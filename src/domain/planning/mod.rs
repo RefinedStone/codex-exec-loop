@@ -36,7 +36,8 @@ pub(crate) use queue_follow::{
     PlanningQueueFollowPolicy, PlanningQueueFollowPromptMode,
 };
 pub use runtime_contracts::{
-    ACTIVE_PLANNING_FILE_PATHS, RESULT_OUTPUT_FILE_PATH, canonical_active_planning_file_path,
+    ACTIVE_PLANNING_FILE_PATHS, RESULT_OUTPUT_FILE_PATH, TaskHandoff,
+    canonical_active_planning_file_path,
 };
 pub(crate) use runtime_contracts::{
     ExecutionSnapshot, MainSessionHandoff, ManualPlanningBootstrapFailureKind,
@@ -48,8 +49,7 @@ pub(crate) use runtime_contracts::{
     PostTurnContinuationAction, PostTurnContinuationGate, PostTurnContinuationPermit,
     PostTurnExecution, PostTurnOutcome, PostTurnPlanningRepairState, PostTurnProvenance,
     PostTurnQueuedPrompt, PostTurnRequest, RuntimeProjection, RuntimeQueuedAutoFollowPrompt,
-    RuntimeWorkspaceStatus, SubSessionHandoff, TaskHandoff, TurnSnapshotCapture,
-    TurnSnapshotCaptureState,
+    RuntimeWorkspaceStatus, SubSessionHandoff, TurnSnapshotCapture, TurnSnapshotCaptureState,
 };
 pub(crate) use task_id::PlanningTaskIdPolicy;
 pub(crate) use task_references::PlanningTaskReferencePolicy;

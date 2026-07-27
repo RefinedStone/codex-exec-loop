@@ -1,9 +1,12 @@
 use super::{
     GithubReviewPollingSetupRequest, ManualPromptPreparationIntent, PlanningEditorMutationRequest,
     PlanningEditorSessionIdentity, PlanningEditorStageTarget, PlanningWorkspaceResetIntent,
-    QueueMutationIntent, SessionCatalogLoadIntent, TurnSubmissionRequest,
+    PostTurnEvaluationCorrelation, PostTurnRouteResolution, QueueMutationIntent,
+    SessionCatalogLoadIntent, TurnSubmissionRequest,
 };
-use crate::domain::conversation::{ConversationApprovalDecision, ConversationTurnSteerRequest};
+use crate::domain::conversation::{
+    ConversationApprovalDecision, ConversationApprovalRequestIdentity, ConversationTurnSteerRequest,
+};
 use crate::domain::planning::PostTurnRequest;
 use crate::domain::recent_sessions::SessionRenameRequest;
 
@@ -67,12 +70,23 @@ pub enum AppCommand {
     SubmitQueueMutation(Box<QueueMutationIntent>),
     PrepareManualPrompt(Box<ManualPromptPreparationIntent>),
     CancelManualPromptPreparation,
-    SubmitTurn(TurnSubmissionRequest),
+    SubmitTurn(Box<TurnSubmissionRequest>),
     RequestStopAllSessions,
     SteerTurn(ConversationTurnSteerRequest),
     SubmitApprovalDecision {
-        approval_id: String,
+        request_identity: ConversationApprovalRequestIdentity,
         decision: ConversationApprovalDecision,
+    },
+    SetAutoFollowMaxTurns {
+        value: usize,
+    },
+    PausePostTurnContinuation,
+    SetParallelPostTurnRearm {
+        rearmed: bool,
+    },
+    ResolvePostTurnContinuation {
+        correlation: PostTurnEvaluationCorrelation,
+        resolution: PostTurnRouteResolution,
     },
     SetupGithubReviewPolling(GithubReviewPollingSetupRequest),
     PollGithubReview,

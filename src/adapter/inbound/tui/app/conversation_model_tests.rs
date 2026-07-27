@@ -1,5 +1,11 @@
-use super::{AutoFollowState, ConversationMessageKind, ConversationViewModel, StopKeywordRule};
+use super::{
+    AutoFollowSnapshotPresentation, ConversationMessageKind, ConversationViewModel,
+    normalize_max_auto_turns_candidate,
+};
 use crate::adapter::inbound::tui::app::INFINITE_AUTO_FOLLOW_MAX_TURNS;
+use crate::core::app::{
+    PostTurnAuthoritySnapshot, PostTurnEvaluationCorrelation, PostTurnRouteResolution,
+};
 use crate::domain::conversation::{
     ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationSnapshot,
 };
@@ -22,10 +28,26 @@ fn ready_conversation() -> ConversationViewModel {
         },
         "/tmp/workspace".to_string(),
     );
+    let mut runtime = conversation.runtime_snapshot().clone();
+    runtime.auto_follow.max_auto_turns = TEST_AUTO_FOLLOW_MAX_TURNS;
+    conversation.apply_runtime_snapshot(runtime);
     conversation
-        .auto_follow_state
-        .set_max_auto_turns(TEST_AUTO_FOLLOW_MAX_TURNS);
-    conversation
+}
+
+fn settle_post_turn(conversation: &mut ConversationViewModel, completed_turn_id: &str) {
+    let correlation = PostTurnEvaluationCorrelation::new(
+        1,
+        conversation.thread_id.clone(),
+        completed_turn_id,
+        conversation.cwd.clone(),
+        conversation.planning_workspace_directory(),
+    );
+    let mut runtime = conversation.runtime_snapshot().clone();
+    runtime.post_turn = PostTurnAuthoritySnapshot::Settled {
+        correlation,
+        resolution: PostTurnRouteResolution::NoContinuation,
+    };
+    conversation.apply_runtime_snapshot(runtime);
 }
 
 // Warning summaries are shell chrome, not transcript content. These tests pin
@@ -114,54 +136,25 @@ fn approval_review_status_preserves_warning_suffix() {
     );
 }
 
-// Auto-follow settings are typed state once parsed, but the TUI receives raw
-// input strings from inline controls. These tests keep normalization narrow so
-// arbitrary prose cannot become a stop keyword or an unbounded turn count.
-#[test]
-fn stop_keyword_rule_normalizes_valid_identifier_like_values() {
-    assert_eq!(
-        StopKeywordRule::normalize_candidate(" AUTO_STOP_2 "),
-        Some("AUTO_STOP_2".to_string())
-    );
-    assert_eq!(StopKeywordRule::normalize_candidate("two words"), None);
-    assert_eq!(StopKeywordRule::normalize_candidate(""), None);
-    assert_eq!(StopKeywordRule::normalize_candidate("stop!"), None);
-}
-
 #[test]
 fn max_auto_turn_candidate_accepts_positive_infinite_and_disable_tokens() {
+    assert_eq!(normalize_max_auto_turns_candidate(" 7 "), Some(7));
+    assert_eq!(normalize_max_auto_turns_candidate("51"), Some(51));
     assert_eq!(
-        AutoFollowState::normalize_max_auto_turns_candidate(" 7 "),
-        Some(7)
-    );
-    assert_eq!(
-        AutoFollowState::normalize_max_auto_turns_candidate("51"),
-        Some(51)
-    );
-    assert_eq!(
-        AutoFollowState::normalize_max_auto_turns_candidate("infinite"),
+        normalize_max_auto_turns_candidate("infinite"),
         Some(INFINITE_AUTO_FOLLOW_MAX_TURNS)
     );
-    assert_eq!(
-        AutoFollowState::normalize_max_auto_turns_candidate("0"),
-        Some(0)
-    );
-    assert_eq!(
-        AutoFollowState::normalize_max_auto_turns_candidate(" OFF "),
-        Some(0)
-    );
-    assert_eq!(
-        AutoFollowState::normalize_max_auto_turns_candidate("three"),
-        None
-    );
+    assert_eq!(normalize_max_auto_turns_candidate("0"), Some(0));
+    assert_eq!(normalize_max_auto_turns_candidate(" OFF "), Some(0));
+    assert_eq!(normalize_max_auto_turns_candidate("three"), None);
 }
 
 #[test]
 fn new_and_resumed_conversations_default_auto_follow_to_off() {
     let draft = ConversationViewModel::new_draft("/tmp/workspace".to_string());
-    assert!(!draft.auto_follow_state.is_enabled());
-    assert!(!draft.auto_follow_state.can_queue_next());
-    assert_eq!(draft.auto_follow_state.max_auto_turns_label(), "off");
+    assert!(!draft.auto_follow_state().is_enabled());
+    assert!(!draft.auto_follow_state().can_queue_next());
+    assert_eq!(draft.auto_follow_state().max_auto_turns_label(), "off");
 
     let resumed = ConversationViewModel::from_snapshot(
         ConversationSnapshot {
@@ -175,28 +168,9 @@ fn new_and_resumed_conversations_default_auto_follow_to_off() {
         },
         "/tmp/workspace".to_string(),
     );
-    assert!(!resumed.auto_follow_state.is_enabled());
-    assert!(!resumed.auto_follow_state.can_queue_next());
-    assert_eq!(resumed.auto_follow_state.progress_label(), "off");
-}
-
-#[test]
-fn manual_turn_reset_preserves_off_and_operator_stop_until_explicit_rearm() {
-    let mut disabled = AutoFollowState::new();
-    disabled.reset_for_manual_turn();
-    assert!(!disabled.can_queue_next());
-    assert_eq!(disabled.max_auto_turns_label(), "off");
-
-    let mut stopped = AutoFollowState::new();
-    stopped.set_max_auto_turns(4);
-    stopped.pause_post_turn_continuation();
-    stopped.reset_for_manual_turn();
-    assert!(stopped.post_turn_continuation_paused());
-    assert!(!stopped.can_queue_next());
-
-    stopped.set_max_auto_turns(4);
-    assert!(!stopped.post_turn_continuation_paused());
-    assert!(stopped.can_queue_next());
+    assert!(!resumed.auto_follow_state().is_enabled());
+    assert!(!resumed.auto_follow_state().can_queue_next());
+    assert_eq!(resumed.auto_follow_state().progress_label(), "off");
 }
 
 // Planning notices are filtered out of generic runtime notices before they
@@ -296,6 +270,7 @@ fn completed_settlement_waits_for_history_flush_ack_before_unlocking_navigation(
     );
     conversation.finish_turn("turn-1", &[]);
     conversation.begin_post_turn_settlement("turn-1");
+    settle_post_turn(&mut conversation, "turn-1");
 
     assert!(conversation.complete_post_turn_settlement("turn-1"));
     assert!(conversation.has_pending_viewport_transcript_handoff());
@@ -324,7 +299,7 @@ fn completed_settlement_waits_for_history_flush_ack_before_unlocking_navigation(
 fn agentless_failure_waits_for_transcript_delivery_before_unlocking_navigation() {
     let mut conversation = ready_conversation();
     conversation.record_turn_started("turn-1".to_string());
-    conversation.fail_turn("agentless runtime failure".to_string());
+    conversation.fail_turn(Some("turn-1"), "agentless runtime failure".to_string());
 
     assert_eq!(
         conversation
@@ -387,6 +362,7 @@ fn tool_only_turn_waits_for_transcript_delivery_before_unlocking_navigation() {
     conversation.buffer_tool_message("tool-only completion");
     conversation.finish_turn("turn-1", &[]);
     conversation.begin_post_turn_settlement("turn-1");
+    settle_post_turn(&mut conversation, "turn-1");
 
     assert!(conversation.complete_post_turn_settlement("turn-1"));
     assert_eq!(

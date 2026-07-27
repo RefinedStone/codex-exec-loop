@@ -13,7 +13,8 @@ use crate::application::service::parallel_mode::control_plane::{
 };
 use crate::application::service::planning::PlanningRuntimeProjection;
 use crate::core::app::{
-    ParallelModeProjection, PlanningParallelProjection, RevisionedPlanningParallelProjection,
+    AutoFollowPhase, ParallelModeProjection, PlanningParallelProjection,
+    RevisionedPlanningParallelProjection,
 };
 use crate::domain::conversation::{
     ConversationMessage, ConversationMessageKind, ConversationTurnSteerRequest,
@@ -27,10 +28,10 @@ use super::super::parallel_presentation_bridge::{
 use super::super::parallel_supervisor_events::ParallelSupervisorEventProjection;
 use super::capability_projection::recent_session_status_label;
 use super::{
-    AutoFollowRuntimePhase, ConversationComposerState, ConversationInputState, ConversationState,
-    ConversationViewModel, HistoryInsertionMode, InlineHistoryRenderMode, NativeTuiApp,
-    ParallelPanelStateController, ShellActionAvailability, ShellOverlay, StartupState,
-    TranscriptHandoffCorrelation, TuiLanguage,
+    AutoFollowSnapshotPresentation, ConversationComposerState, ConversationInputState,
+    ConversationState, ConversationViewModel, HistoryInsertionMode, InlineHistoryRenderMode,
+    NativeTuiApp, ParallelPanelStateController, ShellActionAvailability, ShellOverlay,
+    StartupState, TranscriptHandoffCorrelation, TuiLanguage,
 };
 
 const MAX_GITHUB_REVIEW_NOTICE_LEN: usize = 160;
@@ -315,9 +316,9 @@ impl<'a> ConversationComposerScreenModel<'a> {
     ) -> Self {
         Self {
             state: &conversation.composer,
-            input_state: conversation.input_state,
+            input_state: conversation.input_state(),
             post_turn_settlement_in_flight: conversation.has_post_turn_settlement_in_flight(),
-            auto_follow_has_live_activity: conversation.auto_follow_state.has_live_activity(),
+            auto_follow_has_live_activity: conversation.auto_follow_state().has_live_activity(),
             viewport_transcript_handoff_pending: conversation
                 .has_pending_viewport_transcript_handoff(),
         }
@@ -328,7 +329,7 @@ impl<'a> ConversationComposerScreenModel<'a> {
 pub(in crate::adapter::inbound::tui::app) struct ConversationRuntimeStatusScreenModel {
     pub(in crate::adapter::inbound::tui::app) working_started_at: Option<Instant>,
     pub(in crate::adapter::inbound::tui::app) post_turn_settlement_in_flight: bool,
-    pub(in crate::adapter::inbound::tui::app) auto_follow_phase: AutoFollowRuntimePhase,
+    pub(in crate::adapter::inbound::tui::app) auto_follow_phase: AutoFollowPhase,
     pub(in crate::adapter::inbound::tui::app) auto_follow_max_turns_label: String,
     pub(in crate::adapter::inbound::tui::app) input_state: ConversationInputState,
     pub(in crate::adapter::inbound::tui::app) live_agent_message_present: bool,
@@ -340,9 +341,9 @@ impl ConversationRuntimeStatusScreenModel {
         Self {
             working_started_at: conversation.live_activity_started_at(),
             post_turn_settlement_in_flight: conversation.has_post_turn_settlement_in_flight(),
-            auto_follow_phase: conversation.auto_follow_state.runtime_phase.clone(),
-            auto_follow_max_turns_label: conversation.auto_follow_state.max_auto_turns_label(),
-            input_state: conversation.input_state,
+            auto_follow_phase: conversation.auto_follow_state().phase.clone(),
+            auto_follow_max_turns_label: conversation.auto_follow_state().max_auto_turns_label(),
+            input_state: conversation.input_state(),
             live_agent_message_present: conversation.live_agent_message.is_some(),
             interrupt_support_label: conversation.interrupt_support_label(),
         }
@@ -801,7 +802,7 @@ pub(in crate::adapter::inbound::tui::app) fn conversation_startup_screen_is_acti
 
     !conversation.has_active_thread()
         && conversation.messages.is_empty()
-        && conversation.active_turn_id.is_none()
+        && conversation.active_turn_id().is_none()
         && conversation.live_agent_message.is_none()
 }
 

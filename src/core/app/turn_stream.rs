@@ -1,6 +1,6 @@
 use crate::domain::conversation::{
-    ConversationApprovalRequest, ConversationApprovalResolution, ConversationApprovalReview,
-    ConversationToolActivity,
+    ConversationApprovalRequest, ConversationApprovalRequestIdentity,
+    ConversationApprovalResolution, ConversationApprovalReview, ConversationToolActivity,
 };
 #[cfg(test)]
 use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleHydrationRejection;
@@ -35,7 +35,7 @@ pub(in crate::core) struct TurnStreamState {
     item_lifecycle: ConversationItemLifecycleProjection,
     progressive_activity: ConversationProgressiveActivityProjection,
     active_turn_id: Option<String>,
-    pending_approval_id: Option<String>,
+    pending_approval_identity: Option<ConversationApprovalRequestIdentity>,
     status_text: Option<String>,
     terminal: Option<TurnStreamTerminalSnapshot>,
     last_applied_post_turn_evaluation_id: Option<String>,
@@ -52,7 +52,7 @@ impl TurnStreamState {
             item_lifecycle: ConversationItemLifecycleProjection::default(),
             progressive_activity: ConversationProgressiveActivityProjection::default(),
             active_turn_id: None,
-            pending_approval_id: None,
+            pending_approval_identity: None,
             status_text: None,
             terminal: None,
             last_applied_post_turn_evaluation_id: None,
@@ -101,7 +101,7 @@ impl TurnStreamState {
         self.item_lifecycle = item_lifecycle;
         self.progressive_activity = ConversationProgressiveActivityProjection::default();
         self.active_turn_id = None;
-        self.pending_approval_id = None;
+        self.pending_approval_identity = None;
         self.status_text = None;
         self.terminal = None;
         self.last_applied_post_turn_evaluation_id = None;
@@ -109,7 +109,7 @@ impl TurnStreamState {
 
     pub fn begin_submission(&mut self) {
         self.active_turn_id = None;
-        self.pending_approval_id = None;
+        self.pending_approval_identity = None;
         self.status_text = Some("starting turn".to_string());
         self.terminal = None;
         self.last_applied_post_turn_evaluation_id = None;
@@ -133,8 +133,11 @@ impl TurnStreamState {
         self.active_turn_id.is_some()
     }
 
-    pub fn matches_pending_approval(&self, approval_id: &str) -> bool {
-        self.pending_approval_id.as_deref() == Some(approval_id)
+    pub fn matches_pending_approval(
+        &self,
+        request_identity: &ConversationApprovalRequestIdentity,
+    ) -> bool {
+        self.pending_approval_identity.as_ref() == Some(request_identity)
     }
 
     pub fn apply_session_rename(
@@ -173,7 +176,7 @@ impl TurnStreamState {
                 }
                 self.progressive_activity = ConversationProgressiveActivityProjection::default();
                 self.active_turn_id = None;
-                self.pending_approval_id = None;
+                self.pending_approval_identity = None;
                 self.terminal = None;
                 self.last_applied_post_turn_evaluation_id = None;
                 self.status_text = Some("thread started".to_string());
@@ -188,18 +191,30 @@ impl TurnStreamState {
                 turn_id,
                 runtime_request,
             } => {
-                self.active_turn_id = Some(turn_id.clone());
-                self.pending_approval_id = None;
-                self.progressive_activity = ConversationProgressiveActivityProjection::default();
-                self.runtime_envelope
-                    .get_or_insert_with(ConversationRuntimeEnvelope::unobserved)
-                    .record_turn_request(*runtime_request);
-                self.terminal = None;
-                self.last_applied_post_turn_evaluation_id = None;
-                self.status_text = Some("turn started".to_string());
-                TurnStreamUpdate::TurnStarted {
-                    turn_id,
-                    status_text: "turn started".to_string(),
+                if let Some(expected_turn_id) = self.active_turn_id.as_ref() {
+                    let rejection = if expected_turn_id == &turn_id {
+                        TurnStreamStartRejection::Duplicate
+                    } else {
+                        TurnStreamStartRejection::TurnMismatch {
+                            expected_turn_id: expected_turn_id.clone(),
+                        }
+                    };
+                    TurnStreamUpdate::TurnStartedIgnored { turn_id, rejection }
+                } else {
+                    self.active_turn_id = Some(turn_id.clone());
+                    self.pending_approval_identity = None;
+                    self.progressive_activity =
+                        ConversationProgressiveActivityProjection::default();
+                    self.runtime_envelope
+                        .get_or_insert_with(ConversationRuntimeEnvelope::unobserved)
+                        .record_turn_request(*runtime_request);
+                    self.terminal = None;
+                    self.last_applied_post_turn_evaluation_id = None;
+                    self.status_text = Some("turn started".to_string());
+                    TurnStreamUpdate::TurnStarted {
+                        turn_id,
+                        status_text: "turn started".to_string(),
+                    }
                 }
             }
             TurnStreamEvent::RuntimeEnvelopeObserved { observation } => {
@@ -231,20 +246,25 @@ impl TurnStreamState {
                 TurnStreamUpdate::ApprovalReviewUpdated { review }
             }
             TurnStreamEvent::ApprovalRequested { request } => {
-                self.pending_approval_id = Some(request.approval_id.clone());
+                self.pending_approval_identity = Some(request.identity());
                 self.status_text = Some("approval required".to_string());
                 TurnStreamUpdate::ApprovalRequested { request }
             }
             TurnStreamEvent::ApprovalResolved {
-                approval_id,
+                request_identity,
                 resolution,
             } => {
-                if self.pending_approval_id.as_deref() == Some(approval_id.as_str()) {
-                    self.pending_approval_id = None;
-                }
-                TurnStreamUpdate::ApprovalResolved {
-                    approval_id,
-                    resolution,
+                if self.pending_approval_identity.as_ref() == Some(&request_identity) {
+                    self.pending_approval_identity = None;
+                    TurnStreamUpdate::ApprovalResolved {
+                        request_identity,
+                        resolution,
+                    }
+                } else {
+                    TurnStreamUpdate::ApprovalResolutionIgnored {
+                        request_identity,
+                        resolution,
+                    }
                 }
             }
             TurnStreamEvent::TurnInterruptRequestFailed { message } => {
@@ -265,7 +285,7 @@ impl TurnStreamState {
                     TurnStreamUpdate::RuntimeFailureIgnored { message }
                 } else {
                     self.active_turn_id = None;
-                    self.pending_approval_id = None;
+                    self.pending_approval_identity = None;
                     self.status_text = Some("turn failed".to_string());
                     self.terminal = Some(TurnStreamTerminalSnapshot::Failed {
                         message: message.clone(),
@@ -319,22 +339,32 @@ impl TurnStreamState {
             )
     }
 
+    pub fn has_unapplied_confirmed_terminal(&self) -> bool {
+        matches!(
+            &self.terminal,
+            Some(TurnStreamTerminalSnapshot::Turn { receipt })
+                if receipt.is_completed_and_confirmed()
+                    && self.last_applied_post_turn_evaluation_id.as_deref()
+                        != Some(receipt.turn_id.as_str())
+        )
+    }
+
     pub fn accept_post_turn_evaluation_completion(
         &mut self,
         execution: &PostTurnExecution,
     ) -> bool {
-        if !self.post_turn_evaluation_matches_latest_completed_turn(execution) {
+        if !self.settle_post_turn_terminal(&execution.thread_id, &execution.completed_turn_id) {
             return false;
         }
-        self.last_applied_post_turn_evaluation_id = Some(execution.completed_turn_id.clone());
         true
     }
 
-    fn post_turn_evaluation_matches_latest_completed_turn(
-        &self,
-        execution: &PostTurnExecution,
-    ) -> bool {
-        self.can_start_post_turn_evaluation(&execution.thread_id, &execution.completed_turn_id)
+    pub fn settle_post_turn_terminal(&mut self, thread_id: &str, completed_turn_id: &str) -> bool {
+        if !self.can_start_post_turn_evaluation(thread_id, completed_turn_id) {
+            return false;
+        }
+        self.last_applied_post_turn_evaluation_id = Some(completed_turn_id.to_string());
+        true
     }
 
     fn turn_retrying_update(
@@ -438,7 +468,7 @@ impl TurnStreamState {
         execution_snapshot_capture: Option<TurnSnapshotCapture>,
     ) -> TurnStreamUpdate {
         self.active_turn_id = None;
-        self.pending_approval_id = None;
+        self.pending_approval_identity = None;
         let status_text = terminal_status_text(&receipt).to_string();
         self.status_text = Some(status_text.clone());
         self.terminal = Some(TurnStreamTerminalSnapshot::Turn {
@@ -642,7 +672,7 @@ pub enum TurnStreamEvent {
         request: ConversationApprovalRequest,
     },
     ApprovalResolved {
-        approval_id: String,
+        request_identity: ConversationApprovalRequestIdentity,
         resolution: ConversationApprovalResolution,
     },
     TurnInterruptRequestFailed {
@@ -691,6 +721,10 @@ pub enum TurnStreamUpdate {
         turn_id: String,
         status_text: String,
     },
+    TurnStartedIgnored {
+        turn_id: String,
+        rejection: TurnStreamStartRejection,
+    },
     RuntimeEnvelopeObserved {
         observation: Box<ConversationRuntimeEnvelopeObservation>,
         rejection: Option<TurnStreamRuntimeEnvelopeRejection>,
@@ -722,7 +756,11 @@ pub enum TurnStreamUpdate {
         request: ConversationApprovalRequest,
     },
     ApprovalResolved {
-        approval_id: String,
+        request_identity: ConversationApprovalRequestIdentity,
+        resolution: ConversationApprovalResolution,
+    },
+    ApprovalResolutionIgnored {
+        request_identity: ConversationApprovalRequestIdentity,
         resolution: ConversationApprovalResolution,
     },
     TurnInterruptRequestFailed {
@@ -760,6 +798,12 @@ pub enum TurnStreamUpdate {
     RuntimeNotice {
         notice: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TurnStreamStartRejection {
+    Duplicate,
+    TurnMismatch { expected_turn_id: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -977,6 +1021,54 @@ mod tests {
         assert_eq!(snapshot.title.as_deref(), Some("Loaded thread"));
         assert_eq!(snapshot.cwd.as_deref(), Some("/tmp/loaded"));
         assert_eq!(snapshot.status_text, None);
+    }
+
+    #[test]
+    fn turn_start_is_exact_once_and_conflicting_identity_is_fail_closed_input() {
+        let mut state = TurnStreamState::new();
+        state.apply_stream_event(TurnStreamEvent::ThreadPrepared {
+            thread_id: "thread-1".to_string(),
+            title: "Core stream".to_string(),
+            cwd: "/tmp/workspace".to_string(),
+            runtime_envelope: Box::default(),
+        });
+        let accepted = state.apply_stream_event(TurnStreamEvent::TurnStarted {
+            turn_id: "turn-1".to_string(),
+            runtime_request: Box::default(),
+        });
+        assert!(matches!(
+            accepted.update,
+            TurnStreamUpdate::TurnStarted { ref turn_id, .. } if turn_id == "turn-1"
+        ));
+
+        let duplicate = state.apply_stream_event(TurnStreamEvent::TurnStarted {
+            turn_id: "turn-1".to_string(),
+            runtime_request: Box::default(),
+        });
+        assert!(matches!(
+            duplicate.update,
+            TurnStreamUpdate::TurnStartedIgnored {
+                ref turn_id,
+                rejection: TurnStreamStartRejection::Duplicate,
+            } if turn_id == "turn-1"
+        ));
+        assert_eq!(duplicate.active_turn_id.as_deref(), Some("turn-1"));
+        assert_eq!(duplicate.status_text.as_deref(), Some("turn started"));
+
+        let conflicting = state.apply_stream_event(TurnStreamEvent::TurnStarted {
+            turn_id: "turn-forged".to_string(),
+            runtime_request: Box::default(),
+        });
+        assert!(matches!(
+            conflicting.update,
+            TurnStreamUpdate::TurnStartedIgnored {
+                ref turn_id,
+                rejection: TurnStreamStartRejection::TurnMismatch {
+                    ref expected_turn_id,
+                },
+            } if turn_id == "turn-forged" && expected_turn_id == "turn-1"
+        ));
+        assert_eq!(conflicting.active_turn_id.as_deref(), Some("turn-1"));
     }
 
     #[test]
@@ -1808,16 +1900,17 @@ mod tests {
     }
 
     #[test]
-    fn pending_approval_identity_ignores_stale_resolution_and_clears_exact_resolution() {
+    fn pending_approval_identity_ignores_same_id_old_server_resolution_and_clears_exact_request() {
         let mut state = TurnStreamState::new();
         let request = ConversationApprovalRequest {
             approval_id: "approval-core".to_string(),
-            server_request_id: "server-core".to_string(),
+            server_request_id: "server-current".to_string(),
             method: "item/fileChange/requestApproval".to_string(),
             kind: ConversationApprovalRequestKind::FileChange,
             summary: "File changes requested.".to_string(),
             details: vec!["Reason: update tests".to_string()],
         };
+        let request_identity = request.identity();
 
         let requested = state.apply_stream_event(TurnStreamEvent::ApprovalRequested {
             request: request.clone(),
@@ -1827,26 +1920,49 @@ mod tests {
             TurnStreamUpdate::ApprovalRequested { request }
         );
         assert_eq!(requested.status_text.as_deref(), Some("approval required"));
-        assert!(state.matches_pending_approval("approval-core"));
+        assert!(state.matches_pending_approval(&request_identity));
 
-        state.apply_stream_event(TurnStreamEvent::ApprovalResolved {
-            approval_id: "approval-stale".to_string(),
+        let stale_identity = ConversationApprovalRequestIdentity {
+            approval_id: "approval-core".to_string(),
+            server_request_id: "server-old".to_string(),
+        };
+        let stale = state.apply_stream_event(TurnStreamEvent::ApprovalResolved {
+            request_identity: stale_identity.clone(),
             resolution: ConversationApprovalResolution::Declined,
         });
-        assert!(state.matches_pending_approval("approval-core"));
+        assert!(matches!(
+            stale.update,
+            TurnStreamUpdate::ApprovalResolutionIgnored {
+                request_identity: ignored,
+                resolution: ConversationApprovalResolution::Declined,
+            } if ignored == stale_identity
+        ));
+        assert!(state.matches_pending_approval(&request_identity));
 
         let resolved = state.apply_stream_event(TurnStreamEvent::ApprovalResolved {
-            approval_id: "approval-core".to_string(),
+            request_identity: request_identity.clone(),
             resolution: ConversationApprovalResolution::Declined,
         });
         assert!(matches!(
             resolved.update,
             TurnStreamUpdate::ApprovalResolved {
+                request_identity: resolved_identity,
                 resolution: ConversationApprovalResolution::Declined,
-                ..
-            }
+            } if resolved_identity == request_identity
         ));
-        assert!(!state.matches_pending_approval("approval-core"));
+        assert!(!state.matches_pending_approval(&request_identity));
+
+        let duplicate = state.apply_stream_event(TurnStreamEvent::ApprovalResolved {
+            request_identity: request_identity.clone(),
+            resolution: ConversationApprovalResolution::Declined,
+        });
+        assert!(matches!(
+            duplicate.update,
+            TurnStreamUpdate::ApprovalResolutionIgnored {
+                request_identity: ignored,
+                resolution: ConversationApprovalResolution::Declined,
+            } if ignored == request_identity
+        ));
     }
 
     #[test]
@@ -1880,6 +1996,10 @@ mod tests {
                 execution_snapshot_capture: None,
                 status_text: "turn completed".to_string(),
             }
+        );
+        assert!(
+            state.has_unapplied_confirmed_terminal(),
+            "manual submission must remain closed until post-turn applies this terminal"
         );
     }
 

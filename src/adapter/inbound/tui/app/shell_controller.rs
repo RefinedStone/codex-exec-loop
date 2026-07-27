@@ -540,7 +540,8 @@ impl NativeTuiApp {
                 if conversation.has_running_turn()
                     && !conversation.composer.input_buffer.trim().is_empty() =>
             {
-                let Some(expected_turn_id) = conversation.active_turn_id.clone() else {
+                let Some(expected_turn_id) = conversation.active_turn_id().map(str::to_string)
+                else {
                     self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                         status_text: self
                             .shell
@@ -628,7 +629,7 @@ impl NativeTuiApp {
             &self.conversation.lifecycle.conversation_state,
             ConversationState::Ready(conversation)
                 if conversation.thread_id == intent.request.thread_id
-                    && conversation.active_turn_id.as_deref()
+                    && conversation.active_turn_id()
                         == Some(intent.request.expected_turn_id.as_str())
                     && conversation.composer.input_buffer == intent.source_input_buffer
         ) && self.conversation.prompt_input_revision == intent.input_revision;
@@ -1019,22 +1020,21 @@ impl NativeTuiApp {
         &mut self,
         decision: crate::domain::conversation::ConversationApprovalDecision,
     ) {
-        let approval_id = match &self.conversation.lifecycle.conversation_state {
+        let request_identity = match &self.conversation.lifecycle.conversation_state {
             ConversationState::Ready(conversation)
                 if conversation.pending_approval_decision().is_none() =>
             {
                 conversation
-                    .pending_approval_request
-                    .as_ref()
-                    .map(|request| request.approval_id.clone())
+                    .pending_approval_request()
+                    .map(|request| request.identity())
             }
             ConversationState::Loading | ConversationState::Failed(_) => None,
             ConversationState::Ready(_) => None,
         };
-        if let Some(approval_id) = approval_id {
+        if let Some(request_identity) = request_identity {
             let outcome = self.reduce_core_client_event(CoreInput::Command(
                 AppCommand::SubmitApprovalDecision {
-                    approval_id: approval_id.clone(),
+                    request_identity: request_identity.clone(),
                     decision,
                 },
             ));
@@ -1046,17 +1046,12 @@ impl NativeTuiApp {
                     )
                 )
             });
+            self.apply_core_dispatch_outcome(outcome);
             if admitted {
                 self.dispatch_conversation_runtime(
-                    ConversationRuntimeEvent::ApprovalDecisionSubmitted {
-                        approval_id,
-                        decision,
-                    },
+                    ConversationRuntimeEvent::ApprovalDecisionSubmitted { decision },
                 );
             }
-            // Commit the adapter-local pending projection before an immediate
-            // completion can reopen it for retry.
-            self.apply_core_dispatch_outcome(outcome);
         }
     }
     pub(super) fn handle_ctrl_c(&mut self) {
@@ -1276,9 +1271,11 @@ mod tests {
         PlanningTaskToolRequest,
     };
     use crate::core::app::{
-        QueueAuthorityLoadCorrelation, QueueAuthorityLoadError, QueueAuthoritySnapshot,
-        QueueMutationCorrelation, QueueMutationIntent, QueueMutationResult, QueueMutationTarget,
-        StartupReadySnapshot,
+        ActiveTurnPhase, ActiveTurnSnapshot, ApprovalAuthorityPhase, ApprovalAuthoritySnapshot,
+        CorePromptOrigin, PostTurnAuthoritySnapshot, PostTurnEvaluationCorrelation,
+        PostTurnRouteResolution, QueueAuthorityLoadCorrelation, QueueAuthorityLoadError,
+        QueueAuthoritySnapshot, QueueMutationCorrelation, QueueMutationIntent, QueueMutationResult,
+        QueueMutationTarget, StartupReadySnapshot, TurnSubmissionCorrelation,
     };
     use crate::domain::conversation::{
         ConversationApprovalRequest, ConversationApprovalRequestKind,
@@ -1389,11 +1386,17 @@ mod tests {
 
     fn auto_follow_origin() -> PromptOrigin {
         PromptOrigin::AutoFollow(Box::new(AutoFollowSubmitContext {
+            source: PostTurnEvaluationCorrelation::new(
+                1,
+                "thread-1",
+                "turn-1",
+                "/tmp/root",
+                "/tmp/root",
+            ),
             completed_turn_id: "turn-1".to_string(),
             mode_label: "planning queue".to_string(),
             transcript_text: "queued transcript".to_string(),
             debug_detail: None,
-            handoff_task: None,
         }))
     }
 
@@ -1413,6 +1416,87 @@ mod tests {
             ConversationState::Ready(conversation) => conversation,
             other => panic!("expected ready conversation, got {other:?}"),
         }
+    }
+
+    fn sync_conversation_runtime_from_core(app: &mut NativeTuiApp) {
+        let snapshot = app.runtime.client_runtime.snapshot().conversation_runtime;
+        ready_conversation_mut(app).apply_runtime_snapshot(snapshot);
+    }
+
+    fn set_active_turn(
+        conversation: &mut ConversationViewModel,
+        phase: ActiveTurnPhase,
+        turn_id: Option<&str>,
+        generation: u64,
+    ) {
+        let mut snapshot = conversation.runtime_snapshot().clone();
+        snapshot.active_turn = Some(ActiveTurnSnapshot {
+            correlation: TurnSubmissionCorrelation::new(generation),
+            phase,
+            workspace_directory: conversation.cwd.clone(),
+            turn_id: turn_id.map(str::to_string),
+            prompt_origin: CorePromptOrigin::Manual,
+            started_at: Instant::now(),
+        });
+        conversation.apply_runtime_snapshot(snapshot);
+    }
+
+    fn set_running_turn(conversation: &mut ConversationViewModel, turn_id: &str) {
+        set_active_turn(conversation, ActiveTurnPhase::Running, Some(turn_id), 1);
+        conversation.record_turn_started(turn_id.to_string());
+    }
+
+    fn clear_active_turn(conversation: &mut ConversationViewModel) {
+        let mut snapshot = conversation.runtime_snapshot().clone();
+        snapshot.active_turn = None;
+        conversation.apply_runtime_snapshot(snapshot);
+    }
+
+    fn set_pending_approval(
+        conversation: &mut ConversationViewModel,
+        request: ConversationApprovalRequest,
+    ) {
+        let mut snapshot = conversation.runtime_snapshot().clone();
+        snapshot.approval = Some(ApprovalAuthoritySnapshot {
+            request,
+            decision: None,
+            phase: ApprovalAuthorityPhase::Pending,
+        });
+        conversation.apply_runtime_snapshot(snapshot);
+    }
+
+    fn begin_post_turn_evaluation(conversation: &mut ConversationViewModel, turn_id: &str) {
+        let workspace_directory = conversation.cwd.clone();
+        let mut snapshot = conversation.runtime_snapshot().clone();
+        snapshot.active_turn = None;
+        snapshot.post_turn = PostTurnAuthoritySnapshot::Evaluating {
+            correlation: PostTurnEvaluationCorrelation::new(
+                1,
+                conversation.thread_id.clone(),
+                turn_id,
+                workspace_directory.clone(),
+                workspace_directory,
+            ),
+            started_at: Instant::now(),
+        };
+        conversation.apply_runtime_snapshot(snapshot);
+        conversation.begin_post_turn_settlement(turn_id);
+    }
+
+    fn settle_post_turn(conversation: &mut ConversationViewModel, turn_id: &str) {
+        let workspace_directory = conversation.cwd.clone();
+        let mut snapshot = conversation.runtime_snapshot().clone();
+        snapshot.post_turn = PostTurnAuthoritySnapshot::Settled {
+            correlation: PostTurnEvaluationCorrelation::new(
+                1,
+                conversation.thread_id.clone(),
+                turn_id,
+                workspace_directory.clone(),
+                workspace_directory,
+            ),
+            resolution: PostTurnRouteResolution::NoContinuation,
+        };
+        conversation.apply_runtime_snapshot(snapshot);
     }
 
     fn single_queue_projection(
@@ -1646,6 +1730,23 @@ mod tests {
                         app.apply_parallel_mode_control_plane_presentation_events(
                             outcome.presentation_events,
                         );
+                    }
+                    crate::composition::native_client_runtime::NativeClientDispatchOutcome::Combined {
+                        core,
+                        parallel,
+                    } => {
+                        app.apply_parallel_mode_control_plane_presentation_events(
+                            parallel.presentation_events,
+                        );
+                        for event in core.events {
+                            match event {
+                                AppEvent::QueueMutationCompleted {
+                                    correlation,
+                                    result,
+                                } => return (correlation, *result),
+                                event => app.apply_core_event(event),
+                            }
+                        }
                     }
                 }
             }
@@ -2256,7 +2357,7 @@ mod tests {
         app.execute_inline_shell_command_input(command(":turns 4"));
         assert_eq!(
             ready_conversation(&app)
-                .auto_follow_state
+                .auto_follow_state()
                 .max_auto_turns_label(),
             "4"
         );
@@ -2265,7 +2366,7 @@ mod tests {
         app.execute_inline_shell_command_input(command(":turns off"));
         assert_eq!(
             ready_conversation(&app)
-                .auto_follow_state
+                .auto_follow_state()
                 .max_auto_turns_label(),
             "off"
         );
@@ -2274,7 +2375,7 @@ mod tests {
         app.execute_inline_shell_command_input(command(":turns infinite"));
         assert_eq!(
             ready_conversation(&app)
-                .auto_follow_state
+                .auto_follow_state()
                 .max_auto_turns_label(),
             "infinite"
         );
@@ -2324,22 +2425,19 @@ mod tests {
         );
         assert!(
             ready_conversation(&app)
-                .auto_follow_state
+                .auto_follow_state()
                 .post_turn_continuation_paused()
         );
 
-        ready_conversation_mut(&mut app)
-            .auto_follow_state
-            .reset_for_manual_turn();
         assert!(
             ready_conversation(&app)
-                .auto_follow_state
+                .auto_follow_state()
                 .post_turn_continuation_paused(),
             "manual turns must not re-arm automation after :stop"
         );
         assert!(
             !ready_conversation(&app)
-                .auto_follow_state
+                .auto_follow_state()
                 .parallel_post_turn_continuation_allowed(),
             "manual turns must not re-arm the parallel continuation path"
         );
@@ -2347,26 +2445,28 @@ mod tests {
         app.execute_inline_shell_command_input(command(":parallel"));
         assert!(
             ready_conversation(&app)
-                .auto_follow_state
+                .auto_follow_state()
                 .post_turn_continuation_paused(),
             "parallel opt-in must not clear the single-session stop"
         );
         assert!(
             ready_conversation(&app)
-                .auto_follow_state
+                .auto_follow_state()
                 .parallel_post_turn_continuation_allowed(),
             "explicit parallel opt-in should re-arm only the parallel continuation path"
         );
         app.execute_inline_shell_command_input(command(":parallel off"));
         assert!(
             !ready_conversation(&app)
-                .auto_follow_state
+                .auto_follow_state()
                 .parallel_post_turn_continuation_allowed()
         );
 
         app.execute_inline_shell_command_input(command(":turns 2"));
         assert!(
-            ready_conversation(&app).auto_follow_state.can_queue_next(),
+            ready_conversation(&app)
+                .auto_follow_state()
+                .can_queue_next(),
             "only an explicit positive :turns command should re-arm automation"
         );
 
@@ -2393,7 +2493,7 @@ mod tests {
     fn ctrl_c_interrupts_a_running_turn_once_and_keeps_idle_navigation_semantics() {
         let mut app = test_native_tui_app();
         let turn_submission = app.runtime.client_runtime.begin_test_turn_submission();
-        ready_conversation_mut(&mut app).mark_turn_submitting("/tmp/root".to_string());
+        sync_conversation_runtime_from_core(&mut app);
 
         app.handle_ctrl_c();
         assert!(status_text(&app).contains("stop requested"));
@@ -2420,7 +2520,7 @@ mod tests {
                     message: "turn stopped".to_string(),
                 },
             });
-        ready_conversation_mut(&mut app).mark_turn_finished();
+        sync_conversation_runtime_from_core(&mut app);
         app.handle_ctrl_c();
         assert_eq!(
             app.shell.chrome.exit_confirmation_state,
@@ -3837,7 +3937,7 @@ mod tests {
         app.show_queue_overlay();
         apply_next_queue_overlay_authority_load(&mut app);
 
-        ready_conversation_mut(&mut app).begin_post_turn_settlement("turn-queue");
+        begin_post_turn_evaluation(ready_conversation_mut(&mut app), "turn-queue");
         assert!(app.handle_shell_overlay_key(key(KeyCode::Char('x'))));
         assert!(app.handle_shell_overlay_key(key(KeyCode::Char('u'))));
         let blocked = planning
@@ -3855,14 +3955,12 @@ mod tests {
                 .latest_queue_mutation_receipt
                 .is_some()
         );
-        ready_conversation_mut(&mut app)
-            .auto_follow_state
-            .clear_runtime_phase();
         assert!(ready_conversation(&app).has_post_turn_settlement_in_flight());
+        settle_post_turn(ready_conversation_mut(&mut app), "turn-queue");
         assert!(ready_conversation_mut(&mut app).complete_post_turn_settlement("turn-queue"));
 
         app.close_shell_overlay();
-        ready_conversation_mut(&mut app).record_turn_started("turn-active-undo".to_string());
+        set_running_turn(ready_conversation_mut(&mut app), "turn-active-undo");
         app.planning
             .queue_overlay_ui_state
             .bind_receipt_undo_hit_area(Some(Rect::new(2, 4, 14, 1)));
@@ -3898,7 +3996,7 @@ mod tests {
                 .latest_queue_mutation_receipt
                 .is_none()
         );
-        ready_conversation_mut(&mut app).mark_turn_finished();
+        clear_active_turn(ready_conversation_mut(&mut app));
         app.shell.tui_language = TuiLanguage::English;
 
         let individually_removed = planning
@@ -4153,7 +4251,11 @@ mod tests {
 
         assert!(app.handle_shell_overlay_key(key(KeyCode::Enter)));
         assert_eq!(ready_conversation(&app).pending_approval_decision(), None);
-        assert!(ready_conversation(&app).pending_approval_request.is_some());
+        assert!(
+            ready_conversation(&app)
+                .pending_approval_request()
+                .is_some()
+        );
         assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Approval);
 
         assert!(app.handle_shell_overlay_key(key(KeyCode::Char('y'))));
@@ -4161,7 +4263,11 @@ mod tests {
             ready_conversation(&app).status_text,
             "approval decision submitted: accept / waiting for runtime resolution"
         );
-        assert!(ready_conversation(&app).pending_approval_request.is_some());
+        assert!(
+            ready_conversation(&app)
+                .pending_approval_request()
+                .is_some()
+        );
         assert_eq!(
             ready_conversation(&app).pending_approval_decision(),
             Some(crate::domain::conversation::ConversationApprovalDecision::Accept)
@@ -4172,7 +4278,10 @@ mod tests {
             correlation: crate::core::app::ApprovalDecisionCorrelation::new(
                 1,
                 turn_submission,
-                "approval-key",
+                crate::domain::conversation::ConversationApprovalRequestIdentity {
+                    approval_id: "approval-key".to_string(),
+                    server_request_id: "server-key".to_string(),
+                },
                 crate::domain::conversation::ConversationApprovalDecision::Accept,
             ),
             result: Ok(()),
@@ -4215,20 +4324,26 @@ mod tests {
     #[test]
     fn unavailable_approval_decision_does_not_commit_pending_projection() {
         let mut app = test_native_tui_app();
-        ready_conversation_mut(&mut app).pending_approval_request =
-            Some(ConversationApprovalRequest {
+        set_pending_approval(
+            ready_conversation_mut(&mut app),
+            ConversationApprovalRequest {
                 approval_id: "approval-unavailable".to_string(),
                 server_request_id: "server-unavailable".to_string(),
                 method: "item/commandExecution/requestApproval".to_string(),
                 kind: ConversationApprovalRequestKind::CommandExecution,
                 summary: "Command execution requested.".to_string(),
                 details: vec!["Command: cargo test".to_string()],
-            });
+            },
+        );
         app.dispatch_shell_chrome(ShellChromeEvent::ApprovalOverlayShown);
 
         assert!(app.handle_shell_overlay_key(key(KeyCode::Char('y'))));
         assert_eq!(ready_conversation(&app).pending_approval_decision(), None);
-        assert!(ready_conversation(&app).pending_approval_request.is_some());
+        assert!(
+            ready_conversation(&app)
+                .pending_approval_request()
+                .is_some()
+        );
         assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Approval);
     }
 
@@ -4460,7 +4575,7 @@ mod tests {
         {
             let conversation = ready_conversation_mut(&mut app);
             conversation.thread_id = request.thread_id.clone();
-            conversation.record_turn_started("turn-new".to_string());
+            set_running_turn(conversation, "turn-new");
             conversation.composer.input_buffer = request.prompt.clone();
         }
         app.conversation.pending_turn_steer = Some(steer_intent(1, 0, "same draft", request));
@@ -4487,9 +4602,9 @@ mod tests {
         {
             let conversation = ready_conversation_mut(&mut app);
             conversation.thread_id = request.thread_id.clone();
-            conversation.record_turn_started(request.expected_turn_id.clone());
+            set_running_turn(conversation, &request.expected_turn_id);
             conversation.composer.input_buffer = "delivered draft".to_string();
-            conversation.mark_turn_finished();
+            clear_active_turn(conversation);
         }
         app.conversation.pending_turn_steer = Some(steer_intent(1, 0, "delivered draft", request));
 

@@ -5,7 +5,7 @@ use crate::adapter::inbound::tui::app::conversation_runtime::{
     PostTurnEvaluationProvenance,
 };
 use crate::adapter::inbound::tui::app::{
-    ConversationInputState, ConversationState, InlineShellCommand, NativeTuiParallelModeBinding,
+    ConversationState, ConversationViewModel, InlineShellCommand, NativeTuiParallelModeBinding,
     PlanningWorkerPanelState, PlanningWorkerStatus, test_helpers,
 };
 use crate::adapter::inbound::tui::shell_chrome::{ShellChromeEvent, ShellOverlay, StartupState};
@@ -32,8 +32,9 @@ use crate::application::service::post_turn_evaluation as application_post_turn;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::core::app::{
-    AppEvent, CoreInput, PostTurnEvaluationCorrelation, QueueAuthorityLoadCorrelation,
-    QueueAuthorityLoadError, StartupReadySnapshot, TurnStreamEvent,
+    ActiveTurnPhase, ActiveTurnSnapshot, AppEvent, CoreInput, CorePromptOrigin,
+    PostTurnEvaluationCorrelation, QueueAuthorityLoadCorrelation, QueueAuthorityLoadError,
+    StartupReadySnapshot, TurnStreamEvent, TurnSubmissionCorrelation,
 };
 use crate::domain::conversation::{
     ConversationMessage, ConversationMessageKind, ConversationSnapshot,
@@ -57,6 +58,19 @@ mod flows;
 mod input;
 #[path = "tests/scheduler.rs"]
 mod scheduler;
+
+fn set_running_turn(conversation: &mut ConversationViewModel, turn_id: &str, started_at: Instant) {
+    let mut snapshot = conversation.runtime_snapshot().clone();
+    snapshot.active_turn = Some(ActiveTurnSnapshot {
+        correlation: TurnSubmissionCorrelation::new(1),
+        phase: ActiveTurnPhase::Running,
+        workspace_directory: conversation.cwd.clone(),
+        turn_id: Some(turn_id.to_string()),
+        prompt_origin: CorePromptOrigin::Manual,
+        started_at,
+    });
+    conversation.apply_runtime_snapshot(snapshot);
+}
 
 // Shell runtime tests exercise the adapter boundary where terminal events,
 // background workers, and TUI state meet. The fakes below keep outbound ports
@@ -380,23 +394,34 @@ fn queue_mutation_settlement_stays_correlated_and_off_the_input_path() {
 #[test]
 fn parallel_post_turn_continuation_is_driven_by_control_plane_outcome() {
     /*
-     * The parallel-mode TUI entrypoint must not inspect or consume
-     * QueueAutoPrompt directly. The adapter asks application services for a
-     * continuation outcome, then maps that outcome onto local effects and
-     * presentation events.
+     * The TUI must not inspect or consume QueueAutoPrompt directly. The
+     * composition-owned client runtime consumes the exact Core route marker,
+     * offers it to the private control-plane once, then settles Core before
+     * returning presentation events.
      */
     const PARALLEL_MODE_RS: &str = include_str!("../parallel_mode.rs");
     const POST_TURN_ROUTING_RS: &str = include_str!("../post_turn_continuation.rs");
+    const NATIVE_CLIENT_RUNTIME_RS: &str =
+        include_str!("../../../../../composition/native_client_runtime.rs");
     const CONTROL_PLANE_HOST_RS: &str =
         include_str!("../../../../../application/service/parallel_mode/control_plane/host.rs");
 
-    assert!(PARALLEL_MODE_RS.contains("NativeClientEvent::ParallelPostTurnQueue"));
-    assert!(!PARALLEL_MODE_RS.contains("QueueAutoPrompt"));
-    assert!(!PARALLEL_MODE_RS.contains("record_auto_follow_parallel_dispatch"));
-    assert!(!PARALLEL_MODE_RS.contains("handle_post_turn_queue_continuation"));
-    assert!(POST_TURN_ROUTING_RS.contains("decide_post_turn_auto_prompt_route"));
-    assert!(!POST_TURN_ROUTING_RS.contains("QueueAutoPrompt"));
-    assert!(!POST_TURN_ROUTING_RS.contains(".retain("));
+    for forbidden_tui_route in [
+        "NativeClientEvent::ParallelPostTurnQueue",
+        "QueueAutoPrompt",
+        "record_auto_follow_parallel_dispatch",
+        "handle_post_turn_queue_continuation",
+        "continue_post_turn_queue",
+    ] {
+        assert!(!PARALLEL_MODE_RS.contains(forbidden_tui_route));
+    }
+    assert!(!POST_TURN_ROUTING_RS.contains("decide_post_turn_auto_prompt_route"));
+    assert!(
+        NATIVE_CLIENT_RUNTIME_RS.contains("resolve_internal_post_turn_routes")
+            && NATIVE_CLIENT_RUNTIME_RS.contains("exact_single_post_turn_routing_request")
+            && NATIVE_CLIENT_RUNTIME_RS.contains("continue_post_turn_queue")
+            && NATIVE_CLIENT_RUNTIME_RS.contains("ResolvePostTurnContinuation")
+    );
     assert!(CONTROL_PLANE_HOST_RS.contains("pub fn continue_post_turn_queue"));
     assert!(!CONTROL_PLANE_HOST_RS.contains("pub fn handle_post_turn_queue_continuation"));
 }
@@ -1451,9 +1476,7 @@ fn live_activity_schedules_delayed_draw_without_immediate_redraw() {
     else {
         panic!("expected ready conversation state");
     };
-    conversation.input_state = ConversationInputState::StreamingTurn;
-    conversation.active_turn_id = Some("turn-1".to_string());
-    conversation.active_turn_started_at = Some(now - Duration::from_secs(5));
+    set_running_turn(conversation, "turn-1", now - Duration::from_secs(5));
     runtime.last_live_activity_pulse = Some(5);
 
     runtime.poll_background_messages_at(now);
@@ -1791,9 +1814,11 @@ fn manual_turn_elapsed_pulse_requests_redraw() {
     else {
         panic!("expected ready conversation state");
     };
-    conversation.input_state = ConversationInputState::StreamingTurn;
-    conversation.active_turn_id = Some("turn-1".to_string());
-    conversation.active_turn_started_at = Some(Instant::now() - Duration::from_secs(5));
+    set_running_turn(
+        conversation,
+        "turn-1",
+        Instant::now() - Duration::from_secs(5),
+    );
     runtime.last_live_activity_pulse = Some(4);
     runtime.take_redraw_request();
 

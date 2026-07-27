@@ -151,7 +151,8 @@ mod tests {
     };
     use crate::core::runtime::input_mailbox::{CORE_INPUT_CHANNEL_CAPACITY, core_input_channel};
     use crate::domain::conversation::{
-        ConversationApprovalDecision, ConversationApprovalRequest, ConversationApprovalRequestKind,
+        ConversationApprovalDecision, ConversationApprovalRequest,
+        ConversationApprovalRequestIdentity, ConversationApprovalRequestKind,
         ConversationTurnSteerRequest,
     };
     use crate::domain::github_review::{
@@ -520,12 +521,14 @@ mod tests {
             thread_id: Some("thread-1".to_string()),
             prompt: "ship it".to_string(),
             prompt_origin: CorePromptOrigin::Manual,
+            auto_follow_source: None,
+            planning_handoff: None,
             turn_options: Default::default(),
             slot_lease_handoff: None,
         };
 
-        let first = runtime.dispatch_command(AppCommand::SubmitTurn(request.clone()));
-        let rejected = runtime.dispatch_command(AppCommand::SubmitTurn(request.clone()));
+        let first = runtime.dispatch_command(AppCommand::SubmitTurn(Box::new(request.clone())));
+        let rejected = runtime.dispatch_command(AppCommand::SubmitTurn(Box::new(request.clone())));
 
         assert_eq!(
             first.events,
@@ -549,7 +552,7 @@ mod tests {
             effects.recorded_effects(),
             vec![CoreEffect::SubmitTurn {
                 correlation: crate::core::app::TurnSubmissionCorrelation::new(1),
-                request: request.clone(),
+                request: Box::new(request.clone()),
             }]
         );
 
@@ -559,7 +562,7 @@ mod tests {
                 message: "worker stopped before turn/start".to_string(),
             },
         });
-        let retried = runtime.dispatch_command(AppCommand::SubmitTurn(request.clone()));
+        let retried = runtime.dispatch_command(AppCommand::SubmitTurn(Box::new(request.clone())));
 
         assert_eq!(
             retried.events,
@@ -574,11 +577,11 @@ mod tests {
             vec![
                 CoreEffect::SubmitTurn {
                     correlation: crate::core::app::TurnSubmissionCorrelation::new(1),
-                    request: request.clone(),
+                    request: Box::new(request.clone()),
                 },
                 CoreEffect::SubmitTurn {
                     correlation: crate::core::app::TurnSubmissionCorrelation::new(2),
-                    request,
+                    request: Box::new(request),
                 },
             ]
         );
@@ -594,11 +597,13 @@ mod tests {
             thread_id: Some("thread-1".to_string()),
             prompt: "ship it".to_string(),
             prompt_origin: CorePromptOrigin::Manual,
+            auto_follow_source: None,
+            planning_handoff: None,
             turn_options: Default::default(),
             slot_lease_handoff: None,
         };
         let turn_submission = crate::core::app::TurnSubmissionCorrelation::new(1);
-        runtime.dispatch_command(AppCommand::SubmitTurn(submission_request));
+        runtime.dispatch_command(AppCommand::SubmitTurn(Box::new(submission_request)));
         runtime.dispatch_input(CoreInput::ConversationStreamUpdated {
             correlation: turn_submission,
             event: TurnStreamEvent::ThreadPrepared {
@@ -724,12 +729,15 @@ mod tests {
         let correlation = ApprovalDecisionCorrelation::new(
             1,
             turn_submission,
-            "approval-1",
+            ConversationApprovalRequestIdentity {
+                approval_id: "approval-1".to_string(),
+                server_request_id: "server-approval-1".to_string(),
+            },
             ConversationApprovalDecision::Accept,
         );
 
         let outcome = runtime.dispatch_command(AppCommand::SubmitApprovalDecision {
-            approval_id: "approval-1".to_string(),
+            request_identity: correlation.request_identity.clone(),
             decision: ConversationApprovalDecision::Accept,
         });
 
@@ -752,7 +760,7 @@ mod tests {
             ]
         );
         let waiting_for_resolution = runtime.dispatch_command(AppCommand::SubmitApprovalDecision {
-            approval_id: "approval-1".to_string(),
+            request_identity: correlation.request_identity.clone(),
             decision: ConversationApprovalDecision::Decline,
         });
         assert_eq!(
@@ -981,15 +989,25 @@ mod tests {
 
         let outcome = runtime.dispatch_command(AppCommand::EvaluatePostTurn(Box::new(request)));
 
-        assert!(matches!(
-            outcome.events.as_slice(),
-            [
-                AppEvent::PostTurnEvaluationStarted(started),
-                AppEvent::PostTurnEvaluationCompleted(completed),
-            ] if started.status == PlanningWorkerStatus::RefreshRunning
-                && started.last_summary.is_none()
-                && completed.planning_worker_panel_state == *started
-        ));
+        let started = outcome
+            .events
+            .iter()
+            .find_map(|event| match event {
+                AppEvent::PostTurnEvaluationStarted(started) => Some(started),
+                _ => None,
+            })
+            .expect("the immediate executor should publish the admitted start state");
+        let completed = outcome
+            .events
+            .iter()
+            .find_map(|event| match event {
+                AppEvent::PostTurnContinuationRoutingRequested { execution, .. } => Some(execution),
+                _ => None,
+            })
+            .expect("the immediate executor should return through correlated routing");
+        assert_eq!(started.status, PlanningWorkerStatus::RefreshRunning);
+        assert!(started.last_summary.is_none());
+        assert_eq!(completed.planning_worker_panel_state, *started);
     }
 
     #[test]
@@ -1215,14 +1233,16 @@ mod tests {
         let (_tx, rx) = core_input_channel();
         let mut runtime = CoreRuntime::new(ImmediateStopRequestExecutor, rx);
         let turn_submission = TurnSubmissionCorrelation::new(1);
-        runtime.dispatch_command(AppCommand::SubmitTurn(TurnSubmissionRequest {
+        runtime.dispatch_command(AppCommand::SubmitTurn(Box::new(TurnSubmissionRequest {
             workspace_directory: "/tmp/workspace".to_string(),
             thread_id: Some("thread-1".to_string()),
             prompt: "ship it".to_string(),
             prompt_origin: CorePromptOrigin::Manual,
+            auto_follow_source: None,
+            planning_handoff: None,
             turn_options: Default::default(),
             slot_lease_handoff: None,
-        }));
+        })));
         let correlation = StopRequestCorrelation::new(1, Some(turn_submission));
 
         let requested = runtime.dispatch_command(AppCommand::RequestStopAllSessions);

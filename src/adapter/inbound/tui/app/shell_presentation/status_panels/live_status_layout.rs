@@ -224,14 +224,50 @@ mod tests {
     };
     use crate::adapter::inbound::tui::app::test_helpers::test_native_tui_app;
     use crate::adapter::inbound::tui::app::{
-        ConversationInputState, ConversationState, InlineHistoryRenderMode, MAX_INLINE_TAIL_HEIGHT,
+        ConversationState, ConversationViewModel, InlineHistoryRenderMode, MAX_INLINE_TAIL_HEIGHT,
         NativeTuiApp, ShellActionAvailability, TuiLanguage,
     };
     use crate::application::service::planning::PlanningRuntimeProjection;
-    use crate::core::app::{QueueMutationCorrelation, QueueMutationIntent};
+    use crate::core::app::{
+        ActiveTurnPhase, ActiveTurnSnapshot, CorePromptOrigin, PostTurnAuthoritySnapshot,
+        PostTurnEvaluationCorrelation, PostTurnRouteResolution, QueueMutationCorrelation,
+        QueueMutationIntent, TurnSubmissionCorrelation,
+    };
     use crate::domain::planning::{PlanningWorkerPanelState, PlanningWorkerStatus};
+    use std::time::Instant;
 
     const LOW_PRIORITY_DETAIL: &str = "LOW_PRIORITY_DETAIL";
+
+    fn set_running_turn(conversation: &mut ConversationViewModel, turn_id: &str) {
+        let mut snapshot = conversation.runtime_snapshot().clone();
+        snapshot.active_turn = Some(ActiveTurnSnapshot {
+            correlation: TurnSubmissionCorrelation::new(1),
+            phase: ActiveTurnPhase::Running,
+            workspace_directory: conversation.cwd.clone(),
+            turn_id: Some(turn_id.to_string()),
+            prompt_origin: CorePromptOrigin::Manual,
+            started_at: Instant::now(),
+        });
+        conversation.apply_runtime_snapshot(snapshot);
+        conversation.record_turn_started(turn_id.to_string());
+    }
+
+    fn settle_post_turn(conversation: &mut ConversationViewModel, turn_id: &str) {
+        let workspace_directory = conversation.cwd.clone();
+        let mut snapshot = conversation.runtime_snapshot().clone();
+        snapshot.active_turn = None;
+        snapshot.post_turn = PostTurnAuthoritySnapshot::Settled {
+            correlation: PostTurnEvaluationCorrelation::new(
+                1,
+                conversation.thread_id.clone(),
+                turn_id,
+                workspace_directory.clone(),
+                workspace_directory,
+            ),
+            resolution: PostTurnRouteResolution::NoContinuation,
+        };
+        conversation.apply_runtime_snapshot(snapshot);
+    }
 
     fn dense_hidden_tail_app() -> NativeTuiApp {
         let mut app = test_native_tui_app();
@@ -246,7 +282,6 @@ mod tests {
             "Hidden priority".to_string(),
             "/tmp/root".to_string(),
         );
-        conversation.input_state = ConversationInputState::ReadyToContinue;
         conversation.composer.input_buffer = "우선순위가 보존된 짧은 prompt".to_string();
         conversation
             .composer
@@ -322,7 +357,7 @@ mod tests {
             "Live transcript".to_string(),
             "/tmp/root".to_string(),
         );
-        conversation.record_turn_started("turn-live".to_string());
+        set_running_turn(conversation, "turn-live");
         assert!(conversation.complete_live_agent_message(
             "agent-live".to_string(),
             Some("final_answer".to_string()),
@@ -330,6 +365,7 @@ mod tests {
         ));
         conversation.finish_turn("turn-live", &[]);
         conversation.begin_post_turn_settlement("turn-live");
+        settle_post_turn(conversation, "turn-live");
         assert!(conversation.complete_post_turn_settlement("turn-live"));
         conversation.push_live_agent_delta(
             "agent-next".to_string(),
@@ -431,7 +467,6 @@ mod tests {
             "Semantic tail".to_string(),
             "/tmp/root".to_string(),
         );
-        conversation.input_state = ConversationInputState::ReadyToContinue;
         conversation.status_text = LOW_DETAIL.to_string();
         conversation.base_warnings = vec!["긴한글경고상세".repeat(20)];
         conversation.runtime_notices = vec!["긴한글복구상세".repeat(20)];
@@ -495,6 +530,15 @@ mod tests {
         const WIDTH: u16 = 80;
         let mut app = test_native_tui_app();
         app.shell.chrome.shell_overlay = ShellOverlay::Queue;
+        app.sync_ready_conversation_planning_runtime_projection(
+            PlanningRuntimeProjection::ready_with_details(
+                "Planning Context".to_string(),
+                "now: none  |  next: none  |  proposed: none  |  blocked: none".to_string(),
+                None,
+                None,
+            )
+            .with_workspace_present(true),
+        );
         let ConversationState::Ready(conversation) =
             &mut app.conversation.lifecycle.conversation_state
         else {
@@ -505,18 +549,9 @@ mod tests {
             "Stale planning tail".to_string(),
             "/tmp/root".to_string(),
         );
-        conversation.record_turn_started("turn-stale-tail".to_string());
+        set_running_turn(conversation, "turn-stale-tail");
         conversation.base_warnings = vec!["긴한글경고상세".repeat(20)];
         conversation.runtime_notices = vec!["긴한글복구상세".repeat(20)];
-        app.sync_ready_conversation_planning_runtime_projection(
-            PlanningRuntimeProjection::ready_with_details(
-                "Planning Context".to_string(),
-                "now: none  |  next: none  |  proposed: none  |  blocked: none".to_string(),
-                None,
-                None,
-            )
-            .with_workspace_present(true),
-        );
 
         let mut screen_model = ConversationScreenModel::from_app(&app);
         screen_model.shell_action_availability = ShellActionAvailability::Ready;

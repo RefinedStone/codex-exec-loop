@@ -1,5 +1,7 @@
 use super::TurnSubmissionCorrelation;
-use crate::domain::conversation::{ConversationApprovalDecision, ConversationApprovalReview};
+use crate::domain::conversation::{
+    ConversationApprovalDecision, ConversationApprovalRequestIdentity, ConversationApprovalReview,
+};
 use std::collections::VecDeque;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -138,7 +140,7 @@ impl Default for ApprovalReviewPersistenceCoordinator {
 pub struct ApprovalDecisionCorrelation {
     pub generation: u64,
     pub turn_submission: TurnSubmissionCorrelation,
-    pub approval_id: String,
+    pub request_identity: ConversationApprovalRequestIdentity,
     pub decision: ConversationApprovalDecision,
 }
 
@@ -146,13 +148,13 @@ impl ApprovalDecisionCorrelation {
     pub fn new(
         generation: u64,
         turn_submission: TurnSubmissionCorrelation,
-        approval_id: impl Into<String>,
+        request_identity: ConversationApprovalRequestIdentity,
         decision: ConversationApprovalDecision,
     ) -> Self {
         Self {
             generation,
             turn_submission,
-            approval_id: approval_id.into(),
+            request_identity,
             decision,
         }
     }

@@ -37,16 +37,17 @@ use crate::domain::operator_alert::OperatorAlert;
 
 use super::{
     AutoFollowControlEvent, AutoFollowOverlayUiEvent, AutoFollowOverlayUiState,
-    ConversationComposerEffect, ConversationComposerEvent, ConversationInputEvent,
-    ConversationIntentEffect, ConversationIntentEvent, ConversationIntentMode,
-    ConversationIntentState, ConversationLifecycleEffect, ConversationLifecycleEvent,
-    ConversationLifecycleState, ConversationRuntimeEffect, ConversationRuntimeEvent,
-    ConversationState, ConversationViewModel, GithubReviewPollingBootstrap, NativeTuiApp,
-    PendingResumedSessionPlanningRefresh, PlanningInitOverlayUiState, SESSION_PAGE_SIZE,
-    SessionOverlayUiState, SessionState, ShellChromeEffect, ShellChromeEvent, ShellChromeReduction,
-    ShellChromeState, ShellOverlay, ShellOverlayExitMode, ShellOverlayTransition, StartupState,
-    reduce_auto_follow_controls, reduce_auto_follow_overlay_ui, reduce_conversation_input,
-    reduce_conversation_intents, reduce_conversation_lifecycle, reduce_conversation_runtime,
+    AutoFollowSnapshotPresentation, ConversationComposerEffect, ConversationComposerEvent,
+    ConversationInputEvent, ConversationIntentEffect, ConversationIntentEvent,
+    ConversationIntentMode, ConversationIntentState, ConversationLifecycleEffect,
+    ConversationLifecycleEvent, ConversationLifecycleState, ConversationRuntimeEffect,
+    ConversationRuntimeEvent, ConversationState, ConversationViewModel,
+    GithubReviewPollingBootstrap, NativeTuiApp, PendingResumedSessionPlanningRefresh,
+    PlanningInitOverlayUiState, SESSION_PAGE_SIZE, SessionOverlayUiState, SessionState,
+    ShellChromeEffect, ShellChromeEvent, ShellChromeReduction, ShellChromeState, ShellOverlay,
+    ShellOverlayExitMode, ShellOverlayTransition, StartupState, max_auto_turns_command,
+    reduce_auto_follow_overlay_ui, reduce_conversation_input, reduce_conversation_intents,
+    reduce_conversation_lifecycle, reduce_conversation_runtime_with_transition,
     reduce_shell_chrome, startup_ascii_art_enabled_from_environment,
 };
 
@@ -152,10 +153,10 @@ pub(super) fn core_turn_stream_event_from_application(
             TurnStreamEvent::ApprovalRequested { request }
         }
         ConversationStreamEvent::ApprovalResolved {
-            approval_id,
+            request_identity,
             resolution,
         } => TurnStreamEvent::ApprovalResolved {
-            approval_id,
+            request_identity,
             resolution,
         },
         ConversationStreamEvent::TurnInterruptRequestFailed { message } => {
@@ -803,7 +804,7 @@ mod tests {
             let review_is_projected = matches!(
                 &app.conversation.lifecycle.conversation_state,
                 ConversationState::Ready(conversation)
-                    if conversation.approval_review.as_ref().is_some_and(|review| {
+                    if conversation.approval_review().is_some_and(|review| {
                         review.target_item_id == "tool-gated"
                     })
             );
@@ -848,33 +849,6 @@ mod tests {
     }
 
     #[test]
-    fn stop_supersedes_settlement_but_turn_budget_edits_do_not() {
-        let mut app = test_helpers::test_native_tui_app();
-
-        let paused_permit = app.planning.post_turn_continuation_gate.capture();
-        app.dispatch_auto_follow_controls(AutoFollowControlEvent::AutoFollowPaused);
-        assert!(!paused_permit.is_current());
-
-        let rearmed_permit = app.planning.post_turn_continuation_gate.capture();
-        app.dispatch_auto_follow_controls(AutoFollowControlEvent::MaxAutoTurnsUpdated {
-            value: "3".to_string(),
-        });
-        assert!(rearmed_permit.is_current());
-
-        let invalid_edit_permit = app.planning.post_turn_continuation_gate.capture();
-        app.dispatch_auto_follow_controls(AutoFollowControlEvent::MaxAutoTurnsUpdated {
-            value: "invalid".to_string(),
-        });
-        assert!(invalid_edit_permit.is_current());
-
-        let disabled_permit = app.planning.post_turn_continuation_gate.capture();
-        app.dispatch_auto_follow_controls(AutoFollowControlEvent::MaxAutoTurnsUpdated {
-            value: "off".to_string(),
-        });
-        assert!(disabled_permit.is_current());
-    }
-
-    #[test]
     fn turn_budget_draft_closes_only_after_acceptance_or_context_change() {
         let mut app = test_helpers::test_native_tui_app();
         app.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::EditStarted {
@@ -907,23 +881,19 @@ mod tests {
     }
 
     #[test]
-    fn workspace_and_conversation_supersession_invalidate_continuation_permits() {
+    fn workspace_and_conversation_supersession_reset_tui_intent_state() {
         let mut app = test_helpers::test_native_tui_app();
         let initial_history_identity_revision =
             app.conversation.conversation_history_identity_revision;
 
-        let unchanged_workspace_permit = app.planning.post_turn_continuation_gate.capture();
         app.dispatch_auto_follow_controls(AutoFollowControlEvent::DraftWorkspaceSynced {
             workspace_directory: "/tmp/root".to_string(),
         });
-        assert!(unchanged_workspace_permit.is_current());
 
         app.dispatch_auto_follow_controls(AutoFollowControlEvent::DraftWorkspaceSynced {
             workspace_directory: "/tmp/other".to_string(),
         });
-        assert!(!unchanged_workspace_permit.is_current());
 
-        let new_draft_permit = app.planning.post_turn_continuation_gate.capture();
         arm_pending_manual_prompt_for_identity_test(&mut app, "new draft prompt");
         app.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::EditStarted {
             current_value: "off".to_string(),
@@ -935,7 +905,6 @@ mod tests {
             app.conversation.conversation_history_identity_revision,
             initial_history_identity_revision
         );
-        assert!(!new_draft_permit.is_current());
         assert!(app.conversation.pending_manual_prompt_preparation.is_none());
         assert!(matches!(
             &app.conversation.lifecycle.conversation_state,
@@ -943,7 +912,6 @@ mod tests {
         ));
         assert_eq!(app.max_auto_turns_edit_buffer(), None);
 
-        let session_permit = app.planning.post_turn_continuation_gate.capture();
         let draft_history_identity_revision =
             app.conversation.conversation_history_identity_revision;
         arm_pending_manual_prompt_for_identity_test(&mut app, "session prompt");
@@ -958,7 +926,6 @@ mod tests {
             app.conversation.conversation_history_identity_revision,
             draft_history_identity_revision
         );
-        assert!(!session_permit.is_current());
         assert!(app.conversation.pending_manual_prompt_preparation.is_none());
         assert!(matches!(
             app.conversation.lifecycle.conversation_state,
@@ -1225,6 +1192,52 @@ mod tests {
     }
 
     #[test]
+    fn cancelled_post_turn_authority_resets_worker_panel_and_late_drop_cannot_revive_it() {
+        let mut app = test_helpers::test_native_tui_app();
+        let mut previous_runtime = app.conversation_runtime_projection();
+        previous_runtime.post_turn = crate::core::app::PostTurnAuthoritySnapshot::Evaluating {
+            correlation: crate::core::app::PostTurnEvaluationCorrelation::new(
+                1,
+                "thread-1",
+                "turn-1",
+                "/tmp/root",
+                "/tmp/root",
+            ),
+            started_at: Instant::now(),
+        };
+        app.apply_conversation_runtime_projection(previous_runtime.clone());
+        app.planning
+            .planning_worker_panel_state
+            .replace_for_test(PlanningWorkerPanelState {
+                status: PlanningWorkerStatus::RefreshRunning,
+                last_summary: Some("post-turn evaluation".to_string()),
+                ..PlanningWorkerPanelState::default()
+            });
+
+        let mut cancelled_runtime = previous_runtime.clone();
+        cancelled_runtime.post_turn = crate::core::app::PostTurnAuthoritySnapshot::Idle;
+        app.apply_core_event_with_previous_runtime(
+            AppEvent::ConversationRuntimeAuthorityChanged(Box::new(cancelled_runtime.clone())),
+            &previous_runtime,
+        );
+        assert_eq!(
+            app.planning.planning_worker_panel_state.current(),
+            &PlanningWorkerPanelState::default()
+        );
+
+        // Core drops a completion whose correlation was cancelled. The only
+        // projection TUI can observe is the already-settled authority snapshot.
+        app.apply_core_event_with_previous_runtime(
+            AppEvent::ConversationRuntimeAuthorityChanged(Box::new(cancelled_runtime.clone())),
+            &cancelled_runtime,
+        );
+        assert_eq!(
+            app.planning.planning_worker_panel_state.current(),
+            &PlanningWorkerPanelState::default()
+        );
+    }
+
+    #[test]
     fn parallel_peek_projection_requires_the_visible_matching_preview() {
         let mut app = test_helpers::test_native_tui_app();
         app.shell
@@ -1394,18 +1407,29 @@ mod tests {
             None,
             None,
         ));
-        conversation.record_turn_started("turn-1".to_string());
-        conversation.approval_review = Some(ConversationApprovalReview {
+        let approval_review = ConversationApprovalReview {
             target_item_id: "tool-1".to_string(),
             status: ConversationApprovalReviewStatus::InProgress,
             risk_level: Some("medium".to_string()),
             rationale: Some("confirm this command".to_string()),
+        };
+        let mut runtime_snapshot = conversation.runtime_snapshot().clone();
+        runtime_snapshot.active_turn = Some(crate::core::app::ActiveTurnSnapshot {
+            correlation: crate::core::app::TurnSubmissionCorrelation::new(1),
+            phase: crate::core::app::ActiveTurnPhase::Running,
+            workspace_directory: "/tmp/root".to_string(),
+            turn_id: Some("turn-1".to_string()),
+            prompt_origin: crate::core::app::CorePromptOrigin::Manual,
+            started_at: Instant::now(),
         });
+        runtime_snapshot.approval_review = Some(approval_review);
+        conversation.apply_runtime_snapshot(runtime_snapshot);
+        conversation.record_turn_started("turn-1".to_string());
         conversation.status_text = "semantic status".to_string();
 
         let messages_before = conversation.messages.clone();
-        let active_turn_before = conversation.active_turn_id.clone();
-        let approval_before = conversation.approval_review.clone();
+        let active_turn_before = conversation.active_turn_id().map(str::to_string);
+        let approval_before = conversation.approval_review().cloned();
         let planning_repair_before = conversation.planning_repair_state.clone();
         let status_before = conversation.status_text.clone();
 
@@ -1419,8 +1443,11 @@ mod tests {
         };
         assert_eq!(conversation.composer.input_buffer, "x");
         assert_eq!(conversation.messages, messages_before);
-        assert_eq!(conversation.active_turn_id, active_turn_before);
-        assert_eq!(conversation.approval_review, approval_before);
+        assert_eq!(
+            conversation.active_turn_id().map(str::to_string),
+            active_turn_before
+        );
+        assert_eq!(conversation.approval_review().cloned(), approval_before);
         assert_eq!(conversation.planning_repair_state, planning_repair_before);
         assert_eq!(conversation.status_text, status_before);
     }
@@ -1630,8 +1657,6 @@ impl NativeTuiApp {
                     super::PlanningWorkspaceOperationUiState::default(),
                 planning_draft_editor_ui_state: super::PlanningDraftEditorUiState::default(),
                 planning_worker_panel_state: super::CorePlanningWorkerPanelProjection::default(),
-                post_turn_continuation_gate:
-                    crate::domain::planning::PostTurnContinuationGate::default(),
                 planning_worker_visibility: super::PlanningWorkerVisibility::from_environment(),
             },
             runtime: super::NativeTuiRuntimeState {
@@ -1762,19 +1787,46 @@ impl NativeTuiApp {
                     );
                 Some(AppliedNativeParallelDispatch {
                     presentation_changed,
-                    auto_follow_prompt_consumed: outcome.auto_follow_prompt_consumed,
+                })
+            }
+            NativeClientDispatchOutcome::Combined { core, parallel } => {
+                self.apply_core_dispatch_outcome(core);
+                let presentation_changed = self
+                    .apply_parallel_mode_control_plane_presentation_events(
+                        parallel.presentation_events,
+                    );
+                Some(AppliedNativeParallelDispatch {
+                    presentation_changed,
                 })
             }
         }
     }
 
     pub(super) fn apply_core_dispatch_outcome(&mut self, outcome: CoreDispatchOutcome) {
+        let previous_runtime = self.conversation_runtime_projection();
+        self.apply_conversation_runtime_projection(outcome.snapshot.conversation_runtime.clone());
         for event in outcome.events {
-            self.apply_core_event(event);
+            self.apply_core_event_with_previous_runtime(event, &previous_runtime);
         }
+        // A Core event may synchronously dispatch a newer nested outcome. Read
+        // the runtime facade again so the outer transition cannot restore its
+        // older projection over that nested result.
+        self.apply_conversation_runtime_projection(
+            self.runtime.client_runtime.snapshot().conversation_runtime,
+        );
     }
 
+    #[cfg(test)]
     pub(super) fn apply_core_event(&mut self, event: AppEvent) {
+        let previous_runtime = self.conversation_runtime_projection();
+        self.apply_core_event_with_previous_runtime(event, &previous_runtime);
+    }
+
+    fn apply_core_event_with_previous_runtime(
+        &mut self,
+        event: AppEvent,
+        previous_runtime: &crate::core::app::ConversationRuntimeSnapshot,
+    ) {
         match event {
             AppEvent::StartupChanged { snapshot, .. } => self.apply_core_startup_snapshot(snapshot),
             AppEvent::SessionCatalogChanged(SessionCatalogSnapshot::Idle) => {
@@ -2025,17 +2077,26 @@ impl NativeTuiApp {
             AppEvent::TurnSteerAdmissionResolved(_) => {}
             AppEvent::ApprovalDecisionAdmissionResolved(_) => {}
             AppEvent::ApprovalDecisionSubmissionCompleted {
-                correlation,
+                correlation: _,
                 result,
             } => {
                 if let Err(error) = result {
                     self.dispatch_conversation_runtime(
                         ConversationRuntimeEvent::ApprovalDecisionSubmissionFailed {
-                            approval_id: correlation.approval_id,
                             error,
                         },
                     );
                 }
+            }
+            AppEvent::ConversationRuntimeAuthorityChanged(snapshot) => {
+                if previous_runtime.post_turn.is_in_flight()
+                    && !snapshot.post_turn.is_in_flight()
+                {
+                    self.planning
+                        .planning_worker_panel_state
+                        .reset_for_conversation_lifecycle();
+                }
+                self.apply_conversation_runtime_projection(*snapshot);
             }
             AppEvent::ManualPromptPreparationAdmissionResolved(_) => {}
             AppEvent::TurnSteerCompleted {
@@ -2043,8 +2104,9 @@ impl NativeTuiApp {
                 result,
             } => self.apply_turn_steer_completion(correlation, result),
             AppEvent::TurnStreamSnapshotChanged(stream_snapshot) => {
-                self.dispatch_conversation_runtime(
+                self.dispatch_conversation_runtime_transition(
                     ConversationRuntimeEvent::StreamSnapshotApplied(stream_snapshot),
+                    previous_runtime,
                 );
             }
             AppEvent::ManualPromptPrepared(result) => {
@@ -2055,14 +2117,24 @@ impl NativeTuiApp {
                     .planning_worker_panel_state
                     .apply_started(state);
             }
-            AppEvent::PostTurnEvaluationCompleted(execution) => {
-                self.apply_post_turn_evaluation_execution(*execution);
+            AppEvent::PostTurnContinuationRoutingRequested { .. } => {
+                // NativeClientRuntime consumes this Core event and re-enters
+                // Core with the exact route resolution before TUI projection.
+            }
+            AppEvent::PostTurnEvaluationCompleted {
+                correlation,
+                execution,
+                route_resolution,
+            } => {
+                self.apply_post_turn_evaluation_execution(
+                    correlation,
+                    *execution,
+                    route_resolution,
+                );
             }
             AppEvent::ConversationTurnWorkspaceChanged {
-                workspace_directory,
-            } => {
-                self.sync_active_turn_workspace_directory(&workspace_directory);
-            }
+                workspace_directory: _,
+            } => {}
             AppEvent::ParallelModeSupervisorSnapshotInvalidated => {
                 self.invalidate_parallel_mode_supervisor_snapshot();
             }
@@ -2111,6 +2183,16 @@ impl NativeTuiApp {
             NativeClientDispatchOutcome::Core(outcome) => outcome,
             NativeClientDispatchOutcome::Parallel(_) => {
                 unreachable!("Core client event must return a Core outcome")
+            }
+            NativeClientDispatchOutcome::Combined { core, parallel } => {
+                // Combined is normally produced by polled post-turn routing and
+                // applied through `apply_native_client_dispatch_outcome`. Keep
+                // this admission-oriented seam exhaustive for test/immediate
+                // executors; the Core outcome remains available to the caller.
+                self.apply_parallel_mode_control_plane_presentation_events(
+                    parallel.presentation_events,
+                );
+                core
             }
         }
     }
@@ -2277,7 +2359,6 @@ impl NativeTuiApp {
                 | ConversationLifecycleEvent::SessionChosen { .. }
         );
         if changes_conversation_identity {
-            self.planning.post_turn_continuation_gate.advance();
             self.cancel_manual_prompt_preparation_for_identity_transition();
             self.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::EditFinished);
         }
@@ -2374,19 +2455,50 @@ impl NativeTuiApp {
         }
     }
 
+    pub(super) fn conversation_runtime_projection(
+        &self,
+    ) -> crate::core::app::ConversationRuntimeSnapshot {
+        match &self.conversation.lifecycle.conversation_state {
+            ConversationState::Ready(conversation) => conversation.runtime_snapshot().clone(),
+            ConversationState::Loading | ConversationState::Failed(_) => {
+                self.runtime.client_runtime.snapshot().conversation_runtime
+            }
+        }
+    }
+
+    fn apply_conversation_runtime_projection(
+        &mut self,
+        snapshot: crate::core::app::ConversationRuntimeSnapshot,
+    ) {
+        if let ConversationState::Ready(conversation) =
+            &mut self.conversation.lifecycle.conversation_state
+        {
+            conversation.apply_runtime_snapshot(snapshot);
+        }
+    }
+
     pub(super) fn dispatch_conversation_runtime(
         &mut self,
         event: ConversationRuntimeEvent,
     ) -> bool {
+        let previous_runtime = self.conversation_runtime_projection();
+        self.dispatch_conversation_runtime_transition(event, &previous_runtime)
+    }
+
+    fn dispatch_conversation_runtime_transition(
+        &mut self,
+        event: ConversationRuntimeEvent,
+        previous_runtime: &crate::core::app::ConversationRuntimeSnapshot,
+    ) -> bool {
         self.capture_ready_conversation_history_thread();
         let supersedes_planning_ui_intent = event.supersedes_planning_ui_intent();
-        let post_turn_context = self.post_turn_continuation_context(&event);
         let Some(conversation) = self.take_ready_conversation_state() else {
             return false;
         };
 
-        let reduction = reduce_conversation_runtime(conversation, event);
-        let mut effects = reduction.effects;
+        let reduction =
+            reduce_conversation_runtime_with_transition(conversation, event, previous_runtime);
+        let effects = reduction.effects;
         let requests_turn_submission = effects.iter().any(|effect| {
             matches!(
                 effect,
@@ -2401,7 +2513,6 @@ impl NativeTuiApp {
         if !requests_turn_submission && !self.conversation_has_running_turn() {
             self.conversation.turn_steer_confirmation = None;
         }
-        self.route_post_turn_continuation_effects(post_turn_context, &mut effects);
         let mut turn_submission_admitted = false;
         for effect in effects {
             turn_submission_admitted |= self.execute_conversation_runtime_effect(effect);
@@ -2536,43 +2647,71 @@ impl NativeTuiApp {
     }
 
     pub(super) fn dispatch_auto_follow_controls(&mut self, event: AutoFollowControlEvent) {
-        let invalidates_prior_requests = match &event {
+        match event {
+            AutoFollowControlEvent::DraftWorkspaceSynced {
+                workspace_directory,
+            } => {
+                let changed = match &mut self.conversation.lifecycle.conversation_state {
+                    ConversationState::Ready(conversation) => {
+                        conversation.sync_draft_workspace(workspace_directory)
+                    }
+                    ConversationState::Loading | ConversationState::Failed(_) => false,
+                };
+                if changed {
+                    self.cancel_manual_prompt_preparation_for_identity_transition();
+                    self.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::EditFinished);
+                    self.advance_planning_ui_intent_revision();
+                }
+            }
             AutoFollowControlEvent::AutoFollowPaused
-            | AutoFollowControlEvent::PlanningAuthorityMutationSettled => true,
-            // Budget edits affect the eventual auto-prompt decision, but the
-            // in-flight planning settlement still owns queue/receipt completion.
-            AutoFollowControlEvent::MaxAutoTurnsUpdated { .. } => false,
-            AutoFollowControlEvent::DraftWorkspaceSynced {
-                workspace_directory,
-            } => matches!(
-                &self.conversation.lifecycle.conversation_state,
-                ConversationState::Ready(conversation)
-                    if conversation.draft_workspace_directory() != workspace_directory
-            ),
-        };
-        if invalidates_prior_requests {
-            self.planning.post_turn_continuation_gate.advance();
-        }
-        if matches!(
-            &event,
-            AutoFollowControlEvent::DraftWorkspaceSynced {
-                workspace_directory,
-            } if matches!(
-                &self.conversation.lifecycle.conversation_state,
-                ConversationState::Ready(conversation)
-                    if conversation.draft_workspace_directory() != workspace_directory
-            )
-        ) {
-            self.cancel_manual_prompt_preparation_for_identity_transition();
-        }
-        let Some(conversation) = self.take_ready_conversation_state() else {
-            return;
-        };
-        let reduction = reduce_auto_follow_controls(conversation, event);
-        self.conversation.lifecycle.conversation_state = ConversationState::ready(reduction.state);
-        self.advance_planning_ui_intent_revision();
-        if reduction.close_max_auto_turns_editor {
-            self.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::EditFinished);
+            | AutoFollowControlEvent::PlanningAuthorityMutationSettled => {
+                let show_operator_status =
+                    matches!(event, AutoFollowControlEvent::AutoFollowPaused);
+                self.dispatch_client_event(CoreInput::Command(
+                    AppCommand::PausePostTurnContinuation,
+                ));
+                if let ConversationState::Ready(conversation) =
+                    &mut self.conversation.lifecycle.conversation_state
+                {
+                    conversation.record_internal_continuation_paused();
+                    if show_operator_status {
+                        conversation.status_text =
+                            "auto-follow stopped and disarmed / use :turns <positive|infinite> to re-enable"
+                                .to_string();
+                    }
+                }
+                self.advance_planning_ui_intent_revision();
+            }
+            AutoFollowControlEvent::MaxAutoTurnsUpdated { value } => {
+                let Some(command) = max_auto_turns_command(&value) else {
+                    if let ConversationState::Ready(conversation) =
+                        &mut self.conversation.lifecycle.conversation_state
+                    {
+                        conversation.status_text =
+                            "auto-follow unchanged / use a positive whole number, infinite, off, or 0"
+                                .to_string();
+                    }
+                    return;
+                };
+                self.dispatch_client_event(CoreInput::Command(command));
+                if let ConversationState::Ready(conversation) =
+                    &mut self.conversation.lifecycle.conversation_state
+                {
+                    conversation.clear_auto_follow_skip();
+                    let auto_follow = conversation.auto_follow_state();
+                    conversation.status_text = if auto_follow.is_enabled() {
+                        format!(
+                            "auto-follow enabled / turn budget {}",
+                            auto_follow.max_auto_turns_label()
+                        )
+                    } else {
+                        "auto-follow disabled / use :turns <positive|infinite> to enable"
+                            .to_string()
+                    };
+                }
+                self.advance_planning_ui_intent_revision();
+                self.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::EditFinished);
+            }
         }
     }
 
@@ -2585,5 +2724,4 @@ impl NativeTuiApp {
 
 pub(super) struct AppliedNativeParallelDispatch {
     pub(super) presentation_changed: bool,
-    pub(super) auto_follow_prompt_consumed: bool,
 }

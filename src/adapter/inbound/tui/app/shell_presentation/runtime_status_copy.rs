@@ -1,10 +1,10 @@
 use std::time::{Duration, Instant};
 
+use crate::core::app::AutoFollowPhase;
 use crate::domain::text::compact_whitespace_detail;
 
 use super::{
-    AkraTheme, AutoFollowRuntimePhase, ConversationInputState,
-    ConversationRuntimeStatusScreenModel, Line, Modifier, Span,
+    AkraTheme, ConversationInputState, ConversationRuntimeStatusScreenModel, Line, Modifier, Span,
 };
 
 // shell presentation의 런타임 상태 문구를 한곳에 모아 둔다. 컨트롤러 상태를 다시
@@ -23,10 +23,7 @@ pub(super) fn build_working_line(
     // 내부적으로 turn을 만들기 전 평가/큐 단계도 있으므로 별도 시작 시각을 사용한다.
     let detail = if runtime_status.post_turn_settlement_in_flight {
         "settling planning queue".to_string()
-    } else if !matches!(
-        runtime_status.auto_follow_phase,
-        AutoFollowRuntimePhase::Idle
-    ) {
+    } else if !matches!(runtime_status.auto_follow_phase, AutoFollowPhase::Idle) {
         auto_follow_working_detail(runtime_status)
     } else {
         manual_turn_working_detail(runtime_status)?
@@ -76,16 +73,16 @@ fn auto_follow_working_detail(runtime_status: &ConversationRuntimeStatusScreenMo
     match &runtime_status.auto_follow_phase {
         // Idle은 보통 호출되지 않지만, projection 조합 실수에도 빈 문자열 대신 진단 가능한
         // 라벨을 남긴다.
-        AutoFollowRuntimePhase::Idle => "idle".to_string(),
-        AutoFollowRuntimePhase::Queued { turn_index, .. } => {
+        AutoFollowPhase::Idle => "idle".to_string(),
+        AutoFollowPhase::Queued { turn_index, .. } => {
             format!("auto turn {turn_index}/{max_auto_turns} queued for submission")
         }
-        AutoFollowRuntimePhase::Submitting { turn_index, .. } => {
+        AutoFollowPhase::Submitting { turn_index, .. } => {
             format!(
                 "auto turn {turn_index}/{max_auto_turns} starting / interrupt {interrupt_label}"
             )
         }
-        AutoFollowRuntimePhase::Running { turn_index, .. } => {
+        AutoFollowPhase::Running { turn_index, .. } => {
             format!("auto turn {turn_index}/{max_auto_turns} running / interrupt {interrupt_label}")
         }
     }
@@ -119,7 +116,7 @@ mod tests {
         let mut runtime_status = ConversationRuntimeStatusScreenModel {
             working_started_at: Some(started_at),
             post_turn_settlement_in_flight: false,
-            auto_follow_phase: AutoFollowRuntimePhase::Idle,
+            auto_follow_phase: AutoFollowPhase::Idle,
             auto_follow_max_turns_label: "infinite".to_string(),
             input_state: ConversationInputState::DraftReady,
             live_agent_message_present: false,
@@ -141,7 +138,7 @@ mod tests {
         runtime_status.live_agent_message_present = true;
         assert!(rendered(&runtime_status).is_some_and(|line| line.contains("turn running")));
 
-        runtime_status.auto_follow_phase = AutoFollowRuntimePhase::Queued {
+        runtime_status.auto_follow_phase = AutoFollowPhase::Queued {
             started_at,
             turn_index: 2,
         };

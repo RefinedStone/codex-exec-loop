@@ -4,7 +4,8 @@
  */
 
 use super::super::turn_activity::TurnActivityState;
-use super::AutoFollowState;
+use super::AutoFollowSnapshotPresentation;
+use crate::core::app::AutoFollowAuthoritySnapshot;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /*
@@ -52,7 +53,7 @@ impl AutoFollowSkipReason {
      */
     pub(crate) fn detail(
         self,
-        auto_follow_state: &AutoFollowState,
+        auto_follow_state: &AutoFollowAuthoritySnapshot,
         turn_activity: &TurnActivityState,
     ) -> String {
         // 모든 variant를 직접 매핑해 새 guardrail이 생길 때 operator copy 추가를 강제한다.
@@ -80,7 +81,7 @@ impl AutoFollowSkipReason {
             }
             Self::StopKeywordMatched => format!(
                 "the latest agent reply matched the stop keyword {}",
-                auto_follow_state.stop_rules.stop_keyword.value()
+                auto_follow_state.stop_keyword
             ),
             Self::NoFileChanges => format!(
                 "the last completed turn changed {} files while the no-file stop rule is on",
@@ -121,7 +122,10 @@ impl AutoFollowSkipReason {
      * Detail보다 덜 설명적이지만 paused/stopped/skipped prefix를 유지해 operator가
      * 자동 follow-up 상태를 빠르게 분류할 수 있게 한다.
      */
-    pub(crate) fn activity_summary(self, auto_follow_state: &AutoFollowState) -> &'static str {
+    pub(crate) fn activity_summary(
+        self,
+        auto_follow_state: &AutoFollowAuthoritySnapshot,
+    ) -> &'static str {
         match self {
             Self::PostTurnContinuationPaused
                 if !auto_follow_state.post_turn_continuation_paused() =>
@@ -151,7 +155,7 @@ impl AutoFollowSkipReason {
      * post_turn_execution이 SkipAutoFollow action을 만들면 conversation model이 이
      * 문구를 상태에 기록해 화면과 로그가 같은 skip reason을 같은 어휘로 설명한다.
      */
-    pub(crate) fn runtime_status(self, auto_follow_state: &AutoFollowState) -> String {
+    pub(crate) fn runtime_status(self, auto_follow_state: &AutoFollowAuthoritySnapshot) -> String {
         match self {
             Self::PostTurnContinuationPaused
                 if !auto_follow_state.post_turn_continuation_paused() =>
@@ -176,7 +180,7 @@ impl AutoFollowSkipReason {
             }
             Self::StopKeywordMatched => format!(
                 "turn completed / auto-follow stopped: stop keyword matched ({})",
-                auto_follow_state.stop_rules.stop_keyword.value()
+                auto_follow_state.stop_keyword
             ),
             Self::NoFileChanges => {
                 "turn completed / auto-follow stopped: no file changes".to_string()
@@ -212,7 +216,7 @@ impl AutoFollowSkipReason {
 
 #[cfg(test)]
 mod tests {
-    use super::{AutoFollowSkipReason, AutoFollowState};
+    use super::{AutoFollowAuthoritySnapshot, AutoFollowSkipReason};
 
     #[test]
     fn post_turn_timeout_skip_reason_has_operator_copy() {
@@ -222,7 +226,7 @@ mod tests {
          * copy이므로 variant 추가 시 이 경로의 문구 계약도 함께 유지되어야 한다.
          */
         let reason = AutoFollowSkipReason::PostTurnEvaluationTimedOut;
-        let state = AutoFollowState::new();
+        let state = AutoFollowAuthoritySnapshot::default();
 
         assert!(
             reason

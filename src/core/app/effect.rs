@@ -71,7 +71,7 @@ pub enum CoreEffect {
     },
     SubmitTurn {
         correlation: TurnSubmissionCorrelation,
-        request: TurnSubmissionRequest,
+        request: Box<TurnSubmissionRequest>,
     },
     RequestStopAllSessions {
         correlation: StopRequestCorrelation,

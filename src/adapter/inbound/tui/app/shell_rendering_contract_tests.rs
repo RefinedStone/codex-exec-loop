@@ -401,9 +401,9 @@ fn inline_main_buffer_clears_stale_live_tail_rows_after_turn_finishes() {
         panic!("test app should stay in a ready conversation state");
     };
     conversation.live_agent_message = None;
-    conversation.active_turn_id = None;
-    conversation.active_turn_started_at = None;
-    conversation.input_state = ConversationInputState::ReadyToContinue;
+    let mut snapshot = conversation.runtime_snapshot().clone();
+    snapshot.active_turn = None;
+    conversation.apply_runtime_snapshot(snapshot);
 
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
@@ -426,9 +426,9 @@ fn inline_main_buffer_clears_stale_tail_rows_when_overlay_opens() {
         panic!("test app should stay in a ready conversation state");
     };
     conversation.live_agent_message = None;
-    conversation.active_turn_id = None;
-    conversation.active_turn_started_at = None;
-    conversation.input_state = ConversationInputState::ReadyToContinue;
+    let mut snapshot = conversation.runtime_snapshot().clone();
+    snapshot.active_turn = None;
+    conversation.apply_runtime_snapshot(snapshot);
     app.shell.chrome.shell_overlay = ShellOverlay::Startup;
     app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
 

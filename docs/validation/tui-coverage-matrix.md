@@ -121,6 +121,7 @@ and remove it when the corresponding tests move or disappear.
 - `src/adapter/inbound/tui/app/conversation_intents.rs`
 - `src/adapter/inbound/tui/app/conversation_lifecycle.rs`
 - `src/adapter/inbound/tui/app/conversation_model/activity_rail.rs`
+- `src/adapter/inbound/tui/app/conversation_model/auto_follow.rs`
 - `src/adapter/inbound/tui/app/conversation_model/auto_follow_decision.rs`
 - `src/adapter/inbound/tui/app/conversation_model/progressive_activity_cards.rs`
 - `src/adapter/inbound/tui/app/conversation_model/progressive_activity_detail_tests.rs`

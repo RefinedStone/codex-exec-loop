@@ -7,6 +7,7 @@ pub mod approval;
 pub mod command;
 mod controller;
 pub mod conversation;
+mod conversation_runtime;
 mod conversation_turn_reducer;
 pub mod directions;
 pub mod effect;
@@ -38,6 +39,11 @@ pub use controller::CoreDispatchOutcome;
 pub use conversation::{
     ConversationReadySnapshot, ConversationSnapshot, ConversationState,
     ConversationThreadReviewSnapshot,
+};
+pub use conversation_runtime::{
+    ActiveTurnPhase, ActiveTurnSnapshot, ApprovalAuthorityPhase, ApprovalAuthoritySnapshot,
+    AutoFollowAuthoritySnapshot, AutoFollowPhase, ConversationRuntimeSnapshot,
+    PostTurnAuthoritySnapshot, PostTurnRouteResolution,
 };
 pub use directions::{
     DirectionsMaintenanceDirectionSnapshot, DirectionsMaintenanceSummarySnapshot,
@@ -95,7 +101,7 @@ pub(in crate::core) use turn_stream::TurnStreamState;
 pub(crate) use turn_stream::TurnStreamTestHarness;
 pub use turn_stream::{
     TurnStreamEvent, TurnStreamProgressiveActivityUpdate, TurnStreamRuntimeEnvelopeRejection,
-    TurnStreamSnapshot, TurnStreamTerminalSnapshot, TurnStreamUpdate,
+    TurnStreamSnapshot, TurnStreamStartRejection, TurnStreamTerminalSnapshot, TurnStreamUpdate,
 };
 pub use turn_submission::{
     CorePromptOrigin, TurnSubmissionAdmission, TurnSubmissionCorrelation, TurnSubmissionRequest,

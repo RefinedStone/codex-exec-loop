@@ -22,8 +22,8 @@ use serde_json::{Value, json};
 
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::domain::conversation::{
-    ConversationApprovalDecision, ConversationApprovalRequest, ConversationApprovalResolution,
-    ConversationTurnSteerReceipt,
+    ConversationApprovalDecision, ConversationApprovalRequest, ConversationApprovalRequestIdentity,
+    ConversationApprovalResolution, ConversationTurnSteerReceipt,
 };
 use crate::domain::conversation_runtime_envelope::{
     ConversationRuntimeLaunchEnvironment, ConversationRuntimeProcessEnvironment,
@@ -2661,6 +2661,7 @@ impl AppServerConnection {
             summary: spec.summary.clone(),
             details: spec.details.clone(),
         };
+        let request_identity = request.identity();
         if interrupt_context
             .signal
             .requested_after(interrupt_context.observed_generation)
@@ -2697,7 +2698,7 @@ impl AppServerConnection {
             if let Err(error) = self.ensure_transport_healthy() {
                 self.approval_broker.cancel(&approval_id);
                 let _ = event_sender.try_send(ConversationStreamEvent::ApprovalResolved {
-                    approval_id,
+                    request_identity,
                     resolution: ConversationApprovalResolution::Disconnected,
                 });
                 return Err(error);
@@ -2716,7 +2717,7 @@ impl AppServerConnection {
                 Ok(Some(_)) => {
                     self.approval_broker.cancel(&approval_id);
                     let _ = event_sender.try_send(ConversationStreamEvent::ApprovalResolved {
-                        approval_id,
+                        request_identity,
                         resolution: ConversationApprovalResolution::Disconnected,
                     });
                     return Ok(());
@@ -2725,7 +2726,7 @@ impl AppServerConnection {
                 Err(error) => {
                     self.approval_broker.cancel(&approval_id);
                     let _ = event_sender.try_send(ConversationStreamEvent::ApprovalResolved {
-                        approval_id,
+                        request_identity,
                         resolution: ConversationApprovalResolution::Disconnected,
                     });
                     return Err(error.into());
@@ -2784,7 +2785,13 @@ impl AppServerConnection {
                 }
             }
         };
-        self.send_approval_response(request_id, &approval_id, result, resolution, event_sender)
+        self.send_approval_response(
+            request_id,
+            &request_identity,
+            result,
+            resolution,
+            event_sender,
+        )
     }
 
     fn send_pre_ui_approval_decline(
@@ -2855,14 +2862,14 @@ impl AppServerConnection {
     fn send_approval_response(
         &mut self,
         request_id: &Value,
-        approval_id: &str,
+        request_identity: &ConversationApprovalRequestIdentity,
         result: Value,
         resolution: ConversationApprovalResolution,
         event_sender: &dyn AppServerEventSender,
     ) -> Result<()> {
         self.send_json_line(json!({ "id": request_id, "result": result }))?;
         let _ = event_sender.try_send(ConversationStreamEvent::ApprovalResolved {
-            approval_id: approval_id.to_string(),
+            request_identity: request_identity.clone(),
             resolution,
         });
         Ok(())
@@ -4954,6 +4961,7 @@ mod tests {
             let ConversationStreamEvent::ApprovalRequested { request } = event else {
                 panic!("expected exact approval request, got {event:?}");
             };
+            let request_identity = request.identity();
             for expected in [
                 "Thread: thread-active",
                 "Turn: turn-active",
@@ -4969,9 +4977,10 @@ mod tests {
                     .resolve(&request.approval_id, ConversationApprovalDecision::Accept)
                     .is_err()
             );
-            event_receiver
+            let resolved = event_receiver
                 .recv_timeout(Duration::from_secs(1))
-                .expect("approval resolution should reach the UI channel")
+                .expect("approval resolution should reach the UI channel");
+            (request_identity, resolved)
         });
 
         assert!(
@@ -4991,12 +5000,13 @@ mod tests {
 
         let logged = harness.logged_json_lines(1);
         assert_eq!(logged[0]["result"]["decision"], "accept");
+        let (request_identity, resolved) = resolver.join().expect("resolver thread should finish");
         assert!(matches!(
-            resolver.join().expect("resolver thread should finish"),
+            resolved,
             ConversationStreamEvent::ApprovalResolved {
+                request_identity: resolved_identity,
                 resolution: ConversationApprovalResolution::Accepted,
-                ..
-            }
+            } if resolved_identity == request_identity
         ));
         assert_eq!(harness.connection.approval_broker.pending_count(), 0);
     }

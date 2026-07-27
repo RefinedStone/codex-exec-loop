@@ -1,7 +1,7 @@
 use crate::domain::conversation::ConversationTurnOptions;
-use crate::domain::planning::ParallelTurnHandoff;
+use crate::domain::planning::{ParallelTurnHandoff, TaskHandoff};
 
-use super::StopRequestCorrelation;
+use super::{PostTurnEvaluationCorrelation, StopRequestCorrelation};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TurnSubmissionCorrelation {
@@ -25,6 +25,7 @@ pub enum TurnSubmissionAdmission {
     RejectedStopPending {
         stop_correlation: StopRequestCorrelation,
     },
+    RejectedUnavailable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +41,13 @@ pub struct TurnSubmissionRequest {
     pub thread_id: Option<String>,
     pub prompt: String,
     pub prompt_origin: CorePromptOrigin,
+    pub auto_follow_source: Option<PostTurnEvaluationCorrelation>,
+    /*
+     * Manual-intake handoff identity enters Core with the turn intent. Plain
+     * manual turns must not carry one, while auto-follow derives its handoff
+     * only from the exact Core-owned post-turn route.
+     */
+    pub planning_handoff: Option<TaskHandoff>,
     pub turn_options: ConversationTurnOptions,
     pub slot_lease_handoff: Option<ParallelTurnHandoff>,
 }

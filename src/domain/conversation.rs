@@ -272,6 +272,21 @@ pub struct ConversationApprovalRequest {
     pub details: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ConversationApprovalRequestIdentity {
+    pub approval_id: String,
+    pub server_request_id: String,
+}
+
+impl ConversationApprovalRequest {
+    pub fn identity(&self) -> ConversationApprovalRequestIdentity {
+        ConversationApprovalRequestIdentity {
+            approval_id: self.approval_id.clone(),
+            server_request_id: self.server_request_id.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConversationApprovalDecision {
     Accept,

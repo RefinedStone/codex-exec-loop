@@ -566,8 +566,7 @@ fn inline_frame_render_receipt_matches(
                     ConversationState::Ready(conversation)
                         if conversation.approval_detail_scroll_offset == change.expected
                             && conversation
-                                .pending_approval_request
-                                .as_ref()
+                                .pending_approval_request()
                                 .is_some_and(|request| {
                                     request.server_request_id == change.server_request_id
                                 })
@@ -734,16 +733,15 @@ fn capture_approval_frame(
 ) -> (ApprovalInlineScreenModel, Option<ApprovalScrollStateChange>) {
     let Some((request, requested_scroll_offset, submitted_decision)) =
         (match &app.conversation.lifecycle.conversation_state {
-            ConversationState::Ready(conversation) => conversation
-                .pending_approval_request
-                .as_ref()
-                .map(|request| {
+            ConversationState::Ready(conversation) => {
+                conversation.pending_approval_request().map(|request| {
                     (
                         request.clone(),
                         conversation.approval_detail_scroll_offset,
                         conversation.pending_approval_decision(),
                     )
-                }),
+                })
+            }
             ConversationState::Loading | ConversationState::Failed(_) => None,
         })
     else {
@@ -944,14 +942,20 @@ mod tests {
         else {
             panic!("test app should have a ready conversation");
         };
-        conversation.pending_approval_request = Some(ConversationApprovalRequest {
-            approval_id: "approval-large-scroll".to_string(),
-            server_request_id: "server-large-scroll".to_string(),
-            method: "item/commandExecution/requestApproval".to_string(),
-            kind: ConversationApprovalRequestKind::CommandExecution,
-            summary: "large approval detail".to_string(),
-            details: vec!["x".repeat(140_000)],
+        let mut runtime_snapshot = conversation.runtime_snapshot().clone();
+        runtime_snapshot.approval = Some(crate::core::app::ApprovalAuthoritySnapshot {
+            request: ConversationApprovalRequest {
+                approval_id: "approval-large-scroll".to_string(),
+                server_request_id: "server-large-scroll".to_string(),
+                method: "item/commandExecution/requestApproval".to_string(),
+                kind: ConversationApprovalRequestKind::CommandExecution,
+                summary: "large approval detail".to_string(),
+                details: vec!["x".repeat(140_000)],
+            },
+            decision: None,
+            phase: crate::core::app::ApprovalAuthorityPhase::Pending,
         });
+        conversation.apply_runtime_snapshot(runtime_snapshot);
         conversation.approval_detail_scroll_offset = usize::MAX;
         let area = Rect::new(0, 0, 2, 10);
         let projection = InlineConversationFrameProjection::from_app(&app, area.width);

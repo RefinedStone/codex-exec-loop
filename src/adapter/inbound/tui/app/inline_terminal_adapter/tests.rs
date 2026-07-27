@@ -13,14 +13,18 @@ use crate::adapter::inbound::tui::app::shell_presentation::{
 };
 use crate::adapter::inbound::tui::app::{
     ConversationIntentEvent, ConversationLifecycleEvent, ConversationMessage,
-    ConversationMessageKind, ConversationState, ConversationViewMode, INLINE_VIEWPORT_HEIGHT,
-    InlineHistoryRenderMode, NativeTuiApp, PlanningWorkerVisibility, ProgressiveActivityDetailKind,
-    TuiLanguage,
+    ConversationMessageKind, ConversationState, ConversationViewMode, ConversationViewModel,
+    INLINE_VIEWPORT_HEIGHT, InlineHistoryRenderMode, NativeTuiApp, PlanningWorkerVisibility,
+    ProgressiveActivityDetailKind, TuiLanguage,
 };
 use crate::adapter::inbound::tui::shell_chrome::{ShellChromeEvent, ShellOverlay};
 use crate::application::port::outbound::github_review_poller_port::GithubReviewPollerPort;
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
-use crate::core::app::ConversationSnapshot as CoreConversationSnapshot;
+use crate::core::app::{
+    ActiveTurnPhase, ActiveTurnSnapshot, ApprovalAuthorityPhase, ApprovalAuthoritySnapshot,
+    ConversationSnapshot as CoreConversationSnapshot, CorePromptOrigin, PostTurnAuthoritySnapshot,
+    PostTurnEvaluationCorrelation, PostTurnRouteResolution, TurnSubmissionCorrelation,
+};
 use crate::domain::conversation::{
     ConversationApprovalRequest, ConversationApprovalRequestKind,
     ConversationSnapshot as DomainConversationSnapshot, ConversationTurnSteerRequest,
@@ -86,6 +90,68 @@ mod fixtures;
 #[path = "tests/history_flush.rs"]
 mod history_flush;
 use self::fixtures::{make_test_app, make_test_app_with_github_review_setup_loader};
+
+fn set_running_turn(conversation: &mut ConversationViewModel, turn_id: &str) {
+    let mut snapshot = conversation.runtime_snapshot().clone();
+    snapshot.active_turn = Some(ActiveTurnSnapshot {
+        correlation: TurnSubmissionCorrelation::new(1),
+        phase: ActiveTurnPhase::Running,
+        workspace_directory: conversation.cwd.clone(),
+        turn_id: Some(turn_id.to_string()),
+        prompt_origin: CorePromptOrigin::Manual,
+        started_at: Instant::now(),
+    });
+    conversation.apply_runtime_snapshot(snapshot);
+    conversation.record_turn_started(turn_id.to_string());
+}
+
+fn set_pending_approval(
+    conversation: &mut ConversationViewModel,
+    request: ConversationApprovalRequest,
+) {
+    let mut snapshot = conversation.runtime_snapshot().clone();
+    snapshot.approval = Some(ApprovalAuthoritySnapshot {
+        request,
+        decision: None,
+        phase: ApprovalAuthorityPhase::Pending,
+    });
+    conversation.apply_runtime_snapshot(snapshot);
+}
+
+fn begin_post_turn_evaluation(conversation: &mut ConversationViewModel, turn_id: &str) {
+    let workspace_directory = conversation.cwd.clone();
+    let mut snapshot = conversation.runtime_snapshot().clone();
+    snapshot.active_turn = None;
+    snapshot.post_turn = PostTurnAuthoritySnapshot::Evaluating {
+        correlation: PostTurnEvaluationCorrelation::new(
+            1,
+            conversation.thread_id.clone(),
+            turn_id,
+            workspace_directory.clone(),
+            workspace_directory,
+        ),
+        started_at: Instant::now(),
+    };
+    conversation.apply_runtime_snapshot(snapshot);
+    conversation.begin_post_turn_settlement(turn_id);
+}
+
+fn settle_post_turn(conversation: &mut ConversationViewModel, turn_id: &str) {
+    let workspace_directory = conversation.cwd.clone();
+    let mut snapshot = conversation.runtime_snapshot().clone();
+    snapshot.active_turn = None;
+    snapshot.post_turn = PostTurnAuthoritySnapshot::Settled {
+        correlation: PostTurnEvaluationCorrelation::new(
+            1,
+            conversation.thread_id.clone(),
+            turn_id,
+            workspace_directory.clone(),
+            workspace_directory,
+        ),
+        resolution: PostTurnRouteResolution::NoContinuation,
+    };
+    conversation.apply_runtime_snapshot(snapshot);
+}
 
 struct FirstFrameGithubReviewPollerPort;
 
@@ -227,7 +293,7 @@ fn host_history_sync_keeps_live_agent_delta_out_of_inserted_history() {
     else {
         panic!("test app should start in a ready conversation state");
     };
-    conversation.record_turn_started("turn-1".to_string());
+    set_running_turn(conversation, "turn-1");
     conversation.push_live_agent_delta(
         "agent-live".to_string(),
         Some("final_answer".to_string()),
@@ -318,7 +384,7 @@ fn host_history_sync_keeps_progressive_activity_rail_transient() {
     else {
         panic!("test app should keep a ready conversation state");
     };
-    conversation.fail_turn("command failed".to_string());
+    conversation.fail_turn(Some("turn-1"), "command failed".to_string());
     frames.draw_and_record("cleared", &mut terminal, &mut runtime, &mut inline_viewport);
     let cleared = frames.frame("cleared");
     assert!(
@@ -393,7 +459,7 @@ fn vt100_progressive_activity_rail_stays_transient_across_resize() {
     else {
         panic!("test app should keep a ready conversation state");
     };
-    conversation.fail_turn("command failed".to_string());
+    conversation.fail_turn(None, "command failed".to_string());
     draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
         .expect("cleared progressive VT100 draw transaction");
     let screen = tui_testkit::screen_text(&terminal);
@@ -498,14 +564,17 @@ fn activity_inspector_pages_resize_and_approval_stay_out_of_host_scrollback() {
     else {
         panic!("test app should keep a ready conversation state");
     };
-    conversation.pending_approval_request = Some(ConversationApprovalRequest {
-        approval_id: "approval-activity".to_string(),
-        server_request_id: "server-activity".to_string(),
-        method: "item/fileChange/requestApproval".to_string(),
-        kind: ConversationApprovalRequestKind::FileChange,
-        summary: "Review the pending file change.".to_string(),
-        details: vec!["A bounded approval detail remains inspectable.".to_string()],
-    });
+    set_pending_approval(
+        conversation,
+        ConversationApprovalRequest {
+            approval_id: "approval-activity".to_string(),
+            server_request_id: "server-activity".to_string(),
+            method: "item/fileChange/requestApproval".to_string(),
+            kind: ConversationApprovalRequestKind::FileChange,
+            summary: "Review the pending file change.".to_string(),
+            details: vec!["A bounded approval detail remains inspectable.".to_string()],
+        },
+    );
     runtime
         .app_mut()
         .dispatch_shell_chrome(ShellChromeEvent::ApprovalOverlayShown);
@@ -650,14 +719,17 @@ fn vt100_activity_inspector_stays_transient_through_resize_and_approval() {
     else {
         panic!("test app should keep a ready conversation state");
     };
-    conversation.pending_approval_request = Some(ConversationApprovalRequest {
-        approval_id: "approval-vt100-activity".to_string(),
-        server_request_id: "server-vt100-activity".to_string(),
-        method: "item/commandExecution/requestApproval".to_string(),
-        kind: ConversationApprovalRequestKind::CommandExecution,
-        summary: "Review the VT100 command request.".to_string(),
-        details: vec!["Command: cargo test --lib".to_string()],
-    });
+    set_pending_approval(
+        conversation,
+        ConversationApprovalRequest {
+            approval_id: "approval-vt100-activity".to_string(),
+            server_request_id: "server-vt100-activity".to_string(),
+            method: "item/commandExecution/requestApproval".to_string(),
+            kind: ConversationApprovalRequestKind::CommandExecution,
+            summary: "Review the VT100 command request.".to_string(),
+            details: vec!["Command: cargo test --lib".to_string()],
+        },
+    );
     runtime
         .app_mut()
         .dispatch_shell_chrome(ShellChromeEvent::ApprovalOverlayShown);
@@ -760,7 +832,7 @@ fn draw_transaction_flushes_history_and_live_tail_together() {
     else {
         panic!("test app should start in a ready conversation state");
     };
-    conversation.record_turn_started("turn-1".to_string());
+    set_running_turn(conversation, "turn-1");
     conversation.push_live_agent_delta(
         "agent-live".to_string(),
         Some("final_answer".to_string()),
@@ -987,7 +1059,7 @@ fn released_handoff_app(
     else {
         panic!("test app should start in a ready conversation state");
     };
-    conversation.record_turn_started("turn-handoff-redraw".to_string());
+    set_running_turn(conversation, "turn-handoff-redraw");
     conversation.push_live_agent_delta(
         "agent-handoff-redraw".to_string(),
         Some("final_answer".to_string()),
@@ -999,7 +1071,8 @@ fn released_handoff_app(
         "released handoff answer".to_string(),
     ));
     conversation.finish_turn("turn-handoff-redraw", &[]);
-    conversation.begin_post_turn_settlement("turn-handoff-redraw");
+    begin_post_turn_evaluation(conversation, "turn-handoff-redraw");
+    settle_post_turn(conversation, "turn-handoff-redraw");
     assert!(conversation.complete_post_turn_settlement("turn-handoff-redraw"));
     app.set_parallel_mode_enabled_for_test(parallel_mode_enabled);
     app
@@ -1484,7 +1557,7 @@ fn completed_agent_handoff_flushes_at_settlement_and_only_once() {
         panic!("test app should start in a ready conversation state");
     };
     conversation.thread_id = "thread-handoff".to_string();
-    conversation.record_turn_started("turn-handoff".to_string());
+    set_running_turn(conversation, "turn-handoff");
     conversation.push_live_agent_delta(
         "agent-handoff".to_string(),
         Some("final_answer".to_string()),
@@ -1530,7 +1603,7 @@ fn completed_agent_handoff_flushes_at_settlement_and_only_once() {
         panic!("test app should keep a ready conversation state");
     };
     conversation.finish_turn("turn-handoff", &[]);
-    conversation.begin_post_turn_settlement("turn-handoff");
+    begin_post_turn_evaluation(conversation, "turn-handoff");
     draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
         .expect("settlement handoff draw transaction");
     let settlement_screen = tui_testkit::screen_text(&terminal);
@@ -1554,6 +1627,7 @@ fn completed_agent_handoff_flushes_at_settlement_and_only_once() {
         panic!("test app should keep a ready conversation state");
     };
     assert!(!conversation.has_pending_viewport_transcript_handoff());
+    settle_post_turn(conversation, "turn-handoff");
     assert!(conversation.complete_post_turn_settlement("turn-handoff"));
     assert!(!conversation.has_pending_viewport_transcript_handoff());
     assert!(conversation.can_accept_manual_prompt());
@@ -1598,7 +1672,7 @@ fn settlement_flushes_long_completed_answer_to_host_scrollback() {
     else {
         panic!("test app should start in a ready conversation state");
     };
-    conversation.record_turn_started("turn-long-settlement".to_string());
+    set_running_turn(conversation, "turn-long-settlement");
     let answer = (0..80)
         .map(|index| match index {
             0 => "SETTLEMENT_LONG_MARKER_FIRST".to_string(),
@@ -1614,7 +1688,7 @@ fn settlement_flushes_long_completed_answer_to_host_scrollback() {
         answer,
     );
     conversation.finish_turn("turn-long-settlement", &[]);
-    conversation.begin_post_turn_settlement("turn-long-settlement");
+    begin_post_turn_evaluation(conversation, "turn-long-settlement");
     let mut runtime = ShellRuntime::new(app);
     let mut inline_terminal = InlineTerminalState::default();
 
@@ -1709,7 +1783,7 @@ fn viewport_replay_does_not_duplicate_completed_agent_handoff() {
     else {
         panic!("test app should start in a ready conversation state");
     };
-    conversation.record_turn_started("turn-viewport-replay".to_string());
+    set_running_turn(conversation, "turn-viewport-replay");
     conversation.push_live_agent_delta(
         "agent-viewport-replay".to_string(),
         Some("final_answer".to_string()),
@@ -1741,7 +1815,8 @@ fn viewport_replay_does_not_duplicate_completed_agent_handoff() {
         panic!("test app should keep a ready conversation state");
     };
     conversation.finish_turn("turn-viewport-replay", &[]);
-    conversation.begin_post_turn_settlement("turn-viewport-replay");
+    begin_post_turn_evaluation(conversation, "turn-viewport-replay");
+    settle_post_turn(conversation, "turn-viewport-replay");
     assert!(conversation.complete_post_turn_settlement("turn-viewport-replay"));
     draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
         .expect("viewport replay release draw transaction");
@@ -1759,7 +1834,7 @@ fn frame_cache_invalidates_when_only_live_agent_text_changes() {
     else {
         panic!("test app should start in a ready conversation state");
     };
-    conversation.record_turn_started("turn-cache".to_string());
+    set_running_turn(conversation, "turn-cache");
     conversation.push_live_agent_delta(
         "agent-cache".to_string(),
         Some("final_answer".to_string()),
@@ -2069,7 +2144,7 @@ fn late_completion_across_agent_items_flushes_each_final_once_in_order() {
     else {
         panic!("test app should start in a ready conversation state");
     };
-    conversation.record_turn_started("turn-multi-item".to_string());
+    set_running_turn(conversation, "turn-multi-item");
     conversation.push_live_agent_delta(
         "agent-first".to_string(),
         Some("commentary".to_string()),
@@ -2135,7 +2210,7 @@ fn late_completion_across_agent_items_flushes_each_final_once_in_order() {
         format!("{SECOND_MARKER} final"),
     );
     conversation.finish_turn("turn-multi-item", &[]);
-    conversation.begin_post_turn_settlement("turn-multi-item");
+    begin_post_turn_evaluation(conversation, "turn-multi-item");
     draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
         .expect("multi-item settlement draw transaction");
     let settlement_screen = tui_testkit::screen_text(&terminal);
@@ -2151,6 +2226,7 @@ fn late_completion_across_agent_items_flushes_each_final_once_in_order() {
     else {
         panic!("test app should keep a ready conversation state");
     };
+    settle_post_turn(conversation, "turn-multi-item");
     assert!(conversation.complete_post_turn_settlement("turn-multi-item"));
     draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
         .expect("multi-item release draw transaction");
@@ -2185,7 +2261,7 @@ fn long_committed_commentary_does_not_push_current_live_item_below_viewport() {
     else {
         panic!("test app should start in a ready conversation state");
     };
-    conversation.record_turn_started("turn-long-commentary".to_string());
+    set_running_turn(conversation, "turn-long-commentary");
     conversation.push_live_agent_delta(
         "agent-long-commentary".to_string(),
         Some("commentary".to_string()),
@@ -2256,7 +2332,7 @@ fn assert_parallel_projection_delivers_conversation_handoff(
     else {
         panic!("test app should start in a ready conversation state");
     };
-    conversation.record_turn_started("turn-parallel-handoff".to_string());
+    set_running_turn(conversation, "turn-parallel-handoff");
     conversation.push_live_agent_delta(
         "agent-parallel-commentary".to_string(),
         Some("commentary".to_string()),
@@ -2278,7 +2354,8 @@ fn assert_parallel_projection_delivers_conversation_handoff(
         format!("{FINAL_MARKER} final"),
     );
     conversation.finish_turn("turn-parallel-handoff", &[]);
-    conversation.begin_post_turn_settlement("turn-parallel-handoff");
+    begin_post_turn_evaluation(conversation, "turn-parallel-handoff");
+    settle_post_turn(conversation, "turn-parallel-handoff");
     assert!(conversation.complete_post_turn_settlement("turn-parallel-handoff"));
     app.set_parallel_mode_enabled_for_test(true);
     for index in 0..40 {
@@ -2515,7 +2592,7 @@ fn assert_viewport_handoff_waits_for_a_successful_draw(parallel_mode_enabled: bo
     else {
         panic!("test app should start in a ready conversation state");
     };
-    conversation.record_turn_started("turn-resize-handoff".to_string());
+    set_running_turn(conversation, "turn-resize-handoff");
     conversation.push_live_agent_delta(
         "agent-resize-handoff".to_string(),
         Some("final_answer".to_string()),
@@ -2527,7 +2604,8 @@ fn assert_viewport_handoff_waits_for_a_successful_draw(parallel_mode_enabled: bo
         FINAL_MARKER.to_string(),
     );
     conversation.finish_turn("turn-resize-handoff", &[]);
-    conversation.begin_post_turn_settlement("turn-resize-handoff");
+    begin_post_turn_evaluation(conversation, "turn-resize-handoff");
+    settle_post_turn(conversation, "turn-resize-handoff");
     assert!(conversation.complete_post_turn_settlement("turn-resize-handoff"));
     app.set_parallel_mode_enabled_for_test(parallel_mode_enabled);
     let mut runtime = ShellRuntime::new(app);
@@ -3545,7 +3623,7 @@ fn vt100_terminal_app_preserves_newline_fallback_history_after_live_resize() {
     else {
         panic!("test app should start in a ready conversation state");
     };
-    conversation.record_turn_started("turn-1".to_string());
+    set_running_turn(conversation, "turn-1");
     conversation.push_live_agent_delta(
         "agent-live".to_string(),
         Some("final_answer".to_string()),

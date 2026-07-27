@@ -3,9 +3,9 @@ use ratatui::text::Line;
 use crate::adapter::inbound::tui::supersession_mud::parallel_mode_progress_summary;
 
 use super::super::{
-    ConversationLiveTranscriptScreenModel, ConversationScreenModel, ConversationViewModel,
-    INLINE_TAIL_THREAD_LABEL_LIMIT, INLINE_TAIL_WARNING_DETAIL_LIMIT, compact_inline_detail,
-    format_conversation_lines,
+    AutoFollowSnapshotPresentation, ConversationLiveTranscriptScreenModel, ConversationScreenModel,
+    ConversationViewModel, INLINE_TAIL_THREAD_LABEL_LIMIT, INLINE_TAIL_WARNING_DETAIL_LIMIT,
+    compact_inline_detail, format_conversation_lines,
 };
 use super::activity_rail::build_activity_rail_notice_line;
 
@@ -110,7 +110,7 @@ pub(super) fn build_operator_notice(
      * 그 다음 progressive activity, GitHub review 변화, 기존 tool activity, auto-follow 결과 순으로
      * transient copy를 고른다.
      */
-    if conversation.pending_approval_request.is_some() {
+    if conversation.pending_approval_request().is_some() {
         return Some(OperatorNotice::new(
             OperatorNoticeKind::RequiredAction,
             if conversation.pending_approval_decision().is_some() {
@@ -130,6 +130,12 @@ pub(super) fn build_operator_notice(
     if conversation.progressive_activity.has_primary_fact() || conversation.has_running_turn() {
         return activity_rail_line
             .map(|line| OperatorNotice::new(OperatorNoticeKind::Activity, line));
+    }
+    if !conversation.can_accept_runtime_prompt() {
+        // A Core-accepted submission is already the current operator focus even
+        // before TurnStarted supplies an id. Do not fill that gap with stale
+        // activity or a lower-priority review from the previous turn.
+        return None;
     }
 
     if let Some(github_review_summary) = github_review_recent_changes_summary {
@@ -247,13 +253,13 @@ pub(super) fn compact_auto_follow_status_summary(
      * auto-follow prompt/footer copy는 queue-driven 상태와 internal pause 상태를 구분해야 한다.
      * pause flag가 있으면 activity label보다 우선해 "paused/internal"을 보여 주고, 아니면 queue 상태를 붙인다.
      */
-    let summary = if conversation
-        .auto_follow_state
-        .post_turn_continuation_paused()
-    {
+    let summary = if conversation.auto_follow_state().continuation_paused {
         "paused/internal".to_string()
     } else {
-        format!("queue/{}", conversation.auto_follow_state.activity_label())
+        format!(
+            "queue/{}",
+            conversation.auto_follow_state().activity_label()
+        )
     };
     compact_inline_detail(&summary, max_detail_len)
 }
@@ -276,24 +282,63 @@ mod tests {
     use crate::adapter::inbound::tui::app::conversation_model::{
         ActivityRailTerminalState, ConversationViewModel,
     };
-    use crate::domain::conversation::{
-        ConversationApprovalRequest, ConversationApprovalRequestKind,
+    use crate::core::app::{
+        ActiveTurnPhase, ActiveTurnSnapshot, ApprovalAuthorityPhase, ApprovalAuthoritySnapshot,
+        CorePromptOrigin, TurnSubmissionCorrelation,
     };
+    use crate::domain::conversation::{
+        ConversationApprovalRequest, ConversationApprovalRequestKind, ConversationMessage,
+        ConversationMessageKind,
+    };
+    use std::time::Instant;
 
     const SECRET: &str = "ultra-secret-payload";
+
+    fn set_active_turn(
+        conversation: &mut ConversationViewModel,
+        phase: ActiveTurnPhase,
+        turn_id: Option<&str>,
+    ) {
+        let mut snapshot = conversation.runtime_snapshot().clone();
+        snapshot.active_turn = Some(ActiveTurnSnapshot {
+            correlation: TurnSubmissionCorrelation::new(1),
+            phase,
+            workspace_directory: conversation.cwd.clone(),
+            turn_id: turn_id.map(str::to_string),
+            prompt_origin: CorePromptOrigin::Manual,
+            started_at: Instant::now(),
+        });
+        conversation.apply_runtime_snapshot(snapshot);
+    }
+
+    fn set_pending_approval(
+        conversation: &mut ConversationViewModel,
+        request: ConversationApprovalRequest,
+    ) {
+        let mut snapshot = conversation.runtime_snapshot().clone();
+        snapshot.approval = Some(ApprovalAuthoritySnapshot {
+            request,
+            decision: None,
+            phase: ApprovalAuthorityPhase::Pending,
+        });
+        conversation.apply_runtime_snapshot(snapshot);
+    }
 
     #[test]
     fn pending_approval_wins_over_terminal_activity_and_review() {
         let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
         conversation.activity_rail_terminal_state = Some(ActivityRailTerminalState::Failed);
-        conversation.pending_approval_request = Some(ConversationApprovalRequest {
-            approval_id: "approval-1".to_string(),
-            server_request_id: "request-1".to_string(),
-            method: "item/commandExecution/requestApproval".to_string(),
-            kind: ConversationApprovalRequestKind::CommandExecution,
-            summary: SECRET.to_string(),
-            details: vec![SECRET.to_string()],
-        });
+        set_pending_approval(
+            &mut conversation,
+            ConversationApprovalRequest {
+                approval_id: "approval-1".to_string(),
+                server_request_id: "request-1".to_string(),
+                method: "item/commandExecution/requestApproval".to_string(),
+                kind: ConversationApprovalRequestKind::CommandExecution,
+                summary: SECRET.to_string(),
+                details: vec![SECRET.to_string()],
+            },
+        );
 
         let notice = build_operator_notice(Some("review changed"), &conversation, 160, 160)
             .expect("pending approval notice");
@@ -349,11 +394,18 @@ mod tests {
             "Activity".to_string(),
             "/tmp/root".to_string(),
         );
+        set_active_turn(&mut conversation, ActiveTurnPhase::Running, Some("turn-1"));
         conversation.record_turn_started("turn-1".to_string());
         conversation.turn_activity.current_turn_command_count = 1;
         conversation.turn_activity.current_turn_last_summary = Some(format!("{SECRET}\u{1b}[31m"));
-        conversation.fail_turn("failed".to_string());
-        conversation.mark_turn_submitting("/tmp/root".to_string());
+        conversation.fail_turn(Some("turn-1"), "failed".to_string());
+        let workspace_directory = conversation.cwd.clone();
+        conversation.record_submitted_prompt(
+            ConversationMessage::new(ConversationMessageKind::User, "next prompt", None, None),
+            workspace_directory,
+            true,
+        );
+        set_active_turn(&mut conversation, ActiveTurnPhase::Submitting, None);
 
         assert_eq!(
             build_operator_notice(Some("review changed"), &conversation, 160, 160),

@@ -565,8 +565,7 @@ fn native_tui_uses_one_composition_owned_client_runtime_ingress() {
         "pub(crate)fncore(input:CoreInput)->Self",
         "Self::Core(Box::new(input))",
         "pub(crate)fndispatch_client_event(&mutself,event:NativeClientEvent,)->NativeClientDispatchOutcome",
-        "NativeClientEvent::Core(input)=>",
-        "self.core.runtime.dispatch_input(*input)",
+        "NativeClientEvent::Core(input)=>self.dispatch_core_input(*input)",
     ] {
         assert!(
             compact_facade.contains(required),
@@ -580,12 +579,21 @@ fn native_tui_uses_one_composition_owned_client_runtime_ingress() {
         1,
         "NativeClientRuntime must route Core input through exactly one unified client-event arm"
     );
+    let dispatch_core_input = top_level_impl_method_source(&facade_source, "dispatch_core_input");
+    let compact_dispatch_core_input = rust_code_without_comments_and_literals(&dispatch_core_input)
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
     assert_eq!(
-        compact_facade
-            .matches("self.core.runtime.dispatch_input(*input)")
-            .count(),
+        production_callable_reference_lines(&facade_source, "dispatch_input").len(),
         1,
         "the unified client event must enter the raw core runtime exactly once"
+    );
+    assert!(
+        compact_dispatch_core_input.contains(
+            "letoutcome=self.core.runtime.dispatch_input(input);self.resolve_internal_post_turn_routes(outcome)"
+        ),
+        "the one raw Core ingress must immediately consume internal post-turn routing before returning to the TUI"
     );
     assert!(
         !compact_facade.contains("NativeClientEvent::ParallelCompletion"),
@@ -777,7 +785,6 @@ fn native_tui_app_owns_exactly_four_typed_private_state_slices() {
                     "planning_worker_panel_state",
                     "CorePlanningWorkerPanelProjection",
                 ),
-                ("post_turn_continuation_gate", "PostTurnContinuationGate"),
                 ("planning_worker_visibility", "PlanningWorkerVisibility"),
             ],
         ),
@@ -1031,7 +1038,7 @@ fn native_tui_projects_core_snapshots_without_duplicate_gates_or_runtime_app_esc
         ),
         (
             "reset_for_conversation_lifecycle",
-            vec![("src/adapter/inbound/tui/app/app_runtime.rs", 1_usize)],
+            vec![("src/adapter/inbound/tui/app/app_runtime.rs", 2_usize)],
         ),
     ];
     let app_source_root = repo_root().join("src/adapter/inbound/tui/app");
@@ -1067,13 +1074,28 @@ fn native_tui_projects_core_snapshots_without_duplicate_gates_or_runtime_app_esc
         !intent_effect.contains("reset_for_conversation_lifecycle"),
         "draft/session UI intent must not optimistically clear the Core worker projection"
     );
+    let core_event_projection = top_level_impl_method_source(
+        &app_runtime_source,
+        "apply_core_event_with_previous_runtime",
+    );
+    let compact_core_event_projection =
+        rust_code_without_comments_and_literals(&core_event_projection)
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>();
+    assert!(
+        compact_core_event_projection.contains(
+            "AppEvent::ConversationRuntimeAuthorityChanged(snapshot)=>{ifprevious_runtime.post_turn.is_in_flight()&&!snapshot.post_turn.is_in_flight(){self.planning.planning_worker_panel_state.reset_for_conversation_lifecycle();}"
+        ),
+        "one worker reset must be gated by the exact Core post-turn in-flight to settled/cancelled authority transition"
+    );
     let core_conversation_projection =
         top_level_impl_method_source(&app_runtime_source, "apply_core_conversation_snapshot");
     assert!(
         core_conversation_projection.contains("CoreConversationSnapshot::Idle")
             && core_conversation_projection.contains("CoreConversationSnapshot::Loading")
             && core_conversation_projection.contains("reset_for_conversation_lifecycle"),
-        "only accepted Core conversation lifecycle snapshots may reset the worker projection"
+        "the other worker reset must be gated by an accepted Core Idle/Loading conversation lifecycle snapshot"
     );
 }
 
@@ -2138,13 +2160,43 @@ fn parallel_post_turn_continuation_reuses_the_accepted_runtime_projection() {
         "the exact accepted post-turn runtime projection must carry workspace and queue-head authority into routing"
     );
 
+    let native_runtime = fs::read_to_string("src/composition/native_client_runtime.rs")
+        .expect("native client runtime source should load");
+    let route = top_level_impl_method_source(&native_runtime, "resolve_internal_post_turn_routes");
+    let compact_route = rust_code_without_comments_and_literals(&route)
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    let exact_route =
+        top_level_function_source(&native_runtime, "exact_single_post_turn_routing_request");
+    let compact_exact_route = rust_code_without_comments_and_literals(&exact_route)
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    assert!(
+        compact_route.contains(
+            "exact_single_post_turn_routing_request(core_outcome.snapshot.as_ref(),&routing_requests"
+        ) && compact_route.contains(
+            "route_parallel_post_turn_for_exact_single(core_outcome.snapshot.as_ref(),&routing_requests"
+        ) && compact_route.contains(
+            "request.execution.evaluation.runtime_projection.has_actionable_queue_head()"
+        ) && compact_exact_route.contains("let[request]=routing_requestselse{returnNone;}")
+            && compact_exact_route.contains(
+                "pending_post_turn_route_correlation(snapshot)==Some(&request.correlation)"
+            ),
+        "NativeClientRuntime must route only the exact Core AwaitingRoute correlation and reuse its accepted queue-head projection"
+    );
+    assert_eq!(
+        production_callable_reference_lines(&native_runtime, "continue_post_turn_queue").len(),
+        1,
+        "the private native runtime may offer an exact post-turn route to the parallel control-plane at most once"
+    );
     let parallel_adapter = fs::read_to_string("src/adapter/inbound/tui/app/parallel_mode.rs")
         .expect("TUI parallel adapter source should load");
     assert!(
-        parallel_adapter.contains("evaluation.provenance.has_actionable_queue_head")
-            && parallel_adapter.contains("runtime_projection_workspace_directory")
-            && parallel_adapter.contains("has_actionable_queue_head,"),
-        "parallel continuation must pass the accepted queue-head fact into the control-plane command"
+        production_callable_reference_lines(&parallel_adapter, "continue_post_turn_queue")
+            .is_empty(),
+        "the TUI adapter must not regain direct post-turn parallel routing authority"
     );
 }
 
@@ -2679,8 +2731,8 @@ fn core_session_feature_reducer_owns_only_the_session_lifecycle_slice() {
             "only SessionFeatureReducer may mint session correlations: {forbidden_constructor}"
         );
     }
-    let handle_input = top_level_impl_method_source(&controller_source, "handle_input");
-    let compact_handle_input = rust_code_without_comments_and_literals(&handle_input)
+    let handle_input_inner = top_level_impl_method_source(&controller_source, "handle_input_inner");
+    let compact_handle_input = rust_code_without_comments_and_literals(&handle_input_inner)
         .chars()
         .filter(|character| !character.is_whitespace())
         .collect::<String>();
@@ -2736,8 +2788,26 @@ fn core_conversation_turn_feature_reducer_owns_one_correlated_lifecycle_slice() 
         "conversation_turn must be the typed conversation/turn reducer"
     );
 
-    let raw_root_fields = [
+    let reducer_authority_fields = [
         "turn_stream_state",
+        "conversation_runtime",
+        "guarded_session_rename_stream",
+        "next_conversation_load_generation",
+        "in_flight_conversation_load",
+        "deferred_conversation_load",
+        "next_turn_submission_generation",
+        "next_post_turn_evaluation_generation",
+        "post_turn_continuation_gate",
+        "in_flight_post_turn_evaluation",
+        "next_stop_request_generation",
+        "active_stop_request",
+        "next_turn_steer_generation",
+        "active_turn_steer",
+        "next_approval_decision_generation",
+    ];
+    let forbidden_root_fields = [
+        "turn_stream_state",
+        "conversation_runtime",
         "guarded_session_rename_stream",
         "next_conversation_load_generation",
         "in_flight_conversation_load",
@@ -2745,6 +2815,7 @@ fn core_conversation_turn_feature_reducer_owns_one_correlated_lifecycle_slice() 
         "next_turn_submission_generation",
         "active_turn_submission",
         "next_post_turn_evaluation_generation",
+        "post_turn_continuation_gate",
         "in_flight_post_turn_evaluation",
         "next_stop_request_generation",
         "active_stop_request",
@@ -2760,7 +2831,8 @@ fn core_conversation_turn_feature_reducer_owns_one_correlated_lifecycle_slice() 
             .expect("CoreController field should be named")
             .to_string();
         assert!(
-            field_name == "conversation_turn" || !raw_root_fields.contains(&field_name.as_str()),
+            field_name == "conversation_turn"
+                || !forbidden_root_fields.contains(&field_name.as_str()),
             "conversation/turn authority must live in conversation_turn; unexpected root field: {field_name}"
         );
         if field_name == "conversation_turn" {
@@ -2802,11 +2874,63 @@ fn core_conversation_turn_feature_reducer_owns_one_correlated_lifecycle_slice() 
         .collect::<HashSet<_>>();
     assert_eq!(
         reducer_fields,
-        raw_root_fields
+        reducer_authority_fields
             .into_iter()
             .map(str::to_string)
             .collect::<HashSet<_>>(),
         "ConversationTurnFeatureReducer must remain one cohesive correlated lifecycle slice"
+    );
+    let reducer_struct_fields =
+        named_struct_fields(&reducer_syntax, "ConversationTurnFeatureReducer");
+    let runtime_authority = reducer_struct_fields
+        .iter()
+        .find(|field| {
+            field
+                .ident
+                .as_ref()
+                .is_some_and(|ident| ident == "conversation_runtime")
+        })
+        .expect("conversation reducer must own one runtime authority");
+    assert!(
+        is_named_path_type(&runtime_authority.ty, "ConversationRuntimeAuthority"),
+        "active-turn, approval, auto-follow, and post-turn authority must share one typed runtime owner"
+    );
+    let continuation_gate = reducer_struct_fields
+        .iter()
+        .find(|field| {
+            field
+                .ident
+                .as_ref()
+                .is_some_and(|ident| ident == "post_turn_continuation_gate")
+        })
+        .expect("conversation reducer must own the worker cancellation gate");
+    assert!(
+        is_named_path_type(&continuation_gate.ty, "PostTurnContinuationGate"),
+        "the physical worker permit must remain beside the semantic post-turn authority"
+    );
+    let runtime_authority_source = fs::read_to_string("src/core/app/conversation_runtime.rs")
+        .expect("conversation runtime authority source should load");
+    let runtime_authority_syntax = syn::parse_file(&runtime_authority_source)
+        .expect("conversation runtime authority source should parse");
+    let runtime_fields =
+        named_struct_fields(&runtime_authority_syntax, "ConversationRuntimeAuthority");
+    assert!(
+        matches!(
+            runtime_fields.as_slice(),
+            [snapshot, pending_route]
+                if snapshot.ident.as_ref().is_some_and(|ident| ident == "snapshot")
+                    && is_named_path_type(&snapshot.ty, "ConversationRuntimeSnapshot")
+                    && pending_route
+                        .ident
+                        .as_ref()
+                        .is_some_and(|ident| ident == "pending_post_turn_route")
+                    && is_single_generic_named_type(
+                        &pending_route.ty,
+                        "Option",
+                        "PendingPostTurnRoute",
+                    )
+        ),
+        "ConversationRuntimeAuthority must retain one semantic snapshot plus one private exact route payload"
     );
     let production_reducer = production_source_before_inline_tests(&reducer_source);
     for forbidden_dependency in [
@@ -2905,6 +3029,8 @@ fn core_conversation_turn_feature_reducer_owns_one_correlated_lifecycle_slice() 
                 "ActiveTurnSteer",
                 "ActiveApprovalDecision",
                 "ActivePostTurnEvaluation",
+                "ConversationRuntimeAuthority",
+                "PostTurnContinuationGate",
             ] {
                 assert!(
                     !type_mentions_named_path(&field.ty, forbidden_type),
@@ -3001,8 +3127,8 @@ fn core_conversation_turn_feature_reducer_owns_one_correlated_lifecycle_slice() 
             "CoreController must route major lifecycle operation {required_reduction} through the feature reducer exactly once"
         );
     }
-    let handle_input = top_level_impl_method_source(&controller_source, "handle_input");
-    let compact_handle_input = rust_code_without_comments_and_literals(&handle_input)
+    let handle_input_inner = top_level_impl_method_source(&controller_source, "handle_input_inner");
+    let compact_handle_input = rust_code_without_comments_and_literals(&handle_input_inner)
         .chars()
         .filter(|character| !character.is_whitespace())
         .collect::<String>();
@@ -5023,12 +5149,48 @@ fn core_dispatch_snapshots_share_one_copy_on_write_authority() {
         apply_outcome.contains("for event in outcome.events"),
         "TUI must continue applying every dispatch event in order"
     );
-    for forbidden_short_circuit in ["ptr_eq", "outcome.snapshot", "snapshot.revision"] {
+    for forbidden_short_circuit in ["ptr_eq", "snapshot.revision"] {
         assert!(
             !apply_outcome.contains(forbidden_short_circuit),
             "shared snapshot identity is not a dispatch revision and must not suppress events: {forbidden_short_circuit}"
         );
     }
+    let app_runtime_syntax =
+        syn::parse_file(&tui_runtime_source).expect("TUI app runtime source should parse");
+    let apply_outcome_methods = inherent_impl_methods(
+        &app_runtime_syntax,
+        "NativeTuiApp",
+        "apply_core_dispatch_outcome",
+    );
+    let [apply_outcome_method] = apply_outcome_methods.as_slice() else {
+        panic!("NativeTuiApp must define one apply_core_dispatch_outcome method");
+    };
+    let mut snapshot_reads = NamedFieldAccessVisitor::new("snapshot");
+    snapshot_reads.visit_block(&apply_outcome_method.block);
+    assert_eq!(
+        snapshot_reads.lines.len(),
+        1,
+        "dispatch application may field-read the outcome snapshot exactly once, only to install the authoritative runtime projection"
+    );
+    let compact_apply_outcome = rust_code_without_comments_and_literals(&apply_outcome)
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    let authority_install = compact_apply_outcome
+        .find(
+            "self.apply_conversation_runtime_projection(outcome.snapshot.conversation_runtime.clone())",
+        )
+        .expect("TUI must install the final Core conversation authority before presentation events");
+    let event_reduction = compact_apply_outcome
+        .find("foreventinoutcome.events")
+        .expect("TUI must reduce all events");
+    let live_authority_restore = compact_apply_outcome
+        .rfind("self.runtime.client_runtime.snapshot().conversation_runtime")
+        .expect("nested dispatches must restore the latest facade authority");
+    assert!(
+        authority_install < event_reduction && event_reduction < live_authority_restore,
+        "final authority install, unconditional event reduction, and nested-dispatch restore must keep their transaction order"
+    );
 }
 
 #[test]
@@ -6659,8 +6821,8 @@ fn tui_post_turn_execution_uses_planning_post_turn_facade() {
         "Core start-state policy must derive history from its own seed, never the inbound request field"
     );
 
-    let handle_input = top_level_impl_method_source(&core_controller, "handle_input");
-    let compact_handle_input = handle_input
+    let handle_input_inner = top_level_impl_method_source(&core_controller, "handle_input_inner");
+    let compact_handle_input = handle_input_inner
         .chars()
         .filter(|character| !character.is_whitespace())
         .collect::<String>();

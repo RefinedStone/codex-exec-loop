@@ -129,10 +129,12 @@ navigation intent cannot optimistically rewrite it.
   and setup/poll status projection.
 - `:stop` and running-turn Ctrl-C must pause local automation first, then dispatch
   `AppCommand::RequestStopAllSessions`. Core owns stop generation, active-submission correlation,
-  single-flight admission, and the one `TurnStarted` synchronization attempt. The TUI must not keep
-  a second pending-interrupt boolean or call the provider directly. A lifecycle transition may
-  invalidate the worker permit, but new turn admission and newly requested conversation loading
-  remain behind the physical stop lease until the exact worker completion settles.
+  single-flight admission, the continuation pause/rearm transition, and the one `TurnStarted`
+  synchronization attempt. `RequestStopAllSessions` alone must fail closed even when another
+  inbound adapter does not run TUI cleanup commands. The TUI must not keep a second
+  pending-interrupt boolean or call the provider directly. A lifecycle transition may invalidate
+  the worker permit, but new turn admission and newly requested conversation loading remain behind
+  the physical stop lease until the exact worker completion settles.
 - Cancelled manual-prompt preparation keeps its physical Core lease until exact worker settlement.
   Its worker must recheck cancellation after blocking reads and before bootstrap or task-authority
   mutations; stale completion filtering alone is not a side-effect guard.
@@ -183,8 +185,10 @@ navigation intent cannot optimistically rewrite it.
   state; `DirectionsMaintenance` is the one overlay restored after approval closes. Normal exits
   clean the departed overlay exactly once.
 - Approval decisions must enter through `AppCommand::SubmitApprovalDecision`. Core owns matching
-  the current pending approval and the submitting/submitted single-flight state; composition
-  performs the provider call. The TUI owns only modal projection and retry status copy.
+  the current pending approval by full approval/server-request identity and the
+  submitting/submitted single-flight state; composition performs the provider call. A duplicate
+  exact request preserves that lease, while a stale same-label resolution cannot close a newer
+  modal. The TUI owns only modal projection and retry status copy.
 - The Review Center read-only overlay controller must dispatch a core load command. Core owns
   latest-wins correlation and completion; composition executes the application authority reads
   into a core-owned snapshot.

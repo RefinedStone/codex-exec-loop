@@ -396,7 +396,7 @@ impl CoreEffectRunner {
                 correlation,
                 request,
             } => {
-                self.spawn_turn_submission(correlation, request);
+                self.spawn_turn_submission(correlation, *request);
                 None
             }
             CoreEffect::RequestStopAllSessions {
@@ -892,8 +892,10 @@ impl CoreEffectRunner {
             Err(anyhow::anyhow!("approval decision worker panicked")),
         );
         spawn_effect_completion_worker(input_sender, panic_completion, move || {
-            let result = conversation_service
-                .resolve_approval_request(&correlation.approval_id, correlation.decision);
+            let result = conversation_service.resolve_approval_request(
+                &correlation.request_identity.approval_id,
+                correlation.decision,
+            );
             approval_decision_completion(correlation, result)
         });
     }
@@ -2364,7 +2366,10 @@ mod tests {
         ApprovalDecisionCorrelation::new(
             4,
             crate::core::app::TurnSubmissionCorrelation::new(2),
-            "approval-1",
+            crate::domain::conversation::ConversationApprovalRequestIdentity {
+                approval_id: "approval-1".to_string(),
+                server_request_id: "server-1".to_string(),
+            },
             crate::domain::conversation::ConversationApprovalDecision::Accept,
         )
     }
@@ -3934,6 +3939,8 @@ mod tests {
             thread_id: Some("thread-new".to_string()),
             prompt: "new work".to_string(),
             prompt_origin: CorePromptOrigin::Manual,
+            auto_follow_source: None,
+            planning_handoff: None,
             turn_options: Default::default(),
             slot_lease_handoff: None,
         };
@@ -3949,7 +3956,8 @@ mod tests {
             .recv_timeout(WORKER_COMPLETION_TIMEOUT)
             .expect("stop provider should reach its gate");
 
-        let blocked_turn = runtime.dispatch_command(AppCommand::SubmitTurn(turn_request.clone()));
+        let blocked_turn =
+            runtime.dispatch_command(AppCommand::SubmitTurn(Box::new(turn_request.clone())));
         assert_eq!(
             blocked_turn.events,
             vec![AppEvent::TurnSubmissionAdmissionResolved(
@@ -4001,7 +4009,8 @@ mod tests {
                 )
             })
         });
-        let admitted_turn = runtime.dispatch_command(AppCommand::SubmitTurn(turn_request));
+        let admitted_turn =
+            runtime.dispatch_command(AppCommand::SubmitTurn(Box::new(turn_request)));
         assert!(matches!(
             admitted_turn.events.as_slice(),
             [AppEvent::TurnSubmissionAdmissionResolved(

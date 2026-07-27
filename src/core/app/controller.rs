@@ -135,6 +135,11 @@ impl CoreController {
     }
 
     pub(in crate::core) fn handle_input(&mut self, input: CoreInput) -> CoreDispatchOutcome {
+        let outcome = self.handle_input_inner(input);
+        self.with_conversation_runtime_authority(outcome)
+    }
+
+    fn handle_input_inner(&mut self, input: CoreInput) -> CoreDispatchOutcome {
         match input {
             CoreInput::Command(AppCommand::Noop) => CoreDispatchOutcome {
                 events: Vec::new(),
@@ -415,7 +420,7 @@ impl CoreController {
                 }
             }
             CoreInput::Command(AppCommand::SubmitTurn(request)) => {
-                let admission = self.conversation_turn.admit_turn_submission();
+                let admission = self.conversation_turn.admit_turn_submission(&request);
                 let effects = match &admission {
                     TurnSubmissionAdmission::Accepted { correlation } => {
                         self.approval_review_persistence
@@ -426,7 +431,8 @@ impl CoreController {
                         }]
                     }
                     TurnSubmissionAdmission::RejectedActive { .. }
-                    | TurnSubmissionAdmission::RejectedStopPending { .. } => Vec::new(),
+                    | TurnSubmissionAdmission::RejectedStopPending { .. }
+                    | TurnSubmissionAdmission::RejectedUnavailable => Vec::new(),
                 };
                 CoreDispatchOutcome {
                     events: vec![AppEvent::TurnSubmissionAdmissionResolved(admission)],
@@ -435,6 +441,7 @@ impl CoreController {
                 }
             }
             CoreInput::Command(AppCommand::RequestStopAllSessions) => {
+                self.conversation_turn.pause_post_turn_continuation();
                 let admission = self.conversation_turn.admit_stop_request();
                 let effects = match admission {
                     StopRequestAdmission::Accepted { correlation } => {
@@ -470,12 +477,12 @@ impl CoreController {
                 }
             }
             CoreInput::Command(AppCommand::SubmitApprovalDecision {
-                approval_id,
+                request_identity,
                 decision,
             }) => {
                 let admission = self
                     .conversation_turn
-                    .admit_approval_decision(approval_id, decision);
+                    .admit_approval_decision(request_identity, decision);
                 let effects = match &admission {
                     ApprovalDecisionAdmission::Accepted { correlation } => {
                         vec![CoreEffect::SubmitApprovalDecision {
@@ -488,6 +495,38 @@ impl CoreController {
                 CoreDispatchOutcome {
                     events: vec![AppEvent::ApprovalDecisionAdmissionResolved(admission)],
                     effects,
+                    snapshot: self.shared_snapshot(),
+                }
+            }
+            CoreInput::Command(AppCommand::SetAutoFollowMaxTurns { value }) => {
+                self.conversation_turn.set_auto_follow_max_turns(value);
+                self.unchanged_outcome()
+            }
+            CoreInput::Command(AppCommand::PausePostTurnContinuation) => {
+                self.conversation_turn.pause_post_turn_continuation();
+                self.unchanged_outcome()
+            }
+            CoreInput::Command(AppCommand::SetParallelPostTurnRearm { rearmed }) => {
+                self.conversation_turn.set_parallel_post_turn_rearm(rearmed);
+                self.unchanged_outcome()
+            }
+            CoreInput::Command(AppCommand::ResolvePostTurnContinuation {
+                correlation,
+                resolution,
+            }) => {
+                let Some((execution, route_resolution)) = self
+                    .conversation_turn
+                    .resolve_post_turn_route(&correlation, resolution)
+                else {
+                    return self.unchanged_outcome();
+                };
+                CoreDispatchOutcome {
+                    events: vec![AppEvent::PostTurnEvaluationCompleted {
+                        correlation,
+                        execution,
+                        route_resolution,
+                    }],
+                    effects: Vec::new(),
                     snapshot: self.shared_snapshot(),
                 }
             }
@@ -556,26 +595,28 @@ impl CoreController {
                 }
             }
             CoreInput::Command(AppCommand::EvaluatePostTurn(mut request)) => {
-                let Some(correlation) = self
+                match self
                     .conversation_turn
-                    .admit_post_turn_evaluation(request.as_ref())
-                else {
-                    return self.unchanged_outcome();
-                };
-                let planning_worker_panel_state = post_turn_worker_panel_start_state(
-                    &self.planning_worker_panel_history_seed,
-                    request.as_ref(),
-                );
-                request.planning_worker_panel_state = planning_worker_panel_state.clone();
-                CoreDispatchOutcome {
-                    events: vec![AppEvent::PostTurnEvaluationStarted(
-                        planning_worker_panel_state,
-                    )],
-                    effects: vec![CoreEffect::EvaluatePostTurn {
-                        correlation,
-                        request,
-                    }],
-                    snapshot: self.shared_snapshot(),
+                    .admit_post_turn_evaluation(request.as_mut())
+                {
+                    Some(correlation) => {
+                        let planning_worker_panel_state = post_turn_worker_panel_start_state(
+                            &self.planning_worker_panel_history_seed,
+                            request.as_ref(),
+                        );
+                        request.planning_worker_panel_state = planning_worker_panel_state.clone();
+                        CoreDispatchOutcome {
+                            events: vec![AppEvent::PostTurnEvaluationStarted(
+                                planning_worker_panel_state,
+                            )],
+                            effects: vec![CoreEffect::EvaluatePostTurn {
+                                correlation,
+                                request,
+                            }],
+                            snapshot: self.shared_snapshot(),
+                        }
+                    }
+                    None => self.unchanged_outcome(),
                 }
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::StartupChecksLoaded {
@@ -1227,7 +1268,10 @@ impl CoreController {
                 }
                 let (mut refresh_events, effects) =
                     self.restart_planning_runtime_refresh_after_writer(&workspace_directory);
-                let mut events = vec![AppEvent::PostTurnEvaluationCompleted(execution)];
+                let mut events = vec![AppEvent::PostTurnContinuationRoutingRequested {
+                    correlation,
+                    execution,
+                }];
                 events.append(&mut refresh_events);
                 CoreDispatchOutcome {
                     events,
@@ -1268,7 +1312,7 @@ impl CoreController {
             } => {
                 if !self
                     .conversation_turn
-                    .accepts_turn_workspace_change(correlation)
+                    .apply_turn_workspace_change(correlation, workspace_directory.clone())
                 {
                     return self.unchanged_outcome();
                 }
@@ -1593,6 +1637,8 @@ impl CoreController {
         let correlation = self.conversation_turn.begin_test_turn_submission();
         self.approval_review_persistence
             .begin_conversation_turn(correlation);
+        self.state
+            .apply_conversation_runtime_snapshot(self.conversation_turn.runtime_snapshot());
         correlation
     }
 
@@ -1604,12 +1650,15 @@ impl CoreController {
         turn_workspace_directory: &str,
         planning_workspace_directory: &str,
     ) -> PostTurnEvaluationCorrelation {
-        self.conversation_turn.begin_test_post_turn_evaluation(
+        let correlation = self.conversation_turn.begin_test_post_turn_evaluation(
             thread_id,
             completed_turn_id,
             turn_workspace_directory,
             planning_workspace_directory,
-        )
+        );
+        self.state
+            .apply_conversation_runtime_snapshot(self.conversation_turn.runtime_snapshot());
+        correlation
     }
 
     #[cfg(test)]
@@ -1631,6 +1680,24 @@ impl CoreController {
             effects: Vec::new(),
             snapshot: self.shared_snapshot(),
         }
+    }
+
+    fn with_conversation_runtime_authority(
+        &mut self,
+        mut outcome: CoreDispatchOutcome,
+    ) -> CoreDispatchOutcome {
+        let runtime = self.conversation_turn.runtime_snapshot();
+        if self
+            .state
+            .apply_conversation_runtime_snapshot(runtime.clone())
+        {
+            outcome.events.insert(
+                0,
+                AppEvent::ConversationRuntimeAuthorityChanged(Box::new(runtime)),
+            );
+            outcome.snapshot = self.shared_snapshot();
+        }
+        outcome
     }
 
     fn startup_changed_outcome(
@@ -1747,29 +1814,30 @@ mod tests {
     use super::*;
     use crate::application::service::planning::PlanningRuntimeProjection;
     use crate::core::app::{
-        ApprovalReviewPersistenceCorrelation, ConversationReadySnapshot, ConversationSnapshot,
-        CorePromptOrigin, DirectionsMaintenanceDirectionSnapshot,
-        DirectionsMaintenanceSummarySnapshot, DirectionsSupportingFileStatus,
-        PlanningDoctorSnapshot, PlanningEditorFileSnapshot, PlanningEditorMutationAction,
-        PlanningEditorMutationIdentity, PlanningEditorMutationRequest,
-        PlanningEditorMutationResult, PlanningEditorMutationTarget, PlanningEditorSessionIdentity,
-        PlanningEditorSessionSnapshot, PlanningEditorStageSnapshot, PlanningEditorStageTarget,
-        PlanningRuntimeRefreshCorrelation, PlanningRuntimeRefreshSnapshot,
-        PlanningSimpleDraftPromotionSnapshot, PlanningSimpleDraftStageSnapshot,
-        PlanningWorkspaceOperationCorrelation, PlanningWorkspaceResetIntent,
-        PlanningWorkspaceResetSnapshot, PlanningWorkspaceResetTarget, QueueAuthorityLoadError,
-        QueueAuthoritySnapshot, QueueMutationCommitSnapshot, QueueMutationIntent,
-        QueueMutationKind, QueueMutationResult, QueueMutationTarget, ReviewCenterSnapshot,
-        SessionCatalogLoadCorrelation, SessionCatalogReadySnapshot, SessionCatalogSnapshot,
-        TurnSubmissionRequest,
+        ApprovalAuthorityPhase, ApprovalReviewPersistenceCorrelation, AutoFollowPhase,
+        ConversationReadySnapshot, ConversationSnapshot, CorePromptOrigin,
+        DirectionsMaintenanceDirectionSnapshot, DirectionsMaintenanceSummarySnapshot,
+        DirectionsSupportingFileStatus, PlanningDoctorSnapshot, PlanningEditorFileSnapshot,
+        PlanningEditorMutationAction, PlanningEditorMutationIdentity,
+        PlanningEditorMutationRequest, PlanningEditorMutationResult, PlanningEditorMutationTarget,
+        PlanningEditorSessionIdentity, PlanningEditorSessionSnapshot, PlanningEditorStageSnapshot,
+        PlanningEditorStageTarget, PlanningRuntimeRefreshCorrelation,
+        PlanningRuntimeRefreshSnapshot, PlanningSimpleDraftPromotionSnapshot,
+        PlanningSimpleDraftStageSnapshot, PlanningWorkspaceOperationCorrelation,
+        PlanningWorkspaceResetIntent, PlanningWorkspaceResetSnapshot, PlanningWorkspaceResetTarget,
+        QueueAuthorityLoadError, QueueAuthoritySnapshot, QueueMutationCommitSnapshot,
+        QueueMutationIntent, QueueMutationKind, QueueMutationResult, QueueMutationTarget,
+        ReviewCenterSnapshot, SessionCatalogLoadCorrelation, SessionCatalogReadySnapshot,
+        SessionCatalogSnapshot, TurnSubmissionRequest,
     };
     use crate::core::app::{
-        StartupAttachmentSnapshot, StartupDiagnosticSnapshot, StartupReadySnapshot,
-        StartupSnapshot, TurnStreamEvent, TurnStreamSnapshot, TurnStreamTerminalSnapshot,
-        TurnStreamUpdate,
+        PostTurnAuthoritySnapshot, PostTurnRouteResolution, StartupAttachmentSnapshot,
+        StartupDiagnosticSnapshot, StartupReadySnapshot, StartupSnapshot, TurnStreamEvent,
+        TurnStreamSnapshot, TurnStreamTerminalSnapshot, TurnStreamUpdate,
     };
     use crate::domain::conversation::{
-        ConversationApprovalDecision, ConversationApprovalRequest, ConversationApprovalRequestKind,
+        ConversationApprovalDecision, ConversationApprovalRequest,
+        ConversationApprovalRequestIdentity, ConversationApprovalRequestKind,
         ConversationApprovalResolution, ConversationApprovalReview,
         ConversationApprovalReviewStatus, ConversationMessage, ConversationMessageKind,
         ConversationSnapshot as DomainConversationSnapshot, ConversationTurnSteerRequest,
@@ -1785,8 +1853,9 @@ mod tests {
     use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeReadinessState};
     use crate::domain::planning::{
         ManualPromptOutcome, ManualPromptRequest, PlanningWorkerPanelState, PlanningWorkerStatus,
-        PostTurnContext, PostTurnContinuationGate, PostTurnRequest, QueueIdlePolicy,
-        RESULT_OUTPUT_FILE_PATH, RuntimeProjection, TaskStatus, TurnSnapshotCapture,
+        PostTurnContext, PostTurnContinuationGate, PostTurnContinuationPermit, PostTurnRequest,
+        QueueIdlePolicy, RESULT_OUTPUT_FILE_PATH, RuntimeProjection, TaskStatus,
+        TurnSnapshotCapture,
     };
     use crate::domain::recent_sessions::{RecentSessions, SessionRenameRequest};
     use crate::domain::session_summary::SessionSummary;
@@ -3903,20 +3972,18 @@ mod tests {
     #[test]
     fn deferred_conversation_load_cancels_active_post_turn_authority_immediately() {
         let mut controller = CoreController::new();
-        let continuation_gate = PostTurnContinuationGate::default();
         apply_completed_turn(&mut controller, "thread-1", "turn-1");
-        let mut request = post_turn_request(
+        let request = post_turn_request(
             RuntimeProjection::invalid("refresh required"),
             Vec::new(),
             false,
             PlanningWorkerPanelState::default(),
         );
-        request.continuation_permit = continuation_gate.capture();
-        let stale_permit = request.continuation_permit.clone();
         let started = controller.handle_input(CoreInput::Command(AppCommand::EvaluatePostTurn(
             Box::new(request),
         )));
         let stale_correlation = post_turn_effect_correlation(&started);
+        let stale_permit = post_turn_effect_permit(&started);
 
         controller.handle_input(CoreInput::Command(AppCommand::RenameSession(
             SessionRenameRequest::new("thread-2", "Renamed"),
@@ -3936,7 +4003,6 @@ mod tests {
             !stale_permit.is_current(),
             "the conversation intent must revoke old worker authority before its load can start"
         );
-        assert!(continuation_gate.capture().is_current());
 
         let stale = controller.handle_input(CoreInput::EffectCompleted(
             CoreEffectCompletion::PostTurnEvaluationCompleted {
@@ -4473,12 +4539,19 @@ mod tests {
             correlation: turn,
             workspace_directory: "/tmp/parallel-slot".to_string(),
         });
-        assert_eq!(
-            changed.events,
-            vec![AppEvent::ConversationTurnWorkspaceChanged {
-                workspace_directory: "/tmp/parallel-slot".to_string(),
-            }]
-        );
+        assert!(matches!(
+            changed.events.as_slice(),
+            [
+                AppEvent::ConversationRuntimeAuthorityChanged(runtime),
+                AppEvent::ConversationTurnWorkspaceChanged {
+                    workspace_directory,
+                },
+            ] if runtime
+                .active_turn
+                .as_ref()
+                .is_some_and(|turn| turn.workspace_directory == "/tmp/parallel-slot")
+                && workspace_directory == "/tmp/parallel-slot"
+        ));
 
         let completion = controller.handle_input(CoreInput::EffectCompleted(
             CoreEffectCompletion::PlanningRuntimeLoaded {
@@ -4601,36 +4674,55 @@ mod tests {
     }
 
     #[test]
-    fn submit_turn_returns_core_effect_without_state_revision() {
+    fn submit_turn_returns_core_effect_and_publishes_runtime_authority() {
         let mut controller = CoreController::new();
         let request = crate::core::app::TurnSubmissionRequest {
             workspace_directory: "/tmp/workspace".to_string(),
             thread_id: Some("thread-1".to_string()),
             prompt: "ship it".to_string(),
             prompt_origin: crate::core::app::CorePromptOrigin::Manual,
+            auto_follow_source: None,
+            planning_handoff: None,
             turn_options: Default::default(),
             slot_lease_handoff: None,
         };
 
-        let outcome =
-            controller.handle_input(CoreInput::Command(AppCommand::SubmitTurn(request.clone())));
+        let outcome = controller.handle_input(CoreInput::Command(AppCommand::SubmitTurn(
+            Box::new(request.clone()),
+        )));
 
-        assert_eq!(
-            outcome.events,
-            vec![AppEvent::TurnSubmissionAdmissionResolved(
-                TurnSubmissionAdmission::Accepted {
-                    correlation: TurnSubmissionCorrelation::new(1),
-                },
-            )]
-        );
+        assert!(matches!(
+            outcome.events.as_slice(),
+            [
+                AppEvent::ConversationRuntimeAuthorityChanged(runtime),
+                AppEvent::TurnSubmissionAdmissionResolved(
+                    TurnSubmissionAdmission::Accepted {
+                        correlation: TurnSubmissionCorrelation { generation: 1 },
+                    },
+                ),
+            ] if runtime.active_turn.as_ref().is_some_and(|turn| {
+                turn.correlation == TurnSubmissionCorrelation::new(1)
+                    && turn.workspace_directory == "/tmp/workspace"
+                    && turn.prompt_origin == CorePromptOrigin::Manual
+            })
+        ));
         assert_eq!(
             outcome.effects,
             vec![CoreEffect::SubmitTurn {
                 correlation: TurnSubmissionCorrelation::new(1),
-                request,
+                request: Box::new(request),
             }]
         );
-        assert_eq!(*outcome.snapshot, AppSnapshot::initial());
+        assert_eq!(outcome.snapshot.revision, 1);
+        assert_eq!(
+            outcome
+                .snapshot
+                .conversation_runtime
+                .active_turn
+                .as_ref()
+                .map(|turn| turn.correlation),
+            Some(TurnSubmissionCorrelation::new(1))
+        );
     }
 
     #[test]
@@ -4640,19 +4732,20 @@ mod tests {
         let second = test_turn_submission_request(Some("thread-1"));
 
         let first_outcome =
-            controller.handle_input(CoreInput::Command(AppCommand::SubmitTurn(first)));
+            controller.handle_input(CoreInput::Command(AppCommand::SubmitTurn(Box::new(first))));
         let second_outcome =
-            controller.handle_input(CoreInput::Command(AppCommand::SubmitTurn(second)));
+            controller.handle_input(CoreInput::Command(AppCommand::SubmitTurn(Box::new(second))));
 
         assert_eq!(first_outcome.effects.len(), 1);
-        assert_eq!(
-            first_outcome.events,
-            vec![AppEvent::TurnSubmissionAdmissionResolved(
-                TurnSubmissionAdmission::Accepted {
-                    correlation: TurnSubmissionCorrelation::new(1),
-                },
-            )]
-        );
+        assert!(matches!(
+            first_outcome.events.as_slice(),
+            [
+                AppEvent::ConversationRuntimeAuthorityChanged(_),
+                AppEvent::TurnSubmissionAdmissionResolved(TurnSubmissionAdmission::Accepted {
+                    correlation: TurnSubmissionCorrelation { generation: 1 },
+                },),
+            ]
+        ));
         assert_eq!(
             second_outcome.events,
             vec![AppEvent::TurnSubmissionAdmissionResolved(
@@ -4671,12 +4764,17 @@ mod tests {
 
         let accepted =
             controller.handle_input(CoreInput::Command(AppCommand::RequestStopAllSessions));
-        assert_eq!(
-            accepted.events,
-            vec![AppEvent::StopRequestAdmissionResolved(
-                StopRequestAdmission::Accepted { correlation },
-            )]
-        );
+        assert!(matches!(
+            accepted.events.as_slice(),
+            [
+                AppEvent::ConversationRuntimeAuthorityChanged(runtime),
+                AppEvent::StopRequestAdmissionResolved(StopRequestAdmission::Accepted {
+                    correlation: actual,
+                }),
+            ] if runtime.auto_follow.continuation_paused
+                && !runtime.auto_follow.parallel_rearmed_after_stop
+                && *actual == correlation
+        ));
         assert_eq!(
             accepted.effects,
             vec![CoreEffect::RequestStopAllSessions {
@@ -4739,6 +4837,46 @@ mod tests {
                 attempt: StopRequestAttempt::Initial,
             }]
         );
+    }
+
+    #[test]
+    fn stop_command_atomically_disarms_all_post_turn_continuation_paths() {
+        let mut controller = CoreController::new();
+        controller.handle_input(CoreInput::Command(AppCommand::SetAutoFollowMaxTurns {
+            value: 3,
+        }));
+        controller.handle_input(CoreInput::Command(AppCommand::PausePostTurnContinuation));
+        controller.handle_input(CoreInput::Command(AppCommand::SetParallelPostTurnRearm {
+            rearmed: true,
+        }));
+
+        let outcome =
+            controller.handle_input(CoreInput::Command(AppCommand::RequestStopAllSessions));
+
+        assert!(
+            outcome
+                .snapshot
+                .conversation_runtime
+                .auto_follow
+                .continuation_paused
+        );
+        assert!(
+            !outcome
+                .snapshot
+                .conversation_runtime
+                .auto_follow
+                .parallel_rearmed_after_stop
+        );
+        assert!(outcome.events.iter().any(|event| matches!(
+            event,
+            AppEvent::ConversationRuntimeAuthorityChanged(runtime)
+                if runtime.auto_follow.continuation_paused
+                    && !runtime.auto_follow.parallel_rearmed_after_stop
+        )));
+        assert!(outcome.events.iter().any(|event| matches!(
+            event,
+            AppEvent::StopRequestAdmissionResolved(StopRequestAdmission::Accepted { .. })
+        )));
     }
 
     #[test]
@@ -5023,17 +5161,32 @@ mod tests {
                 execution_snapshot_capture: None,
             },
         ));
+        let post_turn = start_post_turn_evaluation(&mut controller, "turn-1");
+        let post_turn_correlation = post_turn_effect_correlation(&post_turn);
+        controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PostTurnEvaluationCompleted {
+                correlation: post_turn_correlation.clone(),
+                execution: Box::new(sample_post_turn_execution()),
+            },
+        ));
+        controller.handle_input(CoreInput::Command(
+            AppCommand::ResolvePostTurnContinuation {
+                correlation: post_turn_correlation,
+                resolution: PostTurnRouteResolution::NoContinuation,
+            },
+        ));
         let next_submit = controller.handle_input(CoreInput::Command(AppCommand::SubmitTurn(
-            test_turn_submission_request(Some("thread-1")),
+            Box::new(test_turn_submission_request(Some("thread-1"))),
         )));
-        assert_eq!(
-            next_submit.events,
-            vec![AppEvent::TurnSubmissionAdmissionResolved(
-                TurnSubmissionAdmission::Accepted {
-                    correlation: TurnSubmissionCorrelation::new(2),
-                },
-            )]
-        );
+        assert!(matches!(
+            next_submit.events.as_slice(),
+            [
+                AppEvent::ConversationRuntimeAuthorityChanged(_),
+                AppEvent::TurnSubmissionAdmissionResolved(TurnSubmissionAdmission::Accepted {
+                    correlation: TurnSubmissionCorrelation { generation: 2 },
+                }),
+            ]
+        ));
         assert!(matches!(
             next_submit.effects.as_slice(),
             [CoreEffect::SubmitTurn { correlation, .. }]
@@ -5107,7 +5260,7 @@ mod tests {
         let mut controller = CoreController::new();
         let unavailable =
             controller.handle_input(CoreInput::Command(AppCommand::SubmitApprovalDecision {
-                approval_id: "approval-1".to_string(),
+                request_identity: approval_identity("approval-1"),
                 decision: ConversationApprovalDecision::Accept,
             }));
         assert_eq!(
@@ -5121,7 +5274,7 @@ mod tests {
         request_test_approval(&mut controller, turn_submission, "approval-1");
         let mismatched =
             controller.handle_input(CoreInput::Command(AppCommand::SubmitApprovalDecision {
-                approval_id: "approval-other".to_string(),
+                request_identity: approval_identity("approval-other"),
                 decision: ConversationApprovalDecision::Accept,
             }));
         assert_eq!(
@@ -5134,22 +5287,29 @@ mod tests {
         let correlation = ApprovalDecisionCorrelation::new(
             1,
             turn_submission,
-            "approval-1",
+            approval_identity("approval-1"),
             ConversationApprovalDecision::Accept,
         );
         let accepted =
             controller.handle_input(CoreInput::Command(AppCommand::SubmitApprovalDecision {
-                approval_id: "approval-1".to_string(),
+                request_identity: approval_identity("approval-1"),
                 decision: ConversationApprovalDecision::Accept,
             }));
-        assert_eq!(
-            accepted.events,
-            vec![AppEvent::ApprovalDecisionAdmissionResolved(
-                ApprovalDecisionAdmission::Accepted {
-                    correlation: correlation.clone(),
-                },
-            )]
-        );
+        assert!(matches!(
+            accepted.events.as_slice(),
+            [
+                AppEvent::ConversationRuntimeAuthorityChanged(runtime),
+                AppEvent::ApprovalDecisionAdmissionResolved(
+                    ApprovalDecisionAdmission::Accepted {
+                        correlation: accepted,
+                    },
+                ),
+            ] if runtime
+                .approval
+                .as_ref()
+                .is_some_and(|approval| approval.phase == ApprovalAuthorityPhase::Submitting)
+                && accepted == &correlation
+        ));
         assert_eq!(
             accepted.effects,
             vec![CoreEffect::SubmitApprovalDecision {
@@ -5159,7 +5319,7 @@ mod tests {
 
         let duplicate =
             controller.handle_input(CoreInput::Command(AppCommand::SubmitApprovalDecision {
-                approval_id: "approval-1".to_string(),
+                request_identity: approval_identity("approval-1"),
                 decision: ConversationApprovalDecision::Decline,
             }));
         assert_eq!(
@@ -5177,13 +5337,20 @@ mod tests {
                 result: Ok(()),
             },
         ));
-        assert_eq!(
-            completed.events,
-            vec![AppEvent::ApprovalDecisionSubmissionCompleted {
-                correlation: correlation.clone(),
-                result: Ok(()),
-            }]
-        );
+        assert!(matches!(
+            completed.events.as_slice(),
+            [
+                AppEvent::ConversationRuntimeAuthorityChanged(runtime),
+                AppEvent::ApprovalDecisionSubmissionCompleted {
+                    correlation: completed,
+                    result: Ok(()),
+                },
+            ] if runtime
+                .approval
+                .as_ref()
+                .is_some_and(|approval| approval.phase == ApprovalAuthorityPhase::Submitted)
+                && completed == &correlation
+        ));
         assert!(
             controller
                 .conversation_turn
@@ -5193,13 +5360,13 @@ mod tests {
         controller.handle_input(test_turn_stream_input(
             turn_submission,
             TurnStreamEvent::ApprovalResolved {
-                approval_id: "approval-stale".to_string(),
+                request_identity: approval_identity("approval-stale"),
                 resolution: ConversationApprovalResolution::Declined,
             },
         ));
         let waiting =
             controller.handle_input(CoreInput::Command(AppCommand::SubmitApprovalDecision {
-                approval_id: "approval-1".to_string(),
+                request_identity: approval_identity("approval-1"),
                 decision: ConversationApprovalDecision::Accept,
             }));
         assert!(matches!(
@@ -5212,7 +5379,7 @@ mod tests {
         controller.handle_input(test_turn_stream_input(
             turn_submission,
             TurnStreamEvent::ApprovalResolved {
-                approval_id: "approval-1".to_string(),
+                request_identity: approval_identity("approval-1"),
                 resolution: ConversationApprovalResolution::Accepted,
             },
         ));
@@ -5224,7 +5391,7 @@ mod tests {
         );
         let after_resolution =
             controller.handle_input(CoreInput::Command(AppCommand::SubmitApprovalDecision {
-                approval_id: "approval-1".to_string(),
+                request_identity: approval_identity("approval-1"),
                 decision: ConversationApprovalDecision::Accept,
             }));
         assert_eq!(
@@ -5250,11 +5417,11 @@ mod tests {
         let first = ApprovalDecisionCorrelation::new(
             1,
             turn_submission,
-            "approval-1",
+            approval_identity("approval-1"),
             ConversationApprovalDecision::Accept,
         );
         controller.handle_input(CoreInput::Command(AppCommand::SubmitApprovalDecision {
-            approval_id: "approval-1".to_string(),
+            request_identity: approval_identity("approval-1"),
             decision: ConversationApprovalDecision::Accept,
         }));
 
@@ -5266,10 +5433,17 @@ mod tests {
         ));
         assert!(matches!(
             failed.events.as_slice(),
-            [AppEvent::ApprovalDecisionSubmissionCompleted {
-                result: Err(message),
-                ..
-            }] if message == "runtime unavailable"
+            [
+                AppEvent::ConversationRuntimeAuthorityChanged(runtime),
+                AppEvent::ApprovalDecisionSubmissionCompleted {
+                    result: Err(message),
+                    ..
+                },
+            ] if runtime
+                .approval
+                .as_ref()
+                .is_some_and(|approval| approval.phase == ApprovalAuthorityPhase::Pending)
+                && message == "runtime unavailable"
         ));
         assert!(
             controller
@@ -5280,7 +5454,7 @@ mod tests {
 
         let retried =
             controller.handle_input(CoreInput::Command(AppCommand::SubmitApprovalDecision {
-                approval_id: "approval-1".to_string(),
+                request_identity: approval_identity("approval-1"),
                 decision: ConversationApprovalDecision::Decline,
             }));
         assert!(matches!(
@@ -5288,7 +5462,7 @@ mod tests {
             [CoreEffect::SubmitApprovalDecision { correlation }]
                 if correlation.generation == 2
                     && correlation.turn_submission == turn_submission
-                    && correlation.approval_id == "approval-1"
+                    && correlation.request_identity == approval_identity("approval-1")
                     && correlation.decision == ConversationApprovalDecision::Decline
         ));
     }
@@ -5301,11 +5475,11 @@ mod tests {
         let old = ApprovalDecisionCorrelation::new(
             1,
             turn_submission,
-            "approval-a",
+            approval_identity("approval-a"),
             ConversationApprovalDecision::Accept,
         );
         controller.handle_input(CoreInput::Command(AppCommand::SubmitApprovalDecision {
-            approval_id: "approval-a".to_string(),
+            request_identity: approval_identity("approval-a"),
             decision: ConversationApprovalDecision::Accept,
         }));
 
@@ -5317,7 +5491,7 @@ mod tests {
                 .is_none()
         );
         controller.handle_input(CoreInput::Command(AppCommand::SubmitApprovalDecision {
-            approval_id: "approval-b".to_string(),
+            request_identity: approval_identity("approval-b"),
             decision: ConversationApprovalDecision::Accept,
         }));
         request_test_approval(&mut controller, turn_submission, "approval-a");
@@ -5330,11 +5504,11 @@ mod tests {
         let current = ApprovalDecisionCorrelation::new(
             3,
             turn_submission,
-            "approval-a",
+            approval_identity("approval-a"),
             ConversationApprovalDecision::Accept,
         );
         controller.handle_input(CoreInput::Command(AppCommand::SubmitApprovalDecision {
-            approval_id: "approval-a".to_string(),
+            request_identity: approval_identity("approval-a"),
             decision: ConversationApprovalDecision::Accept,
         }));
 
@@ -5358,13 +5532,20 @@ mod tests {
                 result: Ok(()),
             },
         ));
-        assert_eq!(
-            accepted.events,
-            vec![AppEvent::ApprovalDecisionSubmissionCompleted {
-                correlation: current,
-                result: Ok(()),
-            }]
-        );
+        assert!(matches!(
+            accepted.events.as_slice(),
+            [
+                AppEvent::ConversationRuntimeAuthorityChanged(runtime),
+                AppEvent::ApprovalDecisionSubmissionCompleted {
+                    correlation,
+                    result: Ok(()),
+                },
+            ] if runtime
+                .approval
+                .as_ref()
+                .is_some_and(|approval| approval.phase == ApprovalAuthorityPhase::Submitted)
+                && correlation == &current
+        ));
     }
 
     #[test]
@@ -5375,11 +5556,11 @@ mod tests {
         let terminal_correlation = ApprovalDecisionCorrelation::new(
             1,
             terminal_turn,
-            "approval-terminal",
+            approval_identity("approval-terminal"),
             ConversationApprovalDecision::Accept,
         );
         terminal.handle_input(CoreInput::Command(AppCommand::SubmitApprovalDecision {
-            approval_id: "approval-terminal".to_string(),
+            request_identity: approval_identity("approval-terminal"),
             decision: ConversationApprovalDecision::Accept,
         }));
         terminal.handle_input(test_turn_stream_input(
@@ -5409,11 +5590,11 @@ mod tests {
         let invalidated_correlation = ApprovalDecisionCorrelation::new(
             1,
             invalidated_turn,
-            "approval-invalidated",
+            approval_identity("approval-invalidated"),
             ConversationApprovalDecision::Decline,
         );
         invalidated.handle_input(CoreInput::Command(AppCommand::SubmitApprovalDecision {
-            approval_id: "approval-invalidated".to_string(),
+            request_identity: approval_identity("approval-invalidated"),
             decision: ConversationApprovalDecision::Decline,
         }));
         invalidated.handle_input(CoreInput::Command(AppCommand::InvalidateConversationLoad));
@@ -5679,7 +5860,7 @@ mod tests {
             .exhaust_approval_generation_for_test();
 
         controller.handle_input(CoreInput::Command(AppCommand::SubmitApprovalDecision {
-            approval_id: "approval-1".to_string(),
+            request_identity: approval_identity("approval-1"),
             decision: ConversationApprovalDecision::Accept,
         }));
     }
@@ -6043,6 +6224,7 @@ mod tests {
     fn next_submission_recovers_pre_start_failure_and_ignores_stale_worker_inputs() {
         let mut controller = CoreController::new();
         let old_correlation = apply_completed_turn(&mut controller, "thread-1", "turn-1");
+        controller.handle_input(CoreInput::Command(AppCommand::InvalidateConversationLoad));
         let current_correlation = submit_test_turn(&mut controller, Some("thread-1"));
 
         let stale_notice = controller.handle_input(CoreInput::ConversationTurnRuntimeNotice {
@@ -6064,15 +6246,15 @@ mod tests {
                 message: "resume failed before turn/start".to_string(),
             },
         ));
-        assert!(matches!(
-            current_failure.events.as_slice(),
-            [AppEvent::TurnStreamSnapshotChanged(snapshot)]
+        assert!(current_failure.events.iter().any(|event| matches!(
+            event,
+            AppEvent::TurnStreamSnapshotChanged(snapshot)
                 if matches!(snapshot.update, TurnStreamUpdate::Failed { .. })
-        ));
-
-        let next = controller.handle_input(CoreInput::Command(AppCommand::SubmitTurn(
-            test_turn_submission_request(Some("thread-1")),
         )));
+
+        let next = controller.handle_input(CoreInput::Command(AppCommand::SubmitTurn(Box::new(
+            test_turn_submission_request(Some("thread-1")),
+        ))));
         assert!(matches!(
             next.effects.as_slice(),
             [CoreEffect::SubmitTurn {
@@ -6123,8 +6305,12 @@ mod tests {
 
         assert!(matches!(
             outcome.events.as_slice(),
-            [AppEvent::TurnStreamSnapshotChanged(snapshot)]
-                if matches!(
+            [
+                AppEvent::ConversationRuntimeAuthorityChanged(runtime),
+                AppEvent::TurnStreamSnapshotChanged(snapshot),
+            ]
+                if runtime.active_turn.is_none()
+                    && matches!(
                     &snapshot.update,
                     TurnStreamUpdate::TurnTerminal { receipt: projected, status_text, .. }
                         if projected.as_ref() == &receipt && status_text == "turn recovery pending"
@@ -7099,7 +7285,7 @@ mod tests {
     }
 
     #[test]
-    fn conversation_stream_event_reduces_to_core_snapshot_without_state_revision() {
+    fn conversation_stream_event_preserves_the_existing_runtime_snapshot() {
         let mut controller = CoreController::new();
         let turn_correlation = controller.begin_test_turn_submission();
         let stream_event = TurnStreamEvent::StatusUpdated {
@@ -7113,7 +7299,15 @@ mod tests {
             controller.handle_input(test_turn_stream_input(turn_correlation, stream_event));
 
         assert!(Arc::ptr_eq(&before, &outcome.snapshot));
-        assert_eq!(*outcome.snapshot, AppSnapshot::initial());
+        assert_eq!(
+            outcome
+                .snapshot
+                .conversation_runtime
+                .active_turn
+                .as_ref()
+                .map(|turn| turn.correlation),
+            Some(turn_correlation)
+        );
         assert_eq!(
             outcome.events,
             vec![AppEvent::turn_stream_snapshot_changed(TurnStreamSnapshot {
@@ -7170,10 +7364,16 @@ mod tests {
             },
         ));
 
-        assert_eq!(*outcome.snapshot, AppSnapshot::initial());
-        let [AppEvent::TurnStreamSnapshotChanged(snapshot)] = outcome.events.as_slice() else {
-            panic!("typed completion should produce one stream snapshot");
+        assert!(outcome.snapshot.revision > 0);
+        assert!(outcome.snapshot.conversation_runtime.active_turn.is_none());
+        let [
+            AppEvent::ConversationRuntimeAuthorityChanged(runtime),
+            AppEvent::TurnStreamSnapshotChanged(snapshot),
+        ] = outcome.events.as_slice()
+        else {
+            panic!("typed completion should publish authority and one stream snapshot");
         };
+        assert!(runtime.active_turn.is_none());
         assert_eq!(snapshot.revision, 3);
         assert_eq!(
             snapshot.terminal,
@@ -7444,6 +7644,9 @@ mod tests {
             let mut controller = CoreController::new();
             controller.planning_worker_panel_history_seed = history_seed.clone();
             apply_completed_turn(&mut controller, "thread-1", "turn-1");
+            if request.context.planning_settlement_paused {
+                controller.handle_input(CoreInput::Command(AppCommand::PausePostTurnContinuation));
+            }
             let outcome = controller.handle_input(CoreInput::Command(
                 AppCommand::EvaluatePostTurn(Box::new(request)),
             ));
@@ -7451,10 +7654,15 @@ mod tests {
                 controller.planning_worker_panel_history_seed, history_seed,
                 "{label} start must not replace exact-accepted panel history"
             );
-            assert_eq!(
-                outcome.events,
-                vec![AppEvent::PostTurnEvaluationStarted(expected.clone())],
-                "{label} must publish the full computed state first"
+            assert!(
+                matches!(
+                    outcome.events.as_slice(),
+                    [
+                        AppEvent::ConversationRuntimeAuthorityChanged(runtime),
+                        AppEvent::PostTurnEvaluationStarted(actual),
+                    ] if runtime.post_turn.is_in_flight() && actual == &expected
+                ),
+                "{label} must publish authority and the full computed state first"
             );
             let [
                 CoreEffect::EvaluatePostTurn {
@@ -7532,10 +7740,12 @@ mod tests {
                 execution: Box::new(accepted),
             },
         ));
-        assert!(matches!(
-            exact.events.as_slice(),
-            [AppEvent::PostTurnEvaluationCompleted(_)]
-        ));
+        assert!(
+            exact.events.iter().any(|event| matches!(
+                event,
+                AppEvent::PostTurnContinuationRoutingRequested { .. }
+            ))
+        );
         assert_eq!(
             controller.planning_worker_panel_history_seed, accepted_history,
             "only the exact accepted completion becomes the next history seed"
@@ -7618,7 +7828,10 @@ mod tests {
         let accepted = start_post_turn_evaluation(&mut controller, "turn-1");
         assert!(matches!(
             accepted.events.as_slice(),
-            [AppEvent::PostTurnEvaluationStarted(_)]
+            [
+                AppEvent::ConversationRuntimeAuthorityChanged(_),
+                AppEvent::PostTurnEvaluationStarted(_),
+            ]
         ));
         assert!(matches!(
             accepted.effects.as_slice(),
@@ -7651,10 +7864,12 @@ mod tests {
         let accepted_completion = controller.handle_input(CoreInput::EffectCompleted(
             post_turn_completion("/tmp/workspace", Box::new(sample_post_turn_execution())),
         ));
-        assert!(matches!(
-            accepted_completion.events.as_slice(),
-            [AppEvent::PostTurnEvaluationCompleted(_)]
-        ));
+        assert!(
+            accepted_completion.events.iter().any(|event| matches!(
+                event,
+                AppEvent::PostTurnContinuationRoutingRequested { .. }
+            ))
+        );
         assert!(
             controller
                 .active_post_turn_evaluation_correlation()
@@ -7664,6 +7879,614 @@ mod tests {
         let already_applied = start_post_turn_evaluation(&mut controller, "turn-1");
         assert!(already_applied.events.is_empty());
         assert!(already_applied.effects.is_empty());
+    }
+
+    #[test]
+    fn post_turn_policy_is_normalized_from_core_authority_at_admission() {
+        let mut controller = CoreController::new();
+        apply_completed_turn(&mut controller, "thread-1", "turn-1");
+        controller.handle_input(CoreInput::Command(AppCommand::SetAutoFollowMaxTurns {
+            value: 3,
+        }));
+        controller.handle_input(CoreInput::Command(AppCommand::PausePostTurnContinuation));
+        controller.handle_input(CoreInput::Command(AppCommand::SetParallelPostTurnRearm {
+            rearmed: true,
+        }));
+        let mut request = post_turn_request(
+            RuntimeProjection::invalid("refresh required"),
+            vec!["src/main.rs".to_string()],
+            true,
+            PlanningWorkerPanelState::default(),
+        );
+        request.context.latest_main_reply = Some("finished: AUTO_STOP!".to_string());
+        request.context.parallel_mode_enabled = true;
+        request.context.continuation_paused = true;
+        request.context.can_queue_next = false;
+        request.context.stop_keyword = "forged".to_string();
+        request.context.stop_keyword_matched = false;
+        request.context.no_file_changes_stop_matched = true;
+
+        let outcome = controller.handle_input(CoreInput::Command(AppCommand::EvaluatePostTurn(
+            Box::new(request),
+        )));
+        let [
+            CoreEffect::EvaluatePostTurn {
+                request: admitted, ..
+            },
+        ] = outcome.effects.as_slice()
+        else {
+            panic!("the exact completed turn should admit one post-turn effect");
+        };
+
+        assert!(!admitted.context.planning_settlement_paused);
+        assert!(!admitted.context.continuation_paused);
+        assert!(admitted.context.can_queue_next);
+        assert_eq!(admitted.context.stop_keyword, "AUTO_STOP");
+        assert!(admitted.context.stop_keyword_matched);
+        assert!(!admitted.context.no_file_changes_stop_matched);
+    }
+
+    #[test]
+    fn auto_follow_control_commands_publish_the_authoritative_snapshot() {
+        let mut controller = CoreController::new();
+
+        let budget =
+            controller.handle_input(CoreInput::Command(AppCommand::SetAutoFollowMaxTurns {
+                value: 3,
+            }));
+        assert!(matches!(
+            budget.events.as_slice(),
+            [AppEvent::ConversationRuntimeAuthorityChanged(snapshot)]
+                if snapshot.auto_follow.max_auto_turns == 3
+                    && !snapshot.auto_follow.continuation_paused
+        ));
+        assert_eq!(
+            budget.snapshot.conversation_runtime,
+            match &budget.events[0] {
+                AppEvent::ConversationRuntimeAuthorityChanged(snapshot) => {
+                    snapshot.as_ref().clone()
+                }
+                event => panic!("unexpected authority event: {event:?}"),
+            }
+        );
+
+        let paused =
+            controller.handle_input(CoreInput::Command(AppCommand::PausePostTurnContinuation));
+        assert!(matches!(
+            paused.events.as_slice(),
+            [AppEvent::ConversationRuntimeAuthorityChanged(snapshot)]
+                if snapshot.auto_follow.continuation_paused
+                    && !snapshot.auto_follow.parallel_rearmed_after_stop
+        ));
+
+        let rearmed =
+            controller.handle_input(CoreInput::Command(AppCommand::SetParallelPostTurnRearm {
+                rearmed: true,
+            }));
+        assert!(matches!(
+            rearmed.events.as_slice(),
+            [AppEvent::ConversationRuntimeAuthorityChanged(snapshot)]
+                if snapshot.auto_follow.continuation_paused
+                    && snapshot.auto_follow.parallel_rearmed_after_stop
+        ));
+    }
+
+    #[test]
+    fn post_turn_policy_change_settles_the_exact_terminal_and_drops_the_stale_worker() {
+        for (label, command) in [
+            (
+                "turn budget",
+                AppCommand::SetAutoFollowMaxTurns { value: 3 },
+            ),
+            ("continuation pause", AppCommand::PausePostTurnContinuation),
+            (
+                "parallel rearm",
+                AppCommand::SetParallelPostTurnRearm { rearmed: true },
+            ),
+        ] {
+            let mut controller = CoreController::new();
+            apply_completed_turn(&mut controller, "thread-1", "turn-1");
+            let started = start_post_turn_evaluation(&mut controller, "turn-1");
+            let correlation = post_turn_effect_correlation(&started);
+            let permit = post_turn_effect_permit(&started);
+            let retained_history = PlanningWorkerPanelState {
+                status: PlanningWorkerStatus::RefreshSucceeded,
+                last_summary: Some(format!("retained after {label}")),
+                ..PlanningWorkerPanelState::default()
+            };
+            controller.planning_worker_panel_history_seed = retained_history.clone();
+
+            let changed = controller.handle_input(CoreInput::Command(command));
+
+            assert!(
+                !permit.is_current(),
+                "{label} must revoke the worker permit"
+            );
+            assert!(
+                controller
+                    .active_post_turn_evaluation_correlation()
+                    .is_none(),
+                "{label} must release the worker lease"
+            );
+            assert!(matches!(
+                &changed.snapshot.conversation_runtime.post_turn,
+                PostTurnAuthoritySnapshot::Settled {
+                    correlation: settled,
+                    resolution: PostTurnRouteResolution::NoContinuation,
+                } if settled == &correlation
+            ));
+
+            let duplicate = start_post_turn_evaluation(&mut controller, "turn-1");
+            assert!(
+                duplicate.events.is_empty() && duplicate.effects.is_empty(),
+                "{label} must consume the exact terminal instead of retrying it"
+            );
+
+            let manual = controller.handle_input(CoreInput::Command(AppCommand::SubmitTurn(
+                Box::new(test_turn_submission_request(Some("thread-1"))),
+            )));
+            let [
+                CoreEffect::SubmitTurn {
+                    correlation: manual_correlation,
+                    ..
+                },
+            ] = manual.effects.as_slice()
+            else {
+                panic!("{label} must reopen manual turn admission");
+            };
+            let manual_correlation = *manual_correlation;
+
+            let mut stale_execution = sample_post_turn_execution();
+            stale_execution.planning_worker_panel_state = PlanningWorkerPanelState {
+                status: PlanningWorkerStatus::RepairFailed,
+                last_summary: Some(format!("stale worker after {label}")),
+                ..PlanningWorkerPanelState::default()
+            };
+            let stale = controller.handle_input(CoreInput::EffectCompleted(
+                CoreEffectCompletion::PostTurnEvaluationCompleted {
+                    correlation,
+                    execution: Box::new(stale_execution),
+                },
+            ));
+
+            assert!(
+                stale.events.is_empty() && stale.effects.is_empty(),
+                "{label} must drop the stale worker completion"
+            );
+            assert_eq!(
+                stale
+                    .snapshot
+                    .conversation_runtime
+                    .active_turn
+                    .as_ref()
+                    .map(|turn| turn.correlation),
+                Some(manual_correlation),
+                "{label} stale completion must not disturb the new manual turn"
+            );
+            assert_eq!(
+                controller.planning_worker_panel_history_seed, retained_history,
+                "{label} stale completion must not apply its projection history"
+            );
+        }
+    }
+
+    #[test]
+    fn parallel_disable_preserves_in_flight_explicit_single_session_continuation() {
+        let mut controller = CoreController::new();
+        controller.handle_input(CoreInput::Command(AppCommand::SetAutoFollowMaxTurns {
+            value: 1,
+        }));
+        controller.handle_input(CoreInput::Command(AppCommand::SetParallelPostTurnRearm {
+            rearmed: true,
+        }));
+        apply_completed_turn(&mut controller, "thread-1", "turn-1");
+        let started = start_post_turn_evaluation(&mut controller, "turn-1");
+        let correlation = post_turn_effect_correlation(&started);
+        let permit = post_turn_effect_permit(&started);
+
+        let disabled =
+            controller.handle_input(CoreInput::Command(AppCommand::SetParallelPostTurnRearm {
+                rearmed: false,
+            }));
+
+        assert!(
+            permit.is_current(),
+            "parallel disable must preserve a worker backed by an explicit single-session budget"
+        );
+        assert_eq!(
+            controller.active_post_turn_evaluation_correlation(),
+            Some(&correlation)
+        );
+        assert!(matches!(
+            &disabled.snapshot.conversation_runtime.post_turn,
+            PostTurnAuthoritySnapshot::Evaluating {
+                correlation: active,
+                ..
+            } if active == &correlation
+        ));
+        assert!(
+            !disabled
+                .snapshot
+                .conversation_runtime
+                .auto_follow
+                .parallel_rearmed_after_stop
+        );
+
+        let completed = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PostTurnEvaluationCompleted {
+                correlation: correlation.clone(),
+                execution: Box::new(sample_post_turn_execution()),
+            },
+        ));
+        assert!(completed.events.iter().any(|event| matches!(
+            event,
+            AppEvent::PostTurnContinuationRoutingRequested {
+                correlation: routed,
+                ..
+            } if routed == &correlation
+        )));
+
+        let resolved = controller.handle_input(CoreInput::Command(
+            AppCommand::ResolvePostTurnContinuation {
+                correlation,
+                resolution: PostTurnRouteResolution::AutoSubmit,
+            },
+        ));
+        assert!(matches!(
+            resolved.snapshot.conversation_runtime.auto_follow.phase,
+            AutoFollowPhase::Queued { .. }
+        ));
+
+        let disabled_again =
+            controller.handle_input(CoreInput::Command(AppCommand::SetParallelPostTurnRearm {
+                rearmed: false,
+            }));
+        assert!(
+            matches!(
+                disabled_again
+                    .snapshot
+                    .conversation_runtime
+                    .auto_follow
+                    .phase,
+                AutoFollowPhase::Queued { .. }
+            ),
+            "an idempotent parallel disable must not cancel the accepted single-session queue lease"
+        );
+    }
+
+    #[test]
+    fn stop_settles_post_turn_before_waiting_for_stop_completion() {
+        let mut controller = CoreController::new();
+        apply_completed_turn(&mut controller, "thread-1", "turn-1");
+        let started = start_post_turn_evaluation(&mut controller, "turn-1");
+        let post_turn_correlation = post_turn_effect_correlation(&started);
+        let permit = post_turn_effect_permit(&started);
+
+        let stopped =
+            controller.handle_input(CoreInput::Command(AppCommand::RequestStopAllSessions));
+        let [
+            CoreEffect::RequestStopAllSessions {
+                correlation: stop_correlation,
+                attempt: StopRequestAttempt::Initial,
+            },
+        ] = stopped.effects.as_slice()
+        else {
+            panic!("stop must start one exact runtime synchronization");
+        };
+        let stop_correlation = *stop_correlation;
+
+        assert!(!permit.is_current());
+        assert!(matches!(
+            &stopped.snapshot.conversation_runtime.post_turn,
+            PostTurnAuthoritySnapshot::Settled {
+                correlation,
+                resolution: PostTurnRouteResolution::NoContinuation,
+            } if correlation == &post_turn_correlation
+        ));
+
+        let stale = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PostTurnEvaluationCompleted {
+                correlation: post_turn_correlation,
+                execution: Box::new(sample_post_turn_execution()),
+            },
+        ));
+        assert!(stale.events.is_empty());
+        assert!(stale.effects.is_empty());
+
+        let while_stopping = controller.handle_input(CoreInput::Command(AppCommand::SubmitTurn(
+            Box::new(test_turn_submission_request(Some("thread-1"))),
+        )));
+        assert!(matches!(
+            while_stopping.events.as_slice(),
+            [AppEvent::TurnSubmissionAdmissionResolved(
+                TurnSubmissionAdmission::RejectedStopPending { .. }
+            )]
+        ));
+
+        controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::StopRequestAttemptCompleted {
+                correlation: stop_correlation,
+                attempt: StopRequestAttempt::Initial,
+                result: Ok(()),
+            },
+        ));
+        let after_stop = controller.handle_input(CoreInput::Command(AppCommand::SubmitTurn(
+            Box::new(test_turn_submission_request(Some("thread-1"))),
+        )));
+        assert!(
+            matches!(
+                after_stop.effects.as_slice(),
+                [CoreEffect::SubmitTurn { .. }]
+            ),
+            "manual admission must reopen after the exact stop settlement"
+        );
+    }
+
+    #[test]
+    fn early_returning_inner_branch_cannot_bypass_runtime_authority_sync() {
+        let mut controller = CoreController::new();
+        controller.conversation_turn.set_auto_follow_max_turns(3);
+
+        let outcome = controller.handle_input(CoreInput::Command(
+            AppCommand::CancelManualPromptPreparation,
+        ));
+
+        assert!(matches!(
+            outcome.events.as_slice(),
+            [AppEvent::ConversationRuntimeAuthorityChanged(snapshot)]
+                if snapshot.auto_follow.max_auto_turns == 3
+        ));
+        assert_eq!(
+            outcome
+                .snapshot
+                .conversation_runtime
+                .auto_follow
+                .max_auto_turns,
+            3
+        );
+    }
+
+    #[test]
+    fn post_turn_routing_emits_one_final_completion_after_exact_resolution() {
+        let mut controller = CoreController::new();
+        apply_completed_turn(&mut controller, "thread-1", "turn-1");
+        let started = start_post_turn_evaluation(&mut controller, "turn-1");
+        let correlation = post_turn_effect_correlation(&started);
+        let execution = Box::new(sample_post_turn_execution());
+
+        let routed = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PostTurnEvaluationCompleted {
+                correlation: correlation.clone(),
+                execution: execution.clone(),
+            },
+        ));
+        assert!(routed.events.iter().any(|event| matches!(
+            event,
+            AppEvent::PostTurnContinuationRoutingRequested {
+                correlation: routed_correlation,
+                execution: routed_execution,
+            } if routed_correlation == &correlation && routed_execution == &execution
+        )));
+        assert!(
+            !routed
+                .events
+                .iter()
+                .any(|event| matches!(event, AppEvent::PostTurnEvaluationCompleted { .. }))
+        );
+
+        let stale = PostTurnEvaluationCorrelation::new(
+            correlation.generation + 1,
+            &correlation.thread_id,
+            &correlation.completed_turn_id,
+            &correlation.turn_workspace_directory,
+            &correlation.planning_workspace_directory,
+        );
+        let stale_resolution = controller.handle_input(CoreInput::Command(
+            AppCommand::ResolvePostTurnContinuation {
+                correlation: stale,
+                resolution: PostTurnRouteResolution::NoContinuation,
+            },
+        ));
+        assert!(stale_resolution.events.is_empty());
+
+        let resolved = controller.handle_input(CoreInput::Command(
+            AppCommand::ResolvePostTurnContinuation {
+                correlation: correlation.clone(),
+                resolution: PostTurnRouteResolution::NoContinuation,
+            },
+        ));
+        assert_eq!(
+            resolved
+                .events
+                .iter()
+                .filter(|event| matches!(
+                    event,
+                    AppEvent::PostTurnEvaluationCompleted {
+                        correlation: completed_correlation,
+                        execution: completed,
+                        route_resolution: PostTurnRouteResolution::NoContinuation,
+                    } if completed_correlation == &correlation && completed == &execution
+                ))
+                .count(),
+            1
+        );
+
+        let duplicate = controller.handle_input(CoreInput::Command(
+            AppCommand::ResolvePostTurnContinuation {
+                correlation,
+                resolution: PostTurnRouteResolution::NoContinuation,
+            },
+        ));
+        assert!(duplicate.events.is_empty());
+        assert!(duplicate.effects.is_empty());
+    }
+
+    #[test]
+    fn manual_turn_waits_until_the_confirmed_terminal_post_turn_route_is_settled() {
+        let mut controller = CoreController::new();
+        apply_completed_turn(&mut controller, "thread-1", "turn-1");
+
+        let before_evaluation = controller.handle_input(CoreInput::Command(
+            AppCommand::SubmitTurn(Box::new(test_turn_submission_request(Some("thread-1")))),
+        ));
+        assert!(matches!(
+            before_evaluation.events.as_slice(),
+            [AppEvent::TurnSubmissionAdmissionResolved(
+                TurnSubmissionAdmission::RejectedUnavailable
+            )]
+        ));
+        assert!(before_evaluation.effects.is_empty());
+
+        let started = start_post_turn_evaluation(&mut controller, "turn-1");
+        let correlation = post_turn_effect_correlation(&started);
+        let routed = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PostTurnEvaluationCompleted {
+                correlation: correlation.clone(),
+                execution: Box::new(sample_post_turn_execution()),
+            },
+        ));
+        assert!(routed.events.iter().any(|event| matches!(
+            event,
+            AppEvent::PostTurnContinuationRoutingRequested {
+                correlation: routed_correlation,
+                ..
+            } if routed_correlation == &correlation
+        )));
+
+        let while_routing = controller.handle_input(CoreInput::Command(AppCommand::SubmitTurn(
+            Box::new(test_turn_submission_request(Some("thread-1"))),
+        )));
+        assert!(matches!(
+            while_routing.events.as_slice(),
+            [AppEvent::TurnSubmissionAdmissionResolved(
+                TurnSubmissionAdmission::RejectedUnavailable
+            )]
+        ));
+        assert!(while_routing.effects.is_empty());
+
+        controller.handle_input(CoreInput::Command(
+            AppCommand::ResolvePostTurnContinuation {
+                correlation,
+                resolution: PostTurnRouteResolution::NoContinuation,
+            },
+        ));
+        let after_resolution = controller.handle_input(CoreInput::Command(AppCommand::SubmitTurn(
+            Box::new(test_turn_submission_request(Some("thread-1"))),
+        )));
+        assert!(after_resolution.events.iter().any(|event| matches!(
+            event,
+            AppEvent::TurnSubmissionAdmissionResolved(TurnSubmissionAdmission::Accepted { .. })
+        )));
+        assert!(matches!(
+            after_resolution.effects.as_slice(),
+            [CoreEffect::SubmitTurn { .. }]
+        ));
+    }
+
+    #[test]
+    fn auto_follow_submission_requires_and_consumes_the_exact_post_turn_source_lease() {
+        let mut controller = CoreController::new();
+        controller.handle_input(CoreInput::Command(AppCommand::SetAutoFollowMaxTurns {
+            value: 1,
+        }));
+        apply_completed_turn(&mut controller, "thread-1", "turn-1");
+        let started = start_post_turn_evaluation(&mut controller, "turn-1");
+        let source = post_turn_effect_correlation(&started);
+        controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PostTurnEvaluationCompleted {
+                correlation: source.clone(),
+                execution: Box::new(sample_post_turn_execution()),
+            },
+        ));
+        let resolved = controller.handle_input(CoreInput::Command(
+            AppCommand::ResolvePostTurnContinuation {
+                correlation: source.clone(),
+                resolution: PostTurnRouteResolution::AutoSubmit,
+            },
+        ));
+        assert!(matches!(
+            resolved.snapshot.conversation_runtime.auto_follow.phase,
+            AutoFollowPhase::Queued { .. }
+        ));
+
+        let mut auto_request = test_turn_submission_request(Some("thread-1"));
+        auto_request.prompt_origin = CorePromptOrigin::AutoFollow;
+        let direct = controller.handle_input(CoreInput::Command(AppCommand::SubmitTurn(Box::new(
+            auto_request.clone(),
+        ))));
+        assert!(matches!(
+            direct.events.as_slice(),
+            [AppEvent::TurnSubmissionAdmissionResolved(
+                TurnSubmissionAdmission::RejectedUnavailable
+            )]
+        ));
+        assert!(matches!(
+            direct.snapshot.conversation_runtime.auto_follow.phase,
+            AutoFollowPhase::Queued { .. }
+        ));
+
+        let stale_source = PostTurnEvaluationCorrelation::new(
+            source.generation + 1,
+            &source.thread_id,
+            &source.completed_turn_id,
+            &source.turn_workspace_directory,
+            &source.planning_workspace_directory,
+        );
+        auto_request.auto_follow_source = Some(stale_source);
+        let stale = controller.handle_input(CoreInput::Command(AppCommand::SubmitTurn(Box::new(
+            auto_request.clone(),
+        ))));
+        assert!(matches!(
+            stale.events.as_slice(),
+            [AppEvent::TurnSubmissionAdmissionResolved(
+                TurnSubmissionAdmission::RejectedUnavailable
+            )]
+        ));
+        assert!(matches!(
+            stale.snapshot.conversation_runtime.auto_follow.phase,
+            AutoFollowPhase::Queued { .. }
+        ));
+
+        auto_request.auto_follow_source = Some(source.clone());
+        let accepted = controller.handle_input(CoreInput::Command(AppCommand::SubmitTurn(
+            Box::new(auto_request.clone()),
+        )));
+        let accepted_correlation = accepted
+            .events
+            .iter()
+            .find_map(|event| match event {
+                AppEvent::TurnSubmissionAdmissionResolved(TurnSubmissionAdmission::Accepted {
+                    correlation,
+                }) => Some(*correlation),
+                _ => None,
+            })
+            .expect("the exact source lease should admit one auto-follow turn");
+        assert!(matches!(
+            accepted.effects.as_slice(),
+            [CoreEffect::SubmitTurn {
+                request,
+                ..
+            }] if request.auto_follow_source.as_ref() == Some(&source)
+        ));
+        assert!(matches!(
+            accepted.snapshot.conversation_runtime.auto_follow.phase,
+            AutoFollowPhase::Submitting { .. }
+        ));
+
+        let duplicate = controller.handle_input(CoreInput::Command(AppCommand::SubmitTurn(
+            Box::new(auto_request),
+        )));
+        assert!(matches!(
+            duplicate.events.as_slice(),
+            [AppEvent::TurnSubmissionAdmissionResolved(
+                TurnSubmissionAdmission::RejectedActive { active_correlation }
+            )] if *active_correlation == accepted_correlation
+        ));
+        assert!(duplicate.effects.is_empty());
+        assert!(matches!(
+            duplicate.snapshot.conversation_runtime.auto_follow.phase,
+            AutoFollowPhase::Submitting { .. }
+        ));
     }
 
     #[test]
@@ -7686,6 +8509,7 @@ mod tests {
         );
         let first_correlation = post_turn_effect_correlation(&first);
 
+        controller.handle_input(CoreInput::Command(AppCommand::InvalidateConversationLoad));
         apply_completed_turn(&mut controller, "thread-2", "turn-2");
         let second = start_post_turn_evaluation_for(
             &mut controller,
@@ -7696,6 +8520,8 @@ mod tests {
         );
         let second_correlation = post_turn_effect_correlation(&second);
 
+        controller.handle_input(CoreInput::Command(AppCommand::InvalidateConversationLoad));
+        controller.planning_worker_panel_history_seed = initial_history.clone();
         apply_completed_turn(&mut controller, "thread-1", "turn-1");
         let current = start_post_turn_evaluation_for(
             &mut controller,
@@ -7766,10 +8592,12 @@ mod tests {
                 execution: Box::new(current_execution),
             },
         ));
-        assert!(matches!(
-            exact.events.as_slice(),
-            [AppEvent::PostTurnEvaluationCompleted(_)]
-        ));
+        assert!(
+            exact.events.iter().any(|event| matches!(
+                event,
+                AppEvent::PostTurnContinuationRoutingRequested { .. }
+            ))
+        );
         assert!(
             controller
                 .active_post_turn_evaluation_correlation()
@@ -7804,7 +8632,6 @@ mod tests {
     #[test]
     fn lifecycle_only_aba_prunes_the_old_post_turn_lease_before_completion() {
         let mut controller = CoreController::new();
-        let continuation_gate = PostTurnContinuationGate::default();
 
         apply_completed_turn(&mut controller, "thread-1", "turn-1");
         let mut first_request = post_turn_request(
@@ -7815,13 +8642,13 @@ mod tests {
         );
         first_request.context.planning_workspace_directory = "/tmp/planning".to_string();
         first_request.workspace_directory = "/tmp/turn".to_string();
-        first_request.continuation_permit = continuation_gate.capture();
-        let first_permit = first_request.continuation_permit.clone();
         let first = controller.handle_input(CoreInput::Command(AppCommand::EvaluatePostTurn(
             Box::new(first_request),
         )));
         let first_correlation = post_turn_effect_correlation(&first);
+        let first_permit = post_turn_effect_permit(&first);
 
+        controller.handle_input(CoreInput::Command(AppCommand::InvalidateConversationLoad));
         apply_completed_turn(&mut controller, "thread-2", "turn-2");
         assert!(
             controller
@@ -7834,11 +8661,7 @@ mod tests {
             first_permit.with_current(|| ()).is_none(),
             "the pruned worker must lose authority to make later background commits"
         );
-        let current_permit = continuation_gate.capture();
-        assert!(
-            current_permit.is_current(),
-            "pruning A must not advance the shared lifecycle generation for a newer request"
-        );
+        controller.handle_input(CoreInput::Command(AppCommand::InvalidateConversationLoad));
         apply_completed_turn(&mut controller, "thread-1", "turn-1");
 
         let stale = controller.handle_input(CoreInput::EffectCompleted(
@@ -7867,11 +8690,15 @@ mod tests {
         );
         current_request.context.planning_workspace_directory = "/tmp/planning".to_string();
         current_request.workspace_directory = "/tmp/turn".to_string();
-        current_request.continuation_permit = current_permit;
         let current = controller.handle_input(CoreInput::Command(AppCommand::EvaluatePostTurn(
             Box::new(current_request),
         )));
         let current_correlation = post_turn_effect_correlation(&current);
+        let current_permit = post_turn_effect_permit(&current);
+        assert!(
+            current_permit.is_current(),
+            "the newer Core-owned lease must remain current after pruning the old lifecycle"
+        );
         assert_eq!(current_correlation.generation, 2);
         let exact = controller.handle_input(CoreInput::EffectCompleted(
             CoreEffectCompletion::PostTurnEvaluationCompleted {
@@ -7883,10 +8710,12 @@ mod tests {
                 )),
             },
         ));
-        assert!(matches!(
-            exact.events.as_slice(),
-            [AppEvent::PostTurnEvaluationCompleted(_)]
-        ));
+        assert!(
+            exact.events.iter().any(|event| matches!(
+                event,
+                AppEvent::PostTurnContinuationRoutingRequested { .. }
+            ))
+        );
     }
 
     #[test]
@@ -7954,10 +8783,12 @@ mod tests {
                 )),
             },
         ));
-        assert!(matches!(
-            exact.events.as_slice(),
-            [AppEvent::PostTurnEvaluationCompleted(_)]
-        ));
+        assert!(
+            exact.events.iter().any(|event| matches!(
+                event,
+                AppEvent::PostTurnContinuationRoutingRequested { .. }
+            ))
+        );
         assert!(
             controller
                 .active_post_turn_evaluation_correlation()
@@ -7985,12 +8816,16 @@ mod tests {
                 .effects
                 .is_empty()
         );
+        pruned.handle_input(CoreInput::Command(AppCommand::InvalidateConversationLoad));
         apply_completed_turn(&mut pruned, "thread-1", "turn-2");
 
         let next = start_post_turn_evaluation(&mut pruned, "turn-2");
         assert!(matches!(
             next.events.as_slice(),
-            [AppEvent::PostTurnEvaluationStarted(_)]
+            [
+                AppEvent::ConversationRuntimeAuthorityChanged(_),
+                AppEvent::PostTurnEvaluationStarted(_),
+            ]
         ));
         let expected_correlation = PostTurnEvaluationCorrelation::new(
             2,
@@ -8011,6 +8846,7 @@ mod tests {
                 .effects
                 .is_empty()
         );
+        settled.handle_input(CoreInput::Command(AppCommand::InvalidateConversationLoad));
         apply_completed_turn(&mut settled, "thread-1", "turn-2");
 
         let stale_exact = settled.handle_input(CoreInput::EffectCompleted(post_turn_completion(
@@ -8073,10 +8909,13 @@ mod tests {
             execution.clone(),
         )));
 
-        assert_eq!(
-            outcome.events,
-            vec![AppEvent::PostTurnEvaluationCompleted(execution)]
-        );
+        assert!(outcome.events.iter().any(|event| matches!(
+            event,
+            AppEvent::PostTurnContinuationRoutingRequested {
+                execution: routed_execution,
+                ..
+            } if routed_execution == &execution
+        )));
     }
 
     #[test]
@@ -8089,21 +8928,29 @@ mod tests {
                 .is_empty()
         );
         let execution = Box::new(sample_post_turn_execution());
+        let revision_before_completion = controller.snapshot().revision;
 
         let outcome = controller.handle_input(CoreInput::EffectCompleted(post_turn_completion(
             "/tmp/workspace",
             execution.clone(),
         )));
 
-        assert_eq!(outcome.snapshot.revision, 1);
+        assert_eq!(
+            outcome.snapshot.revision,
+            revision_before_completion + 2,
+            "projection and runtime authority must each advance the shared snapshot"
+        );
         assert_eq!(
             *outcome.snapshot.planning_parallel.planning_runtime,
             PlanningRuntimeProjection::invalid("planning blocked")
         );
-        assert_eq!(
-            outcome.events,
-            vec![AppEvent::PostTurnEvaluationCompleted(execution)]
-        );
+        assert!(outcome.events.iter().any(|event| matches!(
+            event,
+            AppEvent::PostTurnContinuationRoutingRequested {
+                execution: routed_execution,
+                ..
+            } if routed_execution == &execution
+        )));
         assert!(outcome.effects.is_empty());
     }
 
@@ -8126,17 +8973,26 @@ mod tests {
             execution.clone(),
         )));
 
-        assert_eq!(
-            outcome.events,
-            vec![
-                AppEvent::PostTurnEvaluationCompleted(execution),
-                AppEvent::PlanningRuntimeRefreshStarted {
+        assert!(outcome.events.iter().any(|event| matches!(
+            event,
+            AppEvent::PostTurnContinuationRoutingRequested {
+                execution: routed_execution,
+                ..
+            } if routed_execution == &execution
+        )));
+        assert!(
+            outcome
+                .events
+                .contains(&AppEvent::PlanningRuntimeRefreshStarted {
                     correlation: planning_runtime_refresh_correlation(2, "/tmp/workspace"),
-                },
-                AppEvent::PlanningRuntimeRefreshCancelled {
+                })
+        );
+        assert!(
+            outcome
+                .events
+                .contains(&AppEvent::PlanningRuntimeRefreshCancelled {
                     correlation: planning_runtime_refresh_correlation(1, "/tmp/workspace"),
-                },
-            ]
+                })
         );
         assert_eq!(
             outcome.effects,
@@ -8206,10 +9062,13 @@ mod tests {
             post_turn_completion_for(post_turn_correlation, "/tmp/slot", execution.clone()),
         ));
 
-        assert_eq!(
-            slot_completion.events,
-            vec![AppEvent::PostTurnEvaluationCompleted(execution)]
-        );
+        assert!(slot_completion.events.iter().any(|event| matches!(
+            event,
+            AppEvent::PostTurnContinuationRoutingRequested {
+                execution: routed_execution,
+                ..
+            } if routed_execution == &execution
+        )));
         assert_eq!(
             *slot_completion.snapshot.planning_parallel.planning_runtime,
             root_projection
@@ -8262,21 +9121,29 @@ mod tests {
                 .is_empty()
         );
         let execution = Box::new(sample_post_turn_execution());
+        let revision_before_completion = controller.snapshot().revision;
 
         let outcome = controller.handle_input(CoreInput::EffectCompleted(post_turn_completion(
             "/tmp/workspace",
             execution.clone(),
         )));
 
-        assert_eq!(outcome.snapshot.revision, 1);
+        assert_eq!(
+            outcome.snapshot.revision,
+            revision_before_completion + 1,
+            "an unchanged projection must advance only runtime authority"
+        );
         assert_eq!(
             *outcome.snapshot.planning_parallel.planning_runtime,
             projection
         );
-        assert_eq!(
-            outcome.events,
-            vec![AppEvent::PostTurnEvaluationCompleted(execution)]
-        );
+        assert!(outcome.events.iter().any(|event| matches!(
+            event,
+            AppEvent::PostTurnContinuationRoutingRequested {
+                execution: routed_execution,
+                ..
+            } if routed_execution == &execution
+        )));
         assert!(outcome.effects.is_empty());
     }
 
@@ -8386,7 +9253,13 @@ mod tests {
             Box::new(duplicate_execution),
         )));
 
-        assert_eq!(first.events.len(), 1);
+        assert!(matches!(
+            first.events.as_slice(),
+            [
+                AppEvent::ConversationRuntimeAuthorityChanged(_),
+                AppEvent::PostTurnContinuationRoutingRequested { .. },
+            ]
+        ));
         assert_eq!(*duplicate.snapshot, *first.snapshot);
         assert!(duplicate.events.is_empty());
         assert!(duplicate.effects.is_empty());
@@ -8496,7 +9369,7 @@ mod tests {
     }
 
     #[test]
-    fn conversation_workspace_change_passes_through_core_without_state_revision() {
+    fn conversation_workspace_change_publishes_runtime_authority() {
         let mut controller = CoreController::new();
         let turn_correlation = controller.begin_test_turn_submission();
 
@@ -8505,13 +9378,24 @@ mod tests {
             workspace_directory: "/tmp/slot-worktree".to_string(),
         });
 
-        assert_eq!(*outcome.snapshot, AppSnapshot::initial());
         assert_eq!(
-            outcome.events,
-            vec![AppEvent::ConversationTurnWorkspaceChanged {
-                workspace_directory: "/tmp/slot-worktree".to_string()
-            }]
+            outcome
+                .snapshot
+                .conversation_runtime
+                .active_turn
+                .as_ref()
+                .map(|turn| turn.workspace_directory.as_str()),
+            Some("/tmp/slot-worktree")
         );
+        assert!(matches!(
+            outcome.events.as_slice(),
+            [
+                AppEvent::ConversationRuntimeAuthorityChanged(_),
+                AppEvent::ConversationTurnWorkspaceChanged {
+                    workspace_directory,
+                },
+            ] if workspace_directory == "/tmp/slot-worktree"
+        ));
         assert!(outcome.effects.is_empty());
     }
 
@@ -8784,6 +9668,13 @@ mod tests {
         ));
     }
 
+    fn approval_identity(approval_id: &str) -> ConversationApprovalRequestIdentity {
+        ConversationApprovalRequestIdentity {
+            approval_id: approval_id.to_string(),
+            server_request_id: format!("server-{approval_id}"),
+        }
+    }
+
     fn test_approval_review(target_item_id: &str) -> ConversationApprovalReview {
         ConversationApprovalReview {
             target_item_id: target_item_id.to_string(),
@@ -8799,6 +9690,8 @@ mod tests {
             thread_id: thread_id.map(str::to_string),
             prompt: "ship it".to_string(),
             prompt_origin: CorePromptOrigin::Manual,
+            auto_follow_source: None,
+            planning_handoff: None,
             turn_options: Default::default(),
             slot_lease_handoff: None,
         }
@@ -8881,12 +9774,19 @@ mod tests {
         correlation.clone()
     }
 
+    fn post_turn_effect_permit(outcome: &CoreDispatchOutcome) -> PostTurnContinuationPermit {
+        let [CoreEffect::EvaluatePostTurn { request, .. }] = outcome.effects.as_slice() else {
+            panic!("test post-turn admission must dispatch one request-local permit");
+        };
+        request.continuation_permit.clone()
+    }
+
     fn submit_test_turn(
         controller: &mut CoreController,
         thread_id: Option<&str>,
     ) -> TurnSubmissionCorrelation {
         let outcome = controller.handle_input(CoreInput::Command(AppCommand::SubmitTurn(
-            test_turn_submission_request(thread_id),
+            Box::new(test_turn_submission_request(thread_id)),
         )));
         let [CoreEffect::SubmitTurn { correlation, .. }] = outcome.effects.as_slice() else {
             panic!("test submission should produce one correlated effect");

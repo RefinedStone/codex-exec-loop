@@ -7,7 +7,7 @@ use crate::application::service::post_turn_evaluation::{
     PostTurnEvaluationExecution, PostTurnEvaluationOutcome as ApplicationPostTurnEvaluationOutcome,
     PostTurnEvaluationProvenance as ApplicationPostTurnEvaluationProvenance,
 };
-use crate::core::app::{AppCommand, CoreInput};
+use crate::core::app::{AppCommand, CoreInput, PostTurnEvaluationCorrelation};
 
 use super::super::conversation_model::PlanningRepairState;
 use super::super::conversation_runtime::{
@@ -15,7 +15,10 @@ use super::super::conversation_runtime::{
     PostTurnQueuedPrompt,
 };
 use super::super::post_turn_continuation::PostTurnEvaluationCompletionPayload;
-use super::super::{AutoFollowSkipReason, ConversationState, ConversationViewModel, NativeTuiApp};
+use super::super::{
+    AutoFollowSkipReason, AutoFollowSnapshotPresentation, ConversationState, ConversationViewModel,
+    NativeTuiApp,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct PostTurnEvaluationRequest {
@@ -30,11 +33,7 @@ impl NativeTuiApp {
         let Some(context) = self.ready_post_turn_evaluation_context() else {
             return;
         };
-        let request = application_post_turn_request(
-            request,
-            context,
-            self.planning.post_turn_continuation_gate.capture(),
-        );
+        let request = application_post_turn_request(request, context);
         self.dispatch_client_event(CoreInput::Command(AppCommand::EvaluatePostTurn(Box::new(
             request,
         ))));
@@ -61,15 +60,19 @@ impl NativeTuiApp {
 
     pub(in crate::adapter::inbound::tui::app) fn apply_post_turn_evaluation_execution(
         &mut self,
+        correlation: PostTurnEvaluationCorrelation,
         execution: PostTurnEvaluationExecution,
+        route_resolution: crate::core::app::PostTurnRouteResolution,
     ) {
         let workspace_directory = execution.runtime_projection_workspace_directory;
         self.apply_post_turn_evaluation_completion_payload(PostTurnEvaluationCompletionPayload {
+            correlation,
             evaluation: Box::new(tui_post_turn_evaluation_outcome(
                 execution.evaluation,
                 workspace_directory,
             )),
             planning_worker_panel_state: execution.planning_worker_panel_state,
+            route_resolution,
         });
     }
 }
@@ -77,7 +80,6 @@ impl NativeTuiApp {
 fn application_post_turn_request(
     request: PostTurnEvaluationRequest,
     context: PostTurnEvaluationContext,
-    continuation_permit: crate::domain::planning::PostTurnContinuationPermit,
 ) -> crate::application::service::post_turn_evaluation::PostTurnEvaluationRequest {
     crate::application::service::post_turn_evaluation::PostTurnEvaluationRequest {
         context,
@@ -89,7 +91,9 @@ fn application_post_turn_request(
         // the application request contract stable until Core admits the exact
         // lifecycle and replaces it with its accepted history snapshot.
         planning_worker_panel_state: Default::default(),
-        continuation_permit,
+        // Core replaces this compatibility placeholder with its own captured
+        // permit during admission. No continuation gate is owned by the TUI.
+        continuation_permit: crate::domain::planning::PostTurnContinuationGate::default().capture(),
     }
 }
 
@@ -101,57 +105,29 @@ fn post_turn_context_from_conversation(
     parallel_automation_epoch_id: Option<u64>,
 ) -> PostTurnEvaluationContext {
     let latest_main_reply = conversation.latest_agent_message_text().map(str::to_string);
-    let stop_keyword_matched = latest_main_reply
-        .as_deref()
-        .map(|message| {
-            conversation
-                .auto_follow_state
-                .stop_rules
-                .stop_keyword
-                .matches(message)
-        })
-        .unwrap_or(false);
-    let no_file_changes_stop_matched = conversation
-        .auto_follow_state
-        .stop_rules
-        .should_stop_on_no_file_changes(
-            conversation
-                .turn_activity
-                .last_completed_file_change_count(),
-        );
-
-    let operator_stopped = conversation
-        .auto_follow_state
-        .post_turn_continuation_paused();
-    let parallel_continuation_enabled = parallel_mode_enabled
-        && conversation
-            .auto_follow_state
-            .parallel_post_turn_continuation_allowed();
 
     PostTurnEvaluationContext {
         thread_id: conversation.thread_id.clone(),
         planning_workspace_directory: planning_workspace_directory.to_string(),
         latest_user_message: conversation.latest_user_message_text().map(str::to_string),
         latest_main_reply,
-        previous_handoff_task: conversation.last_planning_task_handoff().cloned(),
+        // Core replaces this compatibility placeholder from the exact
+        // ConversationRuntimeSnapshot before admitting the worker.
+        previous_handoff_task: None,
         current_runtime_projection,
-        // Single-session continuation remains off by default. Explicit parallel
-        // mode is an independent automation opt-in, while `:stop` remains a
-        // sticky kill switch for both paths.
+        // These policy-shaped fields are compatibility placeholders only.
+        // Core replaces every one from ConversationRuntimeAuthority before it
+        // admits an evaluation effect, so the TUI cannot become a second
+        // auto-follow/post-turn policy writer.
         parallel_mode_enabled,
         parallel_automation_epoch_id,
-        planning_settlement_paused: operator_stopped && !parallel_continuation_enabled,
-        continuation_paused: (!conversation.auto_follow_state.is_enabled() || operator_stopped)
-            && !parallel_continuation_enabled,
-        can_queue_next: conversation.auto_follow_state.can_queue_next()
-            || parallel_continuation_enabled,
-        stop_keyword: conversation
-            .auto_follow_state
-            .stop_keyword_value()
-            .to_string(),
-        stop_keyword_matched,
-        no_file_changes_stop_matched,
-        mode_label: conversation.auto_follow_state.mode_label().to_string(),
+        planning_settlement_paused: false,
+        continuation_paused: false,
+        can_queue_next: false,
+        stop_keyword: String::new(),
+        stop_keyword_matched: false,
+        no_file_changes_stop_matched: false,
+        mode_label: conversation.auto_follow_state().mode_label().to_string(),
     }
 }
 
@@ -241,6 +217,15 @@ fn tui_auto_follow_skip_reason(reason: PostTurnAutoFollowSkipReason) -> AutoFoll
 mod tests {
     use super::*;
 
+    fn update_auto_follow(
+        conversation: &mut ConversationViewModel,
+        update: impl FnOnce(&mut crate::core::app::AutoFollowAuthoritySnapshot),
+    ) {
+        let mut runtime = conversation.runtime_snapshot().clone();
+        update(&mut runtime.auto_follow);
+        conversation.apply_runtime_snapshot(runtime);
+    }
+
     fn request() -> PostTurnEvaluationRequest {
         PostTurnEvaluationRequest {
             workspace_directory: "/tmp/workspace".to_string(),
@@ -250,8 +235,17 @@ mod tests {
         }
     }
 
+    fn assert_neutral_policy_placeholders(context: &PostTurnEvaluationContext) {
+        assert!(!context.planning_settlement_paused);
+        assert!(!context.continuation_paused);
+        assert!(!context.can_queue_next);
+        assert!(context.stop_keyword.is_empty());
+        assert!(!context.stop_keyword_matched);
+        assert!(!context.no_file_changes_stop_matched);
+    }
+
     #[test]
-    fn auto_follow_off_allows_settlement_while_explicit_stop_pauses_it() {
+    fn auto_follow_policy_fields_remain_neutral_tui_placeholders() {
         let mut conversation = ConversationViewModel::new_draft("/tmp/workspace".to_string());
 
         let disabled = post_turn_context_from_conversation(
@@ -261,11 +255,13 @@ mod tests {
             false,
             None,
         );
-        assert!(disabled.continuation_paused);
-        assert!(!disabled.planning_settlement_paused);
-        assert!(!disabled.can_queue_next);
+        assert_neutral_policy_placeholders(&disabled);
 
-        conversation.auto_follow_state.set_max_auto_turns(3);
+        update_auto_follow(&mut conversation, |auto_follow| {
+            auto_follow.max_auto_turns = 3;
+            auto_follow.completed_auto_turns = 0;
+            auto_follow.continuation_paused = false;
+        });
         let enabled = post_turn_context_from_conversation(
             &conversation,
             "/tmp/workspace",
@@ -273,14 +269,13 @@ mod tests {
             false,
             None,
         );
-        assert!(!enabled.continuation_paused);
-        assert!(!enabled.planning_settlement_paused);
-        assert!(enabled.can_queue_next);
+        assert_neutral_policy_placeholders(&enabled);
 
-        conversation
-            .auto_follow_state
-            .pause_post_turn_continuation();
-        conversation.auto_follow_state.reset_for_manual_turn();
+        update_auto_follow(&mut conversation, |auto_follow| {
+            auto_follow.phase = crate::core::app::AutoFollowPhase::Idle;
+            auto_follow.completed_auto_turns = 0;
+            auto_follow.continuation_paused = true;
+        });
         let stopped = post_turn_context_from_conversation(
             &conversation,
             "/tmp/workspace",
@@ -288,11 +283,13 @@ mod tests {
             true,
             None,
         );
-        assert!(stopped.continuation_paused);
-        assert!(stopped.planning_settlement_paused);
-        assert!(!stopped.can_queue_next);
+        assert_neutral_policy_placeholders(&stopped);
 
-        conversation.auto_follow_state.set_max_auto_turns(3);
+        update_auto_follow(&mut conversation, |auto_follow| {
+            auto_follow.max_auto_turns = 3;
+            auto_follow.completed_auto_turns = 0;
+            auto_follow.continuation_paused = false;
+        });
         let rearmed = post_turn_context_from_conversation(
             &conversation,
             "/tmp/workspace",
@@ -300,13 +297,11 @@ mod tests {
             false,
             None,
         );
-        assert!(!rearmed.continuation_paused);
-        assert!(!rearmed.planning_settlement_paused);
-        assert!(rearmed.can_queue_next);
+        assert_neutral_policy_placeholders(&rearmed);
     }
 
     #[test]
-    fn explicit_parallel_mode_enables_only_parallel_post_turn_continuation() {
+    fn explicit_parallel_mode_projects_only_external_control_plane_facts() {
         let mut conversation = ConversationViewModel::new_draft("/tmp/workspace".to_string());
 
         let parallel = post_turn_context_from_conversation(
@@ -318,13 +313,13 @@ mod tests {
         );
         assert!(parallel.parallel_mode_enabled);
         assert_eq!(parallel.parallel_automation_epoch_id, Some(7));
-        assert!(!parallel.continuation_paused);
-        assert!(parallel.can_queue_next);
-        assert!(!conversation.auto_follow_state.is_enabled());
+        assert_neutral_policy_placeholders(&parallel);
+        assert!(!conversation.auto_follow_state().is_enabled());
 
-        conversation
-            .auto_follow_state
-            .pause_post_turn_continuation();
+        update_auto_follow(&mut conversation, |auto_follow| {
+            auto_follow.continuation_paused = true;
+            auto_follow.parallel_rearmed_after_stop = false;
+        });
         let stopped = post_turn_context_from_conversation(
             &conversation,
             "/tmp/workspace",
@@ -332,10 +327,13 @@ mod tests {
             true,
             None,
         );
-        assert!(stopped.continuation_paused);
-        assert!(!stopped.can_queue_next);
+        assert!(stopped.parallel_mode_enabled);
+        assert_eq!(stopped.parallel_automation_epoch_id, None);
+        assert_neutral_policy_placeholders(&stopped);
 
-        conversation.rearm_parallel_post_turn_continuation();
+        update_auto_follow(&mut conversation, |auto_follow| {
+            auto_follow.parallel_rearmed_after_stop = true;
+        });
         let parallel_rearmed = post_turn_context_from_conversation(
             &conversation,
             "/tmp/workspace",
@@ -343,18 +341,19 @@ mod tests {
             true,
             Some(8),
         );
-        assert!(!parallel_rearmed.continuation_paused);
-        assert!(parallel_rearmed.can_queue_next);
+        assert!(parallel_rearmed.parallel_mode_enabled);
+        assert_eq!(parallel_rearmed.parallel_automation_epoch_id, Some(8));
+        assert_neutral_policy_placeholders(&parallel_rearmed);
         assert!(
             conversation
-                .auto_follow_state
+                .auto_follow_state()
                 .post_turn_continuation_paused()
         );
-        assert!(!conversation.auto_follow_state.can_queue_next());
+        assert!(!conversation.auto_follow_state().can_queue_next());
     }
 
     #[test]
-    fn post_turn_context_projects_keyword_and_file_change_stop_rules() {
+    fn post_turn_context_projects_raw_reply_but_not_derived_stop_policy() {
         use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
 
         let mut conversation = ConversationViewModel::new_draft("/tmp/workspace".to_string());
@@ -364,10 +363,9 @@ mod tests {
             None,
             None,
         ));
-        conversation
-            .auto_follow_state
-            .stop_rules
-            .stop_on_no_file_changes = true;
+        update_auto_follow(&mut conversation, |auto_follow| {
+            auto_follow.stop_on_no_file_changes = true;
+        });
 
         let default_keyword = post_turn_context_from_conversation(
             &conversation,
@@ -377,11 +375,15 @@ mod tests {
             None,
         );
 
-        assert_eq!(default_keyword.stop_keyword, "AUTO_STOP");
-        assert!(default_keyword.stop_keyword_matched);
-        assert!(default_keyword.no_file_changes_stop_matched);
+        assert_eq!(
+            default_keyword.latest_main_reply.as_deref(),
+            Some("work complete.\nAUTO_STOP!")
+        );
+        assert_neutral_policy_placeholders(&default_keyword);
 
-        conversation.auto_follow_state.stop_rules.stop_keyword.value = "DONE".to_string();
+        update_auto_follow(&mut conversation, |auto_follow| {
+            auto_follow.stop_keyword = "DONE".to_string();
+        });
         conversation.messages.push(ConversationMessage::new(
             ConversationMessageKind::Agent,
             "done!",
@@ -400,9 +402,8 @@ mod tests {
             None,
         );
 
-        assert_eq!(custom_keyword.stop_keyword, "DONE");
-        assert!(custom_keyword.stop_keyword_matched);
-        assert!(!custom_keyword.no_file_changes_stop_matched);
+        assert_eq!(custom_keyword.latest_main_reply.as_deref(), Some("done!"));
+        assert_neutral_policy_placeholders(&custom_keyword);
     }
 
     #[test]

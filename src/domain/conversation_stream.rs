@@ -1,6 +1,6 @@
 use crate::domain::conversation::{
-    ConversationApprovalRequest, ConversationApprovalResolution, ConversationApprovalReview,
-    ConversationToolActivity,
+    ConversationApprovalRequest, ConversationApprovalRequestIdentity,
+    ConversationApprovalResolution, ConversationApprovalReview, ConversationToolActivity,
 };
 use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleObservation;
 use crate::domain::conversation_progressive_activity::ConversationProgressiveActivityBatch;
@@ -53,7 +53,7 @@ pub enum ConversationStreamEvent {
         request: ConversationApprovalRequest,
     },
     ApprovalResolved {
-        approval_id: String,
+        request_identity: ConversationApprovalRequestIdentity,
         resolution: ConversationApprovalResolution,
     },
     TurnInterruptRequestFailed {

@@ -1,265 +1,42 @@
-use super::{AutoFollowState, ConversationViewModel};
+use super::normalize_max_auto_turns_candidate;
+use crate::core::app::AppCommand;
 
 /*
- * Auto-follow controls는 overlay의 임시 입력 상태가 아니라 ConversationViewModel 안의
- * 실제 auto-follow 정책을 바꾸는 reducer다. app_runtime은 controller에서 올라온 이벤트를
- * 이 함수에 넣는다. reducer는 context 전환이나 유효한 저장이 active editor draft를 닫아야
- * 하는지만 알리고, canonical budget 문자열은 ConversationViewModel에만 남긴다.
+ * Terminal controls emit intent only. Runtime budget, pause, and rearm state are
+ * reduced by Core; the TUI keeps only the unfinished editor buffer and status
+ * copy derived after the authoritative snapshot is applied.
  */
 #[derive(Debug, Clone)]
 pub(super) enum AutoFollowControlEvent {
-    /*
-     * workspace 변경은 conversation draft의 cwd와 auto-follow 상태가 같은 기준 디렉터리를 보도록 맞춘다.
-     * conversation/controller가 새 workspace를 받으면 이 이벤트로 auto-follow 쪽 상태까지 따라오게 한다.
-     */
     DraftWorkspaceSynced { workspace_directory: String },
-    /*
-     * AutoFollowPaused는 실행 중인 내부 continuation을 중단하고 명시적인 `:turns`
-     * 재설정 전까지 자동화를 disarm하라는 operator intent다.
-     */
     AutoFollowPaused,
-    // Authority writers must stop continuation without replacing newer status presentation.
     PlanningAuthorityMutationSettled,
-    /*
-     * MaxAutoTurnsUpdated는 `:turns` editor가 확정한 raw 문자열을 실제 정책 값으로 반영한다.
-     * 입력 검증은 AutoFollowState의 canonical parser를 사용해 UI와 runtime copy가 같은 규칙을 쓴다.
-     */
     MaxAutoTurnsUpdated { value: String },
 }
 
-#[derive(Debug, Clone)]
-pub(super) struct AutoFollowControlReduction {
-    /*
-     * state는 reducer가 갱신한 conversation model이다. caller인 NativeTuiApp은 이 값을 다시
-     * ConversationState::Ready에 넣어 runtime, footer, prompt composer가 같은 값을 보게 한다.
-     */
-    pub state: ConversationViewModel,
-    // Invalid budget input preserves the draft; accepted input and context changes close it.
-    pub close_max_auto_turns_editor: bool,
-}
-
-pub(super) fn reduce_auto_follow_controls(
-    mut state: ConversationViewModel,
-    event: AutoFollowControlEvent,
-) -> AutoFollowControlReduction {
-    let mut close_max_auto_turns_editor = false;
-
-    match event {
-        AutoFollowControlEvent::DraftWorkspaceSynced {
-            workspace_directory,
-        } => {
-            /*
-             * sync_draft_workspace는 cwd 변경뿐 아니라 draft workspace 기준 status와 skip state를 함께 정리한다.
-             * 실제 변화가 있었을 때만 이전 context에서 시작한 editor draft를 닫는다.
-             */
-            if state.sync_draft_workspace(workspace_directory) {
-                close_max_auto_turns_editor = true;
-            }
-        }
-        AutoFollowControlEvent::AutoFollowPaused => {
-            /*
-             * pause_post_turn_continuation은 이후 자동 turn 제출을 막는 sticky operator flag를 세운다.
-             * record_internal_continuation_paused는 tail/footer가 재무장이 필요하다는 이유를 표시하게 하며,
-             * running phase 자체는 유지해 turn budget accounting이 중간에 사라지지 않게 한다.
-             */
-            state.pause_post_turn_continuation();
-            state.record_internal_continuation_paused();
-            state.status_text =
-                "auto-follow stopped and disarmed / use :turns <positive|infinite> to re-enable"
-                    .to_string();
-        }
-        AutoFollowControlEvent::PlanningAuthorityMutationSettled => {
-            state.pause_post_turn_continuation();
-            state.record_internal_continuation_paused();
-        }
-        AutoFollowControlEvent::MaxAutoTurnsUpdated { value } => {
-            /*
-             * raw editor buffer는 숫자, 공백, infinite 같은 표현이 섞일 수 있다.
-             * AutoFollowState가 canonical parser를 소유하게 해서 runtime limit 판단과 UI 저장 검증이 분리되지 않게 한다.
-             */
-            let Some(value) = AutoFollowState::normalize_max_auto_turns_candidate(&value) else {
-                state.status_text =
-                    "auto-follow unchanged / use a positive whole number, infinite, off, or 0"
-                        .to_string();
-                return AutoFollowControlReduction {
-                    state,
-                    close_max_auto_turns_editor,
-                };
-            };
-
-            /*
-             * limit 변경은 사용자의 새 의사 표현이므로 이전 auto-follow skip reason을 지운다.
-             * 그렇지 않으면 footer가 새 설정 뒤에도 오래된 "skipped" 상태를 계속 보여 줄 수 있다.
-             */
-            state.auto_follow_state.set_max_auto_turns(value);
-            state.clear_auto_follow_skip();
-            state.status_text = if state.auto_follow_state.is_enabled() {
-                format!(
-                    "auto-follow enabled / turn budget {}",
-                    state.auto_follow_state.max_auto_turns_label()
-                )
-            } else {
-                "auto-follow disabled / use :turns <positive|infinite> to enable".to_string()
-            };
-            close_max_auto_turns_editor = true;
-        }
-    }
-
-    AutoFollowControlReduction {
-        state,
-        close_max_auto_turns_editor,
-    }
+pub(super) fn max_auto_turns_command(value: &str) -> Option<AppCommand> {
+    normalize_max_auto_turns_candidate(value)
+        .map(|value| AppCommand::SetAutoFollowMaxTurns { value })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapter::inbound::tui::app::AutoFollowSkipReason;
 
     #[test]
-    fn draft_workspace_sync_updates_blank_draft_and_closes_editor() {
-        let draft = ConversationViewModel::new_draft("/tmp/root".to_string());
-
-        let reduced = reduce_auto_follow_controls(
-            draft,
-            AutoFollowControlEvent::DraftWorkspaceSynced {
-                workspace_directory: "/tmp/alt".to_string(),
-            },
-        );
-
-        assert_eq!(reduced.state.cwd, "/tmp/alt");
-        assert!(reduced.state.status_text.contains("draft workspace synced"));
-        assert!(reduced.close_max_auto_turns_editor);
+    fn accepted_budget_maps_to_core_command() {
+        assert!(matches!(
+            max_auto_turns_command("5"),
+            Some(AppCommand::SetAutoFollowMaxTurns { value: 5 })
+        ));
+        assert!(matches!(
+            max_auto_turns_command("off"),
+            Some(AppCommand::SetAutoFollowMaxTurns { value: 0 })
+        ));
     }
 
     #[test]
-    fn draft_workspace_sync_clears_skip_state() {
-        /*
-         * workspace 기준이 바뀌면 이전 workspace에서 계산된 skip reason은 더 이상 신뢰할 수 없다.
-         * reducer가 sync_draft_workspace를 통해 stale auto-follow activity를 제거하는지 확인한다.
-         */
-        let mut draft = ConversationViewModel::new_draft("/tmp/root".to_string());
-        draft.record_auto_follow_skip(AutoFollowSkipReason::NoAgentReply);
-
-        let reduced = reduce_auto_follow_controls(
-            draft,
-            AutoFollowControlEvent::DraftWorkspaceSynced {
-                workspace_directory: "/tmp/alt".to_string(),
-            },
-        );
-
-        assert!(reduced.state.last_auto_follow_activity.is_none());
-    }
-
-    #[test]
-    fn updating_max_auto_turns_clears_skip_and_closes_editor() {
-        /*
-         * turn budget 변경은 auto-follow를 다시 시도하려는 operator action이다.
-         * 정책 값과 stale skip reason을 갱신한 뒤 active draft만 닫는다.
-         */
-        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
-        state.record_auto_follow_skip(AutoFollowSkipReason::NoAgentReply);
-
-        let reduced = reduce_auto_follow_controls(
-            state,
-            AutoFollowControlEvent::MaxAutoTurnsUpdated {
-                value: "5".to_string(),
-            },
-        );
-
-        assert_eq!(reduced.state.auto_follow_state.max_auto_turns_value(), 5);
-        assert!(reduced.state.last_auto_follow_activity.is_none());
-        assert!(reduced.close_max_auto_turns_editor);
-    }
-
-    #[test]
-    fn disabling_auto_follow_accepts_zero_and_closes_editor() {
-        /*
-         * Both `0` and `off` are explicit disable operations. The policy keeps a
-         * prior :stop sticky while closed presentation reads its canonical label.
-         */
-        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
-        state.auto_follow_state.set_max_auto_turns(5);
-        state.pause_post_turn_continuation();
-
-        let reduced = reduce_auto_follow_controls(
-            state,
-            AutoFollowControlEvent::MaxAutoTurnsUpdated {
-                value: "0".to_string(),
-            },
-        );
-
-        assert_eq!(reduced.state.auto_follow_state.max_auto_turns_value(), 0);
-        assert!(!reduced.state.auto_follow_state.can_queue_next());
-        assert!(
-            reduced
-                .state
-                .auto_follow_state
-                .post_turn_continuation_paused()
-        );
-        assert!(reduced.close_max_auto_turns_editor);
-        assert!(reduced.state.status_text.contains("auto-follow disabled"));
-    }
-
-    #[test]
-    fn invalid_max_auto_turns_keeps_auto_follow_disabled() {
-        let state = ConversationViewModel::new_draft("/tmp/root".to_string());
-
-        let reduced = reduce_auto_follow_controls(
-            state,
-            AutoFollowControlEvent::MaxAutoTurnsUpdated {
-                value: "not-a-budget".to_string(),
-            },
-        );
-
-        assert_eq!(reduced.state.auto_follow_state.max_auto_turns_value(), 0);
-        assert!(!reduced.close_max_auto_turns_editor);
-        assert!(reduced.state.status_text.contains("auto-follow unchanged"));
-    }
-
-    #[test]
-    fn positive_budget_is_an_explicit_opt_in_and_clears_chain_pause() {
-        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
-        state.pause_post_turn_continuation();
-
-        let reduced = reduce_auto_follow_controls(
-            state,
-            AutoFollowControlEvent::MaxAutoTurnsUpdated {
-                value: "3".to_string(),
-            },
-        );
-
-        assert!(reduced.state.auto_follow_state.can_queue_next());
-        assert!(
-            !reduced
-                .state
-                .auto_follow_state
-                .post_turn_continuation_paused()
-        );
-        assert_eq!(
-            reduced.state.status_text,
-            "auto-follow enabled / turn budget 3"
-        );
-    }
-
-    #[test]
-    fn pausing_internal_continuation_keeps_running_phase_for_turn_budget() {
-        /*
-         * auto-follow pause는 현재 internal continuation을 멈추는 조작이지 이미 제출된 turn을
-         * 완료 처리하는 조작이 아니다. running phase가 유지되어야 completed_auto_turns가 부풀지 않는다.
-         */
-        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
-        state.auto_follow_state.mark_auto_turn_submitted();
-
-        let reduced = reduce_auto_follow_controls(state, AutoFollowControlEvent::AutoFollowPaused);
-
-        assert!(reduced.state.auto_follow_state.has_live_activity());
-        assert!(
-            reduced
-                .state
-                .auto_follow_state
-                .post_turn_continuation_paused()
-        );
-        assert_eq!(reduced.state.auto_follow_state.completed_auto_turns, 0);
+    fn invalid_budget_does_not_fabricate_a_runtime_write() {
+        assert!(max_auto_turns_command("not-a-budget").is_none());
     }
 }

@@ -1,29 +1,13 @@
-use crate::application::service::post_turn_decision::{
-    PostTurnAutoPromptRoute, PostTurnAutoPromptRouteRequest, PostTurnAutoPromptSuppressionReason,
-    decide_post_turn_auto_prompt_route,
-};
-use crate::core::app::TurnStreamUpdate;
-use crate::domain::parallel_mode::ParallelModePostTurnQueueSignal;
+use crate::core::app::{PostTurnEvaluationCorrelation, PostTurnRouteResolution};
 
-use super::conversation_runtime::{
-    PostTurnEvaluationOutcome, conversation_runtime_auto_prompt_queued,
-    suppress_conversation_runtime_auto_prompt,
-};
-use super::{
-    ConversationRuntimeEffect, ConversationRuntimeEvent, ConversationState, NativeTuiApp,
-    PlanningWorkerPanelState,
-};
+use super::conversation_runtime::PostTurnEvaluationOutcome;
+use super::{ConversationRuntimeEvent, NativeTuiApp, PlanningWorkerPanelState};
 
 pub(super) struct PostTurnEvaluationCompletionPayload {
+    pub(super) correlation: PostTurnEvaluationCorrelation,
     pub(super) evaluation: Box<PostTurnEvaluationOutcome>,
     pub(super) planning_worker_panel_state: PlanningWorkerPanelState,
-}
-
-pub(super) struct PostTurnContinuationRoutingContext {
-    route_after_reduction: bool,
-    parallel_mode_post_turn_queue_signal: Option<ParallelModePostTurnQueueSignal>,
-    runtime_projection_workspace_directory: Option<String>,
-    has_actionable_queue_head: bool,
+    pub(super) route_resolution: PostTurnRouteResolution,
 }
 
 impl NativeTuiApp {
@@ -36,111 +20,10 @@ impl NativeTuiApp {
             .apply_completed(result.planning_worker_panel_state);
         self.invalidate_parallel_mode_supervisor_snapshot();
         self.dispatch_conversation_runtime(ConversationRuntimeEvent::PostTurnEvaluationCompleted {
+            correlation: result.correlation,
             evaluation: result.evaluation,
+            route_resolution: result.route_resolution,
         });
         true
-    }
-
-    pub(super) fn post_turn_continuation_context(
-        &self,
-        event: &ConversationRuntimeEvent,
-    ) -> PostTurnContinuationRoutingContext {
-        let failed_stream_snapshot = matches!(
-            event,
-            ConversationRuntimeEvent::StreamSnapshotApplied(snapshot)
-                if matches!(&snapshot.update, TurnStreamUpdate::Failed { .. })
-        );
-        let (
-            parallel_mode_post_turn_queue_signal,
-            runtime_projection_workspace_directory,
-            has_actionable_queue_head,
-        ) = self.parallel_mode_post_turn_queue_projection(event);
-        PostTurnContinuationRoutingContext {
-            route_after_reduction: matches!(
-                event,
-                ConversationRuntimeEvent::PostTurnEvaluationCompleted { .. }
-            ) || failed_stream_snapshot,
-            parallel_mode_post_turn_queue_signal,
-            runtime_projection_workspace_directory,
-            has_actionable_queue_head,
-        }
-    }
-
-    pub(super) fn route_post_turn_continuation_effects(
-        &mut self,
-        context: PostTurnContinuationRoutingContext,
-        effects: &mut Vec<ConversationRuntimeEffect>,
-    ) {
-        if !context.route_after_reduction {
-            return;
-        }
-        let queued_auto_prompt_available = conversation_runtime_auto_prompt_queued(effects);
-        let parallel_dispatch_consumed_auto_prompt = self
-            .apply_parallel_mode_post_turn_queue_continuation(
-                context.runtime_projection_workspace_directory,
-                queued_auto_prompt_available,
-                context.parallel_mode_post_turn_queue_signal,
-                context.has_actionable_queue_head,
-            );
-        let stale_parallel_only_prompt = queued_auto_prompt_available
-            && !parallel_dispatch_consumed_auto_prompt
-            && matches!(
-                context.parallel_mode_post_turn_queue_signal,
-                Some(ParallelModePostTurnQueueSignal::AutoFollowQueued)
-            )
-            && !self.parallel_mode_enabled()
-            && !self.single_session_auto_follow_can_queue_next();
-        if stale_parallel_only_prompt {
-            suppress_conversation_runtime_auto_prompt(effects);
-            self.record_stale_parallel_only_continuation_cancelled();
-            return;
-        }
-        let route = decide_post_turn_auto_prompt_route(PostTurnAutoPromptRouteRequest {
-            queued_auto_prompt_available,
-            parallel_dispatch_consumed_auto_prompt,
-        });
-        self.apply_post_turn_auto_prompt_route(route, effects);
-    }
-
-    fn apply_post_turn_auto_prompt_route(
-        &mut self,
-        route: PostTurnAutoPromptRoute,
-        effects: &mut Vec<ConversationRuntimeEffect>,
-    ) {
-        if route.should_suppress_prompt() {
-            suppress_conversation_runtime_auto_prompt(effects);
-        }
-        if matches!(
-            route,
-            PostTurnAutoPromptRoute::Suppress(
-                PostTurnAutoPromptSuppressionReason::ParallelDispatch
-            )
-        ) {
-            self.record_auto_follow_parallel_dispatch();
-        }
-    }
-
-    fn record_auto_follow_parallel_dispatch(&mut self) {
-        if let ConversationState::Ready(conversation) =
-            &mut self.conversation.lifecycle.conversation_state
-        {
-            conversation.record_auto_follow_parallel_dispatch();
-        }
-    }
-
-    fn single_session_auto_follow_can_queue_next(&self) -> bool {
-        matches!(
-            &self.conversation.lifecycle.conversation_state,
-            ConversationState::Ready(conversation)
-                if conversation.auto_follow_state.can_queue_next()
-        )
-    }
-
-    fn record_stale_parallel_only_continuation_cancelled(&mut self) {
-        if let ConversationState::Ready(conversation) =
-            &mut self.conversation.lifecycle.conversation_state
-        {
-            conversation.record_stale_parallel_only_continuation_cancelled();
-        }
     }
 }
