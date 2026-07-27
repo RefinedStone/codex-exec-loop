@@ -1,5 +1,4 @@
 pub(super) use super::{
-    DEFAULT_AUTO_FOLLOW_MAX_TURNS, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD,
     DISABLED_AUTO_FOLLOW_MAX_TURNS_TOKEN, INFINITE_AUTO_FOLLOW_MAX_TURNS,
     INFINITE_AUTO_FOLLOW_MAX_TURNS_TOKEN,
 };
@@ -31,7 +30,7 @@ mod view_model;
 // policy 파일 배치가 아니라 conversation model surface에만 의존한다.
 pub(crate) use activity_rail::ActivityRailTerminalState;
 pub(crate) use auto_follow::{
-    AutoFollowRuntimePhase, AutoFollowSkipReason, AutoFollowState, StopKeywordRule,
+    AutoFollowSkipReason, AutoFollowSnapshotPresentation, normalize_max_auto_turns_candidate,
 };
 pub(crate) use composer_state::ConversationComposerState;
 pub(crate) use progressive_activity::ProgressiveActivityItemKind;

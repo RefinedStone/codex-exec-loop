@@ -349,6 +349,8 @@ fn resolve_stream_launch_request(
         thread_id,
         prompt,
         prompt_origin,
+        auto_follow_source,
+        planning_handoff,
         turn_options,
         slot_lease_handoff,
     } = request;
@@ -365,6 +367,8 @@ fn resolve_stream_launch_request(
             thread_id: outcome.request.thread_id,
             prompt: outcome.request.prompt,
             prompt_origin,
+            auto_follow_source,
+            planning_handoff,
             turn_options,
             slot_lease_handoff: outcome.request.slot_lease_handoff,
         },
@@ -455,10 +459,10 @@ fn turn_stream_event_from_application(event: ConversationStreamEvent) -> TurnStr
             TurnStreamEvent::ApprovalRequested { request }
         }
         ConversationStreamEvent::ApprovalResolved {
-            approval_id,
+            request_identity,
             resolution,
         } => TurnStreamEvent::ApprovalResolved {
-            approval_id,
+            request_identity,
             resolution,
         },
         ConversationStreamEvent::TurnInterruptRequestFailed { message } => {
@@ -642,6 +646,8 @@ mod tests {
             thread_id: Some("thread-1".to_string()),
             prompt: "ship it".to_string(),
             prompt_origin: CorePromptOrigin::Manual,
+            auto_follow_source: None,
+            planning_handoff: None,
             turn_options: Default::default(),
             slot_lease_handoff: None,
         }

@@ -1,10 +1,10 @@
 /*
  * Auto-follow controller code sits at the terminal-input edge of NativeTuiApp.
- * It deliberately avoids owning policy: conversation-level auto-follow changes
- * are sent to `auto_follow_controls`, while in-progress editor text is sent to
- * `auto_follow_overlay_ui`. Keeping those two event streams separate lets the TUI
- * offer a forgiving inline text editor without letting half-typed values change
- * the runtime continuation budget.
+ * It deliberately avoids owning policy: conversation-level auto-follow intents
+ * are translated by `auto_follow_controls` into Core commands, while in-progress
+ * editor text is sent to `auto_follow_overlay_ui`. Keeping those two event
+ * streams separate lets the TUI offer a forgiving inline text editor without
+ * letting half-typed values change the runtime continuation budget.
  */
 use std::time::Instant;
 
@@ -18,17 +18,17 @@ use crossterm::event::{self, KeyCode, KeyModifiers};
 
 use super::super::shell_presentation::ParallelPanelProjectionSample;
 use super::super::{
-    AutoFollowControlEvent, AutoFollowOverlayUiEvent, ConversationState,
-    DISABLED_AUTO_FOLLOW_MAX_TURNS_TOKEN, NativeTuiApp, PlanningInitOverlayStep, ShellOverlay,
+    AutoFollowControlEvent, AutoFollowOverlayUiEvent, AutoFollowSnapshotPresentation,
+    ConversationState, DISABLED_AUTO_FOLLOW_MAX_TURNS_TOKEN, NativeTuiApp, PlanningInitOverlayStep,
+    ShellOverlay,
 };
 
 impl NativeTuiApp {
     pub(crate) fn pause_post_turn_continuation_after_authority_mutation(&mut self) {
         /*
          * Pause is an operator intent against the auto-follow policy, not a
-         * visual toggle. Sending it through the control reducer keeps footer
-         * copy, post-turn continuation guards, and budget accounting on the
-         * same ConversationViewModel state.
+         * visual toggle. The control boundary dispatches it to Core first and
+         * derives footer copy from the resulting immutable runtime snapshot.
          */
         self.dispatch_auto_follow_controls(
             AutoFollowControlEvent::PlanningAuthorityMutationSettled,
@@ -37,14 +37,14 @@ impl NativeTuiApp {
 
     pub(crate) fn current_max_auto_turns_label(&self) -> String {
         /*
-         * Ready conversation state is the only canonical owner of
-         * max_auto_turns. Startup and failure screens still need stable copy
-         * for the editor/status surface, so they fall back to the repository
-         * default instead of inventing a separate overlay default.
+         * A ready conversation exposes Core's canonical max_auto_turns snapshot.
+         * Startup and failure screens still need stable copy for the
+         * editor/status surface, so they fall back to the repository default
+         * instead of inventing a separate overlay policy.
          */
         match &self.conversation.lifecycle.conversation_state {
             ConversationState::Ready(conversation) => {
-                conversation.auto_follow_state.max_auto_turns_label()
+                conversation.auto_follow_state().max_auto_turns_label()
             }
             ConversationState::Loading | ConversationState::Failed(_) => {
                 DISABLED_AUTO_FOLLOW_MAX_TURNS_TOKEN.to_string()
@@ -83,7 +83,7 @@ impl NativeTuiApp {
          */
         let conversation_pulse = match &self.conversation.lifecycle.conversation_state {
             ConversationState::Ready(conversation) => conversation
-                // ConversationViewModel owns the monotonic start instant for the current auto-follow/live turn.
+                // ConversationViewModel projects Core's monotonic start instant for the current auto-follow/live turn.
                 .live_activity_started_at()
                 // Saturating math prevents clock/test anomalies from producing negative-looking elapsed values.
                 .map(|started_at| now.saturating_duration_since(started_at).as_secs()),
@@ -139,7 +139,7 @@ impl NativeTuiApp {
         /*
          * Starting an edit snapshots the current canonical label into the
          * overlay buffer. From this point until commit/cancel, the buffer is
-         * allowed to diverge from the conversation policy.
+         * allowed to diverge from the Core policy projection.
          */
         self.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::EditStarted {
             current_value: self.current_max_auto_turns_label(),

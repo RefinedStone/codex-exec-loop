@@ -1,7 +1,7 @@
 use super::{
-    AppSnapshot, ConversationReadySnapshot, ConversationSnapshot, ParallelModeProjection,
-    RevisionedPlanningParallelProjection, SessionCatalogReadySnapshot, SessionCatalogSnapshot,
-    StartupReadySnapshot, StartupSnapshot,
+    AppSnapshot, ConversationReadySnapshot, ConversationRuntimeSnapshot, ConversationSnapshot,
+    ParallelModeProjection, RevisionedPlanningParallelProjection, SessionCatalogReadySnapshot,
+    SessionCatalogSnapshot, StartupReadySnapshot, StartupSnapshot,
 };
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
 use crate::domain::planning::RuntimeProjection;
@@ -162,6 +162,19 @@ impl AppState {
         current.revision += 1;
     }
 
+    pub(super) fn apply_conversation_runtime_snapshot(
+        &mut self,
+        snapshot: ConversationRuntimeSnapshot,
+    ) -> bool {
+        if self.current.conversation_runtime == snapshot {
+            return false;
+        }
+        let current = Arc::make_mut(&mut self.current);
+        current.conversation_runtime = snapshot;
+        current.revision += 1;
+        true
+    }
+
     pub(super) fn apply_planning_runtime_projection(
         &mut self,
         workspace_directory: String,
@@ -299,6 +312,7 @@ mod tests {
                 startup: StartupSnapshot::Loading,
                 session_catalog: SessionCatalogSnapshot::Idle,
                 conversation: ConversationSnapshot::Idle,
+                conversation_runtime: ConversationRuntimeSnapshot::initial(),
                 planning_parallel: PlanningParallelProjection::initial(),
             }
         );
@@ -342,6 +356,7 @@ mod tests {
                 startup: StartupSnapshot::Idle,
                 session_catalog: SessionCatalogSnapshot::Loading,
                 conversation: ConversationSnapshot::Idle,
+                conversation_runtime: ConversationRuntimeSnapshot::initial(),
                 planning_parallel: PlanningParallelProjection::initial(),
             }
         );
@@ -360,6 +375,7 @@ mod tests {
                 startup: StartupSnapshot::Idle,
                 session_catalog: SessionCatalogSnapshot::Idle,
                 conversation: ConversationSnapshot::Loading,
+                conversation_runtime: ConversationRuntimeSnapshot::initial(),
                 planning_parallel: PlanningParallelProjection::initial(),
             }
         );
@@ -409,6 +425,7 @@ mod tests {
                 conversation: ConversationSnapshot::Failed {
                     message: "conversation failed".to_string(),
                 },
+                conversation_runtime: ConversationRuntimeSnapshot::initial(),
                 planning_parallel: PlanningParallelProjection::initial(),
             }
         );

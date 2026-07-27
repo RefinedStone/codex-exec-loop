@@ -91,12 +91,12 @@ impl NativeTuiApp {
                 prompt_origin,
             } => {
                 let outcome = self.reduce_core_client_event(CoreInput::Command(
-                    AppCommand::SubmitTurn(self.build_turn_submission_request(
+                    AppCommand::SubmitTurn(Box::new(self.build_turn_submission_request(
                         workspace_directory,
                         thread_id,
                         prompt,
                         &prompt_origin,
-                    )),
+                    ))),
                 ));
                 turn_submission_admitted = outcome.events.iter().any(|event| {
                     matches!(
@@ -106,6 +106,8 @@ impl NativeTuiApp {
                         )
                     )
                 });
+                let stale_auto_follow = !turn_submission_admitted
+                    && matches!(&prompt_origin, PromptOrigin::AutoFollow(_));
                 if turn_submission_admitted {
                     self.dispatch_conversation_runtime(
                         ConversationRuntimeEvent::PromptSubmissionAdmitted {
@@ -118,6 +120,12 @@ impl NativeTuiApp {
                 // executor are applied, so even synchronous failure reduces from
                 // the submitted state instead of being overwritten by it.
                 self.apply_core_dispatch_outcome(outcome);
+                if stale_auto_follow
+                    && let ConversationState::Ready(conversation) =
+                        &mut self.conversation.lifecycle.conversation_state
+                {
+                    conversation.record_stale_auto_follow_submission();
+                }
             }
             ConversationRuntimeEffect::EvaluatePostTurn {
                 workspace_directory,
@@ -131,21 +139,21 @@ impl NativeTuiApp {
                 execution_snapshot_capture,
             }),
             ConversationRuntimeEffect::QueueAutoPrompt {
+                source,
                 prompt,
                 completed_turn_id,
                 mode_label,
                 transcript_text,
-                handoff_task,
             } => {
                 let debug_detail = self.build_auto_follow_transcript_debug_detail(&transcript_text);
                 turn_submission_admitted = self.submit_prompt(
                     prompt,
                     PromptOrigin::AutoFollow(Box::new(AutoFollowSubmitContext {
+                        source,
                         completed_turn_id,
                         mode_label,
                         transcript_text,
                         debug_detail,
-                        handoff_task,
                     })),
                 );
             }
@@ -184,6 +192,14 @@ impl NativeTuiApp {
             thread_id,
             prompt,
             prompt_origin: core_prompt_origin(prompt_origin),
+            auto_follow_source: match prompt_origin {
+                PromptOrigin::AutoFollow(context) => Some(context.source.clone()),
+                PromptOrigin::Manual | PromptOrigin::ManualIntake(_) => None,
+            },
+            planning_handoff: match prompt_origin {
+                PromptOrigin::ManualIntake(context) => context.handoff_task.clone(),
+                PromptOrigin::Manual | PromptOrigin::AutoFollow(_) => None,
+            },
             turn_options: self.conversation.turn_options.clone(),
             slot_lease_handoff: self.build_parallel_mode_slot_lease_handoff(prompt_origin),
         }
@@ -203,7 +219,10 @@ impl NativeTuiApp {
         let handoff_task = match prompt_origin {
             PromptOrigin::Manual => None,
             PromptOrigin::ManualIntake(context) => context.handoff_task.as_ref(),
-            PromptOrigin::AutoFollow(context) => context.handoff_task.as_ref(),
+            PromptOrigin::AutoFollow(_) => match &self.conversation.lifecycle.conversation_state {
+                ConversationState::Ready(conversation) => conversation.last_planning_task_handoff(),
+                ConversationState::Loading | ConversationState::Failed(_) => None,
+            },
         };
         let handoff_task = handoff_task?;
 
@@ -211,15 +230,6 @@ impl NativeTuiApp {
             handoff_task.task_id.clone(),
             handoff_task.task_title.clone(),
         ))
-    }
-
-    pub(super) fn sync_active_turn_workspace_directory(&mut self, workspace_directory: &str) {
-        let Some(mut conversation) = self.take_ready_conversation_state() else {
-            return;
-        };
-
-        conversation.replace_active_turn_workspace_directory(workspace_directory.to_string());
-        self.conversation.lifecycle.conversation_state = ConversationState::ready(conversation);
     }
 
     pub(super) fn resolve_startup_submit_queue(&mut self) {
@@ -282,7 +292,7 @@ impl NativeTuiApp {
                         delivery.unwrap_or(ManualPromptDelivery::StartTurn),
                         Some(conversation.thread_id.clone())
                             .filter(|thread_id| !thread_id.trim().is_empty()),
-                        conversation.active_turn_id.clone(),
+                        conversation.active_turn_id().map(str::to_string),
                     )
                 }
                 ConversationState::Loading | ConversationState::Failed(_) => {
@@ -712,11 +722,6 @@ impl NativeTuiApp {
         if handoff.transcript_text != expected_transcript_text {
             return;
         }
-        if let Some(conversation) = self.take_ready_conversation_state() {
-            let mut conversation = conversation;
-            conversation.record_manual_intake_handoff(handoff.task.as_ref());
-            self.conversation.lifecycle.conversation_state = ConversationState::ready(conversation);
-        }
         self.dispatch_conversation_input(ConversationComposerEvent::InputCleared);
 
         let task_title = handoff
@@ -957,7 +962,7 @@ mod tests {
     use crate::adapter::inbound::tui::app::{
         AutoFollowSubmitContext, BackgroundMessage, ConversationInputState, ConversationState,
         ConversationViewMode, NativeTuiApp, NativeTuiParallelModeBinding, PlanningInitOverlayStep,
-        PlanningWorkerStatus, PlanningWorkerVisibility, ShellOverlay, StartupState, TuiLanguage,
+        PlanningWorkerVisibility, ShellOverlay, StartupState, TuiLanguage,
     };
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
@@ -984,7 +989,6 @@ mod tests {
     };
     use crate::domain::operator_alert::OperatorAlert;
     use crate::domain::planning::PlanningValidationReport;
-    use crate::domain::planning::PlanningWorkerPanelState;
     use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogRequest};
     use crate::domain::startup_diagnostics::StartupDiagnostics;
     use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
@@ -1164,6 +1168,57 @@ mod tests {
         }
     }
 
+    fn post_turn_source(
+        completed_turn_id: &str,
+        workspace_directory: &str,
+    ) -> crate::core::app::PostTurnEvaluationCorrelation {
+        crate::core::app::PostTurnEvaluationCorrelation::new(
+            1,
+            "thread-1",
+            completed_turn_id,
+            workspace_directory,
+            workspace_directory,
+        )
+    }
+
+    fn install_running_turn(
+        conversation: &mut super::super::ConversationViewModel,
+        turn_id: &str,
+        workspace_directory: &str,
+    ) {
+        let mut runtime = conversation.runtime_snapshot().clone();
+        runtime.active_turn = Some(crate::core::app::ActiveTurnSnapshot {
+            correlation: crate::core::app::TurnSubmissionCorrelation::new(1),
+            phase: crate::core::app::ActiveTurnPhase::Running,
+            workspace_directory: workspace_directory.to_string(),
+            turn_id: Some(turn_id.to_string()),
+            prompt_origin: crate::core::app::CorePromptOrigin::Manual,
+            started_at: Instant::now(),
+        });
+        conversation.apply_runtime_snapshot(runtime);
+        conversation.record_turn_started(turn_id.to_string());
+    }
+
+    fn install_running_core_turn(app: &mut NativeTuiApp, turn_id: &str, workspace_directory: &str) {
+        let correlation = app.runtime.client_runtime.begin_test_turn_submission();
+        app.dispatch_client_event(CoreInput::ConversationStreamUpdated {
+            correlation,
+            event: TurnStreamEvent::ThreadPrepared {
+                thread_id: "thread-running".to_string(),
+                title: "Running".to_string(),
+                cwd: workspace_directory.to_string(),
+                runtime_envelope: Box::default(),
+            },
+        });
+        app.dispatch_client_event(CoreInput::ConversationStreamUpdated {
+            correlation,
+            event: TurnStreamEvent::TurnStarted {
+                turn_id: turn_id.to_string(),
+                runtime_request: Box::default(),
+            },
+        });
+    }
+
     fn set_input(app: &mut NativeTuiApp, input: &str) {
         ready_conversation_mut(app).composer.input_buffer = input.to_string();
     }
@@ -1261,11 +1316,11 @@ mod tests {
 
     fn auto_follow_origin() -> PromptOrigin {
         PromptOrigin::AutoFollow(Box::new(AutoFollowSubmitContext {
+            source: post_turn_source("turn-1", "/tmp/workspace"),
             completed_turn_id: "turn-1".to_string(),
             mode_label: "planning queue".to_string(),
             transcript_text: QUEUED_TASK_TRANSCRIPT_TEXT.to_string(),
             debug_detail: None,
-            handoff_task: None,
         }))
     }
 
@@ -1773,7 +1828,10 @@ mod tests {
         assert_eq!(conversation.composer.input_buffer, "second prompt");
         assert_eq!(conversation.messages, previous_messages);
         assert_eq!(conversation.status_text, previous_status);
-        assert_eq!(conversation.input_state, ConversationInputState::DraftReady);
+        assert_eq!(
+            conversation.input_state(),
+            ConversationInputState::SubmittingTurn
+        );
 
         let _ = app.reduce_core_client_event(CoreInput::ConversationStreamUpdated {
             correlation: active_correlation,
@@ -1800,7 +1858,7 @@ mod tests {
             Some("second prompt")
         );
         assert_eq!(
-            conversation.input_state,
+            conversation.input_state(),
             ConversationInputState::SubmittingTurn
         );
     }
@@ -2137,12 +2195,8 @@ mod tests {
         let workspace = TempWorkspace::new("turn-submit-running-queue-only");
         let mut app = make_test_app(&workspace);
         let task = sample_handoff_task();
-        {
-            let conversation = ready_conversation_mut(&mut app);
-            conversation.thread_id = "thread-running".to_string();
-            conversation.record_turn_started("turn-running".to_string());
-            conversation.composer.input_buffer = "queue this follow-up".to_string();
-        }
+        install_running_core_turn(&mut app, "turn-running", workspace.path_str());
+        ready_conversation_mut(&mut app).composer.input_buffer = "queue this follow-up".to_string();
         assert_eq!(
             manual_prompt_delivery(ready_conversation(&app)),
             Some(ManualPromptDelivery::QueueOnly)
@@ -2172,7 +2226,7 @@ mod tests {
         });
 
         let conversation = ready_conversation(&app);
-        assert_eq!(conversation.active_turn_id.as_deref(), Some("turn-running"));
+        assert_eq!(conversation.active_turn_id(), Some("turn-running"));
         assert!(conversation.composer.input_buffer.is_empty());
         assert_eq!(conversation.last_planning_task_handoff(), None);
         let receipt = conversation
@@ -2219,10 +2273,9 @@ mod tests {
         let workspace = TempWorkspace::new("turn-submit-running-queue-failure");
         let make_running_app = || {
             let mut app = make_test_app(&workspace);
-            let conversation = ready_conversation_mut(&mut app);
-            conversation.thread_id = "thread-running".to_string();
-            conversation.record_turn_started("turn-running".to_string());
-            conversation.composer.input_buffer = "retry this exact draft".to_string();
+            install_running_core_turn(&mut app, "turn-running", workspace.path_str());
+            ready_conversation_mut(&mut app).composer.input_buffer =
+                "retry this exact draft".to_string();
             app
         };
 
@@ -2262,7 +2315,7 @@ mod tests {
                 conversation.status_text,
                 format!("queue preparation failed / {reason}; draft kept")
             );
-            assert_eq!(conversation.active_turn_id.as_deref(), Some("turn-running"));
+            assert_eq!(conversation.active_turn_id(), Some("turn-running"));
         }
 
         let mut app = make_running_app();
@@ -2287,7 +2340,7 @@ mod tests {
             conversation.status_text,
             "queue preparation failed / planning rejected; draft kept"
         );
-        assert_eq!(conversation.active_turn_id.as_deref(), Some("turn-running"));
+        assert_eq!(conversation.active_turn_id(), Some("turn-running"));
     }
 
     #[test]
@@ -2414,10 +2467,7 @@ mod tests {
         let committed_conversation = ready_conversation(&committed_app);
         assert!(committed_conversation.messages.is_empty());
         assert_eq!(committed_conversation.composer.input_buffer, "");
-        assert_eq!(
-            committed_conversation.last_planning_task_handoff(),
-            Some(&task)
-        );
+        assert_eq!(committed_conversation.last_planning_task_handoff(), None);
         assert_ne!(committed_conversation.status_text, "starting turn");
         let event_lines = committed_app
             .parallel_supervisor_event_lines()
@@ -2478,62 +2528,39 @@ mod tests {
     }
 
     #[test]
-    fn queue_auto_prompt_records_debug_detail_and_handoff() {
+    fn stale_queue_auto_prompt_is_rejected_without_leaving_manual_input_locked() {
         let workspace = TempWorkspace::new("turn-submit-auto-debug");
         let mut app = make_test_app(&workspace);
-        app.planning.planning_worker_visibility = PlanningWorkerVisibility::Debug;
-        app.planning
-            .planning_worker_panel_state
-            .replace_for_test(PlanningWorkerPanelState {
-                status: PlanningWorkerStatus::RefreshSucceeded,
-                last_operation_label: Some("refresh queue".to_string()),
-                last_summary: Some("accepted task".to_string()),
-                last_prompt: Some("worker prompt".to_string()),
-                last_response: Some("worker response".to_string()),
-                ..PlanningWorkerPanelState::default()
+        let admitted =
+            app.execute_conversation_runtime_effect(ConversationRuntimeEffect::QueueAutoPrompt {
+                source: post_turn_source("turn-completed", workspace.path_str()),
+                prompt: "continue task".to_string(),
+                completed_turn_id: "turn-completed".to_string(),
+                mode_label: "planning queue".to_string(),
+                transcript_text: QUEUED_TASK_TRANSCRIPT_TEXT.to_string(),
             });
-        ready_conversation_mut(&mut app)
-            .auto_follow_state
-            .set_max_auto_turns(1);
-        let handoff_task = sample_handoff_task();
 
-        app.execute_conversation_runtime_effect(ConversationRuntimeEffect::QueueAutoPrompt {
-            prompt: "continue task".to_string(),
-            completed_turn_id: "turn-completed".to_string(),
-            mode_label: "planning queue".to_string(),
-            transcript_text: QUEUED_TASK_TRANSCRIPT_TEXT.to_string(),
-            handoff_task: Some(handoff_task.clone()),
-        });
-
+        assert!(!admitted);
         let conversation = ready_conversation(&app);
+        assert_eq!(conversation.status_text, "auto-follow cancelled");
+        assert!(conversation.can_accept_manual_prompt());
+        assert_eq!(
+            conversation
+                .last_auto_follow_activity
+                .as_ref()
+                .map(|activity| activity.summary.as_str()),
+            Some("auto-follow cancelled")
+        );
         assert!(
             conversation
-                .status_text
-                .starts_with("auto-follow submitted / turn")
+                .messages
+                .iter()
+                .all(|message| message.display_label.as_deref() != Some("Auto Follow-up"))
         );
-        assert_eq!(
-            conversation.last_planning_task_handoff(),
-            Some(&handoff_task)
-        );
-        let transcript_message = conversation.messages.last().unwrap();
-        assert_eq!(
-            transcript_message.display_label.as_deref(),
-            Some("Auto Follow-up")
-        );
-        let debug_detail = transcript_message
-            .debug_detail
-            .as_deref()
-            .expect("debug visibility should attach worker detail");
-        assert!(
-            debug_detail.contains("planning worker temporary session: refresh queue / refresh ok")
-        );
-        assert!(debug_detail.contains("planning worker summary: accepted task"));
-        assert!(debug_detail.contains("worker prompt"));
-        assert!(debug_detail.contains("worker response"));
     }
 
     #[test]
-    fn terminal_before_steer_completion_does_not_drop_auto_follow_submission() {
+    fn terminal_before_steer_completion_rejects_premature_auto_follow_submission() {
         let workspace = TempWorkspace::new("turn-submit-steer-auto-race");
         let mut app = make_test_app(&workspace);
         let turn_submission = app.runtime.client_runtime.begin_test_turn_submission();
@@ -2554,9 +2581,9 @@ mod tests {
             },
         });
         set_input(&mut app, "steer this before completion");
-        ready_conversation_mut(&mut app)
-            .auto_follow_state
-            .set_max_auto_turns(1);
+        app.dispatch_client_event(CoreInput::Command(AppCommand::SetAutoFollowMaxTurns {
+            value: 1,
+        }));
         assert!(app.show_turn_steer_confirmation());
         assert!(
             app.handle_turn_steer_confirmation_key(crossterm::event::KeyEvent::new(
@@ -2580,29 +2607,36 @@ mod tests {
                 execution_snapshot_capture: None,
             },
         });
+        let source = match app
+            .runtime
+            .client_runtime
+            .snapshot()
+            .conversation_runtime
+            .post_turn
+        {
+            crate::core::app::PostTurnAuthoritySnapshot::Evaluating { correlation, .. } => {
+                correlation
+            }
+            state => panic!("post-turn source should still be evaluating, got {state:?}"),
+        };
         let admitted =
             app.execute_conversation_runtime_effect(ConversationRuntimeEffect::QueueAutoPrompt {
+                source,
                 prompt: "continue task".to_string(),
                 completed_turn_id: "turn-1".to_string(),
                 mode_label: "planning queue".to_string(),
                 transcript_text: QUEUED_TASK_TRANSCRIPT_TEXT.to_string(),
-                handoff_task: None,
             });
 
-        assert!(admitted);
+        assert!(!admitted);
         assert!(app.conversation.pending_turn_steer.is_some());
         let conversation = ready_conversation(&app);
+        assert_eq!(conversation.status_text, "auto-follow cancelled");
         assert!(
             conversation
-                .status_text
-                .starts_with("auto-follow submitted / turn")
-        );
-        assert_eq!(
-            conversation
                 .messages
-                .last()
-                .map(|message| message.text.as_str()),
-            Some(QUEUED_TASK_TRANSCRIPT_TEXT)
+                .iter()
+                .all(|message| message.display_label.as_deref() != Some("Auto Follow-up"))
         );
     }
 
@@ -2612,12 +2646,14 @@ mod tests {
         let mut app = make_test_app(&workspace);
         let task = sample_handoff_task();
         app.set_parallel_mode_enabled_for_test(true);
+        ready_conversation_mut(&mut app).replace_planning_handoff_for_test(Some(task.clone()));
+        let source = post_turn_source("turn-1", workspace.path_str());
         let auto_origin = PromptOrigin::AutoFollow(Box::new(AutoFollowSubmitContext {
+            source: source.clone(),
             completed_turn_id: "turn-1".to_string(),
             mode_label: "planning queue".to_string(),
             transcript_text: QUEUED_TASK_TRANSCRIPT_TEXT.to_string(),
             debug_detail: None,
-            handoff_task: Some(task.clone()),
         }));
 
         let auto_request = app.build_turn_submission_request(
@@ -2633,6 +2669,7 @@ mod tests {
                 task.task_title.clone(),
             ))
         );
+        assert_eq!(auto_request.auto_follow_source, Some(source));
 
         let mut no_task_app = make_test_app(&workspace);
         no_task_app.set_parallel_mode_enabled_for_test(true);
@@ -2714,7 +2751,6 @@ mod tests {
         let workspace = TempWorkspace::new("turn-submit-request");
         let mut app = make_test_app(&workspace);
         let task = sample_handoff_task();
-        ready_conversation_mut(&mut app).record_manual_intake_handoff(Some(&task));
         app.set_parallel_mode_enabled_for_test(true);
         app.conversation.turn_options.model = Some("gpt-5.4".to_string());
         app.conversation.turn_options.reasoning_effort = Some(ConversationReasoningEffort::High);
@@ -2734,6 +2770,7 @@ mod tests {
         assert_eq!(request.thread_id.as_deref(), Some("thread-1"));
         assert_eq!(request.prompt, "wrapped task prompt");
         assert_eq!(request.prompt_origin, CorePromptOrigin::ManualIntake);
+        assert_eq!(request.planning_handoff, Some(task.clone()));
         assert_eq!(request.turn_options, app.conversation.turn_options);
         assert_eq!(
             request.slot_lease_handoff,
@@ -2755,6 +2792,7 @@ mod tests {
         );
 
         assert_eq!(normal_intake_request.slot_lease_handoff, None);
+        assert_eq!(normal_intake_request.planning_handoff, Some(task.clone()));
 
         app.set_parallel_mode_enabled_for_test(false);
         let manual_request = app.build_turn_submission_request(
@@ -2765,6 +2803,7 @@ mod tests {
         );
 
         assert_eq!(manual_request.prompt_origin, CorePromptOrigin::Manual);
+        assert_eq!(manual_request.planning_handoff, None);
         assert_eq!(manual_request.slot_lease_handoff, None);
     }
 
@@ -2894,21 +2933,21 @@ mod tests {
     }
 
     #[test]
-    fn sync_active_turn_workspace_directory_updates_ready_conversation_only() {
+    fn active_turn_workspace_directory_is_read_from_core_projection() {
         let workspace = TempWorkspace::new("turn-submit-active-workspace");
         let mut app = make_test_app(&workspace);
-
-        app.sync_active_turn_workspace_directory("/tmp/active-turn");
+        install_running_turn(
+            ready_conversation_mut(&mut app),
+            "turn-1",
+            "/tmp/active-turn",
+        );
 
         assert_eq!(
-            ready_conversation(&app)
-                .active_turn_workspace_directory
-                .as_deref(),
+            ready_conversation(&app).active_turn_workspace_directory(),
             Some("/tmp/active-turn")
         );
 
         app.conversation.lifecycle.conversation_state = ConversationState::Loading;
-        app.sync_active_turn_workspace_directory("/tmp/ignored");
         assert!(matches!(
             app.conversation.lifecycle.conversation_state,
             ConversationState::Loading

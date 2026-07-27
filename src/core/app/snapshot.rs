@@ -1,5 +1,6 @@
 use super::{
-    ConversationSnapshot, PlanningParallelProjection, SessionCatalogSnapshot, StartupSnapshot,
+    ConversationRuntimeSnapshot, ConversationSnapshot, PlanningParallelProjection,
+    SessionCatalogSnapshot, StartupSnapshot,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -8,6 +9,7 @@ pub struct AppSnapshot {
     pub startup: StartupSnapshot,
     pub session_catalog: SessionCatalogSnapshot,
     pub conversation: ConversationSnapshot,
+    pub conversation_runtime: ConversationRuntimeSnapshot,
     pub planning_parallel: PlanningParallelProjection,
 }
 
@@ -18,6 +20,7 @@ impl AppSnapshot {
             startup: StartupSnapshot::Idle,
             session_catalog: SessionCatalogSnapshot::Idle,
             conversation: ConversationSnapshot::Idle,
+            conversation_runtime: ConversationRuntimeSnapshot::initial(),
             planning_parallel: PlanningParallelProjection::initial(),
         }
     }

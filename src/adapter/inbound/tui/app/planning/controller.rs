@@ -2194,7 +2194,7 @@ mod tests {
     fn post_turn_continuation_is_paused(app: &NativeTuiApp) -> bool {
         match &app.conversation.lifecycle.conversation_state {
             ConversationState::Ready(conversation) => conversation
-                .auto_follow_state
+                .auto_follow_state()
                 .post_turn_continuation_paused(),
             ConversationState::Loading | ConversationState::Failed(_) => false,
         }
@@ -3295,7 +3295,12 @@ mod tests {
             .selected_buffer()
             .expect("exact save buffer should exist")
             .body();
-        let exact_permit = exact_app.planning.post_turn_continuation_gate.capture();
+        let exact_runtime = exact_app
+            .runtime
+            .client_runtime
+            .snapshot()
+            .conversation_runtime
+            .clone();
         let exact_refresh = exact_app.planning.planning_runtime_refresh_ui_state.clone();
 
         exact_app.apply_planning_editor_mutation_completion(
@@ -3322,9 +3327,14 @@ mod tests {
             exact_app.shell.chrome.shell_overlay,
             ShellOverlay::PlanningInit
         );
-        assert!(
-            exact_permit.is_current(),
-            "save must not pause continuation"
+        assert_eq!(
+            exact_app
+                .runtime
+                .client_runtime
+                .snapshot()
+                .conversation_runtime,
+            exact_runtime,
+            "save must not change continuation authority"
         );
         assert_eq!(
             exact_app.planning.planning_runtime_refresh_ui_state, exact_refresh,
@@ -3360,7 +3370,12 @@ mod tests {
             .selected_buffer()
             .expect("newer save buffer should exist")
             .body();
-        let newer_permit = newer_app.planning.post_turn_continuation_gate.capture();
+        let newer_runtime = newer_app
+            .runtime
+            .client_runtime
+            .snapshot()
+            .conversation_runtime
+            .clone();
         let newer_refresh = newer_app.planning.planning_runtime_refresh_ui_state.clone();
 
         newer_app.apply_planning_editor_mutation_completion(
@@ -3384,7 +3399,14 @@ mod tests {
                 .has_dirty_buffers()
         );
         assert!(ready_status(&newer_app).contains("newer edits remain unsaved"));
-        assert!(newer_permit.is_current());
+        assert_eq!(
+            newer_app
+                .runtime
+                .client_runtime
+                .snapshot()
+                .conversation_runtime,
+            newer_runtime
+        );
         assert_eq!(
             newer_app.planning.planning_runtime_refresh_ui_state,
             newer_refresh
@@ -3547,15 +3569,12 @@ mod tests {
             PlanningEditorMutationTarget::Planning,
             success_source,
         );
-        let success_permit = success_app.planning.post_turn_continuation_gate.capture();
-
         success_app.apply_planning_editor_mutation_completion(
             success.clone(),
             Ok(Box::new(promoted_editor_mutation_result(&success, 1))),
         );
         wait_for_observed_load_completions(&mut success_app, &success_observation, 1);
 
-        assert!(!success_permit.is_current());
         assert!(post_turn_continuation_is_paused(&success_app));
         assert_eq!(success_app.shell.chrome.shell_overlay, ShellOverlay::Hidden);
         assert!(
@@ -3586,15 +3605,12 @@ mod tests {
             PlanningEditorMutationTarget::Planning,
             zero_source.clone(),
         );
-        let zero_permit = zero_app.planning.post_turn_continuation_gate.capture();
-
         zero_app.apply_planning_editor_mutation_completion(
             zero.clone(),
             Ok(Box::new(promoted_editor_mutation_result(&zero, 0))),
         );
         wait_for_observed_load_completions(&mut zero_app, &zero_observation, 1);
 
-        assert!(!zero_permit.is_current());
         assert!(post_turn_continuation_is_paused(&zero_app));
         assert_eq!(
             zero_app.shell.chrome.shell_overlay,
@@ -3639,15 +3655,12 @@ mod tests {
             PlanningEditorMutationTarget::Planning,
             error_source.clone(),
         );
-        let error_permit = error_app.planning.post_turn_continuation_gate.capture();
-
         error_app.apply_planning_editor_mutation_completion(
             error,
             Err("provider unavailable".to_string()),
         );
         wait_for_observed_load_completions(&mut error_app, &error_observation, 1);
 
-        assert!(!error_permit.is_current());
         assert!(post_turn_continuation_is_paused(&error_app));
         assert_eq!(
             error_app.shell.chrome.shell_overlay,
@@ -3704,8 +3717,6 @@ mod tests {
             .selected_buffer()
             .expect("newer promotion buffer should exist")
             .body();
-        let newer_permit = newer_app.planning.post_turn_continuation_gate.capture();
-
         newer_app.apply_planning_editor_mutation_completion(
             newer.clone(),
             Ok(Box::new(promoted_editor_mutation_result_with_revision(
@@ -3714,7 +3725,7 @@ mod tests {
         );
         wait_for_observed_load_completions(&mut newer_app, &newer_observation, 1);
 
-        assert!(!newer_permit.is_current());
+        assert!(post_turn_continuation_is_paused(&newer_app));
         assert_eq!(
             newer_app.shell.chrome.shell_overlay,
             ShellOverlay::PlanningInit
@@ -3788,8 +3799,6 @@ mod tests {
         );
         approval_app.dispatch_shell_chrome(ShellChromeEvent::ApprovalOverlayShown);
         let approval_status = ready_status(&approval_app).to_string();
-        let approval_permit = approval_app.planning.post_turn_continuation_gate.capture();
-
         approval_app.apply_planning_editor_mutation_completion(
             approval.clone(),
             Ok(Box::new(promoted_editor_mutation_result_with_revision(
@@ -3798,7 +3807,7 @@ mod tests {
         );
         wait_for_observed_load_completions(&mut approval_app, &approval_observation, 1);
 
-        assert!(!approval_permit.is_current());
+        assert!(post_turn_continuation_is_paused(&approval_app));
         assert_eq!(
             approval_app.shell.chrome.shell_overlay,
             ShellOverlay::Approval
@@ -3843,15 +3852,13 @@ mod tests {
         );
         close_app.close_shell_overlay();
         let close_status = ready_status(&close_app).to_string();
-        let close_permit = close_app.planning.post_turn_continuation_gate.capture();
-
         close_app.apply_planning_editor_mutation_completion(
             close.clone(),
             Ok(Box::new(promoted_editor_mutation_result(&close, 1))),
         );
         wait_for_observed_load_completions(&mut close_app, &close_observation, 1);
 
-        assert!(!close_permit.is_current());
+        assert!(post_turn_continuation_is_paused(&close_app));
         assert_eq!(close_app.shell.chrome.shell_overlay, ShellOverlay::Hidden);
         assert!(
             close_app
@@ -3910,15 +3917,13 @@ mod tests {
             .selected_buffer()
             .expect("new promotion session should have a buffer")
             .body();
-        let new_session_permit = session_app.planning.post_turn_continuation_gate.capture();
-
         session_app.apply_planning_editor_mutation_completion(
             old.clone(),
             Ok(Box::new(promoted_editor_mutation_result(&old, 1))),
         );
         wait_for_observed_load_completions(&mut session_app, &session_observation, 1);
 
-        assert!(!new_session_permit.is_current());
+        assert!(post_turn_continuation_is_paused(&session_app));
         assert_eq!(
             session_app.shell.chrome.shell_overlay,
             ShellOverlay::PlanningInit
@@ -3981,7 +3986,12 @@ mod tests {
         wait_for_observed_load_completions(&mut drifted_app, &drifted_observation, 1);
         wait_for_planning_runtime_refresh(&mut drifted_app);
         drifted_observation.reset_and_enable(workspace_b.path_str(), false);
-        let workspace_b_permit = drifted_app.planning.post_turn_continuation_gate.capture();
+        let workspace_b_runtime = drifted_app
+            .runtime
+            .client_runtime
+            .snapshot()
+            .conversation_runtime
+            .clone();
         let workspace_b_refresh = drifted_app
             .planning
             .planning_runtime_refresh_ui_state
@@ -3994,7 +4004,14 @@ mod tests {
         std::thread::sleep(Duration::from_millis(50));
         drifted_app.poll_client_runtime_events(16);
 
-        assert!(workspace_b_permit.is_current());
+        assert_eq!(
+            drifted_app
+                .runtime
+                .client_runtime
+                .snapshot()
+                .conversation_runtime,
+            workspace_b_runtime
+        );
         assert_eq!(
             drifted_observation.load_count.load(Ordering::SeqCst),
             0,
@@ -4066,15 +4083,12 @@ mod tests {
         wait_for_observed_load_completions(&mut aba_app, &aba_observation, 1);
         wait_for_planning_runtime_refresh(&mut aba_app);
         aba_observation.reset_and_enable(aba_workspace_a.path_str(), false);
-        let aba_permit = aba_app.planning.post_turn_continuation_gate.capture();
-
         aba_app.apply_planning_editor_mutation_completion(
             aba.clone(),
             Ok(Box::new(promoted_editor_mutation_result(&aba, 1))),
         );
         wait_for_observed_load_completions(&mut aba_app, &aba_observation, 1);
 
-        assert!(!aba_permit.is_current());
         assert!(post_turn_continuation_is_paused(&aba_app));
         assert_eq!(
             aba_app.shell.chrome.shell_overlay,
@@ -4750,7 +4764,6 @@ mod tests {
         app.planning
             .planning_workspace_operation_ui_state
             .begin(promotion.clone(), app.planning.planning_ui_intent_revision);
-        let permit = app.planning.post_turn_continuation_gate.capture();
         app.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text: "newer operator status".to_string(),
         });
@@ -4764,7 +4777,7 @@ mod tests {
             })),
         );
 
-        assert!(!permit.is_current());
+        assert!(post_turn_continuation_is_paused(&app));
         assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::PlanningInit);
         assert_eq!(
             app.planning.planning_init_overlay_ui_state.step(),

@@ -159,7 +159,7 @@ fn current_task_fact(conversation: &ConversationViewModel) -> Option<(String, Op
 }
 
 fn coarse_lane_fact(conversation: &ConversationViewModel) -> Option<(String, Option<String>)> {
-    conversation.active_turn_id.as_ref()?;
+    conversation.active_turn_id()?;
     let command_count = conversation.turn_activity.activity_command_count(true);
     let file_change_count = conversation.turn_activity.activity_file_change_count(true);
     let has_summary = !matches!(
@@ -302,6 +302,10 @@ mod tests {
         ActivityRailTerminalState, ConversationViewModel, ProgressiveActivityState,
     };
     use crate::application::service::planning::PlanningTaskHandoff;
+    use crate::core::app::{
+        ActiveTurnPhase, ActiveTurnSnapshot, CorePromptOrigin, TurnSubmissionCorrelation,
+    };
+    use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
     use crate::domain::conversation_item_lifecycle::{
         ConversationItemKind, ConversationItemLifecycleConsistency,
         ConversationItemLifecycleObservation, ConversationItemLifecyclePhase,
@@ -322,8 +326,27 @@ mod tests {
         ConversationRuntimeModelRerouteReason, ConversationRuntimeObservedValue,
         ConversationRuntimeRequestedValue,
     };
+    use std::time::Instant;
 
     const SECRET: &str = "ultra-secret-payload";
+
+    fn set_active_turn(
+        conversation: &mut ConversationViewModel,
+        phase: ActiveTurnPhase,
+        turn_id: Option<&str>,
+        generation: u64,
+    ) {
+        let mut snapshot = conversation.runtime_snapshot().clone();
+        snapshot.active_turn = Some(ActiveTurnSnapshot {
+            correlation: TurnSubmissionCorrelation::new(generation),
+            phase,
+            workspace_directory: conversation.cwd.clone(),
+            turn_id: turn_id.map(str::to_string),
+            prompt_origin: CorePromptOrigin::Manual,
+            started_at: Instant::now(),
+        });
+        conversation.apply_runtime_snapshot(snapshot);
+    }
 
     #[test]
     fn empty_conversation_produces_no_activity_rail() {
@@ -392,7 +415,7 @@ mod tests {
         let mut conversation = running_conversation();
         conversation.progressive_activity = context_only_activity();
         conversation.runtime_envelope = Some(runtime_envelope("requested", "applied"));
-        conversation.last_planning_task_handoff = Some(planning_task());
+        conversation.replace_planning_handoff_for_test(Some(planning_task()));
         conversation.turn_activity.current_turn_command_count = 1;
         conversation.turn_activity.current_turn_last_summary = Some("running command".to_string());
 
@@ -469,7 +492,7 @@ mod tests {
     #[test]
     fn task_handoff_requires_a_correlated_submission_and_running_turn() {
         let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
-        conversation.last_planning_task_handoff = Some(planning_task());
+        conversation.replace_planning_handoff_for_test(Some(planning_task()));
         assert_eq!(build_activity_rail_notice_line(&conversation, 80), None);
 
         conversation.record_thread_prepared(
@@ -477,13 +500,32 @@ mod tests {
             "Activity".to_string(),
             "/tmp/root".to_string(),
         );
+        set_active_turn(
+            &mut conversation,
+            ActiveTurnPhase::Running,
+            Some("turn-1"),
+            1,
+        );
         conversation.record_turn_started("turn-1".to_string());
+        conversation.replace_planning_handoff_for_test(None);
         assert_eq!(conversation.last_planning_task_handoff(), None);
         assert_eq!(build_activity_rail_notice_line(&conversation, 80), None);
 
-        conversation.fail_turn("recovered turn ended".to_string());
-        conversation.last_planning_task_handoff = Some(planning_task());
-        conversation.mark_turn_submitting("/tmp/root".to_string());
+        conversation.fail_turn(Some("turn-1"), "recovered turn ended".to_string());
+        conversation.replace_planning_handoff_for_test(Some(planning_task()));
+        set_active_turn(
+            &mut conversation,
+            ActiveTurnPhase::Running,
+            Some("turn-2"),
+            2,
+        );
+        let mut runtime_snapshot = conversation.runtime_snapshot().clone();
+        runtime_snapshot
+            .active_turn
+            .as_mut()
+            .expect("running turn fixture")
+            .prompt_origin = CorePromptOrigin::ManualIntake;
+        conversation.apply_runtime_snapshot(runtime_snapshot);
         conversation.record_turn_started("turn-2".to_string());
         let notice = build_activity_rail_notice_line(&conversation, 80)
             .expect("correlated running task rail notice");
@@ -496,8 +538,14 @@ mod tests {
         conversation.turn_activity.current_turn_command_count = 2;
         conversation.turn_activity.current_turn_file_change_count = 1;
         conversation.turn_activity.current_turn_last_summary = Some("previous turn".to_string());
-        conversation.fail_turn("failed".to_string());
-        conversation.mark_turn_submitting("/tmp/root".to_string());
+        conversation.fail_turn(Some("turn-1"), "failed".to_string());
+        let workspace_directory = conversation.cwd.clone();
+        conversation.record_submitted_prompt(
+            ConversationMessage::new(ConversationMessageKind::User, "next prompt", None, None),
+            workspace_directory,
+            true,
+        );
+        set_active_turn(&mut conversation, ActiveTurnPhase::Submitting, None, 2);
 
         assert_eq!(build_activity_rail_notice_line(&conversation, 80), None);
     }
@@ -522,7 +570,7 @@ mod tests {
             Some(runtime_envelope("requested", "model | terminal:failed"));
         let mut task = planning_task();
         task.task_title = "ship | terminal:failed".to_string();
-        conversation.last_planning_task_handoff = Some(task);
+        conversation.replace_planning_handoff_for_test(Some(task));
 
         let notice =
             build_activity_rail_notice_line(&conversation, 160).expect("sanitized dynamic facts");
@@ -537,7 +585,7 @@ mod tests {
         let mut conversation = running_conversation();
         let mut task = planning_task();
         task.task_title = format!("{}{SECRET}", " ".repeat(4_096));
-        conversation.last_planning_task_handoff = Some(task);
+        conversation.replace_planning_handoff_for_test(Some(task));
 
         let notice = build_activity_rail_notice_line(&conversation, 80)
             .expect("bounded task fallback rail notice");
@@ -564,7 +612,7 @@ mod tests {
         let mut conversation = running_conversation();
         conversation.progressive_activity = populated_activity(bounded_history);
         conversation.runtime_envelope = Some(runtime_envelope("requested-model", "applied-model"));
-        conversation.last_planning_task_handoff = Some(planning_task());
+        conversation.replace_planning_handoff_for_test(Some(planning_task()));
         conversation.turn_activity.current_turn_command_count = 1;
         conversation.turn_activity.current_turn_file_change_count = 2;
         conversation.turn_activity.current_turn_last_summary =
@@ -578,6 +626,12 @@ mod tests {
             "thread-1".to_string(),
             "Activity".to_string(),
             "/tmp/root".to_string(),
+        );
+        set_active_turn(
+            &mut conversation,
+            ActiveTurnPhase::Running,
+            Some("turn-1"),
+            1,
         );
         conversation.record_turn_started("turn-1".to_string());
         conversation

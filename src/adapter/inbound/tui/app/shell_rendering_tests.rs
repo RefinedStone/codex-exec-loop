@@ -6,6 +6,10 @@ use super::contract_tests::{
 };
 use super::*;
 use crate::adapter::inbound::tui::app::test_helpers::sample_planning_runtime_projection;
+use crate::core::app::{
+    ActiveTurnPhase, ActiveTurnSnapshot, ApprovalAuthorityPhase, ApprovalAuthoritySnapshot,
+    ApprovalDecisionCorrelation, CorePromptOrigin, TurnSubmissionCorrelation,
+};
 use crate::domain::conversation::{ConversationApprovalRequest, ConversationApprovalRequestKind};
 use crate::domain::conversation_runtime_envelope::{
     ConversationRuntimeConfigurationObservation, ConversationRuntimeEnvelope,
@@ -15,6 +19,33 @@ use crate::domain::planning::{
     PlanningQueueMutationKind, PlanningQueueMutationReceipt, PlanningQueueMutationReceiptEntry,
     PriorityQueueProjection, PriorityQueueSkippedTask, PriorityQueueTask, TaskStatus,
 };
+
+fn set_running_turn(conversation: &mut ConversationViewModel, turn_id: &str) {
+    let mut snapshot = conversation.runtime_snapshot().clone();
+    snapshot.active_turn = Some(ActiveTurnSnapshot {
+        correlation: TurnSubmissionCorrelation::new(1),
+        phase: ActiveTurnPhase::Running,
+        workspace_directory: conversation.cwd.clone(),
+        turn_id: Some(turn_id.to_string()),
+        prompt_origin: CorePromptOrigin::Manual,
+        started_at: std::time::Instant::now(),
+    });
+    conversation.apply_runtime_snapshot(snapshot);
+    conversation.record_turn_started(turn_id.to_string());
+}
+
+fn set_pending_approval(
+    conversation: &mut ConversationViewModel,
+    request: ConversationApprovalRequest,
+) {
+    let mut snapshot = conversation.runtime_snapshot().clone();
+    snapshot.approval = Some(ApprovalAuthoritySnapshot {
+        request,
+        decision: None,
+        phase: ApprovalAuthorityPhase::Pending,
+    });
+    conversation.apply_runtime_snapshot(snapshot);
+}
 
 #[test]
 fn inline_main_buffer_ready_shell_matches_snapshot() {
@@ -127,7 +158,7 @@ fn narrow_turn_steer_confirmation_keeps_exact_identity_prompt_and_keys() {
         panic!("test app should start in a ready conversation state");
     };
     conversation.thread_id = "thread-steer-123456789".to_string();
-    conversation.record_turn_started("turn-steer-123456789".to_string());
+    set_running_turn(conversation, "turn-steer-123456789");
     conversation.composer.input_buffer =
         "Prioritize the exact queue cancellation regression before continuing.\n    cargo test --lib"
             .to_string();
@@ -137,8 +168,8 @@ fn narrow_turn_steer_confirmation_keeps_exact_identity_prompt_and_keys() {
         request: ConversationTurnSteerRequest {
             thread_id: conversation.thread_id.clone(),
             expected_turn_id: conversation
-                .active_turn_id
-                .clone()
+                .active_turn_id()
+                .map(str::to_string)
                 .expect("running turn should have identity"),
             prompt: conversation.composer.input_buffer.clone(),
         },
@@ -169,7 +200,7 @@ fn captured_turn_steer_confirmation_keeps_language_and_exact_identity_after_app_
         panic!("test app should start in a ready conversation state");
     };
     conversation.thread_id = "thread-A".to_string();
-    conversation.record_turn_started("turn-A".to_string());
+    set_running_turn(conversation, "turn-A");
     conversation.composer.input_buffer = "CAPTURED_STEER_PROMPT 한글".to_string();
     assert!(app.show_turn_steer_confirmation());
 
@@ -235,7 +266,7 @@ fn vt100_turn_steer_confirmation_hides_prompt_cursor_and_escape_restores_it() {
             panic!("test app should start in a ready conversation state");
         };
         conversation.thread_id = "thread-cursor-steer".to_string();
-        conversation.record_turn_started("turn-cursor-steer".to_string());
+        set_running_turn(conversation, "turn-cursor-steer");
         conversation.composer.input_buffer = draft.clone();
         conversation
             .composer
@@ -243,8 +274,8 @@ fn vt100_turn_steer_confirmation_hides_prompt_cursor_and_escape_restores_it() {
         (
             conversation.thread_id.clone(),
             conversation
-                .active_turn_id
-                .clone()
+                .active_turn_id()
+                .map(str::to_string)
                 .expect("running turn should have identity"),
         )
     };
@@ -367,7 +398,7 @@ fn queue_receipt_renders_clickable_undo_action_in_conversation_tail() {
     };
     conversation.thread_id = "thread-mouse-undo".to_string();
     conversation.title = "Mouse undo".to_string();
-    conversation.record_turn_started("turn-active-mouse-undo".to_string());
+    set_running_turn(conversation, "turn-active-mouse-undo");
     conversation.latest_queue_mutation_receipt = Some(PlanningQueueMutationReceipt {
         completed_turn_id: "turn-mouse-undo".to_string(),
         planning_revision: 7,
@@ -670,19 +701,22 @@ fn approval_overlay_matches_snapshot() {
     else {
         panic!("test app should start in a ready conversation state");
     };
-    conversation.pending_approval_request = Some(ConversationApprovalRequest {
-        approval_id: "approval-render".to_string(),
-        server_request_id: "server-42".to_string(),
-        method: "item/commandExecution/requestApproval".to_string(),
-        kind: ConversationApprovalRequestKind::CommandExecution,
-        summary: "Command execution requested; values are bounded and normalized for display."
-            .to_string(),
-        details: vec![
-            "Command: cargo test --lib".to_string(),
-            "Working directory: /workspace".to_string(),
-            "Reason: verify approval flow".to_string(),
-        ],
-    });
+    set_pending_approval(
+        conversation,
+        ConversationApprovalRequest {
+            approval_id: "approval-render".to_string(),
+            server_request_id: "server-42".to_string(),
+            method: "item/commandExecution/requestApproval".to_string(),
+            kind: ConversationApprovalRequestKind::CommandExecution,
+            summary: "Command execution requested; values are bounded and normalized for display."
+                .to_string(),
+            details: vec![
+                "Command: cargo test --lib".to_string(),
+                "Working directory: /workspace".to_string(),
+                "Reason: verify approval flow".to_string(),
+            ],
+        },
+    );
     app.shell.chrome.shell_overlay = ShellOverlay::Approval;
 
     let rendered = tui_testkit::render_shell_snapshot(&mut app, 96, 28);
@@ -713,10 +747,19 @@ fn approval_overlay_matches_snapshot() {
     else {
         panic!("test app should keep a ready conversation state");
     };
-    assert!(conversation.mark_approval_decision_submitted(
-        "approval-render",
+    let mut snapshot = conversation.runtime_snapshot().clone();
+    let approval = snapshot
+        .approval
+        .as_mut()
+        .expect("approval fixture should remain pending");
+    approval.decision = Some(ApprovalDecisionCorrelation::new(
+        1,
+        TurnSubmissionCorrelation::new(1),
+        approval.request.identity(),
         crate::domain::conversation::ConversationApprovalDecision::Accept,
     ));
+    approval.phase = ApprovalAuthorityPhase::Submitted;
+    conversation.apply_runtime_snapshot(snapshot);
     let awaiting_resolution = tui_testkit::render_shell_snapshot(&mut app, 96, 28);
     assert!(awaiting_resolution.contains("Decision submitted: accept"));
     assert!(awaiting_resolution.contains("Decision locked: accept"));
@@ -732,16 +775,19 @@ fn approval_overlay_scrolls_long_permission_details_without_hiding_decision_keys
     else {
         panic!("test app should start in a ready conversation state");
     };
-    conversation.pending_approval_request = Some(ConversationApprovalRequest {
-        approval_id: "approval-scroll".to_string(),
-        server_request_id: "server-scroll".to_string(),
-        method: "item/permissions/requestApproval".to_string(),
-        kind: ConversationApprovalRequestKind::Permissions,
-        summary: "Additional turn-scoped permissions requested.".to_string(),
-        details: (1..=20)
-            .map(|index| format!("Rule {index:02}: /workspace/path-{index:02}"))
-            .collect(),
-    });
+    set_pending_approval(
+        conversation,
+        ConversationApprovalRequest {
+            approval_id: "approval-scroll".to_string(),
+            server_request_id: "server-scroll".to_string(),
+            method: "item/permissions/requestApproval".to_string(),
+            kind: ConversationApprovalRequestKind::Permissions,
+            summary: "Additional turn-scoped permissions requested.".to_string(),
+            details: (1..=20)
+                .map(|index| format!("Rule {index:02}: /workspace/path-{index:02}"))
+                .collect(),
+        },
+    );
     conversation.approval_detail_scroll_offset = usize::MAX;
     app.shell.chrome.shell_overlay = ShellOverlay::Approval;
 
@@ -766,17 +812,20 @@ fn approval_overlay_scrolls_wrapped_command_rows_to_the_exact_suffix() {
     else {
         panic!("test app should start in a ready conversation state");
     };
-    conversation.pending_approval_request = Some(ConversationApprovalRequest {
-        approval_id: "approval-wrapped".to_string(),
-        server_request_id: "server-wrapped".to_string(),
-        method: "item/commandExecution/requestApproval".to_string(),
-        kind: ConversationApprovalRequestKind::CommandExecution,
-        summary: "Review the exact bounded command.".to_string(),
-        details: vec![
-            format!("Command: {}", "safe-prefix ".repeat(30)),
-            "Exact suffix: rm -rf protected-output".to_string(),
-        ],
-    });
+    set_pending_approval(
+        conversation,
+        ConversationApprovalRequest {
+            approval_id: "approval-wrapped".to_string(),
+            server_request_id: "server-wrapped".to_string(),
+            method: "item/commandExecution/requestApproval".to_string(),
+            kind: ConversationApprovalRequestKind::CommandExecution,
+            summary: "Review the exact bounded command.".to_string(),
+            details: vec![
+                format!("Command: {}", "safe-prefix ".repeat(30)),
+                "Exact suffix: rm -rf protected-output".to_string(),
+            ],
+        },
+    );
     conversation.approval_detail_scroll_offset = usize::MAX;
     app.shell.chrome.shell_overlay = ShellOverlay::Approval;
 
@@ -811,7 +860,7 @@ fn inline_main_buffer_viewport_replay_keeps_recent_transcript_while_streaming() 
     else {
         panic!("test app should start in a ready conversation state");
     };
-    conversation.record_turn_started("turn-1".to_string());
+    set_running_turn(conversation, "turn-1");
     conversation.push_live_agent_delta(
         "agent-1".to_string(),
         Some("final_answer".to_string()),
@@ -902,7 +951,7 @@ fn compact_operator_tail_prioritizes_approval_terminal_and_live_activity() {
     else {
         panic!("test app should start in a ready conversation state");
     };
-    conversation.fail_turn("runtime failed".to_string());
+    conversation.fail_turn(None, "runtime failed".to_string());
     terminal_app.shell.chrome.shell_overlay = ShellOverlay::Activity;
 
     let terminal = tui_testkit::render_inline_snapshot(&mut terminal_app, 48, 10);
@@ -918,14 +967,17 @@ fn compact_operator_tail_prioritizes_approval_terminal_and_live_activity() {
     else {
         panic!("test app should start in a ready conversation state");
     };
-    conversation.pending_approval_request = Some(ConversationApprovalRequest {
-        approval_id: "approval-compact".to_string(),
-        server_request_id: "server-compact".to_string(),
-        method: "item/commandExecution/requestApproval".to_string(),
-        kind: ConversationApprovalRequestKind::CommandExecution,
-        summary: "Review compact approval".to_string(),
-        details: vec!["Command: cargo test".to_string()],
-    });
+    set_pending_approval(
+        conversation,
+        ConversationApprovalRequest {
+            approval_id: "approval-compact".to_string(),
+            server_request_id: "server-compact".to_string(),
+            method: "item/commandExecution/requestApproval".to_string(),
+            kind: ConversationApprovalRequestKind::CommandExecution,
+            summary: "Review compact approval".to_string(),
+            details: vec!["Command: cargo test".to_string()],
+        },
+    );
     approval_app.shell.chrome.shell_overlay = ShellOverlay::Approval;
 
     let approval = tui_testkit::render_inline_snapshot(&mut approval_app, 48, 10);
@@ -973,7 +1025,7 @@ fn narrow_running_rail_never_falls_back_to_raw_coarse_summary() {
         "Typed rail".to_string(),
         "/tmp/root".to_string(),
     );
-    conversation.record_turn_started("turn-rail".to_string());
+    set_running_turn(conversation, "turn-rail");
     conversation.runtime_envelope = Some(ConversationRuntimeEnvelope::prepared(
         Default::default(),
         ConversationRuntimeConfigurationObservation {

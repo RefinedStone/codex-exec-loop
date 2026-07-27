@@ -12,11 +12,10 @@ use crate::application::service::parallel_mode::control_plane::{
     ParallelModeControlPlaneCommand, ParallelModeControlPlanePresentationEvent,
 };
 use crate::composition::native_client_runtime::NativeClientEvent;
-use crate::core::app::CoreInput;
+use crate::core::app::{AppCommand, CoreInput};
 use crate::diagnostics::event_log;
 use crate::domain::parallel_mode::{
-    ParallelModeAutomationTrigger, ParallelModePostTurnQueueSignal, ParallelModeReadinessSnapshot,
-    ParallelModeSupervisorSnapshot,
+    ParallelModeAutomationTrigger, ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot,
 };
 
 /*
@@ -36,8 +35,8 @@ use super::parallel_presentation_bridge::{
 };
 use super::shell_presentation::ParallelPanelProjectionSample;
 use super::{
-    ConversationInputEvent, ConversationRuntimeEvent, ConversationState, NativeTuiApp,
-    ParallelPanelStateController, ParallelPanelUiEvent, ParallelPanelUiState,
+    ConversationInputEvent, NativeTuiApp, ParallelPanelStateController, ParallelPanelUiEvent,
+    ParallelPanelUiState,
 };
 
 impl NativeTuiApp {
@@ -384,11 +383,9 @@ impl NativeTuiApp {
                 // The runtime owns mode and initial-reset policy; this adapter
                 // only projects the loading state.
                 let workspace_directory = self.planning_workspace_directory();
-                if let ConversationState::Ready(conversation) =
-                    &mut self.conversation.lifecycle.conversation_state
-                {
-                    conversation.rearm_parallel_post_turn_continuation();
-                }
+                self.dispatch_client_event(CoreInput::Command(
+                    AppCommand::SetParallelPostTurnRearm { rearmed: true },
+                ));
                 self.sync_core_parallel_mode_readiness_projection(None);
                 self.sync_core_parallel_mode_supervisor_projection(Some(
                     pending_parallel_mode_supervisor_snapshot(
@@ -413,56 +410,14 @@ impl NativeTuiApp {
         }
     }
 
-    pub(super) fn parallel_mode_post_turn_queue_projection(
-        &self,
-        event: &ConversationRuntimeEvent,
-    ) -> (
-        Option<ParallelModePostTurnQueueSignal>,
-        Option<String>,
-        bool,
-    ) {
-        let ConversationRuntimeEvent::PostTurnEvaluationCompleted { evaluation } = event else {
-            return (None, None, false);
-        };
-        (
-            evaluation.provenance.parallel_queue_signal,
-            evaluation
-                .provenance
-                .runtime_projection_workspace_directory
-                .clone(),
-            evaluation.provenance.has_actionable_queue_head,
-        )
-    }
-
-    pub(super) fn apply_parallel_mode_post_turn_queue_continuation(
-        &mut self,
-        accepted_workspace_directory: Option<String>,
-        auto_follow_prompt_queued: bool,
-        event_signal: Option<ParallelModePostTurnQueueSignal>,
-        has_actionable_queue_head: bool,
-    ) -> bool {
-        let workspace_directory =
-            accepted_workspace_directory.unwrap_or_else(|| self.planning_workspace_directory());
-        self.dispatch_parallel_client_event(NativeClientEvent::ParallelPostTurnQueue {
-            workspace_directory,
-            signal: event_signal,
-            auto_follow_prompt_queued,
-            has_actionable_queue_head,
-        })
-        .auto_follow_prompt_consumed
-    }
-
     pub(super) fn close_parallel_mode_automation_epoch(&mut self) {
         // A post-turn evaluator can have captured parallel mode as its only
         // continuation opt-in. Closing the epoch must invalidate that evaluator
         // as well as the control-plane workers; otherwise a late result can
         // recreate a queued continuation after the operator turned parallel off.
-        self.planning.post_turn_continuation_gate.advance();
-        if let ConversationState::Ready(conversation) =
-            &mut self.conversation.lifecycle.conversation_state
-        {
-            conversation.disarm_parallel_post_turn_continuation();
-        }
+        self.dispatch_client_event(CoreInput::Command(AppCommand::SetParallelPostTurnRearm {
+            rearmed: false,
+        }));
         let (workspace_directory, epoch_id) = {
             let snapshot = self.runtime.client_runtime.parallel_epoch_snapshot();
             (
@@ -691,7 +646,7 @@ mod global_runtime_notice_tests {
         self, test_native_tui_app, test_native_tui_app_with_parallel_mode_composition,
     };
     use crate::adapter::inbound::tui::app::{
-        ConversationViewModel, shell_presentation::ConversationScreenModel,
+        ConversationState, ConversationViewModel, shell_presentation::ConversationScreenModel,
     };
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::parallel_agent_worker_port::NoopParallelAgentWorkerPort;
@@ -706,30 +661,6 @@ mod global_runtime_notice_tests {
     fn tick_parallel_mode_control_plane_for_test(app: &mut NativeTuiApp, now: Instant) {
         let sample = ParallelPanelProjectionSample::capture(app);
         app.tick_parallel_mode_control_plane(now, &sample);
-    }
-
-    #[test]
-    fn client_dispatch_settlement_separates_presentation_change_from_prompt_consumption() {
-        let mut app = test_native_tui_app();
-        let workspace_directory = app.planning_workspace_directory();
-
-        assert!(
-            app.inspect_parallel_mode_supervisor(false, true),
-            "synchronous loading/status presentation must be reported as a UI change"
-        );
-
-        app.runtime
-            .client_runtime
-            .force_parallel_mode_for_test(workspace_directory.clone(), true);
-        assert!(
-            app.apply_parallel_mode_post_turn_queue_continuation(
-                Some(workspace_directory),
-                true,
-                Some(ParallelModePostTurnQueueSignal::AutoFollowQueued),
-                true,
-            ),
-            "post-turn routing must return prompt consumption independently of redraw"
-        );
     }
 
     #[test]

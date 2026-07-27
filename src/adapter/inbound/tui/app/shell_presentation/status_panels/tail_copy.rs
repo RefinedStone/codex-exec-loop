@@ -9,9 +9,9 @@ use super::super::planning::build_planning_worker_panel_lines;
 use super::super::planning::status_projection::build_planning_status_surface_projection;
 use super::super::prompt_composer::{build_prompt_buffer_view, build_shell_command_palette_lines};
 use super::super::{
-    AkraTheme, ConversationComposerScreenModel, ConversationInputState,
-    ConversationLiveTranscriptScreenModel, ConversationScreenModel, ConversationViewModel,
-    INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT, INLINE_TAIL_NOTICE_DETAIL_LIMIT,
+    AkraTheme, AutoFollowSnapshotPresentation, ConversationComposerScreenModel,
+    ConversationInputState, ConversationLiveTranscriptScreenModel, ConversationScreenModel,
+    ConversationViewModel, INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT, INLINE_TAIL_NOTICE_DETAIL_LIMIT,
     INLINE_TAIL_PLANNING_DETAIL_LIMIT, INLINE_TAIL_RUNTIME_NOTICE_DETAIL_LIMIT,
     INLINE_TAIL_STATUS_DETAIL_LIMIT, INLINE_TAIL_WARNING_DETAIL_LIMIT, InlineShellCommandInput,
     Modifier, QueueMutationTailState, ShellActionAvailability, ShellConversationState,
@@ -370,7 +370,7 @@ fn build_ready_status_ribbon_line(conversation: &ConversationViewModel) -> Line<
         ));
         parts.push(format!(
             "done: {}",
-            conversation.auto_follow_state.progress_label()
+            conversation.auto_follow_state().progress_label()
         ));
     }
 
@@ -427,11 +427,9 @@ fn build_queue_receipt_undo_action_line(queued_task_count: usize) -> Line<'stati
 
 fn should_show_auto_follow_status(conversation: &ConversationViewModel) -> bool {
     !conversation.has_post_turn_settlement_in_flight()
-        && (conversation.auto_follow_state.has_live_activity()
-            || conversation
-                .auto_follow_state
-                .post_turn_continuation_paused()
-            || conversation.auto_follow_state.completed_auto_turns > 0)
+        && (conversation.auto_follow_state().has_live_activity()
+            || conversation.auto_follow_state().continuation_paused
+            || conversation.auto_follow_state().completed_auto_turns > 0)
 }
 
 fn build_ready_status_detail_line(
@@ -901,10 +899,13 @@ mod coverage_tests {
     use crate::adapter::inbound::tui::app::queue_overlay_ui::QueueMutationKind;
     use crate::adapter::inbound::tui::app::test_helpers::test_native_tui_app;
     use crate::adapter::inbound::tui::app::{
-        AutoFollowRuntimePhase, ConversationState, InlineHistoryRenderMode, InlineShellCommand,
-        NativeTuiApp,
+        ConversationState, InlineHistoryRenderMode, InlineShellCommand, NativeTuiApp,
     };
-    use crate::core::app::{QueueMutationCorrelation, QueueMutationIntent, StartupReadySnapshot};
+    use crate::core::app::{
+        ActiveTurnPhase, ActiveTurnSnapshot, AutoFollowPhase, CorePromptOrigin,
+        PostTurnAuthoritySnapshot, PostTurnEvaluationCorrelation, QueueMutationCorrelation,
+        QueueMutationIntent, StartupReadySnapshot, TurnSubmissionCorrelation,
+    };
     use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
     use crate::domain::planning::{
         PlanningQueueMutationKind, PlanningQueueMutationReceipt, PlanningQueueMutationReceiptEntry,
@@ -913,6 +914,73 @@ mod coverage_tests {
     use crate::domain::startup_diagnostics::StartupDiagnostics;
     use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
     use std::time::Instant;
+
+    fn set_input_state(
+        conversation: &mut ConversationViewModel,
+        input_state: ConversationInputState,
+    ) {
+        let mut snapshot = conversation.runtime_snapshot().clone();
+        snapshot.active_turn = match input_state {
+            ConversationInputState::DraftReady => {
+                conversation.thread_id.clear();
+                None
+            }
+            ConversationInputState::ReadyToContinue => {
+                if conversation.thread_id.is_empty() {
+                    conversation.thread_id = "thread-fixture".to_string();
+                }
+                None
+            }
+            ConversationInputState::SubmittingTurn | ConversationInputState::StreamingTurn => {
+                Some(ActiveTurnSnapshot {
+                    correlation: TurnSubmissionCorrelation::new(1),
+                    phase: if input_state == ConversationInputState::SubmittingTurn {
+                        ActiveTurnPhase::Submitting
+                    } else {
+                        ActiveTurnPhase::Running
+                    },
+                    workspace_directory: conversation.cwd.clone(),
+                    turn_id: (input_state == ConversationInputState::StreamingTurn)
+                        .then(|| "turn-fixture".to_string()),
+                    prompt_origin: CorePromptOrigin::Manual,
+                    started_at: Instant::now(),
+                })
+            }
+        };
+        conversation.apply_runtime_snapshot(snapshot);
+    }
+
+    fn set_running_turn(conversation: &mut ConversationViewModel, turn_id: &str) {
+        let mut snapshot = conversation.runtime_snapshot().clone();
+        snapshot.active_turn = Some(ActiveTurnSnapshot {
+            correlation: TurnSubmissionCorrelation::new(1),
+            phase: ActiveTurnPhase::Running,
+            workspace_directory: conversation.cwd.clone(),
+            turn_id: Some(turn_id.to_string()),
+            prompt_origin: CorePromptOrigin::Manual,
+            started_at: Instant::now(),
+        });
+        conversation.apply_runtime_snapshot(snapshot);
+        conversation.record_turn_started(turn_id.to_string());
+    }
+
+    fn begin_post_turn_evaluation(conversation: &mut ConversationViewModel, turn_id: &str) {
+        let workspace_directory = conversation.cwd.clone();
+        let mut snapshot = conversation.runtime_snapshot().clone();
+        snapshot.active_turn = None;
+        snapshot.post_turn = PostTurnAuthoritySnapshot::Evaluating {
+            correlation: PostTurnEvaluationCorrelation::new(
+                1,
+                conversation.thread_id.clone(),
+                turn_id,
+                workspace_directory.clone(),
+                workspace_directory,
+            ),
+            started_at: Instant::now(),
+        };
+        conversation.apply_runtime_snapshot(snapshot);
+        conversation.begin_post_turn_settlement(turn_id);
+    }
 
     fn ready_conversation(app: &NativeTuiApp) -> &ConversationViewModel {
         let ConversationState::Ready(conversation) = &app.conversation.lifecycle.conversation_state
@@ -1138,18 +1206,22 @@ mod coverage_tests {
             "a very long status line that should be compacted inside the inline tail".to_string();
 
         assert!(!should_show_auto_follow_status(&conversation));
-        conversation.auto_follow_state.completed_auto_turns = 2;
+        let mut snapshot = conversation.runtime_snapshot().clone();
+        snapshot.auto_follow.completed_auto_turns = 2;
+        conversation.apply_runtime_snapshot(snapshot);
         assert!(should_show_auto_follow_status(&conversation));
-        conversation.auto_follow_state.completed_auto_turns = 0;
-        conversation
-            .auto_follow_state
-            .pause_post_turn_continuation();
+        let mut snapshot = conversation.runtime_snapshot().clone();
+        snapshot.auto_follow.completed_auto_turns = 0;
+        snapshot.auto_follow.continuation_paused = true;
+        conversation.apply_runtime_snapshot(snapshot);
         assert!(should_show_auto_follow_status(&conversation));
-        conversation.auto_follow_state.set_max_auto_turns(5);
-        conversation.auto_follow_state.runtime_phase = AutoFollowRuntimePhase::Queued {
+        let mut snapshot = conversation.runtime_snapshot().clone();
+        snapshot.auto_follow.max_auto_turns = 5;
+        snapshot.auto_follow.phase = AutoFollowPhase::Queued {
             started_at: Instant::now(),
             turn_index: 3,
         };
+        conversation.apply_runtime_snapshot(snapshot);
 
         let ribbon = build_ready_status_ribbon_line(&conversation).to_string();
         assert!(ribbon.contains("auto:"));
@@ -1167,7 +1239,7 @@ mod coverage_tests {
         assert!(detail.contains("gh: polling"));
 
         let mut running_draft = ConversationViewModel::new_draft("/tmp/root".to_string());
-        running_draft.record_turn_started("turn-1".to_string());
+        set_running_turn(&mut running_draft, "turn-1");
         running_draft.status_text = "new thread draft".to_string();
         let running_context = context_for(
             &startup_state,
@@ -1286,7 +1358,7 @@ mod coverage_tests {
             ),
         ] {
             let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
-            conversation.input_state = state;
+            set_input_state(&mut conversation, state);
             let prompt = rendered_ready_prompt(&conversation, availability, TuiLanguage::English);
             assert!(
                 prompt.contains(expected),
@@ -1353,7 +1425,12 @@ mod coverage_tests {
 
         let mut busy = ConversationViewModel::new_draft("/tmp/root".to_string());
         busy.composer.input_buffer = "next prompt".to_string();
-        busy.auto_follow_state.mark_auto_turn_queued();
+        let mut snapshot = busy.runtime_snapshot().clone();
+        snapshot.auto_follow.phase = AutoFollowPhase::Queued {
+            turn_index: 1,
+            started_at: Instant::now(),
+        };
+        busy.apply_runtime_snapshot(snapshot);
         let busy_prompt =
             rendered_ready_prompt(&busy, ShellActionAvailability::Ready, TuiLanguage::English);
         assert!(busy_prompt.contains("auto-follow busy"));
@@ -1397,7 +1474,7 @@ mod coverage_tests {
         ] {
             let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
             conversation.composer.input_buffer = "buffered".to_string();
-            conversation.input_state = state;
+            set_input_state(&mut conversation, state);
             let prompt = rendered_ready_prompt(&conversation, availability, TuiLanguage::English);
             assert!(
                 prompt.contains(expected),
@@ -1411,9 +1488,14 @@ mod coverage_tests {
     #[test]
     fn planning_settlement_truth_overrides_idle_and_enter_send_copy() {
         let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
-        conversation.begin_post_turn_settlement("turn-1");
-        conversation.auto_follow_state.set_max_auto_turns(0);
-        conversation.auto_follow_state.mark_auto_turn_queued();
+        begin_post_turn_evaluation(&mut conversation, "turn-1");
+        let mut snapshot = conversation.runtime_snapshot().clone();
+        snapshot.auto_follow.max_auto_turns = 0;
+        snapshot.auto_follow.phase = AutoFollowPhase::Queued {
+            turn_index: 1,
+            started_at: Instant::now(),
+        };
+        conversation.apply_runtime_snapshot(snapshot);
 
         assert!(!conversation.can_accept_manual_prompt());
         let startup_state = StartupState::Idle;
@@ -1462,9 +1544,11 @@ mod coverage_tests {
         app.shell.chrome.startup_state = StartupState::Ready(startup_ready_snapshot(true));
         let conversation = ready_conversation_mut(&mut app);
         conversation.thread_id = "thread-settlement".to_string();
-        conversation.begin_post_turn_settlement("turn-1");
-        conversation.auto_follow_state.set_max_auto_turns(0);
-        conversation.auto_follow_state.completed_auto_turns = 1;
+        begin_post_turn_evaluation(conversation, "turn-1");
+        let mut snapshot = conversation.runtime_snapshot().clone();
+        snapshot.auto_follow.max_auto_turns = 0;
+        snapshot.auto_follow.completed_auto_turns = 1;
+        conversation.apply_runtime_snapshot(snapshot);
         conversation
             .runtime_notices
             .push("bridge attached".to_string());

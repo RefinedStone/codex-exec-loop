@@ -2,7 +2,7 @@ use super::{
     ConversationState, InlineShellCommand, ShellOverlay, StartupState,
     arm_core_post_turn_evaluation, create_temp_workspace, make_dispatch_ready_parallel_runtime,
     make_test_runtime, mark_core_turn_completed, post_turn_evaluation_completed_message,
-    sample_startup_diagnostics,
+    sample_startup_diagnostics, set_running_turn,
 };
 use crate::adapter::inbound::tui::app::conversation_runtime::{
     PostTurnContinuationAction, PostTurnEvaluationOutcome, PostTurnEvaluationProvenance,
@@ -10,11 +10,15 @@ use crate::adapter::inbound::tui::app::conversation_runtime::{
 };
 use crate::adapter::inbound::tui::app::shell_presentation::build_parallel_peek_overlay_view;
 use crate::adapter::inbound::tui::app::{
-    ManualPromptDelivery, PendingManualPromptPreparation, TuiLanguage,
+    ConversationViewModel, ManualPromptDelivery, PendingManualPromptPreparation, TuiLanguage,
 };
 use crate::application::service::parallel_mode::control_plane::{
     ParallelModeControlPlaneBackgroundEvent, ParallelModeSupervisorInspectionSnapshot,
     ParallelModeSupervisorInspectionState,
+};
+use crate::core::app::{
+    AppCommand, ApprovalAuthorityPhase, ApprovalAuthoritySnapshot, CoreInput,
+    PostTurnAuthoritySnapshot, PostTurnRouteResolution,
 };
 use crate::domain::conversation::{ConversationApprovalRequest, ConversationApprovalRequestKind};
 use crate::domain::parallel_mode::{
@@ -38,6 +42,19 @@ runtime은 overlay, inline command palette, conversation input reducer, startup 
 분기한다. 작은 modifier 차이 하나가 prompt text, shell command, refresh shortcut, submit flow 사이를
 바꿀 수 있으므로 이 파일은 "어느 surface가 키를 소비하는가"를 직접 검증한다.
 */
+
+fn set_pending_approval(
+    conversation: &mut ConversationViewModel,
+    request: ConversationApprovalRequest,
+) {
+    let mut snapshot = conversation.runtime_snapshot().clone();
+    snapshot.approval = Some(ApprovalAuthoritySnapshot {
+        request,
+        decision: None,
+        phase: ApprovalAuthorityPhase::Pending,
+    });
+    conversation.apply_runtime_snapshot(snapshot);
+}
 
 fn ready_parallel_mode_readiness_snapshot(
     workspace_directory: &str,
@@ -124,6 +141,7 @@ fn tab_opens_exact_turn_steer_confirmation_and_escape_keeps_the_draft() {
         panic!("expected ready conversation state");
     };
     conversation.thread_id = "thread-steer".to_string();
+    set_running_turn(conversation, "turn-steer", Instant::now());
     conversation.record_turn_started("turn-steer".to_string());
     conversation.composer.input_buffer = "add focused coverage".to_string();
 
@@ -169,6 +187,7 @@ fn tab_cannot_steer_the_same_draft_while_queue_registration_is_pending() {
         panic!("expected ready conversation state");
     };
     conversation.thread_id = "thread-queue-race".to_string();
+    set_running_turn(conversation, "turn-queue-race", Instant::now());
     conversation.record_turn_started("turn-queue-race".to_string());
     conversation.composer.input_buffer = "apply this once".to_string();
 
@@ -1106,7 +1125,7 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_workers() {
         "parallel mode should suppress the main-session auto-follow submit"
     );
     assert!(
-        !conversation.auto_follow_state.has_live_activity(),
+        !conversation.auto_follow_state().has_live_activity(),
         "parallel dispatch conversion must not leave a queued auto turn that can never finish"
     );
     assert_eq!(
@@ -1124,7 +1143,6 @@ fn parallel_off_invalidates_in_flight_evaluation_and_discards_late_parallel_only
     let mut runtime = fixture.runtime;
     let workspace_directory = runtime.app().current_workspace_directory();
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
-    let captured_permit = runtime.app().planning.post_turn_continuation_gate.capture();
     let planning_projection = fixture
         .planning
         .runtime
@@ -1142,8 +1160,15 @@ fn parallel_off_invalidates_in_flight_evaluation_and_discards_late_parallel_only
 
     runtime.app_mut().close_parallel_mode_automation_epoch();
     assert!(
-        !captured_permit.is_current(),
-        "parallel off must cancel a post-turn evaluator that captured the parallel opt-in"
+        !runtime
+            .app()
+            .runtime
+            .client_runtime
+            .snapshot()
+            .conversation_runtime
+            .auto_follow
+            .parallel_rearmed_after_stop,
+        "parallel off must revoke the Core-owned parallel continuation opt-in"
     );
 
     runtime
@@ -1151,7 +1176,7 @@ fn parallel_off_invalidates_in_flight_evaluation_and_discards_late_parallel_only
         .runtime
         .tx
         .send(post_turn_evaluation_completed_message(
-            correlation,
+            correlation.clone(),
             planning_projection,
             PostTurnEvaluationOutcome {
                 provenance: PostTurnEvaluationProvenance::new("turn-disable-race".to_string())
@@ -1183,7 +1208,7 @@ fn parallel_off_invalidates_in_flight_evaluation_and_discards_late_parallel_only
         panic!("expected ready conversation state");
     };
     assert!(
-        !conversation.auto_follow_state.has_live_activity(),
+        !conversation.auto_follow_state().has_live_activity(),
         "discarded parallel-only result must not leave a queued phase"
     );
     assert!(conversation.can_accept_manual_prompt());
@@ -1192,9 +1217,20 @@ fn parallel_off_invalidates_in_flight_evaluation_and_discards_late_parallel_only
             && message.text != "must not run after parallel off"
     }));
     assert!(
-        conversation
-            .status_text
-            .contains("parallel continuation cancelled")
+        matches!(
+            &runtime
+                .app()
+                .runtime
+                .client_runtime
+                .snapshot()
+                .conversation_runtime
+                .post_turn,
+            PostTurnAuthoritySnapshot::Settled {
+                correlation: settled,
+                resolution: PostTurnRouteResolution::NoContinuation,
+            } if settled == &correlation
+        ),
+        "parallel off must settle the exact in-flight route before dropping its late completion"
     );
 }
 
@@ -1206,12 +1242,14 @@ fn parallel_off_preserves_explicit_single_session_auto_follow_for_a_late_result(
         StartupState::Ready(sample_startup_diagnostics(&workspace_directory));
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
     let planning_projection = runtime.app().planning_runtime_projection_snapshot();
+    runtime.app_mut().dispatch_client_event(CoreInput::Command(
+        AppCommand::SetAutoFollowMaxTurns { value: 1 },
+    ));
     let ConversationState::Ready(conversation) =
         &mut runtime.app_mut().conversation.lifecycle.conversation_state
     else {
         panic!("expected ready conversation state");
     };
-    conversation.auto_follow_state.set_max_auto_turns(1);
     conversation.thread_id = "thread-single-follow".to_string();
     conversation.turn_activity.last_completed_turn_id = Some("turn-single-follow".to_string());
     mark_core_turn_completed(&mut runtime, "thread-single-follow", "turn-single-follow");
@@ -2003,14 +2041,17 @@ fn approval_overlay_consumes_paste_without_mutating_the_prompt() {
         panic!("expected ready conversation state");
     };
     conversation.composer.input_buffer = "existing prompt".to_string();
-    conversation.pending_approval_request = Some(ConversationApprovalRequest {
-        approval_id: "approval-paste".to_string(),
-        server_request_id: "server-paste".to_string(),
-        method: "item/fileChange/requestApproval".to_string(),
-        kind: ConversationApprovalRequestKind::FileChange,
-        summary: "File changes requested.".to_string(),
-        details: vec!["Inspect the current diff before accepting.".to_string()],
-    });
+    set_pending_approval(
+        conversation,
+        ConversationApprovalRequest {
+            approval_id: "approval-paste".to_string(),
+            server_request_id: "server-paste".to_string(),
+            method: "item/fileChange/requestApproval".to_string(),
+            kind: ConversationApprovalRequestKind::FileChange,
+            summary: "File changes requested.".to_string(),
+            details: vec!["Inspect the current diff before accepting.".to_string()],
+        },
+    );
     runtime.app_mut().shell.chrome.shell_overlay = ShellOverlay::Approval;
 
     runtime.handle_terminal_event(Event::Paste("must not leak".to_string()));
@@ -2021,5 +2062,5 @@ fn approval_overlay_consumes_paste_without_mutating_the_prompt() {
         panic!("expected ready conversation state");
     };
     assert_eq!(conversation.composer.input_buffer, "existing prompt");
-    assert!(conversation.pending_approval_request.is_some());
+    assert!(conversation.pending_approval_request().is_some());
 }

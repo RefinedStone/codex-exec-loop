@@ -197,10 +197,23 @@ provider worker, and drops stale completions. The TUI owns only the confirmation
 editor revision needed to clear an unchanged draft after success. A terminal turn event does not
 invalidate an already accepted steer, but a conversation identity transition does.
 
+`ConversationRuntimeSnapshot` is the single process-local authority projection for the active-turn
+phase and workspace, approval request/decision/review, auto-follow budget/pause/phase, and post-turn
+evaluation/route state, including the accepted planning-handoff provenance. The mutable authority
+lives only inside the conversation feature reducer.
+`ConversationViewModel` retains one private immutable copy of that snapshot and replaces it
+atomically from a Core outcome; it has no parallel set of semantic fields or transition methods.
+The adapter installs the outcome snapshot before reducing its presentation events and retains the
+prior snapshot only as immutable transition input for terminal facts such as the just-finished turn
+workspace or id.
+
 Approval decisions are also core-owned and single-flight. Core admits a decision only for the
 current pending approval on the active turn, owns its submitting and submitted states, and prevents
-duplicate provider submissions. Composition performs the provider call and returns its correlated
-completion. The TUI owns only the approval modal projection and retry status copy.
+duplicate provider submissions. Approval identity is the full `{approval_id, server_request_id}`
+pair: a same-label request from a newer server exchange cannot be cleared by an older resolution,
+and a duplicate exact request cannot erase an in-flight decision lease. Composition performs the
+provider call and returns its correlated completion. The TUI owns only the approval modal
+projection and retry status copy.
 
 Approval review stream updates are persisted through a Core-owned serial effect queue. Each write
 is correlated to the exact turn, workspace, thread, and review; composition performs the existing
@@ -232,7 +245,16 @@ does not hide the other sections. The TUI owns overlay lifecycle and display-onl
 and requests a fresh load when the current workspace or thread identity changes.
 
 An accepted post-turn completion updates the core planning-runtime projection in the same
-correlated dispatch. TUI conversation state does not retain a second planning-runtime copy.
+correlated dispatch. Core normalizes the evaluator's pause, budget, stop-rule, and continuation
+permit inputs from the current conversation authority rather than trusting a TUI projection. Its
+route request is internal to `NativeClientRuntime`: composition checks the Core-owned stop/rearm
+gate, offers the exact prompt to the private parallel control-plane at most once, and re-enters Core
+with the same correlation and one typed `ParallelConsumed | AutoSubmit | NoContinuation`
+resolution. Only the final settled event reaches the TUI. A stale, duplicate, policy-superseded, or
+ABA route cannot submit an auto-follow prompt or revive parallel work. TUI conversation state does
+not retain a second planning-runtime copy or continuation gate. Disabling parallel routing settles
+a parallel-only evaluation, but preserves an exact in-flight evaluation when the independently
+configured single-session auto-follow budget can still consume its result.
 
 Session rename is also core-correlated and single-flight. The TUI enters pending state only after
 Core returns an accepted admission with the exact correlation; typed active/catalog/conversation
@@ -250,7 +272,7 @@ row requires the exact locally admitted correlation.
 | State | Authority |
 | --- | --- |
 | cursor, modal, overlay, editor buffer, selected row | inbound adapter |
-| session/conversation lifecycle, in-flight effects, stream reduction | core |
+| session/conversation lifecycle, active turn, approval, auto-follow/post-turn, in-flight effects, stream reduction | core |
 | parallel wake/effect ordering and stale-completion guards | application control-plane |
 | task/direction/queue authority, leases, session records, delivery claims | SQLite-backed stores |
 | eligibility, capacity, retry, validation, stale-event decisions | domain |
@@ -541,8 +563,11 @@ rename always applies its semantic catalog and active-stream projection; an exac
 receipt controls only editor, feedback, selection, and status settlement.
 
 The auto-follow turn-budget overlay keeps only an active, uncommitted edit draft. When the editor
-is closed, status and review presentation read the canonical policy from the conversation model;
-the adapter does not retain or reverse-sync a second budget value.
+is closed, status and review presentation read the canonical policy from the Core conversation
+runtime snapshot; the adapter does not retain or reverse-sync a second budget value. Manual and
+auto-follow turn submission are admitted against that same snapshot. An automatic submission must
+consume the exact settled post-turn correlation once; an uncorrelated, stale, duplicate, paused, or
+budget-ineligible request is rejected before a provider effect starts.
 
 Planning-worker diagnostics retain the domain `PlanningWorkerPanelState` inside a sealed,
 read-only Core projection from the Core-started post-turn event through asynchronous completion and

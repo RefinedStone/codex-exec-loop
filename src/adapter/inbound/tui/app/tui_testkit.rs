@@ -5,7 +5,7 @@ use super::inline_terminal_adapter::{
 use super::shell_rendering::draw;
 use super::shell_runtime::ShellRuntime;
 use super::{
-    ConversationInputState, ConversationMessage, ConversationMessageKind, ConversationState,
+    ConversationMessage, ConversationMessageKind, ConversationState, ConversationViewModel,
     INLINE_VIEWPORT_HEIGHT, InlineHistoryRenderMode, NativeTuiApp, ShellFrontendMode,
 };
 use ratatui::backend::{Backend, ClearType, CrosstermBackend, TestBackend, WindowSize};
@@ -19,6 +19,9 @@ use std::io::{self, Write};
 use std::sync::Arc;
 
 use crate::application::service::planning::PlanningTaskHandoff;
+use crate::core::app::{
+    ActiveTurnPhase, ActiveTurnSnapshot, CorePromptOrigin, TurnSubmissionCorrelation,
+};
 use crate::domain::conversation_item_lifecycle::{
     ConversationItemKind, ConversationItemLifecycleConsistency,
     ConversationItemLifecycleObservation, ConversationItemLifecyclePhase,
@@ -321,6 +324,20 @@ pub(super) fn append_agent_history_message(app: &mut NativeTuiApp, text: &str) {
         Some("agent-1".to_string()),
     ));
 }
+
+fn apply_running_turn_snapshot(conversation: &mut ConversationViewModel, turn_id: &str) {
+    let mut snapshot = conversation.runtime_snapshot().clone();
+    snapshot.active_turn = Some(ActiveTurnSnapshot {
+        correlation: TurnSubmissionCorrelation::new(1),
+        phase: ActiveTurnPhase::Running,
+        workspace_directory: conversation.cwd.clone(),
+        turn_id: Some(turn_id.to_string()),
+        prompt_origin: CorePromptOrigin::Manual,
+        started_at: std::time::Instant::now(),
+    });
+    conversation.apply_runtime_snapshot(snapshot);
+}
+
 pub(super) fn set_live_agent_message(app: &mut NativeTuiApp, text: &str) {
     // Live-message injection sets the same running-turn markers used by runtime
     // background updates so inline tail tests cover the streaming path.
@@ -328,9 +345,7 @@ pub(super) fn set_live_agent_message(app: &mut NativeTuiApp, text: &str) {
     else {
         panic!("test app should start in a ready conversation state");
     };
-    conversation.input_state = ConversationInputState::StreamingTurn;
-    conversation.active_turn_id = Some("turn-1".to_string());
-    conversation.active_turn_started_at = Some(std::time::Instant::now());
+    apply_running_turn_snapshot(conversation, "turn-1");
     conversation.live_agent_message = Some(ConversationMessage::new(
         ConversationMessageKind::Agent,
         text.to_string(),
@@ -355,6 +370,7 @@ pub(super) fn set_progressive_command_activity(
             "/tmp/progressive-activity".to_string(),
         );
     }
+    apply_running_turn_snapshot(conversation, "turn-rail");
     conversation.record_turn_started("turn-rail".to_string());
     let runtime_request = ConversationRuntimeConfigurationRequest {
         model: ConversationRuntimeRequestedValue::Value("requested-model-hidden".to_string()),
@@ -369,14 +385,14 @@ pub(super) fn set_progressive_command_activity(
         ConversationRuntimeLaunchEnvironment::unknown(),
         ConversationRuntimeObservedValue::Missing,
     ));
-    conversation.last_planning_task_handoff = Some(PlanningTaskHandoff {
+    conversation.replace_planning_handoff_for_test(Some(PlanningTaskHandoff {
         task_id: "task-p0-d3".to_string(),
         task_title: "P0-D3 rail".to_string(),
         direction_id: "direction-tui".to_string(),
         combined_priority: 90,
         updated_at: "2026-07-13T00:00:00Z".to_string(),
         status_label: "ready".to_string(),
-    });
+    }));
     conversation.turn_activity.current_turn_command_count = 1;
     conversation.turn_activity.current_turn_file_change_count = 2;
     conversation.turn_activity.current_turn_last_summary = Some("coarse activity".to_string());

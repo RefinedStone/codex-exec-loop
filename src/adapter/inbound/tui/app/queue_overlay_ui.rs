@@ -674,13 +674,13 @@ impl NativeTuiApp {
                 Some(QueueActionBlockReason::PostTurnPlanningInFlight)
             }
             ConversationState::Ready(conversation)
-                if conversation.auto_follow_state.has_live_activity() =>
+                if conversation.auto_follow_state().has_live_activity() =>
             {
                 Some(QueueActionBlockReason::PostTurnPlanningInFlight)
             }
             ConversationState::Ready(conversation)
                 if matches!(
-                    conversation.input_state,
+                    conversation.input_state(),
                     ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue
                 ) =>
             {
@@ -707,7 +707,7 @@ impl NativeTuiApp {
         match &self.conversation.lifecycle.conversation_state {
             ConversationState::Ready(conversation)
                 if conversation.has_post_turn_settlement_in_flight()
-                    || conversation.auto_follow_state.has_live_activity() =>
+                    || conversation.auto_follow_state().has_live_activity() =>
             {
                 Some(QueueActionBlockReason::PostTurnPlanningInFlight)
             }

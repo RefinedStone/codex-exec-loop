@@ -1,8 +1,8 @@
 use super::ManualPromptPreparationAdmission;
 use super::ReviewCenterSnapshot;
 use super::{
-    AppSnapshot, ConversationReadySnapshot, ConversationSnapshot, SessionCatalogReadySnapshot,
-    SessionCatalogSnapshot,
+    AppSnapshot, ConversationReadySnapshot, ConversationRuntimeSnapshot, ConversationSnapshot,
+    SessionCatalogReadySnapshot, SessionCatalogSnapshot,
 };
 use super::{
     ApprovalDecisionAdmission, ApprovalDecisionCorrelation, ApprovalReviewPersistenceCorrelation,
@@ -14,9 +14,9 @@ use super::{
     PlanningRuntimeRefreshCorrelation, PlanningRuntimeRefreshSnapshot,
     PlanningSimpleDraftPromotionSnapshot, PlanningSimpleDraftStageSnapshot,
     PlanningWorkspaceOperationAdmission, PlanningWorkspaceOperationCorrelation,
-    PlanningWorkspaceResetSnapshot, PostTurnEvaluationCorrelation, ReviewCenterLoadCorrelation,
-    SessionCatalogLoadCorrelation, SessionRenameAdmission, SessionRenameCorrelation,
-    StartupCheckCorrelation,
+    PlanningWorkspaceResetSnapshot, PostTurnEvaluationCorrelation, PostTurnRouteResolution,
+    ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation, SessionRenameAdmission,
+    SessionRenameCorrelation, StartupCheckCorrelation,
 };
 use super::{DirectionsMaintenanceLoadCorrelation, DirectionsMaintenanceSummarySnapshot};
 use super::{
@@ -274,6 +274,7 @@ pub enum AppEvent {
         correlation: ApprovalDecisionCorrelation,
         result: Result<(), String>,
     },
+    ConversationRuntimeAuthorityChanged(Box<ConversationRuntimeSnapshot>),
     GithubReviewPollingSetupStarted {
         correlation: GithubReviewPollingSetupCorrelation,
     },
@@ -291,7 +292,15 @@ pub enum AppEvent {
     TurnStreamSnapshotChanged(Box<TurnStreamSnapshot>),
     ManualPromptPrepared(Box<ManualPromptOutcome>),
     PostTurnEvaluationStarted(PlanningWorkerPanelState),
-    PostTurnEvaluationCompleted(Box<PostTurnExecution>),
+    PostTurnContinuationRoutingRequested {
+        correlation: PostTurnEvaluationCorrelation,
+        execution: Box<PostTurnExecution>,
+    },
+    PostTurnEvaluationCompleted {
+        correlation: PostTurnEvaluationCorrelation,
+        execution: Box<PostTurnExecution>,
+        route_resolution: PostTurnRouteResolution,
+    },
     ConversationTurnWorkspaceChanged {
         workspace_directory: String,
     },

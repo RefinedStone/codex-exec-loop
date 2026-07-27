@@ -73,9 +73,9 @@ use crate::application::service::planning::task_tool::{
 };
 use crate::diagnostics::event_log;
 use crate::domain::conversation::{
-    ConversationApprovalDecision, ConversationApprovalReviewStatus,
-    ConversationRuntimeControlTruth, ConversationSnapshot, ConversationTurnOptions,
-    ConversationTurnSteerReceipt, ConversationTurnSteerRequest,
+    ConversationApprovalDecision, ConversationApprovalRequestIdentity,
+    ConversationApprovalReviewStatus, ConversationRuntimeControlTruth, ConversationSnapshot,
+    ConversationTurnOptions, ConversationTurnSteerReceipt, ConversationTurnSteerRequest,
 };
 use crate::domain::conversation_runtime_envelope::{
     ConversationRuntimeEnvelope, ConversationRuntimeEnvelopeObservation,
@@ -457,10 +457,19 @@ fn bounded_app_server_stream_event(event: ConversationStreamEvent) -> Conversati
             ConversationStreamEvent::ApprovalReviewUpdated { review }
         }
         ConversationStreamEvent::ApprovalResolved {
-            approval_id,
+            request_identity,
             resolution,
         } => ConversationStreamEvent::ApprovalResolved {
-            approval_id: bounded_stream_text(approval_id, MAX_STREAM_IDENTIFIER_BYTES),
+            request_identity: ConversationApprovalRequestIdentity {
+                approval_id: bounded_stream_text(
+                    request_identity.approval_id,
+                    MAX_STREAM_IDENTIFIER_BYTES,
+                ),
+                server_request_id: bounded_stream_text(
+                    request_identity.server_request_id,
+                    MAX_STREAM_IDENTIFIER_BYTES,
+                ),
+            },
             resolution,
         },
         ConversationStreamEvent::TurnInterruptRequestFailed { message } => {
@@ -2063,8 +2072,8 @@ mod tests {
         PLANNING_TOOL_PARENT_THREAD_ID_ENV, PLANNING_TOOL_PARENT_TURN_ID_ENV,
     };
     use crate::domain::conversation::{
-        ConversationApprovalRequest, ConversationApprovalRequestKind,
-        ConversationRuntimeControlTruth,
+        ConversationApprovalRequest, ConversationApprovalRequestIdentity,
+        ConversationApprovalRequestKind, ConversationRuntimeControlTruth,
     };
     #[cfg(unix)]
     use crate::domain::conversation::{ConversationReasoningEffort, ConversationTurnOptions};
@@ -3267,6 +3276,34 @@ mod tests {
         };
 
         assert_eq!(bounded_app_server_stream_event(event.clone()), event);
+    }
+
+    #[test]
+    fn app_server_stream_boundary_bounds_both_approval_resolution_identity_fields() {
+        let event = bounded_app_server_stream_event(ConversationStreamEvent::ApprovalResolved {
+            request_identity: ConversationApprovalRequestIdentity {
+                approval_id: "a".repeat(super::MAX_STREAM_IDENTIFIER_BYTES + 1),
+                server_request_id: "s".repeat(super::MAX_STREAM_IDENTIFIER_BYTES + 1),
+            },
+            resolution: crate::domain::conversation::ConversationApprovalResolution::Disconnected,
+        });
+
+        let ConversationStreamEvent::ApprovalResolved {
+            request_identity, ..
+        } = event
+        else {
+            panic!("approval resolution should remain the same event kind");
+        };
+        assert!(
+            request_identity
+                .approval_id
+                .ends_with(STREAM_TRUNCATION_MARKER)
+        );
+        assert!(
+            request_identity
+                .server_request_id
+                .ends_with(STREAM_TRUNCATION_MARKER)
+        );
     }
 
     #[test]

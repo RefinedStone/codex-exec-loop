@@ -119,20 +119,16 @@ impl ConversationViewModel {
     pub(crate) fn approval_summary(&self) -> Option<String> {
         // Approval copy is delegated to conversation_text so status and summary
         // surfaces use the same control/approval terminology.
-        self.approval_review
-            .as_ref()
-            .map(approval_review_summary_text)
+        self.approval_review().map(approval_review_summary_text)
     }
 
     pub(crate) fn update_approval_review(&mut self, review: ConversationApprovalReview) {
-        // Approval review changes affect both the stored review detail and the
-        // main status line, because approval availability can change while the
-        // same turn remains selected.
+        // Core owns the review snapshot. This hook updates only presentation
+        // copy for the already-authoritative stream transition.
         self.set_status_with_warnings(approval_review_status_text(
             &review,
             self.turn_control_truth.approval,
         ));
-        self.approval_review = Some(review);
     }
 
     pub(crate) fn interrupt_support_label(&self) -> &'static str {

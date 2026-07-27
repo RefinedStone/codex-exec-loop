@@ -549,9 +549,13 @@ mod tests {
     use crate::adapter::inbound::tui::app::ConversationState;
     use crate::adapter::inbound::tui::app::test_helpers::test_native_tui_app;
     use crate::application::service::planning::PlanningRuntimeProjection;
+    use crate::core::app::{
+        ActiveTurnPhase, ActiveTurnSnapshot, CorePromptOrigin, TurnSubmissionCorrelation,
+    };
     use crate::domain::planning::{
         PriorityQueueProjection, PriorityQueueSkippedTask, PriorityQueueTask, TaskStatus,
     };
+    use std::time::Instant;
     #[test]
     fn resumed_session_status_prefers_queue_summary_projection() {
         let runtime_projection = PlanningRuntimeProjection::ready_with_details(
@@ -804,6 +808,15 @@ mod tests {
     #[test]
     fn planning_surface_marks_running_turn_stale_summary_as_warning() {
         let mut app = test_native_tui_app();
+        app.sync_ready_conversation_planning_runtime_projection(
+            PlanningRuntimeProjection::ready_with_details(
+                "Planning Context".to_string(),
+                "now: none  |  next: none  |  proposed: none  |  blocked: none".to_string(),
+                None,
+                None,
+            )
+            .with_workspace_present(true),
+        );
         let ConversationState::Ready(conversation) =
             &mut app.conversation.lifecycle.conversation_state
         else {
@@ -814,16 +827,17 @@ mod tests {
             "Stale planning".to_string(),
             "/tmp/root".to_string(),
         );
+        let mut runtime_snapshot = conversation.runtime_snapshot().clone();
+        runtime_snapshot.active_turn = Some(ActiveTurnSnapshot {
+            correlation: TurnSubmissionCorrelation::new(1),
+            phase: ActiveTurnPhase::Running,
+            workspace_directory: "/tmp/root".to_string(),
+            turn_id: Some("turn-stale".to_string()),
+            prompt_origin: CorePromptOrigin::Manual,
+            started_at: Instant::now(),
+        });
+        conversation.apply_runtime_snapshot(runtime_snapshot);
         conversation.record_turn_started("turn-stale".to_string());
-        app.sync_ready_conversation_planning_runtime_projection(
-            PlanningRuntimeProjection::ready_with_details(
-                "Planning Context".to_string(),
-                "now: none  |  next: none  |  proposed: none  |  blocked: none".to_string(),
-                None,
-                None,
-            )
-            .with_workspace_present(true),
-        );
         let runtime_projection = app.planning_runtime_projection_snapshot();
         let ConversationState::Ready(conversation) = &app.conversation.lifecycle.conversation_state
         else {

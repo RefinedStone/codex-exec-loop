@@ -13,9 +13,7 @@ use crate::domain::conversation::{
 };
 #[cfg(test)]
 use crate::domain::planning::PlanningWorkerStatus;
-use crate::domain::planning::{
-    ManualPromptCorrelation, PlanningWorkerPanelState, PostTurnContinuationGate,
-};
+use crate::domain::planning::{ManualPromptCorrelation, PlanningWorkerPanelState};
 use crossterm::event::{self, KeyCode, KeyModifiers};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -35,11 +33,9 @@ use std::sync::mpsc::{Receiver, SyncSender};
 // enough to keep the prompt visible.
 const SESSION_PAGE_SIZE: usize = 10;
 const MAX_CONVERSATION_HISTORY_LINES: usize = 160;
-const DEFAULT_AUTO_FOLLOW_MAX_TURNS: usize = 0;
 const DISABLED_AUTO_FOLLOW_MAX_TURNS_TOKEN: &str = "off";
 const INFINITE_AUTO_FOLLOW_MAX_TURNS: usize = usize::MAX;
 const INFINITE_AUTO_FOLLOW_MAX_TURNS_TOKEN: &str = "infinite";
-const DEFAULT_AUTO_FOLLOW_STOP_KEYWORD: &str = "AUTO_STOP";
 const MIN_TRANSCRIPT_PANEL_HEIGHT: u16 = 12;
 const MAX_INLINE_TAIL_HEIGHT: u16 = 10;
 const INLINE_VIEWPORT_HEIGHT: u16 = 16;
@@ -175,7 +171,7 @@ mod view_selection_overlay_ui;
 use app_runtime::BackgroundMessage;
 #[cfg(test)]
 pub(super) use app_runtime::NativeTuiParallelModeBinding;
-use auto_follow_controls::{AutoFollowControlEvent, reduce_auto_follow_controls};
+use auto_follow_controls::{AutoFollowControlEvent, max_auto_turns_command};
 use auto_follow_overlay_ui::{
     AutoFollowOverlayUiEvent, AutoFollowOverlayUiState, reduce_auto_follow_overlay_ui,
 };
@@ -193,13 +189,14 @@ use conversation_lifecycle::{
 };
 #[allow(unused_imports)]
 pub(super) use conversation_model::{
-    AutoFollowRuntimePhase, AutoFollowSkipReason, AutoFollowState, ConversationComposerState,
+    AutoFollowSkipReason, AutoFollowSnapshotPresentation, ConversationComposerState,
     ConversationInputState, ConversationState, ConversationViewModel, ProgressiveActivityCard,
     ProgressiveActivityCardKind, ProgressiveActivityDetailKind, ProgressiveActivityExpandState,
-    StopKeywordRule, TranscriptHandoffCorrelation, filter_cards_by_kind,
+    TranscriptHandoffCorrelation, filter_cards_by_kind, normalize_max_auto_turns_candidate,
 };
 use conversation_runtime::{
-    ConversationRuntimeEffect, ConversationRuntimeEvent, reduce_conversation_runtime,
+    ConversationRuntimeEffect, ConversationRuntimeEvent,
+    reduce_conversation_runtime_with_transition,
 };
 use directions_maintenance_ui::{
     DetailDocConfirmChoice, DirectionsMaintenanceOverlayStep, DirectionsMaintenanceOverlayUiState,
@@ -258,14 +255,15 @@ use view_selection_overlay_ui::{
 
 // Auto-follow submission carries more than a generated prompt: it records the
 // turn that produced the handoff, the transcript line shown to the operator, any
-// debug detail, and the planning task identity needed by parallel-mode leasing.
+// debug detail. Planning handoff authority stays in Core and is read from the
+// exact post-turn snapshot when parallel-mode leasing needs it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AutoFollowSubmitContext {
+    source: crate::core::app::PostTurnEvaluationCorrelation,
     completed_turn_id: String,
     mode_label: String,
     transcript_text: String,
     debug_detail: Option<String>,
-    handoff_task: Option<PlanningTaskHandoff>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -413,7 +411,6 @@ struct NativeTuiPlanningState {
     planning_workspace_operation_ui_state: PlanningWorkspaceOperationUiState,
     planning_draft_editor_ui_state: PlanningDraftEditorUiState,
     planning_worker_panel_state: CorePlanningWorkerPanelProjection,
-    post_turn_continuation_gate: PostTurnContinuationGate,
     planning_worker_visibility: PlanningWorkerVisibility,
 }
 

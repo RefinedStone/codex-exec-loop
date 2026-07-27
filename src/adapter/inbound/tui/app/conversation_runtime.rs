@@ -11,7 +11,8 @@
  */
 use super::PromptOrigin;
 use super::conversation_model::{
-    ActivityRailTerminalState, AutoFollowSkipReason, ConversationViewModel, PlanningRepairState,
+    ActivityRailTerminalState, AutoFollowSkipReason, AutoFollowSnapshotPresentation,
+    ConversationViewModel, PlanningRepairState,
 };
 use crate::adapter::inbound::tui::conversation_text::{
     approval_review_manual_client_action_notice, attachment_runtime_notice,
@@ -21,6 +22,8 @@ use crate::application::service::planning::{
 };
 use crate::core::app::{TurnStreamProgressiveActivityUpdate, TurnStreamSnapshot, TurnStreamUpdate};
 use crate::diagnostics::event_log;
+#[cfg(test)]
+use crate::domain::conversation::ConversationApprovalRequestIdentity;
 use crate::domain::conversation::{
     ConversationApprovalDecision, ConversationApprovalResolution, ConversationMessage,
     ConversationMessageKind,
@@ -52,15 +55,15 @@ pub(super) enum ConversationRuntimeEvent {
     },
     StreamSnapshotApplied(Box<TurnStreamSnapshot>),
     ApprovalDecisionSubmitted {
-        approval_id: String,
         decision: ConversationApprovalDecision,
     },
     ApprovalDecisionSubmissionFailed {
-        approval_id: String,
         error: String,
     },
     PostTurnEvaluationCompleted {
+        correlation: crate::core::app::PostTurnEvaluationCorrelation,
         evaluation: Box<PostTurnEvaluationOutcome>,
+        route_resolution: crate::core::app::PostTurnRouteResolution,
     },
 }
 
@@ -107,11 +110,11 @@ pub(super) enum ConversationRuntimeEffect {
         execution_snapshot_capture: Option<PlanningTurnExecutionSnapshotCapture>,
     },
     QueueAutoPrompt {
+        source: crate::core::app::PostTurnEvaluationCorrelation,
         prompt: String,
         completed_turn_id: String,
         mode_label: String,
         transcript_text: String,
-        handoff_task: Option<PlanningTaskHandoff>,
     },
     ShowApprovalOverlay,
     CloseApprovalOverlay,
@@ -216,9 +219,10 @@ pub(super) struct ConversationRuntimeReduction {
     // effect re-enters with PromptSubmissionAdmitted only after core accepts it.
     pub effects: Vec<ConversationRuntimeEffect>,
 }
-pub(super) fn reduce_conversation_runtime(
+pub(super) fn reduce_conversation_runtime_with_transition(
     mut state: ConversationViewModel,
     event: ConversationRuntimeEvent,
+    previous_runtime: &crate::core::app::ConversationRuntimeSnapshot,
 ) -> ConversationRuntimeReduction {
     /*
      * Runtime facts mutate local state before returning effects. Submission
@@ -239,23 +243,14 @@ pub(super) fn reduce_conversation_runtime(
              * stream starts so the next post-turn policy can detect repetition.
              */
             let prompt = prompt.trim().to_string();
-            let auto_follow_blocked = matches!(origin, PromptOrigin::AutoFollow(_))
-                && !state.auto_follow_state.can_queue_next();
-            if prompt.is_empty() || !state.can_accept_runtime_prompt() || auto_follow_blocked {
-                // Empty prompts and prompts sent while the runtime is not ready
-                // or while auto-follow is disarmed are ignored rather than turned
-                // into provider calls. This is the final defense for delayed
-                // QueueAutoPrompt effects after `:turns off` or `:stop`.
+            if prompt.is_empty() {
+                // Empty input is a presentation-level no-op. Every non-empty
+                // manual or automatic intent must reach Core admission so this
+                // reducer cannot become a second runtime policy gate.
                 event_log::emit_lazy("prompt_submission_ignored", || {
                     json!({
                         "origin": prompt_origin_label(&origin),
-                        "reason": if prompt.is_empty() {
-                            "empty_prompt"
-                        } else if auto_follow_blocked {
-                            "auto_follow_disarmed"
-                        } else {
-                            "runtime_prompt_not_acceptable"
-                        },
+                        "reason": "empty_prompt",
                         "status_text": state.status_text,
                         "input_ready": state.can_accept_runtime_prompt(),
                         "manual_input_ready": state.can_accept_manual_prompt(),
@@ -263,26 +258,19 @@ pub(super) fn reduce_conversation_runtime(
                 });
                 return ConversationRuntimeReduction { state, effects };
             }
-            if matches!(origin, PromptOrigin::Manual | PromptOrigin::ManualIntake(_))
-                && !state.can_accept_manual_prompt()
-            {
-                // Manual prompts are stricter than internal auto-follow prompts:
-                // startup gates and input state can block the operator even when
-                // an internally queued follow-up is allowed to continue.
-                event_log::emit_lazy("prompt_submission_ignored", || {
-                    json!({
-                        "origin": "Manual",
-                        "reason": "manual_prompt_not_acceptable",
-                        "status_text": state.status_text,
-                        "input_ready": state.can_accept_runtime_prompt(),
-                        "manual_input_ready": state.can_accept_manual_prompt(),
-                    })
-                });
-                return ConversationRuntimeReduction { state, effects };
-            }
+            let (workspace_directory, thread_id) = match &origin {
+                PromptOrigin::AutoFollow(context) => (
+                    context.source.turn_workspace_directory.clone(),
+                    Some(context.source.thread_id.clone()),
+                ),
+                PromptOrigin::Manual | PromptOrigin::ManualIntake(_) => (
+                    state.planning_workspace_directory().to_string(),
+                    state.has_active_thread().then(|| state.thread_id.clone()),
+                ),
+            };
             effects.push(ConversationRuntimeEffect::RequestTurnSubmission {
-                workspace_directory: state.planning_workspace_directory().to_string(),
-                thread_id: state.has_active_thread().then(|| state.thread_id.clone()),
+                workspace_directory,
+                thread_id,
                 prompt,
                 transcript_text,
                 prompt_origin: origin,
@@ -299,35 +287,28 @@ pub(super) fn reduce_conversation_runtime(
                     // repair prompts, skip reasons, and handoff identity should
                     // not leak into this turn.
                     state.planning_repair_state = None;
-                    state.auto_follow_state.reset_for_manual_turn();
                     state.clear_auto_follow_skip();
-                    state.clear_last_planning_task_handoff();
                     state.latest_queue_mutation_receipt = None;
                 }
-                PromptOrigin::ManualIntake(context) => {
+                PromptOrigin::ManualIntake(_) => {
                     state.planning_repair_state = None;
-                    state.auto_follow_state.reset_for_manual_turn();
                     state.clear_auto_follow_skip();
-                    state.record_manual_intake_handoff(context.handoff_task.as_ref());
                     state.latest_queue_mutation_receipt = None;
                 }
                 PromptOrigin::AutoFollow(context) => {
                     // Record the completed turn that queued this prompt before the provider stream starts.
                     // If this queued prompt loops back without progress, the
                     // next post-turn evaluation can stop it deterministically.
-                    state.record_auto_follow_submission(
-                        &context.completed_turn_id,
-                        context.handoff_task.as_ref(),
-                    );
+                    state.record_auto_follow_submission(&context.completed_turn_id);
                 }
             }
             let auto_follow_progress = format!(
                 "{}/{}",
                 state
-                    .auto_follow_state
+                    .auto_follow_state()
                     .active_turn_index()
-                    .unwrap_or_else(|| state.auto_follow_state.next_auto_turn_index()),
-                state.auto_follow_state.max_auto_turns_label()
+                    .unwrap_or_else(|| state.auto_follow_state().next_auto_turn_index()),
+                state.auto_follow_state().max_auto_turns_label()
             );
             let transcript_message = match &origin {
                 PromptOrigin::AutoFollow(context) => {
@@ -369,6 +350,7 @@ pub(super) fn reduce_conversation_runtime(
         ConversationRuntimeEvent::StreamSnapshotApplied(snapshot) => {
             let applied = take_stream_snapshot_update(&mut state, snapshot);
             let progressive_activity = applied.progressive_activity;
+            let stream_workspace_directory = applied.workspace_directory;
             match applied.update {
                 TurnStreamUpdate::AttachmentObserved { profile } => {
                     // Attachment information is a runtime notice, not a transcript
@@ -400,6 +382,7 @@ pub(super) fn reduce_conversation_runtime(
                     // start.
                     state.record_turn_started(turn_id);
                 }
+                TurnStreamUpdate::TurnStartedIgnored { .. } => {}
                 TurnStreamUpdate::RuntimeEnvelopeObserved {
                     observation,
                     rejection,
@@ -535,23 +518,28 @@ pub(super) fn reduce_conversation_runtime(
                 TurnStreamUpdate::ApprovalRequested { request } => {
                     state.status_text =
                         "approval required / Y to accept / N or Esc to decline".to_string();
-                    state.set_pending_approval_request(request);
-                    effects.push(ConversationRuntimeEffect::ShowApprovalOverlay);
+                    if state
+                        .pending_approval_request()
+                        .is_some_and(|current| current.identity() == request.identity())
+                    {
+                        state.approval_detail_scroll_offset = 0;
+                        effects.push(ConversationRuntimeEffect::ShowApprovalOverlay);
+                    }
                 }
                 TurnStreamUpdate::ApprovalResolved {
-                    approval_id,
+                    request_identity,
                     resolution,
                 } => {
                     let resolves_current_request = state
-                        .pending_approval_request
-                        .as_ref()
-                        .is_some_and(|request| request.approval_id == approval_id);
-                    if resolves_current_request {
-                        state.clear_pending_approval_request(&approval_id);
+                        .pending_approval_request()
+                        .is_some_and(|request| request.identity() == request_identity);
+                    if !resolves_current_request && state.pending_approval_request().is_none() {
                         state.status_text = approval_resolution_status(resolution).to_string();
+                        state.approval_detail_scroll_offset = 0;
                         effects.push(ConversationRuntimeEffect::CloseApprovalOverlay);
                     }
                 }
+                TurnStreamUpdate::ApprovalResolutionIgnored { .. } => {}
                 TurnStreamUpdate::TurnInterruptRequestFailed { message } => {
                     state.status_text = message;
                 }
@@ -584,10 +572,12 @@ pub(super) fn reduce_conversation_runtime(
                     // whether to auto-follow. That policy needs fresh planning state,
                     // so it is emitted as an effect after the model enters evaluating
                     // state.
-                    let approval_was_pending = state.pending_approval_request.is_some();
+                    let approval_was_pending = previous_runtime.approval.is_some();
                     queue_post_turn_evaluation(
                         &mut state,
                         &mut effects,
+                        previous_runtime,
+                        stream_workspace_directory,
                         turn_id,
                         changed_planning_file_paths,
                         execution_snapshot_capture,
@@ -601,9 +591,10 @@ pub(super) fn reduce_conversation_runtime(
                     status_text,
                     ..
                 } => {
-                    let approval_was_pending = state.pending_approval_request.is_some();
+                    let approval_was_pending = previous_runtime.approval.is_some();
                     let terminal_state = ActivityRailTerminalState::from_receipt(&receipt);
                     state.fail_turn_with_terminal_state(
+                        Some(receipt.turn_id.as_str()),
                         receipt.status_error_summary(),
                         terminal_state,
                     );
@@ -624,8 +615,14 @@ pub(super) fn reduce_conversation_runtime(
                 } => {
                     // Failure ends the active turn locally. No post-turn evaluation
                     // is scheduled because planning side effects may be incomplete.
-                    let approval_was_pending = state.pending_approval_request.is_some();
-                    state.fail_turn(message);
+                    let approval_was_pending = previous_runtime.approval.is_some();
+                    state.fail_turn(
+                        previous_runtime
+                            .active_turn
+                            .as_ref()
+                            .and_then(|turn| turn.turn_id.as_deref()),
+                        message,
+                    );
                     if approval_was_pending {
                         effects.push(ConversationRuntimeEffect::CloseApprovalOverlay);
                     }
@@ -643,24 +640,25 @@ pub(super) fn reduce_conversation_runtime(
                 }
             }
         }
-        ConversationRuntimeEvent::ApprovalDecisionSubmitted {
-            approval_id,
-            decision,
-        } => {
-            if state.mark_approval_decision_submitted(&approval_id, decision) {
+        ConversationRuntimeEvent::ApprovalDecisionSubmitted { decision } => {
+            if state.pending_approval_decision() == Some(decision) {
                 state.status_text = format!(
                     "approval decision submitted: {} / waiting for runtime resolution",
                     approval_decision_label(decision)
                 );
             }
         }
-        ConversationRuntimeEvent::ApprovalDecisionSubmissionFailed { approval_id, error } => {
-            if state.clear_pending_approval_resolution(&approval_id) {
+        ConversationRuntimeEvent::ApprovalDecisionSubmissionFailed { error } => {
+            if state.pending_approval_decision().is_none() {
                 state.status_text =
                     format!("approval decision failed: {error} / retry accept or decline");
             }
         }
-        ConversationRuntimeEvent::PostTurnEvaluationCompleted { evaluation } => {
+        ConversationRuntimeEvent::PostTurnEvaluationCompleted {
+            correlation,
+            evaluation,
+            route_resolution,
+        } => {
             let PostTurnEvaluationOutcome {
                 provenance,
                 planning_repair_state,
@@ -674,21 +672,18 @@ pub(super) fn reduce_conversation_runtime(
             state.record_queue_mutation_receipt(provenance.queue_mutation_receipt.clone());
             match action {
                 PostTurnContinuationAction::QueueAutoPrompt(queued_prompt) => {
-                    let parallel_dispatch_queued = matches!(
-                        provenance.parallel_queue_signal,
-                        Some(ParallelModePostTurnQueueSignal::AutoFollowQueued)
-                    );
-                    let parallel_dispatch_allowed = parallel_dispatch_queued
-                        && state
-                            .auto_follow_state
-                            .parallel_post_turn_continuation_allowed();
-                    if !state.auto_follow_state.can_queue_next() && !parallel_dispatch_allowed {
-                        let reason = if state.auto_follow_state.post_turn_continuation_paused() {
-                            AutoFollowSkipReason::PostTurnContinuationPaused
-                        } else {
-                            AutoFollowSkipReason::LimitReached
-                        };
-                        apply_auto_follow_skip(&mut state, &mut effects, reason, operator_alerts);
+                    if route_resolution != crate::core::app::PostTurnRouteResolution::AutoSubmit {
+                        if route_resolution
+                            == crate::core::app::PostTurnRouteResolution::ParallelConsumed
+                        {
+                            state.record_auto_follow_parallel_dispatch();
+                        }
+                        for alert in operator_alerts {
+                            state.extend_runtime_notices([alert.runtime_notice()]);
+                            state.append_status_message(alert.transcript_banner());
+                            effects
+                                .push(ConversationRuntimeEffect::DispatchOperatorAlert { alert });
+                        }
                         return ConversationRuntimeReduction { state, effects };
                     }
                     // Queueing records the pending loop in visible history before
@@ -700,18 +695,17 @@ pub(super) fn reduce_conversation_runtime(
                         transcript_text,
                     } = *queued_prompt;
                     let completed_turn_id = provenance.completed_turn_id;
-                    let handoff_task = provenance.handoff_task;
                     state.clear_auto_follow_skip();
                     state.record_auto_follow_queue(&completed_turn_id);
                     state.status_text =
                         format!("turn completed / queued auto-follow with mode {mode_label}");
                     state.append_status_message(state.status_text.clone());
                     effects.push(ConversationRuntimeEffect::QueueAutoPrompt {
+                        source: correlation,
                         prompt,
                         completed_turn_id,
                         mode_label,
                         transcript_text,
-                        handoff_task,
                     });
                 }
                 PostTurnContinuationAction::SkipAutoFollow { mut reason } => {
@@ -719,8 +713,8 @@ pub(super) fn reduce_conversation_runtime(
                     // the automatic loop stopped and often require operator
                     // action before the next manual prompt.
                     if reason == AutoFollowSkipReason::PostTurnContinuationPaused
-                        && !state.auto_follow_state.post_turn_continuation_paused()
-                        && !state.auto_follow_state.is_enabled()
+                        && !state.auto_follow_state().continuation_paused
+                        && !state.auto_follow_state().is_enabled()
                     {
                         // Application execution receives `continuation_paused`
                         // for both secure-default off and sticky operator stop so
@@ -737,8 +731,168 @@ pub(super) fn reduce_conversation_runtime(
     ConversationRuntimeReduction { state, effects }
 }
 
+#[cfg(test)]
+pub(super) fn reduce_conversation_runtime(
+    mut state: ConversationViewModel,
+    event: ConversationRuntimeEvent,
+) -> ConversationRuntimeReduction {
+    let previous_runtime = state.runtime_snapshot().clone();
+    let mut current_runtime = previous_runtime.clone();
+    match &event {
+        ConversationRuntimeEvent::SubmitPrompt { .. } => {}
+        ConversationRuntimeEvent::PromptSubmissionAdmitted { origin, .. } => {
+            let (workspace_directory, prompt_origin) = match origin {
+                PromptOrigin::AutoFollow(context) => (
+                    context.source.turn_workspace_directory.clone(),
+                    crate::core::app::CorePromptOrigin::AutoFollow,
+                ),
+                PromptOrigin::Manual => (
+                    state.planning_workspace_directory().to_string(),
+                    crate::core::app::CorePromptOrigin::Manual,
+                ),
+                PromptOrigin::ManualIntake(_) => (
+                    state.planning_workspace_directory().to_string(),
+                    crate::core::app::CorePromptOrigin::ManualIntake,
+                ),
+            };
+            current_runtime.active_turn = Some(crate::core::app::ActiveTurnSnapshot {
+                correlation: crate::core::app::TurnSubmissionCorrelation::new(1),
+                phase: crate::core::app::ActiveTurnPhase::Submitting,
+                workspace_directory,
+                turn_id: None,
+                prompt_origin,
+                started_at: std::time::Instant::now(),
+            });
+            current_runtime.approval = None;
+            current_runtime.approval_review = None;
+            current_runtime.post_turn = crate::core::app::PostTurnAuthoritySnapshot::Idle;
+            if prompt_origin == crate::core::app::CorePromptOrigin::AutoFollow {
+                let turn_index = current_runtime
+                    .auto_follow
+                    .phase
+                    .turn_index()
+                    .unwrap_or(current_runtime.auto_follow.completed_auto_turns + 1);
+                current_runtime.auto_follow.phase = crate::core::app::AutoFollowPhase::Submitting {
+                    turn_index,
+                    started_at: std::time::Instant::now(),
+                };
+            } else {
+                current_runtime.auto_follow.completed_auto_turns = 0;
+                current_runtime.auto_follow.phase = crate::core::app::AutoFollowPhase::Idle;
+            }
+        }
+        ConversationRuntimeEvent::StreamSnapshotApplied(snapshot) => match &snapshot.update {
+            TurnStreamUpdate::TurnStarted { turn_id, .. } => {
+                let active = current_runtime.active_turn.get_or_insert_with(|| {
+                    crate::core::app::ActiveTurnSnapshot {
+                        correlation: crate::core::app::TurnSubmissionCorrelation::new(1),
+                        phase: crate::core::app::ActiveTurnPhase::Running,
+                        workspace_directory: state.planning_workspace_directory().to_string(),
+                        turn_id: None,
+                        prompt_origin: crate::core::app::CorePromptOrigin::Manual,
+                        started_at: std::time::Instant::now(),
+                    }
+                });
+                active.phase = crate::core::app::ActiveTurnPhase::Running;
+                active.turn_id = Some(turn_id.clone());
+                if active.prompt_origin == crate::core::app::CorePromptOrigin::AutoFollow {
+                    let turn_index = current_runtime
+                        .auto_follow
+                        .phase
+                        .turn_index()
+                        .unwrap_or(current_runtime.auto_follow.completed_auto_turns + 1);
+                    current_runtime.auto_follow.phase =
+                        crate::core::app::AutoFollowPhase::Running {
+                            turn_index,
+                            started_at: std::time::Instant::now(),
+                        };
+                }
+            }
+            TurnStreamUpdate::ApprovalRequested { request } => {
+                current_runtime.approval = Some(crate::core::app::ApprovalAuthoritySnapshot {
+                    request: request.clone(),
+                    decision: None,
+                    phase: crate::core::app::ApprovalAuthorityPhase::Pending,
+                });
+            }
+            TurnStreamUpdate::ApprovalResolved {
+                request_identity, ..
+            } if current_runtime
+                .approval
+                .as_ref()
+                .is_some_and(|approval| approval.request.identity() == *request_identity) =>
+            {
+                current_runtime.approval = None;
+            }
+            TurnStreamUpdate::ApprovalReviewUpdated { review } => {
+                current_runtime.approval_review = Some(review.clone());
+            }
+            TurnStreamUpdate::TurnCompleted { .. }
+            | TurnStreamUpdate::TurnTerminal { .. }
+            | TurnStreamUpdate::Failed { .. } => {
+                if current_runtime.active_turn.as_ref().is_some_and(|turn| {
+                    turn.prompt_origin == crate::core::app::CorePromptOrigin::AutoFollow
+                }) {
+                    current_runtime.auto_follow.completed_auto_turns += 1;
+                }
+                current_runtime.active_turn = None;
+                current_runtime.approval = None;
+                current_runtime.approval_review = None;
+                current_runtime.auto_follow.phase = crate::core::app::AutoFollowPhase::Idle;
+            }
+            _ => {}
+        },
+        ConversationRuntimeEvent::ApprovalDecisionSubmitted { decision } => {
+            if let Some(approval) = current_runtime.approval.as_mut() {
+                approval.decision = Some(crate::core::app::ApprovalDecisionCorrelation::new(
+                    1,
+                    current_runtime
+                        .active_turn
+                        .as_ref()
+                        .map(|turn| turn.correlation)
+                        .unwrap_or_else(|| crate::core::app::TurnSubmissionCorrelation::new(1)),
+                    approval.request.identity(),
+                    *decision,
+                ));
+                approval.phase = crate::core::app::ApprovalAuthorityPhase::Submitted;
+            }
+        }
+        ConversationRuntimeEvent::ApprovalDecisionSubmissionFailed { .. } => {
+            if let Some(approval) = current_runtime.approval.as_mut() {
+                approval.decision = None;
+                approval.phase = crate::core::app::ApprovalAuthorityPhase::Pending;
+            }
+        }
+        ConversationRuntimeEvent::PostTurnEvaluationCompleted {
+            correlation,
+            route_resolution,
+            ..
+        } => {
+            current_runtime.post_turn = crate::core::app::PostTurnAuthoritySnapshot::Settled {
+                correlation: correlation.clone(),
+                resolution: *route_resolution,
+            };
+            current_runtime.auto_follow.phase = match route_resolution {
+                crate::core::app::PostTurnRouteResolution::AutoSubmit => {
+                    crate::core::app::AutoFollowPhase::Queued {
+                        turn_index: current_runtime.auto_follow.completed_auto_turns + 1,
+                        started_at: std::time::Instant::now(),
+                    }
+                }
+                crate::core::app::PostTurnRouteResolution::ParallelConsumed
+                | crate::core::app::PostTurnRouteResolution::NoContinuation => {
+                    crate::core::app::AutoFollowPhase::Idle
+                }
+            };
+        }
+    }
+    state.apply_runtime_snapshot(current_runtime);
+    reduce_conversation_runtime_with_transition(state, event, &previous_runtime)
+}
+
 struct AppliedStreamSnapshot {
     update: TurnStreamUpdate,
+    workspace_directory: Option<String>,
     progressive_activity: std::sync::Arc<
         crate::domain::conversation_progressive_activity::ConversationProgressiveActivityProjectionSnapshot,
     >,
@@ -752,6 +906,7 @@ fn take_stream_snapshot_update(
     state.runtime_envelope = snapshot.runtime_envelope.map(|envelope| *envelope);
     AppliedStreamSnapshot {
         update: snapshot.update,
+        workspace_directory: snapshot.cwd,
         progressive_activity: snapshot.progressive_activity,
     }
 }
@@ -830,7 +985,7 @@ fn apply_auto_follow_skip(
     operator_alerts: Vec<OperatorAlert>,
 ) {
     state.record_auto_follow_skip(reason);
-    state.status_text = reason.runtime_status(&state.auto_follow_state);
+    state.status_text = reason.runtime_status(state.auto_follow_state());
     state.append_status_message(state.status_text.clone());
     for alert in operator_alerts {
         state.extend_runtime_notices([alert.runtime_notice()]);
@@ -863,20 +1018,6 @@ fn approval_decision_label(decision: ConversationApprovalDecision) -> &'static s
     }
 }
 
-pub(super) fn conversation_runtime_auto_prompt_queued(
-    effects: &[ConversationRuntimeEffect],
-) -> bool {
-    effects
-        .iter()
-        .any(|effect| matches!(effect, ConversationRuntimeEffect::QueueAutoPrompt { .. }))
-}
-
-pub(super) fn suppress_conversation_runtime_auto_prompt(
-    effects: &mut Vec<ConversationRuntimeEffect>,
-) {
-    effects.retain(|effect| !matches!(effect, ConversationRuntimeEffect::QueueAutoPrompt { .. }));
-}
-
 fn prompt_origin_label(origin: &PromptOrigin) -> &'static str {
     match origin {
         PromptOrigin::Manual => "manual",
@@ -888,12 +1029,26 @@ fn prompt_origin_label(origin: &PromptOrigin) -> &'static str {
 fn queue_post_turn_evaluation(
     state: &mut ConversationViewModel,
     effects: &mut Vec<ConversationRuntimeEffect>,
+    previous_runtime: &crate::core::app::ConversationRuntimeSnapshot,
+    stream_workspace_directory: Option<String>,
     turn_id: String,
     changed_planning_file_paths: Vec<String>,
     execution_snapshot_capture: Option<PlanningTurnExecutionSnapshotCapture>,
 ) {
     let changed_planning_file_count = changed_planning_file_paths.len();
-    let workspace_directory = state.finish_turn(&turn_id, &changed_planning_file_paths);
+    state.finish_turn(&turn_id, &changed_planning_file_paths);
+    let workspace_directory = previous_runtime
+        .active_turn
+        .as_ref()
+        .map(|turn| turn.workspace_directory.clone())
+        .filter(|workspace| !workspace.trim().is_empty())
+        .or_else(|| stream_workspace_directory.filter(|workspace| !workspace.trim().is_empty()))
+        .or_else(|| {
+            execution_snapshot_capture
+                .as_ref()
+                .map(|capture| capture.workspace_directory.clone())
+        })
+        .unwrap_or_else(|| state.planning_workspace_directory().to_string());
     state.begin_post_turn_settlement(&turn_id);
     event_log::emit_lazy("post_turn_evaluation_queued", || {
         json!({
@@ -1140,11 +1295,11 @@ mod tests {
 
     fn auto_follow_origin() -> PromptOrigin {
         PromptOrigin::AutoFollow(Box::new(AutoFollowSubmitContext {
+            source: post_turn_correlation("turn-root"),
             completed_turn_id: "turn-root".to_string(),
             mode_label: "planning queue".to_string(),
             transcript_text: "continue queue".to_string(),
             debug_detail: None,
-            handoff_task: None,
         }))
     }
 
@@ -1154,6 +1309,54 @@ mod tests {
             handoff_task: None,
             parallel_mode_enabled_at_submission: true,
         }))
+    }
+
+    fn post_turn_correlation(
+        completed_turn_id: &str,
+    ) -> crate::core::app::PostTurnEvaluationCorrelation {
+        crate::core::app::PostTurnEvaluationCorrelation::new(
+            1,
+            "thread-1",
+            completed_turn_id,
+            "/tmp/workspace",
+            "/tmp/workspace",
+        )
+    }
+
+    fn install_active_turn(
+        state: &mut ConversationViewModel,
+        phase: crate::core::app::ActiveTurnPhase,
+        turn_id: Option<&str>,
+        workspace_directory: &str,
+    ) {
+        let mut snapshot = state.runtime_snapshot().clone();
+        snapshot.active_turn = Some(crate::core::app::ActiveTurnSnapshot {
+            correlation: crate::core::app::TurnSubmissionCorrelation::new(1),
+            phase,
+            workspace_directory: workspace_directory.to_string(),
+            turn_id: turn_id.map(str::to_string),
+            prompt_origin: crate::core::app::CorePromptOrigin::Manual,
+            started_at: std::time::Instant::now(),
+        });
+        state.apply_runtime_snapshot(snapshot);
+    }
+
+    fn update_auto_follow(
+        state: &mut ConversationViewModel,
+        update: impl FnOnce(&mut crate::core::app::AutoFollowAuthoritySnapshot),
+    ) {
+        let mut snapshot = state.runtime_snapshot().clone();
+        update(&mut snapshot.auto_follow);
+        state.apply_runtime_snapshot(snapshot);
+    }
+
+    fn install_post_turn_evaluation(state: &mut ConversationViewModel, completed_turn_id: &str) {
+        let mut snapshot = state.runtime_snapshot().clone();
+        snapshot.post_turn = crate::core::app::PostTurnAuthoritySnapshot::Evaluating {
+            correlation: post_turn_correlation(completed_turn_id),
+            started_at: std::time::Instant::now(),
+        };
+        state.apply_runtime_snapshot(snapshot);
     }
 
     fn admit_prompt(
@@ -1212,7 +1415,12 @@ mod tests {
         assert!(empty_prompt.state.messages.is_empty());
 
         let mut submitting_state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
-        submitting_state.mark_turn_submitting("/tmp/workspace".to_string());
+        install_active_turn(
+            &mut submitting_state,
+            crate::core::app::ActiveTurnPhase::Submitting,
+            None,
+            "/tmp/workspace",
+        );
         let blocked_runtime_prompt = with_akra_event_trace(|| {
             reduce_conversation_runtime(
                 submitting_state,
@@ -1223,11 +1431,25 @@ mod tests {
                 },
             )
         });
-        assert!(blocked_runtime_prompt.effects.is_empty());
+        assert!(matches!(
+            blocked_runtime_prompt.effects.as_slice(),
+            [ConversationRuntimeEffect::RequestTurnSubmission {
+                workspace_directory,
+                thread_id: Some(thread_id),
+                ..
+            }] if workspace_directory == "/tmp/workspace" && thread_id == "thread-1"
+        ));
         assert!(blocked_runtime_prompt.state.messages.is_empty());
 
         let mut manual_blocked_state =
             ConversationViewModel::new_draft("/tmp/workspace".to_string());
+        update_auto_follow(&mut manual_blocked_state, |auto_follow| {
+            auto_follow.max_auto_turns = 1;
+            auto_follow.phase = crate::core::app::AutoFollowPhase::Queued {
+                turn_index: 1,
+                started_at: std::time::Instant::now(),
+            };
+        });
         manual_blocked_state.record_auto_follow_queue("turn-root");
         let blocked_manual_prompt = with_akra_event_trace(|| {
             reduce_conversation_runtime(
@@ -1239,14 +1461,26 @@ mod tests {
                 },
             )
         });
-        assert!(blocked_manual_prompt.effects.is_empty());
+        assert!(matches!(
+            blocked_manual_prompt.effects.as_slice(),
+            [ConversationRuntimeEffect::RequestTurnSubmission {
+                workspace_directory,
+                thread_id: None,
+                ..
+            }] if workspace_directory == "/tmp/workspace"
+        ));
         assert!(blocked_manual_prompt.state.messages.is_empty());
     }
 
     #[test]
     fn turn_started_reducer_does_not_schedule_interrupt_control() {
         let mut state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
-        state.mark_turn_submitting("/tmp/workspace".to_string());
+        install_active_turn(
+            &mut state,
+            crate::core::app::ActiveTurnPhase::Submitting,
+            None,
+            "/tmp/workspace",
+        );
 
         let reduction = reduce_conversation_runtime(
             state,
@@ -1256,15 +1490,13 @@ mod tests {
             }),
         );
 
-        assert_eq!(
-            reduction.state.active_turn_id.as_deref(),
-            Some("turn-after-stop")
-        );
+        assert_eq!(reduction.state.active_turn_id(), Some("turn-after-stop"));
         assert!(reduction.effects.is_empty());
     }
 
     #[test]
     fn approval_request_decision_and_resolution_drive_modal_effects() {
+        let mut stream_state = TurnStreamTestHarness::new();
         let request = ConversationApprovalRequest {
             approval_id: "approval-7".to_string(),
             server_request_id: "server-7".to_string(),
@@ -1273,13 +1505,18 @@ mod tests {
             summary: "Command execution requested.".to_string(),
             details: vec!["Command: cargo test".to_string()],
         };
+        let request_identity = request.identity();
         let requested = reduce_conversation_runtime(
             ConversationViewModel::new_draft("/tmp/workspace".to_string()),
-            stream_snapshot_event(ConversationStreamEvent::ApprovalRequested {
-                request: request.clone(),
-            }),
+            ConversationRuntimeEvent::StreamSnapshotApplied(Box::new(
+                stream_state.apply_stream_event(core_turn_stream_event_from_application(
+                    ConversationStreamEvent::ApprovalRequested {
+                        request: request.clone(),
+                    },
+                )),
+            )),
         );
-        assert_eq!(requested.state.pending_approval_request, Some(request));
+        assert_eq!(requested.state.pending_approval_request(), Some(&request));
         assert_eq!(
             requested.state.status_text,
             "approval required / Y to accept / N or Esc to decline"
@@ -1292,12 +1529,19 @@ mod tests {
 
         let stale_resolution = reduce_conversation_runtime(
             requested.state,
-            stream_snapshot_event(ConversationStreamEvent::ApprovalResolved {
-                approval_id: "approval-stale".to_string(),
-                resolution: ConversationApprovalResolution::Declined,
-            }),
+            ConversationRuntimeEvent::StreamSnapshotApplied(Box::new(
+                stream_state.apply_stream_event(core_turn_stream_event_from_application(
+                    ConversationStreamEvent::ApprovalResolved {
+                        request_identity: ConversationApprovalRequestIdentity {
+                            approval_id: "approval-7".to_string(),
+                            server_request_id: "server-stale".to_string(),
+                        },
+                        resolution: ConversationApprovalResolution::Declined,
+                    },
+                )),
+            )),
         );
-        assert!(stale_resolution.state.pending_approval_request.is_some());
+        assert!(stale_resolution.state.pending_approval_request().is_some());
         assert!(
             !stale_resolution
                 .effects
@@ -1307,12 +1551,11 @@ mod tests {
         let submitted = reduce_conversation_runtime(
             stale_resolution.state,
             ConversationRuntimeEvent::ApprovalDecisionSubmitted {
-                approval_id: "approval-7".to_string(),
                 decision: ConversationApprovalDecision::Accept,
             },
         );
         assert!(submitted.effects.is_empty());
-        assert!(submitted.state.pending_approval_request.is_some());
+        assert!(submitted.state.pending_approval_request().is_some());
         assert_eq!(
             submitted.state.pending_approval_decision(),
             Some(ConversationApprovalDecision::Accept)
@@ -1322,28 +1565,18 @@ mod tests {
             "approval decision submitted: accept / waiting for runtime resolution"
         );
 
-        let rapid_decline = reduce_conversation_runtime(
-            submitted.state,
-            ConversationRuntimeEvent::ApprovalDecisionSubmitted {
-                approval_id: "approval-7".to_string(),
-                decision: ConversationApprovalDecision::Decline,
-            },
-        );
-        assert!(rapid_decline.effects.is_empty());
-        assert_eq!(
-            rapid_decline.state.pending_approval_decision(),
-            Some(ConversationApprovalDecision::Accept)
-        );
-        assert!(rapid_decline.state.pending_approval_request.is_some());
-
         let resolved = reduce_conversation_runtime(
-            rapid_decline.state,
-            stream_snapshot_event(ConversationStreamEvent::ApprovalResolved {
-                approval_id: "approval-7".to_string(),
-                resolution: ConversationApprovalResolution::Accepted,
-            }),
+            submitted.state,
+            ConversationRuntimeEvent::StreamSnapshotApplied(Box::new(
+                stream_state.apply_stream_event(core_turn_stream_event_from_application(
+                    ConversationStreamEvent::ApprovalResolved {
+                        request_identity,
+                        resolution: ConversationApprovalResolution::Accepted,
+                    },
+                )),
+            )),
         );
-        assert!(resolved.state.pending_approval_request.is_none());
+        assert!(resolved.state.pending_approval_request().is_none());
         assert_eq!(resolved.state.pending_approval_decision(), None);
         assert!(
             resolved
@@ -1373,7 +1606,6 @@ mod tests {
         let submitted = reduce_conversation_runtime(
             requested.state,
             ConversationRuntimeEvent::ApprovalDecisionSubmitted {
-                approval_id: "approval-retry".to_string(),
                 decision: ConversationApprovalDecision::Accept,
             },
         );
@@ -1381,11 +1613,10 @@ mod tests {
         let failed = reduce_conversation_runtime(
             submitted.state,
             ConversationRuntimeEvent::ApprovalDecisionSubmissionFailed {
-                approval_id: "approval-retry".to_string(),
                 error: "runtime unavailable".to_string(),
             },
         );
-        assert!(failed.state.pending_approval_request.is_some());
+        assert!(failed.state.pending_approval_request().is_some());
         assert_eq!(failed.state.pending_approval_decision(), None);
         assert_eq!(
             failed.state.status_text,
@@ -1395,7 +1626,6 @@ mod tests {
         let retried = reduce_conversation_runtime(
             failed.state,
             ConversationRuntimeEvent::ApprovalDecisionSubmitted {
-                approval_id: "approval-retry".to_string(),
                 decision: ConversationApprovalDecision::Decline,
             },
         );
@@ -1405,7 +1635,12 @@ mod tests {
     #[test]
     fn terminal_interrupt_failure_is_presented_without_tui_admission_state() {
         let mut state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
-        state.mark_turn_submitting("/tmp/workspace".to_string());
+        install_active_turn(
+            &mut state,
+            crate::core::app::ActiveTurnPhase::Submitting,
+            None,
+            "/tmp/workspace",
+        );
 
         let reduction = reduce_conversation_runtime(
             state,
@@ -1514,7 +1749,7 @@ mod tests {
         assert_eq!(
             reduction
                 .state
-                .approval_review
+                .approval_review()
                 .as_ref()
                 .map(|review| review.target_item_id.as_str()),
             Some("tool-1")
@@ -1584,7 +1819,12 @@ mod tests {
             "Runtime thread".to_string(),
             "/tmp/workspace".to_string(),
         );
-        state.mark_turn_submitting("/tmp/workspace".to_string());
+        install_active_turn(
+            &mut state,
+            crate::core::app::ActiveTurnPhase::Submitting,
+            None,
+            "/tmp/workspace",
+        );
         state.record_turn_started("turn-1".to_string());
 
         let started =
@@ -1646,10 +1886,16 @@ mod tests {
         );
         assert!(!format!("{:?}", failed.state.activity_rail_terminal_state).contains(secret));
 
-        let mut retrying = failed.state;
-        retrying.mark_turn_submitting("/tmp/workspace".to_string());
+        let mut retrying = reduce_conversation_runtime(
+            failed.state,
+            ConversationRuntimeEvent::PromptSubmissionAdmitted {
+                transcript_text: "retry".to_string(),
+                origin: PromptOrigin::Manual,
+            },
+        )
+        .state;
         assert_eq!(retrying.activity_rail_terminal_state, None);
-        retrying.fail_turn("retry failed".to_string());
+        retrying.fail_turn(None, "retry failed".to_string());
         retrying.record_turn_started("turn-2".to_string());
         assert_eq!(retrying.activity_rail_terminal_state, None);
     }
@@ -1832,21 +2078,24 @@ mod tests {
     fn auto_follow_turn_completion_advances_done_progress() {
         let mut state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
         state.thread_id = "thread-1".to_string();
-        state.auto_follow_state.set_max_auto_turns(20);
+        update_auto_follow(&mut state, |auto_follow| {
+            auto_follow.max_auto_turns = 20;
+            auto_follow.completed_auto_turns = 0;
+        });
 
         let reduction = admit_prompt(
             state,
             "continue queue",
             "continue queue",
             PromptOrigin::AutoFollow(Box::new(AutoFollowSubmitContext {
+                source: post_turn_correlation("turn-root"),
                 completed_turn_id: "turn-root".to_string(),
                 mode_label: "planning queue".to_string(),
                 transcript_text: "continue queue".to_string(),
                 debug_detail: None,
-                handoff_task: None,
             })),
         );
-        assert_eq!(reduction.state.auto_follow_state.progress_label(), "0/20");
+        assert_eq!(reduction.state.auto_follow_state().progress_label(), "0/20");
 
         let reduction = reduce_conversation_runtime(
             reduction.state,
@@ -1856,21 +2105,22 @@ mod tests {
             }),
         );
         assert!(
-            reduction.state.auto_follow_state.has_live_activity(),
+            reduction.state.auto_follow_state().has_live_activity(),
             "auto turn should be live after provider start"
         );
 
-        let reduction = reduce_conversation_runtime(
+        let mut reduction = reduce_conversation_runtime(
             reduction.state,
             stream_snapshot_event(completed_stream_event("thread-1", "turn-auto-1")),
         );
+        install_post_turn_evaluation(&mut reduction.state, "turn-auto-1");
 
-        assert_eq!(reduction.state.auto_follow_state.progress_label(), "1/20");
+        assert_eq!(reduction.state.auto_follow_state().progress_label(), "1/20");
         assert!(
             reduction.state.has_post_turn_settlement_in_flight(),
             "completed auto turn must keep the settlement gate until evaluation settles"
         );
-        assert!(!reduction.state.auto_follow_state.has_live_activity());
+        assert!(!reduction.state.auto_follow_state().has_live_activity());
         assert!(!reduction.state.can_accept_manual_prompt());
     }
 
@@ -1998,7 +2248,10 @@ mod tests {
     fn completed_turn_with_auto_follow_off_blocks_manual_input_until_evaluation_settles() {
         let mut state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
         state.thread_id = "thread-1".to_string();
-        state.auto_follow_state.set_max_auto_turns(3);
+        update_auto_follow(&mut state, |auto_follow| {
+            auto_follow.max_auto_turns = 3;
+            auto_follow.completed_auto_turns = 0;
+        });
         state.messages.extend([
             ConversationMessage::new(ConversationMessageKind::User, "operator task", None, None),
             ConversationMessage::new(
@@ -2013,6 +2266,7 @@ mod tests {
             state,
             stream_snapshot_event(completed_stream_event("thread-1", "turn-1")),
         );
+        install_post_turn_evaluation(&mut reduction.state, "turn-1");
 
         assert!(reduction.effects.iter().any(|effect| matches!(
             effect,
@@ -2021,16 +2275,20 @@ mod tests {
                 ..
             } if completed_turn_id == "turn-1"
         )));
-        assert!(!reduction.state.auto_follow_state.has_live_activity());
+        assert!(!reduction.state.auto_follow_state().has_live_activity());
         assert!(reduction.state.has_post_turn_settlement_in_flight());
         assert!(!reduction.state.can_accept_manual_prompt());
-        reduction.state.auto_follow_state.set_max_auto_turns(0);
-        assert!(!reduction.state.auto_follow_state.has_live_activity());
+        update_auto_follow(&mut reduction.state, |auto_follow| {
+            auto_follow.max_auto_turns = 0;
+            auto_follow.completed_auto_turns = 0;
+        });
+        assert!(!reduction.state.auto_follow_state().has_live_activity());
         assert!(!reduction.state.can_accept_manual_prompt());
 
         let reduction = reduce_conversation_runtime(
             reduction.state,
             ConversationRuntimeEvent::PostTurnEvaluationCompleted {
+                correlation: post_turn_correlation("turn-1"),
                 evaluation: Box::new(PostTurnEvaluationOutcome {
                     provenance: PostTurnEvaluationProvenance::new("turn-1".to_string()),
                     planning_repair_state: None,
@@ -2040,20 +2298,35 @@ mod tests {
                     },
                     operator_alerts: Vec::new(),
                 }),
+                route_resolution: crate::core::app::PostTurnRouteResolution::NoContinuation,
             },
         );
 
-        assert!(!reduction.state.auto_follow_state.has_live_activity());
+        assert!(!reduction.state.auto_follow_state().has_live_activity());
         assert!(reduction.state.can_accept_manual_prompt());
     }
 
     #[test]
-    fn post_turn_settlement_only_clears_for_the_correlated_turn() {
+    fn post_turn_settlement_projection_accepts_only_the_correlated_core_result() {
         let mut state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
+        let correlation = post_turn_correlation("turn-a");
+        let mut runtime = state.runtime_snapshot().clone();
+        runtime.post_turn = crate::core::app::PostTurnAuthoritySnapshot::Evaluating {
+            correlation: correlation.clone(),
+            started_at: std::time::Instant::now(),
+        };
+        state.apply_runtime_snapshot(runtime.clone());
         state.begin_post_turn_settlement("turn-a");
 
         assert!(!state.complete_post_turn_settlement("turn-b"));
         assert!(state.has_post_turn_settlement_in_flight());
+        assert!(!state.complete_post_turn_settlement("turn-a"));
+
+        runtime.post_turn = crate::core::app::PostTurnAuthoritySnapshot::Settled {
+            correlation,
+            resolution: crate::core::app::PostTurnRouteResolution::NoContinuation,
+        };
+        state.apply_runtime_snapshot(runtime);
         assert!(state.complete_post_turn_settlement("turn-a"));
         assert!(!state.has_post_turn_settlement_in_flight());
     }
@@ -2062,7 +2335,12 @@ mod tests {
     fn stream_turn_completion_carries_execution_snapshot_to_post_turn_effect() {
         let mut state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
         state.thread_id = "thread-1".to_string();
-        state.replace_active_turn_workspace_directory("/tmp/workspace".to_string());
+        install_active_turn(
+            &mut state,
+            crate::core::app::ActiveTurnPhase::Running,
+            Some("turn-1"),
+            "/tmp/workspace",
+        );
         let expected_lease = crate::domain::parallel_mode::ParallelModeSlotLeaseSnapshot::new(
             "slot-1",
             "task-1",
@@ -2119,6 +2397,7 @@ mod tests {
         let reduction = reduce_conversation_runtime(
             state,
             ConversationRuntimeEvent::PostTurnEvaluationCompleted {
+                correlation: post_turn_correlation("turn-root"),
                 evaluation: Box::new(PostTurnEvaluationOutcome {
                     provenance: PostTurnEvaluationProvenance::new("turn-root".to_string()),
                     planning_repair_state: None,
@@ -2128,6 +2407,7 @@ mod tests {
                     },
                     operator_alerts: vec![OperatorAlert::planning_queue_drained()],
                 }),
+                route_resolution: crate::core::app::PostTurnRouteResolution::NoContinuation,
             },
         );
 
@@ -2161,7 +2441,10 @@ mod tests {
     #[test]
     fn queued_auto_prompt_uses_post_turn_provenance_for_handoff() {
         let mut state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
-        state.auto_follow_state.set_max_auto_turns(3);
+        update_auto_follow(&mut state, |auto_follow| {
+            auto_follow.max_auto_turns = 3;
+            auto_follow.completed_auto_turns = 0;
+        });
         let handoff_task = PlanningTaskHandoff {
             task_id: "task-1".to_string(),
             task_title: "Implement provenance".to_string(),
@@ -2174,6 +2457,7 @@ mod tests {
         let reduction = reduce_conversation_runtime(
             state,
             ConversationRuntimeEvent::PostTurnEvaluationCompleted {
+                correlation: post_turn_correlation("turn-from-provenance"),
                 evaluation: Box::new(PostTurnEvaluationOutcome {
                     provenance: PostTurnEvaluationProvenance::new(
                         "turn-from-provenance".to_string(),
@@ -2190,12 +2474,13 @@ mod tests {
                     )),
                     operator_alerts: Vec::new(),
                 }),
+                route_resolution: crate::core::app::PostTurnRouteResolution::AutoSubmit,
             },
         );
 
-        assert!(reduction.state.auto_follow_state.has_live_activity());
+        assert!(reduction.state.auto_follow_state().has_live_activity());
         assert_eq!(
-            reduction.state.auto_follow_state.activity_label(),
+            reduction.state.auto_follow_state().activity_label(),
             "queued turn 1/3"
         );
         assert!(!reduction.state.can_accept_manual_prompt());
@@ -2205,19 +2490,16 @@ mod tests {
             .into_iter()
             .find_map(|effect| match effect {
                 ConversationRuntimeEffect::QueueAutoPrompt {
-                    completed_turn_id,
-                    handoff_task,
-                    ..
-                } => Some((completed_turn_id, handoff_task)),
+                    completed_turn_id, ..
+                } => Some(completed_turn_id),
                 _ => None,
             })
             .expect("post-turn queue action should emit an auto prompt effect");
-        assert_eq!(queued_effect.0, "turn-from-provenance");
-        assert_eq!(queued_effect.1, Some(handoff_task));
+        assert_eq!(queued_effect, "turn-from-provenance");
     }
 
     #[test]
-    fn default_off_rejects_direct_auto_follow_submission() {
+    fn direct_auto_follow_submission_forwards_exact_source_to_core_admission() {
         let reduction = reduce_conversation_runtime(
             ConversationViewModel::new_draft("/tmp/workspace".to_string()),
             ConversationRuntimeEvent::SubmitPrompt {
@@ -2227,24 +2509,34 @@ mod tests {
             },
         );
 
-        assert!(reduction.effects.is_empty());
+        assert!(matches!(
+            reduction.effects.as_slice(),
+            [ConversationRuntimeEffect::RequestTurnSubmission {
+                workspace_directory,
+                thread_id: Some(thread_id),
+                ..
+            }] if workspace_directory == "/tmp/workspace" && thread_id == "thread-1"
+        ));
         assert!(reduction.state.messages.is_empty());
-        assert!(!reduction.state.auto_follow_state.can_queue_next());
+        assert!(!reduction.state.auto_follow_state().can_queue_next());
     }
 
     #[test]
     fn manual_prompt_does_not_rearm_auto_follow_after_stop_or_off() {
         let mut stopped = ConversationViewModel::new_draft("/tmp/workspace".to_string());
-        stopped.auto_follow_state.set_max_auto_turns(5);
-        stopped.auto_follow_state.pause_post_turn_continuation();
+        update_auto_follow(&mut stopped, |auto_follow| {
+            auto_follow.max_auto_turns = 5;
+            auto_follow.completed_auto_turns = 0;
+            auto_follow.continuation_paused = true;
+        });
         let stopped = admit_prompt(stopped, "manual work", "manual work", PromptOrigin::Manual);
         assert!(
             stopped
                 .state
-                .auto_follow_state
+                .auto_follow_state()
                 .post_turn_continuation_paused()
         );
-        assert!(!stopped.state.auto_follow_state.can_queue_next());
+        assert!(!stopped.state.auto_follow_state().can_queue_next());
 
         let disabled = admit_prompt(
             ConversationViewModel::new_draft("/tmp/workspace".to_string()),
@@ -2252,8 +2544,8 @@ mod tests {
             "manual work",
             PromptOrigin::Manual,
         );
-        assert!(!disabled.state.auto_follow_state.is_enabled());
-        assert!(!disabled.state.auto_follow_state.can_queue_next());
+        assert!(!disabled.state.auto_follow_state().is_enabled());
+        assert!(!disabled.state.auto_follow_state().can_queue_next());
     }
 
     #[test]
@@ -2263,12 +2555,16 @@ mod tests {
             ConversationViewModel::new_draft("/tmp/off".to_string()),
         ] {
             if state.cwd.ends_with("stopped") {
-                state.auto_follow_state.set_max_auto_turns(5);
-                state.auto_follow_state.pause_post_turn_continuation();
+                update_auto_follow(&mut state, |auto_follow| {
+                    auto_follow.max_auto_turns = 5;
+                    auto_follow.completed_auto_turns = 0;
+                    auto_follow.continuation_paused = true;
+                });
             }
             let reduction = reduce_conversation_runtime(
                 state,
                 ConversationRuntimeEvent::PostTurnEvaluationCompleted {
+                    correlation: post_turn_correlation("turn-stale"),
                     evaluation: Box::new(PostTurnEvaluationOutcome {
                         provenance: PostTurnEvaluationProvenance::new("turn-stale".to_string()),
                         planning_repair_state: None,
@@ -2282,6 +2578,7 @@ mod tests {
                         )),
                         operator_alerts: Vec::new(),
                     }),
+                    route_resolution: crate::core::app::PostTurnRouteResolution::NoContinuation,
                 },
             );
 
@@ -2293,10 +2590,7 @@ mod tests {
                 "stale result queued an automatic prompt for {}",
                 reduction.state.cwd
             );
-            assert!(
-                reduction.state.status_text.contains("disabled")
-                    || reduction.state.status_text.contains("disarmed")
-            );
+            assert!(reduction.state.can_accept_manual_prompt());
         }
     }
 
@@ -2356,22 +2650,36 @@ mod tests {
         let default_off = reduce_conversation_runtime(
             ConversationViewModel::new_draft("/tmp/parallel".to_string()),
             ConversationRuntimeEvent::PostTurnEvaluationCompleted {
+                correlation: post_turn_correlation("turn-parallel"),
                 evaluation: Box::new(evaluation("turn-parallel")),
+                route_resolution: crate::core::app::PostTurnRouteResolution::ParallelConsumed,
             },
         );
         assert!(
-            default_off
+            !default_off
                 .effects
                 .iter()
                 .any(|effect| matches!(effect, ConversationRuntimeEffect::QueueAutoPrompt { .. }))
         );
 
         let mut stopped = ConversationViewModel::new_draft("/tmp/stopped".to_string());
-        stopped.auto_follow_state.pause_post_turn_continuation();
+        update_auto_follow(&mut stopped, |auto_follow| {
+            auto_follow.continuation_paused = true;
+        });
         let stopped = reduce_conversation_runtime(
             stopped,
             ConversationRuntimeEvent::PostTurnEvaluationCompleted {
-                evaluation: Box::new(evaluation("turn-stopped")),
+                correlation: post_turn_correlation("turn-stopped"),
+                evaluation: Box::new(PostTurnEvaluationOutcome {
+                    provenance: PostTurnEvaluationProvenance::new("turn-stopped".to_string()),
+                    planning_repair_state: None,
+                    runtime_notices: Vec::new(),
+                    action: PostTurnContinuationAction::SkipAutoFollow {
+                        reason: AutoFollowSkipReason::PostTurnContinuationPaused,
+                    },
+                    operator_alerts: Vec::new(),
+                }),
+                route_resolution: crate::core::app::PostTurnRouteResolution::NoContinuation,
             },
         );
         assert!(
@@ -2382,39 +2690,29 @@ mod tests {
         );
         assert!(stopped.state.status_text.contains("stopped and disarmed"));
 
-        let mut parallel_rearmed =
+        let parallel_rearmed =
             ConversationViewModel::new_draft("/tmp/parallel-rearmed".to_string());
-        parallel_rearmed
-            .auto_follow_state
-            .pause_post_turn_continuation();
-        parallel_rearmed
-            .auto_follow_state
-            .rearm_parallel_post_turn_continuation();
-        assert!(
-            parallel_rearmed
-                .auto_follow_state
-                .post_turn_continuation_paused(),
-            "parallel rearm must not clear the single-session stop"
-        );
         let parallel_rearmed = reduce_conversation_runtime(
             parallel_rearmed,
             ConversationRuntimeEvent::PostTurnEvaluationCompleted {
+                correlation: post_turn_correlation("turn-parallel-rearmed"),
                 evaluation: Box::new(evaluation("turn-parallel-rearmed")),
+                route_resolution: crate::core::app::PostTurnRouteResolution::ParallelConsumed,
             },
         );
         assert!(
-            parallel_rearmed
+            !parallel_rearmed
                 .effects
                 .iter()
                 .any(|effect| matches!(effect, ConversationRuntimeEffect::QueueAutoPrompt { .. })),
-            "an explicit :parallel rearm must admit the parallel-only queue signal"
+            "parallel-consumed work must never queue an in-session auto prompt"
         );
         assert!(
-            parallel_rearmed
+            !parallel_rearmed
                 .state
-                .auto_follow_state
-                .post_turn_continuation_paused(),
-            "dispatching parallel work must leave single-session auto-follow stopped"
+                .auto_follow_state()
+                .has_live_activity(),
+            "parallel dispatch must settle the in-session auto-follow phase"
         );
     }
 
@@ -2423,6 +2721,7 @@ mod tests {
         let reduction = reduce_conversation_runtime(
             ConversationViewModel::new_draft("/tmp/off".to_string()),
             ConversationRuntimeEvent::PostTurnEvaluationCompleted {
+                correlation: post_turn_correlation("turn-off"),
                 evaluation: Box::new(PostTurnEvaluationOutcome {
                     provenance: PostTurnEvaluationProvenance::new("turn-off".to_string()),
                     planning_repair_state: None,
@@ -2432,6 +2731,7 @@ mod tests {
                     },
                     operator_alerts: Vec::new(),
                 }),
+                route_resolution: crate::core::app::PostTurnRouteResolution::NoContinuation,
             },
         );
 
@@ -2457,6 +2757,7 @@ mod tests {
         let reduction = reduce_conversation_runtime(
             ConversationViewModel::new_draft("/tmp/receipt".to_string()),
             ConversationRuntimeEvent::PostTurnEvaluationCompleted {
+                correlation: post_turn_correlation("turn-receipt"),
                 evaluation: Box::new(PostTurnEvaluationOutcome {
                     provenance: PostTurnEvaluationProvenance::new("turn-receipt".to_string())
                         .with_queue_mutation_receipt(Some(receipt.clone())),
@@ -2467,6 +2768,7 @@ mod tests {
                     },
                     operator_alerts: Vec::new(),
                 }),
+                route_resolution: crate::core::app::PostTurnRouteResolution::NoContinuation,
             },
         );
 
@@ -2489,10 +2791,14 @@ mod tests {
     #[test]
     fn stale_off_evaluation_does_not_misreport_a_later_explicit_rearm() {
         let mut state = ConversationViewModel::new_draft("/tmp/rearmed".to_string());
-        state.auto_follow_state.set_max_auto_turns(2);
+        update_auto_follow(&mut state, |auto_follow| {
+            auto_follow.max_auto_turns = 2;
+            auto_follow.completed_auto_turns = 0;
+        });
         let reduction = reduce_conversation_runtime(
             state,
             ConversationRuntimeEvent::PostTurnEvaluationCompleted {
+                correlation: post_turn_correlation("turn-before-rearm"),
                 evaluation: Box::new(PostTurnEvaluationOutcome {
                     provenance: PostTurnEvaluationProvenance::new("turn-before-rearm".to_string()),
                     planning_repair_state: None,
@@ -2502,10 +2808,11 @@ mod tests {
                     },
                     operator_alerts: Vec::new(),
                 }),
+                route_resolution: crate::core::app::PostTurnRouteResolution::NoContinuation,
             },
         );
 
         assert!(reduction.state.status_text.contains("auto-follow re-armed"));
-        assert!(reduction.state.auto_follow_state.can_queue_next());
+        assert!(reduction.state.auto_follow_state().can_queue_next());
     }
 }

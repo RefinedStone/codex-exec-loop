@@ -336,6 +336,6 @@ fn view_model_boundaries_reset_transient_detail_snapshot() {
 
     conversation.record_turn_started("turn-failure".to_string());
     let _snapshot_owner = seed(&mut conversation);
-    conversation.fail_turn("provider failed".to_string());
+    conversation.fail_turn(Some("turn-failure"), "provider failed".to_string());
     assert_empty(&conversation);
 }

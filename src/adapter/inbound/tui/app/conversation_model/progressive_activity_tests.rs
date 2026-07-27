@@ -705,7 +705,7 @@ fn view_model_lifecycle_boundaries_reset_transient_progressive_state() {
 
     view_model.record_turn_started("turn-two".to_string());
     seed(&mut view_model.progressive_activity);
-    view_model.fail_turn("failed".to_string());
+    view_model.fail_turn(Some("turn-two"), "failed".to_string());
     assert_eq!(
         view_model.progressive_activity,
         ProgressiveActivityState::default()
