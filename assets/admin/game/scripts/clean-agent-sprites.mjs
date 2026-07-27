@@ -40,37 +40,54 @@ const standaloneSprites = [
 
 const WHITE_MATTE_MIN_BRIGHTNESS = 150;
 const WHITE_MATTE_MAX_CHROMA = 28;
+const WHITE_MATTE_EDGE_RADIUS = 2;
 const CHECKER_SIZE = 32;
 const CHECKER_LIGHT = 210;
 const CHECKER_DARK = 160;
 
 const pixelOffset = (image, x, y) => (y * image.width + x) * 4;
 
-const hasTransparentNeighbor = (image, source, x, y) => {
-  const neighbors = [
-    [x - 1, y],
-    [x + 1, y],
-    [x, y - 1],
-    [x, y + 1],
-  ];
-  return neighbors.some(([neighborX, neighborY]) => {
-    if (
-      neighborX < 0 ||
-      neighborY < 0 ||
-      neighborX >= image.width ||
-      neighborY >= image.height
+const hasNearbyTransparentPixel = (image, source, x, y) => {
+  for (
+    let offsetY = -WHITE_MATTE_EDGE_RADIUS;
+    offsetY <= WHITE_MATTE_EDGE_RADIUS;
+    offsetY += 1
+  ) {
+    for (
+      let offsetX = -WHITE_MATTE_EDGE_RADIUS;
+      offsetX <= WHITE_MATTE_EDGE_RADIUS;
+      offsetX += 1
     ) {
-      return true;
+      if (
+        Math.abs(offsetX) + Math.abs(offsetY) > WHITE_MATTE_EDGE_RADIUS
+      ) {
+        continue;
+      }
+      const neighborX = x + offsetX;
+      const neighborY = y + offsetY;
+      if (
+        neighborX < 0 ||
+        neighborY < 0 ||
+        neighborX >= image.width ||
+        neighborY >= image.height
+      ) {
+        return true;
+      }
+      if (source[pixelOffset(image, neighborX, neighborY) + 3] === 0) {
+        return true;
+      }
     }
-    return source[pixelOffset(image, neighborX, neighborY) + 3] === 0;
-  });
+  }
+  return false;
 };
 
 const recoverWhiteMattePixel = (red, green, blue) => {
   const minimum = Math.min(red, green, blue);
   const alpha = 255 - minimum;
   if (alpha === 0) {
-    return [0, 0, 0, 0];
+    // Keep the corrected matte pixel effectively invisible without expanding
+    // the fully transparent edge mask on a later maintenance pass.
+    return [0, 0, 0, 1];
   }
   const recoverChannel = (channel) =>
     Math.max(0, Math.min(255, Math.round(((channel - minimum) * 255) / alpha)));
@@ -102,7 +119,7 @@ const cleanWhiteMatte = (image) => {
         }
         continue;
       }
-      if (alpha !== 255 || !hasTransparentNeighbor(image, source, x, y)) {
+      if (alpha !== 255 || !hasNearbyTransparentPixel(image, source, x, y)) {
         continue;
       }
 
