@@ -529,58 +529,78 @@ mod tests {
 
         let first = runtime.dispatch_command(AppCommand::SubmitTurn(Box::new(request.clone())));
         let rejected = runtime.dispatch_command(AppCommand::SubmitTurn(Box::new(request.clone())));
+        let first_correlation = crate::core::app::TurnSubmissionCorrelation::new(1);
 
-        assert_eq!(
-            first.events,
-            vec![AppEvent::TurnSubmissionAdmissionResolved(
-                TurnSubmissionAdmission::Accepted {
-                    correlation: crate::core::app::TurnSubmissionCorrelation::new(1),
-                },
-            )]
-        );
+        assert!(matches!(
+            first.events.as_slice(),
+            [
+                AppEvent::ConversationRuntimeAuthorityChanged(authority),
+                AppEvent::TurnSubmissionAdmissionResolved(
+                    TurnSubmissionAdmission::Accepted { correlation },
+                ),
+            ] if *correlation == first_correlation
+                && authority.active_turn.as_ref().is_some_and(|active| {
+                    active.correlation == first_correlation
+                        && active.phase == crate::core::app::ActiveTurnPhase::Submitting
+                        && active.workspace_directory == request.workspace_directory
+                        && active.turn_id.is_none()
+                        && active.prompt_origin == CorePromptOrigin::Manual
+                })
+                && first.snapshot.conversation_runtime == **authority
+        ));
         assert_eq!(
             rejected.events,
             vec![AppEvent::TurnSubmissionAdmissionResolved(
                 TurnSubmissionAdmission::RejectedActive {
-                    active_correlation: crate::core::app::TurnSubmissionCorrelation::new(1),
+                    active_correlation: first_correlation,
                 },
             )]
         );
         assert!(rejected.effects.is_empty());
-        assert_eq!(*first.snapshot, AppSnapshot::initial());
+        assert_eq!(first.snapshot.revision, 1);
         assert_eq!(
             effects.recorded_effects(),
             vec![CoreEffect::SubmitTurn {
-                correlation: crate::core::app::TurnSubmissionCorrelation::new(1),
+                correlation: first_correlation,
                 request: Box::new(request.clone()),
             }]
         );
 
         runtime.dispatch_input(CoreInput::ConversationStreamUpdated {
-            correlation: crate::core::app::TurnSubmissionCorrelation::new(1),
+            correlation: first_correlation,
             event: TurnStreamEvent::Failed {
                 message: "worker stopped before turn/start".to_string(),
             },
         });
         let retried = runtime.dispatch_command(AppCommand::SubmitTurn(Box::new(request.clone())));
+        let retry_correlation = crate::core::app::TurnSubmissionCorrelation::new(2);
 
-        assert_eq!(
-            retried.events,
-            vec![AppEvent::TurnSubmissionAdmissionResolved(
-                TurnSubmissionAdmission::Accepted {
-                    correlation: crate::core::app::TurnSubmissionCorrelation::new(2),
-                },
-            )]
-        );
+        assert!(matches!(
+            retried.events.as_slice(),
+            [
+                AppEvent::ConversationRuntimeAuthorityChanged(authority),
+                AppEvent::TurnSubmissionAdmissionResolved(
+                    TurnSubmissionAdmission::Accepted { correlation },
+                ),
+            ] if *correlation == retry_correlation
+                && authority.active_turn.as_ref().is_some_and(|active| {
+                    active.correlation == retry_correlation
+                        && active.phase == crate::core::app::ActiveTurnPhase::Submitting
+                        && active.workspace_directory == request.workspace_directory
+                        && active.turn_id.is_none()
+                        && active.prompt_origin == CorePromptOrigin::Manual
+                })
+                && retried.snapshot.conversation_runtime == **authority
+        ));
         assert_eq!(
             effects.recorded_effects(),
             vec![
                 CoreEffect::SubmitTurn {
-                    correlation: crate::core::app::TurnSubmissionCorrelation::new(1),
+                    correlation: first_correlation,
                     request: Box::new(request.clone()),
                 },
                 CoreEffect::SubmitTurn {
-                    correlation: crate::core::app::TurnSubmissionCorrelation::new(2),
+                    correlation: retry_correlation,
                     request: Box::new(request),
                 },
             ]
@@ -747,18 +767,32 @@ mod tests {
                 correlation: correlation.clone(),
             }]
         );
-        assert_eq!(
-            outcome.events,
-            vec![
-                AppEvent::ApprovalDecisionAdmissionResolved(ApprovalDecisionAdmission::Accepted {
-                    correlation: correlation.clone(),
-                },),
+        assert!(matches!(
+            outcome.events.as_slice(),
+            [
+                AppEvent::ConversationRuntimeAuthorityChanged(admitting),
+                AppEvent::ApprovalDecisionAdmissionResolved(
+                    ApprovalDecisionAdmission::Accepted {
+                        correlation: admitted,
+                    },
+                ),
+                AppEvent::ConversationRuntimeAuthorityChanged(submitted),
                 AppEvent::ApprovalDecisionSubmissionCompleted {
-                    correlation: correlation.clone(),
+                    correlation: completed,
                     result: Ok(()),
                 },
-            ]
-        );
+            ] if admitted == &correlation
+                && completed == &correlation
+                && admitting.approval.as_ref().is_some_and(|approval| {
+                    approval.decision.as_ref() == Some(&correlation)
+                        && approval.phase == crate::core::app::ApprovalAuthorityPhase::Submitting
+                })
+                && submitted.approval.as_ref().is_some_and(|approval| {
+                    approval.decision.as_ref() == Some(&correlation)
+                        && approval.phase == crate::core::app::ApprovalAuthorityPhase::Submitted
+                })
+                && outcome.snapshot.conversation_runtime == **submitted
+        ));
         let waiting_for_resolution = runtime.dispatch_command(AppCommand::SubmitApprovalDecision {
             request_identity: correlation.request_identity.clone(),
             decision: ConversationApprovalDecision::Decline,
@@ -1246,19 +1280,28 @@ mod tests {
         let correlation = StopRequestCorrelation::new(1, Some(turn_submission));
 
         let requested = runtime.dispatch_command(AppCommand::RequestStopAllSessions);
-        assert_eq!(
-            requested.events,
-            vec![
+        assert!(matches!(
+            requested.events.as_slice(),
+            [
+                AppEvent::ConversationRuntimeAuthorityChanged(authority),
                 AppEvent::StopRequestAdmissionResolved(StopRequestAdmission::Accepted {
-                    correlation,
+                    correlation: admitted,
                 }),
                 AppEvent::StopRequestAttemptCompleted {
-                    correlation,
+                    correlation: completed,
                     attempt: StopRequestAttempt::Initial,
                     result: Ok(()),
                 },
-            ]
-        );
+            ] if *admitted == correlation
+                && *completed == correlation
+                && authority.active_turn.as_ref().is_some_and(|active| {
+                    active.correlation == turn_submission
+                        && active.phase == crate::core::app::ActiveTurnPhase::Submitting
+                        && active.turn_id.is_none()
+                })
+                && authority.auto_follow.continuation_paused
+                && requested.snapshot.conversation_runtime == **authority
+        ));
         assert_eq!(
             requested.effects,
             vec![CoreEffect::RequestStopAllSessions {
@@ -1284,6 +1327,7 @@ mod tests {
         assert!(matches!(
             started.events.as_slice(),
             [
+                AppEvent::ConversationRuntimeAuthorityChanged(authority),
                 AppEvent::TurnStreamSnapshotChanged(_),
                 AppEvent::StopRequestAttemptCompleted {
                     correlation: completed,
@@ -1291,6 +1335,13 @@ mod tests {
                     result: Ok(()),
                 },
             ] if *completed == correlation
+                && authority.active_turn.as_ref().is_some_and(|active| {
+                    active.correlation == turn_submission
+                        && active.phase == crate::core::app::ActiveTurnPhase::Running
+                        && active.turn_id.as_deref() == Some("turn-1")
+                })
+                && authority.auto_follow.continuation_paused
+                && started.snapshot.conversation_runtime == **authority
         ));
 
         let duplicate = runtime.dispatch_command(AppCommand::RequestStopAllSessions);

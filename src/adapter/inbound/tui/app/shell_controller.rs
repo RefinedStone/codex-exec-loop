@@ -65,6 +65,12 @@ impl NativeTuiApp {
             ConversationState::Ready(conversation) if conversation.has_running_turn()
         )
     }
+    fn conversation_has_active_turn(&self) -> bool {
+        matches!(
+            &self.conversation.lifecycle.conversation_state,
+            ConversationState::Ready(conversation) if !conversation.can_accept_runtime_prompt()
+        )
+    }
     pub(super) fn show_startup_overlay(&mut self) {
         self.dispatch_shell_chrome(ShellChromeEvent::StartupOverlayShown);
     }
@@ -1051,6 +1057,16 @@ impl NativeTuiApp {
                 self.dispatch_conversation_runtime(
                     ConversationRuntimeEvent::ApprovalDecisionSubmitted { decision },
                 );
+            } else if matches!(
+                &self.conversation.lifecycle.conversation_state,
+                ConversationState::Ready(conversation)
+                    if conversation.pending_approval_request().is_none()
+            ) {
+                // A stale approval projection may race an exact Core
+                // resolution. Rejected admission installs Core's final
+                // snapshot first; do not leave an empty modal behind after the
+                // authoritative request has disappeared.
+                self.dispatch_shell_chrome(ShellChromeEvent::ApprovalOverlayClosed);
             }
         }
     }
@@ -1068,7 +1084,7 @@ impl NativeTuiApp {
             return;
         }
 
-        if self.conversation_has_running_turn() {
+        if self.conversation_has_active_turn() {
             self.handle_stop_shell_command();
             return;
         }
@@ -1271,11 +1287,11 @@ mod tests {
         PlanningTaskToolRequest,
     };
     use crate::core::app::{
-        ActiveTurnPhase, ActiveTurnSnapshot, ApprovalAuthorityPhase, ApprovalAuthoritySnapshot,
-        CorePromptOrigin, PostTurnAuthoritySnapshot, PostTurnEvaluationCorrelation,
-        PostTurnRouteResolution, QueueAuthorityLoadCorrelation, QueueAuthorityLoadError,
-        QueueAuthoritySnapshot, QueueMutationCorrelation, QueueMutationIntent, QueueMutationResult,
-        QueueMutationTarget, StartupReadySnapshot, TurnSubmissionCorrelation,
+        ActiveTurnPhase, ActiveTurnSnapshot, CorePromptOrigin, PostTurnAuthoritySnapshot,
+        PostTurnEvaluationCorrelation, PostTurnRouteResolution, QueueAuthorityLoadCorrelation,
+        QueueAuthorityLoadError, QueueAuthoritySnapshot, QueueMutationCorrelation,
+        QueueMutationIntent, QueueMutationResult, QueueMutationTarget, StartupReadySnapshot,
+        TurnSubmissionCorrelation,
     };
     use crate::domain::conversation::{
         ConversationApprovalRequest, ConversationApprovalRequestKind,
@@ -1449,19 +1465,6 @@ mod tests {
     fn clear_active_turn(conversation: &mut ConversationViewModel) {
         let mut snapshot = conversation.runtime_snapshot().clone();
         snapshot.active_turn = None;
-        conversation.apply_runtime_snapshot(snapshot);
-    }
-
-    fn set_pending_approval(
-        conversation: &mut ConversationViewModel,
-        request: ConversationApprovalRequest,
-    ) {
-        let mut snapshot = conversation.runtime_snapshot().clone();
-        snapshot.approval = Some(ApprovalAuthoritySnapshot {
-            request,
-            decision: None,
-            phase: ApprovalAuthorityPhase::Pending,
-        });
         conversation.apply_runtime_snapshot(snapshot);
     }
 
@@ -4324,17 +4327,25 @@ mod tests {
     #[test]
     fn unavailable_approval_decision_does_not_commit_pending_projection() {
         let mut app = test_native_tui_app();
-        set_pending_approval(
-            ready_conversation_mut(&mut app),
-            ConversationApprovalRequest {
-                approval_id: "approval-unavailable".to_string(),
-                server_request_id: "server-unavailable".to_string(),
-                method: "item/commandExecution/requestApproval".to_string(),
-                kind: ConversationApprovalRequestKind::CommandExecution,
-                summary: "Command execution requested.".to_string(),
-                details: vec!["Command: cargo test".to_string()],
-            },
-        );
+        let request = ConversationApprovalRequest {
+            approval_id: "approval-unavailable".to_string(),
+            server_request_id: "server-unavailable".to_string(),
+            method: "item/commandExecution/requestApproval".to_string(),
+            kind: ConversationApprovalRequestKind::CommandExecution,
+            summary: "Command execution requested.".to_string(),
+            details: vec!["Command: cargo test".to_string()],
+        };
+        let request_identity = request.identity();
+        let turn_submission = arm_pending_approval(&mut app, request);
+        let _ =
+            app.reduce_core_client_event(crate::core::app::CoreInput::ConversationStreamUpdated {
+                correlation: turn_submission,
+                event: crate::core::app::TurnStreamEvent::ApprovalResolved {
+                    request_identity,
+                    resolution:
+                        crate::domain::conversation::ConversationApprovalResolution::Declined,
+                },
+            });
         app.dispatch_shell_chrome(ShellChromeEvent::ApprovalOverlayShown);
 
         assert!(app.handle_shell_overlay_key(key(KeyCode::Char('y'))));
@@ -4342,9 +4353,9 @@ mod tests {
         assert!(
             ready_conversation(&app)
                 .pending_approval_request()
-                .is_some()
+                .is_none()
         );
-        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Approval);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Hidden);
     }
 
     #[test]

@@ -829,12 +829,17 @@ mod tests {
         assert_eq!(outcomes.len(), 1);
         assert!(matches!(
             outcomes[0].events.as_slice(),
-            [AppEvent::TurnStreamSnapshotChanged(snapshot)]
+            [
+                AppEvent::ConversationRuntimeAuthorityChanged(authority),
+                AppEvent::TurnStreamSnapshotChanged(snapshot),
+            ]
                 if matches!(
                     &snapshot.update,
                     TurnStreamUpdate::Failed { message, .. }
                         if message == TURN_SUBMISSION_WORKER_PANIC_MESSAGE
                 )
+                    && authority.active_turn.is_none()
+                    && outcomes[0].snapshot.conversation_runtime == **authority
         ));
         assert!(settlement.terminal_published);
     }
@@ -859,12 +864,17 @@ mod tests {
         );
         assert!(matches!(
             outcomes[1].events.as_slice(),
-            [AppEvent::TurnStreamSnapshotChanged(snapshot)]
+            [
+                AppEvent::ConversationRuntimeAuthorityChanged(authority),
+                AppEvent::TurnStreamSnapshotChanged(snapshot),
+            ]
                 if matches!(
                     &snapshot.update,
                     TurnStreamUpdate::Failed { message, .. }
                         if message == TURN_SUBMISSION_WORKER_PANIC_MESSAGE
                 )
+                    && authority.active_turn.is_none()
+                    && outcomes[1].snapshot.conversation_runtime == **authority
         ));
     }
 
