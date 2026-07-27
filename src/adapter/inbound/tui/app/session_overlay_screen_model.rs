@@ -51,14 +51,14 @@ pub(in crate::adapter::inbound::tui::app) struct SessionBrowserScreenModel {
 impl SessionOverlayScreenModel {
     pub(in crate::adapter::inbound::tui::app) fn capture(app: &NativeTuiApp) -> Self {
         let current_workspace_directory = app.current_workspace_directory();
-        let overlay_state = &app.session_overlay_ui_state;
+        let overlay_state = &app.shell.session_overlay_ui_state;
         let browser_state = overlay_state.browser_state();
         let catalog = capture_catalog(
-            &app.session_state,
+            &app.shell.chrome.session_state,
             browser_state,
             &current_workspace_directory,
             overlay_state.selected_session_id(),
-            app.selected_session_index,
+            app.shell.chrome.selected_session_index,
         );
         let search_query_editor = overlay_state
             .is_search_query_editing()
@@ -75,7 +75,7 @@ impl SessionOverlayScreenModel {
         Self {
             can_open_session_list: app.can_open_session_list(),
             current_workspace_directory,
-            language: app.tui_language,
+            language: app.shell.tui_language,
             committed_search_query: browser_state.search_query.clone(),
             search_query_editor,
             rename_editor,
@@ -166,7 +166,7 @@ mod tests {
     fn capture_owns_one_projected_page_and_editor_selection_facts() {
         let mut app = test_native_tui_app();
         let workspace_directory = app.current_workspace_directory();
-        app.session_state = SessionState::Ready(SessionCatalog::ready(
+        app.shell.chrome.session_state = SessionState::Ready(SessionCatalog::ready(
             SessionCatalogTier::ProviderBackedCatalog,
             RecentSessions {
                 items: (0..12)
@@ -182,24 +182,28 @@ mod tests {
                 next_cursor: Some("next-page".to_string()),
             },
         ));
-        app.session_overlay_ui_state.set_search_query("task");
-        app.session_overlay_ui_state.move_page(1, 2);
-        app.session_overlay_ui_state
+        app.shell.session_overlay_ui_state.set_search_query("task");
+        app.shell.session_overlay_ui_state.move_page(1, 2);
+        app.shell
+            .session_overlay_ui_state
             .set_selected_session_id(Some("thread-11".to_string()));
-        app.session_overlay_ui_state.start_search_query_edit();
-        app.session_overlay_ui_state
+        app.shell.session_overlay_ui_state.start_search_query_edit();
+        app.shell
+            .session_overlay_ui_state
             .push_search_query_character('!');
-        app.session_overlay_ui_state
+        app.shell
+            .session_overlay_ui_state
             .start_rename_edit("thread-11", "Renamed task");
         let rename_request = app
+            .shell
             .session_overlay_ui_state
             .prepare_rename_request(TuiLanguage::Korean)
             .expect("rename should become pending");
-        assert!(app.session_overlay_ui_state.record_rename_admission(
+        assert!(app.shell.session_overlay_ui_state.record_rename_admission(
             crate::core::app::SessionRenameCorrelation::new(1, rename_request),
             TuiLanguage::Korean,
         ));
-        app.tui_language = TuiLanguage::Korean;
+        app.shell.tui_language = TuiLanguage::Korean;
 
         let screen_model = SessionOverlayScreenModel::capture(&app);
 
@@ -245,9 +249,10 @@ mod tests {
             "stable identity and page-local index must identify the same row"
         );
 
-        app.session_overlay_ui_state
+        app.shell
+            .session_overlay_ui_state
             .set_selected_session_id(Some("stale-thread".to_string()));
-        app.selected_session_index = 0;
+        app.shell.chrome.selected_session_index = 0;
         let repaired_selection = SessionOverlayScreenModel::capture(&app);
         let repaired_browser = repaired_selection
             .browser()
@@ -259,9 +264,9 @@ mod tests {
         );
         assert_eq!(repaired_browser.selected_index, Some(0));
 
-        app.session_state = SessionState::Failed("new failure".to_string());
-        app.session_overlay_ui_state.clear_browser_state();
-        app.tui_language = TuiLanguage::English;
+        app.shell.chrome.session_state = SessionState::Failed("new failure".to_string());
+        app.shell.session_overlay_ui_state.clear_browser_state();
+        app.shell.tui_language = TuiLanguage::English;
 
         assert_eq!(
             screen_model
@@ -284,19 +289,21 @@ mod tests {
             warnings: vec!["manual attach only".to_string()],
         };
 
-        app.session_state = SessionState::Ready(SessionCatalog::Unsupported(status.clone()));
+        app.shell.chrome.session_state =
+            SessionState::Ready(SessionCatalog::Unsupported(status.clone()));
         assert_eq!(
             SessionOverlayScreenModel::capture(&app).catalog,
             SessionOverlayCatalogScreenModel::Unsupported(status.clone())
         );
 
-        app.session_state = SessionState::Ready(SessionCatalog::Partial(status.clone()));
+        app.shell.chrome.session_state =
+            SessionState::Ready(SessionCatalog::Partial(status.clone()));
         assert_eq!(
             SessionOverlayScreenModel::capture(&app).catalog,
             SessionOverlayCatalogScreenModel::Partial(status)
         );
 
-        app.session_state = SessionState::Failed("catalog failed".to_string());
+        app.shell.chrome.session_state = SessionState::Failed("catalog failed".to_string());
         assert_eq!(
             SessionOverlayScreenModel::capture(&app).catalog,
             SessionOverlayCatalogScreenModel::Failed("catalog failed".to_string())

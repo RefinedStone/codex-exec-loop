@@ -32,8 +32,8 @@ fn inline_planning_init_inspection_renders_initialized_workspace_inside_shell_fr
     ));
     std::fs::create_dir_all(&workspace_dir).expect("temp workspace should be created");
     let workspace_dir = workspace_dir.to_string_lossy().to_string();
-    app.startup_state = StartupState::Ready(Box::new(StartupReadySnapshot::from_diagnostics(
-        StartupDiagnostics {
+    app.shell.chrome.startup_state = StartupState::Ready(Box::new(
+        StartupReadySnapshot::from_diagnostics(StartupDiagnostics {
             cwd: workspace_dir.clone(),
             codex_binary_ok: true,
             codex_binary_detail: "codex".to_string(),
@@ -47,8 +47,8 @@ fn inline_planning_init_inspection_renders_initialized_workspace_inside_shell_fr
             account_detail: "account ok".to_string(),
             warnings: Vec::new(),
             schema_snapshot: "snapshot.json".to_string(),
-        },
-    )));
+        }),
+    ));
     app.sync_draft_shell_workspace(&workspace_dir);
     planning
         .workspace
@@ -58,13 +58,13 @@ fn inline_planning_init_inspection_renders_initialized_workspace_inside_shell_fr
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
     while std::time::Instant::now() < deadline {
         app.poll_core_runtime_inputs(16);
-        if app.planning_init_overlay_ui_state.step() != PlanningInitOverlayStep::Loading {
+        if app.planning.planning_init_overlay_ui_state.step() != PlanningInitOverlayStep::Loading {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     assert_ne!(
-        app.planning_init_overlay_ui_state.step(),
+        app.planning.planning_init_overlay_ui_state.step(),
         PlanningInitOverlayStep::Loading,
         "planning runtime refresh should finish before rendering"
     );
@@ -88,9 +88,12 @@ fn inline_planning_init_inspection_renders_initialized_workspace_inside_shell_fr
 fn inline_planning_manual_editor_renders_files_and_editor_panels() {
     let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
     let mut app = make_test_app();
-    app.shell_overlay = ShellOverlay::PlanningInit;
-    app.planning_init_overlay_ui_state.open_manual_editor();
-    app.planning_draft_editor_ui_state
+    app.shell.chrome.shell_overlay = ShellOverlay::PlanningInit;
+    app.planning
+        .planning_init_overlay_ui_state
+        .open_manual_editor();
+    app.planning
+        .planning_draft_editor_ui_state
         .open_session(sample_planning_editor_session());
 
     // Manual authoring owns the inline shell surface while it is open. The
@@ -113,16 +116,22 @@ fn inline_planning_manual_editor_renders_files_and_editor_panels() {
 #[test]
 fn prepare_render_state_syncs_inline_planning_editor_scroll_before_render() {
     let mut app = make_test_app();
-    app.shell_overlay = ShellOverlay::PlanningInit;
-    app.planning_init_overlay_ui_state.open_manual_editor();
-    app.planning_draft_editor_ui_state
+    app.shell.chrome.shell_overlay = ShellOverlay::PlanningInit;
+    app.planning
+        .planning_init_overlay_ui_state
+        .open_manual_editor();
+    app.planning
+        .planning_draft_editor_ui_state
         .open_session(sample_long_planning_editor_session());
     for _ in 0..10 {
-        app.planning_draft_editor_ui_state.move_cursor_down();
+        app.planning
+            .planning_draft_editor_ui_state
+            .move_cursor_down();
     }
 
     assert_eq!(
-        app.planning_draft_editor_ui_state
+        app.planning
+            .planning_draft_editor_ui_state
             .selected_buffer()
             .expect("buffer")
             .editor_scroll(),
@@ -147,7 +156,7 @@ fn prepare_render_state_syncs_inline_planning_editor_scroll_before_render() {
         .saturating_sub(1)
         .max(1);
     let view = build_planning_draft_editor_overlay_view_from_state(
-        &app.planning_draft_editor_ui_state,
+        &app.planning.planning_draft_editor_ui_state,
         editor_content_height,
     )
     .expect("planning draft editor overlay view should be available");
@@ -159,8 +168,9 @@ fn prepare_render_state_syncs_inline_planning_editor_scroll_before_render() {
 #[test]
 fn inline_planning_simple_review_renders_promote_and_edit_actions() {
     let mut app = make_test_app();
-    app.shell_overlay = ShellOverlay::PlanningInit;
-    app.planning_init_overlay_ui_state
+    app.shell.chrome.shell_overlay = ShellOverlay::PlanningInit;
+    app.planning
+        .planning_init_overlay_ui_state
         .open_simple_review(PlanningInitStageResult {
             mode: PlanningBootstrapMode::Simple,
             draft_name: "bootstrap-1".to_string(),
@@ -213,8 +223,9 @@ fn inline_planning_simple_review_renders_promote_and_edit_actions() {
 #[test]
 fn inline_planning_simple_review_renders_editing_specific_key_guidance() {
     let mut app = make_test_app();
-    app.shell_overlay = ShellOverlay::PlanningInit;
-    app.planning_init_overlay_ui_state
+    app.shell.chrome.shell_overlay = ShellOverlay::PlanningInit;
+    app.planning
+        .planning_init_overlay_ui_state
         .open_simple_review(PlanningInitStageResult {
             mode: PlanningBootstrapMode::Simple,
             draft_name: "bootstrap-1".to_string(),
@@ -258,19 +269,26 @@ fn inline_planning_simple_review_renders_editing_specific_key_guidance() {
 #[test]
 fn inline_planning_manual_editor_renders_close_confirmation_guidance() {
     let mut app = make_test_app();
-    app.shell_overlay = ShellOverlay::PlanningInit;
-    app.planning_init_overlay_ui_state.open_manual_editor();
-    app.planning_draft_editor_ui_state
+    app.shell.chrome.shell_overlay = ShellOverlay::PlanningInit;
+    app.planning
+        .planning_init_overlay_ui_state
+        .open_manual_editor();
+    app.planning
+        .planning_draft_editor_ui_state
         .open_session(sample_planning_editor_session());
-    app.planning_draft_editor_ui_state.insert_character('#');
-    let _ = app.planning_draft_editor_ui_state.request_close();
+    app.planning
+        .planning_draft_editor_ui_state
+        .insert_character('#');
+    let _ = app.planning.planning_draft_editor_ui_state.request_close();
 
     // Dirty draft close confirmation is part of the editor's safety contract:
     // status copy must make the pending close explicit and the key hints must
     // keep the non-destructive escape path visible.
-    let view =
-        build_planning_draft_editor_overlay_view_from_state(&app.planning_draft_editor_ui_state, 8)
-            .expect("planning draft editor overlay view should be available");
+    let view = build_planning_draft_editor_overlay_view_from_state(
+        &app.planning.planning_draft_editor_ui_state,
+        8,
+    )
+    .expect("planning draft editor overlay view should be available");
     let status = view
         .status_lines
         .iter()

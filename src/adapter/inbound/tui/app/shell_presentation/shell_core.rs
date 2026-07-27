@@ -44,8 +44,10 @@ pub(in crate::adapter::inbound::tui::app) struct ParallelPanelProjectionSample {
 impl ParallelPanelProjectionSample {
     pub(in crate::adapter::inbound::tui::app) fn capture(app: &NativeTuiApp) -> Self {
         Self::from_parts(
-            app.client_runtime.parallel_mode_projection(),
-            app.parallel_mode_control_plane.presentation_projection(),
+            app.runtime.client_runtime.parallel_mode_projection(),
+            app.runtime
+                .parallel_mode_control_plane
+                .presentation_projection(),
         )
     }
 
@@ -144,11 +146,13 @@ impl TranscriptHandoffDeliveryToken {
         &self,
         app: &NativeTuiApp,
     ) -> bool {
-        if self.conversation_history_identity_revision != app.conversation_history_identity_revision
+        if self.conversation_history_identity_revision
+            != app.conversation.conversation_history_identity_revision
         {
             return false;
         }
-        let ConversationState::Ready(conversation) = &app.conversation_state else {
+        let ConversationState::Ready(conversation) = &app.conversation.lifecycle.conversation_state
+        else {
             return false;
         };
         conversation
@@ -169,17 +173,25 @@ impl ConversationProjectionSample {
         let RevisionedPlanningParallelProjection {
             revision: core_revision,
             planning_parallel,
-        } = app.client_runtime.revisioned_planning_parallel_projection();
+        } = app
+            .runtime
+            .client_runtime
+            .revisioned_planning_parallel_projection();
         let PlanningParallelProjection {
             planning_runtime_workspace_directory,
             planning_runtime,
             parallel_mode,
         } = planning_parallel;
-        let parallel_control_plane = app.parallel_mode_control_plane.presentation_projection();
+        let parallel_control_plane = app
+            .runtime
+            .parallel_mode_control_plane
+            .presentation_projection();
         Self {
             core_revision,
-            conversation_history_identity_revision: app.conversation_history_identity_revision,
-            transcript_handoff_correlation: match &app.conversation_state {
+            conversation_history_identity_revision: app
+                .conversation
+                .conversation_history_identity_revision,
+            transcript_handoff_correlation: match &app.conversation.lifecycle.conversation_state {
                 ConversationState::Ready(conversation) => {
                     conversation.viewport_transcript_handoff_correlation()
                 }
@@ -191,9 +203,9 @@ impl ConversationProjectionSample {
                 parallel_mode,
                 parallel_control_plane,
             ),
-            parallel_supervisor_events: app.parallel_supervisor_event_log.projection(),
-            inline_history_render_mode: app.inline_history_render_mode,
-            history_insert_mode: app.history_insert_mode,
+            parallel_supervisor_events: app.shell.parallel_supervisor_event_log.projection(),
+            inline_history_render_mode: app.shell.inline_history_render_mode,
+            history_insert_mode: app.shell.history_insert_mode,
             rendered_at: Instant::now(),
             animation_elapsed_millis: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -490,8 +502,8 @@ impl<'a> ConversationScreenModel<'a> {
             sample.parallel_mode_readiness_for_workspace(workspace_directory.as_deref());
         let current_parallel_mode_supervisor =
             sample.parallel_mode_supervisor_for_workspace(workspace_directory.as_deref());
-        let parallel_panel_visible = app.shell_overlay == ShellOverlay::Supersession
-            || (app.shell_overlay == ShellOverlay::Hidden && parallel_mode_enabled);
+        let parallel_panel_visible = app.shell.chrome.shell_overlay == ShellOverlay::Supersession
+            || (app.shell.chrome.shell_overlay == ShellOverlay::Hidden && parallel_mode_enabled);
         let parallel_mode_loading_prompt_indicator_visible = parallel_panel_visible
             && parallel_mode_enabled
             && current_parallel_mode_supervisor
@@ -521,16 +533,19 @@ impl<'a> ConversationScreenModel<'a> {
         let exit_confirmation_visible = app.is_exit_confirmation_visible();
         let turn_steer_confirmation = app.is_turn_steer_confirmation_visible().then(|| {
             let intent = app
+                .conversation
                 .turn_steer_confirmation
                 .as_ref()
                 .expect("visible turn-steer confirmation must retain its intent");
             TurnSteerConfirmationScreenModel {
-                language: app.tui_language,
+                language: app.shell.tui_language,
                 request: intent.request.clone(),
             }
         });
         let dialog_visible = exit_confirmation_visible || turn_steer_confirmation.is_some();
         let prompt_input_has_focus = app
+            .shell
+            .chrome
             .shell_overlay
             .prompt_input_has_focus(dialog_visible, parallel_mode_prompt_input_locked);
         let queue_mutation_tail_state =
@@ -546,7 +561,7 @@ impl<'a> ConversationScreenModel<'a> {
                 QueueMutationTailState::Idle
             };
         let inline_history_render_mode = sample.inline_history_render_mode();
-        let conversation_state = match &app.conversation_state {
+        let conversation_state = match &app.conversation.lifecycle.conversation_state {
             ConversationState::Loading => ShellConversationState::Loading,
             ConversationState::Failed(message) => ShellConversationState::Failed(message),
             ConversationState::Ready(conversation) => ShellConversationState::Ready(conversation),
@@ -556,7 +571,7 @@ impl<'a> ConversationScreenModel<'a> {
         let live_transcript = Self::live_transcript_for_state(
             conversation_state,
             inline_history_render_mode,
-            app.shell_overlay,
+            app.shell.chrome.shell_overlay,
             dialog_visible,
         );
 
@@ -565,13 +580,13 @@ impl<'a> ConversationScreenModel<'a> {
             transcript_handoff_delivery_token: TranscriptHandoffDeliveryToken::from_sample(sample),
             rendered_at: sample.rendered_at,
             animation_elapsed_millis: sample.animation_elapsed_millis,
-            startup_state: &app.startup_state,
+            startup_state: &app.shell.chrome.startup_state,
             shell_action_availability: app.shell_action_availability(),
-            recent_session_status_label: recent_session_status_label(app, app.tui_language),
+            recent_session_status_label: recent_session_status_label(app, app.shell.tui_language),
             github_review_polling_status_label: app.github_review_polling_status_label(),
             github_review_recent_changes_summary: app
                 .github_review_recent_changes_summary(MAX_GITHUB_REVIEW_NOTICE_LEN),
-            tui_language: app.tui_language,
+            tui_language: app.shell.tui_language,
             parallel_mode_enabled,
             parallel_mode_control_effect_in_flight,
             last_parallel_mode_dispatch_withheld_reason: sample
@@ -592,11 +607,11 @@ impl<'a> ConversationScreenModel<'a> {
             },
             planning_runtime_projection,
             planning_worker_shows_debug_details: app.planning_worker_shows_debug_details(),
-            planning_worker_panel_state: app.planning_worker_panel_state.clone(),
+            planning_worker_panel_state: app.planning.planning_worker_panel_state.current().clone(),
             queue_mutation_tail_state,
-            turn_options_summary: (!app.turn_options.is_default())
-                .then(|| app.turn_options.summary_label()),
-            shell_overlay: app.shell_overlay,
+            turn_options_summary: (!app.conversation.turn_options.is_default())
+                .then(|| app.conversation.turn_options.summary_label()),
+            shell_overlay: app.shell.chrome.shell_overlay,
             inline_history_render_mode,
             exit_confirmation_visible,
             turn_steer_confirmation,
@@ -791,13 +806,15 @@ pub(in crate::adapter::inbound::tui::app) fn conversation_startup_screen_is_acti
 }
 
 fn presentation_workspace_directory(app: &NativeTuiApp) -> Option<String> {
-    match &app.conversation_state {
+    match &app.conversation.lifecycle.conversation_state {
         ConversationState::Ready(conversation) => {
             Some(conversation.planning_workspace_directory().to_string())
         }
-        ConversationState::Loading | ConversationState::Failed(_) => match &app.startup_state {
-            StartupState::Ready(diagnostics) => Some(diagnostics.workspace_path.clone()),
-            StartupState::Idle | StartupState::Loading | StartupState::Failed(_) => None,
-        },
+        ConversationState::Loading | ConversationState::Failed(_) => {
+            match &app.shell.chrome.startup_state {
+                StartupState::Ready(diagnostics) => Some(diagnostics.workspace_path.clone()),
+                StartupState::Idle | StartupState::Loading | StartupState::Failed(_) => None,
+            }
+        }
     }
 }

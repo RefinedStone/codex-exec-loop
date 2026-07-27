@@ -6,7 +6,7 @@ use super::super::option_lines::overlay_option_line;
 use super::ModelSelectionOverlayView;
 
 pub(crate) fn build_model_selection_overlay_view(app: &NativeTuiApp) -> ModelSelectionOverlayView {
-    let state = &app.model_selection_overlay_ui_state;
+    let state = &app.shell.model_selection_overlay_ui_state;
     let model_lines = MODEL_SELECTION_MODEL_OPTIONS
         .iter()
         .enumerate()
@@ -56,7 +56,7 @@ pub(crate) fn build_model_selection_overlay_view(app: &NativeTuiApp) -> ModelSel
 }
 
 fn build_model_selection_status_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    let state = &app.model_selection_overlay_ui_state;
+    let state = &app.shell.model_selection_overlay_ui_state;
     match state.step() {
         ModelSelectionStep::Model => vec![
             Line::from(format!(
@@ -87,11 +87,16 @@ fn build_model_selection_key_lines(step: ModelSelectionStep) -> Vec<Line<'static
 }
 
 fn current_model_label(app: &NativeTuiApp) -> &str {
-    app.turn_options.model.as_deref().unwrap_or("default")
+    app.conversation
+        .turn_options
+        .model
+        .as_deref()
+        .unwrap_or("default")
 }
 
 fn current_effort_label(app: &NativeTuiApp) -> &str {
-    app.turn_options
+    app.conversation
+        .turn_options
         .reasoning_effort
         .map(|effort| effort.label())
         .unwrap_or("default")

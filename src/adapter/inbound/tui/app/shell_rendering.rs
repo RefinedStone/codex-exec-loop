@@ -3,7 +3,11 @@ use std::rc::Rc;
 use super::inline_frame_model::ApprovalInlineScreenModel;
 pub(super) use super::inline_frame_model::{
     InlineConversationFrameProjection, InlineFrameRenderReceipt, InlineInspectionFrameModel,
-    InlineShellFrameModel, apply_inline_frame_render_receipt, capture_inline_shell_frame_model,
+    InlineShellFrameModel,
+};
+#[cfg(test)]
+use super::inline_frame_model::{
+    apply_inline_frame_render_receipt, capture_inline_shell_frame_model,
 };
 use super::shell_presentation::TurnSteerConfirmationScreenModel;
 #[cfg(test)]

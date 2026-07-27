@@ -581,26 +581,30 @@ impl super::NativeTuiApp {
         actor: impl Into<String>,
         body: impl Into<String>,
     ) {
-        self.parallel_supervisor_event_log.push_now(actor, body);
+        self.shell
+            .parallel_supervisor_event_log
+            .push_now(actor, body);
     }
 
     #[cfg(test)]
     pub(crate) fn parallel_supervisor_event_lines(&self) -> Vec<Line<'static>> {
-        self.parallel_supervisor_event_log.lines()
+        self.shell.parallel_supervisor_event_log.lines()
     }
 
     #[cfg(test)]
     pub(crate) fn parallel_supervisor_event_scrollback_lines(&self) -> Vec<Line<'static>> {
-        self.parallel_supervisor_event_log.scrollback_lines()
+        self.shell.parallel_supervisor_event_log.scrollback_lines()
     }
 
     pub(super) fn record_parallel_supervisor_snapshot_for_stream(
         &mut self,
         snapshot: &ParallelModeSupervisorSnapshot,
     ) {
-        self.parallel_supervisor_event_log
-            .record_snapshot_stream_from_supervisor_snapshot(snapshot, self.tui_language);
-        self.parallel_supervisor_event_log
+        self.shell
+            .parallel_supervisor_event_log
+            .record_snapshot_stream_from_supervisor_snapshot(snapshot, self.shell.tui_language);
+        self.shell
+            .parallel_supervisor_event_log
             .record_runtime_feed_from_supervisor_snapshot(snapshot);
     }
 
@@ -611,7 +615,8 @@ impl super::NativeTuiApp {
         actor: impl Into<String>,
         body: impl Into<String>,
     ) {
-        self.parallel_supervisor_event_log
+        self.shell
+            .parallel_supervisor_event_log
             .push_for_test(timestamp_label, actor, body);
     }
 }

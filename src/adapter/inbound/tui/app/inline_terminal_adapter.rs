@@ -7,20 +7,24 @@ use ratatui::text::Line;
 
 use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
 
+#[cfg(test)]
+use super::NativeTuiApp;
 use super::history_insertion::HistoryInsertionMode;
-use super::shell_presentation::{
-    ConversationProjectionSample, TranscriptHandoffDeliveryToken, build_startup_banner_lines,
-    format_conversation_scrollback_lines_with_expand,
+use super::inline_frame_model::InlineTerminalSyncProjection;
+#[cfg(test)]
+use super::inline_frame_model::{
+    apply_inline_frame_render_receipt, capture_inline_shell_frame_model,
 };
+#[cfg(test)]
+use super::inline_frame_model::{
+    capture_inline_terminal_sync_projection, capture_parallel_conversation_handoff_projection,
+};
+use super::shell_presentation::{ConversationProjectionSample, TranscriptHandoffDeliveryToken};
 use super::shell_rendering::{
-    InlineConversationFrameProjection, InlineFrameRenderReceipt, apply_inline_frame_render_receipt,
-    capture_inline_shell_frame_model, draw_projected, inline_parallel_event_stream_visible_rows,
+    InlineConversationFrameProjection, InlineFrameRenderReceipt, draw_projected,
 };
 use super::shell_runtime::ShellRuntime;
-use super::{
-    ConversationState, INLINE_VIEWPORT_HEIGHT, InlineHistoryRenderMode, NativeTuiApp,
-    ShellFrontendMode,
-};
+use super::{INLINE_VIEWPORT_HEIGHT, InlineHistoryRenderMode, ShellFrontendMode};
 #[path = "inline_terminal_adapter/backend.rs"]
 pub(super) mod backend;
 #[path = "inline_terminal_adapter/history_flush.rs"]
@@ -65,11 +69,6 @@ enum InlineViewportSync {
         redraw_after_successful_frame: bool,
         resize_snapshot: InlineResizeSnapshot,
     },
-}
-
-struct ParallelConversationHandoffProjection {
-    lines: Vec<Line<'static>>,
-    delivery_token: TranscriptHandoffDeliveryToken,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -172,8 +171,7 @@ fn draw_inline_frame<B: InlineResizeBackend>(
         }
     }
 
-    let frame_model = capture_inline_shell_frame_model(
-        runtime.app_mut(),
+    let frame_model = runtime.capture_inline_shell_frame_model(
         ShellFrontendMode::InlineMainBuffer,
         current_viewport_area(terminal),
         frame_projection,
@@ -249,7 +247,9 @@ fn draw_inline_frame<B: InlineResizeBackend>(
     }
     let pending_render_receipt =
         pending_render_receipt.expect("successful terminal draw must produce one render receipt");
-    if !inline_terminal.commit_frame_render_receipt(runtime.app_mut(), pending_render_receipt) {
+    if !inline_terminal.commit_frame_render_receipt(pending_render_receipt, |receipt| {
+        runtime.commit_inline_frame_render_receipt(receipt)
+    }) {
         fail_closed_frame_delivery(runtime, inline_terminal);
         runtime.request_delivery_redraw();
         return Ok(false);
@@ -313,7 +313,7 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
     inline_terminal.observe_focus_reacquire(runtime.terminal_focus_reacquire_epoch());
     // Capture render settings before mutating terminal state so one transaction uses
     // a stable compatibility policy snapshot instead of ad hoc env-owned fields.
-    let projection_sample = ConversationProjectionSample::capture(runtime.app_mut());
+    let projection_sample = runtime.capture_inline_terminal_projection_sample();
     inline_terminal.observe_conversation_history_identity_revision(
         projection_sample.conversation_history_identity_revision(),
     );
@@ -334,25 +334,11 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
     let terminal_size = resize_snapshot.size;
     let physical_terminal_resized = inline_terminal.physical_terminal_resized(resize_snapshot);
     let viewport_area = current_viewport_area(terminal);
-    let sampled_parallel_frame_projection = policy.parallel_mode_enabled.then(|| {
-        InlineConversationFrameProjection::from_app_with_sample(
-            runtime.app_mut(),
-            viewport_area.width,
-            &projection_sample,
-        )
-    });
-    let parallel_handoff_conversation_lines =
-        if policy.parallel_mode_enabled && policy.host_insert_mode().is_some() {
-            parallel_conversation_handoff_projection(runtime.app_mut(), &projection_sample)
-        } else {
-            None
-        };
-    let current_history_projection = current_inline_history_lines_for_viewport(
-        runtime.app_mut(),
-        viewport_area,
-        &projection_sample,
-        sampled_parallel_frame_projection.as_ref(),
-    );
+    let InlineTerminalSyncProjection {
+        sampled_parallel_frame_projection,
+        parallel_handoff_conversation_lines,
+        current_history_projection,
+    } = runtime.capture_inline_terminal_sync_projection(viewport_area, &projection_sample);
     let preserves_conversation_baseline = current_history_projection.is_none();
     let current_lines = current_history_projection.unwrap_or_default();
     let conversation_handoff_delivery_token = (!policy.parallel_mode_enabled)
@@ -400,8 +386,7 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
         inline_terminal.record_terminal_viewport(terminal_size, viewport_area, cursor_position);
         inline_terminal.mark_resize_reconciled(resize_snapshot);
         let frame_projection = sampled_parallel_frame_projection.unwrap_or_else(|| {
-            InlineConversationFrameProjection::from_app_with_sample(
-                runtime.app_mut(),
+            runtime.capture_inline_conversation_frame_projection(
                 viewport_area.width,
                 &projection_sample,
             )
@@ -597,11 +582,8 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
     inline_terminal.record_terminal_viewport(terminal_size, viewport_area, cursor_position);
     inline_terminal.mark_resize_reconciled(resize_snapshot);
     let frame_projection = sampled_parallel_frame_projection.unwrap_or_else(|| {
-        InlineConversationFrameProjection::from_app_with_sample(
-            runtime.app_mut(),
-            viewport_area.width,
-            &projection_sample,
-        )
+        runtime
+            .capture_inline_conversation_frame_projection(viewport_area.width, &projection_sample)
     });
     let tail_frame_changed = inline_terminal.should_draw_inline_frame(
         &frame_projection,
@@ -623,34 +605,15 @@ fn acknowledge_transcript_handoff_after_delivery(
     let Some(delivery_token) = delivery_token else {
         return false;
     };
-    let app = runtime.app_mut();
-    if !delivery_token.matches_current(app) {
-        return false;
-    }
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
-        return false;
-    };
-    conversation.acknowledge_viewport_transcript_handoff_flush(delivery_token.correlation())
+    runtime.acknowledge_transcript_handoff_after_delivery(delivery_token)
 }
 
+#[cfg(test)]
 fn parallel_conversation_handoff_projection(
     app: &NativeTuiApp,
     sample: &ConversationProjectionSample,
-) -> Option<ParallelConversationHandoffProjection> {
-    let ConversationState::Ready(conversation) = &app.conversation_state else {
-        return None;
-    };
-    conversation.viewport_transcript_handoff_release_messages()?;
-    Some(ParallelConversationHandoffProjection {
-        lines: format_conversation_scrollback_lines_with_expand(
-            conversation.host_scrollback_messages(),
-            app.conversation_view_mode,
-            app.conversation_view_mode.shows_debug_details()
-                || app.planning_worker_shows_debug_details(),
-            Some(app.progressive_activity_overlay_ui_state.expand_state()),
-        ),
-        delivery_token: TranscriptHandoffDeliveryToken::from_sample(sample)?,
-    })
+) -> Option<super::inline_frame_model::ParallelConversationHandoffProjection> {
+    capture_parallel_conversation_handoff_projection(app, sample)
 }
 
 fn defer_resize_redraw(runtime: &mut ShellRuntime, inline_terminal: &mut InlineTerminalState) {
@@ -663,7 +626,7 @@ fn fail_closed_frame_delivery(
     inline_terminal: &mut InlineTerminalState,
 ) {
     inline_terminal.invalidate_back_buffer();
-    runtime.app_mut().clear_queue_receipt_undo_hit_area();
+    runtime.clear_queue_receipt_undo_hit_area();
 }
 
 fn current_viewport_area<B: Backend>(terminal: &mut Terminal<B>) -> Rect {
@@ -705,88 +668,13 @@ fn autoresize_inline_viewport<B: InlineResizeBackend>(
 #[cfg(test)]
 fn current_inline_history_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     let sample = ConversationProjectionSample::capture(app);
-    let parallel_frame_projection = sample
-        .parallel_mode_enabled()
-        .then(|| InlineConversationFrameProjection::from_app_with_sample(app, 80, &sample));
-    current_inline_history_lines_for_viewport(
+    capture_inline_terminal_sync_projection(
         app,
         Rect::new(0, 0, 80, INLINE_VIEWPORT_HEIGHT),
         &sample,
-        parallel_frame_projection.as_ref(),
     )
+    .current_history_projection
     .unwrap_or_default()
-}
-
-fn current_inline_history_lines_for_viewport(
-    app: &NativeTuiApp,
-    viewport_area: Rect,
-    sample: &ConversationProjectionSample,
-    parallel_frame_projection: Option<&InlineConversationFrameProjection>,
-) -> Option<Vec<Line<'static>>> {
-    if sample.parallel_mode_enabled() {
-        /*
-         * Parallel mode owns the main inline body with the supervisor board. The
-         * durable host scrollback should receive only append-only event rows so
-         * operators can scroll back through past activity without replaying the
-         * live panel title or footer chrome.
-         */
-        return Some(
-            parallel_frame_projection.map_or_else(Vec::new, |projection| {
-                current_inline_parallel_history_lines(viewport_area, sample, projection)
-            }),
-        );
-    }
-    if let Some(startup_banner_lines) =
-        build_startup_banner_lines(app, sample.parallel_mode_enabled(), None)
-    {
-        /*
-         * Startup banner wins over conversation history because before the first
-         * ready conversation the scrollback should explain boot diagnostics, not
-         * show an empty transcript placeholder.
-         */
-        return Some(startup_banner_lines);
-    }
-    match &app.conversation_state {
-        ConversationState::Ready(conversation) => {
-            /*
-             * Host scrollback is the durable transcript surface, so it must not
-             * share the live screen's capped projection. Reformat from committed
-             * messages only: live agent deltas and prompt text stay in the tail.
-             */
-            let messages = conversation.host_scrollback_messages();
-            if messages.is_empty()
-                && conversation
-                    .viewport_transcript_handoff_messages()
-                    .is_some()
-            {
-                return Some(Vec::new());
-            }
-            Some(format_conversation_scrollback_lines_with_expand(
-                messages,
-                app.conversation_view_mode,
-                app.conversation_view_mode.shows_debug_details()
-                    || app.planning_worker_shows_debug_details(),
-                Some(app.progressive_activity_overlay_ui_state.expand_state()),
-            ))
-        }
-        // Loading and failure are not authoritative empty conversations. Keep
-        // the prior diff baseline until a semantic identity revision or a Ready
-        // projection decides what should be delivered next.
-        ConversationState::Loading | ConversationState::Failed(_) => None,
-    }
-}
-
-fn current_inline_parallel_history_lines(
-    viewport_area: Rect,
-    sample: &ConversationProjectionSample,
-    frame_projection: &InlineConversationFrameProjection,
-) -> Vec<Line<'static>> {
-    let live_tail_lines =
-        inline_parallel_event_stream_visible_rows(frame_projection, viewport_area);
-    sample.parallel_supervisor_event_scrollback_lines_before_live_tail(
-        live_tail_lines,
-        viewport_area.width,
-    )
 }
 
 #[derive(Default)]
@@ -810,8 +698,8 @@ impl InlineTerminalState {
 
     fn commit_frame_render_receipt(
         &mut self,
-        app: &mut NativeTuiApp,
         pending: PendingInlineFrameRenderReceipt,
+        commit_receipt: impl FnOnce(InlineFrameRenderReceipt) -> bool,
     ) -> bool {
         let current_attempt = FrameRenderAttempt(self.latest_frame_render_attempt);
         if pending.attempt != current_attempt
@@ -821,7 +709,7 @@ impl InlineTerminalState {
         {
             return false;
         }
-        if !apply_inline_frame_render_receipt(app, pending.receipt) {
+        if !commit_receipt(pending.receipt) {
             return false;
         }
         self.last_committed_frame_render_attempt = Some(pending.attempt);

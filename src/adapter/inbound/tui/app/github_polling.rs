@@ -429,13 +429,14 @@ impl GithubReviewPollingRuntimeState {
 // admission, cursor continuity, and provider execution.
 impl NativeTuiApp {
     pub(super) fn github_review_polling_status_label(&self) -> String {
-        self.github_review_polling_state.status_label()
+        self.runtime.github_review_polling_state.status_label()
     }
     pub(super) fn github_review_recent_changes_summary(
         &self,
         max_total_len: usize,
     ) -> Option<String> {
-        self.github_review_polling_state
+        self.runtime
+            .github_review_polling_state
             .recent_change_summary(max_total_len)
     }
 
@@ -444,12 +445,14 @@ impl NativeTuiApp {
         workspace_directory: &str,
     ) -> bool {
         let Some(request) = self
+            .runtime
             .github_review_polling_state
             .setup_request_for_workspace(workspace_directory)
         else {
             return false;
         };
         let outcome = self
+            .runtime
             .client_runtime
             .dispatch_client_event(CoreInput::Command(AppCommand::SetupGithubReviewPolling(
                 request,
@@ -466,7 +469,8 @@ impl NativeTuiApp {
         &mut self,
         correlation: GithubReviewPollingSetupCorrelation,
     ) {
-        self.github_review_polling_state
+        self.runtime
+            .github_review_polling_state
             .record_setup_started(correlation);
     }
 
@@ -476,15 +480,17 @@ impl NativeTuiApp {
         correlation: GithubReviewPollingSetupCorrelation,
         result: Result<GithubReviewPollingSetupResult, String>,
     ) {
-        self.github_review_polling_state
+        self.runtime
+            .github_review_polling_state
             .record_setup_completion(now, correlation, result);
     }
 
     pub(super) fn maybe_start_github_review_poll(&mut self, now: Instant) -> bool {
-        if !self.github_review_polling_state.poll_due(now) {
+        if !self.runtime.github_review_polling_state.poll_due(now) {
             return false;
         }
         let outcome = self
+            .runtime
             .client_runtime
             .dispatch_client_event(CoreInput::Command(AppCommand::PollGithubReview));
         let started = outcome
@@ -499,7 +505,8 @@ impl NativeTuiApp {
         &mut self,
         correlation: GithubReviewPollCorrelation,
     ) {
-        self.github_review_polling_state
+        self.runtime
+            .github_review_polling_state
             .record_poll_started(correlation);
     }
 
@@ -509,7 +516,8 @@ impl NativeTuiApp {
         correlation: GithubReviewPollCorrelation,
         result: Result<GithubPullRequestPollResult, String>,
     ) {
-        self.github_review_polling_state
+        self.runtime
+            .github_review_polling_state
             .record_poll_completion(now, correlation, result);
     }
 }

@@ -18,7 +18,7 @@ use super::ParallelPeekOverlayView;
 pub(crate) fn build_parallel_peek_overlay_view(app: &NativeTuiApp) -> ParallelPeekOverlayView {
     build_parallel_peek_overlay_view_from_snapshot(
         &app.parallel_mode_supervisor_snapshot(),
-        &app.parallel_peek_overlay_ui_state,
+        &app.shell.parallel_peek_overlay_ui_state,
     )
 }
 

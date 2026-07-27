@@ -32,12 +32,12 @@ impl ShellActionAvailability {
 impl NativeTuiApp {
     pub(super) fn can_open_session_list(&self) -> bool {
         matches!(
-            &self.startup_state,
+            &self.shell.chrome.startup_state,
             StartupState::Ready(ready) if ready.can_continue
         )
     }
     pub(super) fn shell_action_availability(&self) -> ShellActionAvailability {
-        match &self.startup_state {
+        match &self.shell.chrome.startup_state {
             StartupState::Ready(ready) if ready.can_continue => ShellActionAvailability::Ready,
             StartupState::Idle | StartupState::Loading => ShellActionAvailability::Pending,
             StartupState::Ready(_) | StartupState::Failed(_) => ShellActionAvailability::Blocked,
@@ -61,7 +61,7 @@ impl NativeTuiApp {
     }
     pub(super) fn conversation_has_running_turn(&self) -> bool {
         matches!(
-            &self.conversation_state,
+            &self.conversation.lifecycle.conversation_state,
             ConversationState::Ready(conversation) if conversation.has_running_turn()
         )
     }
@@ -87,11 +87,12 @@ impl NativeTuiApp {
     }
 
     pub(super) fn start_reviews_overlay_authority_load(&mut self) {
-        if self.shell_overlay != ShellOverlay::Reviews {
+        if self.shell.chrome.shell_overlay != ShellOverlay::Reviews {
             return;
         }
         let context = self.current_reviews_overlay_context();
         let outcome = self
+            .runtime
             .client_runtime
             .dispatch_client_event(CoreInput::Command(AppCommand::LoadReviewCenter {
                 workspace_directory: context.workspace_directory,
@@ -175,11 +176,12 @@ impl NativeTuiApp {
         }
         let status_text = match command_input.command() {
             InlineShellCommand::Sessions if self.parallel_mode_enabled() => Some(
-                self.tui_language
+                self.shell
+                    .tui_language
                     .parallel_control_tower_opened_status()
                     .to_string(),
             ),
-            _ => command_input.localized_execution_status(self.tui_language),
+            _ => command_input.localized_execution_status(self.shell.tui_language),
         };
         // Command execution consumes the prompt buffer after any command-specific
         // status is emitted; commands that need arguments insert text before
@@ -192,7 +194,7 @@ impl NativeTuiApp {
         self.clear_input_buffer();
     }
     fn show_help_overlay(&mut self) {
-        self.help_scroll_offset = 0;
+        self.shell.help_scroll_offset = 0;
         self.dispatch_shell_chrome(ShellChromeEvent::HelpOverlayShown);
     }
     fn handle_activity_shell_command(&mut self, argument: Option<&str>) {
@@ -223,7 +225,8 @@ impl NativeTuiApp {
         if self.approval_overlay_active() {
             return false;
         }
-        self.progressive_activity_overlay_ui_state
+        self.shell
+            .progressive_activity_overlay_ui_state
             .reset_for_kind(selected_kind);
         self.dispatch_shell_chrome(ShellChromeEvent::ActivityOverlayShown);
         true
@@ -238,24 +241,28 @@ impl NativeTuiApp {
         if self.approval_overlay_active() {
             return false;
         }
-        self.progressive_activity_overlay_ui_state
+        self.shell
+            .progressive_activity_overlay_ui_state
             .reset_for_card_filter(card_filter);
         self.dispatch_shell_chrome(ShellChromeEvent::ActivityOverlayShown);
         true
     }
     pub(super) fn show_model_selection_overlay(&mut self) {
-        self.model_selection_overlay_ui_state
-            .reset_from_turn_options(&self.turn_options);
+        self.shell
+            .model_selection_overlay_ui_state
+            .reset_from_turn_options(&self.conversation.turn_options);
         self.dispatch_shell_chrome(ShellChromeEvent::ModelSelectionOverlayShown);
     }
     pub(super) fn show_view_selection_overlay(&mut self) {
-        self.view_selection_overlay_ui_state
-            .reset_from_mode(self.conversation_view_mode);
+        self.shell
+            .view_selection_overlay_ui_state
+            .reset_from_mode(self.conversation.conversation_view_mode);
         self.dispatch_shell_chrome(ShellChromeEvent::ViewSelectionOverlayShown);
     }
     pub(super) fn show_language_selection_overlay(&mut self) {
-        self.language_selection_overlay_ui_state
-            .reset_from_language(self.tui_language);
+        self.shell
+            .language_selection_overlay_ui_state
+            .reset_from_language(self.shell.tui_language);
         self.dispatch_shell_chrome(ShellChromeEvent::LanguageSelectionOverlayShown);
     }
     fn handle_turns_shell_command(&mut self, argument: Option<&str>) {
@@ -265,7 +272,7 @@ impl NativeTuiApp {
     }
     fn handle_model_shell_command(&mut self, argument: Option<&str>) {
         if argument.is_some_and(is_turn_option_clear_argument) {
-            self.turn_options.model = None;
+            self.conversation.turn_options.model = None;
             self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                 status_text: "model reset to app-server default".to_string(),
             });
@@ -321,19 +328,20 @@ impl NativeTuiApp {
         let status_text = match argument {
             None => format!(
                 "think override unchanged / current: {} / use :think <{}>",
-                self.turn_options
+                self.conversation
+                    .turn_options
                     .reasoning_effort
                     .map(ConversationReasoningEffort::label)
                     .unwrap_or("default"),
                 ConversationReasoningEffort::SUPPORTED_LABELS
             ),
             Some(value) if is_turn_option_clear_argument(value) => {
-                self.turn_options.reasoning_effort = None;
+                self.conversation.turn_options.reasoning_effort = None;
                 "think reset to app-server default".to_string()
             }
             Some(value) => match ConversationReasoningEffort::parse(value) {
                 Some(effort) => {
-                    self.turn_options.reasoning_effort = Some(effort);
+                    self.conversation.turn_options.reasoning_effort = Some(effort);
                     format!("think override set to {}", effort.label())
                 }
                 None => format!(
@@ -410,14 +418,14 @@ impl NativeTuiApp {
         self.prompt_input_has_focus()
     }
     pub(super) fn prompt_input_has_focus(&self) -> bool {
-        self.shell_overlay.prompt_input_has_focus(
+        self.shell.chrome.shell_overlay.prompt_input_has_focus(
             self.is_exit_confirmation_visible() || self.is_turn_steer_confirmation_visible(),
             self.parallel_mode_prompt_input_locked(),
         )
     }
     pub(super) fn is_inline_command_palette_active(&self) -> bool {
         matches!(
-            &self.conversation_state,
+            &self.conversation.lifecycle.conversation_state,
             ConversationState::Ready(conversation)
                 if conversation.composer.inline_shell_command_palette_state.is_active()
         )
@@ -441,7 +449,7 @@ impl NativeTuiApp {
         true
     }
     pub(super) fn accept_inline_command_palette_selection(&mut self) -> bool {
-        let selected_command = match &self.conversation_state {
+        let selected_command = match &self.conversation.lifecycle.conversation_state {
             ConversationState::Ready(conversation)
                 if conversation
                     .composer
@@ -489,38 +497,47 @@ impl NativeTuiApp {
         self.clear_input_buffer();
     }
     pub(super) fn is_shell_overlay_visible(&self) -> bool {
-        self.shell_overlay != ShellOverlay::Hidden
+        self.shell.chrome.shell_overlay != ShellOverlay::Hidden
     }
     pub(super) fn approval_overlay_active(&self) -> bool {
-        self.shell_overlay == ShellOverlay::Approval
+        self.shell.chrome.shell_overlay == ShellOverlay::Approval
     }
     pub(super) fn is_exit_confirmation_visible(&self) -> bool {
-        self.exit_confirmation_state == ExitConfirmationState::Visible
+        self.shell.chrome.exit_confirmation_state == ExitConfirmationState::Visible
     }
 
     pub(super) fn is_turn_steer_confirmation_visible(&self) -> bool {
-        self.turn_steer_confirmation.is_some()
-            && self.shell_overlay == ShellOverlay::Hidden
+        self.conversation.turn_steer_confirmation.is_some()
+            && self.shell.chrome.shell_overlay == ShellOverlay::Hidden
             && !self.is_exit_confirmation_visible()
     }
 
     pub(super) fn show_turn_steer_confirmation(&mut self) -> bool {
-        if self.pending_manual_prompt_preparation.is_some() {
+        if self
+            .conversation
+            .pending_manual_prompt_preparation
+            .is_some()
+        {
             self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                 status_text: self
+                    .shell
                     .tui_language
                     .manual_prompt_queue_pending_status()
                     .to_string(),
             });
             return true;
         }
-        if self.pending_turn_steer.is_some() {
+        if self.conversation.pending_turn_steer.is_some() {
             self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                status_text: self.tui_language.turn_steer_pending_status().to_string(),
+                status_text: self
+                    .shell
+                    .tui_language
+                    .turn_steer_pending_status()
+                    .to_string(),
             });
             return true;
         }
-        let (request, source_input_buffer) = match &self.conversation_state {
+        let (request, source_input_buffer) = match &self.conversation.lifecycle.conversation_state {
             ConversationState::Ready(conversation)
                 if conversation.has_running_turn()
                     && !conversation.composer.input_buffer.trim().is_empty() =>
@@ -528,6 +545,7 @@ impl NativeTuiApp {
                 let Some(expected_turn_id) = conversation.active_turn_id.clone() else {
                     self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                         status_text: self
+                            .shell
                             .tui_language
                             .turn_steer_unavailable_status()
                             .to_string(),
@@ -537,6 +555,7 @@ impl NativeTuiApp {
                 if conversation.thread_id.trim().is_empty() {
                     self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                         status_text: self
+                            .shell
                             .tui_language
                             .turn_steer_unavailable_status()
                             .to_string(),
@@ -558,6 +577,7 @@ impl NativeTuiApp {
             {
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                     status_text: self
+                        .shell
                         .tui_language
                         .turn_steer_needs_prompt_status()
                         .to_string(),
@@ -566,8 +586,8 @@ impl NativeTuiApp {
             }
             _ => return false,
         };
-        self.turn_steer_confirmation = Some(TurnSteerUiIntent {
-            input_revision: self.prompt_input_revision,
+        self.conversation.turn_steer_confirmation = Some(TurnSteerUiIntent {
+            input_revision: self.conversation.prompt_input_revision,
             source_input_buffer,
             request,
         });
@@ -579,7 +599,7 @@ impl NativeTuiApp {
             return false;
         }
         if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('c') {
-            self.turn_steer_confirmation = None;
+            self.conversation.turn_steer_confirmation = None;
             return false;
         }
         if !key.modifiers.is_empty() {
@@ -587,9 +607,13 @@ impl NativeTuiApp {
         }
         match key.code {
             KeyCode::Esc => {
-                self.turn_steer_confirmation = None;
+                self.conversation.turn_steer_confirmation = None;
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                    status_text: self.tui_language.turn_steer_cancelled_status().to_string(),
+                    status_text: self
+                        .shell
+                        .tui_language
+                        .turn_steer_cancelled_status()
+                        .to_string(),
                 });
             }
             KeyCode::Enter | KeyCode::Tab => self.confirm_turn_steer(),
@@ -599,20 +623,21 @@ impl NativeTuiApp {
     }
 
     fn confirm_turn_steer(&mut self) {
-        let Some(intent) = self.turn_steer_confirmation.take() else {
+        let Some(intent) = self.conversation.turn_steer_confirmation.take() else {
             return;
         };
         let still_exact = matches!(
-            &self.conversation_state,
+            &self.conversation.lifecycle.conversation_state,
             ConversationState::Ready(conversation)
                 if conversation.thread_id == intent.request.thread_id
                     && conversation.active_turn_id.as_deref()
                         == Some(intent.request.expected_turn_id.as_str())
                     && conversation.composer.input_buffer == intent.source_input_buffer
-        ) && self.prompt_input_revision == intent.input_revision;
+        ) && self.conversation.prompt_input_revision == intent.input_revision;
         if !still_exact {
             self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                 status_text: self
+                    .shell
                     .tui_language
                     .turn_steer_unavailable_status()
                     .to_string(),
@@ -622,6 +647,7 @@ impl NativeTuiApp {
 
         let request = intent.request.clone();
         let outcome = self
+            .runtime
             .client_runtime
             .dispatch_client_event(CoreInput::Command(AppCommand::SteerTurn(request)));
         let admission = outcome.events.iter().find_map(|event| match event {
@@ -630,22 +656,31 @@ impl NativeTuiApp {
         });
         match admission {
             Some(TurnSteerAdmission::Accepted { correlation }) => {
-                self.pending_turn_steer = Some(PendingTurnSteerUiIntent {
+                self.conversation.pending_turn_steer = Some(PendingTurnSteerUiIntent {
                     correlation,
                     intent,
                 });
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                    status_text: self.tui_language.turn_steer_pending_status().to_string(),
+                    status_text: self
+                        .shell
+                        .tui_language
+                        .turn_steer_pending_status()
+                        .to_string(),
                 });
             }
             Some(TurnSteerAdmission::RejectedActive { .. }) => {
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                    status_text: self.tui_language.turn_steer_pending_status().to_string(),
+                    status_text: self
+                        .shell
+                        .tui_language
+                        .turn_steer_pending_status()
+                        .to_string(),
                 });
             }
             Some(TurnSteerAdmission::RejectedUnavailable) | None => {
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                     status_text: self
+                        .shell
                         .tui_language
                         .turn_steer_unavailable_status()
                         .to_string(),
@@ -663,6 +698,7 @@ impl NativeTuiApp {
         result: Result<crate::domain::conversation::ConversationTurnSteerReceipt, String>,
     ) {
         let Some(pending) = self
+            .conversation
             .pending_turn_steer
             .as_ref()
             .filter(|pending| pending.correlation == correlation)
@@ -670,13 +706,13 @@ impl NativeTuiApp {
         else {
             return;
         };
-        self.pending_turn_steer = None;
+        self.conversation.pending_turn_steer = None;
         let intent = pending.intent;
         match result {
             Ok(receipt) => {
-                let input_revision = self.prompt_input_revision;
+                let input_revision = self.conversation.prompt_input_revision;
                 let draft_is_current = matches!(
-                    &self.conversation_state,
+                    &self.conversation.lifecycle.conversation_state,
                     ConversationState::Ready(conversation)
                         if conversation.thread_id == intent.request.thread_id
                             && conversation.composer.input_buffer == intent.source_input_buffer
@@ -686,13 +722,14 @@ impl NativeTuiApp {
                 }
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                     status_text: self
+                        .shell
                         .tui_language
                         .turn_steer_succeeded_status(&receipt.turn_id),
                 });
             }
             Err(reason) => {
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                    status_text: self.tui_language.turn_steer_failed_status(&reason),
+                    status_text: self.shell.tui_language.turn_steer_failed_status(&reason),
                 });
             }
         }
@@ -720,13 +757,13 @@ impl NativeTuiApp {
         }
     }
     pub(super) fn handle_shell_overlay_key(&mut self, key: event::KeyEvent) -> bool {
-        if self.shell_overlay == ShellOverlay::Hidden {
+        if self.shell.chrome.shell_overlay == ShellOverlay::Hidden {
             return false;
         }
-        if self.shell_overlay == ShellOverlay::Approval {
+        if self.shell.chrome.shell_overlay == ShellOverlay::Approval {
             return self.handle_approval_overlay_key(key);
         }
-        let is_startup_overlay = self.shell_overlay == ShellOverlay::Startup;
+        let is_startup_overlay = self.shell.chrome.shell_overlay == ShellOverlay::Startup;
         // Text-field handlers get first refusal because their shortcuts must not
         // leak into overlay navigation while the cursor is inside an editor.
         if self.handle_max_auto_turns_editor_key(key) {
@@ -744,12 +781,13 @@ impl NativeTuiApp {
         if key.code == KeyCode::Esc
             || (key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('c'))
         {
-            let closing_directions_manual_editor = self.shell_overlay
+            let closing_directions_manual_editor = self.shell.chrome.shell_overlay
                 == ShellOverlay::DirectionsMaintenance
-                && self.directions_maintenance_overlay_ui_state.step()
+                && self.planning.directions_maintenance_overlay_ui_state.step()
                     == DirectionsMaintenanceOverlayStep::ManualEditor;
-            let closing_planning_manual_editor = self.shell_overlay == ShellOverlay::PlanningInit
-                && self.planning_init_overlay_ui_state.step()
+            let closing_planning_manual_editor = self.shell.chrome.shell_overlay
+                == ShellOverlay::PlanningInit
+                && self.planning.planning_init_overlay_ui_state.step()
                     == PlanningInitOverlayStep::ManualEditor;
             // Manual editors have their own close guards for unsaved staged
             // content; other overlays can close directly through shell chrome.
@@ -777,35 +815,35 @@ impl NativeTuiApp {
         if self.handle_supersession_overlay_key(key) {
             return true;
         }
-        if self.shell_overlay == ShellOverlay::Supersession {
+        if self.shell.chrome.shell_overlay == ShellOverlay::Supersession {
             // Supersession only owns ordinary prompt keys while its loading
             // pipeline is active. Once the board has a concrete snapshot, prompt
             // editing falls through so the operator can keep working while the
             // board remains visible.
             return self.parallel_mode_prompt_input_locked();
         }
-        if self.shell_overlay == ShellOverlay::ModelSelection {
+        if self.shell.chrome.shell_overlay == ShellOverlay::ModelSelection {
             return self.handle_model_selection_overlay_key(key);
         }
-        if self.shell_overlay == ShellOverlay::ViewSelection {
+        if self.shell.chrome.shell_overlay == ShellOverlay::ViewSelection {
             return self.handle_view_selection_overlay_key(key);
         }
-        if self.shell_overlay == ShellOverlay::LanguageSelection {
+        if self.shell.chrome.shell_overlay == ShellOverlay::LanguageSelection {
             return self.handle_language_selection_overlay_key(key);
         }
-        if self.shell_overlay == ShellOverlay::DirectionsMaintenance {
+        if self.shell.chrome.shell_overlay == ShellOverlay::DirectionsMaintenance {
             return self.handle_directions_overlay_key(key);
         }
-        if self.shell_overlay == ShellOverlay::PlanningInit {
+        if self.shell.chrome.shell_overlay == ShellOverlay::PlanningInit {
             return self.handle_planning_init_overlay_key(key);
         }
-        if self.shell_overlay == ShellOverlay::Activity {
+        if self.shell.chrome.shell_overlay == ShellOverlay::Activity {
             return self.handle_progressive_activity_overlay_key(key);
         }
-        if self.shell_overlay == ShellOverlay::Help {
+        if self.shell.chrome.shell_overlay == ShellOverlay::Help {
             return self.handle_help_overlay_key(key);
         }
-        if self.shell_overlay == ShellOverlay::Queue {
+        if self.shell.chrome.shell_overlay == ShellOverlay::Queue {
             return self.handle_queue_overlay_key(key);
         }
 
@@ -816,31 +854,33 @@ impl NativeTuiApp {
     fn handle_help_overlay_key(&mut self, key: event::KeyEvent) -> bool {
         match (key.code, key.modifiers) {
             (KeyCode::Up | KeyCode::Char('k'), KeyModifiers::NONE) => {
-                self.help_scroll_offset = self.help_scroll_offset.saturating_sub(1);
+                self.shell.help_scroll_offset = self.shell.help_scroll_offset.saturating_sub(1);
             }
             (KeyCode::Down | KeyCode::Char('j'), KeyModifiers::NONE) => {
-                self.help_scroll_offset = self.help_scroll_offset.saturating_add(1);
+                self.shell.help_scroll_offset = self.shell.help_scroll_offset.saturating_add(1);
             }
             (KeyCode::PageUp, KeyModifiers::NONE) => {
-                self.help_scroll_offset = self.help_scroll_offset.saturating_sub(5);
+                self.shell.help_scroll_offset = self.shell.help_scroll_offset.saturating_sub(5);
             }
             (KeyCode::PageDown, KeyModifiers::NONE) => {
-                self.help_scroll_offset = self.help_scroll_offset.saturating_add(5);
+                self.shell.help_scroll_offset = self.shell.help_scroll_offset.saturating_add(5);
             }
-            (KeyCode::Home, KeyModifiers::NONE) => self.help_scroll_offset = 0,
-            (KeyCode::End, KeyModifiers::NONE) => self.help_scroll_offset = usize::MAX,
+            (KeyCode::Home, KeyModifiers::NONE) => self.shell.help_scroll_offset = 0,
+            (KeyCode::End, KeyModifiers::NONE) => self.shell.help_scroll_offset = usize::MAX,
             _ => {}
         }
         true
     }
 
     fn handle_progressive_activity_overlay_key(&mut self, key: event::KeyEvent) -> bool {
-        let filtered_len = match &self.conversation_state {
+        let filtered_len = match &self.conversation.lifecycle.conversation_state {
             ConversationState::Ready(conversation) => {
                 let cards = conversation.progressive_activity_detail.cards();
                 super::filter_cards_by_kind(
                     &cards,
-                    self.progressive_activity_overlay_ui_state.card_filter(),
+                    self.shell
+                        .progressive_activity_overlay_ui_state
+                        .card_filter(),
                 )
                 .len()
             }
@@ -850,46 +890,64 @@ impl NativeTuiApp {
             (
                 KeyCode::Tab | KeyCode::BackTab | KeyCode::Left | KeyCode::Right,
                 KeyModifiers::NONE | KeyModifiers::SHIFT,
-            ) => self.progressive_activity_overlay_ui_state.cycle_kind(),
+            ) => self
+                .shell
+                .progressive_activity_overlay_ui_state
+                .cycle_kind(),
             (KeyCode::Up | KeyCode::Char('k'), KeyModifiers::NONE) => {
-                self.progressive_activity_overlay_ui_state
+                self.shell
+                    .progressive_activity_overlay_ui_state
                     .move_card_selection(-1, filtered_len);
             }
             (KeyCode::Down | KeyCode::Char('j'), KeyModifiers::NONE) => {
-                self.progressive_activity_overlay_ui_state
+                self.shell
+                    .progressive_activity_overlay_ui_state
                     .move_card_selection(1, filtered_len);
             }
             (KeyCode::PageUp, KeyModifiers::NONE) => {
-                self.progressive_activity_overlay_ui_state
+                self.shell
+                    .progressive_activity_overlay_ui_state
                     .move_to_previous_page();
             }
             (KeyCode::PageDown, KeyModifiers::NONE) => {
-                self.progressive_activity_overlay_ui_state
+                self.shell
+                    .progressive_activity_overlay_ui_state
                     .move_to_next_page();
             }
             (KeyCode::Enter | KeyCode::Char('e') | KeyCode::Char('l'), KeyModifiers::NONE) => {
-                if let ConversationState::Ready(conversation) = &self.conversation_state {
+                if let ConversationState::Ready(conversation) =
+                    &self.conversation.lifecycle.conversation_state
+                {
                     let cards = conversation.progressive_activity_detail.cards();
                     let filtered = super::filter_cards_by_kind(
                         &cards,
-                        self.progressive_activity_overlay_ui_state.card_filter(),
+                        self.shell
+                            .progressive_activity_overlay_ui_state
+                            .card_filter(),
                     );
                     if let Some(card_index) = filtered.get(
-                        self.progressive_activity_overlay_ui_state
+                        self.shell
+                            .progressive_activity_overlay_ui_state
                             .selected_card_index(),
                     ) && let Some(card) = cards.get(*card_index)
                     {
-                        self.progressive_activity_overlay_ui_state
+                        self.shell
+                            .progressive_activity_overlay_ui_state
                             .expand_state_mut()
                             .expand_card(card.key);
                     }
                 }
-                self.progressive_activity_overlay_ui_state.focus_detail();
+                self.shell
+                    .progressive_activity_overlay_ui_state
+                    .focus_detail();
             }
             (KeyCode::Char('h'), KeyModifiers::NONE) => {
-                self.progressive_activity_overlay_ui_state.focus_list();
+                self.shell
+                    .progressive_activity_overlay_ui_state
+                    .focus_list();
             }
             (KeyCode::Home, KeyModifiers::NONE) => self
+                .shell
                 .progressive_activity_overlay_ui_state
                 .reset_navigation(),
             _ => {}
@@ -948,13 +1006,15 @@ impl NativeTuiApp {
         true
     }
     fn move_pending_approval_detail_scroll(&mut self, delta: isize) {
-        if let ConversationState::Ready(conversation) = &mut self.conversation_state {
+        if let ConversationState::Ready(conversation) =
+            &mut self.conversation.lifecycle.conversation_state
+        {
             conversation.move_approval_detail_scroll(delta);
         }
     }
     fn pending_approval_decision_submitted(&self) -> bool {
         matches!(
-            &self.conversation_state,
+            &self.conversation.lifecycle.conversation_state,
             ConversationState::Ready(conversation)
                 if conversation.pending_approval_decision().is_some()
         )
@@ -963,7 +1023,7 @@ impl NativeTuiApp {
         &mut self,
         decision: crate::domain::conversation::ConversationApprovalDecision,
     ) {
-        let approval_id = match &self.conversation_state {
+        let approval_id = match &self.conversation.lifecycle.conversation_state {
             ConversationState::Ready(conversation)
                 if conversation.pending_approval_decision().is_none() =>
             {
@@ -977,6 +1037,7 @@ impl NativeTuiApp {
         };
         if let Some(approval_id) = approval_id {
             let outcome = self
+                .runtime
                 .client_runtime
                 .dispatch_client_event(CoreInput::Command(AppCommand::SubmitApprovalDecision {
                     approval_id: approval_id.clone(),
@@ -1026,22 +1087,27 @@ impl NativeTuiApp {
     }
 
     pub(super) fn handle_model_selection_overlay_key(&mut self, key: event::KeyEvent) -> bool {
-        if self.shell_overlay != ShellOverlay::ModelSelection {
+        if self.shell.chrome.shell_overlay != ShellOverlay::ModelSelection {
             return false;
         }
 
         match key.code {
             KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => {
-                self.model_selection_overlay_ui_state.move_selection(-1);
+                self.shell
+                    .model_selection_overlay_ui_state
+                    .move_selection(-1);
             }
             KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
-                self.model_selection_overlay_ui_state.move_selection(1);
+                self.shell
+                    .model_selection_overlay_ui_state
+                    .move_selection(1);
             }
             KeyCode::Char(number)
                 if key.modifiers.is_empty() && number.is_ascii_digit() && number != '0' =>
             {
                 let index = number.to_digit(10).unwrap_or(0).saturating_sub(1) as usize;
                 if self
+                    .shell
                     .model_selection_overlay_ui_state
                     .select_active_index(index)
                 {
@@ -1053,10 +1119,11 @@ impl NativeTuiApp {
             }
             KeyCode::Left | KeyCode::Backspace
                 if key.modifiers.is_empty()
-                    && self.model_selection_overlay_ui_state.step()
+                    && self.shell.model_selection_overlay_ui_state.step()
                         == ModelSelectionStep::Effort =>
             {
-                self.model_selection_overlay_ui_state
+                self.shell
+                    .model_selection_overlay_ui_state
                     .return_to_model_selection();
             }
             _ => {}
@@ -1065,22 +1132,28 @@ impl NativeTuiApp {
     }
 
     pub(super) fn handle_view_selection_overlay_key(&mut self, key: event::KeyEvent) -> bool {
-        if self.shell_overlay != ShellOverlay::ViewSelection {
+        if self.shell.chrome.shell_overlay != ShellOverlay::ViewSelection {
             return false;
         }
 
         match key.code {
             KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => {
-                self.view_selection_overlay_ui_state.move_selection(-1);
+                self.shell
+                    .view_selection_overlay_ui_state
+                    .move_selection(-1);
             }
             KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
-                self.view_selection_overlay_ui_state.move_selection(1);
+                self.shell.view_selection_overlay_ui_state.move_selection(1);
             }
             KeyCode::Char(number)
                 if key.modifiers.is_empty() && number.is_ascii_digit() && number != '0' =>
             {
                 let index = number.to_digit(10).unwrap_or(0).saturating_sub(1) as usize;
-                if self.view_selection_overlay_ui_state.select_index(index) {
+                if self
+                    .shell
+                    .view_selection_overlay_ui_state
+                    .select_index(index)
+                {
                     self.apply_view_selection_overlay();
                 }
             }
@@ -1091,22 +1164,30 @@ impl NativeTuiApp {
     }
 
     pub(super) fn handle_language_selection_overlay_key(&mut self, key: event::KeyEvent) -> bool {
-        if self.shell_overlay != ShellOverlay::LanguageSelection {
+        if self.shell.chrome.shell_overlay != ShellOverlay::LanguageSelection {
             return false;
         }
 
         match key.code {
             KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => {
-                self.language_selection_overlay_ui_state.move_selection(-1);
+                self.shell
+                    .language_selection_overlay_ui_state
+                    .move_selection(-1);
             }
             KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
-                self.language_selection_overlay_ui_state.move_selection(1);
+                self.shell
+                    .language_selection_overlay_ui_state
+                    .move_selection(1);
             }
             KeyCode::Char(number)
                 if key.modifiers.is_empty() && number.is_ascii_digit() && number != '0' =>
             {
                 let index = number.to_digit(10).unwrap_or(0).saturating_sub(1) as usize;
-                if self.language_selection_overlay_ui_state.select_index(index) {
+                if self
+                    .shell
+                    .language_selection_overlay_ui_state
+                    .select_index(index)
+                {
                     self.apply_language_selection_overlay();
                 }
             }
@@ -1117,9 +1198,10 @@ impl NativeTuiApp {
     }
 
     fn confirm_model_selection_overlay_step(&mut self) {
-        match self.model_selection_overlay_ui_state.step() {
+        match self.shell.model_selection_overlay_ui_state.step() {
             ModelSelectionStep::Model => {
-                self.model_selection_overlay_ui_state
+                self.shell
+                    .model_selection_overlay_ui_state
                     .advance_from_model_selection();
             }
             ModelSelectionStep::Effort => self.apply_model_selection_overlay(),
@@ -1127,10 +1209,13 @@ impl NativeTuiApp {
     }
 
     fn apply_model_selection_overlay(&mut self) {
-        let model_option = self.model_selection_overlay_ui_state.staged_model();
-        let effort_option = self.model_selection_overlay_ui_state.selected_effort();
-        self.turn_options.model = model_option.model.map(str::to_string);
-        self.turn_options.reasoning_effort = effort_option.effort;
+        let model_option = self.shell.model_selection_overlay_ui_state.staged_model();
+        let effort_option = self
+            .shell
+            .model_selection_overlay_ui_state
+            .selected_effort();
+        self.conversation.turn_options.model = model_option.model.map(str::to_string);
+        self.conversation.turn_options.reasoning_effort = effort_option.effort;
         self.close_shell_overlay();
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text: format!(
@@ -1141,17 +1226,20 @@ impl NativeTuiApp {
     }
 
     fn apply_view_selection_overlay(&mut self) {
-        let mode = self.view_selection_overlay_ui_state.selected_mode();
+        let mode = self.shell.view_selection_overlay_ui_state.selected_mode();
         self.apply_conversation_view_mode(mode);
     }
 
     fn apply_language_selection_overlay(&mut self) {
-        let language = self.language_selection_overlay_ui_state.selected_language();
+        let language = self
+            .shell
+            .language_selection_overlay_ui_state
+            .selected_language();
         self.apply_tui_language(language);
     }
 
     fn apply_conversation_view_mode(&mut self, mode: ConversationViewMode) {
-        self.conversation_view_mode = mode;
+        self.conversation.conversation_view_mode = mode;
         self.close_shell_overlay();
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text: format!("conversation view set to {}", mode.label()),
@@ -1159,7 +1247,7 @@ impl NativeTuiApp {
     }
 
     fn apply_tui_language(&mut self, language: TuiLanguage) {
-        self.tui_language = language;
+        self.shell.tui_language = language;
         self.close_shell_overlay();
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text: language.language_set_status().to_string(),
@@ -1220,7 +1308,7 @@ mod tests {
         app: &mut NativeTuiApp,
         request: ConversationApprovalRequest,
     ) -> crate::core::app::TurnSubmissionCorrelation {
-        let turn_submission = app.client_runtime.begin_test_turn_submission();
+        let turn_submission = app.runtime.client_runtime.begin_test_turn_submission();
         app.dispatch_client_event(crate::core::app::CoreInput::ConversationStreamUpdated {
             correlation: turn_submission,
             event: crate::core::app::TurnStreamEvent::ThreadPrepared {
@@ -1245,8 +1333,9 @@ mod tests {
     }
 
     fn open_simple_review(app: &mut NativeTuiApp) {
-        app.shell_overlay = ShellOverlay::PlanningInit;
-        app.planning_init_overlay_ui_state
+        app.shell.chrome.shell_overlay = ShellOverlay::PlanningInit;
+        app.planning
+            .planning_init_overlay_ui_state
             .open_simple_review(PlanningInitStageResult {
                 mode: PlanningBootstrapMode::Simple,
                 draft_name: "bootstrap-1".to_string(),
@@ -1318,14 +1407,14 @@ mod tests {
     }
 
     fn ready_conversation(app: &NativeTuiApp) -> &ConversationViewModel {
-        match &app.conversation_state {
+        match &app.conversation.lifecycle.conversation_state {
             ConversationState::Ready(conversation) => conversation,
             other => panic!("expected ready conversation, got {other:?}"),
         }
     }
 
     fn ready_conversation_mut(app: &mut NativeTuiApp) -> &mut ConversationViewModel {
-        match &mut app.conversation_state {
+        match &mut app.conversation.lifecycle.conversation_state {
             ConversationState::Ready(conversation) => conversation,
             other => panic!("expected ready conversation, got {other:?}"),
         }
@@ -1541,7 +1630,7 @@ mod tests {
     ) -> (QueueMutationCorrelation, QueueMutationResult) {
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
-            if let Some(outcome) = app.client_runtime.poll_pending_client_event() {
+            if let Some(outcome) = app.runtime.client_runtime.poll_pending_client_event() {
                 for event in outcome.events {
                     match event {
                         AppEvent::QueueMutationCompleted {
@@ -1607,7 +1696,7 @@ mod tests {
         while Instant::now() < deadline {
             app.poll_core_runtime_inputs(1);
             if !matches!(
-                app.queue_overlay_ui_state.authority_screen_model(),
+                app.planning.queue_overlay_ui_state.authority_screen_model(),
                 queue_overlay_ui::QueueOverlayAuthorityScreenModel::Loading { .. }
             ) {
                 return;
@@ -1649,7 +1738,7 @@ mod tests {
     fn startup_action_availability_drives_submission_status_copy() {
         let mut app = test_native_tui_app();
 
-        app.startup_state = StartupState::Idle;
+        app.shell.chrome.startup_state = StartupState::Idle;
         assert_eq!(
             app.shell_action_availability(),
             ShellActionAvailability::Pending
@@ -1660,26 +1749,26 @@ mod tests {
             "auto-follow paused while startup checks are still running"
         );
 
-        app.startup_state = StartupState::Loading;
+        app.shell.chrome.startup_state = StartupState::Loading;
         assert_eq!(
             app.submission_blocked_status(PromptOrigin::Manual),
             "startup checks still running; open diagnostics with Ctrl+d"
         );
 
-        app.startup_state = StartupState::Failed("boom".to_string());
+        app.shell.chrome.startup_state = StartupState::Failed("boom".to_string());
         assert_eq!(
             app.submission_blocked_status(auto_follow_origin()),
             "auto-follow paused because startup diagnostics need attention"
         );
 
-        app.startup_state = StartupState::Ready(startup_ready_snapshot(false));
+        app.shell.chrome.startup_state = StartupState::Ready(startup_ready_snapshot(false));
         assert!(!app.can_open_session_list());
         assert_eq!(
             app.shell_action_availability(),
             ShellActionAvailability::Blocked
         );
 
-        app.startup_state = StartupState::Ready(startup_ready_snapshot(true));
+        app.shell.chrome.startup_state = StartupState::Ready(startup_ready_snapshot(true));
         assert!(app.can_open_session_list());
         assert_eq!(
             app.shell_action_availability(),
@@ -1711,7 +1800,7 @@ mod tests {
 
         assert!(app.handle_shell_overlay_key(key(KeyCode::Esc)));
         assert_eq!(app.max_auto_turns_edit_buffer(), None);
-        assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::PlanningInit);
 
         assert!(
             app.handle_shell_overlay_key(modified_key(KeyCode::Char('l'), KeyModifiers::CONTROL))
@@ -1738,7 +1827,7 @@ mod tests {
         );
         assert_eq!(app.max_auto_turns_edit_buffer(), Some("12"));
         app.show_model_selection_overlay();
-        assert_eq!(app.shell_overlay, ShellOverlay::ModelSelection);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::ModelSelection);
         assert_eq!(app.max_auto_turns_edit_buffer(), None);
 
         open_simple_review(&mut app);
@@ -1757,33 +1846,36 @@ mod tests {
     fn close_shell_overlay_resets_overlay_local_buffers() {
         let mut app = test_native_tui_app();
 
-        app.shell_overlay = ShellOverlay::Activity;
-        app.progressive_activity_overlay_ui_state
+        app.shell.chrome.shell_overlay = ShellOverlay::Activity;
+        app.shell
+            .progressive_activity_overlay_ui_state
             .reset_for_kind(ProgressiveActivityDetailKind::Output);
-        app.progressive_activity_overlay_ui_state
+        app.shell
+            .progressive_activity_overlay_ui_state
             .select_document(1, Some(8));
-        app.progressive_activity_overlay_ui_state
+        app.shell
+            .progressive_activity_overlay_ui_state
             .set_page_window(4, Some(8));
         app.close_shell_overlay();
-        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Hidden);
         assert_eq!(
-            app.progressive_activity_overlay_ui_state,
+            app.shell.progressive_activity_overlay_ui_state,
             ProgressiveActivityOverlayUiState::default()
         );
 
-        app.shell_overlay = ShellOverlay::Reviews;
+        app.shell.chrome.shell_overlay = ShellOverlay::Reviews;
         app.begin_reviews_overlay_load(crate::core::app::ReviewCenterLoadCorrelation::new(
             1,
             "/tmp/root",
             None,
         ));
         assert!(matches!(
-            app.reviews_overlay_ui_state.screen_model(),
+            app.shell.reviews_overlay_ui_state.screen_model(),
             crate::adapter::inbound::tui::app::reviews_overlay_ui::ReviewsOverlayScreenModel::Loading(_)
         ));
         app.close_shell_overlay();
         assert!(matches!(
-            app.reviews_overlay_ui_state.screen_model(),
+            app.shell.reviews_overlay_ui_state.screen_model(),
             crate::adapter::inbound::tui::app::reviews_overlay_ui::ReviewsOverlayScreenModel::Idle
         ));
 
@@ -1796,9 +1888,9 @@ mod tests {
             ShellOverlay::ParallelPeek,
             ShellOverlay::Queue,
         ] {
-            app.shell_overlay = overlay;
+            app.shell.chrome.shell_overlay = overlay;
             app.close_shell_overlay();
-            assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+            assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Hidden);
         }
     }
 
@@ -1806,21 +1898,23 @@ mod tests {
     fn overlay_replace_and_transient_dismiss_share_exit_cleanup() {
         let mut app = test_native_tui_app();
         app.dispatch_shell_chrome(ShellChromeEvent::ActivityOverlayShown);
-        app.progressive_activity_overlay_ui_state
+        app.shell
+            .progressive_activity_overlay_ui_state
             .reset_for_kind(ProgressiveActivityDetailKind::Output);
-        app.progressive_activity_overlay_ui_state
+        app.shell
+            .progressive_activity_overlay_ui_state
             .select_document(1, Some(8));
-        let revision_before_replace = app.planning_ui_intent_revision;
+        let revision_before_replace = app.planning.planning_ui_intent_revision;
 
         app.dispatch_shell_chrome(ShellChromeEvent::HelpOverlayShown);
 
-        assert_eq!(app.shell_overlay, ShellOverlay::Help);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Help);
         assert_eq!(
-            app.progressive_activity_overlay_ui_state,
+            app.shell.progressive_activity_overlay_ui_state,
             ProgressiveActivityOverlayUiState::default()
         );
         assert_eq!(
-            app.planning_ui_intent_revision,
+            app.planning.planning_ui_intent_revision,
             revision_before_replace.wrapping_add(1).max(1)
         );
 
@@ -1830,34 +1924,41 @@ mod tests {
             "/tmp/root",
             None,
         ));
-        let revision_before_dismiss = app.planning_ui_intent_revision;
+        let revision_before_dismiss = app.planning.planning_ui_intent_revision;
 
         app.dispatch_shell_chrome(ShellChromeEvent::TransientChromeDismissed);
 
-        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Hidden);
         assert!(matches!(
-            app.reviews_overlay_ui_state.screen_model(),
+            app.shell.reviews_overlay_ui_state.screen_model(),
             crate::adapter::inbound::tui::app::reviews_overlay_ui::ReviewsOverlayScreenModel::Idle
         ));
         assert_eq!(
-            app.planning_ui_intent_revision,
+            app.planning.planning_ui_intent_revision,
             revision_before_dismiss.wrapping_add(1).max(1)
         );
 
-        let revision_after_dismiss = app.planning_ui_intent_revision;
+        let revision_after_dismiss = app.planning.planning_ui_intent_revision;
         app.dispatch_shell_chrome(ShellChromeEvent::TransientChromeDismissed);
-        assert_eq!(app.planning_ui_intent_revision, revision_after_dismiss);
+        assert_eq!(
+            app.planning.planning_ui_intent_revision,
+            revision_after_dismiss
+        );
     }
 
     #[test]
     fn approval_suspend_and_restore_preserve_directions_editor_until_real_exit() {
         let mut app = test_native_tui_app();
         app.dispatch_shell_chrome(ShellChromeEvent::DirectionsMaintenanceOverlayShown);
-        app.directions_maintenance_overlay_ui_state.begin_load(
-            crate::core::app::DirectionsMaintenanceLoadCorrelation::new(3, "/tmp/root"),
-        );
-        app.planning_draft_editor_ui_state.open_correlated_session(
-            crate::core::app::PlanningEditorSessionSnapshot {
+        app.planning
+            .directions_maintenance_overlay_ui_state
+            .begin_load(crate::core::app::DirectionsMaintenanceLoadCorrelation::new(
+                3,
+                "/tmp/root",
+            ));
+        app.planning
+            .planning_draft_editor_ui_state
+            .open_correlated_session(crate::core::app::PlanningEditorSessionSnapshot {
                 session_identity: crate::core::app::PlanningEditorSessionIdentity::new(
                     7,
                     "/tmp/root",
@@ -1871,46 +1972,55 @@ mod tests {
                 }],
                 validation_report: PlanningValidationReport::default(),
                 source_planning_revision: Some(11),
-            },
-        );
-        let directions_before_suspend = app.directions_maintenance_overlay_ui_state.clone();
-        let editor_before_suspend = app.planning_draft_editor_ui_state.clone();
-        let revision_before_suspend = app.planning_ui_intent_revision;
+            });
+        let directions_before_suspend =
+            app.planning.directions_maintenance_overlay_ui_state.clone();
+        let editor_before_suspend = app.planning.planning_draft_editor_ui_state.clone();
+        let revision_before_suspend = app.planning.planning_ui_intent_revision;
 
         app.dispatch_shell_chrome(ShellChromeEvent::ApprovalOverlayShown);
 
-        assert_eq!(app.shell_overlay, ShellOverlay::Approval);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Approval);
         assert_eq!(
-            app.approval_return_overlay,
+            app.shell.chrome.approval_return_overlay,
             Some(ShellOverlay::DirectionsMaintenance)
         );
         assert_eq!(
-            app.directions_maintenance_overlay_ui_state,
+            app.planning.directions_maintenance_overlay_ui_state,
             directions_before_suspend
         );
-        assert_eq!(app.planning_draft_editor_ui_state, editor_before_suspend);
         assert_eq!(
-            app.planning_ui_intent_revision,
+            app.planning.planning_draft_editor_ui_state,
+            editor_before_suspend
+        );
+        assert_eq!(
+            app.planning.planning_ui_intent_revision,
             revision_before_suspend.wrapping_add(1).max(1)
         );
 
         app.dispatch_shell_chrome(ShellChromeEvent::ApprovalOverlayClosed);
 
-        assert_eq!(app.shell_overlay, ShellOverlay::DirectionsMaintenance);
         assert_eq!(
-            app.directions_maintenance_overlay_ui_state,
+            app.shell.chrome.shell_overlay,
+            ShellOverlay::DirectionsMaintenance
+        );
+        assert_eq!(
+            app.planning.directions_maintenance_overlay_ui_state,
             directions_before_suspend
         );
-        assert_eq!(app.planning_draft_editor_ui_state, editor_before_suspend);
+        assert_eq!(
+            app.planning.planning_draft_editor_ui_state,
+            editor_before_suspend
+        );
 
         app.close_shell_overlay();
-        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Hidden);
         assert_eq!(
-            app.directions_maintenance_overlay_ui_state,
+            app.planning.directions_maintenance_overlay_ui_state,
             DirectionsMaintenanceOverlayUiState::default()
         );
         assert_eq!(
-            app.planning_draft_editor_ui_state,
+            app.planning.planning_draft_editor_ui_state,
             PlanningDraftEditorUiState::default()
         );
     }
@@ -1922,12 +2032,12 @@ mod tests {
 
         app.show_reviews_overlay();
 
-        assert_eq!(app.shell_overlay, ShellOverlay::Approval);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Approval);
         assert!(matches!(
-            app.reviews_overlay_ui_state.screen_model(),
+            app.shell.reviews_overlay_ui_state.screen_model(),
             crate::adapter::inbound::tui::app::reviews_overlay_ui::ReviewsOverlayScreenModel::Idle
         ));
-        assert!(app.rx.try_recv().is_err());
+        assert!(app.runtime.rx.try_recv().is_err());
     }
 
     #[test]
@@ -1935,131 +2045,161 @@ mod tests {
         let mut app = test_native_tui_app();
 
         app.execute_inline_shell_command_input(command(":activity"));
-        assert_eq!(app.shell_overlay, ShellOverlay::Activity);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Activity);
         assert_eq!(
-            app.progressive_activity_overlay_ui_state.card_filter(),
+            app.shell
+                .progressive_activity_overlay_ui_state
+                .card_filter(),
             None
         );
 
         app.close_shell_overlay();
         app.execute_inline_shell_command_input(command(":act output"));
-        assert_eq!(app.shell_overlay, ShellOverlay::Activity);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Activity);
         assert_eq!(
-            app.progressive_activity_overlay_ui_state.selected_kind(),
+            app.shell
+                .progressive_activity_overlay_ui_state
+                .selected_kind(),
             ProgressiveActivityDetailKind::Output
         );
         assert_eq!(
-            app.progressive_activity_overlay_ui_state.card_filter(),
+            app.shell
+                .progressive_activity_overlay_ui_state
+                .card_filter(),
             Some(super::ProgressiveActivityCardKind::Command)
         );
 
         app.close_shell_overlay();
         app.execute_inline_shell_command_input(command(":activity all"));
-        assert_eq!(app.shell_overlay, ShellOverlay::Activity);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Activity);
         assert_eq!(
-            app.progressive_activity_overlay_ui_state.card_filter(),
+            app.shell
+                .progressive_activity_overlay_ui_state
+                .card_filter(),
             None
         );
 
         app.close_shell_overlay();
         app.execute_inline_shell_command_input(command(":activity nope"));
-        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Hidden);
         assert!(status_text(&app).contains("activity unchanged; supported values:"));
 
         app.dispatch_shell_chrome(ShellChromeEvent::ApprovalOverlayShown);
         assert!(!app.show_progressive_activity_overlay(ProgressiveActivityDetailKind::Output));
-        assert_eq!(app.shell_overlay, ShellOverlay::Approval);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Approval);
     }
 
     #[test]
     fn activity_overlay_keymap_navigates_pages_kinds_home_and_close() {
         let mut app = test_native_tui_app();
         assert!(app.show_progressive_activity_overlay(ProgressiveActivityDetailKind::Output));
-        app.progressive_activity_overlay_ui_state
+        app.shell
+            .progressive_activity_overlay_ui_state
             .select_document(1, Some(7));
-        app.progressive_activity_overlay_ui_state
+        app.shell
+            .progressive_activity_overlay_ui_state
             .set_page_window(0, Some(10));
 
         // Up/Down select cards; with an empty card list the index stays at 0 and page is reset.
         assert!(app.handle_shell_overlay_key(key(KeyCode::Down)));
         assert_eq!(
-            app.progressive_activity_overlay_ui_state
+            app.shell
+                .progressive_activity_overlay_ui_state
                 .selected_card_index(),
             0
         );
-        app.progressive_activity_overlay_ui_state
+        app.shell
+            .progressive_activity_overlay_ui_state
             .set_page_window(0, Some(10));
         assert!(app.handle_shell_overlay_key(key(KeyCode::PageDown)));
         assert_eq!(
-            app.progressive_activity_overlay_ui_state
+            app.shell
+                .progressive_activity_overlay_ui_state
                 .current_page_start(),
             10
         );
-        app.progressive_activity_overlay_ui_state
+        app.shell
+            .progressive_activity_overlay_ui_state
             .set_page_window(10, Some(20));
         assert!(app.handle_shell_overlay_key(key(KeyCode::PageDown)));
         assert_eq!(
-            app.progressive_activity_overlay_ui_state
+            app.shell
+                .progressive_activity_overlay_ui_state
                 .current_page_start(),
             20
         );
         assert!(app.handle_shell_overlay_key(key(KeyCode::PageUp)));
         assert_eq!(
-            app.progressive_activity_overlay_ui_state
+            app.shell
+                .progressive_activity_overlay_ui_state
                 .current_page_start(),
             10
         );
 
         assert!(app.handle_shell_overlay_key(key(KeyCode::Home)));
         assert_eq!(
-            app.progressive_activity_overlay_ui_state.selected_kind(),
+            app.shell
+                .progressive_activity_overlay_ui_state
+                .selected_kind(),
             ProgressiveActivityDetailKind::Output
         );
         assert_eq!(
-            app.progressive_activity_overlay_ui_state
+            app.shell
+                .progressive_activity_overlay_ui_state
                 .current_document_sequence(),
             None
         );
         assert_eq!(
-            app.progressive_activity_overlay_ui_state
+            app.shell
+                .progressive_activity_overlay_ui_state
                 .current_page_start(),
             0
         );
 
-        app.progressive_activity_overlay_ui_state
+        app.shell
+            .progressive_activity_overlay_ui_state
             .select_document(1, Some(8));
         // Output/Command filter cycles next to Patch in the shared filter wheel.
         assert!(app.handle_shell_overlay_key(key(KeyCode::Tab)));
         assert_eq!(
-            app.progressive_activity_overlay_ui_state.card_filter(),
+            app.shell
+                .progressive_activity_overlay_ui_state
+                .card_filter(),
             Some(super::ProgressiveActivityCardKind::Patch)
         );
         assert_eq!(
-            app.progressive_activity_overlay_ui_state
+            app.shell
+                .progressive_activity_overlay_ui_state
                 .current_document_sequence(),
             None
         );
         // Filter keys always advance the shared cycle (including BackTab/Left).
         assert!(app.handle_shell_overlay_key(modified_key(KeyCode::BackTab, KeyModifiers::SHIFT)));
         assert_eq!(
-            app.progressive_activity_overlay_ui_state.card_filter(),
+            app.shell
+                .progressive_activity_overlay_ui_state
+                .card_filter(),
             Some(super::ProgressiveActivityCardKind::Diff)
         );
         assert!(app.handle_shell_overlay_key(key(KeyCode::Left)));
         assert_eq!(
-            app.progressive_activity_overlay_ui_state.card_filter(),
+            app.shell
+                .progressive_activity_overlay_ui_state
+                .card_filter(),
             Some(super::ProgressiveActivityCardKind::Mcp)
         );
         assert!(app.handle_shell_overlay_key(key(KeyCode::Right)));
         assert_eq!(
-            app.progressive_activity_overlay_ui_state.card_filter(),
+            app.shell
+                .progressive_activity_overlay_ui_state
+                .card_filter(),
             Some(super::ProgressiveActivityCardKind::Plan)
         );
 
         assert!(app.handle_shell_overlay_key(key(KeyCode::Esc)));
-        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Hidden);
         assert_eq!(
-            app.progressive_activity_overlay_ui_state,
+            app.shell.progressive_activity_overlay_ui_state,
             ProgressiveActivityOverlayUiState::default()
         );
     }
@@ -2067,25 +2207,25 @@ mod tests {
     #[test]
     fn help_overlay_keymap_scrolls_resets_and_defers_final_clamp_to_rendering() {
         let mut app = test_native_tui_app();
-        app.help_scroll_offset = 9;
+        app.shell.help_scroll_offset = 9;
 
         app.show_help_overlay();
-        assert_eq!(app.shell_overlay, ShellOverlay::Help);
-        assert_eq!(app.help_scroll_offset, 0);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Help);
+        assert_eq!(app.shell.help_scroll_offset, 0);
 
         assert!(app.handle_shell_overlay_key(key(KeyCode::Char('j'))));
-        assert_eq!(app.help_scroll_offset, 1);
+        assert_eq!(app.shell.help_scroll_offset, 1);
         assert!(app.handle_shell_overlay_key(key(KeyCode::PageDown)));
-        assert_eq!(app.help_scroll_offset, 6);
+        assert_eq!(app.shell.help_scroll_offset, 6);
         assert!(app.handle_shell_overlay_key(key(KeyCode::Char('k'))));
-        assert_eq!(app.help_scroll_offset, 5);
+        assert_eq!(app.shell.help_scroll_offset, 5);
         assert!(app.handle_shell_overlay_key(key(KeyCode::PageUp)));
-        assert_eq!(app.help_scroll_offset, 0);
+        assert_eq!(app.shell.help_scroll_offset, 0);
 
         assert!(app.handle_shell_overlay_key(key(KeyCode::End)));
-        assert_eq!(app.help_scroll_offset, usize::MAX);
+        assert_eq!(app.shell.help_scroll_offset, usize::MAX);
         assert!(app.handle_shell_overlay_key(key(KeyCode::Home)));
-        assert_eq!(app.help_scroll_offset, 0);
+        assert_eq!(app.shell.help_scroll_offset, 0);
     }
 
     #[test]
@@ -2094,15 +2234,15 @@ mod tests {
 
         app.set_parallel_mode_enabled_for_test(true);
         app.execute_inline_shell_command_input(command(":sessions"));
-        assert_eq!(app.shell_overlay, ShellOverlay::Supersession);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Supersession);
         assert!(status_text(&app).contains("opened supersession control tower"));
 
         app.set_parallel_mode_enabled_for_test(false);
         app.execute_inline_shell_command_input(command(":help"));
-        assert_eq!(app.shell_overlay, ShellOverlay::Help);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Help);
         assert!(status_text(&app).contains("opened shell command help"));
         app.execute_inline_shell_command_input(command(":reviews"));
-        assert_eq!(app.shell_overlay, ShellOverlay::Reviews);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Reviews);
         assert!(status_text(&app).contains("opened review center inspection"));
 
         app.execute_inline_shell_command_input(command(":turns 4"));
@@ -2132,15 +2272,18 @@ mod tests {
         );
 
         app.execute_inline_shell_command_input(command(":model default"));
-        assert_eq!(app.turn_options.model, None);
+        assert_eq!(app.conversation.turn_options.model, None);
         assert!(status_text(&app).contains("model reset to app-server default"));
 
         app.execute_inline_shell_command_input(command(":view unsupported"));
-        assert_eq!(app.shell_overlay, ShellOverlay::ViewSelection);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::ViewSelection);
         assert!(status_text(&app).contains("view unchanged"));
 
         app.execute_inline_shell_command_input(command(":language klingon"));
-        assert_eq!(app.shell_overlay, ShellOverlay::LanguageSelection);
+        assert_eq!(
+            app.shell.chrome.shell_overlay,
+            ShellOverlay::LanguageSelection
+        );
         assert!(status_text(&app).contains("language unchanged"));
 
         app.execute_inline_shell_command_input(command(":think"));
@@ -2156,7 +2299,8 @@ mod tests {
             .parallel_mode_automation_epoch_id()
             .expect("parallel epoch should be open before stop");
         assert!(
-            app.parallel_mode_control_plane
+            app.runtime
+                .parallel_mode_control_plane
                 .automation_epoch_is_active(&parallel_workspace, parallel_epoch)
         );
 
@@ -2165,7 +2309,8 @@ mod tests {
         assert!(!app.parallel_mode_enabled());
         assert!(app.parallel_mode_automation_epoch_id().is_none());
         assert!(
-            !app.parallel_mode_control_plane
+            !app.runtime
+                .parallel_mode_control_plane
                 .automation_epoch_is_active(&parallel_workspace, parallel_epoch),
             ":stop must close the automation permit before another dispatch can start"
         );
@@ -2218,7 +2363,7 @@ mod tests {
         );
 
         let mut app = test_native_tui_app();
-        let turn_submission = app.client_runtime.begin_test_turn_submission();
+        let turn_submission = app.runtime.client_runtime.begin_test_turn_submission();
         app.dispatch_client_event(crate::core::app::CoreInput::ConversationStreamUpdated {
             correlation: turn_submission,
             event: crate::core::app::TurnStreamEvent::TurnStarted {
@@ -2239,7 +2384,7 @@ mod tests {
     #[test]
     fn ctrl_c_interrupts_a_running_turn_once_and_keeps_idle_navigation_semantics() {
         let mut app = test_native_tui_app();
-        let turn_submission = app.client_runtime.begin_test_turn_submission();
+        let turn_submission = app.runtime.client_runtime.begin_test_turn_submission();
         ready_conversation_mut(&mut app).mark_turn_submitting("/tmp/root".to_string());
 
         app.handle_ctrl_c();
@@ -2252,12 +2397,15 @@ mod tests {
             },
         });
         poll_core_until_status_contains(&mut app, "stop synchronized");
-        assert_eq!(app.exit_confirmation_state, ExitConfirmationState::Hidden);
+        assert_eq!(
+            app.shell.chrome.exit_confirmation_state,
+            ExitConfirmationState::Hidden
+        );
 
         app.handle_ctrl_c();
         assert!(status_text(&app).contains("stop already requested"));
 
-        let _ = app.client_runtime.dispatch_client_event(
+        let _ = app.runtime.client_runtime.dispatch_client_event(
             crate::core::app::CoreInput::ConversationStreamUpdated {
                 correlation: turn_submission,
                 event: crate::core::app::TurnStreamEvent::Failed {
@@ -2267,10 +2415,16 @@ mod tests {
         );
         ready_conversation_mut(&mut app).mark_turn_finished();
         app.handle_ctrl_c();
-        assert_eq!(app.exit_confirmation_state, ExitConfirmationState::Hidden);
+        assert_eq!(
+            app.shell.chrome.exit_confirmation_state,
+            ExitConfirmationState::Hidden
+        );
         assert!(ready_conversation(&app).is_blank_draft());
         app.handle_ctrl_c();
-        assert_eq!(app.exit_confirmation_state, ExitConfirmationState::Visible);
+        assert_eq!(
+            app.shell.chrome.exit_confirmation_state,
+            ExitConfirmationState::Visible
+        );
     }
 
     #[test]
@@ -2279,15 +2433,15 @@ mod tests {
 
         assert!(!app.insert_input_text(String::new()));
 
-        app.shell_overlay = ShellOverlay::Queue;
+        app.shell.chrome.shell_overlay = ShellOverlay::Queue;
         assert!(!app.can_edit_prompt_input());
         assert!(!app.insert_input_text("blocked".to_string()));
 
-        app.shell_overlay = ShellOverlay::Supersession;
+        app.shell.chrome.shell_overlay = ShellOverlay::Supersession;
         app.set_parallel_mode_enabled_for_test(true);
         assert!(!app.can_edit_prompt_input());
 
-        app.shell_overlay = ShellOverlay::Hidden;
+        app.shell.chrome.shell_overlay = ShellOverlay::Hidden;
         assert!(app.can_edit_prompt_input());
         assert!(app.insert_input_text("abc".to_string()));
         app.move_input_cursor(InputCursorMovement::LineStart);
@@ -2320,7 +2474,7 @@ mod tests {
         app.push_input_character('h');
         assert!(app.move_inline_command_palette_selection(0));
         assert!(app.accept_inline_command_palette_selection());
-        assert_eq!(app.shell_overlay, ShellOverlay::Help);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Help);
     }
 
     #[test]
@@ -2330,7 +2484,7 @@ mod tests {
         app.sync_ready_conversation_planning_runtime_projection(
             sample_planning_runtime_projection("context", "queue").with_planning_revision(Some(1)),
         );
-        app.shell_overlay = ShellOverlay::Queue;
+        app.shell.chrome.shell_overlay = ShellOverlay::Queue;
         app.bind_queue_overlay_authority_for_test(
             1,
             std::collections::BTreeMap::from([
@@ -2371,7 +2525,7 @@ mod tests {
         assert_eq!(ready_conversation(&app).composer.input_buffer, "keep draft");
         assert_eq!(app.pending_queue_mutation_operation_id(), Some(1));
         assert_eq!(
-            app.queue_overlay_ui_state.feedback(),
+            app.planning.queue_overlay_ui_state.feedback(),
             Some("Queue change op-1 is waiting for authority acknowledgement.")
         );
         let _completion = take_next_queue_mutation_completion(&mut app);
@@ -2383,7 +2537,7 @@ mod tests {
         app.sync_ready_conversation_planning_runtime_projection(
             sample_planning_runtime_projection("context", "queue").with_planning_revision(Some(1)),
         );
-        app.shell_overlay = ShellOverlay::Queue;
+        app.shell.chrome.shell_overlay = ShellOverlay::Queue;
         app.bind_queue_overlay_authority_for_test(
             1,
             std::collections::BTreeMap::from([
@@ -2436,7 +2590,7 @@ mod tests {
             "Confirm this task",
             7,
         ));
-        app.shell_overlay = ShellOverlay::Queue;
+        app.shell.chrome.shell_overlay = ShellOverlay::Queue;
         app.bind_queue_overlay_authority_for_test(
             7,
             std::collections::BTreeMap::from([(
@@ -2464,31 +2618,40 @@ mod tests {
             "Read-only task",
             7,
         ));
-        app.shell_overlay = ShellOverlay::Queue;
+        app.shell.chrome.shell_overlay = ShellOverlay::Queue;
         let request = begin_test_queue_overlay_authority_load(&mut app, 1);
 
         app.cancel_selected_queue_task();
         assert!(!app.undo_latest_queue_registration());
         assert_eq!(app.pending_queue_mutation_operation_id(), None);
         assert_eq!(
-            app.queue_overlay_ui_state.feedback(),
+            app.planning.queue_overlay_ui_state.feedback(),
             Some("Queue authority is still loading; remove and undo remain disabled.")
         );
-        assert!(matches!(app.rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        assert!(matches!(
+            app.runtime.rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
 
         assert!(
-            app.queue_overlay_ui_state
+            app.planning
+                .queue_overlay_ui_state
                 .apply_authority_load_failed(request.clone(), "database unavailable".to_string(),)
         );
-        app.queue_mutation_ui_state.require_authority_refresh();
+        app.planning
+            .queue_mutation_ui_state
+            .require_authority_refresh();
         app.cancel_selected_queue_task();
         assert!(!app.undo_latest_queue_registration());
         assert_eq!(app.pending_queue_mutation_operation_id(), None);
         assert_eq!(
-            app.queue_overlay_ui_state.feedback(),
+            app.planning.queue_overlay_ui_state.feedback(),
             Some("queue authority load-1 failed: database unavailable")
         );
-        assert!(matches!(app.rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        assert!(matches!(
+            app.runtime.rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
     }
 
     #[test]
@@ -2499,10 +2662,11 @@ mod tests {
             "Stale authority task",
             7,
         ));
-        app.shell_overlay = ShellOverlay::Queue;
+        app.shell.chrome.shell_overlay = ShellOverlay::Queue;
         let stale_request = begin_test_queue_overlay_authority_load(&mut app, 1);
         assert!(
-            app.queue_overlay_ui_state
+            app.planning
+                .queue_overlay_ui_state
                 .apply_authority_load_failed(stale_request, "database unavailable".to_string())
         );
         ready_conversation_mut(&mut app)
@@ -2512,11 +2676,11 @@ mod tests {
 
         assert_eq!(app.pending_queue_mutation_operation_id(), None);
         assert_eq!(
-            app.queue_overlay_ui_state.feedback(),
+            app.planning.queue_overlay_ui_state.feedback(),
             Some("Queue authority is still loading; remove and undo remain disabled.")
         );
         assert!(matches!(
-            app.queue_overlay_ui_state.authority_screen_model(),
+            app.planning.queue_overlay_ui_state.authority_screen_model(),
             queue_overlay_ui::QueueOverlayAuthorityScreenModel::Loading { .. }
         ));
         let replacement_context = app.current_queue_mutation_context();
@@ -2526,7 +2690,8 @@ mod tests {
             replacement_context.active_thread_id.clone(),
         );
         assert_eq!(
-            app.queue_overlay_ui_state
+            app.planning
+                .queue_overlay_ui_state
                 .loading_request(&replacement_correlation)
                 .expect("replacement load should bind the current context")
                 .correlation
@@ -2552,7 +2717,11 @@ mod tests {
             ),
             queue_overlay_ui::QueueOverlayAuthorityLoadCompletion::Ignored
         );
-        assert!(app.queue_overlay_ui_state.is_loading_request(&new_request));
+        assert!(
+            app.planning
+                .queue_overlay_ui_state
+                .is_loading_request(&new_request)
+        );
 
         assert_eq!(
             app.apply_queue_overlay_authority_loaded(
@@ -2564,7 +2733,7 @@ mod tests {
             queue_overlay_ui::QueueOverlayAuthorityLoadCompletion::Applied
         );
         assert!(matches!(
-            app.queue_overlay_ui_state.authority_screen_model(),
+            app.planning.queue_overlay_ui_state.authority_screen_model(),
             queue_overlay_ui::QueueOverlayAuthorityScreenModel::Failed {
                 request_id,
                 ..
@@ -2582,9 +2751,9 @@ mod tests {
             "Newer live row",
             8,
         ));
-        app.shell_overlay = ShellOverlay::Queue;
+        app.shell.chrome.shell_overlay = ShellOverlay::Queue;
         let request = begin_test_queue_overlay_authority_load(&mut app, 1);
-        assert!(app.queue_overlay_ui_state.apply_authority_loaded(
+        assert!(app.planning.queue_overlay_ui_state.apply_authority_loaded(
             request,
             authority_projection,
             7,
@@ -2609,7 +2778,7 @@ mod tests {
         assert!(rows.contains("Authority snapshot row"), "{rows}");
         assert!(!rows.contains("Newer live row"), "{rows}");
         assert_eq!(
-            app.queue_overlay_ui_state.selected_task_id(),
+            app.planning.queue_overlay_ui_state.selected_task_id(),
             Some("task-authority")
         );
         let keys = view
@@ -2625,12 +2794,12 @@ mod tests {
         app.cancel_selected_queue_task();
         assert_eq!(app.pending_queue_mutation_operation_id(), None);
         assert!(matches!(
-            app.queue_overlay_ui_state.authority_screen_model(),
+            app.planning.queue_overlay_ui_state.authority_screen_model(),
             queue_overlay_ui::QueueOverlayAuthorityScreenModel::Loading { .. }
         ));
         apply_next_queue_overlay_authority_load(&mut app);
         assert!(!matches!(
-            app.queue_overlay_ui_state.authority_screen_model(),
+            app.planning.queue_overlay_ui_state.authority_screen_model(),
             queue_overlay_ui::QueueOverlayAuthorityScreenModel::Idle
         ));
     }
@@ -2643,7 +2812,7 @@ mod tests {
             "Displayed authority row",
             7,
         ));
-        app.shell_overlay = ShellOverlay::Queue;
+        app.shell.chrome.shell_overlay = ShellOverlay::Queue;
         app.bind_queue_overlay_authority_for_test(
             7,
             std::collections::BTreeMap::from([(
@@ -2683,7 +2852,7 @@ mod tests {
         app.sync_ready_conversation_planning_runtime_projection(
             sample_planning_runtime_projection("context", "queue").with_planning_revision(Some(7)),
         );
-        app.shell_overlay = ShellOverlay::Queue;
+        app.shell.chrome.shell_overlay = ShellOverlay::Queue;
         app.bind_queue_overlay_authority_for_test(
             7,
             std::collections::BTreeMap::from([
@@ -2704,7 +2873,7 @@ mod tests {
             ]),
         );
         assert_eq!(
-            app.queue_overlay_ui_state.selected_task_id(),
+            app.planning.queue_overlay_ui_state.selected_task_id(),
             Some("task-1")
         );
 
@@ -2714,11 +2883,11 @@ mod tests {
 
         assert_eq!(app.pending_queue_mutation_operation_id(), None);
         assert_eq!(
-            app.queue_overlay_ui_state.feedback(),
+            app.planning.queue_overlay_ui_state.feedback(),
             Some("Queue authority is still loading; remove and undo remain disabled.")
         );
         assert!(matches!(
-            app.queue_overlay_ui_state.authority_screen_model(),
+            app.planning.queue_overlay_ui_state.authority_screen_model(),
             queue_overlay_ui::QueueOverlayAuthorityScreenModel::Loading { .. }
         ));
         let replacement_context = app.current_queue_mutation_context();
@@ -2728,7 +2897,8 @@ mod tests {
             replacement_context.active_thread_id.clone(),
         );
         assert_eq!(
-            app.queue_overlay_ui_state
+            app.planning
+                .queue_overlay_ui_state
                 .loading_request(&replacement_correlation)
                 .expect("replacement load should bind the drifted context")
                 .correlation
@@ -2760,7 +2930,7 @@ mod tests {
         app.sync_ready_conversation_planning_runtime_projection(
             PlanningRuntimeProjection::uninitialized().with_planning_revision(Some(17)),
         );
-        app.shell_overlay = ShellOverlay::Queue;
+        app.shell.chrome.shell_overlay = ShellOverlay::Queue;
         app.bind_queue_overlay_authority_for_test(17, std::collections::BTreeMap::new());
 
         let view =
@@ -2851,7 +3021,9 @@ mod tests {
                     unchanged_since_mutation: true,
                 }],
             });
-        app.queue_mutation_ui_state.require_authority_refresh();
+        app.planning
+            .queue_mutation_ui_state
+            .require_authority_refresh();
 
         app.show_queue_overlay();
         apply_next_queue_overlay_authority_load(&mut app);
@@ -2913,14 +3085,14 @@ mod tests {
             )
             .with_planning_revision(Some(9)),
         );
-        app.shell_overlay = ShellOverlay::Queue;
+        app.shell.chrome.shell_overlay = ShellOverlay::Queue;
         app.sync_queue_overlay_selection();
 
         for _ in 0..3 {
             assert!(app.handle_shell_overlay_key(key(KeyCode::Char('j'))));
         }
         assert_eq!(
-            app.queue_overlay_ui_state.selected_task_id(),
+            app.planning.queue_overlay_ui_state.selected_task_id(),
             Some("task-4")
         );
         let hidden_active_view =
@@ -2935,7 +3107,7 @@ mod tests {
         assert!(app.handle_shell_overlay_key(key(KeyCode::Char('j'))));
         assert!(app.handle_shell_overlay_key(key(KeyCode::Char('j'))));
         assert_eq!(
-            app.queue_overlay_ui_state.selected_task_id(),
+            app.planning.queue_overlay_ui_state.selected_task_id(),
             Some("ready-but-skipped")
         );
         let skipped_view =
@@ -2973,16 +3145,18 @@ mod tests {
             )
             .with_auto_follow_pause_reason("dependency authority needs operator attention"),
         );
-        app.shell_overlay = ShellOverlay::Queue;
+        app.shell.chrome.shell_overlay = ShellOverlay::Queue;
         app.sync_queue_overlay_selection();
         let task_ids = app
             .queue_action_tasks()
             .into_iter()
             .map(|task| task.task_id)
             .collect::<Vec<_>>();
-        app.queue_overlay_ui_state
+        app.planning
+            .queue_overlay_ui_state
             .move_selection(&task_ids, task_ids.len() as isize);
-        app.queue_overlay_ui_state
+        app.planning
+            .queue_overlay_ui_state
             .set_feedback("task cancellation feedback");
 
         let view =
@@ -3009,7 +3183,8 @@ mod tests {
         app.sync_ready_conversation_planning_runtime_projection(
             PlanningRuntimeProjection::invalid("planning authority could not be loaded"),
         );
-        app.queue_overlay_ui_state
+        app.planning
+            .queue_overlay_ui_state
             .set_feedback("previous queue action completed");
 
         let view =
@@ -3074,9 +3249,9 @@ mod tests {
         authority_load_started
             .recv_timeout(Duration::from_secs(2))
             .expect("background authority load should reach the repository gate");
-        assert_eq!(app.shell_overlay, ShellOverlay::Queue);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Queue);
         assert!(matches!(
-            app.queue_overlay_ui_state.authority_screen_model(),
+            app.planning.queue_overlay_ui_state.authority_screen_model(),
             queue_overlay_ui::QueueOverlayAuthorityScreenModel::Loading { .. }
         ));
         assert_ne!(
@@ -3099,7 +3274,7 @@ mod tests {
         );
         apply_next_queue_overlay_authority_load(&mut app);
         assert!(matches!(
-            app.queue_overlay_ui_state.authority_screen_model(),
+            app.planning.queue_overlay_ui_state.authority_screen_model(),
             queue_overlay_ui::QueueOverlayAuthorityScreenModel::Ready { .. }
         ));
 
@@ -3240,7 +3415,7 @@ mod tests {
         assert_eq!(repository.mutation_count(), 1);
         assert_eq!(app.pending_queue_mutation_operation_id(), Some(1));
         app.close_shell_overlay();
-        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Hidden);
         assert_eq!(app.pending_queue_mutation_operation_id(), Some(1));
         assert_eq!(app.queue_receipt_undo_task_count(), None);
         app.show_queue_overlay();
@@ -3286,12 +3461,17 @@ mod tests {
                 .map(|task| task.status),
             Some(TaskStatus::Cancelled)
         );
-        app.tui_language = TuiLanguage::Korean;
+        app.shell.tui_language = TuiLanguage::Korean;
         app.apply_queue_mutation_completion(correlation, completion);
 
         assert_eq!(app.pending_queue_mutation_operation_id(), None);
         assert_eq!(repository.mutation_count(), 1);
-        assert!(app.client_runtime.poll_pending_client_event().is_none());
+        assert!(
+            app.runtime
+                .client_runtime
+                .poll_pending_client_event()
+                .is_none()
+        );
         assert_eq!(
             app.planning_runtime_projection_snapshot()
                 .planning_revision(),
@@ -3311,6 +3491,7 @@ mod tests {
         );
         assert!(!preserved_newer_receipt.created_batch_is_cancellable());
         let feedback = app
+            .planning
             .queue_overlay_ui_state
             .feedback()
             .expect("localized remove feedback should be visible");
@@ -3356,7 +3537,7 @@ mod tests {
             app.planning_runtime_projection_snapshot(),
             projection_before
         );
-        assert_eq!(app.queue_overlay_ui_state.feedback(), None);
+        assert_eq!(app.planning.queue_overlay_ui_state.feedback(), None);
         assert!(app.queue_mutation_requires_authority_refresh());
     }
 
@@ -3373,7 +3554,7 @@ mod tests {
             Vec::new(),
             None,
         );
-        app.tui_language = TuiLanguage::Korean;
+        app.shell.tui_language = TuiLanguage::Korean;
 
         app.apply_queue_mutation_completion(
             correlation,
@@ -3394,7 +3575,7 @@ mod tests {
         );
         assert!(app.queue_mutation_requires_authority_refresh());
         assert!(
-            app.queue_overlay_ui_state.feedback().is_some_and(
+            app.planning.queue_overlay_ui_state.feedback().is_some_and(
                 |feedback| feedback.contains("현재 표시된 계획 리비전보다 오래되었습니다")
             )
         );
@@ -3500,7 +3681,8 @@ mod tests {
         assert_eq!(app.queue_receipt_undo_task_count(), None);
         assert!(!app.undo_latest_queue_registration());
         assert!(
-            app.queue_overlay_ui_state
+            app.planning
+                .queue_overlay_ui_state
                 .feedback()
                 .is_some_and(|feedback| feedback.contains("close and reopen"))
         );
@@ -3520,7 +3702,7 @@ mod tests {
             Vec::new(),
             None,
         );
-        app.tui_language = TuiLanguage::Korean;
+        app.shell.tui_language = TuiLanguage::Korean;
 
         app.apply_queue_mutation_completion(
             correlation,
@@ -3531,6 +3713,7 @@ mod tests {
         );
 
         let feedback = app
+            .planning
             .queue_overlay_ui_state
             .feedback()
             .expect("localized feedback should be visible");
@@ -3549,7 +3732,7 @@ mod tests {
     #[test]
     fn queue_mutation_input_feedback_uses_the_selected_language() {
         let mut app = test_native_tui_app();
-        app.tui_language = TuiLanguage::Korean;
+        app.shell.tui_language = TuiLanguage::Korean;
         let correlation = record_test_queue_mutation(
             &mut app,
             queue_overlay_ui::QueueMutationKind::RemoveSelected,
@@ -3560,25 +3743,31 @@ mod tests {
 
         assert!(!app.undo_latest_queue_registration());
         assert_eq!(
-            app.queue_overlay_ui_state.feedback(),
+            app.planning.queue_overlay_ui_state.feedback(),
             Some("큐 변경 op-1의 권한 확인을 기다리는 중입니다.")
         );
 
         assert_eq!(
-            app.queue_mutation_ui_state.take_matching(&correlation),
+            app.planning
+                .queue_mutation_ui_state
+                .take_matching(&correlation),
             Some(correlation)
         );
-        app.queue_mutation_ui_state.require_authority_refresh();
+        app.planning
+            .queue_mutation_ui_state
+            .require_authority_refresh();
         assert!(!app.undo_latest_queue_registration());
         assert_eq!(
-            app.queue_overlay_ui_state.feedback(),
+            app.planning.queue_overlay_ui_state.feedback(),
             Some("큐 권한을 새로 확인해야 합니다. 큐를 닫았다가 다시 연 뒤 변경하세요.")
         );
 
-        app.queue_mutation_ui_state.record_authority_refresh();
+        app.planning
+            .queue_mutation_ui_state
+            .record_authority_refresh();
         app.cancel_selected_queue_task();
         assert_eq!(
-            app.queue_overlay_ui_state.feedback(),
+            app.planning.queue_overlay_ui_state.feedback(),
             Some("선택한 큐 항목이 변경되었습니다. 큐를 다시 열어 새로 확인하세요.")
         );
     }
@@ -3651,7 +3840,7 @@ mod tests {
         assert_eq!(blocked.planning_revision, snapshot.planning_revision);
         assert_eq!(blocked.tasks[0].status, TaskStatus::Ready);
         assert_eq!(
-            app.queue_overlay_ui_state.feedback(),
+            app.planning.queue_overlay_ui_state.feedback(),
             Some("wait for post-turn planning to finish")
         );
         assert!(
@@ -3667,7 +3856,8 @@ mod tests {
 
         app.close_shell_overlay();
         ready_conversation_mut(&mut app).record_turn_started("turn-active-undo".to_string());
-        app.queue_overlay_ui_state
+        app.planning
+            .queue_overlay_ui_state
             .bind_receipt_undo_hit_area(Some(Rect::new(2, 4, 14, 1)));
         assert!(
             app.handle_queue_receipt_mouse_event(crossterm::event::MouseEvent {
@@ -3677,7 +3867,7 @@ mod tests {
                 modifiers: KeyModifiers::NONE,
             })
         );
-        app.tui_language = TuiLanguage::Korean;
+        app.shell.tui_language = TuiLanguage::Korean;
         apply_next_queue_mutation_completion(&mut app);
 
         let after = planning
@@ -3686,7 +3876,8 @@ mod tests {
             .expect("cancelled queue snapshot should load");
         assert_eq!(after.tasks[0].status, TaskStatus::Cancelled);
         assert!(
-            app.queue_overlay_ui_state
+            app.planning
+                .queue_overlay_ui_state
                 .feedback()
                 .is_some_and(|feedback| feedback.contains("최근 큐 등록 되돌리기"))
         );
@@ -3701,7 +3892,7 @@ mod tests {
                 .is_none()
         );
         ready_conversation_mut(&mut app).mark_turn_finished();
-        app.tui_language = TuiLanguage::English;
+        app.shell.tui_language = TuiLanguage::English;
 
         let individually_removed = planning
             .task_tool
@@ -3753,15 +3944,16 @@ mod tests {
 
         assert!(app.handle_shell_overlay_key(key(KeyCode::Char('x'))));
         assert!(app.handle_shell_overlay_key(key(KeyCode::Char('x'))));
-        app.tui_language = TuiLanguage::Korean;
+        app.shell.tui_language = TuiLanguage::Korean;
         apply_next_queue_mutation_completion(&mut app);
         assert!(
-            app.queue_overlay_ui_state
+            app.planning
+                .queue_overlay_ui_state
                 .feedback()
                 .is_some_and(|feedback| feedback.contains("큐 변경 거부"))
         );
         assert!(status_text(&app).contains("op-2 거부"));
-        app.tui_language = TuiLanguage::English;
+        app.shell.tui_language = TuiLanguage::English;
         assert!(
             ready_conversation(&app)
                 .latest_queue_mutation_receipt
@@ -3821,7 +4013,8 @@ mod tests {
         assert!(app.handle_shell_overlay_key(key(KeyCode::Char('u'))));
         apply_next_queue_mutation_completion(&mut app);
         assert!(
-            app.queue_overlay_ui_state
+            app.planning
+                .queue_overlay_ui_state
                 .feedback()
                 .is_some_and(|feedback| feedback.contains("authority confirmed cancellation"))
         );
@@ -3842,7 +4035,7 @@ mod tests {
             None
         );
 
-        app.exit_confirmation_state = ExitConfirmationState::Visible;
+        app.shell.chrome.exit_confirmation_state = ExitConfirmationState::Visible;
         assert_eq!(
             app.handle_exit_confirmation_key(modified_key(
                 KeyCode::Char('y'),
@@ -3854,59 +4047,71 @@ mod tests {
             app.handle_exit_confirmation_key(modified_key(KeyCode::Char('Y'), KeyModifiers::SHIFT)),
             Some(true)
         );
-        assert_eq!(app.exit_confirmation_state, ExitConfirmationState::Hidden);
-        app.exit_confirmation_state = ExitConfirmationState::Visible;
+        assert_eq!(
+            app.shell.chrome.exit_confirmation_state,
+            ExitConfirmationState::Hidden
+        );
+        app.shell.chrome.exit_confirmation_state = ExitConfirmationState::Visible;
         assert_eq!(
             app.handle_exit_confirmation_key(key(KeyCode::Char('n'))),
             Some(false)
         );
-        assert_eq!(app.exit_confirmation_state, ExitConfirmationState::Hidden);
+        assert_eq!(
+            app.shell.chrome.exit_confirmation_state,
+            ExitConfirmationState::Hidden
+        );
 
-        app.exit_confirmation_state = ExitConfirmationState::Visible;
+        app.shell.chrome.exit_confirmation_state = ExitConfirmationState::Visible;
         assert_eq!(
             app.handle_exit_confirmation_key(key(KeyCode::Char('x'))),
             Some(false)
         );
 
-        app.shell_overlay = ShellOverlay::Hidden;
+        app.shell.chrome.shell_overlay = ShellOverlay::Hidden;
         assert!(!app.handle_shell_overlay_key(key(KeyCode::Esc)));
 
-        app.shell_overlay = ShellOverlay::Startup;
+        app.shell.chrome.shell_overlay = ShellOverlay::Startup;
         assert!(app.handle_shell_overlay_key(key(KeyCode::Char('r'))));
-        assert!(matches!(app.startup_state, StartupState::Loading));
+        assert!(matches!(
+            app.shell.chrome.startup_state,
+            StartupState::Loading
+        ));
 
-        app.shell_overlay = ShellOverlay::Startup;
-        app.startup_state = StartupState::Ready(startup_ready_snapshot(true));
+        app.shell.chrome.shell_overlay = ShellOverlay::Startup;
+        app.shell.chrome.startup_state = StartupState::Ready(startup_ready_snapshot(true));
         assert!(
             app.handle_shell_overlay_key(modified_key(KeyCode::Char('o'), KeyModifiers::CONTROL))
         );
-        assert_eq!(app.shell_overlay, ShellOverlay::Sessions);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Sessions);
 
-        app.shell_overlay = ShellOverlay::Sessions;
+        app.shell.chrome.shell_overlay = ShellOverlay::Sessions;
         assert!(app.handle_shell_overlay_key(key(KeyCode::Esc)));
-        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Hidden);
 
         app.show_model_selection_overlay();
         assert!(app.handle_shell_overlay_key(key(KeyCode::Enter)));
         assert_eq!(
-            app.model_selection_overlay_ui_state.step(),
+            app.shell.model_selection_overlay_ui_state.step(),
             ModelSelectionStep::Effort
         );
 
         app.show_view_selection_overlay();
         assert!(app.handle_shell_overlay_key(key(KeyCode::Enter)));
-        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Hidden);
 
         app.show_language_selection_overlay();
         assert!(app.handle_shell_overlay_key(key(KeyCode::Enter)));
-        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Hidden);
 
         app.handle_ctrl_c();
-        assert_eq!(app.exit_confirmation_state, ExitConfirmationState::Visible);
+        assert_eq!(
+            app.shell.chrome.exit_confirmation_state,
+            ExitConfirmationState::Visible
+        );
 
-        app.shell_overlay = ShellOverlay::Queue;
+        app.shell.chrome.shell_overlay = ShellOverlay::Queue;
         app.handle_ctrl_c();
-        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Hidden);
     }
 
     #[test]
@@ -3930,7 +4135,7 @@ mod tests {
             ready_conversation(&app).composer.input_buffer,
             "draft prompt"
         );
-        assert_eq!(app.shell_overlay, ShellOverlay::Approval);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Approval);
 
         assert!(app.handle_shell_overlay_key(key(KeyCode::Down)));
         assert_eq!(ready_conversation(&app).approval_detail_scroll_offset, 1);
@@ -3942,7 +4147,7 @@ mod tests {
         assert!(app.handle_shell_overlay_key(key(KeyCode::Enter)));
         assert_eq!(ready_conversation(&app).pending_approval_decision(), None);
         assert!(ready_conversation(&app).pending_approval_request.is_some());
-        assert_eq!(app.shell_overlay, ShellOverlay::Approval);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Approval);
 
         assert!(app.handle_shell_overlay_key(key(KeyCode::Char('y'))));
         assert_eq!(
@@ -3954,7 +4159,7 @@ mod tests {
             ready_conversation(&app).pending_approval_decision(),
             Some(crate::domain::conversation::ConversationApprovalDecision::Accept)
         );
-        assert_eq!(app.shell_overlay, ShellOverlay::Approval);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Approval);
 
         app.apply_core_event(AppEvent::ApprovalDecisionSubmissionCompleted {
             correlation: crate::core::app::ApprovalDecisionCorrelation::new(
@@ -3981,10 +4186,10 @@ mod tests {
             ready_conversation(&app).status_text,
             "approval decision submitted: accept / waiting for runtime resolution"
         );
-        assert_eq!(app.shell_overlay, ShellOverlay::Approval);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Approval);
 
         app.close_shell_overlay();
-        assert_eq!(app.shell_overlay, ShellOverlay::Approval);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Approval);
 
         assert!(
             app.handle_shell_overlay_key(modified_key(KeyCode::Char('c'), KeyModifiers::CONTROL,))
@@ -4017,7 +4222,7 @@ mod tests {
         assert!(app.handle_shell_overlay_key(key(KeyCode::Char('y'))));
         assert_eq!(ready_conversation(&app).pending_approval_decision(), None);
         assert!(ready_conversation(&app).pending_approval_request.is_some());
-        assert_eq!(app.shell_overlay, ShellOverlay::Approval);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Approval);
     }
 
     #[test]
@@ -4056,7 +4261,7 @@ mod tests {
             ready_conversation(&app).status_text,
             "approval decision failed: runtime unavailable / retry accept or decline"
         );
-        assert_eq!(app.shell_overlay, ShellOverlay::Approval);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Approval);
     }
 
     #[test]
@@ -4069,23 +4274,26 @@ mod tests {
         assert!(app.handle_model_selection_overlay_key(key(KeyCode::Up)));
         assert!(app.handle_model_selection_overlay_key(key(KeyCode::Char('2'))));
         assert_eq!(
-            app.model_selection_overlay_ui_state.step(),
+            app.shell.model_selection_overlay_ui_state.step(),
             ModelSelectionStep::Effort
         );
         assert!(app.handle_model_selection_overlay_key(key(KeyCode::Backspace)));
         assert_eq!(
-            app.model_selection_overlay_ui_state.step(),
+            app.shell.model_selection_overlay_ui_state.step(),
             ModelSelectionStep::Model
         );
         assert!(app.handle_model_selection_overlay_key(key(KeyCode::Enter)));
         assert_eq!(
-            app.model_selection_overlay_ui_state.step(),
+            app.shell.model_selection_overlay_ui_state.step(),
             ModelSelectionStep::Effort
         );
         assert!(app.handle_model_selection_overlay_key(key(KeyCode::Enter)));
-        assert_eq!(app.turn_options.model.as_deref(), Some("gpt-5.4"));
         assert_eq!(
-            app.turn_options.reasoning_effort,
+            app.conversation.turn_options.model.as_deref(),
+            Some("gpt-5.4")
+        );
+        assert_eq!(
+            app.conversation.turn_options.reasoning_effort,
             Some(ConversationReasoningEffort::High)
         );
 
@@ -4094,7 +4302,10 @@ mod tests {
         assert!(app.handle_view_selection_overlay_key(key(KeyCode::Down)));
         assert!(app.handle_view_selection_overlay_key(key(KeyCode::Up)));
         assert!(app.handle_view_selection_overlay_key(key(KeyCode::Char('3'))));
-        assert_eq!(app.conversation_view_mode, ConversationViewMode::Detail);
+        assert_eq!(
+            app.conversation.conversation_view_mode,
+            ConversationViewMode::Detail
+        );
         app.show_view_selection_overlay();
         assert!(app.handle_view_selection_overlay_key(key(KeyCode::Enter)));
 
@@ -4103,10 +4314,10 @@ mod tests {
         assert!(app.handle_language_selection_overlay_key(key(KeyCode::Down)));
         assert!(app.handle_language_selection_overlay_key(key(KeyCode::Up)));
         assert!(app.handle_language_selection_overlay_key(key(KeyCode::Char('1'))));
-        assert_eq!(app.tui_language, TuiLanguage::English);
+        assert_eq!(app.shell.tui_language, TuiLanguage::English);
         app.show_language_selection_overlay();
         assert!(app.handle_language_selection_overlay_key(key(KeyCode::Enter)));
-        assert_eq!(app.tui_language, TuiLanguage::English);
+        assert_eq!(app.shell.tui_language, TuiLanguage::English);
     }
 
     #[test]
@@ -4123,9 +4334,9 @@ mod tests {
             conversation.record_turn_started(request.expected_turn_id.clone());
             conversation.composer.input_buffer = request.prompt.clone();
         }
-        app.pending_turn_steer = Some(steer_intent(
+        app.conversation.pending_turn_steer = Some(steer_intent(
             1,
-            app.prompt_input_revision,
+            app.conversation.prompt_input_revision,
             "focus the current work",
             request.clone(),
         ));
@@ -4135,11 +4346,11 @@ mod tests {
             ready_conversation(&app).composer.input_buffer,
             "focus the current work"
         );
-        assert!(app.pending_turn_steer.is_none());
+        assert!(app.conversation.pending_turn_steer.is_none());
 
-        app.pending_turn_steer = Some(steer_intent(
+        app.conversation.pending_turn_steer = Some(steer_intent(
             2,
-            app.prompt_input_revision,
+            app.conversation.prompt_input_revision,
             "focus the current work",
             request,
         ));
@@ -4150,13 +4361,13 @@ mod tests {
             }),
         );
         assert!(ready_conversation(&app).composer.input_buffer.is_empty());
-        assert!(app.pending_turn_steer.is_none());
+        assert!(app.conversation.pending_turn_steer.is_none());
     }
 
     #[test]
     fn confirmed_steer_runs_through_core_and_preserves_the_draft_on_worker_failure() {
         let mut app = test_native_tui_app();
-        let turn_submission = app.client_runtime.begin_test_turn_submission();
+        let turn_submission = app.runtime.client_runtime.begin_test_turn_submission();
         app.dispatch_client_event(crate::core::app::CoreInput::ConversationStreamUpdated {
             correlation: turn_submission,
             event: crate::core::app::TurnStreamEvent::ThreadPrepared {
@@ -4177,15 +4388,15 @@ mod tests {
 
         assert!(app.show_turn_steer_confirmation());
         assert!(app.handle_turn_steer_confirmation_key(key(KeyCode::Enter)));
-        assert!(app.pending_turn_steer.is_some());
+        assert!(app.conversation.pending_turn_steer.is_some());
 
         let deadline = Instant::now() + Duration::from_secs(1);
-        while app.pending_turn_steer.is_some() && Instant::now() < deadline {
+        while app.conversation.pending_turn_steer.is_some() && Instant::now() < deadline {
             app.poll_core_runtime_inputs(8);
             std::thread::yield_now();
         }
 
-        assert!(app.pending_turn_steer.is_none());
+        assert!(app.conversation.pending_turn_steer.is_none());
         assert_eq!(
             ready_conversation(&app).composer.input_buffer,
             "keep this draft"
@@ -4211,9 +4422,9 @@ mod tests {
             conversation.record_turn_started(request.expected_turn_id.clone());
             conversation.composer.input_buffer = "newer draft".to_string();
         }
-        app.pending_turn_steer = Some(steer_intent(
+        app.conversation.pending_turn_steer = Some(steer_intent(
             1,
-            app.prompt_input_revision,
+            app.conversation.prompt_input_revision,
             "original draft",
             request,
         ));
@@ -4245,8 +4456,8 @@ mod tests {
             conversation.record_turn_started("turn-new".to_string());
             conversation.composer.input_buffer = request.prompt.clone();
         }
-        app.pending_turn_steer = Some(steer_intent(1, 0, "same draft", request));
-        app.prompt_input_revision = 1;
+        app.conversation.pending_turn_steer = Some(steer_intent(1, 0, "same draft", request));
+        app.conversation.prompt_input_revision = 1;
 
         app.apply_turn_steer_completion(
             steer_correlation(1),
@@ -4273,7 +4484,7 @@ mod tests {
             conversation.composer.input_buffer = "delivered draft".to_string();
             conversation.mark_turn_finished();
         }
-        app.pending_turn_steer = Some(steer_intent(1, 0, "delivered draft", request));
+        app.conversation.pending_turn_steer = Some(steer_intent(1, 0, "delivered draft", request));
 
         app.apply_turn_steer_completion(
             steer_correlation(1),
@@ -4299,7 +4510,7 @@ mod tests {
             conversation.record_turn_started(request.expected_turn_id.clone());
             conversation.composer.input_buffer = "same request".to_string();
         }
-        app.pending_turn_steer = Some(steer_intent(2, 0, "same request", request));
+        app.conversation.pending_turn_steer = Some(steer_intent(2, 0, "same request", request));
 
         app.apply_turn_steer_completion(
             steer_correlation(1),
@@ -4309,7 +4520,8 @@ mod tests {
         );
 
         assert_eq!(
-            app.pending_turn_steer
+            app.conversation
+                .pending_turn_steer
                 .as_ref()
                 .map(|pending| pending.correlation.generation),
             Some(2)

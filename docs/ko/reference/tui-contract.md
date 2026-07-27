@@ -19,6 +19,12 @@ Ratatui primitive를 흩뜨리지 않게 합니다.
 | Terminal adapter | lifecycle, scrollback, viewport replay, host terminal effect | planning 의미, Akra 문구, overlay policy |
 | Test/capture | rendering contract, snapshot delta, terminal evidence | 검토하지 않은 시각 계약 변경 |
 
+`NativeTuiApp`은 계층 사이에 전달하는 범용 state bag이 아닙니다. 정확히 네 private typed
+slice(`shell`, `conversation`, `planning`, `runtime`)만 소유합니다. Production frontend와 terminal
+module은 `ShellRuntime`을 통해 owned projection/model만 받고, test fixture만 aggregate를 직접
+요청할 수 있습니다. Planning-worker 표시 상태는 sealed Core projection이므로 navigation intent가
+optimistic하게 다시 쓸 수 없습니다.
+
 문구는 projection/copy, action 가능 여부는 state/controller, overlay section은 view model 후
 rendering, style은 `theme.rs`, geometry는 rendering/layout, scrollback/resize는 terminal adapter에서
 시작합니다.

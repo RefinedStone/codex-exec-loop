@@ -638,6 +638,438 @@ fn native_tui_uses_one_composition_owned_client_runtime_ingress() {
 }
 
 #[test]
+fn native_tui_app_owns_exactly_four_typed_private_state_slices() {
+    let app_source =
+        fs::read_to_string("src/adapter/inbound/tui/app.rs").expect("TUI app source should load");
+    let app_syntax = syn::parse_file(&app_source).expect("TUI app source should parse");
+
+    let root_fields = named_struct_fields(&app_syntax, "NativeTuiApp");
+    let expected_root = [
+        ("shell", "NativeTuiShellState"),
+        ("conversation", "NativeTuiConversationState"),
+        ("planning", "NativeTuiPlanningState"),
+        ("runtime", "NativeTuiRuntimeState"),
+    ];
+    assert_eq!(
+        root_fields.len(),
+        expected_root.len(),
+        "NativeTuiApp must remain the four-slice host aggregate"
+    );
+    for (field, (expected_name, expected_type)) in root_fields.iter().zip(expected_root) {
+        assert_eq!(
+            field
+                .ident
+                .as_ref()
+                .expect("NativeTuiApp field should be named"),
+            expected_name,
+            "NativeTuiApp slice order and names are architectural"
+        );
+        assert!(
+            matches!(field.vis, syn::Visibility::Inherited),
+            "NativeTuiApp slice {expected_name} must stay private"
+        );
+        assert!(
+            is_named_path_type(&field.ty, expected_type),
+            "NativeTuiApp.{expected_name} must use {expected_type}"
+        );
+    }
+
+    let expected_slices: [(&str, &[(&str, &str)]); 4] = [
+        (
+            "NativeTuiShellState",
+            &[
+                ("chrome", "ShellChromeState"),
+                ("supersession_mud_ui_state", "SupersessionMudUiState"),
+                (
+                    "parallel_peek_overlay_ui_state",
+                    "ParallelPeekOverlayUiState",
+                ),
+                (
+                    "progressive_activity_overlay_ui_state",
+                    "ProgressiveActivityOverlayUiState",
+                ),
+                ("help_scroll_offset", "usize"),
+                ("reviews_overlay_ui_state", "ReviewsOverlayUiState"),
+                (
+                    "parallel_supervisor_event_log",
+                    "ParallelSupervisorEventLog",
+                ),
+                ("session_overlay_ui_state", "SessionOverlayUiState"),
+                ("tui_language", "TuiLanguage"),
+                (
+                    "language_selection_overlay_ui_state",
+                    "LanguageSelectionOverlayUiState",
+                ),
+                (
+                    "model_selection_overlay_ui_state",
+                    "ModelSelectionOverlayUiState",
+                ),
+                (
+                    "view_selection_overlay_ui_state",
+                    "ViewSelectionOverlayUiState",
+                ),
+                ("inline_history_render_mode", "InlineHistoryRenderMode"),
+                ("history_insert_mode", "HistoryInsertionMode"),
+                ("show_startup_ascii_art", "bool"),
+            ],
+        ),
+        (
+            "NativeTuiConversationState",
+            &[
+                ("lifecycle", "ConversationLifecycleState"),
+                (
+                    "pending_manual_prompt_preparation",
+                    "Option<PendingManualPromptPreparation>",
+                ),
+                ("prompt_input_revision", "u64"),
+                ("turn_steer_confirmation", "Option<TurnSteerUiIntent>"),
+                ("pending_turn_steer", "Option<PendingTurnSteerUiIntent>"),
+                ("conversation_history_identity_revision", "u64"),
+                ("conversation_history_thread_id", "Option<String>"),
+                ("turn_options", "ConversationTurnOptions"),
+                ("conversation_view_mode", "ConversationViewMode"),
+                ("auto_follow_overlay_ui_state", "AutoFollowOverlayUiState"),
+            ],
+        ),
+        (
+            "NativeTuiPlanningState",
+            &[
+                ("planning_ui_intent_revision", "u64"),
+                (
+                    "pending_resumed_session_planning_refresh",
+                    "Option<PendingResumedSessionPlanningRefresh>",
+                ),
+                ("queue_overlay_ui_state", "QueueOverlayUiState"),
+                ("queue_mutation_ui_state", "QueueMutationUiState"),
+                (
+                    "directions_maintenance_overlay_ui_state",
+                    "DirectionsMaintenanceOverlayUiState",
+                ),
+                (
+                    "planning_init_overlay_ui_state",
+                    "PlanningInitOverlayUiState",
+                ),
+                (
+                    "planning_runtime_refresh_ui_state",
+                    "PlanningRuntimeRefreshUiState",
+                ),
+                (
+                    "planning_workspace_operation_ui_state",
+                    "PlanningWorkspaceOperationUiState",
+                ),
+                (
+                    "planning_draft_editor_ui_state",
+                    "PlanningDraftEditorUiState",
+                ),
+                (
+                    "planning_worker_panel_state",
+                    "CorePlanningWorkerPanelProjection",
+                ),
+                ("post_turn_continuation_gate", "PostTurnContinuationGate"),
+                ("planning_worker_visibility", "PlanningWorkerVisibility"),
+            ],
+        ),
+        (
+            "NativeTuiRuntimeState",
+            &[
+                ("client_runtime", "NativeClientRuntime"),
+                (
+                    "parallel_mode_control_plane",
+                    "ParallelModeControlPlaneHandle<TuiParallelModeControlPlaneEventSink>",
+                ),
+                ("github_review_polling_state", "GithubReviewPollingState"),
+                ("tx", "SyncSender<BackgroundMessage>"),
+                ("rx", "Receiver<BackgroundMessage>"),
+            ],
+        ),
+    ];
+    for (slice_name, expected_fields) in expected_slices {
+        let fields = named_struct_fields(&app_syntax, slice_name);
+        assert_eq!(
+            fields.len(),
+            expected_fields.len(),
+            "{slice_name} must keep its exact state-authority ledger"
+        );
+        for (field, (expected_name, expected_type)) in fields.iter().zip(expected_fields) {
+            assert_eq!(
+                field.ident.as_ref().expect("slice field should be named"),
+                expected_name,
+                "{slice_name} field order and names are architectural"
+            );
+            assert!(
+                matches!(field.vis, syn::Visibility::Inherited),
+                "{slice_name}.{expected_name} must stay private"
+            );
+            let exact_type = if let Some((outer, inner)) = expected_type.split_once('<') {
+                is_single_generic_named_type(
+                    &field.ty,
+                    outer,
+                    inner
+                        .strip_suffix('>')
+                        .expect("generic expected type should close"),
+                )
+            } else {
+                is_named_path_type(&field.ty, expected_type)
+            };
+            assert!(
+                exact_type,
+                "{slice_name}.{expected_name} must use {expected_type}"
+            );
+        }
+    }
+
+    let protected_types = [
+        "NativeTuiApp",
+        "NativeTuiShellState",
+        "NativeTuiConversationState",
+        "NativeTuiPlanningState",
+        "NativeTuiRuntimeState",
+        "CorePlanningWorkerPanelProjection",
+        "ShellRuntime",
+    ];
+    let forbidden_traits = [
+        "Deref",
+        "DerefMut",
+        "AsRef",
+        "AsMut",
+        "Borrow",
+        "BorrowMut",
+        "Index",
+        "IndexMut",
+    ];
+    let protected_reference_types = [
+        "NativeTuiApp",
+        "NativeTuiShellState",
+        "NativeTuiConversationState",
+        "NativeTuiPlanningState",
+        "NativeTuiRuntimeState",
+        "CorePlanningWorkerPanelProjection",
+    ];
+    let protected_reference_return = |output: &syn::ReturnType| {
+        let syn::ReturnType::Type(_, ty) = output else {
+            return None;
+        };
+        let syn::Type::Reference(reference) = ty.as_ref() else {
+            return None;
+        };
+        protected_reference_types
+            .iter()
+            .copied()
+            .find(|type_name| is_named_path_type(reference.elem.as_ref(), type_name))
+    };
+    let mut protected_source_paths =
+        rust_files_under(&repo_root().join("src/adapter/inbound/tui/app"));
+    protected_source_paths.push(repo_root().join("src/adapter/inbound/tui/app.rs"));
+    protected_source_paths.sort();
+    protected_source_paths.dedup();
+    let mut violations = Vec::new();
+    for path in protected_source_paths {
+        if is_test_only_path(&path) {
+            continue;
+        }
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+        let syntax = syn::parse_file(&source)
+            .unwrap_or_else(|error| panic!("failed to parse {}: {error}", path.display()));
+        for item in &syntax.items {
+            if item_is_test_only(item) {
+                continue;
+            }
+            if let syn::Item::Fn(function) = item
+                && let Some(type_name) = protected_reference_return(&function.sig.output)
+            {
+                violations.push(format!(
+                    "{}:{}: {} returns a {type_name} reference",
+                    relative_path(&repo_root(), &path),
+                    function.sig.ident.span().start().line,
+                    function.sig.ident
+                ));
+            }
+            let syn::Item::Impl(item_impl) = item else {
+                continue;
+            };
+            if attributes_are_test_only(&item_impl.attrs) {
+                continue;
+            }
+            let protected_self = protected_types
+                .iter()
+                .any(|type_name| type_is_simple_path(item_impl.self_ty.as_ref(), &[*type_name]));
+            if protected_self
+                && let Some((_, trait_path, _)) = &item_impl.trait_
+                && trait_path.segments.last().is_some_and(|segment| {
+                    forbidden_traits
+                        .iter()
+                        .any(|forbidden| segment.ident == *forbidden)
+                })
+            {
+                violations.push(format!(
+                    "{}:{}: protected TUI state implements {}",
+                    relative_path(&repo_root(), &path),
+                    item_impl.impl_token.span.start().line,
+                    trait_path
+                        .segments
+                        .last()
+                        .expect("trait path should have a leaf")
+                        .ident
+                ));
+            }
+            for impl_item in &item_impl.items {
+                let syn::ImplItem::Fn(method) = impl_item else {
+                    continue;
+                };
+                if attributes_are_test_only(&method.attrs) {
+                    continue;
+                }
+                if let Some(type_name) = protected_reference_return(&method.sig.output) {
+                    violations.push(format!(
+                        "{}:{}: {} returns a {type_name} reference",
+                        relative_path(&repo_root(), &path),
+                        method.sig.ident.span().start().line,
+                        method.sig.ident
+                    ));
+                }
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "typed TUI slices must not expose aggregate escape hatches:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn native_tui_projects_core_snapshots_without_duplicate_gates_or_runtime_app_escape() {
+    assert_no_forbidden_references_in_paths(
+        "TUI must project correlation-accepted Core snapshots without a second gate",
+        &["src/adapter/inbound/tui"],
+        &[
+            "pending_startup_check",
+            "pending_conversation_load",
+            "apply_correlated_startup_snapshot",
+            "apply_correlated_conversation_snapshot",
+            "StartupCheckCorrelation",
+            "ConversationLoadCorrelation",
+        ],
+    );
+    assert_no_production_callable_reference_named_in_paths(
+        "production TUI code must not regain the mutable Runtime aggregate escape",
+        &["src/adapter/inbound/tui"],
+        "app_mut",
+    );
+    assert_no_forbidden_references_in_paths(
+        "terminal/frontend code must consume typed Runtime projections, never NativeTuiApp",
+        &[
+            "src/adapter/inbound/tui/app/inline_terminal_adapter.rs",
+            "src/adapter/inbound/tui/app/ratatui_frontend.rs",
+        ],
+        &[
+            "NativeTuiApp",
+            "ConversationProjectionSample::capture",
+            "InlineConversationFrameProjection::from_app_with_sample",
+        ],
+    );
+
+    let shell_runtime_source = fs::read_to_string("src/adapter/inbound/tui/app/shell_runtime.rs")
+        .expect("shell runtime source should load");
+    let shell_runtime_syntax =
+        syn::parse_file(&shell_runtime_source).expect("shell runtime source should parse");
+    for escape in ["app", "app_mut"] {
+        assert!(
+            inherent_impl_methods(&shell_runtime_syntax, "ShellRuntime", escape).is_empty(),
+            "ShellRuntime::{escape} must remain test-only"
+        );
+    }
+
+    let worker_projection_source =
+        fs::read_to_string("src/adapter/inbound/tui/app/planning_worker_panel_projection.rs")
+            .expect("planning worker projection source should load");
+    let worker_projection_syntax = syn::parse_file(&worker_projection_source)
+        .expect("planning worker projection source should parse");
+    let production_methods = [
+        "current",
+        "apply_started",
+        "apply_completed",
+        "reset_for_conversation_lifecycle",
+    ];
+    for required in production_methods {
+        assert_eq!(
+            inherent_impl_methods(
+                &worker_projection_syntax,
+                "CorePlanningWorkerPanelProjection",
+                required,
+            )
+            .len(),
+            1,
+            "Core planning worker projection must expose exactly one {required} transition"
+        );
+    }
+    assert!(
+        !worker_projection_source.contains("DerefMut")
+            && !worker_projection_source.contains("state_mut"),
+        "planning worker projection must not expose mutable domain state"
+    );
+    let expected_worker_mutator_sites = [
+        (
+            "apply_started",
+            vec![("src/adapter/inbound/tui/app/app_runtime.rs", 1_usize)],
+        ),
+        (
+            "apply_completed",
+            vec![(
+                "src/adapter/inbound/tui/app/post_turn_continuation.rs",
+                1_usize,
+            )],
+        ),
+        (
+            "reset_for_conversation_lifecycle",
+            vec![("src/adapter/inbound/tui/app/app_runtime.rs", 1_usize)],
+        ),
+    ];
+    let app_source_root = repo_root().join("src/adapter/inbound/tui/app");
+    for (mutator, expected_sites) in expected_worker_mutator_sites {
+        let mut actual_sites = Vec::new();
+        for path in rust_files_under(&app_source_root) {
+            if is_test_only_path(&path) {
+                continue;
+            }
+            let source = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+            let call_count = production_callable_reference_lines(&source, mutator).len();
+            if call_count > 0 {
+                actual_sites.push((relative_path(&repo_root(), &path).to_string(), call_count));
+            }
+        }
+        actual_sites.sort();
+        let expected_sites = expected_sites
+            .into_iter()
+            .map(|(path, count)| (path.to_string(), count))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual_sites, expected_sites,
+            "Core planning worker projection mutator `{mutator}` must stay on its accepted Core event settlement path"
+        );
+    }
+
+    let app_runtime_source = fs::read_to_string("src/adapter/inbound/tui/app/app_runtime.rs")
+        .expect("TUI runtime source should load");
+    let intent_effect =
+        top_level_impl_method_source(&app_runtime_source, "execute_conversation_intent_effect");
+    assert!(
+        !intent_effect.contains("reset_for_conversation_lifecycle"),
+        "draft/session UI intent must not optimistically clear the Core worker projection"
+    );
+    let core_conversation_projection =
+        top_level_impl_method_source(&app_runtime_source, "apply_core_conversation_snapshot");
+    assert!(
+        core_conversation_projection.contains("CoreConversationSnapshot::Idle")
+            && core_conversation_projection.contains("CoreConversationSnapshot::Loading")
+            && core_conversation_projection.contains("reset_for_conversation_lifecycle"),
+        "only accepted Core conversation lifecycle snapshots may reset the worker projection"
+    );
+}
+
+#[test]
 fn parallel_runtime_notices_enter_the_typed_client_runtime() {
     let source = fs::read_to_string("src/adapter/inbound/tui/app/parallel_mode.rs")
         .expect("parallel TUI adapter source should load");
@@ -2829,13 +3261,13 @@ fn tui_session_renames_enter_through_core_runtime() {
         .find("if!exact_pending{return;}")
         .expect("rename success presentation must require the exact local receipt");
     let success_settlement = compact_completion
-        .find("self.session_overlay_ui_state.finish_rename_success()")
+        .find("self.shell.session_overlay_ui_state.finish_rename_success()")
         .expect("exact rename success must settle local editor presentation");
     let failure_pending_gate = compact_completion
         .rfind("if!exact_pending{return;}")
         .expect("rename failure presentation must require the exact local receipt");
     let failure_settlement = compact_completion
-        .find("self.session_overlay_ui_state.finish_rename_failure(")
+        .find("self.shell.session_overlay_ui_state.finish_rename_failure(")
         .expect("exact rename failure must settle local editor presentation");
     assert!(
         catalog_projection < stream_projection
@@ -3888,15 +4320,14 @@ fn tui_shell_renderer_consumes_one_owned_frame_without_app_or_effects() {
     let commit_receipt =
         top_level_impl_method_source(&terminal_source, "commit_frame_render_receipt");
     assert_eq!(
-        production_callable_reference_lines(&commit_receipt, "apply_inline_frame_render_receipt")
-            .len(),
+        production_callable_reference_lines(&commit_receipt, "commit_receipt").len(),
         1,
-        "the attempt-aware commit gate must apply one delivered render receipt"
+        "the attempt-aware gate must invoke one typed receipt commit callback"
     );
     for required in [
         "pending.attempt != current_attempt",
         "pending.attempt <= last_committed",
-        "if !apply_inline_frame_render_receipt(app, pending.receipt)",
+        "if !commit_receipt(pending.receipt)",
     ] {
         assert!(
             commit_receipt.contains(required),
@@ -3904,7 +4335,7 @@ fn tui_shell_renderer_consumes_one_owned_frame_without_app_or_effects() {
         );
     }
     let receipt_apply_index = commit_receipt
-        .find("if !apply_inline_frame_render_receipt(app, pending.receipt)")
+        .find("if !commit_receipt(pending.receipt)")
         .expect("receipt application must remain fail-closed");
     let commit_index = commit_receipt
         .find("last_committed_frame_render_attempt = Some(pending.attempt)")
@@ -3912,6 +4343,17 @@ fn tui_shell_renderer_consumes_one_owned_frame_without_app_or_effects() {
     assert!(
         receipt_apply_index < commit_index,
         "the render attempt must be recorded only after atomic receipt application succeeds"
+    );
+    let runtime_source =
+        fs::read_to_string(repo_root.join("src/adapter/inbound/tui/app/shell_runtime.rs"))
+            .expect("shell runtime source should load");
+    let runtime_receipt =
+        top_level_impl_method_source(&runtime_source, "commit_inline_frame_render_receipt");
+    assert_eq!(
+        production_callable_reference_lines(&runtime_receipt, "apply_inline_frame_render_receipt")
+            .len(),
+        1,
+        "ShellRuntime must apply the delivered owned receipt exactly once"
     );
 
     let terminal_syntax =
@@ -4098,7 +4540,6 @@ fn tui_conversation_tail_reads_one_immutable_screen_model_without_effects() {
     );
     for required in [
         "conversation_history_identity_revision: u64",
-        "conversation_history_identity_revision: app.conversation_history_identity_revision",
         "fn conversation_history_identity_revision(",
     ] {
         assert!(
@@ -4106,6 +4547,16 @@ fn tui_conversation_tail_reads_one_immutable_screen_model_without_effects() {
             "ConversationProjectionSample must own the terminal history identity fact: {required}"
         );
     }
+    let compact_production = production_source
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    assert!(
+        compact_production.contains(
+            "conversation_history_identity_revision:app.conversation.conversation_history_identity_revision"
+        ),
+        "ConversationProjectionSample must capture the typed conversation history identity"
+    );
     for forbidden in [
         ".application",
         ".planning()",
@@ -4162,7 +4613,7 @@ fn tui_conversation_tail_reads_one_immutable_screen_model_without_effects() {
         .collect::<String>();
     assert_eq!(
         transaction_source
-            .matches("ConversationProjectionSample::capture(runtime.app_mut())")
+            .matches("runtime.capture_inline_terminal_projection_sample()")
             .count(),
         1,
         "one terminal sync transaction must capture conversation projection facts exactly once"
@@ -4186,6 +4637,9 @@ fn tui_transcript_handoff_ack_requires_an_exact_terminal_delivery_receipt() {
         repo_root().join("src/adapter/inbound/tui/app/inline_terminal_adapter.rs"),
     )
     .expect("inline terminal adapter source should load");
+    let runtime_source =
+        fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/shell_runtime.rs"))
+            .expect("shell runtime source should load");
     let flush_source = fs::read_to_string(
         repo_root().join("src/adapter/inbound/tui/app/inline_terminal_adapter/history_flush.rs"),
     )
@@ -4211,7 +4665,6 @@ fn tui_transcript_handoff_ack_requires_an_exact_terminal_delivery_receipt() {
         );
     }
     for required in [
-        "delivery_token.matches_current(app)",
         "history_sync.committed_handoff()",
         "handoff_sync.committed_handoff()",
     ] {
@@ -4220,6 +4673,12 @@ fn tui_transcript_handoff_ack_requires_an_exact_terminal_delivery_receipt() {
             "terminal ACK must consume only an exact committed receipt: {required}"
         );
     }
+    assert!(
+        runtime_source.contains("delivery_token.matches_current(&self.app)")
+            && terminal_source
+                .contains("runtime.acknowledge_transcript_handoff_after_delivery(delivery_token)"),
+        "ShellRuntime must validate the exact delivery token before mutating transcript state"
+    );
 }
 
 #[test]
@@ -4620,8 +5079,9 @@ fn tui_parallel_frame_uses_one_control_plane_and_event_projection_sample() {
         "PlanningParallelProjection {",
         "parallel_panel: ParallelPanelProjectionSample",
         "parallel_panel: ParallelPanelProjectionSample::from_parts(",
-        "let parallel_control_plane = app.parallel_mode_control_plane.presentation_projection();",
-        "parallel_supervisor_events: app.parallel_supervisor_event_log.projection()",
+        "let parallel_control_plane = app",
+        ".parallel_mode_control_plane",
+        "parallel_supervisor_events: app.shell.parallel_supervisor_event_log.projection()",
     ] {
         assert!(
             sample_source.contains(required),
@@ -4653,9 +5113,9 @@ fn tui_parallel_frame_uses_one_control_plane_and_event_projection_sample() {
     )
     .expect("inline terminal adapter source should load");
     for required in [
+        "InlineTerminalSyncProjection",
         "InlineTerminalSyncPolicy::from_sample(&projection_sample)",
         "sampled_parallel_frame_projection",
-        "sample.parallel_supervisor_event_scrollback_lines_before_live_tail(",
     ] {
         assert!(
             terminal_source.contains(required),
@@ -4669,6 +5129,7 @@ fn tui_parallel_frame_uses_one_control_plane_and_event_projection_sample() {
     for required in [
         "supersession_overlay_view: Option<Box<SupersessionOverlayView>>",
         "parallel frame projection must own the supervisor view",
+        "sample.parallel_supervisor_event_scrollback_lines_before_live_tail(",
     ] {
         assert!(
             frame_model_source.contains(required),
@@ -4697,8 +5158,11 @@ fn tui_parallel_frame_uses_one_control_plane_and_event_projection_sample() {
             "pulse and tick must agree on one sampled parallel panel state: {required}"
         );
     }
+    let scheduler_source =
+        top_level_impl_method_source(&runtime_source, "poll_background_messages_at");
     assert!(
-        !runtime_source.contains("ConversationProjectionSample::capture"),
+        !scheduler_source.contains("ConversationProjectionSample::capture")
+            && !scheduler_source.contains("capture_inline_terminal_projection_sample"),
         "the 100ms scheduler must not clone the full conversation and event-stream sample"
     );
     for path in [
@@ -6278,8 +6742,9 @@ fn tui_post_turn_execution_uses_planning_post_turn_facade() {
     );
     assert!(
         tui_runtime.contains("AppEvent::PostTurnEvaluationStarted(state)")
-            && tui_runtime.contains("self.planning_worker_panel_state = state;"),
-        "TUI must apply the Core-started panel state by direct assignment"
+            && tui_runtime.contains(".planning_worker_panel_state")
+            && tui_runtime.contains(".apply_started(state);"),
+        "TUI must apply the Core-started panel state through its sealed projection"
     );
     assert!(
         tui_tests
@@ -9210,6 +9675,11 @@ fn renderer_identifier_is_forbidden(identifier: &str) -> bool {
     matches!(
         identifier,
         "NativeTuiApp"
+            | "NativeTuiShellState"
+            | "NativeTuiConversationState"
+            | "NativeTuiPlanningState"
+            | "NativeTuiRuntimeState"
+            | "CorePlanningWorkerPanelProjection"
             | "NativeTuiApplicationHandle"
             | "NativeClientRuntime"
             | "AppState"

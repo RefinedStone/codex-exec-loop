@@ -40,7 +40,7 @@ pub(super) fn run(
      * 보게 해야 한다. 그래서 Terminal을 만들기 전에 runtime에서 현재 presentation setting을
      * 읽고, 그 값으로 backend wrapper의 viewport 옵션을 확정한다.
      */
-    let render_mode = runtime.app_mut().inline_history_render_mode;
+    let render_mode = runtime.inline_history_render_mode();
     let terminal = build_terminal(backend, render_mode)?;
     /*
      * Terminal ownership은 InlineTerminalAdapter가 갖는다. frontend loop는 "언제 그릴지"만
@@ -92,11 +92,7 @@ fn run_event_loop(
             runtime.finish_pending_quit_after_transaction(transaction_completed);
         }
         // Preserve normal terminal selection and wheel scrolling unless the current frame owns a clickable action.
-        restore_guard.sync_mouse_capture(
-            runtime
-                .app_mut()
-                .queue_receipt_undo_mouse_capture_requested(),
-        )?;
+        restore_guard.sync_mouse_capture(runtime.queue_receipt_undo_mouse_capture_requested())?;
         /*
          * poll timeout은 기본 idle wait와 다음 scheduled draw deadline의 교집합이다. 입력이 없어도
          * delayed draw 시점에는 poll이 깨어나 frame coalescing이 실제 화면에 반영된다.

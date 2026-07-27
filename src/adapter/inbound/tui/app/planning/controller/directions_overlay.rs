@@ -14,6 +14,7 @@ impl NativeTuiApp {
      */
     pub(crate) fn handle_directions_overlay_key(&mut self, key: event::KeyEvent) -> bool {
         match self
+            .planning
             .directions_maintenance_overlay_ui_state
             .projection_kind()
         {
@@ -30,7 +31,7 @@ impl NativeTuiApp {
             DirectionsMaintenanceProjectionKind::Ready => {}
         }
 
-        match self.directions_maintenance_overlay_ui_state.step() {
+        match self.planning.directions_maintenance_overlay_ui_state.step() {
             DirectionsMaintenanceOverlayStep::Overview => match key.code {
                 /*
                  * Enter starts with the most common recovery path: the queue-idle prompt editor.
@@ -45,6 +46,7 @@ impl NativeTuiApp {
                  */
                 KeyCode::Char('d') if key.modifiers.is_empty() => {
                     if self
+                        .planning
                         .directions_maintenance_overlay_ui_state
                         .summary()
                         .and_then(|summary| summary.parse_error.as_deref())
@@ -58,6 +60,7 @@ impl NativeTuiApp {
                             },
                         );
                     } else if self
+                        .planning
                         .directions_maintenance_overlay_ui_state
                         .actionable_detail_doc_directions()
                         .is_empty()
@@ -75,7 +78,8 @@ impl NativeTuiApp {
                             },
                         );
                     } else {
-                        self.directions_maintenance_overlay_ui_state
+                        self.planning
+                            .directions_maintenance_overlay_ui_state
                             .open_detail_doc_selection();
                     }
                 }
@@ -86,6 +90,7 @@ impl NativeTuiApp {
                  */
                 KeyCode::Char('p') if key.modifiers.is_empty() => {
                     if self
+                        .planning
                         .directions_maintenance_overlay_ui_state
                         .summary()
                         .and_then(|summary| summary.parse_error.as_deref())
@@ -116,13 +121,16 @@ impl NativeTuiApp {
             DirectionsMaintenanceOverlayStep::DetailDocSelection => match key.code {
                 // Back/left leaves selection without creating a pending generation target.
                 KeyCode::Backspace | KeyCode::Left if key.modifiers.is_empty() => self
+                    .planning
                     .directions_maintenance_overlay_ui_state
                     .return_to_overview(),
                 // Movement is clamped by UI state against the filtered actionable detail-doc list.
                 KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => self
+                    .planning
                     .directions_maintenance_overlay_ui_state
                     .move_missing_detail_doc_selection(-1),
                 KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => self
+                    .planning
                     .directions_maintenance_overlay_ui_state
                     .move_missing_detail_doc_selection(1),
                 /*
@@ -130,6 +138,7 @@ impl NativeTuiApp {
                  * generation immediately. The later Yes action runs against that captured id/title pair.
                  */
                 KeyCode::Enter if key.modifiers.is_empty() => self
+                    .planning
                     .directions_maintenance_overlay_ui_state
                     .open_detail_doc_confirm(),
                 _ => {}
@@ -137,6 +146,7 @@ impl NativeTuiApp {
             DirectionsMaintenanceOverlayStep::DetailDocConfirm => match key.code {
                 // Back/left returns to the selection list so the operator can pick a different direction.
                 KeyCode::Backspace | KeyCode::Left if key.modifiers.is_empty() => self
+                    .planning
                     .directions_maintenance_overlay_ui_state
                     .open_detail_doc_selection(),
                 /*
@@ -144,19 +154,24 @@ impl NativeTuiApp {
                  * option order, while j/k keep the same keyboard-only navigation model as selection lists.
                  */
                 KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => self
+                    .planning
                     .directions_maintenance_overlay_ui_state
                     .move_detail_doc_confirm_choice(-1),
                 KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => self
+                    .planning
                     .directions_maintenance_overlay_ui_state
                     .move_detail_doc_confirm_choice(1),
                 KeyCode::Char('1') if key.modifiers.is_empty() => self
+                    .planning
                     .directions_maintenance_overlay_ui_state
                     .move_detail_doc_confirm_choice(-1),
                 KeyCode::Char('2') if key.modifiers.is_empty() => self
+                    .planning
                     .directions_maintenance_overlay_ui_state
                     .move_detail_doc_confirm_choice(1),
                 KeyCode::Enter if key.modifiers.is_empty() => {
                     match self
+                        .planning
                         .directions_maintenance_overlay_ui_state
                         .detail_doc_confirm_choice()
                     {
@@ -167,6 +182,7 @@ impl NativeTuiApp {
                              * controller declines to start any editor/service work.
                              */
                             let direction_id = self
+                                .planning
                                 .directions_maintenance_overlay_ui_state
                                 .pending_detail_doc_creation()
                                 .map(|pending| pending.direction_id().to_string());
@@ -179,7 +195,8 @@ impl NativeTuiApp {
                              * No is an explicit cancellation path. It returns to overview and emits a status
                              * message confirming that the directions files were not changed.
                              */
-                            self.directions_maintenance_overlay_ui_state
+                            self.planning
+                                .directions_maintenance_overlay_ui_state
                                 .return_to_overview();
                             self.dispatch_conversation_input(
                                 ConversationInputEvent::StatusMessageShown {

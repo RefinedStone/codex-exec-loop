@@ -149,7 +149,8 @@ impl NativeTuiApp {
         correlation: ReviewCenterLoadCorrelation,
     ) -> ReviewsOverlayLoadRequest {
         let context = self.current_reviews_overlay_context();
-        self.reviews_overlay_ui_state
+        self.shell
+            .reviews_overlay_ui_state
             .begin_load(correlation, context)
     }
 
@@ -158,10 +159,11 @@ impl NativeTuiApp {
         correlation: ReviewCenterLoadCorrelation,
         authority: ReviewsOverlayAuthoritySnapshot,
     ) -> ReviewsOverlayLoadCompletion {
-        if self.shell_overlay != ShellOverlay::Reviews {
+        if self.shell.chrome.shell_overlay != ShellOverlay::Reviews {
             return ReviewsOverlayLoadCompletion::Ignored;
         }
         let Some(request) = self
+            .shell
             .reviews_overlay_ui_state
             .loading_request(&correlation)
             .cloned()
@@ -175,6 +177,7 @@ impl NativeTuiApp {
             return ReviewsOverlayLoadCompletion::ReloadRequired;
         }
         let applied = self
+            .shell
             .reviews_overlay_ui_state
             .apply_loaded(correlation, authority);
         debug_assert!(applied);
@@ -182,15 +185,16 @@ impl NativeTuiApp {
     }
 
     pub(super) fn reviews_overlay_authority_load_required(&self) -> bool {
-        if self.shell_overlay != ShellOverlay::Reviews {
+        if self.shell.chrome.shell_overlay != ShellOverlay::Reviews {
             return false;
         }
-        self.reviews_overlay_ui_state
+        self.shell
+            .reviews_overlay_ui_state
             .requires_authority_load_for(&self.current_reviews_overlay_context())
     }
 
     pub(super) fn current_reviews_overlay_context(&self) -> ReviewsOverlayContext {
-        let active_thread = match &self.conversation_state {
+        let active_thread = match &self.conversation.lifecycle.conversation_state {
             ConversationState::Ready(conversation) if conversation.has_active_thread() => {
                 Some(ReviewsOverlayThreadContext {
                     thread_id: conversation.thread_id.clone(),
@@ -276,9 +280,11 @@ mod tests {
     #[test]
     fn app_requests_reload_when_pending_authority_identity_changes() {
         let mut app = test_native_tui_app();
-        app.shell_overlay = ShellOverlay::Reviews;
+        app.shell.chrome.shell_overlay = ShellOverlay::Reviews;
         let request = begin_app_load(&mut app, 1);
-        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        let ConversationState::Ready(conversation) =
+            &mut app.conversation.lifecycle.conversation_state
+        else {
             panic!("test app should have a ready conversation");
         };
         conversation.cwd = "/tmp/other".to_string();
@@ -289,7 +295,9 @@ mod tests {
             ReviewsOverlayLoadCompletion::ReloadRequired
         );
 
-        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        let ConversationState::Ready(conversation) =
+            &mut app.conversation.lifecycle.conversation_state
+        else {
             panic!("test app should have a ready conversation");
         };
         conversation.record_thread_prepared(
@@ -306,22 +314,22 @@ mod tests {
     #[test]
     fn leaving_and_reopening_reviews_ignores_the_previous_request() {
         let mut app = test_native_tui_app();
-        app.shell_overlay = ShellOverlay::Reviews;
+        app.shell.chrome.shell_overlay = ShellOverlay::Reviews;
         let stale = begin_app_load(&mut app, 1);
         app.dispatch_shell_chrome(super::super::ShellChromeEvent::HelpOverlayShown);
         assert!(matches!(
-            app.reviews_overlay_ui_state.screen_model(),
+            app.shell.reviews_overlay_ui_state.screen_model(),
             ReviewsOverlayScreenModel::Idle
         ));
 
-        app.shell_overlay = ShellOverlay::Reviews;
+        app.shell.chrome.shell_overlay = ShellOverlay::Reviews;
         let current = begin_app_load(&mut app, 2);
         assert_eq!(
             app.apply_reviews_overlay_loaded(stale.correlation, authority()),
             ReviewsOverlayLoadCompletion::Ignored
         );
         assert!(matches!(
-            app.reviews_overlay_ui_state.screen_model(),
+            app.shell.reviews_overlay_ui_state.screen_model(),
             ReviewsOverlayScreenModel::Loading(request) if request == &current
         ));
     }

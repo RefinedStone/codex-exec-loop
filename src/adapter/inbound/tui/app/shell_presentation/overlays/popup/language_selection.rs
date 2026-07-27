@@ -5,12 +5,13 @@ use super::LanguageSelectionOverlayView;
 pub(crate) fn build_language_selection_overlay_view(
     app: &NativeTuiApp,
 ) -> LanguageSelectionOverlayView {
-    let state = &app.language_selection_overlay_ui_state;
+    let state = &app.shell.language_selection_overlay_ui_state;
     let language_lines = LANGUAGE_SELECTION_OPTIONS
         .iter()
         .enumerate()
         .map(|(index, option)| {
-            let detail = with_current_suffix(option.detail, app.tui_language == option.language);
+            let detail =
+                with_current_suffix(option.detail, app.shell.tui_language == option.language);
             overlay_option_line(
                 &(index + 1).to_string(),
                 option.label,
@@ -28,7 +29,7 @@ pub(crate) fn build_language_selection_overlay_view(
         ],
         language_lines,
         status_lines: vec![
-            Line::from(format!("current: {}", app.tui_language.label())),
+            Line::from(format!("current: {}", app.shell.tui_language.label())),
             Line::from("User prompts, task titles, and runtime payloads are kept as written."),
         ],
         key_lines: vec![

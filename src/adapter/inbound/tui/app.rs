@@ -7,13 +7,10 @@ use crate::adapter::inbound::tui::supersession_mud::SupersessionMudUiState;
 use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneHandle;
 use crate::application::service::planning::PlanningTaskHandoff;
 use crate::composition::native_client_runtime::NativeClientRuntime;
-use crate::core::app::{
-    ConversationLoadCorrelation, PlanningRuntimeRefreshCorrelation, StartupCheckCorrelation,
-    TurnSteerCorrelation,
-};
+use crate::core::app::{PlanningRuntimeRefreshCorrelation, TurnSteerCorrelation};
 use crate::domain::conversation::{
     ConversationMessage, ConversationMessageKind, ConversationReasoningEffort,
-    ConversationRuntimeControlTruth, ConversationTurnOptions, ConversationTurnSteerRequest,
+    ConversationTurnOptions, ConversationTurnSteerRequest,
 };
 #[cfg(test)]
 use crate::domain::planning::PlanningWorkerStatus;
@@ -123,6 +120,8 @@ mod planning_runtime_refresh_ui;
 mod planning_shell_command;
 #[path = "app/planning_worker_debug_preview.rs"]
 mod planning_worker_debug_preview;
+#[path = "app/planning_worker_panel_projection.rs"]
+mod planning_worker_panel_projection;
 #[path = "app/planning_workspace_operation_ui.rs"]
 mod planning_workspace_operation_ui;
 #[path = "app/post_turn_continuation.rs"]
@@ -232,6 +231,7 @@ use planning_runtime_refresh_ui::{
     PlanningRuntimeRefreshOperation, PlanningRuntimeRefreshUiCompletion,
     PlanningRuntimeRefreshUiState,
 };
+use planning_worker_panel_projection::CorePlanningWorkerPanelProjection;
 use planning_workspace_operation_ui::{
     PlanningWorkspaceOperationUiSettlement, PlanningWorkspaceOperationUiState,
 };
@@ -361,35 +361,35 @@ impl InlineHistoryRenderMode {
 }
 
 /*
- * NativeTuiApp is intentionally state-heavy: reducers own the decisions, but
- * the app instance is the integration point that holds shell chrome, active
- * conversation state, service handles, planning state, parallel-mode state, and
- * background message channels. Sibling impl modules mutate this single
- * aggregate so renderers and runtime effects see a coherent snapshot.
+ * NativeTuiApp is the host boundary, not a flat bag of feature state. Keeping
+ * the four slices explicit makes a field access name the feature authority it
+ * is crossing and prevents a new renderer/controller from casually adding a
+ * second semantic state field to the root aggregate.
  */
-struct NativeTuiApp {
-    shell_overlay: ShellOverlay,
-    approval_return_overlay: Option<ShellOverlay>,
-    exit_confirmation_state: ExitConfirmationState,
-    startup_state: StartupState,
-    pending_startup_check: Option<StartupCheckCorrelation>,
-    session_state: SessionState,
+struct NativeTuiShellState {
+    chrome: ShellChromeState,
     supersession_mud_ui_state: SupersessionMudUiState,
     parallel_peek_overlay_ui_state: ParallelPeekOverlayUiState,
     progressive_activity_overlay_ui_state: ProgressiveActivityOverlayUiState,
     help_scroll_offset: usize,
-    queue_overlay_ui_state: queue_overlay_ui::QueueOverlayUiState,
-    queue_mutation_ui_state: queue_overlay_ui::QueueMutationUiState,
     reviews_overlay_ui_state: reviews_overlay_ui::ReviewsOverlayUiState,
     parallel_supervisor_event_log: ParallelSupervisorEventLog,
+    session_overlay_ui_state: SessionOverlayUiState,
+    tui_language: TuiLanguage,
+    language_selection_overlay_ui_state: LanguageSelectionOverlayUiState,
+    model_selection_overlay_ui_state: ModelSelectionOverlayUiState,
+    view_selection_overlay_ui_state: ViewSelectionOverlayUiState,
+    inline_history_render_mode: InlineHistoryRenderMode,
+    history_insert_mode: HistoryInsertionMode,
+    show_startup_ascii_art: bool,
+}
+
+struct NativeTuiConversationState {
+    lifecycle: ConversationLifecycleState,
     pending_manual_prompt_preparation: Option<PendingManualPromptPreparation>,
     prompt_input_revision: u64,
-    planning_ui_intent_revision: u64,
     turn_steer_confirmation: Option<TurnSteerUiIntent>,
     pending_turn_steer: Option<PendingTurnSteerUiIntent>,
-    parallel_mode_control_plane:
-        ParallelModeControlPlaneHandle<TuiParallelModeControlPlaneEventSink>,
-    conversation_state: ConversationState,
     // Monotonic semantic boundary for host-scrollback transcript delivery. A
     // new draft or different loaded session advances it; assigning the first
     // provider thread id to an existing draft does not.
@@ -398,33 +398,40 @@ struct NativeTuiApp {
     // deferred or failed load cannot make the terminal forget which baseline it
     // has already delivered.
     conversation_history_thread_id: Option<String>,
-    pending_conversation_load: Option<ConversationLoadCorrelation>,
-    pending_resumed_session_planning_refresh: Option<PendingResumedSessionPlanningRefresh>,
-    selected_session_index: usize,
-    session_overlay_ui_state: SessionOverlayUiState,
-    tui_language: TuiLanguage,
-    language_selection_overlay_ui_state: LanguageSelectionOverlayUiState,
-    model_selection_overlay_ui_state: ModelSelectionOverlayUiState,
-    view_selection_overlay_ui_state: ViewSelectionOverlayUiState,
+    turn_options: ConversationTurnOptions,
+    conversation_view_mode: ConversationViewMode,
     auto_follow_overlay_ui_state: AutoFollowOverlayUiState,
+}
+
+struct NativeTuiPlanningState {
+    planning_ui_intent_revision: u64,
+    pending_resumed_session_planning_refresh: Option<PendingResumedSessionPlanningRefresh>,
+    queue_overlay_ui_state: queue_overlay_ui::QueueOverlayUiState,
+    queue_mutation_ui_state: queue_overlay_ui::QueueMutationUiState,
     directions_maintenance_overlay_ui_state: DirectionsMaintenanceOverlayUiState,
     planning_init_overlay_ui_state: PlanningInitOverlayUiState,
     planning_runtime_refresh_ui_state: PlanningRuntimeRefreshUiState,
     planning_workspace_operation_ui_state: PlanningWorkspaceOperationUiState,
     planning_draft_editor_ui_state: PlanningDraftEditorUiState,
-    client_runtime: NativeClientRuntime,
-    turn_control_truth: ConversationRuntimeControlTruth,
-    turn_options: ConversationTurnOptions,
-    conversation_view_mode: ConversationViewMode,
-    planning_worker_panel_state: PlanningWorkerPanelState,
+    planning_worker_panel_state: CorePlanningWorkerPanelProjection,
     post_turn_continuation_gate: PostTurnContinuationGate,
     planning_worker_visibility: PlanningWorkerVisibility,
+}
+
+struct NativeTuiRuntimeState {
+    client_runtime: NativeClientRuntime,
+    parallel_mode_control_plane:
+        ParallelModeControlPlaneHandle<TuiParallelModeControlPlaneEventSink>,
     github_review_polling_state: GithubReviewPollingState,
-    inline_history_render_mode: InlineHistoryRenderMode,
-    history_insert_mode: HistoryInsertionMode,
-    show_startup_ascii_art: bool,
     tx: SyncSender<BackgroundMessage>,
     rx: Receiver<BackgroundMessage>,
+}
+
+struct NativeTuiApp {
+    shell: NativeTuiShellState,
+    conversation: NativeTuiConversationState,
+    planning: NativeTuiPlanningState,
+    runtime: NativeTuiRuntimeState,
 }
 
 // Startup ASCII art is opt-out because it is useful in an attached TUI, but it

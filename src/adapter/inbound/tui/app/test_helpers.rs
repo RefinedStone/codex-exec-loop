@@ -681,8 +681,9 @@ fn test_native_tui_app_with_parallel_mode_binding(
         conversation_service,
         parallel_mode_binding,
     );
-    app.show_startup_ascii_art = false;
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    app.shell.show_startup_ascii_art = false;
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start with a ready draft conversation");
     };
     conversation.cwd = "/tmp/root".to_string();
@@ -757,11 +758,12 @@ mod tests {
     fn native_tui_app_fixture_normalizes_draft_workspace_and_planning_projection() {
         let app = test_native_tui_app();
 
-        let ConversationState::Ready(conversation) = &app.conversation_state else {
+        let ConversationState::Ready(conversation) = &app.conversation.lifecycle.conversation_state
+        else {
             panic!("fixture should start with ready draft conversation");
         };
         assert_eq!(conversation.cwd, "/tmp/root");
         assert_eq!(conversation.draft_workspace_directory, "/tmp/root");
-        assert!(!app.show_startup_ascii_art);
+        assert!(!app.shell.show_startup_ascii_art);
     }
 }

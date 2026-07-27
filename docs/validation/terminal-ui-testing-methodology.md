@@ -50,7 +50,7 @@ The smaller-representative-set rule below can reduce the number of supplemental 
 
 | Surface | Keep owning | Candidate extraction / clarification |
 | --- | --- | --- |
-| `NativeTuiApp` | authoritative conversation/session/planning/runtime state, operator mode state, env-derived mode values | must not cross into production renderer inputs or be read inside `Terminal::draw` |
+| `NativeTuiApp` | four private typed adapter slices and env-derived/local presentation state; semantic lifecycle remains Core-owned | cannot be borrowed by production frontend/terminal/renderer code; only owned projection/model capture and named receipt APIs cross `ShellRuntime` |
 | Thin terminal layer | terminal lifecycle, scrollback writes, viewport sync, clear/reset, pre-draw owned-frame capture, stable-delivery receipt commit, cursor-sensitive effects | may be named more explicitly only if Option B later activates |
 | Owned frame boundary | `InlineShellFrameModel`, active `InlineInspectionFrameModel`, expected feedback baselines, `InlineFrameRenderReceipt` compare-and-apply | must not reacquire Core/application/control-plane authority or perform provider I/O |
 | Render/layout boundary | pure consumption of owned frame models, typed render surfaces, append-only stream continuity, titleless live-tail behavior, panel chrome exclusion from host scrollback | may mutate only Ratatui `Frame`; must stay distinct from terminal primitive emission and application/core state authority |

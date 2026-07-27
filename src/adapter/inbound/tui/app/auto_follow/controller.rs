@@ -42,7 +42,7 @@ impl NativeTuiApp {
          * for the editor/status surface, so they fall back to the repository
          * default instead of inventing a separate overlay default.
          */
-        match &self.conversation_state {
+        match &self.conversation.lifecycle.conversation_state {
             ConversationState::Ready(conversation) => {
                 conversation.auto_follow_state.max_auto_turns_label()
             }
@@ -59,7 +59,9 @@ impl NativeTuiApp {
          * modules independent from the state machine that decides which
          * planning diagnostics are operator-facing.
          */
-        self.planning_worker_visibility.shows_debug_details()
+        self.planning
+            .planning_worker_visibility
+            .shows_debug_details()
     }
 
     #[cfg(test)]
@@ -79,7 +81,7 @@ impl NativeTuiApp {
          * runtime to measure, so None suppresses the row instead of showing a
          * stale or synthetic duration.
          */
-        let conversation_pulse = match &self.conversation_state {
+        let conversation_pulse = match &self.conversation.lifecycle.conversation_state {
             ConversationState::Ready(conversation) => conversation
                 // ConversationViewModel owns the monotonic start instant for the current auto-follow/live turn.
                 .live_activity_started_at()
@@ -103,7 +105,8 @@ impl NativeTuiApp {
     }
 
     pub(crate) fn max_auto_turns_edit_buffer(&self) -> Option<&str> {
-        self.auto_follow_overlay_ui_state
+        self.conversation
+            .auto_follow_overlay_ui_state
             .max_auto_turns_edit_buffer()
     }
 
@@ -114,7 +117,10 @@ impl NativeTuiApp {
          * no durable target. The startup/failure presentations therefore stay
          * read-only for this control.
          */
-        if !matches!(self.conversation_state, ConversationState::Ready(_)) {
+        if !matches!(
+            self.conversation.lifecycle.conversation_state,
+            ConversationState::Ready(_)
+        ) {
             return;
         }
 
@@ -123,8 +129,9 @@ impl NativeTuiApp {
          * guard prevents a stale keybinding from stealing input while another
          * overlay or another planning-init step owns the keyboard.
          */
-        if self.shell_overlay != ShellOverlay::PlanningInit
-            || self.planning_init_overlay_ui_state.step() != PlanningInitOverlayStep::SimpleReview
+        if self.shell.chrome.shell_overlay != ShellOverlay::PlanningInit
+            || self.planning.planning_init_overlay_ui_state.step()
+                != PlanningInitOverlayStep::SimpleReview
         {
             return;
         }
@@ -200,8 +207,9 @@ impl NativeTuiApp {
          * tick. Rechecking the active overlay and step prevents that stale
          * state from capturing keys meant for another surface.
          */
-        let editor_supported = self.shell_overlay == ShellOverlay::PlanningInit
-            && self.planning_init_overlay_ui_state.step() == PlanningInitOverlayStep::SimpleReview;
+        let editor_supported = self.shell.chrome.shell_overlay == ShellOverlay::PlanningInit
+            && self.planning.planning_init_overlay_ui_state.step()
+                == PlanningInitOverlayStep::SimpleReview;
         if !editor_supported {
             return false;
         }

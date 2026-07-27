@@ -221,6 +221,18 @@ focus만을 위한 상태는 domain authority로 올리지 않습니다. Adapter
 delivery state는 host terminal이 실제로 수락한 결과이므로 client state transition 성공만으로
 추론하면 안 됩니다.
 
+`NativeTuiApp`은 shell-local presentation, conversation projection/composer, planning
+presentation, runtime capability의 정확히 네 private typed slice만 가진 host aggregate입니다.
+Flat semantic field가 없고 `Deref`, `AsRef`, mutable aggregate escape를 제공하지 않습니다. TUI가
+받는 startup/conversation snapshot은 이미 Core correlation 검증을 통과했으므로 adapter는 이를
+직접 projection하며 startup/conversation pending gate를 중복 보관하지 않습니다.
+
+Production terminal/frontend code는 `ShellRuntime`에서 `NativeTuiApp`을 빌릴 수 없습니다. Runtime은
+owned terminal-sync projection과 `InlineShellFrameModel`만 반환하고, render receipt,
+transcript-handoff ACK, queue hit-area cleanup에는 이름이 명확한 좁은 mutation API만 제공합니다.
+`app()`과 `app_mut()`은 test fixture로만 남습니다. Architecture test가 네 slice field ledger,
+aggregate reference/trait escape, 제거된 duplicate correlation gate의 재도입을 차단합니다.
+
 ## Planning 경계
 
 ```text
@@ -438,8 +450,11 @@ projection은 항상 적용되고, exact local pending receipt는 editor draft, 
 status settlement만 제어합니다.
 
 Planning worker 진단은 Core가 시작한 post-turn event부터 비동기 completion과 screen model까지
-domain `PlanningWorkerPanelState`를 그대로 보관합니다. TUI presentation은 adapter 소유 status
-DTO나 왕복 mapper 없이 label과 content visibility만 파생합니다.
+domain `PlanningWorkerPanelState`를 sealed read-only Core projection 안에 보관합니다. 승인된 Core
+start/completion 또는 conversation `Idle | Loading` lifecycle event만 이 projection을
+교체하거나 reset할 수 있고, draft/session UI intent는 이를 optimistic하게 지울 수 없습니다.
+TUI presentation은 adapter 소유 status DTO나 왕복 mapper 없이 label과 content visibility만
+파생합니다.
 
 상세한 test-guarded 계약은 [TUI 계층 아키텍처](tui-contract.md)를 참고하세요.
 

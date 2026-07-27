@@ -264,8 +264,8 @@ fn inline_main_buffer_tail_frame_does_not_render_startup_ascii_art_transiently()
      */
     let mut terminal = tui_testkit::inline_terminal(80, 24);
     let mut app = make_test_app();
-    app.show_startup_ascii_art = true;
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.show_startup_ascii_art = true;
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
 
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
@@ -287,8 +287,8 @@ fn inline_main_buffer_tail_frame_does_not_render_startup_ascii_art_transiently()
 fn inline_startup_screen_uses_selected_korean_language() {
     let mut terminal = tui_testkit::inline_terminal(80, 24);
     let mut app = make_test_app();
-    app.tui_language = TuiLanguage::Korean;
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.tui_language = TuiLanguage::Korean;
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
 
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
@@ -306,8 +306,9 @@ fn inline_startup_screen_uses_selected_korean_language() {
 fn startup_prompt_command_palette_remains_visible_after_colon_input() {
     let mut terminal = tui_testkit::inline_terminal(80, 10);
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start with a ready draft conversation");
     };
     conversation.composer.input_buffer = ":".to_string();
@@ -338,9 +339,10 @@ fn startup_prompt_command_palette_remains_visible_after_colon_input() {
 fn startup_prompt_command_palette_uses_selected_korean_language() {
     let mut terminal = tui_testkit::inline_terminal(48, 10);
     let mut app = make_test_app();
-    app.tui_language = TuiLanguage::Korean;
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    app.shell.tui_language = TuiLanguage::Korean;
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start with a ready draft conversation");
     };
     conversation.composer.input_buffer = ":".to_string();
@@ -355,7 +357,8 @@ fn startup_prompt_command_palette_uses_selected_korean_language() {
     assert!(rendered.contains(":diag  진단"));
     assert!(rendered.contains("Down/Tab 다음"));
 
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should keep a ready draft conversation");
     };
     conversation.composer.input_buffer = ":zzzz".to_string();
@@ -393,7 +396,8 @@ fn inline_main_buffer_clears_stale_live_tail_rows_after_turn_finishes() {
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
         .expect("first inline render succeeds");
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should stay in a ready conversation state");
     };
     conversation.live_agent_message = None;
@@ -417,15 +421,16 @@ fn inline_main_buffer_clears_stale_tail_rows_when_overlay_opens() {
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
         .expect("first inline render succeeds");
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should stay in a ready conversation state");
     };
     conversation.live_agent_message = None;
     conversation.active_turn_id = None;
     conversation.active_turn_started_at = None;
     conversation.input_state = ConversationInputState::ReadyToContinue;
-    app.shell_overlay = ShellOverlay::Startup;
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.shell_overlay = ShellOverlay::Startup;
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
 
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
@@ -438,7 +443,7 @@ fn inline_main_buffer_clears_stale_tail_rows_when_overlay_opens() {
 fn inline_render_positions_cursor_on_empty_prompt_line() {
     let mut terminal = tui_testkit::inline_terminal(80, 24);
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
 
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
@@ -452,9 +457,10 @@ fn inline_render_positions_cursor_on_empty_prompt_line() {
 fn dense_single_line_prompt_keeps_its_end_and_cursor_visible() {
     let mut terminal = Terminal::new(TestBackend::new(48, 18)).expect("test terminal");
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
     tui_testkit::append_agent_history_message(&mut app, "prompt overflow baseline");
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should keep a ready conversation state");
     };
     let before_middle = "word ".repeat(120);
@@ -493,7 +499,8 @@ fn dense_single_line_prompt_keeps_its_end_and_cursor_visible() {
         "cursor should follow the word-wrapped prompt suffix"
     );
 
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should keep a ready conversation state");
     };
     conversation
@@ -534,7 +541,7 @@ fn inline_queue_overlay_rendering_shows_compact_sections() {
         sample_planning_runtime_projection("Planning Context", "Queue Summary")
             .with_planning_revision(Some(1)),
     );
-    app.shell_overlay = ShellOverlay::Queue;
+    app.shell.chrome.shell_overlay = ShellOverlay::Queue;
     app.bind_queue_overlay_authority_for_test(
         1,
         std::collections::BTreeMap::from([
@@ -577,8 +584,8 @@ fn inline_startup_inspection_replaces_transcript_panel() {
      */
     let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    app.shell_overlay = ShellOverlay::Startup;
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.shell_overlay = ShellOverlay::Startup;
 
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
@@ -596,8 +603,8 @@ fn inline_startup_inspection_replaces_transcript_panel() {
 fn inline_sessions_inspection_renders_browser_panels() {
     let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    app.session_state = SessionState::Ready(
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.session_state = SessionState::Ready(
         RecentSessions {
             items: vec![sample_session("thread-1"), sample_session("thread-2")],
             warnings: vec!["cache is stale".to_string()],
@@ -605,7 +612,7 @@ fn inline_sessions_inspection_renders_browser_panels() {
         }
         .into(),
     );
-    app.shell_overlay = ShellOverlay::Sessions;
+    app.shell.chrome.shell_overlay = ShellOverlay::Sessions;
 
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
@@ -625,8 +632,8 @@ fn repeated_session_overlay_draws_do_not_load_the_catalog() {
     let session_port = Arc::new(CountingSessionCatalogPort::default());
     let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
     let mut app = test_native_tui_app_with_session_catalog_port(session_port.clone());
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    app.session_state = SessionState::Ready(
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.session_state = SessionState::Ready(
         RecentSessions {
             items: vec![sample_session("thread-1")],
             warnings: Vec::new(),
@@ -634,7 +641,7 @@ fn repeated_session_overlay_draws_do_not_load_the_catalog() {
         }
         .into(),
     );
-    app.shell_overlay = ShellOverlay::Sessions;
+    app.shell.chrome.shell_overlay = ShellOverlay::Sessions;
 
     for _ in 0..2 {
         terminal
@@ -657,15 +664,15 @@ fn inline_sessions_inspection_surfaces_attach_only_catalog_without_browser_navig
      */
     let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    app.session_state = SessionState::Ready(SessionCatalog::unsupported(
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.session_state = SessionState::Ready(SessionCatalog::unsupported(
         SessionCatalogTier::AttachOnly,
         "session listing is unsupported for this bridge",
         vec!["manual attach only".to_string()],
     ));
     let existing_list_state = ListState::default().with_offset(4).with_selected(Some(5));
-    app.session_overlay_ui_state.list_state = existing_list_state;
-    app.shell_overlay = ShellOverlay::Sessions;
+    app.shell.session_overlay_ui_state.list_state = existing_list_state;
+    app.shell.chrome.shell_overlay = ShellOverlay::Sessions;
 
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
@@ -677,7 +684,7 @@ fn inline_sessions_inspection_surfaces_attach_only_catalog_without_browser_navig
     assert!(rendered.contains("manual attach only"));
     assert!(rendered.contains("Recent-session navigation requires a queryable catalog surface."));
     assert_eq!(
-        app.session_overlay_ui_state.list_state, existing_list_state,
+        app.shell.session_overlay_ui_state.list_state, existing_list_state,
         "message-only session catalogs must not rewrite list selection or offset"
     );
 }
@@ -685,8 +692,8 @@ fn inline_sessions_inspection_surfaces_attach_only_catalog_without_browser_navig
 fn inline_help_inspection_renders_command_help() {
     let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    app.shell_overlay = ShellOverlay::Help;
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.shell_overlay = ShellOverlay::Help;
 
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
@@ -709,9 +716,9 @@ fn inline_help_inspection_renders_command_help() {
 fn inline_help_inspection_uses_selected_korean_language() {
     let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
     let mut app = make_test_app();
-    app.tui_language = TuiLanguage::Korean;
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    app.shell_overlay = ShellOverlay::Help;
+    app.shell.tui_language = TuiLanguage::Korean;
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.shell_overlay = ShellOverlay::Help;
 
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
@@ -728,16 +735,16 @@ fn inline_help_inspection_uses_selected_korean_language() {
 fn narrow_help_inspection_scrolls_to_the_last_command() {
     let mut terminal = Terminal::new(TestBackend::new(48, 18)).expect("test terminal");
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    app.shell_overlay = ShellOverlay::Help;
-    app.help_scroll_offset = usize::MAX;
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.shell_overlay = ShellOverlay::Help;
+    app.shell.help_scroll_offset = usize::MAX;
 
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
         .expect("narrow help render succeeds");
     let rendered = tui_testkit::screen_text(&terminal);
 
-    assert_ne!(app.help_scroll_offset, usize::MAX);
+    assert_ne!(app.shell.help_scroll_offset, usize::MAX);
     assert!(
         rendered.contains("command help"),
         "last command detail must be reachable:\n{rendered}"
@@ -947,7 +954,7 @@ fn complete_reviews_overlay_load(runtime: &mut ShellRuntime) {
     loop {
         runtime.poll_background_messages();
         if matches!(
-            runtime.app().reviews_overlay_ui_state.screen_model(),
+            runtime.app().shell.reviews_overlay_ui_state.screen_model(),
             crate::adapter::inbound::tui::app::reviews_overlay_ui::ReviewsOverlayScreenModel::Ready { .. }
         ) {
             break;
@@ -972,8 +979,9 @@ fn inline_reviews_inspection_keeps_current_thread_and_inbox_history_on_same_work
         "thread-1",
     ));
     let mut app = test_native_tui_app_with_review_center_repository(repository.clone());
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should have a ready conversation");
     };
     conversation.record_thread_prepared(
@@ -988,7 +996,8 @@ fn inline_reviews_inspection_keeps_current_thread_and_inbox_history_on_same_work
     assert_eq!(repository.load_counts(), (1, 1, 1));
 
     let app = runtime.app_mut();
-    let overlay_view = build_reviews_overlay_view(app.reviews_overlay_ui_state.screen_model());
+    let overlay_view =
+        build_reviews_overlay_view(app.shell.reviews_overlay_ui_state.screen_model());
 
     assert!(overlay_view.header_lines.iter().any(|line| {
         line.to_string()
@@ -1039,8 +1048,9 @@ fn inline_reviews_inspection_keeps_current_thread_and_inbox_history_on_same_work
 fn repeated_reviews_inspection_draws_do_not_reload_application_authority() {
     let repository = Arc::new(CountingReviewCenterRepository::default());
     let mut app = test_native_tui_app_with_review_center_repository(repository.clone());
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should have a ready conversation");
     };
     conversation.record_thread_prepared(
@@ -1094,7 +1104,8 @@ fn reviews_identity_drift_reloads_latest_context_through_shell_runtime() {
         release_first_load: Mutex::new(release_rx),
     });
     let mut app = test_native_tui_app_with_review_center_repository(repository.clone());
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should have a ready conversation");
     };
     conversation.record_thread_prepared(
@@ -1107,7 +1118,8 @@ fn reviews_identity_drift_reloads_latest_context_through_shell_runtime() {
         .recv_timeout(Duration::from_secs(2))
         .expect("first review authority load should start");
 
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should have a ready conversation");
     };
     conversation.record_thread_prepared(
@@ -1127,7 +1139,7 @@ fn reviews_identity_drift_reloads_latest_context_through_shell_runtime() {
     let crate::adapter::inbound::tui::app::reviews_overlay_ui::ReviewsOverlayScreenModel::Ready {
         request,
         authority,
-    } = runtime.app().reviews_overlay_ui_state.screen_model()
+    } = runtime.app().shell.reviews_overlay_ui_state.screen_model()
     else {
         panic!("latest Review Center context should become ready");
     };
@@ -1161,10 +1173,12 @@ fn ready_reviews_identity_drift_reloads_latest_context_during_runtime_poll() {
 
     let correlation = runtime
         .app_mut()
+        .runtime
         .client_runtime
         .begin_test_turn_submission();
     runtime
         .app()
+        .runtime
         .tx
         .send(BackgroundMessage::ConversationStream {
             correlation,
@@ -1180,7 +1194,7 @@ fn ready_reviews_identity_drift_reloads_latest_context_during_runtime_poll() {
     runtime.poll_background_messages();
 
     assert!(matches!(
-        runtime.app().reviews_overlay_ui_state.screen_model(),
+        runtime.app().shell.reviews_overlay_ui_state.screen_model(),
         crate::adapter::inbound::tui::app::reviews_overlay_ui::ReviewsOverlayScreenModel::Loading(request)
             if request.context.workspace_directory == "/tmp/other"
                 && request.context.active_thread.as_ref().map(|thread| thread.thread_id.as_str())
@@ -1192,7 +1206,7 @@ fn ready_reviews_identity_drift_reloads_latest_context_during_runtime_poll() {
     let crate::adapter::inbound::tui::app::reviews_overlay_ui::ReviewsOverlayScreenModel::Ready {
         request,
         authority,
-    } = runtime.app().reviews_overlay_ui_state.screen_model()
+    } = runtime.app().shell.reviews_overlay_ui_state.screen_model()
     else {
         panic!("latest Review Center context should become ready");
     };
@@ -1217,7 +1231,7 @@ fn ready_reviews_identity_drift_reloads_latest_context_during_runtime_poll() {
 fn inline_model_selection_inspection_renders_model_and_effort_picker() {
     let mut terminal = Terminal::new(TestBackend::new(104, 28)).expect("test terminal");
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
     app.show_model_selection_overlay();
 
     terminal
@@ -1240,7 +1254,7 @@ fn inline_model_selection_inspection_renders_model_and_effort_picker() {
 fn inline_view_selection_inspection_renders_visibility_picker() {
     let mut terminal = Terminal::new(TestBackend::new(104, 28)).expect("test terminal");
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
     app.show_view_selection_overlay();
 
     terminal
@@ -1263,7 +1277,7 @@ fn inline_view_selection_inspection_renders_visibility_picker() {
 fn inline_language_selection_inspection_renders_language_picker() {
     let mut terminal = Terminal::new(TestBackend::new(104, 28)).expect("test terminal");
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
     app.show_language_selection_overlay();
 
     terminal
@@ -1291,7 +1305,7 @@ fn inline_supersession_inspection_renders_prepare_panels_inside_shell_frame() {
     app.set_parallel_mode_readiness_snapshot_for_test(Some(sample_parallel_mode_snapshot(
         ParallelModeReadinessState::Degraded,
     )));
-    app.shell_overlay = ShellOverlay::Supersession;
+    app.shell.chrome.shell_overlay = ShellOverlay::Supersession;
 
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
@@ -1384,8 +1398,10 @@ fn inline_supersession_deep_actor_and_matching_fallback_stay_visible() {
         None,
     );
     app.set_parallel_mode_supervisor_snapshot_for_test(Some(snapshot.clone()));
-    app.shell_overlay = ShellOverlay::Supersession;
-    app.supersession_mud_ui_state.move_selection(&snapshot, 10);
+    app.shell.chrome.shell_overlay = ShellOverlay::Supersession;
+    app.shell
+        .supersession_mud_ui_state
+        .move_selection(&snapshot, 10);
 
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
@@ -1396,8 +1412,10 @@ fn inline_supersession_deep_actor_and_matching_fallback_stay_visible() {
         "deep selected pool slot must be visible:\n{pool_rendered}"
     );
 
-    app.supersession_mud_ui_state.focus_next_zone();
-    app.supersession_mud_ui_state.move_selection(&snapshot, 10);
+    app.shell.supersession_mud_ui_state.focus_next_zone();
+    app.shell
+        .supersession_mud_ui_state
+        .move_selection(&snapshot, 10);
 
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
@@ -1411,7 +1429,7 @@ fn inline_supersession_deep_actor_and_matching_fallback_stay_visible() {
     );
     assert!(!rendered.contains("> Task 1  "));
 
-    app.supersession_mud_ui_state.focus_next_zone();
+    app.shell.supersession_mud_ui_state.focus_next_zone();
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
         .expect("inline supersession selected detail fallback render succeeds");
@@ -1420,8 +1438,10 @@ fn inline_supersession_deep_actor_and_matching_fallback_stay_visible() {
     assert!(detail_rendered.contains("> Current  Task 11"));
     assert!(detail_rendered.contains("Latest  testing 11"));
 
-    app.supersession_mud_ui_state.focus_next_zone();
-    app.supersession_mud_ui_state.move_selection(&snapshot, 10);
+    app.shell.supersession_mud_ui_state.focus_next_zone();
+    app.shell
+        .supersession_mud_ui_state
+        .move_selection(&snapshot, 10);
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
         .expect("inline supersession deep distributor render succeeds");
@@ -1436,7 +1456,7 @@ fn inline_supersession_deep_actor_and_matching_fallback_stay_visible() {
 fn inline_parallel_event_stream_uses_selected_tui_language() {
     let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
     let mut app = make_test_app();
-    app.tui_language = TuiLanguage::English;
+    app.shell.tui_language = TuiLanguage::English;
     app.set_parallel_mode_enabled_for_test(true);
     app.set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
         ParallelModeSupervisorState::Supervise,
@@ -1455,7 +1475,7 @@ fn inline_parallel_event_stream_uses_selected_tui_language() {
         ),
         Some("control tower is live".to_string()),
     )));
-    app.shell_overlay = ShellOverlay::Supersession;
+    app.shell.chrome.shell_overlay = ShellOverlay::Supersession;
 
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
@@ -1537,9 +1557,10 @@ fn inline_parallel_peek_picker_keeps_agent_rows_visible_in_compact_main_buffer()
         None,
     )));
     let active_agents = app.active_parallel_peek_entries();
-    app.parallel_peek_overlay_ui_state
+    app.shell
+        .parallel_peek_overlay_ui_state
         .select_initial_agent(&active_agents);
-    app.shell_overlay = ShellOverlay::ParallelPeek;
+    app.shell.chrome.shell_overlay = ShellOverlay::ParallelPeek;
 
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
@@ -1568,8 +1589,8 @@ fn inline_parallel_peek_preview_prioritizes_loaded_transcript_in_compact_main_bu
      */
     let mut terminal = Terminal::new(TestBackend::new(80, 14)).expect("test terminal");
     let mut app = make_test_app();
-    app.shell_overlay = ShellOverlay::ParallelPeek;
-    app.parallel_peek_overlay_ui_state.open_preview(
+    app.shell.chrome.shell_overlay = ShellOverlay::ParallelPeek;
+    app.shell.parallel_peek_overlay_ui_state.open_preview(
         super::super::parallel_peek_overlay_ui::ParallelPeekConversationPreview {
             agent_id: "agent-scribe".to_string(),
             slot_id: "slot-2".to_string(),
@@ -1626,7 +1647,7 @@ fn inline_parallel_peek_preview_can_scroll_between_oldest_and_latest_messages() 
      */
     let mut terminal = Terminal::new(TestBackend::new(80, 14)).expect("test terminal");
     let mut app = make_test_app();
-    app.shell_overlay = ShellOverlay::ParallelPeek;
+    app.shell.chrome.shell_overlay = ShellOverlay::ParallelPeek;
 
     let mut messages = Vec::new();
     messages.push(ConversationMessage::new(
@@ -1649,7 +1670,7 @@ fn inline_parallel_peek_preview_can_scroll_between_oldest_and_latest_messages() 
         Some("final_answer".to_string()),
         None,
     ));
-    app.parallel_peek_overlay_ui_state.open_preview(
+    app.shell.parallel_peek_overlay_ui_state.open_preview(
         super::super::parallel_peek_overlay_ui::ParallelPeekConversationPreview {
             agent_id: "agent-scribe".to_string(),
             slot_id: "slot-2".to_string(),
@@ -1678,7 +1699,8 @@ fn inline_parallel_peek_preview_can_scroll_between_oldest_and_latest_messages() 
         "default preview should stay pinned to latest transcript lines:\n{latest_rendered}"
     );
 
-    app.parallel_peek_overlay_ui_state
+    app.shell
+        .parallel_peek_overlay_ui_state
         .scroll_conversation_to_oldest();
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
@@ -1695,7 +1717,7 @@ fn inline_parallel_peek_preview_can_scroll_between_oldest_and_latest_messages() 
 fn inline_parallel_home_replaces_single_mode_transcript_when_overlay_hidden() {
     let mut terminal = Terminal::new(TestBackend::new(104, 28)).expect("test terminal");
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
     app.set_parallel_mode_enabled_for_test(true);
     app.set_parallel_mode_readiness_snapshot_for_test(Some(sample_parallel_mode_snapshot(
         ParallelModeReadinessState::Ready,
@@ -1710,7 +1732,8 @@ fn inline_parallel_home_replaces_single_mode_transcript_when_overlay_hidden() {
         None,
     )));
     app.push_parallel_supervisor_event_for_test("00:00:00", "You", "안녕하세요");
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     conversation.messages.push(ConversationMessage::new(
@@ -1744,8 +1767,8 @@ fn inline_parallel_home_replaces_single_mode_transcript_when_overlay_hidden() {
 fn inline_parallel_home_suppresses_startup_banner_on_empty_draft() {
     let mut terminal = Terminal::new(TestBackend::new(104, 28)).expect("test terminal");
     let mut app = make_test_app();
-    app.show_startup_ascii_art = true;
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.show_startup_ascii_art = true;
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
     app.set_parallel_mode_enabled_for_test(true);
     app.set_parallel_mode_readiness_snapshot_for_test(Some(sample_parallel_mode_snapshot(
         ParallelModeReadinessState::Ready,
@@ -1782,7 +1805,7 @@ fn inline_supersession_keeps_buffered_prompt_visible_in_compact_tail() {
      */
     let mut terminal = Terminal::new(TestBackend::new(120, 24)).expect("test terminal");
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
     app.set_parallel_mode_enabled_for_test(true);
     app.set_parallel_mode_readiness_snapshot_for_test(Some(sample_parallel_mode_snapshot(
         ParallelModeReadinessState::Ready,
@@ -1796,8 +1819,9 @@ fn inline_supersession_keeps_buffered_prompt_visible_in_compact_tail() {
         ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
         None,
     )));
-    app.shell_overlay = ShellOverlay::Supersession;
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    app.shell.chrome.shell_overlay = ShellOverlay::Supersession;
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     conversation.composer.input_buffer = "안녕하세요?".to_string();
@@ -1825,7 +1849,7 @@ fn inline_supersession_command_hints_keep_controls_visible_when_compact() {
      */
     let mut terminal = Terminal::new(TestBackend::new(120, 24)).expect("test terminal");
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
     app.set_parallel_mode_enabled_for_test(true);
     app.set_parallel_mode_readiness_snapshot_for_test(Some(sample_parallel_mode_snapshot(
         ParallelModeReadinessState::Ready,
@@ -1839,7 +1863,7 @@ fn inline_supersession_command_hints_keep_controls_visible_when_compact() {
         ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
         None,
     )));
-    app.shell_overlay = ShellOverlay::Supersession;
+    app.shell.chrome.shell_overlay = ShellOverlay::Supersession;
 
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
@@ -1942,9 +1966,9 @@ fn inline_supersession_narrow_snapshot_keeps_selected_timeline_visible() {
         ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
         None,
     )));
-    app.shell_overlay = ShellOverlay::Supersession;
-    app.supersession_mud_ui_state.focus_next_zone();
-    app.supersession_mud_ui_state.focus_next_zone();
+    app.shell.chrome.shell_overlay = ShellOverlay::Supersession;
+    app.shell.supersession_mud_ui_state.focus_next_zone();
+    app.shell.supersession_mud_ui_state.focus_next_zone();
 
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
@@ -1967,8 +1991,8 @@ fn inline_supersession_narrow_snapshot_keeps_selected_timeline_visible() {
 #[test]
 fn inline_tail_adds_only_spinner_to_prompt_during_parallel_loading() {
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    app.shell_overlay = ShellOverlay::Supersession;
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.shell_overlay = ShellOverlay::Supersession;
     app.set_parallel_mode_enabled_for_test(true);
     app.set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
         ParallelModeSupervisorState::Supervise,
@@ -1999,7 +2023,7 @@ fn inline_tail_adds_only_spinner_to_prompt_during_parallel_loading() {
 fn inline_parallel_home_keeps_loading_spinner_when_overlay_hidden() {
     let mut terminal = Terminal::new(TestBackend::new(104, 28)).expect("test terminal");
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
     app.set_parallel_mode_enabled_for_test(true);
     app.set_parallel_mode_readiness_snapshot_for_test(Some(sample_parallel_mode_snapshot(
         ParallelModeReadinessState::Ready,
@@ -2033,8 +2057,8 @@ fn inline_parallel_home_keeps_loading_spinner_when_overlay_hidden() {
 #[test]
 fn inline_tail_omits_parallel_loading_spinner_after_empty_non_loading_snapshot() {
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    app.shell_overlay = ShellOverlay::Supersession;
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.shell_overlay = ShellOverlay::Supersession;
     app.set_parallel_mode_enabled_for_test(true);
     app.set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
         ParallelModeSupervisorState::Supervise,
@@ -2067,7 +2091,7 @@ fn inline_tail_surfaces_parallel_mode_summary_when_enabled() {
      * compact status contract independent of layout height.
      */
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
     tui_testkit::append_agent_history_message(
         &mut app,
         "parallel summary should render in the live shell",
@@ -2100,7 +2124,7 @@ fn inline_tail_surfaces_parallel_mode_summary_when_enabled() {
 #[test]
 fn inline_tail_shows_syncing_instead_of_idle_before_dispatch_projection_arrives() {
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
     app.set_parallel_mode_enabled_for_test(true);
     app.set_parallel_mode_readiness_snapshot_for_test(Some(sample_parallel_mode_snapshot(
         ParallelModeReadinessState::Ready,
@@ -2141,7 +2165,7 @@ fn inline_tail_shows_syncing_instead_of_idle_before_dispatch_projection_arrives(
 fn inline_tail_omits_legacy_planning_valid_status_in_single_and_parallel_home() {
     fn rendered_tail(parallel_mode_enabled: bool) -> String {
         let mut app = make_test_app();
-        app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+        app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
         tui_testkit::append_agent_history_message(&mut app, "planning status baseline");
         app.sync_ready_conversation_planning_runtime_projection(
             sample_planning_runtime_projection(
@@ -2193,7 +2217,7 @@ fn inline_tail_omits_legacy_planning_valid_status_in_single_and_parallel_home() 
 #[test]
 fn inline_tail_places_parallel_slot_working_line_between_queue_and_prompt() {
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
     tui_testkit::append_agent_history_message(&mut app, "parallel slot status baseline");
     app.sync_ready_conversation_planning_runtime_projection(sample_planning_runtime_projection(
         "Planning Context",
@@ -2269,8 +2293,8 @@ fn inline_tail_places_parallel_slot_working_line_between_queue_and_prompt() {
 #[test]
 fn inline_tail_reports_partial_handle_based_session_catalog_status() {
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    app.session_state = SessionState::Ready(SessionCatalog::partial(
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.session_state = SessionState::Ready(SessionCatalog::partial(
         SessionCatalogTier::HandleBasedReattach,
         "cached handles are available but provider metadata is stale",
         Vec::new(),
@@ -2294,7 +2318,7 @@ fn overlay_family_uses_shared_akra_chrome_tokens() {
      * verifies the common masthead and key-line accent at the data boundary.
      */
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
     let startup_sample = shell_presentation::ConversationProjectionSample::capture(&app);
     let startup = shell_presentation::build_startup_overlay_view(
         &app,
@@ -2318,7 +2342,7 @@ fn overlay_family_uses_shared_akra_chrome_tokens() {
     );
     let supersession = shell_presentation::build_supersession_overlay_view(
         &supersession_screen,
-        &app.supersession_mud_ui_state,
+        &app.shell.supersession_mud_ui_state,
     );
     app.show_planning_init_overlay();
     let planning = shell_presentation::build_planning_init_overlay_view(&app);
@@ -2347,7 +2371,7 @@ fn exit_confirmation_uses_shared_akra_chrome() {
     for (width, height) in [(24, 12), (48, 18), (80, 24)] {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("test terminal");
         let mut app = make_test_app();
-        app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+        app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
         app.dispatch_shell_chrome(ShellChromeEvent::ExitConfirmationShown);
 
         terminal
@@ -2367,7 +2391,7 @@ fn exit_confirmation_uses_shared_akra_chrome() {
 #[test]
 fn startup_overlay_surfaces_attachment_mode_and_recovery_anchor() {
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
     let sample = shell_presentation::ConversationProjectionSample::capture(&app);
     let view = crate::adapter::inbound::tui::app::shell_presentation::build_startup_overlay_view(
         &app,

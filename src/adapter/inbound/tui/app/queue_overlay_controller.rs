@@ -17,13 +17,14 @@ impl NativeTuiApp {
     }
 
     pub(super) fn start_queue_overlay_authority_load(&mut self) {
-        if self.shell_overlay != ShellOverlay::Queue
+        if self.shell.chrome.shell_overlay != ShellOverlay::Queue
             || self.pending_queue_mutation_operation_id().is_some()
         {
             return;
         }
         let context = self.current_queue_mutation_context();
         let outcome = self
+            .runtime
             .client_runtime
             .dispatch_client_event(CoreInput::Command(AppCommand::LoadQueueAuthority {
                 workspace_directory: context.workspace_directory,
@@ -56,10 +57,11 @@ impl NativeTuiApp {
             crate::core::app::QueueAuthorityLoadError,
         >,
     ) -> queue_overlay_ui::QueueOverlayAuthorityLoadCompletion {
-        if self.shell_overlay != ShellOverlay::Queue {
+        if self.shell.chrome.shell_overlay != ShellOverlay::Queue {
             return queue_overlay_ui::QueueOverlayAuthorityLoadCompletion::Ignored;
         }
         let Some(request) = self
+            .planning
             .queue_overlay_ui_state
             .loading_request(&correlation)
             .cloned()
@@ -73,8 +75,12 @@ impl NativeTuiApp {
         let authority = match result {
             Ok(authority) => *authority,
             Err(error) => {
-                let error = self.tui_language.queue_overlay_authority_load_error(&error);
-                self.queue_overlay_ui_state
+                let error = self
+                    .shell
+                    .tui_language
+                    .queue_overlay_authority_load_error(&error);
+                self.planning
+                    .queue_overlay_ui_state
                     .apply_authority_load_failed(request, error);
                 return queue_overlay_ui::QueueOverlayAuthorityLoadCompletion::Applied;
             }
@@ -87,18 +93,21 @@ impl NativeTuiApp {
             },
         };
         let Some(planning_revision) = authority.runtime_projection.planning_revision() else {
-            self.queue_overlay_ui_state.apply_authority_load_failed(
-                request,
-                self.tui_language
-                    .queue_mutation_projection_revision_missing()
-                    .to_string(),
-            );
+            self.planning
+                .queue_overlay_ui_state
+                .apply_authority_load_failed(
+                    request,
+                    self.shell
+                        .tui_language
+                        .queue_mutation_projection_revision_missing()
+                        .to_string(),
+                );
             return queue_overlay_ui::QueueOverlayAuthorityLoadCompletion::Applied;
         };
         let visible_revision = self
             .planning_runtime_projection_snapshot()
             .planning_revision();
-        let receipt_revision = match &self.conversation_state {
+        let receipt_revision = match &self.conversation.lifecycle.conversation_state {
             ConversationState::Ready(conversation) => conversation
                 .latest_queue_mutation_receipt
                 .as_ref()
@@ -115,13 +124,14 @@ impl NativeTuiApp {
             match self.reconcile_queue_authority_snapshot(&authority) {
                 Ok(snapshot) => snapshot,
                 Err(error) => {
-                    self.queue_overlay_ui_state
+                    self.planning
+                        .queue_overlay_ui_state
                         .apply_authority_load_failed(request, error);
                     return queue_overlay_ui::QueueOverlayAuthorityLoadCompletion::Applied;
                 }
             };
         self.reconcile_latest_queue_receipt_with_authority(&authority.queue_authority);
-        if !self.queue_overlay_ui_state.apply_authority_loaded(
+        if !self.planning.queue_overlay_ui_state.apply_authority_loaded(
             request,
             authority.runtime_projection,
             planning_revision,
@@ -129,7 +139,9 @@ impl NativeTuiApp {
         ) {
             return queue_overlay_ui::QueueOverlayAuthorityLoadCompletion::Ignored;
         }
-        self.queue_mutation_ui_state.record_authority_refresh();
+        self.planning
+            .queue_mutation_ui_state
+            .record_authority_refresh();
         self.sync_queue_overlay_selection();
         queue_overlay_ui::QueueOverlayAuthorityLoadCompletion::Applied
     }
@@ -142,21 +154,29 @@ impl NativeTuiApp {
             .collect::<Vec<_>>();
         match (key.code, key.modifiers) {
             (KeyCode::Up | KeyCode::Char('k'), KeyModifiers::NONE) => {
-                self.queue_overlay_ui_state.move_selection(&task_ids, -1);
+                self.planning
+                    .queue_overlay_ui_state
+                    .move_selection(&task_ids, -1);
             }
             (KeyCode::Down | KeyCode::Char('j'), KeyModifiers::NONE) => {
-                self.queue_overlay_ui_state.move_selection(&task_ids, 1);
+                self.planning
+                    .queue_overlay_ui_state
+                    .move_selection(&task_ids, 1);
             }
             (KeyCode::Char('x') | KeyCode::Delete, KeyModifiers::NONE) => {
                 self.arm_or_confirm_selected_queue_task_removal();
             }
             (KeyCode::Enter, KeyModifiers::NONE)
-                if self.queue_overlay_ui_state.armed_remove_task_id().is_some() =>
+                if self
+                    .planning
+                    .queue_overlay_ui_state
+                    .armed_remove_task_id()
+                    .is_some() =>
             {
                 self.confirm_selected_queue_task_removal();
             }
             (KeyCode::Char('u'), KeyModifiers::NONE) => {
-                self.queue_overlay_ui_state.disarm_remove_task();
+                self.planning.queue_overlay_ui_state.disarm_remove_task();
                 self.undo_latest_queue_registration();
             }
             _ => {}
@@ -166,7 +186,7 @@ impl NativeTuiApp {
 
     #[cfg(test)]
     pub(super) fn cancel_selected_queue_task(&mut self) {
-        self.queue_overlay_ui_state.disarm_remove_task();
+        self.planning.queue_overlay_ui_state.disarm_remove_task();
         let Some(intent) = self.prepare_selected_queue_task_removal() else {
             return;
         };
@@ -175,38 +195,48 @@ impl NativeTuiApp {
 
     fn arm_or_confirm_selected_queue_task_removal(&mut self) {
         let Some(intent) = self.prepare_selected_queue_task_removal() else {
-            self.queue_overlay_ui_state.disarm_remove_task();
+            self.planning.queue_overlay_ui_state.disarm_remove_task();
             return;
         };
-        if self.queue_overlay_ui_state.remove_is_armed_for(&intent) {
-            self.queue_overlay_ui_state.disarm_remove_task();
+        if self
+            .planning
+            .queue_overlay_ui_state
+            .remove_is_armed_for(&intent)
+        {
+            self.planning.queue_overlay_ui_state.disarm_remove_task();
             self.submit_queue_mutation(intent);
         } else {
-            self.queue_overlay_ui_state.arm_remove_task(intent);
+            self.planning.queue_overlay_ui_state.arm_remove_task(intent);
         }
     }
 
     fn confirm_selected_queue_task_removal(&mut self) {
         let Some(intent) = self.prepare_selected_queue_task_removal() else {
-            self.queue_overlay_ui_state.disarm_remove_task();
+            self.planning.queue_overlay_ui_state.disarm_remove_task();
             return;
         };
-        if !self.queue_overlay_ui_state.remove_is_armed_for(&intent) {
-            self.queue_overlay_ui_state.disarm_remove_task();
-            self.queue_overlay_ui_state.set_feedback(
-                self.tui_language
+        if !self
+            .planning
+            .queue_overlay_ui_state
+            .remove_is_armed_for(&intent)
+        {
+            self.planning.queue_overlay_ui_state.disarm_remove_task();
+            self.planning.queue_overlay_ui_state.set_feedback(
+                self.shell
+                    .tui_language
                     .queue_mutation_selected_item_changed_feedback(),
             );
             return;
         }
-        self.queue_overlay_ui_state.disarm_remove_task();
+        self.planning.queue_overlay_ui_state.disarm_remove_task();
         self.submit_queue_mutation(intent);
     }
 
     fn prepare_selected_queue_task_removal(&mut self) -> Option<QueueMutationIntent> {
         if let Some(operation_id) = self.pending_queue_mutation_operation_id() {
-            self.queue_overlay_ui_state.set_feedback(
-                self.tui_language
+            self.planning.queue_overlay_ui_state.set_feedback(
+                self.shell
+                    .tui_language
                     .queue_mutation_pending_feedback(operation_id),
             );
             return None;
@@ -215,32 +245,39 @@ impl NativeTuiApp {
             return None;
         }
         if let Some(feedback) = self.queue_overlay_authority_action_feedback() {
-            self.queue_overlay_ui_state.set_feedback(feedback);
+            self.planning.queue_overlay_ui_state.set_feedback(feedback);
             return None;
         }
         if self.queue_mutation_requires_authority_refresh() {
-            self.queue_overlay_ui_state
-                .set_feedback(self.tui_language.queue_mutation_refresh_required_feedback());
+            self.planning.queue_overlay_ui_state.set_feedback(
+                self.shell
+                    .tui_language
+                    .queue_mutation_refresh_required_feedback(),
+            );
             return None;
         }
         if let Some(reason) = self.queue_mutation_block_reason() {
-            self.queue_overlay_ui_state
-                .set_feedback(self.tui_language.queue_action_block_reason(reason));
+            self.planning
+                .queue_overlay_ui_state
+                .set_feedback(self.shell.tui_language.queue_action_block_reason(reason));
             return None;
         }
-        let selected = self.queue_overlay_ui_state.selected_authority_token().map(
-            |(revision, task_id, token)| {
+        let selected = self
+            .planning
+            .queue_overlay_ui_state
+            .selected_authority_token()
+            .map(|(revision, task_id, token)| {
                 (
                     revision,
                     task_id.to_string(),
                     token.status,
                     token.updated_at.clone(),
                 )
-            },
-        );
+            });
         let Some((planning_revision, task_id, status, updated_at)) = selected else {
-            self.queue_overlay_ui_state.set_feedback(
-                self.tui_language
+            self.planning.queue_overlay_ui_state.set_feedback(
+                self.shell
+                    .tui_language
                     .queue_mutation_selected_item_changed_feedback(),
             );
             return None;
@@ -262,8 +299,9 @@ impl NativeTuiApp {
 
     pub(super) fn undo_latest_queue_registration(&mut self) -> bool {
         if let Some(operation_id) = self.pending_queue_mutation_operation_id() {
-            self.queue_overlay_ui_state.set_feedback(
-                self.tui_language
+            self.planning.queue_overlay_ui_state.set_feedback(
+                self.shell
+                    .tui_language
                     .queue_mutation_pending_feedback(operation_id),
             );
             return false;
@@ -272,38 +310,44 @@ impl NativeTuiApp {
             return false;
         }
         if let Some(feedback) = self.queue_overlay_authority_action_feedback() {
-            self.queue_overlay_ui_state.set_feedback(feedback);
+            self.planning.queue_overlay_ui_state.set_feedback(feedback);
             return false;
         }
         if self.queue_mutation_requires_authority_refresh() {
-            self.queue_overlay_ui_state
-                .set_feedback(self.tui_language.queue_mutation_refresh_required_feedback());
+            self.planning.queue_overlay_ui_state.set_feedback(
+                self.shell
+                    .tui_language
+                    .queue_mutation_refresh_required_feedback(),
+            );
             return false;
         }
         if let Some(reason) = self.queue_receipt_undo_block_reason() {
-            self.queue_overlay_ui_state
-                .set_feedback(self.tui_language.queue_action_block_reason(reason));
+            self.planning
+                .queue_overlay_ui_state
+                .set_feedback(self.shell.tui_language.queue_action_block_reason(reason));
             return false;
         }
-        let receipt = match &self.conversation_state {
+        let receipt = match &self.conversation.lifecycle.conversation_state {
             ConversationState::Ready(conversation) => {
                 conversation.latest_queue_mutation_receipt.clone()
             }
             ConversationState::Loading | ConversationState::Failed(_) => None,
         };
         let Some(receipt) = receipt else {
-            self.queue_overlay_ui_state
+            self.planning
+                .queue_overlay_ui_state
                 .set_feedback("No recent queue registration is available to undo.");
             return false;
         };
         let created_count = receipt.created_entries().count();
         if created_count == 0 {
-            self.queue_overlay_ui_state
+            self.planning
+                .queue_overlay_ui_state
                 .set_feedback("The latest receipt did not add removable queue items.");
             return false;
         }
         if !receipt.created_batch_is_cancellable() {
-            self.queue_overlay_ui_state.set_feedback(
+            self.planning.queue_overlay_ui_state.set_feedback(
                 "The latest registration changed after it was shown; review the queue before removing items.",
             );
             return false;
@@ -332,25 +376,34 @@ impl NativeTuiApp {
             return false;
         }
         self.start_queue_overlay_authority_load();
-        self.queue_overlay_ui_state
-            .set_feedback(self.tui_language.queue_overlay_authority_loading_feedback());
+        self.planning.queue_overlay_ui_state.set_feedback(
+            self.shell
+                .tui_language
+                .queue_overlay_authority_loading_feedback(),
+        );
         true
     }
 
     fn queue_overlay_authority_action_feedback(&self) -> Option<String> {
-        if self.shell_overlay != ShellOverlay::Queue {
+        if self.shell.chrome.shell_overlay != ShellOverlay::Queue {
             return None;
         }
-        match self.queue_overlay_ui_state.authority_screen_model() {
+        match self
+            .planning
+            .queue_overlay_ui_state
+            .authority_screen_model()
+        {
             queue_overlay_ui::QueueOverlayAuthorityScreenModel::Idle
             | queue_overlay_ui::QueueOverlayAuthorityScreenModel::Loading { .. } => Some(
-                self.tui_language
+                self.shell
+                    .tui_language
                     .queue_overlay_authority_loading_feedback()
                     .to_string(),
             ),
             queue_overlay_ui::QueueOverlayAuthorityScreenModel::Failed { request_id, error } => {
                 Some(
-                    self.tui_language
+                    self.shell
+                        .tui_language
                         .queue_overlay_authority_failed_summary(request_id, &error),
                 )
             }
@@ -361,7 +414,7 @@ impl NativeTuiApp {
     fn latest_queue_mutation_receipt(
         &self,
     ) -> Option<crate::domain::planning::PlanningQueueMutationReceipt> {
-        match &self.conversation_state {
+        match &self.conversation.lifecycle.conversation_state {
             ConversationState::Ready(conversation) => {
                 conversation.latest_queue_mutation_receipt.clone()
             }
@@ -371,6 +424,7 @@ impl NativeTuiApp {
 
     fn submit_queue_mutation(&mut self, intent: QueueMutationIntent) -> bool {
         let outcome = self
+            .runtime
             .client_runtime
             .dispatch_client_event(CoreInput::Command(AppCommand::SubmitQueueMutation(
                 Box::new(intent),
@@ -385,14 +439,16 @@ impl NativeTuiApp {
 
     pub(super) fn apply_queue_mutation_started(&mut self, correlation: QueueMutationCorrelation) {
         if !self
+            .planning
             .queue_mutation_ui_state
             .record_started(correlation.clone())
         {
             return;
         }
-        self.queue_overlay_ui_state.disarm_remove_task();
-        self.queue_overlay_ui_state.set_feedback(
-            self.tui_language
+        self.planning.queue_overlay_ui_state.disarm_remove_task();
+        self.planning.queue_overlay_ui_state.set_feedback(
+            self.shell
+                .tui_language
                 .queue_mutation_pending_feedback(correlation.generation),
         );
         self.clear_queue_receipt_undo_hit_area();
@@ -403,7 +459,11 @@ impl NativeTuiApp {
         correlation: QueueMutationCorrelation,
         completion: QueueMutationResult,
     ) {
-        let Some(correlation) = self.queue_mutation_ui_state.take_matching(&correlation) else {
+        let Some(correlation) = self
+            .planning
+            .queue_mutation_ui_state
+            .take_matching(&correlation)
+        else {
             return;
         };
         let operation_context = queue_overlay_ui::QueueMutationContext {
@@ -411,17 +471,24 @@ impl NativeTuiApp {
             active_thread_id: correlation.intent.active_thread_id.clone(),
         };
         let current_context = self.current_queue_mutation_context();
-        if !matches!(self.conversation_state, ConversationState::Ready(_))
-            || current_context != operation_context
+        if !matches!(
+            self.conversation.lifecycle.conversation_state,
+            ConversationState::Ready(_)
+        ) || current_context != operation_context
         {
-            self.queue_overlay_ui_state.clear_feedback_if(
+            self.planning.queue_overlay_ui_state.clear_feedback_if(
                 &self
+                    .shell
                     .tui_language
                     .queue_mutation_pending_feedback(correlation.generation),
             );
             if current_context.workspace_directory == operation_context.workspace_directory {
-                self.queue_mutation_ui_state.require_authority_refresh();
-                self.queue_overlay_ui_state.clear_authority_binding();
+                self.planning
+                    .queue_mutation_ui_state
+                    .require_authority_refresh();
+                self.planning
+                    .queue_overlay_ui_state
+                    .clear_authority_binding();
             }
             return;
         }
@@ -436,22 +503,29 @@ impl NativeTuiApp {
                 },
             },
             Err(refresh_error) => {
-                self.queue_mutation_ui_state.require_authority_refresh();
-                self.queue_overlay_ui_state.clear_authority_binding();
+                self.planning
+                    .queue_mutation_ui_state
+                    .require_authority_refresh();
+                self.planning
+                    .queue_overlay_ui_state
+                    .clear_authority_binding();
                 let refresh_error = self
+                    .shell
                     .tui_language
                     .queue_overlay_authority_load_error(&refresh_error);
                 let feedback = match completion.mutation {
                     Ok(_) => self
+                        .shell
                         .tui_language
                         .queue_mutation_committed_refresh_failed(operation_id, &refresh_error),
-                    Err(mutation_error) => {
-                        self.tui_language.queue_mutation_unresolved_refresh_failed(
+                    Err(mutation_error) => self
+                        .shell
+                        .tui_language
+                        .queue_mutation_unresolved_refresh_failed(
                             operation_id,
                             &mutation_error,
                             &refresh_error,
-                        )
-                    }
+                        ),
                 };
                 self.surface_queue_mutation_feedback(feedback);
                 return;
@@ -466,10 +540,15 @@ impl NativeTuiApp {
                 })
             });
         if let Err(error) = self.apply_queue_mutation_authority_snapshot(&authority) {
-            self.queue_mutation_ui_state.require_authority_refresh();
-            self.queue_overlay_ui_state.clear_authority_binding();
+            self.planning
+                .queue_mutation_ui_state
+                .require_authority_refresh();
+            self.planning
+                .queue_overlay_ui_state
+                .clear_authority_binding();
             self.surface_queue_mutation_feedback(
-                self.tui_language
+                self.shell
+                    .tui_language
                     .queue_mutation_reconcile_failed(operation_id, &error),
             );
             return;
@@ -478,9 +557,10 @@ impl NativeTuiApp {
         let feedback = match completion.mutation {
             Ok(result) if authority_confirms_cancellation => {
                 self.settle_correlated_queue_receipt(&correlation, &authority.queue_authority);
-                self.tui_language.queue_mutation_acknowledged(
+                self.shell.tui_language.queue_mutation_acknowledged(
                     operation_id,
-                    self.tui_language
+                    self.shell
+                        .tui_language
                         .queue_mutation_success_label(correlation.intent.kind),
                     result.committed_task_ids.len(),
                     result.committed_planning_revision,
@@ -488,17 +568,20 @@ impl NativeTuiApp {
             }
             Ok(_) => {
                 self.reconcile_correlated_queue_receipt(&correlation, &authority.queue_authority);
-                self.tui_language
+                self.shell
+                    .tui_language
                     .queue_mutation_acknowledged_without_confirmation(operation_id)
             }
             Err(error) if authority_confirms_cancellation => {
                 self.settle_correlated_queue_receipt(&correlation, &authority.queue_authority);
-                self.tui_language
+                self.shell
+                    .tui_language
                     .queue_mutation_authority_confirmed_after_error(operation_id, &error)
             }
             Err(error) => {
                 self.reconcile_correlated_queue_receipt(&correlation, &authority.queue_authority);
-                self.tui_language
+                self.shell
+                    .tui_language
                     .queue_mutation_rejected(operation_id, &error)
             }
         };
@@ -510,17 +593,24 @@ impl NativeTuiApp {
         authority: &queue_overlay_ui::QueueMutationAuthoritySnapshot,
     ) -> Result<(), String> {
         let (projection_revision, tokens) = self.reconcile_queue_authority_snapshot(authority)?;
-        if !self.queue_overlay_ui_state.bind_authority_snapshot(
-            authority.runtime_projection.clone(),
-            projection_revision,
-            tokens,
-        ) {
+        if !self
+            .planning
+            .queue_overlay_ui_state
+            .bind_authority_snapshot(
+                authority.runtime_projection.clone(),
+                projection_revision,
+                tokens,
+            )
+        {
             return Err(self
+                .shell
                 .tui_language
                 .queue_mutation_rows_mismatch_authority()
                 .to_string());
         }
-        self.queue_mutation_ui_state.record_authority_refresh();
+        self.planning
+            .queue_mutation_ui_state
+            .record_authority_refresh();
         self.sync_queue_overlay_selection();
         Ok(())
     }
@@ -539,7 +629,8 @@ impl NativeTuiApp {
             .runtime_projection
             .planning_revision()
             .ok_or_else(|| {
-                self.tui_language
+                self.shell
+                    .tui_language
                     .queue_mutation_projection_revision_missing()
                     .to_string()
             })?;
@@ -549,11 +640,12 @@ impl NativeTuiApp {
             .is_some_and(|current_revision| current_revision > projection_revision)
         {
             return Err(self
+                .shell
                 .tui_language
                 .queue_mutation_completion_older_than_planning(projection_revision));
         }
         if matches!(
-            &self.conversation_state,
+            &self.conversation.lifecycle.conversation_state,
             ConversationState::Ready(conversation)
                 if conversation
                     .latest_queue_mutation_receipt
@@ -561,11 +653,13 @@ impl NativeTuiApp {
                     .is_some_and(|receipt| receipt.planning_revision > projection_revision)
         ) {
             return Err(self
+                .shell
                 .tui_language
                 .queue_mutation_completion_older_than_receipt(projection_revision));
         }
         if projection_revision != authority.queue_authority.planning_revision {
             return Err(self
+                .shell
                 .tui_language
                 .queue_mutation_projection_authority_revision_mismatch(
                     projection_revision,
@@ -577,7 +671,8 @@ impl NativeTuiApp {
             &authority.queue_authority,
         )
         .ok_or_else(|| {
-            self.tui_language
+            self.shell
+                .tui_language
                 .queue_mutation_rows_mismatch_authority()
                 .to_string()
         })?;
@@ -592,7 +687,9 @@ impl NativeTuiApp {
         correlation: &QueueMutationCorrelation,
         authority: &crate::application::service::planning::PlanningQueueAuthoritySnapshot,
     ) {
-        let ConversationState::Ready(conversation) = &mut self.conversation_state else {
+        let ConversationState::Ready(conversation) =
+            &mut self.conversation.lifecycle.conversation_state
+        else {
             return;
         };
         let Some(current_receipt) = conversation.latest_queue_mutation_receipt.clone() else {
@@ -632,7 +729,9 @@ impl NativeTuiApp {
         correlation: &QueueMutationCorrelation,
         authority: &crate::application::service::planning::PlanningQueueAuthoritySnapshot,
     ) {
-        let ConversationState::Ready(conversation) = &mut self.conversation_state else {
+        let ConversationState::Ready(conversation) =
+            &mut self.conversation.lifecycle.conversation_state
+        else {
             return;
         };
         let Some(current_receipt) = conversation.latest_queue_mutation_receipt.clone() else {
@@ -658,8 +757,12 @@ impl NativeTuiApp {
     }
 
     fn surface_queue_mutation_feedback(&mut self, feedback: String) {
-        self.queue_overlay_ui_state.set_feedback(feedback.clone());
-        if let ConversationState::Ready(conversation) = &mut self.conversation_state {
+        self.planning
+            .queue_overlay_ui_state
+            .set_feedback(feedback.clone());
+        if let ConversationState::Ready(conversation) =
+            &mut self.conversation.lifecycle.conversation_state
+        {
             conversation.status_text = feedback.clone();
             conversation.append_status_message(feedback);
         }
@@ -670,7 +773,9 @@ impl NativeTuiApp {
         &mut self,
         authority: &crate::application::service::planning::PlanningQueueAuthoritySnapshot,
     ) {
-        let ConversationState::Ready(conversation) = &mut self.conversation_state else {
+        let ConversationState::Ready(conversation) =
+            &mut self.conversation.lifecycle.conversation_state
+        else {
             return;
         };
         let Some(receipt) = conversation.latest_queue_mutation_receipt.as_ref() else {

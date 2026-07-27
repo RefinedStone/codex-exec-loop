@@ -8,7 +8,7 @@ pub(super) fn build_simple_review_copy(app: &NativeTuiApp) -> PlanningSimpleRevi
     // simple_review가 없다는 것은 router step과 UI-local staged result가 잠깐 어긋난
     // degraded 상태다. rendering path에서는 panic보다 unknown/0 fallback을 택해
     // operator가 상태 불일치를 화면에서 확인할 수 있게 한다.
-    let simple_review = app.planning_init_overlay_ui_state.simple_review();
+    let simple_review = app.planning.planning_init_overlay_ui_state.simple_review();
     let validation_report = simple_review.map(|review| review.validation_report());
 
     PlanningSimpleReviewCopy {

@@ -24,6 +24,12 @@ the fixed Akra theme.
 | Terminal adapters | Crossterm/Ratatui lifecycle, scrollback, viewport replay, host terminal side effects | `ratatui_frontend.rs`, `inline_terminal_adapter.rs`, `history_insertion.rs` | Planning semantics, Akra copy, overlay policy |
 | Tests and captures | Rendering contracts, snapshot deltas, terminal validation evidence | `shell_rendering_tests.rs`, `shell_rendering_contract_tests.rs`, `snapshots/**`, `scripts/capture_native_validation.*` | Unreviewed visual contract drift |
 
+`NativeTuiApp` is not a general-purpose bag passed between these layers. It owns exactly four
+private typed slices (`shell`, `conversation`, `planning`, `runtime`). Production frontend and
+terminal modules receive owned projections/models through `ShellRuntime`; only test fixtures may
+request the aggregate directly. Planning-worker display state is a sealed Core projection, so
+navigation intent cannot optimistically rewrite it.
+
 ## Where To Edit
 
 | Need | Start here | Then verify |

@@ -31,7 +31,9 @@ impl NativeTuiApp {
         &mut self,
         result: PostTurnEvaluationCompletionPayload,
     ) -> bool {
-        self.planning_worker_panel_state = result.planning_worker_panel_state;
+        self.planning
+            .planning_worker_panel_state
+            .apply_completed(result.planning_worker_panel_state);
         self.invalidate_parallel_mode_supervisor_snapshot();
         self.dispatch_conversation_runtime(ConversationRuntimeEvent::PostTurnEvaluationCompleted {
             evaluation: result.evaluation,
@@ -119,21 +121,25 @@ impl NativeTuiApp {
     }
 
     fn record_auto_follow_parallel_dispatch(&mut self) {
-        if let ConversationState::Ready(conversation) = &mut self.conversation_state {
+        if let ConversationState::Ready(conversation) =
+            &mut self.conversation.lifecycle.conversation_state
+        {
             conversation.record_auto_follow_parallel_dispatch();
         }
     }
 
     fn single_session_auto_follow_can_queue_next(&self) -> bool {
         matches!(
-            &self.conversation_state,
+            &self.conversation.lifecycle.conversation_state,
             ConversationState::Ready(conversation)
                 if conversation.auto_follow_state.can_queue_next()
         )
     }
 
     fn record_stale_parallel_only_continuation_cancelled(&mut self) {
-        if let ConversationState::Ready(conversation) = &mut self.conversation_state {
+        if let ConversationState::Ready(conversation) =
+            &mut self.conversation.lifecycle.conversation_state
+        {
             conversation.record_stale_parallel_only_continuation_cancelled();
         }
     }

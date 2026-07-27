@@ -158,8 +158,9 @@ pub(crate) fn make_test_app_with_planning() -> (NativeTuiApp, PlanningServices) 
         conversation_service,
         parallel_mode_binding,
     );
-    app.show_startup_ascii_art = false;
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    app.shell.show_startup_ascii_art = false;
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start with a ready draft conversation");
     };
     conversation.cwd = "/tmp/root".to_string();

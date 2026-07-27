@@ -65,7 +65,9 @@ fn plain_character_input_uses_empty_modifier_check() {
         KeyCode::Char('a'),
         KeyModifiers::empty(),
     )));
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert_eq!(conversation.composer.input_buffer, "a");
@@ -75,12 +77,15 @@ fn plain_character_input_uses_empty_modifier_check() {
 #[test]
 fn session_rename_editor_owns_paste_without_mutating_the_prompt() {
     let mut runtime = make_test_runtime();
-    runtime.app_mut().shell_overlay = ShellOverlay::Sessions;
+    runtime.app_mut().shell.chrome.shell_overlay = ShellOverlay::Sessions;
     runtime
         .app_mut()
+        .shell
         .session_overlay_ui_state
         .start_rename_edit("thread-rename", "Release");
-    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &mut runtime.app_mut().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     conversation.composer.input_buffer = "keep this prompt".to_string();
@@ -90,11 +95,14 @@ fn session_rename_editor_owns_paste_without_mutating_the_prompt() {
     assert_eq!(
         runtime
             .app()
+            .shell
             .session_overlay_ui_state
             .rename_editor_buffer(),
         "Release candidate ready"
     );
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert_eq!(conversation.composer.input_buffer, "keep this prompt");
@@ -104,9 +112,11 @@ fn session_rename_editor_owns_paste_without_mutating_the_prompt() {
 fn tab_opens_exact_turn_steer_confirmation_and_escape_keeps_the_draft() {
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();
-    runtime.app_mut().startup_state =
+    runtime.app_mut().shell.chrome.startup_state =
         StartupState::Ready(sample_startup_diagnostics(&workspace_directory));
-    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &mut runtime.app_mut().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     conversation.thread_id = "thread-steer".to_string();
@@ -116,23 +126,28 @@ fn tab_opens_exact_turn_steer_confirmation_and_escape_keeps_the_draft() {
     runtime.handle_terminal_event(Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)));
     let request = runtime
         .app()
+        .conversation
         .turn_steer_confirmation
         .as_ref()
         .expect("Tab should open confirmation without submitting");
     assert_eq!(request.request.thread_id, "thread-steer");
     assert_eq!(request.request.expected_turn_id, "turn-steer");
     assert_eq!(request.request.prompt, "add focused coverage");
-    assert!(runtime.app().pending_turn_steer.is_none());
+    assert!(runtime.app().conversation.pending_turn_steer.is_none());
 
     runtime.handle_terminal_event(Event::Paste("must not alter exact draft".to_string()));
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert_eq!(conversation.composer.input_buffer, "add focused coverage");
 
     runtime.handle_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
-    assert!(runtime.app().turn_steer_confirmation.is_none());
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    assert!(runtime.app().conversation.turn_steer_confirmation.is_none());
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert_eq!(conversation.composer.input_buffer, "add focused coverage");
@@ -142,16 +157,21 @@ fn tab_opens_exact_turn_steer_confirmation_and_escape_keeps_the_draft() {
 fn tab_cannot_steer_the_same_draft_while_queue_registration_is_pending() {
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();
-    runtime.app_mut().startup_state =
+    runtime.app_mut().shell.chrome.startup_state =
         StartupState::Ready(sample_startup_diagnostics(&workspace_directory));
-    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &mut runtime.app_mut().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     conversation.thread_id = "thread-queue-race".to_string();
     conversation.record_turn_started("turn-queue-race".to_string());
     conversation.composer.input_buffer = "apply this once".to_string();
 
-    runtime.app_mut().pending_manual_prompt_preparation = Some(PendingManualPromptPreparation {
+    runtime
+        .app_mut()
+        .conversation
+        .pending_manual_prompt_preparation = Some(PendingManualPromptPreparation {
         correlation: crate::domain::planning::ManualPromptCorrelation {
             request_id: 1,
             generation: 1,
@@ -163,13 +183,21 @@ fn tab_cannot_steer_the_same_draft_while_queue_registration_is_pending() {
         delivery: ManualPromptDelivery::QueueOnly,
         parent_turn_id: Some("turn-queue-race".to_string()),
     });
-    assert!(runtime.app().pending_manual_prompt_preparation.is_some());
+    assert!(
+        runtime
+            .app()
+            .conversation
+            .pending_manual_prompt_preparation
+            .is_some()
+    );
 
     runtime.handle_terminal_event(Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)));
 
-    assert!(runtime.app().turn_steer_confirmation.is_none());
-    assert!(runtime.app().pending_turn_steer.is_none());
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    assert!(runtime.app().conversation.turn_steer_confirmation.is_none());
+    assert!(runtime.app().conversation.pending_turn_steer.is_none());
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert_eq!(conversation.composer.input_buffer, "apply this once");
@@ -184,7 +212,7 @@ fn supersession_overlay_blocks_prompt_input_while_loading() {
      */
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();
-    runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+    runtime.app_mut().shell.chrome.shell_overlay = ShellOverlay::Supersession;
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
     runtime
         .app_mut()
@@ -203,11 +231,16 @@ fn supersession_overlay_blocks_prompt_input_while_loading() {
         KeyCode::Char('a'),
         KeyModifiers::empty(),
     )));
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert!(conversation.composer.input_buffer.is_empty());
-    assert_eq!(runtime.app().shell_overlay, ShellOverlay::Supersession);
+    assert_eq!(
+        runtime.app().shell.chrome.shell_overlay,
+        ShellOverlay::Supersession
+    );
     assert!(runtime.take_redraw_request());
 }
 
@@ -219,7 +252,7 @@ fn supersession_overlay_allows_prompt_input_after_loading_finishes() {
      */
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();
-    runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+    runtime.app_mut().shell.chrome.shell_overlay = ShellOverlay::Supersession;
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
     runtime
         .app_mut()
@@ -238,11 +271,16 @@ fn supersession_overlay_allows_prompt_input_after_loading_finishes() {
         KeyCode::Char('a'),
         KeyModifiers::empty(),
     )));
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert_eq!(conversation.composer.input_buffer, "a");
-    assert_eq!(runtime.app().shell_overlay, ShellOverlay::Supersession);
+    assert_eq!(
+        runtime.app().shell.chrome.shell_overlay,
+        ShellOverlay::Supersession
+    );
     assert!(runtime.take_redraw_request());
 }
 
@@ -255,10 +293,10 @@ fn supersession_overlay_routes_prompt_to_parallel_task_intake_after_loading_fini
      */
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();
-    runtime.app_mut().startup_state = StartupState::Ready(sample_startup_diagnostics(
+    runtime.app_mut().shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics(
         &runtime.app().current_workspace_directory(),
     ));
-    runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+    runtime.app_mut().shell.chrome.shell_overlay = ShellOverlay::Supersession;
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
     runtime
         .app_mut()
@@ -289,7 +327,9 @@ fn supersession_overlay_routes_prompt_to_parallel_task_intake_after_loading_fini
     )));
     for _ in 0..250 {
         runtime.poll_background_messages();
-        let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        let ConversationState::Ready(conversation) =
+            &runtime.app().conversation.lifecycle.conversation_state
+        else {
             panic!("expected ready conversation state");
         };
         if conversation.composer.input_buffer.is_empty()
@@ -300,7 +340,9 @@ fn supersession_overlay_routes_prompt_to_parallel_task_intake_after_loading_fini
         thread::sleep(Duration::from_millis(20));
     }
 
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert!(conversation.composer.input_buffer.is_empty());
@@ -325,7 +367,10 @@ fn supersession_overlay_routes_prompt_to_parallel_task_intake_after_loading_fini
         event_lines.contains("Task Intake: committed task"),
         "Enter should route the buffered prompt through task intake: {event_lines}"
     );
-    assert_eq!(runtime.app().shell_overlay, ShellOverlay::Supersession);
+    assert_eq!(
+        runtime.app().shell.chrome.shell_overlay,
+        ShellOverlay::Supersession
+    );
     assert!(runtime.take_redraw_request());
 }
 
@@ -373,7 +418,7 @@ fn supersession_mud_navigation_changes_only_ui_selection_state() {
         ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
         None,
     );
-    runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+    runtime.app_mut().shell.chrome.shell_overlay = ShellOverlay::Supersession;
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
     runtime
         .app_mut()
@@ -405,6 +450,7 @@ fn supersession_mud_navigation_changes_only_ui_selection_state() {
     assert_eq!(
         runtime
             .app()
+            .shell
             .supersession_mud_ui_state
             .selected_room_index(),
         1
@@ -412,6 +458,7 @@ fn supersession_mud_navigation_changes_only_ui_selection_state() {
     assert_eq!(
         runtime
             .app()
+            .shell
             .supersession_mud_ui_state
             .selected_actor_index(),
         0
@@ -470,7 +517,7 @@ fn parallel_projection_refresh_preserves_supersession_overlay_focus_and_selectio
             None,
         )
     };
-    runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+    runtime.app_mut().shell.chrome.shell_overlay = ShellOverlay::Supersession;
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
     runtime
         .app_mut()
@@ -486,6 +533,7 @@ fn parallel_projection_refresh_preserves_supersession_overlay_focus_and_selectio
         .mark_parallel_mode_supervisor_refresh_in_flight_for_test();
     runtime
         .app
+        .runtime
         .tx
         .send(BackgroundMessage::ParallelModeControlPlaneEvent(Box::new(
             ParallelModeControlPlaneBackgroundEvent::SupervisorSnapshotRefreshed {
@@ -499,10 +547,14 @@ fn parallel_projection_refresh_preserves_supersession_overlay_focus_and_selectio
         .expect("supervisor refresh should enqueue");
     runtime.poll_background_messages();
 
-    assert_eq!(runtime.app().shell_overlay, ShellOverlay::Supersession);
+    assert_eq!(
+        runtime.app().shell.chrome.shell_overlay,
+        ShellOverlay::Supersession
+    );
     assert_eq!(
         runtime
             .app()
+            .shell
             .supersession_mud_ui_state
             .selected_room_index(),
         1
@@ -514,6 +566,7 @@ fn parallel_projection_refresh_preserves_supersession_overlay_focus_and_selectio
     assert_eq!(
         runtime
             .app()
+            .runtime
             .client_runtime
             .snapshot()
             .planning_parallel
@@ -532,7 +585,7 @@ fn parallel_epoch_id_ignores_stale_workspace_epoch() {
      * 잘못된 workspace 상태를 정상으로 오인할 수 있다.
      */
     let mut runtime = make_test_runtime();
-    runtime.app_mut().startup_state =
+    runtime.app_mut().shell.chrome.startup_state =
         StartupState::Ready(sample_startup_diagnostics("/tmp/parallel-workspace-a"));
     runtime
         .app_mut()
@@ -541,7 +594,7 @@ fn parallel_epoch_id_ignores_stale_workspace_epoch() {
         .app_mut()
         .set_parallel_mode_automation_epoch_for_test(7);
 
-    runtime.app_mut().startup_state =
+    runtime.app_mut().shell.chrome.startup_state =
         StartupState::Ready(sample_startup_diagnostics("/tmp/parallel-workspace-b"));
     runtime
         .app_mut()
@@ -569,7 +622,8 @@ fn bare_parallel_enter_opens_parallel_control_tower_without_main_turn() {
 
     for _ in 0..250 {
         runtime.poll_background_messages();
-        if let ConversationState::Ready(conversation) = &runtime.app().conversation_state
+        if let ConversationState::Ready(conversation) =
+            &runtime.app().conversation.lifecycle.conversation_state
             && conversation.composer.input_buffer.is_empty()
             && conversation.status_text.contains("parallel mode:")
         {
@@ -578,12 +632,17 @@ fn bare_parallel_enter_opens_parallel_control_tower_without_main_turn() {
         thread::sleep(Duration::from_millis(20));
     }
 
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert!(conversation.composer.input_buffer.is_empty());
     assert!(conversation.messages.is_empty());
-    assert_eq!(runtime.app().shell_overlay, ShellOverlay::Supersession);
+    assert_eq!(
+        runtime.app().shell.chrome.shell_overlay,
+        ShellOverlay::Supersession
+    );
 }
 
 #[test]
@@ -594,7 +653,8 @@ fn peek_command_opens_active_agent_picker_and_read_only_conversation() {
      * app-server conversation snapshot without switching the main shell thread.
      */
     let mut runtime = make_test_runtime();
-    let main_conversation_identity = match &runtime.app().conversation_state {
+    let main_conversation_identity = match &runtime.app().conversation.lifecycle.conversation_state
+    {
         ConversationState::Ready(conversation) => {
             (conversation.thread_id.clone(), conversation.title.clone())
         }
@@ -653,11 +713,15 @@ fn peek_command_opens_active_agent_picker_and_read_only_conversation() {
         KeyModifiers::NONE,
     )));
 
-    assert_eq!(runtime.app().shell_overlay, ShellOverlay::ParallelPeek);
+    assert_eq!(
+        runtime.app().shell.chrome.shell_overlay,
+        ShellOverlay::ParallelPeek
+    );
     assert_eq!(runtime.app().active_parallel_peek_entries().len(), 1);
     assert!(
         runtime
             .app()
+            .shell
             .parallel_peek_overlay_ui_state
             .preview()
             .is_none()
@@ -670,6 +734,7 @@ fn peek_command_opens_active_agent_picker_and_read_only_conversation() {
 
     let preview = runtime
         .app()
+        .shell
         .parallel_peek_overlay_ui_state
         .preview()
         .expect("selected active agent should open a preview");
@@ -682,6 +747,7 @@ fn peek_command_opens_active_agent_picker_and_read_only_conversation() {
         runtime.poll_background_messages();
         if runtime
             .app()
+            .shell
             .parallel_peek_overlay_ui_state
             .preview()
             .is_some_and(|preview| preview.snapshot.is_some())
@@ -693,6 +759,7 @@ fn peek_command_opens_active_agent_picker_and_read_only_conversation() {
 
     let preview = runtime
         .app()
+        .shell
         .parallel_peek_overlay_ui_state
         .preview()
         .expect("selected active agent should keep its preview");
@@ -703,12 +770,13 @@ fn peek_command_opens_active_agent_picker_and_read_only_conversation() {
             .map(|snapshot| snapshot.title.as_str()),
         Some("Loaded thread")
     );
-    let current_main_conversation_identity = match &runtime.app().conversation_state {
-        ConversationState::Ready(conversation) => {
-            (conversation.thread_id.clone(), conversation.title.clone())
-        }
-        _ => panic!("peek load must not replace the main conversation"),
-    };
+    let current_main_conversation_identity =
+        match &runtime.app().conversation.lifecycle.conversation_state {
+            ConversationState::Ready(conversation) => {
+                (conversation.thread_id.clone(), conversation.title.clone())
+            }
+            _ => panic!("peek load must not replace the main conversation"),
+        };
     assert_eq!(
         current_main_conversation_identity,
         main_conversation_identity
@@ -716,6 +784,7 @@ fn peek_command_opens_active_agent_picker_and_read_only_conversation() {
     assert_eq!(
         runtime
             .app()
+            .shell
             .parallel_peek_overlay_ui_state
             .conversation_scroll_from_bottom(),
         0
@@ -729,6 +798,7 @@ fn peek_command_opens_active_agent_picker_and_read_only_conversation() {
     assert_eq!(
         runtime
             .app()
+            .shell
             .parallel_peek_overlay_ui_state
             .conversation_scroll_from_bottom(),
         10
@@ -739,6 +809,7 @@ fn peek_command_opens_active_agent_picker_and_read_only_conversation() {
     assert_eq!(
         runtime
             .app()
+            .shell
             .parallel_peek_overlay_ui_state
             .conversation_scroll_from_bottom(),
         0
@@ -746,10 +817,14 @@ fn peek_command_opens_active_agent_picker_and_read_only_conversation() {
 
     runtime.handle_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
 
-    assert_eq!(runtime.app().shell_overlay, ShellOverlay::ParallelPeek);
+    assert_eq!(
+        runtime.app().shell.chrome.shell_overlay,
+        ShellOverlay::ParallelPeek
+    );
     assert!(
         runtime
             .app()
+            .shell
             .parallel_peek_overlay_ui_state
             .preview()
             .is_none()
@@ -790,7 +865,7 @@ fn parallel_peek_selection_tracks_lease_across_roster_reorder() {
         )
     };
 
-    runtime.app_mut().shell_overlay = ShellOverlay::ParallelPeek;
+    runtime.app_mut().shell.chrome.shell_overlay = ShellOverlay::ParallelPeek;
     runtime
         .app_mut()
         .set_parallel_mode_supervisor_snapshot_for_test(Some(snapshot(vec![
@@ -825,6 +900,7 @@ fn parallel_peek_selection_tracks_lease_across_roster_reorder() {
     );
     let preview = runtime
         .app()
+        .shell
         .parallel_peek_overlay_ui_state
         .preview()
         .expect("Enter should open the visibly selected lease");
@@ -866,7 +942,7 @@ fn parallel_peek_rejects_same_index_replacement_until_explicit_reselection() {
         )
     };
 
-    runtime.app_mut().shell_overlay = ShellOverlay::ParallelPeek;
+    runtime.app_mut().shell.chrome.shell_overlay = ShellOverlay::ParallelPeek;
     runtime
         .app_mut()
         .set_parallel_mode_supervisor_snapshot_for_test(Some(snapshot(vec![
@@ -904,12 +980,15 @@ fn parallel_peek_rejects_same_index_replacement_until_explicit_reselection() {
     assert!(
         runtime
             .app()
+            .shell
             .parallel_peek_overlay_ui_state
             .preview()
             .is_none(),
         "Enter must fail closed when the selected lease identity disappeared"
     );
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert_eq!(
@@ -925,6 +1004,7 @@ fn parallel_peek_rejects_same_index_replacement_until_explicit_reselection() {
 
     let preview = runtime
         .app()
+        .shell
         .parallel_peek_overlay_ui_state
         .preview()
         .expect("explicit navigation should adopt the replacement lease");
@@ -963,7 +1043,9 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_workers() {
         .planning
         .runtime
         .load_runtime_projection_or_invalid(&workspace_directory);
-    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &mut runtime.app_mut().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     conversation.thread_id = "thread-1".to_string();
@@ -973,6 +1055,7 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_workers() {
 
     runtime
         .app
+        .runtime
         .tx
         .send(post_turn_evaluation_completed_message(
             correlation,
@@ -1011,7 +1094,9 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_workers() {
         Some(ParallelModeAutomationTrigger::MainTurnPostEvaluation)
     );
     assert_eq!(fixture.launch_count.load(Ordering::SeqCst), 1);
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert!(
@@ -1039,12 +1124,14 @@ fn parallel_off_invalidates_in_flight_evaluation_and_discards_late_parallel_only
     let mut runtime = fixture.runtime;
     let workspace_directory = runtime.app().current_workspace_directory();
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
-    let captured_permit = runtime.app().post_turn_continuation_gate.capture();
+    let captured_permit = runtime.app().planning.post_turn_continuation_gate.capture();
     let planning_projection = fixture
         .planning
         .runtime
         .load_runtime_projection_or_invalid(&workspace_directory);
-    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &mut runtime.app_mut().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     conversation.thread_id = "thread-disable-race".to_string();
@@ -1061,6 +1148,7 @@ fn parallel_off_invalidates_in_flight_evaluation_and_discards_late_parallel_only
 
     runtime
         .app
+        .runtime
         .tx
         .send(post_turn_evaluation_completed_message(
             correlation,
@@ -1089,7 +1177,9 @@ fn parallel_off_invalidates_in_flight_evaluation_and_discards_late_parallel_only
 
     assert_eq!(fixture.launch_count.load(Ordering::SeqCst), 0);
     assert!(!runtime.app().parallel_mode_enabled());
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert!(
@@ -1112,11 +1202,13 @@ fn parallel_off_invalidates_in_flight_evaluation_and_discards_late_parallel_only
 fn parallel_off_preserves_explicit_single_session_auto_follow_for_a_late_result() {
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();
-    runtime.app_mut().startup_state =
+    runtime.app_mut().shell.chrome.startup_state =
         StartupState::Ready(sample_startup_diagnostics(&workspace_directory));
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
     let planning_projection = runtime.app().planning_runtime_projection_snapshot();
-    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &mut runtime.app_mut().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     conversation.auto_follow_state.set_max_auto_turns(1);
@@ -1129,6 +1221,7 @@ fn parallel_off_preserves_explicit_single_session_auto_follow_for_a_late_result(
 
     runtime
         .app
+        .runtime
         .tx
         .send(post_turn_evaluation_completed_message(
             correlation,
@@ -1155,7 +1248,9 @@ fn parallel_off_preserves_explicit_single_session_auto_follow_for_a_late_result(
 
     runtime.poll_background_messages();
 
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert_eq!(
@@ -1181,14 +1276,16 @@ fn supersession_uses_planning_workspace_projection_after_loading_finishes() {
      */
     let mut runtime = make_test_runtime();
     let planning_workspace = "/tmp/planning-workspace".to_string();
-    runtime.app_mut().startup_state =
+    runtime.app_mut().shell.chrome.startup_state =
         StartupState::Ready(sample_startup_diagnostics("/tmp/startup-workspace"));
-    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &mut runtime.app_mut().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     conversation.draft_workspace_directory = planning_workspace.clone();
     conversation.cwd = planning_workspace.clone();
-    runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+    runtime.app_mut().shell.chrome.shell_overlay = ShellOverlay::Supersession;
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
     runtime
         .app_mut()
@@ -1306,7 +1403,7 @@ fn supersession_active_worker_requests_live_pulse() {
      */
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();
-    runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+    runtime.app_mut().shell.chrome.shell_overlay = ShellOverlay::Supersession;
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
     runtime
         .app_mut()
@@ -1353,7 +1450,7 @@ fn supersession_overlay_blocks_plain_r_prompt_input_while_loading() {
      */
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();
-    runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+    runtime.app_mut().shell.chrome.shell_overlay = ShellOverlay::Supersession;
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
     runtime
         .app_mut()
@@ -1372,11 +1469,16 @@ fn supersession_overlay_blocks_plain_r_prompt_input_while_loading() {
         KeyCode::Char('r'),
         KeyModifiers::empty(),
     )));
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert!(conversation.composer.input_buffer.is_empty());
-    assert_eq!(runtime.app().shell_overlay, ShellOverlay::Supersession);
+    assert_eq!(
+        runtime.app().shell.chrome.shell_overlay,
+        ShellOverlay::Supersession
+    );
     assert!(runtime.take_redraw_request());
 }
 
@@ -1387,7 +1489,7 @@ fn supersession_overlay_ctrl_r_refreshes_readiness() {
      * refresh는 status만 갱신해야 하므로 prompt buffer를 비우거나 overlay를 닫는 부작용이 없는지 함께 확인한다.
      */
     let mut runtime = make_test_runtime();
-    runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+    runtime.app_mut().shell.chrome.shell_overlay = ShellOverlay::Supersession;
     runtime.take_redraw_request();
 
     runtime.handle_terminal_event(Event::Key(KeyEvent::new(
@@ -1395,7 +1497,9 @@ fn supersession_overlay_ctrl_r_refreshes_readiness() {
         KeyModifiers::CONTROL,
     )));
     assert!(runtime.app().parallel_mode_control_effect_in_flight());
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert!(conversation.composer.input_buffer.is_empty());
@@ -1406,7 +1510,9 @@ fn supersession_overlay_ctrl_r_refreshes_readiness() {
     );
     for _ in 0..250 {
         runtime.poll_background_messages();
-        let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        let ConversationState::Ready(conversation) =
+            &runtime.app().conversation.lifecycle.conversation_state
+        else {
             panic!("expected ready conversation state");
         };
         if conversation
@@ -1417,7 +1523,9 @@ fn supersession_overlay_ctrl_r_refreshes_readiness() {
         }
         thread::sleep(Duration::from_millis(20));
     }
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert!(
@@ -1426,7 +1534,10 @@ fn supersession_overlay_ctrl_r_refreshes_readiness() {
             .starts_with("parallel readiness refreshed / state:")
     );
     assert!(!runtime.app().parallel_mode_control_effect_in_flight());
-    assert_eq!(runtime.app().shell_overlay, ShellOverlay::Supersession);
+    assert_eq!(
+        runtime.app().shell.chrome.shell_overlay,
+        ShellOverlay::Supersession
+    );
     assert!(runtime.take_redraw_request());
 }
 
@@ -1439,10 +1550,10 @@ fn supersession_overlay_blocks_enter_submit_prompt_while_loading() {
      */
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();
-    runtime.app_mut().startup_state = StartupState::Ready(sample_startup_diagnostics(
+    runtime.app_mut().shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics(
         &runtime.app().current_workspace_directory(),
     ));
-    runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+    runtime.app_mut().shell.chrome.shell_overlay = ShellOverlay::Supersession;
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
     runtime
         .app_mut()
@@ -1464,12 +1575,17 @@ fn supersession_overlay_blocks_enter_submit_prompt_while_loading() {
         KeyCode::Enter,
         KeyModifiers::NONE,
     )));
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert_eq!(conversation.composer.input_buffer, "run next");
     assert!(!conversation.has_running_turn());
-    assert_eq!(runtime.app().shell_overlay, ShellOverlay::Supersession);
+    assert_eq!(
+        runtime.app().shell.chrome.shell_overlay,
+        ShellOverlay::Supersession
+    );
     assert!(runtime.take_redraw_request());
 }
 
@@ -1489,10 +1605,15 @@ fn enter_executes_selected_inline_command_palette_item() {
         KeyCode::Enter,
         KeyModifiers::NONE,
     )));
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
-    assert_eq!(runtime.app().shell_overlay, ShellOverlay::Startup);
+    assert_eq!(
+        runtime.app().shell.chrome.shell_overlay,
+        ShellOverlay::Startup
+    );
     assert!(conversation.composer.input_buffer.is_empty());
     assert!(
         conversation
@@ -1516,7 +1637,9 @@ fn down_then_enter_on_palette_item_with_argument_inserts_completion() {
         KeyCode::Enter,
         KeyModifiers::NONE,
     )));
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert_eq!(conversation.composer.input_buffer, ":reset ");
@@ -1526,7 +1649,10 @@ fn down_then_enter_on_palette_item_with_argument_inserts_completion() {
             .inline_shell_command_palette_state
             .is_active()
     );
-    assert_eq!(runtime.app().shell_overlay, ShellOverlay::Hidden);
+    assert_eq!(
+        runtime.app().shell.chrome.shell_overlay,
+        ShellOverlay::Hidden
+    );
 }
 
 #[test]
@@ -1542,7 +1668,9 @@ fn enter_on_empty_command_palette_does_not_submit_raw_command_text() {
         KeyModifiers::NONE,
     )));
 
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert_eq!(conversation.composer.input_buffer, ":zzzz");
@@ -1565,7 +1693,7 @@ fn enter_on_empty_command_palette_does_not_submit_raw_command_text() {
 #[test]
 fn palette_command_execution_status_uses_selected_korean_language() {
     let mut runtime = make_test_runtime();
-    runtime.app_mut().tui_language = TuiLanguage::Korean;
+    runtime.app_mut().shell.tui_language = TuiLanguage::Korean;
     runtime.app_mut().push_input_character(':');
     runtime.app_mut().push_input_character('d');
     runtime.take_redraw_request();
@@ -1575,7 +1703,9 @@ fn palette_command_execution_status_uses_selected_korean_language() {
         KeyModifiers::NONE,
     )));
 
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert_eq!(conversation.status_text, "진단 화면을 열었습니다.");
@@ -1593,7 +1723,9 @@ fn up_wraps_inline_command_palette_selection() {
     runtime.take_redraw_request();
 
     runtime.handle_terminal_event(Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)));
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert_eq!(
@@ -1612,7 +1744,9 @@ fn tab_and_backtab_navigate_inline_command_palette() {
     runtime.take_redraw_request();
 
     runtime.handle_terminal_event(Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)));
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert_eq!(
@@ -1627,7 +1761,9 @@ fn tab_and_backtab_navigate_inline_command_palette() {
         KeyCode::BackTab,
         KeyModifiers::SHIFT,
     )));
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert_eq!(
@@ -1653,7 +1789,9 @@ fn escape_dismisses_inline_command_palette_without_clearing_buffer() {
     runtime.take_redraw_request();
 
     runtime.handle_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert_eq!(conversation.composer.input_buffer, ":p");
@@ -1699,7 +1837,9 @@ fn ctrl_u_clears_buffered_input() {
         KeyCode::Char('u'),
         KeyModifiers::CONTROL,
     )));
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert!(conversation.composer.input_buffer.is_empty());
@@ -1720,7 +1860,9 @@ fn ctrl_w_deletes_previous_buffered_word() {
         KeyCode::Char('w'),
         KeyModifiers::CONTROL,
     )));
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert_eq!(conversation.composer.input_buffer, "ship this ");
@@ -1744,7 +1886,9 @@ fn arrow_keys_move_prompt_cursor_before_editing() {
         KeyCode::Backspace,
         KeyModifiers::NONE,
     )));
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert_eq!(conversation.composer.input_buffer, "helo");
@@ -1763,7 +1907,9 @@ fn option_arrow_moves_prompt_cursor_by_word() {
         KeyCode::Char('X'),
         KeyModifiers::NONE,
     )));
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert_eq!(conversation.composer.input_buffer, "one two Xthree");
@@ -1784,7 +1930,9 @@ fn command_arrow_moves_prompt_cursor_to_line_boundary() {
         KeyCode::Char('X'),
         KeyModifiers::NONE,
     )));
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert_eq!(conversation.composer.input_buffer, "one\nXtwo");
@@ -1797,13 +1945,15 @@ fn paste_event_inserts_multiline_text_without_submit() {
      * embedded newlines as prompt text instead of treating them as Enter submits.
      */
     let mut runtime = make_test_runtime();
-    runtime.app_mut().startup_state = StartupState::Ready(sample_startup_diagnostics(
+    runtime.app_mut().shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics(
         &runtime.app().current_workspace_directory(),
     ));
     runtime.take_redraw_request();
 
     runtime.handle_terminal_event(Event::Paste("first\nsecond".to_string()));
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert_eq!(conversation.composer.input_buffer, "first\nsecond");
@@ -1815,7 +1965,9 @@ fn paste_event_inserts_multiline_text_without_submit() {
 #[test]
 fn approval_overlay_consumes_paste_without_mutating_the_prompt() {
     let mut runtime = make_test_runtime();
-    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &mut runtime.app_mut().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     conversation.composer.input_buffer = "existing prompt".to_string();
@@ -1827,11 +1979,13 @@ fn approval_overlay_consumes_paste_without_mutating_the_prompt() {
         summary: "File changes requested.".to_string(),
         details: vec!["Inspect the current diff before accepting.".to_string()],
     });
-    runtime.app_mut().shell_overlay = ShellOverlay::Approval;
+    runtime.app_mut().shell.chrome.shell_overlay = ShellOverlay::Approval;
 
     runtime.handle_terminal_event(Event::Paste("must not leak".to_string()));
 
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert_eq!(conversation.composer.input_buffer, "existing prompt");

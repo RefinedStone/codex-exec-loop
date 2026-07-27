@@ -495,18 +495,22 @@ impl NativeTuiApp {
         &mut self,
         correlation: QueueAuthorityLoadCorrelation,
     ) -> QueueOverlayAuthorityLoadRequest {
-        self.queue_overlay_ui_state
+        self.planning
+            .queue_overlay_ui_state
             .begin_authority_load(correlation)
     }
 
     pub(super) fn queue_overlay_authority_load_required(&self) -> bool {
-        self.shell_overlay == ShellOverlay::Queue
+        self.shell.chrome.shell_overlay == ShellOverlay::Queue
             && self.pending_queue_mutation_operation_id().is_none()
-            && self.queue_overlay_ui_state.requires_authority_load_for(
-                &self.current_queue_mutation_context(),
-                self.planning_runtime_projection_snapshot()
-                    .planning_revision(),
-            )
+            && self
+                .planning
+                .queue_overlay_ui_state
+                .requires_authority_load_for(
+                    &self.current_queue_mutation_context(),
+                    self.planning_runtime_projection_snapshot()
+                        .planning_revision(),
+                )
     }
 
     #[cfg(test)]
@@ -525,19 +529,26 @@ impl NativeTuiApp {
     ) -> QueueOverlayScreenModel {
         let pending_operation_id = self.pending_queue_mutation_operation_id();
         let authority_refresh_required = self.queue_mutation_requires_authority_refresh();
-        let authority = self.queue_overlay_ui_state.authority_screen_model();
+        let authority = self
+            .planning
+            .queue_overlay_ui_state
+            .authority_screen_model();
         let authority_snapshot_changed =
             matches!(&authority, QueueOverlayAuthorityScreenModel::Ready { .. })
-                && self.queue_overlay_ui_state.requires_authority_load_for(
-                    &self.current_queue_mutation_context(),
-                    runtime_projection.planning_revision(),
-                );
+                && self
+                    .planning
+                    .queue_overlay_ui_state
+                    .requires_authority_load_for(
+                        &self.current_queue_mutation_context(),
+                        runtime_projection.planning_revision(),
+                    );
         let remove_block_reason = authority_snapshot_changed
             .then_some(QueueActionBlockReason::AuthoritySnapshotChanged)
             .or_else(|| self.queue_mutation_block_reason_for_parallel_mode(parallel_mode_enabled))
             .or_else(|| {
                 (matches!(&authority, QueueOverlayAuthorityScreenModel::Ready { .. })
                     && self
+                        .planning
                         .queue_overlay_ui_state
                         .selected_authority_token()
                         .is_none())
@@ -549,7 +560,7 @@ impl NativeTuiApp {
                 self.queue_receipt_undo_block_reason_for_parallel_mode(parallel_mode_enabled)
             });
         let latest_registration_undo_available = matches!(
-            (&self.conversation_state, &authority),
+            (&self.conversation.lifecycle.conversation_state, &authority),
             (
                 ConversationState::Ready(conversation),
                 QueueOverlayAuthorityScreenModel::Ready {
@@ -564,14 +575,15 @@ impl NativeTuiApp {
                         && *planning_revision == receipt.planning_revision
                 })
         );
-        let conversation = match &self.conversation_state {
+        let conversation = match &self.conversation.lifecycle.conversation_state {
             ConversationState::Loading => QueueOverlayConversationScreenModel::Loading,
             ConversationState::Failed(message) => {
                 QueueOverlayConversationScreenModel::Failed(message.clone())
             }
             ConversationState::Ready(conversation) => QueueOverlayConversationScreenModel::Ready {
                 runtime_projection: Box::new(
-                    self.queue_overlay_ui_state
+                    self.planning
+                        .queue_overlay_ui_state
                         .ready_runtime_projection()
                         .cloned()
                         .unwrap_or_else(|| runtime_projection.clone()),
@@ -584,21 +596,29 @@ impl NativeTuiApp {
             conversation,
             authority,
             selected_task_id: self
+                .planning
                 .queue_overlay_ui_state
                 .selected_task_id()
                 .map(str::to_string),
             armed_remove_task_id: self
+                .planning
                 .queue_overlay_ui_state
                 .armed_remove_task_id()
                 .map(str::to_string),
-            feedback: self.queue_overlay_ui_state.feedback().map(str::to_string),
+            feedback: self
+                .planning
+                .queue_overlay_ui_state
+                .feedback()
+                .map(str::to_string),
             pending_operation_id,
             authority_refresh_required,
             latest_registration_undo_available,
             remove_block_reason,
             undo_block_reason,
             planning_worker_host_detail: self
+                .planning
                 .planning_worker_panel_state
+                .current()
                 .last_host_detail
                 .as_deref()
                 .map(|detail| {
@@ -607,20 +627,22 @@ impl NativeTuiApp {
                         .take(QUEUE_OVERLAY_SCREEN_DETAIL_LIMIT)
                         .collect()
                 }),
-            tui_language: self.tui_language,
+            tui_language: self.shell.tui_language,
         }
     }
 
     pub(super) fn pending_queue_mutation_operation_id(&self) -> Option<u64> {
-        self.queue_mutation_ui_state.pending_operation_id()
+        self.planning.queue_mutation_ui_state.pending_operation_id()
     }
 
     pub(super) fn queue_mutation_requires_authority_refresh(&self) -> bool {
-        self.queue_mutation_ui_state.authority_refresh_required()
+        self.planning
+            .queue_mutation_ui_state
+            .authority_refresh_required()
     }
 
     pub(super) fn current_queue_mutation_context(&self) -> QueueMutationContext {
-        let active_thread_id = match &self.conversation_state {
+        let active_thread_id = match &self.conversation.lifecycle.conversation_state {
             ConversationState::Ready(conversation) if conversation.has_active_thread() => {
                 Some(conversation.thread_id.clone())
             }
@@ -645,7 +667,7 @@ impl NativeTuiApp {
         if parallel_mode_enabled {
             return Some(QueueActionBlockReason::ParallelModeOwnsTaskLeases);
         }
-        match &self.conversation_state {
+        match &self.conversation.lifecycle.conversation_state {
             ConversationState::Ready(conversation)
                 if conversation.has_post_turn_settlement_in_flight() =>
             {
@@ -682,7 +704,7 @@ impl NativeTuiApp {
         if parallel_mode_enabled {
             return Some(QueueActionBlockReason::ParallelModeOwnsTaskLeases);
         }
-        match &self.conversation_state {
+        match &self.conversation.lifecycle.conversation_state {
             ConversationState::Ready(conversation)
                 if conversation.has_post_turn_settlement_in_flight()
                     || conversation.auto_follow_state.has_live_activity() =>
@@ -706,7 +728,7 @@ impl NativeTuiApp {
     ) -> Option<usize> {
         if self.pending_queue_mutation_operation_id().is_some()
             || self.queue_mutation_requires_authority_refresh()
-            || self.shell_overlay != ShellOverlay::Hidden
+            || self.shell.chrome.shell_overlay != ShellOverlay::Hidden
             || self.is_exit_confirmation_visible()
             || self.is_turn_steer_confirmation_visible()
             || self
@@ -715,7 +737,9 @@ impl NativeTuiApp {
         {
             return None;
         }
-        let ConversationState::Ready(conversation) = &self.conversation_state else {
+        let ConversationState::Ready(conversation) =
+            &self.conversation.lifecycle.conversation_state
+        else {
             return None;
         };
         let receipt = conversation.latest_queue_mutation_receipt.as_ref()?;
@@ -725,11 +749,14 @@ impl NativeTuiApp {
     }
 
     pub(super) fn clear_queue_receipt_undo_hit_area(&mut self) {
-        self.queue_overlay_ui_state.clear_receipt_undo_hit_area();
+        self.planning
+            .queue_overlay_ui_state
+            .clear_receipt_undo_hit_area();
     }
 
     pub(super) fn queue_receipt_undo_mouse_capture_requested(&self) -> bool {
-        self.queue_overlay_ui_state
+        self.planning
+            .queue_overlay_ui_state
             .receipt_undo_hit_area()
             .is_some()
             && self.queue_receipt_undo_task_count().is_some()
@@ -740,6 +767,7 @@ impl NativeTuiApp {
             || mouse.modifiers != KeyModifiers::NONE
             || self.queue_receipt_undo_task_count().is_none()
             || !self
+                .planning
                 .queue_overlay_ui_state
                 .take_receipt_undo_hit(mouse.column, mouse.row)
         {
@@ -752,6 +780,7 @@ impl NativeTuiApp {
 
     pub(super) fn queue_action_tasks(&self) -> Vec<QueueOverlayActionTask> {
         let runtime_projection = self
+            .planning
             .queue_overlay_ui_state
             .ready_runtime_projection()
             .cloned()
@@ -791,7 +820,7 @@ impl NativeTuiApp {
             .into_iter()
             .map(|task| task.task_id)
             .collect::<Vec<_>>();
-        self.queue_overlay_ui_state.sync(&task_ids);
+        self.planning.queue_overlay_ui_state.sync(&task_ids);
     }
 
     #[cfg(test)]
@@ -808,7 +837,7 @@ impl NativeTuiApp {
         ));
         let runtime_projection = self.planning_runtime_projection_snapshot();
         assert!(
-            self.queue_overlay_ui_state.apply_authority_loaded(
+            self.planning.queue_overlay_ui_state.apply_authority_loaded(
                 request,
                 runtime_projection,
                 planning_revision,

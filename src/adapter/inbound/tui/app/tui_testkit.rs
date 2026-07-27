@@ -310,7 +310,8 @@ fn is_cjk_wide(character: char) -> bool {
 pub(super) fn append_agent_history_message(app: &mut NativeTuiApp, text: &str) {
     // History injection keeps fixtures small while exercising the renderer's
     // projection from the canonical message log.
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start in a ready conversation state");
     };
     conversation.messages.push(ConversationMessage::new(
@@ -323,7 +324,8 @@ pub(super) fn append_agent_history_message(app: &mut NativeTuiApp, text: &str) {
 pub(super) fn set_live_agent_message(app: &mut NativeTuiApp, text: &str) {
     // Live-message injection sets the same running-turn markers used by runtime
     // background updates so inline tail tests cover the streaming path.
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start in a ready conversation state");
     };
     conversation.input_state = ConversationInputState::StreamingTurn;
@@ -342,7 +344,8 @@ pub(super) fn set_progressive_command_activity(
     command_tail: &str,
     bounded_history: bool,
 ) -> Arc<ConversationProgressiveActivityProjectionSnapshot> {
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start in a ready conversation state");
     };
     if !conversation.has_active_thread() {

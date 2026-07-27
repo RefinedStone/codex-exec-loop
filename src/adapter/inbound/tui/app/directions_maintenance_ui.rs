@@ -321,14 +321,16 @@ impl DirectionsMaintenanceOverlayUiState {
 
 impl NativeTuiApp {
     pub(super) fn directions_editor_workspace_is_current(&self) -> bool {
-        self.directions_maintenance_overlay_ui_state
+        self.planning
+            .directions_maintenance_overlay_ui_state
             .authority_workspace_directory()
             .is_some_and(|workspace| workspace == self.planning_workspace_directory())
     }
 
     pub(super) fn directions_maintenance_load_required(&self) -> bool {
-        self.shell_overlay == ShellOverlay::DirectionsMaintenance
+        self.shell.chrome.shell_overlay == ShellOverlay::DirectionsMaintenance
             && self
+                .planning
                 .directions_maintenance_overlay_ui_state
                 .requires_load_for_workspace(self.planning_workspace_directory().as_str())
     }
@@ -338,13 +340,17 @@ impl NativeTuiApp {
         correlation: DirectionsMaintenanceLoadCorrelation,
         result: Result<Box<DirectionsMaintenanceSummarySnapshot>, String>,
     ) -> DirectionsMaintenanceLoadCompletion {
-        let directions_is_visible = self.shell_overlay == ShellOverlay::DirectionsMaintenance;
-        let directions_is_suspended_for_approval = self.shell_overlay == ShellOverlay::Approval
-            && self.approval_return_overlay == Some(ShellOverlay::DirectionsMaintenance);
+        let directions_is_visible =
+            self.shell.chrome.shell_overlay == ShellOverlay::DirectionsMaintenance;
+        let directions_is_suspended_for_approval = self.shell.chrome.shell_overlay
+            == ShellOverlay::Approval
+            && self.shell.chrome.approval_return_overlay
+                == Some(ShellOverlay::DirectionsMaintenance);
         if !directions_is_visible && !directions_is_suspended_for_approval {
             return DirectionsMaintenanceLoadCompletion::Ignored;
         }
         if self
+            .planning
             .directions_maintenance_overlay_ui_state
             .loading_request(&correlation)
             .is_none()
@@ -355,6 +361,7 @@ impl NativeTuiApp {
             return DirectionsMaintenanceLoadCompletion::ReloadRequired;
         }
         let applied = self
+            .planning
             .directions_maintenance_overlay_ui_state
             .apply_loaded(correlation, result);
         debug_assert!(applied);
@@ -383,7 +390,9 @@ mod tests {
     }
 
     fn sync_draft_workspace(app: &mut NativeTuiApp, workspace_directory: &str) {
-        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        let ConversationState::Ready(conversation) =
+            &mut app.conversation.lifecycle.conversation_state
+        else {
             panic!("test app should have a ready conversation");
         };
         assert!(conversation.sync_draft_workspace(workspace_directory.to_string()));
@@ -420,7 +429,8 @@ mod tests {
         app.dispatch_shell_chrome(ShellChromeEvent::DirectionsMaintenanceOverlayShown);
         let workspace_directory = app.planning_workspace_directory();
         let failed = DirectionsMaintenanceLoadCorrelation::new(1, workspace_directory.clone());
-        app.directions_maintenance_overlay_ui_state
+        app.planning
+            .directions_maintenance_overlay_ui_state
             .begin_load(failed.clone());
 
         assert_eq!(
@@ -431,7 +441,9 @@ mod tests {
             DirectionsMaintenanceLoadCompletion::Applied
         );
         assert!(matches!(
-            app.directions_maintenance_overlay_ui_state.screen_model(),
+            app.planning
+                .directions_maintenance_overlay_ui_state
+                .screen_model(),
             DirectionsMaintenanceScreenModel::Failed {
                 error: "authority unavailable",
                 ..
@@ -450,18 +462,20 @@ mod tests {
         app.dispatch_shell_chrome(ShellChromeEvent::DirectionsMaintenanceOverlayShown);
         let correlation =
             DirectionsMaintenanceLoadCorrelation::new(1, app.planning_workspace_directory());
-        app.directions_maintenance_overlay_ui_state
+        app.planning
+            .directions_maintenance_overlay_ui_state
             .begin_load(correlation.clone());
 
         app.close_shell_overlay();
 
-        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Hidden);
         assert_eq!(
             app.apply_directions_maintenance_loaded(correlation, Ok(Box::new(summary()))),
             DirectionsMaintenanceLoadCompletion::Ignored
         );
         assert_eq!(
-            app.directions_maintenance_overlay_ui_state
+            app.planning
+                .directions_maintenance_overlay_ui_state
                 .projection_kind(),
             DirectionsMaintenanceProjectionKind::Idle
         );
@@ -473,7 +487,8 @@ mod tests {
         app.dispatch_shell_chrome(ShellChromeEvent::DirectionsMaintenanceOverlayShown);
         let correlation =
             DirectionsMaintenanceLoadCorrelation::new(1, app.planning_workspace_directory());
-        app.directions_maintenance_overlay_ui_state
+        app.planning
+            .directions_maintenance_overlay_ui_state
             .begin_load(correlation.clone());
 
         app.dispatch_shell_chrome(ShellChromeEvent::ApprovalOverlayShown);
@@ -482,18 +497,23 @@ mod tests {
             result: Ok(Box::new(summary())),
         });
 
-        assert_eq!(app.shell_overlay, ShellOverlay::Approval);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Approval);
         assert_eq!(
-            app.directions_maintenance_overlay_ui_state
+            app.planning
+                .directions_maintenance_overlay_ui_state
                 .projection_kind(),
             DirectionsMaintenanceProjectionKind::Ready
         );
 
         app.dispatch_shell_chrome(ShellChromeEvent::ApprovalOverlayClosed);
 
-        assert_eq!(app.shell_overlay, ShellOverlay::DirectionsMaintenance);
         assert_eq!(
-            app.directions_maintenance_overlay_ui_state
+            app.shell.chrome.shell_overlay,
+            ShellOverlay::DirectionsMaintenance
+        );
+        assert_eq!(
+            app.planning
+                .directions_maintenance_overlay_ui_state
                 .projection_kind(),
             DirectionsMaintenanceProjectionKind::Ready
         );
@@ -505,7 +525,8 @@ mod tests {
         app.dispatch_shell_chrome(ShellChromeEvent::DirectionsMaintenanceOverlayShown);
         let correlation =
             DirectionsMaintenanceLoadCorrelation::new(1, app.planning_workspace_directory());
-        app.directions_maintenance_overlay_ui_state
+        app.planning
+            .directions_maintenance_overlay_ui_state
             .begin_load(correlation.clone());
         sync_draft_workspace(&mut app, "/different-workspace");
 
@@ -514,7 +535,8 @@ mod tests {
             DirectionsMaintenanceLoadCompletion::ReloadRequired
         );
         assert!(
-            app.directions_maintenance_overlay_ui_state
+            app.planning
+                .directions_maintenance_overlay_ui_state
                 .loading_request(&correlation)
                 .is_some()
         );
@@ -564,13 +586,16 @@ mod tests {
         app.dispatch_shell_chrome(ShellChromeEvent::DirectionsMaintenanceOverlayShown);
         let correlation =
             DirectionsMaintenanceLoadCorrelation::new(1, app.planning_workspace_directory());
-        app.directions_maintenance_overlay_ui_state
+        app.planning
+            .directions_maintenance_overlay_ui_state
             .begin_load(correlation.clone());
         assert!(
-            app.directions_maintenance_overlay_ui_state
+            app.planning
+                .directions_maintenance_overlay_ui_state
                 .apply_loaded(correlation, Ok(Box::new(summary())))
         );
-        app.directions_maintenance_overlay_ui_state
+        app.planning
+            .directions_maintenance_overlay_ui_state
             .open_manual_editor();
         sync_draft_workspace(&mut app, "/different-workspace");
 

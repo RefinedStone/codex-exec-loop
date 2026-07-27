@@ -593,7 +593,7 @@ mod tests {
             lines_text(&build_session_key_lines(&model)).contains("requires a queryable catalog")
         );
 
-        app.session_state = SessionState::Loading;
+        app.shell.chrome.session_state = SessionState::Loading;
         let model = screen_model(&app);
         let (list_view, detail_lines) = build_session_overlay_content(&model);
         assert!(list_text(&list_view).contains("loading recent sessions"));
@@ -602,14 +602,14 @@ mod tests {
             lines_text(&build_session_warning_lines(&model)).contains("waiting for app-server")
         );
 
-        app.session_state = SessionState::Failed("catalog unavailable".to_string());
+        app.shell.chrome.session_state = SessionState::Failed("catalog unavailable".to_string());
         let model = screen_model(&app);
         let (list_view, detail_lines) = build_session_overlay_content(&model);
         assert!(list_text(&list_view).contains("catalog unavailable"));
         assert!(lines_text(&detail_lines).contains("catalog unavailable"));
         assert!(lines_text(&build_session_warning_lines(&model)).contains("catalog unavailable"));
 
-        app.session_state = SessionState::Ready(SessionCatalog::unsupported(
+        app.shell.chrome.session_state = SessionState::Ready(SessionCatalog::unsupported(
             SessionCatalogTier::AttachOnly,
             "provider disabled",
             vec!["unsupported warning".to_string()],
@@ -622,7 +622,7 @@ mod tests {
         assert!(detail_text.contains("detail: provider disabled"));
         assert!(lines_text(&build_session_warning_lines(&model)).contains("unsupported warning"));
 
-        app.session_state = SessionState::Ready(SessionCatalog::partial(
+        app.shell.chrome.session_state = SessionState::Ready(SessionCatalog::partial(
             SessionCatalogTier::HandleBasedReattach,
             "handle only",
             vec!["partial warning".to_string()],
@@ -639,8 +639,9 @@ mod tests {
     #[test]
     fn ready_catalog_content_covers_empty_detail_search_and_query_editing() {
         let mut app = test_native_tui_app();
-        app.shell_overlay = ShellOverlay::Sessions;
-        app.session_state = SessionState::Ready(ready_catalog(Vec::new(), Vec::new(), None));
+        app.shell.chrome.shell_overlay = ShellOverlay::Sessions;
+        app.shell.chrome.session_state =
+            SessionState::Ready(ready_catalog(Vec::new(), Vec::new(), None));
 
         let model = screen_model(&app);
         let (list_view, detail_lines) = build_session_overlay_content(&model);
@@ -652,7 +653,7 @@ mod tests {
         assert!(detail_text.contains("Start a new draft with n"));
         assert!(lines_text(&build_session_warning_lines(&model)).contains("no warnings"));
 
-        app.session_state = SessionState::Ready(ready_catalog(
+        app.shell.chrome.session_state = SessionState::Ready(ready_catalog(
             vec![
                 session("thread-alpha", "Alpha task", "/tmp/root"),
                 session("thread-beta", "Beta task", "/tmp/other"),
@@ -686,17 +687,19 @@ mod tests {
         assert!(lines_text(&build_session_key_lines(&model)).contains("/: query"));
         assert!(lines_text(&build_session_key_lines(&model)).contains("e: rename"));
 
-        app.session_overlay_ui_state
-            .set_project_filter(SessionProjectFilter::RecentProject {
+        app.shell.session_overlay_ui_state.set_project_filter(
+            SessionProjectFilter::RecentProject {
                 workspace_directory: "/tmp/root".to_string(),
-            });
+            },
+        );
         let model = screen_model(&app);
         let (_, detail_lines) = build_session_overlay_content(&model);
         let detail_text = lines_text(&detail_lines);
         assert!(detail_text.contains("filter: /tmp/root (1 recent session)"));
         assert!(detail_text.contains("context: current workspace ("));
 
-        app.session_overlay_ui_state
+        app.shell
+            .session_overlay_ui_state
             .set_search_query("does-not-exist");
         let model = screen_model(&app);
         let (list_view, detail_lines) = build_session_overlay_content(&model);
@@ -707,8 +710,9 @@ mod tests {
         assert!(detail_text.contains("no session detail is available for /tmp/root and query"));
         assert!(detail_text.contains("Press c to clear the browser"));
 
-        app.session_overlay_ui_state.start_search_query_edit();
-        app.session_overlay_ui_state
+        app.shell.session_overlay_ui_state.start_search_query_edit();
+        app.shell
+            .session_overlay_ui_state
             .push_search_query_character('!');
         let model = screen_model(&app);
         let (_, detail_lines) = build_session_overlay_content(&model);
@@ -847,13 +851,14 @@ mod tests {
     #[test]
     fn rename_editor_renders_exact_selected_thread_and_stateful_keys() {
         let mut app = test_native_tui_app();
-        app.shell_overlay = ShellOverlay::Sessions;
-        app.session_state = SessionState::Ready(ready_catalog(
+        app.shell.chrome.shell_overlay = ShellOverlay::Sessions;
+        app.shell.chrome.session_state = SessionState::Ready(ready_catalog(
             vec![session("thread-alpha", "Alpha task", "/tmp/root")],
             Vec::new(),
             None,
         ));
-        app.session_overlay_ui_state
+        app.shell
+            .session_overlay_ui_state
             .start_rename_edit("thread-alpha", "Alpha renamed");
 
         let model = screen_model(&app);
@@ -864,10 +869,11 @@ mod tests {
         assert!(lines_text(&build_session_key_lines(&model)).contains("Enter: rename"));
 
         let request = app
+            .shell
             .session_overlay_ui_state
             .prepare_rename_request(TuiLanguage::English)
             .expect("rename should enter pending state");
-        assert!(app.session_overlay_ui_state.record_rename_admission(
+        assert!(app.shell.session_overlay_ui_state.record_rename_admission(
             crate::core::app::SessionRenameCorrelation::new(1, request),
             TuiLanguage::English,
         ));
@@ -876,7 +882,7 @@ mod tests {
         assert!(keys.contains("Rename pending"));
         assert!(keys.contains("duplicate submit"));
 
-        app.tui_language = TuiLanguage::Korean;
+        app.shell.tui_language = TuiLanguage::Korean;
         let model = screen_model(&app);
         let (_, detail_lines) = build_session_overlay_content(&model);
         assert_eq!(detail_lines[1].to_string(), "새 이름: Alpha renamed");
@@ -888,22 +894,24 @@ mod tests {
     #[test]
     fn captured_overlay_sections_stay_coherent_after_app_state_changes() {
         let mut app = test_native_tui_app();
-        app.shell_overlay = ShellOverlay::Sessions;
-        app.session_state = SessionState::Ready(ready_catalog(
+        app.shell.chrome.shell_overlay = ShellOverlay::Sessions;
+        app.shell.chrome.session_state = SessionState::Ready(ready_catalog(
             vec![session("thread-alpha", "Alpha task", "/tmp/root")],
             vec!["captured warning".to_string()],
             None,
         ));
-        app.session_overlay_ui_state
+        app.shell
+            .session_overlay_ui_state
             .start_rename_edit("thread-alpha", "Alpha renamed");
 
         let captured = screen_model(&app);
 
-        app.session_state = SessionState::Failed("new catalog failure".to_string());
-        app.session_overlay_ui_state.clear_browser_state();
-        app.session_overlay_ui_state
+        app.shell.chrome.session_state = SessionState::Failed("new catalog failure".to_string());
+        app.shell.session_overlay_ui_state.clear_browser_state();
+        app.shell
+            .session_overlay_ui_state
             .cancel_rename_edit(TuiLanguage::Korean);
-        app.tui_language = TuiLanguage::Korean;
+        app.shell.tui_language = TuiLanguage::Korean;
 
         let (captured_list, captured_detail) = build_session_overlay_content(&captured);
         assert!(list_text(&captured_list).contains("Alpha task"));
