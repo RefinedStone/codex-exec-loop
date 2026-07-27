@@ -88,9 +88,22 @@ immediate `EffectCompleted` input, or use the separately audited turn-terminal w
 tests parse the enum, dispatch match, launcher, and runtime trait delegation as Rust syntax, so a
 new completion-less arm, wildcard, conditional launcher, or direct TUI worker fails `cargo test`.
 
+The application-owned parallel control plane follows the same totality rule for its seven effects.
+Every effect is exhaustively dispatched either through the shared panic-total completion sink or
+through its audited synchronous settlement path; wildcard arms, guarded arms, detached workers,
+and completion-sink bypasses fail the architecture suite.
+
 Only `CoreRuntime` drives mutable client-runtime state. Adapters must not construct or mutate
 `CoreController`, `AppState`, or `TurnStreamState` directly. Effect executors may perform work and
 return a completion, but they do not own or mutate runtime state.
+
+`CoreController` is the exhaustive root router, not a bag of per-feature leases. Its private state
+is fixed to seven typed slices: `AppState`, startup, session, conversation/turn, read-model loads,
+planning, and GitHub review. Each feature reducer owns its generation counters, active
+correlations, cancellation flags, and exact-completion checks behind methods; the root only
+coordinates cross-feature ordering and projects accepted results into `AppState`. Rust-aware
+architecture tests reject additional raw controller fields, visible reducer authority fields,
+forbidden reducer dependencies, and silent wildcard handling of conversation stream authority.
 
 This establishes one serialized reducer ingress for ClientEvent flow. Retaining the internal
 `AppCommand` / `CoreInput` names and not physically enqueueing synchronous UI-originated events do

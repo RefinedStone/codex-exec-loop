@@ -1,26 +1,21 @@
-use super::approval::ApprovalReviewPersistenceCoordinator;
 use super::conversation_turn_reducer::{
-    ApprovalReviewPersistenceIntent, ConversationLoadAdmission, ConversationTurnFeatureReducer,
-    LoadedConversationStreamIdentity, StopEffectIntent,
+    ConversationLoadAdmission, ConversationTurnFeatureReducer, LoadedConversationStreamIdentity,
+    StopEffectIntent,
 };
-use super::github_review_polling_target_is_valid;
-use super::planning_runtime::PlanningRuntimeCoordinator;
-use super::planning_workspace::PlanningWorkspaceOperationCoordinator;
+use super::github_review_reducer::{GithubReviewFeatureReducer, GithubReviewPollingSetupAdmission};
+use super::planning_reducer::{ManualPromptCompletionDisposition, PlanningFeatureReducer};
+use super::read_model_reducer::ReadModelFeatureReducer;
 use super::session_reducer::{SessionCatalogLoadReduction, SessionFeatureReducer};
+use super::startup_reducer::StartupFeatureReducer;
 use super::state::AppState;
 use super::{
     AppCommand, AppEvent, AppSnapshot, ApprovalDecisionAdmission, ConversationLoadCorrelation,
-    CoreEffect, CoreEffectCompletion, CoreInput, DirectionsMaintenanceLoadCorrelation,
-    GithubReviewPollCorrelation, GithubReviewPollingSetupCorrelation, GithubReviewPollingSetupMode,
-    GithubReviewPollingSetupRequest, GithubReviewPollingSetupResult,
-    ManualPromptPreparationAdmission, ManualPromptPreparationIntent, ParallelModeProjection,
-    ParallelPeekLoadCorrelation, PlanningEditorMutationRequest,
-    PlanningWorkspaceOperationAdmission, PlanningWorkspaceOperationIntent,
-    PlanningWorkspaceOperationKind, QueueAuthorityLoadCorrelation, QueueMutationCorrelation,
-    ReviewCenterLoadCorrelation, RevisionedPlanningParallelProjection, SessionCatalogLoadIntent,
-    SessionRenameAcceptedSnapshot, SessionRenameAdmission, StartupCheckCorrelation,
-    StopRequestAdmission, StopRequestAttempt, TurnSteerAdmission, TurnStreamEvent,
-    TurnSubmissionAdmission, TurnSubmissionCorrelation,
+    CoreEffect, CoreEffectCompletion, CoreInput, ParallelModeProjection,
+    PlanningEditorMutationRequest, PlanningWorkspaceOperationAdmission,
+    PlanningWorkspaceOperationIntent, PlanningWorkspaceOperationKind,
+    RevisionedPlanningParallelProjection, SessionCatalogLoadIntent, SessionRenameAcceptedSnapshot,
+    SessionRenameAdmission, StartupCheckCorrelation, StopRequestAdmission, StopRequestAttempt,
+    TurnSteerAdmission, TurnStreamEvent, TurnSubmissionAdmission, TurnSubmissionCorrelation,
 };
 #[cfg(test)]
 use super::{
@@ -28,11 +23,6 @@ use super::{
     StopRequestCorrelation, TurnSteerCorrelation,
 };
 use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProjection;
-use crate::domain::github_review::{GithubPullRequestPollState, GithubPullRequestTarget};
-use crate::domain::planning::{
-    ExecutionSnapshot, ManualPromptCorrelation, ManualPromptRequest, PlanningWorkerPanelState,
-    PlanningWorkerStatus, PostTurnRequest, QueueIdlePolicy, RuntimeWorkspaceStatus,
-};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,76 +33,26 @@ pub struct CoreDispatchOutcome {
 }
 
 #[derive(Debug, Clone)]
-struct ActiveManualPromptPreparation {
-    correlation: ManualPromptCorrelation,
-    cancelled: bool,
-}
-
-#[derive(Debug, Clone)]
 pub(in crate::core) struct CoreController {
     state: AppState,
-    conversation_turn: ConversationTurnFeatureReducer,
-    next_startup_check_generation: u64,
-    in_flight_startup_check: Option<StartupCheckCorrelation>,
+    startup: StartupFeatureReducer,
     session_feature: SessionFeatureReducer,
-    next_parallel_peek_load_generation: u64,
-    active_parallel_peek_load: Option<ParallelPeekLoadCorrelation>,
-    next_review_center_load_generation: u64,
-    active_review_center_load: Option<ReviewCenterLoadCorrelation>,
-    next_queue_authority_load_generation: u64,
-    active_queue_authority_load: Option<QueueAuthorityLoadCorrelation>,
-    next_directions_maintenance_load_generation: u64,
-    active_directions_maintenance_load: Option<DirectionsMaintenanceLoadCorrelation>,
-    planning_runtime_refresh: PlanningRuntimeCoordinator,
-    planning_workspace_operations: PlanningWorkspaceOperationCoordinator,
-    next_queue_mutation_generation: u64,
-    active_queue_mutation: Option<QueueMutationCorrelation>,
-    next_manual_prompt_preparation_generation: u64,
-    in_flight_manual_prompt_preparation: Option<ActiveManualPromptPreparation>,
-    planning_worker_panel_history_seed: PlanningWorkerPanelState,
-    approval_review_persistence: ApprovalReviewPersistenceCoordinator,
-    next_github_review_polling_setup_generation: u64,
-    github_review_polling_setup_request: Option<GithubReviewPollingSetupRequest>,
-    active_github_review_polling_setup: Option<GithubReviewPollingSetupCorrelation>,
-    github_review_polling_setup_correlation: Option<GithubReviewPollingSetupCorrelation>,
-    github_review_poll_target: Option<GithubPullRequestTarget>,
-    github_review_poll_cursor: Option<(GithubPullRequestTarget, GithubPullRequestPollState)>,
-    next_github_review_poll_generation: u64,
-    active_github_review_poll: Option<GithubReviewPollCorrelation>,
+    conversation_turn: ConversationTurnFeatureReducer,
+    read_models: ReadModelFeatureReducer,
+    planning: PlanningFeatureReducer,
+    github_review: GithubReviewFeatureReducer,
 }
 
 impl CoreController {
     pub(in crate::core) fn new() -> Self {
         Self {
             state: AppState::new(),
-            conversation_turn: ConversationTurnFeatureReducer::new(),
-            next_startup_check_generation: 1,
-            in_flight_startup_check: None,
+            startup: StartupFeatureReducer::new(),
             session_feature: SessionFeatureReducer::new(),
-            next_parallel_peek_load_generation: 1,
-            active_parallel_peek_load: None,
-            next_review_center_load_generation: 1,
-            active_review_center_load: None,
-            next_queue_authority_load_generation: 1,
-            active_queue_authority_load: None,
-            next_directions_maintenance_load_generation: 1,
-            active_directions_maintenance_load: None,
-            planning_runtime_refresh: PlanningRuntimeCoordinator::new(),
-            planning_workspace_operations: PlanningWorkspaceOperationCoordinator::new(),
-            next_queue_mutation_generation: 1,
-            active_queue_mutation: None,
-            next_manual_prompt_preparation_generation: 1,
-            in_flight_manual_prompt_preparation: None,
-            planning_worker_panel_history_seed: PlanningWorkerPanelState::default(),
-            approval_review_persistence: ApprovalReviewPersistenceCoordinator::new(),
-            next_github_review_polling_setup_generation: 1,
-            github_review_polling_setup_request: None,
-            active_github_review_polling_setup: None,
-            github_review_polling_setup_correlation: None,
-            github_review_poll_target: None,
-            github_review_poll_cursor: None,
-            next_github_review_poll_generation: 1,
-            active_github_review_poll: None,
+            conversation_turn: ConversationTurnFeatureReducer::new(),
+            read_models: ReadModelFeatureReducer::new(),
+            planning: PlanningFeatureReducer::new(),
+            github_review: GithubReviewFeatureReducer::new(),
         }
     }
 
@@ -149,11 +89,7 @@ impl CoreController {
             CoreInput::Command(AppCommand::RunStartupChecks {
                 workspace_directory,
             }) => {
-                let correlation = StartupCheckCorrelation::new(
-                    take_generation(&mut self.next_startup_check_generation, "startup check"),
-                    workspace_directory,
-                );
-                self.in_flight_startup_check = Some(correlation.clone());
+                let correlation = self.startup.begin(workspace_directory);
                 self.state.mark_startup_loading();
                 self.startup_changed_outcome(
                     correlation.clone(),
@@ -191,10 +127,9 @@ impl CoreController {
                 fallback_workspace_directory,
             }) => self.start_conversation_load(thread_id, fallback_workspace_directory),
             CoreInput::Command(AppCommand::InvalidateConversationLoad) => {
-                self.reset_planning_worker_panel_history_seed();
-                let cancelled_refresh = self.planning_runtime_refresh.cancel();
+                self.planning.reset_worker_panel_history();
+                let cancelled_refresh = self.planning.cancel_runtime_refresh();
                 let reduction = self.conversation_turn.reduce_conversation_invalidation();
-                self.approval_review_persistence.invalidate_conversation();
                 self.state.reset_conversation();
                 let mut outcome = self.conversation_changed_outcome(
                     None,
@@ -208,14 +143,7 @@ impl CoreController {
                 outcome
             }
             CoreInput::Command(AppCommand::LoadParallelPeekConversation { thread_id }) => {
-                let correlation = ParallelPeekLoadCorrelation::new(
-                    take_generation(
-                        &mut self.next_parallel_peek_load_generation,
-                        "parallel peek load",
-                    ),
-                    thread_id,
-                );
-                self.active_parallel_peek_load = Some(correlation.clone());
+                let correlation = self.read_models.begin_parallel_peek_load(thread_id);
                 CoreDispatchOutcome {
                     events: Vec::new(),
                     effects: vec![CoreEffect::LoadParallelPeekConversation { correlation }],
@@ -226,15 +154,9 @@ impl CoreController {
                 workspace_directory,
                 active_thread_id,
             }) => {
-                let correlation = ReviewCenterLoadCorrelation::new(
-                    take_generation(
-                        &mut self.next_review_center_load_generation,
-                        "review center load",
-                    ),
-                    workspace_directory,
-                    active_thread_id,
-                );
-                self.active_review_center_load = Some(correlation.clone());
+                let correlation = self
+                    .read_models
+                    .begin_review_center_load(workspace_directory, active_thread_id);
                 CoreDispatchOutcome {
                     events: vec![AppEvent::ReviewCenterLoadStarted {
                         correlation: correlation.clone(),
@@ -247,15 +169,9 @@ impl CoreController {
                 workspace_directory,
                 active_thread_id,
             }) => {
-                let correlation = QueueAuthorityLoadCorrelation::new(
-                    take_generation(
-                        &mut self.next_queue_authority_load_generation,
-                        "queue authority load",
-                    ),
-                    workspace_directory,
-                    active_thread_id,
-                );
-                self.active_queue_authority_load = Some(correlation.clone());
+                let correlation = self
+                    .read_models
+                    .begin_queue_authority_load(workspace_directory, active_thread_id);
                 CoreDispatchOutcome {
                     events: vec![AppEvent::QueueAuthorityLoadStarted {
                         correlation: correlation.clone(),
@@ -267,14 +183,9 @@ impl CoreController {
             CoreInput::Command(AppCommand::LoadDirectionsMaintenance {
                 workspace_directory,
             }) => {
-                let correlation = DirectionsMaintenanceLoadCorrelation::new(
-                    take_generation(
-                        &mut self.next_directions_maintenance_load_generation,
-                        "directions maintenance load",
-                    ),
-                    workspace_directory,
-                );
-                self.active_directions_maintenance_load = Some(correlation.clone());
+                let correlation = self
+                    .read_models
+                    .begin_directions_maintenance_load(workspace_directory);
                 CoreDispatchOutcome {
                     events: vec![AppEvent::DirectionsMaintenanceLoadStarted {
                         correlation: correlation.clone(),
@@ -287,7 +198,7 @@ impl CoreController {
                 workspace_directory,
             }) => {
                 let (correlation, superseded) =
-                    self.planning_runtime_refresh.begin(workspace_directory);
+                    self.planning.begin_runtime_refresh(workspace_directory);
                 let mut events = vec![AppEvent::PlanningRuntimeRefreshStarted {
                     correlation: correlation.clone(),
                 }];
@@ -342,14 +253,9 @@ impl CoreController {
                 ),
             ),
             CoreInput::Command(AppCommand::SubmitQueueMutation(intent)) => {
-                if self.active_queue_mutation.is_some() {
+                let Some(correlation) = self.planning.begin_queue_mutation(*intent) else {
                     return self.unchanged_outcome();
-                }
-                let correlation = QueueMutationCorrelation::new(
-                    take_generation(&mut self.next_queue_mutation_generation, "queue mutation"),
-                    *intent,
-                );
-                self.active_queue_mutation = Some(correlation.clone());
+                };
                 CoreDispatchOutcome {
                     events: vec![AppEvent::QueueMutationStarted {
                         correlation: correlation.clone(),
@@ -359,63 +265,27 @@ impl CoreController {
                 }
             }
             CoreInput::Command(AppCommand::PrepareManualPrompt(intent)) => {
-                if let Some(active) = &self.in_flight_manual_prompt_preparation {
-                    return CoreDispatchOutcome {
-                        events: vec![AppEvent::ManualPromptPreparationAdmissionResolved(
-                            ManualPromptPreparationAdmission::RejectedActive {
-                                active_correlation: active.correlation.clone(),
-                            },
-                        )],
-                        effects: Vec::new(),
-                        snapshot: self.shared_snapshot(),
-                    };
-                }
-                let generation = take_generation(
-                    &mut self.next_manual_prompt_preparation_generation,
-                    "manual prompt preparation",
-                );
-                let ManualPromptPreparationIntent {
-                    workspace_directory,
-                    raw_prompt,
-                    parent_thread_id,
-                    parent_turn_id,
-                } = *intent;
-                let correlation = ManualPromptCorrelation {
-                    request_id: generation,
-                    generation,
-                    workspace_directory,
-                };
-                let request = ManualPromptRequest {
-                    correlation: correlation.clone(),
-                    raw_prompt,
-                    parent_thread_id,
-                    parent_turn_id,
-                };
-                self.in_flight_manual_prompt_preparation = Some(ActiveManualPromptPreparation {
-                    correlation: correlation.clone(),
-                    cancelled: false,
-                });
+                let reduction = self.planning.begin_manual_prompt_preparation(*intent);
+                let effects = reduction
+                    .request
+                    .into_iter()
+                    .map(CoreEffect::PrepareManualPrompt)
+                    .collect();
                 CoreDispatchOutcome {
                     events: vec![AppEvent::ManualPromptPreparationAdmissionResolved(
-                        ManualPromptPreparationAdmission::Accepted { correlation },
+                        reduction.admission,
                     )],
-                    effects: vec![CoreEffect::PrepareManualPrompt(Box::new(request))],
+                    effects,
                     snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::Command(AppCommand::CancelManualPromptPreparation) => {
-                let Some(active) = self.in_flight_manual_prompt_preparation.as_mut() else {
+                let Some(correlation) = self.planning.cancel_manual_prompt_preparation() else {
                     return self.unchanged_outcome();
                 };
-                if active.cancelled {
-                    return self.unchanged_outcome();
-                }
-                active.cancelled = true;
                 CoreDispatchOutcome {
                     events: Vec::new(),
-                    effects: vec![CoreEffect::CancelManualPromptPreparation {
-                        correlation: active.correlation.clone(),
-                    }],
+                    effects: vec![CoreEffect::CancelManualPromptPreparation { correlation }],
                     snapshot: self.shared_snapshot(),
                 }
             }
@@ -423,8 +293,6 @@ impl CoreController {
                 let admission = self.conversation_turn.admit_turn_submission(&request);
                 let effects = match &admission {
                     TurnSubmissionAdmission::Accepted { correlation } => {
-                        self.approval_review_persistence
-                            .begin_conversation_turn(*correlation);
                         vec![CoreEffect::SubmitTurn {
                             correlation: *correlation,
                             request,
@@ -531,22 +399,11 @@ impl CoreController {
                 }
             }
             CoreInput::Command(AppCommand::SetupGithubReviewPolling(request)) => {
-                if self.github_review_polling_setup_request.as_ref() == Some(&request) {
+                let GithubReviewPollingSetupAdmission::Started { correlation } =
+                    self.github_review.begin_setup(request.clone())
+                else {
                     return self.unchanged_outcome();
-                }
-                let correlation = GithubReviewPollingSetupCorrelation::new(
-                    take_generation(
-                        &mut self.next_github_review_polling_setup_generation,
-                        "GitHub review polling setup",
-                    ),
-                    request.workspace_directory.clone(),
-                );
-                self.github_review_polling_setup_request = Some(request.clone());
-                self.active_github_review_polling_setup = Some(correlation.clone());
-                self.github_review_polling_setup_correlation = None;
-                self.github_review_poll_target = None;
-                self.github_review_poll_cursor = None;
-                self.active_github_review_poll = None;
+                };
                 CoreDispatchOutcome {
                     events: vec![AppEvent::GithubReviewPollingSetupStarted {
                         correlation: correlation.clone(),
@@ -559,37 +416,17 @@ impl CoreController {
                 }
             }
             CoreInput::Command(AppCommand::PollGithubReview) => {
-                let Some(target) = self.github_review_poll_target.clone() else {
+                let Some(admission) = self.github_review.begin_poll() else {
                     return self.unchanged_outcome();
                 };
-                let Some(setup_correlation) = self.github_review_polling_setup_correlation.clone()
-                else {
-                    return self.unchanged_outcome();
-                };
-                if self.active_github_review_poll.is_some() {
-                    return self.unchanged_outcome();
-                }
-                let correlation = GithubReviewPollCorrelation::new(
-                    take_generation(
-                        &mut self.next_github_review_poll_generation,
-                        "GitHub review poll",
-                    ),
-                    target.clone(),
-                );
-                let previous_state = self
-                    .github_review_poll_cursor
-                    .as_ref()
-                    .filter(|(cursor_target, _)| cursor_target == &target)
-                    .map(|(_, state)| state.clone());
-                self.active_github_review_poll = Some(correlation.clone());
                 CoreDispatchOutcome {
                     events: vec![AppEvent::GithubReviewPollStarted {
-                        correlation: correlation.clone(),
+                        correlation: admission.correlation.clone(),
                     }],
                     effects: vec![CoreEffect::PollGithubReview {
-                        setup_correlation,
-                        correlation,
-                        previous_state,
+                        setup_correlation: admission.setup_correlation,
+                        correlation: admission.correlation,
+                        previous_state: admission.previous_state,
                     }],
                     snapshot: self.shared_snapshot(),
                 }
@@ -600,10 +437,8 @@ impl CoreController {
                     .admit_post_turn_evaluation(request.as_mut())
                 {
                     Some(correlation) => {
-                        let planning_worker_panel_state = post_turn_worker_panel_start_state(
-                            &self.planning_worker_panel_history_seed,
-                            request.as_ref(),
-                        );
+                        let planning_worker_panel_state =
+                            self.planning.begin_post_turn_worker_panel(request.as_ref());
                         request.planning_worker_panel_state = planning_worker_panel_state.clone();
                         CoreDispatchOutcome {
                             events: vec![AppEvent::PostTurnEvaluationStarted(
@@ -623,10 +458,9 @@ impl CoreController {
                 correlation,
                 result,
             }) => {
-                if self.in_flight_startup_check.as_ref() != Some(&correlation) {
+                if !self.startup.accept(&correlation) {
                     return self.unchanged_outcome();
                 }
-                self.in_flight_startup_check = None;
                 self.state.apply_startup_result(result);
                 self.startup_changed_outcome(correlation, Vec::new())
             }
@@ -707,7 +541,6 @@ impl CoreController {
                 else {
                     return self.unchanged_outcome();
                 };
-                self.approval_review_persistence.invalidate_conversation();
                 self.state.apply_conversation_result(result);
                 self.conversation_changed_outcome(
                     Some(correlation),
@@ -718,10 +551,9 @@ impl CoreController {
                 correlation,
                 result,
             }) => {
-                if self.active_parallel_peek_load.as_ref() != Some(&correlation) {
+                if !self.read_models.accept_parallel_peek_load(&correlation) {
                     return self.unchanged_outcome();
                 }
-                self.active_parallel_peek_load = None;
                 CoreDispatchOutcome {
                     events: vec![AppEvent::ParallelPeekConversationLoaded {
                         correlation,
@@ -735,10 +567,9 @@ impl CoreController {
                 correlation,
                 snapshot,
             }) => {
-                if self.active_review_center_load.as_ref() != Some(&correlation) {
+                if !self.read_models.accept_review_center_load(&correlation) {
                     return self.unchanged_outcome();
                 }
-                self.active_review_center_load = None;
                 CoreDispatchOutcome {
                     events: vec![AppEvent::ReviewCenterLoaded {
                         correlation,
@@ -752,10 +583,9 @@ impl CoreController {
                 correlation,
                 result,
             }) => {
-                if self.active_queue_authority_load.as_ref() != Some(&correlation) {
+                if !self.read_models.accept_queue_authority_load(&correlation) {
                     return self.unchanged_outcome();
                 }
-                self.active_queue_authority_load = None;
                 CoreDispatchOutcome {
                     events: vec![AppEvent::QueueAuthorityLoaded {
                         correlation,
@@ -769,10 +599,12 @@ impl CoreController {
                 correlation,
                 result,
             }) => {
-                if self.active_directions_maintenance_load.as_ref() != Some(&correlation) {
+                if !self
+                    .read_models
+                    .accept_directions_maintenance_load(&correlation)
+                {
                     return self.unchanged_outcome();
                 }
-                self.active_directions_maintenance_load = None;
                 CoreDispatchOutcome {
                     events: vec![AppEvent::DirectionsMaintenanceLoaded {
                         correlation,
@@ -786,7 +618,7 @@ impl CoreController {
                 correlation,
                 result,
             }) => {
-                if !self.planning_runtime_refresh.accept(&correlation) {
+                if !self.planning.accept_runtime_refresh(&correlation) {
                     return self.unchanged_outcome();
                 }
                 let result = result.map(|snapshot| {
@@ -813,7 +645,7 @@ impl CoreController {
                 if !matches!(
                     &correlation.operation,
                     PlanningWorkspaceOperationKind::Reset { .. }
-                ) || !self.planning_workspace_operations.accept(&correlation)
+                ) || !self.planning.accept_workspace_operation(&correlation)
                 {
                     return self.unchanged_outcome();
                 }
@@ -847,7 +679,7 @@ impl CoreController {
                 if !matches!(
                     &correlation.operation,
                     PlanningWorkspaceOperationKind::StageSimpleDraft
-                ) || !self.planning_workspace_operations.accept(&correlation)
+                ) || !self.planning.accept_workspace_operation(&correlation)
                 {
                     return self.unchanged_outcome();
                 }
@@ -892,7 +724,7 @@ impl CoreController {
                         return self.unchanged_outcome();
                     }
                 }
-                if !self.planning_workspace_operations.accept(&correlation) {
+                if !self.planning.accept_workspace_operation(&correlation) {
                     return self.unchanged_outcome();
                 }
                 CoreDispatchOutcome {
@@ -912,7 +744,7 @@ impl CoreController {
                 else {
                     return self.unchanged_outcome();
                 };
-                if !self.planning_workspace_operations.accept(&correlation) {
+                if !self.planning.accept_workspace_operation(&correlation) {
                     return self.unchanged_outcome();
                 }
                 let result = result.and_then(|result| {
@@ -942,7 +774,7 @@ impl CoreController {
                 if !matches!(
                     &correlation.operation,
                     PlanningWorkspaceOperationKind::LoadSimpleEditor { .. }
-                ) || !self.planning_workspace_operations.accept(&correlation)
+                ) || !self.planning.accept_workspace_operation(&correlation)
                 {
                     return self.unchanged_outcome();
                 }
@@ -980,7 +812,7 @@ impl CoreController {
                 if !matches!(
                     &correlation.operation,
                     PlanningWorkspaceOperationKind::PromoteSimpleDraft { .. }
-                ) || !self.planning_workspace_operations.accept(&correlation)
+                ) || !self.planning.accept_workspace_operation(&correlation)
                 {
                     return self.unchanged_outcome();
                 }
@@ -1017,10 +849,9 @@ impl CoreController {
                 correlation,
                 result,
             }) => {
-                if self.active_queue_mutation.as_ref() != Some(&correlation) {
+                if !self.planning.complete_queue_mutation(&correlation) {
                     return self.unchanged_outcome();
                 }
-                self.active_queue_mutation = None;
                 CoreDispatchOutcome {
                     events: vec![AppEvent::QueueMutationCompleted {
                         correlation,
@@ -1103,7 +934,9 @@ impl CoreController {
                 correlation,
                 result,
             }) => {
-                let Some(settlement) = self.approval_review_persistence.complete(&correlation)
+                let Some(settlement) = self
+                    .conversation_turn
+                    .complete_approval_review_persistence(&correlation)
                 else {
                     return self.unchanged_outcome();
                 };
@@ -1135,48 +968,12 @@ impl CoreController {
             CoreInput::EffectCompleted(
                 CoreEffectCompletion::GithubReviewPollingSetupCompleted {
                     correlation,
-                    mut result,
+                    result,
                 },
             ) => {
-                if self.active_github_review_polling_setup.as_ref() != Some(&correlation) {
-                    return self.unchanged_outcome();
-                }
-                self.active_github_review_polling_setup = None;
-                let Some(request) = self.github_review_polling_setup_request.as_ref() else {
+                let Some(result) = self.github_review.complete_setup(&correlation, result) else {
                     return self.unchanged_outcome();
                 };
-                if request.workspace_directory != correlation.workspace_directory {
-                    return self.unchanged_outcome();
-                }
-                if result.as_ref().is_ok_and(|result| {
-                    matches!(
-                        result,
-                        GithubReviewPollingSetupResult::Active { target }
-                            if !github_review_polling_target_is_valid(target)
-                    )
-                }) {
-                    result =
-                        Err("GitHub review polling setup returned an invalid target".to_string());
-                }
-                if let (
-                    GithubReviewPollingSetupMode::Explicit { target: expected },
-                    Ok(GithubReviewPollingSetupResult::Active { target: actual }),
-                ) = (&request.mode, &result)
-                    && expected != actual
-                {
-                    result =
-                        Err("GitHub review polling setup returned a different target".to_string());
-                }
-                match &result {
-                    Ok(GithubReviewPollingSetupResult::Active { target }) => {
-                        self.github_review_polling_setup_correlation = Some(correlation.clone());
-                        self.github_review_poll_target = Some(target.clone());
-                    }
-                    Ok(GithubReviewPollingSetupResult::Disabled) | Err(_) => {
-                        self.github_review_polling_setup_correlation = None;
-                        self.github_review_poll_target = None;
-                    }
-                }
                 CoreDispatchOutcome {
                     events: vec![AppEvent::GithubReviewPollingSetupCompleted {
                         correlation,
@@ -1188,23 +985,11 @@ impl CoreController {
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::GithubReviewPollCompleted {
                 correlation,
-                mut result,
+                result,
             }) => {
-                if self.active_github_review_poll.as_ref() != Some(&correlation) {
+                let Some(result) = self.github_review.complete_poll(&correlation, result) else {
                     return self.unchanged_outcome();
-                }
-                self.active_github_review_poll = None;
-                if result
-                    .as_ref()
-                    .is_ok_and(|poll| poll.snapshot.target != correlation.target)
-                {
-                    result =
-                        Err("GitHub review poll provider returned a different target".to_string());
-                }
-                if let Ok(poll) = &result {
-                    self.github_review_poll_cursor =
-                        Some((correlation.target.clone(), poll.next_state.clone()));
-                }
+                };
                 CoreDispatchOutcome {
                     events: vec![AppEvent::GithubReviewPollCompleted {
                         correlation,
@@ -1215,21 +1000,19 @@ impl CoreController {
                 }
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::ManualPromptPrepared(result)) => {
-                let Some(active) = self.in_flight_manual_prompt_preparation.as_ref() else {
+                let Some(disposition) = self
+                    .planning
+                    .complete_manual_prompt_preparation(result.correlation())
+                else {
                     return CoreDispatchOutcome {
                         events: Vec::new(),
                         effects: Vec::new(),
                         snapshot: self.shared_snapshot(),
                     };
                 };
-                if active.correlation != *result.correlation() {
-                    return self.unchanged_outcome();
-                }
-                let cancelled = active.cancelled;
-                self.in_flight_manual_prompt_preparation = None;
                 let snapshot = self.shared_snapshot();
                 CoreDispatchOutcome {
-                    events: (!cancelled)
+                    events: (disposition == ManualPromptCompletionDisposition::Publish)
                         .then_some(AppEvent::ManualPromptPrepared(result))
                         .into_iter()
                         .collect(),
@@ -1247,13 +1030,13 @@ impl CoreController {
                 {
                     return self.unchanged_outcome();
                 }
-                self.planning_worker_panel_history_seed =
-                    execution.planning_worker_panel_state.clone();
+                self.planning
+                    .accept_post_turn_worker_panel(execution.as_ref());
                 let workspace_directory = execution.runtime_projection_workspace_directory.clone();
                 let refresh_matches_workspace = self
-                    .planning_runtime_refresh
-                    .matches_workspace(&workspace_directory);
-                let should_apply_projection = if self.planning_runtime_refresh.has_active() {
+                    .planning
+                    .runtime_refresh_matches_workspace(&workspace_directory);
+                let should_apply_projection = if self.planning.runtime_refresh_has_active() {
                     refresh_matches_workspace
                 } else {
                     self.state
@@ -1334,9 +1117,9 @@ impl CoreController {
                 projection,
             } => {
                 let refresh_matches_workspace = self
-                    .planning_runtime_refresh
-                    .matches_workspace(&workspace_directory);
-                if self.planning_runtime_refresh.has_active() && !refresh_matches_workspace {
+                    .planning
+                    .runtime_refresh_matches_workspace(&workspace_directory);
+                if self.planning.runtime_refresh_has_active() && !refresh_matches_workspace {
                     return self.unchanged_outcome();
                 }
                 let changed = self
@@ -1365,8 +1148,8 @@ impl CoreController {
         workspace_directory: &str,
     ) -> (Vec<AppEvent>, Vec<CoreEffect>) {
         let Some((replacement, superseded)) = self
-            .planning_runtime_refresh
-            .restart_if_matches(workspace_directory)
+            .planning
+            .restart_runtime_refresh_if_matches(workspace_directory)
         else {
             return (Vec::new(), Vec::new());
         };
@@ -1421,7 +1204,7 @@ impl CoreController {
         {
             return self.unchanged_outcome();
         }
-        let admission = self.planning_workspace_operations.begin(intent);
+        let admission = self.planning.begin_workspace_operation(intent);
         let effects = match &admission {
             PlanningWorkspaceOperationAdmission::Started { correlation } => {
                 let effect = match &correlation.operation {
@@ -1480,7 +1263,7 @@ impl CoreController {
         {
             return self.unchanged_outcome();
         }
-        let admission = self.planning_workspace_operations.begin(
+        let admission = self.planning.begin_workspace_operation(
             PlanningWorkspaceOperationIntent::mutate_editor(workspace_directory, identity.clone()),
         );
         let effects = match &admission {
@@ -1507,8 +1290,8 @@ impl CoreController {
         thread_id: String,
         fallback_workspace_directory: String,
     ) -> CoreDispatchOutcome {
-        self.reset_planning_worker_panel_history_seed();
-        let cancelled_refresh = self.planning_runtime_refresh.cancel();
+        self.planning.reset_worker_panel_history();
+        let cancelled_refresh = self.planning.cancel_runtime_refresh();
         let blocked_by_session_rename = self
             .session_feature
             .active_rename_matches_thread(&thread_id);
@@ -1528,7 +1311,6 @@ impl CoreController {
                 fallback_workspace_directory,
                 stop_effects,
             } => {
-                self.approval_review_persistence.invalidate_conversation();
                 self.state.mark_conversation_loading();
                 let mut effects = stop_effects_from_intents(stop_effects);
                 effects.push(CoreEffect::LoadConversation {
@@ -1580,10 +1362,6 @@ impl CoreController {
         }
     }
 
-    fn reset_planning_worker_panel_history_seed(&mut self) {
-        self.planning_worker_panel_history_seed = PlanningWorkerPanelState::default();
-    }
-
     #[cfg(test)]
     fn active_post_turn_evaluation_correlation(&self) -> Option<&PostTurnEvaluationCorrelation> {
         self.conversation_turn
@@ -1607,8 +1385,8 @@ impl CoreController {
             .map(AppEvent::turn_stream_snapshot_changed)
             .collect();
         let mut effects = stop_effects_from_intents(reduction.stop_effects);
-        if let Some(intent) = reduction.approval_review {
-            effects.extend(self.persist_approval_review(intent));
+        if let Some(correlation) = reduction.approval_review_persistence {
+            effects.push(CoreEffect::PersistApprovalReview { correlation });
         }
         CoreDispatchOutcome {
             events,
@@ -1617,26 +1395,9 @@ impl CoreController {
         }
     }
 
-    fn persist_approval_review(
-        &mut self,
-        intent: ApprovalReviewPersistenceIntent,
-    ) -> impl Iterator<Item = CoreEffect> {
-        self.approval_review_persistence
-            .enqueue(
-                intent.turn_submission,
-                intent.workspace_directory,
-                intent.thread_id,
-                intent.review,
-            )
-            .map(|correlation| CoreEffect::PersistApprovalReview { correlation })
-            .into_iter()
-    }
-
     #[cfg(test)]
     pub(crate) fn begin_test_turn_submission(&mut self) -> TurnSubmissionCorrelation {
         let correlation = self.conversation_turn.begin_test_turn_submission();
-        self.approval_review_persistence
-            .begin_conversation_turn(correlation);
         self.state
             .apply_conversation_runtime_snapshot(self.conversation_turn.runtime_snapshot());
         correlation
@@ -1762,47 +1523,6 @@ fn stop_effects_from_intents(intents: Vec<StopEffectIntent>) -> Vec<CoreEffect> 
         .collect()
 }
 
-fn take_generation(next_generation: &mut u64, operation: &str) -> u64 {
-    let generation = *next_generation;
-    *next_generation = generation
-        .checked_add(1)
-        .unwrap_or_else(|| panic!("{operation} generation exhausted"));
-    generation
-}
-
-fn post_turn_worker_panel_start_state(
-    history_seed: &PlanningWorkerPanelState,
-    request: &PostTurnRequest,
-) -> PlanningWorkerPanelState {
-    let mut state = history_seed.clone();
-    if request.context.planning_settlement_paused {
-        return state;
-    }
-    if request
-        .changed_planning_file_paths
-        .iter()
-        .any(|path| ExecutionSnapshot::captures_path(path))
-    {
-        state.status = PlanningWorkerStatus::RepairRunning;
-        return state;
-    }
-    if request
-        .context
-        .current_runtime_projection
-        .workspace_status()
-        == RuntimeWorkspaceStatus::ReadyNoTask
-        && request
-            .context
-            .current_runtime_projection
-            .queue_idle_policy()
-            == QueueIdlePolicy::Stop
-    {
-        return state;
-    }
-    state.status = PlanningWorkerStatus::RefreshRunning;
-    state
-}
-
 impl Default for CoreController {
     fn default() -> Self {
         Self::new()
@@ -1816,17 +1536,22 @@ mod tests {
     use crate::core::app::{
         ApprovalAuthorityPhase, ApprovalReviewPersistenceCorrelation, AutoFollowPhase,
         ConversationReadySnapshot, ConversationSnapshot, CorePromptOrigin,
-        DirectionsMaintenanceDirectionSnapshot, DirectionsMaintenanceSummarySnapshot,
-        DirectionsSupportingFileStatus, PlanningDoctorSnapshot, PlanningEditorFileSnapshot,
-        PlanningEditorMutationAction, PlanningEditorMutationIdentity,
+        DirectionsMaintenanceDirectionSnapshot, DirectionsMaintenanceLoadCorrelation,
+        DirectionsMaintenanceSummarySnapshot, DirectionsSupportingFileStatus,
+        GithubReviewPollCorrelation, GithubReviewPollingSetupCorrelation,
+        GithubReviewPollingSetupMode, GithubReviewPollingSetupRequest,
+        GithubReviewPollingSetupResult, ManualPromptPreparationAdmission,
+        ManualPromptPreparationIntent, ParallelPeekLoadCorrelation, PlanningDoctorSnapshot,
+        PlanningEditorFileSnapshot, PlanningEditorMutationAction, PlanningEditorMutationIdentity,
         PlanningEditorMutationRequest, PlanningEditorMutationResult, PlanningEditorMutationTarget,
         PlanningEditorSessionIdentity, PlanningEditorSessionSnapshot, PlanningEditorStageSnapshot,
         PlanningEditorStageTarget, PlanningRuntimeRefreshCorrelation,
         PlanningRuntimeRefreshSnapshot, PlanningSimpleDraftPromotionSnapshot,
         PlanningSimpleDraftStageSnapshot, PlanningWorkspaceOperationCorrelation,
         PlanningWorkspaceResetIntent, PlanningWorkspaceResetSnapshot, PlanningWorkspaceResetTarget,
-        QueueAuthorityLoadError, QueueAuthoritySnapshot, QueueMutationCommitSnapshot,
-        QueueMutationIntent, QueueMutationKind, QueueMutationResult, QueueMutationTarget,
+        QueueAuthorityLoadCorrelation, QueueAuthorityLoadError, QueueAuthoritySnapshot,
+        QueueMutationCommitSnapshot, QueueMutationCorrelation, QueueMutationIntent,
+        QueueMutationKind, QueueMutationResult, QueueMutationTarget, ReviewCenterLoadCorrelation,
         ReviewCenterSnapshot, SessionCatalogLoadCorrelation, SessionCatalogReadySnapshot,
         SessionCatalogSnapshot, TurnSubmissionRequest,
     };
@@ -1848,14 +1573,15 @@ mod tests {
         ConversationItemLifecycleSource, ConversationItemOutcome,
     };
     use crate::domain::github_review::{
-        GithubPullRequestActivitySnapshot, GithubPullRequestPollResult,
+        GithubPullRequestActivitySnapshot, GithubPullRequestPollResult, GithubPullRequestPollState,
+        GithubPullRequestTarget,
     };
     use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeReadinessState};
     use crate::domain::planning::{
-        ManualPromptOutcome, ManualPromptRequest, PlanningWorkerPanelState, PlanningWorkerStatus,
-        PostTurnContext, PostTurnContinuationGate, PostTurnContinuationPermit, PostTurnRequest,
-        QueueIdlePolicy, RESULT_OUTPUT_FILE_PATH, RuntimeProjection, TaskStatus,
-        TurnSnapshotCapture,
+        ManualPromptCorrelation, ManualPromptOutcome, ManualPromptRequest,
+        PlanningWorkerPanelState, PlanningWorkerStatus, PostTurnContext, PostTurnContinuationGate,
+        PostTurnContinuationPermit, PostTurnRequest, QueueIdlePolicy, RESULT_OUTPUT_FILE_PATH,
+        RuntimeProjection, TaskStatus, TurnSnapshotCapture,
     };
     use crate::domain::recent_sessions::{RecentSessions, SessionRenameRequest};
     use crate::domain::session_summary::SessionSummary;
@@ -4576,7 +4302,7 @@ mod tests {
     #[should_panic(expected = "planning runtime refresh generation exhausted")]
     fn planning_runtime_refresh_generation_overflow_fails_closed() {
         let mut controller = CoreController::new();
-        controller.planning_runtime_refresh.exhaust_generation();
+        controller.planning.exhaust_runtime_refresh_generation();
 
         controller.handle_input(CoreInput::Command(AppCommand::RefreshPlanningRuntime {
             workspace_directory: "/tmp/workspace".to_string(),
@@ -4662,7 +4388,7 @@ mod tests {
     #[should_panic(expected = "queue mutation generation exhausted")]
     fn queue_mutation_generation_panics_before_it_can_wrap() {
         let mut controller = CoreController::new();
-        controller.next_queue_mutation_generation = u64::MAX;
+        controller.planning.exhaust_queue_mutation_generation();
 
         controller.handle_input(CoreInput::Command(AppCommand::SubmitQueueMutation(
             Box::new(queue_mutation_intent(
@@ -6196,7 +5922,7 @@ mod tests {
     #[should_panic(expected = "GitHub review polling setup generation exhausted")]
     fn github_review_setup_generation_panics_before_it_can_wrap() {
         let mut controller = CoreController::new();
-        controller.next_github_review_polling_setup_generation = u64::MAX;
+        controller.github_review.exhaust_setup_generation();
 
         controller.handle_input(CoreInput::Command(AppCommand::SetupGithubReviewPolling(
             github_review_setup_request(
@@ -6215,7 +5941,7 @@ mod tests {
             "/workspace",
             GithubPullRequestTarget::new("acme/widgets", 42),
         );
-        controller.next_github_review_poll_generation = u64::MAX;
+        controller.github_review.exhaust_poll_generation();
 
         controller.handle_input(CoreInput::Command(AppCommand::PollGithubReview));
     }
@@ -6473,14 +6199,8 @@ mod tests {
                 correlation: first_correlation.clone(),
             }]
         );
-        assert!(
-            controller
-                .in_flight_manual_prompt_preparation
-                .as_ref()
-                .is_some_and(|active| {
-                    active.correlation == first_correlation && active.cancelled
-                })
-        );
+        assert!(controller.planning.manual_prompt_preparation_is_active());
+        assert!(controller.planning.manual_prompt_preparation_is_cancelled());
 
         let second_correlation = manual_prompt_correlation(2, "/tmp/other-workspace");
         let blocked_second = controller.handle_input(CoreInput::Command(
@@ -6508,7 +6228,7 @@ mod tests {
             })),
         ));
         assert!(late.events.is_empty());
-        assert!(controller.in_flight_manual_prompt_preparation.is_none());
+        assert!(!controller.planning.manual_prompt_preparation_is_active());
 
         let second = controller.handle_input(CoreInput::Command(AppCommand::PrepareManualPrompt(
             Box::new(manual_prompt_intent(
@@ -6534,7 +6254,7 @@ mod tests {
             current.events.as_slice(),
             [AppEvent::ManualPromptPrepared(_)]
         ));
-        assert!(controller.in_flight_manual_prompt_preparation.is_none());
+        assert!(!controller.planning.manual_prompt_preparation_is_active());
 
         let back_to_first = controller.handle_input(CoreInput::Command(
             AppCommand::PrepareManualPrompt(Box::new(manual_prompt_intent(
@@ -7226,8 +6946,8 @@ mod tests {
         ));
         assert!(forged.events.is_empty());
         assert_eq!(
-            controller.active_queue_mutation,
-            Some(first_correlation.clone())
+            controller.planning.active_queue_mutation(),
+            Some(&first_correlation)
         );
 
         let first = controller.handle_input(CoreInput::EffectCompleted(
@@ -7256,8 +6976,8 @@ mod tests {
         ));
         assert!(stale.events.is_empty());
         assert_eq!(
-            controller.active_queue_mutation,
-            Some(second_correlation.clone())
+            controller.planning.active_queue_mutation(),
+            Some(&second_correlation)
         );
 
         let second = controller.handle_input(CoreInput::EffectCompleted(
@@ -7642,7 +7362,9 @@ mod tests {
             ),
         ] {
             let mut controller = CoreController::new();
-            controller.planning_worker_panel_history_seed = history_seed.clone();
+            controller
+                .planning
+                .replace_worker_panel_history(history_seed.clone());
             apply_completed_turn(&mut controller, "thread-1", "turn-1");
             if request.context.planning_settlement_paused {
                 controller.handle_input(CoreInput::Command(AppCommand::PausePostTurnContinuation));
@@ -7651,7 +7373,8 @@ mod tests {
                 AppCommand::EvaluatePostTurn(Box::new(request)),
             ));
             assert_eq!(
-                controller.planning_worker_panel_history_seed, history_seed,
+                controller.planning.worker_panel_history(),
+                &history_seed,
                 "{label} start must not replace exact-accepted panel history"
             );
             assert!(
@@ -7699,12 +7422,15 @@ mod tests {
             last_summary: Some("last accepted evaluation".to_string()),
             ..PlanningWorkerPanelState::default()
         };
-        controller.planning_worker_panel_history_seed = initial_history.clone();
+        controller
+            .planning
+            .replace_worker_panel_history(initial_history.clone());
         apply_completed_turn(&mut controller, "thread-1", "turn-1");
         let started = start_post_turn_evaluation(&mut controller, "turn-1");
         let correlation = post_turn_effect_correlation(&started);
         assert_eq!(
-            controller.planning_worker_panel_history_seed, initial_history,
+            controller.planning.worker_panel_history(),
+            &initial_history,
             "a started effect is not accepted panel history"
         );
 
@@ -7723,7 +7449,8 @@ mod tests {
         ));
         assert!(stale.events.is_empty());
         assert_eq!(
-            controller.planning_worker_panel_history_seed, initial_history,
+            controller.planning.worker_panel_history(),
+            &initial_history,
             "a mismatched completion must not replace panel history"
         );
 
@@ -7747,7 +7474,8 @@ mod tests {
             ))
         );
         assert_eq!(
-            controller.planning_worker_panel_history_seed, accepted_history,
+            controller.planning.worker_panel_history(),
+            &accepted_history,
             "only the exact accepted completion becomes the next history seed"
         );
 
@@ -7766,7 +7494,8 @@ mod tests {
         ));
         assert!(duplicate.events.is_empty());
         assert_eq!(
-            controller.planning_worker_panel_history_seed, accepted_history,
+            controller.planning.worker_panel_history(),
+            &accepted_history,
             "a duplicate completion must not replace exact accepted history"
         );
     }
@@ -7779,23 +7508,27 @@ mod tests {
             ..PlanningWorkerPanelState::default()
         };
         let mut controller = CoreController::new();
-        controller.planning_worker_panel_history_seed = retained_history.clone();
+        controller
+            .planning
+            .replace_worker_panel_history(retained_history.clone());
 
         controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
             thread_id: "thread-2".to_string(),
             fallback_workspace_directory: "/tmp/workspace".to_string(),
         }));
         assert_eq!(
-            controller.planning_worker_panel_history_seed,
-            PlanningWorkerPanelState::default(),
+            controller.planning.worker_panel_history(),
+            &PlanningWorkerPanelState::default(),
             "a conversation load intent must clear the previous panel history"
         );
 
-        controller.planning_worker_panel_history_seed = retained_history;
+        controller
+            .planning
+            .replace_worker_panel_history(retained_history);
         controller.handle_input(CoreInput::Command(AppCommand::InvalidateConversationLoad));
         assert_eq!(
-            controller.planning_worker_panel_history_seed,
-            PlanningWorkerPanelState::default(),
+            controller.planning.worker_panel_history(),
+            &PlanningWorkerPanelState::default(),
             "opening a new conversation lifecycle must clear panel history"
         );
     }
@@ -7994,7 +7727,9 @@ mod tests {
                 last_summary: Some(format!("retained after {label}")),
                 ..PlanningWorkerPanelState::default()
             };
-            controller.planning_worker_panel_history_seed = retained_history.clone();
+            controller
+                .planning
+                .replace_worker_panel_history(retained_history.clone());
 
             let changed = controller.handle_input(CoreInput::Command(command));
 
@@ -8064,7 +7799,8 @@ mod tests {
                 "{label} stale completion must not disturb the new manual turn"
             );
             assert_eq!(
-                controller.planning_worker_panel_history_seed, retained_history,
+                controller.planning.worker_panel_history(),
+                &retained_history,
                 "{label} stale completion must not apply its projection history"
             );
         }
@@ -8497,7 +8233,9 @@ mod tests {
             last_summary: Some("accepted before ABA".to_string()),
             ..PlanningWorkerPanelState::default()
         };
-        controller.planning_worker_panel_history_seed = initial_history.clone();
+        controller
+            .planning
+            .replace_worker_panel_history(initial_history.clone());
 
         apply_completed_turn(&mut controller, "thread-1", "turn-1");
         let first = start_post_turn_evaluation_for(
@@ -8521,7 +8259,9 @@ mod tests {
         let second_correlation = post_turn_effect_correlation(&second);
 
         controller.handle_input(CoreInput::Command(AppCommand::InvalidateConversationLoad));
-        controller.planning_worker_panel_history_seed = initial_history.clone();
+        controller
+            .planning
+            .replace_worker_panel_history(initial_history.clone());
         apply_completed_turn(&mut controller, "thread-1", "turn-1");
         let current = start_post_turn_evaluation_for(
             &mut controller,
@@ -8573,7 +8313,8 @@ mod tests {
                 "{label} completion must not clear the current A lease"
             );
             assert_eq!(
-                controller.planning_worker_panel_history_seed, initial_history,
+                controller.planning.worker_panel_history(),
+                &initial_history,
                 "{label} completion must not replace the current panel history seed"
             );
         }
@@ -8604,7 +8345,8 @@ mod tests {
                 .is_none()
         );
         assert_eq!(
-            controller.planning_worker_panel_history_seed, accepted_history,
+            controller.planning.worker_panel_history(),
+            &accepted_history,
             "the current exact A completion must replace panel history"
         );
 
@@ -8624,7 +8366,8 @@ mod tests {
         assert!(duplicate.events.is_empty());
         assert!(duplicate.effects.is_empty());
         assert_eq!(
-            controller.planning_worker_panel_history_seed, accepted_history,
+            controller.planning.worker_panel_history(),
+            &accepted_history,
             "a duplicate current A completion must preserve exact accepted history"
         );
     }

@@ -1,14 +1,15 @@
+use super::approval::{ApprovalReviewPersistenceCoordinator, ApprovalReviewPersistenceSettlement};
 use super::conversation_runtime::{ConversationRuntimeAuthority, TurnAuthorityAdmission};
 use super::{
-    ApprovalDecisionAdmission, ApprovalDecisionCorrelation, ConversationLoadCorrelation,
-    ConversationRuntimeSnapshot, PostTurnEvaluationCorrelation, PostTurnRouteResolution,
-    SessionRenameCorrelation, StopRequestAdmission, StopRequestAttempt, StopRequestCorrelation,
-    TurnSteerAdmission, TurnSteerCorrelation, TurnStreamEvent, TurnStreamSnapshot,
-    TurnStreamStartRejection, TurnStreamState, TurnStreamUpdate, TurnSubmissionAdmission,
-    TurnSubmissionCorrelation, TurnSubmissionRequest,
+    ApprovalDecisionAdmission, ApprovalDecisionCorrelation, ApprovalReviewPersistenceCorrelation,
+    ConversationLoadCorrelation, ConversationRuntimeSnapshot, PostTurnEvaluationCorrelation,
+    PostTurnRouteResolution, SessionRenameCorrelation, StopRequestAdmission, StopRequestAttempt,
+    StopRequestCorrelation, TurnSteerAdmission, TurnSteerCorrelation, TurnStreamEvent,
+    TurnStreamSnapshot, TurnStreamStartRejection, TurnStreamState, TurnStreamUpdate,
+    TurnSubmissionAdmission, TurnSubmissionCorrelation, TurnSubmissionRequest,
 };
 use crate::domain::conversation::{
-    ConversationApprovalDecision, ConversationApprovalRequestIdentity, ConversationApprovalReview,
+    ConversationApprovalDecision, ConversationApprovalRequestIdentity,
     ConversationTurnSteerReceipt, ConversationTurnSteerRequest,
 };
 use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProjection;
@@ -79,18 +80,10 @@ pub(super) struct ConversationLifecycleReduction {
 }
 
 #[derive(Debug)]
-pub(super) struct ApprovalReviewPersistenceIntent {
-    pub(super) turn_submission: TurnSubmissionCorrelation,
-    pub(super) workspace_directory: String,
-    pub(super) thread_id: String,
-    pub(super) review: ConversationApprovalReview,
-}
-
-#[derive(Debug)]
 pub(super) struct TurnStreamReduction {
     pub(super) snapshots: Vec<TurnStreamSnapshot>,
     pub(super) stop_effects: Vec<StopEffectIntent>,
-    pub(super) approval_review: Option<ApprovalReviewPersistenceIntent>,
+    pub(super) approval_review_persistence: Option<ApprovalReviewPersistenceCorrelation>,
 }
 
 #[derive(Debug)]
@@ -117,6 +110,7 @@ pub(super) struct ConversationTurnFeatureReducer {
     next_turn_steer_generation: u64,
     active_turn_steer: Option<ActiveTurnSteer>,
     next_approval_decision_generation: u64,
+    approval_review_persistence: ApprovalReviewPersistenceCoordinator,
 }
 
 impl std::fmt::Debug for ConversationTurnFeatureReducer {
@@ -156,6 +150,7 @@ impl ConversationTurnFeatureReducer {
             next_turn_steer_generation: 1,
             active_turn_steer: None,
             next_approval_decision_generation: 1,
+            approval_review_persistence: ApprovalReviewPersistenceCoordinator::new(),
         }
     }
 
@@ -194,6 +189,7 @@ impl ConversationTurnFeatureReducer {
         self.active_stop_request = None;
         self.active_turn_steer = None;
         self.conversation_runtime.invalidate_conversation();
+        self.approval_review_persistence.invalidate_conversation();
         self.guarded_session_rename_stream = None;
         let correlation = ConversationLoadCorrelation::new(
             take_generation(
@@ -226,6 +222,7 @@ impl ConversationTurnFeatureReducer {
         self.invalidate_stop_request_for_lifecycle(&mut stop_effects);
         self.active_turn_steer = None;
         self.conversation_runtime.invalidate_conversation();
+        self.approval_review_persistence.invalidate_conversation();
         self.guarded_session_rename_stream = None;
         self.turn_stream_state = TurnStreamState::new();
         ConversationLifecycleReduction { stop_effects }
@@ -245,6 +242,7 @@ impl ConversationTurnFeatureReducer {
         self.invalidate_stop_request_for_lifecycle(&mut stop_effects);
         self.active_turn_steer = None;
         self.conversation_runtime.invalidate_conversation();
+        self.approval_review_persistence.invalidate_conversation();
         self.guarded_session_rename_stream = None;
         self.turn_stream_state = TurnStreamState::new();
         if let Some(identity) = loaded_identity {
@@ -306,6 +304,8 @@ impl ConversationTurnFeatureReducer {
         ));
         self.guarded_session_rename_stream = None;
         self.conversation_runtime.begin_turn(correlation, request);
+        self.approval_review_persistence
+            .begin_conversation_turn(correlation);
         self.turn_stream_state.begin_submission();
         self.prune_post_turn_evaluation_for_lifecycle();
         TurnSubmissionAdmission::Accepted { correlation }
@@ -369,7 +369,25 @@ impl ConversationTurnFeatureReducer {
                 self.conversation_runtime
                     .clear_pending_approval(request_identity);
             }
-            _ => {}
+            TurnStreamUpdate::AttachmentObserved { .. }
+            | TurnStreamUpdate::SessionRenamed { .. }
+            | TurnStreamUpdate::ThreadPrepared { .. }
+            | TurnStreamUpdate::TurnStartedIgnored { .. }
+            | TurnStreamUpdate::RuntimeEnvelopeObserved { .. }
+            | TurnStreamUpdate::ItemLifecycleObserved { .. }
+            | TurnStreamUpdate::ProgressiveActivityObserved { .. }
+            | TurnStreamUpdate::StatusUpdated { .. }
+            | TurnStreamUpdate::AgentMessageCompleted { .. }
+            | TurnStreamUpdate::ToolActivity { .. }
+            | TurnStreamUpdate::ApprovalResolutionIgnored { .. }
+            | TurnStreamUpdate::TurnInterruptRequestFailed { .. }
+            | TurnStreamUpdate::TurnRetrying { .. }
+            | TurnStreamUpdate::TurnCompleted { .. }
+            | TurnStreamUpdate::TurnTerminal { .. }
+            | TurnStreamUpdate::TurnTerminalIgnored { .. }
+            | TurnStreamUpdate::Failed { .. }
+            | TurnStreamUpdate::RuntimeFailureIgnored { .. }
+            | TurnStreamUpdate::RuntimeNotice { .. } => {}
         }
         let closes_submission = matches!(
             &stream_snapshot.update,
@@ -399,19 +417,19 @@ impl ConversationTurnFeatureReducer {
                 ..
             }
         );
-        let approval_review = match &stream_snapshot.update {
+        let approval_review_persistence = match &stream_snapshot.update {
             TurnStreamUpdate::ApprovalReviewUpdated { review } => stream_snapshot
                 .cwd
                 .clone()
                 .zip(stream_snapshot.thread_id.clone())
-                .map(
-                    |(workspace_directory, thread_id)| ApprovalReviewPersistenceIntent {
-                        turn_submission: correlation,
+                .and_then(|(workspace_directory, thread_id)| {
+                    self.approval_review_persistence.enqueue(
+                        correlation,
                         workspace_directory,
                         thread_id,
-                        review: review.clone(),
-                    },
-                ),
+                        review.clone(),
+                    )
+                }),
             _ => None,
         };
         let mut snapshots = vec![stream_snapshot];
@@ -451,8 +469,15 @@ impl ConversationTurnFeatureReducer {
         Some(TurnStreamReduction {
             snapshots,
             stop_effects,
-            approval_review,
+            approval_review_persistence,
         })
+    }
+
+    pub(super) fn complete_approval_review_persistence(
+        &mut self,
+        correlation: &ApprovalReviewPersistenceCorrelation,
+    ) -> Option<ApprovalReviewPersistenceSettlement> {
+        self.approval_review_persistence.complete(correlation)
     }
 
     pub(super) fn apply_runtime_notice(&mut self, notice: String) -> TurnStreamSnapshot {

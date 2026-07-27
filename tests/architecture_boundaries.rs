@@ -1914,6 +1914,114 @@ fn manual_prompt_and_stop_provider_io_never_run_inline_in_core_effect_dispatch()
 }
 
 #[test]
+fn parallel_control_plane_effect_dispatch_is_ast_exhaustive_and_panic_total() {
+    let effect_source =
+        fs::read_to_string("src/application/service/parallel_mode/control_plane/mod.rs")
+            .expect("parallel control-plane effect source should load");
+    let controller_source =
+        fs::read_to_string("src/application/service/parallel_mode/control_plane/controller.rs")
+            .expect("parallel control-plane controller source should load");
+    let runner_source =
+        fs::read_to_string("src/application/service/parallel_mode/control_plane/effect_runner.rs")
+            .expect("parallel control-plane effect runner source should load");
+
+    verify_parallel_control_plane_effect_totality_contract(
+        &effect_source,
+        &controller_source,
+        &runner_source,
+    )
+    .unwrap_or_else(|error| {
+        panic!("parallel control-plane effect totality contract violated: {error}")
+    });
+}
+
+#[test]
+fn parallel_control_plane_effect_totality_analyzer_rejects_bypasses_without_fixture_noise() {
+    let effect_source =
+        fs::read_to_string("src/application/service/parallel_mode/control_plane/mod.rs")
+            .expect("parallel control-plane effect source should load");
+    let controller_source =
+        fs::read_to_string("src/application/service/parallel_mode/control_plane/controller.rs")
+            .expect("parallel control-plane controller source should load");
+    let runner_source =
+        fs::read_to_string("src/application/service/parallel_mode/control_plane/effect_runner.rs")
+            .expect("parallel control-plane effect runner source should load");
+    let reject = |effect: &str, controller: &str, runner: &str, expected: &str| {
+        let error =
+            verify_parallel_control_plane_effect_totality_contract(effect, controller, runner)
+                .expect_err("mutated parallel effect contract must be rejected");
+        assert!(
+            error.contains(expected),
+            "unexpected parallel effect analyzer failure; expected `{expected}`, got `{error}`"
+        );
+    };
+
+    reject(
+        &effect_source.replacen(
+            "pub enum ParallelModeControlPlaneEffect {",
+            "pub enum ParallelModeControlPlaneEffect {\n    Unsettled,",
+            1,
+        ),
+        &controller_source,
+        &runner_source,
+        "enum variants must exactly match",
+    );
+    reject(
+        &effect_source,
+        &controller_source.replacen(
+            "ParallelModeControlPlaneEffect::EnterParallelMode {",
+            "_ /* hidden bypass */ | ParallelModeControlPlaneEffect::EnterParallelMode {",
+            1,
+        ),
+        &runner_source,
+        "or-patterns are forbidden",
+    );
+    reject(
+        &effect_source,
+        &controller_source.replacen(
+            "initial_pool_reset_required,\n            } => {",
+            "initial_pool_reset_required,\n            } if true => {",
+            1,
+        ),
+        &runner_source,
+        "must not use a match guard",
+    );
+    reject(
+        &effect_source,
+        &controller_source.replacen(
+            "                    return self.drain_outcome(outcome);",
+            "                    return Vec::new();",
+            1,
+        ),
+        &runner_source,
+        "explicit synchronous settlement",
+    );
+    reject(
+        &effect_source,
+        &controller_source,
+        &runner_source.replacen(
+            "spawn_parallel_effect_completion_worker(event_sink, panic_completion, move || {",
+            "spawn_unchecked_worker(event_sink, panic_completion, move || {",
+            1,
+        ),
+        "shared panic-total completion sink",
+    );
+
+    let fixture_controller = format!(
+        "{controller_source}\n#[cfg(test)] mod bypass_fixture {{ fn run_effect() {{ match () {{ _ if true => std::thread::spawn(|| {{}}), _ => unreachable!() }}; }} }}",
+    );
+    let fixture_runner = format!(
+        "{runner_source}\n#[cfg(test)] fn spawn_unchecked_fixture() {{ std::thread::spawn(|| panic!(\"fixture\")); }}",
+    );
+    verify_parallel_control_plane_effect_totality_contract(
+        &effect_source,
+        &fixture_controller,
+        &fixture_runner,
+    )
+    .expect("test-only bypass fixtures must not create production false positives");
+}
+
+#[test]
 fn core_layer_does_not_bypass_parallel_control_plane_gate() {
     // Parallel mode already has an application single-writer gate. Core may eventually
     // expose a projection of that state, but it must not own the raw service, host
@@ -2804,6 +2912,7 @@ fn core_conversation_turn_feature_reducer_owns_one_correlated_lifecycle_slice() 
         "next_turn_steer_generation",
         "active_turn_steer",
         "next_approval_decision_generation",
+        "approval_review_persistence",
     ];
     let forbidden_root_fields = [
         "turn_stream_state",
@@ -2823,6 +2932,7 @@ fn core_conversation_turn_feature_reducer_owns_one_correlated_lifecycle_slice() 
         "active_turn_steer",
         "next_approval_decision_generation",
         "active_approval_decision",
+        "approval_review_persistence",
     ];
     for field in &controller_fields {
         let field_name = field
@@ -3139,7 +3249,7 @@ fn core_conversation_turn_feature_reducer_owns_one_correlated_lifecycle_slice() 
         ),
         (
             "complete_post_turn_evaluation(&correlation,execution.as_ref())",
-            "planning_worker_panel_history_seed=execution.planning_worker_panel_state.clone()",
+            "planning.accept_post_turn_worker_panel(execution.as_ref())",
         ),
     ] {
         let gate_position = compact_handle_input
@@ -3163,6 +3273,154 @@ fn core_conversation_turn_feature_reducer_owns_one_correlated_lifecycle_slice() 
             && !app_module.contains("pub mod conversation_turn_reducer;")
             && !app_module.contains("pub use conversation_turn_reducer"),
         "the mutable conversation/turn reducer must remain private to core/app"
+    );
+}
+
+#[test]
+fn core_controller_owns_exactly_seven_private_typed_feature_slices() {
+    let controller_source = fs::read_to_string("src/core/app/controller.rs")
+        .expect("core controller source should load");
+    let app_module_source =
+        fs::read_to_string("src/core/app/mod.rs").expect("core app module source should load");
+    let reducer_sources = core_feature_reducer_sources();
+
+    verify_core_feature_reducer_contract(&controller_source, &app_module_source, &reducer_sources)
+        .unwrap_or_else(|error| panic!("Core feature reducer contract violated: {error}"));
+}
+
+#[test]
+fn core_feature_reducer_analyzer_rejects_raw_writers_without_test_fixture_noise() {
+    let controller_source = fs::read_to_string("src/core/app/controller.rs")
+        .expect("core controller source should load");
+    let app_module_source =
+        fs::read_to_string("src/core/app/mod.rs").expect("core app module source should load");
+    let reducer_sources = core_feature_reducer_sources();
+
+    let raw_controller = controller_source.replacen(
+        "state: AppState,",
+        "state: AppState,\n    next_escaped_generation: u64,",
+        1,
+    );
+    let error =
+        verify_core_feature_reducer_contract(&raw_controller, &app_module_source, &reducer_sources)
+            .expect_err("a raw root generation writer must be rejected");
+    assert!(
+        error.contains("exactly the seven typed private slices"),
+        "unexpected controller analyzer error: {error}"
+    );
+
+    let mut public_field_sources = reducer_sources.clone();
+    let startup = public_field_sources
+        .get_mut("startup_reducer")
+        .expect("startup reducer fixture should exist");
+    let field_name = first_named_struct_field_name(startup, "StartupFeatureReducer")
+        .expect("startup reducer should retain an authority field");
+    *startup = startup.replacen(
+        &format!("    {field_name}:"),
+        &format!("    pub(super) {field_name}:"),
+        1,
+    );
+    let error = verify_core_feature_reducer_contract(
+        &controller_source,
+        &app_module_source,
+        &public_field_sources,
+    )
+    .expect_err("a visible reducer authority field must be rejected");
+    assert!(
+        error.contains("authority fields must remain private"),
+        "unexpected reducer visibility analyzer error: {error}"
+    );
+
+    let mut forbidden_dependency_sources = reducer_sources.clone();
+    forbidden_dependency_sources
+        .get_mut("read_model_reducer")
+        .expect("read-model reducer fixture should exist")
+        .push_str(
+            "\nfn escaped_dependency(_: crate::application::service::PlanningServices, _: AppEvent) {}\n",
+        );
+    let error = verify_core_feature_reducer_contract(
+        &controller_source,
+        &app_module_source,
+        &forbidden_dependency_sources,
+    )
+    .expect_err("a reducer dependency on application or AppEvent must be rejected");
+    assert!(
+        error.contains("forbidden dependency"),
+        "unexpected reducer dependency analyzer error: {error}"
+    );
+
+    let mut harmless_fixture_sources = reducer_sources.clone();
+    harmless_fixture_sources
+        .get_mut("read_model_reducer")
+        .expect("read-model reducer fixture should exist")
+        .push_str(
+            r#"
+const ARCHITECTURE_EXAMPLE: &str = "crate::application::service::PlanningServices AppEvent";
+#[cfg(test)]
+mod architecture_fixture {
+    use crate::application::service::PlanningServices;
+    use super::super::AppEvent;
+    fn fixture(_: PlanningServices, _: AppEvent) {}
+}
+"#,
+        );
+    verify_core_feature_reducer_contract(
+        &controller_source,
+        &app_module_source,
+        &harmless_fixture_sources,
+    )
+    .expect("comments, strings, and test-only fixtures must not create reducer false positives");
+}
+
+#[test]
+fn conversation_turn_runtime_authority_match_is_ast_exhaustive() {
+    let update_source =
+        fs::read_to_string("src/core/app/turn_stream.rs").expect("turn stream source should load");
+    let reducer_source = fs::read_to_string("src/core/app/conversation_turn_reducer.rs")
+        .expect("conversation/turn reducer source should load");
+
+    verify_turn_stream_authority_match_contract(&update_source, &reducer_source)
+        .unwrap_or_else(|error| panic!("TurnStreamUpdate authority match violated: {error}"));
+}
+
+#[test]
+fn conversation_turn_runtime_authority_match_analyzer_rejects_silent_variants() {
+    let update_source =
+        fs::read_to_string("src/core/app/turn_stream.rs").expect("turn stream source should load");
+    let reducer_source = fs::read_to_string("src/core/app/conversation_turn_reducer.rs")
+        .expect("conversation/turn reducer source should load");
+
+    let wildcard_reducer =
+        reducer_source.replacen("TurnStreamUpdate::AttachmentObserved { .. }", "_", 1);
+    let error = verify_turn_stream_authority_match_contract(&update_source, &wildcard_reducer)
+        .expect_err("a wildcard authority arm must be rejected");
+    assert!(
+        error.contains("wildcard patterns are forbidden"),
+        "unexpected TurnStreamUpdate wildcard analyzer error: {error}"
+    );
+
+    let guarded_reducer = reducer_source.replacen(
+        "TurnStreamUpdate::TurnStarted { turn_id, .. } =>",
+        "TurnStreamUpdate::TurnStarted { turn_id, .. } if true =>",
+        1,
+    );
+    let error = verify_turn_stream_authority_match_contract(&update_source, &guarded_reducer)
+        .expect_err("a guarded authority arm must be rejected");
+    assert!(
+        error.contains("must not use a match guard"),
+        "unexpected TurnStreamUpdate guard analyzer error: {error}"
+    );
+
+    let expanded_updates = update_source.replacen(
+        "pub enum TurnStreamUpdate {",
+        "pub enum TurnStreamUpdate {\n    UnsettledAuthority,",
+        1,
+    );
+    let error = verify_turn_stream_authority_match_contract(&expanded_updates, &reducer_source)
+        .expect_err("a newly silent TurnStreamUpdate variant must be rejected");
+    assert!(
+        error.contains("must exactly cover the enum"),
+        "unexpected TurnStreamUpdate coverage analyzer error: {error}"
     );
 }
 
@@ -3448,9 +3706,11 @@ fn tui_planning_runtime_projection_refreshes_enter_through_core_runtime() {
         "Planning doctor and reset recovery must share the typed Core refresh effect"
     );
     let core_controller = fs::read_to_string("src/core/app/controller.rs").unwrap();
+    let planning_reducer = fs::read_to_string("src/core/app/planning_reducer.rs").unwrap();
     assert!(
-        core_controller.contains("planning_runtime_refresh: PlanningRuntimeCoordinator"),
-        "CoreController must delegate planning runtime generation and active-correlation ownership to one coordinator"
+        core_controller.contains("planning: PlanningFeatureReducer")
+            && planning_reducer.contains("runtime_refresh: PlanningRuntimeCoordinator"),
+        "CoreController must delegate planning runtime generation and active-correlation ownership to its planning feature reducer"
     );
     assert!(
         !core_controller.contains("next_planning_runtime_refresh_generation:")
@@ -3461,7 +3721,8 @@ fn tui_planning_runtime_projection_refreshes_enter_through_core_runtime() {
     );
     assert!(
         !core_controller.contains(".settle_workspace(")
-            && core_controller.contains(".restart_if_matches("),
+            && core_controller.contains(".restart_runtime_refresh_if_matches(")
+            && planning_reducer.contains(".restart_if_matches("),
         "planning projection writers must supersede and replace, never settle, an exact refresh operation"
     );
     let effect_runner = fs::read_to_string("src/composition/core_effect_runner.rs").unwrap();
@@ -3644,11 +3905,15 @@ fn tui_planning_reset_enters_through_one_core_owned_async_coordinator() {
     }
 
     let core_controller = fs::read_to_string("src/core/app/controller.rs").unwrap();
+    let planning_reducer = fs::read_to_string("src/core/app/planning_reducer.rs").unwrap();
     assert!(
-        core_controller
-            .contains("planning_workspace_operations: PlanningWorkspaceOperationCoordinator",)
-            && core_controller.contains(".begin(intent)")
-            && core_controller.contains(".accept(&correlation)")
+        core_controller.contains("planning: PlanningFeatureReducer")
+            && planning_reducer
+                .contains("workspace_operations: PlanningWorkspaceOperationCoordinator")
+            && core_controller.contains(".begin_workspace_operation(intent)")
+            && core_controller.contains(".accept_workspace_operation(&correlation)")
+            && planning_reducer.contains(".begin(intent)")
+            && planning_reducer.contains(".accept(correlation)")
             && core_controller.contains("correlation.reset_target() == Some(snapshot.target)")
             && core_controller.contains("PlanningWorkspaceOperationKind::StageSimpleDraft")
             && core_controller.contains("PlanningWorkspaceOperationKind::StageEditor")
@@ -5191,6 +5456,146 @@ fn core_dispatch_snapshots_share_one_copy_on_write_authority() {
         authority_install < event_reduction && event_reduction < live_authority_restore,
         "final authority install, unconditional event reduction, and nested-dispatch restore must keep their transaction order"
     );
+}
+
+#[test]
+fn production_tui_cannot_write_conversation_runtime_semantic_authority() {
+    let root = repo_root();
+    let mut violations = Vec::new();
+    let mut whole_replacements = Vec::new();
+    let mut replacement_calls = Vec::new();
+    let mut snapshot_literals = Vec::new();
+
+    for path in rust_files_under(&root.join("src/adapter/inbound/tui")) {
+        if is_test_only_path(&path) {
+            continue;
+        }
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+        let audit = conversation_runtime_writer_audit(&source)
+            .unwrap_or_else(|error| panic!("failed to audit {}: {error}", path.display()));
+        let relative = relative_path(&root, &path);
+        violations.extend(
+            audit
+                .semantic_writes
+                .into_iter()
+                .map(|write| format!("{relative}:{}:{write}", write.line)),
+        );
+        whole_replacements.extend(
+            audit
+                .whole_replacements
+                .into_iter()
+                .map(|write| (relative.clone(), write.owner, write.line)),
+        );
+        replacement_calls.extend(
+            audit
+                .replacement_calls
+                .into_iter()
+                .map(|write| (relative.clone(), write.owner, write.line)),
+        );
+        snapshot_literals.extend(
+            audit
+                .snapshot_literals
+                .into_iter()
+                .map(|write| format!("{relative}:{}:{write}", write.line)),
+        );
+    }
+
+    assert!(
+        violations.is_empty(),
+        "production TUI must treat ConversationRuntimeSnapshot semantic fields as read-only:\n{}",
+        violations.join("\n")
+    );
+    assert!(
+        snapshot_literals.is_empty(),
+        "production TUI must not mint ConversationRuntimeSnapshot authority:\n{}",
+        snapshot_literals.join("\n")
+    );
+    assert_eq!(
+        whole_replacements
+            .iter()
+            .map(|(path, owner, _)| (path.as_str(), owner.as_str()))
+            .collect::<Vec<_>>(),
+        [(
+            "src/adapter/inbound/tui/app/conversation_model/view_model.rs",
+            "apply_runtime_snapshot",
+        )],
+        "one opaque ConversationViewModel replacement assignment is the only TUI-owned projection writer"
+    );
+    assert_eq!(
+        replacement_calls
+            .iter()
+            .map(|(path, owner, _)| (path.as_str(), owner.as_str()))
+            .collect::<Vec<_>>(),
+        [(
+            "src/adapter/inbound/tui/app/app_runtime.rs",
+            "apply_conversation_runtime_projection",
+        )],
+        "only NativeTuiApp's Core projection installer may replace the immutable runtime snapshot"
+    );
+}
+
+#[test]
+fn conversation_runtime_writer_analyzer_ignores_reads_and_test_fixtures_but_rejects_writes() {
+    let harmless = r#"
+fn render(snapshot: &ConversationRuntimeSnapshot) {
+    let _ = (&snapshot.active_turn, &snapshot.approval, &snapshot.auto_follow.phase);
+    let _example = "snapshot.active_turn = None";
+}
+#[cfg(test)]
+fn install_fixture(mut snapshot: ConversationRuntimeSnapshot) {
+    snapshot.active_turn = None;
+    snapshot.auto_follow.phase = AutoFollowPhase::Idle;
+    let _ = ConversationRuntimeSnapshot {
+        active_turn: None,
+        approval: None,
+        approval_review: None,
+        auto_follow: AutoFollowAuthoritySnapshot::default(),
+        post_turn: PostTurnAuthoritySnapshot::Idle,
+        planning_handoff: None,
+    };
+}
+"#;
+    let harmless_audit =
+        conversation_runtime_writer_audit(harmless).expect("harmless fixture should parse");
+    assert!(
+        harmless_audit.semantic_writes.is_empty()
+            && harmless_audit.whole_replacements.is_empty()
+            && harmless_audit.replacement_calls.is_empty()
+            && harmless_audit.snapshot_literals.is_empty(),
+        "reads, strings, and test-only writers must not create false positives"
+    );
+
+    let direct_write = conversation_runtime_writer_audit(
+        "fn escape(mut snapshot: ConversationRuntimeSnapshot) { snapshot.active_turn = None; }",
+    )
+    .expect("direct-write fixture should parse");
+    assert_eq!(direct_write.semantic_writes.len(), 1);
+
+    let nested_write = conversation_runtime_writer_audit(
+        "fn escape(mut snapshot: ConversationRuntimeSnapshot) { snapshot.auto_follow.phase = AutoFollowPhase::Idle; }",
+    )
+    .expect("nested-write fixture should parse");
+    assert_eq!(nested_write.semantic_writes.len(), 1);
+
+    let mutable_borrow = conversation_runtime_writer_audit(
+        "fn escape(snapshot: &mut ConversationRuntimeSnapshot) { let _ = &mut snapshot.approval; }",
+    )
+    .expect("mutable-borrow fixture should parse");
+    assert_eq!(mutable_borrow.semantic_writes.len(), 1);
+
+    let replacement = conversation_runtime_writer_audit(
+        "fn escape(view: &mut View, snapshot: ConversationRuntimeSnapshot) { view.runtime_snapshot = snapshot; view.apply_runtime_snapshot(snapshot); }",
+    )
+    .expect("replacement fixture should parse");
+    assert_eq!(replacement.whole_replacements.len(), 1);
+    assert_eq!(replacement.replacement_calls.len(), 1);
+
+    let literal = conversation_runtime_writer_audit(
+        "fn escape() { let _ = ConversationRuntimeSnapshot { active_turn: None }; }",
+    )
+    .expect("snapshot literal fixture should parse");
+    assert_eq!(literal.snapshot_literals.len(), 1);
 }
 
 #[test]
@@ -6784,41 +7189,41 @@ fn tui_post_turn_execution_uses_planning_post_turn_facade() {
     let core_controller = fs::read_to_string("src/core/app/controller.rs").unwrap();
     let conversation_turn_reducer =
         fs::read_to_string("src/core/app/conversation_turn_reducer.rs").unwrap();
+    let planning_reducer = fs::read_to_string("src/core/app/planning_reducer.rs").unwrap();
     let core_event = fs::read_to_string("src/core/app/event.rs").unwrap();
     let core_runtime = fs::read_to_string("src/core/runtime/driver.rs").unwrap();
     let tui_runtime = fs::read_to_string("src/adapter/inbound/tui/app/app_runtime.rs").unwrap();
     let tui_tests =
         fs::read_to_string("src/adapter/inbound/tui/app/shell_runtime/tests.rs").unwrap();
 
-    let core_syntax =
-        syn::parse_file(&core_controller).expect("Core controller source should parse");
-    let controller_fields = named_struct_fields(&core_syntax, "CoreController");
-    let history_seed = controller_fields
+    let planning_syntax =
+        syn::parse_file(&planning_reducer).expect("planning reducer source should parse");
+    let planning_fields = named_struct_fields(&planning_syntax, "PlanningFeatureReducer");
+    let history_seed = planning_fields
         .iter()
         .find(|field| {
             field
                 .ident
                 .as_ref()
-                .is_some_and(|ident| ident == "planning_worker_panel_history_seed")
+                .is_some_and(|ident| ident == "worker_panel_history_seed")
         })
-        .expect("CoreController must own the planning-worker panel history seed");
+        .expect("PlanningFeatureReducer must own the planning-worker panel history seed");
     assert!(
         is_named_path_type(&history_seed.ty, "PlanningWorkerPanelState"),
         "Core planning-worker history seed must retain the complete domain panel state"
     );
 
     let start_state =
-        top_level_function_source(&core_controller, "post_turn_worker_panel_start_state");
+        top_level_impl_method_source(&planning_reducer, "begin_post_turn_worker_panel");
     let compact_start_state = start_state
         .chars()
         .filter(|character| !character.is_whitespace())
         .collect::<String>();
     assert!(
-        compact_start_state.contains("history_seed:&PlanningWorkerPanelState")
-            && compact_start_state.contains("request:&PostTurnRequest")
-            && compact_start_state.contains("letmutstate=history_seed.clone()")
+        compact_start_state.contains("request:&PostTurnRequest")
+            && compact_start_state.contains("letmutstate=self.worker_panel_history_seed.clone()")
             && !compact_start_state.contains("request.planning_worker_panel_state"),
-        "Core start-state policy must derive history from its own seed, never the inbound request field"
+        "planning reducer start-state policy must derive history from its own seed, never the inbound request field"
     );
 
     let handle_input_inner = top_level_impl_method_source(&core_controller, "handle_input_inner");
@@ -6827,8 +7232,8 @@ fn tui_post_turn_execution_uses_planning_post_turn_facade() {
         .filter(|character| !character.is_whitespace())
         .collect::<String>();
     assert!(
-        compact_handle_input.contains("post_turn_worker_panel_start_state(")
-            && compact_handle_input.contains("&self.planning_worker_panel_history_seed")
+        compact_handle_input
+            .contains("self.planning.begin_post_turn_worker_panel(request.as_ref())")
             && compact_handle_input.contains("request.as_ref()")
             && compact_handle_input.contains(
                 "request.planning_worker_panel_state=planning_worker_panel_state.clone()"
@@ -6839,9 +7244,7 @@ fn tui_post_turn_execution_uses_planning_post_turn_facade() {
         .find("conversation_turn.complete_post_turn_evaluation(&correlation,execution.as_ref())")
         .expect("Core must delegate exact post-turn settlement to the feature reducer");
     let history_seed_commit = compact_handle_input
-        .find(
-            "self.planning_worker_panel_history_seed=execution.planning_worker_panel_state.clone()",
-        )
+        .find("self.planning.accept_post_turn_worker_panel(execution.as_ref())")
         .expect("Core must retain the accepted completion as the next history seed");
     assert!(
         accepted_reducer_settlement < history_seed_commit,
@@ -6869,21 +7272,18 @@ fn tui_post_turn_execution_uses_planning_post_turn_facade() {
     );
 
     let reset_history_seed =
-        top_level_impl_method_source(&core_controller, "reset_planning_worker_panel_history_seed");
+        top_level_impl_method_source(&planning_reducer, "reset_worker_panel_history");
     let compact_reset_history_seed = reset_history_seed
         .chars()
         .filter(|character| !character.is_whitespace())
         .collect::<String>();
     assert!(
-        compact_reset_history_seed.contains(
-            "self.planning_worker_panel_history_seed=PlanningWorkerPanelState::default()"
-        ),
+        compact_reset_history_seed
+            .contains("self.worker_panel_history_seed=PlanningWorkerPanelState::default()"),
         "conversation lifecycle reset must discard the prior planning-worker panel history"
     );
-    let reset_call_lines = production_callable_reference_lines(
-        &core_controller,
-        "reset_planning_worker_panel_history_seed",
-    );
+    let reset_call_lines =
+        production_callable_reference_lines(&core_controller, "reset_worker_panel_history");
     assert_eq!(
         reset_call_lines.len(),
         2,
@@ -9904,6 +10304,1186 @@ fn renderer_callable_is_forbidden(callable: &str) -> bool {
             | "spawn_blocking"
             | "try_recv"
     )
+}
+
+const CORE_CONTROLLER_SLICE_CONTRACTS: &[(&str, &str)] = &[
+    ("state", "AppState"),
+    ("startup", "StartupFeatureReducer"),
+    ("session_feature", "SessionFeatureReducer"),
+    ("conversation_turn", "ConversationTurnFeatureReducer"),
+    ("read_models", "ReadModelFeatureReducer"),
+    ("planning", "PlanningFeatureReducer"),
+    ("github_review", "GithubReviewFeatureReducer"),
+];
+
+const CORE_FEATURE_REDUCER_CONTRACTS: &[(&str, &str, &str)] = &[
+    (
+        "startup_reducer",
+        "src/core/app/startup_reducer.rs",
+        "StartupFeatureReducer",
+    ),
+    (
+        "session_reducer",
+        "src/core/app/session_reducer.rs",
+        "SessionFeatureReducer",
+    ),
+    (
+        "conversation_turn_reducer",
+        "src/core/app/conversation_turn_reducer.rs",
+        "ConversationTurnFeatureReducer",
+    ),
+    (
+        "read_model_reducer",
+        "src/core/app/read_model_reducer.rs",
+        "ReadModelFeatureReducer",
+    ),
+    (
+        "planning_reducer",
+        "src/core/app/planning_reducer.rs",
+        "PlanningFeatureReducer",
+    ),
+    (
+        "github_review_reducer",
+        "src/core/app/github_review_reducer.rs",
+        "GithubReviewFeatureReducer",
+    ),
+];
+
+fn core_feature_reducer_sources() -> HashMap<String, String> {
+    CORE_FEATURE_REDUCER_CONTRACTS
+        .iter()
+        .map(|(module_name, path, _)| {
+            (
+                (*module_name).to_string(),
+                fs::read_to_string(path)
+                    .unwrap_or_else(|error| panic!("{path} should load: {error}")),
+            )
+        })
+        .collect()
+}
+
+fn verify_core_feature_reducer_contract(
+    controller_source: &str,
+    app_module_source: &str,
+    reducer_sources: &HashMap<String, String>,
+) -> Result<(), String> {
+    let controller_syntax = syn::parse_file(controller_source)
+        .map_err(|error| format!("CoreController source must parse as Rust: {error}"))?;
+    let controller = controller_syntax
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Struct(item)
+                if item.ident == "CoreController" && !attributes_are_test_only(&item.attrs) =>
+            {
+                Some(item)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let [controller] = controller.as_slice() else {
+        return Err(format!(
+            "expected one production CoreController, found {}",
+            controller.len()
+        ));
+    };
+    let syn::Fields::Named(controller_fields) = &controller.fields else {
+        return Err("CoreController must use named fields".to_string());
+    };
+    let actual_fields = controller_fields
+        .named
+        .iter()
+        .map(|field| {
+            let name = field
+                .ident
+                .as_ref()
+                .ok_or_else(|| "CoreController field must be named".to_string())?
+                .to_string();
+            let type_name = simple_unqualified_type_name(&field.ty).ok_or_else(|| {
+                format!("CoreController.{name} must use one unqualified typed slice")
+            })?;
+            if !matches!(field.vis, syn::Visibility::Inherited) {
+                return Err(format!(
+                    "CoreController.{name} must remain a private slice field"
+                ));
+            }
+            Ok((name, type_name))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let expected_fields = CORE_CONTROLLER_SLICE_CONTRACTS
+        .iter()
+        .map(|(name, type_name)| ((*name).to_string(), (*type_name).to_string()))
+        .collect::<Vec<_>>();
+    if actual_fields != expected_fields {
+        return Err(format!(
+            "CoreController must own exactly the seven typed private slices; expected={expected_fields:?}, actual={actual_fields:?}"
+        ));
+    }
+
+    let app_module_syntax = syn::parse_file(app_module_source)
+        .map_err(|error| format!("core app module source must parse as Rust: {error}"))?;
+    for &(module_name, _, reducer_type) in CORE_FEATURE_REDUCER_CONTRACTS {
+        let declarations = app_module_syntax
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                syn::Item::Mod(item) if item.ident == module_name => Some(item),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let [declaration] = declarations.as_slice() else {
+            return Err(format!(
+                "core app must declare exactly one private {module_name} module"
+            ));
+        };
+        if !matches!(declaration.vis, syn::Visibility::Inherited) {
+            return Err(format!(
+                "mutable reducer module {module_name} must remain private to core/app"
+            ));
+        }
+        for item in &app_module_syntax.items {
+            let syn::Item::Use(item_use) = item else {
+                continue;
+            };
+            if matches!(item_use.vis, syn::Visibility::Inherited) {
+                continue;
+            }
+            if use_tree_mentions_identifier(&item_use.tree, module_name)
+                || use_tree_mentions_identifier(&item_use.tree, reducer_type)
+            {
+                return Err(format!(
+                    "mutable reducer {reducer_type} must not be publicly re-exported"
+                ));
+            }
+        }
+
+        let source = reducer_sources
+            .get(module_name)
+            .ok_or_else(|| format!("missing reducer source for {module_name}"))?;
+        let syntax = syn::parse_file(source)
+            .map_err(|error| format!("{module_name} source must parse as Rust: {error}"))?;
+        let reducers = syntax
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                syn::Item::Struct(item)
+                    if item.ident == reducer_type && !attributes_are_test_only(&item.attrs) =>
+                {
+                    Some(item)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let [reducer] = reducers.as_slice() else {
+            return Err(format!(
+                "{module_name} must define exactly one production {reducer_type}"
+            ));
+        };
+        let syn::Fields::Named(fields) = &reducer.fields else {
+            return Err(format!("{reducer_type} must use named authority fields"));
+        };
+        if fields.named.is_empty() {
+            return Err(format!(
+                "{reducer_type} must own at least one typed authority field"
+            ));
+        }
+        for field in &fields.named {
+            if !matches!(field.vis, syn::Visibility::Inherited) {
+                let field_name = field
+                    .ident
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "<unnamed>".to_string());
+                return Err(format!(
+                    "{reducer_type} authority fields must remain private; found visible {field_name}"
+                ));
+            }
+        }
+
+        let mut references = RustSemanticReferenceVisitor::default();
+        references.visit_file(&syntax);
+        expand_semantic_alias_paths(&mut references.references.paths, &references.aliases);
+        for reference in references.references.paths {
+            let identifier = reference.rsplit("::").next().unwrap_or(reference.as_str());
+            let cross_reducer = CORE_FEATURE_REDUCER_CONTRACTS
+                .iter()
+                .any(|(_, _, other_type)| *other_type != reducer_type && *other_type == identifier);
+            let forbidden_type = matches!(
+                identifier,
+                "AppState" | "AppEvent" | "CoreEffect" | "CoreDispatchOutcome"
+            );
+            let forbidden_layer = crate_reference_matches_prefix(&reference, "crate::adapter")
+                || crate_reference_matches_prefix(&reference, "crate::application");
+            if forbidden_type || forbidden_layer || cross_reducer {
+                return Err(format!(
+                    "{reducer_type} has forbidden dependency `{reference}`; reducers must return typed local reductions"
+                ));
+            }
+        }
+
+        for item in &syntax.items {
+            let syn::Item::Impl(item_impl) = item else {
+                continue;
+            };
+            if attributes_are_test_only(&item_impl.attrs)
+                || !type_path_ends_with_ident(item_impl.self_ty.as_ref(), reducer_type)
+            {
+                continue;
+            }
+            if item_impl.trait_.as_ref().is_some_and(|(_, path, _)| {
+                path.segments
+                    .last()
+                    .is_some_and(|segment| segment.ident == "Deref" || segment.ident == "DerefMut")
+            }) {
+                return Err(format!(
+                    "{reducer_type} must not expose raw authority through Deref/DerefMut"
+                ));
+            }
+            for item in &item_impl.items {
+                let syn::ImplItem::Fn(method) = item else {
+                    continue;
+                };
+                if attributes_are_test_only(&method.attrs) {
+                    continue;
+                }
+                if return_type_contains_mutable_reference(&method.sig.output) {
+                    return Err(format!(
+                        "{reducer_type}::{} must not return mutable raw authority",
+                        method.sig.ident
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn simple_unqualified_type_name(ty: &syn::Type) -> Option<String> {
+    let syn::Type::Path(type_path) = ty else {
+        return None;
+    };
+    if type_path.qself.is_some()
+        || type_path.path.leading_colon.is_some()
+        || type_path.path.segments.len() != 1
+        || !matches!(
+            type_path.path.segments[0].arguments,
+            syn::PathArguments::None
+        )
+    {
+        return None;
+    }
+    Some(type_path.path.segments[0].ident.to_string())
+}
+
+fn first_named_struct_field_name(source: &str, struct_name: &str) -> Option<String> {
+    let syntax = syn::parse_file(source).ok()?;
+    let item = syntax.items.iter().find_map(|item| match item {
+        syn::Item::Struct(item) if item.ident == struct_name => Some(item),
+        _ => None,
+    })?;
+    let syn::Fields::Named(fields) = &item.fields else {
+        return None;
+    };
+    fields
+        .named
+        .first()?
+        .ident
+        .as_ref()
+        .map(ToString::to_string)
+}
+
+fn use_tree_mentions_identifier(tree: &syn::UseTree, expected: &str) -> bool {
+    match tree {
+        syn::UseTree::Path(path) => {
+            path.ident == expected || use_tree_mentions_identifier(&path.tree, expected)
+        }
+        syn::UseTree::Name(name) => name.ident == expected,
+        syn::UseTree::Rename(rename) => rename.ident == expected || rename.rename == expected,
+        syn::UseTree::Group(group) => group
+            .items
+            .iter()
+            .any(|tree| use_tree_mentions_identifier(tree, expected)),
+        syn::UseTree::Glob(_) => false,
+    }
+}
+
+fn type_path_ends_with_ident(ty: &syn::Type, expected: &str) -> bool {
+    matches!(
+        ty,
+        syn::Type::Path(type_path)
+            if type_path.qself.is_none()
+                && type_path
+                    .path
+                    .segments
+                    .last()
+                    .is_some_and(|segment| segment.ident == expected)
+    )
+}
+
+fn return_type_contains_mutable_reference(output: &syn::ReturnType) -> bool {
+    struct MutableReferenceVisitor {
+        found: bool,
+    }
+    impl<'ast> Visit<'ast> for MutableReferenceVisitor {
+        fn visit_type_reference(&mut self, reference: &'ast syn::TypeReference) {
+            if reference.mutability.is_some() {
+                self.found = true;
+                return;
+            }
+            visit::visit_type_reference(self, reference);
+        }
+    }
+    let syn::ReturnType::Type(_, ty) = output else {
+        return false;
+    };
+    let mut visitor = MutableReferenceVisitor { found: false };
+    visitor.visit_type(ty);
+    visitor.found
+}
+
+fn verify_turn_stream_authority_match_contract(
+    update_source: &str,
+    reducer_source: &str,
+) -> Result<(), String> {
+    let update_syntax = syn::parse_file(update_source)
+        .map_err(|error| format!("TurnStreamUpdate source must parse as Rust: {error}"))?;
+    let reducer_syntax = syn::parse_file(reducer_source)
+        .map_err(|error| format!("conversation/turn reducer source must parse as Rust: {error}"))?;
+    let update_enums = update_syntax
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Enum(item)
+                if item.ident == "TurnStreamUpdate" && !attributes_are_test_only(&item.attrs) =>
+            {
+                Some(item)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let [updates] = update_enums.as_slice() else {
+        return Err(format!(
+            "expected one production TurnStreamUpdate enum, found {}",
+            update_enums.len()
+        ));
+    };
+    let expected = updates
+        .variants
+        .iter()
+        .map(|variant| variant.ident.to_string())
+        .collect::<HashSet<_>>();
+
+    let methods = inherent_impl_methods(
+        &reducer_syntax,
+        "ConversationTurnFeatureReducer",
+        "apply_correlated_turn_stream_event",
+    );
+    let [method] = methods.as_slice() else {
+        return Err(format!(
+            "expected one ConversationTurnFeatureReducer::apply_correlated_turn_stream_event, found {}",
+            methods.len()
+        ));
+    };
+    let authority_matches = method
+        .block
+        .stmts
+        .iter()
+        .filter_map(|statement| match statement {
+            syn::Stmt::Expr(syn::Expr::Match(expression), None)
+                if expression_is_shared_stream_update(&expression.expr) =>
+            {
+                Some(expression)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let [authority_match] = authority_matches.as_slice() else {
+        return Err(format!(
+            "expected one direct `match &stream_snapshot.update` authority transition, found {}",
+            authority_matches.len()
+        ));
+    };
+    let mut actual = HashSet::new();
+    for arm in &authority_match.arms {
+        if arm.guard.is_some() {
+            return Err(format!(
+                "TurnStreamUpdate authority arm at line {} must not use a match guard",
+                arm.span().start().line
+            ));
+        }
+        for variant in exact_enum_pattern_variants(&arm.pat, "TurnStreamUpdate")? {
+            if !actual.insert(variant.clone()) {
+                return Err(format!(
+                    "TurnStreamUpdate::{variant} must appear in exactly one authority arm"
+                ));
+            }
+        }
+    }
+    if actual != expected {
+        return Err(format!(
+            "TurnStreamUpdate authority match must exactly cover the enum ({})",
+            core_effect_set_difference(&actual, &expected)
+        ));
+    }
+    Ok(())
+}
+
+fn expression_is_shared_stream_update(expression: &syn::Expr) -> bool {
+    matches!(
+        expression,
+        syn::Expr::Reference(reference)
+            if reference.mutability.is_none()
+                && expression_is_field_path(
+                    reference.expr.as_ref(),
+                    "stream_snapshot",
+                    "update",
+                )
+    )
+}
+
+fn exact_enum_pattern_variants(pattern: &syn::Pat, enum_name: &str) -> Result<Vec<String>, String> {
+    match pattern {
+        syn::Pat::Or(pattern) => {
+            let mut variants = Vec::new();
+            for case in &pattern.cases {
+                variants.extend(exact_enum_pattern_variants(case, enum_name)?);
+            }
+            Ok(variants)
+        }
+        syn::Pat::Wild(_) => Err("wildcard patterns are forbidden".to_string()),
+        syn::Pat::Struct(pattern) => {
+            exact_two_segment_enum_variant(&pattern.path, enum_name).map(|variant| vec![variant])
+        }
+        syn::Pat::TupleStruct(pattern) => {
+            exact_two_segment_enum_variant(&pattern.path, enum_name).map(|variant| vec![variant])
+        }
+        syn::Pat::Path(pattern) if pattern.qself.is_none() => {
+            exact_two_segment_enum_variant(&pattern.path, enum_name).map(|variant| vec![variant])
+        }
+        _ => Err(format!(
+            "{enum_name} authority arms may only use exact variant or or-patterns"
+        )),
+    }
+}
+
+fn exact_two_segment_enum_variant(path: &syn::Path, enum_name: &str) -> Result<String, String> {
+    if path.leading_colon.is_some() || path.segments.len() != 2 {
+        return Err(format!(
+            "pattern path must be exactly {enum_name}::<Variant>"
+        ));
+    }
+    let mut segments = path.segments.iter();
+    let owner = segments.next().expect("path length checked");
+    let variant = segments.next().expect("path length checked");
+    if owner.ident != enum_name
+        || !matches!(owner.arguments, syn::PathArguments::None)
+        || !matches!(variant.arguments, syn::PathArguments::None)
+    {
+        return Err(format!(
+            "pattern path must be exactly {enum_name}::<Variant>"
+        ));
+    }
+    Ok(variant.ident.to_string())
+}
+
+#[derive(Debug)]
+struct RuntimeWriterFinding {
+    owner: String,
+    line: usize,
+    detail: String,
+}
+
+impl std::fmt::Display for RuntimeWriterFinding {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}: {}", self.owner, self.detail)
+    }
+}
+
+#[derive(Default)]
+struct ConversationRuntimeWriterAudit {
+    semantic_writes: Vec<RuntimeWriterFinding>,
+    whole_replacements: Vec<RuntimeWriterFinding>,
+    replacement_calls: Vec<RuntimeWriterFinding>,
+    snapshot_literals: Vec<RuntimeWriterFinding>,
+}
+
+fn conversation_runtime_writer_audit(
+    source: &str,
+) -> Result<ConversationRuntimeWriterAudit, String> {
+    let syntax = syn::parse_file(source)
+        .map_err(|error| format!("conversation runtime writer source must parse: {error}"))?;
+    let mut visitor = ConversationRuntimeWriterVisitor::default();
+    visitor.visit_file(&syntax);
+    Ok(visitor.audit)
+}
+
+#[derive(Default)]
+struct ConversationRuntimeWriterVisitor {
+    owner: Option<String>,
+    audit: ConversationRuntimeWriterAudit,
+}
+
+impl ConversationRuntimeWriterVisitor {
+    fn finding(&self, line: usize, detail: impl Into<String>) -> RuntimeWriterFinding {
+        RuntimeWriterFinding {
+            owner: self.owner.clone().unwrap_or_else(|| "<module>".to_string()),
+            line,
+            detail: detail.into(),
+        }
+    }
+
+    fn inspect_write_target(&mut self, expression: &syn::Expr, kind: &str) {
+        let fields = expression_field_chain(expression);
+        if let Some(field) = fields
+            .iter()
+            .find(|field| conversation_runtime_semantic_field(field))
+        {
+            self.audit.semantic_writes.push(self.finding(
+                expression.span().start().line,
+                format!("{kind} reaches semantic field `{field}`"),
+            ));
+        }
+        if fields
+            .last()
+            .is_some_and(|field| field == "runtime_snapshot")
+        {
+            self.audit.whole_replacements.push(self.finding(
+                expression.span().start().line,
+                format!("{kind} replaces the whole runtime snapshot"),
+            ));
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for ConversationRuntimeWriterVisitor {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if item_is_test_only(item) {
+            return;
+        }
+        visit::visit_item(self, item);
+    }
+
+    fn visit_item_fn(&mut self, function: &'ast syn::ItemFn) {
+        if attributes_are_test_only(&function.attrs) {
+            return;
+        }
+        let previous = self.owner.replace(function.sig.ident.to_string());
+        visit::visit_item_fn(self, function);
+        self.owner = previous;
+    }
+
+    fn visit_impl_item(&mut self, item: &'ast syn::ImplItem) {
+        if impl_item_attributes(item).is_some_and(attributes_are_test_only) {
+            return;
+        }
+        let syn::ImplItem::Fn(function) = item else {
+            visit::visit_impl_item(self, item);
+            return;
+        };
+        let previous = self.owner.replace(function.sig.ident.to_string());
+        visit::visit_impl_item_fn(self, function);
+        self.owner = previous;
+    }
+
+    fn visit_expr_assign(&mut self, expression: &'ast syn::ExprAssign) {
+        self.inspect_write_target(expression.left.as_ref(), "assignment");
+        visit::visit_expr_assign(self, expression);
+    }
+
+    fn visit_expr_binary(&mut self, expression: &'ast syn::ExprBinary) {
+        if matches!(
+            expression.op,
+            syn::BinOp::AddAssign(_)
+                | syn::BinOp::SubAssign(_)
+                | syn::BinOp::MulAssign(_)
+                | syn::BinOp::DivAssign(_)
+                | syn::BinOp::RemAssign(_)
+                | syn::BinOp::BitXorAssign(_)
+                | syn::BinOp::BitAndAssign(_)
+                | syn::BinOp::BitOrAssign(_)
+                | syn::BinOp::ShlAssign(_)
+                | syn::BinOp::ShrAssign(_)
+        ) {
+            self.inspect_write_target(expression.left.as_ref(), "compound assignment");
+        }
+        visit::visit_expr_binary(self, expression);
+    }
+
+    fn visit_expr_reference(&mut self, expression: &'ast syn::ExprReference) {
+        if expression.mutability.is_some() {
+            self.inspect_write_target(expression.expr.as_ref(), "mutable borrow");
+        }
+        visit::visit_expr_reference(self, expression);
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        if call.method == "apply_runtime_snapshot" {
+            self.audit.replacement_calls.push(self.finding(
+                call.method.span().start().line,
+                "calls the whole runtime snapshot replacement path",
+            ));
+        }
+        if matches!(
+            call.method.to_string().as_str(),
+            "as_mut" | "borrow_mut" | "get_mut" | "replace" | "take"
+        ) && expression_field_chain(call.receiver.as_ref())
+            .iter()
+            .any(|field| conversation_runtime_semantic_field(field))
+        {
+            self.audit.semantic_writes.push(self.finding(
+                call.method.span().start().line,
+                format!(
+                    "mutable accessor `{}` reaches a semantic runtime field",
+                    call.method
+                ),
+            ));
+        }
+        visit::visit_expr_method_call(self, call);
+    }
+
+    fn visit_expr_struct(&mut self, expression: &'ast syn::ExprStruct) {
+        if expression
+            .path
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == "ConversationRuntimeSnapshot")
+        {
+            self.audit.snapshot_literals.push(self.finding(
+                expression.path.span().start().line,
+                "constructs ConversationRuntimeSnapshot in the TUI",
+            ));
+        }
+        visit::visit_expr_struct(self, expression);
+    }
+}
+
+fn expression_field_chain(expression: &syn::Expr) -> Vec<String> {
+    let mut fields = Vec::new();
+    let mut current = expression;
+    while let syn::Expr::Field(field) = current {
+        if let syn::Member::Named(member) = &field.member {
+            fields.push(member.to_string());
+        }
+        current = field.base.as_ref();
+    }
+    fields.reverse();
+    fields
+}
+
+fn conversation_runtime_semantic_field(field: &str) -> bool {
+    matches!(
+        field,
+        "active_turn"
+            | "approval"
+            | "approval_review"
+            | "auto_follow"
+            | "post_turn"
+            | "planning_handoff"
+    )
+}
+
+const PARALLEL_CONTROL_PLANE_EFFECT_CONTRACTS: &[(&str, &str)] = &[
+    ("EnterParallelMode", "spawn_entry"),
+    ("RefreshSupervisor", "spawn_supervisor_snapshot_refresh"),
+    ("InspectSupervisor", "spawn_supervisor_inspection"),
+    ("RunOrchestrator", "spawn_orchestrator_wake"),
+    ("RunOrchestratorTick", "spawn_orchestrator_tick"),
+    (
+        "PollPendingDispatchWake",
+        "spawn_pending_dispatch_wake_poll",
+    ),
+    ("MutateDispatchCommands", "spawn_dispatch_command_mutation"),
+];
+
+fn verify_parallel_control_plane_effect_totality_contract(
+    effect_source: &str,
+    controller_source: &str,
+    runner_source: &str,
+) -> Result<(), String> {
+    let effect_syntax = syn::parse_file(effect_source)
+        .map_err(|error| format!("parallel effect source must parse as Rust: {error}"))?;
+    let controller_syntax = syn::parse_file(controller_source)
+        .map_err(|error| format!("parallel controller source must parse as Rust: {error}"))?;
+    let runner_syntax = syn::parse_file(runner_source)
+        .map_err(|error| format!("parallel effect runner source must parse as Rust: {error}"))?;
+
+    let effect_enums = effect_syntax
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Enum(item)
+                if item.ident == "ParallelModeControlPlaneEffect"
+                    && !attributes_are_test_only(&item.attrs) =>
+            {
+                Some(item)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let [effect_enum] = effect_enums.as_slice() else {
+        return Err(format!(
+            "expected one production ParallelModeControlPlaneEffect enum, found {}",
+            effect_enums.len()
+        ));
+    };
+    let enum_variants = effect_enum
+        .variants
+        .iter()
+        .map(|variant| variant.ident.to_string())
+        .collect::<HashSet<_>>();
+    let expected_variants = PARALLEL_CONTROL_PLANE_EFFECT_CONTRACTS
+        .iter()
+        .map(|(variant, _)| (*variant).to_string())
+        .collect::<HashSet<_>>();
+    if enum_variants != expected_variants {
+        return Err(format!(
+            "parallel effect enum variants must exactly match audited totality contracts ({})",
+            core_effect_set_difference(&enum_variants, &expected_variants)
+        ));
+    }
+
+    let run_effect = find_inherent_method_ending_type(
+        &controller_syntax,
+        "ParallelModeControlPlaneController",
+        "run_effect",
+    )?;
+    let dispatch = match run_effect.block.stmts.as_slice() {
+        [syn::Stmt::Expr(syn::Expr::Match(dispatch), None)]
+            if expression_is_simple_path(dispatch.expr.as_ref(), &["effect"]) =>
+        {
+            dispatch
+        }
+        _ => {
+            return Err(
+                "parallel controller run_effect must be exactly one `match effect` expression"
+                    .to_string(),
+            );
+        }
+    };
+    let contracts = PARALLEL_CONTROL_PLANE_EFFECT_CONTRACTS
+        .iter()
+        .copied()
+        .collect::<HashMap<_, _>>();
+    let mut arms = HashMap::new();
+    for arm in &dispatch.arms {
+        if arm.guard.is_some() {
+            return Err(format!(
+                "parallel effect dispatch arm at line {} must not use a match guard",
+                arm.span().start().line
+            ));
+        }
+        let variant = exact_parallel_effect_pattern_variant(&arm.pat)?;
+        if arms.insert(variant.clone(), arm).is_some() {
+            return Err(format!(
+                "ParallelModeControlPlaneEffect::{variant} must have exactly one dispatch arm"
+            ));
+        }
+    }
+    if arms.keys().cloned().collect::<HashSet<_>>() != enum_variants {
+        return Err(format!(
+            "parallel effect dispatch arms must exactly match the enum ({})",
+            core_effect_set_difference(
+                &arms.keys().cloned().collect::<HashSet<_>>(),
+                &enum_variants,
+            )
+        ));
+    }
+    for (variant, arm) in arms {
+        let launcher = contracts
+            .get(variant.as_str())
+            .ok_or_else(|| format!("missing parallel effect contract for {variant}"))?;
+        let syn::Expr::Block(body) = arm.body.as_ref() else {
+            return Err(format!(
+                "ParallelModeControlPlaneEffect::{variant} dispatch must use an explicit block"
+            ));
+        };
+        verify_parallel_effect_dispatch_arm(&variant, &body.block, launcher)?;
+    }
+
+    verify_parallel_panic_total_sink(&runner_syntax)?;
+    for &(_, launcher) in PARALLEL_CONTROL_PLANE_EFFECT_CONTRACTS {
+        let method = find_inherent_method_ending_type(
+            &runner_syntax,
+            "ParallelModeControlPlaneEffectRunner",
+            launcher,
+        )?;
+        verify_parallel_effect_launcher(method, launcher)?;
+    }
+    Ok(())
+}
+
+fn find_inherent_method_ending_type<'a>(
+    syntax: &'a syn::File,
+    type_name: &str,
+    method_name: &str,
+) -> Result<&'a syn::ImplItemFn, String> {
+    let methods = syntax
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Impl(item)
+                if item.trait_.is_none()
+                    && !attributes_are_test_only(&item.attrs)
+                    && type_path_ends_with_ident(item.self_ty.as_ref(), type_name) =>
+            {
+                Some(item)
+            }
+            _ => None,
+        })
+        .flat_map(|item| item.items.iter())
+        .filter_map(|item| match item {
+            syn::ImplItem::Fn(method)
+                if method.sig.ident == method_name && !attributes_are_test_only(&method.attrs) =>
+            {
+                Some(method)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if methods.len() != 1 {
+        return Err(format!(
+            "expected one production {type_name}::{method_name}, found {}",
+            methods.len()
+        ));
+    }
+    Ok(methods[0])
+}
+
+fn exact_parallel_effect_pattern_variant(pattern: &syn::Pat) -> Result<String, String> {
+    match pattern {
+        syn::Pat::Or(_) => Err("or-patterns are forbidden in parallel effect dispatch".to_string()),
+        syn::Pat::Wild(_) => {
+            Err("wildcard patterns are forbidden in parallel effect dispatch".to_string())
+        }
+        syn::Pat::Struct(pattern) => {
+            exact_two_segment_enum_variant(&pattern.path, "ParallelModeControlPlaneEffect")
+        }
+        syn::Pat::TupleStruct(pattern) => {
+            exact_two_segment_enum_variant(&pattern.path, "ParallelModeControlPlaneEffect")
+        }
+        syn::Pat::Path(pattern) if pattern.qself.is_none() => {
+            exact_two_segment_enum_variant(&pattern.path, "ParallelModeControlPlaneEffect")
+        }
+        _ => Err(
+            "parallel effect dispatch must use one exact ParallelModeControlPlaneEffect variant"
+                .to_string(),
+        ),
+    }
+}
+
+fn verify_parallel_effect_dispatch_arm(
+    variant: &str,
+    body: &syn::Block,
+    launcher: &str,
+) -> Result<(), String> {
+    let top_level_launchers = body
+        .stmts
+        .iter()
+        .filter_map(direct_parallel_effect_runner_launcher)
+        .collect::<Vec<_>>();
+    if top_level_launchers.as_slice() != [launcher] {
+        return Err(format!(
+            "ParallelModeControlPlaneEffect::{variant} must map to one unconditional top-level self.effect_runner.{launcher}(...); found {top_level_launchers:?}"
+        ));
+    }
+    let mut audit = ParallelEffectDispatchVisitor::default();
+    audit.visit_block(body);
+    if audit.launchers.as_slice() != [launcher] {
+        return Err(format!(
+            "ParallelModeControlPlaneEffect::{variant} must not launch through a bypass; found {:?}",
+            audit.launchers
+        ));
+    }
+    if audit.try_count != 0 {
+        return Err(format!(
+            "ParallelModeControlPlaneEffect::{variant} must not use ? before completion"
+        ));
+    }
+    if variant == "RefreshSupervisor" {
+        if audit.returns != 1 || !refresh_arm_has_exact_sync_settlement(body) {
+            return Err(
+                "RefreshSupervisor's no-snapshot path must use one explicit synchronous settlement"
+                    .to_string(),
+            );
+        }
+    } else if audit.returns != 0 {
+        return Err(format!(
+            "ParallelModeControlPlaneEffect::{variant} must not return before its panic-total worker"
+        ));
+    }
+    Ok(())
+}
+
+fn direct_parallel_effect_runner_launcher(statement: &syn::Stmt) -> Option<String> {
+    let syn::Stmt::Expr(syn::Expr::MethodCall(call), Some(_)) = statement else {
+        return None;
+    };
+    if !expression_is_self_field(call.receiver.as_ref(), "effect_runner")
+        || !call.method.to_string().starts_with("spawn_")
+    {
+        return None;
+    }
+    Some(call.method.to_string())
+}
+
+#[derive(Default)]
+struct ParallelEffectDispatchVisitor {
+    launchers: Vec<String>,
+    returns: usize,
+    try_count: usize,
+}
+
+impl<'ast> Visit<'ast> for ParallelEffectDispatchVisitor {
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        if expression_is_self_field(call.receiver.as_ref(), "effect_runner")
+            && call.method.to_string().starts_with("spawn_")
+        {
+            self.launchers.push(call.method.to_string());
+        }
+        visit::visit_expr_method_call(self, call);
+    }
+
+    fn visit_expr_return(&mut self, expression: &'ast syn::ExprReturn) {
+        self.returns += 1;
+        visit::visit_expr_return(self, expression);
+    }
+
+    fn visit_expr_try(&mut self, expression: &'ast syn::ExprTry) {
+        self.try_count += 1;
+        visit::visit_expr_try(self, expression);
+    }
+}
+
+fn refresh_arm_has_exact_sync_settlement(body: &syn::Block) -> bool {
+    let mut visitor = RefreshSyncSettlementVisitor::default();
+    visitor.visit_block(body);
+    visitor.completion_commands == 1
+        && visitor.runtime_handle_calls == 1
+        && visitor.drain_outcome_returns == 1
+}
+
+#[derive(Default)]
+struct RefreshSyncSettlementVisitor {
+    completion_commands: usize,
+    runtime_handle_calls: usize,
+    drain_outcome_returns: usize,
+}
+
+impl<'ast> Visit<'ast> for RefreshSyncSettlementVisitor {
+    fn visit_expr_struct(&mut self, expression: &'ast syn::ExprStruct) {
+        if path_is_simple(
+            &expression.path,
+            &[
+                "ParallelModeControlPlaneCommand",
+                "SupervisorSnapshotRefreshCompleted",
+            ],
+        ) {
+            self.completion_commands += 1;
+        }
+        visit::visit_expr_struct(self, expression);
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        if call.method == "handle"
+            && matches!(
+                call.receiver.as_ref(),
+                syn::Expr::Field(runtime)
+                    if expression_is_simple_path(runtime.base.as_ref(), &["self"])
+                        && matches!(
+                            &runtime.member,
+                            syn::Member::Named(member) if member == "runtime"
+                        )
+            )
+        {
+            self.runtime_handle_calls += 1;
+        }
+        visit::visit_expr_method_call(self, call);
+    }
+
+    fn visit_expr_return(&mut self, expression: &'ast syn::ExprReturn) {
+        if matches!(
+            expression.expr.as_deref(),
+            Some(syn::Expr::MethodCall(call))
+                if call.method == "drain_outcome"
+                    && expression_is_simple_path(call.receiver.as_ref(), &["self"])
+                    && matches!(
+                        call.args.iter().collect::<Vec<_>>().as_slice(),
+                        [argument] if expression_is_simple_path(argument, &["outcome"])
+                    )
+        ) {
+            self.drain_outcome_returns += 1;
+        }
+        visit::visit_expr_return(self, expression);
+    }
+}
+
+fn verify_parallel_panic_total_sink(runner_syntax: &syn::File) -> Result<(), String> {
+    let sink = find_production_function(runner_syntax, "spawn_parallel_effect_completion_worker")?;
+    let mut visitor = ParallelPanicSinkVisitor::default();
+    visitor.visit_block(&sink.block);
+    if visitor.thread_spawns != 1
+        || visitor.redacted_catches != 2
+        || visitor.unwrap_or_calls != 1
+        || visitor.completion_sends != 1
+        || visitor.returns != 0
+        || visitor.try_count != 0
+    {
+        return Err(format!(
+            "shared parallel panic-total sink must catch work and publication exactly once; spawn={}, catch={}, fallback={}, send={}, return={}, ?={}",
+            visitor.thread_spawns,
+            visitor.redacted_catches,
+            visitor.unwrap_or_calls,
+            visitor.completion_sends,
+            visitor.returns,
+            visitor.try_count,
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct ParallelPanicSinkVisitor {
+    thread_spawns: usize,
+    redacted_catches: usize,
+    unwrap_or_calls: usize,
+    completion_sends: usize,
+    returns: usize,
+    try_count: usize,
+}
+
+impl<'ast> Visit<'ast> for ParallelPanicSinkVisitor {
+    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+        if expression_is_simple_path(call.func.as_ref(), &["thread", "spawn"]) {
+            self.thread_spawns += 1;
+        }
+        if expression_is_simple_path(call.func.as_ref(), &["catch_redacted_worker_unwind"]) {
+            self.redacted_catches += 1;
+        }
+        visit::visit_expr_call(self, call);
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        if call.method == "unwrap_or" {
+            self.unwrap_or_calls += 1;
+        }
+        if call.method == "send_control_plane_event" {
+            self.completion_sends += 1;
+        }
+        visit::visit_expr_method_call(self, call);
+    }
+
+    fn visit_expr_return(&mut self, expression: &'ast syn::ExprReturn) {
+        self.returns += 1;
+        visit::visit_expr_return(self, expression);
+    }
+
+    fn visit_expr_try(&mut self, expression: &'ast syn::ExprTry) {
+        self.try_count += 1;
+        visit::visit_expr_try(self, expression);
+    }
+}
+
+fn verify_parallel_effect_launcher(method: &syn::ImplItemFn, launcher: &str) -> Result<(), String> {
+    if !matches!(method.sig.output, syn::ReturnType::Default) {
+        return Err(format!("{launcher} must return unit"));
+    }
+    let direct_sinks = method
+        .block
+        .stmts
+        .iter()
+        .filter(|statement| {
+            matches!(
+                statement,
+                syn::Stmt::Expr(syn::Expr::Call(call), Some(_))
+                    if expression_is_simple_path(
+                        call.func.as_ref(),
+                        &["spawn_parallel_effect_completion_worker"],
+                    )
+                        && matches!(
+                            call.args.iter().collect::<Vec<_>>().as_slice(),
+                            [_, panic_completion, syn::Expr::Closure(_)]
+                                if expression_is_simple_path(
+                                    panic_completion,
+                                    &["panic_completion"],
+                                )
+                        )
+            )
+        })
+        .count();
+    if direct_sinks != 1
+        || !method.block.stmts.last().is_some_and(|statement| {
+            matches!(
+                statement,
+                syn::Stmt::Expr(syn::Expr::Call(call), Some(_))
+                    if expression_is_simple_path(
+                        call.func.as_ref(),
+                        &["spawn_parallel_effect_completion_worker"],
+                    )
+            )
+        })
+    {
+        return Err(format!(
+            "{launcher} must end in one unconditional shared panic-total completion sink"
+        ));
+    }
+    let mut bypass = ParallelLauncherOuterVisitor::default();
+    bypass.visit_block(&method.block);
+    if bypass.shared_sinks != 1
+        || bypass.returns != 0
+        || bypass.try_count != 0
+        || bypass.forbidden_calls != 0
+    {
+        return Err(format!(
+            "{launcher} must reach the shared panic-total completion sink without synchronous work or bypass (sink={}, return={}, ?={}, forbidden_calls={})",
+            bypass.shared_sinks, bypass.returns, bypass.try_count, bypass.forbidden_calls
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct ParallelLauncherOuterVisitor {
+    shared_sinks: usize,
+    returns: usize,
+    try_count: usize,
+    forbidden_calls: usize,
+}
+
+impl<'ast> Visit<'ast> for ParallelLauncherOuterVisitor {
+    fn visit_expr_closure(&mut self, _expression: &'ast syn::ExprClosure) {}
+
+    fn visit_expr_async(&mut self, _expression: &'ast syn::ExprAsync) {}
+
+    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+        if expression_is_simple_path(
+            call.func.as_ref(),
+            &["spawn_parallel_effect_completion_worker"],
+        ) {
+            self.shared_sinks += 1;
+        } else if !expression_is_simple_path(call.func.as_ref(), &["effect_failed"])
+            && !expression_is_simple_path(call.func.as_ref(), &["Err"])
+        {
+            self.forbidden_calls += 1;
+        }
+        visit::visit_expr_call(self, call);
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        if call.method != "clone" && call.method != "to_string" {
+            self.forbidden_calls += 1;
+        }
+        visit::visit_expr_method_call(self, call);
+    }
+
+    fn visit_expr_return(&mut self, expression: &'ast syn::ExprReturn) {
+        self.returns += 1;
+        visit::visit_expr_return(self, expression);
+    }
+
+    fn visit_expr_try(&mut self, expression: &'ast syn::ExprTry) {
+        self.try_count += 1;
+        visit::visit_expr_try(self, expression);
+    }
 }
 
 const CORE_EFFECT_LAUNCH_CONTRACTS: &[(&str, &str, &str)] = &[
