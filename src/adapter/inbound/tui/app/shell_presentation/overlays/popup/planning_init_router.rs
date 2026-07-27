@@ -27,7 +27,7 @@ pub(crate) fn build_planning_init_overlay_view_from_projection(
 ) -> PlanningInitOverlayView {
     // 이 state는 planning service domain state가 아니라 modal-local cursor와 선택값이다.
     // 따라서 mode/detail selection builder에는 app 전체 대신 이 projection만 전달한다.
-    let state = &app.planning_init_overlay_ui_state;
+    let state = &app.planning.planning_init_overlay_ui_state;
 
     // step enum을 exhaustive match로 둬 새 init step이 생길 때 compile 단계에서
     // presentation routing을 갱신하게 한다. fallback view를 만들면 wizard state와

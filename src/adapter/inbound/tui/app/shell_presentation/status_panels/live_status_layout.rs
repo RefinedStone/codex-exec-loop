@@ -235,8 +235,10 @@ mod tests {
 
     fn dense_hidden_tail_app() -> NativeTuiApp {
         let mut app = test_native_tui_app();
-        app.tui_language = TuiLanguage::Korean;
-        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        app.shell.tui_language = TuiLanguage::Korean;
+        let ConversationState::Ready(conversation) =
+            &mut app.conversation.lifecycle.conversation_state
+        else {
             panic!("test app should keep a ready conversation");
         };
         conversation.record_thread_prepared(
@@ -272,8 +274,10 @@ mod tests {
     #[test]
     fn one_screen_model_produces_stable_cjk_copy_layout_and_live_lines() {
         let mut app = test_native_tui_app();
-        app.tui_language = TuiLanguage::Korean;
-        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        app.shell.tui_language = TuiLanguage::Korean;
+        let ConversationState::Ready(conversation) =
+            &mut app.conversation.lifecycle.conversation_state
+        else {
             panic!("test app should keep a ready conversation");
         };
         conversation.composer.input_buffer = "한글 prompt".to_string();
@@ -299,16 +303,18 @@ mod tests {
         assert_eq!(first_live, second_live);
         assert_eq!(
             screen_model.core_revision,
-            app.client_runtime.snapshot().revision
+            app.runtime.client_runtime.snapshot().revision
         );
     }
 
     #[test]
     fn viewport_replay_handoff_projection_couples_visible_release_to_delivery_ack() {
         let mut app = test_native_tui_app();
-        app.inline_history_render_mode = InlineHistoryRenderMode::ViewportReplay;
-        app.shell_overlay = ShellOverlay::Hidden;
-        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        app.shell.inline_history_render_mode = InlineHistoryRenderMode::ViewportReplay;
+        app.shell.chrome.shell_overlay = ShellOverlay::Hidden;
+        let ConversationState::Ready(conversation) =
+            &mut app.conversation.lifecycle.conversation_state
+        else {
             panic!("test app should keep a ready conversation");
         };
         conversation.record_thread_prepared(
@@ -357,7 +363,7 @@ mod tests {
             assert!(handoff_index < live_index);
         }
 
-        app.shell_overlay = ShellOverlay::Help;
+        app.shell.chrome.shell_overlay = ShellOverlay::Help;
         {
             let overlay_screen_model = ConversationScreenModel::from_app(&app);
             assert!(!overlay_screen_model.renders_viewport_transcript_handoff());
@@ -373,7 +379,7 @@ mod tests {
             );
         }
 
-        app.conversation_state = ConversationState::Loading;
+        app.conversation.lifecycle.conversation_state = ConversationState::Loading;
         let loading_screen_model = ConversationScreenModel::from_app(&app);
         assert!(loading_screen_model.live_transcript().is_none());
         assert!(build_inline_live_transcript_lines(&loading_screen_model).is_empty());
@@ -392,7 +398,9 @@ mod tests {
             ConversationScreenModel::from_app(&app).planning_runtime_projection,
             projection
         );
-        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        let ConversationState::Ready(conversation) =
+            &mut app.conversation.lifecycle.conversation_state
+        else {
             panic!("test app should keep a ready conversation");
         };
         conversation.cwd = "/tmp/other-workspace".to_string();
@@ -411,9 +419,11 @@ mod tests {
         const WIDTH: u16 = 80;
         const LOW_DETAIL: &str = "낮은상세표시";
         let mut app = test_native_tui_app();
-        app.tui_language = TuiLanguage::Korean;
-        app.shell_overlay = ShellOverlay::Queue;
-        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        app.shell.tui_language = TuiLanguage::Korean;
+        app.shell.chrome.shell_overlay = ShellOverlay::Queue;
+        let ConversationState::Ready(conversation) =
+            &mut app.conversation.lifecycle.conversation_state
+        else {
             panic!("test app should keep a ready conversation");
         };
         conversation.record_thread_prepared(
@@ -427,7 +437,8 @@ mod tests {
         conversation.runtime_notices = vec!["긴한글복구상세".repeat(20)];
 
         let context = app.current_queue_mutation_context();
-        app.queue_mutation_ui_state
+        app.planning
+            .queue_mutation_ui_state
             .record_started(QueueMutationCorrelation::new(
                 1,
                 QueueMutationIntent {
@@ -483,8 +494,10 @@ mod tests {
     fn running_stale_planning_keeps_warning_priority_in_modal_tail() {
         const WIDTH: u16 = 80;
         let mut app = test_native_tui_app();
-        app.shell_overlay = ShellOverlay::Queue;
-        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        app.shell.chrome.shell_overlay = ShellOverlay::Queue;
+        let ConversationState::Ready(conversation) =
+            &mut app.conversation.lifecycle.conversation_state
+        else {
             panic!("test app should keep a ready conversation");
         };
         conversation.record_thread_prepared(
@@ -657,7 +670,9 @@ mod tests {
     fn hidden_host_scrollback_leaves_an_over_budget_prompt_to_the_suffix_renderer() {
         const WIDTH: u16 = 48;
         let mut app = dense_hidden_tail_app();
-        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        let ConversationState::Ready(conversation) =
+            &mut app.conversation.lifecycle.conversation_state
+        else {
             panic!("test app should keep a ready conversation");
         };
         conversation.composer.input_buffer = format!("{}PROMPT_END", "긴 prompt ".repeat(120));

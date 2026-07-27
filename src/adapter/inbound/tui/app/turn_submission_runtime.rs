@@ -43,7 +43,7 @@ impl NativeTuiApp {
         // Enter first belongs to inline shell commands. Only non-command prompt
         // text becomes a conversation turn, and only when the current conversation
         // can accept a manual prompt.
-        let inline_command = match &self.conversation_state {
+        let inline_command = match &self.conversation.lifecycle.conversation_state {
             ConversationState::Ready(conversation) => {
                 InlineShellCommandInput::parse(&conversation.composer.input_buffer)
             }
@@ -53,13 +53,17 @@ impl NativeTuiApp {
             self.execute_inline_shell_command_input(command);
             return;
         }
-        if self.pending_turn_steer.is_some() {
+        if self.conversation.pending_turn_steer.is_some() {
             self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                status_text: self.tui_language.turn_steer_pending_status().to_string(),
+                status_text: self
+                    .shell
+                    .tui_language
+                    .turn_steer_pending_status()
+                    .to_string(),
             });
             return;
         }
-        let operator_prompt = match &self.conversation_state {
+        let operator_prompt = match &self.conversation.lifecycle.conversation_state {
             ConversationState::Ready(conversation) => conversation.composer.input_buffer.clone(),
             _ => return,
         };
@@ -86,16 +90,17 @@ impl NativeTuiApp {
                 transcript_text,
                 prompt_origin,
             } => {
-                let outcome = self
-                    .client_runtime
-                    .dispatch_client_event(CoreInput::Command(AppCommand::SubmitTurn(
-                        self.build_turn_submission_request(
-                            workspace_directory,
-                            thread_id,
-                            prompt,
-                            &prompt_origin,
-                        ),
-                    )));
+                let outcome =
+                    self.runtime
+                        .client_runtime
+                        .dispatch_client_event(CoreInput::Command(AppCommand::SubmitTurn(
+                            self.build_turn_submission_request(
+                                workspace_directory,
+                                thread_id,
+                                prompt,
+                                &prompt_origin,
+                            ),
+                        )));
                 turn_submission_admitted = outcome.events.iter().any(|event| {
                     matches!(
                         event,
@@ -155,6 +160,7 @@ impl NativeTuiApp {
             }
             ConversationRuntimeEffect::DispatchOperatorAlert { alert } => {
                 if let Err(error) = self
+                    .runtime
                     .tx
                     .try_send(super::BackgroundMessage::OperatorAlert(alert))
                 {
@@ -181,7 +187,7 @@ impl NativeTuiApp {
             thread_id,
             prompt,
             prompt_origin: core_prompt_origin(prompt_origin),
-            turn_options: self.turn_options.clone(),
+            turn_options: self.conversation.turn_options.clone(),
             slot_lease_handoff: self.build_parallel_mode_slot_lease_handoff(prompt_origin),
         }
     }
@@ -216,17 +222,18 @@ impl NativeTuiApp {
         };
 
         conversation.replace_active_turn_workspace_directory(workspace_directory.to_string());
-        self.conversation_state = ConversationState::ready(conversation);
+        self.conversation.lifecycle.conversation_state = ConversationState::ready(conversation);
     }
 
     pub(super) fn resolve_startup_submit_queue(&mut self) {
-        let (startup_submit_armed, operator_prompt) = match &self.conversation_state {
-            ConversationState::Ready(conversation) => (
-                conversation.composer.startup_submit_armed,
-                conversation.composer.input_buffer.clone(),
-            ),
-            ConversationState::Loading | ConversationState::Failed(_) => return,
-        };
+        let (startup_submit_armed, operator_prompt) =
+            match &self.conversation.lifecycle.conversation_state {
+                ConversationState::Ready(conversation) => (
+                    conversation.composer.startup_submit_armed,
+                    conversation.composer.input_buffer.clone(),
+                ),
+                ConversationState::Loading | ConversationState::Failed(_) => return,
+            };
         if !startup_submit_armed {
             return;
         }
@@ -270,7 +277,7 @@ impl NativeTuiApp {
             return;
         }
         let (input_is_current, delivery, parent_thread_id, parent_turn_id) =
-            match &self.conversation_state {
+            match &self.conversation.lifecycle.conversation_state {
                 ConversationState::Ready(conversation) => {
                     let delivery = manual_prompt_delivery(conversation);
                     (
@@ -303,7 +310,11 @@ impl NativeTuiApp {
             }
             ShellActionAvailability::Ready => {}
         }
-        if self.pending_manual_prompt_preparation.is_some() {
+        if self
+            .conversation
+            .pending_manual_prompt_preparation
+            .is_some()
+        {
             self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                 status_text:
                     "turn preparation already in progress; wait for it to finish before submitting again"
@@ -315,6 +326,7 @@ impl NativeTuiApp {
         let workspace_directory = self.planning_workspace_directory();
         let parallel_mode_enabled_at_submission = self.parallel_mode_enabled();
         let outcome = self
+            .runtime
             .client_runtime
             .dispatch_client_event(CoreInput::Command(AppCommand::PrepareManualPrompt(
                 Box::new(ManualPromptPreparationIntent {
@@ -332,14 +344,15 @@ impl NativeTuiApp {
         });
         match admission {
             Some(ManualPromptPreparationAdmission::Accepted { correlation }) => {
-                self.pending_manual_prompt_preparation = Some(PendingManualPromptPreparation {
-                    correlation,
-                    source_input_buffer: operator_prompt,
-                    transcript_text: transcript_text.clone(),
-                    parallel_mode_enabled_at_submission,
-                    delivery,
-                    parent_turn_id,
-                });
+                self.conversation.pending_manual_prompt_preparation =
+                    Some(PendingManualPromptPreparation {
+                        correlation,
+                        source_input_buffer: operator_prompt,
+                        transcript_text: transcript_text.clone(),
+                        parallel_mode_enabled_at_submission,
+                        delivery,
+                        parent_turn_id,
+                    });
                 if parallel_mode_enabled_at_submission {
                     self.show_supersession_overlay();
                     self.record_parallel_supervisor_event(
@@ -379,6 +392,7 @@ impl NativeTuiApp {
         let correlation = result.correlation().clone();
         let result_transcript_text = result.transcript_text().to_string();
         let Some(pending) = self
+            .conversation
             .pending_manual_prompt_preparation
             .as_ref()
             .filter(|pending| pending.correlation == correlation)
@@ -418,7 +432,8 @@ impl NativeTuiApp {
                 ..
             } => {
                 let draft_name = review.draft_name.clone();
-                self.planning_init_overlay_ui_state
+                self.planning
+                    .planning_init_overlay_ui_state
                     .open_simple_review_summary(
                         crate::core::app::PlanningEditorSessionIdentity::new(
                             correlation.generation,
@@ -429,7 +444,7 @@ impl NativeTuiApp {
                         review.staged_file_count,
                         review.validation_report,
                     );
-                self.planning_draft_editor_ui_state.reset();
+                self.planning.planning_draft_editor_ui_state.reset();
                 self.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                     status_text: format!(
@@ -571,13 +586,15 @@ impl NativeTuiApp {
         // The preparation result already carried the committed runtime projection.
         // Invalidate any disposable Queue snapshot so the next open verifies its
         // destructive-action tokens off the input thread.
-        self.queue_overlay_ui_state.reset();
-        let status_text = self.tui_language.manual_prompt_queued_status(
+        self.planning.queue_overlay_ui_state.reset();
+        let status_text = self.shell.tui_language.manual_prompt_queued_status(
             &task_id,
             planning_revision,
             undo_available,
         );
-        if let ConversationState::Ready(conversation) = &mut self.conversation_state {
+        if let ConversationState::Ready(conversation) =
+            &mut self.conversation.lifecycle.conversation_state
+        {
             conversation.latest_queue_mutation_receipt = None;
             if let Some(task) = handoff_task.filter(|_| undo_available) {
                 conversation.latest_queue_mutation_receipt = Some(PlanningQueueMutationReceipt {
@@ -599,13 +616,15 @@ impl NativeTuiApp {
             conversation.append_status_message(status_text.clone());
         }
         self.advance_planning_ui_intent_revision();
-        self.queue_overlay_ui_state.set_feedback(status_text);
+        self.planning
+            .queue_overlay_ui_state
+            .set_feedback(status_text);
     }
 
     pub(super) fn cancel_manual_prompt_preparation_for_identity_transition(&mut self) {
-        self.pending_manual_prompt_preparation = None;
-        self.turn_steer_confirmation = None;
-        self.pending_turn_steer = None;
+        self.conversation.pending_manual_prompt_preparation = None;
+        self.conversation.turn_steer_confirmation = None;
+        self.conversation.pending_turn_steer = None;
         self.dispatch_client_event(CoreInput::Command(
             AppCommand::CancelManualPromptPreparation,
         ));
@@ -615,10 +634,11 @@ impl NativeTuiApp {
         &mut self,
         correlation: &ManualPromptCorrelation,
     ) -> Option<PendingManualPromptPreparation> {
-        self.pending_manual_prompt_preparation
+        self.conversation
+            .pending_manual_prompt_preparation
             .as_ref()
             .is_some_and(|pending| pending.correlation == *correlation)
-            .then(|| self.pending_manual_prompt_preparation.take())
+            .then(|| self.conversation.pending_manual_prompt_preparation.take())
             .flatten()
     }
 
@@ -629,7 +649,7 @@ impl NativeTuiApp {
         if pending.correlation.workspace_directory != self.planning_workspace_directory() {
             return false;
         }
-        match &self.conversation_state {
+        match &self.conversation.lifecycle.conversation_state {
             ConversationState::Ready(conversation) => {
                 conversation.composer.input_buffer == pending.source_input_buffer
             }
@@ -701,7 +721,7 @@ impl NativeTuiApp {
         if let Some(conversation) = self.take_ready_conversation_state() {
             let mut conversation = conversation;
             conversation.record_manual_intake_handoff(handoff.task.as_ref());
-            self.conversation_state = ConversationState::ready(conversation);
+            self.conversation.lifecycle.conversation_state = ConversationState::ready(conversation);
         }
         self.dispatch_conversation_input(ConversationComposerEvent::InputCleared);
 
@@ -794,7 +814,7 @@ impl NativeTuiApp {
         {
             return None;
         }
-        let planning_worker = &self.planning_worker_panel_state;
+        let planning_worker = self.planning.planning_worker_panel_state.current();
         let operation_label = planning_worker
             .last_operation_label
             .as_deref()
@@ -970,6 +990,7 @@ mod tests {
     };
     use crate::domain::operator_alert::OperatorAlert;
     use crate::domain::planning::PlanningValidationReport;
+    use crate::domain::planning::PlanningWorkerPanelState;
     use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogRequest};
     use crate::domain::startup_diagnostics::StartupDiagnostics;
     use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
@@ -1103,7 +1124,8 @@ mod tests {
             ConversationService::new(codex_port),
             parallel_mode_binding,
         );
-        app.startup_state = StartupState::Ready(startup_ready_snapshot(workspace.path_str(), true));
+        app.shell.chrome.startup_state =
+            StartupState::Ready(startup_ready_snapshot(workspace.path_str(), true));
         app.sync_draft_shell_workspace(workspace.path_str());
         app
     }
@@ -1135,14 +1157,14 @@ mod tests {
     }
 
     fn ready_conversation(app: &NativeTuiApp) -> &super::super::ConversationViewModel {
-        match &app.conversation_state {
+        match &app.conversation.lifecycle.conversation_state {
             ConversationState::Ready(conversation) => conversation,
             other => panic!("conversation should be ready, got {other:?}"),
         }
     }
 
     fn ready_conversation_mut(app: &mut NativeTuiApp) -> &mut super::super::ConversationViewModel {
-        match &mut app.conversation_state {
+        match &mut app.conversation.lifecycle.conversation_state {
             ConversationState::Ready(conversation) => conversation,
             other => panic!("conversation should be ready, got {other:?}"),
         }
@@ -1154,12 +1176,14 @@ mod tests {
 
     fn poll_manual_prompt_preparation_completion(app: &mut NativeTuiApp) {
         let deadline = Instant::now() + Duration::from_secs(2);
-        while app.pending_manual_prompt_preparation.is_some() && Instant::now() < deadline {
+        while app.conversation.pending_manual_prompt_preparation.is_some()
+            && Instant::now() < deadline
+        {
             app.poll_core_runtime_inputs(16);
             std::thread::yield_now();
         }
         assert!(
-            app.pending_manual_prompt_preparation.is_none(),
+            app.conversation.pending_manual_prompt_preparation.is_none(),
             "manual prompt preparation should complete through the Core mailbox"
         );
     }
@@ -1175,7 +1199,7 @@ mod tests {
             generation,
             workspace_directory: app.planning_workspace_directory(),
         };
-        app.pending_manual_prompt_preparation = Some(PendingManualPromptPreparation {
+        app.conversation.pending_manual_prompt_preparation = Some(PendingManualPromptPreparation {
             correlation: correlation.clone(),
             source_input_buffer: transcript_text.to_string(),
             transcript_text: transcript_text.to_string(),
@@ -1259,24 +1283,37 @@ mod tests {
 
         inline_app.start_turn_submission();
 
-        assert_eq!(inline_app.shell_overlay, ShellOverlay::ViewSelection);
-        assert!(inline_app.pending_manual_prompt_preparation.is_none());
+        assert_eq!(
+            inline_app.shell.chrome.shell_overlay,
+            ShellOverlay::ViewSelection
+        );
+        assert!(
+            inline_app
+                .conversation
+                .pending_manual_prompt_preparation
+                .is_none()
+        );
 
         let mut blank_app = make_test_app(&workspace);
         set_input(&mut blank_app, "   ");
 
         blank_app.start_turn_submission();
 
-        assert!(blank_app.pending_manual_prompt_preparation.is_none());
+        assert!(
+            blank_app
+                .conversation
+                .pending_manual_prompt_preparation
+                .is_none()
+        );
         assert!(ready_conversation(&blank_app).messages.is_empty());
 
         let mut loading_app = make_test_app(&workspace);
-        loading_app.conversation_state = ConversationState::Loading;
+        loading_app.conversation.lifecycle.conversation_state = ConversationState::Loading;
 
         loading_app.start_turn_submission();
 
         assert!(matches!(
-            loading_app.conversation_state,
+            loading_app.conversation.lifecycle.conversation_state,
             ConversationState::Loading
         ));
     }
@@ -1301,7 +1338,7 @@ mod tests {
         });
 
         assert!(matches!(
-            app.conversation_state,
+            app.conversation.lifecycle.conversation_state,
             ConversationState::Ready(_)
         ));
     }
@@ -1310,7 +1347,7 @@ mod tests {
     fn submit_prompt_respects_startup_readiness_gates() {
         let workspace = TempWorkspace::new("turn-submit-startup-gates");
         let mut pending_app = make_test_app(&workspace);
-        pending_app.startup_state = StartupState::Loading;
+        pending_app.shell.chrome.startup_state = StartupState::Loading;
         set_input(&mut pending_app, "ship it");
 
         assert!(!pending_app.submit_prompt_with_transcript(
@@ -1327,7 +1364,7 @@ mod tests {
         );
 
         let mut blocked_app = make_test_app(&workspace);
-        blocked_app.startup_state =
+        blocked_app.shell.chrome.startup_state =
             StartupState::Ready(startup_ready_snapshot(workspace.path_str(), false));
 
         assert!(!blocked_app.submit_prompt_with_transcript(
@@ -1346,12 +1383,17 @@ mod tests {
     fn manual_preparation_waits_for_startup_before_planning_side_effects() {
         let workspace = TempWorkspace::new("turn-submit-manual-startup-gate");
         let mut pending_app = make_test_app(&workspace);
-        pending_app.startup_state = StartupState::Loading;
+        pending_app.shell.chrome.startup_state = StartupState::Loading;
         set_input(&mut pending_app, "ship it");
 
         pending_app.submit_manual_prompt_from_text("ship it".to_string());
 
-        assert!(pending_app.pending_manual_prompt_preparation.is_none());
+        assert!(
+            pending_app
+                .conversation
+                .pending_manual_prompt_preparation
+                .is_none()
+        );
         assert!(
             ready_conversation(&pending_app)
                 .composer
@@ -1363,7 +1405,7 @@ mod tests {
         );
         assert!(ready_conversation(&pending_app).messages.is_empty());
 
-        pending_app.startup_state =
+        pending_app.shell.chrome.startup_state =
             StartupState::Ready(startup_ready_snapshot(workspace.path_str(), true));
         pending_app.resolve_startup_submit_queue();
         poll_manual_prompt_preparation_completion(&mut pending_app);
@@ -1396,13 +1438,13 @@ mod tests {
     fn blocked_startup_never_enters_manual_planning_preparation() {
         let workspace = TempWorkspace::new("turn-submit-manual-startup-blocked");
         let mut app = make_test_app(&workspace);
-        app.startup_state =
+        app.shell.chrome.startup_state =
             StartupState::Ready(startup_ready_snapshot(workspace.path_str(), false));
         set_input(&mut app, "ship it");
 
         app.submit_manual_prompt_from_text("ship it".to_string());
 
-        assert!(app.pending_manual_prompt_preparation.is_none());
+        assert!(app.conversation.pending_manual_prompt_preparation.is_none());
         assert!(!ready_conversation(&app).composer.startup_submit_armed);
         assert_eq!(ready_conversation(&app).composer.input_buffer, "ship it");
         assert!(ready_conversation(&app).messages.is_empty());
@@ -1417,7 +1459,7 @@ mod tests {
     fn resolve_startup_submit_queue_keeps_or_disarms_buffered_prompt() {
         let workspace = TempWorkspace::new("turn-submit-startup-queue");
         let mut pending_app = make_test_app(&workspace);
-        pending_app.startup_state = StartupState::Loading;
+        pending_app.shell.chrome.startup_state = StartupState::Loading;
         set_input(&mut pending_app, "queued prompt");
         pending_app.dispatch_conversation_input(ConversationComposerEvent::StartupSubmitArmed {
             status_text: "queued".to_string(),
@@ -1436,7 +1478,7 @@ mod tests {
         );
 
         let mut blocked_app = make_test_app(&workspace);
-        blocked_app.startup_state =
+        blocked_app.shell.chrome.startup_state =
             StartupState::Ready(startup_ready_snapshot(workspace.path_str(), false));
         set_input(&mut blocked_app, "queued prompt");
         blocked_app.dispatch_conversation_input(ConversationComposerEvent::StartupSubmitArmed {
@@ -1483,7 +1525,7 @@ mod tests {
         poll_manual_prompt_preparation_completion(&mut app);
 
         let conversation = ready_conversation(&app);
-        assert!(app.pending_manual_prompt_preparation.is_none());
+        assert!(app.conversation.pending_manual_prompt_preparation.is_none());
         assert_eq!(conversation.composer.input_buffer, "");
         assert_eq!(
             conversation
@@ -1516,12 +1558,16 @@ mod tests {
             },
         );
 
-        assert_eq!(review_app.shell_overlay, ShellOverlay::PlanningInit);
         assert_eq!(
-            review_app.planning_init_overlay_ui_state.step(),
+            review_app.shell.chrome.shell_overlay,
+            ShellOverlay::PlanningInit
+        );
+        assert_eq!(
+            review_app.planning.planning_init_overlay_ui_state.step(),
             PlanningInitOverlayStep::SimpleReview
         );
         let review = review_app
+            .planning
             .planning_init_overlay_ui_state
             .simple_review()
             .expect("bootstrap review should be retained for the overlay");
@@ -1603,6 +1649,7 @@ mod tests {
         assert!(ready_conversation(&stale_app).messages.is_empty());
         assert_eq!(
             stale_app
+                .conversation
                 .pending_manual_prompt_preparation
                 .as_ref()
                 .map(|pending| &pending.correlation),
@@ -1656,7 +1703,10 @@ mod tests {
                 },
             },
         );
-        assert_eq!(stale_review_app.shell_overlay, ShellOverlay::Hidden);
+        assert_eq!(
+            stale_review_app.shell.chrome.shell_overlay,
+            ShellOverlay::Hidden
+        );
 
         let mut stale_failure_app = make_test_app(&workspace);
         set_input(&mut stale_failure_app, "newer text");
@@ -1686,7 +1736,7 @@ mod tests {
 
         app.submit_manual_prompt_from_text("x".repeat(MAX_PROMPT_INPUT_BYTES + 1));
 
-        assert!(app.pending_manual_prompt_preparation.is_none());
+        assert!(app.conversation.pending_manual_prompt_preparation.is_none());
         assert!(
             ready_conversation(&app)
                 .status_text
@@ -1705,7 +1755,7 @@ mod tests {
 
         app.start_turn_submission();
 
-        assert!(app.pending_manual_prompt_preparation.is_none());
+        assert!(app.conversation.pending_manual_prompt_preparation.is_none());
         assert_eq!(ready_conversation(&app).status_text, "starting turn");
     }
 
@@ -1716,7 +1766,7 @@ mod tests {
         set_input(&mut app, "second prompt");
         let previous_messages = ready_conversation(&app).messages.clone();
         let previous_status = ready_conversation(&app).status_text.clone();
-        let active_correlation = app.client_runtime.begin_test_turn_submission();
+        let active_correlation = app.runtime.client_runtime.begin_test_turn_submission();
 
         let admitted = app.submit_prompt_with_transcript(
             "second prompt".to_string(),
@@ -1731,14 +1781,14 @@ mod tests {
         assert_eq!(conversation.status_text, previous_status);
         assert_eq!(conversation.input_state, ConversationInputState::DraftReady);
 
-        let _ = app
-            .client_runtime
-            .dispatch_client_event(CoreInput::ConversationStreamUpdated {
+        let _ = app.runtime.client_runtime.dispatch_client_event(
+            CoreInput::ConversationStreamUpdated {
                 correlation: active_correlation,
                 event: TurnStreamEvent::Failed {
                     message: "first submission released".to_string(),
                 },
-            });
+            },
+        );
         let message_count_before_retry = ready_conversation(&app).messages.len();
 
         assert!(app.submit_prompt_with_transcript(
@@ -1786,7 +1836,7 @@ mod tests {
             "stale result",
         ));
 
-        assert!(app.pending_manual_prompt_preparation.is_none());
+        assert!(app.conversation.pending_manual_prompt_preparation.is_none());
         assert_eq!(
             ready_conversation(&app).status_text,
             "turn preparation failed / stale result"
@@ -1809,7 +1859,7 @@ mod tests {
             app.planning_workspace_directory(),
             second_workspace.path_str()
         );
-        assert!(app.pending_manual_prompt_preparation.is_none());
+        assert!(app.conversation.pending_manual_prompt_preparation.is_none());
 
         app.dispatch_conversation_input(ConversationComposerEvent::TextInserted {
             text: " now".to_string(),
@@ -1834,7 +1884,8 @@ mod tests {
         ));
 
         assert_eq!(
-            app.pending_manual_prompt_preparation
+            app.conversation
+                .pending_manual_prompt_preparation
                 .as_ref()
                 .map(|pending| &pending.correlation),
             Some(&replacement)
@@ -1862,7 +1913,7 @@ mod tests {
 
         assert_eq!(ready_conversation(&app).messages.len(), message_count);
         assert_eq!(ready_conversation(&app).status_text, status_text);
-        assert!(app.pending_manual_prompt_preparation.is_none());
+        assert!(app.conversation.pending_manual_prompt_preparation.is_none());
     }
 
     #[test]
@@ -1871,22 +1922,28 @@ mod tests {
         let task = sample_handoff_task();
 
         let mut loading_queue_app = make_test_app(&workspace);
-        loading_queue_app.conversation_state = ConversationState::Loading;
+        loading_queue_app.conversation.lifecycle.conversation_state = ConversationState::Loading;
         loading_queue_app.resolve_startup_submit_queue();
         assert!(matches!(
-            loading_queue_app.conversation_state,
+            loading_queue_app.conversation.lifecycle.conversation_state,
             ConversationState::Loading
         ));
 
         let mut empty_prompt_app = make_test_app(&workspace);
         empty_prompt_app.submit_manual_prompt_from_text("   ".to_string());
-        assert!(empty_prompt_app.pending_manual_prompt_preparation.is_none());
+        assert!(
+            empty_prompt_app
+                .conversation
+                .pending_manual_prompt_preparation
+                .is_none()
+        );
 
         let mut loading_submit_app = make_test_app(&workspace);
-        loading_submit_app.conversation_state = ConversationState::Loading;
+        loading_submit_app.conversation.lifecycle.conversation_state = ConversationState::Loading;
         loading_submit_app.submit_manual_prompt_from_text("ship it".to_string());
         assert!(
             loading_submit_app
+                .conversation
                 .pending_manual_prompt_preparation
                 .is_none()
         );
@@ -1905,6 +1962,7 @@ mod tests {
         );
         assert!(
             clear_pending_app
+                .conversation
                 .pending_manual_prompt_preparation
                 .is_none()
         );
@@ -1961,10 +2019,11 @@ mod tests {
         set_input(&mut loading_match_app, "ship it");
         arm_manual_prompt_preparation(&mut loading_match_app, "ship it");
         let pending = loading_match_app
+            .conversation
             .pending_manual_prompt_preparation
             .clone()
             .expect("preparation should be pending");
-        loading_match_app.conversation_state = ConversationState::Loading;
+        loading_match_app.conversation.lifecycle.conversation_state = ConversationState::Loading;
         assert!(!loading_match_app.manual_prompt_preparation_is_current(&pending));
 
         let mut manual_submit_app = make_test_app(&workspace);
@@ -2098,6 +2157,7 @@ mod tests {
         );
         let correlation = arm_manual_prompt_preparation(&mut app, "queue this follow-up");
         let pending = app
+            .conversation
             .pending_manual_prompt_preparation
             .as_mut()
             .expect("manual intake should be armed");
@@ -2136,6 +2196,7 @@ mod tests {
         set_input(&mut app, "update the queued task");
         let updated_correlation = arm_manual_prompt_preparation(&mut app, "update the queued task");
         let pending = app
+            .conversation
             .pending_manual_prompt_preparation
             .as_mut()
             .expect("updated manual intake should be armed");
@@ -2184,7 +2245,8 @@ mod tests {
             let mut app = make_running_app();
             let original_message_count = ready_conversation(&app).messages.len();
             let correlation = arm_manual_prompt_preparation(&mut app, "retry this exact draft");
-            app.pending_manual_prompt_preparation
+            app.conversation
+                .pending_manual_prompt_preparation
                 .as_mut()
                 .expect("queue intake should be pending")
                 .delivery = ManualPromptDelivery::QueueOnly;
@@ -2214,7 +2276,8 @@ mod tests {
         let mut app = make_running_app();
         let original_message_count = ready_conversation(&app).messages.len();
         let correlation = arm_manual_prompt_preparation(&mut app, "retry this exact draft");
-        app.pending_manual_prompt_preparation
+        app.conversation
+            .pending_manual_prompt_preparation
             .as_mut()
             .expect("queue intake should be pending")
             .delivery = ManualPromptDelivery::QueueOnly;
@@ -2426,12 +2489,17 @@ mod tests {
     fn queue_auto_prompt_records_debug_detail_and_handoff() {
         let workspace = TempWorkspace::new("turn-submit-auto-debug");
         let mut app = make_test_app(&workspace);
-        app.planning_worker_visibility = PlanningWorkerVisibility::Debug;
-        app.planning_worker_panel_state.status = PlanningWorkerStatus::RefreshSucceeded;
-        app.planning_worker_panel_state.last_operation_label = Some("refresh queue".to_string());
-        app.planning_worker_panel_state.last_summary = Some("accepted task".to_string());
-        app.planning_worker_panel_state.last_prompt = Some("worker prompt".to_string());
-        app.planning_worker_panel_state.last_response = Some("worker response".to_string());
+        app.planning.planning_worker_visibility = PlanningWorkerVisibility::Debug;
+        app.planning
+            .planning_worker_panel_state
+            .replace_for_test(PlanningWorkerPanelState {
+                status: PlanningWorkerStatus::RefreshSucceeded,
+                last_operation_label: Some("refresh queue".to_string()),
+                last_summary: Some("accepted task".to_string()),
+                last_prompt: Some("worker prompt".to_string()),
+                last_response: Some("worker response".to_string()),
+                ..PlanningWorkerPanelState::default()
+            });
         ready_conversation_mut(&mut app)
             .auto_follow_state
             .set_max_auto_turns(1);
@@ -2476,7 +2544,7 @@ mod tests {
     fn terminal_before_steer_completion_does_not_drop_auto_follow_submission() {
         let workspace = TempWorkspace::new("turn-submit-steer-auto-race");
         let mut app = make_test_app(&workspace);
-        let turn_submission = app.client_runtime.begin_test_turn_submission();
+        let turn_submission = app.runtime.client_runtime.begin_test_turn_submission();
         app.dispatch_client_event(CoreInput::ConversationStreamUpdated {
             correlation: turn_submission,
             event: TurnStreamEvent::ThreadPrepared {
@@ -2504,7 +2572,7 @@ mod tests {
                 crossterm::event::KeyModifiers::NONE,
             ))
         );
-        assert!(app.pending_turn_steer.is_some());
+        assert!(app.conversation.pending_turn_steer.is_some());
 
         app.dispatch_client_event(CoreInput::ConversationStreamUpdated {
             correlation: turn_submission,
@@ -2530,7 +2598,7 @@ mod tests {
             });
 
         assert!(admitted);
-        assert!(app.pending_turn_steer.is_some());
+        assert!(app.conversation.pending_turn_steer.is_some());
         let conversation = ready_conversation(&app);
         assert!(
             conversation
@@ -2584,7 +2652,7 @@ mod tests {
         );
         assert_eq!(no_task_request.slot_lease_handoff, None);
 
-        no_task_app.conversation_state = ConversationState::Loading;
+        no_task_app.conversation.lifecycle.conversation_state = ConversationState::Loading;
         let loading_request = no_task_app.build_turn_submission_request(
             workspace.path_str().to_string(),
             None,
@@ -2631,12 +2699,17 @@ mod tests {
             app.build_auto_follow_transcript_debug_detail("ordinary prompt"),
             None
         );
-        app.planning_worker_visibility = PlanningWorkerVisibility::Debug;
+        app.planning.planning_worker_visibility = PlanningWorkerVisibility::Debug;
         assert_eq!(
             app.build_auto_follow_transcript_debug_detail(QUEUED_TASK_TRANSCRIPT_TEXT),
             None
         );
-        app.planning_worker_panel_state.last_summary = Some("   ".to_string());
+        let mut planning_worker_panel_state =
+            app.planning.planning_worker_panel_state.current().clone();
+        planning_worker_panel_state.last_summary = Some("   ".to_string());
+        app.planning
+            .planning_worker_panel_state
+            .replace_for_test(planning_worker_panel_state);
         let debug_detail = app
             .build_auto_follow_transcript_debug_detail(QUEUED_TASK_TRANSCRIPT_TEXT)
             .expect("blank summary still records the worker status line");
@@ -2651,8 +2724,8 @@ mod tests {
         let task = sample_handoff_task();
         ready_conversation_mut(&mut app).record_manual_intake_handoff(Some(&task));
         app.set_parallel_mode_enabled_for_test(true);
-        app.turn_options.model = Some("gpt-5.4".to_string());
-        app.turn_options.reasoning_effort = Some(ConversationReasoningEffort::High);
+        app.conversation.turn_options.model = Some("gpt-5.4".to_string());
+        app.conversation.turn_options.reasoning_effort = Some(ConversationReasoningEffort::High);
 
         let request = app.build_turn_submission_request(
             workspace.path_str().to_string(),
@@ -2669,7 +2742,7 @@ mod tests {
         assert_eq!(request.thread_id.as_deref(), Some("thread-1"));
         assert_eq!(request.prompt, "wrapped task prompt");
         assert_eq!(request.prompt_origin, CorePromptOrigin::ManualIntake);
-        assert_eq!(request.turn_options, app.turn_options);
+        assert_eq!(request.turn_options, app.conversation.turn_options);
         assert_eq!(
             request.slot_lease_handoff,
             Some(ParallelTurnSlotLeaseHandoff::new(
@@ -2712,10 +2785,10 @@ mod tests {
             InlineShellCommandInput::parse(":model gpt-5.4").expect("model command should parse"),
         );
         assert_eq!(
-            app.turn_options.model.as_deref(),
+            app.conversation.turn_options.model.as_deref(),
             Some(ConversationTurnOptions::DEFAULT_MODEL)
         );
-        assert_eq!(app.shell_overlay, ShellOverlay::ModelSelection);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::ModelSelection);
         assert!(
             ready_conversation(&app)
                 .status_text
@@ -2733,9 +2806,12 @@ mod tests {
             InlineShellCommandInput::parse(":think high").expect("think command should parse"),
         );
 
-        assert_eq!(app.turn_options.model.as_deref(), Some("gpt-5.4"));
         assert_eq!(
-            app.turn_options.reasoning_effort,
+            app.conversation.turn_options.model.as_deref(),
+            Some("gpt-5.4")
+        );
+        assert_eq!(
+            app.conversation.turn_options.reasoning_effort,
             Some(ConversationReasoningEffort::High)
         );
 
@@ -2748,8 +2824,8 @@ mod tests {
                 .expect("think clear command should parse"),
         );
 
-        assert_eq!(app.turn_options.model, None);
-        assert_eq!(app.turn_options.reasoning_effort, None);
+        assert_eq!(app.conversation.turn_options.model, None);
+        assert_eq!(app.conversation.turn_options.reasoning_effort, None);
     }
 
     #[test]
@@ -2760,14 +2836,17 @@ mod tests {
         app.execute_inline_shell_command_input(
             InlineShellCommandInput::parse(":view").expect("view command should parse"),
         );
-        assert_eq!(app.shell_overlay, ShellOverlay::ViewSelection);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::ViewSelection);
         app.handle_view_selection_overlay_key(crossterm::event::KeyEvent::new(
             crossterm::event::KeyCode::Char('3'),
             crossterm::event::KeyModifiers::NONE,
         ));
 
-        assert_eq!(app.conversation_view_mode, ConversationViewMode::Detail);
-        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+        assert_eq!(
+            app.conversation.conversation_view_mode,
+            ConversationViewMode::Detail
+        );
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Hidden);
         assert!(
             ready_conversation(&app)
                 .status_text
@@ -2778,7 +2857,10 @@ mod tests {
             InlineShellCommandInput::parse(":view midium").expect("view command should parse"),
         );
 
-        assert_eq!(app.conversation_view_mode, ConversationViewMode::Medium);
+        assert_eq!(
+            app.conversation.conversation_view_mode,
+            ConversationViewMode::Medium
+        );
     }
 
     #[test]
@@ -2789,14 +2871,17 @@ mod tests {
         app.execute_inline_shell_command_input(
             InlineShellCommandInput::parse(":language").expect("language command should parse"),
         );
-        assert_eq!(app.shell_overlay, ShellOverlay::LanguageSelection);
+        assert_eq!(
+            app.shell.chrome.shell_overlay,
+            ShellOverlay::LanguageSelection
+        );
         app.handle_language_selection_overlay_key(crossterm::event::KeyEvent::new(
             crossterm::event::KeyCode::Char('1'),
             crossterm::event::KeyModifiers::NONE,
         ));
 
-        assert_eq!(app.tui_language, TuiLanguage::English);
-        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+        assert_eq!(app.shell.tui_language, TuiLanguage::English);
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Hidden);
         assert!(
             ready_conversation(&app)
                 .status_text
@@ -2808,7 +2893,7 @@ mod tests {
                 .expect("language command should parse"),
         );
 
-        assert_eq!(app.tui_language, TuiLanguage::Korean);
+        assert_eq!(app.shell.tui_language, TuiLanguage::Korean);
         assert!(
             ready_conversation(&app)
                 .status_text
@@ -2830,9 +2915,12 @@ mod tests {
             Some("/tmp/active-turn")
         );
 
-        app.conversation_state = ConversationState::Loading;
+        app.conversation.lifecycle.conversation_state = ConversationState::Loading;
         app.sync_active_turn_workspace_directory("/tmp/ignored");
-        assert!(matches!(app.conversation_state, ConversationState::Loading));
+        assert!(matches!(
+            app.conversation.lifecycle.conversation_state,
+            ConversationState::Loading
+        ));
     }
 
     #[test]
@@ -2846,6 +2934,7 @@ mod tests {
         });
 
         let message = app
+            .runtime
             .rx
             .try_recv()
             .expect("operator alert should be queued for the runtime");

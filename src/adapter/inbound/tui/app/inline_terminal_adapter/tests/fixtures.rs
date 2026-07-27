@@ -169,7 +169,8 @@ pub(super) fn make_test_app_with_github_review_setup_loader(
 
 fn configure_test_app(mut app: NativeTuiApp) -> NativeTuiApp {
     // Inline rendering fixtures assume the app opens on an editable draft; fail loudly if constructor semantics change.
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start with a ready draft conversation");
     };
     // Keep cwd and draft workspace identical so viewport assertions are not also testing workspace mismatch behavior.

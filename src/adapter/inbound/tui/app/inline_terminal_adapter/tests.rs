@@ -126,8 +126,8 @@ fn github_setup_starts_once_only_after_the_first_successful_frame() {
             GithubReviewPollerService::new(Arc::new(FirstFrameGithubReviewPollerPort)),
         )))
     });
-    app.show_startup_ascii_art = false;
-    app.inline_history_render_mode = InlineHistoryRenderMode::ViewportReplay;
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::ViewportReplay;
     let mut inner = CursorQueryCountingBackend::new(TestBackend::new(80, 40));
     inner
         .set_cursor_position(Position::new(0, 39))
@@ -169,7 +169,7 @@ fn github_setup_starts_once_only_after_the_first_successful_frame() {
         .expect("successful frame should start setup");
     assert_eq!(setup_calls.load(Ordering::SeqCst), 1);
     assert!(matches!(
-        runtime.app().github_review_polling_state,
+        runtime.app().runtime.github_review_polling_state,
         super::super::github_polling::GithubReviewPollingState::Discovering { .. }
     ));
 
@@ -177,7 +177,9 @@ fn github_setup_starts_once_only_after_the_first_successful_frame() {
         KeyCode::Char('x'),
         KeyModifiers::NONE,
     )));
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("fixture should keep a ready conversation");
     };
     assert_eq!(conversation.composer.input_buffer, "x");
@@ -198,7 +200,7 @@ fn github_setup_starts_once_only_after_the_first_successful_frame() {
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline
         && matches!(
-            runtime.app().github_review_polling_state,
+            runtime.app().runtime.github_review_polling_state,
             super::super::github_polling::GithubReviewPollingState::Discovering { .. }
         )
     {
@@ -206,7 +208,7 @@ fn github_setup_starts_once_only_after_the_first_successful_frame() {
         thread::sleep(Duration::from_millis(5));
     }
     assert!(matches!(
-        runtime.app().github_review_polling_state,
+        runtime.app().runtime.github_review_polling_state,
         super::super::github_polling::GithubReviewPollingState::Active(_)
     ));
 }
@@ -218,10 +220,11 @@ fn host_history_sync_keeps_live_agent_delta_out_of_inserted_history() {
     let mut terminal =
         tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 160, 24);
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
     append_history_message(&mut app, "committed answer belongs in host history");
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start in a ready conversation state");
     };
     conversation.record_turn_started("turn-1".to_string());
@@ -249,8 +252,8 @@ fn host_history_sync_keeps_progressive_activity_rail_transient() {
     let mut terminal =
         tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 160, 24);
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
     append_history_message(&mut app, "committed history remains durable");
     tui_testkit::set_progressive_command_activity(
         &mut app,
@@ -310,7 +313,9 @@ fn host_history_sync_keeps_progressive_activity_rail_transient() {
             .contains("committed history remains durable")
     );
 
-    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &mut runtime.app_mut().conversation.lifecycle.conversation_state
+    else {
         panic!("test app should keep a ready conversation state");
     };
     conversation.fail_turn("command failed".to_string());
@@ -344,8 +349,8 @@ fn vt100_progressive_activity_rail_stays_transient_across_resize() {
         24,
     );
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
     append_history_message(&mut app, "committed VT100 history remains durable");
     tui_testkit::set_progressive_command_activity(
         &mut app,
@@ -383,7 +388,9 @@ fn vt100_progressive_activity_rail_stays_transient_across_resize() {
         assert!(!host_scrollback.contains(secret), "{width}x{height}");
     }
 
-    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &mut runtime.app_mut().conversation.lifecycle.conversation_state
+    else {
         panic!("test app should keep a ready conversation state");
     };
     conversation.fail_turn("command failed".to_string());
@@ -411,8 +418,8 @@ fn activity_inspector_pages_resize_and_approval_stay_out_of_host_scrollback() {
     let mut terminal =
         tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
     append_history_message(&mut app, "committed history remains durable");
     let _core_snapshot = tui_testkit::set_progressive_command_activity(&mut app, &detail, true);
     assert!(app.show_progressive_activity_overlay(ProgressiveActivityDetailKind::Diff));
@@ -423,6 +430,7 @@ fn activity_inspector_pages_resize_and_approval_stay_out_of_host_scrollback() {
     frames.draw_and_record("open", &mut terminal, &mut runtime, &mut inline_terminal);
     let next_page_start = runtime
         .app()
+        .shell
         .progressive_activity_overlay_ui_state
         .next_page_start()
         .expect("long detail should expose a second page");
@@ -439,6 +447,7 @@ fn activity_inspector_pages_resize_and_approval_stay_out_of_host_scrollback() {
     assert_eq!(
         runtime
             .app()
+            .shell
             .progressive_activity_overlay_ui_state
             .current_page_start(),
         next_page_start
@@ -471,6 +480,7 @@ fn activity_inspector_pages_resize_and_approval_stay_out_of_host_scrollback() {
     assert_eq!(
         runtime
             .app()
+            .shell
             .progressive_activity_overlay_ui_state
             .current_page_start(),
         0
@@ -483,7 +493,9 @@ fn activity_inspector_pages_resize_and_approval_stay_out_of_host_scrollback() {
         &mut inline_terminal,
     );
 
-    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &mut runtime.app_mut().conversation.lifecycle.conversation_state
+    else {
         panic!("test app should keep a ready conversation state");
     };
     conversation.pending_approval_request = Some(ConversationApprovalRequest {
@@ -605,8 +617,8 @@ fn vt100_activity_inspector_stays_transient_through_resize_and_approval() {
     let mut terminal =
         tui_testkit::inline_history_vt100_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
     let _core_snapshot = tui_testkit::set_progressive_command_activity(&mut app, &detail, false);
     assert!(app.show_progressive_activity_overlay(ProgressiveActivityDetailKind::Output));
     let mut runtime = ShellRuntime::new(app);
@@ -633,7 +645,9 @@ fn vt100_activity_inspector_stays_transient_through_resize_and_approval() {
         );
     }
 
-    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &mut runtime.app_mut().conversation.lifecycle.conversation_state
+    else {
         panic!("test app should keep a ready conversation state");
     };
     conversation.pending_approval_request = Some(ConversationApprovalRequest {
@@ -665,8 +679,8 @@ fn history_insert_invalidates_back_buffer_until_frame_draw() {
     let mut terminal =
         tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.history_insert_mode = HistoryInsertionMode::StandardScrollRegion;
+    app.shell.show_startup_ascii_art = false;
+    app.shell.history_insert_mode = HistoryInsertionMode::StandardScrollRegion;
     append_history_message(&mut app, "history insert should invalidate diff state");
     let mut runtime = ShellRuntime::new(app);
     let mut inline_terminal = InlineTerminalState::default();
@@ -706,8 +720,8 @@ fn newline_fallback_history_insert_invalidates_back_buffer() {
     let mut terminal =
         tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.history_insert_mode = HistoryInsertionMode::NewlineFallback;
+    app.shell.show_startup_ascii_art = false;
+    app.shell.history_insert_mode = HistoryInsertionMode::NewlineFallback;
     append_history_message(&mut app, "newline fallback committed history");
     let mut runtime = ShellRuntime::new(app);
     let mut inline_terminal = InlineTerminalState::default();
@@ -740,9 +754,10 @@ fn draw_transaction_flushes_history_and_live_tail_together() {
     let mut terminal =
         tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
+    app.shell.show_startup_ascii_art = false;
     append_history_message(&mut app, "committed history in transaction");
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start in a ready conversation state");
     };
     conversation.record_turn_started("turn-1".to_string());
@@ -786,10 +801,11 @@ fn assert_conversation_identity_switch_replays_shared_prefix_once(
     let mut terminal =
         tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 48, 24);
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
-    app.history_insert_mode = insert_mode;
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.shell.history_insert_mode = insert_mode;
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start ready");
     };
     conversation.thread_id = "thread-a".to_string();
@@ -819,7 +835,9 @@ fn assert_conversation_identity_switch_replays_shared_prefix_once(
     );
 
     let next_messages = {
-        let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        let ConversationState::Ready(conversation) =
+            &runtime.app().conversation.lifecycle.conversation_state
+        else {
             panic!("thread A should remain ready");
         };
         let mut messages = conversation.messages.clone();
@@ -867,19 +885,22 @@ fn assert_conversation_identity_switch_replays_shared_prefix_once(
     assert!(!switched.host_scrollback_text.contains("prompt:"));
 
     let same_thread_snapshot = {
-        let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        let ConversationState::Ready(conversation) =
+            &runtime.app().conversation.lifecycle.conversation_state
+        else {
             panic!("thread B should remain ready");
         };
         (**conversation).clone()
     };
-    runtime.app_mut().conversation_state = ConversationState::Loading;
+    runtime.app_mut().conversation.lifecycle.conversation_state = ConversationState::Loading;
     frames.draw_and_record(
         "same-thread-loading",
         &mut terminal,
         &mut runtime,
         &mut inline_terminal,
     );
-    runtime.app_mut().conversation_state = ConversationState::ready(same_thread_snapshot);
+    runtime.app_mut().conversation.lifecycle.conversation_state =
+        ConversationState::ready(same_thread_snapshot);
     frames.draw_and_record(
         "same-thread-reattached",
         &mut terminal,
@@ -958,11 +979,12 @@ fn released_handoff_app(
     shell_overlay: ShellOverlay,
 ) -> NativeTuiApp {
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.inline_history_render_mode = render_mode;
-    app.shell_overlay = shell_overlay;
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = render_mode;
+    app.shell.chrome.shell_overlay = shell_overlay;
     append_user_history_message(&mut app, "released handoff prompt");
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start in a ready conversation state");
     };
     conversation.record_turn_started("turn-handoff-redraw".to_string());
@@ -1005,7 +1027,9 @@ fn successful_viewport_handoff_ack_schedules_one_follow_up_frame() {
     );
     let delivered_screen = tui_testkit::screen_text(&terminal);
     assert!(delivered_screen.contains("released handoff answer"));
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("handoff delivery should keep a ready conversation");
     };
     assert!(!conversation.has_pending_viewport_transcript_handoff());
@@ -1056,7 +1080,9 @@ fn parallel_host_handoff_reprojects_overlay_frame_after_ack() {
         draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
             .expect("parallel host handoff frame")
     );
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("parallel host delivery should keep a ready conversation");
     };
     assert!(!conversation.has_pending_viewport_transcript_handoff());
@@ -1116,7 +1142,9 @@ fn parallel_handoff_draw_resize_preserves_retry_backoff() {
         !draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
             .expect("draw-time resize should defer the post-handoff frame")
     );
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("parallel host delivery should keep a ready conversation");
     };
     assert!(!conversation.has_pending_viewport_transcript_handoff());
@@ -1142,8 +1170,12 @@ fn stale_conversation_identity_receipt_cannot_ack_current_handoff() {
         .expect("released handoff should have a delivery token");
     let mut runtime = ShellRuntime::new(app);
 
-    runtime.app_mut().conversation_history_identity_revision = runtime
+    runtime
+        .app_mut()
+        .conversation
+        .conversation_history_identity_revision = runtime
         .app()
+        .conversation
         .conversation_history_identity_revision
         .wrapping_add(1)
         .max(1);
@@ -1151,7 +1183,9 @@ fn stale_conversation_identity_receipt_cannot_ack_current_handoff() {
         &mut runtime,
         Some(&stale_token),
     ));
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("test app should retain its ready conversation");
     };
     assert!(conversation.has_pending_viewport_transcript_handoff());
@@ -1178,6 +1212,7 @@ fn failed_terminal_draw_keeps_handoff_pending_and_forces_retry() {
     let mut inline_terminal = InlineTerminalState::default();
     runtime
         .app_mut()
+        .planning
         .queue_overlay_ui_state
         .bind_receipt_undo_hit_area(Some(Rect::new(4, 7, 14, 1)));
     terminal.backend_mut().inner_mut().fail_next_draw();
@@ -1186,7 +1221,9 @@ fn failed_terminal_draw_keeps_handoff_pending_and_forces_retry() {
         draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal).is_err(),
         "an injected terminal draw error must escape the transaction"
     );
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("test app should retain its ready conversation");
     };
     assert!(conversation.has_pending_viewport_transcript_handoff());
@@ -1194,7 +1231,11 @@ fn failed_terminal_draw_keeps_handoff_pending_and_forces_retry() {
     assert_eq!(inline_terminal.latest_frame_render_attempt(), 1);
     assert_eq!(inline_terminal.last_committed_frame_render_attempt(), None);
     assert_eq!(
-        runtime.app().queue_overlay_ui_state.receipt_undo_hit_area(),
+        runtime
+            .app()
+            .planning
+            .queue_overlay_ui_state
+            .receipt_undo_hit_area(),
         None,
         "a failed draw must fail closed instead of retaining clickable geometry"
     );
@@ -1203,7 +1244,9 @@ fn failed_terminal_draw_keeps_handoff_pending_and_forces_retry() {
         draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
             .expect("the unchanged handoff should redraw after the transient failure")
     );
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("test app should retain its ready conversation");
     };
     assert!(!conversation.has_pending_viewport_transcript_handoff());
@@ -1228,6 +1271,7 @@ fn failed_terminal_flush_discards_render_receipt_and_stable_retry_commits_once()
     let mut inline_terminal = InlineTerminalState::default();
     runtime
         .app_mut()
+        .planning
         .queue_overlay_ui_state
         .bind_receipt_undo_hit_area(Some(Rect::new(4, 7, 14, 1)));
     terminal.backend_mut().inner_mut().fail_next_flush();
@@ -1236,14 +1280,20 @@ fn failed_terminal_flush_discards_render_receipt_and_stable_retry_commits_once()
         draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal).is_err(),
         "an injected terminal flush error must escape the transaction"
     );
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("test app should retain its ready conversation");
     };
     assert!(conversation.has_pending_viewport_transcript_handoff());
     assert_eq!(inline_terminal.latest_frame_render_attempt(), 1);
     assert_eq!(inline_terminal.last_committed_frame_render_attempt(), None);
     assert_eq!(
-        runtime.app().queue_overlay_ui_state.receipt_undo_hit_area(),
+        runtime
+            .app()
+            .planning
+            .queue_overlay_ui_state
+            .receipt_undo_hit_area(),
         None,
         "a failed flush cannot authorize a hit target from an unproven frame"
     );
@@ -1253,7 +1303,9 @@ fn failed_terminal_flush_discards_render_receipt_and_stable_retry_commits_once()
         draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
             .expect("the unchanged frame should redraw after the transient flush failure")
     );
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("stable retry should retain its ready conversation");
     };
     assert!(!conversation.has_pending_viewport_transcript_handoff());
@@ -1267,8 +1319,8 @@ fn failed_terminal_flush_discards_render_receipt_and_stable_retry_commits_once()
 #[test]
 fn frame_attempt_gate_rejects_stale_and_duplicate_receipts() {
     let mut app = make_test_app();
-    app.shell_overlay = ShellOverlay::Help;
-    app.help_scroll_offset = usize::MAX;
+    app.shell.chrome.shell_overlay = ShellOverlay::Help;
+    app.shell.help_scroll_offset = usize::MAX;
     let area = Rect::new(0, 0, 80, 24);
     let capture_receipt = |app: &NativeTuiApp| {
         let projection = frame_projection(app, area.width);
@@ -1288,26 +1340,26 @@ fn frame_attempt_gate_rejects_stale_and_duplicate_receipts() {
     let receipt_b = capture_receipt(&app);
     let duplicate_receipt_b = capture_receipt(&app);
     let attempt_b = inline_terminal.begin_frame_render_attempt();
-    let initial_help_scroll = app.help_scroll_offset;
+    let initial_help_scroll = app.shell.help_scroll_offset;
 
     assert!(!inline_terminal.commit_frame_render_receipt(
-        &mut app,
         super::PendingInlineFrameRenderReceipt {
             attempt: attempt_a,
             receipt: receipt_a,
         },
+        |receipt| super::apply_inline_frame_render_receipt(&mut app, receipt),
     ));
-    assert_eq!(app.help_scroll_offset, initial_help_scroll);
+    assert_eq!(app.shell.help_scroll_offset, initial_help_scroll);
     assert_eq!(inline_terminal.last_committed_frame_render_attempt(), None);
 
     assert!(inline_terminal.commit_frame_render_receipt(
-        &mut app,
         super::PendingInlineFrameRenderReceipt {
             attempt: attempt_b,
             receipt: receipt_b,
         },
+        |receipt| super::apply_inline_frame_render_receipt(&mut app, receipt),
     ));
-    let committed_help_scroll = app.help_scroll_offset;
+    let committed_help_scroll = app.shell.help_scroll_offset;
     assert!(committed_help_scroll < initial_help_scroll);
     assert_eq!(
         inline_terminal.last_committed_frame_render_attempt(),
@@ -1315,13 +1367,13 @@ fn frame_attempt_gate_rejects_stale_and_duplicate_receipts() {
     );
 
     assert!(!inline_terminal.commit_frame_render_receipt(
-        &mut app,
         super::PendingInlineFrameRenderReceipt {
             attempt: attempt_b,
             receipt: duplicate_receipt_b,
         },
+        |receipt| super::apply_inline_frame_render_receipt(&mut app, receipt),
     ));
-    assert_eq!(app.help_scroll_offset, committed_help_scroll);
+    assert_eq!(app.shell.help_scroll_offset, committed_help_scroll);
     assert_eq!(
         inline_terminal.last_committed_frame_render_attempt(),
         Some(2)
@@ -1349,6 +1401,7 @@ fn post_draw_size_failure_discards_render_receipt_and_hit_target() {
         .expect("stable pre-draw resize snapshot");
     runtime
         .app_mut()
+        .planning
         .queue_overlay_ui_state
         .bind_receipt_undo_hit_area(Some(Rect::new(4, 7, 14, 1)));
     let draw_calls_before = terminal.backend().inner().draw_call_count();
@@ -1376,14 +1429,20 @@ fn post_draw_size_failure_discards_render_receipt_and_hit_target() {
         draw_calls_before + 1,
         "the injected size error must happen after backend draw"
     );
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("test app should retain its ready conversation");
     };
     assert!(conversation.has_pending_viewport_transcript_handoff());
     assert_eq!(inline_terminal.latest_frame_render_attempt(), 1);
     assert_eq!(inline_terminal.last_committed_frame_render_attempt(), None);
     assert_eq!(
-        runtime.app().queue_overlay_ui_state.receipt_undo_hit_area(),
+        runtime
+            .app()
+            .planning
+            .queue_overlay_ui_state
+            .receipt_undo_hit_area(),
         None,
         "a failed post-draw geometry proof must clear clickable geometry"
     );
@@ -1395,7 +1454,9 @@ fn post_draw_size_failure_discards_render_receipt_and_hit_target() {
         &mut runtime,
         &mut inline_terminal
     ));
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("stable retry should retain its ready conversation");
     };
     assert!(!conversation.has_pending_viewport_transcript_handoff());
@@ -1414,11 +1475,12 @@ fn completed_agent_handoff_flushes_at_settlement_and_only_once() {
     let mut terminal =
         tui_testkit::inline_history_vt100_terminal(InlineHistoryRenderMode::HostScrollback, 48, 24);
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
-    app.conversation_view_mode = ConversationViewMode::Detail;
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.conversation.conversation_view_mode = ConversationViewMode::Detail;
     append_user_history_message(&mut app, "handoff prompt");
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start in a ready conversation state");
     };
     conversation.thread_id = "thread-handoff".to_string();
@@ -1434,7 +1496,9 @@ fn completed_agent_handoff_flushes_at_settlement_and_only_once() {
 
     draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
         .expect("streaming handoff draw transaction");
-    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &mut runtime.app_mut().conversation.lifecycle.conversation_state
+    else {
         panic!("test app should keep a ready conversation state");
     };
     assert!(conversation.complete_live_agent_message(
@@ -1460,7 +1524,9 @@ fn completed_agent_handoff_flushes_at_settlement_and_only_once() {
         0
     );
 
-    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &mut runtime.app_mut().conversation.lifecycle.conversation_state
+    else {
         panic!("test app should keep a ready conversation state");
     };
     conversation.finish_turn("turn-handoff", &[]);
@@ -1482,7 +1548,9 @@ fn completed_agent_handoff_flushes_at_settlement_and_only_once() {
     assert!(!settlement_screen.contains("Enter when ready"));
     assert!(settlement_screen.find("◦ Working") < settlement_screen.rfind("prompt:"));
 
-    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &mut runtime.app_mut().conversation.lifecycle.conversation_state
+    else {
         panic!("test app should keep a ready conversation state");
     };
     assert!(!conversation.has_pending_viewport_transcript_handoff());
@@ -1524,9 +1592,10 @@ fn settlement_flushes_long_completed_answer_to_host_scrollback() {
     let mut terminal =
         tui_testkit::inline_history_vt100_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start in a ready conversation state");
     };
     conversation.record_turn_started("turn-long-settlement".to_string());
@@ -1576,9 +1645,10 @@ fn manual_preparation_failure_is_delivered_before_new_draft_can_replace_it() {
     let mut terminal =
         tui_testkit::inline_history_vt100_terminal(InlineHistoryRenderMode::HostScrollback, 48, 24);
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start in a ready conversation state");
     };
     conversation
@@ -1589,7 +1659,9 @@ fn manual_preparation_failure_is_delivered_before_new_draft_can_replace_it() {
     runtime
         .app_mut()
         .dispatch_conversation_intent(ConversationIntentEvent::NewDraftRequested);
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("blocked navigation should keep the failed draft ready");
     };
     assert!(conversation.has_pending_viewport_transcript_handoff());
@@ -1609,7 +1681,9 @@ fn manual_preparation_failure_is_delivered_before_new_draft_can_replace_it() {
         .expect("manual preparation failure draw transaction");
     let delivered_history = tui_testkit::inline_vt100_scrollback_text(&mut terminal);
     assert_eq!(delivered_history.matches(PROMPT_MARKER).count(), 1);
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("history delivery should keep the failed draft ready");
     };
     assert!(!conversation.has_pending_viewport_transcript_handoff());
@@ -1628,10 +1702,11 @@ fn viewport_replay_does_not_duplicate_completed_agent_handoff() {
     let mut terminal =
         tui_testkit::inline_history_vt100_terminal(InlineHistoryRenderMode::ViewportReplay, 80, 24);
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.inline_history_render_mode = InlineHistoryRenderMode::ViewportReplay;
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::ViewportReplay;
     append_user_history_message(&mut app, "viewport replay prompt");
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start in a ready conversation state");
     };
     conversation.record_turn_started("turn-viewport-replay".to_string());
@@ -1660,7 +1735,9 @@ fn viewport_replay_does_not_duplicate_completed_agent_handoff() {
         .join("\n");
     assert_eq!(live_handoff.matches(FINAL_MARKER).count(), 1);
 
-    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &mut runtime.app_mut().conversation.lifecycle.conversation_state
+    else {
         panic!("test app should keep a ready conversation state");
     };
     conversation.finish_turn("turn-viewport-replay", &[]);
@@ -1677,8 +1754,9 @@ fn viewport_replay_does_not_duplicate_completed_agent_handoff() {
 #[test]
 fn frame_cache_invalidates_when_only_live_agent_text_changes() {
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    app.shell.show_startup_ascii_art = false;
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start in a ready conversation state");
     };
     conversation.record_turn_started("turn-cache".to_string());
@@ -1694,7 +1772,8 @@ fn frame_cache_invalidates_when_only_live_agent_text_changes() {
     assert!(!frame_cache_should_draw(
         &mut cache, &app, &viewport, 80, 24
     ));
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should keep a ready conversation state");
     };
     conversation.push_live_agent_delta(
@@ -1854,7 +1933,7 @@ fn vt100_focus_reacquire_repaints_once_across_cjk_resize() {
         30,
     );
     let mut app = focus_reacquire_test_app();
-    app.history_insert_mode = HistoryInsertionMode::NewlineFallback;
+    app.shell.history_insert_mode = HistoryInsertionMode::NewlineFallback;
     let mut runtime = ShellRuntime::new(app);
     let mut inline_terminal = InlineTerminalState::default();
 
@@ -1947,8 +2026,8 @@ fn vt100_focus_reacquire_repaints_once_across_cjk_resize() {
 
 fn focus_reacquire_test_app() -> NativeTuiApp {
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
     append_history_message(&mut app, FOCUS_REACQUIRE_HISTORY_MARKER);
     for index in 0..40 {
         append_history_message(&mut app, &format!("focus history filler {index:02}"));
@@ -1983,10 +2062,11 @@ fn late_completion_across_agent_items_flushes_each_final_once_in_order() {
     let mut terminal =
         tui_testkit::inline_history_vt100_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
     append_user_history_message(&mut app, "multi-item handoff prompt");
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start in a ready conversation state");
     };
     conversation.record_turn_started("turn-multi-item".to_string());
@@ -2000,7 +2080,9 @@ fn late_completion_across_agent_items_flushes_each_final_once_in_order() {
     draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
         .expect("first agent draft draw transaction");
 
-    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &mut runtime.app_mut().conversation.lifecycle.conversation_state
+    else {
         panic!("test app should keep a ready conversation state");
     };
     conversation.complete_live_agent_message(
@@ -2021,7 +2103,9 @@ fn late_completion_across_agent_items_flushes_each_final_once_in_order() {
     assert_eq!(screen_during_second.matches(FIRST_MARKER).count(), 1);
     assert_eq!(screen_during_second.matches(SECOND_MARKER).count(), 1);
 
-    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &mut runtime.app_mut().conversation.lifecycle.conversation_state
+    else {
         panic!("test app should keep a ready conversation state");
     };
     conversation.complete_live_agent_message(
@@ -2040,7 +2124,9 @@ fn late_completion_across_agent_items_flushes_each_final_once_in_order() {
     assert_eq!(interleaved_screen.matches(FIRST_MARKER).count(), 1);
     assert_eq!(interleaved_screen.matches(SECOND_MARKER).count(), 1);
 
-    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &mut runtime.app_mut().conversation.lifecycle.conversation_state
+    else {
         panic!("test app should keep a ready conversation state");
     };
     conversation.complete_live_agent_message(
@@ -2060,7 +2146,9 @@ fn late_completion_across_agent_items_flushes_each_final_once_in_order() {
     assert_eq!(settlement_host.matches(SECOND_MARKER).count(), 1);
     assert!(settlement_host.find(FIRST_MARKER) < settlement_host.find(SECOND_MARKER));
 
-    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &mut runtime.app_mut().conversation.lifecycle.conversation_state
+    else {
         panic!("test app should keep a ready conversation state");
     };
     assert!(conversation.complete_post_turn_settlement("turn-multi-item"));
@@ -2090,10 +2178,11 @@ fn long_committed_commentary_does_not_push_current_live_item_below_viewport() {
     let mut terminal =
         tui_testkit::inline_history_vt100_terminal(InlineHistoryRenderMode::HostScrollback, 48, 24);
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
     append_user_history_message(&mut app, "long commentary prompt");
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start in a ready conversation state");
     };
     conversation.record_turn_started("turn-long-commentary".to_string());
@@ -2159,11 +2248,12 @@ fn assert_parallel_projection_delivers_conversation_handoff(
     const FINAL_MARKER: &str = "PARALLEL_PENDING_HANDOFF_MARKER";
     let mut terminal = tui_testkit::inline_history_vt100_terminal(render_mode, 80, 24);
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.inline_history_render_mode = render_mode;
-    app.history_insert_mode = insert_mode;
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = render_mode;
+    app.shell.history_insert_mode = insert_mode;
     append_user_history_message(&mut app, PROMPT_MARKER);
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start in a ready conversation state");
     };
     conversation.record_turn_started("turn-parallel-handoff".to_string());
@@ -2203,7 +2293,9 @@ fn assert_parallel_projection_delivers_conversation_handoff(
 
     draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
         .expect("parallel handoff draw transaction");
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("test app should keep a ready conversation state");
     };
     assert!(!conversation.has_pending_viewport_transcript_handoff());
@@ -2260,7 +2352,9 @@ fn assert_parallel_projection_delivers_conversation_handoff(
 
     draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
         .expect("stable parallel handoff draw transaction");
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("test app should keep a ready conversation state");
     };
     assert!(!conversation.has_pending_viewport_transcript_handoff());
@@ -2334,6 +2428,7 @@ fn draw_time_resize_aba_keeps_handoff_pending_until_stable_retry() {
         .report_resize_then_restore(2, Size::new(48, 10), 3, Size::new(80, 40));
     runtime
         .app_mut()
+        .planning
         .queue_overlay_ui_state
         .bind_receipt_undo_hit_area(Some(Rect::new(4, 7, 14, 1)));
 
@@ -2355,7 +2450,9 @@ fn draw_time_resize_aba_keeps_handoff_pending_until_stable_retry() {
         "the draw must observe both sides of the resize ABA"
     );
     assert_eq!(terminal.size().unwrap(), Size::new(80, 40));
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("deferred handoff should keep a ready conversation");
     };
     assert!(conversation.has_pending_viewport_transcript_handoff());
@@ -2363,7 +2460,11 @@ fn draw_time_resize_aba_keeps_handoff_pending_until_stable_retry() {
     assert_eq!(inline_terminal.latest_frame_render_attempt(), 1);
     assert_eq!(inline_terminal.last_committed_frame_render_attempt(), None);
     assert_eq!(
-        runtime.app().queue_overlay_ui_state.receipt_undo_hit_area(),
+        runtime
+            .app()
+            .planning
+            .queue_overlay_ui_state
+            .receipt_undo_hit_area(),
         None,
         "a same-size resize ABA must discard stale interaction geometry"
     );
@@ -2378,7 +2479,9 @@ fn draw_time_resize_aba_keeps_handoff_pending_until_stable_retry() {
         &mut runtime,
         &mut inline_terminal
     ));
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("stable retry should keep a ready conversation");
     };
     assert!(!conversation.has_pending_viewport_transcript_handoff());
@@ -2405,10 +2508,11 @@ fn assert_viewport_handoff_waits_for_a_successful_draw(parallel_mode_enabled: bo
     )
     .expect("viewport replay terminal should initialize");
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.inline_history_render_mode = InlineHistoryRenderMode::ViewportReplay;
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::ViewportReplay;
     append_user_history_message(&mut app, "resize guarded handoff prompt");
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start in a ready conversation state");
     };
     conversation.record_turn_started("turn-resize-handoff".to_string());
@@ -2429,13 +2533,15 @@ fn assert_viewport_handoff_waits_for_a_successful_draw(parallel_mode_enabled: bo
     let mut runtime = ShellRuntime::new(app);
     let mut inline_terminal = InlineTerminalState::default();
 
-    runtime.app_mut().shell_overlay = ShellOverlay::Help;
+    runtime.app_mut().shell.chrome.shell_overlay = ShellOverlay::Help;
     runtime
         .app_mut()
         .dispatch_conversation_intent(ConversationIntentEvent::NewDraftRequested);
     draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
         .expect("overlay-obscured viewport handoff draw transaction");
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("test app should keep a ready conversation state");
     };
     assert!(conversation.has_pending_viewport_transcript_handoff());
@@ -2444,7 +2550,7 @@ fn assert_viewport_handoff_waits_for_a_successful_draw(parallel_mode_enabled: bo
     assert!(!overlay_screen.contains(FINAL_MARKER));
     assert!(!overlay_screen.contains("Enter send"));
     assert!(overlay_screen.contains("response held while the dialog is open"));
-    runtime.app_mut().shell_overlay = ShellOverlay::Hidden;
+    runtime.app_mut().shell.chrome.shell_overlay = ShellOverlay::Hidden;
 
     assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_terminal).unwrap());
     terminal
@@ -2456,7 +2562,9 @@ fn assert_viewport_handoff_waits_for_a_successful_draw(parallel_mode_enabled: bo
         &mut runtime,
         &mut inline_terminal
     ));
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("test app should keep a ready conversation state");
     };
     assert!(conversation.has_pending_viewport_transcript_handoff());
@@ -2468,7 +2576,9 @@ fn assert_viewport_handoff_waits_for_a_successful_draw(parallel_mode_enabled: bo
         &mut runtime,
         &mut inline_terminal
     ));
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("test app should keep a ready conversation state");
     };
     assert!(!conversation.has_pending_viewport_transcript_handoff());
@@ -2497,8 +2607,8 @@ fn parallel_event_stream_flushes_rows_without_live_panel_chrome() {
     let mut terminal =
         tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
     app.set_parallel_mode_enabled_for_test(true);
     append_history_message(
         &mut app,
@@ -2588,8 +2698,8 @@ fn parallel_live_tail_continues_scrollback_without_inline_title() {
     let mut terminal =
         tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
     app.set_parallel_mode_enabled_for_test(true);
     for index in 0..48 {
         app.push_parallel_supervisor_event_for_test(
@@ -2657,8 +2767,8 @@ fn parallel_bootstrap_and_task_intake_stream_does_not_insert_tail_title() {
     let mut terminal =
         tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
     let mut app = make_test_app();
-    app.show_startup_ascii_art = true;
-    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.shell.show_startup_ascii_art = true;
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
     app.set_parallel_mode_enabled_for_test(true);
     app.set_parallel_mode_supervisor_snapshot_for_test(Some(
         status_runtime_feed_supervisor_snapshot(Vec::new()),
@@ -2715,8 +2825,8 @@ fn parallel_runtime_feed_primes_baseline_without_scrollback_duplication() {
     let mut terminal =
         tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
     app.set_parallel_mode_enabled_for_test(true);
     app.set_parallel_mode_supervisor_snapshot_for_test(Some(runtime_feed_supervisor_snapshot(
         vec![
@@ -2794,8 +2904,8 @@ fn parallel_stream_preserves_initial_status_rows_as_runtime_events_advance() {
     let mut terminal =
         tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
     app.set_parallel_mode_enabled_for_test(true);
     app.set_parallel_mode_supervisor_snapshot_for_test(Some(
         status_runtime_feed_supervisor_snapshot(vec![inline_runtime_feed_entry(
@@ -2875,8 +2985,8 @@ fn direct_frame_recorder_keeps_parallel_status_rows_across_runtime_redraw() {
     let mut terminal =
         tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
     app.set_parallel_mode_enabled_for_test(true);
     app.set_parallel_mode_supervisor_snapshot_for_test(Some(
         status_runtime_feed_supervisor_snapshot(vec![inline_runtime_feed_entry(
@@ -3004,8 +3114,8 @@ fn direct_frame_recorder_catches_wrapped_parallel_stream_split_at_live_boundary(
     let mut terminal =
         tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 48, 24);
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
     app.set_parallel_mode_enabled_for_test(true);
     app.set_parallel_mode_supervisor_snapshot_for_test(Some(active_runtime_feed_snapshot(
         ParallelModePoolSlotState::Leased,
@@ -3080,8 +3190,8 @@ fn parallel_history_fit_clears_live_panel_before_scrollback_adjustment() {
     let mut terminal =
         tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
     app.set_parallel_mode_enabled_for_test(true);
     for index in 0..12 {
         app.push_parallel_supervisor_event_for_test(
@@ -3333,8 +3443,8 @@ fn vt100_parallel_history_fit_does_not_push_live_panel_chrome() {
     let mut terminal =
         tui_testkit::inline_history_vt100_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
     app.set_parallel_mode_enabled_for_test(true);
     for index in 0..12 {
         app.push_parallel_supervisor_event_for_test(
@@ -3370,9 +3480,9 @@ fn vt100_newline_fallback_parallel_delta_keeps_chrome_out_of_host_scrollback() {
     let mut terminal =
         tui_testkit::inline_history_vt100_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
-    app.history_insert_mode = HistoryInsertionMode::NewlineFallback;
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.shell.history_insert_mode = HistoryInsertionMode::NewlineFallback;
     app.set_parallel_mode_enabled_for_test(true);
     for index in 0..20 {
         app.push_parallel_supervisor_event_for_test(
@@ -3424,14 +3534,15 @@ fn vt100_terminal_app_preserves_newline_fallback_history_after_live_resize() {
     let mut terminal =
         tui_testkit::inline_history_vt100_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
-    app.history_insert_mode = HistoryInsertionMode::NewlineFallback;
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.shell.history_insert_mode = HistoryInsertionMode::NewlineFallback;
     append_user_history_message(&mut app, "HISTORY_MARKER_ONE user prompt");
     append_history_message(&mut app, "HISTORY_MARKER_TWO committed answer");
     append_user_history_message(&mut app, "HISTORY_MARKER_THREE follow-up prompt");
     append_history_message(&mut app, "HISTORY_MARKER_FOUR committed answer");
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start in a ready conversation state");
     };
     conversation.record_turn_started("turn-1".to_string());
@@ -3458,7 +3569,8 @@ fn vt100_terminal_app_preserves_newline_fallback_history_after_live_resize() {
         "live streaming rows must not be flushed into host scrollback before completion: {host_scrollback_before_completion:?}"
     );
     let app = runtime.app_mut();
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should stay in a ready conversation state");
     };
     assert!(conversation.complete_live_agent_message(
@@ -3504,8 +3616,8 @@ fn viewport_replay_sync_skips_host_scrollback_insertions() {
     let mut replay_terminal =
         tui_testkit::inline_history_terminal(InlineHistoryRenderMode::ViewportReplay, 80, 24);
     let mut replay_app = make_test_app();
-    replay_app.show_startup_ascii_art = false;
-    replay_app.inline_history_render_mode = InlineHistoryRenderMode::ViewportReplay;
+    replay_app.shell.show_startup_ascii_art = false;
+    replay_app.shell.inline_history_render_mode = InlineHistoryRenderMode::ViewportReplay;
     append_history_message(&mut replay_app, THREAD_A_MARKER);
     let mut replay_runtime = ShellRuntime::new(replay_app);
     let mut replay_viewport = InlineTerminalState::default();
@@ -3561,8 +3673,8 @@ fn viewport_replay_sync_skips_host_scrollback_insertions() {
     let mut host_terminal =
         tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
     let mut host_app = make_test_app();
-    host_app.show_startup_ascii_art = false;
-    host_app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    host_app.shell.show_startup_ascii_art = false;
+    host_app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
     append_history_message(&mut host_app, "history should be inserted in host mode");
     let mut host_runtime = ShellRuntime::new(host_app);
     let mut host_viewport = InlineTerminalState::default();
@@ -3580,8 +3692,8 @@ fn viewport_replay_ignores_stale_host_scrollback_row_accounting() {
     let mut terminal =
         tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.inline_history_render_mode = InlineHistoryRenderMode::ViewportReplay;
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::ViewportReplay;
     append_history_message(
         &mut app,
         "replay mode should not consume stale host scrollback accounting",
@@ -3688,8 +3800,10 @@ fn physical_shrink_requeries_cursor_before_inline_autoresize() {
     )
     .expect("bottom-anchored inline terminal should initialize");
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    if let ConversationState::Ready(conversation) = &mut app.conversation_state {
+    app.shell.show_startup_ascii_art = false;
+    if let ConversationState::Ready(conversation) =
+        &mut app.conversation.lifecycle.conversation_state
+    {
         conversation.composer.input_buffer = "physical shrink prompt".to_string();
     }
     append_history_message(&mut app, "physical shrink history");
@@ -3771,7 +3885,7 @@ fn draw_resize_races_defer_physical_history_reconciliation() {
         )
         .expect("bottom-anchored inline terminal should initialize");
         let mut app = make_test_app();
-        app.show_startup_ascii_art = false;
+        app.shell.show_startup_ascii_art = false;
         let mut runtime = ShellRuntime::new(app);
         let mut inline_terminal = InlineTerminalState::default();
 
@@ -3843,7 +3957,7 @@ fn sync_resize_race_uses_one_stable_geometry_snapshot() {
     )
     .expect("bottom-anchored inline terminal should initialize");
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
+    app.shell.show_startup_ascii_art = false;
     let mut runtime = ShellRuntime::new(app);
     let mut inline_terminal = InlineTerminalState::default();
 
@@ -3888,8 +4002,8 @@ fn resize_after_stability_snapshot_defers_history_mutation() {
     )
     .expect("bottom-anchored inline terminal should initialize");
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.history_insert_mode = HistoryInsertionMode::StandardScrollRegion;
+    app.shell.show_startup_ascii_art = false;
+    app.shell.history_insert_mode = HistoryInsertionMode::StandardScrollRegion;
     let mut runtime = ShellRuntime::new(app);
     let mut inline_terminal = InlineTerminalState::default();
 
@@ -3948,8 +4062,8 @@ fn resize_after_history_insertion_commits_once_and_marks_row_accounting_dirty() 
     )
     .expect("bottom-anchored inline terminal should initialize");
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.history_insert_mode = HistoryInsertionMode::StandardScrollRegion;
+    app.shell.show_startup_ascii_art = false;
+    app.shell.history_insert_mode = HistoryInsertionMode::StandardScrollRegion;
     append_history_message(&mut app, "stable baseline history");
     let mut runtime = ShellRuntime::new(app);
     let mut inline_terminal = InlineTerminalState::default();
@@ -4022,7 +4136,7 @@ fn due_draw_drains_shrink_restore_events_before_history_accounting() {
     )
     .expect("bottom-anchored inline terminal should initialize");
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
+    app.shell.show_startup_ascii_art = false;
     let mut runtime = ShellRuntime::new(app);
     let mut inline_terminal = InlineTerminalState::default();
 
@@ -4081,7 +4195,7 @@ fn autoresize_retries_sampled_shrink_restore_before_history_mutation() {
     )
     .expect("bottom-anchored inline terminal should initialize");
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
+    app.shell.show_startup_ascii_art = false;
     let mut runtime = ShellRuntime::new(app);
     let mut inline_terminal = InlineTerminalState::default();
 
@@ -4129,7 +4243,7 @@ fn unstable_resize_retries_before_pending_quit_and_history_reconciliation() {
     )
     .expect("bottom-anchored inline terminal should initialize");
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
+    app.shell.show_startup_ascii_art = false;
     let mut runtime = ShellRuntime::new(app);
     let mut inline_terminal = InlineTerminalState::default();
 
@@ -4241,10 +4355,12 @@ fn assert_resize_sequence_does_not_leak_live_tail(
 ) {
     let mut terminal = tui_testkit::inline_history_terminal(render_mode, 80, 24);
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.inline_history_render_mode = render_mode;
-    app.history_insert_mode = HistoryInsertionMode::StandardScrollRegion;
-    if let ConversationState::Ready(conversation) = &mut app.conversation_state {
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = render_mode;
+    app.shell.history_insert_mode = HistoryInsertionMode::StandardScrollRegion;
+    if let ConversationState::Ready(conversation) =
+        &mut app.conversation.lifecycle.conversation_state
+    {
         conversation.composer.input_buffer = "live prompt must not move to scrollback".to_string();
     }
     append_history_message(&mut app, history_message);
@@ -4268,10 +4384,12 @@ fn assert_draw_internal_resize_does_not_leak_live_tail(
 ) {
     let mut terminal = tui_testkit::inline_history_terminal(render_mode, 80, 24);
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.inline_history_render_mode = render_mode;
-    app.history_insert_mode = HistoryInsertionMode::StandardScrollRegion;
-    if let ConversationState::Ready(conversation) = &mut app.conversation_state {
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = render_mode;
+    app.shell.history_insert_mode = HistoryInsertionMode::StandardScrollRegion;
+    if let ConversationState::Ready(conversation) =
+        &mut app.conversation.lifecycle.conversation_state
+    {
         conversation.composer.input_buffer = "live prompt must not move to scrollback".to_string();
     }
     append_history_message(&mut app, history_message);
@@ -4453,18 +4571,18 @@ fn overlay_cycle_resets_hidden_tail_redraw_cache() {
         24
     ));
 
-    app.shell_overlay = ShellOverlay::Startup;
+    app.shell.chrome.shell_overlay = ShellOverlay::Startup;
     assert!(inline_state_should_draw(&mut inline_viewport, &app, 80, 24));
 
-    app.shell_overlay = ShellOverlay::Hidden;
+    app.shell.chrome.shell_overlay = ShellOverlay::Hidden;
     assert!(inline_state_should_draw(&mut inline_viewport, &app, 80, 24));
 }
 #[test]
 fn inline_history_uses_startup_banner_while_typing_in_new_draft() {
     let mut app = make_test_app();
-    app.show_startup_ascii_art = true;
+    app.shell.show_startup_ascii_art = true;
     if let crate::adapter::inbound::tui::app::ConversationState::Ready(conversation) =
-        &mut app.conversation_state
+        &mut app.conversation.lifecycle.conversation_state
     {
         conversation.composer.input_buffer = "hello banner".to_string();
     }
@@ -4482,7 +4600,7 @@ fn inline_history_uses_startup_banner_while_typing_in_new_draft() {
 #[test]
 fn inline_history_does_not_flush_startup_banner_while_parallel_home_is_active() {
     let mut app = make_test_app();
-    app.show_startup_ascii_art = true;
+    app.shell.show_startup_ascii_art = true;
     app.set_parallel_mode_enabled_for_test(true);
 
     let rendered = current_inline_history_lines(&app)
@@ -4499,7 +4617,8 @@ fn inline_history_does_not_flush_startup_banner_while_parallel_home_is_active() 
 #[test]
 fn inline_history_shows_planning_worker_debug_detail_when_visibility_is_debug() {
     let mut app = make_test_app();
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start in a ready conversation state");
     };
     conversation.messages.push(
@@ -4519,7 +4638,7 @@ fn inline_history_shows_planning_worker_debug_detail_when_visibility_is_debug() 
         .join("\n");
     assert!(!normal_lines.contains("planning worker temporary session"));
 
-    app.planning_worker_visibility = PlanningWorkerVisibility::Debug;
+    app.planning.planning_worker_visibility = PlanningWorkerVisibility::Debug;
     let debug_lines = current_inline_history_lines(&app)
         .into_iter()
         .map(|line| line.to_string())
@@ -4531,7 +4650,8 @@ fn inline_history_shows_planning_worker_debug_detail_when_visibility_is_debug() 
 #[test]
 fn inline_history_view_mode_controls_tool_and_status_rows() {
     let mut app = make_test_app();
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start in a ready conversation state");
     };
     conversation.messages.push(ConversationMessage::new(
@@ -4563,7 +4683,7 @@ fn inline_history_view_mode_controls_tool_and_status_rows() {
     assert!(!simple_lines.contains("tool     "));
     assert!(!simple_lines.contains("Status:"));
 
-    app.conversation_view_mode = ConversationViewMode::Medium;
+    app.conversation.conversation_view_mode = ConversationViewMode::Medium;
     let medium_lines = current_inline_history_lines(&app)
         .into_iter()
         .map(|line| line.to_string())
@@ -4581,8 +4701,8 @@ fn host_scrollback_preserves_long_single_completion_beyond_screen_cap() {
     let mut terminal =
         tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 100, 30);
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
     let body = (0..180)
         .map(|index| match index {
             0 => "LONG_SINGLE_MARKER_FIRST".to_string(),
@@ -4624,8 +4744,8 @@ fn vt100_host_scrollback_preserves_long_single_completion_beyond_screen_cap() {
         30,
     );
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
     let body = (0..180)
         .map(|index| match index {
             0 => "VT100_LONG_SINGLE_MARKER_FIRST".to_string(),
@@ -4659,8 +4779,8 @@ fn host_scrollback_preserves_multiturn_history_beyond_screen_cap_without_duplica
     let mut terminal =
         tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 100, 30);
     let mut app = make_test_app();
-    app.show_startup_ascii_art = false;
-    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
     let mut runtime = ShellRuntime::new(app);
     let mut inline_terminal = InlineTerminalState::default();
     let markers = (0..75)
@@ -4724,7 +4844,8 @@ fn append_user_history_message(app: &mut NativeTuiApp, text: &str) {
     append_message(app, ConversationMessageKind::User, text);
 }
 fn append_message(app: &mut NativeTuiApp, kind: ConversationMessageKind, text: &str) {
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start in a ready conversation state");
     };
     conversation
@@ -4752,24 +4873,17 @@ fn load_history_snapshot(
         },
         fallback_workspace_directory: "/tmp/root".to_string(),
     });
-    let correlation = app
-        .pending_conversation_load
-        .clone()
-        .expect("accepted history load should have a correlation");
-    app.apply_correlated_conversation_snapshot(
-        Some(correlation),
-        CoreConversationSnapshot::Ready(Box::new(
-            crate::core::app::ConversationReadySnapshot::from(DomainConversationSnapshot {
-                thread_id: thread_id.to_string(),
-                title: thread_id.to_string(),
-                cwd: "/tmp/root".to_string(),
-                messages,
-                warnings: Vec::new(),
-                runtime_notices: Vec::new(),
-                item_lifecycle: Default::default(),
-            }),
-        )),
-    );
+    app.apply_core_conversation_snapshot(CoreConversationSnapshot::Ready(Box::new(
+        crate::core::app::ConversationReadySnapshot::from(DomainConversationSnapshot {
+            thread_id: thread_id.to_string(),
+            title: thread_id.to_string(),
+            cwd: "/tmp/root".to_string(),
+            messages,
+            warnings: Vec::new(),
+            runtime_notices: Vec::new(),
+            item_lifecycle: Default::default(),
+        }),
+    )));
 }
 
 // Counting backend is a probe for adapter behavior: it exposes accidental

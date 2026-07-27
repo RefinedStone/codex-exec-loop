@@ -18,11 +18,13 @@ use super::shell_presentation::{
     build_parallel_peek_overlay_view_from_snapshot,
     build_planning_draft_editor_overlay_view_from_state,
     build_planning_init_overlay_view_from_projection, build_queue_overlay_view_from_projection,
-    build_reviews_overlay_view, build_session_overlay_view, build_startup_overlay_view,
-    build_supersession_overlay_view, build_view_selection_overlay_view,
+    build_reviews_overlay_view, build_session_overlay_view, build_startup_banner_lines,
+    build_startup_overlay_view, build_supersession_overlay_view, build_view_selection_overlay_view,
+    format_conversation_scrollback_lines_with_expand,
 };
 use super::shell_rendering::{
-    count_rendered_inline_rows, inline_frame_inspection_area, inline_section_height,
+    count_rendered_inline_rows, inline_frame_inspection_area,
+    inline_parallel_event_stream_visible_rows, inline_section_height,
 };
 use super::*;
 
@@ -50,6 +52,133 @@ pub(super) struct InlineConversationFrameProjection {
     sampled_planning_runtime_projection: Box<PlanningRuntimeProjection>,
 }
 
+pub(super) struct ParallelConversationHandoffProjection {
+    pub(super) lines: Vec<Line<'static>>,
+    pub(super) delivery_token: TranscriptHandoffDeliveryToken,
+}
+
+pub(super) struct InlineTerminalSyncProjection {
+    pub(super) sampled_parallel_frame_projection: Option<InlineConversationFrameProjection>,
+    pub(super) parallel_handoff_conversation_lines: Option<ParallelConversationHandoffProjection>,
+    pub(super) current_history_projection: Option<Vec<Line<'static>>>,
+}
+
+pub(super) fn capture_inline_terminal_sync_projection(
+    app: &NativeTuiApp,
+    viewport_area: Rect,
+    sample: &ConversationProjectionSample,
+) -> InlineTerminalSyncProjection {
+    let sampled_parallel_frame_projection = sample.parallel_mode_enabled().then(|| {
+        InlineConversationFrameProjection::from_app_with_sample(app, viewport_area.width, sample)
+    });
+    let parallel_handoff_conversation_lines = (sample.parallel_mode_enabled()
+        && sample.inline_history_render_mode().writes_host_scrollback())
+    .then(|| capture_parallel_conversation_handoff_projection(app, sample))
+    .flatten();
+    let current_history_projection = current_inline_history_lines_for_viewport(
+        app,
+        viewport_area,
+        sample,
+        sampled_parallel_frame_projection.as_ref(),
+    );
+    InlineTerminalSyncProjection {
+        sampled_parallel_frame_projection,
+        parallel_handoff_conversation_lines,
+        current_history_projection,
+    }
+}
+
+pub(super) fn capture_parallel_conversation_handoff_projection(
+    app: &NativeTuiApp,
+    sample: &ConversationProjectionSample,
+) -> Option<ParallelConversationHandoffProjection> {
+    let ConversationState::Ready(conversation) = &app.conversation.lifecycle.conversation_state
+    else {
+        return None;
+    };
+    conversation.viewport_transcript_handoff_release_messages()?;
+    Some(ParallelConversationHandoffProjection {
+        lines: format_conversation_scrollback_lines_with_expand(
+            conversation.host_scrollback_messages(),
+            app.conversation.conversation_view_mode,
+            app.conversation
+                .conversation_view_mode
+                .shows_debug_details()
+                || app.planning_worker_shows_debug_details(),
+            Some(
+                app.shell
+                    .progressive_activity_overlay_ui_state
+                    .expand_state(),
+            ),
+        ),
+        delivery_token: TranscriptHandoffDeliveryToken::from_sample(sample)?,
+    })
+}
+
+fn current_inline_history_lines_for_viewport(
+    app: &NativeTuiApp,
+    viewport_area: Rect,
+    sample: &ConversationProjectionSample,
+    parallel_frame_projection: Option<&InlineConversationFrameProjection>,
+) -> Option<Vec<Line<'static>>> {
+    if sample.parallel_mode_enabled() {
+        /*
+         * Parallel mode owns the main inline body with the supervisor board. The
+         * durable host scrollback receives only append-only event rows.
+         */
+        return Some(
+            parallel_frame_projection.map_or_else(Vec::new, |projection| {
+                current_inline_parallel_history_lines(viewport_area, sample, projection)
+            }),
+        );
+    }
+    if let Some(startup_banner_lines) =
+        build_startup_banner_lines(app, sample.parallel_mode_enabled(), None)
+    {
+        return Some(startup_banner_lines);
+    }
+    match &app.conversation.lifecycle.conversation_state {
+        ConversationState::Ready(conversation) => {
+            let messages = conversation.host_scrollback_messages();
+            if messages.is_empty()
+                && conversation
+                    .viewport_transcript_handoff_messages()
+                    .is_some()
+            {
+                return Some(Vec::new());
+            }
+            Some(format_conversation_scrollback_lines_with_expand(
+                messages,
+                app.conversation.conversation_view_mode,
+                app.conversation
+                    .conversation_view_mode
+                    .shows_debug_details()
+                    || app.planning_worker_shows_debug_details(),
+                Some(
+                    app.shell
+                        .progressive_activity_overlay_ui_state
+                        .expand_state(),
+                ),
+            ))
+        }
+        // Loading/failure retain the prior host-scrollback diff baseline.
+        ConversationState::Loading | ConversationState::Failed(_) => None,
+    }
+}
+
+fn current_inline_parallel_history_lines(
+    viewport_area: Rect,
+    sample: &ConversationProjectionSample,
+    frame_projection: &InlineConversationFrameProjection,
+) -> Vec<Line<'static>> {
+    let live_tail_lines =
+        inline_parallel_event_stream_visible_rows(frame_projection, viewport_area);
+    sample.parallel_supervisor_event_scrollback_lines_before_live_tail(
+        live_tail_lines,
+        viewport_area.width,
+    )
+}
+
 impl InlineConversationFrameProjection {
     #[cfg(test)]
     pub(super) fn from_app(app: &NativeTuiApp, content_width: u16) -> Self {
@@ -69,7 +198,7 @@ impl InlineConversationFrameProjection {
             .then(|| {
                 Box::new(build_supersession_overlay_view(
                     &screen_model,
-                    &app.supersession_mud_ui_state,
+                    &app.shell.supersession_mud_ui_state,
                 ))
             });
         Self::from_screen_model(screen_model, content_width, supersession_overlay_view)
@@ -228,7 +357,7 @@ pub(super) fn capture_inline_shell_frame_model(
         approval_scroll_offset: None,
         session_list_state: None,
         queue_receipt_undo_hit_area: StateChange {
-            expected: app.queue_overlay_ui_state.receipt_undo_hit_area(),
+            expected: app.planning.queue_overlay_ui_state.receipt_undo_hit_area(),
             next: None,
         },
     };
@@ -254,7 +383,7 @@ pub(super) fn capture_inline_shell_frame_model(
         ShellOverlay::Sessions => {
             let screen_model = SessionOverlayScreenModel::capture(app);
             let view = build_session_overlay_view(&screen_model);
-            let expected = app.session_overlay_ui_state.list_state;
+            let expected = app.shell.session_overlay_ui_state.list_state;
             let mut list_state = expected;
             if view.list_view.message_lines.is_none() {
                 list_state.select(view.list_view.selected_index);
@@ -285,10 +414,11 @@ pub(super) fn capture_inline_shell_frame_model(
         ShellOverlay::ParallelPeek => InlineInspectionFrameModel::ParallelPeek {
             view: build_parallel_peek_overlay_view_from_snapshot(
                 &projection.sampled_parallel_supervisor,
-                &app.parallel_peek_overlay_ui_state,
+                &app.shell.parallel_peek_overlay_ui_state,
             ),
-            step: app.parallel_peek_overlay_ui_state.step(),
+            step: app.shell.parallel_peek_overlay_ui_state.step(),
             scroll_from_bottom: app
+                .shell
                 .parallel_peek_overlay_ui_state
                 .conversation_scroll_from_bottom(),
         },
@@ -298,24 +428,24 @@ pub(super) fn capture_inline_shell_frame_model(
             InlineInspectionFrameModel::Activity(view)
         }
         ShellOverlay::Help => {
-            let view = build_help_overlay_view(app.tui_language);
+            let view = build_help_overlay_view(app.shell.tui_language);
             let visible_rows = help_visible_command_rows(inspection_area, &view);
             let rendered_rows =
                 count_rendered_inline_rows(&view.command_lines, inspection_area.width);
             let max_scroll = rendered_rows.saturating_sub(visible_rows.max(1));
-            let next = app.help_scroll_offset.min(max_scroll);
+            let next = app.shell.help_scroll_offset.min(max_scroll);
             receipt.help_scroll_offset = Some(StateChange {
-                expected: app.help_scroll_offset,
+                expected: app.shell.help_scroll_offset,
                 next,
             });
             InlineInspectionFrameModel::Help {
-                language: app.tui_language,
+                language: app.shell.tui_language,
                 view,
                 scroll_offset: next.min(usize::from(u16::MAX)) as u16,
             }
         }
         ShellOverlay::Reviews => InlineInspectionFrameModel::Reviews(build_reviews_overlay_view(
-            app.reviews_overlay_ui_state.screen_model(),
+            app.shell.reviews_overlay_ui_state.screen_model(),
         )),
         ShellOverlay::Queue => {
             InlineInspectionFrameModel::Queue(build_queue_overlay_view_from_projection(
@@ -325,7 +455,7 @@ pub(super) fn capture_inline_shell_frame_model(
             ))
         }
         ShellOverlay::DirectionsMaintenance
-            if app.directions_maintenance_overlay_ui_state.step()
+            if app.planning.directions_maintenance_overlay_ui_state.step()
                 == DirectionsMaintenanceOverlayStep::ManualEditor =>
         {
             capture_draft_editor_frame(
@@ -339,7 +469,7 @@ pub(super) fn capture_inline_shell_frame_model(
             InlineInspectionFrameModel::Directions(build_directions_maintenance_overlay_view(app))
         }
         ShellOverlay::PlanningInit
-            if app.planning_init_overlay_ui_state.step()
+            if app.planning.planning_init_overlay_ui_state.step()
                 == PlanningInitOverlayStep::ManualEditor =>
         {
             capture_draft_editor_frame(app, inspection_area, "Planning Draft", &mut receipt)
@@ -384,24 +514,27 @@ pub(super) fn apply_inline_frame_render_receipt(
     } = receipt;
 
     if let Some(change) = activity {
-        app.progressive_activity_overlay_ui_state = change.next;
+        app.shell.progressive_activity_overlay_ui_state = change.next;
     }
     if let Some(change) = planning_editor {
-        app.planning_draft_editor_ui_state = change.next;
+        app.planning.planning_draft_editor_ui_state = change.next;
     }
     if let Some(change) = help_scroll_offset {
-        app.help_scroll_offset = change.next;
+        app.shell.help_scroll_offset = change.next;
     }
     if let Some(change) = approval_scroll_offset {
-        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        let ConversationState::Ready(conversation) =
+            &mut app.conversation.lifecycle.conversation_state
+        else {
             unreachable!("approval receipt was preflighted against a ready conversation");
         };
         conversation.approval_detail_scroll_offset = change.next;
     }
     if let Some(change) = session_list_state {
-        app.session_overlay_ui_state.list_state = change.next;
+        app.shell.session_overlay_ui_state.list_state = change.next;
     }
-    app.queue_overlay_ui_state
+    app.planning
+        .queue_overlay_ui_state
         .bind_receipt_undo_hit_area(queue_receipt_undo_hit_area.next);
     true
 }
@@ -413,23 +546,23 @@ fn inline_frame_render_receipt_matches(
     let activity_matches = receipt
         .activity
         .as_ref()
-        .is_none_or(|change| app.progressive_activity_overlay_ui_state == change.expected);
+        .is_none_or(|change| app.shell.progressive_activity_overlay_ui_state == change.expected);
     let planning_editor_matches = receipt
         .planning_editor
         .as_ref()
-        .is_none_or(|change| app.planning_draft_editor_ui_state == change.expected);
+        .is_none_or(|change| app.planning.planning_draft_editor_ui_state == change.expected);
     let help_matches = receipt
         .help_scroll_offset
         .as_ref()
-        .is_none_or(|change| app.help_scroll_offset == change.expected);
+        .is_none_or(|change| app.shell.help_scroll_offset == change.expected);
     let approval_matches = receipt
         .approval_scroll_offset
         .as_ref()
         .is_none_or(|change| {
-            app.conversation_history_identity_revision
+            app.conversation.conversation_history_identity_revision
                 == change.conversation_history_identity_revision
                 && matches!(
-                    &app.conversation_state,
+                    &app.conversation.lifecycle.conversation_state,
                     ConversationState::Ready(conversation)
                         if conversation.approval_detail_scroll_offset == change.expected
                             && conversation
@@ -441,10 +574,10 @@ fn inline_frame_render_receipt_matches(
                 )
         });
     let session_matches = receipt.session_list_state.as_ref().is_none_or(|change| {
-        app.session_overlay_ui_state.list_state == change.expected
+        app.shell.session_overlay_ui_state.list_state == change.expected
             && SessionOverlayScreenModel::capture(app) == change.expected_screen_model
     });
-    let queue_matches = app.queue_overlay_ui_state.receipt_undo_hit_area()
+    let queue_matches = app.planning.queue_overlay_ui_state.receipt_undo_hit_area()
         == receipt.queue_receipt_undo_hit_area.expected;
 
     activity_matches
@@ -462,26 +595,29 @@ fn capture_activity_frame(
     ActivityOverlayView,
     StateChange<ProgressiveActivityOverlayUiState>,
 ) {
-    let expected = app.progressive_activity_overlay_ui_state.clone();
+    let expected = app.shell.progressive_activity_overlay_ui_state.clone();
     let mut next = expected.clone();
     let selected_kind = next.selected_kind();
     let card_filter = next.card_filter();
-    let (lifecycle_epoch, diff_available, output_available, cards) = match &app.conversation_state {
-        ConversationState::Ready(conversation) => {
-            let detail = &conversation.progressive_activity_detail;
-            (
-                detail.lifecycle_epoch(),
-                detail
-                    .document(ProgressiveActivityDetailKind::Diff)
-                    .is_some(),
-                detail
-                    .document(ProgressiveActivityDetailKind::Output)
-                    .is_some(),
-                detail.cards(),
-            )
-        }
-        ConversationState::Loading | ConversationState::Failed(_) => (0, false, false, Vec::new()),
-    };
+    let (lifecycle_epoch, diff_available, output_available, cards) =
+        match &app.conversation.lifecycle.conversation_state {
+            ConversationState::Ready(conversation) => {
+                let detail = &conversation.progressive_activity_detail;
+                (
+                    detail.lifecycle_epoch(),
+                    detail
+                        .document(ProgressiveActivityDetailKind::Diff)
+                        .is_some(),
+                    detail
+                        .document(ProgressiveActivityDetailKind::Output)
+                        .is_some(),
+                    detail.cards(),
+                )
+            }
+            ConversationState::Loading | ConversationState::Failed(_) => {
+                (0, false, false, Vec::new())
+            }
+        };
     let filtered_indices = filter_cards_by_kind(&cards, card_filter);
     next.clamp_selected_card(filtered_indices.len());
     let selected_card_index = next.selected_card_index();
@@ -489,7 +625,7 @@ fn capture_activity_frame(
         .iter()
         .filter_map(|index| cards.get(*index).cloned())
         .collect::<Vec<_>>();
-    let document = match &app.conversation_state {
+    let document = match &app.conversation.lifecycle.conversation_state {
         ConversationState::Ready(conversation) => filtered_indices
             .get(selected_card_index)
             .and_then(|card_index| cards.get(*card_index))
@@ -582,7 +718,7 @@ fn capture_draft_editor_frame(
     title: &'static str,
     receipt: &mut InlineFrameRenderReceipt,
 ) -> InlineInspectionFrameModel {
-    let expected = app.planning_draft_editor_ui_state.clone();
+    let expected = app.planning.planning_draft_editor_ui_state.clone();
     let mut next = expected.clone();
     let editor_height = area.height.saturating_sub(14).max(6);
     let editor_content_height = editor_height.saturating_sub(1).max(1);
@@ -597,7 +733,7 @@ fn capture_approval_frame(
     area: Rect,
 ) -> (ApprovalInlineScreenModel, Option<ApprovalScrollStateChange>) {
     let Some((request, requested_scroll_offset, submitted_decision)) =
-        (match &app.conversation_state {
+        (match &app.conversation.lifecycle.conversation_state {
             ConversationState::Ready(conversation) => conversation
                 .pending_approval_request
                 .as_ref()
@@ -699,7 +835,9 @@ fn capture_approval_frame(
             rendered_detail_rows,
         },
         Some(ApprovalScrollStateChange {
-            conversation_history_identity_revision: app.conversation_history_identity_revision,
+            conversation_history_identity_revision: app
+                .conversation
+                .conversation_history_identity_revision,
             server_request_id: request.server_request_id,
             expected: requested_scroll_offset,
             next: next_scroll,
@@ -739,8 +877,8 @@ mod tests {
     #[test]
     fn stale_receipt_rejects_the_entire_ui_transaction() {
         let mut app = test_native_tui_app();
-        app.shell_overlay = ShellOverlay::Help;
-        app.help_scroll_offset = usize::MAX;
+        app.shell.chrome.shell_overlay = ShellOverlay::Help;
+        app.shell.help_scroll_offset = usize::MAX;
         let area = Rect::new(0, 0, 80, 24);
         let projection = InlineConversationFrameProjection::from_app(&app, area.width);
         let model = capture_inline_shell_frame_model(
@@ -752,13 +890,14 @@ mod tests {
         let (_, _, receipt) = model.into_parts();
 
         let conflicting_hit_area = Rect::new(2, 3, 4, 1);
-        app.queue_overlay_ui_state
+        app.planning
+            .queue_overlay_ui_state
             .bind_receipt_undo_hit_area(Some(conflicting_hit_area));
 
         assert!(!apply_inline_frame_render_receipt(&mut app, receipt));
-        assert_eq!(app.help_scroll_offset, usize::MAX);
+        assert_eq!(app.shell.help_scroll_offset, usize::MAX);
         assert_eq!(
-            app.queue_overlay_ui_state.receipt_undo_hit_area(),
+            app.planning.queue_overlay_ui_state.receipt_undo_hit_area(),
             Some(conflicting_hit_area)
         );
     }
@@ -766,14 +905,14 @@ mod tests {
     #[test]
     fn non_queryable_session_message_preserves_existing_list_state() {
         let mut app = test_native_tui_app();
-        app.shell_overlay = ShellOverlay::Sessions;
-        app.session_state = SessionState::Ready(SessionCatalog::unsupported(
+        app.shell.chrome.shell_overlay = ShellOverlay::Sessions;
+        app.shell.chrome.session_state = SessionState::Ready(SessionCatalog::unsupported(
             SessionCatalogTier::AttachOnly,
             "session listing is unsupported",
             vec!["manual attach only".to_string()],
         ));
         let existing_list_state = ListState::default().with_offset(4).with_selected(Some(5));
-        app.session_overlay_ui_state.list_state = existing_list_state;
+        app.shell.session_overlay_ui_state.list_state = existing_list_state;
         let area = Rect::new(0, 0, 80, 24);
         let projection = InlineConversationFrameProjection::from_app(&app, area.width);
         let model = capture_inline_shell_frame_model(
@@ -790,14 +929,19 @@ mod tests {
         assert!(view.list_view.message_lines.is_some());
         assert_eq!(list_state, existing_list_state);
         assert!(apply_inline_frame_render_receipt(&mut app, receipt));
-        assert_eq!(app.session_overlay_ui_state.list_state, existing_list_state);
+        assert_eq!(
+            app.shell.session_overlay_ui_state.list_state,
+            existing_list_state
+        );
     }
 
     #[test]
     fn approval_receipt_uses_the_same_u16_bounded_scroll_as_the_frame() {
         let mut app = test_native_tui_app();
-        app.shell_overlay = ShellOverlay::Approval;
-        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        app.shell.chrome.shell_overlay = ShellOverlay::Approval;
+        let ConversationState::Ready(conversation) =
+            &mut app.conversation.lifecycle.conversation_state
+        else {
             panic!("test app should have a ready conversation");
         };
         conversation.pending_approval_request = Some(ConversationApprovalRequest {
@@ -825,7 +969,8 @@ mod tests {
         assert_eq!(model.scroll_offset, u16::MAX);
         assert!(model.rendered_detail_rows > usize::from(u16::MAX));
         assert!(apply_inline_frame_render_receipt(&mut app, receipt));
-        let ConversationState::Ready(conversation) = &app.conversation_state else {
+        let ConversationState::Ready(conversation) = &app.conversation.lifecycle.conversation_state
+        else {
             panic!("test app should remain ready");
         };
         assert_eq!(

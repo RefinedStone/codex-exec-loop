@@ -17,7 +17,7 @@ impl NativeTuiApp {
     // local draft conversation만 shell workspace로 동기화한다. attached session은 기록된 cwd를 그대로 보존한다.
     pub(crate) fn sync_draft_shell_workspace(&mut self, workspace_directory: &str) {
         let should_refresh_draft = matches!(
-            &self.conversation_state,
+            &self.conversation.lifecycle.conversation_state,
             ConversationState::Ready(conversation)
                 if !conversation.has_active_thread()
                     && conversation.draft_workspace_directory() != workspace_directory
@@ -35,7 +35,7 @@ impl NativeTuiApp {
 
     // shell workspace는 startup diagnostics를 우선하고 없으면 process cwd를 쓴다. active thread workspace와 항상 같지는 않다.
     pub(crate) fn current_workspace_directory(&self) -> String {
-        match &self.startup_state {
+        match &self.shell.chrome.startup_state {
             StartupState::Ready(diagnostics) => diagnostics.workspace_path.clone(),
             _ => std::env::current_dir()
                 .map(|path| path.display().to_string())
@@ -46,7 +46,7 @@ impl NativeTuiApp {
 
     // planning workspace는 conversation이 있으면 그 thread/draft 기준을 따르고, 없으면 shell workspace로 fallback한다.
     pub(crate) fn planning_workspace_directory(&self) -> String {
-        match &self.conversation_state {
+        match &self.conversation.lifecycle.conversation_state {
             ConversationState::Ready(conversation) => {
                 conversation.planning_workspace_directory().to_string()
             }
@@ -58,12 +58,15 @@ impl NativeTuiApp {
         &mut self,
         workspace_directory: &str,
     ) -> Option<(PlanningRuntimeRefreshCorrelation, CoreDispatchOutcome)> {
-        if !matches!(self.conversation_state, ConversationState::Ready(_))
-            || self.planning_workspace_directory() != workspace_directory
+        if !matches!(
+            self.conversation.lifecycle.conversation_state,
+            ConversationState::Ready(_)
+        ) || self.planning_workspace_directory() != workspace_directory
         {
             return None;
         }
         let outcome = self
+            .runtime
             .client_runtime
             .dispatch_client_event(CoreInput::Command(AppCommand::RefreshPlanningRuntime {
                 workspace_directory: workspace_directory.to_string(),
@@ -76,7 +79,7 @@ impl NativeTuiApp {
     }
 
     pub(crate) fn planning_runtime_projection_snapshot(&self) -> PlanningRuntimeProjection {
-        let snapshot = self.client_runtime.snapshot();
+        let snapshot = self.runtime.client_runtime.snapshot();
         if snapshot
             .planning_parallel
             .planning_runtime_workspace_directory
@@ -115,7 +118,10 @@ impl NativeTuiApp {
         &mut self,
         planning_runtime_projection: PlanningRuntimeProjection,
     ) {
-        if !matches!(self.conversation_state, ConversationState::Ready(_)) {
+        if !matches!(
+            self.conversation.lifecycle.conversation_state,
+            ConversationState::Ready(_)
+        ) {
             return;
         }
         self.sync_core_planning_runtime_projection(planning_runtime_projection);
@@ -138,7 +144,7 @@ impl NativeTuiApp {
             resumed_thread_review_summary.as_deref(),
             resumed_thread_manual_handoff_context.as_deref(),
         ));
-        self.conversation_state = ConversationState::ready(conversation);
+        self.conversation.lifecycle.conversation_state = ConversationState::ready(conversation);
         self.advance_planning_ui_intent_revision();
     }
 
@@ -147,7 +153,7 @@ impl NativeTuiApp {
         pending: &PendingResumedSessionPlanningRefresh,
     ) {
         let still_waiting_for_context = matches!(
-            &self.conversation_state,
+            &self.conversation.lifecycle.conversation_state,
             ConversationState::Ready(conversation)
                 if conversation.thread_id == pending.thread_id
                     && conversation.status_text == pending.status_text
@@ -163,7 +169,7 @@ impl NativeTuiApp {
         error: &str,
     ) {
         let still_waiting_for_context = matches!(
-            &self.conversation_state,
+            &self.conversation.lifecycle.conversation_state,
             ConversationState::Ready(conversation)
                 if conversation.thread_id == pending.thread_id
                     && conversation.status_text == pending.status_text

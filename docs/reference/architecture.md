@@ -263,6 +263,20 @@ duplicate semantic lifecycle or in-flight-operation authority already owned by C
 delivery state describes what the host terminal actually accepted and therefore must not be
 inferred from a successful client-state transition alone.
 
+`NativeTuiApp` is a private host aggregate with exactly four typed slices: shell-local presentation,
+conversation projection/composer state, planning presentation, and runtime capabilities. It has no
+flat semantic fields and exposes no `Deref`, `AsRef`, or mutable aggregate escape. Startup and
+conversation snapshots have already passed Core correlation checks when the TUI receives them, so
+the adapter projects them directly instead of retaining duplicate startup/conversation pending
+gates.
+
+Production terminal/frontend code cannot borrow `NativeTuiApp` from `ShellRuntime`. The runtime
+returns owned terminal-sync projections and `InlineShellFrameModel` values, then accepts only named,
+narrow mutations for render receipts, transcript-handoff acknowledgement, and queue hit-area
+cleanup. `app()` and `app_mut()` remain test-only fixtures. Architecture tests pin the four-slice
+field ledger, reject aggregate-reference and trait escape hatches, and reject reintroduction of the
+retired duplicate correlation gates.
+
 ## Planning Boundary
 
 ```text
@@ -519,9 +533,12 @@ The auto-follow turn-budget overlay keeps only an active, uncommitted edit draft
 is closed, status and review presentation read the canonical policy from the conversation model;
 the adapter does not retain or reverse-sync a second budget value.
 
-Planning-worker diagnostics retain the domain `PlanningWorkerPanelState` directly from the
-Core-started post-turn event through asynchronous completion and the screen model. TUI presentation
-derives labels and content visibility without an adapter-owned status DTO or round-trip mapper.
+Planning-worker diagnostics retain the domain `PlanningWorkerPanelState` inside a sealed,
+read-only Core projection from the Core-started post-turn event through asynchronous completion and
+the screen model. Only accepted Core start/completion or conversation `Idle | Loading` lifecycle
+events can replace/reset that projection; draft/session UI intent cannot clear it optimistically.
+TUI presentation derives labels and content visibility without an adapter-owned status DTO or
+round-trip mapper.
 
 The detailed, test-guarded contract is
 [TUI Layered Architecture](../design/07-tui-layered-architecture-and-aesthetic-contract.md).

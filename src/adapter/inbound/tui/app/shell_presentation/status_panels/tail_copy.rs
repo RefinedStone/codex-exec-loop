@@ -915,14 +915,17 @@ mod coverage_tests {
     use std::time::Instant;
 
     fn ready_conversation(app: &NativeTuiApp) -> &ConversationViewModel {
-        let ConversationState::Ready(conversation) = &app.conversation_state else {
+        let ConversationState::Ready(conversation) = &app.conversation.lifecycle.conversation_state
+        else {
             panic!("expected ready conversation");
         };
         conversation
     }
 
     fn ready_conversation_mut(app: &mut NativeTuiApp) -> &mut ConversationViewModel {
-        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        let ConversationState::Ready(conversation) =
+            &mut app.conversation.lifecycle.conversation_state
+        else {
             panic!("expected ready conversation");
         };
         conversation
@@ -1059,8 +1062,8 @@ mod coverage_tests {
     fn shell_loading_and_failed_tails_keep_prompt_copy_without_ready_conversation() {
         let mut app = test_native_tui_app();
 
-        app.conversation_state = ConversationState::Loading;
-        app.startup_state = StartupState::Loading;
+        app.conversation.lifecycle.conversation_state = ConversationState::Loading;
+        app.shell.chrome.startup_state = StartupState::Loading;
         let loading = render_tail(&app, None);
         assert!(loading.contains("thread: loading"));
         assert!(loading.contains("runtime: loading thread history"));
@@ -1070,7 +1073,7 @@ mod coverage_tests {
         );
         assert!(loading.contains("prompt: waiting for shell readiness"));
 
-        app.conversation_state =
+        app.conversation.lifecycle.conversation_state =
             ConversationState::Failed("session catalog unavailable".to_string());
         let failed = render_tail(&app, None);
         assert!(failed.contains("thread: unavailable"));
@@ -1086,25 +1089,25 @@ mod coverage_tests {
     fn startup_tail_covers_masthead_overlay_state_and_starter_variants() {
         let mut app = test_native_tui_app();
 
-        app.startup_state = StartupState::Idle;
+        app.shell.chrome.startup_state = StartupState::Idle;
         let idle = render_tail(&app, None);
         assert!(idle.contains("Akra"));
         assert!(idle.contains("preparing startup checks"));
         assert!(idle.contains("workspace: /tmp/root"));
 
-        app.startup_state = StartupState::Loading;
+        app.shell.chrome.startup_state = StartupState::Loading;
         let loading = render_tail(&app, None);
         assert!(loading.contains("initializing codex shell"));
         assert!(loading.contains("opening codex app-server"));
 
-        app.startup_state = StartupState::Ready(startup_ready_snapshot(true));
+        app.shell.chrome.startup_state = StartupState::Ready(startup_ready_snapshot(true));
         let ready = render_tail(&app, None);
         assert!(ready.contains("workspace: /tmp/root"));
         assert!(ready.contains("first warning should stay visible"));
         assert!(ready.contains("ready: send a task or reopen a session"));
         assert!(!ready.contains("████"));
 
-        app.startup_state = StartupState::Failed("codex missing".to_string());
+        app.shell.chrome.startup_state = StartupState::Failed("codex missing".to_string());
         let failed = render_tail(&app, None);
         assert!(failed.contains("codex missing"));
 
@@ -1114,14 +1117,14 @@ mod coverage_tests {
         assert!(overlay.contains("Akra"));
         assert!(!overlay.contains("████"));
 
-        app.startup_state = StartupState::Ready(startup_ready_snapshot(true));
+        app.shell.chrome.startup_state = StartupState::Ready(startup_ready_snapshot(true));
         let context = ConversationScreenModel::from_app(&app);
         assert!(
             rendered(build_inline_startup_screen_lines_with_context(&context))
                 .contains("draft: opening prompt buffered below")
         );
 
-        app.conversation_state = ConversationState::Loading;
+        app.conversation.lifecycle.conversation_state = ConversationState::Loading;
         let loading_context = ConversationScreenModel::from_app(&app);
         assert!(!startup_prompt_buffered_in_context(&loading_context));
     }
@@ -1213,7 +1216,7 @@ mod coverage_tests {
     #[test]
     fn recent_transcript_projection_prioritizes_human_copy_and_falls_back_to_status() {
         let mut app = test_native_tui_app();
-        app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+        app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
         ready_conversation_mut(&mut app).messages = vec![
             ConversationMessage::new(
                 ConversationMessageKind::Agent,
@@ -1233,7 +1236,7 @@ mod coverage_tests {
         ];
         assert!(render_recent_transcript_tail(&app).is_empty());
 
-        app.inline_history_render_mode = InlineHistoryRenderMode::ViewportReplay;
+        app.shell.inline_history_render_mode = InlineHistoryRenderMode::ViewportReplay;
         let transcript = render_recent_transcript_tail(&app);
         assert_eq!(
             transcript,
@@ -1456,7 +1459,7 @@ mod coverage_tests {
     #[test]
     fn settlement_tail_shows_one_phase_truth_without_auto_or_idle_noise() {
         let mut app = test_native_tui_app();
-        app.startup_state = StartupState::Ready(startup_ready_snapshot(true));
+        app.shell.chrome.startup_state = StartupState::Ready(startup_ready_snapshot(true));
         let conversation = ready_conversation_mut(&mut app);
         conversation.thread_id = "thread-settlement".to_string();
         conversation.begin_post_turn_settlement("turn-1");
@@ -1480,7 +1483,7 @@ mod coverage_tests {
     #[test]
     fn pending_queue_mutation_replaces_undo_action_with_non_clickable_correlation_status() {
         let mut app = test_native_tui_app();
-        app.startup_state = StartupState::Ready(startup_ready_snapshot(true));
+        app.shell.chrome.startup_state = StartupState::Ready(startup_ready_snapshot(true));
         let receipt = PlanningQueueMutationReceipt {
             completed_turn_id: "turn-queue-op".to_string(),
             planning_revision: 9,
@@ -1498,7 +1501,8 @@ mod coverage_tests {
         conversation.thread_id = "thread-queue-op".to_string();
         conversation.latest_queue_mutation_receipt = Some(receipt.clone());
         let context = app.current_queue_mutation_context();
-        app.queue_mutation_ui_state
+        app.planning
+            .queue_mutation_ui_state
             .record_started(QueueMutationCorrelation::new(
                 1,
                 QueueMutationIntent {
@@ -1522,7 +1526,7 @@ mod coverage_tests {
         assert!(!tail.contains(QUEUE_RECEIPT_UNDO_ACTION_LABEL), "{tail}");
         assert!(tail_view.queue_receipt_undo_hit_area.is_none());
 
-        app.tui_language = TuiLanguage::Korean;
+        app.shell.tui_language = TuiLanguage::Korean;
         let korean_tail = render_tail(&app, None);
         assert!(korean_tail.contains("큐: op-1  |  권한 확인 대기 중"));
     }
@@ -1530,10 +1534,12 @@ mod coverage_tests {
     #[test]
     fn required_queue_authority_refresh_uses_localized_non_actionable_tail_copy() {
         let mut app = test_native_tui_app();
-        app.startup_state = StartupState::Ready(startup_ready_snapshot(true));
-        app.tui_language = TuiLanguage::Korean;
+        app.shell.chrome.startup_state = StartupState::Ready(startup_ready_snapshot(true));
+        app.shell.tui_language = TuiLanguage::Korean;
         ready_conversation_mut(&mut app).thread_id = "thread-refresh-required".to_string();
-        app.queue_mutation_ui_state.require_authority_refresh();
+        app.planning
+            .queue_mutation_ui_state
+            .require_authority_refresh();
 
         let screen_model = ConversationScreenModel::from_app(&app);
         let tail_view = super::super::live_status_layout::build_inline_tail_view(&screen_model, 96);
@@ -1550,7 +1556,7 @@ mod coverage_tests {
     #[test]
     fn full_ready_tail_includes_runtime_warnings_planning_notice_and_operator_notice() {
         let mut app = test_native_tui_app();
-        app.startup_state = StartupState::Ready(startup_ready_snapshot(true));
+        app.shell.chrome.startup_state = StartupState::Ready(startup_ready_snapshot(true));
         let conversation = ready_conversation_mut(&mut app);
         conversation.thread_id = "thread-1".to_string();
         conversation.base_warnings.push("warning one".to_string());

@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::style::Print;
+use ratatui::layout::Rect;
 
 #[cfg(test)]
 use crate::adapter::inbound::tui::app::app_runtime::core_turn_stream_event_from_application;
@@ -12,8 +13,18 @@ use crate::core::app::CoreInput;
 use crate::domain::operator_alert::OperatorAlert;
 
 use super::app_runtime::TUI_BACKGROUND_CHANNEL_CAPACITY;
-use super::shell_presentation::ParallelPanelProjectionSample;
-use super::{BackgroundMessage, InputCursorMovement, NativeTuiApp, ShellChromeEvent};
+use super::inline_frame_model::{
+    InlineConversationFrameProjection, InlineFrameRenderReceipt, InlineShellFrameModel,
+    InlineTerminalSyncProjection, apply_inline_frame_render_receipt,
+    capture_inline_shell_frame_model, capture_inline_terminal_sync_projection,
+};
+use super::shell_presentation::{
+    ConversationProjectionSample, ParallelPanelProjectionSample, TranscriptHandoffDeliveryToken,
+};
+use super::{
+    BackgroundMessage, ConversationState, InlineHistoryRenderMode, InputCursorMovement,
+    NativeTuiApp, ShellChromeEvent, ShellFrontendMode,
+};
 
 const BACKGROUND_MESSAGE_DRAIN_BUDGET: usize = 128;
 const TERMINAL_RESIZE_RETRY_DELAY: Duration = Duration::from_millis(16);
@@ -50,12 +61,67 @@ impl ShellRuntime {
             background_drain_limited: false,
         }
     }
-    pub(super) fn app_mut(&mut self) -> &mut NativeTuiApp {
-        &mut self.app
-    }
     #[cfg(test)]
     pub(super) fn app(&self) -> &NativeTuiApp {
         &self.app
+    }
+    #[cfg(test)]
+    pub(super) fn app_mut(&mut self) -> &mut NativeTuiApp {
+        &mut self.app
+    }
+    pub(super) fn inline_history_render_mode(&self) -> InlineHistoryRenderMode {
+        self.app.shell.inline_history_render_mode
+    }
+    pub(super) fn capture_inline_terminal_projection_sample(&self) -> ConversationProjectionSample {
+        ConversationProjectionSample::capture(&self.app)
+    }
+    pub(super) fn capture_inline_terminal_sync_projection(
+        &self,
+        viewport_area: Rect,
+        sample: &ConversationProjectionSample,
+    ) -> InlineTerminalSyncProjection {
+        capture_inline_terminal_sync_projection(&self.app, viewport_area, sample)
+    }
+    pub(super) fn capture_inline_conversation_frame_projection(
+        &self,
+        terminal_width: u16,
+        sample: &ConversationProjectionSample,
+    ) -> InlineConversationFrameProjection {
+        InlineConversationFrameProjection::from_app_with_sample(&self.app, terminal_width, sample)
+    }
+    pub(super) fn capture_inline_shell_frame_model(
+        &self,
+        mode: ShellFrontendMode,
+        area: Rect,
+        projection: InlineConversationFrameProjection,
+    ) -> InlineShellFrameModel {
+        capture_inline_shell_frame_model(&self.app, mode, area, projection)
+    }
+    pub(super) fn commit_inline_frame_render_receipt(
+        &mut self,
+        receipt: InlineFrameRenderReceipt,
+    ) -> bool {
+        apply_inline_frame_render_receipt(&mut self.app, receipt)
+    }
+    pub(super) fn acknowledge_transcript_handoff_after_delivery(
+        &mut self,
+        delivery_token: &TranscriptHandoffDeliveryToken,
+    ) -> bool {
+        if !delivery_token.matches_current(&self.app) {
+            return false;
+        }
+        let ConversationState::Ready(conversation) =
+            &mut self.app.conversation.lifecycle.conversation_state
+        else {
+            return false;
+        };
+        conversation.acknowledge_viewport_transcript_handoff_flush(delivery_token.correlation())
+    }
+    pub(super) fn clear_queue_receipt_undo_hit_area(&mut self) {
+        self.app.clear_queue_receipt_undo_hit_area();
+    }
+    pub(super) fn queue_receipt_undo_mouse_capture_requested(&self) -> bool {
+        self.app.queue_receipt_undo_mouse_capture_requested()
     }
     pub(super) fn should_quit(&self) -> bool {
         self.should_quit
@@ -132,7 +198,7 @@ impl ShellRuntime {
         // for already-buffered keyboard input to update the prompt without waiting
         // behind the whole stream backlog.
         while drained_background_messages < BACKGROUND_MESSAGE_DRAIN_BUDGET {
-            let Ok(message) = self.app.rx.try_recv() else {
+            let Ok(message) = self.app.runtime.rx.try_recv() else {
                 break;
             };
             drained_background_messages += 1;
@@ -156,13 +222,6 @@ impl ShellRuntime {
                 }
                 #[cfg(test)]
                 BackgroundMessage::ConversationLoaded(result) => {
-                    let requested_thread_id = result
-                        .as_ref()
-                        .map(|snapshot| snapshot.thread_id.clone())
-                        .unwrap_or_else(|_| "test-conversation-load".to_string());
-                    let correlation =
-                        crate::core::app::ConversationLoadCorrelation::new(1, requested_thread_id);
-                    self.app.pending_conversation_load = Some(correlation.clone());
                     let core_result = result.map(|snapshot| {
                         Box::new(crate::core::app::ConversationReadySnapshot::from(snapshot))
                     });
@@ -171,8 +230,7 @@ impl ShellRuntime {
                         .unwrap_or_else(|message| crate::core::app::ConversationSnapshot::Failed {
                             message,
                         });
-                    self.app
-                        .apply_correlated_conversation_snapshot(Some(correlation), snapshot);
+                    self.app.apply_core_conversation_snapshot(snapshot);
                 }
                 #[cfg(test)]
                 BackgroundMessage::ConversationStream { correlation, event } => {

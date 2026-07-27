@@ -780,7 +780,8 @@ mod tests {
             .with_workspace_present(true),
         );
         let runtime_projection = app.planning_runtime_projection_snapshot();
-        let ConversationState::Ready(conversation) = &app.conversation_state else {
+        let ConversationState::Ready(conversation) = &app.conversation.lifecycle.conversation_state
+        else {
             panic!("test app should keep a ready conversation");
         };
 
@@ -803,7 +804,9 @@ mod tests {
     #[test]
     fn planning_surface_marks_running_turn_stale_summary_as_warning() {
         let mut app = test_native_tui_app();
-        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        let ConversationState::Ready(conversation) =
+            &mut app.conversation.lifecycle.conversation_state
+        else {
             panic!("test app should keep a ready conversation");
         };
         conversation.record_thread_prepared(
@@ -822,7 +825,8 @@ mod tests {
             .with_workspace_present(true),
         );
         let runtime_projection = app.planning_runtime_projection_snapshot();
-        let ConversationState::Ready(conversation) = &app.conversation_state else {
+        let ConversationState::Ready(conversation) = &app.conversation.lifecycle.conversation_state
+        else {
             panic!("test app should keep a ready conversation");
         };
 
@@ -851,7 +855,8 @@ mod tests {
             .with_workspace_present(true),
         );
         let runtime_projection = app.planning_runtime_projection_snapshot();
-        let ConversationState::Ready(conversation) = &app.conversation_state else {
+        let ConversationState::Ready(conversation) = &app.conversation.lifecycle.conversation_state
+        else {
             panic!("test app should keep a ready conversation");
         };
 
@@ -898,7 +903,8 @@ mod tests {
             ),
         );
         let runtime_projection = app.planning_runtime_projection_snapshot();
-        let ConversationState::Ready(conversation) = &app.conversation_state else {
+        let ConversationState::Ready(conversation) = &app.conversation.lifecycle.conversation_state
+        else {
             panic!("test app should keep a ready conversation");
         };
 

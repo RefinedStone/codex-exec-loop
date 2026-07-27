@@ -3,14 +3,16 @@ use super::super::option_lines::overlay_option_line;
 use super::ViewSelectionOverlayView;
 
 pub(crate) fn build_view_selection_overlay_view(app: &NativeTuiApp) -> ViewSelectionOverlayView {
-    let state = &app.view_selection_overlay_ui_state;
+    let state = &app.shell.view_selection_overlay_ui_state;
     let mode_lines = VIEW_SELECTION_MODE_OPTIONS
         .iter()
         .enumerate()
         .map(|(index, option)| {
             let mode_label = option.mode.label();
-            let detail =
-                with_current_suffix(option.detail, app.conversation_view_mode == option.mode);
+            let detail = with_current_suffix(
+                option.detail,
+                app.conversation.conversation_view_mode == option.mode,
+            );
             overlay_option_line(
                 &(index + 1).to_string(),
                 mode_label,
@@ -28,7 +30,10 @@ pub(crate) fn build_view_selection_overlay_view(app: &NativeTuiApp) -> ViewSelec
         ],
         mode_lines,
         status_lines: vec![
-            Line::from(format!("current: {}", app.conversation_view_mode.label())),
+            Line::from(format!(
+                "current: {}",
+                app.conversation.conversation_view_mode.label()
+            )),
             Line::from("Codex and Codex Commentary stay visible in every view."),
         ],
         key_lines: vec![

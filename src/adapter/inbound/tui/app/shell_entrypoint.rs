@@ -205,7 +205,10 @@ mod tests {
     fn prepare_runtime_requests_startup_checks_before_frontend_run() {
         let runtime = prepare_runtime(make_test_app());
 
-        assert!(matches!(runtime.app().startup_state, StartupState::Loading));
+        assert!(matches!(
+            runtime.app().shell.chrome.startup_state,
+            StartupState::Loading
+        ));
     }
 
     #[test]
@@ -213,7 +216,10 @@ mod tests {
         let runtime = prepare_runtime(make_test_app());
 
         assert!(!runtime.should_quit());
-        assert!(matches!(runtime.app().startup_state, StartupState::Loading));
+        assert!(matches!(
+            runtime.app().shell.chrome.startup_state,
+            StartupState::Loading
+        ));
     }
 
     #[test]
@@ -254,7 +260,10 @@ mod tests {
 
         std::thread::sleep(GATE_DURATION);
         runtime.poll_background_messages();
-        assert!(matches!(runtime.app().startup_state, StartupState::Loading));
+        assert!(matches!(
+            runtime.app().shell.chrome.startup_state,
+            StartupState::Loading
+        ));
 
         let _ = release_tx.send(());
     }

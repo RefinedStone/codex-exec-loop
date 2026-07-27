@@ -106,6 +106,7 @@ fn background_message_burst_yields_after_budget() {
     for index in 0..queued_message_count {
         runtime
             .app
+            .runtime
             .tx
             .send(BackgroundMessage::ConversationRuntimeNotice(format!(
                 "notice {index}"
@@ -116,7 +117,9 @@ fn background_message_burst_yields_after_budget() {
 
     runtime.poll_background_messages_at(now);
 
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert_eq!(
@@ -130,7 +133,9 @@ fn background_message_burst_yields_after_budget() {
 
     runtime.poll_background_messages_at(now + Duration::from_millis(1));
 
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert_eq!(conversation.runtime_notices.len(), queued_message_count);
@@ -170,7 +175,7 @@ fn focus_lost_blocks_draw_until_focus_returns() {
 fn active_supersession_supervisor_refreshes_periodically() {
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();
-    runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+    runtime.app_mut().shell.chrome.shell_overlay = ShellOverlay::Supersession;
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
     runtime
         .app_mut()
@@ -235,7 +240,7 @@ fn active_supersession_supervisor_refreshes_periodically() {
 fn blocked_supersession_pool_refreshes_periodically() {
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();
-    runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+    runtime.app_mut().shell.chrome.shell_overlay = ShellOverlay::Supersession;
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
     runtime
         .app_mut()
@@ -284,7 +289,7 @@ fn blocked_supersession_pool_refreshes_periodically() {
 fn sampled_parallel_panel_state_aligns_prompt_pulse_and_tick_refresh() {
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();
-    runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+    runtime.app_mut().shell.chrome.shell_overlay = ShellOverlay::Supersession;
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
     runtime
         .app_mut()
@@ -364,7 +369,7 @@ fn sampled_parallel_panel_state_aligns_prompt_pulse_and_tick_refresh() {
 fn in_flight_supersession_supervisor_refresh_blocks_periodic_overlap() {
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();
-    runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+    runtime.app_mut().shell.chrome.shell_overlay = ShellOverlay::Supersession;
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
     runtime
         .app_mut()
@@ -409,7 +414,7 @@ fn in_flight_supersession_supervisor_refresh_blocks_periodic_overlap() {
 fn empty_non_loading_supersession_snapshot_does_not_refresh_periodically() {
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();
-    runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+    runtime.app_mut().shell.chrome.shell_overlay = ShellOverlay::Supersession;
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
     runtime
         .app_mut()

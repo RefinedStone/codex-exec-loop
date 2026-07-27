@@ -33,7 +33,7 @@ impl NativeTuiApp {
         let request = application_post_turn_request(
             request,
             context,
-            self.post_turn_continuation_gate.capture(),
+            self.planning.post_turn_continuation_gate.capture(),
         );
         self.dispatch_client_event(CoreInput::Command(AppCommand::EvaluatePostTurn(Box::new(
             request,
@@ -44,9 +44,10 @@ impl NativeTuiApp {
         let current_runtime_projection = self.planning_runtime_projection_snapshot();
         let planning_workspace_directory = self.planning_workspace_directory();
         let parallel_automation_epoch_id = self
+            .runtime
             .parallel_mode_control_plane
             .current_epoch_id_for_workspace(&planning_workspace_directory);
-        match &self.conversation_state {
+        match &self.conversation.lifecycle.conversation_state {
             ConversationState::Ready(conversation) => Some(post_turn_context_from_conversation(
                 conversation.as_ref(),
                 &planning_workspace_directory,

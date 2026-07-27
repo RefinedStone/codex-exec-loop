@@ -24,7 +24,7 @@ fn inline_main_buffer_ready_shell_matches_snapshot() {
      * inline renderer가 modal layout을 잘못 끌고 오지 않도록 막는다.
      */
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
 
     let rendered = tui_testkit::render_inline_snapshot(&mut app, 80, 24);
 
@@ -36,14 +36,15 @@ fn inline_main_buffer_ready_shell_matches_snapshot() {
 #[test]
 fn dense_hidden_tail_preserves_prompt_suffix_snapshot() {
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    app.inline_history_render_mode = InlineHistoryRenderMode::ViewportReplay;
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::ViewportReplay;
     tui_testkit::append_agent_history_message(&mut app, "previous operator-visible response");
     app.sync_ready_conversation_planning_runtime_projection(sample_planning_runtime_projection(
         "Planning Context",
         "queue head: rank 1 / task-1 / Implement shell planning status",
     ));
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start in a ready conversation state");
     };
     conversation.thread_id = "thread-dense-tail".to_string();
@@ -94,6 +95,7 @@ fn dense_hidden_tail_preserves_prompt_suffix_snapshot() {
         .find("[ Undo queue ]")
         .expect("visible undo action should have a rendered column");
     let hit_area = app
+        .planning
         .queue_overlay_ui_state
         .receipt_undo_hit_area()
         .expect("visible undo action should retain its mouse target");
@@ -105,7 +107,7 @@ fn dense_hidden_tail_preserves_prompt_suffix_snapshot() {
 #[test]
 fn narrow_exit_confirmation_keeps_decision_keys_snapshot() {
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
     app.dispatch_shell_chrome(ShellChromeEvent::ExitConfirmationShown);
 
     let rendered = tui_testkit::render_shell_snapshot(&mut app, 48, 18);
@@ -119,8 +121,9 @@ fn narrow_exit_confirmation_keeps_decision_keys_snapshot() {
 #[test]
 fn narrow_turn_steer_confirmation_keeps_exact_identity_prompt_and_keys() {
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start in a ready conversation state");
     };
     conversation.thread_id = "thread-steer-123456789".to_string();
@@ -128,7 +131,7 @@ fn narrow_turn_steer_confirmation_keeps_exact_identity_prompt_and_keys() {
     conversation.composer.input_buffer =
         "Prioritize the exact queue cancellation regression before continuing.\n    cargo test --lib"
             .to_string();
-    app.turn_steer_confirmation = Some(TurnSteerUiIntent {
+    app.conversation.turn_steer_confirmation = Some(TurnSteerUiIntent {
         input_revision: 0,
         source_input_buffer: conversation.composer.input_buffer.clone(),
         request: ConversationTurnSteerRequest {
@@ -159,9 +162,10 @@ fn narrow_turn_steer_confirmation_keeps_exact_identity_prompt_and_keys() {
 #[test]
 fn captured_turn_steer_confirmation_keeps_language_and_exact_identity_after_app_mutation() {
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    app.tui_language = TuiLanguage::Korean;
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.tui_language = TuiLanguage::Korean;
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start in a ready conversation state");
     };
     conversation.thread_id = "thread-A".to_string();
@@ -177,8 +181,9 @@ fn captured_turn_steer_confirmation_keeps_language_and_exact_identity_after_app_
         projection,
     );
 
-    app.tui_language = TuiLanguage::English;
+    app.shell.tui_language = TuiLanguage::English;
     let intent = app
+        .conversation
         .turn_steer_confirmation
         .as_mut()
         .expect("captured turn-steer intent should remain visible");
@@ -221,10 +226,12 @@ fn vt100_turn_steer_confirmation_hides_prompt_cursor_and_escape_restores_it() {
     let mut terminal =
         ratatui::Terminal::new(tui_testkit::Vt100Backend::new(48, 18)).expect("vt100 terminal");
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
     let draft = "keep this exact draft for the active turn".to_string();
     let (thread_id, turn_id) = {
-        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        let ConversationState::Ready(conversation) =
+            &mut app.conversation.lifecycle.conversation_state
+        else {
             panic!("test app should start in a ready conversation state");
         };
         conversation.thread_id = "thread-cursor-steer".to_string();
@@ -248,7 +255,7 @@ fn vt100_turn_steer_confirmation_hides_prompt_cursor_and_escape_restores_it() {
     assert!(!terminal.backend().parser_cursor_hidden());
     let expected_cursor = terminal.backend().parser_cursor_position();
 
-    app.turn_steer_confirmation = Some(TurnSteerUiIntent {
+    app.conversation.turn_steer_confirmation = Some(TurnSteerUiIntent {
         input_revision: 0,
         source_input_buffer: draft.clone(),
         request: ConversationTurnSteerRequest {
@@ -262,7 +269,8 @@ fn vt100_turn_steer_confirmation_hides_prompt_cursor_and_escape_restores_it() {
         .expect("turn steer confirmation render succeeds");
 
     assert!(terminal.backend().parser_cursor_hidden());
-    let ConversationState::Ready(conversation) = &app.conversation_state else {
+    let ConversationState::Ready(conversation) = &app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should keep a ready conversation state");
     };
     assert_eq!(conversation.composer.input_buffer, draft);
@@ -277,7 +285,8 @@ fn vt100_turn_steer_confirmation_hides_prompt_cursor_and_escape_restores_it() {
 
     assert!(!terminal.backend().parser_cursor_hidden());
     assert_eq!(terminal.backend().parser_cursor_position(), expected_cursor);
-    let ConversationState::Ready(conversation) = &app.conversation_state else {
+    let ConversationState::Ready(conversation) = &app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should keep a ready conversation state");
     };
     assert_eq!(conversation.composer.input_buffer, draft);
@@ -288,9 +297,10 @@ fn vt100_exit_confirmation_hides_prompt_cursor_and_cancel_restores_it() {
     let mut terminal =
         ratatui::Terminal::new(tui_testkit::Vt100Backend::new(48, 18)).expect("vt100 terminal");
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
     let draft = "cancel exit and keep this draft".to_string();
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start in a ready conversation state");
     };
     conversation.composer.input_buffer = draft.clone();
@@ -310,7 +320,8 @@ fn vt100_exit_confirmation_hides_prompt_cursor_and_cancel_restores_it() {
         .expect("exit confirmation render succeeds");
 
     assert!(terminal.backend().parser_cursor_hidden());
-    let ConversationState::Ready(conversation) = &app.conversation_state else {
+    let ConversationState::Ready(conversation) = &app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should keep a ready conversation state");
     };
     assert_eq!(conversation.composer.input_buffer, draft);
@@ -328,7 +339,8 @@ fn vt100_exit_confirmation_hides_prompt_cursor_and_cancel_restores_it() {
 
     assert!(!terminal.backend().parser_cursor_hidden());
     assert_eq!(terminal.backend().parser_cursor_position(), expected_cursor);
-    let ConversationState::Ready(conversation) = &app.conversation_state else {
+    let ConversationState::Ready(conversation) = &app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should keep a ready conversation state");
     };
     assert_eq!(conversation.composer.input_buffer, draft);
@@ -348,8 +360,9 @@ fn steer_prompt_preview_preserves_lines_and_marks_bounded_omissions() {
 #[test]
 fn queue_receipt_renders_clickable_undo_action_in_conversation_tail() {
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start in a ready conversation state");
     };
     conversation.thread_id = "thread-mouse-undo".to_string();
@@ -374,6 +387,7 @@ fn queue_receipt_renders_clickable_undo_action_in_conversation_tail() {
     assert!(rendered.contains("[ Undo queue ]"), "{rendered}");
     assert!(rendered.contains("click to cancel 1 queued task"));
     let hit_area = app
+        .planning
         .queue_overlay_ui_state
         .receipt_undo_hit_area()
         .expect("visible queue undo action should own a mouse target");
@@ -381,11 +395,16 @@ fn queue_receipt_renders_clickable_undo_action_in_conversation_tail() {
     assert_eq!(hit_area.height, 1);
     assert!(app.queue_receipt_undo_mouse_capture_requested());
 
-    app.shell_overlay = ShellOverlay::Queue;
+    app.shell.chrome.shell_overlay = ShellOverlay::Queue;
     let overlay = tui_testkit::render_shell_snapshot(&mut app, 96, 24);
 
     assert!(!overlay.contains("[ Undo queue ]"), "{overlay}");
-    assert!(app.queue_overlay_ui_state.receipt_undo_hit_area().is_none());
+    assert!(
+        app.planning
+            .queue_overlay_ui_state
+            .receipt_undo_hit_area()
+            .is_none()
+    );
     assert!(!app.queue_receipt_undo_mouse_capture_requested());
 }
 
@@ -397,12 +416,12 @@ fn queue_overlay_matches_snapshot() {
      * 여기서는 shell frame이 그 read model을 좁은 overlay에 어떻게 배치하는지 본다.
      */
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
     app.sync_ready_conversation_planning_runtime_projection(
         sample_planning_runtime_projection("Planning Context\nQueue Summary", "Queue Summary")
             .with_planning_revision(Some(1)),
     );
-    app.shell_overlay = ShellOverlay::Queue;
+    app.shell.chrome.shell_overlay = ShellOverlay::Queue;
     app.bind_queue_overlay_authority_for_test(
         1,
         std::collections::BTreeMap::from([
@@ -466,7 +485,7 @@ fn queue_overlay_matches_snapshot() {
     assert!(armed.contains("Enter/x/Delete: confirm remove"), "{armed}");
     assert!(!armed.contains("x/Delete: remove |"), "{armed}");
 
-    app.tui_language = TuiLanguage::Korean;
+    app.shell.tui_language = TuiLanguage::Korean;
     let korean = tui_testkit::render_shell_snapshot(&mut app, 48, 18);
     assert!(korean.contains("> #1 [ready]"), "{korean}");
     assert!(korean.contains("task-1 제거할까요?"), "{korean}");
@@ -476,7 +495,7 @@ fn queue_overlay_matches_snapshot() {
 #[test]
 fn compact_queue_overlay_keeps_hidden_proposal_and_skipped_selection_visible() {
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
     let queue_task = |rank: usize| PriorityQueueTask {
         rank,
         task_id: format!("task-{rank}"),
@@ -521,7 +540,7 @@ fn compact_queue_overlay_keeps_hidden_proposal_and_skipped_selection_visible() {
         )
         .with_planning_revision(Some(9)),
     );
-    app.shell_overlay = ShellOverlay::Queue;
+    app.shell.chrome.shell_overlay = ShellOverlay::Queue;
     let authority_tokens = app
         .queue_action_tasks()
         .into_iter()
@@ -542,7 +561,9 @@ fn compact_queue_overlay_keeps_hidden_proposal_and_skipped_selection_visible() {
         .map(|task| task.task_id)
         .collect::<Vec<_>>();
 
-    app.queue_overlay_ui_state.move_selection(&task_ids, 3);
+    app.planning
+        .queue_overlay_ui_state
+        .move_selection(&task_ids, 3);
     let hidden = tui_testkit::render_shell_snapshot(&mut app, 80, 16);
     assert!(hidden.contains("> #4 [ready]"));
     assert!(hidden.contains("Deep queue task 4"));
@@ -560,7 +581,9 @@ fn compact_queue_overlay_keeps_hidden_proposal_and_skipped_selection_visible() {
         "{armed_active}"
     );
 
-    app.queue_overlay_ui_state.move_selection(&task_ids, 1);
+    app.planning
+        .queue_overlay_ui_state
+        .move_selection(&task_ids, 1);
     let proposal = tui_testkit::render_shell_snapshot(&mut app, 80, 16);
     assert!(proposal.contains("> #1 [proposed]"));
     assert!(proposal.contains("Deep proposal selection"));
@@ -584,7 +607,9 @@ fn compact_queue_overlay_keeps_hidden_proposal_and_skipped_selection_visible() {
         "{armed_proposal}"
     );
 
-    app.queue_overlay_ui_state.move_selection(&task_ids, 1);
+    app.planning
+        .queue_overlay_ui_state
+        .move_selection(&task_ids, 1);
     let skipped = tui_testkit::render_shell_snapshot(&mut app, 80, 16);
     assert!(skipped.contains("> [ready / skipped]"));
     assert!(skipped.contains("Deep skipped selection"));
@@ -620,10 +645,13 @@ fn planning_manual_editor_matches_snapshot() {
      * 이 snapshot은 editor 상태가 popup chrome, file list, footer key guide로 끝까지 전달되는지 확인한다.
      */
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    app.shell_overlay = ShellOverlay::PlanningInit;
-    app.planning_init_overlay_ui_state.open_manual_editor();
-    app.planning_draft_editor_ui_state
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.shell_overlay = ShellOverlay::PlanningInit;
+    app.planning
+        .planning_init_overlay_ui_state
+        .open_manual_editor();
+    app.planning
+        .planning_draft_editor_ui_state
         .open_session(sample_planning_editor_session());
 
     let rendered = tui_testkit::render_shell_snapshot(&mut app, 96, 28);
@@ -637,8 +665,9 @@ fn planning_manual_editor_matches_snapshot() {
 #[test]
 fn approval_overlay_matches_snapshot() {
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start in a ready conversation state");
     };
     conversation.pending_approval_request = Some(ConversationApprovalRequest {
@@ -654,7 +683,7 @@ fn approval_overlay_matches_snapshot() {
             "Reason: verify approval flow".to_string(),
         ],
     });
-    app.shell_overlay = ShellOverlay::Approval;
+    app.shell.chrome.shell_overlay = ShellOverlay::Approval;
 
     let rendered = tui_testkit::render_shell_snapshot(&mut app, 96, 28);
 
@@ -680,7 +709,8 @@ fn approval_overlay_matches_snapshot() {
         "narrow approval overlay exceeded its viewport:\n{narrow}"
     );
 
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should keep a ready conversation state");
     };
     assert!(conversation.mark_approval_decision_submitted(
@@ -697,8 +727,9 @@ fn approval_overlay_matches_snapshot() {
 #[test]
 fn approval_overlay_scrolls_long_permission_details_without_hiding_decision_keys() {
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start in a ready conversation state");
     };
     conversation.pending_approval_request = Some(ConversationApprovalRequest {
@@ -712,7 +743,7 @@ fn approval_overlay_scrolls_long_permission_details_without_hiding_decision_keys
             .collect(),
     });
     conversation.approval_detail_scroll_offset = usize::MAX;
-    app.shell_overlay = ShellOverlay::Approval;
+    app.shell.chrome.shell_overlay = ShellOverlay::Approval;
 
     let rendered = tui_testkit::render_shell_snapshot(&mut app, 80, 20);
 
@@ -730,8 +761,9 @@ fn approval_overlay_scrolls_long_permission_details_without_hiding_decision_keys
 #[test]
 fn approval_overlay_scrolls_wrapped_command_rows_to_the_exact_suffix() {
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start in a ready conversation state");
     };
     conversation.pending_approval_request = Some(ConversationApprovalRequest {
@@ -746,7 +778,7 @@ fn approval_overlay_scrolls_wrapped_command_rows_to_the_exact_suffix() {
         ],
     });
     conversation.approval_detail_scroll_offset = usize::MAX;
-    app.shell_overlay = ShellOverlay::Approval;
+    app.shell.chrome.shell_overlay = ShellOverlay::Approval;
 
     let rendered = tui_testkit::render_shell_snapshot(&mut app, 48, 20);
 
@@ -764,8 +796,8 @@ fn inline_main_buffer_viewport_replay_keeps_recent_transcript_while_streaming() 
      * 이 테스트는 replay buffer와 live delta lane의 병합 경계를 고정한다.
      */
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    app.inline_history_render_mode = InlineHistoryRenderMode::ViewportReplay;
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::ViewportReplay;
     tui_testkit::append_agent_history_message(
         &mut app,
         "previous transcript should remain visible in viewport replay mode",
@@ -775,7 +807,8 @@ fn inline_main_buffer_viewport_replay_keeps_recent_transcript_while_streaming() 
         "queue head: rank 1 / terminal-bridge plan",
     );
     app.sync_ready_conversation_planning_runtime_projection(runtime_projection);
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start in a ready conversation state");
     };
     conversation.record_turn_started("turn-1".to_string());
@@ -801,8 +834,8 @@ fn inline_main_buffer_viewport_replay_keeps_recent_transcript_while_streaming() 
 fn progressive_activity_rail_matches_wide_and_narrow_snapshots() {
     let secret = "AKRA_RENDER_PROGRESSIVE_SECRET";
     let mut wide_app = make_test_app();
-    wide_app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    wide_app.show_startup_ascii_art = false;
+    wide_app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    wide_app.shell.show_startup_ascii_art = false;
     tui_testkit::set_progressive_command_activity(
         &mut wide_app,
         &format!("{secret}\nsecond line"),
@@ -820,8 +853,8 @@ fn progressive_activity_rail_matches_wide_and_narrow_snapshots() {
     assert_snapshot!("inline_progressive_activity_rail_wide", wide);
 
     let mut narrow_app = make_test_app();
-    narrow_app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    narrow_app.show_startup_ascii_art = false;
+    narrow_app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    narrow_app.shell.show_startup_ascii_art = false;
     tui_testkit::set_progressive_command_activity(
         &mut narrow_app,
         &format!("{secret}\nsecond line"),
@@ -848,8 +881,8 @@ fn progressive_activity_rail_matches_wide_and_narrow_snapshots() {
 #[test]
 fn compact_operator_tail_prioritizes_approval_terminal_and_live_activity() {
     let mut activity_app = make_test_app();
-    activity_app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    activity_app.show_startup_ascii_art = false;
+    activity_app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    activity_app.shell.show_startup_ascii_art = false;
     tui_testkit::set_progressive_command_activity(&mut activity_app, "first\nsecond", false);
     assert!(activity_app.show_progressive_activity_overlay(ProgressiveActivityDetailKind::Diff));
 
@@ -862,13 +895,15 @@ fn compact_operator_tail_prioritizes_approval_terminal_and_live_activity() {
     assert!(!activity.contains("prompt: turn running"), "{activity}");
 
     let mut terminal_app = make_test_app();
-    terminal_app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    terminal_app.show_startup_ascii_art = false;
-    let ConversationState::Ready(conversation) = &mut terminal_app.conversation_state else {
+    terminal_app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    terminal_app.shell.show_startup_ascii_art = false;
+    let ConversationState::Ready(conversation) =
+        &mut terminal_app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start in a ready conversation state");
     };
     conversation.fail_turn("runtime failed".to_string());
-    terminal_app.shell_overlay = ShellOverlay::Activity;
+    terminal_app.shell.chrome.shell_overlay = ShellOverlay::Activity;
 
     let terminal = tui_testkit::render_inline_snapshot(&mut terminal_app, 48, 10);
     assert!(
@@ -877,8 +912,10 @@ fn compact_operator_tail_prioritizes_approval_terminal_and_live_activity() {
     );
 
     let mut approval_app = make_test_app();
-    approval_app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    let ConversationState::Ready(conversation) = &mut approval_app.conversation_state else {
+    approval_app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    let ConversationState::Ready(conversation) =
+        &mut approval_app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should start in a ready conversation state");
     };
     conversation.pending_approval_request = Some(ConversationApprovalRequest {
@@ -889,7 +926,7 @@ fn compact_operator_tail_prioritizes_approval_terminal_and_live_activity() {
         summary: "Review compact approval".to_string(),
         details: vec!["Command: cargo test".to_string()],
     });
-    approval_app.shell_overlay = ShellOverlay::Approval;
+    approval_app.shell.chrome.shell_overlay = ShellOverlay::Approval;
 
     let approval = tui_testkit::render_inline_snapshot(&mut approval_app, 48, 10);
     assert!(approval.contains("Approval Required"), "{approval}");
@@ -901,8 +938,8 @@ fn compact_operator_tail_prioritizes_approval_terminal_and_live_activity() {
 fn vt100_progressive_activity_rail_is_transient_and_payload_free() {
     let secret = "AKRA_VT100_PROGRESSIVE_SECRET";
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    app.show_startup_ascii_art = false;
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.show_startup_ascii_art = false;
     tui_testkit::set_progressive_command_activity(
         &mut app,
         &format!("{secret}\nsecond line"),
@@ -925,9 +962,10 @@ fn vt100_progressive_activity_rail_is_transient_and_payload_free() {
 fn narrow_running_rail_never_falls_back_to_raw_coarse_summary() {
     let secret = "AKRA_RAW_COARSE_FALLBACK_SECRET";
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    app.show_startup_ascii_art = false;
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.show_startup_ascii_art = false;
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should keep a ready conversation state");
     };
     conversation.record_thread_prepared(
@@ -966,8 +1004,8 @@ fn progressive_activity_inspector_matches_wide_narrow_and_vt100_snapshots() {
             .join("\n")
     );
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    app.show_startup_ascii_art = false;
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.show_startup_ascii_art = false;
     let core_snapshot = tui_testkit::set_progressive_command_activity(&mut app, &detail, true);
     assert_eq!(std::sync::Arc::strong_count(&core_snapshot), 1);
     assert!(app.show_progressive_activity_overlay(ProgressiveActivityDetailKind::Diff));
@@ -1024,8 +1062,8 @@ fn progressive_activity_inspector_matches_wide_narrow_and_vt100_snapshots() {
 fn activity_inspector_clamps_selection_before_first_frame_document_projection() {
     const SURVIVING_DETAIL: &str = "SURVIVING_CARD_DOCUMENT_BODY";
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    app.show_startup_ascii_art = false;
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.show_startup_ascii_art = false;
     let previous_snapshot = tui_testkit::set_progressive_command_activity(
         &mut app,
         &format!("surviving card title\n{SURVIVING_DETAIL}"),
@@ -1033,11 +1071,13 @@ fn activity_inspector_clamps_selection_before_first_frame_document_projection() 
     );
     assert!(app.show_progressive_activity_overlay_all());
     assert!(
-        app.progressive_activity_overlay_ui_state
+        app.shell
+            .progressive_activity_overlay_ui_state
             .move_card_selection(2, 3)
     );
     assert_eq!(
-        app.progressive_activity_overlay_ui_state
+        app.shell
+            .progressive_activity_overlay_ui_state
             .selected_card_index(),
         2
     );
@@ -1054,7 +1094,8 @@ fn activity_inspector_clamps_selection_before_first_frame_document_projection() 
         .map(|record| record.observation_count())
         .sum();
     let next_snapshot = std::sync::Arc::new(next_snapshot);
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
         panic!("test app should keep a ready conversation state");
     };
     conversation.progressive_activity_detail.reset();
@@ -1065,7 +1106,8 @@ fn activity_inspector_clamps_selection_before_first_frame_document_projection() 
     let first_frame = tui_testkit::render_inline_snapshot(&mut app, 80, 24);
 
     assert_eq!(
-        app.progressive_activity_overlay_ui_state
+        app.shell
+            .progressive_activity_overlay_ui_state
             .selected_card_index(),
         0
     );
@@ -1075,8 +1117,8 @@ fn activity_inspector_clamps_selection_before_first_frame_document_projection() 
 #[test]
 fn narrow_activity_inspector_omits_normal_metadata_and_keeps_exact_keys() {
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    app.show_startup_ascii_art = false;
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.show_startup_ascii_art = false;
     let _core_snapshot =
         tui_testkit::set_progressive_command_activity(&mut app, "complete detail", false);
     assert!(app.show_progressive_activity_overlay(ProgressiveActivityDetailKind::Diff));
@@ -1102,8 +1144,8 @@ fn narrow_activity_inspector_omits_normal_metadata_and_keeps_exact_keys() {
 #[test]
 fn activity_inspector_resets_page_when_new_turn_reuses_document_sequence() {
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    app.show_startup_ascii_art = false;
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.show_startup_ascii_art = false;
     let first_detail = (0..80)
         .map(|index| format!("first turn row {index:03}"))
         .collect::<Vec<_>>()
@@ -1113,11 +1155,13 @@ fn activity_inspector_resets_page_when_new_turn_reuses_document_sequence() {
     assert!(app.show_progressive_activity_overlay(ProgressiveActivityDetailKind::Diff));
     let _ = tui_testkit::render_inline_snapshot(&mut app, 80, 24);
     assert!(
-        app.progressive_activity_overlay_ui_state
+        app.shell
+            .progressive_activity_overlay_ui_state
             .move_to_next_page()
     );
     assert!(
-        app.progressive_activity_overlay_ui_state
+        app.shell
+            .progressive_activity_overlay_ui_state
             .current_page_start()
             > 0
     );
@@ -1135,7 +1179,8 @@ fn activity_inspector_resets_page_when_new_turn_reuses_document_sequence() {
         "{rendered}"
     );
     assert_eq!(
-        app.progressive_activity_overlay_ui_state
+        app.shell
+            .progressive_activity_overlay_ui_state
             .current_page_start(),
         0
     );
@@ -1149,7 +1194,7 @@ fn vt100_ready_shell_matches_snapshot() {
      * 같은지 확인해 backend별 rendering drift를 잡는다.
      */
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
 
     let rendered = tui_testkit::render_inline_vt100_snapshot(&mut app, 96, 32);
 
@@ -1166,7 +1211,7 @@ fn vt100_streaming_shell_matches_snapshot() {
      * terminal output 기준으로 legacy lane 제거를 검증한다.
      */
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
     tui_testkit::set_live_agent_message(
         &mut app,
         "streaming delta should stay in the transcript until completion",
@@ -1193,8 +1238,8 @@ fn vt100_viewport_replay_streaming_matches_snapshot() {
      * scroll replay regression은 보통 이 조합에서 중복/누락으로 나타나므로 두 문자열이 각각 한 번만 남는지 본다.
      */
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    app.inline_history_render_mode = InlineHistoryRenderMode::ViewportReplay;
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::ViewportReplay;
     tui_testkit::append_agent_history_message(
         &mut app,
         "viewport replay transcript remains anchored",
@@ -1222,7 +1267,7 @@ fn vt100_markdown_code_block_shell_matches_snapshot() {
      * VT100 output에서도 fence가 다시 노출되지 않는지 확인해 transcript projection 계약을 고정한다.
      */
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
     tui_testkit::set_live_agent_message(&mut app, "```rust\nlet ok = true;\n```");
 
     let rendered = tui_testkit::render_inline_vt100_snapshot(&mut app, 96, 32);
@@ -1241,12 +1286,12 @@ fn vt100_queue_overlay_matches_snapshot() {
      * loss를 놓칠 수 있어 selected task와 key guide를 실제 terminal output에서도 고정한다.
      */
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
     app.sync_ready_conversation_planning_runtime_projection(
         sample_planning_runtime_projection("Planning Context\nQueue Summary", "Queue Summary")
             .with_planning_revision(Some(1)),
     );
-    app.shell_overlay = ShellOverlay::Queue;
+    app.shell.chrome.shell_overlay = ShellOverlay::Queue;
     app.bind_queue_overlay_authority_for_test(
         1,
         std::collections::BTreeMap::from([
@@ -1284,10 +1329,13 @@ fn vt100_planning_manual_editor_matches_snapshot() {
      * editor affordance를 고정한다.
      */
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    app.shell_overlay = ShellOverlay::PlanningInit;
-    app.planning_init_overlay_ui_state.open_manual_editor();
-    app.planning_draft_editor_ui_state
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.shell_overlay = ShellOverlay::PlanningInit;
+    app.planning
+        .planning_init_overlay_ui_state
+        .open_manual_editor();
+    app.planning
+        .planning_draft_editor_ui_state
         .open_session(sample_planning_editor_session());
 
     let rendered = tui_testkit::render_shell_vt100_snapshot(&mut app, 96, 28);
@@ -1306,7 +1354,7 @@ fn vt100_narrow_shell_matches_snapshot() {
      * requested width 안에 들어오는지 확인한다.
      */
     let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
     tui_testkit::set_live_agent_message(&mut app, "narrow resize keeps the live tail visible");
 
     let rendered = tui_testkit::render_inline_vt100_snapshot(&mut app, 48, 10);

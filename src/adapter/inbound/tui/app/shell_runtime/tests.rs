@@ -362,9 +362,12 @@ fn queue_mutation_settlement_stays_correlated_and_off_the_input_path() {
 
     assert!(APP_RS.contains("queue_overlay_ui_state: queue_overlay_ui::QueueOverlayUiState"));
     assert!(APP_RS.contains("queue_mutation_ui_state: queue_overlay_ui::QueueMutationUiState"));
-    assert!(APP_RUNTIME_RS.contains("ShellOverlay::Queue => self.queue_overlay_ui_state.reset()"));
+    assert!(
+        APP_RUNTIME_RS
+            .contains("ShellOverlay::Queue => self.planning.queue_overlay_ui_state.reset()")
+    );
     assert!(!APP_RUNTIME_RS.contains(
-        "if previous_overlay == ShellOverlay::Queue && self.shell_overlay != ShellOverlay::Queue"
+        "if previous_overlay == ShellOverlay::Queue && self.shell.chrome.shell_overlay != ShellOverlay::Queue"
     ));
     assert!(!SHELL_CONTROLLER_RS.contains("refresh_queue_overlay_authority_binding"));
 }
@@ -461,18 +464,19 @@ fn conversation_lifecycle_body_state_is_driven_by_core_snapshot() {
     /*
      * Session selection may keep presentation chrome such as the highlighted
      * session row in TUI, but Loading/Ready/Failed conversation body state must
-     * come back through correlated core ConversationChanged snapshots. The
-     * test-only background shim uses the same TUI correlation gate.
+     * come back through correlation-accepted core ConversationChanged snapshots.
+     * TUI projects those accepted snapshots without owning a duplicate gate.
      */
     const APP_RUNTIME_RS: &str = include_str!("../app_runtime.rs");
     const CONVERSATION_LIFECYCLE_RS: &str = include_str!("../conversation_lifecycle.rs");
     const SHELL_RUNTIME_RS: &str = include_str!("../shell_runtime.rs");
 
     assert!(APP_RUNTIME_RS.contains("AppEvent::ConversationChanged {"));
-    assert!(APP_RUNTIME_RS.contains("apply_correlated_conversation_snapshot"));
     assert!(APP_RUNTIME_RS.contains("apply_core_conversation_snapshot(snapshot)"));
+    assert!(!APP_RUNTIME_RS.contains("pending_conversation_load"));
+    assert!(!APP_RUNTIME_RS.contains("apply_correlated_conversation_snapshot"));
     assert!(CONVERSATION_LIFECYCLE_RS.contains("CoreConversationSnapshotApplied"));
-    assert!(SHELL_RUNTIME_RS.contains("ConversationLoadCorrelation::new"));
+    assert!(!SHELL_RUNTIME_RS.contains("ConversationLoadCorrelation::new"));
     assert!(!APP_RUNTIME_RS.contains("apply_loaded_conversation_result"));
     assert!(!SHELL_RUNTIME_RS.contains("apply_loaded_conversation_result"));
     assert!(!CONVERSATION_LIFECYCLE_RS.contains("ConversationLifecycleEvent::ConversationLoaded"));
@@ -520,7 +524,8 @@ fn tui_projection_rendering_reads_core_snapshot_without_legacy_cache() {
 
     assert!(PARALLEL_MODE_RS.contains("core_parallel_mode_readiness_snapshot"));
     assert!(PARALLEL_MODE_RS.contains("core_parallel_mode_supervisor_snapshot"));
-    assert!(PARALLEL_MODE_RS.contains("self.client_runtime"));
+    assert!(PARALLEL_MODE_RS.contains("self.runtime"));
+    assert!(PARALLEL_MODE_RS.contains(".client_runtime"));
     assert!(PARALLEL_MODE_RS.contains(".planning_parallel"));
     assert!(!APP_RS.contains("parallel_mode_readiness_snapshot:"));
     assert!(!APP_RS.contains("parallel_mode_supervisor_snapshot:"));
@@ -644,7 +649,8 @@ fn make_dispatch_ready_parallel_runtime(prefix: &str) -> ShellRuntimeParallelFix
         ConversationService::new(codex_port),
         parallel_mode_binding,
     );
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir));
+    app.shell.chrome.startup_state =
+        StartupState::Ready(sample_startup_diagnostics(&workspace_dir));
     app.sync_draft_shell_workspace(&workspace_dir);
     app.refresh_ready_conversation_planning_runtime_projection_for_workspace(&workspace_dir);
 
@@ -731,10 +737,14 @@ fn post_turn_evaluation_completed_message(
 fn mark_core_turn_completed(runtime: &mut ShellRuntime, thread_id: &str, turn_id: &str) {
     let correlation = runtime
         .app_mut()
+        .runtime
         .client_runtime
         .begin_test_turn_submission();
-    let _ = runtime.app_mut().client_runtime.dispatch_client_event(
-        CoreInput::ConversationStreamUpdated {
+    let _ = runtime
+        .app_mut()
+        .runtime
+        .client_runtime
+        .dispatch_client_event(CoreInput::ConversationStreamUpdated {
             correlation,
             event: TurnStreamEvent::ThreadPrepared {
                 thread_id: thread_id.to_string(),
@@ -742,22 +752,23 @@ fn mark_core_turn_completed(runtime: &mut ShellRuntime, thread_id: &str, turn_id
                 cwd: "/tmp/workspace".to_string(),
                 runtime_envelope: Box::default(),
             },
-        },
-    );
-    let _ = runtime.app_mut().client_runtime.dispatch_client_event(
-        CoreInput::ConversationStreamUpdated {
+        });
+    let _ = runtime
+        .app_mut()
+        .runtime
+        .client_runtime
+        .dispatch_client_event(CoreInput::ConversationStreamUpdated {
             correlation,
             event: TurnStreamEvent::TurnStarted {
                 turn_id: turn_id.to_string(),
                 runtime_request: Box::default(),
             },
-        },
-    );
-    let _ =
-        runtime
-            .app_mut()
-            .client_runtime
-            .dispatch_client_event(CoreInput::ConversationStreamUpdated {
+        });
+    let _ = runtime
+        .app_mut()
+        .runtime
+        .client_runtime
+        .dispatch_client_event(CoreInput::ConversationStreamUpdated {
             correlation,
             event: TurnStreamEvent::TurnTerminal {
                 receipt: crate::domain::turn_terminal::ConversationTurnTerminalReceipt::completed(
@@ -786,6 +797,7 @@ fn arm_core_post_turn_evaluation(
     let workspace_directory = runtime.app().planning_workspace_directory();
     runtime
         .app_mut()
+        .runtime
         .client_runtime
         .begin_test_post_turn_evaluation(
             thread_id,
@@ -974,7 +986,9 @@ fn non_press_key_events_are_ignored() {
 #[test]
 fn queue_receipt_mouse_down_routes_to_the_inline_undo_action() {
     let mut runtime = make_test_runtime();
-    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &mut runtime.app_mut().conversation.lifecycle.conversation_state
+    else {
         panic!("test runtime should start with a ready conversation");
     };
     conversation.latest_queue_mutation_receipt =
@@ -993,6 +1007,7 @@ fn queue_receipt_mouse_down_routes_to_the_inline_undo_action() {
         });
     runtime
         .app_mut()
+        .planning
         .queue_overlay_ui_state
         .bind_receipt_undo_hit_area(Some(ratatui::layout::Rect::new(3, 5, 14, 1)));
     runtime.take_redraw_request();
@@ -1006,7 +1021,11 @@ fn queue_receipt_mouse_down_routes_to_the_inline_undo_action() {
 
     assert!(runtime.take_redraw_request());
     assert_eq!(
-        runtime.app().queue_overlay_ui_state.receipt_undo_hit_area(),
+        runtime
+            .app()
+            .planning
+            .queue_overlay_ui_state
+            .receipt_undo_hit_area(),
         None
     );
     assert_eq!(runtime.app().pending_queue_mutation_operation_id(), Some(1));
@@ -1019,12 +1038,13 @@ fn resumed_session_status_surfaces_planning_and_queue_context() {
     let mut runtime = make_test_runtime();
     let workspace_dir = create_temp_workspace("resume-planning-context");
     bootstrap_active_planning_workspace(&workspace_dir);
-    runtime.app_mut().startup_state =
+    runtime.app_mut().shell.chrome.startup_state =
         StartupState::Ready(sample_startup_diagnostics(&workspace_dir));
     runtime.take_redraw_request();
 
     runtime
         .app
+        .runtime
         .tx
         .send(BackgroundMessage::ConversationLoaded(Ok(
             ConversationSnapshot {
@@ -1043,7 +1063,7 @@ fn resumed_session_status_surfaces_planning_and_queue_context() {
     while std::time::Instant::now() < deadline {
         runtime.poll_background_messages();
         if matches!(
-            &runtime.app().conversation_state,
+            &runtime.app().conversation.lifecycle.conversation_state,
             ConversationState::Ready(conversation)
                 if conversation.status_text.contains("thread loaded / planning status: ready")
         ) {
@@ -1051,7 +1071,9 @@ fn resumed_session_status_surfaces_planning_and_queue_context() {
         }
         thread::sleep(Duration::from_millis(5));
     }
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert!(
@@ -1083,7 +1105,9 @@ fn resumed_session_status_reads_core_projection() {
 
     runtime.app_mut().surface_resumed_session_planning_context();
 
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert!(
@@ -1096,7 +1120,9 @@ fn resumed_session_status_reads_core_projection() {
 #[test]
 fn post_turn_evaluation_start_state_reads_core_projection() {
     let mut runtime = make_test_runtime();
-    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &mut runtime.app_mut().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     conversation.thread_id = "thread-1".to_string();
@@ -1122,11 +1148,17 @@ fn post_turn_evaluation_start_state_reads_core_projection() {
     assert!(
         runtime
             .app()
+            .runtime
             .client_runtime
             .test_post_turn_evaluation_is_in_flight("thread-1", "turn-1")
     );
     assert_eq!(
-        runtime.app().planning_worker_panel_state.status,
+        runtime
+            .app()
+            .planning
+            .planning_worker_panel_state
+            .current()
+            .status,
         PlanningWorkerStatus::Idle,
         "ready/no-task core projection should preserve the panel"
     );
@@ -1135,7 +1167,9 @@ fn post_turn_evaluation_start_state_reads_core_projection() {
 #[test]
 fn post_turn_evaluation_started_event_ignores_forged_tui_history_seed() {
     let mut runtime = make_test_runtime();
-    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &mut runtime.app_mut().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     conversation.thread_id = "thread-1".to_string();
@@ -1146,11 +1180,15 @@ fn post_turn_evaluation_started_event_ignores_forged_tui_history_seed() {
         .sync_core_planning_runtime_projection(PlanningRuntimeProjection::invalid(
             "refresh required",
         ));
-    runtime.app_mut().planning_worker_panel_state = PlanningWorkerPanelState {
-        status: PlanningWorkerStatus::RefreshSucceeded,
-        last_summary: Some("previous summary".to_string()),
-        ..PlanningWorkerPanelState::default()
-    };
+    runtime
+        .app_mut()
+        .planning
+        .planning_worker_panel_state
+        .replace_for_test(PlanningWorkerPanelState {
+            status: PlanningWorkerStatus::RefreshSucceeded,
+            last_summary: Some("previous summary".to_string()),
+            ..PlanningWorkerPanelState::default()
+        });
 
     runtime.app_mut().execute_conversation_runtime_effect(
         ConversationRuntimeEffect::EvaluatePostTurn {
@@ -1164,12 +1202,13 @@ fn post_turn_evaluation_started_event_ignores_forged_tui_history_seed() {
     assert!(
         runtime
             .app()
+            .runtime
             .client_runtime
             .test_post_turn_evaluation_is_in_flight("thread-1", "turn-1")
     );
     assert_eq!(
-        runtime.app().planning_worker_panel_state,
-        PlanningWorkerPanelState {
+        runtime.app().planning.planning_worker_panel_state.current(),
+        &PlanningWorkerPanelState {
             status: PlanningWorkerStatus::RefreshRunning,
             ..PlanningWorkerPanelState::default()
         },
@@ -1188,7 +1227,7 @@ fn ready_planning_projection_sync_is_ignored_without_a_ready_conversation() {
     runtime
         .app_mut()
         .sync_core_planning_runtime_projection(expected_projection.clone());
-    runtime.app_mut().conversation_state = ConversationState::Loading;
+    runtime.app_mut().conversation.lifecycle.conversation_state = ConversationState::Loading;
 
     runtime
         .app_mut()
@@ -1208,6 +1247,7 @@ fn startup_background_message_updates_app_state() {
     runtime.take_redraw_request();
     runtime
         .app
+        .runtime
         .tx
         .send(BackgroundMessage::StartupLoaded(Ok(
             sample_startup_diagnostics("/tmp/root"),
@@ -1215,7 +1255,7 @@ fn startup_background_message_updates_app_state() {
         .expect("startup message should send");
 
     runtime.poll_background_messages();
-    match &runtime.app.startup_state {
+    match &runtime.app.shell.chrome.startup_state {
         StartupState::Ready(diagnostics) => {
             assert_eq!(diagnostics.workspace_path, "/tmp/root");
         }
@@ -1238,7 +1278,9 @@ fn stale_queue_authority_completion_requires_a_load_for_the_current_thread_conte
     runtime
         .app_mut()
         .begin_queue_overlay_authority_load(stale_correlation.clone());
-    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &mut runtime.app_mut().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     conversation.thread_id = "thread-after-load-started".to_string();
@@ -1259,6 +1301,7 @@ fn stale_queue_authority_completion_requires_a_load_for_the_current_thread_conte
     assert!(
         runtime
             .app()
+            .planning
             .queue_overlay_ui_state
             .loading_request(&replacement_correlation)
             .is_some()
@@ -1275,10 +1318,15 @@ fn conversation_stream_background_message_is_routed_through_runtime_reducer() {
      */
     let mut runtime = make_test_runtime();
     runtime.take_redraw_request();
-    let correlation = runtime.app.client_runtime.begin_test_turn_submission();
+    let correlation = runtime
+        .app
+        .runtime
+        .client_runtime
+        .begin_test_turn_submission();
 
     runtime
         .app
+        .runtime
         .tx
         .send(BackgroundMessage::ConversationStream {
             correlation,
@@ -1289,7 +1337,9 @@ fn conversation_stream_background_message_is_routed_through_runtime_reducer() {
         .expect("conversation stream message should enqueue");
 
     runtime.poll_background_messages();
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert_eq!(conversation.status_text, "provider is thinking");
@@ -1298,7 +1348,7 @@ fn conversation_stream_background_message_is_routed_through_runtime_reducer() {
 fn session_catalog_request_uses_current_workspace_context() {
     let session_port = Arc::new(FakeSessionCatalogPort::default());
     let mut runtime = make_test_runtime_with_session_port(session_port.clone());
-    runtime.app_mut().startup_state =
+    runtime.app_mut().shell.chrome.startup_state =
         StartupState::Ready(sample_startup_diagnostics("/tmp/session-root"));
 
     runtime
@@ -1331,6 +1381,7 @@ fn idle_background_poll_after_initial_refresh_does_not_request_redraw() {
     let deadline = Instant::now() + Duration::from_secs(2);
     while runtime
         .app()
+        .runtime
         .client_runtime
         .snapshot()
         .planning_parallel
@@ -1345,6 +1396,7 @@ fn idle_background_poll_after_initial_refresh_does_not_request_redraw() {
     assert_eq!(
         runtime
             .app()
+            .runtime
             .client_runtime
             .snapshot()
             .planning_parallel
@@ -1369,6 +1421,7 @@ fn live_activity_schedules_delayed_draw_without_immediate_redraw() {
     let initial_refresh_deadline = Instant::now() + Duration::from_secs(2);
     while runtime
         .app()
+        .runtime
         .client_runtime
         .snapshot()
         .planning_parallel
@@ -1383,6 +1436,7 @@ fn live_activity_schedules_delayed_draw_without_immediate_redraw() {
     assert_eq!(
         runtime
             .app()
+            .runtime
             .client_runtime
             .snapshot()
             .planning_parallel
@@ -1393,7 +1447,9 @@ fn live_activity_schedules_delayed_draw_without_immediate_redraw() {
     );
     runtime.take_redraw_request();
     let now = Instant::now();
-    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &mut runtime.app_mut().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     conversation.input_state = ConversationInputState::StreamingTurn;
@@ -1421,6 +1477,7 @@ fn stale_post_turn_evaluation_background_message_is_ignored() {
     let initial_refresh_deadline = Instant::now() + Duration::from_secs(2);
     while runtime
         .app()
+        .runtime
         .client_runtime
         .snapshot()
         .planning_parallel
@@ -1435,6 +1492,7 @@ fn stale_post_turn_evaluation_background_message_is_ignored() {
     assert_eq!(
         runtime
             .app()
+            .runtime
             .client_runtime
             .snapshot()
             .planning_parallel
@@ -1443,7 +1501,9 @@ fn stale_post_turn_evaluation_background_message_is_ignored() {
         Some(workspace_directory.as_str()),
         "the fixture's exact initial refresh must settle before testing stale writer events"
     );
-    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &mut runtime.app_mut().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     conversation.thread_id = "thread-1".to_string();
@@ -1468,6 +1528,7 @@ fn stale_post_turn_evaluation_background_message_is_ignored() {
 
     runtime
         .app
+        .runtime
         .tx
         .send(post_turn_evaluation_completed_message(
             stale_correlation,
@@ -1496,7 +1557,9 @@ fn stale_post_turn_evaluation_background_message_is_ignored() {
         .expect("background message should enqueue");
 
     runtime.poll_background_messages();
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert_eq!(conversation.status_text, "session ready");
@@ -1508,7 +1571,9 @@ fn stale_post_turn_evaluation_background_message_is_ignored() {
     assert!(
         runtime
             .app()
+            .planning
             .planning_worker_panel_state
+            .current()
             .last_summary
             .is_none()
     );
@@ -1517,7 +1582,9 @@ fn stale_post_turn_evaluation_background_message_is_ignored() {
 #[test]
 fn accepted_post_turn_evaluation_preserves_exact_domain_worker_state() {
     let mut runtime = make_test_runtime();
-    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &mut runtime.app_mut().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     conversation.thread_id = "thread-1".to_string();
@@ -1537,6 +1604,7 @@ fn accepted_post_turn_evaluation_preserves_exact_domain_worker_state() {
     };
     runtime
         .app
+        .runtime
         .tx
         .send(post_turn_evaluation_completed_message(
             correlation,
@@ -1557,8 +1625,8 @@ fn accepted_post_turn_evaluation_preserves_exact_domain_worker_state() {
     runtime.poll_background_messages();
 
     assert_eq!(
-        runtime.app().planning_worker_panel_state,
-        expected_worker_state
+        runtime.app().planning.planning_worker_panel_state.current(),
+        &expected_worker_state
     );
 }
 
@@ -1570,6 +1638,7 @@ fn duplicate_post_turn_evaluation_for_same_turn_is_ignored() {
     let initial_refresh_deadline = Instant::now() + Duration::from_secs(2);
     while runtime
         .app()
+        .runtime
         .client_runtime
         .snapshot()
         .planning_parallel
@@ -1584,6 +1653,7 @@ fn duplicate_post_turn_evaluation_for_same_turn_is_ignored() {
     assert_eq!(
         runtime
             .app()
+            .runtime
             .client_runtime
             .snapshot()
             .planning_parallel
@@ -1592,7 +1662,9 @@ fn duplicate_post_turn_evaluation_for_same_turn_is_ignored() {
         Some(workspace_directory.as_str()),
         "the fixture's exact initial refresh must settle before testing duplicate writer events"
     );
-    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &mut runtime.app_mut().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     conversation.thread_id = "thread-1".to_string();
@@ -1628,17 +1700,21 @@ fn duplicate_post_turn_evaluation_for_same_turn_is_ignored() {
 
     runtime
         .app
+        .runtime
         .tx
         .send(build_message("first evaluation"))
         .expect("background message should enqueue");
     runtime
         .app
+        .runtime
         .tx
         .send(build_message("late duplicate"))
         .expect("background message should enqueue");
 
     runtime.poll_background_messages();
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert!(
@@ -1654,7 +1730,9 @@ fn duplicate_post_turn_evaluation_for_same_turn_is_ignored() {
     assert_eq!(
         runtime
             .app()
+            .planning
             .planning_worker_panel_state
+            .current()
             .last_summary
             .as_deref(),
         Some("first evaluation")
@@ -1682,7 +1760,9 @@ fn resize_event_requests_redraw() {
 #[test]
 fn resize_event_leaves_transcript_state_unchanged() {
     let mut runtime = make_test_runtime();
-    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &mut runtime.app_mut().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     conversation.messages.push(ConversationMessage::new(
@@ -1695,7 +1775,9 @@ fn resize_event_leaves_transcript_state_unchanged() {
 
     runtime.take_redraw_request();
     runtime.handle_terminal_event(Event::Resize(120, 40));
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert_eq!(conversation.composer.input_buffer, "buffered prompt");
@@ -1705,7 +1787,9 @@ fn resize_event_leaves_transcript_state_unchanged() {
 #[test]
 fn manual_turn_elapsed_pulse_requests_redraw() {
     let mut runtime = make_test_runtime();
-    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+    let ConversationState::Ready(conversation) =
+        &mut runtime.app_mut().conversation.lifecycle.conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     conversation.input_state = ConversationInputState::StreamingTurn;
@@ -1742,7 +1826,7 @@ fn poll_background_messages_starts_github_review_polling_when_due() {
     while Instant::now() < deadline {
         runtime.poll_background_messages();
         if matches!(
-            &runtime.app().github_review_polling_state,
+            &runtime.app().runtime.github_review_polling_state,
             super::super::github_polling::GithubReviewPollingState::Active(polling_state)
                 if polling_state.snapshot.is_some()
         ) {
@@ -1751,7 +1835,7 @@ fn poll_background_messages_starts_github_review_polling_when_due() {
         thread::yield_now();
     }
     let super::super::github_polling::GithubReviewPollingState::Active(polling_state) =
-        &runtime.app().github_review_polling_state
+        &runtime.app().runtime.github_review_polling_state
     else {
         panic!("expected active github review polling state");
     };
@@ -1761,6 +1845,7 @@ fn poll_background_messages_starts_github_review_polling_when_due() {
     assert!(
         !runtime
             .app()
+            .runtime
             .github_review_polling_state
             .poll_due(Instant::now())
     );
@@ -1780,7 +1865,7 @@ fn github_review_setup_failure_stays_fail_closed() {
     let deadline = Instant::now() + Duration::from_secs(1);
     while Instant::now() < deadline
         && !matches!(
-            runtime.app().github_review_polling_state,
+            runtime.app().runtime.github_review_polling_state,
             super::super::github_polling::GithubReviewPollingState::SetupError { .. }
         )
     {
@@ -1789,7 +1874,7 @@ fn github_review_setup_failure_stays_fail_closed() {
     }
 
     let super::super::github_polling::GithubReviewPollingState::SetupError { message, .. } =
-        &runtime.app().github_review_polling_state
+        &runtime.app().runtime.github_review_polling_state
     else {
         panic!("expected setup error state");
     };
@@ -1797,6 +1882,7 @@ fn github_review_setup_failure_stays_fail_closed() {
     assert!(
         !runtime
             .app()
+            .runtime
             .github_review_polling_state
             .poll_due(Instant::now())
     );

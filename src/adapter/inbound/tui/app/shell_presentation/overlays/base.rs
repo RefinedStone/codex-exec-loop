@@ -18,11 +18,11 @@ pub(crate) fn build_startup_banner_lines(
      * second core snapshot or render clock during history synchronization. max_height is optional
      * because renderers sometimes ask for the natural logo and sometimes need a cropped variant.
      */
-    let conversation = match &app.conversation_state {
+    let conversation = match &app.conversation.lifecycle.conversation_state {
         ConversationState::Ready(conversation) => Some(conversation.as_ref()),
         ConversationState::Loading | ConversationState::Failed(_) => None,
     };
-    if !app.show_startup_ascii_art
+    if !app.shell.show_startup_ascii_art
         || !conversation_startup_screen_is_active(parallel_mode_enabled, conversation)
     {
         return None;

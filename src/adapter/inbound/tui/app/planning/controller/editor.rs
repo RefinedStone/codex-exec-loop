@@ -12,6 +12,7 @@ impl NativeTuiApp {
     pub(super) fn open_planning_manual_editor(&mut self) {
         let workspace_directory = self.planning_workspace_directory();
         let outcome = self
+            .runtime
             .client_runtime
             .dispatch_client_event(CoreInput::Command(AppCommand::StagePlanningEditor {
                 workspace_directory,
@@ -23,6 +24,7 @@ impl NativeTuiApp {
     pub(super) fn open_directions_detail_doc_editor(&mut self, direction_id: &str) {
         let workspace_directory = self.planning_workspace_directory();
         let outcome = self
+            .runtime
             .client_runtime
             .dispatch_client_event(CoreInput::Command(AppCommand::StagePlanningEditor {
                 workspace_directory,
@@ -36,6 +38,7 @@ impl NativeTuiApp {
     pub(super) fn open_queue_idle_prompt_editor(&mut self) {
         let workspace_directory = self.planning_workspace_directory();
         let outcome = self
+            .runtime
             .client_runtime
             .dispatch_client_event(CoreInput::Command(AppCommand::StagePlanningEditor {
                 workspace_directory,
@@ -53,6 +56,7 @@ impl NativeTuiApp {
 
     pub(super) fn save_directions_manual_editor(&mut self) {
         if self
+            .planning
             .planning_draft_editor_ui_state
             .session_identity()
             .is_none()
@@ -80,6 +84,7 @@ impl NativeTuiApp {
 
     pub(super) fn promote_directions_manual_editor(&mut self) {
         if self
+            .planning
             .planning_draft_editor_ui_state
             .session_identity()
             .is_none()
@@ -104,6 +109,7 @@ impl NativeTuiApp {
         target: PlanningEditorMutationTarget,
     ) {
         let Some(source_session) = self
+            .planning
             .planning_draft_editor_ui_state
             .session_identity()
             .cloned()
@@ -127,14 +133,20 @@ impl NativeTuiApp {
             });
             return;
         }
-        let Some(buffer_revision) = self.planning_draft_editor_ui_state.buffer_revision() else {
+        let Some(buffer_revision) = self
+            .planning
+            .planning_draft_editor_ui_state
+            .buffer_revision()
+        else {
             return;
         };
         let source_planning_revision = self
+            .planning
             .planning_draft_editor_ui_state
             .source_planning_revision();
         let draft_name = source_session.draft_name.clone();
-        self.planning_draft_editor_ui_state
+        self.planning
+            .planning_draft_editor_ui_state
             .clear_close_confirmation();
         let mut identity = PlanningEditorMutationIdentity::new(
             action,
@@ -149,10 +161,12 @@ impl NativeTuiApp {
         let request = PlanningEditorMutationRequest {
             identity,
             editable_files: self
+                .planning
                 .planning_draft_editor_ui_state
                 .collect_editable_file_snapshots(),
         };
         let outcome = self
+            .runtime
             .client_runtime
             .dispatch_client_event(CoreInput::Command(AppCommand::MutatePlanningEditor {
                 workspace_directory,
@@ -167,7 +181,7 @@ impl NativeTuiApp {
          * which knows about dirty buffers and invalid staged validation. This
          * controller only chooses the planning-init close destination and copy.
          */
-        match self.planning_draft_editor_ui_state.request_close() {
+        match self.planning.planning_draft_editor_ui_state.request_close() {
             PlanningDraftEditorCloseRequest::CloseImmediately => self.close_shell_overlay(),
             PlanningDraftEditorCloseRequest::ConfirmationRequired(risk) => {
                 /*
@@ -191,7 +205,7 @@ impl NativeTuiApp {
          * destination is the directions maintenance overview rather than the
          * main shell.
          */
-        match self.planning_draft_editor_ui_state.request_close() {
+        match self.planning.planning_draft_editor_ui_state.request_close() {
             PlanningDraftEditorCloseRequest::CloseImmediately => self
                 .close_directions_manual_editor_without_prompt(
                     "directions editor closed".to_string(),
@@ -256,6 +270,7 @@ impl NativeTuiApp {
          * falls through for normal handling.
          */
         if !self
+            .planning
             .planning_draft_editor_ui_state
             .is_close_confirmation_pending()
         {
@@ -264,7 +279,11 @@ impl NativeTuiApp {
 
         match key.code {
             KeyCode::Enter if key.modifiers.is_empty() => {
-                let Some(risk) = self.planning_draft_editor_ui_state.pending_close_risk() else {
+                let Some(risk) = self
+                    .planning
+                    .planning_draft_editor_ui_state
+                    .pending_close_risk()
+                else {
                     return false;
                 };
                 self.close_planning_manual_editor_after_confirmation(risk);
@@ -273,7 +292,8 @@ impl NativeTuiApp {
             KeyCode::Char('n') | KeyCode::Char('N')
                 if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
             {
-                self.planning_draft_editor_ui_state
+                self.planning
+                    .planning_draft_editor_ui_state
                     .clear_close_confirmation();
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                     status_text: "planning draft editor close canceled; keep editing".to_string(),
@@ -286,7 +306,8 @@ impl NativeTuiApp {
                  * normal editor navigation or typing resume immediately without a stale
                  * modal close prompt intercepting later keys.
                  */
-                self.planning_draft_editor_ui_state
+                self.planning
+                    .planning_draft_editor_ui_state
                     .clear_close_confirmation();
                 false
             }
@@ -303,6 +324,7 @@ impl NativeTuiApp {
          * directions-specific.
          */
         if !self
+            .planning
             .planning_draft_editor_ui_state
             .is_close_confirmation_pending()
         {
@@ -311,7 +333,11 @@ impl NativeTuiApp {
 
         match key.code {
             KeyCode::Enter if key.modifiers.is_empty() => {
-                let Some(risk) = self.planning_draft_editor_ui_state.pending_close_risk() else {
+                let Some(risk) = self
+                    .planning
+                    .planning_draft_editor_ui_state
+                    .pending_close_risk()
+                else {
                     return false;
                 };
                 self.close_directions_manual_editor_after_confirmation(risk);
@@ -320,7 +346,8 @@ impl NativeTuiApp {
             KeyCode::Char('n') | KeyCode::Char('N')
                 if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
             {
-                self.planning_draft_editor_ui_state
+                self.planning
+                    .planning_draft_editor_ui_state
                     .clear_close_confirmation();
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                     status_text: "directions editor close canceled; keep editing".to_string(),
@@ -333,7 +360,8 @@ impl NativeTuiApp {
                  * init so shared editor muscle memory stays consistent across both entry
                  * points.
                  */
-                self.planning_draft_editor_ui_state
+                self.planning
+                    .planning_draft_editor_ui_state
                     .clear_close_confirmation();
                 false
             }

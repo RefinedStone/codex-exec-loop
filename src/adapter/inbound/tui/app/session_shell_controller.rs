@@ -52,7 +52,7 @@ impl NativeTuiApp {
 
     pub(super) fn jump_to_first_session(&mut self) {
         // Page movement happens in overlay UI state, then selection is recomputed from the page view.
-        self.session_overlay_ui_state.jump_to_first_page();
+        self.shell.session_overlay_ui_state.jump_to_first_page();
         let next_selection = self
             .current_session_browser_page()
             .map(|browser_page| browser_page.first_selection())
@@ -68,7 +68,9 @@ impl NativeTuiApp {
             .current_session_browser_page()
             .map(|browser_page| browser_page.projection.total_pages)
             .unwrap_or(0);
-        self.session_overlay_ui_state.jump_to_last_page(total_pages);
+        self.shell
+            .session_overlay_ui_state
+            .jump_to_last_page(total_pages);
         let next_selection = self
             .current_session_browser_page()
             .map(|browser_page| browser_page.last_selection())
@@ -81,8 +83,8 @@ impl NativeTuiApp {
 
     pub(super) fn clear_session_browser_state(&mut self) {
         // Clear query/filter/page state and then normalize selected_session_id against the fresh page.
-        self.selected_session_index = 0;
-        self.session_overlay_ui_state.clear_browser_state();
+        self.shell.chrome.selected_session_index = 0;
+        self.shell.session_overlay_ui_state.clear_browser_state();
         self.sync_session_browser_selection();
     }
 
@@ -93,15 +95,15 @@ impl NativeTuiApp {
          * project filter, search query, page index, and selected session id.
          */
         let current_workspace_directory = self.current_workspace_directory();
-        if let SessionState::Ready(catalog) = &self.session_state
+        if let SessionState::Ready(catalog) = &self.shell.chrome.session_state
             && let Some(recent_sessions) = catalog.recent_sessions()
         {
             return Some(build_session_browser_page(
                 recent_sessions,
-                self.session_overlay_ui_state.browser_state(),
+                self.shell.session_overlay_ui_state.browser_state(),
                 Some(current_workspace_directory.as_str()),
-                self.session_overlay_ui_state.selected_session_id(),
-                self.selected_session_index,
+                self.shell.session_overlay_ui_state.selected_session_id(),
+                self.shell.chrome.selected_session_index,
             ));
         }
         None
@@ -109,8 +111,9 @@ impl NativeTuiApp {
 
     fn apply_session_browser_selection(&mut self, selection: SessionBrowserSelection) {
         // Store both visible index and stable id: index drives cursor position, id survives resort/filter.
-        self.selected_session_index = selection.index;
-        self.session_overlay_ui_state
+        self.shell.chrome.selected_session_index = selection.index;
+        self.shell
+            .session_overlay_ui_state
             .set_selected_session_id(selection.session_id);
     }
 
@@ -130,22 +133,27 @@ impl NativeTuiApp {
                 None => (0, None),
             };
 
-        self.selected_session_index = selected_session_index;
-        self.session_overlay_ui_state
+        self.shell.chrome.selected_session_index = selected_session_index;
+        self.shell
+            .session_overlay_ui_state
             .set_selected_session_id(selected_session_id);
     }
 
     pub(super) fn is_session_search_query_editing(&self) -> bool {
-        self.session_overlay_ui_state.is_search_query_editing()
+        self.shell
+            .session_overlay_ui_state
+            .is_search_query_editing()
     }
 
     pub(super) fn start_session_search_query_edit(&mut self) {
         // Search edit mode is scoped to the Sessions overlay; other overlays reuse '/' differently.
-        if self.shell_overlay != ShellOverlay::Sessions {
+        if self.shell.chrome.shell_overlay != ShellOverlay::Sessions {
             return;
         }
 
-        self.session_overlay_ui_state.start_search_query_edit();
+        self.shell
+            .session_overlay_ui_state
+            .start_search_query_edit();
     }
 
     pub(super) fn save_session_search_query_edit(&mut self) {
@@ -153,7 +161,7 @@ impl NativeTuiApp {
             return;
         }
 
-        self.session_overlay_ui_state.save_search_query_edit();
+        self.shell.session_overlay_ui_state.save_search_query_edit();
         self.sync_session_browser_selection();
     }
 
@@ -162,16 +170,21 @@ impl NativeTuiApp {
             return;
         }
 
-        self.session_overlay_ui_state.cancel_search_query_edit();
+        self.shell
+            .session_overlay_ui_state
+            .cancel_search_query_edit();
     }
 
     pub(super) fn push_session_search_query_character(&mut self, character: char) {
-        self.session_overlay_ui_state
+        self.shell
+            .session_overlay_ui_state
             .push_search_query_character(character);
     }
 
     pub(super) fn pop_session_search_query_character(&mut self) {
-        self.session_overlay_ui_state.pop_search_query_character();
+        self.shell
+            .session_overlay_ui_state
+            .pop_search_query_character();
     }
 
     pub(super) fn cycle_session_project_filter(&mut self, delta: isize) {
@@ -186,7 +199,8 @@ impl NativeTuiApp {
             return;
         };
 
-        self.session_overlay_ui_state
+        self.shell
+            .session_overlay_ui_state
             .set_project_filter(next_filter);
         self.sync_session_browser_selection();
     }
@@ -196,7 +210,9 @@ impl NativeTuiApp {
             return;
         };
         let total_pages = browser_page.projection.total_pages;
-        self.session_overlay_ui_state.move_page(delta, total_pages);
+        self.shell
+            .session_overlay_ui_state
+            .move_page(delta, total_pages);
         self.sync_session_browser_selection();
     }
 
@@ -206,7 +222,9 @@ impl NativeTuiApp {
          * cancel keys. Returning true stops the outer overlay handler from also interpreting those
          * keys as navigation commands.
          */
-        if self.shell_overlay != ShellOverlay::Sessions || !self.is_session_search_query_editing() {
+        if self.shell.chrome.shell_overlay != ShellOverlay::Sessions
+            || !self.is_session_search_query_editing()
+        {
             return false;
         }
         match key.code {
@@ -228,16 +246,20 @@ impl NativeTuiApp {
     }
 
     pub(super) fn is_session_rename_editing(&self) -> bool {
-        self.session_overlay_ui_state.is_rename_editing()
+        self.shell.session_overlay_ui_state.is_rename_editing()
     }
 
     pub(super) fn start_session_rename_edit(&mut self) {
-        if self.shell_overlay != ShellOverlay::Sessions {
+        if self.shell.chrome.shell_overlay != ShellOverlay::Sessions {
             return;
         }
         let Some(session) = self.current_session() else {
             self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                status_text: self.tui_language.session_rename_select_status().to_string(),
+                status_text: self
+                    .shell
+                    .tui_language
+                    .session_rename_select_status()
+                    .to_string(),
             });
             return;
         };
@@ -249,27 +271,33 @@ impl NativeTuiApp {
             .filter(|name| !name.is_empty())
             .map(str::to_string)
             .unwrap_or_else(|| session.title());
-        self.session_overlay_ui_state
+        self.shell
+            .session_overlay_ui_state
             .start_rename_edit(thread_id, name);
     }
 
     pub(super) fn handle_session_rename_editor_key(&mut self, key: event::KeyEvent) -> bool {
-        if self.shell_overlay != ShellOverlay::Sessions || !self.is_session_rename_editing() {
+        if self.shell.chrome.shell_overlay != ShellOverlay::Sessions
+            || !self.is_session_rename_editing()
+        {
             return false;
         }
         match key.code {
             KeyCode::Enter if key.modifiers.is_empty() => self.submit_session_rename(),
             KeyCode::Esc => self
+                .shell
                 .session_overlay_ui_state
-                .cancel_rename_edit(self.tui_language),
+                .cancel_rename_edit(self.shell.tui_language),
             KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => self
+                .shell
                 .session_overlay_ui_state
-                .cancel_rename_edit(self.tui_language),
-            KeyCode::Backspace => self.session_overlay_ui_state.pop_rename_character(),
+                .cancel_rename_edit(self.shell.tui_language),
+            KeyCode::Backspace => self.shell.session_overlay_ui_state.pop_rename_character(),
             KeyCode::Char(character)
                 if key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT =>
             {
-                self.session_overlay_ui_state
+                self.shell
+                    .session_overlay_ui_state
                     .push_rename_character(character);
             }
             _ => {}
@@ -278,19 +306,23 @@ impl NativeTuiApp {
     }
 
     pub(super) fn handle_session_rename_paste(&mut self, text: &str) -> bool {
-        if self.shell_overlay != ShellOverlay::Sessions || !self.is_session_rename_editing() {
+        if self.shell.chrome.shell_overlay != ShellOverlay::Sessions
+            || !self.is_session_rename_editing()
+        {
             return false;
         }
-        self.session_overlay_ui_state.push_rename_text(text);
+        self.shell.session_overlay_ui_state.push_rename_text(text);
         true
     }
 
     fn submit_session_rename(&mut self) {
         let Some(request) = self
+            .shell
             .session_overlay_ui_state
-            .prepare_rename_request(self.tui_language)
+            .prepare_rename_request(self.shell.tui_language)
         else {
             if let Some(feedback) = self
+                .shell
                 .session_overlay_ui_state
                 .rename_editor_feedback()
                 .map(str::to_string)
@@ -303,6 +335,7 @@ impl NativeTuiApp {
         };
 
         let outcome = self
+            .runtime
             .client_runtime
             .dispatch_client_event(CoreInput::Command(AppCommand::RenameSession(
                 request.clone(),
@@ -323,11 +356,13 @@ impl NativeTuiApp {
             Some(SessionRenameAdmission::Accepted { correlation })
                 if correlation.request == request
                     && self
+                        .shell
                         .session_overlay_ui_state
-                        .record_rename_admission(correlation.clone(), self.tui_language) =>
+                        .record_rename_admission(correlation.clone(), self.shell.tui_language) =>
             {
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                     status_text: self
+                        .shell
                         .tui_language
                         .session_rename_started_status(&request.name),
                 });
@@ -348,10 +383,11 @@ impl NativeTuiApp {
             None => Some("core did not resolve the session rename admission"),
         };
         if let Some(reason) = rejection {
-            self.session_overlay_ui_state
-                .finish_rename_failure(reason, self.tui_language);
+            self.shell
+                .session_overlay_ui_state
+                .finish_rename_failure(reason, self.shell.tui_language);
             self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                status_text: self.tui_language.session_rename_failed_status(reason),
+                status_text: self.shell.tui_language.session_rename_failed_status(reason),
             });
         }
         // Client Runtime appends an immediate effect completion after the admission event. Record the
@@ -366,6 +402,7 @@ impl NativeTuiApp {
         result: Result<SessionRenameAcceptedSnapshot, String>,
     ) {
         let exact_pending = self
+            .shell
             .session_overlay_ui_state
             .pending_rename_matches(&correlation);
 
@@ -383,11 +420,13 @@ impl NativeTuiApp {
                 if !exact_pending {
                     return;
                 }
-                self.session_overlay_ui_state.finish_rename_success();
-                self.session_overlay_ui_state
+                self.shell.session_overlay_ui_state.finish_rename_success();
+                self.shell
+                    .session_overlay_ui_state
                     .set_selected_session_id(Some(correlation.request.thread_id.clone()));
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                     status_text: self
+                        .shell
                         .tui_language
                         .session_renamed_status(&correlation.request.name),
                 });
@@ -396,17 +435,21 @@ impl NativeTuiApp {
                 if !exact_pending {
                     return;
                 }
-                self.session_overlay_ui_state
-                    .finish_rename_failure(&reason, self.tui_language);
+                self.shell
+                    .session_overlay_ui_state
+                    .finish_rename_failure(&reason, self.shell.tui_language);
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                    status_text: self.tui_language.session_rename_failed_status(&reason),
+                    status_text: self
+                        .shell
+                        .tui_language
+                        .session_rename_failed_status(&reason),
                 });
             }
         }
     }
 
     fn apply_session_catalog_projection(&mut self, snapshot: SessionCatalogSnapshot) {
-        self.session_state = match snapshot {
+        self.shell.chrome.session_state = match snapshot {
             SessionCatalogSnapshot::Idle => SessionState::Idle,
             SessionCatalogSnapshot::Loading => SessionState::Loading,
             SessionCatalogSnapshot::Ready(ready) => SessionState::Ready(*ready.catalog),
@@ -420,7 +463,7 @@ impl NativeTuiApp {
          * UI state, or dispatch conversation/startup intents. Unrecognized keys are still consumed
          * while the overlay is active so they do not leak into the conversation prompt.
          */
-        if self.shell_overlay != ShellOverlay::Sessions {
+        if self.shell.chrome.shell_overlay != ShellOverlay::Sessions {
             return false;
         }
         match key.code {
@@ -508,7 +551,7 @@ mod tests {
     }
 
     fn seed_sessions(app: &mut NativeTuiApp, sessions: Vec<SessionSummary>) {
-        app.session_state = SessionState::Ready(SessionCatalog::ready(
+        app.shell.chrome.session_state = SessionState::Ready(SessionCatalog::ready(
             SessionCatalogTier::ProviderBackedCatalog,
             RecentSessions {
                 items: sessions,
@@ -516,7 +559,7 @@ mod tests {
                 next_cursor: None,
             },
         ));
-        app.shell_overlay = ShellOverlay::Sessions;
+        app.shell.chrome.shell_overlay = ShellOverlay::Sessions;
     }
 
     fn catalog_snapshot(sessions: Vec<SessionSummary>) -> SessionCatalogSnapshot {
@@ -654,9 +697,9 @@ mod tests {
             SessionCatalogLoadIntent::refresh(SESSION_PAGE_SIZE, "/tmp/root"),
         )));
         poll_until(app, |app| {
-            matches!(app.session_state, SessionState::Ready(_))
+            matches!(app.shell.chrome.session_state, SessionState::Ready(_))
         });
-        app.shell_overlay = ShellOverlay::Sessions;
+        app.shell.chrome.shell_overlay = ShellOverlay::Sessions;
     }
 
     #[test]
@@ -680,17 +723,17 @@ mod tests {
 
         app.jump_to_last_session();
 
-        assert_eq!(app.selected_session_index, 1);
+        assert_eq!(app.shell.chrome.selected_session_index, 1);
         assert_eq!(selected_session_id(&app), Some("thread-11"));
 
         app.move_session_page(-1);
 
-        assert_eq!(app.selected_session_index, 1);
+        assert_eq!(app.shell.chrome.selected_session_index, 1);
         assert_eq!(selected_session_id(&app), Some("thread-01"));
 
         app.jump_to_first_session();
 
-        assert_eq!(app.selected_session_index, 0);
+        assert_eq!(app.shell.chrome.selected_session_index, 0);
         assert_eq!(selected_session_id(&app), Some("thread-00"));
     }
 
@@ -705,12 +748,12 @@ mod tests {
             ],
         );
 
-        app.shell_overlay = ShellOverlay::Hidden;
+        app.shell.chrome.shell_overlay = ShellOverlay::Hidden;
         app.start_session_search_query_edit();
         assert!(!app.is_session_search_query_editing());
         assert!(!app.handle_session_search_query_editor_key(key(KeyCode::Char('b'))));
 
-        app.shell_overlay = ShellOverlay::Sessions;
+        app.shell.chrome.shell_overlay = ShellOverlay::Sessions;
         assert!(app.handle_session_overlay_key(key(KeyCode::Char('/'))));
         assert!(app.is_session_search_query_editing());
 
@@ -721,7 +764,9 @@ mod tests {
         )));
         assert!(app.handle_session_search_query_editor_key(key(KeyCode::Backspace)));
         assert_eq!(
-            app.session_overlay_ui_state.search_query_editor_buffer(),
+            app.shell
+                .session_overlay_ui_state
+                .search_query_editor_buffer(),
             "b"
         );
 
@@ -729,7 +774,10 @@ mod tests {
 
         assert!(!app.is_session_search_query_editing());
         assert_eq!(
-            app.session_overlay_ui_state.browser_state().search_query,
+            app.shell
+                .session_overlay_ui_state
+                .browser_state()
+                .search_query,
             "b"
         );
         assert_eq!(selected_session_id(&app), Some("thread-beta"));
@@ -740,11 +788,16 @@ mod tests {
 
         assert!(!app.is_session_search_query_editing());
         assert_eq!(
-            app.session_overlay_ui_state.browser_state().search_query,
+            app.shell
+                .session_overlay_ui_state
+                .browser_state()
+                .search_query,
             "b"
         );
         assert_eq!(
-            app.session_overlay_ui_state.search_query_editor_buffer(),
+            app.shell
+                .session_overlay_ui_state
+                .search_query_editor_buffer(),
             "b"
         );
 
@@ -756,7 +809,10 @@ mod tests {
 
         assert!(!app.is_session_search_query_editing());
         assert_eq!(
-            app.session_overlay_ui_state.browser_state().search_query,
+            app.shell
+                .session_overlay_ui_state
+                .browser_state()
+                .search_query,
             "b"
         );
     }
@@ -772,13 +828,16 @@ mod tests {
             ],
         );
 
-        app.shell_overlay = ShellOverlay::Hidden;
+        app.shell.chrome.shell_overlay = ShellOverlay::Hidden;
         assert!(!app.handle_session_overlay_key(key(KeyCode::Tab)));
 
-        app.shell_overlay = ShellOverlay::Sessions;
+        app.shell.chrome.shell_overlay = ShellOverlay::Sessions;
         assert!(app.handle_session_overlay_key(key(KeyCode::Tab)));
         assert_eq!(
-            app.session_overlay_ui_state.browser_state().project_filter,
+            app.shell
+                .session_overlay_ui_state
+                .browser_state()
+                .project_filter,
             SessionProjectFilter::RecentProject {
                 workspace_directory: "/tmp/root".to_string(),
             }
@@ -787,22 +846,31 @@ mod tests {
 
         assert!(app.handle_session_overlay_key(key(KeyCode::BackTab)));
         assert_eq!(
-            app.session_overlay_ui_state.browser_state().project_filter,
+            app.shell
+                .session_overlay_ui_state
+                .browser_state()
+                .project_filter,
             SessionProjectFilter::AllProjects,
         );
 
-        app.session_overlay_ui_state.set_search_query("other");
+        app.shell.session_overlay_ui_state.set_search_query("other");
         app.sync_session_browser_selection();
         assert_eq!(selected_session_id(&app), Some("thread-other"));
 
         assert!(app.handle_session_overlay_key(key(KeyCode::Char('c'))));
 
         assert_eq!(
-            app.session_overlay_ui_state.browser_state().search_query,
+            app.shell
+                .session_overlay_ui_state
+                .browser_state()
+                .search_query,
             ""
         );
         assert_eq!(
-            app.session_overlay_ui_state.browser_state().project_filter,
+            app.shell
+                .session_overlay_ui_state
+                .browser_state()
+                .project_filter,
             SessionProjectFilter::AllProjects,
         );
         assert_eq!(selected_session_id(&app), Some("thread-root"));
@@ -822,14 +890,11 @@ mod tests {
 
         app.open_conversation_shell();
 
-        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
-        assert_eq!(
-            app.pending_conversation_load
-                .as_ref()
-                .map(|load| load.requested_thread_id.as_str()),
-            Some("thread-beta")
-        );
-        assert!(matches!(app.conversation_state, ConversationState::Loading));
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Hidden);
+        assert!(matches!(
+            app.conversation.lifecycle.conversation_state,
+            ConversationState::Loading
+        ));
     }
 
     #[test]
@@ -843,11 +908,11 @@ mod tests {
         assert!(app.handle_session_overlay_key(key(KeyCode::Char('e'))));
         assert!(app.is_session_rename_editing());
         assert_eq!(
-            app.session_overlay_ui_state.rename_editor_thread_id(),
+            app.shell.session_overlay_ui_state.rename_editor_thread_id(),
             Some("thread-alpha")
         );
         assert_eq!(
-            app.session_overlay_ui_state.rename_editor_buffer(),
+            app.shell.session_overlay_ui_state.rename_editor_buffer(),
             "Alpha draft"
         );
 
@@ -865,17 +930,18 @@ mod tests {
         if let SessionState::Ready(crate::domain::recent_sessions::SessionCatalog::Ready {
             recent_sessions,
             ..
-        }) = &mut app.session_state
+        }) = &mut app.shell.chrome.session_state
         {
             recent_sessions.items[0].name = None;
             recent_sessions.items[0].preview = "Fallback preview title\nsecond line".to_string();
         }
         app.start_session_rename_edit();
         assert_eq!(
-            app.session_overlay_ui_state.rename_editor_buffer(),
+            app.shell.session_overlay_ui_state.rename_editor_buffer(),
             "Fallback preview title"
         );
-        app.session_overlay_ui_state
+        app.shell
+            .session_overlay_ui_state
             .cancel_rename_edit(TuiLanguage::English);
     }
 
@@ -890,19 +956,23 @@ mod tests {
             ],
         );
         app.move_selection(1);
-        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        let ConversationState::Ready(conversation) =
+            &mut app.conversation.lifecycle.conversation_state
+        else {
             panic!("test conversation should be ready");
         };
         conversation.thread_id = "thread-beta".to_string();
         conversation.title = "Beta draft".to_string();
         app.start_session_rename_edit();
         let failed_request = app
+            .shell
             .session_overlay_ui_state
             .prepare_rename_request(TuiLanguage::English)
             .expect("rename request should prepare");
         let failed_correlation = SessionRenameCorrelation::new(1, failed_request);
         assert!(
-            app.session_overlay_ui_state
+            app.shell
+                .session_overlay_ui_state
                 .record_rename_admission(failed_correlation.clone(), TuiLanguage::English,)
         );
 
@@ -913,20 +983,23 @@ mod tests {
 
         assert!(app.is_session_rename_editing());
         assert_eq!(
-            app.session_overlay_ui_state.rename_editor_buffer(),
+            app.shell.session_overlay_ui_state.rename_editor_buffer(),
             "Beta draft"
         );
 
         let retry_request = app
+            .shell
             .session_overlay_ui_state
             .prepare_rename_request(TuiLanguage::English)
             .expect("same-value retry should prepare");
         let retry_correlation = SessionRenameCorrelation::new(2, retry_request);
         assert!(
-            app.session_overlay_ui_state
+            app.shell
+                .session_overlay_ui_state
                 .record_rename_admission(retry_correlation.clone(), TuiLanguage::English,)
         );
         let retry_feedback = app
+            .shell
             .session_overlay_ui_state
             .rename_editor_feedback()
             .map(str::to_string);
@@ -935,12 +1008,13 @@ mod tests {
             Err("late provider failure".to_string()),
         );
         assert!(
-            app.session_overlay_ui_state
+            app.shell
+                .session_overlay_ui_state
                 .pending_rename_matches(&retry_correlation),
             "mismatched failure must not settle the newer retry"
         );
         assert_eq!(
-            app.session_overlay_ui_state.rename_editor_feedback(),
+            app.shell.session_overlay_ui_state.rename_editor_feedback(),
             retry_feedback.as_deref(),
             "mismatched failure must preserve newer editor feedback"
         );
@@ -957,7 +1031,8 @@ mod tests {
             )),
         );
         assert!(
-            app.session_overlay_ui_state
+            app.shell
+                .session_overlay_ui_state
                 .pending_rename_matches(&retry_correlation),
             "older local receipt must not settle the retry"
         );
@@ -967,11 +1042,11 @@ mod tests {
             "Core-accepted catalog projection must not be vetoed by local pending state"
         );
         assert!(matches!(
-            &app.conversation_state,
+            &app.conversation.lifecycle.conversation_state,
             ConversationState::Ready(conversation) if conversation.title == "stale title"
         ));
         assert_eq!(
-            app.session_overlay_ui_state.rename_editor_buffer(),
+            app.shell.session_overlay_ui_state.rename_editor_buffer(),
             "Beta draft",
             "the newer editor must survive a mismatched success"
         );
@@ -998,20 +1073,24 @@ mod tests {
         );
         assert!(app.is_session_rename_editing());
         assert_eq!(
-            app.session_overlay_ui_state.rename_editor_buffer(),
+            app.shell.session_overlay_ui_state.rename_editor_buffer(),
             "Beta draft",
             "an unbound success must not settle the editor reopened by exact failure"
         );
 
-        app.session_overlay_ui_state.pop_rename_character();
-        app.session_overlay_ui_state.push_rename_character('2');
+        app.shell.session_overlay_ui_state.pop_rename_character();
+        app.shell
+            .session_overlay_ui_state
+            .push_rename_character('2');
         let success_request = app
+            .shell
             .session_overlay_ui_state
             .prepare_rename_request(TuiLanguage::English)
             .expect("retry should prepare");
         let success_correlation = SessionRenameCorrelation::new(3, success_request);
         assert!(
-            app.session_overlay_ui_state
+            app.shell
+                .session_overlay_ui_state
                 .record_rename_admission(success_correlation.clone(), TuiLanguage::English,)
         );
         app.apply_session_rename_completion(
@@ -1034,7 +1113,7 @@ mod tests {
             Some("Beta draf2")
         );
         assert!(matches!(
-            &app.conversation_state,
+            &app.conversation.lifecycle.conversation_state,
             ConversationState::Ready(conversation) if conversation.title == "Beta draf2"
         ));
         app.move_selection(-1);
@@ -1051,21 +1130,23 @@ mod tests {
             &mut app,
             vec![session("thread-beta", "Beta draft", "/tmp/root")],
         );
-        app.shell_overlay = ShellOverlay::Sessions;
+        app.shell.chrome.shell_overlay = ShellOverlay::Sessions;
         app.start_session_rename_edit();
         while !app
+            .shell
             .session_overlay_ui_state
             .rename_editor_buffer()
             .is_empty()
         {
-            app.session_overlay_ui_state.pop_rename_character();
+            app.shell.session_overlay_ui_state.pop_rename_character();
         }
         app.handle_session_rename_paste("Beta renamed");
         let request = app
+            .shell
             .session_overlay_ui_state
             .prepare_rename_request(TuiLanguage::English)
             .expect("rename request should prepare without becoming pending");
-        assert!(!app.session_overlay_ui_state.is_rename_pending());
+        assert!(!app.shell.session_overlay_ui_state.is_rename_pending());
         let correlation = SessionRenameCorrelation::new(1, request.clone());
         let outcome = CoreDispatchOutcome {
             events: vec![
@@ -1083,12 +1164,12 @@ mod tests {
                 },
             ],
             effects: Vec::new(),
-            snapshot: std::sync::Arc::new(app.client_runtime.snapshot()),
+            snapshot: std::sync::Arc::new(app.runtime.client_runtime.snapshot()),
         };
 
         app.apply_session_rename_dispatch_outcome(request, outcome);
 
-        assert!(!app.session_overlay_ui_state.is_rename_pending());
+        assert!(!app.shell.session_overlay_ui_state.is_rename_pending());
         assert!(!app.is_session_rename_editing());
         assert_eq!(
             app.current_session().map(SessionSummary::title).as_deref(),
@@ -1103,9 +1184,10 @@ mod tests {
             &mut app,
             vec![session("thread-beta", "Beta draft", "/tmp/root")],
         );
-        app.shell_overlay = ShellOverlay::Sessions;
+        app.shell.chrome.shell_overlay = ShellOverlay::Sessions;
         app.start_session_rename_edit();
         let request = app
+            .shell
             .session_overlay_ui_state
             .prepare_rename_request(TuiLanguage::English)
             .expect("rename request should prepare without becoming pending");
@@ -1120,19 +1202,20 @@ mod tests {
                 },
             )],
             effects: Vec::new(),
-            snapshot: std::sync::Arc::new(app.client_runtime.snapshot()),
+            snapshot: std::sync::Arc::new(app.runtime.client_runtime.snapshot()),
         };
 
         app.apply_session_rename_dispatch_outcome(request, outcome);
 
         assert!(app.is_session_rename_editing());
-        assert!(!app.session_overlay_ui_state.is_rename_pending());
+        assert!(!app.shell.session_overlay_ui_state.is_rename_pending());
         assert_eq!(
-            app.session_overlay_ui_state.rename_editor_buffer(),
+            app.shell.session_overlay_ui_state.rename_editor_buffer(),
             "Beta draft"
         );
         assert!(
-            app.session_overlay_ui_state
+            app.shell
+                .session_overlay_ui_state
                 .rename_editor_feedback()
                 .is_some_and(|feedback| feedback.contains("catalog is loading"))
         );
@@ -1149,26 +1232,27 @@ mod tests {
         }));
         poll_until(&mut app, |app| {
             matches!(
-                &app.conversation_state,
+                &app.conversation.lifecycle.conversation_state,
                 ConversationState::Ready(conversation)
                     if conversation.thread_id == "thread-beta"
             )
         });
-        app.shell_overlay = ShellOverlay::Sessions;
+        app.shell.chrome.shell_overlay = ShellOverlay::Sessions;
         app.start_session_rename_edit();
         while !app
+            .shell
             .session_overlay_ui_state
             .rename_editor_buffer()
             .is_empty()
         {
-            app.session_overlay_ui_state.pop_rename_character();
+            app.shell.session_overlay_ui_state.pop_rename_character();
         }
         app.handle_session_rename_paste("Beta renamed");
 
         assert!(app.handle_session_rename_editor_key(key(KeyCode::Enter)));
-        assert!(app.session_overlay_ui_state.is_rename_pending());
+        assert!(app.shell.session_overlay_ui_state.is_rename_pending());
         poll_until(&mut app, |app| {
-            !app.session_overlay_ui_state.is_rename_pending()
+            !app.shell.session_overlay_ui_state.is_rename_pending()
         });
 
         assert_eq!(
@@ -1184,7 +1268,7 @@ mod tests {
             Some("Beta renamed")
         );
         assert!(matches!(
-            &app.conversation_state,
+            &app.conversation.lifecycle.conversation_state,
             ConversationState::Ready(conversation)
                 if conversation.thread_id == "thread-beta"
                     && conversation.title == "Beta renamed"
@@ -1202,7 +1286,7 @@ mod tests {
 
         assert!(app.handle_session_rename_editor_key(key(KeyCode::Enter)));
         poll_until(&mut app, |app| {
-            !app.session_overlay_ui_state.is_rename_pending()
+            !app.shell.session_overlay_ui_state.is_rename_pending()
         });
 
         assert_eq!(
@@ -1214,7 +1298,7 @@ mod tests {
         );
         assert!(app.is_session_rename_editing());
         assert_eq!(
-            app.session_overlay_ui_state.rename_editor_buffer(),
+            app.shell.session_overlay_ui_state.rename_editor_buffer(),
             "Beta draft"
         );
         assert_eq!(
@@ -1235,11 +1319,12 @@ mod tests {
         load_recording_catalog(&mut app);
         app.start_session_rename_edit();
         while !app
+            .shell
             .session_overlay_ui_state
             .rename_editor_buffer()
             .is_empty()
         {
-            app.session_overlay_ui_state.pop_rename_character();
+            app.shell.session_overlay_ui_state.pop_rename_character();
         }
         app.handle_session_rename_paste("Beta renamed");
         app.handle_session_rename_editor_key(key(KeyCode::Enter));
@@ -1253,13 +1338,16 @@ mod tests {
         app.dispatch_client_event(CoreInput::Command(AppCommand::LoadSessionCatalog(
             SessionCatalogLoadIntent::refresh(10, "/tmp/root"),
         )));
-        assert!(matches!(app.session_state, SessionState::Ready(_)));
+        assert!(matches!(
+            app.shell.chrome.session_state,
+            SessionState::Ready(_)
+        ));
         release_rename_tx
             .send(())
             .expect("rename worker should still be waiting");
         poll_until(&mut app, |app| {
-            !app.session_overlay_ui_state.is_rename_pending()
-                && matches!(app.session_state, SessionState::Ready(_))
+            !app.shell.session_overlay_ui_state.is_rename_pending()
+                && matches!(app.shell.chrome.session_state, SessionState::Ready(_))
         });
 
         assert_eq!(

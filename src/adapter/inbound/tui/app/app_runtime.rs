@@ -28,10 +28,9 @@ use crate::core::app::StartupReadySnapshot;
 #[cfg(test)]
 use crate::core::app::TurnStreamEvent;
 use crate::core::app::{
-    AppCommand, AppEvent, ConversationLoadCorrelation,
-    ConversationSnapshot as CoreConversationSnapshot, CoreDispatchOutcome, CoreInput,
-    SessionCatalogLoadIntent, SessionCatalogLoadMode, SessionCatalogSnapshot,
-    StartupCheckCorrelation, StartupSnapshot,
+    AppCommand, AppEvent, ConversationSnapshot as CoreConversationSnapshot, CoreDispatchOutcome,
+    CoreInput, SessionCatalogLoadIntent, SessionCatalogLoadMode, SessionCatalogSnapshot,
+    StartupSnapshot,
 };
 #[cfg(test)]
 use crate::domain::conversation::ConversationSnapshot;
@@ -43,14 +42,13 @@ use super::{
     ConversationIntentEffect, ConversationIntentEvent, ConversationIntentMode,
     ConversationIntentState, ConversationLifecycleEffect, ConversationLifecycleEvent,
     ConversationLifecycleState, ConversationRuntimeEffect, ConversationRuntimeEvent,
-    ConversationState, ConversationViewModel, ExitConfirmationState, GithubReviewPollingBootstrap,
-    NativeTuiApp, PendingResumedSessionPlanningRefresh, PlanningInitOverlayUiState,
-    SESSION_PAGE_SIZE, SessionOverlayUiState, SessionState, ShellChromeEffect, ShellChromeEvent,
-    ShellChromeReduction, ShellChromeState, ShellOverlay, ShellOverlayExitMode,
-    ShellOverlayTransition, StartupState, reduce_auto_follow_controls,
-    reduce_auto_follow_overlay_ui, reduce_conversation_input, reduce_conversation_intents,
-    reduce_conversation_lifecycle, reduce_conversation_runtime, reduce_shell_chrome,
-    startup_ascii_art_enabled_from_environment,
+    ConversationState, ConversationViewModel, GithubReviewPollingBootstrap, NativeTuiApp,
+    PendingResumedSessionPlanningRefresh, PlanningInitOverlayUiState, SESSION_PAGE_SIZE,
+    SessionOverlayUiState, SessionState, ShellChromeEffect, ShellChromeEvent, ShellChromeReduction,
+    ShellChromeState, ShellOverlay, ShellOverlayExitMode, ShellOverlayTransition, StartupState,
+    reduce_auto_follow_controls, reduce_auto_follow_overlay_ui, reduce_conversation_input,
+    reduce_conversation_intents, reduce_conversation_lifecycle, reduce_conversation_runtime,
+    reduce_shell_chrome, startup_ascii_art_enabled_from_environment,
 };
 
 // Background control-plane and poll results are lower volume than token events,
@@ -233,6 +231,7 @@ mod tests {
     use crate::domain::parallel_mode::{
         ParallelModeControlPlaneWorkerEvent, ParallelModeControlPlaneWorkerEventKind,
     };
+    use crate::domain::planning::{PlanningWorkerPanelState, PlanningWorkerStatus};
     use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogRequest};
     use crate::domain::session_summary::SessionSummary;
     use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
@@ -451,13 +450,15 @@ mod tests {
     #[test]
     fn shared_core_snapshot_identity_does_not_suppress_tui_events() {
         let mut app = test_helpers::test_native_tui_app();
-        let first = app
-            .client_runtime
-            .dispatch_client_event(CoreInput::ConversationRuntimeNotice(
-                "first notice".to_string(),
-            ));
+        let first =
+            app.runtime
+                .client_runtime
+                .dispatch_client_event(CoreInput::ConversationRuntimeNotice(
+                    "first notice".to_string(),
+                ));
         let second =
-            app.client_runtime
+            app.runtime
+                .client_runtime
                 .dispatch_client_event(CoreInput::ConversationRuntimeNotice(
                     "second notice".to_string(),
                 ));
@@ -466,7 +467,8 @@ mod tests {
         app.apply_core_dispatch_outcome(first);
         app.apply_core_dispatch_outcome(second);
 
-        let ConversationState::Ready(conversation) = &app.conversation_state else {
+        let ConversationState::Ready(conversation) = &app.conversation.lifecycle.conversation_state
+        else {
             panic!("test conversation should remain ready");
         };
         assert!(
@@ -692,7 +694,7 @@ mod tests {
     fn prepare_review_persistence_turn(
         app: &mut NativeTuiApp,
     ) -> crate::core::app::TurnSubmissionCorrelation {
-        let correlation = app.client_runtime.begin_test_turn_submission();
+        let correlation = app.runtime.client_runtime.begin_test_turn_submission();
         for event in [
             TurnStreamEvent::ThreadPrepared {
                 thread_id: "thread-1".to_string(),
@@ -716,6 +718,7 @@ mod tests {
         event: TurnStreamEvent,
     ) {
         let outcome = app
+            .runtime
             .client_runtime
             .dispatch_client_event(CoreInput::ConversationStreamUpdated { correlation, event });
         app.apply_core_dispatch_outcome(outcome);
@@ -883,7 +886,7 @@ mod tests {
                     &app,
                 );
             let review_is_projected = matches!(
-                &app.conversation_state,
+                &app.conversation.lifecycle.conversation_state,
                 ConversationState::Ready(conversation)
                     if conversation.approval_review.as_ref().is_some_and(|review| {
                         review.target_item_id == "tool-gated"
@@ -933,23 +936,23 @@ mod tests {
     fn stop_supersedes_settlement_but_turn_budget_edits_do_not() {
         let mut app = test_helpers::test_native_tui_app();
 
-        let paused_permit = app.post_turn_continuation_gate.capture();
+        let paused_permit = app.planning.post_turn_continuation_gate.capture();
         app.dispatch_auto_follow_controls(AutoFollowControlEvent::AutoFollowPaused);
         assert!(!paused_permit.is_current());
 
-        let rearmed_permit = app.post_turn_continuation_gate.capture();
+        let rearmed_permit = app.planning.post_turn_continuation_gate.capture();
         app.dispatch_auto_follow_controls(AutoFollowControlEvent::MaxAutoTurnsUpdated {
             value: "3".to_string(),
         });
         assert!(rearmed_permit.is_current());
 
-        let invalid_edit_permit = app.post_turn_continuation_gate.capture();
+        let invalid_edit_permit = app.planning.post_turn_continuation_gate.capture();
         app.dispatch_auto_follow_controls(AutoFollowControlEvent::MaxAutoTurnsUpdated {
             value: "invalid".to_string(),
         });
         assert!(invalid_edit_permit.is_current());
 
-        let disabled_permit = app.post_turn_continuation_gate.capture();
+        let disabled_permit = app.planning.post_turn_continuation_gate.capture();
         app.dispatch_auto_follow_controls(AutoFollowControlEvent::MaxAutoTurnsUpdated {
             value: "off".to_string(),
         });
@@ -991,9 +994,10 @@ mod tests {
     #[test]
     fn workspace_and_conversation_supersession_invalidate_continuation_permits() {
         let mut app = test_helpers::test_native_tui_app();
-        let initial_history_identity_revision = app.conversation_history_identity_revision;
+        let initial_history_identity_revision =
+            app.conversation.conversation_history_identity_revision;
 
-        let unchanged_workspace_permit = app.post_turn_continuation_gate.capture();
+        let unchanged_workspace_permit = app.planning.post_turn_continuation_gate.capture();
         app.dispatch_auto_follow_controls(AutoFollowControlEvent::DraftWorkspaceSynced {
             workspace_directory: "/tmp/root".to_string(),
         });
@@ -1004,9 +1008,8 @@ mod tests {
         });
         assert!(!unchanged_workspace_permit.is_current());
 
-        let new_draft_permit = app.post_turn_continuation_gate.capture();
+        let new_draft_permit = app.planning.post_turn_continuation_gate.capture();
         arm_pending_manual_prompt_for_identity_test(&mut app, "new draft prompt");
-        app.pending_conversation_load = Some(ConversationLoadCorrelation::new(9, "thread-stale"));
         app.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::EditStarted {
             current_value: "off".to_string(),
         });
@@ -1014,20 +1017,20 @@ mod tests {
             workspace_directory: "/tmp/root".to_string(),
         });
         assert_ne!(
-            app.conversation_history_identity_revision,
+            app.conversation.conversation_history_identity_revision,
             initial_history_identity_revision
         );
         assert!(!new_draft_permit.is_current());
-        assert!(app.pending_manual_prompt_preparation.is_none());
-        assert!(app.pending_conversation_load.is_none());
+        assert!(app.conversation.pending_manual_prompt_preparation.is_none());
         assert!(matches!(
-            &app.conversation_state,
+            &app.conversation.lifecycle.conversation_state,
             ConversationState::Ready(conversation) if conversation.cwd == "/tmp/root"
         ));
         assert_eq!(app.max_auto_turns_edit_buffer(), None);
 
-        let session_permit = app.post_turn_continuation_gate.capture();
-        let draft_history_identity_revision = app.conversation_history_identity_revision;
+        let session_permit = app.planning.post_turn_continuation_gate.capture();
+        let draft_history_identity_revision =
+            app.conversation.conversation_history_identity_revision;
         arm_pending_manual_prompt_for_identity_test(&mut app, "session prompt");
         app.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::EditStarted {
             current_value: "off".to_string(),
@@ -1037,29 +1040,20 @@ mod tests {
             fallback_workspace_directory: "/tmp/root".to_string(),
         });
         assert_eq!(
-            app.conversation_history_identity_revision,
+            app.conversation.conversation_history_identity_revision,
             draft_history_identity_revision
         );
         assert!(!session_permit.is_current());
-        assert!(app.pending_manual_prompt_preparation.is_none());
-        assert!(matches!(app.conversation_state, ConversationState::Loading));
+        assert!(app.conversation.pending_manual_prompt_preparation.is_none());
+        assert!(matches!(
+            app.conversation.lifecycle.conversation_state,
+            ConversationState::Loading
+        ));
         assert_eq!(app.max_auto_turns_edit_buffer(), None);
-        assert_eq!(
-            app.pending_conversation_load
-                .as_ref()
-                .map(|pending| pending.requested_thread_id.as_str()),
-            Some("thread-2")
-        );
-        let correlation = app
-            .pending_conversation_load
-            .clone()
-            .expect("accepted load should have a correlation");
-        app.apply_correlated_conversation_snapshot(
-            Some(correlation),
-            test_core_conversation_snapshot("thread-2"),
-        );
+        app.apply_core_conversation_snapshot(test_core_conversation_snapshot("thread-2"));
         assert_ne!(
-            app.conversation_history_identity_revision, draft_history_identity_revision,
+            app.conversation.conversation_history_identity_revision,
+            draft_history_identity_revision,
             "only accepted Ready publishes the loaded history identity"
         );
     }
@@ -1067,8 +1061,10 @@ mod tests {
     #[test]
     fn draft_promotion_and_same_thread_reattach_preserve_history_identity() {
         let mut app = test_helpers::test_native_tui_app();
-        let history_identity_revision = app.conversation_history_identity_revision;
-        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        let history_identity_revision = app.conversation.conversation_history_identity_revision;
+        let ConversationState::Ready(conversation) =
+            &mut app.conversation.lifecycle.conversation_state
+        else {
             panic!("test app should start ready");
         };
         conversation.record_thread_prepared(
@@ -1077,7 +1073,7 @@ mod tests {
             "/tmp/root".to_string(),
         );
         assert_eq!(
-            app.conversation_history_identity_revision,
+            app.conversation.conversation_history_identity_revision,
             history_identity_revision
         );
 
@@ -1086,25 +1082,18 @@ mod tests {
             fallback_workspace_directory: "/tmp/root".to_string(),
         });
         assert_eq!(
-            app.conversation_history_identity_revision,
+            app.conversation.conversation_history_identity_revision,
             history_identity_revision
         );
-        let failed_correlation = app
-            .pending_conversation_load
-            .clone()
-            .expect("same-thread load should have a correlation");
-        app.apply_correlated_conversation_snapshot(
-            Some(failed_correlation),
-            CoreConversationSnapshot::Failed {
-                message: "temporary failure".to_string(),
-            },
-        );
+        app.apply_core_conversation_snapshot(CoreConversationSnapshot::Failed {
+            message: "temporary failure".to_string(),
+        });
         assert_eq!(
-            app.conversation_history_thread_id.as_deref(),
+            app.conversation.conversation_history_thread_id.as_deref(),
             Some("thread-same")
         );
         assert_eq!(
-            app.conversation_history_identity_revision,
+            app.conversation.conversation_history_identity_revision,
             history_identity_revision
         );
 
@@ -1112,16 +1101,9 @@ mod tests {
             session: test_session_summary("thread-same"),
             fallback_workspace_directory: "/tmp/root".to_string(),
         });
-        let retry_correlation = app
-            .pending_conversation_load
-            .clone()
-            .expect("same-thread retry should have a correlation");
-        app.apply_correlated_conversation_snapshot(
-            Some(retry_correlation),
-            test_core_conversation_snapshot("thread-same"),
-        );
+        app.apply_core_conversation_snapshot(test_core_conversation_snapshot("thread-same"));
         assert_eq!(
-            app.conversation_history_identity_revision, history_identity_revision,
+            app.conversation.conversation_history_identity_revision, history_identity_revision,
             "a failed same-thread reattach must not make its retry a new history"
         );
     }
@@ -1129,7 +1111,9 @@ mod tests {
     #[test]
     fn deferred_session_load_preserves_ready_history_identity_until_core_accepts_it() {
         let mut app = test_helpers::test_native_tui_app();
-        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        let ConversationState::Ready(conversation) =
+            &mut app.conversation.lifecycle.conversation_state
+        else {
             panic!("test app should start ready");
         };
         conversation.record_thread_prepared(
@@ -1140,7 +1124,7 @@ mod tests {
         app.dispatch_client_event(CoreInput::Command(AppCommand::RenameSession(
             crate::domain::recent_sessions::SessionRenameRequest::new("thread-b", "Thread B"),
         )));
-        let history_identity_revision = app.conversation_history_identity_revision;
+        let history_identity_revision = app.conversation.conversation_history_identity_revision;
 
         app.dispatch_conversation_lifecycle(ConversationLifecycleEvent::SessionChosen {
             session: test_session_summary("thread-b"),
@@ -1148,12 +1132,11 @@ mod tests {
         });
 
         assert!(matches!(
-            &app.conversation_state,
+            &app.conversation.lifecycle.conversation_state,
             ConversationState::Ready(conversation) if conversation.thread_id == "thread-a"
         ));
-        assert!(app.pending_conversation_load.is_none());
         assert_eq!(
-            app.conversation_history_identity_revision, history_identity_revision,
+            app.conversation.conversation_history_identity_revision, history_identity_revision,
             "a deferred load intent must not publish a terminal history reset"
         );
     }
@@ -1161,10 +1144,12 @@ mod tests {
     #[test]
     fn conversation_lifecycle_closes_only_epochs_owned_by_the_workspace_being_left() {
         let mut app = test_helpers::test_native_tui_app();
-        app.parallel_mode_control_plane
+        app.runtime
+            .parallel_mode_control_plane
             .force_epoch_for_test("/tmp/worker-b", 1);
         assert!(
-            app.parallel_mode_control_plane
+            app.runtime
+                .parallel_mode_control_plane
                 .automation_epoch_is_active("/tmp/worker-b", 1)
         );
 
@@ -1173,14 +1158,15 @@ mod tests {
         });
 
         assert_eq!(
-            app.parallel_mode_control_plane.epoch_snapshot(),
+            app.runtime.parallel_mode_control_plane.epoch_snapshot(),
             crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneEpochSnapshot {
                 workspace_directory: None,
                 current_epoch_id: None,
             }
         );
         assert!(
-            !app.parallel_mode_control_plane
+            !app.runtime
+                .parallel_mode_control_plane
                 .automation_epoch_is_active("/tmp/worker-b", 1)
         );
 
@@ -1200,13 +1186,15 @@ mod tests {
         );
         assert_eq!(app.planning_runtime_projection_snapshot(), draft_projection);
 
-        app.parallel_mode_control_plane
+        app.runtime
+            .parallel_mode_control_plane
             .force_epoch_for_test("/tmp/root", 2);
         app.dispatch_conversation_lifecycle(ConversationLifecycleEvent::NewDraftOpened {
             workspace_directory: "/tmp/root".to_string(),
         });
         assert_eq!(
-            app.parallel_mode_control_plane
+            app.runtime
+                .parallel_mode_control_plane
                 .current_epoch_id_for_workspace("/tmp/root"),
             Some(2)
         );
@@ -1227,7 +1215,8 @@ mod tests {
             fallback_workspace_directory: "/tmp/root".to_string(),
         });
         assert!(
-            app.parallel_mode_control_plane
+            app.runtime
+                .parallel_mode_control_plane
                 .epoch_snapshot()
                 .current_epoch_id
                 .is_none()
@@ -1235,92 +1224,96 @@ mod tests {
     }
 
     #[test]
-    fn tui_startup_projection_rejects_stale_success_and_failure() {
+    fn tui_startup_projection_applies_only_core_accepted_snapshots() {
         let mut app = test_helpers::test_native_tui_app();
-        let latest = StartupCheckCorrelation::new(2, "/tmp/latest");
-        app.pending_startup_check = Some(latest.clone());
-        app.startup_state = StartupState::Loading;
-        app.session_state = SessionState::Idle;
-
-        app.apply_correlated_startup_snapshot(
-            StartupCheckCorrelation::new(1, "/tmp/stale"),
-            StartupSnapshot::Ready(test_startup_ready_snapshot("/tmp/stale")),
-        );
-        assert!(matches!(app.startup_state, StartupState::Loading));
-        assert!(matches!(app.session_state, SessionState::Idle));
-
-        app.apply_correlated_startup_snapshot(
-            latest,
-            StartupSnapshot::Ready(test_startup_ready_snapshot("/tmp/latest")),
-        );
+        app.apply_core_startup_snapshot(StartupSnapshot::Loading);
         assert!(matches!(
-            &app.startup_state,
-            StartupState::Ready(ready) if ready.workspace_path == "/tmp/latest"
+            app.shell.chrome.startup_state,
+            StartupState::Loading
         ));
-        let latest_state = app.startup_state.clone();
-
-        app.apply_correlated_startup_snapshot(
-            StartupCheckCorrelation::new(1, "/tmp/stale"),
-            StartupSnapshot::Failed {
-                message: "stale failure".to_string(),
-            },
-        );
+        app.apply_core_startup_snapshot(StartupSnapshot::Ready(test_startup_ready_snapshot(
+            "/tmp/latest",
+        )));
         assert!(matches!(
-            (&app.startup_state, &latest_state),
-            (StartupState::Ready(current), StartupState::Ready(expected))
-                if current.workspace_path == expected.workspace_path
+            &app.shell.chrome.startup_state,
+            StartupState::Ready(ready) if ready.workspace_path == "/tmp/latest"
         ));
     }
 
     #[test]
-    fn tui_conversation_projection_rejects_stale_result() {
+    fn tui_conversation_projection_applies_only_core_accepted_snapshots() {
         let mut app = test_helpers::test_native_tui_app();
-        let history_identity_revision = app.conversation_history_identity_revision;
-        let latest = ConversationLoadCorrelation::new(2, "thread-b");
-        app.pending_conversation_load = Some(latest.clone());
-        app.conversation_state = ConversationState::Loading;
-
-        app.apply_correlated_conversation_snapshot(
-            Some(ConversationLoadCorrelation::new(1, "thread-a")),
-            test_core_conversation_snapshot("thread-a"),
-        );
-        assert!(matches!(app.conversation_state, ConversationState::Loading));
+        let history_identity_revision = app.conversation.conversation_history_identity_revision;
+        app.apply_core_conversation_snapshot(CoreConversationSnapshot::Loading);
+        assert!(matches!(
+            app.conversation.lifecycle.conversation_state,
+            ConversationState::Loading
+        ));
         assert_eq!(
-            app.conversation_history_identity_revision,
+            app.conversation.conversation_history_identity_revision,
             history_identity_revision
         );
 
-        app.apply_correlated_conversation_snapshot(
-            Some(latest),
-            test_core_conversation_snapshot("thread-b"),
-        );
+        app.apply_core_conversation_snapshot(test_core_conversation_snapshot("thread-b"));
         assert!(matches!(
-            &app.conversation_state,
+            &app.conversation.lifecycle.conversation_state,
             ConversationState::Ready(conversation) if conversation.thread_id == "thread-b"
         ));
-        let loaded_history_identity_revision = app.conversation_history_identity_revision;
+        let loaded_history_identity_revision =
+            app.conversation.conversation_history_identity_revision;
         assert_ne!(loaded_history_identity_revision, history_identity_revision);
+    }
 
-        app.apply_correlated_conversation_snapshot(
-            Some(ConversationLoadCorrelation::new(1, "thread-a")),
-            CoreConversationSnapshot::Failed {
-                message: "stale A failure".to_string(),
-            },
-        );
-        assert!(matches!(
-            &app.conversation_state,
-            ConversationState::Ready(conversation) if conversation.thread_id == "thread-b"
-        ));
-        assert_eq!(
-            app.conversation_history_identity_revision,
-            loaded_history_identity_revision
-        );
+    #[test]
+    fn core_conversation_lifecycle_alone_resets_planning_worker_projection() {
+        let seeded = PlanningWorkerPanelState {
+            status: PlanningWorkerStatus::RepairFailed,
+            last_summary: Some("previous conversation".to_string()),
+            ..PlanningWorkerPanelState::default()
+        };
+        let cases = [
+            ("idle", CoreConversationSnapshot::Idle, true),
+            ("loading", CoreConversationSnapshot::Loading, true),
+            (
+                "ready",
+                test_core_conversation_snapshot("thread-ready"),
+                false,
+            ),
+            (
+                "failed",
+                CoreConversationSnapshot::Failed {
+                    message: "load failed".to_string(),
+                },
+                false,
+            ),
+        ];
+
+        for (name, snapshot, resets_projection) in cases {
+            let mut app = test_helpers::test_native_tui_app();
+            app.planning
+                .planning_worker_panel_state
+                .replace_for_test(seeded.clone());
+
+            app.apply_core_conversation_snapshot(snapshot);
+
+            let expected = if resets_projection {
+                PlanningWorkerPanelState::default()
+            } else {
+                seeded.clone()
+            };
+            assert_eq!(
+                app.planning.planning_worker_panel_state.current(),
+                &expected,
+                "{name} must obey the Core-owned lifecycle reset contract"
+            );
+        }
     }
 
     #[test]
     fn parallel_peek_projection_requires_the_visible_matching_preview() {
         let mut app = test_helpers::test_native_tui_app();
-        app.parallel_peek_overlay_ui_state
+        app.shell
+            .parallel_peek_overlay_ui_state
             .open_preview(test_parallel_peek_preview("thread-current"));
 
         app.apply_parallel_peek_conversation_load(
@@ -1328,19 +1321,21 @@ mod tests {
             Err("hidden failure".to_string()),
         );
         assert_eq!(
-            app.parallel_peek_overlay_ui_state
+            app.shell
+                .parallel_peek_overlay_ui_state
                 .preview()
                 .map(|preview| preview.status_text.as_str()),
             Some("conversation snapshot loading")
         );
 
-        app.shell_overlay = ShellOverlay::ParallelPeek;
+        app.shell.chrome.shell_overlay = ShellOverlay::ParallelPeek;
         app.apply_parallel_peek_conversation_load(
             crate::core::app::ParallelPeekLoadCorrelation::new(2, "thread-stale"),
             Err("stale failure".to_string()),
         );
         assert_eq!(
-            app.parallel_peek_overlay_ui_state
+            app.shell
+                .parallel_peek_overlay_ui_state
                 .preview()
                 .map(|preview| preview.status_text.as_str()),
             Some("conversation snapshot loading")
@@ -1351,7 +1346,8 @@ mod tests {
             Err("current failure".to_string()),
         );
         assert_eq!(
-            app.parallel_peek_overlay_ui_state
+            app.shell
+                .parallel_peek_overlay_ui_state
                 .preview()
                 .map(|preview| preview.status_text.as_str()),
             Some("conversation snapshot failed: current failure")
@@ -1361,18 +1357,21 @@ mod tests {
     #[test]
     fn shell_chrome_supersession_resets_parallel_peek_projection() {
         let mut app = test_helpers::test_native_tui_app();
-        app.shell_overlay = ShellOverlay::ParallelPeek;
-        app.parallel_peek_overlay_ui_state
+        app.shell.chrome.shell_overlay = ShellOverlay::ParallelPeek;
+        app.shell
+            .parallel_peek_overlay_ui_state
             .open_preview(test_parallel_peek_preview("thread-current"));
-        app.parallel_peek_overlay_ui_state
+        app.shell
+            .parallel_peek_overlay_ui_state
             .scroll_conversation_older(10);
 
         app.dispatch_shell_chrome(ShellChromeEvent::QueueOverlayShown);
 
-        assert_eq!(app.shell_overlay, ShellOverlay::Queue);
-        assert!(app.parallel_peek_overlay_ui_state.preview().is_none());
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Queue);
+        assert!(app.shell.parallel_peek_overlay_ui_state.preview().is_none());
         assert_eq!(
-            app.parallel_peek_overlay_ui_state
+            app.shell
+                .parallel_peek_overlay_ui_state
                 .conversation_scroll_from_bottom(),
             0
         );
@@ -1450,7 +1449,7 @@ mod tests {
 
     fn arm_pending_manual_prompt_for_identity_test(app: &mut NativeTuiApp, transcript_text: &str) {
         let workspace_directory = app.planning_workspace_directory();
-        app.pending_manual_prompt_preparation = Some(
+        app.conversation.pending_manual_prompt_preparation = Some(
             crate::adapter::inbound::tui::app::PendingManualPromptPreparation {
                 correlation: crate::domain::planning::ManualPromptCorrelation {
                     request_id: 1,
@@ -1469,7 +1468,9 @@ mod tests {
     #[test]
     fn composer_dispatch_preserves_semantic_conversation_state() {
         let mut app = test_helpers::test_native_tui_app();
-        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        let ConversationState::Ready(conversation) =
+            &mut app.conversation.lifecycle.conversation_state
+        else {
             panic!("test app should start with a ready conversation");
         };
         conversation.messages.push(ConversationMessage::new(
@@ -1497,7 +1498,8 @@ mod tests {
             character: 'x',
         });
 
-        let ConversationState::Ready(conversation) = &app.conversation_state else {
+        let ConversationState::Ready(conversation) = &app.conversation.lifecycle.conversation_state
+        else {
             panic!("composer dispatch should preserve ready conversation state");
         };
         assert_eq!(conversation.composer.input_buffer, "x");
@@ -1511,7 +1513,9 @@ mod tests {
     #[test]
     fn semantic_status_dispatch_preserves_composer_state() {
         let mut app = test_helpers::test_native_tui_app();
-        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        let ConversationState::Ready(conversation) =
+            &mut app.conversation.lifecycle.conversation_state
+        else {
             panic!("test app should start with a ready conversation");
         };
         conversation.composer.input_buffer = ":p".to_string();
@@ -1523,7 +1527,8 @@ mod tests {
             status_text: "runtime status".to_string(),
         });
 
-        let ConversationState::Ready(conversation) = &app.conversation_state else {
+        let ConversationState::Ready(conversation) = &app.conversation.lifecycle.conversation_state
+        else {
             panic!("status dispatch should preserve ready conversation state");
         };
         assert_eq!(conversation.composer, composer_before);
@@ -1670,60 +1675,65 @@ impl NativeTuiApp {
             turn_control_truth,
         );
         let mut app = Self {
-            shell_overlay: ShellOverlay::Hidden,
-            approval_return_overlay: None,
-            exit_confirmation_state: ExitConfirmationState::Hidden,
-            startup_state: StartupState::Idle,
-            pending_startup_check: None,
-            session_state: SessionState::Idle,
-            supersession_mud_ui_state: super::SupersessionMudUiState::default(),
-            parallel_peek_overlay_ui_state: super::ParallelPeekOverlayUiState::default(),
-            progressive_activity_overlay_ui_state:
-                super::ProgressiveActivityOverlayUiState::default(),
-            help_scroll_offset: 0,
-            queue_overlay_ui_state: super::queue_overlay_ui::QueueOverlayUiState::default(),
-            queue_mutation_ui_state: super::queue_overlay_ui::QueueMutationUiState::default(),
-            reviews_overlay_ui_state: super::reviews_overlay_ui::ReviewsOverlayUiState::default(),
-            parallel_supervisor_event_log: super::ParallelSupervisorEventLog::default(),
-            pending_manual_prompt_preparation: None,
-            prompt_input_revision: 0,
-            planning_ui_intent_revision: 0,
-            turn_steer_confirmation: None,
-            pending_turn_steer: None,
-            parallel_mode_control_plane,
-            conversation_state: ConversationState::ready(initial_conversation),
-            conversation_history_identity_revision: 0,
-            conversation_history_thread_id: None,
-            pending_conversation_load: None,
-            pending_resumed_session_planning_refresh: None,
-            selected_session_index: 0,
-            session_overlay_ui_state: SessionOverlayUiState::new(SESSION_PAGE_SIZE),
-            tui_language: super::TuiLanguage::default(),
-            language_selection_overlay_ui_state: super::LanguageSelectionOverlayUiState::default(),
-            model_selection_overlay_ui_state: super::ModelSelectionOverlayUiState::default(),
-            view_selection_overlay_ui_state: super::ViewSelectionOverlayUiState::default(),
-            auto_follow_overlay_ui_state: AutoFollowOverlayUiState::default(),
-            directions_maintenance_overlay_ui_state:
-                super::DirectionsMaintenanceOverlayUiState::default(),
-            planning_init_overlay_ui_state: PlanningInitOverlayUiState::default(),
-            planning_runtime_refresh_ui_state: super::PlanningRuntimeRefreshUiState::default(),
-            planning_workspace_operation_ui_state:
-                super::PlanningWorkspaceOperationUiState::default(),
-            planning_draft_editor_ui_state: super::PlanningDraftEditorUiState::default(),
-            client_runtime,
-            turn_control_truth,
-            turn_options: Default::default(),
-            conversation_view_mode: super::ConversationViewMode::default(),
-            planning_worker_panel_state: super::PlanningWorkerPanelState::default(),
-            post_turn_continuation_gate: crate::domain::planning::PostTurnContinuationGate::default(
-            ),
-            planning_worker_visibility: super::PlanningWorkerVisibility::from_environment(),
-            github_review_polling_state,
-            inline_history_render_mode: super::InlineHistoryRenderMode::from_environment(),
-            history_insert_mode: super::HistoryInsertionMode::from_environment(),
-            show_startup_ascii_art: startup_ascii_art_enabled_from_environment(),
-            tx: runtime_channels.tx,
-            rx: runtime_channels.rx,
+            shell: super::NativeTuiShellState {
+                chrome: ShellChromeState::default(),
+                supersession_mud_ui_state: super::SupersessionMudUiState::default(),
+                parallel_peek_overlay_ui_state: super::ParallelPeekOverlayUiState::default(),
+                progressive_activity_overlay_ui_state:
+                    super::ProgressiveActivityOverlayUiState::default(),
+                help_scroll_offset: 0,
+                reviews_overlay_ui_state: super::reviews_overlay_ui::ReviewsOverlayUiState::default(
+                ),
+                parallel_supervisor_event_log: super::ParallelSupervisorEventLog::default(),
+                session_overlay_ui_state: SessionOverlayUiState::new(SESSION_PAGE_SIZE),
+                tui_language: super::TuiLanguage::default(),
+                language_selection_overlay_ui_state:
+                    super::LanguageSelectionOverlayUiState::default(),
+                model_selection_overlay_ui_state: super::ModelSelectionOverlayUiState::default(),
+                view_selection_overlay_ui_state: super::ViewSelectionOverlayUiState::default(),
+                inline_history_render_mode: super::InlineHistoryRenderMode::from_environment(),
+                history_insert_mode: super::HistoryInsertionMode::from_environment(),
+                show_startup_ascii_art: startup_ascii_art_enabled_from_environment(),
+            },
+            conversation: super::NativeTuiConversationState {
+                lifecycle: ConversationLifecycleState {
+                    conversation_state: ConversationState::ready(initial_conversation),
+                    turn_control_truth,
+                },
+                pending_manual_prompt_preparation: None,
+                prompt_input_revision: 0,
+                turn_steer_confirmation: None,
+                pending_turn_steer: None,
+                conversation_history_identity_revision: 0,
+                conversation_history_thread_id: None,
+                turn_options: Default::default(),
+                conversation_view_mode: super::ConversationViewMode::default(),
+                auto_follow_overlay_ui_state: AutoFollowOverlayUiState::default(),
+            },
+            planning: super::NativeTuiPlanningState {
+                planning_ui_intent_revision: 0,
+                pending_resumed_session_planning_refresh: None,
+                queue_overlay_ui_state: super::queue_overlay_ui::QueueOverlayUiState::default(),
+                queue_mutation_ui_state: super::queue_overlay_ui::QueueMutationUiState::default(),
+                directions_maintenance_overlay_ui_state:
+                    super::DirectionsMaintenanceOverlayUiState::default(),
+                planning_init_overlay_ui_state: PlanningInitOverlayUiState::default(),
+                planning_runtime_refresh_ui_state: super::PlanningRuntimeRefreshUiState::default(),
+                planning_workspace_operation_ui_state:
+                    super::PlanningWorkspaceOperationUiState::default(),
+                planning_draft_editor_ui_state: super::PlanningDraftEditorUiState::default(),
+                planning_worker_panel_state: super::CorePlanningWorkerPanelProjection::default(),
+                post_turn_continuation_gate:
+                    crate::domain::planning::PostTurnContinuationGate::default(),
+                planning_worker_visibility: super::PlanningWorkerVisibility::from_environment(),
+            },
+            runtime: super::NativeTuiRuntimeState {
+                client_runtime,
+                parallel_mode_control_plane,
+                github_review_polling_state,
+                tx: runtime_channels.tx,
+                rx: runtime_channels.rx,
+            },
         };
         app.refresh_ready_conversation_planning_runtime_projection_for_workspace(
             &workspace_directory,
@@ -1731,30 +1741,20 @@ impl NativeTuiApp {
         app
     }
 
-    // Shell chrome state is split across NativeTuiApp fields for ergonomic access by
-    // renderers, then reassembled here so the reducer still owns one coherent value.
     fn take_shell_chrome_state(&mut self) -> ShellChromeState {
-        ShellChromeState {
-            shell_overlay: self.shell_overlay,
-            approval_return_overlay: self.approval_return_overlay,
-            exit_confirmation_state: self.exit_confirmation_state,
-            startup_state: std::mem::replace(&mut self.startup_state, StartupState::Idle),
-            session_state: std::mem::replace(&mut self.session_state, SessionState::Idle),
-            selected_session_index: self.selected_session_index,
-        }
+        std::mem::take(&mut self.shell.chrome)
     }
 
     fn apply_shell_chrome_state(&mut self, state: ShellChromeState) {
-        self.shell_overlay = state.shell_overlay;
-        self.approval_return_overlay = state.approval_return_overlay;
-        self.exit_confirmation_state = state.exit_confirmation_state;
-        self.startup_state = state.startup_state;
-        self.session_state = state.session_state;
-        self.selected_session_index = state.selected_session_index;
+        self.shell.chrome = state;
     }
 
     pub(super) fn advance_planning_ui_intent_revision(&mut self) {
-        self.planning_ui_intent_revision = self.planning_ui_intent_revision.wrapping_add(1).max(1);
+        self.planning.planning_ui_intent_revision = self
+            .planning
+            .planning_ui_intent_revision
+            .wrapping_add(1)
+            .max(1);
     }
 
     pub(super) fn dispatch_shell_chrome(&mut self, event: ShellChromeEvent) {
@@ -1774,7 +1774,7 @@ impl NativeTuiApp {
 
     fn apply_shell_overlay_transition(&mut self, transition: ShellOverlayTransition) {
         assert_eq!(
-            self.shell_overlay, transition.to,
+            self.shell.chrome.shell_overlay, transition.to,
             "shell overlay transition must be applied after reducer state"
         );
         self.advance_planning_ui_intent_revision();
@@ -1789,29 +1789,33 @@ impl NativeTuiApp {
             }
             ShellOverlayExitMode::Exit => match transition.from {
                 ShellOverlay::ModelSelection => {
-                    self.model_selection_overlay_ui_state =
+                    self.shell.model_selection_overlay_ui_state =
                         super::ModelSelectionOverlayUiState::default();
                 }
                 ShellOverlay::ViewSelection => {
-                    self.view_selection_overlay_ui_state =
+                    self.shell.view_selection_overlay_ui_state =
                         super::ViewSelectionOverlayUiState::default();
                 }
                 ShellOverlay::LanguageSelection => {
-                    self.language_selection_overlay_ui_state =
+                    self.shell.language_selection_overlay_ui_state =
                         super::LanguageSelectionOverlayUiState::default();
                 }
-                ShellOverlay::ParallelPeek => self.parallel_peek_overlay_ui_state.reset(),
-                ShellOverlay::Activity => self.progressive_activity_overlay_ui_state.reset(),
-                ShellOverlay::Reviews => self.reviews_overlay_ui_state.reset(),
-                ShellOverlay::Queue => self.queue_overlay_ui_state.reset(),
+                ShellOverlay::ParallelPeek => self.shell.parallel_peek_overlay_ui_state.reset(),
+                ShellOverlay::Activity => self.shell.progressive_activity_overlay_ui_state.reset(),
+                ShellOverlay::Reviews => self.shell.reviews_overlay_ui_state.reset(),
+                ShellOverlay::Queue => self.planning.queue_overlay_ui_state.reset(),
                 ShellOverlay::DirectionsMaintenance => {
-                    self.directions_maintenance_overlay_ui_state.reset();
-                    self.planning_draft_editor_ui_state.reset();
+                    self.planning
+                        .directions_maintenance_overlay_ui_state
+                        .reset();
+                    self.planning.planning_draft_editor_ui_state.reset();
                 }
                 ShellOverlay::PlanningInit => {
-                    self.planning_runtime_refresh_ui_state.clear_loading();
-                    self.planning_init_overlay_ui_state.reset();
-                    self.planning_draft_editor_ui_state.reset();
+                    self.planning
+                        .planning_runtime_refresh_ui_state
+                        .clear_loading();
+                    self.planning.planning_init_overlay_ui_state.reset();
+                    self.planning.planning_draft_editor_ui_state.reset();
                     self.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::EditFinished);
                 }
                 ShellOverlay::Hidden
@@ -1827,7 +1831,7 @@ impl NativeTuiApp {
     pub(super) fn poll_core_runtime_inputs(&mut self, max_inputs: usize) -> bool {
         let mut changed = false;
         for _ in 0..max_inputs {
-            let Some(outcome) = self.client_runtime.poll_pending_client_event() else {
+            let Some(outcome) = self.runtime.client_runtime.poll_pending_client_event() else {
                 break;
             };
             changed = true;
@@ -1844,33 +1848,29 @@ impl NativeTuiApp {
 
     pub(super) fn apply_core_event(&mut self, event: AppEvent) {
         match event {
-            AppEvent::StartupChanged {
-                correlation,
-                snapshot,
-            } => self.apply_correlated_startup_snapshot(correlation, snapshot),
+            AppEvent::StartupChanged { snapshot, .. } => self.apply_core_startup_snapshot(snapshot),
             AppEvent::SessionCatalogChanged(SessionCatalogSnapshot::Idle) => {
-                self.session_state = SessionState::Idle;
+                self.shell.chrome.session_state = SessionState::Idle;
             }
             AppEvent::SessionCatalogChanged(SessionCatalogSnapshot::Loading) => {
-                self.session_state = SessionState::Loading;
+                self.shell.chrome.session_state = SessionState::Loading;
             }
             AppEvent::SessionCatalogChanged(SessionCatalogSnapshot::Ready(ready)) => {
                 self.dispatch_shell_chrome(ShellChromeEvent::SessionsLoaded(Ok(*ready.catalog)));
-                self.session_overlay_ui_state.reset();
+                self.shell.session_overlay_ui_state.reset();
             }
             AppEvent::SessionCatalogChanged(SessionCatalogSnapshot::Failed { message }) => {
                 self.dispatch_shell_chrome(ShellChromeEvent::SessionsLoaded(Err(message)));
-                self.session_overlay_ui_state.reset();
+                self.shell.session_overlay_ui_state.reset();
             }
             AppEvent::SessionRenameAdmissionResolved(_) => {}
             AppEvent::SessionRenameCompleted {
                 correlation,
                 result,
             } => self.apply_session_rename_completion(correlation, result),
-            AppEvent::ConversationChanged {
-                correlation,
-                snapshot,
-            } => self.apply_correlated_conversation_snapshot(correlation, snapshot),
+            AppEvent::ConversationChanged { snapshot, .. } => {
+                self.apply_core_conversation_snapshot(snapshot)
+            }
             AppEvent::ParallelPeekConversationLoaded {
                 correlation,
                 result,
@@ -1937,25 +1937,25 @@ impl NativeTuiApp {
                 }
             }
             AppEvent::PlanningRuntimeRefreshStarted { correlation } => {
-                if let Some(pending) = self.pending_resumed_session_planning_refresh.as_mut()
+                if let Some(pending) = self.planning.pending_resumed_session_planning_refresh.as_mut()
                     && pending.correlation.workspace_directory == correlation.workspace_directory
                 {
                     pending.correlation = correlation.clone();
                 }
-                self.planning_runtime_refresh_ui_state
+                self.planning.planning_runtime_refresh_ui_state
                     .rebind(correlation);
             }
             AppEvent::PlanningRuntimeRefreshed {
                 correlation,
                 result,
             } => {
-                let presentation_revision = self.planning_ui_intent_revision;
+                let presentation_revision = self.planning.planning_ui_intent_revision;
                 let pending_resume = if self
-                    .pending_resumed_session_planning_refresh
+                    .planning.pending_resumed_session_planning_refresh
                     .as_ref()
                     .is_some_and(|pending| pending.correlation == correlation)
                 {
-                    self.pending_resumed_session_planning_refresh.take()
+                    self.planning.pending_resumed_session_planning_refresh.take()
                 } else {
                     None
                 };
@@ -1972,7 +1972,7 @@ impl NativeTuiApp {
                 }
                 if correlation.workspace_directory == self.planning_workspace_directory() {
                     match self
-                        .planning_runtime_refresh_ui_state
+                        .planning.planning_runtime_refresh_ui_state
                         .apply_completion(correlation.clone(), presentation_revision, result)
                     {
                         super::PlanningRuntimeRefreshUiCompletion::Applied {
@@ -1985,10 +1985,10 @@ impl NativeTuiApp {
                         super::PlanningRuntimeRefreshUiCompletion::Rejected => {}
                     }
                 } else if self
-                    .planning_runtime_refresh_ui_state
+                    .planning.planning_runtime_refresh_ui_state
                     .cancel(&correlation)
                     .is_some()
-                    && self.shell_overlay == ShellOverlay::PlanningInit
+                    && self.shell.chrome.shell_overlay == ShellOverlay::PlanningInit
                 {
                     self.close_shell_overlay();
                     self.dispatch_conversation_input(
@@ -2002,17 +2002,17 @@ impl NativeTuiApp {
             }
             AppEvent::PlanningRuntimeRefreshCancelled { correlation } => {
                 if self
-                    .pending_resumed_session_planning_refresh
+                    .planning.pending_resumed_session_planning_refresh
                     .as_ref()
                     .is_some_and(|pending| pending.correlation == correlation)
                 {
-                    self.pending_resumed_session_planning_refresh = None;
+                    self.planning.pending_resumed_session_planning_refresh = None;
                 }
                 if self
-                    .planning_runtime_refresh_ui_state
+                    .planning.planning_runtime_refresh_ui_state
                     .cancel(&correlation)
                     .is_some()
-                    && self.shell_overlay == ShellOverlay::PlanningInit
+                    && self.shell.chrome.shell_overlay == ShellOverlay::PlanningInit
                 {
                     self.close_shell_overlay();
                     self.dispatch_conversation_input(
@@ -2123,7 +2123,9 @@ impl NativeTuiApp {
                 self.apply_manual_prompt_preparation(*result);
             }
             AppEvent::PostTurnEvaluationStarted(state) => {
-                self.planning_worker_panel_state = state;
+                self.planning
+                    .planning_worker_panel_state
+                    .apply_started(state);
             }
             AppEvent::PostTurnEvaluationCompleted(execution) => {
                 self.apply_post_turn_evaluation_execution(*execution);
@@ -2140,34 +2142,15 @@ impl NativeTuiApp {
         }
     }
 
-    fn apply_correlated_startup_snapshot(
-        &mut self,
-        correlation: StartupCheckCorrelation,
-        snapshot: StartupSnapshot,
-    ) {
+    fn apply_core_startup_snapshot(&mut self, snapshot: StartupSnapshot) {
         match snapshot {
             StartupSnapshot::Loading => {
-                if self
-                    .pending_startup_check
-                    .as_ref()
-                    .is_some_and(|pending| pending.generation > correlation.generation)
-                {
-                    return;
-                }
-                self.pending_startup_check = Some(correlation);
-                self.startup_state = StartupState::Loading;
+                self.shell.chrome.startup_state = StartupState::Loading;
             }
             StartupSnapshot::Idle => {
-                if self.pending_startup_check.as_ref() == Some(&correlation) {
-                    self.pending_startup_check = None;
-                    self.startup_state = StartupState::Idle;
-                }
+                self.shell.chrome.startup_state = StartupState::Idle;
             }
             StartupSnapshot::Ready(ready) => {
-                if self.pending_startup_check.as_ref() != Some(&correlation) {
-                    return;
-                }
-                self.pending_startup_check = None;
                 let workspace_directory = ready.workspace_path.clone();
                 self.dispatch_shell_chrome(ShellChromeEvent::StartupLoaded {
                     result: Ok(ready),
@@ -2177,10 +2160,6 @@ impl NativeTuiApp {
                 self.resolve_startup_submit_queue();
             }
             StartupSnapshot::Failed { message } => {
-                if self.pending_startup_check.as_ref() != Some(&correlation) {
-                    return;
-                }
-                self.pending_startup_check = None;
                 self.dispatch_shell_chrome(ShellChromeEvent::StartupLoaded {
                     result: Err(message),
                     session_page_size: SESSION_PAGE_SIZE,
@@ -2190,46 +2169,8 @@ impl NativeTuiApp {
         }
     }
 
-    pub(in crate::adapter::inbound::tui::app) fn apply_correlated_conversation_snapshot(
-        &mut self,
-        correlation: Option<ConversationLoadCorrelation>,
-        snapshot: CoreConversationSnapshot,
-    ) {
-        match (&correlation, &snapshot) {
-            (Some(correlation), CoreConversationSnapshot::Loading) => {
-                if self
-                    .pending_conversation_load
-                    .as_ref()
-                    .is_some_and(|pending| pending.generation > correlation.generation)
-                {
-                    return;
-                }
-                self.pending_conversation_load = Some(correlation.clone());
-            }
-            (Some(correlation), CoreConversationSnapshot::Ready(ready)) => {
-                if self.pending_conversation_load.as_ref() != Some(correlation)
-                    || ready.conversation.thread_id != correlation.requested_thread_id
-                {
-                    return;
-                }
-                self.pending_conversation_load = None;
-            }
-            (Some(correlation), CoreConversationSnapshot::Failed { .. }) => {
-                if self.pending_conversation_load.as_ref() != Some(correlation) {
-                    return;
-                }
-                self.pending_conversation_load = None;
-            }
-            (None, CoreConversationSnapshot::Idle) => {
-                self.pending_conversation_load = None;
-            }
-            _ => return,
-        }
-        self.apply_core_conversation_snapshot(snapshot);
-    }
-
     pub(super) fn dispatch_client_event(&mut self, input: CoreInput) {
-        let outcome = self.client_runtime.dispatch_client_event(input);
+        let outcome = self.runtime.client_runtime.dispatch_client_event(input);
         self.apply_core_dispatch_outcome(outcome);
     }
 
@@ -2239,9 +2180,16 @@ impl NativeTuiApp {
             &snapshot,
             CoreConversationSnapshot::Ready(_) | CoreConversationSnapshot::Failed { .. }
         );
+        if matches!(
+            &snapshot,
+            CoreConversationSnapshot::Idle | CoreConversationSnapshot::Loading
+        ) {
+            self.planning
+                .planning_worker_panel_state
+                .reset_for_conversation_lifecycle();
+        }
         if matches!(&snapshot, CoreConversationSnapshot::Loading) {
-            self.reset_planning_worker_panel_state();
-            self.pending_resumed_session_planning_refresh = None;
+            self.planning.pending_resumed_session_planning_refresh = None;
         }
         let draft_workspace_directory = self.current_workspace_directory();
         self.dispatch_conversation_lifecycle(
@@ -2255,7 +2203,7 @@ impl NativeTuiApp {
         }
         if loaded_successfully {
             let workspace_directory = self.planning_workspace_directory();
-            let resume_status_context = match &self.conversation_state {
+            let resume_status_context = match &self.conversation.lifecycle.conversation_state {
                 ConversationState::Ready(conversation) => Some((
                     conversation.thread_id.clone(),
                     conversation.status_text.clone(),
@@ -2267,7 +2215,7 @@ impl NativeTuiApp {
                     self.begin_planning_runtime_projection_refresh(&workspace_directory)
             {
                 // Bind resume copy before an immediate test executor can project completion.
-                self.pending_resumed_session_planning_refresh =
+                self.planning.pending_resumed_session_planning_refresh =
                     Some(PendingResumedSessionPlanningRefresh {
                         correlation,
                         thread_id,
@@ -2275,11 +2223,11 @@ impl NativeTuiApp {
                     });
                 self.apply_core_dispatch_outcome(outcome);
             } else {
-                self.pending_resumed_session_planning_refresh = None;
+                self.planning.pending_resumed_session_planning_refresh = None;
                 self.surface_resumed_session_planning_context();
             }
         } else {
-            self.pending_resumed_session_planning_refresh = None;
+            self.planning.pending_resumed_session_planning_refresh = None;
         }
         // A loaded conversation resets follow-up copy because auto-turn affordances
         // belong to the active thread, not the previous shell contents.
@@ -2320,21 +2268,15 @@ impl NativeTuiApp {
     // Moving the conversation out prevents accidental partial mutation when lifecycle
     // reducers decide between loading, failed, and ready session states.
     fn take_conversation_lifecycle_state(&mut self) -> ConversationLifecycleState {
-        ConversationLifecycleState {
-            conversation_state: std::mem::replace(
-                &mut self.conversation_state,
-                ConversationState::Loading,
-            ),
-            turn_control_truth: self.turn_control_truth,
-        }
+        let replacement = ConversationLifecycleState {
+            turn_control_truth: self.conversation.lifecycle.turn_control_truth,
+            conversation_state: ConversationState::Loading,
+        };
+        std::mem::replace(&mut self.conversation.lifecycle, replacement)
     }
 
     fn apply_conversation_lifecycle_state(&mut self, state: ConversationLifecycleState) {
-        self.conversation_state = state.conversation_state;
-    }
-
-    pub(super) fn reset_planning_worker_panel_state(&mut self) {
-        self.planning_worker_panel_state = super::PlanningWorkerPanelState::default();
+        self.conversation.lifecycle = state;
     }
 
     pub(super) fn dispatch_conversation_lifecycle(&mut self, event: ConversationLifecycleEvent) {
@@ -2381,7 +2323,7 @@ impl NativeTuiApp {
                 | ConversationLifecycleEvent::SessionChosen { .. }
         );
         if changes_conversation_identity {
-            self.post_turn_continuation_gate.advance();
+            self.planning.post_turn_continuation_gate.advance();
             self.cancel_manual_prompt_preparation_for_identity_transition();
             self.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::EditFinished);
         }
@@ -2393,12 +2335,14 @@ impl NativeTuiApp {
         self.apply_conversation_lifecycle_state(reduction.state);
         if opens_new_history {
             self.advance_conversation_history_identity_revision();
-            self.conversation_history_thread_id = None;
+            self.conversation.conversation_history_thread_id = None;
         } else if let Some(thread_id) = loaded_history_thread_id {
-            if self.conversation_history_thread_id.as_deref() != Some(thread_id.as_str()) {
+            if self.conversation.conversation_history_thread_id.as_deref()
+                != Some(thread_id.as_str())
+            {
                 self.advance_conversation_history_identity_revision();
             }
-            self.conversation_history_thread_id = Some(thread_id);
+            self.conversation.conversation_history_thread_id = Some(thread_id);
         }
         self.advance_planning_ui_intent_revision();
         for effect in reduction.effects {
@@ -2407,16 +2351,22 @@ impl NativeTuiApp {
     }
 
     fn capture_ready_conversation_history_thread(&mut self) {
-        let ConversationState::Ready(conversation) = &self.conversation_state else {
+        let ConversationState::Ready(conversation) =
+            &self.conversation.lifecycle.conversation_state
+        else {
             return;
         };
-        if self.conversation_history_thread_id.is_none() && conversation.has_active_thread() {
-            self.conversation_history_thread_id = Some(conversation.thread_id.clone());
+        if self.conversation.conversation_history_thread_id.is_none()
+            && conversation.has_active_thread()
+        {
+            self.conversation.conversation_history_thread_id = Some(conversation.thread_id.clone());
         }
     }
 
     fn reconcile_runtime_conversation_history_thread(&mut self) {
-        let ConversationState::Ready(conversation) = &self.conversation_state else {
+        let ConversationState::Ready(conversation) =
+            &self.conversation.lifecycle.conversation_state
+        else {
             return;
         };
         if !conversation.has_active_thread() {
@@ -2424,17 +2374,19 @@ impl NativeTuiApp {
         }
         let thread_id = conversation.thread_id.clone();
         if self
+            .conversation
             .conversation_history_thread_id
             .as_deref()
             .is_some_and(|current| current != thread_id.as_str())
         {
             self.advance_conversation_history_identity_revision();
         }
-        self.conversation_history_thread_id = Some(thread_id);
+        self.conversation.conversation_history_thread_id = Some(thread_id);
     }
 
     fn advance_conversation_history_identity_revision(&mut self) {
-        self.conversation_history_identity_revision = self
+        self.conversation.conversation_history_identity_revision = self
+            .conversation
             .conversation_history_identity_revision
             .wrapping_add(1)
             .max(1);
@@ -2455,11 +2407,14 @@ impl NativeTuiApp {
     }
 
     pub(super) fn take_ready_conversation_state(&mut self) -> Option<ConversationViewModel> {
-        let state = std::mem::replace(&mut self.conversation_state, ConversationState::Loading);
+        let state = std::mem::replace(
+            &mut self.conversation.lifecycle.conversation_state,
+            ConversationState::Loading,
+        );
         match state {
             ConversationState::Ready(conversation) => Some(*conversation),
             other => {
-                self.conversation_state = other;
+                self.conversation.lifecycle.conversation_state = other;
                 None
             }
         }
@@ -2484,13 +2439,13 @@ impl NativeTuiApp {
                 ConversationRuntimeEffect::RequestTurnSubmission { .. }
             )
         });
-        self.conversation_state = ConversationState::ready(reduction.state);
+        self.conversation.lifecycle.conversation_state = ConversationState::ready(reduction.state);
         self.reconcile_runtime_conversation_history_thread();
         if supersedes_planning_ui_intent {
             self.advance_planning_ui_intent_revision();
         }
         if !requests_turn_submission && !self.conversation_has_running_turn() {
-            self.turn_steer_confirmation = None;
+            self.conversation.turn_steer_confirmation = None;
         }
         self.route_post_turn_continuation_effects(post_turn_context, &mut effects);
         let mut turn_submission_admitted = false;
@@ -2502,16 +2457,20 @@ impl NativeTuiApp {
 
     pub(super) fn dispatch_conversation_input(&mut self, event: impl Into<ConversationInputEvent>) {
         let event = event.into();
-        let event =
-            if self.pending_manual_prompt_preparation.is_some() && event.mutates_input_buffer() {
-                ConversationInputEvent::StatusMessageShown {
-                    status_text:
-                        "turn preparation in progress; prompt editing is locked until it finishes"
-                            .to_string(),
-                }
-            } else {
-                event
-            };
+        let event = if self
+            .conversation
+            .pending_manual_prompt_preparation
+            .is_some()
+            && event.mutates_input_buffer()
+        {
+            ConversationInputEvent::StatusMessageShown {
+                status_text:
+                    "turn preparation in progress; prompt editing is locked until it finishes"
+                        .to_string(),
+            }
+        } else {
+            event
+        };
         let mutates_input_buffer = event.mutates_input_buffer();
         let Some(conversation) = self.take_ready_conversation_state() else {
             return;
@@ -2540,10 +2499,14 @@ impl NativeTuiApp {
                 conversation.record_manual_preparation_failure(transcript_text, status_text);
             }
         }
-        self.conversation_state = ConversationState::ready(conversation);
+        self.conversation.lifecycle.conversation_state = ConversationState::ready(conversation);
         self.advance_planning_ui_intent_revision();
         if mutates_input_buffer {
-            self.prompt_input_revision = self.prompt_input_revision.wrapping_add(1).max(1);
+            self.conversation.prompt_input_revision = self
+                .conversation
+                .prompt_input_revision
+                .wrapping_add(1)
+                .max(1);
         }
     }
 
@@ -2552,7 +2515,7 @@ impl NativeTuiApp {
     }
 
     fn conversation_intent_state(&self) -> ConversationIntentState {
-        let mode = match &self.conversation_state {
+        let mode = match &self.conversation.lifecycle.conversation_state {
             ConversationState::Loading => ConversationIntentMode::Loading,
             ConversationState::Failed(_) => ConversationIntentMode::Failed,
             ConversationState::Ready(conversation) if conversation.is_blank_draft() => {
@@ -2564,16 +2527,16 @@ impl NativeTuiApp {
         ConversationIntentState {
             has_running_turn: self.conversation_has_running_turn(),
             blocks_navigation: matches!(
-                &self.conversation_state,
+                &self.conversation.lifecycle.conversation_state,
                 ConversationState::Ready(conversation) if !conversation.can_accept_manual_prompt()
             ),
             mode,
-            interrupt_support: match &self.conversation_state {
+            interrupt_support: match &self.conversation.lifecycle.conversation_state {
                 ConversationState::Ready(conversation) => {
                     conversation.turn_control_truth().interrupt
                 }
                 ConversationState::Loading | ConversationState::Failed(_) => {
-                    self.turn_control_truth.interrupt
+                    self.conversation.lifecycle.turn_control_truth.interrupt
                 }
             },
         }
@@ -2594,10 +2557,9 @@ impl NativeTuiApp {
                 });
             }
             ConversationIntentEffect::OpenNewDraft => {
-                // New drafts must leave transient chrome and planning worker context behind;
-                // otherwise the blank prompt can inherit stale session-side affordances.
+                // Core invalidation resets semantic worker projection state; this
+                // intent only dismisses local chrome before opening the draft.
                 self.dispatch_shell_chrome(ShellChromeEvent::TransientChromeDismissed);
-                self.reset_planning_worker_panel_state();
                 let workspace_directory = self.current_workspace_directory();
                 self.dispatch_conversation_lifecycle(ConversationLifecycleEvent::NewDraftOpened {
                     workspace_directory: workspace_directory.clone(),
@@ -2605,10 +2567,9 @@ impl NativeTuiApp {
                 self.refresh_ready_conversation_planning_runtime_projection();
             }
             ConversationIntentEffect::OpenSession { session } => {
-                // Session selection is a lifecycle transition, not just a transcript swap.
-                // Reset planning side panels before the async load result returns.
+                // Session selection requests Core lifecycle work without
+                // optimistically rewriting the current semantic projection.
                 self.dispatch_shell_chrome(ShellChromeEvent::TransientChromeDismissed);
-                self.reset_planning_worker_panel_state();
                 self.dispatch_conversation_lifecycle(ConversationLifecycleEvent::SessionChosen {
                     session,
                     fallback_workspace_directory: self.current_workspace_directory(),
@@ -2630,20 +2591,20 @@ impl NativeTuiApp {
             AutoFollowControlEvent::DraftWorkspaceSynced {
                 workspace_directory,
             } => matches!(
-                &self.conversation_state,
+                &self.conversation.lifecycle.conversation_state,
                 ConversationState::Ready(conversation)
                     if conversation.draft_workspace_directory() != workspace_directory
             ),
         };
         if invalidates_prior_requests {
-            self.post_turn_continuation_gate.advance();
+            self.planning.post_turn_continuation_gate.advance();
         }
         if matches!(
             &event,
             AutoFollowControlEvent::DraftWorkspaceSynced {
                 workspace_directory,
             } if matches!(
-                &self.conversation_state,
+                &self.conversation.lifecycle.conversation_state,
                 ConversationState::Ready(conversation)
                     if conversation.draft_workspace_directory() != workspace_directory
             )
@@ -2654,7 +2615,7 @@ impl NativeTuiApp {
             return;
         };
         let reduction = reduce_auto_follow_controls(conversation, event);
-        self.conversation_state = ConversationState::ready(reduction.state);
+        self.conversation.lifecycle.conversation_state = ConversationState::ready(reduction.state);
         self.advance_planning_ui_intent_revision();
         if reduction.close_max_auto_turns_editor {
             self.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::EditFinished);
@@ -2662,7 +2623,8 @@ impl NativeTuiApp {
     }
 
     pub(super) fn dispatch_auto_follow_overlay_ui(&mut self, event: AutoFollowOverlayUiEvent) {
-        let state = std::mem::take(&mut self.auto_follow_overlay_ui_state);
-        self.auto_follow_overlay_ui_state = reduce_auto_follow_overlay_ui(state, event);
+        let state = std::mem::take(&mut self.conversation.auto_follow_overlay_ui_state);
+        self.conversation.auto_follow_overlay_ui_state =
+            reduce_auto_follow_overlay_ui(state, event);
     }
 }

@@ -239,7 +239,8 @@ impl NativeFlowHarness {
             ConversationService::new(codex_port),
             parallel_mode_binding,
         );
-        app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir));
+        app.shell.chrome.startup_state =
+            StartupState::Ready(sample_startup_diagnostics(&workspace_dir));
         app.sync_draft_shell_workspace(&workspace_dir);
         app.refresh_ready_conversation_planning_runtime_projection_for_workspace(&workspace_dir);
 
@@ -415,7 +416,12 @@ impl NativeFlowHarness {
             .planning
             .runtime
             .load_runtime_projection_or_invalid(&self.workspace_dir);
-        let ConversationState::Ready(conversation) = &mut self.runtime.app_mut().conversation_state
+        let ConversationState::Ready(conversation) = &mut self
+            .runtime
+            .app_mut()
+            .conversation
+            .lifecycle
+            .conversation_state
         else {
             panic!("expected ready conversation state");
         };
@@ -426,6 +432,7 @@ impl NativeFlowHarness {
 
         self.runtime
             .app
+            .runtime
             .tx
             .send(post_turn_evaluation_completed_message(
                 correlation,
@@ -460,7 +467,12 @@ impl NativeFlowHarness {
             planning_projection.has_actionable_queue_head(),
             "test setup should leave a ready queue head"
         );
-        let ConversationState::Ready(conversation) = &mut self.runtime.app_mut().conversation_state
+        let ConversationState::Ready(conversation) = &mut self
+            .runtime
+            .app_mut()
+            .conversation
+            .lifecycle
+            .conversation_state
         else {
             panic!("expected ready conversation state");
         };
@@ -471,6 +483,7 @@ impl NativeFlowHarness {
 
         self.runtime
             .app
+            .runtime
             .tx
             .send(post_turn_evaluation_completed_message(
                 correlation,
@@ -499,7 +512,12 @@ impl NativeFlowHarness {
             None,
             None,
         );
-        let ConversationState::Ready(conversation) = &mut self.runtime.app_mut().conversation_state
+        let ConversationState::Ready(conversation) = &mut self
+            .runtime
+            .app_mut()
+            .conversation
+            .lifecycle
+            .conversation_state
         else {
             panic!("expected ready conversation state");
         };
@@ -510,6 +528,7 @@ impl NativeFlowHarness {
 
         self.runtime
             .app
+            .runtime
             .tx
             .send(post_turn_evaluation_completed_message(
                 correlation,
@@ -544,7 +563,9 @@ impl NativeFlowHarness {
         let mut final_status = String::new();
         for _ in 0..750 {
             self.runtime.poll_background_messages();
-            if let ConversationState::Ready(conversation) = &self.runtime.app().conversation_state {
+            if let ConversationState::Ready(conversation) =
+                &self.runtime.app().conversation.lifecycle.conversation_state
+            {
                 final_status = conversation.status_text.clone();
                 if final_status.contains(expected) {
                     return final_status;
@@ -556,10 +577,16 @@ impl NativeFlowHarness {
     }
 
     fn poll_until_worker_launches(&mut self, expected_launches: usize) {
-        for _ in 0..750 {
+        // Pool entry creates and prepares real Git worktrees. Cold macOS runners
+        // can exceed the shorter status-only poll budget before the first launch.
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
             self.runtime.poll_background_messages();
             if self.worker_port.launch_count() >= expected_launches {
                 return;
+            }
+            if Instant::now() >= deadline {
+                break;
             }
             thread::sleep(Duration::from_millis(20));
         }
@@ -661,7 +688,9 @@ impl NativeFlowHarness {
     }
 
     fn runtime_notices(&self) -> Vec<String> {
-        let ConversationState::Ready(conversation) = &self.runtime.app().conversation_state else {
+        let ConversationState::Ready(conversation) =
+            &self.runtime.app().conversation.lifecycle.conversation_state
+        else {
             return Vec::new();
         };
         conversation.runtime_notices.clone()
@@ -1178,7 +1207,13 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_once() {
     );
     assert!(launch_request.prompt.contains("[queued-task-handoff]"));
     assert!(launch_request.prompt.contains("[delivery-boundary]"));
-    let ConversationState::Ready(conversation) = &harness.runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) = &harness
+        .runtime
+        .app()
+        .conversation
+        .lifecycle
+        .conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert!(
@@ -1316,7 +1351,13 @@ fn parallel_completion_with_drained_queue_alerts_without_dispatching() {
     harness.send_parallel_completion_with_drained_queue("parallel-turn-drained");
     harness.runtime.poll_background_messages();
 
-    let ConversationState::Ready(conversation) = &harness.runtime.app().conversation_state else {
+    let ConversationState::Ready(conversation) = &harness
+        .runtime
+        .app()
+        .conversation
+        .lifecycle
+        .conversation_state
+    else {
         panic!("expected ready conversation state");
     };
     assert!(
@@ -1431,6 +1472,7 @@ fn dispatch_requests_during_entry_loading_coalesce_until_ready() {
     harness
         .runtime
         .app
+        .runtime
         .tx
         .send(BackgroundMessage::ParallelModeControlPlaneEvent(Box::new(
             ParallelModeControlPlaneBackgroundEvent::SupervisorSnapshotRefreshed {
@@ -1572,6 +1614,7 @@ fn late_enter_result_after_parallel_off_does_not_reenable_mode() {
     harness
         .runtime
         .app
+        .runtime
         .tx
         .send(BackgroundMessage::ParallelModeControlPlaneEvent(Box::new(
             ParallelModeControlPlaneBackgroundEvent::Entered {
@@ -1620,6 +1663,7 @@ fn stale_worker_event_drops_before_ui_notice_or_dispatch_wake() {
     harness
         .runtime
         .app
+        .runtime
         .tx
         .send(BackgroundMessage::ParallelModeControlPlaneEvent(Box::new(
             ParallelModeControlPlaneBackgroundEvent::WorkerEvent {

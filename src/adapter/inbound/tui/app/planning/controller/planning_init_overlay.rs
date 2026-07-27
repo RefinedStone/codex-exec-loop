@@ -15,7 +15,7 @@ impl NativeTuiApp {
          * shell router that the planning overlay owns the key stream while it
          * is visible.
          */
-        match self.planning_init_overlay_ui_state.step() {
+        match self.planning.planning_init_overlay_ui_state.step() {
             // Loading은 Core effect completion만 해제한다. 이 동안 wizard mutation key는 소비한다.
             PlanningInitOverlayStep::Loading => {}
             PlanningInitOverlayStep::ExistingWorkspace => match key.code {
@@ -50,23 +50,27 @@ impl NativeTuiApp {
             },
             PlanningInitOverlayStep::ModeSelection => match key.code {
                 // Vim/arrow navigation only moves the cursor; it does not stage a draft.
-                KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => {
-                    self.planning_init_overlay_ui_state.move_mode_selection(-1)
-                }
-                KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
-                    self.planning_init_overlay_ui_state.move_mode_selection(1)
-                }
+                KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => self
+                    .planning
+                    .planning_init_overlay_ui_state
+                    .move_mode_selection(-1),
+                KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => self
+                    .planning
+                    .planning_init_overlay_ui_state
+                    .move_mode_selection(1),
                 // Letter shortcuts set the same selection cursor used by Enter, preserving one execution path.
                 KeyCode::Char('a') | KeyCode::Char('A')
                     if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
                 {
-                    self.planning_init_overlay_ui_state
+                    self.planning
+                        .planning_init_overlay_ui_state
                         .select_mode(PlanningInitModeSelection::Simple)
                 }
                 KeyCode::Char('b') | KeyCode::Char('B')
                     if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
                 {
-                    self.planning_init_overlay_ui_state
+                    self.planning
+                        .planning_init_overlay_ui_state
                         .select_mode(PlanningInitModeSelection::Detail)
                 }
                 /*
@@ -76,13 +80,14 @@ impl NativeTuiApp {
                  * concrete authoring backend.
                  */
                 KeyCode::Enter if key.modifiers.is_empty() => {
-                    match self.planning_init_overlay_ui_state.selected_mode() {
+                    match self.planning.planning_init_overlay_ui_state.selected_mode() {
                         PlanningInitModeSelection::Simple => {
                             self.stage_simple_mode_planning_init_draft()
                         }
-                        PlanningInitModeSelection::Detail => {
-                            self.planning_init_overlay_ui_state.open_detail_selection()
-                        }
+                        PlanningInitModeSelection::Detail => self
+                            .planning
+                            .planning_init_overlay_ui_state
+                            .open_detail_selection(),
                     }
                 }
                 // Unknown keys are consumed inside this focused wizard step without changing state.
@@ -95,25 +100,30 @@ impl NativeTuiApp {
                  * while from simple review it returns to the staged review.
                  */
                 KeyCode::Backspace | KeyCode::Left if key.modifiers.is_empty() => self
+                    .planning
                     .planning_init_overlay_ui_state
                     .return_from_detail_selection(),
                 KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => self
+                    .planning
                     .planning_init_overlay_ui_state
                     .move_detail_selection(-1),
-                KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
-                    self.planning_init_overlay_ui_state.move_detail_selection(1)
-                }
+                KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => self
+                    .planning
+                    .planning_init_overlay_ui_state
+                    .move_detail_selection(1),
                 // Letter shortcuts select an authoring backend; they do not open the editor until Enter.
                 KeyCode::Char('a') | KeyCode::Char('A')
                     if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
                 {
-                    self.planning_init_overlay_ui_state
+                    self.planning
+                        .planning_init_overlay_ui_state
                         .select_detail(PlanningInitDetailSelection::Manual)
                 }
                 KeyCode::Char('b') | KeyCode::Char('B')
                     if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
                 {
-                    self.planning_init_overlay_ui_state
+                    self.planning
+                        .planning_init_overlay_ui_state
                         .select_detail(PlanningInitDetailSelection::WorkerAssisted)
                 }
                 /*
@@ -123,7 +133,11 @@ impl NativeTuiApp {
                  * leaving the overlay or discarding the selection context.
                  */
                 KeyCode::Enter if key.modifiers.is_empty() => {
-                    match self.planning_init_overlay_ui_state.selected_detail() {
+                    match self
+                        .planning
+                        .planning_init_overlay_ui_state
+                        .selected_detail()
+                    {
                         PlanningInitDetailSelection::Manual => self.open_planning_manual_editor(),
                         PlanningInitDetailSelection::WorkerAssisted => {
                             self.dispatch_conversation_input(
@@ -157,7 +171,9 @@ impl NativeTuiApp {
                     KeyCode::Char('d') | KeyCode::Char('D')
                         if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
                     {
-                        self.planning_init_overlay_ui_state.open_detail_selection();
+                        self.planning
+                            .planning_init_overlay_ui_state
+                            .open_detail_selection();
                         self.dispatch_conversation_input(
                             ConversationInputEvent::StatusMessageShown {
                                 status_text:
