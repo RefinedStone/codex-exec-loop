@@ -1334,6 +1334,14 @@ mod tests {
             }),
         });
 
+        state.begin_submission();
+        assert!(
+            state
+                .runtime_envelope
+                .as_ref()
+                .and_then(|envelope| envelope.last_model_reroute.as_ref())
+                .is_some()
+        );
         let started = state.apply_stream_event(TurnStreamEvent::TurnStarted {
             turn_id: "turn-two".to_string(),
             runtime_request: Box::new(ConversationRuntimeConfigurationRequest {
@@ -1341,6 +1349,10 @@ mod tests {
                 ..Default::default()
             }),
         });
+        assert!(matches!(
+            started.update,
+            TurnStreamUpdate::TurnStarted { ref turn_id, .. } if turn_id == "turn-two"
+        ));
         assert_eq!(
             started
                 .runtime_envelope
@@ -1520,10 +1532,16 @@ mod tests {
             )),
         });
 
+        state.begin_submission();
+        assert_eq!(state.progressive_activity.snapshot().records.len(), 1);
         let next_turn = state.apply_stream_event(TurnStreamEvent::TurnStarted {
             turn_id: "turn-2".to_string(),
             runtime_request: Box::default(),
         });
+        assert!(matches!(
+            next_turn.update,
+            TurnStreamUpdate::TurnStarted { ref turn_id, .. } if turn_id == "turn-2"
+        ));
         assert!(next_turn.progressive_activity.records.is_empty());
         assert_eq!(next_turn.progressive_activity.last_sequence, None);
         assert_eq!(next_turn.progressive_activity.source_observation_count, 0);

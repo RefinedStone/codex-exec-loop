@@ -4,7 +4,8 @@ use super::{
 };
 use crate::adapter::inbound::tui::app::INFINITE_AUTO_FOLLOW_MAX_TURNS;
 use crate::core::app::{
-    PostTurnAuthoritySnapshot, PostTurnEvaluationCorrelation, PostTurnRouteResolution,
+    ActiveTurnPhase, ActiveTurnSnapshot, CorePromptOrigin, PostTurnAuthoritySnapshot,
+    PostTurnEvaluationCorrelation, PostTurnRouteResolution, TurnSubmissionCorrelation,
 };
 use crate::domain::conversation::{
     ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationSnapshot,
@@ -34,6 +35,20 @@ fn ready_conversation() -> ConversationViewModel {
     conversation
 }
 
+fn start_running_turn(conversation: &mut ConversationViewModel, turn_id: &str) {
+    let mut runtime = conversation.runtime_snapshot().clone();
+    runtime.active_turn = Some(ActiveTurnSnapshot {
+        correlation: TurnSubmissionCorrelation::new(1),
+        phase: ActiveTurnPhase::Running,
+        workspace_directory: conversation.cwd.clone(),
+        turn_id: Some(turn_id.to_string()),
+        prompt_origin: CorePromptOrigin::Manual,
+        started_at: std::time::Instant::now(),
+    });
+    conversation.apply_runtime_snapshot(runtime);
+    conversation.record_turn_started(turn_id.to_string());
+}
+
 fn settle_post_turn(conversation: &mut ConversationViewModel, completed_turn_id: &str) {
     let correlation = PostTurnEvaluationCorrelation::new(
         1,
@@ -43,6 +58,7 @@ fn settle_post_turn(conversation: &mut ConversationViewModel, completed_turn_id:
         conversation.planning_workspace_directory(),
     );
     let mut runtime = conversation.runtime_snapshot().clone();
+    runtime.active_turn = None;
     runtime.post_turn = PostTurnAuthoritySnapshot::Settled {
         correlation,
         resolution: PostTurnRouteResolution::NoContinuation,
@@ -196,7 +212,7 @@ fn planning_notice_summary_filters_non_planning_runtime_notices() {
 #[test]
 fn next_live_agent_item_keeps_the_earliest_handoff_out_of_history() {
     let mut conversation = ready_conversation();
-    conversation.record_turn_started("turn-1".to_string());
+    start_running_turn(&mut conversation, "turn-1");
     conversation.push_live_agent_delta(
         "commentary-1".to_string(),
         Some("commentary".to_string()),
@@ -257,7 +273,7 @@ fn next_live_agent_item_keeps_the_earliest_handoff_out_of_history() {
 #[test]
 fn completed_settlement_waits_for_history_flush_ack_before_unlocking_navigation() {
     let mut conversation = ready_conversation();
-    conversation.record_turn_started("turn-1".to_string());
+    start_running_turn(&mut conversation, "turn-1");
     conversation.push_live_agent_delta(
         "answer-1".to_string(),
         Some("final_answer".to_string()),
@@ -358,7 +374,7 @@ fn manual_preparation_failure_waits_for_delivery_and_restores_its_status() {
 #[test]
 fn tool_only_turn_waits_for_transcript_delivery_before_unlocking_navigation() {
     let mut conversation = ready_conversation();
-    conversation.record_turn_started("turn-1".to_string());
+    start_running_turn(&mut conversation, "turn-1");
     conversation.buffer_tool_message("tool-only completion");
     conversation.finish_turn("turn-1", &[]);
     conversation.begin_post_turn_settlement("turn-1");
@@ -389,7 +405,7 @@ fn tool_only_turn_waits_for_transcript_delivery_before_unlocking_navigation() {
 #[test]
 fn stale_handoff_ack_cannot_clear_a_newer_transcript_frontier() {
     let mut conversation = ready_conversation();
-    conversation.record_turn_started("turn-1".to_string());
+    start_running_turn(&mut conversation, "turn-1");
     conversation.push_live_agent_delta(
         "answer-1".to_string(),
         Some("final_answer".to_string()),

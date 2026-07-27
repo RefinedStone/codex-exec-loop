@@ -3838,12 +3838,22 @@ mod tests {
             returned_before_release,
             "stop dispatch must return while provider I/O remains blocked"
         );
-        assert_eq!(
-            accepted.events,
-            vec![AppEvent::StopRequestAdmissionResolved(
-                StopRequestAdmission::Accepted { correlation },
-            )]
-        );
+        assert!(matches!(
+            accepted.events.as_slice(),
+            [
+                AppEvent::ConversationRuntimeAuthorityChanged(authority),
+                AppEvent::StopRequestAdmissionResolved(StopRequestAdmission::Accepted {
+                    correlation: admitted,
+                }),
+            ] if *admitted == correlation
+                && authority.active_turn.as_ref().is_some_and(|active| {
+                    active.correlation == turn_submission
+                        && active.phase == crate::core::app::ActiveTurnPhase::Submitting
+                        && active.turn_id.is_none()
+                })
+                && authority.auto_follow.continuation_paused
+                && accepted.snapshot.conversation_runtime == **authority
+        ));
 
         let stale = runtime.dispatch_input(CoreInput::EffectCompleted(
             CoreEffectCompletion::StopRequestAttemptCompleted {
@@ -3948,9 +3958,15 @@ mod tests {
         let stop = runtime.dispatch_command(AppCommand::RequestStopAllSessions);
         assert!(matches!(
             stop.events.as_slice(),
-            [AppEvent::StopRequestAdmissionResolved(
-                StopRequestAdmission::Accepted { correlation }
-            )] if *correlation == StopRequestCorrelation::new(1, None)
+            [
+                AppEvent::ConversationRuntimeAuthorityChanged(authority),
+                AppEvent::StopRequestAdmissionResolved(StopRequestAdmission::Accepted {
+                    correlation,
+                }),
+            ] if *correlation == StopRequestCorrelation::new(1, None)
+                && authority.active_turn.is_none()
+                && authority.auto_follow.continuation_paused
+                && stop.snapshot.conversation_runtime == **authority
         ));
         gate_entered
             .recv_timeout(WORKER_COMPLETION_TIMEOUT)
@@ -4013,9 +4029,18 @@ mod tests {
             runtime.dispatch_command(AppCommand::SubmitTurn(Box::new(turn_request)));
         assert!(matches!(
             admitted_turn.events.as_slice(),
-            [AppEvent::TurnSubmissionAdmissionResolved(
-                TurnSubmissionAdmission::Accepted { .. }
-            )]
+            [
+                AppEvent::ConversationRuntimeAuthorityChanged(authority),
+                AppEvent::TurnSubmissionAdmissionResolved(
+                    TurnSubmissionAdmission::Accepted { correlation },
+                ),
+            ] if authority.active_turn.as_ref().is_some_and(|active| {
+                active.correlation == *correlation
+                    && active.phase == crate::core::app::ActiveTurnPhase::Submitting
+                    && active.workspace_directory == "/tmp/new-workspace"
+                    && active.turn_id.is_none()
+            })
+                && admitted_turn.snapshot.conversation_runtime == **authority
         ));
     }
 
