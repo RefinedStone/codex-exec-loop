@@ -23,6 +23,7 @@ use crate::domain::parallel_mode::{
     ParallelModeSlotLeaseRequest, ParallelModeSlotLeaseSnapshot, ParallelModeSupervisorSnapshot,
 };
 use crate::domain::turn_terminal::ConversationTurnTerminalReceipt;
+use crate::panic_observation::catch_redacted_worker_unwind;
 use chrono::Utc;
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -703,6 +704,16 @@ struct ParallelDispatchWorkerRunResult {
     worker_event_kind: ParallelModeControlPlaneWorkerEventKind,
 }
 
+struct ParallelDispatchWorkerSettlement {
+    workspace_directory: String,
+    automation_epoch_id: u64,
+    task_id: String,
+    task_title: String,
+    expected_lease: ParallelModeSlotLeaseSnapshot,
+    turn_service: ParallelModeTurnService,
+    outer_tx: Sender<ParallelModeOrchestratorLoopEvent>,
+}
+
 struct ParallelDispatchOfficialCompletionOutcome {
     notices: Vec<String>,
     official_completion_refresh_succeeded: bool,
@@ -754,30 +765,76 @@ fn spawn_parallel_dispatch_worker(
     planning: PlanningServices,
     outer_tx: Sender<ParallelModeOrchestratorLoopEvent>,
 ) {
+    let workspace_directory = request.planning_workspace_directory.clone();
+    let automation_epoch_id = request.automation_epoch_id;
+    let task_id = request.handoff_task.task_id.clone();
+    let task_title = request.handoff_task.task_title.clone();
+    let expected_lease = request.expected_lease.clone();
+    let panic_settlement_service = turn_service.clone();
     thread::spawn(move || {
         /*
          * Background worker는 TUI event loop를 직접 만지지 않는다. 모든 결과는 notice message와
          * supervisor snapshot invalidation으로 되돌아가며, sender 실패는 이미 UI가 내려가는 중이라는
          * 의미라 worker thread 안에서 추가 복구를 시도하지 않는다.
          */
-        let workspace_directory = request.planning_workspace_directory.clone();
-        let automation_epoch_id = request.automation_epoch_id;
-        let task_id = request.handoff_task.task_id.clone();
-        let task_title = request.handoff_task.task_title.clone();
-        event_log::emit_lazy("parallel_worker_thread_started", || {
-            parallel_worker_thread_started_trace_payload(&request)
-        });
-        let result = run_parallel_dispatch_worker(request, worker_port, turn_service, planning);
-        let _ = outer_tx.send(ParallelModeOrchestratorLoopEvent::WorkerEvent(
-            ParallelModeControlPlaneWorkerEvent::new(
+        settle_parallel_dispatch_worker(
+            ParallelDispatchWorkerSettlement {
                 workspace_directory,
                 automation_epoch_id,
                 task_id,
                 task_title,
-                result.worker_event_kind,
-                result.notices,
-            ),
+                expected_lease,
+                turn_service: panic_settlement_service,
+                outer_tx,
+            },
+            || {
+                event_log::emit_lazy("parallel_worker_thread_started", || {
+                    parallel_worker_thread_started_trace_payload(&request)
+                });
+                run_parallel_dispatch_worker(request, worker_port, turn_service, planning)
+            },
+        );
+    });
+}
+
+fn settle_parallel_dispatch_worker<Work>(settlement: ParallelDispatchWorkerSettlement, work: Work)
+where
+    Work: FnOnce() -> ParallelDispatchWorkerRunResult,
+{
+    let ParallelDispatchWorkerSettlement {
+        workspace_directory,
+        automation_epoch_id,
+        task_id,
+        task_title,
+        expected_lease,
+        turn_service,
+        outer_tx,
+    } = settlement;
+    let result = catch_redacted_worker_unwind(work).unwrap_or_else(|_| {
+        let mut notices = vec![format!(
+            "parallel worker failed unexpectedly / task: {task_title}"
+        )];
+        let settlement = catch_redacted_worker_unwind(|| {
+            turn_service.settle_unexpected_worker_panic_for_lease(&expected_lease)
+        });
+        match settlement {
+            Ok(settlement_notices) => notices.extend(settlement_notices),
+            Err(_) => notices
+                .push("parallel worker panic settlement also failed unexpectedly".to_string()),
+        }
+        ParallelDispatchWorkerRunResult::stream_failed(notices)
+    });
+    let completion =
+        ParallelModeOrchestratorLoopEvent::WorkerEvent(ParallelModeControlPlaneWorkerEvent::new(
+            workspace_directory,
+            automation_epoch_id,
+            task_id,
+            task_title,
+            result.worker_event_kind,
+            result.notices,
         ));
+    let _ = catch_redacted_worker_unwind(|| {
+        let _ = outer_tx.send(completion);
     });
 }
 
@@ -798,15 +855,17 @@ fn run_parallel_dispatch_worker(
          * the receiver side so it can reduce stream events while the isolated worker
          * is still running, then joins to capture transport-level errors.
          */
-        worker_port.run_isolated_new_thread_stream(
-            ParallelAgentWorkerStreamRequest {
-                cwd: &service_request.worktree_directory,
-                prompt: &service_request.prompt,
-                developer_instructions: &service_request.developer_instructions,
-                service_name: &service_request.service_name,
-            },
-            event_tx,
-        )
+        catch_redacted_worker_unwind(|| {
+            worker_port.run_isolated_new_thread_stream(
+                ParallelAgentWorkerStreamRequest {
+                    cwd: &service_request.worktree_directory,
+                    prompt: &service_request.prompt,
+                    developer_instructions: &service_request.developer_instructions,
+                    service_name: &service_request.service_name,
+                },
+                event_tx,
+            )
+        })
     });
 
     let mut notices = Vec::new();
@@ -833,7 +892,7 @@ fn run_parallel_dispatch_worker(
 
     let mut producer_receipt = None;
     match service_thread.join() {
-        Ok(Ok(receipt)) => {
+        Ok(Ok(Ok(receipt))) => {
             producer_receipt = Some(receipt);
             event_log::emit_lazy("parallel_worker_stream_joined", || {
                 serde_json::json!({
@@ -846,7 +905,7 @@ fn run_parallel_dispatch_worker(
                 })
             });
         }
-        Ok(Err(error)) => {
+        Ok(Ok(Err(error))) => {
             /*
              * A port error may happen after the event stream already emitted TurnTerminal
              * or Failed. Only synthesize a failure flag when the stream itself did not
@@ -875,7 +934,7 @@ fn run_parallel_dispatch_worker(
                 })
             });
         }
-        Err(_) => {
+        Ok(Err(_)) | Err(_) => {
             /*
              * Panic is treated like a terminal stream failure, but we still preserve
              * saw_turn_started so the turn service can distinguish a dirty running
@@ -1656,14 +1715,16 @@ mod tests {
     use super::{
         ParallelDispatchOfficialCompletionOutcome, ParallelDispatchTurnCompleted,
         ParallelDispatchWorkerRequest, ParallelDispatchWorkerRunResult,
-        ParallelDispatchWorkerStreamState, ParallelModeDispatchExecutionContext,
-        dispatch_parallel_queue_pool, emit_parallel_worker_stream_event,
-        parallel_dispatch_validation_summary, parallel_official_completion_started_trace_payload,
+        ParallelDispatchWorkerSettlement, ParallelDispatchWorkerStreamState,
+        ParallelModeDispatchExecutionContext, dispatch_parallel_queue_pool,
+        emit_parallel_worker_stream_event, parallel_dispatch_validation_summary,
+        parallel_official_completion_started_trace_payload,
         parallel_runtime_event_for_dispatch_trigger,
         parallel_worker_agent_message_completed_trace_payload,
         parallel_worker_stream_starting_trace_payload,
         parallel_worker_thread_started_trace_payload, run_parallel_dispatch_official_completion,
-        run_parallel_dispatch_worker, sync_parallel_dispatch_worker_event,
+        run_parallel_dispatch_worker, settle_parallel_dispatch_worker,
+        sync_parallel_dispatch_worker_event,
     };
     use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
@@ -1681,7 +1742,7 @@ mod tests {
     use crate::application::service::parallel_agent_profile::ParallelAgentProfileService;
     use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
     use crate::application::service::parallel_mode::{
-        ParallelModeAutomationGuard, ParallelModeService,
+        ParallelModeAutomationGuard, ParallelModeOrchestratorLoopEvent, ParallelModeService,
     };
     use crate::application::service::planning::{PlanningServices, PlanningTaskHandoff};
     use crate::domain::parallel_mode::{
@@ -1702,7 +1763,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::sync::{Arc, Mutex, mpsc};
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     struct NoopGithubAutomationPort;
 
@@ -1907,6 +1968,13 @@ mod tests {
             fs::write(repo_root.join("README.md"), "seed\n").expect("seed file should write");
             run_git(&repo_root, &["add", "README.md"]);
             run_git(&repo_root, &["commit", "-qm", "init"]);
+            run_git(&repo_root, &["branch", "-M", "prerelease"]);
+            let remote_root = root.join("origin.git");
+            fs::create_dir_all(&remote_root).expect("temp bare remote should be created");
+            run_git(&remote_root, &["init", "--bare", "-q"]);
+            let remote = remote_root.display().to_string();
+            run_git(&repo_root, &["remote", "add", "origin", remote.as_str()]);
+            run_git(&repo_root, &["push", "-qu", "origin", "prerelease"]);
             Self {
                 root,
                 workspace: repo_root.display().to_string(),
@@ -2125,6 +2193,92 @@ mod tests {
             ParallelModeControlPlaneWorkerEventKind::Completed
         );
         assert_eq!(completed.notices, vec!["done".to_string()]);
+    }
+
+    #[test]
+    fn outer_dispatch_worker_panic_emits_one_redacted_stream_failure() {
+        let workspace = TempGitWorkspace::new("parallel-outer-worker-panic-settlement");
+        let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        test_planning_services(authority.clone())
+            .workspace
+            .initialize_simple_workspace(workspace.path())
+            .expect("planning authority should initialize");
+        run_git(Path::new(workspace.path()), &["add", "."]);
+        run_git(
+            Path::new(workspace.path()),
+            &["commit", "-qm", "initialize planning authority"],
+        );
+        run_git(
+            Path::new(workspace.path()),
+            &["push", "-q", "origin", "prerelease"],
+        );
+        let parallel_service = test_parallel_service(authority);
+        parallel_service
+            .reset_pool_on_parallel_initial_setup_report(workspace.path())
+            .expect("parallel pool should initialize");
+        let lease = parallel_service
+            .acquire_slot_lease(
+                workspace.path(),
+                ParallelModeSlotLeaseRequest::from_task_identity("task-a", "Task A"),
+            )
+            .expect("worker slot should lease");
+        let turn_service = ParallelModeTurnService::new(parallel_service.clone());
+        let (tx, rx) = mpsc::channel();
+        settle_parallel_dispatch_worker(
+            ParallelDispatchWorkerSettlement {
+                workspace_directory: workspace.path().to_string(),
+                automation_epoch_id: 7,
+                task_id: "task-a".to_string(),
+                task_title: "Task A".to_string(),
+                expected_lease: lease.clone(),
+                turn_service,
+                outer_tx: tx,
+            },
+            || panic!("SECRET-DISPATCH-PANIC"),
+        );
+
+        let event = rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("a panicking worker should still emit a terminal event");
+        let ParallelModeOrchestratorLoopEvent::WorkerEvent(event) = event else {
+            panic!("dispatch worker must emit a worker completion");
+        };
+        assert_eq!(event.workspace_directory, workspace.path());
+        assert_eq!(event.epoch_id, 7);
+        assert_eq!(event.task_id, "task-a");
+        assert_eq!(
+            event.kind,
+            ParallelModeControlPlaneWorkerEventKind::StreamFailed
+        );
+        assert!(
+            event
+                .notices
+                .iter()
+                .any(|notice| notice.contains("failed unexpectedly"))
+        );
+        assert!(
+            event
+                .notices
+                .iter()
+                .all(|notice| !notice.contains("SECRET-DISPATCH-PANIC"))
+        );
+        assert!(
+            matches!(rx.try_recv(), Err(mpsc::TryRecvError::Disconnected)),
+            "a worker panic must settle exactly once"
+        );
+
+        let supervisor = parallel_service.build_passive_supervisor_snapshot(workspace.path(), None);
+        let roster_entry = supervisor
+            .roster
+            .entries
+            .iter()
+            .find(|entry| entry.slot_id == lease.slot_id)
+            .expect("the exact lease should remain inspectable after panic settlement");
+        assert_eq!(roster_entry.state_label, "failed");
+        assert!(
+            !roster_entry.counts_as_active(),
+            "panic settlement must not leave a live-looking worker"
+        );
     }
 
     #[test]
@@ -2644,11 +2798,14 @@ mod tests {
             )
         });
 
+        let blocked_reason = outcome
+            .blocked_reason
+            .as_deref()
+            .expect("an invalid workspace must block before worker launch");
+        assert!(!blocked_reason.is_empty());
         assert!(
-            outcome
-                .blocked_reason
-                .as_deref()
-                .is_some_and(|reason| reason.contains("git repository is unavailable"))
+            outcome.launched_task_ids.is_empty(),
+            "plan-build failure must not launch a worker"
         );
     }
 

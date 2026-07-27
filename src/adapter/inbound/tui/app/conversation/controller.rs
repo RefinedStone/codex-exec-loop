@@ -65,10 +65,8 @@ impl NativeTuiApp {
         {
             return None;
         }
-        let outcome = self
-            .runtime
-            .client_runtime
-            .dispatch_client_event(CoreInput::Command(AppCommand::RefreshPlanningRuntime {
+        let outcome =
+            self.reduce_core_client_event(CoreInput::Command(AppCommand::RefreshPlanningRuntime {
                 workspace_directory: workspace_directory.to_string(),
             }));
         let correlation = outcome.events.iter().find_map(|event| match event {

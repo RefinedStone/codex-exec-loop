@@ -334,12 +334,9 @@ impl NativeTuiApp {
             return;
         };
 
-        let outcome = self
-            .runtime
-            .client_runtime
-            .dispatch_client_event(CoreInput::Command(AppCommand::RenameSession(
-                request.clone(),
-            )));
+        let outcome = self.reduce_core_client_event(CoreInput::Command(AppCommand::RenameSession(
+            request.clone(),
+        )));
         self.apply_session_rename_dispatch_outcome(request, outcome);
     }
 
@@ -683,7 +680,7 @@ mod tests {
         // Full CI suites can schedule the rename worker behind other work; 200ms was
         // flaky under load even when the rename path itself was healthy.
         for _ in 0..2_000 {
-            app.poll_core_runtime_inputs(8);
+            app.poll_client_runtime_events(8);
             if complete(app) {
                 return;
             }

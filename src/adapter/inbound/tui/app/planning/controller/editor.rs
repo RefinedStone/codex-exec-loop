@@ -11,10 +11,8 @@ use super::*;
 impl NativeTuiApp {
     pub(super) fn open_planning_manual_editor(&mut self) {
         let workspace_directory = self.planning_workspace_directory();
-        let outcome = self
-            .runtime
-            .client_runtime
-            .dispatch_client_event(CoreInput::Command(AppCommand::StagePlanningEditor {
+        let outcome =
+            self.reduce_core_client_event(CoreInput::Command(AppCommand::StagePlanningEditor {
                 workspace_directory,
                 target: PlanningEditorStageTarget::PlanningManual,
             }));
@@ -23,10 +21,8 @@ impl NativeTuiApp {
 
     pub(super) fn open_directions_detail_doc_editor(&mut self, direction_id: &str) {
         let workspace_directory = self.planning_workspace_directory();
-        let outcome = self
-            .runtime
-            .client_runtime
-            .dispatch_client_event(CoreInput::Command(AppCommand::StagePlanningEditor {
+        let outcome =
+            self.reduce_core_client_event(CoreInput::Command(AppCommand::StagePlanningEditor {
                 workspace_directory,
                 target: PlanningEditorStageTarget::DirectionDetail {
                     direction_id: direction_id.to_string(),
@@ -37,10 +33,8 @@ impl NativeTuiApp {
 
     pub(super) fn open_queue_idle_prompt_editor(&mut self) {
         let workspace_directory = self.planning_workspace_directory();
-        let outcome = self
-            .runtime
-            .client_runtime
-            .dispatch_client_event(CoreInput::Command(AppCommand::StagePlanningEditor {
+        let outcome =
+            self.reduce_core_client_event(CoreInput::Command(AppCommand::StagePlanningEditor {
                 workspace_directory,
                 target: PlanningEditorStageTarget::QueueIdlePrompt,
             }));
@@ -165,10 +159,8 @@ impl NativeTuiApp {
                 .planning_draft_editor_ui_state
                 .collect_editable_file_snapshots(),
         };
-        let outcome = self
-            .runtime
-            .client_runtime
-            .dispatch_client_event(CoreInput::Command(AppCommand::MutatePlanningEditor {
+        let outcome =
+            self.reduce_core_client_event(CoreInput::Command(AppCommand::MutatePlanningEditor {
                 workspace_directory,
                 request: Box::new(request),
             }));

@@ -91,10 +91,8 @@ impl NativeTuiApp {
             return;
         }
         let context = self.current_reviews_overlay_context();
-        let outcome = self
-            .runtime
-            .client_runtime
-            .dispatch_client_event(CoreInput::Command(AppCommand::LoadReviewCenter {
+        let outcome =
+            self.reduce_core_client_event(CoreInput::Command(AppCommand::LoadReviewCenter {
                 workspace_directory: context.workspace_directory,
                 active_thread_id: context.active_thread.map(|thread| thread.thread_id),
             }));
@@ -646,10 +644,8 @@ impl NativeTuiApp {
         }
 
         let request = intent.request.clone();
-        let outcome = self
-            .runtime
-            .client_runtime
-            .dispatch_client_event(CoreInput::Command(AppCommand::SteerTurn(request)));
+        let outcome =
+            self.reduce_core_client_event(CoreInput::Command(AppCommand::SteerTurn(request)));
         let admission = outcome.events.iter().find_map(|event| match event {
             AppEvent::TurnSteerAdmissionResolved(admission) => Some(*admission),
             _ => None,
@@ -1036,13 +1032,12 @@ impl NativeTuiApp {
             ConversationState::Ready(_) => None,
         };
         if let Some(approval_id) = approval_id {
-            let outcome = self
-                .runtime
-                .client_runtime
-                .dispatch_client_event(CoreInput::Command(AppCommand::SubmitApprovalDecision {
+            let outcome = self.reduce_core_client_event(CoreInput::Command(
+                AppCommand::SubmitApprovalDecision {
                     approval_id: approval_id.clone(),
                     decision,
-                }));
+                },
+            ));
             let admitted = outcome.events.iter().any(|event| {
                 matches!(
                     event,
@@ -1631,13 +1626,26 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
             if let Some(outcome) = app.runtime.client_runtime.poll_pending_client_event() {
-                for event in outcome.events {
-                    match event {
-                        AppEvent::QueueMutationCompleted {
-                            correlation,
-                            result,
-                        } => return (correlation, *result),
-                        event => app.apply_core_event(event),
+                match outcome {
+                    crate::composition::native_client_runtime::NativeClientDispatchOutcome::Core(
+                        outcome,
+                    ) => {
+                        for event in outcome.events {
+                            match event {
+                                AppEvent::QueueMutationCompleted {
+                                    correlation,
+                                    result,
+                                } => return (correlation, *result),
+                                event => app.apply_core_event(event),
+                            }
+                        }
+                    }
+                    crate::composition::native_client_runtime::NativeClientDispatchOutcome::Parallel(
+                        outcome,
+                    ) => {
+                        app.apply_parallel_mode_control_plane_presentation_events(
+                            outcome.presentation_events,
+                        );
                     }
                 }
             }
@@ -1694,7 +1702,7 @@ mod tests {
     fn apply_next_queue_overlay_authority_load(app: &mut NativeTuiApp) {
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
-            app.poll_core_runtime_inputs(1);
+            app.poll_client_runtime_events(1);
             if !matches!(
                 app.planning.queue_overlay_ui_state.authority_screen_model(),
                 queue_overlay_ui::QueueOverlayAuthorityScreenModel::Loading { .. }
@@ -1725,7 +1733,7 @@ mod tests {
     fn poll_core_until_status_contains(app: &mut NativeTuiApp, expected: &str) {
         let deadline = Instant::now() + Duration::from_secs(2);
         while !status_text(app).contains(expected) && Instant::now() < deadline {
-            app.poll_core_runtime_inputs(16);
+            app.poll_client_runtime_events(16);
             std::thread::yield_now();
         }
         assert!(
@@ -2300,8 +2308,8 @@ mod tests {
             .expect("parallel epoch should be open before stop");
         assert!(
             app.runtime
-                .parallel_mode_control_plane
-                .automation_epoch_is_active(&parallel_workspace, parallel_epoch)
+                .client_runtime
+                .parallel_automation_epoch_is_active_for_test(&parallel_workspace, parallel_epoch,)
         );
 
         app.execute_inline_shell_command_input(command(":stop"));
@@ -2310,8 +2318,8 @@ mod tests {
         assert!(app.parallel_mode_automation_epoch_id().is_none());
         assert!(
             !app.runtime
-                .parallel_mode_control_plane
-                .automation_epoch_is_active(&parallel_workspace, parallel_epoch),
+                .client_runtime
+                .parallel_automation_epoch_is_active_for_test(&parallel_workspace, parallel_epoch,),
             ":stop must close the automation permit before another dispatch can start"
         );
         assert!(
@@ -2405,14 +2413,13 @@ mod tests {
         app.handle_ctrl_c();
         assert!(status_text(&app).contains("stop already requested"));
 
-        let _ = app.runtime.client_runtime.dispatch_client_event(
-            crate::core::app::CoreInput::ConversationStreamUpdated {
+        let _ =
+            app.reduce_core_client_event(crate::core::app::CoreInput::ConversationStreamUpdated {
                 correlation: turn_submission,
                 event: crate::core::app::TurnStreamEvent::Failed {
                     message: "turn stopped".to_string(),
                 },
-            },
-        );
+            });
         ready_conversation_mut(&mut app).mark_turn_finished();
         app.handle_ctrl_c();
         assert_eq!(
@@ -4252,7 +4259,7 @@ mod tests {
             .is_some()
             && Instant::now() < deadline
         {
-            app.poll_core_runtime_inputs(8);
+            app.poll_client_runtime_events(8);
             std::thread::yield_now();
         }
 
@@ -4392,7 +4399,7 @@ mod tests {
 
         let deadline = Instant::now() + Duration::from_secs(1);
         while app.conversation.pending_turn_steer.is_some() && Instant::now() < deadline {
-            app.poll_core_runtime_inputs(8);
+            app.poll_client_runtime_events(8);
             std::thread::yield_now();
         }
 

@@ -451,12 +451,9 @@ impl NativeTuiApp {
         else {
             return false;
         };
-        let outcome = self
-            .runtime
-            .client_runtime
-            .dispatch_client_event(CoreInput::Command(AppCommand::SetupGithubReviewPolling(
-                request,
-            )));
+        let outcome = self.reduce_core_client_event(CoreInput::Command(
+            AppCommand::SetupGithubReviewPolling(request),
+        ));
         let started = outcome
             .events
             .iter()
@@ -489,10 +486,8 @@ impl NativeTuiApp {
         if !self.runtime.github_review_polling_state.poll_due(now) {
             return false;
         }
-        let outcome = self
-            .runtime
-            .client_runtime
-            .dispatch_client_event(CoreInput::Command(AppCommand::PollGithubReview));
+        let outcome =
+            self.reduce_core_client_event(CoreInput::Command(AppCommand::PollGithubReview));
         let started = outcome
             .events
             .iter()

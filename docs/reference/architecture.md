@@ -17,22 +17,21 @@ composition -> core + application + adapter/outbound
 
 The TUI line records the shipped transitional projection imports honestly. Production bootstrap
 does not receive raw application services: composition consumes them while constructing one opaque
-native application object. The adapter can bind that object only to its event sink and receive a
-`NativeClientRuntime`, typed `ParallelModeControlPlaneHandle`, and immutable runtime-control truth.
+native application object. The adapter receives only `NativeClientRuntime` and immutable
+runtime-control truth. The parallel control-plane handle, event sink, and completion mailbox remain
+private composition details.
 
 The client command loop has a different, intentionally round-trip **runtime flow**:
 
 ```text
 TUI intent
-  -> composition/NativeClientRuntime::dispatch_client_event(CoreInput)
-  -> core reducer
-  -> CoreEffect
-  -> composition/CoreEffectRunner
+  -> composition/NativeClientRuntime::dispatch_client_event(NativeClientEvent)
+  -> core reducer/CoreEffect or application parallel control plane/effect
   -> application use case / outbound port
-  -> bounded CoreInput mailbox
+  -> private bounded completion mailbox
   -> composition/NativeClientRuntime::poll_pending_client_event
-  -> core reducer
-  -> snapshot/event
+  -> owning reducer
+  -> snapshot/presentation event
   -> TUI projection
 ```
 
@@ -76,12 +75,12 @@ application services without adopting this process-local TUI runtime. Its explic
   hot path
 
 Composition owns the opaque `NativeClientRuntime` used by the native shell. It alone assembles the
-bounded mailbox, `CoreEffectRunner`, and `CoreRuntime` driver. The TUI dispatches only
-`CoreInput` through `dispatch_client_event` and reads owned snapshots or projections; it does not
-construct those runtime parts or call the raw driver. UI-originated inputs remain synchronous so an
-adapter can bind an accepted admission before applying an immediate outcome. Worker success,
-failure, and panic completions return through the bounded mailbox and re-enter the same exhaustive
-Core reducer through `poll_pending_client_event`.
+bounded mailboxes, `CoreEffectRunner`, `CoreRuntime` driver, and application-owned parallel
+control-plane handle. The TUI dispatches only `NativeClientEvent` through `dispatch_client_event`
+and reads owned snapshots or projections; it cannot name the parallel completion ingress or call a
+raw driver/handle. UI-originated inputs remain synchronous so an adapter can bind an accepted
+admission before applying an immediate outcome. Core and parallel worker completions return through
+private mailboxes and re-enter their owning reducer through `poll_pending_client_event`.
 
 Every `CoreEffect` variant is structurally paired with one exhaustive dispatch arm. Except for the
 two typed local invalidations, an arm must enter exactly one audited completion worker, emit an
@@ -100,9 +99,9 @@ application control-plane; the TUI reads its typed owned presentation projection
 or reinjecting a second notice ledger.
 
 Startup, session loading, conversation selection, turn submission, stream reduction, completion,
-and post-turn evaluation use this flow. Parallel mutation remains application-owned and enters
-through `ParallelModeControlPlaneHandle`; core may copy the projection but must not own a second
-parallel runtime.
+and post-turn evaluation use this flow. Parallel mutation remains application-owned but enters the
+same client-runtime facade; only composition retains `ParallelModeControlPlaneHandle`. Core may copy
+the projection but must not own a second parallel runtime.
 
 The TUI frame hot path calls `revisioned_planning_parallel_projection()` once per terminal
 transaction. Its owned `RevisionedPlanningParallelProjection` carries the matching Core revision
@@ -395,10 +394,12 @@ reused checkout path cannot silently adopt an earlier repository's authority.
 
 ```text
 TUI intent
-  -> application control-plane handle
+  -> NativeClientEvent
+  -> composition-private application control-plane handle
   -> domain decision
   -> durable store / effect runner
-  -> projection
+  -> private completion mailbox
+  -> exact control-plane reduction / projection
   -> core snapshot / TUI rendering
 ```
 
@@ -406,6 +407,16 @@ The current control-plane is a mutex-serialized synchronous facade. It provides 
 writer, effect accounting, stale-completion dropping, wake coalescing, durable backpressure, and a
 single projection source. Do not add a mailbox actor, raw parallel service owner in TUI/core, or a
 second dispatch queue without revisiting that decision.
+
+Every asynchronous control-plane launcher uses one panic-redacting completion worker. Success,
+ordinary failure, inactive-epoch rejection, and panic each produce exactly one terminal completion
+with the original workspace, epoch, and effect identity. Only that exact identity may clear the
+in-flight ledger; stale, duplicate, and ABA completions are presentation no-ops. The outer parallel
+agent worker follows the same rule and converts an unexpected panic into one redacted
+`StreamFailed` worker event. A failed wake or tick invalidates the possibly mutated projection and
+must complete an exact supervisor refresh before dispatch can resume. A failed first entry closes
+its epoch and cancels partial durable dispatch state; a failed re-entry preserves the already-on
+mode but still requires a fresh projection.
 
 Periodic pending-dispatch polling is admitted by that facade but reads durable authority only in
 the effect runner. The runtime assigns a monotonic operation correlated to the exact workspace and

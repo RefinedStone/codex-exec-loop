@@ -558,9 +558,15 @@ fn native_tui_uses_one_composition_owned_client_runtime_ingress() {
 
     for required in [
         "pub(crate)structNativeClientRuntime",
-        "runtime:CoreRuntime<CoreEffectRunner>",
-        "pub(crate)fndispatch_client_event(&mutself,input:CoreInput)->CoreDispatchOutcome",
-        "self.runtime.dispatch_input(input)",
+        "core:NativeCoreRuntime",
+        "parallel_control_plane:ParallelModeControlPlaneHandle<NativeParallelModeControlPlaneEventSink>",
+        "parallel_completion_rx:Receiver<ParallelModeControlPlaneBackgroundEvent>",
+        "pub(crate)enumNativeClientEvent",
+        "pub(crate)fncore(input:CoreInput)->Self",
+        "Self::Core(Box::new(input))",
+        "pub(crate)fndispatch_client_event(&mutself,event:NativeClientEvent,)->NativeClientDispatchOutcome",
+        "NativeClientEvent::Core(input)=>",
+        "self.core.runtime.dispatch_input(*input)",
     ] {
         assert!(
             compact_facade.contains(required),
@@ -568,16 +574,22 @@ fn native_tui_uses_one_composition_owned_client_runtime_ingress() {
         );
     }
     assert_eq!(
-        compact_facade.matches("input:CoreInput").count(),
+        compact_facade
+            .matches("NativeClientEvent::Core(input)=>")
+            .count(),
         1,
-        "NativeClientRuntime must expose exactly one explicit CoreInput ingress"
+        "NativeClientRuntime must route Core input through exactly one unified client-event arm"
     );
     assert_eq!(
         compact_facade
-            .matches("self.runtime.dispatch_input(input)")
+            .matches("self.core.runtime.dispatch_input(*input)")
             .count(),
         1,
-        "the explicit client event must enter the raw runtime exactly once"
+        "the unified client event must enter the raw core runtime exactly once"
+    );
+    assert!(
+        !compact_facade.contains("NativeClientEvent::ParallelCompletion"),
+        "parallel worker completion must remain private to NativeClientRuntime polling"
     );
     for forbidden_api in [
         "pub(crate)fndispatch_command(",
@@ -773,10 +785,6 @@ fn native_tui_app_owns_exactly_four_typed_private_state_slices() {
             "NativeTuiRuntimeState",
             &[
                 ("client_runtime", "NativeClientRuntime"),
-                (
-                    "parallel_mode_control_plane",
-                    "ParallelModeControlPlaneHandle<TuiParallelModeControlPlaneEventSink>",
-                ),
                 ("github_review_polling_state", "GithubReviewPollingState"),
                 ("tx", "SyncSender<BackgroundMessage>"),
                 ("rx", "Receiver<BackgroundMessage>"),
@@ -1977,11 +1985,11 @@ fn parallel_pending_dispatch_poll_never_reads_authority_under_the_control_plane_
         .map(|(body, _)| body)
         .expect("pending dispatch poll worker should have a bounded source body");
     assert!(
-        poll_worker.contains("thread::spawn(move ||")
+        poll_worker.contains("spawn_parallel_effect_completion_worker(")
             && poll_worker.contains(".pending_dispatch_wake(")
             && poll_worker
                 .contains("ParallelModeControlPlaneBackgroundEvent::PendingDispatchWakePolled"),
-        "pending dispatch polling must perform authority I/O and completion delivery inside the worker"
+        "pending dispatch polling must perform authority I/O inside the panic-total completion worker"
     );
     let runtime = fs::read_to_string("src/application/service/parallel_mode/control_plane/mod.rs")
         .expect("parallel control-plane runtime source should load");
@@ -2020,8 +2028,8 @@ fn parallel_dispatch_mutations_never_run_inline_under_the_control_plane_mutex() 
         .map(|(body, _)| body)
         .expect("parallel dispatch mutation worker should have a bounded source body");
     let (before_spawn, worker_closure) = mutation_worker
-        .split_once("thread::spawn(move || {")
-        .expect("parallel dispatch mutation must have an explicit worker closure");
+        .split_once("spawn_parallel_effect_completion_worker(")
+        .expect("parallel dispatch mutation must use the audited completion worker");
     for forbidden in [
         ".load_runtime_projection_or_invalid(",
         ".enqueue_dispatch_commands_for_event(",
@@ -3394,18 +3402,16 @@ fn tui_planning_reset_enters_through_one_core_owned_async_coordinator() {
         .collect::<String>();
     assert!(
         compact_planning_controller.contains(
-            "dispatch_client_event(CoreInput::Command(AppCommand::ResetPlanningWorkspace("
+            "reduce_core_client_event(CoreInput::Command(AppCommand::ResetPlanningWorkspace("
         ) && compact_planning_controller.contains(
-            "dispatch_client_event(CoreInput::Command(AppCommand::StageSimplePlanningDraft"
-        ) && compact_planning_editor_controller
-            .contains("dispatch_client_event(CoreInput::Command(AppCommand::StagePlanningEditor")
-            && compact_planning_controller.contains(
-                "dispatch_client_event(CoreInput::Command(AppCommand::LoadSimplePlanningEditor"
-            )
-            && compact_planning_controller.contains(
-                "dispatch_client_event(CoreInput::Command(AppCommand::PromoteSimplePlanningDraft"
-            )
-            && planning_controller.contains("PlanningWorkspaceOperationUiSettlement::Applied"),
+            "reduce_core_client_event(CoreInput::Command(AppCommand::StageSimplePlanningDraft"
+        ) && compact_planning_editor_controller.contains(
+            "reduce_core_client_event(CoreInput::Command(AppCommand::StagePlanningEditor"
+        ) && compact_planning_controller.contains(
+            "reduce_core_client_event(CoreInput::Command(AppCommand::LoadSimplePlanningEditor"
+        ) && compact_planning_controller.contains(
+            "reduce_core_client_event(CoreInput::Command(AppCommand::PromoteSimplePlanningDraft"
+        ) && planning_controller.contains("PlanningWorkspaceOperationUiSettlement::Applied"),
         "TUI reset and simple authoring must enter through the typed client event and gate presentation on exact UI settlement"
     );
     assert!(
@@ -3935,7 +3941,7 @@ fn tui_queue_mutations_enter_through_core_runtime() {
     assert!(
         controller.contains("QueueMutationIntent {")
             && compact_controller.contains(
-                ".dispatch_client_event(CoreInput::Command(AppCommand::SubmitQueueMutation("
+                ".reduce_core_client_event(CoreInput::Command(AppCommand::SubmitQueueMutation("
             )
             && compact_controller.contains("Box::new(intent)"),
         "TUI Queue mutations must positively enter through AppCommand::SubmitQueueMutation"
@@ -5080,7 +5086,7 @@ fn tui_parallel_frame_uses_one_control_plane_and_event_projection_sample() {
         "parallel_panel: ParallelPanelProjectionSample",
         "parallel_panel: ParallelPanelProjectionSample::from_parts(",
         "let parallel_control_plane = app",
-        ".parallel_mode_control_plane",
+        ".parallel_control_plane_projection()",
         "parallel_supervisor_events: app.shell.parallel_supervisor_event_log.projection()",
     ] {
         assert!(
@@ -6245,7 +6251,7 @@ fn tui_approval_decisions_enter_through_core_runtime() {
         .collect::<String>();
     assert!(
         compact_controller_source.contains(
-            ".dispatch_client_event(CoreInput::Command(AppCommand::SubmitApprovalDecision"
+            ".reduce_core_client_event(CoreInput::Command(AppCommand::SubmitApprovalDecision"
         ),
         "TUI approval decisions must positively enter through AppCommand::SubmitApprovalDecision"
     );

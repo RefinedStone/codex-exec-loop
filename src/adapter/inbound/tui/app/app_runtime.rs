@@ -5,11 +5,9 @@ use crate::application::service::conversation_runtime_event::ConversationStreamE
 #[cfg(test)]
 use crate::application::service::conversation_service::ConversationService;
 #[cfg(test)]
+use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneBackgroundEvent;
+#[cfg(test)]
 use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneComposition;
-use crate::application::service::parallel_mode::control_plane::{
-    ParallelModeControlPlaneBackgroundEvent, ParallelModeControlPlaneEventSink,
-    ParallelModeControlPlaneHandle,
-};
 #[cfg(test)]
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 #[cfg(test)]
@@ -21,7 +19,8 @@ use crate::application::service::session_service::SessionService;
 #[cfg(test)]
 use crate::application::service::startup_service::StartupService;
 use crate::composition::native_client_runtime::{
-    NativeClientRuntime, NativeTuiApplicationComposition,
+    NativeClientDispatchOutcome, NativeClientEvent, NativeClientRuntime,
+    NativeTuiApplicationComposition,
 };
 #[cfg(test)]
 use crate::core::app::StartupReadySnapshot;
@@ -60,8 +59,8 @@ use super::{
 pub(super) const TUI_BACKGROUND_CHANNEL_CAPACITY: usize = 256;
 
 /* NativeTuiApp is assembled as reducer-owned state plus composition-owned runtime
- * facades. Runtime files keep pure reducers away from threads and raw services:
- * reducers return effects, typed runtime/control-plane handles execute them, and
+ * facade. Runtime files keep pure reducers away from threads and raw services:
+ * reducers return effects, the typed client runtime executes them, and
  * ShellRuntime later drains their messages back into reducers.
  */
 #[derive(Debug, Clone)]
@@ -79,27 +78,11 @@ pub(super) enum BackgroundMessage {
     ConversationRuntimeNotice(String),
     OperatorAlert(OperatorAlert),
     InvalidateParallelModeSupervisorSnapshot,
-    ParallelModeControlPlaneEvent(Box<ParallelModeControlPlaneBackgroundEvent>),
     #[cfg(test)]
     PostTurnEvaluationCompleted {
         correlation: crate::core::app::PostTurnEvaluationCorrelation,
         execution: Box<PostTurnEvaluationExecution>,
     },
-}
-
-#[derive(Clone)]
-pub(super) struct TuiParallelModeControlPlaneEventSink {
-    tx: mpsc::SyncSender<BackgroundMessage>,
-}
-
-impl ParallelModeControlPlaneEventSink for TuiParallelModeControlPlaneEventSink {
-    fn send_control_plane_event(&self, event: ParallelModeControlPlaneBackgroundEvent) {
-        let _ = self
-            .tx
-            .send(BackgroundMessage::ParallelModeControlPlaneEvent(Box::new(
-                event,
-            )));
-    }
 }
 
 pub(super) struct NativeTuiAppRuntimeChannels {
@@ -111,12 +94,6 @@ impl NativeTuiAppRuntimeChannels {
     pub(super) fn new() -> Self {
         let (tx, rx) = mpsc::sync_channel(TUI_BACKGROUND_CHANNEL_CAPACITY);
         Self { tx, rx }
-    }
-
-    pub(super) fn parallel_mode_event_sink(&self) -> TuiParallelModeControlPlaneEventSink {
-        TuiParallelModeControlPlaneEventSink {
-            tx: self.tx.clone(),
-        }
     }
 }
 
@@ -379,45 +356,6 @@ mod tests {
     }
 
     #[test]
-    fn parallel_mode_event_sink_routes_background_events_to_runtime_channel() {
-        let channels = NativeTuiAppRuntimeChannels::new();
-        let sink = channels.parallel_mode_event_sink();
-        let effect_id =
-            crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneEffectId {
-                sequence: 7,
-                kind: crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneEffectKind::RunOrchestrator,
-            };
-
-        sink.send_control_plane_event(
-            ParallelModeControlPlaneBackgroundEvent::ConversationRuntimeNotice {
-                workspace_directory: "/repo".to_string(),
-                epoch_id: 3,
-                effect_id,
-                notice: "parallel notice".to_string(),
-            },
-        );
-
-        match channels.rx.try_recv().expect("event should be queued") {
-            BackgroundMessage::ParallelModeControlPlaneEvent(event) => {
-                let ParallelModeControlPlaneBackgroundEvent::ConversationRuntimeNotice {
-                    workspace_directory,
-                    epoch_id,
-                    effect_id: received_effect_id,
-                    notice,
-                } = *event
-                else {
-                    panic!("unexpected control-plane event");
-                };
-                assert_eq!(workspace_directory, "/repo");
-                assert_eq!(epoch_id, 3);
-                assert_eq!(received_effect_id, effect_id);
-                assert_eq!(notice, "parallel notice");
-            }
-            other => panic!("unexpected background message: {other:?}"),
-        }
-    }
-
-    #[test]
     fn tui_background_channel_is_bounded_and_disconnects_producers() {
         let channels = NativeTuiAppRuntimeChannels::new();
         for sequence in 0..TUI_BACKGROUND_CHANNEL_CAPACITY {
@@ -450,18 +388,12 @@ mod tests {
     #[test]
     fn shared_core_snapshot_identity_does_not_suppress_tui_events() {
         let mut app = test_helpers::test_native_tui_app();
-        let first =
-            app.runtime
-                .client_runtime
-                .dispatch_client_event(CoreInput::ConversationRuntimeNotice(
-                    "first notice".to_string(),
-                ));
-        let second =
-            app.runtime
-                .client_runtime
-                .dispatch_client_event(CoreInput::ConversationRuntimeNotice(
-                    "second notice".to_string(),
-                ));
+        let first = app.reduce_core_client_event(CoreInput::ConversationRuntimeNotice(
+            "first notice".to_string(),
+        ));
+        let second = app.reduce_core_client_event(CoreInput::ConversationRuntimeNotice(
+            "second notice".to_string(),
+        ));
 
         assert!(Arc::ptr_eq(&first.snapshot, &second.snapshot));
         app.apply_core_dispatch_outcome(first);
@@ -718,9 +650,7 @@ mod tests {
         event: TurnStreamEvent,
     ) {
         let outcome = app
-            .runtime
-            .client_runtime
-            .dispatch_client_event(CoreInput::ConversationStreamUpdated { correlation, event });
+            .reduce_core_client_event(CoreInput::ConversationStreamUpdated { correlation, event });
         app.apply_core_dispatch_outcome(outcome);
     }
 
@@ -729,36 +659,21 @@ mod tests {
         let planning = test_helpers::test_planning_services(Arc::new(
             FilesystemPlanningWorkspaceAdapter::new(),
         ));
-        let binding = NativeTuiParallelModeBinding::from_composition(
-            test_helpers::test_parallel_mode_control_plane_composition(planning),
-        );
+        let composition = test_helpers::test_parallel_mode_control_plane_composition(planning);
+        let parallel_turns = composition.parallel_mode_turn_service();
+        let mut app = test_helpers::test_native_tui_app_with_parallel_mode_composition(composition);
         let workspace = "/tmp/shared-automation-guard".to_string();
 
-        let _ = binding.parallel_mode_control_plane.handle_command(
-            crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneCommand::OpenEpoch {
-                workspace_directory: workspace.clone(),
-            },
-        );
-        let epoch_id = binding
-            .parallel_mode_control_plane
-            .current_epoch_id_for_workspace(&workspace)
+        app.open_parallel_mode_automation_epoch(workspace.clone());
+        let epoch_id = app
+            .runtime
+            .client_runtime
+            .current_parallel_epoch_id_for_workspace(&workspace)
             .expect("open epoch should expose its id");
-        assert!(
-            binding
-                .parallel_turns
-                .automation_epoch_is_active(&workspace, epoch_id)
-        );
+        assert!(parallel_turns.automation_epoch_is_active(&workspace, epoch_id));
 
-        let _ = binding.parallel_mode_control_plane.handle_command(
-            crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneCommand::Disable {
-                workspace_directory: workspace.clone(),
-            },
-        );
-        assert!(
-            !binding
-                .parallel_turns
-                .automation_epoch_is_active(&workspace, epoch_id)
-        );
+        app.close_parallel_mode_automation_epoch();
+        assert!(!parallel_turns.automation_epoch_is_active(&workspace, epoch_id));
     }
 
     #[test]
@@ -787,7 +702,7 @@ mod tests {
             .is_empty()
             && Instant::now() < deadline
         {
-            app.poll_core_runtime_inputs(16);
+            app.poll_client_runtime_events(16);
             std::thread::yield_now();
         }
         let duplicate_deadline = Instant::now() + Duration::from_secs(2);
@@ -797,7 +712,7 @@ mod tests {
             < 2
             && Instant::now() < duplicate_deadline
         {
-            app.poll_core_runtime_inputs(16);
+            app.poll_client_runtime_events(16);
             dispatch_review_persistence_stream_event(
                 &mut app,
                 correlation,
@@ -820,7 +735,7 @@ mod tests {
                 .load(Ordering::SeqCst),
             2
         );
-        while app.poll_core_runtime_inputs(16) {}
+        while app.poll_client_runtime_events(16) {}
 
         let thread_reviews = review_repository
             .thread_reviews
@@ -919,7 +834,7 @@ mod tests {
             .is_empty()
             && Instant::now() < deadline
         {
-            app.poll_core_runtime_inputs(16);
+            app.poll_client_runtime_events(16);
             std::thread::yield_now();
         }
         assert_eq!(
@@ -1145,12 +1060,12 @@ mod tests {
     fn conversation_lifecycle_closes_only_epochs_owned_by_the_workspace_being_left() {
         let mut app = test_helpers::test_native_tui_app();
         app.runtime
-            .parallel_mode_control_plane
-            .force_epoch_for_test("/tmp/worker-b", 1);
+            .client_runtime
+            .force_parallel_epoch_for_test("/tmp/worker-b", 1);
         assert!(
             app.runtime
-                .parallel_mode_control_plane
-                .automation_epoch_is_active("/tmp/worker-b", 1)
+                .client_runtime
+                .parallel_automation_epoch_is_active_for_test("/tmp/worker-b", 1)
         );
 
         app.dispatch_conversation_lifecycle(ConversationLifecycleEvent::NewDraftOpened {
@@ -1158,7 +1073,7 @@ mod tests {
         });
 
         assert_eq!(
-            app.runtime.parallel_mode_control_plane.epoch_snapshot(),
+            app.runtime.client_runtime.parallel_epoch_snapshot(),
             crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneEpochSnapshot {
                 workspace_directory: None,
                 current_epoch_id: None,
@@ -1166,8 +1081,8 @@ mod tests {
         );
         assert!(
             !app.runtime
-                .parallel_mode_control_plane
-                .automation_epoch_is_active("/tmp/worker-b", 1)
+                .client_runtime
+                .parallel_automation_epoch_is_active_for_test("/tmp/worker-b", 1)
         );
 
         let draft_projection = app.planning_runtime_projection_snapshot();
@@ -1187,15 +1102,15 @@ mod tests {
         assert_eq!(app.planning_runtime_projection_snapshot(), draft_projection);
 
         app.runtime
-            .parallel_mode_control_plane
-            .force_epoch_for_test("/tmp/root", 2);
+            .client_runtime
+            .force_parallel_epoch_for_test("/tmp/root", 2);
         app.dispatch_conversation_lifecycle(ConversationLifecycleEvent::NewDraftOpened {
             workspace_directory: "/tmp/root".to_string(),
         });
         assert_eq!(
             app.runtime
-                .parallel_mode_control_plane
-                .current_epoch_id_for_workspace("/tmp/root"),
+                .client_runtime
+                .current_parallel_epoch_id_for_workspace("/tmp/root"),
             Some(2)
         );
 
@@ -1216,8 +1131,8 @@ mod tests {
         });
         assert!(
             app.runtime
-                .parallel_mode_control_plane
-                .epoch_snapshot()
+                .client_runtime
+                .parallel_epoch_snapshot()
                 .current_epoch_id
                 .is_none()
         );
@@ -1540,8 +1455,7 @@ mod tests {
 pub(crate) struct NativeTuiParallelModeBinding {
     parallel_turns: ParallelModeTurnService,
     planning_feature: PlanningServices,
-    parallel_mode_control_plane:
-        ParallelModeControlPlaneHandle<TuiParallelModeControlPlaneEventSink>,
+    parallel_mode_control_plane: ParallelModeControlPlaneComposition,
     runtime_channels: NativeTuiAppRuntimeChannels,
 }
 
@@ -1551,12 +1465,10 @@ impl NativeTuiParallelModeBinding {
         composition: ParallelModeControlPlaneComposition,
     ) -> NativeTuiParallelModeBinding {
         let runtime_channels = NativeTuiAppRuntimeChannels::new();
-        let parallel_mode_control_plane =
-            composition.bind_event_sink(runtime_channels.parallel_mode_event_sink());
         NativeTuiParallelModeBinding {
             parallel_turns: composition.parallel_mode_turn_service(),
             planning_feature: composition.planning().clone(),
-            parallel_mode_control_plane,
+            parallel_mode_control_plane: composition,
             runtime_channels,
         }
     }
@@ -1583,10 +1495,10 @@ impl NativeTuiApp {
             conversation_service,
             planning_feature,
             parallel_turns,
+            parallel_mode_control_plane,
         );
         Self::new_with_bound_application(
             client_runtime,
-            parallel_mode_control_plane,
             runtime_channels,
             turn_control_truth,
             GithubReviewPollingBootstrap::disabled(),
@@ -1598,12 +1510,10 @@ impl NativeTuiApp {
         github_review_polling: GithubReviewPollingBootstrap,
     ) -> Self {
         let runtime_channels = NativeTuiAppRuntimeChannels::new();
-        let application = application.bind_event_sink(runtime_channels.parallel_mode_event_sink());
-        let (client_runtime, parallel_mode_control_plane, turn_control_truth) =
-            application.into_parts();
+        let application = application.bind_client_runtime();
+        let (client_runtime, turn_control_truth) = application.into_parts();
         Self::new_with_bound_application(
             client_runtime,
-            parallel_mode_control_plane,
             runtime_channels,
             turn_control_truth,
             github_review_polling,
@@ -1641,11 +1551,11 @@ impl NativeTuiApp {
             conversation_service,
             planning_feature,
             parallel_turns,
+            parallel_mode_control_plane,
             loader,
         );
         Self::new_with_bound_application(
             client_runtime,
-            parallel_mode_control_plane,
             runtime_channels,
             turn_control_truth,
             github_review_polling,
@@ -1654,9 +1564,6 @@ impl NativeTuiApp {
 
     fn new_with_bound_application(
         client_runtime: NativeClientRuntime,
-        parallel_mode_control_plane: ParallelModeControlPlaneHandle<
-            TuiParallelModeControlPlaneEventSink,
-        >,
         runtime_channels: NativeTuiAppRuntimeChannels,
         turn_control_truth: crate::domain::conversation::ConversationRuntimeControlTruth,
         github_review_polling: GithubReviewPollingBootstrap,
@@ -1729,7 +1636,6 @@ impl NativeTuiApp {
             },
             runtime: super::NativeTuiRuntimeState {
                 client_runtime,
-                parallel_mode_control_plane,
                 github_review_polling_state,
                 tx: runtime_channels.tx,
                 rx: runtime_channels.rx,
@@ -1828,16 +1734,38 @@ impl NativeTuiApp {
         }
     }
 
-    pub(super) fn poll_core_runtime_inputs(&mut self, max_inputs: usize) -> bool {
+    pub(super) fn poll_client_runtime_events(&mut self, max_inputs: usize) -> bool {
         let mut changed = false;
         for _ in 0..max_inputs {
             let Some(outcome) = self.runtime.client_runtime.poll_pending_client_event() else {
                 break;
             };
             changed = true;
-            self.apply_core_dispatch_outcome(outcome);
+            self.apply_native_client_dispatch_outcome(outcome);
         }
         changed
+    }
+
+    pub(super) fn apply_native_client_dispatch_outcome(
+        &mut self,
+        outcome: NativeClientDispatchOutcome,
+    ) -> Option<AppliedNativeParallelDispatch> {
+        match outcome {
+            NativeClientDispatchOutcome::Core(outcome) => {
+                self.apply_core_dispatch_outcome(outcome);
+                None
+            }
+            NativeClientDispatchOutcome::Parallel(outcome) => {
+                let presentation_changed = self
+                    .apply_parallel_mode_control_plane_presentation_events(
+                        outcome.presentation_events,
+                    );
+                Some(AppliedNativeParallelDispatch {
+                    presentation_changed,
+                    auto_follow_prompt_consumed: outcome.auto_follow_prompt_consumed,
+                })
+            }
+        }
     }
 
     pub(super) fn apply_core_dispatch_outcome(&mut self, outcome: CoreDispatchOutcome) {
@@ -2170,8 +2098,34 @@ impl NativeTuiApp {
     }
 
     pub(super) fn dispatch_client_event(&mut self, input: CoreInput) {
-        let outcome = self.runtime.client_runtime.dispatch_client_event(input);
+        let outcome = self.reduce_core_client_event(input);
         self.apply_core_dispatch_outcome(outcome);
+    }
+
+    pub(super) fn reduce_core_client_event(&mut self, input: CoreInput) -> CoreDispatchOutcome {
+        match self
+            .runtime
+            .client_runtime
+            .dispatch_client_event(NativeClientEvent::core(input))
+        {
+            NativeClientDispatchOutcome::Core(outcome) => outcome,
+            NativeClientDispatchOutcome::Parallel(_) => {
+                unreachable!("Core client event must return a Core outcome")
+            }
+        }
+    }
+
+    pub(super) fn dispatch_parallel_client_event(
+        &mut self,
+        event: NativeClientEvent,
+    ) -> AppliedNativeParallelDispatch {
+        assert!(
+            !matches!(&event, NativeClientEvent::Core(_)),
+            "parallel dispatch must not receive a Core event"
+        );
+        let outcome = self.runtime.client_runtime.dispatch_client_event(event);
+        self.apply_native_client_dispatch_outcome(outcome)
+            .expect("parallel client event must return a parallel outcome")
     }
 
     pub(super) fn apply_core_conversation_snapshot(&mut self, snapshot: CoreConversationSnapshot) {
@@ -2627,4 +2581,9 @@ impl NativeTuiApp {
         self.conversation.auto_follow_overlay_ui_state =
             reduce_auto_follow_overlay_ui(state, event);
     }
+}
+
+pub(super) struct AppliedNativeParallelDispatch {
+    pub(super) presentation_changed: bool,
+    pub(super) auto_follow_prompt_consumed: bool,
 }

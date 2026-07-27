@@ -4,7 +4,6 @@ use crate::adapter::inbound::tui::shell_chrome::{
     reduce_shell_chrome,
 };
 use crate::adapter::inbound::tui::supersession_mud::SupersessionMudUiState;
-use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneHandle;
 use crate::application::service::planning::PlanningTaskHandoff;
 use crate::composition::native_client_runtime::NativeClientRuntime;
 use crate::core::app::{PlanningRuntimeRefreshCorrelation, TurnSteerCorrelation};
@@ -173,9 +172,9 @@ mod view_selection_overlay_ui;
 // app module root. Keeping them here makes the dependency graph explicit: app
 // slices consume reducer events/effects and presentation types without reaching
 // around to unrelated files.
+use app_runtime::BackgroundMessage;
 #[cfg(test)]
 pub(super) use app_runtime::NativeTuiParallelModeBinding;
-use app_runtime::{BackgroundMessage, TuiParallelModeControlPlaneEventSink};
 use auto_follow_controls::{AutoFollowControlEvent, reduce_auto_follow_controls};
 use auto_follow_overlay_ui::{
     AutoFollowOverlayUiEvent, AutoFollowOverlayUiState, reduce_auto_follow_overlay_ui,
@@ -420,8 +419,6 @@ struct NativeTuiPlanningState {
 
 struct NativeTuiRuntimeState {
     client_runtime: NativeClientRuntime,
-    parallel_mode_control_plane:
-        ParallelModeControlPlaneHandle<TuiParallelModeControlPlaneEventSink>,
     github_review_polling_state: GithubReviewPollingState,
     tx: SyncSender<BackgroundMessage>,
     rx: Receiver<BackgroundMessage>,

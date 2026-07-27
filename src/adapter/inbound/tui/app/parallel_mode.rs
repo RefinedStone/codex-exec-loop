@@ -3,13 +3,15 @@ use std::time::Instant;
 
 use crate::adapter::inbound::tui::shell_chrome::{ShellChromeEvent, ShellOverlay};
 #[cfg(test)]
+use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneBackgroundEvent;
+#[cfg(test)]
 use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneEffectId;
 #[cfg(test)]
 use crate::application::service::parallel_mode::control_plane::parallel_mode_distributor_tick_signature;
 use crate::application::service::parallel_mode::control_plane::{
-    ParallelModeControlPlaneBackgroundEvent, ParallelModeControlPlaneCommand,
-    ParallelModeControlPlanePresentationEvent,
+    ParallelModeControlPlaneCommand, ParallelModeControlPlanePresentationEvent,
 };
+use crate::composition::native_client_runtime::NativeClientEvent;
 use crate::core::app::CoreInput;
 use crate::diagnostics::event_log;
 use crate::domain::parallel_mode::{
@@ -39,18 +41,19 @@ use super::{
 };
 
 impl NativeTuiApp {
+    #[cfg(test)]
     pub(super) fn apply_parallel_mode_control_plane_background_event(
         &mut self,
         event: ParallelModeControlPlaneBackgroundEvent,
     ) {
-        let events = self
+        let outcome = self
             .runtime
-            .parallel_mode_control_plane
-            .handle_background_event(event);
-        self.apply_parallel_mode_control_plane_presentation_events(events);
+            .client_runtime
+            .dispatch_parallel_completion_for_test(event);
+        self.apply_native_client_dispatch_outcome(outcome);
     }
 
-    fn apply_parallel_mode_control_plane_presentation_events(
+    pub(super) fn apply_parallel_mode_control_plane_presentation_events(
         &mut self,
         events: Vec<ParallelModeControlPlanePresentationEvent>,
     ) -> bool {
@@ -103,15 +106,12 @@ impl NativeTuiApp {
         &mut self,
         command: ParallelModeControlPlaneCommand,
     ) -> bool {
-        let events = self
-            .runtime
-            .parallel_mode_control_plane
-            .handle_command(command);
-        self.apply_parallel_mode_control_plane_presentation_events(events)
+        self.dispatch_parallel_client_event(NativeClientEvent::ParallelCommand(command))
+            .presentation_changed
     }
 
     pub(crate) fn parallel_mode_enabled(&self) -> bool {
-        self.runtime.parallel_mode_control_plane.mode_enabled()
+        self.runtime.client_runtime.parallel_mode_enabled()
     }
     pub(crate) fn parallel_mode_readiness_snapshot(&self) -> Option<ParallelModeReadinessSnapshot> {
         self.current_parallel_mode_readiness_projection()
@@ -119,34 +119,34 @@ impl NativeTuiApp {
     #[cfg(test)]
     pub(crate) fn parallel_mode_control_effect_in_flight(&self) -> bool {
         self.runtime
-            .parallel_mode_control_plane
-            .control_effect_in_flight()
+            .client_runtime
+            .parallel_control_effect_in_flight_for_test()
     }
     #[cfg(test)]
     pub(crate) fn parallel_mode_automation_epoch_id(&self) -> Option<u64> {
         let workspace_directory = self.planning_workspace_directory();
         self.runtime
-            .parallel_mode_control_plane
-            .current_epoch_id_for_workspace(&workspace_directory)
+            .client_runtime
+            .current_parallel_epoch_id_for_workspace(&workspace_directory)
     }
     #[cfg(test)]
     pub(crate) fn parallel_mode_supervisor_refresh_in_flight(&self) -> bool {
         self.runtime
-            .parallel_mode_control_plane
-            .supervisor_refresh_in_flight()
+            .client_runtime
+            .parallel_supervisor_refresh_in_flight_for_test()
     }
     #[cfg(test)]
     pub(crate) fn parallel_mode_orchestrator_wake_in_flight(&self) -> bool {
         self.runtime
-            .parallel_mode_control_plane
-            .orchestrator_wake_in_flight()
+            .client_runtime
+            .parallel_orchestrator_wake_in_flight_for_test()
     }
     #[cfg(test)]
     pub(crate) fn set_parallel_mode_enabled_for_test(&mut self, enabled: bool) {
         let workspace_directory = self.planning_workspace_directory();
         self.runtime
-            .parallel_mode_control_plane
-            .force_mode_for_test(workspace_directory, enabled);
+            .client_runtime
+            .force_parallel_mode_for_test(workspace_directory, enabled);
     }
     #[cfg(test)]
     pub(crate) fn set_parallel_mode_initial_pool_reset_completed_for_test(
@@ -154,15 +154,15 @@ impl NativeTuiApp {
         completed: bool,
     ) {
         self.runtime
-            .parallel_mode_control_plane
-            .force_initial_pool_reset_completed_for_test(completed);
+            .client_runtime
+            .force_parallel_initial_pool_reset_completed_for_test(completed);
     }
     #[cfg(test)]
     pub(crate) fn set_parallel_mode_automation_epoch_for_test(&mut self, epoch_id: u64) {
         let workspace_directory = self.planning_workspace_directory();
         self.runtime
-            .parallel_mode_control_plane
-            .force_epoch_for_test(workspace_directory, epoch_id);
+            .client_runtime
+            .force_parallel_epoch_for_test(workspace_directory, epoch_id);
     }
     #[cfg(test)]
     pub(crate) fn mark_parallel_mode_supervisor_refresh_in_flight_for_test(
@@ -172,8 +172,8 @@ impl NativeTuiApp {
         let epoch_id = self.parallel_mode_automation_epoch_id().unwrap_or(1);
         let effect_id = self
             .runtime
-            .parallel_mode_control_plane
-            .force_supervisor_refresh_in_flight_for_test(workspace_directory, epoch_id);
+            .client_runtime
+            .force_parallel_supervisor_refresh_in_flight_for_test(workspace_directory, epoch_id);
         (epoch_id, effect_id)
     }
     #[cfg(test)]
@@ -181,8 +181,8 @@ impl NativeTuiApp {
         &self,
     ) -> Option<ParallelModeAutomationTrigger> {
         self.runtime
-            .parallel_mode_control_plane
-            .last_automation_trigger()
+            .client_runtime
+            .last_parallel_automation_trigger()
     }
     pub(crate) fn parallel_mode_supervisor_snapshot(&self) -> ParallelModeSupervisorSnapshot {
         let workspace_directory = self.planning_workspace_directory();
@@ -443,15 +443,13 @@ impl NativeTuiApp {
     ) -> bool {
         let workspace_directory =
             accepted_workspace_directory.unwrap_or_else(|| self.planning_workspace_directory());
-        let control_plane = self.runtime.parallel_mode_control_plane.clone();
-        let outcome = control_plane.continue_post_turn_queue(
+        self.dispatch_parallel_client_event(NativeClientEvent::ParallelPostTurnQueue {
             workspace_directory,
-            event_signal,
+            signal: event_signal,
             auto_follow_prompt_queued,
             has_actionable_queue_head,
-        );
-        self.apply_parallel_mode_control_plane_presentation_events(outcome.presentation_events);
-        outcome.auto_follow_prompt_consumed
+        })
+        .auto_follow_prompt_consumed
     }
 
     pub(super) fn close_parallel_mode_automation_epoch(&mut self) {
@@ -466,7 +464,7 @@ impl NativeTuiApp {
             conversation.disarm_parallel_post_turn_continuation();
         }
         let (workspace_directory, epoch_id) = {
-            let snapshot = self.runtime.parallel_mode_control_plane.epoch_snapshot();
+            let snapshot = self.runtime.client_runtime.parallel_epoch_snapshot();
             (
                 snapshot
                     .workspace_directory
@@ -478,9 +476,8 @@ impl NativeTuiApp {
         self.apply_parallel_mode_control_plane_command(ParallelModeControlPlaneCommand::Disable {
             workspace_directory: workspace_directory.clone(),
         });
-        self.runtime
-            .parallel_mode_control_plane
-            .clear_dispatch_withheld_reason();
+        let _ = self
+            .dispatch_parallel_client_event(NativeClientEvent::ClearParallelDispatchWithheldReason);
         if let Some(epoch_id) = epoch_id {
             event_log::emit_lazy("parallel_automation_epoch_closed", || {
                 serde_json::json!({
@@ -495,7 +492,7 @@ impl NativeTuiApp {
         &mut self,
         target_workspace_directory: &str,
     ) {
-        let epoch = self.runtime.parallel_mode_control_plane.epoch_snapshot();
+        let epoch = self.runtime.client_runtime.parallel_epoch_snapshot();
         let leaves_active_workspace = epoch.current_epoch_id.is_some()
             && epoch.workspace_directory.as_deref() != Some(target_workspace_directory);
         if leaves_active_workspace {
@@ -548,12 +545,12 @@ impl NativeTuiApp {
     ) -> bool {
         let workspace_directory = self.planning_workspace_directory();
         let activity_pulse_visible = self.parallel_mode_activity_pulse_visible_with_sample(sample);
-        let events = self.runtime.parallel_mode_control_plane.tick(
+        self.dispatch_parallel_client_event(NativeClientEvent::ParallelTick {
             now,
             workspace_directory,
             activity_pulse_visible,
-        );
-        self.apply_parallel_mode_control_plane_presentation_events(events)
+        })
+        .presentation_changed
     }
 
     #[cfg(test)]
@@ -569,8 +566,8 @@ impl NativeTuiApp {
         sample: &ParallelPanelProjectionSample,
     ) -> bool {
         self.runtime
-            .parallel_mode_control_plane
-            .supervisor_refresh_due(
+            .client_runtime
+            .parallel_supervisor_refresh_due_for_test(
                 now,
                 self.parallel_mode_activity_pulse_visible_with_sample(sample),
             )
@@ -712,6 +709,30 @@ mod global_runtime_notice_tests {
     }
 
     #[test]
+    fn client_dispatch_settlement_separates_presentation_change_from_prompt_consumption() {
+        let mut app = test_native_tui_app();
+        let workspace_directory = app.planning_workspace_directory();
+
+        assert!(
+            app.inspect_parallel_mode_supervisor(false, true),
+            "synchronous loading/status presentation must be reported as a UI change"
+        );
+
+        app.runtime
+            .client_runtime
+            .force_parallel_mode_for_test(workspace_directory.clone(), true);
+        assert!(
+            app.apply_parallel_mode_post_turn_queue_continuation(
+                Some(workspace_directory),
+                true,
+                Some(ParallelModePostTurnQueueSignal::AutoFollowQueued),
+                true,
+            ),
+            "post-turn routing must return prompt consumption independently of redraw"
+        );
+    }
+
+    #[test]
     fn ordinary_runtime_notice_enters_client_runtime_and_projects_once() {
         let mut app = test_native_tui_app();
         let workspace_directory = app.planning_workspace_directory();
@@ -788,8 +809,8 @@ mod global_runtime_notice_tests {
             let workspace_directory = format!("/tmp/pulse-cleanup-{operation_id}");
             app.conversation.lifecycle.conversation_state = initial_state;
             app.runtime
-                .parallel_mode_control_plane
-                .force_epoch_for_test(&workspace_directory, 1);
+                .client_runtime
+                .force_parallel_epoch_for_test(&workspace_directory, 1);
 
             app.apply_parallel_mode_control_plane_command(
                 ParallelModeControlPlaneCommand::Disable {
@@ -807,12 +828,12 @@ mod global_runtime_notice_tests {
             ));
             let replacement_workspace = format!("/tmp/pulse-cleanup-replacement-{operation_id}");
             app.runtime
-                .parallel_mode_control_plane
-                .force_epoch_for_test(&replacement_workspace, 2);
+                .client_runtime
+                .force_parallel_epoch_for_test(&replacement_workspace, 2);
             assert!(
                 app.runtime
-                    .parallel_mode_control_plane
-                    .presentation_projection()
+                    .client_runtime
+                    .parallel_control_plane_projection()
                     .global_runtime_notices
                     .is_empty(),
                 "the worker must not mutate authority before its background event is reduced"
@@ -820,8 +841,8 @@ mod global_runtime_notice_tests {
             app.apply_parallel_mode_control_plane_background_event(failed_cleanup);
             let projection = app
                 .runtime
-                .parallel_mode_control_plane
-                .presentation_projection()
+                .client_runtime
+                .parallel_control_plane_projection()
                 .global_runtime_notices;
             let [projected_notice] = projection.as_slice() else {
                 panic!("failed cancellation should project one exact notice: {projection:?}");
@@ -883,8 +904,8 @@ mod global_runtime_notice_tests {
             ));
             assert_eq!(
                 app.runtime
-                    .parallel_mode_control_plane
-                    .presentation_projection()
+                    .client_runtime
+                    .parallel_control_plane_projection()
                     .global_runtime_notices
                     .len(),
                 1,
@@ -899,8 +920,8 @@ mod global_runtime_notice_tests {
             );
             assert!(
                 app.runtime
-                    .parallel_mode_control_plane
-                    .presentation_projection()
+                    .client_runtime
+                    .parallel_control_plane_projection()
                     .global_runtime_notices
                     .is_empty()
             );
@@ -920,7 +941,7 @@ mod global_runtime_notice_tests {
                 "settling cleanup must not delete an ordinary notice with identical copy"
             );
             assert_eq!(
-                app.runtime.parallel_mode_control_plane.epoch_snapshot(),
+                app.runtime.client_runtime.parallel_epoch_snapshot(),
                 crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneEpochSnapshot {
                     workspace_directory: Some(replacement_workspace),
                     current_epoch_id: Some(2),
@@ -942,8 +963,8 @@ mod global_runtime_notice_tests {
         let workspace_directory = "/tmp/pulse-cleanup-backoff".to_string();
         app.conversation.lifecycle.conversation_state = ConversationState::Loading;
         app.runtime
-            .parallel_mode_control_plane
-            .force_epoch_for_test(&workspace_directory, 1);
+            .client_runtime
+            .force_parallel_epoch_for_test(&workspace_directory, 1);
 
         app.apply_parallel_mode_control_plane_command(ParallelModeControlPlaneCommand::Disable {
             workspace_directory,
@@ -974,8 +995,8 @@ mod global_runtime_notice_tests {
         app.apply_parallel_mode_control_plane_background_event(failed_retry);
         assert_eq!(
             app.runtime
-                .parallel_mode_control_plane
-                .presentation_projection()
+                .client_runtime
+                .parallel_control_plane_projection()
                 .global_runtime_notices
                 .len(),
             1,
@@ -1003,15 +1024,9 @@ mod global_runtime_notice_tests {
     fn recv_control_plane_background_event(
         app: &NativeTuiApp,
     ) -> ParallelModeControlPlaneBackgroundEvent {
-        match app
-            .runtime
-            .rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("control-plane worker should return through the production TUI channel")
-        {
-            super::super::BackgroundMessage::ParallelModeControlPlaneEvent(event) => *event,
-            event => panic!("expected a control-plane background event, got {event:?}"),
-        }
+        app.runtime
+            .client_runtime
+            .recv_parallel_completion_for_test(Duration::from_secs(2))
     }
 
     fn wait_for_mutation_count(count: &AtomicUsize, expected: usize) {

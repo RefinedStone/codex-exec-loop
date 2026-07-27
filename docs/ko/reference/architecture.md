@@ -17,22 +17,21 @@ composition -> core + application + adapter/outbound
 
 TUI 행은 현재 남아 있는 과도기 projection 의존성을 숨기지 않고 표현합니다. Production bootstrap은
 raw application service를 받지 않습니다. Composition이 service를 소비해 하나의 opaque native
-application object를 만들고, adapter는 여기에 event sink를 bind해 `NativeClientRuntime`, typed
-`ParallelModeControlPlaneHandle`, immutable runtime-control truth만 받습니다.
+application object를 만들며 adapter는 `NativeClientRuntime`과 immutable runtime-control truth만
+받습니다. Parallel control-plane handle, event sink, completion mailbox는 composition 내부에만
+남습니다.
 
 Client command loop의 **런타임 실행 흐름**은 의도적으로 왕복합니다.
 
 ```text
 TUI intent
-  -> composition/NativeClientRuntime::dispatch_client_event(CoreInput)
-  -> core reducer
-  -> CoreEffect
-  -> composition/CoreEffectRunner
+  -> composition/NativeClientRuntime::dispatch_client_event(NativeClientEvent)
+  -> core reducer/CoreEffect 또는 application parallel control-plane/effect
   -> application use case / outbound port
-  -> bounded CoreInput mailbox
+  -> private bounded completion mailbox
   -> composition/NativeClientRuntime::poll_pending_client_event
-  -> core reducer
-  -> snapshot/event
+  -> 해당 authority reducer
+  -> snapshot/presentation event
   -> TUI projection
 ```
 
@@ -67,10 +66,12 @@ process-local TUI runtime을 채택할 필요가 없습니다.
 - `AppEvent`: 외부에 유용한 전이
 - `AppSnapshot`/projection: adapter가 읽는 view model
 
-Composition만 bounded mailbox, `CoreEffectRunner`, `CoreRuntime` driver를 조립합니다. TUI는
-`dispatch_client_event`로 typed input을 전달하고 owned snapshot/projection만 읽으며 raw runtime
-parts를 생성하거나 service를 직접 호출하지 않습니다. Worker의 success/failure/panic completion은
-모두 bounded mailbox를 거쳐 `poll_pending_client_event`로 같은 reducer에 재진입합니다.
+Composition만 bounded mailbox, `CoreEffectRunner`, `CoreRuntime` driver와 application 소유 parallel
+control-plane handle을 조립합니다. TUI는 `dispatch_client_event`로 `NativeClientEvent`만 전달하고
+owned snapshot/projection만 읽습니다. TUI는 parallel completion 진입점을 이름 붙이거나 raw
+runtime/handle/service를 직접 호출할 수 없습니다. Core와 parallel worker의
+success/failure/panic completion은 private mailbox를 거쳐 `poll_pending_client_event`로 해당
+authority reducer에 재진입합니다.
 
 모든 `CoreEffect` variant는 exhaustive dispatch arm 하나와 구조적으로 대응합니다. Typed local
 invalidation 두 개를 제외한 arm은 audited completion worker 하나, 즉시 `EffectCompleted`, 또는
@@ -83,8 +84,9 @@ Mutable client-runtime state는 `CoreRuntime`만 구동합니다. Adapter는 `Co
 completion을 반환할 수 있지만 runtime state의 소유자도 writer도 아닙니다.
 
 시작, session load, conversation 선택, turn 제출, stream reduction, 완료, post-turn 평가가 이 흐름을
-사용합니다. Parallel mutation은 application 소유이며 `ParallelModeControlPlaneHandle`로 진입합니다.
-Core는 projection을 복사할 수 있지만 두 번째 parallel runtime을 소유하면 안 됩니다.
+사용합니다. Parallel mutation은 application 소유이지만 같은 client-runtime facade로 진입하며
+`ParallelModeControlPlaneHandle`은 composition만 보관합니다. Core는 projection을 복사할 수 있지만
+두 번째 parallel runtime을 소유하면 안 됩니다.
 
 `AppState`는 전체 read model을 하나의 `Arc<AppSnapshot>` copy-on-write 권위로 보관합니다.
 `CoreDispatchOutcome`과 generic `SnapshotChanged` event는 해당 전이의 정확히 같은 snapshot
@@ -332,10 +334,12 @@ single-link file이어야 합니다. Repository incarnation marker는 재사용�
 
 ```text
 TUI intent
-  -> application control-plane handle
+  -> NativeClientEvent
+  -> composition-private application control-plane handle
   -> domain decision
   -> durable store / effect runner
-  -> projection
+  -> private completion mailbox
+  -> exact control-plane reduction / projection
   -> core snapshot / TUI rendering
 ```
 
@@ -343,6 +347,15 @@ TUI intent
 accounting, stale completion drop, wake coalescing, durable backpressure, 단일 projection source를
 제공합니다. 이 결정을 다시 검토하지 않고 mailbox actor, TUI/core의 raw parallel service owner,
 두 번째 dispatch queue를 추가하지 않습니다.
+
+모든 비동기 control-plane launcher는 panic을 redaction하는 completion worker 하나를 사용합니다.
+성공, 일반 실패, inactive epoch 거절, panic은 원래 workspace/epoch/effect identity를 가진 terminal
+completion 정확히 하나를 반환합니다. 그 exact identity만 in-flight ledger를 해제하며 stale,
+duplicate, ABA completion은 presentation을 바꾸지 않습니다. Outer parallel agent worker도 같은
+규칙으로 예기치 않은 panic을 redacted `StreamFailed` worker event 하나로 바꿉니다. Wake 또는
+tick 실패는 부분 변경됐을 수 있는 projection을 무효화하고 정확한 supervisor refresh가 끝나기
+전까지 dispatch를 재개하지 않습니다. 최초 entry 실패는 epoch를 닫고 부분 durable dispatch를
+취소하며, 재진입 실패는 이미 켜진 mode를 보존하되 새 projection을 요구합니다.
 
 주기적인 pending dispatch poll은 이 facade가 승인하지만 durable authority 읽기는 effect runner에서만
 실행합니다. Runtime은 정확한 workspace와 epoch에 묶인 단조 증가 operation을 할당하고 poll 하나만

@@ -250,10 +250,6 @@ impl ShellRuntime {
                 BackgroundMessage::InvalidateParallelModeSupervisorSnapshot => {
                     self.app.invalidate_parallel_mode_supervisor_snapshot();
                 }
-                BackgroundMessage::ParallelModeControlPlaneEvent(event) => {
-                    self.app
-                        .apply_parallel_mode_control_plane_background_event(*event);
-                }
                 #[cfg(test)]
                 BackgroundMessage::PostTurnEvaluationCompleted {
                     correlation,
@@ -273,7 +269,7 @@ impl ShellRuntime {
 
         redraw_requested |= self
             .app
-            .poll_core_runtime_inputs(BACKGROUND_MESSAGE_DRAIN_BUDGET);
+            .poll_client_runtime_events(BACKGROUND_MESSAGE_DRAIN_BUDGET);
         if self.first_frame_delivered {
             let workspace_directory = self.app.planning_workspace_directory();
             redraw_requested |= self

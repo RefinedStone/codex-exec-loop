@@ -306,6 +306,11 @@ pub enum ParallelModeControlPlaneCommand {
         epoch_id: u64,
         effect_id: ParallelModeControlPlaneEffectId,
     },
+    EffectFailed {
+        workspace_directory: String,
+        epoch_id: u64,
+        effect_id: ParallelModeControlPlaneEffectId,
+    },
     EntryCompleted {
         workspace_directory: String,
         epoch_id: u64,
@@ -522,6 +527,7 @@ pub struct ParallelModeControlPlaneRuntimeStore {
     current_epoch_id: Option<u64>,
     next_epoch_id: u64,
     parallel_entry_in_flight: Option<ParallelModeControlPlaneEffectId>,
+    parallel_entry_mode_was_enabled: Option<bool>,
     supervisor_refresh_in_flight: Option<ParallelModeControlPlaneEffectId>,
     orchestrator_wake_in_flight: Option<ParallelModeControlPlaneEffectId>,
     orchestrator_tick_in_flight: Option<ParallelModeControlPlaneEffectId>,
@@ -635,6 +641,7 @@ impl Default for ParallelModeControlPlaneRuntimeStore {
             current_epoch_id: None,
             next_epoch_id: 1,
             parallel_entry_in_flight: None,
+            parallel_entry_mode_was_enabled: None,
             supervisor_refresh_in_flight: None,
             orchestrator_wake_in_flight: None,
             orchestrator_tick_in_flight: None,
@@ -767,6 +774,7 @@ impl ParallelModeControlPlaneRuntime {
         self.store.projection_ready = false;
         let effect_id = self.next_effect_id(ParallelModeControlPlaneEffectKind::EnterParallelMode);
         self.store.parallel_entry_in_flight = Some(effect_id);
+        self.store.parallel_entry_mode_was_enabled = Some(false);
         effect_id
     }
 
@@ -866,6 +874,11 @@ impl ParallelModeControlPlaneRuntime {
                 epoch_id,
                 effect_id,
             } => self.effect_completed(workspace_directory, epoch_id, effect_id, &mut outcome),
+            ParallelModeControlPlaneCommand::EffectFailed {
+                workspace_directory,
+                epoch_id,
+                effect_id,
+            } => self.effect_failed(workspace_directory, epoch_id, effect_id, &mut outcome),
             ParallelModeControlPlaneCommand::EntryCompleted {
                 workspace_directory,
                 epoch_id,
@@ -1168,6 +1181,82 @@ impl ParallelModeControlPlaneRuntime {
         self.continue_after_effect_completed(workspace_directory, epoch_id, outcome);
     }
 
+    fn effect_failed(
+        &mut self,
+        workspace_directory: String,
+        epoch_id: u64,
+        effect_id: ParallelModeControlPlaneEffectId,
+        outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
+    ) {
+        let entry_mode_was_enabled = (effect_id.kind
+            == ParallelModeControlPlaneEffectKind::EnterParallelMode)
+            .then_some(self.store.parallel_entry_mode_was_enabled)
+            .flatten()
+            .unwrap_or(false);
+        let unknown_reason = unknown_effect_reason(effect_id.kind);
+        if !self.finish_effect(
+            &workspace_directory,
+            epoch_id,
+            effect_id,
+            effect_id.kind,
+            unknown_reason,
+            outcome,
+        ) {
+            return;
+        }
+        match effect_id.kind {
+            ParallelModeControlPlaneEffectKind::EnterParallelMode if entry_mode_was_enabled => {
+                self.store.mode_enabled = true;
+                self.store.projection_ready = false;
+                self.store.pending_supervisor_refresh = false;
+                self.start_or_queue_supervisor_refresh(workspace_directory, epoch_id, outcome);
+            }
+            ParallelModeControlPlaneEffectKind::EnterParallelMode => {
+                self.store.mode_enabled = false;
+                self.store.current_epoch_id = None;
+                self.store.workspace_directory = None;
+                self.clear_process_effect_state();
+                outcome
+                    .events
+                    .push(ParallelModeControlPlaneEvent::EpochClosed {
+                        workspace_directory: workspace_directory.clone(),
+                        epoch_id,
+                    });
+                outcome
+                    .events
+                    .push(ParallelModeControlPlaneEvent::ModeDisabled {
+                        workspace_directory: workspace_directory.clone(),
+                    });
+                self.schedule_dispatch_mutation(
+                    workspace_directory,
+                    epoch_id,
+                    ParallelModeDispatchMutation::Cancel {
+                        reason: "parallel mode entry failed".to_string(),
+                    },
+                    outcome,
+                );
+            }
+            ParallelModeControlPlaneEffectKind::RefreshSupervisor => {
+                self.store.projection_ready = false;
+                if self.store.pending_supervisor_refresh {
+                    self.store.pending_supervisor_refresh = false;
+                    self.start_or_queue_supervisor_refresh(workspace_directory, epoch_id, outcome);
+                }
+            }
+            ParallelModeControlPlaneEffectKind::RunOrchestrator => {
+                self.store.projection_ready = false;
+                self.store.pending_supervisor_refresh = false;
+                self.start_or_queue_supervisor_refresh(workspace_directory, epoch_id, outcome);
+            }
+            ParallelModeControlPlaneEffectKind::RunOrchestratorTick => {
+                self.store.last_orchestrator_tick_signature = None;
+                self.store.projection_ready = false;
+                self.store.pending_supervisor_refresh = false;
+                self.start_or_queue_supervisor_refresh(workspace_directory, epoch_id, outcome);
+            }
+        }
+    }
+
     fn entry_completed(
         &mut self,
         completion: ParallelModeEntryCompletion,
@@ -1197,6 +1286,7 @@ impl ParallelModeControlPlaneRuntime {
         }
 
         self.store.parallel_entry_in_flight = None;
+        self.store.parallel_entry_mode_was_enabled = None;
         self.store.mode_enabled = mode_enabled;
         if initial_pool_reset_completed {
             self.store.initial_pool_reset_completed = true;
@@ -1437,6 +1527,7 @@ impl ParallelModeControlPlaneRuntime {
                 let effect_id =
                     self.next_effect_id(ParallelModeControlPlaneEffectKind::EnterParallelMode);
                 self.store.parallel_entry_in_flight = Some(effect_id);
+                self.store.parallel_entry_mode_was_enabled = Some(mode_was_enabled);
                 outcome
                     .events
                     .push(ParallelModeControlPlaneEvent::EffectStarted { effect_id });
@@ -2349,6 +2440,7 @@ impl ParallelModeControlPlaneRuntime {
         match expected_kind {
             ParallelModeControlPlaneEffectKind::EnterParallelMode => {
                 self.store.parallel_entry_in_flight = None;
+                self.store.parallel_entry_mode_was_enabled = None;
             }
             ParallelModeControlPlaneEffectKind::RefreshSupervisor => {
                 self.store.supervisor_refresh_in_flight = None;
@@ -2430,6 +2522,7 @@ impl ParallelModeControlPlaneRuntime {
 
     fn clear_process_effect_state(&mut self) {
         self.store.parallel_entry_in_flight = None;
+        self.store.parallel_entry_mode_was_enabled = None;
         self.store.supervisor_refresh_in_flight = None;
         self.store.orchestrator_wake_in_flight = None;
         self.store.orchestrator_tick_in_flight = None;
@@ -3007,6 +3100,224 @@ mod tests {
         assert!(matches!(
             completed.effects.as_slice(),
             [ParallelModeControlPlaneEffect::RunOrchestrator { .. }]
+        ));
+    }
+
+    #[test]
+    fn failed_orchestrator_tick_refreshes_projection_before_rearming_same_signature() {
+        let mut runtime = ParallelModeControlPlaneRuntime::new();
+        runtime.handle(ParallelModeControlPlaneCommand::OpenEpoch {
+            workspace_directory: "/repo".to_string(),
+        });
+
+        let started = runtime.handle(tick("/repo", "sig-1"));
+        let first_effect_id = only_effect(&started)
+            .effect_id()
+            .expect("tick effect should have id");
+        let stale_effect_id = ParallelModeControlPlaneEffectId::new(
+            first_effect_id.sequence.saturating_add(1),
+            first_effect_id.kind,
+        );
+
+        let stale = runtime.handle(ParallelModeControlPlaneCommand::EffectFailed {
+            workspace_directory: "/repo".to_string(),
+            epoch_id: 1,
+            effect_id: stale_effect_id,
+        });
+        assert!(matches!(
+            stale.events.as_slice(),
+            [ParallelModeControlPlaneEvent::StaleCommandDropped { .. }]
+        ));
+        assert_eq!(
+            runtime.store().last_orchestrator_tick_signature.as_deref(),
+            Some("sig-1")
+        );
+        assert_eq!(
+            runtime.store().orchestrator_tick_in_flight,
+            Some(first_effect_id)
+        );
+
+        let failed = runtime.handle(ParallelModeControlPlaneCommand::EffectFailed {
+            workspace_directory: "/repo".to_string(),
+            epoch_id: 1,
+            effect_id: first_effect_id,
+        });
+        assert!(matches!(
+            failed.events.as_slice(),
+            [
+                ParallelModeControlPlaneEvent::EffectCompleted {
+                    effect_id: completed,
+                },
+                ParallelModeControlPlaneEvent::EffectStarted { .. }
+            ] if *completed == first_effect_id
+        ));
+        let refresh_effect_id = only_effect(&failed)
+            .effect_id()
+            .expect("an exact tick failure must refresh the possibly mutated projection");
+        assert_eq!(
+            refresh_effect_id.kind,
+            ParallelModeControlPlaneEffectKind::RefreshSupervisor
+        );
+        assert!(runtime.store().last_orchestrator_tick_signature.is_none());
+        assert!(runtime.store().orchestrator_tick_in_flight.is_none());
+        assert!(!runtime.store().projection_ready);
+
+        let aba_failure = runtime.handle(ParallelModeControlPlaneCommand::EffectFailed {
+            workspace_directory: "/repo".to_string(),
+            epoch_id: 1,
+            effect_id: first_effect_id,
+        });
+        assert!(matches!(
+            aba_failure.events.as_slice(),
+            [ParallelModeControlPlaneEvent::StaleCommandDropped { .. }]
+        ));
+        assert!(runtime.store().last_orchestrator_tick_signature.is_none());
+        assert_eq!(
+            runtime.store().supervisor_refresh_in_flight,
+            Some(refresh_effect_id)
+        );
+
+        let refreshed = runtime.handle(
+            ParallelModeControlPlaneCommand::SupervisorSnapshotRefreshCompleted {
+                workspace_directory: "/repo".to_string(),
+                epoch_id: 1,
+                effect_id: refresh_effect_id,
+                follow_up_tick_signature: None,
+            },
+        );
+        let poll_correlation = match only_effect(&refreshed) {
+            ParallelModeControlPlaneEffect::PollPendingDispatchWake { correlation } => correlation,
+            effect => {
+                panic!("projection refresh should poll durable dispatch state, got {effect:?}")
+            }
+        };
+        let settled_poll =
+            runtime.handle(ParallelModeControlPlaneCommand::PendingDispatchWakePolled {
+                correlation: poll_correlation,
+                result: Ok(None),
+            });
+        assert!(settled_poll.effects.is_empty());
+
+        let retried = runtime.handle(tick("/repo", "sig-1"));
+        let retry_effect_id = only_effect(&retried)
+            .effect_id()
+            .expect("same signature should retry after projection refresh");
+        assert_ne!(retry_effect_id, first_effect_id);
+        assert_eq!(
+            runtime.store().last_orchestrator_tick_signature.as_deref(),
+            Some("sig-1")
+        );
+        assert_eq!(
+            runtime.store().orchestrator_tick_in_flight,
+            Some(retry_effect_id)
+        );
+    }
+
+    #[test]
+    fn failed_initial_entry_closes_epoch_and_cancels_partial_dispatch_state() {
+        let mut runtime = ParallelModeControlPlaneRuntime::new();
+        let started = runtime.handle(enable("/repo"));
+        let entry_effect_id = only_effect(&started)
+            .effect_id()
+            .expect("enable should start one entry effect");
+
+        let failed = runtime.handle(ParallelModeControlPlaneCommand::EffectFailed {
+            workspace_directory: "/repo".to_string(),
+            epoch_id: 1,
+            effect_id: entry_effect_id,
+        });
+
+        assert!(!runtime.store().mode_enabled);
+        assert!(runtime.store().current_epoch_id.is_none());
+        assert!(runtime.store().workspace_directory.is_none());
+        assert!(!runtime.store().projection_ready);
+        assert!(failed.events.iter().any(|event| matches!(
+            event,
+            ParallelModeControlPlaneEvent::EpochClosed { epoch_id: 1, .. }
+        )));
+        assert!(
+            failed
+                .events
+                .iter()
+                .any(|event| matches!(event, ParallelModeControlPlaneEvent::ModeDisabled { .. }))
+        );
+        assert!(matches!(
+            failed.effects.as_slice(),
+            [ParallelModeControlPlaneEffect::MutateDispatchCommands {
+                mutation: ParallelModeDispatchMutation::Cancel { .. },
+                ..
+            }]
+        ));
+    }
+
+    #[test]
+    fn failed_reentry_and_orchestrator_wake_require_exact_projection_refresh() {
+        let mut reentry_runtime = ParallelModeControlPlaneRuntime::new();
+        reentry_runtime.force_mode_for_test("/repo", true);
+        let reentry = reentry_runtime.handle(enable("/repo"));
+        let reentry_effect_id = only_effect(&reentry)
+            .effect_id()
+            .expect("reentry should start one entry effect");
+        let reentry_failed =
+            reentry_runtime.handle(ParallelModeControlPlaneCommand::EffectFailed {
+                workspace_directory: "/repo".to_string(),
+                epoch_id: 1,
+                effect_id: reentry_effect_id,
+            });
+        assert!(reentry_runtime.store().mode_enabled);
+        assert_eq!(reentry_runtime.store().current_epoch_id, Some(1));
+        assert!(!reentry_runtime.store().projection_ready);
+        assert!(matches!(
+            reentry_failed.effects.as_slice(),
+            [ParallelModeControlPlaneEffect::RefreshSupervisor { .. }]
+        ));
+
+        let mut wake_runtime = ParallelModeControlPlaneRuntime::new();
+        wake_runtime.force_mode_for_test("/repo", true);
+        let wake_started = wake_runtime.handle(wake("/repo", 1));
+        let wake_effect_id = only_effect(&wake_started)
+            .effect_id()
+            .expect("wake should start one orchestrator effect");
+        let wake_failed = wake_runtime.handle(ParallelModeControlPlaneCommand::EffectFailed {
+            workspace_directory: "/repo".to_string(),
+            epoch_id: 1,
+            effect_id: wake_effect_id,
+        });
+        assert!(!wake_runtime.store().projection_ready);
+        assert!(matches!(
+            wake_failed.effects.as_slice(),
+            [ParallelModeControlPlaneEffect::RefreshSupervisor { .. }]
+        ));
+    }
+
+    #[test]
+    fn failed_supervisor_refresh_withholds_queued_wake_until_explicit_retry() {
+        let mut runtime = ParallelModeControlPlaneRuntime::new();
+        runtime.force_mode_for_test("/repo", true);
+        let refresh = runtime.handle(ParallelModeControlPlaneCommand::RefreshSupervisor {
+            workspace_directory: "/repo".to_string(),
+        });
+        let refresh_effect_id = only_effect(&refresh)
+            .effect_id()
+            .expect("refresh should start");
+        assert!(runtime.handle(wake("/repo", 1)).effects.is_empty());
+
+        let failed = runtime.handle(ParallelModeControlPlaneCommand::EffectFailed {
+            workspace_directory: "/repo".to_string(),
+            epoch_id: 1,
+            effect_id: refresh_effect_id,
+        });
+        assert!(failed.effects.is_empty());
+        assert!(!runtime.store().projection_ready);
+        assert!(runtime.store().pending_orchestrator_wake.is_some());
+        assert!(runtime.store().orchestrator_wake_in_flight.is_none());
+
+        let retried = runtime.handle(ParallelModeControlPlaneCommand::RefreshSupervisor {
+            workspace_directory: "/repo".to_string(),
+        });
+        assert!(matches!(
+            retried.effects.as_slice(),
+            [ParallelModeControlPlaneEffect::RefreshSupervisor { .. }]
         ));
     }
 

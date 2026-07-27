@@ -255,24 +255,29 @@ fn make_test_runtime_with_session_port(session_port: Arc<dyn SessionCatalogPort>
 }
 
 #[test]
-fn native_tui_app_keeps_parallel_control_plane_behind_narrow_control_plane_handle() {
+fn native_tui_app_keeps_parallel_control_plane_inside_native_client_runtime() {
     /*
      * This guards the architecture boundary from regressing back to a TUI-owned
-     * controller. Production app construction receives one opaque composition,
-     * then stores only the client runtime and typed control-plane handle. The raw
-     * service binding remains available solely to test fixtures.
+     * controller. Production app construction receives one opaque composition
+     * and stores only the client runtime. The handle, sink, and worker-completion
+     * mailbox stay inside composition.
      */
     const APP_RS: &str = include_str!("../../app.rs");
     const APP_RUNTIME_RS: &str = include_str!("../app_runtime.rs");
+    const CLIENT_RUNTIME_RS: &str =
+        include_str!("../../../../../composition/native_client_runtime.rs");
 
     assert!(
-        APP_RS.contains("ParallelModeControlPlaneHandle<TuiParallelModeControlPlaneEventSink>")
+        !APP_RS.contains("ParallelModeControlPlaneHandle")
+            && !APP_RS.contains("TuiParallelModeControlPlaneEventSink")
     );
     assert!(
         !APP_RS.contains("ParallelModeControlPlaneService<TuiParallelModeControlPlaneEventSink>")
     );
     assert!(APP_RUNTIME_RS.contains("application: NativeTuiApplicationComposition"));
-    assert!(APP_RUNTIME_RS.contains("application.bind_event_sink("));
+    assert!(APP_RUNTIME_RS.contains("application.bind_client_runtime()"));
+    assert!(CLIENT_RUNTIME_RS.contains("parallel_control_plane:"));
+    assert!(CLIENT_RUNTIME_RS.contains("parallel_completion_rx:"));
     assert!(
         APP_RUNTIME_RS.contains("#[cfg(test)]\npub(crate) struct NativeTuiParallelModeBinding")
     );
@@ -311,8 +316,8 @@ fn queue_mutation_settlement_stays_correlated_and_off_the_input_path() {
     assert!(!QUEUE_CONTROLLER_RS.contains("BackgroundMessage::QueueMutationCompleted"));
     assert!(!SHELL_RUNTIME_RS.contains("BackgroundMessage::QueueMutationCompleted"));
     assert!(
-        QUEUE_CONTROLLER_RS
-            .contains(".dispatch_client_event(CoreInput::Command(AppCommand::SubmitQueueMutation(")
+        QUEUE_CONTROLLER_RS.contains("let outcome = self.reduce_core_client_event(")
+            && QUEUE_CONTROLLER_RS.contains("AppCommand::SubmitQueueMutation(Box::new(intent))")
     );
     assert!(APP_RUNTIME_RS.contains("AppEvent::QueueMutationStarted { correlation }"));
     assert!(APP_RUNTIME_RS.contains("self.apply_queue_mutation_started(correlation)"));
@@ -385,7 +390,7 @@ fn parallel_post_turn_continuation_is_driven_by_control_plane_outcome() {
     const CONTROL_PLANE_HOST_RS: &str =
         include_str!("../../../../../application/service/parallel_mode/control_plane/host.rs");
 
-    assert!(PARALLEL_MODE_RS.contains("continue_post_turn_queue("));
+    assert!(PARALLEL_MODE_RS.contains("NativeClientEvent::ParallelPostTurnQueue"));
     assert!(!PARALLEL_MODE_RS.contains("QueueAutoPrompt"));
     assert!(!PARALLEL_MODE_RS.contains("record_auto_follow_parallel_dispatch"));
     assert!(!PARALLEL_MODE_RS.contains("handle_post_turn_queue_continuation"));
@@ -742,9 +747,7 @@ fn mark_core_turn_completed(runtime: &mut ShellRuntime, thread_id: &str, turn_id
         .begin_test_turn_submission();
     let _ = runtime
         .app_mut()
-        .runtime
-        .client_runtime
-        .dispatch_client_event(CoreInput::ConversationStreamUpdated {
+        .reduce_core_client_event(CoreInput::ConversationStreamUpdated {
             correlation,
             event: TurnStreamEvent::ThreadPrepared {
                 thread_id: thread_id.to_string(),
@@ -755,9 +758,7 @@ fn mark_core_turn_completed(runtime: &mut ShellRuntime, thread_id: &str, turn_id
         });
     let _ = runtime
         .app_mut()
-        .runtime
-        .client_runtime
-        .dispatch_client_event(CoreInput::ConversationStreamUpdated {
+        .reduce_core_client_event(CoreInput::ConversationStreamUpdated {
             correlation,
             event: TurnStreamEvent::TurnStarted {
                 turn_id: turn_id.to_string(),
@@ -766,9 +767,7 @@ fn mark_core_turn_completed(runtime: &mut ShellRuntime, thread_id: &str, turn_id
         });
     let _ = runtime
         .app_mut()
-        .runtime
-        .client_runtime
-        .dispatch_client_event(CoreInput::ConversationStreamUpdated {
+        .reduce_core_client_event(CoreInput::ConversationStreamUpdated {
             correlation,
             event: TurnStreamEvent::TurnTerminal {
                 receipt: crate::domain::turn_terminal::ConversationTurnTerminalReceipt::completed(

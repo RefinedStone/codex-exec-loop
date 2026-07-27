@@ -45,8 +45,8 @@ impl NativeTuiApp {
         let planning_workspace_directory = self.planning_workspace_directory();
         let parallel_automation_epoch_id = self
             .runtime
-            .parallel_mode_control_plane
-            .current_epoch_id_for_workspace(&planning_workspace_directory);
+            .client_runtime
+            .current_parallel_epoch_id_for_workspace(&planning_workspace_directory);
         match &self.conversation.lifecycle.conversation_state {
             ConversationState::Ready(conversation) => Some(post_turn_context_from_conversation(
                 conversation.as_ref(),

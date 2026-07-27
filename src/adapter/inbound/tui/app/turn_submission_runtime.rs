@@ -90,17 +90,14 @@ impl NativeTuiApp {
                 transcript_text,
                 prompt_origin,
             } => {
-                let outcome =
-                    self.runtime
-                        .client_runtime
-                        .dispatch_client_event(CoreInput::Command(AppCommand::SubmitTurn(
-                            self.build_turn_submission_request(
-                                workspace_directory,
-                                thread_id,
-                                prompt,
-                                &prompt_origin,
-                            ),
-                        )));
+                let outcome = self.reduce_core_client_event(CoreInput::Command(
+                    AppCommand::SubmitTurn(self.build_turn_submission_request(
+                        workspace_directory,
+                        thread_id,
+                        prompt,
+                        &prompt_origin,
+                    )),
+                ));
                 turn_submission_admitted = outcome.events.iter().any(|event| {
                     matches!(
                         event,
@@ -325,17 +322,14 @@ impl NativeTuiApp {
 
         let workspace_directory = self.planning_workspace_directory();
         let parallel_mode_enabled_at_submission = self.parallel_mode_enabled();
-        let outcome = self
-            .runtime
-            .client_runtime
-            .dispatch_client_event(CoreInput::Command(AppCommand::PrepareManualPrompt(
-                Box::new(ManualPromptPreparationIntent {
-                    workspace_directory,
-                    raw_prompt: transcript_text.clone(),
-                    parent_thread_id,
-                    parent_turn_id: parent_turn_id.clone(),
-                }),
-            )));
+        let outcome = self.reduce_core_client_event(CoreInput::Command(
+            AppCommand::PrepareManualPrompt(Box::new(ManualPromptPreparationIntent {
+                workspace_directory,
+                raw_prompt: transcript_text.clone(),
+                parent_thread_id,
+                parent_turn_id: parent_turn_id.clone(),
+            })),
+        ));
         let admission = outcome.events.iter().find_map(|event| match event {
             AppEvent::ManualPromptPreparationAdmissionResolved(admission) => {
                 Some(admission.clone())
@@ -1179,7 +1173,7 @@ mod tests {
         while app.conversation.pending_manual_prompt_preparation.is_some()
             && Instant::now() < deadline
         {
-            app.poll_core_runtime_inputs(16);
+            app.poll_client_runtime_events(16);
             std::thread::yield_now();
         }
         assert!(
@@ -1781,14 +1775,12 @@ mod tests {
         assert_eq!(conversation.status_text, previous_status);
         assert_eq!(conversation.input_state, ConversationInputState::DraftReady);
 
-        let _ = app.runtime.client_runtime.dispatch_client_event(
-            CoreInput::ConversationStreamUpdated {
-                correlation: active_correlation,
-                event: TurnStreamEvent::Failed {
-                    message: "first submission released".to_string(),
-                },
+        let _ = app.reduce_core_client_event(CoreInput::ConversationStreamUpdated {
+            correlation: active_correlation,
+            event: TurnStreamEvent::Failed {
+                message: "first submission released".to_string(),
             },
-        );
+        });
         let message_count_before_retry = ready_conversation(&app).messages.len();
 
         assert!(app.submit_prompt_with_transcript(
