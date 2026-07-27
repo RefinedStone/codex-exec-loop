@@ -1,7 +1,7 @@
 # Gamebaljeonguk Sprite Pack
 
 Source: processed from the provided image only. No character redraw/regeneration was applied.
-The white-background matte is decontaminated only on pixels touching transparent space,
+The white-background matte is decontaminated on the outer alpha edge only,
 preserving white clothing, speech bubbles, and interior details.
 
 ## Files
@@ -25,8 +25,11 @@ preserving white clothing, speech bubbles, and interior details.
   - Same format as above.
 - gamebaljeonguk_sprite_metadata.json
   - Frame coordinates and source crop data.
-- preview_*.png
+- preview_*_checkerboard.png
   - Checkerboard previews for checking transparency.
+- preview_atlas_dark.png
+  - Full-atlas preview on the same dark color family as the Admin map.
+  - Use it to inspect every animated and static frame for bright edge contamination.
 
 ## Unity
 Import the atlas as Sprite Mode: Multiple.
@@ -44,9 +47,10 @@ Disable filtering for sharper pixel art.
 ## AKRA admin maintenance
 Run from assets/admin/game:
 - npm run sprites:clean
-  - Decontaminates newly introduced white-matte edge pixels and refreshes previews.
+  - Decontaminates newly introduced outer-edge matte pixels and refreshes previews.
 - npm run sprites:check
-  - Verifies that runtime and archived atlases match and no cleanup is pending.
+  - Verifies that runtime and archived atlases match, no cleanup is pending,
+    and all 52 animated/static source frames still contain visible pixels.
 
 ## RPG Maker MV/MZ
 Use the files beginning with "$" as single-character sheets.

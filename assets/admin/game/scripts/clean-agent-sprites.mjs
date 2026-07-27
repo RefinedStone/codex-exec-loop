@@ -44,8 +44,40 @@ const WHITE_MATTE_EDGE_RADIUS = 2;
 const CHECKER_SIZE = 32;
 const CHECKER_LIGHT = 210;
 const CHECKER_DARK = 160;
+const DARK_PREVIEW_RED = 7;
+const DARK_PREVIEW_GREEN = 20;
+const DARK_PREVIEW_BLUE = 31;
+const LARGE_ATLAS_FRAME_WIDTH = 128;
+const LARGE_ATLAS_FRAME_HEIGHT = 192;
+const LARGE_ATLAS_COLUMNS = 8;
+const LARGE_ATLAS_ROWS = 7;
+const LARGE_ATLAS_OCCUPIED_FRAMES = 52;
 
 const pixelOffset = (image, x, y) => (y * image.width + x) * 4;
+
+const hasAdjacentTransparentPixel = (image, source, x, y) => {
+  for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
+    for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
+      if (offsetX === 0 && offsetY === 0) {
+        continue;
+      }
+      const neighborX = x + offsetX;
+      const neighborY = y + offsetY;
+      if (
+        neighborX < 0 ||
+        neighborY < 0 ||
+        neighborX >= image.width ||
+        neighborY >= image.height
+      ) {
+        return true;
+      }
+      if (source[pixelOffset(image, neighborX, neighborY) + 3] === 0) {
+        return true;
+      }
+    }
+  }
+  return false;
+};
 
 const hasNearbyTransparentPixel = (image, source, x, y) => {
   for (
@@ -102,6 +134,7 @@ const recoverWhiteMattePixel = (red, green, blue) => {
 const cleanWhiteMatte = (image) => {
   const source = Buffer.from(image.data);
   let decontaminatedPixels = 0;
+  let edgeDecontaminatedPixels = 0;
   let normalizedTransparentPixels = 0;
 
   for (let y = 0; y < image.height; y += 1) {
@@ -117,6 +150,16 @@ const cleanWhiteMatte = (image) => {
           image.data.fill(0, offset, offset + 3);
           normalizedTransparentPixels += 1;
         }
+        continue;
+      }
+      if (
+        alpha === 255 &&
+        Math.min(red, green, blue) > 0 &&
+        hasAdjacentTransparentPixel(image, source, x, y)
+      ) {
+        image.data.set(recoverWhiteMattePixel(red, green, blue), offset);
+        decontaminatedPixels += 1;
+        edgeDecontaminatedPixels += 1;
         continue;
       }
       if (alpha !== 255 || !hasNearbyTransparentPixel(image, source, x, y)) {
@@ -138,7 +181,11 @@ const cleanWhiteMatte = (image) => {
     }
   }
 
-  return { decontaminatedPixels, normalizedTransparentPixels };
+  return {
+    decontaminatedPixels,
+    edgeDecontaminatedPixels,
+    normalizedTransparentPixels,
+  };
 };
 
 const decode = async (path) => PNG.sync.read(await readFile(path));
@@ -169,6 +216,66 @@ const renderCheckerboard = (source) => {
     }
   }
   return encode(preview);
+};
+
+const renderDarkPreview = (source) => {
+  const preview = new PNG({ width: source.width, height: source.height });
+  for (let y = 0; y < source.height; y += 1) {
+    for (let x = 0; x < source.width; x += 1) {
+      const offset = pixelOffset(source, x, y);
+      const alpha = source.data[offset + 3] / 255;
+      preview.data[offset] = Math.round(
+        source.data[offset] * alpha + DARK_PREVIEW_RED * (1 - alpha),
+      );
+      preview.data[offset + 1] = Math.round(
+        source.data[offset + 1] * alpha + DARK_PREVIEW_GREEN * (1 - alpha),
+      );
+      preview.data[offset + 2] = Math.round(
+        source.data[offset + 2] * alpha + DARK_PREVIEW_BLUE * (1 - alpha),
+      );
+      preview.data[offset + 3] = 255;
+    }
+  }
+  return encode(preview);
+};
+
+const assertLargeAtlasFrameCoverage = (source) => {
+  const occupiedFrames = [];
+  for (
+    let frameIndex = 0;
+    frameIndex < LARGE_ATLAS_COLUMNS * LARGE_ATLAS_ROWS;
+    frameIndex += 1
+  ) {
+    const startX =
+      (frameIndex % LARGE_ATLAS_COLUMNS) * LARGE_ATLAS_FRAME_WIDTH;
+    const startY =
+      Math.floor(frameIndex / LARGE_ATLAS_COLUMNS) * LARGE_ATLAS_FRAME_HEIGHT;
+    let visiblePixels = 0;
+    for (
+      let y = startY;
+      y < startY + LARGE_ATLAS_FRAME_HEIGHT && visiblePixels === 0;
+      y += 1
+    ) {
+      for (let x = startX; x < startX + LARGE_ATLAS_FRAME_WIDTH; x += 1) {
+        if (source.data[pixelOffset(source, x, y) + 3] > 0) {
+          visiblePixels += 1;
+          break;
+        }
+      }
+    }
+    if (visiblePixels > 0) {
+      occupiedFrames.push(frameIndex);
+    }
+  }
+  const expectedFrames = Array.from(
+    { length: LARGE_ATLAS_OCCUPIED_FRAMES },
+    (_, frameIndex) => frameIndex,
+  );
+  if (occupiedFrames.join(",") !== expectedFrames.join(",")) {
+    throw new Error(
+      `Unexpected visible atlas frames: ${occupiedFrames.join(",") || "none"}`,
+    );
+  }
 };
 
 const summaries = [];
@@ -216,6 +323,8 @@ for (const path of standaloneSprites) {
   }
 }
 
+assertLargeAtlasFrameCoverage(cleanedLargeAtlas);
+
 const previews = [
   {
     path: resolve(spritePackRoot, "preview_atlas_checkerboard.png"),
@@ -225,10 +334,14 @@ const previews = [
     path: resolve(spritePackRoot, "preview_original_checkerboard.png"),
     bytes: renderCheckerboard(cleanedOriginal),
   },
+  {
+    path: resolve(spritePackRoot, "preview_atlas_dark.png"),
+    bytes: renderDarkPreview(cleanedLargeAtlas),
+  },
 ];
 for (const preview of previews) {
-  const current = await readFile(preview.path);
-  const changed = !current.equals(preview.bytes);
+  const current = await readFile(preview.path).catch(() => null);
+  const changed = current === null || !current.equals(preview.bytes);
   pendingChanges += Number(changed);
   summaries.push({ file: preview.path, regenerated: true, changed });
   if (writeChanges) {
@@ -243,6 +356,9 @@ for (const summary of summaries) {
       : null,
     summary.normalizedTransparentPixels !== undefined
       ? `transparentRgb=${summary.normalizedTransparentPixels}`
+      : null,
+    summary.edgeDecontaminatedPixels !== undefined
+      ? `edge=${summary.edgeDecontaminatedPixels}`
       : null,
     summary.mirroredFromRuntime ? "mirrored" : null,
     summary.regenerated ? "preview" : null,
