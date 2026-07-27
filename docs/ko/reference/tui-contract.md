@@ -45,6 +45,11 @@ rendering, style은 `theme.rs`, geometry는 rendering/layout, scrollback/resize�
 - Border 없이 compact하게 유지합니다.
 - Status ribbon, planning/queue summary, runtime notice, prompt, command hint 순서의 안정된
   hierarchy를 유지합니다.
+- `NativeTuiApp`은 opaque `NativeClientRuntime` 하나만 소유하며 parallel control-plane handle,
+  sink, completion channel을 소유하지 않습니다. Core/parallel intent는 `NativeClientEvent`로
+  진입하고 runtime이 private completion lane을 공정하게 drain한 뒤 typed projection outcome을
+  반환합니다. Parallel effect는 in-flight correlation을 해제하기 전에 성공, 실패, panic 중 하나로
+  정확히 한 번 정산되어야 합니다.
 - Terminal sync transaction 하나는 `revisioned_planning_parallel_projection()`을 정확히 한 번
   호출하고, 반환된 `RevisionedPlanningParallelProjection`과 render clock을
   `ConversationProjectionSample`이 소유합니다. 이 좁은 Core projection은 한 revision과 frame에

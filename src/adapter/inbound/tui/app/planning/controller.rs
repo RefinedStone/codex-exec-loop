@@ -126,12 +126,11 @@ impl NativeTuiApp {
         let workspace_directory = self.planning_workspace_directory();
         self.planning.planning_draft_editor_ui_state.reset();
         self.dispatch_shell_chrome(ShellChromeEvent::DirectionsMaintenanceOverlayShown);
-        let outcome = self
-            .runtime
-            .client_runtime
-            .dispatch_client_event(CoreInput::Command(AppCommand::LoadDirectionsMaintenance {
+        let outcome = self.reduce_core_client_event(CoreInput::Command(
+            AppCommand::LoadDirectionsMaintenance {
                 workspace_directory,
-            }));
+            },
+        ));
         let correlation = outcome.events.iter().find_map(|event| match event {
             AppEvent::DirectionsMaintenanceLoadStarted { correlation } => Some(correlation.clone()),
             _ => None,
@@ -420,12 +419,9 @@ impl NativeTuiApp {
             self.planning_workspace_directory(),
             core_planning_reset_target(parsed.target),
         );
-        let outcome = self
-            .runtime
-            .client_runtime
-            .dispatch_client_event(CoreInput::Command(AppCommand::ResetPlanningWorkspace(
-                intent,
-            )));
+        let outcome = self.reduce_core_client_event(CoreInput::Command(
+            AppCommand::ResetPlanningWorkspace(intent),
+        ));
         self.apply_core_dispatch_outcome(outcome);
     }
 
@@ -621,12 +617,11 @@ impl NativeTuiApp {
     // drafts remain inspectable through the same overlay.
     pub(super) fn stage_simple_mode_planning_init_draft(&mut self) {
         let workspace_directory = self.planning_workspace_directory();
-        let outcome = self
-            .runtime
-            .client_runtime
-            .dispatch_client_event(CoreInput::Command(AppCommand::StageSimplePlanningDraft {
+        let outcome = self.reduce_core_client_event(CoreInput::Command(
+            AppCommand::StageSimplePlanningDraft {
                 workspace_directory,
-            }));
+            },
+        ));
         self.apply_core_dispatch_outcome(outcome);
     }
     pub(super) fn open_simple_mode_planning_editor(&mut self) {
@@ -649,14 +644,13 @@ impl NativeTuiApp {
         {
             return;
         }
-        let outcome = self
-            .runtime
-            .client_runtime
-            .dispatch_client_event(CoreInput::Command(AppCommand::LoadSimplePlanningEditor {
+        let outcome = self.reduce_core_client_event(CoreInput::Command(
+            AppCommand::LoadSimplePlanningEditor {
                 workspace_directory,
                 draft_name,
                 source_session,
-            }));
+            },
+        ));
         self.apply_core_dispatch_outcome(outcome);
     }
     pub(super) fn promote_simple_mode_planning_draft(&mut self) {
@@ -679,14 +673,13 @@ impl NativeTuiApp {
         {
             return;
         }
-        let outcome = self
-            .runtime
-            .client_runtime
-            .dispatch_client_event(CoreInput::Command(AppCommand::PromoteSimplePlanningDraft {
+        let outcome = self.reduce_core_client_event(CoreInput::Command(
+            AppCommand::PromoteSimplePlanningDraft {
                 workspace_directory,
                 draft_name,
                 source_session,
-            }));
+            },
+        ));
         self.apply_core_dispatch_outcome(outcome);
     }
 
@@ -2045,7 +2038,7 @@ mod tests {
     fn wait_for_planning_init_refresh(app: &mut NativeTuiApp) {
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
-            app.poll_core_runtime_inputs(16);
+            app.poll_client_runtime_events(16);
             if app.planning.planning_init_overlay_ui_state.step()
                 != PlanningInitOverlayStep::Loading
             {
@@ -2059,7 +2052,7 @@ mod tests {
     fn wait_for_planning_runtime_refresh(app: &mut NativeTuiApp) {
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
-            app.poll_core_runtime_inputs(16);
+            app.poll_client_runtime_events(16);
             if !matches!(
                 app.planning.planning_runtime_refresh_ui_state,
                 PlanningRuntimeRefreshUiState::Loading { .. }
@@ -2074,7 +2067,7 @@ mod tests {
     fn wait_for_planning_workspace_operation(app: &mut NativeTuiApp) {
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {
-            app.poll_core_runtime_inputs(16);
+            app.poll_client_runtime_events(16);
             if app
                 .planning
                 .planning_workspace_operation_ui_state
@@ -2153,7 +2146,7 @@ mod tests {
         let mut last_count = observation.load_count.load(Ordering::SeqCst);
         let mut stable_since = Instant::now();
         while Instant::now() < deadline {
-            app.poll_core_runtime_inputs(16);
+            app.poll_client_runtime_events(16);
             let count = observation.load_count.load(Ordering::SeqCst);
             if count != last_count {
                 last_count = count;
@@ -2175,11 +2168,11 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut completed_at = None;
         while Instant::now() < deadline {
-            app.poll_core_runtime_inputs(16);
+            app.poll_client_runtime_events(16);
             if observation.completed_load_count.load(Ordering::SeqCst) >= expected {
                 let completed_at = completed_at.get_or_insert_with(Instant::now);
                 if completed_at.elapsed() >= Duration::from_millis(25) {
-                    app.poll_core_runtime_inputs(16);
+                    app.poll_client_runtime_events(16);
                     return;
                 }
             }
@@ -2350,7 +2343,7 @@ mod tests {
         // enough settlement time under the full suite's process-heavy load.
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {
-            app.poll_core_runtime_inputs(16);
+            app.poll_client_runtime_events(16);
             if app
                 .planning
                 .directions_maintenance_overlay_ui_state
@@ -2969,7 +2962,7 @@ mod tests {
         app.close_shell_overlay();
         let drain_deadline = std::time::Instant::now() + Duration::from_millis(100);
         while std::time::Instant::now() < drain_deadline {
-            app.poll_core_runtime_inputs(16);
+            app.poll_client_runtime_events(16);
             std::thread::sleep(Duration::from_millis(2));
         }
 
@@ -3999,7 +3992,7 @@ mod tests {
             Ok(Box::new(promoted_editor_mutation_result(&drifted, 1))),
         );
         std::thread::sleep(Duration::from_millis(50));
-        drifted_app.poll_core_runtime_inputs(16);
+        drifted_app.poll_client_runtime_events(16);
 
         assert!(workspace_b_permit.is_current());
         assert_eq!(

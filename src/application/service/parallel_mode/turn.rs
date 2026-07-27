@@ -552,6 +552,43 @@ impl ParallelModeTurnService {
         )
     }
 
+    pub(crate) fn settle_unexpected_worker_panic_for_lease(
+        &self,
+        expected_lease: &ParallelModeSlotLeaseSnapshot,
+    ) -> Vec<String> {
+        let mut notices = Vec::new();
+        /*
+         * An outer worker panic loses the local stream evidence, and the isolated
+         * app-server worker may still be unwinding. Releasing the worktree here
+         * could discard or race user-visible changes. Fence the exact lease
+         * generation, preserve it as Running, then persist a failed session detail
+         * so supervisor recovery sees a terminal state instead of a live zombie.
+         */
+        match self
+            .parallel_mode_service
+            .mark_workspace_slot_running_for_lease(expected_lease)
+        {
+            Ok(Some(_)) => {}
+            Ok(None) => notices.push(
+                "parallel worker panic settlement skipped because the captured slot lease no longer exists"
+                    .to_string(),
+            ),
+            Err(error) => notices.push(format!(
+                "parallel worker panic could not fence the captured slot lease: {error}"
+            )),
+        }
+
+        let (failure, _) = self.record_running_turn_failure_inner(
+            &expected_lease.worktree_path,
+            Some(expected_lease),
+            "parallel worker exited unexpectedly before durable stream settlement",
+        );
+        if let Some(notice) = failure.runtime_notice {
+            notices.push(notice);
+        }
+        notices
+    }
+
     fn finalize_stream_completion_inner(
         &self,
         workspace_directory: &str,

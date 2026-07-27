@@ -411,6 +411,94 @@ fn recv_background_event(
         .expect("control plane background event should be sent")
 }
 
+#[test]
+fn controller_settles_only_the_exact_failed_effect_completion() {
+    let (handle, _rx) = test_control_plane_handle();
+    let workspace = unique_workspace("effect-failure-correlation");
+    let effect_id = handle.force_supervisor_refresh_in_flight_for_test(workspace.clone(), 9);
+    let stale_effect_id = ParallelModeControlPlaneEffectId {
+        sequence: effect_id.sequence.saturating_add(1),
+        kind: effect_id.kind,
+    };
+
+    let stale =
+        handle.handle_background_event(ParallelModeControlPlaneBackgroundEvent::EffectFailed {
+            workspace_directory: workspace.clone(),
+            epoch_id: 9,
+            effect_id: stale_effect_id,
+            error: "stale failure".to_string(),
+        });
+    assert!(
+        stale.iter().all(|event| !matches!(
+            event,
+            ParallelModeControlPlanePresentationEvent::StatusShown { .. }
+        )),
+        "a stale failure must not update the presentation"
+    );
+    assert!(
+        handle.control_effect_in_flight(),
+        "a stale failure must not settle the current effect"
+    );
+
+    let completed =
+        handle.handle_background_event(ParallelModeControlPlaneBackgroundEvent::EffectFailed {
+            workspace_directory: workspace.clone(),
+            epoch_id: 9,
+            effect_id,
+            error: "parallel supervisor refresh failed unexpectedly".to_string(),
+        });
+    assert!(completed.iter().any(|event| matches!(
+        event,
+        ParallelModeControlPlanePresentationEvent::StatusShown {
+            workspace_directory,
+            status_text,
+        } if workspace_directory == &workspace
+            && status_text.contains("retry available")
+    )));
+    assert!(
+        !handle.control_effect_in_flight(),
+        "the exact failure must settle the current effect"
+    );
+
+    let replacement_effect_id =
+        handle.force_supervisor_refresh_in_flight_for_test(workspace.clone(), 9);
+    assert_ne!(replacement_effect_id, effect_id);
+    let aba_failure =
+        handle.handle_background_event(ParallelModeControlPlaneBackgroundEvent::EffectFailed {
+            workspace_directory: workspace.clone(),
+            epoch_id: 9,
+            effect_id,
+            error: "old generation failure".to_string(),
+        });
+    assert!(
+        aba_failure.iter().all(|event| !matches!(
+            event,
+            ParallelModeControlPlanePresentationEvent::StatusShown { .. }
+        )),
+        "an old failure must be discarded after a new effect starts"
+    );
+    assert!(
+        handle.control_effect_in_flight(),
+        "an ABA failure must not settle the replacement effect"
+    );
+
+    let replacement_completed =
+        handle.handle_background_event(ParallelModeControlPlaneBackgroundEvent::EffectFailed {
+            workspace_directory: workspace,
+            epoch_id: 9,
+            effect_id: replacement_effect_id,
+            error: "replacement failure".to_string(),
+        });
+    assert!(replacement_completed.iter().any(|event| matches!(
+        event,
+        ParallelModeControlPlanePresentationEvent::StatusShown { .. }
+    )));
+    assert!(
+        !handle.control_effect_in_flight(),
+        "the exact replacement failure must settle once"
+    );
+}
+
 fn loading_inspection_correlation(
     handle: &ParallelModeControlPlaneHandle<CapturingControlPlaneEventSink>,
 ) -> ParallelModeSupervisorInspectionCorrelation {
@@ -2024,7 +2112,9 @@ fn controller_refresh_supervisor_uses_cached_readiness_and_applies_refreshed_sna
 
 #[test]
 fn controller_pending_dispatch_poll_runs_follow_up_tick_when_queue_is_empty() {
-    let (handle, rx) = test_control_plane_handle();
+    let (handle, rx) = test_control_plane_handle_with_noop_authority(Arc::new(
+        NoopPlanningAuthorityPort::default(),
+    ));
     let workspace = unique_workspace("pending-poll");
     handle.force_epoch_for_test(&workspace, 1);
 
@@ -2039,9 +2129,10 @@ fn controller_pending_dispatch_poll_runs_follow_up_tick_when_queue_is_empty() {
         poll_event,
         ParallelModeControlPlaneBackgroundEvent::PendingDispatchWakePolled { .. }
     ));
+    let poll_presentation = handle.handle_background_event(poll_event);
     assert!(
-        handle.handle_background_event(poll_event).is_empty(),
-        "an empty poll should only schedule the correlated follow-up tick"
+        poll_presentation.is_empty(),
+        "an empty poll should only schedule the correlated follow-up tick: {poll_presentation:?}"
     );
     let tick_event = recv_background_event(&rx);
     let (workspace_directory, epoch_id, effect_id) = match tick_event {
@@ -2897,7 +2988,9 @@ fn persistent_cleanup_retry_yields_to_replacement_refresh_and_pending_poll_witho
 
 #[test]
 fn controller_deferred_dispatch_without_projection_records_traceable_queue_state() {
-    let (handle, rx) = test_control_plane_handle();
+    let (handle, rx) = test_control_plane_handle_with_noop_authority(Arc::new(
+        NoopPlanningAuthorityPort::default(),
+    ));
     let workspace = unique_workspace("deferred-dispatch");
     handle.force_epoch_for_test(&workspace, 1);
 
@@ -2910,12 +3003,15 @@ fn controller_deferred_dispatch_without_projection_records_traceable_queue_state
     assert!(started.is_empty());
     let presented =
         with_akra_event_trace(|| handle.handle_background_event(recv_background_event(&rx)));
-    assert!(presented.iter().any(|event| matches!(
-        event,
-        ParallelModeControlPlanePresentationEvent::StatusShown { status_text, .. }
-            if status_text
-                == "parallel mode: dispatch deferred / entry loading or control-plane refresh is still in progress"
-    )));
+    assert!(
+        presented.iter().any(|event| matches!(
+            event,
+            ParallelModeControlPlanePresentationEvent::StatusShown { status_text, .. }
+                if status_text
+                    == "parallel mode: dispatch deferred / entry loading or control-plane refresh is still in progress"
+        )),
+        "deferred dispatch should retain its exact status projection: {presented:?}"
+    );
     assert_eq!(handle.last_dispatch_withheld_reason().as_deref(), None);
     assert_eq!(
         handle.last_automation_trigger(),
@@ -3292,7 +3388,9 @@ fn failed_supervisor_inspection_preserves_projections_and_can_retry() {
 
 #[test]
 fn supervisor_inspection_rejects_stale_duplicate_workspace_and_epoch_completions() {
-    let (handle, rx) = test_control_plane_handle();
+    let (handle, rx) = test_control_plane_handle_with_noop_authority(Arc::new(
+        NoopPlanningAuthorityPort::default(),
+    ));
     let workspace = unique_workspace("inspect-stale");
     handle.force_epoch_for_test(&workspace, 7);
     let _ = handle.handle_command(ParallelModeControlPlaneCommand::InspectSupervisor {
@@ -3307,10 +3405,11 @@ fn supervisor_inspection_rejects_stale_duplicate_workspace_and_epoch_completions
         workspace_directory: workspace.clone(),
     });
     handle.force_epoch_for_test(&workspace, 8);
+    let cleanup_presentation =
+        handle.handle_background_event(recv_dispatch_mutation_completed(&rx));
     assert!(
-        handle
-            .handle_background_event(recv_dispatch_mutation_completed(&rx))
-            .is_empty()
+        cleanup_presentation.is_empty(),
+        "superseded cleanup should not update presentation: {cleanup_presentation:?}"
     );
     let _ = handle.handle_command(ParallelModeControlPlaneCommand::InspectSupervisor {
         workspace_directory: workspace.clone(),

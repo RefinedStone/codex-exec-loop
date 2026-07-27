@@ -1,7 +1,8 @@
 use super::{
-    BackgroundMessage, ConversationState, InlineShellCommand, ShellOverlay, StartupState,
-    arm_core_post_turn_evaluation, make_dispatch_ready_parallel_runtime, make_test_runtime,
-    mark_core_turn_completed, post_turn_evaluation_completed_message, sample_startup_diagnostics,
+    ConversationState, InlineShellCommand, ShellOverlay, StartupState,
+    arm_core_post_turn_evaluation, create_temp_workspace, make_dispatch_ready_parallel_runtime,
+    make_test_runtime, mark_core_turn_completed, post_turn_evaluation_completed_message,
+    sample_startup_diagnostics,
 };
 use crate::adapter::inbound::tui::app::conversation_runtime::{
     PostTurnContinuationAction, PostTurnEvaluationOutcome, PostTurnEvaluationProvenance,
@@ -11,7 +12,10 @@ use crate::adapter::inbound::tui::app::shell_presentation::build_parallel_peek_o
 use crate::adapter::inbound::tui::app::{
     ManualPromptDelivery, PendingManualPromptPreparation, TuiLanguage,
 };
-use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneBackgroundEvent;
+use crate::application::service::parallel_mode::control_plane::{
+    ParallelModeControlPlaneBackgroundEvent, ParallelModeSupervisorInspectionSnapshot,
+    ParallelModeSupervisorInspectionState,
+};
 use crate::domain::conversation::{ConversationApprovalRequest, ConversationApprovalRequestKind};
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot, ParallelModeAutomationTrigger,
@@ -532,10 +536,8 @@ fn parallel_projection_refresh_preserves_supersession_overlay_focus_and_selectio
         .app_mut()
         .mark_parallel_mode_supervisor_refresh_in_flight_for_test();
     runtime
-        .app
-        .runtime
-        .tx
-        .send(BackgroundMessage::ParallelModeControlPlaneEvent(Box::new(
+        .app_mut()
+        .apply_parallel_mode_control_plane_background_event(
             ParallelModeControlPlaneBackgroundEvent::SupervisorSnapshotRefreshed {
                 workspace_directory,
                 epoch_id,
@@ -543,9 +545,7 @@ fn parallel_projection_refresh_preserves_supersession_overlay_focus_and_selectio
                 supervisor_snapshot: Box::new(refreshed_snapshot.clone()),
                 orchestrator_tick_signature: None,
             },
-        )))
-        .expect("supervisor refresh should enqueue");
-    runtime.poll_background_messages();
+        );
 
     assert_eq!(
         runtime.app().shell.chrome.shell_overlay,
@@ -1489,6 +1489,12 @@ fn supersession_overlay_ctrl_r_refreshes_readiness() {
      * refresh는 status만 갱신해야 하므로 prompt buffer를 비우거나 overlay를 닫는 부작용이 없는지 함께 확인한다.
      */
     let mut runtime = make_test_runtime();
+    let workspace_directory = create_temp_workspace("akra-tui-readiness-refresh");
+    runtime.app_mut().shell.chrome.startup_state =
+        StartupState::Ready(sample_startup_diagnostics(&workspace_directory));
+    runtime
+        .app_mut()
+        .sync_draft_shell_workspace(&workspace_directory);
     runtime.app_mut().shell.chrome.shell_overlay = ShellOverlay::Supersession;
     runtime.take_redraw_request();
 
@@ -1496,6 +1502,10 @@ fn supersession_overlay_ctrl_r_refreshes_readiness() {
         KeyCode::Char('r'),
         KeyModifiers::CONTROL,
     )));
+    assert!(
+        runtime.take_redraw_request(),
+        "Ctrl+R loading/status presentation must request an immediate redraw"
+    );
     assert!(runtime.app().parallel_mode_control_effect_in_flight());
     let ConversationState::Ready(conversation) =
         &runtime.app().conversation.lifecycle.conversation_state
@@ -1508,21 +1518,42 @@ fn supersession_overlay_ctrl_r_refreshes_readiness() {
             .status_text
             .starts_with("parallel readiness refresh: loading")
     );
-    for _ in 0..250 {
-        runtime.poll_background_messages();
-        let ConversationState::Ready(conversation) =
-            &runtime.app().conversation.lifecycle.conversation_state
-        else {
-            panic!("expected ready conversation state");
-        };
-        if conversation
-            .status_text
-            .starts_with("parallel readiness refreshed / state:")
-        {
-            break;
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
+    let inspection_state = runtime
+        .app()
+        .runtime
+        .client_runtime
+        .parallel_control_plane_projection()
+        .supervisor_inspection_state;
+    let ParallelModeSupervisorInspectionState::Loading { correlation, .. } = inspection_state
+    else {
+        panic!("Ctrl+R should start one correlated supervisor inspection");
+    };
+    runtime
+        .app_mut()
+        .apply_parallel_mode_control_plane_background_event(
+            ParallelModeControlPlaneBackgroundEvent::SupervisorInspectionCompleted {
+                correlation,
+                result: Ok(ParallelModeSupervisorInspectionSnapshot {
+                    readiness_snapshot: ready_parallel_mode_readiness_snapshot(
+                        &workspace_directory,
+                    ),
+                    supervisor_snapshot: Box::new(ParallelModeSupervisorSnapshot::new(
+                        ParallelModeSupervisorState::Supervise,
+                        workspace_directory,
+                        ParallelModePoolBoardSnapshot::new(0, "/tmp/pool", "idle", Vec::new()),
+                        ParallelModeAgentRosterSnapshot::new(Vec::new(), "no active agents"),
+                        ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
+                        ParallelModeDistributorSnapshot::new(
+                            Vec::new(),
+                            Vec::new(),
+                            "idle",
+                            "queue idle",
+                        ),
+                        None,
+                    )),
+                }),
+            },
+        );
     let ConversationState::Ready(conversation) =
         &runtime.app().conversation.lifecycle.conversation_state
     else {
@@ -1531,14 +1562,15 @@ fn supersession_overlay_ctrl_r_refreshes_readiness() {
     assert!(
         conversation
             .status_text
-            .starts_with("parallel readiness refreshed / state:")
+            .starts_with("parallel readiness refreshed / state:"),
+        "unexpected refresh status: {}",
+        conversation.status_text
     );
     assert!(!runtime.app().parallel_mode_control_effect_in_flight());
     assert_eq!(
         runtime.app().shell.chrome.shell_overlay,
         ShellOverlay::Supersession
     );
-    assert!(runtime.take_redraw_request());
 }
 
 #[test]

@@ -372,6 +372,12 @@ where
                 blocked,
                 notices,
             ),
+            ParallelModeControlPlaneBackgroundEvent::EffectFailed {
+                workspace_directory,
+                epoch_id,
+                effect_id,
+                error,
+            } => self.effect_failed(workspace_directory, epoch_id, effect_id, error),
         }
     }
 
@@ -919,6 +925,32 @@ where
             workspace_directory,
             status_text,
         });
+        events.extend(self.drain_outcome(outcome));
+        events
+    }
+
+    fn effect_failed(
+        &mut self,
+        workspace_directory: String,
+        epoch_id: u64,
+        effect_id: ParallelModeControlPlaneEffectId,
+        error: String,
+    ) -> Vec<ParallelModeControlPlanePresentationEvent> {
+        let outcome = self
+            .runtime
+            .handle(ParallelModeControlPlaneCommand::EffectFailed {
+                workspace_directory: workspace_directory.clone(),
+                epoch_id,
+                effect_id,
+            });
+        if !outcome_effect_completed(&outcome, effect_id) {
+            return self.drain_outcome(outcome);
+        }
+
+        let mut events = vec![ParallelModeControlPlanePresentationEvent::StatusShown {
+            workspace_directory,
+            status_text: format!("parallel mode: operation failed / {error} / retry available"),
+        }];
         events.extend(self.drain_outcome(outcome));
         events
     }

@@ -1471,10 +1471,8 @@ fn dispatch_requests_during_entry_loading_coalesce_until_ready() {
 
     harness
         .runtime
-        .app
-        .runtime
-        .tx
-        .send(BackgroundMessage::ParallelModeControlPlaneEvent(Box::new(
+        .app_mut()
+        .apply_parallel_mode_control_plane_background_event(
             ParallelModeControlPlaneBackgroundEvent::SupervisorSnapshotRefreshed {
                 workspace_directory: harness.workspace_dir.clone(),
                 epoch_id: refresh_epoch_id,
@@ -1484,9 +1482,7 @@ fn dispatch_requests_during_entry_loading_coalesce_until_ready() {
                 )),
                 orchestrator_tick_signature: None,
             },
-        )))
-        .expect("ready supervisor refresh should enqueue");
-    harness.runtime.poll_background_messages();
+        );
     harness.poll_until_worker_launches(1);
     harness.poll_until_dispatch_idle();
 
@@ -1613,10 +1609,8 @@ fn late_enter_result_after_parallel_off_does_not_reenable_mode() {
 
     harness
         .runtime
-        .app
-        .runtime
-        .tx
-        .send(BackgroundMessage::ParallelModeControlPlaneEvent(Box::new(
+        .app_mut()
+        .apply_parallel_mode_control_plane_background_event(
             ParallelModeControlPlaneBackgroundEvent::Entered {
                 workspace_directory: harness.workspace_dir.clone(),
                 epoch_id: 1,
@@ -1635,9 +1629,7 @@ fn late_enter_result_after_parallel_off_does_not_reenable_mode() {
                 has_actionable_queue_head: false,
                 orchestrator_tick_signature: None,
             },
-        )))
-        .expect("late enter result should enqueue");
-    harness.runtime.poll_background_messages();
+        );
 
     assert!(
         !harness.runtime.app().parallel_mode_enabled(),
@@ -1662,10 +1654,8 @@ fn stale_worker_event_drops_before_ui_notice_or_dispatch_wake() {
 
     harness
         .runtime
-        .app
-        .runtime
-        .tx
-        .send(BackgroundMessage::ParallelModeControlPlaneEvent(Box::new(
+        .app_mut()
+        .apply_parallel_mode_control_plane_background_event(
             ParallelModeControlPlaneBackgroundEvent::WorkerEvent {
                 event: ParallelModeControlPlaneWorkerEvent::new(
                     harness.workspace_dir.clone(),
@@ -1677,9 +1667,7 @@ fn stale_worker_event_drops_before_ui_notice_or_dispatch_wake() {
                 ),
                 has_actionable_queue_head: true,
             },
-        )))
-        .expect("stale worker event should enqueue");
-    harness.runtime.poll_background_messages();
+        );
 
     assert_eq!(harness.worker_port.launch_count(), 0);
     assert!(

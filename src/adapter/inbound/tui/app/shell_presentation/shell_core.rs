@@ -46,8 +46,8 @@ impl ParallelPanelProjectionSample {
         Self::from_parts(
             app.runtime.client_runtime.parallel_mode_projection(),
             app.runtime
-                .parallel_mode_control_plane
-                .presentation_projection(),
+                .client_runtime
+                .parallel_control_plane_projection(),
         )
     }
 
@@ -184,8 +184,8 @@ impl ConversationProjectionSample {
         } = planning_parallel;
         let parallel_control_plane = app
             .runtime
-            .parallel_mode_control_plane
-            .presentation_projection();
+            .client_runtime
+            .parallel_control_plane_projection();
         Self {
             core_revision,
             conversation_history_identity_revision: app

@@ -23,10 +23,8 @@ impl NativeTuiApp {
             return;
         }
         let context = self.current_queue_mutation_context();
-        let outcome = self
-            .runtime
-            .client_runtime
-            .dispatch_client_event(CoreInput::Command(AppCommand::LoadQueueAuthority {
+        let outcome =
+            self.reduce_core_client_event(CoreInput::Command(AppCommand::LoadQueueAuthority {
                 workspace_directory: context.workspace_directory,
                 active_thread_id: context.active_thread_id,
             }));
@@ -423,12 +421,9 @@ impl NativeTuiApp {
     }
 
     fn submit_queue_mutation(&mut self, intent: QueueMutationIntent) -> bool {
-        let outcome = self
-            .runtime
-            .client_runtime
-            .dispatch_client_event(CoreInput::Command(AppCommand::SubmitQueueMutation(
-                Box::new(intent),
-            )));
+        let outcome = self.reduce_core_client_event(CoreInput::Command(
+            AppCommand::SubmitQueueMutation(Box::new(intent)),
+        ));
         let started = outcome
             .events
             .iter()

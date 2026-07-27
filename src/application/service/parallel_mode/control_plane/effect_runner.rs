@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread;
-use std::{panic, panic::AssertUnwindSafe};
+use std::thread::JoinHandle;
 
 use serde_json::Value;
 
@@ -20,6 +20,7 @@ use crate::domain::parallel_mode::{
     ParallelModePoolResetRunId, ParallelModePoolResetScope, ParallelModeReadinessSnapshot,
     ParallelModeRuntimeEvent, ParallelModeSupervisorSnapshot,
 };
+use crate::panic_observation::catch_redacted_worker_unwind;
 
 use super::{
     ParallelModeControlPlaneEffectId, ParallelModeControlPlaneWake, ParallelModeDispatchMutation,
@@ -104,10 +105,47 @@ pub enum ParallelModeControlPlaneBackgroundEvent {
         blocked: bool,
         notices: Vec<String>,
     },
+    EffectFailed {
+        workspace_directory: String,
+        epoch_id: u64,
+        effect_id: ParallelModeControlPlaneEffectId,
+        error: String,
+    },
 }
 
 pub trait ParallelModeControlPlaneEventSink: Clone + Send + 'static {
     fn send_control_plane_event(&self, event: ParallelModeControlPlaneBackgroundEvent);
+}
+
+fn spawn_parallel_effect_completion_worker<S, Work>(
+    event_sink: S,
+    panic_completion: ParallelModeControlPlaneBackgroundEvent,
+    work: Work,
+) -> JoinHandle<()>
+where
+    S: ParallelModeControlPlaneEventSink,
+    Work: FnOnce() -> ParallelModeControlPlaneBackgroundEvent + Send + 'static,
+{
+    thread::spawn(move || {
+        let completion = catch_redacted_worker_unwind(work).unwrap_or(panic_completion);
+        let _ = catch_redacted_worker_unwind(|| {
+            event_sink.send_control_plane_event(completion);
+        });
+    })
+}
+
+fn effect_failed(
+    workspace_directory: impl Into<String>,
+    epoch_id: u64,
+    effect_id: ParallelModeControlPlaneEffectId,
+    error: impl Into<String>,
+) -> ParallelModeControlPlaneBackgroundEvent {
+    ParallelModeControlPlaneBackgroundEvent::EffectFailed {
+        workspace_directory: workspace_directory.into(),
+        epoch_id,
+        effect_id,
+        error: error.into(),
+    }
 }
 
 #[derive(Clone)]
@@ -193,10 +231,21 @@ where
         let parallel_mode_service = self.parallel_mode_service.clone();
         let event_sink = self.event_sink.clone();
         let automation_guard = self.automation_guard.clone();
+        let panic_completion = effect_failed(
+            workspace_directory.clone(),
+            epoch_id,
+            effect_id,
+            "parallel supervisor refresh failed unexpectedly",
+        );
 
-        thread::spawn(move || {
+        spawn_parallel_effect_completion_worker(event_sink, panic_completion, move || {
             if !automation_guard.is_active(&workspace_directory, epoch_id) {
-                return;
+                return effect_failed(
+                    workspace_directory,
+                    epoch_id,
+                    effect_id,
+                    "parallel supervisor refresh belongs to an inactive epoch",
+                );
             }
             event_log::emit_lazy("parallel_supervisor_refresh_started", || {
                 supervisor_refresh_started_payload(&workspace_directory, mode_enabled)
@@ -218,15 +267,13 @@ where
                 &workspace_directory,
                 &supervisor_snapshot,
             );
-            event_sink.send_control_plane_event(
-                ParallelModeControlPlaneBackgroundEvent::SupervisorSnapshotRefreshed {
-                    workspace_directory,
-                    epoch_id,
-                    effect_id,
-                    orchestrator_tick_signature,
-                    supervisor_snapshot: Box::new(supervisor_snapshot),
-                },
-            );
+            ParallelModeControlPlaneBackgroundEvent::SupervisorSnapshotRefreshed {
+                workspace_directory,
+                epoch_id,
+                effect_id,
+                orchestrator_tick_signature,
+                supervisor_snapshot: Box::new(supervisor_snapshot),
+            }
         });
     }
 
@@ -240,59 +287,57 @@ where
         let planning = self.planning.clone();
         let event_sink = self.event_sink.clone();
         let automation_guard = self.automation_guard.clone();
+        let panic_completion =
+            ParallelModeControlPlaneBackgroundEvent::SupervisorInspectionCompleted {
+                correlation: correlation.clone(),
+                result: Err("parallel supervisor inspection failed unexpectedly".to_string()),
+            };
 
-        thread::spawn(move || {
+        spawn_parallel_effect_completion_worker(event_sink, panic_completion, move || {
             let workspace_directory = correlation.workspace_directory.clone();
             let automation_permit = correlation
                 .epoch_id
                 .map(|epoch_id| automation_guard.permit(&workspace_directory, epoch_id));
-            let result = panic::catch_unwind(AssertUnwindSafe(
-                || -> Result<ParallelModeSupervisorInspectionSnapshot, String> {
-                    if automation_permit
-                        .as_ref()
-                        .is_some_and(|permit| !permit.is_active())
-                    {
-                        return Err(
-                            "parallel supervisor inspection belongs to an inactive epoch"
-                                .to_string(),
-                        );
-                    }
-                    let planning_projection = planning
-                        .runtime
-                        .load_runtime_projection_or_invalid(&workspace_directory);
-                    let readiness_snapshot = parallel_mode_service
-                        .inspect_readiness(&workspace_directory, &planning_projection);
-                    let supervisor_snapshot = if reconcile_pool {
-                        let permit = automation_permit.as_ref().ok_or_else(|| {
-                            "parallel supervisor reconciliation has no automation epoch".to_string()
-                        })?;
-                        parallel_mode_service.reconcile_supervisor_snapshot_guarded(
-                            &workspace_directory,
-                            mode_enabled,
-                            Some(&readiness_snapshot),
-                            permit,
-                        )?
-                    } else {
-                        parallel_mode_service.build_supervisor_snapshot(
-                            &workspace_directory,
-                            mode_enabled,
-                            Some(&readiness_snapshot),
-                        )
-                    };
-                    Ok(ParallelModeSupervisorInspectionSnapshot {
-                        readiness_snapshot,
-                        supervisor_snapshot: Box::new(supervisor_snapshot),
-                    })
-                },
-            ))
-            .map_err(|_| "parallel supervisor inspection failed unexpectedly".to_string())
-            .and_then(|result| result);
-            event_sink.send_control_plane_event(
-                ParallelModeControlPlaneBackgroundEvent::SupervisorInspectionCompleted {
-                    correlation,
-                    result,
-                },
-            );
+            let result = (|| -> Result<ParallelModeSupervisorInspectionSnapshot, String> {
+                if automation_permit
+                    .as_ref()
+                    .is_some_and(|permit| !permit.is_active())
+                {
+                    return Err(
+                        "parallel supervisor inspection belongs to an inactive epoch".to_string(),
+                    );
+                }
+                let planning_projection = planning
+                    .runtime
+                    .load_runtime_projection_or_invalid(&workspace_directory);
+                let readiness_snapshot = parallel_mode_service
+                    .inspect_readiness(&workspace_directory, &planning_projection);
+                let supervisor_snapshot = if reconcile_pool {
+                    let permit = automation_permit.as_ref().ok_or_else(|| {
+                        "parallel supervisor reconciliation has no automation epoch".to_string()
+                    })?;
+                    parallel_mode_service.reconcile_supervisor_snapshot_guarded(
+                        &workspace_directory,
+                        mode_enabled,
+                        Some(&readiness_snapshot),
+                        permit,
+                    )?
+                } else {
+                    parallel_mode_service.build_supervisor_snapshot(
+                        &workspace_directory,
+                        mode_enabled,
+                        Some(&readiness_snapshot),
+                    )
+                };
+                Ok(ParallelModeSupervisorInspectionSnapshot {
+                    readiness_snapshot,
+                    supervisor_snapshot: Box::new(supervisor_snapshot),
+                })
+            })();
+            ParallelModeControlPlaneBackgroundEvent::SupervisorInspectionCompleted {
+                correlation,
+                result,
+            }
         });
     }
 
@@ -306,10 +351,21 @@ where
         let parallel_mode_service = self.parallel_mode_service.clone();
         let event_sink = self.event_sink.clone();
         let automation_guard = self.automation_guard.clone();
+        let panic_completion = effect_failed(
+            workspace_directory.clone(),
+            epoch_id,
+            effect_id,
+            "parallel orchestrator tick failed unexpectedly",
+        );
 
-        thread::spawn(move || {
+        spawn_parallel_effect_completion_worker(event_sink, panic_completion, move || {
             if !automation_guard.is_active(&workspace_directory, epoch_id) {
-                return;
+                return effect_failed(
+                    workspace_directory,
+                    epoch_id,
+                    effect_id,
+                    "parallel orchestrator tick belongs to an inactive epoch",
+                );
             }
             event_log::emit_lazy("parallel_orchestrator_retry_started", || {
                 orchestrator_retry_started_payload(&workspace_directory, &signature)
@@ -334,15 +390,13 @@ where
                     notices.len(),
                 )
             });
-            event_sink.send_control_plane_event(
-                ParallelModeControlPlaneBackgroundEvent::OrchestratorTickCompleted {
-                    workspace_directory,
-                    epoch_id,
-                    effect_id,
-                    blocked,
-                    notices,
-                },
-            );
+            ParallelModeControlPlaneBackgroundEvent::OrchestratorTickCompleted {
+                workspace_directory,
+                epoch_id,
+                effect_id,
+                blocked,
+                notices,
+            }
         });
     }
 
@@ -358,10 +412,21 @@ where
         let planning = self.planning.clone();
         let event_sink = self.event_sink.clone();
         let automation_guard = self.automation_guard.clone();
+        let panic_completion = effect_failed(
+            workspace_directory.clone(),
+            epoch_id,
+            effect_id,
+            "parallel mode entry failed unexpectedly",
+        );
 
-        thread::spawn(move || {
+        spawn_parallel_effect_completion_worker(event_sink.clone(), panic_completion, move || {
             if !automation_guard.is_active(&workspace_directory, epoch_id) {
-                return;
+                return effect_failed(
+                    workspace_directory,
+                    epoch_id,
+                    effect_id,
+                    "parallel mode entry belongs to an inactive epoch",
+                );
             }
             let planning_projection = planning
                 .runtime
@@ -389,7 +454,12 @@ where
                 && entry_plan.reset_scope == Some(ParallelModePoolResetScope::PoolOnly);
             let (supervisor_snapshot, status_text) = if readiness_snapshot.allows_parallel_mode() {
                 if !automation_guard.is_active(&workspace_directory, epoch_id) {
-                    return;
+                    return effect_failed(
+                        workspace_directory,
+                        epoch_id,
+                        effect_id,
+                        "parallel mode entry belongs to an inactive epoch",
+                    );
                 }
                 event_sink.send_control_plane_event(
                     ParallelModeControlPlaneBackgroundEvent::EnterProgress {
@@ -407,7 +477,12 @@ where
                     == Some(ParallelModePoolResetScope::PoolOnly)
                 {
                     if !automation_guard.is_active(&workspace_directory, epoch_id) {
-                        return;
+                        return effect_failed(
+                            workspace_directory,
+                            epoch_id,
+                            effect_id,
+                            "parallel mode entry belongs to an inactive epoch",
+                        );
                     }
                     event_log::emit_lazy("parallel_pool_reset_started", || {
                         parallel_pool_reset_started_payload(
@@ -479,25 +554,27 @@ where
                             "parallel mode: blocked / readiness: {} / pool reset failed: {error}",
                             readiness_snapshot.readiness_label()
                         );
-                        event_sink.send_control_plane_event(
-                            ParallelModeControlPlaneBackgroundEvent::Entered {
-                                workspace_directory,
-                                epoch_id,
-                                effect_id,
-                                mode_was_enabled,
-                                readiness_snapshot,
-                                supervisor_snapshot: Box::new(supervisor_snapshot),
-                                status_text,
-                                initial_pool_reset_completed: false,
-                                has_actionable_queue_head,
-                                orchestrator_tick_signature: None,
-                            },
-                        );
-                        return;
+                        return ParallelModeControlPlaneBackgroundEvent::Entered {
+                            workspace_directory,
+                            epoch_id,
+                            effect_id,
+                            mode_was_enabled,
+                            readiness_snapshot,
+                            supervisor_snapshot: Box::new(supervisor_snapshot),
+                            status_text,
+                            initial_pool_reset_completed: false,
+                            has_actionable_queue_head,
+                            orchestrator_tick_signature: None,
+                        };
                     }
                 };
                 if !automation_guard.is_active(&workspace_directory, epoch_id) {
-                    return;
+                    return effect_failed(
+                        workspace_directory,
+                        epoch_id,
+                        effect_id,
+                        "parallel mode entry belongs to an inactive epoch",
+                    );
                 }
                 let supervisor_snapshot = parallel_mode_service.reconcile_supervisor_snapshot(
                     &workspace_directory,
@@ -536,9 +613,14 @@ where
                 &supervisor_snapshot,
             );
             if !automation_guard.is_active(&workspace_directory, epoch_id) {
-                return;
+                return effect_failed(
+                    workspace_directory,
+                    epoch_id,
+                    effect_id,
+                    "parallel mode entry belongs to an inactive epoch",
+                );
             }
-            event_sink.send_control_plane_event(ParallelModeControlPlaneBackgroundEvent::Entered {
+            ParallelModeControlPlaneBackgroundEvent::Entered {
                 workspace_directory,
                 epoch_id,
                 effect_id,
@@ -549,7 +631,7 @@ where
                 initial_pool_reset_completed,
                 has_actionable_queue_head,
                 orchestrator_tick_signature,
-            });
+            }
         });
     }
 
@@ -567,27 +649,59 @@ where
         let planning = self.planning.clone();
         let event_sink = self.event_sink.clone();
         let automation_guard = self.automation_guard.clone();
+        let panic_completion = effect_failed(
+            workspace_directory.clone(),
+            epoch_id,
+            effect_id,
+            "parallel orchestrator wake failed unexpectedly",
+        );
 
-        thread::spawn(move || {
+        spawn_parallel_effect_completion_worker(event_sink.clone(), panic_completion, move || {
             if !automation_guard.is_active(&workspace_directory, epoch_id) {
-                return;
+                return effect_failed(
+                    workspace_directory,
+                    epoch_id,
+                    effect_id,
+                    "parallel orchestrator wake belongs to an inactive epoch",
+                );
             }
             let (loop_event_tx, loop_event_rx) = mpsc::channel();
             let loop_event_sink = event_sink.clone();
             let loop_planning = planning.clone();
             let loop_workspace_directory = workspace_directory.clone();
             thread::spawn(move || {
-                while let Ok(event) = loop_event_rx.recv() {
-                    loop_event_sink.send_control_plane_event(
-                        background_event_from_parallel_loop_event(
-                            event,
-                            &loop_planning,
-                            &loop_workspace_directory,
-                            epoch_id,
-                            effect_id,
-                        ),
-                    );
-                }
+                let _ = catch_redacted_worker_unwind(|| {
+                    while let Ok(event) = loop_event_rx.recv() {
+                        let fallback_event = match &event {
+                            ParallelModeOrchestratorLoopEvent::ConversationRuntimeNotice(_) => {
+                                ParallelModeControlPlaneBackgroundEvent::ConversationRuntimeNotice {
+                                    workspace_directory: loop_workspace_directory.clone(),
+                                    epoch_id,
+                                    effect_id,
+                                    notice: "parallel runtime notice could not be projected"
+                                        .to_string(),
+                                }
+                            }
+                            ParallelModeOrchestratorLoopEvent::WorkerEvent(event) => {
+                                ParallelModeControlPlaneBackgroundEvent::WorkerEvent {
+                                    event: event.clone(),
+                                    has_actionable_queue_head: false,
+                                }
+                            }
+                        };
+                        let background_event = catch_redacted_worker_unwind(|| {
+                            background_event_from_parallel_loop_event(
+                                event,
+                                &loop_planning,
+                                &loop_workspace_directory,
+                                epoch_id,
+                                effect_id,
+                            )
+                        })
+                        .unwrap_or(fallback_event);
+                        loop_event_sink.send_control_plane_event(background_event);
+                    }
+                });
             });
             let result = parallel_mode_service.run_dispatch_orchestrator_tick(
                 ParallelModeDispatchOrchestratorTickRequest {
@@ -607,16 +721,14 @@ where
                 &workspace_directory,
                 &result.supervisor_snapshot,
             );
-            event_sink.send_control_plane_event(
-                ParallelModeControlPlaneBackgroundEvent::OrchestratorWakeCompleted {
-                    workspace_directory: result.workspace_directory,
-                    effect_id,
-                    readiness_snapshot: result.readiness_snapshot,
-                    supervisor_snapshot: Box::new(result.supervisor_snapshot),
-                    outcome: result.outcome,
-                    orchestrator_tick_signature,
-                },
-            );
+            ParallelModeControlPlaneBackgroundEvent::OrchestratorWakeCompleted {
+                workspace_directory: result.workspace_directory,
+                effect_id,
+                readiness_snapshot: result.readiness_snapshot,
+                supervisor_snapshot: Box::new(result.supervisor_snapshot),
+                outcome: result.outcome,
+                orchestrator_tick_signature,
+            }
         });
     }
 
@@ -627,27 +739,24 @@ where
         let parallel_mode_service = self.parallel_mode_service.clone();
         let event_sink = self.event_sink.clone();
         let automation_guard = self.automation_guard.clone();
+        let panic_completion = ParallelModeControlPlaneBackgroundEvent::PendingDispatchWakePolled {
+            correlation: correlation.clone(),
+            result: Err("pending dispatch poll failed unexpectedly".to_string()),
+        };
 
-        thread::spawn(move || {
-            let result = panic::catch_unwind(AssertUnwindSafe(|| {
-                if !automation_guard
-                    .is_active(&correlation.workspace_directory, correlation.epoch_id)
-                {
-                    return Err(
-                        "pending dispatch poll belongs to an inactive automation epoch".to_string(),
-                    );
-                }
+        spawn_parallel_effect_completion_worker(event_sink, panic_completion, move || {
+            let result = if !automation_guard
+                .is_active(&correlation.workspace_directory, correlation.epoch_id)
+            {
+                Err("pending dispatch poll belongs to an inactive automation epoch".to_string())
+            } else {
                 parallel_mode_service
                     .pending_dispatch_wake(&correlation.workspace_directory, correlation.epoch_id)
-            }))
-            .map_err(|_| "pending dispatch poll failed unexpectedly".to_string())
-            .and_then(|result| result);
-            event_sink.send_control_plane_event(
-                ParallelModeControlPlaneBackgroundEvent::PendingDispatchWakePolled {
-                    correlation,
-                    result,
-                },
-            );
+            };
+            ParallelModeControlPlaneBackgroundEvent::PendingDispatchWakePolled {
+                correlation,
+                result,
+            }
         });
     }
 
@@ -659,9 +768,13 @@ where
         let parallel_mode_service = self.parallel_mode_service.clone();
         let planning = self.planning.clone();
         let event_sink = self.event_sink.clone();
+        let panic_completion = ParallelModeControlPlaneBackgroundEvent::DispatchMutationCompleted {
+            correlation: correlation.clone(),
+            result: Err("parallel dispatch mutation failed unexpectedly".to_string()),
+        };
 
-        thread::spawn(move || {
-            let result = panic::catch_unwind(AssertUnwindSafe(|| match &mutation {
+        spawn_parallel_effect_completion_worker(event_sink, panic_completion, move || {
+            let result = match &mutation {
                 ParallelModeDispatchMutation::EnqueueSlotCapacity => {
                     let planning_projection = planning
                         .runtime
@@ -695,15 +808,11 @@ where
                         ),
                     )
                 }
-            }))
-            .map_err(|_| "parallel dispatch mutation failed unexpectedly".to_string())
-            .and_then(|result| result);
-            event_sink.send_control_plane_event(
-                ParallelModeControlPlaneBackgroundEvent::DispatchMutationCompleted {
-                    correlation,
-                    result,
-                },
-            );
+            };
+            ParallelModeControlPlaneBackgroundEvent::DispatchMutationCompleted {
+                correlation,
+                result,
+            }
         });
     }
 }
@@ -886,6 +995,8 @@ fn combine_parallel_mode_tick_signature(
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+    use std::sync::mpsc;
+    use std::time::Duration;
 
     use crate::domain::parallel_mode::{
         ParallelModeAgentRosterSnapshot, ParallelModeDistributorQueueItem,
@@ -897,6 +1008,17 @@ mod tests {
 
     use super::*;
 
+    #[derive(Clone)]
+    struct CapturingEventSink {
+        tx: mpsc::Sender<ParallelModeControlPlaneBackgroundEvent>,
+    }
+
+    impl ParallelModeControlPlaneEventSink for CapturingEventSink {
+        fn send_control_plane_event(&self, event: ParallelModeControlPlaneBackgroundEvent) {
+            let _ = self.tx.send(event);
+        }
+    }
+
     fn supervisor_snapshot() -> ParallelModeSupervisorSnapshot {
         ParallelModeSupervisorSnapshot::new(
             ParallelModeSupervisorState::Supervise,
@@ -907,6 +1029,80 @@ mod tests {
             ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "none"),
             None,
         )
+    }
+
+    fn assert_exactly_one_worker_completion(
+        work: impl FnOnce() -> ParallelModeControlPlaneBackgroundEvent + Send + 'static,
+        panic_completion: ParallelModeControlPlaneBackgroundEvent,
+    ) -> ParallelModeControlPlaneBackgroundEvent {
+        let (tx, rx) = mpsc::channel();
+        spawn_parallel_effect_completion_worker(CapturingEventSink { tx }, panic_completion, work)
+            .join()
+            .expect("completion worker should settle its own panic");
+        let completion = rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("completion worker should publish one terminal event");
+        assert!(
+            matches!(rx.try_recv(), Err(mpsc::TryRecvError::Disconnected)),
+            "completion worker must publish exactly one terminal event"
+        );
+        completion
+    }
+
+    #[test]
+    fn completion_worker_is_total_for_success_failure_and_panic() {
+        let effect_id = ParallelModeControlPlaneEffectId {
+            sequence: 11,
+            kind: super::super::ParallelModeControlPlaneEffectKind::RunOrchestratorTick,
+        };
+        let panic_fallback =
+            || effect_failed("/repo", 7, effect_id, "parallel effect failed unexpectedly");
+
+        let success = assert_exactly_one_worker_completion(
+            move || ParallelModeControlPlaneBackgroundEvent::OrchestratorTickCompleted {
+                workspace_directory: "/repo".to_string(),
+                epoch_id: 7,
+                effect_id,
+                blocked: false,
+                notices: Vec::new(),
+            },
+            panic_fallback(),
+        );
+        assert!(matches!(
+            success,
+            ParallelModeControlPlaneBackgroundEvent::OrchestratorTickCompleted {
+                effect_id: completed,
+                ..
+            } if completed == effect_id
+        ));
+
+        let failure = assert_exactly_one_worker_completion(
+            move || effect_failed("/repo", 7, effect_id, "service returned an error"),
+            panic_fallback(),
+        );
+        assert!(matches!(
+            failure,
+            ParallelModeControlPlaneBackgroundEvent::EffectFailed {
+                effect_id: completed,
+                error,
+                ..
+            } if completed == effect_id && error == "service returned an error"
+        ));
+
+        let panic = assert_exactly_one_worker_completion(
+            || panic!("SECRET-PANIC-PAYLOAD"),
+            panic_fallback(),
+        );
+        assert!(matches!(
+            panic,
+            ParallelModeControlPlaneBackgroundEvent::EffectFailed {
+                effect_id: completed,
+                error,
+                ..
+            } if completed == effect_id
+                && error == "parallel effect failed unexpectedly"
+                && !error.contains("SECRET-PANIC-PAYLOAD")
+        ));
     }
 
     #[test]

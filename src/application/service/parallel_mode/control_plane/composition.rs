@@ -138,20 +138,39 @@ impl ParallelModeControlPlaneComposition {
             let event = rx
                 .recv()
                 .map_err(|error| format!("manual control-plane tick did not complete: {error}"))?;
-            if let ParallelModeControlPlaneBackgroundEvent::OrchestratorTickCompleted {
-                blocked,
-                notices,
-                ..
-            } = event
-            {
-                return Ok(ParallelModeOrchestratorTickResult {
-                    trigger: ParallelModeOrchestratorTrigger::ManualDispatch,
-                    state: ParallelModeOrchestratorStateMachine::tick_state(blocked),
+            match event {
+                ParallelModeControlPlaneBackgroundEvent::OrchestratorTickCompleted {
                     blocked,
                     notices,
-                });
+                    ..
+                } => {
+                    return Ok(ParallelModeOrchestratorTickResult {
+                        trigger: ParallelModeOrchestratorTrigger::ManualDispatch,
+                        state: ParallelModeOrchestratorStateMachine::tick_state(blocked),
+                        blocked,
+                        notices,
+                    });
+                }
+                ParallelModeControlPlaneBackgroundEvent::EffectFailed {
+                    workspace_directory,
+                    epoch_id,
+                    effect_id,
+                    error,
+                } => {
+                    let _ = handle.handle_background_event(
+                        ParallelModeControlPlaneBackgroundEvent::EffectFailed {
+                            workspace_directory,
+                            epoch_id,
+                            effect_id,
+                            error: error.clone(),
+                        },
+                    );
+                    return Err(format!("manual control-plane tick failed: {error}"));
+                }
+                event => {
+                    let _ = handle.handle_background_event(event);
+                }
             }
-            let _ = handle.handle_background_event(event);
         }
     }
 

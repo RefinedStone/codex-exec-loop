@@ -57,7 +57,7 @@ fn inline_planning_init_inspection_renders_initialized_workspace_inside_shell_fr
     app.show_planning_init_overlay();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
     while std::time::Instant::now() < deadline {
-        app.poll_core_runtime_inputs(16);
+        app.poll_client_runtime_events(16);
         if app.planning.planning_init_overlay_ui_state.step() != PlanningInitOverlayStep::Loading {
             break;
         }

@@ -82,6 +82,11 @@ navigation intent cannot optimistically rewrite it.
   unrelated conversation switch, or later transcript append must leave the current handoff pending.
 - A failed terminal draw must not acknowledge its handoff or leave the staged frame signature
   trusted. The next transaction must repaint the unchanged semantic frame before it can emit an ACK.
+- `NativeTuiApp` owns one opaque `NativeClientRuntime`, not a parallel control-plane handle, sink,
+  or completion channel. Core and parallel intents enter through `NativeClientEvent`; the runtime
+  fairly drains its private completion lanes and returns typed outcomes for adapter projection.
+  Every parallel effect must settle success, failure, or panic exactly once before its in-flight
+  correlation can be released.
 - Supersession is covered by that consistency guarantee: the sample owns one control-plane
   presentation projection, one event-stream projection, and the narrow owned Core projection,
   while row planning and drawing consume the same owned overlay view. High-frequency prompt,
