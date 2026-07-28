@@ -404,13 +404,17 @@ impl Drop for IsolatedTuiFixture {
 
 fn install_fake_codex(fake_bin: &Path, pid_log: &Path, request_log: &Path) {
     let node = find_host_node();
-    std::os::unix::fs::symlink(&node, fake_bin.join("node"))
-        .expect("trusted Node link should create");
+    let installed_node = fake_bin.join("node");
+    // A hosted tool-cache ancestor may be world-writable even when Node itself is safe. Copy the
+    // executable into the private fixture instead of symlinking across that untrusted boundary.
+    fs::copy(&node, &installed_node).expect("trusted Node fixture should copy");
 
     let launcher = fake_bin.join("codex");
     fs::write(&launcher, fake_codex_script(pid_log, request_log))
         .expect("fake Codex launcher should write");
     use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&installed_node, fs::Permissions::from_mode(0o700))
+        .expect("trusted Node fixture should become private and executable");
     fs::set_permissions(&launcher, fs::Permissions::from_mode(0o700))
         .expect("fake Codex launcher should become executable");
 }
