@@ -588,6 +588,24 @@ fn app_state_authority_analyzer_rejects_visibility_and_writer_escapes() {
         error.contains("storage field must remain private"),
         "unexpected AppState field visibility analyzer error: {error}"
     );
+
+    let nested_writer = controller.replacen(
+        "mod state;",
+        "mod state;\n\
+         mod escaped_writer {\n\
+             use super::state::AppState;\n\
+             fn mutate(state: &mut AppState) {\n\
+                 state.mark_startup_loading();\n\
+             }\n\
+         }",
+        1,
+    );
+    let error = verify_app_state_controller_seal(&app_module, &nested_writer, &state)
+        .expect_err("a production controller child module must not inherit AppState authority");
+    assert!(
+        error.contains("must not declare production child modules"),
+        "unexpected nested-writer analyzer error: {error}"
+    );
 }
 
 #[test]
@@ -3919,6 +3937,25 @@ fn fixture(app: &mut App) {
     assert!(
         audit.field_writes.is_empty() && audit.whole_state_writes.is_empty(),
         "reads and cfg(test) fixtures must not create shell writer false positives"
+    );
+
+    let unrelated_fields = r#"
+struct OtherState {
+    startup_state: usize,
+}
+struct Projection {
+    session_state: usize,
+}
+fn update_unrelated(other: &mut OtherState, projection: &mut Projection) {
+    other.startup_state = 1;
+    projection.session_state = 2;
+}
+"#;
+    let audit =
+        shell_chrome_writer_audit(unrelated_fields).expect("unrelated-field fixture should parse");
+    assert!(
+        audit.field_writes.is_empty() && audit.whole_state_writes.is_empty(),
+        "matching field names outside shell.chrome must not create writer false positives"
     );
 
     let direct = shell_chrome_writer_audit(
@@ -10235,6 +10272,17 @@ fn verify_app_state_controller_seal(
 
     let controller_syntax = syn::parse_file(controller)
         .map_err(|error| format!("CoreController source must parse: {error}"))?;
+    let production_modules = production_module_paths(&controller_syntax);
+    let unexpected_modules = production_modules
+        .iter()
+        .filter(|path| path.as_str() != "state")
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unexpected_modules.is_empty() {
+        return Err(format!(
+            "CoreController must not declare production child modules beside its private `state` child: {unexpected_modules:?}"
+        ));
+    }
     let state_modules = controller_syntax
         .items
         .iter()
@@ -10372,6 +10420,30 @@ fn visibility_is_restricted_to(visibility: &syn::Visibility, expected: &[&str]) 
 
 fn item_is_test_only(item: &syn::Item) -> bool {
     item_attributes(item).is_some_and(attributes_are_test_only)
+}
+
+fn production_module_paths(syntax: &syn::File) -> Vec<String> {
+    let mut visitor = ProductionModulePathVisitor::default();
+    visitor.visit_file(syntax);
+    visitor.paths
+}
+
+#[derive(Default)]
+struct ProductionModulePathVisitor {
+    parents: Vec<String>,
+    paths: Vec<String>,
+}
+
+impl<'ast> Visit<'ast> for ProductionModulePathVisitor {
+    fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
+        if attributes_are_test_only(&module.attrs) {
+            return;
+        }
+        self.parents.push(module.ident.to_string());
+        self.paths.push(self.parents.join("::"));
+        visit::visit_item_mod(self, module);
+        self.parents.pop();
+    }
 }
 
 fn attributes_are_test_only(attributes: &[syn::Attribute]) -> bool {
@@ -11933,6 +12005,33 @@ fn expression_field_chain(expression: &syn::Expr) -> Vec<String> {
     fields
 }
 
+fn expression_named_access_path(expression: &syn::Expr) -> Option<Vec<String>> {
+    match expression {
+        syn::Expr::Field(field) => {
+            let mut path = expression_named_access_path(field.base.as_ref())?;
+            let syn::Member::Named(member) = &field.member else {
+                return None;
+            };
+            path.push(member.to_string());
+            Some(path)
+        }
+        syn::Expr::Path(path) if path.qself.is_none() => Some(
+            path.path
+                .segments
+                .iter()
+                .map(|segment| segment.ident.to_string())
+                .collect(),
+        ),
+        syn::Expr::Group(group) => expression_named_access_path(group.expr.as_ref()),
+        syn::Expr::Paren(paren) => expression_named_access_path(paren.expr.as_ref()),
+        syn::Expr::Reference(reference) => expression_named_access_path(reference.expr.as_ref()),
+        syn::Expr::Unary(unary) if matches!(unary.op, syn::UnOp::Deref(_)) => {
+            expression_named_access_path(unary.expr.as_ref())
+        }
+        _ => None,
+    }
+}
+
 fn conversation_runtime_semantic_field(field: &str) -> bool {
     matches!(
         field,
@@ -11984,16 +12083,29 @@ impl ShellChromeWriterVisitor {
     }
 
     fn inspect_write_target(&mut self, expression: &syn::Expr, kind: &str) {
-        let fields = expression_field_chain(expression);
-        if let Some(field) = fields
-            .iter()
-            .find(|field| SHELL_CHROME_REDUCER_FIELDS.contains(&field.as_str()))
+        let Some(path) = expression_named_access_path(expression) else {
+            return;
+        };
+        let audited_field = path
+            .last()
+            .filter(|field| SHELL_CHROME_REDUCER_FIELDS.contains(&field.as_str()));
+        let is_shell_chrome_field = audited_field.is_some()
+            && path.len() >= 3
+            && path[path.len() - 3] == "shell"
+            && path[path.len() - 2] == "chrome";
+        let is_reducer_state_field =
+            audited_field.is_some() && path.len() == 2 && path[0] == "state";
+        if (is_shell_chrome_field || is_reducer_state_field)
+            && let Some(field) = audited_field
         {
             self.audit.field_writes.push(self.finding(
                 expression.span().start().line,
                 format!("{kind} reaches shell chrome field `{field}`"),
             ));
-        } else if fields.last().is_some_and(|field| field == "chrome") {
+        } else if path.len() >= 2
+            && path[path.len() - 2] == "shell"
+            && path[path.len() - 1] == "chrome"
+        {
             self.audit.whole_state_writes.push(self.finding(
                 expression.span().start().line,
                 format!("{kind} replaces or exposes the whole shell chrome state"),
