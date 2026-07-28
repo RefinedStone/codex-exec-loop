@@ -3971,10 +3971,25 @@ fn update_unrelated(other: &mut OtherState, projection: &mut Projection) {
          }",
     )
     .expect("destructured shell chrome alias fixture should parse");
-    assert_eq!(
-        destructured_alias.whole_state_writes.len(),
-        1,
+    assert!(
+        !destructured_alias.whole_state_writes.is_empty(),
         "a mutable borrow of the shell container must reject destructured chrome aliases"
+    );
+
+    let ergonomic_pattern_alias = shell_chrome_writer_audit(
+        "fn escape(\n\
+             NativeTuiApp {\n\
+                 shell: NativeTuiShellState { chrome, .. },\n\
+                 ..\n\
+             }: &mut NativeTuiApp,\n\
+         ) {\n\
+             chrome.session_state = SessionState::Idle;\n\
+         }",
+    )
+    .expect("ergonomic shell chrome pattern alias fixture should parse");
+    assert!(
+        !ergonomic_pattern_alias.whole_state_writes.is_empty(),
+        "destructuring shell/chrome authority must be rejected even without an explicit mutable reference expression"
     );
 
     let mutable = shell_chrome_writer_audit(
@@ -12045,6 +12060,24 @@ fn expression_named_access_path(expression: &syn::Expr) -> Option<Vec<String>> {
     }
 }
 
+fn struct_pattern_binds_field(
+    pattern: &syn::PatStruct,
+    struct_name: &str,
+    field_name: &str,
+) -> bool {
+    pattern
+        .path
+        .segments
+        .last()
+        .is_some_and(|segment| segment.ident == struct_name)
+        && pattern.fields.iter().any(|field| {
+            matches!(
+                &field.member,
+                syn::Member::Named(member) if member == field_name
+            )
+        })
+}
+
 fn conversation_runtime_semantic_field(field: &str) -> bool {
     matches!(
         field,
@@ -12212,6 +12245,25 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
             self.inspect_write_target(call.receiver.as_ref(), "mutable method");
         }
         visit::visit_expr_method_call(self, call);
+    }
+
+    fn visit_pat_struct(&mut self, pattern: &'ast syn::PatStruct) {
+        let escaped_authority = if struct_pattern_binds_field(pattern, "NativeTuiApp", "shell") {
+            Some("NativeTuiApp.shell")
+        } else if struct_pattern_binds_field(pattern, "NativeTuiShellState", "chrome") {
+            Some("NativeTuiShellState.chrome")
+        } else {
+            None
+        };
+        if let Some(authority) = escaped_authority {
+            self.audit.whole_state_writes.push(self.finding(
+                pattern.span().start().line,
+                format!(
+                    "pattern destructuring exposes shell chrome authority through `{authority}`"
+                ),
+            ));
+        }
+        visit::visit_pat_struct(self, pattern);
     }
 }
 
