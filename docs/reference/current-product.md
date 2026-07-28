@@ -146,6 +146,10 @@ The `/admin/akra` game projection uses a PixiJS 8 world over the same dashboard 
 validated frontend store, semantic camera zoom, worker movement, furniture occlusion, and scene
 selection remain presentation-only; see [Admin Game Frontend](admin-game-frontend.md).
 
+For UI/UX debugging, `akra admin --debug-harness` starts an application-owned, non-durable Fake
+scenario clock behind the same dashboard contract. It supports normal delivery, blocked recovery,
+and queue-pressure playback without mutating real planning, parallel, Git, or GitHub authority.
+
 ## Recovery and Limits
 
 - Invalid or conflicting planning updates pause continuation and preserve review evidence.

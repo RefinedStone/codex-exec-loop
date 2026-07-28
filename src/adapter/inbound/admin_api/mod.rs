@@ -1,4 +1,5 @@
 use crate::application::port::outbound::app_server_prompt_log_port::AppServerPromptLogPort;
+use crate::application::service::admin_debug_harness::AdminDebugHarnessService;
 use crate::application::service::parallel_agent_profile::ParallelAgentProfileService;
 use crate::application::service::parallel_mode::control_plane::{
     ParallelModeControlPlaneBackgroundEvent, ParallelModeControlPlaneComposition,
@@ -27,6 +28,10 @@ use std::sync::{Arc, Mutex, mpsc};
  * 그래서 이 파일은 "어떤 URL이 어떤 transport contract로 facade를 호출하는가"만 설명하고,
  * planning 자체의 판정은 직접 복제하지 않는다.
  */
+mod admin_debug_dashboard;
+mod admin_debug_dashboard_support;
+#[cfg(test)]
+mod admin_debug_dashboard_tests;
 mod akra_dashboard;
 mod api;
 mod forms;
@@ -55,6 +60,7 @@ struct AdminAppState {
     facade: Arc<PlanningAdminFacadeService>,
     parallel_mode_control_plane: Arc<ParallelModeControlPlaneComposition>,
     parallel_control_runtime: AdminParallelControlRuntime,
+    admin_debug_harness_service: AdminDebugHarnessService,
     parallel_agent_profile_service: ParallelAgentProfileService,
     app_server_prompt_log_port: Arc<dyn AppServerPromptLogPort>,
     review_center_read_service: ReviewCenterReadService,
@@ -109,6 +115,7 @@ struct AdminGraphicConfig {
 #[derive(Debug, Default)]
 struct AdminServerArgs {
     port: u16,
+    debug_harness: bool,
 }
 
 enum AdminShutdownSignal {
@@ -203,7 +210,8 @@ where
     let shutdown_signal = AdminShutdownSignal::install();
     let public_origin = security.config.public_origin();
     let workspace_dir = workspace_dir.display().to_string();
-    let state = build_admin_state(workspace_dir, security.config);
+    let state =
+        build_admin_state_with_debug_harness(workspace_dir, security.config, args.debug_harness);
     println!("local planning admin server listening on {public_origin}");
     if let Some(token) = security.generated_capability_token {
         if stdout_is_terminal {
@@ -225,19 +233,32 @@ where
     Ok(())
 }
 
+#[cfg(test)]
 fn build_admin_state(workspace_dir: String, security: AdminSecurityConfig) -> AdminAppState {
+    build_admin_state_with_debug_harness(workspace_dir, security, false)
+}
+
+fn build_admin_state_with_debug_harness(
+    workspace_dir: String,
+    security: AdminSecurityConfig,
+    debug_harness_enabled: bool,
+) -> AdminAppState {
     /*
      * Admin HTTP layer는 route와 transport contract만 소유한다.
      * app-server, sqlite authority, filesystem workspace, Git/GitHub runtime wiring은
      * production composition root에서 같은 graph로 받아 page/API handler가 동일 facade를 공유하게 한다.
      */
-    let application = production::build_admin_application(workspace_dir);
+    let application = production::build_admin_application_with_debug_harness(
+        workspace_dir,
+        debug_harness_enabled,
+    );
     let parallel_control_runtime =
         AdminParallelControlRuntime::new(application.parallel_mode_control_plane.as_ref());
     AdminAppState {
         facade: application.facade,
         parallel_mode_control_plane: application.parallel_mode_control_plane,
         parallel_control_runtime,
+        admin_debug_harness_service: application.admin_debug_harness_service,
         parallel_agent_profile_service: application.parallel_agent_profile_service,
         app_server_prompt_log_port: application.app_server_prompt_log_port,
         review_center_read_service: application.review_center_read_service,
@@ -473,6 +494,10 @@ fn build_router(state: AdminAppState) -> Router {
             "/api/admin/akra/commands/{command_id}",
             get(api::akra_command_api),
         )
+        .route(
+            "/api/admin/akra/debug-harness",
+            get(api::akra_debug_harness_api).post(api::mutate_akra_debug_harness_api),
+        )
         .with_state(state.clone())
         .layer(middleware::from_fn_with_state(
             state,
@@ -499,7 +524,10 @@ where
      * 메인 CLI parser와 결합하면 실험적 admin-only flag가 일반 실행 경로의 contract처럼 굳어질 수 있으므로,
      * 여기서는 port와 help만 받아 standalone server bootstrap에 필요한 최소 surface를 유지한다.
      */
-    let mut parsed = AdminServerArgs { port: DEFAULT_PORT };
+    let mut parsed = AdminServerArgs {
+        port: DEFAULT_PORT,
+        debug_harness: false,
+    };
     let mut args = args.into_iter();
 
     while let Some(arg) = args.next() {
@@ -512,9 +540,10 @@ where
                     .parse::<u16>()
                     .with_context(|| format!("invalid port: {value}"))?;
             }
+            "--debug-harness" => parsed.debug_harness = true,
             "-h" | "--help" => {
-                println!("Usage: akra admin [--port <port>]");
-                println!("Alias: akra admin-server [--port <port>]");
+                println!("Usage: akra admin [--port <port>] [--debug-harness]");
+                println!("Alias: akra admin-server [--port <port>] [--debug-harness]");
                 std::process::exit(0);
             }
             _ => bail!("unsupported argument: {arg}"),

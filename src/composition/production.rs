@@ -29,6 +29,9 @@ use crate::application::port::outbound::review_center_repository_port::ReviewCen
 use crate::application::port::outbound::telegram_bot_port::TelegramBotPort;
 use crate::application::port::outbound::telegram_global_runner_lease_port::TelegramGlobalRunnerLeasePort;
 use crate::application::port::outbound::telegram_update_ledger_port::TelegramUpdateLedgerPort;
+use crate::application::service::admin_debug_harness::{
+    AdminDebugHarnessConfig, AdminDebugHarnessService,
+};
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
 use crate::application::service::parallel_agent_profile::ParallelAgentProfileService;
@@ -51,6 +54,7 @@ const AKRA_APP_SERVER_PROMPT_LOG_ENV_VAR: &str = "AKRA_APP_SERVER_PROMPT_LOG";
 pub(crate) struct ProductionAdminApplication {
     pub(crate) facade: Arc<PlanningAdminFacadeService>,
     pub(crate) parallel_mode_control_plane: Arc<ParallelModeControlPlaneComposition>,
+    pub(crate) admin_debug_harness_service: AdminDebugHarnessService,
     pub(crate) app_server_prompt_log_port: Arc<dyn AppServerPromptLogPort>,
     pub(crate) parallel_agent_profile_service: ParallelAgentProfileService,
     #[allow(dead_code)]
@@ -117,7 +121,15 @@ pub(crate) fn build_parallel_mode_control_plane_composition(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn build_admin_application(workspace_dir: String) -> ProductionAdminApplication {
+    build_admin_application_with_debug_harness(workspace_dir, false)
+}
+
+pub(crate) fn build_admin_application_with_debug_harness(
+    workspace_dir: String,
+    debug_harness_enabled: bool,
+) -> ProductionAdminApplication {
     let capture_enabled = app_server_prompt_logging_enabled();
     maintain_prompt_logs_best_effort(&workspace_dir, capture_enabled);
     let ports = build_shared_ports_for_prompt_logging(capture_enabled);
@@ -143,6 +155,11 @@ pub(crate) fn build_admin_application(workspace_dir: String) -> ProductionAdminA
     ProductionAdminApplication {
         facade,
         parallel_mode_control_plane,
+        admin_debug_harness_service: AdminDebugHarnessService::new(if debug_harness_enabled {
+            AdminDebugHarnessConfig::enabled()
+        } else {
+            AdminDebugHarnessConfig::disabled()
+        }),
         app_server_prompt_log_port: ports.app_server_prompt_log_port,
         parallel_agent_profile_service,
         review_center_read_service,

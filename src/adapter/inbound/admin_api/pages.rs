@@ -12,7 +12,7 @@ use super::views::{
     EditorActionPaths, EditorTemplate, ReviewsTemplate, TasksTemplate,
 };
 use super::{AdminAppState, parse_reset_target};
-use crate::adapter::inbound::admin_api::akra_dashboard::build_akra_dashboard_view;
+use crate::adapter::inbound::admin_api::admin_debug_dashboard::build_admin_dashboard_view;
 use crate::application::service::parallel_agent_profile::parse_parallel_agent_profile_config_json;
 use crate::application::service::planning::{
     PlanningAdminDirectionDeleteRequest, PlanningAdminDirectionMutationRequest,
@@ -171,12 +171,7 @@ pub(super) async fn akra_dashboard_page(
             },
         );
     }
-    let dashboard = build_akra_dashboard_view(
-        state.facade.as_ref(),
-        state.parallel_mode_control_plane.as_ref(),
-        &state.parallel_agent_profile_service,
-    )
-    .map_err(internal_server_error)?;
+    let dashboard = build_admin_dashboard_view(&state).map_err(internal_server_error)?;
     render_html(
         jar,
         AkraDashboardTemplate {
@@ -197,12 +192,7 @@ pub(super) async fn akra_metrics_page(
     query: Query<HashMap<String, String>>,
 ) -> std::result::Result<Response, StatusCode> {
     let (jar, csrf_token) = ensure_csrf_cookie(jar);
-    let dashboard = build_akra_dashboard_view(
-        state.facade.as_ref(),
-        state.parallel_mode_control_plane.as_ref(),
-        &state.parallel_agent_profile_service,
-    )
-    .map_err(internal_server_error)?;
+    let dashboard = build_admin_dashboard_view(&state).map_err(internal_server_error)?;
     render_html(
         jar,
         AkraMetricsTemplate {

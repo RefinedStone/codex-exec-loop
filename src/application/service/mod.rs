@@ -2,6 +2,7 @@
  * service 모듈은 화면이나 저장소 세부사항을 모르는 유스케이스 묶음이다.
  * 각 service는 domain 모델과 outbound port를 조합하고, adapter는 이 공개 진입점만 호출한다.
  */
+pub mod admin_debug_harness;
 pub mod conversation_runtime_event;
 // conversation_service는 사용자 turn과 app-server 스트림을 대화 단위로 조율한다.
 pub mod conversation_service;

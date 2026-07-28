@@ -1,3 +1,6 @@
+use super::admin_debug_dashboard::{
+    AdminDebugHarnessView, build_admin_dashboard_view, build_admin_events_view, map_harness_view,
+};
 use super::forms::{
     AkraControlRequest, CreateDraftRequest, DraftPromoteApiResponse, EditorQuery,
     OverviewApiResponse, ResetRequest, SaveDraftRequest,
@@ -7,8 +10,9 @@ use super::{
     AdminAppState, ensure_csrf_cookie, internal_server_error, parse_reset_target,
     verify_draft_name_path, verify_header_csrf,
 };
-use crate::adapter::inbound::admin_api::akra_dashboard::{
-    EventFeedView, RuntimeEventView, build_akra_dashboard_view, build_akra_events_view,
+use crate::adapter::inbound::admin_api::akra_dashboard::{EventFeedView, RuntimeEventView};
+use crate::application::service::admin_debug_harness::{
+    AdminDebugHarnessCommand, AdminDebugScenario,
 };
 use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneCommand;
 use crate::application::service::planning::{
@@ -49,6 +53,13 @@ pub(super) struct AkraStreamQuery {
     pub after_sequence: Option<i64>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct AkraDebugHarnessRequest {
+    pub action: String,
+    pub scenario: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct AkraEventsApiResponse {
@@ -84,6 +95,7 @@ struct AkraStreamFrame {
     feed: EventFeedView,
     events: Vec<RuntimeEventView>,
     control: AkraControlApiResponse,
+    debug_harness: AdminDebugHarnessView,
     server_time: String,
 }
 
@@ -128,6 +140,9 @@ pub(super) async fn mutate_akra_control_api(
     Json(request): Json<AkraControlRequest>,
 ) -> std::result::Result<Response, StatusCode> {
     verify_header_csrf(&jar, &headers)?;
+    if state.admin_debug_harness_service.projection().enabled {
+        return Err(StatusCode::CONFLICT);
+    }
     state.parallel_control_runtime.drain_pending_events();
     let workspace_directory = state.facade.workspace_dir().to_string();
     let handle = &state.parallel_control_runtime.handle;
@@ -197,23 +212,23 @@ pub(super) async fn akra_stream_api(
     let mut after_sequence = header_cursor.or(query.after_sequence);
     let mut first_frame = true;
     let mut last_control_signature = String::new();
+    let mut last_debug_revision = 0;
     let mut interval = tokio::time::interval(Duration::from_millis(1_500));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     let stream = IntervalStream::new(interval).map(move |_| {
         let control = akra_control_view(&state, "realtime control projection");
-        let (feed, events) = build_akra_events_view(
-            state.facade.workspace_dir(),
-            state.parallel_mode_control_plane.as_ref(),
-            50,
-            after_sequence,
-        );
+        let debug_projection = state.admin_debug_harness_service.projection();
+        let debug_harness = map_harness_view(&debug_projection);
+        let (feed, events) = build_admin_events_view(&state, 50, after_sequence);
         let control_signature =
             serde_json::to_string(&control).expect("AKRA control projection should serialize");
         let control_changed = control_signature != last_control_signature;
         let cursor_reset_required =
             feed.incremental && feed.total_event_count > feed.visible_event_count;
-        let refresh_dashboard = first_frame || control_changed || !events.is_empty();
+        let debug_changed = debug_harness.enabled && debug_harness.revision != last_debug_revision;
+        let refresh_dashboard =
+            first_frame || control_changed || debug_changed || !events.is_empty();
         let reason = if first_frame {
             "connected"
         } else if cursor_reset_required {
@@ -222,6 +237,8 @@ pub(super) async fn akra_stream_api(
             "runtime_event"
         } else if control_changed {
             "control"
+        } else if debug_changed {
+            "debug_harness"
         } else {
             "heartbeat"
         };
@@ -231,6 +248,7 @@ pub(super) async fn akra_stream_api(
         }
         first_frame = false;
         last_control_signature = control_signature;
+        last_debug_revision = debug_harness.revision;
         let frame = AkraStreamFrame {
             schema_version: 1,
             reason,
@@ -239,6 +257,7 @@ pub(super) async fn akra_stream_api(
             feed,
             events,
             control,
+            debug_harness,
             server_time: chrono::Utc::now().to_rfc3339(),
         };
         let mut event = Event::default()
@@ -299,48 +318,28 @@ pub(super) async fn runtime_api(
 pub(super) async fn akra_dashboard_api(
     State(state): State<AdminAppState>,
 ) -> std::result::Result<Response, StatusCode> {
-    let dashboard = build_akra_dashboard_view(
-        state.facade.as_ref(),
-        state.parallel_mode_control_plane.as_ref(),
-        &state.parallel_agent_profile_service,
-    )
-    .map_err(internal_server_error)?;
+    let dashboard = build_admin_dashboard_view(&state).map_err(internal_server_error)?;
     Ok(Json(dashboard).into_response())
 }
 
 pub(super) async fn akra_pool_api(
     State(state): State<AdminAppState>,
 ) -> std::result::Result<Response, StatusCode> {
-    let dashboard = build_akra_dashboard_view(
-        state.facade.as_ref(),
-        state.parallel_mode_control_plane.as_ref(),
-        &state.parallel_agent_profile_service,
-    )
-    .map_err(internal_server_error)?;
+    let dashboard = build_admin_dashboard_view(&state).map_err(internal_server_error)?;
     Ok(Json(dashboard.pool).into_response())
 }
 
 pub(super) async fn akra_agents_api(
     State(state): State<AdminAppState>,
 ) -> std::result::Result<Response, StatusCode> {
-    let dashboard = build_akra_dashboard_view(
-        state.facade.as_ref(),
-        state.parallel_mode_control_plane.as_ref(),
-        &state.parallel_agent_profile_service,
-    )
-    .map_err(internal_server_error)?;
+    let dashboard = build_admin_dashboard_view(&state).map_err(internal_server_error)?;
     Ok(Json(dashboard.agents).into_response())
 }
 
 pub(super) async fn akra_distributor_api(
     State(state): State<AdminAppState>,
 ) -> std::result::Result<Response, StatusCode> {
-    let dashboard = build_akra_dashboard_view(
-        state.facade.as_ref(),
-        state.parallel_mode_control_plane.as_ref(),
-        &state.parallel_agent_profile_service,
-    )
-    .map_err(internal_server_error)?;
+    let dashboard = build_admin_dashboard_view(&state).map_err(internal_server_error)?;
     Ok(Json(dashboard.distributor).into_response())
 }
 
@@ -359,13 +358,45 @@ pub(super) async fn akra_events_api(
         )
             .into_response());
     }
-    let (feed, events) = build_akra_events_view(
-        state.facade.workspace_dir(),
-        state.parallel_mode_control_plane.as_ref(),
-        limit,
-        query.after_sequence,
-    );
+    let (feed, events) = build_admin_events_view(&state, limit, query.after_sequence);
     Ok(Json(AkraEventsApiResponse { feed, events }).into_response())
+}
+
+pub(super) async fn akra_debug_harness_api(
+    State(state): State<AdminAppState>,
+) -> std::result::Result<Response, StatusCode> {
+    Ok(Json(map_harness_view(
+        &state.admin_debug_harness_service.projection(),
+    ))
+    .into_response())
+}
+
+pub(super) async fn mutate_akra_debug_harness_api(
+    State(state): State<AdminAppState>,
+    jar: CookieJar,
+    headers: HeaderMap,
+    Json(request): Json<AkraDebugHarnessRequest>,
+) -> std::result::Result<Response, StatusCode> {
+    verify_header_csrf(&jar, &headers)?;
+    let command = match request.action.trim() {
+        "play" => AdminDebugHarnessCommand::Play,
+        "pause" => AdminDebugHarnessCommand::Pause,
+        "step" => AdminDebugHarnessCommand::Step,
+        "reset" => AdminDebugHarnessCommand::Reset,
+        "scenario" => AdminDebugHarnessCommand::SelectScenario(
+            request
+                .scenario
+                .as_deref()
+                .and_then(AdminDebugScenario::from_key)
+                .ok_or(StatusCode::BAD_REQUEST)?,
+        ),
+        _ => return Err(StatusCode::BAD_REQUEST),
+    };
+    let projection = state
+        .admin_debug_harness_service
+        .execute(command)
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+    Ok(Json(map_harness_view(&projection)).into_response())
 }
 
 pub(super) async fn create_draft_api(
