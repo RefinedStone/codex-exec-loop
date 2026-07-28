@@ -99,10 +99,11 @@ const stableNumber = (value: string): number =>
 const copyPoint = (point: Point): Point => ({ x: point.x, y: point.y });
 
 export const AGENT_MOVEMENT_SPEED_RATIO = 0.3;
-export const WALK_FRAME_DURATION_MS = 225;
+export const AGENT_TRAVEL_SPEED_WORLD_PX_PER_SECOND = 168;
+export const WALK_FRAME_DURATION_MS = 135;
 export const IDLE_FRAME_DURATION_MS = 520;
 
-const MOVEMENT_RESPONSE_RATE_PER_MS = 0.0065 * AGENT_MOVEMENT_SPEED_RATIO;
+const MAX_MOVEMENT_DELTA_MS = 50;
 const IDLE_FRAME_SEQUENCE = [0, 1, 0, 2] as const;
 
 const animationStep = (
@@ -304,18 +305,25 @@ export class AgentWorld {
   }
 
   update(deltaMilliseconds: number, elapsedMilliseconds: number): void {
-    const interpolation = this.reducedMotion
-      ? 1
-      : 1 -
-        Math.exp(
-          -Math.max(0, deltaMilliseconds) * MOVEMENT_RESPONSE_RATE_PER_MS
-        );
+    const movementDeltaSeconds =
+      Math.min(
+        Math.max(0, deltaMilliseconds),
+        MAX_MOVEMENT_DELTA_MS
+      ) / 1000;
     for (const unit of this.units.values()) {
       const remaining = distance(unit.currentPoint, unit.targetPoint);
       const moving = remaining > 1.4;
-      if (moving) {
-        unit.currentPoint.x += (unit.targetPoint.x - unit.currentPoint.x) * interpolation;
-        unit.currentPoint.y += (unit.targetPoint.y - unit.currentPoint.y) * interpolation;
+      if (moving && this.reducedMotion) {
+        unit.currentPoint = copyPoint(unit.targetPoint);
+      } else if (moving) {
+        const travelStep = Math.min(
+          remaining,
+          AGENT_TRAVEL_SPEED_WORLD_PX_PER_SECOND * movementDeltaSeconds
+        );
+        unit.currentPoint.x +=
+          ((unit.targetPoint.x - unit.currentPoint.x) / remaining) * travelStep;
+        unit.currentPoint.y +=
+          ((unit.targetPoint.y - unit.currentPoint.y) / remaining) * travelStep;
       } else {
         unit.currentPoint = copyPoint(unit.targetPoint);
       }

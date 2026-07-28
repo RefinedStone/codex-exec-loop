@@ -3084,7 +3084,8 @@ fn akra_graphic_dashboard_game_bundle_is_vite_typescript_input() {
         "export const ARCHETYPE_BY_PROFILE",
         "const drawStaticMarker",
         "export const AGENT_MOVEMENT_SPEED_RATIO = 0.3",
-        "export const WALK_FRAME_DURATION_MS = 225",
+        "export const AGENT_TRAVEL_SPEED_WORLD_PX_PER_SECOND = 168",
+        "export const WALK_FRAME_DURATION_MS = 135",
         "export const IDLE_FRAME_DURATION_MS = 520",
         "animationKind: unit.animationKind",
         "movementSpeedRatio: AGENT_MOVEMENT_SPEED_RATIO",
@@ -3253,7 +3254,7 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
 
     for semantic_motion in [
         "actorTargetPoint",
-        "interpolation",
+        "travelStep",
         "rebuildSignalPackets",
         "world.update",
         "prefers-reduced-motion",

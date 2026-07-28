@@ -235,7 +235,7 @@ const emptyInspection = (): SceneInspection => ({
         return;
       }
       initialized = true;
-      app.ticker.maxFPS = 30;
+      app.ticker.maxFPS = 60;
       app.canvas.className = "akra-world-canvas";
       app.canvas.setAttribute("aria-hidden", "true");
       app.canvas.setAttribute("tabindex", "-1");
