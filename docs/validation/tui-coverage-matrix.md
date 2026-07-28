@@ -158,6 +158,7 @@ and remove it when the corresponding tests move or disappear.
 - `src/adapter/inbound/tui/app/planning_workspace_operation_ui.rs`
 - `src/adapter/inbound/tui/app/progressive_activity_overlay_ui.rs`
 - `src/adapter/inbound/tui/app/queue_overlay_ui.rs`
+- `src/adapter/inbound/tui/app/ratatui_frontend.rs`
 - `src/adapter/inbound/tui/app/reviews_overlay_ui.rs`
 - `src/adapter/inbound/tui/app/session_overlay_screen_model.rs`
 - `src/adapter/inbound/tui/app/session_overlay_ui.rs`
