@@ -606,6 +606,22 @@ fn app_state_authority_analyzer_rejects_visibility_and_writer_escapes() {
         error.contains("must not declare production child modules"),
         "unexpected nested-writer analyzer error: {error}"
     );
+
+    let nested_state_writer = format!(
+        "{state}\n\
+         mod escaped_writer {{\n\
+             use super::AppState;\n\
+             fn mutate(state: &mut AppState) {{\n\
+                 state.mark_startup_loading();\n\
+             }}\n\
+         }}\n"
+    );
+    let error = verify_app_state_controller_seal(&app_module, &controller, &nested_state_writer)
+        .expect_err("the AppState child file must not delegate writer authority");
+    assert!(
+        error.contains("state child must not declare production child modules"),
+        "unexpected nested state-writer analyzer error: {error}"
+    );
 }
 
 #[test]
@@ -3974,6 +3990,46 @@ fn update_unrelated(
     )
     .expect("direct shell writer fixture should parse");
     assert_eq!(direct.field_writes.len(), 1);
+
+    let type_alias = shell_chrome_writer_audit(
+        "type App = NativeTuiApp;\n\
+         fn escape(app: &mut App) {\n\
+             app.shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+    )
+    .expect("type-aliased native app fixture should parse");
+    assert_eq!(
+        type_alias.field_writes.len(),
+        1,
+        "type aliases of NativeTuiApp must retain shell chrome authority"
+    );
+
+    let chained_import_alias = shell_chrome_writer_audit(
+        "use super::NativeTuiApp as BaseApp;\n\
+         type App = BaseApp;\n\
+         fn escape(app: &mut App) {\n\
+             app.shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+    )
+    .expect("chained import and type alias fixture should parse");
+    assert_eq!(
+        chained_import_alias.field_writes.len(),
+        1,
+        "import renames and chained type aliases must retain shell chrome authority"
+    );
+
+    let boxed_type_alias = shell_chrome_writer_audit(
+        "type App = NativeTuiApp;\n\
+         fn escape(app: &mut Box<App>) {\n\
+             (*app).shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+    )
+    .expect("boxed type-aliased native app fixture should parse");
+    assert_eq!(
+        boxed_type_alias.field_writes.len(),
+        1,
+        "dereference wrappers around aliased NativeTuiApp must retain shell chrome authority"
+    );
 
     let destructured_alias = shell_chrome_writer_audit(
         "fn escape(app: &mut NativeTuiApp) {\n\
@@ -10434,6 +10490,12 @@ fn verify_app_state_controller_seal(
 
     let state_syntax =
         syn::parse_file(state).map_err(|error| format!("AppState source must parse: {error}"))?;
+    let state_production_modules = production_module_paths(&state_syntax);
+    if !state_production_modules.is_empty() {
+        return Err(format!(
+            "AppState state child must not declare production child modules: {state_production_modules:?}"
+        ));
+    }
     let app_states = state_syntax
         .items
         .iter()
@@ -12139,40 +12201,148 @@ struct ShellAuthorityBinding {
     mutable: bool,
 }
 
-fn shell_authority_kind_from_type(
+fn shell_authority_binding_from_type(
     ty: &syn::Type,
     implicit_self: Option<ShellAuthorityKind>,
-) -> Option<ShellAuthorityKind> {
+    type_aliases: &HashMap<String, syn::Type>,
+    resolving_aliases: &mut HashSet<String>,
+) -> Option<ShellAuthorityBinding> {
     match ty {
         syn::Type::Path(path) if path.qself.is_none() => {
-            match path.path.segments.last()?.ident.to_string().as_str() {
+            let segment = path.path.segments.last()?;
+            let name = segment.ident.to_string();
+            if type_aliases.contains_key(&name) {
+                if !resolving_aliases.insert(name.clone()) {
+                    return None;
+                }
+                let resolved = type_aliases.get(&name).and_then(|alias| {
+                    shell_authority_binding_from_type(
+                        alias,
+                        implicit_self,
+                        type_aliases,
+                        resolving_aliases,
+                    )
+                });
+                resolving_aliases.remove(&name);
+                return resolved;
+            }
+            let direct_kind = match name.as_str() {
                 "NativeTuiApp" => Some(ShellAuthorityKind::App),
                 "NativeTuiShellState" => Some(ShellAuthorityKind::Shell),
                 "ShellChromeState" => Some(ShellAuthorityKind::Chrome),
                 "Self" => implicit_self,
                 _ => None,
+            };
+            if let Some(kind) = direct_kind {
+                return Some(ShellAuthorityBinding {
+                    kind,
+                    mutable: false,
+                });
             }
+            if matches!(
+                name.as_str(),
+                "Box" | "Pin" | "RefMut" | "MutexGuard" | "RwLockWriteGuard"
+            ) && let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments
+                && let Some(inner) = arguments.args.iter().find_map(|argument| match argument {
+                    syn::GenericArgument::Type(ty) => Some(ty),
+                    _ => None,
+                })
+            {
+                return shell_authority_binding_from_type(
+                    inner,
+                    implicit_self,
+                    type_aliases,
+                    resolving_aliases,
+                );
+            }
+            None
         }
         syn::Type::Reference(reference) => {
-            shell_authority_kind_from_type(reference.elem.as_ref(), implicit_self)
+            let authority = shell_authority_binding_from_type(
+                reference.elem.as_ref(),
+                implicit_self,
+                type_aliases,
+                resolving_aliases,
+            )?;
+            Some(ShellAuthorityBinding {
+                mutable: reference.mutability.is_some(),
+                ..authority
+            })
         }
-        syn::Type::Group(group) => {
-            shell_authority_kind_from_type(group.elem.as_ref(), implicit_self)
-        }
-        syn::Type::Paren(paren) => {
-            shell_authority_kind_from_type(paren.elem.as_ref(), implicit_self)
+        syn::Type::Group(group) => shell_authority_binding_from_type(
+            group.elem.as_ref(),
+            implicit_self,
+            type_aliases,
+            resolving_aliases,
+        ),
+        syn::Type::Paren(paren) => shell_authority_binding_from_type(
+            paren.elem.as_ref(),
+            implicit_self,
+            type_aliases,
+            resolving_aliases,
+        ),
+        syn::Type::Ptr(pointer) => {
+            let authority = shell_authority_binding_from_type(
+                pointer.elem.as_ref(),
+                implicit_self,
+                type_aliases,
+                resolving_aliases,
+            )?;
+            Some(ShellAuthorityBinding {
+                mutable: pointer.mutability.is_some(),
+                ..authority
+            })
         }
         _ => None,
     }
 }
 
-fn type_is_mutable_reference(ty: &syn::Type) -> bool {
-    match ty {
-        syn::Type::Reference(reference) => reference.mutability.is_some(),
-        syn::Type::Group(group) => type_is_mutable_reference(group.elem.as_ref()),
-        syn::Type::Paren(paren) => type_is_mutable_reference(paren.elem.as_ref()),
-        _ => false,
+#[derive(Default)]
+struct ProductionTypeAliasVisitor {
+    aliases: HashMap<String, syn::Type>,
+}
+
+impl ProductionTypeAliasVisitor {
+    fn collect_use_renames(&mut self, tree: &syn::UseTree) {
+        match tree {
+            syn::UseTree::Path(path) => self.collect_use_renames(path.tree.as_ref()),
+            syn::UseTree::Rename(rename) => {
+                if let Ok(ty) = syn::parse_str::<syn::Type>(&rename.ident.to_string()) {
+                    self.aliases.insert(rename.rename.to_string(), ty);
+                }
+            }
+            syn::UseTree::Group(group) => {
+                for item in &group.items {
+                    self.collect_use_renames(item);
+                }
+            }
+            syn::UseTree::Glob(_) | syn::UseTree::Name(_) => {}
+        }
     }
+}
+
+impl<'ast> Visit<'ast> for ProductionTypeAliasVisitor {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if item_is_test_only(item) {
+            return;
+        }
+        visit::visit_item(self, item);
+    }
+
+    fn visit_item_type(&mut self, item: &'ast syn::ItemType) {
+        self.aliases
+            .insert(item.ident.to_string(), item.ty.as_ref().clone());
+    }
+
+    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+        self.collect_use_renames(&item.tree);
+    }
+}
+
+fn production_type_aliases(syntax: &syn::File) -> HashMap<String, syn::Type> {
+    let mut visitor = ProductionTypeAliasVisitor::default();
+    visitor.visit_file(syntax);
+    visitor.aliases
 }
 
 fn pattern_has_mutable_binding(pattern: &syn::Pat) -> bool {
@@ -12239,7 +12409,10 @@ struct ShellChromeWriterAudit {
 fn shell_chrome_writer_audit(source: &str) -> Result<ShellChromeWriterAudit, String> {
     let syntax = syn::parse_file(source)
         .map_err(|error| format!("shell chrome writer source must parse: {error}"))?;
-    let mut visitor = ShellChromeWriterVisitor::default();
+    let mut visitor = ShellChromeWriterVisitor {
+        type_aliases: production_type_aliases(&syntax),
+        ..Default::default()
+    };
     visitor.visit_file(&syntax);
     Ok(visitor.audit)
 }
@@ -12249,6 +12422,7 @@ struct ShellChromeWriterVisitor {
     owner: Option<String>,
     impl_authority: Option<ShellAuthorityKind>,
     authority_bindings: HashMap<String, ShellAuthorityBinding>,
+    type_aliases: HashMap<String, syn::Type>,
     audit: ShellChromeWriterAudit,
 }
 
@@ -12266,9 +12440,16 @@ impl ShellChromeWriterVisitor {
         pattern: &syn::Pat,
         ty: &syn::Type,
     ) -> Option<ShellAuthorityBinding> {
+        let mut resolving_aliases = HashSet::new();
+        let authority = shell_authority_binding_from_type(
+            ty,
+            self.impl_authority,
+            &self.type_aliases,
+            &mut resolving_aliases,
+        )?;
         Some(ShellAuthorityBinding {
-            kind: shell_authority_kind_from_type(ty, self.impl_authority)?,
-            mutable: type_is_mutable_reference(ty) || pattern_has_mutable_binding(pattern),
+            mutable: authority.mutable || pattern_has_mutable_binding(pattern),
+            ..authority
         })
     }
 
@@ -12434,8 +12615,14 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
             return;
         }
         let previous = self.impl_authority;
-        self.impl_authority =
-            shell_authority_kind_from_type(item.self_ty.as_ref(), self.impl_authority);
+        let mut resolving_aliases = HashSet::new();
+        self.impl_authority = shell_authority_binding_from_type(
+            item.self_ty.as_ref(),
+            self.impl_authority,
+            &self.type_aliases,
+            &mut resolving_aliases,
+        )
+        .map(|authority| authority.kind);
         visit::visit_item_impl(self, item);
         self.impl_authority = previous;
     }
