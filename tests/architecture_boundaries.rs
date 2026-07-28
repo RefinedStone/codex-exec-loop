@@ -4720,6 +4720,41 @@ fn update_unrelated(
     .expect("whole shell writer fixture should parse");
     assert_eq!(whole.whole_state_writes.len(), 1);
 
+    let function_argument = shell_chrome_writer_audit(
+        "fn escape(chrome: &mut ShellChromeState) {\n\
+             std::mem::replace(chrome, Default::default());\n\
+         }",
+    )
+    .expect("mutable function argument fixture should parse");
+    assert_eq!(
+        function_argument.whole_state_writes.len(),
+        1,
+        "general function arguments must not expose mutable Chrome authority"
+    );
+
+    let method_argument = shell_chrome_writer_audit(
+        "fn escape(sink: &mut Sink, chrome: &mut ShellChromeState) {\n\
+             sink.replace(chrome);\n\
+         }",
+    )
+    .expect("mutable method argument fixture should parse");
+    assert_eq!(
+        method_argument.whole_state_writes.len(),
+        1,
+        "method arguments must not expose mutable Chrome authority"
+    );
+
+    let read_only_argument = shell_chrome_writer_audit(
+        "fn inspect(chrome: &ShellChromeState) {\n\
+             inspect_state(chrome);\n\
+         }",
+    )
+    .expect("read-only function argument fixture should parse");
+    assert!(
+        read_only_argument.whole_state_writes.is_empty(),
+        "read-only Chrome arguments must remain harmless"
+    );
+
     let shell_source = fs::read_to_string("src/adapter/inbound/tui/shell_chrome.rs")
         .expect("shell chrome source should load");
     let wildcard = shell_source.replacen("ShellChromeEvent::StartupCheckRequested =>", "_ =>", 1);
@@ -14321,6 +14356,24 @@ impl ShellChromeWriterVisitor {
         }
     }
 
+    fn inspect_call_argument(&mut self, expression: &syn::Expr, kind: &str) {
+        if let Some(authority) = self.resolve_authority(expression)
+            && authority.mutable
+            && self
+                .resolve_type_binding(expression)
+                .is_some_and(|binding| self.type_grants_mutable_access(&binding.ty))
+            && matches!(
+                authority.kind,
+                ShellAuthorityKind::Shell | ShellAuthorityKind::Chrome
+            )
+        {
+            self.audit.whole_state_writes.push(self.finding(
+                expression.span().start().line,
+                format!("{kind} passes mutable {:?} authority", authority.kind),
+            ));
+        }
+    }
+
     fn inspect_macro(&mut self, expression: &syn::Macro, item_position: bool) {
         let name = expression
             .path
@@ -14623,6 +14676,9 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
         if !SHELL_CHROME_READ_ONLY_METHODS.contains(&method.as_str()) {
             self.inspect_write_target(call.receiver.as_ref(), "mutable method");
         }
+        for argument in &call.args {
+            self.inspect_call_argument(argument, "method argument");
+        }
         visit::visit_expr_method_call(self, call);
     }
 
@@ -14635,6 +14691,9 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
                 None,
                 method.ident.span().start().line,
             );
+        }
+        for argument in &call.args {
+            self.inspect_call_argument(argument, "function argument");
         }
         visit::visit_expr_call(self, call);
     }
