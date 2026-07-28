@@ -643,6 +643,19 @@ fn app_state_authority_analyzer_rejects_visibility_and_writer_escapes() {
         "unexpected statement-macro analyzer error: {error}"
     );
 
+    let expression_macro_writer = format!(
+        "{controller}\n\
+         fn invoke_writer_macro() {{\n\
+             let _writer = escaped_writer!();\n\
+         }}\n"
+    );
+    let error = verify_app_state_controller_seal(&app_module, &expression_macro_writer, &state)
+        .expect_err("an expression macro must not manufacture a local AppState writer module");
+    assert!(
+        error.contains("must not contain production item macros"),
+        "unexpected expression-macro analyzer error: {error}"
+    );
+
     let nested_state_writer = format!(
         "{state}\n\
          mod escaped_writer {{\n\
@@ -3913,16 +3926,28 @@ fn shell_chrome_state_has_one_typed_reducer_writer() {
     let mut violations = Vec::new();
     let mut reducer_fields = HashSet::new();
     let mut whole_state_writers = Vec::new();
-    for path in rust_files_under(&root.join("src/adapter/inbound/tui")) {
-        if is_test_only_path(&path) {
-            continue;
-        }
-        let source = fs::read_to_string(&path)
-            .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
-        let relative = relative_path(&root, &path);
-        let audit = shell_chrome_writer_audit_with_policy(
-            &source,
+    let tui_sources = rust_files_under(&root.join("src/adapter/inbound/tui"))
+        .into_iter()
+        .filter(|path| !is_test_only_path(path))
+        .map(|path| {
+            let source = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+            (path, source)
+        })
+        .collect::<Vec<_>>();
+    let mut known_struct_fields = ShellStructFields::new();
+    for (path, source) in &tui_sources {
+        let syntax = syn::parse_file(source)
+            .unwrap_or_else(|error| panic!("failed to parse {}: {error}", path.display()));
+        known_struct_fields.extend(all_struct_fields_declared_in_file(&syntax));
+    }
+
+    for (path, source) in &tui_sources {
+        let relative = relative_path(&root, path);
+        let audit = shell_chrome_writer_audit_with_struct_fields(
+            source,
             relative == "src/adapter/inbound/tui/app/app_runtime.rs",
+            &known_struct_fields,
         )
         .unwrap_or_else(|error| panic!("failed to audit {}: {error}", path.display()));
 
@@ -4068,6 +4093,28 @@ fn update_unrelated(
         nested_wrapped_app.field_writes.len(),
         1,
         "nested wrapper fields and local aliases must retain NativeTuiApp authority"
+    );
+
+    let wrapper_file = syn::parse_file(
+        "pub struct Context<'a> {\n\
+             pub app: &'a mut NativeTuiApp,\n\
+         }",
+    )
+    .expect("cross-file wrapper definition should parse");
+    let known_struct_fields = all_struct_fields_declared_in_file(&wrapper_file);
+    let cross_file_wrapped_app = shell_chrome_writer_audit_with_struct_fields(
+        "use crate::Context;\n\
+         fn escape(context: &mut Context<'_>) {\n\
+             context.app.shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+        false,
+        &known_struct_fields,
+    )
+    .expect("cross-file wrapped native app fixture should parse");
+    assert_eq!(
+        cross_file_wrapped_app.field_writes.len(),
+        1,
+        "the production-wide struct registry must retain authority across Rust files"
     );
 
     let unrelated_wrapper = shell_chrome_writer_audit(
@@ -11083,7 +11130,7 @@ struct ProductionItemMacroVisitor {
     names: Vec<String>,
 }
 
-const SEALED_SOURCE_STATEMENT_MACROS: &[&str] = &[
+const SEALED_SOURCE_ALLOWED_MACROS: &[&str] = &[
     "assert",
     "assert_eq",
     "assert_ne",
@@ -11091,11 +11138,14 @@ const SEALED_SOURCE_STATEMENT_MACROS: &[&str] = &[
     "debug_assert_eq",
     "debug_assert_ne",
     "eprintln",
+    "format",
+    "matches",
     "panic",
     "println",
     "todo",
     "unimplemented",
     "unreachable",
+    "vec",
 ];
 
 fn macro_name(expression: &syn::Macro) -> String {
@@ -11129,7 +11179,17 @@ impl<'ast> Visit<'ast> for ProductionItemMacroVisitor {
             return;
         }
         let name = macro_name(&statement.mac);
-        if !SEALED_SOURCE_STATEMENT_MACROS.contains(&name.as_str()) {
+        if !SEALED_SOURCE_ALLOWED_MACROS.contains(&name.as_str()) {
+            self.names.push(name);
+        }
+    }
+
+    fn visit_expr_macro(&mut self, expression: &'ast syn::ExprMacro) {
+        if attributes_are_test_only(&expression.attrs) {
+            return;
+        }
+        let name = macro_name(&expression.mac);
+        if !SEALED_SOURCE_ALLOWED_MACROS.contains(&name.as_str()) {
             self.names.push(name);
         }
     }
@@ -12982,6 +13042,26 @@ fn struct_fields_declared_in_statements(statements: &[syn::Stmt]) -> ShellStruct
     structs
 }
 
+fn collect_nested_struct_fields(items: &[syn::Item], structs: &mut ShellStructFields) {
+    for item in items {
+        if item_is_test_only(item) {
+            continue;
+        }
+        collect_item_struct_fields(item, structs);
+        if let syn::Item::Mod(module) = item
+            && let Some((_, nested_items)) = &module.content
+        {
+            collect_nested_struct_fields(nested_items, structs);
+        }
+    }
+}
+
+fn all_struct_fields_declared_in_file(file: &syn::File) -> ShellStructFields {
+    let mut structs = HashMap::new();
+    collect_nested_struct_fields(&file.items, &mut structs);
+    structs
+}
+
 fn pattern_has_mutable_binding(pattern: &syn::Pat) -> bool {
     match pattern {
         syn::Pat::Ident(pattern) => {
@@ -13117,10 +13197,23 @@ fn shell_chrome_writer_audit_with_policy(
     source: &str,
     allow_native_app_dispatch_seam: bool,
 ) -> Result<ShellChromeWriterAudit, String> {
+    shell_chrome_writer_audit_with_struct_fields(
+        source,
+        allow_native_app_dispatch_seam,
+        &ShellStructFields::new(),
+    )
+}
+
+fn shell_chrome_writer_audit_with_struct_fields(
+    source: &str,
+    allow_native_app_dispatch_seam: bool,
+    known_struct_fields: &ShellStructFields,
+) -> Result<ShellChromeWriterAudit, String> {
     let syntax = syn::parse_file(source)
         .map_err(|error| format!("shell chrome writer source must parse: {error}"))?;
     let mut visitor = ShellChromeWriterVisitor {
         allow_native_app_dispatch_seam,
+        struct_fields: known_struct_fields.clone(),
         ..Default::default()
     };
     visitor.visit_file(&syntax);
