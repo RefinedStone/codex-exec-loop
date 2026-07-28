@@ -4018,6 +4018,24 @@ fn update_unrelated(
         "import renames and chained type aliases must retain shell chrome authority"
     );
 
+    let scoped_type_alias = shell_chrome_writer_audit(
+        "struct Other;\n\
+         type App = NativeTuiApp;\n\
+         mod unrelated {\n\
+             type App = super::Other;\n\
+             fn read(_app: &App) {}\n\
+         }\n\
+         fn escape(app: &mut App) {\n\
+             app.shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+    )
+    .expect("lexically scoped type alias fixture should parse");
+    assert_eq!(
+        scoped_type_alias.field_writes.len(),
+        1,
+        "a nested module alias must not overwrite the enclosing App authority alias"
+    );
+
     let boxed_type_alias = shell_chrome_writer_audit(
         "type App = NativeTuiApp;\n\
          fn escape(app: &mut Box<App>) {\n\
@@ -4114,6 +4132,24 @@ fn update_unrelated(
         shell_impl_alias.field_writes.len(),
         1,
         "NativeTuiShellState mutable self must resolve through chrome authority"
+    );
+
+    let take_method_result = shell_chrome_writer_audit(
+        "impl NativeTuiApp {\n\
+             fn take_shell_chrome_state(&mut self) -> ShellChromeState {\n\
+                 todo!()\n\
+             }\n\
+             fn escape(&mut self) {\n\
+                 let mut state = self.take_shell_chrome_state();\n\
+                 state.session_state = SessionState::Idle;\n\
+             }\n\
+         }",
+    )
+    .expect("take shell chrome method result fixture should parse");
+    assert_eq!(
+        take_method_result.field_writes.len(),
+        1,
+        "the allowed take seam result must retain Chrome authority in local bindings"
     );
 
     let mutable = shell_chrome_writer_audit(
@@ -12297,52 +12333,52 @@ fn shell_authority_binding_from_type(
     }
 }
 
-#[derive(Default)]
-struct ProductionTypeAliasVisitor {
-    aliases: HashMap<String, syn::Type>,
+fn collect_use_type_renames(tree: &syn::UseTree, aliases: &mut HashMap<String, syn::Type>) {
+    match tree {
+        syn::UseTree::Path(path) => collect_use_type_renames(path.tree.as_ref(), aliases),
+        syn::UseTree::Rename(rename) => {
+            if let Ok(ty) = syn::parse_str::<syn::Type>(&rename.ident.to_string()) {
+                aliases.insert(rename.rename.to_string(), ty);
+            }
+        }
+        syn::UseTree::Group(group) => {
+            for item in &group.items {
+                collect_use_type_renames(item, aliases);
+            }
+        }
+        syn::UseTree::Glob(_) | syn::UseTree::Name(_) => {}
+    }
 }
 
-impl ProductionTypeAliasVisitor {
-    fn collect_use_renames(&mut self, tree: &syn::UseTree) {
-        match tree {
-            syn::UseTree::Path(path) => self.collect_use_renames(path.tree.as_ref()),
-            syn::UseTree::Rename(rename) => {
-                if let Ok(ty) = syn::parse_str::<syn::Type>(&rename.ident.to_string()) {
-                    self.aliases.insert(rename.rename.to_string(), ty);
-                }
-            }
-            syn::UseTree::Group(group) => {
-                for item in &group.items {
-                    self.collect_use_renames(item);
-                }
-            }
-            syn::UseTree::Glob(_) | syn::UseTree::Name(_) => {}
+fn collect_item_type_alias(item: &syn::Item, aliases: &mut HashMap<String, syn::Type>) {
+    if item_is_test_only(item) {
+        return;
+    }
+    match item {
+        syn::Item::Type(item) => {
+            aliases.insert(item.ident.to_string(), item.ty.as_ref().clone());
+        }
+        syn::Item::Use(item) => collect_use_type_renames(&item.tree, aliases),
+        _ => {}
+    }
+}
+
+fn type_aliases_declared_in_items(items: &[syn::Item]) -> HashMap<String, syn::Type> {
+    let mut aliases = HashMap::new();
+    for item in items {
+        collect_item_type_alias(item, &mut aliases);
+    }
+    aliases
+}
+
+fn type_aliases_declared_in_statements(statements: &[syn::Stmt]) -> HashMap<String, syn::Type> {
+    let mut aliases = HashMap::new();
+    for statement in statements {
+        if let syn::Stmt::Item(item) = statement {
+            collect_item_type_alias(item, &mut aliases);
         }
     }
-}
-
-impl<'ast> Visit<'ast> for ProductionTypeAliasVisitor {
-    fn visit_item(&mut self, item: &'ast syn::Item) {
-        if item_is_test_only(item) {
-            return;
-        }
-        visit::visit_item(self, item);
-    }
-
-    fn visit_item_type(&mut self, item: &'ast syn::ItemType) {
-        self.aliases
-            .insert(item.ident.to_string(), item.ty.as_ref().clone());
-    }
-
-    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
-        self.collect_use_renames(&item.tree);
-    }
-}
-
-fn production_type_aliases(syntax: &syn::File) -> HashMap<String, syn::Type> {
-    let mut visitor = ProductionTypeAliasVisitor::default();
-    visitor.visit_file(syntax);
-    visitor.aliases
+    aliases
 }
 
 fn pattern_has_mutable_binding(pattern: &syn::Pat) -> bool {
@@ -12409,10 +12445,7 @@ struct ShellChromeWriterAudit {
 fn shell_chrome_writer_audit(source: &str) -> Result<ShellChromeWriterAudit, String> {
     let syntax = syn::parse_file(source)
         .map_err(|error| format!("shell chrome writer source must parse: {error}"))?;
-    let mut visitor = ShellChromeWriterVisitor {
-        type_aliases: production_type_aliases(&syntax),
-        ..Default::default()
-    };
+    let mut visitor = ShellChromeWriterVisitor::default();
     visitor.visit_file(&syntax);
     Ok(visitor.audit)
 }
@@ -12548,6 +12581,15 @@ impl ShellChromeWriterVisitor {
                     mutable: parent.mutable,
                 })
             }
+            syn::Expr::MethodCall(call) if call.method == "take_shell_chrome_state" => {
+                let receiver = self.resolve_authority(call.receiver.as_ref())?;
+                (receiver.kind == ShellAuthorityKind::App && receiver.mutable).then_some(
+                    ShellAuthorityBinding {
+                        kind: ShellAuthorityKind::Chrome,
+                        mutable: false,
+                    },
+                )
+            }
             syn::Expr::Group(group) => self.resolve_authority(group.expr.as_ref()),
             syn::Expr::Paren(paren) => self.resolve_authority(paren.expr.as_ref()),
             syn::Expr::Reference(reference) => {
@@ -12600,14 +12642,55 @@ impl ShellChromeWriterVisitor {
             ));
         }
     }
+
+    fn inspect_shell_state_seam_call(&mut self, method: &str, line: usize) {
+        if matches!(
+            method,
+            "take_shell_chrome_state" | "apply_shell_chrome_state"
+        ) && self.owner.as_deref() != Some("dispatch_shell_chrome")
+        {
+            self.audit.whole_state_writes.push(self.finding(
+                line,
+                format!(
+                    "calls shell chrome take/apply seam outside `dispatch_shell_chrome`: `{method}`"
+                ),
+            ));
+        }
+    }
 }
 
 impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
+    fn visit_file(&mut self, file: &'ast syn::File) {
+        let previous_aliases = self.type_aliases.clone();
+        self.type_aliases
+            .extend(type_aliases_declared_in_items(&file.items));
+        for item in &file.items {
+            self.visit_item(item);
+        }
+        self.type_aliases = previous_aliases;
+    }
+
     fn visit_item(&mut self, item: &'ast syn::Item) {
         if item_is_test_only(item) {
             return;
         }
         visit::visit_item(self, item);
+    }
+
+    fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
+        if attributes_are_test_only(&module.attrs) {
+            return;
+        }
+        let Some((_, items)) = &module.content else {
+            return;
+        };
+        let previous_aliases = self.type_aliases.clone();
+        self.type_aliases
+            .extend(type_aliases_declared_in_items(items));
+        for item in items {
+            self.visit_item(item);
+        }
+        self.type_aliases = previous_aliases;
     }
 
     fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
@@ -12656,18 +12739,28 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
     }
 
     fn visit_block(&mut self, block: &'ast syn::Block) {
-        let previous = self.authority_bindings.clone();
+        let previous_bindings = self.authority_bindings.clone();
+        let previous_aliases = self.type_aliases.clone();
+        self.type_aliases
+            .extend(type_aliases_declared_in_statements(&block.stmts));
         for statement in &block.stmts {
             self.visit_stmt(statement);
         }
-        self.authority_bindings = previous;
+        self.authority_bindings = previous_bindings;
+        self.type_aliases = previous_aliases;
     }
 
     fn visit_local(&mut self, local: &'ast syn::Local) {
-        let authority = local
+        let mut authority = local
             .init
             .as_ref()
-            .and_then(|init| self.resolve_authority(init.expr.as_ref()));
+            .and_then(|init| self.resolve_authority(init.expr.as_ref()))
+            .or_else(|| match &local.pat {
+                syn::Pat::Type(pattern) => {
+                    self.binding_from_type(pattern.pat.as_ref(), pattern.ty.as_ref())
+                }
+                _ => None,
+            });
         if let Some(init) = &local.init {
             self.visit_expr(init.expr.as_ref());
             if let Some((_, diverge)) = &init.diverge {
@@ -12675,6 +12768,9 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
             }
         }
         self.clear_pattern_bindings(&local.pat);
+        if let Some(authority) = &mut authority {
+            authority.mutable |= pattern_has_mutable_binding(&local.pat);
+        }
         if let Some(authority) = authority {
             self.bind_pattern(&local.pat, authority);
         }
@@ -12712,6 +12808,10 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
     }
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        self.inspect_shell_state_seam_call(
+            &call.method.to_string(),
+            call.method.span().start().line,
+        );
         if matches!(
             call.method.to_string().as_str(),
             "as_mut"
@@ -12727,6 +12827,18 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
             self.inspect_write_target(call.receiver.as_ref(), "mutable method");
         }
         visit::visit_expr_method_call(self, call);
+    }
+
+    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(path) = call.func.as_ref()
+            && let Some(method) = path.path.segments.last()
+        {
+            self.inspect_shell_state_seam_call(
+                &method.ident.to_string(),
+                method.ident.span().start().line,
+            );
+        }
+        visit::visit_expr_call(self, call);
     }
 
     fn visit_expr_match(&mut self, expression: &'ast syn::ExprMatch) {
