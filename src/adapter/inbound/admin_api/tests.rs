@@ -2794,8 +2794,9 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
     for copy in [
         "게임발전국",
         "AKRA ADMIN CONTROL CENTER",
-        "COMMAND STATUS",
-        "OPERATOR BRIEF",
+        "AKRA COMMAND",
+        "ATTENTION",
+        "LOOP CONTROL",
         "data-summary-active-agents",
         "data-summary-idle-slots",
         "data-summary-queue-depth",
@@ -2808,7 +2809,7 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "워크트리 풀",
         "배포 파이프라인",
         "실시간 이벤트",
-        "임무 현황",
+        "활성 레인",
         "data-admin-graphic",
         "class=\"akra-page-title\"",
         "data-poll-interval-ms",
@@ -2844,8 +2845,8 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "setManualRefreshState",
         "aria-busy",
         "data-event-feed-status",
-        "MISSION FLOW",
-        "stage-refresh-btn",
+        "data-realtime-status",
+        "command-refresh",
         "detailSourceKey(node) === nextKey",
         "data-actor-id",
         "data-standby-character",
@@ -2871,7 +2872,6 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "renderCampaign",
         "renderBoard",
         "renderPipeline",
-        "renderSelectedTask",
         "agents: dashboard.agents || null",
         "scene: dashboard.scene || null",
         "pool: dashboard.pool || null",
@@ -2899,7 +2899,6 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "id=\"pipeline\"",
         "id=\"events\"",
         "id=\"campaign\"",
-        "id=\"tasks\"",
     ] {
         assert!(
             AKRA_DASHBOARD_TEMPLATE.contains(anchor),
@@ -2996,7 +2995,7 @@ fn akra_admin_never_reports_uncollected_health_as_success() {
     assert!(!AKRA_DASHBOARD_TEMPLATE.contains("id=\"system-mini\""));
     assert!(!AKRA_DASHBOARD_TEMPLATE.contains("시스템 상태 요약"));
     assert!(AKRA_DASHBOARD_JS.contains("const pollState"));
-    assert!(AKRA_DASHBOARD_TEMPLATE.contains("진행률 미집계"));
+    assert!(AKRA_DASHBOARD_TEMPLATE.contains("data-detail-progress"));
     assert!(AKRA_DASHBOARD_RS.contains("\"stage 미집계\""));
     assert!(AKRA_METRICS_TEMPLATE.contains("Git 상태 미집계"));
     assert!(AKRA_METRICS_TEMPLATE.contains("GitHub 연동 미집계"));
@@ -3031,6 +3030,40 @@ fn akra_graphic_dashboard_event_status_uses_readable_counts() {
         ),
         "event feed status should not render the capped feed as an ambiguous fraction"
     );
+}
+
+#[test]
+fn akra_graphic_dashboard_keeps_one_primary_surface_per_operational_fact() {
+    for primary_surface in [
+        "class=\"command-summary",
+        "data-realtime-status",
+        "class=\"attention-strip",
+        "class=\"command-controls\"",
+        "<h3>활성 레인</h3>",
+        "class=\"game-panel\" id=\"pipeline\"",
+        "data-detail-drawer",
+    ] {
+        assert!(
+            AKRA_DASHBOARD_TEMPLATE.contains(primary_surface),
+            "operations cockpit should keep primary surface {primary_surface}"
+        );
+    }
+
+    for removed_duplicate in [
+        "MISSION FLOW",
+        "OPERATOR BRIEF",
+        "class=\"stage-hud\"",
+        "stage-refresh-btn",
+        "class=\"campaign-summary\"",
+        "id=\"tasks\"",
+        "renderSelectedTask",
+    ] {
+        assert!(
+            !AKRA_DASHBOARD_TEMPLATE.contains(removed_duplicate)
+                && !AKRA_DASHBOARD_JS.contains(removed_duplicate),
+            "operations cockpit should remove duplicate surface {removed_duplicate}"
+        );
+    }
 }
 
 #[test]
@@ -3173,7 +3206,7 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "max-width: 1784px",
         "max-width: 1280px",
         "align-content: start",
-        "grid-template-columns: 220px minmax(500px, 1280px) 260px",
+        "grid-template-columns: 200px minmax(520px, 1280px) 270px",
         "background: var(--office-bg-image) 0 0 / 100% 100% no-repeat",
         "grid-template-columns: minmax(0, 1fr)",
         "overflow: auto",
@@ -3411,9 +3444,11 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "authenticated_curl",
         "cookie_jar",
         "--screenshot=",
+        "--mobile-screenshot=",
         "--compact-screenshot=",
         "--full-hd-screenshot=",
         "--qhd-screenshot=",
+        "admin-graphic-mobile.png",
         "admin-graphic-compact.png",
         "admin-graphic-full-hd.png",
         "admin-graphic-qhd.png",
@@ -3514,7 +3549,8 @@ fn akra_parallel_admin_surface_reuses_typed_control_plane_for_browser_commands()
 fn akra_admin_debug_harness_is_explicit_safe_and_browser_controllable() {
     for token in [
         "data-debug-harness",
-        "APPLICATION FAKE · SAFE MODE",
+        "FAKE · SAFE",
+        "실제 authority와 분리된 UI 시연",
         "data-debug-command=\"play\"",
         "data-debug-command=\"pause\"",
         "data-debug-command=\"step\"",

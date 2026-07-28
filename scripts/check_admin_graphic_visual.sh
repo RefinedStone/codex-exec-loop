@@ -31,6 +31,7 @@ operations_studio_asset="${output_dir}/akra-operations-studio-v3.png"
 agent_atlas_asset="${output_dir}/gamebaljeonguk_atlas_64x96.png"
 agent_atlas_large_asset="${output_dir}/gamebaljeonguk_atlas_128x192.png"
 screenshot_path="${output_dir}/admin-graphic.png"
+mobile_screenshot_path="${output_dir}/admin-graphic-mobile.png"
 compact_screenshot_path="${output_dir}/admin-graphic-compact.png"
 full_hd_screenshot_path="${output_dir}/admin-graphic-full-hd.png"
 qhd_screenshot_path="${output_dir}/admin-graphic-qhd.png"
@@ -184,6 +185,7 @@ capture_with_browser() {
     --browser="${browser}" \
     --url="${url}" \
     --screenshot="${screenshot_path}" \
+    --mobile-screenshot="${mobile_screenshot_path}" \
     --compact-screenshot="${compact_screenshot_path}" \
     --full-hd-screenshot="${full_hd_screenshot_path}" \
     --qhd-screenshot="${qhd_screenshot_path}"
@@ -311,11 +313,12 @@ for token in \
   'id="campaign"' \
   'id="events"' \
   'id="pipeline"' \
-  'COMMAND STATUS' \
-  'OPERATOR BRIEF' \
+  'AKRA COMMAND' \
+  'ATTENTION' \
+  'LOOP CONTROL' \
   'data-command-readiness' \
   'data-operational-action' \
-  '임무 현황' \
+  '활성 레인' \
   'AKRA ADMIN CONTROL CENTER' \
   'class="nav graphic-nav" aria-label="Admin navigation"' \
   'href="/admin/akra" class="active" aria-current="page"' \
@@ -324,8 +327,8 @@ for token in \
   'href="/admin/akra/directions"' \
   'href="/admin/akra/tasks"' \
   '작전 방향' \
-  'MISSION FLOW' \
-  'stage-refresh-btn' \
+  'data-realtime-status' \
+  'command-refresh' \
   '/admin/assets/game/akra-diorama.js' \
   'data-admin-graphic' \
   'data-planning-revision' \
@@ -346,7 +349,10 @@ for token in \
   'max-width: 1784px' \
   'max-width: 1280px' \
   'align-content: start' \
-  'grid-template-columns: 220px minmax(500px, 1280px) 260px' \
+  'grid-template-columns: 200px minmax(520px, 1280px) 270px' \
+  'class="attention-strip' \
+  'class="command-controls"' \
+  '<h3>활성 레인</h3>' \
   'data-standby-character="true"' \
   'data-presence-kind="configured_standby"' \
   '대기 프로필 3' \
@@ -421,6 +427,10 @@ for token in \
   'akraEventPulse' \
   'akraStepSweep' \
   'is-bursting' \
+  'MISSION FLOW' \
+  'OPERATOR BRIEF' \
+  'class="stage-hud"' \
+  'id="tasks"' \
   'blocked-copy'; do
   require_not_contains "${admin_html}" "${token}"
 done
@@ -582,10 +592,11 @@ browser_path=""
 if browser_path="$(find_browser)"; then
   if capture_with_browser "${browser_path}" "${graphic_url}"; then
     sha256sum "${screenshot_path}" >"${output_dir}/admin-graphic.sha256"
+    sha256sum "${mobile_screenshot_path}" >"${output_dir}/admin-graphic-mobile.sha256"
     sha256sum "${compact_screenshot_path}" >"${output_dir}/admin-graphic-compact.sha256"
     sha256sum "${full_hd_screenshot_path}" >"${output_dir}/admin-graphic-full-hd.sha256"
     sha256sum "${qhd_screenshot_path}" >"${output_dir}/admin-graphic-qhd.sha256"
-    echo "admin graphic screenshots captured: ${compact_screenshot_path}, ${screenshot_path}, ${full_hd_screenshot_path}, ${qhd_screenshot_path}"
+    echo "admin graphic screenshots captured: ${mobile_screenshot_path}, ${compact_screenshot_path}, ${screenshot_path}, ${full_hd_screenshot_path}, ${qhd_screenshot_path}"
   else
     exit 1
   fi

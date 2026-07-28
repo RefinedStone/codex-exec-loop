@@ -9,6 +9,7 @@ const options = Object.fromEntries(
 const browserPath = options.browser;
 const targetUrl = options.url;
 const screenshotPath = options.screenshot;
+const mobileScreenshotPath = options["mobile-screenshot"];
 const compactScreenshotPath = options["compact-screenshot"];
 const fullHdScreenshotPath = options["full-hd-screenshot"];
 const qhdScreenshotPath = options["qhd-screenshot"];
@@ -18,13 +19,14 @@ if (
   !browserPath ||
   !targetUrl ||
   !screenshotPath ||
+  !mobileScreenshotPath ||
   !compactScreenshotPath ||
   !fullHdScreenshotPath ||
   !qhdScreenshotPath ||
   !token
 ) {
   throw new Error(
-    "browser, url, screenshot, compact-screenshot, full-hd-screenshot, qhd-screenshot, and AKRA_ADMIN_VISUAL_TOKEN are required",
+    "browser, url, screenshot, mobile-screenshot, compact-screenshot, full-hd-screenshot, qhd-screenshot, and AKRA_ADMIN_VISUAL_TOKEN are required",
   );
 }
 
@@ -88,7 +90,9 @@ try {
     });
     await page.setViewportSize({ width, height });
 
-    const response = await page.goto(targetUrl, { waitUntil: "networkidle" });
+    // The game dashboard intentionally keeps an EventSource connection open.
+    // Waiting for networkidle turns a healthy realtime stream into a timeout.
+    const response = await page.goto(targetUrl, { waitUntil: "domcontentloaded" });
     if (!response?.ok() || page.url().includes("/admin/login")) {
       throw new Error(
         `${label} authenticated admin page failed to load: ${response?.status() ?? "no response"}`,
@@ -237,6 +241,11 @@ try {
             boardY,
             resolvedAtlasFrameIndex,
             poseFallback,
+            animationKind,
+            animationFrameIndex,
+            animationBlend,
+            gaitOffsetX,
+            gaitOffsetY,
             ...actor
           }) => actor,
         ),
@@ -278,6 +287,11 @@ try {
         boardY,
         resolvedAtlasFrameIndex,
         poseFallback,
+        animationKind,
+        animationFrameIndex,
+        animationBlend,
+        gaitOffsetX,
+        gaitOffsetY,
         ...character
       }) => character,
     );
@@ -365,7 +379,8 @@ try {
     if (width === 1920) {
       const baselineActorCount = firstScene.actorCount;
       await page.evaluate(async () => {
-        const response = await fetch("/api/admin/akra/dashboard", {
+        const nativeFetch = window.fetch.bind(window);
+        const response = await nativeFetch("/api/admin/akra/dashboard", {
           headers: { Accept: "application/json" },
         });
         if (!response.ok) throw new Error(`visual probe dashboard ${response.status}`);
@@ -387,11 +402,30 @@ try {
           bubbleLabel: "작업 중",
         });
         window.__akraVisualProbeDashboard = dashboard;
+        window.fetch = (input, init) => {
+          const requestUrl =
+            typeof input === "string" ? input : input?.url ?? String(input);
+          const pathname = new URL(requestUrl, window.location.href).pathname;
+          if (
+            pathname === "/api/admin/akra/dashboard" &&
+            window.__akraVisualProbeDashboard
+          ) {
+            return Promise.resolve(
+              new Response(JSON.stringify(window.__akraVisualProbeDashboard), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+              }),
+            );
+          }
+          return nativeFetch(input, init);
+        };
         window.AkraAdminGame?.applyDashboard?.(dashboard);
       });
       await page.waitForFunction(
-        (expectedActorCount) =>
-          window.AkraAdminGame?.inspectScene?.()?.actorCount === expectedActorCount,
+        (expectedActorCount) => {
+          window.AkraAdminGame?.applyDashboard?.(window.__akraVisualProbeDashboard);
+          return window.AkraAdminGame?.inspectScene?.()?.actorCount === expectedActorCount;
+        },
         baselineActorCount + 1,
       );
       const activePoseProbe = await page.evaluate(() =>
@@ -425,14 +459,15 @@ try {
         probe.severity = "danger";
         window.AkraAdminGame?.applyDashboard?.(dashboard);
       });
-      await page.waitForFunction(() =>
-        window.AkraAdminGame
+      await page.waitForFunction(() => {
+        window.AkraAdminGame?.applyDashboard?.(window.__akraVisualProbeDashboard);
+        return window.AkraAdminGame
           ?.inspectScene?.()
           ?.actors.some(
             (actor) =>
               actor.actorId === "visual-probe-session" && actor.visualState === "blocked",
-          ),
-      );
+          );
+      });
       const blockedPoseProbe = await page.evaluate(() =>
         window.AkraAdminGame
           ?.inspectScene?.()
@@ -456,8 +491,10 @@ try {
         window.AkraAdminGame?.applyDashboard?.(dashboard);
       });
       await page.waitForFunction(
-        (expectedActorCount) =>
-          window.AkraAdminGame?.inspectScene?.()?.actorCount === expectedActorCount,
+        (expectedActorCount) => {
+          window.AkraAdminGame?.applyDashboard?.(window.__akraVisualProbeDashboard);
+          return window.AkraAdminGame?.inspectScene?.()?.actorCount === expectedActorCount;
+        },
         baselineActorCount,
       );
       const baselineStandbyCount = firstScene.standbyCount;
@@ -480,11 +517,14 @@ try {
         window.AkraAdminGame?.applyDashboard?.(dashboard);
       });
       await page.waitForFunction(
-        (expectedStandbyCount) =>
-          window.AkraAdminGame?.inspectScene?.()?.standbyCount === expectedStandbyCount,
+        (expectedStandbyCount) => {
+          window.AkraAdminGame?.applyDashboard?.(window.__akraVisualProbeDashboard);
+          return window.AkraAdminGame?.inspectScene?.()?.standbyCount === expectedStandbyCount;
+        },
         baselineStandbyCount + 1,
       );
       await page.waitForFunction(() => {
+        window.AkraAdminGame?.applyDashboard?.(window.__akraVisualProbeDashboard);
         const character = window.AkraAdminGame
           ?.inspectScene?.()
           ?.standbyCharacters.find(
@@ -515,14 +555,15 @@ try {
       const idleAnimationSamples = [];
       for (let sampleIndex = 0; sampleIndex < 4; sampleIndex += 1) {
         idleAnimationSamples.push(
-          await page.evaluate(() =>
-            window.AkraAdminGame
+          await page.evaluate(() => {
+            window.AkraAdminGame?.applyDashboard?.(window.__akraVisualProbeDashboard);
+            return window.AkraAdminGame
               ?.inspectScene?.()
               ?.standbyCharacters.find(
                 (character) =>
                   character.characterId === "standby:visual-ranger-probe",
-              ),
-          ),
+              );
+          }),
         );
         await page.waitForTimeout(560);
       }
@@ -545,8 +586,10 @@ try {
         window.AkraAdminGame?.applyDashboard?.(dashboard);
       });
       await page.waitForFunction(
-        (expectedStandbyCount) =>
-          window.AkraAdminGame?.inspectScene?.()?.standbyCount === expectedStandbyCount,
+        (expectedStandbyCount) => {
+          window.AkraAdminGame?.applyDashboard?.(window.__akraVisualProbeDashboard);
+          return window.AkraAdminGame?.inspectScene?.()?.standbyCount === expectedStandbyCount;
+        },
         baselineStandbyCount,
       );
       await page.waitForTimeout(50);
@@ -558,10 +601,11 @@ try {
       const body = document.body;
       const canvas = document.querySelector("#pixi-diorama canvas");
       const board = document.querySelector(".office-board");
-      const hud = document.querySelector(".stage-hud");
-      const refresh = document.querySelector(".stage-hud [data-refresh-dashboard]");
+      const refresh = document.querySelector(".command-summary [data-refresh-dashboard]");
+      const realtimeStatus = document.querySelector("[data-realtime-status]");
       const sidebar = document.querySelector(".sidebar");
-      const commandAlert = document.querySelector(".command-alert");
+      const attention = document.querySelector(".attention-strip");
+      const commandControls = document.querySelector(".command-controls");
       const topbar = document.querySelector(".draft-topbar");
       const mainGrid = document.querySelector(".draft-main-grid");
       const shell = document.querySelector(".shell");
@@ -572,10 +616,11 @@ try {
       const bottomGrid = document.querySelector(".bottom-grid");
       const canvasRect = canvas?.getBoundingClientRect();
       const boardRect = board?.getBoundingClientRect();
-      const hudRect = hud?.getBoundingClientRect();
       const refreshRect = refresh?.getBoundingClientRect();
+      const realtimeStatusRect = realtimeStatus?.getBoundingClientRect();
       const sidebarRect = sidebar?.getBoundingClientRect();
-      const commandAlertRect = commandAlert?.getBoundingClientRect();
+      const attentionRect = attention?.getBoundingClientRect();
+      const commandControlsRect = commandControls?.getBoundingClientRect();
       const topbarRect = topbar?.getBoundingClientRect();
       const mainGridRect = mainGrid?.getBoundingClientRect();
       const shellRect = shell?.getBoundingClientRect();
@@ -632,11 +677,10 @@ try {
         viewportWidth: root.clientWidth,
         bodyWidth: body.scrollWidth,
         canvasInsideBoard: isInside(canvasRect, boardRect),
-        hudVisible: isVisible(hud, hudRect),
-        hudInsideBoard: isInside(hudRect, boardRect),
-        hudHitTestable: centerHitIsInside(hud, hudRect),
+        topbarVisible: isVisible(topbar, topbarRect),
+        realtimeStatusVisible: isVisible(realtimeStatus, realtimeStatusRect),
         refreshVisible: isVisible(refresh, refreshRect),
-        refreshInsideBoard: isInside(refreshRect, boardRect),
+        refreshInsideTopbar: isInside(refreshRect, topbarRect),
         refreshHitTestable:
           centerHitIsInside(refresh, refreshRect) &&
           window.getComputedStyle(refresh).pointerEvents !== "none" &&
@@ -644,9 +688,11 @@ try {
         refreshWidth: refreshRect?.width ?? 0,
         refreshHeight: refreshRect?.height ?? 0,
         sidebarVisible: isVisible(sidebar, sidebarRect),
-        commandAlertVisible: isVisible(commandAlert, commandAlertRect),
+        attentionVisible: isVisible(attention, attentionRect),
+        commandControlsVisible: isVisible(commandControls, commandControlsRect),
         topbarHeight: topbarRect?.height ?? 0,
-        commandAlertHeight: commandAlertRect?.height ?? 0,
+        attentionHeight: attentionRect?.height ?? 0,
+        commandControlsHeight: commandControlsRect?.height ?? 0,
         graphicCentered:
           Boolean(graphicRect && shellRect) &&
           Math.abs(
@@ -672,10 +718,11 @@ try {
           boardRect.bottom <= window.innerHeight + 1,
         boardRect: rectValue(boardRect),
         sidebarRect: rectValue(sidebarRect),
-        commandAlertRect: rectValue(commandAlertRect),
+        attentionRect: rectValue(attentionRect),
+        commandControlsRect: rectValue(commandControlsRect),
         topbarRect: rectValue(topbarRect),
         mainGridRect: rectValue(mainGridRect),
-        hudRect: rectValue(hudRect),
+        realtimeStatusRect: rectValue(realtimeStatusRect),
         refreshRect: rectValue(refreshRect),
         graphicRect: rectValue(graphicRect),
         boardRowRect: rectValue(boardRowRect),
@@ -690,20 +737,25 @@ try {
     if (!layout.canvasInsideBoard) {
       throw new Error(`${label} canvas is not framed inside the office board`);
     }
-    if (!layout.sidebarVisible || !layout.commandAlertVisible || !layout.boardInFirstViewport) {
+    if (
+      !layout.sidebarVisible ||
+      !layout.topbarVisible ||
+      !layout.commandControlsVisible ||
+      !layout.boardInFirstViewport
+    ) {
       throw new Error(
-        `${label} PC command layout does not keep navigation, alert, and office board in the first viewport: ${JSON.stringify(layout)}`,
+        `${label} PC command layout does not keep navigation, loop controls, and office board in the first viewport: ${JSON.stringify(layout)}`,
       );
     }
-    if (!layout.hudVisible || !layout.hudInsideBoard || !layout.hudHitTestable) {
-      throw new Error(`${label} mission HUD is hidden, clipped, or occluded: ${JSON.stringify(layout)}`);
+    if (!layout.realtimeStatusVisible) {
+      throw new Error(`${label} command header does not expose realtime status: ${JSON.stringify(layout)}`);
     }
     if (
       !layout.refreshVisible ||
-      !layout.refreshInsideBoard ||
+      !layout.refreshInsideTopbar ||
       !layout.refreshHitTestable ||
-      layout.refreshWidth < 40 ||
-      layout.refreshHeight < 40
+      layout.refreshWidth < 36 ||
+      layout.refreshHeight < 36
     ) {
       throw new Error(
         `${label} refresh control is hidden, clipped, occluded, or too small: ${JSON.stringify(layout)}`,
@@ -712,7 +764,7 @@ try {
     if (width >= 1920) {
       const expectedBoardAspectRatio = 1672 / 941;
       const expectedGraphicWidth = Math.min(1784, layout.shellContentWidth);
-      const expectedBoardWidth = expectedGraphicWidth - 504;
+      const expectedBoardWidth = Math.min(1280, expectedGraphicWidth - 494);
       const gapIsSupported = (gap) => typeof gap === "number" && gap >= 8 && gap <= 24;
       if (
         !layout.graphicCentered ||
@@ -728,7 +780,8 @@ try {
         layout.mainBottomGap < 7 ||
         layout.mainBottomGap > 16 ||
         layout.topbarHeight > 90 ||
-        layout.commandAlertHeight > 120
+        layout.attentionHeight > 120 ||
+        layout.commandControlsHeight > 120
       ) {
         throw new Error(
           `${label} widescreen layout is stretched, off-center, or clipped: ${JSON.stringify(layout)}`,
@@ -739,6 +792,127 @@ try {
     await page.close();
   };
 
+  const captureMobileViewport = async () => {
+    const page = await context.newPage();
+    const browserErrors = [];
+    page.on("console", (message) => {
+      if (message.type() === "error") browserErrors.push(`console: ${message.text()}`);
+    });
+    page.on("pageerror", (error) => browserErrors.push(`page: ${error.message}`));
+    page.on("response", (response) => {
+      if (response.status() >= 400) {
+        browserErrors.push(`response: ${response.status()} ${response.url()}`);
+      }
+    });
+    await page.setViewportSize({ width: 390, height: 844 });
+    const response = await page.goto(targetUrl, { waitUntil: "domcontentloaded" });
+    if (!response?.ok() || page.url().includes("/admin/login")) {
+      throw new Error(
+        `mobile authenticated admin page failed to load: ${response?.status() ?? "no response"}`,
+      );
+    }
+    await page.waitForFunction(() => {
+      const status = document.querySelector("[data-realtime-status]");
+      return status?.textContent?.trim();
+    });
+    await page.waitForTimeout(200);
+
+    const layout = await page.evaluate(() => {
+      const root = document.documentElement;
+      const body = document.body;
+      const sidebar = document.querySelector(".sidebar");
+      const topbar = document.querySelector(".draft-topbar");
+      const commandSummary = document.querySelector(".command-summary");
+      const refresh = document.querySelector(".command-summary [data-refresh-dashboard]");
+      const commandControls = document.querySelector(".command-controls");
+      const mainGrid = document.querySelector(".draft-main-grid");
+      const leftStack = document.querySelector(".left-stack");
+      const rightStack = document.querySelector(".right-stack");
+      const board = document.querySelector(".office-board");
+      const campaign = document.querySelector(".right-stack #campaign");
+      const events = document.querySelector(".right-stack #events");
+      const rect = (element) => element?.getBoundingClientRect() ?? null;
+      const visible = (element) => {
+        const bounds = rect(element);
+        if (!element || !bounds || bounds.width <= 0 || bounds.height <= 0) return false;
+        const style = window.getComputedStyle(element);
+        return style.display !== "none" && style.visibility !== "hidden";
+      };
+      const gridColumns = (element) =>
+        element ? window.getComputedStyle(element).gridTemplateColumns.trim() : "";
+      const overflow = (element) =>
+        element ? window.getComputedStyle(element).overflowY : "";
+      const refreshRect = rect(refresh);
+      const topbarRect = rect(topbar);
+      const loopControlHeights = [...document.querySelectorAll(".loop-control")].map(
+        (control) => rect(control)?.height ?? 0,
+      );
+      return {
+        documentWidth: root.scrollWidth,
+        viewportWidth: root.clientWidth,
+        bodyWidth: body.scrollWidth,
+        sidebarVisible: visible(sidebar),
+        topbarVisible: visible(topbar),
+        commandSummaryVisible: visible(commandSummary),
+        commandControlsVisible: visible(commandControls),
+        boardVisible: visible(board),
+        refreshVisible: visible(refresh),
+        refreshInsideTopbar:
+          Boolean(refreshRect && topbarRect) &&
+          refreshRect.left >= topbarRect.left - 1 &&
+          refreshRect.right <= topbarRect.right + 1 &&
+          refreshRect.top >= topbarRect.top - 1 &&
+          refreshRect.bottom <= topbarRect.bottom + 1,
+        refreshWidth: refreshRect?.width ?? 0,
+        refreshHeight: refreshRect?.height ?? 0,
+        topbarColumns: gridColumns(topbar),
+        mainGridColumns: gridColumns(mainGrid),
+        leftStackColumns: gridColumns(leftStack),
+        rightStackColumns: gridColumns(rightStack),
+        campaignOverflow: overflow(campaign),
+        eventsOverflow: overflow(events),
+        loopControlHeights,
+      };
+    });
+    if (
+      layout.documentWidth > layout.viewportWidth + 1 ||
+      layout.bodyWidth > layout.viewportWidth + 1
+    ) {
+      throw new Error(`mobile layout has global horizontal overflow: ${JSON.stringify(layout)}`);
+    }
+    if (
+      !layout.sidebarVisible ||
+      !layout.topbarVisible ||
+      !layout.commandSummaryVisible ||
+      !layout.commandControlsVisible ||
+      !layout.boardVisible ||
+      !layout.refreshVisible ||
+      !layout.refreshInsideTopbar
+    ) {
+      throw new Error(`mobile command surfaces are hidden or clipped: ${JSON.stringify(layout)}`);
+    }
+    if (
+      layout.refreshWidth < 36 ||
+      layout.refreshHeight < 36 ||
+      layout.mainGridColumns.split(" ").length !== 1 ||
+      layout.leftStackColumns.split(" ").length !== 1 ||
+      layout.rightStackColumns.split(" ").length !== 1 ||
+      layout.campaignOverflow !== "visible" ||
+      layout.eventsOverflow !== "visible" ||
+      layout.loopControlHeights.some((height) => height < 38)
+    ) {
+      throw new Error(
+        `mobile command layout does not collapse into one readable rail: ${JSON.stringify(layout)}`,
+      );
+    }
+    if (browserErrors.length > 0) {
+      throw new Error(`mobile browser errors:\n${browserErrors.join("\n")}`);
+    }
+    await page.screenshot({ path: mobileScreenshotPath, fullPage: true });
+    await page.close();
+  };
+
+  await captureMobileViewport();
   await captureViewport({
     width: 1280,
     height: 800,
@@ -771,7 +945,9 @@ try {
   });
   navigationPage.on("pageerror", (error) => navigationErrors.push(`page: ${error.message}`));
   navigationPage.on("requestfailed", (request) => {
-    navigationErrors.push(`request: ${request.url()} ${request.failure()?.errorText ?? "failed"}`);
+    const failure = request.failure()?.errorText ?? "failed";
+    if (failure === "net::ERR_ABORTED" && request.url().startsWith(baseUrl)) return;
+    navigationErrors.push(`request: ${request.url()} ${failure}`);
   });
   navigationPage.on("response", (response) => {
     if (response.status() >= 400) {
@@ -811,7 +987,7 @@ try {
     navigationPage.waitForURL(`${baseUrl}/admin/akra`),
     navigationPage.keyboard.press("Enter"),
   ]);
-  await navigationPage.waitForLoadState("networkidle");
+  await navigationPage.waitForLoadState("domcontentloaded");
 
   const expectedDashboardLinks = [
     "/admin/akra",

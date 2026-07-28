@@ -33,6 +33,25 @@ native TUI, planning authority, parallel policy, or application control plane.
   is a browser feedback projection; durable runtime events and the planning authority remain the
   operational source of truth.
 
+## Operations cockpit information architecture
+
+- The command header is the only always-visible summary of readiness, branch, revision, observation
+  time, active agents, idle slots, and distributor queue depth. Realtime freshness and manual
+  refresh live in that same header instead of being repeated over the map.
+- The attention strip appears only when readiness is degraded or blocked. It presents the cause,
+  next safe action, and bounded diagnostic before any control.
+- Real loop controls and the deterministic debug harness are mutually exclusive presentation
+  modes. Fake mode shows one compact scenario rail and does not leave disabled production controls
+  occupying a second operator brief.
+- The operations scene has no mission-count HUD. Agent and station motion stays visually primary;
+  zoom controls are the only persistent map overlay.
+- The pool rail is the slot authority surface, the active-lane rail contains lane entities without
+  repeating KPI cards, and the event rail owns event counts and rows.
+- Selected entity facts use the linked detail drawer. The former always-visible selected-task card
+  was removed because it repeated actor and drawer facts while empty states repeated campaign copy.
+- The delivery pipeline remains a full-width evidence rail below the scene so its seven stages do
+  not collapse into an unreadable side card.
+
 ## Debug harness
 
 - `akra admin --debug-harness` enables a process-local deterministic Fake for Admin UI/UX work.

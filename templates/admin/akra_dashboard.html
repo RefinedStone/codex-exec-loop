@@ -41,7 +41,6 @@
     pointer-events: none;
     background-image: var(--office-bg-image);
   }
-  .stage-hud small,
   .akra-game p,
   .akra-game small {
     color: var(--game-muted);
@@ -81,26 +80,10 @@
     background: linear-gradient(180deg, var(--game-panel-strong), rgba(8, 18, 32, 0.98));
     box-shadow: inset 2px 2px 0 rgba(255,255,255,0.1), inset -2px -2px 0 rgba(0,0,0,0.4), 4px 4px 0 rgba(0,0,0,0.6);
   }
-  .campaign-summary {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 8px;
-    margin-bottom: 10px;
-  }
-  .campaign-summary span,
   .campaign-lane {
     border: 2px solid rgba(255,255,255,0.12);
     border-radius: 0;
     background: rgba(255,255,255,0.05);
-  }
-  .campaign-summary span {
-    display: grid;
-    gap: 4px;
-    padding: 10px;
-  }
-  .campaign-summary strong {
-    font-size: 20px;
-    line-height: 1;
   }
   .campaign-lanes {
     display: grid;
@@ -219,68 +202,6 @@
       repeating-linear-gradient(0deg, rgba(255,255,255,0.04) 0 1px, transparent 1px 6px);
     opacity: 0.22;
     mix-blend-mode: screen;
-  }
-  .stage-hud {
-    position: absolute;
-    right: 18px;
-    top: 16px;
-    z-index: 6;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 3px;
-    min-width: 150px;
-    padding: 10px 12px;
-    border: 2px solid rgba(53, 208, 127, 0.36);
-    background: rgba(5, 15, 28, 0.78);
-    box-shadow: inset 2px 2px 0 rgba(255,255,255,0.08), inset -2px -2px 0 rgba(0,0,0,0.38), 4px 4px 0 rgba(0,0,0,0.38);
-  }
-  .stage-hud span,
-  .stage-hud strong,
-  .stage-hud small,
-  .poll-status {
-    grid-column: 1;
-  }
-  .stage-hud span {
-    color: var(--game-muted);
-    font-size: 11px;
-    font-weight: 900;
-  }
-  .stage-hud strong {
-    color: var(--game-green);
-    font-size: 20px;
-    line-height: 1;
-  }
-  .stage-refresh-btn {
-    appearance: none;
-    grid-column: 2;
-    grid-row: 1 / span 4;
-    align-self: center;
-    display: grid;
-    place-items: center;
-    width: 40px;
-    height: 40px;
-    min-width: 40px;
-    min-height: 40px;
-    padding: 0;
-    color: #061525;
-    font: inherit;
-    font-size: 13px;
-    font-weight: 900;
-    cursor: pointer;
-    border-radius: 0;
-    border: 2px solid rgba(255,255,255,0.2);
-    background: var(--game-green);
-    box-shadow: inset -2px -2px 0 rgba(0,0,0,0.3), inset 2px 2px 0 rgba(255,255,255,0.16);
-  }
-  .stage-refresh-btn:hover {
-    filter: brightness(1.12);
-  }
-  .stage-refresh-btn:active {
-    transform: translate(2px, 2px);
-  }
-  .stage-refresh-btn:focus-visible {
-    outline: 3px solid rgba(93, 169, 255, 0.78);
-    outline-offset: 3px;
   }
   .room {
     position: absolute;
@@ -587,51 +508,6 @@
   .event-row.severity-danger .event-icon { background: var(--game-red); color: #fff; }
   .event-row.severity-warning .event-icon { background: var(--game-yellow); }
   .event-row.severity-success .event-icon { background: var(--game-green); }
-  .progress-track {
-    width: 100%;
-    height: 12px;
-    border-radius: 0;
-    border: 2px solid rgba(255,255,255,0.2);
-    background: rgba(0,0,0,0.3);
-    box-shadow: inset 2px 2px 0 rgba(0,0,0,0.4);
-  }
-  .progress-fill {
-    position: relative;
-    overflow: hidden;
-    height: 100%;
-    border-radius: 0;
-    background: var(--game-green);
-    box-shadow: inset -2px -2px 0 rgba(0,0,0,0.2), inset 2px 2px 0 rgba(255,255,255,0.3);
-  }
-  .timeline {
-    display: grid;
-    grid-template-columns: 92px minmax(0, 1fr);
-    gap: 10px;
-  }
-  .trail-list {
-    display: grid;
-    gap: 8px;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-  .trail-list li {
-    position: relative;
-    padding-left: 18px;
-    color: var(--game-muted);
-    font-size: 13px;
-  }
-  .trail-list li::before {
-    content: "";
-    position: absolute;
-    left: 0;
-    top: 5px;
-    width: 8px;
-    height: 8px;
-    border-radius: 999px;
-    background: var(--game-green);
-    box-shadow: 0 0 0 3px rgba(53,208,127,0.12);
-  }
   .pipeline {
     display: grid;
     grid-template-columns: repeat(7, minmax(0, 1fr));
@@ -829,13 +705,12 @@
   }
   .draft-topbar {
     display: grid;
-    grid-template-columns: minmax(210px, 1.35fr) repeat(3, minmax(112px, 0.68fr)) minmax(178px, 0.9fr);
+    grid-template-columns: minmax(330px, 1.65fr) repeat(3, minmax(112px, 0.68fr));
     gap: 8px;
     align-items: stretch;
   }
   .command-summary,
   .draft-stat,
-  .draft-clock,
   .game-panel {
     border: 1px solid rgba(0, 205, 255, 0.32);
     border-radius: 8px;
@@ -847,10 +722,10 @@
   }
   .command-summary {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 4px 12px;
+    grid-template-columns: 10px minmax(96px, 0.72fr) minmax(190px, 1.28fr);
+    gap: 4px 10px;
     align-items: center;
-    min-height: 58px;
+    min-height: 66px;
     padding: 9px 14px;
     border-color: rgba(53, 208, 127, 0.42);
   }
@@ -858,60 +733,82 @@
   .command-summary.state-degraded {
     border-color: rgba(255, 107, 107, 0.58);
   }
-  .command-summary small {
+  .command-state-dot {
+    grid-row: 1 / span 2;
+    width: 9px;
+    height: 9px;
+    border-radius: 999px;
+    background: var(--game-green);
+    box-shadow: 0 0 0 5px rgba(53, 208, 127, 0.1);
+  }
+  .command-summary.state-blocked .command-state-dot,
+  .command-summary.state-degraded .command-state-dot {
+    background: var(--game-red);
+    box-shadow: 0 0 0 5px rgba(255, 107, 107, 0.1);
+  }
+  .command-summary-copy {
+    display: grid;
+    gap: 3px;
+  }
+  .command-summary small,
+  .command-summary-meta {
     color: var(--game-muted);
     font-size: 11px;
   }
-  .command-summary strong {
+  .command-summary-copy strong {
     margin: 0;
     color: var(--game-ink);
     font-size: 22px;
     line-height: 1;
     text-transform: uppercase;
   }
-  .command-summary .command-revision {
-    grid-column: 2;
-    grid-row: 1 / span 2;
-    align-self: center;
-    color: var(--game-blue);
+  .command-summary-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    align-items: center;
+    justify-content: flex-end;
     font-variant-numeric: tabular-nums;
+  }
+  .command-summary-meta span {
+    padding-right: 8px;
+    border-right: 1px solid rgba(152, 171, 196, 0.22);
     white-space: nowrap;
   }
-  .command-alert {
+  .command-summary-meta span:last-of-type {
+    padding-right: 0;
+    border-right: 0;
+  }
+  .command-refresh {
+    appearance: none;
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    gap: 10px 14px;
-    align-items: center;
-    min-height: 46px;
-    padding: 8px 12px;
-    border: 1px solid rgba(93, 169, 255, 0.34);
-    border-left: 4px solid var(--game-blue);
-    border-radius: 6px;
-    color: var(--game-ink);
-    background: rgba(8, 23, 39, 0.94);
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border: 1px solid rgba(93, 169, 255, 0.38);
+    border-radius: 4px;
+    color: var(--game-blue);
+    background: rgba(93, 169, 255, 0.09);
+    font: inherit;
+    cursor: pointer;
   }
-  .command-alert.state-blocked,
-  .command-alert.state-degraded {
-    border-left-color: var(--game-red);
+  .command-refresh:hover,
+  .command-refresh:focus-visible {
+    color: var(--game-green);
+    border-color: rgba(53, 208, 127, 0.58);
+    outline: none;
   }
-  .command-alert-label {
-    color: var(--game-yellow);
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-  }
-  .command-alert-copy {
-    display: grid;
-    gap: 2px;
-    font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
-    line-height: 1.4;
-  }
-  .command-alert-copy strong {
-    font-size: 13px;
-  }
-  .command-alert-copy small {
-    color: var(--game-muted);
-    overflow-wrap: anywhere;
+  .command-summary > .poll-status {
+    grid-column: 2 / -1;
+    min-height: 1em;
+    overflow: hidden;
+    color: rgba(152, 171, 196, 0.78);
+    font-size: 9px;
+    line-height: 1.1;
+    text-align: right;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .command-diagnostic {
     margin-top: 2px;
@@ -937,7 +834,7 @@
     background: rgba(4, 15, 27, 0.64);
     overflow-wrap: anywhere;
   }
-  .command-alert a {
+  .command-controls a {
     padding: 7px 9px;
     border: 1px solid rgba(93, 169, 255, 0.38);
     border-radius: 4px;
@@ -946,13 +843,86 @@
     text-decoration: none;
     white-space: nowrap;
   }
-  .command-alert a:hover {
+  .command-controls a:hover {
     border-color: rgba(53, 208, 127, 0.56);
     background: rgba(53, 208, 127, 0.13);
   }
-  .command-alert a:focus-visible {
+  .command-controls a:focus-visible {
     outline: 3px solid var(--game-yellow);
     outline-offset: 2px;
+  }
+  .attention-strip {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 12px;
+    align-items: start;
+    padding: 9px 12px;
+    border: 1px solid rgba(245, 200, 75, 0.5);
+    border-left: 4px solid var(--game-yellow);
+    border-radius: 6px;
+    background: rgba(45, 30, 7, 0.36);
+  }
+  .attention-strip[hidden] {
+    display: none;
+  }
+  .akra-game[data-debug-harness-enabled="true"] .attention-strip {
+    display: none;
+  }
+  .attention-strip.state-blocked {
+    border-color: rgba(255, 107, 107, 0.56);
+    border-left-color: var(--game-red);
+    background: rgba(54, 16, 21, 0.36);
+  }
+  .attention-strip-label {
+    color: var(--game-yellow);
+    font-size: 10px;
+    font-weight: 900;
+    letter-spacing: 0.1em;
+  }
+  .attention-strip.state-blocked .attention-strip-label {
+    color: var(--game-red);
+  }
+  .attention-strip-copy {
+    display: grid;
+    gap: 2px;
+    font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+    line-height: 1.35;
+  }
+  .attention-strip-copy strong {
+    font-size: 13px;
+  }
+  .attention-strip-copy small {
+    color: var(--game-muted);
+  }
+  .command-controls {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 12px;
+    align-items: center;
+    padding: 8px 11px;
+    border: 1px solid rgba(93, 169, 255, 0.3);
+    border-radius: 6px;
+    background: rgba(8, 23, 39, 0.9);
+  }
+  .command-controls[hidden] {
+    display: none;
+  }
+  .command-controls-copy {
+    display: grid;
+    gap: 2px;
+  }
+  .command-controls-copy span {
+    color: var(--game-blue);
+    font-size: 10px;
+    font-weight: 900;
+    letter-spacing: 0.09em;
+  }
+  .command-controls-copy small {
+    font-size: 10px;
+    white-space: nowrap;
+  }
+  .command-controls .loop-controls {
+    min-width: 0;
   }
   .loop-controls {
     display: flex;
@@ -1004,27 +974,59 @@
   }
   .debug-harness-panel {
     display: grid;
-    grid-template-columns: minmax(190px, 0.8fr) minmax(260px, 1.5fr) auto;
-    gap: 14px;
+    grid-template-columns: minmax(210px, 0.82fr) minmax(240px, 1.5fr) auto;
+    gap: 12px;
     align-items: center;
-    margin: 12px 0;
-    padding: 12px 14px;
-    border: 2px solid rgba(245, 200, 75, 0.62);
+    margin: 0;
+    padding: 8px 11px;
+    border: 1px solid rgba(245, 200, 75, 0.52);
+    border-left: 4px solid var(--game-yellow);
+    border-radius: 6px;
     background:
-      linear-gradient(90deg, rgba(245, 200, 75, 0.11), transparent 45%),
+      linear-gradient(90deg, rgba(245, 200, 75, 0.08), transparent 42%),
       rgba(7, 20, 31, 0.94);
     box-shadow: inset 0 0 0 1px rgba(245, 200, 75, 0.08);
+  }
+  .debug-harness-panel[data-debug-stage="blocked"] {
+    border-color: rgba(255, 107, 107, 0.58);
+    border-left-color: var(--game-red);
+    background:
+      linear-gradient(90deg, rgba(255, 107, 107, 0.09), transparent 42%),
+      rgba(20, 14, 25, 0.96);
+  }
+  .debug-harness-panel[data-debug-stage="blocked"] .debug-harness-kicker {
+    border-color: rgba(255, 107, 107, 0.48);
+    color: var(--game-red);
+    background: rgba(255, 107, 107, 0.08);
   }
   .debug-harness-identity,
   .debug-harness-state {
     display: grid;
-    gap: 4px;
+    gap: 3px;
     min-width: 0;
   }
+  .debug-harness-identity {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+  }
   .debug-harness-kicker {
+    padding: 3px 5px;
+    border: 1px solid rgba(245, 200, 75, 0.44);
     color: var(--game-yellow);
-    font-size: 0.7rem;
-    letter-spacing: 0.12em;
+    background: rgba(245, 200, 75, 0.08);
+    font-size: 0.62rem;
+    font-weight: 900;
+    letter-spacing: 0.08em;
+  }
+  .debug-harness-identity strong {
+    overflow: hidden;
+    font-size: 0.82rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .debug-harness-identity small {
+    grid-column: 1 / -1;
+    font-size: 0.62rem;
   }
   .debug-harness-state strong {
     color: #f6fbff;
@@ -1036,7 +1038,7 @@
   }
   .debug-harness-progress {
     width: 100%;
-    height: 7px;
+    height: 5px;
     overflow: hidden;
     border: 1px solid rgba(93, 169, 255, 0.38);
     background: rgba(1, 8, 15, 0.72);
@@ -1056,7 +1058,7 @@
   }
   .debug-harness-controls select,
   .debug-harness-controls button {
-    min-height: 36px;
+    min-height: 32px;
     border: 1px solid rgba(93, 169, 255, 0.46);
     border-radius: 0;
     background: rgba(9, 31, 48, 0.95);
@@ -1064,12 +1066,12 @@
     font: inherit;
   }
   .debug-harness-controls select {
-    min-width: 150px;
-    padding: 6px 9px;
+    min-width: 142px;
+    padding: 5px 8px;
   }
   .debug-harness-controls button {
-    min-width: 42px;
-    padding: 6px 10px;
+    min-width: 36px;
+    padding: 5px 8px;
     cursor: pointer;
   }
   .debug-harness-controls button:hover,
@@ -1087,6 +1089,7 @@
   .debug-harness-status {
     flex-basis: 100%;
     color: var(--game-muted);
+    font-size: 10px;
     text-align: right;
   }
   .draft-stat {
@@ -1108,60 +1111,23 @@
     font-size: 18px;
     font-weight: 900;
   }
-  .draft-stat strong,
-  .draft-clock strong {
+  .draft-stat strong {
     color: #f3f8ff;
     font-size: 17px;
     line-height: 1;
     white-space: nowrap;
   }
-  .draft-stat small,
-  .draft-clock small {
+  .draft-stat small {
     color: #bdcadb;
     font-size: 12px;
   }
-  .draft-clock {
-    display: grid;
-    grid-template-columns: 10px auto minmax(64px, 1fr) 30px;
-    gap: 6px;
-    align-items: center;
-    min-height: 58px;
-    padding: 10px;
-  }
-  .draft-clock small {
-    font-size: 10px;
-    white-space: nowrap;
-  }
-  .draft-clock strong {
-    font-size: 16px;
-    text-align: right;
-  }
-  .live-dot {
-    width: 10px;
-    height: 10px;
-    border-radius: 999px;
-    background: #24d886;
-    box-shadow: 0 0 0 5px rgba(36, 216, 134, 0.12);
-  }
-  .clock-gear {
-    display: grid;
-    place-items: center;
-    width: 30px;
-    height: 30px;
-    border: 0;
-    color: #9fb3c9;
-    background: rgba(255,255,255,0.04);
-    font: inherit;
-    cursor: pointer;
-  }
-  .clock-gear:disabled,
-  .stage-refresh-btn:disabled {
+  .command-refresh:disabled {
     opacity: 0.62;
     cursor: wait;
   }
   .draft-main-grid {
     display: grid;
-    grid-template-columns: 220px minmax(500px, 1280px) 260px;
+    grid-template-columns: 200px minmax(520px, 1280px) 270px;
     gap: 12px;
     align-items: start;
     justify-content: center;
@@ -1278,15 +1244,6 @@
     font-size: 10px;
     letter-spacing: 0.08em;
     pointer-events: none;
-  }
-  .stage-hud {
-    left: 18px;
-    right: auto;
-    top: 16px;
-    min-width: 170px;
-    border-radius: 5px;
-    border-color: rgba(53, 208, 127, 0.36);
-    background: rgba(4, 19, 28, 0.78);
   }
   .pool-overlay {
     position: static;
@@ -1456,11 +1413,8 @@
     max-height: 420px;
   }
   .right-stack #campaign {
-    max-height: 300px;
+    max-height: 280px;
     overflow: auto;
-  }
-  .right-stack #campaign .campaign-summary {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .right-stack #campaign .panel-title {
     display: grid;
@@ -1473,19 +1427,22 @@
     white-space: nowrap;
   }
   .right-stack #campaign .panel-title small {
-    display: -webkit-box;
-    overflow: hidden;
-    white-space: normal;
-    line-height: 1.35;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
+    color: var(--game-green);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .panel-empty {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+    font-size: 12px;
+    line-height: 1.45;
   }
   .bottom-grid {
-    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.5fr);
+    grid-template-columns: minmax(0, 1fr);
     margin-top: 0;
   }
   @media (max-width: 1360px) {
-    .command-alert {
+    .command-controls {
       grid-template-columns: auto minmax(0, 1fr);
       align-items: start;
     }
@@ -1506,16 +1463,29 @@
     }
     .right-stack #campaign,
     .right-stack #events {
-      max-height: 320px;
+      max-height: none;
+      overflow: visible;
     }
   }
   @media (max-width: 860px) {
-    .draft-topbar,
     .draft-main-grid,
-    .campaign-summary,
     .intel-grid,
-    .pipeline,
-    .timeline { grid-template-columns: 1fr; }
+    .pipeline { grid-template-columns: 1fr; }
+    .draft-topbar {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+    .command-summary {
+      grid-column: 1 / -1;
+      grid-template-columns: 10px minmax(82px, 0.6fr) minmax(150px, 1.4fr);
+    }
+    .draft-stat {
+      grid-template-columns: minmax(0, 1fr) auto;
+      min-height: 50px;
+      padding: 8px 10px;
+    }
+    .draft-stat-icon {
+      display: none;
+    }
     .left-stack,
     .right-stack {
       grid-template-columns: 1fr;
@@ -1531,23 +1501,6 @@
     .pool-overlay {
       position: static;
       width: auto;
-    }
-    .stage-hud {
-      position: absolute;
-      left: 8px;
-      right: auto;
-      top: 8px;
-      width: min(210px, calc(100% - 16px));
-      min-width: 0;
-      padding: 8px 10px;
-      gap: 2px 8px;
-    }
-    .stage-hud strong {
-      font-size: 16px;
-    }
-    .stage-hud small,
-    .stage-hud .poll-status {
-      font-size: 10px;
     }
     .desk,
     .distributor-desk,
@@ -1590,6 +1543,16 @@
     .debug-harness-status {
       text-align: left;
     }
+    .command-controls {
+      grid-template-columns: 1fr;
+    }
+    .command-controls-copy small {
+      white-space: normal;
+    }
+    .attention-strip {
+      grid-template-columns: 1fr;
+      gap: 5px;
+    }
     .scene-camera-hint { display: none; }
     .admin-detail-drawer {
       right: 14px;
@@ -1622,10 +1585,18 @@
   <h1 class="akra-page-title">게임발전국 AKRA Admin Control Center</h1>
   <div class="draft-topbar" aria-label="게임발전국 operation summary">
     <div class="command-summary state-{{ dashboard.workspace.readiness }}" aria-label="운영 준비 상태">
-      <small>COMMAND STATUS</small>
-      <strong data-command-readiness>{{ dashboard.workspace.readiness }}</strong>
-      <small data-command-branch>{{ dashboard.workspace.branch.as_deref().unwrap_or("not-a-git-worktree") }}</small>
-      <small class="command-revision" data-planning-revision>{{ dashboard.planning_revision_label }}</small>
+      <span class="command-state-dot" aria-hidden="true"></span>
+      <div class="command-summary-copy">
+        <small>AKRA COMMAND</small>
+        <strong data-command-readiness>{{ dashboard.workspace.readiness }}</strong>
+      </div>
+      <div class="command-summary-meta">
+        <span data-command-branch>{{ dashboard.workspace.branch.as_deref().unwrap_or("not-a-git-worktree") }}</span>
+        <span data-planning-revision>{{ dashboard.planning_revision_label }}</span>
+        <span data-summary-generated-time>{{ dashboard.generated_time_label }}</span>
+        <button type="button" class="command-refresh" data-refresh-dashboard aria-label="관제 스냅샷 새로고침" title="관제 스냅샷 새로고침">↻</button>
+      </div>
+      <small class="poll-status" data-realtime-status role="status" aria-live="polite" aria-atomic="true">연결 상태 확인 중</small>
     </div>
     <div class="draft-stat" aria-label="가동 중 에이전트">
       <span class="draft-stat-icon" aria-hidden="true">A</span>
@@ -1642,12 +1613,6 @@
       <small>분배 큐</small>
       <strong data-summary-queue-depth>{{ dashboard.kpis.queue_depth }}</strong>
     </div>
-    <div class="draft-clock" aria-label="스냅샷 생성 시각">
-      <span class="live-dot" aria-hidden="true"></span>
-      <small>SNAPSHOT</small>
-      <strong data-summary-generated-time>{{ dashboard.generated_time_label }}</strong>
-      <button type="button" class="clock-gear" data-refresh-dashboard aria-label="Refresh dashboard snapshot" title="Refresh dashboard snapshot">G</button>
-    </div>
   </div>
 
   {% if dashboard.debug_harness.enabled %}
@@ -1659,9 +1624,9 @@
     aria-label="Admin 디버그 시나리오 하네스"
   >
     <div class="debug-harness-identity">
-      <span class="debug-harness-kicker">APPLICATION FAKE · SAFE MODE</span>
+      <span class="debug-harness-kicker">FAKE · SAFE</span>
       <strong data-debug-scenario-label>{{ dashboard.debug_harness.scenario_label }}</strong>
-      <small>실제 planning·parallel authority는 변경하지 않습니다.</small>
+      <small>실제 authority와 분리된 UI 시연</small>
     </div>
     <div class="debug-harness-state">
       <strong>
@@ -1692,13 +1657,15 @@
   {% endif %}
 
   <section
-    class="command-alert state-{{ dashboard.workspace.readiness }}"
+    class="attention-strip state-{{ dashboard.workspace.readiness }}"
+    data-attention-strip
     role="status"
     aria-live="polite"
     aria-atomic="true"
+    {% if dashboard.workspace.readiness == "ready" %}hidden{% endif %}
   >
-    <span class="command-alert-label">OPERATOR BRIEF</span>
-    <div class="command-alert-copy">
+    <span class="attention-strip-label">ATTENTION</span>
+    <div class="attention-strip-copy">
       <strong data-operational-notice>{{ dashboard.workspace.readiness_notice }}</strong>
       <small data-operational-action>{{ dashboard.workspace.blocked_action }}</small>
       <details class="command-diagnostic" data-operational-detail-group{% if dashboard.workspace.top_notice.is_none() %} hidden{% endif %}>
@@ -1709,6 +1676,17 @@
         <p data-operational-detail></p>
         {% endif %}
       </details>
+    </div>
+  </section>
+
+  <section
+    class="command-controls"
+    aria-label="하네스 루프 제어"
+    {% if dashboard.debug_harness.enabled %}hidden{% endif %}
+  >
+    <div class="command-controls-copy">
+      <span>LOOP CONTROL</span>
+      <small>안전한 application 명령만 실행합니다.</small>
     </div>
     <div class="loop-controls" aria-label="하네스 루프 제어">
       <button type="button" class="loop-control primary" data-loop-command="enable">자동 루프 시작</button>
@@ -1773,13 +1751,6 @@
           <button type="button" data-scene-zoom-in aria-label="맵 확대" title="맵 확대">+</button>
         </div>
         <small class="scene-camera-hint" aria-hidden="true">DRAG · WHEEL/PINCH</small>
-        <div class="stage-hud" aria-label="Mission flow">
-          <span>MISSION FLOW</span>
-          <strong>{{ dashboard.campaign.active_lane_count }} lanes</strong>
-          <small data-stage-summary>{{ dashboard.distributor.barrier_state }} · {{ dashboard.event_feed.total_event_count }} signals</small>
-          <small data-planning-revision>{{ dashboard.planning_revision_label }}</small>
-          <button type="button" class="stage-refresh-btn" data-refresh-dashboard aria-label="Refresh dashboard snapshot" title="Refresh dashboard snapshot">R</button>
-        </div>
 
         {% for actor in dashboard.scene.actors %}
         <button
@@ -1954,15 +1925,11 @@
       </section>
     </div>
 
-    <aside class="right-stack" aria-label="임무 현황과 이벤트">
+    <aside class="right-stack" aria-label="활성 레인과 이벤트">
       <section class="game-panel" id="campaign">
-        <div class="panel-title"><h3>임무 현황</h3><small>{{ dashboard.campaign.summary }}</small></div>
-        <div class="campaign-summary" aria-label="임무 현황 요약">
-          <span><small>활성 레인</small><strong>{{ dashboard.campaign.active_lane_count }}</strong></span>
-          <span><small>정보 신호</small><strong>{{ dashboard.campaign.signal_count }}</strong></span>
-        </div>
+        <div class="panel-title"><h3>활성 레인</h3><small>{{ dashboard.campaign.active_lane_count }} active</small></div>
         {% if dashboard.campaign.lane_cards.is_empty() %}
-        <p>{{ dashboard.agents.empty_state }}</p>
+        <p class="panel-empty">현재 수행 중인 레인이 없습니다.</p>
         {% else %}
         <div class="campaign-lanes">
           {% for lane in dashboard.campaign.lane_cards %}
@@ -2032,34 +1999,6 @@
   </div>
 
   <div class="bottom-grid">
-    <section class="game-panel" id="tasks">
-      <div class="panel-title"><h3>작업 상세</h3><small>selected session</small></div>
-      {% if let Some(task) = dashboard.selected_task %}
-      <div class="metric-line"><small>{{ task.task_id }}</small><strong>{{ task.task_title }}</strong></div>
-      <div class="metric-line"><small>담당 요원</small><strong>{{ task.agent_id }} / {{ task.slot_id }}</strong></div>
-      <div class="metric-line"><small>브랜치</small><strong>{{ task.branch_name }}</strong></div>
-      <div class="metric-line">
-        {% if let Some(progress_percent) = task.progress_percent %}
-        <small>진행률 {{ progress_percent }}%</small>
-        <span class="progress-track"><span class="progress-fill" style="width: {{ progress_percent }}%"></span></span>
-        {% else %}
-        <small>진행률 미집계</small>
-        {% endif %}
-      </div>
-      <div class="metric-line"><small>검증 결과</small><strong>{{ task.validation_summary }}</strong></div>
-      <div class="timeline">
-        <small>트레일</small>
-        <ul class="trail-list">
-          {% for trail in task.trail %}
-          <li>{{ trail }}</li>
-          {% endfor %}
-        </ul>
-      </div>
-      {% else %}
-      <p>{{ dashboard.agents.empty_state }}</p>
-      {% endif %}
-    </section>
-
     <section class="game-panel" id="pipeline">
       <div class="panel-title"><h3>배포 파이프라인</h3><small>{{ dashboard.distributor.barrier_state }}</small></div>
       <div class="pipeline">

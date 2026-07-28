@@ -53,15 +53,11 @@
   const panelTitle = (title, subtitle) => {
     const header = document.createElement("div");
     header.className = "panel-title";
-    header.append(createText("h3", "", title), createText("small", "", subtitle));
+    header.appendChild(createText("h3", "", title));
+    if (String(subtitle || "").trim() !== "") {
+      header.appendChild(createText("small", "", subtitle));
+    }
     return header;
-  };
-  const metricLine = (label, value, note) => {
-    const line = document.createElement("div");
-    line.className = "metric-line";
-    line.append(createText("small", "", label), createText("strong", "", value));
-    if (note) line.appendChild(createText("small", "", note));
-    return line;
   };
   const updatePanel = (selector, children) => {
     const panel = root.querySelector(selector);
@@ -467,17 +463,6 @@
 
   const renderCampaign = (dashboard) => {
     const campaign = dashboard.campaign || {};
-    const summary = document.createElement("div");
-    summary.className = "campaign-summary";
-    for (const [label, value] of [
-      ["활성 레인", campaign.activeLaneCount],
-      ["정보 신호", campaign.signalCount]
-    ]) {
-      const item = document.createElement("span");
-      item.append(createText("small", "", label), createText("strong", "", formatValue(value, "0")));
-      summary.appendChild(item);
-    }
-
     const lanes = asArray(campaign.laneCards);
     const laneBody = lanes.length > 0
       ? (() => {
@@ -486,10 +471,9 @@
           list.append(...lanes.map(createCampaignLane));
           return list;
         })()
-      : createText("p", "", dashboard.agents?.emptyState || "표시할 시도 레인이 없습니다.");
+      : createText("p", "panel-empty", "현재 수행 중인 레인이 없습니다.");
     updatePanel("#campaign", [
-      panelTitle("임무 현황", campaign.summary || ""),
-      summary,
+      panelTitle("활성 레인", `${formatValue(campaign.activeLaneCount, "0")} active`),
       laneBody
     ]);
   };
@@ -545,7 +529,7 @@
     const panel = root.querySelector("#pool");
     if (!panel || !pool) return;
     panel.replaceChildren(
-      panelTitle("워크트리 풀", `${formatValue(pool.summary?.running, "0")} / ${formatValue(pool.configuredSize, "0")}`),
+      panelTitle("워크트리 풀", ""),
       ...asArray(pool.slots).map(createSlotButton)
     );
   };
@@ -688,17 +672,6 @@
     root.dataset.sceneSignature = nextSignature;
   };
 
-  const syncStageHud = (dashboard) => {
-    const hud = root.querySelector(".stage-hud");
-    if (!hud) return;
-    const strong = hud.querySelector("strong");
-    const small = hud.querySelector("[data-stage-summary]");
-    if (strong) strong.textContent = `${formatValue(dashboard.campaign?.activeLaneCount, "0")} lanes`;
-    if (small) {
-      small.textContent = `${optionalText(dashboard.distributor?.barrierState)} · ${formatValue(dashboard.eventFeed?.totalEventCount, "0")} signals`;
-    }
-  };
-
   const syncDistributorDesk = (distributor) => {
     const desk = root.querySelector(".distributor-desk");
     if (!desk || !distributor) return;
@@ -755,48 +728,8 @@
   const renderBoard = (dashboard) => {
     renderPool(dashboard.pool);
     renderActors(dashboard.scene);
-    syncStageHud(dashboard);
     syncDistributorDesk(dashboard.distributor);
     syncEventBoard(dashboard);
-  };
-
-  const renderSelectedTask = (dashboard) => {
-    const task = dashboard.selectedTask;
-    const children = [panelTitle("작업 상세", "selected session")];
-    if (!task) {
-      children.push(createText("p", "", dashboard.agents?.emptyState || "선택된 작업이 없습니다."));
-      updatePanel("#tasks", children);
-      return;
-    }
-
-    children.push(
-      metricLine(task.taskId, task.taskTitle),
-      metricLine("담당 요원", `${optionalText(task.agentId)} / ${optionalText(task.slotId)}`),
-      metricLine("브랜치", task.branchName)
-    );
-    const progressLine = document.createElement("div");
-    progressLine.className = "metric-line";
-    const track = document.createElement("span");
-    track.className = "progress-track";
-    const fill = document.createElement("span");
-    fill.className = "progress-fill";
-    const hasProgress = Number.isFinite(task.progressPercent);
-    fill.style.width = hasProgress ? `${Number(task.progressPercent)}%` : "0";
-    track.appendChild(fill);
-    progressLine.append(
-      createText("small", "", hasProgress ? `진행률 ${task.progressPercent}%` : "진행률 미집계"),
-      track
-    );
-    children.push(progressLine, metricLine("검증 결과", task.validationSummary));
-
-    const timeline = document.createElement("div");
-    timeline.className = "timeline";
-    const list = document.createElement("ul");
-    list.className = "trail-list";
-    for (const trail of asArray(task.trail)) list.appendChild(createText("li", "", trail));
-    timeline.append(createText("small", "", "트레일"), list);
-    children.push(timeline);
-    updatePanel("#tasks", children);
   };
 
   const createPipelineStep = (step) => {
@@ -869,7 +802,6 @@
   const renderDashboardPanels = (dashboard) => {
     renderCampaign(dashboard);
     renderBoard(dashboard);
-    renderSelectedTask(dashboard);
     renderPipeline(dashboard.distributor);
     initializeDetailControls();
     syncSelectedDetail();
@@ -900,7 +832,12 @@
       group.hidden = operationalDetail === "";
       if (group.hidden) group.open = false;
     }
-    setOperationalState(".command-summary, .command-alert", dashboard.workspace.readiness);
+    const readiness = optionalText(dashboard.workspace.readiness, "degraded");
+    setOperationalState(".command-summary, .attention-strip", readiness);
+    const attentionStrip = root.querySelector("[data-attention-strip]");
+    if (attentionStrip) {
+      attentionStrip.hidden = readiness === "ready" || root.dataset.debugHarnessEnabled === "true";
+    }
     const previousSignature = root.dataset.dashboardSignature || "";
     const nextSignature = dashboardSignature(dashboard);
     if (previousSignature !== nextSignature) {
@@ -1193,12 +1130,12 @@
     if (source) openDetailDrawer(source);
   });
 
-  const pollStatus = document.createElement("small");
-  pollStatus.className = "poll-status";
+  const pollStatus = root.querySelector("[data-realtime-status]") || document.createElement("small");
+  pollStatus.classList.add("poll-status");
   pollStatus.setAttribute("role", "status");
   pollStatus.setAttribute("aria-live", "polite");
   pollStatus.setAttribute("aria-atomic", "true");
-  root.querySelector(".stage-hud")?.appendChild(pollStatus);
+  if (!pollStatus.isConnected) root.querySelector(".command-summary")?.appendChild(pollStatus);
 
   const pollState = {
     snapshot: "live",
