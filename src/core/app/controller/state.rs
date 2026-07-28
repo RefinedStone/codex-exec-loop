@@ -1,4 +1,4 @@
-use super::{
+use super::super::{
     AppSnapshot, ConversationReadySnapshot, ConversationRuntimeSnapshot, ConversationSnapshot,
     ParallelModeProjection, RevisionedPlanningParallelProjection, SessionCatalogReadySnapshot,
     SessionCatalogSnapshot, StartupReadySnapshot, StartupSnapshot,

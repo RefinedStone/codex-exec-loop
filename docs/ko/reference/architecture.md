@@ -104,6 +104,10 @@ exact-completion 검증은 각 feature reducer가 private하게 소유하고, ro
 승인된 결과의 `AppState` projection만 조정합니다. Rust-aware guard는 controller raw field,
 외부로 노출된 reducer authority, 금지 의존성, conversation stream authority의 silent wildcard를
 거부합니다.
+`AppState`는 controller의 private child module 안에 물리적으로 중첩됩니다. 따라서 projection
+writer를 이름으로 참조할 수 있는 곳은 root controller뿐이며, feature reducer는 typed local
+reduction을 반환하고 snapshot store를 import할 수 없습니다. AST guard는 sibling state module,
+더 넓은 state/writer visibility, 노출된 snapshot storage field를 거부합니다.
 
 이는 ClientEvent 흐름에 하나의 직렬화된 reducer 진입점을 둡니다. 내부
 `AppCommand` / `CoreInput` 이름과 동기 UI 입력을 유지하는 것은 별도의 semantic writer를 만들지

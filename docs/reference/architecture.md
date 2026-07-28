@@ -113,6 +113,10 @@ correlations, cancellation flags, and exact-completion checks behind methods; th
 coordinates cross-feature ordering and projects accepted results into `AppState`. Rust-aware
 architecture tests reject additional raw controller fields, visible reducer authority fields,
 forbidden reducer dependencies, and silent wildcard handling of conversation stream authority.
+`AppState` is physically nested in the controller's private child module. Only the root controller
+can name its projection writers; feature reducers return typed local reductions and cannot import
+the snapshot store. An AST guard rejects a sibling state module, wider state or writer visibility,
+and any visible snapshot storage field.
 
 This establishes one serialized reducer ingress for ClientEvent flow. Retaining the internal
 `AppCommand` / `CoreInput` names and not physically enqueueing synchronous UI-originated events do
