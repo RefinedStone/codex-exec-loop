@@ -677,6 +677,19 @@ fn app_state_authority_analyzer_rejects_visibility_and_writer_escapes() {
         "unexpected allowed-macro analyzer error: {error}"
     );
 
+    let nested_macro_writer = format!(
+        "{controller}\n\
+         fn invoke_writer_macro() {{\n\
+             assert!(external_writer!());\n\
+         }}\n"
+    );
+    let error = verify_app_state_controller_seal(&app_module, &nested_macro_writer, &state)
+        .expect_err("an allowed macro must not hide a nested writer macro");
+    assert!(
+        error.contains("must not contain production item macros"),
+        "unexpected nested-macro analyzer error: {error}"
+    );
+
     let nested_state_writer = format!(
         "{state}\n\
          mod escaped_writer {{\n\
@@ -11221,6 +11234,23 @@ fn sealed_source_macro_is_allowed(expression: &syn::Macro) -> bool {
 }
 
 fn macro_tokens_contain_sealed_source_escape(tokens: &TokenStream) -> bool {
+    let token_trees = tokens.clone().into_iter().collect::<Vec<_>>();
+    if token_trees.windows(3).any(|window| {
+        matches!(
+            window,
+            [
+                TokenTree::Ident(_),
+                TokenTree::Punct(bang),
+                next,
+            ] if bang.as_char() == '!'
+                && !matches!(next, TokenTree::Punct(equals) if equals.as_char() == '=')
+        )
+    }) || matches!(
+        token_trees.as_slice(),
+        [.., TokenTree::Ident(_), TokenTree::Punct(bang)] if bang.as_char() == '!'
+    ) {
+        return true;
+    }
     for token in tokens.clone() {
         let TokenTree::Group(group) = token else {
             continue;
