@@ -42,15 +42,16 @@ fn open_pty(columns: u16, rows: u16) -> io::Result<(File, File)> {
         ws_xpixel: 0,
         ws_ypixel: 0,
     };
+    let window_size_ptr = std::ptr::addr_of_mut!(window_size);
     // SAFETY: openpty initializes both descriptors on success. Null termios requests defaults,
-    // and window_size remains valid for the duration of the call.
+    // and window_size_ptr remains valid for the duration of the call.
     let result = unsafe {
         libc::openpty(
             &mut master_fd,
             &mut slave_fd,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            &mut window_size,
+            window_size_ptr,
         )
     };
     if result == -1 {
