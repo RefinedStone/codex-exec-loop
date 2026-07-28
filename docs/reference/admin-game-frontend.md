@@ -54,20 +54,24 @@ native TUI, planning authority, parallel policy, or application control plane.
 
 - Vite bundles strict TypeScript and PixiJS 8 into the existing IIFE static-asset boundary. The
   Pixi 8 CSP adapter is registered before renderer initialization for the Admin shell's strict CSP.
+- The renderer normally follows Pixi's `60 fps` requestAnimationFrame ticker. A visible-tab
+  `60 fps` timer takes over only when the host throttles requestAnimationFrame; hidden tabs update
+  neither path. Scene inspection exposes the active frame driver for browser-harness verification.
 - `AgentWorld` owns the map, actors, signal packets, points of interest, labels, and depth ordering.
 - `SceneCameraController` owns fit, pan, wheel zoom, pinch zoom, zoom controls, bounds, and the
   `overview -> operations -> detail` semantic zoom projection.
 - Actor state changes move the retained unit toward its new semantic destination. Movement uses
   front, rear, or strict side atlas rows; diagonal character directions are not fabricated.
 - Normal-motion travel keeps the `30%` presentation-speed target as a constant `168` world-pixels
-  per second instead of an exponential interpolation tail. The original `135 ms` walk cadence and a
-  `60 fps` Pixi ticker keep the slower travel visually continuous. Reduced-motion mode still snaps
-  to the semantic destination without a walk cycle.
+  per second instead of an exponential interpolation tail. A fixed directional atlas frame travels
+  on the `60 fps` Pixi ticker while a `760 ms` procedural gait adds subpixel sway, lift, and matching
+  shadow compression. This keeps the silhouette stable instead of swapping differently aligned
+  bitmap frames. Reduced-motion mode still snaps to the semantic destination without a walk cycle.
 - An unchanged idle or configured-standby unit never roams and never emits a packet. It may use a
-  low-cadence local frame/weight-shift loop at the same semantic coordinate; explicit laptop or
-  seated poses remain selected when the atlas provides them.
-- Scene inspection reports each unit's current animation kind/frame and the movement-speed ratio so
-  the debug harness can verify motion independently of canvas screenshots.
+  slower `1280 ms` in-place gait at `55%` amplitude without changing its semantic coordinate;
+  explicit laptop or seated poses remain selected when the atlas provides them.
+- Scene inspection reports each unit's current animation kind/frame, procedural gait offset, and
+  movement-speed ratio so the debug harness can verify motion independently of canvas screenshots.
 - A masked duplicate of the exact map texture restores workstation desk fronts above actors. This
   gives deterministic furniture occlusion without a second hand-painted foreground asset.
 - Pixi hit targets emit typed scene-selection events. The DOM dashboard retains the accessible
