@@ -105,6 +105,14 @@ exact-completion 검증은 각 feature reducer가 private하게 소유하고, ro
 외부로 노출된 reducer authority, 금지 의존성, conversation stream authority의 silent wildcard를
 거부합니다.
 
+이는 ClientEvent 흐름에 하나의 직렬화된 reducer 진입점을 둡니다. 내부
+`AppCommand` / `CoreInput` 이름과 동기 UI 입력을 유지하는 것은 별도의 semantic writer를 만들지
+않습니다. Adapter의 bounded `BackgroundMessage` lane은 production에서 presentation 전용이며
+operator alert만 전달합니다. Startup, session, conversation, turn, planning, parallel semantic
+결과를 이 lane에 추가하면 Rust-aware architecture guard가 실패합니다. 같은 guard는 모든
+`NativeClientEvent` variant를 guard 없는 exhaustive dispatch arm 하나와 대조하므로 새 event가
+routing되지 않거나 wildcard 경로로 조용히 빠질 수 없습니다.
+
 시작, session load, conversation 선택, turn 제출, stream reduction, 완료, post-turn 평가가 이 흐름을
 사용합니다. Parallel mutation은 application 소유이지만 같은 client-runtime facade로 진입하며
 `ParallelModeControlPlaneHandle`은 composition만 보관합니다. Core는 projection을 복사할 수 있지만

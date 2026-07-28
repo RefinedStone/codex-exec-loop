@@ -8,8 +8,7 @@ use ratatui::layout::Rect;
 #[cfg(test)]
 use crate::adapter::inbound::tui::app::app_runtime::core_turn_stream_event_from_application;
 #[cfg(test)]
-use crate::core::app::CoreEffectCompletion;
-use crate::core::app::CoreInput;
+use crate::core::app::{CoreEffectCompletion, CoreInput};
 use crate::domain::operator_alert::OperatorAlert;
 
 use super::app_runtime::TUI_BACKGROUND_CHANNEL_CAPACITY;
@@ -240,15 +239,13 @@ impl ShellRuntime {
                             event: core_turn_stream_event_from_application(event),
                         });
                 }
+                #[cfg(test)]
                 BackgroundMessage::ConversationRuntimeNotice(notice) => {
                     self.app
                         .dispatch_client_event(CoreInput::ConversationRuntimeNotice(notice));
                 }
                 BackgroundMessage::OperatorAlert(alert) => {
                     self.emit_operator_alert(&alert);
-                }
-                BackgroundMessage::InvalidateParallelModeSupervisorSnapshot => {
-                    self.app.invalidate_parallel_mode_supervisor_snapshot();
                 }
                 #[cfg(test)]
                 BackgroundMessage::PostTurnEvaluationCompleted {
