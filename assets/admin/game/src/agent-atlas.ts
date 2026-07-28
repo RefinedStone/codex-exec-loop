@@ -17,6 +17,11 @@ export interface AgentFrameSet {
   up: Texture[];
 }
 
+export interface AgentFrameAlignment {
+  x: number;
+  y: number;
+}
+
 export interface ResolvedAgentTexture {
   texture: Texture | null;
   resolvedAtlasFrameIndex: number | null;
@@ -46,6 +51,40 @@ export const makeAtlasFrameByIndex = (texture: Texture, atlasFrameIndex: number)
 
 const makeFrameRow = (texture: Texture, row: number, startCol: number): Texture[] =>
   Array.from({ length: 4 }, (_, index) => makeAtlasFrame(texture, startCol + index, row));
+
+const aligned = (
+  x: readonly number[],
+  y: readonly number[] = [0, 0, 0, 0]
+): readonly AgentFrameAlignment[] =>
+  x.map((offsetX, index) => ({ x: offsetX, y: y[index] ?? 0 }));
+
+// Source-pixel offsets measured from each frame's alpha bounds. They keep the
+// torso center and lowest visible foot aligned while the four poses cycle.
+export const WALK_FRAME_ALIGNMENT: Record<
+  ArchetypeKey,
+  Record<Facing, readonly AgentFrameAlignment[]>
+> = {
+  planner: {
+    down: aligned([0, -0.5, -0.5, 0]),
+    side: aligned([0, 0.5, 0.5, 0.5]),
+    up: aligned([0, 0, 0, 0.5]),
+  },
+  coffee_addict: {
+    down: aligned([0, 0.5, 0.5, 0.5]),
+    side: aligned([0, 0.5, 0.5, 0.5]),
+    up: aligned([0, 0, 0, 0], [0, 0, -2, 0]),
+  },
+  ai_researcher: {
+    down: aligned([0, 0.5, 0, 0], [0, -2, 0, 0]),
+    side: aligned([0, 0.5, 0.5, 0.5]),
+    up: aligned([0, 0.5, 0.5, 0.5]),
+  },
+  designer: {
+    down: aligned([0, -0.5, 0, 0]),
+    side: aligned([0, 0, 0, 0]),
+    up: aligned([0, 0, 0, 0]),
+  },
+};
 
 export const buildAgentFrameSets = (texture: Texture): Record<ArchetypeKey, AgentFrameSet> => ({
   planner: {
@@ -82,6 +121,13 @@ export const frameForFacing = (
   const row = frames[archetype][facing];
   return row[frameIndex % row.length] ?? row[0];
 };
+
+export const alignmentForFacing = (
+  archetype: ArchetypeKey,
+  facing: Facing,
+  frameIndex: number
+): AgentFrameAlignment =>
+  WALK_FRAME_ALIGNMENT[archetype][facing][frameIndex % 4] ?? { x: 0, y: 0 };
 
 export const resolveRestTexture = (
   atlas: Texture,

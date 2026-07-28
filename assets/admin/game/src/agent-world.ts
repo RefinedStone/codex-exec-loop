@@ -7,6 +7,7 @@ import {
   Texture,
 } from "pixi.js";
 import {
+  alignmentForFacing,
   archetypeForProfile,
   buildAgentFrameSets,
   frameForFacing,
@@ -64,6 +65,7 @@ interface AgentUnit {
   archetype: ArchetypeKey;
   group: Container;
   sprite: Sprite;
+  blendSprite: Sprite;
   shadow: Graphics;
   marker: Graphics;
   label: Text;
@@ -76,6 +78,7 @@ interface AgentUnit {
   hovered: boolean;
   animationKind: AgentAnimationKind;
   animationFrameIndex: number | null;
+  animationBlend: number;
   gaitOffsetX: number;
   gaitOffsetY: number;
   restTexture: Texture;
@@ -104,12 +107,82 @@ const copyPoint = (point: Point): Point => ({ x: point.x, y: point.y });
 export const AGENT_MOVEMENT_SPEED_RATIO = 0.3;
 export const AGENT_TRAVEL_SPEED_WORLD_PX_PER_SECOND = 168;
 export const WALK_IN_PLACE_CYCLE_MS = 760;
-export const IDLE_IN_PLACE_CYCLE_MS = 1_280;
-export const IDLE_IN_PLACE_AMPLITUDE_RATIO = 0.55;
+export const IDLE_IN_PLACE_CYCLE_MS = 960;
+export const IDLE_IN_PLACE_AMPLITUDE_RATIO = 0.65;
 export const WALK_SWAY_WORLD_PX = 0.7;
 export const WALK_LIFT_WORLD_PX = 1.6;
+export const STEP_CROSSFADE_START = 0.68;
 
 const MAX_MOVEMENT_DELTA_MS = 50;
+
+const visibleStepState = (
+  gaitProgress: number
+): { frameIndex: number; nextFrameIndex: number; blend: number } => {
+  const frameProgress = gaitProgress * 4;
+  const frameBase = Math.floor(frameProgress);
+  const frameFraction = frameProgress - frameBase;
+  const rawBlend = Math.max(
+    0,
+    Math.min(
+      1,
+      (frameFraction - STEP_CROSSFADE_START) /
+        (1 - STEP_CROSSFADE_START)
+    )
+  );
+  const blend = rawBlend * rawBlend * (3 - 2 * rawBlend);
+  return {
+    frameIndex: frameBase % 4,
+    nextFrameIndex: (frameBase + 1) % 4,
+    blend,
+  };
+};
+
+const applyVisibleStepAppearance = (
+  unit: AgentUnit,
+  frameSets: Record<ArchetypeKey, AgentFrameSet>,
+  facing: Facing,
+  gaitProgress: number,
+  gaitOffsetX: number,
+  gaitOffsetY: number
+): void => {
+  const step = visibleStepState(gaitProgress);
+  const currentAlignment = alignmentForFacing(
+    unit.archetype,
+    facing,
+    step.frameIndex
+  );
+  const nextAlignment = alignmentForFacing(
+    unit.archetype,
+    facing,
+    step.nextFrameIndex
+  );
+  unit.sprite.texture = frameForFacing(
+    frameSets,
+    unit.archetype,
+    facing,
+    step.frameIndex
+  );
+  unit.blendSprite.texture = frameForFacing(
+    frameSets,
+    unit.archetype,
+    facing,
+    step.nextFrameIndex
+  );
+  unit.sprite.position.set(
+    gaitOffsetX + currentAlignment.x * AGENT_SPRITE_SCALE,
+    gaitOffsetY + currentAlignment.y * AGENT_SPRITE_SCALE
+  );
+  unit.blendSprite.position.set(
+    gaitOffsetX + nextAlignment.x * AGENT_SPRITE_SCALE,
+    gaitOffsetY + nextAlignment.y * AGENT_SPRITE_SCALE
+  );
+  unit.sprite.alpha = Math.sqrt(1 - step.blend);
+  unit.blendSprite.alpha = Math.sqrt(step.blend);
+  unit.sprite.roundPixels = false;
+  unit.blendSprite.roundPixels = false;
+  unit.animationFrameIndex = step.frameIndex;
+  unit.animationBlend = step.blend;
+};
 
 const relevantPacketTarget = (unit: AgentUnit): Point | null => {
   if (unit.presenceKind !== "active") return null;
@@ -310,9 +383,10 @@ export class AgentWorld {
       ) / 1000;
     for (const unit of this.units.values()) {
       const remaining = distance(unit.currentPoint, unit.targetPoint);
-      const moving = remaining > 1.4;
+      let moving = remaining > 1.4;
       if (moving && this.reducedMotion) {
         unit.currentPoint = copyPoint(unit.targetPoint);
+        moving = false;
       } else if (moving) {
         const travelStep = Math.min(
           remaining,
@@ -330,14 +404,18 @@ export class AgentWorld {
       let offsetY = 0;
       let spriteOffsetX = 0;
       let spriteOffsetY = 0;
+      let gaitProgress = 0;
       const inPlaceWalking =
-        !this.reducedMotion && (moving || unit.visualState === "idle");
+        !this.reducedMotion &&
+        (moving ||
+          (unit.visualState === "idle" &&
+            unit.restResolvedAtlasFrameIndex === null));
       if (inPlaceWalking) {
         const gaitCycleMilliseconds = moving
           ? WALK_IN_PLACE_CYCLE_MS
           : IDLE_IN_PLACE_CYCLE_MS;
         const gaitAmplitude = moving ? 1 : IDLE_IN_PLACE_AMPLITUDE_RATIO;
-        const gaitProgress =
+        gaitProgress =
           (elapsedMilliseconds / gaitCycleMilliseconds +
             unit.motionPhase / 17) %
           1;
@@ -373,27 +451,33 @@ export class AgentWorld {
         unit.currentPoint.y + offsetY
       );
       unit.group.zIndex = unit.currentPoint.y;
-      unit.sprite.position.set(spriteOffsetX, spriteOffsetY);
-      unit.sprite.roundPixels = !inPlaceWalking;
       unit.label.position.set(unit.currentPoint.x, unit.currentPoint.y - 137);
       unit.label.zIndex = 20_000 + unit.currentPoint.y;
+      unit.sprite.alpha = 1;
+      unit.blendSprite.alpha = 0;
+      unit.animationBlend = 0;
 
       if (moving) {
         const movement = movementFacing(unit.currentPoint, unit.targetPoint);
         unit.facing = movement.facing;
         unit.flipX = movement.flipX;
-        unit.sprite.texture = frameForFacing(
+        applyVisibleStepAppearance(
+          unit,
           this.frameSets,
-          unit.archetype,
           unit.facing,
-          0
+          gaitProgress,
+          spriteOffsetX,
+          spriteOffsetY
         );
         unit.animationKind = "walk";
-        unit.animationFrameIndex = 0;
         unit.resolvedAtlasFrameIndex = null;
         unit.poseFallback = unit.pose !== "neutral";
       } else {
         unit.sprite.texture = unit.restTexture;
+        unit.sprite.position.set(spriteOffsetX, spriteOffsetY);
+        unit.sprite.roundPixels = !inPlaceWalking;
+        unit.blendSprite.position.set(spriteOffsetX, spriteOffsetY);
+        unit.blendSprite.roundPixels = !inPlaceWalking;
         unit.animationKind =
           !this.reducedMotion && unit.visualState === "idle"
             ? "idle"
@@ -405,10 +489,25 @@ export class AgentWorld {
         unit.animationFrameIndex = null;
         unit.resolvedAtlasFrameIndex = unit.restResolvedAtlasFrameIndex;
         unit.poseFallback = unit.restPoseFallback;
-        if (unit.animationKind === "idle") unit.animationFrameIndex = 0;
         unit.flipX = false;
+        if (unit.animationKind === "idle" && inPlaceWalking) {
+          unit.facing = "down";
+          applyVisibleStepAppearance(
+            unit,
+            this.frameSets,
+            unit.facing,
+            gaitProgress,
+            spriteOffsetX,
+            spriteOffsetY
+          );
+          unit.resolvedAtlasFrameIndex = null;
+        }
       }
       unit.sprite.scale.set(
+        (unit.flipX ? -1 : 1) * AGENT_SPRITE_SCALE,
+        AGENT_SPRITE_SCALE
+      );
+      unit.blendSprite.scale.set(
         (unit.flipX ? -1 : 1) * AGENT_SPRITE_SCALE,
         AGENT_SPRITE_SCALE
       );
@@ -469,6 +568,7 @@ export class AgentWorld {
           pose: unit.pose,
           animationKind: unit.animationKind,
           animationFrameIndex: unit.animationFrameIndex,
+          animationBlend: Number(unit.animationBlend.toFixed(3)),
           gaitOffsetX: Number(unit.gaitOffsetX.toFixed(2)),
           gaitOffsetY: Number(unit.gaitOffsetY.toFixed(2)),
           resolvedAtlasFrameIndex: unit.resolvedAtlasFrameIndex,
@@ -493,6 +593,7 @@ export class AgentWorld {
           pose: unit.pose,
           animationKind: unit.animationKind,
           animationFrameIndex: unit.animationFrameIndex,
+          animationBlend: Number(unit.animationBlend.toFixed(3)),
           gaitOffsetX: Number(unit.gaitOffsetX.toFixed(2)),
           gaitOffsetY: Number(unit.gaitOffsetY.toFixed(2)),
           locationIndex: unit.locationIndex,
@@ -612,6 +713,11 @@ export class AgentWorld {
     sprite.roundPixels = true;
     sprite.anchor.set(0.5, 1);
     sprite.scale.set(AGENT_SPRITE_SCALE);
+    const blendSprite = new Sprite(sprite.texture);
+    blendSprite.alpha = 0;
+    blendSprite.roundPixels = true;
+    blendSprite.anchor.set(0.5, 1);
+    blendSprite.scale.set(AGENT_SPRITE_SCALE);
     const shadow = new Graphics()
       .ellipse(0, -2, 29, 8)
       .fill({ color: 0x000000, alpha: presenceKind === "active" ? 0.34 : 0.25 });
@@ -622,7 +728,7 @@ export class AgentWorld {
     group.eventMode = "static";
     group.cursor = presenceKind === "active" ? "pointer" : "default";
     group.hitArea = new Rectangle(-52, -142, 104, 148);
-    group.addChild(shadow, marker, sprite);
+    group.addChild(shadow, marker, sprite, blendSprite);
 
     const label = new Text({
       text: projection.displayName,
@@ -654,6 +760,7 @@ export class AgentWorld {
       archetype,
       group,
       sprite,
+      blendSprite,
       shadow,
       marker,
       label,
@@ -666,6 +773,7 @@ export class AgentWorld {
       hovered: false,
       animationKind: "rest",
       animationFrameIndex: null,
+      animationBlend: 0,
       gaitOffsetX: 0,
       gaitOffsetY: 0,
       restTexture:
