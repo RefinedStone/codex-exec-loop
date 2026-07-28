@@ -59,9 +59,10 @@ native TUI, planning authority, parallel policy, or application control plane.
   `overview -> operations -> detail` semantic zoom projection.
 - Actor state changes move the retained unit toward its new semantic destination. Movement uses
   front, rear, or strict side atlas rows; diagonal character directions are not fabricated.
-- Normal-motion travel uses `30%` of the original interpolation response and a lower-cadence walk
-  cycle so lifecycle transitions remain readable. Reduced-motion mode still snaps to the semantic
-  destination without a walk cycle.
+- Normal-motion travel keeps the `30%` presentation-speed target as a constant `168` world-pixels
+  per second instead of an exponential interpolation tail. The original `135 ms` walk cadence and a
+  `60 fps` Pixi ticker keep the slower travel visually continuous. Reduced-motion mode still snaps
+  to the semantic destination without a walk cycle.
 - An unchanged idle or configured-standby unit never roams and never emits a packet. It may use a
   low-cadence local frame/weight-shift loop at the same semantic coordinate; explicit laptop or
   seated poses remain selected when the atlas provides them.
