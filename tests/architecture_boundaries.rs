@@ -690,6 +690,38 @@ fn app_state_authority_analyzer_rejects_visibility_and_writer_escapes() {
         "unexpected nested-macro analyzer error: {error}"
     );
 
+    let attribute_writer = controller.replacen(
+        "#[derive(Debug, Clone, PartialEq, Eq)]",
+        "#[escaped_writer]\n#[derive(Debug, Clone, PartialEq, Eq)]",
+        1,
+    );
+    let error = verify_app_state_controller_seal(&app_module, &attribute_writer, &state)
+        .expect_err("a production attribute macro must not manufacture an AppState writer");
+    assert!(
+        error.contains("procedural attribute `escaped_writer`"),
+        "unexpected attribute-macro analyzer error: {error}"
+    );
+
+    let derive_writer = controller.replacen(
+        "#[derive(Debug, Clone, PartialEq, Eq)]",
+        "#[derive(Debug, Clone, PartialEq, Eq, EscapedWriter)]",
+        1,
+    );
+    let error = verify_app_state_controller_seal(&app_module, &derive_writer, &state)
+        .expect_err("a production derive macro must not manufacture an AppState writer");
+    assert!(
+        error.contains("procedural attribute `derive`"),
+        "unexpected derive-macro analyzer error: {error}"
+    );
+
+    let allowed_attribute = controller.replacen(
+        "#[derive(Debug, Clone, PartialEq, Eq)]",
+        "#[allow(dead_code)]\n#[derive(Debug, Clone, PartialEq, Eq)]",
+        1,
+    );
+    verify_app_state_controller_seal(&app_module, &allowed_attribute, &state)
+        .expect("safe built-in attributes and derives must remain allowed");
+
     let nested_state_writer = format!(
         "{state}\n\
          mod escaped_writer {{\n\
@@ -3960,13 +3992,44 @@ fn shell_chrome_state_has_one_typed_reducer_writer() {
     let mut violations = Vec::new();
     let mut reducer_fields = HashSet::new();
     let mut whole_state_writers = Vec::new();
+    let declared_module_paths = rust_module_paths_from_declarations(
+        &root.join("src/adapter/inbound/tui/mod.rs"),
+        &[
+            "crate".to_string(),
+            "adapter".to_string(),
+            "inbound".to_string(),
+            "tui".to_string(),
+        ],
+    )
+    .unwrap_or_else(|error| panic!("failed to resolve TUI module declarations: {error}"));
+    assert_eq!(
+        declared_module_paths
+            .get(&root.join("src/adapter/inbound/tui/app/parallel_mode/panel_controller.rs")),
+        Some(&vec![
+            "crate".to_string(),
+            "adapter".to_string(),
+            "inbound".to_string(),
+            "tui".to_string(),
+            "app".to_string(),
+            "parallel_panel_controller".to_string(),
+        ]),
+        "#[path] modules must use their declared Rust identifier, not their disk directory"
+    );
     let tui_sources = rust_files_under(&root.join("src/adapter/inbound/tui"))
         .into_iter()
         .filter(|path| !is_test_only_path(path))
         .map(|path| {
             let source = fs::read_to_string(&path)
                 .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
-            let module_path = rust_module_path(&root, &path);
+            let module_path = declared_module_paths
+                .get(&path)
+                .cloned()
+                .unwrap_or_else(|| {
+                    panic!(
+                        "production TUI source is not reachable from declared module graph: {}",
+                        path.display()
+                    )
+                });
             (path, source, module_path)
         })
         .collect::<Vec<_>>();
@@ -4728,6 +4791,17 @@ fn update_unrelated(
         "explicit returns must not expose mutable shell chrome authority"
     );
 
+    let returned_owned_chrome = shell_chrome_writer_audit(
+        "fn expose(app: NativeTuiApp) -> ShellChromeState {\n\
+             app.shell.chrome\n\
+         }",
+    )
+    .expect("returned owned chrome fixture should parse");
+    assert!(
+        !returned_owned_chrome.whole_state_writes.is_empty(),
+        "owned ShellChromeState authority must not escape through a function return"
+    );
+
     let inferred_closure_parameter = shell_chrome_writer_audit(
         "fn escape(app: &mut NativeTuiApp) {\n\
              let write = |value| {\n\
@@ -4842,6 +4916,52 @@ fn update_unrelated(
         unrelated_collection_loop.field_writes.is_empty()
             && unrelated_collection_loop.whole_state_writes.is_empty(),
         "unrelated collection elements must not gain NativeTuiApp authority"
+    );
+
+    let indexed_collection = shell_chrome_writer_audit(
+        "fn escape(mut apps: Vec<NativeTuiApp>) {\n\
+             apps[0].shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+    )
+    .expect("indexed collection authority fixture should parse");
+    assert_eq!(
+        indexed_collection.field_writes.len(),
+        1,
+        "mutable index expressions must retain collection element authority"
+    );
+
+    let first_mut_collection = shell_chrome_writer_audit(
+        "fn escape(mut apps: Vec<NativeTuiApp>) {\n\
+             apps.first_mut().unwrap().shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+    )
+    .expect("first_mut collection authority fixture should parse");
+    assert_eq!(
+        first_mut_collection.field_writes.len(),
+        1,
+        "mutable collection accessors must retain element authority"
+    );
+
+    let read_only_index = shell_chrome_writer_audit(
+        "fn inspect(apps: Vec<NativeTuiApp>) {\n\
+             let _ = &apps[0].shell.chrome.session_state;\n\
+         }",
+    )
+    .expect("read-only indexed collection fixture should parse");
+    assert!(
+        read_only_index.field_writes.is_empty() && read_only_index.whole_state_writes.is_empty(),
+        "read-only index expressions must not manufacture mutable authority"
+    );
+
+    let unrelated_index = shell_chrome_writer_audit(
+        "fn update(mut apps: Vec<OtherApp>) {\n\
+             apps[0].shell.chrome.session_state = 1;\n\
+         }",
+    )
+    .expect("unrelated indexed collection fixture should parse");
+    assert!(
+        unrelated_index.field_writes.is_empty() && unrelated_index.whole_state_writes.is_empty(),
+        "unrelated indexed elements must not gain NativeTuiApp authority"
     );
 
     let unrelated_for_loop = shell_chrome_writer_audit(
@@ -11460,6 +11580,34 @@ const SEALED_SOURCE_ALLOWED_MACROS: &[&str] = &[
     "vec",
 ];
 
+const SEALED_SOURCE_ALLOWED_ATTRIBUTES: &[&str] = &[
+    "allow",
+    "cfg",
+    "cold",
+    "deny",
+    "deprecated",
+    "doc",
+    "expect",
+    "forbid",
+    "inline",
+    "must_use",
+    "non_exhaustive",
+    "repr",
+    "warn",
+];
+
+const SEALED_SOURCE_ALLOWED_DERIVES: &[&str] = &[
+    "Clone",
+    "Copy",
+    "Debug",
+    "Default",
+    "Eq",
+    "Hash",
+    "Ord",
+    "PartialEq",
+    "PartialOrd",
+];
+
 fn macro_name(expression: &syn::Macro) -> String {
     expression
         .path
@@ -11469,11 +11617,40 @@ fn macro_name(expression: &syn::Macro) -> String {
         .unwrap_or_else(|| "<anonymous>".to_string())
 }
 
+fn syn_path_name(path: &syn::Path) -> String {
+    path.segments
+        .iter()
+        .map(|segment| segment.ident.to_string())
+        .collect::<Vec<_>>()
+        .join("::")
+}
+
 fn sealed_source_macro_is_allowed(expression: &syn::Macro) -> bool {
     expression.path.leading_colon.is_none()
         && expression.path.segments.len() == 1
         && SEALED_SOURCE_ALLOWED_MACROS.contains(&macro_name(expression).as_str())
         && !macro_tokens_contain_sealed_source_escape(&expression.tokens)
+}
+
+fn sealed_source_attribute_is_allowed(attribute: &syn::Attribute) -> bool {
+    if attribute.path().is_ident("derive") {
+        return attribute
+            .parse_args_with(
+                syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated,
+            )
+            .is_ok_and(|derives| {
+                derives.iter().all(|derive| {
+                    derive.leading_colon.is_none()
+                        && derive.segments.len() == 1
+                        && SEALED_SOURCE_ALLOWED_DERIVES
+                            .contains(&derive.segments[0].ident.to_string().as_str())
+                })
+            });
+    }
+    attribute.path().leading_colon.is_none()
+        && attribute.path().segments.len() == 1
+        && SEALED_SOURCE_ALLOWED_ATTRIBUTES
+            .contains(&attribute.path().segments[0].ident.to_string().as_str())
 }
 
 fn macro_tokens_contain_sealed_source_escape(tokens: &TokenStream) -> bool {
@@ -11539,7 +11716,34 @@ impl<'ast> Visit<'ast> for ProductionItemMacroVisitor {
         if item_is_test_only(item) {
             return;
         }
+        if let Some(attributes) = item_attributes(item) {
+            for attribute in attributes {
+                if !sealed_source_attribute_is_allowed(attribute) {
+                    self.names.push(format!(
+                        "procedural attribute `{}`",
+                        syn_path_name(attribute.path())
+                    ));
+                }
+            }
+        }
         visit::visit_item(self, item);
+    }
+
+    fn visit_impl_item(&mut self, item: &'ast syn::ImplItem) {
+        if impl_item_attributes(item).is_some_and(attributes_are_test_only) {
+            return;
+        }
+        if let Some(attributes) = impl_item_attributes(item) {
+            for attribute in attributes {
+                if !sealed_source_attribute_is_allowed(attribute) {
+                    self.names.push(format!(
+                        "procedural attribute `{}`",
+                        syn_path_name(attribute.path())
+                    ));
+                }
+            }
+        }
+        visit::visit_impl_item(self, item);
     }
 
     fn visit_item_macro(&mut self, item: &'ast syn::ItemMacro) {
@@ -14236,6 +14440,40 @@ impl ShellChromeWriterVisitor {
                 };
                 Some(ShellTypeBinding { ty, ..binding })
             }
+            syn::Expr::Index(index) => {
+                let parent = self.resolve_type_binding(index.expr.as_ref())?;
+                let ty = self.collection_element_type(&parent.ty)?;
+                Some(ShellTypeBinding {
+                    ty,
+                    mutable: parent.mutable,
+                })
+            }
+            syn::Expr::MethodCall(call)
+                if matches!(
+                    call.method.to_string().as_str(),
+                    "first_mut" | "get_mut" | "last_mut"
+                ) =>
+            {
+                let parent = self.resolve_type_binding(call.receiver.as_ref())?;
+                let ty = self.collection_element_type(&parent.ty)?;
+                Some(ShellTypeBinding {
+                    ty,
+                    mutable: parent.mutable,
+                })
+            }
+            syn::Expr::MethodCall(call)
+                if matches!(call.method.to_string().as_str(), "expect" | "unwrap")
+                    && matches!(
+                        call.receiver.as_ref(),
+                        syn::Expr::MethodCall(accessor)
+                            if matches!(
+                                accessor.method.to_string().as_str(),
+                                "first_mut" | "get_mut" | "last_mut"
+                            )
+                    ) =>
+            {
+                self.resolve_type_binding(call.receiver.as_ref())
+            }
             syn::Expr::Call(call) => {
                 if let Some(argument) = self.transparent_call_argument(call) {
                     return self.resolve_type_binding(argument);
@@ -14841,6 +15079,20 @@ impl ShellChromeWriterVisitor {
             syn::Expr::Unary(unary) if matches!(unary.op, syn::UnOp::Deref(_)) => {
                 self.resolve_authority(unary.expr.as_ref())
             }
+            syn::Expr::Index(_) | syn::Expr::MethodCall(_) => {
+                let binding = self.resolve_type_binding(expression)?;
+                let mut resolving_aliases = HashSet::new();
+                let authority = shell_authority_binding_from_type(
+                    &binding.ty,
+                    self.impl_authority,
+                    &self.type_aliases,
+                    &mut resolving_aliases,
+                )?;
+                Some(ShellAuthorityBinding {
+                    mutable: binding.mutable,
+                    ..authority
+                })
+            }
             syn::Expr::Call(call) => {
                 if let Some(argument) = self.transparent_call_argument(call) {
                     return self.resolve_authority(argument);
@@ -14901,12 +15153,16 @@ impl ShellChromeWriterVisitor {
 
     fn inspect_return_escape(&mut self, expression: &syn::Expr, kind: &str) {
         if let Some(authority) = self.resolve_authority(expression)
-            && authority.mutable
             && authority.kind != ShellAuthorityKind::Unknown
+            && (authority.mutable
+                || matches!(
+                    authority.kind,
+                    ShellAuthorityKind::Shell | ShellAuthorityKind::Chrome
+                ))
         {
             self.audit.whole_state_writes.push(self.finding(
                 expression.span().start().line,
-                format!("{kind} exposes mutable {:?} authority", authority.kind),
+                format!("{kind} exposes {:?} authority", authority.kind),
             ));
             return;
         }
@@ -17532,24 +17788,146 @@ fn is_test_only_path(path: &Path) -> bool {
         })
 }
 
-fn rust_module_path(repo_root: &Path, path: &Path) -> Vec<String> {
-    let source_root = repo_root.join("src");
-    let relative = path.strip_prefix(&source_root).unwrap_or(path);
-    let mut module_path = vec!["crate".to_string()];
-    if let Some(parent) = relative.parent() {
-        module_path.extend(parent.components().filter_map(|component| match component {
-            Component::Normal(value) => Some(value.to_string_lossy().into_owned()),
-            _ => None,
-        }));
+fn rust_module_paths_from_declarations(
+    root_file: &Path,
+    root_module_path: &[String],
+) -> Result<HashMap<PathBuf, Vec<String>>, String> {
+    fn path_attribute(module: &syn::ItemMod) -> Option<PathBuf> {
+        module.attrs.iter().find_map(|attribute| {
+            if !attribute.path().is_ident("path") {
+                return None;
+            }
+            let syn::Meta::NameValue(value) = &attribute.meta else {
+                return None;
+            };
+            let syn::Expr::Lit(expression) = &value.value else {
+                return None;
+            };
+            let syn::Lit::Str(path) = &expression.lit else {
+                return None;
+            };
+            Some(PathBuf::from(path.value()))
+        })
     }
-    let stem = relative
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default();
-    if !matches!(stem, "lib" | "main" | "mod") {
-        module_path.push(stem.to_string());
+
+    fn default_child_directory(source_file: &Path) -> PathBuf {
+        let parent = source_file.parent().unwrap_or_else(|| Path::new(""));
+        let stem = source_file
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        if matches!(stem, "lib" | "main" | "mod") {
+            parent.to_path_buf()
+        } else {
+            parent.join(stem)
+        }
     }
-    module_path
+
+    fn declared_child_file(base: &Path, module: &syn::ItemMod) -> Result<PathBuf, String> {
+        let direct = base.join(format!("{}.rs", module.ident));
+        let nested = base.join(module.ident.to_string()).join("mod.rs");
+        match (direct.is_file(), nested.is_file()) {
+            (true, false) => Ok(direct),
+            (false, true) => Ok(nested),
+            (true, true) => Err(format!(
+                "module `{}` is ambiguous between {} and {}",
+                module.ident,
+                direct.display(),
+                nested.display()
+            )),
+            (false, false) => Err(format!(
+                "module `{}` has no source at {} or {}",
+                module.ident,
+                direct.display(),
+                nested.display()
+            )),
+        }
+    }
+
+    fn walk_items(
+        items: &[syn::Item],
+        logical_path: &[String],
+        module_directory: &Path,
+        path_attribute_directory: &Path,
+        paths: &mut HashMap<PathBuf, Vec<String>>,
+        visited: &mut HashSet<PathBuf>,
+    ) -> Result<(), String> {
+        for item in items {
+            let syn::Item::Mod(module) = item else {
+                continue;
+            };
+            if attributes_are_test_only(&module.attrs) {
+                continue;
+            }
+            let mut child_logical_path = logical_path.to_vec();
+            child_logical_path.push(module.ident.to_string());
+            if let Some((_, nested_items)) = &module.content {
+                let inline_directory = module_directory.join(module.ident.to_string());
+                walk_items(
+                    nested_items,
+                    &child_logical_path,
+                    &inline_directory,
+                    &inline_directory,
+                    paths,
+                    visited,
+                )?;
+                continue;
+            }
+            let child_file = if let Some(path) = path_attribute(module) {
+                path_attribute_directory.join(path)
+            } else {
+                declared_child_file(module_directory, module)?
+            };
+            walk_file(&child_file, &child_logical_path, paths, visited)?;
+        }
+        Ok(())
+    }
+
+    fn walk_file(
+        source_file: &Path,
+        logical_path: &[String],
+        paths: &mut HashMap<PathBuf, Vec<String>>,
+        visited: &mut HashSet<PathBuf>,
+    ) -> Result<(), String> {
+        if !source_file.is_file() {
+            return Err(format!(
+                "declared module source does not exist: {}",
+                source_file.display()
+            ));
+        }
+        let source_file = source_file.to_path_buf();
+        if let Some(previous) = paths.insert(source_file.clone(), logical_path.to_vec())
+            && previous != logical_path
+        {
+            return Err(format!(
+                "module source {} is declared as both {} and {}",
+                source_file.display(),
+                previous.join("::"),
+                logical_path.join("::")
+            ));
+        }
+        if !visited.insert(source_file.clone()) {
+            return Ok(());
+        }
+        let source = fs::read_to_string(&source_file)
+            .map_err(|error| format!("failed to read {}: {error}", source_file.display()))?;
+        let syntax = syn::parse_file(&source)
+            .map_err(|error| format!("failed to parse {}: {error}", source_file.display()))?;
+        let module_directory = default_child_directory(&source_file);
+        let path_attribute_directory = source_file.parent().unwrap_or_else(|| Path::new(""));
+        walk_items(
+            &syntax.items,
+            logical_path,
+            &module_directory,
+            path_attribute_directory,
+            paths,
+            visited,
+        )
+    }
+
+    let mut paths = HashMap::new();
+    walk_file(root_file, root_module_path, &mut paths, &mut HashSet::new())?;
+    Ok(paths)
 }
 
 fn relative_path(repo_root: &Path, path: &Path) -> String {
