@@ -1002,6 +1002,93 @@
     color: var(--game-muted);
     text-align: right;
   }
+  .debug-harness-panel {
+    display: grid;
+    grid-template-columns: minmax(190px, 0.8fr) minmax(260px, 1.5fr) auto;
+    gap: 14px;
+    align-items: center;
+    margin: 12px 0;
+    padding: 12px 14px;
+    border: 2px solid rgba(245, 200, 75, 0.62);
+    background:
+      linear-gradient(90deg, rgba(245, 200, 75, 0.11), transparent 45%),
+      rgba(7, 20, 31, 0.94);
+    box-shadow: inset 0 0 0 1px rgba(245, 200, 75, 0.08);
+  }
+  .debug-harness-identity,
+  .debug-harness-state {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+  }
+  .debug-harness-kicker {
+    color: var(--game-yellow);
+    font-size: 0.7rem;
+    letter-spacing: 0.12em;
+  }
+  .debug-harness-state strong {
+    color: #f6fbff;
+    font-size: 0.95rem;
+  }
+  .debug-harness-state small {
+    color: var(--game-muted);
+    line-height: 1.45;
+  }
+  .debug-harness-progress {
+    width: 100%;
+    height: 7px;
+    overflow: hidden;
+    border: 1px solid rgba(93, 169, 255, 0.38);
+    background: rgba(1, 8, 15, 0.72);
+  }
+  .debug-harness-progress span {
+    display: block;
+    width: var(--debug-progress, 0%);
+    height: 100%;
+    background: linear-gradient(90deg, var(--game-blue), var(--game-green));
+    transition: width 180ms ease;
+  }
+  .debug-harness-controls {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 7px;
+  }
+  .debug-harness-controls select,
+  .debug-harness-controls button {
+    min-height: 36px;
+    border: 1px solid rgba(93, 169, 255, 0.46);
+    border-radius: 0;
+    background: rgba(9, 31, 48, 0.95);
+    color: #f6fbff;
+    font: inherit;
+  }
+  .debug-harness-controls select {
+    min-width: 150px;
+    padding: 6px 9px;
+  }
+  .debug-harness-controls button {
+    min-width: 42px;
+    padding: 6px 10px;
+    cursor: pointer;
+  }
+  .debug-harness-controls button:hover,
+  .debug-harness-controls button:focus-visible,
+  .debug-harness-controls select:focus-visible {
+    border-color: var(--game-yellow);
+    outline: 2px solid rgba(245, 200, 75, 0.34);
+    outline-offset: 2px;
+  }
+  .debug-harness-controls button:disabled,
+  .debug-harness-controls select:disabled {
+    cursor: wait;
+    opacity: 0.52;
+  }
+  .debug-harness-status {
+    flex-basis: 100%;
+    color: var(--game-muted);
+    text-align: right;
+  }
   .draft-stat {
     display: grid;
     grid-template-columns: 36px minmax(0, 1fr) auto;
@@ -1398,6 +1485,18 @@
     margin-top: 0;
   }
   @media (max-width: 1360px) {
+    .command-alert {
+      grid-template-columns: auto minmax(0, 1fr);
+      align-items: start;
+    }
+    .loop-controls {
+      grid-column: 1 / -1;
+      justify-content: flex-start;
+      min-width: 0;
+    }
+    .loop-control-status {
+      text-align: left;
+    }
     .draft-main-grid {
       grid-template-columns: 210px minmax(0, 1fr);
     }
@@ -1481,6 +1580,16 @@
       transform: scale(0.92);
       transform-origin: right bottom;
     }
+    .debug-harness-panel {
+      grid-template-columns: 1fr;
+      align-items: stretch;
+    }
+    .debug-harness-controls {
+      justify-content: flex-start;
+    }
+    .debug-harness-status {
+      text-align: left;
+    }
     .scene-camera-hint { display: none; }
     .admin-detail-drawer {
       right: 14px;
@@ -1506,6 +1615,7 @@
   aria-label="게임발전국 AKRA Admin Control Center"
   data-admin-graphic
   data-poll-interval-ms="{{ polling_interval_ms }}"
+  data-debug-harness-enabled="{{ dashboard.debug_harness.enabled }}"
   data-latest-event-sequence="{{ dashboard.event_feed.newest_sequence.unwrap_or(0) }}"
   data-event-total-count="{{ dashboard.event_feed.total_event_count }}"
 >
@@ -1539,6 +1649,47 @@
       <button type="button" class="clock-gear" data-refresh-dashboard aria-label="Refresh dashboard snapshot" title="Refresh dashboard snapshot">G</button>
     </div>
   </div>
+
+  {% if dashboard.debug_harness.enabled %}
+  <section
+    class="debug-harness-panel"
+    data-debug-harness
+    data-debug-playing="{{ dashboard.debug_harness.playing }}"
+    data-debug-stage="{{ dashboard.debug_harness.stage_key }}"
+    aria-label="Admin 디버그 시나리오 하네스"
+  >
+    <div class="debug-harness-identity">
+      <span class="debug-harness-kicker">APPLICATION FAKE · SAFE MODE</span>
+      <strong data-debug-scenario-label>{{ dashboard.debug_harness.scenario_label }}</strong>
+      <small>실제 planning·parallel authority는 변경하지 않습니다.</small>
+    </div>
+    <div class="debug-harness-state">
+      <strong>
+        <span data-debug-stage-label>{{ dashboard.debug_harness.stage_label }}</span>
+        · <span data-debug-stage-index>{{ dashboard.debug_harness.stage_index + 1 }}</span>/{{ dashboard.debug_harness.stage_count }}
+      </strong>
+      <small data-debug-stage-summary>{{ dashboard.debug_harness.stage_summary }}</small>
+      <span class="debug-harness-progress" aria-hidden="true">
+        <span data-debug-progress style="--debug-progress: {{ dashboard.debug_harness.progress_percent }}%"></span>
+      </span>
+    </div>
+    <div class="debug-harness-controls">
+      <label class="sr-only" for="debug-harness-scenario">디버그 시나리오</label>
+      <select id="debug-harness-scenario" data-debug-scenario aria-label="디버그 시나리오">
+        {% for scenario in dashboard.debug_harness.scenarios %}
+        <option value="{{ scenario.key }}">{{ scenario.label }}</option>
+        {% endfor %}
+      </select>
+      <button type="button" data-debug-command="play" aria-label="시나리오 재생">▶</button>
+      <button type="button" data-debug-command="pause" aria-label="시나리오 일시정지">Ⅱ</button>
+      <button type="button" data-debug-command="step" aria-label="다음 단계">+1</button>
+      <button type="button" data-debug-command="reset" aria-label="시나리오 초기화">↺</button>
+      <small class="debug-harness-status" data-debug-status role="status" aria-live="polite">
+        Fake projection 준비 완료
+      </small>
+    </div>
+  </section>
+  {% endif %}
 
   <section
     class="command-alert state-{{ dashboard.workspace.readiness }}"

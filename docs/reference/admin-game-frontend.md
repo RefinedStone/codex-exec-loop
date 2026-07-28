@@ -33,6 +33,23 @@ native TUI, planning authority, parallel policy, or application control plane.
   is a browser feedback projection; durable runtime events and the planning authority remain the
   operational source of truth.
 
+## Debug harness
+
+- `akra admin --debug-harness` enables a process-local deterministic Fake for Admin UI/UX work.
+- The Fake clock, scenario selection, play/pause/step/reset commands, and stage history are owned by
+  `AdminDebugHarnessService` in the application layer. The HTTP adapter only maps its semantic
+  projection into the existing dashboard JSON.
+- The harness never writes planning authority, leases, worktrees, Git, or GitHub state. While it is
+  enabled, real parallel browser controls return `409 Conflict` and the dashboard labels them as
+  protected.
+- `GET|POST /api/admin/akra/debug-harness` is authenticated like the other Admin APIs; mutation
+  requires the existing cookie-bound CSRF header.
+- The built-in scenarios cover a normal delivery loop, blocked-lane recovery, and queue pressure.
+  Each stage replaces pool, actor, campaign, distributor, metric, and event projections together so
+  the DOM and Pixi world observe one coherent snapshot.
+- Fake stage revision changes travel through the existing SSE reconciliation path. The browser
+  requests a fresh authoritative dashboard snapshot and worker movement remains presentation-only.
+
 ## Renderer
 
 - Vite bundles strict TypeScript and PixiJS 8 into the existing IIFE static-asset boundary. The
@@ -74,6 +91,7 @@ diagonal chairs, painterly blur, and baked status icons.
 Run:
 
 ```text
+node --check assets/admin/scripts/akra-dashboard.js
 npm --prefix assets/admin/game run check
 npm --prefix assets/admin/game run build
 cargo test akra_graphic_dashboard --lib

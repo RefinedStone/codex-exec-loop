@@ -7,6 +7,7 @@
   const eventsUrl = "/api/admin/akra/events";
   const streamUrl = "/api/admin/akra/stream";
   const controlUrl = "/api/admin/akra/control";
+  const debugHarnessUrl = "/api/admin/akra/debug-harness";
   const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || "";
 
   const setText = (selector, value) => {
@@ -861,6 +862,7 @@
     kpis: dashboard.kpis || null,
     workspace: dashboard.workspace || null,
     eventFeed: dashboard.eventFeed || null,
+    debugHarness: dashboard.debugHarness || null,
     events: asArray(dashboard.events)
   });
 
@@ -876,6 +878,7 @@
   };
 
   const updateDashboard = (dashboard) => {
+    renderDebugHarness(dashboard.debugHarness);
     setText(
       "[data-planning-revision]",
       dashboard.planningRevision == null ? "미집계" : `rev ${dashboard.planningRevision}`,
@@ -941,8 +944,54 @@
 
   const loopControlStatus = root.querySelector("[data-loop-control-status]");
   let loopControlRequest = null;
+  const debugHarnessPanel = root.querySelector("[data-debug-harness]");
+  const debugScenario = root.querySelector("[data-debug-scenario]");
+  const debugStatus = root.querySelector("[data-debug-status]");
+  let debugHarnessRequest = null;
+  let currentDebugHarness = null;
+
+  const renderDebugHarness = (harness, busy = false) => {
+    const enabled = Boolean(harness?.enabled && debugHarnessPanel);
+    root.dataset.debugHarnessEnabled = String(enabled);
+    if (!debugHarnessPanel) return;
+    debugHarnessPanel.hidden = !enabled;
+    if (!enabled) return;
+    currentDebugHarness = harness;
+    root.dataset.debugHarnessRevision = String(harness.revision || "");
+    debugHarnessPanel.dataset.debugPlaying = String(Boolean(harness.playing));
+    debugHarnessPanel.dataset.debugStage = optionalText(harness.stageKey, "ready");
+    setText("[data-debug-scenario-label]", optionalText(harness.scenarioLabel));
+    setText("[data-debug-stage-label]", optionalText(harness.stageLabel));
+    setText("[data-debug-stage-index]", String((Number(harness.stageIndex) || 0) + 1));
+    setText("[data-debug-stage-summary]", optionalText(harness.stageSummary));
+    const progress = Math.max(0, Math.min(100, Number(harness.progressPercent) || 0));
+    const progressBar = root.querySelector("[data-debug-progress]");
+    if (progressBar) progressBar.style.setProperty("--debug-progress", `${progress}%`);
+    if (debugScenario && debugScenario.value !== harness.scenarioKey) {
+      debugScenario.value = harness.scenarioKey;
+    }
+    for (const control of root.querySelectorAll("[data-debug-command], [data-debug-scenario]")) {
+      control.disabled = busy;
+    }
+    if (debugStatus) {
+      debugStatus.textContent = busy
+        ? "Fake 명령 적용 중"
+        : `${harness.playing ? "자동 재생" : "일시정지"} · ${harness.stageLabel} · fake rev ${harness.revision}`;
+    }
+  };
 
   const renderLoopControl = (control, busy = false) => {
+    if (root.dataset.debugHarnessEnabled === "true") {
+      for (const button of root.querySelectorAll("[data-loop-command]")) {
+        button.disabled = true;
+        button.setAttribute("aria-pressed", "false");
+      }
+      if (loopControlStatus) {
+        loopControlStatus.textContent =
+          "Application Fake 활성 · 실제 parallel 명령은 보호를 위해 비활성화";
+      }
+      return;
+    }
     const modeEnabled = Boolean(control?.modeEnabled);
     const controlBusy = busy || Boolean(control?.controlEffectInFlight);
     const latestCommand = control?.latestCommand || null;
@@ -1018,6 +1067,38 @@
     return loopControlRequest;
   };
 
+  const runDebugHarnessCommand = (action, scenario = null) => {
+    if (!debugHarnessPanel || debugHarnessRequest) return debugHarnessRequest;
+    if (currentDebugHarness) renderDebugHarness(currentDebugHarness, true);
+    debugHarnessRequest = fetch(debugHarnessUrl, {
+      method: "POST",
+      headers: {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "X-CSRF-Token": csrfToken,
+      },
+      body: JSON.stringify({ action, scenario }),
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error(`debug harness ${response.status}`);
+        return response.json();
+      })
+      .then((harness) => {
+        renderDebugHarness(harness);
+        return Promise.allSettled([pollDashboard(), pollEvents({ reset: true })]);
+      })
+      .catch((error) => {
+        if (debugStatus) debugStatus.textContent = `Fake 명령 실패 · ${error.message}`;
+      })
+      .finally(() => {
+        debugHarnessRequest = null;
+        for (const control of root.querySelectorAll("[data-debug-command], [data-debug-scenario]")) {
+          control.disabled = false;
+        }
+      });
+    return debugHarnessRequest;
+  };
+
   initializeDetailControls();
 
   root.addEventListener("click", (event) => {
@@ -1029,6 +1110,12 @@
     const loopControl = event.target.closest("[data-loop-command]");
     if (loopControl) {
       runLoopCommand(loopControl.dataset.loopCommand);
+      return;
+    }
+
+    const debugControl = event.target.closest("[data-debug-command]");
+    if (debugControl) {
+      runDebugHarnessCommand(debugControl.dataset.debugCommand);
       return;
     }
 
@@ -1079,6 +1166,10 @@
       event.preventDefault();
       navigateDetailSelection(detailSource, -1);
     }
+  });
+
+  debugScenario?.addEventListener("change", () => {
+    runDebugHarnessCommand("scenario", debugScenario.value);
   });
 
   window.addEventListener("akra:scene-selection-requested", (event) => {
@@ -1230,6 +1321,7 @@
     setRealtimeState("live");
     applyEventsPayload(frame);
     if (frame.control) renderLoopControl(frame.control);
+    if (frame.debugHarness) renderDebugHarness(frame.debugHarness);
     if (frame.cursorResetRequired) {
       pollEvents({ reset: true });
     }

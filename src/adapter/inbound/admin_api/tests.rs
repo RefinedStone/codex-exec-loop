@@ -6,7 +6,8 @@ use super::pages::{draft_mutation_path, extract_file_updates, nav_for_kind};
 use super::security::{ADMIN_TOKEN_HEADER, AdminSecurityConfig, verify_local_admin_request};
 use super::views::{EditorActionPaths, EditorTemplate};
 use super::{
-    build_admin_state, build_router, harden_admin_response, parse_args, parse_reset_target,
+    build_admin_state, build_admin_state_with_debug_harness, build_router, harden_admin_response,
+    parse_args, parse_reset_target,
 };
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::application::port::outbound::review_center_repository_port::{
@@ -191,6 +192,14 @@ fn admin_test_router(workspace: &TempAdminWorkspace) -> Router {
     build_router(build_admin_state(
         workspace.path.clone(),
         AdminSecurityConfig::for_test(TEST_ADMIN_TOKEN, 18442),
+    ))
+}
+
+fn admin_debug_harness_test_router(workspace: &TempAdminWorkspace) -> Router {
+    build_router(build_admin_state_with_debug_harness(
+        workspace.path.clone(),
+        AdminSecurityConfig::for_test(TEST_ADMIN_TOKEN, 18442),
+        true,
     ))
 }
 
@@ -403,10 +412,16 @@ fn reset_form_and_json_spelling_maps_to_shared_application_target() {
 fn admin_server_arg_parser_accepts_default_and_port_only_surface() {
     let default_args = parse_args(Vec::<String>::new()).expect("default args should parse");
     assert_eq!(default_args.port, 18442);
+    assert!(!default_args.debug_harness);
 
     let args = parse_args(["--port".to_string(), "19000".to_string()])
         .expect("explicit port should parse");
     assert_eq!(args.port, 19000);
+    assert!(!args.debug_harness);
+
+    let debug_args =
+        parse_args(["--debug-harness".to_string()]).expect("debug harness flag should parse");
+    assert!(debug_args.debug_harness);
 
     for (args, expected) in [
         (
@@ -1387,6 +1402,115 @@ async fn admin_akra_control_route_requires_csrf_and_returns_typed_projection() {
     let command = json_body(command).await;
     assert_eq!(command["commandId"], command_id);
     assert_eq!(command["state"], "completed");
+}
+
+#[tokio::test]
+async fn admin_debug_harness_drives_fake_application_projection_without_real_control_mutation() {
+    let workspace = TempAdminWorkspace::new("akra-debug-harness");
+    let router = admin_debug_harness_test_router(&workspace);
+    let (cookie, csrf_token, _) = bootstrap_admin_html_session(&router).await;
+
+    let initial = router
+        .clone()
+        .oneshot(
+            admin_request_builder()
+                .method(Method::GET)
+                .uri("/api/admin/akra/dashboard")
+                .body(Body::empty())
+                .expect("debug dashboard request should build"),
+        )
+        .await
+        .expect("debug dashboard request should be served");
+    assert_eq!(initial.status(), StatusCode::OK);
+    let initial = json_body(initial).await;
+    assert_eq!(initial["debugHarness"]["enabled"], true);
+    assert_eq!(initial["debugHarness"]["stageKey"], "ready");
+    assert_eq!(initial["scene"]["actors"].as_array().map(Vec::len), Some(0));
+    assert_eq!(
+        initial["scene"]["standbyCharacters"]
+            .as_array()
+            .map(Vec::len),
+        Some(3)
+    );
+
+    let forbidden = router
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/api/admin/akra/debug-harness",
+            json!({ "action": "step" }),
+            Some(&cookie),
+            None,
+        ))
+        .await
+        .expect("debug command without CSRF should be served");
+    assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+
+    let selected = router
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/api/admin/akra/debug-harness",
+            json!({ "action": "scenario", "scenario": "blocked_recovery" }),
+            Some(&cookie),
+            Some(&csrf_token),
+        ))
+        .await
+        .expect("debug scenario command should be served");
+    assert_eq!(selected.status(), StatusCode::OK);
+    assert_eq!(json_body(selected).await["scenarioKey"], "blocked_recovery");
+
+    for _ in 0..4 {
+        let stepped = router
+            .clone()
+            .oneshot(json_request(
+                Method::POST,
+                "/api/admin/akra/debug-harness",
+                json!({ "action": "step" }),
+                Some(&cookie),
+                Some(&csrf_token),
+            ))
+            .await
+            .expect("debug step command should be served");
+        assert_eq!(stepped.status(), StatusCode::OK);
+    }
+
+    let blocked = router
+        .clone()
+        .oneshot(
+            admin_request_builder()
+                .method(Method::GET)
+                .uri("/api/admin/akra/dashboard")
+                .body(Body::empty())
+                .expect("blocked dashboard request should build"),
+        )
+        .await
+        .expect("blocked dashboard request should be served");
+    let blocked = json_body(blocked).await;
+    assert_eq!(blocked["debugHarness"]["stageKey"], "blocked");
+    assert_eq!(blocked["workspace"]["readiness"], "blocked");
+    assert_eq!(blocked["pool"]["summary"]["blocked"], 1);
+    assert_eq!(
+        blocked["scene"]["actors"]
+            .as_array()
+            .expect("blocked scene should contain actors")
+            .iter()
+            .filter(|actor| actor["visualState"] == "blocked")
+            .count(),
+        1
+    );
+
+    let real_control = router
+        .oneshot(json_request(
+            Method::POST,
+            "/api/admin/akra/control",
+            json!({ "action": "enable" }),
+            Some(&cookie),
+            Some(&csrf_token),
+        ))
+        .await
+        .expect("real control request should be served");
+    assert_eq!(real_control.status(), StatusCode::CONFLICT);
 }
 
 #[tokio::test]
@@ -3353,6 +3477,38 @@ fn akra_parallel_admin_surface_reuses_typed_control_plane_for_browser_commands()
     assert!(ADMIN_MOD.contains("\"/api/admin/akra/control\""));
     assert!(!AKRA_DASHBOARD_RS.contains("ParallelModeService"));
     assert!(!ADMIN_API.contains("process_distributor_queue"));
+}
+
+#[test]
+fn akra_admin_debug_harness_is_explicit_safe_and_browser_controllable() {
+    for token in [
+        "data-debug-harness",
+        "APPLICATION FAKE · SAFE MODE",
+        "data-debug-command=\"play\"",
+        "data-debug-command=\"pause\"",
+        "data-debug-command=\"step\"",
+        "data-debug-command=\"reset\"",
+        "data-debug-scenario",
+    ] {
+        assert!(
+            AKRA_DASHBOARD_TEMPLATE.contains(token),
+            "debug harness template should expose {token}"
+        );
+    }
+    for token in [
+        "\"/api/admin/akra/debug-harness\"",
+        "runDebugHarnessCommand",
+        "renderDebugHarness",
+        "Application Fake 활성",
+    ] {
+        assert!(
+            ADMIN_MOD.contains(token) || AKRA_DASHBOARD_JS.contains(token),
+            "debug harness browser contract should expose {token}"
+        );
+    }
+    assert!(ADMIN_API.contains("AdminDebugHarnessCommand::SelectScenario"));
+    assert!(ADMIN_API.contains("verify_header_csrf"));
+    assert!(ADMIN_API.contains("StatusCode::CONFLICT"));
 }
 
 #[test]

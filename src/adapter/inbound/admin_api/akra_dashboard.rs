@@ -15,6 +15,7 @@ use chrono::Utc;
 use serde::Serialize;
 use std::collections::HashSet;
 
+use super::admin_debug_dashboard::AdminDebugHarnessView;
 use crate::git_subprocess;
 
 const DASHBOARD_EVENT_LIMIT: usize = 20;
@@ -24,6 +25,7 @@ const STANDBY_CHARACTER_LIMIT: usize = 3;
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct AkraAdminDashboardView {
+    pub debug_harness: AdminDebugHarnessView,
     pub workspace: AkraWorkspaceView,
     pub kpis: AkraKpiView,
     pub pool: PoolBoardView,
@@ -493,6 +495,7 @@ pub(super) fn build_akra_dashboard_view(
     );
     let generated_at = Utc::now();
     Ok(AkraAdminDashboardView {
+        debug_harness: AdminDebugHarnessView::disabled(),
         workspace: AkraWorkspaceView {
             path: supervisor.workspace_path.clone(),
             branch: current_git_branch(workspace_dir),
