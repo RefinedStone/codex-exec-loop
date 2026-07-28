@@ -14,6 +14,7 @@ import {
   type AgentFrameSet,
 } from "./agent-atlas";
 import type {
+  AgentAnimationKind,
   ArchetypeKey,
   DashboardSceneSnapshot,
   Facing,
@@ -72,6 +73,11 @@ interface AgentUnit {
   flipX: boolean;
   motionPhase: number;
   hovered: boolean;
+  animationKind: AgentAnimationKind;
+  animationFrameIndex: number | null;
+  restTexture: Texture;
+  restResolvedAtlasFrameIndex: number | null;
+  restPoseFallback: boolean;
   resolvedAtlasFrameIndex: number | null;
   poseFallback: boolean;
 }
@@ -91,6 +97,20 @@ const stableNumber = (value: string): number =>
   [...value].reduce((sum, character) => sum + character.charCodeAt(0), 0);
 
 const copyPoint = (point: Point): Point => ({ x: point.x, y: point.y });
+
+export const AGENT_MOVEMENT_SPEED_RATIO = 0.3;
+export const WALK_FRAME_DURATION_MS = 225;
+export const IDLE_FRAME_DURATION_MS = 520;
+
+const MOVEMENT_RESPONSE_RATE_PER_MS = 0.0065 * AGENT_MOVEMENT_SPEED_RATIO;
+const IDLE_FRAME_SEQUENCE = [0, 1, 0, 2] as const;
+
+const animationStep = (
+  elapsedMilliseconds: number,
+  frameDurationMilliseconds: number,
+  motionPhase: number
+): number =>
+  Math.floor(elapsedMilliseconds / frameDurationMilliseconds + motionPhase);
 
 const relevantPacketTarget = (unit: AgentUnit): Point | null => {
   if (unit.presenceKind !== "active") return null;
@@ -286,7 +306,10 @@ export class AgentWorld {
   update(deltaMilliseconds: number, elapsedMilliseconds: number): void {
     const interpolation = this.reducedMotion
       ? 1
-      : 1 - Math.exp(-Math.max(0, deltaMilliseconds) * 0.0065);
+      : 1 -
+        Math.exp(
+          -Math.max(0, deltaMilliseconds) * MOVEMENT_RESPONSE_RATE_PER_MS
+        );
     for (const unit of this.units.values()) {
       const remaining = distance(unit.currentPoint, unit.targetPoint);
       const moving = remaining > 1.4;
@@ -299,13 +322,18 @@ export class AgentWorld {
 
       let offsetX = 0;
       let offsetY = 0;
+      let spriteOffsetY = 0;
       if (!this.reducedMotion && unit.visualState === "blocked") {
         offsetX = Math.sin(elapsedMilliseconds * 0.014 + unit.motionPhase) * 2.2;
       } else if (!this.reducedMotion && unit.visualState === "working" && !moving) {
         offsetY = Math.sin(elapsedMilliseconds * 0.0045 + unit.motionPhase) * 1.2;
+      } else if (!this.reducedMotion && unit.visualState === "idle" && !moving) {
+        spriteOffsetY =
+          Math.sin(elapsedMilliseconds * 0.0024 + unit.motionPhase) * 0.9;
       }
       unit.group.position.set(unit.currentPoint.x + offsetX, unit.currentPoint.y + offsetY);
       unit.group.zIndex = unit.currentPoint.y;
+      unit.sprite.position.y = spriteOffsetY;
       unit.label.position.set(unit.currentPoint.x, unit.currentPoint.y - 137);
       unit.label.zIndex = 20_000 + unit.currentPoint.y;
 
@@ -313,34 +341,66 @@ export class AgentWorld {
         const movement = movementFacing(unit.currentPoint, unit.targetPoint);
         unit.facing = movement.facing;
         unit.flipX = movement.flipX;
-        const frameIndex = Math.floor(elapsedMilliseconds / 135 + unit.motionPhase) % 4;
+        const frameIndex =
+          animationStep(
+            elapsedMilliseconds,
+            WALK_FRAME_DURATION_MS,
+            unit.motionPhase
+          ) % 4;
         unit.sprite.texture = frameForFacing(
           this.frameSets,
           unit.archetype,
           unit.facing,
           frameIndex
         );
+        unit.animationKind = "walk";
+        unit.animationFrameIndex = frameIndex;
         unit.resolvedAtlasFrameIndex = null;
         unit.poseFallback = unit.pose !== "neutral";
       } else {
-        const resolved = resolveRestTexture(
-          this.atlasTexture,
-          this.frameSets,
-          unit.archetype,
-          unit.visualState,
-          unit.pose
-        );
-        unit.sprite.texture =
-          unit.visualState === "working" && !this.reducedMotion
-            ? frameForFacing(
-                this.frameSets,
-                unit.archetype,
-                "up",
-                Math.floor(elapsedMilliseconds / 460 + unit.motionPhase) % 2
-              )
-            : resolved.texture ?? unit.sprite.texture;
-        unit.resolvedAtlasFrameIndex = resolved.resolvedAtlasFrameIndex;
-        unit.poseFallback = resolved.poseFallback;
+        unit.sprite.texture = unit.restTexture;
+        unit.animationKind =
+          !this.reducedMotion && unit.visualState === "idle"
+            ? "idle"
+            : !this.reducedMotion && unit.visualState === "working"
+              ? "working"
+              : !this.reducedMotion && unit.visualState === "blocked"
+                ? "blocked"
+                : "rest";
+        unit.animationFrameIndex = null;
+        unit.resolvedAtlasFrameIndex = unit.restResolvedAtlasFrameIndex;
+        unit.poseFallback = unit.restPoseFallback;
+
+        if (unit.animationKind === "working") {
+          const frameIndex =
+            animationStep(elapsedMilliseconds, 460, unit.motionPhase) % 2;
+          unit.sprite.texture = frameForFacing(
+            this.frameSets,
+            unit.archetype,
+            "up",
+            frameIndex
+          );
+          unit.animationFrameIndex = frameIndex;
+          unit.resolvedAtlasFrameIndex = null;
+        } else if (
+          unit.animationKind === "idle" &&
+          unit.restResolvedAtlasFrameIndex === null
+        ) {
+          const sequenceIndex =
+            animationStep(
+              elapsedMilliseconds,
+              IDLE_FRAME_DURATION_MS,
+              unit.motionPhase
+            ) % IDLE_FRAME_SEQUENCE.length;
+          const frameIndex = IDLE_FRAME_SEQUENCE[sequenceIndex] ?? 0;
+          unit.sprite.texture = frameForFacing(
+            this.frameSets,
+            unit.archetype,
+            "down",
+            frameIndex
+          );
+          unit.animationFrameIndex = frameIndex;
+        }
         unit.flipX = false;
       }
       unit.sprite.scale.set(
@@ -388,6 +448,7 @@ export class AgentWorld {
               unit.visualState !== "idle" ||
               distance(unit.currentPoint, unit.targetPoint) > 1.4
           ).length,
+      movementSpeedRatio: AGENT_MOVEMENT_SPEED_RATIO,
       renderCount: this.renderCount,
       planningRevision: this.planningRevision,
       zoomLevel: this.zoomLevel,
@@ -401,6 +462,8 @@ export class AgentWorld {
           slotId: unit.slotId,
           visualState: unit.visualState,
           pose: unit.pose,
+          animationKind: unit.animationKind,
+          animationFrameIndex: unit.animationFrameIndex,
           resolvedAtlasFrameIndex: unit.resolvedAtlasFrameIndex,
           poseFallback: unit.poseFallback,
           displayWidth: Math.round(spriteBounds.width),
@@ -421,6 +484,8 @@ export class AgentWorld {
           agentId: unit.agentId,
           visualState: unit.visualState,
           pose: unit.pose,
+          animationKind: unit.animationKind,
+          animationFrameIndex: unit.animationFrameIndex,
           locationIndex: unit.locationIndex,
           resolvedAtlasFrameIndex: unit.resolvedAtlasFrameIndex,
           poseFallback: unit.poseFallback,
@@ -589,6 +654,12 @@ export class AgentWorld {
       flipX: false,
       motionPhase: (stableNumber(key) + index) % 17,
       hovered: false,
+      animationKind: "rest",
+      animationFrameIndex: null,
+      restTexture:
+        resolved.texture ?? frameForFacing(this.frameSets, archetype, "down", 0),
+      restResolvedAtlasFrameIndex: resolved.resolvedAtlasFrameIndex,
+      restPoseFallback: resolved.poseFallback,
       resolvedAtlasFrameIndex: resolved.resolvedAtlasFrameIndex,
       poseFallback: resolved.poseFallback,
     };
@@ -616,6 +687,16 @@ export class AgentWorld {
   }
 
   private syncUnitAppearance(unit: AgentUnit): void {
+    const resolved = resolveRestTexture(
+      this.atlasTexture,
+      this.frameSets,
+      unit.archetype,
+      unit.visualState,
+      unit.pose
+    );
+    if (resolved.texture) unit.restTexture = resolved.texture;
+    unit.restResolvedAtlasFrameIndex = resolved.resolvedAtlasFrameIndex;
+    unit.restPoseFallback = resolved.poseFallback;
     const color = STATUS_PALETTE[unit.severity];
     drawStaticMarker(unit.marker, unit.visualState, color, unit.presenceKind);
     this.syncUnitLabel(unit);

@@ -20,6 +20,7 @@ export type VisualState =
 export type StaticPose = "neutral" | "laptop" | "callout" | "alert" | "sit";
 export type PresenceKind = "active" | "configured_standby";
 export type Facing = "down" | "side" | "up";
+export type AgentAnimationKind = "rest" | "idle" | "walk" | "working" | "blocked";
 export type ArchetypeKey = "planner" | "coffee_addict" | "ai_researcher" | "designer";
 export type SemanticZoomLevel = "overview" | "operations" | "detail";
 
@@ -76,6 +77,8 @@ export interface SceneInspectionActor {
   slotId: string;
   visualState: VisualState;
   pose: StaticPose;
+  animationKind: AgentAnimationKind;
+  animationFrameIndex: number | null;
   resolvedAtlasFrameIndex: number | null;
   poseFallback: boolean;
   displayWidth: number;
@@ -93,6 +96,8 @@ export interface SceneInspectionStandby {
   agentId: string;
   visualState: VisualState;
   pose: StaticPose;
+  animationKind: AgentAnimationKind;
+  animationFrameIndex: number | null;
   locationIndex: number;
   resolvedAtlasFrameIndex: number | null;
   poseFallback: boolean;
@@ -112,6 +117,7 @@ export interface SceneInspection {
   standbyCount: number;
   packetCount: number;
   semanticMotionCount: number;
+  movementSpeedRatio: number;
   renderCount: number;
   planningRevision: number | null;
   zoomLevel: SemanticZoomLevel;

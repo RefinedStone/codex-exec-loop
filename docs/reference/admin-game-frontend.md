@@ -59,6 +59,14 @@ native TUI, planning authority, parallel policy, or application control plane.
   `overview -> operations -> detail` semantic zoom projection.
 - Actor state changes move the retained unit toward its new semantic destination. Movement uses
   front, rear, or strict side atlas rows; diagonal character directions are not fabricated.
+- Normal-motion travel uses `30%` of the original interpolation response and a lower-cadence walk
+  cycle so lifecycle transitions remain readable. Reduced-motion mode still snaps to the semantic
+  destination without a walk cycle.
+- An unchanged idle or configured-standby unit never roams and never emits a packet. It may use a
+  low-cadence local frame/weight-shift loop at the same semantic coordinate; explicit laptop or
+  seated poses remain selected when the atlas provides them.
+- Scene inspection reports each unit's current animation kind/frame and the movement-speed ratio so
+  the debug harness can verify motion independently of canvas screenshots.
 - A masked duplicate of the exact map texture restores workstation desk fronts above actors. This
   gives deterministic furniture occlusion without a second hand-painted foreground asset.
 - Pixi hit targets emit typed scene-selection events. The DOM dashboard retains the accessible
@@ -71,7 +79,7 @@ native TUI, planning authority, parallel policy, or application control plane.
 - `gamebaljeonguk_atlas_128x192.png` remains the exact worker source.
 - Five workstation foot anchors align to front/back-facing chairs. Review, delivery, cleanup, and
   standby destinations use separate uncluttered room blocks.
-- Worker sprites use a `0.68` world scale. Working actors use their rear-facing row behind the map's
+- Worker sprites use a `0.72` world scale. Working actors use their rear-facing row behind the map's
   desks instead of legacy laptop emotes that contain duplicate furniture.
 
 ## Image generation provenance
