@@ -630,6 +630,19 @@ fn app_state_authority_analyzer_rejects_visibility_and_writer_escapes() {
         "unexpected macro-writer analyzer error: {error}"
     );
 
+    let statement_macro_writer = format!(
+        "{controller}\n\
+         fn invoke_writer_macro() {{\n\
+             escaped_writer!();\n\
+         }}\n"
+    );
+    let error = verify_app_state_controller_seal(&app_module, &statement_macro_writer, &state)
+        .expect_err("a statement macro must not manufacture a local AppState writer module");
+    assert!(
+        error.contains("must not contain production item macros"),
+        "unexpected statement-macro analyzer error: {error}"
+    );
+
     let nested_state_writer = format!(
         "{state}\n\
          mod escaped_writer {{\n\
@@ -4393,6 +4406,39 @@ fn update_unrelated(
         "known read-only macros must not create shell writer false positives"
     );
 
+    let akra_event_writer = shell_chrome_writer_audit(
+        "fn escape(app: &mut NativeTuiApp) {\n\
+             crate::akra_event!(\n\
+                 tracing::Level::DEBUG,\n\
+                 \"writer\",\n\
+                 value = {\n\
+                     app.shell.chrome.session_state = SessionState::Idle;\n\
+                     0\n\
+                 },\n\
+             );\n\
+         }",
+    )
+    .expect("akra_event writer fixture should parse");
+    assert!(
+        !akra_event_writer.macro_escapes.is_empty(),
+        "akra_event named-value expressions must not hide shell chrome assignments"
+    );
+
+    let akra_event_read = shell_chrome_writer_audit(
+        "fn inspect(app: &mut NativeTuiApp) {\n\
+             crate::akra_event!(\n\
+                 tracing::Level::DEBUG,\n\
+                 \"read\",\n\
+                 value = app.shell.chrome.selected_session_index,\n\
+             );\n\
+         }",
+    )
+    .expect("akra_event read fixture should parse");
+    assert!(
+        akra_event_read.macro_escapes.is_empty(),
+        "akra_event top-level key separators must not be mistaken for assignments"
+    );
+
     let returned_chrome_alias = shell_chrome_writer_audit(
         "fn expose(\n\
              NativeTuiApp {\n\
@@ -4478,9 +4524,10 @@ fn update_unrelated(
     );
 
     let unrelated_for_loop = shell_chrome_writer_audit(
-        "fn update(values: Vec<usize>) {\n\
-             for value in values {\n\
-                 let _ = value + 1;\n\
+        "struct OtherState { startup_state: usize }\n\
+         fn update(values: Vec<OtherState>) {\n\
+             for mut value in values {\n\
+                 value.startup_state = 1;\n\
              }\n\
          }",
     )
@@ -4488,7 +4535,7 @@ fn update_unrelated(
     assert!(
         unrelated_for_loop.field_writes.is_empty()
             && unrelated_for_loop.whole_state_writes.is_empty(),
-        "inferred for-loop patterns without shell authority paths must remain harmless"
+        "inferred loops must not treat unrelated same-name fields as Chrome authority"
     );
 
     let mutable = shell_chrome_writer_audit(
@@ -10986,6 +11033,30 @@ struct ProductionItemMacroVisitor {
     names: Vec<String>,
 }
 
+const SEALED_SOURCE_STATEMENT_MACROS: &[&str] = &[
+    "assert",
+    "assert_eq",
+    "assert_ne",
+    "debug_assert",
+    "debug_assert_eq",
+    "debug_assert_ne",
+    "eprintln",
+    "panic",
+    "println",
+    "todo",
+    "unimplemented",
+    "unreachable",
+];
+
+fn macro_name(expression: &syn::Macro) -> String {
+    expression
+        .path
+        .segments
+        .last()
+        .map(|segment| segment.ident.to_string())
+        .unwrap_or_else(|| "<anonymous>".to_string())
+}
+
 impl<'ast> Visit<'ast> for ProductionItemMacroVisitor {
     fn visit_item(&mut self, item: &'ast syn::Item) {
         if item_is_test_only(item) {
@@ -10999,15 +11070,18 @@ impl<'ast> Visit<'ast> for ProductionItemMacroVisitor {
             .ident
             .as_ref()
             .map(ToString::to_string)
-            .or_else(|| {
-                item.mac
-                    .path
-                    .segments
-                    .last()
-                    .map(|segment| segment.ident.to_string())
-            })
-            .unwrap_or_else(|| "<anonymous>".to_string());
+            .unwrap_or_else(|| macro_name(&item.mac));
         self.names.push(name);
+    }
+
+    fn visit_stmt_macro(&mut self, statement: &'ast syn::StmtMacro) {
+        if attributes_are_test_only(&statement.attrs) {
+            return;
+        }
+        let name = macro_name(&statement.mac);
+        if !SEALED_SOURCE_STATEMENT_MACROS.contains(&name.as_str()) {
+            self.names.push(name);
+        }
     }
 }
 
@@ -12851,7 +12925,6 @@ fn child_shell_authority(
     };
     match (parent, member.to_string().as_str()) {
         (ShellAuthorityKind::Unknown, "shell") => Some(ShellAuthorityKind::Shell),
-        (ShellAuthorityKind::Unknown, "chrome") => Some(ShellAuthorityKind::Chrome),
         (ShellAuthorityKind::App, "shell") => Some(ShellAuthorityKind::Shell),
         (ShellAuthorityKind::Shell, "chrome") => Some(ShellAuthorityKind::Chrome),
         _ => None,
@@ -12892,6 +12965,33 @@ fn macro_tokens_have_assignment(tokens: &proc_macro2::TokenStream) -> bool {
             .copied();
         let next = compact.get(index + 1).copied();
         !matches!(previous, Some('=' | '!' | '<' | '>')) && !matches!(next, Some('=' | '>'))
+    })
+}
+
+fn akra_event_value_tokens_have_assignment(tokens: &proc_macro2::TokenStream) -> bool {
+    let mut segments = vec![Vec::new()];
+    for token in tokens.clone() {
+        if matches!(&token, proc_macro2::TokenTree::Punct(punct) if punct.as_char() == ',') {
+            segments.push(Vec::new());
+        } else {
+            segments
+                .last_mut()
+                .expect("one macro argument segment is always present")
+                .push(token);
+        }
+    }
+    segments.into_iter().any(|segment| {
+        let value_start = segment
+            .iter()
+            .position(
+                |token| matches!(token, proc_macro2::TokenTree::Punct(punct) if punct.as_char() == '='),
+            )
+            .map_or(0, |index| index + 1);
+        let value_tokens = segment
+            .into_iter()
+            .skip(value_start)
+            .collect::<proc_macro2::TokenStream>();
+        macro_tokens_have_assignment(&value_tokens)
     })
 }
 
@@ -13312,11 +13412,7 @@ impl ShellChromeWriterVisitor {
             return None;
         }
         let authority = self.resolve_authority(field.base.as_ref())?;
-        (matches!(
-            authority.kind,
-            ShellAuthorityKind::Unknown | ShellAuthorityKind::Chrome
-        ) && authority.mutable)
-            .then_some(field_name)
+        (authority.kind == ShellAuthorityKind::Chrome && authority.mutable).then_some(field_name)
     }
 
     fn inspect_write_target(&mut self, expression: &syn::Expr, kind: &str) {
@@ -13371,11 +13467,13 @@ impl ShellChromeWriterVisitor {
                     authority.mutable && authority.kind != ShellAuthorityKind::Unknown
                 })
         });
-        let has_mutation_syntax = (name != "akra_event"
-            && macro_tokens_have_assignment(&expression.tokens))
-            || SHELL_CHROME_MACRO_MUTATION_IDENTIFIERS
-                .iter()
-                .any(|identifier| identifiers.contains(*identifier));
+        let has_mutation_syntax = (if name == "akra_event" {
+            akra_event_value_tokens_have_assignment(&expression.tokens)
+        } else {
+            macro_tokens_have_assignment(&expression.tokens)
+        }) || SHELL_CHROME_MACRO_MUTATION_IDENTIFIERS
+            .iter()
+            .any(|identifier| identifiers.contains(*identifier));
         let read_macro = SHELL_CHROME_AUTHORITY_READ_MACROS.contains(&name.as_str());
         if item_position
             || (mentions_audited_field && has_mutation_syntax)
