@@ -4255,6 +4255,30 @@ fn update_unrelated(
         "the dispatch exception must apply to the exact mutable self receiver only"
     );
 
+    let unlisted_mutator = shell_chrome_writer_audit(
+        "fn escape(app: &mut NativeTuiApp) {\n\
+             app.shell.chrome.approval_return_overlay.get_or_insert(Default::default());\n\
+         }",
+    )
+    .expect("unlisted mutable method fixture should parse");
+    assert_eq!(
+        unlisted_mutator.field_writes.len(),
+        1,
+        "new methods on mutable shell chrome fields must be rejected unless explicitly read-only"
+    );
+
+    let explicit_read = shell_chrome_writer_audit(
+        "fn inspect(app: &mut NativeTuiApp) {\n\
+             let _ = app.shell.chrome.session_state.clone();\n\
+             let _ = app.shell.chrome.shell_overlay.prompt_input_has_focus(false, false);\n\
+         }",
+    )
+    .expect("explicit read-only shell method fixture should parse");
+    assert!(
+        explicit_read.field_writes.is_empty() && explicit_read.whole_state_writes.is_empty(),
+        "audited read-only methods must not create shell writer false positives"
+    );
+
     let mutable = shell_chrome_writer_audit(
         "fn escape(app: &mut NativeTuiApp) {\n\
              let _ = &mut app.shell.chrome.approval_return_overlay;\n\
@@ -12327,6 +12351,8 @@ const SHELL_CHROME_REDUCER_FIELDS: &[&str] = &[
     "selected_session_index",
 ];
 
+const SHELL_CHROME_READ_ONLY_METHODS: &[&str] = &["clone", "prompt_input_has_focus"];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ShellAuthorityKind {
     App,
@@ -13078,23 +13104,13 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
     }
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        let method = call.method.to_string();
         self.inspect_shell_state_seam_call(
-            &call.method.to_string(),
+            &method,
             Some(call.receiver.as_ref()),
             call.method.span().start().line,
         );
-        if matches!(
-            call.method.to_string().as_str(),
-            "as_mut"
-                | "borrow_mut"
-                | "clear"
-                | "get_mut"
-                | "insert"
-                | "push"
-                | "remove"
-                | "replace"
-                | "take"
-        ) {
+        if !SHELL_CHROME_READ_ONLY_METHODS.contains(&method.as_str()) {
             self.inspect_write_target(call.receiver.as_ref(), "mutable method");
         }
         visit::visit_expr_method_call(self, call);
