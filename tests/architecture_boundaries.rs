@@ -4356,9 +4356,11 @@ fn update_unrelated(
         "the production-wide alias registry must retain authority across Rust files"
     );
 
-    let relative_authority_alias_file =
-        syn::parse_file("pub type AppRef<'a> = &'a mut super::NativeTuiApp;")
-            .expect("relative cross-file authority alias definition should parse");
+    let relative_authority_alias_file = syn::parse_file(
+        "pub type BaseApp = super::NativeTuiApp;\n\
+         pub type AppRef<'a> = &'a mut BaseApp;",
+    )
+    .expect("relative cross-file authority alias definition should parse");
     let relative_alias_module = [
         "crate".to_string(),
         "adapter".to_string(),
@@ -4381,7 +4383,8 @@ fn update_unrelated(
         "writer".to_string(),
     ];
     let relative_cross_file_alias = shell_chrome_writer_audit_with_type_registry(
-        "use crate::adapter::inbound::tui::app::aliases::AppRef;\n\
+        "type BaseApp = OtherApp;\n\
+         use crate::adapter::inbound::tui::app::aliases::AppRef;\n\
          fn escape(app: AppRef<'_>) {\n\
              app.shell.chrome.session_state = SessionState::Idle;\n\
          }",
@@ -4394,7 +4397,7 @@ fn update_unrelated(
     assert_eq!(
         relative_cross_file_alias.field_writes.len(),
         1,
-        "imported aliases must resolve relative RHS paths in their declaration module"
+        "imported aliases must resolve relative RHS paths and nested aliases in their declaration module"
     );
 
     let cross_file_unrelated_alias = shell_chrome_writer_audit_with_type_registry(
@@ -13783,6 +13786,7 @@ fn shell_authority_binding_from_type(
     qualified_type_aliases: &ShellQualifiedTypeAliases,
     resolving_aliases: &mut HashSet<String>,
     module_path: &[String],
+    allow_local_aliases: bool,
 ) -> Option<ShellAuthorityBinding> {
     match ty {
         syn::Type::Path(path) if path.qself.is_none() => {
@@ -13799,7 +13803,8 @@ fn shell_authority_binding_from_type(
             let alias_module_path = normalized_path
                 .get(..normalized_path.len().saturating_sub(1))
                 .unwrap_or_default();
-            let local_alias = (path.path.segments.len() == 1 || alias_module_path == module_path)
+            let local_alias = (allow_local_aliases
+                && (path.path.segments.len() == 1 || alias_module_path == module_path))
                 .then(|| type_aliases.get(&name))
                 .flatten();
             let alias = local_alias.or_else(|| qualified_type_aliases.get(&qualified_name));
@@ -13819,6 +13824,7 @@ fn shell_authority_binding_from_type(
                     qualified_type_aliases,
                     resolving_aliases,
                     alias_module_path,
+                    local_alias.is_some(),
                 );
                 resolving_aliases.remove(&qualified_name);
                 return resolved;
@@ -13847,6 +13853,7 @@ fn shell_authority_binding_from_type(
                         qualified_type_aliases,
                         resolving_aliases,
                         module_path,
+                        allow_local_aliases,
                     )
                 });
             }
@@ -13860,6 +13867,7 @@ fn shell_authority_binding_from_type(
                 qualified_type_aliases,
                 resolving_aliases,
                 module_path,
+                allow_local_aliases,
             )?;
             Some(ShellAuthorityBinding {
                 mutable: reference.mutability.is_some(),
@@ -13873,6 +13881,7 @@ fn shell_authority_binding_from_type(
             qualified_type_aliases,
             resolving_aliases,
             module_path,
+            allow_local_aliases,
         ),
         syn::Type::Paren(paren) => shell_authority_binding_from_type(
             paren.elem.as_ref(),
@@ -13881,6 +13890,7 @@ fn shell_authority_binding_from_type(
             qualified_type_aliases,
             resolving_aliases,
             module_path,
+            allow_local_aliases,
         ),
         syn::Type::Ptr(pointer) => {
             let authority = shell_authority_binding_from_type(
@@ -13890,6 +13900,7 @@ fn shell_authority_binding_from_type(
                 qualified_type_aliases,
                 resolving_aliases,
                 module_path,
+                allow_local_aliases,
             )?;
             Some(ShellAuthorityBinding {
                 mutable: pointer.mutability.is_some(),
@@ -14510,6 +14521,7 @@ impl ShellChromeWriterVisitor {
             &self.qualified_type_aliases,
             &mut resolving_aliases,
             &self.module_path,
+            true,
         )?;
         Some(ShellAuthorityBinding {
             mutable: authority.mutable || pattern_has_mutable_binding(pattern),
@@ -15015,6 +15027,7 @@ impl ShellChromeWriterVisitor {
             &self.qualified_type_aliases,
             &mut resolving_aliases,
             &self.module_path,
+            true,
         ) {
             return inherited_mutability || authority.mutable;
         }
@@ -15460,6 +15473,7 @@ impl ShellChromeWriterVisitor {
                             &self.qualified_type_aliases,
                             &mut resolving_aliases,
                             &self.module_path,
+                            true,
                         );
                         self.authority_bindings.insert(
                             "self".to_string(),
@@ -15502,6 +15516,7 @@ impl ShellChromeWriterVisitor {
                     &self.qualified_type_aliases,
                     &mut resolving_aliases,
                     &self.module_path,
+                    true,
                 )?;
                 Some(ShellAuthorityBinding {
                     mutable: binding.mutable || authority.mutable,
@@ -15526,6 +15541,7 @@ impl ShellChromeWriterVisitor {
                     &self.qualified_type_aliases,
                     &mut resolving_aliases,
                     &self.module_path,
+                    true,
                 )?;
                 Some(ShellAuthorityBinding {
                     mutable: binding.mutable || authority.mutable,
@@ -15563,6 +15579,7 @@ impl ShellChromeWriterVisitor {
                     &self.qualified_type_aliases,
                     &mut resolving_aliases,
                     &self.module_path,
+                    true,
                 )?;
                 Some(ShellAuthorityBinding {
                     mutable: binding.mutable,
@@ -15582,6 +15599,7 @@ impl ShellChromeWriterVisitor {
                     &self.qualified_type_aliases,
                     &mut resolving_aliases,
                     &self.module_path,
+                    true,
                 )?;
                 Some(ShellAuthorityBinding {
                     mutable: binding.mutable || authority.mutable,
@@ -15963,6 +15981,7 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
             &self.qualified_type_aliases,
             &mut resolving_aliases,
             &self.module_path,
+            true,
         );
         self.impl_authority = impl_authority.map(|authority| authority.kind);
         self.impl_authority_mutable = impl_authority.is_some_and(|authority| authority.mutable);
