@@ -656,6 +656,27 @@ fn app_state_authority_analyzer_rejects_visibility_and_writer_escapes() {
         "unexpected expression-macro analyzer error: {error}"
     );
 
+    let allowed_macro_writer = format!(
+        "{controller}\n\
+         fn invoke_writer_macro() {{\n\
+             assert!({{\n\
+                 mod escaped_writer {{\n\
+                     use super::state::AppState;\n\
+                     fn mutate(state: &mut AppState) {{\n\
+                         state.mark_startup_loading();\n\
+                     }}\n\
+                 }}\n\
+                 true\n\
+             }});\n\
+         }}\n"
+    );
+    let error = verify_app_state_controller_seal(&app_module, &allowed_macro_writer, &state)
+        .expect_err("an allowed macro must not hide a local AppState writer item");
+    assert!(
+        error.contains("must not contain production item macros"),
+        "unexpected allowed-macro analyzer error: {error}"
+    );
+
     let nested_state_writer = format!(
         "{state}\n\
          mod escaped_writer {{\n\
@@ -3932,22 +3953,27 @@ fn shell_chrome_state_has_one_typed_reducer_writer() {
         .map(|path| {
             let source = fs::read_to_string(&path)
                 .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
-            (path, source)
+            let module_path = rust_module_path(&root, &path);
+            (path, source, module_path)
         })
         .collect::<Vec<_>>();
     let mut known_struct_fields = ShellStructFields::new();
-    for (path, source) in &tui_sources {
+    for (path, source, module_path) in &tui_sources {
         let syntax = syn::parse_file(source)
             .unwrap_or_else(|error| panic!("failed to parse {}: {error}", path.display()));
-        known_struct_fields.extend(all_struct_fields_declared_in_file(&syntax));
+        known_struct_fields.extend(qualified_struct_fields_declared_in_file(
+            &syntax,
+            module_path,
+        ));
     }
 
-    for (path, source) in &tui_sources {
+    for (path, source, module_path) in &tui_sources {
         let relative = relative_path(&root, path);
-        let audit = shell_chrome_writer_audit_with_struct_fields(
+        let audit = shell_chrome_writer_audit_with_struct_registry(
             source,
             relative == "src/adapter/inbound/tui/app/app_runtime.rs",
             &known_struct_fields,
+            module_path,
         )
         .unwrap_or_else(|error| panic!("failed to audit {}: {error}", path.display()));
 
@@ -4095,26 +4121,56 @@ fn update_unrelated(
         "nested wrapper fields and local aliases must retain NativeTuiApp authority"
     );
 
-    let wrapper_file = syn::parse_file(
+    let authority_wrapper_file = syn::parse_file(
         "pub struct Context<'a> {\n\
              pub app: &'a mut NativeTuiApp,\n\
          }",
     )
     .expect("cross-file wrapper definition should parse");
-    let known_struct_fields = all_struct_fields_declared_in_file(&wrapper_file);
-    let cross_file_wrapped_app = shell_chrome_writer_audit_with_struct_fields(
-        "use crate::Context;\n\
+    let unrelated_wrapper_file = syn::parse_file(
+        "pub struct Context<'a> {\n\
+             pub app: &'a mut OtherApp,\n\
+         }",
+    )
+    .expect("same-named unrelated wrapper definition should parse");
+    let mut known_struct_fields = qualified_struct_fields_declared_in_file(
+        &authority_wrapper_file,
+        &["crate".to_string(), "authority".to_string()],
+    );
+    known_struct_fields.extend(qualified_struct_fields_declared_in_file(
+        &unrelated_wrapper_file,
+        &["crate".to_string(), "unrelated".to_string()],
+    ));
+    let writer_module = ["crate".to_string(), "writer".to_string()];
+    let cross_file_wrapped_app = shell_chrome_writer_audit_with_struct_registry(
+        "use crate::authority::Context;\n\
          fn escape(context: &mut Context<'_>) {\n\
              context.app.shell.chrome.session_state = SessionState::Idle;\n\
          }",
         false,
         &known_struct_fields,
+        &writer_module,
     )
     .expect("cross-file wrapped native app fixture should parse");
     assert_eq!(
         cross_file_wrapped_app.field_writes.len(),
         1,
         "the production-wide struct registry must retain authority across Rust files"
+    );
+    let cross_file_unrelated_app = shell_chrome_writer_audit_with_struct_registry(
+        "use crate::unrelated::Context;\n\
+         fn update(context: &mut Context<'_>) {\n\
+             context.app.shell.chrome.session_state = 1;\n\
+         }",
+        false,
+        &known_struct_fields,
+        &writer_module,
+    )
+    .expect("same-named cross-file wrapper fixture should parse");
+    assert!(
+        cross_file_unrelated_app.field_writes.is_empty()
+            && cross_file_unrelated_app.whole_state_writes.is_empty(),
+        "qualified imports must distinguish same-named wrappers across modules"
     );
 
     let unrelated_wrapper = shell_chrome_writer_audit(
@@ -11157,6 +11213,54 @@ fn macro_name(expression: &syn::Macro) -> String {
         .unwrap_or_else(|| "<anonymous>".to_string())
 }
 
+fn sealed_source_macro_is_allowed(expression: &syn::Macro) -> bool {
+    expression.path.leading_colon.is_none()
+        && expression.path.segments.len() == 1
+        && SEALED_SOURCE_ALLOWED_MACROS.contains(&macro_name(expression).as_str())
+        && !macro_tokens_contain_sealed_source_escape(&expression.tokens)
+}
+
+fn macro_tokens_contain_sealed_source_escape(tokens: &TokenStream) -> bool {
+    for token in tokens.clone() {
+        let TokenTree::Group(group) = token else {
+            continue;
+        };
+        let group_tokens = TokenStream::from(TokenTree::Group(group.clone()));
+        if group.delimiter() == proc_macro2::Delimiter::Brace
+            && let Ok(block) = syn::parse2::<syn::Block>(group_tokens)
+        {
+            if block.stmts.iter().any(
+                |statement| matches!(statement, syn::Stmt::Item(item) if !item_is_test_only(item)),
+            ) {
+                return true;
+            }
+            let mut nested_macros = ProductionItemMacroVisitor::default();
+            nested_macros.visit_block(&block);
+            if !nested_macros.names.is_empty() {
+                return true;
+            }
+        }
+        if macro_tokens_contain_sealed_source_escape(&group.stream()) {
+            return true;
+        }
+    }
+    macro_token_identifiers(tokens).contains("AppState")
+}
+
+fn use_tree_can_shadow_allowed_macro(tree: &syn::UseTree) -> bool {
+    match tree {
+        syn::UseTree::Path(path) => use_tree_can_shadow_allowed_macro(path.tree.as_ref()),
+        syn::UseTree::Name(name) => {
+            SEALED_SOURCE_ALLOWED_MACROS.contains(&name.ident.to_string().as_str())
+        }
+        syn::UseTree::Rename(rename) => {
+            SEALED_SOURCE_ALLOWED_MACROS.contains(&rename.rename.to_string().as_str())
+        }
+        syn::UseTree::Group(group) => group.items.iter().any(use_tree_can_shadow_allowed_macro),
+        syn::UseTree::Glob(_) => true,
+    }
+}
+
 impl<'ast> Visit<'ast> for ProductionItemMacroVisitor {
     fn visit_item(&mut self, item: &'ast syn::Item) {
         if item_is_test_only(item) {
@@ -11174,13 +11278,18 @@ impl<'ast> Visit<'ast> for ProductionItemMacroVisitor {
         self.names.push(name);
     }
 
+    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+        if use_tree_can_shadow_allowed_macro(&item.tree) {
+            self.names.push("macro-shadowing use".to_string());
+        }
+    }
+
     fn visit_stmt_macro(&mut self, statement: &'ast syn::StmtMacro) {
         if attributes_are_test_only(&statement.attrs) {
             return;
         }
-        let name = macro_name(&statement.mac);
-        if !SEALED_SOURCE_ALLOWED_MACROS.contains(&name.as_str()) {
-            self.names.push(name);
+        if !sealed_source_macro_is_allowed(&statement.mac) {
+            self.names.push(macro_name(&statement.mac));
         }
     }
 
@@ -11188,9 +11297,8 @@ impl<'ast> Visit<'ast> for ProductionItemMacroVisitor {
         if attributes_are_test_only(&expression.attrs) {
             return;
         }
-        let name = macro_name(&expression.mac);
-        if !SEALED_SOURCE_ALLOWED_MACROS.contains(&name.as_str()) {
-            self.names.push(name);
+        if !sealed_source_macro_is_allowed(&expression.mac) {
+            self.names.push(macro_name(&expression.mac));
         }
     }
 }
@@ -13042,24 +13150,108 @@ fn struct_fields_declared_in_statements(statements: &[syn::Stmt]) -> ShellStruct
     structs
 }
 
-fn collect_nested_struct_fields(items: &[syn::Item], structs: &mut ShellStructFields) {
+fn collect_qualified_struct_fields(
+    items: &[syn::Item],
+    module_path: &mut Vec<String>,
+    structs: &mut ShellStructFields,
+) {
     for item in items {
         if item_is_test_only(item) {
             continue;
         }
-        collect_item_struct_fields(item, structs);
+        if let syn::Item::Struct(item) = item {
+            let mut fields = ShellStructFields::new();
+            collect_item_struct_fields(&syn::Item::Struct(item.clone()), &mut fields);
+            if let Some(fields) = fields.remove(&item.ident.to_string()) {
+                structs.insert(
+                    format!("{}::{}", module_path.join("::"), item.ident),
+                    fields,
+                );
+            }
+        }
         if let syn::Item::Mod(module) = item
             && let Some((_, nested_items)) = &module.content
         {
-            collect_nested_struct_fields(nested_items, structs);
+            module_path.push(module.ident.to_string());
+            collect_qualified_struct_fields(nested_items, module_path, structs);
+            module_path.pop();
         }
     }
 }
 
-fn all_struct_fields_declared_in_file(file: &syn::File) -> ShellStructFields {
+fn qualified_struct_fields_declared_in_file(
+    file: &syn::File,
+    module_path: &[String],
+) -> ShellStructFields {
     let mut structs = HashMap::new();
-    collect_nested_struct_fields(&file.items, &mut structs);
+    collect_qualified_struct_fields(&file.items, &mut module_path.to_vec(), &mut structs);
     structs
+}
+
+type ShellStructImports = HashMap<String, Vec<String>>;
+
+fn collect_use_struct_imports(
+    tree: &syn::UseTree,
+    prefix: &mut Vec<String>,
+    imports: &mut ShellStructImports,
+) {
+    match tree {
+        syn::UseTree::Path(path) => {
+            prefix.push(path.ident.to_string());
+            collect_use_struct_imports(path.tree.as_ref(), prefix, imports);
+            prefix.pop();
+        }
+        syn::UseTree::Name(name) if name.ident == "self" => {
+            if let Some(local_name) = prefix.last() {
+                imports.insert(local_name.clone(), prefix.clone());
+            }
+        }
+        syn::UseTree::Name(name) => {
+            let mut target = prefix.clone();
+            target.push(name.ident.to_string());
+            imports.insert(name.ident.to_string(), target);
+        }
+        syn::UseTree::Rename(rename) => {
+            let mut target = prefix.clone();
+            if rename.ident != "self" {
+                target.push(rename.ident.to_string());
+            }
+            imports.insert(rename.rename.to_string(), target);
+        }
+        syn::UseTree::Group(group) => {
+            for item in &group.items {
+                collect_use_struct_imports(item, prefix, imports);
+            }
+        }
+        syn::UseTree::Glob(_) => {}
+    }
+}
+
+fn collect_item_struct_imports(item: &syn::Item, imports: &mut ShellStructImports) {
+    if item_is_test_only(item) {
+        return;
+    }
+    if let syn::Item::Use(item) = item {
+        collect_use_struct_imports(&item.tree, &mut Vec::new(), imports);
+    }
+}
+
+fn struct_imports_declared_in_items(items: &[syn::Item]) -> ShellStructImports {
+    let mut imports = HashMap::new();
+    for item in items {
+        collect_item_struct_imports(item, &mut imports);
+    }
+    imports
+}
+
+fn struct_imports_declared_in_statements(statements: &[syn::Stmt]) -> ShellStructImports {
+    let mut imports = HashMap::new();
+    for statement in statements {
+        if let syn::Stmt::Item(item) = statement {
+            collect_item_struct_imports(item, &mut imports);
+        }
+    }
+    imports
 }
 
 fn pattern_has_mutable_binding(pattern: &syn::Pat) -> bool {
@@ -13209,11 +13401,26 @@ fn shell_chrome_writer_audit_with_struct_fields(
     allow_native_app_dispatch_seam: bool,
     known_struct_fields: &ShellStructFields,
 ) -> Result<ShellChromeWriterAudit, String> {
+    shell_chrome_writer_audit_with_struct_registry(
+        source,
+        allow_native_app_dispatch_seam,
+        known_struct_fields,
+        &["crate".to_string()],
+    )
+}
+
+fn shell_chrome_writer_audit_with_struct_registry(
+    source: &str,
+    allow_native_app_dispatch_seam: bool,
+    known_struct_fields: &ShellStructFields,
+    module_path: &[String],
+) -> Result<ShellChromeWriterAudit, String> {
     let syntax = syn::parse_file(source)
         .map_err(|error| format!("shell chrome writer source must parse: {error}"))?;
     let mut visitor = ShellChromeWriterVisitor {
         allow_native_app_dispatch_seam,
         struct_fields: known_struct_fields.clone(),
+        module_path: module_path.to_vec(),
         ..Default::default()
     };
     visitor.visit_file(&syntax);
@@ -13231,6 +13438,8 @@ struct ShellChromeWriterVisitor {
     type_bindings: HashMap<String, ShellTypeBinding>,
     type_aliases: HashMap<String, syn::Type>,
     struct_fields: ShellStructFields,
+    struct_imports: ShellStructImports,
+    module_path: Vec<String>,
     audit: ShellChromeWriterAudit,
 }
 
@@ -13307,32 +13516,86 @@ impl ShellChromeWriterVisitor {
         resolve(ty, &self.type_aliases, &mut HashSet::new())
     }
 
+    fn normalized_struct_path(&self, raw_path: &[String]) -> Vec<String> {
+        let mut normalized = self.module_path.clone();
+        let mut index = 0;
+        if raw_path.first().is_some_and(|segment| segment == "crate") {
+            normalized.clear();
+            normalized.push("crate".to_string());
+            index = 1;
+        } else if raw_path.first().is_some_and(|segment| segment == "self") {
+            index = 1;
+        }
+        while raw_path
+            .get(index)
+            .is_some_and(|segment| segment == "super")
+        {
+            if normalized.len() > 1 {
+                normalized.pop();
+            }
+            index += 1;
+        }
+        normalized.extend(raw_path[index..].iter().cloned());
+        normalized
+    }
+
+    fn registered_struct_key(&self, raw_path: &[String]) -> Option<String> {
+        let first = raw_path.first()?;
+        if let Some(imported) = self.struct_imports.get(first) {
+            let mut imported_path = imported.clone();
+            imported_path.extend(raw_path.iter().skip(1).cloned());
+            let key = self.normalized_struct_path(&imported_path).join("::");
+            if self.struct_fields.contains_key(&key) {
+                return Some(key);
+            }
+        }
+        if raw_path.len() == 1 && self.struct_fields.contains_key(first) {
+            return Some(first.clone());
+        }
+
+        let normalized = self.normalized_struct_path(raw_path).join("::");
+        if self.struct_fields.contains_key(&normalized) {
+            return Some(normalized);
+        }
+        if !matches!(
+            raw_path.first().map(String::as_str),
+            Some("crate" | "self" | "super")
+        ) {
+            let mut crate_path = vec!["crate".to_string()];
+            crate_path.extend(raw_path.iter().cloned());
+            let crate_key = crate_path.join("::");
+            if self.struct_fields.contains_key(&crate_key) {
+                return Some(crate_key);
+            }
+        }
+        let suffix = format!("::{}", raw_path.last()?);
+        let mut matching_keys = self
+            .struct_fields
+            .keys()
+            .filter(|key| key.ends_with(&suffix))
+            .cloned();
+        let only_match = matching_keys.next()?;
+        matching_keys.next().is_none().then_some(only_match)
+    }
+
     fn struct_name_from_type(&self, ty: &syn::Type) -> Option<String> {
         fn resolve(
+            visitor: &ShellChromeWriterVisitor,
             ty: &syn::Type,
-            aliases: &HashMap<String, syn::Type>,
             resolving_aliases: &mut HashSet<String>,
         ) -> Option<String> {
             match ty {
                 syn::Type::Reference(reference) => {
-                    resolve(reference.elem.as_ref(), aliases, resolving_aliases)
+                    resolve(visitor, reference.elem.as_ref(), resolving_aliases)
                 }
                 syn::Type::Ptr(pointer) => {
-                    resolve(pointer.elem.as_ref(), aliases, resolving_aliases)
+                    resolve(visitor, pointer.elem.as_ref(), resolving_aliases)
                 }
-                syn::Type::Group(group) => resolve(group.elem.as_ref(), aliases, resolving_aliases),
-                syn::Type::Paren(paren) => resolve(paren.elem.as_ref(), aliases, resolving_aliases),
+                syn::Type::Group(group) => resolve(visitor, group.elem.as_ref(), resolving_aliases),
+                syn::Type::Paren(paren) => resolve(visitor, paren.elem.as_ref(), resolving_aliases),
                 syn::Type::Path(path) if path.qself.is_none() => {
                     let segment = path.path.segments.last()?;
                     let name = segment.ident.to_string();
-                    if resolving_aliases.insert(name.clone()) {
-                        if let Some(alias) = aliases.get(&name) {
-                            let resolved = resolve(alias, aliases, resolving_aliases);
-                            resolving_aliases.remove(&name);
-                            return resolved;
-                        }
-                        resolving_aliases.remove(&name);
-                    }
                     if matches!(
                         name.as_str(),
                         "Box" | "MutexGuard" | "Pin" | "RefMut" | "RwLockWriteGuard"
@@ -13342,16 +13605,35 @@ impl ShellChromeWriterVisitor {
                             let syn::GenericArgument::Type(inner) = argument else {
                                 return None;
                             };
-                            resolve(inner, aliases, resolving_aliases)
+                            resolve(visitor, inner, resolving_aliases)
                         });
                     }
-                    Some(name)
+                    let raw_path = path
+                        .path
+                        .segments
+                        .iter()
+                        .map(|segment| segment.ident.to_string())
+                        .collect::<Vec<_>>();
+                    if visitor.struct_imports.contains_key(&raw_path[0])
+                        && let Some(key) = visitor.registered_struct_key(&raw_path)
+                    {
+                        return Some(key);
+                    }
+                    if path.path.segments.len() == 1 && resolving_aliases.insert(name.clone()) {
+                        if let Some(alias) = visitor.type_aliases.get(&name) {
+                            let resolved = resolve(visitor, alias, resolving_aliases);
+                            resolving_aliases.remove(&name);
+                            return resolved;
+                        }
+                        resolving_aliases.remove(&name);
+                    }
+                    visitor.registered_struct_key(&raw_path)
                 }
                 _ => None,
             }
         }
 
-        resolve(ty, &self.type_aliases, &mut HashSet::new())
+        resolve(self, ty, &mut HashSet::new())
     }
 
     fn struct_field_type(&self, ty: &syn::Type, member: &syn::Member) -> Option<syn::Type> {
@@ -14055,10 +14337,13 @@ impl ShellChromeWriterVisitor {
         let previous_type_bindings = self.type_bindings.clone();
         let previous_aliases = self.type_aliases.clone();
         let previous_structs = self.struct_fields.clone();
+        let previous_imports = self.struct_imports.clone();
         self.type_aliases
             .extend(type_aliases_declared_in_statements(&block.stmts));
         self.struct_fields
             .extend(struct_fields_declared_in_statements(&block.stmts));
+        self.struct_imports
+            .extend(struct_imports_declared_in_statements(&block.stmts));
         for statement in &block.stmts {
             self.visit_stmt(statement);
         }
@@ -14069,6 +14354,7 @@ impl ShellChromeWriterVisitor {
         self.type_bindings = previous_type_bindings;
         self.type_aliases = previous_aliases;
         self.struct_fields = previous_structs;
+        self.struct_imports = previous_imports;
     }
 
     fn is_exact_native_app_dispatch_receiver(&self, receiver: &syn::Expr) -> bool {
@@ -14126,15 +14412,19 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
     fn visit_file(&mut self, file: &'ast syn::File) {
         let previous_aliases = self.type_aliases.clone();
         let previous_structs = self.struct_fields.clone();
+        let previous_imports = self.struct_imports.clone();
         self.type_aliases
             .extend(type_aliases_declared_in_items(&file.items));
         self.struct_fields
             .extend(struct_fields_declared_in_items(&file.items));
+        self.struct_imports
+            .extend(struct_imports_declared_in_items(&file.items));
         for item in &file.items {
             self.visit_item(item);
         }
         self.type_aliases = previous_aliases;
         self.struct_fields = previous_structs;
+        self.struct_imports = previous_imports;
     }
 
     fn visit_item(&mut self, item: &'ast syn::Item) {
@@ -14161,15 +14451,20 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
         };
         let previous_aliases = self.type_aliases.clone();
         let previous_structs = self.struct_fields.clone();
+        let previous_imports = self.struct_imports.clone();
+        self.module_path.push(module.ident.to_string());
         self.type_aliases
             .extend(type_aliases_declared_in_items(items));
         self.struct_fields
             .extend(struct_fields_declared_in_items(items));
+        self.struct_imports = struct_imports_declared_in_items(items);
         for item in items {
             self.visit_item(item);
         }
         self.type_aliases = previous_aliases;
         self.struct_fields = previous_structs;
+        self.struct_imports = previous_imports;
+        self.module_path.pop();
     }
 
     fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
@@ -16526,6 +16821,26 @@ fn is_test_only_path(path: &Path) -> bool {
             }
             _ => false,
         })
+}
+
+fn rust_module_path(repo_root: &Path, path: &Path) -> Vec<String> {
+    let source_root = repo_root.join("src");
+    let relative = path.strip_prefix(&source_root).unwrap_or(path);
+    let mut module_path = vec!["crate".to_string()];
+    if let Some(parent) = relative.parent() {
+        module_path.extend(parent.components().filter_map(|component| match component {
+            Component::Normal(value) => Some(value.to_string_lossy().into_owned()),
+            _ => None,
+        }));
+    }
+    let stem = relative
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    if !matches!(stem, "lib" | "main" | "mod") {
+        module_path.push(stem.to_string());
+    }
+    module_path
 }
 
 fn relative_path(repo_root: &Path, path: &Path) -> String {
