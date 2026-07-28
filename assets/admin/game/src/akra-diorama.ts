@@ -14,6 +14,9 @@ import { DashboardSceneStore } from "./scene-store";
 const MAP_ASSET_URL = "/admin/assets/graphics/akra-operations-studio-v3.png";
 const AGENT_ATLAS_URL = "/admin/assets/graphics/gamebaljeonguk_atlas_128x192.png";
 
+export const ACTIVE_FRAME_INTERVAL_MS = 1000 / 60;
+export const RAF_HEALTHY_GAP_MS = 80;
+
 declare global {
   interface Window {
     AkraAdminGame?: AkraAdminGameBridge;
@@ -58,6 +61,10 @@ const emptyInspection = (): SceneInspection => ({
     let ready = false;
     let destroyed = false;
     let lastInspectionSync = 0;
+    let lastTickerAt = 0;
+    let lastWorldUpdateAt = 0;
+    let tickerHealthy = false;
+    let frameDriver = "booting";
     let lastLayoutWidth = 0;
     let lastLayoutHeight = 0;
     let currentZoomLevel: SemanticZoomLevel = "overview";
@@ -76,6 +83,7 @@ const emptyInspection = (): SceneInspection => ({
       container.dataset.scenePlanningRevision = String(inspection.planningRevision ?? "");
       container.dataset.sceneZoomLevel = inspection.zoomLevel;
       container.dataset.sceneCameraZoom = inspection.cameraZoom.toFixed(3);
+      container.dataset.sceneFrameDriver = frameDriver;
       container.dataset.sceneActorSignature = JSON.stringify(
         inspection.actors.map((actor) => ({
           actorId: actor.actorId,
@@ -85,6 +93,8 @@ const emptyInspection = (): SceneInspection => ({
           pose: actor.pose,
           animationKind: actor.animationKind,
           animationFrameIndex: actor.animationFrameIndex,
+          gaitOffsetX: actor.gaitOffsetX,
+          gaitOffsetY: actor.gaitOffsetY,
           x: actor.x,
           y: actor.y,
         }))
@@ -97,6 +107,8 @@ const emptyInspection = (): SceneInspection => ({
           pose: character.pose,
           animationKind: character.animationKind,
           animationFrameIndex: character.animationFrameIndex,
+          gaitOffsetX: character.gaitOffsetX,
+          gaitOffsetY: character.gaitOffsetY,
           resolvedAtlasFrameIndex: character.resolvedAtlasFrameIndex,
           poseFallback: character.poseFallback,
           x: character.x,
@@ -273,14 +285,56 @@ const emptyInspection = (): SceneInspection => ({
       });
 
       app.ticker.add((ticker: Ticker) => {
-        if (!world || destroyed) return;
+        if (!world || destroyed || document.hidden) return;
         const now = performance.now();
-        world.update(ticker.deltaMS, now);
+        const tickerGap = lastTickerAt > 0 ? now - lastTickerAt : 0;
+        lastTickerAt = now;
+        tickerHealthy = tickerGap > 0 && tickerGap <= RAF_HEALTHY_GAP_MS;
+        const deltaMilliseconds =
+          lastWorldUpdateAt > 0 ? now - lastWorldUpdateAt : ticker.deltaMS;
+        lastWorldUpdateAt = now;
+        frameDriver = tickerHealthy ? "ticker" : "interval-fallback";
+        world.update(deltaMilliseconds, now);
         if (now - lastInspectionSync >= 500) {
           lastInspectionSync = now;
           syncInspectionDataset();
         }
       });
+      const fallbackTimer = window.setInterval(() => {
+        if (!world || destroyed || document.hidden) return;
+        const now = performance.now();
+        if (tickerHealthy && now - lastTickerAt <= RAF_HEALTHY_GAP_MS) return;
+        const deltaMilliseconds =
+          lastWorldUpdateAt > 0
+            ? now - lastWorldUpdateAt
+            : ACTIVE_FRAME_INTERVAL_MS;
+        lastWorldUpdateAt = now;
+        frameDriver = "interval-fallback";
+        world.update(deltaMilliseconds, now);
+        app.render();
+        if (now - lastInspectionSync >= 500) {
+          lastInspectionSync = now;
+          syncInspectionDataset();
+        }
+      }, ACTIVE_FRAME_INTERVAL_MS);
+      cleanupCallbacks.push(() => window.clearInterval(fallbackTimer));
+      const syncAnimationVisibility = (): void => {
+        if (document.hidden) {
+          frameDriver = "paused";
+          app.ticker.stop();
+        } else {
+          lastTickerAt = 0;
+          lastWorldUpdateAt = performance.now();
+          tickerHealthy = false;
+          app.ticker.start();
+        }
+        syncInspectionDataset();
+      };
+      document.addEventListener("visibilitychange", syncAnimationVisibility);
+      cleanupCallbacks.push(() =>
+        document.removeEventListener("visibilitychange", syncAnimationVisibility)
+      );
+      syncAnimationVisibility();
 
       bindControl("[data-scene-zoom-out]", () => zoomBy(1 / 1.22));
       bindControl("[data-scene-zoom-reset]", resetCamera);

@@ -64,6 +64,7 @@ interface AgentUnit {
   archetype: ArchetypeKey;
   group: Container;
   sprite: Sprite;
+  shadow: Graphics;
   marker: Graphics;
   label: Text;
   homePoint: Point;
@@ -75,6 +76,8 @@ interface AgentUnit {
   hovered: boolean;
   animationKind: AgentAnimationKind;
   animationFrameIndex: number | null;
+  gaitOffsetX: number;
+  gaitOffsetY: number;
   restTexture: Texture;
   restResolvedAtlasFrameIndex: number | null;
   restPoseFallback: boolean;
@@ -100,18 +103,13 @@ const copyPoint = (point: Point): Point => ({ x: point.x, y: point.y });
 
 export const AGENT_MOVEMENT_SPEED_RATIO = 0.3;
 export const AGENT_TRAVEL_SPEED_WORLD_PX_PER_SECOND = 168;
-export const WALK_FRAME_DURATION_MS = 135;
-export const IDLE_FRAME_DURATION_MS = 520;
+export const WALK_IN_PLACE_CYCLE_MS = 760;
+export const IDLE_IN_PLACE_CYCLE_MS = 1_280;
+export const IDLE_IN_PLACE_AMPLITUDE_RATIO = 0.55;
+export const WALK_SWAY_WORLD_PX = 0.7;
+export const WALK_LIFT_WORLD_PX = 1.6;
 
 const MAX_MOVEMENT_DELTA_MS = 50;
-const IDLE_FRAME_SEQUENCE = [0, 1, 0, 2] as const;
-
-const animationStep = (
-  elapsedMilliseconds: number,
-  frameDurationMilliseconds: number,
-  motionPhase: number
-): number =>
-  Math.floor(elapsedMilliseconds / frameDurationMilliseconds + motionPhase);
 
 const relevantPacketTarget = (unit: AgentUnit): Point | null => {
   if (unit.presenceKind !== "active") return null;
@@ -330,18 +328,53 @@ export class AgentWorld {
 
       let offsetX = 0;
       let offsetY = 0;
+      let spriteOffsetX = 0;
       let spriteOffsetY = 0;
-      if (!this.reducedMotion && unit.visualState === "blocked") {
+      const inPlaceWalking =
+        !this.reducedMotion && (moving || unit.visualState === "idle");
+      if (inPlaceWalking) {
+        const gaitCycleMilliseconds = moving
+          ? WALK_IN_PLACE_CYCLE_MS
+          : IDLE_IN_PLACE_CYCLE_MS;
+        const gaitAmplitude = moving ? 1 : IDLE_IN_PLACE_AMPLITUDE_RATIO;
+        const gaitProgress =
+          (elapsedMilliseconds / gaitCycleMilliseconds +
+            unit.motionPhase / 17) %
+          1;
+        const gaitAngle = gaitProgress * Math.PI * 2;
+        const stride = Math.sin(gaitAngle);
+        const lift = Math.abs(stride);
+        spriteOffsetX = stride * WALK_SWAY_WORLD_PX * gaitAmplitude;
+        spriteOffsetY = -lift * WALK_LIFT_WORLD_PX * gaitAmplitude;
+        unit.shadow.scale.set(
+          1 - lift * 0.075 * gaitAmplitude,
+          1 - lift * 0.035 * gaitAmplitude
+        );
+        unit.shadow.alpha =
+          (unit.presenceKind === "active" ? 0.34 : 0.25) -
+          lift * 0.055 * gaitAmplitude;
+      } else if (!this.reducedMotion && unit.visualState === "blocked") {
         offsetX = Math.sin(elapsedMilliseconds * 0.014 + unit.motionPhase) * 2.2;
-      } else if (!this.reducedMotion && unit.visualState === "working" && !moving) {
+      } else if (
+        !this.reducedMotion &&
+        unit.visualState === "working" &&
+        !moving
+      ) {
         offsetY = Math.sin(elapsedMilliseconds * 0.0045 + unit.motionPhase) * 1.2;
-      } else if (!this.reducedMotion && unit.visualState === "idle" && !moving) {
-        spriteOffsetY =
-          Math.sin(elapsedMilliseconds * 0.0024 + unit.motionPhase) * 0.9;
       }
-      unit.group.position.set(unit.currentPoint.x + offsetX, unit.currentPoint.y + offsetY);
+      if (!inPlaceWalking) {
+        unit.shadow.scale.set(1);
+        unit.shadow.alpha = unit.presenceKind === "active" ? 0.34 : 0.25;
+      }
+      unit.gaitOffsetX = spriteOffsetX;
+      unit.gaitOffsetY = spriteOffsetY;
+      unit.group.position.set(
+        unit.currentPoint.x + offsetX,
+        unit.currentPoint.y + offsetY
+      );
       unit.group.zIndex = unit.currentPoint.y;
-      unit.sprite.position.y = spriteOffsetY;
+      unit.sprite.position.set(spriteOffsetX, spriteOffsetY);
+      unit.sprite.roundPixels = !inPlaceWalking;
       unit.label.position.set(unit.currentPoint.x, unit.currentPoint.y - 137);
       unit.label.zIndex = 20_000 + unit.currentPoint.y;
 
@@ -349,20 +382,14 @@ export class AgentWorld {
         const movement = movementFacing(unit.currentPoint, unit.targetPoint);
         unit.facing = movement.facing;
         unit.flipX = movement.flipX;
-        const frameIndex =
-          animationStep(
-            elapsedMilliseconds,
-            WALK_FRAME_DURATION_MS,
-            unit.motionPhase
-          ) % 4;
         unit.sprite.texture = frameForFacing(
           this.frameSets,
           unit.archetype,
           unit.facing,
-          frameIndex
+          0
         );
         unit.animationKind = "walk";
-        unit.animationFrameIndex = frameIndex;
+        unit.animationFrameIndex = 0;
         unit.resolvedAtlasFrameIndex = null;
         unit.poseFallback = unit.pose !== "neutral";
       } else {
@@ -378,37 +405,7 @@ export class AgentWorld {
         unit.animationFrameIndex = null;
         unit.resolvedAtlasFrameIndex = unit.restResolvedAtlasFrameIndex;
         unit.poseFallback = unit.restPoseFallback;
-
-        if (unit.animationKind === "working") {
-          const frameIndex =
-            animationStep(elapsedMilliseconds, 460, unit.motionPhase) % 2;
-          unit.sprite.texture = frameForFacing(
-            this.frameSets,
-            unit.archetype,
-            "up",
-            frameIndex
-          );
-          unit.animationFrameIndex = frameIndex;
-          unit.resolvedAtlasFrameIndex = null;
-        } else if (
-          unit.animationKind === "idle" &&
-          unit.restResolvedAtlasFrameIndex === null
-        ) {
-          const sequenceIndex =
-            animationStep(
-              elapsedMilliseconds,
-              IDLE_FRAME_DURATION_MS,
-              unit.motionPhase
-            ) % IDLE_FRAME_SEQUENCE.length;
-          const frameIndex = IDLE_FRAME_SEQUENCE[sequenceIndex] ?? 0;
-          unit.sprite.texture = frameForFacing(
-            this.frameSets,
-            unit.archetype,
-            "down",
-            frameIndex
-          );
-          unit.animationFrameIndex = frameIndex;
-        }
+        if (unit.animationKind === "idle") unit.animationFrameIndex = 0;
         unit.flipX = false;
       }
       unit.sprite.scale.set(
@@ -472,6 +469,8 @@ export class AgentWorld {
           pose: unit.pose,
           animationKind: unit.animationKind,
           animationFrameIndex: unit.animationFrameIndex,
+          gaitOffsetX: Number(unit.gaitOffsetX.toFixed(2)),
+          gaitOffsetY: Number(unit.gaitOffsetY.toFixed(2)),
           resolvedAtlasFrameIndex: unit.resolvedAtlasFrameIndex,
           poseFallback: unit.poseFallback,
           displayWidth: Math.round(spriteBounds.width),
@@ -494,6 +493,8 @@ export class AgentWorld {
           pose: unit.pose,
           animationKind: unit.animationKind,
           animationFrameIndex: unit.animationFrameIndex,
+          gaitOffsetX: Number(unit.gaitOffsetX.toFixed(2)),
+          gaitOffsetY: Number(unit.gaitOffsetY.toFixed(2)),
           locationIndex: unit.locationIndex,
           resolvedAtlasFrameIndex: unit.resolvedAtlasFrameIndex,
           poseFallback: unit.poseFallback,
@@ -653,6 +654,7 @@ export class AgentWorld {
       archetype,
       group,
       sprite,
+      shadow,
       marker,
       label,
       homePoint: copyPoint(homePoint),
@@ -664,6 +666,8 @@ export class AgentWorld {
       hovered: false,
       animationKind: "rest",
       animationFrameIndex: null,
+      gaitOffsetX: 0,
+      gaitOffsetY: 0,
       restTexture:
         resolved.texture ?? frameForFacing(this.frameSets, archetype, "down", 0),
       restResolvedAtlasFrameIndex: resolved.resolvedAtlasFrameIndex,

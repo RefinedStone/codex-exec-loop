@@ -647,7 +647,8 @@ Exit:
 
 - stateful scene 도입 전까지 baseline payload 대비 10% 이상 증가 금지
 - active animation의 desktop p95 frame time 20 ms 이하
-- active walk는 60 fps ticker와 약 7.5 fps atlas cadence를 사용하고 좌표 보폭은 일정하게 유지
+- active walk는 60 fps ticker, 고정 atlas silhouette, 절차적 제자리 보폭을 사용하고 좌표 보폭은 일정하게 유지
+- visible host가 requestAnimationFrame을 throttle하면 60 fps timer가 frame driver를 대체하고 hidden tab은 갱신하지 않음
 - hidden tab의 scene frame과 scheduled poll 0
 - device pixel ratio 상한 2
 - dashboard/event overlapping poll 0
