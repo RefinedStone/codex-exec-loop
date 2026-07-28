@@ -15,11 +15,12 @@ adapter/outbound -> application ports + domain
 composition -> core + application + adapter/outbound
 ```
 
-The TUI line records the shipped transitional projection imports honestly. Production bootstrap
-does not receive raw application services: composition consumes them while constructing one opaque
-native application object. The adapter receives only `NativeClientRuntime` and immutable
-runtime-control truth. The parallel control-plane handle, event sink, and completion mailbox remain
-private composition details.
+The TUI line deliberately permits inward, data-only application/domain contracts and projections.
+Those imports carry immutable values for mapping and rendering; they are not runtime capabilities
+and do not invert the dependency direction. Production bootstrap does not receive raw application
+services: composition consumes them while constructing one opaque native application object. The
+adapter receives only `NativeClientRuntime` and immutable runtime-control truth. The parallel
+control-plane handle, event sink, and completion mailbox remain private composition details.
 
 The client command loop has a different, intentionally round-trip **runtime flow**:
 
@@ -81,6 +82,14 @@ and reads owned snapshots or projections; it cannot name the parallel completion
 raw driver/handle. UI-originated inputs remain synchronous so an adapter can bind an accepted
 admission before applying an immediate outcome. Core and parallel worker completions return through
 private mailboxes and re-enter their owning reducer through `poll_pending_client_event`.
+
+`CoreRuntime`, its effect executor, and its input mailbox are crate-private implementation details,
+not a library SDK. Only composition may assemble them. The production callable surface of
+`NativeClientRuntime` is closed to event dispatch, completion polling, and owned read-only
+snapshots/projections. It exposes no raw runtime, runner, sender, service, mutable state reference,
+or borrowed projection. Rust-aware architecture tests pin both visibility boundaries and the exact
+facade method ledger, and mutation fixtures prove that reopening a raw type or adding a mutable
+facade capability fails `cargo test`.
 
 Every `CoreEffect` variant is structurally paired with one exhaustive dispatch arm. Except for the
 two typed local invalidations, an arm must enter exactly one audited completion worker, emit an

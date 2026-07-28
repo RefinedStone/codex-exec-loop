@@ -1,19 +1,21 @@
 use std::collections::VecDeque;
 use std::fmt;
-use std::sync::mpsc::{SendError, TryRecvError, TrySendError};
+#[cfg(test)]
+use std::sync::mpsc::TrySendError;
+use std::sync::mpsc::{SendError, TryRecvError};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use crate::core::app::{CoreInput, TurnStreamEvent};
 use crate::domain::conversation_progressive_activity::MAX_RETAINED_PROGRESSIVE_ACTIVITY_DYNAMIC_BYTES;
 
-pub const CORE_INPUT_CHANNEL_CAPACITY: usize = 16;
+pub(super) const CORE_INPUT_CHANNEL_CAPACITY: usize = 16;
 const CORE_PROGRESSIVE_SEGMENT_CAPACITY: usize = CORE_INPUT_CHANNEL_CAPACITY + 1;
 
-pub struct CoreInputSender {
+pub(crate) struct CoreInputSender {
     shared: Arc<CoreInputMailbox>,
 }
 
-pub struct CoreInputReceiver {
+pub(crate) struct CoreInputReceiver {
     shared: Arc<CoreInputMailbox>,
 }
 
@@ -156,7 +158,7 @@ impl CoreInputMailboxState {
 
 impl CoreInputSender {
     #[allow(clippy::result_large_err)]
-    pub fn send(&self, input: CoreInput) -> Result<(), SendError<CoreInput>> {
+    pub(crate) fn send(&self, input: CoreInput) -> Result<(), SendError<CoreInput>> {
         let mut state = self.shared.lock_state();
         if !state.receiver_alive {
             return Err(SendError(input));
@@ -182,8 +184,9 @@ impl CoreInputSender {
         Ok(())
     }
 
+    #[cfg(test)]
     #[allow(clippy::result_large_err)]
-    pub fn try_send(&self, input: CoreInput) -> Result<(), TrySendError<CoreInput>> {
+    pub(super) fn try_send(&self, input: CoreInput) -> Result<(), TrySendError<CoreInput>> {
         let mut state = self.shared.lock_state();
         if !state.receiver_alive {
             return Err(TrySendError::Disconnected(input));
@@ -403,7 +406,7 @@ fn discard_progressive_core_input_records(input: &mut CoreInput) {
     batch.discard_retained_records();
 }
 
-pub fn core_input_channel() -> (CoreInputSender, CoreInputReceiver) {
+pub(crate) fn core_input_channel() -> (CoreInputSender, CoreInputReceiver) {
     let shared = Arc::new(CoreInputMailbox {
         state: Mutex::new(CoreInputMailboxState::new()),
         changed: Condvar::new(),
