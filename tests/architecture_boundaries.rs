@@ -3964,6 +3964,19 @@ fn update_unrelated(other: &mut OtherState, projection: &mut Projection) {
     .expect("direct shell writer fixture should parse");
     assert_eq!(direct.field_writes.len(), 1);
 
+    let destructured_alias = shell_chrome_writer_audit(
+        "fn escape(app: &mut App) {\n\
+             let NativeTuiShellState { chrome, .. } = &mut app.shell;\n\
+             chrome.session_state = SessionState::Idle;\n\
+         }",
+    )
+    .expect("destructured shell chrome alias fixture should parse");
+    assert_eq!(
+        destructured_alias.whole_state_writes.len(),
+        1,
+        "a mutable borrow of the shell container must reject destructured chrome aliases"
+    );
+
     let mutable = shell_chrome_writer_audit(
         "fn escape(app: &mut App) { let _ = &mut app.shell.chrome.approval_return_overlay; }",
     )
@@ -12109,6 +12122,14 @@ impl ShellChromeWriterVisitor {
             self.audit.whole_state_writes.push(self.finding(
                 expression.span().start().line,
                 format!("{kind} replaces or exposes the whole shell chrome state"),
+            ));
+        } else if path.last().is_some_and(|field| field == "shell") {
+            // NativeTuiApp's exact four-slice ledger pins `shell` to NativeTuiShellState.
+            // Borrowing that aggregate mutably would allow destructuring `chrome` into an
+            // alias and bypassing the canonical `shell.chrome.<field>` access path.
+            self.audit.whole_state_writes.push(self.finding(
+                expression.span().start().line,
+                format!("{kind} exposes the shell container that owns chrome"),
             ));
         }
     }
