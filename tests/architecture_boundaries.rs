@@ -4446,6 +4446,50 @@ fn update_unrelated(
         "type aliases of NativeTuiApp must retain shell chrome authority"
     );
 
+    let self_qualified_type_alias = shell_chrome_writer_audit(
+        "type App = NativeTuiApp;\n\
+         fn escape(app: &mut self::App) {\n\
+             app.shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+    )
+    .expect("self-qualified native app alias fixture should parse");
+    assert_eq!(
+        self_qualified_type_alias.field_writes.len(),
+        1,
+        "self-qualified aliases must resolve in their declaration module"
+    );
+
+    let cross_module_qualified_type_alias = shell_chrome_writer_audit(
+        "mod authority {\n\
+             pub type BaseApp = NativeTuiApp;\n\
+             pub type App = BaseApp;\n\
+         }\n\
+         fn escape(app: &mut crate::authority::App) {\n\
+             app.shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+    )
+    .expect("cross-module qualified native app alias fixture should parse");
+    assert_eq!(
+        cross_module_qualified_type_alias.field_writes.len(),
+        1,
+        "qualified aliases must resolve through the production alias registry"
+    );
+
+    let unrelated_qualified_type_alias = shell_chrome_writer_audit(
+        "mod unrelated {\n\
+             pub type App = OtherApp;\n\
+         }\n\
+         fn update(app: &mut crate::unrelated::App) {\n\
+             app.shell.chrome.session_state = 1;\n\
+         }",
+    )
+    .expect("unrelated qualified alias fixture should parse");
+    assert!(
+        unrelated_qualified_type_alias.field_writes.is_empty()
+            && unrelated_qualified_type_alias.whole_state_writes.is_empty(),
+        "qualified aliases without TUI authority must remain harmless"
+    );
+
     let chained_import_alias = shell_chrome_writer_audit(
         "use crate::adapter::inbound::tui::app::NativeTuiApp as BaseApp;\n\
          type App = BaseApp;\n\
@@ -4845,6 +4889,25 @@ fn update_unrelated(
             && nested_read_macros.whole_state_writes.is_empty()
             && nested_read_macros.macro_escapes.is_empty(),
         "nested known read-only macros must remain harmless"
+    );
+
+    let unrelated_nested_macro = shell_chrome_writer_audit(
+        "fn inspect(app: &mut NativeTuiApp) {\n\
+             assert!(\n\
+                 cfg!(debug_assertions)\n\
+                     && matches!(\n\
+                         app.shell.chrome.session_state,\n\
+                         SessionState::Idle\n\
+                     )\n\
+             );\n\
+         }",
+    )
+    .expect("unrelated nested macro fixture should parse");
+    assert!(
+        unrelated_nested_macro.field_writes.is_empty()
+            && unrelated_nested_macro.whole_state_writes.is_empty()
+            && unrelated_nested_macro.macro_escapes.is_empty(),
+        "an unknown nested macro must reference mutable authority itself before failing closed"
     );
 
     let akra_event_writer = shell_chrome_writer_audit(
@@ -13675,6 +13738,7 @@ fn shell_authority_binding_from_type(
     ty: &syn::Type,
     implicit_self: Option<ShellAuthorityKind>,
     type_aliases: &HashMap<String, syn::Type>,
+    qualified_type_aliases: &ShellQualifiedTypeAliases,
     resolving_aliases: &mut HashSet<String>,
     module_path: &[String],
 ) -> Option<ShellAuthorityBinding> {
@@ -13682,20 +13746,39 @@ fn shell_authority_binding_from_type(
         syn::Type::Path(path) if path.qself.is_none() => {
             let segment = path.path.segments.last()?;
             let name = segment.ident.to_string();
-            if path.path.segments.len() == 1 && type_aliases.contains_key(&name) {
-                if !resolving_aliases.insert(name.clone()) {
+            let normalized_path = if path.path.segments.len() == 1 {
+                let mut qualified = module_path.to_vec();
+                qualified.push(name.clone());
+                qualified
+            } else {
+                normalized_shell_type_path(&path.path, module_path)
+            };
+            let qualified_name = normalized_path.join("::");
+            let alias_module_path = normalized_path
+                .get(..normalized_path.len().saturating_sub(1))
+                .unwrap_or_default();
+            let local_alias = (path.path.segments.len() == 1 || alias_module_path == module_path)
+                .then(|| type_aliases.get(&name))
+                .flatten();
+            let alias = local_alias.or_else(|| qualified_type_aliases.get(&qualified_name));
+            if let Some(alias) = alias {
+                if !resolving_aliases.insert(qualified_name.clone()) {
                     return None;
                 }
-                let resolved = type_aliases.get(&name).and_then(|alias| {
-                    shell_authority_binding_from_type(
-                        alias,
-                        implicit_self,
-                        type_aliases,
-                        resolving_aliases,
-                        module_path,
-                    )
-                });
-                resolving_aliases.remove(&name);
+                let alias_module_path = if local_alias.is_some() {
+                    module_path
+                } else {
+                    alias_module_path
+                };
+                let resolved = shell_authority_binding_from_type(
+                    alias,
+                    implicit_self,
+                    type_aliases,
+                    qualified_type_aliases,
+                    resolving_aliases,
+                    alias_module_path,
+                );
+                resolving_aliases.remove(&qualified_name);
                 return resolved;
             }
             let direct_kind =
@@ -13719,6 +13802,7 @@ fn shell_authority_binding_from_type(
                         inner,
                         implicit_self,
                         type_aliases,
+                        qualified_type_aliases,
                         resolving_aliases,
                         module_path,
                     )
@@ -13731,6 +13815,7 @@ fn shell_authority_binding_from_type(
                 reference.elem.as_ref(),
                 implicit_self,
                 type_aliases,
+                qualified_type_aliases,
                 resolving_aliases,
                 module_path,
             )?;
@@ -13743,6 +13828,7 @@ fn shell_authority_binding_from_type(
             group.elem.as_ref(),
             implicit_self,
             type_aliases,
+            qualified_type_aliases,
             resolving_aliases,
             module_path,
         ),
@@ -13750,6 +13836,7 @@ fn shell_authority_binding_from_type(
             paren.elem.as_ref(),
             implicit_self,
             type_aliases,
+            qualified_type_aliases,
             resolving_aliases,
             module_path,
         ),
@@ -13758,6 +13845,7 @@ fn shell_authority_binding_from_type(
                 pointer.elem.as_ref(),
                 implicit_self,
                 type_aliases,
+                qualified_type_aliases,
                 resolving_aliases,
                 module_path,
             )?;
@@ -14149,8 +14237,13 @@ fn macro_token_identifiers(tokens: &proc_macro2::TokenStream) -> HashSet<String>
     identifiers
 }
 
-fn macro_token_invocations(tokens: &proc_macro2::TokenStream) -> HashSet<String> {
-    fn collect(tokens: proc_macro2::TokenStream, invocations: &mut HashSet<String>) {
+fn macro_token_invocations(
+    tokens: &proc_macro2::TokenStream,
+) -> Vec<(String, proc_macro2::TokenStream)> {
+    fn collect(
+        tokens: proc_macro2::TokenStream,
+        invocations: &mut Vec<(String, proc_macro2::TokenStream)>,
+    ) {
         let token_trees = tokens.into_iter().collect::<Vec<_>>();
         for token in &token_trees {
             let proc_macro2::TokenTree::Group(group) = token else {
@@ -14195,11 +14288,14 @@ fn macro_token_invocations(tokens: &proc_macro2::TokenStream) -> HashSet<String>
                 path_index -= 3;
             }
             path.reverse();
-            invocations.insert(path.join("::"));
+            let Some(proc_macro2::TokenTree::Group(arguments)) = token_trees.get(index + 2) else {
+                continue;
+            };
+            invocations.push((path.join("::"), arguments.stream()));
         }
     }
 
-    let mut invocations = HashSet::new();
+    let mut invocations = Vec::new();
     collect(tokens.clone(), &mut invocations);
     invocations
 }
@@ -14314,10 +14410,15 @@ fn shell_chrome_writer_audit_with_type_registry(
 ) -> Result<ShellChromeWriterAudit, String> {
     let syntax = syn::parse_file(source)
         .map_err(|error| format!("shell chrome writer source must parse: {error}"))?;
+    let mut qualified_type_aliases = known_type_aliases.clone();
+    qualified_type_aliases.extend(qualified_type_aliases_declared_in_file(
+        &syntax,
+        module_path,
+    ));
     let mut visitor = ShellChromeWriterVisitor {
         allow_native_app_dispatch_seam,
         struct_fields: known_struct_fields.clone(),
-        qualified_type_aliases: known_type_aliases.clone(),
+        qualified_type_aliases,
         module_path: module_path.to_vec(),
         ..Default::default()
     };
@@ -14364,6 +14465,7 @@ impl ShellChromeWriterVisitor {
             ty,
             self.impl_authority,
             &self.type_aliases,
+            &self.qualified_type_aliases,
             &mut resolving_aliases,
             &self.module_path,
         )?;
@@ -14867,6 +14969,7 @@ impl ShellChromeWriterVisitor {
             ty,
             self.impl_authority,
             &self.type_aliases,
+            &self.qualified_type_aliases,
             &mut resolving_aliases,
             &self.module_path,
         ) {
@@ -15311,6 +15414,7 @@ impl ShellChromeWriterVisitor {
                             receiver.ty.as_ref(),
                             Some(kind),
                             &self.type_aliases,
+                            &self.qualified_type_aliases,
                             &mut resolving_aliases,
                             &self.module_path,
                         );
@@ -15352,6 +15456,7 @@ impl ShellChromeWriterVisitor {
                     &binding.ty,
                     self.impl_authority,
                     &self.type_aliases,
+                    &self.qualified_type_aliases,
                     &mut resolving_aliases,
                     &self.module_path,
                 )?;
@@ -15375,6 +15480,7 @@ impl ShellChromeWriterVisitor {
                     &binding.ty,
                     self.impl_authority,
                     &self.type_aliases,
+                    &self.qualified_type_aliases,
                     &mut resolving_aliases,
                     &self.module_path,
                 )?;
@@ -15411,6 +15517,7 @@ impl ShellChromeWriterVisitor {
                     &binding.ty,
                     self.impl_authority,
                     &self.type_aliases,
+                    &self.qualified_type_aliases,
                     &mut resolving_aliases,
                     &self.module_path,
                 )?;
@@ -15429,6 +15536,7 @@ impl ShellChromeWriterVisitor {
                     &binding.ty,
                     self.impl_authority,
                     &self.type_aliases,
+                    &self.qualified_type_aliases,
                     &mut resolving_aliases,
                     &self.module_path,
                 )?;
@@ -15521,6 +15629,20 @@ impl ShellChromeWriterVisitor {
         }
     }
 
+    fn identifiers_mention_mutable_authority(&self, identifiers: &HashSet<String>) -> bool {
+        identifiers.iter().any(|identifier| {
+            self.authority_bindings
+                .get(identifier)
+                .is_some_and(|authority| {
+                    authority.mutable && authority.kind != ShellAuthorityKind::Unknown
+                })
+                || self
+                    .type_bindings
+                    .get(identifier)
+                    .is_some_and(|binding| self.binding_contains_mutable_authority(binding))
+        })
+    }
+
     fn inspect_macro(&mut self, expression: &syn::Macro, item_position: bool) {
         let name = expression
             .path
@@ -15532,17 +15654,7 @@ impl ShellChromeWriterVisitor {
         let mentions_audited_field = SHELL_CHROME_REDUCER_FIELDS
             .iter()
             .any(|field| identifiers.contains(*field));
-        let mentions_mutable_authority = identifiers.iter().any(|identifier| {
-            self.authority_bindings
-                .get(identifier)
-                .is_some_and(|authority| {
-                    authority.mutable && authority.kind != ShellAuthorityKind::Unknown
-                })
-                || self
-                    .type_bindings
-                    .get(identifier)
-                    .is_some_and(|binding| self.binding_contains_mutable_authority(binding))
-        });
+        let mentions_mutable_authority = self.identifiers_mention_mutable_authority(&identifiers);
         let has_mutation_syntax = (if name == "akra_event" {
             akra_event_value_tokens_have_assignment(&expression.tokens)
         } else {
@@ -15551,13 +15663,16 @@ impl ShellChromeWriterVisitor {
             .iter()
             .any(|identifier| identifiers.contains(*identifier));
         let read_macro = shell_chrome_read_macro_path(&syn_path_name(&expression.path));
-        let has_untrusted_nested_macro = macro_token_invocations(&expression.tokens)
+        let has_untrusted_nested_authority_macro = macro_token_invocations(&expression.tokens)
             .iter()
-            .any(|path| !shell_chrome_read_macro_path(path));
+            .any(|(path, tokens)| {
+                !shell_chrome_read_macro_path(path)
+                    && self.identifiers_mention_mutable_authority(&macro_token_identifiers(tokens))
+            });
         if item_position
             || (mentions_audited_field && has_mutation_syntax)
             || (mentions_mutable_authority
-                && (!read_macro || has_mutation_syntax || has_untrusted_nested_macro))
+                && (!read_macro || has_mutation_syntax || has_untrusted_nested_authority_macro))
         {
             self.audit.macro_escapes.push(self.finding(
                 expression.path.span().start().line,
@@ -15802,6 +15917,7 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
             item.self_ty.as_ref(),
             self.impl_authority,
             &self.type_aliases,
+            &self.qualified_type_aliases,
             &mut resolving_aliases,
             &self.module_path,
         );
