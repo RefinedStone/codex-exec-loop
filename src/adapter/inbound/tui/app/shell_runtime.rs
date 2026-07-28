@@ -205,13 +205,21 @@ impl ShellRuntime {
             match message {
                 #[cfg(test)]
                 BackgroundMessage::StartupLoaded(result) => {
-                    let workspace_directory = match &result {
-                        Ok(ready) => Some(ready.workspace_path.clone()),
-                        Err(_) => None,
+                    let (snapshot, workspace_directory) = match result {
+                        Ok(ready) => {
+                            let workspace_directory = Some(ready.workspace_path.clone());
+                            (
+                                crate::core::app::StartupSnapshot::Ready(ready),
+                                workspace_directory,
+                            )
+                        }
+                        Err(message) => {
+                            (crate::core::app::StartupSnapshot::Failed { message }, None)
+                        }
                     };
                     self.app
-                        .dispatch_shell_chrome(ShellChromeEvent::StartupLoaded {
-                            result,
+                        .dispatch_shell_chrome(ShellChromeEvent::StartupProjected {
+                            snapshot,
                             session_page_size: super::SESSION_PAGE_SIZE,
                         });
                     if let Some(workspace_directory) = workspace_directory {

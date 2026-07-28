@@ -3806,6 +3806,163 @@ fn shell_overlay_cleanup_is_owned_by_the_typed_reducer_transition() {
 }
 
 #[test]
+fn shell_chrome_state_has_one_typed_reducer_writer() {
+    let root = repo_root();
+    let shell_source = fs::read_to_string(root.join("src/adapter/inbound/tui/shell_chrome.rs"))
+        .expect("shell chrome source should load");
+    verify_shell_chrome_event_reducer_contract(&shell_source)
+        .unwrap_or_else(|error| panic!("ShellChromeEvent reducer contract violated: {error}"));
+    let shell_syntax = syn::parse_file(&shell_source).expect("shell chrome source should parse");
+    let actual_state_fields = named_struct_fields(&shell_syntax, "ShellChromeState")
+        .into_iter()
+        .map(|field| {
+            field
+                .ident
+                .as_ref()
+                .expect("ShellChromeState fields must be named")
+                .to_string()
+        })
+        .collect::<HashSet<_>>();
+    assert_eq!(
+        actual_state_fields,
+        SHELL_CHROME_REDUCER_FIELDS
+            .iter()
+            .map(|field| (*field).to_string())
+            .collect(),
+        "ShellChromeState field additions must extend the audited reducer-writer ledger"
+    );
+
+    let tui_module = fs::read_to_string(root.join("src/adapter/inbound/tui/mod.rs"))
+        .expect("TUI module source should load");
+    assert!(
+        tui_module.contains("pub(crate) mod shell_chrome;")
+            && !tui_module.contains("pub mod shell_chrome;"),
+        "shell reducer internals must not be a public adapter API"
+    );
+
+    let mut violations = Vec::new();
+    let mut reducer_fields = HashSet::new();
+    let mut whole_state_writers = Vec::new();
+    for path in rust_files_under(&root.join("src/adapter/inbound/tui")) {
+        if is_test_only_path(&path) {
+            continue;
+        }
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+        let audit = shell_chrome_writer_audit(&source)
+            .unwrap_or_else(|error| panic!("failed to audit {}: {error}", path.display()));
+        let relative = relative_path(&root, &path);
+
+        for write in audit.field_writes {
+            if relative == "src/adapter/inbound/tui/shell_chrome.rs"
+                && write.owner == "reduce_shell_chrome"
+            {
+                for &field in SHELL_CHROME_REDUCER_FIELDS {
+                    if write.detail.contains(&format!("`{field}`")) {
+                        reducer_fields.insert(field);
+                    }
+                }
+            } else {
+                violations.push(format!("{relative}:{}:{write}", write.line));
+            }
+        }
+        whole_state_writers.extend(
+            audit
+                .whole_state_writes
+                .into_iter()
+                .map(|write| (relative.clone(), write.owner, write.line)),
+        );
+    }
+
+    assert!(
+        violations.is_empty(),
+        "production shell chrome fields must be written only by reduce_shell_chrome:\n{}",
+        violations.join("\n")
+    );
+    assert_eq!(
+        reducer_fields,
+        SHELL_CHROME_REDUCER_FIELDS.iter().copied().collect(),
+        "the reducer must remain the explicit writer for every ShellChromeState field"
+    );
+    whole_state_writers.sort();
+    assert_eq!(
+        whole_state_writers
+            .iter()
+            .map(|(path, owner, _)| (path.as_str(), owner.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            (
+                "src/adapter/inbound/tui/app/app_runtime.rs",
+                "apply_shell_chrome_state",
+            ),
+            (
+                "src/adapter/inbound/tui/app/app_runtime.rs",
+                "take_shell_chrome_state",
+            ),
+        ],
+        "only the reducer dispatch seam may take and reinstall the whole shell chrome state"
+    );
+}
+
+#[test]
+fn shell_chrome_writer_and_router_analyzers_reject_escape_fixtures() {
+    let harmless = r#"
+fn render(app: &App) {
+    let _ = (&app.shell.chrome.startup_state, app.shell.chrome.selected_session_index);
+}
+#[cfg(test)]
+fn fixture(app: &mut App) {
+    app.shell.chrome.startup_state = StartupState::Loading;
+}
+"#;
+    let audit = shell_chrome_writer_audit(harmless).expect("harmless fixture should parse");
+    assert!(
+        audit.field_writes.is_empty() && audit.whole_state_writes.is_empty(),
+        "reads and cfg(test) fixtures must not create shell writer false positives"
+    );
+
+    let direct = shell_chrome_writer_audit(
+        "fn escape(app: &mut App) { app.shell.chrome.session_state = SessionState::Idle; }",
+    )
+    .expect("direct shell writer fixture should parse");
+    assert_eq!(direct.field_writes.len(), 1);
+
+    let mutable = shell_chrome_writer_audit(
+        "fn escape(app: &mut App) { let _ = &mut app.shell.chrome.approval_return_overlay; }",
+    )
+    .expect("mutable shell borrow fixture should parse");
+    assert_eq!(mutable.field_writes.len(), 1);
+
+    let whole = shell_chrome_writer_audit(
+        "fn escape(app: &mut App, state: ShellChromeState) { app.shell.chrome = state; }",
+    )
+    .expect("whole shell writer fixture should parse");
+    assert_eq!(whole.whole_state_writes.len(), 1);
+
+    let shell_source = fs::read_to_string("src/adapter/inbound/tui/shell_chrome.rs")
+        .expect("shell chrome source should load");
+    let wildcard = shell_source.replacen("ShellChromeEvent::StartupCheckRequested =>", "_ =>", 1);
+    let error = verify_shell_chrome_event_reducer_contract(&wildcard)
+        .expect_err("a wildcard ShellChromeEvent arm must be rejected");
+    assert!(
+        error.contains("wildcard patterns are forbidden"),
+        "unexpected ShellChromeEvent wildcard analyzer error: {error}"
+    );
+
+    let expanded = shell_source.replacen(
+        "pub enum ShellChromeEvent {",
+        "pub enum ShellChromeEvent {\n    UnroutedProjection,",
+        1,
+    );
+    let error = verify_shell_chrome_event_reducer_contract(&expanded)
+        .expect_err("a newly unrouted ShellChromeEvent variant must be rejected");
+    assert!(
+        error.contains("must exactly cover the enum"),
+        "unexpected ShellChromeEvent coverage analyzer error: {error}"
+    );
+}
+
+#[test]
 fn tui_session_renames_enter_through_core_runtime() {
     assert_no_forbidden_references_in_paths(
         "TUI session renames must be dispatched through core runtime, not a local worker or SessionService handle",
@@ -11786,6 +11943,220 @@ fn conversation_runtime_semantic_field(field: &str) -> bool {
             | "post_turn"
             | "planning_handoff"
     )
+}
+
+const SHELL_CHROME_REDUCER_FIELDS: &[&str] = &[
+    "shell_overlay",
+    "approval_return_overlay",
+    "exit_confirmation_state",
+    "startup_state",
+    "session_state",
+    "selected_session_index",
+];
+
+#[derive(Default)]
+struct ShellChromeWriterAudit {
+    field_writes: Vec<RuntimeWriterFinding>,
+    whole_state_writes: Vec<RuntimeWriterFinding>,
+}
+
+fn shell_chrome_writer_audit(source: &str) -> Result<ShellChromeWriterAudit, String> {
+    let syntax = syn::parse_file(source)
+        .map_err(|error| format!("shell chrome writer source must parse: {error}"))?;
+    let mut visitor = ShellChromeWriterVisitor::default();
+    visitor.visit_file(&syntax);
+    Ok(visitor.audit)
+}
+
+#[derive(Default)]
+struct ShellChromeWriterVisitor {
+    owner: Option<String>,
+    audit: ShellChromeWriterAudit,
+}
+
+impl ShellChromeWriterVisitor {
+    fn finding(&self, line: usize, detail: impl Into<String>) -> RuntimeWriterFinding {
+        RuntimeWriterFinding {
+            owner: self.owner.clone().unwrap_or_else(|| "<module>".to_string()),
+            line,
+            detail: detail.into(),
+        }
+    }
+
+    fn inspect_write_target(&mut self, expression: &syn::Expr, kind: &str) {
+        let fields = expression_field_chain(expression);
+        if let Some(field) = fields
+            .iter()
+            .find(|field| SHELL_CHROME_REDUCER_FIELDS.contains(&field.as_str()))
+        {
+            self.audit.field_writes.push(self.finding(
+                expression.span().start().line,
+                format!("{kind} reaches shell chrome field `{field}`"),
+            ));
+        } else if fields.last().is_some_and(|field| field == "chrome") {
+            self.audit.whole_state_writes.push(self.finding(
+                expression.span().start().line,
+                format!("{kind} replaces or exposes the whole shell chrome state"),
+            ));
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if item_is_test_only(item) {
+            return;
+        }
+        visit::visit_item(self, item);
+    }
+
+    fn visit_item_fn(&mut self, function: &'ast syn::ItemFn) {
+        if attributes_are_test_only(&function.attrs) {
+            return;
+        }
+        let previous = self.owner.replace(function.sig.ident.to_string());
+        visit::visit_item_fn(self, function);
+        self.owner = previous;
+    }
+
+    fn visit_impl_item(&mut self, item: &'ast syn::ImplItem) {
+        if impl_item_attributes(item).is_some_and(attributes_are_test_only) {
+            return;
+        }
+        let syn::ImplItem::Fn(function) = item else {
+            visit::visit_impl_item(self, item);
+            return;
+        };
+        let previous = self.owner.replace(function.sig.ident.to_string());
+        visit::visit_impl_item_fn(self, function);
+        self.owner = previous;
+    }
+
+    fn visit_expr_assign(&mut self, expression: &'ast syn::ExprAssign) {
+        self.inspect_write_target(expression.left.as_ref(), "assignment");
+        visit::visit_expr_assign(self, expression);
+    }
+
+    fn visit_expr_binary(&mut self, expression: &'ast syn::ExprBinary) {
+        if matches!(
+            expression.op,
+            syn::BinOp::AddAssign(_)
+                | syn::BinOp::SubAssign(_)
+                | syn::BinOp::MulAssign(_)
+                | syn::BinOp::DivAssign(_)
+                | syn::BinOp::RemAssign(_)
+                | syn::BinOp::BitXorAssign(_)
+                | syn::BinOp::BitAndAssign(_)
+                | syn::BinOp::BitOrAssign(_)
+                | syn::BinOp::ShlAssign(_)
+                | syn::BinOp::ShrAssign(_)
+        ) {
+            self.inspect_write_target(expression.left.as_ref(), "compound assignment");
+        }
+        visit::visit_expr_binary(self, expression);
+    }
+
+    fn visit_expr_reference(&mut self, expression: &'ast syn::ExprReference) {
+        if expression.mutability.is_some() {
+            self.inspect_write_target(expression.expr.as_ref(), "mutable borrow");
+        }
+        visit::visit_expr_reference(self, expression);
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        if matches!(
+            call.method.to_string().as_str(),
+            "as_mut"
+                | "borrow_mut"
+                | "clear"
+                | "get_mut"
+                | "insert"
+                | "push"
+                | "remove"
+                | "replace"
+                | "take"
+        ) {
+            self.inspect_write_target(call.receiver.as_ref(), "mutable method");
+        }
+        visit::visit_expr_method_call(self, call);
+    }
+}
+
+fn verify_shell_chrome_event_reducer_contract(source: &str) -> Result<(), String> {
+    let syntax =
+        syn::parse_file(source).map_err(|error| format!("shell chrome must parse: {error}"))?;
+    let event_enums = syntax
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Enum(item)
+                if item.ident == "ShellChromeEvent" && !attributes_are_test_only(&item.attrs) =>
+            {
+                Some(item)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let [event_enum] = event_enums.as_slice() else {
+        return Err(format!(
+            "expected one production ShellChromeEvent enum, found {}",
+            event_enums.len()
+        ));
+    };
+    let expected = event_enum
+        .variants
+        .iter()
+        .filter(|variant| !attributes_are_test_only(&variant.attrs))
+        .map(|variant| variant.ident.to_string())
+        .collect::<HashSet<_>>();
+
+    let reducer = top_level_function(&syntax, "reduce_shell_chrome");
+    let event_matches = reducer
+        .block
+        .stmts
+        .iter()
+        .filter_map(|statement| match statement {
+            syn::Stmt::Expr(syn::Expr::Match(expression), _)
+                if expression_is_simple_path(expression.expr.as_ref(), &["event"]) =>
+            {
+                Some(expression)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let [event_match] = event_matches.as_slice() else {
+        return Err(format!(
+            "reduce_shell_chrome must contain one direct `match event`, found {}",
+            event_matches.len()
+        ));
+    };
+
+    let mut actual = HashSet::new();
+    for arm in &event_match.arms {
+        if arm.guard.is_some() {
+            return Err(format!(
+                "ShellChromeEvent arm at line {} must not use a match guard",
+                arm.span().start().line
+            ));
+        }
+        for variant in exact_enum_pattern_variants(&arm.pat, "ShellChromeEvent")
+            .map_err(|error| format!("ShellChromeEvent reducer {error}"))?
+        {
+            if !actual.insert(variant.clone()) {
+                return Err(format!(
+                    "ShellChromeEvent::{variant} must appear in exactly one reducer arm"
+                ));
+            }
+        }
+    }
+    if actual != expected {
+        return Err(format!(
+            "ShellChromeEvent reducer arms must exactly cover the enum ({})",
+            core_effect_set_difference(&actual, &expected)
+        ));
+    }
+
+    Ok(())
 }
 
 const PARALLEL_CONTROL_PLANE_EFFECT_CONTRACTS: &[(&str, &str)] = &[

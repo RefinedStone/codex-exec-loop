@@ -1,7 +1,7 @@
 use crate::adapter::inbound::tui::shell_chrome::{
-    ExitConfirmationState, SessionState, ShellChromeEffect, ShellChromeEvent, ShellChromeReduction,
-    ShellChromeState, ShellOverlay, ShellOverlayExitMode, ShellOverlayTransition, StartupState,
-    reduce_shell_chrome,
+    ExitConfirmationState, SessionCatalogSelectionPolicy, SessionState, ShellChromeEffect,
+    ShellChromeEvent, ShellChromeReduction, ShellChromeState, ShellOverlay, ShellOverlayExitMode,
+    ShellOverlayTransition, StartupState, reduce_shell_chrome,
 };
 use crate::adapter::inbound::tui::supersession_mud::SupersessionMudUiState;
 use crate::application::service::planning::PlanningTaskHandoff;
