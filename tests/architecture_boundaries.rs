@@ -3883,9 +3883,12 @@ fn shell_chrome_state_has_one_typed_reducer_writer() {
         }
         let source = fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
-        let audit = shell_chrome_writer_audit(&source)
-            .unwrap_or_else(|error| panic!("failed to audit {}: {error}", path.display()));
         let relative = relative_path(&root, &path);
+        let audit = shell_chrome_writer_audit_with_policy(
+            &source,
+            relative == "src/adapter/inbound/tui/app/app_runtime.rs",
+        )
+        .unwrap_or_else(|error| panic!("failed to audit {}: {error}", path.display()));
 
         for write in audit.field_writes {
             if relative == "src/adapter/inbound/tui/shell_chrome.rs"
@@ -4150,6 +4153,106 @@ fn update_unrelated(
         take_method_result.field_writes.len(),
         1,
         "the allowed take seam result must retain Chrome authority in local bindings"
+    );
+
+    let tuple_alias = shell_chrome_writer_audit(
+        "fn escape(app: &mut NativeTuiApp) {\n\
+             let (alias,) = (app,);\n\
+             alias.shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+    )
+    .expect("tuple shell authority alias fixture should parse");
+    assert_eq!(
+        tuple_alias.field_writes.len(),
+        1,
+        "tuple expressions and patterns must recursively retain shell chrome authority"
+    );
+
+    let typed_tuple_alias = shell_chrome_writer_audit(
+        "fn escape((app,): (&mut NativeTuiApp,)) {\n\
+             app.shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+    )
+    .expect("typed tuple shell authority alias fixture should parse");
+    assert_eq!(
+        typed_tuple_alias.field_writes.len(),
+        1,
+        "typed tuple parameters must recursively retain shell chrome authority"
+    );
+
+    let match_tuple_alias = shell_chrome_writer_audit(
+        "fn escape(app: &mut NativeTuiApp) {\n\
+             match (app,) {\n\
+                 (alias,) => alias.shell.chrome.session_state = SessionState::Idle,\n\
+             }\n\
+         }",
+    )
+    .expect("match tuple shell authority alias fixture should parse");
+    assert_eq!(
+        match_tuple_alias.field_writes.len(),
+        1,
+        "match tuple patterns must recursively retain shell chrome authority"
+    );
+
+    let allowed_dispatch_seam = shell_chrome_writer_audit_with_policy(
+        "impl NativeTuiApp {\n\
+             fn dispatch_shell_chrome(&mut self) {\n\
+                 let state = self.take_shell_chrome_state();\n\
+                 self.apply_shell_chrome_state(state);\n\
+             }\n\
+         }",
+        true,
+    )
+    .expect("exact NativeTuiApp dispatch seam fixture should parse");
+    assert!(
+        allowed_dispatch_seam.whole_state_writes.is_empty(),
+        "only the exact NativeTuiApp dispatch method may call the take/apply seam"
+    );
+
+    let same_named_free_function = shell_chrome_writer_audit_with_policy(
+        "fn dispatch_shell_chrome(app: &mut NativeTuiApp) {\n\
+             let state = app.take_shell_chrome_state();\n\
+             app.apply_shell_chrome_state(state);\n\
+         }",
+        true,
+    )
+    .expect("same-named free function fixture should parse");
+    assert_eq!(
+        same_named_free_function.whole_state_writes.len(),
+        2,
+        "a same-named free function must not inherit the NativeTuiApp dispatch exception"
+    );
+
+    let same_named_other_impl = shell_chrome_writer_audit_with_policy(
+        "impl Other {\n\
+             fn dispatch_shell_chrome(&mut self, app: &mut NativeTuiApp) {\n\
+                 let state = app.take_shell_chrome_state();\n\
+                 app.apply_shell_chrome_state(state);\n\
+             }\n\
+         }",
+        true,
+    )
+    .expect("same-named unrelated impl fixture should parse");
+    assert_eq!(
+        same_named_other_impl.whole_state_writes.len(),
+        2,
+        "a same-named method on another type must not inherit the dispatch exception"
+    );
+
+    let wrong_dispatch_receiver = shell_chrome_writer_audit_with_policy(
+        "impl NativeTuiApp {\n\
+             fn dispatch_shell_chrome(&mut self, app: &mut NativeTuiApp) {\n\
+                 let state = app.take_shell_chrome_state();\n\
+                 app.apply_shell_chrome_state(state);\n\
+             }\n\
+         }",
+        true,
+    )
+    .expect("wrong dispatch receiver fixture should parse");
+    assert_eq!(
+        wrong_dispatch_receiver.whole_state_writes.len(),
+        2,
+        "the dispatch exception must apply to the exact mutable self receiver only"
     );
 
     let mutable = shell_chrome_writer_audit(
@@ -12443,9 +12546,19 @@ struct ShellChromeWriterAudit {
 }
 
 fn shell_chrome_writer_audit(source: &str) -> Result<ShellChromeWriterAudit, String> {
+    shell_chrome_writer_audit_with_policy(source, false)
+}
+
+fn shell_chrome_writer_audit_with_policy(
+    source: &str,
+    allow_native_app_dispatch_seam: bool,
+) -> Result<ShellChromeWriterAudit, String> {
     let syntax = syn::parse_file(source)
         .map_err(|error| format!("shell chrome writer source must parse: {error}"))?;
-    let mut visitor = ShellChromeWriterVisitor::default();
+    let mut visitor = ShellChromeWriterVisitor {
+        allow_native_app_dispatch_seam,
+        ..Default::default()
+    };
     visitor.visit_file(&syntax);
     Ok(visitor.audit)
 }
@@ -12454,6 +12567,8 @@ fn shell_chrome_writer_audit(source: &str) -> Result<ShellChromeWriterAudit, Str
 struct ShellChromeWriterVisitor {
     owner: Option<String>,
     impl_authority: Option<ShellAuthorityKind>,
+    impl_is_inherent: bool,
+    allow_native_app_dispatch_seam: bool,
     authority_bindings: HashMap<String, ShellAuthorityBinding>,
     type_aliases: HashMap<String, syn::Type>,
     audit: ShellChromeWriterAudit,
@@ -12537,6 +12652,136 @@ impl ShellChromeWriterVisitor {
         }
     }
 
+    fn bind_pattern_from_type(&mut self, pattern: &syn::Pat, ty: &syn::Type) -> bool {
+        let mut resolving_aliases = HashSet::new();
+        self.bind_pattern_from_type_inner(pattern, ty, &mut resolving_aliases)
+    }
+
+    fn bind_pattern_from_type_inner(
+        &mut self,
+        pattern: &syn::Pat,
+        ty: &syn::Type,
+        resolving_aliases: &mut HashSet<String>,
+    ) -> bool {
+        match pattern {
+            syn::Pat::Type(pattern) => {
+                return self.bind_pattern_from_type_inner(
+                    pattern.pat.as_ref(),
+                    pattern.ty.as_ref(),
+                    resolving_aliases,
+                );
+            }
+            syn::Pat::Paren(pattern) => {
+                return self.bind_pattern_from_type_inner(
+                    pattern.pat.as_ref(),
+                    ty,
+                    resolving_aliases,
+                );
+            }
+            _ => {}
+        }
+
+        match ty {
+            syn::Type::Group(group) => {
+                return self.bind_pattern_from_type_inner(
+                    pattern,
+                    group.elem.as_ref(),
+                    resolving_aliases,
+                );
+            }
+            syn::Type::Paren(paren) => {
+                return self.bind_pattern_from_type_inner(
+                    pattern,
+                    paren.elem.as_ref(),
+                    resolving_aliases,
+                );
+            }
+            syn::Type::Path(path) if path.qself.is_none() => {
+                if let Some(segment) = path.path.segments.last() {
+                    let name = segment.ident.to_string();
+                    if resolving_aliases.insert(name.clone()) {
+                        if let Some(alias) = self.type_aliases.get(&name).cloned() {
+                            let bound = self.bind_pattern_from_type_inner(
+                                pattern,
+                                &alias,
+                                resolving_aliases,
+                            );
+                            resolving_aliases.remove(&name);
+                            return bound;
+                        }
+                        resolving_aliases.remove(&name);
+                    }
+                }
+            }
+            syn::Type::Tuple(tuple) => {
+                if let syn::Pat::Tuple(pattern) = pattern
+                    && pattern.elems.len() == tuple.elems.len()
+                {
+                    return pattern.elems.iter().zip(&tuple.elems).fold(
+                        false,
+                        |bound, (pattern, ty)| {
+                            self.bind_pattern_from_type_inner(pattern, ty, resolving_aliases)
+                                || bound
+                        },
+                    );
+                }
+            }
+            _ => {}
+        }
+
+        if let Some(binding) = self.binding_from_type(pattern, ty) {
+            self.bind_pattern(pattern, binding);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn bind_pattern_from_expression(&mut self, pattern: &syn::Pat, expression: &syn::Expr) -> bool {
+        match pattern {
+            syn::Pat::Type(pattern) => {
+                if self.bind_pattern_from_expression(pattern.pat.as_ref(), expression) {
+                    return true;
+                }
+                return self.bind_pattern_from_type(pattern.pat.as_ref(), pattern.ty.as_ref());
+            }
+            syn::Pat::Paren(pattern) => {
+                return self.bind_pattern_from_expression(pattern.pat.as_ref(), expression);
+            }
+            _ => {}
+        }
+
+        match expression {
+            syn::Expr::Group(group) => {
+                return self.bind_pattern_from_expression(pattern, group.expr.as_ref());
+            }
+            syn::Expr::Paren(paren) => {
+                return self.bind_pattern_from_expression(pattern, paren.expr.as_ref());
+            }
+            syn::Expr::Tuple(tuple) => {
+                if let syn::Pat::Tuple(pattern) = pattern
+                    && pattern.elems.len() == tuple.elems.len()
+                {
+                    return pattern.elems.iter().zip(&tuple.elems).fold(
+                        false,
+                        |bound, (pattern, expression)| {
+                            self.bind_pattern_from_expression(pattern, expression) || bound
+                        },
+                    );
+                }
+            }
+            _ => {}
+        }
+
+        if let Some(mut authority) = self.resolve_authority(expression) {
+            authority.mutable |= pattern_has_mutable_binding(pattern);
+            self.bind_pattern(pattern, authority);
+            true
+        } else {
+            false
+        }
+    }
+
     fn seed_signature(&mut self, signature: &syn::Signature) {
         for input in &signature.inputs {
             match input {
@@ -12553,11 +12798,7 @@ impl ShellChromeWriterVisitor {
                 }
                 syn::FnArg::Typed(argument) => {
                     self.clear_pattern_bindings(argument.pat.as_ref());
-                    if let Some(binding) =
-                        self.binding_from_type(argument.pat.as_ref(), argument.ty.as_ref())
-                    {
-                        self.bind_pattern(argument.pat.as_ref(), binding);
-                    }
+                    self.bind_pattern_from_type(argument.pat.as_ref(), argument.ty.as_ref());
                 }
             }
         }
@@ -12643,12 +12884,47 @@ impl ShellChromeWriterVisitor {
         }
     }
 
-    fn inspect_shell_state_seam_call(&mut self, method: &str, line: usize) {
-        if matches!(
+    fn is_exact_native_app_dispatch_receiver(&self, receiver: &syn::Expr) -> bool {
+        let receiver_is_self = match receiver {
+            syn::Expr::Path(path) => {
+                path.qself.is_none()
+                    && path.path.leading_colon.is_none()
+                    && path.path.segments.len() == 1
+                    && path.path.segments[0].ident == "self"
+            }
+            syn::Expr::Group(group) => {
+                self.is_exact_native_app_dispatch_receiver(group.expr.as_ref())
+            }
+            syn::Expr::Paren(paren) => {
+                self.is_exact_native_app_dispatch_receiver(paren.expr.as_ref())
+            }
+            _ => false,
+        };
+        receiver_is_self
+            && self.resolve_authority(receiver).is_some_and(|authority| {
+                authority.kind == ShellAuthorityKind::App && authority.mutable
+            })
+    }
+
+    fn inspect_shell_state_seam_call(
+        &mut self,
+        method: &str,
+        receiver: Option<&syn::Expr>,
+        line: usize,
+    ) {
+        if !matches!(
             method,
             "take_shell_chrome_state" | "apply_shell_chrome_state"
-        ) && self.owner.as_deref() != Some("dispatch_shell_chrome")
-        {
+        ) {
+            return;
+        }
+        let exact_dispatch_seam = self.allow_native_app_dispatch_seam
+            && self.impl_is_inherent
+            && self.impl_authority == Some(ShellAuthorityKind::App)
+            && self.owner.as_deref() == Some("dispatch_shell_chrome")
+            && receiver
+                .is_some_and(|receiver| self.is_exact_native_app_dispatch_receiver(receiver));
+        if !exact_dispatch_seam {
             self.audit.whole_state_writes.push(self.finding(
                 line,
                 format!(
@@ -12697,7 +12973,8 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
         if attributes_are_test_only(&item.attrs) {
             return;
         }
-        let previous = self.impl_authority;
+        let previous_authority = self.impl_authority;
+        let previous_is_inherent = self.impl_is_inherent;
         let mut resolving_aliases = HashSet::new();
         self.impl_authority = shell_authority_binding_from_type(
             item.self_ty.as_ref(),
@@ -12706,8 +12983,10 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
             &mut resolving_aliases,
         )
         .map(|authority| authority.kind);
+        self.impl_is_inherent = item.trait_.is_none();
         visit::visit_item_impl(self, item);
-        self.impl_authority = previous;
+        self.impl_authority = previous_authority;
+        self.impl_is_inherent = previous_is_inherent;
     }
 
     fn visit_item_fn(&mut self, function: &'ast syn::ItemFn) {
@@ -12751,16 +13030,6 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
     }
 
     fn visit_local(&mut self, local: &'ast syn::Local) {
-        let mut authority = local
-            .init
-            .as_ref()
-            .and_then(|init| self.resolve_authority(init.expr.as_ref()))
-            .or_else(|| match &local.pat {
-                syn::Pat::Type(pattern) => {
-                    self.binding_from_type(pattern.pat.as_ref(), pattern.ty.as_ref())
-                }
-                _ => None,
-            });
         if let Some(init) = &local.init {
             self.visit_expr(init.expr.as_ref());
             if let Some((_, diverge)) = &init.diverge {
@@ -12768,11 +13037,12 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
             }
         }
         self.clear_pattern_bindings(&local.pat);
-        if let Some(authority) = &mut authority {
-            authority.mutable |= pattern_has_mutable_binding(&local.pat);
-        }
-        if let Some(authority) = authority {
-            self.bind_pattern(&local.pat, authority);
+        let bound_from_initializer = local
+            .init
+            .as_ref()
+            .is_some_and(|init| self.bind_pattern_from_expression(&local.pat, init.expr.as_ref()));
+        if !bound_from_initializer && let syn::Pat::Type(pattern) = &local.pat {
+            self.bind_pattern_from_type(pattern.pat.as_ref(), pattern.ty.as_ref());
         }
     }
 
@@ -12810,6 +13080,7 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
         self.inspect_shell_state_seam_call(
             &call.method.to_string(),
+            Some(call.receiver.as_ref()),
             call.method.span().start().line,
         );
         if matches!(
@@ -12835,6 +13106,7 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
         {
             self.inspect_shell_state_seam_call(
                 &method.ident.to_string(),
+                None,
                 method.ident.span().start().line,
             );
         }
@@ -12843,13 +13115,10 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
 
     fn visit_expr_match(&mut self, expression: &'ast syn::ExprMatch) {
         self.visit_expr(expression.expr.as_ref());
-        let authority = self.resolve_authority(expression.expr.as_ref());
         for arm in &expression.arms {
             let previous = self.authority_bindings.clone();
             self.clear_pattern_bindings(&arm.pat);
-            if let Some(authority) = authority {
-                self.bind_pattern(&arm.pat, authority);
-            }
+            self.bind_pattern_from_expression(&arm.pat, expression.expr.as_ref());
             if let Some((_, guard)) = &arm.guard {
                 self.visit_expr(guard.as_ref());
             }
@@ -12861,12 +13130,9 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
     fn visit_expr_if(&mut self, expression: &'ast syn::ExprIf) {
         if let syn::Expr::Let(condition) = expression.cond.as_ref() {
             self.visit_expr(condition.expr.as_ref());
-            let authority = self.resolve_authority(condition.expr.as_ref());
             let previous = self.authority_bindings.clone();
             self.clear_pattern_bindings(condition.pat.as_ref());
-            if let Some(authority) = authority {
-                self.bind_pattern(condition.pat.as_ref(), authority);
-            }
+            self.bind_pattern_from_expression(condition.pat.as_ref(), condition.expr.as_ref());
             self.visit_block(&expression.then_branch);
             self.authority_bindings = previous;
             if let Some((_, otherwise)) = &expression.else_branch {
@@ -12880,12 +13146,9 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
     fn visit_expr_while(&mut self, expression: &'ast syn::ExprWhile) {
         if let syn::Expr::Let(condition) = expression.cond.as_ref() {
             self.visit_expr(condition.expr.as_ref());
-            let authority = self.resolve_authority(condition.expr.as_ref());
             let previous = self.authority_bindings.clone();
             self.clear_pattern_bindings(condition.pat.as_ref());
-            if let Some(authority) = authority {
-                self.bind_pattern(condition.pat.as_ref(), authority);
-            }
+            self.bind_pattern_from_expression(condition.pat.as_ref(), condition.expr.as_ref());
             self.visit_block(&expression.body);
             self.authority_bindings = previous;
         } else {
@@ -12897,11 +13160,8 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
         let previous = self.authority_bindings.clone();
         for pattern in &expression.inputs {
             self.clear_pattern_bindings(pattern);
-            if let syn::Pat::Type(pattern) = pattern
-                && let Some(binding) =
-                    self.binding_from_type(pattern.pat.as_ref(), pattern.ty.as_ref())
-            {
-                self.bind_pattern(pattern.pat.as_ref(), binding);
+            if let syn::Pat::Type(pattern) = pattern {
+                self.bind_pattern_from_type(pattern.pat.as_ref(), pattern.ty.as_ref());
             }
         }
         self.visit_expr(expression.body.as_ref());
