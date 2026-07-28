@@ -27,6 +27,7 @@ const emptyInspection = (): SceneInspection => ({
   standbyCount: 0,
   packetCount: 0,
   semanticMotionCount: 0,
+  movementSpeedRatio: 0.3,
   renderCount: 0,
   planningRevision: null,
   zoomLevel: "overview",
@@ -70,6 +71,7 @@ const emptyInspection = (): SceneInspection => ({
       container.dataset.sceneStandbyCount = String(inspection.standbyCount);
       container.dataset.scenePacketCount = String(inspection.packetCount);
       container.dataset.sceneSemanticMotionCount = String(inspection.semanticMotionCount);
+      container.dataset.sceneMovementSpeedRatio = String(inspection.movementSpeedRatio);
       container.dataset.sceneRenderCount = String(inspection.renderCount);
       container.dataset.scenePlanningRevision = String(inspection.planningRevision ?? "");
       container.dataset.sceneZoomLevel = inspection.zoomLevel;
@@ -81,6 +83,10 @@ const emptyInspection = (): SceneInspection => ({
           slotId: actor.slotId,
           visualState: actor.visualState,
           pose: actor.pose,
+          animationKind: actor.animationKind,
+          animationFrameIndex: actor.animationFrameIndex,
+          x: actor.x,
+          y: actor.y,
         }))
       );
       container.dataset.sceneStandbySignature = JSON.stringify(
@@ -89,8 +95,12 @@ const emptyInspection = (): SceneInspection => ({
           agentId: character.agentId,
           visualState: character.visualState,
           pose: character.pose,
+          animationKind: character.animationKind,
+          animationFrameIndex: character.animationFrameIndex,
           resolvedAtlasFrameIndex: character.resolvedAtlasFrameIndex,
           poseFallback: character.poseFallback,
+          x: character.x,
+          y: character.y,
         }))
       );
     };

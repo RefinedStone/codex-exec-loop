@@ -194,6 +194,11 @@ try {
       if (!scene || scene.packetCount < 0 || scene.semanticMotionCount < 0) {
         throw new Error(`${label} scene reported invalid semantic motion: ${JSON.stringify(scene)}`);
       }
+      if (scene.movementSpeedRatio !== 0.3) {
+        throw new Error(
+          `${label} scene reported an unexpected worker movement ratio: ${JSON.stringify(scene.movementSpeedRatio)}`,
+        );
+      }
     }
     const semanticMotion = Math.max(
       firstScene.semanticMotionCount,
@@ -479,6 +484,15 @@ try {
           window.AkraAdminGame?.inspectScene?.()?.standbyCount === expectedStandbyCount,
         baselineStandbyCount + 1,
       );
+      await page.waitForFunction(() => {
+        const character = window.AkraAdminGame
+          ?.inspectScene?.()
+          ?.standbyCharacters.find(
+            (candidate) => candidate.characterId === "standby:visual-ranger-probe",
+          );
+        return character?.animationKind === "idle"
+          && Number.isInteger(character.animationFrameIndex);
+      });
       const rangerStandbyProbe = await page.evaluate(() =>
         window.AkraAdminGame
           ?.inspectScene?.()
@@ -489,11 +503,38 @@ try {
       if (
         !rangerStandbyProbe ||
         rangerStandbyProbe.pose !== "neutral" ||
+        rangerStandbyProbe.animationKind !== "idle" ||
+        !Number.isInteger(rangerStandbyProbe.animationFrameIndex) ||
         rangerStandbyProbe.resolvedAtlasFrameIndex !== null ||
         rangerStandbyProbe.poseFallback
       ) {
         throw new Error(
           `${label} Ranger standby did not keep its explicit neutral pose: ${JSON.stringify(rangerStandbyProbe)}`,
+        );
+      }
+      const idleAnimationSamples = [];
+      for (let sampleIndex = 0; sampleIndex < 4; sampleIndex += 1) {
+        idleAnimationSamples.push(
+          await page.evaluate(() =>
+            window.AkraAdminGame
+              ?.inspectScene?.()
+              ?.standbyCharacters.find(
+                (character) =>
+                  character.characterId === "standby:visual-ranger-probe",
+              ),
+          ),
+        );
+        await page.waitForTimeout(560);
+      }
+      const idleFrames = new Set(
+        idleAnimationSamples.map((character) => character?.animationFrameIndex),
+      );
+      const idleSemanticPoints = new Set(
+        idleAnimationSamples.map((character) => `${character?.x}:${character?.y}`),
+      );
+      if (idleFrames.size < 2 || idleSemanticPoints.size !== 1) {
+        throw new Error(
+          `${label} Ranger standby animation did not change frames at one semantic point: ${JSON.stringify(idleAnimationSamples)}`,
         );
       }
       await page.evaluate(() => {

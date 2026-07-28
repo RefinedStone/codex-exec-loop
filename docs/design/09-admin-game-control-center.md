@@ -283,7 +283,7 @@ precedence는 서로 다른 component가 잠시 겹쳐 보일 때의 reconciliat
 
 | State | Station/action | Motion rule | Existing asset first |
 | --- | --- | --- | --- |
-| `idle` | empty slot은 빈 desk, 실제 idle actor만 assigned seat/rest | semantic 이동과 packet 없음 | neutral idle frame |
+| `idle` | empty slot은 빈 desk, 실제 idle actor만 assigned seat/rest | semantic 이동과 packet은 없고 제자리 저속 pose/frame loop만 허용 | neutral/sit idle |
 | `starting` | entrance에서 assigned desk로 이동 | lease/starting transition당 한 번 | directional walk |
 | `working` | desk에 고정, activity kind를 detail에 표시 | 새 relevant activity transition에만 bounded action | laptop/sit |
 | `awaiting_review` | review/command desk 또는 callout | review transition당 한 번 이동/보고 | callout |
@@ -650,7 +650,7 @@ Exit:
 - hidden tab의 scene frame과 scheduled poll 0
 - device pixel ratio 상한 2
 - dashboard/event overlapping poll 0
-- unchanged idle에서 continuous path/packet redraw 0
+- unchanged idle에서 continuous path/packet redraw 0; normal-motion의 local sprite loop는 허용
 - asset 하나의 실패가 operator DOM을 막지 않음
 - first meaningful scene 목표 2초; cold/warm과 장비를 evidence에 함께 기록
 
@@ -707,9 +707,10 @@ component version mismatch는 숨기지 않고 full reconcile 또는 stale/unkno
 - normal motion의 semantic inspection과 reduced-motion pixel stability
 - real two-lane run에서 lifecycle, actor action, detail, event sequence 일치 capture
 
-현재 `two canvas frames must differ` assertion은 제거한다. 대체 계약은 다음과 같다.
+현재 전체 canvas에 대한 `two canvas frames must differ` assertion은 제거한다. 대체 계약은 다음과 같다.
 
-- idle/reduced-motion fixture: semantic scene과 pixel이 stable
+- normal-motion idle fixture: semantic 좌표와 packet은 stable이고 허용된 local idle frame만 변화
+- reduced-motion idle fixture: semantic scene과 pixel이 stable
 - active transition fixture: expected actor/effect만 변화
 - canvas blank/layout guard는 유지
 
