@@ -4329,6 +4329,49 @@ fn update_unrelated(
         "explicit returns must not expose mutable shell chrome authority"
     );
 
+    let inferred_closure_parameter = shell_chrome_writer_audit(
+        "fn escape(app: &mut NativeTuiApp) {\n\
+             let write = |app| {\n\
+                 app.shell.chrome.session_state = SessionState::Idle;\n\
+             };\n\
+             write(app);\n\
+         }",
+    )
+    .expect("inferred closure parameter fixture should parse");
+    assert_eq!(
+        inferred_closure_parameter.field_writes.len(),
+        1,
+        "untyped closure parameters must conservatively retain shell chrome authority paths"
+    );
+
+    let inferred_placeholder_type = shell_chrome_writer_audit(
+        "fn escape(app: &mut NativeTuiApp) {\n\
+             let write = |app: _| {\n\
+                 app.shell.chrome.session_state = SessionState::Idle;\n\
+             };\n\
+             write(app);\n\
+         }",
+    )
+    .expect("inferred placeholder closure type fixture should parse");
+    assert_eq!(
+        inferred_placeholder_type.field_writes.len(),
+        1,
+        "unresolved closure parameter types must use the same conservative authority path"
+    );
+
+    let unrelated_inferred_closure = shell_chrome_writer_audit(
+        "fn update() {\n\
+             let increment = |value| value + 1;\n\
+             let _ = increment(1);\n\
+         }",
+    )
+    .expect("unrelated inferred closure fixture should parse");
+    assert!(
+        unrelated_inferred_closure.field_writes.is_empty()
+            && unrelated_inferred_closure.whole_state_writes.is_empty(),
+        "untyped closures without shell authority paths must remain harmless"
+    );
+
     let mutable = shell_chrome_writer_audit(
         "fn escape(app: &mut NativeTuiApp) {\n\
              let _ = &mut app.shell.chrome.approval_return_overlay;\n\
@@ -12451,6 +12494,7 @@ const SHELL_CHROME_READ_ONLY_METHODS: &[&str] = &["clone", "prompt_input_has_foc
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ShellAuthorityKind {
+    Unknown,
     App,
     Shell,
     Chrome,
@@ -12655,6 +12699,8 @@ fn child_shell_authority(
         return None;
     };
     match (parent, member.to_string().as_str()) {
+        (ShellAuthorityKind::Unknown, "shell") => Some(ShellAuthorityKind::Shell),
+        (ShellAuthorityKind::Unknown, "chrome") => Some(ShellAuthorityKind::Chrome),
         (ShellAuthorityKind::App, "shell") => Some(ShellAuthorityKind::Shell),
         (ShellAuthorityKind::Shell, "chrome") => Some(ShellAuthorityKind::Chrome),
         _ => None,
@@ -12744,6 +12790,21 @@ impl ShellChromeWriterVisitor {
                 }
             }
             syn::Pat::Paren(pattern) => self.bind_pattern(pattern.pat.as_ref(), binding),
+            syn::Pat::Tuple(pattern) => {
+                for element in &pattern.elems {
+                    self.bind_pattern(element, binding);
+                }
+            }
+            syn::Pat::TupleStruct(pattern) => {
+                for element in &pattern.elems {
+                    self.bind_pattern(element, binding);
+                }
+            }
+            syn::Pat::Slice(pattern) => {
+                for element in &pattern.elems {
+                    self.bind_pattern(element, binding);
+                }
+            }
             syn::Pat::Reference(pattern) => self.bind_pattern(
                 pattern.pat.as_ref(),
                 ShellAuthorityBinding {
@@ -12981,7 +13042,11 @@ impl ShellChromeWriterVisitor {
             return None;
         }
         let authority = self.resolve_authority(field.base.as_ref())?;
-        (authority.kind == ShellAuthorityKind::Chrome && authority.mutable).then_some(field_name)
+        (matches!(
+            authority.kind,
+            ShellAuthorityKind::Unknown | ShellAuthorityKind::Chrome
+        ) && authority.mutable)
+            .then_some(field_name)
     }
 
     fn inspect_write_target(&mut self, expression: &syn::Expr, kind: &str) {
@@ -13009,6 +13074,7 @@ impl ShellChromeWriterVisitor {
     fn inspect_return_escape(&mut self, expression: &syn::Expr, kind: &str) {
         if let Some(authority) = self.resolve_authority(expression)
             && authority.mutable
+            && authority.kind != ShellAuthorityKind::Unknown
         {
             self.audit.whole_state_writes.push(self.finding(
                 expression.span().start().line,
@@ -13300,7 +13366,23 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
         for pattern in &expression.inputs {
             self.clear_pattern_bindings(pattern);
             if let syn::Pat::Type(pattern) = pattern {
-                self.bind_pattern_from_type(pattern.pat.as_ref(), pattern.ty.as_ref());
+                if !self.bind_pattern_from_type(pattern.pat.as_ref(), pattern.ty.as_ref()) {
+                    self.bind_pattern(
+                        pattern.pat.as_ref(),
+                        ShellAuthorityBinding {
+                            kind: ShellAuthorityKind::Unknown,
+                            mutable: true,
+                        },
+                    );
+                }
+            } else {
+                self.bind_pattern(
+                    pattern,
+                    ShellAuthorityBinding {
+                        kind: ShellAuthorityKind::Unknown,
+                        mutable: true,
+                    },
+                );
             }
         }
         if let syn::Expr::Block(block) = expression.body.as_ref() {
