@@ -4355,6 +4355,48 @@ fn update_unrelated(
         1,
         "the production-wide alias registry must retain authority across Rust files"
     );
+
+    let relative_authority_alias_file =
+        syn::parse_file("pub type AppRef<'a> = &'a mut super::NativeTuiApp;")
+            .expect("relative cross-file authority alias definition should parse");
+    let relative_alias_module = [
+        "crate".to_string(),
+        "adapter".to_string(),
+        "inbound".to_string(),
+        "tui".to_string(),
+        "app".to_string(),
+        "aliases".to_string(),
+    ];
+    let relative_type_aliases = qualified_type_aliases_declared_in_file(
+        &relative_authority_alias_file,
+        &relative_alias_module,
+    );
+    let relative_writer_module = [
+        "crate".to_string(),
+        "adapter".to_string(),
+        "inbound".to_string(),
+        "tui".to_string(),
+        "app".to_string(),
+        "feature".to_string(),
+        "writer".to_string(),
+    ];
+    let relative_cross_file_alias = shell_chrome_writer_audit_with_type_registry(
+        "use crate::adapter::inbound::tui::app::aliases::AppRef;\n\
+         fn escape(app: AppRef<'_>) {\n\
+             app.shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+        false,
+        &known_struct_fields,
+        &relative_type_aliases,
+        &relative_writer_module,
+    )
+    .expect("relative cross-file authority alias fixture should parse");
+    assert_eq!(
+        relative_cross_file_alias.field_writes.len(),
+        1,
+        "imported aliases must resolve relative RHS paths in their declaration module"
+    );
+
     let cross_file_unrelated_alias = shell_chrome_writer_audit_with_type_registry(
         "use crate::unrelated_alias::AppRef;\n\
          fn update(app: AppRef<'_>) {\n\
@@ -14549,10 +14591,11 @@ impl ShellChromeWriterVisitor {
             .iter()
             .filter_map(|(local_name, target)| {
                 let key = self.normalized_struct_path(target).join("::");
-                self.qualified_type_aliases
-                    .get(&key)
-                    .cloned()
-                    .map(|ty| (local_name.clone(), ty))
+                if !self.qualified_type_aliases.contains_key(&key) {
+                    return None;
+                }
+                let ty = syn::parse_str::<syn::Type>(&key).ok()?;
+                Some((local_name.clone(), ty))
             })
             .collect()
     }
