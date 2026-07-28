@@ -6,17 +6,18 @@ use crate::core::app::{
 use super::input_mailbox::CoreInputReceiver;
 
 /*
- * CoreRuntime is the headless command loop around CoreController. Inbound
- * adapters can submit commands, while background workers send CoreInput back
- * through the queue so all app state changes still pass through the controller.
+ * CoreRuntime is the crate-private headless command loop around CoreController.
+ * Composition-owned facades submit commands, while background workers send
+ * CoreInput back through the queue so every state change still passes through
+ * the controller.
  */
-pub struct CoreRuntime<E> {
+pub(crate) struct CoreRuntime<E> {
     controller: CoreController,
     effect_executor: E,
     input_receiver: CoreInputReceiver,
 }
 
-pub trait CoreEffectExecutor {
+pub(crate) trait CoreEffectExecutor {
     // Bounded local effects may return an immediate completion when their mutation must remain
     // serialized with the command dispatch. Long-running provider work returns None and reports
     // completion through CoreInputSender instead.
@@ -27,7 +28,7 @@ impl<E> CoreRuntime<E>
 where
     E: CoreEffectExecutor,
 {
-    pub fn new(effect_executor: E, input_receiver: CoreInputReceiver) -> Self {
+    pub(crate) fn new(effect_executor: E, input_receiver: CoreInputReceiver) -> Self {
         Self::from_parts(CoreController::new(), effect_executor, input_receiver)
     }
 
@@ -43,19 +44,21 @@ where
         }
     }
 
-    pub fn snapshot(&self) -> AppSnapshot {
+    pub(crate) fn snapshot(&self) -> AppSnapshot {
         self.controller.snapshot()
     }
 
-    pub fn revisioned_planning_parallel_projection(&self) -> RevisionedPlanningParallelProjection {
+    pub(crate) fn revisioned_planning_parallel_projection(
+        &self,
+    ) -> RevisionedPlanningParallelProjection {
         self.controller.revisioned_planning_parallel_projection()
     }
 
-    pub fn parallel_mode_projection(&self) -> ParallelModeProjection {
+    pub(crate) fn parallel_mode_projection(&self) -> ParallelModeProjection {
         self.controller.parallel_mode_projection()
     }
 
-    pub fn dispatch_command(&mut self, command: AppCommand) -> CoreDispatchOutcome {
+    pub(crate) fn dispatch_command(&mut self, command: AppCommand) -> CoreDispatchOutcome {
         self.dispatch_input(CoreInput::Command(command))
     }
 
@@ -73,12 +76,12 @@ where
         outcomes
     }
 
-    pub fn poll_pending_input(&mut self) -> Option<CoreDispatchOutcome> {
+    pub(crate) fn poll_pending_input(&mut self) -> Option<CoreDispatchOutcome> {
         let input = self.input_receiver.try_recv().ok()?;
         Some(self.dispatch_input(input))
     }
 
-    pub fn dispatch_input(&mut self, input: CoreInput) -> CoreDispatchOutcome {
+    pub(crate) fn dispatch_input(&mut self, input: CoreInput) -> CoreDispatchOutcome {
         let mut outcome = self.controller.handle_input(input);
         let effects = outcome.effects.clone();
         for effect in effects {

@@ -1,10 +1,10 @@
 /*
- * Runtime owns side-effect execution for the headless core boundary. Concrete
- * inbound adapters should receive CoreInput/AppEvent/Snapshot contracts, while
- * runtime workers convert application service completion into CoreInput.
+ * Runtime drives the headless core boundary behind a composition-owned facade.
+ * Inbound adapters receive CoreInput/AppEvent/Snapshot contracts without raw
+ * driver, executor, or mailbox construction capability.
  */
-pub mod driver;
+mod driver;
 mod input_mailbox;
 
-pub use driver::{CoreEffectExecutor, CoreRuntime};
-pub use input_mailbox::{CoreInputReceiver, CoreInputSender, core_input_channel};
+pub(crate) use driver::{CoreEffectExecutor, CoreRuntime};
+pub(crate) use input_mailbox::{CoreInputSender, core_input_channel};

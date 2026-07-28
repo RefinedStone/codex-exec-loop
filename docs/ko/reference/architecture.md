@@ -15,11 +15,12 @@ adapter/outbound -> application ports + domain
 composition -> core + application + adapter/outbound
 ```
 
-TUI 행은 현재 남아 있는 과도기 projection 의존성을 숨기지 않고 표현합니다. Production bootstrap은
-raw application service를 받지 않습니다. Composition이 service를 소비해 하나의 opaque native
-application object를 만들며 adapter는 `NativeClientRuntime`과 immutable runtime-control truth만
-받습니다. Parallel control-plane handle, event sink, completion mailbox는 composition 내부에만
-남습니다.
+TUI 행은 안쪽을 향하는 data-only application/domain contract와 projection 의존성을 명시적으로
+허용합니다. 이 import는 mapping/rendering에 쓰는 immutable value이며 runtime capability가 아니므로
+의존성 방향을 뒤집지 않습니다. Production bootstrap은 raw application service를 받지 않습니다.
+Composition이 service를 소비해 하나의 opaque native application object를 만들며 adapter는
+`NativeClientRuntime`과 immutable runtime-control truth만 받습니다. Parallel control-plane handle,
+event sink, completion mailbox는 composition 내부에만 남습니다.
 
 Client command loop의 **런타임 실행 흐름**은 의도적으로 왕복합니다.
 
@@ -72,6 +73,14 @@ owned snapshot/projection만 읽습니다. TUI는 parallel completion 진입점�
 runtime/handle/service를 직접 호출할 수 없습니다. Core와 parallel worker의
 success/failure/panic completion은 private mailbox를 거쳐 `poll_pending_client_event`로 해당
 authority reducer에 재진입합니다.
+
+`CoreRuntime`, effect executor, input mailbox는 library SDK가 아닌 crate-private 구현 세부사항입니다.
+Composition만 이들을 조립할 수 있습니다. Production `NativeClientRuntime` callable surface는 event
+dispatch, completion polling, owned read-only snapshot/projection으로 닫혀 있습니다. Raw runtime,
+runner, sender, service, mutable state reference, borrowed projection은 노출하지 않습니다. Rust-aware
+architecture test는 visibility와 정확한 facade method 목록을 함께 고정하며, raw type을 다시
+공개하거나 mutable facade capability를 추가한 mutation fixture가 `cargo test`에서 실패함을
+검증합니다.
 
 모든 `CoreEffect` variant는 exhaustive dispatch arm 하나와 구조적으로 대응합니다. Typed local
 invalidation 두 개를 제외한 arm은 audited completion worker 하나, 즉시 `EffectCompleted`, 또는

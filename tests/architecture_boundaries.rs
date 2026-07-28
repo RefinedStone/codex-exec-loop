@@ -515,6 +515,95 @@ fn client_runtime_state_mutation_stays_behind_the_runtime_driver() {
 }
 
 #[test]
+fn raw_core_runtime_api_is_crate_private_and_native_facade_is_bounded() {
+    let core_module =
+        fs::read_to_string("src/core/mod.rs").expect("core module source should load");
+    let runtime_module =
+        fs::read_to_string("src/core/runtime/mod.rs").expect("runtime module source should load");
+    let driver = fs::read_to_string("src/core/runtime/driver.rs")
+        .expect("runtime driver source should load");
+    let mailbox = fs::read_to_string("src/core/runtime/input_mailbox.rs")
+        .expect("runtime mailbox source should load");
+    let native_facade = fs::read_to_string("src/composition/native_client_runtime.rs")
+        .expect("native client facade source should load");
+
+    verify_client_runtime_api_boundary(
+        &core_module,
+        &runtime_module,
+        &driver,
+        &mailbox,
+        &native_facade,
+    )
+    .unwrap_or_else(|error| panic!("client runtime API boundary must remain sealed: {error}"));
+
+    let public_runtime_module =
+        core_module.replacen("pub(crate) mod runtime;", "pub mod runtime;", 1);
+    let error = verify_client_runtime_api_boundary(
+        &public_runtime_module,
+        &runtime_module,
+        &driver,
+        &mailbox,
+        &native_facade,
+    )
+    .expect_err("making the raw runtime module public must fail");
+    assert!(
+        error.contains("core::runtime module"),
+        "unexpected public runtime module error: {error}"
+    );
+
+    let public_runtime_type =
+        driver.replacen("pub(crate) struct CoreRuntime", "pub struct CoreRuntime", 1);
+    let error = verify_client_runtime_api_boundary(
+        &core_module,
+        &runtime_module,
+        &public_runtime_type,
+        &mailbox,
+        &native_facade,
+    )
+    .expect_err("making CoreRuntime public must fail");
+    assert!(
+        error.contains("CoreRuntime visibility"),
+        "unexpected public CoreRuntime error: {error}"
+    );
+
+    let public_mailbox = mailbox.replacen(
+        "pub(crate) struct CoreInputSender",
+        "pub struct CoreInputSender",
+        1,
+    );
+    let error = verify_client_runtime_api_boundary(
+        &core_module,
+        &runtime_module,
+        &driver,
+        &public_mailbox,
+        &native_facade,
+    )
+    .expect_err("making the completion sender public must fail");
+    assert!(
+        error.contains("CoreInputSender visibility"),
+        "unexpected public mailbox error: {error}"
+    );
+
+    let expanded_facade = native_facade.replacen(
+        "impl NativeClientRuntime {",
+        "impl NativeClientRuntime {\n    pub(crate) fn runtime_mut(&mut self) {}",
+        1,
+    );
+    let error = verify_client_runtime_api_boundary(
+        &core_module,
+        &runtime_module,
+        &driver,
+        &mailbox,
+        &expanded_facade,
+    )
+    .expect_err("adding a second mutable facade capability must fail");
+    assert!(
+        error.contains("NativeClientRuntime API"),
+        "unexpected expanded facade error: {error}"
+    );
+}
+
+#[test]
 fn native_tui_uses_one_composition_owned_client_runtime_ingress() {
     /*
      * The native adapter may name CoreInput and immutable projections, but it
@@ -1431,6 +1520,7 @@ fn client_runtime_compile_dependencies_and_runtime_flow_are_documented_separatel
         "**runtime flow**",
         "framework-free **Client Runtime**",
         "terminal transaction/adapter",
+        "`CoreRuntime`, its effect executor, and its input mailbox are crate-private",
     ] {
         assert!(
             english.contains(required),
@@ -1444,6 +1534,7 @@ fn client_runtime_compile_dependencies_and_runtime_flow_are_documented_separatel
         "**런타임 실행 흐름**",
         "framework 독립 **Client Runtime**",
         "terminal transaction/adapter",
+        "`CoreRuntime`, effect executor, input mailbox는 library SDK가 아닌 crate-private",
     ] {
         assert!(
             korean.contains(required),
@@ -9441,6 +9532,266 @@ fn push_use_reference(segments: &[String], line: usize, references: &mut Vec<Cra
             path: segments.join("::"),
         });
     }
+}
+
+fn verify_client_runtime_api_boundary(
+    core_module: &str,
+    runtime_module: &str,
+    driver: &str,
+    mailbox: &str,
+    native_facade: &str,
+) -> Result<(), String> {
+    let core_syntax =
+        syn::parse_file(core_module).map_err(|error| format!("core module must parse: {error}"))?;
+    let runtime_item = core_syntax
+        .items
+        .iter()
+        .find_map(|item| match item {
+            syn::Item::Mod(item) if item.ident == "runtime" => Some(item),
+            _ => None,
+        })
+        .ok_or_else(|| "core module must declare runtime".to_string())?;
+    if !visibility_is_restricted_to(&runtime_item.vis, &["crate"]) {
+        return Err("core::runtime module must be restricted to pub(crate)".to_string());
+    }
+
+    let runtime_syntax = syn::parse_file(runtime_module)
+        .map_err(|error| format!("runtime module must parse: {error}"))?;
+    let driver_module = runtime_syntax
+        .items
+        .iter()
+        .find_map(|item| match item {
+            syn::Item::Mod(item) if item.ident == "driver" => Some(item),
+            _ => None,
+        })
+        .ok_or_else(|| "runtime module must declare driver".to_string())?;
+    if !matches!(driver_module.vis, syn::Visibility::Inherited) {
+        return Err("raw runtime driver module must remain private".to_string());
+    }
+    let runtime_reexports = runtime_syntax
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Use(item) => Some(item),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if runtime_reexports.len() != 2
+        || runtime_reexports
+            .iter()
+            .any(|item| !visibility_is_restricted_to(&item.vis, &["crate"]))
+    {
+        return Err(
+            "raw runtime types and mailbox must have exactly two pub(crate) re-exports".to_string(),
+        );
+    }
+
+    let driver_syntax =
+        syn::parse_file(driver).map_err(|error| format!("runtime driver must parse: {error}"))?;
+    let runtime_struct = driver_syntax
+        .items
+        .iter()
+        .find_map(|item| match item {
+            syn::Item::Struct(item) if item.ident == "CoreRuntime" => Some(item),
+            _ => None,
+        })
+        .ok_or_else(|| "runtime driver must define CoreRuntime".to_string())?;
+    if !visibility_is_restricted_to(&runtime_struct.vis, &["crate"]) {
+        return Err("CoreRuntime visibility must remain pub(crate)".to_string());
+    }
+    let executor_trait = driver_syntax
+        .items
+        .iter()
+        .find_map(|item| match item {
+            syn::Item::Trait(item) if item.ident == "CoreEffectExecutor" => Some(item),
+            _ => None,
+        })
+        .ok_or_else(|| "runtime driver must define CoreEffectExecutor".to_string())?;
+    if !visibility_is_restricted_to(&executor_trait.vis, &["crate"]) {
+        return Err("CoreEffectExecutor visibility must remain pub(crate)".to_string());
+    }
+
+    let expected_runtime_api = [
+        "dispatch_command",
+        "dispatch_input",
+        "new",
+        "parallel_mode_projection",
+        "poll_pending_input",
+        "revisioned_planning_parallel_projection",
+        "snapshot",
+    ];
+    let mut actual_runtime_api = Vec::new();
+    for item in &driver_syntax.items {
+        if item_is_test_only(item) {
+            continue;
+        }
+        let syn::Item::Impl(item_impl) = item else {
+            continue;
+        };
+        let implements_core_runtime = matches!(
+            item_impl.self_ty.as_ref(),
+            syn::Type::Path(type_path)
+                if type_path.qself.is_none()
+                    && type_path.path.segments.last().is_some_and(|segment| {
+                        segment.ident == "CoreRuntime"
+                    })
+        );
+        if item_impl.trait_.is_some() || !implements_core_runtime {
+            continue;
+        }
+        for impl_item in &item_impl.items {
+            let syn::ImplItem::Fn(method) = impl_item else {
+                continue;
+            };
+            if attributes_are_test_only(&method.attrs) {
+                continue;
+            }
+            if matches!(method.vis, syn::Visibility::Public(_)) {
+                return Err(format!(
+                    "CoreRuntime::{} must not be publicly reachable",
+                    method.sig.ident
+                ));
+            }
+            if visibility_is_restricted_to(&method.vis, &["crate"]) {
+                actual_runtime_api.push(method.sig.ident.to_string());
+            }
+        }
+    }
+    actual_runtime_api.sort();
+    if actual_runtime_api != expected_runtime_api {
+        return Err(format!(
+            "CoreRuntime crate API must stay bounded; expected {expected_runtime_api:?}, found {actual_runtime_api:?}"
+        ));
+    }
+
+    let mailbox_syntax =
+        syn::parse_file(mailbox).map_err(|error| format!("runtime mailbox must parse: {error}"))?;
+    for type_name in ["CoreInputSender", "CoreInputReceiver"] {
+        let item = mailbox_syntax
+            .items
+            .iter()
+            .find_map(|item| match item {
+                syn::Item::Struct(item) if item.ident == type_name => Some(item),
+                _ => None,
+            })
+            .ok_or_else(|| format!("runtime mailbox must define {type_name}"))?;
+        if !visibility_is_restricted_to(&item.vis, &["crate"]) {
+            return Err(format!("{type_name} visibility must remain pub(crate)"));
+        }
+    }
+    let channel = top_level_function(&mailbox_syntax, "core_input_channel");
+    if !visibility_is_restricted_to(&channel.vis, &["crate"]) {
+        return Err("core_input_channel visibility must remain pub(crate)".to_string());
+    }
+    let sender_methods = inherent_impl_methods(&mailbox_syntax, "CoreInputSender", "send");
+    if sender_methods.len() != 1 || !visibility_is_restricted_to(&sender_methods[0].vis, &["crate"])
+    {
+        return Err("CoreInputSender::send visibility must remain pub(crate)".to_string());
+    }
+    if mailbox_syntax.items.iter().any(|item| {
+        if item_is_test_only(item) {
+            return false;
+        }
+        let visibility = match item {
+            syn::Item::Const(item) => Some(&item.vis),
+            syn::Item::Fn(item) => Some(&item.vis),
+            syn::Item::Struct(item) => Some(&item.vis),
+            _ => None,
+        };
+        visibility.is_some_and(|visibility| matches!(visibility, syn::Visibility::Public(_)))
+    }) {
+        return Err("runtime mailbox must expose no public top-level item".to_string());
+    }
+
+    let facade_syntax = syn::parse_file(native_facade)
+        .map_err(|error| format!("native client facade must parse: {error}"))?;
+    let expected_facade_api = [
+        "current_parallel_epoch_id_for_workspace",
+        "dispatch_client_event",
+        "parallel_control_plane_projection",
+        "parallel_epoch_snapshot",
+        "parallel_mode_enabled",
+        "parallel_mode_projection",
+        "poll_pending_client_event",
+        "revisioned_planning_parallel_projection",
+        "snapshot",
+    ];
+    let read_only_facade_api = [
+        "current_parallel_epoch_id_for_workspace",
+        "parallel_control_plane_projection",
+        "parallel_epoch_snapshot",
+        "parallel_mode_enabled",
+        "parallel_mode_projection",
+        "revisioned_planning_parallel_projection",
+        "snapshot",
+    ];
+    let mut actual_facade_api = Vec::new();
+    for item in &facade_syntax.items {
+        if item_is_test_only(item) {
+            continue;
+        }
+        let syn::Item::Impl(item_impl) = item else {
+            continue;
+        };
+        if item_impl.trait_.is_some()
+            || !type_is_simple_path(item_impl.self_ty.as_ref(), &["NativeClientRuntime"])
+        {
+            continue;
+        }
+        for impl_item in &item_impl.items {
+            let syn::ImplItem::Fn(method) = impl_item else {
+                continue;
+            };
+            if attributes_are_test_only(&method.attrs) {
+                continue;
+            }
+            if matches!(method.vis, syn::Visibility::Public(_)) {
+                return Err(format!(
+                    "NativeClientRuntime::{} must remain crate-private",
+                    method.sig.ident
+                ));
+            }
+            if !visibility_is_restricted_to(&method.vis, &["crate"]) {
+                continue;
+            }
+            let method_name = method.sig.ident.to_string();
+            if read_only_facade_api.contains(&method_name.as_str()) {
+                let receiver = method.sig.receiver().ok_or_else(|| {
+                    format!("NativeClientRuntime::{method_name} must receive &self")
+                })?;
+                if receiver.reference.is_none() || receiver.mutability.is_some() {
+                    return Err(format!(
+                        "NativeClientRuntime::{method_name} must be read-only"
+                    ));
+                }
+                if matches!(
+                    &method.sig.output,
+                    syn::ReturnType::Type(_, ty) if matches!(ty.as_ref(), syn::Type::Reference(_))
+                ) {
+                    return Err(format!(
+                        "NativeClientRuntime::{method_name} must return an owned projection"
+                    ));
+                }
+            }
+            actual_facade_api.push(method_name);
+        }
+    }
+    actual_facade_api.sort();
+    if actual_facade_api != expected_facade_api {
+        return Err(format!(
+            "NativeClientRuntime API must be dispatch/poll or owned read-only projection only; expected {expected_facade_api:?}, found {actual_facade_api:?}"
+        ));
+    }
+
+    Ok(())
+}
+
+fn visibility_is_restricted_to(visibility: &syn::Visibility, expected: &[&str]) -> bool {
+    matches!(
+        visibility,
+        syn::Visibility::Restricted(restricted)
+            if path_is_simple(&restricted.path, expected)
+    )
 }
 
 fn item_is_test_only(item: &syn::Item) -> bool {
