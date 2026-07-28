@@ -79,6 +79,7 @@ export interface SceneInspectionActor {
   pose: StaticPose;
   animationKind: AgentAnimationKind;
   animationFrameIndex: number | null;
+  animationBlend: number;
   gaitOffsetX: number;
   gaitOffsetY: number;
   resolvedAtlasFrameIndex: number | null;
@@ -100,6 +101,7 @@ export interface SceneInspectionStandby {
   pose: StaticPose;
   animationKind: AgentAnimationKind;
   animationFrameIndex: number | null;
+  animationBlend: number;
   gaitOffsetX: number;
   gaitOffsetY: number;
   locationIndex: number;
