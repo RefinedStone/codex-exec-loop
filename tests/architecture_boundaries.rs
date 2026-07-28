@@ -4634,8 +4634,8 @@ fn update_unrelated(
 
     let inferred_closure_parameter = shell_chrome_writer_audit(
         "fn escape(app: &mut NativeTuiApp) {\n\
-             let write = |app| {\n\
-                 app.shell.chrome.session_state = SessionState::Idle;\n\
+             let write = |value| {\n\
+                 value.shell.chrome.session_state = SessionState::Idle;\n\
              };\n\
              write(app);\n\
          }",
@@ -4673,6 +4673,23 @@ fn update_unrelated(
         unrelated_inferred_closure.field_writes.is_empty()
             && unrelated_inferred_closure.whole_state_writes.is_empty(),
         "untyped closures without shell authority paths must remain harmless"
+    );
+
+    let unrelated_shell_shaped_inferred_closure = shell_chrome_writer_audit(
+        "fn update(mut other: OtherState) {\n\
+             let write = |value| value.shell.chrome.session_state = 1;\n\
+             write(&mut other);\n\
+         }",
+    )
+    .expect("unrelated shell-shaped inferred closure fixture should parse");
+    assert!(
+        unrelated_shell_shaped_inferred_closure
+            .field_writes
+            .is_empty()
+            && unrelated_shell_shaped_inferred_closure
+                .whole_state_writes
+                .is_empty(),
+        "untyped closure parameters must not gain NativeTuiApp authority from field names alone"
     );
 
     let for_loop_alias = shell_chrome_writer_audit(
@@ -4742,6 +4759,59 @@ fn update_unrelated(
         method_argument.whole_state_writes.len(),
         1,
         "method arguments must not expose mutable Chrome authority"
+    );
+
+    let call_returned_app = shell_chrome_writer_audit(
+        "fn escape(app: &mut NativeTuiApp) {\n\
+             std::convert::identity(app).shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+    )
+    .expect("call-returned mutable app fixture should parse");
+    assert_eq!(
+        call_returned_app.field_writes.len(),
+        1,
+        "transparent calls must retain mutable NativeTuiApp authority"
+    );
+
+    let imported_call_returned_app = shell_chrome_writer_audit(
+        "use std::convert::identity as retain;\n\
+         fn escape(app: &mut NativeTuiApp) {\n\
+             retain(app).shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+    )
+    .expect("imported call-returned mutable app fixture should parse");
+    assert_eq!(
+        imported_call_returned_app.field_writes.len(),
+        1,
+        "imported transparent calls must retain mutable NativeTuiApp authority"
+    );
+
+    let locally_returned_app = shell_chrome_writer_audit(
+        "fn retain(app: &mut NativeTuiApp) -> &mut NativeTuiApp { app }\n\
+         fn escape(app: &mut NativeTuiApp) {\n\
+             retain(app).shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+    )
+    .expect("locally returned mutable app fixture should parse");
+    assert_eq!(
+        locally_returned_app.field_writes.len(),
+        1,
+        "declared mutable NativeTuiApp returns must retain authority at their call sites"
+    );
+
+    let unrelated_call_return = shell_chrome_writer_audit(
+        "struct OtherChrome { session_state: usize }\n\
+         struct OtherShell { chrome: OtherChrome }\n\
+         struct OtherState { shell: OtherShell }\n\
+         fn project(_: &mut NativeTuiApp) -> OtherState { todo!() }\n\
+         fn update(app: &mut NativeTuiApp) {\n\
+             project(app).shell.chrome.session_state = 1;\n\
+         }",
+    )
+    .expect("unrelated call return fixture should parse");
+    assert!(
+        unrelated_call_return.field_writes.is_empty(),
+        "a call argument alone must not retype an unrelated return as NativeTuiApp authority"
     );
 
     let read_only_argument = shell_chrome_writer_audit(
@@ -13164,6 +13234,38 @@ fn type_aliases_declared_in_statements(statements: &[syn::Stmt]) -> HashMap<Stri
     aliases
 }
 
+type ShellFunctionReturns = HashMap<String, syn::Type>;
+
+fn collect_item_function_return(item: &syn::Item, returns: &mut ShellFunctionReturns) {
+    let syn::Item::Fn(function) = item else {
+        return;
+    };
+    if attributes_are_test_only(&function.attrs) {
+        return;
+    }
+    if let syn::ReturnType::Type(_, ty) = &function.sig.output {
+        returns.insert(function.sig.ident.to_string(), ty.as_ref().clone());
+    }
+}
+
+fn function_returns_declared_in_items(items: &[syn::Item]) -> ShellFunctionReturns {
+    let mut returns = HashMap::new();
+    for item in items {
+        collect_item_function_return(item, &mut returns);
+    }
+    returns
+}
+
+fn function_returns_declared_in_statements(statements: &[syn::Stmt]) -> ShellFunctionReturns {
+    let mut returns = HashMap::new();
+    for statement in statements {
+        if let syn::Stmt::Item(item) = statement {
+            collect_item_function_return(item, &mut returns);
+        }
+    }
+    returns
+}
+
 type ShellStructFields = HashMap<String, HashMap<String, syn::Type>>;
 
 fn shell_member_key(member: &syn::Member) -> String {
@@ -13368,7 +13470,6 @@ fn child_shell_authority(
         return None;
     };
     match (parent, member.to_string().as_str()) {
-        (ShellAuthorityKind::Unknown, "shell") => Some(ShellAuthorityKind::Shell),
         (ShellAuthorityKind::App, "shell") => Some(ShellAuthorityKind::Shell),
         (ShellAuthorityKind::Shell, "chrome") => Some(ShellAuthorityKind::Chrome),
         _ => None,
@@ -13502,6 +13603,8 @@ struct ShellChromeWriterVisitor {
     authority_bindings: HashMap<String, ShellAuthorityBinding>,
     type_bindings: HashMap<String, ShellTypeBinding>,
     type_aliases: HashMap<String, syn::Type>,
+    function_returns: ShellFunctionReturns,
+    closure_bindings: HashMap<String, syn::ExprClosure>,
     struct_fields: ShellStructFields,
     struct_imports: ShellStructImports,
     module_path: Vec<String>,
@@ -13874,8 +13977,61 @@ impl ShellChromeWriterVisitor {
                 };
                 Some(ShellTypeBinding { ty, ..binding })
             }
+            syn::Expr::Call(call) => {
+                if let Some(argument) = self.transparent_call_argument(call) {
+                    return self.resolve_type_binding(argument);
+                }
+                let syn::Expr::Path(path) = call.func.as_ref() else {
+                    return None;
+                };
+                if path.qself.is_some()
+                    || path.path.leading_colon.is_some()
+                    || path.path.segments.len() != 1
+                {
+                    return None;
+                }
+                let ty = self
+                    .function_returns
+                    .get(&path.path.segments.first()?.ident.to_string())?
+                    .clone();
+                Some(ShellTypeBinding {
+                    mutable: self.type_grants_mutable_access(&ty),
+                    ty,
+                })
+            }
             _ => None,
         }
+    }
+
+    fn transparent_call_argument<'a>(&self, call: &'a syn::ExprCall) -> Option<&'a syn::Expr> {
+        if call.args.len() != 1 {
+            return None;
+        }
+        let syn::Expr::Path(path) = call.func.as_ref() else {
+            return None;
+        };
+        if path.qself.is_some() {
+            return None;
+        }
+        let raw_path = path
+            .path
+            .segments
+            .iter()
+            .map(|segment| segment.ident.to_string())
+            .collect::<Vec<_>>();
+        let imported_path = (raw_path.len() == 1)
+            .then(|| self.struct_imports.get(&raw_path[0]).cloned())
+            .flatten();
+        let resolved_path = imported_path.as_ref().unwrap_or(&raw_path);
+        matches!(
+            resolved_path.as_slice(),
+            [root, convert, identity]
+                if matches!(root.as_str(), "std" | "core")
+                    && convert == "convert"
+                    && identity == "identity"
+        )
+        .then(|| call.args.first())
+        .flatten()
     }
 
     fn bind_type_pattern_from_expression(&mut self, pattern: &syn::Pat, expression: &syn::Expr) {
@@ -13931,6 +14087,7 @@ impl ShellChromeWriterVisitor {
         for name in pattern_binding_names(pattern) {
             self.authority_bindings.remove(&name);
             self.type_bindings.remove(&name);
+            self.closure_bindings.remove(&name);
         }
     }
 
@@ -14294,6 +14451,23 @@ impl ShellChromeWriterVisitor {
             syn::Expr::Unary(unary) if matches!(unary.op, syn::UnOp::Deref(_)) => {
                 self.resolve_authority(unary.expr.as_ref())
             }
+            syn::Expr::Call(call) => {
+                if let Some(argument) = self.transparent_call_argument(call) {
+                    return self.resolve_authority(argument);
+                }
+                let binding = self.resolve_type_binding(expression)?;
+                let mut resolving_aliases = HashSet::new();
+                let authority = shell_authority_binding_from_type(
+                    &binding.ty,
+                    self.impl_authority,
+                    &self.type_aliases,
+                    &mut resolving_aliases,
+                )?;
+                Some(ShellAuthorityBinding {
+                    mutable: binding.mutable || authority.mutable,
+                    ..authority
+                })
+            }
             _ => None,
         }
     }
@@ -14419,10 +14593,14 @@ impl ShellChromeWriterVisitor {
         let previous_bindings = self.authority_bindings.clone();
         let previous_type_bindings = self.type_bindings.clone();
         let previous_aliases = self.type_aliases.clone();
+        let previous_returns = self.function_returns.clone();
+        let previous_closures = self.closure_bindings.clone();
         let previous_structs = self.struct_fields.clone();
         let previous_imports = self.struct_imports.clone();
         self.type_aliases
             .extend(type_aliases_declared_in_statements(&block.stmts));
+        self.function_returns
+            .extend(function_returns_declared_in_statements(&block.stmts));
         self.struct_fields
             .extend(struct_fields_declared_in_statements(&block.stmts));
         self.struct_imports
@@ -14436,6 +14614,8 @@ impl ShellChromeWriterVisitor {
         self.authority_bindings = previous_bindings;
         self.type_bindings = previous_type_bindings;
         self.type_aliases = previous_aliases;
+        self.function_returns = previous_returns;
+        self.closure_bindings = previous_closures;
         self.struct_fields = previous_structs;
         self.struct_imports = previous_imports;
     }
@@ -14489,15 +14669,65 @@ impl ShellChromeWriterVisitor {
             ));
         }
     }
+
+    fn visit_closure_with_arguments(
+        &mut self,
+        expression: &syn::ExprClosure,
+        arguments: Option<&syn::punctuated::Punctuated<syn::Expr, syn::token::Comma>>,
+    ) {
+        let previous = self.authority_bindings.clone();
+        let previous_type_bindings = self.type_bindings.clone();
+        let previous_closures = self.closure_bindings.clone();
+        for (index, pattern) in expression.inputs.iter().enumerate() {
+            let argument = arguments.and_then(|arguments| arguments.iter().nth(index));
+            let argument_authority = argument.and_then(|argument| self.resolve_authority(argument));
+            let argument_type = argument.and_then(|argument| self.resolve_type_binding(argument));
+            self.clear_pattern_bindings(pattern);
+            if let syn::Pat::Type(pattern) = pattern {
+                let typed = self.bind_pattern_from_type(pattern.pat.as_ref(), pattern.ty.as_ref());
+                if !typed {
+                    if let Some(mut binding) = argument_type {
+                        binding.mutable |= pattern_has_mutable_binding(pattern.pat.as_ref());
+                        self.bind_type_pattern(pattern.pat.as_ref(), binding);
+                    }
+                    if let Some(mut authority) = argument_authority {
+                        authority.mutable |= pattern_has_mutable_binding(pattern.pat.as_ref());
+                        self.bind_pattern(pattern.pat.as_ref(), authority);
+                    }
+                }
+            } else {
+                if let Some(mut binding) = argument_type {
+                    binding.mutable |= pattern_has_mutable_binding(pattern);
+                    self.bind_type_pattern(pattern, binding);
+                }
+                if let Some(mut authority) = argument_authority {
+                    authority.mutable |= pattern_has_mutable_binding(pattern);
+                    self.bind_pattern(pattern, authority);
+                }
+            }
+        }
+        if let syn::Expr::Block(block) = expression.body.as_ref() {
+            self.visit_scoped_block(&block.block, true);
+        } else {
+            self.visit_expr(expression.body.as_ref());
+            self.inspect_return_escape(expression.body.as_ref(), "closure return");
+        }
+        self.authority_bindings = previous;
+        self.type_bindings = previous_type_bindings;
+        self.closure_bindings = previous_closures;
+    }
 }
 
 impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
     fn visit_file(&mut self, file: &'ast syn::File) {
         let previous_aliases = self.type_aliases.clone();
+        let previous_returns = self.function_returns.clone();
         let previous_structs = self.struct_fields.clone();
         let previous_imports = self.struct_imports.clone();
         self.type_aliases
             .extend(type_aliases_declared_in_items(&file.items));
+        self.function_returns
+            .extend(function_returns_declared_in_items(&file.items));
         self.struct_fields
             .extend(struct_fields_declared_in_items(&file.items));
         self.struct_imports
@@ -14506,6 +14736,7 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
             self.visit_item(item);
         }
         self.type_aliases = previous_aliases;
+        self.function_returns = previous_returns;
         self.struct_fields = previous_structs;
         self.struct_imports = previous_imports;
     }
@@ -14533,11 +14764,14 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
             return;
         };
         let previous_aliases = self.type_aliases.clone();
+        let previous_returns = self.function_returns.clone();
         let previous_structs = self.struct_fields.clone();
         let previous_imports = self.struct_imports.clone();
         self.module_path.push(module.ident.to_string());
         self.type_aliases
             .extend(type_aliases_declared_in_items(items));
+        self.function_returns
+            .extend(function_returns_declared_in_items(items));
         self.struct_fields
             .extend(struct_fields_declared_in_items(items));
         self.struct_imports = struct_imports_declared_in_items(items);
@@ -14545,6 +14779,7 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
             self.visit_item(item);
         }
         self.type_aliases = previous_aliases;
+        self.function_returns = previous_returns;
         self.struct_fields = previous_structs;
         self.struct_imports = previous_imports;
         self.module_path.pop();
@@ -14580,11 +14815,13 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
         let previous = self.owner.replace(function.sig.ident.to_string());
         let previous_bindings = std::mem::take(&mut self.authority_bindings);
         let previous_type_bindings = std::mem::take(&mut self.type_bindings);
+        let previous_closures = std::mem::take(&mut self.closure_bindings);
         self.seed_signature(&function.sig);
         visit::visit_signature(self, &function.sig);
         self.visit_scoped_block(&function.block, true);
         self.authority_bindings = previous_bindings;
         self.type_bindings = previous_type_bindings;
+        self.closure_bindings = previous_closures;
         self.owner = previous;
     }
 
@@ -14599,11 +14836,13 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
         let previous = self.owner.replace(function.sig.ident.to_string());
         let previous_bindings = std::mem::take(&mut self.authority_bindings);
         let previous_type_bindings = std::mem::take(&mut self.type_bindings);
+        let previous_closures = std::mem::take(&mut self.closure_bindings);
         self.seed_signature(&function.sig);
         visit::visit_signature(self, &function.sig);
         self.visit_scoped_block(&function.block, true);
         self.authority_bindings = previous_bindings;
         self.type_bindings = previous_type_bindings;
+        self.closure_bindings = previous_closures;
         self.owner = previous;
     }
 
@@ -14625,6 +14864,14 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
             .is_some_and(|init| self.bind_pattern_from_expression(&local.pat, init.expr.as_ref()));
         if !bound_from_initializer && let syn::Pat::Type(pattern) = &local.pat {
             self.bind_pattern_from_type(pattern.pat.as_ref(), pattern.ty.as_ref());
+        }
+        if let Some(init) = &local.init
+            && let syn::Expr::Closure(closure) = init.expr.as_ref()
+        {
+            let names = pattern_binding_names(&local.pat);
+            if let [name] = names.as_slice() {
+                self.closure_bindings.insert(name.clone(), closure.clone());
+            }
         }
     }
 
@@ -14692,6 +14939,17 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
                 method.ident.span().start().line,
             );
         }
+        if let syn::Expr::Path(path) = call.func.as_ref()
+            && path.qself.is_none()
+            && path.path.leading_colon.is_none()
+            && path.path.segments.len() == 1
+            && let Some(closure) = self
+                .closure_bindings
+                .get(&path.path.segments[0].ident.to_string())
+                .cloned()
+        {
+            self.visit_closure_with_arguments(&closure, Some(&call.args));
+        }
         for argument in &call.args {
             self.inspect_call_argument(argument, "function argument");
         }
@@ -14747,38 +15005,7 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
     }
 
     fn visit_expr_closure(&mut self, expression: &'ast syn::ExprClosure) {
-        let previous = self.authority_bindings.clone();
-        let previous_type_bindings = self.type_bindings.clone();
-        for pattern in &expression.inputs {
-            self.clear_pattern_bindings(pattern);
-            if let syn::Pat::Type(pattern) = pattern {
-                if !self.bind_pattern_from_type(pattern.pat.as_ref(), pattern.ty.as_ref()) {
-                    self.bind_pattern(
-                        pattern.pat.as_ref(),
-                        ShellAuthorityBinding {
-                            kind: ShellAuthorityKind::Unknown,
-                            mutable: true,
-                        },
-                    );
-                }
-            } else {
-                self.bind_pattern(
-                    pattern,
-                    ShellAuthorityBinding {
-                        kind: ShellAuthorityKind::Unknown,
-                        mutable: true,
-                    },
-                );
-            }
-        }
-        if let syn::Expr::Block(block) = expression.body.as_ref() {
-            self.visit_scoped_block(&block.block, true);
-        } else {
-            self.visit_expr(expression.body.as_ref());
-            self.inspect_return_escape(expression.body.as_ref(), "closure return");
-        }
-        self.authority_bindings = previous;
-        self.type_bindings = previous_type_bindings;
+        self.visit_closure_with_arguments(expression, None);
     }
 }
 
