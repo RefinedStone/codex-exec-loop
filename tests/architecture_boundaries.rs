@@ -418,6 +418,7 @@ fn client_runtime_state_mutation_stays_behind_the_runtime_driver() {
         "pub use controller::{CoreController",
         "pub use controller::CoreController",
         "pub use state::AppState",
+        "pub use controller::state",
         "pub use turn_stream::TurnStreamState",
     ] {
         assert!(
@@ -445,14 +446,14 @@ fn client_runtime_state_mutation_stays_behind_the_runtime_driver() {
         "only the client runtime driver may enter the root reducer"
     );
 
-    let state = fs::read_to_string("src/core/app/state.rs").unwrap();
+    let state = fs::read_to_string("src/core/app/controller/state.rs").unwrap();
     assert!(
         state.contains("pub(super) struct AppState"),
-        "AppState must remain private to core/app"
+        "AppState must remain private to the root controller module"
     );
     assert!(
-        controller.contains("use super::state::AppState;"),
-        "the root reducer must import AppState directly from the private state module"
+        controller.contains("mod state;") && controller.contains("use self::state::AppState;"),
+        "the root reducer must own AppState in its private child module"
     );
 
     let turn_stream = fs::read_to_string("src/core/app/turn_stream.rs").unwrap();
@@ -511,6 +512,81 @@ fn client_runtime_state_mutation_stays_behind_the_runtime_driver() {
             && !driver.contains("pub(crate) fn from_parts(")
             && !driver.contains("pub fn from_parts("),
         "injecting a raw CoreController must not be part of the public runtime API"
+    );
+}
+
+#[test]
+fn app_state_authority_is_sealed_inside_the_root_controller() {
+    let app_module =
+        fs::read_to_string("src/core/app/mod.rs").expect("core app module source should load");
+    let controller = fs::read_to_string("src/core/app/controller.rs")
+        .expect("core controller source should load");
+    let state = fs::read_to_string("src/core/app/controller/state.rs")
+        .expect("core controller state source should load");
+
+    verify_app_state_controller_seal(&app_module, &controller, &state)
+        .unwrap_or_else(|error| panic!("AppState authority must remain root-owned: {error}"));
+}
+
+#[test]
+fn app_state_authority_analyzer_rejects_visibility_and_writer_escapes() {
+    let app_module =
+        fs::read_to_string("src/core/app/mod.rs").expect("core app module source should load");
+    let controller = fs::read_to_string("src/core/app/controller.rs")
+        .expect("core controller source should load");
+    let state = fs::read_to_string("src/core/app/controller/state.rs")
+        .expect("core controller state source should load");
+
+    let sibling_state = app_module.replacen(
+        "pub mod turn_interrupt;",
+        "mod state;\npub mod turn_interrupt;",
+        1,
+    );
+    let error = verify_app_state_controller_seal(&sibling_state, &controller, &state)
+        .expect_err("a sibling AppState module must be rejected");
+    assert!(
+        error.contains("must not declare a sibling `state` module"),
+        "unexpected sibling-state analyzer error: {error}"
+    );
+
+    let visible_child = controller.replacen("mod state;", "pub(super) mod state;", 1);
+    let error = verify_app_state_controller_seal(&app_module, &visible_child, &state)
+        .expect_err("a visible controller state child must be rejected");
+    assert!(
+        error.contains("private child"),
+        "unexpected state-module visibility analyzer error: {error}"
+    );
+
+    let visible_state = state.replacen(
+        "pub(super) struct AppState",
+        "pub(crate) struct AppState",
+        1,
+    );
+    let error = verify_app_state_controller_seal(&app_module, &controller, &visible_state)
+        .expect_err("a crate-visible AppState must be rejected");
+    assert!(
+        error.contains("restricted to its parent CoreController"),
+        "unexpected AppState visibility analyzer error: {error}"
+    );
+
+    let visible_writer = state.replacen("pub(super) fn new()", "pub(crate) fn new()", 1);
+    let error = verify_app_state_controller_seal(&app_module, &controller, &visible_writer)
+        .expect_err("a crate-visible AppState method must be rejected");
+    assert!(
+        error.contains("must remain private or pub(super)"),
+        "unexpected AppState method visibility analyzer error: {error}"
+    );
+
+    let visible_field = state.replacen(
+        "    current: Arc<AppSnapshot>,",
+        "    pub(super) current: Arc<AppSnapshot>,",
+        1,
+    );
+    let error = verify_app_state_controller_seal(&app_module, &controller, &visible_field)
+        .expect_err("a visible AppState storage field must be rejected");
+    assert!(
+        error.contains("storage field must remain private"),
+        "unexpected AppState field visibility analyzer error: {error}"
     );
 }
 
@@ -1661,7 +1737,7 @@ fn future_core_app_public_contracts_are_core_owned() {
             "src/core/app/queue.rs",
             "src/core/app/review_center.rs",
             "src/core/app/snapshot.rs",
-            "src/core/app/state.rs",
+            "src/core/app/controller/state.rs",
             "src/core/app/turn_steer.rs",
             "src/core/app/turn_stream.rs",
             "src/core/app/turn_submission.rs",
@@ -5428,7 +5504,7 @@ fn tui_session_overlay_is_captured_once_before_pure_draw() {
 
 #[test]
 fn core_revisioned_planning_parallel_projection_stays_narrow() {
-    let state_source = fs::read_to_string(repo_root().join("src/core/app/state.rs"))
+    let state_source = fs::read_to_string(repo_root().join("src/core/app/controller/state.rs"))
         .expect("core app state source should load");
     let state_method =
         top_level_impl_method_source(&state_source, "revisioned_planning_parallel_projection");
@@ -5490,7 +5566,7 @@ fn core_revisioned_planning_parallel_projection_stays_narrow() {
 
 #[test]
 fn core_dispatch_snapshots_share_one_copy_on_write_authority() {
-    let state_source = fs::read_to_string(repo_root().join("src/core/app/state.rs"))
+    let state_source = fs::read_to_string(repo_root().join("src/core/app/controller/state.rs"))
         .expect("core app state source should load");
     assert!(
         state_source.contains("current: Arc<AppSnapshot>"),
@@ -9971,6 +10047,164 @@ fn verify_client_runtime_api_boundary(
     Ok(())
 }
 
+fn verify_app_state_controller_seal(
+    app_module: &str,
+    controller: &str,
+    state: &str,
+) -> Result<(), String> {
+    let app_syntax = syn::parse_file(app_module)
+        .map_err(|error| format!("core app module must parse: {error}"))?;
+    if app_syntax.items.iter().any(|item| {
+        matches!(
+            item,
+            syn::Item::Mod(module)
+                if module.ident == "state" && !attributes_are_test_only(&module.attrs)
+        )
+    }) {
+        return Err(
+            "core/app must not declare a sibling `state` module beside CoreController".to_string(),
+        );
+    }
+    if app_syntax.items.iter().any(|item| {
+        matches!(
+            item,
+            syn::Item::Use(item)
+                if !attributes_are_test_only(&item.attrs)
+                    && use_tree_mentions_identifier(&item.tree, "AppState")
+        )
+    }) {
+        return Err("core/app must not import or re-export AppState".to_string());
+    }
+
+    let controller_syntax = syn::parse_file(controller)
+        .map_err(|error| format!("CoreController source must parse: {error}"))?;
+    let state_modules = controller_syntax
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Mod(module)
+                if module.ident == "state" && !attributes_are_test_only(&module.attrs) =>
+            {
+                Some(module)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let [state_module] = state_modules.as_slice() else {
+        return Err(format!(
+            "CoreController must declare exactly one state child, found {}",
+            state_modules.len()
+        ));
+    };
+    if !matches!(state_module.vis, syn::Visibility::Inherited) || state_module.content.is_some() {
+        return Err("CoreController state must remain a private child file module".to_string());
+    }
+
+    let state_imports = controller_syntax
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Use(item)
+                if !attributes_are_test_only(&item.attrs)
+                    && use_tree_mentions_identifier(&item.tree, "AppState") =>
+            {
+                Some(item)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let [state_import] = state_imports.as_slice() else {
+        return Err(format!(
+            "CoreController must import AppState exactly once, found {} imports",
+            state_imports.len()
+        ));
+    };
+    if !matches!(state_import.vis, syn::Visibility::Inherited)
+        || !use_tree_is_simple_path(&state_import.tree, &["self", "state", "AppState"])
+    {
+        return Err(
+            "CoreController must privately import AppState from self::state::AppState".to_string(),
+        );
+    }
+
+    let state_syntax =
+        syn::parse_file(state).map_err(|error| format!("AppState source must parse: {error}"))?;
+    let app_states = state_syntax
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Struct(item)
+                if item.ident == "AppState" && !attributes_are_test_only(&item.attrs) =>
+            {
+                Some(item)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let [app_state] = app_states.as_slice() else {
+        return Err(format!(
+            "state child must define exactly one production AppState, found {}",
+            app_states.len()
+        ));
+    };
+    if !visibility_is_restricted_to(&app_state.vis, &["super"]) {
+        return Err(
+            "AppState visibility must be restricted to its parent CoreController".to_string(),
+        );
+    }
+    let syn::Fields::Named(fields) = &app_state.fields else {
+        return Err("AppState must use one named storage field".to_string());
+    };
+    if fields.named.len() != 1 {
+        return Err("AppState must retain exactly one snapshot authority field".to_string());
+    }
+    let current = fields
+        .named
+        .first()
+        .expect("one AppState field was checked above");
+    if current
+        .ident
+        .as_ref()
+        .is_none_or(|ident| ident != "current")
+        || !type_is_single_generic_path(&current.ty, "Arc", "AppSnapshot")
+    {
+        return Err("AppState authority must remain `current: Arc<AppSnapshot>`".to_string());
+    }
+    if !matches!(current.vis, syn::Visibility::Inherited) {
+        return Err("AppState storage field must remain private".to_string());
+    }
+
+    for item in &state_syntax.items {
+        let syn::Item::Impl(item_impl) = item else {
+            continue;
+        };
+        if item_impl.trait_.is_some()
+            || attributes_are_test_only(&item_impl.attrs)
+            || !type_is_simple_path(item_impl.self_ty.as_ref(), &["AppState"])
+        {
+            continue;
+        }
+        for item in &item_impl.items {
+            let syn::ImplItem::Fn(method) = item else {
+                continue;
+            };
+            if attributes_are_test_only(&method.attrs) {
+                continue;
+            }
+            if !matches!(method.vis, syn::Visibility::Inherited)
+                && !visibility_is_restricted_to(&method.vis, &["super"])
+            {
+                return Err(format!(
+                    "AppState::{} must remain private or pub(super)",
+                    method.sig.ident
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn visibility_is_restricted_to(visibility: &syn::Visibility, expected: &[&str]) -> bool {
     matches!(
         visibility,
@@ -11143,6 +11377,19 @@ fn use_tree_mentions_identifier(tree: &syn::UseTree, expected: &str) -> bool {
     }
 }
 
+fn use_tree_is_simple_path(tree: &syn::UseTree, expected: &[&str]) -> bool {
+    let Some((head, tail)) = expected.split_first() else {
+        return false;
+    };
+    match tree {
+        syn::UseTree::Path(path) => {
+            path.ident == *head && use_tree_is_simple_path(&path.tree, tail)
+        }
+        syn::UseTree::Name(name) => tail.is_empty() && name.ident == *head,
+        _ => false,
+    }
+}
+
 fn type_path_ends_with_ident(ty: &syn::Type, expected: &str) -> bool {
     matches!(
         ty,
@@ -11153,6 +11400,29 @@ fn type_path_ends_with_ident(ty: &syn::Type, expected: &str) -> bool {
                     .segments
                     .last()
                     .is_some_and(|segment| segment.ident == expected)
+    )
+}
+
+fn type_is_single_generic_path(ty: &syn::Type, outer: &str, inner: &str) -> bool {
+    let syn::Type::Path(type_path) = ty else {
+        return false;
+    };
+    if type_path.qself.is_some()
+        || type_path.path.leading_colon.is_some()
+        || type_path.path.segments.len() != 1
+    {
+        return false;
+    }
+    let segment = &type_path.path.segments[0];
+    if segment.ident != outer {
+        return false;
+    }
+    let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return false;
+    };
+    matches!(
+        arguments.args.iter().collect::<Vec<_>>().as_slice(),
+        [syn::GenericArgument::Type(argument)] if type_is_simple_path(argument, &[inner])
     )
 }
 

@@ -1,3 +1,6 @@
+mod state;
+
+use self::state::AppState;
 use super::conversation_turn_reducer::{
     ConversationLoadAdmission, ConversationTurnFeatureReducer, LoadedConversationStreamIdentity,
     StopEffectIntent,
@@ -7,7 +10,6 @@ use super::planning_reducer::{ManualPromptCompletionDisposition, PlanningFeature
 use super::read_model_reducer::ReadModelFeatureReducer;
 use super::session_reducer::{SessionCatalogLoadReduction, SessionFeatureReducer};
 use super::startup_reducer::StartupFeatureReducer;
-use super::state::AppState;
 use super::{
     AppCommand, AppEvent, AppSnapshot, ApprovalDecisionAdmission, ConversationLoadCorrelation,
     CoreEffect, CoreEffectCompletion, CoreInput, ParallelModeProjection,
