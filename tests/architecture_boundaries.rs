@@ -4178,6 +4178,69 @@ fn update_unrelated(
     .expect("direct shell writer fixture should parse");
     assert_eq!(direct.field_writes.len(), 1);
 
+    let canonical_qualified_app = shell_chrome_writer_audit(
+        "fn escape(\n\
+             app: &mut crate::adapter::inbound::tui::app::NativeTuiApp,\n\
+         ) {\n\
+             app.shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+    )
+    .expect("canonical qualified NativeTuiApp fixture should parse");
+    assert_eq!(
+        canonical_qualified_app.field_writes.len(),
+        1,
+        "the canonical TUI module path must retain NativeTuiApp authority"
+    );
+
+    let relative_qualified_app = shell_chrome_writer_audit_with_struct_registry(
+        "fn escape(app: &mut super::NativeTuiApp) {\n\
+             app.shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+        false,
+        &ShellStructFields::new(),
+        &[
+            "crate".to_string(),
+            "adapter".to_string(),
+            "inbound".to_string(),
+            "tui".to_string(),
+            "app".to_string(),
+            "child".to_string(),
+        ],
+    )
+    .expect("relative qualified NativeTuiApp fixture should parse");
+    assert_eq!(
+        relative_qualified_app.field_writes.len(),
+        1,
+        "relative paths must resolve against their declared Rust module"
+    );
+
+    let unrelated_qualified_app = shell_chrome_writer_audit(
+        "fn update(app: &mut crate::unrelated::NativeTuiApp) {\n\
+             app.shell.chrome.session_state = 1;\n\
+         }",
+    )
+    .expect("unrelated qualified NativeTuiApp fixture should parse");
+    assert!(
+        unrelated_qualified_app.field_writes.is_empty()
+            && unrelated_qualified_app.whole_state_writes.is_empty(),
+        "a same-named type on an unrelated qualified path must not gain TUI authority"
+    );
+
+    let unrelated_qualified_import_alias = shell_chrome_writer_audit(
+        "use crate::unrelated::NativeTuiApp as App;\n\
+         fn update(app: &mut App) {\n\
+             app.shell.chrome.session_state = 1;\n\
+         }",
+    )
+    .expect("unrelated qualified NativeTuiApp import alias fixture should parse");
+    assert!(
+        unrelated_qualified_import_alias.field_writes.is_empty()
+            && unrelated_qualified_import_alias
+                .whole_state_writes
+                .is_empty(),
+        "an import alias must preserve its qualified path before authority classification"
+    );
+
     let wrapped_app = shell_chrome_writer_audit(
         "struct Context<'a> {\n\
              app: &'a mut NativeTuiApp,\n\
@@ -4384,7 +4447,7 @@ fn update_unrelated(
     );
 
     let chained_import_alias = shell_chrome_writer_audit(
-        "use super::NativeTuiApp as BaseApp;\n\
+        "use crate::adapter::inbound::tui::app::NativeTuiApp as BaseApp;\n\
          type App = BaseApp;\n\
          fn escape(app: &mut App) {\n\
              app.shell.chrome.session_state = SessionState::Idle;\n\
@@ -4556,6 +4619,23 @@ fn update_unrelated(
         explicit_mutable_self.field_writes.len(),
         1,
         "explicit receiver types must retain mutable self authority"
+    );
+
+    let mutable_impl_self = shell_chrome_writer_audit(
+        "trait Mutate {\n\
+             fn mutate(self);\n\
+         }\n\
+         impl Mutate for &mut NativeTuiApp {\n\
+             fn mutate(self) {\n\
+                 self.shell.chrome.session_state = SessionState::Idle;\n\
+             }\n\
+         }",
+    )
+    .expect("mutable impl Self authority fixture should parse");
+    assert_eq!(
+        mutable_impl_self.field_writes.len(),
+        1,
+        "a by-value Self receiver must inherit mutability from an &mut impl target"
     );
 
     let take_method_result = shell_chrome_writer_audit(
@@ -4740,6 +4820,33 @@ fn update_unrelated(
         "known read-only macros must not create shell writer false positives"
     );
 
+    let nested_macro_writer = shell_chrome_writer_audit(
+        "fn escape(app: &mut NativeTuiApp) {\n\
+             assert!(external_shell_writer!(app));\n\
+         }",
+    )
+    .expect("nested shell writer macro fixture should parse");
+    assert!(
+        !nested_macro_writer.macro_escapes.is_empty(),
+        "a known read-only macro must not hide an unknown nested authority macro"
+    );
+
+    let nested_read_macros = shell_chrome_writer_audit(
+        "fn inspect(app: &mut NativeTuiApp) {\n\
+             assert!(matches!(\n\
+                 app.shell.chrome.session_state,\n\
+                 SessionState::Idle if !(false)\n\
+             ));\n\
+         }",
+    )
+    .expect("nested read-only shell macros fixture should parse");
+    assert!(
+        nested_read_macros.field_writes.is_empty()
+            && nested_read_macros.whole_state_writes.is_empty()
+            && nested_read_macros.macro_escapes.is_empty(),
+        "nested known read-only macros must remain harmless"
+    );
+
     let akra_event_writer = shell_chrome_writer_audit(
         "fn escape(app: &mut NativeTuiApp) {\n\
              crate::akra_event!(\n\
@@ -4826,6 +4933,35 @@ fn update_unrelated(
         "untyped closure parameters must conservatively retain shell chrome authority paths"
     );
 
+    let referenced_inferred_closure = shell_chrome_writer_audit(
+        "fn escape(app: &mut NativeTuiApp) {\n\
+             let write = |value| {\n\
+                 value.shell.chrome.session_state = SessionState::Idle;\n\
+             };\n\
+             (&write)(app);\n\
+         }",
+    )
+    .expect("referenced inferred closure parameter fixture should parse");
+    assert_eq!(
+        referenced_inferred_closure.field_writes.len(),
+        1,
+        "closure argument inference must follow transparent call-target references"
+    );
+
+    let inline_inferred_closure = shell_chrome_writer_audit(
+        "fn escape(app: &mut NativeTuiApp) {\n\
+             (|value| {\n\
+                 value.shell.chrome.session_state = SessionState::Idle;\n\
+             })(app);\n\
+         }",
+    )
+    .expect("inline inferred closure parameter fixture should parse");
+    assert_eq!(
+        inline_inferred_closure.field_writes.len(),
+        1,
+        "inline closure calls must infer shell authority from their arguments"
+    );
+
     let inferred_placeholder_type = shell_chrome_writer_audit(
         "fn escape(app: &mut NativeTuiApp) {\n\
              let write = |app: _| {\n\
@@ -4852,6 +4988,20 @@ fn update_unrelated(
         unrelated_inferred_closure.field_writes.is_empty()
             && unrelated_inferred_closure.whole_state_writes.is_empty(),
         "untyped closures without shell authority paths must remain harmless"
+    );
+
+    let unrelated_inline_closure = shell_chrome_writer_audit(
+        "fn update(other: &mut OtherApp) {\n\
+             (|value| {\n\
+                 value.shell.chrome.session_state = 1;\n\
+             })(other);\n\
+         }",
+    )
+    .expect("unrelated inline closure fixture should parse");
+    assert!(
+        unrelated_inline_closure.field_writes.is_empty()
+            && unrelated_inline_closure.whole_state_writes.is_empty(),
+        "inline closure inference must not infer TUI authority from field names alone"
     );
 
     let unrelated_shell_shaped_inferred_closure = shell_chrome_writer_audit(
@@ -13441,17 +13591,98 @@ struct ShellTypeBinding {
     mutable: bool,
 }
 
+fn normalized_shell_type_path(path: &syn::Path, module_path: &[String]) -> Vec<String> {
+    let raw_path = path
+        .segments
+        .iter()
+        .map(|segment| segment.ident.to_string())
+        .collect::<Vec<_>>();
+    if raw_path.len() <= 1 {
+        return raw_path;
+    }
+
+    let mut normalized = module_path.to_vec();
+    let mut index = 0;
+    if raw_path.first().is_some_and(|segment| segment == "crate") {
+        normalized.clear();
+        normalized.push("crate".to_string());
+        index = 1;
+    } else if raw_path.first().is_some_and(|segment| segment == "self") {
+        index = 1;
+    }
+    while raw_path
+        .get(index)
+        .is_some_and(|segment| segment == "super")
+    {
+        if normalized.len() > 1 {
+            normalized.pop();
+        }
+        index += 1;
+    }
+    if index == 0 {
+        return raw_path;
+    }
+    normalized.extend(raw_path[index..].iter().cloned());
+    normalized
+}
+
+fn shell_authority_kind_from_path(
+    path: &syn::Path,
+    module_path: &[String],
+    implicit_self: Option<ShellAuthorityKind>,
+) -> Option<ShellAuthorityKind> {
+    let normalized = normalized_shell_type_path(path, module_path);
+    match normalized.as_slice() {
+        [name] if name == "NativeTuiApp" => Some(ShellAuthorityKind::App),
+        [name] if name == "NativeTuiShellState" => Some(ShellAuthorityKind::Shell),
+        [name] if name == "ShellChromeState" => Some(ShellAuthorityKind::Chrome),
+        [name] if name == "Self" => implicit_self,
+        [root, adapter, inbound, tui, app, name]
+            if root == "crate"
+                && adapter == "adapter"
+                && inbound == "inbound"
+                && tui == "tui"
+                && app == "app"
+                && name == "NativeTuiApp" =>
+        {
+            Some(ShellAuthorityKind::App)
+        }
+        [root, adapter, inbound, tui, app, name]
+            if root == "crate"
+                && adapter == "adapter"
+                && inbound == "inbound"
+                && tui == "tui"
+                && app == "app"
+                && name == "NativeTuiShellState" =>
+        {
+            Some(ShellAuthorityKind::Shell)
+        }
+        [root, adapter, inbound, tui, shell_chrome, name]
+            if root == "crate"
+                && adapter == "adapter"
+                && inbound == "inbound"
+                && tui == "tui"
+                && shell_chrome == "shell_chrome"
+                && name == "ShellChromeState" =>
+        {
+            Some(ShellAuthorityKind::Chrome)
+        }
+        _ => None,
+    }
+}
+
 fn shell_authority_binding_from_type(
     ty: &syn::Type,
     implicit_self: Option<ShellAuthorityKind>,
     type_aliases: &HashMap<String, syn::Type>,
     resolving_aliases: &mut HashSet<String>,
+    module_path: &[String],
 ) -> Option<ShellAuthorityBinding> {
     match ty {
         syn::Type::Path(path) if path.qself.is_none() => {
             let segment = path.path.segments.last()?;
             let name = segment.ident.to_string();
-            if type_aliases.contains_key(&name) {
+            if path.path.segments.len() == 1 && type_aliases.contains_key(&name) {
                 if !resolving_aliases.insert(name.clone()) {
                     return None;
                 }
@@ -13461,18 +13692,14 @@ fn shell_authority_binding_from_type(
                         implicit_self,
                         type_aliases,
                         resolving_aliases,
+                        module_path,
                     )
                 });
                 resolving_aliases.remove(&name);
                 return resolved;
             }
-            let direct_kind = match name.as_str() {
-                "NativeTuiApp" => Some(ShellAuthorityKind::App),
-                "NativeTuiShellState" => Some(ShellAuthorityKind::Shell),
-                "ShellChromeState" => Some(ShellAuthorityKind::Chrome),
-                "Self" => implicit_self,
-                _ => None,
-            };
+            let direct_kind =
+                shell_authority_kind_from_path(&path.path, module_path, implicit_self);
             if let Some(kind) = direct_kind {
                 return Some(ShellAuthorityBinding {
                     kind,
@@ -13493,6 +13720,7 @@ fn shell_authority_binding_from_type(
                         implicit_self,
                         type_aliases,
                         resolving_aliases,
+                        module_path,
                     )
                 });
             }
@@ -13504,6 +13732,7 @@ fn shell_authority_binding_from_type(
                 implicit_self,
                 type_aliases,
                 resolving_aliases,
+                module_path,
             )?;
             Some(ShellAuthorityBinding {
                 mutable: reference.mutability.is_some(),
@@ -13515,12 +13744,14 @@ fn shell_authority_binding_from_type(
             implicit_self,
             type_aliases,
             resolving_aliases,
+            module_path,
         ),
         syn::Type::Paren(paren) => shell_authority_binding_from_type(
             paren.elem.as_ref(),
             implicit_self,
             type_aliases,
             resolving_aliases,
+            module_path,
         ),
         syn::Type::Ptr(pointer) => {
             let authority = shell_authority_binding_from_type(
@@ -13528,6 +13759,7 @@ fn shell_authority_binding_from_type(
                 implicit_self,
                 type_aliases,
                 resolving_aliases,
+                module_path,
             )?;
             Some(ShellAuthorityBinding {
                 mutable: pointer.mutability.is_some(),
@@ -13538,17 +13770,29 @@ fn shell_authority_binding_from_type(
     }
 }
 
-fn collect_use_type_renames(tree: &syn::UseTree, aliases: &mut HashMap<String, syn::Type>) {
+fn collect_use_type_renames(
+    tree: &syn::UseTree,
+    prefix: &mut Vec<String>,
+    aliases: &mut HashMap<String, syn::Type>,
+) {
     match tree {
-        syn::UseTree::Path(path) => collect_use_type_renames(path.tree.as_ref(), aliases),
+        syn::UseTree::Path(path) => {
+            prefix.push(path.ident.to_string());
+            collect_use_type_renames(path.tree.as_ref(), prefix, aliases);
+            prefix.pop();
+        }
         syn::UseTree::Rename(rename) => {
-            if let Ok(ty) = syn::parse_str::<syn::Type>(&rename.ident.to_string()) {
+            let mut target = prefix.clone();
+            if rename.ident != "self" {
+                target.push(rename.ident.to_string());
+            }
+            if let Ok(ty) = syn::parse_str::<syn::Type>(&target.join("::")) {
                 aliases.insert(rename.rename.to_string(), ty);
             }
         }
         syn::UseTree::Group(group) => {
             for item in &group.items {
-                collect_use_type_renames(item, aliases);
+                collect_use_type_renames(item, prefix, aliases);
             }
         }
         syn::UseTree::Glob(_) | syn::UseTree::Name(_) => {}
@@ -13563,7 +13807,9 @@ fn collect_item_type_alias(item: &syn::Item, aliases: &mut HashMap<String, syn::
         syn::Item::Type(item) => {
             aliases.insert(item.ident.to_string(), item.ty.as_ref().clone());
         }
-        syn::Item::Use(item) => collect_use_type_renames(&item.tree, aliases),
+        syn::Item::Use(item) => {
+            collect_use_type_renames(&item.tree, &mut Vec::new(), aliases);
+        }
         _ => {}
     }
 }
@@ -13903,6 +14149,66 @@ fn macro_token_identifiers(tokens: &proc_macro2::TokenStream) -> HashSet<String>
     identifiers
 }
 
+fn macro_token_invocations(tokens: &proc_macro2::TokenStream) -> HashSet<String> {
+    fn collect(tokens: proc_macro2::TokenStream, invocations: &mut HashSet<String>) {
+        let token_trees = tokens.into_iter().collect::<Vec<_>>();
+        for token in &token_trees {
+            let proc_macro2::TokenTree::Group(group) = token else {
+                continue;
+            };
+            collect(group.stream(), invocations);
+        }
+        for index in 0..token_trees.len().saturating_sub(1) {
+            let proc_macro2::TokenTree::Ident(ident) = &token_trees[index] else {
+                continue;
+            };
+            if syn::parse_str::<syn::Ident>(&ident.to_string()).is_err() {
+                continue;
+            }
+            let proc_macro2::TokenTree::Punct(bang) = &token_trees[index + 1] else {
+                continue;
+            };
+            if bang.as_char() != '!'
+                || !matches!(
+                    token_trees.get(index + 2),
+                    Some(proc_macro2::TokenTree::Group(_))
+                )
+            {
+                continue;
+            }
+
+            let mut path = vec![ident.to_string()];
+            let mut path_index = index;
+            while path_index >= 3
+                && matches!(
+                    (&token_trees[path_index - 2], &token_trees[path_index - 1]),
+                    (
+                        proc_macro2::TokenTree::Punct(first),
+                        proc_macro2::TokenTree::Punct(second),
+                    ) if first.as_char() == ':' && second.as_char() == ':'
+                )
+            {
+                let proc_macro2::TokenTree::Ident(parent) = &token_trees[path_index - 3] else {
+                    break;
+                };
+                path.push(parent.to_string());
+                path_index -= 3;
+            }
+            path.reverse();
+            invocations.insert(path.join("::"));
+        }
+    }
+
+    let mut invocations = HashSet::new();
+    collect(tokens.clone(), &mut invocations);
+    invocations
+}
+
+fn shell_chrome_read_macro_path(path: &str) -> bool {
+    (!path.contains("::") && SHELL_CHROME_AUTHORITY_READ_MACROS.contains(&path))
+        || path == "crate::akra_event"
+}
+
 fn macro_tokens_have_assignment(tokens: &proc_macro2::TokenStream) -> bool {
     let compact = tokens
         .to_string()
@@ -14023,6 +14329,7 @@ fn shell_chrome_writer_audit_with_type_registry(
 struct ShellChromeWriterVisitor {
     owner: Option<String>,
     impl_authority: Option<ShellAuthorityKind>,
+    impl_authority_mutable: bool,
     impl_type: Option<syn::Type>,
     impl_is_inherent: bool,
     allow_native_app_dispatch_seam: bool,
@@ -14058,6 +14365,7 @@ impl ShellChromeWriterVisitor {
             self.impl_authority,
             &self.type_aliases,
             &mut resolving_aliases,
+            &self.module_path,
         )?;
         Some(ShellAuthorityBinding {
             mutable: authority.mutable || pattern_has_mutable_binding(pattern),
@@ -14560,6 +14868,7 @@ impl ShellChromeWriterVisitor {
             self.impl_authority,
             &self.type_aliases,
             &mut resolving_aliases,
+            &self.module_path,
         ) {
             return inherited_mutability || authority.mutable;
         }
@@ -14985,12 +15294,14 @@ impl ShellChromeWriterVisitor {
             match input {
                 syn::FnArg::Receiver(receiver) => {
                     if let Some(impl_type) = self.impl_type.clone() {
+                        let impl_type_is_mutable = self.type_grants_mutable_access(&impl_type);
                         self.type_bindings.insert(
                             "self".to_string(),
                             ShellTypeBinding {
                                 ty: impl_type,
                                 mutable: receiver.mutability.is_some()
-                                    || self.type_grants_mutable_access(receiver.ty.as_ref()),
+                                    || self.type_grants_mutable_access(receiver.ty.as_ref())
+                                    || impl_type_is_mutable,
                             },
                         );
                     }
@@ -15001,6 +15312,7 @@ impl ShellChromeWriterVisitor {
                             Some(kind),
                             &self.type_aliases,
                             &mut resolving_aliases,
+                            &self.module_path,
                         );
                         self.authority_bindings.insert(
                             "self".to_string(),
@@ -15009,7 +15321,8 @@ impl ShellChromeWriterVisitor {
                                     .map(|authority| authority.kind)
                                     .unwrap_or(kind),
                                 mutable: receiver.mutability.is_some()
-                                    || typed_receiver.is_some_and(|authority| authority.mutable),
+                                    || typed_receiver.is_some_and(|authority| authority.mutable)
+                                    || self.impl_authority_mutable,
                             },
                         );
                     }
@@ -15040,6 +15353,7 @@ impl ShellChromeWriterVisitor {
                     self.impl_authority,
                     &self.type_aliases,
                     &mut resolving_aliases,
+                    &self.module_path,
                 )?;
                 Some(ShellAuthorityBinding {
                     mutable: binding.mutable || authority.mutable,
@@ -15062,6 +15376,7 @@ impl ShellChromeWriterVisitor {
                     self.impl_authority,
                     &self.type_aliases,
                     &mut resolving_aliases,
+                    &self.module_path,
                 )?;
                 Some(ShellAuthorityBinding {
                     mutable: binding.mutable || authority.mutable,
@@ -15097,6 +15412,7 @@ impl ShellChromeWriterVisitor {
                     self.impl_authority,
                     &self.type_aliases,
                     &mut resolving_aliases,
+                    &self.module_path,
                 )?;
                 Some(ShellAuthorityBinding {
                     mutable: binding.mutable,
@@ -15114,6 +15430,7 @@ impl ShellChromeWriterVisitor {
                     self.impl_authority,
                     &self.type_aliases,
                     &mut resolving_aliases,
+                    &self.module_path,
                 )?;
                 Some(ShellAuthorityBinding {
                     mutable: binding.mutable || authority.mutable,
@@ -15233,10 +15550,14 @@ impl ShellChromeWriterVisitor {
         }) || SHELL_CHROME_MACRO_MUTATION_IDENTIFIERS
             .iter()
             .any(|identifier| identifiers.contains(*identifier));
-        let read_macro = SHELL_CHROME_AUTHORITY_READ_MACROS.contains(&name.as_str());
+        let read_macro = shell_chrome_read_macro_path(&syn_path_name(&expression.path));
+        let has_untrusted_nested_macro = macro_token_invocations(&expression.tokens)
+            .iter()
+            .any(|path| !shell_chrome_read_macro_path(path));
         if item_position
             || (mentions_audited_field && has_mutation_syntax)
-            || (mentions_mutable_authority && (!read_macro || has_mutation_syntax))
+            || (mentions_mutable_authority
+                && (!read_macro || has_mutation_syntax || has_untrusted_nested_macro))
         {
             self.audit.macro_escapes.push(self.finding(
                 expression.path.span().start().line,
@@ -15324,6 +15645,30 @@ impl ShellChromeWriterVisitor {
                     "calls shell chrome take/apply seam outside `dispatch_shell_chrome`: `{method}`"
                 ),
             ));
+        }
+    }
+
+    fn closure_for_call_target(&self, expression: &syn::Expr) -> Option<syn::ExprClosure> {
+        match expression {
+            syn::Expr::Closure(closure) => Some(closure.clone()),
+            syn::Expr::Path(path)
+                if path.qself.is_none()
+                    && path.path.leading_colon.is_none()
+                    && path.path.segments.len() == 1 =>
+            {
+                self.closure_bindings
+                    .get(&path.path.segments[0].ident.to_string())
+                    .cloned()
+            }
+            syn::Expr::Group(group) => self.closure_for_call_target(group.expr.as_ref()),
+            syn::Expr::Paren(paren) => self.closure_for_call_target(paren.expr.as_ref()),
+            syn::Expr::Reference(reference) => {
+                self.closure_for_call_target(reference.expr.as_ref())
+            }
+            syn::Expr::Unary(unary) if matches!(unary.op, syn::UnOp::Deref(_)) => {
+                self.closure_for_call_target(unary.expr.as_ref())
+            }
+            _ => None,
         }
     }
 
@@ -15449,20 +15794,24 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
             return;
         }
         let previous_authority = self.impl_authority;
+        let previous_authority_mutable = self.impl_authority_mutable;
         let previous_type = self.impl_type.clone();
         let previous_is_inherent = self.impl_is_inherent;
         let mut resolving_aliases = HashSet::new();
-        self.impl_authority = shell_authority_binding_from_type(
+        let impl_authority = shell_authority_binding_from_type(
             item.self_ty.as_ref(),
             self.impl_authority,
             &self.type_aliases,
             &mut resolving_aliases,
-        )
-        .map(|authority| authority.kind);
+            &self.module_path,
+        );
+        self.impl_authority = impl_authority.map(|authority| authority.kind);
+        self.impl_authority_mutable = impl_authority.is_some_and(|authority| authority.mutable);
         self.impl_type = Some(item.self_ty.as_ref().clone());
         self.impl_is_inherent = item.trait_.is_none();
         visit::visit_item_impl(self, item);
         self.impl_authority = previous_authority;
+        self.impl_authority_mutable = previous_authority_mutable;
         self.impl_type = previous_type;
         self.impl_is_inherent = previous_is_inherent;
     }
@@ -15598,21 +15947,20 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
                 method.ident.span().start().line,
             );
         }
-        if let syn::Expr::Path(path) = call.func.as_ref()
-            && path.qself.is_none()
-            && path.path.leading_colon.is_none()
-            && path.path.segments.len() == 1
-            && let Some(closure) = self
-                .closure_bindings
-                .get(&path.path.segments[0].ident.to_string())
-                .cloned()
-        {
-            self.visit_closure_with_arguments(&closure, Some(&call.args));
+        let invoked_closure = self.closure_for_call_target(call.func.as_ref());
+        if let Some(closure) = &invoked_closure {
+            self.visit_closure_with_arguments(closure, Some(&call.args));
         }
         for argument in &call.args {
             self.inspect_call_argument(argument, "function argument");
         }
-        visit::visit_expr_call(self, call);
+        if invoked_closure.is_some() {
+            for argument in &call.args {
+                self.visit_expr(argument);
+            }
+        } else {
+            visit::visit_expr_call(self, call);
+        }
     }
 
     fn visit_expr_match(&mut self, expression: &'ast syn::ExprMatch) {
