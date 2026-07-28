@@ -456,7 +456,9 @@ fn client_runtime_state_mutation_stays_behind_the_runtime_driver() {
         "the root reducer must own AppState in its private child module"
     );
 
-    let turn_stream = fs::read_to_string("src/core/app/turn_stream.rs").unwrap();
+    let turn_stream = fs::read_to_string("src/core/app/turn_stream.rs")
+        .unwrap()
+        .replace("\r\n", "\n");
     assert!(
         turn_stream.contains("pub(in crate::core) struct TurnStreamState"),
         "TurnStreamState must be impossible to name outside the client runtime"
@@ -976,7 +978,8 @@ fn native_client_event_routing_is_exhaustive_and_tui_background_lane_is_presenta
     let facade = fs::read_to_string("src/composition/native_client_runtime.rs")
         .expect("native client runtime source should load");
     let app_runtime = fs::read_to_string("src/adapter/inbound/tui/app/app_runtime.rs")
-        .expect("TUI app runtime source should load");
+        .expect("TUI app runtime source should load")
+        .replace("\r\n", "\n");
 
     verify_native_client_event_contract(&facade, &app_runtime)
         .unwrap_or_else(|error| panic!("single ClientEvent contract must remain closed: {error}"));
@@ -2094,7 +2097,7 @@ fn core_effect_workers_share_one_redacted_panic_totality_boundary() {
         let source = fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
         for line in production_callable_reference_lines(&source, "spawn") {
-            raw_spawn_owners.push(format!("{}:{line}", path.display()));
+            raw_spawn_owners.push(format!("{}:{line}", path.display()).replace('\\', "/"));
         }
     }
     assert!(
@@ -2283,7 +2286,8 @@ fn parallel_control_plane_effect_dispatch_is_ast_exhaustive_and_panic_total() {
             .expect("parallel control-plane effect source should load");
     let controller_source =
         fs::read_to_string("src/application/service/parallel_mode/control_plane/controller.rs")
-            .expect("parallel control-plane controller source should load");
+            .expect("parallel control-plane controller source should load")
+            .replace("\r\n", "\n");
     let runner_source =
         fs::read_to_string("src/application/service/parallel_mode/control_plane/effect_runner.rs")
             .expect("parallel control-plane effect runner source should load");
@@ -2305,10 +2309,12 @@ fn parallel_control_plane_effect_totality_analyzer_rejects_bypasses_without_fixt
             .expect("parallel control-plane effect source should load");
     let controller_source =
         fs::read_to_string("src/application/service/parallel_mode/control_plane/controller.rs")
-            .expect("parallel control-plane controller source should load");
+            .expect("parallel control-plane controller source should load")
+            .replace("\r\n", "\n");
     let runner_source =
         fs::read_to_string("src/application/service/parallel_mode/control_plane/effect_runner.rs")
-            .expect("parallel control-plane effect runner source should load");
+            .expect("parallel control-plane effect runner source should load")
+            .replace("\r\n", "\n");
     let reject = |effect: &str, controller: &str, runner: &str, expected: &str| {
         let error =
             verify_parallel_control_plane_effect_totality_contract(effect, controller, runner)
@@ -2419,7 +2425,8 @@ fn parallel_supervisor_inspection_never_runs_inline_under_the_control_plane_mute
 
     let runner =
         fs::read_to_string("src/application/service/parallel_mode/control_plane/effect_runner.rs")
-            .expect("parallel control-plane effect runner source should load");
+            .expect("parallel control-plane effect runner source should load")
+            .replace("\r\n", "\n");
     let inspection_worker = runner
         .split_once("pub fn spawn_supervisor_inspection(")
         .and_then(|(_, body)| body.split_once("pub fn spawn_orchestrator_tick("))
@@ -2471,7 +2478,8 @@ fn parallel_pending_dispatch_poll_never_reads_authority_under_the_control_plane_
     );
     let runner =
         fs::read_to_string("src/application/service/parallel_mode/control_plane/effect_runner.rs")
-            .expect("parallel control-plane effect runner source should load");
+            .expect("parallel control-plane effect runner source should load")
+            .replace("\r\n", "\n");
     let poll_worker = runner
         .split_once("pub fn spawn_pending_dispatch_wake_poll(")
         .and_then(|(_, body)| body.split_once("pub fn spawn_dispatch_command_mutation("))
@@ -2512,7 +2520,8 @@ fn parallel_dispatch_mutations_never_run_inline_under_the_control_plane_mutex() 
 
     let runner =
         fs::read_to_string("src/application/service/parallel_mode/control_plane/effect_runner.rs")
-            .expect("parallel control-plane effect runner source should load");
+            .expect("parallel control-plane effect runner source should load")
+            .replace("\r\n", "\n");
     let mutation_worker = runner
         .split_once("pub fn spawn_dispatch_command_mutation(")
         .and_then(|(_, body)| {
