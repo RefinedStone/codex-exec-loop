@@ -747,6 +747,53 @@ fn native_tui_uses_one_composition_owned_client_runtime_ingress() {
 }
 
 #[test]
+fn native_client_event_routing_is_exhaustive_and_tui_background_lane_is_presentation_only() {
+    let facade = fs::read_to_string("src/composition/native_client_runtime.rs")
+        .expect("native client runtime source should load");
+    let app_runtime = fs::read_to_string("src/adapter/inbound/tui/app/app_runtime.rs")
+        .expect("TUI app runtime source should load");
+
+    verify_native_client_event_contract(&facade, &app_runtime)
+        .unwrap_or_else(|error| panic!("single ClientEvent contract must remain closed: {error}"));
+
+    let unrouted_event = facade.replacen(
+        "pub(crate) enum NativeClientEvent {",
+        "pub(crate) enum NativeClientEvent {\n    UnroutedSemanticMutation,",
+        1,
+    );
+    let error = verify_native_client_event_contract(&unrouted_event, &app_runtime)
+        .expect_err("a new event without an exact dispatch arm must fail");
+    assert!(
+        error.contains("exactly cover"),
+        "unexpected unrouted event error: {error}"
+    );
+
+    let wildcard_router = facade.replacen(
+        "NativeClientEvent::ClearParallelDispatchWithheldReason => {",
+        "_ => {",
+        1,
+    );
+    let error = verify_native_client_event_contract(&wildcard_router, &app_runtime)
+        .expect_err("a wildcard client-event route must fail");
+    assert!(
+        error.contains("wildcard"),
+        "unexpected wildcard router error: {error}"
+    );
+
+    let semantic_background_lane = app_runtime.replacen(
+        "    #[cfg(test)]\n    ConversationRuntimeNotice(String),",
+        "    ConversationRuntimeNotice(String),",
+        1,
+    );
+    let error = verify_native_client_event_contract(&facade, &semantic_background_lane)
+        .expect_err("a production semantic BackgroundMessage variant must fail");
+    assert!(
+        error.contains("presentation-only"),
+        "unexpected semantic background-lane error: {error}"
+    );
+}
+
+#[test]
 fn native_tui_app_owns_exactly_four_typed_private_state_slices() {
     let app_source =
         fs::read_to_string("src/adapter/inbound/tui/app.rs").expect("TUI app source should load");
@@ -9532,6 +9579,144 @@ fn push_use_reference(segments: &[String], line: usize, references: &mut Vec<Cra
             path: segments.join("::"),
         });
     }
+}
+
+fn verify_native_client_event_contract(
+    native_facade: &str,
+    tui_app_runtime: &str,
+) -> Result<(), String> {
+    let facade_syntax = syn::parse_file(native_facade)
+        .map_err(|error| format!("native client facade must parse: {error}"))?;
+    let client_events = facade_syntax
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Enum(item)
+                if item.ident == "NativeClientEvent" && !attributes_are_test_only(&item.attrs) =>
+            {
+                Some(item)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let [client_events] = client_events.as_slice() else {
+        return Err(format!(
+            "expected one production NativeClientEvent enum, found {}",
+            client_events.len()
+        ));
+    };
+    let expected_routes = client_events
+        .variants
+        .iter()
+        .filter(|variant| !attributes_are_test_only(&variant.attrs))
+        .map(|variant| variant.ident.to_string())
+        .collect::<HashSet<_>>();
+
+    let dispatch_methods = inherent_impl_methods(
+        &facade_syntax,
+        "NativeClientRuntime",
+        "dispatch_client_event",
+    );
+    let [dispatch] = dispatch_methods.as_slice() else {
+        return Err(format!(
+            "expected one NativeClientRuntime::dispatch_client_event, found {}",
+            dispatch_methods.len()
+        ));
+    };
+    let event_matches = dispatch
+        .block
+        .stmts
+        .iter()
+        .filter_map(|statement| match statement {
+            syn::Stmt::Expr(syn::Expr::Match(expression), None)
+                if expression_is_simple_path(expression.expr.as_ref(), &["event"]) =>
+            {
+                Some(expression)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let [event_match] = event_matches.as_slice() else {
+        return Err(format!(
+            "dispatch_client_event must contain one direct `match event`, found {}",
+            event_matches.len()
+        ));
+    };
+    let mut actual_routes = HashSet::new();
+    for arm in &event_match.arms {
+        if arm.guard.is_some() {
+            return Err(format!(
+                "NativeClientEvent arm at line {} must not use a match guard",
+                arm.span().start().line
+            ));
+        }
+        for variant in exact_enum_pattern_variants(&arm.pat, "NativeClientEvent")
+            .map_err(|error| format!("NativeClientEvent router {error}"))?
+        {
+            if !actual_routes.insert(variant.clone()) {
+                return Err(format!(
+                    "NativeClientEvent::{variant} must appear in exactly one dispatch arm"
+                ));
+            }
+        }
+    }
+    if actual_routes != expected_routes {
+        return Err(format!(
+            "NativeClientEvent dispatch arms must exactly cover the enum ({})",
+            core_effect_set_difference(&actual_routes, &expected_routes)
+        ));
+    }
+
+    let app_syntax = syn::parse_file(tui_app_runtime)
+        .map_err(|error| format!("TUI app runtime must parse: {error}"))?;
+    let background_messages = app_syntax
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Enum(item)
+                if item.ident == "BackgroundMessage" && !attributes_are_test_only(&item.attrs) =>
+            {
+                Some(item)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let [background_messages] = background_messages.as_slice() else {
+        return Err(format!(
+            "expected one production BackgroundMessage enum, found {}",
+            background_messages.len()
+        ));
+    };
+    let production_variants = background_messages
+        .variants
+        .iter()
+        .filter(|variant| !attributes_are_test_only(&variant.attrs))
+        .collect::<Vec<_>>();
+    let [operator_alert] = production_variants.as_slice() else {
+        return Err(format!(
+            "production BackgroundMessage must remain presentation-only with one OperatorAlert variant; found {:?}",
+            production_variants
+                .iter()
+                .map(|variant| variant.ident.to_string())
+                .collect::<Vec<_>>()
+        ));
+    };
+    let syn::Fields::Unnamed(fields) = &operator_alert.fields else {
+        return Err(
+            "production BackgroundMessage::OperatorAlert must carry one typed payload".to_string(),
+        );
+    };
+    if operator_alert.ident != "OperatorAlert"
+        || fields.unnamed.len() != 1
+        || !is_named_path_type(&fields.unnamed[0].ty, "OperatorAlert")
+    {
+        return Err(
+            "production BackgroundMessage must remain presentation-only as OperatorAlert(OperatorAlert)"
+                .to_string(),
+        );
+    }
+
+    Ok(())
 }
 
 fn verify_client_runtime_api_boundary(

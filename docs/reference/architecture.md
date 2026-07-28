@@ -120,6 +120,12 @@ not create another semantic writer. Global parallel-cleanup state remains owned 
 application control-plane; the TUI reads its typed owned presentation projection without retaining
 or reinjecting a second notice ledger.
 
+The adapter's bounded `BackgroundMessage` lane is presentation-only in production and carries only
+operator alerts. Startup, session, conversation, turn, planning, and parallel semantic results
+cannot be added to that lane without failing the Rust-aware architecture guard. The same guard
+compares every `NativeClientEvent` variant with one unguarded exhaustive dispatch arm, so adding a
+new event cannot silently create an unrouted or wildcard-routed state path.
+
 Startup, session loading, conversation selection, turn submission, stream reduction, completion,
 and post-turn evaluation use this flow. Parallel mutation remains application-owned but enters the
 same client-runtime facade; only composition retains `ParallelModeControlPlaneHandle`. Core may copy

@@ -65,7 +65,6 @@ pub(super) const TUI_BACKGROUND_CHANNEL_CAPACITY: usize = 256;
  * ShellRuntime later drains their messages back into reducers.
  */
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub(super) enum BackgroundMessage {
     #[cfg(test)]
     StartupLoaded(Result<Box<StartupReadySnapshot>, String>),
@@ -76,9 +75,9 @@ pub(super) enum BackgroundMessage {
         correlation: crate::core::app::TurnSubmissionCorrelation,
         event: ConversationStreamEvent,
     },
+    #[cfg(test)]
     ConversationRuntimeNotice(String),
     OperatorAlert(OperatorAlert),
-    InvalidateParallelModeSupervisorSnapshot,
     #[cfg(test)]
     PostTurnEvaluationCompleted {
         correlation: crate::core::app::PostTurnEvaluationCorrelation,
