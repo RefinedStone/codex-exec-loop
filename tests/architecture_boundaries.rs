@@ -3926,6 +3926,12 @@ fn shell_chrome_state_has_one_typed_reducer_writer() {
                 violations.push(format!("{relative}:{}:{write}", write.line));
             }
         }
+        violations.extend(
+            audit
+                .macro_escapes
+                .into_iter()
+                .map(|write| format!("{relative}:{}:{write}", write.line)),
+        );
         whole_state_writers.extend(
             audit
                 .whole_state_writes
@@ -4121,6 +4127,37 @@ fn update_unrelated(
         "match ergonomics must retain mutable shell chrome alias authority"
     );
 
+    let let_chain_alias = shell_chrome_writer_audit(
+        "fn escape(app: &mut NativeTuiApp, enabled: bool) {\n\
+             if let NativeTuiApp {\n\
+                 shell: NativeTuiShellState { chrome, .. },\n\
+                 ..\n\
+             } = app && enabled {\n\
+                 chrome.session_state = SessionState::Idle;\n\
+             }\n\
+         }",
+    )
+    .expect("let-chain shell chrome alias fixture should parse");
+    assert_eq!(
+        let_chain_alias.field_writes.len(),
+        1,
+        "Rust 2024 let-chain patterns must retain shell chrome authority"
+    );
+
+    let option_pattern_alias = shell_chrome_writer_audit(
+        "fn escape(maybe: Option<&mut NativeTuiApp>) {\n\
+             if let Some(app) = maybe {\n\
+                 app.shell.chrome.session_state = SessionState::Idle;\n\
+             }\n\
+         }",
+    )
+    .expect("Option shell authority pattern fixture should parse");
+    assert_eq!(
+        option_pattern_alias.field_writes.len(),
+        1,
+        "generic Option patterns must retain their inner mutable app authority"
+    );
+
     let read_only_pattern = shell_chrome_writer_audit(
         "fn render(app: &NativeTuiApp) {\n\
              let NativeTuiShellState { chrome, .. } = &app.shell;\n\
@@ -4314,6 +4351,46 @@ fn update_unrelated(
     assert!(
         explicit_read.field_writes.is_empty() && explicit_read.whole_state_writes.is_empty(),
         "audited read-only methods must not create shell writer false positives"
+    );
+
+    let macro_writer = shell_chrome_writer_audit(
+        "macro_rules! write_shell_chrome {\n\
+             ($app:expr) => {\n\
+                 $app.shell.chrome.session_state = SessionState::Idle;\n\
+             };\n\
+         }\n\
+         fn escape(app: &mut NativeTuiApp) {\n\
+             write_shell_chrome!(app);\n\
+         }",
+    )
+    .expect("shell chrome macro writer fixture should parse");
+    assert!(
+        !macro_writer.macro_escapes.is_empty(),
+        "production macro definitions and authority calls must not hide shell chrome writes"
+    );
+
+    let external_macro_writer = shell_chrome_writer_audit(
+        "fn escape(app: &mut NativeTuiApp) {\n\
+             external_shell_writer!(app);\n\
+         }",
+    )
+    .expect("external shell writer macro fixture should parse");
+    assert!(
+        !external_macro_writer.macro_escapes.is_empty(),
+        "unknown macros receiving mutable shell authority must fail closed"
+    );
+
+    let macro_read = shell_chrome_writer_audit(
+        "fn inspect(app: &mut NativeTuiApp) {\n\
+             let _ = matches!(app.shell.chrome.session_state, SessionState::Idle);\n\
+         }",
+    )
+    .expect("read-only shell macro fixture should parse");
+    assert!(
+        macro_read.field_writes.is_empty()
+            && macro_read.whole_state_writes.is_empty()
+            && macro_read.macro_escapes.is_empty(),
+        "known read-only macros must not create shell writer false positives"
     );
 
     let returned_chrome_alias = shell_chrome_writer_audit(
@@ -12534,6 +12611,37 @@ const SHELL_CHROME_REDUCER_FIELDS: &[&str] = &[
 
 const SHELL_CHROME_READ_ONLY_METHODS: &[&str] = &["clone", "prompt_input_has_focus"];
 
+const SHELL_CHROME_AUTHORITY_READ_MACROS: &[&str] = &[
+    "akra_event",
+    "assert",
+    "assert_eq",
+    "assert_ne",
+    "debug_assert",
+    "debug_assert_eq",
+    "debug_assert_ne",
+    "format",
+    "format_args",
+    "matches",
+    "panic",
+    "unreachable",
+];
+
+const SHELL_CHROME_MACRO_MUTATION_IDENTIFIERS: &[&str] = &[
+    "as_mut",
+    "borrow_mut",
+    "clear",
+    "get_mut",
+    "get_or_insert",
+    "get_or_insert_default",
+    "get_or_insert_with",
+    "insert",
+    "mut",
+    "push",
+    "remove",
+    "replace",
+    "take",
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ShellAuthorityKind {
     Unknown,
@@ -12588,19 +12696,20 @@ fn shell_authority_binding_from_type(
             }
             if matches!(
                 name.as_str(),
-                "Box" | "Pin" | "RefMut" | "MutexGuard" | "RwLockWriteGuard"
+                "Box" | "MutexGuard" | "Option" | "Pin" | "RefMut" | "Result" | "RwLockWriteGuard"
             ) && let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments
-                && let Some(inner) = arguments.args.iter().find_map(|argument| match argument {
-                    syn::GenericArgument::Type(ty) => Some(ty),
-                    _ => None,
-                })
             {
-                return shell_authority_binding_from_type(
-                    inner,
-                    implicit_self,
-                    type_aliases,
-                    resolving_aliases,
-                );
+                return arguments.args.iter().find_map(|argument| {
+                    let syn::GenericArgument::Type(inner) = argument else {
+                        return None;
+                    };
+                    shell_authority_binding_from_type(
+                        inner,
+                        implicit_self,
+                        type_aliases,
+                        resolving_aliases,
+                    )
+                });
             }
             None
         }
@@ -12749,10 +12858,48 @@ fn child_shell_authority(
     }
 }
 
+fn macro_token_identifiers(tokens: &proc_macro2::TokenStream) -> HashSet<String> {
+    fn collect(tokens: proc_macro2::TokenStream, identifiers: &mut HashSet<String>) {
+        for token in tokens {
+            match token {
+                proc_macro2::TokenTree::Group(group) => collect(group.stream(), identifiers),
+                proc_macro2::TokenTree::Ident(ident) => {
+                    identifiers.insert(ident.to_string());
+                }
+                proc_macro2::TokenTree::Literal(_) | proc_macro2::TokenTree::Punct(_) => {}
+            }
+        }
+    }
+
+    let mut identifiers = HashSet::new();
+    collect(tokens.clone(), &mut identifiers);
+    identifiers
+}
+
+fn macro_tokens_have_assignment(tokens: &proc_macro2::TokenStream) -> bool {
+    let compact = tokens
+        .to_string()
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<Vec<_>>();
+    compact.iter().enumerate().any(|(index, character)| {
+        if *character != '=' {
+            return false;
+        }
+        let previous = index
+            .checked_sub(1)
+            .and_then(|index| compact.get(index))
+            .copied();
+        let next = compact.get(index + 1).copied();
+        !matches!(previous, Some('=' | '!' | '<' | '>')) && !matches!(next, Some('=' | '>'))
+    })
+}
+
 #[derive(Default)]
 struct ShellChromeWriterAudit {
     field_writes: Vec<RuntimeWriterFinding>,
     whole_state_writes: Vec<RuntimeWriterFinding>,
+    macro_escapes: Vec<RuntimeWriterFinding>,
 }
 
 fn shell_chrome_writer_audit(source: &str) -> Result<ShellChromeWriterAudit, String> {
@@ -13061,6 +13208,23 @@ impl ShellChromeWriterVisitor {
         }
     }
 
+    fn visit_let_chain_condition(&mut self, condition: &syn::Expr) {
+        match condition {
+            syn::Expr::Binary(binary) if matches!(binary.op, syn::BinOp::And(_)) => {
+                self.visit_let_chain_condition(binary.left.as_ref());
+                self.visit_let_chain_condition(binary.right.as_ref());
+            }
+            syn::Expr::Let(condition) => {
+                self.visit_expr(condition.expr.as_ref());
+                self.clear_pattern_bindings(condition.pat.as_ref());
+                self.bind_pattern_from_expression(condition.pat.as_ref(), condition.expr.as_ref());
+            }
+            syn::Expr::Group(group) => self.visit_let_chain_condition(group.expr.as_ref()),
+            syn::Expr::Paren(paren) => self.visit_let_chain_condition(paren.expr.as_ref()),
+            _ => self.visit_expr(condition),
+        }
+    }
+
     fn seed_signature(&mut self, signature: &syn::Signature) {
         for input in &signature.inputs {
             match input {
@@ -13189,6 +13353,41 @@ impl ShellChromeWriterVisitor {
         }
     }
 
+    fn inspect_macro(&mut self, expression: &syn::Macro, item_position: bool) {
+        let name = expression
+            .path
+            .segments
+            .last()
+            .map(|segment| segment.ident.to_string())
+            .unwrap_or_else(|| "<anonymous>".to_string());
+        let identifiers = macro_token_identifiers(&expression.tokens);
+        let mentions_audited_field = SHELL_CHROME_REDUCER_FIELDS
+            .iter()
+            .any(|field| identifiers.contains(*field));
+        let mentions_mutable_authority = identifiers.iter().any(|identifier| {
+            self.authority_bindings
+                .get(identifier)
+                .is_some_and(|authority| {
+                    authority.mutable && authority.kind != ShellAuthorityKind::Unknown
+                })
+        });
+        let has_mutation_syntax = (name != "akra_event"
+            && macro_tokens_have_assignment(&expression.tokens))
+            || SHELL_CHROME_MACRO_MUTATION_IDENTIFIERS
+                .iter()
+                .any(|identifier| identifiers.contains(*identifier));
+        let read_macro = SHELL_CHROME_AUTHORITY_READ_MACROS.contains(&name.as_str());
+        if item_position
+            || (mentions_audited_field && has_mutation_syntax)
+            || (mentions_mutable_authority && (!read_macro || has_mutation_syntax))
+        {
+            self.audit.macro_escapes.push(self.finding(
+                expression.path.span().start().line,
+                format!("macro `{name}` may hide a mutable shell chrome authority escape"),
+            ));
+        }
+    }
+
     fn visit_scoped_block(&mut self, block: &syn::Block, inspect_tail_return: bool) {
         let previous_bindings = self.authority_bindings.clone();
         let previous_aliases = self.type_aliases.clone();
@@ -13271,6 +13470,14 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
             return;
         }
         visit::visit_item(self, item);
+    }
+
+    fn visit_item_macro(&mut self, item: &'ast syn::ItemMacro) {
+        self.inspect_macro(&item.mac, true);
+    }
+
+    fn visit_macro(&mut self, expression: &'ast syn::Macro) {
+        self.inspect_macro(expression, false);
     }
 
     fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
@@ -13439,32 +13646,20 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
     }
 
     fn visit_expr_if(&mut self, expression: &'ast syn::ExprIf) {
-        if let syn::Expr::Let(condition) = expression.cond.as_ref() {
-            self.visit_expr(condition.expr.as_ref());
-            let previous = self.authority_bindings.clone();
-            self.clear_pattern_bindings(condition.pat.as_ref());
-            self.bind_pattern_from_expression(condition.pat.as_ref(), condition.expr.as_ref());
-            self.visit_block(&expression.then_branch);
-            self.authority_bindings = previous;
-            if let Some((_, otherwise)) = &expression.else_branch {
-                self.visit_expr(otherwise.as_ref());
-            }
-        } else {
-            visit::visit_expr_if(self, expression);
+        let previous = self.authority_bindings.clone();
+        self.visit_let_chain_condition(expression.cond.as_ref());
+        self.visit_block(&expression.then_branch);
+        self.authority_bindings = previous;
+        if let Some((_, otherwise)) = &expression.else_branch {
+            self.visit_expr(otherwise.as_ref());
         }
     }
 
     fn visit_expr_while(&mut self, expression: &'ast syn::ExprWhile) {
-        if let syn::Expr::Let(condition) = expression.cond.as_ref() {
-            self.visit_expr(condition.expr.as_ref());
-            let previous = self.authority_bindings.clone();
-            self.clear_pattern_bindings(condition.pat.as_ref());
-            self.bind_pattern_from_expression(condition.pat.as_ref(), condition.expr.as_ref());
-            self.visit_block(&expression.body);
-            self.authority_bindings = previous;
-        } else {
-            visit::visit_expr_while(self, expression);
-        }
+        let previous = self.authority_bindings.clone();
+        self.visit_let_chain_condition(expression.cond.as_ref());
+        self.visit_block(&expression.body);
+        self.authority_bindings = previous;
     }
 
     fn visit_expr_for_loop(&mut self, expression: &'ast syn::ExprForLoop) {
