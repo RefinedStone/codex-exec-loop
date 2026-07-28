@@ -13,7 +13,7 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 const DISCONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[test]
-fn native_tui_exits_after_its_controlling_pty_disconnects() {
+fn native_tui_and_app_server_exit_after_their_controlling_pty_disconnects() {
     let fixture = IsolatedTuiFixture::new();
     let (mut master, slave) = open_pty(100, 30).expect("PTY fixture should open");
     set_nonblocking(&master).expect("PTY master should become nonblocking");
@@ -21,7 +21,7 @@ fn native_tui_exits_after_its_controlling_pty_disconnects() {
     let mut child = spawn_native_tui(&fixture, &slave);
     drop(slave);
 
-    wait_for_terminal_startup(&mut child, &mut master);
+    let app_server_pids = wait_for_terminal_startup(&fixture, &mut child, &mut master);
     drop(master);
 
     let (status, stderr) = child
@@ -31,6 +31,7 @@ fn native_tui_exits_after_its_controlling_pty_disconnects() {
         status.success(),
         "native TUI should shut down cleanly after PTY disconnect: {status}; stderr: {stderr}"
     );
+    fixture.wait_for_app_servers_to_exit(&app_server_pids, DISCONNECT_TIMEOUT);
 }
 
 fn open_pty(columns: u16, rows: u16) -> io::Result<(File, File)> {
@@ -107,7 +108,7 @@ fn spawn_native_tui(fixture: &IsolatedTuiFixture, slave: &File) -> ChildGuard {
         .env("USER", "akra-pty-test")
         .env("LOGNAME", "akra-pty-test")
         .env("SHELL", "/bin/sh")
-        .env("PATH", "/usr/bin:/bin")
+        .env("PATH", fixture.process_path())
         .env("LANG", "C.UTF-8")
         .env("LC_ALL", "C.UTF-8")
         .env("TERM", "xterm-256color")
@@ -136,7 +137,11 @@ fn spawn_native_tui(fixture: &IsolatedTuiFixture, slave: &File) -> ChildGuard {
     ChildGuard::new(command.spawn().expect("native TUI fixture should spawn"))
 }
 
-fn wait_for_terminal_startup(child: &mut ChildGuard, master: &mut File) {
+fn wait_for_terminal_startup(
+    fixture: &IsolatedTuiFixture,
+    child: &mut ChildGuard,
+    master: &mut File,
+) -> Vec<libc::pid_t> {
     let deadline = Instant::now() + STARTUP_TIMEOUT;
     let mut output = Vec::new();
     let mut cursor_queries_answered = 0;
@@ -166,23 +171,31 @@ fn wait_for_terminal_startup(child: &mut ChildGuard, master: &mut File) {
             "native TUI exited before terminal startup; output: {}",
             String::from_utf8_lossy(&output)
         );
-        if output
+        let terminal_started = output
             .windows(b"Akra".len())
-            .any(|window| window == b"Akra")
-        {
-            // Visible Akra copy proves that the first terminal transaction completed. Give the
-            // frontend enough time to enter its blocking event poll before disconnecting the PTY.
+            .any(|window| window == b"Akra");
+        let app_server_pids = fixture.live_initialized_app_server_pids();
+        if terminal_started && !app_server_pids.is_empty() {
+            // Visible Akra copy proves that the first terminal transaction completed, while the
+            // live initialized child proves startup reached the production app-server boundary.
+            // Give the frontend enough time to enter its blocking event poll before disconnecting.
             thread::sleep(Duration::from_millis(500));
             assert!(
                 child.try_wait().is_none(),
                 "native TUI exited before PTY disconnect; output: {}",
                 String::from_utf8_lossy(&output)
             );
-            return;
+            let app_server_pids = fixture.live_initialized_app_server_pids();
+            assert!(
+                !app_server_pids.is_empty(),
+                "initialized app-server exited before PTY disconnect"
+            );
+            return app_server_pids;
         }
         assert!(
             Instant::now() < deadline,
-            "native TUI did not initialize its terminal before timeout; output: {}",
+            "native TUI and app-server did not finish startup before timeout; methods: {:?}; output: {}",
+            fixture.logged_app_server_methods(),
             String::from_utf8_lossy(&output)
         );
         thread::sleep(Duration::from_millis(10));
@@ -246,10 +259,14 @@ impl Drop for ChildGuard {
 
 struct IsolatedTuiFixture {
     root: PathBuf,
+    trusted_launcher_root: PathBuf,
+    fake_bin: PathBuf,
     workspace: PathBuf,
     home: PathBuf,
     akra_home: PathBuf,
     codex_home: PathBuf,
+    app_server_pid_log: PathBuf,
+    app_server_request_log: PathBuf,
 }
 
 impl IsolatedTuiFixture {
@@ -266,23 +283,237 @@ impl IsolatedTuiFixture {
         let home = root.join("home");
         let akra_home = root.join("akra-home");
         let codex_home = root.join("codex-home");
+        let app_server_pid_log = root.join("app-server-pids");
+        let app_server_request_log = root.join("app-server-requests.jsonl");
         for directory in [&root, &workspace, &home, &akra_home, &codex_home] {
             create_private_directory(directory);
         }
+
+        // Production rejects repository- and system-temp-controlled launchers. Install the fake
+        // under the current user's private home so this fixture traverses the same trusted
+        // executable pinning path as a real Codex installation.
+        let trusted_home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .expect("test host HOME should be available");
+        let trusted_launcher_root = trusted_home.join(format!(
+            ".akra-tui-terminal-disconnect-{}-{nonce}",
+            std::process::id()
+        ));
+        let fake_bin = trusted_launcher_root.join("bin");
+        create_private_directory(&trusted_launcher_root);
+        create_private_directory(&fake_bin);
+        install_fake_codex(&fake_bin, &app_server_pid_log, &app_server_request_log);
+
         Self {
             root,
+            trusted_launcher_root,
+            fake_bin,
             workspace,
             home,
             akra_home,
             codex_home,
+            app_server_pid_log,
+            app_server_request_log,
+        }
+    }
+
+    fn process_path(&self) -> std::ffi::OsString {
+        std::env::join_paths([
+            self.fake_bin.as_path(),
+            Path::new("/usr/bin"),
+            Path::new("/bin"),
+        ])
+        .expect("fake app-server PATH should join")
+    }
+
+    fn logged_app_server_methods(&self) -> Vec<String> {
+        fs::read_to_string(&self.app_server_request_log)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter_map(|request| request["method"].as_str().map(str::to_string))
+            .collect()
+    }
+
+    fn app_server_pids(&self) -> Vec<libc::pid_t> {
+        fs::read_to_string(&self.app_server_pid_log)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| line.parse().ok())
+            .collect()
+    }
+
+    fn live_initialized_app_server_pids(&self) -> Vec<libc::pid_t> {
+        if !self
+            .logged_app_server_methods()
+            .iter()
+            .any(|method| method == "account/read")
+        {
+            return Vec::new();
+        }
+        self.app_server_pids()
+            .into_iter()
+            .filter(|pid| process_is_alive(*pid))
+            .collect()
+    }
+
+    fn wait_for_app_servers_to_exit(&self, expected: &[libc::pid_t], timeout: Duration) {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let observed = self.app_server_pids();
+            let live = observed
+                .iter()
+                .copied()
+                .filter(|pid| process_is_alive(*pid))
+                .collect::<Vec<_>>();
+            if live.is_empty() {
+                assert!(
+                    expected.iter().all(|pid| observed.contains(pid)),
+                    "app-server PID log lost a child observed before disconnect"
+                );
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "app-server children remained alive after native TUI exit: {live:?}"
+            );
+            thread::sleep(Duration::from_millis(10));
         }
     }
 }
 
 impl Drop for IsolatedTuiFixture {
     fn drop(&mut self) {
+        // ChildGuard force-kills the native process on panic, but app-server intentionally owns a
+        // separate process group. Contain that failure path explicitly before deleting its PID log.
+        for pid in self
+            .app_server_pids()
+            .into_iter()
+            .filter(|pid| process_is_alive(*pid))
+        {
+            // SAFETY: production subprocess containment makes the app-server PID its process-group
+            // leader. The direct-PID fallback also covers an exec failure before group setup.
+            if unsafe { libc::kill(-pid, libc::SIGKILL) } == -1 {
+                let _ = unsafe { libc::kill(pid, libc::SIGKILL) };
+            }
+        }
         let _ = fs::remove_dir_all(&self.root);
+        let _ = fs::remove_dir_all(&self.trusted_launcher_root);
     }
+}
+
+fn install_fake_codex(fake_bin: &Path, pid_log: &Path, request_log: &Path) {
+    let node = find_host_node();
+    std::os::unix::fs::symlink(&node, fake_bin.join("node"))
+        .expect("trusted Node link should create");
+
+    let launcher = fake_bin.join("codex");
+    fs::write(&launcher, fake_codex_script(pid_log, request_log))
+        .expect("fake Codex launcher should write");
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&launcher, fs::Permissions::from_mode(0o700))
+        .expect("fake Codex launcher should become executable");
+}
+
+fn find_host_node() -> PathBuf {
+    let path = std::env::var_os("PATH").expect("test host PATH should be available");
+    for directory in std::env::split_paths(&path).filter(|directory| directory.is_absolute()) {
+        for name in ["node", "nodejs"] {
+            let candidate = directory.join(name);
+            if !candidate.is_file() {
+                continue;
+            }
+            if Command::new(&candidate)
+                .arg("--version")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success())
+            {
+                return fs::canonicalize(&candidate).unwrap_or(candidate);
+            }
+        }
+    }
+    panic!("terminal lifecycle test requires a host Node executable");
+}
+
+fn fake_codex_script(pid_log: &Path, request_log: &Path) -> String {
+    let pid_log = serde_json::to_string(
+        pid_log
+            .to_str()
+            .expect("fake app-server PID log path should be UTF-8"),
+    )
+    .expect("fake app-server PID log path should serialize");
+    let request_log = serde_json::to_string(
+        request_log
+            .to_str()
+            .expect("fake app-server request log path should be UTF-8"),
+    )
+    .expect("fake app-server request log path should serialize");
+    r#"#!/usr/bin/env node
+const fs = require("node:fs");
+const readline = require("node:readline");
+
+const pidLog = __PID_LOG__;
+const requestLog = __REQUEST_LOG__;
+fs.appendFileSync(pidLog, `${process.pid}\n`, { encoding: "utf8", mode: 0o600 });
+
+function send(value) {
+  process.stdout.write(`${JSON.stringify(value)}\n`);
+}
+
+const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+input.on("line", (line) => {
+  const request = JSON.parse(line);
+  fs.appendFileSync(requestLog, `${JSON.stringify(request)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+  if (!Object.prototype.hasOwnProperty.call(request, "id")) {
+    return;
+  }
+
+  if (request.method === "initialize") {
+    send({
+      id: request.id,
+      result: {
+        userAgent: "codex-app-server/pty-lifecycle-fixture",
+        platformFamily: "unix",
+        platformOs: process.platform,
+      },
+    });
+  } else if (request.method === "account/read") {
+    send({
+      id: request.id,
+      result: {
+        account: {
+          type: "chatgpt",
+          email: "pty-fixture@example.com",
+          planType: "test",
+        },
+        requiresOpenAIAuth: false,
+      },
+    });
+  } else if (request.method === "thread/list") {
+    send({ id: request.id, result: { data: [], nextCursor: null } });
+  } else {
+    send({
+      id: request.id,
+      error: { message: `unexpected fixture method ${request.method}` },
+    });
+  }
+});
+"#
+    .replace("__PID_LOG__", &pid_log)
+    .replace("__REQUEST_LOG__", &request_log)
+}
+
+fn process_is_alive(pid: libc::pid_t) -> bool {
+    // SAFETY: signal zero performs a liveness/permission check without delivering a signal.
+    if unsafe { libc::kill(pid, 0) } == 0 {
+        return true;
+    }
+    io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
 }
 
 fn create_private_directory(path: &Path) {

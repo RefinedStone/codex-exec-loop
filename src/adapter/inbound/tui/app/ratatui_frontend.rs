@@ -76,6 +76,24 @@ fn run_event_loop(
     shutdown: &crate::shutdown::GracefulShutdown,
     restore_guard: &mut TerminalRestoreGuard,
 ) -> Result<()> {
+    match run_event_loop_until_exit(adapter, runtime, shutdown, restore_guard) {
+        /*
+         * Closing a Unix PTY can make the terminal descriptor report EIO before the process-level
+         * SIGHUP flag becomes visible. Broken pipes and EOF are equivalent output/input closure
+         * signals on other terminal backends. They are a normal lifecycle boundary, not an
+         * application failure; the outer stack will drop the runtime and its app-server children.
+         */
+        Err(error) if terminal_disconnected(&error) => Ok(()),
+        result => result,
+    }
+}
+
+fn run_event_loop_until_exit(
+    adapter: &mut InlineTerminalAdapter<InlineTerminalBackend<CrosstermBackend<io::Stdout>>>,
+    runtime: &mut ShellRuntime,
+    shutdown: &crate::shutdown::GracefulShutdown,
+    restore_guard: &mut TerminalRestoreGuard,
+) -> Result<()> {
     while !runtime.should_quit() && !shutdown.is_requested() {
         /*
          * app-server stream, startup/session load, post-turn evaluation은 terminal input과 별개로
@@ -112,6 +130,31 @@ fn run_event_loop(
     }
 
     Ok(())
+}
+
+fn terminal_disconnected(error: &anyhow::Error) -> bool {
+    error.chain().any(|source| {
+        source
+            .downcast_ref::<io::Error>()
+            .is_some_and(terminal_io_disconnected)
+    })
+}
+
+fn terminal_io_disconnected(error: &io::Error) -> bool {
+    if matches!(
+        error.kind(),
+        io::ErrorKind::BrokenPipe | io::ErrorKind::UnexpectedEof
+    ) {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        error.raw_os_error() == Some(libc::EIO)
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
 }
 
 pub(super) fn prepare_runtime_for_due_draw(
@@ -222,5 +265,37 @@ impl Drop for TerminalRestoreGuard {
          */
         let _ = execute!(stdout, MoveToNextLine(1));
         let _ = execute!(stdout, Show);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use super::{terminal_disconnected, terminal_io_disconnected};
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_pty_eio_is_a_terminal_disconnect() {
+        let error = io::Error::from_raw_os_error(libc::EIO);
+
+        assert!(terminal_io_disconnected(&error));
+        assert!(terminal_disconnected(&anyhow::Error::new(error)));
+    }
+
+    #[test]
+    fn broken_pipe_is_a_terminal_disconnect() {
+        assert!(terminal_io_disconnected(&io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            "terminal output closed",
+        )));
+    }
+
+    #[test]
+    fn unrelated_terminal_io_errors_remain_failures() {
+        assert!(!terminal_io_disconnected(&io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "terminal permissions changed",
+        )));
     }
 }

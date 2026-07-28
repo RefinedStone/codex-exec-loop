@@ -167,13 +167,17 @@ lifetime, or process shutdown. The test harness must wait until the native binar
 first visible frame, close the PTY master without sending the normal quit key, and require the
 process to exit within a bounded deadline.
 
-The harness must own a final cleanup guard so a failing assertion or regression cannot leak the
-native process. Forced cleanup is failure containment only: the exit assertion must settle before
-the guard is disarmed, and a guard-initiated kill must never count as a passing shutdown.
+The harness must start a controlled app-server fixture through the production executable-pinning
+and JSON-RPC startup path, prove that child is initialized and live before disconnecting, and then
+prove both processes are gone. It must also own a final cleanup guard so a failing assertion or
+regression cannot leak the native process. Forced cleanup is failure containment only: the exit
+assertion must settle before the guard is disarmed, and a guard-initiated kill must never count as a
+passing shutdown.
 
 Required cases:
 
 - closing the controlling PTY after the first frame exits the real native binary
+- an initialized app-server child is live before disconnect and is gone after native shutdown
 - the exit completes before the deadline without a CPU-spin survivor
 - startup failure and assertion failure still reap the isolated child
 - PTY descriptors not intended for the child are close-on-exec so the harness cannot keep its own
@@ -216,7 +220,7 @@ Every TUI rendering PR should state which rows it touches.
 | Overlay | opening overlay clears stale live-tail rows and closing redraws normal tail |
 | Parallel event stream | frame recorder proves initial status rows survive later runtime-event redraws without panel chrome in host scrollback; split scrollback/live-tail streams render as a titleless live tail |
 | Terminal fallback | standard and fallback insertion modes each update viewport state correctly |
-| Terminal disconnect | real native binary reaches its first PTY frame, loses the PTY master, and exits within the deadline without guard-initiated cleanup |
+| Terminal disconnect | real native binary reaches its first PTY frame with a live initialized app-server child, loses the PTY master, and both processes exit within the deadline without guard-initiated cleanup |
 
 ## Architectural Guardrails
 
