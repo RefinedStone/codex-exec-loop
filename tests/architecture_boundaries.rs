@@ -607,6 +607,29 @@ fn app_state_authority_analyzer_rejects_visibility_and_writer_escapes() {
         "unexpected nested-writer analyzer error: {error}"
     );
 
+    let macro_writer = controller.replacen(
+        "mod state;",
+        "mod state;\n\
+         macro_rules! escaped_writer {\n\
+             () => {\n\
+                 mod escaped_writer {\n\
+                     use super::state::AppState;\n\
+                     fn mutate(state: &mut AppState) {\n\
+                         state.mark_startup_loading();\n\
+                     }\n\
+                 }\n\
+             };\n\
+         }\n\
+         escaped_writer!();",
+        1,
+    );
+    let error = verify_app_state_controller_seal(&app_module, &macro_writer, &state)
+        .expect_err("a production item macro must not manufacture an AppState writer module");
+    assert!(
+        error.contains("must not contain production item macros"),
+        "unexpected macro-writer analyzer error: {error}"
+    );
+
     let nested_state_writer = format!(
         "{state}\n\
          mod escaped_writer {{\n\
@@ -4277,6 +4300,33 @@ fn update_unrelated(
     assert!(
         explicit_read.field_writes.is_empty() && explicit_read.whole_state_writes.is_empty(),
         "audited read-only methods must not create shell writer false positives"
+    );
+
+    let returned_chrome_alias = shell_chrome_writer_audit(
+        "fn expose(\n\
+             NativeTuiApp {\n\
+                 shell: NativeTuiShellState { chrome, .. },\n\
+                 ..\n\
+             }: &mut NativeTuiApp,\n\
+         ) -> &mut ShellChromeState {\n\
+             chrome\n\
+         }",
+    )
+    .expect("returned mutable chrome alias fixture should parse");
+    assert!(
+        !returned_chrome_alias.whole_state_writes.is_empty(),
+        "mutable shell chrome authority must not escape through a function return"
+    );
+
+    let explicit_returned_chrome_alias = shell_chrome_writer_audit(
+        "fn expose(chrome: &mut ShellChromeState) -> &mut ShellChromeState {\n\
+             return chrome;\n\
+         }",
+    )
+    .expect("explicit returned mutable chrome alias fixture should parse");
+    assert!(
+        !explicit_returned_chrome_alias.whole_state_writes.is_empty(),
+        "explicit returns must not expose mutable shell chrome authority"
     );
 
     let mutable = shell_chrome_writer_audit(
@@ -10567,6 +10617,7 @@ fn verify_app_state_controller_seal(
 ) -> Result<(), String> {
     let app_syntax = syn::parse_file(app_module)
         .map_err(|error| format!("core app module must parse: {error}"))?;
+    reject_production_item_macros("core/app", &app_syntax)?;
     if app_syntax.items.iter().any(|item| {
         matches!(
             item,
@@ -10591,6 +10642,7 @@ fn verify_app_state_controller_seal(
 
     let controller_syntax = syn::parse_file(controller)
         .map_err(|error| format!("CoreController source must parse: {error}"))?;
+    reject_production_item_macros("CoreController", &controller_syntax)?;
     let production_modules = production_module_paths(&controller_syntax);
     let unexpected_modules = production_modules
         .iter()
@@ -10653,6 +10705,7 @@ fn verify_app_state_controller_seal(
 
     let state_syntax =
         syn::parse_file(state).map_err(|error| format!("AppState source must parse: {error}"))?;
+    reject_production_item_macros("AppState state child", &state_syntax)?;
     let state_production_modules = production_module_paths(&state_syntax);
     if !state_production_modules.is_empty() {
         return Err(format!(
@@ -10751,6 +10804,49 @@ fn production_module_paths(syntax: &syn::File) -> Vec<String> {
     let mut visitor = ProductionModulePathVisitor::default();
     visitor.visit_file(syntax);
     visitor.paths
+}
+
+fn reject_production_item_macros(label: &str, syntax: &syn::File) -> Result<(), String> {
+    let mut visitor = ProductionItemMacroVisitor::default();
+    visitor.visit_file(syntax);
+    if visitor.names.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{label} must not contain production item macros: {:?}",
+            visitor.names
+        ))
+    }
+}
+
+#[derive(Default)]
+struct ProductionItemMacroVisitor {
+    names: Vec<String>,
+}
+
+impl<'ast> Visit<'ast> for ProductionItemMacroVisitor {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if item_is_test_only(item) {
+            return;
+        }
+        visit::visit_item(self, item);
+    }
+
+    fn visit_item_macro(&mut self, item: &'ast syn::ItemMacro) {
+        let name = item
+            .ident
+            .as_ref()
+            .map(ToString::to_string)
+            .or_else(|| {
+                item.mac
+                    .path
+                    .segments
+                    .last()
+                    .map(|segment| segment.ident.to_string())
+            })
+            .unwrap_or_else(|| "<anonymous>".to_string());
+        self.names.push(name);
+    }
 }
 
 #[derive(Default)]
@@ -12910,6 +13006,32 @@ impl ShellChromeWriterVisitor {
         }
     }
 
+    fn inspect_return_escape(&mut self, expression: &syn::Expr, kind: &str) {
+        if let Some(authority) = self.resolve_authority(expression)
+            && authority.mutable
+        {
+            self.audit.whole_state_writes.push(self.finding(
+                expression.span().start().line,
+                format!("{kind} exposes mutable {:?} authority", authority.kind),
+            ));
+        }
+    }
+
+    fn visit_scoped_block(&mut self, block: &syn::Block, inspect_tail_return: bool) {
+        let previous_bindings = self.authority_bindings.clone();
+        let previous_aliases = self.type_aliases.clone();
+        self.type_aliases
+            .extend(type_aliases_declared_in_statements(&block.stmts));
+        for statement in &block.stmts {
+            self.visit_stmt(statement);
+        }
+        if inspect_tail_return && let Some(syn::Stmt::Expr(expression, None)) = block.stmts.last() {
+            self.inspect_return_escape(expression, "tail return");
+        }
+        self.authority_bindings = previous_bindings;
+        self.type_aliases = previous_aliases;
+    }
+
     fn is_exact_native_app_dispatch_receiver(&self, receiver: &syn::Expr) -> bool {
         let receiver_is_self = match receiver {
             syn::Expr::Path(path) => {
@@ -13022,7 +13144,8 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
         let previous = self.owner.replace(function.sig.ident.to_string());
         let previous_bindings = std::mem::take(&mut self.authority_bindings);
         self.seed_signature(&function.sig);
-        visit::visit_item_fn(self, function);
+        visit::visit_signature(self, &function.sig);
+        self.visit_scoped_block(&function.block, true);
         self.authority_bindings = previous_bindings;
         self.owner = previous;
     }
@@ -13038,21 +13161,14 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
         let previous = self.owner.replace(function.sig.ident.to_string());
         let previous_bindings = std::mem::take(&mut self.authority_bindings);
         self.seed_signature(&function.sig);
-        visit::visit_impl_item_fn(self, function);
+        visit::visit_signature(self, &function.sig);
+        self.visit_scoped_block(&function.block, true);
         self.authority_bindings = previous_bindings;
         self.owner = previous;
     }
 
     fn visit_block(&mut self, block: &'ast syn::Block) {
-        let previous_bindings = self.authority_bindings.clone();
-        let previous_aliases = self.type_aliases.clone();
-        self.type_aliases
-            .extend(type_aliases_declared_in_statements(&block.stmts));
-        for statement in &block.stmts {
-            self.visit_stmt(statement);
-        }
-        self.authority_bindings = previous_bindings;
-        self.type_aliases = previous_aliases;
+        self.visit_scoped_block(block, false);
     }
 
     fn visit_local(&mut self, local: &'ast syn::Local) {
@@ -13101,6 +13217,13 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
             self.inspect_write_target(expression.expr.as_ref(), "mutable borrow");
         }
         visit::visit_expr_reference(self, expression);
+    }
+
+    fn visit_expr_return(&mut self, expression: &'ast syn::ExprReturn) {
+        if let Some(value) = &expression.expr {
+            self.inspect_return_escape(value.as_ref(), "explicit return");
+        }
+        visit::visit_expr_return(self, expression);
     }
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
@@ -13180,7 +13303,12 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
                 self.bind_pattern_from_type(pattern.pat.as_ref(), pattern.ty.as_ref());
             }
         }
-        self.visit_expr(expression.body.as_ref());
+        if let syn::Expr::Block(block) = expression.body.as_ref() {
+            self.visit_scoped_block(&block.block, true);
+        } else {
+            self.visit_expr(expression.body.as_ref());
+            self.inspect_return_escape(expression.body.as_ref(), "closure return");
+        }
         self.authority_bindings = previous;
     }
 }
