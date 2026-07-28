@@ -4160,6 +4160,20 @@ fn update_unrelated(
         "NativeTuiShellState mutable self must resolve through chrome authority"
     );
 
+    let explicit_mutable_self = shell_chrome_writer_audit(
+        "impl NativeTuiApp {\n\
+             fn escape(self: &mut Self) {\n\
+                 self.shell.chrome.session_state = SessionState::Idle;\n\
+             }\n\
+         }",
+    )
+    .expect("explicit mutable self fixture should parse");
+    assert_eq!(
+        explicit_mutable_self.field_writes.len(),
+        1,
+        "explicit receiver types must retain mutable self authority"
+    );
+
     let take_method_result = shell_chrome_writer_audit(
         "impl NativeTuiApp {\n\
              fn take_shell_chrome_state(&mut self) -> ShellChromeState {\n\
@@ -4370,6 +4384,34 @@ fn update_unrelated(
         unrelated_inferred_closure.field_writes.is_empty()
             && unrelated_inferred_closure.whole_state_writes.is_empty(),
         "untyped closures without shell authority paths must remain harmless"
+    );
+
+    let for_loop_alias = shell_chrome_writer_audit(
+        "fn escape(app: &mut NativeTuiApp) {\n\
+             for alias in std::iter::once(app) {\n\
+                 alias.shell.chrome.session_state = SessionState::Idle;\n\
+             }\n\
+         }",
+    )
+    .expect("for-loop shell authority alias fixture should parse");
+    assert_eq!(
+        for_loop_alias.field_writes.len(),
+        1,
+        "for-loop patterns must retain authority from their iterator element"
+    );
+
+    let unrelated_for_loop = shell_chrome_writer_audit(
+        "fn update(values: Vec<usize>) {\n\
+             for value in values {\n\
+                 let _ = value + 1;\n\
+             }\n\
+         }",
+    )
+    .expect("unrelated for-loop fixture should parse");
+    assert!(
+        unrelated_for_loop.field_writes.is_empty()
+            && unrelated_for_loop.whole_state_writes.is_empty(),
+        "inferred for-loop patterns without shell authority paths must remain harmless"
     );
 
     let mutable = shell_chrome_writer_audit(
@@ -12965,16 +13007,80 @@ impl ShellChromeWriterVisitor {
         }
     }
 
+    fn bind_for_loop_pattern(&mut self, pattern: &syn::Pat, iterator: &syn::Expr) {
+        let bound = match iterator {
+            syn::Expr::Group(group) => {
+                self.bind_for_loop_pattern(pattern, group.expr.as_ref());
+                return;
+            }
+            syn::Expr::Paren(paren) => {
+                self.bind_for_loop_pattern(pattern, paren.expr.as_ref());
+                return;
+            }
+            syn::Expr::Array(array) => {
+                let mut bound = false;
+                for expression in &array.elems {
+                    bound = self.bind_pattern_from_expression(pattern, expression) || bound;
+                }
+                bound
+            }
+            syn::Expr::Call(call)
+                if matches!(
+                    call.func.as_ref(),
+                    syn::Expr::Path(path)
+                        if path.path.segments.last().is_some_and(|segment| {
+                            matches!(
+                                segment.ident.to_string().as_str(),
+                                "once" | "Some" | "Ok"
+                            )
+                        })
+                ) =>
+            {
+                call.args.first().is_some_and(|expression| {
+                    self.bind_pattern_from_expression(pattern, expression)
+                })
+            }
+            syn::Expr::MethodCall(call)
+                if matches!(
+                    call.method.to_string().as_str(),
+                    "into_iter" | "iter" | "iter_mut"
+                ) =>
+            {
+                self.bind_pattern_from_expression(pattern, call.receiver.as_ref())
+            }
+            _ => self.bind_pattern_from_expression(pattern, iterator),
+        };
+        if !bound {
+            self.bind_pattern(
+                pattern,
+                ShellAuthorityBinding {
+                    kind: ShellAuthorityKind::Unknown,
+                    mutable: true,
+                },
+            );
+        }
+    }
+
     fn seed_signature(&mut self, signature: &syn::Signature) {
         for input in &signature.inputs {
             match input {
                 syn::FnArg::Receiver(receiver) => {
                     if let Some(kind) = self.impl_authority {
+                        let mut resolving_aliases = HashSet::new();
+                        let typed_receiver = shell_authority_binding_from_type(
+                            receiver.ty.as_ref(),
+                            Some(kind),
+                            &self.type_aliases,
+                            &mut resolving_aliases,
+                        );
                         self.authority_bindings.insert(
                             "self".to_string(),
                             ShellAuthorityBinding {
-                                kind,
-                                mutable: receiver.mutability.is_some(),
+                                kind: typed_receiver
+                                    .map(|authority| authority.kind)
+                                    .unwrap_or(kind),
+                                mutable: receiver.mutability.is_some()
+                                    || typed_receiver.is_some_and(|authority| authority.mutable),
                             },
                         );
                     }
@@ -13359,6 +13465,15 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
         } else {
             visit::visit_expr_while(self, expression);
         }
+    }
+
+    fn visit_expr_for_loop(&mut self, expression: &'ast syn::ExprForLoop) {
+        self.visit_expr(expression.expr.as_ref());
+        let previous = self.authority_bindings.clone();
+        self.clear_pattern_bindings(expression.pat.as_ref());
+        self.bind_for_loop_pattern(expression.pat.as_ref(), expression.expr.as_ref());
+        self.visit_block(&expression.body);
+        self.authority_bindings = previous;
     }
 
     fn visit_expr_closure(&mut self, expression: &'ast syn::ExprClosure) {
