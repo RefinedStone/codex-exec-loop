@@ -1,4 +1,6 @@
-use crate::core::app::{SessionCatalogLoadMode, StartupReadySnapshot};
+use crate::core::app::{
+    SessionCatalogLoadMode, SessionCatalogSnapshot, StartupReadySnapshot, StartupSnapshot,
+};
 use crate::domain::recent_sessions::SessionCatalog;
 
 /*
@@ -128,14 +130,20 @@ impl Default for ShellChromeState {
 #[derive(Debug, Clone)]
 pub enum ShellChromeEvent {
     StartupCheckRequested,
-    StartupLoaded {
-        result: Result<Box<StartupReadySnapshot>, String>,
+    StartupProjected {
+        snapshot: StartupSnapshot,
         session_page_size: usize,
     },
     SessionsRequested {
         limit: usize,
     },
-    SessionsLoaded(Result<SessionCatalog, String>),
+    SessionCatalogProjected {
+        snapshot: SessionCatalogSnapshot,
+        selection_policy: SessionCatalogSelectionPolicy,
+    },
+    SessionSelectionProjected {
+        index: usize,
+    },
     StartupOverlayShown,
     SessionsOverlayShown {
         limit: usize,
@@ -163,9 +171,12 @@ pub enum ShellChromeEvent {
     ExitConfirmationHidden,
     // conversation transition은 transient shell chrome을 접어 overlay가 열린 shell context보다 오래 남지 않게 한다.
     TransientChromeDismissed,
-    SessionSelectionMoved {
-        delta: isize,
-    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionCatalogSelectionPolicy {
+    Preserve,
+    ResetOnReady,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -222,14 +233,20 @@ pub fn reduce_shell_chrome(
 
     match event {
         ShellChromeEvent::StartupCheckRequested => {
-            state.startup_state = StartupState::Loading;
+            // Loading은 Core의 StartupChanged projection만 설치할 수 있다. 이 intent는 effect만 기술한다.
             effects.push(ShellChromeEffect::RunStartupChecks);
         }
-        ShellChromeEvent::StartupLoaded {
-            result,
+        ShellChromeEvent::StartupProjected {
+            snapshot,
             session_page_size,
-        } => match result {
-            Ok(ready) => {
+        } => match snapshot {
+            StartupSnapshot::Idle => {
+                state.startup_state = StartupState::Idle;
+            }
+            StartupSnapshot::Loading => {
+                state.startup_state = StartupState::Loading;
+            }
+            StartupSnapshot::Ready(ready) => {
                 // ready snapshot을 state 안으로 move하기 전에 session preload gate와 workspace scope에 필요한 값을 빼 둔다.
                 let can_continue = ready.can_continue;
                 let workspace_path = ready.workspace_path.clone();
@@ -244,7 +261,7 @@ pub fn reduce_shell_chrome(
                     });
                 }
             }
-            Err(message) => {
+            StartupSnapshot::Failed { message } => {
                 state.startup_state = StartupState::Failed(message);
             }
         },
@@ -256,15 +273,25 @@ pub fn reduce_shell_chrome(
                 &mut effects,
             );
         }
-        ShellChromeEvent::SessionsLoaded(result) => {
-            state.session_state = match result {
-                Ok(catalog) => {
+        ShellChromeEvent::SessionCatalogProjected {
+            snapshot,
+            selection_policy,
+        } => {
+            state.session_state = match snapshot {
+                SessionCatalogSnapshot::Idle => SessionState::Idle,
+                SessionCatalogSnapshot::Loading => SessionState::Loading,
+                SessionCatalogSnapshot::Ready(ready) => {
                     // 새 catalog가 도착하면 browser focus를 첫 visible row로 되돌려 이전 catalog index가 새 목록을 벗어나지 않게 한다.
-                    state.selected_session_index = 0;
-                    SessionState::Ready(catalog)
+                    if selection_policy == SessionCatalogSelectionPolicy::ResetOnReady {
+                        state.selected_session_index = 0;
+                    }
+                    SessionState::Ready(*ready.catalog)
                 }
-                Err(message) => SessionState::Failed(message),
+                SessionCatalogSnapshot::Failed { message } => SessionState::Failed(message),
             };
+        }
+        ShellChromeEvent::SessionSelectionProjected { index } => {
+            state.selected_session_index = index;
         }
         ShellChromeEvent::StartupOverlayShown => {
             // non-exit overlay를 열면 exit prompt를 닫아 shell chrome의 focus owner를 하나로 유지한다.
@@ -392,24 +419,6 @@ pub fn reduce_shell_chrome(
                 state.shell_overlay = ShellOverlay::Hidden;
             }
         }
-        ShellChromeEvent::SessionSelectionMoved { delta } => {
-            // navigation은 full recent-session catalog가 있을 때만 적용된다. attach-only catalog는 selectable row가 없다.
-            let SessionState::Ready(catalog) = &state.session_state else {
-                return finish_shell_chrome_reduction(state, effects, previous_overlay);
-            };
-            let Some(recent_sessions) = catalog.recent_sessions() else {
-                return finish_shell_chrome_reduction(state, effects, previous_overlay);
-            };
-            if recent_sessions.items.is_empty() {
-                state.selected_session_index = 0;
-            } else {
-                // wrap 대신 clamp를 써서 list 끝에서 반복 keypress가 같은 row에 머물게 한다.
-                let max_index = recent_sessions.items.len().saturating_sub(1) as isize;
-                let current_index = state.selected_session_index as isize;
-                let next_index = (current_index + delta).clamp(0, max_index);
-                state.selected_session_index = next_index as usize;
-            }
-        }
     }
 
     finish_shell_chrome_reduction(state, effects, previous_overlay)
@@ -459,23 +468,26 @@ fn queue_session_catalog_intent_if_startup_ready(
 #[cfg(test)]
 mod tests {
     use super::{
-        ExitConfirmationState, SessionState, ShellChromeEffect, ShellChromeEvent, ShellChromeState,
-        ShellOverlay, ShellOverlayExitMode, ShellOverlayTransition, StartupState,
-        reduce_shell_chrome,
+        ExitConfirmationState, SessionCatalogSelectionPolicy, SessionState, ShellChromeEffect,
+        ShellChromeEvent, ShellChromeState, ShellOverlay, ShellOverlayExitMode,
+        ShellOverlayTransition, StartupState, reduce_shell_chrome,
     };
-    use crate::core::app::{SessionCatalogLoadMode, StartupReadySnapshot};
-    use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogTier};
+    use crate::core::app::{
+        SessionCatalogLoadMode, SessionCatalogReadySnapshot, SessionCatalogSnapshot,
+        StartupReadySnapshot, StartupSnapshot,
+    };
+    use crate::domain::recent_sessions::RecentSessions;
     use crate::domain::session_summary::SessionSummary;
     use crate::domain::startup_diagnostics::StartupDiagnostics;
     use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
     #[test]
-    fn startup_loaded_auto_requests_sessions_when_ready() {
+    fn startup_ready_projection_auto_requests_sessions() {
         // startup 성공 직후에는 validated workspace로 recent session preload를 한 번 걸어 첫 화면 진입 비용을 줄인다.
         let state = ShellChromeState::new();
         let reduced = reduce_shell_chrome(
             state,
-            ShellChromeEvent::StartupLoaded {
-                result: Ok(sample_startup_diagnostics()),
+            ShellChromeEvent::StartupProjected {
+                snapshot: StartupSnapshot::Ready(sample_startup_diagnostics()),
                 session_page_size: 10,
             },
         );
@@ -493,6 +505,120 @@ mod tests {
                 current_workspace_directory: Some("/tmp/root".to_string()),
             }]
         );
+    }
+
+    #[test]
+    fn startup_request_waits_for_the_core_loading_projection() {
+        let reduced = reduce_shell_chrome(
+            ShellChromeState::new(),
+            ShellChromeEvent::StartupCheckRequested,
+        );
+
+        assert!(matches!(reduced.state.startup_state, StartupState::Idle));
+        assert_eq!(reduced.effects, vec![ShellChromeEffect::RunStartupChecks]);
+
+        let projected = reduce_shell_chrome(
+            reduced.state,
+            ShellChromeEvent::StartupProjected {
+                snapshot: StartupSnapshot::Loading,
+                session_page_size: 10,
+            },
+        );
+        assert!(matches!(
+            projected.state.startup_state,
+            StartupState::Loading
+        ));
+        assert!(projected.effects.is_empty());
+    }
+
+    #[test]
+    fn startup_idle_and_failure_are_installed_only_from_typed_projections() {
+        let mut state = ShellChromeState::new();
+        state.startup_state = StartupState::Loading;
+        let idle = reduce_shell_chrome(
+            state,
+            ShellChromeEvent::StartupProjected {
+                snapshot: StartupSnapshot::Idle,
+                session_page_size: 10,
+            },
+        );
+        assert!(matches!(idle.state.startup_state, StartupState::Idle));
+
+        let failed = reduce_shell_chrome(
+            idle.state,
+            ShellChromeEvent::StartupProjected {
+                snapshot: StartupSnapshot::Failed {
+                    message: "missing provider".to_string(),
+                },
+                session_page_size: 10,
+            },
+        );
+        assert!(matches!(
+            failed.state.startup_state,
+            StartupState::Failed(ref message) if message == "missing provider"
+        ));
+        assert!(failed.effects.is_empty());
+    }
+
+    #[test]
+    fn catalog_projection_policy_resets_only_authoritative_load_results() {
+        let catalog = SessionCatalogReadySnapshot {
+            catalog: Box::new(
+                RecentSessions {
+                    items: vec![sample_session("thread-1"), sample_session("thread-2")],
+                    warnings: Vec::new(),
+                    next_cursor: None,
+                }
+                .into(),
+            ),
+            tier_label: "provider-backed-catalog".to_string(),
+            item_count: 2,
+            warnings: Vec::new(),
+        };
+        let mut state = ShellChromeState::new();
+        state.selected_session_index = 1;
+
+        let preserved = reduce_shell_chrome(
+            state,
+            ShellChromeEvent::SessionCatalogProjected {
+                snapshot: SessionCatalogSnapshot::Ready(catalog.clone()),
+                selection_policy: SessionCatalogSelectionPolicy::Preserve,
+            },
+        );
+        assert_eq!(preserved.state.selected_session_index, 1);
+
+        let reset = reduce_shell_chrome(
+            preserved.state,
+            ShellChromeEvent::SessionCatalogProjected {
+                snapshot: SessionCatalogSnapshot::Ready(catalog),
+                selection_policy: SessionCatalogSelectionPolicy::ResetOnReady,
+            },
+        );
+        assert_eq!(reset.state.selected_session_index, 0);
+    }
+
+    #[test]
+    fn non_ready_catalog_projections_preserve_the_browser_selection() {
+        let snapshots = [
+            SessionCatalogSnapshot::Idle,
+            SessionCatalogSnapshot::Loading,
+            SessionCatalogSnapshot::Failed {
+                message: "catalog unavailable".to_string(),
+            },
+        ];
+
+        for snapshot in snapshots {
+            let mut state = ShellChromeState::new();
+            state.selected_session_index = 3;
+            let reduced = reduce_shell_chrome(
+                state,
+                ShellChromeEvent::SessionCatalogProjected {
+                    snapshot,
+                    selection_policy: SessionCatalogSelectionPolicy::ResetOnReady,
+                },
+            );
+            assert_eq!(reduced.state.selected_session_index, 3);
+        }
     }
     #[test]
     fn opening_sessions_overlay_forwards_each_ensure_intent_to_core() {
@@ -656,39 +782,6 @@ mod tests {
                 current_workspace_directory: None,
             }]
         );
-    }
-    #[test]
-    fn moving_selection_clamps_to_available_bounds() {
-        // session browser navigation은 list edge에서 wrap하지 않고 clamp되어 같은 row에 머문다.
-        let mut state = ShellChromeState::new();
-        state.session_state = SessionState::Ready(
-            RecentSessions {
-                items: vec![sample_session("thread-1"), sample_session("thread-2")],
-                warnings: Vec::new(),
-                next_cursor: None,
-            }
-            .into(),
-        );
-        state.selected_session_index = 1;
-        let reduced =
-            reduce_shell_chrome(state, ShellChromeEvent::SessionSelectionMoved { delta: 5 });
-
-        assert_eq!(reduced.state.selected_session_index, 1);
-    }
-    #[test]
-    fn moving_selection_ignores_attach_only_catalog_without_browser_items() {
-        // attach-only catalog는 browser item이 없으므로 selection movement가 기존 index를 바꾸지 않는다.
-        let mut state = ShellChromeState::new();
-        state.session_state = SessionState::Ready(SessionCatalog::unsupported(
-            SessionCatalogTier::AttachOnly,
-            "session listing is unsupported for this bridge",
-            Vec::new(),
-        ));
-        state.selected_session_index = 1;
-        let reduced =
-            reduce_shell_chrome(state, ShellChromeEvent::SessionSelectionMoved { delta: -1 });
-
-        assert_eq!(reduced.state.selected_session_index, 1);
     }
     #[test]
     fn showing_planning_init_overlay_hides_exit_confirmation() {
@@ -954,7 +1047,7 @@ mod tests {
     }
 
     #[test]
-    fn unchanged_overlay_and_selection_early_returns_do_not_publish_a_transition() {
+    fn unchanged_overlay_and_selection_projection_do_not_publish_a_transition() {
         let mut unchanged_state = ShellChromeState::new();
         unchanged_state.shell_overlay = ShellOverlay::Help;
         let unchanged = reduce_shell_chrome(unchanged_state, ShellChromeEvent::HelpOverlayShown);
@@ -964,7 +1057,7 @@ mod tests {
         selection_state.shell_overlay = ShellOverlay::Sessions;
         let selection = reduce_shell_chrome(
             selection_state,
-            ShellChromeEvent::SessionSelectionMoved { delta: 1 },
+            ShellChromeEvent::SessionSelectionProjected { index: 1 },
         );
         assert_eq!(selection.state.shell_overlay, ShellOverlay::Sessions);
         assert_eq!(selection.overlay_transition, None);

@@ -263,6 +263,12 @@ Flat semantic field가 없고 `Deref`, `AsRef`, mutable aggregate escape를 제�
 받는 startup/conversation snapshot은 이미 Core correlation 검증을 통과했으므로 adapter는 이를
 직접 projection하며 startup/conversation pending gate를 중복 보관하지 않습니다.
 
+Shell-local startup, session catalog, selection, overlay, exit-confirmation field의 writer는
+`reduce_shell_chrome` 하나뿐입니다. Core snapshot과 domain에서 계산한 browser selection은 typed
+projection event로 들어오며 controller가 field를 직접 대입할 수 없습니다. Shell reducer module은
+crate-private이고, Rust AST guard는 dispatch seam 밖의 field assignment, mutable borrow,
+whole-state replacement와 non-exhaustive event routing을 거부합니다.
+
 Production terminal/frontend code는 `ShellRuntime`에서 `NativeTuiApp`을 빌릴 수 없습니다. Runtime은
 owned terminal-sync projection과 `InlineShellFrameModel`만 반환하고, render receipt,
 transcript-handoff ACK, queue hit-area cleanup에는 이름이 명확한 좁은 mutation API만 제공합니다.

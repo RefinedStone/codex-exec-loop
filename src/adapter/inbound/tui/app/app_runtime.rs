@@ -35,6 +35,8 @@ use crate::core::app::{
 use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::operator_alert::OperatorAlert;
 
+#[cfg(test)]
+use super::StartupState;
 use super::{
     AutoFollowControlEvent, AutoFollowOverlayUiEvent, AutoFollowOverlayUiState,
     AutoFollowSnapshotPresentation, ConversationComposerEffect, ConversationComposerEvent,
@@ -43,12 +45,13 @@ use super::{
     ConversationLifecycleEvent, ConversationLifecycleState, ConversationRuntimeEffect,
     ConversationRuntimeEvent, ConversationState, ConversationViewModel,
     GithubReviewPollingBootstrap, NativeTuiApp, PendingResumedSessionPlanningRefresh,
-    PlanningInitOverlayUiState, SESSION_PAGE_SIZE, SessionOverlayUiState, SessionState,
-    ShellChromeEffect, ShellChromeEvent, ShellChromeReduction, ShellChromeState, ShellOverlay,
-    ShellOverlayExitMode, ShellOverlayTransition, StartupState, max_auto_turns_command,
-    reduce_auto_follow_overlay_ui, reduce_conversation_input, reduce_conversation_intents,
-    reduce_conversation_lifecycle, reduce_conversation_runtime_with_transition,
-    reduce_shell_chrome, startup_ascii_art_enabled_from_environment,
+    PlanningInitOverlayUiState, SESSION_PAGE_SIZE, SessionCatalogSelectionPolicy,
+    SessionOverlayUiState, ShellChromeEffect, ShellChromeEvent, ShellChromeReduction,
+    ShellChromeState, ShellOverlay, ShellOverlayExitMode, ShellOverlayTransition,
+    max_auto_turns_command, reduce_auto_follow_overlay_ui, reduce_conversation_input,
+    reduce_conversation_intents, reduce_conversation_lifecycle,
+    reduce_conversation_runtime_with_transition, reduce_shell_chrome,
+    startup_ascii_art_enabled_from_environment,
 };
 
 // Background control-plane and poll results are lower volume than token events,
@@ -1828,19 +1831,18 @@ impl NativeTuiApp {
     ) {
         match event {
             AppEvent::StartupChanged { snapshot, .. } => self.apply_core_startup_snapshot(snapshot),
-            AppEvent::SessionCatalogChanged(SessionCatalogSnapshot::Idle) => {
-                self.shell.chrome.session_state = SessionState::Idle;
-            }
-            AppEvent::SessionCatalogChanged(SessionCatalogSnapshot::Loading) => {
-                self.shell.chrome.session_state = SessionState::Loading;
-            }
-            AppEvent::SessionCatalogChanged(SessionCatalogSnapshot::Ready(ready)) => {
-                self.dispatch_shell_chrome(ShellChromeEvent::SessionsLoaded(Ok(*ready.catalog)));
-                self.shell.session_overlay_ui_state.reset();
-            }
-            AppEvent::SessionCatalogChanged(SessionCatalogSnapshot::Failed { message }) => {
-                self.dispatch_shell_chrome(ShellChromeEvent::SessionsLoaded(Err(message)));
-                self.shell.session_overlay_ui_state.reset();
+            AppEvent::SessionCatalogChanged(snapshot) => {
+                let resets_overlay_ui = matches!(
+                    &snapshot,
+                    SessionCatalogSnapshot::Ready(_) | SessionCatalogSnapshot::Failed { .. }
+                );
+                self.dispatch_shell_chrome(ShellChromeEvent::SessionCatalogProjected {
+                    snapshot,
+                    selection_policy: SessionCatalogSelectionPolicy::ResetOnReady,
+                });
+                if resets_overlay_ui {
+                    self.shell.session_overlay_ui_state.reset();
+                }
             }
             AppEvent::SessionRenameAdmissionResolved(_) => {}
             AppEvent::SessionRenameCompleted {
@@ -2142,29 +2144,23 @@ impl NativeTuiApp {
     }
 
     fn apply_core_startup_snapshot(&mut self, snapshot: StartupSnapshot) {
-        match snapshot {
-            StartupSnapshot::Loading => {
-                self.shell.chrome.startup_state = StartupState::Loading;
-            }
-            StartupSnapshot::Idle => {
-                self.shell.chrome.startup_state = StartupState::Idle;
-            }
-            StartupSnapshot::Ready(ready) => {
-                let workspace_directory = ready.workspace_path.clone();
-                self.dispatch_shell_chrome(ShellChromeEvent::StartupLoaded {
-                    result: Ok(ready),
-                    session_page_size: SESSION_PAGE_SIZE,
-                });
-                self.sync_draft_shell_workspace(&workspace_directory);
-                self.resolve_startup_submit_queue();
-            }
-            StartupSnapshot::Failed { message } => {
-                self.dispatch_shell_chrome(ShellChromeEvent::StartupLoaded {
-                    result: Err(message),
-                    session_page_size: SESSION_PAGE_SIZE,
-                });
-                self.resolve_startup_submit_queue();
-            }
+        let workspace_directory = match &snapshot {
+            StartupSnapshot::Ready(ready) => Some(ready.workspace_path.clone()),
+            _ => None,
+        };
+        let settled = matches!(
+            &snapshot,
+            StartupSnapshot::Ready(_) | StartupSnapshot::Failed { .. }
+        );
+        self.dispatch_shell_chrome(ShellChromeEvent::StartupProjected {
+            snapshot,
+            session_page_size: SESSION_PAGE_SIZE,
+        });
+        if let Some(workspace_directory) = workspace_directory {
+            self.sync_draft_shell_workspace(&workspace_directory);
+        }
+        if settled {
+            self.resolve_startup_submit_queue();
         }
     }
 

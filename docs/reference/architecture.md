@@ -323,6 +323,12 @@ conversation snapshots have already passed Core correlation checks when the TUI 
 the adapter projects them directly instead of retaining duplicate startup/conversation pending
 gates.
 
+Shell-local startup, session catalog, selection, overlay, and exit-confirmation fields have one
+writer: `reduce_shell_chrome`. Core snapshots and domain-derived browser selections enter as typed
+projection events; controllers cannot assign those fields directly. The shell reducer module is
+crate-private, and a Rust AST guard rejects field assignments, mutable borrows, whole-state
+replacement outside the dispatch seam, and non-exhaustive event routing.
+
 Production terminal/frontend code cannot borrow `NativeTuiApp` from `ShellRuntime`. The runtime
 returns owned terminal-sync projections and `InlineShellFrameModel` values, then accepts only named,
 narrow mutations for render receipts, transcript-handoff acknowledgement, and queue hit-area

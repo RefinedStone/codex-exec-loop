@@ -2,7 +2,7 @@ use crossterm::event::{self, KeyCode, KeyModifiers};
 
 use super::{
     ConversationInputEvent, ConversationIntentEvent, ConversationRuntimeEvent, NativeTuiApp,
-    SESSION_PAGE_SIZE, SessionState, ShellChromeEvent, ShellOverlay,
+    SESSION_PAGE_SIZE, SessionCatalogSelectionPolicy, SessionState, ShellChromeEvent, ShellOverlay,
 };
 use crate::core::app::{
     AppCommand, AppEvent, CoreDispatchOutcome, CoreInput, SessionCatalogSnapshot,
@@ -83,7 +83,7 @@ impl NativeTuiApp {
 
     pub(super) fn clear_session_browser_state(&mut self) {
         // Clear query/filter/page state and then normalize selected_session_id against the fresh page.
-        self.shell.chrome.selected_session_index = 0;
+        self.dispatch_shell_chrome(ShellChromeEvent::SessionSelectionProjected { index: 0 });
         self.shell.session_overlay_ui_state.clear_browser_state();
         self.sync_session_browser_selection();
     }
@@ -111,7 +111,9 @@ impl NativeTuiApp {
 
     fn apply_session_browser_selection(&mut self, selection: SessionBrowserSelection) {
         // Store both visible index and stable id: index drives cursor position, id survives resort/filter.
-        self.shell.chrome.selected_session_index = selection.index;
+        self.dispatch_shell_chrome(ShellChromeEvent::SessionSelectionProjected {
+            index: selection.index,
+        });
         self.shell
             .session_overlay_ui_state
             .set_selected_session_id(selection.session_id);
@@ -133,7 +135,9 @@ impl NativeTuiApp {
                 None => (0, None),
             };
 
-        self.shell.chrome.selected_session_index = selected_session_index;
+        self.dispatch_shell_chrome(ShellChromeEvent::SessionSelectionProjected {
+            index: selected_session_index,
+        });
         self.shell
             .session_overlay_ui_state
             .set_selected_session_id(selected_session_id);
@@ -446,12 +450,10 @@ impl NativeTuiApp {
     }
 
     fn apply_session_catalog_projection(&mut self, snapshot: SessionCatalogSnapshot) {
-        self.shell.chrome.session_state = match snapshot {
-            SessionCatalogSnapshot::Idle => SessionState::Idle,
-            SessionCatalogSnapshot::Loading => SessionState::Loading,
-            SessionCatalogSnapshot::Ready(ready) => SessionState::Ready(*ready.catalog),
-            SessionCatalogSnapshot::Failed { message } => SessionState::Failed(message),
-        };
+        self.dispatch_shell_chrome(ShellChromeEvent::SessionCatalogProjected {
+            snapshot,
+            selection_policy: SessionCatalogSelectionPolicy::Preserve,
+        });
     }
 
     pub(super) fn handle_session_overlay_key(&mut self, key: event::KeyEvent) -> bool {
