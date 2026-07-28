@@ -4241,6 +4241,36 @@ fn update_unrelated(
         "an import alias must preserve its qualified path before authority classification"
     );
 
+    let qualified_reexport = shell_chrome_writer_audit(
+        "mod facade {\n\
+             pub use crate::adapter::inbound::tui::app::NativeTuiApp;\n\
+         }\n\
+         fn escape(app: &mut crate::facade::NativeTuiApp) {\n\
+             app.shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+    )
+    .expect("qualified NativeTuiApp re-export fixture should parse");
+    assert_eq!(
+        qualified_reexport.field_writes.len(),
+        1,
+        "qualified re-exports must resolve to the original TUI authority path"
+    );
+
+    let unrelated_qualified_reexport = shell_chrome_writer_audit(
+        "mod facade {\n\
+             pub use crate::unrelated::NativeTuiApp;\n\
+         }\n\
+         fn update(app: &mut crate::facade::NativeTuiApp) {\n\
+             app.shell.chrome.session_state = 1;\n\
+         }",
+    )
+    .expect("unrelated qualified re-export fixture should parse");
+    assert!(
+        unrelated_qualified_reexport.field_writes.is_empty()
+            && unrelated_qualified_reexport.whole_state_writes.is_empty(),
+        "same-named re-exports outside the TUI authority path must remain harmless"
+    );
+
     let wrapped_app = shell_chrome_writer_audit(
         "struct Context<'a> {\n\
              app: &'a mut NativeTuiApp,\n\
@@ -13989,6 +14019,15 @@ fn collect_qualified_type_aliases(
                 format!("{}::{}", module_path.join("::"), alias.ident),
                 alias.ty.as_ref().clone(),
             );
+        }
+        if let syn::Item::Use(import) = item {
+            let mut imports = ShellStructImports::new();
+            collect_use_struct_imports(&import.tree, &mut Vec::new(), &mut imports);
+            for (local_name, target) in imports {
+                if let Ok(ty) = syn::parse_str::<syn::Type>(&target.join("::")) {
+                    aliases.insert(format!("{}::{local_name}", module_path.join("::")), ty);
+                }
+            }
         }
         if let syn::Item::Mod(module) = item
             && let Some((_, nested_items)) = &module.content
