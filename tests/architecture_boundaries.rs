@@ -4057,6 +4057,7 @@ fn shell_chrome_state_has_one_typed_reducer_writer() {
         .collect::<Vec<_>>();
     let mut known_struct_fields = ShellStructFields::new();
     let mut known_type_aliases = ShellQualifiedTypeAliases::new();
+    let mut known_function_returns = ShellQualifiedFunctionReturns::new();
     let tui_root_module_path = [
         "crate".to_string(),
         "adapter".to_string(),
@@ -4082,6 +4083,10 @@ fn shell_chrome_state_has_one_typed_reducer_writer() {
             &syntax,
             module_path,
         ));
+        known_function_returns.extend(qualified_function_returns_declared_in_file(
+            &syntax,
+            module_path,
+        ));
     }
     for (path, source, module_path) in &tui_sources {
         let syntax = syn::parse_file(source)
@@ -4094,15 +4099,20 @@ fn shell_chrome_state_has_one_typed_reducer_writer() {
             &syntax,
             module_path,
         ));
+        known_function_returns.extend(qualified_function_returns_declared_in_file(
+            &syntax,
+            module_path,
+        ));
     }
 
     for (path, source, module_path) in &tui_sources {
         let relative = relative_path(&root, path);
-        let audit = shell_chrome_writer_audit_with_type_registry(
+        let audit = shell_chrome_writer_audit_with_registries(
             source,
             relative == "src/adapter/inbound/tui/app/app_runtime.rs",
             &known_struct_fields,
             &known_type_aliases,
+            &known_function_returns,
             module_path,
         )
         .unwrap_or_else(|error| panic!("failed to audit {}: {error}", path.display()));
@@ -6656,16 +6666,57 @@ fn update_unrelated(
     let owned_function_returns = shell_chrome_writer_audit(
         "fn make_app() -> NativeTuiApp { todo!() }\n\
          fn make_chrome() -> ShellChromeState { todo!() }\n\
-         fn escape() {\n\
+         mod returns {\n\
+             pub fn make_app() -> NativeTuiApp { todo!() }\n\
+         }\n\
+         struct Factory;\n\
+         impl Factory {\n\
+             fn make_chrome(&self) -> ShellChromeState { todo!() }\n\
+         }\n\
+         fn escape(factory: Factory) {\n\
              make_app().shell.chrome.session_state = SessionState::Idle;\n\
              make_chrome().session_state = SessionState::Idle;\n\
+             returns::make_app().shell.chrome.session_state = SessionState::Idle;\n\
+             factory.make_chrome().session_state = SessionState::Idle;\n\
          }",
     )
     .expect("owned function return authority fixtures should parse");
     assert_eq!(
         owned_function_returns.field_writes.len(),
+        4,
+        "free, qualified, and method return temporaries must grant mutable authority"
+    );
+    let external_factory_file = syn::parse_file(
+        "pub struct Factory;\n\
+         impl Factory {\n\
+             pub fn make_chrome(&self) -> ShellChromeState { todo!() }\n\
+         }\n\
+         pub fn make_app() -> NativeTuiApp { todo!() }",
+    )
+    .expect("cross-file factory return fixture should parse");
+    let external_factory_module = ["crate".to_string(), "factory".to_string()];
+    let external_factory_structs =
+        qualified_struct_fields_declared_in_file(&external_factory_file, &external_factory_module);
+    let external_factory_returns = qualified_function_returns_declared_in_file(
+        &external_factory_file,
+        &external_factory_module,
+    );
+    let cross_file_function_returns = shell_chrome_writer_audit_with_registries(
+        "fn escape(factory: crate::factory::Factory) {\n\
+             crate::factory::make_app().shell.chrome.session_state = SessionState::Idle;\n\
+             factory.make_chrome().session_state = SessionState::Idle;\n\
+         }",
+        false,
+        &external_factory_structs,
+        &ShellQualifiedTypeAliases::new(),
+        &external_factory_returns,
+        &["crate".to_string(), "writer".to_string()],
+    )
+    .expect("cross-file function return authority fixture should parse");
+    assert_eq!(
+        cross_file_function_returns.field_writes.len(),
         2,
-        "owned function return temporaries must grant mutable authority"
+        "cross-file qualified functions and methods must retain owned return authority"
     );
 
     let read_only_index = shell_chrome_writer_audit(
@@ -16636,6 +16687,7 @@ fn qualified_type_aliases_declared_in_file(
 }
 
 type ShellFunctionReturns = HashMap<String, syn::Type>;
+type ShellQualifiedFunctionReturns = HashMap<String, syn::Type>;
 
 fn collect_item_function_return(item: &syn::Item, returns: &mut ShellFunctionReturns) {
     let syn::Item::Fn(function) = item else {
@@ -16664,6 +16716,104 @@ fn function_returns_declared_in_statements(statements: &[syn::Stmt]) -> ShellFun
             collect_item_function_return(item, &mut returns);
         }
     }
+    returns
+}
+
+fn declared_shell_path(path: &syn::Path, module_path: &[String]) -> Vec<String> {
+    let raw_path = path
+        .segments
+        .iter()
+        .map(|segment| segment.ident.to_string())
+        .collect::<Vec<_>>();
+    let mut normalized = module_path.to_vec();
+    let mut index = 0;
+    if path.leading_colon.is_some() || raw_path.first().is_some_and(|segment| segment == "crate") {
+        normalized.clear();
+        normalized.push("crate".to_string());
+        if raw_path.first().is_some_and(|segment| segment == "crate") {
+            index = 1;
+        }
+    } else if raw_path.first().is_some_and(|segment| segment == "self") {
+        index = 1;
+    }
+    while raw_path
+        .get(index)
+        .is_some_and(|segment| segment == "super")
+    {
+        if normalized.len() > 1 {
+            normalized.pop();
+        }
+        index += 1;
+    }
+    normalized.extend(raw_path[index..].iter().cloned());
+    normalized
+}
+
+fn collect_qualified_function_returns(
+    items: &[syn::Item],
+    module_path: &mut Vec<String>,
+    returns: &mut ShellQualifiedFunctionReturns,
+) {
+    for item in items {
+        if item_is_test_only(item) {
+            continue;
+        }
+        match item {
+            syn::Item::Fn(function) => {
+                if let syn::ReturnType::Type(_, ty) = &function.sig.output {
+                    returns.insert(
+                        format!("{}::{}", module_path.join("::"), function.sig.ident),
+                        ty.as_ref().clone(),
+                    );
+                }
+            }
+            syn::Item::Impl(item) => {
+                let raw_receiver = shell_type_identity(item.self_ty.as_ref());
+                let receiver_paths = shell_type_path(item.self_ty.as_ref())
+                    .map(|path| {
+                        vec![
+                            raw_receiver.clone(),
+                            declared_shell_path(&path.path, module_path).join("::"),
+                        ]
+                    })
+                    .unwrap_or_else(|| vec![raw_receiver]);
+                for method in &item.items {
+                    let syn::ImplItem::Fn(method) = method else {
+                        continue;
+                    };
+                    if attributes_are_test_only(&method.attrs) {
+                        continue;
+                    }
+                    let syn::ReturnType::Type(_, ty) = &method.sig.output else {
+                        continue;
+                    };
+                    for receiver in &receiver_paths {
+                        returns.insert(
+                            format!("{receiver}::{}", method.sig.ident),
+                            ty.as_ref().clone(),
+                        );
+                    }
+                }
+            }
+            syn::Item::Mod(module) => {
+                let Some((_, nested_items)) = &module.content else {
+                    continue;
+                };
+                module_path.push(module.ident.to_string());
+                collect_qualified_function_returns(nested_items, module_path, returns);
+                module_path.pop();
+            }
+            _ => {}
+        }
+    }
+}
+
+fn qualified_function_returns_declared_in_file(
+    file: &syn::File,
+    module_path: &[String],
+) -> ShellQualifiedFunctionReturns {
+    let mut returns = HashMap::new();
+    collect_qualified_function_returns(&file.items, &mut module_path.to_vec(), &mut returns);
     returns
 }
 
@@ -17243,6 +17393,24 @@ fn shell_chrome_writer_audit_with_type_registry(
     known_type_aliases: &ShellQualifiedTypeAliases,
     module_path: &[String],
 ) -> Result<ShellChromeWriterAudit, String> {
+    shell_chrome_writer_audit_with_registries(
+        source,
+        allow_native_app_dispatch_seam,
+        known_struct_fields,
+        known_type_aliases,
+        &ShellQualifiedFunctionReturns::new(),
+        module_path,
+    )
+}
+
+fn shell_chrome_writer_audit_with_registries(
+    source: &str,
+    allow_native_app_dispatch_seam: bool,
+    known_struct_fields: &ShellStructFields,
+    known_type_aliases: &ShellQualifiedTypeAliases,
+    known_function_returns: &ShellQualifiedFunctionReturns,
+    module_path: &[String],
+) -> Result<ShellChromeWriterAudit, String> {
     let syntax = syn::parse_file(source)
         .map_err(|error| format!("shell chrome writer source must parse: {error}"))?;
     let mut struct_fields = known_struct_fields.clone();
@@ -17255,10 +17423,16 @@ fn shell_chrome_writer_audit_with_type_registry(
         &syntax,
         module_path,
     ));
+    let mut qualified_function_returns = known_function_returns.clone();
+    qualified_function_returns.extend(qualified_function_returns_declared_in_file(
+        &syntax,
+        module_path,
+    ));
     let mut visitor = ShellChromeWriterVisitor {
         allow_native_app_dispatch_seam,
         struct_fields,
         qualified_type_aliases,
+        qualified_function_returns,
         module_path: module_path.to_vec(),
         ..Default::default()
     };
@@ -17279,6 +17453,7 @@ struct ShellChromeWriterVisitor {
     type_aliases: ShellTypeAliases,
     qualified_type_aliases: ShellQualifiedTypeAliases,
     function_returns: ShellFunctionReturns,
+    qualified_function_returns: ShellQualifiedFunctionReturns,
     closure_bindings: HashMap<String, syn::ExprClosure>,
     struct_fields: ShellStructFields,
     struct_imports: ShellStructImports,
@@ -17836,6 +18011,91 @@ impl ShellChromeWriterVisitor {
         );
     }
 
+    fn function_return_binding(&self, ty: syn::Type) -> ShellTypeBinding {
+        ShellTypeBinding {
+            mutable: self.type_grants_mutable_access(&ty),
+            ty,
+        }
+    }
+
+    fn function_return_type(&self, path: &syn::Path) -> Option<syn::Type> {
+        if path.leading_colon.is_none()
+            && path.segments.len() == 1
+            && let Some(ty) = self
+                .function_returns
+                .get(&path.segments.first()?.ident.to_string())
+        {
+            return Some(ty.clone());
+        }
+        let mut normalized =
+            normalized_shell_type_path(path, self.type_resolution_scope(self.impl_authority));
+        if normalized.len() == 1 {
+            let mut scoped = self.module_path.clone();
+            scoped.append(&mut normalized);
+            normalized = scoped;
+        }
+        self.qualified_function_returns
+            .get(&normalized.join("::"))
+            .cloned()
+    }
+
+    fn method_return_type(
+        &self,
+        receiver: &ShellTypeBinding,
+        method: &syn::Ident,
+    ) -> Option<syn::Type> {
+        fn named_path(ty: &syn::Type) -> Option<&syn::TypePath> {
+            match ty {
+                syn::Type::Reference(reference) => named_path(reference.elem.as_ref()),
+                syn::Type::Ptr(pointer) => named_path(pointer.elem.as_ref()),
+                syn::Type::Group(group) => named_path(group.elem.as_ref()),
+                syn::Type::Paren(paren) => named_path(paren.elem.as_ref()),
+                syn::Type::Path(path) if path.qself.is_none() => Some(path),
+                _ => None,
+            }
+        }
+
+        let expanded = shell_type_with_expanded_aliases(
+            &receiver.ty,
+            self.type_resolution_scope(self.impl_authority),
+            &mut HashSet::new(),
+        );
+        let mut receiver_keys = Vec::new();
+        if let Some(resolved) = self.resolved_struct_type(&expanded) {
+            receiver_keys.push(resolved.name);
+        }
+        if let Some(path) = named_path(&expanded) {
+            let raw = path
+                .path
+                .segments
+                .iter()
+                .map(|segment| segment.ident.to_string())
+                .collect::<Vec<_>>();
+            receiver_keys.push(raw.join("::"));
+            let mut normalized = normalized_shell_type_path(
+                &path.path,
+                self.type_resolution_scope(self.impl_authority),
+            );
+            if normalized.len() == 1 {
+                let mut scoped = self.module_path.clone();
+                scoped.append(&mut normalized);
+                normalized = scoped;
+            }
+            receiver_keys.push(normalized.join("::"));
+        }
+        receiver_keys.dedup();
+        let method = method.to_string();
+        let mut ty = receiver_keys.into_iter().find_map(|receiver| {
+            self.qualified_function_returns
+                .get(&format!("{receiver}::{method}"))
+                .cloned()
+        })?;
+        if shell_type_is_bare_self(&ty) {
+            ty = receiver.ty.clone();
+        }
+        Some(ty)
+    }
+
     fn resolve_type_binding(&self, expression: &syn::Expr) -> Option<ShellTypeBinding> {
         match expression {
             syn::Expr::Path(path)
@@ -17936,6 +18196,11 @@ impl ShellChromeWriterVisitor {
                     ty,
                 })
             }
+            syn::Expr::MethodCall(call) => {
+                let receiver = self.resolve_type_binding(call.receiver.as_ref())?;
+                let ty = self.method_return_type(&receiver, &call.method)?;
+                Some(self.function_return_binding(ty))
+            }
             syn::Expr::Call(call) => {
                 if let Some(argument) = self.transparent_call_argument(call) {
                     return self.resolve_type_binding(argument);
@@ -17943,20 +18208,11 @@ impl ShellChromeWriterVisitor {
                 let syn::Expr::Path(path) = call.func.as_ref() else {
                     return None;
                 };
-                if path.qself.is_some()
-                    || path.path.leading_colon.is_some()
-                    || path.path.segments.len() != 1
-                {
+                if path.qself.is_some() {
                     return None;
                 }
-                let ty = self
-                    .function_returns
-                    .get(&path.path.segments.first()?.ident.to_string())?
-                    .clone();
-                Some(ShellTypeBinding {
-                    mutable: self.type_grants_mutable_access(&ty),
-                    ty,
-                })
+                let ty = self.function_return_type(&path.path)?;
+                Some(self.function_return_binding(ty))
             }
             _ => None,
         }
