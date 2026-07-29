@@ -4062,20 +4062,21 @@ fn shell_chrome_state_has_one_typed_reducer_writer() {
         "inbound".to_string(),
         "tui".to_string(),
     ];
-    let mut ancestor_sources = declared_module_paths
-        .iter()
-        .filter(|(_, module_path)| tui_root_module_path.starts_with(module_path.as_slice()))
-        .collect::<Vec<_>>();
-    ancestor_sources.sort_by_key(|(path, _)| path.as_os_str().to_owned());
-    for (path, module_path) in ancestor_sources {
+    let mut registry_sources = declared_module_paths.iter().collect::<Vec<_>>();
+    registry_sources.sort_by_key(|(path, _)| path.as_os_str().to_owned());
+    for (path, module_path) in registry_sources {
         let source = fs::read_to_string(path)
             .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
         let syntax = syn::parse_file(&source)
             .unwrap_or_else(|error| panic!("failed to parse {}: {error}", path.display()));
-        known_struct_fields.extend(qualified_struct_fields_declared_in_file(
-            &syntax,
-            module_path,
-        ));
+        if tui_root_module_path.starts_with(module_path.as_slice())
+            || module_path.starts_with(tui_root_module_path.as_slice())
+        {
+            known_struct_fields.extend(qualified_struct_fields_declared_in_file(
+                &syntax,
+                module_path,
+            ));
+        }
         known_type_aliases.extend(qualified_type_aliases_declared_in_file(
             &syntax,
             module_path,
@@ -4707,6 +4708,26 @@ fn update_unrelated(
         ancestor_reexported_app.field_writes.len(),
         1,
         "crate-to-TUI ancestor re-exports must retain NativeTuiApp authority"
+    );
+    let sibling_reexports = qualified_type_aliases_declared_in_file(
+        &ancestor_reexport_file,
+        &["crate".to_string(), "facade".to_string()],
+    );
+    let sibling_reexported_app = shell_chrome_writer_audit_with_type_registry(
+        "use crate::facade::App;\n\
+         fn escape(app: &mut App) {\n\
+             app.shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+        false,
+        &known_struct_fields,
+        &sibling_reexports,
+        &relative_writer_module,
+    )
+    .expect("sibling re-exported native app fixture should parse");
+    assert_eq!(
+        sibling_reexported_app.field_writes.len(),
+        1,
+        "sibling module re-exports must retain NativeTuiApp authority"
     );
 
     let crate_alias_file = syn::parse_file("extern crate self as akra;")
