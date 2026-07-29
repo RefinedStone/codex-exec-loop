@@ -1864,6 +1864,44 @@ fn frame_cache_invalidates_when_only_live_agent_text_changes() {
 }
 
 #[test]
+fn physical_shrink_clears_only_cursor_confirmed_tail_reflow_rows() {
+    let mut app = make_test_app();
+    app.shell.show_startup_ascii_art = false;
+    let mut state = InlineTerminalState::default();
+    state.record_terminal_viewport(
+        Size::new(120, 30),
+        Rect::new(0, 1, 120, 4),
+        Position::new(29, 3),
+    );
+    assert!(inline_state_should_draw(&mut state, &app, 120, 30));
+
+    state.observe_physical_resize_reflow(Size::new(48, 18), Position::new(29, 4));
+    assert_eq!(
+        state.resize_reflow_rows_to_clear(),
+        1,
+        "the one-row cursor shift and prior HUD wrap must agree on one cleanup row"
+    );
+
+    state.observe_physical_resize_reflow(Size::new(48, 18), Position::new(29, 9));
+    assert_eq!(
+        state.resize_reflow_rows_to_clear(),
+        1,
+        "history reflow may move the cursor farther, but cleanup must stay bounded by live-tail wrapping"
+    );
+
+    state.mark_frame_drawn(
+        Size::new(48, 18),
+        Rect::new(0, 1, 48, 4),
+        Position::new(29, 3),
+    );
+    assert_eq!(
+        state.resize_reflow_rows_to_clear(),
+        0,
+        "a delivered frame consumes the one-shot reflow cleanup"
+    );
+}
+
+#[test]
 fn frame_cache_invalidates_when_only_handoff_delivery_phase_changes() {
     let app = released_handoff_app(
         InlineHistoryRenderMode::ViewportReplay,
