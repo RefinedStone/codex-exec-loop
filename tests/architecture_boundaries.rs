@@ -5057,6 +5057,32 @@ fn update_unrelated(
         1,
         "absolute imports in alias declarations must bypass declaration-module shadows"
     );
+    let direct_absolute_reexport_file = syn::parse_file(
+        "mod akra {}\n\
+         pub use ::akra::adapter::inbound::tui::app::NativeTuiApp as App;",
+    )
+    .expect("direct absolute self-crate re-export should parse");
+    let mut direct_absolute_reexports = crate_aliases.clone();
+    direct_absolute_reexports.extend(qualified_type_aliases_declared_in_file(
+        &direct_absolute_reexport_file,
+        &relative_alias_module,
+    ));
+    let direct_absolute_reexported_alias = shell_chrome_writer_audit_with_type_registry(
+        "use crate::adapter::inbound::tui::app::aliases::App;\n\
+         fn escape(app: &mut App) {\n\
+             app.shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+        false,
+        &known_struct_fields,
+        &direct_absolute_reexports,
+        &relative_writer_module,
+    )
+    .expect("direct absolute self-crate re-export fixture should parse");
+    assert_eq!(
+        direct_absolute_reexported_alias.field_writes.len(),
+        1,
+        "direct absolute re-exports must preserve their root path origin"
+    );
 
     let unrelated_wrapper = shell_chrome_writer_audit(
         "struct OtherChrome { session_state: usize }\n\
@@ -15078,7 +15104,10 @@ impl ShellTypeAlias {
         }
     }
 
-    fn transparent(ty: syn::Type) -> Self {
+    fn transparent(mut ty: syn::Type, absolute: bool) -> Self {
+        if absolute {
+            mark_shell_type_path_absolute(&mut ty);
+        }
         Self {
             ty,
             generic_parameters: Vec::new(),
@@ -15156,6 +15185,17 @@ impl ShellTypeAlias {
     }
 }
 
+fn mark_shell_type_path_absolute(ty: &mut syn::Type) {
+    match ty {
+        syn::Type::Group(group) => mark_shell_type_path_absolute(group.elem.as_mut()),
+        syn::Type::Paren(paren) => mark_shell_type_path_absolute(paren.elem.as_mut()),
+        syn::Type::Path(path) if path.qself.is_none() => {
+            path.path.leading_colon = Some(Default::default());
+        }
+        _ => {}
+    }
+}
+
 struct ShellTypeParameterSubstituter<'a> {
     replacements: &'a HashMap<String, syn::Type>,
 }
@@ -15207,11 +15247,12 @@ fn collect_use_type_renames(
     tree: &syn::UseTree,
     prefix: &mut Vec<String>,
     aliases: &mut ShellTypeAliases,
+    absolute: bool,
 ) {
     match tree {
         syn::UseTree::Path(path) => {
             prefix.push(path.ident.to_string());
-            collect_use_type_renames(path.tree.as_ref(), prefix, aliases);
+            collect_use_type_renames(path.tree.as_ref(), prefix, aliases, absolute);
             prefix.pop();
         }
         syn::UseTree::Rename(rename) => {
@@ -15220,12 +15261,15 @@ fn collect_use_type_renames(
                 target.push(rename.ident.to_string());
             }
             if let Ok(ty) = syn::parse_str::<syn::Type>(&target.join("::")) {
-                aliases.insert(rename.rename.to_string(), ShellTypeAlias::transparent(ty));
+                aliases.insert(
+                    rename.rename.to_string(),
+                    ShellTypeAlias::transparent(ty, absolute),
+                );
             }
         }
         syn::UseTree::Group(group) => {
             for item in &group.items {
-                collect_use_type_renames(item, prefix, aliases);
+                collect_use_type_renames(item, prefix, aliases, absolute);
             }
         }
         syn::UseTree::Glob(_) | syn::UseTree::Name(_) => {}
@@ -15241,7 +15285,12 @@ fn collect_item_type_alias(item: &syn::Item, aliases: &mut ShellTypeAliases) {
             aliases.insert(item.ident.to_string(), ShellTypeAlias::declared(item));
         }
         syn::Item::Use(item) => {
-            collect_use_type_renames(&item.tree, &mut Vec::new(), aliases);
+            collect_use_type_renames(
+                &item.tree,
+                &mut Vec::new(),
+                aliases,
+                item.leading_colon.is_some(),
+            );
         }
         _ => {}
     }
@@ -15511,7 +15560,7 @@ fn collect_qualified_type_aliases(
                 if let Ok(ty) = syn::parse_str::<syn::Type>(&target.join("::")) {
                     aliases.insert(
                         format!("{}::{local_name}", module_path.join("::")),
-                        ShellTypeAlias::transparent(ty),
+                        ShellTypeAlias::transparent(ty, import.leading_colon.is_some()),
                     );
                 }
             }
@@ -16269,7 +16318,10 @@ impl ShellChromeWriterVisitor {
                     return None;
                 }
                 let ty = syn::parse_str::<syn::Type>(&key).ok()?;
-                Some((local_name.clone(), ShellTypeAlias::transparent(ty)))
+                Some((
+                    local_name.clone(),
+                    ShellTypeAlias::transparent(ty, self.absolute_imports.contains(local_name)),
+                ))
             })
             .collect()
     }
