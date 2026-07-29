@@ -5429,6 +5429,38 @@ fn update_unrelated(
         1,
         "alias resolution must retain reordered concrete struct arguments"
     );
+    let qualified_reordered_struct_alias = shell_chrome_writer_audit(
+        "struct Holder<T> { app: T }\n\
+         mod facade {\n\
+             pub type Reordered<A, B> = super::Holder<B>;\n\
+         }\n\
+         fn escape(mut holder: facade::Reordered<OtherState, NativeTuiApp>) {\n\
+             holder.app.shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+    )
+    .expect("qualified reordered generic struct alias fixture should parse");
+    assert_eq!(
+        qualified_reordered_struct_alias.field_writes.len(),
+        1,
+        "qualified aliases must retain reordered concrete struct arguments"
+    );
+    let recursively_reordered_struct = shell_chrome_writer_audit(
+        "struct Flip<A, B> {\n\
+             child: Box<Flip<B, A>>,\n\
+             current: A,\n\
+         }\n\
+         fn escape<'a>(\n\
+             value: Flip<OtherState, &'a mut ShellChromeState>,\n\
+         ) -> Flip<OtherState, &'a mut ShellChromeState> {\n\
+             value\n\
+         }",
+    )
+    .expect("recursively reordered generic struct fixture should parse");
+    assert_eq!(
+        recursively_reordered_struct.whole_state_writes.len(),
+        1,
+        "recursive visits must distinguish concrete generic instantiations"
+    );
     let custom_result_payload = shell_chrome_writer_audit(
         "enum Result<T, E> { Ok(E), Err(ShellChromeState, T) }\n\
          fn escape(value: Result<NativeTuiApp, OtherState>) {\n\
@@ -15010,6 +15042,112 @@ struct ShellResolvedStructType {
     arguments: syn::PathArguments,
 }
 
+impl ShellResolvedStructType {
+    fn visit_key(&self) -> String {
+        format!(
+            "{}{}",
+            self.name,
+            shell_path_arguments_identity(&self.arguments)
+        )
+    }
+}
+
+fn shell_path_arguments_identity(arguments: &syn::PathArguments) -> String {
+    match arguments {
+        syn::PathArguments::None => String::new(),
+        syn::PathArguments::AngleBracketed(arguments) => {
+            let arguments = arguments
+                .args
+                .iter()
+                .map(|argument| match argument {
+                    syn::GenericArgument::Lifetime(lifetime) => {
+                        format!("'{}", lifetime.ident)
+                    }
+                    syn::GenericArgument::Type(ty) => shell_type_identity(ty),
+                    syn::GenericArgument::Const(_) => "const".to_string(),
+                    syn::GenericArgument::AssocType(association) => {
+                        format!(
+                            "{}={}",
+                            association.ident,
+                            shell_type_identity(&association.ty)
+                        )
+                    }
+                    syn::GenericArgument::AssocConst(association) => {
+                        format!("{}=const", association.ident)
+                    }
+                    syn::GenericArgument::Constraint(constraint) => {
+                        format!("{}:constraint", constraint.ident)
+                    }
+                    _ => "argument".to_string(),
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("<{arguments}>")
+        }
+        syn::PathArguments::Parenthesized(arguments) => {
+            let inputs = arguments
+                .inputs
+                .iter()
+                .map(shell_type_identity)
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("({inputs})")
+        }
+    }
+}
+
+fn shell_type_identity(ty: &syn::Type) -> String {
+    match ty {
+        syn::Type::Path(path) if path.qself.is_none() => path
+            .path
+            .segments
+            .iter()
+            .map(|segment| {
+                format!(
+                    "{}{}",
+                    segment.ident,
+                    shell_path_arguments_identity(&segment.arguments)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("::"),
+        syn::Type::Reference(reference) => format!(
+            "&{}{}",
+            if reference.mutability.is_some() {
+                "mut "
+            } else {
+                ""
+            },
+            shell_type_identity(reference.elem.as_ref())
+        ),
+        syn::Type::Ptr(pointer) => format!(
+            "*{} {}",
+            if pointer.mutability.is_some() {
+                "mut"
+            } else {
+                "const"
+            },
+            shell_type_identity(pointer.elem.as_ref())
+        ),
+        syn::Type::Group(group) => shell_type_identity(group.elem.as_ref()),
+        syn::Type::Paren(paren) => format!("({})", shell_type_identity(paren.elem.as_ref())),
+        syn::Type::Slice(slice) => format!("[{}]", shell_type_identity(slice.elem.as_ref())),
+        syn::Type::Array(array) => format!("[{};_]", shell_type_identity(array.elem.as_ref())),
+        syn::Type::Tuple(tuple) => format!(
+            "({})",
+            tuple
+                .elems
+                .iter()
+                .map(shell_type_identity)
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        syn::Type::Never(_) => "!".to_string(),
+        syn::Type::Infer(_) => "_".to_string(),
+        _ => "type".to_string(),
+    }
+}
+
 #[derive(Clone, Copy)]
 struct ShellTypeResolutionScope<'a> {
     implicit_self: Option<ShellAuthorityKind>,
@@ -16711,6 +16849,11 @@ fn shell_chrome_writer_audit_with_type_registry(
 ) -> Result<ShellChromeWriterAudit, String> {
     let syntax = syn::parse_file(source)
         .map_err(|error| format!("shell chrome writer source must parse: {error}"))?;
+    let mut struct_fields = known_struct_fields.clone();
+    struct_fields.extend(qualified_struct_fields_declared_in_file(
+        &syntax,
+        module_path,
+    ));
     let mut qualified_type_aliases = known_type_aliases.clone();
     qualified_type_aliases.extend(qualified_type_aliases_declared_in_file(
         &syntax,
@@ -16718,7 +16861,7 @@ fn shell_chrome_writer_audit_with_type_registry(
     ));
     let mut visitor = ShellChromeWriterVisitor {
         allow_native_app_dispatch_seam,
-        struct_fields: known_struct_fields.clone(),
+        struct_fields,
         qualified_type_aliases,
         module_path: module_path.to_vec(),
         ..Default::default()
@@ -16997,7 +17140,12 @@ impl ShellChromeWriterVisitor {
             }
         }
 
-        resolve(self, ty, &mut HashSet::new())
+        let expanded = shell_type_with_expanded_aliases(
+            ty,
+            self.type_resolution_scope(self.impl_authority),
+            &mut HashSet::new(),
+        );
+        resolve(self, &expanded, &mut HashSet::new())
     }
 
     fn registered_struct_field_type(
@@ -17447,7 +17595,11 @@ impl ShellChromeWriterVisitor {
         let Some(struct_type) = self.resolved_struct_type(ty) else {
             return false;
         };
-        if !resolving_structs.insert(struct_type.name.clone()) {
+        if resolving_structs.len() >= 64 {
+            return true;
+        }
+        let visit_key = struct_type.visit_key();
+        if !resolving_structs.insert(visit_key.clone()) {
             return false;
         }
         let fields = self
@@ -17462,7 +17614,7 @@ impl ShellChromeWriterVisitor {
                 resolving_structs,
             )
         });
-        resolving_structs.remove(&struct_type.name);
+        resolving_structs.remove(&visit_key);
         contains
     }
 
