@@ -5404,6 +5404,31 @@ fn update_unrelated(
         1,
         "generic named variant payloads must substitute their actual authority type"
     );
+    let wrapped_generic_struct = shell_chrome_writer_audit(
+        "struct Holder<T> { app: T }\n\
+         fn escape(mut holder: Box<Holder<NativeTuiApp>>) {\n\
+             holder.app.shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+    )
+    .expect("wrapped generic struct fixture should parse");
+    assert_eq!(
+        wrapped_generic_struct.field_writes.len(),
+        1,
+        "wrapper resolution must retain the concrete inner struct arguments"
+    );
+    let reordered_generic_struct_alias = shell_chrome_writer_audit(
+        "struct Holder<T> { app: T }\n\
+         type Reordered<A, B> = Holder<B>;\n\
+         fn escape(mut holder: Reordered<OtherState, NativeTuiApp>) {\n\
+             holder.app.shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+    )
+    .expect("reordered generic struct alias fixture should parse");
+    assert_eq!(
+        reordered_generic_struct_alias.field_writes.len(),
+        1,
+        "alias resolution must retain reordered concrete struct arguments"
+    );
     let custom_result_payload = shell_chrome_writer_audit(
         "enum Result<T, E> { Ok(E), Err(ShellChromeState, T) }\n\
          fn escape(value: Result<NativeTuiApp, OtherState>) {\n\
@@ -14980,6 +15005,11 @@ struct ShellTypeBinding {
     mutable: bool,
 }
 
+struct ShellResolvedStructType {
+    name: String,
+    arguments: syn::PathArguments,
+}
+
 #[derive(Clone, Copy)]
 struct ShellTypeResolutionScope<'a> {
     implicit_self: Option<ShellAuthorityKind>,
@@ -16892,12 +16922,12 @@ impl ShellChromeWriterVisitor {
         matching_keys.next().is_none().then_some(only_match)
     }
 
-    fn struct_name_from_type(&self, ty: &syn::Type) -> Option<String> {
+    fn resolved_struct_type(&self, ty: &syn::Type) -> Option<ShellResolvedStructType> {
         fn resolve(
             visitor: &ShellChromeWriterVisitor,
             ty: &syn::Type,
             resolving_aliases: &mut HashSet<String>,
-        ) -> Option<String> {
+        ) -> Option<ShellResolvedStructType> {
             match ty {
                 syn::Type::Reference(reference) => {
                     resolve(visitor, reference.elem.as_ref(), resolving_aliases)
@@ -16942,7 +16972,10 @@ impl ShellChromeWriterVisitor {
                     if visitor.struct_imports.contains_key(&raw_path[0])
                         && let Some(key) = visitor.registered_struct_key(&path.path)
                     {
-                        return Some(key);
+                        return Some(ShellResolvedStructType {
+                            name: key,
+                            arguments: segment.arguments.clone(),
+                        });
                     }
                     if path.path.segments.len() == 1 && resolving_aliases.insert(name.clone()) {
                         if let Some(alias) = visitor.type_aliases.get(&name) {
@@ -16953,7 +16986,12 @@ impl ShellChromeWriterVisitor {
                         }
                         resolving_aliases.remove(&name);
                     }
-                    visitor.registered_struct_key(&path.path)
+                    visitor
+                        .registered_struct_key(&path.path)
+                        .map(|name| ShellResolvedStructType {
+                            name,
+                            arguments: segment.arguments.clone(),
+                        })
                 }
                 _ => None,
             }
@@ -16962,37 +17000,24 @@ impl ShellChromeWriterVisitor {
         resolve(self, ty, &mut HashSet::new())
     }
 
-    fn type_path_arguments(ty: &syn::Type) -> syn::PathArguments {
-        match ty {
-            syn::Type::Path(path) if path.qself.is_none() => path
-                .path
-                .segments
-                .last()
-                .map_or(syn::PathArguments::None, |segment| {
-                    segment.arguments.clone()
-                }),
-            syn::Type::Reference(reference) => Self::type_path_arguments(reference.elem.as_ref()),
-            syn::Type::Ptr(pointer) => Self::type_path_arguments(pointer.elem.as_ref()),
-            syn::Type::Group(group) => Self::type_path_arguments(group.elem.as_ref()),
-            syn::Type::Paren(paren) => Self::type_path_arguments(paren.elem.as_ref()),
-            _ => syn::PathArguments::None,
-        }
-    }
-
     fn registered_struct_field_type(
         &self,
         struct_name: &str,
-        ty: &syn::Type,
+        arguments: &syn::PathArguments,
         field: &str,
     ) -> Option<syn::Type> {
         self.struct_fields
             .get(struct_name)?
-            .instantiated_field(field, &Self::type_path_arguments(ty))
+            .instantiated_field(field, arguments)
     }
 
     fn struct_field_type(&self, ty: &syn::Type, member: &syn::Member) -> Option<syn::Type> {
-        let struct_name = self.struct_name_from_type(ty)?;
-        self.registered_struct_field_type(&struct_name, ty, &shell_member_key(member))
+        let resolved = self.resolved_struct_type(ty)?;
+        self.registered_struct_field_type(
+            &resolved.name,
+            &resolved.arguments,
+            &shell_member_key(member),
+        )
     }
 
     fn tuple_struct_pattern_field_type(
@@ -17035,10 +17060,10 @@ impl ShellChromeWriterVisitor {
             .last()?
             .ident
             .to_string();
-        if let Some(parent) = self.struct_name_from_type(container_type) {
-            let variant_key = format!("{parent}::{variant}");
+        if let Some(parent) = self.resolved_struct_type(container_type) {
+            let variant_key = format!("{}::{variant}", parent.name);
             let payload = self
-                .registered_struct_field_type(&variant_key, container_type, &index.to_string())
+                .registered_struct_field_type(&variant_key, &parent.arguments, &index.to_string())
                 .or_else(|| {
                     self.struct_field_type(
                         container_type,
@@ -17123,10 +17148,14 @@ impl ShellChromeWriterVisitor {
             .last()?
             .ident
             .to_string();
-        let parent = self.struct_name_from_type(container_type)?;
-        let variant_key = format!("{parent}::{variant}");
+        let parent = self.resolved_struct_type(container_type)?;
+        let variant_key = format!("{}::{variant}", parent.name);
         let payload = self
-            .registered_struct_field_type(&variant_key, container_type, &shell_member_key(member))
+            .registered_struct_field_type(
+                &variant_key,
+                &parent.arguments,
+                &shell_member_key(member),
+            )
             .or_else(|| self.struct_field_type(container_type, member))?;
         Some(reference_mutability.map_or(payload.clone(), |mutable| {
             Self::referenced_type(payload, mutable)
@@ -17415,16 +17444,16 @@ impl ShellChromeWriterVisitor {
         ) {
             return inherited_mutability || authority.mutable;
         }
-        let Some(struct_name) = self.struct_name_from_type(ty) else {
+        let Some(struct_type) = self.resolved_struct_type(ty) else {
             return false;
         };
-        if !resolving_structs.insert(struct_name.clone()) {
+        if !resolving_structs.insert(struct_type.name.clone()) {
             return false;
         }
         let fields = self
             .struct_fields
-            .get(&struct_name)
-            .map(|definition| definition.instantiated_fields(&Self::type_path_arguments(ty)))
+            .get(&struct_type.name)
+            .map(|definition| definition.instantiated_fields(&struct_type.arguments))
             .unwrap_or_default();
         let contains = fields.iter().any(|field| {
             self.type_contains_mutable_authority(
@@ -17433,7 +17462,7 @@ impl ShellChromeWriterVisitor {
                 resolving_structs,
             )
         });
-        resolving_structs.remove(&struct_name);
+        resolving_structs.remove(&struct_type.name);
         contains
     }
 
