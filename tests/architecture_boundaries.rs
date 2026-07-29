@@ -4757,6 +4757,42 @@ fn update_unrelated(
         "a by-value Self receiver must inherit mutability from an &mut impl target"
     );
 
+    let shared_mutable_impl_self = shell_chrome_writer_audit(
+        "trait Inspect {\n\
+             fn inspect(&self);\n\
+         }\n\
+         impl Inspect for &mut NativeTuiApp {\n\
+             fn inspect(&self) {\n\
+                 self.shell.chrome.session_state.read_only_probe();\n\
+                 external_read!(self.shell.chrome.session_state);\n\
+             }\n\
+         }",
+    )
+    .expect("shared mutable impl Self authority fixture should parse");
+    assert!(
+        shared_mutable_impl_self.field_writes.is_empty()
+            && shared_mutable_impl_self.whole_state_writes.is_empty()
+            && shared_mutable_impl_self.macro_escapes.is_empty(),
+        "&self must remain read-only even when Self is implemented for &mut NativeTuiApp"
+    );
+
+    let mutable_wrapper_impl_self = shell_chrome_writer_audit(
+        "struct Context<'a> {\n\
+             app: &'a mut NativeTuiApp,\n\
+         }\n\
+         impl Context<'_> {\n\
+             fn escape(&mut self) {\n\
+                 self.app.shell.chrome.session_state = SessionState::Idle;\n\
+             }\n\
+         }",
+    )
+    .expect("mutable wrapper impl Self authority fixture should parse");
+    assert_eq!(
+        mutable_wrapper_impl_self.field_writes.len(),
+        1,
+        "receiver types using Self must still resolve through their concrete impl target"
+    );
+
     let take_method_result = shell_chrome_writer_audit(
         "impl NativeTuiApp {\n\
              fn take_shell_chrome_state(&mut self) -> ShellChromeState {\n\
@@ -13809,6 +13845,20 @@ fn shell_authority_kind_from_path(
     }
 }
 
+fn shell_type_is_bare_self(ty: &syn::Type) -> bool {
+    match ty {
+        syn::Type::Path(path) => {
+            path.qself.is_none()
+                && path.path.leading_colon.is_none()
+                && path.path.segments.len() == 1
+                && path.path.segments[0].ident == "Self"
+        }
+        syn::Type::Group(group) => shell_type_is_bare_self(group.elem.as_ref()),
+        syn::Type::Paren(paren) => shell_type_is_bare_self(paren.elem.as_ref()),
+        _ => false,
+    }
+}
+
 fn shell_authority_binding_from_type(
     ty: &syn::Type,
     implicit_self: Option<ShellAuthorityKind>,
@@ -14710,6 +14760,17 @@ impl ShellChromeWriterVisitor {
                 syn::Type::Group(group) => resolve(visitor, group.elem.as_ref(), resolving_aliases),
                 syn::Type::Paren(paren) => resolve(visitor, paren.elem.as_ref(), resolving_aliases),
                 syn::Type::Path(path) if path.qself.is_none() => {
+                    if shell_type_is_bare_self(ty) {
+                        if !resolving_aliases.insert("Self".to_string()) {
+                            return None;
+                        }
+                        let resolved = visitor
+                            .impl_type
+                            .as_ref()
+                            .and_then(|impl_type| resolve(visitor, impl_type, resolving_aliases));
+                        resolving_aliases.remove("Self");
+                        return resolved;
+                    }
                     let segment = path.path.segments.last()?;
                     let name = segment.ident.to_string();
                     if matches!(
@@ -15491,15 +15552,15 @@ impl ShellChromeWriterVisitor {
         for input in &signature.inputs {
             match input {
                 syn::FnArg::Receiver(receiver) => {
-                    if let Some(impl_type) = self.impl_type.clone() {
-                        let impl_type_is_mutable = self.type_grants_mutable_access(&impl_type);
+                    let owns_impl_target = shell_type_is_bare_self(receiver.ty.as_ref());
+                    if self.impl_type.is_some() {
                         self.type_bindings.insert(
                             "self".to_string(),
                             ShellTypeBinding {
-                                ty: impl_type,
+                                ty: receiver.ty.as_ref().clone(),
                                 mutable: receiver.mutability.is_some()
                                     || self.type_grants_mutable_access(receiver.ty.as_ref())
-                                    || impl_type_is_mutable,
+                                    || (owns_impl_target && self.impl_authority_mutable),
                             },
                         );
                     }
@@ -15522,7 +15583,7 @@ impl ShellChromeWriterVisitor {
                                     .unwrap_or(kind),
                                 mutable: receiver.mutability.is_some()
                                     || typed_receiver.is_some_and(|authority| authority.mutable)
-                                    || self.impl_authority_mutable,
+                                    || (owns_impl_target && self.impl_authority_mutable),
                             },
                         );
                     }
