@@ -7165,6 +7165,10 @@ fn update_unrelated(
          impl Carrier for OtherMarker {\n\
              type Inner = OtherState;\n\
          }\n\
+         struct ReferencedMarker;\n\
+         impl Carrier for &'static ReferencedMarker {\n\
+             type Inner = ShellChromeState;\n\
+         }\n\
          trait NestedGatMaker {\n\
              type Output<T: Carrier>;\n\
              fn make<T: Carrier>(&self) -> Self::Output<T>;\n\
@@ -7176,6 +7180,7 @@ fn update_unrelated(
          }\n\
          fn make_chrome() -> <ChromeMarker as Carrier>::Inner { todo!() }\n\
          fn make_other() -> <OtherMarker as Carrier>::Inner { todo!() }\n\
+         fn make_referenced() -> <&'static ReferencedMarker as Carrier>::Inner { todo!() }\n\
          fn make_pair() -> (\n\
              <OtherMarker as Carrier>::Inner,\n\
              <ChromeMarker as Carrier>::Inner,\n\
@@ -7185,6 +7190,7 @@ fn update_unrelated(
              factory.make::<OtherMarker>().session_state = 1;\n\
              make_chrome().session_state = SessionState::Idle;\n\
              make_other().session_state = 1;\n\
+             make_referenced().session_state = SessionState::Idle;\n\
              let (_, mut chrome) = make_pair();\n\
              chrome.session_state = SessionState::Idle;\n\
          }",
@@ -7192,8 +7198,8 @@ fn update_unrelated(
     .expect("nested generic associated projection fixture should parse");
     assert_eq!(
         nested_generic_associated_projection.field_writes.len(),
-        3,
-        "nested and receiver-qualified projections must resolve without QSelf key collisions"
+        4,
+        "nested projections must preserve exact QSelf wrappers and receiver identities"
     );
     let cross_file_trait = syn::parse_file(
         "pub trait CrossFileMaker {\n\
@@ -20178,6 +20184,7 @@ impl ShellChromeWriterVisitor {
         declaration_module: &[String],
         generic_parameters: &[ShellDeclaredGenericParameter],
         receiver: &ShellTypeBinding,
+        preserve_receiver_wrappers: bool,
     ) -> Option<ShellGenericBindings> {
         fn owned_type(ty: &syn::Type) -> &syn::Type {
             match ty {
@@ -20190,8 +20197,12 @@ impl ShellChromeWriterVisitor {
         }
 
         let expected = self.resolved_declared_return_type(expected, declaration_module, None);
-        let actual =
-            self.resolved_declared_return_type(owned_type(&receiver.ty), &self.module_path, None);
+        let actual_type = if preserve_receiver_wrappers {
+            &receiver.ty
+        } else {
+            owned_type(&receiver.ty)
+        };
+        let actual = self.resolved_declared_return_type(actual_type, &self.module_path, None);
         let mut bindings = ShellGenericBindings::default();
         shell_type_pattern_matches(&expected, &actual, generic_parameters, &mut bindings)
             .then_some(bindings)
@@ -20210,6 +20221,7 @@ impl ShellChromeWriterVisitor {
             &entry.impl_module_path,
             &entry.impl_generic_parameters,
             receiver,
+            false,
         )
     }
 
@@ -20312,6 +20324,7 @@ impl ShellChromeWriterVisitor {
                     &implementation.impl_module_path,
                     &implementation.impl_generic_parameters,
                     receiver,
+                    projection_receiver.is_some(),
                 ) else {
                     continue;
                 };
