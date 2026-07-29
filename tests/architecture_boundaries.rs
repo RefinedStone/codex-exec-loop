@@ -6653,6 +6653,20 @@ fn update_unrelated(
         2,
         "owned success and error payloads must grant mutable temporary authority"
     );
+    let owned_function_returns = shell_chrome_writer_audit(
+        "fn make_app() -> NativeTuiApp { todo!() }\n\
+         fn make_chrome() -> ShellChromeState { todo!() }\n\
+         fn escape() {\n\
+             make_app().shell.chrome.session_state = SessionState::Idle;\n\
+             make_chrome().session_state = SessionState::Idle;\n\
+         }",
+    )
+    .expect("owned function return authority fixtures should parse");
+    assert_eq!(
+        owned_function_returns.field_writes.len(),
+        2,
+        "owned function return temporaries must grant mutable authority"
+    );
 
     let read_only_index = shell_chrome_writer_audit(
         "fn inspect(apps: Vec<NativeTuiApp>) {\n\
@@ -18845,7 +18859,10 @@ impl ShellChromeWriterVisitor {
             return None;
         }
         let authority = self.resolve_authority(field.base.as_ref())?;
-        (authority.kind == ShellAuthorityKind::Chrome && authority.mutable).then_some(field_name)
+        (authority.kind == ShellAuthorityKind::Chrome
+            && (authority.mutable
+                || self.expression_grants_temporary_mutability(field.base.as_ref())))
+        .then_some(field_name)
     }
 
     fn inspect_write_target(&mut self, expression: &syn::Expr, kind: &str) {
@@ -18857,7 +18874,7 @@ impl ShellChromeWriterVisitor {
             return;
         }
         if let Some(authority) = self.resolve_authority(expression)
-            && authority.mutable
+            && (authority.mutable || self.expression_grants_temporary_mutability(expression))
             && matches!(
                 authority.kind,
                 ShellAuthorityKind::Shell | ShellAuthorityKind::Chrome
@@ -18867,6 +18884,24 @@ impl ShellChromeWriterVisitor {
                 expression.span().start().line,
                 format!("{kind} replaces or exposes typed shell chrome authority"),
             ));
+        }
+    }
+
+    fn expression_grants_temporary_mutability(&self, expression: &syn::Expr) -> bool {
+        match expression {
+            syn::Expr::Call(_) | syn::Expr::MethodCall(_) => self
+                .resolve_type_binding(expression)
+                .is_some_and(|binding| self.extracted_payload_is_mutable(&binding.ty)),
+            syn::Expr::Field(field) => {
+                self.expression_grants_temporary_mutability(field.base.as_ref())
+            }
+            syn::Expr::Group(group) => {
+                self.expression_grants_temporary_mutability(group.expr.as_ref())
+            }
+            syn::Expr::Paren(paren) => {
+                self.expression_grants_temporary_mutability(paren.expr.as_ref())
+            }
+            _ => false,
         }
     }
 
