@@ -1,0 +1,30 @@
+artifact_id: pr2054-context-hud-composer-e3
+capture_role: supplemental-unmatched
+environment_class: first-class E3
+captured_at_utc: 2026-07-29T19:40:57Z
+operator_reviewer: Codex /root
+pull_request: 2054
+candidate_commit: bd18ab3cdf557e135921bb5ae625ec64ca1cf40c
+candidate_tree: 03b36f1033432162e85c1a7c1bfdf17044ce798b
+candidate_clean_before: true
+source_build: true
+binary_sha256: abbb9dff65c3361189e152a5aea79c4d2d6aaad7114f9a64396b355578063830
+runtime_authority: actual Codex app-server
+codex_version: codex-cli 0.146.0
+akra_version: 1.3.5
+terminal: tmux 3.4 detached PTY
+shell: bash
+os: Ubuntu 24.04 / WSL2
+kernel: 6.18.33.2-microsoft-standard-WSL2
+architecture: x86_64
+frontend: inline
+term: xterm-256color
+initial_geometry: 120x30
+narrow_geometry: 48x18
+restored_geometry: 120x30
+inline_history_render_mode: HostScrollback
+history_insertion_mode: StandardScrollRegion
+startup_ascii_art: disabled for compact evidence
+runtime_exit_status: 0
+scoped_process_count_after_cleanup: 0
+overall_result: pass
