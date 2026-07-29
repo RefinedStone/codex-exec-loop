@@ -4704,6 +4704,47 @@ fn update_unrelated(
         2,
         "variant patterns must bind each generic payload to its own authority kind"
     );
+    let referenced_authority_variants = shell_chrome_writer_audit(
+        "fn escape(value: &mut Result<NativeTuiApp, ShellChromeState>) {\n\
+             match value {\n\
+                 Ok(app) => {\n\
+                     app.shell.chrome.session_state = SessionState::Idle;\n\
+                 }\n\
+                 Err(chrome) => {\n\
+                     chrome.session_state = SessionState::Idle;\n\
+                 }\n\
+             }\n\
+         }",
+    )
+    .expect("referenced authority variant fixture should parse");
+    assert_eq!(
+        referenced_authority_variants.field_writes.len(),
+        2,
+        "match ergonomics must preserve outer mutable access for each variant payload"
+    );
+    let aliased_authority_variants = shell_chrome_writer_audit_with_type_registry(
+        "use std::result::Result::{Err as Failure, Ok as Success};\n\
+         fn escape(value: crate::chrome_aliases::MixedAuthorityResult<'_>) {\n\
+             match value {\n\
+                 Success(app) => {\n\
+                     app.shell.chrome.session_state = SessionState::Idle;\n\
+                 }\n\
+                 Failure(mut chrome) => {\n\
+                     chrome.session_state = SessionState::Idle;\n\
+                 }\n\
+             }\n\
+         }",
+        false,
+        &known_struct_fields,
+        &qualified_chrome_aliases,
+        &writer_module,
+    )
+    .expect("aliased authority variant fixture should parse");
+    assert_eq!(
+        aliased_authority_variants.field_writes.len(),
+        2,
+        "variant constructor aliases must resolve to their original payload positions"
+    );
     let generic_authority_alias_file = syn::parse_file(
         "pub type Forward<T> = T;\n\
          pub type AppList<T> = Vec<T>;",
@@ -16835,12 +16876,40 @@ impl ShellChromeWriterVisitor {
             self.type_resolution_scope(self.impl_authority),
             &mut HashSet::new(),
         );
+        let mut container_type = &expanded_type;
+        let mut reference_mutability = None;
+        loop {
+            match container_type {
+                syn::Type::Reference(reference) => {
+                    let mutable = reference.mutability.is_some();
+                    reference_mutability =
+                        Some(reference_mutability.map_or(mutable, |outer| outer && mutable));
+                    container_type = reference.elem.as_ref();
+                }
+                syn::Type::Group(group) => container_type = group.elem.as_ref(),
+                syn::Type::Paren(paren) => container_type = paren.elem.as_ref(),
+                _ => break,
+            }
+        }
+        let expanded_variant = shell_type_with_expanded_aliases(
+            &syn::Type::Path(syn::TypePath {
+                qself: None,
+                path: path.clone(),
+            }),
+            self.type_resolution_scope(self.impl_authority),
+            &mut HashSet::new(),
+        );
+        let variant = shell_type_path(&expanded_variant)?
+            .path
+            .segments
+            .last()?
+            .ident
+            .to_string();
         if index == 0
-            && let syn::Type::Path(parent_path) = &expanded_type
+            && let syn::Type::Path(parent_path) = container_type
             && parent_path.qself.is_none()
         {
             let parent = parent_path.path.segments.last()?;
-            let variant = path.segments.last()?.ident.to_string();
             let argument_index = match (parent.ident.to_string().as_str(), variant.as_str()) {
                 ("Option", "Some") | ("Result", "Ok") => Some(0),
                 ("Result", "Err") => Some(1),
@@ -16859,12 +16928,14 @@ impl ShellChromeWriterVisitor {
                     })
                     .nth(argument_index)
             {
-                return Some(payload.clone());
+                return Some(reference_mutability.map_or_else(
+                    || payload.clone(),
+                    |mutable| Self::referenced_type(payload.clone(), mutable),
+                ));
             }
         }
 
-        let parent = self.struct_name_from_type(&expanded_type)?;
-        let variant = path.segments.last()?.ident.to_string();
+        let parent = self.struct_name_from_type(container_type)?;
         let variant_key = format!("{parent}::{variant}");
         self.struct_fields
             .get(&variant_key)
@@ -16872,7 +16943,7 @@ impl ShellChromeWriterVisitor {
             .cloned()
             .or_else(|| {
                 self.struct_field_type(
-                    &expanded_type,
+                    container_type,
                     &syn::Member::Unnamed(syn::Index::from(index)),
                 )
             })
