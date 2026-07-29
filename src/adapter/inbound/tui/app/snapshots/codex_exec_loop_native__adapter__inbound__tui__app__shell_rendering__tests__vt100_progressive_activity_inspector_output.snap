@@ -13,8 +13,8 @@ command · 한글 wide detail | 0-42 / 795 B
 Keys
 Up/Down: card | Enter/e: detail | PgUp/PgDn: page
 Tab: filter | Home: first | Esc: close
-Akra  |  thread: Progressive activity
+Akra / progressi...  •  ready  •  queue: off
 ◦ Working (0s • waiting for response / interrupt runtime-...)
 notice: activity: active:command | diff:+1 -1 h1 | cmd:52 lines | ctx:75.00%
->
-prompt: Enter queue | Tab steer | Ctrl+j nl
+ > Describe a task or type : for commands
+ Type a follow-up  |  Tab steers after typing

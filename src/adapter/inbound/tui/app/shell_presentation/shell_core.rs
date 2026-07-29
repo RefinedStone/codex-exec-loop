@@ -26,7 +26,9 @@ use super::super::parallel_presentation_bridge::{
     ParallelModePresentationLoadingStage, pending_parallel_mode_supervisor_snapshot,
 };
 use super::super::parallel_supervisor_events::ParallelSupervisorEventProjection;
-use super::capability_projection::recent_session_status_label;
+use super::capability_projection::{
+    recent_session_status_label, recent_session_status_requires_attention,
+};
 use super::{
     AutoFollowSnapshotPresentation, ConversationComposerState, ConversationInputState,
     ConversationState, ConversationViewModel, HistoryInsertionMode, InlineHistoryRenderMode,
@@ -444,6 +446,7 @@ pub(in crate::adapter::inbound::tui::app) struct ConversationScreenModel<'a> {
     pub(in crate::adapter::inbound::tui::app) startup_state: &'a StartupState,
     pub(in crate::adapter::inbound::tui::app) shell_action_availability: ShellActionAvailability,
     pub(in crate::adapter::inbound::tui::app) recent_session_status_label: String,
+    pub(in crate::adapter::inbound::tui::app) recent_session_status_requires_attention: bool,
     pub(in crate::adapter::inbound::tui::app) github_review_polling_status_label: String,
     pub(in crate::adapter::inbound::tui::app) github_review_recent_changes_summary: Option<String>,
     pub(in crate::adapter::inbound::tui::app) tui_language: TuiLanguage,
@@ -463,6 +466,9 @@ pub(in crate::adapter::inbound::tui::app) struct ConversationScreenModel<'a> {
     pub(in crate::adapter::inbound::tui::app) planning_worker_shows_debug_details: bool,
     pub(in crate::adapter::inbound::tui::app) planning_worker_panel_state: PlanningWorkerPanelState,
     pub(in crate::adapter::inbound::tui::app) queue_mutation_tail_state: QueueMutationTailState,
+    pub(in crate::adapter::inbound::tui::app) workspace_directory: String,
+    pub(in crate::adapter::inbound::tui::app) turn_options_hud_label: String,
+    pub(in crate::adapter::inbound::tui::app) context_pressure_basis_points: Option<u16>,
     pub(in crate::adapter::inbound::tui::app) turn_options_summary: Option<String>,
     pub(in crate::adapter::inbound::tui::app) shell_overlay: ShellOverlay,
     pub(in crate::adapter::inbound::tui::app) inline_history_render_mode: InlineHistoryRenderMode,
@@ -584,6 +590,7 @@ impl<'a> ConversationScreenModel<'a> {
             startup_state: &app.shell.chrome.startup_state,
             shell_action_availability: app.shell_action_availability(),
             recent_session_status_label: recent_session_status_label(app, app.shell.tui_language),
+            recent_session_status_requires_attention: recent_session_status_requires_attention(app),
             github_review_polling_status_label: app.github_review_polling_status_label(),
             github_review_recent_changes_summary: app
                 .github_review_recent_changes_summary(MAX_GITHUB_REVIEW_NOTICE_LEN),
@@ -610,6 +617,14 @@ impl<'a> ConversationScreenModel<'a> {
             planning_worker_shows_debug_details: app.planning_worker_shows_debug_details(),
             planning_worker_panel_state: app.planning.planning_worker_panel_state.current().clone(),
             queue_mutation_tail_state,
+            workspace_directory: presentation_workspace_directory,
+            turn_options_hud_label: app.conversation.turn_options.summary_label(),
+            context_pressure_basis_points: match conversation_state {
+                ShellConversationState::Ready(conversation) => conversation
+                    .progressive_activity
+                    .context_pressure_basis_points(),
+                ShellConversationState::Loading | ShellConversationState::Failed(_) => None,
+            },
             turn_options_summary: (!app.conversation.turn_options.is_default())
                 .then(|| app.conversation.turn_options.summary_label()),
             shell_overlay: app.shell.chrome.shell_overlay,
@@ -755,6 +770,7 @@ impl<'a> ConversationScreenModel<'a> {
             startup_state,
             shell_action_availability,
             recent_session_status_label: "loaded".to_string(),
+            recent_session_status_requires_attention: false,
             github_review_polling_status_label: "polling".to_string(),
             github_review_recent_changes_summary: None,
             tui_language: TuiLanguage::English,
@@ -775,6 +791,9 @@ impl<'a> ConversationScreenModel<'a> {
             planning_worker_shows_debug_details: false,
             planning_worker_panel_state: PlanningWorkerPanelState::default(),
             queue_mutation_tail_state: QueueMutationTailState::Idle,
+            workspace_directory: ".".to_string(),
+            turn_options_hud_label: "model: default  |  think: default".to_string(),
+            context_pressure_basis_points: None,
             turn_options_summary: None,
             shell_overlay: ShellOverlay::Hidden,
             inline_history_render_mode: InlineHistoryRenderMode::HostScrollback,

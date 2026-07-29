@@ -15,7 +15,7 @@ use super::*;
 use super::{AkraTheme, ShellFrontendMode, ShellOverlay};
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph, Wrap};
 
 /*
@@ -33,7 +33,7 @@ use inline_inspection::draw_inline_shell_inspection;
 use inline_layout::centered_rect;
 use inline_layout::{
     build_inline_terminal_flow_layout, centered_fixed_rect, inline_body_render_area,
-    render_inline_body, render_inline_body_suffix, set_cursor_if_visible,
+    inline_tail_render_area, render_inline_body_suffix, set_cursor_if_visible,
 };
 pub(in crate::adapter::inbound::tui::app) use inline_layout::{
     count_rendered_inline_rows, inline_section_height,
@@ -259,41 +259,151 @@ fn draw_inline_conversation_shell(
     if shell_overlay == ShellOverlay::Hidden {
         if parallel_mode_enabled && !renders_parallel_viewport_handoff {
             let tail_band = layout.get(1).copied().unwrap_or(frame_area);
-            let tail_area = inline_body_render_area(tail_band, &tail_view.lines);
+            let tail_area = inline_tail_render_area(tail_band, &tail_view);
             return render_bottom_anchored_tail(frame, tail_area, tail_view);
         }
         // startup banner 같은 presentation state는 의도적으로 상단부터 전체 frame을 소유하므로 bottom anchored가 아니어야 한다.
         if tail_view.render_from_top {
-            let hit_area = resolve_queue_receipt_undo_hit_area(
-                frame_area,
-                tail_view.queue_receipt_undo_hit_area,
+            let top_area = Rect::new(
+                frame_area.x,
+                frame_area.y,
+                frame_area.width,
+                tail_view.rendered_height(frame_area.width, frame_area.height),
             );
-            render_inline_body(frame, frame_area, tail_view.lines, false);
-            set_cursor_if_visible(frame, frame_area, tail_view.prompt_cursor_offset);
-            return hit_area;
+            return render_bottom_anchored_tail(frame, top_area, tail_view);
         }
         // standard shell에서는 tail 높이를 먼저 재고 live transcript line을 그 위 공간에 clip한다.
         let tail_band = layout.get(1).copied().unwrap_or(frame_area);
-        let tail_area = inline_body_render_area(tail_band, &tail_view.lines);
+        let tail_area = inline_tail_render_area(tail_band, &tail_view);
         render_inline_live_transcript(frame, frame_area, tail_area, live_transcript_lines);
         return render_bottom_anchored_tail(frame, tail_area, tail_view);
     }
     // overlay/modal이 active이면 layout[0]은 inspection이 쓰고 layout[1]은 그 아래에 tail을 고정한다.
     // exit modal은 두 영역을 모두 덮어야 하므로 이 함수 밖에서 계속 그린다.
-    let tail_area = inline_body_render_area(layout[1], &tail_view.lines);
-    let hit_area =
-        resolve_queue_receipt_undo_hit_area(tail_area, tail_view.queue_receipt_undo_hit_area);
-    render_inline_body(frame, tail_area, tail_view.lines, false);
-    if shell_overlay == ShellOverlay::Supersession {
-        set_cursor_if_visible(frame, tail_area, tail_view.prompt_cursor_offset);
-    }
-    hit_area
+    let tail_area = inline_tail_render_area(layout[1], &tail_view);
+    let prompt_can_focus = shell_overlay == ShellOverlay::Supersession;
+    render_tail_surface(frame, tail_area, tail_view, prompt_can_focus)
 }
 
 fn render_bottom_anchored_tail(
     frame: &mut Frame<'_>,
     tail_area: Rect,
     tail_view: super::shell_presentation::InlineTailView,
+) -> Option<Rect> {
+    render_tail_surface(frame, tail_area, tail_view, true)
+}
+
+fn render_tail_surface(
+    frame: &mut Frame<'_>,
+    tail_area: Rect,
+    tail_view: super::shell_presentation::InlineTailView,
+    prompt_can_focus: bool,
+) -> Option<Rect> {
+    let Some(surface) = tail_view.composer_surface.clone() else {
+        return render_flat_tail(frame, tail_area, tail_view, prompt_can_focus);
+    };
+    if !prompt_can_focus || !surface.focused {
+        return render_flat_tail(frame, tail_area, tail_view, false);
+    }
+    if tail_area.width < 2 {
+        return render_flat_tail(frame, tail_area, tail_view, prompt_can_focus);
+    }
+    if tail_area.height < 3 {
+        let mut compact_lines = surface.body_lines;
+        compact_lines.push(surface.action_line);
+        let focus_row = surface.cursor_offset.map(|(_, y)| y);
+        let dropped_rows = render_inline_body_suffix(frame, tail_area, compact_lines, focus_row);
+        let cursor_offset = surface
+            .cursor_offset
+            .and_then(|(x, y)| y.checked_sub(dropped_rows).map(|y| (x, y)));
+        set_cursor_if_visible(frame, tail_area, cursor_offset);
+        return None;
+    }
+
+    let body_width = tail_area.width.saturating_sub(1);
+    let desired_body_height = Paragraph::new(surface.body_lines.clone())
+        .wrap(Wrap { trim: false })
+        .line_count(body_width)
+        .max(1)
+        .min(usize::from(u16::MAX)) as u16;
+    let composer_height = desired_body_height
+        .saturating_add(2)
+        .min(tail_area.height)
+        .max(3);
+    let prefix_height = tail_area.height.saturating_sub(composer_height);
+    let prefix_area = Rect::new(tail_area.x, tail_area.y, tail_area.width, prefix_height);
+    let composer_area = Rect::new(
+        tail_area.x,
+        tail_area.y.saturating_add(prefix_height),
+        tail_area.width,
+        composer_height,
+    );
+
+    let dropped_prefix_rows = if prefix_height == 0 {
+        count_rendered_inline_rows(tail_view.prefix_lines(), tail_area.width)
+            .min(usize::from(u16::MAX)) as u16
+    } else {
+        render_inline_body_suffix(frame, prefix_area, tail_view.prefix_lines().to_vec(), None)
+    };
+
+    let rail_style = AkraTheme::composer_rail(surface.focused && prompt_can_focus);
+    let header_area = Rect::new(composer_area.x, composer_area.y, composer_area.width, 1);
+    let body_shell_area = Rect::new(
+        composer_area.x,
+        composer_area.y.saturating_add(1),
+        composer_area.width,
+        composer_area.height.saturating_sub(2),
+    );
+    let body_area = Rect::new(
+        body_shell_area.x.saturating_add(1),
+        body_shell_area.y,
+        body_shell_area.width.saturating_sub(1),
+        body_shell_area.height,
+    );
+    let footer_area = Rect::new(
+        composer_area.x,
+        composer_area.bottom().saturating_sub(1),
+        composer_area.width,
+        1,
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("╭ ", rail_style),
+            Span::styled("Task", rail_style),
+        ])),
+        header_area,
+    );
+    for y in body_shell_area.top()..body_shell_area.bottom() {
+        frame.render_widget(
+            Paragraph::new(Line::styled("│", rail_style)),
+            Rect::new(body_shell_area.x, y, 1, 1),
+        );
+    }
+    let focus_row = surface.cursor_offset.map(|(_, y)| y);
+    let dropped_body_rows =
+        render_inline_body_suffix(frame, body_area, surface.body_lines, focus_row);
+    let mut footer_spans = vec![Span::styled("╰ ", rail_style)];
+    footer_spans.extend(surface.action_line.spans);
+    frame.render_widget(Paragraph::new(Line::from(footer_spans)), footer_area);
+
+    if prompt_can_focus {
+        let cursor_offset = surface
+            .cursor_offset
+            .and_then(|(x, y)| y.checked_sub(dropped_body_rows).map(|y| (x, y)));
+        set_cursor_if_visible(frame, body_area, cursor_offset);
+    }
+
+    let hit_area = tail_view
+        .queue_receipt_undo_hit_area
+        .and_then(|area| scroll_relative_rect(area, dropped_prefix_rows));
+    resolve_queue_receipt_undo_hit_area(tail_area, hit_area)
+}
+
+fn render_flat_tail(
+    frame: &mut Frame<'_>,
+    tail_area: Rect,
+    tail_view: super::shell_presentation::InlineTailView,
+    prompt_can_focus: bool,
 ) -> Option<Rect> {
     let focus_row = tail_view.prompt_cursor_offset.map(|(_, y)| y);
     let dropped_rows = render_inline_body_suffix(frame, tail_area, tail_view.lines, focus_row);
@@ -305,7 +415,9 @@ fn render_bottom_anchored_tail(
         .and_then(|(x, y)| y.checked_sub(dropped_rows).map(|y| (x, y)));
 
     let hit_area = resolve_queue_receipt_undo_hit_area(tail_area, hit_area);
-    set_cursor_if_visible(frame, tail_area, prompt_cursor_offset);
+    if prompt_can_focus {
+        set_cursor_if_visible(frame, tail_area, prompt_cursor_offset);
+    }
     hit_area
 }
 

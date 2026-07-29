@@ -195,7 +195,12 @@ impl<B: Backend> Backend for InlineTerminalBackend<B> {
         {
             return Ok(position);
         }
-        let position = self.inner.get_cursor_position()?;
+        let mut position = self.inner.get_cursor_position()?;
+        // Some backends report the pre-reflow cursor after a physical shrink.
+        // Ratatui uses that coordinate to anchor an inline viewport, so an
+        // out-of-bounds row would move the focused composer below the screen.
+        position.x = position.x.min(size.width.saturating_sub(1));
+        position.y = position.y.min(size.height.saturating_sub(1));
         self.tracked_cursor_position = Some(position);
         self.tracked_cursor_size = Some(size);
         self.tracked_cursor_observation_epoch = Some(observation_epoch);

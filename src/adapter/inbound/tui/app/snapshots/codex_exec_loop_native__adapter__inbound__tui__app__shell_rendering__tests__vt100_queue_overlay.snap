@@ -27,6 +27,6 @@ Keys
 Up/Down, j/k: select
 x/Delete: remove
 Esc/Ctrl+C: close
-Akra  |  Workflows: ready  |  Sessions: idle  |  Reviews: off
->
-prompt: new thread ready  |  Enter send  |  Ctrl+j nl  |  :help
+Akra / root  •  branch: --  •  ready  •  gpt-5.5/high  •  ctx: --  •  queue: ready
+ > Describe a task or type : for commands
+ Type a task  |  : commands

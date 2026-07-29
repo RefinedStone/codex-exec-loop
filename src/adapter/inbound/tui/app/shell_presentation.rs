@@ -12,7 +12,6 @@ shell presentation은 TUI app state를 직접 그리는 마지막 어댑터 계�
 // footer는 화면 하단의 넓은 status area이고 inline tail은 입력 프롬프트 옆의 매우 좁은
 // 영역이다. 같은 domain detail이라도 두 영역에서 읽을 수 있는 길이가 달라 별도 limit을 둔다.
 const FOOTER_NOTICE_DETAIL_LIMIT: usize = 56;
-const INLINE_TAIL_THREAD_LABEL_LIMIT: usize = 20;
 const INLINE_TAIL_STATUS_DETAIL_LIMIT: usize = 44;
 const INLINE_TAIL_NOTICE_DETAIL_LIMIT: usize = 40;
 const INLINE_TAIL_WARNING_DETAIL_LIMIT: usize = 24;
@@ -135,14 +134,6 @@ fn build_startup_overlay_summary_lines(app: &NativeTuiApp) -> Vec<Line<'static>>
     capability_projection::build_startup_overlay_summary_lines(app)
 }
 
-fn build_startup_check_lines_from_state(startup_state: &StartupState) -> Vec<Line<'static>> {
-    capability_projection::build_startup_check_lines_from_state(startup_state)
-}
-
 fn build_startup_warning_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     capability_projection::build_startup_warning_lines(app)
-}
-
-fn build_startup_warning_lines_from_state(startup_state: &StartupState) -> Vec<Line<'static>> {
-    capability_projection::build_startup_warning_lines_from_state(startup_state)
 }

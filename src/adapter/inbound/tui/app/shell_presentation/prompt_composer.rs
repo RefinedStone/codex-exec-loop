@@ -10,8 +10,8 @@ conversation reducer가 가진 raw buffer와 input state를 읽어 "지금 사�
 line copy로 바꾸고, renderer가 cursor를 올바른 terminal row에 놓을 수 있도록 같은 buffer projection을
 좌표 계산에도 재사용한다.
 */
-const PROMPT_PRIMARY_PREFIX: &str = "> ";
-const PROMPT_CONTINUATION_PREFIX: &str = "  ";
+const PROMPT_PRIMARY_PREFIX: &str = " > ";
+const PROMPT_CONTINUATION_PREFIX: &str = "   ";
 
 pub(super) struct PromptBufferView {
     // Prompt text is already split into ratatui Lines so popup and inline tail renderers share one projection.
@@ -188,6 +188,13 @@ fn locate_prompt_cursor_with_word_wrap(
 pub(super) fn build_prompt_buffer_view(
     composer: &ConversationComposerScreenModel<'_>,
 ) -> PromptBufferView {
+    build_prompt_buffer_view_with_optional_placeholder(composer, None)
+}
+
+fn build_prompt_buffer_view_with_optional_placeholder(
+    composer: &ConversationComposerScreenModel<'_>,
+    placeholder: Option<&str>,
+) -> PromptBufferView {
     /*
     Prefixes are part of the prompt projection so rendered input and cursor probes share the same copy.
     */
@@ -196,10 +203,14 @@ pub(super) fn build_prompt_buffer_view(
 
     for (index, buffer_line) in buffer_lines.iter().enumerate() {
         let prefix = prompt_line_prefix(index);
-        let line = Line::from(vec![
-            Span::raw(prefix),
-            Span::raw((*buffer_line).to_string()),
-        ]);
+        let content = if index == 0 && buffer_line.is_empty() {
+            placeholder
+                .map(|placeholder| Span::styled(placeholder.to_string(), AkraTheme::subtle()))
+                .unwrap_or_else(|| Span::raw(""))
+        } else {
+            Span::raw((*buffer_line).to_string())
+        };
+        let line = Line::from(vec![Span::styled(prefix, AkraTheme::brand()), content]);
         lines.push(line);
     }
 
@@ -244,7 +255,7 @@ mod tests {
 
         assert_eq!(
             build_prompt_cursor_offset(&composer_screen_model(&conversation), 80),
-            Some((4, 0))
+            Some((5, 0))
         );
     }
 
@@ -258,7 +269,7 @@ mod tests {
 
         assert_eq!(
             build_prompt_cursor_offset(&composer_screen_model(&conversation), 80),
-            Some((3, 1))
+            Some((4, 1))
         );
     }
 
@@ -277,7 +288,7 @@ mod tests {
 
         assert_eq!(
             build_prompt_cursor_offset(&composer_screen_model(&conversation), 12),
-            Some((11, 0))
+            Some((0, 1))
         );
     }
 }

@@ -7,6 +7,7 @@ use ratatui::widgets::{Paragraph, Wrap};
 
 use super::super::{AkraTheme, MAX_INLINE_TAIL_HEIGHT, MIN_TRANSCRIPT_PANEL_HEIGHT, ShellOverlay};
 use super::InlineConversationFrameProjection;
+use crate::adapter::inbound::tui::app::shell_presentation::InlineTailView;
 
 /*
  * inline_layout.rs는 inline shell mode와 popup overlay가 공유하는 low-level geometry layer다.
@@ -39,7 +40,10 @@ pub(super) fn build_inline_terminal_flow_layout(
     } else {
         MAX_INLINE_INSPECTION_TAIL_HEIGHT
     };
-    let tail_height = inline_body_height(tail_lines, area.width, tail_max_height);
+    let _ = tail_lines;
+    let tail_height = projection
+        .tail_view
+        .rendered_height(area.width, tail_max_height);
     let inspection_constraint = if projection.shell_overlay == ShellOverlay::Hidden {
         // The prompt tail owns short viewports; transcript receives every remaining row.
         Constraint::Min(0)
@@ -79,6 +83,12 @@ pub(super) fn inline_body_render_area(area: Rect, lines: &[Line<'_>]) -> Rect {
      * prompt/status text가 가용 영역보다 짧으면 위쪽 row를 blank padding으로 쓰지 않고 transcript replay에 남겨 둔다.
      */
     let body_height = inline_body_height(lines, area.width, area.height);
+    let y = area.y + area.height.saturating_sub(body_height);
+    Rect::new(area.x, y, area.width, body_height)
+}
+
+pub(super) fn inline_tail_render_area(area: Rect, tail_view: &InlineTailView) -> Rect {
+    let body_height = tail_view.rendered_height(area.width, area.height);
     let y = area.y + area.height.saturating_sub(body_height);
     Rect::new(area.x, y, area.width, body_height)
 }
@@ -212,15 +222,6 @@ fn render_inline_section(
         section_layout[0],
     );
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim }), section_layout[1]);
-}
-
-pub(super) fn render_inline_body(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    lines: Vec<Line<'static>>,
-    trim: bool,
-) {
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim }), area);
 }
 
 pub(super) fn set_cursor_if_visible(frame: &mut Frame<'_>, area: Rect, offset: Option<(u16, u16)>) {

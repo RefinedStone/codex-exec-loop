@@ -51,17 +51,108 @@ fn set_pending_approval(
 fn inline_main_buffer_ready_shell_matches_snapshot() {
     /*
      * InlineMainBuffer는 host terminal scrollback 안에 직접 그리는 primary frontend다.
-     * ready shell snapshot은 popup frame border 없이 transcript/prompt chrome만 남는지 확인해,
-     * inline renderer가 modal layout을 잘못 끌고 오지 않도록 막는다.
+     * ready shell snapshot은 borderless context ribbon과 prompt 전용 focus frame만 남는지
+     * 확인해, inline renderer가 whole-terminal modal chrome을 잘못 끌고 오지 않도록 막는다.
      */
     let mut app = make_test_app();
     app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
 
     let rendered = tui_testkit::render_inline_snapshot(&mut app, 80, 24);
 
-    assert!(rendered.contains("prompt: new thread ready"));
-    assert!(!rendered.contains("┌"));
+    assert!(rendered.contains("Describe a task or type : for commands"));
+    assert!(rendered.contains("╭ Task"), "{rendered}");
+    assert!(
+        !rendered
+            .lines()
+            .next()
+            .is_some_and(|line| line.starts_with('╭'))
+    );
     assert_snapshot!("inline_main_buffer_ready_shell", rendered);
+}
+
+#[test]
+fn context_hud_and_focused_composer_scale_at_120_and_160_columns() {
+    let mut medium_app = make_test_app();
+    medium_app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    let medium = tui_testkit::render_inline_snapshot(&mut medium_app, 120, 24);
+
+    assert!(medium.contains("Akra / root"));
+    assert!(medium.contains("branch: --"));
+    assert!(medium.contains("gpt-5.5/high"));
+    assert_eq!(medium.matches("╭ Task").count(), 1, "{medium}");
+    assert!(
+        medium.lines().all(
+            |line| ratatui::text::Line::from(line.trim_matches('"').to_string()).width() <= 120
+        ),
+        "{medium}"
+    );
+    assert_snapshot!("inline_context_hud_ready_120", medium);
+
+    let mut wide_app = make_test_app();
+    wide_app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    let wide = tui_testkit::render_inline_snapshot(&mut wide_app, 160, 24);
+
+    assert!(wide.contains("ctx: --"));
+    assert!(wide.contains("queue: off"));
+    assert_eq!(wide.matches("╭ Task").count(), 1, "{wide}");
+    assert!(
+        wide.lines().all(
+            |line| ratatui::text::Line::from(line.trim_matches('"').to_string()).width() <= 160
+        ),
+        "{wide}"
+    );
+    assert_snapshot!("inline_context_hud_ready_160", wide);
+}
+
+#[test]
+fn focused_composer_projects_typing_blocked_and_parallel_loading_states() {
+    let mut typing_app = make_test_app();
+    typing_app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    let ConversationState::Ready(conversation) =
+        &mut typing_app.conversation.lifecycle.conversation_state
+    else {
+        panic!("test app should start in a ready conversation state");
+    };
+    conversation.composer.input_buffer = "Refine the operator timeline".to_string();
+    conversation
+        .composer
+        .set_input_cursor_byte_index(conversation.composer.input_buffer.len());
+    let typing = tui_testkit::render_inline_snapshot(&mut typing_app, 120, 24);
+    assert!(typing.contains("Refine the operator timeline"));
+    assert!(typing.contains("Enter send  |  Ctrl+J newline"));
+    assert!(!typing.contains("Describe a task or type : for commands"));
+    assert_snapshot!("inline_focused_composer_typing_120", typing);
+
+    let mut blocked_app = make_test_app();
+    blocked_app.shell.chrome.startup_state =
+        StartupState::Failed("codex app-server unavailable".to_string());
+    let blocked = tui_testkit::render_inline_snapshot(&mut blocked_app, 120, 24);
+    assert!(blocked.contains("blocked"));
+    assert!(blocked.contains("Ctrl+D diagnostics"));
+    assert!(blocked.contains("draft preserved"));
+    assert_snapshot!("inline_focused_composer_startup_blocked_120", blocked);
+
+    let mut parallel_app = make_test_app();
+    parallel_app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    parallel_app.set_parallel_mode_enabled_for_test(true);
+    let parallel_loading = tui_testkit::render_inline_snapshot(&mut parallel_app, 120, 24);
+    assert!(parallel_loading.contains("Parallel board loading"));
+    assert!(parallel_loading.contains("input paused"));
+    assert!(
+        ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+            .iter()
+            .any(|frame| parallel_loading.contains(frame)),
+        "{parallel_loading}"
+    );
+    let stable_parallel_loading = ["⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        .into_iter()
+        .fold(parallel_loading, |rendered, frame| {
+            rendered.replace(frame, "⠋")
+        });
+    assert_snapshot!(
+        "inline_focused_composer_parallel_loading_120",
+        stable_parallel_loading
+    );
 }
 
 #[test]
@@ -105,7 +196,7 @@ fn dense_hidden_tail_preserves_prompt_suffix_snapshot() {
         "{rendered}"
     );
     assert!(
-        rendered.contains("buffered prompt  |  Enter send"),
+        rendered.contains("Enter send  |  Ctrl+J newline"),
         "{rendered}"
     );
     let prompt_row = rendered
@@ -730,7 +821,7 @@ fn approval_overlay_matches_snapshot() {
     let narrow = tui_testkit::render_shell_snapshot(&mut app, 48, 18);
     assert!(narrow.contains("Y: approve once"));
     assert!(narrow.contains("N / Esc: decline"));
-    assert!(narrow.contains("prompt: paused while an approval decision"));
+    assert!(narrow.contains("Input paused"));
     assert!(
         narrow.lines().all(|line| {
             line.strip_prefix('"')
@@ -1072,7 +1163,7 @@ fn progressive_activity_inspector_matches_wide_narrow_and_vt100_snapshots() {
     assert!(wide.contains(&format!("{secret}\\x1b[31m")), "{wide}");
     assert!(!wide.contains("@@ -1 +1 @@"), "{wide}");
     assert!(!wide.contains('\u{1b}'));
-    assert!(wide.contains("prompt:"));
+    assert!(wide.contains("Describe a task or type : for commands"));
     assert_eq!(std::sync::Arc::strong_count(&core_snapshot), 1);
     assert_snapshot!("inline_progressive_activity_inspector_wide", wide);
 
@@ -1086,7 +1177,10 @@ fn progressive_activity_inspector_matches_wide_narrow_and_vt100_snapshots() {
         "{narrow}"
     );
     assert!(narrow.contains("notice: activity:"), "{narrow}");
-    assert!(narrow.contains("prompt:"), "{narrow}");
+    assert!(
+        narrow.contains("Describe a task") || narrow.contains("Type a follow-up"),
+        "{narrow}"
+    );
     assert!(!narrow.contains('\u{1b}'));
     assert!(
         narrow.lines().all(|line| {
@@ -1250,8 +1344,8 @@ fn vt100_ready_shell_matches_snapshot() {
 
     let rendered = tui_testkit::render_inline_vt100_snapshot(&mut app, 96, 32);
 
-    assert!(rendered.contains("prompt: new thread ready"));
-    assert!(!rendered.contains("┌"));
+    assert!(rendered.contains("Describe a task or type : for commands"));
+    assert_eq!(rendered.matches("╭ Task").count(), 1, "{rendered}");
     assert_snapshot!("vt100_ready_shell", rendered);
 }
 
@@ -1412,9 +1506,9 @@ fn vt100_narrow_shell_matches_snapshot() {
     let rendered = tui_testkit::render_inline_vt100_snapshot(&mut app, 48, 10);
 
     assert_snapshot!("vt100_narrow_shell", rendered);
-    assert!(rendered.contains("Enter queue"));
-    assert!(rendered.contains("Tab steer"));
-    assert!(rendered.contains("Ctrl+j nl"));
+    assert!(rendered.contains("Type a follow-up"));
+    assert!(rendered.contains("Tab steers after typing"));
+    assert!(!rendered.contains("Ctrl+J newline"));
     assert!(!rendered.contains("prompt: turn running"));
     assert!(rendered.lines().all(|line| line.chars().count() <= 48));
 }

@@ -1,7 +1,6 @@
 use ratatui::text::{Line, Span};
 
 use super::super::capability_copy::{
-    startup_attachment_summary_line, startup_diagnostics_summary_line,
     startup_initializing_status_line, startup_preparing_status_line,
     thread_history_loading_status_line,
 };
@@ -20,8 +19,7 @@ use super::super::{
 use super::parallel_working_copy::build_parallel_slot_working_line;
 use super::tail_shared::{
     OperatorNoticeKind, build_operator_notice, compact_auto_follow_status_summary,
-    compact_inline_summary_label, inline_thread_label, parallel_mode_alert_line,
-    parallel_mode_summary_line,
+    compact_inline_summary_label, parallel_mode_alert_line, parallel_mode_summary_line,
 };
 
 use crate::adapter::inbound::tui::conversation_text::conversation_message_kind_label;
@@ -67,6 +65,7 @@ pub(super) fn build_inline_tail_lines_with_context(
         screen_model,
         github_review_recent_changes_summary,
         notice_detail_limit,
+        notice_detail_limit.saturating_add("notice: ".len()) as u16,
     )
     .into_iter()
     .map(|entry| entry.line)
@@ -77,6 +76,7 @@ pub(super) fn build_inline_tail_content_with_context(
     screen_model: &ConversationScreenModel<'_>,
     github_review_recent_changes_summary: Option<String>,
     notice_detail_limit: usize,
+    content_width: u16,
 ) -> Vec<InlineTailLine> {
     /*
     Planning projection is computed before state branching because both the ready
@@ -108,13 +108,22 @@ pub(super) fn build_inline_tail_content_with_context(
         // prompt remains close to its status line.
         let mut lines =
             if screen_model.shell_overlay == ShellOverlay::Hidden && !has_buffered_input {
-                build_inline_startup_screen_lines_with_context(screen_model)
+                build_inline_startup_screen_lines_with_context(screen_model, content_width)
             } else {
-                build_inline_startup_overlay_tail_lines_with_context(screen_model)
+                build_inline_startup_overlay_tail_lines_with_context(screen_model, content_width)
             }
             .into_iter()
             .map(|line| InlineTailLine::new(InlineTailPriority::Detail, line))
             .collect::<Vec<_>>();
+        if screen_model.recent_session_status_requires_attention {
+            lines.push(InlineTailLine::new(
+                InlineTailPriority::Warning,
+                Line::from(format!(
+                    "session: {}",
+                    screen_model.recent_session_status_label
+                )),
+            ));
+        }
         lines.extend(
             build_inline_tail_prompt_lines_with_context(screen_model)
                 .into_iter()
@@ -191,8 +200,17 @@ pub(super) fn build_inline_tail_content_with_context(
 
             lines.push(InlineTailLine::new(
                 InlineTailPriority::Identity,
-                build_ready_status_ribbon_line(conversation),
+                build_ready_status_ribbon_line(conversation, screen_model, content_width),
             ));
+            if screen_model.recent_session_status_requires_attention {
+                lines.push(InlineTailLine::new(
+                    InlineTailPriority::Warning,
+                    Line::from(format!(
+                        "session: {}",
+                        screen_model.recent_session_status_label
+                    )),
+                ));
+            }
             if let Some(status_detail_line) =
                 build_ready_status_detail_line(conversation, screen_model)
             {
@@ -352,29 +370,159 @@ fn operator_notice_priority(kind: OperatorNoticeKind) -> InlineTailPriority {
         OperatorNoticeKind::Detail => InlineTailPriority::Detail,
     }
 }
-fn build_ready_status_ribbon_line(conversation: &ConversationViewModel) -> Line<'static> {
+fn build_ready_status_ribbon_line(
+    conversation: &ConversationViewModel,
+    screen_model: &ConversationScreenModel<'_>,
+    content_width: u16,
+) -> Line<'static> {
+    build_context_ribbon_line(screen_model, Some(conversation), content_width)
+}
+
+fn build_context_ribbon_line(
+    screen_model: &ConversationScreenModel<'_>,
+    conversation: Option<&ConversationViewModel>,
+    content_width: u16,
+) -> Line<'static> {
     /*
     The ribbon anchors thread identity. Working state and input actions have
     dedicated rows below it, so repeating them here would consume compact rows
     without adding operator information. Auto-follow details are only added
     while an automatic chain has useful state to report.
     */
-    let mut parts = vec![
-        "Akra".to_string(),
-        format!("thread: {}", inline_thread_label(conversation)),
+    let readiness = screen_model
+        .tui_language
+        .startup_axis_status(screen_model.shell_action_availability);
+    let readiness_style = match screen_model.shell_action_availability {
+        ShellActionAvailability::Ready => AkraTheme::success(),
+        ShellActionAvailability::Pending => AkraTheme::warning(),
+        ShellActionAvailability::Blocked => AkraTheme::danger(),
+    };
+    let queue_status = if screen_model
+        .planning_runtime_projection
+        .has_actionable_queue_head()
+    {
+        "ready"
+    } else {
+        match screen_model
+            .planning_runtime_projection
+            .preview_status_label()
+        {
+            "ready" => "idle",
+            "inactive" => "off",
+            status => status,
+        }
+    };
+    let queue_style = match queue_status {
+        "blocked" => AkraTheme::danger(),
+        "ready" => AkraTheme::success(),
+        _ => AkraTheme::muted(),
+    };
+    let context = screen_model
+        .context_pressure_basis_points
+        .map(|basis_points| format!("ctx: {}%", basis_points / 100))
+        .unwrap_or_else(|| "ctx: --".to_string());
+    let shows_full_context = content_width >= 80;
+    let workspace_label = compact_workspace_label(&screen_model.workspace_directory);
+    let workspace_limit = if content_width >= 120 {
+        20
+    } else if shows_full_context {
+        usize::from(content_width.saturating_sub(76)).clamp(4, 12)
+    } else {
+        12
+    };
+    let mut spans = vec![
+        Span::styled("Akra", AkraTheme::brand()),
+        Span::raw(" / "),
+        Span::styled(
+            compact_inline_detail(&workspace_label, workspace_limit),
+            AkraTheme::accent(),
+        ),
     ];
-    if should_show_auto_follow_status(conversation) {
-        parts.push(format!(
-            "auto: {}",
-            compact_auto_follow_status_summary(conversation, INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT,)
-        ));
-        parts.push(format!(
-            "done: {}",
-            conversation.auto_follow_state().progress_label()
-        ));
+    if shows_full_context {
+        spans.extend([
+            Span::styled("  •  ", AkraTheme::subtle()),
+            Span::styled("branch: --", AkraTheme::muted()),
+        ]);
+    }
+    spans.extend([
+        Span::styled("  •  ", AkraTheme::subtle()),
+        Span::styled(readiness, readiness_style),
+    ]);
+    if shows_full_context {
+        spans.extend([
+            Span::styled("  •  ", AkraTheme::subtle()),
+            Span::styled(
+                compact_turn_options_hud_label(&screen_model.turn_options_hud_label),
+                AkraTheme::muted(),
+            ),
+            Span::styled("  •  ", AkraTheme::subtle()),
+            Span::styled(context, AkraTheme::muted()),
+        ]);
+    }
+    spans.extend([
+        Span::styled("  •  ", AkraTheme::subtle()),
+        Span::styled(format!("queue: {queue_status}"), queue_style),
+    ]);
+    if shows_full_context && Line::from(spans.clone()).width() > usize::from(content_width) {
+        spans = vec![
+            Span::styled("Akra", AkraTheme::brand()),
+            Span::raw(" / "),
+            Span::styled(
+                compact_inline_detail(&workspace_label, 12),
+                AkraTheme::accent(),
+            ),
+            Span::styled("  •  ", AkraTheme::subtle()),
+            Span::styled(readiness, readiness_style),
+            Span::styled("  •  ", AkraTheme::subtle()),
+            Span::styled(format!("queue: {queue_status}"), queue_style),
+        ];
+    }
+    if content_width >= 140 && conversation.is_some_and(should_show_auto_follow_status) {
+        let conversation = conversation.expect("checked conversation must exist");
+        let mut candidate = spans.clone();
+        candidate.extend([
+            Span::styled("  •  ", AkraTheme::subtle()),
+            Span::styled(
+                format!(
+                    "auto: {}",
+                    compact_auto_follow_status_summary(
+                        conversation,
+                        INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT,
+                    )
+                ),
+                AkraTheme::muted(),
+            ),
+            Span::styled("  •  ", AkraTheme::subtle()),
+            Span::styled(
+                format!(
+                    "done: {}",
+                    conversation.auto_follow_state().progress_label()
+                ),
+                AkraTheme::muted(),
+            ),
+        ]);
+        if Line::from(candidate.clone()).width() <= usize::from(content_width) {
+            spans = candidate;
+        }
     }
 
-    Line::from(parts.join("  |  "))
+    Line::from(spans)
+}
+
+fn compact_workspace_label(workspace_directory: &str) -> String {
+    workspace_directory
+        .trim_end_matches(['/', '\\'])
+        .rsplit(['/', '\\'])
+        .find(|segment| !segment.is_empty())
+        .unwrap_or(workspace_directory)
+        .to_string()
+}
+
+fn compact_turn_options_hud_label(summary: &str) -> String {
+    summary
+        .strip_prefix("model: ")
+        .unwrap_or(summary)
+        .replace("  |  think: ", "/")
 }
 
 fn build_queue_mutation_line(
@@ -540,161 +688,55 @@ fn build_recent_transcript_summary_lines(
 
 fn build_inline_startup_screen_lines_with_context(
     screen_model: &ConversationScreenModel<'_>,
+    content_width: u16,
 ) -> Vec<Line<'static>> {
     /*
     The startup masthead is allowed to be taller than the steady-state tail
     because no transcript exists yet. Once the operator starts typing, callers
     switch to the compact startup overlay tail to keep the prompt close to hand.
     */
-    let mut lines = if matches!(screen_model.startup_state, StartupState::Ready(_)) {
-        Vec::new()
-    } else {
-        startup_masthead_lines()
-    };
-    lines.push(Line::from(vec![
-        ratatui::text::Span::styled("Akra", AkraTheme::brand()),
-        ratatui::text::Span::raw(
-            screen_model.tui_language.startup_axis_row(
-                screen_model
-                    .tui_language
-                    .startup_axis_status(screen_model.shell_action_availability),
-                screen_model.recent_session_status_label.as_str(),
-                &screen_model
-                    .tui_language
-                    .github_review_polling_status(&screen_model.github_review_polling_status_label),
-            ),
-        ),
-    ]));
+    let mut lines = vec![build_context_ribbon_line(
+        screen_model,
+        screen_model.ready_conversation(),
+        content_width,
+    )];
     match screen_model.startup_state {
         StartupState::Idle => {
             lines.push(Line::from(startup_preparing_status_line()));
-            if let Some(conversation) = screen_model.ready_conversation() {
-                lines.push(Line::from(
-                    screen_model
-                        .tui_language
-                        .startup_workspace_line(&conversation.cwd),
-                ));
-            }
         }
         StartupState::Loading => {
             lines.push(Line::from(startup_initializing_status_line()));
-            lines.extend(super::super::build_startup_check_lines_from_state(
-                screen_model.startup_state,
-            ));
         }
         StartupState::Ready(ready) => {
-            lines.push(Line::from(
-                screen_model.tui_language.startup_workspace_line(&ready.cwd),
-            ));
-            lines.push(Line::from(startup_diagnostics_summary_line(
-                ready,
-                screen_model.tui_language,
-            )));
-            lines.push(Line::from(startup_attachment_summary_line(
-                ready,
-                screen_model.tui_language,
-            )));
             if let Some(first_warning) = ready.warnings.first() {
                 lines.push(Line::from(screen_model.tui_language.startup_warning_line(
                     &compact_inline_detail(first_warning, INLINE_TAIL_NOTICE_DETAIL_LIMIT),
                 )));
             }
-            lines.push(Line::from(
-                screen_model.tui_language.startup_ready_action_line(),
-            ));
-            if startup_prompt_buffered_in_context(screen_model) {
-                lines.push(Line::from(
-                    screen_model.tui_language.startup_buffered_prompt_line(),
-                ));
-            } else {
-                lines.push(Line::from(
-                    screen_model.tui_language.startup_examples_line(),
-                ));
-            }
-            lines.push(Line::from(
-                screen_model.tui_language.startup_shortcuts_line(),
-            ));
         }
         StartupState::Failed(message) => {
             lines.push(Line::from(
                 screen_model.tui_language.startup_status_line(message),
             ));
-            for warning_line in
-                super::super::build_startup_warning_lines_from_state(screen_model.startup_state)
-                    .into_iter()
-                    .filter(|line| !line.to_string().eq_ignore_ascii_case("no warnings"))
-            {
-                lines.push(Line::from(screen_model.tui_language.startup_warning_line(
-                    &compact_inline_detail(
-                        &warning_line.to_string(),
-                        INLINE_TAIL_NOTICE_DETAIL_LIMIT,
-                    ),
-                )));
-            }
         }
     }
-
-    lines.push(Line::from(""));
     lines
 }
 
 fn build_inline_startup_overlay_tail_lines_with_context(
     screen_model: &ConversationScreenModel<'_>,
+    content_width: u16,
 ) -> Vec<Line<'static>> {
     /*
     Compact startup tail is deliberately a single operational axis row. It is used
     while overlays or buffered input need vertical space, so detailed diagnostics
     stay available through inspection instead of crowding the prompt.
     */
-    vec![Line::from(vec![
-        ratatui::text::Span::styled("Akra", AkraTheme::brand()),
-        ratatui::text::Span::raw(
-            screen_model.tui_language.startup_axis_row(
-                screen_model
-                    .tui_language
-                    .startup_axis_status(screen_model.shell_action_availability),
-                screen_model.recent_session_status_label.as_str(),
-                &screen_model
-                    .tui_language
-                    .github_review_polling_status(&screen_model.github_review_polling_status_label),
-            ),
-        ),
-    ])]
-}
-
-fn startup_masthead_lines() -> Vec<Line<'static>> {
-    vec![
-        Line::from(Span::styled(
-            " █████╗ ██╗  ██╗██████╗  █████╗",
-            AkraTheme::brand(),
-        )),
-        Line::from(Span::styled(
-            "██╔══██╗██║ ██╔╝██╔══██╗██╔══██╗",
-            AkraTheme::brand(),
-        )),
-        Line::from(Span::styled(
-            "███████║█████╔╝ ██████╔╝███████║",
-            AkraTheme::brand(),
-        )),
-        Line::from(Span::styled(
-            "██╔══██║██╔═██╗ ██╔══██╗██╔══██║",
-            AkraTheme::brand(),
-        )),
-        Line::from(Span::styled(
-            "██║  ██║██║  ██╗██║  ██║██║  ██║",
-            AkraTheme::brand(),
-        )),
-        Line::from(Span::styled(
-            "╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝",
-            AkraTheme::brand(),
-        )),
-    ]
-}
-
-fn startup_prompt_buffered_in_context(screen_model: &ConversationScreenModel<'_>) -> bool {
-    screen_model
-        .composer()
-        .is_some_and(|composer| !composer.state.input_buffer.trim().is_empty())
+    vec![build_context_ribbon_line(
+        screen_model,
+        screen_model.ready_conversation(),
+        content_width,
+    )]
 }
 
 pub(super) fn build_inline_tail_prompt_lines_with_context(
@@ -706,8 +748,9 @@ pub(super) fn build_inline_tail_prompt_lines_with_context(
     affordance rows; ready state delegates to the input-aware branch below.
     */
     if screen_model.shell_overlay == ShellOverlay::Approval {
-        return vec![Line::from(
-            "prompt: paused while an approval decision is pending",
+        return vec![Line::styled(
+            screen_model.tui_language.composer_approval_action(),
+            AkraTheme::subtle(),
         )];
     }
     if screen_model
@@ -715,13 +758,32 @@ pub(super) fn build_inline_tail_prompt_lines_with_context(
         .is_some_and(|composer| composer.viewport_transcript_handoff_pending)
         && (screen_model.shell_overlay != ShellOverlay::Hidden || screen_model.dialog_visible())
     {
-        return vec![Line::from("prompt: response held while the dialog is open")];
+        return vec![
+            Line::styled(
+                screen_model.tui_language.composer_dialog_hold_status(),
+                AkraTheme::subtle(),
+            ),
+            composer_action_line(screen_model.tui_language.composer_dialog_resume_action()),
+        ];
     }
     let mut lines = match screen_model.conversation_state {
-        ShellConversationState::Loading => vec![Line::from("prompt: waiting for shell readiness")],
-        ShellConversationState::Failed(message) => {
-            vec![Line::from(format!("prompt: unavailable  |  {message}"))]
-        }
+        ShellConversationState::Loading => vec![
+            Line::styled(
+                screen_model.tui_language.composer_loading_status(),
+                AkraTheme::subtle(),
+            ),
+            composer_action_line(screen_model.tui_language.composer_loading_action()),
+        ],
+        ShellConversationState::Failed(message) => vec![
+            Line::styled(
+                screen_model.tui_language.composer_unavailable_status(),
+                AkraTheme::danger(),
+            ),
+            composer_action_line(&format!(
+                "{}  |  {message}",
+                screen_model.tui_language.composer_startup_blocked_action()
+            )),
+        ],
         ShellConversationState::Ready(_) => {
             let composer = screen_model
                 .composer()
@@ -746,8 +808,16 @@ pub(super) fn build_inline_tail_prompt_lines_with_context(
                 AkraTheme::brand(),
             ),
         );
+        if let Some(action_line) = lines.last_mut() {
+            *action_line =
+                composer_action_line(screen_model.tui_language.composer_parallel_loading_action());
+        }
     }
     lines
+}
+
+fn composer_action_line(copy: &str) -> Line<'static> {
+    Line::styled(format!(" {copy} "), AkraTheme::shortcut())
 }
 
 fn parallel_loading_prompt_indicator_frame(animation_elapsed_millis: u128) -> &'static str {
@@ -763,6 +833,12 @@ fn build_inline_ready_prompt_lines(
 ) -> Vec<Line<'static>> {
     let prompt_buffer = build_prompt_buffer_view(composer);
     let mut lines = prompt_buffer.lines;
+    if composer.state.input_buffer.is_empty() {
+        lines[0].spans.push(Span::styled(
+            language.composer_placeholder(),
+            AkraTheme::subtle(),
+        ));
+    }
 
     // Empty prompt copy prioritizes what blocks or enables the next Enter press.
     // Buffered prompt copy instead explains what will happen to the typed text.
@@ -773,34 +849,31 @@ fn build_inline_ready_prompt_lines(
         is blocked by a running/paused automation state.
         */
         if composer.post_turn_settlement_in_flight {
-            lines.push(Line::from("prompt: type now  |  Enter when settled"));
+            lines.push(composer_action_line("Type now  |  Enter when settled"));
             return lines;
         }
         if composer.auto_follow_has_live_activity {
-            lines.push(Line::from("prompt: type now  |  Enter when idle"));
+            lines.push(composer_action_line("Type now  |  Enter when idle"));
             return lines;
         }
         let line = match (composer.input_state, shell_action_availability) {
             (_, ShellActionAvailability::Pending) if composer.input_state.can_submit_now() => {
-                "prompt: waiting for startup  |  type now, Enter sends when ready".to_string()
+                language.composer_startup_pending_action().to_string()
             }
             (_, ShellActionAvailability::Blocked) if composer.input_state.can_submit_now() => {
-                "prompt: blocked by startup diagnostics  |  Ctrl+d inspect".to_string()
+                language.composer_startup_blocked_action().to_string()
             }
-            (ConversationInputState::DraftReady, _) => {
-                "prompt: new thread ready  |  Enter send  |  Ctrl+j nl  |  :help".to_string()
-            }
-            (ConversationInputState::ReadyToContinue, _) => {
-                "prompt: session ready  |  Enter send  |  Ctrl+j nl  |  :help".to_string()
+            (ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue, _) => {
+                language.composer_empty_action().to_string()
             }
             (ConversationInputState::SubmittingTurn, _) => {
                 language.turn_starting_prompt_hint(false).to_string()
             }
             (ConversationInputState::StreamingTurn, _) => {
-                language.running_prompt_hint(false).to_string()
+                language.composer_streaming_empty_action().to_string()
             }
         };
-        lines.push(Line::from(line));
+        lines.push(composer_action_line(&line));
         return lines;
     }
 
@@ -820,17 +893,10 @@ fn build_inline_ready_prompt_lines(
             selected,
             palette.suggestions().len(),
         )));
-        if palette.suggestions().is_empty() {
-            lines.push(Line::from(language.inline_command_palette_empty_key_line()));
-        } else {
-            lines.extend(
-                language
-                    .inline_command_palette_key_lines()
-                    .into_iter()
-                    .map(Line::from),
-            );
-        }
         lines.extend(build_shell_command_palette_lines(composer, language));
+        lines.push(composer_action_line(
+            language.composer_palette_action(!palette.suggestions().is_empty()),
+        ));
         return lines;
     }
 
@@ -840,15 +906,16 @@ fn build_inline_ready_prompt_lines(
         guidance. That keeps destructive or overlay-opening commands legible
         while the text is still just buffered input.
         */
-        lines.push(Line::from(format!(
-            "command: {}",
-            command.localized_buffered_hint(language)
-        )));
+        lines.push(composer_action_line(
+            &command.localized_buffered_hint(language),
+        ));
         return lines;
     }
 
     if composer.post_turn_settlement_in_flight && composer.input_state.can_submit_now() {
-        lines.push(Line::from("buffered  |  Enter when settled  |  Ctrl+j nl"));
+        lines.push(composer_action_line(
+            "Draft ready  |  Enter when settled  |  Ctrl+J newline",
+        ));
         return lines;
     }
 
@@ -858,8 +925,8 @@ fn build_inline_ready_prompt_lines(
         but Enter would race the continuation. This line keeps the buffered prompt
         visible while making the idle gate explicit.
         */
-        lines.push(Line::from(
-            "buffered prompt  |  auto-follow busy  |  Enter when idle",
+        lines.push(composer_action_line(
+            "Draft ready  |  auto-follow busy  |  Enter when idle",
         ));
         return lines;
     }
@@ -875,19 +942,19 @@ fn build_inline_ready_prompt_lines(
             hint names the cancellation behavior instead of repeating normal send
             guidance.
             */
-            "queued until startup is ready  |  editing cancels the queued send"
+            "Queued until startup is ready  |  editing cancels send"
         }
         (
             ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue,
             ShellActionAvailability::Ready,
-        ) => "buffered prompt  |  Enter send  |  Ctrl+j nl",
+        ) => language.composer_send_action(),
         (ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue, _) => {
-            "buffered prompt  |  Enter when ready  |  Ctrl+j nl"
+            language.composer_startup_blocked_action()
         }
         (ConversationInputState::SubmittingTurn, _) => language.turn_starting_prompt_hint(true),
-        (ConversationInputState::StreamingTurn, _) => language.running_prompt_hint(true),
+        (ConversationInputState::StreamingTurn, _) => language.composer_streaming_buffered_action(),
     };
-    lines.push(Line::from(hint));
+    lines.push(composer_action_line(hint));
     lines
 }
 
@@ -1139,7 +1206,8 @@ mod coverage_tests {
             loading.lines().nth(2),
             Some(thread_history_loading_status_line())
         );
-        assert!(loading.contains("prompt: waiting for shell readiness"));
+        assert!(loading.contains("Preparing the prompt"));
+        assert!(loading.contains("Wait for shell readiness"));
 
         app.conversation.lifecycle.conversation_state =
             ConversationState::Failed("session catalog unavailable".to_string());
@@ -1150,7 +1218,8 @@ mod coverage_tests {
             failed.lines().nth(2),
             Some("status: session catalog unavailable")
         );
-        assert!(failed.contains("prompt: unavailable  |  session catalog unavailable"));
+        assert!(failed.contains("Prompt unavailable"));
+        assert!(failed.contains("Ctrl+D diagnostics"));
     }
 
     #[test]
@@ -1159,20 +1228,23 @@ mod coverage_tests {
 
         app.shell.chrome.startup_state = StartupState::Idle;
         let idle = render_tail(&app, None);
-        assert!(idle.contains("Akra"));
+        assert!(idle.contains("Akra / root"));
         assert!(idle.contains("preparing startup checks"));
-        assert!(idle.contains("workspace: /tmp/root"));
+        assert!(idle.contains("Describe a task"));
+        assert!(!idle.contains("workspace: /tmp/root"));
 
         app.shell.chrome.startup_state = StartupState::Loading;
         let loading = render_tail(&app, None);
         assert!(loading.contains("initializing codex shell"));
-        assert!(loading.contains("opening codex app-server"));
+        assert!(!loading.contains("opening codex app-server"));
 
         app.shell.chrome.startup_state = StartupState::Ready(startup_ready_snapshot(true));
         let ready = render_tail(&app, None);
-        assert!(ready.contains("workspace: /tmp/root"));
+        assert!(ready.contains("Akra / root"));
         assert!(ready.contains("first warning should stay visible"));
-        assert!(ready.contains("ready: send a task or reopen a session"));
+        assert!(ready.contains("Type a task"));
+        assert!(!ready.contains("diagnostics:"));
+        assert!(!ready.contains("examples:"));
         assert!(!ready.contains("████"));
 
         app.shell.chrome.startup_state = StartupState::Failed("codex missing".to_string());
@@ -1187,14 +1259,11 @@ mod coverage_tests {
 
         app.shell.chrome.startup_state = StartupState::Ready(startup_ready_snapshot(true));
         let context = ConversationScreenModel::from_app(&app);
-        assert!(
-            rendered(build_inline_startup_screen_lines_with_context(&context))
-                .contains("draft: opening prompt buffered below")
-        );
+        let compact = rendered(build_inline_startup_screen_lines_with_context(&context, 80));
+        assert!(compact.contains("Akra / root"));
+        assert!(!compact.contains("draft: opening prompt buffered below"));
 
         app.conversation.lifecycle.conversation_state = ConversationState::Loading;
-        let loading_context = ConversationScreenModel::from_app(&app);
-        assert!(!startup_prompt_buffered_in_context(&loading_context));
     }
 
     #[test]
@@ -1223,15 +1292,14 @@ mod coverage_tests {
         };
         conversation.apply_runtime_snapshot(snapshot);
 
-        let ribbon = build_ready_status_ribbon_line(&conversation).to_string();
-        assert!(ribbon.contains("auto:"));
-        assert!(ribbon.contains("done:"));
-
         let context = context_for(
             &startup_state,
             ShellActionAvailability::Blocked,
             ShellConversationState::Ready(&conversation),
         );
+        let ribbon = build_ready_status_ribbon_line(&conversation, &context, 160).to_string();
+        assert!(ribbon.contains("auto:"));
+        assert!(ribbon.contains("done:"));
         let detail = build_ready_status_detail_line(&conversation, &context)
             .expect("non-benign status detail")
             .to_string();
@@ -1329,22 +1397,22 @@ mod coverage_tests {
             (
                 ConversationInputState::DraftReady,
                 ShellActionAvailability::Pending,
-                "waiting for startup",
+                "submission waits for startup",
             ),
             (
                 ConversationInputState::DraftReady,
                 ShellActionAvailability::Blocked,
-                "blocked by startup diagnostics",
+                "Ctrl+D diagnostics",
             ),
             (
                 ConversationInputState::DraftReady,
                 ShellActionAvailability::Ready,
-                "new thread ready",
+                "Type a task",
             ),
             (
                 ConversationInputState::ReadyToContinue,
                 ShellActionAvailability::Ready,
-                "session ready",
+                "Type a task",
             ),
             (
                 ConversationInputState::SubmittingTurn,
@@ -1354,7 +1422,7 @@ mod coverage_tests {
             (
                 ConversationInputState::StreamingTurn,
                 ShellActionAvailability::Ready,
-                "Enter queue",
+                "Type a follow-up",
             ),
         ] {
             let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
@@ -1378,8 +1446,9 @@ mod coverage_tests {
             TuiLanguage::English,
         );
         assert!(palette_prompt.contains("palette 3/19"));
-        assert!(palette_prompt.contains("Up/Shift+Tab previous"));
-        assert!(palette_prompt.contains("Down/Tab next"));
+        assert!(palette_prompt.contains("↑/↓ or Tab select"));
+        assert!(palette_prompt.contains("Enter choose"));
+        assert!(palette_prompt.contains("Esc close"));
         assert!(palette_prompt.contains(":diag"));
 
         let korean_palette_prompt = rendered_ready_prompt(
@@ -1391,9 +1460,9 @@ mod coverage_tests {
             korean_palette_prompt
                 .contains(&TuiLanguage::Korean.inline_command_palette_header(3, 19))
         );
-        for key_line in TuiLanguage::Korean.inline_command_palette_key_lines() {
-            assert!(korean_palette_prompt.contains(key_line));
-        }
+        assert!(korean_palette_prompt.contains("↑/↓ 또는 Tab 선택"));
+        assert!(korean_palette_prompt.contains("Enter 적용"));
+        assert!(korean_palette_prompt.contains("Esc 닫기"));
         assert!(korean_palette_prompt.contains(&format!(
             ":peek  {}",
             TuiLanguage::Korean.inline_shell_command_detail(InlineShellCommand::Peek)
@@ -1409,7 +1478,7 @@ mod coverage_tests {
         let korean_hint = InlineShellCommandInput::parse(":reset queue")
             .expect("reset command should parse")
             .localized_buffered_hint(TuiLanguage::Korean);
-        assert!(korean_command_prompt.contains(&format!("command: {korean_hint}")));
+        assert!(korean_command_prompt.contains(&korean_hint));
         assert!(!korean_command_prompt.contains("Press Enter"));
 
         let mut command = ConversationViewModel::new_draft("/tmp/root".to_string());
@@ -1419,9 +1488,7 @@ mod coverage_tests {
             ShellActionAvailability::Ready,
             TuiLanguage::English,
         );
-        assert!(
-            command_prompt.contains("command: Press Enter to reset queue-side planning state.")
-        );
+        assert!(command_prompt.contains("Press Enter to reset queue-side planning state."));
 
         let mut busy = ConversationViewModel::new_draft("/tmp/root".to_string());
         busy.composer.input_buffer = "next prompt".to_string();
@@ -1438,7 +1505,7 @@ mod coverage_tests {
         busy.composer.clear_input_buffer();
         let empty_busy_prompt =
             rendered_ready_prompt(&busy, ShellActionAvailability::Ready, TuiLanguage::English);
-        assert!(empty_busy_prompt.contains("prompt: type now  |  Enter when idle"));
+        assert!(empty_busy_prompt.contains("Type now  |  Enter when idle"));
 
         let mut armed = ConversationViewModel::new_draft("/tmp/root".to_string());
         armed.composer.input_buffer = "queued".to_string();
@@ -1448,7 +1515,7 @@ mod coverage_tests {
             ShellActionAvailability::Pending,
             TuiLanguage::English,
         );
-        assert!(armed_prompt.contains("editing cancels the queued send"));
+        assert!(armed_prompt.contains("editing cancels send"));
 
         for (state, availability, expected) in [
             (
@@ -1459,7 +1526,7 @@ mod coverage_tests {
             (
                 ConversationInputState::ReadyToContinue,
                 ShellActionAvailability::Blocked,
-                "Enter when ready",
+                "Ctrl+D diagnostics",
             ),
             (
                 ConversationInputState::SubmittingTurn,
@@ -1531,11 +1598,7 @@ mod coverage_tests {
         );
         assert!(buffered_prompt.contains("Enter when settled"));
         assert!(!buffered_prompt.contains("Enter when ready"));
-        assert!(
-            buffered_prompt
-                .lines()
-                .all(|line| line.chars().count() <= 48)
-        );
+        assert!(buffered_prompt.contains("Draft ready"));
     }
 
     #[test]
@@ -1654,7 +1717,7 @@ mod coverage_tests {
         assert!(tail.contains("warning one"));
         assert!(tail.contains("notice:"));
         assert!(tail.contains("review changed"));
-        assert!(tail.contains("buffered prompt"));
+        assert!(tail.contains("Enter send"));
 
         assert_eq!(ready_conversation(&app).thread_id, "thread-1");
     }
