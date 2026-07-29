@@ -5495,17 +5495,17 @@ fn update_unrelated(
     );
     let split_namespace_authority_reexport = shell_chrome_writer_audit(
         "mod types {\n\
-             pub type App = NativeTuiApp;\n\
+             pub type Box = NativeTuiApp;\n\
          }\n\
          mod values {\n\
              #[allow(non_snake_case)]\n\
-             pub fn App() {}\n\
+             pub fn Box() {}\n\
          }\n\
          mod facade {\n\
              pub use super::types::*;\n\
-             pub use super::values::App;\n\
+             pub use super::values::Box;\n\
          }\n\
-         fn escape(mut app: facade::App) {\n\
+         fn escape(mut app: facade::Box) {\n\
              app.shell.chrome.session_state = SessionState::Idle;\n\
          }",
     )
@@ -15689,39 +15689,41 @@ fn shell_alias_target_is_type(ty: &syn::Type, scope: ShellTypeResolutionScope<'_
                     .get(&qualified_name)
                     .is_some_and(|alias| !alias.forwards_arguments)
                 || shell_authority_kind_from_path(&path.path, scope).is_some()
-                || matches!(
-                    name.as_str(),
-                    "Box"
-                        | "HashMap"
-                        | "HashSet"
-                        | "MutexGuard"
-                        | "Option"
-                        | "Pin"
-                        | "Rc"
-                        | "RefMut"
-                        | "Result"
-                        | "RwLockWriteGuard"
-                        | "String"
-                        | "Vec"
-                        | "VecDeque"
-                        | "bool"
-                        | "char"
-                        | "f32"
-                        | "f64"
-                        | "i8"
-                        | "i16"
-                        | "i32"
-                        | "i64"
-                        | "i128"
-                        | "isize"
-                        | "str"
-                        | "u8"
-                        | "u16"
-                        | "u32"
-                        | "u64"
-                        | "u128"
-                        | "usize"
-                )
+                || (path.path.leading_colon.is_none()
+                    && path.path.segments.len() == 1
+                    && matches!(
+                        name.as_str(),
+                        "Box"
+                            | "HashMap"
+                            | "HashSet"
+                            | "MutexGuard"
+                            | "Option"
+                            | "Pin"
+                            | "Rc"
+                            | "RefMut"
+                            | "Result"
+                            | "RwLockWriteGuard"
+                            | "String"
+                            | "Vec"
+                            | "VecDeque"
+                            | "bool"
+                            | "char"
+                            | "f32"
+                            | "f64"
+                            | "i8"
+                            | "i16"
+                            | "i32"
+                            | "i64"
+                            | "i128"
+                            | "isize"
+                            | "str"
+                            | "u8"
+                            | "u16"
+                            | "u32"
+                            | "u64"
+                            | "u128"
+                            | "usize"
+                    ))
         }
         syn::Type::Reference(reference) => {
             shell_alias_target_is_type(reference.elem.as_ref(), scope)
