@@ -4001,16 +4001,9 @@ fn shell_chrome_state_has_one_typed_reducer_writer() {
     let mut violations = Vec::new();
     let mut reducer_fields = HashSet::new();
     let mut whole_state_writers = Vec::new();
-    let declared_module_paths = rust_module_paths_from_declarations(
-        &root.join("src/adapter/inbound/tui/mod.rs"),
-        &[
-            "crate".to_string(),
-            "adapter".to_string(),
-            "inbound".to_string(),
-            "tui".to_string(),
-        ],
-    )
-    .unwrap_or_else(|error| panic!("failed to resolve TUI module declarations: {error}"));
+    let declared_module_paths =
+        rust_module_paths_from_declarations(&root.join("src/lib.rs"), &["crate".to_string()])
+            .unwrap_or_else(|error| panic!("failed to resolve crate module declarations: {error}"));
     assert_eq!(
         declared_module_paths
             .get(&root.join("src/adapter/inbound/tui/app/parallel_mode/panel_controller.rs")),
@@ -4024,6 +4017,25 @@ fn shell_chrome_state_has_one_typed_reducer_writer() {
         ]),
         "#[path] modules must use their declared Rust identifier, not their disk directory"
     );
+    for (relative, expected) in [
+        ("src/lib.rs", vec!["crate"]),
+        ("src/adapter/mod.rs", vec!["crate", "adapter"]),
+        (
+            "src/adapter/inbound/mod.rs",
+            vec!["crate", "adapter", "inbound"],
+        ),
+        (
+            "src/adapter/inbound/tui/mod.rs",
+            vec!["crate", "adapter", "inbound", "tui"],
+        ),
+    ] {
+        let expected = expected.into_iter().map(str::to_string).collect::<Vec<_>>();
+        assert_eq!(
+            declared_module_paths.get(&root.join(relative)),
+            Some(&expected),
+            "shell authority registry must include declared crate-to-TUI ancestor `{relative}`"
+        );
+    }
     let tui_sources = rust_files_under(&root.join("src/adapter/inbound/tui"))
         .into_iter()
         .filter(|path| !is_test_only_path(path))
@@ -4044,14 +4056,31 @@ fn shell_chrome_state_has_one_typed_reducer_writer() {
         .collect::<Vec<_>>();
     let mut known_struct_fields = ShellStructFields::new();
     let mut known_type_aliases = ShellQualifiedTypeAliases::new();
-    let crate_root_source =
-        fs::read_to_string(root.join("src/lib.rs")).expect("library crate root should load");
-    let crate_root_syntax =
-        syn::parse_file(&crate_root_source).expect("library crate root should parse");
-    known_type_aliases.extend(qualified_type_aliases_declared_in_file(
-        &crate_root_syntax,
-        &["crate".to_string()],
-    ));
+    let tui_root_module_path = [
+        "crate".to_string(),
+        "adapter".to_string(),
+        "inbound".to_string(),
+        "tui".to_string(),
+    ];
+    let mut ancestor_sources = declared_module_paths
+        .iter()
+        .filter(|(_, module_path)| tui_root_module_path.starts_with(module_path.as_slice()))
+        .collect::<Vec<_>>();
+    ancestor_sources.sort_by_key(|(path, _)| path.as_os_str().to_owned());
+    for (path, module_path) in ancestor_sources {
+        let source = fs::read_to_string(path)
+            .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+        let syntax = syn::parse_file(&source)
+            .unwrap_or_else(|error| panic!("failed to parse {}: {error}", path.display()));
+        known_struct_fields.extend(qualified_struct_fields_declared_in_file(
+            &syntax,
+            module_path,
+        ));
+        known_type_aliases.extend(qualified_type_aliases_declared_in_file(
+            &syntax,
+            module_path,
+        ));
+    }
     for (path, source, module_path) in &tui_sources {
         let syntax = syn::parse_file(source)
             .unwrap_or_else(|error| panic!("failed to parse {}: {error}", path.display()));
@@ -4651,6 +4680,33 @@ fn update_unrelated(
         cross_file_unrelated_alias.field_writes.is_empty()
             && cross_file_unrelated_alias.whole_state_writes.is_empty(),
         "qualified imports must distinguish same-named aliases across modules"
+    );
+
+    let ancestor_reexport_file =
+        syn::parse_file("pub use crate::adapter::inbound::tui::app::NativeTuiApp as App;")
+            .expect("ancestor authority re-export should parse");
+    let ancestor_reexports = qualified_type_aliases_declared_in_file(
+        &ancestor_reexport_file,
+        &[
+            "crate".to_string(),
+            "adapter".to_string(),
+            "inbound".to_string(),
+        ],
+    );
+    let ancestor_reexported_app = shell_chrome_writer_audit_with_type_registry(
+        "fn escape(app: &mut crate::adapter::inbound::App) {\n\
+             app.shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+        false,
+        &known_struct_fields,
+        &ancestor_reexports,
+        &relative_writer_module,
+    )
+    .expect("ancestor re-exported native app fixture should parse");
+    assert_eq!(
+        ancestor_reexported_app.field_writes.len(),
+        1,
+        "crate-to-TUI ancestor re-exports must retain NativeTuiApp authority"
     );
 
     let crate_alias_file = syn::parse_file("extern crate self as akra;")
@@ -5357,6 +5413,33 @@ fn update_unrelated(
             && nested_absolute_read_macro.whole_state_writes.is_empty()
             && nested_absolute_read_macro.macro_escapes.is_empty(),
         "absolute nested standard macros must bypass lexical and crate-root shadows"
+    );
+    let renamed_nested_read_macro = shell_chrome_writer_audit(
+        "use std::matches as is_match;\n\
+         fn inspect(app: &mut NativeTuiApp) {\n\
+             assert!(is_match!(\n\
+                 app.shell.chrome.session_state,\n\
+                 SessionState::Idle\n\
+             ));\n\
+         }",
+    )
+    .expect("renamed nested standard macro fixture should parse");
+    assert!(
+        renamed_nested_read_macro.field_writes.is_empty()
+            && renamed_nested_read_macro.whole_state_writes.is_empty()
+            && renamed_nested_read_macro.macro_escapes.is_empty(),
+        "renamed nested standard macros must be classified by their import target"
+    );
+    let renamed_nested_lookalike_macro = shell_chrome_writer_audit(
+        "use crate::evil::matches as is_match;\n\
+         fn escape(app: &mut NativeTuiApp) {\n\
+             assert!(is_match!(app.shell.chrome.session_state));\n\
+         }",
+    )
+    .expect("renamed nested lookalike macro fixture should parse");
+    assert!(
+        !renamed_nested_lookalike_macro.macro_escapes.is_empty(),
+        "renamed lookalikes must not inherit the standard read-only macro allowlist"
     );
 
     let unrelated_nested_macro = shell_chrome_writer_audit(
@@ -16534,39 +16617,37 @@ impl ShellChromeWriterVisitor {
                     .is_some_and(|target| target.as_slice() != [root]))
     }
 
-    fn imported_read_macro_is_trusted(&self, name: &str, target: &[String]) -> bool {
+    fn imported_read_macro_name(&self, target: &[String]) -> Option<String> {
         match target {
             [root, target_name]
-                if target_name == name
-                    && matches!(root.as_str(), "std" | "core" | "alloc")
+                if matches!(root.as_str(), "std" | "core" | "alloc")
+                    && shell_chrome_read_macro_name(target_name)
                     && !self.standard_macro_root_is_shadowed(root, false) =>
             {
-                true
+                Some(target_name.clone())
             }
-            [root, target_name]
-                if root == "crate" && name == "akra_event" && target_name == name =>
-            {
-                true
+            [root, target_name] if root == "crate" && target_name == "akra_event" => {
+                Some(target_name.clone())
             }
-            _ => false,
+            _ => None,
         }
     }
 
-    fn shell_chrome_read_macro_path(&self, path: &str, absolute: bool) -> bool {
+    fn shell_chrome_read_macro_path(&self, path: &str, absolute: bool) -> Option<String> {
         let segments = path.split("::").collect::<Vec<_>>();
         match segments.as_slice() {
-            [name] if shell_chrome_read_macro_name(name) => self
-                .struct_imports
-                .get(*name)
-                .is_none_or(|target| self.imported_read_macro_is_trusted(name, target)),
+            [name] => match self.struct_imports.get(*name) {
+                Some(target) => self.imported_read_macro_name(target),
+                None => shell_chrome_read_macro_name(name).then(|| (*name).to_string()),
+            },
             [root, name]
                 if matches!(*root, "std" | "core" | "alloc")
                     && shell_chrome_read_macro_name(name) =>
             {
-                !self.standard_macro_root_is_shadowed(root, absolute)
+                (!self.standard_macro_root_is_shadowed(root, absolute)).then(|| (*name).to_string())
             }
-            ["crate", "akra_event"] => true,
-            _ => false,
+            ["crate", "akra_event"] => Some("akra_event".to_string()),
+            _ => None,
         }
     }
 
@@ -16582,21 +16663,22 @@ impl ShellChromeWriterVisitor {
             .iter()
             .any(|field| identifiers.contains(*field));
         let mentions_mutable_authority = self.identifiers_mention_mutable_authority(&identifiers);
-        let has_mutation_syntax = (if name == "akra_event" {
+        let read_macro_name = self.shell_chrome_read_macro_path(
+            &syn_path_name(&expression.path),
+            expression.path.leading_colon.is_some(),
+        );
+        let has_mutation_syntax = (if read_macro_name.as_deref() == Some("akra_event") {
             akra_event_value_tokens_have_assignment(&expression.tokens)
         } else {
             macro_tokens_have_assignment(&expression.tokens)
         }) || SHELL_CHROME_MACRO_MUTATION_IDENTIFIERS
             .iter()
             .any(|identifier| identifiers.contains(*identifier));
-        let read_macro = self.shell_chrome_read_macro_path(
-            &syn_path_name(&expression.path),
-            expression.path.leading_colon.is_some(),
-        );
         let has_untrusted_nested_authority_macro = macro_token_invocations(&expression.tokens)
             .iter()
             .any(|invocation| {
-                !self.shell_chrome_read_macro_path(&invocation.path, invocation.absolute)
+                self.shell_chrome_read_macro_path(&invocation.path, invocation.absolute)
+                    .is_none()
                     && self.identifiers_mention_mutable_authority(&macro_token_identifiers(
                         &invocation.tokens,
                     ))
@@ -16604,7 +16686,9 @@ impl ShellChromeWriterVisitor {
         if item_position
             || (mentions_audited_field && has_mutation_syntax)
             || (mentions_mutable_authority
-                && (!read_macro || has_mutation_syntax || has_untrusted_nested_authority_macro))
+                && (read_macro_name.is_none()
+                    || has_mutation_syntax
+                    || has_untrusted_nested_authority_macro))
         {
             self.audit.macro_escapes.push(self.finding(
                 expression.path.span().start().line,
