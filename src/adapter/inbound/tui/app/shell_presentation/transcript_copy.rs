@@ -4,7 +4,6 @@ use crate::adapter::inbound::tui::app::conversation_model::{
 };
 use crate::adapter::inbound::tui::conversation_text::conversation_message_label;
 
-use super::super::INLINE_HOST_SCROLLBACK_REFLOW_GUARD_ROWS;
 use super::{
     AkraTheme, ConversationMessage, ConversationMessageKind, ConversationViewMode, Line,
     MAX_CONVERSATION_HISTORY_LINES, Modifier, Span, Style,
@@ -45,24 +44,7 @@ pub(in super::super) fn format_conversation_scrollback_lines_with_expand(
     show_debug_details: bool,
     expand_state: Option<&ProgressiveActivityExpandState>,
 ) -> Vec<Line<'static>> {
-    let mut lines =
-        format_conversation_lines_uncapped(messages, view_mode, show_debug_details, expand_state);
-    /*
-     * Host scrollback owns the durable transcript while Ratatui owns the live
-     * inline tail. Keep reserved blank rows between them even for an empty
-     * thread. Besides improving scan separation, these rows are the safe
-     * cleanup guard when a terminal width change reflows the previous live
-     * tail.
-     */
-    let trailing_blank_rows = lines
-        .iter()
-        .rev()
-        .take_while(|line| line.width() == 0)
-        .count();
-    for _ in trailing_blank_rows..usize::from(INLINE_HOST_SCROLLBACK_REFLOW_GUARD_ROWS) {
-        lines.push(Line::from(""));
-    }
-    lines
+    format_conversation_lines_uncapped(messages, view_mode, show_debug_details, expand_state)
 }
 
 fn format_conversation_lines_capped(
@@ -479,20 +461,6 @@ fn label_style(kind: ConversationMessageKind) -> Style {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn host_scrollback_keeps_blank_guards_after_an_empty_thread() {
-        let lines = format_conversation_scrollback_lines_with_expand(
-            &[],
-            ConversationViewMode::Medium,
-            false,
-            None,
-        );
-
-        assert_eq!(line_text(&lines[0]), "No messages in this thread yet.");
-        assert_eq!(line_text(&lines[1]), "");
-        assert_eq!(line_text(&lines[2]), "");
-    }
 
     #[test]
     fn tool_messages_collapse_to_one_line_headers_in_medium_view() {

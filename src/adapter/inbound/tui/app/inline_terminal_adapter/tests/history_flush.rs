@@ -36,6 +36,7 @@ fn pending_lines_returns_only_new_suffix_for_appended_history() {
         pending_history_lines: Vec::new(),
         visible_history_rows: 0,
         visible_history_rows_dirty: false,
+        trailing_reflow_guard_rows: 0,
     };
     let current_lines = vec![
         Line::from("User:"),
@@ -75,6 +76,7 @@ fn pending_lines_replays_full_history_after_reset() {
         pending_history_lines: Vec::new(),
         visible_history_rows: 0,
         visible_history_rows_dirty: false,
+        trailing_reflow_guard_rows: 0,
     };
     let current_lines = vec![
         Line::from("Status:"),
@@ -102,6 +104,7 @@ fn pending_lines_only_inserts_new_suffix_for_shifted_history_window() {
         pending_history_lines: Vec::new(),
         visible_history_rows: 0,
         visible_history_rows_dirty: false,
+        trailing_reflow_guard_rows: 0,
     };
     let current_lines = (3..MAX_CONVERSATION_HISTORY_LINES + 3)
         .map(|idx| Line::from(format!("line {idx}")))
@@ -134,6 +137,7 @@ fn pending_lines_only_inserts_new_suffix_when_history_first_hits_cap() {
         pending_history_lines: Vec::new(),
         visible_history_rows: 0,
         visible_history_rows_dirty: false,
+        trailing_reflow_guard_rows: 0,
     };
     let current_lines = (10..MAX_CONVERSATION_HISTORY_LINES + 10)
         .map(|idx| Line::from(format!("line {idx}")))
@@ -170,6 +174,7 @@ fn pending_lines_does_not_treat_small_overlap_as_shifted_history() {
         pending_history_lines: Vec::new(),
         visible_history_rows: 0,
         visible_history_rows_dirty: false,
+        trailing_reflow_guard_rows: 0,
     };
     let current_lines = vec![
         Line::from("Status:"),
@@ -209,6 +214,7 @@ fn pending_lines_does_not_shift_uncapped_history_window_even_with_large_overlap(
         pending_history_lines: Vec::new(),
         visible_history_rows: 0,
         visible_history_rows_dirty: false,
+        trailing_reflow_guard_rows: 0,
     };
     let current_lines = vec![
         Line::from("Status:"),
@@ -293,6 +299,78 @@ fn history_sync_reports_insertions_that_need_viewport_redraw() {
             .unwrap()
             .inserted()
     );
+}
+
+#[test]
+fn conversation_reflow_guards_stay_physical_and_refresh_only_with_new_history() {
+    for insert_mode in [
+        HistoryInsertionMode::StandardScrollRegion,
+        HistoryInsertionMode::NewlineFallback,
+    ] {
+        let mut terminal =
+            tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
+        let mut state = HistoryFlushState::default();
+        let initial_lines = vec![Line::from("User:"), Line::from("  first prompt")];
+
+        let snapshot = terminal.backend().resize_snapshot().unwrap();
+        assert!(
+            state
+                .sync(&mut terminal, &initial_lines, snapshot, insert_mode)
+                .unwrap()
+                .inserted()
+        );
+        assert_eq!(state.rendered_lines, initial_lines);
+        assert!(state.pending_history_lines.is_empty());
+        assert_eq!(
+            state.trailing_reflow_guard_rows,
+            super::super::super::INLINE_HOST_SCROLLBACK_REFLOW_GUARD_ROWS
+        );
+
+        let stable_visible_rows = state.visible_history_rows;
+        let snapshot = terminal.backend().resize_snapshot().unwrap();
+        assert!(
+            !state
+                .sync(&mut terminal, &initial_lines, snapshot, insert_mode)
+                .unwrap()
+                .inserted()
+        );
+        assert_eq!(state.visible_history_rows, stable_visible_rows);
+        assert_eq!(state.rendered_lines, initial_lines);
+
+        let appended_lines = vec![
+            Line::from("User:"),
+            Line::from("  first prompt"),
+            Line::from("Agent:"),
+            Line::from("  first answer"),
+        ];
+        assert_eq!(
+            state.pending_lines(&appended_lines),
+            vec![Line::from("Agent:"), Line::from("  first answer")]
+        );
+        let snapshot = terminal.backend().resize_snapshot().unwrap();
+        assert!(
+            state
+                .sync(&mut terminal, &appended_lines, snapshot, insert_mode)
+                .unwrap()
+                .inserted()
+        );
+        assert_eq!(state.rendered_lines, appended_lines);
+        assert!(state.pending_history_lines.is_empty());
+        assert_eq!(
+            state.trailing_reflow_guard_rows,
+            super::super::super::INLINE_HOST_SCROLLBACK_REFLOW_GUARD_ROWS
+        );
+
+        let refreshed_visible_rows = state.visible_history_rows;
+        let snapshot = terminal.backend().resize_snapshot().unwrap();
+        assert!(
+            !state
+                .sync(&mut terminal, &appended_lines, snapshot, insert_mode)
+                .unwrap()
+                .inserted()
+        );
+        assert_eq!(state.visible_history_rows, refreshed_visible_rows);
+    }
 }
 
 #[test]
@@ -409,6 +487,7 @@ fn history_sync_for_empty_thread_clears_baseline_without_losing_geometry() {
         pending_history_lines: Vec::new(),
         visible_history_rows: 6,
         visible_history_rows_dirty: false,
+        trailing_reflow_guard_rows: 0,
     };
 
     let snapshot = terminal.backend().resize_snapshot().unwrap();
@@ -438,6 +517,7 @@ fn conversation_projection_reset_preserves_parallel_baseline_and_geometry() {
         pending_history_lines: vec![Line::from("pending conversation")],
         visible_history_rows: 7,
         visible_history_rows_dirty: true,
+        trailing_reflow_guard_rows: 0,
     };
 
     state.reset_conversation_projection();
