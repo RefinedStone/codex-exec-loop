@@ -5361,6 +5361,38 @@ fn update_unrelated(
         1,
         "enum named payloads must retain nested NativeTuiApp authority"
     );
+    let aliased_named_enum_payload = shell_chrome_writer_audit(
+        "enum Holder<'a> { App { app: &'a mut NativeTuiApp }, Empty }\n\
+         use Holder::App as Authority;\n\
+         fn escape(holder: Holder<'_>) {\n\
+             if let Authority { app } = holder {\n\
+                 app.shell.chrome.session_state = SessionState::Idle;\n\
+             }\n\
+         }",
+    )
+    .expect("aliased named enum payload fixture should parse");
+    assert_eq!(
+        aliased_named_enum_payload.field_writes.len(),
+        1,
+        "named variant aliases must resolve to their registered payload authority"
+    );
+    let custom_result_payload = shell_chrome_writer_audit(
+        "enum Result<T, E> { Ok(E), Err(ShellChromeState, T) }\n\
+         fn escape(value: Result<NativeTuiApp, OtherState>) {\n\
+             match value {\n\
+                 Result::Err(mut chrome, _) => {\n\
+                     chrome.session_state = SessionState::Idle;\n\
+                 }\n\
+                 Result::Ok(_) => {}\n\
+             }\n\
+         }",
+    )
+    .expect("custom Result payload fixture should parse");
+    assert_eq!(
+        custom_result_payload.field_writes.len(),
+        1,
+        "registered custom Result payloads must outrank standard generic positions"
+    );
 
     let unrelated_enum_payload = shell_chrome_writer_audit(
         "enum Holder<'a> { App(&'a mut OtherApp), Empty }\n\
@@ -16905,6 +16937,25 @@ impl ShellChromeWriterVisitor {
             .last()?
             .ident
             .to_string();
+        if let Some(parent) = self.struct_name_from_type(container_type) {
+            let variant_key = format!("{parent}::{variant}");
+            let payload = self
+                .struct_fields
+                .get(&variant_key)
+                .and_then(|fields| fields.get(&index.to_string()))
+                .cloned()
+                .or_else(|| {
+                    self.struct_field_type(
+                        container_type,
+                        &syn::Member::Unnamed(syn::Index::from(index)),
+                    )
+                });
+            if let Some(payload) = payload {
+                return Some(reference_mutability.map_or(payload.clone(), |mutable| {
+                    Self::referenced_type(payload, mutable)
+                }));
+            }
+        }
         if index == 0
             && let syn::Type::Path(parent_path) = container_type
             && parent_path.qself.is_none()
@@ -16934,19 +16985,7 @@ impl ShellChromeWriterVisitor {
                 ));
             }
         }
-
-        let parent = self.struct_name_from_type(container_type)?;
-        let variant_key = format!("{parent}::{variant}");
-        self.struct_fields
-            .get(&variant_key)
-            .and_then(|fields| fields.get(&index.to_string()))
-            .cloned()
-            .or_else(|| {
-                self.struct_field_type(
-                    container_type,
-                    &syn::Member::Unnamed(syn::Index::from(index)),
-                )
-            })
+        None
     }
 
     fn struct_pattern_field_type(
@@ -16955,14 +16994,51 @@ impl ShellChromeWriterVisitor {
         path: &syn::Path,
         member: &syn::Member,
     ) -> Option<syn::Type> {
-        let parent = self.struct_name_from_type(ty)?;
-        let variant = path.segments.last()?.ident.to_string();
+        let expanded_type = shell_type_with_expanded_aliases(
+            ty,
+            self.type_resolution_scope(self.impl_authority),
+            &mut HashSet::new(),
+        );
+        let mut container_type = &expanded_type;
+        let mut reference_mutability = None;
+        loop {
+            match container_type {
+                syn::Type::Reference(reference) => {
+                    let mutable = reference.mutability.is_some();
+                    reference_mutability =
+                        Some(reference_mutability.map_or(mutable, |outer| outer && mutable));
+                    container_type = reference.elem.as_ref();
+                }
+                syn::Type::Group(group) => container_type = group.elem.as_ref(),
+                syn::Type::Paren(paren) => container_type = paren.elem.as_ref(),
+                _ => break,
+            }
+        }
+        let expanded_variant = shell_type_with_expanded_aliases(
+            &syn::Type::Path(syn::TypePath {
+                qself: None,
+                path: path.clone(),
+            }),
+            self.type_resolution_scope(self.impl_authority),
+            &mut HashSet::new(),
+        );
+        let variant = shell_type_path(&expanded_variant)?
+            .path
+            .segments
+            .last()?
+            .ident
+            .to_string();
+        let parent = self.struct_name_from_type(container_type)?;
         let variant_key = format!("{parent}::{variant}");
-        self.struct_fields
+        let payload = self
+            .struct_fields
             .get(&variant_key)
             .and_then(|fields| fields.get(&shell_member_key(member)))
             .cloned()
-            .or_else(|| self.struct_field_type(ty, member))
+            .or_else(|| self.struct_field_type(container_type, member))?;
+        Some(reference_mutability.map_or(payload.clone(), |mutable| {
+            Self::referenced_type(payload, mutable)
+        }))
     }
 
     fn bind_type_pattern(&mut self, pattern: &syn::Pat, binding: ShellTypeBinding) {
