@@ -4044,6 +4044,14 @@ fn shell_chrome_state_has_one_typed_reducer_writer() {
         .collect::<Vec<_>>();
     let mut known_struct_fields = ShellStructFields::new();
     let mut known_type_aliases = ShellQualifiedTypeAliases::new();
+    let crate_root_source =
+        fs::read_to_string(root.join("src/lib.rs")).expect("library crate root should load");
+    let crate_root_syntax =
+        syn::parse_file(&crate_root_source).expect("library crate root should parse");
+    known_type_aliases.extend(qualified_type_aliases_declared_in_file(
+        &crate_root_syntax,
+        &["crate".to_string()],
+    ));
     for (path, source, module_path) in &tui_sources {
         let syntax = syn::parse_file(source)
             .unwrap_or_else(|error| panic!("failed to parse {}: {error}", path.display()));
@@ -4628,6 +4636,46 @@ fn update_unrelated(
         "qualified imports must distinguish same-named aliases across modules"
     );
 
+    let crate_alias_file = syn::parse_file("extern crate self as akra;")
+        .expect("self-crate alias definition should parse");
+    let crate_aliases =
+        qualified_type_aliases_declared_in_file(&crate_alias_file, &["crate".to_string()]);
+    let self_crate_aliased_app = shell_chrome_writer_audit_with_type_registry(
+        "fn escape(\n\
+             app: &mut akra::adapter::inbound::tui::app::NativeTuiApp,\n\
+         ) {\n\
+             app.shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+        false,
+        &known_struct_fields,
+        &crate_aliases,
+        &relative_writer_module,
+    )
+    .expect("self-crate aliased native app fixture should parse");
+    assert_eq!(
+        self_crate_aliased_app.field_writes.len(),
+        1,
+        "crate-root `extern crate self` aliases must retain NativeTuiApp authority"
+    );
+    let shadowed_self_crate_alias = shell_chrome_writer_audit_with_type_registry(
+        "mod akra {}\n\
+         fn update(\n\
+             app: &mut akra::adapter::inbound::tui::app::NativeTuiApp,\n\
+         ) {\n\
+             app.shell.chrome.session_state = 1;\n\
+         }",
+        false,
+        &known_struct_fields,
+        &crate_aliases,
+        &relative_writer_module,
+    )
+    .expect("shadowed self-crate alias fixture should parse");
+    assert!(
+        shadowed_self_crate_alias.field_writes.is_empty()
+            && shadowed_self_crate_alias.whole_state_writes.is_empty(),
+        "a local type-namespace item must shadow a crate-root self alias"
+    );
+
     let unrelated_wrapper = shell_chrome_writer_audit(
         "struct OtherChrome { session_state: usize }\n\
          struct OtherShell { chrome: OtherChrome }\n\
@@ -5172,6 +5220,53 @@ fn update_unrelated(
             && qualified_standard_macro_read.whole_state_writes.is_empty()
             && qualified_standard_macro_read.macro_escapes.is_empty(),
         "std/core-qualified read-only macros must not create writer false positives"
+    );
+
+    let shadowed_standard_macro = shell_chrome_writer_audit(
+        "fn escape(app: &mut NativeTuiApp) {\n\
+             use crate::evil as std;\n\
+             let _ = std::format_args!(\"{}\", app.shell.chrome.session_state);\n\
+         }",
+    )
+    .expect("import-shadowed standard macro fixture should parse");
+    assert!(
+        !shadowed_standard_macro.macro_escapes.is_empty(),
+        "a local import named `std` must not make an authority-bearing macro trusted"
+    );
+    let module_shadowed_standard_macro = shell_chrome_writer_audit(
+        "mod alloc {}\n\
+         fn escape(app: &mut NativeTuiApp) {\n\
+             let _ = alloc::format!(\"{:?}\", app.shell.chrome.session_state);\n\
+         }",
+    )
+    .expect("module-shadowed standard macro fixture should parse");
+    assert!(
+        !module_shadowed_standard_macro.macro_escapes.is_empty(),
+        "a local module named `alloc` must not make an authority-bearing macro trusted"
+    );
+    let imported_lookalike_read_macro = shell_chrome_writer_audit(
+        "use crate::evil::matches;\n\
+         fn escape(app: &mut NativeTuiApp) {\n\
+             let _ = matches!(app.shell.chrome.session_state, SessionState::Idle);\n\
+         }",
+    )
+    .expect("import-shadowed read macro fixture should parse");
+    assert!(
+        !imported_lookalike_read_macro.macro_escapes.is_empty(),
+        "an imported lookalike must not inherit the read-only macro allowlist"
+    );
+    let imported_standard_read_macro = shell_chrome_writer_audit(
+        "use std::matches;\n\
+         fn inspect(app: &mut NativeTuiApp) {\n\
+             let _ = matches!(app.shell.chrome.session_state, SessionState::Idle);\n\
+         }",
+    )
+    .expect("imported standard read macro fixture should parse");
+    assert!(
+        imported_standard_read_macro.field_writes.is_empty()
+            && imported_standard_read_macro.whole_state_writes.is_empty()
+            && imported_standard_read_macro.macro_escapes.is_empty(),
+        "an explicitly imported standard read-only macro must remain harmless"
     );
 
     let qualified_unknown_macro = shell_chrome_writer_audit(
@@ -14014,25 +14109,24 @@ struct ShellTypeResolutionScope<'a> {
     type_aliases: &'a HashMap<String, syn::Type>,
     qualified_type_aliases: &'a ShellQualifiedTypeAliases,
     imports: &'a ShellStructImports,
+    path_shadows: &'a HashSet<String>,
     module_path: &'a [String],
     allow_local_aliases: bool,
 }
 
 fn normalized_shell_type_path(
     path: &syn::Path,
-    module_path: &[String],
-    imports: &ShellStructImports,
-    allow_local_imports: bool,
+    scope: ShellTypeResolutionScope<'_>,
 ) -> Vec<String> {
     let mut raw_path = path
         .segments
         .iter()
         .map(|segment| segment.ident.to_string())
         .collect::<Vec<_>>();
-    if allow_local_imports {
+    if scope.allow_local_aliases {
         let mut resolving_imports = HashSet::new();
         while let Some(first) = raw_path.first().cloned()
-            && let Some(target) = imports.get(&first)
+            && let Some(target) = scope.imports.get(&first)
             && resolving_imports.insert(first)
         {
             let mut expanded = target.clone();
@@ -14044,9 +14138,13 @@ fn normalized_shell_type_path(
         return raw_path;
     }
 
-    let mut normalized = module_path.to_vec();
+    let mut normalized = scope.module_path.to_vec();
     let mut index = 0;
-    if raw_path.first().is_some_and(|segment| segment == "crate") {
+    let first_is_visible_crate_alias = raw_path.first().is_some_and(|segment| {
+        scope.qualified_type_aliases.is_crate_alias(segment)
+            && (!scope.allow_local_aliases || !scope.path_shadows.contains(segment))
+    });
+    if raw_path.first().is_some_and(|segment| segment == "crate") || first_is_visible_crate_alias {
         normalized.clear();
         normalized.push("crate".to_string());
         index = 1;
@@ -14068,17 +14166,14 @@ fn normalized_shell_type_path(
 
 fn shell_authority_kind_from_path(
     path: &syn::Path,
-    module_path: &[String],
-    implicit_self: Option<ShellAuthorityKind>,
-    imports: &ShellStructImports,
-    allow_local_imports: bool,
+    scope: ShellTypeResolutionScope<'_>,
 ) -> Option<ShellAuthorityKind> {
-    let normalized = normalized_shell_type_path(path, module_path, imports, allow_local_imports);
+    let normalized = normalized_shell_type_path(path, scope);
     match normalized.as_slice() {
         [name] if name == "NativeTuiApp" => Some(ShellAuthorityKind::App),
         [name] if name == "NativeTuiShellState" => Some(ShellAuthorityKind::Shell),
         [name] if name == "ShellChromeState" => Some(ShellAuthorityKind::Chrome),
-        [name] if name == "Self" => implicit_self,
+        [name] if name == "Self" => scope.implicit_self,
         [root, adapter, inbound, tui, app, name]
             if root == "crate"
                 && adapter == "adapter"
@@ -14150,12 +14245,7 @@ fn shell_authority_binding_from_type(
                 qualified.push(name.clone());
                 qualified
             } else {
-                normalized_shell_type_path(
-                    &path.path,
-                    scope.module_path,
-                    scope.imports,
-                    scope.allow_local_aliases,
-                )
+                normalized_shell_type_path(&path.path, scope)
             };
             let qualified_name = normalized_path.join("::");
             let alias_module_path = normalized_path
@@ -14263,13 +14353,7 @@ fn shell_authority_binding_from_type(
                     }
                 }
             }
-            let direct_kind = shell_authority_kind_from_path(
-                &path.path,
-                scope.module_path,
-                scope.implicit_self,
-                scope.imports,
-                scope.allow_local_aliases,
-            );
+            let direct_kind = shell_authority_kind_from_path(&path.path, scope);
             if let Some(kind) = direct_kind {
                 return Some(ShellAuthorityBinding {
                     kind,
@@ -14385,6 +14469,8 @@ fn type_aliases_declared_in_statements(statements: &[syn::Stmt]) -> HashMap<Stri
 struct ShellQualifiedTypeAliases {
     aliases: HashMap<String, syn::Type>,
     glob_imports: HashMap<String, Vec<syn::Type>>,
+    crate_aliases: HashSet<String>,
+    root_path_shadows: HashSet<String>,
 }
 
 impl ShellQualifiedTypeAliases {
@@ -14400,11 +14486,21 @@ impl ShellQualifiedTypeAliases {
         self.glob_imports.entry(module).or_default().push(target);
     }
 
+    fn insert_crate_alias(&mut self, alias: String) {
+        self.crate_aliases.insert(alias);
+    }
+
+    fn insert_root_path_shadow(&mut self, name: String) {
+        self.root_path_shadows.insert(name);
+    }
+
     fn extend(&mut self, other: Self) {
         self.aliases.extend(other.aliases);
         for (module, targets) in other.glob_imports {
             self.glob_imports.entry(module).or_default().extend(targets);
         }
+        self.crate_aliases.extend(other.crate_aliases);
+        self.root_path_shadows.extend(other.root_path_shadows);
     }
 
     fn get(&self, name: &str) -> Option<&syn::Type> {
@@ -14417,6 +14513,14 @@ impl ShellQualifiedTypeAliases {
 
     fn glob_targets(&self, module: &str) -> &[syn::Type] {
         self.glob_imports.get(module).map_or(&[], Vec::as_slice)
+    }
+
+    fn is_crate_alias(&self, name: &str) -> bool {
+        self.crate_aliases.contains(name)
+    }
+
+    fn root_path_is_shadowed(&self, name: &str) -> bool {
+        self.root_path_shadows.contains(name)
     }
 }
 
@@ -14449,6 +14553,40 @@ fn collect_qualified_type_aliases(
     for item in items {
         if item_is_test_only(item) {
             continue;
+        }
+        if module_path.as_slice() == ["crate"] {
+            match item {
+                syn::Item::ExternCrate(extern_crate) => {
+                    let local_name = extern_crate
+                        .rename
+                        .as_ref()
+                        .map_or(&extern_crate.ident, |(_, rename)| rename)
+                        .to_string();
+                    if extern_crate.ident == "self" {
+                        aliases.insert_crate_alias(local_name.clone());
+                        if matches!(local_name.as_str(), "std" | "core" | "alloc") {
+                            aliases.insert_root_path_shadow(local_name);
+                        }
+                    } else if extern_crate.ident != local_name {
+                        aliases.insert_root_path_shadow(local_name);
+                    }
+                }
+                syn::Item::Mod(module) => {
+                    aliases.insert_root_path_shadow(module.ident.to_string());
+                }
+                syn::Item::Use(import) => {
+                    let mut imports = ShellStructImports::new();
+                    collect_use_struct_imports(&import.tree, &mut Vec::new(), &mut imports);
+                    for (local_name, target) in imports {
+                        if matches!(local_name.as_str(), "std" | "core" | "alloc")
+                            && target.as_slice() != [local_name.as_str()]
+                        {
+                            aliases.insert_root_path_shadow(local_name);
+                        }
+                    }
+                }
+                _ => {}
+            }
         }
         if let syn::Item::Type(alias) = item {
             aliases.insert(
@@ -14699,6 +14837,61 @@ fn struct_imports_declared_in_statements(statements: &[syn::Stmt]) -> ShellStruc
     imports
 }
 
+fn collect_item_path_shadows(item: &syn::Item, shadows: &mut HashSet<String>) {
+    if item_is_test_only(item) {
+        return;
+    }
+    match item {
+        syn::Item::Mod(module) => {
+            shadows.insert(module.ident.to_string());
+        }
+        syn::Item::ExternCrate(extern_crate) if extern_crate.ident != "self" => {
+            let local_name = extern_crate
+                .rename
+                .as_ref()
+                .map_or(&extern_crate.ident, |(_, rename)| rename);
+            shadows.insert(local_name.to_string());
+        }
+        syn::Item::Enum(item) => {
+            shadows.insert(item.ident.to_string());
+        }
+        syn::Item::Struct(item) => {
+            shadows.insert(item.ident.to_string());
+        }
+        syn::Item::Trait(item) => {
+            shadows.insert(item.ident.to_string());
+        }
+        syn::Item::TraitAlias(item) => {
+            shadows.insert(item.ident.to_string());
+        }
+        syn::Item::Type(item) => {
+            shadows.insert(item.ident.to_string());
+        }
+        syn::Item::Union(item) => {
+            shadows.insert(item.ident.to_string());
+        }
+        _ => {}
+    }
+}
+
+fn path_shadows_declared_in_items(items: &[syn::Item]) -> HashSet<String> {
+    let mut shadows = HashSet::new();
+    for item in items {
+        collect_item_path_shadows(item, &mut shadows);
+    }
+    shadows
+}
+
+fn path_shadows_declared_in_statements(statements: &[syn::Stmt]) -> HashSet<String> {
+    let mut shadows = HashSet::new();
+    for statement in statements {
+        if let syn::Stmt::Item(item) = statement {
+            collect_item_path_shadows(item, &mut shadows);
+        }
+    }
+    shadows
+}
+
 fn pattern_has_mutable_binding(pattern: &syn::Pat) -> bool {
     match pattern {
         syn::Pat::Ident(pattern) => {
@@ -14835,17 +15028,8 @@ fn macro_token_invocations(
     invocations
 }
 
-fn shell_chrome_read_macro_path(path: &str) -> bool {
-    let segments = path.split("::").collect::<Vec<_>>();
-    matches!(
-        segments.as_slice(),
-        [name] if SHELL_CHROME_AUTHORITY_READ_MACROS.contains(name)
-    ) || matches!(
-        segments.as_slice(),
-        [root, name]
-            if matches!(*root, "std" | "core" | "alloc")
-                && SHELL_CHROME_AUTHORITY_READ_MACROS.contains(name)
-    ) || path == "crate::akra_event"
+fn shell_chrome_read_macro_name(name: &str) -> bool {
+    SHELL_CHROME_AUTHORITY_READ_MACROS.contains(&name)
 }
 
 fn macro_tokens_have_assignment(tokens: &proc_macro2::TokenStream) -> bool {
@@ -14985,6 +15169,7 @@ struct ShellChromeWriterVisitor {
     closure_bindings: HashMap<String, syn::ExprClosure>,
     struct_fields: ShellStructFields,
     struct_imports: ShellStructImports,
+    path_shadows: HashSet<String>,
     module_path: Vec<String>,
     audit: ShellChromeWriterAudit,
 }
@@ -15007,6 +15192,7 @@ impl ShellChromeWriterVisitor {
             type_aliases: &self.type_aliases,
             qualified_type_aliases: &self.qualified_type_aliases,
             imports: &self.struct_imports,
+            path_shadows: &self.path_shadows,
             module_path: &self.module_path,
             allow_local_aliases: true,
         }
@@ -16191,6 +16377,52 @@ impl ShellChromeWriterVisitor {
         })
     }
 
+    fn standard_macro_root_is_shadowed(&self, root: &str, absolute: bool) -> bool {
+        self.qualified_type_aliases.root_path_is_shadowed(root)
+            || (!absolute
+                && (self.path_shadows.contains(root)
+                    || self
+                        .struct_imports
+                        .get(root)
+                        .is_some_and(|target| target.as_slice() != [root])))
+    }
+
+    fn imported_read_macro_is_trusted(&self, name: &str, target: &[String]) -> bool {
+        match target {
+            [root, target_name]
+                if target_name == name
+                    && matches!(root.as_str(), "std" | "core" | "alloc")
+                    && !self.standard_macro_root_is_shadowed(root, false) =>
+            {
+                true
+            }
+            [root, target_name]
+                if root == "crate" && name == "akra_event" && target_name == name =>
+            {
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn shell_chrome_read_macro_path(&self, path: &str, absolute: bool) -> bool {
+        let segments = path.split("::").collect::<Vec<_>>();
+        match segments.as_slice() {
+            [name] if shell_chrome_read_macro_name(name) => self
+                .struct_imports
+                .get(*name)
+                .is_none_or(|target| self.imported_read_macro_is_trusted(name, target)),
+            [root, name]
+                if matches!(*root, "std" | "core" | "alloc")
+                    && shell_chrome_read_macro_name(name) =>
+            {
+                !self.standard_macro_root_is_shadowed(root, absolute)
+            }
+            ["crate", "akra_event"] => true,
+            _ => false,
+        }
+    }
+
     fn inspect_macro(&mut self, expression: &syn::Macro, item_position: bool) {
         let name = expression
             .path
@@ -16210,11 +16442,14 @@ impl ShellChromeWriterVisitor {
         }) || SHELL_CHROME_MACRO_MUTATION_IDENTIFIERS
             .iter()
             .any(|identifier| identifiers.contains(*identifier));
-        let read_macro = shell_chrome_read_macro_path(&syn_path_name(&expression.path));
+        let read_macro = self.shell_chrome_read_macro_path(
+            &syn_path_name(&expression.path),
+            expression.path.leading_colon.is_some(),
+        );
         let has_untrusted_nested_authority_macro = macro_token_invocations(&expression.tokens)
             .iter()
             .any(|(path, tokens)| {
-                !shell_chrome_read_macro_path(path)
+                !self.shell_chrome_read_macro_path(path, false)
                     && self.identifiers_mention_mutable_authority(&macro_token_identifiers(tokens))
             });
         if item_position
@@ -16237,8 +16472,11 @@ impl ShellChromeWriterVisitor {
         let previous_closures = self.closure_bindings.clone();
         let previous_structs = self.struct_fields.clone();
         let previous_imports = self.struct_imports.clone();
+        let previous_path_shadows = self.path_shadows.clone();
         self.struct_imports
             .extend(struct_imports_declared_in_statements(&block.stmts));
+        self.path_shadows
+            .extend(path_shadows_declared_in_statements(&block.stmts));
         self.type_aliases
             .extend(type_aliases_declared_in_statements(&block.stmts));
         self.extend_imported_type_aliases();
@@ -16259,6 +16497,7 @@ impl ShellChromeWriterVisitor {
         self.closure_bindings = previous_closures;
         self.struct_fields = previous_structs;
         self.struct_imports = previous_imports;
+        self.path_shadows = previous_path_shadows;
     }
 
     fn is_exact_native_app_dispatch_receiver(&self, receiver: &syn::Expr) -> bool {
@@ -16389,8 +16628,11 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
         let previous_returns = self.function_returns.clone();
         let previous_structs = self.struct_fields.clone();
         let previous_imports = self.struct_imports.clone();
+        let previous_path_shadows = self.path_shadows.clone();
         self.struct_imports
             .extend(struct_imports_declared_in_items(&file.items));
+        self.path_shadows
+            .extend(path_shadows_declared_in_items(&file.items));
         self.type_aliases
             .extend(type_aliases_declared_in_items(&file.items));
         self.extend_imported_type_aliases();
@@ -16405,6 +16647,7 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
         self.function_returns = previous_returns;
         self.struct_fields = previous_structs;
         self.struct_imports = previous_imports;
+        self.path_shadows = previous_path_shadows;
     }
 
     fn visit_item(&mut self, item: &'ast syn::Item) {
@@ -16433,8 +16676,10 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
         let previous_returns = self.function_returns.clone();
         let previous_structs = self.struct_fields.clone();
         let previous_imports = self.struct_imports.clone();
+        let previous_path_shadows = self.path_shadows.clone();
         self.module_path.push(module.ident.to_string());
         self.struct_imports = struct_imports_declared_in_items(items);
+        self.path_shadows = path_shadows_declared_in_items(items);
         self.type_aliases
             .extend(type_aliases_declared_in_items(items));
         self.extend_imported_type_aliases();
@@ -16449,6 +16694,7 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
         self.function_returns = previous_returns;
         self.struct_fields = previous_structs;
         self.struct_imports = previous_imports;
+        self.path_shadows = previous_path_shadows;
         self.module_path.pop();
     }
 
