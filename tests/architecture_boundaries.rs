@@ -5253,6 +5253,22 @@ fn update_unrelated(
         "closure argument inference must follow transparent call-target references"
     );
 
+    let aliased_referenced_inferred_closure = shell_chrome_writer_audit(
+        "fn escape(app: &mut NativeTuiApp) {\n\
+             let write = |value| {\n\
+                 value.shell.chrome.session_state = SessionState::Idle;\n\
+             };\n\
+             let forwarded = &write;\n\
+             forwarded(app);\n\
+         }",
+    )
+    .expect("aliased closure reference fixture should parse");
+    assert_eq!(
+        aliased_referenced_inferred_closure.field_writes.len(),
+        1,
+        "closure inference must follow references stored in local aliases"
+    );
+
     let inline_inferred_closure = shell_chrome_writer_audit(
         "fn escape(app: &mut NativeTuiApp) {\n\
              (|value| {\n\
@@ -5293,6 +5309,22 @@ fn update_unrelated(
         unrelated_inferred_closure.field_writes.is_empty()
             && unrelated_inferred_closure.whole_state_writes.is_empty(),
         "untyped closures without shell authority paths must remain harmless"
+    );
+
+    let unrelated_aliased_closure = shell_chrome_writer_audit(
+        "fn update(other: &mut OtherApp) {\n\
+             let write = |value| {\n\
+                 value.shell.chrome.session_state = 1;\n\
+             };\n\
+             let forwarded = &write;\n\
+             forwarded(other);\n\
+         }",
+    )
+    .expect("unrelated aliased closure fixture should parse");
+    assert!(
+        unrelated_aliased_closure.field_writes.is_empty()
+            && unrelated_aliased_closure.whole_state_writes.is_empty(),
+        "closure aliases must not infer TUI authority from unrelated arguments"
     );
 
     let unrelated_inline_closure = shell_chrome_writer_audit(
@@ -16298,6 +16330,10 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
     }
 
     fn visit_local(&mut self, local: &'ast syn::Local) {
+        let closure_initializer = local
+            .init
+            .as_ref()
+            .and_then(|init| self.closure_for_call_target(init.expr.as_ref()));
         if let Some(init) = &local.init {
             self.visit_expr(init.expr.as_ref());
             if let Some((_, diverge)) = &init.diverge {
@@ -16312,12 +16348,10 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
         if !bound_from_initializer && let syn::Pat::Type(pattern) = &local.pat {
             self.bind_pattern_from_type(pattern.pat.as_ref(), pattern.ty.as_ref());
         }
-        if let Some(init) = &local.init
-            && let syn::Expr::Closure(closure) = init.expr.as_ref()
-        {
+        if let Some(closure) = closure_initializer {
             let names = pattern_binding_names(&local.pat);
             if let [name] = names.as_slice() {
-                self.closure_bindings.insert(name.clone(), closure.clone());
+                self.closure_bindings.insert(name.clone(), closure);
             }
         }
     }
