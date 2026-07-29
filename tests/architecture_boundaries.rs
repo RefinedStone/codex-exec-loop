@@ -5413,6 +5413,50 @@ fn update_unrelated(
         "untyped closure parameters must conservatively retain shell chrome authority paths"
     );
 
+    let boxed_inferred_closure = shell_chrome_writer_audit(
+        "fn escape(app: &mut NativeTuiApp) {\n\
+             let write: Box<dyn FnOnce(&mut NativeTuiApp)> = Box::new(|value| {\n\
+                 value.shell.chrome.session_state = SessionState::Idle;\n\
+             });\n\
+             write(app);\n\
+         }",
+    )
+    .expect("boxed inferred closure parameter fixture should parse");
+    assert_eq!(
+        boxed_inferred_closure.field_writes.len(),
+        1,
+        "callable wrappers must preserve local closure argument inference"
+    );
+    let imported_arc_inferred_closure = shell_chrome_writer_audit(
+        "use std::sync::Arc as Callable;\n\
+         fn escape(app: &mut NativeTuiApp) {\n\
+             let write = Callable::new(|value| {\n\
+                 value.shell.chrome.session_state = SessionState::Idle;\n\
+             });\n\
+             write(app);\n\
+         }",
+    )
+    .expect("import-aliased Arc closure parameter fixture should parse");
+    assert_eq!(
+        imported_arc_inferred_closure.field_writes.len(),
+        1,
+        "canonical imported callable wrappers must preserve closure authority"
+    );
+    let unrelated_boxed_closure = shell_chrome_writer_audit(
+        "fn update(other: &mut OtherApp) {\n\
+             let write: Box<dyn FnOnce(&mut OtherApp)> = Box::new(|value| {\n\
+                 value.shell.chrome.session_state = 1;\n\
+             });\n\
+             write(other);\n\
+         }",
+    )
+    .expect("unrelated boxed closure fixture should parse");
+    assert!(
+        unrelated_boxed_closure.field_writes.is_empty()
+            && unrelated_boxed_closure.whole_state_writes.is_empty(),
+        "callable wrappers must not infer TUI authority from unrelated arguments"
+    );
+
     let referenced_inferred_closure = shell_chrome_writer_audit(
         "fn escape(app: &mut NativeTuiApp) {\n\
              let write = |value| {\n\
@@ -16570,8 +16614,85 @@ impl ShellChromeWriterVisitor {
             syn::Expr::Unary(unary) if matches!(unary.op, syn::UnOp::Deref(_)) => {
                 self.closure_for_call_target(unary.expr.as_ref())
             }
+            syn::Expr::Call(call) => self
+                .transparent_closure_wrapper_argument(call)
+                .and_then(|argument| self.closure_for_call_target(argument)),
             _ => None,
         }
+    }
+
+    fn transparent_closure_wrapper_argument<'a>(
+        &self,
+        call: &'a syn::ExprCall,
+    ) -> Option<&'a syn::Expr> {
+        if call.args.len() != 1 {
+            return None;
+        }
+        if let Some(argument) = self.transparent_call_argument(call) {
+            return Some(argument);
+        }
+        let syn::Expr::Path(path) = call.func.as_ref() else {
+            return None;
+        };
+        if path.qself.is_some() {
+            return None;
+        }
+        let mut resolved_path = path
+            .path
+            .segments
+            .iter()
+            .map(|segment| segment.ident.to_string())
+            .collect::<Vec<_>>();
+        if let Some(first) = resolved_path.first().cloned()
+            && let Some(imported) = self.struct_imports.get(&first)
+        {
+            let mut expanded = imported.clone();
+            expanded.extend(resolved_path.iter().skip(1).cloned());
+            resolved_path = expanded;
+        }
+        let known_wrapper = match resolved_path.as_slice() {
+            [wrapper, constructor]
+                if wrapper == "Box"
+                    && matches!(constructor.as_str(), "from" | "new" | "pin")
+                    && !self.path_shadows.contains(wrapper) =>
+            {
+                true
+            }
+            [root, module, wrapper, constructor]
+                if matches!(root.as_str(), "alloc" | "std")
+                    && module == "boxed"
+                    && wrapper == "Box"
+                    && matches!(constructor.as_str(), "from" | "new" | "pin") =>
+            {
+                true
+            }
+            [root, module, wrapper, constructor]
+                if matches!(root.as_str(), "alloc" | "std")
+                    && module == "rc"
+                    && wrapper == "Rc"
+                    && matches!(constructor.as_str(), "from" | "new") =>
+            {
+                true
+            }
+            [root, module, wrapper, constructor]
+                if matches!(root.as_str(), "alloc" | "std")
+                    && module == "sync"
+                    && wrapper == "Arc"
+                    && matches!(constructor.as_str(), "from" | "new") =>
+            {
+                true
+            }
+            [root, module, wrapper, constructor]
+                if matches!(root.as_str(), "core" | "std")
+                    && module == "pin"
+                    && wrapper == "Pin"
+                    && matches!(constructor.as_str(), "new" | "new_unchecked") =>
+            {
+                true
+            }
+            _ => false,
+        };
+        known_wrapper.then(|| call.args.first()).flatten()
     }
 
     fn visit_closure_with_arguments(
