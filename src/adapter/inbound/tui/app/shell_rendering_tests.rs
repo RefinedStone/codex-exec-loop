@@ -77,8 +77,9 @@ fn context_hud_and_focused_composer_scale_at_120_and_160_columns() {
     let medium = tui_testkit::render_inline_snapshot(&mut medium_app, 120, 24);
 
     assert!(medium.contains("Akra / root"));
-    assert!(medium.contains("branch: --"));
     assert!(medium.contains("gpt-5.5/high"));
+    assert!(!medium.contains("branch: --"));
+    assert!(!medium.contains("ctx: --"));
     assert_eq!(medium.matches("╭ Task").count(), 1, "{medium}");
     assert!(
         medium.lines().all(
@@ -92,7 +93,8 @@ fn context_hud_and_focused_composer_scale_at_120_and_160_columns() {
     wide_app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
     let wide = tui_testkit::render_inline_snapshot(&mut wide_app, 160, 24);
 
-    assert!(wide.contains("ctx: --"));
+    assert!(!wide.contains("branch: --"));
+    assert!(!wide.contains("ctx: --"));
     assert!(wide.contains("queue: off"));
     assert_eq!(wide.matches("╭ Task").count(), 1, "{wide}");
     assert!(

@@ -13,7 +13,7 @@ expression: rendered
 Codex:
   streaming delta should stay in the transcript until completion
 
-Akra / root  •  branch: --  •  ready  •  gpt-5.5/high  •  ctx: --  •  queue: off
+Akra / root  •  ready  •  gpt-5.5/high  •  queue: off
 ◦ Working (0s • turn running / interrupt runtime-native)
 ╭ Task
 │ > Describe a task or type : for commands
