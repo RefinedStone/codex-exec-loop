@@ -349,6 +349,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "proc-macro2",
+ "quote",
  "rand",
  "ratatui",
  "rusqlite",
