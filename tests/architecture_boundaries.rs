@@ -7011,6 +7011,54 @@ fn update_unrelated(
         1,
         "associated projection resolution must include the owning trait identity"
     );
+    let inherited_and_generic_associated_projections = shell_chrome_writer_audit(
+        "trait InheritedBase {\n\
+             type Output;\n\
+         }\n\
+         trait InheritedDerived: InheritedBase {\n\
+             fn make(&self) -> Self::Output;\n\
+         }\n\
+         struct InheritedFactory;\n\
+         impl InheritedBase for InheritedFactory {\n\
+             type Output = ShellChromeState;\n\
+         }\n\
+         impl InheritedDerived for InheritedFactory {\n\
+             fn make(&self) -> Self::Output { todo!() }\n\
+         }\n\
+         struct GenericProjectionFactory<T>(T);\n\
+         trait GenericBase {\n\
+             type Output;\n\
+         }\n\
+         trait GenericDerived: GenericBase {\n\
+             fn make(&self) -> <Self as GenericBase>::Output;\n\
+         }\n\
+         impl<T> GenericBase for GenericProjectionFactory<T> {\n\
+             type Output = T;\n\
+         }\n\
+         impl GenericDerived for GenericProjectionFactory<ShellChromeState> {\n\
+             fn make(&self) -> <Self as GenericBase>::Output { todo!() }\n\
+         }\n\
+         impl GenericDerived for GenericProjectionFactory<OtherState> {\n\
+             fn make(&self) -> <Self as GenericBase>::Output { todo!() }\n\
+         }\n\
+         fn update(\n\
+             inherited: InheritedFactory,\n\
+             chrome: GenericProjectionFactory<ShellChromeState>,\n\
+             other: GenericProjectionFactory<OtherState>,\n\
+         ) {\n\
+             inherited.make().session_state = SessionState::Idle;\n\
+             chrome.make().session_state = SessionState::Idle;\n\
+             other.make().session_state = 1;\n\
+         }",
+    )
+    .expect("inherited and generic associated projection fixtures should parse");
+    assert_eq!(
+        inherited_and_generic_associated_projections
+            .field_writes
+            .len(),
+        2,
+        "inherited owners and applicable generic associated impls must resolve exactly"
+    );
     let cross_file_trait = syn::parse_file(
         "pub trait CrossFileMaker {\n\
              type Output;\n\
@@ -17203,6 +17251,7 @@ struct ShellGenericBindings {
     consts: HashMap<String, syn::Expr>,
     lifetimes: HashMap<String, syn::Lifetime>,
     associated_types: HashMap<ShellAssociatedTypeKey, syn::Type>,
+    associated_type_owners: HashMap<ShellAssociatedTypeKey, ShellAssociatedTypeKey>,
     current_trait: Option<String>,
 }
 
@@ -17242,6 +17291,9 @@ impl ShellGenericBindings {
             }
             merged.associated_types.insert(name.clone(), ty.clone());
         }
+        merged
+            .associated_type_owners
+            .extend(additional.associated_type_owners.clone());
         match (&merged.current_trait, &additional.current_trait) {
             (Some(existing), Some(additional)) if existing != additional => return None,
             (None, Some(additional)) => {
@@ -17250,6 +17302,20 @@ impl ShellGenericBindings {
             _ => {}
         }
         Some(merged)
+    }
+
+    fn associated_type(&self, key: &ShellAssociatedTypeKey) -> Option<&syn::Type> {
+        let mut current = key;
+        let mut visited = HashSet::new();
+        loop {
+            if let Some(ty) = self.associated_types.get(current) {
+                return Some(ty);
+            }
+            if !visited.insert(current.clone()) {
+                return None;
+            }
+            current = self.associated_type_owners.get(current)?;
+        }
     }
 }
 
@@ -17638,10 +17704,18 @@ struct ShellTraitDefaultReturn {
     function_generic_parameters: Vec<ShellDeclaredGenericParameter>,
 }
 
+#[derive(Clone)]
+struct ShellDeclaredTraitReference {
+    path: syn::Path,
+    module_path: Vec<String>,
+}
+
 #[derive(Clone, Default)]
 struct ShellTraitDefinition {
     generic_parameters: Vec<ShellDeclaredGenericParameter>,
+    associated_type_names: HashSet<String>,
     associated_type_defaults: HashMap<String, ShellDeclaredAssociatedType>,
+    supertraits: Vec<ShellDeclaredTraitReference>,
     default_returns: Vec<ShellTraitDefaultReturn>,
 }
 
@@ -17727,6 +17801,28 @@ fn shell_associated_type_projection_key(
     })
 }
 
+fn shell_type_contains_associated_projection(ty: &syn::Type) -> bool {
+    struct ProjectionFinder {
+        found: bool,
+    }
+
+    impl<'ast> Visit<'ast> for ProjectionFinder {
+        fn visit_type_path(&mut self, path: &'ast syn::TypePath) {
+            if path.qself.is_some()
+                || (path.path.segments.len() >= 2 && path.path.segments[0].ident == "Self")
+            {
+                self.found = true;
+                return;
+            }
+            visit::visit_type_path(self, path);
+        }
+    }
+
+    let mut finder = ProjectionFinder { found: false };
+    finder.visit_type(ty);
+    finder.found
+}
+
 struct ShellAssociatedTypeSubstituter<'a> {
     bindings: &'a ShellGenericBindings,
     scope: ShellTypeResolutionScope<'a>,
@@ -17738,7 +17834,7 @@ impl VisitMut for ShellAssociatedTypeSubstituter<'_> {
             ty,
             self.scope,
             self.bindings.current_trait.as_deref(),
-        ) && let Some(replacement) = self.bindings.associated_types.get(&key)
+        ) && let Some(replacement) = self.bindings.associated_type(&key)
         {
             let changed = shell_type_identity(ty) != shell_type_identity(replacement);
             *ty = replacement.clone();
@@ -17751,11 +17847,44 @@ impl VisitMut for ShellAssociatedTypeSubstituter<'_> {
     }
 }
 
+fn shell_trait_associated_owners(
+    trait_identity: &str,
+    definitions: &HashMap<String, ShellTraitDefinition>,
+    supertraits: &HashMap<String, Vec<String>>,
+    visiting: &mut HashSet<String>,
+) -> HashMap<String, String> {
+    if !visiting.insert(trait_identity.to_string()) {
+        return HashMap::new();
+    }
+    let mut owners = definitions
+        .get(trait_identity)
+        .map(|definition| {
+            definition
+                .associated_type_names
+                .iter()
+                .map(|name| (name.clone(), trait_identity.to_string()))
+                .collect::<HashMap<_, _>>()
+        })
+        .unwrap_or_default();
+    let mut inherited = supertraits.get(trait_identity).cloned().unwrap_or_default();
+    inherited.sort();
+    for supertrait in inherited {
+        for (name, owner) in
+            shell_trait_associated_owners(&supertrait, definitions, supertraits, visiting)
+        {
+            owners.entry(name).or_insert(owner);
+        }
+    }
+    visiting.remove(trait_identity);
+    owners
+}
+
 #[derive(Clone, Default)]
 struct ShellQualifiedFunctionReturns {
     returns: HashMap<String, Vec<ShellQualifiedFunctionReturn>>,
     trait_definitions: HashMap<String, ShellTraitDefinition>,
     trait_implementations: Vec<ShellTraitImplementation>,
+    associated_type_owners: HashMap<ShellAssociatedTypeKey, ShellAssociatedTypeKey>,
     materialized: bool,
 }
 
@@ -17776,6 +17905,46 @@ impl ShellQualifiedFunctionReturns {
     fn materialize_trait_defaults(&mut self, aliases: &ShellQualifiedTypeAliases) {
         if self.materialized {
             return;
+        }
+        let supertraits = self
+            .trait_definitions
+            .iter()
+            .map(|(trait_identity, definition)| {
+                (
+                    trait_identity.clone(),
+                    definition
+                        .supertraits
+                        .iter()
+                        .map(|supertrait| {
+                            canonical_trait_identity(
+                                &supertrait.path,
+                                &supertrait.module_path,
+                                aliases,
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        self.associated_type_owners.clear();
+        for trait_identity in self.trait_definitions.keys() {
+            for (name, owner) in shell_trait_associated_owners(
+                trait_identity,
+                &self.trait_definitions,
+                &supertraits,
+                &mut HashSet::new(),
+            ) {
+                self.associated_type_owners.insert(
+                    ShellAssociatedTypeKey {
+                        trait_identity: trait_identity.clone(),
+                        name: name.clone(),
+                    },
+                    ShellAssociatedTypeKey {
+                        trait_identity: owner,
+                        name,
+                    },
+                );
+            }
         }
         let mut implementations = self.trait_implementations.clone();
         for implementation in &mut implementations {
@@ -17843,7 +18012,7 @@ impl ShellQualifiedFunctionReturns {
 
         let mut associated_by_receiver =
             HashMap::<String, HashMap<ShellAssociatedTypeKey, ShellDeclaredAssociatedType>>::new();
-        for implementation in implementations {
+        for implementation in &mut implementations {
             let Some(definition) = self
                 .trait_definitions
                 .get(&implementation.trait_identity)
@@ -17886,6 +18055,7 @@ impl ShellQualifiedFunctionReturns {
                 .visit_type_mut(&mut associated_type.ty);
             }
             associated_types.extend(implementation.associated_types.clone());
+            implementation.associated_types = associated_types.clone();
             associated_by_receiver
                 .entry(implementation.association_receiver_key.clone())
                 .or_default()
@@ -17929,6 +18099,7 @@ impl ShellQualifiedFunctionReturns {
                 );
             }
         }
+        self.trait_implementations = implementations;
         for entries in self.returns.values_mut() {
             for entry in entries {
                 let Some(receiver_key) = &entry.association_receiver_key else {
@@ -17949,7 +18120,8 @@ fn extend_qualified_function_returns(
 ) {
     let has_source = !source.returns.is_empty()
         || !source.trait_definitions.is_empty()
-        || !source.trait_implementations.is_empty();
+        || !source.trait_implementations.is_empty()
+        || !source.associated_type_owners.is_empty();
     for (key, returns) in source.returns {
         target.returns.entry(key).or_default().extend(returns);
     }
@@ -17957,6 +18129,9 @@ fn extend_qualified_function_returns(
     target
         .trait_implementations
         .extend(source.trait_implementations);
+    target
+        .associated_type_owners
+        .extend(source.associated_type_owners);
     if has_source {
         target.materialized = false;
     }
@@ -18102,6 +18277,16 @@ fn collect_qualified_function_returns(
             }
             syn::Item::Trait(item) => {
                 let trait_identity = format!("{}::{}", module_path.join("::"), item.ident);
+                let associated_type_names = item
+                    .items
+                    .iter()
+                    .filter_map(|trait_item| {
+                        let syn::TraitItem::Type(associated_type) = trait_item else {
+                            return None;
+                        };
+                        Some(associated_type.ident.to_string())
+                    })
+                    .collect();
                 let associated_type_defaults = item
                     .items
                     .iter()
@@ -18117,6 +18302,19 @@ fn collect_qualified_function_returns(
                                 module_path: module_path.clone(),
                             },
                         ))
+                    })
+                    .collect();
+                let supertraits = item
+                    .supertraits
+                    .iter()
+                    .filter_map(|bound| {
+                        let syn::TypeParamBound::Trait(bound) = bound else {
+                            return None;
+                        };
+                        Some(ShellDeclaredTraitReference {
+                            path: bound.path.clone(),
+                            module_path: module_path.clone(),
+                        })
                     })
                     .collect();
                 let default_returns = item
@@ -18146,7 +18344,9 @@ fn collect_qualified_function_returns(
                     trait_identity,
                     ShellTraitDefinition {
                         generic_parameters: shell_declared_generic_parameters(&item.generics),
+                        associated_type_names,
                         associated_type_defaults,
+                        supertraits,
                         default_returns,
                     },
                 );
@@ -19581,9 +19781,11 @@ impl ShellChromeWriterVisitor {
             || self.type_contains_mutable_authority(ty, true, &mut HashSet::new())
     }
 
-    fn impl_receiver_matches(
+    fn impl_receiver_pattern_matches(
         &self,
-        entry: &ShellQualifiedFunctionReturn,
+        expected: &syn::Type,
+        declaration_module: &[String],
+        generic_parameters: &[ShellDeclaredGenericParameter],
         receiver: &ShellTypeBinding,
     ) -> Option<ShellGenericBindings> {
         fn owned_type(ty: &syn::Type) -> &syn::Type {
@@ -19596,20 +19798,55 @@ impl ShellChromeWriterVisitor {
             }
         }
 
-        let Some(expected) = &entry.impl_receiver else {
-            return Some(ShellGenericBindings::default());
-        };
-        let expected = self.resolved_declared_return_type(expected, &entry.impl_module_path, None);
+        let expected = self.resolved_declared_return_type(expected, declaration_module, None);
         let actual =
             self.resolved_declared_return_type(owned_type(&receiver.ty), &self.module_path, None);
         let mut bindings = ShellGenericBindings::default();
-        shell_type_pattern_matches(
-            &expected,
-            &actual,
+        shell_type_pattern_matches(&expected, &actual, generic_parameters, &mut bindings)
+            .then_some(bindings)
+    }
+
+    fn impl_receiver_matches(
+        &self,
+        entry: &ShellQualifiedFunctionReturn,
+        receiver: &ShellTypeBinding,
+    ) -> Option<ShellGenericBindings> {
+        let Some(expected) = &entry.impl_receiver else {
+            return Some(ShellGenericBindings::default());
+        };
+        self.impl_receiver_pattern_matches(
+            expected,
+            &entry.impl_module_path,
             &entry.impl_generic_parameters,
-            &mut bindings,
+            receiver,
         )
-        .then_some(bindings)
+    }
+
+    fn applicable_associated_types(
+        &self,
+        receiver: &ShellTypeBinding,
+    ) -> HashMap<ShellAssociatedTypeKey, syn::Type> {
+        let mut associated_types = HashMap::new();
+        for implementation in &self.qualified_function_returns.trait_implementations {
+            let Some(bindings) = self.impl_receiver_pattern_matches(
+                &implementation.receiver,
+                &implementation.impl_module_path,
+                &implementation.impl_generic_parameters,
+                receiver,
+            ) else {
+                continue;
+            };
+            for (key, associated_type) in &implementation.associated_types {
+                let ty = self.resolved_declared_return_type_with_bindings(
+                    &associated_type.ty,
+                    &associated_type.module_path,
+                    Some(receiver),
+                    &bindings,
+                );
+                associated_types.insert(key.clone(), ty);
+            }
+        }
+        associated_types
     }
 
     fn impl_trait_matches(
@@ -19690,6 +19927,11 @@ impl ShellChromeWriterVisitor {
         )?;
         let mut bindings = instantiation.impl_bindings.merge(&function_bindings)?;
         bindings.current_trait = instantiation.trait_identity.map(str::to_string);
+        bindings.associated_type_owners.extend(
+            self.qualified_function_returns
+                .associated_type_owners
+                .clone(),
+        );
         for (key, associated_type) in instantiation.associated_types.into_iter().flatten() {
             let ty = self.resolved_declared_return_type_with_bindings(
                 &associated_type.ty,
@@ -19698,6 +19940,17 @@ impl ShellChromeWriterVisitor {
                 &bindings,
             );
             bindings.associated_types.insert(key.clone(), ty);
+        }
+        let contains_associated_projection = shell_type_contains_associated_projection(ty)
+            || shell_type_contains_associated_projection(&shell_type_with_expanded_aliases(
+                ty,
+                self.return_type_resolution_scope(declaration_module),
+                &mut HashSet::new(),
+            ));
+        if contains_associated_projection && let Some(receiver) = instantiation.receiver {
+            bindings
+                .associated_types
+                .extend(self.applicable_associated_types(receiver));
         }
         Some(self.resolved_declared_return_type_with_bindings(
             ty,
