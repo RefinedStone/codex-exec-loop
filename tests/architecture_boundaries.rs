@@ -5159,6 +5159,7 @@ fn update_unrelated(
     let qualified_standard_macro_read = shell_chrome_writer_audit(
         "fn inspect(app: &mut NativeTuiApp) {\n\
              let _ = std::format_args!(\"{}\", app.shell.chrome.session_state);\n\
+             let _ = alloc::format!(\"{:?}\", app.shell.chrome.session_state);\n\
              core::assert_eq!(\n\
                  app.shell.chrome.selected_session_index,\n\
                  Some(0),\n\
@@ -5176,6 +5177,7 @@ fn update_unrelated(
     let qualified_unknown_macro = shell_chrome_writer_audit(
         "fn escape(app: &mut NativeTuiApp) {\n\
              std::external_shell_writer!(app);\n\
+             alloc::external_shell_writer!(app);\n\
          }",
     )
     .expect("qualified unknown macro fixture should parse");
@@ -14841,7 +14843,7 @@ fn shell_chrome_read_macro_path(path: &str) -> bool {
     ) || matches!(
         segments.as_slice(),
         [root, name]
-            if matches!(*root, "std" | "core")
+            if matches!(*root, "std" | "core" | "alloc")
                 && SHELL_CHROME_AUTHORITY_READ_MACROS.contains(name)
     ) || path == "crate::akra_event"
 }
