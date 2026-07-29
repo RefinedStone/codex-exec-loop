@@ -5109,6 +5109,40 @@ fn update_unrelated(
         1,
         "absolute glob re-exports must preserve their root path origin"
     );
+    let block_absolute_alias_import = shell_chrome_writer_audit_with_type_registry(
+        "fn escape() {\n\
+             use ::akra::adapter::inbound::tui::app::aliases::App;\n\
+             let app: &mut App = unsafe { std::mem::zeroed() };\n\
+             app.shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+        false,
+        &known_struct_fields,
+        &direct_absolute_reexports,
+        &relative_writer_module,
+    )
+    .expect("block absolute alias import fixture should parse");
+    assert_eq!(
+        block_absolute_alias_import.field_writes.len(),
+        1,
+        "block-scoped absolute imports must normalize before alias registry lookup"
+    );
+    let absolute_struct_import = shell_chrome_writer_audit_with_type_registry(
+        "mod akra {}\n\
+         use ::akra::authority::Context;\n\
+         fn escape(context: &mut Context<'_>) {\n\
+             context.app.shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+        false,
+        &known_struct_fields,
+        &crate_aliases,
+        &writer_module,
+    )
+    .expect("absolute struct import fixture should parse");
+    assert_eq!(
+        absolute_struct_import.field_writes.len(),
+        1,
+        "absolute struct imports must normalize before wrapper registry lookup"
+    );
 
     let unrelated_wrapper = shell_chrome_writer_audit(
         "struct OtherChrome { session_state: usize }\n\
@@ -16342,15 +16376,23 @@ impl ShellChromeWriterVisitor {
         self.struct_imports
             .iter()
             .filter_map(|(local_name, target)| {
-                let key = self.normalized_struct_path(target).join("::");
+                let absolute = self.absolute_imports.contains(local_name);
+                let path = syn::parse_str::<syn::Path>(&format!(
+                    "{}{}",
+                    if absolute { "::" } else { "" },
+                    target.join("::")
+                ))
+                .ok()?;
+                let key = normalized_shell_type_path(
+                    &path,
+                    self.type_resolution_scope(self.impl_authority),
+                )
+                .join("::");
                 if !self.qualified_type_aliases.contains_key(&key) {
                     return None;
                 }
                 let ty = syn::parse_str::<syn::Type>(&key).ok()?;
-                Some((
-                    local_name.clone(),
-                    ShellTypeAlias::transparent(ty, self.absolute_imports.contains(local_name)),
-                ))
+                Some((local_name.clone(), ShellTypeAlias::transparent(ty, false)))
             })
             .collect()
     }
@@ -16364,7 +16406,19 @@ impl ShellChromeWriterVisitor {
         if let Some(imported) = self.struct_imports.get(first) {
             let mut imported_path = imported.clone();
             imported_path.extend(raw_path.iter().skip(1).cloned());
-            let key = self.normalized_struct_path(&imported_path).join("::");
+            let path = syn::parse_str::<syn::Path>(&format!(
+                "{}{}",
+                if self.absolute_imports.contains(first) {
+                    "::"
+                } else {
+                    ""
+                },
+                imported_path.join("::")
+            ))
+            .ok()?;
+            let key =
+                normalized_shell_type_path(&path, self.type_resolution_scope(self.impl_authority))
+                    .join("::");
             if self.struct_fields.contains_key(&key) {
                 return Some(key);
             }
