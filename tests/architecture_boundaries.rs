@@ -4837,6 +4837,34 @@ fn update_unrelated(
             && shadowed_cross_file_alias.whole_state_writes.is_empty(),
         "cross-file alias RHS paths must preserve declaration-module shadows"
     );
+    let import_shadowed_self_crate_alias_file = syn::parse_file(
+        "use crate::unrelated as akra;\n\
+         pub type App = akra::adapter::inbound::tui::app::NativeTuiApp;",
+    )
+    .expect("import-shadowed cross-file self-crate alias type should parse");
+    let mut import_shadowed_self_crate_aliases = crate_aliases.clone();
+    import_shadowed_self_crate_aliases.extend(qualified_type_aliases_declared_in_file(
+        &import_shadowed_self_crate_alias_file,
+        &relative_alias_module,
+    ));
+    let import_shadowed_cross_file_alias = shell_chrome_writer_audit_with_type_registry(
+        "use crate::adapter::inbound::tui::app::aliases::App;\n\
+         fn update(app: &mut App) {\n\
+             app.shell.chrome.session_state = 1;\n\
+         }",
+        false,
+        &known_struct_fields,
+        &import_shadowed_self_crate_aliases,
+        &relative_writer_module,
+    )
+    .expect("import-shadowed cross-file self-crate alias fixture should parse");
+    assert!(
+        import_shadowed_cross_file_alias.field_writes.is_empty()
+            && import_shadowed_cross_file_alias
+                .whole_state_writes
+                .is_empty(),
+        "cross-file alias RHS paths must preserve declaration-module imports"
+    );
 
     let unrelated_wrapper = shell_chrome_writer_audit(
         "struct OtherChrome { session_state: usize }\n\
@@ -14400,6 +14428,7 @@ struct ShellTypeResolutionScope<'a> {
     path_shadows: &'a HashSet<String>,
     module_path: &'a [String],
     allow_local_aliases: bool,
+    allow_local_imports: bool,
 }
 
 fn normalized_shell_type_path(
@@ -14411,7 +14440,7 @@ fn normalized_shell_type_path(
         .iter()
         .map(|segment| segment.ident.to_string())
         .collect::<Vec<_>>();
-    if scope.allow_local_aliases && path.leading_colon.is_none() {
+    if scope.allow_local_imports && path.leading_colon.is_none() {
         let mut resolving_imports = HashSet::new();
         while let Some(first) = raw_path.first().cloned()
             && let Some(target) = scope.imports.get(&first)
@@ -14560,12 +14589,21 @@ fn shell_authority_binding_from_type(
                         .qualified_type_aliases
                         .path_shadows_for_module(alias_module_path)
                 };
+                let alias_imports = if local_alias.is_some() {
+                    scope.imports
+                } else {
+                    scope
+                        .qualified_type_aliases
+                        .imports_for_module(alias_module_path)
+                };
                 let resolved = shell_authority_binding_from_type(
                     alias,
                     ShellTypeResolutionScope {
                         module_path: alias_module_path,
+                        imports: alias_imports,
                         path_shadows: alias_path_shadows,
                         allow_local_aliases: local_alias.is_some(),
+                        allow_local_imports: true,
                         ..scope
                     },
                     resolving_aliases,
@@ -14598,12 +14636,17 @@ fn shell_authority_binding_from_type(
                 let alias_path_shadows = scope
                     .qualified_type_aliases
                     .path_shadows_for_module(alias_module_path);
+                let alias_imports = scope
+                    .qualified_type_aliases
+                    .imports_for_module(alias_module_path);
                 let resolved = shell_authority_binding_from_type(
                     &syn::Type::Path(expanded_path),
                     ShellTypeResolutionScope {
                         module_path: alias_module_path,
+                        imports: alias_imports,
                         path_shadows: alias_path_shadows,
                         allow_local_aliases: false,
+                        allow_local_imports: true,
                         ..scope
                     },
                     resolving_aliases,
@@ -14649,12 +14692,17 @@ fn shell_authority_binding_from_type(
                         let glob_path_shadows = scope
                             .qualified_type_aliases
                             .path_shadows_for_module(glob_module_path);
+                        let glob_imports = scope
+                            .qualified_type_aliases
+                            .imports_for_module(glob_module_path);
                         let resolved = shell_authority_binding_from_type(
                             &syn::Type::Path(expanded_path),
                             ShellTypeResolutionScope {
                                 module_path: glob_module_path,
+                                imports: glob_imports,
                                 path_shadows: glob_path_shadows,
                                 allow_local_aliases: false,
+                                allow_local_imports: true,
                                 ..scope
                             },
                             resolving_aliases,
@@ -14784,6 +14832,7 @@ struct ShellQualifiedTypeAliases {
     glob_imports: HashMap<String, Vec<syn::Type>>,
     crate_aliases: HashSet<String>,
     explicit_type_paths: HashSet<String>,
+    module_imports: HashMap<String, ShellStructImports>,
     module_path_shadows: HashMap<String, HashSet<String>>,
     root_path_shadows: HashSet<String>,
 }
@@ -14816,6 +14865,13 @@ impl ShellQualifiedTypeAliases {
             .extend(shadows);
     }
 
+    fn insert_module_imports(&mut self, module: String, imports: ShellStructImports) {
+        self.module_imports
+            .entry(module)
+            .or_default()
+            .extend(imports);
+    }
+
     fn insert_root_path_shadow(&mut self, name: String) {
         self.root_path_shadows.insert(name);
     }
@@ -14827,6 +14883,12 @@ impl ShellQualifiedTypeAliases {
         }
         self.crate_aliases.extend(other.crate_aliases);
         self.explicit_type_paths.extend(other.explicit_type_paths);
+        for (module, imports) in other.module_imports {
+            self.module_imports
+                .entry(module)
+                .or_default()
+                .extend(imports);
+        }
         for (module, shadows) in other.module_path_shadows {
             self.module_path_shadows
                 .entry(module)
@@ -14865,6 +14927,15 @@ impl ShellQualifiedTypeAliases {
             })
     }
 
+    fn imports_for_module(&self, module_path: &[String]) -> &ShellStructImports {
+        self.module_imports
+            .get(&module_path.join("::"))
+            .unwrap_or_else(|| {
+                static EMPTY: std::sync::OnceLock<ShellStructImports> = std::sync::OnceLock::new();
+                EMPTY.get_or_init(ShellStructImports::new)
+            })
+    }
+
     fn root_path_is_shadowed(&self, name: &str) -> bool {
         self.root_path_shadows.contains(name)
     }
@@ -14899,6 +14970,10 @@ fn collect_qualified_type_aliases(
     aliases.insert_module_path_shadows(
         module_path.join("::"),
         path_shadows_declared_in_items(items),
+    );
+    aliases.insert_module_imports(
+        module_path.join("::"),
+        struct_imports_declared_in_items(items),
     );
     for item in items {
         if item_is_test_only(item) {
@@ -15577,6 +15652,7 @@ impl ShellChromeWriterVisitor {
             path_shadows: &self.path_shadows,
             module_path: &self.module_path,
             allow_local_aliases: true,
+            allow_local_imports: true,
         }
     }
 
