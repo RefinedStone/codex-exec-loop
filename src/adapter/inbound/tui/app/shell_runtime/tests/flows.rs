@@ -42,6 +42,10 @@ use std::time::{Duration, Instant};
 
 const FLOW_POOL_SIZE: usize = 3;
 const FLOW_POOL_BASELINE_BRANCH: &str = "prerelease";
+// A dispatch may wait for the production pool mutation lock (120 seconds)
+// before it can finish the real Git worktree preparation. Keep the flow
+// deadline above that bounded wait without changing the production contract.
+const FLOW_BACKGROUND_OPERATION_TIMEOUT: Duration = Duration::from_secs(150);
 
 fn flow_test_guard() -> MutexGuard<'static, ()> {
     crate::test_utils::process_environment_mutex()
@@ -188,7 +192,7 @@ impl ParallelAgentWorkerPort for FlowParallelAgentWorkerPort {
                 .expect("held stream state mutex should not be poisoned");
             state.active_count += 1;
             self.held_streams_released.notify_all();
-            let deadline = Instant::now() + Duration::from_secs(30);
+            let deadline = Instant::now() + FLOW_BACKGROUND_OPERATION_TIMEOUT;
             while !state.release_all {
                 let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
                     break;
@@ -561,7 +565,11 @@ impl NativeFlowHarness {
 
     fn poll_until_status_contains(&mut self, expected: &str) -> String {
         let mut final_status = String::new();
-        for _ in 0..750 {
+        // Parallel entry may create and reconcile every pool worktree before
+        // publishing its ready status. Match the worker-launch cold-run budget
+        // so slower CI filesystems do not fail while entry is still progressing.
+        let deadline = Instant::now() + FLOW_BACKGROUND_OPERATION_TIMEOUT;
+        loop {
             self.runtime.poll_background_messages();
             if let ConversationState::Ready(conversation) =
                 &self.runtime.app().conversation.lifecycle.conversation_state
@@ -571,15 +579,18 @@ impl NativeFlowHarness {
                     return final_status;
                 }
             }
+            if Instant::now() >= deadline {
+                break;
+            }
             thread::sleep(Duration::from_millis(20));
         }
         panic!("status did not contain `{expected}`; last status was `{final_status}`");
     }
 
     fn poll_until_worker_launches(&mut self, expected_launches: usize) {
-        // Pool entry creates and prepares real Git worktrees. Cold macOS runners
-        // can exceed the shorter status-only poll budget before the first launch.
-        let deadline = Instant::now() + Duration::from_secs(60);
+        // Pool entry creates and prepares real Git worktrees. Cold runners may
+        // first wait on the bounded production pool lock before the first launch.
+        let deadline = Instant::now() + FLOW_BACKGROUND_OPERATION_TIMEOUT;
         loop {
             self.runtime.poll_background_messages();
             if self.worker_port.launch_count() >= expected_launches {
@@ -599,12 +610,16 @@ impl NativeFlowHarness {
     }
 
     fn poll_until_worker_streams_active(&mut self, expected_active_streams: usize) {
-        for _ in 0..1500 {
+        let deadline = Instant::now() + FLOW_BACKGROUND_OPERATION_TIMEOUT;
+        loop {
             self.runtime.poll_background_messages();
             if self.worker_port.active_stream_count() >= expected_active_streams
                 && self.worker_port.terminal_stream_count() == 0
             {
                 return;
+            }
+            if Instant::now() >= deadline {
+                break;
             }
             thread::sleep(Duration::from_millis(20));
         }
@@ -616,10 +631,14 @@ impl NativeFlowHarness {
     }
 
     fn poll_until_worker_streams_terminal(&mut self, expected_terminal_streams: usize) {
-        for _ in 0..750 {
+        let deadline = Instant::now() + FLOW_BACKGROUND_OPERATION_TIMEOUT;
+        loop {
             self.runtime.poll_background_messages();
             if self.worker_port.terminal_stream_count() >= expected_terminal_streams {
                 return;
+            }
+            if Instant::now() >= deadline {
+                break;
             }
             thread::sleep(Duration::from_millis(20));
         }
@@ -630,7 +649,8 @@ impl NativeFlowHarness {
     }
 
     fn poll_until_dispatch_idle(&mut self) {
-        for _ in 0..750 {
+        let deadline = Instant::now() + FLOW_BACKGROUND_OPERATION_TIMEOUT;
+        loop {
             self.runtime.poll_background_messages();
             if !self
                 .runtime
@@ -638,6 +658,9 @@ impl NativeFlowHarness {
                 .parallel_mode_orchestrator_wake_in_flight()
             {
                 return;
+            }
+            if Instant::now() >= deadline {
+                break;
             }
             thread::sleep(Duration::from_millis(20));
         }
@@ -649,22 +672,25 @@ impl NativeFlowHarness {
         expected_commands: usize,
         expected_state: ParallelModeDispatchCommandState,
     ) {
-        let mut last_states = Vec::new();
-        for _ in 0..750 {
+        let deadline = Instant::now() + FLOW_BACKGROUND_OPERATION_TIMEOUT;
+        let last_states = loop {
             self.runtime.poll_background_messages();
             let projections = self.runtime_projections();
-            last_states = projections
+            let states = projections
                 .dispatch_commands
                 .iter()
                 .map(|command| command.state)
                 .collect::<Vec<_>>();
             if projections.dispatch_commands.len() == expected_commands
-                && last_states.iter().all(|state| *state == expected_state)
+                && states.iter().all(|state| *state == expected_state)
             {
                 return;
             }
+            if Instant::now() >= deadline {
+                break states;
+            }
             thread::sleep(Duration::from_millis(20));
-        }
+        };
         panic!(
             "expected {expected_commands} dispatch command(s) in {} state, got {last_states:?}",
             expected_state.label()
@@ -672,11 +698,15 @@ impl NativeFlowHarness {
     }
 
     fn poll_until_runtime_blocks(&mut self, expected_blocks: usize) {
-        for _ in 0..750 {
+        let deadline = Instant::now() + FLOW_BACKGROUND_OPERATION_TIMEOUT;
+        loop {
             self.runtime.poll_background_messages();
             let projections = self.runtime_projections();
             if projections.task_dispatch_blocks.len() >= expected_blocks {
                 return;
+            }
+            if Instant::now() >= deadline {
+                break;
             }
             thread::sleep(Duration::from_millis(20));
         }
@@ -710,7 +740,8 @@ impl NativeFlowHarness {
         expected_running_leases: usize,
     ) -> crate::application::port::outbound::planning_authority_port::PlanningAuthorityRuntimeProjectionSnapshot
     {
-        for _ in 0..750 {
+        let deadline = Instant::now() + FLOW_BACKGROUND_OPERATION_TIMEOUT;
+        loop {
             self.runtime.poll_background_messages();
             let projections = self.runtime_projections();
             let running_count = projections
@@ -720,6 +751,9 @@ impl NativeFlowHarness {
                 .count();
             if running_count >= expected_running_leases {
                 return projections;
+            }
+            if Instant::now() >= deadline {
+                break;
             }
             thread::sleep(Duration::from_millis(20));
         }
@@ -788,20 +822,19 @@ impl NativeFlowHarness {
     }
 
     fn poll_until_idle_pool(&mut self) -> ParallelModePoolBoardSnapshot {
-        let mut last_pool = None;
-        for _ in 0..750 {
+        let deadline = Instant::now() + FLOW_BACKGROUND_OPERATION_TIMEOUT;
+        let last_pool = loop {
             self.runtime.poll_background_messages();
             let pool = self.runtime.app().parallel_mode_supervisor_snapshot().pool;
             if pool.slots.len() == FLOW_POOL_SIZE && pool.idle_slots == FLOW_POOL_SIZE {
                 return pool;
             }
-            last_pool = Some(pool);
+            if Instant::now() >= deadline {
+                break pool;
+            }
             thread::sleep(Duration::from_millis(20));
-        }
-        panic!(
-            "pool did not become fully idle; last pool snapshot: {:?}",
-            last_pool
-        );
+        };
+        panic!("pool did not become fully idle; last pool snapshot: {last_pool:?}");
     }
 }
 

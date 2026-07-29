@@ -5030,8 +5030,9 @@ fn reused_projection_sample_keeps_parallel_frame_facts_stable_after_handle_mutat
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(sampled_header.contains("prompt available"));
-    assert!(sampled_keys.contains("Ctrl+P off"));
+    assert!(sampled_header.contains("composer available"));
+    assert!(sampled_keys.contains("Ctrl+O board"));
+    assert!(sampled_keys.contains(":parallel off"));
 
     let fresh = ConversationScreenModel::from_app(&app);
     assert!(fresh.core_revision > sampled_revision);

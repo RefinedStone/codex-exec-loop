@@ -1795,8 +1795,15 @@ fn inline_parallel_home_replaces_single_mode_transcript_when_overlay_hidden() {
         .expect("inline parallel home render succeeds");
     let rendered = tui_testkit::screen_text(&terminal);
 
-    assert!(rendered.contains("Parallel Operations / inline inspection"));
+    assert!(
+        !rendered.contains("Parallel Operations / inline inspection"),
+        "the passive parallel home must not occupy the composer with full board chrome:\n{rendered}"
+    );
     assert!(rendered.contains("Parallel Event Stream"));
+    assert!(
+        rendered.contains("Ctrl+O board"),
+        "the passive home must expose the explicit operations-board entry point:\n{rendered}"
+    );
     assert!(rendered.contains("You: 안녕하세요"));
     assert!(!rendered.contains("Operator: first user word"));
     assert!(!rendered.contains("Codex:"));
@@ -1829,9 +1836,19 @@ fn inline_parallel_home_suppresses_startup_banner_on_empty_draft() {
         .expect("inline parallel empty draft render succeeds");
     let rendered = tui_testkit::screen_text(&terminal);
 
-    assert!(rendered.contains("Parallel Operations / inline inspection"));
+    assert!(
+        !rendered.contains("Parallel Operations / inline inspection"),
+        "parallel mode should keep the composer available until the operator opens the board:\n{rendered}"
+    );
     assert!(rendered.contains("Parallel Event Stream"));
-    assert!(rendered.contains("READY"));
+    assert!(
+        rendered.contains("Ctrl+O board"),
+        "the passive parallel home should advertise its board shortcut:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("Describe a task or type : for commands"),
+        "the passive parallel home should retain the empty composer:\n{rendered}"
+    );
     assert!(!rendered.contains("█████"));
     assert!(!rendered.contains("╚═╝"));
 }
@@ -2088,14 +2105,19 @@ fn inline_parallel_home_keeps_loading_spinner_when_overlay_hidden() {
         .expect("inline parallel home loading render succeeds");
     let rendered = tui_testkit::screen_text(&terminal);
 
-    assert!(rendered.contains("Parallel Operations / inline inspection"));
-    assert!(rendered.contains("prompt paused while setup completes"));
+    assert!(
+        !rendered.contains("Parallel Operations / inline inspection"),
+        "loading must remain a passive composer state until the board is explicitly opened:\n{rendered}"
+    );
+    assert!(rendered.contains("Parallel setup in progress"));
+    assert!(rendered.contains("Ctrl+O board"));
     assert!(
         ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
             .iter()
             .any(|frame| rendered.contains(*frame))
     );
     assert!(rendered.contains("Parallel board loading"));
+    assert!(rendered.contains("input paused"));
 }
 
 #[test]
