@@ -4865,6 +4865,33 @@ fn update_unrelated(
                 .is_empty(),
         "cross-file alias RHS paths must preserve declaration-module imports"
     );
+    let absolute_imported_self_crate_alias_file = syn::parse_file(
+        "mod akra {}\n\
+         use ::akra as root_akra;\n\
+         pub type App = root_akra::adapter::inbound::tui::app::NativeTuiApp;",
+    )
+    .expect("absolute-imported cross-file self-crate alias type should parse");
+    let mut absolute_imported_self_crate_aliases = crate_aliases.clone();
+    absolute_imported_self_crate_aliases.extend(qualified_type_aliases_declared_in_file(
+        &absolute_imported_self_crate_alias_file,
+        &relative_alias_module,
+    ));
+    let absolute_imported_cross_file_alias = shell_chrome_writer_audit_with_type_registry(
+        "use crate::adapter::inbound::tui::app::aliases::App;\n\
+         fn escape(app: &mut App) {\n\
+             app.shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+        false,
+        &known_struct_fields,
+        &absolute_imported_self_crate_aliases,
+        &relative_writer_module,
+    )
+    .expect("absolute-imported cross-file self-crate alias fixture should parse");
+    assert_eq!(
+        absolute_imported_cross_file_alias.field_writes.len(),
+        1,
+        "absolute imports in alias declarations must bypass declaration-module shadows"
+    );
 
     let unrelated_wrapper = shell_chrome_writer_audit(
         "struct OtherChrome { session_state: usize }\n\
@@ -5529,6 +5556,25 @@ fn update_unrelated(
             && renamed_nested_read_macro.macro_escapes.is_empty(),
         "renamed nested standard macros must be classified by their import target"
     );
+    let absolute_renamed_nested_read_macro = shell_chrome_writer_audit(
+        "mod std {}\n\
+         use ::std::matches as is_match;\n\
+         fn inspect(app: &mut NativeTuiApp) {\n\
+             assert!(is_match!(\n\
+                 app.shell.chrome.session_state,\n\
+                 SessionState::Idle\n\
+             ));\n\
+         }",
+    )
+    .expect("absolute renamed nested standard macro fixture should parse");
+    assert!(
+        absolute_renamed_nested_read_macro.field_writes.is_empty()
+            && absolute_renamed_nested_read_macro
+                .whole_state_writes
+                .is_empty()
+            && absolute_renamed_nested_read_macro.macro_escapes.is_empty(),
+        "absolute imported read-only macros must bypass lexical root shadows"
+    );
     let renamed_nested_lookalike_macro = shell_chrome_writer_audit(
         "use crate::evil::matches as is_match;\n\
          fn escape(app: &mut NativeTuiApp) {\n\
@@ -5727,6 +5773,38 @@ fn update_unrelated(
         absolute_standard_wrapper.field_writes.len(),
         1,
         "an absolute standard wrapper must bypass lexical root shadows"
+    );
+    let absolute_imported_standard_wrapper = shell_chrome_writer_audit(
+        "mod std {}\n\
+         use ::std::boxed::Box as Callable;\n\
+         fn escape(app: &mut NativeTuiApp) {\n\
+             let write = Callable::new(|value| {\n\
+                 value.shell.chrome.session_state = SessionState::Idle;\n\
+             });\n\
+             write(app);\n\
+         }",
+    )
+    .expect("absolute imported standard callable wrapper fixture should parse");
+    assert_eq!(
+        absolute_imported_standard_wrapper.field_writes.len(),
+        1,
+        "absolute imported callable wrappers must bypass lexical root shadows"
+    );
+    let absolute_imported_identity_wrapper = shell_chrome_writer_audit(
+        "mod std {}\n\
+         use ::std::convert::identity as keep;\n\
+         fn escape(app: &mut NativeTuiApp) {\n\
+             let write = keep(|value| {\n\
+                 value.shell.chrome.session_state = SessionState::Idle;\n\
+             });\n\
+             write(app);\n\
+         }",
+    )
+    .expect("absolute imported identity wrapper fixture should parse");
+    assert_eq!(
+        absolute_imported_identity_wrapper.field_writes.len(),
+        1,
+        "absolute imported identity calls must preserve closure authority"
     );
 
     let referenced_inferred_closure = shell_chrome_writer_audit(
@@ -14425,6 +14503,7 @@ struct ShellTypeResolutionScope<'a> {
     type_aliases: &'a HashMap<String, syn::Type>,
     qualified_type_aliases: &'a ShellQualifiedTypeAliases,
     imports: &'a ShellStructImports,
+    absolute_imports: &'a HashSet<String>,
     path_shadows: &'a HashSet<String>,
     module_path: &'a [String],
     allow_local_aliases: bool,
@@ -14435,6 +14514,7 @@ fn normalized_shell_type_path(
     path: &syn::Path,
     scope: ShellTypeResolutionScope<'_>,
 ) -> Vec<String> {
+    let mut absolute = path.leading_colon.is_some();
     let mut raw_path = path
         .segments
         .iter()
@@ -14444,8 +14524,9 @@ fn normalized_shell_type_path(
         let mut resolving_imports = HashSet::new();
         while let Some(first) = raw_path.first().cloned()
             && let Some(target) = scope.imports.get(&first)
-            && resolving_imports.insert(first)
+            && resolving_imports.insert(first.clone())
         {
+            absolute |= scope.absolute_imports.contains(&first);
             let mut expanded = target.clone();
             expanded.extend(raw_path.iter().skip(1).cloned());
             raw_path = expanded;
@@ -14459,7 +14540,7 @@ fn normalized_shell_type_path(
     let mut index = 0;
     let first_is_visible_crate_alias = raw_path.first().is_some_and(|segment| {
         scope.qualified_type_aliases.is_crate_alias(segment)
-            && (path.leading_colon.is_some() || !scope.path_shadows.contains(segment))
+            && (absolute || !scope.path_shadows.contains(segment))
     });
     if raw_path.first().is_some_and(|segment| segment == "crate") || first_is_visible_crate_alias {
         normalized.clear();
@@ -14596,11 +14677,19 @@ fn shell_authority_binding_from_type(
                         .qualified_type_aliases
                         .imports_for_module(alias_module_path)
                 };
+                let alias_absolute_imports = if local_alias.is_some() {
+                    scope.absolute_imports
+                } else {
+                    scope
+                        .qualified_type_aliases
+                        .absolute_imports_for_module(alias_module_path)
+                };
                 let resolved = shell_authority_binding_from_type(
                     alias,
                     ShellTypeResolutionScope {
                         module_path: alias_module_path,
                         imports: alias_imports,
+                        absolute_imports: alias_absolute_imports,
                         path_shadows: alias_path_shadows,
                         allow_local_aliases: local_alias.is_some(),
                         allow_local_imports: true,
@@ -14639,11 +14728,15 @@ fn shell_authority_binding_from_type(
                 let alias_imports = scope
                     .qualified_type_aliases
                     .imports_for_module(alias_module_path);
+                let alias_absolute_imports = scope
+                    .qualified_type_aliases
+                    .absolute_imports_for_module(alias_module_path);
                 let resolved = shell_authority_binding_from_type(
                     &syn::Type::Path(expanded_path),
                     ShellTypeResolutionScope {
                         module_path: alias_module_path,
                         imports: alias_imports,
+                        absolute_imports: alias_absolute_imports,
                         path_shadows: alias_path_shadows,
                         allow_local_aliases: false,
                         allow_local_imports: true,
@@ -14695,11 +14788,15 @@ fn shell_authority_binding_from_type(
                         let glob_imports = scope
                             .qualified_type_aliases
                             .imports_for_module(glob_module_path);
+                        let glob_absolute_imports = scope
+                            .qualified_type_aliases
+                            .absolute_imports_for_module(glob_module_path);
                         let resolved = shell_authority_binding_from_type(
                             &syn::Type::Path(expanded_path),
                             ShellTypeResolutionScope {
                                 module_path: glob_module_path,
                                 imports: glob_imports,
+                                absolute_imports: glob_absolute_imports,
                                 path_shadows: glob_path_shadows,
                                 allow_local_aliases: false,
                                 allow_local_imports: true,
@@ -14833,6 +14930,7 @@ struct ShellQualifiedTypeAliases {
     crate_aliases: HashSet<String>,
     explicit_type_paths: HashSet<String>,
     module_imports: HashMap<String, ShellStructImports>,
+    module_absolute_imports: HashMap<String, HashSet<String>>,
     module_path_shadows: HashMap<String, HashSet<String>>,
     root_path_shadows: HashSet<String>,
 }
@@ -14872,6 +14970,13 @@ impl ShellQualifiedTypeAliases {
             .extend(imports);
     }
 
+    fn insert_module_absolute_imports(&mut self, module: String, imports: HashSet<String>) {
+        self.module_absolute_imports
+            .entry(module)
+            .or_default()
+            .extend(imports);
+    }
+
     fn insert_root_path_shadow(&mut self, name: String) {
         self.root_path_shadows.insert(name);
     }
@@ -14885,6 +14990,12 @@ impl ShellQualifiedTypeAliases {
         self.explicit_type_paths.extend(other.explicit_type_paths);
         for (module, imports) in other.module_imports {
             self.module_imports
+                .entry(module)
+                .or_default()
+                .extend(imports);
+        }
+        for (module, imports) in other.module_absolute_imports {
+            self.module_absolute_imports
                 .entry(module)
                 .or_default()
                 .extend(imports);
@@ -14936,6 +15047,15 @@ impl ShellQualifiedTypeAliases {
             })
     }
 
+    fn absolute_imports_for_module(&self, module_path: &[String]) -> &HashSet<String> {
+        self.module_absolute_imports
+            .get(&module_path.join("::"))
+            .unwrap_or_else(|| {
+                static EMPTY: std::sync::OnceLock<HashSet<String>> = std::sync::OnceLock::new();
+                EMPTY.get_or_init(HashSet::new)
+            })
+    }
+
     fn root_path_is_shadowed(&self, name: &str) -> bool {
         self.root_path_shadows.contains(name)
     }
@@ -14974,6 +15094,10 @@ fn collect_qualified_type_aliases(
     aliases.insert_module_imports(
         module_path.join("::"),
         struct_imports_declared_in_items(items),
+    );
+    aliases.insert_module_absolute_imports(
+        module_path.join("::"),
+        absolute_imports_declared_in_items(items),
     );
     for item in items {
         if item_is_test_only(item) {
@@ -15279,6 +15403,52 @@ fn struct_imports_declared_in_statements(statements: &[syn::Stmt]) -> ShellStruc
         }
     }
     imports
+}
+
+fn collect_item_absolute_imports(item: &syn::Item, imports: &mut HashSet<String>) {
+    if item_is_test_only(item) {
+        return;
+    }
+    let syn::Item::Use(item) = item else {
+        return;
+    };
+    if item.leading_colon.is_none() {
+        return;
+    }
+    let mut bindings = ShellStructImports::new();
+    collect_use_struct_imports(&item.tree, &mut Vec::new(), &mut bindings);
+    imports.extend(bindings.into_keys());
+}
+
+fn absolute_imports_declared_in_items(items: &[syn::Item]) -> HashSet<String> {
+    let mut imports = HashSet::new();
+    for item in items {
+        collect_item_absolute_imports(item, &mut imports);
+    }
+    imports
+}
+
+fn absolute_imports_declared_in_statements(statements: &[syn::Stmt]) -> HashSet<String> {
+    let mut imports = HashSet::new();
+    for statement in statements {
+        if let syn::Stmt::Item(item) = statement {
+            collect_item_absolute_imports(item, &mut imports);
+        }
+    }
+    imports
+}
+
+fn extend_struct_import_scope(
+    imports: &mut ShellStructImports,
+    absolute_imports: &mut HashSet<String>,
+    declared_imports: ShellStructImports,
+    declared_absolute_imports: HashSet<String>,
+) {
+    for name in declared_imports.keys() {
+        absolute_imports.remove(name);
+    }
+    imports.extend(declared_imports);
+    absolute_imports.extend(declared_absolute_imports);
 }
 
 fn collect_item_path_shadows(item: &syn::Item, shadows: &mut HashSet<String>) {
@@ -15626,6 +15796,7 @@ struct ShellChromeWriterVisitor {
     closure_bindings: HashMap<String, syn::ExprClosure>,
     struct_fields: ShellStructFields,
     struct_imports: ShellStructImports,
+    absolute_imports: HashSet<String>,
     path_shadows: HashSet<String>,
     module_path: Vec<String>,
     audit: ShellChromeWriterAudit,
@@ -15649,6 +15820,7 @@ impl ShellChromeWriterVisitor {
             type_aliases: &self.type_aliases,
             qualified_type_aliases: &self.qualified_type_aliases,
             imports: &self.struct_imports,
+            absolute_imports: &self.absolute_imports,
             path_shadows: &self.path_shadows,
             module_path: &self.module_path,
             allow_local_aliases: true,
@@ -16149,6 +16321,8 @@ impl ShellChromeWriterVisitor {
         let imported_path = (raw_path.len() == 1)
             .then(|| self.struct_imports.get(&raw_path[0]).cloned())
             .flatten();
+        let absolute = path.path.leading_colon.is_some()
+            || (imported_path.is_some() && self.absolute_imports.contains(&raw_path[0]));
         let resolved_path = imported_path.as_ref().unwrap_or(&raw_path);
         matches!(
             resolved_path.as_slice(),
@@ -16156,6 +16330,7 @@ impl ShellChromeWriterVisitor {
                 if matches!(root.as_str(), "std" | "core")
                     && convert == "convert"
                     && identity == "identity"
+                    && !self.standard_path_root_is_shadowed(root, absolute)
         )
         .then(|| call.args.first())
         .flatten()
@@ -16845,12 +17020,12 @@ impl ShellChromeWriterVisitor {
                     .is_some_and(|target| target.as_slice() != [root]))
     }
 
-    fn imported_read_macro_name(&self, target: &[String]) -> Option<String> {
+    fn imported_read_macro_name(&self, target: &[String], absolute: bool) -> Option<String> {
         match target {
             [root, target_name]
                 if matches!(root.as_str(), "std" | "core" | "alloc")
                     && shell_chrome_read_macro_name(target_name)
-                    && !self.standard_path_root_is_shadowed(root, false) =>
+                    && !self.standard_path_root_is_shadowed(root, absolute) =>
             {
                 Some(target_name.clone())
             }
@@ -16865,7 +17040,9 @@ impl ShellChromeWriterVisitor {
         let segments = path.split("::").collect::<Vec<_>>();
         match segments.as_slice() {
             [name] => match self.struct_imports.get(*name) {
-                Some(target) => self.imported_read_macro_name(target),
+                Some(target) => {
+                    self.imported_read_macro_name(target, self.absolute_imports.contains(*name))
+                }
                 None => shell_chrome_read_macro_name(name).then(|| (*name).to_string()),
             },
             [root, name]
@@ -16933,9 +17110,14 @@ impl ShellChromeWriterVisitor {
         let previous_closures = self.closure_bindings.clone();
         let previous_structs = self.struct_fields.clone();
         let previous_imports = self.struct_imports.clone();
+        let previous_absolute_imports = self.absolute_imports.clone();
         let previous_path_shadows = self.path_shadows.clone();
-        self.struct_imports
-            .extend(struct_imports_declared_in_statements(&block.stmts));
+        extend_struct_import_scope(
+            &mut self.struct_imports,
+            &mut self.absolute_imports,
+            struct_imports_declared_in_statements(&block.stmts),
+            absolute_imports_declared_in_statements(&block.stmts),
+        );
         self.path_shadows
             .extend(path_shadows_declared_in_statements(&block.stmts));
         self.type_aliases
@@ -16958,6 +17140,7 @@ impl ShellChromeWriterVisitor {
         self.closure_bindings = previous_closures;
         self.struct_fields = previous_structs;
         self.struct_imports = previous_imports;
+        self.absolute_imports = previous_absolute_imports;
         self.path_shadows = previous_path_shadows;
     }
 
@@ -17054,15 +17237,19 @@ impl ShellChromeWriterVisitor {
         if path.qself.is_some() {
             return None;
         }
+        let mut absolute = path.path.leading_colon.is_some();
         let mut resolved_path = path
             .path
             .segments
             .iter()
             .map(|segment| segment.ident.to_string())
             .collect::<Vec<_>>();
-        if let Some(first) = resolved_path.first().cloned()
+        let mut resolving_imports = HashSet::new();
+        while let Some(first) = resolved_path.first().cloned()
             && let Some(imported) = self.struct_imports.get(&first)
+            && resolving_imports.insert(first.clone())
         {
+            absolute |= self.absolute_imports.contains(&first);
             let mut expanded = imported.clone();
             expanded.extend(resolved_path.iter().skip(1).cloned());
             resolved_path = expanded;
@@ -17080,10 +17267,7 @@ impl ShellChromeWriterVisitor {
                     && module == "boxed"
                     && wrapper == "Box"
                     && matches!(constructor.as_str(), "from" | "new" | "pin")
-                    && !self.standard_path_root_is_shadowed(
-                        root,
-                        path.path.leading_colon.is_some(),
-                    ) =>
+                    && !self.standard_path_root_is_shadowed(root, absolute) =>
             {
                 true
             }
@@ -17092,10 +17276,7 @@ impl ShellChromeWriterVisitor {
                     && module == "rc"
                     && wrapper == "Rc"
                     && matches!(constructor.as_str(), "from" | "new")
-                    && !self.standard_path_root_is_shadowed(
-                        root,
-                        path.path.leading_colon.is_some(),
-                    ) =>
+                    && !self.standard_path_root_is_shadowed(root, absolute) =>
             {
                 true
             }
@@ -17104,10 +17285,7 @@ impl ShellChromeWriterVisitor {
                     && module == "sync"
                     && wrapper == "Arc"
                     && matches!(constructor.as_str(), "from" | "new")
-                    && !self.standard_path_root_is_shadowed(
-                        root,
-                        path.path.leading_colon.is_some(),
-                    ) =>
+                    && !self.standard_path_root_is_shadowed(root, absolute) =>
             {
                 true
             }
@@ -17116,10 +17294,7 @@ impl ShellChromeWriterVisitor {
                     && module == "pin"
                     && wrapper == "Pin"
                     && matches!(constructor.as_str(), "new" | "new_unchecked")
-                    && !self.standard_path_root_is_shadowed(
-                        root,
-                        path.path.leading_colon.is_some(),
-                    ) =>
+                    && !self.standard_path_root_is_shadowed(root, absolute) =>
             {
                 true
             }
@@ -17182,9 +17357,14 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
         let previous_returns = self.function_returns.clone();
         let previous_structs = self.struct_fields.clone();
         let previous_imports = self.struct_imports.clone();
+        let previous_absolute_imports = self.absolute_imports.clone();
         let previous_path_shadows = self.path_shadows.clone();
-        self.struct_imports
-            .extend(struct_imports_declared_in_items(&file.items));
+        extend_struct_import_scope(
+            &mut self.struct_imports,
+            &mut self.absolute_imports,
+            struct_imports_declared_in_items(&file.items),
+            absolute_imports_declared_in_items(&file.items),
+        );
         self.path_shadows
             .extend(path_shadows_declared_in_items(&file.items));
         self.type_aliases
@@ -17201,6 +17381,7 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
         self.function_returns = previous_returns;
         self.struct_fields = previous_structs;
         self.struct_imports = previous_imports;
+        self.absolute_imports = previous_absolute_imports;
         self.path_shadows = previous_path_shadows;
     }
 
@@ -17230,9 +17411,11 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
         let previous_returns = self.function_returns.clone();
         let previous_structs = self.struct_fields.clone();
         let previous_imports = self.struct_imports.clone();
+        let previous_absolute_imports = self.absolute_imports.clone();
         let previous_path_shadows = self.path_shadows.clone();
         self.module_path.push(module.ident.to_string());
         self.struct_imports = struct_imports_declared_in_items(items);
+        self.absolute_imports = absolute_imports_declared_in_items(items);
         self.path_shadows = path_shadows_declared_in_items(items);
         self.type_aliases
             .extend(type_aliases_declared_in_items(items));
@@ -17248,6 +17431,7 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
         self.function_returns = previous_returns;
         self.struct_fields = previous_structs;
         self.struct_imports = previous_imports;
+        self.absolute_imports = previous_absolute_imports;
         self.path_shadows = previous_path_shadows;
         self.module_path.pop();
     }
