@@ -7122,13 +7122,15 @@ fn update_unrelated(
          impl DefaultGenericMaker for DefaultGenericFactory {}\n\
          fn escape(factory: DefaultGenericFactory) {\n\
              factory.make().session_state = SessionState::Idle;\n\
+             <DefaultGenericFactory as DefaultGenericMaker<ShellChromeState>>::make(&factory)\n\
+                 .session_state = SessionState::Idle;\n\
          }",
     )
     .expect("default generic trait return fixture should parse");
     assert_eq!(
         default_generic_trait_return.field_writes.len(),
-        1,
-        "omitted trait generic arguments must materialize their declared defaults"
+        2,
+        "omitted and explicitly restated trait defaults must resolve to one trait instance"
     );
     let generic_associated_type_projection = shell_chrome_writer_audit(
         "trait GatMaker {\n\
@@ -7174,18 +7176,24 @@ fn update_unrelated(
          }\n\
          fn make_chrome() -> <ChromeMarker as Carrier>::Inner { todo!() }\n\
          fn make_other() -> <OtherMarker as Carrier>::Inner { todo!() }\n\
+         fn make_pair() -> (\n\
+             <OtherMarker as Carrier>::Inner,\n\
+             <ChromeMarker as Carrier>::Inner,\n\
+         ) { todo!() }\n\
          fn update(factory: NestedGatFactory) {\n\
              factory.make::<ChromeMarker>().session_state = SessionState::Idle;\n\
              factory.make::<OtherMarker>().session_state = 1;\n\
              make_chrome().session_state = SessionState::Idle;\n\
              make_other().session_state = 1;\n\
+             let (_, mut chrome) = make_pair();\n\
+             chrome.session_state = SessionState::Idle;\n\
          }",
     )
     .expect("nested generic associated projection fixture should parse");
     assert_eq!(
         nested_generic_associated_projection.field_writes.len(),
-        2,
-        "nested and receiver-qualified associated projections must resolve to a fixed point"
+        3,
+        "nested and receiver-qualified projections must resolve without QSelf key collisions"
     );
     let cross_file_trait = syn::parse_file(
         "pub trait CrossFileMaker {\n\
@@ -17482,12 +17490,14 @@ impl ShellGenericBindings {
                 trait_identity: current.trait_identity.clone(),
                 name: current.name.clone(),
                 arguments: String::new(),
+                receiver: String::new(),
             };
             let owner = self.associated_type_owners.get(&template)?;
             let concrete_owner = ShellAssociatedTypeKey {
                 trait_identity: owner.trait_identity.clone(),
                 name: owner.name.clone(),
                 arguments: current.arguments.clone(),
+                receiver: current.receiver.clone(),
             };
             if let Some(ty) = self.associated_types.get(&concrete_owner) {
                 return Some(ty);
@@ -17899,6 +17909,7 @@ struct ShellAssociatedTypeKey {
     trait_identity: String,
     name: String,
     arguments: String,
+    receiver: String,
 }
 
 #[derive(Clone)]
@@ -18037,6 +18048,7 @@ fn shell_associated_type_projection(
                 trait_identity: current_trait?.to_string(),
                 name: output.ident.to_string(),
                 arguments: arguments_identity,
+                receiver: String::new(),
             },
             arguments,
             receiver: None,
@@ -18059,6 +18071,10 @@ fn shell_associated_type_projection(
         ShellReturnTypeQualifier { scope }.visit_type_mut(&mut receiver);
         Some(receiver)
     };
+    let receiver_identity = receiver
+        .as_ref()
+        .map(shell_type_identity)
+        .unwrap_or_default();
     Some(ShellAssociatedTypeProjection {
         key: ShellAssociatedTypeKey {
             trait_identity: canonical_trait_instance_identity(
@@ -18068,6 +18084,7 @@ fn shell_associated_type_projection(
             ),
             name: output.ident.to_string(),
             arguments: arguments_identity,
+            receiver: receiver_identity,
         },
         arguments,
         receiver,
@@ -18132,6 +18149,7 @@ fn shell_associated_type_owner_key(
             trait_identity: current.trait_identity.clone(),
             name: current.name.clone(),
             arguments: String::new(),
+            receiver: String::new(),
         };
         let Some(owner) = owners.get(&template) else {
             break;
@@ -18140,6 +18158,7 @@ fn shell_associated_type_owner_key(
             trait_identity: owner.trait_identity.clone(),
             name: owner.name.clone(),
             arguments: current.arguments,
+            receiver: current.receiver,
         };
     }
     current
@@ -18279,11 +18298,13 @@ impl ShellQualifiedFunctionReturns {
                         trait_identity: trait_identity.clone(),
                         name: name.clone(),
                         arguments: String::new(),
+                        receiver: String::new(),
                     },
                     ShellAssociatedTypeKey {
                         trait_identity: owner,
                         name,
                         arguments: String::new(),
+                        receiver: String::new(),
                     },
                 );
             }
@@ -18310,6 +18331,7 @@ impl ShellQualifiedFunctionReturns {
                             trait_identity: implementation.trait_instance.clone(),
                             name: key.name,
                             arguments: key.arguments,
+                            receiver: key.receiver,
                         },
                         associated_type,
                     )
@@ -18345,6 +18367,7 @@ impl ShellQualifiedFunctionReturns {
                                 trait_identity: canonical_instance.clone(),
                                 name: key.name,
                                 arguments: key.arguments,
+                                receiver: key.receiver,
                             },
                             associated_type,
                         )
@@ -18397,6 +18420,7 @@ impl ShellQualifiedFunctionReturns {
                             trait_identity: implementation.trait_instance.clone(),
                             name,
                             arguments: String::new(),
+                            receiver: String::new(),
                         },
                         associated_type,
                     )
@@ -18746,6 +18770,7 @@ fn collect_qualified_function_returns(
                                         trait_identity: trait_identity.clone(),
                                         name: associated_type.ident.to_string(),
                                         arguments: String::new(),
+                                        receiver: String::new(),
                                     },
                                     ShellDeclaredAssociatedType {
                                         ty: associated_type.ty.clone(),
@@ -20254,6 +20279,7 @@ impl ShellChromeWriterVisitor {
                 trait_identity,
                 name: key.name.clone(),
                 arguments: key.arguments.clone(),
+                receiver: key.receiver.clone(),
             };
         }
         shell_associated_type_owner_key(
@@ -20329,6 +20355,103 @@ impl ShellChromeWriterVisitor {
         associated_types
     }
 
+    fn trait_type_with_materialized_defaults(
+        &self,
+        ty: &syn::Type,
+        declaration_module: &[String],
+    ) -> syn::Type {
+        let mut resolved = self.resolved_declared_return_type(ty, declaration_module, None);
+        let syn::Type::Path(path) = &resolved else {
+            return resolved;
+        };
+        let trait_identity = path
+            .path
+            .segments
+            .iter()
+            .map(|segment| segment.ident.to_string())
+            .collect::<Vec<_>>()
+            .join("::");
+        let Some(definition) = self
+            .qualified_function_returns
+            .trait_definitions
+            .get(&trait_identity)
+        else {
+            return resolved;
+        };
+        let existing_arguments = match &path
+            .path
+            .segments
+            .last()
+            .expect("a resolved trait path must have a final segment")
+            .arguments
+        {
+            syn::PathArguments::None => None,
+            syn::PathArguments::AngleBracketed(arguments) => Some(arguments.clone()),
+            syn::PathArguments::Parenthesized(_) => return resolved,
+        };
+        let Some(explicit_bindings) = shell_explicit_generic_bindings(
+            &definition.generic_parameters,
+            existing_arguments.as_ref(),
+        ) else {
+            return resolved;
+        };
+        let Some(complete_bindings) = shell_generic_bindings_with_defaults(
+            &definition.generic_parameters,
+            &definition.generic_defaults,
+            existing_arguments.as_ref(),
+        ) else {
+            return resolved;
+        };
+        let mut materialized_arguments =
+            existing_arguments.unwrap_or_else(|| syn::AngleBracketedGenericArguments {
+                colon2_token: None,
+                lt_token: Default::default(),
+                args: Default::default(),
+                gt_token: Default::default(),
+            });
+        let mut appended_default = false;
+        for parameter in &definition.generic_parameters {
+            match parameter {
+                ShellDeclaredGenericParameter::Type(name)
+                    if !explicit_bindings.types.contains_key(name) =>
+                {
+                    let Some(default) = complete_bindings.types.get(name) else {
+                        return resolved;
+                    };
+                    materialized_arguments
+                        .args
+                        .push(syn::GenericArgument::Type(default.clone()));
+                    appended_default = true;
+                }
+                ShellDeclaredGenericParameter::Const(name)
+                    if !explicit_bindings.consts.contains_key(name) =>
+                {
+                    let Some(default) = complete_bindings.consts.get(name) else {
+                        return resolved;
+                    };
+                    materialized_arguments
+                        .args
+                        .push(syn::GenericArgument::Const(default.clone()));
+                    appended_default = true;
+                }
+                ShellDeclaredGenericParameter::Lifetime(_)
+                | ShellDeclaredGenericParameter::Type(_)
+                | ShellDeclaredGenericParameter::Const(_) => {}
+            }
+        }
+        if appended_default {
+            let syn::Type::Path(path) = &mut resolved else {
+                unreachable!("a checked trait type must stay a path");
+            };
+            path.path
+                .segments
+                .last_mut()
+                .expect("a checked trait path must have a final segment")
+                .arguments = syn::PathArguments::AngleBracketed(materialized_arguments);
+        }
+        resolved
+    }
+
     fn impl_trait_pattern_matches(
         &self,
         expected_trait: &syn::Path,
@@ -20337,15 +20460,14 @@ impl ShellChromeWriterVisitor {
         actual_trait: &syn::Type,
         initial_bindings: &ShellGenericBindings,
     ) -> Option<ShellGenericBindings> {
-        let expected = self.resolved_declared_return_type(
+        let expected = self.trait_type_with_materialized_defaults(
             &syn::Type::Path(syn::TypePath {
                 qself: None,
                 path: expected_trait.clone(),
             }),
             declaration_module,
-            None,
         );
-        let actual = self.resolved_declared_return_type(actual_trait, &self.module_path, None);
+        let actual = self.trait_type_with_materialized_defaults(actual_trait, &self.module_path);
         let mut bindings = initial_bindings.clone();
         shell_type_pattern_matches(&expected, &actual, generic_parameters, &mut bindings)
             .then_some(bindings)
