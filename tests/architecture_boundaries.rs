@@ -5376,6 +5376,34 @@ fn update_unrelated(
         1,
         "named variant aliases must resolve to their registered payload authority"
     );
+    let generic_enum_payload = shell_chrome_writer_audit(
+        "enum Holder<T> { App(T), Empty }\n\
+         fn escape(holder: Holder<NativeTuiApp>) {\n\
+             if let Holder::App(mut app) = holder {\n\
+                 app.shell.chrome.session_state = SessionState::Idle;\n\
+             }\n\
+         }",
+    )
+    .expect("generic enum payload fixture should parse");
+    assert_eq!(
+        generic_enum_payload.field_writes.len(),
+        1,
+        "generic tuple variant payloads must substitute their actual authority type"
+    );
+    let generic_named_enum_payload = shell_chrome_writer_audit(
+        "enum Holder<T> { App { app: T }, Empty }\n\
+         fn escape(holder: Holder<NativeTuiApp>) {\n\
+             if let Holder::App { mut app } = holder {\n\
+                 app.shell.chrome.session_state = SessionState::Idle;\n\
+             }\n\
+         }",
+    )
+    .expect("generic named enum payload fixture should parse");
+    assert_eq!(
+        generic_named_enum_payload.field_writes.len(),
+        1,
+        "generic named variant payloads must substitute their actual authority type"
+    );
     let custom_result_payload = shell_chrome_writer_audit(
         "enum Result<T, E> { Ok(E), Err(ShellChromeState, T) }\n\
          fn escape(value: Result<NativeTuiApp, OtherState>) {\n\
@@ -15520,6 +15548,23 @@ enum ShellAliasGenericParameter {
     Const,
 }
 
+fn shell_alias_generic_parameters(generics: &syn::Generics) -> Vec<ShellAliasGenericParameter> {
+    generics
+        .params
+        .iter()
+        .map(|parameter| match parameter {
+            syn::GenericParam::Lifetime(_) => ShellAliasGenericParameter::Lifetime,
+            syn::GenericParam::Type(parameter) => {
+                ShellAliasGenericParameter::Type(Box::new(ShellTypeParameter {
+                    name: parameter.ident.to_string(),
+                    default: parameter.default.clone(),
+                }))
+            }
+            syn::GenericParam::Const(_) => ShellAliasGenericParameter::Const,
+        })
+        .collect()
+}
+
 #[derive(Clone)]
 struct ShellTypeAlias {
     ty: syn::Type,
@@ -15529,24 +15574,9 @@ struct ShellTypeAlias {
 
 impl ShellTypeAlias {
     fn declared(item: &syn::ItemType) -> Self {
-        let generic_parameters = item
-            .generics
-            .params
-            .iter()
-            .map(|parameter| match parameter {
-                syn::GenericParam::Lifetime(_) => ShellAliasGenericParameter::Lifetime,
-                syn::GenericParam::Type(parameter) => {
-                    ShellAliasGenericParameter::Type(Box::new(ShellTypeParameter {
-                        name: parameter.ident.to_string(),
-                        default: parameter.default.clone(),
-                    }))
-                }
-                syn::GenericParam::Const(_) => ShellAliasGenericParameter::Const,
-            })
-            .collect();
         Self {
             ty: item.ty.as_ref().clone(),
-            generic_parameters,
+            generic_parameters: shell_alias_generic_parameters(&item.generics),
             forwards_arguments: false,
         }
     }
@@ -16073,7 +16103,41 @@ fn function_returns_declared_in_statements(statements: &[syn::Stmt]) -> ShellFun
     returns
 }
 
-type ShellStructFields = HashMap<String, HashMap<String, syn::Type>>;
+#[derive(Clone)]
+struct ShellStructDefinition {
+    fields: HashMap<String, syn::Type>,
+    generic_parameters: Vec<ShellAliasGenericParameter>,
+}
+
+impl ShellStructDefinition {
+    fn declared(fields: HashMap<String, syn::Type>, generics: &syn::Generics) -> Self {
+        Self {
+            fields,
+            generic_parameters: shell_alias_generic_parameters(generics),
+        }
+    }
+
+    fn instantiated_field(&self, name: &str, arguments: &syn::PathArguments) -> Option<syn::Type> {
+        let ty = self.fields.get(name)?.clone();
+        Some(
+            ShellTypeAlias {
+                ty,
+                generic_parameters: self.generic_parameters.clone(),
+                forwards_arguments: false,
+            }
+            .instantiate(arguments),
+        )
+    }
+
+    fn instantiated_fields(&self, arguments: &syn::PathArguments) -> Vec<syn::Type> {
+        self.fields
+            .keys()
+            .filter_map(|name| self.instantiated_field(name, arguments))
+            .collect()
+    }
+}
+
+type ShellStructFields = HashMap<String, ShellStructDefinition>;
 
 fn shell_member_key(member: &syn::Member) -> String {
     match member {
@@ -16099,7 +16163,10 @@ fn collect_item_struct_fields(item: &syn::Item, structs: &mut ShellStructFields)
                     )
                 })
                 .collect();
-            structs.insert(item.ident.to_string(), fields);
+            structs.insert(
+                item.ident.to_string(),
+                ShellStructDefinition::declared(fields, &item.generics),
+            );
         }
         syn::Item::Enum(item) if !attributes_are_test_only(&item.attrs) => {
             let mut all_payloads = HashMap::new();
@@ -16124,9 +16191,15 @@ fn collect_item_struct_fields(item: &syn::Item, structs: &mut ShellStructFields)
                 for (field, ty) in &fields {
                     all_payloads.insert(format!("{}::{field}", variant.ident), ty.clone());
                 }
-                structs.insert(format!("{}::{}", item.ident, variant.ident), fields);
+                structs.insert(
+                    format!("{}::{}", item.ident, variant.ident),
+                    ShellStructDefinition::declared(fields, &item.generics),
+                );
             }
-            structs.insert(item.ident.to_string(), all_payloads);
+            structs.insert(
+                item.ident.to_string(),
+                ShellStructDefinition::declared(all_payloads, &item.generics),
+            );
         }
         _ => {}
     }
@@ -16889,12 +16962,37 @@ impl ShellChromeWriterVisitor {
         resolve(self, ty, &mut HashSet::new())
     }
 
+    fn type_path_arguments(ty: &syn::Type) -> syn::PathArguments {
+        match ty {
+            syn::Type::Path(path) if path.qself.is_none() => path
+                .path
+                .segments
+                .last()
+                .map_or(syn::PathArguments::None, |segment| {
+                    segment.arguments.clone()
+                }),
+            syn::Type::Reference(reference) => Self::type_path_arguments(reference.elem.as_ref()),
+            syn::Type::Ptr(pointer) => Self::type_path_arguments(pointer.elem.as_ref()),
+            syn::Type::Group(group) => Self::type_path_arguments(group.elem.as_ref()),
+            syn::Type::Paren(paren) => Self::type_path_arguments(paren.elem.as_ref()),
+            _ => syn::PathArguments::None,
+        }
+    }
+
+    fn registered_struct_field_type(
+        &self,
+        struct_name: &str,
+        ty: &syn::Type,
+        field: &str,
+    ) -> Option<syn::Type> {
+        self.struct_fields
+            .get(struct_name)?
+            .instantiated_field(field, &Self::type_path_arguments(ty))
+    }
+
     fn struct_field_type(&self, ty: &syn::Type, member: &syn::Member) -> Option<syn::Type> {
         let struct_name = self.struct_name_from_type(ty)?;
-        self.struct_fields
-            .get(&struct_name)?
-            .get(&shell_member_key(member))
-            .cloned()
+        self.registered_struct_field_type(&struct_name, ty, &shell_member_key(member))
     }
 
     fn tuple_struct_pattern_field_type(
@@ -16940,10 +17038,7 @@ impl ShellChromeWriterVisitor {
         if let Some(parent) = self.struct_name_from_type(container_type) {
             let variant_key = format!("{parent}::{variant}");
             let payload = self
-                .struct_fields
-                .get(&variant_key)
-                .and_then(|fields| fields.get(&index.to_string()))
-                .cloned()
+                .registered_struct_field_type(&variant_key, container_type, &index.to_string())
                 .or_else(|| {
                     self.struct_field_type(
                         container_type,
@@ -17031,10 +17126,7 @@ impl ShellChromeWriterVisitor {
         let parent = self.struct_name_from_type(container_type)?;
         let variant_key = format!("{parent}::{variant}");
         let payload = self
-            .struct_fields
-            .get(&variant_key)
-            .and_then(|fields| fields.get(&shell_member_key(member)))
-            .cloned()
+            .registered_struct_field_type(&variant_key, container_type, &shell_member_key(member))
             .or_else(|| self.struct_field_type(container_type, member))?;
         Some(reference_mutability.map_or(payload.clone(), |mutable| {
             Self::referenced_type(payload, mutable)
@@ -17332,9 +17424,8 @@ impl ShellChromeWriterVisitor {
         let fields = self
             .struct_fields
             .get(&struct_name)
-            .into_iter()
-            .flat_map(|fields| fields.values().cloned())
-            .collect::<Vec<_>>();
+            .map(|definition| definition.instantiated_fields(&Self::type_path_arguments(ty)))
+            .unwrap_or_default();
         let contains = fields.iter().any(|field| {
             self.type_contains_mutable_authority(
                 field,
