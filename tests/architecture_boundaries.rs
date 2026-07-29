@@ -5,6 +5,7 @@ use std::path::{Component, Path, PathBuf};
 use proc_macro2::{TokenStream, TokenTree};
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
+use syn::visit_mut::{self, VisitMut};
 
 #[derive(Clone, Copy)]
 struct BoundaryRule {
@@ -4587,6 +4588,63 @@ fn update_unrelated(
         cross_file_aliased_app.field_writes.len(),
         1,
         "the production-wide alias registry must retain authority across Rust files"
+    );
+    let generic_authority_alias_file = syn::parse_file("pub type Forward<T> = T;")
+        .expect("generic cross-file authority alias definition should parse");
+    let mut generic_authority_aliases = qualified_type_aliases_declared_in_file(
+        &generic_authority_alias_file,
+        &["crate".to_string(), "generic_alias".to_string()],
+    );
+    let generic_cross_file_alias = shell_chrome_writer_audit_with_type_registry(
+        "use crate::generic_alias::Forward;\n\
+         fn escape(app: Forward<&mut NativeTuiApp>) {\n\
+             app.shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+        false,
+        &known_struct_fields,
+        &generic_authority_aliases,
+        &writer_module,
+    )
+    .expect("generic cross-file authority alias fixture should parse");
+    assert_eq!(
+        generic_cross_file_alias.field_writes.len(),
+        1,
+        "generic aliases must substitute actual authority type arguments"
+    );
+    let generic_reexport_file =
+        syn::parse_file("pub use crate::generic_alias::Forward as AppForward;")
+            .expect("generic authority re-export should parse");
+    generic_authority_aliases.extend(qualified_type_aliases_declared_in_file(
+        &generic_reexport_file,
+        &["crate".to_string(), "generic_facade".to_string()],
+    ));
+    let generic_reexported_alias = shell_chrome_writer_audit_with_type_registry(
+        "use crate::generic_facade::AppForward;\n\
+         fn escape(app: AppForward<&mut NativeTuiApp>) {\n\
+             app.shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+        false,
+        &known_struct_fields,
+        &generic_authority_aliases,
+        &writer_module,
+    )
+    .expect("generic re-exported authority alias fixture should parse");
+    assert_eq!(
+        generic_reexported_alias.field_writes.len(),
+        1,
+        "transparent alias re-exports must forward actual type arguments"
+    );
+    let generic_collection_alias = shell_chrome_writer_audit(
+        "type AppList<T> = Vec<T>;\n\
+         fn escape(mut apps: AppList<NativeTuiApp>) {\n\
+             apps[0].shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+    )
+    .expect("generic authority collection alias fixture should parse");
+    assert_eq!(
+        generic_collection_alias.field_writes.len(),
+        1,
+        "collection inference must retain substituted generic alias elements"
     );
 
     let relative_authority_alias_file = syn::parse_file(
@@ -14500,7 +14558,7 @@ struct ShellTypeBinding {
 #[derive(Clone, Copy)]
 struct ShellTypeResolutionScope<'a> {
     implicit_self: Option<ShellAuthorityKind>,
-    type_aliases: &'a HashMap<String, syn::Type>,
+    type_aliases: &'a ShellTypeAliases,
     qualified_type_aliases: &'a ShellQualifiedTypeAliases,
     imports: &'a ShellStructImports,
     absolute_imports: &'a HashSet<String>,
@@ -14684,8 +14742,9 @@ fn shell_authority_binding_from_type(
                         .qualified_type_aliases
                         .absolute_imports_for_module(alias_module_path)
                 };
+                let instantiated_alias = alias.instantiate(&segment.arguments);
                 let resolved = shell_authority_binding_from_type(
-                    alias,
+                    &instantiated_alias,
                     ShellTypeResolutionScope {
                         module_path: alias_module_path,
                         imports: alias_imports,
@@ -14705,7 +14764,8 @@ fn shell_authority_binding_from_type(
                 let Some(alias) = scope.qualified_type_aliases.get(&prefix) else {
                     continue;
                 };
-                let Some(alias_path) = shell_type_path(alias) else {
+                let instantiated_alias = alias.instantiate(&syn::PathArguments::None);
+                let Some(alias_path) = shell_type_path(&instantiated_alias) else {
                     continue;
                 };
                 if !resolving_aliases.insert(prefix.clone()) {
@@ -14720,6 +14780,9 @@ fn shell_authority_binding_from_type(
                             segment,
                             proc_macro2::Span::call_site(),
                         )));
+                }
+                if let Some(expanded_segment) = expanded_path.path.segments.last_mut() {
+                    expanded_segment.arguments = segment.arguments.clone();
                 }
                 let alias_module_path = &normalized_path[..prefix_len.saturating_sub(1)];
                 let alias_path_shadows = scope
@@ -14780,6 +14843,9 @@ fn shell_authority_binding_from_type(
                             expanded_path.path.segments.push(syn::PathSegment::from(
                                 syn::Ident::new(segment, proc_macro2::Span::call_site()),
                             ));
+                        }
+                        if let Some(expanded_segment) = expanded_path.path.segments.last_mut() {
+                            expanded_segment.arguments = segment.arguments.clone();
                         }
                         let glob_module_path = &normalized_path[..prefix_len];
                         let glob_path_shadows = scope
@@ -14861,10 +14927,179 @@ fn shell_authority_binding_from_type(
     }
 }
 
+#[derive(Clone)]
+struct ShellTypeParameter {
+    name: String,
+    default: Option<syn::Type>,
+}
+
+#[derive(Clone)]
+enum ShellAliasGenericParameter {
+    Lifetime,
+    Type(Box<ShellTypeParameter>),
+    Const,
+}
+
+#[derive(Clone)]
+struct ShellTypeAlias {
+    ty: syn::Type,
+    generic_parameters: Vec<ShellAliasGenericParameter>,
+    forwards_arguments: bool,
+}
+
+impl ShellTypeAlias {
+    fn declared(item: &syn::ItemType) -> Self {
+        let generic_parameters = item
+            .generics
+            .params
+            .iter()
+            .map(|parameter| match parameter {
+                syn::GenericParam::Lifetime(_) => ShellAliasGenericParameter::Lifetime,
+                syn::GenericParam::Type(parameter) => {
+                    ShellAliasGenericParameter::Type(Box::new(ShellTypeParameter {
+                        name: parameter.ident.to_string(),
+                        default: parameter.default.clone(),
+                    }))
+                }
+                syn::GenericParam::Const(_) => ShellAliasGenericParameter::Const,
+            })
+            .collect();
+        Self {
+            ty: item.ty.as_ref().clone(),
+            generic_parameters,
+            forwards_arguments: false,
+        }
+    }
+
+    fn transparent(ty: syn::Type) -> Self {
+        Self {
+            ty,
+            generic_parameters: Vec::new(),
+            forwards_arguments: true,
+        }
+    }
+
+    fn instantiate(&self, arguments: &syn::PathArguments) -> syn::Type {
+        let mut instantiated = self.ty.clone();
+        if self.generic_parameters.is_empty() {
+            if self.forwards_arguments {
+                attach_shell_alias_arguments(&mut instantiated, arguments);
+            }
+            return instantiated;
+        }
+        let actual_arguments = match arguments {
+            syn::PathArguments::AngleBracketed(arguments) => {
+                arguments.args.iter().collect::<Vec<_>>()
+            }
+            syn::PathArguments::None | syn::PathArguments::Parenthesized(_) => Vec::new(),
+        };
+        let mut argument_index = 0;
+        let mut replacements = HashMap::new();
+        for parameter in &self.generic_parameters {
+            match parameter {
+                ShellAliasGenericParameter::Lifetime => {
+                    if actual_arguments
+                        .get(argument_index)
+                        .is_some_and(|argument| {
+                            matches!(argument, syn::GenericArgument::Lifetime(_))
+                        })
+                    {
+                        argument_index += 1;
+                    }
+                }
+                ShellAliasGenericParameter::Const => {
+                    if actual_arguments
+                        .get(argument_index)
+                        .is_some_and(|argument| {
+                            !matches!(argument, syn::GenericArgument::Lifetime(_))
+                        })
+                    {
+                        argument_index += 1;
+                    }
+                }
+                ShellAliasGenericParameter::Type(parameter) => {
+                    let replacement = actual_arguments
+                        .get(argument_index)
+                        .and_then(|argument| {
+                            let syn::GenericArgument::Type(ty) = argument else {
+                                return None;
+                            };
+                            argument_index += 1;
+                            Some((*ty).clone())
+                        })
+                        .or_else(|| {
+                            let mut default = parameter.default.clone()?;
+                            ShellTypeParameterSubstituter {
+                                replacements: &replacements,
+                            }
+                            .visit_type_mut(&mut default);
+                            Some(default)
+                        });
+                    if let Some(replacement) = replacement {
+                        replacements.insert(parameter.name.clone(), replacement);
+                    }
+                }
+            }
+        }
+        ShellTypeParameterSubstituter {
+            replacements: &replacements,
+        }
+        .visit_type_mut(&mut instantiated);
+        instantiated
+    }
+}
+
+struct ShellTypeParameterSubstituter<'a> {
+    replacements: &'a HashMap<String, syn::Type>,
+}
+
+impl VisitMut for ShellTypeParameterSubstituter<'_> {
+    fn visit_type_mut(&mut self, ty: &mut syn::Type) {
+        if let syn::Type::Path(path) = ty
+            && path.qself.is_none()
+            && path.path.leading_colon.is_none()
+            && path.path.segments.len() == 1
+            && matches!(path.path.segments[0].arguments, syn::PathArguments::None)
+            && let Some(replacement) = self
+                .replacements
+                .get(&path.path.segments[0].ident.to_string())
+        {
+            *ty = replacement.clone();
+            return;
+        }
+        visit_mut::visit_type_mut(self, ty);
+    }
+}
+
+fn attach_shell_alias_arguments(ty: &mut syn::Type, arguments: &syn::PathArguments) {
+    if matches!(arguments, syn::PathArguments::None) {
+        return;
+    }
+    match ty {
+        syn::Type::Group(group) => attach_shell_alias_arguments(group.elem.as_mut(), arguments),
+        syn::Type::Paren(paren) => attach_shell_alias_arguments(paren.elem.as_mut(), arguments),
+        syn::Type::Path(path)
+            if path.qself.is_none()
+                && path.path.segments.last().is_some_and(|segment| {
+                    matches!(segment.arguments, syn::PathArguments::None)
+                }) =>
+        {
+            path.path
+                .segments
+                .last_mut()
+                .expect("a checked alias path has a final segment")
+                .arguments = arguments.clone();
+        }
+        _ => {}
+    }
+}
+
+type ShellTypeAliases = HashMap<String, ShellTypeAlias>;
+
 fn collect_use_type_renames(
     tree: &syn::UseTree,
     prefix: &mut Vec<String>,
-    aliases: &mut HashMap<String, syn::Type>,
+    aliases: &mut ShellTypeAliases,
 ) {
     match tree {
         syn::UseTree::Path(path) => {
@@ -14878,7 +15113,7 @@ fn collect_use_type_renames(
                 target.push(rename.ident.to_string());
             }
             if let Ok(ty) = syn::parse_str::<syn::Type>(&target.join("::")) {
-                aliases.insert(rename.rename.to_string(), ty);
+                aliases.insert(rename.rename.to_string(), ShellTypeAlias::transparent(ty));
             }
         }
         syn::UseTree::Group(group) => {
@@ -14890,13 +15125,13 @@ fn collect_use_type_renames(
     }
 }
 
-fn collect_item_type_alias(item: &syn::Item, aliases: &mut HashMap<String, syn::Type>) {
+fn collect_item_type_alias(item: &syn::Item, aliases: &mut ShellTypeAliases) {
     if item_is_test_only(item) {
         return;
     }
     match item {
         syn::Item::Type(item) => {
-            aliases.insert(item.ident.to_string(), item.ty.as_ref().clone());
+            aliases.insert(item.ident.to_string(), ShellTypeAlias::declared(item));
         }
         syn::Item::Use(item) => {
             collect_use_type_renames(&item.tree, &mut Vec::new(), aliases);
@@ -14905,7 +15140,7 @@ fn collect_item_type_alias(item: &syn::Item, aliases: &mut HashMap<String, syn::
     }
 }
 
-fn type_aliases_declared_in_items(items: &[syn::Item]) -> HashMap<String, syn::Type> {
+fn type_aliases_declared_in_items(items: &[syn::Item]) -> ShellTypeAliases {
     let mut aliases = HashMap::new();
     for item in items {
         collect_item_type_alias(item, &mut aliases);
@@ -14913,7 +15148,7 @@ fn type_aliases_declared_in_items(items: &[syn::Item]) -> HashMap<String, syn::T
     aliases
 }
 
-fn type_aliases_declared_in_statements(statements: &[syn::Stmt]) -> HashMap<String, syn::Type> {
+fn type_aliases_declared_in_statements(statements: &[syn::Stmt]) -> ShellTypeAliases {
     let mut aliases = HashMap::new();
     for statement in statements {
         if let syn::Stmt::Item(item) = statement {
@@ -14925,7 +15160,7 @@ fn type_aliases_declared_in_statements(statements: &[syn::Stmt]) -> HashMap<Stri
 
 #[derive(Clone, Default)]
 struct ShellQualifiedTypeAliases {
-    aliases: HashMap<String, syn::Type>,
+    aliases: ShellTypeAliases,
     glob_imports: HashMap<String, Vec<syn::Type>>,
     crate_aliases: HashSet<String>,
     explicit_type_paths: HashSet<String>,
@@ -14940,8 +15175,8 @@ impl ShellQualifiedTypeAliases {
         Self::default()
     }
 
-    fn insert(&mut self, name: String, ty: syn::Type) {
-        self.aliases.insert(name, ty);
+    fn insert(&mut self, name: String, alias: ShellTypeAlias) {
+        self.aliases.insert(name, alias);
     }
 
     fn insert_glob(&mut self, module: String, target: syn::Type) {
@@ -15009,7 +15244,7 @@ impl ShellQualifiedTypeAliases {
         self.root_path_shadows.extend(other.root_path_shadows);
     }
 
-    fn get(&self, name: &str) -> Option<&syn::Type> {
+    fn get(&self, name: &str) -> Option<&ShellTypeAlias> {
         self.aliases.get(name)
     }
 
@@ -15159,7 +15394,7 @@ fn collect_qualified_type_aliases(
         if let syn::Item::Type(alias) = item {
             aliases.insert(
                 format!("{}::{}", module_path.join("::"), alias.ident),
-                alias.ty.as_ref().clone(),
+                ShellTypeAlias::declared(alias),
             );
         }
         if let syn::Item::Use(import) = item {
@@ -15167,7 +15402,10 @@ fn collect_qualified_type_aliases(
             collect_use_struct_imports(&import.tree, &mut Vec::new(), &mut imports);
             for (local_name, target) in imports {
                 if let Ok(ty) = syn::parse_str::<syn::Type>(&target.join("::")) {
-                    aliases.insert(format!("{}::{local_name}", module_path.join("::")), ty);
+                    aliases.insert(
+                        format!("{}::{local_name}", module_path.join("::")),
+                        ShellTypeAlias::transparent(ty),
+                    );
                 }
             }
             let mut glob_targets = Vec::new();
@@ -15790,7 +16028,7 @@ struct ShellChromeWriterVisitor {
     allow_native_app_dispatch_seam: bool,
     authority_bindings: HashMap<String, ShellAuthorityBinding>,
     type_bindings: HashMap<String, ShellTypeBinding>,
-    type_aliases: HashMap<String, syn::Type>,
+    type_aliases: ShellTypeAliases,
     qualified_type_aliases: ShellQualifiedTypeAliases,
     function_returns: ShellFunctionReturns,
     closure_bindings: HashMap<String, syn::ExprClosure>,
@@ -15848,7 +16086,7 @@ impl ShellChromeWriterVisitor {
     fn type_grants_mutable_access(&self, ty: &syn::Type) -> bool {
         fn resolve(
             ty: &syn::Type,
-            aliases: &HashMap<String, syn::Type>,
+            aliases: &ShellTypeAliases,
             resolving_aliases: &mut HashSet<String>,
         ) -> bool {
             match ty {
@@ -15863,7 +16101,8 @@ impl ShellChromeWriterVisitor {
                     let name = segment.ident.to_string();
                     if resolving_aliases.insert(name.clone()) {
                         if let Some(alias) = aliases.get(&name) {
-                            let mutable = resolve(alias, aliases, resolving_aliases);
+                            let instantiated = alias.instantiate(&segment.arguments);
+                            let mutable = resolve(&instantiated, aliases, resolving_aliases);
                             resolving_aliases.remove(&name);
                             return mutable;
                         }
@@ -15914,7 +16153,7 @@ impl ShellChromeWriterVisitor {
         normalized
     }
 
-    fn imported_type_aliases(&self) -> HashMap<String, syn::Type> {
+    fn imported_type_aliases(&self) -> ShellTypeAliases {
         self.struct_imports
             .iter()
             .filter_map(|(local_name, target)| {
@@ -15923,7 +16162,7 @@ impl ShellChromeWriterVisitor {
                     return None;
                 }
                 let ty = syn::parse_str::<syn::Type>(&key).ok()?;
-                Some((local_name.clone(), ty))
+                Some((local_name.clone(), ShellTypeAlias::transparent(ty)))
             })
             .collect()
     }
@@ -16025,7 +16264,8 @@ impl ShellChromeWriterVisitor {
                     }
                     if path.path.segments.len() == 1 && resolving_aliases.insert(name.clone()) {
                         if let Some(alias) = visitor.type_aliases.get(&name) {
-                            let resolved = resolve(visitor, alias, resolving_aliases);
+                            let instantiated = alias.instantiate(&segment.arguments);
+                            let resolved = resolve(visitor, &instantiated, resolving_aliases);
                             resolving_aliases.remove(&name);
                             return resolved;
                         }
@@ -16502,9 +16742,10 @@ impl ShellChromeWriterVisitor {
                     let name = segment.ident.to_string();
                     if resolving_aliases.insert(name.clone()) {
                         if let Some(alias) = self.type_aliases.get(&name).cloned() {
+                            let instantiated = alias.instantiate(&segment.arguments);
                             let bound = self.bind_pattern_from_type_inner(
                                 pattern,
-                                &alias,
+                                &instantiated,
                                 resolving_aliases,
                             );
                             resolving_aliases.remove(&name);
@@ -16610,7 +16851,8 @@ impl ShellChromeWriterVisitor {
                     let name = segment.ident.to_string();
                     if resolving_aliases.insert(name.clone()) {
                         if let Some(alias) = visitor.type_aliases.get(&name) {
-                            let resolved = resolve(visitor, alias, resolving_aliases);
+                            let instantiated = alias.instantiate(&segment.arguments);
+                            let resolved = resolve(visitor, &instantiated, resolving_aliases);
                             resolving_aliases.remove(&name);
                             return resolved;
                         }

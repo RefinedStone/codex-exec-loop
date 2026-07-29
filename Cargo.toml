@@ -57,5 +57,5 @@ windows-sys = { version = "0.61", features = [
 [dev-dependencies]
 insta = "1"
 proc-macro2 = { version = "1", features = ["span-locations"] }
-syn = { version = "2", features = ["full", "visit"] }
+syn = { version = "2", features = ["full", "visit", "visit-mut"] }
 vt100 = "0.16.2"
