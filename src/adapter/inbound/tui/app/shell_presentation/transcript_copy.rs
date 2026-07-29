@@ -44,7 +44,18 @@ pub(in super::super) fn format_conversation_scrollback_lines_with_expand(
     show_debug_details: bool,
     expand_state: Option<&ProgressiveActivityExpandState>,
 ) -> Vec<Line<'static>> {
-    format_conversation_lines_uncapped(messages, view_mode, show_debug_details, expand_state)
+    let mut lines =
+        format_conversation_lines_uncapped(messages, view_mode, show_debug_details, expand_state);
+    /*
+     * Host scrollback owns the durable transcript while Ratatui owns the live
+     * inline tail. Keep one blank row between them even for an empty thread.
+     * Besides improving scan separation, this row is the safe cleanup guard
+     * when a terminal width change reflows the previous live tail.
+     */
+    if lines.last().is_some_and(|line| line.width() > 0) {
+        lines.push(Line::from(""));
+    }
+    lines
 }
 
 fn format_conversation_lines_capped(
@@ -461,6 +472,19 @@ fn label_style(kind: ConversationMessageKind) -> Style {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_scrollback_keeps_a_blank_guard_after_an_empty_thread() {
+        let lines = format_conversation_scrollback_lines_with_expand(
+            &[],
+            ConversationViewMode::Medium,
+            false,
+            None,
+        );
+
+        assert_eq!(line_text(&lines[0]), "No messages in this thread yet.");
+        assert_eq!(line_text(&lines[1]), "");
+    }
 
     #[test]
     fn tool_messages_collapse_to_one_line_headers_in_medium_view() {

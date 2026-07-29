@@ -1864,7 +1864,7 @@ fn frame_cache_invalidates_when_only_live_agent_text_changes() {
 }
 
 #[test]
-fn physical_shrink_clears_only_cursor_confirmed_tail_reflow_rows() {
+fn width_resize_uses_one_host_guard_row_when_the_cursor_does_not_move() {
     let mut app = make_test_app();
     app.shell.show_startup_ascii_art = false;
     let mut state = InlineTerminalState::default();
@@ -1875,18 +1875,11 @@ fn physical_shrink_clears_only_cursor_confirmed_tail_reflow_rows() {
     );
     assert!(inline_state_should_draw(&mut state, &app, 120, 30));
 
-    state.observe_physical_resize_reflow(Size::new(48, 18), Position::new(29, 4));
+    state.observe_physical_resize_reflow(Size::new(48, 18), Position::new(29, 3), true);
     assert_eq!(
         state.resize_reflow_rows_to_clear(),
         1,
-        "the one-row cursor shift and prior HUD wrap must agree on one cleanup row"
-    );
-
-    state.observe_physical_resize_reflow(Size::new(48, 18), Position::new(29, 9));
-    assert_eq!(
-        state.resize_reflow_rows_to_clear(),
-        1,
-        "history reflow may move the cursor farther, but cleanup must stay bounded by live-tail wrapping"
+        "the host separator must protect one cleanup row when tmux reflows without moving the cursor"
     );
 
     state.mark_frame_drawn(
@@ -1898,6 +1891,21 @@ fn physical_shrink_clears_only_cursor_confirmed_tail_reflow_rows() {
         state.resize_reflow_rows_to_clear(),
         0,
         "a delivered frame consumes the one-shot reflow cleanup"
+    );
+    assert!(inline_state_should_draw(&mut state, &app, 48, 18));
+
+    state.observe_physical_resize_reflow(Size::new(120, 30), Position::new(29, 3), true);
+    assert_eq!(
+        state.resize_reflow_rows_to_clear(),
+        1,
+        "restoring width must also remove the former narrow HUD row above the viewport"
+    );
+
+    state.observe_physical_resize_reflow(Size::new(48, 18), Position::new(29, 9), false);
+    assert_eq!(
+        state.resize_reflow_rows_to_clear(),
+        0,
+        "viewport replay has no durable host separator and must not clear above its viewport"
     );
 }
 
