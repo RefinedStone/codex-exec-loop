@@ -13,7 +13,7 @@ command · 한글 wide detail | 0-42 / 795 B
 Keys
 Up/Down: card | Enter/e: detail | PgUp/PgDn: page
 Tab: filter | Home: first | Esc: close
-Akra / progressi...  •  ready  •  queue: off
+Akra / p...  •  ready  •  gpt-5.5/high  •  ctx: 75%  •  queue: off
 ◦ Working (0s • waiting for response / interrupt runtime-...)
 notice: activity: active:command | diff:+1 -1 h1 | cmd:52 lines | ctx:75.00%
  > Describe a task or type : for commands

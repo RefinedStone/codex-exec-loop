@@ -417,10 +417,17 @@ fn build_context_ribbon_line(
         "ready" => AkraTheme::success(),
         _ => AkraTheme::muted(),
     };
+    /*
+     * Context usage is learned from app-server token-usage events. Before the first
+     * authoritative event there is no meaningful value to show, so the HUD omits
+     * the slot instead of presenting a prototype-style `ctx: --` placeholder.
+     * The same rule applies to branch metadata: this presentation model does not
+     * currently own an authoritative active-branch projection, and the renderer
+     * must not probe Git as a side effect of drawing.
+     */
     let context = screen_model
         .context_pressure_basis_points
-        .map(|basis_points| format!("ctx: {}%", basis_points / 100))
-        .unwrap_or_else(|| "ctx: --".to_string());
+        .map(|basis_points| format!("ctx: {}%", basis_points / 100));
     let shows_full_context = content_width >= 80;
     let workspace_label = compact_workspace_label(&screen_model.workspace_directory);
     let workspace_limit = if content_width >= 120 {
@@ -438,12 +445,6 @@ fn build_context_ribbon_line(
             AkraTheme::accent(),
         ),
     ];
-    if shows_full_context {
-        spans.extend([
-            Span::styled("  •  ", AkraTheme::subtle()),
-            Span::styled("branch: --", AkraTheme::muted()),
-        ]);
-    }
     spans.extend([
         Span::styled("  •  ", AkraTheme::subtle()),
         Span::styled(readiness, readiness_style),
@@ -455,9 +456,13 @@ fn build_context_ribbon_line(
                 compact_turn_options_hud_label(&screen_model.turn_options_hud_label),
                 AkraTheme::muted(),
             ),
-            Span::styled("  •  ", AkraTheme::subtle()),
-            Span::styled(context, AkraTheme::muted()),
         ]);
+        if let Some(context) = context {
+            spans.extend([
+                Span::styled("  •  ", AkraTheme::subtle()),
+                Span::styled(context, AkraTheme::muted()),
+            ]);
+        }
     }
     spans.extend([
         Span::styled("  •  ", AkraTheme::subtle()),

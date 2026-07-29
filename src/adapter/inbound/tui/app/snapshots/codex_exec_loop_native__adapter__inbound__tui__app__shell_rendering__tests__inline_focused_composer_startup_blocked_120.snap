@@ -2,7 +2,7 @@
 source: src/adapter/inbound/tui/app/shell_rendering_tests.rs
 expression: blocked
 ---
-"Akra / root  •  branch: --  •  blocked  •  gpt-5.5/high  •  ctx: --  •  queue: off                                      "
+"Akra / root  •  blocked  •  gpt-5.5/high  •  queue: off                                                                 "
 "status: codex app-server unavailable                                                                                    "
 "╭ Task                                                                                                                  "
 "│ > Describe a task or type : for commands                                                                              "

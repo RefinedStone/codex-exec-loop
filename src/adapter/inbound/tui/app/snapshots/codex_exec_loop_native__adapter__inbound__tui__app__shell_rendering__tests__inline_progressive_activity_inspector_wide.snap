@@ -13,7 +13,7 @@ expression: wide
 "   detail line 00                                                                                                       "
 "Keys                                                                                                                    "
 "Up/Down: card | Enter/e: detail | PgUp/PgDn: page | Tab: filter | Home: first | Esc: close                              "
-"Akra / progressive-activity  •  branch: --  •  ready  •  gpt-5.5/high  •  ctx: 75%  •  queue: off                       "
+"Akra / progressive-activity  •  ready  •  gpt-5.5/high  •  ctx: 75%  •  queue: off                                      "
 "◦ Working (0s • waiting for response / interrupt runtime-...)                                                           "
 "notice: activity: active:command | diff:+1 -1 h1 | cmd:52 lines | ctx:75.00% | history:bounded | model:gpt-5.5          "
 " > Describe a task or type : for commands                                                                               "

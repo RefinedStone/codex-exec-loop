@@ -12,7 +12,7 @@ expression: rendered
 Codex:
   viewport replay stream remains separate
 
-Akra / root  •  branch: --  •  ready  •  gpt-5.5/high  •  ctx: --  •  queue: off
+Akra / root  •  ready  •  gpt-5.5/high  •  queue: off
 ◦ Working (0s • turn running / interrupt runtime-native)
 recent codex: viewport replay transcript remains an...
 ╭ Task

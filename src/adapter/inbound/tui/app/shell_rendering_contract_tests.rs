@@ -281,7 +281,8 @@ fn inline_main_buffer_tail_frame_does_not_render_startup_ascii_art_transiently()
     assert!(!rendered.contains(".:  .::    .::  .::.: .:::   .::"));
     assert!(!rendered.contains(".::.::  .::   .::    .::  .::   .::"));
     assert!(rendered.contains("Akra / root"));
-    assert!(rendered.contains("branch: --"));
+    assert!(!rendered.contains("branch: --"));
+    assert!(!rendered.contains("ctx: --"));
     assert!(rendered.contains("queue: off"));
     assert!(rendered.contains("Describe a task or type : for commands"));
     assert!(rendered.contains("Type a task  |  : commands"));
