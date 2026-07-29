@@ -4359,6 +4359,23 @@ fn update_unrelated(
         1,
         "qualified glob re-exports must resolve names from the original authority module"
     );
+    let explicit_type_over_glob = shell_chrome_writer_audit(
+        "mod facade {\n\
+             pub use crate::adapter::inbound::tui::shell_chrome::*;\n\
+             pub struct ShellChromeState {\n\
+                 pub session_state: usize,\n\
+             }\n\
+         }\n\
+         fn update(chrome: &mut crate::facade::ShellChromeState) {\n\
+             chrome.session_state = 1;\n\
+         }",
+    )
+    .expect("explicit type over glob re-export fixture should parse");
+    assert!(
+        explicit_type_over_glob.field_writes.is_empty()
+            && explicit_type_over_glob.whole_state_writes.is_empty(),
+        "an explicit local type must shadow a same-named glob re-export"
+    );
 
     let chained_qualified_glob_reexport = shell_chrome_writer_audit(
         "mod first {\n\
@@ -4674,6 +4691,24 @@ fn update_unrelated(
         shadowed_self_crate_alias.field_writes.is_empty()
             && shadowed_self_crate_alias.whole_state_writes.is_empty(),
         "a local type-namespace item must shadow a crate-root self alias"
+    );
+    let absolute_self_crate_alias = shell_chrome_writer_audit_with_type_registry(
+        "mod akra {}\n\
+         fn escape(\n\
+             app: &mut ::akra::adapter::inbound::tui::app::NativeTuiApp,\n\
+         ) {\n\
+             app.shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+        false,
+        &known_struct_fields,
+        &crate_aliases,
+        &relative_writer_module,
+    )
+    .expect("absolute self-crate alias fixture should parse");
+    assert_eq!(
+        absolute_self_crate_alias.field_writes.len(),
+        1,
+        "an absolute self-crate alias must bypass lexical path shadows"
     );
 
     let unrelated_wrapper = shell_chrome_writer_audit(
@@ -14167,7 +14202,7 @@ fn normalized_shell_type_path(
         .iter()
         .map(|segment| segment.ident.to_string())
         .collect::<Vec<_>>();
-    if scope.allow_local_aliases {
+    if scope.allow_local_aliases && path.leading_colon.is_none() {
         let mut resolving_imports = HashSet::new();
         while let Some(first) = raw_path.first().cloned()
             && let Some(target) = scope.imports.get(&first)
@@ -14186,7 +14221,9 @@ fn normalized_shell_type_path(
     let mut index = 0;
     let first_is_visible_crate_alias = raw_path.first().is_some_and(|segment| {
         scope.qualified_type_aliases.is_crate_alias(segment)
-            && (!scope.allow_local_aliases || !scope.path_shadows.contains(segment))
+            && (!scope.allow_local_aliases
+                || path.leading_colon.is_some()
+                || !scope.path_shadows.contains(segment))
     });
     if raw_path.first().is_some_and(|segment| segment == "crate") || first_is_visible_crate_alias {
         normalized.clear();
@@ -14357,43 +14394,51 @@ fn shell_authority_binding_from_type(
                     return resolved;
                 }
             }
-            for prefix_len in (1..normalized_path.len()).rev() {
-                let glob_module = normalized_path[..prefix_len].join("::");
-                for (target_index, target) in scope
-                    .qualified_type_aliases
-                    .glob_targets(&glob_module)
-                    .iter()
-                    .enumerate()
-                {
-                    let Some(target_path) = shell_type_path(target) else {
-                        continue;
-                    };
-                    let resolution_key = format!("{glob_module}::*#{target_index}");
-                    if !resolving_aliases.insert(resolution_key.clone()) {
+            if !scope
+                .qualified_type_aliases
+                .explicitly_declares_type(&qualified_name)
+            {
+                for prefix_len in (1..normalized_path.len()).rev() {
+                    let glob_module = normalized_path[..prefix_len].join("::");
+                    let shadowed_item = format!("{glob_module}::{}", normalized_path[prefix_len]);
+                    if scope
+                        .qualified_type_aliases
+                        .explicitly_declares_type(&shadowed_item)
+                    {
                         continue;
                     }
-                    let mut expanded_path = target_path.clone();
-                    for segment in &normalized_path[prefix_len..] {
-                        expanded_path
-                            .path
-                            .segments
-                            .push(syn::PathSegment::from(syn::Ident::new(
-                                segment,
-                                proc_macro2::Span::call_site(),
-                            )));
-                    }
-                    let resolved = shell_authority_binding_from_type(
-                        &syn::Type::Path(expanded_path),
-                        ShellTypeResolutionScope {
-                            module_path: &normalized_path[..prefix_len],
-                            allow_local_aliases: false,
-                            ..scope
-                        },
-                        resolving_aliases,
-                    );
-                    resolving_aliases.remove(&resolution_key);
-                    if resolved.is_some() {
-                        return resolved;
+                    for (target_index, target) in scope
+                        .qualified_type_aliases
+                        .glob_targets(&glob_module)
+                        .iter()
+                        .enumerate()
+                    {
+                        let Some(target_path) = shell_type_path(target) else {
+                            continue;
+                        };
+                        let resolution_key = format!("{glob_module}::*#{target_index}");
+                        if !resolving_aliases.insert(resolution_key.clone()) {
+                            continue;
+                        }
+                        let mut expanded_path = target_path.clone();
+                        for segment in &normalized_path[prefix_len..] {
+                            expanded_path.path.segments.push(syn::PathSegment::from(
+                                syn::Ident::new(segment, proc_macro2::Span::call_site()),
+                            ));
+                        }
+                        let resolved = shell_authority_binding_from_type(
+                            &syn::Type::Path(expanded_path),
+                            ShellTypeResolutionScope {
+                                module_path: &normalized_path[..prefix_len],
+                                allow_local_aliases: false,
+                                ..scope
+                            },
+                            resolving_aliases,
+                        );
+                        resolving_aliases.remove(&resolution_key);
+                        if resolved.is_some() {
+                            return resolved;
+                        }
                     }
                 }
             }
@@ -14514,6 +14559,7 @@ struct ShellQualifiedTypeAliases {
     aliases: HashMap<String, syn::Type>,
     glob_imports: HashMap<String, Vec<syn::Type>>,
     crate_aliases: HashSet<String>,
+    explicit_type_paths: HashSet<String>,
     root_path_shadows: HashSet<String>,
 }
 
@@ -14534,6 +14580,10 @@ impl ShellQualifiedTypeAliases {
         self.crate_aliases.insert(alias);
     }
 
+    fn insert_explicit_type(&mut self, path: String) {
+        self.explicit_type_paths.insert(path);
+    }
+
     fn insert_root_path_shadow(&mut self, name: String) {
         self.root_path_shadows.insert(name);
     }
@@ -14544,6 +14594,7 @@ impl ShellQualifiedTypeAliases {
             self.glob_imports.entry(module).or_default().extend(targets);
         }
         self.crate_aliases.extend(other.crate_aliases);
+        self.explicit_type_paths.extend(other.explicit_type_paths);
         self.root_path_shadows.extend(other.root_path_shadows);
     }
 
@@ -14561,6 +14612,10 @@ impl ShellQualifiedTypeAliases {
 
     fn is_crate_alias(&self, name: &str) -> bool {
         self.crate_aliases.contains(name)
+    }
+
+    fn explicitly_declares_type(&self, path: &str) -> bool {
+        self.explicit_type_paths.contains(path)
     }
 
     fn root_path_is_shadowed(&self, name: &str) -> bool {
@@ -14631,6 +14686,25 @@ fn collect_qualified_type_aliases(
                 }
                 _ => {}
             }
+        }
+        let explicit_type_name = match item {
+            syn::Item::Enum(item) => Some(item.ident.to_string()),
+            syn::Item::ExternCrate(item) => Some(
+                item.rename
+                    .as_ref()
+                    .map_or(&item.ident, |(_, rename)| rename)
+                    .to_string(),
+            ),
+            syn::Item::Mod(item) => Some(item.ident.to_string()),
+            syn::Item::Struct(item) => Some(item.ident.to_string()),
+            syn::Item::Trait(item) => Some(item.ident.to_string()),
+            syn::Item::TraitAlias(item) => Some(item.ident.to_string()),
+            syn::Item::Type(item) => Some(item.ident.to_string()),
+            syn::Item::Union(item) => Some(item.ident.to_string()),
+            _ => None,
+        };
+        if let Some(name) = explicit_type_name {
+            aliases.insert_explicit_type(format!("{}::{name}", module_path.join("::")));
         }
         if let syn::Item::Type(alias) = item {
             aliases.insert(
