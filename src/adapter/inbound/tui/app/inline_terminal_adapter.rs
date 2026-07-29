@@ -407,6 +407,10 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
     }
     if physical_terminal_resized {
         let resize_cursor_position = terminal.get_cursor_position()?;
+        let has_host_scrollback_guard = policy.render_mode.writes_host_scrollback()
+            && inline_terminal
+                .history_flush
+                .has_trailing_reflow_guard_rows();
         if !terminal
             .backend()
             .matches_resize_snapshot(resize_snapshot)?
@@ -417,7 +421,7 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
         inline_terminal.observe_physical_resize_reflow(
             terminal_size,
             resize_cursor_position,
-            policy.render_mode.writes_host_scrollback(),
+            has_host_scrollback_guard,
         );
     }
     let Some(insert_mode) = policy.host_insert_mode() else {

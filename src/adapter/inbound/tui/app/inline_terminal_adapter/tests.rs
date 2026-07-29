@@ -2466,9 +2466,24 @@ fn assert_parallel_projection_delivers_conversation_handoff(
         .find(|marker| parallel_history.contains(marker));
     match render_mode {
         InlineHistoryRenderMode::HostScrollback => {
-            assert_eq!(parallel_history.matches(PROMPT_MARKER).count(), 1);
-            assert_eq!(parallel_history.matches(COMMENTARY_MARKER).count(), 1);
-            assert_eq!(parallel_history.matches(FINAL_MARKER).count(), 1);
+            let diagnostic = format!(
+                "{render_mode:?}/{insert_mode:?}\nterminal history:\n{parallel_history}\nhost scrollback:\n{durable_host}"
+            );
+            assert_eq!(
+                parallel_history.matches(PROMPT_MARKER).count(),
+                1,
+                "{diagnostic}"
+            );
+            assert_eq!(
+                parallel_history.matches(COMMENTARY_MARKER).count(),
+                1,
+                "{diagnostic}"
+            );
+            assert_eq!(
+                parallel_history.matches(FINAL_MARKER).count(),
+                1,
+                "{diagnostic}"
+            );
             assert!(
                 parallel_history.find(PROMPT_MARKER) < parallel_history.find(COMMENTARY_MARKER)
             );

@@ -2,10 +2,10 @@ use ratatui::Terminal;
 use ratatui::layout::{Position, Rect};
 use ratatui::text::Line;
 
-use super::super::MAX_CONVERSATION_HISTORY_LINES;
 use super::super::history_insertion::{
     HistoryInsertionAdapter, HistoryInsertionMode, count_rendered_history_rows,
 };
+use super::super::{INLINE_HOST_SCROLLBACK_REFLOW_GUARD_ROWS, MAX_CONVERSATION_HISTORY_LINES};
 use super::backend::{InlineResizeBackend, InlineResizeSnapshot};
 use crate::adapter::inbound::tui::app::shell_presentation::TranscriptHandoffDeliveryToken;
 
@@ -46,6 +46,12 @@ pub(crate) struct HistoryFlushState {
      * flag after clamping the cached row count to the observed viewport.
      */
     pub(crate) visible_history_rows_dirty: bool,
+    /*
+     * Blank rows physically separating durable host history from the live
+     * Ratatui viewport. They are terminal geometry, not conversation data, so
+     * they never participate in rendered_lines identity or suffix matching.
+     */
+    pub(crate) trailing_reflow_guard_rows: u16,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -216,11 +222,25 @@ impl HistoryFlushState {
         if !terminal.backend().matches_resize_snapshot(expected)? {
             return Ok(HistoryFlushResult::default());
         }
+        /*
+         * The compact conversation shell needs a small physical buffer above the
+         * live viewport so width reflow can be erased deterministically. Parallel
+         * mode already owns a bounded operations projection in that space; adding
+         * guard rows to each event batch would consume its scroll-region budget
+         * and evict a one-shot conversation handoff.
+         */
+        let reserve_reflow_guards = !parallel_projection;
+        let physical_pending_lines = if reserve_reflow_guards {
+            self.pending_lines_with_reflow_guards(&pending_history_lines)
+        } else {
+            pending_history_lines.clone()
+        };
         let width = expected.size.width;
-        let inserted_rows = if pending_history_lines.is_empty() {
+        let inserted_rows = if physical_pending_lines.is_empty() {
             0
         } else {
-            count_rendered_history_rows(&pending_history_lines, width).min(u16::MAX as usize) as u16
+            count_rendered_history_rows(&physical_pending_lines, width).min(u16::MAX as usize)
+                as u16
         };
         /*
          * No pending rows means the app transcript and host scrollback are already aligned. Avoid
@@ -231,13 +251,18 @@ impl HistoryFlushState {
             let insertion = HistoryInsertionAdapter::new(insert_mode)
                 .insert_with_rendered_rows_at_snapshot(
                     terminal,
-                    &pending_history_lines,
+                    &physical_pending_lines,
                     inserted_rows,
                     expected,
                 )?;
             if !insertion.completed() {
                 return Ok(HistoryFlushResult::default());
             }
+            self.trailing_reflow_guard_rows = if reserve_reflow_guards {
+                INLINE_HOST_SCROLLBACK_REFLOW_GUARD_ROWS
+            } else {
+                0
+            };
             if !insertion.stable_geometry() {
                 let viewport_top_after_insert = terminal.get_frame().area().top();
                 self.visible_history_rows =
@@ -303,6 +328,7 @@ impl HistoryFlushState {
         if !insertion.completed() {
             return Ok(HistoryFlushResult::default());
         }
+        self.trailing_reflow_guard_rows = 0;
         let viewport_top_after_insert = terminal.get_frame().area().top();
         self.visible_history_rows = self
             .visible_history_rows
@@ -327,12 +353,14 @@ impl HistoryFlushState {
      */
     pub(crate) fn remember_without_flush(&mut self, current_lines: &[Line<'static>]) {
         self.visible_history_rows_dirty = false;
+        self.trailing_reflow_guard_rows = 0;
         self.pending_history_lines.clear();
         self.remember(current_lines);
     }
 
     pub(crate) fn remember_parallel_without_flush(&mut self, current_lines: &[Line<'static>]) {
         self.visible_history_rows_dirty = false;
+        self.trailing_reflow_guard_rows = 0;
         self.pending_history_lines.clear();
         if !self.parallel_rendered_lines.starts_with(current_lines) {
             self.parallel_rendered_lines = current_lines.to_vec();
@@ -353,8 +381,40 @@ impl HistoryFlushState {
         self.visible_history_rows_dirty = true;
     }
 
+    pub(crate) fn has_trailing_reflow_guard_rows(&self) -> bool {
+        self.trailing_reflow_guard_rows >= INLINE_HOST_SCROLLBACK_REFLOW_GUARD_ROWS
+    }
+
     fn remember(&mut self, current_lines: &[Line<'static>]) {
         self.rendered_lines = current_lines.to_vec();
+    }
+
+    fn pending_lines_with_reflow_guards(
+        &self,
+        pending_lines: &[Line<'static>],
+    ) -> Vec<Line<'static>> {
+        /*
+         * Guard rows travel only with newly committed conversation history.
+         * Retrofitting them during an otherwise stable projection would mutate
+         * scrollback on mode switches and could evict the oldest visible handoff.
+         */
+        if pending_lines.is_empty() {
+            return Vec::new();
+        }
+
+        let mut physical_lines = pending_lines.to_vec();
+        let trailing_blank_rows = pending_lines
+            .iter()
+            .rev()
+            .take_while(|line| line.width() == 0)
+            .count()
+            .min(usize::from(u16::MAX)) as u16;
+        let missing_guard_rows =
+            INLINE_HOST_SCROLLBACK_REFLOW_GUARD_ROWS.saturating_sub(trailing_blank_rows);
+        physical_lines.extend(
+            std::iter::repeat_with(|| Line::from("")).take(usize::from(missing_guard_rows)),
+        );
+        physical_lines
     }
 
     fn visible_rows_after_insert(&self, inserted_rows: u16, viewport_top: u16) -> u16 {
