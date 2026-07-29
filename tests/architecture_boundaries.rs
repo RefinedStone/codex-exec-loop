@@ -6745,6 +6745,96 @@ fn update_unrelated(
         3,
         "cross-file relative, aliased, qualified, and method returns must retain authority"
     );
+    let unrelated_factory_file = syn::parse_file(
+        "pub struct ShellChromeState { pub session_state: usize }\n\
+         pub fn make() -> ShellChromeState {\n\
+             ShellChromeState { session_state: 0 }\n\
+         }",
+    )
+    .expect("unrelated bare return type fixture should parse");
+    let unrelated_factory_module = ["crate".to_string(), "unrelated_factory".to_string()];
+    let unrelated_factory_structs = qualified_struct_fields_declared_in_file(
+        &unrelated_factory_file,
+        &unrelated_factory_module,
+    );
+    let unrelated_factory_aliases =
+        qualified_type_aliases_declared_in_file(&unrelated_factory_file, &unrelated_factory_module);
+    let unrelated_factory_returns = qualified_function_returns_declared_in_file(
+        &unrelated_factory_file,
+        &unrelated_factory_module,
+    );
+    let unrelated_bare_function_return = shell_chrome_writer_audit_with_registries(
+        "fn update() {\n\
+             crate::unrelated_factory::make().session_state = 1;\n\
+         }",
+        false,
+        &unrelated_factory_structs,
+        &unrelated_factory_aliases,
+        &unrelated_factory_returns,
+        &["crate".to_string(), "writer".to_string()],
+    )
+    .expect("unrelated bare function return audit fixture should parse");
+    assert!(
+        unrelated_bare_function_return.field_writes.is_empty()
+            && unrelated_bare_function_return.whole_state_writes.is_empty(),
+        "a declaration-local lookalike return type must remain unrelated"
+    );
+    let generic_impl_applicability = shell_chrome_writer_audit(
+        "struct GenericFactory<T>(T);\n\
+         trait ChromeMaker {\n\
+             fn make(&self) -> ShellChromeState;\n\
+         }\n\
+         impl ChromeMaker for GenericFactory<String> {\n\
+             fn make(&self) -> ShellChromeState { todo!() }\n\
+         }\n\
+         impl GenericFactory<u8> {\n\
+             fn make(&self) -> OtherState { todo!() }\n\
+         }\n\
+         fn escape(factory: GenericFactory<String>) {\n\
+             factory.make().session_state = SessionState::Idle;\n\
+         }",
+    )
+    .expect("generic impl applicability fixture should parse");
+    assert_eq!(
+        generic_impl_applicability.field_writes.len(),
+        1,
+        "an inapplicable concrete inherent impl must not hide an applicable trait method"
+    );
+    let trait_visibility = shell_chrome_writer_audit(
+        "struct TraitFactory;\n\
+         mod traits {\n\
+             pub trait ChromeMaker {\n\
+                 fn make(&self) -> ShellChromeState;\n\
+             }\n\
+             pub trait OtherMaker {\n\
+                 fn make(&self) -> OtherState;\n\
+             }\n\
+         }\n\
+         impl traits::ChromeMaker for TraitFactory {\n\
+             fn make(&self) -> ShellChromeState { todo!() }\n\
+         }\n\
+         impl traits::OtherMaker for TraitFactory {\n\
+             fn make(&self) -> OtherState { todo!() }\n\
+         }\n\
+         mod chrome_writer {\n\
+             use super::{TraitFactory, traits::ChromeMaker};\n\
+             fn escape(factory: TraitFactory) {\n\
+                 factory.make().session_state = SessionState::Idle;\n\
+             }\n\
+         }\n\
+         mod unrelated_writer {\n\
+             use super::{TraitFactory, traits::OtherMaker};\n\
+             fn update(factory: TraitFactory) {\n\
+                 factory.make().session_state = 1;\n\
+             }\n\
+         }",
+    )
+    .expect("trait visibility fixtures should parse");
+    assert_eq!(
+        trait_visibility.field_writes.len(),
+        1,
+        "method resolution must consider only traits visible in each call module"
+    );
 
     let read_only_index = shell_chrome_writer_audit(
         "fn inspect(apps: Vec<NativeTuiApp>) {\n\
@@ -15384,10 +15474,26 @@ impl VisitMut for ShellReturnTypeQualifier<'_> {
         }
         let imported = self.scope.imports.contains_key(first);
         let relative = matches!(first.as_str(), "crate" | "self" | "super");
-        if path.path.leading_colon.is_none() && raw_path.len() == 1 && !imported && !relative {
+        let mut scoped_path = self.scope.module_path.to_vec();
+        scoped_path.extend(raw_path.iter().cloned());
+        let declared_in_scope = raw_path.len() == 1
+            && self
+                .scope
+                .qualified_type_aliases
+                .explicitly_declares_type(&scoped_path.join("::"));
+        if path.path.leading_colon.is_none()
+            && raw_path.len() == 1
+            && !imported
+            && !relative
+            && !declared_in_scope
+        {
             return;
         }
-        let normalized = normalized_shell_type_path(&path.path, self.scope);
+        let normalized = if declared_in_scope {
+            scoped_path
+        } else {
+            normalized_shell_type_path(&path.path, self.scope)
+        };
         if normalized.is_empty() {
             return;
         }
@@ -16774,6 +16880,8 @@ struct ShellQualifiedFunctionReturn {
     ty: syn::Type,
     module_path: Vec<String>,
     source: ShellFunctionReturnSource,
+    impl_receiver: Option<syn::Type>,
+    impl_type_parameters: HashSet<String>,
 }
 
 type ShellQualifiedFunctionReturns = HashMap<String, Vec<ShellQualifiedFunctionReturn>>;
@@ -16870,6 +16978,8 @@ fn collect_qualified_function_returns(
                             ty: ty.as_ref().clone(),
                             module_path: module_path.clone(),
                             source: ShellFunctionReturnSource::Free,
+                            impl_receiver: None,
+                            impl_type_parameters: HashSet::new(),
                         });
                 }
             }
@@ -16893,6 +17003,11 @@ fn collect_qualified_function_returns(
                         )
                     },
                 );
+                let impl_type_parameters = item
+                    .generics
+                    .type_params()
+                    .map(|parameter| parameter.ident.to_string())
+                    .collect::<HashSet<_>>();
                 for method in &item.items {
                     let syn::ImplItem::Fn(method) = method else {
                         continue;
@@ -16911,6 +17026,8 @@ fn collect_qualified_function_returns(
                                 ty: ty.as_ref().clone(),
                                 module_path: module_path.clone(),
                                 source: source.clone(),
+                                impl_receiver: Some(item.self_ty.as_ref().clone()),
+                                impl_type_parameters: impl_type_parameters.clone(),
                             });
                     }
                 }
@@ -18204,6 +18321,201 @@ impl ShellChromeWriterVisitor {
             || self.type_contains_mutable_authority(ty, true, &mut HashSet::new())
     }
 
+    fn impl_receiver_matches(
+        &self,
+        entry: &ShellQualifiedFunctionReturn,
+        receiver: &ShellTypeBinding,
+    ) -> bool {
+        fn owned_type(ty: &syn::Type) -> &syn::Type {
+            match ty {
+                syn::Type::Reference(reference) => owned_type(reference.elem.as_ref()),
+                syn::Type::Ptr(pointer) => owned_type(pointer.elem.as_ref()),
+                syn::Type::Group(group) => owned_type(group.elem.as_ref()),
+                syn::Type::Paren(paren) => owned_type(paren.elem.as_ref()),
+                _ => ty,
+            }
+        }
+
+        fn arguments_match(
+            expected: &syn::PathArguments,
+            actual: &syn::PathArguments,
+            generic_parameters: &HashSet<String>,
+            bindings: &mut HashMap<String, String>,
+        ) -> bool {
+            match (expected, actual) {
+                (syn::PathArguments::None, syn::PathArguments::None) => true,
+                (
+                    syn::PathArguments::AngleBracketed(expected),
+                    syn::PathArguments::AngleBracketed(actual),
+                ) => {
+                    let expected = expected
+                        .args
+                        .iter()
+                        .filter_map(|argument| {
+                            let syn::GenericArgument::Type(ty) = argument else {
+                                return None;
+                            };
+                            Some(ty)
+                        })
+                        .collect::<Vec<_>>();
+                    let actual = actual
+                        .args
+                        .iter()
+                        .filter_map(|argument| {
+                            let syn::GenericArgument::Type(ty) = argument else {
+                                return None;
+                            };
+                            Some(ty)
+                        })
+                        .collect::<Vec<_>>();
+                    expected.len() == actual.len()
+                        && expected.iter().zip(actual).all(|(expected, actual)| {
+                            type_matches(expected, actual, generic_parameters, bindings)
+                        })
+                }
+                _ => {
+                    shell_path_arguments_identity(expected) == shell_path_arguments_identity(actual)
+                }
+            }
+        }
+
+        fn type_matches(
+            expected: &syn::Type,
+            actual: &syn::Type,
+            generic_parameters: &HashSet<String>,
+            bindings: &mut HashMap<String, String>,
+        ) -> bool {
+            match (expected, actual) {
+                (syn::Type::Group(expected), _) => {
+                    type_matches(expected.elem.as_ref(), actual, generic_parameters, bindings)
+                }
+                (_, syn::Type::Group(actual)) => {
+                    type_matches(expected, actual.elem.as_ref(), generic_parameters, bindings)
+                }
+                (syn::Type::Paren(expected), _) => {
+                    type_matches(expected.elem.as_ref(), actual, generic_parameters, bindings)
+                }
+                (_, syn::Type::Paren(actual)) => {
+                    type_matches(expected, actual.elem.as_ref(), generic_parameters, bindings)
+                }
+                (syn::Type::Path(expected), _)
+                    if expected.qself.is_none()
+                        && expected.path.leading_colon.is_none()
+                        && expected.path.segments.len() == 1
+                        && matches!(
+                            expected.path.segments[0].arguments,
+                            syn::PathArguments::None
+                        )
+                        && generic_parameters
+                            .contains(&expected.path.segments[0].ident.to_string()) =>
+                {
+                    let parameter = expected.path.segments[0].ident.to_string();
+                    let actual = shell_type_identity(actual);
+                    if let Some(bound) = bindings.get(&parameter) {
+                        bound == &actual
+                    } else {
+                        bindings.insert(parameter, actual);
+                        true
+                    }
+                }
+                (syn::Type::Path(expected), syn::Type::Path(actual))
+                    if expected.qself.is_none() && actual.qself.is_none() =>
+                {
+                    expected.path.segments.len() == actual.path.segments.len()
+                        && expected
+                            .path
+                            .segments
+                            .iter()
+                            .zip(&actual.path.segments)
+                            .all(|(expected, actual)| {
+                                expected.ident == actual.ident
+                                    && arguments_match(
+                                        &expected.arguments,
+                                        &actual.arguments,
+                                        generic_parameters,
+                                        bindings,
+                                    )
+                            })
+                }
+                (syn::Type::Reference(expected), syn::Type::Reference(actual)) => {
+                    expected.mutability.is_some() == actual.mutability.is_some()
+                        && type_matches(
+                            expected.elem.as_ref(),
+                            actual.elem.as_ref(),
+                            generic_parameters,
+                            bindings,
+                        )
+                }
+                (syn::Type::Ptr(expected), syn::Type::Ptr(actual)) => {
+                    expected.mutability.is_some() == actual.mutability.is_some()
+                        && type_matches(
+                            expected.elem.as_ref(),
+                            actual.elem.as_ref(),
+                            generic_parameters,
+                            bindings,
+                        )
+                }
+                (syn::Type::Tuple(expected), syn::Type::Tuple(actual)) => {
+                    expected.elems.len() == actual.elems.len()
+                        && expected
+                            .elems
+                            .iter()
+                            .zip(&actual.elems)
+                            .all(|(expected, actual)| {
+                                type_matches(expected, actual, generic_parameters, bindings)
+                            })
+                }
+                _ => shell_type_identity(expected) == shell_type_identity(actual),
+            }
+        }
+
+        let Some(expected) = &entry.impl_receiver else {
+            return true;
+        };
+        let expected = self.resolved_declared_return_type(expected, &entry.module_path, None);
+        let actual =
+            self.resolved_declared_return_type(owned_type(&receiver.ty), &self.module_path, None);
+        type_matches(
+            &expected,
+            &actual,
+            &entry.impl_type_parameters,
+            &mut HashMap::new(),
+        )
+    }
+
+    fn trait_is_visible(&self, trait_path: &str) -> bool {
+        let Some(trait_name) = trait_path.rsplit("::").next() else {
+            return false;
+        };
+        let local_path = format!("{}::{trait_name}", self.module_path.join("::"));
+        if local_path == trait_path
+            && self
+                .qualified_type_aliases
+                .explicitly_declares_type(&local_path)
+        {
+            return true;
+        }
+        let current_scope = self.type_resolution_scope(self.impl_authority);
+        if self.struct_imports.values().any(|target| {
+            let Ok(path) = syn::parse_str::<syn::Path>(&target.join("::")) else {
+                return false;
+            };
+            normalized_shell_type_path(&path, current_scope).join("::") == trait_path
+        }) {
+            return true;
+        }
+        let Some((trait_module, _)) = trait_path.rsplit_once("::") else {
+            return false;
+        };
+        self.qualified_type_aliases
+            .glob_targets(&self.module_path.join("::"))
+            .iter()
+            .filter_map(shell_type_path)
+            .any(|target| {
+                normalized_shell_type_path(&target.path, current_scope).join("::") == trait_module
+            })
+    }
+
     fn function_return_type(&self, path: &syn::Path) -> Option<syn::Type> {
         if path.leading_colon.is_none()
             && path.segments.len() == 1
@@ -18289,6 +18601,7 @@ impl ShellChromeWriterVisitor {
                     .get(&format!("{receiver}::{method}"))
             })
             .flatten()
+            .filter(|entry| self.impl_receiver_matches(entry, receiver))
             .collect::<Vec<_>>();
         if let Some(inherent) = candidates
             .iter()
@@ -18307,6 +18620,9 @@ impl ShellChromeWriterVisitor {
                 let ShellFunctionReturnSource::Trait(trait_path) = &entry.source else {
                     return None;
                 };
+                if !self.trait_is_visible(trait_path) {
+                    return None;
+                }
                 Some((
                     trait_path,
                     self.resolved_declared_return_type(
