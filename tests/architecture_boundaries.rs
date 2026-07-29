@@ -4713,6 +4713,46 @@ fn update_unrelated(
         1,
         "collection aliases must follow glob re-exports"
     );
+    let authority_collection_file = syn::parse_file("pub type AppList = Vec<NativeTuiApp>;")
+        .expect("authority collection alias should parse");
+    let unrelated_collection_file = syn::parse_file("pub type AppList = OtherAppList;")
+        .expect("unrelated collection alias should parse");
+    let collection_precedence_file = syn::parse_file(
+        "pub use crate::authority_collection::*;\n\
+         pub use crate::unrelated_collection::AppList;",
+    )
+    .expect("collection import precedence fixture should parse");
+    let mut collection_precedence_aliases = qualified_type_aliases_declared_in_file(
+        &authority_collection_file,
+        &["crate".to_string(), "authority_collection".to_string()],
+    );
+    collection_precedence_aliases.extend(qualified_type_aliases_declared_in_file(
+        &unrelated_collection_file,
+        &["crate".to_string(), "unrelated_collection".to_string()],
+    ));
+    collection_precedence_aliases.extend(qualified_type_aliases_declared_in_file(
+        &collection_precedence_file,
+        &["crate".to_string(), "collection_precedence".to_string()],
+    ));
+    let explicitly_unrelated_collection_alias = shell_chrome_writer_audit_with_type_registry(
+        "fn update(mut apps: crate::collection_precedence::AppList) {\n\
+             apps[0].shell.chrome.session_state = 1;\n\
+         }",
+        false,
+        &known_struct_fields,
+        &collection_precedence_aliases,
+        &writer_module,
+    )
+    .expect("explicitly unrelated collection alias fixture should parse");
+    assert!(
+        explicitly_unrelated_collection_alias
+            .field_writes
+            .is_empty()
+            && explicitly_unrelated_collection_alias
+                .whole_state_writes
+                .is_empty(),
+        "an explicit unrelated collection import must shadow authority glob re-exports"
+    );
 
     let relative_authority_alias_file = syn::parse_file(
         "pub type BaseApp = super::NativeTuiApp;\n\
@@ -16934,9 +16974,10 @@ impl ShellChromeWriterVisitor {
                         .flatten();
                     let alias =
                         local_alias.or_else(|| scope.qualified_type_aliases.get(&qualified_name));
-                    if let Some(alias) = alias
-                        && resolving_aliases.insert(qualified_name.clone())
-                    {
+                    if let Some(alias) = alias {
+                        if !resolving_aliases.insert(qualified_name.clone()) {
+                            return None;
+                        }
                         let declaration_module = if local_alias.is_some() {
                             scope.module_path
                         } else {
@@ -16978,9 +17019,7 @@ impl ShellChromeWriterVisitor {
                             resolving_aliases,
                         );
                         resolving_aliases.remove(&qualified_name);
-                        if resolved.is_some() {
-                            return resolved;
-                        }
+                        return resolved;
                     }
                     for prefix_len in (1..normalized_path.len()).rev() {
                         let prefix = normalized_path[..prefix_len].join("::");
