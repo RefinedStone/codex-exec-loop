@@ -1371,18 +1371,18 @@ fn inline_supersession_inspection_renders_prepare_panels_inside_shell_frame() {
         .expect("inline supersession inspection render succeeds");
     let rendered = tui_testkit::screen_text(&terminal);
 
-    assert!(rendered.contains("Parallel / inline inspection"));
+    assert!(rendered.contains("Parallel Operations / inline inspection"));
     assert!(rendered.contains("Overview"));
-    assert!(rendered.contains("Delivery"));
-    assert!(rendered.contains("Capacity"));
-    assert!(rendered.contains("Tasks"));
+    assert!(rendered.contains("Agent Lanes"));
+    assert!(rendered.contains("Selected Lane"));
+    assert!(rendered.contains("Accepted Queue"));
     assert!(rendered.contains("Parallel Event Stream"));
-    assert!(rendered.contains("loading pool board"));
-    assert!(rendered.contains("loading distributor board"));
+    assert!(rendered.contains("PREPARING"));
+    assert!(rendered.contains("Waiting for the three-slot pool projection"));
     assert!(rendered.contains("Ctrl+R refresh"));
     assert!(rendered.contains("Ctrl+P off"));
-    assert!(rendered.contains(":peek agents"));
-    assert!(rendered.contains("Ctrl+O/Esc/Ctrl+C close"));
+    assert!(rendered.contains("V agent view"));
+    assert!(rendered.contains("Esc close"));
     assert!(!rendered.contains("Transcript /"));
     assert!(!rendered.contains("┌"));
 }
@@ -1466,10 +1466,12 @@ fn inline_supersession_deep_actor_and_matching_fallback_stay_visible() {
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
         .expect("inline supersession deep slot render succeeds");
     let pool_rendered = tui_testkit::screen_text(&terminal);
+    assert!(pool_rendered.contains("Selected Lane"));
     assert!(
-        pool_rendered.contains("> slot-11"),
-        "deep selected pool slot must be visible:\n{pool_rendered}"
+        pool_rendered.contains("slot-11  DELIVERY"),
+        "deep selected lane detail must remain visible:\n{pool_rendered}"
     );
+    assert!(pool_rendered.contains("task      Task 11"));
 
     app.shell.supersession_mud_ui_state.focus_next_zone();
     app.shell
@@ -1481,34 +1483,14 @@ fn inline_supersession_deep_actor_and_matching_fallback_stay_visible() {
         .expect("inline supersession selected roster render succeeds");
     let rendered = tui_testkit::screen_text(&terminal);
 
-    assert!(rendered.contains("Current / Diagnostics"));
+    assert!(rendered.contains("Agent Lanes"));
+    assert!(rendered.contains("Selected Lane"));
     assert!(
-        rendered.contains("> Task 11"),
-        "deep selected roster row must be visible:\n{rendered}"
+        rendered.contains("slot-11  DELIVERY"),
+        "actor focus must preserve the selected lane:\n{rendered}"
     );
-    assert!(!rendered.contains("> Task 1  "));
-
-    app.shell.supersession_mud_ui_state.focus_next_zone();
-    terminal
-        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
-        .expect("inline supersession selected detail fallback render succeeds");
-    let detail_rendered = tui_testkit::screen_text(&terminal);
-
-    assert!(detail_rendered.contains("> Current  Task 11"));
-    assert!(detail_rendered.contains("Latest  testing 11"));
-
-    app.shell.supersession_mud_ui_state.focus_next_zone();
-    app.shell
-        .supersession_mud_ui_state
-        .move_selection(&snapshot, 10);
-    terminal
-        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
-        .expect("inline supersession deep distributor render succeeds");
-    let distributor_rendered = tui_testkit::screen_text(&terminal);
-    assert!(
-        distributor_rendered.contains("> Task 11  ·  queued  ·  next"),
-        "deep selected distributor item must be visible:\n{distributor_rendered}"
-    );
+    assert!(rendered.contains("task      Task 11"));
+    assert!(rendered.contains("agent     agent-11"));
 }
 
 #[test]
@@ -1813,7 +1795,7 @@ fn inline_parallel_home_replaces_single_mode_transcript_when_overlay_hidden() {
         .expect("inline parallel home render succeeds");
     let rendered = tui_testkit::screen_text(&terminal);
 
-    assert!(rendered.contains("Parallel / inline inspection"));
+    assert!(rendered.contains("Parallel Operations / inline inspection"));
     assert!(rendered.contains("Parallel Event Stream"));
     assert!(rendered.contains("You: 안녕하세요"));
     assert!(!rendered.contains("Operator: first user word"));
@@ -1847,20 +1829,19 @@ fn inline_parallel_home_suppresses_startup_banner_on_empty_draft() {
         .expect("inline parallel empty draft render succeeds");
     let rendered = tui_testkit::screen_text(&terminal);
 
-    assert!(rendered.contains("Parallel / inline inspection"));
+    assert!(rendered.contains("Parallel Operations / inline inspection"));
     assert!(rendered.contains("Parallel Event Stream"));
-    assert!(rendered.contains("Parallel  ready"));
+    assert!(rendered.contains("READY"));
     assert!(!rendered.contains("█████"));
     assert!(!rendered.contains("╚═╝"));
 }
 
 #[test]
-fn inline_supersession_keeps_buffered_prompt_visible_in_compact_tail() {
+fn inline_supersession_focused_board_hides_buffered_prompt_until_close() {
     /*
-     * Supersession replaces the transcript with a dense inspection board while
-     * the prompt remains active below it. The compact tail must therefore keep
-     * the prompt suffix visible instead of letting planning detail rows consume
-     * the whole tail and leave the cursor over status copy.
+     * Explicit Parallel Operations is a focused inspection surface. The draft is
+     * preserved in conversation state, but the board owns the full main buffer
+     * until the operator closes it.
      */
     let mut terminal = Terminal::new(TestBackend::new(120, 24)).expect("test terminal");
     let mut app = make_test_app();
@@ -1890,13 +1871,17 @@ fn inline_supersession_keeps_buffered_prompt_visible_in_compact_tail() {
         .expect("inline supersession prompt render succeeds");
     let rendered = tui_testkit::screen_text(&terminal);
 
-    assert!(rendered.contains("> 안녕하세요?"));
-    assert!(rendered.contains("Enter send  |  Ctrl+J newline"));
-    assert!(
-        !rendered.contains("now: none"),
-        "planning detail rows should be clipped before they can hide the prompt:\n{rendered}"
-    );
-    assert_eq!(rendered.matches("╭ Task").count(), 1, "{rendered}");
+    assert!(!rendered.contains("> 안녕하세요?"));
+    assert!(!rendered.contains("Enter send  |  Ctrl+J newline"));
+    assert!(rendered.contains("Parallel Operations / inline inspection"));
+    assert!(rendered.contains("Command Hints"));
+    assert!(rendered.contains("accepted queue 0"));
+    assert!(rendered.contains("Esc close"));
+    let ConversationState::Ready(conversation) = &app.conversation.lifecycle.conversation_state
+    else {
+        panic!("expected ready conversation state");
+    };
+    assert_eq!(conversation.composer.input_buffer, "안녕하세요?");
 }
 
 #[test]
@@ -1936,11 +1921,11 @@ fn inline_supersession_command_hints_keep_controls_visible_when_compact() {
         "parallel off shortcut must stay visible in compact command hints:\n{rendered}"
     );
     assert!(
-        rendered.contains(":peek agents"),
-        "agent inspection command must stay visible in compact command hints:\n{rendered}"
+        rendered.contains("V agent view"),
+        "agent inspection shortcut must stay visible in compact command hints:\n{rendered}"
     );
     assert!(
-        rendered.contains("Ctrl+O/Esc/Ctrl+C close"),
+        rendered.contains("Esc close"),
         "close shortcuts must stay visible in compact command hints:\n{rendered}"
     );
 }
@@ -2038,11 +2023,13 @@ fn inline_supersession_narrow_snapshot_keeps_selected_timeline_visible() {
     assert!(rendered.contains("Distributor: slot-1"));
     assert!(rendered.contains("Agent agent-1: Timeline UI"));
     assert!(rendered.contains("Ledger: accepted Timeline UI"));
-    assert!(rendered.contains("head: idle"));
-    assert!(rendered.contains("Current"));
+    assert!(rendered.contains("Selected Lane"));
+    assert!(rendered.contains("slot-1 DELIVERY"));
+    assert!(rendered.contains("✓Commit"));
+    assert!(rendered.contains("✓Validation"));
     assert!(
-        rendered.contains("> Current"),
-        "selected session detail must survive the narrow layout:\n{rendered}"
+        rendered.contains("● now official"),
+        "selected lifecycle must survive the narrow layout:\n{rendered}"
     );
     assert!(!rendered.contains("commit_ready"));
 }
@@ -2101,7 +2088,7 @@ fn inline_parallel_home_keeps_loading_spinner_when_overlay_hidden() {
         .expect("inline parallel home loading render succeeds");
     let rendered = tui_testkit::screen_text(&terminal);
 
-    assert!(rendered.contains("Parallel / inline inspection"));
+    assert!(rendered.contains("Parallel Operations / inline inspection"));
     assert!(rendered.contains("prompt paused while setup completes"));
     assert!(
         ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]

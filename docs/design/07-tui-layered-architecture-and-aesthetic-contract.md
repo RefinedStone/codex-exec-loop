@@ -116,8 +116,9 @@ navigation intent cannot optimistically rewrite it.
   so a newer UI edit cannot be overwritten by an older frame.
 - Prompt focus has one policy shared by input and presentation. Exit and turn-steer dialogs remove
   prompt focus and hide the terminal cursor; closing either dialog restores the unchanged draft and
-  its exact cursor position. Supersession may retain prompt focus only while its loading lock is
-  clear.
+  its exact cursor position. Focused Supersession owns the inline inspection viewport, hides the
+  cursor, and consumes unhandled text so it cannot mutate the preserved composer. Closing it while
+  parallel mode remains enabled returns to the passive projection and restores composer focus.
 - It must reserve display density for long-running operator work, not marketing copy.
 - It must support Korean and wide-character prompt text without changing the surrounding layout
   contract.
@@ -191,6 +192,14 @@ navigation intent cannot optimistically rewrite it.
 - Popup overlays must use the shared Akra panel frame from `AkraTheme::panel_block`.
 - Overlay content should follow this order when the surface needs all sections: header, summary,
   primary content, status, keys.
+- Focused Supersession must remain inside the main-buffer model and use the complete 16-row live
+  viewport; it must not enter alternate-screen mode or move its panel chrome into host scrollback.
+- Parallel Operations must join pool, roster, bounded session detail, and distributor rows by exact
+  identity. It must render disagreement as `DESYNC`, missing facts as `unknown`, and accepted queue
+  work separately from active leases. Presentation must not infer gate completion from prose.
+- Lane selection must survive refresh reorder by slot/session identity. Wide layouts show
+  lifecycle, lanes, and selected detail in columns; narrow layouts show every lane before selected
+  detail. Both retain refresh, disable, inspect, agent-view, and close controls.
 - Every actual overlay identity change must leave the shell reducer as one typed
   `ShellOverlayTransition { from, to, exit_mode }`. The root coordinator has one exhaustive cleanup
   owner for all overlay variants and both exit modes; explicit close only dispatches

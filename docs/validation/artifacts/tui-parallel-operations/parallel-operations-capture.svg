@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1160" viewBox="0 0 1920 1160">
+  <style>
+    .title { font: 700 30px "Cascadia Mono", Consolas, monospace; fill: #f4f7fb; }
+    .meta { font: 16px "Cascadia Mono", Consolas, monospace; fill: #8290a7; }
+    .terminal { font: 14px "Cascadia Mono", Consolas, monospace; fill: #cbd5e5; white-space: pre; }
+    .terminal-small { font: 14px "Cascadia Mono", Consolas, monospace; fill: #cbd5e5; white-space: pre; }
+    .section { fill: #2de2c3; font-weight: 700; }
+    .success { fill: #57d98c; }
+    .active { fill: #64a9ff; }
+    .muted { fill: #8290a7; }
+    .warning { fill: #ffcb6b; }
+    .card-title { font: 700 18px "Cascadia Mono", Consolas, monospace; fill: #f4f7fb; }
+    .card-copy { font: 16px "Cascadia Mono", Consolas, monospace; fill: #aab6c9; }
+  </style>
+  <rect width="1920" height="1160" fill="#070b12"/>
+  <text x="54" y="54" class="title">Akra Parallel Operations</text>
+  <text x="54" y="84" class="meta">deterministic Ratatui capture · focused inline viewport · 160 / 80 columns</text>
+
+  <rect x="40" y="112" width="1840" height="420" rx="14" fill="#0b111c" stroke="#263246" stroke-width="2"/>
+  <text x="66" y="143" class="meta">WIDE · 160×16 · lifecycle + lanes + selected delivery gates</text>
+  <g class="terminal" xml:space="preserve">
+    <text x="66" y="178" class="section">Akra / Parallel Operations / inline inspection</text>
+    <text x="66" y="201"><tspan class="success">ON</tspan><tspan>  ·  </tspan><tspan class="warning">CLEANUP</tspan><tspan>  ·  focused inspection</tspan></text>
+    <text x="66" y="224" class="section">Overview</text>
+    <text x="66" y="247"><tspan class="warning">CLEANUP</tspan><tspan>  ·  slots 2/3  ·  accepted queue 3  ·  delivery 2</tspan></text>
+    <text x="66" y="270"><tspan class="success">No active blocker</tspan><tspan class="muted"> · unknown facts remain unknown</tspan></text>
+    <text x="66" y="293" class="section">Lifecycle</text>
+    <text x="330" y="293" class="section">Agent Lanes</text>
+    <text x="1110" y="293" class="section">Selected Lane</text>
+    <text x="66" y="316">● now merge pending</text>
+    <text x="330" y="316"><tspan class="active"> slot-1 RUNNING Implementation</tspan><tspan> · Commercial lane 1 · →Commit</tspan></text>
+    <text x="1110" y="316" class="warning">slot-2 REVIEW Verification · →Review</text>
+    <text x="66" y="339">00:26 merge pending</text>
+    <text x="330" y="339"><tspan class="warning">&gt;slot-2 REVIEW Verification</tspan><tspan> · Commercial lane 2 · →Review</tspan></text>
+    <text x="1110" y="339">Commercial lane 2 · agent-2 · 12m02s</text>
+    <text x="66" y="362">00:25 pr pending</text>
+    <text x="330" y="362"><tspan class="warning"> slot-3 CLEANUP Documentation</tspan><tspan> · Commercial lane 3 · →Cleanup</tspan></text>
+    <text x="1110" y="362">branch codex/para... · wt pool/s...</text>
+    <text x="66" y="385">00:24 official</text>
+    <text x="1110" y="385"><tspan class="success">✓Commit ✓Validation ✓PR</tspan><tspan> </tspan><tspan class="active">▶Review</tspan></text>
+    <text x="66" y="408">00:23 ledger refr...</text>
+    <text x="1110" y="408" class="muted">·Integration ·Remote verify ·Cleanup</text>
+    <text x="66" y="431" class="section">Accepted Queue</text>
+    <text x="66" y="454"><tspan class="warning">#4 DISPATCH</tspan><tspan>  Commercial lane 4</tspan></text>
+    <text x="66" y="477" class="muted">[12:30:00] Supervisor: typed operations event 5</text>
+    <text x="66" y="500"><tspan class="section">Command Hints</tspan><tspan>  Enter inspect · V agent view · Ctrl+R refresh · Ctrl+P off · Esc close</tspan></text>
+  </g>
+
+  <rect x="40" y="568" width="940" height="500" rx="14" fill="#0b111c" stroke="#263246" stroke-width="2"/>
+  <text x="66" y="599" class="meta">NARROW · 80×16 · lanes first, then selected lane</text>
+  <g class="terminal-small" xml:space="preserve">
+    <text x="66" y="634" class="section">Akra / Parallel Operations / inline inspection</text>
+    <text x="66" y="657"><tspan class="success">ON</tspan><tspan>  ·  </tspan><tspan class="warning">CLEANUP</tspan><tspan>  ·  focused inspection</tspan></text>
+    <text x="66" y="680" class="section">Overview</text>
+    <text x="66" y="703">CLEANUP · slots 2/3 · accepted queue 3 · delivery 2</text>
+    <text x="66" y="726"><tspan class="success">No active blocker</tspan><tspan class="muted"> · unknown facts remain unknown</tspan></text>
+    <text x="66" y="749" class="section">Agent Lanes</text>
+    <text x="66" y="772"><tspan class="active"> slot-1 RUNNING Implementation</tspan> · Commercial lane 1 · →Commit</text>
+    <text x="66" y="795"><tspan class="warning">&gt;slot-2 REVIEW Verification</tspan> · Commercial lane 2 · →Review</text>
+    <text x="66" y="818"><tspan class="warning"> slot-3 CLEANUP Documentation</tspan> · Commercial lane 3 · →Cleanup</text>
+    <text x="66" y="841" class="section">Selected Lane</text>
+    <text x="66" y="864">slot-2 REVIEW Verification · →Review</text>
+    <text x="66" y="887" class="section">Accepted Queue</text>
+    <text x="66" y="910"><tspan class="warning">#4 DISPATCH</tspan><tspan>  Commercial lane 4</tspan></text>
+    <text x="66" y="933" class="muted">[12:30:00] Supervisor: typed operations event 5</text>
+    <text x="66" y="956" class="section">Command Hints</text>
+    <text x="66" y="979">Enter inspect · V agent view · Ctrl+R refresh · Ctrl+P off · Esc close</text>
+  </g>
+
+  <rect x="1016" y="568" width="864" height="500" rx="14" fill="#0b111c" stroke="#263246" stroke-width="2"/>
+  <text x="1048" y="609" class="card-title">Commercial UX checks</text>
+  <rect x="1048" y="642" width="800" height="70" rx="10" fill="#0d1919" stroke="#1f8f7c"/>
+  <text x="1072" y="672" class="card-title success">✓ Truth before decoration</text>
+  <text x="1072" y="697" class="card-copy">DESYNC and unknown remain explicit; no prose-derived progress.</text>
+  <rect x="1048" y="730" width="800" height="70" rx="10" fill="#101827" stroke="#315f9e"/>
+  <text x="1072" y="760" class="card-title active">✓ One operator decision per frame</text>
+  <text x="1072" y="785" class="card-copy">One blocker, one selected lane, one next gate, one accepted queue.</text>
+  <rect x="1048" y="818" width="800" height="70" rx="10" fill="#17150f" stroke="#9b762d"/>
+  <text x="1072" y="848" class="card-title warning">✓ Full delivery boundary</text>
+  <text x="1072" y="873" class="card-copy">Commit → validation → PR → review → integration → verify → cleanup.</text>
+  <rect x="1048" y="906" width="800" height="70" rx="10" fill="#111722" stroke="#36445d"/>
+  <text x="1072" y="936" class="card-title">✓ Native inline behavior</text>
+  <text x="1072" y="961" class="card-copy">Stable identity selection, responsive resize, clean host scrollback.</text>
+  <text x="1048" y="1026" class="meta">Golden snapshots are the exact text authority; accents reconstruct AkraTheme semantics.</text>
+</svg>

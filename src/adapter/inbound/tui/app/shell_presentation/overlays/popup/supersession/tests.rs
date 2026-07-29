@@ -1,6 +1,7 @@
 use super::{
-    build_detail_lines, build_distributor_lines, build_parallel_event_stream_lines,
-    build_roster_lines,
+    DeliveryGateStatus, build_detail_lines, build_distributor_lines, build_operations_lane_lines,
+    build_parallel_event_stream_lines, build_roster_lines, delivery_gates,
+    operations_board_state_label, operations_lane,
 };
 use crate::adapter::inbound::tui::app::TuiLanguage;
 use crate::adapter::inbound::tui::app::parallel_supervisor_events::parallel_supervisor_event_line;
@@ -578,4 +579,174 @@ fn roster_and_detail_lines_surface_missing_slot_worktree_health() {
     assert!(
         detail_rendered.contains("slot health: slot blocked: lease exists but worktree is missing")
     );
+}
+
+#[test]
+fn operations_board_state_covers_operator_lifecycle_without_invented_progress() {
+    let ready = operations_snapshot(vec![ParallelModePoolSlotSnapshot::new(
+        "slot-1",
+        ParallelModePoolSlotState::Idle,
+        "prerelease",
+        "pool/slot-1",
+        "idle",
+    )]);
+    let running = operations_snapshot(vec![ParallelModePoolSlotSnapshot::new(
+        "slot-1",
+        ParallelModePoolSlotState::Running,
+        "agent/slot-1",
+        "pool/slot-1",
+        "agent-1 / task-1",
+    )]);
+    let cleanup = operations_snapshot(vec![ParallelModePoolSlotSnapshot::new(
+        "slot-1",
+        ParallelModePoolSlotState::AwaitingCleanup,
+        "agent/slot-1",
+        "pool/slot-1",
+        "agent-1 / task-1",
+    )]);
+    let blocked = operations_snapshot(vec![ParallelModePoolSlotSnapshot::new(
+        "slot-1",
+        ParallelModePoolSlotState::Blocked,
+        "agent/slot-1",
+        "pool/slot-1 missing",
+        "agent-1 / task-1",
+    )]);
+    let mut enabling = ready.clone();
+    enabling.pool.pool_root_label = "loading: pool reconcile".to_string();
+
+    assert_eq!(operations_board_state_label(false, false, &ready), "OFF");
+    assert_eq!(
+        operations_board_state_label(true, false, &enabling),
+        "ENABLING"
+    );
+    assert_eq!(operations_board_state_label(true, false, &ready), "READY");
+    assert_eq!(
+        operations_board_state_label(true, false, &running),
+        "RUNNING"
+    );
+    assert_eq!(
+        operations_board_state_label(true, false, &blocked),
+        "ATTENTION"
+    );
+    assert_eq!(
+        operations_board_state_label(true, false, &cleanup),
+        "CLEANUP"
+    );
+    assert_eq!(
+        operations_board_state_label(true, true, &running),
+        "REFRESHING · showing last snapshot"
+    );
+}
+
+#[test]
+fn operations_lane_surfaces_projection_disagreement_as_desync() {
+    let slot = ParallelModePoolSlotSnapshot::new(
+        "slot-1",
+        ParallelModePoolSlotState::Running,
+        "agent/slot-1",
+        "pool/slot-1",
+        "agent-1 / task-1",
+    )
+    .with_owner_identity("agent-1", "task-1", "session-a", None);
+    let mut snapshot = operations_snapshot(vec![slot]);
+    snapshot.roster = ParallelModeAgentRosterSnapshot::new(
+        vec![
+            ParallelModeAgentRosterEntry::new(
+                "agent-2",
+                "Wrong projected lease",
+                "slot-1",
+                "agent/slot-1",
+                "running",
+                "1m",
+                "running",
+            )
+            .with_lease_identity("task-1", "session-b", None),
+        ],
+        "empty",
+    );
+
+    let (wide, compact) = build_operations_lane_lines(&snapshot, Some("slot-1"), "|");
+    let rendered = wide
+        .into_iter()
+        .chain(compact)
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("DESYNC"));
+    assert!(rendered.contains("pool and roster identities disagree"));
+}
+
+#[test]
+fn delivery_gates_keep_unknown_unknown_and_map_typed_queue_state() {
+    let unknown_snapshot = operations_snapshot(vec![ParallelModePoolSlotSnapshot::new(
+        "slot-1",
+        ParallelModePoolSlotState::Idle,
+        "prerelease",
+        "pool/slot-1",
+        "idle",
+    )]);
+    let unknown_lane =
+        operations_lane(&unknown_snapshot, "slot-1").expect("idle lane should be projected");
+    assert!(
+        delivery_gates(&unknown_lane)
+            .iter()
+            .all(|gate| gate.status == DeliveryGateStatus::Unknown)
+    );
+
+    let mut review_snapshot = operations_snapshot(vec![ParallelModePoolSlotSnapshot::new(
+        "slot-1",
+        ParallelModePoolSlotState::Running,
+        "agent/slot-1",
+        "pool/slot-1",
+        "agent-1 / task-1",
+    )]);
+    review_snapshot.roster = ParallelModeAgentRosterSnapshot::new(
+        vec![ParallelModeAgentRosterEntry::new(
+            "agent-1",
+            "Review typed delivery",
+            "slot-1",
+            "agent/slot-1",
+            "merge_pending",
+            "review",
+            "waiting for merge",
+        )],
+        "empty",
+    );
+    review_snapshot.distributor = ParallelModeDistributorSnapshot::new(
+        vec![ParallelModeDistributorQueueItem::new(
+            "agent-1",
+            "Review typed delivery",
+            ParallelModeQueueItemState::MergePending,
+            "agent/slot-1",
+            "abc1234",
+            "waiting for merge",
+        )],
+        Vec::new(),
+        "merge pending",
+        "waiting for merge",
+    );
+    let review_lane =
+        operations_lane(&review_snapshot, "slot-1").expect("review lane should be projected");
+    let gates = delivery_gates(&review_lane);
+
+    assert!(gates[0].status == DeliveryGateStatus::Done);
+    assert!(gates[1].status == DeliveryGateStatus::Done);
+    assert!(gates[2].status == DeliveryGateStatus::Done);
+    assert!(gates[3].status == DeliveryGateStatus::Active);
+    assert!(gates[4].status == DeliveryGateStatus::Pending);
+    assert!(gates[5].status == DeliveryGateStatus::Pending);
+    assert!(gates[6].status == DeliveryGateStatus::Pending);
+}
+
+fn operations_snapshot(slots: Vec<ParallelModePoolSlotSnapshot>) -> ParallelModeSupervisorSnapshot {
+    ParallelModeSupervisorSnapshot::new(
+        ParallelModeSupervisorState::Supervise,
+        "/tmp/workspace",
+        ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "ready", slots),
+        ParallelModeAgentRosterSnapshot::new(Vec::new(), "no active agents"),
+        ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
+        ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
+        None,
+    )
 }

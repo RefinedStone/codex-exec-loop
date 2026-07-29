@@ -41,9 +41,17 @@ pub(super) fn build_inline_terminal_flow_layout(
         MAX_INLINE_INSPECTION_TAIL_HEIGHT
     };
     let _ = tail_lines;
-    let tail_height = projection
-        .tail_view
-        .rendered_height(area.width, tail_max_height);
+    // The explicit operations board is a focused inspection surface. It owns
+    // the full main buffer and exposes direct keys instead of a hidden composer.
+    // Passive parallel mode still uses ShellOverlay::Hidden and keeps the normal
+    // composer beneath its live board.
+    let tail_height = if projection.shell_overlay == ShellOverlay::Supersession {
+        0
+    } else {
+        projection
+            .tail_view
+            .rendered_height(area.width, tail_max_height)
+    };
     let inspection_constraint = if projection.shell_overlay == ShellOverlay::Hidden {
         // The prompt tail owns short viewports; transcript receives every remaining row.
         Constraint::Min(0)

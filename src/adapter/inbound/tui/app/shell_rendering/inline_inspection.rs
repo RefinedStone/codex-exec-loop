@@ -601,84 +601,224 @@ fn draw_inline_supersession_inspection(
     area: Rect,
     overlay_view: SupersessionOverlayView,
 ) {
+    if !overlay_view.focused_full_viewport {
+        let layout = passive_supersession_inspection_layout(&overlay_view, area);
+        render_inline_parallel_event_stream(frame, layout.events, overlay_view.event_lines);
+        render_inline_titled_panel(
+            frame,
+            layout.keys,
+            Line::from("Command Hints"),
+            overlay_view.key_lines,
+            true,
+        );
+        return;
+    }
+
+    let layout = supersession_inspection_layout(&overlay_view, area);
     let SupersessionOverlayView {
-        selection_visible,
+        focused_full_viewport: _,
         header_lines,
-        summary_lines,
-        capability_lines,
-        pool_lines,
-        roster_lines,
-        detail_lines,
-        distributor_lines,
+        overview_lines,
+        accepted_queue_lines,
+        timeline_lines,
+        lane_lines,
+        compact_lane_lines,
+        selected_lane_lines,
+        compact_selected_lane_lines,
+        event_lines,
         key_lines,
     } = overlay_view;
-    let orchestrator_lines = if selection_visible {
-        let mut lines = distributor_lines;
-        lines.extend(roster_lines);
-        lines
-    } else {
-        roster_lines
-    };
     let body_lines = take_panel_body_lines(header_lines);
-    let layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(inline_section_height(&body_lines, 4)),
-            Constraint::Length(inline_section_height(&summary_lines, 7)),
-            Constraint::Length(10),
-            Constraint::Min(8),
-            Constraint::Length(inline_section_height(&key_lines, 4)),
-        ])
-        .split(area);
-
     render_inline_titled_panel(
         frame,
-        layout[0],
-        inline_overlay_title("Parallel"),
+        layout.header,
+        inline_overlay_title("Parallel Operations"),
         body_lines,
         true,
     );
     render_inline_titled_panel(
         frame,
-        layout[1],
+        layout.overview,
         Line::from("Overview"),
-        summary_lines,
+        overview_lines,
         true,
     );
-    let status_layout = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(34),
-            Constraint::Percentage(33),
-            Constraint::Percentage(33),
-        ])
-        .split(layout[2]);
+
+    if area.width >= 116 {
+        let compact_columns = layout.operations.height < 12;
+        let operations_layout = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(17),
+                Constraint::Length(1),
+                Constraint::Percentage(50),
+                Constraint::Length(1),
+                Constraint::Min(0),
+            ])
+            .split(layout.operations);
+        render_inline_supersession_panel(
+            frame,
+            operations_layout[0],
+            Line::from("Lifecycle"),
+            timeline_lines,
+        );
+        render_inline_supersession_panel(
+            frame,
+            operations_layout[2],
+            Line::from("Agent Lanes"),
+            if compact_columns {
+                compact_lane_lines
+            } else {
+                lane_lines
+            },
+        );
+        render_inline_supersession_panel(
+            frame,
+            operations_layout[4],
+            Line::from("Selected Lane"),
+            if compact_columns {
+                compact_selected_lane_lines
+            } else {
+                selected_lane_lines
+            },
+        );
+    } else {
+        let lane_height = inline_section_height(&compact_lane_lines, 4)
+            .min(layout.operations.height.saturating_sub(2).max(2));
+        let operations_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(lane_height), Constraint::Min(2)])
+            .split(layout.operations);
+        render_inline_supersession_panel(
+            frame,
+            operations_layout[0],
+            Line::from("Agent Lanes"),
+            compact_lane_lines,
+        );
+        let mut compact_detail = compact_selected_lane_lines;
+        if !timeline_lines.is_empty() {
+            compact_detail.push(Line::styled("LIFECYCLE", AkraTheme::accent()));
+            compact_detail.extend(timeline_lines);
+        }
+        render_inline_supersession_panel(
+            frame,
+            operations_layout[1],
+            Line::from("Selected Lane"),
+            compact_detail,
+        );
+    }
 
     render_inline_supersession_panel(
         frame,
-        status_layout[0],
-        Line::from("Delivery"),
-        capability_lines,
+        layout.accepted_queue,
+        Line::from("Accepted Queue"),
+        accepted_queue_lines,
     );
-    render_inline_supersession_panel(frame, status_layout[1], Line::from("Capacity"), pool_lines);
-    render_inline_supersession_panel(
-        frame,
-        status_layout[2],
-        Line::from(if selection_visible {
-            "Current / Diagnostics"
-        } else {
-            "Tasks"
-        }),
-        orchestrator_lines,
-    );
-    render_inline_parallel_event_stream(frame, layout[3], detail_lines);
+    render_inline_parallel_event_stream(frame, layout.events, event_lines);
     render_inline_titled_panel(
         frame,
-        layout[4],
+        layout.keys,
         Line::from("Command Hints"),
         key_lines,
         true,
     );
+}
+
+#[derive(Clone, Copy)]
+struct SupersessionInspectionLayout {
+    header: Rect,
+    overview: Rect,
+    operations: Rect,
+    accepted_queue: Rect,
+    events: Rect,
+    keys: Rect,
+}
+
+fn passive_supersession_inspection_layout(
+    overlay_view: &SupersessionOverlayView,
+    area: Rect,
+) -> SupersessionInspectionLayout {
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(inline_section_height(&overlay_view.key_lines, 3)),
+        ])
+        .split(area);
+    SupersessionInspectionLayout {
+        header: Rect::default(),
+        overview: Rect::default(),
+        operations: Rect::default(),
+        accepted_queue: Rect::default(),
+        events: sections[0],
+        keys: sections[1],
+    }
+}
+
+fn supersession_inspection_layout(
+    overlay_view: &SupersessionOverlayView,
+    area: Rect,
+) -> SupersessionInspectionLayout {
+    let header_body_lines = overlay_view.header_lines.len().saturating_sub(1);
+    let header_height = (header_body_lines + 1).clamp(2, 3) as u16;
+    if area.height <= 18 {
+        let sections = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(2),
+                Constraint::Length(3),
+                Constraint::Length(6),
+                Constraint::Length(2),
+                Constraint::Min(1),
+                Constraint::Length(2),
+            ])
+            .split(area);
+        return SupersessionInspectionLayout {
+            header: sections[0],
+            overview: sections[1],
+            operations: sections[2],
+            accepted_queue: sections[3],
+            events: sections[4],
+            keys: sections[5],
+        };
+    }
+    let overview_height = inline_section_height(&overlay_view.overview_lines, 5);
+    let queue_height = inline_section_height(&overlay_view.accepted_queue_lines, 4);
+    let key_height = inline_section_height(&overlay_view.key_lines, 3);
+    let operations_height = if overlay_view.focused_full_viewport && area.width >= 116 {
+        if area.height >= 34 { 16 } else { 13 }
+    } else if overlay_view.focused_full_viewport {
+        if area.height >= 32 {
+            12
+        } else if area.height >= 26 {
+            10
+        } else {
+            7
+        }
+    } else if area.height >= 26 {
+        10
+    } else {
+        7
+    };
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(header_height),
+            Constraint::Length(overview_height),
+            Constraint::Length(operations_height),
+            Constraint::Length(queue_height),
+            Constraint::Min(3),
+            Constraint::Length(key_height),
+        ])
+        .split(area);
+    SupersessionInspectionLayout {
+        header: sections[0],
+        overview: sections[1],
+        operations: sections[2],
+        accepted_queue: sections[3],
+        events: sections[4],
+        keys: sections[5],
+    }
 }
 
 fn render_inline_supersession_panel(
@@ -687,9 +827,10 @@ fn render_inline_supersession_panel(
     title: Line<'static>,
     lines: Vec<Line<'static>>,
 ) {
-    let selected_line_index = lines
-        .iter()
-        .rposition(|line| line.to_string().starts_with("> "));
+    let selected_line_index = lines.iter().rposition(|line| {
+        let text = line.to_string();
+        text.starts_with("> ") || text.starts_with('▌')
+    });
     let visible_rows = area.height.saturating_sub(1) as usize;
     let scroll_offset =
         selected_content_scroll_offset(&lines, selected_line_index, area.width, visible_rows)
@@ -759,27 +900,15 @@ pub(super) fn parallel_event_stream_visible_rows(
     overlay_view: &SupersessionOverlayView,
     area: Rect,
 ) -> usize {
-    let body_lines = overlay_view
-        .header_lines
-        .iter()
-        .skip(1)
-        .cloned()
-        .collect::<Vec<_>>();
-    let layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(inline_section_height(&body_lines, 4)),
-            Constraint::Length(inline_section_height(&overlay_view.summary_lines, 7)),
-            Constraint::Length(10),
-            Constraint::Min(8),
-            Constraint::Length(inline_section_height(&overlay_view.key_lines, 4)),
-        ])
-        .split(area);
-
+    let layout = if overlay_view.focused_full_viewport {
+        supersession_inspection_layout(overlay_view, area)
+    } else {
+        passive_supersession_inspection_layout(overlay_view, area)
+    };
     parallel_event_stream_visible_rows_for_lines(
-        &overlay_view.detail_lines,
-        layout[3].width,
-        layout[3],
+        &overlay_view.event_lines,
+        layout.events.width,
+        layout.events,
     )
 }
 fn draw_inline_queue_inspection(frame: &mut Frame<'_>, area: Rect, overlay_view: QueueOverlayView) {

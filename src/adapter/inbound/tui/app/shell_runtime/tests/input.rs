@@ -230,8 +230,8 @@ fn tab_cannot_steer_the_same_draft_while_queue_registration_is_pending() {
 #[test]
 fn supersession_overlay_blocks_prompt_input_while_loading() {
     /*
-     * Supersession overlay는 loading 중에만 일반 prompt 입력을 막는다. 이 시점에는
-     * pool reset/reconcile이 진행 중이라 새 prompt 작성과 섞이면 상태를 읽기 어렵다.
+     * Loading 중인 Parallel Operations도 focused board와 동일하게 일반 prompt
+     * 입력을 소유한다. Pool reset/reconcile 상태가 보이지 않는 draft와 섞이면 안 된다.
      */
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();
@@ -268,10 +268,11 @@ fn supersession_overlay_blocks_prompt_input_while_loading() {
 }
 
 #[test]
-fn supersession_overlay_allows_prompt_input_after_loading_finishes() {
+fn supersession_overlay_owns_prompt_input_after_loading_finishes() {
     /*
-     * Loading이 끝나 concrete supervisor snapshot이 들어오면 Supersession board를 열어 둔 채로도
-     * prompt editing은 다시 가능해야 한다. Ctrl+R/Ctrl+P 같은 board shortcut만 overlay가 계속 소유한다.
+     * Concrete snapshot 이후에도 focused Parallel Operations는 full viewport를
+     * 소유한다. 보이지 않는 composer로 문자가 새면 안 되며, prompt 편집은
+     * board를 닫은 뒤에만 재개된다.
      */
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();
@@ -299,7 +300,7 @@ fn supersession_overlay_allows_prompt_input_after_loading_finishes() {
     else {
         panic!("expected ready conversation state");
     };
-    assert_eq!(conversation.composer.input_buffer, "a");
+    assert!(conversation.composer.input_buffer.is_empty());
     assert_eq!(
         runtime.app().shell.chrome.shell_overlay,
         ShellOverlay::Supersession
@@ -308,11 +309,12 @@ fn supersession_overlay_allows_prompt_input_after_loading_finishes() {
 }
 
 #[test]
-fn supersession_overlay_routes_prompt_to_parallel_task_intake_after_loading_finishes() {
+fn supersession_overlay_requires_close_before_parallel_task_intake_then_reopens() {
     /*
-     * Supersession MUD navigation must not steal ordinary composer keys once the
-     * supervisor board is concrete. The footer still advertises Enter send, so a
-     * ready board has to let Space edit the prompt and Enter start the turn.
+     * Enter on the focused operations board inspects its selected lane and must
+     * not submit a buffered draft. Closing the board restores the ordinary
+     * composer, after which the same draft may enter parallel task intake. The
+     * accepted intake then reopens operations so dispatch progress is visible.
      */
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();
@@ -332,18 +334,42 @@ fn supersession_overlay_routes_prompt_to_parallel_task_intake_after_loading_fini
             ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
             None,
         )));
-    for character in "run".chars() {
+    for character in "run next".chars() {
         runtime.app_mut().push_input_character(character);
     }
     runtime.take_redraw_request();
 
     runtime.handle_terminal_event(Event::Key(KeyEvent::new(
-        KeyCode::Char(' '),
+        KeyCode::Enter,
         KeyModifiers::empty(),
     )));
-    for character in "next".chars() {
-        runtime.app_mut().push_input_character(character);
-    }
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
+        panic!("expected ready conversation state");
+    };
+    assert_eq!(conversation.composer.input_buffer, "run next");
+    assert!(conversation.messages.is_empty());
+    assert_eq!(
+        runtime.app().shell.chrome.shell_overlay,
+        ShellOverlay::Supersession
+    );
+    assert!(
+        !runtime
+            .app()
+            .parallel_supervisor_event_lines()
+            .iter()
+            .any(|line| line.to_string().contains("Task Intake"))
+    );
+
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::Esc,
+        KeyModifiers::empty(),
+    )));
+    assert_eq!(
+        runtime.app().shell.chrome.shell_overlay,
+        ShellOverlay::Hidden
+    );
     runtime.handle_terminal_event(Event::Key(KeyEvent::new(
         KeyCode::Enter,
         KeyModifiers::empty(),
@@ -387,8 +413,8 @@ fn supersession_overlay_routes_prompt_to_parallel_task_intake_after_loading_fini
     assert!(event_lines.contains("You: operator prompt submitted / chars: 8"));
     assert!(!event_lines.contains("You: run next"));
     assert!(
-        event_lines.contains("Task Intake: committed task"),
-        "Enter should route the buffered prompt through task intake: {event_lines}"
+        event_lines.contains("Task Intake: task generation started"),
+        "Enter should route the buffered prompt into task intake before any platform-specific authority result: {event_lines}"
     );
     assert_eq!(
         runtime.app().shell.chrome.shell_overlay,
@@ -498,31 +524,30 @@ fn parallel_projection_refresh_preserves_supersession_overlay_focus_and_selectio
      */
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();
-    let build_snapshot = |pool_status: &str| {
+    let build_snapshot = |pool_status: &str, reverse_slots: bool| {
+        let mut slots = vec![
+            ParallelModePoolSlotSnapshot::new(
+                "slot-1",
+                ParallelModePoolSlotState::Idle,
+                "prerelease",
+                "slot-1",
+                "idle",
+            ),
+            ParallelModePoolSlotSnapshot::new(
+                "slot-2",
+                ParallelModePoolSlotState::Running,
+                "akra-agent/slot-2/mud",
+                "slot-2",
+                "agent-2",
+            ),
+        ];
+        if reverse_slots {
+            slots.reverse();
+        }
         ParallelModeSupervisorSnapshot::new(
             ParallelModeSupervisorState::Supervise,
             workspace_directory.clone(),
-            ParallelModePoolBoardSnapshot::new(
-                2,
-                "/tmp/pool",
-                pool_status,
-                vec![
-                    ParallelModePoolSlotSnapshot::new(
-                        "slot-1",
-                        ParallelModePoolSlotState::Idle,
-                        "prerelease",
-                        "slot-1",
-                        "idle",
-                    ),
-                    ParallelModePoolSlotSnapshot::new(
-                        "slot-2",
-                        ParallelModePoolSlotState::Running,
-                        "akra-agent/slot-2/mud",
-                        "slot-2",
-                        "agent-2",
-                    ),
-                ],
-            ),
+            ParallelModePoolBoardSnapshot::new(2, "/tmp/pool", pool_status, slots),
             ParallelModeAgentRosterSnapshot::new(
                 vec![ParallelModeAgentRosterEntry::new(
                     "agent-2",
@@ -544,13 +569,13 @@ fn parallel_projection_refresh_preserves_supersession_overlay_focus_and_selectio
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
     runtime
         .app_mut()
-        .set_parallel_mode_supervisor_snapshot_for_test(Some(build_snapshot("running")));
+        .set_parallel_mode_supervisor_snapshot_for_test(Some(build_snapshot("running", false)));
     runtime.handle_terminal_event(Event::Key(KeyEvent::new(
         KeyCode::Down,
         KeyModifiers::empty(),
     )));
 
-    let refreshed_snapshot = build_snapshot("running / refreshed");
+    let refreshed_snapshot = build_snapshot("running / refreshed", true);
     let (epoch_id, effect_id) = runtime
         .app_mut()
         .mark_parallel_mode_supervisor_refresh_in_flight_for_test();
@@ -576,7 +601,15 @@ fn parallel_projection_refresh_preserves_supersession_overlay_focus_and_selectio
             .shell
             .supersession_mud_ui_state
             .selected_room_index(),
-        1
+        0
+    );
+    assert_eq!(
+        runtime
+            .app()
+            .shell
+            .supersession_mud_ui_state
+            .selected_lane_slot_id(&refreshed_snapshot),
+        Some("slot-2")
     );
     assert_eq!(
         runtime.app().parallel_mode_supervisor_snapshot(),
@@ -594,6 +627,66 @@ fn parallel_projection_refresh_preserves_supersession_overlay_focus_and_selectio
             .as_deref(),
         Some(&refreshed_snapshot)
     );
+}
+
+#[test]
+fn supersession_v_opens_agent_view_without_mutating_the_buffered_prompt() {
+    let mut runtime = make_test_runtime();
+    let workspace_directory = runtime.app().current_workspace_directory();
+    runtime.app_mut().shell.chrome.shell_overlay = ShellOverlay::Supersession;
+    runtime.app_mut().set_parallel_mode_enabled_for_test(true);
+    runtime
+        .app_mut()
+        .set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Supervise,
+            workspace_directory,
+            ParallelModePoolBoardSnapshot::new(
+                1,
+                "/tmp/pool",
+                "running",
+                vec![ParallelModePoolSlotSnapshot::new(
+                    "slot-1",
+                    ParallelModePoolSlotState::Running,
+                    "akra-agent/slot-1/operations",
+                    "slot-1",
+                    "agent-1",
+                )],
+            ),
+            ParallelModeAgentRosterSnapshot::new(
+                vec![ParallelModeAgentRosterEntry::new(
+                    "agent-1",
+                    "Operations lane",
+                    "slot-1",
+                    "akra-agent/slot-1/operations",
+                    "running",
+                    "01m00s",
+                    "working",
+                )],
+                "one active agent",
+            ),
+            ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
+            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
+            None,
+        )));
+    for character in "preserve this draft".chars() {
+        runtime.app_mut().push_input_character(character);
+    }
+
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::Char('v'),
+        KeyModifiers::NONE,
+    )));
+
+    assert_eq!(
+        runtime.app().shell.chrome.shell_overlay,
+        ShellOverlay::ParallelPeek
+    );
+    let ConversationState::Ready(conversation) =
+        &runtime.app().conversation.lifecycle.conversation_state
+    else {
+        panic!("expected ready conversation state");
+    };
+    assert_eq!(conversation.composer.input_buffer, "preserve this draft");
 }
 
 #[test]

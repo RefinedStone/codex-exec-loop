@@ -273,10 +273,46 @@ fn build_supervisor_detail_from_context(
     } else {
         "parallel mode is off / supervisor detail is read-only"
     };
-    ParallelModeSupervisorDetailSnapshot::new(
-        selected_runtime_session_detail(context, &history, &queue_records),
-        empty_state,
-    )
+    let selected = selected_runtime_session_detail(context, &history, &queue_records);
+    let lane_sessions = bounded_lane_session_details(context, &history, selected.as_ref());
+    ParallelModeSupervisorDetailSnapshot::new(selected, empty_state)
+        .with_lane_sessions(lane_sessions)
+}
+
+fn bounded_lane_session_details(
+    context: &PoolRuntimeContext,
+    history: &[ParallelModeAgentSessionDetailSnapshot],
+    selected: Option<&ParallelModeAgentSessionDetailSnapshot>,
+) -> Vec<ParallelModeAgentSessionDetailSnapshot> {
+    /*
+     * The operations board needs detail for every currently leased slot, but it
+     * must not turn the supervisor snapshot into an unbounded session-history
+     * export. Join each live lease with its exact session key, then retain the
+     * selected delivery head when it is no longer represented by a live lease.
+     */
+    let mut details = context
+        .slot_leases
+        .values()
+        .map(|lease| {
+            let persisted = history
+                .iter()
+                .find(|detail| detail.session_key == lease_session_key(lease))
+                .cloned();
+            ParallelModeAgentSessionDetailSnapshot::live_for_lease(
+                lease,
+                persisted,
+                live_detail_defaults(),
+            )
+        })
+        .collect::<Vec<_>>();
+    if let Some(selected) = selected
+        && !details
+            .iter()
+            .any(|detail| detail.session_key == selected.session_key)
+    {
+        details.push(selected.clone());
+    }
+    details
 }
 
 /*

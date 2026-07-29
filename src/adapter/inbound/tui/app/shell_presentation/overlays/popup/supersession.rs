@@ -1,20 +1,21 @@
 #[cfg(test)]
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use ratatui::text::{Line, Span};
 
 use crate::adapter::inbound::tui::supersession_mud::{
-    ParallelModeProgressSummary, SupersessionMudFocusZone, SupersessionMudUiState,
-    build_supersession_mud_view, parallel_mode_progress_summary,
+    ParallelModeProgressSummary, SupersessionMudUiState, parallel_mode_progress_summary,
 };
 use crate::domain::parallel_mode::{
-    ParallelModeDistributorSnapshot, ParallelModePoolBoardSnapshot, ParallelModeSupervisorSnapshot,
+    ParallelModeAgentRosterEntry, ParallelModeAgentSessionDetailSnapshot,
+    ParallelModeDistributorQueueItem, ParallelModeDistributorSnapshot,
+    ParallelModePoolBoardSnapshot, ParallelModePoolSlotSnapshot, ParallelModePoolSlotState,
+    ParallelModeQueueItemState, ParallelModeSupervisorSnapshot,
 };
-#[cfg(test)]
-use crate::domain::parallel_mode::{ParallelModePoolSlotSnapshot, ParallelModePoolSlotState};
 
 use super::super::super::super::parallel_supervisor_events::parallel_supervisor_snapshot_stream_lines;
-use super::super::super::super::{AkraTheme, TuiLanguage};
+use super::super::super::super::{AkraTheme, ShellOverlay, TuiLanguage};
 use super::super::super::ConversationScreenModel;
 use super::SupersessionOverlayView;
 
@@ -31,106 +32,78 @@ pub(crate) fn build_supersession_overlay_view(
     let supervisor_snapshot = &screen_model.parallel_mode_supervisor;
     let planning_projection = &screen_model.planning_runtime_projection;
     let activity_frame = supersession_activity_frame(screen_model.animation_elapsed_millis);
-    let mud_view = build_supersession_mud_view(supervisor_snapshot, mud_ui_state);
     let progress = parallel_mode_progress_summary(
         supervisor_snapshot,
         planning_projection.queue_projection(),
         screen_model.parallel_mode_control_effect_in_flight,
     );
-    /*
-    The core app projection remains the first source for live readiness and
-    supervisor snapshots. This adapter only chooses popup grouping and copy, so service-layer
-    invariants such as queue ordering, pool reconciliation, and official completion
-    refresh stay testable outside ratatui rendering.
-    */
-    let summary_lines = build_summary_lines(
+    let selected_slot_id = mud_ui_state.selected_lane_slot_id(supervisor_snapshot);
+    let selected_lane =
+        selected_slot_id.and_then(|slot_id| operations_lane(supervisor_snapshot, slot_id));
+    let (accepted_queue_lines, accepted_queue_pressure) =
+        build_accepted_queue_lines(screen_model, supervisor_snapshot);
+    let overview_lines = build_operations_overview_lines(
         screen_model,
-        mud_ui_state,
         readiness_snapshot,
         supervisor_snapshot,
         &progress,
+        selected_lane.as_ref(),
+        accepted_queue_pressure,
     );
-    let capability_lines = build_distributor_lines_with_mud(
-        &supervisor_snapshot.distributor,
-        if mud_ui_state.focused_zone() == SupersessionMudFocusZone::ExitCorridor {
-            &mud_view.distributor_lines
-        } else {
-            &[]
-        },
-    );
-    let pool_lines = build_pool_lines_with_mud(
-        &supervisor_snapshot.pool,
-        activity_frame,
-        if mud_ui_state.focused_zone() == SupersessionMudFocusZone::RealmMap {
-            &mud_view.pool_lines
-        } else {
-            &[]
-        },
-    );
-    let roster_lines = if matches!(
-        mud_ui_state.focused_zone(),
-        SupersessionMudFocusZone::RealmMap | SupersessionMudFocusZone::ExitCorridor
-    ) {
-        mud_view
-            .roster_lines
-            .iter()
-            .cloned()
-            .map(Line::from)
-            .chain(build_orchestrator_lines(&supervisor_snapshot.distributor))
-            .collect::<Vec<_>>()
-    } else {
-        build_orchestrator_lines(&supervisor_snapshot.distributor)
-    };
-    let detail_lines = build_parallel_event_stream_lines(
+    let (lane_lines, compact_lane_lines) =
+        build_operations_lane_lines(supervisor_snapshot, selected_slot_id, activity_frame);
+    let timeline_lines = build_selected_lane_timeline_lines(selected_lane.as_ref());
+    let (selected_lane_lines, compact_selected_lane_lines) =
+        build_selected_lane_detail_lines(screen_model, supervisor_snapshot, selected_lane.as_ref());
+    let event_lines = build_parallel_event_stream_lines(
         supervisor_snapshot,
         screen_model.parallel_supervisor_event_lines.clone(),
         screen_model.tui_language,
     );
-    let distributor_lines = match mud_ui_state.focused_zone() {
-        SupersessionMudFocusZone::Actors => mud_view.roster_lines,
-        SupersessionMudFocusZone::QuestLog => mud_view.detail_lines,
-        SupersessionMudFocusZone::RealmMap | SupersessionMudFocusZone::ExitCorridor => Vec::new(),
-    }
-    .into_iter()
-    .map(Line::from)
-    .collect::<Vec<_>>();
+    let focused_full_viewport = screen_model.shell_overlay == ShellOverlay::Supersession;
     let key_lines = build_command_hint_lines(
         screen_model.parallel_mode_enabled,
         screen_model.parallel_mode_loading_prompt_indicator_visible,
         readiness_snapshot.is_some_and(|snapshot| snapshot.allows_parallel_mode()),
-    );
-    let selection_visible = matches!(
-        mud_ui_state.focused_zone(),
-        SupersessionMudFocusZone::Actors | SupersessionMudFocusZone::QuestLog
+        focused_full_viewport,
     );
 
     SupersessionOverlayView {
-        selection_visible,
+        focused_full_viewport,
         header_lines: vec![
-            AkraTheme::title_line("Parallel", " / live workspace"),
+            AkraTheme::title_line("Parallel Operations", ""),
             Line::styled(
                 format!(
-                    "{}  ·  {}",
+                    "{}  ·  {}  ·  {}",
                     if is_pending_pool_board(&supervisor_snapshot.pool) {
-                        format!("{activity_frame} Preparing workspace")
+                        format!("{activity_frame} PREPARING")
+                    } else if screen_model.parallel_mode_enabled {
+                        "ON".to_string()
                     } else {
-                        "Live workspace".to_string()
+                        "OFF".to_string()
                     },
-                    if screen_model.parallel_mode_loading_prompt_indicator_visible {
-                        "prompt paused while setup completes"
+                    operations_board_state_label(
+                        screen_model.parallel_mode_enabled,
+                        screen_model.parallel_mode_control_effect_in_flight,
+                        supervisor_snapshot,
+                    ),
+                    if focused_full_viewport {
+                        "focused inspection"
                     } else {
-                        "prompt available"
+                        "composer available"
                     }
                 ),
                 AkraTheme::subtle(),
             ),
         ],
-        summary_lines,
-        capability_lines,
-        pool_lines,
-        roster_lines,
-        detail_lines,
-        distributor_lines,
+        overview_lines,
+        accepted_queue_lines,
+        timeline_lines,
+        lane_lines,
+        compact_lane_lines,
+        selected_lane_lines,
+        compact_selected_lane_lines,
+        event_lines,
         key_lines,
     }
 }
@@ -139,158 +112,829 @@ fn build_command_hint_lines(
     parallel_mode_enabled: bool,
     prompt_input_locked: bool,
     readiness_allows_parallel_mode: bool,
+    focused_full_viewport: bool,
 ) -> Vec<Line<'static>> {
     /*
      * Inline command hints can be clipped to a single body row on compact terminals.
      * Keep the board-level actions on the first row so the visible row never degrades
      * to only "Ctrl+R" while off/close/peek remain hidden below it.
      */
-    let primary = if parallel_mode_enabled {
-        "Ctrl+R refresh  ·  Ctrl+P off  ·  :peek agents  ·  Ctrl+O/Esc/Ctrl+C close"
+    let primary = if parallel_mode_enabled && focused_full_viewport {
+        "Enter inspect  ·  V agent view  ·  Ctrl+R refresh  ·  Ctrl+P off  ·  Esc close"
+    } else if parallel_mode_enabled {
+        "Ctrl+O board  ·  :parallel refresh  ·  :peek agents  ·  :parallel off"
     } else if readiness_allows_parallel_mode {
         "Ctrl+R refresh  ·  :parallel enable  ·  Ctrl+O/Esc/Ctrl+C close"
     } else {
         "Ctrl+R refresh  ·  fix readiness then :parallel  ·  Ctrl+O/Esc/Ctrl+C close"
     };
-    let secondary = if prompt_input_locked {
+    let secondary = if focused_full_viewport && prompt_input_locked {
         "Tab section  ·  ↑↓ select  ·  Enter/Space inspect"
+    } else if focused_full_viewport {
+        "Tab section  ·  ↑↓ select  ·  Enter/Space inspect  ·  V opens agent picker"
+    } else if prompt_input_locked {
+        "Parallel setup in progress  ·  draft preserved  ·  Ctrl+O opens operations"
     } else {
-        "Tab section  ·  ↑↓ select  ·  Enter sends prompt when composer is active"
+        "Enter sends prompt  ·  Ctrl+O opens operations"
     };
 
     vec![AkraTheme::key_line(primary), AkraTheme::key_line(secondary)]
 }
 
-fn build_summary_lines(
+#[derive(Clone, Copy)]
+struct OperationsLane<'a> {
+    slot: &'a ParallelModePoolSlotSnapshot,
+    roster: Option<&'a ParallelModeAgentRosterEntry>,
+    detail: Option<&'a ParallelModeAgentSessionDetailSnapshot>,
+    queue_item: Option<&'a ParallelModeDistributorQueueItem>,
+    discrepancy: Option<&'static str>,
+}
+
+fn operations_lane<'a>(
+    snapshot: &'a ParallelModeSupervisorSnapshot,
+    slot_id: &str,
+) -> Option<OperationsLane<'a>> {
+    let slot = snapshot
+        .pool
+        .slots
+        .iter()
+        .find(|slot| slot.slot_id == slot_id)?;
+    let roster = snapshot
+        .roster
+        .entries
+        .iter()
+        .find(|entry| entry.slot_id == slot.slot_id);
+    let detail = snapshot
+        .detail
+        .session_for_lane(&slot.slot_id, roster.map(|entry| entry.agent_id.as_str()));
+    let queue_item = queue_item_for_lane(&snapshot.distributor, slot, roster, detail);
+    Some(OperationsLane {
+        slot,
+        roster,
+        detail,
+        queue_item,
+        discrepancy: lane_projection_discrepancy(slot, roster),
+    })
+}
+
+fn queue_item_for_lane<'a>(
+    distributor: &'a ParallelModeDistributorSnapshot,
+    slot: &ParallelModePoolSlotSnapshot,
+    roster: Option<&ParallelModeAgentRosterEntry>,
+    detail: Option<&ParallelModeAgentSessionDetailSnapshot>,
+) -> Option<&'a ParallelModeDistributorQueueItem> {
+    distributor.queue_items.iter().find(|item| {
+        if let Some(identity) = item.identity.as_deref() {
+            return detail.is_some_and(|detail| identity.session_key == detail.session_key)
+                || slot.owner_identity.as_ref().is_some_and(|owner| {
+                    identity.session_key == owner.session_key
+                        && identity.slot_id == slot.slot_id
+                        && identity.task_id == owner.task_id
+                });
+        }
+        roster.is_some_and(|entry| {
+            item.source_agent == entry.agent_id && item.branch_name == entry.branch_name
+        })
+    })
+}
+
+fn lane_projection_discrepancy(
+    slot: &ParallelModePoolSlotSnapshot,
+    roster: Option<&ParallelModeAgentRosterEntry>,
+) -> Option<&'static str> {
+    let slot_requires_roster = matches!(
+        slot.state,
+        ParallelModePoolSlotState::Leased
+            | ParallelModePoolSlotState::Running
+            | ParallelModePoolSlotState::AwaitingCleanup
+    );
+    let Some(roster) = roster else {
+        return slot_requires_roster.then_some("lease has no roster row");
+    };
+    if slot.state == ParallelModePoolSlotState::Idle {
+        return Some("idle slot still has a roster row");
+    }
+    match (slot.owner_identity.as_ref(), roster.lease_identity.as_ref()) {
+        (Some(owner), Some(lease)) => (owner.agent_id != roster.agent_id
+            || owner.task_id != lease.task_id
+            || owner.session_key != lease.session_key)
+            .then_some("pool and roster identities disagree"),
+        (Some(_), None) => Some("roster lease identity is unknown"),
+        (None, Some(_)) => Some("pool owner identity is unknown"),
+        (None, None) => None,
+    }
+}
+
+fn operations_board_state_label(
+    mode_enabled: bool,
+    refreshing: bool,
+    snapshot: &ParallelModeSupervisorSnapshot,
+) -> &'static str {
+    if !mode_enabled {
+        return "OFF";
+    }
+    if is_pending_pool_board(&snapshot.pool) {
+        return "ENABLING";
+    }
+    if refreshing {
+        return "REFRESHING · showing last snapshot";
+    }
+    if snapshot.pool.blocked_slots + snapshot.pool.missing_slots + snapshot.pool.unavailable_slots
+        > 0
+    {
+        return "ATTENTION";
+    }
+    if snapshot.pool.awaiting_cleanup_slots > 0 {
+        return "CLEANUP";
+    }
+    if snapshot.pool.leased_slots + snapshot.pool.running_slots > 0 {
+        return "RUNNING";
+    }
+    "READY"
+}
+
+fn build_operations_overview_lines(
     screen_model: &ConversationScreenModel<'_>,
-    mud_ui_state: &SupersessionMudUiState,
     readiness_snapshot: Option<&crate::domain::parallel_mode::ParallelModeReadinessSnapshot>,
-    supervisor_snapshot: &ParallelModeSupervisorSnapshot,
+    snapshot: &ParallelModeSupervisorSnapshot,
     progress: &ParallelModeProgressSummary,
+    selected_lane: Option<&OperationsLane<'_>>,
+    accepted_queue_rows: usize,
 ) -> Vec<Line<'static>> {
-    /*
-    Summary lines are the popup's triage header: readiness tells whether parallel
-    mode can be enabled, pool and roster summaries show dispatch capacity, and the
-    distributor compact summary shows whether completed work is stuck downstream.
-    */
+    let active = snapshot.pool.leased_slots + snapshot.pool.running_slots;
     let mut lines = vec![Line::from(vec![
-        Span::styled("Parallel", AkraTheme::accent()),
-        Span::raw(format!("  {}", progress.compact_line())),
+        Span::styled(
+            operations_board_state_label(
+                screen_model.parallel_mode_enabled,
+                screen_model.parallel_mode_control_effect_in_flight,
+                snapshot,
+            ),
+            if progress.attention > 0 {
+                AkraTheme::warning()
+            } else {
+                AkraTheme::brand()
+            },
+        ),
+        Span::raw(format!(
+            "  ·  slots {active}/{}  ·  accepted queue {accepted_queue_rows}  ·  delivery {}",
+            snapshot.pool.configured_size,
+            snapshot.distributor.queue_depth()
+        )),
     ])];
-    lines.push(build_current_task_line(
-        screen_model,
-        mud_ui_state,
-        supervisor_snapshot,
-        progress,
-    ));
+    if let Some(blocker) = operations_blocker(screen_model, snapshot, selected_lane) {
+        lines.push(Line::from(vec![
+            Span::styled("BLOCKER  ", AkraTheme::danger()),
+            Span::styled(truncate_timeline_text(&blocker, 112), AkraTheme::warning()),
+        ]));
+    } else {
+        lines.push(Line::styled(
+            "No active blocker · unknown facts remain unknown",
+            AkraTheme::subtle(),
+        ));
+    }
     lines.push(Line::styled(
         format!(
             "{}  ·  {}",
             readiness_snapshot
-                .map(|snapshot| snapshot.readiness_label().to_string())
-                .unwrap_or_else(|| "checking readiness".to_string()),
-            truncate_timeline_text(&supervisor_snapshot.workspace_path, 82)
+                .map(|readiness| readiness.readiness_label())
+                .unwrap_or("readiness unknown"),
+            truncate_timeline_text(&snapshot.workspace_path, 104)
         ),
         AkraTheme::muted(),
     ));
-    if let Some(alert) = readiness_snapshot.and_then(|snapshot| snapshot.top_alert.as_deref()) {
-        lines.push(Line::styled(
-            format!("Needs attention  ·  {alert}"),
-            AkraTheme::warning(),
-        ));
-    } else if let Some(notice) = supervisor_snapshot.top_notice.as_deref() {
-        lines.push(Line::styled(
-            format!("Update  ·  {notice}"),
-            AkraTheme::muted(),
-        ));
-    }
-    if let Some(reason) = screen_model
-        .last_parallel_mode_dispatch_withheld_reason
-        .as_deref()
-    {
-        lines.push(Line::styled(
-            format!("Waiting  ·  {reason}"),
-            AkraTheme::warning(),
-        ));
-    }
-
     lines
 }
 
-fn build_current_task_line(
+fn operations_blocker(
     screen_model: &ConversationScreenModel<'_>,
-    mud_ui_state: &SupersessionMudUiState,
-    supervisor_snapshot: &ParallelModeSupervisorSnapshot,
-    progress: &ParallelModeProgressSummary,
-) -> Line<'static> {
-    let handoff = screen_model
-        .ready_conversation()
-        .and_then(|conversation| conversation.last_planning_task_handoff());
-    let selected_entry = handoff
-        .and_then(|handoff| {
-            supervisor_snapshot.roster.entries.iter().find(|entry| {
-                entry
-                    .lease_identity
-                    .as_ref()
-                    .is_some_and(|identity| identity.task_id == handoff.task_id)
-            })
+    snapshot: &ParallelModeSupervisorSnapshot,
+    selected_lane: Option<&OperationsLane<'_>>,
+) -> Option<String> {
+    screen_model
+        .last_parallel_mode_dispatch_withheld_reason
+        .clone()
+        .or_else(|| {
+            screen_model
+                .parallel_mode_readiness
+                .as_ref()
+                .and_then(|readiness| readiness.top_alert.clone())
         })
         .or_else(|| {
-            supervisor_snapshot
-                .roster
-                .entries
-                .get(mud_ui_state.selected_actor_index())
-        });
+            snapshot
+                .distributor
+                .orchestrator_status
+                .blocked_reason
+                .clone()
+        })
+        .or_else(|| snapshot.distributor.head_blocked_detail.clone())
+        .or_else(|| {
+            selected_lane.and_then(|lane| {
+                (lane.discrepancy.is_some()
+                    || matches!(
+                        lane.slot.state,
+                        ParallelModePoolSlotState::Blocked
+                            | ParallelModePoolSlotState::Missing
+                            | ParallelModePoolSlotState::Unavailable
+                    ))
+                .then(|| {
+                    lane.discrepancy.map_or_else(
+                        || lane.slot.worktree_label.clone(),
+                        |discrepancy| {
+                            format!(
+                                "{discrepancy} · {}",
+                                truncate_timeline_text(&lane.slot.worktree_label, 88)
+                            )
+                        },
+                    )
+                })
+            })
+        })
+}
 
-    if let Some(entry) = selected_entry {
-        let stage = if supervisor_snapshot
+fn build_accepted_queue_lines(
+    screen_model: &ConversationScreenModel<'_>,
+    snapshot: &ParallelModeSupervisorSnapshot,
+) -> (Vec<Line<'static>>, usize) {
+    let active_task_ids = snapshot
+        .roster
+        .entries
+        .iter()
+        .filter_map(|entry| entry.lease_identity.as_ref())
+        .map(|identity| identity.task_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut lines = screen_model
+        .planning_runtime_projection
+        .queue_projection()
+        .into_iter()
+        .flat_map(|queue| queue.active_tasks.iter())
+        .filter(|task| !active_task_ids.contains(task.task_id.as_str()))
+        .map(|task| {
+            Line::from(vec![
+                Span::styled(format!("#{} DISPATCH  ", task.rank), AkraTheme::accent()),
+                Span::raw(truncate_timeline_text(&task.task_title, 70)),
+            ])
+        })
+        .collect::<Vec<_>>();
+    lines.extend(
+        snapshot
             .distributor
             .queue_items
             .iter()
-            .any(|item| item.source_agent == entry.agent_id)
-        {
-            "delivery"
-        } else {
-            crate::adapter::inbound::tui::supersession_mud::lifecycle_progress_label(
-                &entry.state_label,
-            )
-        };
-        return Line::from(vec![
-            Span::styled("Current", AkraTheme::accent()),
-            Span::raw(format!(
-                "  {}  ·  {}  ·  {}",
-                truncate_timeline_text(&entry.task_title, 54),
-                stage,
-                entry.duration_label
-            )),
-        ]);
+            .enumerate()
+            .map(|(index, item)| {
+                let style = if matches!(
+                    item.queue_state,
+                    ParallelModeQueueItemState::Blocked | ParallelModeQueueItemState::Failed
+                ) {
+                    AkraTheme::warning()
+                } else {
+                    AkraTheme::tool()
+                };
+                Line::from(vec![
+                    Span::styled(format!("D{} DELIVERY  ", index + 1), style),
+                    Span::raw(format!(
+                        "{}  ·  {}",
+                        item.queue_state.label(),
+                        truncate_timeline_text(&item.task_title, 62)
+                    )),
+                ])
+            }),
+    );
+    let pressure = lines.len();
+    if pressure == 0 {
+        lines.push(Line::styled(
+            "No accepted work is waiting; active leases remain in the lane board.",
+            AkraTheme::subtle(),
+        ));
     }
-    if let Some(next_task_title) = progress.next_task_title.as_deref() {
-        return Line::from(vec![
-            Span::styled("Next", AkraTheme::accent()),
-            Span::raw(format!(
-                "  {}  ·  waiting for a slot",
-                truncate_timeline_text(next_task_title, 64)
-            )),
-        ]);
-    }
-    if progress.syncing {
-        let task_title = handoff.map(|handoff| handoff.task_title.as_str());
-        return Line::from(vec![
-            Span::styled("Preparing", AkraTheme::accent()),
-            Span::raw(format!(
-                "  {}",
-                task_title
-                    .map(|title| truncate_timeline_text(title, 64))
-                    .unwrap_or_else(|| "refreshing parallel workspace".to_string())
-            )),
-        ]);
-    }
+    (lines, pressure)
+}
 
-    Line::styled(
-        format!("Ready for work  ·  {} slots available", progress.available),
-        AkraTheme::muted(),
-    )
+fn build_operations_lane_lines(
+    snapshot: &ParallelModeSupervisorSnapshot,
+    selected_slot_id: Option<&str>,
+    activity_frame: &'static str,
+) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
+    if snapshot.pool.slots.is_empty() {
+        let loading = vec![Line::styled(
+            format!("{activity_frame} Waiting for the three-slot pool projection"),
+            AkraTheme::muted(),
+        )];
+        return (loading.clone(), loading);
+    }
+    let mut lines = Vec::new();
+    let mut compact = Vec::new();
+    for slot in &snapshot.pool.slots {
+        let lane = operations_lane(snapshot, &slot.slot_id)
+            .expect("pool slot used to build an operations lane must remain present");
+        let selected = selected_slot_id == Some(slot.slot_id.as_str());
+        let state_label = lane_state_label(&lane);
+        let state_style = lane_state_style(&lane);
+        let marker = if selected { "▌" } else { " " };
+        let pulse = if lane_is_active(&lane) {
+            activity_frame
+        } else {
+            " "
+        };
+        let role = lane
+            .roster
+            .and_then(|entry| entry.role_label.as_deref())
+            .unwrap_or("unknown role");
+        let agent = lane
+            .roster
+            .map(|entry| entry.agent_id.as_str())
+            .or_else(|| {
+                lane.slot
+                    .owner_identity
+                    .as_ref()
+                    .map(|owner| owner.agent_id.as_str())
+            })
+            .unwrap_or("unknown agent");
+        let task = lane
+            .roster
+            .map(|entry| entry.task_title.as_str())
+            .unwrap_or("no leased task");
+        let elapsed = lane
+            .roster
+            .map(|entry| entry.duration_label.as_str())
+            .unwrap_or("—");
+        let next_gate = lane_next_gate(&lane);
+        lines.extend([
+            Line::from(vec![
+                Span::styled(format!("{marker} {pulse} {}  ", slot.slot_id), state_style),
+                Span::styled(state_label, state_style),
+                Span::styled(format!("  ·  {elapsed}"), AkraTheme::muted()),
+            ]),
+            Line::from(format!(
+                "    role {role}  ·  agent {}",
+                truncate_timeline_text(agent, 38)
+            )),
+            Line::from(format!("    task {}", truncate_timeline_text(task, 72))),
+            Line::styled(
+                format!(
+                    "    branch {}  ·  worktree {}",
+                    truncate_timeline_text(&slot.branch_name, 40),
+                    truncate_timeline_text(&slot.worktree_label, 38)
+                ),
+                AkraTheme::muted(),
+            ),
+            Line::from(vec![
+                Span::styled("    next ", AkraTheme::subtle()),
+                Span::styled(next_gate, state_style),
+                Span::styled(
+                    lane.discrepancy
+                        .map(|discrepancy| format!("  ·  {discrepancy}"))
+                        .unwrap_or_default(),
+                    AkraTheme::warning(),
+                ),
+            ]),
+        ]);
+        compact.push(Line::from(vec![
+            Span::styled(
+                format!(
+                    "{}{} {} ",
+                    if selected { ">" } else { " " },
+                    slot.slot_id,
+                    state_label
+                ),
+                state_style,
+            ),
+            Span::raw(format!(
+                "{} · {} · →{}",
+                truncate_timeline_text(role, 16),
+                truncate_timeline_text(task, 22),
+                next_gate
+            )),
+        ]));
+    }
+    for roster in snapshot.roster.entries.iter().filter(|entry| {
+        !snapshot
+            .pool
+            .slots
+            .iter()
+            .any(|slot| slot.slot_id == entry.slot_id)
+    }) {
+        let row = format!(
+            "! {} UNMAPPED  ·  {}  ·  {}",
+            roster.slot_id,
+            truncate_timeline_text(&roster.task_title, 42),
+            truncate_timeline_text(&roster.branch_name, 44)
+        );
+        lines.push(Line::styled(row.clone(), AkraTheme::danger()));
+        compact.push(Line::styled(row, AkraTheme::danger()));
+    }
+    (lines, compact)
+}
+
+fn lane_is_active(lane: &OperationsLane<'_>) -> bool {
+    matches!(
+        lane.slot.state,
+        ParallelModePoolSlotState::Leased
+            | ParallelModePoolSlotState::Running
+            | ParallelModePoolSlotState::AwaitingCleanup
+    ) || lane
+        .queue_item
+        .is_some_and(|item| item.queue_state.is_active())
+}
+
+fn lane_state_label(lane: &OperationsLane<'_>) -> &'static str {
+    if lane.discrepancy.is_some() {
+        return "DESYNC";
+    }
+    if let Some(item) = lane.queue_item {
+        return match item.queue_state {
+            ParallelModeQueueItemState::Idle => "IDLE",
+            ParallelModeQueueItemState::Queued => "DELIVERY",
+            ParallelModeQueueItemState::Pushing => "PUSHING",
+            ParallelModeQueueItemState::PrPending => "PR",
+            ParallelModeQueueItemState::MergePending => "REVIEW",
+            ParallelModeQueueItemState::Integrating => "INTEGRATING",
+            ParallelModeQueueItemState::Cleaning => "CLEANUP",
+            ParallelModeQueueItemState::Done => "DONE",
+            ParallelModeQueueItemState::Blocked | ParallelModeQueueItemState::Failed => "BLOCKED",
+        };
+    }
+    match lane.slot.state {
+        ParallelModePoolSlotState::Idle => "IDLE",
+        ParallelModePoolSlotState::Leased => "STARTING",
+        ParallelModePoolSlotState::Running => {
+            match lane.roster.map(|entry| entry.state_label.as_str()) {
+                Some("reported_complete" | "ledger_refreshing") => "VERIFYING",
+                Some("commit_ready" | "merge_queued") => "DELIVERY",
+                Some("failed" | "official_refresh_recovery_needed") => "BLOCKED",
+                _ => "RUNNING",
+            }
+        }
+        ParallelModePoolSlotState::AwaitingCleanup => "CLEANUP",
+        ParallelModePoolSlotState::Blocked => "BLOCKED",
+        ParallelModePoolSlotState::Missing => "MISSING",
+        ParallelModePoolSlotState::Unavailable => "UNAVAILABLE",
+    }
+}
+
+fn lane_state_style(lane: &OperationsLane<'_>) -> ratatui::style::Style {
+    if lane.discrepancy.is_some()
+        || matches!(
+            lane.slot.state,
+            ParallelModePoolSlotState::Blocked
+                | ParallelModePoolSlotState::Missing
+                | ParallelModePoolSlotState::Unavailable
+        )
+        || lane.queue_item.is_some_and(|item| {
+            matches!(
+                item.queue_state,
+                ParallelModeQueueItemState::Blocked | ParallelModeQueueItemState::Failed
+            )
+        })
+    {
+        AkraTheme::warning()
+    } else if lane_is_active(lane) {
+        AkraTheme::brand()
+    } else {
+        AkraTheme::subtle()
+    }
+}
+
+fn build_selected_lane_timeline_lines(lane: Option<&OperationsLane<'_>>) -> Vec<Line<'static>> {
+    let Some(lane) = lane else {
+        return vec![Line::styled(
+            "No lane selected · lifecycle unknown",
+            AkraTheme::subtle(),
+        )];
+    };
+    let Some(detail) = lane.detail else {
+        return vec![
+            Line::styled(
+                format!("● now  {}", lane_state_label(lane)),
+                lane_state_style(lane),
+            ),
+            Line::styled(
+                "  No exact session history is projected for this lane.",
+                AkraTheme::subtle(),
+            ),
+        ];
+    };
+    let current_state =
+        truncate_timeline_text(&display_supersession_state_label(&detail.state_label), 14);
+    let mut lines = vec![Line::from(vec![
+        Span::styled("● now ", AkraTheme::brand()),
+        Span::styled(current_state.clone(), lane_state_style(lane)),
+    ])];
+    lines.extend(
+        detail
+            .history
+            .iter()
+            .rev()
+            .filter(|entry| {
+                !(entry.state_label == detail.state_label && entry.timestamp == detail.updated_at)
+            })
+            .take(12)
+            .map(|entry| {
+                let state = truncate_timeline_text(
+                    &display_supersession_state_label(&entry.state_label),
+                    14,
+                );
+                Line::from(vec![
+                    Span::styled(
+                        format!("{} ", compact_timestamp_label(&entry.timestamp)),
+                        AkraTheme::muted(),
+                    ),
+                    Span::raw(state),
+                ])
+            }),
+    );
+    lines
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DeliveryGateStatus {
+    Done,
+    Active,
+    Pending,
+    Unknown,
+}
+
+struct DeliveryGate {
+    label: &'static str,
+    status: DeliveryGateStatus,
+}
+
+fn build_selected_lane_detail_lines(
+    _screen_model: &ConversationScreenModel<'_>,
+    _snapshot: &ParallelModeSupervisorSnapshot,
+    lane: Option<&OperationsLane<'_>>,
+) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
+    let Some(lane) = lane else {
+        let empty = vec![Line::styled(
+            "No lane selected · use ↑/↓ in the lane board",
+            AkraTheme::subtle(),
+        )];
+        return (empty.clone(), empty);
+    };
+    let role = lane
+        .roster
+        .and_then(|entry| entry.role_label.as_deref())
+        .unwrap_or("unknown");
+    let agent = lane
+        .roster
+        .map(|entry| entry.agent_id.as_str())
+        .or_else(|| {
+            lane.slot
+                .owner_identity
+                .as_ref()
+                .map(|owner| owner.agent_id.as_str())
+        })
+        .unwrap_or("unknown");
+    let task = lane
+        .roster
+        .map(|entry| entry.task_title.as_str())
+        .unwrap_or("unknown");
+    let elapsed = lane
+        .roster
+        .map(|entry| entry.duration_label.as_str())
+        .unwrap_or("unknown");
+    let gates = delivery_gates(lane);
+    let next_gate = next_delivery_gate(&gates);
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(format!("{}  ", lane.slot.slot_id), lane_state_style(lane)),
+            Span::styled(lane_state_label(lane), lane_state_style(lane)),
+        ]),
+        Line::from(format!("role      {role}")),
+        Line::from(format!("task      {}", truncate_timeline_text(task, 62))),
+        Line::from(format!("agent     {}", truncate_timeline_text(agent, 62))),
+        Line::from(format!(
+            "branch    {}",
+            truncate_timeline_text(&lane.slot.branch_name, 62)
+        )),
+        Line::from(format!(
+            "worktree  {}",
+            truncate_timeline_text(&lane.slot.worktree_label, 62)
+        )),
+        Line::from(format!("activity  {elapsed}  ·  next {next_gate}")),
+        Line::styled("DELIVERY GATES", AkraTheme::accent()),
+    ];
+    lines.extend(gates.iter().map(delivery_gate_line));
+    let compact = vec![
+        Line::from(vec![
+            Span::styled(
+                format!("{} {} ", lane.slot.slot_id, lane_state_label(lane)),
+                lane_state_style(lane),
+            ),
+            Span::raw(format!("{role} · →{next_gate}")),
+        ]),
+        Line::from(format!(
+            "{} · {} · {}",
+            truncate_timeline_text(task, 20),
+            truncate_timeline_text(agent, 12),
+            elapsed.split_whitespace().collect::<String>()
+        )),
+        Line::styled(
+            format!(
+                "branch {}  ·  wt {}",
+                truncate_timeline_text(&lane.slot.branch_name, 13),
+                truncate_timeline_text(&lane.slot.worktree_label, 9)
+            ),
+            AkraTheme::muted(),
+        ),
+        compact_delivery_gate_line(&gates[..4]),
+        compact_delivery_gate_line(&gates[4..]),
+    ];
+    (lines, compact)
+}
+
+fn delivery_gates(lane: &OperationsLane<'_>) -> Vec<DeliveryGate> {
+    let mut states = BTreeSet::new();
+    if let Some(detail) = lane.detail {
+        states.extend(
+            detail
+                .history
+                .iter()
+                .map(|entry| entry.state_label.as_str()),
+        );
+        states.insert(detail.state_label.as_str());
+        states.insert(detail.completion_state_label.as_str());
+    }
+    let queue_state = lane.queue_item.map(|item| item.queue_state);
+    let known_pipeline = lane.roster.is_some() || lane.detail.is_some() || queue_state.is_some();
+    let commit_done = state_seen(
+        &states,
+        &[
+            "commit_ready",
+            "merge_queued",
+            "pushing",
+            "pr_pending",
+            "merge_pending",
+            "integrating",
+            "merged",
+            "cleanup_pending",
+            "cleaned",
+        ],
+    ) || queue_state.is_some();
+    let validation_active = state_seen(&states, &["reported_complete", "ledger_refreshing"]);
+    let commit_active = state_seen(&states, &["ledger_refreshing"]) && !commit_done;
+    let pr_active = queue_state == Some(ParallelModeQueueItemState::PrPending)
+        || state_seen(&states, &["pr_pending"]);
+    let pr_done = matches!(
+        queue_state,
+        Some(
+            ParallelModeQueueItemState::MergePending
+                | ParallelModeQueueItemState::Integrating
+                | ParallelModeQueueItemState::Cleaning
+                | ParallelModeQueueItemState::Done
+        )
+    ) || state_seen(
+        &states,
+        &[
+            "merge_pending",
+            "integrating",
+            "merged",
+            "cleanup_pending",
+            "cleaned",
+        ],
+    );
+    let review_active = queue_state == Some(ParallelModeQueueItemState::MergePending)
+        || state_seen(&states, &["merge_pending"]);
+    let review_done = matches!(
+        queue_state,
+        Some(
+            ParallelModeQueueItemState::Integrating
+                | ParallelModeQueueItemState::Cleaning
+                | ParallelModeQueueItemState::Done
+        )
+    ) || state_seen(
+        &states,
+        &["integrating", "merged", "cleanup_pending", "cleaned"],
+    );
+    let integration_active = queue_state == Some(ParallelModeQueueItemState::Integrating)
+        || state_seen(&states, &["integrating"]);
+    let integration_done = matches!(
+        queue_state,
+        Some(ParallelModeQueueItemState::Cleaning | ParallelModeQueueItemState::Done)
+    ) || state_seen(&states, &["merged", "cleanup_pending", "cleaned"]);
+    let cleanup_active = queue_state == Some(ParallelModeQueueItemState::Cleaning)
+        || state_seen(&states, &["merged", "cleanup_pending"]);
+    let cleanup_done =
+        queue_state == Some(ParallelModeQueueItemState::Done) || state_seen(&states, &["cleaned"]);
+    let status = |done: bool, active: bool| {
+        if done {
+            DeliveryGateStatus::Done
+        } else if active {
+            DeliveryGateStatus::Active
+        } else if known_pipeline {
+            DeliveryGateStatus::Pending
+        } else {
+            DeliveryGateStatus::Unknown
+        }
+    };
+    vec![
+        DeliveryGate {
+            label: "Commit",
+            status: status(commit_done, commit_active),
+        },
+        DeliveryGate {
+            label: "Validation",
+            status: status(commit_done, validation_active),
+        },
+        DeliveryGate {
+            label: "PR",
+            status: status(pr_done, pr_active),
+        },
+        DeliveryGate {
+            label: "Review",
+            status: status(review_done, review_active),
+        },
+        DeliveryGate {
+            label: "Integration",
+            status: status(integration_done, integration_active),
+        },
+        DeliveryGate {
+            label: "Remote verify",
+            status: status(integration_done, integration_active),
+        },
+        DeliveryGate {
+            label: "Cleanup",
+            status: status(cleanup_done, cleanup_active),
+        },
+    ]
+}
+
+fn state_seen(states: &BTreeSet<&str>, candidates: &[&str]) -> bool {
+    candidates
+        .iter()
+        .any(|candidate| states.contains(candidate))
+}
+
+fn next_delivery_gate(gates: &[DeliveryGate]) -> &'static str {
+    gates
+        .iter()
+        .find(|gate| gate.status == DeliveryGateStatus::Active)
+        .or_else(|| {
+            gates
+                .iter()
+                .find(|gate| gate.status == DeliveryGateStatus::Pending)
+        })
+        .map(|gate| gate.label)
+        .unwrap_or_else(|| {
+            if gates
+                .iter()
+                .all(|gate| gate.status == DeliveryGateStatus::Done)
+            {
+                "complete"
+            } else {
+                "unknown"
+            }
+        })
+}
+
+fn lane_next_gate(lane: &OperationsLane<'_>) -> &'static str {
+    if lane.discrepancy.is_some()
+        || matches!(
+            lane.slot.state,
+            ParallelModePoolSlotState::Blocked
+                | ParallelModePoolSlotState::Missing
+                | ParallelModePoolSlotState::Unavailable
+        )
+    {
+        return "operator recovery";
+    }
+    if lane.slot.state == ParallelModePoolSlotState::Idle {
+        return "accepted task";
+    }
+    next_delivery_gate(&delivery_gates(lane))
+}
+
+fn delivery_gate_line(gate: &DeliveryGate) -> Line<'static> {
+    let (marker, label, style) = match gate.status {
+        DeliveryGateStatus::Done => ("✓", "done", AkraTheme::success()),
+        DeliveryGateStatus::Active => ("▶", "active", AkraTheme::brand()),
+        DeliveryGateStatus::Pending => ("·", "pending", AkraTheme::muted()),
+        DeliveryGateStatus::Unknown => ("?", "unknown", AkraTheme::subtle()),
+    };
+    Line::from(vec![
+        Span::styled(format!("{marker} {:<14}", gate.label), style),
+        Span::styled(label, style),
+    ])
+}
+
+fn compact_delivery_gate_line(gates: &[DeliveryGate]) -> Line<'static> {
+    let spans = gates
+        .iter()
+        .enumerate()
+        .flat_map(|(index, gate)| {
+            let (marker, style) = match gate.status {
+                DeliveryGateStatus::Done => ("✓", AkraTheme::success()),
+                DeliveryGateStatus::Active => ("▶", AkraTheme::brand()),
+                DeliveryGateStatus::Pending => ("·", AkraTheme::muted()),
+                DeliveryGateStatus::Unknown => ("?", AkraTheme::subtle()),
+            };
+            [
+                Span::raw(if index == 0 { "" } else { " " }),
+                Span::styled(format!("{marker}{}", gate.label), style),
+            ]
+        })
+        .collect::<Vec<_>>();
+    Line::from(spans)
 }
 
 #[cfg(test)]
@@ -302,6 +946,7 @@ fn build_pool_lines(
     build_pool_lines_with_mud(pool, activity_frame, &[])
 }
 
+#[cfg(test)]
 fn build_pool_lines_with_mud(
     pool: &ParallelModePoolBoardSnapshot,
     activity_frame: &'static str,
@@ -762,6 +1407,7 @@ fn build_distributor_lines(distributor: &ParallelModeDistributorSnapshot) -> Vec
     build_distributor_lines_with_mud(distributor, &[])
 }
 
+#[cfg(test)]
 fn build_distributor_lines_with_mud(
     distributor: &ParallelModeDistributorSnapshot,
     mud_distributor_lines: &[String],
@@ -882,6 +1528,7 @@ fn is_pending_pool_board(pool: &ParallelModePoolBoardSnapshot) -> bool {
     pool.pool_root_label.starts_with("loading:")
 }
 
+#[cfg(test)]
 fn is_pending_distributor(distributor: &ParallelModeDistributorSnapshot) -> bool {
     distributor.queue_items.is_empty()
         && distributor.completion_feed.is_empty()
@@ -896,6 +1543,7 @@ fn supersession_activity_frame(animation_elapsed_millis: u128) -> &'static str {
     FRAMES[((animation_elapsed_millis / 250) as usize) % FRAMES.len()]
 }
 
+#[cfg(test)]
 fn build_orchestrator_lines(distributor: &ParallelModeDistributorSnapshot) -> Vec<Line<'static>> {
     let status = &distributor.orchestrator_status;
     /*
@@ -942,7 +1590,6 @@ fn build_orchestrator_lines(distributor: &ParallelModeDistributorSnapshot) -> Ve
     lines
 }
 
-#[cfg(test)]
 fn display_supersession_state_label(state_label: &str) -> String {
     /*
     Domain labels are precise but too lifecycle-specific for the popup. The control
@@ -956,6 +1603,7 @@ fn display_supersession_state_label(state_label: &str) -> String {
     }
 }
 
+#[cfg(test)]
 fn display_runtime_event_label(label: &str) -> String {
     label.replace('_', " ")
 }
