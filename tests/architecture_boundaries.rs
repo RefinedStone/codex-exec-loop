@@ -4666,6 +4666,53 @@ fn update_unrelated(
         1,
         "qualified collection aliases must resolve through the production alias registry"
     );
+    let collection_prefix_reexport_file =
+        syn::parse_file("pub use crate::generic_alias as collections;")
+            .expect("collection prefix re-export should parse");
+    generic_authority_aliases.extend(qualified_type_aliases_declared_in_file(
+        &collection_prefix_reexport_file,
+        &["crate".to_string(), "collection_facade".to_string()],
+    ));
+    let prefix_reexported_collection_alias = shell_chrome_writer_audit_with_type_registry(
+        "fn escape(\n\
+             mut apps: crate::collection_facade::collections::AppList<NativeTuiApp>,\n\
+         ) {\n\
+             apps[0].shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+        false,
+        &known_struct_fields,
+        &generic_authority_aliases,
+        &writer_module,
+    )
+    .expect("prefix re-exported authority collection alias fixture should parse");
+    assert_eq!(
+        prefix_reexported_collection_alias.field_writes.len(),
+        1,
+        "collection aliases must follow prefix re-exports"
+    );
+    let collection_glob_reexport_file = syn::parse_file("pub use crate::generic_alias::*;")
+        .expect("collection glob re-export should parse");
+    generic_authority_aliases.extend(qualified_type_aliases_declared_in_file(
+        &collection_glob_reexport_file,
+        &["crate".to_string(), "collection_glob".to_string()],
+    ));
+    let glob_reexported_collection_alias = shell_chrome_writer_audit_with_type_registry(
+        "fn escape(\n\
+             mut apps: crate::collection_glob::AppList<NativeTuiApp>,\n\
+         ) {\n\
+             apps[0].shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+        false,
+        &known_struct_fields,
+        &generic_authority_aliases,
+        &writer_module,
+    )
+    .expect("glob re-exported authority collection alias fixture should parse");
+    assert_eq!(
+        glob_reexported_collection_alias.field_writes.len(),
+        1,
+        "collection aliases must follow glob re-exports"
+    );
 
     let relative_authority_alias_file = syn::parse_file(
         "pub type BaseApp = super::NativeTuiApp;\n\
@@ -16933,6 +16980,117 @@ impl ShellChromeWriterVisitor {
                         resolving_aliases.remove(&qualified_name);
                         if resolved.is_some() {
                             return resolved;
+                        }
+                    }
+                    for prefix_len in (1..normalized_path.len()).rev() {
+                        let prefix = normalized_path[..prefix_len].join("::");
+                        let Some(alias) = scope.qualified_type_aliases.get(&prefix) else {
+                            continue;
+                        };
+                        let instantiated = alias.instantiate(&syn::PathArguments::None);
+                        let Some(alias_path) = shell_type_path(&instantiated) else {
+                            continue;
+                        };
+                        if !resolving_aliases.insert(prefix.clone()) {
+                            continue;
+                        }
+                        let mut expanded_path = alias_path.clone();
+                        for segment in &normalized_path[prefix_len..] {
+                            expanded_path.path.segments.push(syn::PathSegment::from(
+                                syn::Ident::new(segment, proc_macro2::Span::call_site()),
+                            ));
+                        }
+                        if let Some(expanded_segment) = expanded_path.path.segments.last_mut() {
+                            expanded_segment.arguments = segment.arguments.clone();
+                        }
+                        let declaration_module = &normalized_path[..prefix_len.saturating_sub(1)];
+                        let resolved = resolve(
+                            &syn::Type::Path(expanded_path),
+                            ShellTypeResolutionScope {
+                                module_path: declaration_module,
+                                imports: scope
+                                    .qualified_type_aliases
+                                    .imports_for_module(declaration_module),
+                                absolute_imports: scope
+                                    .qualified_type_aliases
+                                    .absolute_imports_for_module(declaration_module),
+                                path_shadows: scope
+                                    .qualified_type_aliases
+                                    .path_shadows_for_module(declaration_module),
+                                allow_local_aliases: false,
+                                allow_local_imports: true,
+                                ..scope
+                            },
+                            resolving_aliases,
+                        );
+                        resolving_aliases.remove(&prefix);
+                        if resolved.is_some() {
+                            return resolved;
+                        }
+                    }
+                    if !scope
+                        .qualified_type_aliases
+                        .explicitly_declares_type(&qualified_name)
+                    {
+                        for prefix_len in (1..normalized_path.len()).rev() {
+                            let glob_module = normalized_path[..prefix_len].join("::");
+                            let shadowed_item =
+                                format!("{glob_module}::{}", normalized_path[prefix_len]);
+                            if scope
+                                .qualified_type_aliases
+                                .explicitly_declares_type(&shadowed_item)
+                            {
+                                continue;
+                            }
+                            for (target_index, target) in scope
+                                .qualified_type_aliases
+                                .glob_targets(&glob_module)
+                                .iter()
+                                .enumerate()
+                            {
+                                let Some(target_path) = shell_type_path(target) else {
+                                    continue;
+                                };
+                                let resolution_key = format!("{glob_module}::*#{target_index}");
+                                if !resolving_aliases.insert(resolution_key.clone()) {
+                                    continue;
+                                }
+                                let mut expanded_path = target_path.clone();
+                                for segment in &normalized_path[prefix_len..] {
+                                    expanded_path.path.segments.push(syn::PathSegment::from(
+                                        syn::Ident::new(segment, proc_macro2::Span::call_site()),
+                                    ));
+                                }
+                                if let Some(expanded_segment) =
+                                    expanded_path.path.segments.last_mut()
+                                {
+                                    expanded_segment.arguments = segment.arguments.clone();
+                                }
+                                let declaration_module = &normalized_path[..prefix_len];
+                                let resolved = resolve(
+                                    &syn::Type::Path(expanded_path),
+                                    ShellTypeResolutionScope {
+                                        module_path: declaration_module,
+                                        imports: scope
+                                            .qualified_type_aliases
+                                            .imports_for_module(declaration_module),
+                                        absolute_imports: scope
+                                            .qualified_type_aliases
+                                            .absolute_imports_for_module(declaration_module),
+                                        path_shadows: scope
+                                            .qualified_type_aliases
+                                            .path_shadows_for_module(declaration_module),
+                                        allow_local_aliases: false,
+                                        allow_local_imports: true,
+                                        ..scope
+                                    },
+                                    resolving_aliases,
+                                );
+                                resolving_aliases.remove(&resolution_key);
+                                if resolved.is_some() {
+                                    return resolved;
+                                }
+                            }
                         }
                     }
                     if !matches!(
