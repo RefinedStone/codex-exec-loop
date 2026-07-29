@@ -1192,9 +1192,16 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_workers() {
         ))
         .expect("background message should enqueue");
 
-    for _ in 0..750 {
+    // Dispatch can prepare real Git worktrees before the worker port is invoked.
+    // Keep this budget aligned with the end-to-end flow harness so cold CI
+    // runners do not report a false launch regression.
+    let launch_deadline = Instant::now() + Duration::from_secs(60);
+    loop {
         runtime.poll_background_messages();
         if fixture.launch_count.load(Ordering::SeqCst) > 0 {
+            break;
+        }
+        if Instant::now() >= launch_deadline {
             break;
         }
         thread::sleep(Duration::from_millis(20));
@@ -1205,7 +1212,25 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_workers() {
         runtime.app().last_parallel_mode_automation_trigger(),
         Some(ParallelModeAutomationTrigger::MainTurnPostEvaluation)
     );
-    assert_eq!(fixture.launch_count.load(Ordering::SeqCst), 1);
+    let event_lines = runtime
+        .app()
+        .parallel_supervisor_event_lines()
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let control_plane_projection = runtime
+        .app()
+        .runtime
+        .client_runtime
+        .parallel_control_plane_projection();
+    let orchestrator_wake_in_flight = runtime.app().parallel_mode_orchestrator_wake_in_flight();
+    let supervisor_refresh_in_flight = runtime.app().parallel_mode_supervisor_refresh_in_flight();
+    assert_eq!(
+        fixture.launch_count.load(Ordering::SeqCst),
+        1,
+        "control plane: {control_plane_projection:?}\norchestrator wake in flight: {orchestrator_wake_in_flight}\nsupervisor refresh in flight: {supervisor_refresh_in_flight}\nevents:\n{event_lines}"
+    );
     let ConversationState::Ready(conversation) =
         &runtime.app().conversation.lifecycle.conversation_state
     else {
