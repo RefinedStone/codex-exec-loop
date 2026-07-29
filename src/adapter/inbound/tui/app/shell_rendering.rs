@@ -281,8 +281,7 @@ fn draw_inline_conversation_shell(
     // overlay/modal이 active이면 layout[0]은 inspection이 쓰고 layout[1]은 그 아래에 tail을 고정한다.
     // exit modal은 두 영역을 모두 덮어야 하므로 이 함수 밖에서 계속 그린다.
     let tail_area = inline_tail_render_area(layout[1], &tail_view);
-    let prompt_can_focus = shell_overlay == ShellOverlay::Supersession;
-    render_tail_surface(frame, tail_area, tail_view, prompt_can_focus)
+    render_tail_surface(frame, tail_area, tail_view, false)
 }
 
 fn render_bottom_anchored_tail(

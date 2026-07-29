@@ -272,7 +272,9 @@ impl Drop for TerminalRestoreGuard {
 mod tests {
     use std::io;
 
-    use super::{terminal_disconnected, terminal_io_disconnected};
+    #[cfg(unix)]
+    use super::terminal_disconnected;
+    use super::terminal_io_disconnected;
 
     #[cfg(unix)]
     #[test]

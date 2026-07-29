@@ -511,6 +511,13 @@ Pool mutations also take a repository-scoped OS lock. Every allocation gets an u
 generation carried through leases, sessions, events, delivery, and cleanup; delayed events compare
 that generation before mutation. SQLite remains authoritative on every supported platform.
 
+Supervisor inspection projects bounded session detail for every live pool lane instead of only the
+currently selected session. Each detail row remains keyed by exact slot/session identity and is
+sorted and deduplicated before presentation. Optional agent profile lookup adds display name and
+role to the roster at the application boundary; lookup failure leaves those fields unknown. The
+TUI joins pool, roster, session detail, and distributor state by those identities and surfaces a
+disagreement as `DESYNC`; rendering never reads Git, GitHub, SQLite, or profile storage.
+
 Post-turn mutation captures continuation and parallel-epoch permits. Long work stays outside their
 bounded commit sections; an invalidated permit may still produce diagnostics but cannot change task
 authority or enqueue delivery.
@@ -567,6 +574,14 @@ consumes the result. Supersession row planning, host-scrollback/live-tail splitt
 animation, and drawing consume that immutable projection instead of reacquiring the control-plane
 mutex or sampling another clock. High-frequency prompt, pulse, and scheduler checks share a
 panel-only projection and do not clone transcript or event-stream rows.
+
+Focused Supersession is a full inline-main-buffer inspection, not an alternate-screen TUI. It hides
+and locks the composer, preserves its draft, and renders one responsive 16-row Parallel Operations
+view. Hidden Supersession while parallel mode remains enabled is passive and leaves the composer
+available. Lane selection stores stable slot/session identities and resolves them against each new
+snapshot, so refresh reorder cannot silently move focus to another worker. The selected lane
+separates typed commit, validation, PR, review, integration, remote-verification, and cleanup gates;
+absence of an owned fact remains `unknown`.
 
 Before `Terminal::draw`, the transaction combines the conversation projection and exactly one
 active overlay into an owned `InlineShellFrameModel`. Its `InlineInspectionFrameModel` variant owns

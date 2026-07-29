@@ -28,6 +28,10 @@ pub struct ParallelModeAgentRosterEntry {
     pub duration_label: String,
     // roster에서 마지막 의미 있는 진행 상태를 보여 주는 한 줄 요약이다.
     pub latest_summary: String,
+    // Durable leases may outlive a profile file, so profile metadata remains
+    // optional and presentation can render an explicit unknown role.
+    pub profile_display_name: Option<String>,
+    pub role_label: Option<String>,
     // live lease에서 직접 전달된 scene-safe identity다. 수동/legacy fixture의 None을
     // display 문자열에서 복원하지 않고 unknown diagnostic으로 남기기 위해 optional이다.
     pub lease_identity: Option<ParallelModeAgentLeaseIdentity>,
@@ -60,12 +64,24 @@ impl ParallelModeAgentRosterEntry {
             state_label: state_label.into(),
             duration_label: duration_label.into(),
             latest_summary: latest_summary.into(),
+            profile_display_name: None,
+            role_label: None,
             lease_identity: None,
         }
     }
 
     pub fn with_thread_id(mut self, thread_id: Option<String>) -> Self {
         self.thread_id = thread_id;
+        self
+    }
+
+    pub fn with_profile(
+        mut self,
+        display_name: impl Into<String>,
+        role_label: impl Into<String>,
+    ) -> Self {
+        self.profile_display_name = Some(display_name.into());
+        self.role_label = Some(role_label.into());
         self
     }
 
@@ -383,6 +399,9 @@ fn live_detail_updated_at(lease: &ParallelModeSlotLeaseSnapshot) -> &str {
 pub struct ParallelModeSupervisorDetailSnapshot {
     // 현재 supervisor detail panel에 표시할 session이다.
     pub session: Option<ParallelModeAgentSessionDetailSnapshot>,
+    // The operations board needs bounded detail for each live lane, not only
+    // the supervisor's default selection. This is not an unbounded history list.
+    pub lane_sessions: Vec<ParallelModeAgentSessionDetailSnapshot>,
     // session이 없을 때 표시할 상태 문구다.
     pub empty_state: String,
 }
@@ -393,10 +412,52 @@ impl ParallelModeSupervisorDetailSnapshot {
         session: Option<ParallelModeAgentSessionDetailSnapshot>,
         empty_state: impl Into<String>,
     ) -> Self {
+        let lane_sessions = session.iter().cloned().collect();
         Self {
             session,
+            lane_sessions,
             empty_state: empty_state.into(),
         }
+    }
+
+    pub fn with_lane_sessions(
+        mut self,
+        mut lane_sessions: Vec<ParallelModeAgentSessionDetailSnapshot>,
+    ) -> Self {
+        if let Some(selected) = self.session.as_ref()
+            && !lane_sessions
+                .iter()
+                .any(|detail| detail.session_key == selected.session_key)
+        {
+            lane_sessions.push(selected.clone());
+        }
+        lane_sessions.sort_by(|left, right| {
+            left.slot_id
+                .cmp(&right.slot_id)
+                .then_with(|| left.session_key.cmp(&right.session_key))
+        });
+        lane_sessions.dedup_by(|left, right| left.session_key == right.session_key);
+        self.lane_sessions = lane_sessions;
+        self
+    }
+
+    pub fn session_for_lane(
+        &self,
+        slot_id: &str,
+        agent_id: Option<&str>,
+    ) -> Option<&ParallelModeAgentSessionDetailSnapshot> {
+        self.lane_sessions
+            .iter()
+            .find(|detail| {
+                detail.slot_id == slot_id
+                    && agent_id.is_none_or(|agent_id| detail.agent_id == agent_id)
+            })
+            .or_else(|| {
+                self.session.as_ref().filter(|detail| {
+                    detail.slot_id == slot_id
+                        && agent_id.is_none_or(|agent_id| detail.agent_id == agent_id)
+                })
+            })
     }
 }
 

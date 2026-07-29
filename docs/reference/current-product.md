@@ -32,7 +32,7 @@ an explicitly proposed document, not here.
 | Planning | `:planning`, `:planning-init` | stage, validate, and promote planning changes |
 | Directions | `:directions` | maintain directions and queue-idle supporting artifacts |
 | Health | `:doctor`, `:planning doctor`, `akra doctor`, `akra status` | inspect planning authority without authoring |
-| Parallel | `:parallel`, `:pa` | enable or refresh automation and open the supervisor board |
+| Parallel | `:parallel`, `:pa` | enable or refresh automation and open the focused Parallel Operations board |
 | Parallel peek | `:peek` | inspect active parallel agent conversations |
 
 Global keys include `Ctrl+q` to exit, `Ctrl+t` to start a blank draft, and `Esc`/`Ctrl+c` to close
@@ -136,8 +136,20 @@ Git common directory so linked worktrees share one authority and independent clo
 - Human review is required by default. Public-repository or autonomous delivery requires an exact
   parent-process opt-in; repository configuration cannot grant either permission.
 
-The board is a read-only projection of readiness, pool slots, active roster, selected lifecycle,
-distributor head, queue state, and withheld-dispatch reason.
+The focused Parallel Operations board owns the 16-row inline viewport without switching to an
+alternate screen. It presents one priority blocker, accepted queue pressure, a lifecycle timeline,
+three slot lanes, and a selected-lane delivery checklist. Pool slots, active roster, bounded session
+detail, optional role profile, distributor head, queue state, and withheld-dispatch reason remain a
+read-only projection; a missing join is shown as `DESYNC` or `unknown`, never invented progress.
+Accepted dispatch work is visually separate from active leases.
+
+Selection is keyed by slot/session identity and survives projection reorder on refresh. `Enter` or
+`Space` inspects the selected lane, `V` opens the read-only active-agent picker, `Ctrl+R` refreshes,
+`Ctrl+P` disables parallel mode, and `Esc` closes the focused board. Closing restores the unchanged
+composer while the enabled passive projection continues; submitting a parallel task reopens the
+board so dispatch progress is visible. The 80-column layout stacks lanes before selected detail,
+while 120- and 160-column layouts show lifecycle, lanes, and detail together.
+
 `:peek` opens a read-only active-agent conversation preview; switching agents or overlays prevents
 late results from replacing the latest preview or the interactive conversation.
 

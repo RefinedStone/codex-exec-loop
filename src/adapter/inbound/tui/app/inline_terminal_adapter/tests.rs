@@ -3062,6 +3062,223 @@ fn parallel_live_tail_continues_scrollback_without_inline_title() {
 }
 
 #[test]
+fn focused_parallel_operations_survives_resize_and_close_without_chrome_in_scrollback() {
+    let mut terminal =
+        tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 120, 30);
+    let mut app = make_test_app();
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.set_parallel_mode_enabled_for_test(true);
+    app.shell.chrome.shell_overlay = ShellOverlay::Supersession;
+    for index in 0..36 {
+        app.push_parallel_supervisor_event_for_test(
+            "12:10:00",
+            "Supervisor",
+            format!("operations-resize-event-{index:02}"),
+        );
+    }
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+    let mut recorder = tui_testkit::InlineFrameRecorder::default();
+
+    recorder.draw_and_record(
+        "operations-wide",
+        &mut terminal,
+        &mut runtime,
+        &mut inline_terminal,
+    );
+    let wide = recorder.frame("operations-wide");
+    assert!(
+        wide.screen_text
+            .contains("Parallel Operations / inline inspection")
+    );
+    for index in 0..36 {
+        let marker = format!("operations-resize-event-{index:02}");
+        assert_eq!(
+            wide.terminal_history_text.matches(&marker).count(),
+            1,
+            "the first focused frame must retain each event exactly once: {marker}\n{}",
+            wide.terminal_history_text
+        );
+    }
+
+    let expected_host_scrollback = wide.host_scrollback_text.clone();
+    let expected_cursor = terminal
+        .get_cursor_position()
+        .expect("focused operations cursor should be readable");
+    let _ = runtime.take_redraw_request();
+    runtime.handle_terminal_event(Event::FocusLost);
+    let viewport_area = inline_terminal
+        .viewport_area()
+        .expect("focused operations draw should record its viewport");
+    replace_visible_inline_frame(&mut terminal, viewport_area, expected_cursor);
+    runtime.handle_terminal_event(Event::FocusGained);
+    assert_eq!(runtime.terminal_focus_reacquire_epoch(), 1);
+    assert!(runtime.take_redraw_request());
+    recorder.draw_and_record(
+        "operations-refocused",
+        &mut terminal,
+        &mut runtime,
+        &mut inline_terminal,
+    );
+    let refocused = recorder.frame("operations-refocused");
+    assert!(
+        refocused
+            .screen_text
+            .contains("Parallel Operations / inline inspection")
+    );
+    assert_eq!(refocused.host_scrollback_text, expected_host_scrollback);
+    assert_eq!(
+        refocused
+            .terminal_history_text
+            .matches("operations-resize-event-35")
+            .count(),
+        1,
+        "focus reacquire must repaint the live event without replaying it:\n{}",
+        refocused.terminal_history_text
+    );
+
+    tui_testkit::resize_inline_history_terminal(&mut terminal, 72, 24);
+    recorder.draw_and_record(
+        "operations-narrow",
+        &mut terminal,
+        &mut runtime,
+        &mut inline_terminal,
+    );
+    let narrow = recorder.frame("operations-narrow");
+    assert!(narrow.screen_text.contains("Agent Lanes"));
+    assert!(narrow.screen_text.contains("Selected Lane"));
+    assert!(
+        !narrow.screen_text.contains("Enter send"),
+        "focused board must not expose a hidden composer after resize:\n{}",
+        narrow.screen_text
+    );
+    for index in 0..36 {
+        let marker = format!("operations-resize-event-{index:02}");
+        assert_eq!(
+            narrow.app_event_stream_text.matches(&marker).count(),
+            1,
+            "the narrow focused frame must retain each canonical event exactly once: {marker}\n{}",
+            narrow.app_event_stream_text
+        );
+    }
+    assert_eq!(
+        narrow
+            .terminal_history_text
+            .matches("operations-resize-event-35")
+            .count(),
+        1,
+        "the narrow focused frame must render the latest event once:\n{}",
+        narrow.terminal_history_text
+    );
+
+    runtime.app_mut().shell.chrome.shell_overlay = ShellOverlay::Hidden;
+    tui_testkit::resize_inline_history_terminal(&mut terminal, 120, 30);
+    recorder.draw_and_record(
+        "operations-closed",
+        &mut terminal,
+        &mut runtime,
+        &mut inline_terminal,
+    );
+    let closed = recorder.frame("operations-closed");
+    assert!(closed.screen_text.contains("Ctrl+O board"));
+    assert!(
+        closed
+            .screen_text
+            .contains("Describe a task or type : for commands")
+            && closed.screen_text.contains("input paused"),
+        "closing focused operations must restore the composer:\n{}",
+        closed.screen_text
+    );
+    for chrome in [
+        "Parallel Operations",
+        "Agent Lanes",
+        "Selected Lane",
+        "Accepted Queue",
+        "Command Hints",
+        "Parallel Event Stream",
+    ] {
+        assert!(
+            !closed.host_scrollback_text.contains(chrome),
+            "live board chrome must stay out of host scrollback after resize/close: {chrome}\n{}",
+            closed.host_scrollback_text
+        );
+    }
+    for index in 0..36 {
+        let marker = format!("operations-resize-event-{index:02}");
+        assert_eq!(
+            closed.app_event_stream_text.matches(&marker).count(),
+            1,
+            "the canonical stream must remain continuous across focused/narrow/passive frames: {marker}\n{}",
+            closed.app_event_stream_text
+        );
+    }
+}
+
+#[test]
+fn vt100_focused_parallel_operations_keeps_chrome_out_of_scrollback_after_width_resize() {
+    let mut terminal = tui_testkit::inline_history_vt100_terminal(
+        InlineHistoryRenderMode::HostScrollback,
+        120,
+        30,
+    );
+    let mut app = make_test_app();
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.set_parallel_mode_enabled_for_test(true);
+    app.shell.chrome.shell_overlay = ShellOverlay::Supersession;
+    for index in 0..36 {
+        app.push_parallel_supervisor_event_for_test(
+            "12:10:00",
+            "Supervisor",
+            format!("vt100-operations-resize-event-{index:02}"),
+        );
+    }
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+
+    draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+        .expect("wide vt100 operations frame");
+    tui_testkit::resize_inline_history_vt100_terminal(&mut terminal, 72, 24);
+    draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+        .expect("narrow vt100 operations frame");
+
+    let host_scrollback = tui_testkit::inline_vt100_host_scrollback_text(&mut terminal);
+    for chrome in [
+        "Parallel Operations",
+        "Agent Lanes",
+        "Selected Lane",
+        "Accepted Queue",
+        "Command Hints",
+    ] {
+        assert!(
+            !host_scrollback.contains(chrome),
+            "focused board chrome must remain transient after vt100 width resize: {chrome}\n{host_scrollback}"
+        );
+    }
+    let screen = tui_testkit::screen_text(&terminal);
+    assert!(
+        screen.contains("vt100-operations-resize-event-35"),
+        "the resized focused board must retain the latest live event:\n{screen}"
+    );
+    let event_stream = runtime
+        .app()
+        .parallel_supervisor_event_lines()
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    for index in 0..36 {
+        let marker = format!("vt100-operations-resize-event-{index:02}");
+        assert_eq!(
+            event_stream.matches(&marker).count(),
+            1,
+            "vt100 width resize must not mutate the canonical event projection: {marker}\n{event_stream}"
+        );
+    }
+}
+
+#[test]
 fn parallel_bootstrap_and_task_intake_stream_does_not_insert_tail_title() {
     let mut terminal =
         tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);

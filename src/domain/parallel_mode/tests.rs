@@ -11,7 +11,7 @@ use super::{
     ParallelModePoolSlotState, ParallelModePostTurnQueueSignal, ParallelModeReadinessSnapshot,
     ParallelModeReadinessState, ParallelModeRuntimeEvent, ParallelModeRuntimeEventEntry,
     ParallelModeRuntimeEventsSnapshot, ParallelModeSlotLeaseRequest, ParallelModeSlotLeaseSnapshot,
-    ParallelModeSlotLeaseState, ParallelModeSupervisorState,
+    ParallelModeSlotLeaseState, ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorState,
 };
 
 // readiness 집계의 최우선 안전 규칙을 고정한다. 하나라도 Blocked가 있으면 다른
@@ -1154,6 +1154,54 @@ fn lease_generation_deserialization_accepts_legacy_none_and_rejects_malformed_va
             .expect_err("malformed persisted generation must fail closed");
         assert!(error.to_string().contains("64 lowercase hexadecimal"));
     }
+}
+
+#[test]
+fn supervisor_detail_lane_sessions_are_sorted_deduplicated_and_exactly_joined() {
+    let first_lease = lease(
+        "slot-1",
+        "task-1",
+        "Task One",
+        "agent-1",
+        ParallelModeSlotLeaseState::Running,
+        "2026-07-10T12:00:00Z",
+        Some("2026-07-10T12:01:00Z"),
+    );
+    let second_lease = lease(
+        "slot-2",
+        "task-2",
+        "Task Two",
+        "agent-2",
+        ParallelModeSlotLeaseState::Running,
+        "2026-07-10T12:02:00Z",
+        Some("2026-07-10T12:03:00Z"),
+    );
+    let first = session_detail(&first_lease, "running", "first active lane");
+    let second = session_detail(&second_lease, "commit_ready", "second delivery lane");
+    let snapshot =
+        ParallelModeSupervisorDetailSnapshot::new(Some(second.clone()), "no selected detail")
+            .with_lane_sessions(vec![second.clone(), first.clone(), first]);
+
+    assert_eq!(
+        snapshot
+            .lane_sessions
+            .iter()
+            .map(|detail| detail.slot_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["slot-1", "slot-2"]
+    );
+    assert_eq!(
+        snapshot
+            .session_for_lane("slot-2", Some("agent-2"))
+            .map(|detail| detail.session_key.as_str()),
+        Some(second.session_key.as_str())
+    );
+    assert!(
+        snapshot
+            .session_for_lane("slot-2", Some("agent-1"))
+            .is_none(),
+        "an agent mismatch must remain unknown instead of borrowing another lane's detail"
+    );
 }
 
 // 테스트 fixture lease는 실제 pool allocation이 만드는 branch/worktree naming을 축약한다.

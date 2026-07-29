@@ -15,6 +15,15 @@ use crate::domain::conversation_runtime_envelope::{
     ConversationRuntimeConfigurationObservation, ConversationRuntimeEnvelope,
     ConversationRuntimeLaunchEnvironment, ConversationRuntimeObservedValue,
 };
+use crate::domain::parallel_mode::{
+    ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot,
+    ParallelModeAgentSessionDetailSnapshot, ParallelModeAgentSessionHistoryEntry,
+    ParallelModeDistributorQueueItem, ParallelModeDistributorSnapshot,
+    ParallelModePoolBoardSnapshot, ParallelModePoolSlotSnapshot, ParallelModePoolSlotState,
+    ParallelModeQueueItemState, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
+    ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
+    ParallelModeSupervisorState,
+};
 use crate::domain::planning::{
     PlanningQueueMutationKind, PlanningQueueMutationReceipt, PlanningQueueMutationReceiptEntry,
     PriorityQueueProjection, PriorityQueueSkippedTask, PriorityQueueTask, TaskStatus,
@@ -45,6 +54,42 @@ fn set_pending_approval(
         phase: ApprovalAuthorityPhase::Pending,
     });
     conversation.apply_runtime_snapshot(snapshot);
+}
+
+fn parallel_operations_detail(
+    index: usize,
+    state_label: &str,
+    history_states: &[&str],
+) -> ParallelModeAgentSessionDetailSnapshot {
+    ParallelModeAgentSessionDetailSnapshot::new(
+        format!("session-{index}"),
+        format!("agent-{index}"),
+        format!("task-{index}"),
+        format!("Commercial lane {index}"),
+        format!("slot-{index}"),
+        Some(format!("thread-{index}")),
+        format!("/tmp/akra-pool/slot-{index}"),
+        format!("codex/parallel-operations-{index}"),
+        format!("2026-07-30T00:0{index}:00Z"),
+        state_label,
+        state_label,
+        format!("lane {index} projected from typed authority state"),
+        "cargo test passed",
+        "authority refresh confirmed",
+        None,
+        history_states
+            .iter()
+            .enumerate()
+            .map(|(history_index, state)| {
+                ParallelModeAgentSessionHistoryEntry::new(
+                    *state,
+                    format!("2026-07-30T00:{index}{history_index}:00Z"),
+                    format!("typed {state} transition"),
+                )
+            })
+            .collect(),
+        format!("2026-07-30T00:{index}9:00Z"),
+    )
 }
 
 #[test]
@@ -155,6 +200,210 @@ fn focused_composer_projects_typing_blocked_and_parallel_loading_states() {
         "inline_focused_composer_parallel_loading_120",
         stable_parallel_loading
     );
+}
+
+#[test]
+fn parallel_operations_board_scales_across_80_120_and_160_columns() {
+    let mut app = make_test_app();
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.set_parallel_mode_enabled_for_test(true);
+    app.set_parallel_mode_readiness_snapshot_for_test(Some(ParallelModeReadinessSnapshot::new(
+        "/tmp/root",
+        ParallelModeReadinessState::Ready,
+        Vec::new(),
+        None,
+    )));
+    let queue_task = |index: usize| PriorityQueueTask {
+        rank: index,
+        task_id: format!("task-{index}"),
+        direction_id: "direction-operations".to_string(),
+        direction_title: "Commercial TUI".to_string(),
+        task_title: format!("Commercial lane {index}"),
+        status: TaskStatus::Ready,
+        combined_priority: 100 - index as i32,
+        updated_at: format!("2026-07-30T00:0{index}:00Z"),
+        rank_reasons: vec!["accepted".to_string()],
+    };
+    let active_tasks = (1..=4).map(queue_task).collect::<Vec<_>>();
+    app.sync_ready_conversation_planning_runtime_projection(
+        crate::application::service::planning::PlanningRuntimeProjection::ready_with_queue_projection(
+            "commercial operations context".to_string(),
+            "queue ready".to_string(),
+            None,
+            active_tasks.first().cloned(),
+            PriorityQueueProjection {
+                next_task: active_tasks.first().cloned(),
+                active_tasks,
+                proposed_tasks: Vec::new(),
+                skipped_tasks: Vec::new(),
+            },
+        ),
+    );
+    let slots = vec![
+        ParallelModePoolSlotSnapshot::new(
+            "slot-1",
+            ParallelModePoolSlotState::Running,
+            "codex/parallel-operations-1",
+            "pool/slot-1",
+            "agent-1 / task-1",
+        )
+        .with_owner_identity("agent-1", "task-1", "session-1", None),
+        ParallelModePoolSlotSnapshot::new(
+            "slot-2",
+            ParallelModePoolSlotState::Running,
+            "codex/parallel-operations-2",
+            "pool/slot-2",
+            "agent-2 / task-2",
+        )
+        .with_owner_identity("agent-2", "task-2", "session-2", None),
+        ParallelModePoolSlotSnapshot::new(
+            "slot-3",
+            ParallelModePoolSlotState::AwaitingCleanup,
+            "codex/parallel-operations-3",
+            "pool/slot-3",
+            "agent-3 / task-3",
+        )
+        .with_owner_identity("agent-3", "task-3", "session-3", None),
+    ];
+    let roster = ParallelModeAgentRosterSnapshot::new(
+        vec![
+            ParallelModeAgentRosterEntry::new(
+                "agent-1",
+                "Commercial lane 1",
+                "slot-1",
+                "codex/parallel-operations-1",
+                "running",
+                "08m 14s",
+                "implementing responsive operations lanes",
+            )
+            .with_profile("Artificer", "Implementation")
+            .with_lease_identity("task-1", "session-1", None),
+            ParallelModeAgentRosterEntry::new(
+                "agent-2",
+                "Commercial lane 2",
+                "slot-2",
+                "codex/parallel-operations-2",
+                "merge_pending",
+                "12m 02s",
+                "waiting for review gate",
+            )
+            .with_profile("Guardian", "Verification")
+            .with_lease_identity("task-2", "session-2", None),
+            ParallelModeAgentRosterEntry::new(
+                "agent-3",
+                "Commercial lane 3",
+                "slot-3",
+                "codex/parallel-operations-3",
+                "cleanup_pending",
+                "18m 45s",
+                "remote integration verified; cleanup pending",
+            )
+            .with_profile("Scribe", "Documentation")
+            .with_lease_identity("task-3", "session-3", None),
+        ],
+        "no active agents",
+    );
+    let details = vec![
+        parallel_operations_detail(1, "running", &["assigned", "starting", "running"]),
+        parallel_operations_detail(
+            2,
+            "merge_pending",
+            &[
+                "assigned",
+                "running",
+                "reported_complete",
+                "ledger_refreshing",
+                "commit_ready",
+                "pr_pending",
+                "merge_pending",
+            ],
+        ),
+        parallel_operations_detail(
+            3,
+            "cleanup_pending",
+            &[
+                "assigned",
+                "running",
+                "commit_ready",
+                "pr_pending",
+                "merge_pending",
+                "integrating",
+                "merged",
+                "cleanup_pending",
+            ],
+        ),
+    ];
+    let distributor = ParallelModeDistributorSnapshot::new(
+        vec![
+            ParallelModeDistributorQueueItem::new(
+                "agent-2",
+                "Commercial lane 2",
+                ParallelModeQueueItemState::MergePending,
+                "codex/parallel-operations-2",
+                "abc1234",
+                "review is waiting for merge authority",
+            ),
+            ParallelModeDistributorQueueItem::new(
+                "agent-3",
+                "Commercial lane 3",
+                ParallelModeQueueItemState::Cleaning,
+                "codex/parallel-operations-3",
+                "def5678",
+                "remote integration verified; slot cleanup pending",
+            ),
+        ],
+        Vec::new(),
+        "merge pending",
+        "review is waiting for merge authority",
+    );
+    let snapshot = ParallelModeSupervisorSnapshot::new(
+        ParallelModeSupervisorState::Supervise,
+        "/tmp/root",
+        ParallelModePoolBoardSnapshot::new(3, "/tmp/akra-pool", "running", slots),
+        roster,
+        ParallelModeSupervisorDetailSnapshot::new(Some(details[1].clone()), "no detail")
+            .with_lane_sessions(details),
+        distributor,
+        Some("three typed operator lanes projected".to_string()),
+    );
+    app.set_parallel_mode_supervisor_snapshot_for_test(Some(snapshot.clone()));
+    app.shell.chrome.shell_overlay = ShellOverlay::Supersession;
+    app.shell
+        .supersession_mud_ui_state
+        .move_selection(&snapshot, 1);
+    for index in 1..=5 {
+        app.push_parallel_supervisor_event_for_test(
+            "12:30:00",
+            "Supervisor",
+            format!("typed operations event {index}"),
+        );
+    }
+
+    let narrow = tui_testkit::render_inline_snapshot(&mut app, 80, 34);
+    let medium = tui_testkit::render_inline_snapshot(&mut app, 120, 34);
+    let wide = tui_testkit::render_inline_snapshot(&mut app, 160, 36);
+    for rendered in [&narrow, &medium, &wide] {
+        assert!(rendered.contains("Parallel Operations / inline inspection"));
+        assert!(rendered.contains("accepted queue 3"), "{rendered}");
+        assert!(rendered.contains("slot-1"), "{rendered}");
+        assert!(rendered.contains("slot-2"), "{rendered}");
+        assert!(rendered.contains("slot-3"), "{rendered}");
+        assert!(rendered.contains("Verification"));
+        assert!(rendered.contains("Accepted Queue"));
+        assert!(rendered.contains("V agent view"));
+        assert!(!rendered.contains("Enter send"));
+        assert!(!rendered.contains("PR #"));
+        assert!(!rendered.contains('%'));
+    }
+    assert!(narrow.contains("Selected Lane"));
+    assert!(narrow.contains("→Review"));
+    assert!(medium.contains("Lifecycle"));
+    assert!(medium.contains("→Review"), "{medium}");
+    assert!(wide.contains("Lifecycle"));
+    assert!(wide.contains("Remote verify"));
+    assert_snapshot!("parallel_operations_board_80", narrow);
+    assert_snapshot!("parallel_operations_board_120", medium);
+    assert_snapshot!("parallel_operations_board_160", wide);
 }
 
 #[test]

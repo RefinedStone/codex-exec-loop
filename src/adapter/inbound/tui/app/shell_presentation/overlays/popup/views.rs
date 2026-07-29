@@ -92,28 +92,25 @@ pub(crate) struct LanguageSelectionOverlayView {
 }
 
 /*
- * Supersession overlay flattens parallel-mode orchestration into independent panels.
- * Each section maps to a different operational concern: global mode, capability,
- * pool capacity, live roster, selected detail, distributor queue, and controls.
+ * The parallel operations board keeps lifecycle facts in commercial operator
+ * groups: global state, accepted queue, stable slot lanes, selected delivery
+ * gates, and the append-only event stream.
  */
 pub(crate) struct SupersessionOverlayView {
-    // Whether the current MUD focus selects an actor/detail panel.
-    pub(crate) selection_visible: bool,
-    // Overlay title and current supersession mode.
+    // Explicit :parallel inspection owns the full viewport; the passive parallel
+    // home keeps the composer available below the same read-only projection.
+    pub(crate) focused_full_viewport: bool,
     pub(crate) header_lines: Vec<Line<'static>>,
-    // One-screen summary of orchestration state before detailed panels.
-    pub(crate) summary_lines: Vec<Line<'static>>,
-    // Whether parallel controls are currently available and why.
-    pub(crate) capability_lines: Vec<Line<'static>>,
-    // Worker pool capacity and saturation summary.
-    pub(crate) pool_lines: Vec<Line<'static>>,
-    // Live worker/session roster rows.
-    pub(crate) roster_lines: Vec<Line<'static>>,
-    // Longer status, path, or reason text for the selected/focused worker.
-    pub(crate) detail_lines: Vec<Line<'static>>,
-    // Focused roster or session detail shown before orchestrator state.
-    pub(crate) distributor_lines: Vec<Line<'static>>,
-    // Available supersession controls for the current capability state.
+    pub(crate) overview_lines: Vec<Line<'static>>,
+    pub(crate) accepted_queue_lines: Vec<Line<'static>>,
+    pub(crate) timeline_lines: Vec<Line<'static>>,
+    pub(crate) lane_lines: Vec<Line<'static>>,
+    pub(crate) compact_lane_lines: Vec<Line<'static>>,
+    pub(crate) selected_lane_lines: Vec<Line<'static>>,
+    pub(crate) compact_selected_lane_lines: Vec<Line<'static>>,
+    // Append-only runtime events remain a distinct stream so panel chrome never
+    // enters durable host scrollback.
+    pub(crate) event_lines: Vec<Line<'static>>,
     pub(crate) key_lines: Vec<Line<'static>>,
 }
 

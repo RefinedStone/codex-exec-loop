@@ -921,11 +921,10 @@ impl NativeTuiApp {
             return true;
         }
         if self.shell.chrome.shell_overlay == ShellOverlay::Supersession {
-            // Supersession only owns ordinary prompt keys while its loading
-            // pipeline is active. Once the board has a concrete snapshot, prompt
-            // editing falls through so the operator can keep working while the
-            // board remains visible.
-            return self.parallel_mode_prompt_input_locked();
+            // Focused Parallel Operations owns the full main buffer. Unhandled
+            // text must not leak into the hidden composer; close the board first
+            // to resume ordinary prompt editing.
+            return true;
         }
         if self.shell.chrome.shell_overlay == ShellOverlay::ModelSelection {
             return self.handle_model_selection_overlay_key(key);

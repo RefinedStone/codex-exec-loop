@@ -542,6 +542,9 @@ impl NativeTuiApp {
         snapshot: Option<ParallelModeSupervisorSnapshot>,
     ) {
         if let Some(snapshot) = snapshot.as_ref() {
+            self.shell
+                .supersession_mud_ui_state
+                .clamp_to_snapshot(snapshot);
             self.record_parallel_supervisor_snapshot_for_stream(snapshot);
         }
         self.dispatch_client_event(CoreInput::ParallelModeSupervisorProjectionChanged(
@@ -616,21 +619,20 @@ impl NativeTuiApp {
                     .supersession_mud_ui_state
                     .move_selection(&snapshot, 1);
             }
-            KeyCode::Enter
-                if key.modifiers.is_empty() && self.parallel_mode_prompt_input_locked() =>
-            {
+            KeyCode::Enter if key.modifiers.is_empty() => {
                 let snapshot = self.parallel_mode_supervisor_snapshot();
                 self.shell
                     .supersession_mud_ui_state
                     .inspect_focused(&snapshot);
             }
-            KeyCode::Char(' ')
-                if key.modifiers.is_empty() && self.parallel_mode_prompt_input_locked() =>
-            {
+            KeyCode::Char(' ') if key.modifiers.is_empty() => {
                 let snapshot = self.parallel_mode_supervisor_snapshot();
                 self.shell
                     .supersession_mud_ui_state
                     .inspect_focused(&snapshot);
+            }
+            KeyCode::Char('v') if key.modifiers.is_empty() => {
+                self.open_parallel_peek_overlay(None);
             }
             _ => return false,
         }

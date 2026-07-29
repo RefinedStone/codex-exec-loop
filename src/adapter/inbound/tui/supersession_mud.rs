@@ -150,7 +150,9 @@ impl SupersessionMudFocusZone {
 pub struct SupersessionMudUiState {
     focused_zone: SupersessionMudFocusZone,
     selected_room_index: usize,
+    selected_room_slot_id: Option<String>,
     selected_actor_index: usize,
+    selected_actor_identity: Option<String>,
     selected_quest_index: usize,
 }
 
@@ -159,7 +161,9 @@ impl Default for SupersessionMudUiState {
         Self {
             focused_zone: SupersessionMudFocusZone::RealmMap,
             selected_room_index: 0,
+            selected_room_slot_id: None,
             selected_actor_index: 0,
+            selected_actor_identity: None,
             selected_quest_index: 0,
         }
     }
@@ -182,6 +186,36 @@ impl SupersessionMudUiState {
         self.selected_quest_index
     }
 
+    pub fn selected_lane_slot_id<'a>(
+        &self,
+        snapshot: &'a ParallelModeSupervisorSnapshot,
+    ) -> Option<&'a str> {
+        match self.focused_zone {
+            SupersessionMudFocusZone::RealmMap => snapshot
+                .pool
+                .slots
+                .get(self.resolved_room_index(snapshot))
+                .map(|slot| slot.slot_id.as_str()),
+            SupersessionMudFocusZone::Actors | SupersessionMudFocusZone::QuestLog => snapshot
+                .roster
+                .entries
+                .get(self.resolved_actor_index(snapshot))
+                .map(|entry| entry.slot_id.as_str())
+                .or_else(|| {
+                    snapshot
+                        .pool
+                        .slots
+                        .get(self.resolved_room_index(snapshot))
+                        .map(|slot| slot.slot_id.as_str())
+                }),
+            SupersessionMudFocusZone::ExitCorridor => snapshot
+                .pool
+                .slots
+                .get(self.resolved_room_index(snapshot))
+                .map(|slot| slot.slot_id.as_str()),
+        }
+    }
+
     pub fn focus_next_zone(&mut self) {
         self.focused_zone = self.focused_zone.next();
     }
@@ -193,15 +227,28 @@ impl SupersessionMudUiState {
     pub fn move_selection(&mut self, snapshot: &ParallelModeSupervisorSnapshot, delta: isize) {
         match self.focused_zone {
             SupersessionMudFocusZone::RealmMap => {
-                self.selected_room_index =
-                    moved_index(self.selected_room_index, snapshot.pool.slots.len(), delta);
+                self.selected_room_index = moved_index(
+                    self.resolved_room_index(snapshot),
+                    snapshot.pool.slots.len(),
+                    delta,
+                );
+                self.selected_room_slot_id = snapshot
+                    .pool
+                    .slots
+                    .get(self.selected_room_index)
+                    .map(|slot| slot.slot_id.clone());
             }
             SupersessionMudFocusZone::Actors | SupersessionMudFocusZone::QuestLog => {
                 self.selected_actor_index = moved_index(
-                    self.selected_actor_index,
+                    self.resolved_actor_index(snapshot),
                     snapshot.roster.entries.len(),
                     delta,
                 );
+                self.selected_actor_identity = snapshot
+                    .roster
+                    .entries
+                    .get(self.selected_actor_index)
+                    .map(actor_identity_key);
             }
             SupersessionMudFocusZone::ExitCorridor => {
                 self.selected_quest_index = moved_index(
@@ -217,6 +264,7 @@ impl SupersessionMudUiState {
     pub fn inspect_focused(&mut self, snapshot: &ParallelModeSupervisorSnapshot) {
         match self.focused_zone {
             SupersessionMudFocusZone::RealmMap => {
+                self.selected_room_index = self.resolved_room_index(snapshot);
                 if let Some(slot) = snapshot.pool.slots.get(self.selected_room_index)
                     && let Some(actor_index) = snapshot
                         .roster
@@ -225,6 +273,11 @@ impl SupersessionMudUiState {
                         .position(|entry| entry.slot_id == slot.slot_id)
                 {
                     self.selected_actor_index = actor_index;
+                    self.selected_actor_identity = snapshot
+                        .roster
+                        .entries
+                        .get(actor_index)
+                        .map(actor_identity_key);
                     self.focused_zone = SupersessionMudFocusZone::QuestLog;
                 }
             }
@@ -242,16 +295,64 @@ impl SupersessionMudUiState {
     }
 
     pub fn clamp_to_snapshot(&mut self, snapshot: &ParallelModeSupervisorSnapshot) {
-        self.selected_room_index = self
-            .selected_room_index
-            .min(snapshot.pool.slots.len().saturating_sub(1));
-        self.selected_actor_index = self
-            .selected_actor_index
-            .min(snapshot.roster.entries.len().saturating_sub(1));
+        self.selected_room_index = self.resolved_room_index(snapshot);
+        self.selected_room_slot_id = snapshot
+            .pool
+            .slots
+            .get(self.selected_room_index)
+            .map(|slot| slot.slot_id.clone());
+        self.selected_actor_index = self.resolved_actor_index(snapshot);
+        self.selected_actor_identity = snapshot
+            .roster
+            .entries
+            .get(self.selected_actor_index)
+            .map(actor_identity_key);
         self.selected_quest_index = self
             .selected_quest_index
             .min(snapshot.distributor.queue_items.len().saturating_sub(1));
     }
+
+    fn resolved_room_index(&self, snapshot: &ParallelModeSupervisorSnapshot) -> usize {
+        self.selected_room_slot_id
+            .as_deref()
+            .and_then(|slot_id| {
+                snapshot
+                    .pool
+                    .slots
+                    .iter()
+                    .position(|slot| slot.slot_id == slot_id)
+            })
+            .unwrap_or_else(|| {
+                self.selected_room_index
+                    .min(snapshot.pool.slots.len().saturating_sub(1))
+            })
+    }
+
+    fn resolved_actor_index(&self, snapshot: &ParallelModeSupervisorSnapshot) -> usize {
+        self.selected_actor_identity
+            .as_deref()
+            .and_then(|identity| {
+                snapshot
+                    .roster
+                    .entries
+                    .iter()
+                    .position(|entry| actor_identity_key(entry) == identity)
+            })
+            .unwrap_or_else(|| {
+                self.selected_actor_index
+                    .min(snapshot.roster.entries.len().saturating_sub(1))
+            })
+    }
+}
+
+fn actor_identity_key(
+    entry: &crate::domain::parallel_mode::ParallelModeAgentRosterEntry,
+) -> String {
+    entry
+        .lease_identity
+        .as_ref()
+        .map(|identity| identity.session_key.clone())
+        .unwrap_or_else(|| format!("{}|{}", entry.slot_id, entry.agent_id))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

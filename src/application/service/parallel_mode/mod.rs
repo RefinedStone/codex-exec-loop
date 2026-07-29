@@ -780,13 +780,14 @@ impl ParallelModeService {
         mode_enabled: bool,
         readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
     ) -> ParallelModeSupervisorSnapshot {
-        self.supervisor_service.build_snapshot(
+        let snapshot = self.supervisor_service.build_snapshot(
             self.planning_authority.as_ref(),
             workspace_dir,
             mode_enabled,
             readiness_snapshot,
             &self.distributor_service,
-        )
+        );
+        self.with_agent_profile_labels(workspace_dir, snapshot)
     }
 
     pub fn build_passive_supervisor_snapshot(
@@ -794,12 +795,38 @@ impl ParallelModeService {
         workspace_dir: &str,
         readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
     ) -> ParallelModeSupervisorSnapshot {
-        self.supervisor_service.build_passive_snapshot(
+        let snapshot = self.supervisor_service.build_passive_snapshot(
             self.planning_authority.as_ref(),
             workspace_dir,
             readiness_snapshot,
             &self.distributor_service,
-        )
+        );
+        self.with_agent_profile_labels(workspace_dir, snapshot)
+    }
+
+    fn with_agent_profile_labels(
+        &self,
+        workspace_dir: &str,
+        mut snapshot: ParallelModeSupervisorSnapshot,
+    ) -> ParallelModeSupervisorSnapshot {
+        let Some(service) = self.parallel_agent_profile_service.as_ref() else {
+            return snapshot;
+        };
+        let Ok(config) = service.load_config(workspace_dir) else {
+            return snapshot;
+        };
+        let profiles = config.enabled_profiles();
+        for entry in &mut snapshot.roster.entries {
+            let Some(profile) = profiles
+                .iter()
+                .find(|profile| profile.agent_id == entry.agent_id)
+            else {
+                continue;
+            };
+            entry.profile_display_name = Some(profile.display_name.clone());
+            entry.role_label = Some(profile.role.clone());
+        }
+        snapshot
     }
 
     /*

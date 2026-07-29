@@ -1,4 +1,6 @@
 use super::*;
+use crate::adapter::outbound::filesystem::FilesystemParallelAgentProfileRepositoryAdapter;
+use crate::application::service::parallel_agent_profile::ParallelAgentProfileService;
 
 // parallel mode가 꺼져 있으면 supervisor는 pool을 실제로 운용하지 않고 준비 화면의
 // 기본 숫자만 보여준다. 이 상태에서 distributor head가 inactive인 것도 TUI가
@@ -219,6 +221,90 @@ fn build_supervisor_snapshot_populates_detail_with_live_session_history() {
             .collect::<Vec<_>>(),
         vec!["assigned", "starting", "running"]
     );
+}
+
+// Operations board는 기본 선택 하나가 아니라 각 live lease의 정확한 session
+// detail을 필요로 한다. Snapshot 크기는 현재 lease 수로 제한되고 lane join은
+// slot/agent identity를 보존해야 한다.
+#[test]
+fn build_supervisor_snapshot_projects_bounded_detail_for_every_live_lane() {
+    let repo = TempGitRepo::new("supervisor-detail-live-lanes");
+    let service = test_parallel_mode_service();
+    let readiness = ParallelModeReadinessSnapshot::new(
+        repo.workspace_dir(),
+        ParallelModeReadinessState::Ready,
+        vec![],
+        None,
+    );
+    let mut leases = Vec::new();
+    for index in 1..=DEFAULT_POOL_SIZE {
+        let agent_id = format!("agent-{index}");
+        let lease = service
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request(
+                    &format!("task-{index}"),
+                    &format!("Task {index}"),
+                    &agent_id,
+                    &format!("task-{index}"),
+                ),
+            )
+            .expect("slot lease should be acquired");
+        service
+            .mark_slot_running(&repo.workspace_dir(), &lease.slot_id, &agent_id)
+            .expect("slot lease should transition to running");
+        leases.push(lease);
+    }
+
+    let snapshot = service.build_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness));
+
+    assert_eq!(snapshot.detail.lane_sessions.len(), DEFAULT_POOL_SIZE);
+    for lease in &leases {
+        let detail = snapshot
+            .detail
+            .session_for_lane(&lease.slot_id, Some(&lease.agent_id))
+            .expect("each live lane should expose its exact bounded detail");
+        assert_eq!(detail.session_key, lease_session_key(lease));
+        assert_eq!(detail.task_id, lease.task_id);
+    }
+}
+
+// Agent 역할은 lease 문자열에서 추측하지 않고 workspace profile authority에서
+// 가져온다. Profile이 정확히 일치할 때만 display/role metadata를 roster에 보강한다.
+#[test]
+fn build_supervisor_snapshot_enriches_roster_from_agent_profiles() {
+    let repo = TempGitRepo::new("supervisor-profile-labels");
+    let profile_service = ParallelAgentProfileService::new(Arc::new(
+        FilesystemParallelAgentProfileRepositoryAdapter::new(),
+    ));
+    let service = test_parallel_mode_service().with_parallel_agent_profile_service(profile_service);
+    let readiness = ParallelModeReadinessSnapshot::new(
+        repo.workspace_dir(),
+        ParallelModeReadinessState::Ready,
+        vec![],
+        None,
+    );
+    service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request(
+                "task-1",
+                "Commercial operations board",
+                "agent-artificer",
+                "operations-board",
+            ),
+        )
+        .expect("slot lease should be acquired");
+
+    let snapshot = service.build_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness));
+    let entry = snapshot
+        .roster
+        .entries
+        .first()
+        .expect("profile-backed roster entry should exist");
+
+    assert_eq!(entry.profile_display_name.as_deref(), Some("아티피서"));
+    assert_eq!(entry.role_label.as_deref(), Some("구현 담당"));
 }
 
 // slot cleanup 이후 roster에는 active entry가 없어도 detail pane은 마지막 session을
