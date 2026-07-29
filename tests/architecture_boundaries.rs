@@ -5342,6 +5342,22 @@ fn update_unrelated(
             && nested_read_macros.macro_escapes.is_empty(),
         "nested known read-only macros must remain harmless"
     );
+    let nested_absolute_read_macro = shell_chrome_writer_audit(
+        "fn inspect(app: &mut NativeTuiApp) {\n\
+             mod std {}\n\
+             assert!(::std::matches!(\n\
+                 app.shell.chrome.session_state,\n\
+                 SessionState::Idle\n\
+             ));\n\
+         }",
+    )
+    .expect("nested absolute standard macro fixture should parse");
+    assert!(
+        nested_absolute_read_macro.field_writes.is_empty()
+            && nested_absolute_read_macro.whole_state_writes.is_empty()
+            && nested_absolute_read_macro.macro_escapes.is_empty(),
+        "absolute nested standard macros must bypass lexical and crate-root shadows"
+    );
 
     let unrelated_nested_macro = shell_chrome_writer_audit(
         "fn inspect(app: &mut NativeTuiApp) {\n\
@@ -15083,13 +15099,14 @@ fn macro_token_identifiers(tokens: &proc_macro2::TokenStream) -> HashSet<String>
     identifiers
 }
 
-fn macro_token_invocations(
-    tokens: &proc_macro2::TokenStream,
-) -> Vec<(String, proc_macro2::TokenStream)> {
-    fn collect(
-        tokens: proc_macro2::TokenStream,
-        invocations: &mut Vec<(String, proc_macro2::TokenStream)>,
-    ) {
+struct MacroTokenInvocation {
+    path: String,
+    absolute: bool,
+    tokens: proc_macro2::TokenStream,
+}
+
+fn macro_token_invocations(tokens: &proc_macro2::TokenStream) -> Vec<MacroTokenInvocation> {
+    fn collect(tokens: proc_macro2::TokenStream, invocations: &mut Vec<MacroTokenInvocation>) {
         let token_trees = tokens.into_iter().collect::<Vec<_>>();
         for token in &token_trees {
             let proc_macro2::TokenTree::Group(group) = token else {
@@ -15134,10 +15151,22 @@ fn macro_token_invocations(
                 path_index -= 3;
             }
             path.reverse();
+            let absolute = path_index >= 2
+                && matches!(
+                    (&token_trees[path_index - 2], &token_trees[path_index - 1]),
+                    (
+                        proc_macro2::TokenTree::Punct(first),
+                        proc_macro2::TokenTree::Punct(second),
+                    ) if first.as_char() == ':' && second.as_char() == ':'
+                );
             let Some(proc_macro2::TokenTree::Group(arguments)) = token_trees.get(index + 2) else {
                 continue;
             };
-            invocations.push((path.join("::"), arguments.stream()));
+            invocations.push(MacroTokenInvocation {
+                path: path.join("::"),
+                absolute,
+                tokens: arguments.stream(),
+            });
         }
     }
 
@@ -16496,13 +16525,13 @@ impl ShellChromeWriterVisitor {
     }
 
     fn standard_macro_root_is_shadowed(&self, root: &str, absolute: bool) -> bool {
-        self.qualified_type_aliases.root_path_is_shadowed(root)
-            || (!absolute
-                && (self.path_shadows.contains(root)
-                    || self
-                        .struct_imports
-                        .get(root)
-                        .is_some_and(|target| target.as_slice() != [root])))
+        !absolute
+            && (self.qualified_type_aliases.root_path_is_shadowed(root)
+                || self.path_shadows.contains(root)
+                || self
+                    .struct_imports
+                    .get(root)
+                    .is_some_and(|target| target.as_slice() != [root]))
     }
 
     fn imported_read_macro_is_trusted(&self, name: &str, target: &[String]) -> bool {
@@ -16566,9 +16595,11 @@ impl ShellChromeWriterVisitor {
         );
         let has_untrusted_nested_authority_macro = macro_token_invocations(&expression.tokens)
             .iter()
-            .any(|(path, tokens)| {
-                !self.shell_chrome_read_macro_path(path, false)
-                    && self.identifiers_mention_mutable_authority(&macro_token_identifiers(tokens))
+            .any(|invocation| {
+                !self.shell_chrome_read_macro_path(&invocation.path, invocation.absolute)
+                    && self.identifiers_mention_mutable_authority(&macro_token_identifiers(
+                        &invocation.tokens,
+                    ))
             });
         if item_position
             || (mentions_audited_field && has_mutation_syntax)
