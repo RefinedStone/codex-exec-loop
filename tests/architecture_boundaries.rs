@@ -7114,6 +7114,22 @@ fn update_unrelated(
         1,
         "generic supertrait arguments must resolve the inherited associated type owner"
     );
+    let default_generic_trait_return = shell_chrome_writer_audit(
+        "trait DefaultGenericMaker<T = ShellChromeState> {\n\
+             fn make(&self) -> T { todo!() }\n\
+         }\n\
+         struct DefaultGenericFactory;\n\
+         impl DefaultGenericMaker for DefaultGenericFactory {}\n\
+         fn escape(factory: DefaultGenericFactory) {\n\
+             factory.make().session_state = SessionState::Idle;\n\
+         }",
+    )
+    .expect("default generic trait return fixture should parse");
+    assert_eq!(
+        default_generic_trait_return.field_writes.len(),
+        1,
+        "omitted trait generic arguments must materialize their declared defaults"
+    );
     let generic_associated_type_projection = shell_chrome_writer_audit(
         "trait GatMaker {\n\
              type Output<T>;\n\
@@ -7134,6 +7150,42 @@ fn update_unrelated(
         generic_associated_type_projection.field_writes.len(),
         1,
         "generic associated projection arguments must instantiate the associated return type"
+    );
+    let nested_generic_associated_projection = shell_chrome_writer_audit(
+        "trait Carrier {\n\
+             type Inner;\n\
+         }\n\
+         struct ChromeMarker;\n\
+         impl Carrier for ChromeMarker {\n\
+             type Inner = ShellChromeState;\n\
+         }\n\
+         struct OtherMarker;\n\
+         impl Carrier for OtherMarker {\n\
+             type Inner = OtherState;\n\
+         }\n\
+         trait NestedGatMaker {\n\
+             type Output<T: Carrier>;\n\
+             fn make<T: Carrier>(&self) -> Self::Output<T>;\n\
+         }\n\
+         struct NestedGatFactory;\n\
+         impl NestedGatMaker for NestedGatFactory {\n\
+             type Output<T: Carrier> = <T as Carrier>::Inner;\n\
+             fn make<T: Carrier>(&self) -> Self::Output<T> { todo!() }\n\
+         }\n\
+         fn make_chrome() -> <ChromeMarker as Carrier>::Inner { todo!() }\n\
+         fn make_other() -> <OtherMarker as Carrier>::Inner { todo!() }\n\
+         fn update(factory: NestedGatFactory) {\n\
+             factory.make::<ChromeMarker>().session_state = SessionState::Idle;\n\
+             factory.make::<OtherMarker>().session_state = 1;\n\
+             make_chrome().session_state = SessionState::Idle;\n\
+             make_other().session_state = 1;\n\
+         }",
+    )
+    .expect("nested generic associated projection fixture should parse");
+    assert_eq!(
+        nested_generic_associated_projection.field_writes.len(),
+        2,
+        "nested and receiver-qualified associated projections must resolve to a fixed point"
     );
     let cross_file_trait = syn::parse_file(
         "pub trait CrossFileMaker {\n\
@@ -15691,6 +15743,8 @@ const SHELL_CHROME_MACRO_MUTATION_IDENTIFIERS: &[&str] = &[
     "take",
 ];
 
+const SHELL_ASSOCIATED_PROJECTION_RESOLUTION_LIMIT: usize = 64;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ShellAuthorityKind {
     Unknown,
@@ -17301,6 +17355,12 @@ enum ShellDeclaredGenericParameter {
     Const(String),
 }
 
+#[derive(Clone, Default)]
+struct ShellDeclaredGenericDefaults {
+    types: HashMap<String, syn::Type>,
+    consts: HashMap<String, syn::Expr>,
+}
+
 fn shell_declared_generic_parameters(
     generics: &syn::Generics,
 ) -> Vec<ShellDeclaredGenericParameter> {
@@ -17319,6 +17379,30 @@ fn shell_declared_generic_parameters(
             }
         })
         .collect()
+}
+
+fn shell_declared_generic_defaults(generics: &syn::Generics) -> ShellDeclaredGenericDefaults {
+    let mut defaults = ShellDeclaredGenericDefaults::default();
+    for parameter in &generics.params {
+        match parameter {
+            syn::GenericParam::Type(parameter) => {
+                if let Some(default) = &parameter.default {
+                    defaults
+                        .types
+                        .insert(parameter.ident.to_string(), default.clone());
+                }
+            }
+            syn::GenericParam::Const(parameter) => {
+                if let Some(default) = &parameter.default {
+                    defaults
+                        .consts
+                        .insert(parameter.ident.to_string(), default.clone());
+                }
+            }
+            syn::GenericParam::Lifetime(_) => {}
+        }
+    }
+    defaults
 }
 
 #[derive(Clone, Default)]
@@ -17740,6 +17824,38 @@ fn shell_explicit_generic_bindings(
     Some(bindings)
 }
 
+fn shell_generic_bindings_with_defaults(
+    parameters: &[ShellDeclaredGenericParameter],
+    defaults: &ShellDeclaredGenericDefaults,
+    arguments: Option<&syn::AngleBracketedGenericArguments>,
+) -> Option<ShellGenericBindings> {
+    let mut bindings = shell_explicit_generic_bindings(parameters, arguments)?;
+    for parameter in parameters {
+        match parameter {
+            ShellDeclaredGenericParameter::Type(name) if !bindings.types.contains_key(name) => {
+                let mut default = defaults.types.get(name)?.clone();
+                ShellGenericSubstituter {
+                    bindings: &bindings,
+                }
+                .visit_type_mut(&mut default);
+                bindings.types.insert(name.clone(), default);
+            }
+            ShellDeclaredGenericParameter::Const(name) if !bindings.consts.contains_key(name) => {
+                let mut default = defaults.consts.get(name)?.clone();
+                ShellGenericSubstituter {
+                    bindings: &bindings,
+                }
+                .visit_expr_mut(&mut default);
+                bindings.consts.insert(name.clone(), default);
+            }
+            ShellDeclaredGenericParameter::Lifetime(_)
+            | ShellDeclaredGenericParameter::Type(_)
+            | ShellDeclaredGenericParameter::Const(_) => {}
+        }
+    }
+    Some(bindings)
+}
+
 #[derive(Clone)]
 struct ShellFunctionReturn {
     ty: syn::Type,
@@ -17789,6 +17905,7 @@ struct ShellAssociatedTypeKey {
 struct ShellAssociatedTypeProjection {
     key: ShellAssociatedTypeKey,
     arguments: Option<syn::AngleBracketedGenericArguments>,
+    receiver: Option<syn::Type>,
 }
 
 #[derive(Clone)]
@@ -17821,6 +17938,7 @@ struct ShellCanonicalTraitReference {
 #[derive(Clone, Default)]
 struct ShellTraitDefinition {
     generic_parameters: Vec<ShellDeclaredGenericParameter>,
+    generic_defaults: ShellDeclaredGenericDefaults,
     associated_type_names: HashSet<String>,
     associated_type_defaults: HashMap<String, ShellDeclaredAssociatedType>,
     supertraits: Vec<ShellDeclaredTraitReference>,
@@ -17921,16 +18039,26 @@ fn shell_associated_type_projection(
                 arguments: arguments_identity,
             },
             arguments,
+            receiver: None,
         });
     }
     let qself = path.qself.as_ref()?;
-    if shell_simple_type_name(qself.ty.as_ref()).as_deref() != Some("Self")
-        || path.path.segments.len() < 2
-    {
+    if path.path.segments.len() < 2 {
         return None;
     }
     let mut trait_path = path.path.clone();
     trait_path.segments.pop();
+    if trait_path.segments.is_empty() {
+        return None;
+    }
+    let receiver = if shell_simple_type_name(qself.ty.as_ref()).as_deref() == Some("Self") {
+        None
+    } else {
+        let mut receiver = qself.ty.as_ref().clone();
+        receiver = shell_type_with_expanded_aliases(&receiver, scope, &mut HashSet::new());
+        ShellReturnTypeQualifier { scope }.visit_type_mut(&mut receiver);
+        Some(receiver)
+    };
     Some(ShellAssociatedTypeProjection {
         key: ShellAssociatedTypeKey {
             trait_identity: canonical_trait_instance_identity(
@@ -17942,6 +18070,7 @@ fn shell_associated_type_projection(
             arguments: arguments_identity,
         },
         arguments,
+        receiver,
     })
 }
 
@@ -18252,9 +18381,11 @@ impl ShellQualifiedFunctionReturns {
                     };
                     Some(arguments)
                 });
-            let Some(trait_bindings) =
-                shell_explicit_generic_bindings(&definition.generic_parameters, trait_arguments)
-            else {
+            let Some(trait_bindings) = shell_generic_bindings_with_defaults(
+                &definition.generic_parameters,
+                &definition.generic_defaults,
+                trait_arguments,
+            ) else {
                 continue;
             };
             let mut associated_types = definition
@@ -18570,6 +18701,7 @@ fn collect_qualified_function_returns(
                     trait_identity,
                     ShellTraitDefinition {
                         generic_parameters: shell_declared_generic_parameters(&item.generics),
+                        generic_defaults: shell_declared_generic_defaults(&item.generics),
                         associated_type_names,
                         associated_type_defaults,
                         supertraits,
@@ -20087,7 +20219,11 @@ impl ShellChromeWriterVisitor {
             };
             Some(arguments)
         });
-        let bindings = shell_explicit_generic_bindings(&definition.generic_parameters, arguments)?;
+        let bindings = shell_generic_bindings_with_defaults(
+            &definition.generic_parameters,
+            &definition.generic_defaults,
+            arguments,
+        )?;
         for supertrait in &definition.supertraits {
             let supertrait_ty = syn::Type::Path(syn::TypePath {
                 qself: None,
@@ -20128,13 +20264,20 @@ impl ShellChromeWriterVisitor {
 
     fn applicable_associated_types(
         &self,
-        receiver: &ShellTypeBinding,
+        fallback_receiver: Option<&ShellTypeBinding>,
         projections: &[ShellAssociatedTypeProjection],
     ) -> HashMap<ShellAssociatedTypeKey, syn::Type> {
         let mut associated_types = HashMap::new();
         for projection in projections {
             let owner = self.associated_type_owner_key(&projection.key);
             let Ok(actual_trait) = syn::parse_str::<syn::Type>(&owner.trait_identity) else {
+                continue;
+            };
+            let projection_receiver = projection.receiver.as_ref().map(|ty| ShellTypeBinding {
+                ty: ty.clone(),
+                mutable: false,
+            });
+            let Some(receiver) = projection_receiver.as_ref().or(fallback_receiver) else {
                 continue;
             };
             for implementation in &self.qualified_function_returns.trait_implementations {
@@ -20325,24 +20468,48 @@ impl ShellChromeWriterVisitor {
             declaration_scope,
             &mut HashSet::new(),
         );
-        let projections = shell_associated_type_projections(
-            &projection_ty,
-            declaration_scope,
-            bindings.current_trait.as_deref(),
-        );
-        if !projections.is_empty()
-            && let Some(receiver) = instantiation.receiver
-        {
-            bindings
-                .associated_types
-                .extend(self.applicable_associated_types(receiver, &projections));
+        let mut visited_projection_states = HashSet::new();
+        let mut projection_resolution_settled = false;
+        for _ in 0..SHELL_ASSOCIATED_PROJECTION_RESOLUTION_LIMIT {
+            let projection_state = projection_ty.to_token_stream().to_string();
+            if !visited_projection_states.insert(projection_state.clone()) {
+                projection_resolution_settled = true;
+                break;
+            }
+            let projections = shell_associated_type_projections(
+                &projection_ty,
+                declaration_scope,
+                bindings.current_trait.as_deref(),
+            );
+            if !projections.is_empty() {
+                bindings
+                    .associated_types
+                    .extend(self.applicable_associated_types(instantiation.receiver, &projections));
+            }
+            let resolved = self.resolved_declared_return_type_with_bindings(
+                &projection_ty,
+                declaration_module,
+                instantiation.receiver,
+                &bindings,
+            );
+            let resolved_state = resolved.to_token_stream().to_string();
+            projection_ty = resolved;
+            if resolved_state == projection_state {
+                projection_resolution_settled = true;
+                break;
+            }
         }
-        Some(self.resolved_declared_return_type_with_bindings(
-            ty,
-            declaration_module,
-            instantiation.receiver,
-            &bindings,
-        ))
+        assert!(
+            projection_resolution_settled
+                || shell_associated_type_projections(
+                    &projection_ty,
+                    declaration_scope,
+                    bindings.current_trait.as_deref(),
+                )
+                .is_empty(),
+            "shell chrome guard exceeded the associated projection resolution limit"
+        );
+        Some(projection_ty)
     }
 
     fn associated_call_receiver(&self, path: &syn::ExprPath) -> Option<ShellTypeBinding> {
