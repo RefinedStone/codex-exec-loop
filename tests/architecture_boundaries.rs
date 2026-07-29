@@ -5143,6 +5143,22 @@ fn update_unrelated(
         1,
         "absolute struct imports must normalize before wrapper registry lookup"
     );
+    let direct_absolute_struct_path = shell_chrome_writer_audit_with_type_registry(
+        "mod akra {}\n\
+         fn escape(context: &mut ::akra::authority::Context<'_>) {\n\
+             context.app.shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+        false,
+        &known_struct_fields,
+        &crate_aliases,
+        &writer_module,
+    )
+    .expect("direct absolute struct path fixture should parse");
+    assert_eq!(
+        direct_absolute_struct_path.field_writes.len(),
+        1,
+        "direct absolute struct paths must retain wrapper authority"
+    );
 
     let unrelated_wrapper = shell_chrome_writer_audit(
         "struct OtherChrome { session_state: usize }\n\
@@ -16349,29 +16365,6 @@ impl ShellChromeWriterVisitor {
         resolve(ty, &self.type_aliases, &mut HashSet::new())
     }
 
-    fn normalized_struct_path(&self, raw_path: &[String]) -> Vec<String> {
-        let mut normalized = self.module_path.clone();
-        let mut index = 0;
-        if raw_path.first().is_some_and(|segment| segment == "crate") {
-            normalized.clear();
-            normalized.push("crate".to_string());
-            index = 1;
-        } else if raw_path.first().is_some_and(|segment| segment == "self") {
-            index = 1;
-        }
-        while raw_path
-            .get(index)
-            .is_some_and(|segment| segment == "super")
-        {
-            if normalized.len() > 1 {
-                normalized.pop();
-            }
-            index += 1;
-        }
-        normalized.extend(raw_path[index..].iter().cloned());
-        normalized
-    }
-
     fn imported_type_aliases(&self) -> ShellTypeAliases {
         self.struct_imports
             .iter()
@@ -16401,35 +16394,29 @@ impl ShellChromeWriterVisitor {
         self.type_aliases.extend(self.imported_type_aliases());
     }
 
-    fn registered_struct_key(&self, raw_path: &[String]) -> Option<String> {
+    fn registered_struct_key(&self, path: &syn::Path) -> Option<String> {
+        let raw_path = path
+            .segments
+            .iter()
+            .map(|segment| segment.ident.to_string())
+            .collect::<Vec<_>>();
         let first = raw_path.first()?;
-        if let Some(imported) = self.struct_imports.get(first) {
-            let mut imported_path = imported.clone();
-            imported_path.extend(raw_path.iter().skip(1).cloned());
-            let path = syn::parse_str::<syn::Path>(&format!(
-                "{}{}",
-                if self.absolute_imports.contains(first) {
-                    "::"
-                } else {
-                    ""
-                },
-                imported_path.join("::")
-            ))
-            .ok()?;
-            let key =
-                normalized_shell_type_path(&path, self.type_resolution_scope(self.impl_authority))
-                    .join("::");
-            if self.struct_fields.contains_key(&key) {
-                return Some(key);
-            }
+        let normalized =
+            normalized_shell_type_path(path, self.type_resolution_scope(self.impl_authority))
+                .join("::");
+        if self.struct_fields.contains_key(&normalized) {
+            return Some(normalized);
         }
         if raw_path.len() == 1 && self.struct_fields.contains_key(first) {
             return Some(first.clone());
         }
-
-        let normalized = self.normalized_struct_path(raw_path).join("::");
-        if self.struct_fields.contains_key(&normalized) {
-            return Some(normalized);
+        if raw_path.len() == 1 {
+            let mut scoped_path = self.module_path.clone();
+            scoped_path.push(first.clone());
+            let scoped_key = scoped_path.join("::");
+            if self.struct_fields.contains_key(&scoped_key) {
+                return Some(scoped_key);
+            }
         }
         if !matches!(
             raw_path.first().map(String::as_str),
@@ -16500,7 +16487,7 @@ impl ShellChromeWriterVisitor {
                         .map(|segment| segment.ident.to_string())
                         .collect::<Vec<_>>();
                     if visitor.struct_imports.contains_key(&raw_path[0])
-                        && let Some(key) = visitor.registered_struct_key(&raw_path)
+                        && let Some(key) = visitor.registered_struct_key(&path.path)
                     {
                         return Some(key);
                     }
@@ -16513,7 +16500,7 @@ impl ShellChromeWriterVisitor {
                         }
                         resolving_aliases.remove(&name);
                     }
-                    visitor.registered_struct_key(&raw_path)
+                    visitor.registered_struct_key(&path.path)
                 }
                 _ => None,
             }
