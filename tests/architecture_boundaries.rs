@@ -6628,6 +6628,17 @@ fn update_unrelated(
         1,
         "mutable wrapper accessors must retain payload authority through unwrap"
     );
+    let result_error_as_mut = shell_chrome_writer_audit(
+        "fn escape(mut result: Result<(), NativeTuiApp>) {\n\
+             result.as_mut().unwrap_err().shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+    )
+    .expect("Result::as_mut error authority fixture should parse");
+    assert_eq!(
+        result_error_as_mut.field_writes.len(),
+        1,
+        "Result error extractors must retain the second payload authority"
+    );
 
     let read_only_index = shell_chrome_writer_audit(
         "fn inspect(apps: Vec<NativeTuiApp>) {\n\
@@ -17884,6 +17895,19 @@ impl ShellChromeWriterVisitor {
                     ty,
                 })
             }
+            syn::Expr::MethodCall(call)
+                if matches!(
+                    call.method.to_string().as_str(),
+                    "expect_err" | "unwrap_err"
+                ) =>
+            {
+                let parent = self.resolve_type_binding(call.receiver.as_ref())?;
+                let ty = self.result_error_type(&parent.ty)?;
+                Some(ShellTypeBinding {
+                    mutable: parent.mutable || self.type_grants_mutable_access(&ty),
+                    ty,
+                })
+            }
             syn::Expr::Call(call) => {
                 if let Some(argument) = self.transparent_call_argument(call) {
                     return self.resolve_type_binding(argument);
@@ -18449,6 +18473,70 @@ impl ShellChromeWriterVisitor {
             self.type_resolution_scope(self.impl_authority),
             &mut HashSet::new(),
         )
+    }
+
+    fn result_error_type(&self, ty: &syn::Type) -> Option<syn::Type> {
+        fn path(ty: &syn::Type) -> Option<&syn::TypePath> {
+            match ty {
+                syn::Type::Reference(reference) => path(reference.elem.as_ref()),
+                syn::Type::Group(group) => path(group.elem.as_ref()),
+                syn::Type::Paren(paren) => path(paren.elem.as_ref()),
+                syn::Type::Path(path) if path.qself.is_none() => Some(path),
+                _ => None,
+            }
+        }
+
+        let expanded = shell_type_with_expanded_aliases(
+            ty,
+            self.type_resolution_scope(self.impl_authority),
+            &mut HashSet::new(),
+        );
+        let result_path = path(&expanded)?;
+        let raw_path = result_path
+            .path
+            .segments
+            .iter()
+            .map(|segment| segment.ident.to_string())
+            .collect::<Vec<_>>();
+        let standard_result = matches!(raw_path.as_slice(), [name] if name == "Result")
+            || matches!(
+                raw_path.as_slice(),
+                [root, module, name]
+                    if matches!(root.as_str(), "std" | "core")
+                        && module == "result"
+                        && name == "Result"
+            );
+        let registered_result = if raw_path.len() == 1 {
+            let mut scoped_path = self.module_path.clone();
+            scoped_path.push("Result".to_string());
+            self.struct_fields.contains_key("Result")
+                || self.struct_fields.contains_key(&scoped_path.join("::"))
+        } else {
+            let normalized = normalized_shell_type_path(
+                &result_path.path,
+                self.type_resolution_scope(self.impl_authority),
+            )
+            .join("::");
+            self.struct_fields.contains_key(&normalized)
+        };
+        if !standard_result || registered_result {
+            return None;
+        }
+        let syn::PathArguments::AngleBracketed(arguments) =
+            &result_path.path.segments.last()?.arguments
+        else {
+            return None;
+        };
+        arguments
+            .args
+            .iter()
+            .filter_map(|argument| {
+                let syn::GenericArgument::Type(ty) = argument else {
+                    return None;
+                };
+                Some(ty.clone())
+            })
+            .nth(1)
     }
 
     fn referenced_type(ty: syn::Type, mutable: bool) -> syn::Type {
