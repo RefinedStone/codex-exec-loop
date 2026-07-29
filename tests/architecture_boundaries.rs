@@ -5444,6 +5444,32 @@ fn update_unrelated(
         1,
         "qualified aliases must retain reordered concrete struct arguments"
     );
+    let reexported_reordered_struct_aliases = shell_chrome_writer_audit(
+        "struct Holder<T> { app: T }\n\
+         mod defs {\n\
+             pub type Reordered<A, B> = super::Holder<B>;\n\
+         }\n\
+         mod facade {\n\
+             pub use super::defs as aliases;\n\
+             pub use super::defs::*;\n\
+         }\n\
+         fn escape_prefix(\n\
+             mut holder: facade::aliases::Reordered<OtherState, NativeTuiApp>,\n\
+         ) {\n\
+             holder.app.shell.chrome.session_state = SessionState::Idle;\n\
+         }\n\
+         fn escape_glob(\n\
+             mut holder: facade::Reordered<OtherState, NativeTuiApp>,\n\
+         ) {\n\
+             holder.app.shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+    )
+    .expect("re-exported reordered generic struct alias fixtures should parse");
+    assert_eq!(
+        reexported_reordered_struct_aliases.field_writes.len(),
+        2,
+        "prefix and glob re-exports must retain reordered concrete struct arguments"
+    );
     let recursively_reordered_struct = shell_chrome_writer_audit(
         "struct Flip<A, B> {\n\
              child: Box<Flip<B, A>>,\n\
@@ -15622,6 +15648,131 @@ fn shell_type_with_expanded_aliases(
                 );
                 resolving_aliases.remove(&qualified_name);
                 return expanded;
+            }
+
+            for prefix_len in (1..normalized_path.len()).rev() {
+                let prefix = normalized_path[..prefix_len].join("::");
+                let Some(alias) = scope.qualified_type_aliases.get(&prefix) else {
+                    continue;
+                };
+                let instantiated = alias.instantiate(&syn::PathArguments::None);
+                let Some(alias_path) = shell_type_path(&instantiated) else {
+                    continue;
+                };
+                if !resolving_aliases.insert(prefix.clone()) {
+                    return ty.clone();
+                }
+                let mut expanded_path = alias_path.clone();
+                for segment in &normalized_path[prefix_len..] {
+                    expanded_path
+                        .path
+                        .segments
+                        .push(syn::PathSegment::from(syn::Ident::new(
+                            segment,
+                            proc_macro2::Span::call_site(),
+                        )));
+                }
+                if let Some(expanded_segment) = expanded_path.path.segments.last_mut() {
+                    expanded_segment.arguments = segment.arguments.clone();
+                }
+                let declaration_module = normalized_path[..prefix_len.saturating_sub(1)].to_vec();
+                let expanded = shell_type_with_expanded_aliases(
+                    &syn::Type::Path(expanded_path),
+                    ShellTypeResolutionScope {
+                        module_path: &declaration_module,
+                        imports: scope
+                            .qualified_type_aliases
+                            .imports_for_module(&declaration_module),
+                        absolute_imports: scope
+                            .qualified_type_aliases
+                            .absolute_imports_for_module(&declaration_module),
+                        path_shadows: scope
+                            .qualified_type_aliases
+                            .path_shadows_for_module(&declaration_module),
+                        allow_local_aliases: false,
+                        allow_local_imports: true,
+                        ..scope
+                    },
+                    resolving_aliases,
+                );
+                resolving_aliases.remove(&prefix);
+                return expanded;
+            }
+
+            if !scope
+                .qualified_type_aliases
+                .explicitly_declares_type(&qualified_name)
+            {
+                for prefix_len in (1..normalized_path.len()).rev() {
+                    let glob_module = normalized_path[..prefix_len].join("::");
+                    let shadowed_item = format!("{glob_module}::{}", normalized_path[prefix_len]);
+                    if scope
+                        .qualified_type_aliases
+                        .explicitly_declares_type(&shadowed_item)
+                    {
+                        continue;
+                    }
+                    for (target_index, target) in scope
+                        .qualified_type_aliases
+                        .glob_targets(&glob_module)
+                        .iter()
+                        .enumerate()
+                    {
+                        let Some(target_path) = shell_type_path(target) else {
+                            continue;
+                        };
+                        let resolution_key = format!("{glob_module}::*#{target_index}");
+                        if !resolving_aliases.insert(resolution_key.clone()) {
+                            continue;
+                        }
+                        let mut expanded_path = target_path.clone();
+                        for segment in &normalized_path[prefix_len..] {
+                            expanded_path.path.segments.push(syn::PathSegment::from(
+                                syn::Ident::new(segment, proc_macro2::Span::call_site()),
+                            ));
+                        }
+                        if let Some(expanded_segment) = expanded_path.path.segments.last_mut() {
+                            expanded_segment.arguments = segment.arguments.clone();
+                        }
+                        let declaration_module = normalized_path[..prefix_len].to_vec();
+                        let candidate_scope = ShellTypeResolutionScope {
+                            module_path: &declaration_module,
+                            imports: scope
+                                .qualified_type_aliases
+                                .imports_for_module(&declaration_module),
+                            absolute_imports: scope
+                                .qualified_type_aliases
+                                .absolute_imports_for_module(&declaration_module),
+                            path_shadows: scope
+                                .qualified_type_aliases
+                                .path_shadows_for_module(&declaration_module),
+                            allow_local_aliases: false,
+                            allow_local_imports: true,
+                            ..scope
+                        };
+                        let candidate = syn::Type::Path(expanded_path);
+                        let candidate_key = shell_type_path(&candidate)
+                            .map(|path| normalized_shell_type_path(&path.path, candidate_scope))
+                            .unwrap_or_default()
+                            .join("::");
+                        let expanded = shell_type_with_expanded_aliases(
+                            &candidate,
+                            candidate_scope,
+                            resolving_aliases,
+                        );
+                        resolving_aliases.remove(&resolution_key);
+                        let target_declared =
+                            scope.qualified_type_aliases.contains_key(&candidate_key)
+                                || scope
+                                    .qualified_type_aliases
+                                    .explicitly_declares_type(&candidate_key);
+                        if target_declared
+                            || shell_type_identity(&expanded) != shell_type_identity(&candidate)
+                        {
+                            return expanded;
+                        }
+                    }
+                }
             }
 
             let mut expanded = path.clone();
