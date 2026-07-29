@@ -1,6 +1,7 @@
 use super::conversation_model::{
     ProgressiveActivityCardKind, ProgressiveActivityDetailKind, ProgressiveActivityExpandState,
 };
+use ratatui::layout::{Position, Rect};
 
 const MAX_PROGRESSIVE_ACTIVITY_PAGE_HISTORY: usize = 256;
 
@@ -111,6 +112,13 @@ pub(super) struct ProgressiveActivityOverlayUiState {
     previous_page_stack: Vec<ProgressiveActivityPageCursor>,
     next_page_cursor: Option<ProgressiveActivityPageCursor>,
     expand_state: ProgressiveActivityExpandState,
+    card_hit_areas: Vec<ProgressiveActivityCardHitArea>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ProgressiveActivityCardHitArea {
+    pub(super) card_index: usize,
+    pub(super) area: Rect,
 }
 
 impl Default for ProgressiveActivityOverlayUiState {
@@ -127,6 +135,7 @@ impl Default for ProgressiveActivityOverlayUiState {
             previous_page_stack: Vec::new(),
             next_page_cursor: None,
             expand_state: ProgressiveActivityExpandState::default(),
+            card_hit_areas: Vec::new(),
         }
     }
 }
@@ -154,6 +163,33 @@ impl ProgressiveActivityOverlayUiState {
 
     pub(super) fn expand_state_mut(&mut self) -> &mut ProgressiveActivityExpandState {
         &mut self.expand_state
+    }
+
+    pub(super) fn bind_card_hit_areas(
+        &mut self,
+        card_hit_areas: Vec<ProgressiveActivityCardHitArea>,
+    ) {
+        self.card_hit_areas = card_hit_areas;
+    }
+
+    pub(super) fn clear_card_hit_areas(&mut self) {
+        self.card_hit_areas.clear();
+    }
+
+    pub(super) fn card_index_at(&self, column: u16, row: u16) -> Option<usize> {
+        self.card_hit_areas
+            .iter()
+            .find(|hit_area| hit_area.area.contains(Position::new(column, row)))
+            .map(|hit_area| hit_area.card_index)
+    }
+
+    pub(super) fn mouse_capture_requested(&self) -> bool {
+        !self.card_hit_areas.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(super) fn card_hit_areas(&self) -> &[ProgressiveActivityCardHitArea] {
+        &self.card_hit_areas
     }
 
     #[cfg(test)]
@@ -275,6 +311,19 @@ impl ProgressiveActivityOverlayUiState {
         true
     }
 
+    pub(super) fn select_card(&mut self, index: usize, filtered_len: usize) -> bool {
+        if index >= filtered_len {
+            return false;
+        }
+        let changed = self.selected_card_index != index;
+        self.selected_card_index = index;
+        self.list_focus = true;
+        if changed {
+            self.reset_page_navigation();
+        }
+        true
+    }
+
     pub(super) fn focus_detail(&mut self) {
         self.list_focus = false;
     }
@@ -365,12 +414,14 @@ impl ProgressiveActivityOverlayUiState {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_PROGRESSIVE_ACTIVITY_PAGE_HISTORY, ProgressiveActivityCardKind,
-        ProgressiveActivityDetailKind, ProgressiveActivityDiffContinuation,
-        ProgressiveActivityDiffCursor, ProgressiveActivityDiffLineKind,
-        ProgressiveActivityOverlayUiState, ProgressiveActivityPageCursor,
-        parse_progressive_activity_card_filter, parse_progressive_activity_detail_kind,
+        MAX_PROGRESSIVE_ACTIVITY_PAGE_HISTORY, ProgressiveActivityCardHitArea,
+        ProgressiveActivityCardKind, ProgressiveActivityDetailKind,
+        ProgressiveActivityDiffContinuation, ProgressiveActivityDiffCursor,
+        ProgressiveActivityDiffLineKind, ProgressiveActivityOverlayUiState,
+        ProgressiveActivityPageCursor, parse_progressive_activity_card_filter,
+        parse_progressive_activity_detail_kind,
     };
+    use ratatui::layout::Rect;
 
     #[test]
     fn kind_parser_is_closed_and_case_insensitive() {
@@ -561,5 +612,30 @@ mod tests {
         assert!(state.list_focus());
         assert!(state.move_card_selection(-1, 3));
         assert_eq!(state.selected_card_index(), 0);
+    }
+
+    #[test]
+    fn receipt_owned_card_hit_areas_are_exact_and_clearable() {
+        let mut state = ProgressiveActivityOverlayUiState::default();
+        state.bind_card_hit_areas(vec![
+            ProgressiveActivityCardHitArea {
+                card_index: 0,
+                area: Rect::new(4, 6, 20, 1),
+            },
+            ProgressiveActivityCardHitArea {
+                card_index: 2,
+                area: Rect::new(4, 8, 20, 1),
+            },
+        ]);
+
+        assert!(state.mouse_capture_requested());
+        assert_eq!(state.card_index_at(4, 6), Some(0));
+        assert_eq!(state.card_index_at(23, 8), Some(2));
+        assert_eq!(state.card_index_at(24, 8), None);
+        assert_eq!(state.card_index_at(4, 7), None);
+
+        state.clear_card_hit_areas();
+        assert!(!state.mouse_capture_requested());
+        assert_eq!(state.card_index_at(4, 6), None);
     }
 }

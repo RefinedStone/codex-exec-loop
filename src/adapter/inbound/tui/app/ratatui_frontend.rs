@@ -110,7 +110,7 @@ fn run_event_loop_until_exit(
             runtime.finish_pending_quit_after_transaction(transaction_completed);
         }
         // Preserve normal terminal selection and wheel scrolling unless the current frame owns a clickable action.
-        restore_guard.sync_mouse_capture(runtime.queue_receipt_undo_mouse_capture_requested())?;
+        restore_guard.sync_mouse_capture(runtime.mouse_capture_requested())?;
         /*
          * poll timeout은 기본 idle wait와 다음 scheduled draw deadline의 교집합이다. 입력이 없어도
          * delayed draw 시점에는 poll이 깨어나 frame coalescing이 실제 화면에 반영된다.

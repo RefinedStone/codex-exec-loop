@@ -36,6 +36,7 @@ use super::*;
  */
 pub(super) struct InlineConversationFrameProjection {
     pub(super) core_revision: u64,
+    pub(super) rendered_at_epoch_millis: Option<i64>,
     pub(super) tail_view: InlineTailView,
     pub(super) live_transcript_lines: Vec<Line<'static>>,
     pub(super) shell_overlay: ShellOverlay,
@@ -222,6 +223,7 @@ impl InlineConversationFrameProjection {
             Box::new(screen_model.planning_runtime_projection);
         Self {
             core_revision: screen_model.core_revision,
+            rendered_at_epoch_millis: i64::try_from(screen_model.animation_elapsed_millis).ok(),
             tail_view,
             live_transcript_lines,
             shell_overlay: screen_model.shell_overlay,
@@ -423,7 +425,8 @@ pub(super) fn capture_inline_shell_frame_model(
                 .conversation_scroll_from_bottom(),
         },
         ShellOverlay::Activity => {
-            let (view, change) = capture_activity_frame(app, inspection_area);
+            let (view, change) =
+                capture_activity_frame(app, inspection_area, projection.rendered_at_epoch_millis);
             receipt.activity = Some(change);
             InlineInspectionFrameModel::Activity(view)
         }
@@ -590,6 +593,7 @@ fn inline_frame_render_receipt_matches(
 fn capture_activity_frame(
     app: &NativeTuiApp,
     area: Rect,
+    rendered_at_ms: Option<i64>,
 ) -> (
     ActivityOverlayView,
     StateChange<ProgressiveActivityOverlayUiState>,
@@ -598,7 +602,7 @@ fn capture_activity_frame(
     let mut next = expected.clone();
     let selected_kind = next.selected_kind();
     let card_filter = next.card_filter();
-    let (lifecycle_epoch, diff_available, output_available, cards) =
+    let (lifecycle_epoch, diff_available, output_available, cards, wait_status) =
         match &app.conversation.lifecycle.conversation_state {
             ConversationState::Ready(conversation) => {
                 let detail = &conversation.progressive_activity_detail;
@@ -610,11 +614,15 @@ fn capture_activity_frame(
                     detail
                         .document(ProgressiveActivityDetailKind::Output)
                         .is_some(),
-                    detail.cards(),
+                    detail.timeline_cards(rendered_at_ms),
+                    detail.wait_status(
+                        conversation.progressive_activity.retrying_summary(),
+                        conversation.pending_approval_request().is_some(),
+                    ),
                 )
             }
             ConversationState::Loading | ConversationState::Failed(_) => {
-                (0, false, false, Vec::new())
+                (0, false, false, Vec::new(), None)
             }
         };
     let filtered_indices = filter_cards_by_kind(&cards, card_filter);
@@ -628,6 +636,7 @@ fn capture_activity_frame(
         ConversationState::Ready(conversation) => filtered_indices
             .get(selected_card_index)
             .and_then(|card_index| cards.get(*card_index))
+            .filter(|card| next.expand_state().is_card_expanded(card.key))
             .and_then(|card| conversation.progressive_activity_detail.card_document(card)),
         ConversationState::Loading | ConversationState::Failed(_) => None,
     };
@@ -647,6 +656,8 @@ fn capture_activity_frame(
         &filtered_cards,
         selected_card_index,
         next.list_focus(),
+        wait_status.as_ref(),
+        next.expand_state(),
         selected_kind,
         diff_available,
         output_available,
@@ -678,6 +689,8 @@ fn capture_activity_frame(
         &filtered_cards,
         selected_card_index,
         next.list_focus(),
+        wait_status.as_ref(),
+        next.expand_state(),
         selected_kind,
         diff_available,
         output_available,
@@ -686,6 +699,24 @@ fn capture_activity_frame(
         layout[1].width,
         body_height,
     );
+    let header_body_y = layout[0].y.saturating_add(1);
+    let header_bottom = layout[0].bottom();
+    let card_hit_areas = view
+        .card_rows
+        .iter()
+        .filter_map(|row| {
+            let preceding_rows = count_rendered_inline_rows(
+                &view.header_lines[..row.header_line_index],
+                layout[0].width,
+            );
+            let y = header_body_y.saturating_add(u16::try_from(preceding_rows).unwrap_or(u16::MAX));
+            (y < header_bottom).then_some(ProgressiveActivityCardHitArea {
+                card_index: row.card_index,
+                area: Rect::new(layout[0].x, y, layout[0].width, 1),
+            })
+        })
+        .collect();
+    next.bind_card_hit_areas(card_hit_areas);
     next.set_page_cursor_window(view.current_page_cursor, view.next_page_cursor);
     (view, StateChange { expected, next })
 }

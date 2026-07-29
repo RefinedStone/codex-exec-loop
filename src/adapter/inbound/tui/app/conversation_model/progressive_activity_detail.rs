@@ -2,8 +2,10 @@ use std::fmt;
 use std::sync::{Arc, Weak};
 
 use super::progressive_activity_cards::{
-    ProgressiveActivityCard, card_detail_text, project_activity_cards,
+    ProgressiveActivityCard, ProgressiveActivityWaitStatus, card_detail_text,
+    project_activity_cards, project_activity_timeline_cards, project_activity_wait_status,
 };
+use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProjectionSnapshot;
 use crate::domain::conversation_progressive_activity::{
     ConversationProgressiveActivityPayload, ConversationProgressiveActivityProjectionSnapshot,
 };
@@ -61,10 +63,21 @@ pub(crate) struct ProgressiveActivityDetailState {
     // A strong reference would force Core's next Arc::make_mut to clone up to
     // the full retained projection. The document guard upgrades only for one frame.
     snapshot: Weak<ConversationProgressiveActivityProjectionSnapshot>,
+    lifecycle_snapshot: Weak<ConversationItemLifecycleProjectionSnapshot>,
     lifecycle_epoch: u64,
 }
 
 impl ProgressiveActivityDetailState {
+    pub(crate) fn replace_snapshots(
+        &mut self,
+        snapshot: &Arc<ConversationProgressiveActivityProjectionSnapshot>,
+        lifecycle_snapshot: &Arc<ConversationItemLifecycleProjectionSnapshot>,
+    ) {
+        self.snapshot = Arc::downgrade(snapshot);
+        self.lifecycle_snapshot = Arc::downgrade(lifecycle_snapshot);
+    }
+
+    #[cfg(test)]
     pub(crate) fn replace_snapshot(
         &mut self,
         snapshot: &Arc<ConversationProgressiveActivityProjectionSnapshot>,
@@ -114,6 +127,30 @@ impl ProgressiveActivityDetailState {
         project_activity_cards(&snapshot)
     }
 
+    pub(crate) fn timeline_cards(
+        &self,
+        rendered_at_ms: Option<i64>,
+    ) -> Vec<ProgressiveActivityCard> {
+        let Some(snapshot) = self.snapshot.upgrade() else {
+            return Vec::new();
+        };
+        let lifecycle_snapshot = self.lifecycle_snapshot.upgrade();
+        project_activity_timeline_cards(&snapshot, lifecycle_snapshot.as_deref(), rendered_at_ms)
+    }
+
+    pub(crate) fn wait_status(
+        &self,
+        retry_summary: Option<&str>,
+        approval_pending: bool,
+    ) -> Option<ProgressiveActivityWaitStatus> {
+        let lifecycle_snapshot = self.lifecycle_snapshot.upgrade();
+        project_activity_wait_status(
+            lifecycle_snapshot.as_deref(),
+            retry_summary,
+            approval_pending,
+        )
+    }
+
     pub(crate) fn card_document(
         &self,
         card: &ProgressiveActivityCard,
@@ -141,6 +178,7 @@ impl ProgressiveActivityDetailState {
 
     pub(crate) fn reset(&mut self) {
         self.snapshot = Weak::new();
+        self.lifecycle_snapshot = Weak::new();
         self.lifecycle_epoch = self.lifecycle_epoch.wrapping_add(1);
     }
 
@@ -183,6 +221,10 @@ impl fmt::Debug for ProgressiveActivityDetailState {
             .debug_struct("ProgressiveActivityDetailState")
             .field("lifecycle_epoch", &self.lifecycle_epoch)
             .field("snapshot_present", &snapshot.is_some())
+            .field(
+                "lifecycle_snapshot_present",
+                &self.lifecycle_snapshot.upgrade().is_some(),
+            )
             .field(
                 "last_sequence",
                 &snapshot

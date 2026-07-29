@@ -7885,6 +7885,7 @@ fn conversation_runtime_status_projection_uses_one_narrow_screen_model() {
             "input_state",
             "live_agent_message_present",
             "interrupt_support_label",
+            "wait_status",
         ]
         .into_iter()
         .map(str::to_string)

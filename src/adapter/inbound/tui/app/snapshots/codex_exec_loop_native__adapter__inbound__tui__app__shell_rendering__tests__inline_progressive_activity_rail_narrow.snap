@@ -7,7 +7,7 @@ expression: narrow
 "                                                "
 "                                                "
 "Akra / progressi...  •  ready  •  queue: off    "
-"◦ Working (0s • waiting for response / inter...)"
+"◦ Waiting for model response (0s • interrupt r…)"
 "notice: activity: active:command | diff:+1 -1 h1"
 "╭ Task                                          "
 "│ > Describe a task or type : for commands      "
