@@ -481,7 +481,7 @@ mod tests {
     use super::*;
 
     #[test]
-fn host_scrollback_keeps_blank_guards_after_an_empty_thread() {
+    fn host_scrollback_keeps_blank_guards_after_an_empty_thread() {
         let lines = format_conversation_scrollback_lines_with_expand(
             &[],
             ConversationViewMode::Medium,
