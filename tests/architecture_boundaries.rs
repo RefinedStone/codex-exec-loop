@@ -4083,10 +4083,10 @@ fn shell_chrome_state_has_one_typed_reducer_writer() {
             &syntax,
             module_path,
         ));
-        known_function_returns.extend(qualified_function_returns_declared_in_file(
-            &syntax,
-            module_path,
-        ));
+        extend_qualified_function_returns(
+            &mut known_function_returns,
+            qualified_function_returns_declared_in_file(&syntax, module_path),
+        );
     }
     for (path, source, module_path) in &tui_sources {
         let syntax = syn::parse_file(source)
@@ -4099,10 +4099,10 @@ fn shell_chrome_state_has_one_typed_reducer_writer() {
             &syntax,
             module_path,
         ));
-        known_function_returns.extend(qualified_function_returns_declared_in_file(
-            &syntax,
-            module_path,
-        ));
+        extend_qualified_function_returns(
+            &mut known_function_returns,
+            qualified_function_returns_declared_in_file(&syntax, module_path),
+        );
     }
 
     for (path, source, module_path) in &tui_sources {
@@ -6673,50 +6673,77 @@ fn update_unrelated(
          impl Factory {\n\
              fn make_chrome(&self) -> ShellChromeState { todo!() }\n\
          }\n\
-         fn escape(factory: Factory) {\n\
+         trait LookalikeFactory {\n\
+             fn make_chrome(&self) -> OtherState;\n\
+         }\n\
+         impl LookalikeFactory for Factory {\n\
+             fn make_chrome(&self) -> OtherState { todo!() }\n\
+         }\n\
+         impl NativeTuiApp {\n\
+             fn wrapped(self) -> Option<Self> { Some(self) }\n\
+         }\n\
+         fn escape(factory: Factory, app: NativeTuiApp) {\n\
              make_app().shell.chrome.session_state = SessionState::Idle;\n\
              make_chrome().session_state = SessionState::Idle;\n\
              returns::make_app().shell.chrome.session_state = SessionState::Idle;\n\
              factory.make_chrome().session_state = SessionState::Idle;\n\
+             app.wrapped().unwrap().shell.chrome.session_state = SessionState::Idle;\n\
          }",
     )
     .expect("owned function return authority fixtures should parse");
     assert_eq!(
         owned_function_returns.field_writes.len(),
-        4,
-        "free, qualified, and method return temporaries must grant mutable authority"
+        5,
+        "free, qualified, method, and wrapped Self return temporaries must retain authority"
     );
     let external_factory_file = syn::parse_file(
-        "pub struct Factory;\n\
+        "use super::shell_chrome::ShellChromeState as Chrome;\n\
+         pub struct Factory;\n\
          impl Factory {\n\
-             pub fn make_chrome(&self) -> ShellChromeState { todo!() }\n\
+             pub fn make_chrome(&self) -> super::shell_chrome::ShellChromeState { todo!() }\n\
          }\n\
-         pub fn make_app() -> NativeTuiApp { todo!() }",
+         pub fn make_app() -> super::app::NativeTuiApp { todo!() }\n\
+         pub fn make_chrome() -> Chrome { todo!() }",
     )
     .expect("cross-file factory return fixture should parse");
-    let external_factory_module = ["crate".to_string(), "factory".to_string()];
+    let external_factory_module = [
+        "crate".to_string(),
+        "adapter".to_string(),
+        "inbound".to_string(),
+        "tui".to_string(),
+        "factory".to_string(),
+    ];
     let external_factory_structs =
         qualified_struct_fields_declared_in_file(&external_factory_file, &external_factory_module);
+    let external_factory_aliases =
+        qualified_type_aliases_declared_in_file(&external_factory_file, &external_factory_module);
     let external_factory_returns = qualified_function_returns_declared_in_file(
         &external_factory_file,
         &external_factory_module,
     );
     let cross_file_function_returns = shell_chrome_writer_audit_with_registries(
-        "fn escape(factory: crate::factory::Factory) {\n\
-             crate::factory::make_app().shell.chrome.session_state = SessionState::Idle;\n\
+        "fn escape(factory: crate::adapter::inbound::tui::factory::Factory) {\n\
+             crate::adapter::inbound::tui::factory::make_app().shell.chrome.session_state = SessionState::Idle;\n\
+             crate::adapter::inbound::tui::factory::make_chrome().session_state = SessionState::Idle;\n\
              factory.make_chrome().session_state = SessionState::Idle;\n\
          }",
         false,
         &external_factory_structs,
-        &ShellQualifiedTypeAliases::new(),
+        &external_factory_aliases,
         &external_factory_returns,
-        &["crate".to_string(), "writer".to_string()],
+        &[
+            "crate".to_string(),
+            "adapter".to_string(),
+            "inbound".to_string(),
+            "tui".to_string(),
+            "writer".to_string(),
+        ],
     )
     .expect("cross-file function return authority fixture should parse");
     assert_eq!(
         cross_file_function_returns.field_writes.len(),
-        2,
-        "cross-file qualified functions and methods must retain owned return authority"
+        3,
+        "cross-file relative, aliased, qualified, and method returns must retain authority"
     );
 
     let read_only_index = shell_chrome_writer_audit(
@@ -15333,6 +15360,53 @@ struct ShellTypeResolutionScope<'a> {
     allow_local_imports: bool,
 }
 
+struct ShellReturnTypeQualifier<'a> {
+    scope: ShellTypeResolutionScope<'a>,
+}
+
+impl VisitMut for ShellReturnTypeQualifier<'_> {
+    fn visit_type_path_mut(&mut self, path: &mut syn::TypePath) {
+        visit_mut::visit_type_path_mut(self, path);
+        if path.qself.is_some() {
+            return;
+        }
+        let raw_path = path
+            .path
+            .segments
+            .iter()
+            .map(|segment| segment.ident.to_string())
+            .collect::<Vec<_>>();
+        let Some(first) = raw_path.first() else {
+            return;
+        };
+        if matches!(first.as_str(), "std" | "core" | "alloc") {
+            return;
+        }
+        let imported = self.scope.imports.contains_key(first);
+        let relative = matches!(first.as_str(), "crate" | "self" | "super");
+        if path.path.leading_colon.is_none() && raw_path.len() == 1 && !imported && !relative {
+            return;
+        }
+        let normalized = normalized_shell_type_path(&path.path, self.scope);
+        if normalized.is_empty() {
+            return;
+        }
+        let arguments = path
+            .path
+            .segments
+            .last()
+            .map(|segment| segment.arguments.clone())
+            .unwrap_or(syn::PathArguments::None);
+        let Ok(mut qualified) = syn::parse_str::<syn::Path>(&normalized.join("::")) else {
+            return;
+        };
+        if let Some(segment) = qualified.segments.last_mut() {
+            segment.arguments = arguments;
+        }
+        path.path = qualified;
+    }
+}
+
 fn normalized_shell_type_path(
     path: &syn::Path,
     scope: ShellTypeResolutionScope<'_>,
@@ -16687,7 +16761,31 @@ fn qualified_type_aliases_declared_in_file(
 }
 
 type ShellFunctionReturns = HashMap<String, syn::Type>;
-type ShellQualifiedFunctionReturns = HashMap<String, syn::Type>;
+
+#[derive(Clone)]
+enum ShellFunctionReturnSource {
+    Free,
+    Inherent,
+    Trait(String),
+}
+
+#[derive(Clone)]
+struct ShellQualifiedFunctionReturn {
+    ty: syn::Type,
+    module_path: Vec<String>,
+    source: ShellFunctionReturnSource,
+}
+
+type ShellQualifiedFunctionReturns = HashMap<String, Vec<ShellQualifiedFunctionReturn>>;
+
+fn extend_qualified_function_returns(
+    target: &mut ShellQualifiedFunctionReturns,
+    source: ShellQualifiedFunctionReturns,
+) {
+    for (key, returns) in source {
+        target.entry(key).or_default().extend(returns);
+    }
+}
 
 fn collect_item_function_return(item: &syn::Item, returns: &mut ShellFunctionReturns) {
     let syn::Item::Fn(function) = item else {
@@ -16761,15 +16859,23 @@ fn collect_qualified_function_returns(
         match item {
             syn::Item::Fn(function) => {
                 if let syn::ReturnType::Type(_, ty) = &function.sig.output {
-                    returns.insert(
-                        format!("{}::{}", module_path.join("::"), function.sig.ident),
-                        ty.as_ref().clone(),
-                    );
+                    returns
+                        .entry(format!(
+                            "{}::{}",
+                            module_path.join("::"),
+                            function.sig.ident
+                        ))
+                        .or_default()
+                        .push(ShellQualifiedFunctionReturn {
+                            ty: ty.as_ref().clone(),
+                            module_path: module_path.clone(),
+                            source: ShellFunctionReturnSource::Free,
+                        });
                 }
             }
             syn::Item::Impl(item) => {
                 let raw_receiver = shell_type_identity(item.self_ty.as_ref());
-                let receiver_paths = shell_type_path(item.self_ty.as_ref())
+                let mut receiver_paths = shell_type_path(item.self_ty.as_ref())
                     .map(|path| {
                         vec![
                             raw_receiver.clone(),
@@ -16777,6 +16883,16 @@ fn collect_qualified_function_returns(
                         ]
                     })
                     .unwrap_or_else(|| vec![raw_receiver]);
+                receiver_paths.sort();
+                receiver_paths.dedup();
+                let source = item.trait_.as_ref().map_or(
+                    ShellFunctionReturnSource::Inherent,
+                    |(_, trait_path, _)| {
+                        ShellFunctionReturnSource::Trait(
+                            declared_shell_path(trait_path, module_path).join("::"),
+                        )
+                    },
+                );
                 for method in &item.items {
                     let syn::ImplItem::Fn(method) = method else {
                         continue;
@@ -16788,10 +16904,14 @@ fn collect_qualified_function_returns(
                         continue;
                     };
                     for receiver in &receiver_paths {
-                        returns.insert(
-                            format!("{receiver}::{}", method.sig.ident),
-                            ty.as_ref().clone(),
-                        );
+                        returns
+                            .entry(format!("{receiver}::{}", method.sig.ident))
+                            .or_default()
+                            .push(ShellQualifiedFunctionReturn {
+                                ty: ty.as_ref().clone(),
+                                module_path: module_path.clone(),
+                                source: source.clone(),
+                            });
                     }
                 }
             }
@@ -17424,10 +17544,10 @@ fn shell_chrome_writer_audit_with_registries(
         module_path,
     ));
     let mut qualified_function_returns = known_function_returns.clone();
-    qualified_function_returns.extend(qualified_function_returns_declared_in_file(
-        &syntax,
-        module_path,
-    ));
+    extend_qualified_function_returns(
+        &mut qualified_function_returns,
+        qualified_function_returns_declared_in_file(&syntax, module_path),
+    );
     let mut visitor = ShellChromeWriterVisitor {
         allow_native_app_dispatch_seam,
         struct_fields,
@@ -18018,6 +18138,72 @@ impl ShellChromeWriterVisitor {
         }
     }
 
+    fn return_type_resolution_scope<'a>(
+        &'a self,
+        module_path: &'a [String],
+    ) -> ShellTypeResolutionScope<'a> {
+        ShellTypeResolutionScope {
+            implicit_self: self.impl_authority,
+            type_aliases: &self.type_aliases,
+            qualified_type_aliases: &self.qualified_type_aliases,
+            imports: self.qualified_type_aliases.imports_for_module(module_path),
+            absolute_imports: self
+                .qualified_type_aliases
+                .absolute_imports_for_module(module_path),
+            path_shadows: self
+                .qualified_type_aliases
+                .path_shadows_for_module(module_path),
+            module_path,
+            allow_local_aliases: false,
+            allow_local_imports: true,
+        }
+    }
+
+    fn resolved_declared_return_type(
+        &self,
+        ty: &syn::Type,
+        declaration_module: &[String],
+        receiver: Option<&ShellTypeBinding>,
+    ) -> syn::Type {
+        fn owned_receiver_type(ty: &syn::Type) -> syn::Type {
+            match ty {
+                syn::Type::Reference(reference) => owned_receiver_type(reference.elem.as_ref()),
+                syn::Type::Ptr(pointer) => owned_receiver_type(pointer.elem.as_ref()),
+                syn::Type::Group(group) => owned_receiver_type(group.elem.as_ref()),
+                syn::Type::Paren(paren) => owned_receiver_type(paren.elem.as_ref()),
+                _ => ty.clone(),
+            }
+        }
+
+        let mut resolved = ty.clone();
+        if let Some(receiver) = receiver {
+            let replacements =
+                HashMap::from([("Self".to_string(), owned_receiver_type(&receiver.ty))]);
+            ShellTypeParameterSubstituter {
+                replacements: &replacements,
+            }
+            .visit_type_mut(&mut resolved);
+        }
+        let declaration_scope = self.return_type_resolution_scope(declaration_module);
+        resolved =
+            shell_type_with_expanded_aliases(&resolved, declaration_scope, &mut HashSet::new());
+        ShellReturnTypeQualifier {
+            scope: declaration_scope,
+        }
+        .visit_type_mut(&mut resolved);
+        resolved
+    }
+
+    fn return_type_contains_authority(&self, ty: &syn::Type) -> bool {
+        shell_authority_binding_from_type(
+            ty,
+            self.type_resolution_scope(self.impl_authority),
+            &mut HashSet::new(),
+        )
+        .is_some()
+            || self.type_contains_mutable_authority(ty, true, &mut HashSet::new())
+    }
+
     fn function_return_type(&self, path: &syn::Path) -> Option<syn::Type> {
         if path.leading_colon.is_none()
             && path.segments.len() == 1
@@ -18025,7 +18211,7 @@ impl ShellChromeWriterVisitor {
                 .function_returns
                 .get(&path.segments.first()?.ident.to_string())
         {
-            return Some(ty.clone());
+            return Some(self.resolved_declared_return_type(ty, &self.module_path, None));
         }
         let mut normalized =
             normalized_shell_type_path(path, self.type_resolution_scope(self.impl_authority));
@@ -18034,9 +18220,19 @@ impl ShellChromeWriterVisitor {
             scoped.append(&mut normalized);
             normalized = scoped;
         }
-        self.qualified_function_returns
-            .get(&normalized.join("::"))
-            .cloned()
+        let returns = self
+            .qualified_function_returns
+            .get(&normalized.join("::"))?;
+        let selected = returns
+            .iter()
+            .find(|entry| matches!(entry.source, ShellFunctionReturnSource::Free))
+            .or_else(|| {
+                returns
+                    .iter()
+                    .find(|entry| matches!(entry.source, ShellFunctionReturnSource::Inherent))
+            })
+            .or_else(|| returns.first())?;
+        Some(self.resolved_declared_return_type(&selected.ty, &selected.module_path, None))
     }
 
     fn method_return_type(
@@ -18083,17 +18279,50 @@ impl ShellChromeWriterVisitor {
             }
             receiver_keys.push(normalized.join("::"));
         }
+        receiver_keys.sort();
         receiver_keys.dedup();
         let method = method.to_string();
-        let mut ty = receiver_keys.into_iter().find_map(|receiver| {
-            self.qualified_function_returns
-                .get(&format!("{receiver}::{method}"))
-                .cloned()
-        })?;
-        if shell_type_is_bare_self(&ty) {
-            ty = receiver.ty.clone();
+        let candidates = receiver_keys
+            .into_iter()
+            .filter_map(|receiver| {
+                self.qualified_function_returns
+                    .get(&format!("{receiver}::{method}"))
+            })
+            .flatten()
+            .collect::<Vec<_>>();
+        if let Some(inherent) = candidates
+            .iter()
+            .copied()
+            .find(|entry| matches!(entry.source, ShellFunctionReturnSource::Inherent))
+        {
+            return Some(self.resolved_declared_return_type(
+                &inherent.ty,
+                &inherent.module_path,
+                Some(receiver),
+            ));
         }
-        Some(ty)
+        let mut trait_returns = candidates
+            .into_iter()
+            .filter_map(|entry| {
+                let ShellFunctionReturnSource::Trait(trait_path) = &entry.source else {
+                    return None;
+                };
+                Some((
+                    trait_path,
+                    self.resolved_declared_return_type(
+                        &entry.ty,
+                        &entry.module_path,
+                        Some(receiver),
+                    ),
+                ))
+            })
+            .collect::<Vec<_>>();
+        trait_returns.sort_by(|left, right| left.0.cmp(right.0));
+        trait_returns
+            .iter()
+            .find(|(_, ty)| self.return_type_contains_authority(ty))
+            .or_else(|| trait_returns.first())
+            .map(|(_, ty)| ty.clone())
     }
 
     fn resolve_type_binding(&self, expression: &syn::Expr) -> Option<ShellTypeBinding> {
