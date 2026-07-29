@@ -4592,7 +4592,8 @@ fn update_unrelated(
     let qualified_chrome_alias_file = syn::parse_file(
         "pub type ChromeRef<'a> = &'a mut ShellChromeState;\n\
          pub type ChromeView<'a> = &'a ShellChromeState;\n\
-         pub type ChromeGuard<'a> = std::sync::MutexGuard<'a, ShellChromeState>;",
+         pub type ChromeGuard<'a> = std::sync::MutexGuard<'a, ShellChromeState>;\n\
+         pub type ChromeResult<'a> = Result<&'a ShellChromeState, ChromeGuard<'a>>;",
     )
     .expect("qualified Chrome authority aliases should parse");
     let qualified_chrome_aliases = qualified_type_aliases_declared_in_file(
@@ -4647,6 +4648,22 @@ fn update_unrelated(
         qualified_chrome_guard_argument.whole_state_writes.len(),
         1,
         "qualified mutable guard aliases must retain Chrome authority at external call sites"
+    );
+    let multi_argument_chrome_alias = shell_chrome_writer_audit_with_type_registry(
+        "fn external<T>(_chrome: T) {}\n\
+         fn escape(chrome: crate::chrome_aliases::ChromeResult<'_>) {\n\
+             external(chrome);\n\
+         }",
+        false,
+        &known_struct_fields,
+        &qualified_chrome_aliases,
+        &writer_module,
+    )
+    .expect("multi-argument Chrome alias fixture should parse");
+    assert_eq!(
+        multi_argument_chrome_alias.whole_state_writes.len(),
+        1,
+        "all generic arguments must contribute their mutable Chrome authority"
     );
     let generic_authority_alias_file = syn::parse_file(
         "pub type Forward<T> = T;\n\
@@ -15157,17 +15174,28 @@ fn shell_authority_binding_from_type(
                 "Box" | "MutexGuard" | "Option" | "Pin" | "RefMut" | "Result" | "RwLockWriteGuard"
             ) && let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments
             {
-                let authority = arguments.args.iter().find_map(|argument| {
+                let wrapper_is_mutable =
+                    matches!(name.as_str(), "MutexGuard" | "RefMut" | "RwLockWriteGuard");
+                let mut first_authority = None;
+                for argument in &arguments.args {
                     let syn::GenericArgument::Type(inner) = argument else {
-                        return None;
+                        continue;
                     };
-                    shell_authority_binding_from_type(inner, scope, resolving_aliases)
-                })?;
-                return Some(ShellAuthorityBinding {
-                    mutable: authority.mutable
-                        || matches!(name.as_str(), "MutexGuard" | "RefMut" | "RwLockWriteGuard"),
-                    ..authority
-                });
+                    let Some(authority) =
+                        shell_authority_binding_from_type(inner, scope, resolving_aliases)
+                    else {
+                        continue;
+                    };
+                    let authority = ShellAuthorityBinding {
+                        mutable: authority.mutable || wrapper_is_mutable,
+                        ..authority
+                    };
+                    if authority.mutable {
+                        return Some(authority);
+                    }
+                    first_authority.get_or_insert(authority);
+                }
+                return first_authority;
             }
             None
         }
