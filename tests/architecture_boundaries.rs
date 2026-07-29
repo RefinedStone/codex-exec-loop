@@ -6617,6 +6617,17 @@ fn update_unrelated(
         1,
         "mutable collection accessors must retain element authority"
     );
+    let option_as_mut = shell_chrome_writer_audit(
+        "fn escape(mut app: Option<NativeTuiApp>) {\n\
+             app.as_mut().unwrap().shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+    )
+    .expect("Option::as_mut authority fixture should parse");
+    assert_eq!(
+        option_as_mut.field_writes.len(),
+        1,
+        "mutable wrapper accessors must retain payload authority through unwrap"
+    );
 
     let read_only_index = shell_chrome_writer_audit(
         "fn inspect(apps: Vec<NativeTuiApp>) {\n\
@@ -17845,17 +17856,33 @@ impl ShellChromeWriterVisitor {
                 })
             }
             syn::Expr::MethodCall(call)
-                if matches!(call.method.to_string().as_str(), "expect" | "unwrap")
-                    && matches!(
-                        call.receiver.as_ref(),
-                        syn::Expr::MethodCall(accessor)
-                            if matches!(
-                                accessor.method.to_string().as_str(),
-                                "first_mut" | "get_mut" | "last_mut"
-                            )
-                    ) =>
+                if matches!(call.method.to_string().as_str(), "as_deref_mut" | "as_mut") =>
             {
-                self.resolve_type_binding(call.receiver.as_ref())
+                let parent = self.resolve_type_binding(call.receiver.as_ref())?;
+                Some(ShellTypeBinding {
+                    mutable: true,
+                    ..parent
+                })
+            }
+            syn::Expr::MethodCall(call)
+                if matches!(call.method.to_string().as_str(), "expect" | "unwrap") =>
+            {
+                let parent = self.resolve_type_binding(call.receiver.as_ref())?;
+                if matches!(
+                    call.receiver.as_ref(),
+                    syn::Expr::MethodCall(accessor)
+                        if matches!(
+                            accessor.method.to_string().as_str(),
+                            "first_mut" | "get_mut" | "last_mut"
+                        )
+                ) {
+                    return Some(parent);
+                }
+                let ty = self.collection_element_type(&parent.ty)?;
+                Some(ShellTypeBinding {
+                    mutable: parent.mutable || self.type_grants_mutable_access(&ty),
+                    ty,
+                })
             }
             syn::Expr::Call(call) => {
                 if let Some(argument) = self.transparent_call_argument(call) {
