@@ -6639,6 +6639,20 @@ fn update_unrelated(
         1,
         "Result error extractors must retain the second payload authority"
     );
+    let owned_wrapper_payloads = shell_chrome_writer_audit(
+        "fn escape_option(app: Option<NativeTuiApp>) {\n\
+             app.unwrap().shell.chrome.session_state = SessionState::Idle;\n\
+         }\n\
+         fn escape_result(result: Result<(), NativeTuiApp>) {\n\
+             result.unwrap_err().shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+    )
+    .expect("owned wrapper payload authority fixtures should parse");
+    assert_eq!(
+        owned_wrapper_payloads.field_writes.len(),
+        2,
+        "owned success and error payloads must grant mutable temporary authority"
+    );
 
     let read_only_index = shell_chrome_writer_audit(
         "fn inspect(apps: Vec<NativeTuiApp>) {\n\
@@ -17891,7 +17905,7 @@ impl ShellChromeWriterVisitor {
                 }
                 let ty = self.collection_element_type(&parent.ty)?;
                 Some(ShellTypeBinding {
-                    mutable: parent.mutable || self.type_grants_mutable_access(&ty),
+                    mutable: parent.mutable || self.extracted_payload_is_mutable(&ty),
                     ty,
                 })
             }
@@ -17904,7 +17918,7 @@ impl ShellChromeWriterVisitor {
                 let parent = self.resolve_type_binding(call.receiver.as_ref())?;
                 let ty = self.result_error_type(&parent.ty)?;
                 Some(ShellTypeBinding {
-                    mutable: parent.mutable || self.type_grants_mutable_access(&ty),
+                    mutable: parent.mutable || self.extracted_payload_is_mutable(&ty),
                     ty,
                 })
             }
@@ -18537,6 +18551,25 @@ impl ShellChromeWriterVisitor {
                 Some(ty.clone())
             })
             .nth(1)
+    }
+
+    fn extracted_payload_is_mutable(&self, ty: &syn::Type) -> bool {
+        fn resolve(ty: &syn::Type) -> bool {
+            match ty {
+                syn::Type::Reference(reference) => reference.mutability.is_some(),
+                syn::Type::Ptr(pointer) => pointer.mutability.is_some(),
+                syn::Type::Group(group) => resolve(group.elem.as_ref()),
+                syn::Type::Paren(paren) => resolve(paren.elem.as_ref()),
+                _ => true,
+            }
+        }
+
+        let expanded = shell_type_with_expanded_aliases(
+            ty,
+            self.type_resolution_scope(self.impl_authority),
+            &mut HashSet::new(),
+        );
+        resolve(&expanded)
     }
 
     fn referenced_type(ty: syn::Type, mutable: bool) -> syn::Type {
