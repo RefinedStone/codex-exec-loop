@@ -24,7 +24,10 @@ use super::shell_rendering::{
     InlineConversationFrameProjection, InlineFrameRenderReceipt, draw_projected,
 };
 use super::shell_runtime::ShellRuntime;
-use super::{INLINE_VIEWPORT_HEIGHT, InlineHistoryRenderMode, ShellFrontendMode};
+use super::{
+    INLINE_HOST_SCROLLBACK_REFLOW_GUARD_ROWS, INLINE_VIEWPORT_HEIGHT, InlineHistoryRenderMode,
+    ShellFrontendMode,
+};
 #[path = "inline_terminal_adapter/backend.rs"]
 pub(super) mod backend;
 #[path = "inline_terminal_adapter/history_flush.rs"]
@@ -33,8 +36,6 @@ mod history_flush;
 use self::backend::InlineResizeSnapshot;
 pub(super) use self::backend::{InlineResizeBackend, InlineTerminalBackend};
 use self::history_flush::HistoryFlushState;
-
-const HOST_SCROLLBACK_REFLOW_GUARD_ROWS: u16 = 1;
 
 /* Inline mode uses ratatui's inline viewport while also writing durable history
  * into the host scrollback. This adapter keeps those two surfaces synchronized:
@@ -291,8 +292,9 @@ fn clear_inline_viewport<B: Backend>(
      * Some main-buffer terminals reflow a previously drawn tail before Ratatui
      * observes the new width. The extra tail row lands immediately above the
      * newly anchored viewport and is outside both Ratatui buffers. Host
-     * scrollback always ends with one blank guard row, so one cleanup row is
-     * safe even when the emulator keeps the cursor fixed while reflowing.
+     * scrollback always ends with reserved blank guard rows, so the guarded
+     * cleanup is safe even when the emulator keeps the cursor fixed while
+     * reflowing.
      * Additional rows require both an observed cursor shift and a prior-tail
      * wrap budget; durable transcript rows above that bound remain untouched.
      */
@@ -818,7 +820,7 @@ impl InlineTerminalState {
             .frame_cache
             .resize_reflow_cleanup_budget(terminal_size.width);
         self.viewport.resize_reflow_rows_to_clear =
-            cleanup_budget.min(observed_cursor_shift.max(HOST_SCROLLBACK_REFLOW_GUARD_ROWS));
+            cleanup_budget.min(observed_cursor_shift.max(INLINE_HOST_SCROLLBACK_REFLOW_GUARD_ROWS));
     }
 
     fn observe_focus_reacquire(&mut self, focus_reacquire_epoch: u64) {
@@ -998,7 +1000,7 @@ impl FrameCacheState {
         if next_terminal_width > previous.terminal_width {
             // Expanding can unwrap one former soft row above the newly anchored
             // viewport even though no new wrapping is introduced.
-            return HOST_SCROLLBACK_REFLOW_GUARD_ROWS;
+            return INLINE_HOST_SCROLLBACK_REFLOW_GUARD_ROWS;
         }
         previous
             .lines
@@ -1011,7 +1013,7 @@ impl FrameCacheState {
                 let next_rows = wrapped_terminal_rows(line_width, next_terminal_width);
                 total.saturating_add(next_rows.saturating_sub(previous_rows))
             })
-            .max(HOST_SCROLLBACK_REFLOW_GUARD_ROWS)
+            .max(INLINE_HOST_SCROLLBACK_REFLOW_GUARD_ROWS)
     }
 
     fn should_draw_inline_frame(

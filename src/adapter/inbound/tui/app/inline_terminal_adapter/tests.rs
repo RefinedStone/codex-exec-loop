@@ -1864,7 +1864,7 @@ fn frame_cache_invalidates_when_only_live_agent_text_changes() {
 }
 
 #[test]
-fn width_resize_uses_one_host_guard_row_when_the_cursor_does_not_move() {
+fn width_resize_uses_host_guard_rows_when_the_cursor_does_not_move() {
     let mut app = make_test_app();
     app.shell.show_startup_ascii_art = false;
     let mut state = InlineTerminalState::default();
@@ -1878,8 +1878,8 @@ fn width_resize_uses_one_host_guard_row_when_the_cursor_does_not_move() {
     state.observe_physical_resize_reflow(Size::new(48, 18), Position::new(29, 3), true);
     assert_eq!(
         state.resize_reflow_rows_to_clear(),
-        1,
-        "the host separator must protect one cleanup row when tmux reflows without moving the cursor"
+        2,
+        "the host separators must protect cleanup when tmux reflows without moving the cursor"
     );
 
     state.mark_frame_drawn(
@@ -1897,7 +1897,7 @@ fn width_resize_uses_one_host_guard_row_when_the_cursor_does_not_move() {
     state.observe_physical_resize_reflow(Size::new(120, 30), Position::new(29, 3), true);
     assert_eq!(
         state.resize_reflow_rows_to_clear(),
-        1,
+        2,
         "restoring width must also remove the former narrow HUD row above the viewport"
     );
 
