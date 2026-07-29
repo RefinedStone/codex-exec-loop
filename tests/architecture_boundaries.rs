@@ -4214,6 +4214,72 @@ fn update_unrelated(
         "relative paths must resolve against their declared Rust module"
     );
 
+    let module_alias_qualified_app = shell_chrome_writer_audit_with_struct_registry(
+        "use super as app_alias;\n\
+         fn escape(app: &mut app_alias::NativeTuiApp) {\n\
+             app.shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+        false,
+        &ShellStructFields::new(),
+        &[
+            "crate".to_string(),
+            "adapter".to_string(),
+            "inbound".to_string(),
+            "tui".to_string(),
+            "app".to_string(),
+            "child".to_string(),
+        ],
+    )
+    .expect("module alias qualified NativeTuiApp fixture should parse");
+    assert_eq!(
+        module_alias_qualified_app.field_writes.len(),
+        1,
+        "module aliases must resolve against their declared Rust module"
+    );
+
+    let child_module_qualified_app = shell_chrome_writer_audit_with_struct_registry(
+        "fn escape(app: &mut app::NativeTuiApp) {\n\
+             app.shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+        false,
+        &ShellStructFields::new(),
+        &[
+            "crate".to_string(),
+            "adapter".to_string(),
+            "inbound".to_string(),
+            "tui".to_string(),
+        ],
+    )
+    .expect("child module qualified NativeTuiApp fixture should parse");
+    assert_eq!(
+        child_module_qualified_app.field_writes.len(),
+        1,
+        "child module paths must resolve against their current Rust module"
+    );
+
+    let unrelated_module_alias = shell_chrome_writer_audit_with_struct_registry(
+        "use crate::unrelated as app_alias;\n\
+         fn update(app: &mut app_alias::NativeTuiApp) {\n\
+             app.shell.chrome.session_state = 1;\n\
+         }",
+        false,
+        &ShellStructFields::new(),
+        &[
+            "crate".to_string(),
+            "adapter".to_string(),
+            "inbound".to_string(),
+            "tui".to_string(),
+            "app".to_string(),
+            "child".to_string(),
+        ],
+    )
+    .expect("unrelated module alias fixture should parse");
+    assert!(
+        unrelated_module_alias.field_writes.is_empty()
+            && unrelated_module_alias.whole_state_writes.is_empty(),
+        "module aliases to an unrelated same-named type must remain harmless"
+    );
+
     let unrelated_qualified_app = shell_chrome_writer_audit(
         "fn update(app: &mut crate::unrelated::NativeTuiApp) {\n\
              app.shell.chrome.session_state = 1;\n\
@@ -4256,6 +4322,21 @@ fn update_unrelated(
         "qualified re-exports must resolve to the original TUI authority path"
     );
 
+    let qualified_module_reexport = shell_chrome_writer_audit(
+        "mod facade {\n\
+             pub use crate::adapter::inbound::tui::app as app_alias;\n\
+         }\n\
+         fn escape(app: &mut crate::facade::app_alias::NativeTuiApp) {\n\
+             app.shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+    )
+    .expect("qualified NativeTuiApp module re-export fixture should parse");
+    assert_eq!(
+        qualified_module_reexport.field_writes.len(),
+        1,
+        "qualified module re-exports must resolve path suffixes to TUI authority"
+    );
+
     let unrelated_qualified_reexport = shell_chrome_writer_audit(
         "mod facade {\n\
              pub use crate::unrelated::NativeTuiApp;\n\
@@ -4269,6 +4350,23 @@ fn update_unrelated(
         unrelated_qualified_reexport.field_writes.is_empty()
             && unrelated_qualified_reexport.whole_state_writes.is_empty(),
         "same-named re-exports outside the TUI authority path must remain harmless"
+    );
+
+    let unrelated_qualified_module_reexport = shell_chrome_writer_audit(
+        "mod facade {\n\
+             pub use crate::unrelated as app_alias;\n\
+         }\n\
+         fn update(app: &mut crate::facade::app_alias::NativeTuiApp) {\n\
+             app.shell.chrome.session_state = 1;\n\
+         }",
+    )
+    .expect("unrelated qualified module re-export fixture should parse");
+    assert!(
+        unrelated_qualified_module_reexport.field_writes.is_empty()
+            && unrelated_qualified_module_reexport
+                .whole_state_writes
+                .is_empty(),
+        "module re-exports to unrelated same-named types must remain harmless"
     );
 
     let wrapped_app = shell_chrome_writer_audit(
@@ -4428,6 +4526,39 @@ fn update_unrelated(
         relative_cross_file_alias.field_writes.len(),
         1,
         "imported aliases must resolve relative RHS paths and nested aliases in their declaration module"
+    );
+
+    let module_alias_authority_file = syn::parse_file(
+        "use super as app_alias;\n\
+         pub type AppRef<'a> = &'a mut app_alias::NativeTuiApp;",
+    )
+    .expect("module-aliased cross-file authority definition should parse");
+    let module_alias_type_aliases = qualified_type_aliases_declared_in_file(
+        &module_alias_authority_file,
+        &[
+            "crate".to_string(),
+            "adapter".to_string(),
+            "inbound".to_string(),
+            "tui".to_string(),
+            "app".to_string(),
+            "aliases".to_string(),
+        ],
+    );
+    let module_alias_cross_file = shell_chrome_writer_audit_with_type_registry(
+        "use crate::adapter::inbound::tui::app::aliases::AppRef;\n\
+         fn escape(app: AppRef<'_>) {\n\
+             app.shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+        false,
+        &known_struct_fields,
+        &module_alias_type_aliases,
+        &relative_writer_module,
+    )
+    .expect("module-aliased cross-file authority fixture should parse");
+    assert_eq!(
+        module_alias_cross_file.field_writes.len(),
+        1,
+        "cross-file aliases must resolve module aliases in their declaration scope"
     );
 
     let cross_file_unrelated_alias = shell_chrome_writer_audit_with_type_registry(
@@ -13765,12 +13896,38 @@ struct ShellTypeBinding {
     mutable: bool,
 }
 
-fn normalized_shell_type_path(path: &syn::Path, module_path: &[String]) -> Vec<String> {
-    let raw_path = path
+#[derive(Clone, Copy)]
+struct ShellTypeResolutionScope<'a> {
+    implicit_self: Option<ShellAuthorityKind>,
+    type_aliases: &'a HashMap<String, syn::Type>,
+    qualified_type_aliases: &'a ShellQualifiedTypeAliases,
+    imports: &'a ShellStructImports,
+    module_path: &'a [String],
+    allow_local_aliases: bool,
+}
+
+fn normalized_shell_type_path(
+    path: &syn::Path,
+    module_path: &[String],
+    imports: &ShellStructImports,
+    allow_local_imports: bool,
+) -> Vec<String> {
+    let mut raw_path = path
         .segments
         .iter()
         .map(|segment| segment.ident.to_string())
         .collect::<Vec<_>>();
+    if allow_local_imports {
+        let mut resolving_imports = HashSet::new();
+        while let Some(first) = raw_path.first().cloned()
+            && let Some(target) = imports.get(&first)
+            && resolving_imports.insert(first)
+        {
+            let mut expanded = target.clone();
+            expanded.extend(raw_path.iter().skip(1).cloned());
+            raw_path = expanded;
+        }
+    }
     if raw_path.len() <= 1 {
         return raw_path;
     }
@@ -13793,9 +13950,6 @@ fn normalized_shell_type_path(path: &syn::Path, module_path: &[String]) -> Vec<S
         }
         index += 1;
     }
-    if index == 0 {
-        return raw_path;
-    }
     normalized.extend(raw_path[index..].iter().cloned());
     normalized
 }
@@ -13804,8 +13958,10 @@ fn shell_authority_kind_from_path(
     path: &syn::Path,
     module_path: &[String],
     implicit_self: Option<ShellAuthorityKind>,
+    imports: &ShellStructImports,
+    allow_local_imports: bool,
 ) -> Option<ShellAuthorityKind> {
-    let normalized = normalized_shell_type_path(path, module_path);
+    let normalized = normalized_shell_type_path(path, module_path, imports, allow_local_imports);
     match normalized.as_slice() {
         [name] if name == "NativeTuiApp" => Some(ShellAuthorityKind::App),
         [name] if name == "NativeTuiShellState" => Some(ShellAuthorityKind::Shell),
@@ -13861,56 +14017,110 @@ fn shell_type_is_bare_self(ty: &syn::Type) -> bool {
 
 fn shell_authority_binding_from_type(
     ty: &syn::Type,
-    implicit_self: Option<ShellAuthorityKind>,
-    type_aliases: &HashMap<String, syn::Type>,
-    qualified_type_aliases: &ShellQualifiedTypeAliases,
+    scope: ShellTypeResolutionScope<'_>,
     resolving_aliases: &mut HashSet<String>,
-    module_path: &[String],
-    allow_local_aliases: bool,
 ) -> Option<ShellAuthorityBinding> {
     match ty {
         syn::Type::Path(path) if path.qself.is_none() => {
             let segment = path.path.segments.last()?;
             let name = segment.ident.to_string();
             let normalized_path = if path.path.segments.len() == 1 {
-                let mut qualified = module_path.to_vec();
+                let mut qualified = scope.module_path.to_vec();
                 qualified.push(name.clone());
                 qualified
             } else {
-                normalized_shell_type_path(&path.path, module_path)
+                normalized_shell_type_path(
+                    &path.path,
+                    scope.module_path,
+                    scope.imports,
+                    scope.allow_local_aliases,
+                )
             };
             let qualified_name = normalized_path.join("::");
             let alias_module_path = normalized_path
                 .get(..normalized_path.len().saturating_sub(1))
                 .unwrap_or_default();
-            let local_alias = (allow_local_aliases
-                && (path.path.segments.len() == 1 || alias_module_path == module_path))
-                .then(|| type_aliases.get(&name))
+            let local_alias = (scope.allow_local_aliases
+                && (path.path.segments.len() == 1 || alias_module_path == scope.module_path))
+                .then(|| scope.type_aliases.get(&name))
                 .flatten();
-            let alias = local_alias.or_else(|| qualified_type_aliases.get(&qualified_name));
+            let alias = local_alias.or_else(|| scope.qualified_type_aliases.get(&qualified_name));
             if let Some(alias) = alias {
                 if !resolving_aliases.insert(qualified_name.clone()) {
                     return None;
                 }
                 let alias_module_path = if local_alias.is_some() {
-                    module_path
+                    scope.module_path
                 } else {
                     alias_module_path
                 };
                 let resolved = shell_authority_binding_from_type(
                     alias,
-                    implicit_self,
-                    type_aliases,
-                    qualified_type_aliases,
+                    ShellTypeResolutionScope {
+                        module_path: alias_module_path,
+                        allow_local_aliases: local_alias.is_some(),
+                        ..scope
+                    },
                     resolving_aliases,
-                    alias_module_path,
-                    local_alias.is_some(),
                 );
                 resolving_aliases.remove(&qualified_name);
                 return resolved;
             }
-            let direct_kind =
-                shell_authority_kind_from_path(&path.path, module_path, implicit_self);
+            for prefix_len in (1..normalized_path.len()).rev() {
+                let prefix = normalized_path[..prefix_len].join("::");
+                let Some(alias) = scope.qualified_type_aliases.get(&prefix) else {
+                    continue;
+                };
+                let alias_path = match alias {
+                    syn::Type::Path(path) if path.qself.is_none() => Some(path),
+                    syn::Type::Group(group) => match group.elem.as_ref() {
+                        syn::Type::Path(path) if path.qself.is_none() => Some(path),
+                        _ => None,
+                    },
+                    syn::Type::Paren(paren) => match paren.elem.as_ref() {
+                        syn::Type::Path(path) if path.qself.is_none() => Some(path),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let Some(alias_path) = alias_path else {
+                    continue;
+                };
+                if !resolving_aliases.insert(prefix.clone()) {
+                    return None;
+                }
+                let mut expanded_path = alias_path.clone();
+                for segment in &normalized_path[prefix_len..] {
+                    expanded_path
+                        .path
+                        .segments
+                        .push(syn::PathSegment::from(syn::Ident::new(
+                            segment,
+                            proc_macro2::Span::call_site(),
+                        )));
+                }
+                let alias_module_path = &normalized_path[..prefix_len.saturating_sub(1)];
+                let resolved = shell_authority_binding_from_type(
+                    &syn::Type::Path(expanded_path),
+                    ShellTypeResolutionScope {
+                        module_path: alias_module_path,
+                        allow_local_aliases: false,
+                        ..scope
+                    },
+                    resolving_aliases,
+                );
+                resolving_aliases.remove(&prefix);
+                if resolved.is_some() {
+                    return resolved;
+                }
+            }
+            let direct_kind = shell_authority_kind_from_path(
+                &path.path,
+                scope.module_path,
+                scope.implicit_self,
+                scope.imports,
+                scope.allow_local_aliases,
+            );
             if let Some(kind) = direct_kind {
                 return Some(ShellAuthorityBinding {
                     kind,
@@ -13926,15 +14136,7 @@ fn shell_authority_binding_from_type(
                     let syn::GenericArgument::Type(inner) = argument else {
                         return None;
                     };
-                    shell_authority_binding_from_type(
-                        inner,
-                        implicit_self,
-                        type_aliases,
-                        qualified_type_aliases,
-                        resolving_aliases,
-                        module_path,
-                        allow_local_aliases,
-                    )
+                    shell_authority_binding_from_type(inner, scope, resolving_aliases)
                 });
             }
             None
@@ -13942,46 +14144,23 @@ fn shell_authority_binding_from_type(
         syn::Type::Reference(reference) => {
             let authority = shell_authority_binding_from_type(
                 reference.elem.as_ref(),
-                implicit_self,
-                type_aliases,
-                qualified_type_aliases,
+                scope,
                 resolving_aliases,
-                module_path,
-                allow_local_aliases,
             )?;
             Some(ShellAuthorityBinding {
                 mutable: reference.mutability.is_some(),
                 ..authority
             })
         }
-        syn::Type::Group(group) => shell_authority_binding_from_type(
-            group.elem.as_ref(),
-            implicit_self,
-            type_aliases,
-            qualified_type_aliases,
-            resolving_aliases,
-            module_path,
-            allow_local_aliases,
-        ),
-        syn::Type::Paren(paren) => shell_authority_binding_from_type(
-            paren.elem.as_ref(),
-            implicit_self,
-            type_aliases,
-            qualified_type_aliases,
-            resolving_aliases,
-            module_path,
-            allow_local_aliases,
-        ),
+        syn::Type::Group(group) => {
+            shell_authority_binding_from_type(group.elem.as_ref(), scope, resolving_aliases)
+        }
+        syn::Type::Paren(paren) => {
+            shell_authority_binding_from_type(paren.elem.as_ref(), scope, resolving_aliases)
+        }
         syn::Type::Ptr(pointer) => {
-            let authority = shell_authority_binding_from_type(
-                pointer.elem.as_ref(),
-                implicit_self,
-                type_aliases,
-                qualified_type_aliases,
-                resolving_aliases,
-                module_path,
-                allow_local_aliases,
-            )?;
+            let authority =
+                shell_authority_binding_from_type(pointer.elem.as_ref(), scope, resolving_aliases)?;
             Some(ShellAuthorityBinding {
                 mutable: pointer.mutability.is_some(),
                 ..authority
@@ -14597,6 +14776,20 @@ impl ShellChromeWriterVisitor {
         }
     }
 
+    fn type_resolution_scope(
+        &self,
+        implicit_self: Option<ShellAuthorityKind>,
+    ) -> ShellTypeResolutionScope<'_> {
+        ShellTypeResolutionScope {
+            implicit_self,
+            type_aliases: &self.type_aliases,
+            qualified_type_aliases: &self.qualified_type_aliases,
+            imports: &self.struct_imports,
+            module_path: &self.module_path,
+            allow_local_aliases: true,
+        }
+    }
+
     fn binding_from_type(
         &self,
         pattern: &syn::Pat,
@@ -14605,12 +14798,8 @@ impl ShellChromeWriterVisitor {
         let mut resolving_aliases = HashSet::new();
         let authority = shell_authority_binding_from_type(
             ty,
-            self.impl_authority,
-            &self.type_aliases,
-            &self.qualified_type_aliases,
+            self.type_resolution_scope(self.impl_authority),
             &mut resolving_aliases,
-            &self.module_path,
-            true,
         )?;
         Some(ShellAuthorityBinding {
             mutable: authority.mutable || pattern_has_mutable_binding(pattern),
@@ -15122,12 +15311,8 @@ impl ShellChromeWriterVisitor {
         let mut resolving_aliases = HashSet::new();
         if let Some(authority) = shell_authority_binding_from_type(
             ty,
-            self.impl_authority,
-            &self.type_aliases,
-            &self.qualified_type_aliases,
+            self.type_resolution_scope(self.impl_authority),
             &mut resolving_aliases,
-            &self.module_path,
-            true,
         ) {
             return inherited_mutability || authority.mutable;
         }
@@ -15568,12 +15753,8 @@ impl ShellChromeWriterVisitor {
                         let mut resolving_aliases = HashSet::new();
                         let typed_receiver = shell_authority_binding_from_type(
                             receiver.ty.as_ref(),
-                            Some(kind),
-                            &self.type_aliases,
-                            &self.qualified_type_aliases,
+                            self.type_resolution_scope(Some(kind)),
                             &mut resolving_aliases,
-                            &self.module_path,
-                            true,
                         );
                         self.authority_bindings.insert(
                             "self".to_string(),
@@ -15611,12 +15792,8 @@ impl ShellChromeWriterVisitor {
                 let mut resolving_aliases = HashSet::new();
                 let authority = shell_authority_binding_from_type(
                     &binding.ty,
-                    self.impl_authority,
-                    &self.type_aliases,
-                    &self.qualified_type_aliases,
+                    self.type_resolution_scope(self.impl_authority),
                     &mut resolving_aliases,
-                    &self.module_path,
-                    true,
                 )?;
                 Some(ShellAuthorityBinding {
                     mutable: binding.mutable || authority.mutable,
@@ -15636,12 +15813,8 @@ impl ShellChromeWriterVisitor {
                 let mut resolving_aliases = HashSet::new();
                 let authority = shell_authority_binding_from_type(
                     &binding.ty,
-                    self.impl_authority,
-                    &self.type_aliases,
-                    &self.qualified_type_aliases,
+                    self.type_resolution_scope(self.impl_authority),
                     &mut resolving_aliases,
-                    &self.module_path,
-                    true,
                 )?;
                 Some(ShellAuthorityBinding {
                     mutable: binding.mutable || authority.mutable,
@@ -15674,12 +15847,8 @@ impl ShellChromeWriterVisitor {
                 let mut resolving_aliases = HashSet::new();
                 let authority = shell_authority_binding_from_type(
                     &binding.ty,
-                    self.impl_authority,
-                    &self.type_aliases,
-                    &self.qualified_type_aliases,
+                    self.type_resolution_scope(self.impl_authority),
                     &mut resolving_aliases,
-                    &self.module_path,
-                    true,
                 )?;
                 Some(ShellAuthorityBinding {
                     mutable: binding.mutable,
@@ -15694,12 +15863,8 @@ impl ShellChromeWriterVisitor {
                 let mut resolving_aliases = HashSet::new();
                 let authority = shell_authority_binding_from_type(
                     &binding.ty,
-                    self.impl_authority,
-                    &self.type_aliases,
-                    &self.qualified_type_aliases,
+                    self.type_resolution_scope(self.impl_authority),
                     &mut resolving_aliases,
-                    &self.module_path,
-                    true,
                 )?;
                 Some(ShellAuthorityBinding {
                     mutable: binding.mutable || authority.mutable,
@@ -16076,12 +16241,8 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
         let mut resolving_aliases = HashSet::new();
         let impl_authority = shell_authority_binding_from_type(
             item.self_ty.as_ref(),
-            self.impl_authority,
-            &self.type_aliases,
-            &self.qualified_type_aliases,
+            self.type_resolution_scope(self.impl_authority),
             &mut resolving_aliases,
-            &self.module_path,
-            true,
         );
         self.impl_authority = impl_authority.map(|authority| authority.kind);
         self.impl_authority_mutable = impl_authority.is_some_and(|authority| authority.mutable);
