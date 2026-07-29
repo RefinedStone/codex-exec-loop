@@ -1,0 +1,10 @@
+No messages in this thread yet.
+
+
+Akra / pr2054  •  ready  •  gpt-5.5/high  •  queue: off
+╭ Task
+│ > 한글 작업을 검토해 주세요
+╰  Enter send  |  Ctrl+J newline
+
+geometry=120x30 cursor=29,4
+assertion=no duplicate narrow or wide HUD

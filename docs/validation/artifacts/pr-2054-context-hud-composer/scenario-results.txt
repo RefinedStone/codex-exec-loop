@@ -1,0 +1,20 @@
+1. candidate_integrity: pass
+   The exact clean commit and source-built Linux binary were used for every final frame.
+2. focused_composer_cjk_input: pass
+   The Korean draft remained exact and the cursor stayed at terminal cell 29 on the input row.
+3. responsive_hud_shrink: pass
+   At 48x18 the HUD collapsed to workspace, readiness, and queue without clipping the draft.
+4. terminal_reflow_cleanup: pass
+   The final 120x30 -> 48x18 -> 120x30 cycle left no former HUD fragment or duplicate ribbon.
+5. diagnostics_round_trip: pass
+   Ctrl+D opened the inline diagnostics inspection and Escape restored the focused composer with
+   the draft and cursor intact.
+6. action_copy: pass
+   A non-empty draft showed only `Enter send | Ctrl+J newline`; unavailable idle actions were absent.
+7. artifact_safety: pass
+   The checked-in frames omit credentials, UUIDs, PTY identifiers, and the absolute workspace path.
+8. clean_exit_and_cleanup: pass
+   The pane exited with status 0, the private tmux server stopped, and no scoped Akra process remained.
+9. transcript_identity_and_parallel_handoff: pass
+   Physical guard rows stayed outside the logical transcript; session replay, capped history, and
+   parallel one-shot handoff regression tests all passed.

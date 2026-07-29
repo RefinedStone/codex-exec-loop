@@ -1,0 +1,17 @@
+No messages in this thread yet.
+
+
+Akra / Diagnostics / inline inspection
+Inspect readiness without leaving the live shell.
+Startup
+status: ready
+Checks
+[ok] codex binary: [validated executable]
+[ok] workspace: git repo: [workspace]
+[ok] app-server initialize: linux / unix / codex-exec-loop-native/0.146.0 / xterm-256color
+[ok] attachment mode: provider-launched
+[ok] recovery anchor: provider-thread-id
+app-server sent notification `remoteControl/status/changed` while waiting for response id=2
+Akra / pr2054  •  ready  •  gpt-5.5/high  •  queue: off
+ > 한글 작업을 검토해 주세요
+ Enter send  |  Ctrl+J newline

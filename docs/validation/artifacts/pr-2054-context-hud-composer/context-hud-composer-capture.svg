@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="760" viewBox="0 0 1440 760">
+  <rect width="1440" height="760" fill="#070b12"/>
+  <text x="56" y="64" fill="#f3f6fb" font-family="ui-monospace, Consolas, monospace" font-size="28" font-weight="700">Akra context HUD + focused composer</text>
+  <text x="56" y="98" fill="#778298" font-family="ui-monospace, Consolas, monospace" font-size="16">actual E3 tmux capture · commit bd18ab3c · responsive 120 → 48 → 120</text>
+
+  <rect x="48" y="136" width="880" height="520" rx="14" fill="#0b111c" stroke="#263246" stroke-width="2"/>
+  <text x="76" y="178" fill="#8390a8" font-family="ui-monospace, Consolas, monospace" font-size="16">WIDE · 120×30</text>
+  <text x="76" y="240" fill="#2de2c3" font-family="ui-monospace, Consolas, monospace" font-size="22">Akra</text>
+  <text x="132" y="240" fill="#cbd4e5" font-family="ui-monospace, Consolas, monospace" font-size="22">/ pr2054  •  </text>
+  <text x="310" y="240" fill="#57d98c" font-family="ui-monospace, Consolas, monospace" font-size="22">ready</text>
+  <text x="380" y="240" fill="#cbd4e5" font-family="ui-monospace, Consolas, monospace" font-size="22">  •  gpt-5.5/high  •  queue: off</text>
+  <text x="76" y="310" fill="#2de2c3" font-family="ui-monospace, Consolas, monospace" font-size="23">╭ Task</text>
+  <text x="76" y="350" fill="#f3f6fb" font-family="ui-monospace, Consolas, monospace" font-size="23">│ &gt; 한글 작업을 검토해 주세요</text>
+  <text x="76" y="390" fill="#2de2c3" font-family="ui-monospace, Consolas, monospace" font-size="23">╰</text>
+  <text x="105" y="390" fill="#9ca8ba" font-family="ui-monospace, Consolas, monospace" font-size="23"> Enter send  |  Ctrl+J newline</text>
+  <text x="76" y="590" fill="#778298" font-family="ui-monospace, Consolas, monospace" font-size="16">Unknown facts omitted · diagnostics collapsed · one semantic focus rail</text>
+
+  <rect x="964" y="136" width="428" height="520" rx="14" fill="#0b111c" stroke="#263246" stroke-width="2"/>
+  <text x="992" y="178" fill="#8390a8" font-family="ui-monospace, Consolas, monospace" font-size="16">NARROW · 48×18</text>
+  <text x="992" y="240" fill="#2de2c3" font-family="ui-monospace, Consolas, monospace" font-size="20">Akra</text>
+  <text x="1042" y="240" fill="#cbd4e5" font-family="ui-monospace, Consolas, monospace" font-size="20">/ pr2054 • </text>
+  <text x="1175" y="240" fill="#57d98c" font-family="ui-monospace, Consolas, monospace" font-size="20">ready</text>
+  <text x="1240" y="240" fill="#cbd4e5" font-family="ui-monospace, Consolas, monospace" font-size="20"> • queue: off</text>
+  <text x="992" y="310" fill="#2de2c3" font-family="ui-monospace, Consolas, monospace" font-size="21">╭ Task</text>
+  <text x="992" y="350" fill="#f3f6fb" font-family="ui-monospace, Consolas, monospace" font-size="21">│ &gt; 한글 작업을 검토해 주세요</text>
+  <text x="992" y="390" fill="#2de2c3" font-family="ui-monospace, Consolas, monospace" font-size="21">╰</text>
+  <text x="1018" y="390" fill="#9ca8ba" font-family="ui-monospace, Consolas, monospace" font-size="21"> Enter send | Ctrl+J newline</text>
+  <rect x="992" y="500" width="350" height="54" rx="8" fill="#0e1b19" stroke="#1a8f7a"/>
+  <text x="1014" y="534" fill="#57d98c" font-family="ui-monospace, Consolas, monospace" font-size="17">✓ no stale wide-HUD fragment</text>
+  <text x="992" y="590" fill="#778298" font-family="ui-monospace, Consolas, monospace" font-size="16">Priority collapse preserves task + action.</text>
+</svg>
