@@ -4589,8 +4589,11 @@ fn update_unrelated(
         1,
         "the production-wide alias registry must retain authority across Rust files"
     );
-    let generic_authority_alias_file = syn::parse_file("pub type Forward<T> = T;")
-        .expect("generic cross-file authority alias definition should parse");
+    let generic_authority_alias_file = syn::parse_file(
+        "pub type Forward<T> = T;\n\
+         pub type AppList<T> = Vec<T>;",
+    )
+    .expect("generic cross-file authority alias definition should parse");
     let mut generic_authority_aliases = qualified_type_aliases_declared_in_file(
         &generic_authority_alias_file,
         &["crate".to_string(), "generic_alias".to_string()],
@@ -4645,6 +4648,23 @@ fn update_unrelated(
         generic_collection_alias.field_writes.len(),
         1,
         "collection inference must retain substituted generic alias elements"
+    );
+    let qualified_generic_collection_alias = shell_chrome_writer_audit_with_type_registry(
+        "fn escape(\n\
+             mut apps: crate::generic_alias::AppList<NativeTuiApp>,\n\
+         ) {\n\
+             apps[0].shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+        false,
+        &known_struct_fields,
+        &generic_authority_aliases,
+        &writer_module,
+    )
+    .expect("qualified generic authority collection alias fixture should parse");
+    assert_eq!(
+        qualified_generic_collection_alias.field_writes.len(),
+        1,
+        "qualified collection aliases must resolve through the production alias registry"
     );
 
     let relative_authority_alias_file = syn::parse_file(
@@ -16828,17 +16848,17 @@ impl ShellChromeWriterVisitor {
 
     fn collection_element_type(&self, ty: &syn::Type) -> Option<syn::Type> {
         fn resolve(
-            visitor: &ShellChromeWriterVisitor,
             ty: &syn::Type,
+            scope: ShellTypeResolutionScope<'_>,
             resolving_aliases: &mut HashSet<String>,
         ) -> Option<syn::Type> {
             match ty {
                 syn::Type::Array(array) => Some(array.elem.as_ref().clone()),
                 syn::Type::Slice(slice) => Some(slice.elem.as_ref().clone()),
-                syn::Type::Group(group) => resolve(visitor, group.elem.as_ref(), resolving_aliases),
-                syn::Type::Paren(paren) => resolve(visitor, paren.elem.as_ref(), resolving_aliases),
+                syn::Type::Group(group) => resolve(group.elem.as_ref(), scope, resolving_aliases),
+                syn::Type::Paren(paren) => resolve(paren.elem.as_ref(), scope, resolving_aliases),
                 syn::Type::Reference(reference) => {
-                    let element = resolve(visitor, reference.elem.as_ref(), resolving_aliases)?;
+                    let element = resolve(reference.elem.as_ref(), scope, resolving_aliases)?;
                     Some(syn::Type::Reference(syn::TypeReference {
                         and_token: Default::default(),
                         lifetime: None,
@@ -16849,14 +16869,71 @@ impl ShellChromeWriterVisitor {
                 syn::Type::Path(path) if path.qself.is_none() => {
                     let segment = path.path.segments.last()?;
                     let name = segment.ident.to_string();
-                    if resolving_aliases.insert(name.clone()) {
-                        if let Some(alias) = visitor.type_aliases.get(&name) {
-                            let instantiated = alias.instantiate(&segment.arguments);
-                            let resolved = resolve(visitor, &instantiated, resolving_aliases);
-                            resolving_aliases.remove(&name);
+                    let normalized_path = if path.path.segments.len() == 1 {
+                        let mut qualified = scope.module_path.to_vec();
+                        qualified.push(name.clone());
+                        qualified
+                    } else {
+                        normalized_shell_type_path(&path.path, scope)
+                    };
+                    let qualified_name = normalized_path.join("::");
+                    let alias_module_path = normalized_path
+                        .get(..normalized_path.len().saturating_sub(1))
+                        .unwrap_or_default();
+                    let local_alias = (scope.allow_local_aliases
+                        && (path.path.segments.len() == 1
+                            || alias_module_path == scope.module_path))
+                        .then(|| scope.type_aliases.get(&name))
+                        .flatten();
+                    let alias =
+                        local_alias.or_else(|| scope.qualified_type_aliases.get(&qualified_name));
+                    if let Some(alias) = alias
+                        && resolving_aliases.insert(qualified_name.clone())
+                    {
+                        let declaration_module = if local_alias.is_some() {
+                            scope.module_path
+                        } else {
+                            alias_module_path
+                        };
+                        let declaration_imports = if local_alias.is_some() {
+                            scope.imports
+                        } else {
+                            scope
+                                .qualified_type_aliases
+                                .imports_for_module(declaration_module)
+                        };
+                        let declaration_absolute_imports = if local_alias.is_some() {
+                            scope.absolute_imports
+                        } else {
+                            scope
+                                .qualified_type_aliases
+                                .absolute_imports_for_module(declaration_module)
+                        };
+                        let declaration_path_shadows = if local_alias.is_some() {
+                            scope.path_shadows
+                        } else {
+                            scope
+                                .qualified_type_aliases
+                                .path_shadows_for_module(declaration_module)
+                        };
+                        let instantiated = alias.instantiate(&segment.arguments);
+                        let resolved = resolve(
+                            &instantiated,
+                            ShellTypeResolutionScope {
+                                module_path: declaration_module,
+                                imports: declaration_imports,
+                                absolute_imports: declaration_absolute_imports,
+                                path_shadows: declaration_path_shadows,
+                                allow_local_aliases: local_alias.is_some(),
+                                allow_local_imports: true,
+                                ..scope
+                            },
+                            resolving_aliases,
+                        );
+                        resolving_aliases.remove(&qualified_name);
+                        if resolved.is_some() {
                             return resolved;
                         }
-                        resolving_aliases.remove(&name);
                     }
                     if !matches!(
                         name.as_str(),
@@ -16894,7 +16971,11 @@ impl ShellChromeWriterVisitor {
             }
         }
 
-        resolve(self, ty, &mut HashSet::new())
+        resolve(
+            ty,
+            self.type_resolution_scope(self.impl_authority),
+            &mut HashSet::new(),
+        )
     }
 
     fn referenced_type(ty: syn::Type, mutable: bool) -> syn::Type {
