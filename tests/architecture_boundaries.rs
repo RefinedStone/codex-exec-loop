@@ -4337,6 +4337,39 @@ fn update_unrelated(
         "qualified module re-exports must resolve path suffixes to TUI authority"
     );
 
+    let qualified_glob_reexport = shell_chrome_writer_audit(
+        "mod facade {\n\
+             pub use crate::adapter::inbound::tui::shell_chrome::*;\n\
+         }\n\
+         fn escape(chrome: &mut crate::facade::ShellChromeState) {\n\
+             chrome.session_state = SessionState::Idle;\n\
+         }",
+    )
+    .expect("qualified ShellChromeState glob re-export fixture should parse");
+    assert_eq!(
+        qualified_glob_reexport.field_writes.len(),
+        1,
+        "qualified glob re-exports must resolve names from the original authority module"
+    );
+
+    let chained_qualified_glob_reexport = shell_chrome_writer_audit(
+        "mod first {\n\
+             pub use crate::adapter::inbound::tui::shell_chrome::*;\n\
+         }\n\
+         mod facade {\n\
+             pub use crate::first::*;\n\
+         }\n\
+         fn escape(chrome: &mut crate::facade::ShellChromeState) {\n\
+             chrome.session_state = SessionState::Idle;\n\
+         }",
+    )
+    .expect("chained ShellChromeState glob re-export fixture should parse");
+    assert_eq!(
+        chained_qualified_glob_reexport.field_writes.len(),
+        1,
+        "glob re-export chains must retain the original authority module"
+    );
+
     let unrelated_qualified_reexport = shell_chrome_writer_audit(
         "mod facade {\n\
              pub use crate::unrelated::NativeTuiApp;\n\
@@ -4367,6 +4400,23 @@ fn update_unrelated(
                 .whole_state_writes
                 .is_empty(),
         "module re-exports to unrelated same-named types must remain harmless"
+    );
+
+    let unrelated_qualified_glob_reexport = shell_chrome_writer_audit(
+        "mod facade {\n\
+             pub use crate::unrelated::*;\n\
+         }\n\
+         fn update(chrome: &mut crate::facade::ShellChromeState) {\n\
+             chrome.session_state = 1;\n\
+         }",
+    )
+    .expect("unrelated qualified glob re-export fixture should parse");
+    assert!(
+        unrelated_qualified_glob_reexport.field_writes.is_empty()
+            && unrelated_qualified_glob_reexport
+                .whole_state_writes
+                .is_empty(),
+        "glob re-exports from unrelated modules must remain harmless"
     );
 
     let wrapped_app = shell_chrome_writer_audit(
@@ -5104,6 +5154,34 @@ fn update_unrelated(
             && macro_read.whole_state_writes.is_empty()
             && macro_read.macro_escapes.is_empty(),
         "known read-only macros must not create shell writer false positives"
+    );
+
+    let qualified_standard_macro_read = shell_chrome_writer_audit(
+        "fn inspect(app: &mut NativeTuiApp) {\n\
+             let _ = std::format_args!(\"{}\", app.shell.chrome.session_state);\n\
+             core::assert_eq!(\n\
+                 app.shell.chrome.selected_session_index,\n\
+                 Some(0),\n\
+             );\n\
+         }",
+    )
+    .expect("qualified standard read-only macro fixture should parse");
+    assert!(
+        qualified_standard_macro_read.field_writes.is_empty()
+            && qualified_standard_macro_read.whole_state_writes.is_empty()
+            && qualified_standard_macro_read.macro_escapes.is_empty(),
+        "std/core-qualified read-only macros must not create writer false positives"
+    );
+
+    let qualified_unknown_macro = shell_chrome_writer_audit(
+        "fn escape(app: &mut NativeTuiApp) {\n\
+             std::external_shell_writer!(app);\n\
+         }",
+    )
+    .expect("qualified unknown macro fixture should parse");
+    assert!(
+        !qualified_unknown_macro.macro_escapes.is_empty(),
+        "std qualification must not whitelist an unknown macro receiving mutable authority"
     );
 
     let nested_macro_writer = shell_chrome_writer_audit(
@@ -14047,6 +14125,15 @@ fn shell_type_is_bare_self(ty: &syn::Type) -> bool {
     }
 }
 
+fn shell_type_path(ty: &syn::Type) -> Option<&syn::TypePath> {
+    match ty {
+        syn::Type::Path(path) if path.qself.is_none() => Some(path),
+        syn::Type::Group(group) => shell_type_path(group.elem.as_ref()),
+        syn::Type::Paren(paren) => shell_type_path(paren.elem.as_ref()),
+        _ => None,
+    }
+}
+
 fn shell_authority_binding_from_type(
     ty: &syn::Type,
     scope: ShellTypeResolutionScope<'_>,
@@ -14103,19 +14190,7 @@ fn shell_authority_binding_from_type(
                 let Some(alias) = scope.qualified_type_aliases.get(&prefix) else {
                     continue;
                 };
-                let alias_path = match alias {
-                    syn::Type::Path(path) if path.qself.is_none() => Some(path),
-                    syn::Type::Group(group) => match group.elem.as_ref() {
-                        syn::Type::Path(path) if path.qself.is_none() => Some(path),
-                        _ => None,
-                    },
-                    syn::Type::Paren(paren) => match paren.elem.as_ref() {
-                        syn::Type::Path(path) if path.qself.is_none() => Some(path),
-                        _ => None,
-                    },
-                    _ => None,
-                };
-                let Some(alias_path) = alias_path else {
+                let Some(alias_path) = shell_type_path(alias) else {
                     continue;
                 };
                 if !resolving_aliases.insert(prefix.clone()) {
@@ -14144,6 +14219,46 @@ fn shell_authority_binding_from_type(
                 resolving_aliases.remove(&prefix);
                 if resolved.is_some() {
                     return resolved;
+                }
+            }
+            for prefix_len in (1..normalized_path.len()).rev() {
+                let glob_module = normalized_path[..prefix_len].join("::");
+                for (target_index, target) in scope
+                    .qualified_type_aliases
+                    .glob_targets(&glob_module)
+                    .iter()
+                    .enumerate()
+                {
+                    let Some(target_path) = shell_type_path(target) else {
+                        continue;
+                    };
+                    let resolution_key = format!("{glob_module}::*#{target_index}");
+                    if !resolving_aliases.insert(resolution_key.clone()) {
+                        continue;
+                    }
+                    let mut expanded_path = target_path.clone();
+                    for segment in &normalized_path[prefix_len..] {
+                        expanded_path
+                            .path
+                            .segments
+                            .push(syn::PathSegment::from(syn::Ident::new(
+                                segment,
+                                proc_macro2::Span::call_site(),
+                            )));
+                    }
+                    let resolved = shell_authority_binding_from_type(
+                        &syn::Type::Path(expanded_path),
+                        ShellTypeResolutionScope {
+                            module_path: &normalized_path[..prefix_len],
+                            allow_local_aliases: false,
+                            ..scope
+                        },
+                        resolving_aliases,
+                    );
+                    resolving_aliases.remove(&resolution_key);
+                    if resolved.is_some() {
+                        return resolved;
+                    }
                 }
             }
             let direct_kind = shell_authority_kind_from_path(
@@ -14264,7 +14379,65 @@ fn type_aliases_declared_in_statements(statements: &[syn::Stmt]) -> HashMap<Stri
     aliases
 }
 
-type ShellQualifiedTypeAliases = HashMap<String, syn::Type>;
+#[derive(Clone, Default)]
+struct ShellQualifiedTypeAliases {
+    aliases: HashMap<String, syn::Type>,
+    glob_imports: HashMap<String, Vec<syn::Type>>,
+}
+
+impl ShellQualifiedTypeAliases {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn insert(&mut self, name: String, ty: syn::Type) {
+        self.aliases.insert(name, ty);
+    }
+
+    fn insert_glob(&mut self, module: String, target: syn::Type) {
+        self.glob_imports.entry(module).or_default().push(target);
+    }
+
+    fn extend(&mut self, other: Self) {
+        self.aliases.extend(other.aliases);
+        for (module, targets) in other.glob_imports {
+            self.glob_imports.entry(module).or_default().extend(targets);
+        }
+    }
+
+    fn get(&self, name: &str) -> Option<&syn::Type> {
+        self.aliases.get(name)
+    }
+
+    fn contains_key(&self, name: &str) -> bool {
+        self.aliases.contains_key(name)
+    }
+
+    fn glob_targets(&self, module: &str) -> &[syn::Type] {
+        self.glob_imports.get(module).map_or(&[], Vec::as_slice)
+    }
+}
+
+fn collect_use_glob_targets(
+    tree: &syn::UseTree,
+    prefix: &mut Vec<String>,
+    targets: &mut Vec<Vec<String>>,
+) {
+    match tree {
+        syn::UseTree::Path(path) => {
+            prefix.push(path.ident.to_string());
+            collect_use_glob_targets(path.tree.as_ref(), prefix, targets);
+            prefix.pop();
+        }
+        syn::UseTree::Group(group) => {
+            for item in &group.items {
+                collect_use_glob_targets(item, prefix, targets);
+            }
+        }
+        syn::UseTree::Glob(_) => targets.push(prefix.clone()),
+        syn::UseTree::Name(_) | syn::UseTree::Rename(_) => {}
+    }
+}
 
 fn collect_qualified_type_aliases(
     items: &[syn::Item],
@@ -14289,6 +14462,13 @@ fn collect_qualified_type_aliases(
                     aliases.insert(format!("{}::{local_name}", module_path.join("::")), ty);
                 }
             }
+            let mut glob_targets = Vec::new();
+            collect_use_glob_targets(&import.tree, &mut Vec::new(), &mut glob_targets);
+            for target in glob_targets {
+                if let Ok(ty) = syn::parse_str::<syn::Type>(&target.join("::")) {
+                    aliases.insert_glob(module_path.join("::"), ty);
+                }
+            }
         }
         if let syn::Item::Mod(module) = item
             && let Some((_, nested_items)) = &module.content
@@ -14304,7 +14484,7 @@ fn qualified_type_aliases_declared_in_file(
     file: &syn::File,
     module_path: &[String],
 ) -> ShellQualifiedTypeAliases {
-    let mut aliases = HashMap::new();
+    let mut aliases = ShellQualifiedTypeAliases::new();
     collect_qualified_type_aliases(&file.items, &mut module_path.to_vec(), &mut aliases);
     aliases
 }
@@ -14654,8 +14834,16 @@ fn macro_token_invocations(
 }
 
 fn shell_chrome_read_macro_path(path: &str) -> bool {
-    (!path.contains("::") && SHELL_CHROME_AUTHORITY_READ_MACROS.contains(&path))
-        || path == "crate::akra_event"
+    let segments = path.split("::").collect::<Vec<_>>();
+    matches!(
+        segments.as_slice(),
+        [name] if SHELL_CHROME_AUTHORITY_READ_MACROS.contains(name)
+    ) || matches!(
+        segments.as_slice(),
+        [root, name]
+            if matches!(*root, "std" | "core")
+                && SHELL_CHROME_AUTHORITY_READ_MACROS.contains(name)
+    ) || path == "crate::akra_event"
 }
 
 fn macro_tokens_have_assignment(tokens: &proc_macro2::TokenStream) -> bool {
