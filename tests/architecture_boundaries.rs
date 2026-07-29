@@ -7157,6 +7157,9 @@ fn update_unrelated(
         "trait Carrier {\n\
              type Inner;\n\
          }\n\
+         trait StateCarrier {\n\
+             type State;\n\
+         }\n\
          struct ChromeMarker;\n\
          impl Carrier for ChromeMarker {\n\
              type Inner = ShellChromeState;\n\
@@ -7167,6 +7170,17 @@ fn update_unrelated(
          }\n\
          struct ReferencedMarker;\n\
          impl Carrier for &'static ReferencedMarker {\n\
+             type Inner = ShellChromeState;\n\
+         }\n\
+         struct NestedReferencedMarker;\n\
+         impl Carrier for &'static NestedReferencedMarker {\n\
+             type Inner = Self;\n\
+         }\n\
+         impl StateCarrier for &'static NestedReferencedMarker {\n\
+             type State = ShellChromeState;\n\
+         }\n\
+         struct LifetimeMarker;\n\
+         impl Carrier for &'static LifetimeMarker {\n\
              type Inner = ShellChromeState;\n\
          }\n\
          trait NestedGatMaker {\n\
@@ -7181,6 +7195,13 @@ fn update_unrelated(
          fn make_chrome() -> <ChromeMarker as Carrier>::Inner { todo!() }\n\
          fn make_other() -> <OtherMarker as Carrier>::Inner { todo!() }\n\
          fn make_referenced() -> <&'static ReferencedMarker as Carrier>::Inner { todo!() }\n\
+         fn make_nested_referenced() ->\n\
+             <<&'static NestedReferencedMarker as Carrier>::Inner as StateCarrier>::State\n\
+         { todo!() }\n\
+         fn make_lifetime_other<'a>() -> <&'a LifetimeMarker as Carrier>::Inner\n\
+         where\n\
+             &'a LifetimeMarker: Carrier<Inner = OtherState>,\n\
+         { todo!() }\n\
          fn make_pair() -> (\n\
              <OtherMarker as Carrier>::Inner,\n\
              <ChromeMarker as Carrier>::Inner,\n\
@@ -7191,6 +7212,8 @@ fn update_unrelated(
              make_chrome().session_state = SessionState::Idle;\n\
              make_other().session_state = 1;\n\
              make_referenced().session_state = SessionState::Idle;\n\
+             make_nested_referenced().session_state = SessionState::Idle;\n\
+             make_lifetime_other().session_state = 1;\n\
              let (_, mut chrome) = make_pair();\n\
              chrome.session_state = SessionState::Idle;\n\
          }",
@@ -7198,8 +7221,8 @@ fn update_unrelated(
     .expect("nested generic associated projection fixture should parse");
     assert_eq!(
         nested_generic_associated_projection.field_writes.len(),
-        4,
-        "nested projections must preserve exact QSelf wrappers and receiver identities"
+        5,
+        "nested projections must preserve exact QSelf wrappers, Self, and lifetimes"
     );
     let cross_file_trait = syn::parse_file(
         "pub trait CrossFileMaker {\n\
@@ -15867,7 +15890,12 @@ fn shell_type_identity(ty: &syn::Type) -> String {
             .collect::<Vec<_>>()
             .join("::"),
         syn::Type::Reference(reference) => format!(
-            "&{}{}",
+            "&{}{}{}",
+            reference
+                .lifetime
+                .as_ref()
+                .map(|lifetime| format!("'{} ", lifetime.ident))
+                .unwrap_or_default(),
             if reference.mutability.is_some() {
                 "mut "
             } else {
@@ -17427,6 +17455,7 @@ struct ShellGenericBindings {
     associated_types: HashMap<ShellAssociatedTypeKey, syn::Type>,
     associated_type_owners: HashMap<ShellAssociatedTypeKey, ShellAssociatedTypeKey>,
     current_trait: Option<String>,
+    exact_reference_lifetimes: bool,
 }
 
 impl ShellGenericBindings {
@@ -17475,6 +17504,7 @@ impl ShellGenericBindings {
             }
             _ => {}
         }
+        merged.exact_reference_lifetimes |= additional.exact_reference_lifetimes;
         Some(merged)
     }
 
@@ -17586,6 +17616,33 @@ fn shell_const_pattern_matches(
     shell_const_expression_identity(expected) == shell_const_expression_identity(actual)
 }
 
+fn shell_reference_lifetime_pattern_matches(
+    expected: Option<&syn::Lifetime>,
+    actual: Option<&syn::Lifetime>,
+    parameters: &[ShellDeclaredGenericParameter],
+    bindings: &mut ShellGenericBindings,
+) -> bool {
+    match (expected, actual) {
+        (None, None) => true,
+        (Some(expected), Some(actual)) => {
+            let name = expected.ident.to_string();
+            let is_parameter = parameters.iter().any(|parameter| {
+                matches!(parameter, ShellDeclaredGenericParameter::Lifetime(parameter) if parameter == &name)
+            });
+            if !is_parameter {
+                return expected.ident == actual.ident;
+            }
+            if let Some(bound) = bindings.lifetimes.get(&name) {
+                bound.ident == actual.ident
+            } else {
+                bindings.lifetimes.insert(name, actual.clone());
+                true
+            }
+        }
+        (None, Some(_)) | (Some(_), None) => false,
+    }
+}
+
 fn shell_type_pattern_matches(
     expected: &syn::Type,
     actual: &syn::Type,
@@ -17635,6 +17692,13 @@ fn shell_type_pattern_matches(
         }
         (syn::Type::Reference(expected), syn::Type::Reference(actual)) => {
             expected.mutability.is_some() == actual.mutability.is_some()
+                && (!bindings.exact_reference_lifetimes
+                    || shell_reference_lifetime_pattern_matches(
+                        expected.lifetime.as_ref(),
+                        actual.lifetime.as_ref(),
+                        parameters,
+                        bindings,
+                    ))
                 && shell_type_pattern_matches(
                     expected.elem.as_ref(),
                     actual.elem.as_ref(),
@@ -20132,6 +20196,23 @@ impl ShellChromeWriterVisitor {
         receiver: Option<&ShellTypeBinding>,
         bindings: &ShellGenericBindings,
     ) -> syn::Type {
+        self.resolved_declared_return_type_with_receiver_mode(
+            ty,
+            declaration_module,
+            receiver,
+            bindings,
+            false,
+        )
+    }
+
+    fn resolved_declared_return_type_with_receiver_mode(
+        &self,
+        ty: &syn::Type,
+        declaration_module: &[String],
+        receiver: Option<&ShellTypeBinding>,
+        bindings: &ShellGenericBindings,
+        preserve_receiver_wrappers: bool,
+    ) -> syn::Type {
         fn owned_receiver_type(ty: &syn::Type) -> syn::Type {
             match ty {
                 syn::Type::Reference(reference) => owned_receiver_type(reference.elem.as_ref()),
@@ -20145,9 +20226,12 @@ impl ShellChromeWriterVisitor {
         let mut resolved = ty.clone();
         let mut replacements = bindings.clone();
         if let Some(receiver) = receiver {
-            replacements
-                .types
-                .insert("Self".to_string(), owned_receiver_type(&receiver.ty));
+            let receiver_ty = if preserve_receiver_wrappers {
+                receiver.ty.clone()
+            } else {
+                owned_receiver_type(&receiver.ty)
+            };
+            replacements.types.insert("Self".to_string(), receiver_ty);
         }
         let declaration_scope = self.return_type_resolution_scope(declaration_module);
         ShellAssociatedTypeSubstituter {
@@ -20203,7 +20287,10 @@ impl ShellChromeWriterVisitor {
             owned_type(&receiver.ty)
         };
         let actual = self.resolved_declared_return_type(actual_type, &self.module_path, None);
-        let mut bindings = ShellGenericBindings::default();
+        let mut bindings = ShellGenericBindings {
+            exact_reference_lifetimes: preserve_receiver_wrappers,
+            ..ShellGenericBindings::default()
+        };
         shell_type_pattern_matches(&expected, &actual, generic_parameters, &mut bindings)
             .then_some(bindings)
     }
@@ -20356,11 +20443,12 @@ impl ShellChromeWriterVisitor {
                 let Some(bindings) = trait_bindings.merge(&gat_bindings) else {
                     continue;
                 };
-                let ty = self.resolved_declared_return_type_with_bindings(
+                let ty = self.resolved_declared_return_type_with_receiver_mode(
                     &associated_type.ty,
                     &associated_type.module_path,
                     Some(receiver),
                     &bindings,
+                    projection_receiver.is_some(),
                 );
                 associated_types.insert(projection.key.clone(), ty);
             }
