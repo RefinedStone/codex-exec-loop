@@ -4,8 +4,8 @@ use crate::adapter::inbound::tui::supersession_mud::parallel_mode_progress_summa
 
 use super::super::{
     AutoFollowSnapshotPresentation, ConversationLiveTranscriptScreenModel, ConversationScreenModel,
-    ConversationViewModel, INLINE_TAIL_THREAD_LABEL_LIMIT, INLINE_TAIL_WARNING_DETAIL_LIMIT,
-    compact_inline_detail, format_conversation_lines,
+    ConversationViewModel, INLINE_TAIL_WARNING_DETAIL_LIMIT, compact_inline_detail,
+    format_conversation_lines,
 };
 use super::activity_rail::build_activity_rail_notice_line;
 
@@ -262,18 +262,6 @@ pub(super) fn compact_auto_follow_status_summary(
         )
     };
     compact_inline_detail(&summary, max_detail_len)
-}
-
-pub(super) fn inline_thread_label(conversation: &ConversationViewModel) -> String {
-    /*
-     * active thread가 없는 draft는 session title이 아직 의미 있는 anchor가 아니다.
-     * "new draft"를 고정 copy로 쓰고, 기존 thread만 title을 폭 제한에 맞게 축약한다.
-     */
-    if !conversation.has_active_thread() {
-        return "new draft".to_string();
-    }
-
-    compact_inline_detail(&conversation.title, INLINE_TAIL_THREAD_LABEL_LIMIT)
 }
 
 #[cfg(test)]

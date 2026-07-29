@@ -28,5 +28,5 @@ expression: rendered
 "Y: approve once                                                                                 "
 "N / Esc: decline                                                                                "
 "Up/Down/Page: scroll    Ctrl-C: decline + stop                                                  "
-"Akra  |  Workflows: ready  |  Sessions: idle  |  Reviews: off                                   "
-"prompt: paused while an approval decision is pending                                            "
+"Akra / root  •  branch: --  •  ready  •  gpt-5.5/high  •  ctx: --  •  queue: off                "
+"Input paused  •  Y approve once  •  N / Esc decline                                             "

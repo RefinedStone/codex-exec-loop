@@ -9,12 +9,12 @@ expression: rendered
 
 
 
-
 Codex:
   viewport replay stream remains separate
 
-Akra  |  thread: new draft
+Akra / root  •  branch: --  •  ready  •  gpt-5.5/high  •  ctx: --  •  queue: off
 ◦ Working (0s • turn running / interrupt runtime-native)
 recent codex: viewport replay transcript remains an...
->
-prompt: Enter queue | Tab steer | Ctrl+j nl
+╭ Task
+│ > Describe a task or type : for commands
+╰  Type a follow-up  |  Tab steers after typing

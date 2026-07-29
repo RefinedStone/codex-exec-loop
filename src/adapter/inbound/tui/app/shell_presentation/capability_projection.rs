@@ -182,6 +182,14 @@ pub(super) fn recent_session_status_label(app: &NativeTuiApp, language: TuiLangu
     }
 }
 
+pub(super) fn recent_session_status_requires_attention(app: &NativeTuiApp) -> bool {
+    matches!(
+        &app.shell.chrome.session_state,
+        SessionState::Failed(_)
+            | SessionState::Ready(SessionCatalog::Unsupported(_) | SessionCatalog::Partial(_))
+    )
+}
+
 fn diagnostic_item(title: &str, ok: bool, detail: &str) -> Line<'static> {
     /*
      * startup check rows share a compact marker/title/detail format.

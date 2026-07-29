@@ -1,6 +1,6 @@
 use ratatui::text::Line;
 
-use crate::core::app::{StartupAttachmentSnapshot, StartupReadySnapshot};
+use crate::core::app::StartupAttachmentSnapshot;
 use crate::domain::recent_sessions::SessionCatalogTier;
 
 use super::TuiLanguage;
@@ -76,29 +76,6 @@ pub(super) fn startup_check_loading_lines() -> Vec<Line<'static>> {
         Line::from("opening codex app-server"),
         Line::from("reading account state"),
     ]
-}
-
-pub(super) fn startup_diagnostics_summary_line(
-    startup: &StartupReadySnapshot,
-    language: TuiLanguage,
-) -> String {
-    /*
-     * inline tail은 full startup check list를 반복할 공간이 없다. 여기서는 prompt submission에 직접
-     * 영향을 주는 codex/app-server/account gate만 한 줄로 압축해, 사용자가 현재 막힌 축을 빠르게
-     * 비교할 수 있게 한다.
-     */
-    language.startup_diagnostics_summary_line(
-        language.inline_diagnostic_status(startup.codex_binary.ok, "check"),
-        language.inline_diagnostic_status(startup.app_server_initialize.ok, "check"),
-        language.inline_diagnostic_status(startup.account.ok, "attention"),
-    )
-}
-
-pub(super) fn startup_attachment_summary_line(
-    startup: &StartupReadySnapshot,
-    language: TuiLanguage,
-) -> String {
-    attachment_profile_summary_line(&startup.attachment, language)
 }
 
 pub(super) fn attachment_profile_summary_line(

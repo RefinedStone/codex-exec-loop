@@ -738,7 +738,10 @@ fn vt100_activity_inspector_stays_transient_through_resize_and_approval() {
     let approval_screen = tui_testkit::screen_text(&terminal);
     assert!(approval_screen.contains("Approval Required"));
     assert!(approval_screen.contains("Y: approve once"));
-    assert!(!approval_screen.contains("Activity / inline inspection"));
+    assert!(
+        !approval_screen.contains("Activity / inline inspection"),
+        "{approval_screen}"
+    );
     let host_scrollback = tui_testkit::inline_vt100_host_scrollback_text(&mut terminal);
     assert!(!host_scrollback.contains(secret));
     assert!(!host_scrollback.contains("vt100 activity row"));
@@ -1160,7 +1163,7 @@ fn parallel_host_handoff_reprojects_overlay_frame_after_ack() {
     };
     assert!(!conversation.has_pending_viewport_transcript_handoff());
     let delivered_screen = tui_testkit::screen_text(&terminal);
-    assert!(delivered_screen.contains("response held while the dialog is open"));
+    assert!(delivered_screen.contains("Response held while the dialog is open"));
     assert!(
         runtime.take_redraw_request(),
         "host ACK must schedule the post-handoff parallel frame"
@@ -1173,7 +1176,7 @@ fn parallel_host_handoff_reprojects_overlay_frame_after_ack() {
     );
     let settled_screen = tui_testkit::screen_text(&terminal);
     assert!(
-        !settled_screen.contains("response held while the dialog is open"),
+        !settled_screen.contains("Response held while the dialog is open"),
         "the scheduled overlay frame must reflect the host ACK: {settled_screen}"
     );
     assert!(!runtime.take_redraw_request());
@@ -1619,7 +1622,7 @@ fn completed_agent_handoff_flushes_at_settlement_and_only_once() {
     assert!(!settlement_screen.contains("status: turn completed"));
     assert!(!settlement_screen.contains("Enter send"));
     assert!(!settlement_screen.contains("Enter when ready"));
-    assert!(settlement_screen.find("◦ Working") < settlement_screen.rfind("prompt:"));
+    assert!(settlement_screen.find("◦ Working") < settlement_screen.rfind("╭ Task"));
 
     let ConversationState::Ready(conversation) =
         &mut runtime.app_mut().conversation.lifecycle.conversation_state
@@ -1953,7 +1956,10 @@ fn focus_reacquire_repaints_visible_frame_without_replaying_host_scrollback() {
     let expected_cursor = terminal
         .get_cursor_position()
         .expect("baseline cursor should be readable");
-    assert!(expected_screen.contains(FOCUS_REACQUIRE_PROMPT_MARKER));
+    assert!(
+        expected_screen.contains(FOCUS_REACQUIRE_PROMPT_MARKER),
+        "{expected_screen}"
+    );
     assert_eq!(
         expected_host_scrollback
             .matches(FOCUS_REACQUIRE_HISTORY_MARKER)
@@ -2018,8 +2024,23 @@ fn vt100_focus_reacquire_repaints_once_across_cjk_resize() {
     tui_testkit::resize_inline_history_vt100_terminal(&mut terminal, 48, 18);
     runtime.handle_terminal_event(Event::Resize(48, 18));
     assert!(runtime.take_redraw_request());
-    draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
-        .expect("narrow VT100 frame should draw");
+    let narrow_projection = frame_projection(runtime.app(), 48);
+    assert!(narrow_projection.tail_view.composer_surface.is_some());
+    assert!(
+        narrow_projection.tail_view.prompt_cursor_offset.is_some(),
+        "{}",
+        narrow_projection
+            .tail_view
+            .lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    assert!(
+        draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+            .expect("narrow VT100 frame transaction should succeed")
+    );
 
     let expected_screen = tui_testkit::screen_text(&terminal);
     let expected_host_scrollback = tui_testkit::inline_vt100_host_scrollback_text(&mut terminal);
@@ -2028,7 +2049,21 @@ fn vt100_focus_reacquire_repaints_once_across_cjk_resize() {
         .get_cursor_position()
         .expect("narrow VT100 cursor should be readable");
     let draw_calls_before_focus = terminal.backend().inner().draw_call_count();
-    assert!(expected_screen.contains(FOCUS_REACQUIRE_PROMPT_MARKER));
+    assert!(
+        expected_screen.contains(FOCUS_REACQUIRE_PROMPT_MARKER),
+        "viewport={:?} cursor={:?} composer={} prompt_cursor={:?}\nlines:\n{}\nscreen:\n{expected_screen}",
+        inline_terminal.viewport_area(),
+        expected_cursor,
+        narrow_projection.tail_view.composer_surface.is_some(),
+        narrow_projection.tail_view.prompt_cursor_offset,
+        narrow_projection
+            .tail_view
+            .lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
     assert_eq!(
         expected_terminal_history
             .matches(FOCUS_REACQUIRE_HISTORY_MARKER)
@@ -2627,7 +2662,7 @@ fn assert_viewport_handoff_waits_for_a_successful_draw(parallel_mode_enabled: bo
     let overlay_screen = tui_testkit::buffer_text(terminal.backend().inner().inner.buffer());
     assert!(!overlay_screen.contains(FINAL_MARKER));
     assert!(!overlay_screen.contains("Enter send"));
-    assert!(overlay_screen.contains("response held while the dialog is open"));
+    assert!(overlay_screen.contains("Response held while the dialog is open"));
     runtime.app_mut().shell.chrome.shell_overlay = ShellOverlay::Hidden;
 
     assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_terminal).unwrap());
@@ -2669,7 +2704,11 @@ fn assert_viewport_handoff_waits_for_a_successful_draw(parallel_mode_enabled: bo
     let screen = tui_testkit::buffer_text(terminal.backend().inner().inner.buffer());
     assert_eq!(screen.matches(FINAL_MARKER).count(), 1, "{screen}");
     assert!(!screen.contains("status: conversation is busy"), "{screen}");
-    assert!(screen.contains("prompt: waiting for startup"), "{screen}");
+    if parallel_mode_enabled {
+        assert!(screen.contains("Parallel board loading"), "{screen}");
+    } else {
+        assert!(screen.contains("submission waits for startup"), "{screen}");
+    }
 
     assert!(
         draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)

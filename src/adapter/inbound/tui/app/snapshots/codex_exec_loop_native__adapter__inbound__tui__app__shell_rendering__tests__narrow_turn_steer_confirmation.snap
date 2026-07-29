@@ -18,5 +18,5 @@ expression: rendered
 "│Enter/Tab: steer    Esc: keep draft           │"
 "└──────────────────────────────────────────────┘"
 "regression before continuing.                   "
-"      cargo test --lib                          "
-"buffered: Enter queue | Tab steer | Ctrl+j nl   "
+"       cargo test --lib                         "
+" Enter queue  |  Tab steer  |  Ctrl+J newline   "

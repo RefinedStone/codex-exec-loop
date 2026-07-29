@@ -83,15 +83,6 @@ impl TuiLanguage {
         }
     }
 
-    pub(super) const fn running_prompt_hint(self, buffered: bool) -> &'static str {
-        match (self, buffered) {
-            (Self::English, false) => "prompt: Enter queue | Tab steer | Ctrl+j nl",
-            (Self::English, true) => "buffered: Enter queue | Tab steer | Ctrl+j nl",
-            (Self::Korean, false) => "입력: Enter 큐 | Tab 전달 | Ctrl+j 줄바꿈",
-            (Self::Korean, true) => "작성됨: Enter 큐 | Tab 전달 | Ctrl+j 줄바꿈",
-        }
-    }
-
     pub(super) const fn turn_starting_prompt_hint(self, buffered: bool) -> &'static str {
         match (self, buffered) {
             (Self::English, false) => "prompt: wait for turn start  |  type now",
@@ -102,6 +93,113 @@ impl TuiLanguage {
             (Self::Korean, true) => {
                 "입력된 프롬프트  |  턴 시작 대기  |  시작 후 Enter 큐 등록  |  Ctrl+j 줄바꿈"
             }
+        }
+    }
+
+    pub(super) const fn composer_placeholder(self) -> &'static str {
+        match self {
+            Self::English => "Describe a task or type : for commands",
+            Self::Korean => "작업을 입력하거나 : 명령을 사용하세요",
+        }
+    }
+
+    pub(super) const fn composer_empty_action(self) -> &'static str {
+        match self {
+            Self::English => "Type a task  |  : commands",
+            Self::Korean => "작업 입력  |  : 명령",
+        }
+    }
+
+    pub(super) const fn composer_send_action(self) -> &'static str {
+        match self {
+            Self::English => "Enter send  |  Ctrl+J newline",
+            Self::Korean => "Enter 전송  |  Ctrl+J 줄바꿈",
+        }
+    }
+
+    pub(super) const fn composer_streaming_empty_action(self) -> &'static str {
+        match self {
+            Self::English => "Type a follow-up  |  Tab steers after typing",
+            Self::Korean => "후속 작업 입력  |  입력 후 Tab으로 전달",
+        }
+    }
+
+    pub(super) const fn composer_streaming_buffered_action(self) -> &'static str {
+        match self {
+            Self::English => "Enter queue  |  Tab steer  |  Ctrl+J newline",
+            Self::Korean => "Enter 큐  |  Tab 전달  |  Ctrl+J 줄바꿈",
+        }
+    }
+
+    pub(super) const fn composer_palette_action(self, has_matches: bool) -> &'static str {
+        match (self, has_matches) {
+            (Self::English, true) => "↑/↓ or Tab select  |  Enter choose  |  Esc close",
+            (Self::English, false) => "Esc close",
+            (Self::Korean, true) => "↑/↓ 또는 Tab 선택  |  Enter 적용  |  Esc 닫기",
+            (Self::Korean, false) => "Esc 닫기",
+        }
+    }
+
+    pub(super) const fn composer_startup_blocked_action(self) -> &'static str {
+        match self {
+            Self::English => "Ctrl+D diagnostics  |  draft preserved",
+            Self::Korean => "Ctrl+D 진단  |  초안 유지",
+        }
+    }
+
+    pub(super) const fn composer_parallel_loading_action(self) -> &'static str {
+        match self {
+            Self::English => "Parallel board loading  |  input paused",
+            Self::Korean => "병렬 보드 로딩 중  |  입력 일시 정지",
+        }
+    }
+
+    pub(super) const fn composer_approval_action(self) -> &'static str {
+        match self {
+            Self::English => "Input paused  •  Y approve once  •  N / Esc decline",
+            Self::Korean => "입력 일시 정지  •  Y 한 번 승인  •  N / Esc 거절",
+        }
+    }
+
+    pub(super) const fn composer_dialog_hold_status(self) -> &'static str {
+        match self {
+            Self::English => "Response held while the dialog is open",
+            Self::Korean => "대화 상자가 열려 있어 응답 표시가 보류되었습니다",
+        }
+    }
+
+    pub(super) const fn composer_dialog_resume_action(self) -> &'static str {
+        match self {
+            Self::English => "Close the dialog to resume input",
+            Self::Korean => "입력을 계속하려면 대화 상자를 닫으세요",
+        }
+    }
+
+    pub(super) const fn composer_loading_status(self) -> &'static str {
+        match self {
+            Self::English => "Preparing the prompt…",
+            Self::Korean => "입력 화면을 준비하는 중…",
+        }
+    }
+
+    pub(super) const fn composer_loading_action(self) -> &'static str {
+        match self {
+            Self::English => "Wait for shell readiness",
+            Self::Korean => "셸 준비가 끝날 때까지 기다리세요",
+        }
+    }
+
+    pub(super) const fn composer_unavailable_status(self) -> &'static str {
+        match self {
+            Self::English => "Prompt unavailable",
+            Self::Korean => "입력을 사용할 수 없습니다",
+        }
+    }
+
+    pub(super) const fn composer_startup_pending_action(self) -> &'static str {
+        match self {
+            Self::English => "Type now  |  submission waits for startup",
+            Self::Korean => "지금 입력 가능  |  시작 준비 후 전송",
         }
     }
 
@@ -819,6 +917,7 @@ impl TuiLanguage {
         }
     }
 
+    #[cfg(test)]
     pub(super) const fn inline_command_palette_key_lines(self) -> [&'static str; 2] {
         match self {
             Self::English => [
@@ -829,6 +928,7 @@ impl TuiLanguage {
         }
     }
 
+    #[cfg(test)]
     pub(super) const fn inline_command_palette_empty_key_line(self) -> &'static str {
         match self {
             Self::English => "Esc close",
@@ -1141,6 +1241,7 @@ impl TuiLanguage {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn startup_axis_row(
         self,
         workflow_status: &str,
@@ -1175,6 +1276,7 @@ impl TuiLanguage {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn github_review_polling_status(self, status: &str) -> String {
         match (self, status) {
             (Self::Korean, "off") => "꺼짐".to_string(),
@@ -1182,6 +1284,7 @@ impl TuiLanguage {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn startup_workspace_line(self, workspace_path: &str) -> String {
         match self {
             Self::English => format!("workspace: {workspace_path}"),
@@ -1203,6 +1306,7 @@ impl TuiLanguage {
         }
     }
 
+    #[cfg(test)]
     pub(super) const fn startup_ready_action_line(self) -> &'static str {
         match self {
             Self::English => "ready: send a task or reopen a session",
@@ -1210,6 +1314,7 @@ impl TuiLanguage {
         }
     }
 
+    #[cfg(test)]
     pub(super) const fn startup_examples_line(self) -> &'static str {
         match self {
             Self::English => "examples: fix src/...  |  review PR #123  |  explain tests/...",
@@ -1217,6 +1322,7 @@ impl TuiLanguage {
         }
     }
 
+    #[cfg(test)]
     pub(super) const fn startup_shortcuts_line(self) -> &'static str {
         match self {
             Self::English => "shortcuts: Ctrl+o sessions  |  Ctrl+d diagnostics  |  :help",
@@ -1224,6 +1330,7 @@ impl TuiLanguage {
         }
     }
 
+    #[cfg(test)]
     pub(super) const fn startup_buffered_prompt_line(self) -> &'static str {
         match self {
             Self::English => "draft: opening prompt buffered below",
@@ -1231,6 +1338,7 @@ impl TuiLanguage {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn startup_diagnostics_summary_line(
         self,
         codex_status: &str,
@@ -1251,6 +1359,7 @@ impl TuiLanguage {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn inline_diagnostic_status(
         self,
         ok: bool,

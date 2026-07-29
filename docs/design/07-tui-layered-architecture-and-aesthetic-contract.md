@@ -58,7 +58,12 @@ navigation intent cannot optimistically rewrite it.
 
 ### Inline Shell Tail
 
-- The inline tail must remain borderless and compact.
+- The inline tail must remain compact. Status, notices, and inspection summaries stay
+  borderless; the focused prompt composer may own one semantic focus frame, provided
+  the frame does not claim the whole terminal background or alter host scrollback.
+- In the main-buffer frontend that frame is an open `╭ / │ / ╰` focus rail, not a
+  full-width horizontal box. This avoids resize reflow moving the cursor or live tail
+  outside the physical viewport.
 - It must keep a stable hierarchy: status ribbon, planning or queue summary, runtime notice,
   prompt, command hint.
 - One terminal sync transaction must call `revisioned_planning_parallel_projection()` exactly once

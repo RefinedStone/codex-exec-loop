@@ -177,6 +177,17 @@ impl AkraTheme {
             .title(title)
     }
 
+    // Inline mode uses an open focus rail instead of a full-width box. A horizontal
+    // border can reflow into extra terminal rows during a physical resize and push
+    // the live prompt out of the viewport.
+    pub(super) fn composer_rail(focused: bool) -> Style {
+        if focused {
+            Self::brand()
+        } else {
+            Self::subtle()
+        }
+    }
+
     // shared heading grammar다. brand, section title, suffix가 surface마다 예측 가능한 span 순서로 배치된다.
     pub(super) fn title_line(text: &'static str, suffix: &'static str) -> Line<'static> {
         Line::from(vec![

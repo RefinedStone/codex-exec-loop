@@ -4,11 +4,11 @@ expression: rendered
 ---
 
 
-
 Codex:
   narrow resize keeps the live tail visible
 
-Akra  |  thread: new draft
+Akra / root  •  ready  •  queue: off
 ◦ Working (0s • turn running / interrupt run...)
->
-prompt: Enter queue | Tab steer | Ctrl+j nl
+╭ Task
+│ > Describe a task or type : for commands
+╰  Type a follow-up  |  Tab steers after typing

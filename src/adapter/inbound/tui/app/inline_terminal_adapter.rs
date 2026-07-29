@@ -65,7 +65,7 @@ enum InlineViewportSync {
     Deferred,
     Stable {
         redraw_required: bool,
-        frame_projection: InlineConversationFrameProjection,
+        frame_projection: Box<InlineConversationFrameProjection>,
         redraw_after_successful_frame: bool,
         resize_snapshot: InlineResizeSnapshot,
     },
@@ -139,7 +139,7 @@ pub(super) fn draw_inline_transaction<B: InlineResizeBackend>(
             terminal,
             runtime,
             inline_terminal,
-            frame_projection,
+            *frame_projection,
             redraw_after_successful_frame,
             resize_snapshot,
         )?
@@ -165,7 +165,9 @@ fn draw_inline_frame<B: InlineResizeBackend>(
          * scrollback insertion or resize may have shifted visible rows, clearing
          * before draw prevents stale glyphs from surviving under shorter frames.
          */
-        if let Err(error) = clear_inline_viewport(terminal) {
+        if let Err(error) =
+            clear_inline_viewport(terminal, inline_terminal.viewport.last_drawn_viewport_area)
+        {
             fail_closed_frame_delivery(runtime, inline_terminal);
             return Err(error);
         }
@@ -274,7 +276,29 @@ fn draw_inline_frame<B: InlineResizeBackend>(
     Ok(true)
 }
 
-fn clear_inline_viewport<B: Backend>(terminal: &mut Terminal<B>) -> Result<(), B::Error> {
+fn clear_inline_viewport<B: Backend>(
+    terminal: &mut Terminal<B>,
+    last_drawn_viewport_area: Option<Rect>,
+) -> Result<(), B::Error> {
+    let current_area = current_viewport_area(terminal);
+    let terminal_size = terminal.size()?;
+    if let Some(previous_area) = last_drawn_viewport_area {
+        // A resize can move an inline viewport without moving every old cell
+        // into the new area. Clear only the previous rows outside the current
+        // viewport before Terminal::clear resets the current viewport buffer.
+        for y in previous_area.y..previous_area.bottom().min(terminal_size.height) {
+            if y >= current_area.y && y < current_area.bottom() {
+                continue;
+            }
+            terminal.backend_mut().set_cursor_position(Position {
+                x: previous_area.x.min(terminal_size.width.saturating_sub(1)),
+                y,
+            })?;
+            terminal
+                .backend_mut()
+                .clear_region(ClearType::CurrentLine)?;
+        }
+    }
     terminal.clear()
 }
 
@@ -398,7 +422,7 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
         );
         return Ok(InlineViewportSync::Stable {
             redraw_required: tail_frame_changed,
-            frame_projection,
+            frame_projection: Box::new(frame_projection),
             redraw_after_successful_frame: false,
             resize_snapshot,
         });
@@ -592,7 +616,7 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
     );
     Ok(InlineViewportSync::Stable {
         redraw_required: visible_history_adjusted || history_inserted || tail_frame_changed,
-        frame_projection,
+        frame_projection: Box::new(frame_projection),
         redraw_after_successful_frame,
         resize_snapshot,
     })
@@ -832,6 +856,7 @@ impl InlineTerminalState {
 // history-fit changes invalidate that trust and force a clear before the next draw.
 struct TerminalViewportState {
     viewport_area: Option<Rect>,
+    last_drawn_viewport_area: Option<Rect>,
     last_known_screen_size: Option<Size>,
     last_known_cursor_pos: Option<Position>,
     last_reconciled_resize_event_epoch: u64,
@@ -845,6 +870,7 @@ impl Default for TerminalViewportState {
     fn default() -> Self {
         Self {
             viewport_area: None,
+            last_drawn_viewport_area: None,
             last_known_screen_size: None,
             last_known_cursor_pos: None,
             last_reconciled_resize_event_epoch: 0,
@@ -884,6 +910,7 @@ impl TerminalViewportState {
          * not prove the visible cells match our tail-frame signature.
          */
         self.record_terminal_viewport(terminal_size, viewport_area, cursor_position);
+        self.last_drawn_viewport_area = Some(viewport_area);
         self.back_buffer_trustworthy = true;
     }
 }

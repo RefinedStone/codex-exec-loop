@@ -1,9 +1,7 @@
 ---
 source: src/adapter/inbound/tui/app/shell_rendering_tests.rs
-assertion_line: 518
 expression: rendered
 ---
-"                                                                                "
 "                                                                                "
 "                                                                                "
 "                                                                                "
@@ -11,14 +9,15 @@ expression: rendered
 "Codex:                                                                          "
 "  streaming reply still visible                                                 "
 "                                                                                "
-"Akra  |  thread: new draft                                                      "
+"Akra / root  •  ready  •  queue: ready                                          "
 "◦ Working (0s • turn running / interrupt runtime-native)                        "
 "planning: stale                                                                 "
 "now: Implement shell planning status  |  next: Trim legacy shell code           "
 "blocked: Follow blocked review thread (blocked by tasks: task-2(in_progress))   "
 "recent codex: previous transcript should remain vis...                          "
-">                                                                               "
-"prompt: Enter queue | Tab steer | Ctrl+j nl                                     "
+"╭ Task                                                                          "
+"│ > Describe a task or type : for commands                                      "
+"╰  Type a follow-up  |  Tab steers after typing                                 "
 "                                                                                "
 "                                                                                "
 "                                                                                "

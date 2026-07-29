@@ -197,7 +197,7 @@ fn transcript_view_modes_filter_tool_and_status_rows() {
 // transcript stays outside the alternate-screen tail, and live rows are cleared
 // when state changes.
 #[test]
-fn inline_main_buffer_rendering_avoids_box_borders() {
+fn inline_main_buffer_rendering_uses_only_the_composer_focus_frame() {
     let mut terminal = tui_testkit::inline_terminal(80, 24);
     let mut app = make_test_app();
     tui_testkit::append_agent_history_message(
@@ -214,7 +214,7 @@ fn inline_main_buffer_rendering_avoids_box_borders() {
     assert!(!rendered.contains("Transcript /"));
     assert!(!rendered.contains("Controls / shell shortcuts and live status"));
     assert!(!rendered.contains("Prompt / ready"));
-    assert!(rendered.contains("Akra  |  thread: new draft"));
+    assert!(rendered.contains("Akra / root"));
     assert!(!rendered.contains("turn: idle"));
     assert!(!rendered.contains("input: draft"));
     assert!(!rendered.contains("auto: queue/idle"));
@@ -223,8 +223,17 @@ fn inline_main_buffer_rendering_avoids_box_borders() {
     assert!(!rendered.contains("parallel: off"));
     assert!(!rendered.contains("stable history should stay above the live region"));
     assert!(!rendered.contains("No messages in this thread yet."));
-    assert!(!rendered.contains("┌"));
-    assert!(!rendered.contains("│"));
+    let compact_hud = rendered
+        .lines()
+        .filter(|line| line.contains("Akra / root"))
+        .collect::<Vec<_>>();
+    assert_eq!(compact_hud.len(), 1, "{rendered}");
+    assert!(compact_hud[0].contains("pending"), "{rendered}");
+    assert!(compact_hud[0].contains("queue: off"), "{rendered}");
+    assert!(!compact_hud[0].contains("branch:"), "{rendered}");
+    assert_eq!(rendered.matches("╭ Task").count(), 1, "{rendered}");
+    assert_eq!(rendered.matches('│').count(), 1, "{rendered}");
+    assert_eq!(rendered.matches('╰').count(), 1, "{rendered}");
 }
 #[test]
 fn inline_main_buffer_tail_anchors_below_transcript_area_after_history() {
@@ -239,10 +248,7 @@ fn inline_main_buffer_tail_anchors_below_transcript_area_after_history() {
     let rendered_lines = rendered.lines().collect::<Vec<_>>();
     let thread_line_index = rendered_lines
         .iter()
-        .position(|line| {
-            line.trim_matches('"')
-                .starts_with("Akra  |  thread: new draft")
-        })
+        .position(|line| line.trim_matches('"').starts_with("Akra / root"))
         .expect("inline viewport should contain visible tail text");
     assert!(
         thread_line_index > 0,
@@ -274,13 +280,14 @@ fn inline_main_buffer_tail_frame_does_not_render_startup_ascii_art_transiently()
 
     assert!(!rendered.contains(".:  .::    .::  .::.: .:::   .::"));
     assert!(!rendered.contains(".::.::  .::   .::    .::  .::   .::"));
-    assert!(rendered.contains("Akra  |  Workflows: ready  |  Sessions:"));
-    assert!(rendered.contains("workspace: /tmp/root"));
-    assert!(rendered.contains("diagnostics: codex ok  |  app-server ok  |  account ok"));
-    assert!(rendered.contains("attachment: provider-launched  |  recovery: provider-thread-id"));
-    assert!(rendered.contains("ready: send a task or reopen a session"));
-    assert!(rendered.contains("shortcuts: Ctrl+o sessions"));
-    assert!(rendered.contains("prompt: new thread ready"));
+    assert!(rendered.contains("Akra / root"));
+    assert!(rendered.contains("branch: --"));
+    assert!(rendered.contains("queue: off"));
+    assert!(rendered.contains("Describe a task or type : for commands"));
+    assert!(rendered.contains("Type a task  |  : commands"));
+    assert!(!rendered.contains("diagnostics:"));
+    assert!(!rendered.contains("attachment:"));
+    assert!(!rendered.contains("shortcuts:"));
 }
 
 #[test]
@@ -295,12 +302,12 @@ fn inline_startup_screen_uses_selected_korean_language() {
         .expect("inline startup render succeeds");
     let rendered = tui_testkit::screen_text(&terminal);
 
-    assert!(rendered.contains("Akra  |  워크플로: 준비됨  |  세션:"));
-    assert!(rendered.contains("작업공간: /tmp/root"));
-    assert!(rendered.contains("진단: codex 정상  |  app-server 정상  |  계정 정상"));
-    assert!(rendered.contains("연결: provider-launched  |  복구: provider-thread-id"));
-    assert!(rendered.contains("준비됨: 작업을 보내거나 세션을 다시 여세요"));
-    assert!(rendered.contains("단축키: Ctrl+o 세션"));
+    assert!(rendered.contains("Akra / root"));
+    assert!(rendered.contains("준비됨"));
+    assert!(rendered.contains("작업을 입력하거나 : 명령을 사용하세요"));
+    assert!(rendered.contains("작업 입력  |  : 명령"));
+    assert!(!rendered.contains("진단:"));
+    assert!(!rendered.contains("단축키:"));
 }
 #[test]
 fn startup_prompt_command_palette_remains_visible_after_colon_input() {
@@ -321,7 +328,7 @@ fn startup_prompt_command_palette_remains_visible_after_colon_input() {
 
     assert!(rendered.contains("> :"));
     assert!(rendered.contains("palette 1/19"));
-    assert!(rendered.contains("Down/Tab next"));
+    assert!(rendered.contains("↑/↓ or Tab select"));
     assert!(rendered.contains(":diag"));
     assert!(rendered.contains(":peek"));
 
@@ -332,7 +339,7 @@ fn startup_prompt_command_palette_remains_visible_after_colon_input() {
     let narrow = tui_testkit::screen_text(&narrow_terminal);
     assert!(narrow.contains("palette 1/19"), "{narrow}");
     assert!(narrow.contains("> :diag"), "{narrow}");
-    assert!(narrow.contains("Down/Tab next"), "{narrow}");
+    assert!(narrow.contains("↑/↓ or Tab select"), "{narrow}");
 }
 
 #[test]
@@ -355,7 +362,7 @@ fn startup_prompt_command_palette_uses_selected_korean_language() {
 
     assert!(rendered.contains("팔레트 1/19"));
     assert!(rendered.contains(":diag  진단"));
-    assert!(rendered.contains("Down/Tab 다음"));
+    assert!(rendered.contains("↑/↓ 또는 Tab 선택"));
 
     let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
     else {
@@ -451,8 +458,55 @@ fn inline_render_positions_cursor_on_empty_prompt_line() {
 
     terminal
         .backend_mut()
-        .assert_cursor_position(Position::new(2, 8));
+        .assert_cursor_position(Position::new(4, 2));
 }
+
+#[test]
+fn focused_composer_cursor_uses_terminal_cells_for_korean_and_wide_graphemes() {
+    use unicode_width::UnicodeWidthStr;
+
+    let mut terminal = tui_testkit::inline_terminal(80, 24);
+    let mut app = make_test_app();
+    app.shell.tui_language = TuiLanguage::Korean;
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    let input = "한글 👩‍💻 작업";
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
+        panic!("test app should keep a ready conversation state");
+    };
+    conversation.composer.input_buffer = input.to_string();
+    conversation
+        .composer
+        .set_input_cursor_byte_index(conversation.composer.input_buffer.len());
+
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("wide prompt render succeeds");
+    let rendered = tui_testkit::screen_text(&terminal);
+    let cursor = terminal
+        .backend_mut()
+        .get_cursor_position()
+        .expect("cursor position should be available");
+    let (prompt_row, prompt_line) = rendered
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains(input))
+        .expect("wide prompt should be visible");
+    let prompt_line = prompt_line.trim_matches('"');
+    let input_end = prompt_line
+        .find(input)
+        .expect("wide prompt should have a start")
+        .saturating_add(input.len());
+    let expected_x = UnicodeWidthStr::width(&prompt_line[..input_end]);
+
+    assert_eq!(
+        cursor,
+        Position::new(expected_x as u16, prompt_row as u16),
+        "cursor should use terminal cells rather than UTF-8 byte length"
+    );
+    assert!(rendered.contains("Enter 전송  |  Ctrl+J 줄바꿈"));
+}
+
 #[test]
 fn dense_single_line_prompt_keeps_its_end_and_cursor_visible() {
     let mut terminal = Terminal::new(TestBackend::new(48, 18)).expect("test terminal");
@@ -480,7 +534,7 @@ fn dense_single_line_prompt_keeps_its_end_and_cursor_visible() {
 
     assert!(rendered.contains("CURSOR_END"), "{rendered}");
     assert!(
-        rendered.contains("buffered prompt  |  Enter send"),
+        rendered.contains("Enter send  |  Ctrl+J newline"),
         "{rendered}"
     );
     let (cursor_text_row, cursor_text_line) = rendered
@@ -489,14 +543,16 @@ fn dense_single_line_prompt_keeps_its_end_and_cursor_visible() {
         .find(|(_, line)| line.contains("CURSOR_END"))
         .expect("prompt suffix row should be visible");
     let cursor_text_line = cursor_text_line.trim_matches('"');
-    let expected_cursor_x = cursor_text_line
+    let cursor_marker_end = cursor_text_line
         .find("CURSOR_END")
         .expect("cursor marker should have a column")
         .saturating_add("CURSOR_END".len());
+    let expected_cursor_x =
+        unicode_width::UnicodeWidthStr::width(&cursor_text_line[..cursor_marker_end]);
     assert_eq!(
         cursor,
         Position::new(expected_cursor_x as u16, cursor_text_row as u16),
-        "cursor should follow the word-wrapped prompt suffix"
+        "cursor should follow the word-wrapped prompt suffix:\n{rendered}"
     );
 
     let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
@@ -519,14 +575,16 @@ fn dense_single_line_prompt_keeps_its_end_and_cursor_visible() {
         .enumerate()
         .find(|(_, line)| line.contains("MIDDLE_CURSOR"))
         .expect("focused middle prompt row should be visible");
-    let middle_x = middle_line
-        .trim_matches('"')
-        .find("MIDDLE_CURSOR")
-        .expect("middle cursor marker should have a column");
+    let middle_line = middle_line.trim_matches('"');
+    let middle_x = unicode_width::UnicodeWidthStr::width(
+        &middle_line[..middle_line
+            .find("MIDDLE_CURSOR")
+            .expect("middle cursor marker should have a column")],
+    );
     assert_eq!(
         cursor,
         Position::new(middle_x as u16, middle_row as u16),
-        "cursor should follow a word-wrapped middle edit"
+        "cursor should follow a word-wrapped middle edit:\n{rendered}"
     );
 }
 #[test]
@@ -754,7 +812,7 @@ fn narrow_help_inspection_scrolls_to_the_last_command() {
         "help close action must remain visible:\n{rendered}"
     );
     assert!(
-        rendered.contains("prompt:"),
+        rendered.contains("Describe a task or type : for commands"),
         "composer tail must remain visible:\n{rendered}"
     );
 }
@@ -1760,7 +1818,7 @@ fn inline_parallel_home_replaces_single_mode_transcript_when_overlay_hidden() {
     assert!(!rendered.contains("Operator: first user word"));
     assert!(!rendered.contains("Codex:"));
     assert!(!rendered.contains("single mode reply must not own"));
-    assert!(!rendered.contains("┌"));
+    assert_eq!(rendered.matches("╭ Task").count(), 1, "{rendered}");
 }
 
 #[test]
@@ -1832,12 +1890,12 @@ fn inline_supersession_keeps_buffered_prompt_visible_in_compact_tail() {
     let rendered = tui_testkit::screen_text(&terminal);
 
     assert!(rendered.contains("> 안녕하세요?"));
-    assert!(rendered.contains("buffered prompt  |  Enter send  |  Ctrl+j nl"));
+    assert!(rendered.contains("Enter send  |  Ctrl+J newline"));
     assert!(
         !rendered.contains("now: none"),
         "planning detail rows should be clipped before they can hide the prompt:\n{rendered}"
     );
-    assert!(!rendered.contains("┌"));
+    assert_eq!(rendered.matches("╭ Task").count(), 1, "{rendered}");
 }
 
 #[test]
@@ -2010,12 +2068,11 @@ fn inline_tail_adds_only_spinner_to_prompt_during_parallel_loading() {
         .join("\n");
 
     assert!(
-        [
-            "⠋ >", "⠙ >", "⠹ >", "⠸ >", "⠼ >", "⠴ >", "⠦ >", "⠧ >", "⠇ >", "⠏ >"
-        ]
-        .iter()
-        .any(|frame| rendered.contains(frame))
+        ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+            .iter()
+            .any(|frame| rendered.contains(*frame))
     );
+    assert!(rendered.contains("Parallel board loading"));
     assert!(!rendered.contains("thinking"));
 }
 
@@ -2046,12 +2103,11 @@ fn inline_parallel_home_keeps_loading_spinner_when_overlay_hidden() {
     assert!(rendered.contains("Parallel / inline inspection"));
     assert!(rendered.contains("prompt paused while setup completes"));
     assert!(
-        [
-            "⠋ >", "⠙ >", "⠹ >", "⠸ >", "⠼ >", "⠴ >", "⠦ >", "⠧ >", "⠇ >", "⠏ >"
-        ]
-        .iter()
-        .any(|frame| rendered.contains(frame))
+        ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+            .iter()
+            .any(|frame| rendered.contains(*frame))
     );
+    assert!(rendered.contains("Parallel board loading"));
 }
 
 #[test]
@@ -2305,7 +2361,7 @@ fn inline_tail_reports_partial_handle_based_session_catalog_status() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(rendered.contains("Sessions: partial"));
+    assert!(rendered.contains("session: partial"));
 }
 
 // Shared chrome tests keep overlay titles and confirmation styling aligned
@@ -2383,7 +2439,7 @@ fn exit_confirmation_uses_shared_akra_chrome() {
         assert!(rendered.contains("Exit codex-exec-loop?"), "{rendered}");
         assert!(rendered.contains("y: exit    n: stay"), "{rendered}");
         if width == 80 {
-            assert!(rendered.contains("ready: send a task or reopen a session"));
+            assert!(rendered.contains("Akra / root"));
         }
         assert!(!rendered.contains("████"));
     }

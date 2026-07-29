@@ -11,6 +11,14 @@ use super::tail_copy::{
 const INLINE_TAIL_NOTICE_PREFIX_WIDTH: usize = "notice: ".len();
 const INLINE_TAIL_MAX_NOTICE_DETAIL_LIMIT: usize = 160;
 
+#[derive(Clone)]
+pub(crate) struct InlineComposerSurfaceView {
+    pub(crate) body_lines: Vec<Line<'static>>,
+    pub(crate) action_line: Line<'static>,
+    pub(crate) focused: bool,
+    pub(crate) cursor_offset: Option<(u16, u16)>,
+}
+
 // InlineTailView is the renderer-facing plan for the live status tail.
 // It keeps text lines, cursor placement, and startup anchoring together so rendering uses one coherent snapshot.
 #[derive(Clone)]
@@ -19,10 +27,34 @@ pub(crate) struct InlineTailView {
     pub(crate) lines: Vec<Line<'static>>,
     // Cursor offset relative to the tail area; None means the renderer should not move the terminal cursor.
     pub(crate) prompt_cursor_offset: Option<(u16, u16)>,
-    // Startup mode renders this block from the top instead of pinning it to the bottom.
+    // Startup stays top-anchored because an inline terminal can temporarily retain
+    // its pre-resize scrollback origin. Keeping the compact HUD at the viewport
+    // origin guarantees the focused composer remains on the physical screen.
     pub(crate) render_from_top: bool,
+    // The prompt suffix is rendered as one semantic focus surface. `lines` remains
+    // the stable flattened projection used by terminal diff/cache contracts.
+    pub(crate) composer_surface: Option<InlineComposerSurfaceView>,
+    pub(crate) composer_start_line_index: usize,
     // Mouse target relative to the rendered tail body. The renderer translates it into terminal coordinates.
     pub(crate) queue_receipt_undo_hit_area: Option<Rect>,
+}
+
+impl InlineTailView {
+    pub(crate) fn prefix_lines(&self) -> &[Line<'static>] {
+        &self.lines[..self.composer_start_line_index.min(self.lines.len())]
+    }
+
+    pub(crate) fn rendered_height(&self, content_width: u16, max_height: u16) -> u16 {
+        let prefix_rows = rendered_rows(self.prefix_lines(), content_width);
+        let composer_rows = self
+            .composer_surface
+            .as_ref()
+            .map_or(0, |surface| composer_surface_height(surface, content_width));
+        prefix_rows
+            .saturating_add(composer_rows)
+            .max(1)
+            .min(usize::from(max_height)) as u16
+    }
 }
 
 // Build the tail text and cursor plan from the same presentation context.
@@ -38,13 +70,40 @@ pub(crate) fn build_inline_tail_view(
         screen_model,
         screen_model.github_review_recent_changes_summary.clone(),
         notice_detail_limit,
+        content_width,
     );
     let lines = compact_inspection_tail_lines(screen_model, content_width, tail_content);
+    let prompt_lines = build_inline_tail_prompt_lines_with_context(screen_model);
+    let composer_line_count = prompt_lines.len().min(lines.len());
+    let focused_composer_line_count = if screen_model.prompt_input_has_focus {
+        composer_line_count
+    } else {
+        0
+    };
+    let composer_start_line_index = lines.len().saturating_sub(focused_composer_line_count);
+    let composer_surface = (focused_composer_line_count >= 2).then(|| {
+        let prompt_slice = &lines[composer_start_line_index..];
+        let body_end = prompt_slice.len().saturating_sub(1);
+        let cursor_offset = if screen_model.prompt_input_has_focus {
+            screen_model.composer().and_then(|composer| {
+                build_prompt_cursor_offset(composer, composer_inner_width(content_width))
+            })
+        } else {
+            None
+        };
+        InlineComposerSurfaceView {
+            body_lines: prompt_slice[..body_end].to_vec(),
+            action_line: prompt_slice[body_end].clone(),
+            focused: screen_model.prompt_input_has_focus,
+            cursor_offset,
+        }
+    });
 
     let queue_receipt_undo_hit_area =
         find_inline_action_hit_area(&lines, content_width, QUEUE_RECEIPT_UNDO_ACTION_LABEL);
 
-    // Cursor placement depends on the actual line stack because status/notice rows before the prompt can wrap.
+    // Cursor placement includes the focus rail and every wrapped status row
+    // before the composer.
     let prompt_cursor_offset =
         build_inline_prompt_cursor_offset_for_lines(screen_model, content_width, &lines);
 
@@ -52,8 +111,18 @@ pub(crate) fn build_inline_tail_view(
         lines,
         prompt_cursor_offset,
         render_from_top: screen_model.startup_screen_is_active(),
+        composer_surface,
+        composer_start_line_index,
         queue_receipt_undo_hit_area,
     }
+}
+
+pub(crate) fn composer_inner_width(content_width: u16) -> u16 {
+    content_width.saturating_sub(1).max(1)
+}
+
+fn composer_surface_height(surface: &InlineComposerSurfaceView, content_width: u16) -> usize {
+    rendered_rows(&surface.body_lines, composer_inner_width(content_width)).saturating_add(2)
 }
 
 fn find_inline_action_hit_area(
@@ -120,7 +189,16 @@ fn compact_inspection_tail_lines(
 
     let prompt_start_index = lines.len().saturating_sub(prompt_lines.len());
     let prefix_lines = &lines[..prompt_start_index];
-    let prompt_rows = rendered_rows(&prompt_lines, content_width);
+    let prompt_rows = if prompt_lines.len() >= 2 && screen_model.prompt_input_has_focus {
+        let body_end = prompt_lines.len() - 1;
+        rendered_rows(
+            &prompt_lines[..body_end],
+            composer_inner_width(content_width),
+        )
+        .saturating_add(2)
+    } else {
+        rendered_rows(&prompt_lines, content_width)
+    };
     let compact_activity_tail =
         screen_model.shell_overlay == ShellOverlay::Activity && content_width <= 48;
     let max_tail_rows = if is_primary_tail {
@@ -157,9 +235,21 @@ fn compact_inspection_tail_lines(
     let prefix_row_budget = max_tail_rows - prompt_rows;
     let mut priority_lines = prefix_lines.iter().enumerate().collect::<Vec<_>>();
     priority_lines.sort_by_key(|(_, entry)| entry.priority);
+    let inspection_has_attention_signal = !is_primary_tail
+        && prefix_lines
+            .iter()
+            .any(|entry| entry.priority <= super::tail_copy::InlineTailPriority::Warning);
     let mut selected_lines = Vec::new();
     let mut used_prefix_rows = 0usize;
     for (index, entry) in priority_lines {
+        // Inspection tails should not refill spare rows with diagnostic detail
+        // while a pinned, terminal, or warning signal is asking for attention.
+        // The unused row is intentional visual separation, not lost capacity.
+        if inspection_has_attention_signal
+            && entry.priority == super::tail_copy::InlineTailPriority::Detail
+        {
+            continue;
+        }
         let line_rows = rendered_rows(std::slice::from_ref(&entry.line), content_width);
         if used_prefix_rows.saturating_add(line_rows) > prefix_row_budget {
             continue;
@@ -172,6 +262,9 @@ fn compact_inspection_tail_lines(
         .into_iter()
         .map(|(_, entry)| entry.line.clone())
         .collect::<Vec<_>>();
+    if inspection_has_attention_signal && used_prefix_rows < prefix_row_budget {
+        compacted.push(Line::default());
+    }
     compacted.extend(prompt_lines);
     compacted
 }
@@ -182,36 +275,28 @@ fn rendered_rows(lines: &[Line<'static>], content_width: u16) -> usize {
         .line_count(content_width)
 }
 
-// Convert the prompt-local cursor into a tail-local cursor.
-// Every wrapped row before the prompt becomes vertical offset that must be added to the prompt composer result.
+// Convert the prompt-local cursor into a tail-local cursor. The focus rail adds
+// one cell on the left and one row above the prompt body.
 fn build_inline_prompt_cursor_offset_for_lines(
     screen_model: &ConversationScreenModel<'_>,
-    // Tail content width is the common basis for both wrapping and prompt cursor composition.
     content_width: u16,
-    // Final display lines; we count wrapped rows before the prompt suffix inside this slice.
     tail_lines: &[Line<'static>],
 ) -> Option<(u16, u16)> {
     if !screen_model.prompt_input_has_focus {
         return None;
     }
-    // Only a ready conversation projects a reliable composer cursor.
     let composer = screen_model.composer()?;
-
-    // Rebuild only the prompt suffix to find where that suffix begins in the already assembled tail.
     let prompt_lines = build_inline_tail_prompt_lines_with_context(screen_model);
-    // Saturating subtraction keeps degraded state from slicing before the beginning of tail_lines.
     let prompt_start_index = tail_lines.len().saturating_sub(prompt_lines.len());
-
-    // Count physical terminal rows before the prompt, not logical Line entries.
     let prompt_start_row = rendered_rows(&tail_lines[..prompt_start_index], content_width)
-        .try_into()
-        .unwrap_or(u16::MAX);
+        .min(usize::from(u16::MAX)) as u16;
+    let (cursor_x, cursor_y) =
+        build_prompt_cursor_offset(composer, composer_inner_width(content_width))?;
 
-    // Prompt composer returns cursor coordinates relative to the prompt text alone.
-    let (cursor_x, cursor_y) = build_prompt_cursor_offset(composer, content_width)?;
-
-    // Add pre-prompt rows to reach tail-local coordinates, saturating for extremely tall notice stacks.
-    Some((cursor_x, prompt_start_row.saturating_add(cursor_y)))
+    Some((
+        cursor_x.saturating_add(1),
+        prompt_start_row.saturating_add(1).saturating_add(cursor_y),
+    ))
 }
 
 #[cfg(test)]
@@ -328,8 +413,8 @@ mod tests {
 
         assert_eq!(first.lines, second.lines);
         assert_eq!(first.prompt_cursor_offset, second.prompt_cursor_offset);
-        assert_eq!(first.lines[1].to_string(), "> 한글 prompt");
-        assert_eq!(first.prompt_cursor_offset, Some((6, 1)));
+        assert_eq!(first.lines[1].to_string(), " > 한글 prompt");
+        assert_eq!(first.prompt_cursor_offset, Some((8, 2)));
         assert_eq!(first.render_from_top, second.render_from_top);
         assert_eq!(
             first.queue_receipt_undo_hit_area,
@@ -488,7 +573,7 @@ mod tests {
 
         let mut screen_model = ConversationScreenModel::from_app(&app);
         screen_model.shell_action_availability = ShellActionAvailability::Ready;
-        let raw = build_inline_tail_content_with_context(&screen_model, None, 72);
+        let raw = build_inline_tail_content_with_context(&screen_model, None, 72, 80);
         let cjk_warning = raw
             .iter()
             .map(|entry| &entry.line)
@@ -508,19 +593,10 @@ mod tests {
             rendered.contains("큐: op-1  |  권한 확인 대기 중"),
             "{rendered}"
         );
-        assert!(
-            rendered.contains("prompt: session ready  |  Enter send"),
-            "{rendered}"
-        );
+        assert!(rendered.contains("작업 입력  |  : 명령"), "{rendered}");
         assert!(rendered.contains("runtime:"), "{rendered}");
         assert!(!rendered.contains(LOW_DETAIL), "{rendered}");
-        let accounted_rows = tail_view
-            .lines
-            .iter()
-            .map(|line| wrapped_row_count(line.width(), WIDTH))
-            .sum::<usize>();
-        assert_eq!(accounted_rows, 6);
-        assert_eq!(rendered_rows(&tail_view.lines, WIDTH), 6);
+        assert_eq!(tail_view.rendered_height(WIDTH, 6), 6);
         assert!(tail_view.prompt_cursor_offset.is_none());
         assert!(tail_view.queue_receipt_undo_hit_area.is_none());
     }
@@ -555,7 +631,7 @@ mod tests {
 
         let mut screen_model = ConversationScreenModel::from_app(&app);
         screen_model.shell_action_availability = ShellActionAvailability::Ready;
-        let raw = build_inline_tail_content_with_context(&screen_model, None, 72);
+        let raw = build_inline_tail_content_with_context(&screen_model, None, 72, 80);
         let stale = raw
             .iter()
             .find(|entry| entry.line.to_string() == "planning: stale")
@@ -573,7 +649,7 @@ mod tests {
         assert!(rendered.contains("runtime:"), "{rendered}");
         assert!(rendered.contains("planning: stale"), "{rendered}");
         assert!(!rendered.contains("Akra"), "{rendered}");
-        assert_eq!(rendered_rows(&tail_view.lines, WIDTH), 6);
+        assert_eq!(tail_view.rendered_height(WIDTH, 6), 6);
     }
 
     #[test]
@@ -603,10 +679,11 @@ mod tests {
                         .mirrors_recent_transcript_in_tail()
                 );
 
-                let raw_lines = build_inline_tail_content_with_context(&screen_model, None, 72)
-                    .into_iter()
-                    .map(|entry| entry.line)
-                    .collect::<Vec<_>>();
+                let raw_lines =
+                    build_inline_tail_content_with_context(&screen_model, None, 72, width)
+                        .into_iter()
+                        .map(|entry| entry.line)
+                        .collect::<Vec<_>>();
                 assert!(
                     rendered_rows(&raw_lines, width) > usize::from(MAX_INLINE_TAIL_HEIGHT),
                     "fixture must exceed the renderer tail budget at width {width}"
@@ -716,7 +793,7 @@ mod tests {
             .set_input_cursor_byte_index(conversation.composer.input_buffer.len());
         let mut screen_model = ConversationScreenModel::from_app(&app);
         add_dense_low_priority_details(&mut screen_model);
-        let raw_lines = build_inline_tail_content_with_context(&screen_model, None, 40)
+        let raw_lines = build_inline_tail_content_with_context(&screen_model, None, 40, 48)
             .into_iter()
             .map(|entry| entry.line)
             .collect::<Vec<_>>();
