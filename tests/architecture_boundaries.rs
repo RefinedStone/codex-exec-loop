@@ -4593,7 +4593,8 @@ fn update_unrelated(
         "pub type ChromeRef<'a> = &'a mut ShellChromeState;\n\
          pub type ChromeView<'a> = &'a ShellChromeState;\n\
          pub type ChromeGuard<'a> = std::sync::MutexGuard<'a, ShellChromeState>;\n\
-         pub type ChromeResult<'a> = Result<&'a ShellChromeState, ChromeGuard<'a>>;",
+         pub type ChromeResult<'a> = Result<&'a ShellChromeState, ChromeGuard<'a>>;\n\
+         pub type MixedAuthorityResult<'a> = Result<&'a mut NativeTuiApp, ChromeGuard<'a>>;",
     )
     .expect("qualified Chrome authority aliases should parse");
     let qualified_chrome_aliases = qualified_type_aliases_declared_in_file(
@@ -4664,6 +4665,22 @@ fn update_unrelated(
         multi_argument_chrome_alias.whole_state_writes.len(),
         1,
         "all generic arguments must contribute their mutable Chrome authority"
+    );
+    let mixed_authority_alias = shell_chrome_writer_audit_with_type_registry(
+        "fn external<T>(_value: T) {}\n\
+         fn escape(value: crate::chrome_aliases::MixedAuthorityResult<'_>) {\n\
+             external(value);\n\
+         }",
+        false,
+        &known_struct_fields,
+        &qualified_chrome_aliases,
+        &writer_module,
+    )
+    .expect("mixed authority alias fixture should parse");
+    assert_eq!(
+        mixed_authority_alias.whole_state_writes.len(),
+        1,
+        "mutable Shell or Chrome authority must outrank mutable App generic arguments"
     );
     let generic_authority_alias_file = syn::parse_file(
         "pub type Forward<T> = T;\n\
@@ -15176,7 +15193,19 @@ fn shell_authority_binding_from_type(
             {
                 let wrapper_is_mutable =
                     matches!(name.as_str(), "MutexGuard" | "RefMut" | "RwLockWriteGuard");
-                let mut first_authority = None;
+                let priority = |authority: ShellAuthorityBinding| match (
+                    authority.mutable,
+                    matches!(
+                        authority.kind,
+                        ShellAuthorityKind::Shell | ShellAuthorityKind::Chrome
+                    ),
+                ) {
+                    (true, true) => 4,
+                    (true, false) => 3,
+                    (false, true) => 2,
+                    (false, false) => 1,
+                };
+                let mut preferred_authority = None;
                 for argument in &arguments.args {
                     let syn::GenericArgument::Type(inner) = argument else {
                         continue;
@@ -15190,12 +15219,13 @@ fn shell_authority_binding_from_type(
                         mutable: authority.mutable || wrapper_is_mutable,
                         ..authority
                     };
-                    if authority.mutable {
-                        return Some(authority);
+                    if preferred_authority
+                        .is_none_or(|preferred| priority(authority) > priority(preferred))
+                    {
+                        preferred_authority = Some(authority);
                     }
-                    first_authority.get_or_insert(authority);
                 }
-                return first_authority;
+                return preferred_authority;
             }
             None
         }
