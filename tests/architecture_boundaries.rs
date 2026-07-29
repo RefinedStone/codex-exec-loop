@@ -4682,6 +4682,28 @@ fn update_unrelated(
         1,
         "mutable Shell or Chrome authority must outrank mutable App generic arguments"
     );
+    let mixed_authority_variants = shell_chrome_writer_audit_with_type_registry(
+        "fn escape(value: crate::chrome_aliases::MixedAuthorityResult<'_>) {\n\
+             match value {\n\
+                 Ok(app) => {\n\
+                     app.shell.chrome.session_state = SessionState::Idle;\n\
+                 }\n\
+                 Err(mut chrome) => {\n\
+                     chrome.session_state = SessionState::Idle;\n\
+                 }\n\
+             }\n\
+         }",
+        false,
+        &known_struct_fields,
+        &qualified_chrome_aliases,
+        &writer_module,
+    )
+    .expect("mixed authority variant fixture should parse");
+    assert_eq!(
+        mixed_authority_variants.field_writes.len(),
+        2,
+        "variant patterns must bind each generic payload to its own authority kind"
+    );
     let generic_authority_alias_file = syn::parse_file(
         "pub type Forward<T> = T;\n\
          pub type AppList<T> = Vec<T>;",
@@ -15258,6 +15280,160 @@ fn shell_authority_binding_from_type(
     }
 }
 
+fn shell_type_with_expanded_aliases(
+    ty: &syn::Type,
+    scope: ShellTypeResolutionScope<'_>,
+    resolving_aliases: &mut HashSet<String>,
+) -> syn::Type {
+    match ty {
+        syn::Type::Path(path) if path.qself.is_none() => {
+            let Some(segment) = path.path.segments.last() else {
+                return ty.clone();
+            };
+            let name = segment.ident.to_string();
+            let normalized_path = if path.path.segments.len() == 1 {
+                let mut qualified = scope.module_path.to_vec();
+                qualified.push(name.clone());
+                qualified
+            } else {
+                normalized_shell_type_path(&path.path, scope)
+            };
+            let qualified_name = normalized_path.join("::");
+            let alias_module_path = normalized_path
+                .get(..normalized_path.len().saturating_sub(1))
+                .unwrap_or_default();
+            let local_alias = (scope.allow_local_aliases
+                && (path.path.segments.len() == 1 || alias_module_path == scope.module_path))
+                .then(|| scope.type_aliases.get(&name))
+                .flatten();
+            let alias = local_alias.or_else(|| scope.qualified_type_aliases.get(&qualified_name));
+            if let Some(alias) = alias {
+                if !resolving_aliases.insert(qualified_name.clone()) {
+                    return ty.clone();
+                }
+                let declaration_module = if local_alias.is_some() {
+                    scope.module_path.to_vec()
+                } else {
+                    alias_module_path.to_vec()
+                };
+                let declaration_imports = if local_alias.is_some() {
+                    scope.imports
+                } else {
+                    scope
+                        .qualified_type_aliases
+                        .imports_for_module(&declaration_module)
+                };
+                let declaration_absolute_imports = if local_alias.is_some() {
+                    scope.absolute_imports
+                } else {
+                    scope
+                        .qualified_type_aliases
+                        .absolute_imports_for_module(&declaration_module)
+                };
+                let declaration_path_shadows = if local_alias.is_some() {
+                    scope.path_shadows
+                } else {
+                    scope
+                        .qualified_type_aliases
+                        .path_shadows_for_module(&declaration_module)
+                };
+                let instantiated = alias.instantiate(&segment.arguments);
+                let expanded = shell_type_with_expanded_aliases(
+                    &instantiated,
+                    ShellTypeResolutionScope {
+                        module_path: &declaration_module,
+                        imports: declaration_imports,
+                        absolute_imports: declaration_absolute_imports,
+                        path_shadows: declaration_path_shadows,
+                        allow_local_aliases: local_alias.is_some(),
+                        allow_local_imports: true,
+                        ..scope
+                    },
+                    resolving_aliases,
+                );
+                resolving_aliases.remove(&qualified_name);
+                return expanded;
+            }
+
+            let mut expanded = path.clone();
+            for segment in &mut expanded.path.segments {
+                let syn::PathArguments::AngleBracketed(arguments) = &mut segment.arguments else {
+                    continue;
+                };
+                for argument in &mut arguments.args {
+                    let syn::GenericArgument::Type(inner) = argument else {
+                        continue;
+                    };
+                    *inner = shell_type_with_expanded_aliases(inner, scope, resolving_aliases);
+                }
+            }
+            syn::Type::Path(expanded)
+        }
+        syn::Type::Reference(reference) => {
+            let mut expanded = reference.clone();
+            expanded.elem = Box::new(shell_type_with_expanded_aliases(
+                reference.elem.as_ref(),
+                scope,
+                resolving_aliases,
+            ));
+            syn::Type::Reference(expanded)
+        }
+        syn::Type::Ptr(pointer) => {
+            let mut expanded = pointer.clone();
+            expanded.elem = Box::new(shell_type_with_expanded_aliases(
+                pointer.elem.as_ref(),
+                scope,
+                resolving_aliases,
+            ));
+            syn::Type::Ptr(expanded)
+        }
+        syn::Type::Group(group) => {
+            let mut expanded = group.clone();
+            expanded.elem = Box::new(shell_type_with_expanded_aliases(
+                group.elem.as_ref(),
+                scope,
+                resolving_aliases,
+            ));
+            syn::Type::Group(expanded)
+        }
+        syn::Type::Paren(paren) => {
+            let mut expanded = paren.clone();
+            expanded.elem = Box::new(shell_type_with_expanded_aliases(
+                paren.elem.as_ref(),
+                scope,
+                resolving_aliases,
+            ));
+            syn::Type::Paren(expanded)
+        }
+        syn::Type::Slice(slice) => {
+            let mut expanded = slice.clone();
+            expanded.elem = Box::new(shell_type_with_expanded_aliases(
+                slice.elem.as_ref(),
+                scope,
+                resolving_aliases,
+            ));
+            syn::Type::Slice(expanded)
+        }
+        syn::Type::Array(array) => {
+            let mut expanded = array.clone();
+            expanded.elem = Box::new(shell_type_with_expanded_aliases(
+                array.elem.as_ref(),
+                scope,
+                resolving_aliases,
+            ));
+            syn::Type::Array(expanded)
+        }
+        syn::Type::Tuple(tuple) => {
+            let mut expanded = tuple.clone();
+            for element in &mut expanded.elems {
+                *element = shell_type_with_expanded_aliases(element, scope, resolving_aliases);
+            }
+            syn::Type::Tuple(expanded)
+        }
+        _ => ty.clone(),
+    }
+}
+
 #[derive(Clone)]
 struct ShellTypeParameter {
     name: String,
@@ -16654,14 +16830,52 @@ impl ShellChromeWriterVisitor {
         path: &syn::Path,
         index: usize,
     ) -> Option<syn::Type> {
-        let parent = self.struct_name_from_type(ty)?;
+        let expanded_type = shell_type_with_expanded_aliases(
+            ty,
+            self.type_resolution_scope(self.impl_authority),
+            &mut HashSet::new(),
+        );
+        if index == 0
+            && let syn::Type::Path(parent_path) = &expanded_type
+            && parent_path.qself.is_none()
+        {
+            let parent = parent_path.path.segments.last()?;
+            let variant = path.segments.last()?.ident.to_string();
+            let argument_index = match (parent.ident.to_string().as_str(), variant.as_str()) {
+                ("Option", "Some") | ("Result", "Ok") => Some(0),
+                ("Result", "Err") => Some(1),
+                _ => None,
+            };
+            if let Some(argument_index) = argument_index
+                && let syn::PathArguments::AngleBracketed(arguments) = &parent.arguments
+                && let Some(payload) = arguments
+                    .args
+                    .iter()
+                    .filter_map(|argument| {
+                        let syn::GenericArgument::Type(ty) = argument else {
+                            return None;
+                        };
+                        Some(ty)
+                    })
+                    .nth(argument_index)
+            {
+                return Some(payload.clone());
+            }
+        }
+
+        let parent = self.struct_name_from_type(&expanded_type)?;
         let variant = path.segments.last()?.ident.to_string();
         let variant_key = format!("{parent}::{variant}");
         self.struct_fields
             .get(&variant_key)
             .and_then(|fields| fields.get(&index.to_string()))
             .cloned()
-            .or_else(|| self.struct_field_type(ty, &syn::Member::Unnamed(syn::Index::from(index))))
+            .or_else(|| {
+                self.struct_field_type(
+                    &expanded_type,
+                    &syn::Member::Unnamed(syn::Index::from(index)),
+                )
+            })
     }
 
     fn struct_pattern_field_type(
@@ -16683,13 +16897,18 @@ impl ShellChromeWriterVisitor {
     fn bind_type_pattern(&mut self, pattern: &syn::Pat, binding: ShellTypeBinding) {
         match pattern {
             syn::Pat::Ident(pattern) => {
-                self.type_bindings.insert(
-                    pattern.ident.to_string(),
-                    ShellTypeBinding {
-                        mutable: binding.mutable || pattern.mutability.is_some(),
-                        ..binding.clone()
-                    },
-                );
+                let name = pattern.ident.to_string();
+                let typed_binding = ShellTypeBinding {
+                    mutable: binding.mutable || pattern.mutability.is_some(),
+                    ..binding.clone()
+                };
+                if let Some(mut authority) =
+                    self.binding_from_type(&syn::Pat::Ident(pattern.clone()), &typed_binding.ty)
+                {
+                    authority.mutable |= typed_binding.mutable;
+                    self.authority_bindings.insert(name.clone(), authority);
+                }
+                self.type_bindings.insert(name, typed_binding);
                 if let Some((_, subpattern)) = &pattern.subpat {
                     self.bind_type_pattern(subpattern, binding);
                 }
@@ -17141,6 +17360,15 @@ impl ShellChromeWriterVisitor {
 
     fn bind_pattern_from_expression(&mut self, pattern: &syn::Pat, expression: &syn::Expr) -> bool {
         self.bind_type_pattern_from_expression(pattern, expression);
+        let typed_authorities = pattern_binding_names(pattern)
+            .into_iter()
+            .filter_map(|name| {
+                self.authority_bindings
+                    .get(&name)
+                    .copied()
+                    .map(|authority| (name, authority))
+            })
+            .collect::<Vec<_>>();
         match pattern {
             syn::Pat::Type(pattern) => {
                 self.bind_type_pattern_from_type(pattern.pat.as_ref(), pattern.ty.as_ref());
@@ -17180,6 +17408,9 @@ impl ShellChromeWriterVisitor {
         if let Some(mut authority) = self.resolve_authority(expression) {
             authority.mutable |= pattern_has_mutable_binding(pattern);
             self.bind_pattern(pattern, authority);
+            for (name, authority) in typed_authorities {
+                self.authority_bindings.insert(name, authority);
+            }
             true
         } else {
             false
