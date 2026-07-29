@@ -5611,6 +5611,45 @@ fn update_unrelated(
             && unrelated_boxed_closure.whole_state_writes.is_empty(),
         "callable wrappers must not infer TUI authority from unrelated arguments"
     );
+    let shadowed_standard_wrapper = shell_chrome_writer_audit(
+        "mod std {\n\
+             pub mod boxed {\n\
+                 pub struct Box;\n\
+                 impl Box {\n\
+                     pub fn new<F>(_closure: F) -> impl FnOnce(&mut NativeTuiApp) {\n\
+                         |_| {}\n\
+                     }\n\
+                 }\n\
+             }\n\
+         }\n\
+         fn update(app: &mut NativeTuiApp) {\n\
+             let write = std::boxed::Box::new(|value| {\n\
+                 value.shell.chrome.session_state = SessionState::Idle;\n\
+             });\n\
+             write(app);\n\
+         }",
+    )
+    .expect("shadowed standard callable wrapper fixture should parse");
+    assert!(
+        shadowed_standard_wrapper.field_writes.is_empty()
+            && shadowed_standard_wrapper.whole_state_writes.is_empty(),
+        "a relative standard-looking wrapper must respect lexical root shadows"
+    );
+    let absolute_standard_wrapper = shell_chrome_writer_audit(
+        "mod std {}\n\
+         fn escape(app: &mut NativeTuiApp) {\n\
+             let write = ::std::boxed::Box::new(|value| {\n\
+                 value.shell.chrome.session_state = SessionState::Idle;\n\
+             });\n\
+             write(app);\n\
+         }",
+    )
+    .expect("absolute standard callable wrapper fixture should parse");
+    assert_eq!(
+        absolute_standard_wrapper.field_writes.len(),
+        1,
+        "an absolute standard wrapper must bypass lexical root shadows"
+    );
 
     let referenced_inferred_closure = shell_chrome_writer_audit(
         "fn escape(app: &mut NativeTuiApp) {\n\
@@ -16628,7 +16667,7 @@ impl ShellChromeWriterVisitor {
         })
     }
 
-    fn standard_macro_root_is_shadowed(&self, root: &str, absolute: bool) -> bool {
+    fn standard_path_root_is_shadowed(&self, root: &str, absolute: bool) -> bool {
         !absolute
             && (self.qualified_type_aliases.root_path_is_shadowed(root)
                 || self.path_shadows.contains(root)
@@ -16643,7 +16682,7 @@ impl ShellChromeWriterVisitor {
             [root, target_name]
                 if matches!(root.as_str(), "std" | "core" | "alloc")
                     && shell_chrome_read_macro_name(target_name)
-                    && !self.standard_macro_root_is_shadowed(root, false) =>
+                    && !self.standard_path_root_is_shadowed(root, false) =>
             {
                 Some(target_name.clone())
             }
@@ -16665,7 +16704,7 @@ impl ShellChromeWriterVisitor {
                 if matches!(*root, "std" | "core" | "alloc")
                     && shell_chrome_read_macro_name(name) =>
             {
-                (!self.standard_macro_root_is_shadowed(root, absolute)).then(|| (*name).to_string())
+                (!self.standard_path_root_is_shadowed(root, absolute)).then(|| (*name).to_string())
             }
             ["crate", "akra_event"] => Some("akra_event".to_string()),
             _ => None,
@@ -16872,7 +16911,11 @@ impl ShellChromeWriterVisitor {
                 if matches!(root.as_str(), "alloc" | "std")
                     && module == "boxed"
                     && wrapper == "Box"
-                    && matches!(constructor.as_str(), "from" | "new" | "pin") =>
+                    && matches!(constructor.as_str(), "from" | "new" | "pin")
+                    && !self.standard_path_root_is_shadowed(
+                        root,
+                        path.path.leading_colon.is_some(),
+                    ) =>
             {
                 true
             }
@@ -16880,7 +16923,11 @@ impl ShellChromeWriterVisitor {
                 if matches!(root.as_str(), "alloc" | "std")
                     && module == "rc"
                     && wrapper == "Rc"
-                    && matches!(constructor.as_str(), "from" | "new") =>
+                    && matches!(constructor.as_str(), "from" | "new")
+                    && !self.standard_path_root_is_shadowed(
+                        root,
+                        path.path.leading_colon.is_some(),
+                    ) =>
             {
                 true
             }
@@ -16888,7 +16935,11 @@ impl ShellChromeWriterVisitor {
                 if matches!(root.as_str(), "alloc" | "std")
                     && module == "sync"
                     && wrapper == "Arc"
-                    && matches!(constructor.as_str(), "from" | "new") =>
+                    && matches!(constructor.as_str(), "from" | "new")
+                    && !self.standard_path_root_is_shadowed(
+                        root,
+                        path.path.leading_colon.is_some(),
+                    ) =>
             {
                 true
             }
@@ -16896,7 +16947,11 @@ impl ShellChromeWriterVisitor {
                 if matches!(root.as_str(), "core" | "std")
                     && module == "pin"
                     && wrapper == "Pin"
-                    && matches!(constructor.as_str(), "new" | "new_unchecked") =>
+                    && matches!(constructor.as_str(), "new" | "new_unchecked")
+                    && !self.standard_path_root_is_shadowed(
+                        root,
+                        path.path.leading_colon.is_some(),
+                    ) =>
             {
                 true
             }
