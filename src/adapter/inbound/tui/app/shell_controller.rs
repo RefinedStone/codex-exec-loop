@@ -232,6 +232,7 @@ impl NativeTuiApp {
         self.shell
             .progressive_activity_overlay_ui_state
             .reset_for_kind(selected_kind);
+        self.expand_first_progressive_activity_card();
         self.dispatch_shell_chrome(ShellChromeEvent::ActivityOverlayShown);
         true
     }
@@ -248,9 +249,110 @@ impl NativeTuiApp {
         self.shell
             .progressive_activity_overlay_ui_state
             .reset_for_card_filter(card_filter);
+        self.expand_first_progressive_activity_card();
         self.dispatch_shell_chrome(ShellChromeEvent::ActivityOverlayShown);
         true
     }
+
+    fn expand_first_progressive_activity_card(&mut self) {
+        let card_filter = self
+            .shell
+            .progressive_activity_overlay_ui_state
+            .card_filter();
+        let first_key = match &self.conversation.lifecycle.conversation_state {
+            ConversationState::Ready(conversation) => {
+                let cards = conversation.progressive_activity_detail.cards();
+                super::filter_cards_by_kind(&cards, card_filter)
+                    .first()
+                    .and_then(|card_index| cards.get(*card_index))
+                    .filter(|card| card.expandable)
+                    .map(|card| card.key)
+            }
+            ConversationState::Loading | ConversationState::Failed(_) => None,
+        };
+        if let Some(first_key) = first_key {
+            self.shell
+                .progressive_activity_overlay_ui_state
+                .expand_state_mut()
+                .expand_card(first_key);
+        }
+    }
+
+    pub(super) fn progressive_activity_mouse_capture_requested(&self) -> bool {
+        self.shell.chrome.shell_overlay == ShellOverlay::Activity
+            && self
+                .shell
+                .progressive_activity_overlay_ui_state
+                .mouse_capture_requested()
+    }
+
+    pub(super) fn clear_progressive_activity_card_hit_areas(&mut self) {
+        self.shell
+            .progressive_activity_overlay_ui_state
+            .clear_card_hit_areas();
+    }
+
+    pub(super) fn handle_progressive_activity_mouse_event(
+        &mut self,
+        mouse: event::MouseEvent,
+    ) -> bool {
+        if self.shell.chrome.shell_overlay != ShellOverlay::Activity
+            || mouse.kind != event::MouseEventKind::Down(event::MouseButton::Left)
+            || mouse.modifiers != KeyModifiers::NONE
+        {
+            return false;
+        }
+        let Some(clicked_index) = self
+            .shell
+            .progressive_activity_overlay_ui_state
+            .card_index_at(mouse.column, mouse.row)
+        else {
+            return false;
+        };
+        let card_filter = self
+            .shell
+            .progressive_activity_overlay_ui_state
+            .card_filter();
+        let Some((filtered_len, card_key, expandable)) =
+            (match &self.conversation.lifecycle.conversation_state {
+                ConversationState::Ready(conversation) => {
+                    let cards = conversation.progressive_activity_detail.cards();
+                    let filtered = super::filter_cards_by_kind(&cards, card_filter);
+                    filtered
+                        .get(clicked_index)
+                        .and_then(|card_index| cards.get(*card_index))
+                        .map(|card| (filtered.len(), card.key, card.expandable))
+                }
+                ConversationState::Loading | ConversationState::Failed(_) => None,
+            })
+        else {
+            return false;
+        };
+        if !self
+            .shell
+            .progressive_activity_overlay_ui_state
+            .select_card(clicked_index, filtered_len)
+        {
+            return false;
+        }
+        let expanded = expandable
+            && self
+                .shell
+                .progressive_activity_overlay_ui_state
+                .expand_state_mut()
+                .toggle_card(card_key);
+        if expanded {
+            self.shell
+                .progressive_activity_overlay_ui_state
+                .focus_detail();
+        } else {
+            self.shell
+                .progressive_activity_overlay_ui_state
+                .focus_list();
+        }
+        true
+    }
+
     pub(super) fn show_model_selection_overlay(&mut self) {
         self.shell
             .model_selection_overlay_ui_state
@@ -918,6 +1020,7 @@ impl NativeTuiApp {
                     .move_to_next_page();
             }
             (KeyCode::Enter | KeyCode::Char('e') | KeyCode::Char('l'), KeyModifiers::NONE) => {
+                let mut expanded = false;
                 if let ConversationState::Ready(conversation) =
                     &self.conversation.lifecycle.conversation_state
                 {
@@ -933,16 +1036,24 @@ impl NativeTuiApp {
                             .progressive_activity_overlay_ui_state
                             .selected_card_index(),
                     ) && let Some(card) = cards.get(*card_index)
+                        && card.expandable
                     {
-                        self.shell
+                        expanded = self
+                            .shell
                             .progressive_activity_overlay_ui_state
                             .expand_state_mut()
-                            .expand_card(card.key);
+                            .toggle_card(card.key);
                     }
                 }
-                self.shell
-                    .progressive_activity_overlay_ui_state
-                    .focus_detail();
+                if expanded {
+                    self.shell
+                        .progressive_activity_overlay_ui_state
+                        .focus_detail();
+                } else {
+                    self.shell
+                        .progressive_activity_overlay_ui_state
+                        .focus_list();
+                }
             }
             (KeyCode::Char('h'), KeyModifiers::NONE) => {
                 self.shell

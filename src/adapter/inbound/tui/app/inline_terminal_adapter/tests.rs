@@ -674,6 +674,127 @@ fn activity_inspector_pages_resize_and_approval_stay_out_of_host_scrollback() {
 }
 
 #[test]
+fn structured_activity_timeline_survives_retry_redraw_and_resize_without_scrollback_leak() {
+    let mut terminal =
+        tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 120, 30);
+    let mut app = make_test_app();
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    append_history_message(
+        &mut app,
+        "durable transcript stays outside the activity overlay",
+    );
+    let fixture = tui_testkit::set_structured_activity_timeline(&mut app);
+    assert!(app.show_progressive_activity_overlay_all());
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+    let mut frames = tui_testkit::InlineFrameRecorder::default();
+
+    frames.draw_and_record(
+        "initial-timeline",
+        &mut terminal,
+        &mut runtime,
+        &mut inline_terminal,
+    );
+    frames.draw_and_record(
+        "steady-redraw",
+        &mut terminal,
+        &mut runtime,
+        &mut inline_terminal,
+    );
+    let ConversationState::Ready(conversation) =
+        &mut runtime.app_mut().conversation.lifecycle.conversation_state
+    else {
+        panic!("structured activity frame fixture should remain ready");
+    };
+    conversation
+        .progressive_activity
+        .record_turn_retrying("server overloaded; retry scheduled");
+    frames.draw_and_record(
+        "retrying",
+        &mut terminal,
+        &mut runtime,
+        &mut inline_terminal,
+    );
+    let ConversationState::Ready(conversation) =
+        &mut runtime.app_mut().conversation.lifecycle.conversation_state
+    else {
+        panic!("structured activity frame fixture should remain ready");
+    };
+    conversation.progressive_activity.clear_turn_retrying();
+    tui_testkit::resize_inline_history_terminal(&mut terminal, 80, 30);
+    frames.draw_and_record(
+        "narrow-after-retry",
+        &mut terminal,
+        &mut runtime,
+        &mut inline_terminal,
+    );
+
+    for label in [
+        "initial-timeline",
+        "steady-redraw",
+        "retrying",
+        "narrow-after-retry",
+    ] {
+        let frame = frames.frame(label);
+        assert!(frame.screen_text.contains("complete"), "{label}");
+        assert!(frame.screen_text.contains("failed"), "{label}");
+        assert!(
+            !frame
+                .host_scrollback_text
+                .contains("Activity / inline inspection"),
+            "{label}"
+        );
+        assert!(
+            !frame
+                .host_scrollback_text
+                .contains("Reviewing retry and approval paths"),
+            "{label}"
+        );
+    }
+    for label in ["initial-timeline", "steady-redraw", "retrying"] {
+        let frame = frames.frame(label);
+        assert!(frame.screen_text.contains("active"), "{label}");
+        assert!(frame.screen_text.contains("2.5s"), "{label}");
+        assert!(frame.screen_text.contains("800ms"), "{label}");
+    }
+    assert!(
+        frames
+            .frame("initial-timeline")
+            .screen_text
+            .contains("waiting for subagent")
+    );
+    assert_eq!(
+        frames
+            .frame("steady-redraw")
+            .screen_text
+            .matches("Strict lint failed")
+            .count(),
+        1
+    );
+    assert!(
+        frames
+            .frame("retrying")
+            .screen_text
+            .contains("retrying turn")
+    );
+    assert!(
+        !frames
+            .frame("retrying")
+            .screen_text
+            .contains("waiting for subagent")
+    );
+    assert!(
+        frames
+            .frame("narrow-after-retry")
+            .screen_text
+            .contains("waiting for subagent")
+    );
+    assert_eq!(std::sync::Arc::strong_count(&fixture.progressive), 1);
+    assert_eq!(std::sync::Arc::strong_count(&fixture.lifecycle), 1);
+}
+
+#[test]
 fn vt100_activity_inspector_stays_transient_through_resize_and_approval() {
     let secret = "AKRA_ACTIVITY_INSPECTOR_VT100_SECRET";
     let detail = format!(

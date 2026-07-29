@@ -1,12 +1,14 @@
 use super::*;
-use crate::adapter::inbound::tui::app::conversation_model::AutoFollowSkipReason;
+use crate::adapter::inbound::tui::app::conversation_model::{
+    AutoFollowSkipReason, ProgressiveActivityDetailKind,
+};
 use crate::adapter::inbound::tui::app::conversation_runtime::{
     ConversationRuntimeEffect, PostTurnContinuationAction, PostTurnEvaluationOutcome,
     PostTurnEvaluationProvenance,
 };
 use crate::adapter::inbound::tui::app::{
     ConversationState, ConversationViewModel, InlineShellCommand, NativeTuiParallelModeBinding,
-    PlanningWorkerPanelState, PlanningWorkerStatus, test_helpers,
+    PlanningWorkerPanelState, PlanningWorkerStatus, test_helpers, tui_testkit,
 };
 use crate::adapter::inbound::tui::shell_chrome::{ShellChromeEvent, ShellOverlay, StartupState};
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
@@ -1055,6 +1057,64 @@ fn queue_receipt_mouse_down_routes_to_the_inline_undo_action() {
     assert_eq!(runtime.app().pending_queue_mutation_operation_id(), Some(1));
     assert!(!runtime.app().queue_receipt_undo_mouse_capture_requested());
 }
+
+#[test]
+fn activity_card_mouse_down_routes_through_runtime_and_toggles_fold() {
+    let mut runtime = make_test_runtime();
+    let _snapshot =
+        tui_testkit::set_progressive_command_activity(runtime.app_mut(), "cargo test\nok", false);
+    assert!(
+        runtime
+            .app_mut()
+            .show_progressive_activity_overlay(ProgressiveActivityDetailKind::Output)
+    );
+    let card_key = match &runtime.app().conversation.lifecycle.conversation_state {
+        ConversationState::Ready(conversation) => {
+            conversation.progressive_activity_detail.cards()[0].key
+        }
+        ConversationState::Loading | ConversationState::Failed(_) => {
+            panic!("activity mouse runtime fixture requires a ready conversation")
+        }
+    };
+    runtime
+        .app_mut()
+        .shell
+        .progressive_activity_overlay_ui_state
+        .bind_card_hit_areas(vec![
+            crate::adapter::inbound::tui::app::ProgressiveActivityCardHitArea {
+                card_index: 0,
+                area: ratatui::layout::Rect::new(3, 7, 40, 1),
+            },
+        ]);
+    assert!(runtime.mouse_capture_requested());
+    assert!(
+        runtime
+            .app()
+            .shell
+            .progressive_activity_overlay_ui_state
+            .expand_state()
+            .is_card_expanded(card_key)
+    );
+    runtime.take_redraw_request();
+
+    runtime.handle_terminal_event(Event::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 3,
+        row: 7,
+        modifiers: KeyModifiers::NONE,
+    }));
+
+    assert!(runtime.take_redraw_request());
+    assert!(
+        !runtime
+            .app()
+            .shell
+            .progressive_activity_overlay_ui_state
+            .expand_state()
+            .is_card_expanded(card_key)
+    );
+}
+
 // Background loads must surface planning authority and queue context when a
 // resumed conversation points at a workspace that already has planning state.
 #[test]
@@ -1769,11 +1829,56 @@ fn duplicate_post_turn_evaluation_for_same_turn_is_ignored() {
 #[test]
 fn resize_event_requests_redraw() {
     let mut runtime = make_test_runtime();
+    runtime
+        .app_mut()
+        .planning
+        .queue_overlay_ui_state
+        .bind_receipt_undo_hit_area(Some(ratatui::layout::Rect::new(1, 1, 4, 1)));
+    runtime
+        .app_mut()
+        .shell
+        .progressive_activity_overlay_ui_state
+        .bind_card_hit_areas(vec![
+            crate::adapter::inbound::tui::app::ProgressiveActivityCardHitArea {
+                card_index: 0,
+                area: ratatui::layout::Rect::new(1, 2, 8, 1),
+            },
+        ]);
     runtime.take_redraw_request();
     assert_eq!(runtime.terminal_resize_epoch(), 0);
+    assert!(
+        runtime
+            .app()
+            .planning
+            .queue_overlay_ui_state
+            .receipt_undo_hit_area()
+            .is_some()
+    );
+    assert!(
+        runtime
+            .app()
+            .shell
+            .progressive_activity_overlay_ui_state
+            .mouse_capture_requested()
+    );
 
     runtime.handle_terminal_event(Event::Resize(48, 10));
     assert_eq!(runtime.terminal_resize_epoch(), 1);
+    assert_eq!(
+        runtime
+            .app()
+            .planning
+            .queue_overlay_ui_state
+            .receipt_undo_hit_area(),
+        None
+    );
+    assert!(
+        !runtime
+            .app()
+            .shell
+            .progressive_activity_overlay_ui_state
+            .mouse_capture_requested()
+    );
     runtime.handle_terminal_event(Event::Resize(120, 40));
 
     assert!(runtime.take_redraw_request());

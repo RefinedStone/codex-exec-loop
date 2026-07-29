@@ -32,8 +32,8 @@ use super::capability_projection::{
 use super::{
     AutoFollowSnapshotPresentation, ConversationComposerState, ConversationInputState,
     ConversationState, ConversationViewModel, HistoryInsertionMode, InlineHistoryRenderMode,
-    NativeTuiApp, ParallelPanelStateController, ShellActionAvailability, ShellOverlay,
-    StartupState, TranscriptHandoffCorrelation, TuiLanguage,
+    NativeTuiApp, ParallelPanelStateController, ProgressiveActivityWaitStatus,
+    ShellActionAvailability, ShellOverlay, StartupState, TranscriptHandoffCorrelation, TuiLanguage,
 };
 
 const MAX_GITHUB_REVIEW_NOTICE_LEN: usize = 160;
@@ -335,6 +335,7 @@ pub(in crate::adapter::inbound::tui::app) struct ConversationRuntimeStatusScreen
     pub(in crate::adapter::inbound::tui::app) auto_follow_max_turns_label: String,
     pub(in crate::adapter::inbound::tui::app) input_state: ConversationInputState,
     pub(in crate::adapter::inbound::tui::app) live_agent_message_present: bool,
+    pub(in crate::adapter::inbound::tui::app) wait_status: Option<ProgressiveActivityWaitStatus>,
     pub(in crate::adapter::inbound::tui::app) interrupt_support_label: &'static str,
 }
 
@@ -347,6 +348,10 @@ impl ConversationRuntimeStatusScreenModel {
             auto_follow_max_turns_label: conversation.auto_follow_state().max_auto_turns_label(),
             input_state: conversation.input_state(),
             live_agent_message_present: conversation.live_agent_message.is_some(),
+            wait_status: conversation.progressive_activity_detail.wait_status(
+                conversation.progressive_activity.retrying_summary(),
+                conversation.pending_approval_request().is_some(),
+            ),
             interrupt_support_label: conversation.interrupt_support_label(),
         }
     }

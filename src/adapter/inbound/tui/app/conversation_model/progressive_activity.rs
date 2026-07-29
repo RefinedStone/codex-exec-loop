@@ -147,6 +147,7 @@ impl ActiveProgressiveItem {
 #[derive(Clone, Default, PartialEq, Eq)]
 pub(crate) struct ProgressiveActivityState {
     active_items: Vec<ActiveProgressiveItem>,
+    retrying_summary: Option<String>,
     plan_completed_count: u64,
     plan_total_count: u64,
     plan_omitted_count: u64,
@@ -163,6 +164,17 @@ impl ProgressiveActivityState {
         observation: &ConversationItemLifecycleObservation,
         consistency: Option<ConversationItemLifecycleConsistency>,
     ) {
+        if matches!(
+            consistency,
+            Some(
+                ConversationItemLifecycleConsistency::Accepted
+                    | ConversationItemLifecycleConsistency::SnapshotObserved
+                    | ConversationItemLifecycleConsistency::CompletionWithoutStart
+                    | ConversationItemLifecycleConsistency::TimestampRegression
+            )
+        ) {
+            self.clear_turn_retrying();
+        }
         match observation.phase {
             ConversationItemLifecyclePhase::Started => {
                 if consistency != Some(ConversationItemLifecycleConsistency::Accepted) {
@@ -229,6 +241,7 @@ impl ProgressiveActivityState {
         invalid_observation_count: u64,
         unknown_observation_count: u64,
     ) {
+        self.clear_turn_retrying();
         self.bounded_history |= projection.payload_truncation_count > 0
             || projection.dropped_observation_count > 0
             || projection.invalid_observation_count > 0
@@ -254,6 +267,18 @@ impl ProgressiveActivityState {
 
     pub(crate) fn reset(&mut self) {
         *self = Self::default();
+    }
+
+    pub(crate) fn record_turn_retrying(&mut self, summary: &str) {
+        self.retrying_summary = Some(summary.chars().take(512).collect());
+    }
+
+    pub(crate) fn clear_turn_retrying(&mut self) {
+        self.retrying_summary = None;
+    }
+
+    pub(crate) fn retrying_summary(&self) -> Option<&str> {
+        self.retrying_summary.as_deref()
     }
 
     pub(crate) fn active_item_kind(&self) -> Option<ProgressiveActivityItemKind> {
@@ -402,6 +427,7 @@ impl fmt::Debug for ProgressiveActivityState {
         formatter
             .debug_struct("ProgressiveActivityState")
             .field("active_item_count", &self.active_items.len())
+            .field("turn_retrying", &self.retrying_summary.is_some())
             .field("active_item_kind", &self.active_item_kind())
             .field("command_line_count", &self.command_line_count())
             .field("patch_count", &self.patch_count())

@@ -25,6 +25,7 @@ use crate::core::app::{
 use crate::domain::conversation_item_lifecycle::{
     ConversationItemKind, ConversationItemLifecycleConsistency,
     ConversationItemLifecycleObservation, ConversationItemLifecyclePhase,
+    ConversationItemLifecycleProjection, ConversationItemLifecycleProjectionSnapshot,
     ConversationItemLifecycleSource, ConversationItemOutcome,
 };
 use crate::domain::conversation_progressive_activity::{
@@ -513,6 +514,204 @@ pub(super) fn set_progressive_command_activity(
         .progressive_activity_detail
         .replace_snapshot(&snapshot);
     snapshot
+}
+
+pub(super) struct StructuredActivityTimelineFixture {
+    pub(super) progressive: Arc<ConversationProgressiveActivityProjectionSnapshot>,
+    pub(super) lifecycle: Arc<ConversationItemLifecycleProjectionSnapshot>,
+}
+
+pub(super) fn set_structured_activity_timeline(
+    app: &mut NativeTuiApp,
+) -> StructuredActivityTimelineFixture {
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
+        panic!("test app should start in a ready conversation state");
+    };
+    if !conversation.has_active_thread() {
+        conversation.record_thread_prepared(
+            "thread-timeline".to_string(),
+            "Structured activity timeline".to_string(),
+            "/tmp/structured-activity".to_string(),
+        );
+    }
+    apply_running_turn_snapshot(conversation, "turn-timeline");
+    conversation.record_turn_started("turn-timeline".to_string());
+
+    let complete_tail = "cargo test --workspace\n248 tests passed";
+    let failed_tail = "cargo clippy --all-targets\nerror: borrowed value does not live long enough";
+    let subagent_text = "Reviewing retry and approval paths";
+    let diff = concat!(
+        "--- a/src/adapter/inbound/tui/app/a-very-long-commercial-activity-timeline-path.rs\n",
+        "+++ b/src/adapter/inbound/tui/app/a-very-long-commercial-activity-timeline-path.rs\n",
+        "@@ -41,2 +41,3 @@\n",
+        "-old status copy\n",
+        "+typed lifecycle outcome\n",
+        "+exact elapsed time\n"
+    );
+    let observations = [
+        ConversationProgressiveActivityObservation {
+            sequence: 0,
+            thread_id: conversation.thread_id.clone(),
+            turn_id: Some("turn-timeline".to_string()),
+            item_id: Some("command-complete".to_string()),
+            kind: ConversationProgressiveActivityKind::CommandOutput,
+            payload: ConversationProgressiveActivityPayload::CommandOutput {
+                tail: complete_tail.to_string(),
+                chunk_count: 1,
+                source_bytes: complete_tail.len() as u64,
+                newline_count: 1,
+                ends_with_newline: false,
+                truncated_bytes: 0,
+            },
+        },
+        ConversationProgressiveActivityObservation {
+            sequence: 1,
+            thread_id: conversation.thread_id.clone(),
+            turn_id: Some("turn-timeline".to_string()),
+            item_id: Some("command-failed".to_string()),
+            kind: ConversationProgressiveActivityKind::CommandOutput,
+            payload: ConversationProgressiveActivityPayload::CommandOutput {
+                tail: failed_tail.to_string(),
+                chunk_count: 1,
+                source_bytes: failed_tail.len() as u64,
+                newline_count: 1,
+                ends_with_newline: false,
+                truncated_bytes: 0,
+            },
+        },
+        ConversationProgressiveActivityObservation {
+            sequence: 2,
+            thread_id: conversation.thread_id.clone(),
+            turn_id: Some("turn-timeline".to_string()),
+            item_id: Some("subagent-active".to_string()),
+            kind: ConversationProgressiveActivityKind::AgentMessageDelta,
+            payload: ConversationProgressiveActivityPayload::AgentMessageDelta {
+                phase: Some("commentary".to_string()),
+                text: subagent_text.to_string(),
+                source_bytes: subagent_text.len() as u64,
+                truncated_bytes: 0,
+            },
+        },
+        ConversationProgressiveActivityObservation {
+            sequence: 3,
+            thread_id: conversation.thread_id.clone(),
+            turn_id: Some("turn-timeline".to_string()),
+            item_id: None,
+            kind: ConversationProgressiveActivityKind::TurnDiff,
+            payload: ConversationProgressiveActivityPayload::TurnDiff {
+                detail: diff.to_string(),
+                source_bytes: diff.len() as u64,
+                line_count: diff.lines().count() as u64,
+                addition_count: 2,
+                deletion_count: 1,
+                hunk_count: 1,
+                truncated_bytes: 0,
+            },
+        },
+    ];
+    let mut progressive_projection = ConversationProgressiveActivityProjection::default();
+    for observation in observations {
+        progressive_projection
+            .apply_batch_correlated(
+                Some(conversation.thread_id.as_str()),
+                Some("turn-timeline"),
+                ConversationProgressiveActivityBatch::single(observation)
+                    .expect("structured activity observation should be valid"),
+            )
+            .expect("structured activity observation should project");
+    }
+    let progressive = progressive_projection.snapshot();
+
+    let lifecycle_observations = vec![
+        ConversationItemLifecycleObservation {
+            thread_id: conversation.thread_id.clone(),
+            turn_id: "turn-timeline".to_string(),
+            item_id: "command-complete".to_string(),
+            kind: ConversationItemKind::CommandExecution,
+            phase: ConversationItemLifecyclePhase::Started,
+            source: ConversationItemLifecycleSource::Live,
+            observed_at_ms: Some(1_000),
+            outcome: ConversationItemOutcome::InProgress,
+            summary: "Running workspace test suite".to_string(),
+        },
+        ConversationItemLifecycleObservation {
+            thread_id: conversation.thread_id.clone(),
+            turn_id: "turn-timeline".to_string(),
+            item_id: "command-complete".to_string(),
+            kind: ConversationItemKind::CommandExecution,
+            phase: ConversationItemLifecyclePhase::Completed,
+            source: ConversationItemLifecycleSource::Live,
+            observed_at_ms: Some(3_500),
+            outcome: ConversationItemOutcome::Completed,
+            summary: concat!(
+                "Completed C:/dev/akra-queue/codex-exec-loop/",
+                "src/adapter/inbound/tui/app/a-very-long-commercial-activity-timeline-path.rs"
+            )
+            .to_string(),
+        },
+        ConversationItemLifecycleObservation {
+            thread_id: conversation.thread_id.clone(),
+            turn_id: "turn-timeline".to_string(),
+            item_id: "command-failed".to_string(),
+            kind: ConversationItemKind::CommandExecution,
+            phase: ConversationItemLifecyclePhase::Started,
+            source: ConversationItemLifecycleSource::Live,
+            observed_at_ms: Some(5_000),
+            outcome: ConversationItemOutcome::InProgress,
+            summary: "Running strict lint".to_string(),
+        },
+        ConversationItemLifecycleObservation {
+            thread_id: conversation.thread_id.clone(),
+            turn_id: "turn-timeline".to_string(),
+            item_id: "command-failed".to_string(),
+            kind: ConversationItemKind::CommandExecution,
+            phase: ConversationItemLifecyclePhase::Completed,
+            source: ConversationItemLifecycleSource::Live,
+            observed_at_ms: Some(5_800),
+            outcome: ConversationItemOutcome::Failed,
+            summary: "Strict lint failed".to_string(),
+        },
+        ConversationItemLifecycleObservation {
+            thread_id: conversation.thread_id.clone(),
+            turn_id: "turn-timeline".to_string(),
+            item_id: "subagent-active".to_string(),
+            kind: ConversationItemKind::SubAgentActivity,
+            phase: ConversationItemLifecyclePhase::SnapshotObserved,
+            source: ConversationItemLifecycleSource::Snapshot,
+            observed_at_ms: None,
+            outcome: ConversationItemOutcome::InProgress,
+            summary: "Reviewing retry and approval paths".to_string(),
+        },
+    ];
+    let mut lifecycle_projection = ConversationItemLifecycleProjection::default();
+    for observation in lifecycle_observations {
+        let consistency = lifecycle_projection
+            .apply(observation.clone())
+            .expect("structured lifecycle observation should project");
+        conversation
+            .progressive_activity
+            .observe_item_lifecycle(&observation, Some(consistency));
+    }
+    let lifecycle = lifecycle_projection.snapshot();
+
+    conversation.progressive_activity.apply_projection_update(
+        progressive.as_ref(),
+        Some(0),
+        Some(3),
+        0,
+        0,
+        0,
+        0,
+    );
+    conversation
+        .progressive_activity_detail
+        .replace_snapshots(&progressive, &lifecycle);
+
+    StructuredActivityTimelineFixture {
+        progressive,
+        lifecycle,
+    }
 }
 
 pub(super) struct Vt100Screen {

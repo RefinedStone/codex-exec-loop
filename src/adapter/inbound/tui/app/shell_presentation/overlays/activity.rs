@@ -1,9 +1,13 @@
 use ratatui::text::{Line, Span};
 
+#[cfg(test)]
+use super::super::super::ProgressiveActivityCardKey;
 use super::super::super::{
-    AkraTheme, ProgressiveActivityCard, ProgressiveActivityCardKind, ProgressiveActivityDetailKind,
-    ProgressiveActivityPageCursor,
+    AkraTheme, ProgressiveActivityCard, ProgressiveActivityCardKind,
+    ProgressiveActivityCardOutcome, ProgressiveActivityDetailKind, ProgressiveActivityExpandState,
+    ProgressiveActivityPageCursor, ProgressiveActivityWaitKind, ProgressiveActivityWaitStatus,
 };
+use super::super::terminal_text::{display_width, truncate_end_to_cells};
 use super::activity_diff::build_bounded_diff_page;
 
 const PAGE_SCAN_BYTES_PER_CELL: usize = 8;
@@ -21,11 +25,18 @@ pub(crate) struct ActivityOverlayDocument<'a> {
 
 pub(crate) struct ActivityOverlayView {
     pub(crate) header_lines: Vec<Line<'static>>,
+    pub(crate) card_rows: Vec<ActivityOverlayCardRow>,
     pub(crate) detail_title: Line<'static>,
     pub(crate) detail_lines: Vec<Line<'static>>,
     pub(crate) key_lines: Vec<Line<'static>>,
     pub(crate) current_page_cursor: ProgressiveActivityPageCursor,
     pub(crate) next_page_cursor: Option<ProgressiveActivityPageCursor>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ActivityOverlayCardRow {
+    pub(crate) card_index: usize,
+    pub(crate) header_line_index: usize,
 }
 
 #[cfg(test)]
@@ -38,11 +49,14 @@ pub(crate) fn build_activity_overlay_view(
     viewport_width: u16,
     viewport_height: u16,
 ) -> ActivityOverlayView {
+    let expand_state = ProgressiveActivityExpandState::default();
     build_activity_overlay_list_view(
         None,
         &[],
         0,
         true,
+        None,
+        &expand_state,
         selected_kind,
         diff_available,
         output_available,
@@ -59,6 +73,8 @@ pub(crate) fn build_activity_overlay_list_view(
     cards: &[ProgressiveActivityCard],
     selected_card_index: usize,
     list_focus: bool,
+    wait_status: Option<&ProgressiveActivityWaitStatus>,
+    expand_state: &ProgressiveActivityExpandState,
     selected_kind: ProgressiveActivityDetailKind,
     diff_available: bool,
     output_available: bool,
@@ -73,11 +89,26 @@ pub(crate) fn build_activity_overlay_list_view(
         diff_available,
         output_available,
     )];
-    header_lines.extend(build_card_list_lines(
+    if let Some(wait_status) = wait_status {
+        header_lines.push(build_wait_status_line(wait_status, viewport_width));
+    }
+    let card_header_start = header_lines.len();
+    let card_list = build_card_list_lines(
         cards,
         selected_card_index,
         list_focus,
-    ));
+        expand_state,
+        viewport_width,
+    );
+    let card_rows = card_list
+        .card_rows
+        .into_iter()
+        .map(|row| ActivityOverlayCardRow {
+            card_index: row.card_index,
+            header_line_index: card_header_start + row.line_index,
+        })
+        .collect();
+    header_lines.extend(card_list.lines);
 
     let Some(document) = document else {
         if cards.is_empty() {
@@ -88,9 +119,11 @@ pub(crate) fn build_activity_overlay_list_view(
         }
         return ActivityOverlayView {
             header_lines,
+            card_rows,
             detail_title: Line::from(selected_card_detail_title(cards, selected_card_index)),
-            detail_lines: vec![Line::from(
-                "No retained detail is available for the selected activity card.".to_string(),
+            detail_lines: vec![Line::styled(
+                "Folded. Press Enter/e or click the selected row to expand.".to_string(),
+                AkraTheme::muted(),
             )],
             key_lines: build_activity_overlay_key_lines(viewport_width),
             current_page_cursor: ProgressiveActivityPageCursor::at(0),
@@ -145,6 +178,7 @@ pub(crate) fn build_activity_overlay_list_view(
 
     ActivityOverlayView {
         header_lines,
+        card_rows,
         detail_title,
         detail_lines: page.lines,
         key_lines: build_activity_overlay_key_lines(viewport_width),
@@ -215,16 +249,32 @@ fn build_filter_line(
     ])
 }
 
+struct ActivityCardList {
+    lines: Vec<Line<'static>>,
+    card_rows: Vec<ActivityCardRow>,
+}
+
+struct ActivityCardRow {
+    card_index: usize,
+    line_index: usize,
+}
+
 fn build_card_list_lines(
     cards: &[ProgressiveActivityCard],
     selected_card_index: usize,
     list_focus: bool,
-) -> Vec<Line<'static>> {
+    expand_state: &ProgressiveActivityExpandState,
+    viewport_width: u16,
+) -> ActivityCardList {
     if cards.is_empty() {
-        return Vec::new();
+        return ActivityCardList {
+            lines: Vec::new(),
+            card_rows: Vec::new(),
+        };
     }
 
     let mut lines = Vec::new();
+    let mut card_rows = Vec::new();
     let start = selected_card_index.saturating_sub(MAX_LIST_ROWS / 2);
     let end = (start + MAX_LIST_ROWS).min(cards.len());
     let start = end.saturating_sub(MAX_LIST_ROWS);
@@ -237,28 +287,26 @@ fn build_card_list_lines(
             AkraTheme::idle_marker()
         };
         let indicator = if card.expandable {
-            AkraTheme::collapsed_indicator()
+            if expand_state.is_card_expanded(card.key) {
+                AkraTheme::expanded_indicator()
+            } else {
+                AkraTheme::collapsed_indicator()
+            }
         } else {
             AkraTheme::non_expandable_indicator()
         };
-        let fact = if card.fact.is_empty() {
-            String::new()
-        } else {
-            format!("  {}", card.fact)
-        };
-        let text = format!(
-            "{marker}{indicator}{}{:<9} {}{fact}",
-            AkraTheme::tool_card_bullet_glyph(),
-            card.key.kind.label(),
-            card.title
-        );
+        let text = build_activity_card_text(card, marker, indicator, viewport_width);
         let style = if selected && list_focus {
             AkraTheme::selected()
         } else if selected {
             AkraTheme::accent()
         } else {
-            AkraTheme::tool_card_header()
+            activity_outcome_style(card.outcome)
         };
+        card_rows.push(ActivityCardRow {
+            card_index: index,
+            line_index: lines.len(),
+        });
         lines.push(Line::styled(text, style));
     }
     if cards.len() > MAX_LIST_ROWS {
@@ -267,7 +315,103 @@ fn build_card_list_lines(
             AkraTheme::muted(),
         ));
     }
-    lines
+    ActivityCardList { lines, card_rows }
+}
+
+fn build_activity_card_text(
+    card: &ProgressiveActivityCard,
+    marker: &str,
+    indicator: &str,
+    viewport_width: u16,
+) -> String {
+    let prefix = format!(
+        "{marker}{indicator}{} {:<9} {:<9} ",
+        activity_outcome_glyph(card.outcome),
+        card.key.kind.label(),
+        card.outcome.label(),
+    );
+    let elapsed = card.elapsed_ms.map(format_elapsed);
+    let trailing = match (card.fact.is_empty(), elapsed) {
+        (true, None) => String::new(),
+        (false, None) => format!("  {}", card.fact),
+        (true, Some(elapsed)) => format!("  {elapsed}"),
+        (false, Some(elapsed)) => format!("  {} · {elapsed}", card.fact),
+    };
+    let width = usize::from(viewport_width);
+    let fixed_width = display_width(&prefix).saturating_add(display_width(&trailing));
+    let summary_width = width.saturating_sub(fixed_width);
+    if summary_width == 0 {
+        return truncate_end_to_cells(&prefix, width);
+    }
+    format!(
+        "{prefix}{}{trailing}",
+        truncate_end_to_cells(&sanitize_activity_inline_text(&card.summary), summary_width)
+    )
+}
+
+fn activity_outcome_glyph(outcome: ProgressiveActivityCardOutcome) -> &'static str {
+    match outcome {
+        ProgressiveActivityCardOutcome::Observed => "·",
+        ProgressiveActivityCardOutcome::Active => "●",
+        ProgressiveActivityCardOutcome::Completed => "✓",
+        ProgressiveActivityCardOutcome::Failed => "×",
+        ProgressiveActivityCardOutcome::Declined => "–",
+        ProgressiveActivityCardOutcome::Interrupted => "■",
+        ProgressiveActivityCardOutcome::Unknown => "?",
+    }
+}
+
+fn activity_outcome_style(outcome: ProgressiveActivityCardOutcome) -> ratatui::style::Style {
+    match outcome {
+        ProgressiveActivityCardOutcome::Active => AkraTheme::brand(),
+        ProgressiveActivityCardOutcome::Completed => AkraTheme::muted(),
+        ProgressiveActivityCardOutcome::Failed => AkraTheme::danger(),
+        ProgressiveActivityCardOutcome::Declined | ProgressiveActivityCardOutcome::Interrupted => {
+            AkraTheme::warning()
+        }
+        ProgressiveActivityCardOutcome::Observed => AkraTheme::tool_card_header(),
+        ProgressiveActivityCardOutcome::Unknown => AkraTheme::subtle(),
+    }
+}
+
+fn format_elapsed(elapsed_ms: u64) -> String {
+    if elapsed_ms < 1_000 {
+        return format!("{elapsed_ms}ms");
+    }
+    if elapsed_ms < 60_000 {
+        return format!("{}.{:01}s", elapsed_ms / 1_000, (elapsed_ms % 1_000) / 100);
+    }
+    if elapsed_ms < 3_600_000 {
+        return format!("{}m {:02}s", elapsed_ms / 60_000, (elapsed_ms / 1_000) % 60);
+    }
+    format!(
+        "{}h {:02}m",
+        elapsed_ms / 3_600_000,
+        (elapsed_ms / 60_000) % 60
+    )
+}
+
+fn build_wait_status_line(
+    wait_status: &ProgressiveActivityWaitStatus,
+    viewport_width: u16,
+) -> Line<'static> {
+    let state = match wait_status.kind {
+        ProgressiveActivityWaitKind::Retrying => "retrying turn".to_string(),
+        kind => format!("waiting for {}", kind.label()),
+    };
+    let detail = wait_status
+        .summary
+        .as_deref()
+        .map(sanitize_activity_inline_text)
+        .map(|summary| format!("  ·  {summary}"))
+        .unwrap_or_default();
+    let text = truncate_end_to_cells(&format!("● {state}{detail}"), usize::from(viewport_width));
+    let style = if wait_status.kind == ProgressiveActivityWaitKind::Retrying {
+        AkraTheme::warning()
+    } else {
+        AkraTheme::brand()
+    };
+    Line::styled(text, style)
 }
 
 fn selected_card_detail_title(
@@ -276,8 +420,29 @@ fn selected_card_detail_title(
 ) -> String {
     cards
         .get(selected_card_index)
-        .map(|card| format!("{} · {}", card.key.kind.label(), card.title))
+        .map(|card| {
+            format!(
+                "{} · {}",
+                card.key.kind.label(),
+                sanitize_activity_inline_text(&card.title)
+            )
+        })
         .unwrap_or_else(|| "Retained Activity Detail".to_string())
+}
+
+fn sanitize_activity_inline_text(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                escape_control(character)
+            } else {
+                character.to_string()
+            }
+        })
+        .collect()
 }
 
 fn tab_span(label: &'static str, selected: bool, available: bool) -> Span<'static> {
@@ -321,19 +486,19 @@ fn build_document_status_lines(document: &ActivityOverlayDocument<'_>) -> Vec<Li
 fn build_activity_overlay_key_lines(viewport_width: u16) -> Vec<Line<'static>> {
     if viewport_width >= 96 {
         return vec![AkraTheme::key_line(
-            "Up/Down: card | Enter/e: detail | PgUp/PgDn: page | Tab: filter | Home: first | Esc: close",
+            "Up/Down: row | Enter/e or click: fold | PgUp/PgDn: page | Tab: filter | h: list | Esc: close",
         )];
     }
     if viewport_width >= 64 {
         return vec![
-            AkraTheme::key_line("Up/Down: card | Enter/e: detail | PgUp/PgDn: page"),
-            AkraTheme::key_line("Tab: filter | Home: first | Esc: close"),
+            AkraTheme::key_line("Up/Down: row | Enter/e or click: fold"),
+            AkraTheme::key_line("PgUp/PgDn: page | Tab: filter | h: list | Esc: close"),
         ];
     }
     vec![
-        AkraTheme::key_line("Up/Down: card | Enter/e: detail"),
+        AkraTheme::key_line("Up/Down: row | Enter/e: fold"),
         AkraTheme::key_line("PgUp/PgDn: page | Tab: filter"),
-        AkraTheme::key_line("Home: first | Esc: close"),
+        AkraTheme::key_line("h: list | Esc: close"),
     ]
 }
 
@@ -514,10 +679,36 @@ fn clamped_char_boundary(text: &str, requested: usize) -> usize {
 mod tests {
     use super::{
         ActivityOverlayDocument, BoundedDocumentPage, PAGE_OUTPUT_BYTES_PER_CELL,
-        PAGE_SCAN_BYTES_PER_CELL, ProgressiveActivityCardKind, ProgressiveActivityDetailKind,
-        ProgressiveActivityPageCursor, activity_document_detail_kind, build_activity_overlay_view,
-        build_bounded_document_page,
+        PAGE_SCAN_BYTES_PER_CELL, ProgressiveActivityCard, ProgressiveActivityCardKey,
+        ProgressiveActivityCardKind, ProgressiveActivityCardOutcome, ProgressiveActivityDetailKind,
+        ProgressiveActivityExpandState, ProgressiveActivityPageCursor, ProgressiveActivityWaitKind,
+        ProgressiveActivityWaitStatus, activity_document_detail_kind,
+        build_activity_overlay_list_view, build_activity_overlay_view, build_bounded_document_page,
     };
+
+    fn card(
+        sequence: u64,
+        outcome: ProgressiveActivityCardOutcome,
+        summary: &str,
+        elapsed_ms: Option<u64>,
+    ) -> ProgressiveActivityCard {
+        ProgressiveActivityCard {
+            key: ProgressiveActivityCardKey {
+                sequence,
+                kind: ProgressiveActivityCardKind::Command,
+            },
+            title: "cargo test".to_string(),
+            summary: summary.to_string(),
+            fact: "42 lines".to_string(),
+            outcome,
+            elapsed_ms,
+            expandable: true,
+            record_index: sequence as usize,
+            source_bytes: 42,
+            retained_bytes: 42,
+            truncated_bytes: 0,
+        }
+    }
 
     fn rendered_text(page: &BoundedDocumentPage) -> String {
         page.lines
@@ -668,6 +859,73 @@ mod tests {
     }
 
     #[test]
+    fn timeline_rows_are_cell_bounded_and_keep_outcome_summary_and_elapsed_truth() {
+        let cards = vec![
+            card(
+                0,
+                ProgressiveActivityCardOutcome::Active,
+                "C:/very/long/workspace/경로/src/adapter/inbound/tui/activity.rs\u{1b}[31m",
+                Some(1_250),
+            ),
+            card(
+                1,
+                ProgressiveActivityCardOutcome::Completed,
+                "tests passed",
+                Some(62_000),
+            ),
+            card(
+                2,
+                ProgressiveActivityCardOutcome::Failed,
+                "command failed",
+                None,
+            ),
+        ];
+        let mut expand_state = ProgressiveActivityExpandState::default();
+        expand_state.expand_card(cards[0].key);
+
+        for width in [80, 120, 160] {
+            let view = build_activity_overlay_list_view(
+                None,
+                &cards,
+                0,
+                true,
+                Some(&ProgressiveActivityWaitStatus {
+                    kind: ProgressiveActivityWaitKind::TaskOutput,
+                    summary: Some("shell command running".to_string()),
+                }),
+                &expand_state,
+                ProgressiveActivityDetailKind::Output,
+                false,
+                true,
+                None,
+                ProgressiveActivityPageCursor::at(0),
+                width,
+                8,
+            );
+
+            assert!(
+                view.header_lines
+                    .iter()
+                    .all(|line| line.width() <= width as usize)
+            );
+            let text = view
+                .header_lines
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(text.contains("waiting for task output"), "{text}");
+            assert!(text.contains("active"), "{text}");
+            assert!(text.contains("complete"), "{text}");
+            assert!(text.contains("failed"), "{text}");
+            assert!(text.contains("1.2s"), "{text}");
+            assert!(text.contains("1m 02s"), "{text}");
+            assert!(!text.contains('\u{1b}'), "{text:?}");
+            assert_eq!(view.card_rows.len(), 3);
+        }
+    }
+
+    #[test]
     fn scan_and_output_work_stay_within_viewport_budgets() {
         let text = "\u{301}".repeat(1_000_000);
         let width = 17usize;
@@ -699,11 +957,7 @@ mod tests {
 
         assert_eq!(view.current_page_cursor.byte_offset, 0);
         assert_eq!(view.next_page_cursor, None);
-        assert!(
-            view.detail_lines[0]
-                .to_string()
-                .contains("No retained detail is available")
-        );
+        assert!(view.detail_lines[0].to_string().contains("Press Enter/e"));
         assert!(view.header_lines[0].to_string().contains("filter:"));
     }
 }

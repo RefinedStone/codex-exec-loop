@@ -583,6 +583,13 @@ receipts. Receipt application compares the captured baseline before applying act
 help, approval, session-list, or queue-hit-area feedback, so an older frame cannot overwrite a
 newer UI edit.
 
+Activity frame capture joins retained progressive payloads with the Core-published item-lifecycle
+snapshot through exact item identity and authoritative consistency records. The resulting owned
+frame carries typed outcome, summary, elapsed time, and wait reason; presentation must not infer
+these facts from prose. The adapter keeps only weak references to both immutable snapshots, and the
+render receipt owns row hit areas so keyboard and mouse folding update the same bounded expansion
+state without making rendering an input authority.
+
 Session frame capture creates one owned `SessionOverlayScreenModel` before presentation. The model
 combines the Core-published catalog projection with workspace, committed and edited query, project
 filter, one page projection, stable selected thread identity, page-local selected index, rename

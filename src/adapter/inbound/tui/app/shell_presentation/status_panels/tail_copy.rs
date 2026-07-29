@@ -273,11 +273,17 @@ pub(super) fn build_inline_tail_content_with_context(
             }
             let working_detail_limit =
                 INLINE_TAIL_STATUS_DETAIL_LIMIT.min(notice_detail_limit.saturating_sub(9));
-            if let Some(working_line) = build_working_line(
-                runtime_status,
-                working_detail_limit,
-                screen_model.rendered_at,
-            ) {
+            let activity_overlay_owns_exact_wait = screen_model.shell_overlay
+                == ShellOverlay::Activity
+                && runtime_status.wait_status.is_some();
+            if !activity_overlay_owns_exact_wait
+                && let Some(working_line) = build_working_line(
+                    runtime_status,
+                    working_detail_limit,
+                    content_width,
+                    screen_model.rendered_at,
+                )
+            {
                 lines.push(InlineTailLine::new(
                     InlineTailPriority::LiveActivity,
                     working_line,
@@ -1582,6 +1588,7 @@ mod coverage_tests {
                     .runtime_status()
                     .expect("ready conversation should retain runtime status"),
                 40,
+                80,
                 Instant::now(),
             )
             .is_some_and(|line| line.to_string().contains("settling planning queue"))

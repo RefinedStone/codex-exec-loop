@@ -1159,7 +1159,7 @@ fn progressive_activity_inspector_matches_wide_narrow_and_vt100_snapshots() {
     assert!(wide.contains("Activity / inline inspection"));
     assert!(wide.contains("filter:"));
     assert!(wide.contains("> Diff") || wide.contains("diff"));
-    assert!(wide.contains("◆"));
+    assert!(wide.contains("observed"));
     assert!(wide.contains("history:incomplete"));
     assert!(wide.contains("1 -old value"), "{wide}");
     assert!(wide.contains(&format!("{secret}\\x1b[31m")), "{wide}");
@@ -1173,7 +1173,8 @@ fn progressive_activity_inspector_matches_wide_narrow_and_vt100_snapshots() {
     assert!(narrow.contains("Activity / inline inspection"));
     assert!(narrow.contains("filter:") || narrow.contains("diff"));
     assert!(
-        narrow.contains("Up/Down: card")
+        narrow.contains("Up/Down: row")
+            || narrow.contains("Up/Down: card")
             || narrow.contains("PgUp/PgDn: page")
             || narrow.contains("Tab: filter"),
         "{narrow}"
@@ -1199,11 +1200,131 @@ fn progressive_activity_inspector_matches_wide_narrow_and_vt100_snapshots() {
     assert!(app.show_progressive_activity_overlay(ProgressiveActivityDetailKind::Output));
     let vt100 = tui_testkit::render_inline_vt100_snapshot(&mut app, 80, 24);
     assert!(vt100.contains("filter:") || vt100.contains("command") || vt100.contains("> Output"));
-    assert!(vt100.contains("◆") || vt100.contains("command"));
+    assert!(vt100.contains("observed") || vt100.contains("command"));
     assert!(!vt100.contains("Full Output"));
     assert!(!vt100.contains('\u{1b}'));
     assert_eq!(std::sync::Arc::strong_count(&core_snapshot), 1);
     assert_snapshot!("vt100_progressive_activity_inspector_output", vt100);
+}
+
+#[test]
+fn structured_activity_timeline_matches_80_120_and_160_cell_snapshots() {
+    let render = |width: u16| {
+        let mut app = make_test_app();
+        app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+        app.shell.show_startup_ascii_art = false;
+        let fixture = tui_testkit::set_structured_activity_timeline(&mut app);
+        assert!(app.show_progressive_activity_overlay_all());
+
+        let rendered = tui_testkit::render_inline_snapshot(&mut app, width, 30);
+
+        assert!(rendered.contains("waiting for subagent"), "{rendered}");
+        assert!(rendered.contains("complete"), "{rendered}");
+        assert!(rendered.contains("failed"), "{rendered}");
+        assert!(rendered.contains("active"), "{rendered}");
+        assert!(rendered.contains("2.5s"), "{rendered}");
+        assert!(rendered.contains("800ms"), "{rendered}");
+        assert!(rendered.contains("Completed C:/dev"), "{rendered}");
+        assert!(
+            !rendered.contains(
+                "Completed C:/dev/akra-queue/codex-exec-loop/src/adapter/inbound/tui/app/a-very-long-commercial-activity-timeline-path.rs"
+            ),
+            "{rendered}"
+        );
+        let complete_index = rendered.find("complete").expect("completed row");
+        let failed_index = rendered.find("failed").expect("failed row");
+        let active_index = rendered.find("active").expect("active row");
+        assert!(complete_index < failed_index && failed_index < active_index);
+        assert!(!rendered.contains('\u{1b}'));
+        assert!(
+            rendered.lines().all(|line| {
+                let line = line.strip_prefix('"').unwrap_or(line);
+                let line = line.split("\" Hidden by").next().unwrap_or(line);
+                let line = line.strip_suffix('"').unwrap_or(line);
+                ratatui::text::Line::from(line.to_string()).width() <= usize::from(width)
+            }),
+            "{width}-cell activity frame overflowed:\n{rendered}"
+        );
+        assert_eq!(std::sync::Arc::strong_count(&fixture.progressive), 1);
+        assert_eq!(std::sync::Arc::strong_count(&fixture.lifecycle), 1);
+        rendered
+    };
+
+    let width_80 = render(80);
+    assert_snapshot!("structured_activity_timeline_80", width_80);
+    let width_120 = render(120);
+    assert_snapshot!("structured_activity_timeline_120", width_120);
+    let width_160 = render(160);
+    assert_snapshot!("structured_activity_timeline_160", width_160);
+}
+
+#[test]
+fn activity_card_mouse_hit_area_toggles_the_same_fold_owned_by_keyboard() {
+    let mut app = make_test_app();
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.show_startup_ascii_art = false;
+    let _core_snapshot =
+        tui_testkit::set_progressive_command_activity(&mut app, "cargo test\nall green", false);
+    assert!(app.show_progressive_activity_overlay(ProgressiveActivityDetailKind::Output));
+    let card_key = match &app.conversation.lifecycle.conversation_state {
+        ConversationState::Ready(conversation) => {
+            conversation.progressive_activity_detail.cards()[0].key
+        }
+        ConversationState::Loading | ConversationState::Failed(_) => {
+            panic!("activity mouse fixture requires a ready conversation")
+        }
+    };
+    assert!(
+        app.shell
+            .progressive_activity_overlay_ui_state
+            .expand_state()
+            .is_card_expanded(card_key)
+    );
+
+    let expanded = tui_testkit::render_inline_snapshot(&mut app, 96, 24);
+    assert!(expanded.contains("all green"), "{expanded}");
+    assert!(app.progressive_activity_mouse_capture_requested());
+    let first_hit = app
+        .shell
+        .progressive_activity_overlay_ui_state
+        .card_hit_areas()[0];
+    assert!(
+        app.handle_progressive_activity_mouse_event(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left,),
+            column: first_hit.area.x,
+            row: first_hit.area.y,
+            modifiers: KeyModifiers::NONE,
+        })
+    );
+    assert!(
+        !app.shell
+            .progressive_activity_overlay_ui_state
+            .expand_state()
+            .is_card_expanded(card_key)
+    );
+
+    let folded = tui_testkit::render_inline_snapshot(&mut app, 96, 24);
+    assert!(folded.contains("Folded."), "{folded}");
+    let second_hit = app
+        .shell
+        .progressive_activity_overlay_ui_state
+        .card_hit_areas()[0];
+    assert!(
+        app.handle_progressive_activity_mouse_event(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left,),
+            column: second_hit.area.x,
+            row: second_hit.area.y,
+            modifiers: KeyModifiers::NONE,
+        })
+    );
+    assert!(
+        app.shell
+            .progressive_activity_overlay_ui_state
+            .expand_state()
+            .is_card_expanded(card_key)
+    );
+    let expanded_again = tui_testkit::render_inline_snapshot(&mut app, 96, 24);
+    assert!(expanded_again.contains("all green"), "{expanded_again}");
 }
 
 #[test]

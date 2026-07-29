@@ -192,8 +192,10 @@ use conversation_lifecycle::{
 pub(super) use conversation_model::{
     AutoFollowSkipReason, AutoFollowSnapshotPresentation, ConversationComposerState,
     ConversationInputState, ConversationState, ConversationViewModel, ProgressiveActivityCard,
-    ProgressiveActivityCardKind, ProgressiveActivityDetailKind, ProgressiveActivityExpandState,
-    TranscriptHandoffCorrelation, filter_cards_by_kind, normalize_max_auto_turns_candidate,
+    ProgressiveActivityCardKey, ProgressiveActivityCardKind, ProgressiveActivityCardOutcome,
+    ProgressiveActivityDetailKind, ProgressiveActivityExpandState, ProgressiveActivityWaitKind,
+    ProgressiveActivityWaitStatus, TranscriptHandoffCorrelation, filter_cards_by_kind,
+    normalize_max_auto_turns_candidate,
 };
 use conversation_runtime::{
     ConversationRuntimeEffect, ConversationRuntimeEvent,
@@ -233,10 +235,10 @@ use planning_workspace_operation_ui::{
     PlanningWorkspaceOperationUiSettlement, PlanningWorkspaceOperationUiState,
 };
 use progressive_activity_overlay_ui::{
-    ProgressiveActivityDiffContinuation, ProgressiveActivityDiffCursor,
-    ProgressiveActivityDiffLineKind, ProgressiveActivityOverlayUiState,
-    ProgressiveActivityPageCursor, parse_progressive_activity_card_filter,
-    parse_progressive_activity_detail_kind,
+    ProgressiveActivityCardHitArea, ProgressiveActivityDiffContinuation,
+    ProgressiveActivityDiffCursor, ProgressiveActivityDiffLineKind,
+    ProgressiveActivityOverlayUiState, ProgressiveActivityPageCursor,
+    parse_progressive_activity_card_filter, parse_progressive_activity_detail_kind,
 };
 pub(in crate::adapter::inbound::tui::app) use session_overlay_screen_model::{
     SessionBrowserScreenModel, SessionOverlayCatalogScreenModel, SessionOverlayScreenModel,

@@ -350,7 +350,11 @@ pub(super) fn reduce_conversation_runtime_with_transition(
         ConversationRuntimeEvent::StreamSnapshotApplied(snapshot) => {
             let applied = take_stream_snapshot_update(&mut state, snapshot);
             let progressive_activity = applied.progressive_activity;
+            let item_lifecycle = applied.item_lifecycle;
             let stream_workspace_directory = applied.workspace_directory;
+            state
+                .progressive_activity_detail
+                .replace_snapshots(&progressive_activity, &item_lifecycle);
             match applied.update {
                 TurnStreamUpdate::AttachmentObserved { profile } => {
                     // Attachment information is a runtime notice, not a transcript
@@ -448,9 +452,6 @@ pub(super) fn reduce_conversation_runtime_with_transition(
                     activity,
                     rejection,
                 } => {
-                    state
-                        .progressive_activity_detail
-                        .replace_snapshot(&progressive_activity);
                     if let Some(rejection) = rejection {
                         state.extend_runtime_notices([format!(
                             "ignored progressive activity observation: {}",
@@ -486,6 +487,7 @@ pub(super) fn reduce_conversation_runtime_with_transition(
                 TurnStreamUpdate::StatusUpdated { text } => {
                     // Provider status copy owns the main status line while a turn is
                     // active, but it does not become durable transcript history.
+                    state.progressive_activity.clear_turn_retrying();
                     state.status_text = text;
                 }
                 TurnStreamUpdate::AgentMessageCompleted {
@@ -495,11 +497,13 @@ pub(super) fn reduce_conversation_runtime_with_transition(
                 } => {
                     // Completion either flushes the live buffer or patches the final
                     // transcript row for the provider item.
+                    state.progressive_activity.clear_turn_retrying();
                     state.complete_live_agent_message(item_id, phase, text);
                 }
                 TurnStreamUpdate::ToolActivity { activity } => {
                     // Tool activity feeds both compact live counters and ordered
                     // transcript notices so shell tail and transcript agree.
+                    state.progressive_activity.clear_turn_retrying();
                     state.turn_activity.register_tool_activity(&activity);
                     state.buffer_tool_message(activity.text);
                 }
@@ -550,10 +554,14 @@ pub(super) fn reduce_conversation_runtime_with_transition(
                     ..
                 } => {
                     if correlation_failure.is_none() {
+                        let error_summary = error.summary();
+                        state
+                            .progressive_activity
+                            .record_turn_retrying(&error_summary);
                         state.status_text = status_text;
                         state.extend_runtime_notices([format!(
                             "app-server retrying active turn: {}",
-                            error.summary()
+                            error_summary
                         )]);
                     } else {
                         state.extend_runtime_notices([format!(
@@ -893,6 +901,9 @@ pub(super) fn reduce_conversation_runtime(
 struct AppliedStreamSnapshot {
     update: TurnStreamUpdate,
     workspace_directory: Option<String>,
+    item_lifecycle: std::sync::Arc<
+        crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProjectionSnapshot,
+    >,
     progressive_activity: std::sync::Arc<
         crate::domain::conversation_progressive_activity::ConversationProgressiveActivityProjectionSnapshot,
     >,
@@ -907,6 +918,7 @@ fn take_stream_snapshot_update(
     AppliedStreamSnapshot {
         update: snapshot.update,
         workspace_directory: snapshot.cwd,
+        item_lifecycle: snapshot.item_lifecycle,
         progressive_activity: snapshot.progressive_activity,
     }
 }
@@ -1073,7 +1085,9 @@ fn queue_post_turn_evaluation(
 mod tests {
     use super::*;
     use crate::adapter::inbound::tui::app::app_runtime::core_turn_stream_event_from_application;
-    use crate::adapter::inbound::tui::app::conversation_model::ProgressiveActivityDetailKind;
+    use crate::adapter::inbound::tui::app::conversation_model::{
+        ProgressiveActivityDetailKind, ProgressiveActivityWaitKind,
+    };
     use crate::adapter::inbound::tui::app::{
         AutoFollowSubmitContext, ManualIntakeSubmitContext, PromptOrigin,
     };
@@ -1898,6 +1912,66 @@ mod tests {
         retrying.fail_turn(None, "retry failed".to_string());
         retrying.record_turn_started("turn-2".to_string());
         assert_eq!(retrying.activity_rail_terminal_state, None);
+    }
+
+    #[test]
+    fn exact_retry_state_survives_projection_and_clears_on_fresh_activity() {
+        let mut core = TurnStreamTestHarness::new();
+        core.seed_loaded_thread_identity("thread-1", "Runtime thread", "/tmp/workspace");
+        core.apply_stream_event(crate::core::app::TurnStreamEvent::TurnStarted {
+            turn_id: "turn-1".to_string(),
+            runtime_request: Box::default(),
+        });
+        let mut state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
+        state.record_thread_prepared(
+            "thread-1".to_string(),
+            "Runtime thread".to_string(),
+            "/tmp/workspace".to_string(),
+        );
+        install_active_turn(
+            &mut state,
+            crate::core::app::ActiveTurnPhase::Running,
+            Some("turn-1"),
+            "/tmp/workspace",
+        );
+        state.record_turn_started("turn-1".to_string());
+
+        let retry_snapshot =
+            core.apply_stream_event(crate::core::app::TurnStreamEvent::TurnRetrying {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                error: crate::domain::turn_terminal::ConversationTurnError::new(
+                    "server overloaded",
+                    None::<&str>,
+                    None,
+                ),
+            });
+        let retried = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::StreamSnapshotApplied(Box::new(retry_snapshot)),
+        );
+
+        assert_eq!(
+            retried.state.progressive_activity.retrying_summary(),
+            Some("server overloaded")
+        );
+        assert_eq!(
+            retried
+                .state
+                .progressive_activity_detail
+                .wait_status(retried.state.progressive_activity.retrying_summary(), false)
+                .map(|status| status.kind),
+            Some(ProgressiveActivityWaitKind::Retrying)
+        );
+
+        let command_snapshot = core.apply_stream_event(core_turn_stream_event_from_application(
+            progressive_command_event("fresh output"),
+        ));
+        let cleared = reduce_conversation_runtime(
+            retried.state,
+            ConversationRuntimeEvent::StreamSnapshotApplied(Box::new(command_snapshot)),
+        );
+        assert_eq!(cleared.state.progressive_activity.retrying_summary(), None);
     }
 
     #[test]

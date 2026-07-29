@@ -27,7 +27,7 @@ an explicitly proposed document, not here.
 | Diagnostics | `Ctrl+d`, `:diag` | inspect startup readiness and blockers |
 | Sessions | `Ctrl+o`, `:sessions` | search, rename, resume, or start a blank draft |
 | Reviews | `:reviews` | inspect the bounded review center projection |
-| Activity | `:activity [all\|diff\|output\|command\|patch\|…]`, `:act` | inspect retained progressive activity cards and selected detail; diff detail uses a line-numbered unified-diff view (live/overlay only; host scrollback stays static) |
+| Activity | `:activity [all\|diff\|output\|command\|patch\|…]`, `:act` | inspect a chronological typed activity timeline with outcome, exact elapsed time, foldable retained detail, and line-numbered unified diff (live/overlay only; host scrollback stays static) |
 | Queue | `:queue`, `:q`, `akra queue` | inspect accepted head, proposals, skip framing, and receipts |
 | Planning | `:planning`, `:planning-init` | stage, validate, and promote planning changes |
 | Directions | `:directions` | maintain directions and queue-idle supporting artifacts |
@@ -80,6 +80,12 @@ continuation paths. A later `:parallel` re-arms only parallel continuation.
 4. Active output remains in the live inline tail; final assistant output moves to committed history.
 5. Typed activity, runtime notices, approvals, and warnings update the same shell projection.
 6. Post-turn evaluation advances, pauses, or stops continuation from accepted planning state.
+
+The Activity surface joins progressive payloads with authoritative item-lifecycle records by exact
+item identity. It exposes active, completed, failed, declined, interrupted, and observed outcomes
+without deriving progress from prose. Exact active waits distinguish model response, subagent,
+approval, task output, and retry. `Up`/`Down` selects a row; `Enter`, `e`, or a left click folds or
+expands retained detail. Completed rows stay visually quiet while active work remains dominant.
 
 Only the interactive main conversation can answer a reviewable command or bounded additional
 permission request. `Y` accepts once; `N`/`Esc` declines; `Enter` is inert. Timeout, interrupt,

@@ -146,6 +146,14 @@ navigation intent cannot optimistically rewrite it.
 
 ### Conversation Markdown And Diff Detail
 
+- Activity rows are chronological typed lifecycle views. Each visible row keeps one kind, outcome,
+  bounded summary, optional exact elapsed time, and a fold affordance; prose must not be parsed to
+  invent state or progress.
+- Completed activity is visually quiet, current activity is dominant, and exact waits distinguish
+  model response, subagent, approval, task output, and retry. When the Activity overlay already
+  owns the exact wait line, the conversation tail must not duplicate a coarser working line.
+- Keyboard and mouse interaction address the same card identity and bounded expansion state. Hit
+  areas are frame receipts and must be discarded after a resize or stale draw.
 - App-server agent text is raw Markdown. The transcript projection must interpret its presentation
   syntax consistently for live deltas, completed history, and viewport replay.
 - Fenced code delimiters and their info strings are parser syntax, not transcript content. Hide

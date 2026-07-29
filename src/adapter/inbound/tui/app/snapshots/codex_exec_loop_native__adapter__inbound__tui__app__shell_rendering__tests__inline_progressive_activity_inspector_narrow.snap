@@ -7,8 +7,8 @@ expression: narrow
 "diff · 한글 wide detail | 0-19 / 795 B          " Hidden by multi-width symbols: [(8, " "), (10, " ")]
 "   한글 wide detail                             " Hidden by multi-width symbols: [(4, " "), (6, " ")]
 "Keys                                            "
-"Up/Down: card | Enter/e: detail                 "
-"◦ Working (0s • waiting for response / inter...)"
+"Up/Down: row | Enter/e: fold                    "
+"◦ Waiting for model response (0s • interrupt r…)"
 "notice: activity: active:command | diff:+1 -1 h1"
 " > Describe a task or type : for commands       "
 " Type a follow-up  |  Tab steers after typing   "
