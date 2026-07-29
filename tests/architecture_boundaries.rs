@@ -5083,6 +5083,32 @@ fn update_unrelated(
         1,
         "direct absolute re-exports must preserve their root path origin"
     );
+    let absolute_glob_reexport_file = syn::parse_file(
+        "mod akra {}\n\
+         pub use ::akra::adapter::inbound::tui::app::*;",
+    )
+    .expect("absolute self-crate glob re-export should parse");
+    let mut absolute_glob_reexports = crate_aliases.clone();
+    absolute_glob_reexports.extend(qualified_type_aliases_declared_in_file(
+        &absolute_glob_reexport_file,
+        &relative_alias_module,
+    ));
+    let absolute_glob_reexported_alias = shell_chrome_writer_audit_with_type_registry(
+        "use crate::adapter::inbound::tui::app::aliases::NativeTuiApp;\n\
+         fn escape(app: &mut NativeTuiApp) {\n\
+             app.shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+        false,
+        &known_struct_fields,
+        &absolute_glob_reexports,
+        &relative_writer_module,
+    )
+    .expect("absolute self-crate glob re-export fixture should parse");
+    assert_eq!(
+        absolute_glob_reexported_alias.field_writes.len(),
+        1,
+        "absolute glob re-exports must preserve their root path origin"
+    );
 
     let unrelated_wrapper = shell_chrome_writer_audit(
         "struct OtherChrome { session_state: usize }\n\
@@ -15567,7 +15593,10 @@ fn collect_qualified_type_aliases(
             let mut glob_targets = Vec::new();
             collect_use_glob_targets(&import.tree, &mut Vec::new(), &mut glob_targets);
             for target in glob_targets {
-                if let Ok(ty) = syn::parse_str::<syn::Type>(&target.join("::")) {
+                if let Ok(mut ty) = syn::parse_str::<syn::Type>(&target.join("::")) {
+                    if import.leading_colon.is_some() {
+                        mark_shell_type_path_absolute(&mut ty);
+                    }
                     aliases.insert_glob(module_path.join("::"), ty);
                 }
             }
