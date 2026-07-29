@@ -4589,6 +4589,65 @@ fn update_unrelated(
         1,
         "the production-wide alias registry must retain authority across Rust files"
     );
+    let qualified_chrome_alias_file = syn::parse_file(
+        "pub type ChromeRef<'a> = &'a mut ShellChromeState;\n\
+         pub type ChromeView<'a> = &'a ShellChromeState;\n\
+         pub type ChromeGuard<'a> = std::sync::MutexGuard<'a, ShellChromeState>;",
+    )
+    .expect("qualified Chrome authority aliases should parse");
+    let qualified_chrome_aliases = qualified_type_aliases_declared_in_file(
+        &qualified_chrome_alias_file,
+        &["crate".to_string(), "chrome_aliases".to_string()],
+    );
+    let qualified_mutable_chrome_argument = shell_chrome_writer_audit_with_type_registry(
+        "fn external<T>(_chrome: T) {}\n\
+         fn escape(chrome: crate::chrome_aliases::ChromeRef<'_>) {\n\
+             external(chrome);\n\
+         }",
+        false,
+        &known_struct_fields,
+        &qualified_chrome_aliases,
+        &writer_module,
+    )
+    .expect("qualified mutable Chrome argument fixture should parse");
+    assert_eq!(
+        qualified_mutable_chrome_argument.whole_state_writes.len(),
+        1,
+        "qualified aliases must retain mutable Chrome authority at external call sites"
+    );
+    let qualified_read_only_chrome_argument = shell_chrome_writer_audit_with_type_registry(
+        "fn external<T>(_chrome: T) {}\n\
+         fn inspect(chrome: crate::chrome_aliases::ChromeView<'_>) {\n\
+             external(chrome);\n\
+         }",
+        false,
+        &known_struct_fields,
+        &qualified_chrome_aliases,
+        &writer_module,
+    )
+    .expect("qualified read-only Chrome argument fixture should parse");
+    assert!(
+        qualified_read_only_chrome_argument
+            .whole_state_writes
+            .is_empty(),
+        "qualified read-only aliases must not manufacture mutable Chrome authority"
+    );
+    let qualified_chrome_guard_argument = shell_chrome_writer_audit_with_type_registry(
+        "fn external<T>(_chrome: T) {}\n\
+         fn escape(chrome: crate::chrome_aliases::ChromeGuard<'_>) {\n\
+             external(chrome);\n\
+         }",
+        false,
+        &known_struct_fields,
+        &qualified_chrome_aliases,
+        &writer_module,
+    )
+    .expect("qualified Chrome guard argument fixture should parse");
+    assert_eq!(
+        qualified_chrome_guard_argument.whole_state_writes.len(),
+        1,
+        "qualified mutable guard aliases must retain Chrome authority at external call sites"
+    );
     let generic_authority_alias_file = syn::parse_file(
         "pub type Forward<T> = T;\n\
          pub type AppList<T> = Vec<T>;",
@@ -15098,11 +15157,16 @@ fn shell_authority_binding_from_type(
                 "Box" | "MutexGuard" | "Option" | "Pin" | "RefMut" | "Result" | "RwLockWriteGuard"
             ) && let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments
             {
-                return arguments.args.iter().find_map(|argument| {
+                let authority = arguments.args.iter().find_map(|argument| {
                     let syn::GenericArgument::Type(inner) = argument else {
                         return None;
                     };
                     shell_authority_binding_from_type(inner, scope, resolving_aliases)
+                })?;
+                return Some(ShellAuthorityBinding {
+                    mutable: authority.mutable
+                        || matches!(name.as_str(), "MutexGuard" | "RefMut" | "RwLockWriteGuard"),
+                    ..authority
                 });
             }
             None
@@ -16319,6 +16383,15 @@ impl ShellChromeWriterVisitor {
     }
 
     fn type_grants_mutable_access(&self, ty: &syn::Type) -> bool {
+        let mut resolving_authority_aliases = HashSet::new();
+        if let Some(authority) = shell_authority_binding_from_type(
+            ty,
+            self.type_resolution_scope(self.impl_authority),
+            &mut resolving_authority_aliases,
+        ) {
+            return authority.mutable;
+        }
+
         fn resolve(
             ty: &syn::Type,
             aliases: &ShellTypeAliases,
