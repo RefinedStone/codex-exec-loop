@@ -5470,6 +5470,51 @@ fn update_unrelated(
         2,
         "prefix and glob re-exports must retain reordered concrete struct arguments"
     );
+    let split_namespace_reexport = shell_chrome_writer_audit(
+        "struct Holder<T> { app: T }\n\
+         mod types {\n\
+             pub type App = super::Holder<NativeTuiApp>;\n\
+         }\n\
+         mod values {\n\
+             #[allow(non_snake_case)]\n\
+             pub fn App() {}\n\
+         }\n\
+         mod facade {\n\
+             pub use super::types::*;\n\
+             pub use super::values::App;\n\
+         }\n\
+         fn escape(mut holder: facade::App) {\n\
+             holder.app.shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+    )
+    .expect("split type/value namespace re-export fixture should parse");
+    assert_eq!(
+        split_namespace_reexport.field_writes.len(),
+        1,
+        "a value-only explicit import must not hide a same-named type glob re-export"
+    );
+    let split_namespace_authority_reexport = shell_chrome_writer_audit(
+        "mod types {\n\
+             pub type App = NativeTuiApp;\n\
+         }\n\
+         mod values {\n\
+             #[allow(non_snake_case)]\n\
+             pub fn App() {}\n\
+         }\n\
+         mod facade {\n\
+             pub use super::types::*;\n\
+             pub use super::values::App;\n\
+         }\n\
+         fn escape(mut app: facade::App) {\n\
+             app.shell.chrome.session_state = SessionState::Idle;\n\
+         }",
+    )
+    .expect("split type/value authority re-export fixture should parse");
+    assert_eq!(
+        split_namespace_authority_reexport.field_writes.len(),
+        1,
+        "authority binding must continue to a type glob after a value-only exact import"
+    );
     let recursively_reordered_struct = shell_chrome_writer_audit(
         "struct Flip<A, B> {\n\
              child: Box<Flip<B, A>>,\n\
@@ -15362,21 +15407,35 @@ fn shell_authority_binding_from_type(
                         .absolute_imports_for_module(alias_module_path)
                 };
                 let instantiated_alias = alias.instantiate(&segment.arguments);
+                let alias_scope = ShellTypeResolutionScope {
+                    module_path: alias_module_path,
+                    imports: alias_imports,
+                    absolute_imports: alias_absolute_imports,
+                    path_shadows: alias_path_shadows,
+                    allow_local_aliases: local_alias.is_some(),
+                    allow_local_imports: true,
+                    ..scope
+                };
                 let resolved = shell_authority_binding_from_type(
                     &instantiated_alias,
-                    ShellTypeResolutionScope {
-                        module_path: alias_module_path,
-                        imports: alias_imports,
-                        absolute_imports: alias_absolute_imports,
-                        path_shadows: alias_path_shadows,
-                        allow_local_aliases: local_alias.is_some(),
-                        allow_local_imports: true,
-                        ..scope
-                    },
+                    alias_scope,
                     resolving_aliases,
                 );
                 resolving_aliases.remove(&qualified_name);
-                return resolved;
+                if resolved.is_some() {
+                    return resolved;
+                }
+                let expanded_alias = shell_type_with_expanded_aliases(
+                    &instantiated_alias,
+                    alias_scope,
+                    &mut HashSet::new(),
+                );
+                if !alias.forwards_arguments
+                    || shell_alias_target_is_type(&instantiated_alias, alias_scope)
+                    || shell_alias_target_is_type(&expanded_alias, alias_scope)
+                {
+                    return None;
+                }
             }
             for prefix_len in (1..normalized_path.len()).rev() {
                 let prefix = normalized_path[..prefix_len].join("::");
@@ -15575,10 +15634,118 @@ fn shell_authority_binding_from_type(
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ShellAliasNamespace {
+    Type,
+    Value,
+}
+
 fn shell_type_with_expanded_aliases(
     ty: &syn::Type,
     scope: ShellTypeResolutionScope<'_>,
     resolving_aliases: &mut HashSet<String>,
+) -> syn::Type {
+    shell_type_with_expanded_aliases_in_namespace(
+        ty,
+        scope,
+        resolving_aliases,
+        ShellAliasNamespace::Type,
+    )
+}
+
+fn shell_value_path_with_expanded_aliases(
+    ty: &syn::Type,
+    scope: ShellTypeResolutionScope<'_>,
+    resolving_aliases: &mut HashSet<String>,
+) -> syn::Type {
+    shell_type_with_expanded_aliases_in_namespace(
+        ty,
+        scope,
+        resolving_aliases,
+        ShellAliasNamespace::Value,
+    )
+}
+
+fn shell_alias_target_is_type(ty: &syn::Type, scope: ShellTypeResolutionScope<'_>) -> bool {
+    match ty {
+        syn::Type::Path(path) if path.qself.is_none() => {
+            let Some(segment) = path.path.segments.last() else {
+                return false;
+            };
+            let name = segment.ident.to_string();
+            let normalized = if path.path.segments.len() == 1 {
+                let mut qualified = scope.module_path.to_vec();
+                qualified.push(name.clone());
+                qualified
+            } else {
+                normalized_shell_type_path(&path.path, scope)
+            };
+            let qualified_name = normalized.join("::");
+            scope
+                .qualified_type_aliases
+                .explicitly_declares_type(&qualified_name)
+                || scope
+                    .qualified_type_aliases
+                    .get(&qualified_name)
+                    .is_some_and(|alias| !alias.forwards_arguments)
+                || shell_authority_kind_from_path(&path.path, scope).is_some()
+                || matches!(
+                    name.as_str(),
+                    "Box"
+                        | "HashMap"
+                        | "HashSet"
+                        | "MutexGuard"
+                        | "Option"
+                        | "Pin"
+                        | "Rc"
+                        | "RefMut"
+                        | "Result"
+                        | "RwLockWriteGuard"
+                        | "String"
+                        | "Vec"
+                        | "VecDeque"
+                        | "bool"
+                        | "char"
+                        | "f32"
+                        | "f64"
+                        | "i8"
+                        | "i16"
+                        | "i32"
+                        | "i64"
+                        | "i128"
+                        | "isize"
+                        | "str"
+                        | "u8"
+                        | "u16"
+                        | "u32"
+                        | "u64"
+                        | "u128"
+                        | "usize"
+                )
+        }
+        syn::Type::Reference(reference) => {
+            shell_alias_target_is_type(reference.elem.as_ref(), scope)
+        }
+        syn::Type::Ptr(pointer) => shell_alias_target_is_type(pointer.elem.as_ref(), scope),
+        syn::Type::Group(group) => shell_alias_target_is_type(group.elem.as_ref(), scope),
+        syn::Type::Paren(paren) => shell_alias_target_is_type(paren.elem.as_ref(), scope),
+        syn::Type::Array(_)
+        | syn::Type::BareFn(_)
+        | syn::Type::ImplTrait(_)
+        | syn::Type::Infer(_)
+        | syn::Type::Never(_)
+        | syn::Type::Slice(_)
+        | syn::Type::TraitObject(_)
+        | syn::Type::Tuple(_) => true,
+        _ => false,
+    }
+}
+
+fn shell_type_with_expanded_aliases_in_namespace(
+    ty: &syn::Type,
+    scope: ShellTypeResolutionScope<'_>,
+    resolving_aliases: &mut HashSet<String>,
+    namespace: ShellAliasNamespace,
 ) -> syn::Type {
     match ty {
         syn::Type::Path(path) if path.qself.is_none() => {
@@ -15633,21 +15800,29 @@ fn shell_type_with_expanded_aliases(
                         .path_shadows_for_module(&declaration_module)
                 };
                 let instantiated = alias.instantiate(&segment.arguments);
-                let expanded = shell_type_with_expanded_aliases(
+                let declaration_scope = ShellTypeResolutionScope {
+                    module_path: &declaration_module,
+                    imports: declaration_imports,
+                    absolute_imports: declaration_absolute_imports,
+                    path_shadows: declaration_path_shadows,
+                    allow_local_aliases: local_alias.is_some(),
+                    allow_local_imports: true,
+                    ..scope
+                };
+                let expanded = shell_type_with_expanded_aliases_in_namespace(
                     &instantiated,
-                    ShellTypeResolutionScope {
-                        module_path: &declaration_module,
-                        imports: declaration_imports,
-                        absolute_imports: declaration_absolute_imports,
-                        path_shadows: declaration_path_shadows,
-                        allow_local_aliases: local_alias.is_some(),
-                        allow_local_imports: true,
-                        ..scope
-                    },
+                    declaration_scope,
                     resolving_aliases,
+                    namespace,
                 );
                 resolving_aliases.remove(&qualified_name);
-                return expanded;
+                let valid_namespace = namespace == ShellAliasNamespace::Value
+                    || !alias.forwards_arguments
+                    || shell_alias_target_is_type(&instantiated, declaration_scope)
+                    || shell_alias_target_is_type(&expanded, declaration_scope);
+                if valid_namespace {
+                    return expanded;
+                }
             }
 
             for prefix_len in (1..normalized_path.len()).rev() {
@@ -15676,7 +15851,7 @@ fn shell_type_with_expanded_aliases(
                     expanded_segment.arguments = segment.arguments.clone();
                 }
                 let declaration_module = normalized_path[..prefix_len.saturating_sub(1)].to_vec();
-                let expanded = shell_type_with_expanded_aliases(
+                let expanded = shell_type_with_expanded_aliases_in_namespace(
                     &syn::Type::Path(expanded_path),
                     ShellTypeResolutionScope {
                         module_path: &declaration_module,
@@ -15694,6 +15869,7 @@ fn shell_type_with_expanded_aliases(
                         ..scope
                     },
                     resolving_aliases,
+                    namespace,
                 );
                 resolving_aliases.remove(&prefix);
                 return expanded;
@@ -15755,10 +15931,11 @@ fn shell_type_with_expanded_aliases(
                             .map(|path| normalized_shell_type_path(&path.path, candidate_scope))
                             .unwrap_or_default()
                             .join("::");
-                        let expanded = shell_type_with_expanded_aliases(
+                        let expanded = shell_type_with_expanded_aliases_in_namespace(
                             &candidate,
                             candidate_scope,
                             resolving_aliases,
+                            namespace,
                         );
                         resolving_aliases.remove(&resolution_key);
                         let target_declared =
@@ -15784,69 +15961,85 @@ fn shell_type_with_expanded_aliases(
                     let syn::GenericArgument::Type(inner) = argument else {
                         continue;
                     };
-                    *inner = shell_type_with_expanded_aliases(inner, scope, resolving_aliases);
+                    *inner = shell_type_with_expanded_aliases_in_namespace(
+                        inner,
+                        scope,
+                        resolving_aliases,
+                        namespace,
+                    );
                 }
             }
             syn::Type::Path(expanded)
         }
         syn::Type::Reference(reference) => {
             let mut expanded = reference.clone();
-            expanded.elem = Box::new(shell_type_with_expanded_aliases(
+            expanded.elem = Box::new(shell_type_with_expanded_aliases_in_namespace(
                 reference.elem.as_ref(),
                 scope,
                 resolving_aliases,
+                namespace,
             ));
             syn::Type::Reference(expanded)
         }
         syn::Type::Ptr(pointer) => {
             let mut expanded = pointer.clone();
-            expanded.elem = Box::new(shell_type_with_expanded_aliases(
+            expanded.elem = Box::new(shell_type_with_expanded_aliases_in_namespace(
                 pointer.elem.as_ref(),
                 scope,
                 resolving_aliases,
+                namespace,
             ));
             syn::Type::Ptr(expanded)
         }
         syn::Type::Group(group) => {
             let mut expanded = group.clone();
-            expanded.elem = Box::new(shell_type_with_expanded_aliases(
+            expanded.elem = Box::new(shell_type_with_expanded_aliases_in_namespace(
                 group.elem.as_ref(),
                 scope,
                 resolving_aliases,
+                namespace,
             ));
             syn::Type::Group(expanded)
         }
         syn::Type::Paren(paren) => {
             let mut expanded = paren.clone();
-            expanded.elem = Box::new(shell_type_with_expanded_aliases(
+            expanded.elem = Box::new(shell_type_with_expanded_aliases_in_namespace(
                 paren.elem.as_ref(),
                 scope,
                 resolving_aliases,
+                namespace,
             ));
             syn::Type::Paren(expanded)
         }
         syn::Type::Slice(slice) => {
             let mut expanded = slice.clone();
-            expanded.elem = Box::new(shell_type_with_expanded_aliases(
+            expanded.elem = Box::new(shell_type_with_expanded_aliases_in_namespace(
                 slice.elem.as_ref(),
                 scope,
                 resolving_aliases,
+                namespace,
             ));
             syn::Type::Slice(expanded)
         }
         syn::Type::Array(array) => {
             let mut expanded = array.clone();
-            expanded.elem = Box::new(shell_type_with_expanded_aliases(
+            expanded.elem = Box::new(shell_type_with_expanded_aliases_in_namespace(
                 array.elem.as_ref(),
                 scope,
                 resolving_aliases,
+                namespace,
             ));
             syn::Type::Array(expanded)
         }
         syn::Type::Tuple(tuple) => {
             let mut expanded = tuple.clone();
             for element in &mut expanded.elems {
-                *element = shell_type_with_expanded_aliases(element, scope, resolving_aliases);
+                *element = shell_type_with_expanded_aliases_in_namespace(
+                    element,
+                    scope,
+                    resolving_aliases,
+                    namespace,
+                );
             }
             syn::Type::Tuple(expanded)
         }
@@ -17345,7 +17538,7 @@ impl ShellChromeWriterVisitor {
                 _ => break,
             }
         }
-        let expanded_variant = shell_type_with_expanded_aliases(
+        let expanded_variant = shell_value_path_with_expanded_aliases(
             &syn::Type::Path(syn::TypePath {
                 qself: None,
                 path: path.clone(),
@@ -17433,7 +17626,7 @@ impl ShellChromeWriterVisitor {
                 _ => break,
             }
         }
-        let expanded_variant = shell_type_with_expanded_aliases(
+        let expanded_variant = shell_value_path_with_expanded_aliases(
             &syn::Type::Path(syn::TypePath {
                 qself: None,
                 path: path.clone(),
