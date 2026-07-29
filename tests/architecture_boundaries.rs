@@ -7183,6 +7183,10 @@ fn update_unrelated(
          impl Carrier for &'static LifetimeMarker {\n\
              type Inner = ShellChromeState;\n\
          }\n\
+         struct ElidedMarker;\n\
+         impl<'a> Carrier for &'a ElidedMarker {\n\
+             type Inner = ShellChromeState;\n\
+         }\n\
          trait NestedGatMaker {\n\
              type Output<T: Carrier>;\n\
              fn make<T: Carrier>(&self) -> Self::Output<T>;\n\
@@ -7202,6 +7206,8 @@ fn update_unrelated(
          where\n\
              &'a LifetimeMarker: Carrier<Inner = OtherState>,\n\
          { todo!() }\n\
+         fn make_elided(marker: &ElidedMarker) -> <&ElidedMarker as Carrier>::Inner\n\
+         { todo!() }\n\
          fn make_pair() -> (\n\
              <OtherMarker as Carrier>::Inner,\n\
              <ChromeMarker as Carrier>::Inner,\n\
@@ -7214,6 +7220,7 @@ fn update_unrelated(
              make_referenced().session_state = SessionState::Idle;\n\
              make_nested_referenced().session_state = SessionState::Idle;\n\
              make_lifetime_other().session_state = 1;\n\
+             make_elided(&ElidedMarker).session_state = SessionState::Idle;\n\
              let (_, mut chrome) = make_pair();\n\
              chrome.session_state = SessionState::Idle;\n\
          }",
@@ -7221,7 +7228,7 @@ fn update_unrelated(
     .expect("nested generic associated projection fixture should parse");
     assert_eq!(
         nested_generic_associated_projection.field_writes.len(),
-        5,
+        6,
         "nested projections must preserve exact QSelf wrappers, Self, and lifetimes"
     );
     let cross_file_trait = syn::parse_file(
@@ -17623,7 +17630,7 @@ fn shell_reference_lifetime_pattern_matches(
     bindings: &mut ShellGenericBindings,
 ) -> bool {
     match (expected, actual) {
-        (None, None) => true,
+        (None, _) => true,
         (Some(expected), Some(actual)) => {
             let name = expected.ident.to_string();
             let is_parameter = parameters.iter().any(|parameter| {
@@ -17639,7 +17646,13 @@ fn shell_reference_lifetime_pattern_matches(
                 true
             }
         }
-        (None, Some(_)) | (Some(_), None) => false,
+        (Some(expected), None) => parameters.iter().any(|parameter| {
+            matches!(
+                parameter,
+                ShellDeclaredGenericParameter::Lifetime(parameter)
+                    if parameter == &expected.ident.to_string()
+            )
+        }),
     }
 }
 
