@@ -47,12 +47,12 @@ pub(super) fn prepare_render_state(app: &mut NativeTuiApp, mode: ShellFrontendMo
     assert!(apply_inline_frame_render_receipt(app, receipt));
 }
 
-pub(super) fn inline_parallel_event_stream_visible_rows(
+pub(super) fn inline_parallel_event_stream_area(
     projection: &InlineConversationFrameProjection,
     frame_area: Rect,
-) -> usize {
+) -> Rect {
     if !projection.parallel_mode_enabled && projection.shell_overlay != ShellOverlay::Supersession {
-        return 0;
+        return Rect::default();
     }
 
     let layout =
@@ -60,8 +60,8 @@ pub(super) fn inline_parallel_event_stream_visible_rows(
     projection
         .supersession_overlay_view
         .as_deref()
-        .map_or(0, |view| {
-            inline_inspection::parallel_event_stream_visible_rows(view, layout[0])
+        .map_or(Rect::default(), |view| {
+            inline_inspection::parallel_event_stream_area(view, layout[0])
         })
 }
 

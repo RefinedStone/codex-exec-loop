@@ -10,11 +10,9 @@ use super::backend::{InlineResizeBackend, InlineResizeSnapshot};
 use crate::adapter::inbound::tui::app::shell_presentation::TranscriptHandoffDeliveryToken;
 
 /*
- * Inline terminal rendering has two histories to keep in sync. Ratatui owns the live frame buffer,
- * while the host terminal scrollback should receive durable transcript rows as the conversation
- * grows. HistoryFlushState is the small reconciliation cache between those worlds: it remembers
- * the transcript snapshot already written to scrollback, computes the new suffix, and tracks how
- * many rendered rows now occupy the space above the inline viewport.
+ * Ratatui owns the live frame buffer while the host terminal scrollback receives
+ * durable transcript rows. Parallel events use a separate typed delivery cursor;
+ * this state remembers only the transcript baseline and shared physical row count.
  */
 #[derive(Default)]
 pub(crate) struct HistoryFlushState {
@@ -23,11 +21,6 @@ pub(crate) struct HistoryFlushState {
      * values because the next draw tick must diff against it after the app borrow has ended.
      */
     pub(crate) rendered_lines: Vec<Line<'static>>,
-    /*
-     * Parallel mode projects supervisor events instead of conversation rows. Keep its diff
-     * baseline separate so switching projections cannot make either history replay in full.
-     */
-    pub(crate) parallel_rendered_lines: Vec<Line<'static>>,
     /*
      * Staging buffer for the suffix selected during sync. Tests inspect the field directly, but
      * production clears it after terminal mutation so stale rows cannot be replayed on the next
@@ -177,33 +170,7 @@ impl HistoryFlushState {
         expected: InlineResizeSnapshot,
         insert_mode: HistoryInsertionMode,
     ) -> Result<HistoryFlushResult, B::Error> {
-        self.sync_projection(terminal, current_lines, expected, insert_mode, false)
-    }
-
-    pub(crate) fn sync_parallel<B: InlineResizeBackend>(
-        &mut self,
-        terminal: &mut Terminal<B>,
-        current_lines: &[Line<'static>],
-        expected: InlineResizeSnapshot,
-        insert_mode: HistoryInsertionMode,
-    ) -> Result<HistoryFlushResult, B::Error> {
-        if self.parallel_rendered_lines.starts_with(current_lines) {
-            if !terminal.backend().matches_resize_snapshot(expected)? {
-                return Ok(HistoryFlushResult::default());
-            }
-            self.pending_history_lines.clear();
-            self.visible_history_rows_dirty = false;
-            return Ok(HistoryFlushResult {
-                inserted_rows: 0,
-                stable_geometry: true,
-                history_committed: true,
-                committed_handoff: None,
-            });
-        }
-        std::mem::swap(&mut self.rendered_lines, &mut self.parallel_rendered_lines);
-        let result = self.sync_projection(terminal, current_lines, expected, insert_mode, true);
-        std::mem::swap(&mut self.rendered_lines, &mut self.parallel_rendered_lines);
-        result
+        self.sync_projection(terminal, current_lines, expected, insert_mode)
     }
 
     fn sync_projection<B: InlineResizeBackend>(
@@ -212,29 +179,12 @@ impl HistoryFlushState {
         current_lines: &[Line<'static>],
         expected: InlineResizeSnapshot,
         insert_mode: HistoryInsertionMode,
-        parallel_projection: bool,
     ) -> Result<HistoryFlushResult, B::Error> {
-        let pending_history_lines = if parallel_projection {
-            Self::pending_lines_against(&self.rendered_lines, current_lines, false)
-        } else {
-            self.pending_lines(current_lines)
-        };
+        let pending_history_lines = self.pending_lines(current_lines);
         if !terminal.backend().matches_resize_snapshot(expected)? {
             return Ok(HistoryFlushResult::default());
         }
-        /*
-         * The compact conversation shell needs a small physical buffer above the
-         * live viewport so width reflow can be erased deterministically. Parallel
-         * mode already owns a bounded operations projection in that space; adding
-         * guard rows to each event batch would consume its scroll-region budget
-         * and evict a one-shot conversation handoff.
-         */
-        let reserve_reflow_guards = !parallel_projection;
-        let physical_pending_lines = if reserve_reflow_guards {
-            self.pending_lines_with_reflow_guards(&pending_history_lines)
-        } else {
-            pending_history_lines.clone()
-        };
+        let physical_pending_lines = self.pending_lines_with_reflow_guards(&pending_history_lines);
         let width = expected.size.width;
         let inserted_rows = if physical_pending_lines.is_empty() {
             0
@@ -258,11 +208,7 @@ impl HistoryFlushState {
             if !insertion.completed() {
                 return Ok(HistoryFlushResult::default());
             }
-            self.trailing_reflow_guard_rows = if reserve_reflow_guards {
-                INLINE_HOST_SCROLLBACK_REFLOW_GUARD_ROWS
-            } else {
-                0
-            };
+            self.trailing_reflow_guard_rows = INLINE_HOST_SCROLLBACK_REFLOW_GUARD_ROWS;
             if !insertion.stable_geometry() {
                 let viewport_top_after_insert = terminal.get_frame().area().top();
                 self.visible_history_rows =
@@ -358,23 +304,22 @@ impl HistoryFlushState {
         self.remember(current_lines);
     }
 
-    pub(crate) fn remember_parallel_without_flush(&mut self, current_lines: &[Line<'static>]) {
-        self.visible_history_rows_dirty = false;
-        self.trailing_reflow_guard_rows = 0;
-        self.pending_history_lines.clear();
-        if !self.parallel_rendered_lines.starts_with(current_lines) {
-            self.parallel_rendered_lines = current_lines.to_vec();
-        }
-    }
-
     pub(crate) fn remember_conversation_projection(&mut self, current_lines: &[Line<'static>]) {
         self.remember(current_lines);
     }
 
-    pub(crate) fn has_pending_parallel_lines(&self, current_lines: &[Line<'static>]) -> bool {
-        !self.parallel_rendered_lines.starts_with(current_lines)
-            && !Self::pending_lines_against(&self.parallel_rendered_lines, current_lines, false)
-                .is_empty()
+    pub(crate) fn commit_parallel_insertion(
+        &mut self,
+        inserted_rows: u16,
+        viewport_top: u16,
+        stable_geometry: bool,
+    ) {
+        self.trailing_reflow_guard_rows = 0;
+        self.visible_history_rows = self
+            .visible_history_rows
+            .saturating_add(inserted_rows)
+            .min(viewport_top);
+        self.visible_history_rows_dirty = !stable_geometry;
     }
 
     pub(crate) fn mark_visible_history_rows_dirty(&mut self) {

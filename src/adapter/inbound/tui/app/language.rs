@@ -1542,6 +1542,32 @@ impl TuiLanguage {
         }
     }
 
+    pub(super) fn parallel_delivery_retention_gap(
+        self,
+        missing_from: u64,
+        missing_through: u64,
+    ) -> String {
+        match self {
+            Self::English => format!(
+                "[retention gap] parallel events {missing_from}..={missing_through} expired before terminal delivery"
+            ),
+            Self::Korean => format!(
+                "[보존 누락] parallel 이벤트 {missing_from}..={missing_through}가 terminal 전달 전에 만료되었습니다"
+            ),
+        }
+    }
+
+    pub(super) const fn parallel_delivery_uncertain(self) -> &'static str {
+        match self {
+            Self::English => {
+                "[terminal delivery uncertain] host output will not be replayed; replace the terminal surface to recover"
+            }
+            Self::Korean => {
+                "[terminal 전달 불확실] host 출력을 재전송하지 않습니다; terminal surface를 교체해 복구하세요"
+            }
+        }
+    }
+
     pub(super) fn parallel_history_summary(
         self,
         state_label: &str,

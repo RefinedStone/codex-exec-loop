@@ -5,6 +5,8 @@ use ratatui::widgets::ListState;
 use crate::application::service::planning::PlanningRuntimeProjection;
 use crate::domain::parallel_mode::ParallelModeSupervisorSnapshot;
 
+use super::parallel_supervisor_events::ParallelEventStreamSnapshot;
+use super::parallel_terminal_delivery::ParallelLiveStreamModel;
 use super::shell_presentation::{
     ActivityOverlayDocument, ActivityOverlayView, ConversationProjectionSample,
     ConversationScreenFrameInput, ConversationScreenModel, DirectionsMaintenanceFrameInput,
@@ -28,8 +30,8 @@ use super::shell_presentation::{
     shell_conversation_state,
 };
 use super::shell_rendering::{
-    count_rendered_inline_rows, inline_frame_inspection_area,
-    inline_parallel_event_stream_visible_rows, inline_section_height,
+    count_rendered_inline_rows, inline_frame_inspection_area, inline_parallel_event_stream_area,
+    inline_section_height,
 };
 use super::*;
 
@@ -113,6 +115,7 @@ pub(super) struct InlineConversationFrameProjection {
     pub(super) tail_view: InlineTailView,
     pub(super) live_transcript_lines: Vec<Line<'static>>,
     pub(super) shell_overlay: ShellOverlay,
+    pub(super) tui_language: TuiLanguage,
     pub(super) inline_history_render_mode: InlineHistoryRenderMode,
     pub(super) parallel_mode_enabled: bool,
     pub(super) renders_viewport_transcript_handoff: bool,
@@ -120,7 +123,6 @@ pub(super) struct InlineConversationFrameProjection {
     pub(super) renders_parallel_viewport_handoff: bool,
     pub(super) exit_confirmation_visible: bool,
     pub(super) turn_steer_confirmation: Option<Box<TurnSteerConfirmationScreenModel>>,
-    pub(super) parallel_supervisor_event_lines: Vec<Line<'static>>,
     pub(super) supersession_overlay_view: Option<Box<SupersessionOverlayView>>,
     sampled_parallel_supervisor: Box<ParallelModeSupervisorSnapshot>,
     sampled_planning_runtime_projection: Box<PlanningRuntimeProjection>,
@@ -135,6 +137,7 @@ pub(super) struct InlineTerminalSyncProjection {
     pub(super) sampled_parallel_frame_projection: Option<InlineConversationFrameProjection>,
     pub(super) parallel_handoff_conversation_lines: Option<ParallelConversationHandoffProjection>,
     pub(super) current_history_projection: Option<Vec<Line<'static>>>,
+    pub(super) parallel_event_stream_snapshot: Option<ParallelEventStreamSnapshot>,
 }
 
 pub(super) fn capture_inline_terminal_sync_projection(
@@ -149,16 +152,15 @@ pub(super) fn capture_inline_terminal_sync_projection(
         && sample.inline_history_render_mode().writes_host_scrollback())
     .then(|| capture_parallel_conversation_handoff_projection(app, sample))
     .flatten();
-    let current_history_projection = current_inline_history_lines_for_viewport(
-        app,
-        viewport_area,
-        sample,
-        sampled_parallel_frame_projection.as_ref(),
-    );
+    let current_history_projection = current_inline_history_lines_for_viewport(app, sample);
+    let parallel_event_stream_snapshot = sample
+        .parallel_mode_enabled()
+        .then(|| sample.parallel_event_stream_snapshot());
     InlineTerminalSyncProjection {
         sampled_parallel_frame_projection,
         parallel_handoff_conversation_lines,
         current_history_projection,
+        parallel_event_stream_snapshot,
     }
 }
 
@@ -191,20 +193,12 @@ pub(super) fn capture_parallel_conversation_handoff_projection(
 
 fn current_inline_history_lines_for_viewport(
     app: &NativeTuiApp,
-    viewport_area: Rect,
     sample: &ConversationProjectionSample,
-    parallel_frame_projection: Option<&InlineConversationFrameProjection>,
 ) -> Option<Vec<Line<'static>>> {
     if sample.parallel_mode_enabled() {
-        /*
-         * Parallel mode owns the main inline body with the supervisor board. The
-         * durable host scrollback receives only append-only event rows.
-         */
-        return Some(
-            parallel_frame_projection.map_or_else(Vec::new, |projection| {
-                current_inline_parallel_history_lines(viewport_area, sample, projection)
-            }),
-        );
+        // Parallel delivery has its own typed cursor and must not participate in
+        // the transcript rendered-line baseline.
+        return None;
     }
     let startup_conversation = match &app.conversation.lifecycle.conversation_state {
         ConversationState::Ready(conversation) => Some(conversation.as_ref()),
@@ -247,19 +241,6 @@ fn current_inline_history_lines_for_viewport(
         // Loading/failure retain the prior host-scrollback diff baseline.
         ConversationState::Loading | ConversationState::Failed(_) => None,
     }
-}
-
-fn current_inline_parallel_history_lines(
-    viewport_area: Rect,
-    sample: &ConversationProjectionSample,
-    frame_projection: &InlineConversationFrameProjection,
-) -> Vec<Line<'static>> {
-    let live_tail_lines =
-        inline_parallel_event_stream_visible_rows(frame_projection, viewport_area);
-    sample.parallel_supervisor_event_scrollback_lines_before_live_tail(
-        live_tail_lines,
-        viewport_area.width,
-    )
 }
 
 impl InlineConversationFrameProjection {
@@ -312,6 +293,7 @@ impl InlineConversationFrameProjection {
             tail_view,
             live_transcript_lines,
             shell_overlay: screen_model.shell_overlay,
+            tui_language: screen_model.tui_language,
             inline_history_render_mode: screen_model.inline_history_render_mode,
             parallel_mode_enabled: screen_model.parallel_mode_enabled,
             renders_viewport_transcript_handoff,
@@ -319,10 +301,27 @@ impl InlineConversationFrameProjection {
             renders_parallel_viewport_handoff,
             exit_confirmation_visible: screen_model.exit_confirmation_visible,
             turn_steer_confirmation: screen_model.turn_steer_confirmation.map(Box::new),
-            parallel_supervisor_event_lines: screen_model.parallel_supervisor_event_lines,
             supersession_overlay_view,
             sampled_parallel_supervisor,
             sampled_planning_runtime_projection,
+        }
+    }
+
+    pub(super) fn parallel_live_stream(&self) -> Option<&ParallelLiveStreamModel> {
+        self.supersession_overlay_view
+            .as_deref()
+            .map(|view| &view.event_stream)
+    }
+
+    pub(super) fn install_parallel_live_stream(&mut self, live_stream: ParallelLiveStreamModel) {
+        if let Some(view) = self.supersession_overlay_view.as_deref_mut() {
+            view.event_stream = live_stream;
+        }
+    }
+
+    fn finalize_parallel_live_stream_geometry(&mut self, event_area: Rect) {
+        if let Some(view) = self.supersession_overlay_view.as_deref_mut() {
+            view.event_stream.finalize_pending_geometry(event_area);
         }
     }
 }
@@ -437,6 +436,8 @@ pub(super) fn capture_inline_shell_frame_model(
 ) -> InlineShellFrameModel {
     let _ = mode;
     let inspection_area = inline_frame_inspection_area(&projection, area);
+    let parallel_event_area = inline_parallel_event_stream_area(&projection, area);
+    projection.finalize_parallel_live_stream_geometry(parallel_event_area);
     let mut receipt = InlineFrameRenderReceipt {
         activity: None,
         planning_editor: None,

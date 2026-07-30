@@ -2,7 +2,7 @@ use ratatui::Terminal;
 use ratatui::backend::Backend;
 use ratatui::backend::ClearType;
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Position, Rect};
+use ratatui::layout::{Position, Rect, Size};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
@@ -79,6 +79,14 @@ pub(super) struct HistoryInsertionAdapter {
 pub(super) struct GuardedHistoryInsertionResult {
     completed: bool,
     stable_geometry: bool,
+}
+
+pub(super) enum ParallelHistoryInsertionOutcome<E> {
+    AbortedBeforeWrite,
+    FailedBeforeWrite(E),
+    Committed { stable_geometry: bool },
+    CommittedWithError(E),
+    Uncertain(E),
 }
 
 impl GuardedHistoryInsertionResult {
@@ -183,6 +191,70 @@ impl HistoryInsertionAdapter {
             stable_geometry: terminal.backend().matches_resize_snapshot(expected)?,
         })
     }
+
+    pub(super) fn attempt_parallel_insert_at_snapshot<B: InlineResizeBackend>(
+        self,
+        terminal: &mut Terminal<B>,
+        lines: &[Line<'static>],
+        rendered_rows: u16,
+        expected: InlineResizeSnapshot,
+    ) -> ParallelHistoryInsertionOutcome<B::Error> {
+        match terminal.backend().matches_resize_snapshot(expected) {
+            Ok(true) => {}
+            Ok(false) => return ParallelHistoryInsertionOutcome::AbortedBeforeWrite,
+            Err(error) => return ParallelHistoryInsertionOutcome::FailedBeforeWrite(error),
+        }
+        if expected.size.width == 0 || rendered_rows == 0 {
+            return ParallelHistoryInsertionOutcome::Committed {
+                stable_geometry: true,
+            };
+        }
+        let cursor = match terminal.get_cursor_position() {
+            Ok(cursor) => cursor,
+            Err(error) => return ParallelHistoryInsertionOutcome::FailedBeforeWrite(error),
+        };
+        match terminal.backend().matches_resize_snapshot(expected) {
+            Ok(true) => {}
+            Ok(false) => return ParallelHistoryInsertionOutcome::AbortedBeforeWrite,
+            Err(error) => return ParallelHistoryInsertionOutcome::FailedBeforeWrite(error),
+        }
+
+        let write_result = match self.mode {
+            HistoryInsertionMode::Automatic | HistoryInsertionMode::StandardScrollRegion => {
+                insert_with_standard_scroll_region(terminal, lines, rendered_rows)
+            }
+            HistoryInsertionMode::NewlineFallback => {
+                let terminal_size = match terminal.size() {
+                    Ok(size) => size,
+                    Err(error) => {
+                        return ParallelHistoryInsertionOutcome::FailedBeforeWrite(error);
+                    }
+                };
+                let viewport_top = terminal.get_frame().area().top();
+                let buffer = rendered_history_buffer_with_height(
+                    expected.size.width,
+                    rendered_rows,
+                    lines.to_vec(),
+                );
+                insert_with_newline_fallback_with_size(
+                    terminal,
+                    &buffer,
+                    viewport_top,
+                    terminal_size,
+                )
+            }
+        };
+        if let Err(error) = write_result {
+            return ParallelHistoryInsertionOutcome::Uncertain(error);
+        }
+        if let Err(error) = restore_cursor(terminal, cursor) {
+            return ParallelHistoryInsertionOutcome::CommittedWithError(error);
+        }
+        match terminal.backend().matches_resize_snapshot(expected) {
+            Ok(stable_geometry) => ParallelHistoryInsertionOutcome::Committed { stable_geometry },
+            Err(error) => ParallelHistoryInsertionOutcome::CommittedWithError(error),
+        }
+    }
 }
 
 /*
@@ -212,6 +284,15 @@ fn insert_with_newline_fallback<B: Backend>(
     viewport_top: u16,
 ) -> Result<(), B::Error> {
     let size = terminal.size()?;
+    insert_with_newline_fallback_with_size(terminal, buffer, viewport_top, size)
+}
+
+fn insert_with_newline_fallback_with_size<B: Backend>(
+    terminal: &mut Terminal<B>,
+    buffer: &Buffer,
+    viewport_top: u16,
+    size: Size,
+) -> Result<(), B::Error> {
     if size.width == 0 || size.height == 0 {
         return Ok(());
     }

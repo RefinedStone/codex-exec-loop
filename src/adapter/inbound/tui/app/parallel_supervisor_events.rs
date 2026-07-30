@@ -14,6 +14,7 @@ use crate::domain::parallel_mode::{
 use super::AkraTheme;
 use super::language::{TUI_LOCALIZED_IMPORTANT_MARKERS, TuiLanguage};
 
+#[cfg(test)]
 const MAX_PARALLEL_SUPERVISOR_EVENTS: usize = 96;
 const MAX_PARALLEL_EVENT_WINDOW: usize = 512;
 pub(super) const PARALLEL_SUPERVISOR_OPERATOR_ACTOR: &str = "You";
@@ -25,7 +26,13 @@ pub(super) struct ParallelStreamEventId {
 }
 
 impl ParallelStreamEventId {
-    #[cfg(test)]
+    pub(super) fn new(stream_generation: u64, ordinal: u64) -> Self {
+        Self {
+            stream_generation,
+            ordinal,
+        }
+    }
+
     pub(super) fn stream_generation(self) -> u64 {
         self.stream_generation
     }
@@ -140,22 +147,26 @@ pub(super) struct ParallelEventStreamSnapshot {
     events: Arc<[ProjectedParallelEvent]>,
 }
 
+impl Default for ParallelEventStreamSnapshot {
+    fn default() -> Self {
+        ParallelEventStreamState::default().snapshot()
+    }
+}
+
 impl ParallelEventStreamSnapshot {
-    #[cfg(test)]
-    fn generation(&self) -> u64 {
+    pub(super) fn generation(&self) -> u64 {
         self.generation
     }
 
-    #[cfg(test)]
-    fn first_ordinal(&self) -> u64 {
+    pub(super) fn first_ordinal(&self) -> u64 {
         self.first_ordinal
     }
 
-    #[cfg(test)]
-    fn events(&self) -> &[ProjectedParallelEvent] {
+    pub(super) fn events(&self) -> &[ProjectedParallelEvent] {
         &self.events
     }
 
+    #[cfg(test)]
     pub(super) fn live_events(&self) -> &[ProjectedParallelEvent] {
         let live_start = self
             .events
@@ -164,25 +175,12 @@ impl ParallelEventStreamSnapshot {
         &self.events[live_start..]
     }
 
+    #[cfg(test)]
     pub(super) fn live_lines(&self) -> Vec<Line<'static>> {
         self.live_events()
             .iter()
             .map(|event| event.line().clone())
             .collect()
-    }
-
-    pub(super) fn scrollback_lines_before_rendered_live_tail(
-        &self,
-        live_tail_rows: usize,
-        width: u16,
-    ) -> Vec<Line<'static>> {
-        let lines = self
-            .events
-            .iter()
-            .map(|event| event.line().clone())
-            .collect::<Vec<_>>();
-        let durable_len = rendered_parallel_event_tail_start_index(&lines, live_tail_rows, width);
-        lines[..durable_len].to_vec()
     }
 }
 
@@ -694,7 +692,8 @@ fn rendered_tail_start_index(lines: &[Line<'static>], live_tail_rows: usize, wid
     rendered_parallel_event_tail_start_index(lines, live_tail_rows, width)
 }
 
-pub(super) fn rendered_parallel_event_tail_start_index(
+#[cfg(test)]
+fn rendered_parallel_event_tail_start_index(
     lines: &[Line<'static>],
     live_tail_rows: usize,
     width: u16,

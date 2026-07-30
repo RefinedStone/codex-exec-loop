@@ -1,10 +1,9 @@
 use super::{
     DeliveryGateStatus, build_detail_lines, build_distributor_lines, build_operations_lane_lines,
-    build_parallel_event_stream_lines, build_roster_lines, delivery_gates,
-    operations_board_state_label, operations_lane,
+    build_roster_lines, delivery_gates, operations_board_state_label, operations_lane,
 };
-use crate::adapter::inbound::tui::app::TuiLanguage;
-use crate::adapter::inbound::tui::app::parallel_supervisor_events::parallel_supervisor_event_line;
+use crate::adapter::inbound::tui::app::parallel_supervisor_events::ParallelEventStreamState;
+use crate::adapter::inbound::tui::app::parallel_terminal_delivery::ParallelLiveStreamModel;
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot,
     ParallelModeAgentSessionDetailSnapshot, ParallelModeAgentSessionHistoryEntry,
@@ -231,53 +230,19 @@ fn parallel_event_stream_does_not_replay_raw_runtime_feed() {
     before the operator opened :parallel. The live event stream must use the append-only
     supervisor event log instead, where the runtime feed has already been baselined.
     */
-    let snapshot = ParallelModeSupervisorSnapshot::new(
-        ParallelModeSupervisorState::Supervise,
-        "/tmp/workspace",
-        ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "idle", Vec::new()),
-        ParallelModeAgentRosterSnapshot::new(Vec::new(), "empty"),
-        ParallelModeSupervisorDetailSnapshot::new(None, "empty"),
-        ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queued")
-            .with_runtime_event_feed(vec![
-                runtime_event_feed_entry(3, "third runtime write"),
-                runtime_event_feed_entry(1, "first runtime write"),
-                runtime_event_feed_entry(2, "second runtime write"),
-            ]),
-        None,
-    );
-    let rendered = build_parallel_event_stream_lines(
-        &snapshot,
-        vec![parallel_supervisor_event_line(
-            "11:45:04",
-            "You",
-            "안녕하세요",
-        )],
-        TuiLanguage::Korean,
-    )
-    .into_iter()
-    .map(|line| line.to_string())
-    .collect::<Vec<_>>()
-    .join("\n");
+    let mut stream = ParallelEventStreamState::default();
+    stream.push_for_test("11:45:04", "You", "안녕하세요");
+    let rendered = ParallelLiveStreamModel::pending_viewport(&stream.snapshot(), Vec::new())
+        .render_lines()
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
 
     assert!(rendered.contains("You: 안녕하세요"));
     assert!(!rendered.contains("first runtime write"));
     assert!(!rendered.contains("second runtime write"));
     assert!(!rendered.contains("third runtime write"));
-}
-
-fn runtime_event_feed_entry(
-    sequence: i64,
-    summary: impl Into<String>,
-) -> ParallelModeRuntimeEventFeedEntry {
-    ParallelModeRuntimeEventFeedEntry::new(
-        sequence,
-        "parallel_runtime_reset",
-        "parallel_runtime",
-        "pool",
-        60,
-        summary,
-        format!("2026-05-13T11:45:{sequence:02}+00:00"),
-    )
 }
 
 #[test]

@@ -32,7 +32,6 @@ fn pending_lines_returns_only_new_suffix_for_appended_history() {
             Line::from("  first prompt"),
             Line::from(""),
         ],
-        parallel_rendered_lines: Vec::new(),
         pending_history_lines: Vec::new(),
         visible_history_rows: 0,
         visible_history_rows_dirty: false,
@@ -72,7 +71,6 @@ fn pending_lines_replays_full_history_after_reset() {
             Line::from("  old thread"),
             Line::from(""),
         ],
-        parallel_rendered_lines: Vec::new(),
         pending_history_lines: Vec::new(),
         visible_history_rows: 0,
         visible_history_rows_dirty: false,
@@ -100,7 +98,6 @@ fn pending_lines_only_inserts_new_suffix_for_shifted_history_window() {
         rendered_lines: (0..MAX_CONVERSATION_HISTORY_LINES)
             .map(|idx| Line::from(format!("line {idx}")))
             .collect(),
-        parallel_rendered_lines: Vec::new(),
         pending_history_lines: Vec::new(),
         visible_history_rows: 0,
         visible_history_rows_dirty: false,
@@ -133,7 +130,6 @@ fn pending_lines_only_inserts_new_suffix_when_history_first_hits_cap() {
         rendered_lines: (0..MAX_CONVERSATION_HISTORY_LINES - 10)
             .map(|idx| Line::from(format!("line {idx}")))
             .collect(),
-        parallel_rendered_lines: Vec::new(),
         pending_history_lines: Vec::new(),
         visible_history_rows: 0,
         visible_history_rows_dirty: false,
@@ -170,7 +166,6 @@ fn pending_lines_does_not_treat_small_overlap_as_shifted_history() {
             Line::from("Status:"),
             Line::from("  completed"),
         ],
-        parallel_rendered_lines: Vec::new(),
         pending_history_lines: Vec::new(),
         visible_history_rows: 0,
         visible_history_rows_dirty: false,
@@ -210,7 +205,6 @@ fn pending_lines_does_not_shift_uncapped_history_window_even_with_large_overlap(
             Line::from("  old tail"),
             Line::from(""),
         ],
-        parallel_rendered_lines: Vec::new(),
         pending_history_lines: Vec::new(),
         visible_history_rows: 0,
         visible_history_rows_dirty: false,
@@ -374,97 +368,6 @@ fn conversation_reflow_guards_stay_physical_and_refresh_only_with_new_history() 
 }
 
 #[test]
-fn first_parallel_event_preserves_one_shot_handoff_rows() {
-    for insert_mode in [
-        HistoryInsertionMode::StandardScrollRegion,
-        HistoryInsertionMode::NewlineFallback,
-    ] {
-        let mut terminal =
-            tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
-        let mut state = HistoryFlushState::default();
-        let handoff_lines = vec![
-            Line::from("User: one-shot prompt"),
-            Line::from("Agent: one-shot answer"),
-            Line::from(""),
-        ];
-
-        let snapshot = terminal.backend().resize_snapshot().unwrap();
-        let handoff = state
-            .append_durable_lines_preserving_baseline(
-                &mut terminal,
-                &handoff_lines,
-                snapshot,
-                insert_mode,
-            )
-            .unwrap();
-        assert!(handoff.inserted());
-        let handoff_visible_rows = state.visible_history_rows;
-
-        let parallel_lines = vec![Line::from("parallel event")];
-        let snapshot = terminal.backend().resize_snapshot().unwrap();
-        let first_event = state
-            .sync_parallel(&mut terminal, &parallel_lines, snapshot, insert_mode)
-            .unwrap();
-        assert!(first_event.inserted());
-        assert_eq!(
-            state.visible_history_rows,
-            handoff_visible_rows
-                .saturating_add(1)
-                .min(terminal.get_frame().area().top())
-        );
-
-        let visible_rows_after_first_event = state.visible_history_rows;
-        let snapshot = terminal.backend().resize_snapshot().unwrap();
-        assert!(
-            !state
-                .sync_parallel(&mut terminal, &[], snapshot, insert_mode)
-                .unwrap()
-                .inserted()
-        );
-        assert_eq!(state.parallel_rendered_lines, parallel_lines);
-        assert_eq!(state.visible_history_rows, visible_rows_after_first_event);
-
-        let snapshot = terminal.backend().resize_snapshot().unwrap();
-        assert!(
-            !state
-                .sync_parallel(&mut terminal, &parallel_lines, snapshot, insert_mode)
-                .unwrap()
-                .inserted()
-        );
-        assert_eq!(state.visible_history_rows, visible_rows_after_first_event);
-    }
-}
-
-#[test]
-fn shifted_parallel_window_inserts_only_its_new_tail() {
-    let mut terminal =
-        tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
-    let mut state = HistoryFlushState {
-        parallel_rendered_lines: (0..10)
-            .map(|index| Line::from(format!("parallel event {index}")))
-            .collect(),
-        ..HistoryFlushState::default()
-    };
-    let shifted_lines = (1..11)
-        .map(|index| Line::from(format!("parallel event {index}")))
-        .collect::<Vec<_>>();
-
-    let snapshot = terminal.backend().resize_snapshot().unwrap();
-    let result = state
-        .sync_parallel(
-            &mut terminal,
-            &shifted_lines,
-            snapshot,
-            HistoryInsertionMode::StandardScrollRegion,
-        )
-        .unwrap();
-
-    assert!(result.inserted());
-    assert_eq!(state.visible_history_rows, 1);
-    assert_eq!(state.parallel_rendered_lines, shifted_lines);
-}
-
-#[test]
 fn history_sync_for_empty_thread_clears_baseline_without_losing_geometry() {
     /*
      * Empty transcripts appear while a thread is being replaced or before history
@@ -483,7 +386,6 @@ fn history_sync_for_empty_thread_clears_baseline_without_losing_geometry() {
             Line::from("  old answer"),
             Line::from(""),
         ],
-        parallel_rendered_lines: Vec::new(),
         pending_history_lines: Vec::new(),
         visible_history_rows: 6,
         visible_history_rows_dirty: false,
@@ -510,10 +412,9 @@ fn history_sync_for_empty_thread_clears_baseline_without_losing_geometry() {
 }
 
 #[test]
-fn conversation_projection_reset_preserves_parallel_baseline_and_geometry() {
+fn conversation_projection_reset_preserves_shared_geometry() {
     let mut state = HistoryFlushState {
         rendered_lines: vec![Line::from("old conversation")],
-        parallel_rendered_lines: vec![Line::from("parallel event")],
         pending_history_lines: vec![Line::from("pending conversation")],
         visible_history_rows: 7,
         visible_history_rows_dirty: true,
@@ -524,10 +425,6 @@ fn conversation_projection_reset_preserves_parallel_baseline_and_geometry() {
 
     assert!(state.rendered_lines.is_empty());
     assert!(state.pending_history_lines.is_empty());
-    assert_eq!(
-        state.parallel_rendered_lines,
-        vec![Line::from("parallel event")]
-    );
     assert_eq!(state.visible_history_rows, 7);
     assert!(state.visible_history_rows_dirty);
 }

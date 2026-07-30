@@ -15,7 +15,8 @@ use crate::domain::parallel_mode::{
 };
 
 use super::super::super::super::parallel_supervisor_events::parallel_supervisor_snapshot_stream_lines;
-use super::super::super::super::{AkraTheme, ShellOverlay, TuiLanguage};
+use super::super::super::super::parallel_terminal_delivery::ParallelLiveStreamModel;
+use super::super::super::super::{AkraTheme, ShellOverlay};
 use super::super::super::ConversationScreenModel;
 use super::SupersessionOverlayView;
 
@@ -55,10 +56,9 @@ pub(crate) fn build_supersession_overlay_view(
     let timeline_lines = build_selected_lane_timeline_lines(selected_lane.as_ref());
     let (selected_lane_lines, compact_selected_lane_lines) =
         build_selected_lane_detail_lines(screen_model, supervisor_snapshot, selected_lane.as_ref());
-    let event_lines = build_parallel_event_stream_lines(
-        supervisor_snapshot,
-        screen_model.parallel_supervisor_event_lines.clone(),
-        screen_model.tui_language,
+    let event_stream = ParallelLiveStreamModel::pending_viewport(
+        &screen_model.parallel_event_stream_snapshot,
+        fallback_parallel_event_stream_lines(screen_model),
     );
     let focused_full_viewport = screen_model.shell_overlay == ShellOverlay::Supersession;
     let key_lines = build_command_hint_lines(
@@ -103,7 +103,7 @@ pub(crate) fn build_supersession_overlay_view(
         compact_lane_lines,
         selected_lane_lines,
         compact_selected_lane_lines,
-        event_lines,
+        event_stream,
         key_lines,
     }
 }
@@ -1192,28 +1192,24 @@ fn build_detail_lines_with_mud(
     lines
 }
 
-fn build_parallel_event_stream_lines(
-    supervisor_snapshot: &ParallelModeSupervisorSnapshot,
-    local_event_lines: Vec<Line<'static>>,
-    language: TuiLanguage,
+fn fallback_parallel_event_stream_lines(
+    screen_model: &ConversationScreenModel<'_>,
 ) -> Vec<Line<'static>> {
-    let mut events = if local_event_lines.is_empty() {
-        parallel_supervisor_snapshot_stream_lines(supervisor_snapshot, language)
-    } else {
-        local_event_lines
-    };
-
-    if events.is_empty() {
-        return vec![Line::from(language.no_parallel_events())];
+    if !screen_model
+        .parallel_event_stream_snapshot
+        .events()
+        .is_empty()
+    {
+        return Vec::new();
     }
-
-    const MAX_STREAM_EVENTS: usize = 96;
-    let drain_count = events.len().saturating_sub(MAX_STREAM_EVENTS);
-    if drain_count > 0 {
-        events.drain(0..drain_count);
+    let mut lines = parallel_supervisor_snapshot_stream_lines(
+        &screen_model.parallel_mode_supervisor,
+        screen_model.tui_language,
+    );
+    if lines.is_empty() {
+        lines.push(Line::from(screen_model.tui_language.no_parallel_events()));
     }
-
-    events
+    lines
 }
 
 #[cfg(test)]

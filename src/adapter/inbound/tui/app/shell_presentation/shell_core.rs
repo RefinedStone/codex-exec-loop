@@ -6,8 +6,6 @@
  */
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use ratatui::text::Line;
-
 use crate::application::service::parallel_mode::control_plane::{
     ParallelModeControlPlanePresentationProjection, ParallelModeGlobalRuntimeNoticeProjection,
 };
@@ -287,19 +285,10 @@ impl ConversationProjectionSample {
         self.history_insert_mode
     }
 
-    pub(in crate::adapter::inbound::tui::app) fn parallel_supervisor_event_lines(
+    pub(in crate::adapter::inbound::tui::app) fn parallel_event_stream_snapshot(
         &self,
-    ) -> Vec<Line<'static>> {
-        self.parallel_supervisor_events.live_lines()
-    }
-
-    pub(in crate::adapter::inbound::tui::app) fn parallel_supervisor_event_scrollback_lines_before_live_tail(
-        &self,
-        live_tail_rows: usize,
-        width: u16,
-    ) -> Vec<Line<'static>> {
-        self.parallel_supervisor_events
-            .scrollback_lines_before_rendered_live_tail(live_tail_rows, width)
+    ) -> ParallelEventStreamSnapshot {
+        self.parallel_supervisor_events.clone()
     }
 
     pub(in crate::adapter::inbound::tui::app) fn parallel_mode_readiness_for_workspace(
@@ -509,7 +498,8 @@ pub(in crate::adapter::inbound::tui::app) struct ConversationScreenModel<'a> {
         Option<ParallelModeReadinessSnapshot>,
     pub(in crate::adapter::inbound::tui::app) parallel_mode_supervisor:
         ParallelModeSupervisorSnapshot,
-    pub(in crate::adapter::inbound::tui::app) parallel_supervisor_event_lines: Vec<Line<'static>>,
+    pub(in crate::adapter::inbound::tui::app) parallel_event_stream_snapshot:
+        ParallelEventStreamSnapshot,
     pub(in crate::adapter::inbound::tui::app) planning_runtime_projection:
         PlanningRuntimeProjection,
     pub(in crate::adapter::inbound::tui::app) planning_worker_shows_debug_details: bool,
@@ -700,11 +690,7 @@ impl<'a> ConversationScreenModel<'a> {
             parallel_mode_loading_prompt_indicator_visible,
             parallel_mode_readiness,
             parallel_mode_supervisor,
-            parallel_supervisor_event_lines: if parallel_mode_enabled {
-                sample.parallel_supervisor_event_lines()
-            } else {
-                Vec::new()
-            },
+            parallel_event_stream_snapshot: sample.parallel_event_stream_snapshot(),
             planning_runtime_projection,
             planning_worker_shows_debug_details: input.planning_worker_shows_debug_details,
             planning_worker_panel_state: input.planning_worker_panel_state,
@@ -877,7 +863,7 @@ impl<'a> ConversationScreenModel<'a> {
                 None,
                 ParallelModePresentationLoadingStage::Entering,
             ),
-            parallel_supervisor_event_lines: Vec::new(),
+            parallel_event_stream_snapshot: ParallelEventStreamSnapshot::default(),
             planning_runtime_projection: PlanningRuntimeProjection::uninitialized(),
             planning_worker_shows_debug_details: false,
             planning_worker_panel_state: PlanningWorkerPanelState::default(),

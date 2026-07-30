@@ -9,7 +9,10 @@ use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
 
 #[cfg(test)]
 use super::NativeTuiApp;
-use super::history_insertion::HistoryInsertionMode;
+use super::history_insertion::{
+    HistoryInsertionAdapter, HistoryInsertionMode, ParallelHistoryInsertionOutcome,
+    count_rendered_history_rows,
+};
 use super::inline_frame_model::InlineTerminalSyncProjection;
 #[cfg(test)]
 use super::inline_frame_model::{
@@ -19,14 +22,19 @@ use super::inline_frame_model::{
 use super::inline_frame_model::{
     capture_inline_terminal_sync_projection, capture_parallel_conversation_handoff_projection,
 };
+use super::parallel_terminal_delivery::{
+    ParallelHostReceiptSettlement, ParallelHostWriteStartError, ParallelHostWriteTransition,
+    ParallelStreamDeliveryPlan, ParallelTerminalDeliveryState, TerminalSurfaceTransition,
+};
 use super::shell_presentation::{ConversationProjectionSample, TranscriptHandoffDeliveryToken};
 use super::shell_rendering::{
     InlineConversationFrameProjection, InlineFrameRenderReceipt, draw_projected,
+    inline_parallel_event_stream_area,
 };
 use super::shell_runtime::ShellRuntime;
 use super::{
     INLINE_HOST_SCROLLBACK_REFLOW_GUARD_ROWS, INLINE_VIEWPORT_HEIGHT, InlineHistoryRenderMode,
-    ShellFrontendMode,
+    ShellFrontendMode, TuiLanguage,
 };
 #[path = "inline_terminal_adapter/backend.rs"]
 pub(super) mod backend;
@@ -71,6 +79,14 @@ enum InlineViewportSync {
         frame_projection: Box<InlineConversationFrameProjection>,
         redraw_after_successful_frame: bool,
         resize_snapshot: InlineResizeSnapshot,
+    },
+}
+
+enum ParallelHostSync {
+    Deferred,
+    Stable {
+        inserted: bool,
+        stable_geometry: bool,
     },
 }
 
@@ -385,9 +401,10 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
     let physical_terminal_resized = inline_terminal.physical_terminal_resized(resize_snapshot);
     let viewport_area = current_viewport_area(terminal);
     let InlineTerminalSyncProjection {
-        sampled_parallel_frame_projection,
+        mut sampled_parallel_frame_projection,
         parallel_handoff_conversation_lines,
         current_history_projection,
+        parallel_event_stream_snapshot,
     } = runtime.capture_inline_terminal_sync_projection(viewport_area, &projection_sample);
     let preserves_conversation_baseline = current_history_projection.is_none();
     let current_lines = current_history_projection.unwrap_or_default();
@@ -424,6 +441,32 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
             has_host_scrollback_guard,
         );
     }
+    let mut parallel_plan = match (
+        sampled_parallel_frame_projection.as_ref(),
+        parallel_event_stream_snapshot.as_ref(),
+    ) {
+        (Some(frame_projection), Some(snapshot)) => {
+            inline_terminal
+                .parallel_delivery
+                .transition_terminal_surface(
+                    TerminalSurfaceTransition::PreserveHostScrollback,
+                    snapshot.generation(),
+                );
+            let event_area = inline_parallel_event_stream_area(frame_projection, viewport_area);
+            let fallback_status_lines = frame_projection
+                .parallel_live_stream()
+                .map_or_else(Vec::new, |stream| stream.fallback_status_lines());
+            Some(inline_terminal.parallel_delivery.prepare_plan(
+                snapshot,
+                policy.render_mode,
+                event_area,
+                frame_projection.tui_language,
+                &fallback_status_lines,
+            ))
+        }
+        (None, None) => None,
+        _ => unreachable!("parallel frame and event snapshot must be sampled together"),
+    };
     let Some(insert_mode) = policy.host_insert_mode() else {
         /*
          * ViewportReplay keeps transcript rows inside ratatui rendering and must not
@@ -439,27 +482,25 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
             return Ok(InlineViewportSync::Deferred);
         }
         if !preserves_conversation_baseline {
-            if policy.parallel_mode_enabled {
-                inline_terminal
-                    .history_flush
-                    .remember_parallel_without_flush(&current_lines);
-            } else {
-                inline_terminal
-                    .history_flush
-                    .remember_without_flush(&current_lines);
-            }
+            inline_terminal
+                .history_flush
+                .remember_without_flush(&current_lines);
         }
         if physical_terminal_resized {
             inline_terminal.invalidate_back_buffer();
         }
         inline_terminal.record_terminal_viewport(terminal_size, viewport_area, cursor_position);
         inline_terminal.mark_resize_reconciled(resize_snapshot);
-        let frame_projection = sampled_parallel_frame_projection.unwrap_or_else(|| {
+        let mut frame_projection = sampled_parallel_frame_projection.unwrap_or_else(|| {
             runtime.capture_inline_conversation_frame_projection(
                 viewport_area.width,
                 &projection_sample,
             )
         });
+        if let Some(plan) = parallel_plan.take() {
+            let (_, live_stream) = plan.into_parts();
+            frame_projection.install_parallel_live_stream(live_stream);
+        }
         let tail_frame_changed = inline_terminal.should_draw_inline_frame(
             &frame_projection,
             viewport_area.width,
@@ -473,9 +514,9 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
         });
     };
     let parallel_history_pending = policy.parallel_mode_enabled
-        && (inline_terminal
-            .history_flush
-            .has_pending_parallel_lines(&current_lines)
+        && (parallel_plan
+            .as_ref()
+            .is_some_and(|plan| plan.host_batch().is_some())
             || !parallel_handoff_pending_lines.is_empty());
     let parallel_history_fit_would_scroll = policy.parallel_mode_enabled
         && inline_terminal.history_flush.visible_history_rows > viewport_area.top();
@@ -537,20 +578,71 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
         inline_terminal.invalidate_back_buffer();
     }
 
+    let parallel_host_inserted = if policy.parallel_mode_enabled {
+        let plan = parallel_plan
+            .take()
+            .expect("parallel host mode must own one delivery plan");
+        let language = sampled_parallel_frame_projection
+            .as_ref()
+            .expect("parallel plan must own a frame projection")
+            .tui_language;
+        let host_sync = sync_parallel_host_delivery(
+            terminal,
+            inline_terminal,
+            &plan,
+            resize_snapshot,
+            insert_mode,
+            language,
+        )?;
+        let ParallelHostSync::Stable {
+            inserted,
+            stable_geometry,
+        } = host_sync
+        else {
+            defer_resize_redraw(runtime, inline_terminal);
+            return Ok(InlineViewportSync::Deferred);
+        };
+        if !stable_geometry {
+            defer_resize_redraw(runtime, inline_terminal);
+            return Ok(InlineViewportSync::Deferred);
+        }
+
+        let frame_projection = sampled_parallel_frame_projection
+            .as_mut()
+            .expect("parallel plan must retain its sampled frame");
+        let snapshot = parallel_event_stream_snapshot
+            .as_ref()
+            .expect("parallel plan must retain its sampled event window");
+        let event_area = inline_parallel_event_stream_area(frame_projection, viewport_area);
+        let fallback_status_lines = frame_projection
+            .parallel_live_stream()
+            .map_or_else(Vec::new, |stream| stream.fallback_status_lines());
+        let post_write_plan = inline_terminal.parallel_delivery.prepare_plan(
+            snapshot,
+            policy.render_mode,
+            event_area,
+            frame_projection.tui_language,
+            &fallback_status_lines,
+        );
+        if post_write_plan.host_batch().is_some() {
+            // A second durable prefix can be handled by the next bounded
+            // transaction, but must not be mixed into this frame.
+            defer_resize_redraw(runtime, inline_terminal);
+            return Ok(InlineViewportSync::Deferred);
+        }
+        let (_, live_stream) = post_write_plan.into_parts();
+        frame_projection.install_parallel_live_stream(live_stream);
+        inserted
+    } else {
+        false
+    };
+
     /*
-     * HostScrollback mode writes only the history delta. The tail frame stays
-     * in the inline viewport so the operator can scroll back through durable
-     * transcript rows without duplicating the live status panel.
+     * HostScrollback mode writes only the transcript delta. Parallel events use
+     * the typed host receipt above and never enter this rendered-line baseline.
      */
     let history_sync_result = if preserves_conversation_baseline {
         Ok(self::history_flush::HistoryFlushResult::preserved_baseline())
-    } else if policy.parallel_mode_enabled {
-        inline_terminal.history_flush.sync_parallel(
-            terminal,
-            &current_lines,
-            resize_snapshot,
-            insert_mode,
-        )
     } else {
         inline_terminal
             .history_flush
@@ -624,7 +716,8 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
     } else {
         None
     };
-    let history_inserted = history_sync.inserted()
+    let history_inserted = parallel_host_inserted
+        || history_sync.inserted()
         || parallel_handoff_sync.is_some_and(|handoff_sync| handoff_sync.inserted());
     if history_inserted {
         inline_terminal.invalidate_back_buffer();
@@ -665,6 +758,106 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
         redraw_after_successful_frame,
         resize_snapshot,
     })
+}
+
+fn sync_parallel_host_delivery<B: InlineResizeBackend>(
+    terminal: &mut Terminal<B>,
+    inline_terminal: &mut InlineTerminalState,
+    plan: &ParallelStreamDeliveryPlan,
+    resize_snapshot: InlineResizeSnapshot,
+    insert_mode: HistoryInsertionMode,
+    language: TuiLanguage,
+) -> Result<ParallelHostSync, B::Error> {
+    let Some(batch) = plan.host_batch() else {
+        return Ok(ParallelHostSync::Stable {
+            inserted: false,
+            stable_geometry: true,
+        });
+    };
+    let lines = batch.lines(language);
+    let inserted_rows = count_rendered_history_rows(&lines, resize_snapshot.size.width)
+        .min(usize::from(u16::MAX)) as u16;
+    if inserted_rows == 0 {
+        return Ok(ParallelHostSync::Deferred);
+    }
+    let token = match inline_terminal.parallel_delivery.begin_host_write(plan) {
+        Ok(token) => token,
+        Err(
+            ParallelHostWriteStartError::DeliveryBlocked
+            | ParallelHostWriteStartError::StalePlan
+            | ParallelHostWriteStartError::StaleSurface,
+        ) => return Ok(ParallelHostSync::Deferred),
+    };
+    let insertion = HistoryInsertionAdapter::new(insert_mode).attempt_parallel_insert_at_snapshot(
+        terminal,
+        &lines,
+        inserted_rows,
+        resize_snapshot,
+    );
+    match insertion {
+        ParallelHistoryInsertionOutcome::AbortedBeforeWrite => {
+            let transition = inline_terminal.parallel_delivery.abort_before_write(&token);
+            debug_assert_eq!(transition, ParallelHostWriteTransition::Applied);
+            Ok(ParallelHostSync::Deferred)
+        }
+        ParallelHistoryInsertionOutcome::FailedBeforeWrite(error) => {
+            let transition = inline_terminal.parallel_delivery.abort_before_write(&token);
+            debug_assert_eq!(transition, ParallelHostWriteTransition::Applied);
+            Err(error)
+        }
+        ParallelHistoryInsertionOutcome::Committed { stable_geometry } => {
+            let settlement = inline_terminal
+                .parallel_delivery
+                .commit_host_receipt(token.receipt());
+            match settlement {
+                ParallelHostReceiptSettlement::Applied => {
+                    inline_terminal.history_flush.commit_parallel_insertion(
+                        inserted_rows,
+                        terminal.get_frame().area().top(),
+                        stable_geometry,
+                    );
+                    Ok(ParallelHostSync::Stable {
+                        inserted: true,
+                        stable_geometry,
+                    })
+                }
+                ParallelHostReceiptSettlement::Duplicate
+                | ParallelHostReceiptSettlement::Rejected => {
+                    let _ = inline_terminal.parallel_delivery.mark_uncertain(&token);
+                    inline_terminal
+                        .history_flush
+                        .mark_visible_history_rows_dirty();
+                    Ok(ParallelHostSync::Deferred)
+                }
+            }
+        }
+        ParallelHistoryInsertionOutcome::CommittedWithError(error) => {
+            let settlement = inline_terminal
+                .parallel_delivery
+                .commit_host_receipt(token.receipt());
+            if settlement == ParallelHostReceiptSettlement::Applied {
+                inline_terminal.history_flush.commit_parallel_insertion(
+                    inserted_rows,
+                    terminal.get_frame().area().top(),
+                    false,
+                );
+            } else {
+                let _ = inline_terminal.parallel_delivery.mark_uncertain(&token);
+                inline_terminal
+                    .history_flush
+                    .mark_visible_history_rows_dirty();
+            }
+            Err(error)
+        }
+        ParallelHistoryInsertionOutcome::Uncertain(error) => {
+            let transition = inline_terminal.parallel_delivery.mark_uncertain(&token);
+            debug_assert_eq!(transition, ParallelHostWriteTransition::Applied);
+            inline_terminal
+                .history_flush
+                .mark_visible_history_rows_dirty();
+            Err(error)
+        }
+    }
 }
 
 fn acknowledge_transcript_handoff_after_delivery(
@@ -750,6 +943,7 @@ fn current_inline_history_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
 pub(super) struct InlineTerminalState {
     viewport: TerminalViewportState,
     history_flush: HistoryFlushState,
+    parallel_delivery: ParallelTerminalDeliveryState,
     frame_cache: FrameCacheState,
     last_conversation_history_identity_revision: u64,
     latest_frame_render_attempt: u64,
@@ -1010,7 +1204,7 @@ impl FrameCacheState {
             .lines
             .iter()
             .chain(previous.live_transcript_lines.iter())
-            .chain(previous.parallel_supervisor_events.iter())
+            .chain(previous.parallel_live_stream_lines.iter())
             .fold(0u16, |total, line| {
                 let line_width = line.width();
                 let previous_rows = wrapped_terminal_rows(line_width, previous.terminal_width);
@@ -1049,7 +1243,9 @@ impl FrameCacheState {
             lines: frame_projection.tail_view.lines.clone(),
             prompt_cursor_offset: frame_projection.tail_view.prompt_cursor_offset,
             live_transcript_lines: frame_projection.live_transcript_lines.clone(),
-            parallel_supervisor_events: frame_projection.parallel_supervisor_event_lines.clone(),
+            parallel_live_stream_lines: frame_projection
+                .parallel_live_stream()
+                .map_or_else(Vec::new, |stream| stream.render_lines()),
             renders_viewport_transcript_handoff: frame_projection
                 .renders_viewport_transcript_handoff,
         };
@@ -1075,7 +1271,7 @@ struct InlineTailFrameSignature {
     lines: Vec<Line<'static>>,
     prompt_cursor_offset: Option<(u16, u16)>,
     live_transcript_lines: Vec<Line<'static>>,
-    parallel_supervisor_events: Vec<Line<'static>>,
+    parallel_live_stream_lines: Vec<Line<'static>>,
     renders_viewport_transcript_handoff: bool,
 }
 
