@@ -9972,6 +9972,12 @@ fn tui_parallel_terminal_delivery_is_one_typed_transaction() {
             "a rendered-line delivery baseline must not return: {retired_baseline}"
         );
     }
+    let parallel_insertion_commit =
+        top_level_impl_method_source(&flush_source, "commit_parallel_insertion");
+    assert!(
+        parallel_insertion_commit.contains("INLINE_HOST_SCROLLBACK_REFLOW_GUARD_ROWS"),
+        "parallel host delivery must retain physical guard rows for the next resize"
+    );
 
     let renderer_source = fs::read_to_string(
         repo_root().join("src/adapter/inbound/tui/app/shell_rendering/inline_inspection.rs"),
@@ -10018,6 +10024,10 @@ fn tui_parallel_terminal_delivery_is_one_typed_transaction() {
         "focused operations must keep terminal resize reflow below the live event stream"
     );
     let host_delivery = top_level_function_source(&terminal_source, "sync_parallel_host_delivery");
+    assert!(
+        host_delivery.contains(".lines_with_reflow_guards("),
+        "parallel host batches must write their physical resize guards in the same transaction"
+    );
     for required_outcome in [
         "ParallelHistoryInsertionOutcome::AbortedBeforeWrite",
         "ParallelHistoryInsertionOutcome::FailedBeforeWrite",

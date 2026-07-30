@@ -3222,6 +3222,66 @@ fn focused_parallel_operations_survives_resize_and_close_without_chrome_in_scrol
         "restoring geometry and closing the board must retain the latest event exactly once:\n{}",
         closed.terminal_history_text
     );
+
+    runtime.app_mut().push_parallel_supervisor_event_for_test(
+        "12:10:01",
+        "Supervisor",
+        "operations-after-reopen",
+    );
+    runtime.app_mut().shell.chrome.shell_overlay = ShellOverlay::Supersession;
+    recorder.draw_and_record_vt100(
+        "operations-reopened",
+        &mut terminal,
+        &mut runtime,
+        &mut inline_terminal,
+    );
+    assert!(
+        inline_terminal
+            .history_flush
+            .has_trailing_reflow_guard_rows(),
+        "the newly durable boundary event needs physical guard rows before another resize"
+    );
+    tui_testkit::resize_inline_history_vt100_terminal(&mut terminal, 48, 18);
+    recorder.draw_and_record_vt100(
+        "operations-reopened-narrow",
+        &mut terminal,
+        &mut runtime,
+        &mut inline_terminal,
+    );
+    tui_testkit::resize_inline_history_vt100_terminal(&mut terminal, 120, 30);
+    recorder.draw_and_record_vt100(
+        "operations-reopened-restored",
+        &mut terminal,
+        &mut runtime,
+        &mut inline_terminal,
+    );
+    let reopened_restored = recorder.frame("operations-reopened-restored");
+    assert_eq!(
+        reopened_restored
+            .terminal_history_text
+            .matches("operations-resize-event-35")
+            .count(),
+        1,
+        "a newly durable boundary event must survive reopen plus a second resize cycle:\n{}",
+        reopened_restored.terminal_history_text
+    );
+    assert_eq!(
+        reopened_restored
+            .terminal_history_text
+            .matches("operations-after-reopen")
+            .count(),
+        1,
+        "the new live event must survive reopen plus a second resize cycle:\n{}",
+        reopened_restored.terminal_history_text
+    );
+    assert_eq!(
+        terminal
+            .get_cursor_position()
+            .expect("reopened operations cursor should be readable")
+            .y,
+        29,
+        "the reopened focused board must keep the hidden cursor at the physical bottom"
+    );
 }
 
 #[test]
