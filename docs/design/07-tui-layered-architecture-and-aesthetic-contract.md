@@ -326,3 +326,8 @@ navigation intent cannot optimistically rewrite it.
 - Korean or wide-character text still fits the affected surface when the change touches prompt,
   tail, or overlay copy.
 - Snapshot changes are intentional and named in the PR body.
+
+## Related Design Decisions
+
+- [Typed Terminal Delivery Transaction](08-typed-terminal-delivery-transaction.md) is accepted for
+  implementation but does not describe shipped behavior until its completion criteria pass.

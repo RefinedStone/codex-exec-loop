@@ -7,9 +7,13 @@ state, resize behavior, overlays, prompt editing, or live-tail presentation.
 
 ## Current-Stack Default And Compatibility Ownership
 
-Stay on the current Ratatui/Crossterm stack by default. Option A proof hardening is the default
-path; do not infer Option B activation from these docs alone. A structural extraction remains
-blocked unless the Decision Record explicitly proves the Round 6 trigger evidence.
+Stay on the current Ratatui/Crossterm stack by default. Option A remains the shipped path. The
+[Typed Terminal Delivery Transaction](../design/08-typed-terminal-delivery-transaction.md)
+decision record accepts one narrow Option B extraction for parallel host delivery after documenting
+the Round 6 trigger evidence; it does not activate a new runtime path until its implementation
+completion criteria pass.
+Option A proof hardening is the default for every shipped path. Any broader structural extraction
+remains blocked unless the Decision Record explicitly proves the Round 6 trigger evidence.
 This contract keeps `invariant × first-class environment × branch family` explicit in repo-facing docs and guards.
 The current stack remains the default posture for native runtime proof.
 Manual terminal capture stays primitive-sensitive only.
@@ -51,10 +55,10 @@ The smaller-representative-set rule below can reduce the number of supplemental 
 | Surface | Keep owning | Candidate extraction / clarification |
 | --- | --- | --- |
 | `NativeTuiApp` | four private typed adapter slices and env-derived/local presentation state; semantic lifecycle remains Core-owned | cannot be borrowed by production frontend/terminal/renderer code; only owned projection/model capture and named receipt APIs cross `ShellRuntime` |
-| Thin terminal layer | terminal lifecycle, scrollback writes, viewport sync, clear/reset, pre-draw owned-frame capture, stable-delivery receipt commit, cursor-sensitive effects | may be named more explicitly only if Option B later activates |
+| Thin terminal layer | terminal lifecycle, scrollback writes, viewport sync, clear/reset, pre-draw owned-frame capture, stable-delivery receipt commit, cursor-sensitive effects | the accepted parallel-delivery extraction remains implementation-pending; broader extraction still requires a separate decision |
 | Owned frame boundary | `InlineShellFrameModel`, active `InlineInspectionFrameModel`, expected feedback baselines, `InlineFrameRenderReceipt` compare-and-apply | must not reacquire Core/application/control-plane authority or perform provider I/O |
 | Render/layout boundary | pure consumption of owned frame models, typed render surfaces, append-only stream continuity, titleless live-tail behavior, panel chrome exclusion from host scrollback | may mutate only Ratatui `Frame`; must stay distinct from terminal primitive emission and application/core state authority |
-| Shared render transaction model | reconcile history delta, geometry state, back-buffer trust, redraw decision, terminal-side flush ordering | remains a conditional extraction candidate only when the Decision Record proves Round 6 trigger evidence |
+| Shared render transaction model | reconcile history delta, geometry state, back-buffer trust, redraw decision, terminal-side flush ordering | only the parallel-delivery state machine is accepted; broader shared-transaction extraction remains conditional |
 
 
 ## Test Layers
@@ -407,3 +411,4 @@ clear behavior, or scrollback behavior. Record manual rows with
 - [../reference/current-product.md](../reference/current-product.md)
 - [../plan/12-platform-validation-matrix.md](../plan/12-platform-validation-matrix.md)
 - [../design/07-tui-layered-architecture-and-aesthetic-contract.md](../design/07-tui-layered-architecture-and-aesthetic-contract.md)
+- [../design/08-typed-terminal-delivery-transaction.md](../design/08-typed-terminal-delivery-transaction.md)
