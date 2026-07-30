@@ -34,7 +34,9 @@ use super::PlanningInitOverlayView;
 pub(crate) use editor_surface::build_planning_draft_editor_overlay_view_from_state;
 #[cfg(test)]
 use init_router::build_planning_init_overlay_view_for_app;
-pub(crate) use init_router::build_planning_init_overlay_view_from_projection;
+pub(crate) use init_router::{
+    PlanningInitOverlayFrameInput, build_planning_init_overlay_view_from_projection,
+};
 
 // popup/inline renderers는 이 entry만 호출한다. router가 app state를 보고 mode selection, simple review,
 // manual editor handoff, existing workspace variant 중 하나를 고르므로 rendering layer에는 단일 init shape만 보인다.

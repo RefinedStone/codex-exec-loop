@@ -7,21 +7,24 @@ use super::capability_copy::{
     startup_overlay_readiness_label, startup_overlay_running_checks_label,
     startup_probe_loading_summary_line, startup_probe_not_started_line,
 };
-use super::{AkraTheme, Line, NativeTuiApp, Span, StartupState, TuiLanguage};
+use super::{AkraTheme, Line, Span, StartupState, TuiLanguage};
 
 /*
- * capability_projection은 NativeTuiApp의 runtime capability 상태를 renderer-ready Line/String으로
- * 접는 계층이다. capability_copy가 문구 자체를 소유하고, 이 파일은 StartupState/SessionState 같은
- * app state를 읽어 어떤 문구와 색을 선택할지 결정한다. shell_core와 inline_inspection은
- * 이 projection 결과만 받아 배치한다.
+ * capability_projection은 typed frame input을 renderer-ready Line/String으로 접는 계층이다.
+ * capability_copy가 문구 자체를 소유하고, 이 파일은 StartupState/SessionState 같은
+ * 명시적인 read model만 읽는다. NativeTuiApp sampling은 terminal frame capture 경계가
+ * 한 번만 수행하고 shell_core와 inline inspection은 이 projection 결과만 배치한다.
  */
-pub(super) fn build_startup_overlay_summary_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+pub(super) fn build_startup_overlay_summary_lines(
+    startup_state: &StartupState,
+    language: TuiLanguage,
+) -> Vec<Line<'static>> {
     /*
      * startup overlay 상단 요약은 상세 check list보다 먼저 보이는 상태 헤더다.
      * Idle/Loading/Ready/Failed를 각기 다른 두 줄 요약으로 접어, 사용자가 현재 probe가
      * 시작 전인지, 실행 중인지, 계속 가능한지, 완전히 실패했는지 즉시 구분하게 한다.
      */
-    match &app.shell.chrome.startup_state {
+    match startup_state {
         StartupState::Idle => vec![
             Line::from(startup_overlay_idle_status_line()),
             Line::from(startup_probe_not_started_line()),
@@ -50,10 +53,7 @@ pub(super) fn build_startup_overlay_summary_lines(app: &NativeTuiApp) -> Vec<Lin
              * 세부 diagnostics list와 별개로 상단에 고정해 operator가 현재 thread 연결 방식을 빠르게 확인한다.
              */
             Line::from(format!("cwd: {}", ready.cwd)),
-            Line::from(attachment_profile_summary_line(
-                &ready.attachment,
-                app.shell.tui_language,
-            )),
+            Line::from(attachment_profile_summary_line(&ready.attachment, language)),
         ],
         StartupState::Failed(message) => vec![
             Line::from(vec![
@@ -65,17 +65,7 @@ pub(super) fn build_startup_overlay_summary_lines(app: &NativeTuiApp) -> Vec<Lin
     }
 }
 
-pub(super) fn build_startup_check_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    /*
-     * public facade는 app 전체를 받지만 실제 projection은 StartupState만 필요하다.
-     * 테스트와 다른 renderer가 state 단위 helper를 직접 재사용할 수 있도록 아래 함수로 위임한다.
-     */
-    build_startup_check_lines_from_state(&app.shell.chrome.startup_state)
-}
-
-pub(super) fn build_startup_check_lines_from_state(
-    startup_state: &StartupState,
-) -> Vec<Line<'static>> {
+pub(super) fn build_startup_check_lines(startup_state: &StartupState) -> Vec<Line<'static>> {
     /*
      * startup check list는 summary보다 자세한 capability inventory다.
      * Ready 상태에서는 startup_service가 수집한 각 probe 결과를 같은 marker format으로 정렬해 보여 준다.
@@ -112,17 +102,7 @@ pub(super) fn build_startup_check_lines_from_state(
     }
 }
 
-pub(super) fn build_startup_warning_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    /*
-     * warning projection도 StartupState만 필요하다. app facade를 제공해 shell_presentation의 외부 API는
-     * NativeTuiApp 중심으로 유지하고, tests는 from_state helper를 호출할 수 있게 한다.
-     */
-    build_startup_warning_lines_from_state(&app.shell.chrome.startup_state)
-}
-
-pub(super) fn build_startup_warning_lines_from_state(
-    startup_state: &StartupState,
-) -> Vec<Line<'static>> {
+pub(super) fn build_startup_warning_lines(startup_state: &StartupState) -> Vec<Line<'static>> {
     /*
      * warnings는 Ready diagnostics의 부가 신호다. 실패 상태는 warning bucket이 아니라 실패 메시지를
      * 직접 보여 주고, 나머지 상태는 operator가 볼 수 있는 "no warnings" placeholder를 유지한다.
@@ -139,17 +119,22 @@ pub(super) fn build_startup_warning_lines_from_state(
     }
 }
 
-pub(super) fn recent_session_status_label(app: &NativeTuiApp, language: TuiLanguage) -> String {
+pub(super) fn recent_session_status_label(
+    can_open_session_list: bool,
+    startup_state: &StartupState,
+    session_state: &SessionState,
+    language: TuiLanguage,
+) -> String {
     /*
      * recent session status는 startup gate와 session loader state가 함께 결정한다.
      * shell header는 긴 SessionCatalog enum을 직접 알 필요 없이 이 label 하나만 받아 표시한다.
      */
-    if !app.can_open_session_list() {
+    if !can_open_session_list {
         /*
          * startup이 아직 session list를 열 수 없는 상태면 SessionState보다 startup gate가 우선한다.
          * Loading은 기다리는 중, Ready/Failed인데 열 수 없으면 blocked, Idle은 아직 probe 전으로 구분한다.
          */
-        return match &app.shell.chrome.startup_state {
+        return match startup_state {
             StartupState::Loading => language
                 .recent_session_status_waiting_for_startup()
                 .to_string(),
@@ -165,7 +150,7 @@ pub(super) fn recent_session_status_label(app: &NativeTuiApp, language: TuiLangu
      * Ready 안에서도 catalog tier가 Unsupported/Partial/Ready로 갈라지므로 capability_copy의
      * tier-aware 문구를 사용한다.
      */
-    match &app.shell.chrome.session_state {
+    match session_state {
         SessionState::Idle => language.recent_session_status_ready_to_load().to_string(),
         SessionState::Loading => language.recent_session_status_loading().to_string(),
         SessionState::Failed(_) => language.recent_session_status_load_failed().to_string(),
@@ -182,9 +167,9 @@ pub(super) fn recent_session_status_label(app: &NativeTuiApp, language: TuiLangu
     }
 }
 
-pub(super) fn recent_session_status_requires_attention(app: &NativeTuiApp) -> bool {
+pub(super) fn recent_session_status_requires_attention(session_state: &SessionState) -> bool {
     matches!(
-        &app.shell.chrome.session_state,
+        session_state,
         SessionState::Failed(_)
             | SessionState::Ready(SessionCatalog::Unsupported(_) | SessionCatalog::Partial(_))
     )

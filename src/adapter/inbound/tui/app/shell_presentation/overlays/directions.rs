@@ -6,8 +6,9 @@ mod copy;
 mod projection;
 
 use super::super::{
-    DirectionsMaintenanceOverlayStep, DirectionsMaintenanceScreenModel, Line, NativeTuiApp,
-    QUEUE_INSPECTION_NOTE_DETAIL_LIMIT, compact_whitespace_detail,
+    DirectionsMaintenanceOverlayStep, DirectionsMaintenanceOverlayUiState,
+    DirectionsMaintenanceScreenModel, Line, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT,
+    compact_whitespace_detail,
 };
 use copy::{
     build_detail_doc_confirm_overlay_view, build_detail_doc_selection_overlay_view,
@@ -32,18 +33,20 @@ pub(crate) struct DirectionsMaintenanceOverlayView {
     pub(crate) key_lines: Vec<Line<'static>>,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct DirectionsMaintenanceFrameInput<'a> {
+    pub(crate) ui_state: &'a DirectionsMaintenanceOverlayUiState,
+}
+
 // Top-level presentation boundary for directions maintenance.
 // Controller code mutates DirectionsMaintenanceOverlayUiState from key events; this function reads that
 // state and the last application-service summary, then lowers them into renderer-ready lines without
 // starting file IO or changing the selected action.
 pub(crate) fn build_directions_maintenance_overlay_view(
-    app: &NativeTuiApp,
+    input: DirectionsMaintenanceFrameInput<'_>,
 ) -> DirectionsMaintenanceOverlayView {
-    let summary = match app
-        .planning
-        .directions_maintenance_overlay_ui_state
-        .screen_model()
-    {
+    let state = input.ui_state;
+    let summary = match state.screen_model() {
         DirectionsMaintenanceScreenModel::Idle => return build_idle_overlay_view(),
         DirectionsMaintenanceScreenModel::Loading {
             workspace_directory,
@@ -59,7 +62,7 @@ pub(crate) fn build_directions_maintenance_overlay_view(
     };
 
     // The step is the shared state-machine axis between rendering and key handling.
-    match app.planning.directions_maintenance_overlay_ui_state.step() {
+    match state.step() {
         // Overview summarizes the service's authority scan and queue-idle prompt health.
         DirectionsMaintenanceOverlayStep::Overview => {
             // Missing and broken counts are the operator's quick signal for whether detail-doc repair is needed.
@@ -96,14 +99,8 @@ pub(crate) fn build_directions_maintenance_overlay_view(
         }
         // DetailDocSelection presents only actionable directions, matching the controller's selection movement.
         DirectionsMaintenanceOverlayStep::DetailDocSelection => {
-            let actionable_directions = app
-                .planning
-                .directions_maintenance_overlay_ui_state
-                .actionable_detail_doc_directions();
-            let selected_direction = app
-                .planning
-                .directions_maintenance_overlay_ui_state
-                .selected_actionable_detail_doc_direction();
+            let actionable_directions = state.actionable_detail_doc_directions();
+            let selected_direction = state.selected_actionable_detail_doc_direction();
             // Projection keeps filtered-list cursor rules out of copy text and out of renderer layout.
             let projection = build_detail_doc_selection_projection(
                 actionable_directions.as_slice(),
@@ -117,10 +114,7 @@ pub(crate) fn build_directions_maintenance_overlay_view(
         }
         // DetailDocConfirm renders the pending target snapshot captured before any editor/service action starts.
         DirectionsMaintenanceOverlayStep::DetailDocConfirm => {
-            let pending = app
-                .planning
-                .directions_maintenance_overlay_ui_state
-                .pending_detail_doc_creation();
+            let pending = state.pending_detail_doc_creation();
             // Title confirms the human target; id is the stable key the controller will pass to the editor flow.
             let direction_id = pending
                 .map(|pending| pending.direction_id())
@@ -132,10 +126,8 @@ pub(crate) fn build_directions_maintenance_overlay_view(
             build_detail_doc_confirm_overlay_view(
                 direction_title,
                 direction_id,
-                app.planning
-                    .directions_maintenance_overlay_ui_state
-                    // The choice controls both highlighted copy and the Enter behavior in the controller.
-                    .detail_doc_confirm_choice(),
+                // The choice controls both highlighted copy and the Enter behavior in the controller.
+                state.detail_doc_confirm_choice(),
             )
         }
         DirectionsMaintenanceOverlayStep::EditorLoading => build_editor_loading_overlay_view(),

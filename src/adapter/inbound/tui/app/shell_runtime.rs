@@ -18,7 +18,7 @@ use super::inline_frame_model::{
     capture_inline_shell_frame_model, capture_inline_terminal_sync_projection,
 };
 use super::shell_presentation::{
-    ConversationProjectionSample, ParallelPanelProjectionSample, TranscriptHandoffDeliveryToken,
+    ConversationProjectionFrameInput, ConversationProjectionSample, TranscriptHandoffDeliveryToken,
 };
 use super::{
     BackgroundMessage, ConversationState, InlineHistoryRenderMode, InputCursorMovement,
@@ -72,7 +72,33 @@ impl ShellRuntime {
         self.app.shell.inline_history_render_mode
     }
     pub(super) fn capture_inline_terminal_projection_sample(&self) -> ConversationProjectionSample {
-        ConversationProjectionSample::capture(&self.app)
+        let transcript_handoff_correlation =
+            match &self.app.conversation.lifecycle.conversation_state {
+                ConversationState::Ready(conversation) => {
+                    conversation.viewport_transcript_handoff_correlation()
+                }
+                ConversationState::Loading | ConversationState::Failed(_) => None,
+            };
+        ConversationProjectionSample::from_frame_input(ConversationProjectionFrameInput {
+            planning_parallel: self
+                .app
+                .runtime
+                .client_runtime
+                .revisioned_planning_parallel_projection(),
+            parallel_control_plane: self
+                .app
+                .runtime
+                .client_runtime
+                .parallel_control_plane_projection(),
+            conversation_history_identity_revision: self
+                .app
+                .conversation
+                .conversation_history_identity_revision,
+            transcript_handoff_correlation,
+            parallel_supervisor_events: self.app.shell.parallel_supervisor_event_log.projection(),
+            inline_history_render_mode: self.app.shell.inline_history_render_mode,
+            history_insert_mode: self.app.shell.history_insert_mode,
+        })
     }
     pub(super) fn capture_inline_terminal_sync_projection(
         &self,
@@ -106,7 +132,16 @@ impl ShellRuntime {
         &mut self,
         delivery_token: &TranscriptHandoffDeliveryToken,
     ) -> bool {
-        if !delivery_token.matches_current(&self.app) {
+        let current_correlation = match &self.app.conversation.lifecycle.conversation_state {
+            ConversationState::Ready(conversation) => {
+                conversation.viewport_transcript_handoff_correlation()
+            }
+            ConversationState::Loading | ConversationState::Failed(_) => None,
+        };
+        if !delivery_token.matches_current(
+            self.app.conversation.conversation_history_identity_revision,
+            current_correlation.as_ref(),
+        ) {
             return false;
         }
         let ConversationState::Ready(conversation) =
@@ -283,7 +318,7 @@ impl ShellRuntime {
                 .maybe_start_github_review_polling_setup(&workspace_directory);
         }
         redraw_requested |= self.app.maybe_start_github_review_poll(now);
-        let parallel_presentation_sample = ParallelPanelProjectionSample::capture(&self.app);
+        let parallel_presentation_sample = self.app.parallel_panel_projection_sample();
         let live_activity_pulse = self
             .app
             .live_activity_pulse_with_sample(now, &parallel_presentation_sample);

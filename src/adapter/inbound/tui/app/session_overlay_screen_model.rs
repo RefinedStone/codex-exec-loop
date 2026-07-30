@@ -1,4 +1,6 @@
-use super::{NativeTuiApp, SessionState, TuiLanguage};
+#[cfg(test)]
+use super::NativeTuiApp;
+use super::{SessionOverlayUiState, SessionState, TuiLanguage};
 use crate::domain::recent_sessions::{SessionCatalog, SessionCatalogStatus, SessionCatalogTier};
 use crate::domain::session_browser::{SessionBrowserProjection, build_session_browser_page};
 use crate::domain::session_summary::SessionSummary;
@@ -49,16 +51,34 @@ pub(in crate::adapter::inbound::tui::app) struct SessionBrowserScreenModel {
 }
 
 impl SessionOverlayScreenModel {
+    #[cfg(test)]
     pub(in crate::adapter::inbound::tui::app) fn capture(app: &NativeTuiApp) -> Self {
         let current_workspace_directory = app.current_workspace_directory();
-        let overlay_state = &app.shell.session_overlay_ui_state;
+        Self::from_frame_input(
+            app.can_open_session_list(),
+            current_workspace_directory,
+            app.shell.tui_language,
+            &app.shell.chrome.session_state,
+            &app.shell.session_overlay_ui_state,
+            app.shell.chrome.selected_session_index,
+        )
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn from_frame_input(
+        can_open_session_list: bool,
+        current_workspace_directory: String,
+        language: TuiLanguage,
+        session_state: &SessionState,
+        overlay_state: &SessionOverlayUiState,
+        selected_session_index: usize,
+    ) -> Self {
         let browser_state = overlay_state.browser_state();
         let catalog = capture_catalog(
-            &app.shell.chrome.session_state,
+            session_state,
             browser_state,
             &current_workspace_directory,
             overlay_state.selected_session_id(),
-            app.shell.chrome.selected_session_index,
+            selected_session_index,
         );
         let search_query_editor = overlay_state
             .is_search_query_editing()
@@ -73,9 +93,9 @@ impl SessionOverlayScreenModel {
         });
 
         Self {
-            can_open_session_list: app.can_open_session_list(),
+            can_open_session_list,
             current_workspace_directory,
-            language: app.shell.tui_language,
+            language,
             committed_search_query: browser_state.search_query.clone(),
             search_query_editor,
             rename_editor,

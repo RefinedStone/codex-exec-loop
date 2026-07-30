@@ -586,6 +586,11 @@ absence of an owned fact remains `unknown`.
 Before `Terminal::draw`, the transaction combines the conversation projection and exactly one
 active overlay into an owned `InlineShellFrameModel`. Its `InlineInspectionFrameModel` variant owns
 the view, widget-local state, geometry-dependent scroll decisions, and expected feedback baseline.
+`ShellRuntime` samples Client Runtime once into `ConversationProjectionFrameInput`; the UI capture
+boundary then lowers the four private app slices into feature-specific conversation, startup,
+session, selection, planning, and directions frame inputs. Production `shell_presentation/**`
+builders cannot accept `NativeTuiApp`; test-only app wrappers are excluded from the production
+contract by the architecture guard.
 The capture boundary may read UI-local state but cannot reacquire Core, application services, the
 parallel control plane, or outbound I/O. Production `shell_rendering.rs` and
 `shell_rendering/**` consume only this owned frame model, mutate only Ratatui's `Frame`, and return

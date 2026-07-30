@@ -1748,7 +1748,7 @@ fn global_parallel_cleanup_notices_are_owned_by_application_projection_and_pure_
         "ConversationProjectionSample accessor must read the sampled application projection"
     );
     let screen_model_builder =
-        top_level_impl_method_source(&shell_core_source, "from_app_with_sample");
+        top_level_impl_method_source(&shell_core_source, "from_screen_frame_input");
     let screen_model_builder_references = rust_semantic_references(&screen_model_builder).paths;
     assert!(
         screen_model_builder_references
@@ -8434,7 +8434,7 @@ fn tui_shell_renderer_consumes_one_owned_frame_without_app_or_effects() {
     for sampled_builder in [
         "build_parallel_peek_overlay_view_from_snapshot",
         "build_planning_init_overlay_view_from_projection",
-        "build_queue_overlay_view_from_projection",
+        "build_queue_overlay_view_from_screen_model",
     ] {
         assert_eq!(
             production_callable_reference_lines(&capture_source, sampled_builder).len(),
@@ -8746,28 +8746,70 @@ fn tui_owned_frame_capture_keeps_app_projection_wrappers_test_only() {
         repo_root.join("src/adapter/inbound/tui/app/shell_presentation/shell_core.rs"),
     )
     .expect("conversation screen-model source should load");
-    let from_app_with_sample =
-        top_level_impl_method_source(&shell_core_source, "from_app_with_sample");
+    let shell_core_syntax =
+        syn::parse_file(&shell_core_source).expect("conversation screen-model source should parse");
+    for app_wrapper in ["from_app", "from_app_with_sample", "capture"] {
+        let production_wrappers = shell_core_syntax
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                syn::Item::Impl(item) if !attributes_are_test_only(&item.attrs) => Some(item),
+                _ => None,
+            })
+            .flat_map(|item| item.items.iter())
+            .filter(|item| {
+                matches!(
+                    item,
+                    syn::ImplItem::Fn(function)
+                        if function.sig.ident == app_wrapper
+                            && !attributes_are_test_only(&function.attrs)
+                )
+            })
+            .count();
+        assert_eq!(
+            production_wrappers, 0,
+            "presentation `{app_wrapper}` wrappers that accept NativeTuiApp must stay test-only"
+        );
+    }
+    assert_no_forbidden_references_in_paths(
+        "production shell presentation must consume typed frame inputs instead of NativeTuiApp",
+        &[
+            "src/adapter/inbound/tui/app/shell_presentation.rs",
+            "src/adapter/inbound/tui/app/shell_presentation",
+        ],
+        &["NativeTuiApp"],
+    );
+
+    let frame_model_source =
+        fs::read_to_string(repo_root.join("src/adapter/inbound/tui/app/inline_frame_model.rs"))
+            .expect("inline frame capture source should load");
+    let conversation_frame_input = top_level_function_source(
+        &frame_model_source,
+        "capture_conversation_screen_frame_input",
+    );
     assert!(
-        production_callable_reference_lines(&from_app_with_sample, "queue_receipt_undo_task_count")
-            .is_empty(),
-        "ConversationScreenModel must not reread parallel mode through the raw queue receipt helper"
+        production_callable_reference_lines(
+            &conversation_frame_input,
+            "queue_receipt_undo_task_count"
+        )
+        .is_empty(),
+        "typed conversation frame capture must not reread parallel mode through the raw queue receipt helper"
     );
     assert_eq!(
         production_callable_reference_lines(
-            &from_app_with_sample,
+            &conversation_frame_input,
             "queue_receipt_undo_task_count_for_parallel_mode"
         )
         .len(),
         1,
-        "ConversationScreenModel must derive queue receipt copy from the sampled parallel-mode fact"
+        "typed conversation frame capture must derive queue receipt copy from the sampled parallel-mode fact"
     );
-    let compact_from_app = from_app_with_sample
+    let compact_frame_input = conversation_frame_input
         .chars()
         .filter(|character| !character.is_whitespace())
         .collect::<String>();
     assert!(
-        compact_from_app
+        compact_frame_input
             .contains("queue_receipt_undo_task_count_for_parallel_mode(parallel_mode_enabled)"),
         "the sampled queue receipt helper must receive the transaction-owned parallel-mode value"
     );
@@ -8812,17 +8854,29 @@ fn tui_conversation_tail_reads_one_immutable_screen_model_without_effects() {
         .map(|line| line.text)
         .collect::<Vec<_>>()
         .join("\n");
-    // Keep frame projection reads narrow so the rendering boundary does not
-    // become coupled to unrelated Core state through a full AppSnapshot.
+    // Keep frame projection reads in ShellRuntime's capture method so pure
+    // presentation cannot become coupled to unrelated runtime state.
     assert_eq!(
         production_source
             .matches("revisioned_planning_parallel_projection()")
             .count(),
+        0,
+        "ConversationScreenModel must consume the typed projection sample without reading Client Runtime"
+    );
+    let runtime_source =
+        fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/shell_runtime.rs"))
+            .expect("shell runtime source should load");
+    let projection_capture =
+        top_level_impl_method_source(&runtime_source, "capture_inline_terminal_projection_sample");
+    assert_eq!(
+        projection_capture
+            .matches("revisioned_planning_parallel_projection()")
+            .count(),
         1,
-        "ConversationProjectionSample must read the revisioned planning/parallel projection exactly once"
+        "ShellRuntime must sample the revisioned planning/parallel projection exactly once"
     );
     assert_eq!(
-        production_source
+        projection_capture
             .matches("client_runtime.snapshot()")
             .count(),
         0,
@@ -8842,15 +8896,15 @@ fn tui_conversation_tail_reads_one_immutable_screen_model_without_effects() {
             "ConversationProjectionSample must own the terminal history identity fact: {required}"
         );
     }
-    let compact_production = production_source
+    let compact_capture = projection_capture
         .chars()
         .filter(|character| !character.is_whitespace())
         .collect::<String>();
     assert!(
-        compact_production.contains(
-            "conversation_history_identity_revision:app.conversation.conversation_history_identity_revision"
+        compact_capture.contains(
+            "conversation_history_identity_revision:self.app.conversation.conversation_history_identity_revision"
         ),
-        "ConversationProjectionSample must capture the typed conversation history identity"
+        "ShellRuntime must capture the typed conversation history identity"
     );
     for forbidden in [
         ".application",
@@ -8968,11 +9022,24 @@ fn tui_transcript_handoff_ack_requires_an_exact_terminal_delivery_receipt() {
             "terminal ACK must consume only an exact committed receipt: {required}"
         );
     }
+    let acknowledge = top_level_impl_method_source(
+        &runtime_source,
+        "acknowledge_transcript_handoff_after_delivery",
+    );
+    for required in [
+        "delivery_token.matches_current(",
+        "conversation_history_identity_revision",
+        "current_correlation.as_ref()",
+    ] {
+        assert!(
+            acknowledge.contains(required),
+            "ShellRuntime must validate the exact typed delivery token fact before mutating transcript state: {required}"
+        );
+    }
     assert!(
-        runtime_source.contains("delivery_token.matches_current(&self.app)")
-            && terminal_source
-                .contains("runtime.acknowledge_transcript_handoff_after_delivery(delivery_token)"),
-        "ShellRuntime must validate the exact delivery token before mutating transcript state"
+        terminal_source
+            .contains("runtime.acknowledge_transcript_handoff_after_delivery(delivery_token)"),
+        "terminal delivery must commit the exact transcript handoff token through ShellRuntime"
     );
 }
 
@@ -8994,13 +9061,23 @@ fn tui_turn_steer_confirmation_draws_one_owned_screen_model() {
     for required in [
         "structTurnSteerConfirmationScreenModel",
         "turn_steer_confirmation:Option<TurnSteerConfirmationScreenModel>",
-        "request:intent.request.clone()",
     ] {
         assert!(
             screen_model_compact.contains(required),
             "turn-steer projection must capture its owned confirmation fact: {required}"
         );
     }
+    let frame_capture_source =
+        fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/inline_frame_model.rs"))
+            .expect("inline frame capture source should load");
+    let frame_capture_compact = frame_capture_source
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    assert!(
+        frame_capture_compact.contains("request:intent.request.clone()"),
+        "typed frame capture must own the exact turn-steer request before pure presentation"
+    );
 
     let rendering_source =
         fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/shell_rendering.rs"))
@@ -9048,8 +9125,18 @@ fn tui_session_overlay_is_captured_once_before_pure_draw() {
         model_production
             .matches("current_workspace_directory()")
             .count(),
+        0,
+        "session screen-model projection must receive workspace context through typed frame input"
+    );
+    let frame_model_source =
+        fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/inline_frame_model.rs"))
+            .expect("inline frame capture source should load");
+    let session_capture =
+        top_level_function_source(&frame_model_source, "capture_session_overlay_screen_model");
+    assert_eq!(
+        production_callable_reference_lines(&session_capture, "current_workspace_directory").len(),
         1,
-        "one session screen-model capture must sample workspace context exactly once"
+        "one terminal frame capture must sample session workspace context exactly once"
     );
     for required in [
         "selected_session_id: Option<String>",
@@ -9144,7 +9231,7 @@ fn tui_session_overlay_is_captured_once_before_pure_draw() {
         .collect::<String>();
     assert_eq!(
         compact_capture
-            .matches("SessionOverlayScreenModel::capture(app)")
+            .matches("capture_session_overlay_screen_model(app)")
             .count(),
         1,
         "one frame capture must materialize one immutable session screen model"
@@ -9157,7 +9244,7 @@ fn tui_session_overlay_is_captured_once_before_pure_draw() {
         "one frame capture must build every session section from the same screen model"
     );
     let capture_index = compact_capture
-        .find("SessionOverlayScreenModel::capture(app)")
+        .find("capture_session_overlay_screen_model(app)")
         .expect("frame capture should capture a session screen model");
     let view_index = compact_capture
         .find("build_session_overlay_view(&screen_model)")
@@ -9550,23 +9637,19 @@ fn tui_parallel_frame_uses_one_control_plane_and_event_projection_sample() {
         "PlanningParallelProjection {",
         "parallel_panel: ParallelPanelProjectionSample",
         "parallel_panel: ParallelPanelProjectionSample::from_parts(",
-        "let parallel_control_plane = app",
-        ".parallel_control_plane_projection()",
-        "parallel_supervisor_events: app.shell.parallel_supervisor_event_log.projection()",
+        "pub(in crate::adapter::inbound::tui::app) struct ConversationProjectionFrameInput",
+        "parallel_supervisor_events: ParallelSupervisorEventProjection",
     ] {
         assert!(
             sample_source.contains(required),
             "ConversationProjectionSample must own the parallel frame fact: {required}"
         );
     }
-    let conversation_capture_start = sample_source
-        .find("impl ConversationProjectionSample")
-        .expect("conversation projection sample implementation should exist");
-    let conversation_capture_end = sample_source[conversation_capture_start..]
-        .find("pub(in crate::adapter::inbound::tui::app) fn parallel_mode_enabled")
-        .map(|offset| conversation_capture_start + offset)
-        .expect("conversation projection capture boundary should exist");
-    let conversation_capture = &sample_source[conversation_capture_start..conversation_capture_end];
+    let runtime_source =
+        fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/shell_runtime.rs"))
+            .expect("shell runtime source should load");
+    let conversation_capture =
+        top_level_impl_method_source(&runtime_source, "capture_inline_terminal_projection_sample");
     assert_eq!(
         conversation_capture
             .matches("revisioned_planning_parallel_projection()")
@@ -9616,11 +9699,8 @@ fn tui_parallel_frame_uses_one_control_plane_and_event_projection_sample() {
         "Supersession row planning and drawing must consume the owned view"
     );
 
-    let runtime_source =
-        fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/shell_runtime.rs"))
-            .expect("shell runtime source should load");
     for required in [
-        "let parallel_presentation_sample = ParallelPanelProjectionSample::capture(&self.app);",
+        "let parallel_presentation_sample = self.app.parallel_panel_projection_sample();",
         ".live_activity_pulse_with_sample(now, &parallel_presentation_sample)",
         ".tick_parallel_mode_control_plane(now, &parallel_presentation_sample)",
     ] {
