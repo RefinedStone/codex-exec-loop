@@ -12124,12 +12124,12 @@ fn tui_parallel_stream_continuity_is_architecture_contract() {
         "I3 | Scrollback insertion / clear-reset restores clean header and viewport",
         "I4 | Thread/session switch does not leak transcript or deferred history",
         "I5 | `ViewportReplay` remains explicit-only and does not write committed history to host scrollback",
-        "I6 | Standard and fallback insertion modes each preserve viewport state correctly",
+        "I6 | Automatic newline fallback preserves host history, viewport, and cursor; standard mode remains explicit diagnostic coverage",
         "B1 HostScrollback",
         "B2 ViewportReplay",
         "B3 StandardScrollRegion",
         "B4 NewlineFallback",
-        "activate Option B.",
+        "narrow Option B transaction is active",
     ] {
         assert!(
             matrix.contains(required_matrix_text),

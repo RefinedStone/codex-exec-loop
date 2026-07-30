@@ -1,0 +1,11 @@
+candidate_commit: ac409ed7d1fa97cde46553aff271e5ae3b162742
+candidate_tree: 16e6e3c1210ac31da760a104e5de3a5d9d704366
+binary_path_role: local source-build target/debug/akra
+binary_sha256: 185d9025623f8b798659c298f42054ba4bd249825f4ad7f6e96c78d85af14115
+production_source_diff_against_candidate: none
+build_command: cargo build --bin akra
+history_render_mode_override: unset
+history_insertion_mode_override: explicitly unset
+temporary_runtime_root: disposable and omitted
+raw_capture_checked_in: false
+credential_material_checked_in: false

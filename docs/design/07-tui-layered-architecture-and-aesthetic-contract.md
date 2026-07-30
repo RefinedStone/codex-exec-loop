@@ -21,7 +21,7 @@ the fixed Akra theme.
 | Frame capture and delivery receipt | One owned `InlineShellFrameModel`, active `InlineInspectionFrameModel`, and compare-and-apply render feedback | `inline_frame_model.rs`, `inline_terminal_adapter.rs` | Service calls, provider I/O, draw-time authority reads, optimistic state mutation |
 | Theme and chrome | Semantic styles, Akra brand tokens, panel frame helpers, selection markers | `theme.rs` | Feature state, controller behavior, surface-specific wording |
 | Rendering and layout | Owned frame models, `Rect`, `Layout`, `Frame`, `Paragraph`, `List`, popup and inline section placement | `shell_rendering/**`, `inline_layout.rs`, `popup_frame.rs`, `popup_helpers.rs` | `NativeTuiApp`, Core/application/control-plane authority, state mutation, new keybinding claims, product copy, raw color or border policy |
-| Terminal adapters | Crossterm/Ratatui lifecycle, scrollback, viewport replay, host terminal side effects | `ratatui_frontend.rs`, `inline_terminal_adapter.rs`, `history_insertion.rs` | Planning semantics, Akra copy, overlay policy |
+| Terminal adapters | Crossterm/Ratatui lifecycle, typed parallel delivery, scrollback, viewport replay, host terminal side effects | `ratatui_frontend.rs`, `inline_terminal_adapter.rs`, `parallel_terminal_delivery.rs`, `history_insertion.rs` | Planning semantics, Akra copy, overlay policy |
 | Tests and captures | Rendering contracts, snapshot deltas, terminal validation evidence | `shell_rendering_tests.rs`, `shell_rendering_contract_tests.rs`, `snapshots/**`, `scripts/capture_native_validation.*` | Unreviewed visual contract drift |
 
 `NativeTuiApp` is not a general-purpose bag passed between these layers. It owns exactly four
@@ -79,6 +79,14 @@ navigation intent cannot optimistically rewrite it.
   draft-to-provider promotion, and same-thread reattach preserve it. Transient Loading/Failed
   projections must not impersonate an authoritative empty transcript, and conversation switches
   must not reset the parallel event baseline or shared physical-row geometry.
+- Parallel host delivery uses the stable stream generation/ordinal, never rendered text, as its
+  side-effect identity. One adapter-owned planner partitions the canonical event window into
+  disjoint durable and live models; only an exact committed host receipt advances the monotonic
+  frontier, independently of frame feedback and conversation handoff.
+- The newest undelivered parallel event remains live even when its wrapped rows exceed the event
+  viewport. Focused Parallel Operations anchors the hidden physical cursor at the live viewport
+  origin, and every newly durable host batch carries the shared physical reflow guards so later
+  resize cleanup cannot erase the boundary event or move panel chrome into host history.
 - A released transcript handoff must carry one typed delivery token sampled with the frame. The
   token binds conversation history identity, thread and source-turn identity, handoff generation,
   and the exact transcript revision. Host-scrollback and parallel writes place that token in the

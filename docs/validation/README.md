@@ -53,6 +53,9 @@ explicit gate.
 
 ## Historical and Review Artifacts
 
+- [artifacts/pr-2061-typed-terminal-delivery/](artifacts/pr-2061-typed-terminal-delivery/) contains
+  candidate-specific E3 typed-delivery evidence and explicitly records the unexecuted E1, E2, and
+  E4 candidate rows.
 - [artifacts/pr-1926-physical-resize/](artifacts/pr-1926-physical-resize/) contains reviewed
   primitive-sensitive evidence for that exact candidate, not a general release pass.
 - [artifacts/pr-1951-focus-reacquire/](artifacts/pr-1951-focus-reacquire/) contains supplemental

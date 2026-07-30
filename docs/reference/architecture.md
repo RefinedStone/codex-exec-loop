@@ -644,11 +644,12 @@ round-trip mapper.
 The detailed, test-guarded contract is
 [TUI Layered Architecture](../design/07-tui-layered-architecture-and-aesthetic-contract.md).
 
-The accepted but not yet shipped
 [Typed Terminal Delivery Transaction](../design/08-typed-terminal-delivery-transaction.md)
-records the narrow extraction that will replace rendered-line identity in the parallel
-host-scrollback/live-tail path. Until its completion criteria pass, this section continues to
-describe the shipped terminal implementation.
+is the shipped narrow extraction for the parallel host-scrollback/live-tail path. Stable event
+identity reaches one adapter-owned monotonic delivery frontier; one plan owns disjoint host and live
+models; host, frame, and conversation receipts settle independently; and renderers receive only the
+typed live model. `ViewportReplay` does not write the host frontier. Automatic host insertion uses
+the newline fallback, while the standard scroll-region strategy is an explicit diagnostic override.
 
 ## Forbidden Directions and Gates
 
