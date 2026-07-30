@@ -46,4 +46,3 @@ diagnostic_control:
   A precursor run using StandardScrollRegion returned terminal-write success while tmux history
   remained empty and an earlier event disappeared after the next transition. Standard mode is
   therefore an explicit diagnostic override, not an automatic-path pass claim.
-

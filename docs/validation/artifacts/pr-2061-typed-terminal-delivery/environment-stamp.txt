@@ -32,4 +32,3 @@ wt_session: unset
 relevant_overrides: CODEX_EXEC_LOOP_INLINE_HISTORY_MODE unset; CODEX_EXEC_LOOP_HISTORY_INSERT_MODE unset
 runtime_exit: normal Ctrl+q shutdown
 notes_on_deviations: E1, E2, and E4 candidate-specific manual rows not executed; see README evidence matrix
-
