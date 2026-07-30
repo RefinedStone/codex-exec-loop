@@ -10019,9 +10019,9 @@ fn tui_parallel_terminal_delivery_is_one_typed_transaction() {
         "every host delivery path must apply the safe automatic insertion policy"
     );
     assert!(
-        terminal_source.contains("park_hidden_cursor_at_terminal_bottom")
+        terminal_source.contains("park_hidden_cursor_at_terminal_anchor")
             && terminal_source.contains("ShellOverlay::Supersession"),
-        "focused operations must keep terminal resize reflow below the live event stream"
+        "focused operations must anchor terminal resize reflow away from host history"
     );
     let host_delivery = top_level_function_source(&terminal_source, "sync_parallel_host_delivery");
     assert!(

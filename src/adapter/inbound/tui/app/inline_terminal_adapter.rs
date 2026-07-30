@@ -178,7 +178,7 @@ fn draw_inline_frame<B: InlineResizeBackend>(
 ) -> Result<bool, B::Error> {
     let viewport_handoff_delivery_token =
         frame_projection.transcript_handoff_delivery_token.clone();
-    let park_hidden_cursor_at_terminal_bottom =
+    let park_hidden_cursor_at_terminal_anchor =
         frame_projection.shell_overlay == ShellOverlay::Supersession;
     if !inline_terminal.viewport.back_buffer_trustworthy {
         /*
@@ -243,18 +243,20 @@ fn draw_inline_frame<B: InlineResizeBackend>(
             return Err(error);
         }
     };
-    if park_hidden_cursor_at_terminal_bottom && terminal_size.height > 0 {
+    if park_hidden_cursor_at_terminal_anchor && terminal_size.height > 0 {
         /*
-         * Focused parallel operations has no interactive cursor. Leaving the
-         * hidden cursor on the last changed event row makes tmux anchor a width
-         * shrink there and reflow that live event into host history before Akra
-         * can redraw it. Park the still-hidden physical cursor at the terminal
-         * bottom so resize reflow consumes trailing screen space instead.
+         * Focused parallel operations has no interactive cursor. Anchor its
+         * still-hidden physical cursor at the live viewport origin so tmux
+         * reflow keeps the host/live boundary stable instead of treating the
+         * last changed event row as terminal history. The canonical stream
+         * redraws clipped live rows after the resize.
          */
-        if let Err(error) = terminal
-            .backend_mut()
-            .set_cursor_position(Position::new(0, terminal_size.height - 1))
-        {
+        if let Err(error) = terminal.backend_mut().set_cursor_position(Position::new(
+            drawn_viewport_area.x,
+            terminal_size
+                .height
+                .saturating_sub(drawn_viewport_area.height),
+        )) {
             fail_closed_frame_delivery(runtime, inline_terminal);
             return Err(error);
         }

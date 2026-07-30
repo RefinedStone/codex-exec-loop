@@ -3089,8 +3089,8 @@ fn focused_parallel_operations_survives_resize_and_close_without_chrome_in_scrol
             .get_cursor_position()
             .expect("focused operations cursor should be readable")
             .y,
-        29,
-        "the hidden operations cursor must park at the physical bottom before resize"
+        14,
+        "the hidden operations cursor must anchor at the live viewport origin before resize"
     );
     for index in 0..36 {
         let marker = format!("operations-resize-event-{index:02}");
@@ -3279,8 +3279,8 @@ fn focused_parallel_operations_survives_resize_and_close_without_chrome_in_scrol
             .get_cursor_position()
             .expect("reopened operations cursor should be readable")
             .y,
-        29,
-        "the reopened focused board must keep the hidden cursor at the physical bottom"
+        14,
+        "the reopened focused board must keep the hidden cursor at the live viewport origin"
     );
 }
 
