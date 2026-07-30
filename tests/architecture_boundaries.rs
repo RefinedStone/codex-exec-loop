@@ -1076,10 +1076,7 @@ fn native_tui_app_owns_exactly_four_typed_private_state_slices() {
                 ),
                 ("help_scroll_offset", "usize"),
                 ("reviews_overlay_ui_state", "ReviewsOverlayUiState"),
-                (
-                    "parallel_supervisor_event_log",
-                    "ParallelSupervisorEventLog",
-                ),
+                ("parallel_event_stream", "ParallelEventStreamState"),
                 ("session_overlay_ui_state", "SessionOverlayUiState"),
                 ("tui_language", "TuiLanguage"),
                 (
@@ -9638,7 +9635,7 @@ fn tui_parallel_frame_uses_one_control_plane_and_event_projection_sample() {
         "parallel_panel: ParallelPanelProjectionSample",
         "parallel_panel: ParallelPanelProjectionSample::from_parts(",
         "pub(in crate::adapter::inbound::tui::app) struct ConversationProjectionFrameInput",
-        "parallel_supervisor_events: ParallelSupervisorEventProjection",
+        "parallel_supervisor_events: ParallelEventStreamSnapshot",
     ] {
         assert!(
             sample_source.contains(required),
@@ -9746,6 +9743,99 @@ fn tui_parallel_frame_uses_one_control_plane_and_event_projection_sample() {
                 "scrollback splitting and live rendering must share Ratatui word-wrap boundary helper: {required}"
             );
         }
+    }
+}
+
+#[test]
+fn tui_parallel_event_stream_owns_one_typed_canonical_window() {
+    let event_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/parallel_supervisor_events.rs"),
+    )
+    .expect("parallel event source should load");
+    let event_syntax =
+        syn::parse_file(&event_source).expect("parallel event source should parse as Rust");
+
+    let id_fields = named_struct_fields(&event_syntax, "ParallelStreamEventId");
+    assert_eq!(id_fields.len(), 2);
+    for (field, (expected_name, expected_type)) in id_fields
+        .iter()
+        .zip([("stream_generation", "u64"), ("ordinal", "u64")])
+    {
+        assert_eq!(
+            field
+                .ident
+                .as_ref()
+                .expect("event ID field should be named"),
+            expected_name
+        );
+        assert!(is_named_path_type(&field.ty, expected_type));
+        assert!(
+            matches!(field.vis, syn::Visibility::Inherited),
+            "parallel event ID fields must remain private"
+        );
+    }
+
+    let projected_fields = named_struct_fields(&event_syntax, "ProjectedParallelEvent");
+    let projected_id = projected_fields
+        .iter()
+        .find(|field| field.ident.as_ref().is_some_and(|ident| ident == "id"))
+        .expect("projected parallel event should retain its typed ID");
+    assert!(is_named_path_type(
+        &projected_id.ty,
+        "ParallelStreamEventId"
+    ));
+    assert!(
+        projected_fields.iter().any(|field| {
+            field.ident.as_ref().is_some_and(|ident| ident == "source")
+                && is_named_path_type(&field.ty, "ParallelEventSourceId")
+        }),
+        "projected parallel event should retain its source correlation"
+    );
+
+    let snapshot_fields = named_struct_fields(&event_syntax, "ParallelEventStreamSnapshot");
+    let immutable_events = snapshot_fields
+        .iter()
+        .find(|field| field.ident.as_ref().is_some_and(|ident| ident == "events"))
+        .expect("parallel event snapshot should own immutable events");
+    assert!(
+        type_mentions_named_path(&immutable_events.ty, "Arc")
+            && type_mentions_named_path(&immutable_events.ty, "ProjectedParallelEvent"),
+        "parallel event snapshot must publish shared immutable projected events"
+    );
+
+    let state_fields = named_struct_fields(&event_syntax, "ParallelEventStreamState");
+    let canonical_windows = state_fields
+        .iter()
+        .filter(|field| {
+            type_mentions_named_path(&field.ty, "Arc")
+                && type_mentions_named_path(&field.ty, "ProjectedParallelEvent")
+        })
+        .count();
+    assert_eq!(
+        canonical_windows, 1,
+        "parallel stream state must own exactly one mutable projected-event window"
+    );
+    for retired_shape in [
+        "ParallelSupervisorEventLog",
+        "ParallelSupervisorEventProjection",
+        "scrollback_entries",
+        "seen_snapshot_stream_events",
+        "VecDeque<ProjectedParallelEvent>",
+    ] {
+        assert!(
+            !event_source.contains(retired_shape),
+            "retired dual-store or global-text-dedup shape must not return: {retired_shape}"
+        );
+    }
+    for required_source_variant in [
+        "Authority {",
+        "LocalAccepted {",
+        "ObservedStateTransition {",
+    ] {
+        assert!(
+            event_source.contains(required_source_variant),
+            "parallel ingestion must keep source-specific identity: {required_source_variant}"
+        );
     }
 }
 

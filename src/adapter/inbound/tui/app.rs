@@ -219,7 +219,7 @@ use parallel_panel_controller::{
     ParallelPanelStateController, ParallelPanelUiEvent, ParallelPanelUiState,
 };
 use parallel_peek_overlay_ui::{ParallelPeekOverlayStep, ParallelPeekOverlayUiState};
-use parallel_supervisor_events::{PARALLEL_SUPERVISOR_OPERATOR_ACTOR, ParallelSupervisorEventLog};
+use parallel_supervisor_events::{PARALLEL_SUPERVISOR_OPERATOR_ACTOR, ParallelEventStreamState};
 use planning::PlanningWorkerVisibility;
 use planning_draft_editor_ui::PlanningDraftEditorUiState;
 use planning_init_overlay_ui::{
@@ -373,7 +373,7 @@ struct NativeTuiShellState {
     progressive_activity_overlay_ui_state: ProgressiveActivityOverlayUiState,
     help_scroll_offset: usize,
     reviews_overlay_ui_state: reviews_overlay_ui::ReviewsOverlayUiState,
-    parallel_supervisor_event_log: ParallelSupervisorEventLog,
+    parallel_event_stream: ParallelEventStreamState,
     session_overlay_ui_state: SessionOverlayUiState,
     tui_language: TuiLanguage,
     language_selection_overlay_ui_state: LanguageSelectionOverlayUiState,

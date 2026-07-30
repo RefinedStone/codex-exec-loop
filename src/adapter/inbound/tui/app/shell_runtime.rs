@@ -95,7 +95,7 @@ impl ShellRuntime {
                 .conversation
                 .conversation_history_identity_revision,
             transcript_handoff_correlation,
-            parallel_supervisor_events: self.app.shell.parallel_supervisor_event_log.projection(),
+            parallel_supervisor_events: self.app.shell.parallel_event_stream.snapshot(),
             inline_history_render_mode: self.app.shell.inline_history_render_mode,
             history_insert_mode: self.app.shell.history_insert_mode,
         })

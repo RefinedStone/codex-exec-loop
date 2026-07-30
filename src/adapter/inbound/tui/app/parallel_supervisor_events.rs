@@ -1,4 +1,5 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use chrono::Utc;
 use ratatui::style::{Modifier, Style};
@@ -14,39 +15,90 @@ use super::AkraTheme;
 use super::language::{TUI_LOCALIZED_IMPORTANT_MARKERS, TuiLanguage};
 
 const MAX_PARALLEL_SUPERVISOR_EVENTS: usize = 96;
-const MAX_PARALLEL_SUPERVISOR_SCROLLBACK_EVENTS: usize = 512;
+const MAX_PARALLEL_EVENT_WINDOW: usize = 512;
 pub(super) const PARALLEL_SUPERVISOR_OPERATOR_ACTOR: &str = "You";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ParallelSupervisorEventEntry {
-    line: Line<'static>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(super) struct ParallelStreamEventId {
+    stream_generation: u64,
+    ordinal: u64,
+}
+
+impl ParallelStreamEventId {
+    #[cfg(test)]
+    pub(super) fn stream_generation(self) -> u64 {
+        self.stream_generation
+    }
+
+    pub(super) fn ordinal(self) -> u64 {
+        self.ordinal
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct ParallelSupervisorStreamEvent {
-    key: String,
+pub(super) enum ParallelEventSourceId {
+    Authority {
+        workspace: String,
+        sequence: i64,
+    },
+    LocalAccepted {
+        operation_kind: String,
+        correlation: u64,
+    },
+    ObservedStateTransition {
+        subject: String,
+        previous: Option<String>,
+        current: String,
+        observed_revision: u64,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ProjectedParallelEvent {
+    id: ParallelStreamEventId,
+    source: ParallelEventSourceId,
+    line: Line<'static>,
+}
+
+impl ProjectedParallelEvent {
+    pub(super) fn id(&self) -> ParallelStreamEventId {
+        self.id
+    }
+
+    #[cfg(test)]
+    fn source(&self) -> &ParallelEventSourceId {
+        &self.source
+    }
+
+    pub(super) fn line(&self) -> &Line<'static> {
+        &self.line
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParallelSnapshotObservation {
+    subject: String,
+    fingerprint: String,
     timestamp_label: String,
     actor: String,
     body: String,
 }
 
-impl ParallelSupervisorStreamEvent {
-    fn new_with_key(
-        key: impl Into<String>,
+impl ParallelSnapshotObservation {
+    fn new(
+        subject: impl Into<String>,
+        fingerprint: impl Into<String>,
         timestamp_label: impl Into<String>,
         actor: impl Into<String>,
         body: impl Into<String>,
     ) -> Self {
         Self {
-            key: key.into(),
+            subject: subject.into(),
+            fingerprint: fingerprint.into(),
             timestamp_label: timestamp_label.into(),
             actor: actor.into(),
             body: body.into(),
         }
-    }
-
-    fn key(&self) -> String {
-        self.key.clone()
     }
 
     fn into_line(self) -> Line<'static> {
@@ -54,25 +106,69 @@ impl ParallelSupervisorStreamEvent {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(super) struct ParallelSupervisorEventLog {
-    entries: VecDeque<ParallelSupervisorEventEntry>,
-    scrollback_entries: VecDeque<ParallelSupervisorEventEntry>,
-    runtime_feed_workspace: Option<String>,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ParallelEventStreamState {
+    stream_generation: u64,
+    next_ordinal: u64,
+    next_local_correlation: u64,
+    next_observed_revision: u64,
+    workspace: Option<String>,
+    events: Arc<[ProjectedParallelEvent]>,
     last_runtime_sequence_seen: Option<i64>,
-    snapshot_stream_workspace: Option<String>,
-    seen_snapshot_stream_events: HashSet<String>,
+    observed_snapshot_fingerprints: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(super) struct ParallelSupervisorEventProjection {
-    live_lines: Vec<Line<'static>>,
-    scrollback_lines: Vec<Line<'static>>,
+impl Default for ParallelEventStreamState {
+    fn default() -> Self {
+        Self {
+            stream_generation: 0,
+            next_ordinal: 0,
+            next_local_correlation: 0,
+            next_observed_revision: 0,
+            workspace: None,
+            events: Arc::from(Vec::<ProjectedParallelEvent>::new()),
+            last_runtime_sequence_seen: None,
+            observed_snapshot_fingerprints: HashMap::new(),
+        }
+    }
 }
 
-impl ParallelSupervisorEventProjection {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ParallelEventStreamSnapshot {
+    generation: u64,
+    first_ordinal: u64,
+    events: Arc<[ProjectedParallelEvent]>,
+}
+
+impl ParallelEventStreamSnapshot {
+    #[cfg(test)]
+    fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    #[cfg(test)]
+    fn first_ordinal(&self) -> u64 {
+        self.first_ordinal
+    }
+
+    #[cfg(test)]
+    fn events(&self) -> &[ProjectedParallelEvent] {
+        &self.events
+    }
+
+    pub(super) fn live_events(&self) -> &[ProjectedParallelEvent] {
+        let live_start = self
+            .events
+            .len()
+            .saturating_sub(MAX_PARALLEL_SUPERVISOR_EVENTS);
+        &self.events[live_start..]
+    }
+
     pub(super) fn live_lines(&self) -> Vec<Line<'static>> {
-        self.live_lines.clone()
+        self.live_events()
+            .iter()
+            .map(|event| event.line().clone())
+            .collect()
     }
 
     pub(super) fn scrollback_lines_before_rendered_live_tail(
@@ -80,60 +176,91 @@ impl ParallelSupervisorEventProjection {
         live_tail_rows: usize,
         width: u16,
     ) -> Vec<Line<'static>> {
-        let durable_len =
-            rendered_parallel_event_tail_start_index(&self.scrollback_lines, live_tail_rows, width);
-        self.scrollback_lines[..durable_len].to_vec()
+        let lines = self
+            .events
+            .iter()
+            .map(|event| event.line().clone())
+            .collect::<Vec<_>>();
+        let durable_len = rendered_parallel_event_tail_start_index(&lines, live_tail_rows, width);
+        lines[..durable_len].to_vec()
     }
 }
 
-impl ParallelSupervisorEventLog {
+impl ParallelEventStreamState {
     pub(super) fn push_now(&mut self, actor: impl Into<String>, body: impl Into<String>) {
-        self.push(
+        self.push_local(
             Utc::now().format("%H:%M:%S").to_string(),
             actor.into(),
             body.into(),
         );
     }
 
-    fn push(&mut self, timestamp_label: String, actor: String, body: String) {
-        let entry = ParallelSupervisorEventEntry {
-            line: parallel_supervisor_event_line(&timestamp_label, &actor, &body),
+    fn push_local(&mut self, timestamp_label: String, actor: String, body: String) {
+        let correlation = self.next_local_correlation;
+        self.next_local_correlation = self
+            .next_local_correlation
+            .checked_add(1)
+            .expect("parallel local correlation exhausted");
+        self.append(
+            ParallelEventSourceId::LocalAccepted {
+                operation_kind: actor.clone(),
+                correlation,
+            },
+            timestamp_label,
+            actor,
+            body,
+        );
+    }
+
+    fn append(
+        &mut self,
+        source: ParallelEventSourceId,
+        timestamp_label: String,
+        actor: String,
+        body: String,
+    ) {
+        let id = ParallelStreamEventId {
+            stream_generation: self.stream_generation,
+            ordinal: self.next_ordinal,
         };
-        self.scrollback_entries.push_back(entry.clone());
-        self.trim_scrollback_entries();
-        self.push_live_entry(entry);
-    }
-
-    fn push_live_entry(&mut self, entry: ParallelSupervisorEventEntry) {
-        self.entries.push_back(entry);
-        while self.entries.len() > MAX_PARALLEL_SUPERVISOR_EVENTS {
-            self.entries.pop_front();
+        self.next_ordinal = self
+            .next_ordinal
+            .checked_add(1)
+            .expect("parallel stream ordinal exhausted");
+        let mut events = self.events.to_vec();
+        events.push(ProjectedParallelEvent {
+            id,
+            source,
+            line: parallel_supervisor_event_line(&timestamp_label, &actor, &body),
+        });
+        let expired = events.len().saturating_sub(MAX_PARALLEL_EVENT_WINDOW);
+        if expired > 0 {
+            events.drain(..expired);
         }
+        self.events = Arc::from(events);
     }
 
-    pub(super) fn lines(&self) -> Vec<Line<'static>> {
-        self.entries
-            .iter()
-            .map(|entry| entry.line.clone())
-            .collect()
-    }
-
-    pub(super) fn projection(&self) -> ParallelSupervisorEventProjection {
-        ParallelSupervisorEventProjection {
-            live_lines: self.lines(),
-            scrollback_lines: self
-                .scrollback_entries
-                .iter()
-                .map(|entry| entry.line.clone())
-                .collect(),
+    pub(super) fn snapshot(&self) -> ParallelEventStreamSnapshot {
+        ParallelEventStreamSnapshot {
+            generation: self.stream_generation,
+            first_ordinal: self
+                .events
+                .first()
+                .map_or(self.next_ordinal, |event| event.id().ordinal()),
+            events: Arc::clone(&self.events),
         }
     }
 
     #[cfg(test)]
-    pub(super) fn scrollback_lines(&self) -> Vec<Line<'static>> {
-        self.scrollback_entries
+    pub(super) fn lines(&self) -> Vec<Line<'static>> {
+        self.snapshot().live_lines()
+    }
+
+    #[cfg(test)]
+    pub(super) fn window_lines(&self) -> Vec<Line<'static>> {
+        self.events
             .iter()
-            .map(|entry| entry.line.clone())
+            .map(|event| event.line().clone())
             .collect()
     }
 
@@ -143,15 +270,33 @@ impl ParallelSupervisorEventLog {
         language: TuiLanguage,
     ) {
         let workspace_path = snapshot.workspace_path.as_str();
-        if self.snapshot_stream_workspace.as_deref() != Some(workspace_path) {
-            self.snapshot_stream_workspace = Some(workspace_path.to_string());
-            self.seen_snapshot_stream_events.clear();
-        }
-        for event in parallel_supervisor_snapshot_stream_events(snapshot, language) {
-            let key = event.key();
-            if self.seen_snapshot_stream_events.insert(key) {
-                self.push(event.timestamp_label, event.actor, event.body);
+        self.observe_workspace(workspace_path);
+        for observation in parallel_supervisor_snapshot_stream_events(snapshot, language) {
+            let previous = self
+                .observed_snapshot_fingerprints
+                .get(&observation.subject)
+                .cloned();
+            if previous.as_deref() == Some(observation.fingerprint.as_str()) {
+                continue;
             }
+            self.observed_snapshot_fingerprints
+                .insert(observation.subject.clone(), observation.fingerprint.clone());
+            let observed_revision = self.next_observed_revision;
+            self.next_observed_revision = self
+                .next_observed_revision
+                .checked_add(1)
+                .expect("parallel snapshot observation revision exhausted");
+            self.append(
+                ParallelEventSourceId::ObservedStateTransition {
+                    subject: observation.subject,
+                    previous,
+                    current: observation.fingerprint,
+                    observed_revision,
+                },
+                observation.timestamp_label,
+                observation.actor,
+                observation.body,
+            );
         }
     }
 
@@ -160,14 +305,15 @@ impl ParallelSupervisorEventLog {
         snapshot: &ParallelModeSupervisorSnapshot,
     ) {
         let workspace_path = snapshot.workspace_path.as_str();
-        if self.runtime_feed_workspace.as_deref() != Some(workspace_path) {
-            self.runtime_feed_workspace = Some(workspace_path.to_string());
-            self.last_runtime_sequence_seen = None;
-        }
-        self.record_runtime_feed_entries(&snapshot.distributor.runtime_event_feed);
+        self.observe_workspace(workspace_path);
+        self.record_runtime_feed_entries(workspace_path, &snapshot.distributor.runtime_event_feed);
     }
 
-    fn record_runtime_feed_entries(&mut self, entries: &[ParallelModeRuntimeEventFeedEntry]) {
+    fn record_runtime_feed_entries(
+        &mut self,
+        workspace: &str,
+        entries: &[ParallelModeRuntimeEventFeedEntry],
+    ) {
         let Some(latest_sequence) = entries.iter().map(|entry| entry.sequence).max() else {
             return;
         };
@@ -181,8 +327,13 @@ impl ParallelSupervisorEventLog {
             .filter(|entry| entry.sequence > previous_sequence)
             .collect::<Vec<_>>();
         entries.sort_by_key(|entry| entry.sequence);
+        entries.dedup_by_key(|entry| entry.sequence);
         for entry in entries {
-            self.push(
+            self.append(
+                ParallelEventSourceId::Authority {
+                    workspace: workspace.to_string(),
+                    sequence: entry.sequence,
+                },
                 compact_stream_timestamp_label(&entry.recorded_at),
                 "Supervisor".to_string(),
                 format!(
@@ -198,9 +349,24 @@ impl ParallelSupervisorEventLog {
         self.last_runtime_sequence_seen = Some(previous_sequence.max(latest_sequence));
     }
 
-    fn trim_scrollback_entries(&mut self) {
-        while self.scrollback_entries.len() > MAX_PARALLEL_SUPERVISOR_SCROLLBACK_EVENTS {
-            self.scrollback_entries.pop_front();
+    fn observe_workspace(&mut self, workspace: &str) {
+        match self.workspace.as_deref() {
+            None => {
+                self.workspace = Some(workspace.to_string());
+            }
+            Some(current) if current == workspace => {}
+            Some(_) => {
+                self.stream_generation = self
+                    .stream_generation
+                    .checked_add(1)
+                    .expect("parallel stream generation exhausted");
+                self.next_ordinal = 0;
+                self.next_observed_revision = 0;
+                self.workspace = Some(workspace.to_string());
+                self.events = Arc::from(Vec::<ProjectedParallelEvent>::new());
+                self.last_runtime_sequence_seen = None;
+                self.observed_snapshot_fingerprints.clear();
+            }
         }
     }
 
@@ -211,7 +377,7 @@ impl ParallelSupervisorEventLog {
         actor: impl Into<String>,
         body: impl Into<String>,
     ) {
-        self.push(timestamp_label.into(), actor.into(), body.into());
+        self.push_local(timestamp_label.into(), actor.into(), body.into());
     }
 }
 
@@ -221,20 +387,22 @@ pub(super) fn parallel_supervisor_snapshot_stream_lines(
 ) -> Vec<Line<'static>> {
     parallel_supervisor_snapshot_stream_events(snapshot, language)
         .into_iter()
-        .map(ParallelSupervisorStreamEvent::into_line)
+        .map(ParallelSnapshotObservation::into_line)
         .collect()
 }
 
 fn parallel_supervisor_snapshot_stream_events(
     supervisor_snapshot: &ParallelModeSupervisorSnapshot,
     language: TuiLanguage,
-) -> Vec<ParallelSupervisorStreamEvent> {
+) -> Vec<ParallelSnapshotObservation> {
     let mut events = Vec::new();
 
     if let Some(notice) = supervisor_snapshot.top_notice.as_deref() {
+        let fingerprint = format!("top_notice|{notice}");
         let notice = truncate_event_text(notice, 96);
-        events.push(ParallelSupervisorStreamEvent::new_with_key(
-            format!("top_notice|{notice}"),
+        events.push(ParallelSnapshotObservation::new(
+            "top_notice",
+            fingerprint,
             "--:--:--",
             "Supervisor",
             language.parallel_board_refreshed(&notice),
@@ -247,12 +415,13 @@ fn parallel_supervisor_snapshot_stream_events(
             ParallelModePoolSlotState::Idle | ParallelModePoolSlotState::Missing
         ) {
             let owner_label = truncate_event_text(&slot.owner_label, 56);
-            events.push(ParallelSupervisorStreamEvent::new_with_key(
+            events.push(ParallelSnapshotObservation::new(
+                format!("slot|{}", slot.slot_id),
                 format!(
                     "slot|{}|{}|{}",
                     slot.slot_id,
                     slot.state.label(),
-                    owner_label
+                    slot.owner_label
                 ),
                 "--:--:--",
                 "Pool",
@@ -265,10 +434,15 @@ fn parallel_supervisor_snapshot_stream_events(
         let task_title = truncate_event_text(&entry.task_title, 52);
         let state_label = display_supersession_state_label(&entry.state_label);
         let summary = truncate_event_text(&entry.latest_summary, 72);
-        events.push(ParallelSupervisorStreamEvent::new_with_key(
+        events.push(ParallelSnapshotObservation::new(
+            format!("roster|{}", entry.agent_id),
             format!(
                 "roster|{}|{}|{}|{}|{}",
-                entry.agent_id, task_title, entry.slot_id, state_label, summary
+                entry.agent_id,
+                entry.task_title,
+                entry.slot_id,
+                entry.state_label,
+                entry.latest_summary
             ),
             "--:--:--",
             format!("Agent {}", entry.agent_id),
@@ -278,7 +452,8 @@ fn parallel_supervisor_snapshot_stream_events(
 
     if let Some(detail) = supervisor_snapshot.detail.session.as_ref() {
         for history in &detail.history {
-            events.push(ParallelSupervisorStreamEvent::new_with_key(
+            events.push(ParallelSnapshotObservation::new(
+                format!("history|{}|{}", detail.agent_id, history.timestamp),
                 format!(
                     "history|{}|{}|{}|{}",
                     history.timestamp, detail.agent_id, history.state_label, history.summary
@@ -293,7 +468,8 @@ fn parallel_supervisor_snapshot_stream_events(
             history.state_label == detail.state_label && history.timestamp == detail.updated_at
         });
         if !current_already_recorded {
-            events.push(ParallelSupervisorStreamEvent::new_with_key(
+            events.push(ParallelSnapshotObservation::new(
+                format!("current|{}", detail.agent_id),
                 format!(
                     "current|{}|{}|{}|{}",
                     detail.updated_at, detail.agent_id, detail.state_label, detail.latest_summary
@@ -314,13 +490,24 @@ fn parallel_supervisor_snapshot_stream_events(
         let task_title = truncate_event_text(&item.task_title, 52);
         let branch_name = truncate_event_text(&item.branch_name, 40);
         let integration_note = truncate_event_text(&item.integration_note, 72);
-        events.push(ParallelSupervisorStreamEvent::new_with_key(
+        let subject = item.identity.as_ref().map_or_else(
+            || {
+                format!(
+                    "queue|{}|{}|{}",
+                    item.source_agent, item.task_title, item.branch_name
+                )
+            },
+            |identity| format!("queue|{}", identity.queue_item_id),
+        );
+        events.push(ParallelSnapshotObservation::new(
+            subject,
             format!(
-                "queue|{}|{}|{}|{}",
-                task_title,
+                "queue|{}|{}|{}|{}|{}",
+                item.source_agent,
+                item.task_title,
                 item.queue_state.label(),
-                branch_name,
-                integration_note
+                item.branch_name,
+                item.integration_note
             ),
             "--:--:--",
             "Distributor",
@@ -336,8 +523,9 @@ fn parallel_supervisor_snapshot_stream_events(
     for entry in &supervisor_snapshot.distributor.completion_feed {
         let stage_label = display_runtime_event_label(&entry.stage_label);
         let summary = truncate_event_text(&entry.summary, 88);
-        events.push(ParallelSupervisorStreamEvent::new_with_key(
-            format!("completion|{stage_label}|{summary}"),
+        events.push(ParallelSnapshotObservation::new(
+            format!("completion|{}", entry.stage_label),
+            format!("completion|{}|{}", entry.stage_label, entry.summary),
             "--:--:--",
             "Ledger",
             language.ledger_stage_record(&stage_label, &summary),
@@ -346,18 +534,22 @@ fn parallel_supervisor_snapshot_stream_events(
 
     let orchestrator = &supervisor_snapshot.distributor.orchestrator_status;
     if let Some(reason) = orchestrator.blocked_reason.as_deref() {
+        let fingerprint = format!("orchestrator_blocked|{reason}");
         let reason = truncate_event_text(reason, 88);
-        events.push(ParallelSupervisorStreamEvent::new_with_key(
-            format!("orchestrator_blocked|{reason}"),
+        events.push(ParallelSnapshotObservation::new(
+            "orchestrator_blocked",
+            fingerprint,
             "--:--:--",
             "Orchestrator",
             language.integration_blocked(&reason),
         ));
     }
     if let Some(reason) = orchestrator.slot_return_wait_reason.as_deref() {
+        let fingerprint = format!("slot_return_wait|{reason}");
         let reason = truncate_event_text(reason, 88);
-        events.push(ParallelSupervisorStreamEvent::new_with_key(
-            format!("slot_return_wait|{reason}"),
+        events.push(ParallelSnapshotObservation::new(
+            "slot_return_wait",
+            fingerprint,
             "--:--:--",
             "Orchestrator",
             language.slot_return_withheld(&reason),
@@ -498,16 +690,8 @@ fn compact_stream_timestamp_label(timestamp: &str) -> String {
 }
 
 #[cfg(test)]
-fn rendered_tail_start_index(
-    entries: &VecDeque<ParallelSupervisorEventEntry>,
-    live_tail_rows: usize,
-    width: u16,
-) -> usize {
-    let lines = entries
-        .iter()
-        .map(|entry| entry.line.clone())
-        .collect::<Vec<_>>();
-    rendered_parallel_event_tail_start_index(&lines, live_tail_rows, width)
+fn rendered_tail_start_index(lines: &[Line<'static>], live_tail_rows: usize, width: u16) -> usize {
+    rendered_parallel_event_tail_start_index(lines, live_tail_rows, width)
 }
 
 pub(super) fn rendered_parallel_event_tail_start_index(
@@ -581,19 +765,17 @@ impl super::NativeTuiApp {
         actor: impl Into<String>,
         body: impl Into<String>,
     ) {
-        self.shell
-            .parallel_supervisor_event_log
-            .push_now(actor, body);
+        self.shell.parallel_event_stream.push_now(actor, body);
     }
 
     #[cfg(test)]
     pub(crate) fn parallel_supervisor_event_lines(&self) -> Vec<Line<'static>> {
-        self.shell.parallel_supervisor_event_log.lines()
+        self.shell.parallel_event_stream.lines()
     }
 
     #[cfg(test)]
     pub(crate) fn parallel_supervisor_event_scrollback_lines(&self) -> Vec<Line<'static>> {
-        self.shell.parallel_supervisor_event_log.scrollback_lines()
+        self.shell.parallel_event_stream.window_lines()
     }
 
     pub(super) fn record_parallel_supervisor_snapshot_for_stream(
@@ -601,10 +783,10 @@ impl super::NativeTuiApp {
         snapshot: &ParallelModeSupervisorSnapshot,
     ) {
         self.shell
-            .parallel_supervisor_event_log
+            .parallel_event_stream
             .record_snapshot_stream_from_supervisor_snapshot(snapshot, self.shell.tui_language);
         self.shell
-            .parallel_supervisor_event_log
+            .parallel_event_stream
             .record_runtime_feed_from_supervisor_snapshot(snapshot);
     }
 
@@ -616,7 +798,7 @@ impl super::NativeTuiApp {
         body: impl Into<String>,
     ) {
         self.shell
-            .parallel_supervisor_event_log
+            .parallel_event_stream
             .push_for_test(timestamp_label, actor, body);
     }
 }
@@ -634,7 +816,7 @@ mod tests {
 
     #[test]
     fn user_prompt_line_uses_you_label_with_user_emphasis() {
-        let mut log = ParallelSupervisorEventLog::default();
+        let mut log = ParallelEventStreamState::default();
 
         log.push_for_test(
             "11:31:18",
@@ -664,7 +846,7 @@ mod tests {
 
     #[test]
     fn non_user_event_line_highlights_actor_label() {
-        let mut log = ParallelSupervisorEventLog::default();
+        let mut log = ParallelEventStreamState::default();
 
         log.push_for_test("11:31:19", "Task Intake", "task generation started.");
 
@@ -683,7 +865,7 @@ mod tests {
 
     #[test]
     fn important_event_line_highlights_message_body() {
-        let mut log = ParallelSupervisorEventLog::default();
+        let mut log = ParallelEventStreamState::default();
 
         log.push_for_test("11:31:20", "Ledger", "official completion을 확인했습니다.");
 
@@ -699,7 +881,7 @@ mod tests {
 
     #[test]
     fn log_keeps_recent_events_without_reformatting_on_read() {
-        let mut log = ParallelSupervisorEventLog::default();
+        let mut log = ParallelEventStreamState::default();
 
         for index in 0..(MAX_PARALLEL_SUPERVISOR_EVENTS + 4) {
             log.push_for_test("11:45:02", "Supervisor", format!("event-{index:03}"));
@@ -716,27 +898,20 @@ mod tests {
 
     #[test]
     fn durable_tail_boundary_keeps_wrapped_event_out_of_scrollback_until_complete() {
-        let entries = VecDeque::from([
-            ParallelSupervisorEventEntry {
-                line: Line::from("123456 123456 123456"),
-            },
-            ParallelSupervisorEventEntry {
-                line: Line::from("tail event"),
-            },
-        ]);
+        let lines = vec![Line::from("123456 123456 123456"), Line::from("tail event")];
 
         assert_eq!(
-            rendered_parallel_event_line_rows(&entries[0].line, 10),
+            rendered_parallel_event_line_rows(&lines[0], 10),
             3,
             "event row measurement must match Ratatui word wrapping rather than raw width division"
         );
         assert_eq!(
-            rendered_tail_start_index(&entries, 3, 10),
+            rendered_tail_start_index(&lines, 3, 10),
             1,
             "an event that does not fully fit in the live suffix must remain durable"
         );
         assert_eq!(
-            rendered_tail_start_index(&entries, 1, 10),
+            rendered_tail_start_index(&lines, 1, 10),
             1,
             "boundary exactly after a wrapped event may start at the next event"
         );
@@ -744,37 +919,43 @@ mod tests {
 
     #[test]
     fn event_log_keeps_runtime_feed_append_only_after_baseline() {
-        let mut log = ParallelSupervisorEventLog::default();
+        let mut log = ParallelEventStreamState::default();
 
         log.push_for_test(
             "11:45:02",
             PARALLEL_SUPERVISOR_OPERATOR_ACTOR,
             "안녕하세요?",
         );
-        log.record_runtime_feed_entries(&[
-            runtime_feed_entry(2, "slot_lease", "slot-2", "slot_lease_upsert"),
-            runtime_feed_entry(1, "session_detail", "slot-1", "session_detail_upsert"),
-        ]);
+        log.record_runtime_feed_entries(
+            "/tmp/root",
+            &[
+                runtime_feed_entry(2, "slot_lease", "slot-2", "slot_lease_upsert"),
+                runtime_feed_entry(1, "session_detail", "slot-1", "session_detail_upsert"),
+            ],
+        );
         assert_eq!(
-            log.scrollback_lines()
+            log.window_lines()
                 .iter()
                 .map(|line| line.to_string())
                 .collect::<Vec<_>>(),
             vec!["[11:45:02] You: 안녕하세요?".to_string()],
             "initial runtime feed should establish the append baseline without backfilling old DB events"
         );
-        log.record_runtime_feed_entries(&[
-            runtime_feed_entry(
-                3,
-                "distributor_queue",
-                "queue-1",
-                "distributor_queue_upsert",
-            ),
-            runtime_feed_entry(2, "slot_lease", "slot-2", "slot_lease_upsert"),
-            runtime_feed_entry(1, "session_detail", "slot-1", "session_detail_upsert"),
-        ]);
+        log.record_runtime_feed_entries(
+            "/tmp/root",
+            &[
+                runtime_feed_entry(
+                    3,
+                    "distributor_queue",
+                    "queue-1",
+                    "distributor_queue_upsert",
+                ),
+                runtime_feed_entry(2, "slot_lease", "slot-2", "slot_lease_upsert"),
+                runtime_feed_entry(1, "session_detail", "slot-1", "session_detail_upsert"),
+            ],
+        );
         let before_tail = log
-            .scrollback_lines()
+            .window_lines()
             .iter()
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
@@ -806,24 +987,221 @@ mod tests {
             .expect("new runtime event should append to live stream");
         assert!(live_operator_index < live_runtime_index);
 
-        for index in 0..MAX_PARALLEL_SUPERVISOR_SCROLLBACK_EVENTS {
+        for index in 0..MAX_PARALLEL_EVENT_WINDOW {
             log.push_for_test("11:45:03", "Supervisor", format!("tail-{index:03}"));
         }
 
         let rendered = log
-            .scrollback_lines()
+            .window_lines()
             .iter()
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
             .join("\n");
-        assert_eq!(
-            log.scrollback_lines().len(),
-            MAX_PARALLEL_SUPERVISOR_SCROLLBACK_EVENTS
-        );
+        assert_eq!(log.window_lines().len(), MAX_PARALLEL_EVENT_WINDOW);
         assert!(!rendered.contains("Parallel Event Stream"));
         assert!(!rendered.contains("slot lease:slot-2"));
         assert!(rendered.contains("tail-000"));
         assert_eq!(rendered.matches("tail-511").count(), 1);
+    }
+
+    #[test]
+    fn authority_sequence_rejects_stale_and_duplicate_entries() {
+        let mut stream = ParallelEventStreamState::default();
+
+        stream.record_runtime_feed_entries(
+            "/tmp/root",
+            &[runtime_feed_entry(
+                1,
+                "session_detail",
+                "slot-1",
+                "session_detail_upsert",
+            )],
+        );
+        stream.record_runtime_feed_entries(
+            "/tmp/root",
+            &[
+                runtime_feed_entry(3, "slot_lease", "slot-3", "slot_lease_upsert"),
+                runtime_feed_entry(2, "slot_lease", "slot-2", "slot_lease_upsert"),
+                runtime_feed_entry(3, "slot_lease", "slot-3", "slot_lease_upsert"),
+            ],
+        );
+        stream.record_runtime_feed_entries(
+            "/tmp/root",
+            &[
+                runtime_feed_entry(1, "session_detail", "slot-1", "session_detail_upsert"),
+                runtime_feed_entry(2, "slot_lease", "slot-2", "slot_lease_upsert"),
+            ],
+        );
+
+        let snapshot = stream.snapshot();
+        assert_eq!(snapshot.events().len(), 2);
+        assert_eq!(
+            snapshot
+                .events()
+                .iter()
+                .map(|event| event.id().ordinal())
+                .collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+        assert_eq!(
+            snapshot
+                .events()
+                .iter()
+                .filter_map(|event| match event.source() {
+                    ParallelEventSourceId::Authority { sequence, .. } => Some(*sequence),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+    }
+
+    #[test]
+    fn mixed_sources_share_one_total_order() {
+        let mut stream = ParallelEventStreamState::default();
+        stream.push_for_test("11:45:02", "You", "start work");
+        stream.record_snapshot_stream_from_supervisor_snapshot(
+            &snapshot_with_notice("/tmp/root", "board ready"),
+            TuiLanguage::English,
+        );
+        stream.record_runtime_feed_entries(
+            "/tmp/root",
+            &[runtime_feed_entry(
+                1,
+                "session_detail",
+                "slot-1",
+                "session_detail_upsert",
+            )],
+        );
+        stream.record_runtime_feed_entries(
+            "/tmp/root",
+            &[
+                runtime_feed_entry(1, "session_detail", "slot-1", "session_detail_upsert"),
+                runtime_feed_entry(2, "slot_lease", "slot-2", "slot_lease_upsert"),
+            ],
+        );
+
+        let snapshot = stream.snapshot();
+        assert_eq!(
+            snapshot
+                .events()
+                .iter()
+                .map(|event| event.id().ordinal())
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+        assert!(matches!(
+            snapshot.events()[0].source(),
+            ParallelEventSourceId::LocalAccepted { .. }
+        ));
+        assert!(matches!(
+            snapshot.events()[1].source(),
+            ParallelEventSourceId::ObservedStateTransition { .. }
+        ));
+        assert!(matches!(
+            snapshot.events()[2].source(),
+            ParallelEventSourceId::Authority { sequence: 2, .. }
+        ));
+    }
+
+    #[test]
+    fn snapshot_observation_retains_a_to_b_to_a() {
+        let mut stream = ParallelEventStreamState::default();
+
+        for notice in ["state A", "state B", "state A"] {
+            stream.record_snapshot_stream_from_supervisor_snapshot(
+                &snapshot_with_notice("/tmp/root", notice),
+                TuiLanguage::English,
+            );
+        }
+
+        let snapshot = stream.snapshot();
+        assert_eq!(snapshot.events().len(), 3);
+        assert_eq!(
+            snapshot
+                .events()
+                .iter()
+                .map(|event| event.id().ordinal())
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+        assert_eq!(
+            snapshot
+                .events()
+                .iter()
+                .filter(|event| event.line().to_string().contains("state A"))
+                .count(),
+            2
+        );
+        assert!(matches!(
+            snapshot.events()[2].source(),
+            ParallelEventSourceId::ObservedStateTransition {
+                previous: Some(previous),
+                current,
+                ..
+            } if previous.ends_with("state B") && current.ends_with("state A")
+        ));
+    }
+
+    #[test]
+    fn workspace_a_b_a_creates_new_stream_generations() {
+        let mut stream = ParallelEventStreamState::default();
+
+        stream.record_snapshot_stream_from_supervisor_snapshot(
+            &snapshot_with_notice("/tmp/a", "A first"),
+            TuiLanguage::English,
+        );
+        let first = stream.snapshot();
+        stream.record_snapshot_stream_from_supervisor_snapshot(
+            &snapshot_with_notice("/tmp/b", "B"),
+            TuiLanguage::English,
+        );
+        let second = stream.snapshot();
+        stream.record_snapshot_stream_from_supervisor_snapshot(
+            &snapshot_with_notice("/tmp/a", "A again"),
+            TuiLanguage::English,
+        );
+        let third = stream.snapshot();
+
+        assert_eq!(
+            [first.generation(), second.generation(), third.generation()],
+            [0, 1, 2]
+        );
+        for snapshot in [&first, &second, &third] {
+            assert_eq!(snapshot.first_ordinal(), 0);
+            assert_eq!(snapshot.events().len(), 1);
+            assert_eq!(
+                snapshot.events()[0].id().stream_generation(),
+                snapshot.generation()
+            );
+        }
+        assert!(third.events()[0].line().to_string().contains("A again"));
+        assert!(!third.events()[0].line().to_string().contains("A first"));
+    }
+
+    #[test]
+    fn canonical_window_retains_one_bounded_identity_range() {
+        let mut stream = ParallelEventStreamState::default();
+
+        for index in 0..(MAX_PARALLEL_EVENT_WINDOW + 3) {
+            stream.push_for_test("11:45:03", "Supervisor", format!("event-{index:03}"));
+        }
+
+        let snapshot = stream.snapshot();
+        assert!(
+            Arc::ptr_eq(&stream.events, &snapshot.events),
+            "capturing a stream snapshot should share the immutable canonical window"
+        );
+        assert_eq!(snapshot.events().len(), MAX_PARALLEL_EVENT_WINDOW);
+        assert_eq!(snapshot.first_ordinal(), 3);
+        assert_eq!(
+            snapshot.events().last().map(ProjectedParallelEvent::id),
+            Some(ParallelStreamEventId {
+                stream_generation: 0,
+                ordinal: (MAX_PARALLEL_EVENT_WINDOW + 2) as u64,
+            })
+        );
+        assert_eq!(snapshot.live_events().len(), MAX_PARALLEL_SUPERVISOR_EVENTS);
     }
 
     #[test]
@@ -851,19 +1229,34 @@ mod tests {
     #[test]
     fn localized_snapshot_stream_dedupes_with_language_independent_keys() {
         let snapshot = localized_snapshot();
-        let mut log = ParallelSupervisorEventLog::default();
+        let mut log = ParallelEventStreamState::default();
 
         log.record_snapshot_stream_from_supervisor_snapshot(&snapshot, TuiLanguage::Korean);
+        let first = log.snapshot();
         log.record_snapshot_stream_from_supervisor_snapshot(&snapshot, TuiLanguage::English);
+        let second = log.snapshot();
 
         let rendered = log
-            .scrollback_lines()
+            .window_lines()
             .iter()
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
             .join("\n");
         assert_eq!(rendered.matches("control tower is live").count(), 1);
         assert_eq!(rendered.matches("no agent results reported yet").count(), 1);
+        assert_eq!(
+            first
+                .events()
+                .iter()
+                .map(ProjectedParallelEvent::id)
+                .collect::<Vec<_>>(),
+            second
+                .events()
+                .iter()
+                .map(ProjectedParallelEvent::id)
+                .collect::<Vec<_>>(),
+            "language-specific copy must not create a new event identity"
+        );
     }
 
     fn runtime_feed_entry(
@@ -901,5 +1294,13 @@ mod tests {
             ),
             Some("control tower is live".to_string()),
         )
+    }
+
+    fn snapshot_with_notice(workspace: &str, notice: &str) -> ParallelModeSupervisorSnapshot {
+        let mut snapshot = localized_snapshot();
+        snapshot.workspace_path = workspace.to_string();
+        snapshot.distributor.completion_feed.clear();
+        snapshot.top_notice = Some(notice.to_string());
+        snapshot
     }
 }

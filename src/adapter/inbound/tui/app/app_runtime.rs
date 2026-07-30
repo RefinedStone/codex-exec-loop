@@ -1620,7 +1620,7 @@ impl NativeTuiApp {
                 help_scroll_offset: 0,
                 reviews_overlay_ui_state: super::reviews_overlay_ui::ReviewsOverlayUiState::default(
                 ),
-                parallel_supervisor_event_log: super::ParallelSupervisorEventLog::default(),
+                parallel_event_stream: super::ParallelEventStreamState::default(),
                 session_overlay_ui_state: SessionOverlayUiState::new(SESSION_PAGE_SIZE),
                 tui_language: super::TuiLanguage::default(),
                 language_selection_overlay_ui_state:

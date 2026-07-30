@@ -25,7 +25,7 @@ use crate::domain::planning::PlanningWorkerPanelState;
 use super::super::parallel_presentation_bridge::{
     ParallelModePresentationLoadingStage, pending_parallel_mode_supervisor_snapshot,
 };
-use super::super::parallel_supervisor_events::ParallelSupervisorEventProjection;
+use super::super::parallel_supervisor_events::ParallelEventStreamSnapshot;
 #[cfg(test)]
 use super::NativeTuiApp;
 use super::capability_projection::{
@@ -125,7 +125,7 @@ pub(in crate::adapter::inbound::tui::app) struct ConversationProjectionSample {
     planning_runtime_workspace_directory: Option<String>,
     planning_runtime: Box<PlanningRuntimeProjection>,
     parallel_panel: ParallelPanelProjectionSample,
-    parallel_supervisor_events: ParallelSupervisorEventProjection,
+    parallel_supervisor_events: ParallelEventStreamSnapshot,
     inline_history_render_mode: InlineHistoryRenderMode,
     history_insert_mode: HistoryInsertionMode,
     rendered_at: Instant,
@@ -141,7 +141,7 @@ pub(in crate::adapter::inbound::tui::app) struct ConversationProjectionFrameInpu
     pub(in crate::adapter::inbound::tui::app) transcript_handoff_correlation:
         Option<TranscriptHandoffCorrelation>,
     pub(in crate::adapter::inbound::tui::app) parallel_supervisor_events:
-        ParallelSupervisorEventProjection,
+        ParallelEventStreamSnapshot,
     pub(in crate::adapter::inbound::tui::app) inline_history_render_mode: InlineHistoryRenderMode,
     pub(in crate::adapter::inbound::tui::app) history_insert_mode: HistoryInsertionMode,
 }
@@ -201,7 +201,7 @@ impl ConversationProjectionSample {
                 }
                 ConversationState::Loading | ConversationState::Failed(_) => None,
             },
-            parallel_supervisor_events: app.shell.parallel_supervisor_event_log.projection(),
+            parallel_supervisor_events: app.shell.parallel_event_stream.snapshot(),
             inline_history_render_mode: app.shell.inline_history_render_mode,
             history_insert_mode: app.shell.history_insert_mode,
         })
