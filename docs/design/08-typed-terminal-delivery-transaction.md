@@ -1,6 +1,6 @@
 # Typed Terminal Delivery Transaction
 
-Status: **Accepted for implementation; not yet shipped**
+Status: **Implemented and shipped on `prerelease`**
 
 Decision date: 2026-07-30
 
@@ -15,10 +15,10 @@ Related contracts:
 
 ## Decision Summary
 
-Akra will implement a narrow terminal-delivery state machine inside the inbound TUI adapter.
+Akra implements a narrow terminal-delivery state machine inside the inbound TUI adapter.
 The first consumer is the parallel supervisor event stream.
 
-The change will:
+The shipped transaction:
 
 1. retain stable event identity through projection and terminal delivery;
 2. replace separate live and scrollback event stores with one canonical event window;
@@ -32,8 +32,34 @@ This decision activates only the narrow extraction previously described as the c
 terminal-transaction option. It does **not** replace Ratatui or Crossterm, introduce custom
 scrollback, move terminal state into Core, or create a new business/application layer.
 
-Until the implementation completion criteria in this document pass, the current terminal adapter
-remains the shipped implementation.
+The implementation and primitive evidence are recorded below. Broader extraction beyond the
+parallel stream still requires a separate decision.
+
+## Shipped Implementation
+
+The two delivery slices are complete:
+
+- canonical stream identity shipped in PR 2060 at `41b89993`;
+- the typed host/live transaction shipped in PR 2061, with implementation evidence captured at
+  `ac409ed7d1fa97cde46553aff271e5ae3b162742`;
+- `ParallelTerminalDeliveryState` owns the generation-qualified cursor, exact write token,
+  committed receipt, and explicit `Ready | Writing | Uncertain` state;
+- one planner derives disjoint `ParallelHostBatch` and `ParallelLiveStreamModel` values from the
+  canonical event window and one geometry snapshot;
+- the newest undelivered event remains live even when wrapping exceeds the viewport, while a typed
+  scroll offset clips its rows without advancing the frontier;
+- focused Parallel Operations frames anchor the hidden physical cursor at the live viewport
+  origin, and newly durable host batches carry physical reflow guard rows through the same
+  transaction; and
+- host receipt settlement, frame feedback, and conversation handoff commit independently.
+
+`HistoryInsertionMode::Automatic` now resolves to `NewlineFallback` for every host-delivery path.
+An actual tmux control run showed that `StandardScrollRegion` could return success while retaining
+no host history; it therefore remains an explicit diagnostic override, not an automatic default.
+`ViewportReplay` remains explicit-only and never advances or writes the host frontier.
+
+The candidate-specific E3 capture and its explicit cross-environment evidence limits are recorded
+in [PR 2061 typed-delivery evidence](../validation/artifacts/pr-2061-typed-terminal-delivery/README.md).
 
 ## Context
 
@@ -53,13 +79,13 @@ The semantic boundaries are substantially enforced:
 - transcript handoff and frame feedback use exact typed receipts; and
 - terminal delivery owns viewport, back-buffer, scrollback, and recovery facts.
 
-The parallel event stream does not yet preserve that contract end to end. Runtime feed entries
-arrive with an authority sequence, but the TUI lowers them to rendered `Line` values before
-terminal delivery. It then keeps separate live and scrollback collections and uses rendered-line
-prefix or overlap comparison as the delivery baseline.
+Before this decision shipped, the parallel event stream did not preserve that contract end to end.
+Runtime feed entries arrived with an authority sequence, but the TUI lowered them to rendered
+`Line` values before terminal delivery. It then kept separate live and scrollback collections and
+used rendered-line prefix or overlap comparison as the delivery baseline.
 
 Consequently, copy, localization, wrapping, viewport height, stream retention, or layout changes
-can influence whether terminal delivery considers an event new. This is a presentation concern
+could influence whether terminal delivery considered an event new. This was a presentation concern
 leaking into side-effect identity.
 
 ## Trigger Evidence
@@ -490,7 +516,7 @@ the temporal tests below prove behavior.
 
 ## Validation Contract
 
-Implementation starts with a frame-recorder reproduction of the reported failure:
+Implementation proof starts with a frame-recorder reproduction of the reported failure:
 
 - one authority event;
 - long wrapped GitHub identity error text;
@@ -543,14 +569,15 @@ a new test dependency.
 
 Because the implementation changes shared host-scrollback behavior, it follows the primitive-
 sensitive capture contract. The PR records the required first-class environments and any explicit
-downgrade. TestBackend or snapshot output alone is insufficient.
+downgrade. TestBackend or snapshot output alone is insufficient. The recorded evidence is
+[PR 2061 typed-delivery evidence](../validation/artifacts/pr-2061-typed-terminal-delivery/README.md).
 
-## Delivery Slices
+## Delivered Slices
 
-Implementation should use two reviewable worktree/PR slices, each based on the latest
+Implementation used two reviewable worktree/PR slices, each based on the latest
 `origin/prerelease`.
 
-### Slice 1: canonical event identity
+### Slice 1: canonical event identity — PR 2060
 
 - add this decision to the canonical architecture links;
 - add typed stream generation, ordinal, and source identity;
@@ -561,9 +588,9 @@ Implementation should use two reviewable worktree/PR slices, each based on the l
 - add stream stale, duplicate, ABA, and retention tests; and
 - add guards preventing the old dual-store shape from returning.
 
-This slice does not change terminal primitives.
+This slice did not change terminal primitives.
 
-### Slice 2: typed terminal delivery
+### Slice 2: typed terminal delivery — PR 2061
 
 - add the dedicated parallel delivery state and cursor;
 - prepare a single host/live partition;
@@ -582,13 +609,11 @@ Each slice follows:
 worktree -> commit -> push -> PR(prerelease) -> rebase merge -> worktree cleanup
 ```
 
-Slice 2 must not merge while both the old line baseline and the new delivery frontier can write
-the same parallel stream.
+Slice 2 removed the old parallel line baseline before the new frontier became the only writer.
 
 ## Completion Criteria
 
-The implementation reaches the project 85% checkpoint only when all critical conditions below are
-complete:
+The shipped implementation satisfies the critical 85% checkpoint:
 
 - stable event identity reaches terminal delivery;
 - one canonical event window replaces dual storage;

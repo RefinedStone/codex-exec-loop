@@ -150,6 +150,14 @@ composer while the enabled passive projection continues; submitting a parallel t
 board so dispatch progress is visible. The 80-column layout stacks lanes before selected detail,
 while 120- and 160-column layouts show lifecycle, lanes, and detail together.
 
+Parallel event delivery keeps one generation-qualified canonical event window. The terminal
+adapter plans disjoint durable and live event models, advances its monotonic host frontier only
+after an exact committed write receipt, and never asks the renderer to rediscover ownership from
+text. The newest undelivered event remains live through narrow geometry, focused frames park their
+hidden cursor at the live viewport origin, and newly durable batches retain physical resize guards.
+Automatic host insertion uses `NewlineFallback`; `StandardScrollRegion` and `ViewportReplay` remain
+explicit diagnostic paths, and replay mode performs no host writes.
+
 `:peek` opens a read-only active-agent conversation preview; switching agents or overlays prevents
 late results from replacing the latest preview or the interactive conversation.
 

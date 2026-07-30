@@ -1,0 +1,49 @@
+scenario_set: typed-terminal-delivery-transaction-v1
+overall_result: pass for candidate-specific E3; explicit E1/E2/E4 evidence downgrade recorded
+
+1. committed_history_above_live_viewport: pass
+   Two real pool refresh transitions became durable host events while the focused board remained live.
+2. no_duplicate_after_redraw: pass
+   slot-1 and slot-2 proof events each counted once after refresh.
+3. shrink_restore_without_stale_or_duplicate_tail: pass
+   wide-1:     slot1=1 slot2=1 width=120 height=30 cursor=0,14 history=25
+   narrow-1:   slot1=1 slot2=1 width=48  height=18 cursor=0,2  history=54
+   restored-1: slot1=1 slot2=1 width=120 height=30 cursor=0,14 history=22
+4. clear_reset_recovery: automated and historical addendum
+   Named proofs: history_sync_for_empty_thread_clears_baseline_without_losing_geometry;
+   pending_lines_replays_full_history_after_reset. PR 1926 recorded actual reset flows.
+5. thread_session_switch_without_leakage: automated and historical addendum
+   Named proof: conversation_identity_switch_replays_shared_prefix_once_without_loading_frame.
+   PR 1926 recorded actual session-switch flows.
+6. split_host_live_continuity_without_panel_chrome: pass
+   Host-history-only capture after repeated resize retained both full proof events once.
+   Chrome matches across Parallel Operations, Agent Lanes, Selected Lane, Accepted Queue, and
+   Command Hints: 0.
+7. fallback_viewport_and_cursor_restoration: pass
+   Automatic resolved to NewlineFallback with both overrides unset. Focused cursor followed the
+   live viewport origin at y=14 wide and y=2 narrow; closing restored the composer cursor.
+8. focus_loss_reacquire: automated plus manual surface-transition addendum
+   Named proofs: focus_reacquire_repaints_visible_frame_without_replaying_host_scrollback;
+   vt100_focus_reacquire_repaints_once_across_cjk_resize. Manual close/reopen retained both proof
+   events once.
+9. board_close_reopen_second_resize: pass
+   closed:     slot1=1 slot2=1 width=120 height=30 cursor=4,24 history=22
+   reopened:   slot1=1 slot2=1 width=120 height=30 cursor=0,14 history=29
+   narrow-2:   slot1=1 slot2=1 width=48  height=18 cursor=0,2  history=52
+   restored-2: slot1=1 slot2=1 width=120 height=30 cursor=0,14 history=26
+10. third_resize_and_host_history: pass
+   narrow-3:   slot1=1 slot2=1 width=48  height=18 cursor=0,2  history=46
+   restored-3: slot1=1 slot2=1 width=120 height=30 cursor=0,14 history=23
+   Final host-history chrome matches: 0.
+11. exact_long_identity_and_transaction_model: automated addendum
+   Named proofs: direct_frame_recorder_keeps_long_github_identity_error_exactly_once_through_refresh_and_resize;
+   deterministic_operation_sequence_never_decreases_the_frontier;
+   focused_parallel_operations_survives_resize_and_close_without_chrome_in_scrollback.
+12. clean_exit: pass
+   Ctrl+q removed the tmux pane through the normal candidate shutdown path.
+
+diagnostic_control:
+  A precursor run using StandardScrollRegion returned terminal-write success while tmux history
+  remained empty and an earlier event disappeared after the next transition. Standard mode is
+  therefore an explicit diagnostic override, not an automatic-path pass claim.
+

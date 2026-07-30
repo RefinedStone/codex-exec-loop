@@ -9,9 +9,8 @@ state, resize behavior, overlays, prompt editing, or live-tail presentation.
 
 Stay on the current Ratatui/Crossterm stack by default. Option A remains the shipped path. The
 [Typed Terminal Delivery Transaction](../design/08-typed-terminal-delivery-transaction.md)
-decision record accepts one narrow Option B extraction for parallel host delivery after documenting
-the Round 6 trigger evidence; it does not activate a new runtime path until its implementation
-completion criteria pass.
+decision record ships one narrow Option B extraction for parallel host delivery after documenting
+the Round 6 trigger evidence and satisfying its implementation completion criteria.
 Option A proof hardening is the default for every shipped path. Any broader structural extraction
 remains blocked unless the Decision Record explicitly proves the Round 6 trigger evidence.
 This contract keeps `invariant × first-class environment × branch family` explicit in repo-facing docs and guards.
@@ -37,7 +36,7 @@ The smaller-representative-set rule below can reduce the number of supplemental 
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Environment class | approved spec + validation docs | release policy / docs / PR review | E1 Windows Terminal + WSL bash, E2 Windows Terminal + PowerShell, E3 tmux detached PTY, E4 direct Linux terminal | other environments stay explicitly fallback or experimental | none at runtime | non-first-class paths are non-blocking unless they contaminate first-class behavior | first-class invariants are release-blocking; fallback/experimental rows stay representative |
 | Default `InlineHistoryRenderMode` | `src/adapter/inbound/tui/app.rs` | app startup / env parse | `HostScrollback` via `InlineHistoryRenderMode::from_env_values(None)` | `ViewportReplay` remains explicit-only | `CODEX_EXEC_LOOP_INLINE_HISTORY_MODE` | replay-only paths stay representative unless release policy promotes them | `HostScrollback` rows are release-blocking; `ViewportReplay` rows stay representative by default |
-| Default `HistoryInsertionMode` | `src/adapter/inbound/tui/app/history_insertion.rs` | adapter-local mode resolution | `Automatic`: `NewlineFallback` for ordinary conversations; `StandardScrollRegion` for parallel mode | non-first-class terminals remain representative-only unless they contaminate first-class behavior | explicit `CODEX_EXEC_LOOP_HISTORY_INSERT_MODE` override | downgrade stays non-blocking unless it changes a first-class claim | both resolved insertion branches need proof wherever they are default or explicitly claimed |
+| Default `HistoryInsertionMode` | `src/adapter/inbound/tui/app/history_insertion.rs` | adapter-local mode resolution | `Automatic`: `NewlineFallback` for every host-delivery path | `StandardScrollRegion` remains an explicit diagnostic path; non-first-class terminals remain representative-only unless they contaminate first-class behavior | explicit `CODEX_EXEC_LOOP_HISTORY_INSERT_MODE` override | an explicit standard-path failure does not downgrade the automatic path, but any first-class automatic-path failure remains blocking | newline fallback needs default-path proof; standard needs representative proof only when explicitly exercised or claimed |
 | Terminal primitive behavior ownership | `history_insertion.rs`, `inline_terminal_adapter.rs` | implementation boundary | preserve release-blocking invariants across E1-E4 | representative proof is acceptable for downgraded environments | env override plus explicit manual capture | primitive divergence outside first-class policy must be documented | automated proof always; manual capture only for primitive-sensitive changes |
 | Reviewer gate / release semantics | validation docs + PR policy + architecture guards | review / merge | release blocks on first-class invariant failures | fallback/experimental failures do not block unless they contaminate first-class behavior | none | downgrades must be explicit in docs and review notes | first-class rows require pass; fallback/experimental rows require representative evidence |
 
@@ -55,10 +54,10 @@ The smaller-representative-set rule below can reduce the number of supplemental 
 | Surface | Keep owning | Candidate extraction / clarification |
 | --- | --- | --- |
 | `NativeTuiApp` | four private typed adapter slices and env-derived/local presentation state; semantic lifecycle remains Core-owned | cannot be borrowed by production frontend/terminal/renderer code; only owned projection/model capture and named receipt APIs cross `ShellRuntime` |
-| Thin terminal layer | terminal lifecycle, scrollback writes, viewport sync, clear/reset, pre-draw owned-frame capture, stable-delivery receipt commit, cursor-sensitive effects | the accepted parallel-delivery extraction remains implementation-pending; broader extraction still requires a separate decision |
+| Thin terminal layer | terminal lifecycle, scrollback writes, viewport sync, clear/reset, pre-draw owned-frame capture, typed parallel delivery, stable-delivery receipt commit, cursor-sensitive effects | the parallel-delivery extraction is shipped; broader extraction still requires a separate decision |
 | Owned frame boundary | `InlineShellFrameModel`, active `InlineInspectionFrameModel`, expected feedback baselines, `InlineFrameRenderReceipt` compare-and-apply | must not reacquire Core/application/control-plane authority or perform provider I/O |
 | Render/layout boundary | pure consumption of owned frame models, typed render surfaces, append-only stream continuity, titleless live-tail behavior, panel chrome exclusion from host scrollback | may mutate only Ratatui `Frame`; must stay distinct from terminal primitive emission and application/core state authority |
-| Shared render transaction model | reconcile history delta, geometry state, back-buffer trust, redraw decision, terminal-side flush ordering | only the parallel-delivery state machine is accepted; broader shared-transaction extraction remains conditional |
+| Shared render transaction model | reconcile history delta, geometry state, back-buffer trust, redraw decision, terminal-side flush ordering | the parallel-delivery state machine is shipped; broader shared-transaction extraction remains conditional |
 
 
 ## Test Layers
@@ -148,6 +147,13 @@ Required cases:
 - one stable delivery commits the exact render-attempt receipt once; stale and duplicate attempts
   cannot change activity, editor, help, approval, session-list, or queue-hit-area state
 - a UI edit made after frame capture wins over an older receipt through compare-and-apply
+- one generation-qualified parallel event window produces disjoint host and live models
+- resize, focus, overlay, and mode transitions never decrease the parallel host frontier
+- the newest undelivered parallel event remains live when wrapping exceeds the viewport
+- a newly durable parallel boundary event retains physical reflow guards through reopen and a
+  second shrink/restore cycle
+- committed, duplicate, stale, pre-write-aborted, and ambiguous host outcomes settle through
+  exhaustive typed receipt paths
 
 ### 5. Event And Scheduler Tests
 
@@ -222,8 +228,8 @@ Every TUI rendering PR should state which rows it touches.
 | Transcript handoff receipt | exact conversation/turn/generation/revision ACK only; stale identity and later-appended transcript remain pending; terminal draw failure retries without ACK |
 | Frame render receipt | owned model captured before draw; failed/resize-raced/stale/duplicate delivery applies nothing; exact stable attempt compare-and-applies feedback once |
 | Overlay | opening overlay clears stale live-tail rows and closing redraws normal tail |
-| Parallel event stream | frame recorder proves initial status rows survive later runtime-event redraws without panel chrome in host scrollback; split scrollback/live-tail streams render as a titleless live tail |
-| Terminal fallback | standard and fallback insertion modes each update viewport state correctly |
+| Parallel event stream | frame recorder proves stable event identity, disjoint host/live ownership, monotonic receipt settlement, initial status-row continuity, newest-live clipping, focused cursor parking, durable resize guards, and a titleless live tail without panel chrome in host scrollback |
+| Terminal fallback | automatic newline fallback preserves host history, viewport state, and cursor; explicit standard mode remains representative diagnostic coverage |
 | Terminal disconnect | real native binary reaches its first PTY frame with a live initialized app-server child, loses the PTY master, and both processes exit within the deadline without guard-initiated cleanup |
 
 ## Architectural Guardrails
@@ -346,6 +352,11 @@ Capture all four first-class environments when:
 - the change touches defaulting logic or common adapter code affecting multiple first-class
   classes
 - the change changes release-policy claims or downgrade semantics
+
+If a required candidate-specific row cannot be executed, record it as `not executed` and document
+the resulting release-evidence downgrade. Historical artifacts may support an unchanged primitive
+branch, but they must retain their original candidate identity and cannot be relabeled as a pass
+for the current candidate.
 
 ### When a smaller representative set is sufficient
 

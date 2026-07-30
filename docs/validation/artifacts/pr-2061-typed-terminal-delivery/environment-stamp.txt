@@ -1,0 +1,35 @@
+artifact_id: pr2061-e3-typed-terminal-delivery
+pr_or_work_item: PR 2061
+capture_role: supplemental-unmatched
+environment_class: first-class E3
+check_profile: typed-terminal-delivery-transaction-v1
+captured_at_local: 2026-07-31T00:07+09:00
+operator: Codex /root
+reviewer: pending PR review
+candidate_commit: ac409ed7d1fa97cde46553aff271e5ae3b162742
+candidate_tree: 16e6e3c1210ac31da760a104e5de3a5d9d704366
+candidate_production_inputs_match_commit: true
+worktree_state_during_capture: production inputs clean; documentation draft uncommitted
+binary_sha256: 185d9025623f8b798659c298f42054ba4bd249825f4ad7f6e96c78d85af14115
+source_build: true
+runtime_authority: production akra composition with actual codex app-server startup
+terminal: tmux 3.4
+multiplexer: tmux detached PTY
+shell: GNU bash 5.2.21(1)-release
+os: Ubuntu 24.04.2 LTS / WSL2
+kernel: 6.18.33.2-microsoft-standard-WSL2
+frontend: inline
+term: xterm-256color
+initial_geometry: 120x30
+narrow_geometry: 48x18
+restored_geometry: 120x30
+inline_history_render_mode: HostScrollback
+inline_history_render_mode_source: default; override unset
+configured_history_insertion_mode: Automatic
+effective_history_insertion_mode: NewlineFallback
+history_insertion_mode_source: default; override explicitly unset
+wt_session: unset
+relevant_overrides: CODEX_EXEC_LOOP_INLINE_HISTORY_MODE unset; CODEX_EXEC_LOOP_HISTORY_INSERT_MODE unset
+runtime_exit: normal Ctrl+q shutdown
+notes_on_deviations: E1, E2, and E4 candidate-specific manual rows not executed; see README evidence matrix
+
