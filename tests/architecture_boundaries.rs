@@ -9951,6 +9951,10 @@ fn tui_parallel_terminal_delivery_is_one_typed_transaction() {
             "delivery ownership must never be reconstructed from rendered text: {forbidden}"
         );
     }
+    assert!(
+        delivery_production.contains("start.min(events.len() - 1)"),
+        "resize geometry alone must not advance the frontier past the latest live event"
+    );
 
     let flush_source = fs::read_to_string(
         repo_root().join("src/adapter/inbound/tui/app/inline_terminal_adapter/history_flush.rs"),
@@ -10007,6 +10011,11 @@ fn tui_parallel_terminal_delivery_is_one_typed_transaction() {
     assert!(
         terminal_source.contains(".then_some(self.insert_mode.resolve())"),
         "every host delivery path must apply the safe automatic insertion policy"
+    );
+    assert!(
+        terminal_source.contains("park_hidden_cursor_at_terminal_bottom")
+            && terminal_source.contains("ShellOverlay::Supersession"),
+        "focused operations must keep terminal resize reflow below the live event stream"
     );
     let host_delivery = top_level_function_source(&terminal_source, "sync_parallel_host_delivery");
     for required_outcome in [

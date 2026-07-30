@@ -178,6 +178,8 @@ fn draw_inline_frame<B: InlineResizeBackend>(
 ) -> Result<bool, B::Error> {
     let viewport_handoff_delivery_token =
         frame_projection.transcript_handoff_delivery_token.clone();
+    let park_hidden_cursor_at_terminal_bottom =
+        frame_projection.shell_overlay == ShellOverlay::Supersession;
     if !inline_terminal.viewport.back_buffer_trustworthy {
         /*
          * Inline viewport content is not a full-screen alternate buffer. Once
@@ -234,15 +236,31 @@ fn draw_inline_frame<B: InlineResizeBackend>(
             return Err(error);
         }
     };
-    let cursor_position = match terminal.get_cursor_position() {
-        Ok(cursor_position) => cursor_position,
+    let terminal_size = match terminal.size() {
+        Ok(terminal_size) => terminal_size,
         Err(error) => {
             fail_closed_frame_delivery(runtime, inline_terminal);
             return Err(error);
         }
     };
-    let terminal_size = match terminal.size() {
-        Ok(terminal_size) => terminal_size,
+    if park_hidden_cursor_at_terminal_bottom && terminal_size.height > 0 {
+        /*
+         * Focused parallel operations has no interactive cursor. Leaving the
+         * hidden cursor on the last changed event row makes tmux anchor a width
+         * shrink there and reflow that live event into host history before Akra
+         * can redraw it. Park the still-hidden physical cursor at the terminal
+         * bottom so resize reflow consumes trailing screen space instead.
+         */
+        if let Err(error) = terminal
+            .backend_mut()
+            .set_cursor_position(Position::new(0, terminal_size.height - 1))
+        {
+            fail_closed_frame_delivery(runtime, inline_terminal);
+            return Err(error);
+        }
+    }
+    let cursor_position = match terminal.get_cursor_position() {
+        Ok(cursor_position) => cursor_position,
         Err(error) => {
             fail_closed_frame_delivery(runtime, inline_terminal);
             return Err(error);
