@@ -39,7 +39,7 @@ release-blocking proof shape for that stack. The
 decision record ships one narrow Option B extraction for parallel host delivery after its
 completion criteria passed. The narrow Option B transaction is active; this matrix does not
 authorize any broader extraction.
-The current stack remains the default posture for repo-facing proof.
+The current stack as the default posture remains explicit in repo-facing proof.
 
 ### First-class environment key
 
