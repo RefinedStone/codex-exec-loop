@@ -33,9 +33,12 @@ native TUI behavior.
 - vt100-backed tests cover ANSI, cursor, clear, wrapping, and terminal scrollback behavior.
 ## Proof Contract Markers
 
-Option A remains the current-stack default on the existing Ratatui/Crossterm structure. This
-matrix materializes the release-blocking proof shape for that stack; it does not by itself
-activate Option B.
+Option A remains the shipped default on the existing Ratatui/Crossterm structure. This matrix
+materializes the release-blocking proof shape for that stack. The
+[Typed Terminal Delivery Transaction](../design/08-typed-terminal-delivery-transaction.md)
+decision record separately accepts one narrow Option B extraction for parallel host delivery; the
+new path is not shipped until that record's completion criteria pass.
+This matrix does not by itself activate Option B.
 The current stack as the default posture remains explicit in this matrix for repo-facing proof.
 
 ### First-class environment key
