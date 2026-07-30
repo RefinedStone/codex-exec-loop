@@ -1,14 +1,19 @@
-use super::super::super::super::{FOOTER_NOTICE_DETAIL_LIMIT, NativeTuiApp, compact_inline_detail};
+use super::super::super::super::{
+    FOOTER_NOTICE_DETAIL_LIMIT, PlanningInitSimpleReviewState, compact_inline_detail,
+};
 use super::copy::PlanningSimpleReviewCopy;
 
 // simple review 화면은 두 UI state를 함께 보여 준다. planning init 쪽 staged draft
 // metadata/validation 상태와, promote 이후 이어질 auto-follow turn budget editor 상태다.
 // 이 projection이 두 source를 copy DTO로 고정해 아래 review builder가 app을 다시 읽지 않게 한다.
-pub(super) fn build_simple_review_copy(app: &NativeTuiApp) -> PlanningSimpleReviewCopy {
+pub(super) fn build_simple_review_copy(
+    simple_review: Option<&PlanningInitSimpleReviewState>,
+    max_auto_turns_label: String,
+    turn_budget_edit_buffer: Option<String>,
+) -> PlanningSimpleReviewCopy {
     // simple_review가 없다는 것은 router step과 UI-local staged result가 잠깐 어긋난
     // degraded 상태다. rendering path에서는 panic보다 unknown/0 fallback을 택해
     // operator가 상태 불일치를 화면에서 확인할 수 있게 한다.
-    let simple_review = app.planning.planning_init_overlay_ui_state.simple_review();
     let validation_report = simple_review.map(|review| review.validation_report());
 
     PlanningSimpleReviewCopy {
@@ -31,9 +36,9 @@ pub(super) fn build_simple_review_copy(app: &NativeTuiApp) -> PlanningSimpleRevi
             .map(|issue| compact_inline_detail(issue.message.as_str(), FOOTER_NOTICE_DETAIL_LIMIT)),
         // auto-turn budget은 planning init 자체의 산출물은 아니지만, promote 직후 이어질
         // 자동 실행량을 같은 decision surface에서 조정하게 해 주는 adjacent control이다.
-        max_auto_turns_label: app.current_max_auto_turns_label(),
+        max_auto_turns_label,
         // None이면 committed label이 유일한 표시 값이고, Some이면 같은 값이 editor
         // 활성 여부와 raw draft를 함께 표현해 bool/string 불일치를 만들지 않는다.
-        turn_budget_edit_buffer: app.max_auto_turns_edit_buffer().map(str::to_string),
+        turn_budget_edit_buffer,
     }
 }

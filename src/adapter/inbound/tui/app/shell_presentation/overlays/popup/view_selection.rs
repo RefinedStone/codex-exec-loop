@@ -1,23 +1,27 @@
-use super::super::super::{AkraTheme, Line, NativeTuiApp, VIEW_SELECTION_MODE_OPTIONS};
+use super::super::super::{AkraTheme, ConversationViewMode, Line, VIEW_SELECTION_MODE_OPTIONS};
 use super::super::option_lines::overlay_option_line;
 use super::ViewSelectionOverlayView;
 
-pub(crate) fn build_view_selection_overlay_view(app: &NativeTuiApp) -> ViewSelectionOverlayView {
-    let state = &app.shell.view_selection_overlay_ui_state;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ViewSelectionFrameInput {
+    pub(crate) current_mode: ConversationViewMode,
+    pub(crate) selected_mode_index: usize,
+}
+
+pub(crate) fn build_view_selection_overlay_view(
+    input: ViewSelectionFrameInput,
+) -> ViewSelectionOverlayView {
     let mode_lines = VIEW_SELECTION_MODE_OPTIONS
         .iter()
         .enumerate()
         .map(|(index, option)| {
             let mode_label = option.mode.label();
-            let detail = with_current_suffix(
-                option.detail,
-                app.conversation.conversation_view_mode == option.mode,
-            );
+            let detail = with_current_suffix(option.detail, input.current_mode == option.mode);
             overlay_option_line(
                 &(index + 1).to_string(),
                 mode_label,
                 &detail,
-                state.selected_mode_index() == index,
+                input.selected_mode_index == index,
                 false,
             )
         })
@@ -30,10 +34,7 @@ pub(crate) fn build_view_selection_overlay_view(app: &NativeTuiApp) -> ViewSelec
         ],
         mode_lines,
         status_lines: vec![
-            Line::from(format!(
-                "current: {}",
-                app.conversation.conversation_view_mode.label()
-            )),
+            Line::from(format!("current: {}", input.current_mode.label())),
             Line::from("Codex and Codex Commentary stay visible in every view."),
         ],
         key_lines: vec![

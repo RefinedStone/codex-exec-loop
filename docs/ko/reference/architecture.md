@@ -472,8 +472,13 @@ host-scrollback/live-tail 분할, prompt lock, animation, draw는 control-plane 
 
 `Terminal::draw` 전에 terminal transaction은 conversation projection과 활성 overlay 하나를
 owned `InlineShellFrameModel`로 합칩니다. 그 안의 `InlineInspectionFrameModel` variant가 view,
-widget-local state, geometry에 따른 scroll 결정, feedback 비교 기준을 소유합니다. Capture
-boundary는 UI-local state만 읽을 수 있고 Core, application service, parallel control plane,
+widget-local state, geometry에 따른 scroll 결정, feedback 비교 기준을 소유합니다.
+`ShellRuntime`은 Client Runtime을 `ConversationProjectionFrameInput`으로 한 번만 sample하고,
+UI capture 경계는 네 private app slice를 conversation, startup, session, selection, planning,
+directions 전용 frame input으로 낮춥니다. Production `shell_presentation/**` builder는
+`NativeTuiApp`을 받을 수 없으며 test-only app wrapper는 architecture guard가 production
+contract에서 제외합니다. Capture boundary는 UI-local state만 읽을 수 있고 Core,
+application service, parallel control plane,
 outbound I/O를 다시 조회할 수 없습니다. Production `shell_rendering.rs`와
 `shell_rendering/**`는 이 owned frame model만 소비하고 Ratatui `Frame`만 변경한 뒤
 `InlineFrameRenderReceipt`를 반환합니다. `NativeTuiApp`, command dispatch, clock, retained

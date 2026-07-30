@@ -1,6 +1,8 @@
 use crate::application::service::planning::PlanningRuntimeProjection;
 
-use super::super::super::super::{NativeTuiApp, PlanningInitOverlayStep};
+#[cfg(test)]
+use super::super::super::super::NativeTuiApp;
+use super::super::super::super::{PlanningInitOverlayStep, PlanningInitOverlayUiState};
 use super::super::PlanningInitOverlayView;
 use super::existing_workspace::build_existing_workspace_overlay_view_from_projection;
 use super::init_copy::{
@@ -10,6 +12,13 @@ use super::init_copy::{
 };
 use super::simple_review_inputs::build_simple_review_copy;
 
+pub(crate) struct PlanningInitOverlayFrameInput<'a> {
+    pub(crate) ui_state: &'a PlanningInitOverlayUiState,
+    pub(crate) workspace_directory: &'a str,
+    pub(crate) max_auto_turns_label: String,
+    pub(crate) turn_budget_edit_buffer: Option<String>,
+}
+
 // planning init overlay는 여러 wizard step을 갖지만 popup renderer는 단일
 // `PlanningInitOverlayView`만 소비한다. 이 router는 shell frontend와 step-specific
 // builder 사이의 adapter로, app/UI state 중 각 step에 필요한 입력만 아래로 넘긴다.
@@ -18,16 +27,25 @@ pub(super) fn build_planning_init_overlay_view_for_app(
     app: &NativeTuiApp,
 ) -> PlanningInitOverlayView {
     let runtime_projection = app.planning_runtime_projection_snapshot();
-    build_planning_init_overlay_view_from_projection(app, &runtime_projection)
+    let workspace_directory = app.planning_workspace_directory();
+    build_planning_init_overlay_view_from_projection(
+        PlanningInitOverlayFrameInput {
+            ui_state: &app.planning.planning_init_overlay_ui_state,
+            workspace_directory: &workspace_directory,
+            max_auto_turns_label: app.current_max_auto_turns_label(),
+            turn_budget_edit_buffer: app.max_auto_turns_edit_buffer().map(str::to_string),
+        },
+        &runtime_projection,
+    )
 }
 
 pub(crate) fn build_planning_init_overlay_view_from_projection(
-    app: &NativeTuiApp,
+    input: PlanningInitOverlayFrameInput<'_>,
     runtime_projection: &PlanningRuntimeProjection,
 ) -> PlanningInitOverlayView {
     // 이 state는 planning service domain state가 아니라 modal-local cursor와 선택값이다.
     // 따라서 mode/detail selection builder에는 app 전체 대신 이 projection만 전달한다.
-    let state = &app.planning.planning_init_overlay_ui_state;
+    let state = input.ui_state;
 
     // step enum을 exhaustive match로 둬 새 init step이 생길 때 compile 단계에서
     // presentation routing을 갱신하게 한다. fallback view를 만들면 wizard state와
@@ -38,7 +56,7 @@ pub(crate) fn build_planning_init_overlay_view_from_projection(
         // 이 단계만 app-level copy builder를 거쳐야 guard 화면의 상태 문구가 최신이다.
         PlanningInitOverlayStep::ExistingWorkspace => {
             build_existing_workspace_overlay_view_from_projection(
-                &app.planning_workspace_directory(),
+                input.workspace_directory,
                 runtime_projection,
             )
         }
@@ -55,7 +73,11 @@ pub(crate) fn build_planning_init_overlay_view_from_projection(
         // simple review는 staged scaffold 이름과 file count 같은 app-derived copy가 필요하다.
         // copy 추출을 여기서 끝내 review layout module은 renderer DTO 조립만 맡는다.
         PlanningInitOverlayStep::SimpleReview => {
-            build_simple_review_overlay_view(build_simple_review_copy(app))
+            build_simple_review_overlay_view(build_simple_review_copy(
+                state.simple_review(),
+                input.max_auto_turns_label,
+                input.turn_budget_edit_buffer,
+            ))
         }
         // manual editor step은 별도 draft editor surface를 전제로 한 고정 안내다.
         // app-derived 값이 없으므로 builder를 바로 호출해 데이터 의존성을 명시적으로 비운다.

@@ -1,22 +1,34 @@
 use super::super::super::{
     AkraTheme, Line, MODEL_SELECTION_EFFORT_OPTIONS, MODEL_SELECTION_MODEL_OPTIONS,
-    ModelSelectionStep, NativeTuiApp,
+    ModelSelectionStep,
 };
 use super::super::option_lines::overlay_option_line;
 use super::ModelSelectionOverlayView;
 
-pub(crate) fn build_model_selection_overlay_view(app: &NativeTuiApp) -> ModelSelectionOverlayView {
-    let state = &app.shell.model_selection_overlay_ui_state;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ModelSelectionFrameInput<'a> {
+    pub(crate) step: ModelSelectionStep,
+    pub(crate) selected_model_index: usize,
+    pub(crate) selected_effort_index: usize,
+    pub(crate) staged_model_index: usize,
+    pub(crate) staged_model_label: &'static str,
+    pub(crate) current_model_label: &'a str,
+    pub(crate) current_effort_label: &'static str,
+}
+
+pub(crate) fn build_model_selection_overlay_view(
+    input: ModelSelectionFrameInput<'_>,
+) -> ModelSelectionOverlayView {
     let model_lines = MODEL_SELECTION_MODEL_OPTIONS
         .iter()
         .enumerate()
         .map(|(index, option)| {
-            let selected = match state.step() {
-                ModelSelectionStep::Model => state.selected_model_index() == index,
-                ModelSelectionStep::Effort => state.staged_model_index() == index,
+            let selected = match input.step {
+                ModelSelectionStep::Model => input.selected_model_index == index,
+                ModelSelectionStep::Effort => input.staged_model_index == index,
             };
             let detail =
-                with_current_suffix(option.detail, current_model_label(app) == option.label);
+                with_current_suffix(option.detail, input.current_model_label == option.label);
             overlay_option_line(
                 &(index + 1).to_string(),
                 option.label,
@@ -32,13 +44,13 @@ pub(crate) fn build_model_selection_overlay_view(app: &NativeTuiApp) -> ModelSel
         .map(|(index, option)| {
             let effort_label = option.label;
             let detail =
-                with_current_suffix(option.detail, current_effort_label(app) == effort_label);
+                with_current_suffix(option.detail, input.current_effort_label == effort_label);
             overlay_option_line(
                 &(index + 1).to_string(),
                 effort_label,
                 &detail,
-                state.selected_effort_index() == index,
-                state.step() == ModelSelectionStep::Model,
+                input.selected_effort_index == index,
+                input.step == ModelSelectionStep::Model,
             )
         })
         .collect();
@@ -50,24 +62,22 @@ pub(crate) fn build_model_selection_overlay_view(app: &NativeTuiApp) -> ModelSel
         ],
         model_lines,
         effort_lines,
-        status_lines: build_model_selection_status_lines(app),
-        key_lines: build_model_selection_key_lines(state.step()),
+        status_lines: build_model_selection_status_lines(input),
+        key_lines: build_model_selection_key_lines(input.step),
     }
 }
 
-fn build_model_selection_status_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    let state = &app.shell.model_selection_overlay_ui_state;
-    match state.step() {
+fn build_model_selection_status_lines(input: ModelSelectionFrameInput<'_>) -> Vec<Line<'static>> {
+    match input.step {
         ModelSelectionStep::Model => vec![
             Line::from(format!(
                 "current: model {}  |  think {}",
-                current_model_label(app),
-                current_effort_label(app)
+                input.current_model_label, input.current_effort_label
             )),
             Line::from("Enter chooses the highlighted model and moves to think level."),
         ],
         ModelSelectionStep::Effort => vec![
-            Line::from(format!("selected model: {}", state.staged_model().label)),
+            Line::from(format!("selected model: {}", input.staged_model_label)),
             Line::from("Enter applies the highlighted think level with the selected model."),
         ],
     }
@@ -84,22 +94,6 @@ fn build_model_selection_key_lines(step: ModelSelectionStep) -> Vec<Line<'static
             AkraTheme::key_line("Backspace/Left: model    Esc/Ctrl+C: close"),
         ],
     }
-}
-
-fn current_model_label(app: &NativeTuiApp) -> &str {
-    app.conversation
-        .turn_options
-        .model
-        .as_deref()
-        .unwrap_or("default")
-}
-
-fn current_effort_label(app: &NativeTuiApp) -> &str {
-    app.conversation
-        .turn_options
-        .reasoning_effort
-        .map(|effort| effort.label())
-        .unwrap_or("default")
 }
 
 fn with_current_suffix(detail: &str, current: bool) -> String {

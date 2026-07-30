@@ -1,6 +1,5 @@
 use super::super::{
-    ConversationState, Line, NativeTuiApp, conversation_startup_screen_is_active,
-    startup_ascii_art_lines,
+    ConversationViewModel, Line, conversation_startup_screen_is_active, startup_ascii_art_lines,
 };
 
 /*
@@ -8,9 +7,15 @@ use super::super::{
  * code uses the startup banner helper here; framed shell builders were removed with the legacy
  * popup renderer, so inline inspection owns the remaining overlay layout contracts.
  */
+#[derive(Clone, Copy)]
+pub(crate) struct StartupBannerFrameInput<'a> {
+    pub(crate) show_startup_ascii_art: bool,
+    pub(crate) parallel_mode_enabled: bool,
+    pub(crate) conversation: Option<&'a ConversationViewModel>,
+}
+
 pub(crate) fn build_startup_banner_lines(
-    app: &NativeTuiApp,
-    parallel_mode_enabled: bool,
+    input: StartupBannerFrameInput<'_>,
     max_height: Option<u16>,
 ) -> Option<Vec<Line<'static>>> {
     /*
@@ -18,12 +23,8 @@ pub(crate) fn build_startup_banner_lines(
      * second core snapshot or render clock during history synchronization. max_height is optional
      * because renderers sometimes ask for the natural logo and sometimes need a cropped variant.
      */
-    let conversation = match &app.conversation.lifecycle.conversation_state {
-        ConversationState::Ready(conversation) => Some(conversation.as_ref()),
-        ConversationState::Loading | ConversationState::Failed(_) => None,
-    };
-    if !app.shell.show_startup_ascii_art
-        || !conversation_startup_screen_is_active(parallel_mode_enabled, conversation)
+    if !input.show_startup_ascii_art
+        || !conversation_startup_screen_is_active(input.parallel_mode_enabled, input.conversation)
     {
         return None;
     }

@@ -2387,20 +2387,64 @@ fn overlay_family_uses_shared_akra_chrome_tokens() {
     app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
     let startup_sample = shell_presentation::ConversationProjectionSample::capture(&app);
     let startup = shell_presentation::build_startup_overlay_view(
-        &app,
-        startup_sample.parallel_mode_enabled(),
+        shell_presentation::StartupOverlayFrameInput {
+            startup_state: &app.shell.chrome.startup_state,
+            language: app.shell.tui_language,
+            parallel_mode_enabled: startup_sample.parallel_mode_enabled(),
+        },
     );
     let sessions_model = SessionOverlayScreenModel::capture(&app);
     let sessions = shell_presentation::build_session_overlay_view(&sessions_model);
     let help = shell_presentation::build_help_overlay_view(TuiLanguage::English);
     app.show_model_selection_overlay();
-    let model_selection = shell_presentation::build_model_selection_overlay_view(&app);
+    let model_state = &app.shell.model_selection_overlay_ui_state;
+    let model_selection = shell_presentation::build_model_selection_overlay_view(
+        shell_presentation::ModelSelectionFrameInput {
+            step: model_state.step(),
+            selected_model_index: model_state.selected_model_index(),
+            selected_effort_index: model_state.selected_effort_index(),
+            staged_model_index: model_state.staged_model_index(),
+            staged_model_label: model_state.staged_model().label,
+            current_model_label: app
+                .conversation
+                .turn_options
+                .model
+                .as_deref()
+                .unwrap_or("default"),
+            current_effort_label: app
+                .conversation
+                .turn_options
+                .reasoning_effort
+                .map(|effort| effort.label())
+                .unwrap_or("default"),
+        },
+    );
     app.show_view_selection_overlay();
-    let view_selection = shell_presentation::build_view_selection_overlay_view(&app);
+    let view_selection = shell_presentation::build_view_selection_overlay_view(
+        shell_presentation::ViewSelectionFrameInput {
+            current_mode: app.conversation.conversation_view_mode,
+            selected_mode_index: app
+                .shell
+                .view_selection_overlay_ui_state
+                .selected_mode_index(),
+        },
+    );
     app.show_language_selection_overlay();
-    let language_selection = shell_presentation::build_language_selection_overlay_view(&app);
+    let language_selection = shell_presentation::build_language_selection_overlay_view(
+        shell_presentation::LanguageSelectionFrameInput {
+            current_language: app.shell.tui_language,
+            selected_language_index: app
+                .shell
+                .language_selection_overlay_ui_state
+                .selected_language_index(),
+        },
+    );
     let queue = shell_presentation::build_queue_overlay_view(&app);
-    let directions = shell_presentation::build_directions_maintenance_overlay_view(&app);
+    let directions = shell_presentation::build_directions_maintenance_overlay_view(
+        shell_presentation::DirectionsMaintenanceFrameInput {
+            ui_state: &app.planning.directions_maintenance_overlay_ui_state,
+        },
+    );
     let supersession_sample = shell_presentation::ConversationProjectionSample::capture(&app);
     let supersession_screen = shell_presentation::ConversationScreenModel::from_app_with_sample(
         &app,
@@ -2460,8 +2504,11 @@ fn startup_overlay_surfaces_attachment_mode_and_recovery_anchor() {
     app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
     let sample = shell_presentation::ConversationProjectionSample::capture(&app);
     let view = crate::adapter::inbound::tui::app::shell_presentation::build_startup_overlay_view(
-        &app,
-        sample.parallel_mode_enabled(),
+        shell_presentation::StartupOverlayFrameInput {
+            startup_state: &app.shell.chrome.startup_state,
+            language: app.shell.tui_language,
+            parallel_mode_enabled: sample.parallel_mode_enabled(),
+        },
     );
     let summary = view
         .summary_lines

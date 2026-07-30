@@ -26,7 +26,7 @@ mod popup;
 
 // startup banner는 modal이 아니라 shell boot copy다. 그래도 shell presentation
 // ownership에 속하므로 overlay surface에서 함께 공개한다.
-pub(crate) use base::build_startup_banner_lines;
+pub(crate) use base::{StartupBannerFrameInput, build_startup_banner_lines};
 
 pub(crate) use activity::{
     ActivityOverlayDocument, ActivityOverlayView, build_activity_overlay_list_view,
@@ -35,7 +35,8 @@ pub(crate) use activity::{
 // directions maintenance는 planning/task popup과 별도 흐름이다. active directions 상태를
 // 점검하고 복구하는 overlay라 DTO와 builder를 독립 surface로 공개한다.
 pub(crate) use directions::{
-    DirectionsMaintenanceOverlayView, build_directions_maintenance_overlay_view,
+    DirectionsMaintenanceFrameInput, DirectionsMaintenanceOverlayView,
+    build_directions_maintenance_overlay_view,
 };
 
 // help overlay는 read-only command catalog다. action popup과 분리해도 frontend는
@@ -50,11 +51,12 @@ pub(crate) use list_projection::{OverlayListEntryView, OverlayListView};
 // 공개한다. 이 경계를 유지해야 planning/session/queue popup layout 변경이 frontend import
 // churn으로 번지지 않는다.
 pub(crate) use popup::{
-    LanguageSelectionOverlayView, ModelSelectionOverlayView, ParallelPeekOverlayView,
-    PlanningDraftEditorOverlayView, PlanningInitOverlayView, QueueOverlayView, ReviewsOverlayView,
-    SessionOverlayView, StartupOverlayView, SupersessionOverlayView, ViewSelectionOverlayView,
-    build_language_selection_overlay_view, build_model_selection_overlay_view,
-    build_parallel_peek_overlay_view_from_snapshot,
+    LanguageSelectionFrameInput, LanguageSelectionOverlayView, ModelSelectionFrameInput,
+    ModelSelectionOverlayView, ParallelPeekOverlayView, PlanningDraftEditorOverlayView,
+    PlanningInitOverlayFrameInput, PlanningInitOverlayView, QueueOverlayView, ReviewsOverlayView,
+    SessionOverlayView, StartupOverlayFrameInput, StartupOverlayView, SupersessionOverlayView,
+    ViewSelectionFrameInput, ViewSelectionOverlayView, build_language_selection_overlay_view,
+    build_model_selection_overlay_view, build_parallel_peek_overlay_view_from_snapshot,
     build_planning_draft_editor_overlay_view_from_state,
     build_planning_init_overlay_view_from_projection, build_queue_overlay_view_from_screen_model,
     build_reviews_overlay_view, build_session_overlay_view, build_startup_overlay_view,

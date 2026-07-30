@@ -1,22 +1,27 @@
-use super::super::super::{AkraTheme, LANGUAGE_SELECTION_OPTIONS, Line, NativeTuiApp};
+use super::super::super::{AkraTheme, LANGUAGE_SELECTION_OPTIONS, Line, TuiLanguage};
 use super::super::option_lines::overlay_option_line;
 use super::LanguageSelectionOverlayView;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LanguageSelectionFrameInput {
+    pub(crate) current_language: TuiLanguage,
+    pub(crate) selected_language_index: usize,
+}
+
 pub(crate) fn build_language_selection_overlay_view(
-    app: &NativeTuiApp,
+    input: LanguageSelectionFrameInput,
 ) -> LanguageSelectionOverlayView {
-    let state = &app.shell.language_selection_overlay_ui_state;
     let language_lines = LANGUAGE_SELECTION_OPTIONS
         .iter()
         .enumerate()
         .map(|(index, option)| {
             let detail =
-                with_current_suffix(option.detail, app.shell.tui_language == option.language);
+                with_current_suffix(option.detail, input.current_language == option.language);
             overlay_option_line(
                 &(index + 1).to_string(),
                 option.label,
                 &detail,
-                state.selected_language_index() == index,
+                input.selected_language_index == index,
                 false,
             )
         })
@@ -29,7 +34,7 @@ pub(crate) fn build_language_selection_overlay_view(
         ],
         language_lines,
         status_lines: vec![
-            Line::from(format!("current: {}", app.shell.tui_language.label())),
+            Line::from(format!("current: {}", input.current_language.label())),
             Line::from("User prompts, task titles, and runtime payloads are kept as written."),
         ],
         key_lines: vec![

@@ -40,6 +40,15 @@ use super::{
 };
 
 impl NativeTuiApp {
+    pub(super) fn parallel_panel_projection_sample(&self) -> ParallelPanelProjectionSample {
+        ParallelPanelProjectionSample::from_parts(
+            self.runtime.client_runtime.parallel_mode_projection(),
+            self.runtime
+                .client_runtime
+                .parallel_control_plane_projection(),
+        )
+    }
+
     #[cfg(test)]
     pub(super) fn apply_parallel_mode_control_plane_background_event(
         &mut self,
@@ -239,7 +248,7 @@ impl NativeTuiApp {
     }
 
     pub(crate) fn parallel_mode_prompt_input_locked(&self) -> bool {
-        let sample = ParallelPanelProjectionSample::capture(self);
+        let sample = self.parallel_panel_projection_sample();
         self.parallel_mode_prompt_input_locked_with_sample(&sample)
     }
 

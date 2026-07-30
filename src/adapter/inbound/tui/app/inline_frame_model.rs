@@ -7,20 +7,25 @@ use crate::domain::parallel_mode::ParallelModeSupervisorSnapshot;
 
 use super::shell_presentation::{
     ActivityOverlayDocument, ActivityOverlayView, ConversationProjectionSample,
-    ConversationScreenModel, DirectionsMaintenanceOverlayView, HelpOverlayView, InlineTailView,
-    LanguageSelectionOverlayView, ModelSelectionOverlayView, ParallelPeekOverlayView,
-    PlanningDraftEditorOverlayView, PlanningInitOverlayView, QueueOverlayView, ReviewsOverlayView,
-    SessionOverlayView, StartupOverlayView, SupersessionOverlayView,
-    TranscriptHandoffDeliveryToken, TurnSteerConfirmationScreenModel, ViewSelectionOverlayView,
-    build_activity_overlay_list_view, build_directions_maintenance_overlay_view,
-    build_help_overlay_view, build_inline_live_transcript_lines, build_inline_tail_view,
+    ConversationScreenFrameInput, ConversationScreenModel, DirectionsMaintenanceFrameInput,
+    DirectionsMaintenanceOverlayView, HelpOverlayView, InlineTailView, LanguageSelectionFrameInput,
+    LanguageSelectionOverlayView, MAX_GITHUB_REVIEW_NOTICE_LEN, ModelSelectionFrameInput,
+    ModelSelectionOverlayView, ParallelPeekOverlayView, PlanningDraftEditorOverlayView,
+    PlanningInitOverlayFrameInput, PlanningInitOverlayView, QueueMutationTailState,
+    QueueOverlayView, ReviewsOverlayView, SessionOverlayView, StartupBannerFrameInput,
+    StartupOverlayFrameInput, StartupOverlayView, SupersessionOverlayView,
+    TranscriptHandoffDeliveryToken, TurnSteerConfirmationScreenModel, ViewSelectionFrameInput,
+    ViewSelectionOverlayView, build_activity_overlay_list_view,
+    build_directions_maintenance_overlay_view, build_help_overlay_view,
+    build_inline_live_transcript_lines, build_inline_tail_view,
     build_language_selection_overlay_view, build_model_selection_overlay_view,
     build_parallel_peek_overlay_view_from_snapshot,
     build_planning_draft_editor_overlay_view_from_state,
-    build_planning_init_overlay_view_from_projection, build_queue_overlay_view_from_projection,
+    build_planning_init_overlay_view_from_projection, build_queue_overlay_view_from_screen_model,
     build_reviews_overlay_view, build_session_overlay_view, build_startup_banner_lines,
     build_startup_overlay_view, build_supersession_overlay_view, build_view_selection_overlay_view,
-    format_conversation_scrollback_lines_with_expand,
+    format_conversation_scrollback_lines_with_expand, presentation_workspace_directory,
+    shell_conversation_state,
 };
 use super::shell_rendering::{
     count_rendered_inline_rows, inline_frame_inspection_area,
@@ -34,6 +39,74 @@ use super::*;
  * rendering modules consume the owned models below and return a delivery receipt;
  * they never reread or mutate the aggregate while terminal I/O is in progress.
  */
+fn capture_conversation_screen_frame_input<'a>(
+    app: &'a NativeTuiApp,
+    sample: &ConversationProjectionSample,
+) -> ConversationScreenFrameInput<'a> {
+    let conversation_state =
+        shell_conversation_state(&app.conversation.lifecycle.conversation_state);
+    let workspace_directory =
+        presentation_workspace_directory(conversation_state, &app.shell.chrome.startup_state);
+    let parallel_mode_enabled = sample.parallel_mode_enabled();
+    let queue_mutation_tail_state =
+        if let Some(operation_id) = app.pending_queue_mutation_operation_id() {
+            QueueMutationTailState::Pending(operation_id)
+        } else if app.queue_mutation_requires_authority_refresh() {
+            QueueMutationTailState::RefreshRequired
+        } else if let Some(task_count) =
+            app.queue_receipt_undo_task_count_for_parallel_mode(parallel_mode_enabled)
+        {
+            QueueMutationTailState::UndoAvailable(task_count)
+        } else {
+            QueueMutationTailState::Idle
+        };
+    let exit_confirmation_visible = app.is_exit_confirmation_visible();
+    let turn_steer_confirmation = app.is_turn_steer_confirmation_visible().then(|| {
+        let intent = app
+            .conversation
+            .turn_steer_confirmation
+            .as_ref()
+            .expect("visible turn-steer confirmation must retain its intent");
+        TurnSteerConfirmationScreenModel {
+            language: app.shell.tui_language,
+            request: intent.request.clone(),
+        }
+    });
+
+    ConversationScreenFrameInput {
+        startup_state: &app.shell.chrome.startup_state,
+        session_state: &app.shell.chrome.session_state,
+        can_open_session_list: app.can_open_session_list(),
+        shell_action_availability: app.shell_action_availability(),
+        github_review_polling_status_label: app.github_review_polling_status_label(),
+        github_review_recent_changes_summary: app
+            .github_review_recent_changes_summary(MAX_GITHUB_REVIEW_NOTICE_LEN),
+        tui_language: app.shell.tui_language,
+        planning_worker_shows_debug_details: app.planning_worker_shows_debug_details(),
+        planning_worker_panel_state: app.planning.planning_worker_panel_state.current().clone(),
+        queue_mutation_tail_state,
+        workspace_directory,
+        turn_options_hud_label: app.conversation.turn_options.summary_label(),
+        turn_options_summary: (!app.conversation.turn_options.is_default())
+            .then(|| app.conversation.turn_options.summary_label()),
+        shell_overlay: app.shell.chrome.shell_overlay,
+        exit_confirmation_visible,
+        turn_steer_confirmation,
+        conversation_state,
+    }
+}
+
+fn capture_session_overlay_screen_model(app: &NativeTuiApp) -> SessionOverlayScreenModel {
+    SessionOverlayScreenModel::from_frame_input(
+        app.can_open_session_list(),
+        app.current_workspace_directory(),
+        app.shell.tui_language,
+        &app.shell.chrome.session_state,
+        &app.shell.session_overlay_ui_state,
+        app.shell.chrome.selected_session_index,
+    )
+}
+
 pub(super) struct InlineConversationFrameProjection {
     pub(super) core_revision: u64,
     pub(super) rendered_at_epoch_millis: Option<i64>,
@@ -133,9 +206,18 @@ fn current_inline_history_lines_for_viewport(
             }),
         );
     }
-    if let Some(startup_banner_lines) =
-        build_startup_banner_lines(app, sample.parallel_mode_enabled(), None)
-    {
+    let startup_conversation = match &app.conversation.lifecycle.conversation_state {
+        ConversationState::Ready(conversation) => Some(conversation.as_ref()),
+        ConversationState::Loading | ConversationState::Failed(_) => None,
+    };
+    if let Some(startup_banner_lines) = build_startup_banner_lines(
+        StartupBannerFrameInput {
+            show_startup_ascii_art: app.shell.show_startup_ascii_art,
+            parallel_mode_enabled: sample.parallel_mode_enabled(),
+            conversation: startup_conversation,
+        },
+        None,
+    ) {
         return Some(startup_banner_lines);
     }
     match &app.conversation.lifecycle.conversation_state {
@@ -192,7 +274,10 @@ impl InlineConversationFrameProjection {
         content_width: u16,
         sample: &ConversationProjectionSample,
     ) -> Self {
-        let screen_model = ConversationScreenModel::from_app_with_sample(app, sample);
+        let screen_model = ConversationScreenModel::from_screen_frame_input(
+            capture_conversation_screen_frame_input(app, sample),
+            sample,
+        );
         let supersession_overlay_view = (screen_model.shell_overlay == ShellOverlay::Supersession
             || (screen_model.shell_overlay == ShellOverlay::Hidden
                 && screen_model.parallel_mode_enabled))
@@ -379,11 +464,14 @@ pub(super) fn capture_inline_shell_frame_model(
         }
         ShellOverlay::Hidden => InlineInspectionFrameModel::Conversation,
         ShellOverlay::Startup => InlineInspectionFrameModel::Startup(build_startup_overlay_view(
-            app,
-            projection.parallel_mode_enabled,
+            StartupOverlayFrameInput {
+                startup_state: &app.shell.chrome.startup_state,
+                language: app.shell.tui_language,
+                parallel_mode_enabled: projection.parallel_mode_enabled,
+            },
         )),
         ShellOverlay::Sessions => {
-            let screen_model = SessionOverlayScreenModel::capture(app);
+            let screen_model = capture_session_overlay_screen_model(app);
             let view = build_session_overlay_view(&screen_model);
             let expected = app.shell.session_overlay_ui_state.list_state;
             let mut list_state = expected;
@@ -398,13 +486,46 @@ pub(super) fn capture_inline_shell_frame_model(
             InlineInspectionFrameModel::Sessions { view, list_state }
         }
         ShellOverlay::ModelSelection => {
-            InlineInspectionFrameModel::ModelSelection(build_model_selection_overlay_view(app))
+            let state = &app.shell.model_selection_overlay_ui_state;
+            InlineInspectionFrameModel::ModelSelection(build_model_selection_overlay_view(
+                ModelSelectionFrameInput {
+                    step: state.step(),
+                    selected_model_index: state.selected_model_index(),
+                    selected_effort_index: state.selected_effort_index(),
+                    staged_model_index: state.staged_model_index(),
+                    staged_model_label: state.staged_model().label,
+                    current_model_label: app
+                        .conversation
+                        .turn_options
+                        .model
+                        .as_deref()
+                        .unwrap_or("default"),
+                    current_effort_label: app
+                        .conversation
+                        .turn_options
+                        .reasoning_effort
+                        .map(|effort| effort.label())
+                        .unwrap_or("default"),
+                },
+            ))
         }
-        ShellOverlay::ViewSelection => {
-            InlineInspectionFrameModel::ViewSelection(build_view_selection_overlay_view(app))
-        }
+        ShellOverlay::ViewSelection => InlineInspectionFrameModel::ViewSelection(
+            build_view_selection_overlay_view(ViewSelectionFrameInput {
+                current_mode: app.conversation.conversation_view_mode,
+                selected_mode_index: app
+                    .shell
+                    .view_selection_overlay_ui_state
+                    .selected_mode_index(),
+            }),
+        ),
         ShellOverlay::LanguageSelection => InlineInspectionFrameModel::LanguageSelection(
-            build_language_selection_overlay_view(app),
+            build_language_selection_overlay_view(LanguageSelectionFrameInput {
+                current_language: app.shell.tui_language,
+                selected_language_index: app
+                    .shell
+                    .language_selection_overlay_ui_state
+                    .selected_language_index(),
+            }),
         ),
         ShellOverlay::Supersession => InlineInspectionFrameModel::Supersession(
             projection
@@ -451,10 +572,11 @@ pub(super) fn capture_inline_shell_frame_model(
             app.shell.reviews_overlay_ui_state.screen_model(),
         )),
         ShellOverlay::Queue => {
-            InlineInspectionFrameModel::Queue(build_queue_overlay_view_from_projection(
-                app,
-                &projection.sampled_planning_runtime_projection,
-                projection.parallel_mode_enabled,
+            InlineInspectionFrameModel::Queue(build_queue_overlay_view_from_screen_model(
+                app.queue_overlay_screen_model_from_projection(
+                    &projection.sampled_planning_runtime_projection,
+                    projection.parallel_mode_enabled,
+                ),
             ))
         }
         ShellOverlay::DirectionsMaintenance
@@ -468,21 +590,33 @@ pub(super) fn capture_inline_shell_frame_model(
                 &mut receipt,
             )
         }
-        ShellOverlay::DirectionsMaintenance => {
-            InlineInspectionFrameModel::Directions(build_directions_maintenance_overlay_view(app))
-        }
+        ShellOverlay::DirectionsMaintenance => InlineInspectionFrameModel::Directions(
+            build_directions_maintenance_overlay_view(DirectionsMaintenanceFrameInput {
+                ui_state: &app.planning.directions_maintenance_overlay_ui_state,
+            }),
+        ),
         ShellOverlay::PlanningInit
             if app.planning.planning_init_overlay_ui_state.step()
                 == PlanningInitOverlayStep::ManualEditor =>
         {
             capture_draft_editor_frame(app, inspection_area, "Planning Draft", &mut receipt)
         }
-        ShellOverlay::PlanningInit => InlineInspectionFrameModel::PlanningInit(
-            build_planning_init_overlay_view_from_projection(
-                app,
-                &projection.sampled_planning_runtime_projection,
-            ),
-        ),
+        ShellOverlay::PlanningInit => {
+            let workspace_directory = app.planning_workspace_directory();
+            InlineInspectionFrameModel::PlanningInit(
+                build_planning_init_overlay_view_from_projection(
+                    PlanningInitOverlayFrameInput {
+                        ui_state: &app.planning.planning_init_overlay_ui_state,
+                        workspace_directory: &workspace_directory,
+                        max_auto_turns_label: app.current_max_auto_turns_label(),
+                        turn_budget_edit_buffer: app
+                            .max_auto_turns_edit_buffer()
+                            .map(str::to_string),
+                    },
+                    &projection.sampled_planning_runtime_projection,
+                ),
+            )
+        }
         ShellOverlay::Approval => {
             let (model, change) = capture_approval_frame(app, inspection_area);
             receipt.approval_scroll_offset = change;
@@ -577,7 +711,7 @@ fn inline_frame_render_receipt_matches(
         });
     let session_matches = receipt.session_list_state.as_ref().is_none_or(|change| {
         app.shell.session_overlay_ui_state.list_state == change.expected
-            && SessionOverlayScreenModel::capture(app) == change.expected_screen_model
+            && capture_session_overlay_screen_model(app) == change.expected_screen_model
     });
     let queue_matches = app.planning.queue_overlay_ui_state.receipt_undo_hit_area()
         == receipt.queue_receipt_undo_hit_area.expected;

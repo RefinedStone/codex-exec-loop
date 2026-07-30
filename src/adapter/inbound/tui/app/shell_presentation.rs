@@ -3,10 +3,11 @@ use crate::domain::planning::PlanningValidationSeverity;
 use crate::domain::text::compact_whitespace_detail;
 
 /*
-shell presentation은 TUI app state를 직접 그리는 마지막 어댑터 계층이다. 이 파일은
-실제 렌더링 알고리즘을 담기보다 하위 projection 모듈을 한 namespace로 묶는 facade 역할을
-한다. 기존 call site가 `shell_presentation::...` 경계를 유지하도록 re-export와 얇은 wrapper를
-여기에 남기고, 복잡한 copy/overlay/status 계산은 파일별 하위 모듈로 분리한다.
+shell presentation은 terminal frame capture가 만든 typed input과 owned screen model만
+그리는 마지막 어댑터 계층이다. 이 파일은 실제 렌더링 알고리즘을 담기보다 하위 projection
+모듈을 한 namespace로 묶는 facade 역할을 한다. 기존 call site가
+`shell_presentation::...` 경계를 유지하도록 re-export와 얇은 wrapper를 여기에 남기고,
+복잡한 copy/overlay/status 계산은 파일별 하위 모듈로 분리한다.
 */
 
 // footer는 화면 하단의 넓은 status area이고 inline tail은 입력 프롬프트 옆의 매우 좁은
@@ -49,16 +50,18 @@ mod terminal_text;
 #[path = "shell_presentation/transcript_copy.rs"]
 mod transcript_copy;
 
-use overlays::build_queue_overlay_view_from_screen_model;
+pub(super) use overlays::build_queue_overlay_view_from_screen_model;
 pub(super) use overlays::{
-    ActivityOverlayDocument, ActivityOverlayView, DirectionsMaintenanceOverlayView,
-    HelpOverlayView, LanguageSelectionOverlayView, ModelSelectionOverlayView, OverlayListView,
-    ParallelPeekOverlayView, PlanningDraftEditorOverlayView, PlanningInitOverlayView,
-    QueueOverlayView, ReviewsOverlayView, SessionOverlayView, StartupOverlayView,
-    SupersessionOverlayView, ViewSelectionOverlayView, build_activity_overlay_list_view,
-    build_directions_maintenance_overlay_view, build_help_overlay_view,
-    build_language_selection_overlay_view, build_model_selection_overlay_view,
-    build_parallel_peek_overlay_view_from_snapshot,
+    ActivityOverlayDocument, ActivityOverlayView, DirectionsMaintenanceFrameInput,
+    DirectionsMaintenanceOverlayView, HelpOverlayView, LanguageSelectionFrameInput,
+    LanguageSelectionOverlayView, ModelSelectionFrameInput, ModelSelectionOverlayView,
+    OverlayListView, ParallelPeekOverlayView, PlanningDraftEditorOverlayView,
+    PlanningInitOverlayFrameInput, PlanningInitOverlayView, QueueOverlayView, ReviewsOverlayView,
+    SessionOverlayView, StartupBannerFrameInput, StartupOverlayFrameInput, StartupOverlayView,
+    SupersessionOverlayView, ViewSelectionFrameInput, ViewSelectionOverlayView,
+    build_activity_overlay_list_view, build_directions_maintenance_overlay_view,
+    build_help_overlay_view, build_language_selection_overlay_view,
+    build_model_selection_overlay_view, build_parallel_peek_overlay_view_from_snapshot,
     build_planning_draft_editor_overlay_view_from_state,
     build_planning_init_overlay_view_from_projection, build_reviews_overlay_view,
     build_session_overlay_view, build_startup_banner_lines, build_startup_overlay_view,
@@ -67,13 +70,16 @@ pub(super) use overlays::{
 #[cfg(test)]
 pub(super) use overlays::{build_parallel_peek_overlay_view, build_planning_init_overlay_view};
 use runtime_status_copy::{build_working_line, compact_inline_detail};
+pub(super) use shell_core::QueueMutationTailState;
+use shell_core::ShellConversationState;
 pub(super) use shell_core::{
     ConversationComposerScreenModel, ConversationLiveTranscriptScreenModel,
-    ConversationProjectionSample, ConversationRuntimeStatusScreenModel, ConversationScreenModel,
-    ParallelPanelProjectionSample, TranscriptHandoffDeliveryToken,
+    ConversationProjectionFrameInput, ConversationProjectionSample,
+    ConversationRuntimeStatusScreenModel, ConversationScreenFrameInput, ConversationScreenModel,
+    MAX_GITHUB_REVIEW_NOTICE_LEN, ParallelPanelProjectionSample, TranscriptHandoffDeliveryToken,
     TurnSteerConfirmationScreenModel, conversation_startup_screen_is_active,
+    presentation_workspace_directory, shell_conversation_state,
 };
-use shell_core::{QueueMutationTailState, ShellConversationState};
 pub(super) use startup_banner::startup_ascii_art_lines;
 pub(super) use status_panels::InlineTailView;
 #[cfg(test)]
@@ -114,26 +120,6 @@ pub(super) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
     build_queue_overlay_view_from_screen_model(app.queue_overlay_screen_model())
 }
 
-pub(super) fn build_queue_overlay_view_from_projection(
-    app: &NativeTuiApp,
-    runtime_projection: &crate::application::service::planning::PlanningRuntimeProjection,
-    parallel_mode_enabled: bool,
-) -> QueueOverlayView {
-    build_queue_overlay_view_from_screen_model(
-        app.queue_overlay_screen_model_from_projection(runtime_projection, parallel_mode_enabled),
-    )
-}
-
-fn build_startup_check_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    // startup/capability projection은 overlay와 footer가 함께 쓰는 copy라 facade에서
-    // 이름을 보존하고 하위 모듈로 위임한다.
-    capability_projection::build_startup_check_lines(app)
-}
-
-fn build_startup_overlay_summary_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    capability_projection::build_startup_overlay_summary_lines(app)
-}
-
-fn build_startup_warning_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    capability_projection::build_startup_warning_lines(app)
-}
+use capability_projection::{
+    build_startup_check_lines, build_startup_overlay_summary_lines, build_startup_warning_lines,
+};
