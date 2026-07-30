@@ -3084,6 +3084,14 @@ fn focused_parallel_operations_survives_resize_and_close_without_chrome_in_scrol
         wide.screen_text
             .contains("Parallel Operations / inline inspection")
     );
+    assert_eq!(
+        terminal
+            .get_cursor_position()
+            .expect("focused operations cursor should be readable")
+            .y,
+        29,
+        "the hidden operations cursor must park at the physical bottom before resize"
+    );
     for index in 0..36 {
         let marker = format!("operations-resize-event-{index:02}");
         assert_eq!(
@@ -3205,6 +3213,15 @@ fn focused_parallel_operations_survives_resize_and_close_without_chrome_in_scrol
             closed.app_event_stream_text
         );
     }
+    assert_eq!(
+        closed
+            .terminal_history_text
+            .matches("operations-resize-event-35")
+            .count(),
+        1,
+        "restoring geometry and closing the board must retain the latest event exactly once:\n{}",
+        closed.terminal_history_text
+    );
 }
 
 #[test]

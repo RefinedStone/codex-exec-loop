@@ -307,13 +307,21 @@ impl ParallelStreamDeliveryPlan {
         let after_cursor = host_batch
             .as_ref()
             .map_or(cursor, ParallelHostBatch::proposed_cursor);
+        let live_lines = idle_status
+            .iter()
+            .cloned()
+            .chain(live_events.iter().map(|event| event.line().clone()))
+            .collect::<Vec<_>>();
+        let scroll_offset = rendered_rows(&live_lines, geometry.event_area.width)
+            .saturating_sub(visible_rows)
+            .min(usize::from(u16::MAX)) as u16;
         let live_stream = ParallelLiveStreamModel::planned(
             snapshot,
             after_cursor,
             live_events,
             idle_status,
             title_visible,
-            0,
+            scroll_offset,
         );
         debug_assert_partition(snapshot, cursor, host_batch.as_ref(), &live_stream);
         Self {
@@ -709,7 +717,7 @@ fn live_event_start_index(
         return 0;
     }
     if live_rows == 0 || width == 0 {
-        return events.len();
+        return events.len() - 1;
     }
     let mut used_rows = 0usize;
     let mut start = events.len();
@@ -721,7 +729,7 @@ fn live_event_start_index(
         used_rows += rows;
         start = index;
     }
-    start
+    start.min(events.len() - 1)
 }
 
 fn idle_status_lines(
@@ -872,6 +880,32 @@ mod tests {
         assert!(host_ids.is_disjoint(&live_ids));
         assert_eq!(host_ids.len() + live_ids.len(), snapshot.events().len());
         assert_eq!(live_ids.len(), 3);
+    }
+
+    #[test]
+    fn latest_event_stays_live_when_its_wrapped_rows_exceed_the_viewport() {
+        let mut stream = ParallelEventStreamState::default();
+        stream.push_for_test(
+            "12:00:00",
+            "Supervisor",
+            "one very long event that cannot fit inside a single narrow viewport row",
+        );
+        let snapshot = stream.snapshot();
+        let mut state = ParallelTerminalDeliveryState::default();
+
+        let plan = plan(
+            &mut state,
+            &snapshot,
+            InlineHistoryRenderMode::HostScrollback,
+            12,
+            1,
+        );
+
+        assert!(plan.host_batch().is_none());
+        assert_eq!(
+            plan.live_stream().event_ids(),
+            vec![snapshot.events()[0].id()]
+        );
     }
 
     #[test]
