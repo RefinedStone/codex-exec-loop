@@ -12,9 +12,9 @@ use super::inline_terminal_adapter::backend::{InlineResizeBackend, InlineResizeS
 /*
  * Inline history insertion moves completed transcript rows into the host
  * scrollback while the live shell viewport stays on screen. Automatic mode uses
- * portable newline insertion for ordinary conversations and preserves the
- * scroll-region primitive for the parallel renderer. Explicit overrides keep both
- * strategies available for terminal-matrix validation and diagnosis.
+ * portable newline insertion because a successful partial scroll-region operation
+ * does not prove that a real terminal retained the row in host scrollback. Explicit
+ * overrides keep both strategies available for terminal-matrix validation and diagnosis.
  */
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) enum HistoryInsertionMode {
@@ -45,8 +45,8 @@ impl HistoryInsertionMode {
         else {
             /*
              * Scroll-region insertion is not guaranteed to create host scrollback.
-             * Automatic mode uses portable newline insertion for normal conversations
-             * while preserving the parallel renderer's scroll-region behavior.
+             * Automatic mode therefore uses portable newline insertion for every
+             * host-delivery transaction.
              */
             return Self::Automatic;
         };
@@ -57,11 +57,10 @@ impl HistoryInsertionMode {
         }
     }
 
-    pub(super) fn resolve(self, parallel_mode_enabled: bool) -> Self {
-        match (self, parallel_mode_enabled) {
-            (Self::Automatic, true) => Self::StandardScrollRegion,
-            (Self::Automatic, false) => Self::NewlineFallback,
-            (mode, _) => mode,
+    pub(super) fn resolve(self) -> Self {
+        match self {
+            Self::Automatic => Self::NewlineFallback,
+            mode => mode,
         }
     }
 }
@@ -323,6 +322,15 @@ fn insert_with_newline_fallback_with_size<B: Backend>(
         let destination_y = viewport_top.saturating_sub(suffix_rows);
         draw_buffer_rows_at(terminal, buffer, source_y, suffix_rows, destination_y)?;
     }
+    if viewport_top == 0 && pending_rows > 0 {
+        /*
+         * An inline viewport can begin at the physical top on a fresh terminal.
+         * In that shape the final staged row still occupies row zero and the
+         * following Ratatui frame clear would erase it. Advance once more so the
+         * complete batch belongs to host scrollback before the live frame redraw.
+         */
+        scroll_terminal_from_bottom(terminal, size.height, 1)?;
+    }
     terminal.backend_mut().flush()
 }
 
@@ -517,10 +525,11 @@ fn sentinel_bg() -> Color {
 #[cfg(test)]
 mod tests {
     use super::{
-        HistoryInsertionAdapter, HistoryInsertionMode, count_rendered_history_rows,
-        rendered_history_buffer,
+        HistoryInsertionAdapter, HistoryInsertionMode, ParallelHistoryInsertionOutcome,
+        count_rendered_history_rows, rendered_history_buffer,
     };
     use crate::adapter::inbound::tui::app::InlineHistoryRenderMode;
+    use crate::adapter::inbound::tui::app::inline_terminal_adapter::InlineResizeBackend;
     use crate::adapter::inbound::tui::app::tui_testkit;
     use ratatui::layout::Position;
     use ratatui::text::{Line, Span};
@@ -540,12 +549,8 @@ mod tests {
             HistoryInsertionMode::Automatic
         );
         assert_eq!(
-            HistoryInsertionMode::Automatic.resolve(false),
+            HistoryInsertionMode::Automatic.resolve(),
             HistoryInsertionMode::NewlineFallback
-        );
-        assert_eq!(
-            HistoryInsertionMode::Automatic.resolve(true),
-            HistoryInsertionMode::StandardScrollRegion
         );
     }
     #[test]
@@ -719,6 +724,68 @@ mod tests {
         let rendered = tui_testkit::inline_terminal_history_text(&terminal);
         assert!(rendered.contains("newline fallback"));
         assert!(rendered.contains("fallback two"));
+    }
+    #[test]
+    fn automatic_parallel_insert_reaches_vt100_terminal_history() {
+        const MARKER: &str = "typed parallel host receipt marker";
+        let mut terminal = tui_testkit::inline_history_vt100_terminal(
+            InlineHistoryRenderMode::HostScrollback,
+            40,
+            16,
+        );
+        let lines = vec![Line::from(MARKER)];
+        let expected = terminal
+            .backend()
+            .resize_snapshot()
+            .expect("stable resize snapshot");
+        let rendered_rows =
+            count_rendered_history_rows(&lines, expected.size.width).min(u16::MAX as usize) as u16;
+
+        let outcome = HistoryInsertionAdapter::new(HistoryInsertionMode::Automatic.resolve())
+            .attempt_parallel_insert_at_snapshot(&mut terminal, &lines, rendered_rows, expected);
+
+        assert!(matches!(
+            outcome,
+            ParallelHistoryInsertionOutcome::Committed {
+                stable_geometry: true
+            }
+        ));
+        terminal
+            .clear()
+            .expect("the following live-frame clear should succeed");
+        let terminal_history = tui_testkit::inline_vt100_scrollback_text(&mut terminal);
+        assert!(
+            terminal_history.contains(MARKER),
+            "a committed automatic parallel insertion must leave the live viewport in terminal-owned history: {terminal_history:?}"
+        );
+    }
+    #[test]
+    fn newline_fallback_preserves_the_row_adjacent_to_the_inline_viewport() {
+        let mut terminal = tui_testkit::inline_history_vt100_terminal(
+            InlineHistoryRenderMode::HostScrollback,
+            80,
+            24,
+        );
+        let lines = (0..41)
+            .map(|index| Line::from(format!("boundary marker {index:02}")))
+            .collect::<Vec<_>>();
+
+        HistoryInsertionAdapter::new(HistoryInsertionMode::NewlineFallback)
+            .insert(&mut terminal, &lines)
+            .unwrap();
+        terminal
+            .clear()
+            .expect("the following live-frame clear should succeed");
+
+        let terminal_history = tui_testkit::inline_vt100_scrollback_text(&mut terminal);
+        for index in 0..41 {
+            let marker = format!("boundary marker {index:02}");
+            assert_eq!(
+                terminal_history.matches(&marker).count(),
+                1,
+                "newline insertion must retain the row adjacent to the live viewport: {marker}\n{terminal_history}"
+            );
+        }
     }
     #[test]
     fn history_insertion_modes_restore_cursor_position() {

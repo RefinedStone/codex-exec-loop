@@ -2984,7 +2984,7 @@ fn parallel_event_stream_flushes_rows_without_live_panel_chrome() {
 #[test]
 fn parallel_live_tail_continues_scrollback_without_inline_title() {
     let mut terminal =
-        tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
+        tui_testkit::inline_history_vt100_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
     let mut app = make_test_app();
     app.shell.show_startup_ascii_art = false;
     app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
@@ -3000,7 +3000,7 @@ fn parallel_live_tail_continues_scrollback_without_inline_title() {
     let mut inline_terminal = InlineTerminalState::default();
     let mut frame_recorder = tui_testkit::InlineFrameRecorder::default();
 
-    frame_recorder.draw_and_record(
+    frame_recorder.draw_and_record_vt100(
         "overflowed-tail",
         &mut terminal,
         &mut runtime,
@@ -3052,8 +3052,11 @@ fn parallel_live_tail_continues_scrollback_without_inline_title() {
 
 #[test]
 fn focused_parallel_operations_survives_resize_and_close_without_chrome_in_scrollback() {
-    let mut terminal =
-        tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 120, 30);
+    let mut terminal = tui_testkit::inline_history_vt100_terminal(
+        InlineHistoryRenderMode::HostScrollback,
+        120,
+        30,
+    );
     let mut app = make_test_app();
     app.shell.show_startup_ascii_art = false;
     app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
@@ -3070,7 +3073,7 @@ fn focused_parallel_operations_survives_resize_and_close_without_chrome_in_scrol
     let mut inline_terminal = InlineTerminalState::default();
     let mut recorder = tui_testkit::InlineFrameRecorder::default();
 
-    recorder.draw_and_record(
+    recorder.draw_and_record_vt100(
         "operations-wide",
         &mut terminal,
         &mut runtime,
@@ -3104,7 +3107,7 @@ fn focused_parallel_operations_survives_resize_and_close_without_chrome_in_scrol
     runtime.handle_terminal_event(Event::FocusGained);
     assert_eq!(runtime.terminal_focus_reacquire_epoch(), 1);
     assert!(runtime.take_redraw_request());
-    recorder.draw_and_record(
+    recorder.draw_and_record_vt100(
         "operations-refocused",
         &mut terminal,
         &mut runtime,
@@ -3127,8 +3130,8 @@ fn focused_parallel_operations_survives_resize_and_close_without_chrome_in_scrol
         refocused.terminal_history_text
     );
 
-    tui_testkit::resize_inline_history_terminal(&mut terminal, 72, 24);
-    recorder.draw_and_record(
+    tui_testkit::resize_inline_history_vt100_terminal(&mut terminal, 72, 24);
+    recorder.draw_and_record_vt100(
         "operations-narrow",
         &mut terminal,
         &mut runtime,
@@ -3162,8 +3165,8 @@ fn focused_parallel_operations_survives_resize_and_close_without_chrome_in_scrol
     );
 
     runtime.app_mut().shell.chrome.shell_overlay = ShellOverlay::Hidden;
-    tui_testkit::resize_inline_history_terminal(&mut terminal, 120, 30);
-    recorder.draw_and_record(
+    tui_testkit::resize_inline_history_vt100_terminal(&mut terminal, 120, 30);
+    recorder.draw_and_record_vt100(
         "operations-closed",
         &mut terminal,
         &mut runtime,
@@ -3407,7 +3410,7 @@ fn parallel_runtime_feed_primes_baseline_without_scrollback_duplication() {
 #[test]
 fn parallel_stream_preserves_initial_status_rows_as_runtime_events_advance() {
     let mut terminal =
-        tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
+        tui_testkit::inline_history_vt100_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
     let mut app = make_test_app();
     app.shell.show_startup_ascii_art = false;
     app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
@@ -3462,7 +3465,7 @@ fn parallel_stream_preserves_initial_status_rows_as_runtime_events_advance() {
         screen_text.contains("runtime stream marker 40"),
         "live stream should keep following new runtime events:\n{screen_text}"
     );
-    let terminal_scrollback = tui_testkit::inline_scrollback_text(&terminal);
+    let terminal_scrollback = tui_testkit::inline_vt100_host_scrollback_text(&mut terminal);
     assert!(
         terminal_scrollback.contains("control tower is live"),
         "initial board status should move into durable terminal history instead of disappearing:\n{terminal_scrollback}"
@@ -3488,7 +3491,7 @@ fn parallel_stream_preserves_initial_status_rows_as_runtime_events_advance() {
 #[test]
 fn direct_frame_recorder_keeps_parallel_status_rows_across_runtime_redraw() {
     let mut terminal =
-        tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
+        tui_testkit::inline_history_vt100_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
     let mut app = make_test_app();
     app.shell.show_startup_ascii_art = false;
     app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
@@ -3503,7 +3506,7 @@ fn direct_frame_recorder_keeps_parallel_status_rows_across_runtime_redraw() {
     let mut inline_terminal = InlineTerminalState::default();
     let mut frame_recorder = tui_testkit::InlineFrameRecorder::default();
 
-    frame_recorder.draw_and_record(
+    frame_recorder.draw_and_record_vt100(
         "initial-status",
         &mut terminal,
         &mut runtime,
@@ -3545,7 +3548,7 @@ fn direct_frame_recorder_keeps_parallel_status_rows_across_runtime_redraw() {
                     .collect(),
             ),
         ));
-    frame_recorder.draw_and_record(
+    frame_recorder.draw_and_record_vt100(
         "runtime-tail",
         &mut terminal,
         &mut runtime,
@@ -3617,7 +3620,7 @@ fn direct_frame_recorder_keeps_parallel_status_rows_across_runtime_redraw() {
 #[test]
 fn direct_frame_recorder_catches_wrapped_parallel_stream_split_at_live_boundary() {
     let mut terminal =
-        tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 48, 24);
+        tui_testkit::inline_history_vt100_terminal(InlineHistoryRenderMode::HostScrollback, 72, 30);
     let mut app = make_test_app();
     app.shell.show_startup_ascii_art = false;
     app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
@@ -3631,7 +3634,12 @@ fn direct_frame_recorder_catches_wrapped_parallel_stream_split_at_live_boundary(
     let mut inline_terminal = InlineTerminalState::default();
     let mut frame_recorder = tui_testkit::InlineFrameRecorder::default();
 
-    frame_recorder.draw_and_record("leased", &mut terminal, &mut runtime, &mut inline_terminal);
+    frame_recorder.draw_and_record_vt100(
+        "leased",
+        &mut terminal,
+        &mut runtime,
+        &mut inline_terminal,
+    );
     runtime
         .app_mut()
         .set_parallel_mode_supervisor_snapshot_for_test(Some(active_runtime_feed_snapshot(
@@ -3646,7 +3654,7 @@ fn direct_frame_recorder_catches_wrapped_parallel_stream_split_at_live_boundary(
                 })
                 .collect(),
         )));
-    frame_recorder.draw_and_record(
+    frame_recorder.draw_and_record_vt100(
         "running-runtime-tail",
         &mut terminal,
         &mut runtime,
@@ -3693,22 +3701,25 @@ fn direct_frame_recorder_catches_wrapped_parallel_stream_split_at_live_boundary(
 #[test]
 fn direct_frame_recorder_keeps_long_github_identity_error_exactly_once_through_refresh_and_resize()
 {
-    const ERROR_MARKER: &str = "GITHUB_IDENTITY_ERROR_EXACTLY_ONCE";
+    const ERROR_MARKER: &str = "GHID2061";
     let error_feed = || {
         vec![
             long_runtime_feed_entry(1, "runtime feed priming event"),
             long_runtime_feed_entry(
                 2,
                 format!(
-                    "{ERROR_MARKER}: expected repo-local RefinedStone credentials but the \
-                     asynchronous GitHub identity probe returned a different account"
+                    "{ERROR_MARKER}: GitHub identity error: expected repo-local RefinedStone \
+                     credentials but the asynchronous probe returned a different account"
                 ),
             ),
         ]
     };
 
-    let mut terminal =
-        tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 48, 24);
+    let mut terminal = tui_testkit::inline_history_vt100_terminal(
+        InlineHistoryRenderMode::HostScrollback,
+        100,
+        30,
+    );
     let mut app = make_test_app();
     app.shell.show_startup_ascii_art = false;
     app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
@@ -3722,7 +3733,7 @@ fn direct_frame_recorder_keeps_long_github_identity_error_exactly_once_through_r
     let mut inline_terminal = InlineTerminalState::default();
     let mut recorder = tui_testkit::InlineFrameRecorder::default();
 
-    recorder.draw_and_record(
+    recorder.draw_and_record_vt100(
         "github-identity-primed",
         &mut terminal,
         &mut runtime,
@@ -3735,7 +3746,7 @@ fn direct_frame_recorder_keeps_long_github_identity_error_exactly_once_through_r
             "github identity check failed",
             error_feed(),
         )));
-    recorder.draw_and_record(
+    recorder.draw_and_record_vt100(
         "github-identity-live",
         &mut terminal,
         &mut runtime,
@@ -3761,6 +3772,22 @@ fn direct_frame_recorder_keeps_long_github_identity_error_exactly_once_through_r
         "the live event must not also be present in host scrollback:\n{}",
         live.host_scrollback_text
     );
+    let error_event_id = runtime
+        .app()
+        .shell
+        .parallel_event_stream
+        .snapshot()
+        .events()
+        .iter()
+        .find(|event| event.line().to_string().contains(ERROR_MARKER))
+        .expect("the authority error should retain one typed stream event")
+        .id();
+    assert!(
+        !inline_terminal
+            .parallel_delivery
+            .has_delivered(error_event_id),
+        "the authority error should begin beyond the committed host frontier"
+    );
 
     for refresh_state in [
         "github identity retry queued",
@@ -3778,8 +3805,8 @@ fn direct_frame_recorder_keeps_long_github_identity_error_exactly_once_through_r
         draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
             .expect("asynchronous supervisor refresh draw");
     }
-    tui_testkit::resize_inline_history_terminal(&mut terminal, 42, 18);
-    recorder.draw_and_record(
+    tui_testkit::resize_inline_history_vt100_terminal(&mut terminal, 42, 18);
+    recorder.draw_and_record_vt100(
         "github-identity-after-refresh-and-shrink",
         &mut terminal,
         &mut runtime,
@@ -3793,17 +3820,11 @@ fn direct_frame_recorder_keeps_long_github_identity_error_exactly_once_through_r
         "repeated snapshots with the same authority sequence must not append the error again:\n{}",
         shifted.app_event_stream_text
     );
-    assert_eq!(
-        shifted.host_scrollback_text.matches(ERROR_MARKER).count(),
-        1,
-        "the event should cross into the durable partition exactly once:\n{}",
-        shifted.host_scrollback_text
-    );
-    assert_eq!(
-        shifted.screen_text.matches(ERROR_MARKER).count(),
-        0,
-        "a committed host event must not remain in the live partition:\n{}",
-        shifted.screen_text
+    assert!(
+        inline_terminal
+            .parallel_delivery
+            .has_delivered(error_event_id),
+        "the event should cross the exact typed host frontier after refresh and shrink"
     );
     assert_eq!(
         shifted.terminal_history_text.matches(ERROR_MARKER).count(),
@@ -3812,8 +3833,8 @@ fn direct_frame_recorder_keeps_long_github_identity_error_exactly_once_through_r
         shifted.terminal_history_text
     );
 
-    tui_testkit::resize_inline_history_terminal(&mut terminal, 100, 30);
-    recorder.draw_and_record(
+    tui_testkit::resize_inline_history_vt100_terminal(&mut terminal, 100, 30);
+    recorder.draw_and_record_vt100(
         "github-identity-restored",
         &mut terminal,
         &mut runtime,

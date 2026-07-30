@@ -191,11 +191,49 @@ impl InlineFrameRecorder {
         terminal: &Terminal<InlineTerminalBackend<TestBackend>>,
         runtime: &ShellRuntime,
     ) {
+        self.record_values(
+            label,
+            screen_text(terminal),
+            inline_scrollback_text(terminal),
+            inline_terminal_history_text(terminal),
+            runtime,
+        );
+    }
+
+    pub(super) fn draw_and_record_vt100(
+        &mut self,
+        label: &'static str,
+        terminal: &mut Terminal<InlineTerminalBackend<Vt100Backend>>,
+        runtime: &mut ShellRuntime,
+        inline_terminal: &mut InlineTerminalState,
+    ) {
+        draw_inline_transaction(terminal, runtime, inline_terminal)
+            .expect("recorded VT100 inline draw transaction");
+        let screen_text = screen_text(terminal);
+        let host_scrollback_text = inline_vt100_host_scrollback_text(terminal);
+        let terminal_history_text = inline_vt100_scrollback_text(terminal);
+        self.record_values(
+            label,
+            screen_text,
+            host_scrollback_text,
+            terminal_history_text,
+            runtime,
+        );
+    }
+
+    fn record_values(
+        &mut self,
+        label: &'static str,
+        screen_text: String,
+        host_scrollback_text: String,
+        terminal_history_text: String,
+        runtime: &ShellRuntime,
+    ) {
         self.frames.push(RecordedInlineFrame {
             label,
-            screen_text: screen_text(terminal),
-            host_scrollback_text: inline_scrollback_text(terminal),
-            terminal_history_text: inline_terminal_history_text(terminal),
+            screen_text,
+            host_scrollback_text,
+            terminal_history_text,
             app_event_stream_text: runtime
                 .app()
                 .parallel_supervisor_event_lines()

@@ -9996,6 +9996,18 @@ fn tui_parallel_terminal_delivery_is_one_typed_transaction() {
         repo_root().join("src/adapter/inbound/tui/app/inline_terminal_adapter.rs"),
     )
     .expect("inline terminal adapter source should load");
+    let insertion_source =
+        fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/history_insertion.rs"))
+            .expect("history insertion source should load");
+    let automatic_resolution = top_level_impl_method_source(&insertion_source, "resolve");
+    assert!(
+        automatic_resolution.contains("Self::Automatic => Self::NewlineFallback"),
+        "automatic delivery must use the primitive proven to retain real terminal history"
+    );
+    assert!(
+        terminal_source.contains(".then_some(self.insert_mode.resolve())"),
+        "every host delivery path must apply the safe automatic insertion policy"
+    );
     let host_delivery = top_level_function_source(&terminal_source, "sync_parallel_host_delivery");
     for required_outcome in [
         "ParallelHistoryInsertionOutcome::AbortedBeforeWrite",
