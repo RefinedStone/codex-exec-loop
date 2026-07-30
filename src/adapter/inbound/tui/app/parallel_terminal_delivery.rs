@@ -654,6 +654,14 @@ impl ParallelTerminalDeliveryState {
     fn is_uncertain(&self) -> bool {
         matches!(self.state, ParallelDeliveryState::Uncertain { .. })
     }
+
+    #[cfg(test)]
+    pub(super) fn has_delivered(&self, event_id: ParallelStreamEventId) -> bool {
+        matches!(
+            self.state,
+            ParallelDeliveryState::Ready { cursor } if cursor.contains(event_id)
+        )
+    }
 }
 
 fn validate_snapshot(snapshot: &ParallelEventStreamSnapshot) {

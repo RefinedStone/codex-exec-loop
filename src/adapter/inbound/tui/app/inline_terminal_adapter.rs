@@ -110,7 +110,7 @@ impl InlineTerminalSyncPolicy {
     fn host_insert_mode(self) -> Option<HistoryInsertionMode> {
         self.render_mode
             .writes_host_scrollback()
-            .then_some(self.insert_mode.resolve(self.parallel_mode_enabled))
+            .then_some(self.insert_mode.resolve())
     }
 }
 
