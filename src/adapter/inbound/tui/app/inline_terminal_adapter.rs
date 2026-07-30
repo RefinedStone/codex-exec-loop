@@ -792,7 +792,9 @@ fn sync_parallel_host_delivery<B: InlineResizeBackend>(
             stable_geometry: true,
         });
     };
-    let lines = batch.lines(language);
+    let lines = inline_terminal
+        .history_flush
+        .lines_with_reflow_guards(&batch.lines(language));
     let inserted_rows = count_rendered_history_rows(&lines, resize_snapshot.size.width)
         .min(usize::from(u16::MAX)) as u16;
     if inserted_rows == 0 {

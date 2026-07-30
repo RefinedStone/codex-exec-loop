@@ -184,7 +184,7 @@ impl HistoryFlushState {
         if !terminal.backend().matches_resize_snapshot(expected)? {
             return Ok(HistoryFlushResult::default());
         }
-        let physical_pending_lines = self.pending_lines_with_reflow_guards(&pending_history_lines);
+        let physical_pending_lines = self.lines_with_reflow_guards(&pending_history_lines);
         let width = expected.size.width;
         let inserted_rows = if physical_pending_lines.is_empty() {
             0
@@ -314,7 +314,7 @@ impl HistoryFlushState {
         viewport_top: u16,
         stable_geometry: bool,
     ) {
-        self.trailing_reflow_guard_rows = 0;
+        self.trailing_reflow_guard_rows = INLINE_HOST_SCROLLBACK_REFLOW_GUARD_ROWS;
         self.visible_history_rows = self
             .visible_history_rows
             .saturating_add(inserted_rows)
@@ -334,12 +334,12 @@ impl HistoryFlushState {
         self.rendered_lines = current_lines.to_vec();
     }
 
-    fn pending_lines_with_reflow_guards(
+    pub(crate) fn lines_with_reflow_guards(
         &self,
         pending_lines: &[Line<'static>],
     ) -> Vec<Line<'static>> {
         /*
-         * Guard rows travel only with newly committed conversation history.
+         * Guard rows travel only with newly committed durable history.
          * Retrofitting them during an otherwise stable projection would mutate
          * scrollback on mode switches and could evict the oldest visible handoff.
          */
