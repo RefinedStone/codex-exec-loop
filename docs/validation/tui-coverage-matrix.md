@@ -148,6 +148,7 @@ and remove it when the corresponding tests move or disappear.
 - `src/adapter/inbound/tui/app/parallel_mode_shell_command.rs`
 - `src/adapter/inbound/tui/app/parallel_peek_overlay_ui.rs`
 - `src/adapter/inbound/tui/app/parallel_supervisor_events.rs`
+- `src/adapter/inbound/tui/app/parallel_terminal_delivery.rs`
 - `src/adapter/inbound/tui/app/planning/controller.rs`
 - `src/adapter/inbound/tui/app/planning/presentation.rs`
 - `src/adapter/inbound/tui/app/planning/status_projection.rs`

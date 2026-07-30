@@ -1,6 +1,4 @@
-use super::super::parallel_supervisor_events::{
-    rendered_parallel_event_line_rows, rendered_parallel_event_tail_start_index,
-};
+use super::super::parallel_terminal_delivery::ParallelLiveStreamModel;
 use super::super::shell_presentation::{
     ActivityOverlayView, DirectionsMaintenanceOverlayView, HelpOverlayView,
     LanguageSelectionOverlayView, ModelSelectionOverlayView, OverlayListView,
@@ -603,7 +601,7 @@ fn draw_inline_supersession_inspection(
 ) {
     if !overlay_view.focused_full_viewport {
         let layout = passive_supersession_inspection_layout(&overlay_view, area);
-        render_inline_parallel_event_stream(frame, layout.events, overlay_view.event_lines);
+        render_inline_parallel_event_stream(frame, layout.events, overlay_view.event_stream);
         render_inline_titled_panel(
             frame,
             layout.keys,
@@ -625,7 +623,7 @@ fn draw_inline_supersession_inspection(
         compact_lane_lines,
         selected_lane_lines,
         compact_selected_lane_lines,
-        event_lines,
+        event_stream,
         key_lines,
     } = overlay_view;
     let body_lines = take_panel_body_lines(header_lines);
@@ -714,7 +712,7 @@ fn draw_inline_supersession_inspection(
         Line::from("Accepted Queue"),
         accepted_queue_lines,
     );
-    render_inline_parallel_event_stream(frame, layout.events, event_lines);
+    render_inline_parallel_event_stream(frame, layout.events, event_stream);
     render_inline_titled_panel(
         frame,
         layout.keys,
@@ -841,13 +839,10 @@ fn render_inline_supersession_panel(
 fn render_inline_parallel_event_stream(
     frame: &mut Frame<'_>,
     area: Rect,
-    lines: Vec<Line<'static>>,
+    stream: ParallelLiveStreamModel,
 ) {
-    let stream_visible_rows =
-        parallel_event_stream_visible_rows_for_lines(&lines, area.width, area);
-    let stream_scroll_offset =
-        event_boundary_scroll_offset(&lines, area.width, stream_visible_rows);
-    let title = if parallel_event_stream_title_visible(&lines, area.width, area) {
+    let stream = stream.into_render_parts();
+    let title = if stream.title_visible {
         InlineAppendOnlyStreamTitle::Visible(Line::from(PARALLEL_EVENT_STREAM_TITLE))
     } else {
         /*
@@ -859,57 +854,23 @@ fn render_inline_parallel_event_stream(
          */
         InlineAppendOnlyStreamTitle::Hidden
     };
-    InlineAppendOnlyStream::new(title, lines, stream_scroll_offset).render(frame, area);
-}
-
-fn event_boundary_scroll_offset(lines: &[Line<'static>], width: u16, visible_rows: usize) -> u16 {
-    if lines.is_empty() || visible_rows == 0 || width == 0 {
-        return 0;
-    }
-
-    let live_start = rendered_parallel_event_tail_start_index(lines, visible_rows, width);
-    lines[..live_start]
-        .iter()
-        .map(|line| rendered_parallel_event_line_rows(line, width))
-        .sum::<usize>()
-        .min(u16::MAX as usize) as u16
-}
-
-fn parallel_event_stream_title_visible(lines: &[Line<'static>], width: u16, area: Rect) -> bool {
-    let titled_body_rows = area.height.saturating_sub(1) as usize;
-    count_rendered_inline_rows(lines, width) <= titled_body_rows
-}
-
-fn parallel_event_stream_visible_rows_for_lines(
-    lines: &[Line<'static>],
-    width: u16,
-    area: Rect,
-) -> usize {
-    if parallel_event_stream_title_visible(lines, width, area) {
-        area.height.saturating_sub(1) as usize
-    } else {
-        area.height as usize
-    }
+    InlineAppendOnlyStream::new(title, stream.lines, stream.scroll_offset).render(frame, area);
 }
 
 fn rendered_line_rows(line: &Line<'_>, width: u16) -> usize {
     count_rendered_inline_rows(std::slice::from_ref(line), width).max(1)
 }
 
-pub(super) fn parallel_event_stream_visible_rows(
+pub(super) fn parallel_event_stream_area(
     overlay_view: &SupersessionOverlayView,
     area: Rect,
-) -> usize {
+) -> Rect {
     let layout = if overlay_view.focused_full_viewport {
         supersession_inspection_layout(overlay_view, area)
     } else {
         passive_supersession_inspection_layout(overlay_view, area)
     };
-    parallel_event_stream_visible_rows_for_lines(
-        &overlay_view.event_lines,
-        layout.events.width,
-        layout.events,
-    )
+    layout.events
 }
 fn draw_inline_queue_inspection(frame: &mut Frame<'_>, area: Rect, overlay_view: QueueOverlayView) {
     let QueueOverlayView {
@@ -1194,23 +1155,7 @@ fn draw_inline_session_list_panel(
 mod tests {
     use ratatui::text::Line;
 
-    use super::{event_boundary_scroll_offset, selected_content_scroll_offset};
-
-    #[test]
-    fn event_boundary_scroll_offset_keeps_wrapped_event_intact() {
-        let lines = vec![Line::from("123456 123456 123456"), Line::from("tail event")];
-
-        assert_eq!(
-            event_boundary_scroll_offset(&lines, 10, 3),
-            3,
-            "an event that does not fully fit in the live suffix must remain durable"
-        );
-        assert_eq!(
-            event_boundary_scroll_offset(&lines, 10, 1),
-            3,
-            "boundary exactly after the first wrapped event may start at the next event"
-        );
-    }
+    use super::selected_content_scroll_offset;
 
     #[test]
     fn selected_content_scroll_keeps_marker_when_row_is_taller_than_viewport() {

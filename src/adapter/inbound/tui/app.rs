@@ -100,6 +100,8 @@ mod parallel_peek_overlay_ui;
 mod parallel_presentation_bridge;
 #[path = "app/parallel_supervisor_events.rs"]
 mod parallel_supervisor_events;
+#[path = "app/parallel_terminal_delivery.rs"]
+mod parallel_terminal_delivery;
 #[path = "app/planning/mod.rs"]
 mod planning;
 #[path = "app/planning_draft_editor_ui.rs"]

@@ -9680,7 +9680,8 @@ fn tui_parallel_frame_uses_one_control_plane_and_event_projection_sample() {
     for required in [
         "supersession_overlay_view: Option<Box<SupersessionOverlayView>>",
         "parallel frame projection must own the supervisor view",
-        "sample.parallel_supervisor_event_scrollback_lines_before_live_tail(",
+        "parallel_event_stream_snapshot: Option<ParallelEventStreamSnapshot>",
+        "install_parallel_live_stream",
     ] {
         assert!(
             frame_model_source.contains(required),
@@ -9691,8 +9692,7 @@ fn tui_parallel_frame_uses_one_control_plane_and_event_projection_sample() {
         fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/shell_rendering.rs"))
             .expect("shell rendering source should load");
     assert!(
-        rendering_source
-            .contains("inline_inspection::parallel_event_stream_visible_rows(view, layout[0])"),
+        rendering_source.contains("inline_inspection::parallel_event_stream_area(view, layout[0])"),
         "Supersession row planning and drawing must consume the owned view"
     );
 
@@ -9725,25 +9725,18 @@ fn tui_parallel_frame_uses_one_control_plane_and_event_projection_sample() {
         );
     }
 
-    let event_source = fs::read_to_string(
-        repo_root().join("src/adapter/inbound/tui/app/parallel_supervisor_events.rs"),
-    )
-    .expect("parallel event source should load");
     let inspection_source = fs::read_to_string(
         repo_root().join("src/adapter/inbound/tui/app/shell_rendering/inline_inspection.rs"),
     )
     .expect("inline inspection source should load");
-    for required in [
-        "rendered_parallel_event_line_rows",
-        "rendered_parallel_event_tail_start_index",
-    ] {
-        for source in [&event_source, &inspection_source] {
-            assert!(
-                source.contains(required),
-                "scrollback splitting and live rendering must share Ratatui word-wrap boundary helper: {required}"
-            );
-        }
-    }
+    assert!(
+        inspection_source.contains("stream.into_render_parts()"),
+        "parallel renderer must consume the terminal-planned live model"
+    );
+    assert!(
+        !inspection_source.contains("rendered_parallel_event_tail_start_index"),
+        "parallel renderer must not reconstruct the durable/live event boundary"
+    );
 }
 
 #[test]
@@ -9835,6 +9828,229 @@ fn tui_parallel_event_stream_owns_one_typed_canonical_window() {
         assert!(
             event_source.contains(required_source_variant),
             "parallel ingestion must keep source-specific identity: {required_source_variant}"
+        );
+    }
+}
+
+#[test]
+fn tui_parallel_terminal_delivery_is_one_typed_transaction() {
+    let delivery_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/parallel_terminal_delivery.rs"),
+    )
+    .expect("parallel terminal delivery source should load");
+    let delivery_production = production_source_before_inline_tests(&delivery_source);
+    let delivery_syntax = syn::parse_file(&delivery_production)
+        .expect("parallel terminal delivery source should parse as Rust");
+
+    let cursor_fields = named_struct_fields(&delivery_syntax, "ParallelDeliveryCursor");
+    assert_eq!(
+        cursor_fields.len(),
+        2,
+        "the delivery frontier must be one generation-qualified cursor"
+    );
+    for (field, (expected_name, expected_type)) in cursor_fields.iter().zip([
+        ("stream_generation", "u64"),
+        ("delivered_through", "Option"),
+    ]) {
+        assert_eq!(
+            field
+                .ident
+                .as_ref()
+                .expect("delivery cursor field should be named"),
+            expected_name
+        );
+        assert!(
+            type_mentions_named_path(&field.ty, expected_type),
+            "delivery cursor field {expected_name} must mention {expected_type}"
+        );
+        assert!(
+            matches!(field.vis, syn::Visibility::Inherited),
+            "delivery cursor fields must stay private"
+        );
+    }
+
+    let state = delivery_syntax
+        .items
+        .iter()
+        .find_map(|item| match item {
+            syn::Item::Enum(item) if item.ident == "ParallelDeliveryState" => Some(item),
+            _ => None,
+        })
+        .expect("parallel delivery state should exist");
+    assert_eq!(
+        state
+            .variants
+            .iter()
+            .map(|variant| variant.ident.to_string())
+            .collect::<Vec<_>>(),
+        ["Ready", "Writing", "Uncertain"],
+        "delivery must make the pre-write, in-flight, and ambiguous states explicit"
+    );
+
+    for (struct_name, required_fields) in [
+        (
+            "ParallelHostDeliveryToken",
+            &[
+                "terminal_surface_generation",
+                "stream_generation",
+                "expected_cursor",
+                "proposed_cursor",
+                "attempt_id",
+            ][..],
+        ),
+        (
+            "ParallelStreamDeliveryPlan",
+            &["geometry", "host_batch", "live_stream"][..],
+        ),
+        (
+            "ParallelHostBatch",
+            &[
+                "expected_cursor",
+                "commit_through",
+                "retention_gap",
+                "events",
+            ][..],
+        ),
+        (
+            "ParallelLiveStreamModel",
+            &[
+                "stream_generation",
+                "after_cursor",
+                "events",
+                "status_lines",
+                "layout",
+            ][..],
+        ),
+    ] {
+        let fields = named_struct_fields(&delivery_syntax, struct_name);
+        assert_eq!(
+            fields
+                .iter()
+                .map(|field| {
+                    field
+                        .ident
+                        .as_ref()
+                        .expect("transaction field should be named")
+                        .to_string()
+                })
+                .collect::<Vec<_>>(),
+            required_fields,
+            "{struct_name} must keep the typed transaction shape"
+        );
+        assert!(
+            fields
+                .iter()
+                .all(|field| matches!(field.vis, syn::Visibility::Inherited)),
+            "{struct_name} transaction fields must stay private"
+        );
+    }
+
+    for forbidden in [".starts_with(", "std::mem::swap", "rendered_lines =="] {
+        assert!(
+            !delivery_production.contains(forbidden),
+            "delivery ownership must never be reconstructed from rendered text: {forbidden}"
+        );
+    }
+
+    let flush_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/inline_terminal_adapter/history_flush.rs"),
+    )
+    .expect("inline history flush source should load");
+    let flush_production = production_source_before_inline_tests(&flush_source);
+    for retired_baseline in [
+        "parallel_rendered_lines",
+        "sync_parallel",
+        "remember_parallel_without_flush",
+        "has_pending_parallel_lines",
+    ] {
+        assert!(
+            !flush_production.contains(retired_baseline),
+            "a rendered-line delivery baseline must not return: {retired_baseline}"
+        );
+    }
+
+    let renderer_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/shell_rendering/inline_inspection.rs"),
+    )
+    .expect("inline inspection renderer source should load");
+    assert!(
+        renderer_source.contains("ParallelLiveStreamModel")
+            && renderer_source.contains("stream.into_render_parts()"),
+        "the renderer must consume only the planned live stream model"
+    );
+    for forbidden_renderer_knowledge in [
+        "ParallelDeliveryCursor",
+        "ParallelDeliveryState",
+        "ParallelEventStreamSnapshot",
+        "ParallelHostBatch",
+        "HistoryInsertionAdapter",
+        "rendered_parallel_event_tail_start_index",
+    ] {
+        assert!(
+            !renderer_source.contains(forbidden_renderer_knowledge),
+            "the renderer must not reconstruct transaction ownership: {forbidden_renderer_knowledge}"
+        );
+    }
+
+    let terminal_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/inline_terminal_adapter.rs"),
+    )
+    .expect("inline terminal adapter source should load");
+    let host_delivery = top_level_function_source(&terminal_source, "sync_parallel_host_delivery");
+    for required_outcome in [
+        "ParallelHistoryInsertionOutcome::AbortedBeforeWrite",
+        "ParallelHistoryInsertionOutcome::FailedBeforeWrite",
+        "ParallelHistoryInsertionOutcome::Committed",
+        "ParallelHistoryInsertionOutcome::CommittedWithError",
+        "ParallelHistoryInsertionOutcome::Uncertain",
+        "ParallelHostReceiptSettlement::Applied",
+        "ParallelHostReceiptSettlement::Duplicate",
+        "ParallelHostReceiptSettlement::Rejected",
+        ".abort_before_write(&token)",
+        ".mark_uncertain(&token)",
+        ".commit_host_receipt(token.receipt())",
+    ] {
+        assert!(
+            host_delivery.contains(required_outcome),
+            "host delivery must classify and settle every write outcome: {required_outcome}"
+        );
+    }
+
+    let commit = top_level_impl_method_source(&delivery_source, "commit_host_receipt");
+    for required_identity in [
+        "token.terminal_surface_generation != self.terminal_surface_generation",
+        ".last_committed_token",
+        "ParallelDeliveryState::Writing",
+        "active != &token",
+        "token.stream_generation != token.expected_cursor.stream_generation",
+        "token.stream_generation != token.proposed_cursor.stream_generation",
+    ] {
+        assert!(
+            commit.contains(required_identity),
+            "host receipts must settle against exact transaction identity: {required_identity}"
+        );
+    }
+
+    let surface_transition =
+        top_level_impl_method_source(&delivery_source, "transition_terminal_surface");
+    for explicit_policy in [
+        "TerminalSurfaceTransition::PreserveHostScrollback",
+        "terminal_surface_generation",
+        "ParallelDeliveryCursor::initial(active_stream_generation)",
+    ] {
+        assert!(
+            surface_transition.contains(explicit_policy),
+            "terminal surface transitions must be explicit: {explicit_policy}"
+        );
+    }
+    for policy_variant in [
+        "PreserveHostScrollback",
+        "ClearHostScrollback",
+        "ReplaceSurface",
+    ] {
+        assert!(
+            delivery_production.contains(policy_variant),
+            "terminal delivery must name every host-surface policy: {policy_variant}"
         );
     }
 }
@@ -11894,7 +12110,7 @@ fn tui_parallel_stream_continuity_is_architecture_contract() {
         "fn render_inline_parallel_event_stream",
         "Architecture contract: a split event stream is not a titled panel.",
         "InlineAppendOnlyStreamTitle::Hidden",
-        "InlineAppendOnlyStream::new(title, lines, stream_scroll_offset).render(frame, area)",
+        "InlineAppendOnlyStream::new(title, stream.lines, stream.scroll_offset).render(frame, area)",
     ] {
         assert!(
             renderer.contains(required_renderer_text),

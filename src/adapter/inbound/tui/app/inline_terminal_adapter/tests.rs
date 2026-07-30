@@ -2625,17 +2625,6 @@ fn assert_parallel_projection_delivers_conversation_handoff(
             assert!(conversation_baseline.contains(PROMPT_MARKER));
             assert!(conversation_baseline.contains(COMMENTARY_MARKER));
             assert!(conversation_baseline.contains(FINAL_MARKER));
-            let parallel_baseline = inline_terminal
-                .history_flush
-                .parallel_rendered_lines
-                .iter()
-                .map(|line| line.to_string())
-                .collect::<Vec<_>>()
-                .join("\n");
-            assert!(parallel_baseline.contains("PARALLEL_BASELINE_EVENT_00"));
-            assert!(!parallel_baseline.contains(PROMPT_MARKER));
-            assert!(!parallel_baseline.contains(COMMENTARY_MARKER));
-            assert!(!parallel_baseline.contains(FINAL_MARKER));
         }
         InlineHistoryRenderMode::ViewportReplay => {
             assert_eq!(parallel_screen.matches(COMMENTARY_MARKER).count(), 1);
@@ -3699,6 +3688,144 @@ fn direct_frame_recorder_catches_wrapped_parallel_stream_split_at_live_boundary(
             runtime_tail_frame.terminal_history_text
         );
     }
+}
+
+#[test]
+fn direct_frame_recorder_keeps_long_github_identity_error_exactly_once_through_refresh_and_resize()
+{
+    const ERROR_MARKER: &str = "GITHUB_IDENTITY_ERROR_EXACTLY_ONCE";
+    let error_feed = || {
+        vec![
+            long_runtime_feed_entry(1, "runtime feed priming event"),
+            long_runtime_feed_entry(
+                2,
+                format!(
+                    "{ERROR_MARKER}: expected repo-local RefinedStone credentials but the \
+                     asynchronous GitHub identity probe returned a different account"
+                ),
+            ),
+        ]
+    };
+
+    let mut terminal =
+        tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 48, 24);
+    let mut app = make_test_app();
+    app.shell.show_startup_ascii_art = false;
+    app.shell.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.set_parallel_mode_enabled_for_test(true);
+    app.set_parallel_mode_supervisor_snapshot_for_test(Some(active_runtime_feed_snapshot(
+        ParallelModePoolSlotState::Leased,
+        "starting",
+        vec![long_runtime_feed_entry(1, "runtime feed priming event")],
+    )));
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+    let mut recorder = tui_testkit::InlineFrameRecorder::default();
+
+    recorder.draw_and_record(
+        "github-identity-primed",
+        &mut terminal,
+        &mut runtime,
+        &mut inline_terminal,
+    );
+    runtime
+        .app_mut()
+        .set_parallel_mode_supervisor_snapshot_for_test(Some(active_runtime_feed_snapshot(
+            ParallelModePoolSlotState::Running,
+            "github identity check failed",
+            error_feed(),
+        )));
+    recorder.draw_and_record(
+        "github-identity-live",
+        &mut terminal,
+        &mut runtime,
+        &mut inline_terminal,
+    );
+
+    let live = recorder.frame("github-identity-live");
+    assert_eq!(
+        live.app_event_stream_text.matches(ERROR_MARKER).count(),
+        1,
+        "one authority sequence must produce one canonical event:\n{}",
+        live.app_event_stream_text
+    );
+    assert_eq!(
+        live.screen_text.matches(ERROR_MARKER).count(),
+        1,
+        "the long identity error should begin in the live partition:\n{}",
+        live.screen_text
+    );
+    assert_eq!(
+        live.host_scrollback_text.matches(ERROR_MARKER).count(),
+        0,
+        "the live event must not also be present in host scrollback:\n{}",
+        live.host_scrollback_text
+    );
+
+    for refresh_state in [
+        "github identity retry queued",
+        "github identity retry running",
+        "github identity retry waiting",
+        "github identity retry observed",
+    ] {
+        runtime
+            .app_mut()
+            .set_parallel_mode_supervisor_snapshot_for_test(Some(active_runtime_feed_snapshot(
+                ParallelModePoolSlotState::Running,
+                refresh_state,
+                error_feed(),
+            )));
+        draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+            .expect("asynchronous supervisor refresh draw");
+    }
+    tui_testkit::resize_inline_history_terminal(&mut terminal, 42, 18);
+    recorder.draw_and_record(
+        "github-identity-after-refresh-and-shrink",
+        &mut terminal,
+        &mut runtime,
+        &mut inline_terminal,
+    );
+
+    let shifted = recorder.frame("github-identity-after-refresh-and-shrink");
+    assert_eq!(
+        shifted.app_event_stream_text.matches(ERROR_MARKER).count(),
+        1,
+        "repeated snapshots with the same authority sequence must not append the error again:\n{}",
+        shifted.app_event_stream_text
+    );
+    assert_eq!(
+        shifted.host_scrollback_text.matches(ERROR_MARKER).count(),
+        1,
+        "the event should cross into the durable partition exactly once:\n{}",
+        shifted.host_scrollback_text
+    );
+    assert_eq!(
+        shifted.screen_text.matches(ERROR_MARKER).count(),
+        0,
+        "a committed host event must not remain in the live partition:\n{}",
+        shifted.screen_text
+    );
+    assert_eq!(
+        shifted.terminal_history_text.matches(ERROR_MARKER).count(),
+        1,
+        "combined terminal history must contain the wrapped authority event exactly once:\n{}",
+        shifted.terminal_history_text
+    );
+
+    tui_testkit::resize_inline_history_terminal(&mut terminal, 100, 30);
+    recorder.draw_and_record(
+        "github-identity-restored",
+        &mut terminal,
+        &mut runtime,
+        &mut inline_terminal,
+    );
+    let restored = recorder.frame("github-identity-restored");
+    assert_eq!(
+        restored.terminal_history_text.matches(ERROR_MARKER).count(),
+        1,
+        "restoring terminal geometry must preserve the committed frontier:\n{}",
+        restored.terminal_history_text
+    );
 }
 
 #[test]

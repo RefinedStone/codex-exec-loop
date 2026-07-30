@@ -3,6 +3,7 @@
  * ratatui renderers. Builders translate domain/runtime state into `Line` sections
  * here; renderers should only decide layout, wrapping, focus, and scrolling.
  */
+use super::super::super::super::parallel_terminal_delivery::ParallelLiveStreamModel;
 use super::super::super::Line;
 // Session overlay is the one popup in this file that needs selection and scrolling
 // metadata in addition to preformatted lines.
@@ -108,9 +109,9 @@ pub(crate) struct SupersessionOverlayView {
     pub(crate) compact_lane_lines: Vec<Line<'static>>,
     pub(crate) selected_lane_lines: Vec<Line<'static>>,
     pub(crate) compact_selected_lane_lines: Vec<Line<'static>>,
-    // Append-only runtime events remain a distinct stream so panel chrome never
-    // enters durable host scrollback.
-    pub(crate) event_lines: Vec<Line<'static>>,
+    // Terminal delivery supplies the already-partitioned live stream. This view
+    // cannot inspect the canonical window or reconstruct durable host rows.
+    pub(crate) event_stream: ParallelLiveStreamModel,
     pub(crate) key_lines: Vec<Line<'static>>,
 }
 
