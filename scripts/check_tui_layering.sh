@@ -16,7 +16,9 @@ report_forbidden() {
   local allowed_regex="$3"
   local matches
 
-  matches="$(rg -n --glob '*.rs' "${pattern}" "${app_dir}" || true)"
+  # Git Bash can return mixed separators (`C:/repo/app\\theme.rs`) from the
+  # Windows rg binary. Normalize before applying portable allow-list regexes.
+  matches="$(rg -n --glob '*.rs' "${pattern}" "${app_dir}" | tr '\\' '/' || true)"
   if [[ -n "${matches}" && -n "${allowed_regex}" ]]; then
     matches="$(printf '%s\n' "${matches}" | grep -Ev "${allowed_regex}" || true)"
   fi

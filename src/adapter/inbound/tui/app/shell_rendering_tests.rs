@@ -104,6 +104,10 @@ fn inline_main_buffer_ready_shell_matches_snapshot() {
 
     let rendered = tui_testkit::render_inline_snapshot(&mut app, 80, 24);
 
+    assert!(rendered.contains("READY"));
+    assert!(rendered.contains("queue off"));
+    assert!(rendered.contains("agents off"));
+    assert!(rendered.contains("terminals 0"));
     assert!(rendered.contains("Describe a task or type : for commands"));
     assert!(rendered.contains("╭ Task"), "{rendered}");
     assert!(
@@ -122,6 +126,10 @@ fn context_hud_and_focused_composer_scale_at_120_and_160_columns() {
     let medium = tui_testkit::render_inline_snapshot(&mut medium_app, 120, 24);
 
     assert!(medium.contains("Akra / root"));
+    assert!(medium.contains("READY"));
+    assert!(medium.contains("queue off"));
+    assert!(medium.contains("agents off"));
+    assert!(medium.contains("terminals 0"));
     assert!(medium.contains("gpt-5.5/high"));
     assert!(!medium.contains("branch: --"));
     assert!(!medium.contains("ctx: --"));
@@ -140,7 +148,9 @@ fn context_hud_and_focused_composer_scale_at_120_and_160_columns() {
 
     assert!(!wide.contains("branch: --"));
     assert!(!wide.contains("ctx: --"));
-    assert!(wide.contains("queue: off"));
+    assert!(wide.contains("queue off"));
+    assert!(wide.contains("agents off"));
+    assert!(wide.contains("terminals 0"));
     assert_eq!(wide.matches("╭ Task").count(), 1, "{wide}");
     assert!(
         wide.lines().all(
@@ -149,6 +159,69 @@ fn context_hud_and_focused_composer_scale_at_120_and_160_columns() {
         "{wide}"
     );
     assert_snapshot!("inline_context_hud_ready_160", wide);
+}
+
+#[test]
+fn operator_attention_ribbon_scales_and_routes_raw_payload_to_diagnostics() {
+    fn app_with_attention() -> NativeTuiApp {
+        let mut app = make_test_app();
+        app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+        let ConversationState::Ready(conversation) =
+            &mut app.conversation.lifecycle.conversation_state
+        else {
+            panic!("test app should start in a ready conversation state");
+        };
+        conversation.base_warnings.push(
+            "app-server sent notification `remoteControl:raw-diagnostic-payload`".to_string(),
+        );
+        conversation
+            .runtime_notices
+            .push("bridge reconnect completed with fallback transport".to_string());
+        app
+    }
+
+    fn assert_attention_contract(rendered: &str, width: u16) {
+        assert!(rendered.contains("DEGRADED"), "{width}: {rendered}");
+        assert!(rendered.contains("warning 1"), "{width}: {rendered}");
+        assert!(rendered.contains("runtime notice 1"), "{width}: {rendered}");
+        assert!(rendered.contains("Ctrl+D details"), "{width}: {rendered}");
+        assert!(!rendered.contains("raw-diagnostic-payload"));
+        assert!(!rendered.contains("fallback transport"));
+    }
+
+    let mut narrow_app = app_with_attention();
+    let narrow = tui_testkit::render_inline_snapshot(&mut narrow_app, 80, 24);
+    assert_attention_contract(&narrow, 80);
+    assert_snapshot!("inline_operator_ribbon_attention_80", narrow);
+
+    let mut medium_app = app_with_attention();
+    let medium = tui_testkit::render_inline_snapshot(&mut medium_app, 120, 24);
+    assert_attention_contract(&medium, 120);
+    assert_snapshot!("inline_operator_ribbon_attention_120", medium);
+
+    let mut wide_app = app_with_attention();
+    let wide = tui_testkit::render_inline_snapshot(&mut wide_app, 160, 24);
+    assert_attention_contract(&wide, 160);
+    assert_snapshot!("inline_operator_ribbon_attention_160", wide);
+
+    let mut diagnostics_app = app_with_attention();
+    diagnostics_app.show_startup_overlay();
+    let ConversationState::Ready(conversation) =
+        &mut diagnostics_app.conversation.lifecycle.conversation_state
+    else {
+        panic!("diagnostics app should retain a ready conversation");
+    };
+    conversation.base_warnings =
+        vec!["app-server sent notification `remoteControl:raw-diagnostic-payload`".to_string()];
+    conversation.runtime_notices =
+        vec!["bridge reconnect completed with fallback transport".to_string()];
+    let diagnostics = tui_testkit::render_inline_snapshot(&mut diagnostics_app, 120, 28);
+    assert!(
+        diagnostics.contains("raw-diagnostic-payload"),
+        "{diagnostics}"
+    );
+    assert!(diagnostics.contains("fallback transport"), "{diagnostics}");
+    assert_snapshot!("inline_operator_ribbon_diagnostics_120", diagnostics);
 }
 
 #[test]
@@ -174,7 +247,7 @@ fn focused_composer_projects_typing_blocked_and_parallel_loading_states() {
     blocked_app.shell.chrome.startup_state =
         StartupState::Failed("codex app-server unavailable".to_string());
     let blocked = tui_testkit::render_inline_snapshot(&mut blocked_app, 120, 24);
-    assert!(blocked.contains("blocked"));
+    assert!(blocked.contains("BLOCKED"));
     assert!(blocked.contains("Ctrl+D diagnostics"));
     assert!(blocked.contains("draft preserved"));
     assert_snapshot!("inline_focused_composer_startup_blocked_120", blocked);

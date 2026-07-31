@@ -1299,13 +1299,6 @@ impl TuiLanguage {
         }
     }
 
-    pub(super) fn startup_warning_line(self, warning: &str) -> String {
-        match self {
-            Self::English => format!("warning: {warning}"),
-            Self::Korean => format!("경고: {warning}"),
-        }
-    }
-
     #[cfg(test)]
     pub(super) const fn startup_ready_action_line(self) -> &'static str {
         match self {
@@ -1924,14 +1917,6 @@ mod tests {
         assert_eq!(
             TuiLanguage::Korean.startup_status_line("준비"),
             "상태: 준비"
-        );
-        assert_eq!(
-            TuiLanguage::English.startup_warning_line("check config"),
-            "warning: check config"
-        );
-        assert_eq!(
-            TuiLanguage::Korean.startup_warning_line("설정 확인"),
-            "경고: 설정 확인"
         );
         assert!(
             TuiLanguage::English

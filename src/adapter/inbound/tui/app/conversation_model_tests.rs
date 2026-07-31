@@ -66,46 +66,6 @@ fn settle_post_turn(conversation: &mut ConversationViewModel, completed_turn_id:
     conversation.apply_runtime_snapshot(runtime);
 }
 
-// Warning summaries are shell chrome, not transcript content. These tests pin
-// down the priority order: user-facing warnings remain separate from runtime
-// reconnection notices, and status text keeps its warning suffix when approval
-// review state changes.
-#[test]
-fn warning_summary_prefers_latest_warning_and_truncates() {
-    let mut conversation = ready_conversation();
-    conversation.base_warnings = vec![
-        "first warning".to_string(),
-        "shared runtime busy with an active turn stream; request used an isolated app-server connection".to_string(),
-    ];
-    conversation.warnings = conversation.base_warnings.clone();
-    let summary = conversation.warning_summary(36);
-
-    assert_eq!(
-        summary,
-        "warnings (2): shared runtime busy with an activ..."
-    );
-}
-
-#[test]
-fn runtime_notice_summary_is_separate_from_warning_summary() {
-    let mut conversation = ready_conversation();
-    conversation.base_warnings = vec!["workspace planning warning".to_string()];
-    conversation.warnings = conversation.base_warnings.clone();
-    conversation.runtime_notices = vec![
-        "shared runtime reset after recent sessions request failure; retrying with a fresh app-server connection (boom)"
-            .to_string(),
-    ];
-
-    assert_eq!(
-        conversation.warning_summary(40),
-        "warning: workspace planning warning"
-    );
-    let runtime_summary = conversation
-        .runtime_notice_summary(40)
-        .expect("runtime summary should exist");
-    assert!(runtime_summary.starts_with("runtime: shared runtime reset"));
-}
-
 #[test]
 fn from_snapshot_keeps_runtime_notices_out_of_status_text() {
     let conversation = ConversationViewModel::from_snapshot(
@@ -125,12 +85,8 @@ fn from_snapshot_keeps_runtime_notices_out_of_status_text() {
     );
 
     assert_eq!(conversation.status_text, "thread loaded");
-    assert!(
-        conversation
-            .runtime_notice_summary(36)
-            .expect("runtime summary should exist")
-            .starts_with("runtime: shared runtime reconnected")
-    );
+    assert_eq!(conversation.runtime_notices.len(), 1);
+    assert!(conversation.runtime_notices[0].starts_with("shared runtime reconnected"));
 }
 
 #[test]

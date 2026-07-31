@@ -46,12 +46,6 @@ impl ConversationViewModel {
         format!("{truncated}{TRUNCATION_SUFFIX}")
     }
 
-    fn selected_warning_for_summary(&self) -> Option<&str> {
-        // The latest warning is the one most likely to explain the current
-        // degraded state. Older warnings are still represented by the count.
-        self.base_warnings.last().map(String::as_str)
-    }
-
     fn warning_status_label(&self) -> Option<String> {
         // The primary status line receives only a count badge. Detailed warning
         // copy is exposed through warning_summary so the status line stays
@@ -62,37 +56,6 @@ impl ConversationViewModel {
             1 => Some("warning".to_string()),
             warning_count => Some(format!("warnings ({warning_count})")),
         }
-    }
-
-    pub(crate) fn warning_summary(&self, max_detail_len: usize) -> String {
-        // Return explicit none-copy rather than an empty string so downstream
-        // panels can render a stable row without guessing whether data is absent.
-        let Some(selected_warning) = self.selected_warning_for_summary() else {
-            return "warning: none".to_string();
-        };
-        let summary = Self::truncate_warning_text(selected_warning, max_detail_len);
-        // Keep count grammar aligned with warning_status_label while adding the
-        // representative latest warning detail.
-        match self.base_warnings.len() {
-            0 => "warning: none".to_string(),
-            1 => format!("warning: {summary}"),
-            warning_count => format!("warnings ({warning_count}): {summary}"),
-        }
-    }
-
-    pub(crate) fn runtime_notice_summary(&self, max_detail_len: usize) -> Option<String> {
-        // Runtime notices are optional status details. None lets callers hide
-        // the row entirely when no notice has been recorded.
-        let selected_notice = self.runtime_notices.last()?;
-        let summary = Self::truncate_warning_text(selected_notice, max_detail_len);
-        Some(if self.runtime_notices.len() == 1 {
-            format!("runtime: {summary}")
-        } else {
-            format!(
-                "runtime notices ({}): {summary}",
-                self.runtime_notices.len()
-            )
-        })
     }
 
     pub(crate) fn planning_notice_summary(&self, max_detail_len: usize) -> Option<String> {

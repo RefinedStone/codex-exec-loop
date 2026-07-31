@@ -14,7 +14,7 @@ expression: width_80
 "Keys                                                                            "
 "Up/Down: row | Enter/e or click: fold                                           "
 "PgUp/PgDn: page | Tab: filter | h: list | Esc: close                            "
-"Akra / s...  •  ready  •  gpt-5.5/high  •  queue: off                           "
+"Akra / structure...  ·  READY  ·  queue off  ·  agents off  ·  terminals 0      "
 "notice: activity: diff:+2 -1 h1                                                 "
 " > Describe a task or type : for commands                                       "
 " Type a follow-up  |  Tab steers after typing                                   "

@@ -12,7 +12,7 @@ expression: wide
 "                                                                                                                                                                "
 "                                                                                                                                                                "
 "                                                                                                                                                                "
-"Akra / progressive-activity  •  ready  •  gpt-5.5/high  •  ctx: 75%  •  queue: off                                                                              "
+"Akra / progressive-activity  ·  READY  ·  queue off  ·  agents off  ·  terminals 1  ·  gpt-5.5/high  ·  ctx 75%                                                 "
 "◦ Waiting for model response (0s • interrupt runtime-native)                                                                                                    "
 "notice: activity: active:command | diff:+1 -1 h1 | cmd:2 lines | ctx:75.00% | model:gpt-5.5 | task:P0-D3 rail                                                   "
 "╭ Task                                                                                                                                                          "

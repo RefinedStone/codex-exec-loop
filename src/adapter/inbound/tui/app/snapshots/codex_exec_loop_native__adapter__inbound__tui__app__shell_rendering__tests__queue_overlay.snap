@@ -27,6 +27,6 @@ expression: rendered
 "Up/Down, j/k: select                                                                            "
 "x/Delete: remove                                                                                "
 "Esc/Ctrl+C: close                                                                               "
-"Akra / root  •  ready  •  gpt-5.5/high  •  queue: ready                                         "
+"Akra / root  ·  READY  ·  queue 2  ·  agents off  ·  terminals 0                                "
 " > Describe a task or type : for commands                                                       "
 " Type a task  |  : commands                                                                     "

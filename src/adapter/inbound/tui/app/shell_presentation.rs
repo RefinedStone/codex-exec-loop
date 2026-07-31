@@ -15,8 +15,6 @@ shell presentation은 terminal frame capture가 만든 typed input과 owned scre
 const FOOTER_NOTICE_DETAIL_LIMIT: usize = 56;
 const INLINE_TAIL_STATUS_DETAIL_LIMIT: usize = 44;
 const INLINE_TAIL_NOTICE_DETAIL_LIMIT: usize = 40;
-const INLINE_TAIL_WARNING_DETAIL_LIMIT: usize = 24;
-const INLINE_TAIL_RUNTIME_NOTICE_DETAIL_LIMIT: usize = 24;
 const INLINE_TAIL_PLANNING_DETAIL_LIMIT: usize = 36;
 const INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT: usize = 18;
 const INLINE_COMMAND_PALETTE_VISIBLE_LIMIT: usize = 4;
@@ -103,6 +101,12 @@ pub(super) fn build_inline_tail_view(
     // renderer는 폭만 알고 status panel의 세부 우선순위는 알지 못한다. content_width를
     // 넘겨 presentation 쪽에서 어떤 상태를 남기고 줄일지 결정한다.
     status_panels::build_inline_tail_view(screen_model, content_width)
+}
+
+pub(super) fn build_operator_diagnostic_lines(
+    screen_model: &ConversationScreenModel<'_>,
+) -> Vec<Line<'static>> {
+    status_panels::build_operator_diagnostic_lines(screen_model)
 }
 
 pub(super) fn build_inline_live_transcript_lines(

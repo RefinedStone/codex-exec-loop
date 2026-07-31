@@ -130,6 +130,7 @@ fn lifecycle_tracks_only_bounded_identity_and_kind_then_clears_matching_completi
         state.active_item_kind(),
         Some(ProgressiveActivityItemKind::CommandExecution)
     );
+    assert_eq!(state.active_terminal_count(), 1);
     assert_eq!(state.command_line_count(), 1);
     assert!(!format!("{state:?}").contains("secret-item-id"));
     assert!(!format!("{state:?}").contains(&started.summary));
@@ -172,6 +173,7 @@ fn lifecycle_tracks_only_bounded_identity_and_kind_then_clears_matching_completi
         Some(ConversationItemLifecycleConsistency::Accepted),
     );
     assert_eq!(state.active_item_kind(), None);
+    assert_eq!(state.active_terminal_count(), 0);
     assert_eq!(state.command_line_count(), 0);
 }
 

@@ -228,8 +228,8 @@ fn inline_main_buffer_rendering_uses_only_the_composer_focus_frame() {
         .filter(|line| line.contains("Akra / root"))
         .collect::<Vec<_>>();
     assert_eq!(compact_hud.len(), 1, "{rendered}");
-    assert!(compact_hud[0].contains("pending"), "{rendered}");
-    assert!(compact_hud[0].contains("queue: off"), "{rendered}");
+    assert!(compact_hud[0].contains("PENDING"), "{rendered}");
+    assert!(compact_hud[0].contains("queue off"), "{rendered}");
     assert!(!compact_hud[0].contains("branch:"), "{rendered}");
     assert_eq!(rendered.matches("╭ Task").count(), 1, "{rendered}");
     assert_eq!(rendered.matches('│').count(), 1, "{rendered}");
@@ -283,7 +283,7 @@ fn inline_main_buffer_tail_frame_does_not_render_startup_ascii_art_transiently()
     assert!(rendered.contains("Akra / root"));
     assert!(!rendered.contains("branch: --"));
     assert!(!rendered.contains("ctx: --"));
-    assert!(rendered.contains("queue: off"));
+    assert!(rendered.contains("queue off"));
     assert!(rendered.contains("Describe a task or type : for commands"));
     assert!(rendered.contains("Type a task  |  : commands"));
     assert!(!rendered.contains("diagnostics:"));
@@ -2391,6 +2391,7 @@ fn overlay_family_uses_shared_akra_chrome_tokens() {
             startup_state: &app.shell.chrome.startup_state,
             language: app.shell.tui_language,
             parallel_mode_enabled: startup_sample.parallel_mode_enabled(),
+            operator_diagnostic_lines: Vec::new(),
         },
     );
     let sessions_model = SessionOverlayScreenModel::capture(&app);
@@ -2508,6 +2509,7 @@ fn startup_overlay_surfaces_attachment_mode_and_recovery_anchor() {
             startup_state: &app.shell.chrome.startup_state,
             language: app.shell.tui_language,
             parallel_mode_enabled: sample.parallel_mode_enabled(),
+            operator_diagnostic_lines: Vec::new(),
         },
     );
     let summary = view

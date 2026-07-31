@@ -27,6 +27,6 @@ controls: Tab/Shift+Tab switches files  |  arrows move the cursor
 controls: Enter inserts newline  |  Backspace deletes  |  Ctrl+W deletes the previous word
 controls: Ctrl+S saves and validates  |  Ctrl+P saves and promotes active planning
 controls: Esc/Ctrl+C closes this surface
-Akra / root  •  ready  •  gpt-5.5/high  •  queue: off
+Akra / root  ·  READY  ·  queue off  ·  agents off  ·  terminals 0
  > Describe a task or type : for commands
  Type a task  |  : commands

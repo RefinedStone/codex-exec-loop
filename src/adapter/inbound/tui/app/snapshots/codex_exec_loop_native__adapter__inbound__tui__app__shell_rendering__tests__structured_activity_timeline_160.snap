@@ -14,7 +14,7 @@ expression: width_160
 "248 tests passed                                                                                                                                                "
 "Keys                                                                                                                                                            "
 "Up/Down: row | Enter/e or click: fold | PgUp/PgDn: page | Tab: filter | h: list | Esc: close                                                                    "
-"Akra / structured-activity  •  ready  •  gpt-5.5/high  •  queue: off                                                                                            "
+"Akra / structured-activity  ·  READY  ·  queue off  ·  agents off  ·  terminals 0  ·  gpt-5.5/high                                                              "
 "notice: activity: diff:+2 -1 h1                                                                                                                                 "
 " > Describe a task or type : for commands                                                                                                                       "
 " Type a follow-up  |  Tab steers after typing                                                                                                                   "

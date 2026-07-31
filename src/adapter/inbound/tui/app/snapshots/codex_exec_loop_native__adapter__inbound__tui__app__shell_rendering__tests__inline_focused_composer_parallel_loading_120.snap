@@ -13,7 +13,7 @@ expression: stable_parallel_loading
 "Command Hints                                                                                                           "
 "Ctrl+O board  ·  :parallel refresh  ·  :peek agents  ·  :parallel off                                                   "
 "Parallel setup in progress  ·  draft preserved  ·  Ctrl+O opens operations                                              "
-"Akra / root  •  ready  •  gpt-5.5/high  •  queue: off                                                                   "
+"Akra / root  ·  READY  ·  queue off  ·  agents pending  ·  terminals 0  ·  gpt-5.5/high                                 "
 "Parallel  ◐ preparing workspace                                                                                         "
 "╭ Task                                                                                                                  "
 "│⠋  > Describe a task or type : for commands                                                                            "

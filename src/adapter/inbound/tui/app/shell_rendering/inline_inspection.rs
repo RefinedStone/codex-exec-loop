@@ -383,6 +383,42 @@ fn draw_inline_startup_inspection(
         key_lines,
     } = overlay_view;
     let body_lines = take_panel_body_lines(header_lines);
+    if !warning_lines.is_empty() {
+        /*
+         * Attention diagnostics are the target of the ribbon's Ctrl+D action.
+         * Keep their raw, terminal-safe payload and the recovery keys above the
+         * longer prerequisite list so the action remains truthful in the
+         * bounded inline inspection viewport.
+         */
+        let layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(inline_section_height(&body_lines, 4)),
+                Constraint::Length(inline_section_height(&summary_lines, 2)),
+                Constraint::Length(inline_section_height(&warning_lines, 5)),
+                Constraint::Length(inline_section_height(&key_lines, 4)),
+                Constraint::Min(2),
+            ])
+            .split(area);
+        render_inline_titled_panel(
+            frame,
+            layout[0],
+            inline_overlay_title("Diagnostics"),
+            body_lines,
+            true,
+        );
+        render_inline_titled_panel(frame, layout[1], Line::from("Startup"), summary_lines, true);
+        render_inline_titled_panel(
+            frame,
+            layout[2],
+            Line::from("Warnings"),
+            warning_lines,
+            true,
+        );
+        render_inline_titled_panel(frame, layout[3], Line::from("Keys"), key_lines, true);
+        render_inline_titled_panel(frame, layout[4], Line::from("Checks"), check_lines, false);
+        return;
+    }
     let check_height = inline_section_height(&check_lines, 10).max(4);
     let layout = Layout::default()
         .direction(Direction::Vertical)
