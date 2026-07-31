@@ -32,8 +32,9 @@ use super::capability_projection::{
 use super::{
     AutoFollowSnapshotPresentation, ConversationComposerState, ConversationInputState,
     ConversationState, ConversationViewModel, HistoryInsertionMode, InlineHistoryRenderMode,
-    ParallelPanelStateController, ProgressiveActivityWaitStatus, SessionState,
-    ShellActionAvailability, ShellOverlay, StartupState, TranscriptHandoffCorrelation, TuiLanguage,
+    InlineShellCommandCapabilitySet, ParallelPanelStateController, ProgressiveActivityWaitStatus,
+    SessionState, ShellActionAvailability, ShellOverlay, StartupState,
+    TranscriptHandoffCorrelation, TuiLanguage,
 };
 
 pub(in crate::adapter::inbound::tui::app) const MAX_GITHUB_REVIEW_NOTICE_LEN: usize = 160;
@@ -113,6 +114,26 @@ impl ParallelPanelProjectionSample {
                 workspace_directory.is_none_or(|workspace| snapshot.workspace_path == workspace)
             })
             .cloned()
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn active_parallel_agent_count_for_workspace(
+        &self,
+        workspace_directory: Option<&str>,
+    ) -> usize {
+        self.parallel_mode
+            .supervisor
+            .as_deref()
+            .filter(|snapshot| {
+                workspace_directory.is_none_or(|workspace| snapshot.workspace_path == workspace)
+            })
+            .map_or(0, |snapshot| {
+                snapshot
+                    .roster
+                    .entries
+                    .iter()
+                    .filter(|entry| entry.counts_as_active())
+                    .count()
+            })
     }
 }
 
@@ -251,6 +272,14 @@ impl ConversationProjectionSample {
         &self,
     ) -> bool {
         self.parallel_panel.parallel_mode_control_effect_in_flight()
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn active_parallel_agent_count_for_workspace(
+        &self,
+        workspace_directory: Option<&str>,
+    ) -> usize {
+        self.parallel_panel
+            .active_parallel_agent_count_for_workspace(workspace_directory)
     }
 
     pub(in crate::adapter::inbound::tui::app) fn last_parallel_mode_dispatch_withheld_reason(
@@ -460,6 +489,8 @@ pub(in crate::adapter::inbound::tui::app) struct ConversationScreenFrameInput<'a
     pub(in crate::adapter::inbound::tui::app) session_state: &'a SessionState,
     pub(in crate::adapter::inbound::tui::app) can_open_session_list: bool,
     pub(in crate::adapter::inbound::tui::app) shell_action_availability: ShellActionAvailability,
+    pub(in crate::adapter::inbound::tui::app) inline_shell_command_capabilities:
+        InlineShellCommandCapabilitySet,
     pub(in crate::adapter::inbound::tui::app) github_review_polling_status_label: String,
     pub(in crate::adapter::inbound::tui::app) github_review_recent_changes_summary: Option<String>,
     pub(in crate::adapter::inbound::tui::app) tui_language: TuiLanguage,
@@ -483,6 +514,8 @@ pub(in crate::adapter::inbound::tui::app) struct ConversationScreenModel<'a> {
     pub(in crate::adapter::inbound::tui::app) animation_elapsed_millis: u128,
     pub(in crate::adapter::inbound::tui::app) startup_state: &'a StartupState,
     pub(in crate::adapter::inbound::tui::app) shell_action_availability: ShellActionAvailability,
+    pub(in crate::adapter::inbound::tui::app) inline_shell_command_capabilities:
+        InlineShellCommandCapabilitySet,
     pub(in crate::adapter::inbound::tui::app) recent_session_status_label: String,
     pub(in crate::adapter::inbound::tui::app) recent_session_status_requires_attention: bool,
     pub(in crate::adapter::inbound::tui::app) github_review_polling_status_label: String,
@@ -538,6 +571,11 @@ impl<'a> ConversationScreenModel<'a> {
             shell_conversation_state(&app.conversation.lifecycle.conversation_state);
         let workspace_directory =
             presentation_workspace_directory(conversation_state, &app.shell.chrome.startup_state);
+        let inline_shell_command_capabilities = app.inline_shell_command_capabilities(
+            sample.parallel_mode_enabled(),
+            sample.parallel_mode_control_effect_in_flight(),
+            sample.active_parallel_agent_count_for_workspace(workspace_directory.as_deref()),
+        );
         let exit_confirmation_visible = app.is_exit_confirmation_visible();
         let turn_steer_confirmation = app.is_turn_steer_confirmation_visible().then(|| {
             let intent = app
@@ -568,6 +606,7 @@ impl<'a> ConversationScreenModel<'a> {
                 session_state: &app.shell.chrome.session_state,
                 can_open_session_list: app.can_open_session_list(),
                 shell_action_availability: app.shell_action_availability(),
+                inline_shell_command_capabilities,
                 github_review_polling_status_label: app.github_review_polling_status_label(),
                 github_review_recent_changes_summary: app
                     .github_review_recent_changes_summary(MAX_GITHUB_REVIEW_NOTICE_LEN),
@@ -665,6 +704,7 @@ impl<'a> ConversationScreenModel<'a> {
             animation_elapsed_millis: sample.animation_elapsed_millis,
             startup_state: input.startup_state,
             shell_action_availability: input.shell_action_availability,
+            inline_shell_command_capabilities: input.inline_shell_command_capabilities,
             recent_session_status_label: recent_session_status_label(
                 input.can_open_session_list,
                 input.startup_state,
@@ -846,6 +886,7 @@ impl<'a> ConversationScreenModel<'a> {
             animation_elapsed_millis: 0,
             startup_state,
             shell_action_availability,
+            inline_shell_command_capabilities: InlineShellCommandCapabilitySet::default(),
             recent_session_status_label: "loaded".to_string(),
             recent_session_status_requires_attention: false,
             github_review_polling_status_label: "polling".to_string(),

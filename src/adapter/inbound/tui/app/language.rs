@@ -15,7 +15,10 @@ use super::progressive_activity_overlay_ui::{
 };
 use super::queue_overlay_ui::{QueueActionBlockReason, QueueMutationKind};
 use super::view_selection_overlay_ui::ConversationViewMode;
-use super::{InlineShellCommand, ShellActionAvailability};
+use super::{
+    InlineShellCommand, InlineShellCommandAvailability, InlineShellCommandAvailabilityReason,
+    ShellActionAvailability,
+};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) enum TuiLanguage {
@@ -131,12 +134,28 @@ impl TuiLanguage {
         }
     }
 
-    pub(super) const fn composer_palette_action(self, has_matches: bool) -> &'static str {
-        match (self, has_matches) {
-            (Self::English, true) => "↑/↓ or Tab select  |  Enter choose  |  Esc close",
-            (Self::English, false) => "Esc close",
-            (Self::Korean, true) => "↑/↓ 또는 Tab 선택  |  Enter 적용  |  Esc 닫기",
-            (Self::Korean, false) => "Esc 닫기",
+    pub(super) const fn composer_palette_action(
+        self,
+        has_matches: bool,
+        selected_is_ready: bool,
+        selected_requires_argument: bool,
+    ) -> &'static str {
+        match (
+            self,
+            has_matches,
+            selected_is_ready,
+            selected_requires_argument,
+        ) {
+            (Self::English, false, _, _) => "Esc close",
+            (Self::English, true, false, _) => {
+                "↑/↓ or Tab select  |  Enter unavailable  |  Esc close"
+            }
+            (Self::English, true, true, true) => "↑/↓ or Tab select  |  Enter insert  |  Esc close",
+            (Self::English, true, true, false) => "↑/↓ or Tab select  |  Enter run  |  Esc close",
+            (Self::Korean, false, _, _) => "Esc 닫기",
+            (Self::Korean, true, false, _) => "↑/↓ 또는 Tab 선택  |  Enter 사용 불가  |  Esc 닫기",
+            (Self::Korean, true, true, true) => "↑/↓ 또는 Tab 선택  |  Enter 입력  |  Esc 닫기",
+            (Self::Korean, true, true, false) => "↑/↓ 또는 Tab 선택  |  Enter 실행  |  Esc 닫기",
         }
     }
 
@@ -917,6 +936,154 @@ impl TuiLanguage {
         }
     }
 
+    pub(super) const fn inline_command_availability_label(
+        self,
+        availability: InlineShellCommandAvailability,
+    ) -> &'static str {
+        match availability {
+            InlineShellCommandAvailability::Ready => "READY",
+            InlineShellCommandAvailability::Pending(_) => "PENDING",
+            InlineShellCommandAvailability::Locked(_) => "LOCKED",
+        }
+    }
+
+    pub(super) const fn inline_command_availability_reason(
+        self,
+        reason: InlineShellCommandAvailabilityReason,
+    ) -> &'static str {
+        match (self, reason) {
+            (Self::English, InlineShellCommandAvailabilityReason::StartupChecksRunning) => {
+                "startup checks are still running"
+            }
+            (
+                Self::English,
+                InlineShellCommandAvailabilityReason::StartupDiagnosticsNeedAttention,
+            ) => "resolve startup diagnostics first",
+            (Self::English, InlineShellCommandAvailabilityReason::ParallelTransitionInFlight) => {
+                "parallel control transition is in progress"
+            }
+            (Self::English, InlineShellCommandAvailabilityReason::ParallelModeDisabled) => {
+                "start parallel mode first"
+            }
+            (Self::English, InlineShellCommandAvailabilityReason::NoActiveParallelAgents) => {
+                "available after an agent starts"
+            }
+            (Self::Korean, InlineShellCommandAvailabilityReason::StartupChecksRunning) => {
+                "시작 검사가 진행 중입니다"
+            }
+            (
+                Self::Korean,
+                InlineShellCommandAvailabilityReason::StartupDiagnosticsNeedAttention,
+            ) => "먼저 시작 진단을 해결하세요",
+            (Self::Korean, InlineShellCommandAvailabilityReason::ParallelTransitionInFlight) => {
+                "병렬 제어 전환이 진행 중입니다"
+            }
+            (Self::Korean, InlineShellCommandAvailabilityReason::ParallelModeDisabled) => {
+                "먼저 병렬 모드를 시작하세요"
+            }
+            (Self::Korean, InlineShellCommandAvailabilityReason::NoActiveParallelAgents) => {
+                "에이전트가 시작된 뒤 사용할 수 있습니다"
+            }
+        }
+    }
+
+    pub(super) const fn inline_command_argument_preview(
+        self,
+        command: InlineShellCommand,
+    ) -> &'static str {
+        match (self, command) {
+            (Self::English, InlineShellCommand::Parallel) => "[off]",
+            (Self::English, InlineShellCommand::Activity) => "[all|kind]",
+            (Self::English, InlineShellCommand::Turns) => "<positive|infinite|off>",
+            (Self::English, InlineShellCommand::Model) => "[default]",
+            (Self::English, InlineShellCommand::View) => "[simple|medium|detail]",
+            (Self::English, InlineShellCommand::Language) => "[english|korean]",
+            (Self::English, InlineShellCommand::Think) => "<level|default>",
+            (Self::English, InlineShellCommand::PlanningInit) => "[doctor]",
+            (Self::English, InlineShellCommand::Reset) => "<queue|directions|all>",
+            (Self::English, _) => "none",
+            (Self::Korean, InlineShellCommand::Parallel) => "[off]",
+            (Self::Korean, InlineShellCommand::Activity) => "[all|종류]",
+            (Self::Korean, InlineShellCommand::Turns) => "<양수|infinite|off>",
+            (Self::Korean, InlineShellCommand::Model) => "[default]",
+            (Self::Korean, InlineShellCommand::View) => "[simple|medium|detail]",
+            (Self::Korean, InlineShellCommand::Language) => "[english|korean]",
+            (Self::Korean, InlineShellCommand::Think) => "<수준|default>",
+            (Self::Korean, InlineShellCommand::PlanningInit) => "[doctor]",
+            (Self::Korean, InlineShellCommand::Reset) => "<queue|directions|all>",
+            (Self::Korean, _) => "없음",
+        }
+    }
+
+    pub(super) const fn inline_command_expected_result(
+        self,
+        command: InlineShellCommand,
+        parallel_mode_enabled: bool,
+    ) -> &'static str {
+        match (self, command) {
+            (Self::English, InlineShellCommand::Diagnostics) => "open startup diagnostics",
+            (Self::English, InlineShellCommand::Parallel) => "enable mode and open the board",
+            (Self::English, InlineShellCommand::Peek) => "inspect active agent work",
+            (Self::English, InlineShellCommand::Activity) => "inspect retained activity",
+            (Self::English, InlineShellCommand::Sessions) if parallel_mode_enabled => {
+                "open the operations board"
+            }
+            (Self::English, InlineShellCommand::Sessions) => "open recent sessions",
+            (Self::English, InlineShellCommand::Reviews) => "load the review center",
+            (Self::English, InlineShellCommand::Queue) => "open the accepted queue",
+            (Self::English, InlineShellCommand::Directions) => "edit planning directions",
+            (Self::English, InlineShellCommand::Turns) => "change auto-follow budget",
+            (Self::English, InlineShellCommand::Stop) => "pause automation and stop sessions",
+            (Self::English, InlineShellCommand::Model) => "choose model and think level",
+            (Self::English, InlineShellCommand::View) => "change transcript density",
+            (Self::English, InlineShellCommand::Language) => "change TUI language",
+            (Self::English, InlineShellCommand::Think) => "override reasoning effort",
+            (Self::English, InlineShellCommand::Doctor) => "inspect planning health",
+            (Self::English, InlineShellCommand::PlanningInit) => "open planning control center",
+            (Self::English, InlineShellCommand::Reset) => "reset selected planning state",
+            (Self::English, InlineShellCommand::NewDraft) => "open a clean draft",
+            (Self::English, InlineShellCommand::Help) => "open command help",
+            (Self::Korean, InlineShellCommand::Diagnostics) => "시작 진단 열기",
+            (Self::Korean, InlineShellCommand::Parallel) => "병렬 모드와 운영 보드 시작",
+            (Self::Korean, InlineShellCommand::Peek) => "활성 에이전트 작업 보기",
+            (Self::Korean, InlineShellCommand::Activity) => "보존된 활동 보기",
+            (Self::Korean, InlineShellCommand::Sessions) if parallel_mode_enabled => {
+                "운영 보드 열기"
+            }
+            (Self::Korean, InlineShellCommand::Sessions) => "최근 세션 열기",
+            (Self::Korean, InlineShellCommand::Reviews) => "리뷰 센터 불러오기",
+            (Self::Korean, InlineShellCommand::Queue) => "수락된 큐 열기",
+            (Self::Korean, InlineShellCommand::Directions) => "계획 지침 편집",
+            (Self::Korean, InlineShellCommand::Turns) => "자동 진행 예산 변경",
+            (Self::Korean, InlineShellCommand::Stop) => "자동화를 멈추고 세션 중지",
+            (Self::Korean, InlineShellCommand::Model) => "모델과 추론 수준 선택",
+            (Self::Korean, InlineShellCommand::View) => "대화 표시 밀도 변경",
+            (Self::Korean, InlineShellCommand::Language) => "TUI 언어 변경",
+            (Self::Korean, InlineShellCommand::Think) => "추론 수준 재정의",
+            (Self::Korean, InlineShellCommand::Doctor) => "계획 상태 점검",
+            (Self::Korean, InlineShellCommand::PlanningInit) => "계획 제어 센터 열기",
+            (Self::Korean, InlineShellCommand::Reset) => "선택한 계획 상태 초기화",
+            (Self::Korean, InlineShellCommand::NewDraft) => "새 초안 열기",
+            (Self::Korean, InlineShellCommand::Help) => "명령 도움말 열기",
+        }
+    }
+
+    pub(super) fn inline_command_palette_unavailable_status(
+        self,
+        command: InlineShellCommand,
+        availability: InlineShellCommandAvailability,
+    ) -> String {
+        let label = self.inline_command_availability_label(availability);
+        let reason = availability
+            .reason()
+            .map(|reason| self.inline_command_availability_reason(reason))
+            .unwrap_or_default();
+        match self {
+            Self::English => format!("{} {label}; {reason}", command.command_name()),
+            Self::Korean => format!("{} {label}; {reason}", command.command_name()),
+        }
+    }
+
     #[cfg(test)]
     pub(super) const fn inline_command_palette_key_lines(self) -> [&'static str; 2] {
         match self {
@@ -1178,13 +1345,6 @@ impl TuiLanguage {
         match self {
             Self::English => format!("no shell commands match `{prefix}`"),
             Self::Korean => format!("`{prefix}`와 일치하는 셸 명령이 없습니다"),
-        }
-    }
-
-    pub(super) const fn inline_command_palette_argument_suffix(self) -> &'static str {
-        match self {
-            Self::English => " / add value",
-            Self::Korean => " / 값 입력",
         }
     }
 
@@ -1908,6 +2068,15 @@ mod tests {
         assert_eq!(
             TuiLanguage::Korean.inline_shell_command_detail(InlineShellCommand::Queue),
             "계획 큐"
+        );
+        assert_eq!(
+            TuiLanguage::English
+                .inline_command_expected_result(InlineShellCommand::Sessions, false),
+            "open recent sessions"
+        );
+        assert_eq!(
+            TuiLanguage::English.inline_command_expected_result(InlineShellCommand::Sessions, true),
+            "open the operations board"
         );
         let english = TuiLanguage::English.inline_command_palette_header(3, 19);
         let korean = TuiLanguage::Korean.inline_command_palette_header(3, 19);

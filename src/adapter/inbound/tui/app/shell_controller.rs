@@ -43,6 +43,53 @@ impl NativeTuiApp {
             StartupState::Ready(_) | StartupState::Failed(_) => ShellActionAvailability::Blocked,
         }
     }
+    fn inline_shell_command_startup_readiness(&self) -> InlineShellCommandStartupReadiness {
+        match self.shell_action_availability() {
+            ShellActionAvailability::Ready => InlineShellCommandStartupReadiness::Ready,
+            ShellActionAvailability::Pending => InlineShellCommandStartupReadiness::Pending,
+            ShellActionAvailability::Blocked => InlineShellCommandStartupReadiness::Blocked,
+        }
+    }
+    pub(super) fn inline_shell_command_capabilities(
+        &self,
+        parallel_mode_enabled: bool,
+        parallel_transition_in_flight: bool,
+        active_parallel_agent_count: usize,
+    ) -> InlineShellCommandCapabilitySet {
+        InlineShellCommandCapabilitySet::from_application_context(
+            InlineShellCommandCapabilityContext {
+                startup_readiness: self.inline_shell_command_startup_readiness(),
+                parallel_mode_enabled,
+                parallel_transition_in_flight,
+                active_parallel_agent_count,
+            },
+        )
+    }
+    fn current_inline_shell_command_capabilities(&self) -> InlineShellCommandCapabilitySet {
+        let workspace_directory = self.planning_workspace_directory();
+        let control_plane = self
+            .runtime
+            .client_runtime
+            .parallel_control_plane_projection();
+        let parallel_mode = self.runtime.client_runtime.parallel_mode_projection();
+        let active_parallel_agent_count = parallel_mode
+            .supervisor
+            .as_deref()
+            .filter(|snapshot| snapshot.workspace_path == workspace_directory)
+            .map_or(0, |snapshot| {
+                snapshot
+                    .roster
+                    .entries
+                    .iter()
+                    .filter(|entry| entry.counts_as_active())
+                    .count()
+            });
+        self.inline_shell_command_capabilities(
+            control_plane.mode_enabled,
+            control_plane.control_effect_in_flight,
+            active_parallel_agent_count,
+        )
+    }
     pub(super) fn submission_blocked_status(&self, prompt_origin: PromptOrigin) -> String {
         // Manual prompts can point the operator to diagnostics; auto-follow
         // needs a non-interactive pause reason that can be surfaced in status.
@@ -572,6 +619,18 @@ impl NativeTuiApp {
         let Some(command) = selected_command else {
             return false;
         };
+        let availability = self
+            .current_inline_shell_command_capabilities()
+            .availability(command);
+        if !availability.is_ready() {
+            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                status_text: self
+                    .shell
+                    .tui_language
+                    .inline_command_palette_unavailable_status(command, availability),
+            });
+            return true;
+        }
         // Commands with arguments stay in the prompt for editing; argument-free
         // commands execute immediately through the same inline command handler.
         if command.requires_argument() {
@@ -2695,6 +2754,23 @@ mod tests {
         assert!(app.move_inline_command_palette_selection(0));
         assert!(app.accept_inline_command_palette_selection());
         assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Help);
+    }
+
+    #[test]
+    fn palette_acceptance_keeps_locked_command_visible_and_explains_reason() {
+        let mut app = test_native_tui_app();
+        app.push_input_character(':');
+        app.push_input_character('p');
+        app.push_input_character('e');
+
+        assert!(app.is_inline_command_palette_active());
+        assert!(app.accept_inline_command_palette_selection());
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Hidden);
+        assert_eq!(ready_conversation(&app).composer.input_buffer, ":pe");
+        assert_eq!(
+            ready_conversation(&app).status_text,
+            ":peek LOCKED; start parallel mode first"
+        );
     }
 
     #[test]

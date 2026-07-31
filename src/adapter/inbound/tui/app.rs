@@ -210,7 +210,9 @@ use directions_maintenance_ui::{
 use github_polling::{GithubReviewPollingBootstrap, GithubReviewPollingState};
 use history_insertion::HistoryInsertionMode;
 use inline_shell_commands::{
-    InlineShellCommand, InlineShellCommandInput, is_turn_option_clear_argument,
+    InlineShellCommand, InlineShellCommandAvailability, InlineShellCommandAvailabilityReason,
+    InlineShellCommandCapabilityContext, InlineShellCommandCapabilitySet, InlineShellCommandInput,
+    InlineShellCommandStartupReadiness, is_turn_option_clear_argument,
 };
 use language::{LANGUAGE_SELECTION_OPTIONS, LanguageSelectionOverlayUiState, TuiLanguage};
 use model_selection_overlay_ui::{

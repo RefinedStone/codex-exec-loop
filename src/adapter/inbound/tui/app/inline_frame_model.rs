@@ -49,6 +49,11 @@ fn capture_conversation_screen_frame_input<'a>(
         shell_conversation_state(&app.conversation.lifecycle.conversation_state);
     let workspace_directory =
         presentation_workspace_directory(conversation_state, &app.shell.chrome.startup_state);
+    let inline_shell_command_capabilities = app.inline_shell_command_capabilities(
+        sample.parallel_mode_enabled(),
+        sample.parallel_mode_control_effect_in_flight(),
+        sample.active_parallel_agent_count_for_workspace(workspace_directory.as_deref()),
+    );
     let parallel_mode_enabled = sample.parallel_mode_enabled();
     let queue_mutation_tail_state =
         if let Some(operation_id) = app.pending_queue_mutation_operation_id() {
@@ -80,6 +85,7 @@ fn capture_conversation_screen_frame_input<'a>(
         session_state: &app.shell.chrome.session_state,
         can_open_session_list: app.can_open_session_list(),
         shell_action_availability: app.shell_action_availability(),
+        inline_shell_command_capabilities,
         github_review_polling_status_label: app.github_review_polling_status_label(),
         github_review_recent_changes_summary: app
             .github_review_recent_changes_summary(MAX_GITHUB_REVIEW_NOTICE_LEN),

@@ -11,7 +11,8 @@ use super::super::{
     AkraTheme, ConversationComposerScreenModel, ConversationInputState,
     ConversationLiveTranscriptScreenModel, ConversationScreenModel, ConversationViewModel,
     INLINE_TAIL_NOTICE_DETAIL_LIMIT, INLINE_TAIL_PLANNING_DETAIL_LIMIT,
-    INLINE_TAIL_STATUS_DETAIL_LIMIT, InlineShellCommandInput, Modifier, QueueMutationTailState,
+    INLINE_TAIL_STATUS_DETAIL_LIMIT, InlineShellCommand, InlineShellCommandAvailability,
+    InlineShellCommandCapabilitySet, InlineShellCommandInput, Modifier, QueueMutationTailState,
     ShellActionAvailability, ShellConversationState, ShellOverlay, StartupState, TuiLanguage,
     build_working_line, compact_inline_detail,
 };
@@ -126,7 +127,7 @@ pub(super) fn build_inline_tail_content_with_context(
             ));
         }
         lines.extend(
-            build_inline_tail_prompt_lines_with_context(screen_model)
+            build_inline_tail_prompt_lines_with_context(screen_model, content_width)
                 .into_iter()
                 .map(|line| InlineTailLine::new(InlineTailPriority::Pinned, line)),
         );
@@ -345,7 +346,7 @@ pub(super) fn build_inline_tail_content_with_context(
     }
 
     lines.extend(
-        build_inline_tail_prompt_lines_with_context(screen_model)
+        build_inline_tail_prompt_lines_with_context(screen_model, content_width)
             .into_iter()
             .map(|line| InlineTailLine::new(InlineTailPriority::Pinned, line)),
     );
@@ -552,6 +553,7 @@ fn build_inline_startup_overlay_tail_lines_with_context(
 
 pub(super) fn build_inline_tail_prompt_lines_with_context(
     screen_model: &ConversationScreenModel<'_>,
+    content_width: u16,
 ) -> Vec<Line<'static>> {
     /*
     Prompt copy is separated from the status body because layout code also uses
@@ -601,8 +603,10 @@ pub(super) fn build_inline_tail_prompt_lines_with_context(
                 .expect("ready conversation must project composer state");
             build_inline_ready_prompt_lines(
                 composer,
+                &screen_model.inline_shell_command_capabilities,
                 screen_model.shell_action_availability,
                 screen_model.tui_language,
+                content_width,
             )
         }
     };
@@ -639,8 +643,10 @@ fn parallel_loading_prompt_indicator_frame(animation_elapsed_millis: u128) -> &'
 
 fn build_inline_ready_prompt_lines(
     composer: &ConversationComposerScreenModel<'_>,
+    inline_shell_command_capabilities: &InlineShellCommandCapabilitySet,
     shell_action_availability: ShellActionAvailability,
     language: TuiLanguage,
+    content_width: u16,
 ) -> Vec<Line<'static>> {
     let prompt_buffer = build_prompt_buffer_view(composer);
     let mut lines = prompt_buffer.lines;
@@ -704,10 +710,21 @@ fn build_inline_ready_prompt_lines(
             selected,
             palette.suggestions().len(),
         )));
-        lines.extend(build_shell_command_palette_lines(composer, language));
-        lines.push(composer_action_line(
-            language.composer_palette_action(!palette.suggestions().is_empty()),
+        lines.extend(build_shell_command_palette_lines(
+            composer,
+            inline_shell_command_capabilities,
+            language,
+            content_width,
         ));
+        let selected_command = palette.selected_command();
+        let selected_availability = selected_command
+            .map(|command| inline_shell_command_capabilities.availability(command))
+            .unwrap_or(InlineShellCommandAvailability::Ready);
+        lines.push(composer_action_line(language.composer_palette_action(
+            !palette.suggestions().is_empty(),
+            selected_availability.is_ready(),
+            selected_command.is_some_and(InlineShellCommand::requires_argument),
+        )));
         return lines;
     }
 
@@ -777,7 +794,7 @@ mod coverage_tests {
     use crate::adapter::inbound::tui::app::queue_overlay_ui::QueueMutationKind;
     use crate::adapter::inbound::tui::app::test_helpers::test_native_tui_app;
     use crate::adapter::inbound::tui::app::{
-        ConversationState, InlineHistoryRenderMode, InlineShellCommand, NativeTuiApp,
+        ConversationState, InlineHistoryRenderMode, NativeTuiApp,
     };
     use crate::core::app::{
         ActiveTurnPhase, ActiveTurnSnapshot, AutoFollowPhase, CorePromptOrigin,
@@ -892,8 +909,10 @@ mod coverage_tests {
     ) -> String {
         rendered(build_inline_ready_prompt_lines(
             &ConversationComposerScreenModel::from_conversation(conversation),
+            &InlineShellCommandCapabilitySet::default(),
             availability,
             language,
+            120,
         ))
     }
 
@@ -1268,17 +1287,19 @@ mod coverage_tests {
         palette.composer.sync_inline_shell_command_palette();
         palette
             .composer
-            .move_inline_shell_command_palette_selection(2);
+            .move_inline_shell_command_palette_selection(3);
         let palette_prompt = rendered_ready_prompt(
             &palette,
             ShellActionAvailability::Ready,
             TuiLanguage::English,
         );
-        assert!(palette_prompt.contains("palette 3/19"));
+        assert!(palette_prompt.contains("palette 4/19"));
         assert!(palette_prompt.contains("↑/↓ or Tab select"));
-        assert!(palette_prompt.contains("Enter choose"));
+        assert!(palette_prompt.contains("Enter run"));
         assert!(palette_prompt.contains("Esc close"));
-        assert!(palette_prompt.contains(":diag"));
+        assert!(palette_prompt.contains(":parallel"));
+        assert!(palette_prompt.contains("READY"));
+        assert!(palette_prompt.contains("inspect retained activity"));
 
         let korean_palette_prompt = rendered_ready_prompt(
             &palette,
@@ -1287,15 +1308,13 @@ mod coverage_tests {
         );
         assert!(
             korean_palette_prompt
-                .contains(&TuiLanguage::Korean.inline_command_palette_header(3, 19))
+                .contains(&TuiLanguage::Korean.inline_command_palette_header(4, 19))
         );
         assert!(korean_palette_prompt.contains("↑/↓ 또는 Tab 선택"));
-        assert!(korean_palette_prompt.contains("Enter 적용"));
+        assert!(korean_palette_prompt.contains("Enter 실행"));
         assert!(korean_palette_prompt.contains("Esc 닫기"));
-        assert!(korean_palette_prompt.contains(&format!(
-            ":peek  {}",
-            TuiLanguage::Korean.inline_shell_command_detail(InlineShellCommand::Peek)
-        )));
+        assert!(korean_palette_prompt.contains(":activity  READY"));
+        assert!(korean_palette_prompt.contains("보존된 활동 보기"));
 
         let mut korean_command = ConversationViewModel::new_draft("/tmp/root".to_string());
         korean_command.composer.input_buffer = ":reset queue".to_string();

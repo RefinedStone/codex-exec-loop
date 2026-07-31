@@ -20,7 +20,9 @@ pub(super) struct PromptBufferView {
 
 pub(super) fn build_shell_command_palette_lines(
     composer: &ConversationComposerScreenModel<'_>,
+    capabilities: &InlineShellCommandCapabilitySet,
     language: TuiLanguage,
+    content_width: u16,
 ) -> Vec<Line<'static>> {
     let palette_state = &composer.state.inline_shell_command_palette_state;
     // Dismissed palettes should leave the typed buffer visible without suggestion rows.
@@ -48,12 +50,20 @@ pub(super) fn build_shell_command_palette_lines(
     inline_shell_commands, while this layer only decides which visible slice surrounds
     the selected row and how to style the active item.
     */
-    suggestions[window_start..window_end]
+    let effective_width = if content_width == 0 {
+        120
+    } else {
+        content_width
+    };
+    let show_badge = effective_width >= 36;
+    let show_description = effective_width >= 72;
+    let mut lines = suggestions[window_start..window_end]
         .iter()
         .enumerate()
         .map(|(offset, command)| {
             let is_selected = selected_index == window_start + offset;
             let selector = if is_selected { "> " } else { "  " };
+            let availability = capabilities.availability(*command);
             let label_style = if is_selected {
                 AkraTheme::brand()
             } else {
@@ -64,22 +74,91 @@ pub(super) fn build_shell_command_palette_lines(
             } else {
                 AkraTheme::subtle()
             };
-            Line::from(vec![
+            let availability_style = match availability {
+                InlineShellCommandAvailability::Ready => AkraTheme::success(),
+                InlineShellCommandAvailability::Pending(_) => AkraTheme::warning(),
+                InlineShellCommandAvailability::Locked(_) => AkraTheme::subtle(),
+            };
+            let mut spans = vec![
                 Span::raw(selector),
                 Span::styled(command.command_name(), label_style),
-                Span::raw("  "),
-                Span::styled(command.suggestion_detail(language), detail_style),
-                if command.requires_argument() {
-                    Span::styled(
-                        language.inline_command_palette_argument_suffix(),
-                        detail_style,
-                    )
-                } else {
-                    Span::raw("")
-                },
-            ])
+            ];
+            if show_badge {
+                spans.push(Span::raw("  "));
+                spans.push(Span::styled(
+                    language.inline_command_availability_label(availability),
+                    availability_style.add_modifier(Modifier::BOLD),
+                ));
+            }
+            if show_description {
+                spans.push(Span::raw("  "));
+                spans.push(Span::styled(
+                    command.suggestion_detail(language),
+                    detail_style,
+                ));
+            }
+            Line::from(spans)
         })
-        .collect()
+        .collect::<Vec<_>>();
+
+    if let Some(command) = palette_state.selected_command() {
+        lines.push(build_shell_command_palette_detail_line(
+            command,
+            capabilities.availability(command),
+            capabilities.parallel_mode_enabled(),
+            language,
+            effective_width,
+        ));
+    }
+    lines
+}
+
+fn build_shell_command_palette_detail_line(
+    command: InlineShellCommand,
+    availability: InlineShellCommandAvailability,
+    parallel_mode_enabled: bool,
+    language: TuiLanguage,
+    content_width: u16,
+) -> Line<'static> {
+    let availability_label = language.inline_command_availability_label(availability);
+    let availability_style = match availability {
+        InlineShellCommandAvailability::Ready => AkraTheme::success(),
+        InlineShellCommandAvailability::Pending(_) => AkraTheme::warning(),
+        InlineShellCommandAvailability::Locked(_) => AkraTheme::subtle(),
+    }
+    .add_modifier(Modifier::BOLD);
+    let reason = availability
+        .reason()
+        .map(|reason| language.inline_command_availability_reason(reason));
+
+    if content_width < 64 {
+        let detail = reason.unwrap_or_else(|| {
+            language.inline_command_expected_result(command, parallel_mode_enabled)
+        });
+        return Line::from(vec![
+            Span::styled("  detail  ", AkraTheme::subtle()),
+            Span::styled(availability_label, availability_style),
+            Span::raw(" · "),
+            Span::raw(detail),
+        ]);
+    }
+
+    let mut spans = vec![Span::styled("  detail  ", AkraTheme::subtle())];
+    if content_width >= 100 {
+        spans.push(Span::styled("args ", AkraTheme::subtle()));
+    }
+    spans.push(Span::raw(language.inline_command_argument_preview(command)));
+    spans.push(Span::styled(" → ", AkraTheme::subtle()));
+    spans.push(Span::raw(
+        language.inline_command_expected_result(command, parallel_mode_enabled),
+    ));
+    spans.push(Span::raw(" · "));
+    spans.push(Span::styled(availability_label, availability_style));
+    if let Some(reason) = reason {
+        spans.push(Span::raw(" · "));
+        spans.push(Span::raw(reason));
+    }
+    Line::from(spans)
 }
 
 fn build_shell_command_palette_window(
@@ -290,5 +369,39 @@ mod tests {
             build_prompt_cursor_offset(&composer_screen_model(&conversation), 12),
             Some((0, 1))
         );
+    }
+
+    #[test]
+    fn contextual_palette_folds_description_then_badge_without_losing_command() {
+        let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
+        conversation.composer.input_buffer = ":pe".to_string();
+        conversation.composer.sync_inline_shell_command_palette();
+        let capabilities = InlineShellCommandCapabilitySet::default();
+        let composer = composer_screen_model(&conversation);
+
+        let wide =
+            build_shell_command_palette_lines(&composer, &capabilities, TuiLanguage::English, 120);
+        assert_eq!(wide.len(), 2);
+        assert!(
+            wide[0]
+                .to_string()
+                .contains(":peek  LOCKED  parallel agent peek")
+        );
+        assert!(
+            wide[1]
+                .to_string()
+                .contains("none → inspect active agent work")
+        );
+        assert!(wide[1].to_string().contains("start parallel mode first"));
+
+        let compact =
+            build_shell_command_palette_lines(&composer, &capabilities, TuiLanguage::English, 64);
+        assert!(compact[0].to_string().contains(":peek  LOCKED"));
+        assert!(!compact[0].to_string().contains("parallel agent peek"));
+
+        let minimal =
+            build_shell_command_palette_lines(&composer, &capabilities, TuiLanguage::English, 32);
+        assert_eq!(minimal[0].to_string(), "> :peek");
+        assert!(minimal[1].to_string().contains("LOCKED"));
     }
 }
