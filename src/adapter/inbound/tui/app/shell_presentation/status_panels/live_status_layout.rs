@@ -413,8 +413,13 @@ mod tests {
 
         assert_eq!(first.lines, second.lines);
         assert_eq!(first.prompt_cursor_offset, second.prompt_cursor_offset);
-        assert_eq!(first.lines[1].to_string(), " > 한글 prompt");
-        assert_eq!(first.prompt_cursor_offset, Some((8, 2)));
+        let prompt_index = first
+            .lines
+            .iter()
+            .position(|line| line.to_string().starts_with(" > "))
+            .expect("focused prompt should remain in the startup tail");
+        assert_eq!(prompt_index, 2);
+        assert_eq!(first.prompt_cursor_offset, Some((8, 3)));
         assert_eq!(first.render_from_top, second.render_from_top);
         assert_eq!(
             first.queue_receipt_undo_hit_area,
@@ -574,12 +579,13 @@ mod tests {
         let mut screen_model = ConversationScreenModel::from_app(&app);
         screen_model.shell_action_availability = ShellActionAvailability::Ready;
         let raw = build_inline_tail_content_with_context(&screen_model, None, 72, 80);
-        let cjk_warning = raw
+        let attention = raw
             .iter()
             .map(|entry| &entry.line)
-            .find(|line| line.to_string().starts_with("runtime:"))
-            .expect("runtime warning should remain in the raw semantic tail");
-        assert_eq!(wrapped_row_count(cjk_warning.width(), WIDTH), 2);
+            .find(|line| line.to_string().starts_with('!'))
+            .expect("aggregated attention should remain in the raw semantic tail");
+        assert_eq!(wrapped_row_count(attention.width(), WIDTH), 1);
+        assert!(attention.to_string().contains("Ctrl+D"));
 
         let tail_view = build_inline_tail_view(&screen_model, WIDTH);
         let rendered = tail_view
@@ -594,7 +600,8 @@ mod tests {
             "{rendered}"
         );
         assert!(rendered.contains("작업 입력  |  : 명령"), "{rendered}");
-        assert!(rendered.contains("runtime:"), "{rendered}");
+        assert!(rendered.contains("Ctrl+D"), "{rendered}");
+        assert!(!rendered.contains("runtime:"), "{rendered}");
         assert!(!rendered.contains(LOW_DETAIL), "{rendered}");
         assert_eq!(tail_view.rendered_height(WIDTH, 6), 6);
         assert!(tail_view.prompt_cursor_offset.is_none());
@@ -646,9 +653,10 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(rendered.contains("runtime:"), "{rendered}");
+        assert!(rendered.contains("Ctrl+D details"), "{rendered}");
+        assert!(!rendered.contains("runtime:"), "{rendered}");
         assert!(rendered.contains("planning: stale"), "{rendered}");
-        assert!(!rendered.contains("Akra"), "{rendered}");
+        assert!(rendered.contains("Akra"), "{rendered}");
         assert_eq!(tail_view.rendered_height(WIDTH, 6), 6);
     }
 
@@ -702,7 +710,8 @@ mod tests {
                     "{rendered}"
                 );
                 assert!(rendered.contains(expected_queue_copy), "{rendered}");
-                assert!(rendered.contains("runtime:"), "{rendered}");
+                assert!(rendered.contains("Ctrl+D"), "{rendered}");
+                assert!(!rendered.contains("runtime:"), "{rendered}");
                 assert!(
                     rendered.contains("우선순위가 보존된 짧은 prompt"),
                     "{rendered}"

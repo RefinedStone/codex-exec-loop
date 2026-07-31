@@ -21,7 +21,7 @@ use super::shell_presentation::{
     build_directions_maintenance_overlay_view, build_help_overlay_view,
     build_inline_live_transcript_lines, build_inline_tail_view,
     build_language_selection_overlay_view, build_model_selection_overlay_view,
-    build_parallel_peek_overlay_view_from_snapshot,
+    build_operator_diagnostic_lines, build_parallel_peek_overlay_view_from_snapshot,
     build_planning_draft_editor_overlay_view_from_state,
     build_planning_init_overlay_view_from_projection, build_queue_overlay_view_from_screen_model,
     build_reviews_overlay_view, build_session_overlay_view, build_startup_banner_lines,
@@ -124,6 +124,7 @@ pub(super) struct InlineConversationFrameProjection {
     pub(super) exit_confirmation_visible: bool,
     pub(super) turn_steer_confirmation: Option<Box<TurnSteerConfirmationScreenModel>>,
     pub(super) supersession_overlay_view: Option<Box<SupersessionOverlayView>>,
+    operator_diagnostic_lines: Vec<Line<'static>>,
     sampled_parallel_supervisor: Box<ParallelModeSupervisorSnapshot>,
     sampled_planning_runtime_projection: Box<PlanningRuntimeProjection>,
 }
@@ -276,6 +277,7 @@ impl InlineConversationFrameProjection {
         content_width: u16,
         supersession_overlay_view: Option<Box<SupersessionOverlayView>>,
     ) -> Self {
+        let operator_diagnostic_lines = build_operator_diagnostic_lines(&screen_model);
         let tail_view = build_inline_tail_view(&screen_model, content_width);
         let live_transcript_lines = build_inline_live_transcript_lines(&screen_model);
         let renders_viewport_transcript_handoff =
@@ -302,6 +304,7 @@ impl InlineConversationFrameProjection {
             exit_confirmation_visible: screen_model.exit_confirmation_visible,
             turn_steer_confirmation: screen_model.turn_steer_confirmation.map(Box::new),
             supersession_overlay_view,
+            operator_diagnostic_lines,
             sampled_parallel_supervisor,
             sampled_planning_runtime_projection,
         }
@@ -469,6 +472,9 @@ pub(super) fn capture_inline_shell_frame_model(
                 startup_state: &app.shell.chrome.startup_state,
                 language: app.shell.tui_language,
                 parallel_mode_enabled: projection.parallel_mode_enabled,
+                operator_diagnostic_lines: std::mem::take(
+                    &mut projection.operator_diagnostic_lines,
+                ),
             },
         )),
         ShellOverlay::Sessions => {

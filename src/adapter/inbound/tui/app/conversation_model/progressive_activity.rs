@@ -288,6 +288,13 @@ impl ProgressiveActivityState {
             .min_by_key(|kind| kind.rail_priority())
     }
 
+    pub(crate) fn active_terminal_count(&self) -> usize {
+        self.active_items
+            .iter()
+            .filter(|active_item| active_item.kind == ProgressiveActivityItemKind::CommandExecution)
+            .count()
+    }
+
     pub(crate) fn command_line_count(&self) -> u64 {
         self.active_items.iter().fold(0u64, |total, active_item| {
             total.saturating_add(active_item.command_line_count)

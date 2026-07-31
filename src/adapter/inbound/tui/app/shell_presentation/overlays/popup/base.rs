@@ -7,11 +7,12 @@ use super::super::super::{
 };
 use super::{SessionOverlayView, StartupOverlayView};
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct StartupOverlayFrameInput<'a> {
     pub(crate) startup_state: &'a StartupState,
     pub(crate) language: TuiLanguage,
     pub(crate) parallel_mode_enabled: bool,
+    pub(crate) operator_diagnostic_lines: Vec<Line<'static>>,
 }
 
 // Startup popup은 app startup diagnostics를 renderer-facing section snapshot으로 낮춘다.
@@ -27,6 +28,14 @@ pub(crate) fn build_startup_overlay_view(
         "Ctrl+o: recent sessions"
     };
 
+    let mut warning_lines = build_startup_warning_lines(input.startup_state);
+    if !input.operator_diagnostic_lines.is_empty()
+        && matches!(input.startup_state, StartupState::Ready(ready) if ready.warnings.is_empty())
+    {
+        warning_lines.clear();
+    }
+    warning_lines.extend(input.operator_diagnostic_lines);
+
     StartupOverlayView {
         // header는 startup diagnostics가 live shell 위의 inspection surface라는 위치를 고정한다.
         header_lines: vec![
@@ -36,7 +45,7 @@ pub(crate) fn build_startup_overlay_view(
         // summary/check/warning groups는 startup projection layer가 이미 우선순위를 정한 read model이다.
         summary_lines: build_startup_overlay_summary_lines(input.startup_state, input.language),
         check_lines: build_startup_check_lines(input.startup_state),
-        warning_lines: build_startup_warning_lines(input.startup_state),
+        warning_lines,
         key_lines: vec![
             AkraTheme::key_line("Esc/Ctrl+C: close    r: rerun checks"),
             AkraTheme::key_line(ctrl_o_label),

@@ -4,8 +4,7 @@ use crate::adapter::inbound::tui::supersession_mud::parallel_mode_progress_summa
 
 use super::super::{
     AutoFollowSnapshotPresentation, ConversationLiveTranscriptScreenModel, ConversationScreenModel,
-    ConversationViewModel, INLINE_TAIL_WARNING_DETAIL_LIMIT, compact_inline_detail,
-    format_conversation_lines,
+    ConversationViewModel, compact_inline_detail, format_conversation_lines,
 };
 use super::activity_rail::build_activity_rail_notice_line;
 
@@ -226,23 +225,6 @@ pub(super) fn build_operator_notice(
             ),
         )
     })
-}
-
-pub(super) fn compact_inline_summary_label(summary: &str) -> String {
-    /*
-     * runtime warning/notices copy는 원문 그대로 두면 inline tail의 좁은 폭을 빨리 넘긴다.
-     * 의미를 유지하는 짧은 약어로 먼저 바꾼 뒤 공통 truncation helper에 넘긴다.
-     */
-    compact_inline_detail(
-        &summary
-            .replace("runtime warning:", "rt warn:")
-            .replace("runtime warnings", "rt warns")
-            .replace("warning:", "warn:")
-            .replace("warnings:", "warn:")
-            .replace("runtime notices", "notices")
-            .replace("runtime:", "notice:"),
-        INLINE_TAIL_WARNING_DETAIL_LIMIT,
-    )
 }
 
 pub(super) fn compact_auto_follow_status_summary(

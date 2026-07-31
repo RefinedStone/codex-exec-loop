@@ -7,7 +7,7 @@ expression: rendered
 Codex:
   narrow resize keeps the live tail visible
 
-Akra / root  •  ready  •  queue: off
+Akra / root · READY · q off · a off · t 0
 ◦ Working (0s • turn running / interrupt run...)
 ╭ Task
 │ > Describe a task or type : for commands

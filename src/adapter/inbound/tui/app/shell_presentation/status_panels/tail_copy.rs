@@ -8,18 +8,19 @@ use super::super::planning::build_planning_worker_panel_lines;
 use super::super::planning::status_projection::build_planning_status_surface_projection;
 use super::super::prompt_composer::{build_prompt_buffer_view, build_shell_command_palette_lines};
 use super::super::{
-    AkraTheme, AutoFollowSnapshotPresentation, ConversationComposerScreenModel,
-    ConversationInputState, ConversationLiveTranscriptScreenModel, ConversationScreenModel,
-    ConversationViewModel, INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT, INLINE_TAIL_NOTICE_DETAIL_LIMIT,
-    INLINE_TAIL_PLANNING_DETAIL_LIMIT, INLINE_TAIL_RUNTIME_NOTICE_DETAIL_LIMIT,
-    INLINE_TAIL_STATUS_DETAIL_LIMIT, INLINE_TAIL_WARNING_DETAIL_LIMIT, InlineShellCommandInput,
-    Modifier, QueueMutationTailState, ShellActionAvailability, ShellConversationState,
-    ShellOverlay, StartupState, TuiLanguage, build_working_line, compact_inline_detail,
+    AkraTheme, ConversationComposerScreenModel, ConversationInputState,
+    ConversationLiveTranscriptScreenModel, ConversationScreenModel, ConversationViewModel,
+    INLINE_TAIL_NOTICE_DETAIL_LIMIT, INLINE_TAIL_PLANNING_DETAIL_LIMIT,
+    INLINE_TAIL_STATUS_DETAIL_LIMIT, InlineShellCommandInput, Modifier, QueueMutationTailState,
+    ShellActionAvailability, ShellConversationState, ShellOverlay, StartupState, TuiLanguage,
+    build_working_line, compact_inline_detail,
 };
+use super::operator_ribbon::{build_operator_attention_line, build_operator_ribbon_line};
+#[cfg(test)]
+use super::operator_ribbon::{build_operator_diagnostic_lines, should_show_auto_follow_status};
 use super::parallel_working_copy::build_parallel_slot_working_line;
 use super::tail_shared::{
-    OperatorNoticeKind, build_operator_notice, compact_auto_follow_status_summary,
-    compact_inline_summary_label, parallel_mode_alert_line, parallel_mode_summary_line,
+    OperatorNoticeKind, build_operator_notice, parallel_mode_alert_line, parallel_mode_summary_line,
 };
 
 use crate::adapter::inbound::tui::conversation_text::conversation_message_kind_label;
@@ -188,16 +189,6 @@ pub(super) fn build_inline_tail_content_with_context(
             let runtime_status = screen_model
                 .runtime_status()
                 .expect("ready conversation must retain its runtime status projection");
-            let warning_summary = compact_inline_summary_label(
-                &conversation.warning_summary(INLINE_TAIL_WARNING_DETAIL_LIMIT),
-            );
-            let runtime_notice_summary = combined_runtime_notice_summary(
-                conversation,
-                &screen_model.global_runtime_notices,
-                INLINE_TAIL_RUNTIME_NOTICE_DETAIL_LIMIT,
-            )
-            .map(|summary| compact_inline_summary_label(&summary));
-
             lines.push(InlineTailLine::new(
                 InlineTailPriority::Identity,
                 build_ready_status_ribbon_line(conversation, screen_model, content_width),
@@ -237,19 +228,12 @@ pub(super) fn build_inline_tail_content_with_context(
                     queue_mutation_line,
                 ));
             }
-            if let Some(runtime_notice_summary) = runtime_notice_summary {
-                let mut runtime_line = format!("runtime: {runtime_notice_summary}");
-                if warning_summary_has_signal(&warning_summary) {
-                    runtime_line.push_str(&format!("  |  {warning_summary}"));
-                }
+            if let Some(attention_line) =
+                build_operator_attention_line(screen_model, Some(conversation), content_width)
+            {
                 lines.push(InlineTailLine::new(
                     InlineTailPriority::Warning,
-                    Line::from(runtime_line),
-                ));
-            } else if warning_summary_has_signal(&warning_summary) {
-                lines.push(InlineTailLine::new(
-                    InlineTailPriority::Warning,
-                    Line::from(warning_summary),
+                    attention_line,
                 ));
             }
             if let Some(turn_options_summary) = screen_model.turn_options_summary.as_deref() {
@@ -381,159 +365,7 @@ fn build_ready_status_ribbon_line(
     screen_model: &ConversationScreenModel<'_>,
     content_width: u16,
 ) -> Line<'static> {
-    build_context_ribbon_line(screen_model, Some(conversation), content_width)
-}
-
-fn build_context_ribbon_line(
-    screen_model: &ConversationScreenModel<'_>,
-    conversation: Option<&ConversationViewModel>,
-    content_width: u16,
-) -> Line<'static> {
-    /*
-    The ribbon anchors thread identity. Working state and input actions have
-    dedicated rows below it, so repeating them here would consume compact rows
-    without adding operator information. Auto-follow details are only added
-    while an automatic chain has useful state to report.
-    */
-    let readiness = screen_model
-        .tui_language
-        .startup_axis_status(screen_model.shell_action_availability);
-    let readiness_style = match screen_model.shell_action_availability {
-        ShellActionAvailability::Ready => AkraTheme::success(),
-        ShellActionAvailability::Pending => AkraTheme::warning(),
-        ShellActionAvailability::Blocked => AkraTheme::danger(),
-    };
-    let queue_status = if screen_model
-        .planning_runtime_projection
-        .has_actionable_queue_head()
-    {
-        "ready"
-    } else {
-        match screen_model
-            .planning_runtime_projection
-            .preview_status_label()
-        {
-            "ready" => "idle",
-            "inactive" => "off",
-            status => status,
-        }
-    };
-    let queue_style = match queue_status {
-        "blocked" => AkraTheme::danger(),
-        "ready" => AkraTheme::success(),
-        _ => AkraTheme::muted(),
-    };
-    /*
-     * Context usage is learned from app-server token-usage events. Before the first
-     * authoritative event there is no meaningful value to show, so the HUD omits
-     * the slot instead of presenting a prototype-style `ctx: --` placeholder.
-     * The same rule applies to branch metadata: this presentation model does not
-     * currently own an authoritative active-branch projection, and the renderer
-     * must not probe Git as a side effect of drawing.
-     */
-    let context = screen_model
-        .context_pressure_basis_points
-        .map(|basis_points| format!("ctx: {}%", basis_points / 100));
-    let shows_full_context = content_width >= 80;
-    let workspace_label = compact_workspace_label(&screen_model.workspace_directory);
-    let workspace_limit = if content_width >= 120 {
-        20
-    } else if shows_full_context {
-        usize::from(content_width.saturating_sub(76)).clamp(4, 12)
-    } else {
-        12
-    };
-    let mut spans = vec![
-        Span::styled("Akra", AkraTheme::brand()),
-        Span::raw(" / "),
-        Span::styled(
-            compact_inline_detail(&workspace_label, workspace_limit),
-            AkraTheme::accent(),
-        ),
-    ];
-    spans.extend([
-        Span::styled("  •  ", AkraTheme::subtle()),
-        Span::styled(readiness, readiness_style),
-    ]);
-    if shows_full_context {
-        spans.extend([
-            Span::styled("  •  ", AkraTheme::subtle()),
-            Span::styled(
-                compact_turn_options_hud_label(&screen_model.turn_options_hud_label),
-                AkraTheme::muted(),
-            ),
-        ]);
-        if let Some(context) = context {
-            spans.extend([
-                Span::styled("  •  ", AkraTheme::subtle()),
-                Span::styled(context, AkraTheme::muted()),
-            ]);
-        }
-    }
-    spans.extend([
-        Span::styled("  •  ", AkraTheme::subtle()),
-        Span::styled(format!("queue: {queue_status}"), queue_style),
-    ]);
-    if shows_full_context && Line::from(spans.clone()).width() > usize::from(content_width) {
-        spans = vec![
-            Span::styled("Akra", AkraTheme::brand()),
-            Span::raw(" / "),
-            Span::styled(
-                compact_inline_detail(&workspace_label, 12),
-                AkraTheme::accent(),
-            ),
-            Span::styled("  •  ", AkraTheme::subtle()),
-            Span::styled(readiness, readiness_style),
-            Span::styled("  •  ", AkraTheme::subtle()),
-            Span::styled(format!("queue: {queue_status}"), queue_style),
-        ];
-    }
-    if content_width >= 140 && conversation.is_some_and(should_show_auto_follow_status) {
-        let conversation = conversation.expect("checked conversation must exist");
-        let mut candidate = spans.clone();
-        candidate.extend([
-            Span::styled("  •  ", AkraTheme::subtle()),
-            Span::styled(
-                format!(
-                    "auto: {}",
-                    compact_auto_follow_status_summary(
-                        conversation,
-                        INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT,
-                    )
-                ),
-                AkraTheme::muted(),
-            ),
-            Span::styled("  •  ", AkraTheme::subtle()),
-            Span::styled(
-                format!(
-                    "done: {}",
-                    conversation.auto_follow_state().progress_label()
-                ),
-                AkraTheme::muted(),
-            ),
-        ]);
-        if Line::from(candidate.clone()).width() <= usize::from(content_width) {
-            spans = candidate;
-        }
-    }
-
-    Line::from(spans)
-}
-
-fn compact_workspace_label(workspace_directory: &str) -> String {
-    workspace_directory
-        .trim_end_matches(['/', '\\'])
-        .rsplit(['/', '\\'])
-        .find(|segment| !segment.is_empty())
-        .unwrap_or(workspace_directory)
-        .to_string()
-}
-
-fn compact_turn_options_hud_label(summary: &str) -> String {
-    summary
-        .strip_prefix("model: ")
-        .unwrap_or(summary)
-        .replace("  |  think: ", "/")
+    build_operator_ribbon_line(screen_model, Some(conversation), content_width)
 }
 
 fn build_queue_mutation_line(
@@ -584,13 +416,6 @@ fn build_queue_receipt_undo_action_line(queued_task_count: usize) -> Line<'stati
     ])
 }
 
-fn should_show_auto_follow_status(conversation: &ConversationViewModel) -> bool {
-    !conversation.has_post_turn_settlement_in_flight()
-        && (conversation.auto_follow_state().has_live_activity()
-            || conversation.auto_follow_state().continuation_paused
-            || conversation.auto_follow_state().completed_auto_turns > 0)
-}
-
 fn build_ready_status_detail_line(
     conversation: &ConversationViewModel,
     screen_model: &ConversationScreenModel<'_>,
@@ -625,40 +450,6 @@ fn build_ready_status_detail_line(
     }
 
     (!parts.is_empty()).then(|| Line::from(parts.join("  |  ")))
-}
-
-fn warning_summary_has_signal(warning_summary: &str) -> bool {
-    !matches!(warning_summary.trim(), "warn: none" | "none")
-}
-
-fn combined_runtime_notice_summary(
-    conversation: &ConversationViewModel,
-    global_runtime_notices: &[String],
-    max_detail_len: usize,
-) -> Option<String> {
-    if global_runtime_notices.is_empty() {
-        return conversation.runtime_notice_summary(max_detail_len);
-    }
-
-    let mut notices =
-        Vec::with_capacity(conversation.runtime_notices.len() + global_runtime_notices.len());
-    for notice in conversation
-        .runtime_notices
-        .iter()
-        .chain(global_runtime_notices)
-    {
-        let notice = notice.as_str();
-        if !notices.contains(&notice) {
-            notices.push(notice);
-        }
-    }
-    let selected_notice = notices.last()?;
-    let summary = compact_inline_detail(selected_notice, max_detail_len);
-    Some(if notices.len() == 1 {
-        format!("runtime: {summary}")
-    } else {
-        format!("runtime notices ({}): {summary}", notices.len())
-    })
 }
 
 fn build_completion_alert_line(conversation: &ConversationViewModel) -> Option<Line<'static>> {
@@ -706,11 +497,18 @@ fn build_inline_startup_screen_lines_with_context(
     because no transcript exists yet. Once the operator starts typing, callers
     switch to the compact startup overlay tail to keep the prompt close to hand.
     */
-    let mut lines = vec![build_context_ribbon_line(
+    let mut lines = vec![build_operator_ribbon_line(
         screen_model,
         screen_model.ready_conversation(),
         content_width,
     )];
+    if let Some(attention_line) = build_operator_attention_line(
+        screen_model,
+        screen_model.ready_conversation(),
+        content_width,
+    ) {
+        lines.push(attention_line);
+    }
     match screen_model.startup_state {
         StartupState::Idle => {
             lines.push(Line::from(startup_preparing_status_line()));
@@ -718,13 +516,7 @@ fn build_inline_startup_screen_lines_with_context(
         StartupState::Loading => {
             lines.push(Line::from(startup_initializing_status_line()));
         }
-        StartupState::Ready(ready) => {
-            if let Some(first_warning) = ready.warnings.first() {
-                lines.push(Line::from(screen_model.tui_language.startup_warning_line(
-                    &compact_inline_detail(first_warning, INLINE_TAIL_NOTICE_DETAIL_LIMIT),
-                )));
-            }
-        }
+        StartupState::Ready(_) => {}
         StartupState::Failed(message) => {
             lines.push(Line::from(
                 screen_model.tui_language.startup_status_line(message),
@@ -743,11 +535,19 @@ fn build_inline_startup_overlay_tail_lines_with_context(
     while overlays or buffered input need vertical space, so detailed diagnostics
     stay available through inspection instead of crowding the prompt.
     */
-    vec![build_context_ribbon_line(
+    let mut lines = vec![build_operator_ribbon_line(
         screen_model,
         screen_model.ready_conversation(),
         content_width,
-    )]
+    )];
+    if let Some(attention_line) = build_operator_attention_line(
+        screen_model,
+        screen_model.ready_conversation(),
+        content_width,
+    ) {
+        lines.push(attention_line);
+    }
+    lines
 }
 
 pub(super) fn build_inline_tail_prompt_lines_with_context(
@@ -1252,7 +1052,9 @@ mod coverage_tests {
         app.shell.chrome.startup_state = StartupState::Ready(startup_ready_snapshot(true));
         let ready = render_tail(&app, None);
         assert!(ready.contains("Akra / root"));
-        assert!(ready.contains("first warning should stay visible"));
+        assert!(ready.contains("DEGRADED"));
+        assert!(ready.contains("Ctrl+D details"));
+        assert!(!ready.contains("first warning should stay visible"));
         assert!(ready.contains("Type a task"));
         assert!(!ready.contains("diagnostics:"));
         assert!(!ready.contains("examples:"));
@@ -1330,10 +1132,6 @@ mod coverage_tests {
             .to_string();
         assert!(!running_detail.contains("new thread draft"));
 
-        assert!(!warning_summary_has_signal("warn: none"));
-        assert!(!warning_summary_has_signal("none"));
-        assert!(warning_summary_has_signal("warn: disk almost full"));
-
         assert!(build_completion_alert_line(&conversation).is_none());
         conversation.last_auto_follow_activity = Some(RecordedAutoFollowActivity {
             summary: "complete: planning queue drained".to_string(),
@@ -1348,20 +1146,40 @@ mod coverage_tests {
     }
 
     #[test]
-    fn global_cleanup_copy_is_combined_without_mutating_equal_conversation_notice() {
+    fn operator_attention_aggregates_causes_and_keeps_raw_payload_in_diagnostics() {
+        let mut ready = startup_ready_snapshot(true);
+        ready.warnings.clear();
+        let startup_state = StartupState::Ready(ready);
         let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
+        let warning = "app-server sent notification `remoteControl:secret-payload`".to_string();
         let notice = "parallel cleanup remains unsettled".to_string();
+        conversation.base_warnings.push(warning.clone());
         conversation.runtime_notices.push(notice.clone());
+        let mut context = context_for(
+            &startup_state,
+            ShellActionAvailability::Ready,
+            ShellConversationState::Ready(&conversation),
+        );
+        context.global_runtime_notices.push(notice.clone());
 
-        let combined =
-            combined_runtime_notice_summary(&conversation, std::slice::from_ref(&notice), 160)
-                .expect("equal global and conversation notices should remain visible");
-        assert_eq!(combined, format!("runtime: {notice}"));
+        for width in [80, 120, 160] {
+            let line = build_operator_attention_line(&context, Some(&conversation), width)
+                .expect("warning and notice should project an attention row");
+            let text = line.to_string();
+            assert!(text.contains("warning 1"), "{width}: {text}");
+            assert!(text.contains("runtime notice 1"), "{width}: {text}");
+            assert!(text.contains("Ctrl+D details"), "{width}: {text}");
+            assert!(!text.contains("secret-payload"), "{width}: {text}");
+            assert!(line.width() <= usize::from(width), "{width}: {text}");
+        }
 
-        let after_cleanup = combined_runtime_notice_summary(&conversation, &[], 160)
-            .expect("settling cleanup must not remove the ordinary conversation notice");
-        assert_eq!(after_cleanup, format!("runtime: {notice}"));
-        assert_eq!(conversation.runtime_notices, vec![notice]);
+        let diagnostics = build_operator_diagnostic_lines(&context)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(diagnostics.contains(&warning));
+        assert_eq!(diagnostics.matches(&notice).count(), 1);
     }
 
     #[test]
@@ -1725,8 +1543,12 @@ mod coverage_tests {
 
         let tail = render_tail(&app, Some("review changed"));
 
-        assert!(tail.contains("runtime:"));
-        assert!(tail.contains("warning one"));
+        assert!(tail.contains("DEGRADED"));
+        assert!(tail.contains("w2"));
+        assert!(tail.contains("n1"));
+        assert!(tail.contains("Ctrl+D details"));
+        assert!(!tail.contains("runtime one"));
+        assert!(!tail.contains("warning one"));
         assert!(tail.contains("notice:"));
         assert!(tail.contains("review changed"));
         assert!(tail.contains("Enter send"));

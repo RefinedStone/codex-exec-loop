@@ -28,5 +28,5 @@ expression: rendered
 "Y: approve once                                                                                 "
 "N / Esc: decline                                                                                "
 "Up/Down/Page: scroll    Ctrl-C: decline + stop                                                  "
-"Akra / root  •  ready  •  gpt-5.5/high  •  queue: off                                           "
+"Akra / root  ·  READY  ·  queue off  ·  agents off  ·  terminals 0                              "
 "Input paused  •  Y approve once  •  N / Esc decline                                             "

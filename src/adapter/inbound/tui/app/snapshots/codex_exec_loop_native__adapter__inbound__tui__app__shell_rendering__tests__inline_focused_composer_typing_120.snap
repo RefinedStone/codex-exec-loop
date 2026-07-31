@@ -2,7 +2,7 @@
 source: src/adapter/inbound/tui/app/shell_rendering_tests.rs
 expression: typing
 ---
-"Akra / root  •  ready  •  gpt-5.5/high  •  queue: off                                                                   "
+"Akra / root  ·  READY  ·  queue off  ·  agents off  ·  terminals 0  ·  gpt-5.5/high                                     "
 "╭ Task                                                                                                                  "
 "│ > Refine the operator timeline                                                                                        "
 "╰  Enter send  |  Ctrl+J newline                                                                                        "

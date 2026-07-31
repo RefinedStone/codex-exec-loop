@@ -12,6 +12,10 @@ mod activity_rail;
 // Width-aware inline tail layout owns cursor placement and top-anchored startup behavior.
 #[path = "status_panels/live_status_layout.rs"]
 mod live_status_layout;
+// Operator ribbon projection turns authoritative shell facts into a stable,
+// width-aware status rail and keeps raw warning payloads in diagnostics.
+#[path = "status_panels/operator_ribbon.rs"]
+mod operator_ribbon;
 // Planning substate vocabulary is centralized here so workspace popup copy stays consistent.
 #[path = "status_panels/plan_indicator.rs"]
 mod plan_indicator;
@@ -34,6 +38,12 @@ pub(crate) fn build_inline_tail_view(
     content_width: u16,
 ) -> InlineTailView {
     live_status_layout::build_inline_tail_view(screen_model, content_width)
+}
+
+pub(in crate::adapter::inbound::tui::app) fn build_operator_diagnostic_lines(
+    screen_model: &ConversationScreenModel<'_>,
+) -> Vec<Line<'static>> {
+    operator_ribbon::build_operator_diagnostic_lines(screen_model)
 }
 
 #[cfg(test)]

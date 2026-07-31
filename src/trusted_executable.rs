@@ -195,11 +195,11 @@ fn resolve_codex_command(
             bail!("Windows Codex npm target is outside @openai/codex/bin/codex.js")
         }
         let node = resolve_native_from_path("node", path, cwd)?;
-        return Ok(Some(TrustedCommand {
+        Ok(Some(TrustedCommand {
             program: node,
             prefix_args: vec![target.as_os_str().to_os_string()],
             source_executable,
-        }));
+        }))
     }
     #[cfg(unix)]
     {

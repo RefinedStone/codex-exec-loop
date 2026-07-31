@@ -9,7 +9,7 @@ expression: rendered
 "Codex:                                                                          "
 "  streaming reply still visible                                                 "
 "                                                                                "
-"Akra / root  •  ready  •  gpt-5.5/high  •  queue: ready                         "
+"Akra / root  ·  READY  ·  queue 2  ·  agents off  ·  terminals 0                "
 "◦ Working (0s • turn running / interrupt runtime-native)                        "
 "planning: stale                                                                 "
 "now: Implement shell planning status  |  next: Trim legacy shell code           "
