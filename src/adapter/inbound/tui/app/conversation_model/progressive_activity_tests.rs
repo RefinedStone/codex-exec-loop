@@ -33,6 +33,7 @@ fn lifecycle_observation(
             ConversationItemOutcome::Completed
         },
         summary: "raw lifecycle summary must not be retained".to_string(),
+        command_actions: Default::default(),
     }
 }
 

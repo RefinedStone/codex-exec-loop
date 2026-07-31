@@ -23,9 +23,10 @@ use crate::core::app::{
     ActiveTurnPhase, ActiveTurnSnapshot, CorePromptOrigin, TurnSubmissionCorrelation,
 };
 use crate::domain::conversation_item_lifecycle::{
-    ConversationItemKind, ConversationItemLifecycleConsistency,
-    ConversationItemLifecycleObservation, ConversationItemLifecyclePhase,
-    ConversationItemLifecycleProjection, ConversationItemLifecycleProjectionSnapshot,
+    ConversationCommandAction, ConversationCommandActionProjection, ConversationItemKind,
+    ConversationItemLifecycleConsistency, ConversationItemLifecycleObservation,
+    ConversationItemLifecyclePhase, ConversationItemLifecycleProjection,
+    ConversationItemLifecycleProjectionSnapshot, ConversationItemLifecycleRecord,
     ConversationItemLifecycleSource, ConversationItemOutcome,
 };
 use crate::domain::conversation_progressive_activity::{
@@ -446,6 +447,7 @@ pub(super) fn set_progressive_command_activity(
             observed_at_ms: Some(1),
             outcome: ConversationItemOutcome::InProgress,
             summary: "command running".to_string(),
+            command_actions: Default::default(),
         },
         Some(ConversationItemLifecycleConsistency::Accepted),
     );
@@ -552,6 +554,60 @@ pub(super) fn set_progressive_command_activity(
         .progressive_activity_detail
         .replace_snapshot(&snapshot);
     snapshot
+}
+
+pub(super) fn set_lifecycle_only_read_activity(
+    app: &mut NativeTuiApp,
+) -> (
+    Arc<ConversationProgressiveActivityProjectionSnapshot>,
+    Arc<ConversationItemLifecycleProjectionSnapshot>,
+) {
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
+        panic!("test app should start in a ready conversation state");
+    };
+    if !conversation.has_active_thread() {
+        conversation.record_thread_prepared(
+            "thread-read".to_string(),
+            "Read activity".to_string(),
+            "C:/dev/akra".to_string(),
+        );
+    }
+    let name = "src/core/app.rs";
+    let path = "C:/dev/akra/src/core/app.rs";
+    let retained_bytes = name.len().saturating_add(path.len());
+    let progressive = Arc::new(ConversationProgressiveActivityProjectionSnapshot::default());
+    let lifecycle = Arc::new(ConversationItemLifecycleProjectionSnapshot {
+        records: vec![ConversationItemLifecycleRecord {
+            sequence: 4,
+            observation: ConversationItemLifecycleObservation {
+                thread_id: conversation.thread_id.clone(),
+                turn_id: "turn-read".to_string(),
+                item_id: "command-read".to_string(),
+                kind: ConversationItemKind::CommandExecution,
+                phase: ConversationItemLifecyclePhase::SnapshotObserved,
+                source: ConversationItemLifecycleSource::Snapshot,
+                observed_at_ms: None,
+                outcome: ConversationItemOutcome::Completed,
+                summary: "Read src/core/app.rs".to_string(),
+                command_actions: ConversationCommandActionProjection {
+                    actions: vec![ConversationCommandAction::Read {
+                        name: name.to_string(),
+                        path: path.to_string(),
+                    }],
+                    read_action_count: 1,
+                    source_bytes: u64::try_from(retained_bytes).unwrap_or(u64::MAX),
+                    ..ConversationCommandActionProjection::default()
+                },
+            },
+            consistency: ConversationItemLifecycleConsistency::SnapshotObserved,
+        }],
+        ..ConversationItemLifecycleProjectionSnapshot::default()
+    });
+    conversation
+        .progressive_activity_detail
+        .replace_snapshots(&progressive, &lifecycle);
+    (progressive, lifecycle)
 }
 
 pub(super) struct StructuredActivityTimelineFixture {
@@ -672,6 +728,7 @@ pub(super) fn set_structured_activity_timeline(
             observed_at_ms: Some(1_000),
             outcome: ConversationItemOutcome::InProgress,
             summary: "Running workspace test suite".to_string(),
+            command_actions: Default::default(),
         },
         ConversationItemLifecycleObservation {
             thread_id: conversation.thread_id.clone(),
@@ -687,6 +744,7 @@ pub(super) fn set_structured_activity_timeline(
                 "src/adapter/inbound/tui/app/a-very-long-commercial-activity-timeline-path.rs"
             )
             .to_string(),
+            command_actions: Default::default(),
         },
         ConversationItemLifecycleObservation {
             thread_id: conversation.thread_id.clone(),
@@ -698,6 +756,7 @@ pub(super) fn set_structured_activity_timeline(
             observed_at_ms: Some(5_000),
             outcome: ConversationItemOutcome::InProgress,
             summary: "Running strict lint".to_string(),
+            command_actions: Default::default(),
         },
         ConversationItemLifecycleObservation {
             thread_id: conversation.thread_id.clone(),
@@ -709,6 +768,7 @@ pub(super) fn set_structured_activity_timeline(
             observed_at_ms: Some(5_800),
             outcome: ConversationItemOutcome::Failed,
             summary: "Strict lint failed".to_string(),
+            command_actions: Default::default(),
         },
         ConversationItemLifecycleObservation {
             thread_id: conversation.thread_id.clone(),
@@ -720,6 +780,7 @@ pub(super) fn set_structured_activity_timeline(
             observed_at_ms: None,
             outcome: ConversationItemOutcome::InProgress,
             summary: "Reviewing retry and approval paths".to_string(),
+            command_actions: Default::default(),
         },
     ];
     let mut lifecycle_projection = ConversationItemLifecycleProjection::default();

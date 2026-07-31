@@ -134,11 +134,11 @@ impl AkraTheme {
     }
 
     pub(super) fn diff_addition() -> Style {
-        Self::success()
+        Self::success().bg(Color::Rgb(33, 58, 43))
     }
 
     pub(super) fn diff_deletion() -> Style {
-        Self::danger()
+        Self::danger().bg(Color::Rgb(74, 34, 29))
     }
 
     pub(super) fn diff_gutter() -> Style {

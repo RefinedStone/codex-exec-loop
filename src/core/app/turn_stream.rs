@@ -913,6 +913,7 @@ mod tests {
             outcome:
                 crate::domain::conversation_item_lifecycle::ConversationItemOutcome::InProgress,
             summary: "command bytes=10; status=inProgress".to_string(),
+            command_actions: Default::default(),
         }
     }
 
@@ -1887,6 +1888,7 @@ mod tests {
         let activity = ConversationToolActivity {
             kind: ConversationToolActivityKind::FileChange,
             text: "edited src/lib.rs".to_string(),
+            display_label: None,
             file_change_count: 1,
         };
 

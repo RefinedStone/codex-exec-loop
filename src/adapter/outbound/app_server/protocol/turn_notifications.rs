@@ -12,7 +12,8 @@ use crate::domain::conversation::{
     ConversationMessageKind, ConversationToolActivity, ConversationToolActivityKind,
 };
 use crate::domain::conversation_item_lifecycle::{
-    ConversationItemKind, ConversationItemLifecycleConsistency, ConversationItemLifecyclePhase,
+    ConversationCommandAction, ConversationCommandActionProjection, ConversationItemKind,
+    ConversationItemLifecycleConsistency, ConversationItemLifecyclePhase,
     ConversationItemLifecycleProjection, ConversationItemOutcome,
     MAX_RETAINED_CONVERSATION_ITEM_LIFECYCLE_RECORDS,
 };
@@ -29,6 +30,8 @@ use crate::domain::turn_terminal::{
     ConversationTurnObservations, ConversationTurnTerminalOutcome, ConversationTurnTerminalReceipt,
     ConversationTurnTerminalUncertainty,
 };
+
+use super::item_lifecycle::{command_action_label, command_action_summary, parse_command_actions};
 
 const MAX_TERMINAL_PROTOCOL_TEXT_BYTES: usize = 4 * 1024;
 pub(super) const MAX_RETAINED_ITEM_EFFECT_IDENTITIES: usize =
@@ -1143,20 +1146,28 @@ pub(super) fn to_conversation_message(item: Value) -> Option<ConversationMessage
                 .map(str::to_string),
             item.get("id").and_then(Value::as_str).map(str::to_string),
         )),
-        "fileChange" if item.get("status").and_then(Value::as_str) == Some("completed") => {
-            Some(ConversationMessage::new(
+        "fileChange" if item.get("status").and_then(Value::as_str) == Some("completed") => Some(
+            ConversationMessage::new(
                 ConversationMessageKind::Tool,
                 format_file_change_summary(&item),
                 None,
                 item.get("id").and_then(Value::as_str).map(str::to_string),
-            ))
+            )
+            .with_display_label("patch"),
+        ),
+        "commandExecution" => {
+            let copy = command_execution_copy(&item);
+            let mut message = ConversationMessage::new(
+                ConversationMessageKind::Tool,
+                copy.text,
+                None,
+                item.get("id").and_then(Value::as_str).map(str::to_string),
+            );
+            if let Some(display_label) = copy.display_label {
+                message = message.with_display_label(display_label);
+            }
+            Some(message)
         }
-        "commandExecution" => Some(ConversationMessage::new(
-            ConversationMessageKind::Tool,
-            format_command_execution_summary(&item),
-            None,
-            item.get("id").and_then(Value::as_str).map(str::to_string),
-        )),
         _ => None,
     }
 }
@@ -1232,17 +1243,93 @@ fn count_file_changes(item: &Value) -> usize {
         .unwrap_or_default()
 }
 
-fn format_command_execution_summary(item: &Value) -> String {
-    // Command execution payloads are reduced to command plus status; stdout/stderr detail is left to app-server transcript items.
-    let command = item
-        .get("command")
-        .and_then(Value::as_str)
-        .unwrap_or("command");
+struct CommandExecutionCopy {
+    text: String,
+    display_label: Option<String>,
+}
+
+fn command_execution_copy(item: &Value) -> CommandExecutionCopy {
     let status = item
         .get("status")
         .and_then(Value::as_str)
         .unwrap_or("completed");
-    format!("command: {command} [{status}]")
+    if let Some(values) = item.get("commandActions").and_then(Value::as_array)
+        && let Ok(projection) = parse_command_actions(values)
+        && !projection.is_empty()
+    {
+        return CommandExecutionCopy {
+            text: format_command_action_transcript(
+                command_action_summary(&projection, status),
+                &projection,
+            ),
+            display_label: Some(command_action_label(&projection).to_string()),
+        };
+    }
+
+    // Unknown commands retain the prior compact copy. Structured read/list/search
+    // actions never expose the raw shell command in the transcript.
+    let command = item
+        .get("command")
+        .and_then(Value::as_str)
+        .unwrap_or("command");
+    CommandExecutionCopy {
+        text: format!("command: {command} [{status}]"),
+        display_label: Some("command".to_string()),
+    }
+}
+
+fn format_command_action_transcript(
+    summary: String,
+    projection: &ConversationCommandActionProjection,
+) -> String {
+    let mut lines = vec![summary];
+    for (index, action) in projection.actions.iter().enumerate() {
+        match action {
+            ConversationCommandAction::Read { name, path } => {
+                let target = non_empty_action_text(name)
+                    .or_else(|| non_empty_action_text(path))
+                    .unwrap_or("file");
+                lines.push(format!("{}. Read {target}", index + 1));
+                if path != target {
+                    lines.push(format!("   path: {path}"));
+                }
+            }
+            ConversationCommandAction::ListFiles { path } => {
+                lines.push(format!("{}. List files", index + 1));
+                lines.push(format!(
+                    "   path: {}",
+                    path.as_deref()
+                        .and_then(non_empty_action_text)
+                        .unwrap_or("workspace")
+                ));
+            }
+            ConversationCommandAction::Search { query, path } => {
+                lines.push(format!(
+                    "{}. Search {}",
+                    index + 1,
+                    query
+                        .as_deref()
+                        .and_then(non_empty_action_text)
+                        .map(|query| format!("\"{query}\""))
+                        .unwrap_or_else(|| "workspace".to_string())
+                ));
+                if let Some(path) = path.as_deref().and_then(non_empty_action_text) {
+                    lines.push(format!("   path: {path}"));
+                }
+            }
+        }
+    }
+    if projection.omitted_action_count > 0 {
+        lines.push(format!(
+            "… {} more actions were not retained",
+            projection.omitted_action_count
+        ));
+    }
+    lines.join("\n")
+}
+
+fn non_empty_action_text(value: &str) -> Option<&str> {
+    (!value.trim().is_empty()).then_some(value)
 }
 
 fn extract_user_input_text(items: &[Value]) -> String {
@@ -1397,6 +1484,7 @@ fn handle_completed_item(
                     activity: ConversationToolActivity {
                         kind: ConversationToolActivityKind::FileChange,
                         text: format_file_change_summary(item),
+                        display_label: Some("patch".to_string()),
                         file_change_count: count_file_changes(item),
                     },
                 },
@@ -1404,12 +1492,14 @@ fn handle_completed_item(
             )?;
         }
         Some("commandExecution") => {
+            let copy = command_execution_copy(item);
             send_required_app_server_event(
                 event_sender,
                 ConversationStreamEvent::ToolActivity {
                     activity: ConversationToolActivity {
                         kind: ConversationToolActivityKind::CommandExecution,
-                        text: format_command_execution_summary(item),
+                        text: copy.text,
+                        display_label: copy.display_label,
                         file_change_count: 0,
                     },
                 },
@@ -1594,6 +1684,37 @@ mod terminal_receipt_tests {
     const THREAD_ID: &str = "thread-live";
     const TURN_ID: &str = "turn-live";
     const RESULT_OUTPUT_PATH: &str = ".codex-exec-loop/planning/result-output.md";
+
+    #[test]
+    fn structured_read_transcript_copy_is_collapsed_first_and_drops_raw_command() {
+        let raw_command = "RAW_READ_COMMAND_CANARY";
+        let item = json!({
+            "id": "read-item",
+            "type": "commandExecution",
+            "command": raw_command,
+            "commandActions": [{
+                "type": "read",
+                "command": raw_command,
+                "name": "src/lib.rs",
+                "path": "C:/dev/akra/src/lib.rs"
+            }],
+            "cwd": "C:/dev/akra",
+            "status": "completed"
+        });
+
+        let message = to_conversation_message(item).expect("read item transcript message");
+
+        assert_eq!(message.display_label.as_deref(), Some("read"));
+        assert_eq!(
+            message.text,
+            concat!(
+                "Read src/lib.rs\n",
+                "1. Read src/lib.rs\n",
+                "   path: C:/dev/akra/src/lib.rs"
+            )
+        );
+        assert!(!format!("{message:?}").contains(raw_command));
+    }
 
     #[test]
     fn terminal_statuses_reduce_to_typed_outcomes_and_metadata() {

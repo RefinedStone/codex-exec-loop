@@ -789,6 +789,7 @@ mod tests {
                     observed_at_ms: None,
                     outcome: ConversationItemOutcome::InProgress,
                     summary: SECRET.to_string(),
+                    command_actions: Default::default(),
                 },
                 Some(ConversationItemLifecycleConsistency::Accepted),
             );

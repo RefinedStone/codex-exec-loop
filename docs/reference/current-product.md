@@ -85,7 +85,12 @@ The Activity surface joins progressive payloads with authoritative item-lifecycl
 item identity. It exposes active, completed, failed, declined, interrupted, and observed outcomes
 without deriving progress from prose. Exact active waits distinguish model response, subagent,
 approval, task output, and retry. `Up`/`Down` selects a row; `Enter`, `e`, or a left click folds or
-expands retained detail. Completed rows stay visually quiet while active work remains dominant.
+expands retained detail. App-server `Read`, `ListFiles`, and `Search` command actions project a
+concise typed target header and reveal exact bounded targets only when expanded; raw command text is
+not retained for these typed actions, and reads with no output still appear from lifecycle truth.
+Completed rows stay visually quiet while active work remains dominant. Unified diffs show old/new
+source line numbers and extend addition/deletion backgrounds across the code region while keeping
+the gutter neutral.
 
 Only the interactive main conversation can answer a reviewable command or bounded additional
 permission request. `Y` accepts once; `N`/`Esc` declines; `Enter` is inert. Timeout, interrupt,

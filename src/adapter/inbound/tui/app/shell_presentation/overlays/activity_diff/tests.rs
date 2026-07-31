@@ -1,9 +1,9 @@
 use super::*;
-
 fn rendered_text(page: &BoundedDiffPage) -> String {
     page.lines
         .iter()
         .map(ToString::to_string)
+        .map(|line| line.trim_end().to_string())
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -23,6 +23,20 @@ fn unified_diff_renders_file_summary_and_source_line_gutter() {
     );
     assert_eq!(page.lines[2].spans[1].style, AkraTheme::diff_deletion());
     assert_eq!(page.lines[3].spans[1].style, AkraTheme::diff_addition());
+    assert_eq!(page.lines[2].width(), 80);
+    assert_eq!(page.lines[3].width(), 80);
+    assert_eq!(
+        page.lines[2].spans.last().unwrap().style,
+        AkraTheme::diff_deletion()
+    );
+    assert_eq!(
+        page.lines[3].spans.last().unwrap().style,
+        AkraTheme::diff_addition()
+    );
+    assert!(
+        page.lines[1].width() < 80,
+        "context rows should stay neutral"
+    );
 }
 
 #[test]

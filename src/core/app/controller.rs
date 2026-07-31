@@ -7210,6 +7210,7 @@ mod tests {
                 observed_at_ms: None,
                 outcome: ConversationItemOutcome::NotReported,
                 summary: "reasoning content_blocks=1; summary_blocks=1".to_string(),
+                command_actions: Default::default(),
             })
             .unwrap();
         let mut ready = sample_conversation_ready_snapshot();

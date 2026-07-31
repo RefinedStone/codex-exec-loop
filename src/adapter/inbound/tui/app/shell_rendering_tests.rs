@@ -1898,6 +1898,77 @@ fn activity_card_mouse_hit_area_toggles_the_same_fold_owned_by_keyboard() {
 }
 
 #[test]
+fn lifecycle_only_read_card_keyboard_and_click_open_exact_path_without_command_output() {
+    let mut app = make_test_app();
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.show_startup_ascii_art = false;
+    let (_progressive, _lifecycle) = tui_testkit::set_lifecycle_only_read_activity(&mut app);
+    assert!(app.show_progressive_activity_overlay_all());
+
+    let collapsed = tui_testkit::render_inline_snapshot(&mut app, 96, 24);
+    assert!(collapsed.contains("read"), "{collapsed}");
+    assert!(
+        !collapsed.contains("C:/dev/akra/src/core/app.rs"),
+        "{collapsed}"
+    );
+
+    assert!(
+        app.handle_shell_overlay_key(event::KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,))
+    );
+    let keyboard_expanded = tui_testkit::render_inline_snapshot(&mut app, 96, 24);
+    assert!(
+        keyboard_expanded.contains("C:/dev/akra/src/core/app.rs"),
+        "{keyboard_expanded}"
+    );
+    assert!(
+        app.handle_shell_overlay_key(event::KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,))
+    );
+    let keyboard_collapsed = tui_testkit::render_inline_snapshot(&mut app, 96, 24);
+    assert!(
+        !keyboard_collapsed.contains("C:/dev/akra/src/core/app.rs"),
+        "{keyboard_collapsed}"
+    );
+
+    let hit = app
+        .shell
+        .progressive_activity_overlay_ui_state
+        .card_hit_areas()[0];
+    assert!(
+        app.handle_progressive_activity_mouse_event(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: hit.area.x,
+            row: hit.area.y,
+            modifiers: KeyModifiers::NONE,
+        })
+    );
+
+    let expanded = tui_testkit::render_inline_snapshot(&mut app, 96, 24);
+    assert!(expanded.contains("Read src/core/app.rs"), "{expanded}");
+    assert!(
+        expanded.contains("C:/dev/akra/src/core/app.rs"),
+        "{expanded}"
+    );
+
+    let hit = app
+        .shell
+        .progressive_activity_overlay_ui_state
+        .card_hit_areas()[0];
+    assert!(
+        app.handle_progressive_activity_mouse_event(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: hit.area.x,
+            row: hit.area.y,
+            modifiers: KeyModifiers::NONE,
+        })
+    );
+    let collapsed_again = tui_testkit::render_inline_snapshot(&mut app, 96, 24);
+    assert!(
+        !collapsed_again.contains("C:/dev/akra/src/core/app.rs"),
+        "{collapsed_again}"
+    );
+}
+
+#[test]
 fn activity_inspector_clamps_selection_before_first_frame_document_projection() {
     const SURVIVING_DETAIL: &str = "SURVIVING_CARD_DOCUMENT_BODY";
     let mut app = make_test_app();

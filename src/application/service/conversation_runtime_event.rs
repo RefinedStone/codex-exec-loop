@@ -766,6 +766,7 @@ mod tests {
                 observed_at_ms: Some(1),
                 outcome: ConversationItemOutcome::InProgress,
                 summary: "plan started".to_string(),
+                command_actions: Default::default(),
             }),
         }
     }
