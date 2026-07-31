@@ -1,12 +1,12 @@
 use ratatui::text::{Line, Span};
 
-#[cfg(test)]
-use super::super::super::ProgressiveActivityCardKey;
 use super::super::super::{
     AkraTheme, ProgressiveActivityCard, ProgressiveActivityCardKind,
     ProgressiveActivityCardOutcome, ProgressiveActivityDetailKind, ProgressiveActivityExpandState,
     ProgressiveActivityPageCursor, ProgressiveActivityWaitKind, ProgressiveActivityWaitStatus,
 };
+#[cfg(test)]
+use super::super::super::{ProgressiveActivityCardKey, ProgressiveActivityCardSource};
 use super::super::terminal_text::{display_width, truncate_end_to_cells};
 use super::activity_diff::build_bounded_diff_page;
 
@@ -111,6 +111,11 @@ pub(crate) fn build_activity_overlay_list_view(
     header_lines.extend(card_list.lines);
 
     let Some(document) = document else {
+        let detail_message = if cards.is_empty() {
+            "No retained activity detail yet."
+        } else {
+            "Folded. Press Enter/e or click the selected row to expand."
+        };
         if cards.is_empty() {
             header_lines.push(Line::styled(
                 "no retained progressive activity cards",
@@ -121,10 +126,7 @@ pub(crate) fn build_activity_overlay_list_view(
             header_lines,
             card_rows,
             detail_title: Line::from(selected_card_detail_title(cards, selected_card_index)),
-            detail_lines: vec![Line::styled(
-                "Folded. Press Enter/e or click the selected row to expand.".to_string(),
-                AkraTheme::muted(),
-            )],
+            detail_lines: vec![Line::styled(detail_message.to_string(), AkraTheme::muted())],
             key_lines: build_activity_overlay_key_lines(viewport_width),
             current_page_cursor: ProgressiveActivityPageCursor::at(0),
             next_page_cursor: None,
@@ -327,7 +329,7 @@ fn build_activity_card_text(
     let prefix = format!(
         "{marker}{indicator}{} {:<9} {:<9} ",
         activity_outcome_glyph(card.outcome),
-        card.key.kind.label(),
+        card.activity_label,
         card.outcome.label(),
     );
     let elapsed = card.elapsed_ms.map(format_elapsed);
@@ -423,7 +425,7 @@ fn selected_card_detail_title(
         .map(|card| {
             format!(
                 "{} · {}",
-                card.key.kind.label(),
+                card.activity_label,
                 sanitize_activity_inline_text(&card.title)
             )
         })
@@ -680,10 +682,11 @@ mod tests {
     use super::{
         ActivityOverlayDocument, BoundedDocumentPage, PAGE_OUTPUT_BYTES_PER_CELL,
         PAGE_SCAN_BYTES_PER_CELL, ProgressiveActivityCard, ProgressiveActivityCardKey,
-        ProgressiveActivityCardKind, ProgressiveActivityCardOutcome, ProgressiveActivityDetailKind,
-        ProgressiveActivityExpandState, ProgressiveActivityPageCursor, ProgressiveActivityWaitKind,
-        ProgressiveActivityWaitStatus, activity_document_detail_kind,
-        build_activity_overlay_list_view, build_activity_overlay_view, build_bounded_document_page,
+        ProgressiveActivityCardKind, ProgressiveActivityCardOutcome, ProgressiveActivityCardSource,
+        ProgressiveActivityDetailKind, ProgressiveActivityExpandState,
+        ProgressiveActivityPageCursor, ProgressiveActivityWaitKind, ProgressiveActivityWaitStatus,
+        activity_document_detail_kind, build_activity_overlay_list_view,
+        build_activity_overlay_view, build_bounded_document_page,
     };
 
     fn card(
@@ -694,16 +697,19 @@ mod tests {
     ) -> ProgressiveActivityCard {
         ProgressiveActivityCard {
             key: ProgressiveActivityCardKey {
+                source: ProgressiveActivityCardSource::Progressive,
                 sequence,
                 kind: ProgressiveActivityCardKind::Command,
             },
+            activity_label: "command",
             title: "cargo test".to_string(),
             summary: summary.to_string(),
             fact: "42 lines".to_string(),
             outcome,
             elapsed_ms,
             expandable: true,
-            record_index: sequence as usize,
+            record_index: Some(sequence as usize),
+            lifecycle_sequence: None,
             source_bytes: 42,
             retained_bytes: 42,
             truncated_bytes: 0,
@@ -957,7 +963,10 @@ mod tests {
 
         assert_eq!(view.current_page_cursor.byte_offset, 0);
         assert_eq!(view.next_page_cursor, None);
-        assert!(view.detail_lines[0].to_string().contains("Press Enter/e"));
+        assert_eq!(
+            view.detail_lines[0].to_string(),
+            "No retained activity detail yet."
+        );
         assert!(view.header_lines[0].to_string().contains("filter:"));
     }
 }

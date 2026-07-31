@@ -202,11 +202,16 @@ fn startup_catalog_and_snapshot_payloads_reduce_to_adapter_contracts() {
     );
     assert_eq!(snapshot.messages[1].phase.as_deref(), Some("final_answer"));
     assert_eq!(snapshot.messages[2].kind, ConversationMessageKind::Tool);
+    assert_eq!(snapshot.messages[2].display_label.as_deref(), Some("patch"));
     assert_eq!(
         snapshot.messages[2].text,
         "file change: update .codex-exec-loop/planning/result-output.md, update src/main.rs"
     );
     assert_eq!(snapshot.messages[3].kind, ConversationMessageKind::Tool);
+    assert_eq!(
+        snapshot.messages[3].display_label.as_deref(),
+        Some("command")
+    );
     assert_eq!(
         snapshot.messages[3].text,
         "command: cargo test app_server::protocol [completed]"
@@ -271,6 +276,7 @@ fn live_turn_notification_sequence_reduces_to_stream_events() {
                 activity: ConversationToolActivity {
                     kind: ConversationToolActivityKind::FileChange,
                     text: "file change: update .codex-exec-loop/planning/result-output.md, update /tmp/workspace/.codex-exec-loop/planning/result-output.md, update src/main.rs".to_string(),
+                    display_label: Some("patch".to_string()),
                     file_change_count: 3,
                 },
             },

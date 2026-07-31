@@ -1,7 +1,8 @@
 use std::fmt;
 
 use crate::domain::conversation_item_lifecycle::{
-    ConversationItemKind, ConversationItemLifecycleConsistency, ConversationItemLifecyclePhase,
+    ConversationCommandAction, ConversationCommandActionProjection, ConversationItemKind,
+    ConversationItemLifecycleConsistency, ConversationItemLifecyclePhase,
     ConversationItemLifecycleProjectionSnapshot, ConversationItemOutcome,
 };
 use crate::domain::conversation_progressive_activity::{
@@ -71,7 +72,14 @@ impl ProgressiveActivityCardKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum ProgressiveActivityCardSource {
+    Progressive,
+    Lifecycle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct ProgressiveActivityCardKey {
+    pub(crate) source: ProgressiveActivityCardSource,
     pub(crate) sequence: u64,
     pub(crate) kind: ProgressiveActivityCardKind,
 }
@@ -79,13 +87,15 @@ pub(crate) struct ProgressiveActivityCardKey {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProgressiveActivityCard {
     pub(crate) key: ProgressiveActivityCardKey,
+    pub(crate) activity_label: &'static str,
     pub(crate) title: String,
     pub(crate) summary: String,
     pub(crate) fact: String,
     pub(crate) outcome: ProgressiveActivityCardOutcome,
     pub(crate) elapsed_ms: Option<u64>,
     pub(crate) expandable: bool,
-    pub(crate) record_index: usize,
+    pub(crate) record_index: Option<usize>,
+    pub(crate) lifecycle_sequence: Option<u64>,
     pub(crate) source_bytes: u64,
     pub(crate) retained_bytes: u64,
     pub(crate) truncated_bytes: u64,
@@ -160,8 +170,7 @@ impl ProgressiveActivityCard {
         };
         format!(
             "{indicator}◆ {:<9} {}{fact}",
-            self.key.kind.label(),
-            self.title
+            self.activity_label, self.title
         )
     }
 }
@@ -237,40 +246,120 @@ pub(crate) fn project_activity_timeline_cards(
     for (record_index, record) in snapshot.records.iter().enumerate() {
         let observation = record.observation();
         let kind = ProgressiveActivityCardKind::from_activity_kind(&observation.kind);
-        let (title, fact, expandable, retained_bytes) =
+        let (payload_title, fact, payload_expandable, payload_retained_bytes) =
             project_payload_summary(&observation.payload);
-        let lifecycle = observation.item_id.as_deref().and_then(|item_id| {
+        let card_lifecycle = observation.item_id.as_deref().and_then(|item_id| {
             lifecycle
                 .and_then(|lifecycle| project_card_lifecycle(lifecycle, item_id, rendered_at_ms))
         });
-        let summary = lifecycle
+        let summary = card_lifecycle
             .as_ref()
             .map(|lifecycle| lifecycle.summary.as_str())
             .filter(|summary| !summary.is_empty())
-            .unwrap_or(&title)
+            .unwrap_or(&payload_title)
             .to_string();
+        let command_actions = card_lifecycle
+            .as_ref()
+            .and_then(|lifecycle| lifecycle.command_actions.as_ref());
+        let title = command_actions
+            .map(|actions| actions.title.clone())
+            .unwrap_or(payload_title);
+        let activity_label = command_actions.map_or(kind.label(), |actions| actions.activity_label);
+        let action_source_bytes = command_actions.map_or(0, |actions| actions.source_bytes);
+        let action_retained_bytes = command_actions.map_or(0, |actions| actions.retained_bytes);
+        let action_truncated_bytes = command_actions.map_or(0, |actions| actions.truncated_bytes);
         cards.push(ProgressiveActivityCard {
             key: ProgressiveActivityCardKey {
+                source: ProgressiveActivityCardSource::Progressive,
                 sequence: record.last_sequence(),
                 kind,
             },
+            activity_label,
             title,
             summary,
             fact,
-            outcome: lifecycle
+            outcome: card_lifecycle
                 .as_ref()
                 .map_or(ProgressiveActivityCardOutcome::Observed, |lifecycle| {
                     lifecycle.outcome
                 }),
-            elapsed_ms: lifecycle.and_then(|lifecycle| lifecycle.elapsed_ms),
-            expandable,
-            record_index,
-            source_bytes: observation.source_bytes(),
-            retained_bytes,
-            truncated_bytes: observation.truncated_bytes(),
+            elapsed_ms: card_lifecycle
+                .as_ref()
+                .and_then(|lifecycle| lifecycle.elapsed_ms),
+            expandable: payload_expandable || command_actions.is_some(),
+            record_index: Some(record_index),
+            lifecycle_sequence: command_actions.map(|actions| actions.sequence),
+            source_bytes: observation
+                .source_bytes()
+                .saturating_add(action_source_bytes),
+            retained_bytes: payload_retained_bytes.saturating_add(action_retained_bytes),
+            truncated_bytes: observation
+                .truncated_bytes()
+                .saturating_add(action_truncated_bytes),
         });
     }
+    if let Some(lifecycle) = lifecycle {
+        append_lifecycle_only_action_cards(&mut cards, snapshot, lifecycle, rendered_at_ms);
+    }
     cards
+}
+
+fn append_lifecycle_only_action_cards(
+    cards: &mut Vec<ProgressiveActivityCard>,
+    progressive: &ConversationProgressiveActivityProjectionSnapshot,
+    lifecycle: &ConversationItemLifecycleProjectionSnapshot,
+    rendered_at_ms: Option<i64>,
+) {
+    let represented_item_ids = progressive
+        .records
+        .iter()
+        .filter_map(|record| record.observation().item_id.as_deref())
+        .collect::<Vec<_>>();
+    let mut seen_item_ids = Vec::new();
+    let mut lifecycle_only = Vec::new();
+
+    for record in lifecycle.records.iter().rev() {
+        let item_id = record.observation.item_id.as_str();
+        if seen_item_ids.contains(&item_id) {
+            continue;
+        }
+        seen_item_ids.push(item_id);
+        if represented_item_ids.contains(&item_id)
+            || !matches!(
+                record.observation.kind,
+                ConversationItemKind::CommandExecution
+            )
+        {
+            continue;
+        }
+        let Some(projected) = project_card_lifecycle(lifecycle, item_id, rendered_at_ms) else {
+            continue;
+        };
+        let Some(actions) = projected.command_actions.as_ref() else {
+            continue;
+        };
+        lifecycle_only.push(ProgressiveActivityCard {
+            key: ProgressiveActivityCardKey {
+                source: ProgressiveActivityCardSource::Lifecycle,
+                sequence: actions.sequence,
+                kind: ProgressiveActivityCardKind::Command,
+            },
+            activity_label: actions.activity_label,
+            title: actions.title.clone(),
+            summary: projected.summary.clone(),
+            fact: actions.fact.clone(),
+            outcome: projected.outcome,
+            elapsed_ms: projected.elapsed_ms,
+            expandable: true,
+            record_index: None,
+            lifecycle_sequence: Some(actions.sequence),
+            source_bytes: actions.source_bytes,
+            retained_bytes: actions.retained_bytes,
+            truncated_bytes: actions.truncated_bytes,
+        });
+    }
+    lifecycle_only.reverse();
+    cards.extend(lifecycle_only);
 }
 
 pub(crate) fn project_activity_wait_status(
@@ -316,6 +405,17 @@ struct ProjectedCardLifecycle {
     outcome: ProgressiveActivityCardOutcome,
     summary: String,
     elapsed_ms: Option<u64>,
+    command_actions: Option<ProjectedCommandActions>,
+}
+
+struct ProjectedCommandActions {
+    sequence: u64,
+    activity_label: &'static str,
+    title: String,
+    fact: String,
+    source_bytes: u64,
+    retained_bytes: u64,
+    truncated_bytes: u64,
 }
 
 fn project_card_lifecycle(
@@ -325,6 +425,8 @@ fn project_card_lifecycle(
 ) -> Option<ProjectedCardLifecycle> {
     let mut outcome = ProgressiveActivityCardOutcome::Observed;
     let mut summary = String::new();
+    let mut action_summary = None;
+    let mut command_actions = None;
     let mut started_at_ms = None;
     let mut completed_at_ms = None;
     let mut matched = false;
@@ -341,6 +443,13 @@ fn project_card_lifecycle(
         matched = true;
         if !observation.summary.trim().is_empty() {
             summary = observation.summary.clone();
+        }
+        if !observation.command_actions.is_empty() {
+            action_summary = non_empty_summary(&observation.summary);
+            command_actions = Some(project_command_actions(
+                record.sequence,
+                &observation.command_actions,
+            ));
         }
         match observation.phase {
             ConversationItemLifecyclePhase::Started => {
@@ -365,9 +474,91 @@ fn project_card_lifecycle(
 
     matched.then(|| ProjectedCardLifecycle {
         outcome,
-        summary,
+        summary: action_summary.unwrap_or(summary),
         elapsed_ms: projected_elapsed_ms(outcome, started_at_ms, completed_at_ms, rendered_at_ms),
+        command_actions,
     })
+}
+
+fn project_command_actions(
+    sequence: u64,
+    projection: &ConversationCommandActionProjection,
+) -> ProjectedCommandActions {
+    ProjectedCommandActions {
+        sequence,
+        activity_label: command_action_activity_label(projection),
+        title: command_action_title(projection),
+        fact: command_action_fact(projection),
+        source_bytes: projection.source_bytes,
+        retained_bytes: u64::try_from(projection.retained_dynamic_bytes()).unwrap_or(u64::MAX),
+        truncated_bytes: projection.truncated_bytes,
+    }
+}
+
+fn command_action_activity_label(projection: &ConversationCommandActionProjection) -> &'static str {
+    let count = projection.action_count();
+    if projection.read_action_count == count {
+        "read"
+    } else if projection.list_files_action_count == count {
+        "list"
+    } else if projection.search_action_count == count {
+        "search"
+    } else {
+        "explore"
+    }
+}
+
+fn command_action_title(projection: &ConversationCommandActionProjection) -> String {
+    if projection.action_count() == 1 {
+        return projection
+            .actions
+            .first()
+            .map(command_action_target)
+            .unwrap_or_else(|| "workspace".to_string());
+    }
+    format!("{} targets", projection.action_count())
+}
+
+fn command_action_fact(projection: &ConversationCommandActionProjection) -> String {
+    let count = projection.action_count();
+    if projection.omitted_action_count > 0 {
+        format!(
+            "{}+{} actions",
+            projection.actions.len(),
+            projection.omitted_action_count
+        )
+    } else if count == 1 {
+        "1 action".to_string()
+    } else {
+        format!("{count} actions")
+    }
+}
+
+fn command_action_target(action: &ConversationCommandAction) -> String {
+    match action {
+        ConversationCommandAction::Read { name, path } => non_empty_text(name)
+            .unwrap_or_else(|| non_empty_text(path).unwrap_or("file"))
+            .to_string(),
+        ConversationCommandAction::ListFiles { path } => path
+            .as_deref()
+            .and_then(non_empty_text)
+            .unwrap_or("workspace")
+            .to_string(),
+        ConversationCommandAction::Search { query, path } => {
+            let query = query.as_deref().and_then(non_empty_text);
+            let path = path.as_deref().and_then(non_empty_text);
+            match (query, path) {
+                (Some(query), Some(path)) => format!("\"{query}\" in {path}"),
+                (Some(query), None) => format!("\"{query}\""),
+                (None, Some(path)) => format!("in {path}"),
+                (None, None) => "workspace".to_string(),
+            }
+        }
+    }
+}
+
+fn non_empty_text(value: &str) -> Option<&str> {
+    (!value.trim().is_empty()).then_some(value)
 }
 
 fn lifecycle_record_is_authoritative(consistency: ConversationItemLifecycleConsistency) -> bool {
@@ -469,6 +660,68 @@ pub(crate) fn card_detail_text(
 ) -> Option<String> {
     let record = snapshot.records.get(record_index)?;
     Some(synthesize_payload_detail(&record.observation().payload))
+}
+
+pub(crate) fn command_action_detail_text(
+    snapshot: &ConversationItemLifecycleProjectionSnapshot,
+    sequence: u64,
+) -> Option<String> {
+    let record = snapshot
+        .records
+        .iter()
+        .find(|record| record.sequence == sequence)?;
+    let projection = &record.observation.command_actions;
+    if projection.is_empty() {
+        return None;
+    }
+
+    let mut lines = vec![format!(
+        "{} details",
+        command_action_activity_label(projection)
+    )];
+    for (index, action) in projection.actions.iter().enumerate() {
+        match action {
+            ConversationCommandAction::Read { name, path } => {
+                let target = non_empty_text(name)
+                    .or_else(|| non_empty_text(path))
+                    .unwrap_or("file");
+                lines.push(format!("{}. Read {target}", index + 1));
+                if path != target {
+                    lines.push(format!("   path: {path}"));
+                }
+            }
+            ConversationCommandAction::ListFiles { path } => {
+                lines.push(format!("{}. List files", index + 1));
+                lines.push(format!(
+                    "   path: {}",
+                    path.as_deref()
+                        .and_then(non_empty_text)
+                        .unwrap_or("workspace")
+                ));
+            }
+            ConversationCommandAction::Search { query, path } => {
+                lines.push(format!(
+                    "{}. Search {}",
+                    index + 1,
+                    query
+                        .as_deref()
+                        .and_then(non_empty_text)
+                        .map(|query| format!("\"{query}\""))
+                        .unwrap_or_else(|| "workspace".to_string())
+                ));
+                if let Some(path) = path.as_deref().and_then(non_empty_text) {
+                    lines.push(format!("   path: {path}"));
+                }
+            }
+        }
+    }
+    if projection.omitted_action_count > 0 {
+        lines.push(format!(
+            "… {} more actions were not retained",
+            projection.omitted_action_count
+        ));
+    }
+    Some(bound_synthesized_detail(lines.join("\n")))
 }
 
 pub(crate) fn tool_message_digest(text: &str) -> [u8; 32] {
@@ -830,6 +1083,10 @@ fn synthesize_payload_detail(payload: &ConversationProgressiveActivityPayload) -
             format!("unknown progressive activity · {payload_bytes} B")
         }
     };
+    bound_synthesized_detail(raw)
+}
+
+pub(crate) fn bound_synthesized_detail(raw: String) -> String {
     if raw.len() <= MAX_SYNTHESIZED_DETAIL_BYTES {
         raw
     } else {
@@ -950,8 +1207,22 @@ mod tests {
                 observed_at_ms: fixture.observed_at_ms,
                 outcome: fixture.outcome,
                 summary: fixture.summary.to_string(),
+                command_actions: Default::default(),
             },
             consistency: fixture.consistency,
+        }
+    }
+
+    fn read_actions(name: &str, path: &str) -> ConversationCommandActionProjection {
+        let retained_bytes = name.len().saturating_add(path.len());
+        ConversationCommandActionProjection {
+            actions: vec![ConversationCommandAction::Read {
+                name: name.to_string(),
+                path: path.to_string(),
+            }],
+            read_action_count: 1,
+            source_bytes: u64::try_from(retained_bytes).unwrap_or(u64::MAX),
+            ..ConversationCommandActionProjection::default()
         }
     }
 
@@ -1109,6 +1380,81 @@ mod tests {
     }
 
     #[test]
+    fn read_actions_replace_opaque_command_copy_and_expand_to_exact_path() {
+        let progressive = command_snapshot("cmd-read");
+        let mut started = lifecycle_record(LifecycleRecordFixture {
+            sequence: 0,
+            item_id: "cmd-read",
+            kind: ConversationItemKind::CommandExecution,
+            phase: ConversationItemLifecyclePhase::Started,
+            observed_at_ms: Some(1_000),
+            outcome: ConversationItemOutcome::InProgress,
+            summary: "Reading src/lib.rs",
+            consistency: ConversationItemLifecycleConsistency::Accepted,
+        });
+        started.observation.command_actions = read_actions("src/lib.rs", "C:/dev/akra/src/lib.rs");
+        let mut completed = lifecycle_record(LifecycleRecordFixture {
+            sequence: 1,
+            item_id: "cmd-read",
+            kind: ConversationItemKind::CommandExecution,
+            phase: ConversationItemLifecyclePhase::Completed,
+            observed_at_ms: Some(1_500),
+            outcome: ConversationItemOutcome::Completed,
+            summary: "Read src/lib.rs",
+            consistency: ConversationItemLifecycleConsistency::Accepted,
+        });
+        completed.observation.command_actions = started.observation.command_actions.clone();
+        let lifecycle = ConversationItemLifecycleProjectionSnapshot {
+            records: vec![started, completed],
+            ..ConversationItemLifecycleProjectionSnapshot::default()
+        };
+
+        let cards = project_activity_timeline_cards(&progressive, Some(&lifecycle), Some(2_000));
+
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].activity_label, "read");
+        assert_eq!(cards[0].title, "src/lib.rs");
+        assert_eq!(cards[0].summary, "Read src/lib.rs");
+        assert_eq!(cards[0].lifecycle_sequence, Some(1));
+        assert!(cards[0].expandable);
+        let detail = command_action_detail_text(&lifecycle, 1).unwrap();
+        assert!(detail.contains("1. Read src/lib.rs"), "{detail}");
+        assert!(detail.contains("path: C:/dev/akra/src/lib.rs"), "{detail}");
+    }
+
+    #[test]
+    fn action_without_command_output_still_materializes_one_stable_activity_card() {
+        let progressive = snapshot_from(Vec::new());
+        let mut record = lifecycle_record(LifecycleRecordFixture {
+            sequence: 7,
+            item_id: "cmd-empty-read",
+            kind: ConversationItemKind::CommandExecution,
+            phase: ConversationItemLifecyclePhase::SnapshotObserved,
+            observed_at_ms: None,
+            outcome: ConversationItemOutcome::Completed,
+            summary: "Read Cargo.toml",
+            consistency: ConversationItemLifecycleConsistency::SnapshotObserved,
+        });
+        record.observation.command_actions = read_actions("Cargo.toml", "C:/dev/akra/Cargo.toml");
+        let lifecycle = ConversationItemLifecycleProjectionSnapshot {
+            records: vec![record],
+            ..ConversationItemLifecycleProjectionSnapshot::default()
+        };
+
+        let cards = project_activity_timeline_cards(&progressive, Some(&lifecycle), None);
+
+        assert_eq!(cards.len(), 1);
+        assert_eq!(
+            cards[0].key.source,
+            ProgressiveActivityCardSource::Lifecycle
+        );
+        assert_eq!(cards[0].key.sequence, 7);
+        assert_eq!(cards[0].activity_label, "read");
+        assert_eq!(cards[0].record_index, None);
+        assert_eq!(cards[0].lifecycle_sequence, Some(7));
+    }
+
+    #[test]
     fn active_failed_and_clock_regression_states_never_invent_elapsed_time() {
         let progressive = command_snapshot("cmd-state");
         let active = ConversationItemLifecycleProjectionSnapshot {
@@ -1224,6 +1570,7 @@ mod tests {
     fn expand_state_is_bounded_and_toggles() {
         let mut state = ProgressiveActivityExpandState::default();
         let key = ProgressiveActivityCardKey {
+            source: ProgressiveActivityCardSource::Progressive,
             sequence: 1,
             kind: ProgressiveActivityCardKind::Command,
         };
@@ -1234,6 +1581,7 @@ mod tests {
 
         for sequence in 0..40 {
             state.expand_card(ProgressiveActivityCardKey {
+                source: ProgressiveActivityCardSource::Progressive,
                 sequence,
                 kind: ProgressiveActivityCardKind::Diff,
             });

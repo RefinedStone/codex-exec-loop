@@ -317,11 +317,16 @@ impl NativeTuiApp {
             .card_filter();
         let first_key = match &self.conversation.lifecycle.conversation_state {
             ConversationState::Ready(conversation) => {
-                let cards = conversation.progressive_activity_detail.cards();
+                let cards = conversation
+                    .progressive_activity_detail
+                    .timeline_cards(None);
                 super::filter_cards_by_kind(&cards, card_filter)
                     .first()
                     .and_then(|card_index| cards.get(*card_index))
                     .filter(|card| card.expandable)
+                    .filter(|card| {
+                        !matches!(card.activity_label, "read" | "list" | "search" | "explore")
+                    })
                     .map(|card| card.key)
             }
             ConversationState::Loading | ConversationState::Failed(_) => None,
@@ -372,7 +377,9 @@ impl NativeTuiApp {
         let Some((filtered_len, card_key, expandable)) =
             (match &self.conversation.lifecycle.conversation_state {
                 ConversationState::Ready(conversation) => {
-                    let cards = conversation.progressive_activity_detail.cards();
+                    let cards = conversation
+                        .progressive_activity_detail
+                        .timeline_cards(None);
                     let filtered = super::filter_cards_by_kind(&cards, card_filter);
                     filtered
                         .get(clicked_index)
@@ -1130,7 +1137,9 @@ impl NativeTuiApp {
     fn handle_progressive_activity_overlay_key(&mut self, key: event::KeyEvent) -> bool {
         let filtered_len = match &self.conversation.lifecycle.conversation_state {
             ConversationState::Ready(conversation) => {
-                let cards = conversation.progressive_activity_detail.cards();
+                let cards = conversation
+                    .progressive_activity_detail
+                    .timeline_cards(None);
                 super::filter_cards_by_kind(
                     &cards,
                     self.shell
@@ -1174,7 +1183,9 @@ impl NativeTuiApp {
                 if let ConversationState::Ready(conversation) =
                     &self.conversation.lifecycle.conversation_state
                 {
-                    let cards = conversation.progressive_activity_detail.cards();
+                    let cards = conversation
+                        .progressive_activity_detail
+                        .timeline_cards(None);
                     let filtered = super::filter_cards_by_kind(
                         &cards,
                         self.shell

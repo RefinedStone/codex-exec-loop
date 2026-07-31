@@ -222,6 +222,8 @@ pub struct ConversationToolActivity {
     pub kind: ConversationToolActivityKind,
     // activity summary 문구이다.
     pub text: String,
+    // Structured app-server actions can provide a clearer read/list/search label than generic "tool".
+    pub display_label: Option<String>,
     // file change activity에서 변경 파일 수를 별도 숫자로 보존해 compact copy가 쉽게 만들 수 있게 한다.
     pub file_change_count: usize,
 }

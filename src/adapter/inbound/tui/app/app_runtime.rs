@@ -225,6 +225,7 @@ mod tests {
         let activity = ConversationToolActivity {
             kind: ConversationToolActivityKind::CommandExecution,
             text: "cargo test".to_string(),
+            display_label: None,
             file_change_count: 0,
         };
         let review = ConversationApprovalReview {

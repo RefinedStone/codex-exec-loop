@@ -190,13 +190,25 @@ impl ConversationViewModel {
      * 먼저 buffer에 모아 두고 turn boundary나 explicit flush에서 한꺼번에 옮겨 agent
      * reply와 tool activity copy의 상대 순서를 안정화한다.
      */
+    #[cfg(test)]
     pub(crate) fn buffer_tool_message(&mut self, text: impl Into<String>) {
+        self.buffer_tool_message_with_label(text, None);
+    }
+
+    pub(crate) fn buffer_tool_message_with_label(
+        &mut self,
+        text: impl Into<String>,
+        display_label: Option<String>,
+    ) {
         let text = text.into();
         if text.trim().is_empty() {
             return;
         }
 
         let mut message = ConversationMessage::new(ConversationMessageKind::Tool, text, None, None);
+        if let Some(display_label) = display_label {
+            message = message.with_display_label(display_label);
+        }
         bound_conversation_message(&mut message);
         self.buffered_tool_messages.push(message);
         let mut retained_bytes = self

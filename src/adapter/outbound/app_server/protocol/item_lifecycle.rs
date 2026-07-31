@@ -1,10 +1,12 @@
 use serde_json::Value;
 
 use crate::domain::conversation_item_lifecycle::{
-    ConversationItemKind, ConversationItemLifecycleObservation, ConversationItemLifecyclePhase,
+    ConversationCommandAction, ConversationCommandActionProjection, ConversationItemKind,
+    ConversationItemLifecycleObservation, ConversationItemLifecyclePhase,
     ConversationItemLifecycleRejection, ConversationItemLifecycleSource, ConversationItemOutcome,
-    MAX_CONVERSATION_ITEM_IDENTIFIER_BYTES, MAX_CONVERSATION_ITEM_KIND_LABEL_BYTES,
-    MAX_CONVERSATION_ITEM_SUMMARY_BYTES,
+    MAX_CONVERSATION_COMMAND_ACTION_TEXT_BYTES, MAX_CONVERSATION_ITEM_IDENTIFIER_BYTES,
+    MAX_CONVERSATION_ITEM_KIND_LABEL_BYTES, MAX_CONVERSATION_ITEM_SUMMARY_BYTES,
+    MAX_RETAINED_CONVERSATION_COMMAND_ACTIONS,
 };
 
 // Runtime classification reads wire_type; the remaining fields are executable schema metadata.
@@ -85,8 +87,8 @@ pub(crate) const ITEM_PROJECTION_MANIFEST: &[ItemProjectionManifestRow] = &[
     ItemProjectionManifestRow {
         wire_type: "commandExecution",
         required_fields: &["command", "commandActions", "cwd", "id", "status", "type"],
-        preserved_fields: &["id", "status", "type"],
-        bounded_redacted_fields: &["command", "commandActions"],
+        preserved_fields: &["commandActions", "id", "status", "type"],
+        bounded_redacted_fields: &["command"],
         ignored_fields: &[
             "aggregatedOutput",
             "cwd",
@@ -302,7 +304,17 @@ fn parse_item_lifecycle(
     validate_identifier(turn_id, "turnId")?;
     let item_id = required_identifier(item, "id")?;
     let wire_type = required_discriminator(item, "type")?;
-    let (kind, outcome, summary) = classify_item(item, wire_type)?;
+    let (kind, outcome, mut summary) = classify_item(item, wire_type)?;
+    let command_actions = if wire_type == "commandExecution" {
+        let projection = parse_command_actions(required_array(item, "commandActions")?)?;
+        if !projection.is_empty() {
+            let status = required_string(item, "status")?;
+            summary = command_action_summary(&projection, status);
+        }
+        projection
+    } else {
+        ConversationCommandActionProjection::default()
+    };
     let observation = ConversationItemLifecycleObservation {
         thread_id: thread_id.to_string(),
         turn_id: turn_id.to_string(),
@@ -313,6 +325,7 @@ fn parse_item_lifecycle(
         observed_at_ms,
         outcome,
         summary: bounded_summary(summary),
+        command_actions,
     };
     observation
         .validate()
@@ -377,7 +390,6 @@ fn classify_item(
         }
         "commandExecution" => {
             let command = required_string(item, "command")?;
-            let _ = required_array(item, "commandActions")?;
             let _ = required_string(item, "cwd")?;
             let status = required_string(item, "status")?;
             let status_label = bounded_kind_label(status);
@@ -523,6 +535,160 @@ fn classify_item(
         )),
         unknown => Ok(unknown_item_classification(unknown)),
     }
+}
+
+pub(super) fn parse_command_actions(
+    values: &[Value],
+) -> Result<ConversationCommandActionProjection, ItemLifecycleParseError> {
+    let mut projection = ConversationCommandActionProjection::default();
+    for value in values {
+        if !value.is_object() {
+            return Err(ItemLifecycleParseError::InvalidField("commandActions"));
+        }
+        let action_type = required_discriminator(value, "type")?;
+        let _ = required_string(value, "command")?;
+        let action = match action_type {
+            "read" => {
+                projection.read_action_count = projection.read_action_count.saturating_add(1);
+                let name = required_string(value, "name")?;
+                let path = required_string(value, "path")?;
+                projection.source_bytes = projection
+                    .source_bytes
+                    .saturating_add(string_bytes(name))
+                    .saturating_add(string_bytes(path));
+                ConversationCommandAction::Read {
+                    name: bounded_action_text(name),
+                    path: bounded_action_text(path),
+                }
+            }
+            "listFiles" => {
+                projection.list_files_action_count =
+                    projection.list_files_action_count.saturating_add(1);
+                let path = optional_string(value, "path")?;
+                projection.source_bytes = projection
+                    .source_bytes
+                    .saturating_add(path.map_or(0, string_bytes));
+                ConversationCommandAction::ListFiles {
+                    path: path.map(bounded_action_text),
+                }
+            }
+            "search" => {
+                projection.search_action_count = projection.search_action_count.saturating_add(1);
+                let query = optional_string(value, "query")?;
+                let path = optional_string(value, "path")?;
+                projection.source_bytes = projection
+                    .source_bytes
+                    .saturating_add(query.map_or(0, string_bytes))
+                    .saturating_add(path.map_or(0, string_bytes));
+                ConversationCommandAction::Search {
+                    query: query.map(bounded_action_text),
+                    path: path.map(bounded_action_text),
+                }
+            }
+            // Unknown actions can contain an arbitrary raw command. Validate the schema shape,
+            // then deliberately drop that secret-bearing field from the retained projection.
+            _ => continue,
+        };
+        if projection.actions.len() < MAX_RETAINED_CONVERSATION_COMMAND_ACTIONS {
+            projection.actions.push(action);
+        } else {
+            projection.omitted_action_count = projection.omitted_action_count.saturating_add(1);
+        }
+    }
+    let retained_bytes = u64::try_from(projection.retained_dynamic_bytes()).unwrap_or(u64::MAX);
+    projection.truncated_bytes = projection.source_bytes.saturating_sub(retained_bytes);
+    Ok(projection)
+}
+
+pub(super) fn command_action_summary(
+    projection: &ConversationCommandActionProjection,
+    status: &str,
+) -> String {
+    let active = status == "inProgress";
+    let count = projection.action_count();
+    if count == 1 {
+        let target = projection
+            .actions
+            .first()
+            .map(command_action_target)
+            .unwrap_or_else(|| "target".to_string());
+        if projection.read_action_count == 1 {
+            return format!("{} {target}", if active { "Reading" } else { "Read" });
+        }
+        if projection.list_files_action_count == 1 {
+            return format!("{} {target}", if active { "Listing" } else { "Listed" });
+        }
+        return format!("{} {target}", if active { "Searching" } else { "Searched" });
+    }
+    if projection.read_action_count == count {
+        return format!("{} {count} files", if active { "Reading" } else { "Read" });
+    }
+    if projection.list_files_action_count == count {
+        return format!(
+            "{} {count} locations",
+            if active { "Listing" } else { "Listed" }
+        );
+    }
+    if projection.search_action_count == count {
+        return format!(
+            "{} {count} patterns",
+            if active { "Searching" } else { "Searched" }
+        );
+    }
+    format!(
+        "{} {count} targets",
+        if active { "Exploring" } else { "Explored" }
+    )
+}
+
+pub(super) fn command_action_label(
+    projection: &ConversationCommandActionProjection,
+) -> &'static str {
+    let count = projection.action_count();
+    if projection.read_action_count == count {
+        "read"
+    } else if projection.list_files_action_count == count {
+        "list"
+    } else if projection.search_action_count == count {
+        "search"
+    } else {
+        "explore"
+    }
+}
+
+fn command_action_target(action: &ConversationCommandAction) -> String {
+    match action {
+        ConversationCommandAction::Read { name, path } => {
+            non_empty_text(name).unwrap_or(path).to_string()
+        }
+        ConversationCommandAction::ListFiles { path } => path
+            .as_deref()
+            .and_then(non_empty_text)
+            .unwrap_or("workspace")
+            .to_string(),
+        ConversationCommandAction::Search { query, path } => {
+            let query = query.as_deref().and_then(non_empty_text);
+            let path = path.as_deref().and_then(non_empty_text);
+            match (query, path) {
+                (Some(query), Some(path)) => format!("\"{query}\" in {path}"),
+                (Some(query), None) => format!("\"{query}\""),
+                (None, Some(path)) => format!("in {path}"),
+                (None, None) => "workspace".to_string(),
+            }
+        }
+    }
+}
+
+fn non_empty_text(value: &str) -> Option<&str> {
+    (!value.trim().is_empty()).then_some(value)
+}
+
+fn bounded_action_text(value: &str) -> String {
+    bounded_text(value, MAX_CONVERSATION_COMMAND_ACTION_TEXT_BYTES)
+}
+
+fn string_bytes(value: &str) -> u64 {
+    u64::try_from(value.len()).unwrap_or(u64::MAX)
 }
 
 fn unknown_item_classification(
@@ -726,6 +892,85 @@ mod tests {
         assert_eq!(observation.outcome, ConversationItemOutcome::Failed);
         assert!(!format!("{observation:?}").contains(secret));
         assert!(observation.summary.contains("command bytes="));
+    }
+
+    #[test]
+    fn structured_command_actions_project_clear_summary_and_exact_expandable_targets() {
+        let raw_command_canary = "RAW_COMMAND_MUST_NOT_BE_RETAINED";
+        let item = json!({
+            "id": "command-explore",
+            "type": "commandExecution",
+            "command": raw_command_canary,
+            "commandActions": [
+                {
+                    "type": "read",
+                    "command": raw_command_canary,
+                    "name": "src/lib.rs",
+                    "path": "C:/dev/akra/src/lib.rs"
+                },
+                {
+                    "type": "search",
+                    "command": raw_command_canary,
+                    "query": "ConversationItemLifecycleObservation",
+                    "path": "src"
+                },
+                {
+                    "type": "listFiles",
+                    "command": raw_command_canary,
+                    "path": "tests"
+                }
+            ],
+            "cwd": "C:/dev/akra",
+            "status": "completed"
+        });
+
+        let observation = parse_snapshot_item_lifecycle("thread-1", "turn-1", &item).unwrap();
+
+        assert_eq!(observation.summary, "Explored 3 targets");
+        assert_eq!(observation.command_actions.action_count(), 3);
+        assert_eq!(observation.command_actions.actions.len(), 3);
+        assert_eq!(observation.command_actions.read_action_count, 1);
+        assert_eq!(observation.command_actions.search_action_count, 1);
+        assert_eq!(observation.command_actions.list_files_action_count, 1);
+        assert!(matches!(
+            &observation.command_actions.actions[0],
+            ConversationCommandAction::Read { name, path }
+                if name == "src/lib.rs" && path == "C:/dev/akra/src/lib.rs"
+        ));
+        assert!(!format!("{observation:?}").contains(raw_command_canary));
+    }
+
+    #[test]
+    fn command_action_projection_is_bounded_and_reports_omitted_detail() {
+        let actions = (0..(MAX_RETAINED_CONVERSATION_COMMAND_ACTIONS + 2))
+            .map(|index| {
+                json!({
+                    "type": "read",
+                    "command": "read command",
+                    "name": format!("file-{index}.rs"),
+                    "path": format!("C:/workspace/file-{index}.rs")
+                })
+            })
+            .collect::<Vec<_>>();
+        let item = json!({
+            "id": "command-many-reads",
+            "type": "commandExecution",
+            "command": "read many files",
+            "commandActions": actions,
+            "cwd": "C:/workspace",
+            "status": "inProgress"
+        });
+
+        let observation = parse_snapshot_item_lifecycle("thread-1", "turn-1", &item).unwrap();
+
+        assert_eq!(observation.summary, "Reading 18 files");
+        assert_eq!(
+            observation.command_actions.actions.len(),
+            MAX_RETAINED_CONVERSATION_COMMAND_ACTIONS
+        );
+        assert_eq!(observation.command_actions.omitted_action_count, 2);
+        assert_eq!(observation.command_actions.action_count(), 18);
+        assert!(observation.command_actions.truncated_bytes > 0);
     }
 
     #[test]

@@ -38,9 +38,9 @@ pub(crate) use progressive_activity::ProgressiveActivityItemKind;
 pub(crate) use progressive_activity::ProgressiveActivityState;
 pub(crate) use progressive_activity_cards::{
     ProgressiveActivityCard, ProgressiveActivityCardKey, ProgressiveActivityCardKind,
-    ProgressiveActivityCardOutcome, ProgressiveActivityExpandState, ProgressiveActivityWaitKind,
-    ProgressiveActivityWaitStatus, filter_cards_by_kind, tool_message_digest, tool_message_fact,
-    tool_message_is_expandable, tool_message_title,
+    ProgressiveActivityCardOutcome, ProgressiveActivityCardSource, ProgressiveActivityExpandState,
+    ProgressiveActivityWaitKind, ProgressiveActivityWaitStatus, filter_cards_by_kind,
+    tool_message_digest, tool_message_fact, tool_message_is_expandable, tool_message_title,
 };
 pub(crate) use progressive_activity_detail::ProgressiveActivityDetailKind;
 // shell은 conversation state, input state, planning-repair state를 이 surface에서

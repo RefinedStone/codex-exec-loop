@@ -505,7 +505,7 @@ pub(super) fn reduce_conversation_runtime_with_transition(
                     // transcript notices so shell tail and transcript agree.
                     state.progressive_activity.clear_turn_retrying();
                     state.turn_activity.register_tool_activity(&activity);
-                    state.buffer_tool_message(activity.text);
+                    state.buffer_tool_message_with_label(activity.text, activity.display_label);
                 }
                 TurnStreamUpdate::ApprovalReviewUpdated { review } => {
                     // Some provider statuses require approval outside the visible
@@ -1243,6 +1243,7 @@ mod tests {
                 observed_at_ms: Some(1),
                 outcome: ConversationItemOutcome::InProgress,
                 summary: "command running".to_string(),
+                command_actions: Default::default(),
             }),
         }
     }
@@ -1726,6 +1727,7 @@ mod tests {
                 activity: ConversationToolActivity {
                     kind: ConversationToolActivityKind::CommandExecution,
                     text: "cargo test".to_string(),
+                    display_label: None,
                     file_change_count: 0,
                 },
             }),

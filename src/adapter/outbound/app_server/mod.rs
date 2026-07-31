@@ -3711,6 +3711,7 @@ mod tests {
                         observed_at_ms: Some(1),
                         outcome: crate::domain::conversation_item_lifecycle::ConversationItemOutcome::NotReported,
                         summary: "reasoning summary_parts=1; content_parts=1".to_string(),
+                        command_actions: Default::default(),
                     },
                 ),
             })

@@ -535,9 +535,13 @@ fn render_source_chunk(
     let content_width = width.saturating_sub(prefix_width).max(1);
     let (content, next_byte) = display_source_chunk(text, start, end, content_width);
     let output_bytes = content.len();
+    let padding = diff_band_padding(kind, &content, content_width);
     if prefix_width == 0 {
         return (
-            Line::styled(content, diff_content_style(kind)),
+            Line::from(vec![
+                Span::styled(content, diff_content_style(kind)),
+                Span::styled(padding, diff_content_style(kind)),
+            ]),
             next_byte,
             output_bytes,
         );
@@ -559,10 +563,25 @@ fn render_source_chunk(
             Span::styled(gutter, AkraTheme::diff_gutter()),
             Span::styled(sign, diff_sign_style(kind)),
             Span::styled(content, diff_content_style(kind)),
+            Span::styled(padding, diff_content_style(kind)),
         ]),
         next_byte,
         output_bytes,
     )
+}
+
+fn diff_band_padding(
+    kind: ProgressiveActivityDiffLineKind,
+    content: &str,
+    content_width: usize,
+) -> String {
+    if !matches!(
+        kind,
+        ProgressiveActivityDiffLineKind::Insert | ProgressiveActivityDiffLineKind::Delete
+    ) {
+        return String::new();
+    }
+    " ".repeat(content_width.saturating_sub(Line::from(content).width()))
 }
 
 fn display_source_chunk(text: &str, start: usize, end: usize, width: usize) -> (String, usize) {

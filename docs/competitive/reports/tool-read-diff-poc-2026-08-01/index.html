@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Akra · Tool Read & Diff PoC</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main>
+      <header class="hero">
+        <p class="eyebrow">AKRA RESEARCH POC · 2026-08-01</p>
+        <h1>작게 보이고,<br /><span>증거는 클릭해서 연다.</span></h1>
+        <p class="lede">
+          읽기 활동은 한 줄로 조용하게, 정확한 경로는 요청할 때만. 코드 변경은 줄 번호와
+          행 전체 음영으로 한눈에 읽히도록 재설계했습니다.
+        </p>
+        <div class="decision-chips" aria-label="핵심 결정">
+          <span>typed commandActions</span><span>mouse + keyboard</span><span>bounded detail</span>
+        </div>
+      </header>
+
+      <section aria-labelledby="research-title">
+        <div class="section-heading">
+          <p class="eyebrow">01 · RESEARCH</p>
+          <h2 id="research-title">경쟁 제품에서 가져온 것은 패턴입니다.</h2>
+        </div>
+        <div class="research-grid">
+          <article>
+            <p class="product">Codex</p>
+            <h3>탐색 작업을 하나의 흐름으로 묶기</h3>
+            <p><code>Read/List/Search</code>를 Exploring/Explored 흐름으로 묶고 diff에 의미색과 줄 번호를 사용합니다.</p>
+          </article>
+          <article>
+            <p class="product">Grok Build</p>
+            <h3>파일명 우선, 내용은 접어서 보관</h3>
+            <p><code>Read path (range)</code>를 압축 헤더로 두고, 펼치면 번호가 붙은 원문을 보여줍니다.</p>
+          </article>
+          <article>
+            <p class="product">Claude Code</p>
+            <h3>진행 상태와 과거 기록의 밀도 분리</h3>
+            <p>읽기/검색 그룹의 현재 대상은 보이되, 완료된 상세는 접고 클릭 확장의 신뢰성을 반복 개선했습니다.</p>
+          </article>
+        </div>
+        <p class="research-note">
+          Akra의 선택: 경쟁 제품 문구를 복제하지 않고, app-server의 구조화된 타입을 그대로
+          authority로 사용합니다. 원문 명령을 다시 파싱하지 않습니다.
+        </p>
+      </section>
+
+      <section class="poc-section" aria-labelledby="poc-title">
+        <div class="section-heading">
+          <p class="eyebrow">02 · INTERACTIVE POC</p>
+          <h2 id="poc-title">실제 계약을 눌러 보세요.</h2>
+          <p>Read 행을 클릭하거나 포커스 후 Enter를 누르면 같은 카드 identity가 열립니다.</p>
+        </div>
+
+        <div class="mode-switch" role="tablist" aria-label="PoC 화면 선택">
+          <button id="read-tab" class="active" role="tab" aria-selected="true" aria-controls="read-panel">Read activity</button>
+          <button id="diff-tab" role="tab" aria-selected="false" aria-controls="diff-panel">Code diff</button>
+        </div>
+
+        <div id="read-panel" class="terminal" role="tabpanel" aria-labelledby="read-tab">
+          <div class="terminal-title"><span>Akra / Activity / inline inspection</span><span>96 × 24</span></div>
+          <div class="terminal-body">
+            <div class="filter"><span>filter: </span><b>all</b><span class="tab-on">› Diff</span><span>Output</span></div>
+            <button id="read-card" class="activity-row" aria-expanded="false" aria-controls="read-detail">
+              <span class="marker">&gt;</span><span id="fold-indicator">›</span><span class="ok">✓</span>
+              <span class="kind">read</span><span class="outcome">complete</span>
+              <span class="summary">Read src/core/app.rs</span><span class="fact">1 action</span>
+            </button>
+            <div class="detail-heading">read · src/core/app.rs<span id="byte-range" hidden> | 0–73 / 42 B</span></div>
+            <div id="read-detail" class="read-detail" hidden>
+              <div class="muted">read details</div>
+              <div>1. Read src/core/app.rs</div>
+              <div class="path">path: C:/dev/akra/src/core/app.rs</div>
+            </div>
+            <p id="fold-copy" class="muted">Folded. Press Enter/e or click the selected row to expand.</p>
+            <div class="terminal-spacer"></div>
+            <div class="keys"><b>Keys</b><br />Up/Down: row | Enter/e or click: fold | PgUp/PgDn: page | Tab: filter | Esc: close</div>
+          </div>
+          <div class="statusbar">Akra / akra · READY · queue off · agents off · terminals 0</div>
+        </div>
+
+        <div id="diff-panel" class="terminal" role="tabpanel" aria-labelledby="diff-tab" hidden>
+          <div class="terminal-title"><span>Akra / Activity / diff inspection</span><span>80 columns</span></div>
+          <div class="diff-summary"><b>• Edited src/lib.rs</b><span>+1 −1 · 1 hunk</span></div>
+          <div class="diff-code" role="table" aria-label="줄 번호가 있는 코드 변경">
+            <div class="diff-row context" role="row"><span class="gutter">98</span><span class="sign"> </span><code>line 98</code></div>
+            <div class="diff-row deletion" role="row"><span class="gutter">99</span><span class="sign">−</span><code>line 99</code></div>
+            <div class="diff-row addition" role="row"><span class="gutter">99</span><span class="sign">+</span><code>line 99 changed</code></div>
+            <div class="diff-row context" role="row"><span class="gutter">100</span><span class="sign"> </span><code>line 100</code></div>
+          </div>
+          <div class="diff-legend"><span class="add-dot"></span> 추가 행 전체 음영 <span class="del-dot"></span> 삭제 행 전체 음영 <span>줄 번호 gutter는 중립</span></div>
+          <div class="statusbar">PgUp/PgDn: hunk · h: list · Esc: close</div>
+        </div>
+      </section>
+
+      <section aria-labelledby="contract-title">
+        <div class="section-heading"><p class="eyebrow">03 · SHIPPED CONTRACT</p><h2 id="contract-title">간결함을 만드는 안전장치</h2></div>
+        <div class="contract-grid">
+          <article><span>01</span><h3>출력이 없어도 보인다</h3><p>command output delta가 없는 읽기도 lifecycle 카드로 재구성됩니다.</p></article>
+          <article><span>02</span><h3>원문 명령은 숨긴다</h3><p>typed action이 있으면 경로·검색어만 bounded projection에 보존합니다.</p></article>
+          <article><span>03</span><h3>클릭과 키보드는 같다</h3><p>프레임 receipt의 hit area와 Enter/e가 동일한 stable card key를 토글합니다.</p></article>
+          <article><span>04</span><h3>색만으로 말하지 않는다</h3><p>+/− 기호와 old/new 줄 번호를 유지하며 색은 보조 신호로 사용합니다.</p></article>
+        </div>
+      </section>
+
+      <section class="boundary" aria-labelledby="boundary-title">
+        <p class="eyebrow">HONEST BOUNDARY</p>
+        <h2 id="boundary-title">호스트 scrollback 자체는 클릭 영역이 아닙니다.</h2>
+        <p>Akra의 durable scrollback 계약을 깨지 않기 위해 상호작용은 <code>:activity</code> overlay가 소유합니다. 일반 transcript에서는 축약 헤더를 유지하고 <code>:view detail</code>이 정확한 내용을 펼칩니다.</p>
+      </section>
+
+      <footer>
+        <p>Official evidence</p>
+        <nav aria-label="공식 출처">
+          <a href="https://github.com/openai/codex/tree/main/codex-rs/app-server">OpenAI app-server</a>
+          <a href="https://github.com/openai/codex/blob/da2c7ca8d16a25f00e09a199524d4f8554ee3977/codex-rs/tui/src/diff_render.rs">Codex diff renderer</a>
+          <a href="https://github.com/xai-org/grok-build">Grok Build</a>
+          <a href="https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md">Claude Code changelog</a>
+        </nav>
+      </footer>
+    </main>
+    <script src="app.js"></script>
+  </body>
+</html>

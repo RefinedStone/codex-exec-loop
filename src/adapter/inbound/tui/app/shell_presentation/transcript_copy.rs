@@ -148,12 +148,16 @@ fn format_tool_card_lines(
         AkraTheme::collapsed_indicator()
     };
     let title = tool_message_title(&message.text);
-    let fact = tool_message_fact(&message.text);
     let label = message
         .display_label
         .as_deref()
         .filter(|label| !label.trim().is_empty())
         .unwrap_or("tool");
+    let fact = if matches!(label, "read" | "list" | "search" | "explore") {
+        String::new()
+    } else {
+        tool_message_fact(&message.text)
+    };
 
     let mut lines = vec![Line::from(vec![
         Span::styled(
@@ -179,7 +183,7 @@ fn format_tool_card_lines(
 
     if expanded {
         let mut markdown_code_fence = None;
-        for text_line in message.text.lines() {
+        for text_line in message.text.lines().skip(1) {
             let Some(mut body) = format_markdown_body_line(text_line, &mut markdown_code_fence)
             else {
                 continue;
@@ -486,6 +490,39 @@ mod tests {
         assert!(detail_text.contains("▼ "));
         assert!(detail_text.contains("line two"));
         assert!(detail_text.contains("line three"));
+    }
+
+    #[test]
+    fn structured_read_card_is_quiet_when_collapsed_and_exact_when_expanded() {
+        let messages = vec![
+            ConversationMessage::new(
+                ConversationMessageKind::Tool,
+                "Read src/lib.rs\n1. Read src/lib.rs\n   path: C:/dev/akra/src/lib.rs",
+                None,
+                Some("read-1".to_string()),
+            )
+            .with_display_label("read"),
+        ];
+
+        let medium =
+            format_conversation_lines_for_view(&messages, ConversationViewMode::Medium, false);
+        let medium_text = medium.iter().map(line_text).collect::<Vec<_>>().join("\n");
+        assert!(
+            medium_text.contains("read      Read src/lib.rs"),
+            "{medium_text}"
+        );
+        assert!(!medium_text.contains("path:"), "{medium_text}");
+        assert!(!medium_text.contains("3 lines"), "{medium_text}");
+
+        let detail =
+            format_conversation_lines_for_view(&messages, ConversationViewMode::Detail, false);
+        let detail_text = detail.iter().map(line_text).collect::<Vec<_>>().join("\n");
+        assert!(detail_text.contains("1. Read src/lib.rs"), "{detail_text}");
+        assert!(
+            detail_text.contains("path: C:/dev/akra/src/lib.rs"),
+            "{detail_text}"
+        );
+        assert_eq!(detail_text.matches("Read src/lib.rs").count(), 2);
     }
 
     #[test]

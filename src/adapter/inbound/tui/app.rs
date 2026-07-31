@@ -197,9 +197,9 @@ pub(super) use conversation_model::{
     AutoFollowSkipReason, AutoFollowSnapshotPresentation, ConversationComposerState,
     ConversationInputState, ConversationState, ConversationViewModel, ProgressiveActivityCard,
     ProgressiveActivityCardKey, ProgressiveActivityCardKind, ProgressiveActivityCardOutcome,
-    ProgressiveActivityDetailKind, ProgressiveActivityExpandState, ProgressiveActivityWaitKind,
-    ProgressiveActivityWaitStatus, TranscriptHandoffCorrelation, filter_cards_by_kind,
-    normalize_max_auto_turns_candidate,
+    ProgressiveActivityCardSource, ProgressiveActivityDetailKind, ProgressiveActivityExpandState,
+    ProgressiveActivityWaitKind, ProgressiveActivityWaitStatus, TranscriptHandoffCorrelation,
+    filter_cards_by_kind, normalize_max_auto_turns_candidate,
 };
 use conversation_runtime::{
     ConversationRuntimeEffect, ConversationRuntimeEvent,

@@ -2,8 +2,9 @@ use std::fmt;
 use std::sync::{Arc, Weak};
 
 use super::progressive_activity_cards::{
-    ProgressiveActivityCard, ProgressiveActivityWaitStatus, card_detail_text,
-    project_activity_cards, project_activity_timeline_cards, project_activity_wait_status,
+    ProgressiveActivityCard, ProgressiveActivityWaitStatus, bound_synthesized_detail,
+    card_detail_text, command_action_detail_text, project_activity_cards,
+    project_activity_timeline_cards, project_activity_wait_status,
 };
 use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProjectionSnapshot;
 use crate::domain::conversation_progressive_activity::{
@@ -24,7 +25,7 @@ pub(crate) struct ProgressiveActivityDocument {
     pub(crate) truncated_bytes: u64,
     pub(crate) history_incomplete: bool,
     snapshot: Arc<ConversationProgressiveActivityProjectionSnapshot>,
-    record_index: usize,
+    record_index: Option<usize>,
     owned_text: Option<String>,
 }
 
@@ -33,10 +34,11 @@ impl ProgressiveActivityDocument {
         if let Some(owned_text) = self.owned_text.as_deref() {
             return owned_text;
         }
+        let record_index = self
+            .record_index
+            .expect("borrowed document text must retain a progressive record index");
         detail_payload(
-            &self.snapshot.records[self.record_index]
-                .observation()
-                .payload,
+            &self.snapshot.records[record_index].observation().payload,
             self.kind,
         )
         .expect("document kind must match its retained record")
@@ -115,7 +117,7 @@ impl ProgressiveActivityDetailState {
             truncated_bytes,
             history_incomplete,
             snapshot,
-            record_index,
+            record_index: Some(record_index),
             owned_text: None,
         })
     }
@@ -156,10 +158,26 @@ impl ProgressiveActivityDetailState {
         card: &ProgressiveActivityCard,
     ) -> Option<ProgressiveActivityDocument> {
         let snapshot = self.snapshot.upgrade()?;
-        if card.record_index >= snapshot.records.len() {
-            return None;
-        }
-        let detail = card_detail_text(&snapshot, card.record_index)?;
+        let output_detail = match card.record_index {
+            Some(record_index) if record_index < snapshot.records.len() => {
+                card_detail_text(&snapshot, record_index)
+            }
+            Some(_) => return None,
+            None => None,
+        };
+        let action_detail = card.lifecycle_sequence.and_then(|sequence| {
+            self.lifecycle_snapshot
+                .upgrade()
+                .and_then(|lifecycle| command_action_detail_text(&lifecycle, sequence))
+        });
+        let detail = match (action_detail, output_detail) {
+            (Some(actions), Some(output)) if !output.trim().is_empty() => {
+                bound_synthesized_detail(format!("{actions}\n\nCommand output\n{output}"))
+            }
+            (Some(actions), _) => actions,
+            (None, Some(output)) => output,
+            (None, None) => return None,
+        };
         let history_incomplete = snapshot.history_incomplete();
         // Card documents synthesize detail for every progressive kind. Diff/Output
         // kind is only a legacy tab label; card body text lives in owned_text.

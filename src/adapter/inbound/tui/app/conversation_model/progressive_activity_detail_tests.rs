@@ -2,6 +2,12 @@ use std::sync::Arc;
 
 use super::super::view_model::ConversationViewModel;
 use super::{ProgressiveActivityDetailKind, ProgressiveActivityDetailState};
+use crate::domain::conversation_item_lifecycle::{
+    ConversationCommandAction, ConversationCommandActionProjection, ConversationItemKind,
+    ConversationItemLifecycleConsistency, ConversationItemLifecycleObservation,
+    ConversationItemLifecyclePhase, ConversationItemLifecycleProjectionSnapshot,
+    ConversationItemLifecycleRecord, ConversationItemLifecycleSource, ConversationItemOutcome,
+};
 use crate::domain::conversation_progressive_activity::{
     ConversationProgressiveActivityBatch, ConversationProgressiveActivityKind,
     ConversationProgressiveActivityObservation, ConversationProgressiveActivityPayload,
@@ -86,6 +92,41 @@ fn snapshot(
             .expect("detail test batch should project");
     }
     projection.snapshot()
+}
+
+fn read_lifecycle_snapshot(
+    item_id: &str,
+    name: &str,
+    path: &str,
+) -> Arc<ConversationItemLifecycleProjectionSnapshot> {
+    let retained_bytes = name.len().saturating_add(path.len());
+    Arc::new(ConversationItemLifecycleProjectionSnapshot {
+        records: vec![ConversationItemLifecycleRecord {
+            sequence: 3,
+            observation: ConversationItemLifecycleObservation {
+                thread_id: THREAD_ID.to_string(),
+                turn_id: TURN_ID.to_string(),
+                item_id: item_id.to_string(),
+                kind: ConversationItemKind::CommandExecution,
+                phase: ConversationItemLifecyclePhase::SnapshotObserved,
+                source: ConversationItemLifecycleSource::Snapshot,
+                observed_at_ms: None,
+                outcome: ConversationItemOutcome::Completed,
+                summary: format!("Read {name}"),
+                command_actions: ConversationCommandActionProjection {
+                    actions: vec![ConversationCommandAction::Read {
+                        name: name.to_string(),
+                        path: path.to_string(),
+                    }],
+                    read_action_count: 1,
+                    source_bytes: u64::try_from(retained_bytes).unwrap_or(u64::MAX),
+                    ..ConversationCommandActionProjection::default()
+                },
+            },
+            consistency: ConversationItemLifecycleConsistency::SnapshotObserved,
+        }],
+        ..ConversationItemLifecycleProjectionSnapshot::default()
+    })
 }
 
 #[test]
@@ -194,6 +235,40 @@ fn document_selects_latest_output_and_diff_with_exact_accounting() {
     assert_eq!(diff.retained_bytes, 6);
     assert_eq!(diff.truncated_bytes, 3);
     assert!(diff.history_incomplete);
+}
+
+#[test]
+fn expanded_read_card_shows_exact_target_before_optional_command_output() {
+    let progressive = snapshot([command_observation(
+        0,
+        "command-read",
+        "42 lines returned",
+        0,
+    )]);
+    let lifecycle = read_lifecycle_snapshot(
+        "command-read",
+        "src/core/app.rs",
+        "C:/dev/akra/src/core/app.rs",
+    );
+    let mut state = ProgressiveActivityDetailState::default();
+    state.replace_snapshots(&progressive, &lifecycle);
+
+    let cards = state.timeline_cards(None);
+    let document = state
+        .card_document(&cards[0])
+        .expect("read card should expose structured detail");
+
+    assert_eq!(cards[0].activity_label, "read");
+    assert_eq!(
+        document.text(),
+        concat!(
+            "read details\n",
+            "1. Read src/core/app.rs\n",
+            "   path: C:/dev/akra/src/core/app.rs\n\n",
+            "Command output\n",
+            "42 lines returned"
+        )
+    );
 }
 
 #[test]

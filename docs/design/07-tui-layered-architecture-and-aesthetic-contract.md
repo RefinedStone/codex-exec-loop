@@ -163,6 +163,14 @@ navigation intent cannot optimistically rewrite it.
   owns the exact wait line, the conversation tail must not duplicate a coarser working line.
 - Keyboard and mouse interaction address the same card identity and bounded expansion state. Hit
   areas are frame receipts and must be discarded after a resize or stale draw.
+- App-server command exploration uses typed `commandActions` as its display authority. `Read`,
+  `ListFiles`, and `Search` keep one concise action/target header when folded and reveal exact
+  bounded targets only in retained detail. When these typed actions exist, the raw shell command
+  must not be retained as presentation detail, and an item with no command-output delta must still
+  be available as a lifecycle-only Activity card.
+- Interactive folding belongs to the live Activity inspection surface. Durable host scrollback is
+  static terminal history, so it must not advertise a click target; transcript Detail view may
+  render the same retained tool detail as a keyboard-readable expansion.
 - App-server agent text is raw Markdown. The transcript projection must interpret its presentation
   syntax consistently for live deltas, completed history, and viewport replay.
 - Fenced code delimiters and their info strings are parser syntax, not transcript content. Hide
@@ -172,7 +180,9 @@ navigation intent cannot optimistically rewrite it.
   uses one right-aligned line-number gutter: deletions show the old line number, while additions and
   context show the new line number.
 - Diff additions, deletions, gutters, metadata, and hunk separators use semantic theme styles.
-  Wrapped continuation rows keep an empty gutter and sign column instead of repeating a source line
+  Addition and deletion code regions extend their semantic background through the available row
+  width while the line-number gutter remains neutral. Wrapped continuation rows keep an empty
+  gutter and sign column, preserve the code-region background, and do not repeat a source line
   number.
 - Diff pagination owns a semantic parser cursor with old/new counters and wrapped-line continuation
   state. Previous and next pages must restore that cursor instead of rescanning the retained

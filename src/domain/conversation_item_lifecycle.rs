@@ -4,13 +4,93 @@ pub const MAX_CONVERSATION_ITEM_IDENTIFIER_BYTES: usize = 4 * 1024;
 pub const MAX_CONVERSATION_ITEM_KIND_LABEL_BYTES: usize = 4 * 1024;
 pub const MAX_CONVERSATION_ITEM_OUTCOME_LABEL_BYTES: usize = 4 * 1024;
 pub const MAX_CONVERSATION_ITEM_SUMMARY_BYTES: usize = 4 * 1024;
+pub const MAX_CONVERSATION_COMMAND_ACTION_TEXT_BYTES: usize = 1024;
+pub const MAX_RETAINED_CONVERSATION_COMMAND_ACTIONS: usize = 16;
+const MAX_CONVERSATION_COMMAND_ACTION_DYNAMIC_BYTES: usize =
+    MAX_RETAINED_CONVERSATION_COMMAND_ACTIONS * MAX_CONVERSATION_COMMAND_ACTION_TEXT_BYTES * 2;
+const MAX_CONVERSATION_ITEM_KIND_OR_ACTION_BYTES: usize =
+    if MAX_CONVERSATION_COMMAND_ACTION_DYNAMIC_BYTES > MAX_CONVERSATION_ITEM_KIND_LABEL_BYTES {
+        MAX_CONVERSATION_COMMAND_ACTION_DYNAMIC_BYTES
+    } else {
+        MAX_CONVERSATION_ITEM_KIND_LABEL_BYTES
+    };
 pub const MAX_RETAINED_CONVERSATION_ITEM_LIFECYCLE_RECORDS: usize = 256;
 pub const MAX_RETAINED_CONVERSATION_ITEM_DYNAMIC_BYTES: usize =
     MAX_RETAINED_CONVERSATION_ITEM_LIFECYCLE_RECORDS
         * (MAX_CONVERSATION_ITEM_IDENTIFIER_BYTES * 3
-            + MAX_CONVERSATION_ITEM_KIND_LABEL_BYTES
             + MAX_CONVERSATION_ITEM_OUTCOME_LABEL_BYTES
-            + MAX_CONVERSATION_ITEM_SUMMARY_BYTES);
+            + MAX_CONVERSATION_ITEM_SUMMARY_BYTES
+            + MAX_CONVERSATION_ITEM_KIND_OR_ACTION_BYTES);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConversationCommandAction {
+    Read {
+        name: String,
+        path: String,
+    },
+    ListFiles {
+        path: Option<String>,
+    },
+    Search {
+        query: Option<String>,
+        path: Option<String>,
+    },
+}
+
+impl ConversationCommandAction {
+    fn retained_dynamic_bytes(&self) -> usize {
+        match self {
+            Self::Read { name, path } => name.len().saturating_add(path.len()),
+            Self::ListFiles { path } => path.as_ref().map_or(0, String::len),
+            Self::Search { query, path } => query
+                .as_ref()
+                .map_or(0, String::len)
+                .saturating_add(path.as_ref().map_or(0, String::len)),
+        }
+    }
+
+    fn fields_fit_bound(&self) -> bool {
+        match self {
+            Self::Read { name, path } => {
+                action_text_fits_bound(name) && action_text_fits_bound(path)
+            }
+            Self::ListFiles { path } => path.as_deref().is_none_or(action_text_fits_bound),
+            Self::Search { query, path } => {
+                query.as_deref().is_none_or(action_text_fits_bound)
+                    && path.as_deref().is_none_or(action_text_fits_bound)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConversationCommandActionProjection {
+    pub actions: Vec<ConversationCommandAction>,
+    pub omitted_action_count: u32,
+    pub read_action_count: u32,
+    pub list_files_action_count: u32,
+    pub search_action_count: u32,
+    pub source_bytes: u64,
+    pub truncated_bytes: u64,
+}
+
+impl ConversationCommandActionProjection {
+    pub fn action_count(&self) -> u32 {
+        self.read_action_count
+            .saturating_add(self.list_files_action_count)
+            .saturating_add(self.search_action_count)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.action_count() == 0
+    }
+
+    pub fn retained_dynamic_bytes(&self) -> usize {
+        self.actions.iter().fold(0usize, |total, action| {
+            total.saturating_add(action.retained_dynamic_bytes())
+        })
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConversationItemLifecycleObservation {
@@ -23,6 +103,7 @@ pub struct ConversationItemLifecycleObservation {
     pub observed_at_ms: Option<i64>,
     pub outcome: ConversationItemOutcome,
     pub summary: String,
+    pub command_actions: ConversationCommandActionProjection,
 }
 
 impl ConversationItemLifecycleObservation {
@@ -156,6 +237,7 @@ impl ConversationItemLifecycleProjectionSnapshot {
                 .saturating_add(kind_bytes)
                 .saturating_add(outcome_bytes)
                 .saturating_add(observation.summary.len())
+                .saturating_add(observation.command_actions.retained_dynamic_bytes())
         })
     }
 }
@@ -341,6 +423,10 @@ pub enum ConversationItemLifecycleRejection {
     MissingIdentity { field: &'static str },
     IdentifierTooLong { field: &'static str },
     SummaryTooLong,
+    TooManyCommandActions,
+    CommandActionFieldTooLong,
+    InvalidCommandActionAccounting,
+    UnexpectedCommandActions,
     InvalidOutcomeLabel,
     MissingLiveTimestamp,
     UnexpectedSnapshotTimestamp,
@@ -374,6 +460,10 @@ impl ConversationItemLifecycleRejection {
             Self::MissingIdentity { .. } => "missing item lifecycle identity",
             Self::IdentifierTooLong { .. } => "oversized item lifecycle identity",
             Self::SummaryTooLong => "oversized item lifecycle summary",
+            Self::TooManyCommandActions => "too many retained command actions",
+            Self::CommandActionFieldTooLong => "oversized command action detail",
+            Self::InvalidCommandActionAccounting => "invalid command action accounting",
+            Self::UnexpectedCommandActions => "unexpected command action detail",
             Self::InvalidOutcomeLabel => "invalid item lifecycle outcome",
             Self::MissingLiveTimestamp => "missing live item lifecycle timestamp",
             Self::UnexpectedSnapshotTimestamp => "unexpected snapshot item lifecycle timestamp",
@@ -403,6 +493,7 @@ fn validate_observation(
     if observation.summary.len() > MAX_CONVERSATION_ITEM_SUMMARY_BYTES {
         return Err(ConversationItemLifecycleRejection::SummaryTooLong);
     }
+    validate_command_actions(&observation.kind, &observation.command_actions)?;
     if let ConversationItemOutcome::Unknown(label) = &observation.outcome
         && label.len() > MAX_CONVERSATION_ITEM_OUTCOME_LABEL_BYTES
     {
@@ -434,6 +525,40 @@ fn validate_observation(
         _ => {}
     }
     Ok(())
+}
+
+fn validate_command_actions(
+    kind: &ConversationItemKind,
+    projection: &ConversationCommandActionProjection,
+) -> Result<(), ConversationItemLifecycleRejection> {
+    if !matches!(kind, ConversationItemKind::CommandExecution) && !projection.is_empty() {
+        return Err(ConversationItemLifecycleRejection::UnexpectedCommandActions);
+    }
+    if projection.actions.len() > MAX_RETAINED_CONVERSATION_COMMAND_ACTIONS {
+        return Err(ConversationItemLifecycleRejection::TooManyCommandActions);
+    }
+    if projection
+        .actions
+        .iter()
+        .any(|action| !action.fields_fit_bound())
+    {
+        return Err(ConversationItemLifecycleRejection::CommandActionFieldTooLong);
+    }
+    let retained_count = u32::try_from(projection.actions.len()).unwrap_or(u32::MAX);
+    if projection.action_count() != retained_count.saturating_add(projection.omitted_action_count) {
+        return Err(ConversationItemLifecycleRejection::InvalidCommandActionAccounting);
+    }
+    let retained_bytes = u64::try_from(projection.retained_dynamic_bytes()).unwrap_or(u64::MAX);
+    if projection.source_bytes < retained_bytes
+        || projection.source_bytes.saturating_sub(retained_bytes) != projection.truncated_bytes
+    {
+        return Err(ConversationItemLifecycleRejection::InvalidCommandActionAccounting);
+    }
+    Ok(())
+}
+
+fn action_text_fits_bound(value: &str) -> bool {
+    value.len() <= MAX_CONVERSATION_COMMAND_ACTION_TEXT_BYTES
 }
 
 fn validate_identifier(
@@ -468,6 +593,7 @@ mod tests {
             observed_at_ms: Some(timestamp),
             outcome: ConversationItemOutcome::NotReported,
             summary: "command [redacted]".to_string(),
+            command_actions: Default::default(),
         }
     }
 
@@ -560,9 +686,20 @@ mod tests {
     fn lifecycle_projection_bounds_worst_case_retained_dynamic_bytes() {
         let mut projection = ConversationItemLifecycleProjection::default();
         let maximum_identifier = "i".repeat(MAX_CONVERSATION_ITEM_IDENTIFIER_BYTES);
-        let maximum_kind = "k".repeat(MAX_CONVERSATION_ITEM_KIND_LABEL_BYTES);
         let maximum_outcome = "o".repeat(MAX_CONVERSATION_ITEM_OUTCOME_LABEL_BYTES);
         let maximum_summary = "s".repeat(MAX_CONVERSATION_ITEM_SUMMARY_BYTES);
+        let maximum_action_text = "a".repeat(MAX_CONVERSATION_COMMAND_ACTION_TEXT_BYTES);
+        let maximum_actions = ConversationCommandActionProjection {
+            actions: (0..MAX_RETAINED_CONVERSATION_COMMAND_ACTIONS)
+                .map(|_| ConversationCommandAction::Read {
+                    name: maximum_action_text.clone(),
+                    path: maximum_action_text.clone(),
+                })
+                .collect(),
+            read_action_count: MAX_RETAINED_CONVERSATION_COMMAND_ACTIONS as u32,
+            source_bytes: MAX_CONVERSATION_COMMAND_ACTION_DYNAMIC_BYTES as u64,
+            ..Default::default()
+        };
 
         for index in 0..MAX_RETAINED_CONVERSATION_ITEM_LIFECYCLE_RECORDS * 2 {
             let mut item_id = index.to_string();
@@ -574,12 +711,13 @@ mod tests {
                     thread_id: maximum_identifier.clone(),
                     turn_id: maximum_identifier.clone(),
                     item_id,
-                    kind: ConversationItemKind::Unknown(maximum_kind.clone()),
+                    kind: ConversationItemKind::CommandExecution,
                     phase: ConversationItemLifecyclePhase::Completed,
                     source: ConversationItemLifecycleSource::Live,
                     observed_at_ms: Some(index as i64),
                     outcome: ConversationItemOutcome::Unknown(maximum_outcome.clone()),
                     summary: maximum_summary.clone(),
+                    command_actions: maximum_actions.clone(),
                 })
                 .unwrap();
         }
