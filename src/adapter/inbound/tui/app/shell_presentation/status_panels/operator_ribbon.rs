@@ -95,38 +95,15 @@ impl OperatorAttentionProjection {
     }
 
     fn label(&self, language: TuiLanguage) -> &'static str {
-        match (language, self.availability, self.warning_count()) {
-            (TuiLanguage::English, ShellActionAvailability::Pending, _) => "CHECKING",
-            (TuiLanguage::English, ShellActionAvailability::Blocked, _) => "BLOCKED",
-            (TuiLanguage::English, ShellActionAvailability::Ready, 1..) => "DEGRADED",
-            (TuiLanguage::English, ShellActionAvailability::Ready, 0) => "NOTICE",
-            (TuiLanguage::Korean, ShellActionAvailability::Pending, _) => "확인 중",
-            (TuiLanguage::Korean, ShellActionAvailability::Blocked, _) => "차단",
-            (TuiLanguage::Korean, ShellActionAvailability::Ready, 1..) => "주의",
-            (TuiLanguage::Korean, ShellActionAvailability::Ready, 0) => "알림",
-        }
+        language.operator_attention_label(self.availability, self.warning_count())
     }
 
     fn impact(&self, language: TuiLanguage) -> &'static str {
-        match (language, self.availability, self.warning_count()) {
-            (TuiLanguage::English, ShellActionAvailability::Pending, _) => "input pending",
-            (TuiLanguage::English, ShellActionAvailability::Blocked, _) => "input locked",
-            (TuiLanguage::English, ShellActionAvailability::Ready, 1..) => "runtime degraded",
-            (TuiLanguage::English, ShellActionAvailability::Ready, 0) => "runtime update",
-            (TuiLanguage::Korean, ShellActionAvailability::Pending, _) => "입력 대기",
-            (TuiLanguage::Korean, ShellActionAvailability::Blocked, _) => "입력 잠김",
-            (TuiLanguage::Korean, ShellActionAvailability::Ready, 1..) => "런타임 저하",
-            (TuiLanguage::Korean, ShellActionAvailability::Ready, 0) => "런타임 갱신",
-        }
+        language.operator_attention_impact(self.availability, self.warning_count())
     }
 
     fn action(&self, language: TuiLanguage) -> &'static str {
-        match (language, self.availability) {
-            (TuiLanguage::English, ShellActionAvailability::Blocked) => "Ctrl+D resolve",
-            (TuiLanguage::English, _) => "Ctrl+D details",
-            (TuiLanguage::Korean, ShellActionAvailability::Blocked) => "Ctrl+D 해결",
-            (TuiLanguage::Korean, _) => "Ctrl+D 상세",
-        }
+        language.operator_attention_action(self.availability)
     }
 
     fn tone(&self) -> RibbonTone {
@@ -290,14 +267,18 @@ pub(super) fn build_operator_attention_line(
     if attention.warning_count() > 0 {
         count_segments.push(format!(
             "{} {}",
-            warning_label(screen_model.tui_language, attention.warning_count()),
+            screen_model
+                .tui_language
+                .operator_warning_label(attention.warning_count()),
             attention.warning_count()
         ));
     }
     if attention.runtime_notice_count() > 0 {
         count_segments.push(format!(
             "{} {}",
-            runtime_notice_label(screen_model.tui_language, attention.runtime_notice_count(),),
+            screen_model
+                .tui_language
+                .operator_runtime_notice_label(attention.runtime_notice_count()),
             attention.runtime_notice_count()
         ));
     }
@@ -492,45 +473,16 @@ fn separator(compact: bool) -> Span<'static> {
 }
 
 fn metric_label(language: TuiLanguage, metric: &str, compact: bool) -> &'static str {
-    match (language, metric, compact) {
-        (_, "queue", true) => "q",
-        (_, "agents", true) => "a",
-        (_, "terminals", true) => "t",
-        (TuiLanguage::English, "queue", false) => "queue",
-        (TuiLanguage::English, "agents", false) => "agents",
-        (TuiLanguage::English, "terminals", false) => "terminals",
-        (TuiLanguage::Korean, "queue", false) => "큐",
-        (TuiLanguage::Korean, "agents", false) => "요원",
-        (TuiLanguage::Korean, "terminals", false) => "터미널",
+    match metric {
+        "queue" => language.operator_queue_metric_label(compact),
+        "agents" => language.operator_agent_metric_label(compact),
+        "terminals" => language.operator_terminal_metric_label(compact),
         _ => "?",
     }
 }
 
 fn localized_state(language: TuiLanguage, state: &str) -> String {
-    match (language, state) {
-        (TuiLanguage::Korean, "off") => "꺼짐".to_string(),
-        (TuiLanguage::Korean, "blocked") => "차단".to_string(),
-        (TuiLanguage::Korean, "pending" | "loading") => "대기".to_string(),
-        (TuiLanguage::Korean, "ready") => "준비".to_string(),
-        (TuiLanguage::Korean, "idle") => "유휴".to_string(),
-        _ => state.to_string(),
-    }
-}
-
-fn warning_label(language: TuiLanguage, count: usize) -> &'static str {
-    match (language, count) {
-        (TuiLanguage::English, 1) => "warning",
-        (TuiLanguage::English, _) => "warnings",
-        (TuiLanguage::Korean, _) => "경고",
-    }
-}
-
-fn runtime_notice_label(language: TuiLanguage, count: usize) -> &'static str {
-    match (language, count) {
-        (TuiLanguage::English, 1) => "runtime notice",
-        (TuiLanguage::English, _) => "runtime notices",
-        (TuiLanguage::Korean, _) => "런타임 알림",
-    }
+    language.operator_state_label(state)
 }
 
 fn compact_workspace_label(workspace_directory: &str) -> String {

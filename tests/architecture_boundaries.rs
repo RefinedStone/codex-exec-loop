@@ -1760,9 +1760,11 @@ fn global_parallel_cleanup_notices_are_owned_by_application_projection_and_pure_
     );
 
     let tail_path = "src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_copy.rs";
+    let operator_ribbon_path =
+        "src/adapter/inbound/tui/app/shell_presentation/status_panels/operator_ribbon.rs";
     assert_no_semantic_references_in_paths(
         "pure tail copy must consume only screen-model notice data",
-        &[tail_path],
+        &[tail_path, operator_ribbon_path],
         &[],
         &[
             "NativeTuiApp",
@@ -1773,16 +1775,16 @@ fn global_parallel_cleanup_notices_are_owned_by_application_projection_and_pure_
     );
     assert_no_forbidden_references_in_paths(
         "pure tail copy must not pull global notices from application authority",
-        &[tail_path],
+        &[tail_path, operator_ribbon_path],
         &["parallel_mode_control_plane", "presentation_projection"],
     );
-    let tail_source = fs::read_to_string(repo_root().join(tail_path))
-        .expect("inline tail copy source should load");
-    let tail_content =
-        top_level_function_source(&tail_source, "build_inline_tail_content_with_context");
+    let operator_ribbon_source = fs::read_to_string(repo_root().join(operator_ribbon_path))
+        .expect("operator ribbon source should load");
+    let attention_projection =
+        top_level_impl_method_source(&operator_ribbon_source, "from_screen_model");
     assert!(
-        tail_content.contains("screen_model.global_runtime_notices"),
-        "pure tail copy must read global cleanup notices only from ConversationScreenModel"
+        attention_projection.contains(".global_runtime_notices"),
+        "pure operator ribbon must read global cleanup notices only from ConversationScreenModel"
     );
 }
 
