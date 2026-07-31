@@ -1,6 +1,6 @@
 use super::*;
 use crate::adapter::inbound::tui::app::conversation_model::{
-    AutoFollowSkipReason, ProgressiveActivityDetailKind,
+    AutoFollowSkipReason, ProgressiveActivityDetailKind, tool_message_digest,
 };
 use crate::adapter::inbound::tui::app::conversation_runtime::{
     ConversationRuntimeEffect, PostTurnContinuationAction, PostTurnEvaluationOutcome,
@@ -973,6 +973,58 @@ fn ctrl_q_requests_quit() {
     )));
 
     assert!(runtime.should_quit());
+}
+
+#[test]
+fn ctrl_e_toggles_the_latest_live_tool_card_without_requiring_a_mouse_hit_area() {
+    let mut runtime = make_test_runtime();
+    let tool_text = "Read src/lib.rs\n1. Read src/lib.rs\n   path: C:/dev/akra/src/lib.rs";
+    let digest = tool_message_digest(Some("read-runtime-1"), tool_text);
+    let ConversationState::Ready(conversation) =
+        &mut runtime.app_mut().conversation.lifecycle.conversation_state
+    else {
+        panic!("test runtime should start with a ready conversation")
+    };
+    conversation.buffer_tool_message_with_detail(
+        tool_text,
+        Some("read".to_string()),
+        Some("read-runtime-1".to_string()),
+        None,
+    );
+    runtime
+        .app_mut()
+        .shell
+        .inline_transcript_ui_state
+        .bind_cards(vec![digest], Vec::new());
+    runtime.take_redraw_request();
+
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::Char('e'),
+        KeyModifiers::CONTROL,
+    )));
+
+    assert!(
+        runtime
+            .app()
+            .shell
+            .progressive_activity_overlay_ui_state
+            .expand_state()
+            .is_tool_expanded(digest)
+    );
+    assert!(runtime.take_redraw_request());
+
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::Char('e'),
+        KeyModifiers::CONTROL,
+    )));
+    assert!(
+        !runtime
+            .app()
+            .shell
+            .progressive_activity_overlay_ui_state
+            .expand_state()
+            .is_tool_expanded(digest)
+    );
 }
 #[test]
 fn confirmed_exit_hides_modal_then_quits_after_redraw() {

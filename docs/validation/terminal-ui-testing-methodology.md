@@ -227,6 +227,7 @@ Every TUI rendering PR should state which rows it touches.
 | Streaming turn | active cell or live delta stays live, final output becomes committed history |
 | Transcript handoff receipt | exact conversation/turn/generation/revision ACK only; stale identity and later-appended transcript remain pending; terminal draw failure retries without ACK |
 | Frame render receipt | owned model captured before draw; failed/resize-raced/stale/duplicate delivery applies nothing; exact stable attempt compare-and-applies feedback once |
+| Inline conversation cards | tool completion is visible before the next Commentary; folded read targets open by click and `Ctrl+E`; patch previews retain semantic line numbers/bands; resize or stale receipts expose no old hit area; host scrollback never advertises a click target |
 | Overlay | opening overlay clears stale live-tail rows and closing redraws normal tail |
 | Parallel event stream | frame recorder proves stable event identity, disjoint host/live ownership, monotonic receipt settlement, initial status-row continuity, newest-live clipping, focused cursor parking, durable resize guards, and a titleless live tail without panel chrome in host scrollback |
 | Terminal fallback | automatic newline fallback preserves host history, viewport state, and cursor; explicit standard mode remains representative diagnostic coverage |

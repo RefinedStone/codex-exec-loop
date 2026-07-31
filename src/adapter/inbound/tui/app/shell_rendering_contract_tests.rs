@@ -169,7 +169,7 @@ fn transcript_view_modes_filter_tool_and_status_rows() {
     assert!(simple.contains("You:"));
     assert!(simple.contains("Codex Commentary:"));
     assert!(simple.contains("Codex:"));
-    assert!(!simple.contains("◆ "));
+    assert!(simple.contains("tool") && simple.contains("cargo test"));
     assert!(!simple.contains("Status:"));
 
     let medium = format_conversation_lines_for_view(&messages, ConversationViewMode::Medium, false)
@@ -180,7 +180,7 @@ fn transcript_view_modes_filter_tool_and_status_rows() {
     assert!(medium.contains("◆ ") && medium.contains("tool"));
     assert!(medium.contains("Status:"));
 
-    let only_hidden_messages = messages[3..].to_vec();
+    let only_hidden_messages = messages[4..].to_vec();
     let simple_empty = format_conversation_lines_for_view(
         &only_hidden_messages,
         ConversationViewMode::Simple,

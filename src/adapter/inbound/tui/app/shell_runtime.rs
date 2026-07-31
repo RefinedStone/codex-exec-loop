@@ -154,9 +154,13 @@ impl ShellRuntime {
     pub(super) fn clear_queue_receipt_undo_hit_area(&mut self) {
         self.app.clear_queue_receipt_undo_hit_area();
     }
+    pub(super) fn clear_inline_transcript_card_hit_areas(&mut self) {
+        self.app.clear_inline_transcript_card_hit_areas();
+    }
     pub(super) fn mouse_capture_requested(&self) -> bool {
         self.app.queue_receipt_undo_mouse_capture_requested()
             || self.app.progressive_activity_mouse_capture_requested()
+            || self.app.inline_transcript_mouse_capture_requested()
     }
     pub(super) fn should_quit(&self) -> bool {
         self.should_quit
@@ -366,7 +370,8 @@ impl ShellRuntime {
                 self.handle_key_press(key, now);
             }
             Event::Mouse(mouse) => {
-                if self.app.handle_progressive_activity_mouse_event(mouse)
+                if self.app.handle_inline_transcript_mouse_event(mouse)
+                    || self.app.handle_progressive_activity_mouse_event(mouse)
                     || self.app.handle_queue_receipt_mouse_event(mouse)
                 {
                     self.request_redraw_at(now);
@@ -383,6 +388,7 @@ impl ShellRuntime {
                 self.terminal_resize_epoch = self.terminal_resize_epoch.saturating_add(1);
                 self.app.clear_queue_receipt_undo_hit_area();
                 self.app.clear_progressive_activity_card_hit_areas();
+                self.app.clear_inline_transcript_card_hit_areas();
                 self.request_redraw_at(now);
             }
             Event::FocusGained => {
@@ -515,6 +521,11 @@ impl ShellRuntime {
             }
             KeyCode::Char('w') if key.modifiers == KeyModifiers::CONTROL => {
                 self.app.delete_previous_input_word()
+            }
+            KeyCode::Char('e') if key.modifiers == KeyModifiers::CONTROL => {
+                if !self.app.toggle_latest_inline_transcript_tool_card() {
+                    return;
+                }
             }
             KeyCode::Left if key.modifiers.is_empty() => self
                 .app

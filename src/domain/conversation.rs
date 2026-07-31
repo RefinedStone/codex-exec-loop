@@ -220,6 +220,10 @@ pub enum ConversationToolActivityKind {
 pub struct ConversationToolActivity {
     // activity의 분류이다.
     pub kind: ConversationToolActivityKind,
+    // item_id binds the compact transcript card to the exact app-server item.
+    // Presentation uses it to recover retained read targets or patch detail without
+    // guessing from prose or pairing unrelated concurrent tool events.
+    pub item_id: Option<String>,
     // activity summary 문구이다.
     pub text: String,
     // Structured app-server actions can provide a clearer read/list/search label than generic "tool".

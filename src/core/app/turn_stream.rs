@@ -1887,6 +1887,7 @@ mod tests {
         let mut state = TurnStreamState::new();
         let activity = ConversationToolActivity {
             kind: ConversationToolActivityKind::FileChange,
+            item_id: Some("file-change-1".to_string()),
             text: "edited src/lib.rs".to_string(),
             display_label: None,
             file_change_count: 1,

@@ -701,6 +701,7 @@ mod tests {
                 sequence,
                 kind: ProgressiveActivityCardKind::Command,
             },
+            item_id: Some(format!("command-{sequence}")),
             activity_label: "command",
             title: "cargo test".to_string(),
             summary: summary.to_string(),

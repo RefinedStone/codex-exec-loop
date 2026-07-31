@@ -195,17 +195,34 @@ impl ConversationViewModel {
         self.buffer_tool_message_with_label(text, None);
     }
 
+    #[cfg(test)]
     pub(crate) fn buffer_tool_message_with_label(
         &mut self,
         text: impl Into<String>,
         display_label: Option<String>,
     ) {
-        let text = text.into();
+        self.buffer_tool_message_with_detail(text, display_label, None, None);
+    }
+
+    pub(crate) fn buffer_tool_message_with_detail(
+        &mut self,
+        text: impl Into<String>,
+        display_label: Option<String>,
+        item_id: Option<String>,
+        detail: Option<String>,
+    ) {
+        let mut text = text.into();
         if text.trim().is_empty() {
             return;
         }
 
-        let mut message = ConversationMessage::new(ConversationMessageKind::Tool, text, None, None);
+        if let Some(detail) = detail.as_deref().filter(|detail| !detail.trim().is_empty()) {
+            text.push('\n');
+            text.push_str(detail);
+        }
+
+        let mut message =
+            ConversationMessage::new(ConversationMessageKind::Tool, text, None, item_id);
         if let Some(display_label) = display_label {
             message = message.with_display_label(display_label);
         }
@@ -297,6 +314,7 @@ impl ConversationViewModel {
         }
 
         self.commit_live_agent_message();
+        self.flush_buffered_tool_messages();
         let mut message =
             ConversationMessage::new(ConversationMessageKind::Agent, delta, phase, Some(item_id));
         bound_conversation_message(&mut message);
@@ -321,6 +339,7 @@ impl ConversationViewModel {
         }
 
         self.commit_live_agent_message();
+        self.flush_buffered_tool_messages();
         let mut message =
             ConversationMessage::new(ConversationMessageKind::Agent, text, phase, Some(item_id));
         bound_conversation_message(&mut message);
@@ -343,6 +362,7 @@ impl ConversationViewModel {
             if message.item_id.as_deref() == Some(item_id.as_str()) {
                 message.text = text;
                 message.phase = phase;
+                self.flush_buffered_tool_messages();
                 self.push_message(message);
                 self.hold_latest_committed_agent_in_viewport();
                 return true;
@@ -366,6 +386,7 @@ impl ConversationViewModel {
             return true;
         }
 
+        self.flush_buffered_tool_messages();
         self.push_message(ConversationMessage::new(
             ConversationMessageKind::Agent,
             text,
@@ -389,6 +410,26 @@ impl ConversationViewModel {
         self.push_message(message);
         self.hold_latest_committed_agent_in_viewport();
         true
+    }
+
+    pub(crate) fn buffered_tool_messages(&self) -> &[ConversationMessage] {
+        &self.buffered_tool_messages
+    }
+
+    pub(crate) fn visible_inline_tool_message_has_digest(&self, digest: [u8; 32]) -> bool {
+        self.viewport_transcript_handoff_messages()
+            .or_else(|| self.viewport_transcript_handoff_release_messages())
+            .into_iter()
+            .flatten()
+            .chain(self.buffered_tool_messages.iter())
+            .chain(self.live_agent_message.iter())
+            .filter(|message| message.kind == ConversationMessageKind::Tool)
+            .any(|message| {
+                super::super::progressive_activity_cards::tool_message_digest(
+                    message.item_id.as_deref(),
+                    &message.text,
+                ) == digest
+            })
     }
 
     pub(crate) fn host_scrollback_messages(&self) -> &[ConversationMessage] {
@@ -736,6 +777,40 @@ mod retention_tests {
                 .last()
                 .map(|message| message.text.as_str()),
             Some("tool-256")
+        );
+    }
+
+    #[test]
+    fn buffered_tool_is_committed_before_the_next_agent_commentary() {
+        let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
+        assert!(conversation.complete_live_agent_message(
+            "agent-commentary-1".to_string(),
+            Some("commentary".to_string()),
+            "I will inspect the event reducer.".to_string(),
+        ));
+        conversation.buffer_tool_message("Read src/lib.rs");
+
+        assert!(conversation.complete_live_agent_message(
+            "agent-commentary-2".to_string(),
+            Some("commentary".to_string()),
+            "The event reducer is next.".to_string(),
+        ));
+
+        let visible = conversation
+            .messages
+            .iter()
+            .map(|message| (message.kind, message.text.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            visible,
+            vec![
+                (
+                    ConversationMessageKind::Agent,
+                    "I will inspect the event reducer."
+                ),
+                (ConversationMessageKind::Tool, "Read src/lib.rs"),
+                (ConversationMessageKind::Agent, "The event reducer is next."),
+            ]
         );
     }
 

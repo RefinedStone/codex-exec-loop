@@ -353,6 +353,64 @@ impl NativeTuiApp {
             .clear_card_hit_areas();
     }
 
+    pub(super) fn inline_transcript_mouse_capture_requested(&self) -> bool {
+        self.shell.chrome.shell_overlay == ShellOverlay::Hidden
+            && self
+                .shell
+                .inline_transcript_ui_state
+                .mouse_capture_requested()
+    }
+
+    pub(super) fn clear_inline_transcript_card_hit_areas(&mut self) {
+        self.shell.inline_transcript_ui_state.clear_card_hit_areas();
+    }
+
+    fn toggle_inline_transcript_tool_card(&mut self, digest: [u8; 32]) -> bool {
+        if self.shell.chrome.shell_overlay != ShellOverlay::Hidden {
+            return false;
+        }
+        let ConversationState::Ready(conversation) =
+            &self.conversation.lifecycle.conversation_state
+        else {
+            return false;
+        };
+        if !conversation.visible_inline_tool_message_has_digest(digest) {
+            return false;
+        }
+        self.shell
+            .progressive_activity_overlay_ui_state
+            .expand_state_mut()
+            .toggle_tool(digest);
+        true
+    }
+
+    pub(super) fn toggle_latest_inline_transcript_tool_card(&mut self) -> bool {
+        let Some(digest) = self.shell.inline_transcript_ui_state.latest_digest() else {
+            return false;
+        };
+        self.toggle_inline_transcript_tool_card(digest)
+    }
+
+    pub(super) fn handle_inline_transcript_mouse_event(
+        &mut self,
+        mouse: event::MouseEvent,
+    ) -> bool {
+        if self.shell.chrome.shell_overlay != ShellOverlay::Hidden
+            || mouse.kind != event::MouseEventKind::Down(event::MouseButton::Left)
+            || mouse.modifiers != KeyModifiers::NONE
+        {
+            return false;
+        }
+        let Some(digest) = self
+            .shell
+            .inline_transcript_ui_state
+            .digest_at(mouse.column, mouse.row)
+        else {
+            return false;
+        };
+        self.toggle_inline_transcript_tool_card(digest)
+    }
+
     pub(super) fn handle_progressive_activity_mouse_event(
         &mut self,
         mouse: event::MouseEvent,

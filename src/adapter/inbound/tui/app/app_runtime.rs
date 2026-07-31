@@ -224,6 +224,7 @@ mod tests {
     fn application_stream_events_map_to_core_stream_events() {
         let activity = ConversationToolActivity {
             kind: ConversationToolActivityKind::CommandExecution,
+            item_id: Some("command-1".to_string()),
             text: "cargo test".to_string(),
             display_label: None,
             file_change_count: 0,
@@ -1620,6 +1621,7 @@ impl NativeTuiApp {
                 parallel_peek_overlay_ui_state: super::ParallelPeekOverlayUiState::default(),
                 progressive_activity_overlay_ui_state:
                     super::ProgressiveActivityOverlayUiState::default(),
+                inline_transcript_ui_state: super::InlineTranscriptUiState::default(),
                 help_scroll_offset: 0,
                 reviews_overlay_ui_state: super::reviews_overlay_ui::ReviewsOverlayUiState::default(
                 ),

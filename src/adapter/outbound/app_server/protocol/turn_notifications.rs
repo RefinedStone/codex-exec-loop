@@ -20,7 +20,8 @@ use crate::domain::conversation_item_lifecycle::{
 use crate::domain::conversation_progressive_activity::{
     ConversationProgressiveActivityBatch, ConversationProgressiveActivityKind,
     ConversationProgressiveActivityObservation, ConversationProgressiveActivityPayload,
-    MAX_PROGRESSIVE_ACTIVITY_IDENTIFIER_BYTES, bounded_progressive_prefix,
+    MAX_PROGRESSIVE_ACTIVITY_IDENTIFIER_BYTES, MAX_PROGRESSIVE_DIFF_DETAIL_BYTES,
+    bounded_progressive_prefix,
 };
 use crate::domain::conversation_runtime_envelope::{
     ConversationRuntimeEnvelopeObservation, ConversationRuntimeObservationGap,
@@ -1149,7 +1150,7 @@ pub(super) fn to_conversation_message(item: Value) -> Option<ConversationMessage
         "fileChange" if item.get("status").and_then(Value::as_str) == Some("completed") => Some(
             ConversationMessage::new(
                 ConversationMessageKind::Tool,
-                format_file_change_summary(&item),
+                format_file_change_transcript(&item),
                 None,
                 item.get("id").and_then(Value::as_str).map(str::to_string),
             )
@@ -1233,6 +1234,60 @@ fn format_file_change_summary(item: &Value) -> String {
         .collect::<Vec<_>>();
 
     format!("file change: {}", entries.join(", "))
+}
+
+fn format_file_change_transcript(item: &Value) -> String {
+    let summary = format_file_change_summary(item);
+    let mut detail = String::new();
+    let mut truncated_bytes = 0_u64;
+    let mut saw_diff = false;
+    for change in item
+        .get("changes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(diff) = change
+            .get("diff")
+            .and_then(Value::as_str)
+            .filter(|diff| !diff.trim().is_empty())
+        else {
+            continue;
+        };
+        saw_diff = true;
+        let path = change
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown-path");
+        let kind = change
+            .get("kind")
+            .and_then(|value| value.get("type"))
+            .and_then(Value::as_str)
+            .unwrap_or("update");
+        if !detail.is_empty() && detail.len() < MAX_PROGRESSIVE_DIFF_DETAIL_BYTES {
+            detail.push('\n');
+        }
+        let remaining = MAX_PROGRESSIVE_DIFF_DETAIL_BYTES.saturating_sub(detail.len());
+        let (header, header_truncated_bytes) =
+            bounded_progressive_prefix(&format!("[{kind}] {path}\n"), remaining);
+        detail.push_str(&header);
+        truncated_bytes = truncated_bytes.saturating_add(header_truncated_bytes);
+
+        let remaining = MAX_PROGRESSIVE_DIFF_DETAIL_BYTES.saturating_sub(detail.len());
+        let (diff, diff_truncated_bytes) = bounded_progressive_prefix(diff, remaining);
+        detail.push_str(&diff);
+        truncated_bytes = truncated_bytes.saturating_add(diff_truncated_bytes);
+    }
+    if !saw_diff {
+        return summary;
+    }
+
+    let truncation_notice = if truncated_bytes > 0 {
+        format!("\n... {truncated_bytes} diff bytes omitted")
+    } else {
+        String::new()
+    };
+    format!("{summary}\n{detail}{truncation_notice}")
 }
 
 fn count_file_changes(item: &Value) -> usize {
@@ -1483,6 +1538,7 @@ fn handle_completed_item(
                 ConversationStreamEvent::ToolActivity {
                     activity: ConversationToolActivity {
                         kind: ConversationToolActivityKind::FileChange,
+                        item_id: item.get("id").and_then(Value::as_str).map(str::to_string),
                         text: format_file_change_summary(item),
                         display_label: Some("patch".to_string()),
                         file_change_count: count_file_changes(item),
@@ -1498,6 +1554,7 @@ fn handle_completed_item(
                 ConversationStreamEvent::ToolActivity {
                     activity: ConversationToolActivity {
                         kind: ConversationToolActivityKind::CommandExecution,
+                        item_id: item.get("id").and_then(Value::as_str).map(str::to_string),
                         text: copy.text,
                         display_label: copy.display_label,
                         file_change_count: 0,
@@ -1714,6 +1771,28 @@ mod terminal_receipt_tests {
             )
         );
         assert!(!format!("{message:?}").contains(raw_command));
+    }
+
+    #[test]
+    fn snapshot_file_change_retains_diff_for_conversation_expansion() {
+        let item = json!({
+            "id": "patch-item",
+            "type": "fileChange",
+            "status": "completed",
+            "changes": [{
+                "path": "src/lib.rs",
+                "diff": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -7 +7 @@\n-old\n+new\n",
+                "kind": { "type": "update" }
+            }]
+        });
+
+        let message = to_conversation_message(item).expect("file change transcript message");
+
+        assert_eq!(message.display_label.as_deref(), Some("patch"));
+        assert!(message.text.starts_with("file change: update src/lib.rs\n"));
+        assert!(message.text.contains("[update] src/lib.rs"));
+        assert!(message.text.contains("@@ -7 +7 @@"));
+        assert!(message.text.contains("-old\n+new"));
     }
 
     #[test]

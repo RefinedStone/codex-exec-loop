@@ -4,7 +4,9 @@ use ratatui::text::Line;
 
 use crate::application::service::planning::PlanningRuntimeProjection;
 
-use super::{ConversationLiveTranscriptScreenModel, ConversationScreenModel};
+#[cfg(test)]
+use super::ConversationLiveTranscriptScreenModel;
+use super::ConversationScreenModel;
 
 // Activity rail copy owns cross-source priority and width budgeting for the live operator notice.
 #[path = "status_panels/activity_rail.rs"]
@@ -55,6 +57,7 @@ pub(super) fn build_inline_tail_lines(
 }
 
 // Shared live-agent projection used by main tail and overlays so streaming/tool activity speaks with one vocabulary.
+#[cfg(test)]
 pub(super) fn current_live_agent_lines(
     live_transcript: &ConversationLiveTranscriptScreenModel<'_>,
 ) -> Option<Vec<Line<'static>>> {

@@ -1,10 +1,15 @@
+#[cfg(test)]
 use ratatui::text::Line;
 
 use crate::adapter::inbound::tui::supersession_mud::parallel_mode_progress_summary;
 
+#[cfg(test)]
+use super::super::ConversationLiveTranscriptScreenModel;
+#[cfg(test)]
+use super::super::format_conversation_lines;
 use super::super::{
-    AutoFollowSnapshotPresentation, ConversationLiveTranscriptScreenModel, ConversationScreenModel,
-    ConversationViewModel, compact_inline_detail, format_conversation_lines,
+    AutoFollowSnapshotPresentation, ConversationScreenModel, ConversationViewModel,
+    compact_inline_detail,
 };
 use super::activity_rail::build_activity_rail_notice_line;
 
@@ -13,6 +18,7 @@ use super::activity_rail::build_activity_rail_notice_line;
  * renderer마다 직접 ConversationViewModel을 뒤지면 thread label, auto-follow 상태, operator notice의
  * 우선순위와 축약 규칙이 달라지기 쉽다. 그래서 이 파일이 공통 copy를 만들고, tail_copy는 배치와 스타일에만 집중한다.
  */
+#[cfg(test)]
 pub(super) fn current_live_agent_lines(
     live_transcript: &ConversationLiveTranscriptScreenModel<'_>,
 ) -> Option<Vec<Line<'static>>> {
@@ -23,6 +29,11 @@ pub(super) fn current_live_agent_lines(
     let mut lines = Vec::new();
     if let Some(messages) = live_transcript.handoff_messages {
         lines.extend(format_conversation_lines(messages));
+    }
+    if !live_transcript.buffered_tool_messages.is_empty() {
+        lines.extend(format_conversation_lines(
+            live_transcript.buffered_tool_messages,
+        ));
     }
     if let Some(message) = live_transcript.live_agent_message {
         lines.extend(format_conversation_lines(std::slice::from_ref(message)));

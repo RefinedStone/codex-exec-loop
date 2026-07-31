@@ -82,6 +82,8 @@ mod inline_frame_model;
 mod inline_shell_commands;
 #[path = "app/inline_terminal_adapter.rs"]
 mod inline_terminal_adapter;
+#[path = "app/inline_transcript_ui.rs"]
+mod inline_transcript_ui;
 #[path = "app/language.rs"]
 mod language;
 #[path = "app/model_selection_overlay_ui.rs"]
@@ -216,6 +218,7 @@ use inline_shell_commands::{
     InlineShellCommandCapabilityContext, InlineShellCommandCapabilitySet, InlineShellCommandInput,
     InlineShellCommandStartupReadiness, is_turn_option_clear_argument,
 };
+use inline_transcript_ui::{InlineTranscriptCardHitArea, InlineTranscriptUiState};
 use language::{LANGUAGE_SELECTION_OPTIONS, LanguageSelectionOverlayUiState, TuiLanguage};
 use model_selection_overlay_ui::{
     MODEL_SELECTION_EFFORT_OPTIONS, MODEL_SELECTION_MODEL_OPTIONS, ModelSelectionOverlayUiState,
@@ -380,6 +383,7 @@ struct NativeTuiShellState {
     supersession_mud_ui_state: SupersessionMudUiState,
     parallel_peek_overlay_ui_state: ParallelPeekOverlayUiState,
     progressive_activity_overlay_ui_state: ProgressiveActivityOverlayUiState,
+    inline_transcript_ui_state: InlineTranscriptUiState,
     help_scroll_offset: usize,
     reviews_overlay_ui_state: reviews_overlay_ui::ReviewsOverlayUiState,
     parallel_event_stream: ParallelEventStreamState,

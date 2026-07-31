@@ -503,8 +503,8 @@ impl ConversationViewModel {
             .map(str::to_string)
             .unwrap_or_else(|| self.planning_workspace_directory().to_string());
 
-        self.commit_live_agent_message();
         self.flush_buffered_tool_messages();
+        self.commit_live_agent_message();
         self.turn_activity
             .register_changed_planning_file_paths(changed_planning_file_paths);
         self.turn_activity.complete_turn(turn_id);
@@ -529,8 +529,8 @@ impl ConversationViewModel {
         terminal_state: Option<ActivityRailTerminalState>,
     ) {
         // Preserve whatever stream content arrived before failure, then reopen the input gate.
-        self.commit_live_agent_message();
         self.flush_buffered_tool_messages();
+        self.commit_live_agent_message();
         self.progressive_activity.reset();
         self.progressive_activity_detail.reset();
         self.approval_detail_scroll_offset = 0;

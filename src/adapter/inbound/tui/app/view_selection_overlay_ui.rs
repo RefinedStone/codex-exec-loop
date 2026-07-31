@@ -22,11 +22,11 @@ pub(super) struct ViewSelectionOverlayUiState {
 pub(super) const VIEW_SELECTION_MODE_OPTIONS: &[ViewSelectionModeOption] = &[
     ViewSelectionModeOption {
         mode: ConversationViewMode::Simple,
-        detail: "Show user prompts, Codex, and Codex Commentary only.",
+        detail: "Show conversation plus concise folded tool cards.",
     },
     ViewSelectionModeOption {
         mode: ConversationViewMode::Medium,
-        detail: "Also show tool and shell status transcript rows.",
+        detail: "Also show shell status transcript rows.",
     },
     ViewSelectionModeOption {
         mode: ConversationViewMode::Detail,
@@ -62,10 +62,10 @@ impl ConversationViewMode {
 
     pub(super) fn includes_message(self, message: &ConversationMessage) -> bool {
         match message.kind {
-            ConversationMessageKind::User | ConversationMessageKind::Agent => true,
-            ConversationMessageKind::Tool | ConversationMessageKind::Status => {
-                matches!(self, Self::Medium | Self::Detail)
-            }
+            ConversationMessageKind::User
+            | ConversationMessageKind::Agent
+            | ConversationMessageKind::Tool => true,
+            ConversationMessageKind::Status => matches!(self, Self::Medium | Self::Detail),
         }
     }
 }
@@ -129,7 +129,7 @@ mod tests {
     }
 
     #[test]
-    fn simple_keeps_user_and_agent_messages_only() {
+    fn simple_keeps_conversation_and_foldable_tool_messages() {
         let user = ConversationMessage::new(ConversationMessageKind::User, "hi", None, None);
         let agent = ConversationMessage::new(ConversationMessageKind::Agent, "ok", None, None);
         let tool = ConversationMessage::new(ConversationMessageKind::Tool, "cmd", None, None);
@@ -137,7 +137,7 @@ mod tests {
 
         assert!(ConversationViewMode::Simple.includes_message(&user));
         assert!(ConversationViewMode::Simple.includes_message(&agent));
-        assert!(!ConversationViewMode::Simple.includes_message(&tool));
+        assert!(ConversationViewMode::Simple.includes_message(&tool));
         assert!(!ConversationViewMode::Simple.includes_message(&status));
     }
 }

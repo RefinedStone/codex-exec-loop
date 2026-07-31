@@ -2,8 +2,8 @@ use std::fmt;
 use std::sync::{Arc, Weak};
 
 use super::progressive_activity_cards::{
-    ProgressiveActivityCard, ProgressiveActivityWaitStatus, bound_synthesized_detail,
-    card_detail_text, command_action_detail_text, project_activity_cards,
+    ProgressiveActivityCard, ProgressiveActivityCardKind, ProgressiveActivityWaitStatus,
+    bound_synthesized_detail, card_detail_text, command_action_detail_text, project_activity_cards,
     project_activity_timeline_cards, project_activity_wait_status,
 };
 use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProjectionSnapshot;
@@ -192,6 +192,20 @@ impl ProgressiveActivityDetailState {
             record_index: card.record_index,
             owned_text: Some(detail),
         })
+    }
+
+    pub(crate) fn card_detail_for_item(
+        &self,
+        item_id: &str,
+        kind: ProgressiveActivityCardKind,
+    ) -> Option<String> {
+        let card = self
+            .timeline_cards(None)
+            .into_iter()
+            .rev()
+            .find(|card| card.key.kind == kind && card.item_id.as_deref() == Some(item_id))?;
+        self.card_document(&card)
+            .map(|document| document.text().to_string())
     }
 
     pub(crate) fn reset(&mut self) {

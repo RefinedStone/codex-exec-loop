@@ -32,6 +32,24 @@ pub(crate) use activity::{
     ActivityOverlayDocument, ActivityOverlayView, build_activity_overlay_list_view,
 };
 
+pub(crate) struct InlineDiffPreview {
+    pub(crate) lines: Vec<ratatui::text::Line<'static>>,
+    pub(crate) has_more: bool,
+}
+
+pub(crate) fn build_inline_diff_preview(text: &str, width: u16, height: u16) -> InlineDiffPreview {
+    let page = activity_diff::build_bounded_diff_page(
+        text,
+        super::ProgressiveActivityPageCursor::at(0),
+        width,
+        height,
+    );
+    InlineDiffPreview {
+        lines: page.lines,
+        has_more: page.next_cursor.is_some(),
+    }
+}
+
 // directions maintenance는 planning/task popup과 별도 흐름이다. active directions 상태를
 // 점검하고 복구하는 overlay라 DTO와 builder를 독립 surface로 공개한다.
 pub(crate) use directions::{

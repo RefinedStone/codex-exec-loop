@@ -83,12 +83,13 @@ pub(super) use shell_core::{
 pub(super) use startup_banner::startup_ascii_art_lines;
 pub(super) use status_panels::InlineTailView;
 #[cfg(test)]
-pub(super) use transcript_copy::format_conversation_lines_for_view;
-#[cfg(test)]
 pub(super) use transcript_copy::format_conversation_lines_with_debug;
 pub(super) use transcript_copy::{
-    format_conversation_lines, format_conversation_scrollback_lines_with_expand,
+    ConversationTranscriptCardRow, ConversationTranscriptView,
+    format_conversation_scrollback_lines_with_expand_at_width,
 };
+#[cfg(test)]
+pub(super) use transcript_copy::{format_conversation_lines, format_conversation_lines_for_view};
 
 #[cfg(test)]
 pub(super) fn build_inline_tail_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
@@ -111,6 +112,7 @@ pub(super) fn build_operator_diagnostic_lines(
     status_panels::build_operator_diagnostic_lines(screen_model)
 }
 
+#[cfg(test)]
 pub(super) fn build_inline_live_transcript_lines(
     screen_model: &ConversationScreenModel<'_>,
 ) -> Vec<Line<'static>> {
@@ -119,6 +121,30 @@ pub(super) fn build_inline_live_transcript_lines(
         return Vec::new();
     };
     status_panels::current_live_agent_lines(live_transcript).unwrap_or_default()
+}
+
+pub(super) fn build_inline_live_transcript_view(
+    screen_model: &ConversationScreenModel<'_>,
+    view_mode: ConversationViewMode,
+    show_debug_details: bool,
+    expand_state: &ProgressiveActivityExpandState,
+    width: u16,
+) -> ConversationTranscriptView {
+    let Some(live_transcript) = screen_model.live_transcript() else {
+        return ConversationTranscriptView {
+            lines: Vec::new(),
+            card_rows: Vec::new(),
+        };
+    };
+    transcript_copy::format_live_conversation_transcript_view(
+        live_transcript.handoff_messages,
+        live_transcript.buffered_tool_messages,
+        live_transcript.live_agent_message,
+        view_mode,
+        show_debug_details,
+        expand_state,
+        width,
+    )
 }
 
 #[cfg(test)]

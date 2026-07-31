@@ -12,7 +12,7 @@
 use super::PromptOrigin;
 use super::conversation_model::{
     ActivityRailTerminalState, AutoFollowSkipReason, AutoFollowSnapshotPresentation,
-    ConversationViewModel, PlanningRepairState,
+    ConversationViewModel, PlanningRepairState, ProgressiveActivityCardKind,
 };
 use crate::adapter::inbound::tui::conversation_text::{
     approval_review_manual_client_action_notice, attachment_runtime_notice,
@@ -26,7 +26,7 @@ use crate::diagnostics::event_log;
 use crate::domain::conversation::ConversationApprovalRequestIdentity;
 use crate::domain::conversation::{
     ConversationApprovalDecision, ConversationApprovalResolution, ConversationMessage,
-    ConversationMessageKind,
+    ConversationMessageKind, ConversationToolActivityKind,
 };
 use crate::domain::conversation_runtime_envelope::{
     ConversationRuntimeEnvelopeObservation, ConversationRuntimeObservedValue,
@@ -505,7 +505,22 @@ pub(super) fn reduce_conversation_runtime_with_transition(
                     // transcript notices so shell tail and transcript agree.
                     state.progressive_activity.clear_turn_retrying();
                     state.turn_activity.register_tool_activity(&activity);
-                    state.buffer_tool_message_with_label(activity.text, activity.display_label);
+                    let detail = (activity.kind == ConversationToolActivityKind::FileChange)
+                        .then(|| {
+                            activity.item_id.as_deref().and_then(|item_id| {
+                                state.progressive_activity_detail.card_detail_for_item(
+                                    item_id,
+                                    ProgressiveActivityCardKind::Patch,
+                                )
+                            })
+                        })
+                        .flatten();
+                    state.buffer_tool_message_with_detail(
+                        activity.text,
+                        activity.display_label,
+                        activity.item_id,
+                        detail,
+                    );
                 }
                 TurnStreamUpdate::ApprovalReviewUpdated { review } => {
                     // Some provider statuses require approval outside the visible
@@ -1110,6 +1125,7 @@ mod tests {
     use crate::domain::conversation_progressive_activity::{
         ConversationProgressiveActivityBatch, ConversationProgressiveActivityKind,
         ConversationProgressiveActivityObservation, ConversationProgressiveActivityPayload,
+        ConversationProgressiveFileChange, ConversationProgressiveFileChangeKind,
     };
     use crate::domain::conversation_runtime_envelope::{
         ConversationRuntimeConfigurationObservation, ConversationRuntimeConfigurationRequest,
@@ -1726,6 +1742,7 @@ mod tests {
             stream_snapshot_event(ConversationStreamEvent::ToolActivity {
                 activity: ConversationToolActivity {
                     kind: ConversationToolActivityKind::CommandExecution,
+                    item_id: Some("command-1".to_string()),
                     text: "cargo test".to_string(),
                     display_label: None,
                     file_change_count: 0,
@@ -1793,6 +1810,75 @@ mod tests {
                 .iter()
                 .any(|message| message.text == "provider failed")
         );
+    }
+
+    #[test]
+    fn completed_file_change_attaches_exact_progressive_diff_to_the_live_transcript_card() {
+        let diff = "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -7 +7 @@\n-old\n+new\n";
+        let batch = ConversationProgressiveActivityBatch::single(
+            ConversationProgressiveActivityObservation {
+                sequence: 1,
+                thread_id: "thread-1".to_string(),
+                turn_id: Some("turn-1".to_string()),
+                item_id: Some("patch-1".to_string()),
+                kind: ConversationProgressiveActivityKind::FileChangePatch,
+                payload: ConversationProgressiveActivityPayload::FileChangePatch {
+                    changes: vec![ConversationProgressiveFileChange {
+                        path: "src/lib.rs".to_string(),
+                        diff: diff.to_string(),
+                        kind: ConversationProgressiveFileChangeKind::Update {
+                            move_path_present: false,
+                        },
+                    }],
+                    omitted_change_count: 0,
+                    source_bytes: ("src/lib.rs".len() + diff.len()) as u64,
+                    truncated_bytes: 0,
+                },
+            },
+        )
+        .expect("file patch test event should be valid");
+        let mut stream_state = TurnStreamTestHarness::new();
+        stream_state.seed_loaded_thread_identity(
+            "thread-1".to_string(),
+            "Test thread",
+            "/tmp/workspace",
+        );
+        stream_state.apply_stream_event(crate::core::app::TurnStreamEvent::TurnStarted {
+            turn_id: "turn-1".to_string(),
+            runtime_request: Box::default(),
+        });
+        stream_state.apply_stream_event(core_turn_stream_event_from_application(
+            ConversationStreamEvent::ProgressiveActivityObserved {
+                batch: Box::new(batch),
+            },
+        ));
+        let snapshot = stream_state.apply_stream_event(core_turn_stream_event_from_application(
+            ConversationStreamEvent::ToolActivity {
+                activity: ConversationToolActivity {
+                    kind: ConversationToolActivityKind::FileChange,
+                    item_id: Some("patch-1".to_string()),
+                    text: "file change: update src/lib.rs".to_string(),
+                    display_label: Some("patch".to_string()),
+                    file_change_count: 1,
+                },
+            },
+        ));
+
+        let reduction = reduce_conversation_runtime(
+            ConversationViewModel::new_draft("/tmp/workspace".to_string()),
+            ConversationRuntimeEvent::StreamSnapshotApplied(Box::new(snapshot)),
+        );
+        let message = reduction
+            .state
+            .buffered_tool_messages
+            .last()
+            .expect("completed patch should remain visible before the next commentary");
+
+        assert_eq!(message.display_label.as_deref(), Some("patch"));
+        assert!(message.text.starts_with("file change: update src/lib.rs\n"));
+        assert!(message.text.contains("[update] src/lib.rs"));
+        assert!(message.text.contains("@@ -7 +7 @@"));
+        assert!(message.text.contains("-old\n+new"));
     }
 
     #[test]
