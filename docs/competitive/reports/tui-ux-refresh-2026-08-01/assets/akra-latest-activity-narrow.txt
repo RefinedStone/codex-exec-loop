@@ -1,0 +1,16 @@
+Akra / Activity / inline inspection
+filter: all    > Diff    Output
+no retained progressive activity cards
+Retained Activity Detail
+Folded. Press Enter/e or click the selected row to expand.
+
+
+
+
+Keys
+Up/Down: row | Enter/e or click: fold
+PgUp/PgDn: page | Tab: filter | h: list | Esc: close
+Akra / tui-ux-re...  ·  READY  ·  queue off  ·  agents off  ·  terminals 0
+! DEGRADED  ·  runtime degraded  ·  warning 1
+ > Describe a task or type : for commands
+ Type a task  |  : commands

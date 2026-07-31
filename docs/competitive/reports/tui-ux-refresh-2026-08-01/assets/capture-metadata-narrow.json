@@ -1,0 +1,17 @@
+{
+  "capturedAt": "2026-07-31T15:38:42.366Z",
+  "commit": "a36aeb4d9f9ede56fef8d6eedd1e3da3432ee044",
+  "workspace": "<workspace>",
+  "terminal": "Windows ConPTY",
+  "geometry": "80x24",
+  "binarySha256": "9ac931fc35243506714054a5a066cda65a6a83356c2c56aeb4700b0acc7ff585",
+  "codexSha256": "ecd7a3eaff5e42723dbba03b5c91514b3986b5db5cbca8f34619620b5356f31f",
+  "actualCodexAppServer": true,
+  "screens": [
+    "ready",
+    "palette",
+    "work-center",
+    "diagnostics",
+    "activity"
+  ]
+}

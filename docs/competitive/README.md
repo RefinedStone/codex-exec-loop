@@ -36,6 +36,11 @@ breadth, tool count, or UI surface count into the product goal.
 
 Cross-product reports:
 
+- [Akra TUI UX Competitive Refresh](reports/tui-ux-refresh-2026-08-01/README.md): latest
+  <code>prerelease</code> recapture at 120×30 and 80×24, deliberate startup-blocked reproduction,
+  and local Codex/Grok command-surface comparison. Confirms the previous top three slices shipped
+  and reprioritizes the remaining work around failure recovery, truthful empty states, and return
+  recap. Snapshot: 2026-08-01 (Asia/Seoul).
 - [Akra TUI UX Priority Audit](reports/tui-ux-priority-2026-07-31/README.md): current Akra
   Windows ConPTY captures compared with official Codex, Grok Build, OpenCode, Claude Code,
   Gemini CLI, and Pi evidence, ending in three commercial-UX slices and a prioritized backlog.

@@ -1,0 +1,17 @@
+╭───────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.146.0-alpha.9.2)          │
+│                                               │
+│ model:     gpt-5.6-sol max   /model to change │
+│ directory: <workspace>  │
+╰───────────────────────────────────────────────╯
+
+  Tip: Use /fork to branch the current chat into a new thread.
+
+• You have 2 usage limit resets available. Run /usage to use one.
+
+• Starting MCP servers (2/4): blender_ab, unityMCP (0s • esc to interrupt)
+
+
+› Implement {feature}
+
+  gpt-5.6-sol max · <workspace>

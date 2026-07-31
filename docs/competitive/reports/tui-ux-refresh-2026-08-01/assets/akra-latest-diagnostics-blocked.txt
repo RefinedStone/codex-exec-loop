@@ -1,0 +1,16 @@
+Akra / Diagnostics / inline inspection
+Inspect readiness without leaving the live shell.
+Startup
+status: failed
+Warnings
+failed to pin a trusted `codex` executable at startup: PATH selected an unsafe `codex` executable at
+Keys
+Esc/Ctrl+C: close    r: rerun checks    Ctrl+o: recent sessions
+↑↓/jk: warnings    PgUp/PgDn: page    Home/End: bounds
+Checks
+startup error: failed to pin a trusted `codex` executable at startup: PATH selected an unsafe `codex` executable at
+`C:\nvm4w\nodejs\codex.cmd`: trusted Windows executable ACL grants mutation rights to another principal: \\?\C:\nvm
+Akra / tui-ux-refresh-20...  ·  BLOCKED  ·  queue off  ·  agents off  ·  terminals 0  ·  gpt-5.5/high
+! BLOCKED  ·  input locked
+ > Describe a task or type : for commands
+ Ctrl+D diagnostics  |  draft preserved

@@ -1,0 +1,16 @@
+Akra / Diagnostics / inline inspection
+Inspect readiness without leaving the live shell.
+Startup
+status: ready
+Warnings
+app-server sent notification `remoteControl/status/changed` while waiting for
+Keys
+Esc/Ctrl+C: close    r: rerun checks    Ctrl+o: recent sessions
+↑↓/jk: warnings    PgUp/PgDn: page    Home/End: bounds
+Checks
+[ok] codex binary:
+\\?\%USERPROFILE%\akra-trusted-capture-d7601823e3e64d6bba0ff96fa4cf096d\codex.
+Akra / tui-ux-re...  ·  READY  ·  queue off  ·  agents off  ·  terminals 0
+! DEGRADED  ·  runtime degraded  ·  warning 1
+ > Describe a task or type : for commands
+ Type a task  |  : commands
