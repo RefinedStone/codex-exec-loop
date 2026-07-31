@@ -1276,6 +1276,103 @@ impl TuiLanguage {
         }
     }
 
+    pub(super) const fn operator_attention_label(
+        self,
+        shell_action_availability: ShellActionAvailability,
+        warning_count: usize,
+    ) -> &'static str {
+        match (self, shell_action_availability, warning_count) {
+            (Self::English, ShellActionAvailability::Pending, _) => "CHECKING",
+            (Self::English, ShellActionAvailability::Blocked, _) => "BLOCKED",
+            (Self::English, ShellActionAvailability::Ready, 1..) => "DEGRADED",
+            (Self::English, ShellActionAvailability::Ready, 0) => "NOTICE",
+            (Self::Korean, ShellActionAvailability::Pending, _) => "확인 중",
+            (Self::Korean, ShellActionAvailability::Blocked, _) => "차단",
+            (Self::Korean, ShellActionAvailability::Ready, 1..) => "주의",
+            (Self::Korean, ShellActionAvailability::Ready, 0) => "알림",
+        }
+    }
+
+    pub(super) const fn operator_attention_impact(
+        self,
+        shell_action_availability: ShellActionAvailability,
+        warning_count: usize,
+    ) -> &'static str {
+        match (self, shell_action_availability, warning_count) {
+            (Self::English, ShellActionAvailability::Pending, _) => "input pending",
+            (Self::English, ShellActionAvailability::Blocked, _) => "input locked",
+            (Self::English, ShellActionAvailability::Ready, 1..) => "runtime degraded",
+            (Self::English, ShellActionAvailability::Ready, 0) => "runtime update",
+            (Self::Korean, ShellActionAvailability::Pending, _) => "입력 대기",
+            (Self::Korean, ShellActionAvailability::Blocked, _) => "입력 잠김",
+            (Self::Korean, ShellActionAvailability::Ready, 1..) => "런타임 저하",
+            (Self::Korean, ShellActionAvailability::Ready, 0) => "런타임 갱신",
+        }
+    }
+
+    pub(super) const fn operator_attention_action(
+        self,
+        shell_action_availability: ShellActionAvailability,
+    ) -> &'static str {
+        match (self, shell_action_availability) {
+            (Self::English, ShellActionAvailability::Blocked) => "Ctrl+D resolve",
+            (Self::English, _) => "Ctrl+D details",
+            (Self::Korean, ShellActionAvailability::Blocked) => "Ctrl+D 해결",
+            (Self::Korean, _) => "Ctrl+D 상세",
+        }
+    }
+
+    pub(super) const fn operator_queue_metric_label(self, compact: bool) -> &'static str {
+        match (self, compact) {
+            (_, true) => "q",
+            (Self::English, false) => "queue",
+            (Self::Korean, false) => "큐",
+        }
+    }
+
+    pub(super) const fn operator_agent_metric_label(self, compact: bool) -> &'static str {
+        match (self, compact) {
+            (_, true) => "a",
+            (Self::English, false) => "agents",
+            (Self::Korean, false) => "요원",
+        }
+    }
+
+    pub(super) const fn operator_terminal_metric_label(self, compact: bool) -> &'static str {
+        match (self, compact) {
+            (_, true) => "t",
+            (Self::English, false) => "terminals",
+            (Self::Korean, false) => "터미널",
+        }
+    }
+
+    pub(super) fn operator_state_label(self, state: &str) -> String {
+        match (self, state) {
+            (Self::Korean, "off") => "꺼짐".to_string(),
+            (Self::Korean, "blocked") => "차단".to_string(),
+            (Self::Korean, "pending" | "loading") => "대기".to_string(),
+            (Self::Korean, "ready") => "준비".to_string(),
+            (Self::Korean, "idle") => "유휴".to_string(),
+            _ => state.to_string(),
+        }
+    }
+
+    pub(super) const fn operator_warning_label(self, count: usize) -> &'static str {
+        match (self, count) {
+            (Self::English, 1) => "warning",
+            (Self::English, _) => "warnings",
+            (Self::Korean, _) => "경고",
+        }
+    }
+
+    pub(super) const fn operator_runtime_notice_label(self, count: usize) -> &'static str {
+        match (self, count) {
+            (Self::English, 1) => "runtime notice",
+            (Self::English, _) => "runtime notices",
+            (Self::Korean, _) => "런타임 알림",
+        }
+    }
+
     #[cfg(test)]
     pub(super) fn github_review_polling_status(self, status: &str) -> String {
         match (self, status) {

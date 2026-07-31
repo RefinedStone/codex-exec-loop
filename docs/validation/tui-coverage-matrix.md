@@ -191,6 +191,7 @@ and remove it when the corresponding tests move or disappear.
 - `src/adapter/inbound/tui/app/shell_presentation/startup_banner.rs`
 - `src/adapter/inbound/tui/app/shell_presentation/status_panels/activity_rail.rs`
 - `src/adapter/inbound/tui/app/shell_presentation/status_panels/live_status_layout.rs`
+- `src/adapter/inbound/tui/app/shell_presentation/status_panels/operator_ribbon.rs`
 - `src/adapter/inbound/tui/app/shell_presentation/status_panels/parallel_working_copy.rs`
 - `src/adapter/inbound/tui/app/shell_presentation/status_panels/plan_indicator.rs`
 - `src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_copy.rs`
