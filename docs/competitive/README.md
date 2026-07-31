@@ -36,6 +36,10 @@ breadth, tool count, or UI surface count into the product goal.
 
 Cross-product reports:
 
+- [Akra TUI UX Priority Audit](reports/tui-ux-priority-2026-07-31/README.md): current Akra
+  Windows ConPTY captures compared with official Codex, Grok Build, OpenCode, Claude Code,
+  Gemini CLI, and Pi evidence, ending in three commercial-UX slices and a prioritized backlog.
+  Snapshot: 2026-07-31 (Asia/Seoul).
 - [Coding-Agent TUI Architecture Field Report](reports/tui-architecture/README.md): interactive,
   official-source comparison of GJC, OpenCode, Codex, Claude Code, Pi, and jcode, including
   renderer stacks, state authority, mouse undo mechanics, extension surfaces, critical debt, and

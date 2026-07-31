@@ -1,0 +1,551 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Akra의 실제 Windows ConPTY 캡처와 Codex, Grok Build, OpenCode, Claude Code, Gemini CLI, Pi의 공식 자료를 비교한 TUI UX 우선순위 보고서">
+  <title>Akra TUI UX Priority Audit · 2026-07-31</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">본문으로 이동</a>
+
+  <header class="topbar">
+    <a class="brand" href="#summary" aria-label="보고서 처음으로">
+      <span class="brand-mark" aria-hidden="true">A</span>
+      <span>
+        <strong>AKRA</strong>
+        <small>TUI UX priority audit</small>
+      </span>
+    </a>
+    <div class="topbar-meta">
+      <span class="live-dot" aria-hidden="true"></span>
+      <span>evidence-backed</span>
+      <span>2026.07.31 KST</span>
+    </div>
+  </header>
+
+  <div class="page-shell">
+    <aside class="rail" aria-label="보고서 목차">
+      <p class="rail-label">FIELD REPORT</p>
+      <nav>
+        <a href="#summary" data-nav="summary"><span>01</span>결론</a>
+        <a href="#capture" data-nav="capture"><span>02</span>실제 캡처</a>
+        <a href="#diagnosis" data-nav="diagnosis"><span>03</span>현재 진단</a>
+        <a href="#competitive" data-nav="competitive"><span>04</span>경쟁 제품</a>
+        <a href="#priorities" data-nav="priorities"><span>05</span>핵심 3개</a>
+        <a href="#backlog" data-nav="backlog"><span>06</span>전체 목록</a>
+        <a href="#delivery" data-nav="delivery"><span>07</span>구현 순서</a>
+        <a href="#sources" data-nav="sources"><span>08</span>근거</a>
+      </nav>
+      <div class="rail-scope">
+        <span>Akra 실제 화면 4종</span>
+        <span>공식 제품 자료 6종</span>
+        <span>렌더 계약 보존</span>
+      </div>
+    </aside>
+
+    <main id="main">
+      <section class="hero report-section" id="summary" data-section>
+        <div class="hero-copy">
+          <p class="kicker">TERMINAL UX FIELD AUDIT / WINDOWS CONPTY + OFFICIAL SOURCES</p>
+          <h1>더 많은 정보보다<br><em>더 빠른 판단</em>이 먼저다.</h1>
+          <p class="hero-lead">
+            Akra는 이미 인라인 스크롤백, 반응형 composer, typed frame, 병렬 운영 보드라는 좋은 뼈대를 갖췄다.
+            지금의 병목은 기능 부족이 아니라 <strong>상태·경고·다음 행동의 우선순위가 한눈에 모이지 않는 것</strong>이다.
+          </p>
+          <div class="hero-actions">
+            <a class="button primary" href="#priorities">우선순위 3개 보기</a>
+            <a class="button secondary" href="#capture">실제 화면 비교</a>
+          </div>
+          <div class="evidence-strip" aria-label="조사 범위">
+            <span><strong>120×30</strong> 실제 ConPTY</span>
+            <span><strong>80/120/160</strong> 반응형 계약</span>
+            <span><strong>6</strong> 경쟁 제품</span>
+            <span><strong>12</strong> 개선 항목</span>
+          </div>
+        </div>
+
+        <div class="hero-terminal" aria-label="권장 Akra 상태 화면 개념">
+          <div class="terminal-title">
+            <span>AKRA / prerelease</span>
+            <span class="terminal-badge ok">READY</span>
+          </div>
+          <div class="terminal-body">
+            <p><span class="cyan">●</span> queue 5 <span class="dim">·</span> agents 2/3 <span class="dim">·</span> terminals 1</p>
+            <p><span class="amber">!</span> notice 1 <span class="dim">· Ctrl+D details</span></p>
+            <p class="spacer"></p>
+            <p class="phase"><span>WORK</span> Review <strong>2/4</strong> <span class="dim">· 03:18</span></p>
+            <p><span class="green">✓</span> Context <span class="dim">42s</span></p>
+            <p><span class="cyan">◆</span> Review <span class="dim">2 agents running</span></p>
+            <p><span class="dim">○</span> Verify</p>
+            <p><span class="dim">○</span> Deliver</p>
+            <p class="spacer"></p>
+            <p><span class="prompt">›</span> Describe a task or type <span class="cyan">:</span> for commands</p>
+          </div>
+          <div class="terminal-footer">Enter inspect · p pause · x stop · : activity</div>
+        </div>
+      </section>
+
+      <section class="decision-band" aria-label="핵심 결론">
+        <article>
+          <span>01</span>
+          <div><small>KEEP</small><strong>인라인 main-buffer 구조</strong></div>
+        </article>
+        <article>
+          <span>02</span>
+          <div><small>CHANGE</small><strong>경고와 상태의 의미 계층</strong></div>
+        </article>
+        <article>
+          <span>03</span>
+          <div><small>UNIFY</small><strong>task·agent·terminal 진행 화면</strong></div>
+        </article>
+      </section>
+
+      <section class="report-section" id="capture" data-section>
+        <div class="section-heading">
+          <div>
+            <p class="kicker">CURRENT PRODUCT / REPRODUCED</p>
+            <h2>추측이 아니라 실제 Akra 화면에서 시작했다</h2>
+          </div>
+          <p class="section-intro">
+            현재 브랜치 바이너리를 Windows ConPTY 120×30에서 실행하고 실제 Codex app-server에 연결했다.
+            PNG는 경로를 익명화한 텍스트·배치 증거이며, 정확한 semantic color 기준은 저장소 snapshot과 기존 E3 캡처다.
+          </p>
+        </div>
+
+        <div class="gallery-tabs" role="tablist" aria-label="Akra 실제 캡처 선택">
+          <button type="button" role="tab" aria-selected="true" aria-controls="capture-ready" id="tab-ready" data-gallery="capture-ready">Ready</button>
+          <button type="button" role="tab" aria-selected="false" aria-controls="capture-palette" id="tab-palette" data-gallery="capture-palette">Palette</button>
+          <button type="button" role="tab" aria-selected="false" aria-controls="capture-diagnostics" id="tab-diagnostics" data-gallery="capture-diagnostics">Diagnostics</button>
+          <button type="button" role="tab" aria-selected="false" aria-controls="capture-help" id="tab-help" data-gallery="capture-help">Help</button>
+          <button type="button" role="tab" aria-selected="false" aria-controls="capture-responsive" id="tab-responsive" data-gallery="capture-responsive">Responsive</button>
+          <button type="button" role="tab" aria-selected="false" aria-controls="capture-parallel" id="tab-parallel" data-gallery="capture-parallel">Parallel</button>
+        </div>
+
+        <div class="capture-stage">
+          <figure class="capture-panel is-active" id="capture-ready" role="tabpanel" aria-labelledby="tab-ready">
+            <button class="image-button" type="button" data-zoom aria-label="Ready 캡처 크게 보기">
+              <img src="assets/akra-current-ready.png" alt="Windows ConPTY 120x30에서 실행한 Akra ready shell">
+            </button>
+            <figcaption>
+              <span class="evidence-tag reproduced">현재 재현</span>
+              <strong>Ready shell</strong>
+              <p>상단 리본과 열린 composer는 간결하다. 반면 원시 app-server notification이 한 줄을 차지하고 끝이 잘려, 중요도와 다음 행동을 알 수 없다.</p>
+            </figcaption>
+          </figure>
+
+          <figure class="capture-panel" id="capture-palette" role="tabpanel" aria-labelledby="tab-palette" hidden>
+            <button class="image-button" type="button" data-zoom aria-label="명령 팔레트 캡처 크게 보기">
+              <img src="assets/akra-current-palette.png" alt="콜론 입력으로 연 Akra 명령 팔레트">
+            </button>
+            <figcaption>
+              <span class="evidence-tag reproduced">현재 재현</span>
+              <strong>Inline command palette</strong>
+              <p>검색·선택·삽입의 핵심 기능은 이미 있다. 다음 단계는 명령의 현재 사용 가능 여부, 인자 예시, 선택 후 결과를 별도 detail row에 보여주는 것이다.</p>
+            </figcaption>
+          </figure>
+
+          <figure class="capture-panel" id="capture-diagnostics" role="tabpanel" aria-labelledby="tab-diagnostics" hidden>
+            <button class="image-button" type="button" data-zoom aria-label="진단 캡처 크게 보기">
+              <img src="assets/akra-current-diagnostics.png" alt="Akra inline diagnostics 화면">
+            </button>
+            <figcaption>
+              <span class="evidence-tag reproduced">현재 재현</span>
+              <strong>Diagnostics</strong>
+              <p>검사 결과는 충분하지만 긴 경로와 policy 문자열이 같은 밀도로 흐른다. “무슨 문제·영향·해결·재검증” 순서의 operator card가 필요하다.</p>
+            </figcaption>
+          </figure>
+
+          <figure class="capture-panel" id="capture-help" role="tabpanel" aria-labelledby="tab-help" hidden>
+            <button class="image-button" type="button" data-zoom aria-label="도움말 캡처 크게 보기">
+              <img src="assets/akra-current-help.png" alt="Akra inline shell commands 도움말 화면">
+            </button>
+            <figcaption>
+              <span class="evidence-tag reproduced">현재 재현</span>
+              <strong>Shell Commands help</strong>
+              <p>전체 명령을 확인할 수 있지만 긴 <code>:activity</code> signature가 120열에서도 잘린다. palette detail과 폭별 copy budget이 필요한 직접 증거다.</p>
+            </figcaption>
+          </figure>
+
+          <figure class="capture-panel" id="capture-responsive" role="tabpanel" aria-labelledby="tab-responsive" hidden>
+            <button class="image-button" type="button" data-zoom aria-label="반응형 실터미널 캡처 크게 보기">
+              <img src="../../../validation/artifacts/pr-2054-context-hud-composer/context-hud-composer-capture.png" alt="실제 tmux PTY에서 검증한 Akra 120열과 48열 composer 비교">
+            </button>
+            <figcaption>
+              <span class="evidence-tag physical">실터미널 E3</span>
+              <strong>Responsive composer</strong>
+              <p>기존 120→48→120 물리 resize 검증은 stale row 없이 통과했다. 이 계약은 새 UX에서도 반드시 보존할 자산이다.</p>
+            </figcaption>
+          </figure>
+
+          <figure class="capture-panel" id="capture-parallel" role="tabpanel" aria-labelledby="tab-parallel" hidden>
+            <button class="image-button" type="button" data-zoom aria-label="병렬 운영 보드 캡처 크게 보기">
+              <img src="../../../validation/artifacts/tui-parallel-operations/parallel-operations-capture.png" alt="80 120 160열에서 렌더한 Akra Parallel Operations 보드">
+            </button>
+            <figcaption>
+              <span class="evidence-tag deterministic">결정론 렌더</span>
+              <strong>Parallel Operations</strong>
+              <p>lane·selected detail·delivery gate 구조는 좋다. 다만 일반 turn의 task·background terminal·agent 진행과 떨어져 있어 운영자가 여러 화면을 오가게 된다.</p>
+            </figcaption>
+          </figure>
+        </div>
+
+        <aside class="incident-card">
+          <div>
+            <span class="incident-icon" aria-hidden="true">!</span>
+            <div>
+              <small>실제 startup 실패도 재현됨</small>
+              <strong>unsafe Codex path → WindowsApps 접근 거부</strong>
+            </div>
+          </div>
+          <code>failed to pin a trusted codex executable … WindowsApps … access denied (os error 5)</code>
+          <p>현재 문구는 기술적으로 정확하지만 사용자가 해야 할 조치가 첫 화면에 없다. 실패 카드 개선의 대표 acceptance fixture로 쓰기 좋다.</p>
+        </aside>
+      </section>
+
+      <section class="report-section" id="diagnosis" data-section>
+        <div class="section-heading compact">
+          <div>
+            <p class="kicker">DIAGNOSIS / KEEP THE CONTRACT</p>
+            <h2>현재 Akra의 강점과 부족한 점</h2>
+          </div>
+        </div>
+
+        <div class="diagnosis-grid">
+          <article class="diagnosis-card strength">
+            <div class="card-head"><span>KEEP</span><h3>이미 상용 기반에 가까운 것</h3></div>
+            <ul class="check-list">
+              <li><strong>인라인 main-buffer</strong><span>대화 scrollback과 live tail의 책임 분리가 명확하다.</span></li>
+              <li><strong>반응형 composer</strong><span>좁은 폭에서도 입력·커서·복원이 검증돼 있다.</span></li>
+              <li><strong>typed frame model</strong><span>렌더러가 권위 상태를 새로 만들지 않는다.</span></li>
+              <li><strong>병렬 delivery gate</strong><span>unknown을 성공처럼 꾸미지 않는 운영 의미가 있다.</span></li>
+              <li><strong>검색형 palette</strong><span>명령 검색·선택·argument entry 기반이 이미 존재한다.</span></li>
+            </ul>
+          </article>
+
+          <article class="diagnosis-card gap">
+            <div class="card-head"><span>FIX</span><h3>상용 UX에서 체감되는 간극</h3></div>
+            <ul class="check-list">
+              <li><strong>주의 신호가 원시 문자열</strong><span>심각도·영향·행동이 분리되지 않는다.</span></li>
+              <li><strong>진행 정보가 분산</strong><span>:activity, :parallel, :peek, 상태 리본이 서로 떨어져 있다.</span></li>
+              <li><strong>palette detail 부족</strong><span>상태별 가능 여부와 인자·결과 설명이 약하다.</span></li>
+              <li><strong>진단의 정보 밀도</strong><span>정상 check와 실제 blocker가 비슷한 무게로 보인다.</span></li>
+              <li><strong>복귀 맥락 부족</strong><span>오래 자리를 비운 뒤 무엇이 끝났는지 한 줄 요약이 없다.</span></li>
+            </ul>
+          </article>
+        </div>
+
+        <div class="principle-callout">
+          <span>설계 원칙</span>
+          <p><strong>TUI는 authority가 아니다.</strong> 새 화면은 application/domain 상태를 읽는 projection이어야 하며, history identity·queue authority·delivery truth를 렌더 편의를 위해 복제하지 않는다.</p>
+        </div>
+      </section>
+
+      <section class="report-section" id="competitive" data-section>
+        <div class="section-heading">
+          <div>
+            <p class="kicker">COMPETITIVE READ / OFFICIAL SOURCES</p>
+            <h2>경쟁 제품에서 가져올 것은 ‘크롬’이 아니라 판단 구조다</h2>
+          </div>
+          <p class="section-intro">공식 문서·공식 저장소·고정된 공식 이미지로만 기능을 확인했다. 마케팅 이미지는 런타임 정확성 증거가 아니므로 별도 표시했다.</p>
+        </div>
+
+        <div class="product-grid">
+          <article class="product-card grok-card">
+            <div class="product-meta"><span class="product-index">01</span><span class="evidence-tag documented">공식 문서</span></div>
+            <h3>Grok Build</h3>
+            <p class="product-summary">전체화면·마우스 TUI라 Akra와 소유권 모델은 다르지만, 대규모 workflow의 상태 압축은 가장 직접적인 참고 대상이다.</p>
+            <div class="mini-terminal" aria-label="Grok Build 공식 workflow 문서의 정보 구조를 요약한 화면">
+              <p>─ Workflows ─</p>
+              <p><span class="red">[×]</span> pr-review · agents 0/128 · 12s</p>
+              <p class="dim">Phases</p>
+              <p><span class="cyan">› 1 Context</span></p>
+              <p>  2 Review</p>
+              <p>  3 Verify</p>
+              <p>  4 Synthesize</p>
+              <p class="dim">↑↓ phase · enter agent · p pause · x stop · s save</p>
+            </div>
+            <dl class="takeaway-list">
+              <div><dt>차용</dt><dd>phase·agent count·elapsed·control을 한 viewport에 결합</dd></div>
+              <div><dt>보류</dt><dd>fullscreen ownership과 mouse-first navigation</dd></div>
+            </dl>
+            <a class="source-link" href="https://x.ai/news/workflows">공식 workflow 자료 ↗</a>
+          </article>
+
+          <article class="product-card visual-card">
+            <div class="product-meta"><span class="product-index">02</span><span class="evidence-tag visual">공식 이미지</span></div>
+            <h3>Codex CLI</h3>
+            <img src="../tui-architecture/assets/codex-official-tui.png" alt="OpenAI Codex 저장소의 공식 TUI 이미지">
+            <p class="product-summary">명령 popup, 사용자가 고르는 statusline 항목, background terminal의 최근 출력 preview가 강점이다.</p>
+            <dl class="takeaway-list">
+              <div><dt>차용</dt><dd>상태선 항목 선택·background output의 bounded preview</dd></div>
+              <div><dt>보류</dt><dd>Akra 고유 queue/delivery 의미를 일반 chat status로 축소</dd></div>
+            </dl>
+            <a class="source-link" href="https://developers.openai.com/codex/cli/slash-commands">공식 command reference ↗</a>
+          </article>
+
+          <article class="product-card visual-card">
+            <div class="product-meta"><span class="product-index">03</span><span class="evidence-tag visual">공식 이미지</span></div>
+            <h3>OpenCode</h3>
+            <img src="../tui-architecture/assets/opencode-official-tui.png" alt="OpenCode 저장소의 공식 TUI 이미지">
+            <p class="product-summary">command description, keybind·diff·mouse·attention 설정이 TUI 전용 구성으로 정리돼 있다.</p>
+            <dl class="takeaway-list">
+              <div><dt>차용</dt><dd>palette 설명 품질·attention event의 명시적 분류</dd></div>
+              <div><dt>보류</dt><dd>theme 자유도가 semantic color 의미를 무너뜨리는 설정</dd></div>
+            </dl>
+            <a class="source-link" href="https://opencode.ai/docs/tui/">공식 TUI 문서 ↗</a>
+          </article>
+
+          <article class="product-card text-card">
+            <div class="product-meta"><span class="product-index">04</span><span class="evidence-tag documented">공식 문서</span></div>
+            <h3>Claude Code</h3>
+            <div class="feature-stack">
+              <div><span>Ctrl+T</span><p><strong>Task list</strong>최대 5개 작업을 status area에 표시</p></div>
+              <div><span>recap</span><p><strong>Return context</strong>자리를 비운 뒤 한 줄 요약</p></div>
+              <div><span>PR</span><p><strong>Review state</strong>footer에서 승인·변경요청 상태 표시</p></div>
+            </div>
+            <dl class="takeaway-list">
+              <div><dt>차용</dt><dd>복귀 recap·bounded task list·PR 상태의 지속 노출</dd></div>
+              <div><dt>보류</dt><dd>shell script가 statusline 의미를 임의 재정의하는 구조</dd></div>
+            </dl>
+            <a class="source-link" href="https://code.claude.com/docs/en/interactive-mode">공식 interactive mode ↗</a>
+          </article>
+
+          <article class="product-card text-card">
+            <div class="product-meta"><span class="product-index">05</span><span class="evidence-tag documented">공식 문서</span></div>
+            <h3>Gemini CLI</h3>
+            <div class="feature-stack">
+              <div><span>Ctrl+O</span><p><strong>Debug console</strong>일반 대화와 상세 로그를 분리</p></div>
+              <div><span>!</span><p><strong>Shell mode</strong>색과 indicator로 입력 모드 구분</p></div>
+              <div><span>/mcp</span><p><strong>Progressive detail</strong>tool description을 toggle</p></div>
+            </div>
+            <dl class="takeaway-list">
+              <div><dt>차용</dt><dd>진단 detail toggle과 명확한 mode indicator</dd></div>
+              <div><dt>보류</dt><dd>Akra prompt에서 직접 shell mode를 추가하는 것</dd></div>
+            </dl>
+            <a class="source-link" href="https://google-gemini.github.io/gemini-cli/docs/cli/commands.html">공식 commands 문서 ↗</a>
+          </article>
+
+          <article class="product-card visual-card">
+            <div class="product-meta"><span class="product-index">06</span><span class="evidence-tag visual">공식 이미지</span></div>
+            <h3>Pi</h3>
+            <img src="../tui-architecture/assets/pi-official-tui.png" alt="Pi coding agent 저장소의 공식 interactive mode 이미지">
+            <p class="product-summary">화면 밀도는 높지만 prompt와 statusline이 명확하고, extension이 UI를 확장하는 경계가 문서화돼 있다.</p>
+            <dl class="takeaway-list">
+              <div><dt>차용</dt><dd>작고 지속적인 model·token·mode context</dd></div>
+              <div><dt>보류</dt><dd>기능을 한 화면에 과밀하게 상시 노출</dd></div>
+            </dl>
+            <a class="source-link" href="https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent">공식 저장소 ↗</a>
+          </article>
+        </div>
+
+        <div class="matrix-wrap" role="region" aria-label="제품별 UX 패턴 비교" tabindex="0">
+          <table class="comparison-table">
+            <caption>본 조사에서의 상대 평가 — 기능 유무가 아니라 현재 Akra에 참고할 UX 패턴의 성숙도</caption>
+            <thead>
+              <tr><th>판단 과제</th><th>Akra 현재</th><th>Codex</th><th>Grok Build</th><th>OpenCode</th><th>Claude</th><th>Gemini</th></tr>
+            </thead>
+            <tbody>
+              <tr><th>명령 발견</th><td><span class="grade partial">기반 있음</span></td><td><span class="grade strong">강함</span></td><td><span class="grade strong">강함</span></td><td><span class="grade strong">강함</span></td><td><span class="grade strong">강함</span></td><td><span class="grade strong">강함</span></td></tr>
+              <tr><th>장기 작업 진행</th><td><span class="grade partial">분산</span></td><td><span class="grade partial">부분</span></td><td><span class="grade strong">강함</span></td><td><span class="grade partial">부분</span></td><td><span class="grade strong">강함</span></td><td><span class="grade partial">부분</span></td></tr>
+              <tr><th>병렬 agent 가시성</th><td><span class="grade strong">강함</span></td><td><span class="grade strong">강함</span></td><td><span class="grade strong">강함</span></td><td><span class="grade strong">강함</span></td><td><span class="grade partial">부분</span></td><td><span class="grade muted">낮음</span></td></tr>
+              <tr><th>진단·복구</th><td><span class="grade partial">정확/과밀</span></td><td><span class="grade strong">강함</span></td><td><span class="grade partial">부분</span></td><td><span class="grade partial">부분</span></td><td><span class="grade partial">부분</span></td><td><span class="grade strong">강함</span></td></tr>
+              <tr><th>좁은 폭 의미 보존</th><td><span class="grade strong">검증됨</span></td><td><span class="grade strong">강함</span></td><td><span class="grade muted">전체화면</span></td><td><span class="grade strong">강함</span></td><td><span class="grade partial">부분</span></td><td><span class="grade partial">부분</span></td></tr>
+              <tr><th>운영 authority 충실도</th><td><span class="grade strong">고유 강점</span></td><td><span class="grade partial">session 중심</span></td><td><span class="grade strong">workflow 중심</span></td><td><span class="grade partial">session 중심</span></td><td><span class="grade partial">task 중심</span></td><td><span class="grade partial">session 중심</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="report-section" id="priorities" data-section>
+        <div class="section-heading compact">
+          <div>
+            <p class="kicker">TOP 3 / COMMERCIAL UX SLICES</p>
+            <h2>먼저 바꿀 세 가지</h2>
+          </div>
+        </div>
+
+        <div class="priority-stack">
+          <article class="priority-card">
+            <div class="priority-aside"><span>P0</span><strong>01</strong><small>semantic rail</small></div>
+            <div class="priority-content">
+              <div class="priority-heading">
+                <div><p class="eyebrow">상태·경고·행동을 두 줄에</p><h3>Operator Ribbon</h3></div>
+                <span class="effort">M</span>
+              </div>
+              <p>원시 notification을 그대로 보여주지 말고 severity·영향·detail action으로 분류한다. 정상 상태는 한 줄, 주의가 있을 때만 두 번째 줄을 사용한다.</p>
+              <div class="before-after">
+                <div><small>BEFORE</small><code>warning: app-server sent notification `remoteC...</code></div>
+                <div><small>AFTER</small><code><b>READY</b> · queue 0 · agents 0/3 · terminals 1<br><i>!</i> runtime notice 1 · Ctrl+D details</code></div>
+              </div>
+              <ul class="acceptance-list">
+                <li>80/120/160열에서 상태 이름과 action key는 절대 잘리지 않는다.</li>
+                <li>동일 원인의 warning은 count로 합치고 raw payload는 diagnostics로 보낸다.</li>
+                <li>live tail만 갱신하며 committed scrollback identity를 바꾸지 않는다.</li>
+              </ul>
+              <div class="code-map"><span>live_status_layout.rs</span><span>tail_copy.rs</span><span>typed notice projection</span></div>
+            </div>
+          </article>
+
+          <article class="priority-card">
+            <div class="priority-aside"><span>P0</span><strong>02</strong><small>command context</small></div>
+            <div class="priority-content">
+              <div class="priority-heading">
+                <div><p class="eyebrow">기존 palette를 상용 수준으로</p><h3>Contextual Command Palette</h3></div>
+                <span class="effort">M</span>
+              </div>
+              <p>새 palette를 만드는 일이 아니다. 현재 19개 command registry에 상태 badge, disabled reason, argument preview, 예상 결과를 추가한다.</p>
+              <div class="concept-terminal">
+                <p><span class="prompt">›</span> :pa</p>
+                <p class="dim">palette 1/3 · parallel ready</p>
+                <p><span class="cyan">› :parallel</span> <b class="pill ready">READY</b> operations board 열기</p>
+                <p>  :peek <b class="pill locked">LOCKED</b> agent가 시작된 뒤 사용</p>
+                <p>  :activity <b class="pill ready">READY</b> 작업 이벤트 보기</p>
+                <p class="detail">Enter 실행 · detail: accepted queue를 최대 3개 lane에 dispatch</p>
+              </div>
+              <ul class="acceptance-list">
+                <li>선택 command의 인자·부작용·현재 가능 여부를 한 줄로 설명한다.</li>
+                <li>좁은 폭에서는 설명→badge 순서로 접고 command 이름은 보존한다.</li>
+                <li>실행 가능성은 UI 추측이 아니라 application readiness를 매핑한다.</li>
+              </ul>
+              <div class="code-map"><span>inline_shell_commands.rs</span><span>prompt_composer.rs</span><span>language.rs</span></div>
+            </div>
+          </article>
+
+          <article class="priority-card">
+            <div class="priority-aside"><span>P0</span><strong>03</strong><small>unified work</small></div>
+            <div class="priority-content">
+              <div class="priority-heading">
+                <div><p class="eyebrow">:activity · :parallel · :peek의 공통 입구</p><h3>Work Center</h3></div>
+                <span class="effort">L</span>
+              </div>
+              <p>현재 화면들을 폐기하지 않고 상위 summary projection을 추가한다. task phase, agent lane, background terminal, approval, delivery를 한 viewport에서 훑고 기존 상세 화면으로 들어간다.</p>
+              <div class="concept-terminal work-center">
+                <p><b>WORK</b> Review 2/4 · agents 2/3 · terminals 1 · 03:18</p>
+                <p class="divider">────────────────────────────────────────────────────</p>
+                <p><span class="green">✓ Context</span> 42s <span class="dim">repo graph + constraints</span></p>
+                <p><span class="cyan">◆ Review</span> 2 active <span class="dim">slot-1 API · slot-2 tests</span></p>
+                <p><span class="dim">○ Verify</span> waiting <span class="dim">requires review results</span></p>
+                <p><span class="dim">○ Deliver</span> blocked <span class="amber">PR policy</span></p>
+                <p class="divider">────────────────────────────────────────────────────</p>
+                <p class="detail">Enter detail · V agent · T terminal · p pause · x stop · Esc close</p>
+              </div>
+              <ul class="acceptance-list">
+                <li>정확한 session history가 없으면 “unknown”을 유지하고 가짜 progress를 만들지 않는다.</li>
+                <li>selected item만 bounded detail을 받고, 16-row inline viewport 예산을 지킨다.</li>
+                <li>기존 Parallel Operations와 activity card의 typed projection을 재사용한다.</li>
+              </ul>
+              <div class="code-map"><span>InlineInspectionFrameModel</span><span>Parallel projection</span><span>activity overlay state</span></div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="report-section" id="backlog" data-section>
+        <div class="section-heading backlog-heading">
+          <div>
+            <p class="kicker">PRIORITIZED BACKLOG / 12 ITEMS</p>
+            <h2>나머지 개선 목록</h2>
+          </div>
+          <div class="filter-group" role="group" aria-label="우선순위 필터">
+            <button type="button" class="is-active" data-filter="all" aria-pressed="true">전체</button>
+            <button type="button" data-filter="p0" aria-pressed="false">P0</button>
+            <button type="button" data-filter="p1" aria-pressed="false">P1</button>
+            <button type="button" data-filter="p2" aria-pressed="false">P2</button>
+          </div>
+        </div>
+
+        <div class="backlog-list">
+          <article data-priority="p0"><span class="priority-label p0">P0</span><span class="item-no">01</span><div><h3>Semantic operator ribbon</h3><p>raw notification을 상태·영향·action으로 압축한다.</p></div><span class="owner">shell presentation</span><span class="size">M</span></article>
+          <article data-priority="p0"><span class="priority-label p0">P0</span><span class="item-no">02</span><div><h3>Contextual command palette</h3><p>availability, argument, disabled reason, expected result를 추가한다.</p></div><span class="owner">composer</span><span class="size">M</span></article>
+          <article data-priority="p0"><span class="priority-label p0">P0</span><span class="item-no">03</span><div><h3>Unified Work Center</h3><p>task·agent·terminal·approval·delivery의 공통 summary 화면을 만든다.</p></div><span class="owner">inspection projection</span><span class="size">L</span></article>
+          <article data-priority="p0"><span class="priority-label p0">P0</span><span class="item-no">04</span><div><h3>Operator-grade failure card</h3><p>실패를 “원인 / 영향 / 해결 / 재검증” 순서로 보여준다.</p></div><span class="owner">diagnostics</span><span class="size">M</span></article>
+          <article data-priority="p1"><span class="priority-label p1">P1</span><span class="item-no">05</span><div><h3>Return recap</h3><p>idle 후 복귀할 때 완료·차단·대기 중인 핵심 변화만 한 줄로 요약한다.</p></div><span class="owner">session projection</span><span class="size">M</span></article>
+          <article data-priority="p1"><span class="priority-label p1">P1</span><span class="item-no">06</span><div><h3>Plan / approval review density</h3><p>승인 대상, diff 규모, 위험, 선택지를 같은 viewport에 묶는다.</p></div><span class="owner">review center</span><span class="size">L</span></article>
+          <article data-priority="p1"><span class="priority-label p1">P1</span><span class="item-no">07</span><div><h3>PR delivery state in footer</h3><p>draft·review·changes requested·merged를 delivery authority에서 읽어 표시한다.</p></div><span class="owner">delivery projection</span><span class="size">M</span></article>
+          <article data-priority="p1"><span class="priority-label p1">P1</span><span class="item-no">08</span><div><h3>No-clipping copy budget</h3><p>명령 signature와 action key의 80/120/160열 축약 순서를 명시한다.</p></div><span class="owner">language + layout</span><span class="size">S</span></article>
+          <article data-priority="p1"><span class="priority-label p1">P1</span><span class="item-no">09</span><div><h3>Background terminal preview</h3><p>명령, 상태, 최근 비어 있지 않은 2~3줄만 bounded preview한다.</p></div><span class="owner">runtime activity</span><span class="size">M</span></article>
+          <article data-priority="p2"><span class="priority-label p2">P2</span><span class="item-no">10</span><div><h3>Statusline density preset</h3><p>semantic 항목은 고정하되 compact / operator 두 밀도 preset을 제공한다.</p></div><span class="owner">preferences</span><span class="size">S</span></article>
+          <article data-priority="p2"><span class="priority-label p2">P2</span><span class="item-no">11</span><div><h3>Attention notification policy</h3><p>질문·승인·완료·오류만 terminal blur 상태에서 선택적으로 알린다.</p></div><span class="owner">outbound attention port</span><span class="size">M</span></article>
+          <article data-priority="p2"><span class="priority-label p2">P2</span><span class="item-no">12</span><div><h3>Transcript operations</h3><p>last response copy, turn diff, raw event view를 명령 팔레트에서 찾게 한다.</p></div><span class="owner">conversation tools</span><span class="size">M</span></article>
+        </div>
+      </section>
+
+      <section class="report-section" id="delivery" data-section>
+        <div class="section-heading compact">
+          <div>
+            <p class="kicker">DELIVERY ORDER / REVIEWABLE SLICES</p>
+            <h2>한 번에 갈아엎지 않는 구현 순서</h2>
+          </div>
+        </div>
+
+        <ol class="delivery-steps">
+          <li><span>Slice A</span><div><h3>Notice classification + ribbon</h3><p>가장 자주 보이는 ready/blocked/active 화면의 신호 대 잡음비부터 개선한다.</p><small>증거: 80/120/160 snapshots + blocked startup + 실제 ConPTY</small></div></li>
+          <li><span>Slice B</span><div><h3>Palette detail model</h3><p>registry와 reducer는 유지하고 presentation metadata와 readiness mapping만 확장한다.</p><small>증거: filter/no-match/argument/disabled snapshot + keyboard flow</small></div></li>
+          <li><span>Slice C</span><div><h3>Work Center summary projection</h3><p>기존 parallel/activity detail을 공통 inspection viewport로 묶는다.</p><small>증거: idle/running/blocked/desync + 80/120/160 + resize/close</small></div></li>
+          <li><span>Slice D</span><div><h3>Failure cards + recap</h3><p>실패 해결과 복귀 맥락을 보강하고 긴 작업의 operator loop를 완성한다.</p><small>증거: Windows ACL, missing runtime, public repository blocker fixtures</small></div></li>
+        </ol>
+
+        <div class="validation-grid">
+          <article><span>E1–E4</span><h3>실터미널</h3><p>Windows Terminal/WSL, PowerShell, tmux, direct xterm에서 물리 resize와 scrollback을 확인한다.</p></article>
+          <article><span>80/120/160</span><h3>결정론 렌더</h3><p>모든 새 copy가 지정 폭에서 잘리지 않고 우선순위대로 축약되는지 snapshot으로 고정한다.</p></article>
+          <article><span>NO SHADOW STATE</span><h3>아키텍처</h3><p>TUI가 queue, delivery, agent lifecycle을 새로 저장하거나 추정하지 않는지 contract test로 막는다.</p></article>
+          <article><span>A11Y</span><h3>키보드·색상</h3><p>색 없이도 상태가 읽히며 focus, Esc, Ctrl+C, narrow cursor 동작이 일관적인지 확인한다.</p></article>
+        </div>
+      </section>
+
+      <section class="report-section sources-section" id="sources" data-section>
+        <div class="section-heading compact">
+          <div>
+            <p class="kicker">EVIDENCE LEDGER</p>
+            <h2>자료와 해석의 경계</h2>
+          </div>
+        </div>
+
+        <div class="evidence-legend">
+          <span class="evidence-tag reproduced">현재 재현</span><p>2026-07-31 현재 브랜치 바이너리 + Windows ConPTY + 실제 Codex app-server.</p>
+          <span class="evidence-tag physical">실터미널 E3</span><p>기존 commit의 실제 tmux PTY 관찰. 현재 브랜치의 완전한 E1–E4 재검증은 아님.</p>
+          <span class="evidence-tag deterministic">결정론 렌더</span><p>Ratatui TestBackend snapshot에서 렌더한 텍스트 권위.</p>
+          <span class="evidence-tag documented">공식 문서</span><p>제품 기능 설명. Akra 적용안은 이 자료에서 도출한 설계 판단.</p>
+          <span class="evidence-tag visual">공식 이미지</span><p>표현 참고용. 성능·정확성·현재 기본값을 증명하지 않음.</p>
+        </div>
+
+        <div class="source-columns">
+          <div>
+            <h3>Akra 내부 근거</h3>
+            <ul>
+              <li><a href="../../../design/07-tui-layered-architecture-and-aesthetic-contract.md">TUI layered architecture & aesthetic contract</a></li>
+              <li><a href="../../../validation/terminal-ui-testing-methodology.md">Terminal UI testing methodology</a></li>
+              <li><a href="../../../validation/artifacts/pr-2054-context-hud-composer/README.md">Context HUD real-terminal evidence</a></li>
+              <li><a href="../../../validation/artifacts/tui-parallel-operations/README.md">Parallel Operations rendering evidence</a></li>
+              <li><a href="../tui-architecture/README.md">이전 TUI architecture field report</a></li>
+            </ul>
+          </div>
+          <div>
+            <h3>경쟁 제품 공식 자료</h3>
+            <ul>
+              <li><a href="https://developers.openai.com/codex/cli/slash-commands">OpenAI · Codex developer commands</a></li>
+              <li><a href="https://x.ai/cli">SpaceXAI · Grok Build</a> · <a href="https://x.ai/news/workflows">Workflows</a> · <a href="https://github.com/xai-org/grok-build">source</a></li>
+              <li><a href="https://opencode.ai/docs/tui/">OpenCode · TUI</a> · <a href="https://opencode.ai/docs/commands/">commands</a></li>
+              <li><a href="https://code.claude.com/docs/en/interactive-mode">Anthropic · interactive mode</a> · <a href="https://code.claude.com/docs/en/statusline">statusline</a></li>
+              <li><a href="https://google-gemini.github.io/gemini-cli/docs/cli/commands.html">Google · Gemini CLI commands</a></li>
+              <li><a href="https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent">Pi coding agent official repository</a></li>
+            </ul>
+          </div>
+        </div>
+        <p class="retrieval-note">공식 웹 자료 확인일: 2026-07-31 (Asia/Seoul). 공식 이미지의 pinned commit·SHA-256은 <a href="../tui-architecture/assets/README.md">asset provenance</a>에 기록돼 있다.</p>
+      </section>
+    </main>
+  </div>
+
+  <dialog class="image-dialog" id="imageDialog" aria-label="캡처 크게 보기">
+    <button type="button" class="dialog-close" aria-label="닫기">×</button>
+    <img alt="">
+    <p></p>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>
