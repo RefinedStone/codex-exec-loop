@@ -27,6 +27,18 @@ pub(super) enum TuiLanguage {
     Korean,
 }
 
+pub(super) struct WorkCenterLocalizedCopy {
+    pub(super) subtitle: &'static str,
+    pub(super) no_task: &'static str,
+    pub(super) no_active_turn: &'static str,
+    pub(super) no_terminal: &'static str,
+    pub(super) no_approval: &'static str,
+    pub(super) unknown: &'static str,
+    pub(super) selected_prefix: &'static str,
+    pub(super) keys_navigation: &'static str,
+    pub(super) keys_direct: &'static str,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct LanguageSelectionOption {
     pub(super) language: TuiLanguage,
@@ -56,6 +68,33 @@ pub(super) const TUI_LOCALIZED_IMPORTANT_MARKERS: &[&str] =
 
 impl TuiLanguage {
     pub(super) const SUPPORTED_LABELS: &'static str = "english, korean";
+
+    pub(super) const fn work_center_copy(self) -> WorkCenterLocalizedCopy {
+        match self {
+            Self::English => WorkCenterLocalizedCopy {
+                subtitle: "Read-only authority summary · Enter opens the selected detail surface",
+                no_task: "No ready conversation projection",
+                no_active_turn: "no active turn",
+                no_terminal: "No terminal activity recorded",
+                no_approval: "No runtime approval is waiting",
+                unknown: "unknown",
+                selected_prefix: "Selected",
+                keys_navigation: "Keys · ↑↓ / jk select · Enter drill in · Esc close",
+                keys_direct: "A activity · V agents · T terminal · R reviews · D delivery",
+            },
+            Self::Korean => WorkCenterLocalizedCopy {
+                subtitle: "읽기 전용 권한 요약 · Enter로 선택한 상세 화면 열기",
+                no_task: "준비된 대화 투영이 없습니다",
+                no_active_turn: "활성 턴 없음",
+                no_terminal: "기록된 터미널 활동이 없습니다",
+                no_approval: "대기 중인 런타임 승인이 없습니다",
+                unknown: "알 수 없음",
+                selected_prefix: "선택",
+                keys_navigation: "키 · ↑↓ / jk 선택 · Enter 상세 · Esc 닫기",
+                keys_direct: "A 활동 · V 에이전트 · T 터미널 · R 리뷰 · D 전달",
+            },
+        }
+    }
 
     pub(super) fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
@@ -889,6 +928,7 @@ impl TuiLanguage {
     ) -> &'static str {
         match (self, command) {
             (Self::English, InlineShellCommand::Diagnostics) => "diagnostics",
+            (Self::English, InlineShellCommand::Work) => "unified work center",
             (Self::English, InlineShellCommand::Parallel) => "parallel mode",
             (Self::English, InlineShellCommand::Peek) => "parallel agent peek",
             (Self::English, InlineShellCommand::Activity) => "progressive activity cards",
@@ -908,6 +948,7 @@ impl TuiLanguage {
             (Self::English, InlineShellCommand::NewDraft) => "new draft",
             (Self::English, InlineShellCommand::Help) => "command help",
             (Self::Korean, InlineShellCommand::Diagnostics) => "진단",
+            (Self::Korean, InlineShellCommand::Work) => "통합 작업 센터",
             (Self::Korean, InlineShellCommand::Parallel) => "병렬 모드",
             (Self::Korean, InlineShellCommand::Peek) => "병렬 에이전트 보기",
             (Self::Korean, InlineShellCommand::Activity) => "활동 카드 목록",
@@ -1022,6 +1063,9 @@ impl TuiLanguage {
     ) -> &'static str {
         match (self, command) {
             (Self::English, InlineShellCommand::Diagnostics) => "open startup diagnostics",
+            (Self::English, InlineShellCommand::Work) => {
+                "open task, agent, terminal, approval, and delivery summary"
+            }
             (Self::English, InlineShellCommand::Parallel) => "enable mode and open the board",
             (Self::English, InlineShellCommand::Peek) => "inspect active agent work",
             (Self::English, InlineShellCommand::Activity) => "inspect retained activity",
@@ -1044,6 +1088,7 @@ impl TuiLanguage {
             (Self::English, InlineShellCommand::NewDraft) => "open a clean draft",
             (Self::English, InlineShellCommand::Help) => "open command help",
             (Self::Korean, InlineShellCommand::Diagnostics) => "시작 진단 열기",
+            (Self::Korean, InlineShellCommand::Work) => "작업·에이전트·터미널·승인·전달 요약 열기",
             (Self::Korean, InlineShellCommand::Parallel) => "병렬 모드와 운영 보드 시작",
             (Self::Korean, InlineShellCommand::Peek) => "활성 에이전트 작업 보기",
             (Self::Korean, InlineShellCommand::Activity) => "보존된 활동 보기",
@@ -1113,6 +1158,7 @@ impl TuiLanguage {
         }
         match command {
             InlineShellCommand::Diagnostics => "Enter로 진단 화면을 엽니다.",
+            InlineShellCommand::Work => "Enter로 통합 작업 센터를 엽니다.",
             InlineShellCommand::Parallel => "Enter로 병렬 모드를 시작합니다.",
             InlineShellCommand::Peek => "Enter로 실행 중인 병렬 에이전트를 봅니다.",
             InlineShellCommand::Activity => {
@@ -1308,6 +1354,7 @@ impl TuiLanguage {
                 },
             },
             InlineShellCommand::Diagnostics
+            | InlineShellCommand::Work
             | InlineShellCommand::Peek
             | InlineShellCommand::Sessions
             | InlineShellCommand::Stop
@@ -1326,6 +1373,7 @@ impl TuiLanguage {
             (Self::Korean, InlineShellCommand::Diagnostics) => {
                 "진단 화면을 열었습니다.".to_string()
             }
+            (Self::Korean, InlineShellCommand::Work) => "통합 작업 센터를 열었습니다.".to_string(),
             (Self::Korean, InlineShellCommand::Sessions) => "최근 세션을 열었습니다.".to_string(),
             (Self::Korean, InlineShellCommand::Reviews) => "리뷰 센터를 열었습니다.".to_string(),
             (Self::Korean, InlineShellCommand::Queue) => "계획 큐를 열었습니다.".to_string(),
@@ -2078,10 +2126,10 @@ mod tests {
             TuiLanguage::English.inline_command_expected_result(InlineShellCommand::Sessions, true),
             "open the operations board"
         );
-        let english = TuiLanguage::English.inline_command_palette_header(3, 19);
-        let korean = TuiLanguage::Korean.inline_command_palette_header(3, 19);
-        assert!(english.contains("palette 3/19"));
-        assert!(korean.contains("팔레트 3/19"));
+        let english = TuiLanguage::English.inline_command_palette_header(3, 20);
+        let korean = TuiLanguage::Korean.inline_command_palette_header(3, 20);
+        assert!(english.contains("palette 3/20"));
+        assert!(korean.contains("팔레트 3/20"));
         let english_keys = TuiLanguage::English
             .inline_command_palette_key_lines()
             .join("\n");

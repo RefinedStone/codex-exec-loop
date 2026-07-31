@@ -17,6 +17,7 @@ use crate::domain::conversation::ConversationReasoningEffort;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InlineShellCommand {
     Diagnostics,
+    Work,
     Parallel,
     Peek,
     Activity,
@@ -195,7 +196,7 @@ pub(crate) struct InlineShellCommandHelpEntry {
     pub(crate) detail: &'static str,
 }
 #[cfg(test)]
-const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [off]  :peek  :activity [all|diff|output|command|…]  :sessions  :reviews  :queue  :directions  :turns <positive|infinite|off>  :stop  :model [default]  :view [simple|medium|detail]  :language [english|korean]  :think <none|minimal|low|medium|high|xhigh|default>  :planning [doctor]  :doctor  :reset <queue|directions|all>  :new  :help";
+const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :work  :parallel [off]  :peek  :activity [all|diff|output|command|…]  :sessions  :reviews  :queue  :directions  :turns <positive|infinite|off>  :stop  :model [default]  :view [simple|medium|detail]  :language [english|korean]  :think <none|minimal|low|medium|high|xhigh|default>  :planning [doctor]  :doctor  :reset <queue|directions|all>  :new  :help";
 const ACTIVITY_USAGE: &str = "Type `:activity [all|diff|output|command|patch|…]` to inspect retained progressive activity cards.";
 const RESET_USAGE: &str =
     "Type `:reset <queue|directions|all>` and press Enter to reset planning state.";
@@ -214,6 +215,14 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         aliases: &[":diag", ":diagnostics"],
         buffered_hint: "Press Enter to open the diagnostics inspection.",
         execution_status: Some("opened diagnostics inspection"),
+        requires_argument: false,
+    },
+    InlineShellCommandSpec {
+        command: InlineShellCommand::Work,
+        primary_name: ":work",
+        aliases: &[":w", ":work"],
+        buffered_hint: "Press Enter to open the unified work center.",
+        execution_status: Some("opened unified work center"),
         requires_argument: false,
     },
     InlineShellCommandSpec {
@@ -567,6 +576,7 @@ impl InlineShellCommand {
             InlineShellCommand::Language => ":language",
             InlineShellCommand::Think => ":think ",
             InlineShellCommand::Diagnostics
+            | InlineShellCommand::Work
             | InlineShellCommand::Parallel
             | InlineShellCommand::Peek
             | InlineShellCommand::Activity
@@ -592,6 +602,7 @@ impl InlineShellCommand {
     }
     fn help_usage(self) -> &'static str {
         match self {
+            InlineShellCommand::Work => ":work",
             InlineShellCommand::Parallel => ":parallel [off]",
             InlineShellCommand::Peek => ":peek",
             InlineShellCommand::Activity => ":activity [all|diff|output|command|patch|mcp|plan|…]",

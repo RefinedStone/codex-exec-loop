@@ -92,6 +92,103 @@ fn parallel_operations_detail(
     )
 }
 
+fn commercial_work_center_app() -> NativeTuiApp {
+    let mut app = make_test_app();
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.set_parallel_mode_enabled_for_test(true);
+    app.set_parallel_mode_readiness_snapshot_for_test(Some(ParallelModeReadinessSnapshot::new(
+        "/tmp/root",
+        ParallelModeReadinessState::Ready,
+        Vec::new(),
+        None,
+    )));
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
+        panic!("test app should start in a ready conversation state");
+    };
+    conversation.thread_id = "thread-work-center".to_string();
+    conversation.title = "Ship the unified operator surface".to_string();
+    set_running_turn(conversation, "turn-work-center");
+
+    let slot = ParallelModePoolSlotSnapshot::new(
+        "slot-1",
+        ParallelModePoolSlotState::Running,
+        "codex/tui-unified-work-center",
+        "pool/slot-1",
+        "agent-1 / task-work-center",
+    )
+    .with_owner_identity("agent-1", "task-work-center", "session-1", None);
+    let roster = ParallelModeAgentRosterSnapshot::new(
+        vec![
+            ParallelModeAgentRosterEntry::new(
+                "agent-1",
+                "Implement unified work center",
+                "slot-1",
+                "codex/tui-unified-work-center",
+                "running",
+                "06m 42s",
+                "projecting typed task and delivery authority",
+            )
+            .with_profile("Artificer", "Implementation")
+            .with_lease_identity("task-work-center", "session-1", None),
+        ],
+        "no active agents",
+    );
+    let detail = ParallelModeAgentSessionDetailSnapshot::new(
+        "session-1",
+        "agent-1",
+        "task-work-center",
+        "Implement unified work center",
+        "slot-1",
+        Some("thread-agent-1".to_string()),
+        "/tmp/akra-pool/slot-1",
+        "codex/tui-unified-work-center",
+        "2026-07-31T09:00:00Z",
+        "running",
+        "running",
+        "rendering responsive work center",
+        "cargo test pending",
+        "authority projection current",
+        None,
+        vec![ParallelModeAgentSessionHistoryEntry::new(
+            "running",
+            "2026-07-31T09:04:00Z",
+            "work center frame active",
+        )],
+        "2026-07-31T09:04:00Z",
+    );
+    let distributor = ParallelModeDistributorSnapshot::new(
+        vec![ParallelModeDistributorQueueItem::new(
+            "agent-1",
+            "Implement unified work center",
+            ParallelModeQueueItemState::MergePending,
+            "codex/tui-unified-work-center",
+            "abc1234",
+            "waiting for the final rebase merge gate",
+        )],
+        Vec::new(),
+        "merge pending",
+        "delivery authority is current",
+    );
+    app.set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
+        ParallelModeSupervisorState::Supervise,
+        "/tmp/root",
+        ParallelModePoolBoardSnapshot::new(1, "/tmp/akra-pool", "running", vec![slot]),
+        roster,
+        ParallelModeSupervisorDetailSnapshot::new(Some(detail.clone()), "no detail")
+            .with_lane_sessions(vec![detail]),
+        distributor,
+        Some("unified work center authority projection".to_string()),
+    )));
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
+        panic!("test app should retain a ready conversation state");
+    };
+    set_running_turn(conversation, "turn-work-center");
+    app.show_work_center_overlay();
+    app
+}
+
 #[test]
 fn inline_main_buffer_ready_shell_matches_snapshot() {
     /*
@@ -209,6 +306,77 @@ fn contextual_command_palette_scales_across_80_120_and_160_columns() {
     let wide = tui_testkit::render_inline_snapshot(&mut wide_app, 160, 24);
     assert_palette_contract(&wide, 160);
     assert_snapshot!("contextual_command_palette_160", wide);
+}
+
+#[test]
+fn unified_work_center_scales_across_80_120_and_160_columns() {
+    fn assert_work_center_contract(rendered: &str, width: u16) {
+        assert!(
+            rendered.contains("Work Center / inline inspection"),
+            "{width}: {rendered}"
+        );
+        for label in ["TASK", "AGENTS", "TERMINAL", "APPROVAL", "DELIVERY"] {
+            assert!(
+                rendered.contains(label),
+                "{width} missing {label}: {rendered}"
+            );
+        }
+        assert!(
+            rendered.contains("TASK      RUNNING"),
+            "{width}: {rendered}"
+        );
+        assert!(
+            rendered.contains("AGENTS    RUNNING"),
+            "{width}: {rendered}"
+        );
+        assert!(
+            rendered.contains("DELIVERY  WORKING"),
+            "{width}: {rendered}"
+        );
+        assert!(rendered.contains("Selected · TASK"), "{width}: {rendered}");
+        assert!(rendered.contains("Enter drill in"), "{width}: {rendered}");
+        assert!(rendered.contains("A activity"), "{width}: {rendered}");
+        assert!(!rendered.contains("Enter send"), "{width}: {rendered}");
+    }
+
+    let mut narrow_app = commercial_work_center_app();
+    let narrow = tui_testkit::render_inline_snapshot(&mut narrow_app, 80, 24);
+    assert_work_center_contract(&narrow, 80);
+    assert_snapshot!("unified_work_center_80", narrow);
+
+    let mut medium_app = commercial_work_center_app();
+    let medium = tui_testkit::render_inline_snapshot(&mut medium_app, 120, 24);
+    assert_work_center_contract(&medium, 120);
+    assert_snapshot!("unified_work_center_120", medium);
+
+    let mut wide_app = commercial_work_center_app();
+    let wide = tui_testkit::render_inline_snapshot(&mut wide_app, 160, 24);
+    assert_work_center_contract(&wide, 160);
+    assert_snapshot!("unified_work_center_160", wide);
+}
+
+#[test]
+fn unified_work_center_survives_resize_exposes_desync_and_closes_to_prompt() {
+    let mut app = commercial_work_center_app();
+    let mut snapshot = app.parallel_mode_supervisor_snapshot();
+    snapshot.roster.entries.clear();
+    app.set_parallel_mode_supervisor_snapshot_for_test(Some(snapshot));
+
+    let wide = tui_testkit::render_inline_snapshot(&mut app, 160, 24);
+    let narrow = tui_testkit::render_inline_snapshot(&mut app, 80, 24);
+    for rendered in [&wide, &narrow] {
+        assert!(rendered.contains("AGENTS    DESYNC"), "{rendered}");
+        assert!(rendered.contains("DELIVERY  DESYNC"), "{rendered}");
+        assert!(rendered.contains("TASK"), "{rendered}");
+        assert!(rendered.contains("Keys"), "{rendered}");
+    }
+
+    assert!(app.handle_shell_overlay_key(event::KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE,)));
+    assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Hidden);
+    assert!(app.prompt_input_has_focus());
+    let closed = tui_testkit::render_inline_snapshot(&mut app, 80, 24);
+    assert!(!closed.contains("Work Center / inline inspection"));
+    assert!(closed.contains("Describe a task or type : for commands"));
 }
 
 #[test]

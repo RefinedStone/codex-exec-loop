@@ -166,6 +166,8 @@ mod tui_testkit;
 mod turn_submission_runtime;
 #[path = "app/view_selection_overlay_ui.rs"]
 mod view_selection_overlay_ui;
+#[path = "app/work_center_overlay_ui.rs"]
+mod work_center_overlay_ui;
 
 // Re-exports below are the narrow surface area sibling modules expect from this
 // app module root. Keeping them here makes the dependency graph explicit: app
@@ -259,6 +261,7 @@ use theme::AkraTheme;
 use view_selection_overlay_ui::{
     ConversationViewMode, VIEW_SELECTION_MODE_OPTIONS, ViewSelectionOverlayUiState,
 };
+use work_center_overlay_ui::{WorkCenterOverlayUiState, WorkCenterSection};
 
 // Auto-follow submission carries more than a generated prompt: it records the
 // turn that produced the handoff, the transcript line shown to the operator, any
@@ -372,6 +375,7 @@ impl InlineHistoryRenderMode {
  */
 struct NativeTuiShellState {
     chrome: ShellChromeState,
+    work_center_overlay_ui_state: WorkCenterOverlayUiState,
     supersession_mud_ui_state: SupersessionMudUiState,
     parallel_peek_overlay_ui_state: ParallelPeekOverlayUiState,
     progressive_activity_overlay_ui_state: ProgressiveActivityOverlayUiState,

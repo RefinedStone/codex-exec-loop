@@ -328,7 +328,7 @@ fn startup_prompt_command_palette_remains_visible_after_colon_input() {
     let rendered = tui_testkit::screen_text(&terminal);
 
     assert!(rendered.contains("> :"));
-    assert!(rendered.contains("palette 1/19"));
+    assert!(rendered.contains("palette 1/20"));
     assert!(rendered.contains("↑/↓ or Tab select"));
     assert!(rendered.contains(":diag"));
     assert!(rendered.contains("READY"));
@@ -340,7 +340,7 @@ fn startup_prompt_command_palette_remains_visible_after_colon_input() {
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
         .expect("narrow inline render succeeds");
     let narrow = tui_testkit::screen_text(&narrow_terminal);
-    assert!(narrow.contains("palette 1/19"), "{narrow}");
+    assert!(narrow.contains("palette 1/20"), "{narrow}");
     assert!(narrow.contains("> :diag"), "{narrow}");
     assert!(narrow.contains("READY"), "{narrow}");
     assert!(narrow.contains("↑/↓ or Tab select"), "{narrow}");
@@ -364,7 +364,7 @@ fn startup_prompt_command_palette_uses_selected_korean_language() {
         .expect("inline render succeeds");
     let rendered = tui_testkit::screen_text(&terminal);
 
-    assert!(rendered.contains("팔레트 1/19"));
+    assert!(rendered.contains("팔레트 1/20"));
     assert!(rendered.contains(":diag  READY"));
     assert!(rendered.contains("시작 진단 열기"));
     assert!(rendered.contains("↑/↓ 또는 Tab 선택"));

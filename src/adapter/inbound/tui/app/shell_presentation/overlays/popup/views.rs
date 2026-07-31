@@ -134,6 +134,25 @@ pub(crate) struct ParallelPeekOverlayView {
 }
 
 /*
+ * Work Center is a read-only common entry over existing task, agent, terminal,
+ * approval, and delivery projections. It deliberately carries no copied domain
+ * state: each frame rebuilds these bounded rows from the same screen snapshot
+ * used by the dedicated drill-down surfaces.
+ */
+pub(crate) struct WorkCenterOverlayView {
+    // Product identity and the aggregate at-a-glance state.
+    pub(crate) header_lines: Vec<Line<'static>>,
+    // Compact cross-surface counts and authority-health context.
+    pub(crate) summary_lines: Vec<Line<'static>>,
+    // Five stable focus rows, with selection and state styles pre-applied.
+    pub(crate) item_lines: Vec<Line<'static>>,
+    // Only the selected row's bounded explanation and drill-in destination.
+    pub(crate) detail_lines: Vec<Line<'static>>,
+    // Navigation and direct drill-in shortcuts.
+    pub(crate) key_lines: Vec<Line<'static>>,
+}
+
+/*
  * Queue overlay projects the planning application read model into renderer sections.
  * Accepted queue rows, proposal candidates, and explanatory notes are intentionally
  * separate so the UI never blends committed work with suggested next work.

@@ -225,7 +225,7 @@ fn lane_projection_discrepancy(
     }
 }
 
-fn operations_board_state_label(
+pub(super) fn operations_board_state_label(
     mode_enabled: bool,
     refreshing: bool,
     snapshot: &ParallelModeSupervisorSnapshot,
@@ -310,6 +310,34 @@ fn operations_blocker(
     snapshot: &ParallelModeSupervisorSnapshot,
     selected_lane: Option<&OperationsLane<'_>>,
 ) -> Option<String> {
+    global_operations_blocker(screen_model, snapshot).or_else(|| {
+        selected_lane.and_then(|lane| {
+            (lane.discrepancy.is_some()
+                || matches!(
+                    lane.slot.state,
+                    ParallelModePoolSlotState::Blocked
+                        | ParallelModePoolSlotState::Missing
+                        | ParallelModePoolSlotState::Unavailable
+                ))
+            .then(|| {
+                lane.discrepancy.map_or_else(
+                    || lane.slot.worktree_label.clone(),
+                    |discrepancy| {
+                        format!(
+                            "{discrepancy} · {}",
+                            truncate_timeline_text(&lane.slot.worktree_label, 88)
+                        )
+                    },
+                )
+            })
+        })
+    })
+}
+
+pub(super) fn global_operations_blocker(
+    screen_model: &ConversationScreenModel<'_>,
+    snapshot: &ParallelModeSupervisorSnapshot,
+) -> Option<String> {
     screen_model
         .last_parallel_mode_dispatch_withheld_reason
         .clone()
@@ -327,27 +355,27 @@ fn operations_blocker(
                 .clone()
         })
         .or_else(|| snapshot.distributor.head_blocked_detail.clone())
-        .or_else(|| {
-            selected_lane.and_then(|lane| {
-                (lane.discrepancy.is_some()
-                    || matches!(
-                        lane.slot.state,
-                        ParallelModePoolSlotState::Blocked
-                            | ParallelModePoolSlotState::Missing
-                            | ParallelModePoolSlotState::Unavailable
-                    ))
-                .then(|| {
-                    lane.discrepancy.map_or_else(
-                        || lane.slot.worktree_label.clone(),
-                        |discrepancy| {
-                            format!(
-                                "{discrepancy} · {}",
-                                truncate_timeline_text(&lane.slot.worktree_label, 88)
-                            )
-                        },
-                    )
-                })
-            })
+}
+
+pub(super) fn parallel_projection_has_desync(snapshot: &ParallelModeSupervisorSnapshot) -> bool {
+    if is_pending_pool_board(&snapshot.pool) {
+        return false;
+    }
+    let slot_has_disagreement = snapshot.pool.slots.iter().any(|slot| {
+        let roster = snapshot
+            .roster
+            .entries
+            .iter()
+            .find(|entry| entry.slot_id == slot.slot_id);
+        lane_projection_discrepancy(slot, roster).is_some()
+    });
+    slot_has_disagreement
+        || snapshot.roster.entries.iter().any(|entry| {
+            !snapshot
+                .pool
+                .slots
+                .iter()
+                .any(|slot| slot.slot_id == entry.slot_id)
         })
 }
 

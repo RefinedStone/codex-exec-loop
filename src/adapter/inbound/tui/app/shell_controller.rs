@@ -121,6 +121,10 @@ impl NativeTuiApp {
     pub(super) fn show_startup_overlay(&mut self) {
         self.dispatch_shell_chrome(ShellChromeEvent::StartupOverlayShown);
     }
+    pub(super) fn show_work_center_overlay(&mut self) {
+        self.shell.work_center_overlay_ui_state.reset();
+        self.dispatch_shell_chrome(ShellChromeEvent::WorkCenterOverlayShown);
+    }
     pub(super) fn show_session_overlay(&mut self) {
         if self.parallel_mode_enabled() {
             // In parallel mode the session shortcut is repurposed to the
@@ -196,6 +200,7 @@ impl NativeTuiApp {
         // same path is used for palette acceptance and typed slash commands.
         match command_input.command() {
             InlineShellCommand::Diagnostics => self.show_startup_overlay(),
+            InlineShellCommand::Work => self.show_work_center_overlay(),
             InlineShellCommand::Parallel => {
                 self.handle_parallel_shell_command(command_input.argument())
             }
@@ -976,6 +981,9 @@ impl NativeTuiApp {
             }
             return true;
         }
+        if self.shell.chrome.shell_overlay == ShellOverlay::WorkCenter {
+            return self.handle_work_center_overlay_key(key);
+        }
         if self.handle_supersession_overlay_key(key) {
             return true;
         }
@@ -1012,6 +1020,57 @@ impl NativeTuiApp {
 
         self.handle_session_overlay_key(key);
         true
+    }
+
+    fn handle_work_center_overlay_key(&mut self, key: event::KeyEvent) -> bool {
+        match (key.code, key.modifiers) {
+            (KeyCode::Up | KeyCode::Char('k'), KeyModifiers::NONE) => {
+                self.shell.work_center_overlay_ui_state.move_selection(-1);
+            }
+            (KeyCode::Down | KeyCode::Char('j'), KeyModifiers::NONE) => {
+                self.shell.work_center_overlay_ui_state.move_selection(1);
+            }
+            (KeyCode::Enter, KeyModifiers::NONE) => {
+                self.open_selected_work_center_section();
+            }
+            (KeyCode::Char('a' | 'A'), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+                self.show_progressive_activity_overlay_all();
+            }
+            (KeyCode::Char('v' | 'V'), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+                self.open_parallel_peek_overlay(None);
+            }
+            (KeyCode::Char('t' | 'T'), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+                self.show_progressive_activity_overlay_filter(Some(
+                    ProgressiveActivityCardKind::Terminal,
+                ));
+            }
+            (KeyCode::Char('r' | 'R'), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+                self.show_reviews_overlay()
+            }
+            (KeyCode::Char('d' | 'D'), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+                self.inspect_parallel_mode_shell()
+            }
+            _ => {}
+        }
+        true
+    }
+
+    fn open_selected_work_center_section(&mut self) {
+        match self.shell.work_center_overlay_ui_state.selected_section() {
+            WorkCenterSection::Task => {
+                self.show_progressive_activity_overlay_all();
+            }
+            WorkCenterSection::Agents => {
+                self.open_parallel_peek_overlay(None);
+            }
+            WorkCenterSection::Terminal => {
+                self.show_progressive_activity_overlay_filter(Some(
+                    ProgressiveActivityCardKind::Terminal,
+                ));
+            }
+            WorkCenterSection::Approval => self.show_reviews_overlay(),
+            WorkCenterSection::Delivery => self.inspect_parallel_mode_shell(),
+        }
     }
 
     fn handle_help_overlay_key(&mut self, key: event::KeyEvent) -> bool {
@@ -4848,6 +4907,57 @@ mod tests {
         assert_eq!(
             ready_conversation(&app).composer.input_buffer,
             "same request"
+        );
+    }
+
+    #[test]
+    fn work_command_opens_navigates_and_drills_into_terminal_activity() {
+        let mut app = test_native_tui_app();
+        let command =
+            InlineShellCommandInput::parse(":work").expect("work center command should parse");
+
+        app.execute_inline_shell_command_input(command);
+
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::WorkCenter);
+        assert_eq!(
+            app.shell.work_center_overlay_ui_state.selected_section(),
+            WorkCenterSection::Task
+        );
+        assert!(!app.prompt_input_has_focus());
+
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Down)));
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Char('j'))));
+        assert_eq!(
+            app.shell.work_center_overlay_ui_state.selected_section(),
+            WorkCenterSection::Terminal
+        );
+
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Enter)));
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Activity);
+        assert_eq!(
+            app.shell
+                .progressive_activity_overlay_ui_state
+                .card_filter(),
+            Some(ProgressiveActivityCardKind::Terminal)
+        );
+
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Esc)));
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Hidden);
+        assert!(app.prompt_input_has_focus());
+    }
+
+    #[test]
+    fn work_center_direct_agent_shortcut_uses_existing_parallel_peek_surface() {
+        let mut app = test_native_tui_app();
+        app.show_work_center_overlay();
+
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Char('v'))));
+
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::ParallelPeek);
+        assert!(
+            ready_conversation(&app)
+                .status_text
+                .contains("no active parallel agents")
         );
     }
 }

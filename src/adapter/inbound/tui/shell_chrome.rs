@@ -19,6 +19,7 @@ pub enum ShellOverlay {
     LanguageSelection,
     Supersession,
     ParallelPeek,
+    WorkCenter,
     Activity,
     Help,
     Reviews,
@@ -153,6 +154,7 @@ pub enum ShellChromeEvent {
     LanguageSelectionOverlayShown,
     SupersessionOverlayShown,
     ParallelPeekOverlayShown,
+    WorkCenterOverlayShown,
     ActivityOverlayShown,
     HelpOverlayShown,
     ReviewsOverlayShown,
@@ -214,6 +216,7 @@ pub fn reduce_shell_chrome(
                 | ShellChromeEvent::LanguageSelectionOverlayShown
                 | ShellChromeEvent::SupersessionOverlayShown
                 | ShellChromeEvent::ParallelPeekOverlayShown
+                | ShellChromeEvent::WorkCenterOverlayShown
                 | ShellChromeEvent::ActivityOverlayShown
                 | ShellChromeEvent::HelpOverlayShown
                 | ShellChromeEvent::ReviewsOverlayShown
@@ -328,6 +331,10 @@ pub fn reduce_shell_chrome(
             state.exit_confirmation_state = ExitConfirmationState::Hidden;
             state.shell_overlay = ShellOverlay::ParallelPeek;
         }
+        ShellChromeEvent::WorkCenterOverlayShown => {
+            state.exit_confirmation_state = ExitConfirmationState::Hidden;
+            state.shell_overlay = ShellOverlay::WorkCenter;
+        }
         ShellChromeEvent::ActivityOverlayShown => {
             state.exit_confirmation_state = ExitConfirmationState::Hidden;
             state.shell_overlay = ShellOverlay::Activity;
@@ -354,7 +361,10 @@ pub fn reduce_shell_chrome(
         }
         ShellChromeEvent::ApprovalOverlayShown => {
             state.exit_confirmation_state = ExitConfirmationState::Hidden;
-            if state.shell_overlay == ShellOverlay::DirectionsMaintenance {
+            if matches!(
+                state.shell_overlay,
+                ShellOverlay::DirectionsMaintenance | ShellOverlay::WorkCenter
+            ) {
                 state.approval_return_overlay = Some(state.shell_overlay);
             } else if state.shell_overlay != ShellOverlay::Approval {
                 state.approval_return_overlay = None;
@@ -1044,6 +1054,31 @@ mod tests {
                 exit_mode: ShellOverlayExitMode::Exit,
             })
         );
+    }
+
+    #[test]
+    fn approval_overlay_restores_the_suspended_work_center() {
+        let mut state = ShellChromeState::new();
+        state.shell_overlay = ShellOverlay::WorkCenter;
+
+        let shown = reduce_shell_chrome(state, ShellChromeEvent::ApprovalOverlayShown);
+        assert_eq!(shown.state.shell_overlay, ShellOverlay::Approval);
+        assert_eq!(
+            shown.state.approval_return_overlay,
+            Some(ShellOverlay::WorkCenter)
+        );
+        assert_eq!(
+            shown.overlay_transition,
+            Some(ShellOverlayTransition {
+                from: ShellOverlay::WorkCenter,
+                to: ShellOverlay::Approval,
+                exit_mode: ShellOverlayExitMode::Suspend,
+            })
+        );
+
+        let closed = reduce_shell_chrome(shown.state, ShellChromeEvent::ApprovalOverlayClosed);
+        assert_eq!(closed.state.shell_overlay, ShellOverlay::WorkCenter);
+        assert_eq!(closed.state.approval_return_overlay, None);
     }
 
     #[test]
