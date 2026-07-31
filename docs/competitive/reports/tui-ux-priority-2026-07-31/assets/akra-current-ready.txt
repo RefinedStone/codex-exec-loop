@@ -1,0 +1,5 @@
+Akra / tui-ux-competitiv...  •  ready  •  gpt-5.5/high  •  queue: idle
+warning: app-server sent notification `remoteC...
+╭ Task
+│ > Describe a task or type : for commands
+╰  Type a task  |  : commands
