@@ -331,6 +331,8 @@ fn startup_prompt_command_palette_remains_visible_after_colon_input() {
     assert!(rendered.contains("palette 1/19"));
     assert!(rendered.contains("↑/↓ or Tab select"));
     assert!(rendered.contains(":diag"));
+    assert!(rendered.contains("READY"));
+    assert!(rendered.contains("none → open startup diagnostics"));
     assert!(rendered.contains(":peek"));
 
     let mut narrow_terminal = tui_testkit::inline_terminal(48, 10);
@@ -340,6 +342,7 @@ fn startup_prompt_command_palette_remains_visible_after_colon_input() {
     let narrow = tui_testkit::screen_text(&narrow_terminal);
     assert!(narrow.contains("palette 1/19"), "{narrow}");
     assert!(narrow.contains("> :diag"), "{narrow}");
+    assert!(narrow.contains("READY"), "{narrow}");
     assert!(narrow.contains("↑/↓ or Tab select"), "{narrow}");
 }
 
@@ -362,7 +365,8 @@ fn startup_prompt_command_palette_uses_selected_korean_language() {
     let rendered = tui_testkit::screen_text(&terminal);
 
     assert!(rendered.contains("팔레트 1/19"));
-    assert!(rendered.contains(":diag  진단"));
+    assert!(rendered.contains(":diag  READY"));
+    assert!(rendered.contains("시작 진단 열기"));
     assert!(rendered.contains("↑/↓ 또는 Tab 선택"));
 
     let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state

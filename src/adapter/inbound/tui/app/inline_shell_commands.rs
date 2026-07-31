@@ -37,6 +37,132 @@ pub(crate) enum InlineShellCommand {
     Help,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InlineShellCommandStartupReadiness {
+    Ready,
+    Pending,
+    Blocked,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InlineShellCommandAvailabilityReason {
+    StartupChecksRunning,
+    StartupDiagnosticsNeedAttention,
+    ParallelTransitionInFlight,
+    ParallelModeDisabled,
+    NoActiveParallelAgents,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InlineShellCommandAvailability {
+    Ready,
+    Pending(InlineShellCommandAvailabilityReason),
+    Locked(InlineShellCommandAvailabilityReason),
+}
+
+impl InlineShellCommandAvailability {
+    pub(crate) fn is_ready(self) -> bool {
+        self == Self::Ready
+    }
+
+    pub(crate) fn reason(self) -> Option<InlineShellCommandAvailabilityReason> {
+        match self {
+            Self::Ready => None,
+            Self::Pending(reason) | Self::Locked(reason) => Some(reason),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct InlineShellCommandCapabilityContext {
+    pub(crate) startup_readiness: InlineShellCommandStartupReadiness,
+    pub(crate) parallel_mode_enabled: bool,
+    pub(crate) parallel_transition_in_flight: bool,
+    pub(crate) active_parallel_agent_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct InlineShellCommandCapabilitySet {
+    entries: Vec<(InlineShellCommand, InlineShellCommandAvailability)>,
+    parallel_mode_enabled: bool,
+}
+
+impl InlineShellCommandCapabilitySet {
+    pub(crate) fn from_application_context(context: InlineShellCommandCapabilityContext) -> Self {
+        let entries = INLINE_SHELL_COMMAND_SPECS
+            .iter()
+            .map(|spec| {
+                (
+                    spec.command,
+                    inline_shell_command_availability(spec.command, context),
+                )
+            })
+            .collect();
+        Self {
+            entries,
+            parallel_mode_enabled: context.parallel_mode_enabled,
+        }
+    }
+
+    pub(crate) fn availability(
+        &self,
+        command: InlineShellCommand,
+    ) -> InlineShellCommandAvailability {
+        self.entries
+            .iter()
+            .find_map(|(candidate, availability)| (*candidate == command).then_some(*availability))
+            .unwrap_or(InlineShellCommandAvailability::Ready)
+    }
+
+    pub(crate) fn parallel_mode_enabled(&self) -> bool {
+        self.parallel_mode_enabled
+    }
+}
+
+impl Default for InlineShellCommandCapabilitySet {
+    fn default() -> Self {
+        Self::from_application_context(InlineShellCommandCapabilityContext {
+            startup_readiness: InlineShellCommandStartupReadiness::Ready,
+            parallel_mode_enabled: false,
+            parallel_transition_in_flight: false,
+            active_parallel_agent_count: 0,
+        })
+    }
+}
+
+fn inline_shell_command_availability(
+    command: InlineShellCommand,
+    context: InlineShellCommandCapabilityContext,
+) -> InlineShellCommandAvailability {
+    use InlineShellCommandAvailability::{Locked, Pending, Ready};
+    use InlineShellCommandAvailabilityReason::{
+        NoActiveParallelAgents, ParallelModeDisabled, ParallelTransitionInFlight,
+        StartupChecksRunning, StartupDiagnosticsNeedAttention,
+    };
+
+    match command {
+        InlineShellCommand::Parallel | InlineShellCommand::Peek
+            if context.parallel_transition_in_flight =>
+        {
+            Pending(ParallelTransitionInFlight)
+        }
+        InlineShellCommand::Peek if !context.parallel_mode_enabled => Locked(ParallelModeDisabled),
+        InlineShellCommand::Peek if context.active_parallel_agent_count == 0 => {
+            Locked(NoActiveParallelAgents)
+        }
+        InlineShellCommand::Sessions if !context.parallel_mode_enabled => {
+            match context.startup_readiness {
+                InlineShellCommandStartupReadiness::Ready => Ready,
+                InlineShellCommandStartupReadiness::Pending => Pending(StartupChecksRunning),
+                InlineShellCommandStartupReadiness::Blocked => {
+                    Locked(StartupDiagnosticsNeedAttention)
+                }
+            }
+        }
+        _ => Ready,
+    }
+}
+
 // Parsed command input keeps the canonical command separate from the free-form
 // argument tail so controllers can share one execution path for typed commands
 // and palette-accepted commands.

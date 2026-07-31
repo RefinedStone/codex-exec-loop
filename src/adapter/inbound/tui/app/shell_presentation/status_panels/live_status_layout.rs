@@ -73,7 +73,7 @@ pub(crate) fn build_inline_tail_view(
         content_width,
     );
     let lines = compact_inspection_tail_lines(screen_model, content_width, tail_content);
-    let prompt_lines = build_inline_tail_prompt_lines_with_context(screen_model);
+    let prompt_lines = build_inline_tail_prompt_lines_with_context(screen_model, content_width);
     let composer_line_count = prompt_lines.len().min(lines.len());
     let focused_composer_line_count = if screen_model.prompt_input_has_focus {
         composer_line_count
@@ -182,7 +182,7 @@ fn compact_inspection_tail_lines(
         return lines.into_iter().map(|entry| entry.line).collect();
     }
 
-    let prompt_lines = build_inline_tail_prompt_lines_with_context(screen_model);
+    let prompt_lines = build_inline_tail_prompt_lines_with_context(screen_model, content_width);
     if prompt_lines.is_empty() || lines.len() <= prompt_lines.len() {
         return lines.into_iter().map(|entry| entry.line).collect();
     }
@@ -286,7 +286,7 @@ fn build_inline_prompt_cursor_offset_for_lines(
         return None;
     }
     let composer = screen_model.composer()?;
-    let prompt_lines = build_inline_tail_prompt_lines_with_context(screen_model);
+    let prompt_lines = build_inline_tail_prompt_lines_with_context(screen_model, content_width);
     let prompt_start_index = tail_lines.len().saturating_sub(prompt_lines.len());
     let prompt_start_row = rendered_rows(&tail_lines[..prompt_start_index], content_width)
         .min(usize::from(u16::MAX)) as u16;
@@ -761,7 +761,7 @@ mod tests {
             priority: InlineTailPriority::Detail,
         }));
         content.extend(
-            build_inline_tail_prompt_lines_with_context(&screen_model)
+            build_inline_tail_prompt_lines_with_context(&screen_model, WIDTH)
                 .into_iter()
                 .map(|line| InlineTailLine {
                     line,
@@ -806,7 +806,7 @@ mod tests {
             .into_iter()
             .map(|entry| entry.line)
             .collect::<Vec<_>>();
-        let prompt_lines = build_inline_tail_prompt_lines_with_context(&screen_model);
+        let prompt_lines = build_inline_tail_prompt_lines_with_context(&screen_model, WIDTH);
         assert!(rendered_rows(&prompt_lines, WIDTH) >= usize::from(MAX_INLINE_TAIL_HEIGHT));
 
         let tail_view = build_inline_tail_view(&screen_model, WIDTH);

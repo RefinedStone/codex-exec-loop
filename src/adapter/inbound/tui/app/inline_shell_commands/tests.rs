@@ -1,6 +1,7 @@
 use super::{
-    InlineShellCommand, InlineShellCommandInput, InlineShellCommandPaletteState, RESET_USAGE,
-    TuiLanguage,
+    InlineShellCommand, InlineShellCommandAvailability, InlineShellCommandAvailabilityReason,
+    InlineShellCommandCapabilityContext, InlineShellCommandCapabilitySet, InlineShellCommandInput,
+    InlineShellCommandPaletteState, InlineShellCommandStartupReadiness, RESET_USAGE, TuiLanguage,
 };
 
 /* Inline shell commands are typed directly into the prompt, so these tests pin
@@ -716,5 +717,114 @@ fn execution_status_stays_alias_neutral() {
         let command =
             InlineShellCommandInput::parse(input).expect("inline shell command should parse");
         assert_eq!(command.execution_status().as_deref(), expected);
+    }
+}
+
+#[test]
+fn capability_projection_uses_parallel_application_state() {
+    let disabled = InlineShellCommandCapabilitySet::from_application_context(
+        InlineShellCommandCapabilityContext {
+            startup_readiness: InlineShellCommandStartupReadiness::Ready,
+            parallel_mode_enabled: false,
+            parallel_transition_in_flight: false,
+            active_parallel_agent_count: 0,
+        },
+    );
+    assert_eq!(
+        disabled.availability(InlineShellCommand::Parallel),
+        InlineShellCommandAvailability::Ready
+    );
+    assert_eq!(
+        disabled.availability(InlineShellCommand::Peek),
+        InlineShellCommandAvailability::Locked(
+            InlineShellCommandAvailabilityReason::ParallelModeDisabled
+        )
+    );
+
+    let enabled_without_agents = InlineShellCommandCapabilitySet::from_application_context(
+        InlineShellCommandCapabilityContext {
+            startup_readiness: InlineShellCommandStartupReadiness::Ready,
+            parallel_mode_enabled: true,
+            parallel_transition_in_flight: false,
+            active_parallel_agent_count: 0,
+        },
+    );
+    assert_eq!(
+        enabled_without_agents.availability(InlineShellCommand::Peek),
+        InlineShellCommandAvailability::Locked(
+            InlineShellCommandAvailabilityReason::NoActiveParallelAgents
+        )
+    );
+
+    let enabled_with_agent = InlineShellCommandCapabilitySet::from_application_context(
+        InlineShellCommandCapabilityContext {
+            startup_readiness: InlineShellCommandStartupReadiness::Ready,
+            parallel_mode_enabled: true,
+            parallel_transition_in_flight: false,
+            active_parallel_agent_count: 1,
+        },
+    );
+    assert_eq!(
+        enabled_with_agent.availability(InlineShellCommand::Peek),
+        InlineShellCommandAvailability::Ready
+    );
+}
+
+#[test]
+fn capability_projection_marks_parallel_transition_pending() {
+    let capabilities = InlineShellCommandCapabilitySet::from_application_context(
+        InlineShellCommandCapabilityContext {
+            startup_readiness: InlineShellCommandStartupReadiness::Ready,
+            parallel_mode_enabled: true,
+            parallel_transition_in_flight: true,
+            active_parallel_agent_count: 1,
+        },
+    );
+    let pending = InlineShellCommandAvailability::Pending(
+        InlineShellCommandAvailabilityReason::ParallelTransitionInFlight,
+    );
+    assert_eq!(
+        capabilities.availability(InlineShellCommand::Parallel),
+        pending
+    );
+    assert_eq!(capabilities.availability(InlineShellCommand::Peek), pending);
+    assert_eq!(
+        capabilities.availability(InlineShellCommand::Stop),
+        InlineShellCommandAvailability::Ready
+    );
+}
+
+#[test]
+fn session_capability_follows_startup_readiness_outside_parallel_mode() {
+    for (startup_readiness, expected) in [
+        (
+            InlineShellCommandStartupReadiness::Pending,
+            InlineShellCommandAvailability::Pending(
+                InlineShellCommandAvailabilityReason::StartupChecksRunning,
+            ),
+        ),
+        (
+            InlineShellCommandStartupReadiness::Blocked,
+            InlineShellCommandAvailability::Locked(
+                InlineShellCommandAvailabilityReason::StartupDiagnosticsNeedAttention,
+            ),
+        ),
+    ] {
+        let capabilities = InlineShellCommandCapabilitySet::from_application_context(
+            InlineShellCommandCapabilityContext {
+                startup_readiness,
+                parallel_mode_enabled: false,
+                parallel_transition_in_flight: false,
+                active_parallel_agent_count: 0,
+            },
+        );
+        assert_eq!(
+            capabilities.availability(InlineShellCommand::Sessions),
+            expected
+        );
+        assert_eq!(
+            capabilities.availability(InlineShellCommand::Diagnostics),
+            InlineShellCommandAvailability::Ready
+        );
     }
 }

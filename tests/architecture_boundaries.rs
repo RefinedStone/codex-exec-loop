@@ -10584,7 +10584,7 @@ fn conversation_prompt_projection_uses_one_narrow_composer_screen_model() {
             "src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_copy.rs",
             "build_inline_tail_prompt_lines_with_context",
             "build_inline_ready_prompt_lines",
-            3,
+            5,
         ),
         (
             "src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_copy.rs",
@@ -10596,7 +10596,7 @@ fn conversation_prompt_projection_uses_one_narrow_composer_screen_model() {
             "src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_copy.rs",
             "build_inline_ready_prompt_lines",
             "build_shell_command_palette_lines",
-            2,
+            4,
         ),
         (
             "src/adapter/inbound/tui/app/shell_presentation/status_panels/live_status_layout.rs",

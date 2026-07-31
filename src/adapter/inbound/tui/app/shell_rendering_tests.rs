@@ -162,6 +162,56 @@ fn context_hud_and_focused_composer_scale_at_120_and_160_columns() {
 }
 
 #[test]
+fn contextual_command_palette_scales_across_80_120_and_160_columns() {
+    fn palette_app() -> NativeTuiApp {
+        let mut app = make_test_app();
+        app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+        let ConversationState::Ready(conversation) =
+            &mut app.conversation.lifecycle.conversation_state
+        else {
+            panic!("test app should start in a ready conversation state");
+        };
+        conversation.composer.input_buffer = ":p".to_string();
+        conversation.composer.sync_inline_shell_command_palette();
+        conversation
+            .composer
+            .move_inline_shell_command_palette_selection(1);
+        app
+    }
+
+    fn assert_palette_contract(rendered: &str, width: u16) {
+        assert!(rendered.contains("palette 2/3"), "{width}: {rendered}");
+        assert!(rendered.contains(":parallel"), "{width}: {rendered}");
+        assert!(rendered.contains("READY"), "{width}: {rendered}");
+        assert!(rendered.contains("> :peek"), "{width}: {rendered}");
+        assert!(rendered.contains("LOCKED"), "{width}: {rendered}");
+        assert!(
+            rendered.contains("start parallel mode first"),
+            "{width}: {rendered}"
+        );
+        assert!(
+            rendered.contains("Enter unavailable"),
+            "{width}: {rendered}"
+        );
+    }
+
+    let mut narrow_app = palette_app();
+    let narrow = tui_testkit::render_inline_snapshot(&mut narrow_app, 80, 24);
+    assert_palette_contract(&narrow, 80);
+    assert_snapshot!("contextual_command_palette_80", narrow);
+
+    let mut medium_app = palette_app();
+    let medium = tui_testkit::render_inline_snapshot(&mut medium_app, 120, 24);
+    assert_palette_contract(&medium, 120);
+    assert_snapshot!("contextual_command_palette_120", medium);
+
+    let mut wide_app = palette_app();
+    let wide = tui_testkit::render_inline_snapshot(&mut wide_app, 160, 24);
+    assert_palette_contract(&wide, 160);
+    assert_snapshot!("contextual_command_palette_160", wide);
+}
+
+#[test]
 fn operator_attention_ribbon_scales_and_routes_raw_payload_to_diagnostics() {
     fn app_with_attention() -> NativeTuiApp {
         let mut app = make_test_app();
