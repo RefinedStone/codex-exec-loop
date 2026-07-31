@@ -8359,14 +8359,7 @@ mod tests {
             approval_mode: AppServerApprovalMode::Interactive,
             interrupt_signal: AppServerTurnInterruptSignal::default(),
         };
-        let published_deadline = Instant::now() + Duration::from_secs(2);
-        while !pid_path.exists() && Instant::now() < published_deadline {
-            thread::sleep(Duration::from_millis(10));
-        }
-        let descendant_pid = fs::read_to_string(&pid_path)
-            .expect("app-server descendant PID should be published")
-            .parse::<u32>()
-            .expect("app-server descendant PID should be numeric");
+        let descendant_pid = wait_for_published_pid(&pid_path, "app-server descendant");
 
         drop(connection);
         drop(tx);
@@ -8426,14 +8419,7 @@ mod tests {
             approval_mode: AppServerApprovalMode::Interactive,
             interrupt_signal: AppServerTurnInterruptSignal::default(),
         };
-        let published_deadline = Instant::now() + Duration::from_secs(2);
-        while !pid_path.exists() && Instant::now() < published_deadline {
-            thread::sleep(Duration::from_millis(10));
-        }
-        let descendant_pid = fs::read_to_string(&pid_path)
-            .expect("silent app-server descendant PID should be published")
-            .parse::<u32>()
-            .expect("silent app-server descendant PID should be numeric");
+        let descendant_pid = wait_for_published_pid(&pid_path, "silent app-server descendant");
         let signal = AppServerTurnInterruptSignal::default();
         let observed_generation = signal.current_generation();
         signal.request_stop_all_sessions();
@@ -8870,6 +8856,25 @@ mod tests {
             "codex-exec-loop-app-server-connection-{}-{now}.jsonl",
             std::process::id()
         ))
+    }
+
+    #[cfg(unix)]
+    fn wait_for_published_pid(path: &Path, label: &str) -> u32 {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if let Ok(body) = fs::read_to_string(path)
+                && let Ok(pid) = body.trim().parse::<u32>()
+                && pid > 0
+            {
+                return pid;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{label} PID should be published as a non-zero number at {}",
+                path.display()
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 
     fn logged_json_lines(path: &Path, expected_count: usize) -> Vec<Value> {
