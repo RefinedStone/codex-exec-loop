@@ -587,6 +587,25 @@ impl NativeFlowHarness {
         panic!("status did not contain `{expected}`; last status was `{final_status}`");
     }
 
+    fn poll_until_parallel_control_idle(&mut self) {
+        let deadline = Instant::now() + FLOW_BACKGROUND_OPERATION_TIMEOUT;
+        loop {
+            self.runtime.poll_background_messages();
+            if !self.runtime.app().parallel_mode_control_effect_in_flight() {
+                return;
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        let status = match &self.runtime.app().conversation.lifecycle.conversation_state {
+            ConversationState::Ready(conversation) => conversation.status_text.as_str(),
+            _ => "conversation not ready",
+        };
+        panic!("parallel control transition did not settle; last status was `{status}`");
+    }
+
     fn poll_until_worker_launches(&mut self, expected_launches: usize) {
         // Pool entry creates and prepares real Git worktrees. Cold runners may
         // first wait on the bounded production pool lock before the first launch.
@@ -1557,6 +1576,11 @@ fn live_running_slot_is_preserved_during_off_to_on_pool_reset() {
         .app_mut()
         .set_parallel_mode_initial_pool_reset_completed_for_test(true);
     harness.turn_parallel_off();
+    // Disable owns a background control-plane effect. Re-entering before that
+    // exact effect settles exercises the command's PENDING guard instead of
+    // the off-to-on reset this test is meant to prove.
+    harness.poll_until_parallel_control_idle();
+    assert!(!harness.runtime.app().parallel_mode_enabled());
     harness.enter_parallel();
 
     let final_status = harness.poll_until_status_contains("preserved 1 live slot");
