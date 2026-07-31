@@ -1,0 +1,11 @@
+Akra / tui-ux-re...  ·  READY  ·  queue off  ·  agents off  ·  terminals 0
+! DEGRADED  ·  runtime degraded  ·  warning 1  ·  Ctrl+D details
+╭ Task
+│ > :
+│palette 1/20
+│> :diag  READY  diagnostics
+│  :work  READY  unified work center
+│  :parallel  READY  parallel mode
+│  :peek  LOCKED  parallel agent peek
+│  detail  none → open startup diagnostics · READY
+╰  ↑/↓ or Tab select  |  Enter run  |  Esc close
