@@ -459,10 +459,11 @@ viewport에 나뉘는 append-only row 사이에 panel chrome을 삽입하지 않
 `ShellOverlayTransition` 하나로 발행합니다. Root TUI coordinator는 reduced state를 먼저 적용한 뒤
 그 transition을 유일한 overlay cleanup owner에 전달합니다. Cleanup owner는 wildcard 없이 모든
 `ShellOverlay` variant와 `Suspend`/`Exit` mode를 명시합니다. `Approval`로 진입하는 전환은
-suspension으로 departed overlay의 local state를 보존합니다. 이 중 `DirectionsMaintenance`만
-approval close 뒤 원래 overlay로 복귀하고, 다른 approval interruption은 in-flight local state를
-지우지 않은 채 hidden chrome으로 돌아갑니다. 명시적 close는 `OverlayClosed`만 dispatch하고,
-exit cleanup은 반환된 transition에서 정확히 한 번 파생합니다.
+suspension으로 departed overlay의 local state를 보존합니다. 이 중 `DirectionsMaintenance`와
+read-only `WorkCenter`만 approval close 뒤 원래 overlay로 복귀하고, 다른 approval
+interruption은 in-flight local state를 지우지 않은 채 hidden chrome으로 돌아갑니다. 명시적
+close는 `OverlayClosed`만 dispatch하고, exit cleanup은 반환된 transition에서 정확히 한 번
+파생합니다.
 
 같은 terminal transaction은 parallel mode, 진행 중 effect, supervisor inspection, withheld
 reason, event-stream fact도 각각 한 번만 캡처합니다. Supersession row plan,
