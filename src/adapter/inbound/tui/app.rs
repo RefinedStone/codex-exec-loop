@@ -375,6 +375,7 @@ impl InlineHistoryRenderMode {
  */
 struct NativeTuiShellState {
     chrome: ShellChromeState,
+    startup_diagnostics_scroll_offset: usize,
     work_center_overlay_ui_state: WorkCenterOverlayUiState,
     supersession_mud_ui_state: SupersessionMudUiState,
     parallel_peek_overlay_ui_state: ParallelPeekOverlayUiState,

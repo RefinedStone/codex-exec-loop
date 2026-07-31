@@ -1071,6 +1071,7 @@ fn native_tui_app_owns_exactly_four_typed_private_state_slices() {
             "NativeTuiShellState",
             &[
                 ("chrome", "ShellChromeState"),
+                ("startup_diagnostics_scroll_offset", "usize"),
                 ("work_center_overlay_ui_state", "WorkCenterOverlayUiState"),
                 ("supersession_mud_ui_state", "SupersessionMudUiState"),
                 (

@@ -119,6 +119,7 @@ impl NativeTuiApp {
         )
     }
     pub(super) fn show_startup_overlay(&mut self) {
+        self.shell.startup_diagnostics_scroll_offset = 0;
         self.dispatch_shell_chrome(ShellChromeEvent::StartupOverlayShown);
     }
     pub(super) fn show_work_center_overlay(&mut self) {
@@ -174,6 +175,9 @@ impl NativeTuiApp {
     }
 
     pub(super) fn toggle_startup_overlay(&mut self) {
+        if self.shell.chrome.shell_overlay != ShellOverlay::Startup {
+            self.shell.startup_diagnostics_scroll_offset = 0;
+        }
         self.dispatch_shell_chrome(ShellChromeEvent::StartupOverlayToggled);
     }
     pub(super) fn toggle_session_overlay(&mut self) {
@@ -970,13 +974,42 @@ impl NativeTuiApp {
             return true;
         }
         if is_startup_overlay {
-            match key.code {
-                KeyCode::Char('r') if key.modifiers.is_empty() => {
-                    self.dispatch_shell_chrome(ShellChromeEvent::StartupCheckRequested)
+            match (key.code, key.modifiers) {
+                (KeyCode::Up | KeyCode::Char('k'), KeyModifiers::NONE) => {
+                    self.shell.startup_diagnostics_scroll_offset = self
+                        .shell
+                        .startup_diagnostics_scroll_offset
+                        .saturating_sub(1);
                 }
-                KeyCode::Char('o') if key.modifiers == KeyModifiers::CONTROL => {
-                    self.show_session_overlay()
+                (KeyCode::Down | KeyCode::Char('j'), KeyModifiers::NONE) => {
+                    self.shell.startup_diagnostics_scroll_offset = self
+                        .shell
+                        .startup_diagnostics_scroll_offset
+                        .saturating_add(1);
                 }
+                (KeyCode::PageUp, KeyModifiers::NONE) => {
+                    self.shell.startup_diagnostics_scroll_offset = self
+                        .shell
+                        .startup_diagnostics_scroll_offset
+                        .saturating_sub(4);
+                }
+                (KeyCode::PageDown, KeyModifiers::NONE) => {
+                    self.shell.startup_diagnostics_scroll_offset = self
+                        .shell
+                        .startup_diagnostics_scroll_offset
+                        .saturating_add(4);
+                }
+                (KeyCode::Home, KeyModifiers::NONE) => {
+                    self.shell.startup_diagnostics_scroll_offset = 0;
+                }
+                (KeyCode::End, KeyModifiers::NONE) => {
+                    self.shell.startup_diagnostics_scroll_offset = usize::MAX;
+                }
+                (KeyCode::Char('r'), KeyModifiers::NONE) => {
+                    self.shell.startup_diagnostics_scroll_offset = 0;
+                    self.dispatch_shell_chrome(ShellChromeEvent::StartupCheckRequested);
+                }
+                (KeyCode::Char('o'), KeyModifiers::CONTROL) => self.show_session_overlay(),
                 _ => {}
             }
             return true;
@@ -4959,5 +4992,26 @@ mod tests {
                 .status_text
                 .contains("no active parallel agents")
         );
+    }
+
+    #[test]
+    fn startup_diagnostics_navigation_is_bounded_by_the_next_frame_and_resets_on_close() {
+        let mut app = test_native_tui_app();
+        app.show_startup_overlay();
+
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Down)));
+        assert!(app.handle_shell_overlay_key(key(KeyCode::PageDown)));
+        assert_eq!(app.shell.startup_diagnostics_scroll_offset, 5);
+
+        assert!(app.handle_shell_overlay_key(key(KeyCode::PageUp)));
+        assert_eq!(app.shell.startup_diagnostics_scroll_offset, 1);
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Home)));
+        assert_eq!(app.shell.startup_diagnostics_scroll_offset, 0);
+        assert!(app.handle_shell_overlay_key(key(KeyCode::End)));
+        assert_eq!(app.shell.startup_diagnostics_scroll_offset, usize::MAX);
+
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Esc)));
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Hidden);
+        assert_eq!(app.shell.startup_diagnostics_scroll_offset, 0);
     }
 }

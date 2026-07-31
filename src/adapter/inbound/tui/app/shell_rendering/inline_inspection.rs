@@ -58,9 +58,10 @@ pub(super) fn draw_inline_shell_inspection(
         | InlineInspectionFrameModel::Supersession(view) => {
             draw_inline_supersession_inspection(frame, inspection_area, view)
         }
-        InlineInspectionFrameModel::Startup(view) => {
-            draw_inline_startup_inspection(frame, inspection_area, view)
-        }
+        InlineInspectionFrameModel::Startup {
+            view,
+            warning_scroll_offset,
+        } => draw_inline_startup_inspection(frame, inspection_area, view, warning_scroll_offset),
         InlineInspectionFrameModel::Sessions { view, list_state } => {
             return Some(draw_inline_session_inspection(
                 frame,
@@ -440,6 +441,7 @@ fn draw_inline_startup_inspection(
     frame: &mut Frame<'_>,
     area: Rect,
     overlay_view: StartupOverlayView,
+    warning_scroll_offset: u16,
 ) {
     let StartupOverlayView {
         header_lines,
@@ -474,12 +476,12 @@ fn draw_inline_startup_inspection(
             true,
         );
         render_inline_titled_panel(frame, layout[1], Line::from("Startup"), summary_lines, true);
-        render_inline_titled_panel(
+        render_inline_scrolled_panel(
             frame,
             layout[2],
             Line::from("Warnings"),
             warning_lines,
-            true,
+            warning_scroll_offset,
         );
         render_inline_titled_panel(frame, layout[3], Line::from("Keys"), key_lines, true);
         render_inline_titled_panel(frame, layout[4], Line::from("Checks"), check_lines, false);

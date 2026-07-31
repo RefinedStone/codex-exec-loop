@@ -1192,6 +1192,14 @@ mod coverage_tests {
             assert!(line.width() <= usize::from(width), "{width}: {text}");
         }
 
+        context.shell_overlay = ShellOverlay::Queue;
+        let modal_text = build_operator_attention_line(&context, Some(&conversation), 120)
+            .expect("modal attention row should keep the warning summary")
+            .to_string();
+        assert!(modal_text.contains("warning 1"), "{modal_text}");
+        assert!(modal_text.contains("runtime notice 1"), "{modal_text}");
+        assert!(!modal_text.contains("Ctrl+D"), "{modal_text}");
+
         let diagnostics = build_operator_diagnostic_lines(&context)
             .into_iter()
             .map(|line| line.to_string())

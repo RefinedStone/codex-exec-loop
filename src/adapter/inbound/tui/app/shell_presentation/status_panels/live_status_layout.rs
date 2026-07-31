@@ -585,7 +585,7 @@ mod tests {
             .find(|line| line.to_string().starts_with('!'))
             .expect("aggregated attention should remain in the raw semantic tail");
         assert_eq!(wrapped_row_count(attention.width(), WIDTH), 1);
-        assert!(attention.to_string().contains("Ctrl+D"));
+        assert!(!attention.to_string().contains("Ctrl+D"));
 
         let tail_view = build_inline_tail_view(&screen_model, WIDTH);
         let rendered = tail_view
@@ -600,7 +600,7 @@ mod tests {
             "{rendered}"
         );
         assert!(rendered.contains("작업 입력  |  : 명령"), "{rendered}");
-        assert!(rendered.contains("Ctrl+D"), "{rendered}");
+        assert!(!rendered.contains("Ctrl+D"), "{rendered}");
         assert!(!rendered.contains("runtime:"), "{rendered}");
         assert!(!rendered.contains(LOW_DETAIL), "{rendered}");
         assert_eq!(tail_view.rendered_height(WIDTH, 6), 6);
@@ -653,7 +653,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(rendered.contains("Ctrl+D details"), "{rendered}");
+        assert!(!rendered.contains("Ctrl+D"), "{rendered}");
         assert!(!rendered.contains("runtime:"), "{rendered}");
         assert!(rendered.contains("planning: stale"), "{rendered}");
         assert!(rendered.contains("Akra"), "{rendered}");

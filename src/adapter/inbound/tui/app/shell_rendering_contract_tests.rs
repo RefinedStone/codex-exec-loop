@@ -32,6 +32,7 @@ use ratatui::Terminal;
 use ratatui::backend::{Backend, TestBackend};
 use ratatui::layout::Position;
 use ratatui::style::Color;
+use ratatui::text::Span;
 use ratatui::widgets::ListState;
 use std::sync::{
     Arc, Mutex,
@@ -368,6 +369,18 @@ fn startup_prompt_command_palette_uses_selected_korean_language() {
     assert!(rendered.contains(":diag  READY"));
     assert!(rendered.contains("시작 진단 열기"));
     assert!(rendered.contains("↑/↓ 또는 Tab 선택"));
+    assert!(rendered.contains("상세"), "{rendered}");
+    assert!(!rendered.contains("detail"), "{rendered}");
+
+    let mut wide_terminal = tui_testkit::inline_terminal(120, 10);
+    wide_terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("wide Korean palette render succeeds");
+    let wide = tui_testkit::screen_text(&wide_terminal);
+    assert!(wide.contains("상세"), "{wide}");
+    assert!(wide.contains("인수"), "{wide}");
+    assert!(!wide.contains("detail"), "{wide}");
+    assert!(!wide.contains("args"), "{wide}");
 
     let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
     else {
@@ -2532,4 +2545,42 @@ fn startup_overlay_surfaces_attachment_mode_and_recovery_anchor() {
     assert!(summary.contains("attachment: provider-launched  |  recovery: provider-thread-id"));
     assert!(checks.contains("[ok] attachment mode: provider-launched"));
     assert!(checks.contains("[ok] recovery anchor: provider-thread-id"));
+}
+
+#[test]
+fn startup_overlay_deduplicates_startup_warnings_from_operator_diagnostics() {
+    let mut diagnostics = sample_startup_diagnostics();
+    diagnostics.warnings = vec!["duplicate startup warning".to_string()];
+    let state = StartupState::Ready(diagnostics);
+    let view = shell_presentation::build_startup_overlay_view(
+        shell_presentation::StartupOverlayFrameInput {
+            startup_state: &state,
+            language: TuiLanguage::English,
+            parallel_mode_enabled: false,
+            operator_diagnostic_lines: vec![
+                Line::from(vec![
+                    Span::raw("operator warning: "),
+                    Span::raw("duplicate startup warning"),
+                ]),
+                Line::from(vec![
+                    Span::raw("runtime notice: "),
+                    Span::raw("latest runtime notice"),
+                ]),
+            ],
+        },
+    );
+    let warnings = view
+        .warning_lines
+        .iter()
+        .map(Line::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert_eq!(warnings.matches("duplicate startup warning").count(), 1);
+    assert!(warnings.contains("latest runtime notice"));
+    assert!(
+        view.key_lines
+            .iter()
+            .any(|line| line.to_string().contains("PgUp/PgDn"))
+    );
 }
