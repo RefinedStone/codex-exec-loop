@@ -87,6 +87,7 @@ pub(crate) struct ProgressiveActivityCardKey {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProgressiveActivityCard {
     pub(crate) key: ProgressiveActivityCardKey,
+    pub(crate) item_id: Option<String>,
     pub(crate) activity_label: &'static str,
     pub(crate) title: String,
     pub(crate) summary: String,
@@ -200,7 +201,6 @@ impl ProgressiveActivityExpandState {
         self.expanded_tool_digests.contains(&digest)
     }
 
-    #[cfg(test)]
     pub(crate) fn expand_tool(&mut self, digest: [u8; 32]) {
         if self.is_tool_expanded(digest) {
             return;
@@ -217,6 +217,19 @@ impl ProgressiveActivityExpandState {
             return false;
         }
         self.expand_card(key);
+        true
+    }
+
+    pub(crate) fn toggle_tool(&mut self, digest: [u8; 32]) -> bool {
+        if let Some(index) = self
+            .expanded_tool_digests
+            .iter()
+            .position(|entry| *entry == digest)
+        {
+            self.expanded_tool_digests.remove(index);
+            return false;
+        }
+        self.expand_tool(digest);
         true
     }
 }
@@ -274,6 +287,7 @@ pub(crate) fn project_activity_timeline_cards(
                 sequence: record.last_sequence(),
                 kind,
             },
+            item_id: observation.item_id.clone(),
             activity_label,
             title,
             summary,
@@ -344,6 +358,7 @@ fn append_lifecycle_only_action_cards(
                 sequence: actions.sequence,
                 kind: ProgressiveActivityCardKind::Command,
             },
+            item_id: Some(item_id.to_string()),
             activity_label: actions.activity_label,
             title: actions.title.clone(),
             summary: projected.summary.clone(),
@@ -724,9 +739,17 @@ pub(crate) fn command_action_detail_text(
     Some(bound_synthesized_detail(lines.join("\n")))
 }
 
-pub(crate) fn tool_message_digest(text: &str) -> [u8; 32] {
+pub(crate) fn tool_message_digest(item_id: Option<&str>, text: &str) -> [u8; 32] {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
+    hasher.update(b"akra-tool-card-v1\0");
+    if let Some(item_id) = item_id {
+        hasher.update(b"item\0");
+        hasher.update(item_id.as_bytes());
+    } else {
+        hasher.update(b"text\0");
+    }
+    hasher.update(b"\0");
     hasher.update(text.as_bytes());
     hasher.finalize().into()
 }
@@ -1595,9 +1618,16 @@ mod tests {
         assert!(tool_message_is_expandable("one\ntwo"));
         assert_eq!(tool_message_title("one\ntwo"), "one");
         assert_eq!(tool_message_fact("one\ntwo\nthree"), "3 lines");
-        assert_ne!(tool_message_digest("a"), tool_message_digest("b"));
+        assert_ne!(
+            tool_message_digest(None, "a"),
+            tool_message_digest(None, "b")
+        );
+        assert_ne!(
+            tool_message_digest(Some("read-1"), "same read"),
+            tool_message_digest(Some("read-2"), "same read")
+        );
         let mut state = ProgressiveActivityExpandState::default();
-        let digest = tool_message_digest("one\ntwo");
+        let digest = tool_message_digest(None, "one\ntwo");
         state.expand_tool(digest);
         assert!(state.is_tool_expanded(digest));
     }

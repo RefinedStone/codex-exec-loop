@@ -1777,7 +1777,7 @@ fn completed_agent_handoff_flushes_at_settlement_and_only_once() {
         .collect::<Vec<_>>()
         .join("\n");
     assert_eq!(released_history.matches(TOOL_MARKER).count(), 1);
-    assert!(released_history.find(FINAL_MARKER) < released_history.find(TOOL_MARKER));
+    assert!(released_history.find(TOOL_MARKER) < released_history.find(FINAL_MARKER));
 
     draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
         .expect("stable released handoff draw transaction");
@@ -5421,8 +5421,8 @@ fn inline_history_view_mode_controls_tool_and_status_rows() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(simple_lines.contains("Codex Commentary:"));
-    assert!(!simple_lines.contains("◆ "));
-    assert!(!simple_lines.contains("tool     "));
+    assert!(simple_lines.contains("tool     "), "{simple_lines}");
+    assert!(simple_lines.contains("cargo test"), "{simple_lines}");
     assert!(!simple_lines.contains("Status:"));
 
     app.conversation.conversation_view_mode = ConversationViewMode::Medium;

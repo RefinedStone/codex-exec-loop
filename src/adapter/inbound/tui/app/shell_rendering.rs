@@ -9,10 +9,10 @@ pub(super) use super::inline_frame_model::{
 use super::inline_frame_model::{
     apply_inline_frame_render_receipt, capture_inline_shell_frame_model,
 };
-use super::shell_presentation::TurnSteerConfirmationScreenModel;
+use super::shell_presentation::{ConversationTranscriptCardRow, TurnSteerConfirmationScreenModel};
 #[cfg(test)]
 use super::*;
-use super::{AkraTheme, ShellFrontendMode, ShellOverlay};
+use super::{AkraTheme, InlineTranscriptCardHitArea, ShellFrontendMode, ShellOverlay};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
@@ -89,8 +89,12 @@ pub(super) fn draw_projected(
     let turn_steer_confirmation = projection.turn_steer_confirmation.take();
     let exit_confirmation_visible = projection.exit_confirmation_visible;
 
-    let queue_receipt_undo_hit_area = draw_inline_conversation_shell(frame, projection, &layout);
-    receipt.record_queue_receipt_undo_hit_area(queue_receipt_undo_hit_area);
+    let conversation_receipt = draw_inline_conversation_shell(frame, projection, &layout);
+    receipt.record_queue_receipt_undo_hit_area(conversation_receipt.queue_receipt_undo_hit_area);
+    receipt.record_inline_transcript_cards(
+        conversation_receipt.inline_transcript_card_digests,
+        conversation_receipt.inline_transcript_card_hit_areas,
+    );
     if let Some(list_state) = draw_inline_shell_inspection(frame, layout[0], inspection) {
         receipt.record_session_list_state(list_state);
     }
@@ -238,14 +242,21 @@ fn draw_exit_confirmation(frame: &mut Frame<'_>) {
     frame.render_widget(popup, popup_area);
 }
 
+struct InlineConversationShellRenderReceipt {
+    queue_receipt_undo_hit_area: Option<Rect>,
+    inline_transcript_card_digests: Vec<[u8; 32]>,
+    inline_transcript_card_hit_areas: Vec<InlineTranscriptCardHitArea>,
+}
+
 fn draw_inline_conversation_shell(
     frame: &mut Frame<'_>,
     projection: InlineConversationFrameProjection,
     layout: &Rc<[Rect]>,
-) -> Option<Rect> {
+) -> InlineConversationShellRenderReceipt {
     let InlineConversationFrameProjection {
         tail_view,
         live_transcript_lines,
+        live_transcript_card_rows,
         shell_overlay,
         parallel_mode_enabled,
         renders_parallel_viewport_handoff,
@@ -260,7 +271,13 @@ fn draw_inline_conversation_shell(
         if parallel_mode_enabled && !renders_parallel_viewport_handoff {
             let tail_band = layout.get(1).copied().unwrap_or(frame_area);
             let tail_area = inline_tail_render_area(tail_band, &tail_view);
-            return render_bottom_anchored_tail(frame, tail_area, tail_view);
+            return InlineConversationShellRenderReceipt {
+                queue_receipt_undo_hit_area: render_bottom_anchored_tail(
+                    frame, tail_area, tail_view,
+                ),
+                inline_transcript_card_digests: Vec::new(),
+                inline_transcript_card_hit_areas: Vec::new(),
+            };
         }
         // startup banner 같은 presentation state는 의도적으로 상단부터 전체 frame을 소유하므로 bottom anchored가 아니어야 한다.
         if tail_view.render_from_top {
@@ -270,18 +287,42 @@ fn draw_inline_conversation_shell(
                 frame_area.width,
                 tail_view.rendered_height(frame_area.width, frame_area.height),
             );
-            return render_bottom_anchored_tail(frame, top_area, tail_view);
+            return InlineConversationShellRenderReceipt {
+                queue_receipt_undo_hit_area: render_bottom_anchored_tail(
+                    frame, top_area, tail_view,
+                ),
+                inline_transcript_card_digests: Vec::new(),
+                inline_transcript_card_hit_areas: Vec::new(),
+            };
         }
         // standard shell에서는 tail 높이를 먼저 재고 live transcript line을 그 위 공간에 clip한다.
         let tail_band = layout.get(1).copied().unwrap_or(frame_area);
         let tail_area = inline_tail_render_area(tail_band, &tail_view);
-        render_inline_live_transcript(frame, frame_area, tail_area, live_transcript_lines);
-        return render_bottom_anchored_tail(frame, tail_area, tail_view);
+        let inline_transcript_card_digests = live_transcript_card_rows
+            .iter()
+            .map(|row| row.digest)
+            .collect();
+        let inline_transcript_card_hit_areas = render_inline_live_transcript(
+            frame,
+            frame_area,
+            tail_area,
+            live_transcript_lines,
+            live_transcript_card_rows,
+        );
+        return InlineConversationShellRenderReceipt {
+            queue_receipt_undo_hit_area: render_bottom_anchored_tail(frame, tail_area, tail_view),
+            inline_transcript_card_digests,
+            inline_transcript_card_hit_areas,
+        };
     }
     // overlay/modal이 active이면 layout[0]은 inspection이 쓰고 layout[1]은 그 아래에 tail을 고정한다.
     // exit modal은 두 영역을 모두 덮어야 하므로 이 함수 밖에서 계속 그린다.
     let tail_area = inline_tail_render_area(layout[1], &tail_view);
-    render_tail_surface(frame, tail_area, tail_view, false)
+    InlineConversationShellRenderReceipt {
+        queue_receipt_undo_hit_area: render_tail_surface(frame, tail_area, tail_view, false),
+        inline_transcript_card_digests: Vec::new(),
+        inline_transcript_card_hit_areas: Vec::new(),
+    }
 }
 
 fn render_bottom_anchored_tail(
@@ -451,10 +492,11 @@ fn render_inline_live_transcript(
     frame_area: Rect,
     tail_area: Rect,
     live_transcript_lines: Vec<Line<'static>>,
-) {
+    card_rows: Vec<ConversationTranscriptCardRow>,
+) -> Vec<InlineTranscriptCardHitArea> {
     // transcript line이 없거나 tail 위의 vertical space가 없으면 live region에 그릴 유효 내용이 없다.
     if live_transcript_lines.is_empty() || tail_area.y <= frame_area.y {
-        return;
+        return Vec::new();
     }
     // live container는 frame 상단부터 prompt tail 직전 row까지다.
     // inner render area를 bottom-align해 최신 출력이 prompt에 가장 가깝게 앉게 한다.
@@ -465,7 +507,49 @@ fn render_inline_live_transcript(
         tail_area.y.saturating_sub(frame_area.y),
     );
     let live_area = inline_body_render_area(live_container, &live_transcript_lines);
-    render_inline_body_suffix(frame, live_area, live_transcript_lines, None);
+    let projected_rows = card_rows
+        .into_iter()
+        .filter_map(|row| {
+            if row.line_index >= live_transcript_lines.len() {
+                return None;
+            }
+            let start = count_rendered_inline_rows(
+                &live_transcript_lines[..row.line_index],
+                live_area.width,
+            );
+            let end = count_rendered_inline_rows(
+                &live_transcript_lines[..=row.line_index],
+                live_area.width,
+            );
+            (end > start).then_some((row.digest, start, end))
+        })
+        .collect::<Vec<_>>();
+    let dropped_rows = usize::from(render_inline_body_suffix(
+        frame,
+        live_area,
+        live_transcript_lines,
+        None,
+    ));
+    let visible_end = dropped_rows.saturating_add(usize::from(live_area.height));
+    projected_rows
+        .into_iter()
+        .filter_map(|(digest, start, end)| {
+            let clipped_start = start.max(dropped_rows);
+            let clipped_end = end.min(visible_end);
+            (clipped_end > clipped_start).then(|| InlineTranscriptCardHitArea {
+                digest,
+                area: Rect::new(
+                    live_area.x,
+                    live_area.y.saturating_add(
+                        u16::try_from(clipped_start.saturating_sub(dropped_rows))
+                            .unwrap_or(u16::MAX),
+                    ),
+                    live_area.width,
+                    u16::try_from(clipped_end.saturating_sub(clipped_start)).unwrap_or(u16::MAX),
+                ),
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]

@@ -401,6 +401,7 @@ impl ConversationRuntimeStatusScreenModel {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::adapter::inbound::tui::app) struct ConversationLiveTranscriptScreenModel<'a> {
     pub(in crate::adapter::inbound::tui::app) handoff_messages: Option<&'a [ConversationMessage]>,
+    pub(in crate::adapter::inbound::tui::app) buffered_tool_messages: &'a [ConversationMessage],
     pub(in crate::adapter::inbound::tui::app) live_agent_message: Option<&'a ConversationMessage>,
     pub(in crate::adapter::inbound::tui::app) recent_tail_messages:
         [Option<&'a ConversationMessage>; 2],
@@ -422,6 +423,7 @@ impl<'a> ConversationLiveTranscriptScreenModel<'a> {
         let handoff_pending = conversation.has_pending_viewport_transcript_handoff();
         Self {
             handoff_messages,
+            buffered_tool_messages: conversation.buffered_tool_messages(),
             live_agent_message: conversation.live_agent_message.as_ref(),
             recent_tail_messages: if handoff_pending {
                 [None, None]

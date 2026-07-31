@@ -168,17 +168,23 @@ navigation intent cannot optimistically rewrite it.
   bounded targets only in retained detail. When these typed actions exist, the raw shell command
   must not be retained as presentation detail, and an item with no command-output delta must still
   be available as a lifecycle-only Activity card.
-- Interactive folding belongs to the live Activity inspection surface. Durable host scrollback is
-  static terminal history, so it must not advertise a click target; transcript Detail view may
-  render the same retained tool detail as a keyboard-readable expansion.
+- Typed tool completion must enter the live conversation in event order. A buffered `Read`,
+  `ListFiles`, `Search`, command, or patch card is visible before the next agent Commentary and is
+  committed before that Commentary; the final answer must not collect earlier tool cards after it.
+- Folding belongs to both the Activity inspector and app-owned live conversation rows. A visible
+  conversation card uses the same bounded expansion state for mouse and `Ctrl+E`, and its hit area
+  is compare-and-applied with the frame receipt. Durable host scrollback remains static terminal
+  history, so a row that has crossed that boundary must not advertise a click target; `:activity`
+  and transcript Detail remain the keyboard-readable path for retained history.
 - App-server agent text is raw Markdown. The transcript projection must interpret its presentation
   syntax consistently for live deltas, completed history, and viewport replay.
 - Fenced code delimiters and their info strings are parser syntax, not transcript content. Hide
   matching opening and closing fences, retain incomplete streaming code, and style only the code
   body through `AkraTheme`.
-- The Activity Diff document must interpret unified-diff file headers and hunk ranges. Each code row
-  uses one right-aligned line-number gutter: deletions show the old line number, while additions and
-  context show the new line number.
+- Activity Diff and expanded live-conversation patch cards must share the unified-diff interpreter.
+  Each code row uses one right-aligned line-number gutter: deletions show the old line number, while
+  additions and context show the new line number. The inline preview is bounded and sends the
+  operator to `:activity` for the remaining document instead of flooding the prompt viewport.
 - Diff additions, deletions, gutters, metadata, and hunk separators use semantic theme styles.
   Addition and deletion code regions extend their semantic background through the available row
   width while the line-number gutter remains neutral. Wrapped continuation rows keep an empty

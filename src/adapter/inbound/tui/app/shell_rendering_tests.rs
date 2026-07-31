@@ -1898,6 +1898,115 @@ fn activity_card_mouse_hit_area_toggles_the_same_fold_owned_by_keyboard() {
 }
 
 #[test]
+fn live_conversation_tool_card_is_folded_inline_and_opens_by_keyboard_or_click() {
+    let mut app = make_test_app();
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.show_startup_ascii_art = false;
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
+        panic!("inline transcript fixture requires a ready conversation")
+    };
+    conversation.thread_id = "thread-inline-card".to_string();
+    set_running_turn(conversation, "turn-inline-card");
+    conversation.buffer_tool_message_with_detail(
+        "Read src/core/app.rs\n1. Read src/core/app.rs\n   path: C:/dev/akra/src/core/app.rs",
+        Some("read".to_string()),
+        Some("read-inline-1".to_string()),
+        None,
+    );
+
+    let collapsed = tui_testkit::render_inline_snapshot(&mut app, 96, 24);
+    assert!(collapsed.contains("Read src/core/app.rs"), "{collapsed}");
+    assert!(
+        !collapsed.contains("C:/dev/akra/src/core/app.rs"),
+        "{collapsed}"
+    );
+    assert!(app.inline_transcript_mouse_capture_requested());
+    assert_eq!(
+        app.shell.inline_transcript_ui_state.card_hit_areas().len(),
+        1
+    );
+
+    assert!(app.toggle_latest_inline_transcript_tool_card());
+    let keyboard_expanded = tui_testkit::render_inline_snapshot(&mut app, 96, 24);
+    assert!(
+        keyboard_expanded.contains("C:/dev/akra/src/core/app.rs"),
+        "{keyboard_expanded}"
+    );
+
+    let hit = app.shell.inline_transcript_ui_state.card_hit_areas()[0];
+    assert!(
+        app.handle_inline_transcript_mouse_event(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: hit.area.x,
+            row: hit.area.y,
+            modifiers: KeyModifiers::NONE,
+        })
+    );
+    let collapsed_again = tui_testkit::render_inline_snapshot(&mut app, 96, 24);
+    assert!(
+        !collapsed_again.contains("C:/dev/akra/src/core/app.rs"),
+        "{collapsed_again}"
+    );
+}
+
+#[test]
+fn clipped_expanded_tool_card_still_closes_with_latest_card_shortcut() {
+    let mut app = make_test_app();
+    app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell.show_startup_ascii_art = false;
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
+        panic!("inline transcript fixture requires a ready conversation")
+    };
+    conversation.thread_id = "thread-clipped-card".to_string();
+    set_running_turn(conversation, "turn-clipped-card");
+    conversation.buffer_tool_message_with_detail(
+        "file change: update src/lib.rs",
+        Some("patch".to_string()),
+        Some("patch-clipped-1".to_string()),
+        Some(
+            concat!(
+                "[update] src/lib.rs\n",
+                "--- a/src/lib.rs\n",
+                "+++ b/src/lib.rs\n",
+                "@@ -1,6 +1,6 @@\n",
+                "-old_1\n+new_1\n",
+                "-old_2\n+new_2\n",
+                "-old_3\n+new_3\n",
+                "-old_4\n+new_4\n",
+                "-old_5\n+new_5\n",
+                "-old_6\n+new_6\n",
+            )
+            .to_string(),
+        ),
+    );
+
+    let _collapsed = tui_testkit::render_inline_snapshot(&mut app, 96, 12);
+    assert!(app.toggle_latest_inline_transcript_tool_card());
+    let expanded = tui_testkit::render_inline_snapshot(&mut app, 96, 12);
+    assert!(
+        expanded.contains("more diff detail in :activity"),
+        "{expanded}"
+    );
+    assert!(
+        app.shell
+            .inline_transcript_ui_state
+            .card_hit_areas()
+            .is_empty(),
+        "expanded card header should be clipped in the compact viewport"
+    );
+
+    assert!(app.toggle_latest_inline_transcript_tool_card());
+    let collapsed_again = tui_testkit::render_inline_snapshot(&mut app, 96, 12);
+    assert!(collapsed_again.contains("src/lib.rs"), "{collapsed_again}");
+    assert!(
+        !collapsed_again.contains("more diff detail in :activity"),
+        "{collapsed_again}"
+    );
+}
+
+#[test]
 fn lifecycle_only_read_card_keyboard_and_click_open_exact_path_without_command_output() {
     let mut app = make_test_app();
     app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());

@@ -911,6 +911,7 @@ fn fail_closed_frame_delivery(
 ) {
     inline_terminal.invalidate_back_buffer();
     runtime.clear_queue_receipt_undo_hit_area();
+    runtime.clear_inline_transcript_card_hit_areas();
 }
 
 fn current_viewport_area<B: Backend>(terminal: &mut Terminal<B>) -> Rect {

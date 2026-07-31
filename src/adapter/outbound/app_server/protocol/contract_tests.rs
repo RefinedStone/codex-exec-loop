@@ -275,6 +275,7 @@ fn live_turn_notification_sequence_reduces_to_stream_events() {
             ConversationStreamEvent::ToolActivity {
                 activity: ConversationToolActivity {
                     kind: ConversationToolActivityKind::FileChange,
+                    item_id: Some("file-change-live".to_string()),
                     text: "file change: update .codex-exec-loop/planning/result-output.md, update /tmp/workspace/.codex-exec-loop/planning/result-output.md, update src/main.rs".to_string(),
                     display_label: Some("patch".to_string()),
                     file_change_count: 3,

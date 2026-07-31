@@ -4,24 +4,50 @@ use crate::adapter::inbound::tui::app::conversation_model::{
 };
 use crate::adapter::inbound::tui::conversation_text::conversation_message_label;
 
+use super::overlays::build_inline_diff_preview;
 use super::{
     AkraTheme, ConversationMessage, ConversationMessageKind, ConversationViewMode, Line,
     MAX_CONVERSATION_HISTORY_LINES, Modifier, Span, Style,
 };
 
+const INLINE_DIFF_PREVIEW_ROWS: u16 = 8;
+const INLINE_TOOL_DETAIL_ROWS: usize = 8;
+#[cfg(test)]
+const DEFAULT_TRANSCRIPT_WIDTH: u16 = 120;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in super::super) struct ConversationTranscriptCardRow {
+    pub(in super::super) line_index: usize,
+    pub(in super::super) digest: [u8; 32],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in super::super) struct ConversationTranscriptView {
+    pub(in super::super) lines: Vec<Line<'static>>,
+    pub(in super::super) card_rows: Vec<ConversationTranscriptCardRow>,
+}
+
 // Default transcript formatting is user-facing: message debug detail stays hidden unless a debug-aware caller opts in.
+#[cfg(test)]
 pub(in super::super) fn format_conversation_lines(
     messages: &[ConversationMessage],
 ) -> Vec<Line<'static>> {
     format_conversation_lines_for_view(messages, ConversationViewMode::Medium, false)
 }
 
+#[cfg(test)]
 pub(in super::super) fn format_conversation_lines_for_view(
     messages: &[ConversationMessage],
     view_mode: ConversationViewMode,
     show_debug_details: bool,
 ) -> Vec<Line<'static>> {
-    format_conversation_lines_capped(messages, view_mode, show_debug_details, None)
+    format_conversation_lines_capped(
+        messages,
+        view_mode,
+        show_debug_details,
+        None,
+        DEFAULT_TRANSCRIPT_WIDTH,
+    )
 }
 
 #[cfg(test)]
@@ -35,44 +61,130 @@ pub(in super::super) fn format_conversation_lines_with_debug(
     } else {
         ConversationViewMode::Medium
     };
-    format_conversation_lines_capped(messages, view_mode, show_debug_details, None)
+    format_conversation_lines_capped(
+        messages,
+        view_mode,
+        show_debug_details,
+        None,
+        DEFAULT_TRANSCRIPT_WIDTH,
+    )
 }
 
-pub(in super::super) fn format_conversation_scrollback_lines_with_expand(
+pub(in super::super) fn format_conversation_scrollback_lines_with_expand_at_width(
     messages: &[ConversationMessage],
     view_mode: ConversationViewMode,
     show_debug_details: bool,
     expand_state: Option<&ProgressiveActivityExpandState>,
+    width: u16,
 ) -> Vec<Line<'static>> {
-    format_conversation_lines_uncapped(messages, view_mode, show_debug_details, expand_state)
+    format_conversation_projection_uncapped(
+        messages,
+        view_mode,
+        show_debug_details,
+        expand_state,
+        width,
+    )
+    .lines
 }
 
+pub(in super::super) fn format_live_conversation_transcript_view(
+    handoff_messages: Option<&[ConversationMessage]>,
+    buffered_tool_messages: &[ConversationMessage],
+    live_agent_message: Option<&ConversationMessage>,
+    view_mode: ConversationViewMode,
+    show_debug_details: bool,
+    expand_state: &ProgressiveActivityExpandState,
+    width: u16,
+) -> ConversationTranscriptView {
+    let mut projection = ConversationTranscriptView {
+        lines: Vec::new(),
+        card_rows: Vec::new(),
+    };
+    if let Some(messages) = handoff_messages {
+        append_conversation_messages(
+            &mut projection,
+            messages,
+            view_mode,
+            show_debug_details,
+            Some(expand_state),
+            width,
+        );
+    }
+    append_conversation_messages(
+        &mut projection,
+        buffered_tool_messages,
+        view_mode,
+        show_debug_details,
+        Some(expand_state),
+        width,
+    );
+    if let Some(message) = live_agent_message {
+        append_conversation_messages(
+            &mut projection,
+            std::slice::from_ref(message),
+            view_mode,
+            show_debug_details,
+            Some(expand_state),
+            width,
+        );
+    }
+    cap_conversation_projection(&mut projection);
+    projection
+}
+
+#[cfg(test)]
 fn format_conversation_lines_capped(
     messages: &[ConversationMessage],
     view_mode: ConversationViewMode,
     show_debug_details: bool,
     expand_state: Option<&ProgressiveActivityExpandState>,
+    width: u16,
 ) -> Vec<Line<'static>> {
-    let mut lines =
-        format_conversation_lines_uncapped(messages, view_mode, show_debug_details, expand_state);
-
-    // Keep recent terminal history bounded; rendering and inline tail logic operate on this capped line buffer.
-    if lines.len() > MAX_CONVERSATION_HISTORY_LINES {
-        lines.drain(0..lines.len() - MAX_CONVERSATION_HISTORY_LINES);
-    }
-
-    lines
+    let mut projection = format_conversation_projection_uncapped(
+        messages,
+        view_mode,
+        show_debug_details,
+        expand_state,
+        width,
+    );
+    cap_conversation_projection(&mut projection);
+    projection.lines
 }
 
 // Project logical conversation messages into terminal transcript lines.
 // Each message becomes a styled label, indented body/debug lines, and a blank separator so history reads as blocks.
-fn format_conversation_lines_uncapped(
+fn format_conversation_projection_uncapped(
     messages: &[ConversationMessage],
     view_mode: ConversationViewMode,
     show_debug_details: bool,
     expand_state: Option<&ProgressiveActivityExpandState>,
-) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
+    width: u16,
+) -> ConversationTranscriptView {
+    let mut projection = ConversationTranscriptView {
+        lines: Vec::new(),
+        card_rows: Vec::new(),
+    };
+    append_conversation_messages(
+        &mut projection,
+        messages,
+        view_mode,
+        show_debug_details,
+        expand_state,
+        width,
+    );
+    append_empty_transcript_message(&mut projection.lines, messages.len(), view_mode);
+    projection
+}
+
+fn append_conversation_messages(
+    projection: &mut ConversationTranscriptView,
+    messages: &[ConversationMessage],
+    view_mode: ConversationViewMode,
+    show_debug_details: bool,
+    expand_state: Option<&ProgressiveActivityExpandState>,
+    width: u16,
+) {
+    let lines = &mut projection.lines;
 
     for message in messages {
         if !view_mode.includes_message(message) {
@@ -80,7 +192,19 @@ fn format_conversation_lines_uncapped(
         }
 
         if message.kind == ConversationMessageKind::Tool {
-            lines.extend(format_tool_card_lines(message, view_mode, expand_state));
+            let line_index = lines.len();
+            let digest = tool_message_digest(message.item_id.as_deref(), &message.text);
+            if tool_message_is_expandable(&message.text) {
+                projection
+                    .card_rows
+                    .push(ConversationTranscriptCardRow { line_index, digest });
+            }
+            lines.extend(format_tool_card_lines(
+                message,
+                view_mode,
+                expand_state,
+                width,
+            ));
             lines.push(Line::from(""));
             continue;
         }
@@ -113,27 +237,43 @@ fn format_conversation_lines_uncapped(
         // Separator participates in history capping so rendered scroll height matches what the user sees.
         lines.push(Line::from(""));
     }
+}
 
-    // Empty threads still need visible transcript content so the panel does not look broken.
+fn append_empty_transcript_message(
+    lines: &mut Vec<Line<'static>>,
+    source_message_count: usize,
+    view_mode: ConversationViewMode,
+) {
     if lines.is_empty() {
-        let empty_message = if messages.is_empty() {
+        let empty_message = if source_message_count == 0 {
             "No messages in this thread yet.".to_string()
         } else {
             format!("No messages visible in {} view.", view_mode.label())
         };
         lines.push(Line::from(empty_message));
     }
+}
 
-    lines
+fn cap_conversation_projection(projection: &mut ConversationTranscriptView) {
+    if projection.lines.len() <= MAX_CONVERSATION_HISTORY_LINES {
+        return;
+    }
+    let dropped = projection.lines.len() - MAX_CONVERSATION_HISTORY_LINES;
+    projection.lines.drain(0..dropped);
+    projection.card_rows.retain(|row| row.line_index >= dropped);
+    for row in &mut projection.card_rows {
+        row.line_index -= dropped;
+    }
 }
 
 fn format_tool_card_lines(
     message: &ConversationMessage,
     view_mode: ConversationViewMode,
     expand_state: Option<&ProgressiveActivityExpandState>,
+    width: u16,
 ) -> Vec<Line<'static>> {
     let expandable = tool_message_is_expandable(&message.text);
-    let digest = tool_message_digest(&message.text);
+    let digest = tool_message_digest(message.item_id.as_deref(), &message.text);
     // Detail view expands multi-line tool cards by default; Medium keeps them collapsed
     // unless the operator toggled the card. Single-line tools stay header-only.
     let expanded = expandable
@@ -181,8 +321,19 @@ fn format_tool_card_lines(
         },
     ])];
 
-    if expanded {
+    if expanded && label == "patch" && tool_message_has_unified_diff(&message.text) {
+        let detail = message.text.lines().skip(1).collect::<Vec<_>>().join("\n");
+        let preview = build_inline_diff_preview(&detail, width, INLINE_DIFF_PREVIEW_ROWS);
+        lines.extend(preview.lines);
+        if preview.has_more {
+            lines.push(Line::styled(
+                "  ... more diff detail in :activity",
+                AkraTheme::muted(),
+            ));
+        }
+    } else if expanded {
         let mut markdown_code_fence = None;
+        let mut body_lines = Vec::new();
         for text_line in message.text.lines().skip(1) {
             let Some(mut body) = format_markdown_body_line(text_line, &mut markdown_code_fence)
             else {
@@ -192,11 +343,25 @@ fn format_tool_card_lines(
             for span in body.spans.iter_mut().skip(1) {
                 span.style = span.style.patch(AkraTheme::tool_card_body());
             }
-            lines.push(body);
+            body_lines.push(body);
+        }
+        let has_more = body_lines.len() > INLINE_TOOL_DETAIL_ROWS;
+        lines.extend(body_lines.into_iter().take(INLINE_TOOL_DETAIL_ROWS));
+        if has_more {
+            lines.push(Line::styled(
+                "  ... more tool detail in :activity",
+                AkraTheme::muted(),
+            ));
         }
     }
 
     lines
+}
+
+fn tool_message_has_unified_diff(text: &str) -> bool {
+    text.lines().skip(1).any(|line| {
+        line.starts_with("diff --git ") || line.starts_with("@@ -") || line.starts_with("--- ")
+    })
 }
 
 // Normalize tabs before ratatui width/layout calculations so transcript alignment is terminal-independent.
@@ -523,6 +688,123 @@ mod tests {
             "{detail_text}"
         );
         assert_eq!(detail_text.matches("Read src/lib.rs").count(), 2);
+    }
+
+    #[test]
+    fn repeated_identical_reads_expand_only_the_selected_item() {
+        let text = "Read src/lib.rs\n1. Read src/lib.rs\n   path: C:/dev/akra/src/lib.rs";
+        let messages = vec![
+            ConversationMessage::new(
+                ConversationMessageKind::Tool,
+                text,
+                None,
+                Some("read-1".to_string()),
+            )
+            .with_display_label("read"),
+            ConversationMessage::new(
+                ConversationMessageKind::Tool,
+                text,
+                None,
+                Some("read-2".to_string()),
+            )
+            .with_display_label("read"),
+        ];
+        let mut expand_state = ProgressiveActivityExpandState::default();
+        expand_state.expand_tool(tool_message_digest(Some("read-1"), text));
+
+        let rendered = format_conversation_scrollback_lines_with_expand_at_width(
+            &messages,
+            ConversationViewMode::Medium,
+            false,
+            Some(&expand_state),
+            DEFAULT_TRANSCRIPT_WIDTH,
+        )
+        .iter()
+        .map(line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+        assert_eq!(rendered.matches("path: C:/dev/akra/src/lib.rs").count(), 1);
+    }
+
+    #[test]
+    fn expanded_patch_card_reuses_numbered_semantic_diff_bands() {
+        let messages = vec![
+            ConversationMessage::new(
+                ConversationMessageKind::Tool,
+                concat!(
+                    "file change: update src/lib.rs\n",
+                    "[update] src/lib.rs\n",
+                    "--- a/src/lib.rs\n",
+                    "+++ b/src/lib.rs\n",
+                    "@@ -7,2 +7,2 @@\n",
+                    "-old_value\n",
+                    "+new_value\n"
+                ),
+                None,
+                Some("patch-1".to_string()),
+            )
+            .with_display_label("patch"),
+        ];
+
+        let detail =
+            format_conversation_lines_for_view(&messages, ConversationViewMode::Detail, false);
+        let rendered = detail.iter().map(line_text).collect::<Vec<_>>().join("\n");
+        assert!(rendered.contains("Edited src/lib.rs"), "{rendered}");
+        assert!(rendered.contains("7 -old_value"), "{rendered}");
+        assert!(rendered.contains("7 +new_value"), "{rendered}");
+
+        let deletion = detail
+            .iter()
+            .find(|line| line_text(line).contains("old_value"))
+            .expect("deletion row");
+        let addition = detail
+            .iter()
+            .find(|line| line_text(line).contains("new_value"))
+            .expect("addition row");
+        assert!(
+            deletion
+                .spans
+                .iter()
+                .any(|span| span.style == AkraTheme::diff_deletion())
+        );
+        assert!(
+            addition
+                .spans
+                .iter()
+                .any(|span| span.style == AkraTheme::diff_addition())
+        );
+    }
+
+    #[test]
+    fn expanded_tool_card_bounds_inline_detail_and_points_to_activity() {
+        let detail = (1..=10)
+            .map(|line| format!("detail line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let messages = vec![
+            ConversationMessage::new(
+                ConversationMessageKind::Tool,
+                format!("Read ten records\n{detail}"),
+                None,
+                Some("read-many".to_string()),
+            )
+            .with_display_label("read"),
+        ];
+
+        let rendered =
+            format_conversation_lines_for_view(&messages, ConversationViewMode::Detail, false)
+                .iter()
+                .map(line_text)
+                .collect::<Vec<_>>()
+                .join("\n");
+
+        assert!(rendered.contains("detail line 8"), "{rendered}");
+        assert!(!rendered.contains("detail line 9"), "{rendered}");
+        assert!(
+            rendered.contains("more tool detail in :activity"),
+            "{rendered}"
+        );
     }
 
     #[test]

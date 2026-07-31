@@ -9,24 +9,24 @@ use super::parallel_supervisor_events::ParallelEventStreamSnapshot;
 use super::parallel_terminal_delivery::ParallelLiveStreamModel;
 use super::shell_presentation::{
     ActivityOverlayDocument, ActivityOverlayView, ConversationProjectionSample,
-    ConversationScreenFrameInput, ConversationScreenModel, DirectionsMaintenanceFrameInput,
-    DirectionsMaintenanceOverlayView, HelpOverlayView, InlineTailView, LanguageSelectionFrameInput,
-    LanguageSelectionOverlayView, MAX_GITHUB_REVIEW_NOTICE_LEN, ModelSelectionFrameInput,
-    ModelSelectionOverlayView, ParallelPeekOverlayView, PlanningDraftEditorOverlayView,
-    PlanningInitOverlayFrameInput, PlanningInitOverlayView, QueueMutationTailState,
-    QueueOverlayView, ReviewsOverlayView, SessionOverlayView, StartupBannerFrameInput,
-    StartupOverlayFrameInput, StartupOverlayView, SupersessionOverlayView,
-    TranscriptHandoffDeliveryToken, TurnSteerConfirmationScreenModel, ViewSelectionFrameInput,
-    ViewSelectionOverlayView, WorkCenterOverlayView, build_activity_overlay_list_view,
-    build_directions_maintenance_overlay_view, build_help_overlay_view,
-    build_inline_live_transcript_lines, build_inline_tail_view,
+    ConversationScreenFrameInput, ConversationScreenModel, ConversationTranscriptCardRow,
+    ConversationTranscriptView, DirectionsMaintenanceFrameInput, DirectionsMaintenanceOverlayView,
+    HelpOverlayView, InlineTailView, LanguageSelectionFrameInput, LanguageSelectionOverlayView,
+    MAX_GITHUB_REVIEW_NOTICE_LEN, ModelSelectionFrameInput, ModelSelectionOverlayView,
+    ParallelPeekOverlayView, PlanningDraftEditorOverlayView, PlanningInitOverlayFrameInput,
+    PlanningInitOverlayView, QueueMutationTailState, QueueOverlayView, ReviewsOverlayView,
+    SessionOverlayView, StartupBannerFrameInput, StartupOverlayFrameInput, StartupOverlayView,
+    SupersessionOverlayView, TranscriptHandoffDeliveryToken, TurnSteerConfirmationScreenModel,
+    ViewSelectionFrameInput, ViewSelectionOverlayView, WorkCenterOverlayView,
+    build_activity_overlay_list_view, build_directions_maintenance_overlay_view,
+    build_help_overlay_view, build_inline_live_transcript_view, build_inline_tail_view,
     build_language_selection_overlay_view, build_model_selection_overlay_view,
     build_operator_diagnostic_lines, build_parallel_peek_overlay_view_from_snapshot,
     build_planning_draft_editor_overlay_view_from_state,
     build_planning_init_overlay_view_from_projection, build_queue_overlay_view_from_screen_model,
     build_reviews_overlay_view, build_session_overlay_view, build_startup_banner_lines,
     build_startup_overlay_view, build_supersession_overlay_view, build_view_selection_overlay_view,
-    build_work_center_overlay_view, format_conversation_scrollback_lines_with_expand,
+    build_work_center_overlay_view, format_conversation_scrollback_lines_with_expand_at_width,
     presentation_workspace_directory, shell_conversation_state,
 };
 use super::shell_rendering::{
@@ -120,6 +120,7 @@ pub(super) struct InlineConversationFrameProjection {
     pub(super) rendered_at_epoch_millis: Option<i64>,
     pub(super) tail_view: InlineTailView,
     pub(super) live_transcript_lines: Vec<Line<'static>>,
+    pub(super) live_transcript_card_rows: Vec<ConversationTranscriptCardRow>,
     pub(super) shell_overlay: ShellOverlay,
     pub(super) tui_language: TuiLanguage,
     pub(super) inline_history_render_mode: InlineHistoryRenderMode,
@@ -158,9 +159,12 @@ pub(super) fn capture_inline_terminal_sync_projection(
     });
     let parallel_handoff_conversation_lines = (sample.parallel_mode_enabled()
         && sample.inline_history_render_mode().writes_host_scrollback())
-    .then(|| capture_parallel_conversation_handoff_projection(app, sample))
+    .then(|| {
+        capture_parallel_conversation_handoff_projection_at_width(app, sample, viewport_area.width)
+    })
     .flatten();
-    let current_history_projection = current_inline_history_lines_for_viewport(app, sample);
+    let current_history_projection =
+        current_inline_history_lines_for_viewport(app, sample, viewport_area.width);
     let parallel_event_stream_snapshot = sample
         .parallel_mode_enabled()
         .then(|| sample.parallel_event_stream_snapshot());
@@ -172,9 +176,18 @@ pub(super) fn capture_inline_terminal_sync_projection(
     }
 }
 
+#[cfg(test)]
 pub(super) fn capture_parallel_conversation_handoff_projection(
     app: &NativeTuiApp,
     sample: &ConversationProjectionSample,
+) -> Option<ParallelConversationHandoffProjection> {
+    capture_parallel_conversation_handoff_projection_at_width(app, sample, 120)
+}
+
+fn capture_parallel_conversation_handoff_projection_at_width(
+    app: &NativeTuiApp,
+    sample: &ConversationProjectionSample,
+    width: u16,
 ) -> Option<ParallelConversationHandoffProjection> {
     let ConversationState::Ready(conversation) = &app.conversation.lifecycle.conversation_state
     else {
@@ -182,7 +195,7 @@ pub(super) fn capture_parallel_conversation_handoff_projection(
     };
     conversation.viewport_transcript_handoff_release_messages()?;
     Some(ParallelConversationHandoffProjection {
-        lines: format_conversation_scrollback_lines_with_expand(
+        lines: format_conversation_scrollback_lines_with_expand_at_width(
             conversation.host_scrollback_messages(),
             app.conversation.conversation_view_mode,
             app.conversation
@@ -194,6 +207,7 @@ pub(super) fn capture_parallel_conversation_handoff_projection(
                     .progressive_activity_overlay_ui_state
                     .expand_state(),
             ),
+            width,
         ),
         delivery_token: TranscriptHandoffDeliveryToken::from_sample(sample)?,
     })
@@ -202,6 +216,7 @@ pub(super) fn capture_parallel_conversation_handoff_projection(
 fn current_inline_history_lines_for_viewport(
     app: &NativeTuiApp,
     sample: &ConversationProjectionSample,
+    width: u16,
 ) -> Option<Vec<Line<'static>>> {
     if sample.parallel_mode_enabled() {
         // Parallel delivery has its own typed cursor and must not participate in
@@ -232,7 +247,7 @@ fn current_inline_history_lines_for_viewport(
             {
                 return Some(Vec::new());
             }
-            Some(format_conversation_scrollback_lines_with_expand(
+            Some(format_conversation_scrollback_lines_with_expand_at_width(
                 messages,
                 app.conversation.conversation_view_mode,
                 app.conversation
@@ -244,6 +259,7 @@ fn current_inline_history_lines_for_viewport(
                         .progressive_activity_overlay_ui_state
                         .expand_state(),
                 ),
+                width,
             ))
         }
         // Loading/failure retain the prior host-scrollback diff baseline.
@@ -284,9 +300,22 @@ impl InlineConversationFrameProjection {
                     content_width,
                 ))
             });
+        let live_transcript_view = build_inline_live_transcript_view(
+            &screen_model,
+            app.conversation.conversation_view_mode,
+            app.conversation
+                .conversation_view_mode
+                .shows_debug_details()
+                || app.planning_worker_shows_debug_details(),
+            app.shell
+                .progressive_activity_overlay_ui_state
+                .expand_state(),
+            content_width,
+        );
         Self::from_screen_model(
             screen_model,
             content_width,
+            live_transcript_view,
             supersession_overlay_view,
             work_center_overlay_view,
         )
@@ -295,12 +324,16 @@ impl InlineConversationFrameProjection {
     fn from_screen_model(
         screen_model: ConversationScreenModel<'_>,
         content_width: u16,
+        live_transcript_view: ConversationTranscriptView,
         supersession_overlay_view: Option<Box<SupersessionOverlayView>>,
         work_center_overlay_view: Option<Box<WorkCenterOverlayView>>,
     ) -> Self {
         let operator_diagnostic_lines = build_operator_diagnostic_lines(&screen_model);
         let tail_view = build_inline_tail_view(&screen_model, content_width);
-        let live_transcript_lines = build_inline_live_transcript_lines(&screen_model);
+        let ConversationTranscriptView {
+            lines: live_transcript_lines,
+            card_rows: live_transcript_card_rows,
+        } = live_transcript_view;
         let renders_viewport_transcript_handoff =
             screen_model.renders_viewport_transcript_handoff();
         let transcript_handoff_delivery_token = screen_model
@@ -315,6 +348,7 @@ impl InlineConversationFrameProjection {
             rendered_at_epoch_millis: i64::try_from(screen_model.animation_elapsed_millis).ok(),
             tail_view,
             live_transcript_lines,
+            live_transcript_card_rows,
             shell_overlay: screen_model.shell_overlay,
             tui_language: screen_model.tui_language,
             inline_history_render_mode: screen_model.inline_history_render_mode,
@@ -426,6 +460,7 @@ struct SessionListStateChange {
 
 pub(super) struct InlineFrameRenderReceipt {
     activity: Option<StateChange<ProgressiveActivityOverlayUiState>>,
+    inline_transcript: StateChange<InlineTranscriptUiState>,
     planning_editor: Option<StateChange<PlanningDraftEditorUiState>>,
     startup_diagnostics_scroll_offset: Option<StateChange<usize>>,
     help_scroll_offset: Option<StateChange<usize>>,
@@ -447,6 +482,16 @@ impl InlineShellFrameModel {
 }
 
 impl InlineFrameRenderReceipt {
+    pub(super) fn record_inline_transcript_cards(
+        &mut self,
+        card_digests: Vec<[u8; 32]>,
+        hit_areas: Vec<InlineTranscriptCardHitArea>,
+    ) {
+        self.inline_transcript
+            .next
+            .bind_cards(card_digests, hit_areas);
+    }
+
     pub(super) fn record_queue_receipt_undo_hit_area(&mut self, hit_area: Option<Rect>) {
         self.queue_receipt_undo_hit_area.next = hit_area;
     }
@@ -470,6 +515,10 @@ pub(super) fn capture_inline_shell_frame_model(
     projection.finalize_parallel_live_stream_geometry(parallel_event_area);
     let mut receipt = InlineFrameRenderReceipt {
         activity: None,
+        inline_transcript: StateChange {
+            expected: app.shell.inline_transcript_ui_state.clone(),
+            next: InlineTranscriptUiState::default(),
+        },
         planning_editor: None,
         startup_diagnostics_scroll_offset: None,
         help_scroll_offset: None,
@@ -698,6 +747,7 @@ pub(super) fn apply_inline_frame_render_receipt(
 
     let InlineFrameRenderReceipt {
         activity,
+        inline_transcript,
         planning_editor,
         startup_diagnostics_scroll_offset,
         help_scroll_offset,
@@ -709,6 +759,7 @@ pub(super) fn apply_inline_frame_render_receipt(
     if let Some(change) = activity {
         app.shell.progressive_activity_overlay_ui_state = change.next;
     }
+    app.shell.inline_transcript_ui_state = inline_transcript.next;
     if let Some(change) = planning_editor {
         app.planning.planning_draft_editor_ui_state = change.next;
     }
@@ -743,6 +794,8 @@ fn inline_frame_render_receipt_matches(
         .activity
         .as_ref()
         .is_none_or(|change| app.shell.progressive_activity_overlay_ui_state == change.expected);
+    let inline_transcript_matches =
+        app.shell.inline_transcript_ui_state == receipt.inline_transcript.expected;
     let planning_editor_matches = receipt
         .planning_editor
         .as_ref()
@@ -780,6 +833,7 @@ fn inline_frame_render_receipt_matches(
         == receipt.queue_receipt_undo_hit_area.expected;
 
     activity_matches
+        && inline_transcript_matches
         && planning_editor_matches
         && startup_diagnostics_matches
         && help_matches
