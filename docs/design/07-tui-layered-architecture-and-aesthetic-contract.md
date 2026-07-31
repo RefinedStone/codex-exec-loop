@@ -212,8 +212,8 @@ navigation intent cannot optimistically rewrite it.
   `ShellOverlayTransition { from, to, exit_mode }`. The root coordinator has one exhaustive cleanup
   owner for all overlay variants and both exit modes; explicit close only dispatches
   `OverlayClosed`. Entering `Approval` is `Suspend` and preserves the departed overlay's local
-  state; `DirectionsMaintenance` is the one overlay restored after approval closes. Normal exits
-  clean the departed overlay exactly once.
+  state; `DirectionsMaintenance` and the read-only `WorkCenter` are the only overlays restored
+  after approval closes. Normal exits clean the departed overlay exactly once.
 - Approval decisions must enter through `AppCommand::SubmitApprovalDecision`. Core owns matching
   the current pending approval by full approval/server-request identity and the
   submitting/submitted single-flight state; composition performs the provider call. A duplicate
