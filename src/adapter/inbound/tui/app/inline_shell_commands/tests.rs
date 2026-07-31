@@ -23,6 +23,8 @@ fn parse_recognizes_supported_aliases() {
             ":diagnostics",
             Some((InlineShellCommand::Diagnostics, None)),
         ),
+        (":work", Some((InlineShellCommand::Work, None))),
+        (":w", Some((InlineShellCommand::Work, None))),
         (":parallel", Some((InlineShellCommand::Parallel, None))),
         (":pa", Some((InlineShellCommand::Parallel, None))),
         (":peek", Some((InlineShellCommand::Peek, None))),
@@ -142,6 +144,7 @@ fn suggestions_show_all_commands_for_colon_only() {
         suggestions,
         vec![
             InlineShellCommand::Diagnostics,
+            InlineShellCommand::Work,
             InlineShellCommand::Parallel,
             InlineShellCommand::Peek,
             InlineShellCommand::Activity,
@@ -233,6 +236,10 @@ fn suggestions_filter_by_prefix() {
         vec![InlineShellCommand::View]
     );
     assert_eq!(
+        InlineShellCommand::suggestions(":w"),
+        vec![InlineShellCommand::Work]
+    );
+    assert_eq!(
         InlineShellCommand::suggestions(":la"),
         vec![InlineShellCommand::Language]
     );
@@ -292,6 +299,7 @@ fn completion_text_uses_canonical_argument_ready_command_forms() {
     executable form. Aliases remain parse-only and never become completion text.
     */
     assert_eq!(InlineShellCommand::Diagnostics.completion_text(), ":diag");
+    assert_eq!(InlineShellCommand::Work.completion_text(), ":work");
     assert_eq!(
         InlineShellCommand::PlanningInit.completion_text(),
         ":planning"
@@ -333,6 +341,7 @@ fn help_entries_use_renderable_command_forms() {
         .join("\n");
 
     assert!(rendered.contains(":diag - diagnostics"));
+    assert!(rendered.contains(":work - unified work center"));
     assert!(rendered.contains(":parallel [off] - parallel mode"));
     assert!(rendered.contains(":peek - parallel agent peek"));
     assert!(rendered.contains(
@@ -699,6 +708,7 @@ fn execution_status_stays_alias_neutral() {
     */
     let cases = [
         (":diag", Some("opened diagnostics inspection")),
+        (":work", Some("opened unified work center")),
         (":sessions", Some("opened recent sessions inspection")),
         (":reviews", Some("opened review center inspection")),
         (":queue", Some("opened planning queue inspection")),

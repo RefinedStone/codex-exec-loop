@@ -57,13 +57,15 @@ pub(super) use overlays::{
     PlanningInitOverlayFrameInput, PlanningInitOverlayView, QueueOverlayView, ReviewsOverlayView,
     SessionOverlayView, StartupBannerFrameInput, StartupOverlayFrameInput, StartupOverlayView,
     SupersessionOverlayView, ViewSelectionFrameInput, ViewSelectionOverlayView,
-    build_activity_overlay_list_view, build_directions_maintenance_overlay_view,
-    build_help_overlay_view, build_language_selection_overlay_view,
-    build_model_selection_overlay_view, build_parallel_peek_overlay_view_from_snapshot,
+    WorkCenterOverlayView, build_activity_overlay_list_view,
+    build_directions_maintenance_overlay_view, build_help_overlay_view,
+    build_language_selection_overlay_view, build_model_selection_overlay_view,
+    build_parallel_peek_overlay_view_from_snapshot,
     build_planning_draft_editor_overlay_view_from_state,
     build_planning_init_overlay_view_from_projection, build_reviews_overlay_view,
     build_session_overlay_view, build_startup_banner_lines, build_startup_overlay_view,
     build_supersession_overlay_view, build_view_selection_overlay_view,
+    build_work_center_overlay_view,
 };
 #[cfg(test)]
 pub(super) use overlays::{build_parallel_peek_overlay_view, build_planning_init_overlay_view};

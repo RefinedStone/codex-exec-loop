@@ -1287,13 +1287,13 @@ mod coverage_tests {
         palette.composer.sync_inline_shell_command_palette();
         palette
             .composer
-            .move_inline_shell_command_palette_selection(3);
+            .move_inline_shell_command_palette_selection(4);
         let palette_prompt = rendered_ready_prompt(
             &palette,
             ShellActionAvailability::Ready,
             TuiLanguage::English,
         );
-        assert!(palette_prompt.contains("palette 4/19"));
+        assert!(palette_prompt.contains("palette 5/20"));
         assert!(palette_prompt.contains("↑/↓ or Tab select"));
         assert!(palette_prompt.contains("Enter run"));
         assert!(palette_prompt.contains("Esc close"));
@@ -1308,7 +1308,7 @@ mod coverage_tests {
         );
         assert!(
             korean_palette_prompt
-                .contains(&TuiLanguage::Korean.inline_command_palette_header(4, 19))
+                .contains(&TuiLanguage::Korean.inline_command_palette_header(5, 20))
         );
         assert!(korean_palette_prompt.contains("↑/↓ 또는 Tab 선택"));
         assert!(korean_palette_prompt.contains("Enter 실행"));

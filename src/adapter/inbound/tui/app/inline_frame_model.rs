@@ -17,7 +17,7 @@ use super::shell_presentation::{
     QueueOverlayView, ReviewsOverlayView, SessionOverlayView, StartupBannerFrameInput,
     StartupOverlayFrameInput, StartupOverlayView, SupersessionOverlayView,
     TranscriptHandoffDeliveryToken, TurnSteerConfirmationScreenModel, ViewSelectionFrameInput,
-    ViewSelectionOverlayView, build_activity_overlay_list_view,
+    ViewSelectionOverlayView, WorkCenterOverlayView, build_activity_overlay_list_view,
     build_directions_maintenance_overlay_view, build_help_overlay_view,
     build_inline_live_transcript_lines, build_inline_tail_view,
     build_language_selection_overlay_view, build_model_selection_overlay_view,
@@ -26,8 +26,8 @@ use super::shell_presentation::{
     build_planning_init_overlay_view_from_projection, build_queue_overlay_view_from_screen_model,
     build_reviews_overlay_view, build_session_overlay_view, build_startup_banner_lines,
     build_startup_overlay_view, build_supersession_overlay_view, build_view_selection_overlay_view,
-    format_conversation_scrollback_lines_with_expand, presentation_workspace_directory,
-    shell_conversation_state,
+    build_work_center_overlay_view, format_conversation_scrollback_lines_with_expand,
+    presentation_workspace_directory, shell_conversation_state,
 };
 use super::shell_rendering::{
     count_rendered_inline_rows, inline_frame_inspection_area, inline_parallel_event_stream_area,
@@ -130,6 +130,7 @@ pub(super) struct InlineConversationFrameProjection {
     pub(super) exit_confirmation_visible: bool,
     pub(super) turn_steer_confirmation: Option<Box<TurnSteerConfirmationScreenModel>>,
     pub(super) supersession_overlay_view: Option<Box<SupersessionOverlayView>>,
+    pub(super) work_center_overlay_view: Option<Box<WorkCenterOverlayView>>,
     operator_diagnostic_lines: Vec<Line<'static>>,
     sampled_parallel_supervisor: Box<ParallelModeSupervisorSnapshot>,
     sampled_planning_runtime_projection: Box<PlanningRuntimeProjection>,
@@ -275,13 +276,27 @@ impl InlineConversationFrameProjection {
                     &app.shell.supersession_mud_ui_state,
                 ))
             });
-        Self::from_screen_model(screen_model, content_width, supersession_overlay_view)
+        let work_center_overlay_view = (screen_model.shell_overlay == ShellOverlay::WorkCenter)
+            .then(|| {
+                Box::new(build_work_center_overlay_view(
+                    &screen_model,
+                    app.shell.work_center_overlay_ui_state.selected_section(),
+                    content_width,
+                ))
+            });
+        Self::from_screen_model(
+            screen_model,
+            content_width,
+            supersession_overlay_view,
+            work_center_overlay_view,
+        )
     }
 
     fn from_screen_model(
         screen_model: ConversationScreenModel<'_>,
         content_width: u16,
         supersession_overlay_view: Option<Box<SupersessionOverlayView>>,
+        work_center_overlay_view: Option<Box<WorkCenterOverlayView>>,
     ) -> Self {
         let operator_diagnostic_lines = build_operator_diagnostic_lines(&screen_model);
         let tail_view = build_inline_tail_view(&screen_model, content_width);
@@ -310,6 +325,7 @@ impl InlineConversationFrameProjection {
             exit_confirmation_visible: screen_model.exit_confirmation_visible,
             turn_steer_confirmation: screen_model.turn_steer_confirmation.map(Box::new),
             supersession_overlay_view,
+            work_center_overlay_view,
             operator_diagnostic_lines,
             sampled_parallel_supervisor,
             sampled_planning_runtime_projection,
@@ -353,6 +369,7 @@ pub(super) enum InlineInspectionFrameModel {
     ViewSelection(ViewSelectionOverlayView),
     LanguageSelection(LanguageSelectionOverlayView),
     Supersession(SupersessionOverlayView),
+    WorkCenter(WorkCenterOverlayView),
     ParallelPeek {
         view: ParallelPeekOverlayView,
         step: ParallelPeekOverlayStep,
@@ -558,6 +575,13 @@ pub(super) fn capture_inline_shell_frame_model(
                 .parallel_peek_overlay_ui_state
                 .conversation_scroll_from_bottom(),
         },
+        ShellOverlay::WorkCenter => InlineInspectionFrameModel::WorkCenter(
+            projection
+                .work_center_overlay_view
+                .take()
+                .map(|view| *view)
+                .expect("work center frame projection must own its view"),
+        ),
         ShellOverlay::Activity => {
             let (view, change) =
                 capture_activity_frame(app, inspection_area, projection.rendered_at_epoch_millis);

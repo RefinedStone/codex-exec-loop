@@ -1,0 +1,28 @@
+---
+source: src/adapter/inbound/tui/app/shell_rendering_tests.rs
+expression: medium
+---
+"Akra / Work Center / inline inspection                                                                                  "
+"task RUNNING · agents RUNNING · terminal IDLE · approval NONE · delivery WORKING                                        "
+"> TASK      RUNNING   Ship the unified operator surface · turn started                                                  "
+"  AGENTS    RUNNING   1/1 active · agent-1 · Implement unified work center · projecting typed task and delivery author… "
+"  TERMINAL  IDLE      No terminal activity recorded                                                                     "
+"  APPROVAL  NONE      No runtime approval is waiting                                                                    "
+"  DELIVERY  WORKING   merge pending · Implement unified work center · merge pending                                     "
+"Selected · TASK · RUNNING → Activity · turn turn-work-center · thread thread-work-center                                "
+"Keys · ↑↓ / jk select · Enter drill in · Esc close                                                                      "
+"A activity · V agents · T terminal · R reviews · D delivery                                                             "
+"Akra / root  ·  READY  ·  queue off  ·  agents 1/1  ·  terminals 0  ·  gpt-5.5/high                                     "
+"Parallel  ◆ 1 delivery                                                                                                  "
+"◦ Waiting for model response (0s • interrupt runtime-native)                                                            "
+"◦ Working (pool slot-1 • state: running • 06m 42s • Implement unified work center: projecting...)                       "
+" > Describe a task or type : for commands                                                                               "
+" Type a follow-up  |  Tab steers after typing                                                                           "
+"                                                                                                                        "
+"                                                                                                                        "
+"                                                                                                                        "
+"                                                                                                                        "
+"                                                                                                                        "
+"                                                                                                                        "
+"                                                                                                                        "
+"                                                                                                                        "

@@ -4,7 +4,7 @@ use super::super::shell_presentation::{
     LanguageSelectionOverlayView, ModelSelectionOverlayView, OverlayListView,
     ParallelPeekOverlayView, PlanningDraftEditorOverlayView, PlanningInitOverlayView,
     QueueOverlayView, ReviewsOverlayView, SessionOverlayView, StartupOverlayView,
-    SupersessionOverlayView, ViewSelectionOverlayView,
+    SupersessionOverlayView, ViewSelectionOverlayView, WorkCenterOverlayView,
 };
 use super::super::{AkraTheme, ParallelPeekOverlayStep, TuiLanguage};
 use super::inline_layout::{
@@ -89,6 +89,9 @@ pub(super) fn draw_inline_shell_inspection(
             step,
             scroll_from_bottom,
         ),
+        InlineInspectionFrameModel::WorkCenter(view) => {
+            draw_inline_work_center_inspection(frame, inspection_area, view)
+        }
         InlineInspectionFrameModel::Activity(view) => {
             draw_inline_activity_inspection(frame, inspection_area, view)
         }
@@ -117,6 +120,69 @@ pub(super) fn draw_inline_shell_inspection(
         }
     }
     None
+}
+
+fn draw_inline_work_center_inspection(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    view: WorkCenterOverlayView,
+) {
+    let WorkCenterOverlayView {
+        header_lines,
+        summary_lines,
+        item_lines,
+        detail_lines,
+        key_lines,
+    } = view;
+    let body_lines = take_panel_body_lines(header_lines);
+    if area.height <= 18 {
+        // The ordinary inline shell reserves a dense status/composer tail. A
+        // compact Work Center therefore removes per-section title rows and
+        // spends every remaining row on the five authority summaries, selected
+        // detail, and keys. This keeps the whole control surface visible in an
+        // 11-row inspection area without hiding the shell's live status rail.
+        let mut lines = vec![inline_overlay_title("Work Center")];
+        lines.extend(summary_lines);
+        lines.extend(item_lines);
+        lines.extend(detail_lines);
+        lines.extend(key_lines);
+        frame.render_widget(Paragraph::new(lines), area);
+        return;
+    }
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(inline_section_height(&body_lines, 3)),
+            Constraint::Length(inline_section_height(&summary_lines, 3)),
+            Constraint::Min(6),
+            Constraint::Length(inline_section_height(&detail_lines, 4)),
+            Constraint::Length(inline_section_height(&key_lines, 4)),
+        ])
+        .split(area);
+
+    render_inline_titled_panel(
+        frame,
+        layout[0],
+        inline_overlay_title("Work Center"),
+        body_lines,
+        true,
+    );
+    render_inline_titled_panel(
+        frame,
+        layout[1],
+        Line::from("Overview"),
+        summary_lines,
+        true,
+    );
+    render_inline_titled_panel(frame, layout[2], Line::from("Work"), item_lines, false);
+    render_inline_titled_panel(
+        frame,
+        layout[3],
+        Line::from("Selected Detail"),
+        detail_lines,
+        true,
+    );
+    render_inline_titled_panel(frame, layout[4], Line::from("Keys"), key_lines, true);
 }
 
 fn draw_inline_activity_inspection(frame: &mut Frame<'_>, area: Rect, view: ActivityOverlayView) {

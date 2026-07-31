@@ -1942,7 +1942,7 @@ fn tab_and_backtab_navigate_inline_command_palette() {
             .composer
             .inline_shell_command_palette_state
             .selected_command(),
-        Some(InlineShellCommand::Parallel)
+        Some(InlineShellCommand::Work)
     );
 
     runtime.handle_terminal_event(Event::Key(KeyEvent::new(

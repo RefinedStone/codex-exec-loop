@@ -1613,6 +1613,7 @@ impl NativeTuiApp {
         let mut app = Self {
             shell: super::NativeTuiShellState {
                 chrome: ShellChromeState::default(),
+                work_center_overlay_ui_state: super::WorkCenterOverlayUiState::default(),
                 supersession_mud_ui_state: super::SupersessionMudUiState::default(),
                 parallel_peek_overlay_ui_state: super::ParallelPeekOverlayUiState::default(),
                 progressive_activity_overlay_ui_state:
@@ -1734,6 +1735,7 @@ impl NativeTuiApp {
                         super::LanguageSelectionOverlayUiState::default();
                 }
                 ShellOverlay::ParallelPeek => self.shell.parallel_peek_overlay_ui_state.reset(),
+                ShellOverlay::WorkCenter => self.shell.work_center_overlay_ui_state.reset(),
                 ShellOverlay::Activity => self.shell.progressive_activity_overlay_ui_state.reset(),
                 ShellOverlay::Reviews => self.shell.reviews_overlay_ui_state.reset(),
                 ShellOverlay::Queue => self.planning.queue_overlay_ui_state.reset(),

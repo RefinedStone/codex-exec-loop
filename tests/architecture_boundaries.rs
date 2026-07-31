@@ -151,6 +151,12 @@ const CORE_RUNTIME_RAW_APPLICATION_SERVICE_FORBIDDEN_PATTERNS: &[&str] = &[
 
 const TUI_COVERAGE_SURFACES: &[TuiCoverageSurface] = &[
     TuiCoverageSurface {
+        name: "Unified Work Center",
+        doc_marker: "| Unified Work Center |",
+        source_prefixes: &["src/adapter/inbound/tui/app/work_center_overlay_ui.rs"],
+        test_entrypoints: &["src/adapter/inbound/tui/app/work_center_overlay_ui.rs"],
+    },
+    TuiCoverageSurface {
         name: "Inline terminal, host scrollback, viewport, resize, redraw transaction",
         doc_marker: "| Inline terminal, host scrollback, viewport, resize, redraw transaction |",
         source_prefixes: &[
@@ -1065,6 +1071,7 @@ fn native_tui_app_owns_exactly_four_typed_private_state_slices() {
             "NativeTuiShellState",
             &[
                 ("chrome", "ShellChromeState"),
+                ("work_center_overlay_ui_state", "WorkCenterOverlayUiState"),
                 ("supersession_mud_ui_state", "SupersessionMudUiState"),
                 (
                     "parallel_peek_overlay_ui_state",
