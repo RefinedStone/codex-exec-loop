@@ -5,8 +5,8 @@ use crate::application::service::planning::PlanningApplicationProjection;
 
 use super::super::{
     AkraTheme, AutoFollowSnapshotPresentation, ConversationScreenModel, ConversationViewModel,
-    INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT, ShellActionAvailability, StartupState, TuiLanguage,
-    compact_inline_detail,
+    INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT, ShellActionAvailability, ShellOverlay, StartupState,
+    TuiLanguage, compact_inline_detail,
 };
 use super::tail_shared::compact_auto_follow_status_summary;
 
@@ -284,34 +284,25 @@ pub(super) fn build_operator_attention_line(
     }
     let mut segments = vec![attention.impact(screen_model.tui_language).to_string()];
     segments.extend(count_segments.iter().cloned());
+    let action = (screen_model.shell_overlay == ShellOverlay::Hidden
+        && !screen_model.dialog_visible())
+    .then(|| attention.action(screen_model.tui_language));
 
-    let mut spans = vec![
-        Span::styled(
-            format!("{marker} {}", attention.label(screen_model.tui_language)),
-            tone.style().add_modifier(Modifier::BOLD),
-        ),
-        Span::styled("  ·  ", AkraTheme::subtle()),
-        Span::styled(segments.join("  ·  "), tone.style()),
-        Span::styled("  ·  ", AkraTheme::subtle()),
-        Span::styled(
-            attention.action(screen_model.tui_language),
-            AkraTheme::shortcut(),
-        ),
-    ];
+    let mut spans = build_attention_spans(
+        marker,
+        attention.label(screen_model.tui_language),
+        tone,
+        Some(segments.join("  ·  ")),
+        action,
+    );
     if Line::from(spans.clone()).width() > usize::from(effective_width) {
-        spans = vec![
-            Span::styled(
-                format!("{marker} {}", attention.label(screen_model.tui_language)),
-                tone.style().add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("  ·  ", AkraTheme::subtle()),
-            Span::styled(count_segments.join("  ·  "), tone.style()),
-            Span::styled("  ·  ", AkraTheme::subtle()),
-            Span::styled(
-                attention.action(screen_model.tui_language),
-                AkraTheme::shortcut(),
-            ),
-        ];
+        spans = build_attention_spans(
+            marker,
+            attention.label(screen_model.tui_language),
+            tone,
+            Some(count_segments.join("  ·  ")),
+            action,
+        );
     }
     if Line::from(spans.clone()).width() > usize::from(effective_width) {
         let mut compact = Vec::new();
@@ -321,25 +312,41 @@ pub(super) fn build_operator_attention_line(
         if attention.runtime_notice_count() > 0 {
             compact.push(format!("n{}", attention.runtime_notice_count()));
         }
-        spans = vec![
-            Span::styled(
-                format!("{marker} {}", attention.label(screen_model.tui_language)),
-                tone.style().add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("  ·  ", AkraTheme::subtle()),
-        ];
-        if !compact.is_empty() {
-            spans.extend([
-                Span::styled(compact.join(" "), tone.style()),
-                Span::styled("  ·  ", AkraTheme::subtle()),
-            ]);
-        }
-        spans.push(Span::styled(
-            attention.action(screen_model.tui_language),
-            AkraTheme::shortcut(),
-        ));
+        spans = build_attention_spans(
+            marker,
+            attention.label(screen_model.tui_language),
+            tone,
+            (!compact.is_empty()).then(|| compact.join(" ")),
+            action,
+        );
     }
     Some(Line::from(spans))
+}
+
+fn build_attention_spans(
+    marker: &'static str,
+    label: &'static str,
+    tone: RibbonTone,
+    detail: Option<String>,
+    action: Option<&'static str>,
+) -> Vec<Span<'static>> {
+    let mut spans = vec![Span::styled(
+        format!("{marker} {label}"),
+        tone.style().add_modifier(Modifier::BOLD),
+    )];
+    if let Some(detail) = detail.filter(|detail| !detail.is_empty()) {
+        spans.extend([
+            Span::styled("  ·  ", AkraTheme::subtle()),
+            Span::styled(detail, tone.style()),
+        ]);
+    }
+    if let Some(action) = action {
+        spans.extend([
+            Span::styled("  ·  ", AkraTheme::subtle()),
+            Span::styled(action, AkraTheme::shortcut()),
+        ]);
+    }
+    spans
 }
 
 pub(in crate::adapter::inbound::tui::app) fn build_operator_diagnostic_lines(

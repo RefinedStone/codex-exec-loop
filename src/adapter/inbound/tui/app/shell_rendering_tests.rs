@@ -443,6 +443,36 @@ fn operator_attention_ribbon_scales_and_routes_raw_payload_to_diagnostics() {
 }
 
 #[test]
+fn startup_diagnostics_scroll_reaches_recent_unique_warning_rows() {
+    let mut app = make_test_app();
+    let mut diagnostics = sample_startup_diagnostics();
+    diagnostics.warnings = (1..=6)
+        .map(|index| format!("startup-warning-{index}"))
+        .collect();
+    app.shell.chrome.startup_state = StartupState::Ready(diagnostics);
+    let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
+    else {
+        panic!("test app should have a ready conversation");
+    };
+    conversation
+        .runtime_notices
+        .push("runtime-notice-latest".to_string());
+    app.show_startup_overlay();
+
+    let first = tui_testkit::render_inline_snapshot(&mut app, 80, 24);
+    assert!(first.contains("startup-warning-1"), "{first}");
+    assert!(!first.contains("runtime-notice-latest"), "{first}");
+    assert_eq!(first.matches("startup-warning-1").count(), 1, "{first}");
+    assert!(first.contains("PgUp/PgDn"), "{first}");
+
+    assert!(app.handle_shell_overlay_key(event::KeyEvent::new(KeyCode::End, KeyModifiers::NONE,)));
+    let latest = tui_testkit::render_inline_snapshot(&mut app, 80, 24);
+    assert!(latest.contains("startup-warning-6"), "{latest}");
+    assert!(latest.contains("runtime-notice-latest"), "{latest}");
+    assert_ne!(app.shell.startup_diagnostics_scroll_offset, usize::MAX);
+}
+
+#[test]
 fn focused_composer_projects_typing_blocked_and_parallel_loading_states() {
     let mut typing_app = make_test_app();
     typing_app.shell.chrome.startup_state = StartupState::Ready(sample_startup_diagnostics());

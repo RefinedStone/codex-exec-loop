@@ -360,7 +360,10 @@ pub(super) struct InlineShellFrameModel {
 pub(super) enum InlineInspectionFrameModel {
     Conversation,
     ParallelSupervisor(SupersessionOverlayView),
-    Startup(StartupOverlayView),
+    Startup {
+        view: StartupOverlayView,
+        warning_scroll_offset: u16,
+    },
     Sessions {
         view: SessionOverlayView,
         list_state: ListState,
@@ -424,6 +427,7 @@ struct SessionListStateChange {
 pub(super) struct InlineFrameRenderReceipt {
     activity: Option<StateChange<ProgressiveActivityOverlayUiState>>,
     planning_editor: Option<StateChange<PlanningDraftEditorUiState>>,
+    startup_diagnostics_scroll_offset: Option<StateChange<usize>>,
     help_scroll_offset: Option<StateChange<usize>>,
     approval_scroll_offset: Option<ApprovalScrollStateChange>,
     session_list_state: Option<SessionListStateChange>,
@@ -467,6 +471,7 @@ pub(super) fn capture_inline_shell_frame_model(
     let mut receipt = InlineFrameRenderReceipt {
         activity: None,
         planning_editor: None,
+        startup_diagnostics_scroll_offset: None,
         help_scroll_offset: None,
         approval_scroll_offset: None,
         session_list_state: None,
@@ -490,16 +495,29 @@ pub(super) fn capture_inline_shell_frame_model(
             )
         }
         ShellOverlay::Hidden => InlineInspectionFrameModel::Conversation,
-        ShellOverlay::Startup => InlineInspectionFrameModel::Startup(build_startup_overlay_view(
-            StartupOverlayFrameInput {
+        ShellOverlay::Startup => {
+            let view = build_startup_overlay_view(StartupOverlayFrameInput {
                 startup_state: &app.shell.chrome.startup_state,
                 language: app.shell.tui_language,
                 parallel_mode_enabled: projection.parallel_mode_enabled,
                 operator_diagnostic_lines: std::mem::take(
                     &mut projection.operator_diagnostic_lines,
                 ),
-            },
-        )),
+            });
+            let visible_rows = startup_visible_warning_rows(inspection_area, &view);
+            let rendered_rows =
+                count_rendered_inline_rows(&view.warning_lines, inspection_area.width);
+            let max_scroll = rendered_rows.saturating_sub(visible_rows.max(1));
+            let next = app.shell.startup_diagnostics_scroll_offset.min(max_scroll);
+            receipt.startup_diagnostics_scroll_offset = Some(StateChange {
+                expected: app.shell.startup_diagnostics_scroll_offset,
+                next,
+            });
+            InlineInspectionFrameModel::Startup {
+                view,
+                warning_scroll_offset: next.min(usize::from(u16::MAX)) as u16,
+            }
+        }
         ShellOverlay::Sessions => {
             let screen_model = capture_session_overlay_screen_model(app);
             let view = build_session_overlay_view(&screen_model);
@@ -681,6 +699,7 @@ pub(super) fn apply_inline_frame_render_receipt(
     let InlineFrameRenderReceipt {
         activity,
         planning_editor,
+        startup_diagnostics_scroll_offset,
         help_scroll_offset,
         approval_scroll_offset,
         session_list_state,
@@ -692,6 +711,9 @@ pub(super) fn apply_inline_frame_render_receipt(
     }
     if let Some(change) = planning_editor {
         app.planning.planning_draft_editor_ui_state = change.next;
+    }
+    if let Some(change) = startup_diagnostics_scroll_offset {
+        app.shell.startup_diagnostics_scroll_offset = change.next;
     }
     if let Some(change) = help_scroll_offset {
         app.shell.help_scroll_offset = change.next;
@@ -725,6 +747,10 @@ fn inline_frame_render_receipt_matches(
         .planning_editor
         .as_ref()
         .is_none_or(|change| app.planning.planning_draft_editor_ui_state == change.expected);
+    let startup_diagnostics_matches = receipt
+        .startup_diagnostics_scroll_offset
+        .as_ref()
+        .is_none_or(|change| app.shell.startup_diagnostics_scroll_offset == change.expected);
     let help_matches = receipt
         .help_scroll_offset
         .as_ref()
@@ -755,6 +781,7 @@ fn inline_frame_render_receipt_matches(
 
     activity_matches
         && planning_editor_matches
+        && startup_diagnostics_matches
         && help_matches
         && approval_matches
         && session_matches
@@ -911,6 +938,29 @@ fn help_visible_command_rows(area: Rect, view: &HelpOverlayView) -> usize {
         ])
         .split(area);
     usize::from(layout[1].height.saturating_sub(1))
+}
+
+fn startup_visible_warning_rows(area: Rect, view: &StartupOverlayView) -> usize {
+    if view.warning_lines.is_empty() {
+        return 0;
+    }
+    let body_lines = view
+        .header_lines
+        .iter()
+        .skip(1)
+        .cloned()
+        .collect::<Vec<_>>();
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(inline_section_height(&body_lines, 4)),
+            Constraint::Length(inline_section_height(&view.summary_lines, 2)),
+            Constraint::Length(inline_section_height(&view.warning_lines, 5)),
+            Constraint::Length(inline_section_height(&view.key_lines, 4)),
+            Constraint::Min(2),
+        ])
+        .split(area);
+    usize::from(layout[2].height.saturating_sub(1))
 }
 
 fn capture_draft_editor_frame(

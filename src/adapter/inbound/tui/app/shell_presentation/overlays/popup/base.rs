@@ -35,7 +35,18 @@ pub(crate) fn build_startup_overlay_view(
         warning_lines.clear();
     }
     warning_lines.extend(input.operator_diagnostic_lines);
-
+    let warning_lines = deduplicate_startup_warning_lines(warning_lines);
+    let warning_navigation_available = warning_lines
+        .iter()
+        .any(|line| startup_warning_identity(line) != "no warnings");
+    let mut key_lines = vec![AkraTheme::key_line(format!(
+        "Esc/Ctrl+C: close    r: rerun checks    {ctrl_o_label}"
+    ))];
+    if warning_navigation_available {
+        key_lines.push(AkraTheme::key_line(
+            input.language.startup_diagnostics_scroll_key_line(),
+        ));
+    }
     StartupOverlayView {
         // header는 startup diagnostics가 live shell 위의 inspection surface라는 위치를 고정한다.
         header_lines: vec![
@@ -46,11 +57,31 @@ pub(crate) fn build_startup_overlay_view(
         summary_lines: build_startup_overlay_summary_lines(input.startup_state, input.language),
         check_lines: build_startup_check_lines(input.startup_state),
         warning_lines,
-        key_lines: vec![
-            AkraTheme::key_line("Esc/Ctrl+C: close    r: rerun checks"),
-            AkraTheme::key_line(ctrl_o_label),
-        ],
+        key_lines,
     }
+}
+
+fn deduplicate_startup_warning_lines(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+    let mut seen = Vec::new();
+    lines
+        .into_iter()
+        .filter(|line| {
+            let identity = startup_warning_identity(line);
+            if seen.contains(&identity) {
+                return false;
+            }
+            seen.push(identity);
+            true
+        })
+        .collect()
+}
+
+fn startup_warning_identity(line: &Line<'_>) -> String {
+    line.spans
+        .last()
+        .map(|span| span.content.trim().to_string())
+        .filter(|identity| !identity.is_empty())
+        .unwrap_or_else(|| line.to_string().trim().to_string())
 }
 
 // Session popup은 session_browser의 list/detail projection을 modal chrome에 싣는 얇은 assembly boundary다.

@@ -136,16 +136,25 @@ fn build_shell_command_palette_detail_line(
             language.inline_command_expected_result(command, parallel_mode_enabled)
         });
         return Line::from(vec![
-            Span::styled("  detail  ", AkraTheme::subtle()),
+            Span::styled(
+                format!("  {}  ", language.inline_command_palette_detail_label()),
+                AkraTheme::subtle(),
+            ),
             Span::styled(availability_label, availability_style),
             Span::raw(" · "),
             Span::raw(detail),
         ]);
     }
 
-    let mut spans = vec![Span::styled("  detail  ", AkraTheme::subtle())];
+    let mut spans = vec![Span::styled(
+        format!("  {}  ", language.inline_command_palette_detail_label()),
+        AkraTheme::subtle(),
+    )];
     if content_width >= 100 {
-        spans.push(Span::styled("args ", AkraTheme::subtle()));
+        spans.push(Span::styled(
+            format!("{} ", language.inline_command_palette_args_label()),
+            AkraTheme::subtle(),
+        ));
     }
     spans.push(Span::raw(language.inline_command_argument_preview(command)));
     spans.push(Span::styled(" → ", AkraTheme::subtle()));

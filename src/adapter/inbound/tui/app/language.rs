@@ -977,6 +977,27 @@ impl TuiLanguage {
         }
     }
 
+    pub(super) const fn inline_command_palette_detail_label(self) -> &'static str {
+        match self {
+            Self::English => "detail",
+            Self::Korean => "상세",
+        }
+    }
+
+    pub(super) const fn inline_command_palette_args_label(self) -> &'static str {
+        match self {
+            Self::English => "args",
+            Self::Korean => "인수",
+        }
+    }
+
+    pub(super) const fn startup_diagnostics_scroll_key_line(self) -> &'static str {
+        match self {
+            Self::English => "↑↓/jk: warnings    PgUp/PgDn: page    Home/End: bounds",
+            Self::Korean => "↑↓/jk: 경고    PgUp/PgDn: 페이지    Home/End: 처음/끝",
+        }
+    }
+
     pub(super) const fn inline_command_availability_label(
         self,
         availability: InlineShellCommandAvailability,

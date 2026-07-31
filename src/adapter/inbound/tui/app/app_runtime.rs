@@ -1613,6 +1613,7 @@ impl NativeTuiApp {
         let mut app = Self {
             shell: super::NativeTuiShellState {
                 chrome: ShellChromeState::default(),
+                startup_diagnostics_scroll_offset: 0,
                 work_center_overlay_ui_state: super::WorkCenterOverlayUiState::default(),
                 supersession_mud_ui_state: super::SupersessionMudUiState::default(),
                 parallel_peek_overlay_ui_state: super::ParallelPeekOverlayUiState::default(),
@@ -1753,8 +1754,8 @@ impl NativeTuiApp {
                     self.planning.planning_draft_editor_ui_state.reset();
                     self.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::EditFinished);
                 }
+                ShellOverlay::Startup => self.shell.startup_diagnostics_scroll_offset = 0,
                 ShellOverlay::Hidden
-                | ShellOverlay::Startup
                 | ShellOverlay::Sessions
                 | ShellOverlay::Supersession
                 | ShellOverlay::Help
