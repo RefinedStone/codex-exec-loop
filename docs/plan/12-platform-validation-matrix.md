@@ -2,31 +2,32 @@
 
 [한국어](../ko/reference/validation.md)
 
-Use this matrix when a change affects raw mode, terminal restore, inline behavior, prompt editing,
-overlays, resize, scrollback, or cursor behavior. It validates terminal behavior, not feature
+Use this matrix when a change affects raw mode, alternate-screen restore, prompt editing,
+overlays, transcript viewport, resize, mouse capture, or cursor behavior. It validates terminal behavior, not feature
 completeness.
 
-The shipped frontend is inline main-buffer mode. Counted `terminal-baseline` rows cover that default;
-alternate-screen or branch-family evidence is supplemental and does not replace a required row.
+The shipped frontend is alternate-screen fullscreen mode. Counted `terminal-baseline` rows cover
+that default; inline or host-scrollback evidence is historical and does not replace a required row.
 
 ## Required Terminal Baseline
 
 | OS | Terminal | Shell | Frontend | Priority |
 | --- | --- | --- | --- | --- |
-| macOS | Terminal.app | zsh | inline | required |
-| macOS | iTerm2 | zsh | inline | required |
-| Windows | Windows Terminal | PowerShell | inline | required |
-| Windows | Windows Terminal | WSL bash | inline | required |
-| Windows | Git Bash or equivalent | bash | inline | optional |
-| Windows | JetBrains IDE terminal | WSL bash | inline | optional |
+| Linux | direct terminal | bash | fullscreen | required |
+| Linux | tmux detached PTY | bash | fullscreen | required |
+| macOS | Terminal.app | zsh | fullscreen | optional |
+| macOS | iTerm2 | zsh | fullscreen | optional |
+| Windows | Windows Terminal | PowerShell | fullscreen | required |
+| Windows | Windows Terminal | WSL bash | fullscreen | required |
+| Windows | JetBrains IDE terminal | WSL bash | fullscreen | optional |
 
 Run once per required row:
 
 1. launch, render the first frame, exit with `Ctrl+q`, and confirm prompt/cursor restoration
 2. edit with `Ctrl+j`, `Ctrl+u`, `Ctrl+w`, cursor movement, multiline input, and `Enter`
 3. open and close diagnostics, sessions, queue, and planning
-4. stream a turn and verify buffered input and compact status behavior
-5. resize narrower, wider, shorter, and taller; inspect committed host scrollback
+4. stream a turn, PageUp, and verify the reader anchor plus `new output`; Ctrl+End resumes the tail
+5. expand read/explore and patch cards, then resize narrower, wider, shorter, and taller
 6. exercise failure/interrupt recovery when terminal restoration changed
 
 ## Operator-Surface Profile
@@ -72,7 +73,7 @@ Record one row:
 
 ```bash
 bash scripts/capture_native_validation.sh \
-  --frontend inline \
+  --frontend fullscreen \
   --check-profile terminal-baseline \
   --terminal "iTerm2 3.5" \
   --result pass \
@@ -91,8 +92,8 @@ bash scripts/summarize_native_validation.sh \
 ```
 
 The plain summary is informational; `--fail-on-incomplete` is the explicit gate. Counted rows use
-`capture_role: counted-row`. Representative branch-family evidence uses
-`capture_role: supplemental-unmatched` and never waives a required row by itself.
+`capture_role: counted-row`. Representative evidence uses `capture_role: supplemental-unmatched`
+and never waives a required row by itself.
 
 Every record includes date, commit SHA, OS, terminal/version, shell, frontend, `TERM` when
 available, capture role, exact profile, emitted checks, result, and notes. Primitive-sensitive

@@ -88,7 +88,7 @@ function Get-ValidationChecks {
                 "- input editing"
                 "- overlay flow"
                 "- streaming visibility"
-                "- resize and scrollback"
+                "- transcript scroll, card expansion, and resize"
                 "- failure and recovery"
             )
         }
@@ -99,7 +99,7 @@ function Get-ValidationChecks {
                 "- input editing"
                 "- overlay flow"
                 "- streaming visibility"
-                "- resize and scrollback"
+                "- transcript scroll, card expansion, and resize"
                 "- failure and recovery"
                 "- status language and next action"
                 "- resumed session context"
@@ -124,7 +124,7 @@ function Get-ValidationChecks {
                 "- input editing"
                 "- overlay flow"
                 "- streaming visibility"
-                "- resize and scrollback"
+                "- transcript scroll, card expansion, and resize"
                 "- failure and recovery"
             )
         }

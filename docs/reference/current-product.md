@@ -8,8 +8,8 @@ an explicitly proposed document, not here.
 ## Product Shape
 
 - Akra is a native-first Rust client over official `codex app-server` interfaces.
-- The inline main-buffer TUI is the primary surface; completed output is committed to host terminal
-  scrollback while the live viewport owns the prompt, stream tail, overlays, and compact notices.
+- The alternate-screen fullscreen TUI is the primary surface. One app-owned transcript viewport
+  owns conversation history, streaming rows, tool cards, overlays, status, and the composer.
 - Losing the controlling terminal terminates the native TUI through its normal shutdown boundary;
   a closed terminal or PTY must not leave the TUI or its app-server runtime resident.
 - Agent text stays raw Markdown in app-server state and is rendered at the TUI projection boundary;
@@ -27,7 +27,7 @@ an explicitly proposed document, not here.
 | Diagnostics | `Ctrl+d`, `:diag` | inspect startup readiness and blockers |
 | Sessions | `Ctrl+o`, `:sessions` | search, rename, resume, or start a blank draft |
 | Reviews | `:reviews` | inspect the bounded review center projection |
-| Activity | `:activity [all\|diff\|output\|command\|patch\|…]`, `:act` | inspect a chronological typed activity timeline with outcome, exact elapsed time, foldable retained detail, and line-numbered unified diff (live/overlay only; host scrollback stays static) |
+| Activity | `:activity [all\|diff\|output\|command\|patch\|…]`, `:act` | inspect a chronological typed activity timeline with outcome, exact elapsed time, foldable retained detail, and line-numbered unified diff; read/explore and patch detail is also expandable in the conversation |
 | Queue | `:queue`, `:q`, `akra queue` | inspect accepted head, proposals, skip framing, and receipts |
 | Planning | `:planning`, `:planning-init` | stage, validate, and promote planning changes |
 | Directions | `:directions` | maintain directions and queue-idle supporting artifacts |
@@ -77,8 +77,10 @@ continuation paths. A later `:parallel` re-arms only parallel continuation.
 3. `Tab` can confirm delivery into the exact active turn. Core admits one correlated steer worker,
    keeps the draft until provider acknowledgement, and ignores stale completions; later edits or
    identical retyped input are never cleared by an older acknowledgement.
-4. Active output remains in the live inline tail; final assistant output moves to committed history.
-5. Typed activity, runtime notices, approvals, and warnings update the same shell projection.
+4. Streaming assistant output updates its canonical `item_id` row in place. Tool rows append at
+   arrival time, so a late final assistant event cannot reorder the transcript.
+5. Typed activity, runtime notices, approvals, warnings, and expandable tool cards update the same
+   fullscreen projection.
 6. Post-turn evaluation advances, pauses, or stops continuation from accepted planning state.
 
 The Activity surface joins progressive payloads with authoritative item-lifecycle records by exact
@@ -141,8 +143,8 @@ Git common directory so linked worktrees share one authority and independent clo
 - Human review is required by default. Public-repository or autonomous delivery requires an exact
   parent-process opt-in; repository configuration cannot grant either permission.
 
-The focused Parallel Operations board owns the 16-row inline viewport without switching to an
-alternate screen. It presents one priority blocker, accepted queue pressure, a lifecycle timeline,
+The focused Parallel Operations board uses the same alternate-screen fullscreen frame transaction.
+It presents one priority blocker, accepted queue pressure, a lifecycle timeline,
 three slot lanes, and a selected-lane delivery checklist. Pool slots, active roster, bounded session
 detail, optional role profile, distributor head, queue state, and withheld-dispatch reason remain a
 read-only projection; a missing join is shown as `DESYNC` or `unknown`, never invented progress.
@@ -155,13 +157,11 @@ composer while the enabled passive projection continues; submitting a parallel t
 board so dispatch progress is visible. The 80-column layout stacks lanes before selected detail,
 while 120- and 160-column layouts show lifecycle, lanes, and detail together.
 
-Parallel event delivery keeps one generation-qualified canonical event window. The terminal
-adapter plans disjoint durable and live event models, advances its monotonic host frontier only
-after an exact committed write receipt, and never asks the renderer to rediscover ownership from
-text. The newest undelivered event remains live through narrow geometry, focused frames park their
-hidden cursor at the live viewport origin, and newly durable batches retain physical resize guards.
-Automatic host insertion uses `NewlineFallback`; `StandardScrollRegion` and `ViewportReplay` remain
-explicit diagnostic paths, and replay mode performs no host writes.
+Parallel event delivery keeps one generation-qualified canonical event window. The frame capture
+turns it into one app-owned `ParallelLiveStreamModel`, finalizes geometry before drawing, and never
+asks the renderer to rediscover ownership from text. Under height pressure the stream title may
+collapse, but event order and rows remain in the same Ratatui viewport. There is no host frontier,
+history insertion, durable/live split, or replay mode.
 
 `:peek` opens a read-only active-agent conversation preview; switching agents or overlays prevents
 late results from replacing the latest preview or the interactive conversation.
@@ -188,7 +188,7 @@ and queue-pressure playback without mutating real planning, parallel, Git, or Gi
   not hard-reset operator-owned integration history.
 - Non-Git workspaces use planning authority but not the full Git worktree pool.
 - Planning detail authoring is manual; the `llm-assisted` editor path is disabled.
-- Real-terminal evidence is still required for primitive-sensitive TUI changes and affected
+- Real-terminal evidence is still required for primitive-sensitive fullscreen TUI changes and affected
   restart/distributor/multi-worktree flows.
 
 ## Code Entry
