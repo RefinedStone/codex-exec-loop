@@ -57,7 +57,7 @@ pub(crate) fn build_model_selection_overlay_view(
 
     ModelSelectionOverlayView {
         header_lines: vec![
-            AkraTheme::title_line("Select Model and Effort", " / inline inspection"),
+            AkraTheme::title_line("Select Model and Effort", " / focused view"),
             Line::from("Choose a model, then choose the think level for future turns."),
         ],
         model_lines,

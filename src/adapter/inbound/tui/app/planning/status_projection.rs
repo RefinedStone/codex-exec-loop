@@ -9,7 +9,7 @@ use crate::domain::text::compact_whitespace_detail;
 use ratatui::text::Line;
 
 // Planning status appears in several shell surfaces with different space
-// budgets. Resume status is a single line, inline tail gets a compact summary
+// budgets. Resume status is a single line, the shell tail gets a compact summary
 // plus optional queue framing, and diagnostics can ask for longer details.
 const RESUMED_SESSION_DETAIL_LIMIT: usize = 96;
 const STATUS_SEGMENT_SEPARATOR: &str = "  |  ";
@@ -90,7 +90,7 @@ pub(crate) fn build_planning_status_surface_projection(
     }
 }
 
-// Resumed sessions need status text before the full inline shell has rendered.
+// Resumed sessions need status text before the full fullscreen shell has rendered.
 // Prefer the queue summary because it gives operators immediate handoff context;
 // fall back to the runtime detail only when no queue framing is available.
 pub(crate) fn build_resumed_session_status_text(

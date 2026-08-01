@@ -2,8 +2,8 @@ use super::{
     DeliveryGateStatus, build_detail_lines, build_distributor_lines, build_operations_lane_lines,
     build_roster_lines, delivery_gates, operations_board_state_label, operations_lane,
 };
+use crate::adapter::inbound::tui::app::parallel_stream_view::ParallelLiveStreamModel;
 use crate::adapter::inbound::tui::app::parallel_supervisor_events::ParallelEventStreamState;
-use crate::adapter::inbound::tui::app::parallel_terminal_delivery::ParallelLiveStreamModel;
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot,
     ParallelModeAgentSessionDetailSnapshot, ParallelModeAgentSessionHistoryEntry,

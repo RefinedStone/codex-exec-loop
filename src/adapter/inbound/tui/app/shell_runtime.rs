@@ -6,23 +6,17 @@ use crossterm::style::Print;
 use ratatui::layout::Rect;
 
 #[cfg(test)]
-use crate::adapter::inbound::tui::app::app_runtime::core_turn_stream_event_from_application;
-#[cfg(test)]
-use crate::core::app::{CoreEffectCompletion, CoreInput};
+use crate::core::app::CoreInput;
 use crate::domain::operator_alert::OperatorAlert;
 
 use super::app_runtime::TUI_BACKGROUND_CHANNEL_CAPACITY;
-use super::inline_frame_model::{
-    InlineConversationFrameProjection, InlineFrameRenderReceipt, InlineShellFrameModel,
-    InlineTerminalSyncProjection, apply_inline_frame_render_receipt,
-    capture_inline_shell_frame_model, capture_inline_terminal_sync_projection,
+use super::fullscreen_frame_model::{
+    FullscreenConversationFrameProjection, FullscreenFrameRenderReceipt, FullscreenShellFrameModel,
+    apply_fullscreen_frame_render_receipt, capture_fullscreen_shell_frame_model,
 };
-use super::shell_presentation::{
-    ConversationProjectionFrameInput, ConversationProjectionSample, TranscriptHandoffDeliveryToken,
-};
+use super::shell_presentation::{ConversationProjectionFrameInput, ConversationProjectionSample};
 use super::{
-    BackgroundMessage, ConversationState, InlineHistoryRenderMode, InputCursorMovement,
-    NativeTuiApp, ShellChromeEvent, ShellFrontendMode,
+    BackgroundMessage, InputCursorMovement, NativeTuiApp, ShellChromeEvent, ShellFrontendMode,
 };
 
 const BACKGROUND_MESSAGE_DRAIN_BUDGET: usize = 128;
@@ -39,7 +33,6 @@ pub(super) struct ShellRuntime {
     quit_after_redraw: bool,
     frame_scheduler: TuiFrameScheduler,
     terminal_resize_epoch: u64,
-    terminal_focus_reacquire_epoch: u64,
     first_frame_delivered: bool,
     last_live_activity_pulse: Option<u64>,
     background_drain_limited: bool,
@@ -54,7 +47,6 @@ impl ShellRuntime {
             quit_after_redraw: false,
             frame_scheduler: TuiFrameScheduler::new(now),
             terminal_resize_epoch: 0,
-            terminal_focus_reacquire_epoch: 0,
             first_frame_delivered: false,
             last_live_activity_pulse: None,
             background_drain_limited: false,
@@ -68,17 +60,7 @@ impl ShellRuntime {
     pub(super) fn app_mut(&mut self) -> &mut NativeTuiApp {
         &mut self.app
     }
-    pub(super) fn inline_history_render_mode(&self) -> InlineHistoryRenderMode {
-        self.app.shell.inline_history_render_mode
-    }
-    pub(super) fn capture_inline_terminal_projection_sample(&self) -> ConversationProjectionSample {
-        let transcript_handoff_correlation =
-            match &self.app.conversation.lifecycle.conversation_state {
-                ConversationState::Ready(conversation) => {
-                    conversation.viewport_transcript_handoff_correlation()
-                }
-                ConversationState::Loading | ConversationState::Failed(_) => None,
-            };
+    pub(super) fn capture_fullscreen_projection_sample(&self) -> ConversationProjectionSample {
         ConversationProjectionSample::from_frame_input(ConversationProjectionFrameInput {
             planning_parallel: self
                 .app
@@ -90,86 +72,45 @@ impl ShellRuntime {
                 .runtime
                 .client_runtime
                 .parallel_control_plane_projection(),
-            conversation_history_identity_revision: self
-                .app
-                .conversation
-                .conversation_history_identity_revision,
-            transcript_handoff_correlation,
             parallel_supervisor_events: self.app.shell.parallel_event_stream.snapshot(),
-            inline_history_render_mode: self.app.shell.inline_history_render_mode,
-            history_insert_mode: self.app.shell.history_insert_mode,
         })
     }
-    pub(super) fn capture_inline_terminal_sync_projection(
-        &self,
-        viewport_area: Rect,
-        sample: &ConversationProjectionSample,
-    ) -> InlineTerminalSyncProjection {
-        capture_inline_terminal_sync_projection(&self.app, viewport_area, sample)
-    }
-    pub(super) fn capture_inline_conversation_frame_projection(
+    pub(super) fn capture_fullscreen_conversation_frame_projection(
         &self,
         terminal_width: u16,
         sample: &ConversationProjectionSample,
-    ) -> InlineConversationFrameProjection {
-        InlineConversationFrameProjection::from_app_with_sample(&self.app, terminal_width, sample)
+    ) -> FullscreenConversationFrameProjection {
+        FullscreenConversationFrameProjection::from_app_with_sample(
+            &self.app,
+            terminal_width,
+            sample,
+        )
     }
-    pub(super) fn capture_inline_shell_frame_model(
+    pub(super) fn capture_fullscreen_shell_frame_model(
         &self,
         mode: ShellFrontendMode,
         area: Rect,
-        projection: InlineConversationFrameProjection,
-    ) -> InlineShellFrameModel {
-        capture_inline_shell_frame_model(&self.app, mode, area, projection)
+        projection: FullscreenConversationFrameProjection,
+    ) -> FullscreenShellFrameModel {
+        capture_fullscreen_shell_frame_model(&self.app, mode, area, projection)
     }
-    pub(super) fn commit_inline_frame_render_receipt(
+    pub(super) fn commit_fullscreen_frame_render_receipt(
         &mut self,
-        receipt: InlineFrameRenderReceipt,
+        receipt: FullscreenFrameRenderReceipt,
     ) -> bool {
-        apply_inline_frame_render_receipt(&mut self.app, receipt)
-    }
-    pub(super) fn acknowledge_transcript_handoff_after_delivery(
-        &mut self,
-        delivery_token: &TranscriptHandoffDeliveryToken,
-    ) -> bool {
-        let current_correlation = match &self.app.conversation.lifecycle.conversation_state {
-            ConversationState::Ready(conversation) => {
-                conversation.viewport_transcript_handoff_correlation()
-            }
-            ConversationState::Loading | ConversationState::Failed(_) => None,
-        };
-        if !delivery_token.matches_current(
-            self.app.conversation.conversation_history_identity_revision,
-            current_correlation.as_ref(),
-        ) {
-            return false;
-        }
-        let ConversationState::Ready(conversation) =
-            &mut self.app.conversation.lifecycle.conversation_state
-        else {
-            return false;
-        };
-        conversation.acknowledge_viewport_transcript_handoff_flush(delivery_token.correlation())
+        apply_fullscreen_frame_render_receipt(&mut self.app, receipt)
     }
     pub(super) fn clear_queue_receipt_undo_hit_area(&mut self) {
         self.app.clear_queue_receipt_undo_hit_area();
     }
-    pub(super) fn clear_inline_transcript_card_hit_areas(&mut self) {
-        self.app.clear_inline_transcript_card_hit_areas();
-    }
-    pub(super) fn mouse_capture_requested(&self) -> bool {
-        self.app.queue_receipt_undo_mouse_capture_requested()
-            || self.app.progressive_activity_mouse_capture_requested()
-            || self.app.inline_transcript_mouse_capture_requested()
+    pub(super) fn clear_transcript_card_hit_areas(&mut self) {
+        self.app.clear_transcript_card_hit_areas();
     }
     pub(super) fn should_quit(&self) -> bool {
         self.should_quit
     }
     pub(super) fn terminal_resize_epoch(&self) -> u64 {
         self.terminal_resize_epoch
-    }
-    pub(super) fn terminal_focus_reacquire_epoch(&self) -> u64 {
-        self.terminal_focus_reacquire_epoch
     }
     #[cfg(test)]
     pub(super) fn take_redraw_request(&mut self) -> bool {
@@ -244,68 +185,12 @@ impl ShellRuntime {
             redraw_requested = true;
             match message {
                 #[cfg(test)]
-                BackgroundMessage::StartupLoaded(result) => {
-                    let (snapshot, workspace_directory) = match result {
-                        Ok(ready) => {
-                            let workspace_directory = Some(ready.workspace_path.clone());
-                            (
-                                crate::core::app::StartupSnapshot::Ready(ready),
-                                workspace_directory,
-                            )
-                        }
-                        Err(message) => {
-                            (crate::core::app::StartupSnapshot::Failed { message }, None)
-                        }
-                    };
-                    self.app
-                        .dispatch_shell_chrome(ShellChromeEvent::StartupProjected {
-                            snapshot,
-                            session_page_size: super::SESSION_PAGE_SIZE,
-                        });
-                    if let Some(workspace_directory) = workspace_directory {
-                        self.app.sync_draft_shell_workspace(&workspace_directory);
-                    }
-                    self.app.resolve_startup_submit_queue();
-                }
-                #[cfg(test)]
-                BackgroundMessage::ConversationLoaded(result) => {
-                    let core_result = result.map(|snapshot| {
-                        Box::new(crate::core::app::ConversationReadySnapshot::from(snapshot))
-                    });
-                    let snapshot = core_result
-                        .map(crate::core::app::ConversationSnapshot::Ready)
-                        .unwrap_or_else(|message| crate::core::app::ConversationSnapshot::Failed {
-                            message,
-                        });
-                    self.app.apply_core_conversation_snapshot(snapshot);
-                }
-                #[cfg(test)]
-                BackgroundMessage::ConversationStream { correlation, event } => {
-                    self.app
-                        .dispatch_client_event(CoreInput::ConversationStreamUpdated {
-                            correlation,
-                            event: core_turn_stream_event_from_application(event),
-                        });
-                }
-                #[cfg(test)]
                 BackgroundMessage::ConversationRuntimeNotice(notice) => {
                     self.app
                         .dispatch_client_event(CoreInput::ConversationRuntimeNotice(notice));
                 }
                 BackgroundMessage::OperatorAlert(alert) => {
                     self.emit_operator_alert(&alert);
-                }
-                #[cfg(test)]
-                BackgroundMessage::PostTurnEvaluationCompleted {
-                    correlation,
-                    execution,
-                } => {
-                    self.app.dispatch_client_event(CoreInput::EffectCompleted(
-                        CoreEffectCompletion::PostTurnEvaluationCompleted {
-                            correlation,
-                            execution,
-                        },
-                    ));
                 }
             }
         }
@@ -370,7 +255,7 @@ impl ShellRuntime {
                 self.handle_key_press(key, now);
             }
             Event::Mouse(mouse) => {
-                if self.app.handle_inline_transcript_mouse_event(mouse)
+                if self.app.handle_transcript_mouse_event(mouse)
                     || self.app.handle_progressive_activity_mouse_event(mouse)
                     || self.app.handle_queue_receipt_mouse_event(mouse)
                 {
@@ -382,26 +267,17 @@ impl ShellRuntime {
                 /*
                  * Several resize events can be drained into one redraw. Preserve
                  * that fact even when the final dimensions equal the previous
-                 * frame, because the intermediate resize may already have moved
-                 * the physical cursor or host scrollback.
+                 * frame, because the intermediate resize invalidates wrapping,
+                 * transcript offsets, and all frame-local mouse hit areas.
                  */
                 self.terminal_resize_epoch = self.terminal_resize_epoch.saturating_add(1);
                 self.app.clear_queue_receipt_undo_hit_area();
                 self.app.clear_progressive_activity_card_hit_areas();
-                self.app.clear_inline_transcript_card_hit_areas();
+                self.app.clear_transcript_card_hit_areas();
                 self.request_redraw_at(now);
             }
             Event::FocusGained => {
-                if self.frame_scheduler.set_focused(true, now) {
-                    /*
-                     * Another application may have replaced visible terminal cells
-                     * while Akra was unfocused. Keep this separate from semantic frame
-                     * state so the adapter can rebuild the same frame without replaying
-                     * durable scrollback.
-                     */
-                    self.terminal_focus_reacquire_epoch =
-                        self.terminal_focus_reacquire_epoch.saturating_add(1);
-                }
+                self.frame_scheduler.set_focused(true, now);
             }
             Event::FocusLost => {
                 self.frame_scheduler.set_focused(false, now);
@@ -523,7 +399,17 @@ impl ShellRuntime {
                 self.app.delete_previous_input_word()
             }
             KeyCode::Char('e') if key.modifiers == KeyModifiers::CONTROL => {
-                if !self.app.toggle_latest_inline_transcript_tool_card() {
+                if !self.app.toggle_latest_transcript_tool_card() {
+                    return;
+                }
+            }
+            KeyCode::PageUp if key.modifiers.is_empty() => {
+                if !self.app.scroll_transcript_page_up() {
+                    return;
+                }
+            }
+            KeyCode::PageDown if key.modifiers.is_empty() => {
+                if !self.app.scroll_transcript_page_down() {
                     return;
                 }
             }
@@ -582,10 +468,14 @@ impl ShellRuntime {
                 self.app.move_input_cursor(InputCursorMovement::LineEnd)
             }
             KeyCode::Home if key.modifiers == KeyModifiers::CONTROL => {
-                self.app.move_input_cursor(InputCursorMovement::BufferStart)
+                if !self.app.jump_transcript_to_top() {
+                    return;
+                }
             }
             KeyCode::End if key.modifiers == KeyModifiers::CONTROL => {
-                self.app.move_input_cursor(InputCursorMovement::BufferEnd)
+                if !self.app.follow_latest_transcript() {
+                    return;
+                }
             }
             KeyCode::Backspace => self.app.pop_input_character(),
             KeyCode::Delete => self.app.delete_next_input_character(),
@@ -674,5 +564,84 @@ impl TuiFrameScheduler {
 }
 
 #[cfg(test)]
-#[path = "shell_runtime/tests.rs"]
-mod tests;
+mod tests {
+    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::layout::Rect;
+
+    use super::ShellRuntime;
+    use crate::adapter::inbound::tui::app::{
+        TranscriptCardHitArea, test_helpers::test_native_tui_app,
+    };
+
+    fn key(code: KeyCode, modifiers: KeyModifiers) -> Event {
+        Event::Key(KeyEvent::new(code, modifiers))
+    }
+
+    #[test]
+    fn page_keys_and_ctrl_end_drive_the_app_owned_transcript_viewport() {
+        let mut runtime = ShellRuntime::new(test_native_tui_app());
+        assert!(runtime.take_redraw_request());
+        runtime
+            .app_mut()
+            .shell
+            .transcript_viewport_ui_state
+            .bind_document(Some("thread:test".to_string()));
+        runtime
+            .app_mut()
+            .shell
+            .transcript_viewport_ui_state
+            .resolve_frame(120, 10, 1);
+
+        runtime.handle_terminal_event(key(KeyCode::PageUp, KeyModifiers::NONE));
+        let viewport = &runtime.app().shell.transcript_viewport_ui_state;
+        assert_eq!(viewport.top_row(), 102);
+        assert!(!viewport.follow_tail());
+        assert!(runtime.take_redraw_request());
+
+        runtime.handle_terminal_event(key(KeyCode::End, KeyModifiers::CONTROL));
+        let viewport = &runtime.app().shell.transcript_viewport_ui_state;
+        assert_eq!(viewport.top_row(), 110);
+        assert!(viewport.follow_tail());
+        assert!(runtime.take_redraw_request());
+    }
+
+    #[test]
+    fn resize_invalidates_frame_local_geometry_and_requests_one_redraw() {
+        let mut runtime = ShellRuntime::new(test_native_tui_app());
+        assert!(runtime.take_redraw_request());
+        runtime
+            .app_mut()
+            .shell
+            .transcript_viewport_ui_state
+            .bind_cards(
+                vec![[7; 32]],
+                vec![TranscriptCardHitArea {
+                    digest: [7; 32],
+                    area: Rect::new(2, 3, 20, 1),
+                }],
+            );
+        assert_eq!(
+            runtime
+                .app()
+                .shell
+                .transcript_viewport_ui_state
+                .card_hit_areas()
+                .len(),
+            1
+        );
+
+        runtime.handle_terminal_event(Event::Resize(80, 24));
+
+        assert_eq!(runtime.terminal_resize_epoch(), 1);
+        assert!(
+            runtime
+                .app()
+                .shell
+                .transcript_viewport_ui_state
+                .card_hit_areas()
+                .is_empty()
+        );
+        assert!(runtime.take_redraw_request());
+        assert!(!runtime.take_redraw_request());
+    }
+}

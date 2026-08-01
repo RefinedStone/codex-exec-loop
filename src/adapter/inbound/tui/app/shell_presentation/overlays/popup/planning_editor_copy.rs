@@ -1,7 +1,7 @@
 /*
 planning_editor_copy는 draft editor의 status copy DTO를 ratatui `Line`으로 낮추는 마지막 표현 계층이다.
 검증 결과, dirty label, close risk는 editor UI state와 presentation copy builder가 이미 계산해서 넘긴다.
-여기서 editor state를 다시 조회하지 않기 때문에 popup/inline renderer는 같은 status/key vocabulary를 쓰고,
+여기서 editor state를 다시 조회하지 않기 때문에 popup/fullscreen renderer는 같은 status/key vocabulary를 쓰고,
 저장/검증/close guard의 실제 상태 전이는 planning_draft_editor_ui와 controller에 남는다.
 */
 use super::super::super::super::super::planning_draft_editor_ui::PlanningDraftEditorCloseRisk;

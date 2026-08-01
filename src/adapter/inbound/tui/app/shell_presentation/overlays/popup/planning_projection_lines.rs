@@ -3,7 +3,7 @@ use super::super::super::super::{AkraTheme, Line, Modifier, Span, Style};
 
 // draft editor 좌측 파일 목록은 editor buffer state를 변경하지 않는 순수 projection이다.
 // `planning_projection.rs`가 selected buffer의 body/cursor projection을 만들 때 이 helper의
-// file rows를 함께 묶어 popup/inline renderer 모두 같은 file-list grammar를 쓰게 한다.
+// file rows를 함께 묶어 popup/fullscreen renderer 모두 같은 file-list grammar를 쓰게 한다.
 pub(super) fn build_planning_draft_editor_file_lines(
     buffers: &[PlanningDraftEditorBufferState],
     selected_index: usize,

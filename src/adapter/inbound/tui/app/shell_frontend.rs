@@ -4,12 +4,11 @@ use super::ratatui_frontend::run as run_ratatui_frontend;
 use super::shell_runtime::ShellRuntime;
 
 // Frontend mode는 terminal adapter가 선택한 viewport contract를 rendering layer에 넘기는 값이다.
-// 지금은 inline main buffer만 남았지만 enum 경계를 유지해 popup layout, testkit, terminal adapter가
-// 같은 mode vocabulary로 viewport assumptions를 고정한다.
+// 현재 production은 alternate-screen fullscreen 하나이며, enum 경계를 유지해 overlay layout,
+// TestBackend, terminal adapter가 같은 viewport contract를 사용하게 한다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ShellFrontendMode {
-    // ratatui frontend의 production path와 testkit이 공유하는 inline transcript/prompt layout.
-    InlineMainBuffer,
+    Fullscreen,
 }
 
 // ShellFrontend는 shell entrypoint와 concrete ratatui loop 사이의 작은 facade다.
@@ -28,8 +27,8 @@ impl ShellFrontend {
     // production draw path는 ratatui adapter에서 같은 값을 직접 전달한다.
     #[cfg(test)]
     pub(super) fn mode(self) -> ShellFrontendMode {
-        // 이 값이 바뀌면 shell_rendering과 inline terminal testkit의 layout contract도 같이 바뀐다.
-        ShellFrontendMode::InlineMainBuffer
+        // 이 값이 바뀌면 shell_rendering과 fullscreen rendering regression의 layout contract도 같이 바뀐다.
+        ShellFrontendMode::Fullscreen
     }
 
     // run은 initialized ShellRuntime의 소유권을 terminal event loop로 넘기는 마지막 adapter handoff다.
@@ -48,12 +47,9 @@ mod tests {
     use super::{ShellFrontend, ShellFrontendMode};
 
     // rendering snapshot이 아니라 facade wiring policy를 고정하는 test다.
-    // 실패 시 frontend mode vocabulary나 inline-only 전제가 바뀐 것으로 보고 downstream layout 호출부를 재검토한다.
+    // 실패 시 frontend mode vocabulary나 fullscreen 전제가 바뀐 것이므로 downstream layout 호출부를 재검토한다.
     #[test]
-    fn shell_frontend_is_inline_only() {
-        assert_eq!(
-            ShellFrontend::new().mode(),
-            ShellFrontendMode::InlineMainBuffer
-        );
+    fn shell_frontend_is_fullscreen() {
+        assert_eq!(ShellFrontend::new().mode(), ShellFrontendMode::Fullscreen);
     }
 }

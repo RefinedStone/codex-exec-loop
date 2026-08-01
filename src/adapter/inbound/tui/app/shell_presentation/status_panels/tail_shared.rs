@@ -1,46 +1,16 @@
-#[cfg(test)]
-use ratatui::text::Line;
-
 use crate::adapter::inbound::tui::supersession_mud::parallel_mode_progress_summary;
 
-#[cfg(test)]
-use super::super::ConversationLiveTranscriptScreenModel;
-#[cfg(test)]
-use super::super::format_conversation_lines;
 use super::super::{
     AutoFollowSnapshotPresentation, ConversationScreenModel, ConversationViewModel,
-    compact_inline_detail,
+    compact_shell_detail,
 };
 use super::activity_rail::build_activity_rail_notice_line;
 
 /*
- * tail_shared는 inline tail이 쓰는 "짧은 상태 문장"의 정책 모듈이다.
+ * tail_shared는 shell tail이 쓰는 "짧은 상태 문장"의 정책 모듈이다.
  * renderer마다 직접 ConversationViewModel을 뒤지면 thread label, auto-follow 상태, operator notice의
  * 우선순위와 축약 규칙이 달라지기 쉽다. 그래서 이 파일이 공통 copy를 만들고, tail_copy는 배치와 스타일에만 집중한다.
  */
-#[cfg(test)]
-pub(super) fn current_live_agent_lines(
-    live_transcript: &ConversationLiveTranscriptScreenModel<'_>,
-) -> Option<Vec<Line<'static>>> {
-    /*
-     * Host scrollback으로 아직 넘기지 않은 완료 메시지와 현재 streaming item을 순서대로 그린다.
-     * 동일 formatter를 재사용해 임시 viewport와 저장된 transcript의 markdown 규칙을 맞춘다.
-     */
-    let mut lines = Vec::new();
-    if let Some(messages) = live_transcript.handoff_messages {
-        lines.extend(format_conversation_lines(messages));
-    }
-    if !live_transcript.buffered_tool_messages.is_empty() {
-        lines.extend(format_conversation_lines(
-            live_transcript.buffered_tool_messages,
-        ));
-    }
-    if let Some(message) = live_transcript.live_agent_message {
-        lines.extend(format_conversation_lines(std::slice::from_ref(message)));
-    }
-    (!lines.is_empty()).then_some(lines)
-}
-
 pub(super) fn parallel_mode_summary_line(
     screen_model: &ConversationScreenModel<'_>,
 ) -> Option<String> {
@@ -68,7 +38,7 @@ pub(super) fn parallel_mode_summary_line(
         }
         /*
          * snapshot도 없고 mode도 꺼져 있으면 parallel subsystem은 의도적으로 inactive다.
-         * 이 상태는 operator가 조치할 정보가 없으므로 inline tail에서는 숨긴다.
+         * 이 상태는 operator가 조치할 정보가 없으므로 shell tail에서는 숨긴다.
          */
         None => None,
     }
@@ -153,7 +123,7 @@ pub(super) fn build_operator_notice(
             OperatorNoticeKind::Detail,
             format!(
                 "gh update: {}",
-                compact_inline_detail(github_review_summary, max_detail_len)
+                compact_shell_detail(github_review_summary, max_detail_len)
             ),
         ));
     }
@@ -187,7 +157,7 @@ pub(super) fn build_operator_notice(
             format!(
                 "auto: {}  |  detail: {}",
                 activity.summary,
-                compact_inline_detail(&activity.detail, max_detail_len)
+                compact_shell_detail(&activity.detail, max_detail_len)
             ),
         ));
     }
@@ -199,7 +169,7 @@ pub(super) fn build_operator_notice(
          */
         let mut parts = vec![format!(
             "tool activity: {}",
-            compact_inline_detail(activity_summary, max_detail_len)
+            compact_shell_detail(activity_summary, max_detail_len)
         )];
         if activity_command_count > 0 {
             parts.push(format!(
@@ -214,7 +184,7 @@ pub(super) fn build_operator_notice(
         if let Some(approval_summary) = conversation.approval_summary().as_deref() {
             parts.push(format!(
                 "approval: {}",
-                compact_inline_detail(approval_summary, max_detail_len)
+                compact_shell_detail(approval_summary, max_detail_len)
             ));
         }
         return Some(OperatorNotice::new(
@@ -232,7 +202,7 @@ pub(super) fn build_operator_notice(
             OperatorNoticeKind::Detail,
             format!(
                 "approval: {}",
-                compact_inline_detail(&approval_summary, max_detail_len)
+                compact_shell_detail(&approval_summary, max_detail_len)
             ),
         )
     })
@@ -254,7 +224,7 @@ pub(super) fn compact_auto_follow_status_summary(
             conversation.auto_follow_state().activity_label()
         )
     };
-    compact_inline_detail(&summary, max_detail_len)
+    compact_shell_detail(&summary, max_detail_len)
 }
 
 #[cfg(test)]

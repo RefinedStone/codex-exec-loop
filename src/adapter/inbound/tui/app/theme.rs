@@ -166,7 +166,7 @@ impl AkraTheme {
         Self::accent()
     }
 
-    // shell panel, popup, inline inspection surface가 공유하는 frame grammar다.
+    // shell panel, popup, fullscreen inspection surface가 공유하는 frame grammar다.
     pub(super) fn panel_block<'a, T>(title: T) -> Block<'a>
     where
         T: Into<Line<'a>>,
@@ -177,7 +177,7 @@ impl AkraTheme {
             .title(title)
     }
 
-    // Inline mode uses an open focus rail instead of a full-width box. A horizontal
+    // The fullscreen composer uses an open focus rail instead of a full-width box. A horizontal
     // border can reflow into extra terminal rows during a physical resize and push
     // the live prompt out of the viewport.
     pub(super) fn composer_rail(focused: bool) -> Style {

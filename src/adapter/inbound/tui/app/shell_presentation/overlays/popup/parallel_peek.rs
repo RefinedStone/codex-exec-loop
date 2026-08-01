@@ -6,21 +6,11 @@ use crate::domain::conversation::{
 use crate::domain::parallel_mode::ParallelModeAgentRosterEntry;
 use crate::domain::parallel_mode::ParallelModeSupervisorSnapshot;
 
-#[cfg(test)]
-use super::super::super::super::NativeTuiApp;
 use super::super::super::super::parallel_peek_overlay_ui::{
     ParallelPeekConversationPreview, ParallelPeekOverlayUiState,
 };
 use super::super::super::super::{AkraTheme, ParallelPeekOverlayStep};
 use super::ParallelPeekOverlayView;
-
-#[cfg(test)]
-pub(crate) fn build_parallel_peek_overlay_view(app: &NativeTuiApp) -> ParallelPeekOverlayView {
-    build_parallel_peek_overlay_view_from_snapshot(
-        &app.parallel_mode_supervisor_snapshot(),
-        &app.shell.parallel_peek_overlay_ui_state,
-    )
-}
 
 pub(crate) fn build_parallel_peek_overlay_view_from_snapshot(
     supervisor: &ParallelModeSupervisorSnapshot,

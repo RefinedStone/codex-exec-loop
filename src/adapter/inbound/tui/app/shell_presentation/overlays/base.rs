@@ -5,7 +5,7 @@ use super::super::{
 /*
  * overlay/base.rs sits between shell state projection and concrete overlay rendering. Production
  * code uses the startup banner helper here; framed shell builders were removed with the legacy
- * popup renderer, so inline inspection owns the remaining overlay layout contracts.
+ * popup renderer, so fullscreen inspection owns the remaining overlay layout contracts.
  */
 #[derive(Clone, Copy)]
 pub(crate) struct StartupBannerFrameInput<'a> {

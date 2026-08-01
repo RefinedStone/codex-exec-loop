@@ -754,14 +754,6 @@ impl NativeTuiApp {
             .clear_receipt_undo_hit_area();
     }
 
-    pub(super) fn queue_receipt_undo_mouse_capture_requested(&self) -> bool {
-        self.planning
-            .queue_overlay_ui_state
-            .receipt_undo_hit_area()
-            .is_some()
-            && self.queue_receipt_undo_task_count().is_some()
-    }
-
     pub(super) fn handle_queue_receipt_mouse_event(&mut self, mouse: MouseEvent) -> bool {
         if mouse.kind != MouseEventKind::Down(MouseButton::Left)
             || mouse.modifiers != KeyModifiers::NONE

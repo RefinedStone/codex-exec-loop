@@ -157,16 +157,20 @@ const TUI_COVERAGE_SURFACES: &[TuiCoverageSurface] = &[
         test_entrypoints: &["src/adapter/inbound/tui/app/work_center_overlay_ui.rs"],
     },
     TuiCoverageSurface {
-        name: "Inline terminal, host scrollback, viewport, resize, redraw transaction",
-        doc_marker: "| Inline terminal, host scrollback, viewport, resize, redraw transaction |",
+        name: "Fullscreen terminal, transcript viewport, resize, redraw transaction",
+        doc_marker: "| Fullscreen terminal, transcript viewport, resize, redraw transaction |",
         source_prefixes: &[
-            "src/adapter/inbound/tui/app/inline_terminal_adapter",
-            "src/adapter/inbound/tui/app/history_insertion.rs",
+            "src/adapter/inbound/tui/app/fullscreen_frame_model.rs",
+            "src/adapter/inbound/tui/app/fullscreen_terminal_adapter.rs",
+            "src/adapter/inbound/tui/app/ratatui_frontend.rs",
+            "src/adapter/inbound/tui/app/transcript_viewport_ui.rs",
         ],
         test_entrypoints: &[
-            "src/adapter/inbound/tui/app/inline_terminal_adapter/tests.rs",
-            "src/adapter/inbound/tui/app/inline_terminal_adapter/tests/history_flush.rs",
-            "src/adapter/inbound/tui/app/history_insertion.rs",
+            "src/adapter/inbound/tui/app/fullscreen_frame_model.rs",
+            "src/adapter/inbound/tui/app/fullscreen_rendering_tests.rs",
+            "src/adapter/inbound/tui/app/fullscreen_terminal_adapter.rs",
+            "src/adapter/inbound/tui/app/ratatui_frontend.rs",
+            "src/adapter/inbound/tui/app/transcript_viewport_ui.rs",
         ],
     },
     TuiCoverageSurface {
@@ -180,10 +184,8 @@ const TUI_COVERAGE_SURFACES: &[TuiCoverageSurface] = &[
             "src/adapter/inbound/tui/supersession_mud.rs",
         ],
         test_entrypoints: &[
-            "src/adapter/inbound/tui/app/inline_terminal_adapter/tests.rs",
-            "src/adapter/inbound/tui/app/shell_rendering_contract_tests.rs",
-            "src/adapter/inbound/tui/app/shell_runtime/tests/flows.rs",
-            "src/adapter/inbound/tui/app/shell_runtime/tests/input.rs",
+            "src/adapter/inbound/tui/app/fullscreen_rendering_tests.rs",
+            "src/adapter/inbound/tui/app/parallel_stream_view.rs",
             "src/adapter/inbound/tui/app/parallel_peek_overlay_ui.rs",
         ],
     },
@@ -208,11 +210,8 @@ const TUI_COVERAGE_SURFACES: &[TuiCoverageSurface] = &[
             "src/adapter/inbound/tui/shell_chrome.rs",
         ],
         test_entrypoints: &[
-            "src/adapter/inbound/tui/app/inline_terminal_adapter/tests.rs",
             "src/adapter/inbound/tui/app/shell_presentation/overlays/activity.rs",
-            "src/adapter/inbound/tui/app/shell_rendering_contract_tests.rs",
-            "src/adapter/inbound/tui/app/shell_rendering_contract_tests/planning.rs",
-            "src/adapter/inbound/tui/app/shell_rendering_tests.rs",
+            "src/adapter/inbound/tui/app/fullscreen_rendering_tests.rs",
             "src/adapter/inbound/tui/app/language.rs",
             "src/adapter/inbound/tui/app/planning_draft_editor_ui/tests.rs",
             "src/adapter/inbound/tui/app/planning/controller.rs",
@@ -241,19 +240,18 @@ const TUI_COVERAGE_SURFACES: &[TuiCoverageSurface] = &[
             "src/adapter/inbound/tui/app/turn_submission_runtime",
         ],
         test_entrypoints: &[
-            "src/adapter/inbound/tui/app/shell_runtime/tests/input.rs",
-            "src/adapter/inbound/tui/app/shell_runtime/tests/flows.rs",
-            "src/adapter/inbound/tui/app/shell_runtime/tests/scheduler.rs",
             "src/adapter/inbound/tui/app/conversation_input.rs",
             "src/adapter/inbound/tui/app/conversation_intents.rs",
+            "src/adapter/inbound/tui/app/fullscreen_rendering_tests.rs",
             "src/adapter/inbound/tui/app/inline_shell_commands/tests.rs",
+            "src/adapter/inbound/tui/app/shell_controller.rs",
         ],
     },
     TuiCoverageSurface {
         name: "Shell rendering snapshots plus targeted assertions",
         doc_marker: "| Shell rendering snapshots plus targeted assertions |",
         source_prefixes: &[
-            "src/adapter/inbound/tui/app/inline_frame_model.rs",
+            "src/adapter/inbound/tui/app/fullscreen_frame_model.rs",
             "src/adapter/inbound/tui/app/shell_rendering",
             "src/adapter/inbound/tui/app/shell_layout.rs",
             "src/adapter/inbound/tui/app/shell_presentation.rs",
@@ -262,26 +260,23 @@ const TUI_COVERAGE_SURFACES: &[TuiCoverageSurface] = &[
             "src/adapter/inbound/tui/conversation_text.rs",
         ],
         test_entrypoints: &[
-            "src/adapter/inbound/tui/app/shell_rendering_tests.rs",
-            "src/adapter/inbound/tui/app/shell_rendering_contract_tests.rs",
-            "src/adapter/inbound/tui/app/shell_rendering_contract_tests/planning.rs",
-            "src/adapter/inbound/tui/app/snapshots",
+            "src/adapter/inbound/tui/app/fullscreen_frame_model.rs",
+            "src/adapter/inbound/tui/app/fullscreen_rendering_tests.rs",
+            "src/adapter/inbound/tui/app/shell_rendering/fullscreen_inspection.rs",
+            "src/adapter/inbound/tui/app/shell_rendering/fullscreen_layout.rs",
         ],
     },
     TuiCoverageSurface {
-        name: "vt100 terminal path",
-        doc_marker: "| vt100 terminal path |",
+        name: "Alternate-screen terminal lifecycle and TestBackend path",
+        doc_marker: "| Alternate-screen terminal lifecycle and TestBackend path |",
         source_prefixes: &[
-            "src/adapter/inbound/tui/app/tui_testkit.rs",
-            "src/adapter/inbound/tui/app/history_insertion.rs",
-            "src/adapter/inbound/tui/app/inline_terminal_adapter",
-            "src/adapter/inbound/tui/app/shell_rendering_tests.rs",
+            "src/adapter/inbound/tui/app/fullscreen_terminal_adapter.rs",
+            "src/adapter/inbound/tui/app/ratatui_frontend.rs",
         ],
         test_entrypoints: &[
-            "src/adapter/inbound/tui/app/tui_testkit.rs",
-            "src/adapter/inbound/tui/app/history_insertion.rs",
-            "src/adapter/inbound/tui/app/inline_terminal_adapter/tests.rs",
-            "src/adapter/inbound/tui/app/shell_rendering_tests.rs",
+            "src/adapter/inbound/tui/app/fullscreen_rendering_tests.rs",
+            "src/adapter/inbound/tui/app/fullscreen_terminal_adapter.rs",
+            "src/adapter/inbound/tui/app/ratatui_frontend.rs",
         ],
     },
     TuiCoverageSurface {
@@ -306,8 +301,9 @@ const TUI_COVERAGE_SURFACES: &[TuiCoverageSurface] = &[
             "src/adapter/inbound/tui/app.rs",
             "src/adapter/inbound/tui/app/auto_follow_controls.rs",
             "src/adapter/inbound/tui/app/auto_follow_overlay_ui.rs",
-            "src/adapter/inbound/tui/app/conversation_model_tests.rs",
+            "src/adapter/inbound/tui/app/conversation_model/view_model/messages.rs",
             "src/adapter/inbound/tui/app/conversation_runtime.rs",
+            "src/adapter/inbound/tui/app/fullscreen_rendering_tests.rs",
             "src/adapter/inbound/tui/app/github_polling/tests.rs",
             "src/adapter/inbound/tui/app/turn_submission_runtime.rs",
             "src/adapter/inbound/tui/app/shell_entrypoint.rs",
@@ -318,12 +314,14 @@ const TUI_COVERAGE_SURFACES: &[TuiCoverageSurface] = &[
         doc_marker: "| TUI support and validation devices |",
         source_prefixes: &[
             "src/adapter/inbound/tui/app/test_helpers.rs",
-            "src/adapter/inbound/tui/app/tui_testkit.rs",
+            "src/adapter/inbound/tui/app/fullscreen_rendering_tests.rs",
+            "src/adapter/inbound/tui/app/transcript_viewport_ui.rs",
             "tests/architecture_boundaries.rs",
             "tests/native_validation_scripts.rs",
         ],
         test_entrypoints: &[
-            "src/adapter/inbound/tui/app/tui_testkit.rs",
+            "src/adapter/inbound/tui/app/fullscreen_rendering_tests.rs",
+            "src/adapter/inbound/tui/app/transcript_viewport_ui.rs",
             "tests/architecture_boundaries.rs",
             "tests/native_validation_scripts.rs",
             "docs/validation/tui-coverage-matrix.md",
@@ -1082,6 +1080,7 @@ fn native_tui_app_owns_exactly_four_typed_private_state_slices() {
                     "progressive_activity_overlay_ui_state",
                     "ProgressiveActivityOverlayUiState",
                 ),
+                ("transcript_viewport_ui_state", "TranscriptViewportUiState"),
                 ("help_scroll_offset", "usize"),
                 ("reviews_overlay_ui_state", "ReviewsOverlayUiState"),
                 ("parallel_event_stream", "ParallelEventStreamState"),
@@ -1099,8 +1098,6 @@ fn native_tui_app_owns_exactly_four_typed_private_state_slices() {
                     "view_selection_overlay_ui_state",
                     "ViewSelectionOverlayUiState",
                 ),
-                ("inline_history_render_mode", "InlineHistoryRenderMode"),
-                ("history_insert_mode", "HistoryInsertionMode"),
                 ("show_startup_ascii_art", "bool"),
             ],
         ),
@@ -1115,8 +1112,8 @@ fn native_tui_app_owns_exactly_four_typed_private_state_slices() {
                 ("prompt_input_revision", "u64"),
                 ("turn_steer_confirmation", "Option<TurnSteerUiIntent>"),
                 ("pending_turn_steer", "Option<PendingTurnSteerUiIntent>"),
-                ("conversation_history_identity_revision", "u64"),
-                ("conversation_history_thread_id", "Option<String>"),
+                ("transcript_document_revision", "u64"),
+                ("transcript_document_thread_id", "Option<String>"),
                 ("turn_options", "ConversationTurnOptions"),
                 ("conversation_view_mode", "ConversationViewMode"),
                 ("auto_follow_overlay_ui_state", "AutoFollowOverlayUiState"),
@@ -1346,13 +1343,13 @@ fn native_tui_projects_core_snapshots_without_duplicate_gates_or_runtime_app_esc
     assert_no_forbidden_references_in_paths(
         "terminal/frontend code must consume typed Runtime projections, never NativeTuiApp",
         &[
-            "src/adapter/inbound/tui/app/inline_terminal_adapter.rs",
+            "src/adapter/inbound/tui/app/fullscreen_terminal_adapter.rs",
             "src/adapter/inbound/tui/app/ratatui_frontend.rs",
         ],
         &[
             "NativeTuiApp",
             "ConversationProjectionSample::capture",
-            "InlineConversationFrameProjection::from_app_with_sample",
+            "FullscreenConversationFrameProjection::from_app_with_sample",
         ],
     );
 
@@ -8363,10 +8360,10 @@ fn tui_shell_renderer_consumes_one_owned_frame_without_app_or_effects() {
         violations.join("\n")
     );
 
-    let frame_model_path = repo_root.join("src/adapter/inbound/tui/app/inline_frame_model.rs");
+    let frame_model_path = repo_root.join("src/adapter/inbound/tui/app/fullscreen_frame_model.rs");
     assert_no_semantic_references_in_paths(
         "inline frame capture may sample UI state but must not reacquire Core, application, control-plane, or outbound authority",
-        &["src/adapter/inbound/tui/app/inline_frame_model.rs"],
+        &["src/adapter/inbound/tui/app/fullscreen_frame_model.rs"],
         &[
             "crate::composition",
             "crate::core",
@@ -8437,7 +8434,7 @@ fn tui_shell_renderer_consumes_one_owned_frame_without_app_or_effects() {
         );
     }
     let capture_source =
-        top_level_function_source(&frame_model_source, "capture_inline_shell_frame_model");
+        top_level_function_source(&frame_model_source, "capture_fullscreen_shell_frame_model");
     for sampled_builder in [
         "build_parallel_peek_overlay_view_from_snapshot",
         "build_planning_init_overlay_view_from_projection",
@@ -8460,9 +8457,9 @@ fn tui_shell_renderer_consumes_one_owned_frame_without_app_or_effects() {
         );
     }
     for type_name in [
-        "InlineShellFrameModel",
-        "InlineInspectionFrameModel",
-        "InlineFrameRenderReceipt",
+        "FullscreenShellFrameModel",
+        "FullscreenInspectionFrameModel",
+        "FullscreenFrameRenderReceipt",
     ] {
         let item = frame_model_syntax
             .items
@@ -8494,9 +8491,9 @@ fn tui_shell_renderer_consumes_one_owned_frame_without_app_or_effects() {
         let documentation = fs::read_to_string(repo_root.join(documentation_path))
             .unwrap_or_else(|error| panic!("{documentation_path} should load: {error}"));
         for contract_name in [
-            "InlineShellFrameModel",
-            "InlineInspectionFrameModel",
-            "InlineFrameRenderReceipt",
+            "FullscreenShellFrameModel",
+            "FullscreenInspectionFrameModel",
+            "FullscreenFrameRenderReceipt",
         ] {
             assert!(
                 documentation.contains(contract_name),
@@ -8505,7 +8502,7 @@ fn tui_shell_renderer_consumes_one_owned_frame_without_app_or_effects() {
         }
     }
 
-    let capture = top_level_function(&frame_model_syntax, "capture_inline_shell_frame_model");
+    let capture = top_level_function(&frame_model_syntax, "capture_fullscreen_shell_frame_model");
     assert_eq!(
         capture.sig.inputs.len(),
         4,
@@ -8528,11 +8525,11 @@ fn tui_shell_renderer_consumes_one_owned_frame_without_app_or_effects() {
     assert!(
         matches!(
             &capture.sig.output,
-            syn::ReturnType::Type(_, ty) if is_named_path_type(ty, "InlineShellFrameModel")
+            syn::ReturnType::Type(_, ty) if is_named_path_type(ty, "FullscreenShellFrameModel")
         ),
-        "frame capture must return InlineShellFrameModel"
+        "frame capture must return FullscreenShellFrameModel"
     );
-    let apply = top_level_function(&frame_model_syntax, "apply_inline_frame_render_receipt");
+    let apply = top_level_function(&frame_model_syntax, "apply_fullscreen_frame_render_receipt");
     assert_eq!(
         apply.sig.inputs.len(),
         2,
@@ -8548,7 +8545,7 @@ fn tui_shell_renderer_consumes_one_owned_frame_without_app_or_effects() {
     assert_eq!(
         draw.sig.inputs.len(),
         3,
-        "draw_projected must receive only Frame, ShellFrontendMode, and InlineShellFrameModel"
+        "draw_projected must receive only Frame, ShellFrontendMode, and FullscreenShellFrameModel"
     );
     let draw_inputs = draw.sig.inputs.iter().collect::<Vec<_>>();
     assert!(
@@ -8566,7 +8563,7 @@ fn tui_shell_renderer_consumes_one_owned_frame_without_app_or_effects() {
     );
     for (index, expected_type) in [
         (1usize, "ShellFrontendMode"),
-        (2usize, "InlineShellFrameModel"),
+        (2usize, "FullscreenShellFrameModel"),
     ] {
         assert!(
             matches!(
@@ -8580,21 +8577,22 @@ fn tui_shell_renderer_consumes_one_owned_frame_without_app_or_effects() {
     assert!(
         matches!(
             &draw.sig.output,
-            syn::ReturnType::Type(_, ty) if is_named_path_type(ty, "InlineFrameRenderReceipt")
+            syn::ReturnType::Type(_, ty) if is_named_path_type(ty, "FullscreenFrameRenderReceipt")
         ),
-        "draw_projected must return InlineFrameRenderReceipt"
+        "draw_projected must return FullscreenFrameRenderReceipt"
     );
 
     let terminal_source = fs::read_to_string(
-        repo_root.join("src/adapter/inbound/tui/app/inline_terminal_adapter.rs"),
+        repo_root.join("src/adapter/inbound/tui/app/fullscreen_terminal_adapter.rs"),
     )
-    .expect("inline terminal adapter source should load");
-    let terminal_function = top_level_function_source(&terminal_source, "draw_inline_frame");
+    .expect("fullscreen terminal adapter source should load");
+    let terminal_function =
+        top_level_impl_method_source(&terminal_source, "draw_fullscreen_transaction");
     let draw_lines = production_callable_reference_lines(&terminal_function, "draw_projected");
-    let stable_lines =
-        production_callable_reference_lines(&terminal_function, "matches_resize_snapshot");
-    let commit_lines =
-        production_callable_reference_lines(&terminal_function, "commit_frame_render_receipt");
+    let commit_lines = production_callable_reference_lines(
+        &terminal_function,
+        "commit_fullscreen_frame_render_receipt",
+    );
     assert_eq!(
         draw_lines.len(),
         1,
@@ -8605,77 +8603,42 @@ fn tui_shell_renderer_consumes_one_owned_frame_without_app_or_effects() {
         1,
         "one stable terminal frame must commit its render receipt exactly once"
     );
+    let stable_geometry = terminal_function
+        .find("let stable_geometry")
+        .expect("fullscreen delivery must verify post-draw geometry");
+    let commit = terminal_function
+        .find("commit_fullscreen_frame_render_receipt")
+        .expect("fullscreen delivery must commit one owned receipt");
     assert!(
-        stable_lines
-            .iter()
-            .any(|stable_line| draw_lines[0] < *stable_line && *stable_line < commit_lines[0]),
-        "render receipt must apply only after the post-draw resize snapshot remains stable"
+        terminal_function.find("draw_projected").expect("draw") < stable_geometry
+            && stable_geometry < commit,
+        "render receipt must apply only after drawing and the post-draw geometry check"
     );
     assert!(
-        production_callable_reference_lines(
-            &terminal_function,
-            "apply_inline_frame_render_receipt"
-        )
-        .is_empty(),
-        "draw_inline_frame must commit through the attempt-aware receipt gate"
+        terminal_function.contains("self.terminal.size()? == size_before")
+            && terminal_function.contains("runtime.terminal_resize_epoch() == resize_epoch")
+            && terminal_function.contains("runtime.request_resize_redraw_retry()"),
+        "fullscreen delivery must reject a resize race and request a fresh frame"
     );
-    let commit_receipt =
-        top_level_impl_method_source(&terminal_source, "commit_frame_render_receipt");
-    assert_eq!(
-        production_callable_reference_lines(&commit_receipt, "commit_receipt").len(),
-        1,
-        "the attempt-aware gate must invoke one typed receipt commit callback"
-    );
-    for required in [
-        "pending.attempt != current_attempt",
-        "pending.attempt <= last_committed",
-        "if !commit_receipt(pending.receipt)",
-    ] {
-        assert!(
-            commit_receipt.contains(required),
-            "the render receipt gate is missing required fail-closed behavior: {required}"
-        );
-    }
-    let receipt_apply_index = commit_receipt
-        .find("if !commit_receipt(pending.receipt)")
-        .expect("receipt application must remain fail-closed");
-    let commit_index = commit_receipt
-        .find("last_committed_frame_render_attempt = Some(pending.attempt)")
-        .expect("successful receipt application must record its attempt");
     assert!(
-        receipt_apply_index < commit_index,
-        "the render attempt must be recorded only after atomic receipt application succeeds"
+        terminal_function.contains("self.terminal.draw(|frame|")
+            && !terminal_function.contains("runtime.app_mut()"),
+        "Terminal::draw must consume only the owned frame model"
     );
     let runtime_source =
         fs::read_to_string(repo_root.join("src/adapter/inbound/tui/app/shell_runtime.rs"))
             .expect("shell runtime source should load");
     let runtime_receipt =
-        top_level_impl_method_source(&runtime_source, "commit_inline_frame_render_receipt");
+        top_level_impl_method_source(&runtime_source, "commit_fullscreen_frame_render_receipt");
     assert_eq!(
-        production_callable_reference_lines(&runtime_receipt, "apply_inline_frame_render_receipt")
-            .len(),
+        production_callable_reference_lines(
+            &runtime_receipt,
+            "apply_fullscreen_frame_render_receipt"
+        )
+        .len(),
         1,
         "ShellRuntime must apply the delivered owned receipt exactly once"
     );
-
-    let terminal_syntax =
-        syn::parse_file(&terminal_source).expect("inline terminal adapter source should parse");
-    let terminal_draw = top_level_function(&terminal_syntax, "draw_inline_frame");
-    let mut closure_references = TerminalDrawClosureReferenceVisitor::default();
-    closure_references.visit_block(&terminal_draw.block);
-    assert_eq!(
-        closure_references.references.len(),
-        1,
-        "draw_inline_frame must have one Terminal::draw closure"
-    );
-    for forbidden in ["NativeTuiApp", "app_mut", "runtime"] {
-        assert!(
-            !closure_references.references[0]
-                .iter()
-                .any(|reference| reference.split("::").any(|segment| segment == forbidden)),
-            "Terminal::draw closure must not access `{forbidden}`; it consumes only the owned frame model"
-        );
-    }
 }
 
 #[test]
@@ -8788,7 +8751,7 @@ fn tui_owned_frame_capture_keeps_app_projection_wrappers_test_only() {
     );
 
     let frame_model_source =
-        fs::read_to_string(repo_root.join("src/adapter/inbound/tui/app/inline_frame_model.rs"))
+        fs::read_to_string(repo_root.join("src/adapter/inbound/tui/app/fullscreen_frame_model.rs"))
             .expect("inline frame capture source should load");
     let conversation_frame_input = top_level_function_source(
         &frame_model_source,
@@ -8874,7 +8837,7 @@ fn tui_conversation_tail_reads_one_immutable_screen_model_without_effects() {
         fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/shell_runtime.rs"))
             .expect("shell runtime source should load");
     let projection_capture =
-        top_level_impl_method_source(&runtime_source, "capture_inline_terminal_projection_sample");
+        top_level_impl_method_source(&runtime_source, "capture_fullscreen_projection_sample");
     assert_eq!(
         projection_capture
             .matches("revisioned_planning_parallel_projection()")
@@ -8894,25 +8857,6 @@ fn tui_conversation_tail_reads_one_immutable_screen_model_without_effects() {
         0,
         "TUI shell_core must not import or use AppSnapshot for frame projection"
     );
-    for required in [
-        "conversation_history_identity_revision: u64",
-        "fn conversation_history_identity_revision(",
-    ] {
-        assert!(
-            production_source.contains(required),
-            "ConversationProjectionSample must own the terminal history identity fact: {required}"
-        );
-    }
-    let compact_capture = projection_capture
-        .chars()
-        .filter(|character| !character.is_whitespace())
-        .collect::<String>();
-    assert!(
-        compact_capture.contains(
-            "conversation_history_identity_revision:self.app.conversation.conversation_history_identity_revision"
-        ),
-        "ShellRuntime must capture the typed conversation history identity"
-    );
     for forbidden in [
         ".application",
         ".planning()",
@@ -8927,127 +8871,113 @@ fn tui_conversation_tail_reads_one_immutable_screen_model_without_effects() {
         );
     }
 
-    let terminal_source = fs::read_to_string(
-        repo_root().join("src/adapter/inbound/tui/app/inline_terminal_adapter.rs"),
+    let frame_model_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/fullscreen_frame_model.rs"),
     )
-    .expect("inline terminal adapter source should load");
-    assert!(
-        terminal_source.contains("frame_projection: &InlineConversationFrameProjection"),
-        "frame cache must accept the immutable frame projection instead of NativeTuiApp"
-    );
-    assert!(
-        terminal_source.contains("capture_inline_shell_frame_model("),
-        "the terminal transaction must materialize one owned frame before drawing"
-    );
+    .expect("fullscreen frame model source should load");
+    for required in [
+        "transcript_document_identity: Option<String>",
+        "transcript_revision: u64",
+        "conversation.transcript_revision()",
+        "format_fullscreen_conversation_transcript_view(",
+    ] {
+        assert!(
+            frame_model_source.contains(required),
+            "the owned fullscreen projection must carry canonical transcript facts: {required}"
+        );
+    }
 
-    let syntax =
-        syn::parse_file(&terminal_source).expect("inline terminal adapter source should parse");
-    let transaction = syntax
-        .items
-        .iter()
-        .find_map(|item| match item {
-            syn::Item::Fn(function) if function.sig.ident == "sync_inline_viewport_transaction" => {
-                Some(function)
-            }
-            _ => None,
-        })
-        .expect("inline terminal adapter should expose sync_inline_viewport_transaction");
-    let span = transaction.span();
-    let transaction_source = terminal_source
-        .lines()
-        .skip(span.start().line.saturating_sub(1))
-        .take(
-            span.end()
-                .line
-                .saturating_sub(span.start().line)
-                .saturating_add(1),
-        )
-        .collect::<String>();
-    let transaction_source = transaction_source
-        .chars()
-        .filter(|character| !character.is_whitespace())
-        .collect::<String>();
+    let terminal_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/fullscreen_terminal_adapter.rs"),
+    )
+    .expect("fullscreen terminal adapter source should load");
+    let transaction_source =
+        top_level_impl_method_source(&terminal_source, "draw_fullscreen_transaction");
     assert_eq!(
         transaction_source
-            .matches("runtime.capture_inline_terminal_projection_sample()")
+            .matches("runtime.capture_fullscreen_projection_sample()")
             .count(),
         1,
         "one terminal sync transaction must capture conversation projection facts exactly once"
     );
     assert_eq!(
         transaction_source
-            .matches("observe_conversation_history_identity_revision(")
+            .matches("runtime.capture_fullscreen_conversation_frame_projection(")
             .count(),
         1,
-        "one terminal sync transaction must observe the sampled conversation history identity exactly once"
+        "one terminal transaction must derive one immutable conversation projection"
+    );
+    assert_eq!(
+        transaction_source
+            .matches("runtime.capture_fullscreen_shell_frame_model(")
+            .count(),
+        1,
+        "one terminal transaction must materialize one owned fullscreen frame"
     );
 }
 
 #[test]
-fn tui_transcript_handoff_ack_requires_an_exact_terminal_delivery_receipt() {
+fn tui_transcript_viewport_commit_requires_a_stable_fullscreen_delivery_receipt() {
     let model_source = fs::read_to_string(
         repo_root().join("src/adapter/inbound/tui/app/conversation_model/view_model/messages.rs"),
     )
     .expect("conversation message mutation source should load");
+    let viewport_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/transcript_viewport_ui.rs"),
+    )
+    .expect("transcript viewport source should load");
+    let frame_model_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/fullscreen_frame_model.rs"),
+    )
+    .expect("fullscreen frame model source should load");
     let terminal_source = fs::read_to_string(
-        repo_root().join("src/adapter/inbound/tui/app/inline_terminal_adapter.rs"),
+        repo_root().join("src/adapter/inbound/tui/app/fullscreen_terminal_adapter.rs"),
     )
-    .expect("inline terminal adapter source should load");
-    let runtime_source =
-        fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/shell_runtime.rs"))
-            .expect("shell runtime source should load");
-    let flush_source = fs::read_to_string(
-        repo_root().join("src/adapter/inbound/tui/app/inline_terminal_adapter/history_flush.rs"),
-    )
-    .expect("history flush source should load");
+    .expect("fullscreen terminal adapter source should load");
 
-    for required in [
-        "viewport_transcript_handoff_correlation",
-        "correlation: &super::TranscriptHandoffCorrelation",
-        "self.viewport_transcript_handoff_correlation().as_ref() != Some(correlation)",
+    for forbidden in [
+        "live_agent_message",
+        "buffered_tool_messages",
+        "viewport_transcript_handoff",
+        "host_scrollback",
     ] {
         assert!(
-            model_source.contains(required),
-            "conversation model must reject an uncorrelated transcript ACK: {required}"
+            !model_source.contains(forbidden),
+            "canonical transcript mutation must not restore the retired split path: {forbidden}"
         );
     }
     for required in [
-        "committed_handoff: Option<TranscriptHandoffDeliveryToken>",
-        "fn committed_handoff(",
+        "top_row: usize",
+        "follow_tail: bool",
+        "latest_revision: u64",
+        "seen_revision: u64",
+        "has_unseen_output",
     ] {
         assert!(
-            flush_source.contains(required),
-            "history flush receipt must retain the sampled handoff token: {required}"
+            viewport_source.contains(required),
+            "app-owned transcript viewport is missing state: {required}"
         );
     }
     for required in [
-        "history_sync.committed_handoff()",
-        "handoff_sync.committed_handoff()",
+        "transcript_viewport: StateChange<TranscriptViewportUiState>",
+        "app.shell.transcript_viewport_ui_state == receipt.transcript_viewport.expected",
+        "app.shell.transcript_viewport_ui_state = transcript_viewport.next",
+    ] {
+        assert!(
+            frame_model_source.contains(required),
+            "fullscreen receipt must compare-and-apply the exact viewport state: {required}"
+        );
+    }
+    for required in [
+        "let stable_geometry =",
+        "runtime.terminal_resize_epoch() == resize_epoch",
+        "runtime.commit_fullscreen_frame_render_receipt(receipt)",
     ] {
         assert!(
             terminal_source.contains(required),
-            "terminal ACK must consume only an exact committed receipt: {required}"
+            "terminal delivery must commit viewport state only after stable geometry: {required}"
         );
     }
-    let acknowledge = top_level_impl_method_source(
-        &runtime_source,
-        "acknowledge_transcript_handoff_after_delivery",
-    );
-    for required in [
-        "delivery_token.matches_current(",
-        "conversation_history_identity_revision",
-        "current_correlation.as_ref()",
-    ] {
-        assert!(
-            acknowledge.contains(required),
-            "ShellRuntime must validate the exact typed delivery token fact before mutating transcript state: {required}"
-        );
-    }
-    assert!(
-        terminal_source
-            .contains("runtime.acknowledge_transcript_handoff_after_delivery(delivery_token)"),
-        "terminal delivery must commit the exact transcript handoff token through ShellRuntime"
-    );
 }
 
 #[test]
@@ -9074,9 +9004,10 @@ fn tui_turn_steer_confirmation_draws_one_owned_screen_model() {
             "turn-steer projection must capture its owned confirmation fact: {required}"
         );
     }
-    let frame_capture_source =
-        fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/inline_frame_model.rs"))
-            .expect("inline frame capture source should load");
+    let frame_capture_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/fullscreen_frame_model.rs"),
+    )
+    .expect("inline frame capture source should load");
     let frame_capture_compact = frame_capture_source
         .chars()
         .filter(|character| !character.is_whitespace())
@@ -9135,9 +9066,10 @@ fn tui_session_overlay_is_captured_once_before_pure_draw() {
         0,
         "session screen-model projection must receive workspace context through typed frame input"
     );
-    let frame_model_source =
-        fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/inline_frame_model.rs"))
-            .expect("inline frame capture source should load");
+    let frame_model_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/fullscreen_frame_model.rs"),
+    )
+    .expect("inline frame capture source should load");
     let session_capture =
         top_level_function_source(&frame_model_source, "capture_session_overlay_screen_model");
     assert_eq!(
@@ -9227,11 +9159,12 @@ fn tui_session_overlay_is_captured_once_before_pure_draw() {
         "session popup assembly must not reread NativeTuiApp"
     );
 
-    let frame_model_source =
-        fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/inline_frame_model.rs"))
-            .expect("inline frame-model source should load");
+    let frame_model_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/fullscreen_frame_model.rs"),
+    )
+    .expect("inline frame-model source should load");
     let capture =
-        top_level_function_source(&frame_model_source, "capture_inline_shell_frame_model");
+        top_level_function_source(&frame_model_source, "capture_fullscreen_shell_frame_model");
     let compact_capture = capture
         .chars()
         .filter(|character| !character.is_whitespace())
@@ -9265,7 +9198,7 @@ fn tui_session_overlay_is_captured_once_before_pure_draw() {
     );
 
     let rendering_source = fs::read_to_string(
-        repo_root().join("src/adapter/inbound/tui/app/shell_rendering/inline_inspection.rs"),
+        repo_root().join("src/adapter/inbound/tui/app/shell_rendering/fullscreen_inspection.rs"),
     )
     .expect("inline inspection source should load");
     for forbidden in [
@@ -9598,7 +9531,7 @@ fn tui_parallel_frame_uses_one_control_plane_and_event_projection_sample() {
             "src/adapter/inbound/tui/app/shell_presentation",
             "src/adapter/inbound/tui/app/shell_rendering.rs",
             "src/adapter/inbound/tui/app/shell_rendering",
-            "src/adapter/inbound/tui/app/inline_terminal_adapter.rs",
+            "src/adapter/inbound/tui/app/fullscreen_terminal_adapter.rs",
         ],
         &[
             ".mode_enabled()",
@@ -9656,7 +9589,7 @@ fn tui_parallel_frame_uses_one_control_plane_and_event_projection_sample() {
         fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/shell_runtime.rs"))
             .expect("shell runtime source should load");
     let conversation_capture =
-        top_level_impl_method_source(&runtime_source, "capture_inline_terminal_projection_sample");
+        top_level_impl_method_source(&runtime_source, "capture_fullscreen_projection_sample");
     assert_eq!(
         conversation_capture
             .matches("revisioned_planning_parallel_projection()")
@@ -9670,28 +9603,29 @@ fn tui_parallel_frame_uses_one_control_plane_and_event_projection_sample() {
     );
 
     let terminal_source = fs::read_to_string(
-        repo_root().join("src/adapter/inbound/tui/app/inline_terminal_adapter.rs"),
+        repo_root().join("src/adapter/inbound/tui/app/fullscreen_terminal_adapter.rs"),
     )
-    .expect("inline terminal adapter source should load");
+    .expect("fullscreen terminal adapter source should load");
     for required in [
-        "InlineTerminalSyncProjection",
-        "InlineTerminalSyncPolicy::from_sample(&projection_sample)",
-        "sampled_parallel_frame_projection",
+        "let sample = runtime.capture_fullscreen_projection_sample()",
+        "runtime.capture_fullscreen_conversation_frame_projection(size_before.width, &sample)",
+        "runtime.capture_fullscreen_shell_frame_model(",
     ] {
         assert!(
             terminal_source.contains(required),
-            "parallel policy, history, and frame drawing must share one sample: {required}"
+            "parallel policy and frame drawing must share one immutable sample: {required}"
         );
     }
 
-    let frame_model_source =
-        fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/inline_frame_model.rs"))
-            .expect("owned frame model source should load");
+    let frame_model_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/fullscreen_frame_model.rs"),
+    )
+    .expect("owned frame model source should load");
     for required in [
         "supersession_overlay_view: Option<Box<SupersessionOverlayView>>",
-        "parallel frame projection must own the supervisor view",
-        "parallel_event_stream_snapshot: Option<ParallelEventStreamSnapshot>",
-        "install_parallel_live_stream",
+        "sampled_parallel_supervisor: Box<ParallelModeSupervisorSnapshot>",
+        "fn finalize_parallel_live_stream_geometry",
+        "view.event_stream.finalize_pending_geometry(event_area)",
     ] {
         assert!(
             frame_model_source.contains(required),
@@ -9702,7 +9636,8 @@ fn tui_parallel_frame_uses_one_control_plane_and_event_projection_sample() {
         fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/shell_rendering.rs"))
             .expect("shell rendering source should load");
     assert!(
-        rendering_source.contains("inline_inspection::parallel_event_stream_area(view, layout[0])"),
+        rendering_source
+            .contains("fullscreen_inspection::parallel_event_stream_area(view, layout[0])"),
         "Supersession row planning and drawing must consume the owned view"
     );
 
@@ -9720,7 +9655,7 @@ fn tui_parallel_frame_uses_one_control_plane_and_event_projection_sample() {
         top_level_impl_method_source(&runtime_source, "poll_background_messages_at");
     assert!(
         !scheduler_source.contains("ConversationProjectionSample::capture")
-            && !scheduler_source.contains("capture_inline_terminal_projection_sample"),
+            && !scheduler_source.contains("capture_fullscreen_projection_sample"),
         "the 100ms scheduler must not clone the full conversation and event-stream sample"
     );
     for path in [
@@ -9736,9 +9671,9 @@ fn tui_parallel_frame_uses_one_control_plane_and_event_projection_sample() {
     }
 
     let inspection_source = fs::read_to_string(
-        repo_root().join("src/adapter/inbound/tui/app/shell_rendering/inline_inspection.rs"),
+        repo_root().join("src/adapter/inbound/tui/app/shell_rendering/fullscreen_inspection.rs"),
     )
-    .expect("inline inspection source should load");
+    .expect("fullscreen inspection source should load");
     assert!(
         inspection_source.contains("stream.into_render_parts()"),
         "parallel renderer must consume the terminal-planned live model"
@@ -9843,255 +9778,90 @@ fn tui_parallel_event_stream_owns_one_typed_canonical_window() {
 }
 
 #[test]
-fn tui_parallel_terminal_delivery_is_one_typed_transaction() {
-    let delivery_source = fs::read_to_string(
-        repo_root().join("src/adapter/inbound/tui/app/parallel_terminal_delivery.rs"),
-    )
-    .expect("parallel terminal delivery source should load");
-    let delivery_production = production_source_before_inline_tests(&delivery_source);
-    let delivery_syntax = syn::parse_file(&delivery_production)
-        .expect("parallel terminal delivery source should parse as Rust");
-
-    let cursor_fields = named_struct_fields(&delivery_syntax, "ParallelDeliveryCursor");
+fn tui_parallel_stream_is_one_app_owned_fullscreen_projection() {
+    let stream_source =
+        fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/parallel_stream_view.rs"))
+            .expect("parallel stream view source should load");
+    let stream_syntax = syn::parse_file(&stream_source).expect("parallel stream view should parse");
+    let fields = named_struct_fields(&stream_syntax, "ParallelLiveStreamModel");
     assert_eq!(
-        cursor_fields.len(),
-        2,
-        "the delivery frontier must be one generation-qualified cursor"
-    );
-    for (field, (expected_name, expected_type)) in cursor_fields.iter().zip([
-        ("stream_generation", "u64"),
-        ("delivered_through", "Option"),
-    ]) {
-        assert_eq!(
-            field
-                .ident
-                .as_ref()
-                .expect("delivery cursor field should be named"),
-            expected_name
-        );
-        assert!(
-            type_mentions_named_path(&field.ty, expected_type),
-            "delivery cursor field {expected_name} must mention {expected_type}"
-        );
-        assert!(
-            matches!(field.vis, syn::Visibility::Inherited),
-            "delivery cursor fields must stay private"
-        );
-    }
-
-    let state = delivery_syntax
-        .items
-        .iter()
-        .find_map(|item| match item {
-            syn::Item::Enum(item) if item.ident == "ParallelDeliveryState" => Some(item),
-            _ => None,
-        })
-        .expect("parallel delivery state should exist");
-    assert_eq!(
-        state
-            .variants
+        fields
             .iter()
-            .map(|variant| variant.ident.to_string())
+            .map(|field| field.ident.as_ref().expect("named field").to_string())
             .collect::<Vec<_>>(),
-        ["Ready", "Writing", "Uncertain"],
-        "delivery must make the pre-write, in-flight, and ambiguous states explicit"
+        ["events", "status_lines", "layout"],
+        "parallel fullscreen stream must own only semantic events, status rows, and layout"
     );
-
-    for (struct_name, required_fields) in [
-        (
-            "ParallelHostDeliveryToken",
-            &[
-                "terminal_surface_generation",
-                "stream_generation",
-                "expected_cursor",
-                "proposed_cursor",
-                "attempt_id",
-            ][..],
-        ),
-        (
-            "ParallelStreamDeliveryPlan",
-            &["geometry", "host_batch", "live_stream"][..],
-        ),
-        (
-            "ParallelHostBatch",
-            &[
-                "expected_cursor",
-                "commit_through",
-                "retention_gap",
-                "events",
-            ][..],
-        ),
-        (
-            "ParallelLiveStreamModel",
-            &[
-                "stream_generation",
-                "after_cursor",
-                "events",
-                "status_lines",
-                "layout",
-            ][..],
-        ),
-    ] {
-        let fields = named_struct_fields(&delivery_syntax, struct_name);
-        assert_eq!(
-            fields
-                .iter()
-                .map(|field| {
-                    field
-                        .ident
-                        .as_ref()
-                        .expect("transaction field should be named")
-                        .to_string()
-                })
-                .collect::<Vec<_>>(),
-            required_fields,
-            "{struct_name} must keep the typed transaction shape"
-        );
-        assert!(
-            fields
-                .iter()
-                .all(|field| matches!(field.vis, syn::Visibility::Inherited)),
-            "{struct_name} transaction fields must stay private"
-        );
-    }
-
-    for forbidden in [".starts_with(", "std::mem::swap", "rendered_lines =="] {
-        assert!(
-            !delivery_production.contains(forbidden),
-            "delivery ownership must never be reconstructed from rendered text: {forbidden}"
-        );
-    }
     assert!(
-        delivery_production.contains("start.min(events.len() - 1)"),
-        "resize geometry alone must not advance the frontier past the latest live event"
+        fields
+            .iter()
+            .all(|field| matches!(field.vis, syn::Visibility::Inherited)),
+        "parallel fullscreen stream internals must stay private"
     );
+    for required in [
+        "enum ParallelLiveLayout {",
+        "Pending,",
+        "Planned {",
+        "pub(super) fn pending_viewport(",
+        "pub(super) fn finalize_pending_geometry(",
+        "pub(super) fn into_render_parts(",
+        "ParallelLiveLayout::Pending => (true, 0)",
+        "pending_stream_falls_back_to_a_safe_unscrolled_view",
+    ] {
+        assert!(
+            stream_source.contains(required),
+            "parallel fullscreen stream is missing a typed projection boundary: {required}"
+        );
+    }
+    for retired_host_primitive in [
+        "ParallelDeliveryCursor",
+        "ParallelHostBatch",
+        "HistoryInsertionAdapter",
+        "host_scrollback",
+        "terminal_surface_generation",
+    ] {
+        assert!(
+            !stream_source.contains(retired_host_primitive),
+            "parallel stream must not restore host-terminal delivery state: {retired_host_primitive}"
+        );
+    }
 
-    let flush_source = fs::read_to_string(
-        repo_root().join("src/adapter/inbound/tui/app/inline_terminal_adapter/history_flush.rs"),
+    let frame_model_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/fullscreen_frame_model.rs"),
     )
-    .expect("inline history flush source should load");
-    let flush_production = production_source_before_inline_tests(&flush_source);
-    for retired_baseline in [
-        "parallel_rendered_lines",
-        "sync_parallel",
-        "remember_parallel_without_flush",
-        "has_pending_parallel_lines",
-    ] {
-        assert!(
-            !flush_production.contains(retired_baseline),
-            "a rendered-line delivery baseline must not return: {retired_baseline}"
-        );
-    }
-    let parallel_insertion_commit =
-        top_level_impl_method_source(&flush_source, "commit_parallel_insertion");
+    .expect("fullscreen frame model source should load");
+    let capture =
+        top_level_function_source(&frame_model_source, "capture_fullscreen_shell_frame_model");
+    let area = capture
+        .find("fullscreen_parallel_event_stream_area")
+        .expect("frame capture must derive the exact event viewport");
+    let finalize = capture
+        .find("finalize_parallel_live_stream_geometry")
+        .expect("frame capture must finalize stream geometry");
     assert!(
-        parallel_insertion_commit.contains("INLINE_HOST_SCROLLBACK_REFLOW_GUARD_ROWS"),
-        "parallel host delivery must retain physical guard rows for the next resize"
+        area < finalize,
+        "parallel stream geometry must be derived before the owned frame is delivered"
     );
 
     let renderer_source = fs::read_to_string(
-        repo_root().join("src/adapter/inbound/tui/app/shell_rendering/inline_inspection.rs"),
+        repo_root().join("src/adapter/inbound/tui/app/shell_rendering/fullscreen_inspection.rs"),
     )
-    .expect("inline inspection renderer source should load");
+    .expect("fullscreen inspection renderer source should load");
     assert!(
-        renderer_source.contains("ParallelLiveStreamModel")
-            && renderer_source.contains("stream.into_render_parts()"),
-        "the renderer must consume only the planned live stream model"
+        renderer_source.contains("fn render_fullscreen_parallel_event_stream(")
+            && renderer_source.contains("stream.into_render_parts()")
+            && renderer_source.contains("FullscreenAppendOnlyStream::new("),
+        "renderer must consume only the finalized app-owned parallel stream"
     );
     for forbidden_renderer_knowledge in [
         "ParallelDeliveryCursor",
-        "ParallelDeliveryState",
         "ParallelEventStreamSnapshot",
         "ParallelHostBatch",
         "HistoryInsertionAdapter",
-        "rendered_parallel_event_tail_start_index",
     ] {
         assert!(
             !renderer_source.contains(forbidden_renderer_knowledge),
-            "the renderer must not reconstruct transaction ownership: {forbidden_renderer_knowledge}"
-        );
-    }
-
-    let terminal_source = fs::read_to_string(
-        repo_root().join("src/adapter/inbound/tui/app/inline_terminal_adapter.rs"),
-    )
-    .expect("inline terminal adapter source should load");
-    let insertion_source =
-        fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/history_insertion.rs"))
-            .expect("history insertion source should load");
-    let automatic_resolution = top_level_impl_method_source(&insertion_source, "resolve");
-    assert!(
-        automatic_resolution.contains("Self::Automatic => Self::NewlineFallback"),
-        "automatic delivery must use the primitive proven to retain real terminal history"
-    );
-    assert!(
-        terminal_source.contains(".then_some(self.insert_mode.resolve())"),
-        "every host delivery path must apply the safe automatic insertion policy"
-    );
-    assert!(
-        terminal_source.contains("park_hidden_cursor_at_terminal_anchor")
-            && terminal_source.contains("ShellOverlay::Supersession"),
-        "focused operations must anchor terminal resize reflow away from host history"
-    );
-    let host_delivery = top_level_function_source(&terminal_source, "sync_parallel_host_delivery");
-    assert!(
-        host_delivery.contains(".lines_with_reflow_guards("),
-        "parallel host batches must write their physical resize guards in the same transaction"
-    );
-    for required_outcome in [
-        "ParallelHistoryInsertionOutcome::AbortedBeforeWrite",
-        "ParallelHistoryInsertionOutcome::FailedBeforeWrite",
-        "ParallelHistoryInsertionOutcome::Committed",
-        "ParallelHistoryInsertionOutcome::CommittedWithError",
-        "ParallelHistoryInsertionOutcome::Uncertain",
-        "ParallelHostReceiptSettlement::Applied",
-        "ParallelHostReceiptSettlement::Duplicate",
-        "ParallelHostReceiptSettlement::Rejected",
-        ".abort_before_write(&token)",
-        ".mark_uncertain(&token)",
-        ".commit_host_receipt(token.receipt())",
-    ] {
-        assert!(
-            host_delivery.contains(required_outcome),
-            "host delivery must classify and settle every write outcome: {required_outcome}"
-        );
-    }
-
-    let commit = top_level_impl_method_source(&delivery_source, "commit_host_receipt");
-    for required_identity in [
-        "token.terminal_surface_generation != self.terminal_surface_generation",
-        ".last_committed_token",
-        "ParallelDeliveryState::Writing",
-        "active != &token",
-        "token.stream_generation != token.expected_cursor.stream_generation",
-        "token.stream_generation != token.proposed_cursor.stream_generation",
-    ] {
-        assert!(
-            commit.contains(required_identity),
-            "host receipts must settle against exact transaction identity: {required_identity}"
-        );
-    }
-
-    let surface_transition =
-        top_level_impl_method_source(&delivery_source, "transition_terminal_surface");
-    for explicit_policy in [
-        "TerminalSurfaceTransition::PreserveHostScrollback",
-        "terminal_surface_generation",
-        "ParallelDeliveryCursor::initial(active_stream_generation)",
-    ] {
-        assert!(
-            surface_transition.contains(explicit_policy),
-            "terminal surface transitions must be explicit: {explicit_policy}"
-        );
-    }
-    for policy_variant in [
-        "PreserveHostScrollback",
-        "ClearHostScrollback",
-        "ReplaceSurface",
-    ] {
-        assert!(
-            delivery_production.contains(policy_variant),
-            "terminal delivery must name every host-surface policy: {policy_variant}"
+            "renderer must not reconstruct parallel authority: {forbidden_renderer_knowledge}"
         );
     }
 }
@@ -10126,7 +9896,7 @@ fn tui_tail_compaction_uses_typed_priority_without_parsing_localized_copy() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    for required in ["Vec<InlineTailLine>", ".priority"] {
+    for required in ["Vec<ShellTailLine>", ".priority"] {
         assert!(
             compaction.contains(required),
             "tail compaction must consume typed semantic priority: {required}"
@@ -10446,7 +10216,6 @@ fn conversation_prompt_projection_uses_one_narrow_composer_screen_model() {
             "input_state",
             "post_turn_settlement_in_flight",
             "auto_follow_has_live_activity",
-            "viewport_transcript_handoff_pending",
         ]
         .into_iter()
         .map(str::to_string)
@@ -10471,7 +10240,6 @@ fn conversation_prompt_projection_uses_one_narrow_composer_screen_model() {
     for boolean_field in [
         "post_turn_settlement_in_flight",
         "auto_follow_has_live_activity",
-        "viewport_transcript_handoff_pending",
     ] {
         assert!(
             is_named_path_type(composer_field_types[boolean_field], "bool"),
@@ -10547,7 +10315,7 @@ fn conversation_prompt_projection_uses_one_narrow_composer_screen_model() {
     let consumer_contracts = [
         (
             "src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_copy.rs",
-            "build_inline_ready_prompt_lines",
+            "build_ready_prompt_lines",
         ),
         (
             "src/adapter/inbound/tui/app/shell_presentation/status_panels/live_status_layout.rs",
@@ -10560,7 +10328,7 @@ fn conversation_prompt_projection_uses_one_narrow_composer_screen_model() {
         let syntax =
             syn::parse_file(&source).unwrap_or_else(|error| panic!("{path} should parse: {error}"));
         let function = top_level_function(&syntax, function_name);
-        if function_name == "build_inline_ready_prompt_lines" {
+        if function_name == "build_ready_prompt_lines" {
             let Some(syn::FnArg::Typed(first_argument)) = function.sig.inputs.first() else {
                 panic!("{function_name} must accept a composer screen model first");
             };
@@ -10590,19 +10358,19 @@ fn conversation_prompt_projection_uses_one_narrow_composer_screen_model() {
     for (path, function_name, called_function, argument_count) in [
         (
             "src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_copy.rs",
-            "build_inline_tail_prompt_lines_with_context",
-            "build_inline_ready_prompt_lines",
+            "build_shell_tail_prompt_lines_with_context",
+            "build_ready_prompt_lines",
             5,
         ),
         (
             "src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_copy.rs",
-            "build_inline_ready_prompt_lines",
+            "build_ready_prompt_lines",
             "build_prompt_buffer_view",
             1,
         ),
         (
             "src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_copy.rs",
-            "build_inline_ready_prompt_lines",
+            "build_ready_prompt_lines",
             "build_shell_command_palette_lines",
             4,
         ),
@@ -10729,7 +10497,7 @@ fn conversation_runtime_status_projection_uses_one_narrow_screen_model() {
     )
     .expect("inline tail copy source should load");
     let ready_tail =
-        top_level_function_source(&tail_source, "build_inline_tail_content_with_context")
+        top_level_function_source(&tail_source, "build_shell_tail_content_with_context")
             .chars()
             .filter(|character| !character.is_whitespace())
             .collect::<String>();
@@ -10741,160 +10509,72 @@ fn conversation_runtime_status_projection_uses_one_narrow_screen_model() {
 }
 
 #[test]
-fn conversation_live_transcript_projection_uses_one_narrow_screen_model() {
-    const SHELL_CORE: &str = "src/adapter/inbound/tui/app/shell_presentation/shell_core.rs";
-    const LIVE_CONSUMERS: &[&str] = &[
-        "src/adapter/inbound/tui/app/shell_presentation.rs",
-        "src/adapter/inbound/tui/app/shell_presentation/status_panels.rs",
-        "src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_shared.rs",
-        "src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_copy.rs",
-    ];
-
-    let shell_core_source =
-        fs::read_to_string(repo_root().join(SHELL_CORE)).expect("shell core source should load");
-    let shell_core_syntax =
-        syn::parse_file(&shell_core_source).expect("shell core source should parse");
-    named_struct_fields(&shell_core_syntax, "ConversationLiveTranscriptScreenModel");
-    let shell_core_compact = shell_core_source
-        .chars()
-        .filter(|character| !character.is_whitespace())
-        .collect::<String>();
-    assert!(
-        shell_core_compact.contains("recent_tail_messages:[Option<&'aConversationMessage>;2],"),
-        "live transcript projection must retain only two recent tail message references"
-    );
-
-    let screen_model_fields = named_struct_fields(&shell_core_syntax, "ConversationScreenModel");
-    let live_projection = screen_model_fields
+fn conversation_streaming_uses_one_canonical_ordered_transcript() {
+    let view_model_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/conversation_model/view_model.rs"),
+    )
+    .expect("conversation view model source should load");
+    let view_model_syntax =
+        syn::parse_file(&view_model_source).expect("conversation view model should parse");
+    let fields = named_struct_fields(&view_model_syntax, "ConversationViewModel");
+    let field_names = fields
         .iter()
-        .find(|field| {
-            field
-                .ident
-                .as_ref()
-                .is_some_and(|ident| ident == "live_transcript")
-        })
-        .expect("ConversationScreenModel must retain one live transcript projection");
-    assert!(
-        is_option_of_single_lifetime_named_type(
-            &live_projection.ty,
-            "ConversationLiveTranscriptScreenModel",
-            "a",
-        ),
-        "ConversationScreenModel.live_transcript must retain the narrow projection"
-    );
-
-    for (path, function_name) in [
-        (
-            "src/adapter/inbound/tui/app/shell_presentation/status_panels.rs",
-            "current_live_agent_lines",
-        ),
-        (
-            "src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_shared.rs",
-            "current_live_agent_lines",
-        ),
-        (
-            "src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_copy.rs",
-            "build_recent_transcript_summary_lines",
-        ),
+        .filter_map(|field| field.ident.as_ref().map(ToString::to_string))
+        .collect::<HashSet<_>>();
+    assert!(field_names.contains("messages"));
+    assert!(field_names.contains("transcript_revision"));
+    for retired_split in [
+        "live_agent_message",
+        "buffered_tool_messages",
+        "viewport_transcript_handoff_start",
+        "viewport_transcript_handoff_release_pending",
     ] {
-        let source = fs::read_to_string(repo_root().join(path))
-            .unwrap_or_else(|error| panic!("{path} should load: {error}"));
-        let syntax =
-            syn::parse_file(&source).unwrap_or_else(|error| panic!("{path} should parse: {error}"));
-        let function = top_level_function(&syntax, function_name);
-        assert_eq!(
-            function.sig.inputs.len(),
-            1,
-            "{path}::{function_name} must accept only the live transcript projection"
-        );
-        let Some(syn::FnArg::Typed(first_argument)) = function.sig.inputs.first() else {
-            panic!("{path}::{function_name} must accept a projection first");
-        };
         assert!(
-            is_shared_reference_to_single_lifetime_named_type(
-                &first_argument.ty,
-                "ConversationLiveTranscriptScreenModel",
-                "_",
-            ),
-            "{path}::{function_name} must accept only the narrow projection"
+            !field_names.contains(retired_split),
+            "conversation transcript must not restore split state: {retired_split}"
         );
     }
 
-    for callable in [
-        "viewport_transcript_handoff_messages",
-        "viewport_transcript_handoff_release_messages",
-        "has_pending_viewport_transcript_handoff",
+    let messages_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/conversation_model/view_model/messages.rs"),
+    )
+    .expect("conversation message mutation source should load");
+    for required in [
+        "self.messages.push(message)",
+        "self.messages.iter_mut().rev().find(|message|",
+        "message.item_id.as_deref() == Some(item_id.as_str())",
+        "self.advance_transcript_revision()",
     ] {
-        assert_no_production_callable_reference_named_in_paths(
-            "live transcript consumers must use the prebuilt screen projection",
-            LIVE_CONSUMERS,
-            callable,
-        );
-    }
-
-    let references_identifier = |references: &[String], identifier: &str| {
-        references
-            .iter()
-            .any(|path| path.split("::").any(|segment| segment == identifier))
-    };
-    for (path, function_name) in [
-        (
-            "src/adapter/inbound/tui/app/shell_presentation.rs",
-            "build_inline_live_transcript_lines",
-        ),
-        (
-            "src/adapter/inbound/tui/app/shell_presentation/status_panels.rs",
-            "current_live_agent_lines",
-        ),
-        (
-            "src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_shared.rs",
-            "current_live_agent_lines",
-        ),
-        (
-            "src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_copy.rs",
-            "build_recent_transcript_summary_lines",
-        ),
-    ] {
-        let source = fs::read_to_string(repo_root().join(path))
-            .unwrap_or_else(|error| panic!("{path} should load: {error}"));
-        let function_source = top_level_function_source(&source, function_name);
-        let references = rust_semantic_references(&function_source).paths;
-        for forbidden in ["ConversationViewModel", "ShellConversationState"] {
-            assert!(
-                !references_identifier(&references, forbidden),
-                "{path}::{function_name} must not consume {forbidden}"
-            );
-        }
-    }
-
-    for (function_source, boundary) in [
-        (
-            top_level_function_source(
-                &fs::read_to_string(repo_root().join(LIVE_CONSUMERS[0]))
-                    .expect("shell presentation source should load"),
-                "build_inline_live_transcript_lines",
-            ),
-            "live transcript copy",
-        ),
-        (
-            top_level_impl_method_source(&shell_core_source, "renders_viewport_transcript_handoff"),
-            "viewport handoff ACK",
-        ),
-    ] {
-        let compact = function_source
-            .chars()
-            .filter(|character| !character.is_whitespace())
-            .collect::<String>();
         assert!(
-            compact.contains("live_transcript()"),
-            "{boundary} must consume the narrow live transcript projection"
+            messages_source.contains(required),
+            "canonical streaming transcript is missing behavior: {required}"
         );
-        for forbidden in [".conversation_state", "ready_conversation("] {
-            assert!(
-                !compact.contains(forbidden),
-                "{boundary} must not bypass the live transcript projection: {forbidden}"
-            );
-        }
+    }
+    for retired_split in [
+        "flush_buffered_tool_messages",
+        "commit_live_agent_message",
+        "viewport_transcript_handoff",
+    ] {
+        assert!(
+            !messages_source.contains(retired_split),
+            "streaming must update the canonical row in place: {retired_split}"
+        );
+    }
+
+    let frame_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/fullscreen_frame_model.rs"),
+    )
+    .expect("fullscreen frame model source should load");
+    for required in [
+        "transcript_lines: Vec<Line<'static>>",
+        "transcript_card_rows: Vec<ConversationTranscriptCardRow>",
+        "format_fullscreen_conversation_transcript_view(",
+        "&conversation.messages",
+    ] {
+        assert!(
+            frame_source.contains(required),
+            "fullscreen projection must render directly from the canonical transcript: {required}"
+        );
     }
 }
 
@@ -11207,7 +10887,7 @@ fn tui_github_review_polling_enters_through_core_runtime() {
         "src/adapter/inbound/tui/app.rs",
         "src/adapter/inbound/tui/app/app_runtime.rs",
         "src/adapter/inbound/tui/app/github_polling.rs",
-        "src/adapter/inbound/tui/app/inline_terminal_adapter.rs",
+        "src/adapter/inbound/tui/app/fullscreen_terminal_adapter.rs",
         "src/adapter/inbound/tui/app/shell_entrypoint.rs",
         "src/adapter/inbound/tui/app/shell_runtime.rs",
     ] {
@@ -11235,7 +10915,7 @@ fn tui_github_review_polling_enters_through_core_runtime() {
 
     for path in [
         "src/adapter/inbound/tui/app/github_polling.rs",
-        "src/adapter/inbound/tui/app/inline_terminal_adapter.rs",
+        "src/adapter/inbound/tui/app/fullscreen_terminal_adapter.rs",
         "src/adapter/inbound/tui/app/shell_entrypoint.rs",
         "src/adapter/inbound/tui/app/shell_runtime.rs",
     ] {
@@ -11519,8 +11199,7 @@ fn tui_post_turn_execution_uses_planning_post_turn_facade() {
     let core_event = fs::read_to_string("src/core/app/event.rs").unwrap();
     let core_runtime = fs::read_to_string("src/core/runtime/driver.rs").unwrap();
     let tui_runtime = fs::read_to_string("src/adapter/inbound/tui/app/app_runtime.rs").unwrap();
-    let tui_tests =
-        fs::read_to_string("src/adapter/inbound/tui/app/shell_runtime/tests.rs").unwrap();
+    let tui_tests = fs::read_to_string("src/adapter/inbound/tui/app/app_runtime.rs").unwrap();
 
     let planning_syntax =
         syn::parse_file(&planning_reducer).expect("planning reducer source should parse");
@@ -11641,8 +11320,7 @@ fn tui_post_turn_execution_uses_planning_post_turn_facade() {
         "TUI must apply the Core-started panel state through its sealed projection"
     );
     assert!(
-        tui_tests
-            .contains("fn post_turn_evaluation_started_event_ignores_forged_tui_history_seed()"),
+        tui_tests.contains("fn post_turn_started_event_replaces_forged_tui_history_seed()"),
         "TUI must prove a forged presentation history cannot seed Core admission"
     );
 }
@@ -11981,100 +11659,77 @@ fn temporary_parallel_control_surfaces_no_longer_bypass_control_plane_gate() {
 }
 
 #[test]
-fn tui_temporal_regressions_use_shared_frame_recorder_contract() {
-    // Static guard: redraw-order regressions need temporal evidence. Keep the
-    // recorder in the shared TUI testkit so future TUI tests do not re-create
-    // weaker one-off final-screen checks.
+fn tui_temporal_regressions_cover_the_app_owned_fullscreen_viewport() {
+    // Static guard: redraw-order regressions need assertions across sequential
+    // app-owned frames, not host-scrollback or final-screen reconstruction.
     let repo_root = repo_root();
     let docs_path = repo_root.join("docs/validation/terminal-ui-testing-methodology.md");
-    let testkit_path = repo_root.join("src/adapter/inbound/tui/app/tui_testkit.rs");
-    let inline_tests_path =
-        repo_root.join("src/adapter/inbound/tui/app/inline_terminal_adapter/tests.rs");
+    let rendering_tests_path =
+        repo_root.join("src/adapter/inbound/tui/app/fullscreen_rendering_tests.rs");
+    let viewport_tests_path =
+        repo_root.join("src/adapter/inbound/tui/app/transcript_viewport_ui.rs");
     let docs = fs::read_to_string(&docs_path).unwrap_or_else(|error| {
         panic!("failed to read {}: {error}", docs_path.display());
     });
-    let testkit = fs::read_to_string(&testkit_path).unwrap_or_else(|error| {
-        panic!("failed to read {}: {error}", testkit_path.display());
+    let rendering_tests = fs::read_to_string(&rendering_tests_path).unwrap_or_else(|error| {
+        panic!("failed to read {}: {error}", rendering_tests_path.display());
     });
-    let inline_tests = fs::read_to_string(&inline_tests_path).unwrap_or_else(|error| {
-        panic!("failed to read {}: {error}", inline_tests_path.display());
+    let viewport_tests = fs::read_to_string(&viewport_tests_path).unwrap_or_else(|error| {
+        panic!("failed to read {}: {error}", viewport_tests_path.display());
     });
 
     for required_doc_text in [
-        "direct frame recorder: store every rendered buffer",
-        "Frame recorder assertions should include",
-        "Parallel event stream | frame recorder proves",
-        "## Current-Stack Default And Compatibility Ownership",
-        "## Compatibility-Tier Ownership Table",
-        "Stay on the current Ratatui/Crossterm stack by default.",
-        "Option A proof hardening is the default",
-        "blocked unless the Decision Record explicitly proves the Round 6 trigger evidence",
-        "Default `InlineHistoryRenderMode`",
-        "Default `HistoryInsertionMode`",
-        "Terminal primitive behavior ownership",
-        "Reviewer gate / release semantics",
+        "app-owned transcript viewport",
+        "alternate screen",
+        "stable frame receipt",
+        "streaming append does not move a reader",
         "## Manual Capture Contract",
         "### Reviewer gate",
-        "Manual capture is required **only** for primitive-sensitive changes",
     ] {
         assert!(
             docs.contains(required_doc_text),
-            "TUI methodology must require frame-recorder coverage and concrete proof-contract markers: {required_doc_text}"
+            "TUI methodology must document the fullscreen temporal proof contract: {required_doc_text}"
         );
     }
 
-    for required_testkit_text in [
-        "pub(super) struct InlineFrameRecorder",
-        "pub(super) struct RecordedInlineFrame",
-        "pub(super) fn draw_and_record",
-        "pub(super) fn record_inline",
-        "screen_text",
-        "host_scrollback_text",
-        "terminal_history_text",
-        "app_event_stream_text",
-    ] {
-        assert!(
-            testkit.contains(required_testkit_text),
-            "shared TUI testkit must expose the direct frame-recorder contract: {required_testkit_text}"
-        );
-    }
-
-    assert!(
-        !inline_tests.contains("struct InlineFrameRecorder"),
-        "inline terminal tests must use the shared tui_testkit recorder instead of a local one-off recorder"
-    );
-    assert!(
-        inline_tests.contains("tui_testkit::InlineFrameRecorder::default()"),
-        "inline terminal frame-recorder regressions must instantiate the shared tui_testkit recorder"
-    );
     for required_regression in [
-        "direct_frame_recorder_keeps_parallel_status_rows_across_runtime_redraw",
-        "direct_frame_recorder_catches_wrapped_parallel_stream_split_at_live_boundary",
+        "fullscreen_transcript_owns_history_and_keeps_the_composer_visible",
+        "streaming_append_does_not_move_a_reader_and_exposes_a_new_output_badge",
+        "read_card_is_quiet_by_default_and_expands_in_the_conversation",
+        "patch_card_expands_to_semantic_diff_lines_inside_the_conversation",
     ] {
         assert!(
-            inline_tests.contains(required_regression),
-            "parallel stream redraw regression must stay covered by a direct frame-recorder test: {required_regression}"
+            rendering_tests.contains(required_regression),
+            "fullscreen rendering must keep the named temporal regression: {required_regression}"
+        );
+    }
+    for required_regression in [
+        "appended_rows_do_not_move_a_reader_who_left_follow_tail",
+        "following_reader_tracks_latest_rows_and_marks_them_seen",
+        "switching_documents_resets_scroll_and_card_geometry",
+    ] {
+        assert!(
+            viewport_tests.contains(required_regression),
+            "viewport state must keep the named temporal regression: {required_regression}"
         );
     }
 }
 
 #[test]
 fn tui_parallel_stream_continuity_is_architecture_contract() {
-    // Static guard: append-only stream surfaces are more fragile than ordinary
-    // panels because the visible rows can be split between host scrollback and
-    // the live inline viewport. Keep the contract explicit so a future wording
-    // or layout tweak cannot reintroduce title chrome in the middle of a stream.
+    // Static guard: focused parallel rows are one semantic stream inside the
+    // app-owned fullscreen viewport. Layout may hide its title under pressure,
+    // but it must never split delivery between Ratatui and host scrollback.
     let repo_root = repo_root();
     let methodology_path = repo_root.join("docs/validation/terminal-ui-testing-methodology.md");
     let design_path =
         repo_root.join("docs/design/07-tui-layered-architecture-and-aesthetic-contract.md");
     let matrix_path = repo_root.join("docs/validation/tui-coverage-matrix.md");
     let renderer_path =
-        repo_root.join("src/adapter/inbound/tui/app/shell_rendering/inline_inspection.rs");
+        repo_root.join("src/adapter/inbound/tui/app/shell_rendering/fullscreen_inspection.rs");
     let layout_path =
-        repo_root.join("src/adapter/inbound/tui/app/shell_rendering/inline_layout.rs");
-    let inline_tests_path =
-        repo_root.join("src/adapter/inbound/tui/app/inline_terminal_adapter/tests.rs");
+        repo_root.join("src/adapter/inbound/tui/app/shell_rendering/fullscreen_layout.rs");
+    let stream_path = repo_root.join("src/adapter/inbound/tui/app/parallel_stream_view.rs");
     let methodology = fs::read_to_string(&methodology_path).unwrap_or_else(|error| {
         panic!("failed to read {}: {error}", methodology_path.display());
     });
@@ -12090,17 +11745,17 @@ fn tui_parallel_stream_continuity_is_architecture_contract() {
     let layout = fs::read_to_string(&layout_path).unwrap_or_else(|error| {
         panic!("failed to read {}: {error}", layout_path.display());
     });
-    let inline_tests = fs::read_to_string(&inline_tests_path).unwrap_or_else(|error| {
-        panic!("failed to read {}: {error}", inline_tests_path.display());
+    let stream = fs::read_to_string(&stream_path).unwrap_or_else(|error| {
+        panic!("failed to read {}: {error}", stream_path.display());
     });
 
     for required_text in [
         "Architectural Guardrails",
-        "no panel title may be inserted between durable scrollback rows and live rows",
-        "dedicated stream renderer",
-        "typed render surface API",
-        "InlineAppendOnlyStream",
-        "titleless live tail",
+        "one app-owned fullscreen viewport",
+        "no host scrollback delivery",
+        "dedicated fullscreen stream renderer",
+        "FullscreenAppendOnlyStream",
+        "title may collapse without splitting the stream",
     ] {
         assert!(
             methodology.contains(required_text),
@@ -12109,14 +11764,13 @@ fn tui_parallel_stream_continuity_is_architecture_contract() {
     }
 
     for required_text in [
-        "Append-only Stream Surfaces",
-        "No panel title may be inserted between durable scrollback rows and live rows",
-        "titleless live tail data only",
-        "explicit render surface type",
-        "InlineTitledPanel",
-        "InlineScrolledPanel",
-        "InlineAppendOnlyStream",
-        "named stream renderer",
+        "Canonical Fullscreen Stream Surfaces",
+        "Parallel event rows remain in one app-owned viewport",
+        "No host scrollback delivery",
+        "FullscreenTitledPanel",
+        "FullscreenScrolledPanel",
+        "FullscreenAppendOnlyStream",
+        "render_fullscreen_parallel_event_stream",
     ] {
         assert!(
             design.contains(required_text),
@@ -12125,21 +11779,13 @@ fn tui_parallel_stream_continuity_is_architecture_contract() {
     }
 
     for required_matrix_text in [
-        "split scrollback/live-tail streams render as a titleless live tail",
-        "typed render surface routing",
-        "## Primary Proof Matrix — Invariant × First-Class Environment",
-        "## Linked Branch-Family Applicability Table — Invariant × Branch Family",
-        "I1 | History/live-tail separation and no duplicate replay",
-        "I2 | Resize leaves no stale rows or duplicated live tail",
-        "I3 | Scrollback insertion / clear-reset restores clean header and viewport",
-        "I4 | Thread/session switch does not leak transcript or deferred history",
-        "I5 | `ViewportReplay` remains explicit-only and does not write committed history to host scrollback",
-        "I6 | Automatic newline fallback preserves host history, viewport, and cursor; standard mode remains explicit diagnostic coverage",
-        "B1 HostScrollback",
-        "B2 ViewportReplay",
-        "B3 StandardScrollRegion",
-        "B4 NewlineFallback",
-        "narrow Option B transaction is active",
+        "## Fullscreen Proof Matrix",
+        "F1 | One canonical transcript ordering",
+        "F2 | Reader anchor survives streaming append",
+        "F3 | Stable resize-gated receipt",
+        "F4 | Thread switch resets viewport identity",
+        "F5 | Parallel stream stays app-owned",
+        "F6 | Alternate-screen lifecycle restores the terminal",
     ] {
         assert!(
             matrix.contains(required_matrix_text),
@@ -12148,10 +11794,10 @@ fn tui_parallel_stream_continuity_is_architecture_contract() {
     }
 
     for required_renderer_text in [
-        "fn render_inline_parallel_event_stream",
-        "Architecture contract: a split event stream is not a titled panel.",
-        "InlineAppendOnlyStreamTitle::Hidden",
-        "InlineAppendOnlyStream::new(title, stream.lines, stream.scroll_offset).render(frame, area)",
+        "fn render_fullscreen_parallel_event_stream",
+        "stream.into_render_parts()",
+        "FullscreenAppendOnlyStreamTitle::Hidden",
+        "FullscreenAppendOnlyStream::new(title, stream.lines, stream.scroll_offset).render(frame, area)",
     ] {
         assert!(
             renderer.contains(required_renderer_text),
@@ -12159,50 +11805,45 @@ fn tui_parallel_stream_continuity_is_architecture_contract() {
         );
     }
     for forbidden_renderer_text in [
-        "render_inline_section(",
-        "render_inline_scrolled_section(",
-        "render_inline_scrolled_body(",
+        "HistoryInsertionAdapter",
+        "ParallelHostBatch",
+        "host_scrollback",
     ] {
         assert!(
             !renderer.contains(forbidden_renderer_text),
-            "inline inspection must route through typed render surfaces instead of low-level helper: {forbidden_renderer_text}"
+            "fullscreen inspection must not reconstruct host delivery: {forbidden_renderer_text}"
         );
     }
-    assert!(
-        !renderer.contains("Recent Parallel Events"),
-        "parallel event stream renderer must not replace one misplaced stream title with another"
-    );
 
     for required_layout_text in [
-        "pub(super) struct InlineTitledPanel",
-        "pub(super) struct InlineScrolledPanel",
-        "pub(super) enum InlineAppendOnlyStreamTitle",
-        "pub(super) struct InlineAppendOnlyStream",
+        "pub(super) struct FullscreenTitledPanel",
+        "pub(super) struct FullscreenScrolledPanel",
+        "pub(super) enum FullscreenAppendOnlyStreamTitle",
+        "pub(super) struct FullscreenAppendOnlyStream",
     ] {
         assert!(
             layout.contains(required_layout_text),
-            "inline layout must expose the typed render surface API: {required_layout_text}"
+            "fullscreen layout must expose the typed render surface API: {required_layout_text}"
         );
     }
     for forbidden_layout_text in [
-        "pub(super) fn render_inline_section(",
-        "pub(super) fn render_inline_scrolled_section(",
-        "pub(super) fn render_inline_scrolled_body(",
+        "HistoryInsertionAdapter",
+        "host_scrollback",
+        "InlineHistoryRenderMode",
     ] {
         assert!(
             !layout.contains(forbidden_layout_text),
-            "low-level inline layout helper must stay private behind typed render surfaces: {forbidden_layout_text}"
+            "fullscreen layout must stay independent from retired host delivery: {forbidden_layout_text}"
         );
     }
 
     for required_regression in [
-        "parallel_live_tail_continues_scrollback_without_inline_title",
-        "parallel_bootstrap_and_task_intake_stream_does_not_insert_tail_title",
-        "direct_frame_recorder_keeps_parallel_status_rows_across_runtime_redraw",
+        "short_parallel_stream_keeps_its_title",
+        "dense_parallel_stream_hides_only_the_title_and_keeps_rows",
     ] {
         assert!(
-            inline_tests.contains(required_regression),
-            "parallel stream continuity must stay covered by a named frame-recorder regression: {required_regression}"
+            stream.contains(required_regression),
+            "parallel stream continuity must stay covered by a named regression: {required_regression}"
         );
     }
 }
@@ -12275,15 +11916,11 @@ fn tui_coverage_matrix_maps_existing_sources_to_automated_entrypoints() {
 
     for required_text in [
         "terminal-ui-testing-methodology.md",
-        "tui_testkit::InlineFrameRecorder",
         "Ratatui `TestBackend`",
-        "vt100-backed tests",
+        "alternate-screen lifecycle tests",
         "architecture-test exception",
-        "## Proof Contract Markers",
-        "## Primary Proof Matrix — Invariant × First-Class Environment",
-        "## Linked Branch-Family Applicability Table — Invariant × Branch Family",
-        "## Joined Proof Shape",
-        "I5 | `ViewportReplay` remains explicit-only and does not write committed history to host scrollback",
+        "## Fullscreen Proof Matrix",
+        "## Test Entry Point Inventory",
     ] {
         assert!(
             matrix.contains(required_text),
@@ -12292,19 +11929,17 @@ fn tui_coverage_matrix_maps_existing_sources_to_automated_entrypoints() {
     }
     for required_methodology_text in [
         "docs/validation/tui-coverage-matrix.md",
-        "## Current-Stack Default And Compatibility Ownership",
-        "## Compatibility-Tier Ownership Table",
-        "### First-class environment key",
-        "### Branch-family key",
-        "## Responsibility Candidate Summary",
+        "## Fullscreen Default and Ownership",
+        "### Environment key",
+        "## Responsibility Summary",
         "`NativeTuiApp`",
         "Thin terminal layer",
         "Render/layout boundary",
-        "Shared render transaction model",
+        "Stable frame receipt",
         "## Manual Capture Contract",
         "### Reviewer gate",
-        "### When all four first-class environments are required",
-        "### When a smaller representative set is sufficient",
+        "### When all first-class environments are required",
+        "### When a representative set is sufficient",
     ] {
         assert!(
             methodology.contains(required_methodology_text),
@@ -12383,32 +12018,28 @@ fn native_runtime_validation_proof_contract_is_documented_in_repo_guards() {
     });
 
     let common_required_texts = [
-        "**E1** = Windows Terminal + WSL bash + inline",
-        "**E2** = Windows Terminal + PowerShell + inline",
-        "**E3** = tmux detached PTY + inline",
-        "**E4** = direct Linux terminal + inline",
-        "bug-class recurrence across compatibility boundaries",
-        "fallback masking risk",
+        "**E1** = Windows Terminal + WSL bash + fullscreen",
+        "**E2** = Windows Terminal + PowerShell + fullscreen",
+        "**E3** = tmux detached PTY + fullscreen",
+        "**E4** = direct Linux terminal + fullscreen",
+        "bug-class recurrence across terminal boundaries",
         "future test-growth cost",
         "maintainability cost",
         "Current owner / source",
         "Decision point",
         "First-class default",
-        "Fallback / experimental handling",
-        "Override mechanism",
-        "Downgrade semantics",
         "Proof obligation",
         "Manual terminal capture stays primitive-sensitive only",
-        "escape sequences",
+        "alternate-screen escape sequences",
         "viewport mode",
         "clear or restore behavior",
-        "host scrollback behavior",
+        "mouse capture behavior",
     ];
     let methodology_specific_texts = [
-        "## Current-Stack Default And Compatibility Ownership",
-        "invariant × first-class environment × branch family",
-        "`HostScrollback`, `ViewportReplay`, `StandardScrollRegion`, `NewlineFallback`",
-        "current stack remains the default posture",
+        "## Fullscreen Default and Ownership",
+        "invariant × first-class environment",
+        "Ratatui/Crossterm fullscreen stack",
+        "fullscreen stack remains the default posture",
         "docs/plan/12-platform-validation-matrix.md",
         "macOS Terminal.app and iTerm2",
     ];
@@ -12424,12 +12055,11 @@ fn native_runtime_validation_proof_contract_is_documented_in_repo_guards() {
     }
 
     let matrix_specific_texts = [
-        "## Proof Contract Markers",
-        "## Primary Proof Matrix — Invariant × First-Class Environment",
-        "## Linked Branch-Family Applicability Table — Invariant × Branch Family",
+        "## Fullscreen Proof Matrix",
+        "## Environment Applicability",
         "## Joined Proof Shape",
-        "Branch-family keys: `HostScrollback`, `ViewportReplay`, `StandardScrollRegion`, `NewlineFallback`.",
-        "current stack as the default posture",
+        "Environment keys: `E1`, `E2`, `E3`, `E4`.",
+        "fullscreen stack as the default posture",
     ];
     for required_text in common_required_texts
         .iter()
@@ -12509,24 +12139,24 @@ fn tui_coverage_matrix_lists_existing_tui_test_entrypoints() {
 }
 
 #[test]
-fn tui_shared_test_devices_stay_in_tui_testkit() {
-    // Static guard: reusable temporal/terminal devices belong in tui_testkit so
-    // TUI tests share the same frame and backend contracts.
+fn tui_temporal_test_devices_stay_with_fullscreen_regressions() {
+    // Static guard: reusable temporal/terminal devices belong with the focused
+    // fullscreen regression suite instead of being reimplemented per feature.
     let repo_root = repo_root();
     let tui_root = repo_root.join("src/adapter/inbound/tui");
     let mut violations = Vec::new();
 
     for path in rust_files_under(&tui_root) {
         let relative = relative_path(&repo_root, &path);
-        if relative == "src/adapter/inbound/tui/app/tui_testkit.rs" {
+        if relative == "src/adapter/inbound/tui/app/fullscreen_rendering_tests.rs" {
             continue;
         }
         let source = fs::read_to_string(&path).unwrap_or_else(|error| {
             panic!("failed to read {}: {error}", path.display());
         });
         for forbidden in [
-            "struct InlineFrameRecorder",
-            "struct RecordedInlineFrame",
+            "struct FullscreenFrameRecorder",
+            "struct RecordedFullscreenFrame",
             "struct Vt100Backend",
             "struct Vt100Screen",
         ] {
@@ -12540,7 +12170,7 @@ fn tui_shared_test_devices_stay_in_tui_testkit() {
 
     assert!(
         violations.is_empty(),
-        "reusable TUI test devices must stay centralized in tui_testkit:\n{}",
+        "reusable TUI test devices must stay centralized in fullscreen regressions:\n{}",
         violations.join("\n")
     );
 }
@@ -12667,7 +12297,7 @@ fn renderer_boundary_scan_ignores_fixtures_and_rejects_production_escape_hatches
 
         const EXAMPLE: &str = "NativeTuiApp client_runtime snapshot";
 
-        fn draw_owned(frame: &mut Frame<'_>, model: InlineShellFrameModel) {
+        fn draw_owned(frame: &mut Frame<'_>, model: FullscreenShellFrameModel) {
             // NativeTuiApp and AppSnapshot are architecture examples only.
             render(frame, model);
         }
@@ -13503,30 +13133,6 @@ impl<'ast> Visit<'ast> for RustSemanticReferenceVisitor {
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
         self.references.paths.push(call.method.to_string());
-        visit::visit_expr_method_call(self, call);
-    }
-}
-
-#[derive(Default)]
-struct TerminalDrawClosureReferenceVisitor {
-    references: Vec<Vec<String>>,
-}
-
-impl<'ast> Visit<'ast> for TerminalDrawClosureReferenceVisitor {
-    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
-        if call.method == "draw" {
-            for argument in &call.args {
-                let syn::Expr::Closure(closure) = argument else {
-                    continue;
-                };
-                let mut visitor = RustSemanticReferenceVisitor::default();
-                visitor.visit_expr(&closure.body);
-                expand_semantic_alias_paths(&mut visitor.references.paths, &visitor.aliases);
-                visitor.references.paths.sort();
-                visitor.references.paths.dedup();
-                self.references.push(visitor.references.paths);
-            }
-        }
         visit::visit_expr_method_call(self, call);
     }
 }

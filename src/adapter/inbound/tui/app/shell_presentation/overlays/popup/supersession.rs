@@ -14,8 +14,8 @@ use crate::domain::parallel_mode::{
     ParallelModeQueueItemState, ParallelModeSupervisorSnapshot,
 };
 
+use super::super::super::super::parallel_stream_view::ParallelLiveStreamModel;
 use super::super::super::super::parallel_supervisor_events::parallel_supervisor_snapshot_stream_lines;
-use super::super::super::super::parallel_terminal_delivery::ParallelLiveStreamModel;
 use super::super::super::super::{AkraTheme, ShellOverlay};
 use super::super::super::ConversationScreenModel;
 use super::SupersessionOverlayView;
@@ -115,7 +115,7 @@ fn build_command_hint_lines(
     focused_full_viewport: bool,
 ) -> Vec<Line<'static>> {
     /*
-     * Inline command hints can be clipped to a single body row on compact terminals.
+     * Command hints can be clipped to a single body row on compact terminals.
      * Keep the board-level actions on the first row so the visible row never degrades
      * to only "Ctrl+R" while off/close/peek remain hidden below it.
      */
@@ -1245,7 +1245,7 @@ fn build_timeline_lines(
     detail: &crate::domain::parallel_mode::ParallelModeAgentSessionDetailSnapshot,
 ) -> Vec<Line<'static>> {
     /*
-    The selected-detail panel has only a few visible rows in inline mode, so this
+    The selected-detail panel has only a few visible rows on compact terminals, so this
     compact timeline sits before path/ledger fields. Full history stays below it as
     audit evidence, but operators can scan lifecycle chronology without scrolling.
     */

@@ -8,8 +8,8 @@ use crate::domain::parallel_mode::{
 };
 
 use super::super::{
-    AkraTheme, ConversationScreenModel, INLINE_TAIL_STATUS_DETAIL_LIMIT, Modifier,
-    compact_inline_detail,
+    AkraTheme, ConversationScreenModel, Modifier, SHELL_TAIL_STATUS_DETAIL_LIMIT,
+    compact_shell_detail,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,9 +41,9 @@ pub(super) fn build_parallel_slot_working_line(
     if let Some(duration_label) = status.duration_label.as_deref() {
         segments.push(duration_label.to_string());
     }
-    segments.push(compact_inline_detail(
+    segments.push(compact_shell_detail(
         &status.detail,
-        INLINE_TAIL_STATUS_DETAIL_LIMIT,
+        SHELL_TAIL_STATUS_DETAIL_LIMIT,
     ));
 
     Some(Line::from(vec![

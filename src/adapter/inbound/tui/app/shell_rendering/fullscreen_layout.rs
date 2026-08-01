@@ -5,40 +5,27 @@ use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::text::Line;
 use ratatui::widgets::{Paragraph, Wrap};
 
-use super::super::{AkraTheme, MAX_INLINE_TAIL_HEIGHT, MIN_TRANSCRIPT_PANEL_HEIGHT, ShellOverlay};
-use super::InlineConversationFrameProjection;
-use crate::adapter::inbound::tui::app::shell_presentation::InlineTailView;
+use super::super::{AkraTheme, MAX_SHELL_TAIL_HEIGHT, MIN_TRANSCRIPT_PANEL_HEIGHT, ShellOverlay};
+use super::FullscreenConversationFrameProjection;
+use crate::adapter::inbound::tui::app::shell_presentation::ShellTailView;
 
-/*
- * inline_layout.rs는 inline shell mode와 popup overlay가 공유하는 low-level geometry layer다.
- * 상위 module이 어떤 presentation line을 보여 줄지 정하고, 이 파일은 그 line이 차지할 terminal row 수,
- * bottom-anchored tail 위치, textarea cursor를 현재 frame 안에 둘 수 있는지를 결정한다.
- */
-const MAX_INLINE_INSPECTION_TAIL_HEIGHT: u16 = 6;
-// replay mode는 tail에 최근 transcript를 mirror하므로 일반 prompt tail보다 더 많은 row가 필요하다.
-const MAX_INLINE_REPLAY_TAIL_HEIGHT: u16 = 12;
+// Fullscreen geometry has two persistent bands: the app-owned transcript (or a
+// focused view) and a bottom-anchored status/composer surface. This module owns
+// wrapping, height budgets, scrolling, and cursor placement for those bands.
+const MAX_FOCUSED_VIEW_TAIL_HEIGHT: u16 = 6;
 
-pub(super) fn build_inline_terminal_flow_layout(
-    projection: &InlineConversationFrameProjection,
+pub(super) fn build_fullscreen_flow_layout(
+    projection: &FullscreenConversationFrameProjection,
     area: Rect,
     tail_lines: &[Line<'_>],
 ) -> Rc<[Rect]> {
-    /*
-     * inline shell은 위쪽 transcript/live content와 아래쪽 prompt/status tail로 나뉜 two-band frame이다.
-     * hidden-overlay mode에서는 tail이 primary interaction surface라 더 많은 공간을 준다.
-     * inspection/confirmation mode에서는 작은 terminal에서도 overlay content가 밀려나지 않도록 tail을 작게 제한한다.
-     */
+    // Conversation mode gives the composer its normal budget. A focused view
+    // keeps only a compact action tail so its content remains useful on small
+    // terminals.
     let tail_max_height = if projection.shell_overlay == ShellOverlay::Hidden {
-        if projection
-            .inline_history_render_mode
-            .mirrors_recent_transcript_in_tail()
-        {
-            MAX_INLINE_REPLAY_TAIL_HEIGHT
-        } else {
-            MAX_INLINE_TAIL_HEIGHT
-        }
+        MAX_SHELL_TAIL_HEIGHT
     } else {
-        MAX_INLINE_INSPECTION_TAIL_HEIGHT
+        MAX_FOCUSED_VIEW_TAIL_HEIGHT
     };
     let _ = tail_lines;
     // The explicit operations board is a focused inspection surface. It owns
@@ -66,11 +53,11 @@ pub(super) fn build_inline_terminal_flow_layout(
         .split(area)
 }
 
-pub(in crate::adapter::inbound::tui::app) fn inline_section_height(
+pub(in crate::adapter::inbound::tui::app) fn fullscreen_section_height(
     lines: &[Line<'_>],
     max_height: u16,
 ) -> u16 {
-    // inline inspection panel은 title row 하나와 최소 body row 하나를 예약한 뒤 caller가 준 상한으로 자른다.
+    // fullscreen inspection panel은 title row 하나와 최소 body row 하나를 예약한 뒤 caller가 준 상한으로 자른다.
     lines
         .len()
         .saturating_add(1)
@@ -78,30 +65,13 @@ pub(in crate::adapter::inbound::tui::app) fn inline_section_height(
         .min(max_height as usize) as u16
 }
 
-fn inline_body_height(lines: &[Line<'_>], width: u16, max_height: u16) -> u16 {
-    // body height는 logical line이 아니라 rendered row 기준이라 wrap된 text도 필요한 공간을 확보한다.
-    count_rendered_inline_rows(lines, width)
-        .max(1)
-        .min(max_height as usize) as u16
-}
-
-pub(super) fn inline_body_render_area(area: Rect, lines: &[Line<'_>]) -> Rect {
-    /*
-     * tail body는 bottom-anchored다.
-     * prompt/status text가 가용 영역보다 짧으면 위쪽 row를 blank padding으로 쓰지 않고 transcript replay에 남겨 둔다.
-     */
-    let body_height = inline_body_height(lines, area.width, area.height);
-    let y = area.y + area.height.saturating_sub(body_height);
-    Rect::new(area.x, y, area.width, body_height)
-}
-
-pub(super) fn inline_tail_render_area(area: Rect, tail_view: &InlineTailView) -> Rect {
+pub(super) fn fullscreen_tail_render_area(area: Rect, tail_view: &ShellTailView) -> Rect {
     let body_height = tail_view.rendered_height(area.width, area.height);
     let y = area.y + area.height.saturating_sub(body_height);
     Rect::new(area.x, y, area.width, body_height)
 }
 
-pub(in crate::adapter::inbound::tui::app) fn count_rendered_inline_rows(
+pub(in crate::adapter::inbound::tui::app) fn count_wrapped_rows(
     lines: &[Line<'_>],
     width: u16,
 ) -> usize {
@@ -114,7 +84,7 @@ pub(in crate::adapter::inbound::tui::app) fn count_rendered_inline_rows(
         .line_count(width)
 }
 
-pub(super) fn render_inline_body_suffix(
+pub(super) fn render_body_suffix(
     frame: &mut Frame<'_>,
     area: Rect,
     lines: Vec<Line<'static>>,
@@ -136,37 +106,37 @@ pub(super) fn render_inline_body_suffix(
     scroll_offset
 }
 
-pub(super) fn split_inline_section(area: Rect) -> Rc<[Rect]> {
-    // inline overlay가 공유하는 title/body split으로 모든 panel이 같은 visual rhythm을 유지한다.
+pub(super) fn split_fullscreen_section(area: Rect) -> Rc<[Rect]> {
+    // fullscreen overlay가 공유하는 title/body split으로 모든 panel이 같은 visual rhythm을 유지한다.
     Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(1)])
         .split(area)
 }
 
-pub(super) struct InlineTitledPanel {
+pub(super) struct FullscreenTitledPanel {
     title: Line<'static>,
     lines: Vec<Line<'static>>,
     trim: bool,
 }
 
-impl InlineTitledPanel {
+impl FullscreenTitledPanel {
     pub(super) fn new(title: Line<'static>, lines: Vec<Line<'static>>, trim: bool) -> Self {
         Self { title, lines, trim }
     }
 
     pub(super) fn render(self, frame: &mut Frame<'_>, area: Rect) {
-        render_inline_section(frame, area, self.title, self.lines, self.trim);
+        render_fullscreen_section(frame, area, self.title, self.lines, self.trim);
     }
 }
 
-pub(super) struct InlineScrolledPanel {
+pub(super) struct FullscreenScrolledPanel {
     title: Line<'static>,
     lines: Vec<Line<'static>>,
     scroll_offset: u16,
 }
 
-impl InlineScrolledPanel {
+impl FullscreenScrolledPanel {
     pub(super) fn new(title: Line<'static>, lines: Vec<Line<'static>>, scroll_offset: u16) -> Self {
         Self {
             title,
@@ -176,24 +146,24 @@ impl InlineScrolledPanel {
     }
 
     pub(super) fn render(self, frame: &mut Frame<'_>, area: Rect) {
-        render_inline_scrolled_section(frame, area, self.title, self.lines, self.scroll_offset);
+        render_fullscreen_scrolled_section(frame, area, self.title, self.lines, self.scroll_offset);
     }
 }
 
-pub(super) enum InlineAppendOnlyStreamTitle {
+pub(super) enum FullscreenAppendOnlyStreamTitle {
     Visible(Line<'static>),
     Hidden,
 }
 
-pub(super) struct InlineAppendOnlyStream {
-    title: InlineAppendOnlyStreamTitle,
+pub(super) struct FullscreenAppendOnlyStream {
+    title: FullscreenAppendOnlyStreamTitle,
     lines: Vec<Line<'static>>,
     scroll_offset: u16,
 }
 
-impl InlineAppendOnlyStream {
+impl FullscreenAppendOnlyStream {
     pub(super) fn new(
-        title: InlineAppendOnlyStreamTitle,
+        title: FullscreenAppendOnlyStreamTitle,
         lines: Vec<Line<'static>>,
         scroll_offset: u16,
     ) -> Self {
@@ -206,25 +176,31 @@ impl InlineAppendOnlyStream {
 
     pub(super) fn render(self, frame: &mut Frame<'_>, area: Rect) {
         match self.title {
-            InlineAppendOnlyStreamTitle::Visible(title) => {
-                render_inline_scrolled_section(frame, area, title, self.lines, self.scroll_offset);
+            FullscreenAppendOnlyStreamTitle::Visible(title) => {
+                render_fullscreen_scrolled_section(
+                    frame,
+                    area,
+                    title,
+                    self.lines,
+                    self.scroll_offset,
+                );
             }
-            InlineAppendOnlyStreamTitle::Hidden => {
-                render_inline_scrolled_body(frame, area, self.lines, self.scroll_offset);
+            FullscreenAppendOnlyStreamTitle::Hidden => {
+                render_fullscreen_scrolled_body(frame, area, self.lines, self.scroll_offset);
             }
         }
     }
 }
 
-fn render_inline_section(
+fn render_fullscreen_section(
     frame: &mut Frame<'_>,
     area: Rect,
     title: Line<'static>,
     lines: Vec<Line<'static>>,
     trim: bool,
 ) {
-    // inline inspection은 whitespace와 title을 chrome으로 쓰므로 border 없는 titled panel을 render한다.
-    let section_layout = split_inline_section(area);
+    // fullscreen inspection은 whitespace와 title을 chrome으로 쓰므로 border 없는 titled panel을 render한다.
+    let section_layout = split_fullscreen_section(area);
     frame.render_widget(
         Paragraph::new(vec![title.style(AkraTheme::title())]),
         section_layout[0],
@@ -259,7 +235,7 @@ pub(super) fn set_cursor_if_visible(frame: &mut Frame<'_>, area: Rect, offset: O
     frame.set_cursor_position(Position::new(absolute_x, absolute_y));
 }
 
-fn render_inline_scrolled_section(
+fn render_fullscreen_scrolled_section(
     frame: &mut Frame<'_>,
     area: Rect,
     title: Line<'static>,
@@ -267,7 +243,7 @@ fn render_inline_scrolled_section(
     scroll_offset: u16,
 ) {
     // scrolled section은 leading whitespace 보존이 중요한 editor-style panel에서 사용한다.
-    let section_layout = split_inline_section(area);
+    let section_layout = split_fullscreen_section(area);
     frame.render_widget(
         Paragraph::new(vec![title.style(AkraTheme::title())]),
         section_layout[0],
@@ -280,7 +256,7 @@ fn render_inline_scrolled_section(
     );
 }
 
-fn render_inline_scrolled_body(
+fn render_fullscreen_scrolled_body(
     frame: &mut Frame<'_>,
     area: Rect,
     lines: Vec<Line<'static>>,
@@ -300,32 +276,6 @@ pub(super) fn take_panel_body_lines(mut header_lines: Vec<Line<'static>>) -> Vec
         header_lines.remove(0);
     }
     header_lines
-}
-
-#[cfg(test)]
-pub(super) fn centered_rect(horizontal_percent: u16, vertical_percent: u16, area: Rect) -> Rect {
-    /*
-     * popup overlay는 percent 기반 영역을 요청하지만 design 조정 중 caller가 100을 넘는 값을 줄 수 있다.
-     * split 전에 clamp해 ratatui가 invalid percentage constraint를 받지 않게 한다.
-     */
-    let horizontal_percent = horizontal_percent.min(100);
-    let vertical_percent = vertical_percent.min(100);
-    let vertical_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100u16.saturating_sub(vertical_percent)) / 2),
-            Constraint::Percentage(vertical_percent),
-            Constraint::Percentage((100u16.saturating_sub(vertical_percent)) / 2),
-        ])
-        .split(area);
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100u16.saturating_sub(horizontal_percent)) / 2),
-            Constraint::Percentage(horizontal_percent),
-            Constraint::Percentage((100u16.saturating_sub(horizontal_percent)) / 2),
-        ])
-        .split(vertical_layout[1])[1]
 }
 
 pub(super) fn centered_fixed_rect(width: u16, height: u16, area: Rect) -> Rect {
@@ -360,13 +310,13 @@ mod tests {
     }
 
     #[test]
-    fn render_inline_body_suffix_scrolls_to_the_last_rendered_rows() {
+    fn render_body_suffix_scrolls_to_the_last_rendered_rows() {
         let backend = TestBackend::new(5, 2);
         let mut terminal = Terminal::new(backend).expect("terminal should initialize");
 
         terminal
             .draw(|frame| {
-                let dropped_rows = render_inline_body_suffix(
+                let dropped_rows = render_body_suffix(
                     frame,
                     frame.area(),
                     vec![

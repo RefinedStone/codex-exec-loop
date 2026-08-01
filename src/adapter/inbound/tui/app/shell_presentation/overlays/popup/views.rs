@@ -3,7 +3,7 @@
  * ratatui renderers. Builders translate domain/runtime state into `Line` sections
  * here; renderers should only decide layout, wrapping, focus, and scrolling.
  */
-use super::super::super::super::parallel_terminal_delivery::ParallelLiveStreamModel;
+use super::super::super::super::parallel_stream_view::ParallelLiveStreamModel;
 use super::super::super::Line;
 // Session overlay is the one popup in this file that needs selection and scrolling
 // metadata in addition to preformatted lines.
@@ -11,7 +11,7 @@ use super::super::OverlayListView;
 
 /*
  * Startup overlay is the renderer-facing snapshot of boot diagnostics. Keeping the
- * sections separate lets popup and inline inspection draw the same readiness facts
+ * sections separate lets popup and fullscreen inspection draw the same readiness facts
  * without reinterpreting startup service state.
  */
 pub(crate) struct StartupOverlayView {
@@ -168,7 +168,7 @@ pub(crate) struct QueueOverlayView {
     pub(crate) proposal_lines: Vec<Line<'static>>,
     // Empty/invalid/blocked explanations that tell the operator why rows may be absent.
     pub(crate) note_lines: Vec<Line<'static>>,
-    // Index in the inline renderer's merged queue/proposal/note content.
+    // Index in the fullscreen renderer's merged queue/proposal/note content.
     pub(crate) selected_content_line_index: Option<usize>,
     // Queue overlay navigation and close hints.
     pub(crate) key_lines: Vec<Line<'static>>,
@@ -177,7 +177,7 @@ pub(crate) struct QueueOverlayView {
 /*
  * Review center overlay keeps the current thread, inbox, and recent history as
  * separate read-only panels. Each review row carries one headline plus a few
- * supporting detail lines so popup and inline renderers can reuse the same
+ * supporting detail lines so popup and fullscreen renderers can reuse the same
  * compact projection without reformatting repository payloads.
  */
 pub(crate) struct ReviewOverlayView {
@@ -258,7 +258,7 @@ pub(crate) struct PlanningInitOverlayView {
 }
 
 /*
- * Planning draft editor view is shared by popup and inline inspection renderers.
+ * Planning draft editor view is shared by popup and fullscreen inspection renderers.
  * It carries document selection, editor text, scroll/cursor coordinates, validation
  * status, and command hints as one already-projected surface.
  */
@@ -271,7 +271,7 @@ pub(crate) struct PlanningDraftEditorOverlayView {
     pub(crate) editor_title: String,
     // Current buffer content as syntax-neutral display lines.
     pub(crate) editor_lines: Vec<Line<'static>>,
-    // Vertical editor scroll offset shared by popup and inline renderers.
+    // Vertical editor scroll offset shared by popup and fullscreen renderers.
     pub(crate) editor_scroll: u16,
     // Visible cursor offset; None means read-only/status-only surfaces should not draw a cursor.
     pub(crate) editor_cursor_offset: Option<(u16, u16)>,

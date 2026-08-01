@@ -470,7 +470,7 @@ pub(super) fn reduce_conversation_runtime_with_transition(
                         if let Some((item_id, phase, text)) =
                             latest_agent_draft_for_update(progressive_activity.as_ref(), &activity)
                         {
-                            state.sync_live_agent_draft(item_id, phase, text);
+                            state.upsert_agent_draft(item_id, phase, text);
                         }
                         if progressive_activity_requires_runtime_notice(&activity) {
                             state.extend_runtime_notices([format!(
@@ -495,27 +495,30 @@ pub(super) fn reduce_conversation_runtime_with_transition(
                     phase,
                     text,
                 } => {
-                    // Completion either flushes the live buffer or patches the final
-                    // transcript row for the provider item.
+                    // Completion patches authoritative text into the existing
+                    // canonical row, or appends that row when the event is late.
                     state.progressive_activity.clear_turn_retrying();
-                    state.complete_live_agent_message(item_id, phase, text);
+                    state.finalize_agent_message(item_id, phase, text);
                 }
                 TurnStreamUpdate::ToolActivity { activity } => {
                     // Tool activity feeds both compact live counters and ordered
                     // transcript notices so shell tail and transcript agree.
                     state.progressive_activity.clear_turn_retrying();
                     state.turn_activity.register_tool_activity(&activity);
-                    let detail = (activity.kind == ConversationToolActivityKind::FileChange)
-                        .then(|| {
-                            activity.item_id.as_deref().and_then(|item_id| {
-                                state.progressive_activity_detail.card_detail_for_item(
-                                    item_id,
-                                    ProgressiveActivityCardKind::Patch,
-                                )
-                            })
-                        })
-                        .flatten();
-                    state.buffer_tool_message_with_detail(
+                    let card_kind = match activity.kind {
+                        ConversationToolActivityKind::FileChange => {
+                            ProgressiveActivityCardKind::Patch
+                        }
+                        ConversationToolActivityKind::CommandExecution => {
+                            ProgressiveActivityCardKind::Command
+                        }
+                    };
+                    let detail = activity.item_id.as_deref().and_then(|item_id| {
+                        state
+                            .progressive_activity_detail
+                            .card_detail_for_item(item_id, card_kind)
+                    });
+                    state.append_tool_message_with_detail(
                         activity.text,
                         activity.display_label,
                         activity.item_id,
@@ -1718,8 +1721,9 @@ mod tests {
         assert_eq!(
             reduction
                 .state
-                .live_agent_message
-                .as_ref()
+                .messages
+                .iter()
+                .find(|message| message.item_id.as_deref() == Some("agent-1"))
                 .map(|message| message.text.as_str()),
             Some("hel")
         );
@@ -1732,9 +1736,10 @@ mod tests {
                 text: "hello final".to_string(),
             }),
         );
-        assert!(reduction.state.live_agent_message.is_none());
         assert!(reduction.state.messages.iter().any(|message| {
-            message.kind == ConversationMessageKind::Agent && message.text == "hello final"
+            message.kind == ConversationMessageKind::Agent
+                && message.item_id.as_deref() == Some("agent-1")
+                && message.text == "hello final"
         }));
 
         reduction = reduce_conversation_runtime(
@@ -1749,15 +1754,9 @@ mod tests {
                 },
             }),
         );
-        assert!(
-            reduction
-                .state
-                .buffered_tool_messages
-                .iter()
-                .any(|message| {
-                    message.kind == ConversationMessageKind::Tool && message.text == "cargo test"
-                })
-        );
+        assert!(reduction.state.messages.iter().any(|message| {
+            message.kind == ConversationMessageKind::Tool && message.text == "cargo test"
+        }));
 
         reduction = reduce_conversation_runtime(
             reduction.state,
@@ -1870,15 +1869,63 @@ mod tests {
         );
         let message = reduction
             .state
-            .buffered_tool_messages
-            .last()
-            .expect("completed patch should remain visible before the next commentary");
+            .messages
+            .iter()
+            .find(|message| message.item_id.as_deref() == Some("patch-1"))
+            .expect("completed patch should be visible immediately in the transcript");
 
         assert_eq!(message.display_label.as_deref(), Some("patch"));
         assert!(message.text.starts_with("file change: update src/lib.rs\n"));
         assert!(message.text.contains("[update] src/lib.rs"));
         assert!(message.text.contains("@@ -7 +7 @@"));
         assert!(message.text.contains("-old\n+new"));
+    }
+
+    #[test]
+    fn completed_read_command_attaches_exact_progressive_output_to_the_live_transcript_card() {
+        let mut stream_state = TurnStreamTestHarness::new();
+        stream_state.seed_loaded_thread_identity(
+            "thread-1".to_string(),
+            "Test thread",
+            "/tmp/workspace",
+        );
+        stream_state.apply_stream_event(crate::core::app::TurnStreamEvent::TurnStarted {
+            turn_id: "turn-1".to_string(),
+            runtime_request: Box::default(),
+        });
+        stream_state.apply_stream_event(core_turn_stream_event_from_application(
+            command_started_event(),
+        ));
+        stream_state.apply_stream_event(core_turn_stream_event_from_application(
+            progressive_command_event("src/core/app.rs:1\nsrc/domain/conversation.rs:212"),
+        ));
+        let snapshot = stream_state.apply_stream_event(core_turn_stream_event_from_application(
+            ConversationStreamEvent::ToolActivity {
+                activity: ConversationToolActivity {
+                    kind: ConversationToolActivityKind::CommandExecution,
+                    item_id: Some("command-1".to_string()),
+                    text: "Explored 2 targets".to_string(),
+                    display_label: Some("explore".to_string()),
+                    file_change_count: 0,
+                },
+            },
+        ));
+
+        let reduction = reduce_conversation_runtime(
+            ConversationViewModel::new_draft("/tmp/workspace".to_string()),
+            ConversationRuntimeEvent::StreamSnapshotApplied(Box::new(snapshot)),
+        );
+        let message = reduction
+            .state
+            .messages
+            .iter()
+            .find(|message| message.item_id.as_deref() == Some("command-1"))
+            .expect("completed read should be visible immediately in the transcript");
+
+        assert_eq!(message.display_label.as_deref(), Some("explore"));
+        assert!(message.text.starts_with("Explored 2 targets\n"));
+        assert!(message.text.contains("src/core/app.rs:1"));
+        assert!(message.text.contains("src/domain/conversation.rs:212"));
     }
 
     #[test]
@@ -1891,8 +1938,9 @@ mod tests {
         assert_eq!(
             reduction
                 .state
-                .live_agent_message
-                .as_ref()
+                .messages
+                .iter()
+                .find(|message| message.item_id.as_deref() == Some("agent-1"))
                 .map(|message| message.text.as_str()),
             Some("hello")
         );
@@ -2335,28 +2383,12 @@ mod tests {
         for (event, expected_terminal_state) in terminal_events {
             let mut state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
             state.thread_id = "thread-1".to_string();
-            let mut reduction = reduce_conversation_runtime(state, stream_snapshot_event(event));
+            let reduction = reduce_conversation_runtime(state, stream_snapshot_event(event));
 
             assert!(reduction.effects.iter().all(|effect| !matches!(
                 effect,
                 ConversationRuntimeEffect::EvaluatePostTurn { .. }
             )));
-            assert!(!reduction.state.can_accept_manual_prompt());
-            assert!(
-                reduction
-                    .state
-                    .viewport_transcript_handoff_release_messages()
-                    .is_some()
-            );
-            let correlation = reduction
-                .state
-                .viewport_transcript_handoff_correlation()
-                .expect("terminal outcome should release a correlated transcript handoff");
-            assert!(
-                reduction
-                    .state
-                    .acknowledge_viewport_transcript_handoff_flush(&correlation)
-            );
             assert!(reduction.state.can_accept_manual_prompt());
             assert_eq!(
                 reduction.state.activity_rail_terminal_state,

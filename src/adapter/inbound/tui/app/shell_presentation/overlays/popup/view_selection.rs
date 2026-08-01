@@ -29,7 +29,7 @@ pub(crate) fn build_view_selection_overlay_view(
 
     ViewSelectionOverlayView {
         header_lines: vec![
-            AkraTheme::title_line("Select Conversation View", " / inline inspection"),
+            AkraTheme::title_line("Select Conversation View", " / focused view"),
             Line::from("Choose how much tool and status transcript detail remains visible."),
         ],
         mode_lines,

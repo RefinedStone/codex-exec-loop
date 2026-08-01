@@ -1,4 +1,4 @@
-use super::super::parallel_terminal_delivery::ParallelLiveStreamModel;
+use super::super::parallel_stream_view::ParallelLiveStreamModel;
 use super::super::shell_presentation::{
     ActivityOverlayView, DirectionsMaintenanceOverlayView, HelpOverlayView,
     LanguageSelectionOverlayView, ModelSelectionOverlayView, OverlayListView,
@@ -7,12 +7,12 @@ use super::super::shell_presentation::{
     SupersessionOverlayView, ViewSelectionOverlayView, WorkCenterOverlayView,
 };
 use super::super::{AkraTheme, ParallelPeekOverlayStep, TuiLanguage};
-use super::inline_layout::{
-    InlineAppendOnlyStream, InlineAppendOnlyStreamTitle, InlineScrolledPanel, InlineTitledPanel,
-    count_rendered_inline_rows, inline_section_height, set_cursor_if_visible, split_inline_section,
-    take_panel_body_lines,
+use super::fullscreen_layout::{
+    FullscreenAppendOnlyStream, FullscreenAppendOnlyStreamTitle, FullscreenScrolledPanel,
+    FullscreenTitledPanel, count_wrapped_rows, fullscreen_section_height, set_cursor_if_visible,
+    split_fullscreen_section, take_panel_body_lines,
 };
-use super::{ApprovalInlineScreenModel, InlineInspectionFrameModel};
+use super::{ApprovalFullscreenScreenModel, FullscreenInspectionFrameModel};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::text::Line;
@@ -20,110 +20,110 @@ use ratatui::widgets::{List, ListItem, ListState, Paragraph, Wrap};
 
 const PARALLEL_EVENT_STREAM_TITLE: &str = "Parallel Event Stream";
 
-// Inline inspection renders shell overlays inside the app-server main buffer.
-// It reuses presentation view builders, then maps those view models into
-// frameless sections that can replace the transcript area without popup chrome.
-fn inline_overlay_title(name: &'static str) -> Line<'static> {
-    AkraTheme::title_line(name, " / inline inspection")
+// Focused views replace the transcript area without leaving the fullscreen
+// application. Their presentation models remain independent from terminal I/O.
+fn fullscreen_overlay_title(name: &'static str) -> Line<'static> {
+    AkraTheme::title_line(name, " / focused view")
 }
 
-fn render_inline_titled_panel(
+fn render_fullscreen_titled_panel(
     frame: &mut Frame<'_>,
     area: Rect,
     title: Line<'static>,
     lines: Vec<Line<'static>>,
     trim: bool,
 ) {
-    InlineTitledPanel::new(title, lines, trim).render(frame, area);
+    FullscreenTitledPanel::new(title, lines, trim).render(frame, area);
 }
 
-fn render_inline_scrolled_panel(
+fn render_fullscreen_scrolled_panel(
     frame: &mut Frame<'_>,
     area: Rect,
     title: Line<'static>,
     lines: Vec<Line<'static>>,
     scroll_offset: u16,
 ) {
-    InlineScrolledPanel::new(title, lines, scroll_offset).render(frame, area);
+    FullscreenScrolledPanel::new(title, lines, scroll_offset).render(frame, area);
 }
 
-pub(super) fn draw_inline_shell_inspection(
+pub(super) fn draw_fullscreen_shell_inspection(
     frame: &mut Frame<'_>,
     inspection_area: Rect,
-    model: InlineInspectionFrameModel,
+    model: FullscreenInspectionFrameModel,
 ) -> Option<ListState> {
     match model {
-        InlineInspectionFrameModel::Conversation => {}
-        InlineInspectionFrameModel::ParallelSupervisor(view)
-        | InlineInspectionFrameModel::Supersession(view) => {
-            draw_inline_supersession_inspection(frame, inspection_area, view)
+        FullscreenInspectionFrameModel::Conversation => {}
+        FullscreenInspectionFrameModel::Supersession(view) => {
+            draw_fullscreen_supersession_inspection(frame, inspection_area, view)
         }
-        InlineInspectionFrameModel::Startup {
+        FullscreenInspectionFrameModel::Startup {
             view,
             warning_scroll_offset,
-        } => draw_inline_startup_inspection(frame, inspection_area, view, warning_scroll_offset),
-        InlineInspectionFrameModel::Sessions { view, list_state } => {
-            return Some(draw_inline_session_inspection(
+        } => {
+            draw_fullscreen_startup_inspection(frame, inspection_area, view, warning_scroll_offset)
+        }
+        FullscreenInspectionFrameModel::Sessions { view, list_state } => {
+            return Some(draw_fullscreen_session_inspection(
                 frame,
                 inspection_area,
                 view,
                 list_state,
             ));
         }
-        InlineInspectionFrameModel::ModelSelection(view) => {
-            draw_inline_model_selection_inspection(frame, inspection_area, view)
+        FullscreenInspectionFrameModel::ModelSelection(view) => {
+            draw_fullscreen_model_selection_inspection(frame, inspection_area, view)
         }
-        InlineInspectionFrameModel::ViewSelection(view) => {
-            draw_inline_view_selection_inspection(frame, inspection_area, view)
+        FullscreenInspectionFrameModel::ViewSelection(view) => {
+            draw_fullscreen_view_selection_inspection(frame, inspection_area, view)
         }
-        InlineInspectionFrameModel::LanguageSelection(view) => {
-            draw_inline_language_selection_inspection(frame, inspection_area, view)
+        FullscreenInspectionFrameModel::LanguageSelection(view) => {
+            draw_fullscreen_language_selection_inspection(frame, inspection_area, view)
         }
-        InlineInspectionFrameModel::ParallelPeek {
+        FullscreenInspectionFrameModel::ParallelPeek {
             view,
             step,
             scroll_from_bottom,
-        } => draw_inline_parallel_peek_inspection(
+        } => draw_fullscreen_parallel_peek_inspection(
             frame,
             inspection_area,
             view,
             step,
             scroll_from_bottom,
         ),
-        InlineInspectionFrameModel::WorkCenter(view) => {
-            draw_inline_work_center_inspection(frame, inspection_area, view)
+        FullscreenInspectionFrameModel::WorkCenter(view) => {
+            draw_fullscreen_work_center_inspection(frame, inspection_area, view)
         }
-        InlineInspectionFrameModel::Activity(view) => {
-            draw_inline_activity_inspection(frame, inspection_area, view)
+        FullscreenInspectionFrameModel::Activity(view) => {
+            draw_fullscreen_activity_inspection(frame, inspection_area, view)
         }
-        InlineInspectionFrameModel::Help {
+        FullscreenInspectionFrameModel::Help {
             language,
             view,
             scroll_offset,
-        } => draw_inline_help_inspection(frame, inspection_area, language, view, scroll_offset),
-        InlineInspectionFrameModel::Reviews(view) => {
-            draw_inline_reviews_inspection(frame, inspection_area, view)
+        } => draw_fullscreen_help_inspection(frame, inspection_area, language, view, scroll_offset),
+        FullscreenInspectionFrameModel::Reviews(view) => {
+            draw_fullscreen_reviews_inspection(frame, inspection_area, view)
         }
-        InlineInspectionFrameModel::Queue(view) => {
-            draw_inline_queue_inspection(frame, inspection_area, view)
+        FullscreenInspectionFrameModel::Queue(view) => {
+            draw_fullscreen_queue_inspection(frame, inspection_area, view)
         }
-        InlineInspectionFrameModel::Directions(view) => {
-            draw_inline_directions_maintenance_inspection(frame, inspection_area, view)
+        FullscreenInspectionFrameModel::Directions(view) => {
+            draw_fullscreen_directions_maintenance_inspection(frame, inspection_area, view)
         }
-        InlineInspectionFrameModel::PlanningInit(view) => {
-            draw_inline_planning_init_inspection(frame, inspection_area, view)
+        FullscreenInspectionFrameModel::PlanningInit(view) => {
+            draw_fullscreen_planning_init_inspection(frame, inspection_area, view)
         }
-        InlineInspectionFrameModel::DraftEditor { title, view } => {
-            draw_inline_draft_editor_inspection(frame, inspection_area, title, view)
+        FullscreenInspectionFrameModel::DraftEditor { title, view } => {
+            draw_fullscreen_draft_editor_inspection(frame, inspection_area, title, view)
         }
-        InlineInspectionFrameModel::Approval(model) => {
-            draw_inline_approval_inspection(frame, inspection_area, model)
+        FullscreenInspectionFrameModel::Approval(model) => {
+            draw_fullscreen_approval_inspection(frame, inspection_area, model)
         }
     }
     None
 }
 
-fn draw_inline_work_center_inspection(
+fn draw_fullscreen_work_center_inspection(
     frame: &mut Frame<'_>,
     area: Rect,
     view: WorkCenterOverlayView,
@@ -137,12 +137,12 @@ fn draw_inline_work_center_inspection(
     } = view;
     let body_lines = take_panel_body_lines(header_lines);
     if area.height <= 18 {
-        // The ordinary inline shell reserves a dense status/composer tail. A
+        // The ordinary fullscreen shell reserves a dense status/composer tail. A
         // compact Work Center therefore removes per-section title rows and
         // spends every remaining row on the five authority summaries, selected
         // detail, and keys. This keeps the whole control surface visible in an
         // 11-row inspection area without hiding the shell's live status rail.
-        let mut lines = vec![inline_overlay_title("Work Center")];
+        let mut lines = vec![fullscreen_overlay_title("Work Center")];
         lines.extend(summary_lines);
         lines.extend(item_lines);
         lines.extend(detail_lines);
@@ -153,40 +153,44 @@ fn draw_inline_work_center_inspection(
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(inline_section_height(&body_lines, 3)),
-            Constraint::Length(inline_section_height(&summary_lines, 3)),
+            Constraint::Length(fullscreen_section_height(&body_lines, 3)),
+            Constraint::Length(fullscreen_section_height(&summary_lines, 3)),
             Constraint::Min(6),
-            Constraint::Length(inline_section_height(&detail_lines, 4)),
-            Constraint::Length(inline_section_height(&key_lines, 4)),
+            Constraint::Length(fullscreen_section_height(&detail_lines, 4)),
+            Constraint::Length(fullscreen_section_height(&key_lines, 4)),
         ])
         .split(area);
 
-    render_inline_titled_panel(
+    render_fullscreen_titled_panel(
         frame,
         layout[0],
-        inline_overlay_title("Work Center"),
+        fullscreen_overlay_title("Work Center"),
         body_lines,
         true,
     );
-    render_inline_titled_panel(
+    render_fullscreen_titled_panel(
         frame,
         layout[1],
         Line::from("Overview"),
         summary_lines,
         true,
     );
-    render_inline_titled_panel(frame, layout[2], Line::from("Work"), item_lines, false);
-    render_inline_titled_panel(
+    render_fullscreen_titled_panel(frame, layout[2], Line::from("Work"), item_lines, false);
+    render_fullscreen_titled_panel(
         frame,
         layout[3],
         Line::from("Selected Detail"),
         detail_lines,
         true,
     );
-    render_inline_titled_panel(frame, layout[4], Line::from("Keys"), key_lines, true);
+    render_fullscreen_titled_panel(frame, layout[4], Line::from("Keys"), key_lines, true);
 }
 
-fn draw_inline_activity_inspection(frame: &mut Frame<'_>, area: Rect, view: ActivityOverlayView) {
+fn draw_fullscreen_activity_inspection(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    view: ActivityOverlayView,
+) {
     let ActivityOverlayView {
         header_lines,
         detail_title,
@@ -194,10 +198,10 @@ fn draw_inline_activity_inspection(frame: &mut Frame<'_>, area: Rect, view: Acti
         key_lines,
         ..
     } = view;
-    let desired_header_height = count_rendered_inline_rows(&header_lines, area.width)
+    let desired_header_height = count_wrapped_rows(&header_lines, area.width)
         .saturating_add(1)
         .min(usize::from(u16::MAX)) as u16;
-    let key_height = inline_section_height(&key_lines, 4).min(area.height.saturating_sub(4));
+    let key_height = fullscreen_section_height(&key_lines, 4).min(area.height.saturating_sub(4));
     let header_height =
         desired_header_height.min(area.height.saturating_sub(key_height).saturating_sub(2));
     let layout = Layout::default()
@@ -209,33 +213,33 @@ fn draw_inline_activity_inspection(frame: &mut Frame<'_>, area: Rect, view: Acti
         ])
         .split(area);
 
-    render_inline_titled_panel(
+    render_fullscreen_titled_panel(
         frame,
         layout[0],
-        inline_overlay_title("Activity"),
+        fullscreen_overlay_title("Activity"),
         header_lines,
         false,
     );
-    render_inline_scrolled_panel(frame, layout[1], detail_title, detail_lines, 0);
-    render_inline_titled_panel(frame, layout[2], Line::from("Keys"), key_lines, true);
+    render_fullscreen_scrolled_panel(frame, layout[1], detail_title, detail_lines, 0);
+    render_fullscreen_titled_panel(frame, layout[2], Line::from("Keys"), key_lines, true);
 }
 
-fn draw_inline_approval_inspection(
+fn draw_fullscreen_approval_inspection(
     frame: &mut Frame<'_>,
     area: Rect,
-    model: ApprovalInlineScreenModel,
+    model: ApprovalFullscreenScreenModel,
 ) {
     if !model.available {
-        render_inline_titled_panel(
+        render_fullscreen_titled_panel(
             frame,
             area,
-            inline_overlay_title("Approval"),
+            fullscreen_overlay_title("Approval"),
             vec![Line::from("The approval request is no longer available.")],
             true,
         );
         return;
     }
-    let ApprovalInlineScreenModel {
+    let ApprovalFullscreenScreenModel {
         header_lines,
         detail_lines,
         key_lines,
@@ -253,14 +257,14 @@ fn draw_inline_approval_inspection(
             Constraint::Length(wrapped_approval_panel_height(&key_lines, area.width, 4)),
         ])
         .split(area);
-    render_inline_titled_panel(
+    render_fullscreen_titled_panel(
         frame,
         layout[0],
-        inline_overlay_title("Approval Required"),
+        fullscreen_overlay_title("Approval Required"),
         header_lines,
         true,
     );
-    render_inline_scrolled_panel(
+    render_fullscreen_scrolled_panel(
         frame,
         layout[1],
         Line::from(format!(
@@ -269,7 +273,7 @@ fn draw_inline_approval_inspection(
         detail_lines,
         scroll_offset,
     );
-    render_inline_titled_panel(frame, layout[2], Line::from("Decision"), key_lines, true);
+    render_fullscreen_titled_panel(frame, layout[2], Line::from("Decision"), key_lines, true);
 }
 
 fn wrapped_approval_panel_height(lines: &[Line<'_>], width: u16, minimum: u16) -> u16 {
@@ -283,7 +287,7 @@ fn wrapped_approval_panel_height(lines: &[Line<'_>], width: u16, minimum: u16) -
         .max(minimum)
 }
 
-fn draw_inline_parallel_peek_inspection(
+fn draw_fullscreen_parallel_peek_inspection(
     frame: &mut Frame<'_>,
     area: Rect,
     overlay_view: ParallelPeekOverlayView,
@@ -302,22 +306,22 @@ fn draw_inline_parallel_peek_inspection(
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(inline_section_height(&body_lines, 4)),
+            Constraint::Length(fullscreen_section_height(&body_lines, 4)),
             Constraint::Min(6),
-            Constraint::Length(inline_section_height(&status_lines, 4)),
-            Constraint::Length(inline_section_height(&key_lines, 4)),
+            Constraint::Length(fullscreen_section_height(&status_lines, 4)),
+            Constraint::Length(fullscreen_section_height(&key_lines, 4)),
         ])
         .split(area);
 
-    render_inline_titled_panel(
+    render_fullscreen_titled_panel(
         frame,
         layout[0],
-        inline_overlay_title("Parallel Peek"),
+        fullscreen_overlay_title("Parallel Peek"),
         body_lines,
         true,
     );
     match step {
-        ParallelPeekOverlayStep::AgentList => render_inline_scrolled_panel(
+        ParallelPeekOverlayStep::AgentList => render_fullscreen_scrolled_panel(
             frame,
             layout[1],
             Line::from("Active Agents"),
@@ -330,7 +334,7 @@ fn draw_inline_parallel_peek_inspection(
                 conversation_lines.len(),
                 scroll_from_bottom,
             );
-            render_inline_scrolled_panel(
+            render_fullscreen_scrolled_panel(
                 frame,
                 layout[1],
                 Line::from("Conversation Preview"),
@@ -339,8 +343,8 @@ fn draw_inline_parallel_peek_inspection(
             );
         }
     }
-    render_inline_titled_panel(frame, layout[2], Line::from("Status"), status_lines, true);
-    render_inline_titled_panel(frame, layout[3], Line::from("Keys"), key_lines, true);
+    render_fullscreen_titled_panel(frame, layout[2], Line::from("Status"), status_lines, true);
+    render_fullscreen_titled_panel(frame, layout[3], Line::from("Keys"), key_lines, true);
 }
 
 fn inline_preview_scroll_offset(area: Rect, line_count: usize, scroll_from_bottom: usize) -> u16 {
@@ -351,7 +355,7 @@ fn inline_preview_scroll_offset(area: Rect, line_count: usize, scroll_from_botto
         .min(u16::MAX as usize) as u16
 }
 
-fn draw_inline_help_inspection(
+fn draw_fullscreen_help_inspection(
     frame: &mut Frame<'_>,
     area: Rect,
     language: TuiLanguage,
@@ -364,19 +368,19 @@ fn draw_inline_help_inspection(
         key_lines,
     } = view;
     let body_lines = take_panel_body_lines(header_lines);
-    let key_height = count_rendered_inline_rows(&key_lines, area.width)
+    let key_height = count_wrapped_rows(&key_lines, area.width)
         .saturating_add(1)
         .clamp(2, 4) as u16;
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(inline_section_height(&body_lines, 4)),
+            Constraint::Length(fullscreen_section_height(&body_lines, 4)),
             Constraint::Min(2),
             Constraint::Length(key_height),
         ])
         .split(area);
 
-    render_inline_titled_panel(
+    render_fullscreen_titled_panel(
         frame,
         layout[0],
         AkraTheme::title_line(
@@ -386,14 +390,14 @@ fn draw_inline_help_inspection(
         body_lines,
         true,
     );
-    render_inline_scrolled_panel(
+    render_fullscreen_scrolled_panel(
         frame,
         layout[1],
         Line::from(language.commands_section_title()),
         command_lines,
         scroll_offset,
     );
-    render_inline_titled_panel(
+    render_fullscreen_titled_panel(
         frame,
         layout[2],
         Line::from(language.keys_section_title()),
@@ -401,7 +405,7 @@ fn draw_inline_help_inspection(
         true,
     );
 }
-fn draw_inline_directions_maintenance_inspection(
+fn draw_fullscreen_directions_maintenance_inspection(
     frame: &mut Frame<'_>,
     area: Rect,
     overlay_view: DirectionsMaintenanceOverlayView,
@@ -417,27 +421,27 @@ fn draw_inline_directions_maintenance_inspection(
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(inline_section_height(&body_lines, 4)),
-            Constraint::Length(inline_section_height(&summary_lines, 5)),
+            Constraint::Length(fullscreen_section_height(&body_lines, 4)),
+            Constraint::Length(fullscreen_section_height(&summary_lines, 5)),
             Constraint::Min(8),
-            Constraint::Length(inline_section_height(&status_lines, 5)),
-            Constraint::Length(inline_section_height(&key_lines, 4)),
+            Constraint::Length(fullscreen_section_height(&status_lines, 5)),
+            Constraint::Length(fullscreen_section_height(&key_lines, 4)),
         ])
         .split(area);
 
-    render_inline_titled_panel(
+    render_fullscreen_titled_panel(
         frame,
         layout[0],
-        inline_overlay_title("Directions"),
+        fullscreen_overlay_title("Directions"),
         body_lines,
         true,
     );
-    render_inline_titled_panel(frame, layout[1], Line::from("Summary"), summary_lines, true);
-    render_inline_titled_panel(frame, layout[2], Line::from("Options"), option_lines, false);
-    render_inline_titled_panel(frame, layout[3], Line::from("Status"), status_lines, true);
-    render_inline_titled_panel(frame, layout[4], Line::from("Keys"), key_lines, true);
+    render_fullscreen_titled_panel(frame, layout[1], Line::from("Summary"), summary_lines, true);
+    render_fullscreen_titled_panel(frame, layout[2], Line::from("Options"), option_lines, false);
+    render_fullscreen_titled_panel(frame, layout[3], Line::from("Status"), status_lines, true);
+    render_fullscreen_titled_panel(frame, layout[4], Line::from("Keys"), key_lines, true);
 }
-fn draw_inline_startup_inspection(
+fn draw_fullscreen_startup_inspection(
     frame: &mut Frame<'_>,
     area: Rect,
     overlay_view: StartupOverlayView,
@@ -456,68 +460,74 @@ fn draw_inline_startup_inspection(
          * Attention diagnostics are the target of the ribbon's Ctrl+D action.
          * Keep their raw, terminal-safe payload and the recovery keys above the
          * longer prerequisite list so the action remains truthful in the
-         * bounded inline inspection viewport.
+         * bounded fullscreen inspection viewport.
          */
         let layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(inline_section_height(&body_lines, 4)),
-                Constraint::Length(inline_section_height(&summary_lines, 2)),
-                Constraint::Length(inline_section_height(&warning_lines, 5)),
-                Constraint::Length(inline_section_height(&key_lines, 4)),
+                Constraint::Length(fullscreen_section_height(&body_lines, 4)),
+                Constraint::Length(fullscreen_section_height(&summary_lines, 2)),
+                Constraint::Length(fullscreen_section_height(&warning_lines, 5)),
+                Constraint::Length(fullscreen_section_height(&key_lines, 4)),
                 Constraint::Min(2),
             ])
             .split(area);
-        render_inline_titled_panel(
+        render_fullscreen_titled_panel(
             frame,
             layout[0],
-            inline_overlay_title("Diagnostics"),
+            fullscreen_overlay_title("Diagnostics"),
             body_lines,
             true,
         );
-        render_inline_titled_panel(frame, layout[1], Line::from("Startup"), summary_lines, true);
-        render_inline_scrolled_panel(
+        render_fullscreen_titled_panel(
+            frame,
+            layout[1],
+            Line::from("Startup"),
+            summary_lines,
+            true,
+        );
+        render_fullscreen_scrolled_panel(
             frame,
             layout[2],
             Line::from("Warnings"),
             warning_lines,
             warning_scroll_offset,
         );
-        render_inline_titled_panel(frame, layout[3], Line::from("Keys"), key_lines, true);
-        render_inline_titled_panel(frame, layout[4], Line::from("Checks"), check_lines, false);
+        render_fullscreen_titled_panel(frame, layout[3], Line::from("Keys"), key_lines, true);
+        render_fullscreen_titled_panel(frame, layout[4], Line::from("Checks"), check_lines, false);
         return;
     }
-    let check_height = inline_section_height(&check_lines, 10).max(4);
+    let check_height = fullscreen_section_height(&check_lines, 10).max(4);
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(inline_section_height(&body_lines, 4)),
-            Constraint::Length(inline_section_height(&summary_lines, 4)),
+            Constraint::Length(fullscreen_section_height(&body_lines, 4)),
+            Constraint::Length(fullscreen_section_height(&summary_lines, 4)),
             Constraint::Min(check_height),
-            Constraint::Length(inline_section_height(&warning_lines, 5)),
-            Constraint::Length(inline_section_height(&key_lines, 4)),
+            Constraint::Length(fullscreen_section_height(&warning_lines, 5)),
+            Constraint::Length(fullscreen_section_height(&key_lines, 4)),
         ])
         .split(area);
 
-    render_inline_titled_panel(
+    render_fullscreen_titled_panel(
         frame,
         layout[0],
-        inline_overlay_title("Diagnostics"),
+        fullscreen_overlay_title("Diagnostics"),
         body_lines,
         true,
     );
-    render_inline_titled_panel(frame, layout[1], Line::from("Startup"), summary_lines, true);
-    render_inline_titled_panel(frame, layout[2], Line::from("Checks"), check_lines, false);
-    render_inline_titled_panel(
+    render_fullscreen_titled_panel(frame, layout[1], Line::from("Startup"), summary_lines, true);
+    render_fullscreen_titled_panel(frame, layout[2], Line::from("Checks"), check_lines, false);
+    render_fullscreen_titled_panel(
         frame,
         layout[3],
         Line::from("Warnings"),
         warning_lines,
         true,
     );
-    render_inline_titled_panel(frame, layout[4], Line::from("Keys"), key_lines, true);
+    render_fullscreen_titled_panel(frame, layout[4], Line::from("Keys"), key_lines, true);
 }
-fn draw_inline_session_inspection(
+fn draw_fullscreen_session_inspection(
     frame: &mut Frame<'_>,
     area: Rect,
     overlay_view: SessionOverlayView,
@@ -534,17 +544,17 @@ fn draw_inline_session_inspection(
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(inline_section_height(&body_lines, 4)),
+            Constraint::Length(fullscreen_section_height(&body_lines, 4)),
             Constraint::Min(8),
-            Constraint::Length(inline_section_height(&warning_lines, 5)),
-            Constraint::Length(inline_section_height(&key_lines, 4)),
+            Constraint::Length(fullscreen_section_height(&warning_lines, 5)),
+            Constraint::Length(fullscreen_section_height(&key_lines, 4)),
         ])
         .split(area);
 
-    render_inline_titled_panel(
+    render_fullscreen_titled_panel(
         frame,
         layout[0],
-        inline_overlay_title("Recent Sessions"),
+        fullscreen_overlay_title("Recent Sessions"),
         body_lines,
         true,
     );
@@ -556,8 +566,8 @@ fn draw_inline_session_inspection(
         .split(layout[1]);
 
     let list_state =
-        draw_inline_session_list_panel(frame, content_layout[0], list_state, list_view);
-    render_inline_titled_panel(
+        draw_fullscreen_session_list_panel(frame, content_layout[0], list_state, list_view);
+    render_fullscreen_titled_panel(
         frame,
         content_layout[1],
         Line::from("Selected Session"),
@@ -565,17 +575,17 @@ fn draw_inline_session_inspection(
         false,
     );
 
-    render_inline_titled_panel(
+    render_fullscreen_titled_panel(
         frame,
         layout[2],
         Line::from("Session Warnings"),
         warning_lines,
         true,
     );
-    render_inline_titled_panel(frame, layout[3], Line::from("Keys"), key_lines, true);
+    render_fullscreen_titled_panel(frame, layout[3], Line::from("Keys"), key_lines, true);
     list_state
 }
-fn draw_inline_model_selection_inspection(
+fn draw_fullscreen_model_selection_inspection(
     frame: &mut Frame<'_>,
     area: Rect,
     overlay_view: ModelSelectionOverlayView,
@@ -591,17 +601,17 @@ fn draw_inline_model_selection_inspection(
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(inline_section_height(&body_lines, 4)),
+            Constraint::Length(fullscreen_section_height(&body_lines, 4)),
             Constraint::Min(12),
-            Constraint::Length(inline_section_height(&status_lines, 4)),
-            Constraint::Length(inline_section_height(&key_lines, 3)),
+            Constraint::Length(fullscreen_section_height(&status_lines, 4)),
+            Constraint::Length(fullscreen_section_height(&key_lines, 3)),
         ])
         .split(area);
 
-    render_inline_titled_panel(
+    render_fullscreen_titled_panel(
         frame,
         layout[0],
-        inline_overlay_title("Select Model and Effort"),
+        fullscreen_overlay_title("Select Model and Effort"),
         body_lines,
         true,
     );
@@ -609,24 +619,24 @@ fn draw_inline_model_selection_inspection(
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
         .split(layout[1]);
-    render_inline_titled_panel(
+    render_fullscreen_titled_panel(
         frame,
         picker_layout[0],
         Line::from("Models"),
         model_lines,
         false,
     );
-    render_inline_titled_panel(
+    render_fullscreen_titled_panel(
         frame,
         picker_layout[1],
         Line::from("Think Level"),
         effort_lines,
         false,
     );
-    render_inline_titled_panel(frame, layout[2], Line::from("Status"), status_lines, true);
-    render_inline_titled_panel(frame, layout[3], Line::from("Keys"), key_lines, true);
+    render_fullscreen_titled_panel(frame, layout[2], Line::from("Status"), status_lines, true);
+    render_fullscreen_titled_panel(frame, layout[3], Line::from("Keys"), key_lines, true);
 }
-fn draw_inline_view_selection_inspection(
+fn draw_fullscreen_view_selection_inspection(
     frame: &mut Frame<'_>,
     area: Rect,
     overlay_view: ViewSelectionOverlayView,
@@ -641,25 +651,25 @@ fn draw_inline_view_selection_inspection(
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(inline_section_height(&body_lines, 4)),
+            Constraint::Length(fullscreen_section_height(&body_lines, 4)),
             Constraint::Min(8),
-            Constraint::Length(inline_section_height(&status_lines, 4)),
-            Constraint::Length(inline_section_height(&key_lines, 3)),
+            Constraint::Length(fullscreen_section_height(&status_lines, 4)),
+            Constraint::Length(fullscreen_section_height(&key_lines, 3)),
         ])
         .split(area);
 
-    render_inline_titled_panel(
+    render_fullscreen_titled_panel(
         frame,
         layout[0],
-        inline_overlay_title("Select Conversation View"),
+        fullscreen_overlay_title("Select Conversation View"),
         body_lines,
         true,
     );
-    render_inline_titled_panel(frame, layout[1], Line::from("Views"), mode_lines, false);
-    render_inline_titled_panel(frame, layout[2], Line::from("Status"), status_lines, true);
-    render_inline_titled_panel(frame, layout[3], Line::from("Keys"), key_lines, true);
+    render_fullscreen_titled_panel(frame, layout[1], Line::from("Views"), mode_lines, false);
+    render_fullscreen_titled_panel(frame, layout[2], Line::from("Status"), status_lines, true);
+    render_fullscreen_titled_panel(frame, layout[3], Line::from("Keys"), key_lines, true);
 }
-fn draw_inline_language_selection_inspection(
+fn draw_fullscreen_language_selection_inspection(
     frame: &mut Frame<'_>,
     area: Rect,
     overlay_view: LanguageSelectionOverlayView,
@@ -674,39 +684,39 @@ fn draw_inline_language_selection_inspection(
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(inline_section_height(&body_lines, 4)),
+            Constraint::Length(fullscreen_section_height(&body_lines, 4)),
             Constraint::Min(7),
-            Constraint::Length(inline_section_height(&status_lines, 4)),
-            Constraint::Length(inline_section_height(&key_lines, 3)),
+            Constraint::Length(fullscreen_section_height(&status_lines, 4)),
+            Constraint::Length(fullscreen_section_height(&key_lines, 3)),
         ])
         .split(area);
 
-    render_inline_titled_panel(
+    render_fullscreen_titled_panel(
         frame,
         layout[0],
-        inline_overlay_title("Select Language"),
+        fullscreen_overlay_title("Select Language"),
         body_lines,
         true,
     );
-    render_inline_titled_panel(
+    render_fullscreen_titled_panel(
         frame,
         layout[1],
         Line::from("Languages"),
         language_lines,
         false,
     );
-    render_inline_titled_panel(frame, layout[2], Line::from("Status"), status_lines, true);
-    render_inline_titled_panel(frame, layout[3], Line::from("Keys"), key_lines, true);
+    render_fullscreen_titled_panel(frame, layout[2], Line::from("Status"), status_lines, true);
+    render_fullscreen_titled_panel(frame, layout[3], Line::from("Keys"), key_lines, true);
 }
-fn draw_inline_supersession_inspection(
+fn draw_fullscreen_supersession_inspection(
     frame: &mut Frame<'_>,
     area: Rect,
     overlay_view: SupersessionOverlayView,
 ) {
     if !overlay_view.focused_full_viewport {
         let layout = passive_supersession_inspection_layout(&overlay_view, area);
-        render_inline_parallel_event_stream(frame, layout.events, overlay_view.event_stream);
-        render_inline_titled_panel(
+        render_fullscreen_parallel_event_stream(frame, layout.events, overlay_view.event_stream);
+        render_fullscreen_titled_panel(
             frame,
             layout.keys,
             Line::from("Command Hints"),
@@ -731,14 +741,14 @@ fn draw_inline_supersession_inspection(
         key_lines,
     } = overlay_view;
     let body_lines = take_panel_body_lines(header_lines);
-    render_inline_titled_panel(
+    render_fullscreen_titled_panel(
         frame,
         layout.header,
-        inline_overlay_title("Parallel Operations"),
+        fullscreen_overlay_title("Parallel Operations"),
         body_lines,
         true,
     );
-    render_inline_titled_panel(
+    render_fullscreen_titled_panel(
         frame,
         layout.overview,
         Line::from("Overview"),
@@ -758,13 +768,13 @@ fn draw_inline_supersession_inspection(
                 Constraint::Min(0),
             ])
             .split(layout.operations);
-        render_inline_supersession_panel(
+        render_fullscreen_supersession_panel(
             frame,
             operations_layout[0],
             Line::from("Lifecycle"),
             timeline_lines,
         );
-        render_inline_supersession_panel(
+        render_fullscreen_supersession_panel(
             frame,
             operations_layout[2],
             Line::from("Agent Lanes"),
@@ -774,7 +784,7 @@ fn draw_inline_supersession_inspection(
                 lane_lines
             },
         );
-        render_inline_supersession_panel(
+        render_fullscreen_supersession_panel(
             frame,
             operations_layout[4],
             Line::from("Selected Lane"),
@@ -785,13 +795,13 @@ fn draw_inline_supersession_inspection(
             },
         );
     } else {
-        let lane_height = inline_section_height(&compact_lane_lines, 4)
+        let lane_height = fullscreen_section_height(&compact_lane_lines, 4)
             .min(layout.operations.height.saturating_sub(2).max(2));
         let operations_layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(lane_height), Constraint::Min(2)])
             .split(layout.operations);
-        render_inline_supersession_panel(
+        render_fullscreen_supersession_panel(
             frame,
             operations_layout[0],
             Line::from("Agent Lanes"),
@@ -802,7 +812,7 @@ fn draw_inline_supersession_inspection(
             compact_detail.push(Line::styled("LIFECYCLE", AkraTheme::accent()));
             compact_detail.extend(timeline_lines);
         }
-        render_inline_supersession_panel(
+        render_fullscreen_supersession_panel(
             frame,
             operations_layout[1],
             Line::from("Selected Lane"),
@@ -810,14 +820,14 @@ fn draw_inline_supersession_inspection(
         );
     }
 
-    render_inline_supersession_panel(
+    render_fullscreen_supersession_panel(
         frame,
         layout.accepted_queue,
         Line::from("Accepted Queue"),
         accepted_queue_lines,
     );
-    render_inline_parallel_event_stream(frame, layout.events, event_stream);
-    render_inline_titled_panel(
+    render_fullscreen_parallel_event_stream(frame, layout.events, event_stream);
+    render_fullscreen_titled_panel(
         frame,
         layout.keys,
         Line::from("Command Hints"),
@@ -844,7 +854,7 @@ fn passive_supersession_inspection_layout(
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(1),
-            Constraint::Length(inline_section_height(&overlay_view.key_lines, 3)),
+            Constraint::Length(fullscreen_section_height(&overlay_view.key_lines, 3)),
         ])
         .split(area);
     SupersessionInspectionLayout {
@@ -884,9 +894,9 @@ fn supersession_inspection_layout(
             keys: sections[5],
         };
     }
-    let overview_height = inline_section_height(&overlay_view.overview_lines, 5);
-    let queue_height = inline_section_height(&overlay_view.accepted_queue_lines, 4);
-    let key_height = inline_section_height(&overlay_view.key_lines, 3);
+    let overview_height = fullscreen_section_height(&overlay_view.overview_lines, 5);
+    let queue_height = fullscreen_section_height(&overlay_view.accepted_queue_lines, 4);
+    let key_height = fullscreen_section_height(&overlay_view.key_lines, 3);
     let operations_height = if overlay_view.focused_full_viewport && area.width >= 116 {
         if area.height >= 34 { 16 } else { 13 }
     } else if overlay_view.focused_full_viewport {
@@ -923,7 +933,7 @@ fn supersession_inspection_layout(
     }
 }
 
-fn render_inline_supersession_panel(
+fn render_fullscreen_supersession_panel(
     frame: &mut Frame<'_>,
     area: Rect,
     title: Line<'static>,
@@ -937,32 +947,27 @@ fn render_inline_supersession_panel(
     let scroll_offset =
         selected_content_scroll_offset(&lines, selected_line_index, area.width, visible_rows)
             .min(u16::MAX as usize) as u16;
-    render_inline_scrolled_panel(frame, area, title, lines, scroll_offset);
+    render_fullscreen_scrolled_panel(frame, area, title, lines, scroll_offset);
 }
 
-fn render_inline_parallel_event_stream(
+fn render_fullscreen_parallel_event_stream(
     frame: &mut Frame<'_>,
     area: Rect,
     stream: ParallelLiveStreamModel,
 ) {
     let stream = stream.into_render_parts();
     let title = if stream.title_visible {
-        InlineAppendOnlyStreamTitle::Visible(Line::from(PARALLEL_EVENT_STREAM_TITLE))
+        FullscreenAppendOnlyStreamTitle::Visible(Line::from(PARALLEL_EVENT_STREAM_TITLE))
     } else {
-        /*
-         * Architecture contract: a split event stream is not a titled panel.
-         * In host-scrollback mode, overflowed rows above this inline area are
-         * already durable terminal history. Rendering title chrome here puts a
-         * non-event row between two chunks of the same stream, so the live tail
-         * must stay data-only.
-         */
-        InlineAppendOnlyStreamTitle::Hidden
+        // A continuation of the focused event stream remains data-only; adding
+        // panel chrome between chunks would make one logical stream look split.
+        FullscreenAppendOnlyStreamTitle::Hidden
     };
-    InlineAppendOnlyStream::new(title, stream.lines, stream.scroll_offset).render(frame, area);
+    FullscreenAppendOnlyStream::new(title, stream.lines, stream.scroll_offset).render(frame, area);
 }
 
 fn rendered_line_rows(line: &Line<'_>, width: u16) -> usize {
-    count_rendered_inline_rows(std::slice::from_ref(line), width).max(1)
+    count_wrapped_rows(std::slice::from_ref(line), width).max(1)
 }
 
 pub(super) fn parallel_event_stream_area(
@@ -976,7 +981,11 @@ pub(super) fn parallel_event_stream_area(
     };
     layout.events
 }
-fn draw_inline_queue_inspection(frame: &mut Frame<'_>, area: Rect, overlay_view: QueueOverlayView) {
+fn draw_fullscreen_queue_inspection(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    overlay_view: QueueOverlayView,
+) {
     let QueueOverlayView {
         header_lines,
         summary_lines,
@@ -988,7 +997,7 @@ fn draw_inline_queue_inspection(frame: &mut Frame<'_>, area: Rect, overlay_view:
     } = overlay_view;
     let body_lines = take_panel_body_lines(header_lines);
     // Queue, proposal, and note lines are merged into one scrollable section to
-    // preserve vertical space in inline mode.
+    // preserve vertical space in the fullscreen inspection.
     let mut content_lines = Vec::new();
     content_lines.extend(queue_lines);
     if !proposal_lines.is_empty() {
@@ -1002,15 +1011,15 @@ fn draw_inline_queue_inspection(frame: &mut Frame<'_>, area: Rect, overlay_view:
     let header_height = if body_lines.is_empty() {
         1
     } else {
-        inline_section_height(&body_lines, 3)
+        fullscreen_section_height(&body_lines, 3)
     };
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(header_height),
-            Constraint::Length(inline_section_height(&summary_lines, 3)),
+            Constraint::Length(fullscreen_section_height(&summary_lines, 3)),
             Constraint::Min(4),
-            Constraint::Length(inline_section_height(&key_lines, 4)),
+            Constraint::Length(fullscreen_section_height(&key_lines, 4)),
         ])
         .split(area);
     let visible_content_rows = layout[2].height.saturating_sub(1) as usize;
@@ -1024,27 +1033,27 @@ fn draw_inline_queue_inspection(frame: &mut Frame<'_>, area: Rect, overlay_view:
 
     if body_lines.is_empty() {
         frame.render_widget(
-            Paragraph::new(inline_overlay_title("Planning Queue")),
+            Paragraph::new(fullscreen_overlay_title("Planning Queue")),
             layout[0],
         );
     } else {
-        render_inline_titled_panel(
+        render_fullscreen_titled_panel(
             frame,
             layout[0],
-            inline_overlay_title("Planning Queue"),
+            fullscreen_overlay_title("Planning Queue"),
             body_lines,
             true,
         );
     }
-    render_inline_titled_panel(frame, layout[1], Line::from("Summary"), summary_lines, true);
-    render_inline_scrolled_panel(
+    render_fullscreen_titled_panel(frame, layout[1], Line::from("Summary"), summary_lines, true);
+    render_fullscreen_scrolled_panel(
         frame,
         layout[2],
         Line::from("Queue"),
         content_lines,
         content_scroll_offset,
     );
-    render_inline_titled_panel(frame, layout[3], Line::from("Keys"), key_lines, true);
+    render_fullscreen_titled_panel(frame, layout[3], Line::from("Keys"), key_lines, true);
 }
 
 fn selected_content_scroll_offset(
@@ -1056,8 +1065,7 @@ fn selected_content_scroll_offset(
     selected_line_index
         .and_then(|selected_index| {
             let selected_line = content_lines.get(selected_index)?;
-            let selected_start =
-                count_rendered_inline_rows(&content_lines[..selected_index], width);
+            let selected_start = count_wrapped_rows(&content_lines[..selected_index], width);
             let selected_rows = rendered_line_rows(selected_line, width);
             let visible_rows = visible_rows.max(1);
             Some(if selected_rows >= visible_rows {
@@ -1069,7 +1077,7 @@ fn selected_content_scroll_offset(
         .unwrap_or(0)
 }
 
-fn draw_inline_reviews_inspection(
+fn draw_fullscreen_reviews_inspection(
     frame: &mut Frame<'_>,
     area: Rect,
     overlay_view: ReviewsOverlayView,
@@ -1083,21 +1091,21 @@ fn draw_inline_reviews_inspection(
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(inline_section_height(&body_lines, 4)),
-            Constraint::Length(inline_section_height(&summary_lines, 5)),
+            Constraint::Length(fullscreen_section_height(&body_lines, 4)),
+            Constraint::Length(fullscreen_section_height(&summary_lines, 5)),
             Constraint::Min(8),
-            Constraint::Length(inline_section_height(&key_lines, 3)),
+            Constraint::Length(fullscreen_section_height(&key_lines, 3)),
         ])
         .split(area);
 
-    render_inline_titled_panel(
+    render_fullscreen_titled_panel(
         frame,
         layout[0],
-        inline_overlay_title("Review Center"),
+        fullscreen_overlay_title("Review Center"),
         body_lines,
         true,
     );
-    render_inline_titled_panel(frame, layout[1], Line::from("Summary"), summary_lines, true);
+    render_fullscreen_titled_panel(frame, layout[1], Line::from("Summary"), summary_lines, true);
     let content_layout = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -1106,30 +1114,30 @@ fn draw_inline_reviews_inspection(
             Constraint::Percentage(33),
         ])
         .split(layout[2]);
-    render_inline_titled_panel(
+    render_fullscreen_titled_panel(
         frame,
         content_layout[0],
         Line::from("Active Thread"),
         current_thread_lines,
         false,
     );
-    render_inline_titled_panel(
+    render_fullscreen_titled_panel(
         frame,
         content_layout[1],
         Line::from("Inbox"),
         inbox_lines,
         false,
     );
-    render_inline_titled_panel(
+    render_fullscreen_titled_panel(
         frame,
         content_layout[2],
         Line::from("Recent History"),
         history_lines,
         false,
     );
-    render_inline_titled_panel(frame, layout[3], Line::from("Keys"), key_lines, true);
+    render_fullscreen_titled_panel(frame, layout[3], Line::from("Keys"), key_lines, true);
 }
-fn draw_inline_planning_init_inspection(
+fn draw_fullscreen_planning_init_inspection(
     frame: &mut Frame<'_>,
     area: Rect,
     overlay_view: PlanningInitOverlayView,
@@ -1145,27 +1153,27 @@ fn draw_inline_planning_init_inspection(
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(inline_section_height(&body_lines, 4)),
-            Constraint::Length(inline_section_height(&summary_lines, 5)),
+            Constraint::Length(fullscreen_section_height(&body_lines, 4)),
+            Constraint::Length(fullscreen_section_height(&summary_lines, 5)),
             Constraint::Min(8),
-            Constraint::Length(inline_section_height(&status_lines, 5)),
-            Constraint::Length(inline_section_height(&key_lines, 4)),
+            Constraint::Length(fullscreen_section_height(&status_lines, 5)),
+            Constraint::Length(fullscreen_section_height(&key_lines, 4)),
         ])
         .split(area);
 
-    render_inline_titled_panel(
+    render_fullscreen_titled_panel(
         frame,
         layout[0],
-        inline_overlay_title("Planning"),
+        fullscreen_overlay_title("Planning"),
         body_lines,
         true,
     );
-    render_inline_titled_panel(frame, layout[1], Line::from("Summary"), summary_lines, true);
-    render_inline_titled_panel(frame, layout[2], Line::from("Options"), option_lines, false);
-    render_inline_titled_panel(frame, layout[3], Line::from("Status"), status_lines, true);
-    render_inline_titled_panel(frame, layout[4], Line::from("Keys"), key_lines, true);
+    render_fullscreen_titled_panel(frame, layout[1], Line::from("Summary"), summary_lines, true);
+    render_fullscreen_titled_panel(frame, layout[2], Line::from("Options"), option_lines, false);
+    render_fullscreen_titled_panel(frame, layout[3], Line::from("Status"), status_lines, true);
+    render_fullscreen_titled_panel(frame, layout[4], Line::from("Keys"), key_lines, true);
 }
-fn draw_inline_draft_editor_inspection(
+fn draw_fullscreen_draft_editor_inspection(
     frame: &mut Frame<'_>,
     area: Rect,
     title: &'static str,
@@ -1191,23 +1199,23 @@ fn draw_inline_draft_editor_inspection(
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(inline_section_height(&body_lines, 4)),
-            Constraint::Length(inline_section_height(&file_lines, 5)),
+            Constraint::Length(fullscreen_section_height(&body_lines, 4)),
+            Constraint::Length(fullscreen_section_height(&file_lines, 5)),
             Constraint::Min(editor_height),
-            Constraint::Length(inline_section_height(&status_lines, 6)),
-            Constraint::Length(inline_section_height(&key_lines, 5)),
+            Constraint::Length(fullscreen_section_height(&status_lines, 6)),
+            Constraint::Length(fullscreen_section_height(&key_lines, 5)),
         ])
         .split(area);
 
-    render_inline_titled_panel(
+    render_fullscreen_titled_panel(
         frame,
         layout[0],
-        inline_overlay_title(title),
+        fullscreen_overlay_title(title),
         body_lines,
         true,
     );
-    render_inline_titled_panel(frame, layout[1], Line::from("Files"), file_lines, true);
-    render_inline_scrolled_panel(
+    render_fullscreen_titled_panel(frame, layout[1], Line::from("Files"), file_lines, true);
+    render_fullscreen_scrolled_panel(
         frame,
         layout[2],
         Line::from(editor_title),
@@ -1216,18 +1224,18 @@ fn draw_inline_draft_editor_inspection(
     );
     // Cursor placement happens after rendering because the editor section title
     // consumes the first row of the split section.
-    let editor_content_area = split_inline_section(layout[2])[1];
+    let editor_content_area = split_fullscreen_section(layout[2])[1];
     set_cursor_if_visible(frame, editor_content_area, editor_cursor_offset);
-    render_inline_titled_panel(frame, layout[3], Line::from("Status"), status_lines, true);
-    render_inline_titled_panel(frame, layout[4], Line::from("Keys"), key_lines, true);
+    render_fullscreen_titled_panel(frame, layout[3], Line::from("Status"), status_lines, true);
+    render_fullscreen_titled_panel(frame, layout[4], Line::from("Keys"), key_lines, true);
 }
-fn draw_inline_session_list_panel(
+fn draw_fullscreen_session_list_panel(
     frame: &mut Frame<'_>,
     area: Rect,
     mut list_state: ListState,
     list_view: OverlayListView,
 ) -> ListState {
-    let section_layout = split_inline_section(area);
+    let section_layout = split_fullscreen_section(area);
     frame.render_widget(
         Paragraph::new(vec![Line::from("Threads")]),
         section_layout[0],

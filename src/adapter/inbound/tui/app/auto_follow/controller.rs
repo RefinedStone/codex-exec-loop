@@ -64,12 +64,6 @@ impl NativeTuiApp {
             .shows_debug_details()
     }
 
-    #[cfg(test)]
-    pub(crate) fn live_activity_pulse(&self, now: Instant) -> Option<u64> {
-        let sample = ParallelPanelProjectionSample::capture(self);
-        self.live_activity_pulse_with_sample(now, &sample)
-    }
-
     pub(in crate::adapter::inbound::tui::app) fn live_activity_pulse_with_sample(
         &self,
         now: Instant,

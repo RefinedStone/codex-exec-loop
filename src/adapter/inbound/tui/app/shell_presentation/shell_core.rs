@@ -14,9 +14,7 @@ use crate::core::app::{
     AutoFollowPhase, ParallelModeProjection, PlanningParallelProjection,
     RevisionedPlanningParallelProjection,
 };
-use crate::domain::conversation::{
-    ConversationMessage, ConversationMessageKind, ConversationTurnSteerRequest,
-};
+use crate::domain::conversation::{ConversationMessageKind, ConversationTurnSteerRequest};
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
 use crate::domain::planning::PlanningWorkerPanelState;
 
@@ -31,10 +29,9 @@ use super::capability_projection::{
 };
 use super::{
     AutoFollowSnapshotPresentation, ConversationComposerState, ConversationInputState,
-    ConversationState, ConversationViewModel, HistoryInsertionMode, InlineHistoryRenderMode,
-    InlineShellCommandCapabilitySet, ParallelPanelStateController, ProgressiveActivityWaitStatus,
-    SessionState, ShellActionAvailability, ShellOverlay, StartupState,
-    TranscriptHandoffCorrelation, TuiLanguage,
+    ConversationState, ConversationViewModel, InlineShellCommandCapabilitySet,
+    ParallelPanelStateController, ProgressiveActivityWaitStatus, SessionState,
+    ShellActionAvailability, ShellOverlay, StartupState, TuiLanguage,
 };
 
 pub(in crate::adapter::inbound::tui::app) const MAX_GITHUB_REVIEW_NOTICE_LEN: usize = 160;
@@ -138,15 +135,10 @@ impl ParallelPanelProjectionSample {
 }
 
 pub(in crate::adapter::inbound::tui::app) struct ConversationProjectionSample {
-    core_revision: u64,
-    conversation_history_identity_revision: u64,
-    transcript_handoff_correlation: Option<TranscriptHandoffCorrelation>,
     planning_runtime_workspace_directory: Option<String>,
     planning_runtime: Box<PlanningRuntimeProjection>,
     parallel_panel: ParallelPanelProjectionSample,
     parallel_supervisor_events: ParallelEventStreamSnapshot,
-    inline_history_render_mode: InlineHistoryRenderMode,
-    history_insert_mode: HistoryInsertionMode,
     rendered_at: Instant,
     animation_elapsed_millis: u128,
 }
@@ -156,47 +148,8 @@ pub(in crate::adapter::inbound::tui::app) struct ConversationProjectionFrameInpu
         RevisionedPlanningParallelProjection,
     pub(in crate::adapter::inbound::tui::app) parallel_control_plane:
         ParallelModeControlPlanePresentationProjection,
-    pub(in crate::adapter::inbound::tui::app) conversation_history_identity_revision: u64,
-    pub(in crate::adapter::inbound::tui::app) transcript_handoff_correlation:
-        Option<TranscriptHandoffCorrelation>,
     pub(in crate::adapter::inbound::tui::app) parallel_supervisor_events:
         ParallelEventStreamSnapshot,
-    pub(in crate::adapter::inbound::tui::app) inline_history_render_mode: InlineHistoryRenderMode,
-    pub(in crate::adapter::inbound::tui::app) history_insert_mode: HistoryInsertionMode,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::adapter::inbound::tui::app) struct TranscriptHandoffDeliveryToken {
-    conversation_history_identity_revision: u64,
-    correlation: TranscriptHandoffCorrelation,
-}
-
-impl TranscriptHandoffDeliveryToken {
-    pub(in crate::adapter::inbound::tui::app) fn from_sample(
-        sample: &ConversationProjectionSample,
-    ) -> Option<Self> {
-        Some(Self {
-            conversation_history_identity_revision: sample.conversation_history_identity_revision(),
-            correlation: sample.transcript_handoff_correlation.clone()?,
-        })
-    }
-
-    pub(in crate::adapter::inbound::tui::app) fn matches_current(
-        &self,
-        conversation_history_identity_revision: u64,
-        transcript_handoff_correlation: Option<&TranscriptHandoffCorrelation>,
-    ) -> bool {
-        if self.conversation_history_identity_revision != conversation_history_identity_revision {
-            return false;
-        }
-        transcript_handoff_correlation == Some(&self.correlation)
-    }
-
-    pub(in crate::adapter::inbound::tui::app) fn correlation(
-        &self,
-    ) -> &TranscriptHandoffCorrelation {
-        &self.correlation
-    }
 }
 
 impl ConversationProjectionSample {
@@ -211,18 +164,7 @@ impl ConversationProjectionSample {
                 .runtime
                 .client_runtime
                 .parallel_control_plane_projection(),
-            conversation_history_identity_revision: app
-                .conversation
-                .conversation_history_identity_revision,
-            transcript_handoff_correlation: match &app.conversation.lifecycle.conversation_state {
-                ConversationState::Ready(conversation) => {
-                    conversation.viewport_transcript_handoff_correlation()
-                }
-                ConversationState::Loading | ConversationState::Failed(_) => None,
-            },
             parallel_supervisor_events: app.shell.parallel_event_stream.snapshot(),
-            inline_history_render_mode: app.shell.inline_history_render_mode,
-            history_insert_mode: app.shell.history_insert_mode,
         })
     }
 
@@ -230,7 +172,7 @@ impl ConversationProjectionSample {
         input: ConversationProjectionFrameInput,
     ) -> Self {
         let RevisionedPlanningParallelProjection {
-            revision: core_revision,
+            revision: _,
             planning_parallel,
         } = input.planning_parallel;
         let PlanningParallelProjection {
@@ -239,9 +181,6 @@ impl ConversationProjectionSample {
             parallel_mode,
         } = planning_parallel;
         Self {
-            core_revision,
-            conversation_history_identity_revision: input.conversation_history_identity_revision,
-            transcript_handoff_correlation: input.transcript_handoff_correlation,
             planning_runtime_workspace_directory,
             planning_runtime,
             parallel_panel: ParallelPanelProjectionSample::from_parts(
@@ -249,8 +188,6 @@ impl ConversationProjectionSample {
                 input.parallel_control_plane,
             ),
             parallel_supervisor_events: input.parallel_supervisor_events,
-            inline_history_render_mode: input.inline_history_render_mode,
-            history_insert_mode: input.history_insert_mode,
             rendered_at: Instant::now(),
             animation_elapsed_millis: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -260,12 +197,6 @@ impl ConversationProjectionSample {
 
     pub(in crate::adapter::inbound::tui::app) fn parallel_mode_enabled(&self) -> bool {
         self.parallel_panel.parallel_mode_enabled()
-    }
-
-    pub(in crate::adapter::inbound::tui::app) fn conversation_history_identity_revision(
-        &self,
-    ) -> u64 {
-        self.conversation_history_identity_revision
     }
 
     pub(in crate::adapter::inbound::tui::app) fn parallel_mode_control_effect_in_flight(
@@ -293,25 +224,6 @@ impl ConversationProjectionSample {
         &self,
     ) -> &[ParallelModeGlobalRuntimeNoticeProjection] {
         self.parallel_panel.global_runtime_notices()
-    }
-
-    #[cfg(test)]
-    pub(in crate::adapter::inbound::tui::app) fn parallel_panel_sample(
-        &self,
-    ) -> &ParallelPanelProjectionSample {
-        &self.parallel_panel
-    }
-
-    pub(in crate::adapter::inbound::tui::app) fn inline_history_render_mode(
-        &self,
-    ) -> InlineHistoryRenderMode {
-        self.inline_history_render_mode
-    }
-
-    pub(in crate::adapter::inbound::tui::app) fn history_insert_mode(
-        &self,
-    ) -> HistoryInsertionMode {
-        self.history_insert_mode
     }
 
     pub(in crate::adapter::inbound::tui::app) fn parallel_event_stream_snapshot(
@@ -350,7 +262,6 @@ pub(in crate::adapter::inbound::tui::app) struct ConversationComposerScreenModel
     pub(in crate::adapter::inbound::tui::app) input_state: ConversationInputState,
     pub(in crate::adapter::inbound::tui::app) post_turn_settlement_in_flight: bool,
     pub(in crate::adapter::inbound::tui::app) auto_follow_has_live_activity: bool,
-    pub(in crate::adapter::inbound::tui::app) viewport_transcript_handoff_pending: bool,
 }
 
 impl<'a> ConversationComposerScreenModel<'a> {
@@ -362,8 +273,6 @@ impl<'a> ConversationComposerScreenModel<'a> {
             input_state: conversation.input_state(),
             post_turn_settlement_in_flight: conversation.has_post_turn_settlement_in_flight(),
             auto_follow_has_live_activity: conversation.auto_follow_state().has_live_activity(),
-            viewport_transcript_handoff_pending: conversation
-                .has_pending_viewport_transcript_handoff(),
         }
     }
 }
@@ -388,87 +297,19 @@ impl ConversationRuntimeStatusScreenModel {
             auto_follow_phase: conversation.auto_follow_state().phase.clone(),
             auto_follow_max_turns_label: conversation.auto_follow_state().max_auto_turns_label(),
             input_state: conversation.input_state(),
-            live_agent_message_present: conversation.live_agent_message.is_some(),
+            live_agent_message_present: conversation.has_running_turn()
+                && conversation
+                    .messages
+                    .iter()
+                    .rev()
+                    .find(|message| message.kind != ConversationMessageKind::Status)
+                    .is_some_and(|message| message.kind == ConversationMessageKind::Agent),
             wait_status: conversation.progressive_activity_detail.wait_status(
                 conversation.progressive_activity.retrying_summary(),
                 conversation.pending_approval_request().is_some(),
             ),
             interrupt_support_label: conversation.interrupt_support_label(),
         }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::adapter::inbound::tui::app) struct ConversationLiveTranscriptScreenModel<'a> {
-    pub(in crate::adapter::inbound::tui::app) handoff_messages: Option<&'a [ConversationMessage]>,
-    pub(in crate::adapter::inbound::tui::app) buffered_tool_messages: &'a [ConversationMessage],
-    pub(in crate::adapter::inbound::tui::app) live_agent_message: Option<&'a ConversationMessage>,
-    pub(in crate::adapter::inbound::tui::app) recent_tail_messages:
-        [Option<&'a ConversationMessage>; 2],
-    pub(in crate::adapter::inbound::tui::app) handoff_pending: bool,
-    pub(in crate::adapter::inbound::tui::app) acknowledge_handoff_after_successful_draw: bool,
-}
-
-impl<'a> ConversationLiveTranscriptScreenModel<'a> {
-    fn from_conversation(
-        conversation: &'a ConversationViewModel,
-        inline_history_render_mode: InlineHistoryRenderMode,
-        shell_overlay: ShellOverlay,
-        dialog_visible: bool,
-    ) -> Self {
-        let release_handoff_messages = conversation.viewport_transcript_handoff_release_messages();
-        let handoff_messages = conversation
-            .viewport_transcript_handoff_messages()
-            .or(release_handoff_messages);
-        let handoff_pending = conversation.has_pending_viewport_transcript_handoff();
-        Self {
-            handoff_messages,
-            buffered_tool_messages: conversation.buffered_tool_messages(),
-            live_agent_message: conversation.live_agent_message.as_ref(),
-            recent_tail_messages: if handoff_pending {
-                [None, None]
-            } else {
-                Self::recent_tail_messages(conversation, inline_history_render_mode)
-            },
-            handoff_pending,
-            acknowledge_handoff_after_successful_draw: shell_overlay == ShellOverlay::Hidden
-                && !dialog_visible
-                && matches!(
-                    inline_history_render_mode,
-                    InlineHistoryRenderMode::ViewportReplay
-                )
-                && release_handoff_messages.is_some(),
-        }
-    }
-
-    fn recent_tail_messages(
-        conversation: &'a ConversationViewModel,
-        inline_history_render_mode: InlineHistoryRenderMode,
-    ) -> [Option<&'a ConversationMessage>; 2] {
-        if !inline_history_render_mode.mirrors_recent_transcript_in_tail() {
-            return [None, None];
-        }
-
-        // Prefer the last two human-visible rows, in chronological display order.
-        let mut messages = conversation.messages.iter().rev().filter(|message| {
-            message.kind != ConversationMessageKind::Tool
-                && message.kind != ConversationMessageKind::Status
-        });
-        let newest = messages.next();
-        let previous = messages.next();
-        if newest.is_some() {
-            return [previous, newest];
-        }
-
-        // Status is useful fallback context before any user or agent message exists.
-        let mut messages = conversation
-            .messages
-            .iter()
-            .rev()
-            .filter(|message| message.kind != ConversationMessageKind::Tool);
-        let newest = messages.next();
-        let previous = messages.next();
-        [previous, newest]
     }
 }
 
@@ -510,8 +351,6 @@ pub(in crate::adapter::inbound::tui::app) struct ConversationScreenFrameInput<'a
 }
 
 pub(in crate::adapter::inbound::tui::app) struct ConversationScreenModel<'a> {
-    pub(in crate::adapter::inbound::tui::app) core_revision: u64,
-    transcript_handoff_delivery_token: Option<TranscriptHandoffDeliveryToken>,
     pub(in crate::adapter::inbound::tui::app) rendered_at: Instant,
     pub(in crate::adapter::inbound::tui::app) animation_elapsed_millis: u128,
     pub(in crate::adapter::inbound::tui::app) startup_state: &'a StartupState,
@@ -545,14 +384,12 @@ pub(in crate::adapter::inbound::tui::app) struct ConversationScreenModel<'a> {
     pub(in crate::adapter::inbound::tui::app) context_pressure_basis_points: Option<u16>,
     pub(in crate::adapter::inbound::tui::app) turn_options_summary: Option<String>,
     pub(in crate::adapter::inbound::tui::app) shell_overlay: ShellOverlay,
-    pub(in crate::adapter::inbound::tui::app) inline_history_render_mode: InlineHistoryRenderMode,
     pub(in crate::adapter::inbound::tui::app) exit_confirmation_visible: bool,
     pub(in crate::adapter::inbound::tui::app) turn_steer_confirmation:
         Option<TurnSteerConfirmationScreenModel>,
     pub(in crate::adapter::inbound::tui::app) prompt_input_has_focus: bool,
     composer: Option<ConversationComposerScreenModel<'a>>,
     runtime_status: Option<ConversationRuntimeStatusScreenModel>,
-    live_transcript: Option<ConversationLiveTranscriptScreenModel<'a>>,
     pub(in crate::adapter::inbound::tui::app) conversation_state: ShellConversationState<'a>,
 }
 
@@ -637,7 +474,6 @@ impl<'a> ConversationScreenModel<'a> {
         input: ConversationScreenFrameInput<'a>,
         sample: &ConversationProjectionSample,
     ) -> Self {
-        let core_revision = sample.core_revision;
         let workspace_directory = input.workspace_directory.clone();
         let planning_runtime_projection = if sample.planning_runtime_workspace_directory.as_deref()
             == workspace_directory.as_deref()
@@ -688,20 +524,11 @@ impl<'a> ConversationScreenModel<'a> {
             .shell_overlay
             .prompt_input_has_focus(dialog_visible, parallel_mode_prompt_input_locked);
         let queue_mutation_tail_state = input.queue_mutation_tail_state;
-        let inline_history_render_mode = sample.inline_history_render_mode();
         let conversation_state = input.conversation_state;
         let composer = Self::composer_for_state(conversation_state);
         let runtime_status = Self::runtime_status_for_state(conversation_state);
-        let live_transcript = Self::live_transcript_for_state(
-            conversation_state,
-            inline_history_render_mode,
-            input.shell_overlay,
-            dialog_visible,
-        );
 
         Self {
-            core_revision,
-            transcript_handoff_delivery_token: TranscriptHandoffDeliveryToken::from_sample(sample),
             rendered_at: sample.rendered_at,
             animation_elapsed_millis: sample.animation_elapsed_millis,
             startup_state: input.startup_state,
@@ -747,13 +574,11 @@ impl<'a> ConversationScreenModel<'a> {
             },
             turn_options_summary: input.turn_options_summary,
             shell_overlay: input.shell_overlay,
-            inline_history_render_mode,
             exit_confirmation_visible,
             turn_steer_confirmation,
             prompt_input_has_focus,
             composer,
             runtime_status,
-            live_transcript,
             conversation_state,
         }
     }
@@ -809,122 +634,12 @@ impl<'a> ConversationScreenModel<'a> {
         }
     }
 
-    pub(in crate::adapter::inbound::tui::app) fn live_transcript(
-        &self,
-    ) -> Option<&ConversationLiveTranscriptScreenModel<'a>> {
-        match (self.conversation_state, self.live_transcript.as_ref()) {
-            (ShellConversationState::Ready(_), Some(live_transcript)) => Some(live_transcript),
-            (ShellConversationState::Loading | ShellConversationState::Failed(_), None) => None,
-            _ => unreachable!("conversation and live transcript projections must agree"),
-        }
-    }
-
-    fn live_transcript_for_state(
-        conversation_state: ShellConversationState<'a>,
-        inline_history_render_mode: InlineHistoryRenderMode,
-        shell_overlay: ShellOverlay,
-        dialog_visible: bool,
-    ) -> Option<ConversationLiveTranscriptScreenModel<'a>> {
-        match conversation_state {
-            ShellConversationState::Ready(conversation) => {
-                Some(ConversationLiveTranscriptScreenModel::from_conversation(
-                    conversation,
-                    inline_history_render_mode,
-                    shell_overlay,
-                    dialog_visible,
-                ))
-            }
-            ShellConversationState::Loading | ShellConversationState::Failed(_) => None,
-        }
-    }
-
     pub(in crate::adapter::inbound::tui::app) fn startup_screen_is_active(&self) -> bool {
         conversation_startup_screen_is_active(self.parallel_mode_enabled, self.ready_conversation())
     }
 
     pub(in crate::adapter::inbound::tui::app) fn dialog_visible(&self) -> bool {
         self.exit_confirmation_visible || self.turn_steer_confirmation.is_some()
-    }
-
-    pub(in crate::adapter::inbound::tui::app) fn renders_viewport_transcript_handoff(
-        &self,
-    ) -> bool {
-        self.live_transcript().is_some_and(|live_transcript| {
-            live_transcript.acknowledge_handoff_after_successful_draw
-        })
-    }
-
-    pub(in crate::adapter::inbound::tui::app) fn transcript_handoff_delivery_token(
-        &self,
-    ) -> Option<TranscriptHandoffDeliveryToken> {
-        if !self.renders_viewport_transcript_handoff() {
-            return None;
-        }
-        self.transcript_handoff_delivery_token.clone()
-    }
-
-    pub(in crate::adapter::inbound::tui::app) fn renders_parallel_viewport_handoff(&self) -> bool {
-        self.parallel_mode_enabled && self.renders_viewport_transcript_handoff()
-    }
-
-    #[cfg(test)]
-    pub(in crate::adapter::inbound::tui::app) fn from_test_parts(
-        startup_state: &'a StartupState,
-        shell_action_availability: ShellActionAvailability,
-        conversation_state: ShellConversationState<'a>,
-    ) -> Self {
-        let composer = Self::composer_for_state(conversation_state);
-        let runtime_status = Self::runtime_status_for_state(conversation_state);
-        let live_transcript = Self::live_transcript_for_state(
-            conversation_state,
-            InlineHistoryRenderMode::HostScrollback,
-            ShellOverlay::Hidden,
-            false,
-        );
-        Self {
-            core_revision: 0,
-            transcript_handoff_delivery_token: None,
-            rendered_at: Instant::now(),
-            animation_elapsed_millis: 0,
-            startup_state,
-            shell_action_availability,
-            inline_shell_command_capabilities: InlineShellCommandCapabilitySet::default(),
-            recent_session_status_label: "loaded".to_string(),
-            recent_session_status_requires_attention: false,
-            github_review_polling_status_label: "polling".to_string(),
-            github_review_recent_changes_summary: None,
-            tui_language: TuiLanguage::English,
-            parallel_mode_enabled: false,
-            parallel_mode_control_effect_in_flight: false,
-            last_parallel_mode_dispatch_withheld_reason: None,
-            global_runtime_notices: Vec::new(),
-            parallel_mode_loading_prompt_indicator_visible: false,
-            parallel_mode_readiness: None,
-            parallel_mode_supervisor: pending_parallel_mode_supervisor_snapshot(
-                ".",
-                false,
-                None,
-                ParallelModePresentationLoadingStage::Entering,
-            ),
-            parallel_event_stream_snapshot: ParallelEventStreamSnapshot::default(),
-            planning_runtime_projection: PlanningRuntimeProjection::uninitialized(),
-            planning_worker_shows_debug_details: false,
-            planning_worker_panel_state: PlanningWorkerPanelState::default(),
-            queue_mutation_tail_state: QueueMutationTailState::Idle,
-            workspace_directory: ".".to_string(),
-            turn_options_hud_label: "model: default  |  think: default".to_string(),
-            context_pressure_basis_points: None,
-            turn_options_summary: None,
-            shell_overlay: ShellOverlay::Hidden,
-            inline_history_render_mode: InlineHistoryRenderMode::HostScrollback,
-            exit_confirmation_visible: false,
-            turn_steer_confirmation: None,
-            prompt_input_has_focus: true,
-            composer,
-            runtime_status,
-            live_transcript,
-            conversation_state,
-        }
     }
 }
 
@@ -942,7 +657,6 @@ pub(in crate::adapter::inbound::tui::app) fn conversation_startup_screen_is_acti
     !conversation.has_active_thread()
         && conversation.messages.is_empty()
         && conversation.active_turn_id().is_none()
-        && conversation.live_agent_message.is_none()
 }
 
 pub(in crate::adapter::inbound::tui::app) fn shell_conversation_state(

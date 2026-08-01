@@ -3,7 +3,7 @@ use crate::application::service::planning::{
 };
 
 use super::super::super::super::status_panels::plan_runtime_substate_label;
-use super::super::super::super::{FOOTER_NOTICE_DETAIL_LIMIT, compact_inline_detail};
+use super::super::super::super::{FOOTER_NOTICE_DETAIL_LIMIT, compact_shell_detail};
 use super::copy::PlanningExistingWorkspaceCopy;
 
 // existing workspace popup은 이미 planning artifact가 있는 directory에서 새 init을
@@ -23,12 +23,12 @@ pub(super) fn build_existing_workspace_copy(
     let queue_summary = projection
         .queue_summary
         .as_deref()
-        .map(|summary| compact_inline_detail(summary, FOOTER_NOTICE_DETAIL_LIMIT))
+        .map(|summary| compact_shell_detail(summary, FOOTER_NOTICE_DETAIL_LIMIT))
         .unwrap_or_else(|| "queue state unavailable".to_string());
     let failure_summary = (projection.workspace_status == PlanningRuntimeWorkspaceStatus::Invalid)
         .then_some(projection.status_detail.as_deref())
         .flatten()
-        .map(|summary| compact_inline_detail(summary, FOOTER_NOTICE_DETAIL_LIMIT));
+        .map(|summary| compact_shell_detail(summary, FOOTER_NOTICE_DETAIL_LIMIT));
 
     PlanningExistingWorkspaceCopy {
         workspace_directory: workspace_directory.to_string(),

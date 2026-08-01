@@ -145,7 +145,7 @@ pub(super) fn session_catalog_warning_blocked_line() -> &'static str {
 
 pub(super) fn startup_diagnostic_marker(ok: bool) -> &'static str {
     /*
-     * startup check rows는 popup과 inline inspection의 좁은 폭을 공유한다. verbose 상태 문구 대신
+     * startup check rows는 popup과 fullscreen inspection의 좁은 폭을 공유한다. verbose 상태 문구 대신
      * bracket marker를 쓰면 title/detail을 보존하면서도 여러 capability를 빠르게 훑을 수 있다.
      */
     if ok { "[ok]" } else { "[warn]" }

@@ -10,13 +10,13 @@ shell presentation은 terminal frame capture가 만든 typed input과 owned scre
 복잡한 copy/overlay/status 계산은 파일별 하위 모듈로 분리한다.
 */
 
-// footer는 화면 하단의 넓은 status area이고 inline tail은 입력 프롬프트 옆의 매우 좁은
+// footer는 화면 하단의 넓은 status area이고 shell tail은 입력 프롬프트 옆의 매우 좁은
 // 영역이다. 같은 domain detail이라도 두 영역에서 읽을 수 있는 길이가 달라 별도 limit을 둔다.
 const FOOTER_NOTICE_DETAIL_LIMIT: usize = 56;
-const INLINE_TAIL_STATUS_DETAIL_LIMIT: usize = 44;
-const INLINE_TAIL_NOTICE_DETAIL_LIMIT: usize = 40;
-const INLINE_TAIL_PLANNING_DETAIL_LIMIT: usize = 36;
-const INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT: usize = 18;
+const SHELL_TAIL_STATUS_DETAIL_LIMIT: usize = 44;
+const SHELL_TAIL_NOTICE_DETAIL_LIMIT: usize = 40;
+const SHELL_TAIL_PLANNING_DETAIL_LIMIT: usize = 36;
+const SHELL_TAIL_AUTO_FOLLOW_DETAIL_LIMIT: usize = 18;
 const INLINE_COMMAND_PALETTE_VISIBLE_LIMIT: usize = 4;
 pub(super) const QUEUE_INSPECTION_TASK_LIMIT: usize = 2;
 pub(super) const QUEUE_INSPECTION_PROPOSAL_LIMIT: usize = 1;
@@ -48,6 +48,8 @@ mod terminal_text;
 #[path = "shell_presentation/transcript_copy.rs"]
 mod transcript_copy;
 
+#[cfg(test)]
+pub(super) use overlays::build_planning_init_overlay_view;
 pub(super) use overlays::build_queue_overlay_view_from_screen_model;
 pub(super) use overlays::{
     ActivityOverlayDocument, ActivityOverlayView, DirectionsMaintenanceFrameInput,
@@ -67,84 +69,37 @@ pub(super) use overlays::{
     build_supersession_overlay_view, build_view_selection_overlay_view,
     build_work_center_overlay_view,
 };
-#[cfg(test)]
-pub(super) use overlays::{build_parallel_peek_overlay_view, build_planning_init_overlay_view};
-use runtime_status_copy::{build_working_line, compact_inline_detail};
+use runtime_status_copy::{build_working_line, compact_shell_detail};
 pub(super) use shell_core::QueueMutationTailState;
 use shell_core::ShellConversationState;
 pub(super) use shell_core::{
-    ConversationComposerScreenModel, ConversationLiveTranscriptScreenModel,
-    ConversationProjectionFrameInput, ConversationProjectionSample,
-    ConversationRuntimeStatusScreenModel, ConversationScreenFrameInput, ConversationScreenModel,
-    MAX_GITHUB_REVIEW_NOTICE_LEN, ParallelPanelProjectionSample, TranscriptHandoffDeliveryToken,
-    TurnSteerConfirmationScreenModel, conversation_startup_screen_is_active,
-    presentation_workspace_directory, shell_conversation_state,
+    ConversationComposerScreenModel, ConversationProjectionFrameInput,
+    ConversationProjectionSample, ConversationRuntimeStatusScreenModel,
+    ConversationScreenFrameInput, ConversationScreenModel, MAX_GITHUB_REVIEW_NOTICE_LEN,
+    ParallelPanelProjectionSample, TurnSteerConfirmationScreenModel,
+    conversation_startup_screen_is_active, presentation_workspace_directory,
+    shell_conversation_state,
 };
 pub(super) use startup_banner::startup_ascii_art_lines;
-pub(super) use status_panels::InlineTailView;
-#[cfg(test)]
-pub(super) use transcript_copy::format_conversation_lines_with_debug;
+pub(super) use status_panels::ShellTailView;
 pub(super) use transcript_copy::{
     ConversationTranscriptCardRow, ConversationTranscriptView,
-    format_conversation_scrollback_lines_with_expand_at_width,
+    format_fullscreen_conversation_transcript_view,
 };
-#[cfg(test)]
-pub(super) use transcript_copy::{format_conversation_lines, format_conversation_lines_for_view};
 
-#[cfg(test)]
-pub(super) fn build_inline_tail_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    let screen_model = ConversationScreenModel::from_app(app);
-    status_panels::build_inline_tail_lines(&screen_model)
-}
-
-pub(super) fn build_inline_tail_view(
+pub(super) fn build_shell_tail_view(
     screen_model: &ConversationScreenModel<'_>,
     content_width: u16,
-) -> InlineTailView {
+) -> ShellTailView {
     // renderer는 폭만 알고 status panel의 세부 우선순위는 알지 못한다. content_width를
     // 넘겨 presentation 쪽에서 어떤 상태를 남기고 줄일지 결정한다.
-    status_panels::build_inline_tail_view(screen_model, content_width)
+    status_panels::build_shell_tail_view(screen_model, content_width)
 }
 
 pub(super) fn build_operator_diagnostic_lines(
     screen_model: &ConversationScreenModel<'_>,
 ) -> Vec<Line<'static>> {
     status_panels::build_operator_diagnostic_lines(screen_model)
-}
-
-#[cfg(test)]
-pub(super) fn build_inline_live_transcript_lines(
-    screen_model: &ConversationScreenModel<'_>,
-) -> Vec<Line<'static>> {
-    // loading/failed 상태에서는 live transcript projection이 없으므로 빈 view를 반환한다.
-    let Some(live_transcript) = screen_model.live_transcript() else {
-        return Vec::new();
-    };
-    status_panels::current_live_agent_lines(live_transcript).unwrap_or_default()
-}
-
-pub(super) fn build_inline_live_transcript_view(
-    screen_model: &ConversationScreenModel<'_>,
-    view_mode: ConversationViewMode,
-    show_debug_details: bool,
-    expand_state: &ProgressiveActivityExpandState,
-    width: u16,
-) -> ConversationTranscriptView {
-    let Some(live_transcript) = screen_model.live_transcript() else {
-        return ConversationTranscriptView {
-            lines: Vec::new(),
-            card_rows: Vec::new(),
-        };
-    };
-    transcript_copy::format_live_conversation_transcript_view(
-        live_transcript.handoff_messages,
-        live_transcript.buffered_tool_messages,
-        live_transcript.live_agent_message,
-        view_mode,
-        show_debug_details,
-        expand_state,
-        width,
-    )
 }
 
 #[cfg(test)]

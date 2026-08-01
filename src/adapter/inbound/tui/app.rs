@@ -11,8 +11,6 @@ use crate::domain::conversation::{
     ConversationMessage, ConversationMessageKind, ConversationReasoningEffort,
     ConversationTurnOptions, ConversationTurnSteerRequest,
 };
-#[cfg(test)]
-use crate::domain::planning::PlanningWorkerStatus;
 use crate::domain::planning::{ManualPromptCorrelation, PlanningWorkerPanelState};
 use crossterm::event::{self, KeyCode, KeyModifiers};
 use ratatui::layout::Rect;
@@ -29,20 +27,15 @@ use std::sync::mpsc::{Receiver, SyncSender};
 
 // These defaults define the shell's bounded presentation surface: session lists
 // are paged, transcript history is capped, auto-follow is disabled until the
-// operator explicitly supplies a positive budget, and inline panels stay short
+// operator explicitly supplies a positive budget, and fullscreen panels stay short
 // enough to keep the prompt visible.
 const SESSION_PAGE_SIZE: usize = 10;
-const MAX_CONVERSATION_HISTORY_LINES: usize = 160;
 const DISABLED_AUTO_FOLLOW_MAX_TURNS_TOKEN: &str = "off";
 const INFINITE_AUTO_FOLLOW_MAX_TURNS: usize = usize::MAX;
 const INFINITE_AUTO_FOLLOW_MAX_TURNS_TOKEN: &str = "infinite";
 const MIN_TRANSCRIPT_PANEL_HEIGHT: u16 = 12;
-const MAX_INLINE_TAIL_HEIGHT: u16 = 10;
-const INLINE_VIEWPORT_HEIGHT: u16 = 16;
-const INLINE_HOST_SCROLLBACK_REFLOW_GUARD_ROWS: u16 = 2;
+const MAX_SHELL_TAIL_HEIGHT: u16 = 10;
 const STARTUP_ASCII_ART_ENV_VAR: &str = "CODEX_EXEC_LOOP_SHOW_STARTUP_ASCII_ART";
-const INLINE_HISTORY_RENDER_MODE_ENV_VAR: &str = "CODEX_EXEC_LOOP_INLINE_HISTORY_MODE";
-const HISTORY_INSERT_MODE_ENV_VAR: &str = "CODEX_EXEC_LOOP_HISTORY_INSERT_MODE";
 
 /*
  * The #[path] list is deliberately flat: each child file owns one reducer,
@@ -72,18 +65,14 @@ mod conversation_model;
 mod conversation_runtime;
 #[path = "app/directions_maintenance_ui.rs"]
 mod directions_maintenance_ui;
+#[path = "app/fullscreen_frame_model.rs"]
+mod fullscreen_frame_model;
+#[path = "app/fullscreen_terminal_adapter.rs"]
+mod fullscreen_terminal_adapter;
 #[path = "app/github_polling.rs"]
 mod github_polling;
-#[path = "app/history_insertion.rs"]
-mod history_insertion;
-#[path = "app/inline_frame_model.rs"]
-mod inline_frame_model;
 #[path = "app/inline_shell_commands.rs"]
 mod inline_shell_commands;
-#[path = "app/inline_terminal_adapter.rs"]
-mod inline_terminal_adapter;
-#[path = "app/inline_transcript_ui.rs"]
-mod inline_transcript_ui;
 #[path = "app/language.rs"]
 mod language;
 #[path = "app/model_selection_overlay_ui.rs"]
@@ -100,10 +89,10 @@ mod parallel_peek;
 mod parallel_peek_overlay_ui;
 #[path = "app/parallel_mode/presentation_bridge.rs"]
 mod parallel_presentation_bridge;
+#[path = "app/parallel_stream_view.rs"]
+mod parallel_stream_view;
 #[path = "app/parallel_supervisor_events.rs"]
 mod parallel_supervisor_events;
-#[path = "app/parallel_terminal_delivery.rs"]
-mod parallel_terminal_delivery;
 #[path = "app/planning/mod.rs"]
 mod planning;
 #[path = "app/planning_draft_editor_ui.rs"]
@@ -161,9 +150,8 @@ mod shell_runtime;
 pub(crate) mod test_helpers;
 #[path = "app/theme.rs"]
 mod theme;
-#[cfg(test)]
-#[path = "app/tui_testkit.rs"]
-mod tui_testkit;
+#[path = "app/transcript_viewport_ui.rs"]
+mod transcript_viewport_ui;
 #[path = "app/turn_submission_runtime.rs"]
 mod turn_submission_runtime;
 #[path = "app/view_selection_overlay_ui.rs"]
@@ -200,8 +188,8 @@ pub(super) use conversation_model::{
     ConversationInputState, ConversationState, ConversationViewModel, ProgressiveActivityCard,
     ProgressiveActivityCardKey, ProgressiveActivityCardKind, ProgressiveActivityCardOutcome,
     ProgressiveActivityCardSource, ProgressiveActivityDetailKind, ProgressiveActivityExpandState,
-    ProgressiveActivityWaitKind, ProgressiveActivityWaitStatus, TranscriptHandoffCorrelation,
-    filter_cards_by_kind, normalize_max_auto_turns_candidate,
+    ProgressiveActivityWaitKind, ProgressiveActivityWaitStatus, filter_cards_by_kind,
+    normalize_max_auto_turns_candidate,
 };
 use conversation_runtime::{
     ConversationRuntimeEffect, ConversationRuntimeEvent,
@@ -212,13 +200,11 @@ use directions_maintenance_ui::{
     DirectionsMaintenanceProjectionKind, DirectionsMaintenanceScreenModel,
 };
 use github_polling::{GithubReviewPollingBootstrap, GithubReviewPollingState};
-use history_insertion::HistoryInsertionMode;
 use inline_shell_commands::{
     InlineShellCommand, InlineShellCommandAvailability, InlineShellCommandAvailabilityReason,
     InlineShellCommandCapabilityContext, InlineShellCommandCapabilitySet, InlineShellCommandInput,
     InlineShellCommandStartupReadiness, is_turn_option_clear_argument,
 };
-use inline_transcript_ui::{InlineTranscriptCardHitArea, InlineTranscriptUiState};
 use language::{LANGUAGE_SELECTION_OPTIONS, LanguageSelectionOverlayUiState, TuiLanguage};
 use model_selection_overlay_ui::{
     MODEL_SELECTION_EFFORT_OPTIONS, MODEL_SELECTION_MODEL_OPTIONS, ModelSelectionOverlayUiState,
@@ -257,10 +243,9 @@ pub(super) use shell_controller::ShellActionAvailability;
 pub use shell_entrypoint::run;
 use shell_frontend::ShellFrontendMode;
 #[cfg(test)]
-use shell_presentation::format_conversation_lines;
-#[cfg(test)]
-use shell_presentation::{build_inline_tail_lines, build_planning_init_overlay_view};
+use shell_presentation::build_planning_init_overlay_view;
 use theme::AkraTheme;
+use transcript_viewport_ui::{TranscriptCardHitArea, TranscriptViewportUiState};
 use view_selection_overlay_ui::{
     ConversationViewMode, VIEW_SELECTION_MODE_OPTIONS, ViewSelectionOverlayUiState,
 };
@@ -332,44 +317,6 @@ enum PromptOrigin {
     AutoFollow(Box<AutoFollowSubmitContext>),
 }
 
-// Inline history mode chooses where transcript history is rendered. Host
-// scrollback is the normal terminal-friendly path; viewport replay mirrors
-// recent transcript rows into the inline tail for environments that need a
-// self-contained frame.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum InlineHistoryRenderMode {
-    HostScrollback,
-    ViewportReplay,
-}
-impl InlineHistoryRenderMode {
-    fn from_environment() -> Self {
-        Self::from_env_values(
-            std::env::var(INLINE_HISTORY_RENDER_MODE_ENV_VAR)
-                .ok()
-                .as_deref(),
-        )
-    }
-    fn from_env_values(mode_value: Option<&str>) -> Self {
-        let explicit_mode = mode_value
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(|value| value.to_ascii_lowercase());
-        if let Some(explicit_mode) = explicit_mode {
-            return match explicit_mode.as_str() {
-                "viewport" | "viewport-replay" | "replay" | "mirror" => Self::ViewportReplay,
-                _ => Self::HostScrollback,
-            };
-        }
-        Self::HostScrollback
-    }
-    fn mirrors_recent_transcript_in_tail(self) -> bool {
-        matches!(self, Self::ViewportReplay)
-    }
-    fn writes_host_scrollback(self) -> bool {
-        matches!(self, Self::HostScrollback)
-    }
-}
-
 /*
  * NativeTuiApp is the host boundary, not a flat bag of feature state. Keeping
  * the four slices explicit makes a field access name the feature authority it
@@ -383,7 +330,7 @@ struct NativeTuiShellState {
     supersession_mud_ui_state: SupersessionMudUiState,
     parallel_peek_overlay_ui_state: ParallelPeekOverlayUiState,
     progressive_activity_overlay_ui_state: ProgressiveActivityOverlayUiState,
-    inline_transcript_ui_state: InlineTranscriptUiState,
+    transcript_viewport_ui_state: TranscriptViewportUiState,
     help_scroll_offset: usize,
     reviews_overlay_ui_state: reviews_overlay_ui::ReviewsOverlayUiState,
     parallel_event_stream: ParallelEventStreamState,
@@ -392,8 +339,6 @@ struct NativeTuiShellState {
     language_selection_overlay_ui_state: LanguageSelectionOverlayUiState,
     model_selection_overlay_ui_state: ModelSelectionOverlayUiState,
     view_selection_overlay_ui_state: ViewSelectionOverlayUiState,
-    inline_history_render_mode: InlineHistoryRenderMode,
-    history_insert_mode: HistoryInsertionMode,
     show_startup_ascii_art: bool,
 }
 
@@ -403,14 +348,13 @@ struct NativeTuiConversationState {
     prompt_input_revision: u64,
     turn_steer_confirmation: Option<TurnSteerUiIntent>,
     pending_turn_steer: Option<PendingTurnSteerUiIntent>,
-    // Monotonic semantic boundary for host-scrollback transcript delivery. A
-    // new draft or different loaded session advances it; assigning the first
-    // provider thread id to an existing draft does not.
-    conversation_history_identity_revision: u64,
+    // Monotonic identity for the app-owned transcript document. A new draft or
+    // different loaded session advances it; assigning the first provider thread
+    // id to an existing draft does not.
+    transcript_document_revision: u64,
     // The last authoritative transcript identity survives Loading/Failed so a
-    // deferred or failed load cannot make the terminal forget which baseline it
-    // has already delivered.
-    conversation_history_thread_id: Option<String>,
+    // deferred or failed load cannot make the viewport adopt another document.
+    transcript_document_thread_id: Option<String>,
     turn_options: ConversationTurnOptions,
     conversation_view_mode: ConversationViewMode,
     auto_follow_overlay_ui_state: AutoFollowOverlayUiState,
@@ -463,9 +407,7 @@ fn startup_ascii_art_enabled_from_value(value: Option<&str>) -> bool {
 
 #[cfg(test)]
 mod startup_ascii_art_env_tests {
-    use super::{
-        InlineHistoryRenderMode, PlanningWorkerVisibility, startup_ascii_art_enabled_from_value,
-    };
+    use super::{PlanningWorkerVisibility, startup_ascii_art_enabled_from_value};
     #[test]
     fn startup_ascii_art_defaults_to_enabled() {
         assert!(startup_ascii_art_enabled_from_value(None));
@@ -510,39 +452,5 @@ mod startup_ascii_art_env_tests {
             PlanningWorkerVisibility::from_env_value(Some("verbose")),
             PlanningWorkerVisibility::Debug
         );
-    }
-    #[test]
-    fn inline_history_render_mode_defaults_to_host_scrollback() {
-        assert_eq!(
-            InlineHistoryRenderMode::from_env_values(None),
-            InlineHistoryRenderMode::HostScrollback
-        );
-    }
-    #[test]
-    fn inline_history_render_mode_keeps_host_scrollback_for_windows_by_default() {
-        assert_eq!(
-            InlineHistoryRenderMode::from_env_values(None),
-            InlineHistoryRenderMode::HostScrollback
-        );
-    }
-    #[test]
-    fn inline_history_render_mode_supports_explicit_override() {
-        assert_eq!(
-            InlineHistoryRenderMode::from_env_values(Some("scrollback")),
-            InlineHistoryRenderMode::HostScrollback
-        );
-        assert_eq!(
-            InlineHistoryRenderMode::from_env_values(Some("viewport-replay")),
-            InlineHistoryRenderMode::ViewportReplay
-        );
-        assert_eq!(
-            InlineHistoryRenderMode::from_env_values(Some("mirror")),
-            InlineHistoryRenderMode::ViewportReplay
-        );
-    }
-    #[test]
-    fn viewport_replay_does_not_write_host_scrollback() {
-        assert!(InlineHistoryRenderMode::HostScrollback.writes_host_scrollback());
-        assert!(!InlineHistoryRenderMode::ViewportReplay.writes_host_scrollback());
     }
 }
