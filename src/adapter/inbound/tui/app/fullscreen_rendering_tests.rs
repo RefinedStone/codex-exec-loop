@@ -101,6 +101,28 @@ fn startup_screen_renders_the_akra_logo_above_the_composer() {
 }
 
 #[test]
+fn short_startup_screen_centers_the_logo_without_transcript_scrolling() {
+    let mut app = test_native_tui_app();
+    app.shell.show_startup_ascii_art = true;
+    let projection = FullscreenConversationFrameProjection::from_app(&app, 80);
+    let available_logo_height = 8_u16.saturating_sub(projection.tail_view.rendered_height(80, 8));
+    let expected_logo_lines = startup_ascii_art_lines(Some(available_logo_height))
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    let screen = render(&mut app, 80, 8);
+
+    for line in expected_logo_lines {
+        assert!(
+            screen.contains(&line),
+            "missing centered startup logo row: {line}"
+        );
+    }
+    assert!(screen.contains("Describe a task"));
+}
+
+#[test]
 fn transcript_window_rebases_scroll_offsets_beyond_u16_without_losing_the_target_row() {
     let lines = (0..1_000)
         .map(|index| Line::from(format!("{index:04}:{}", "x".repeat(75))))

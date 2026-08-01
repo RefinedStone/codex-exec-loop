@@ -9,7 +9,9 @@ pub(super) use super::fullscreen_frame_model::{
 use super::fullscreen_frame_model::{
     apply_fullscreen_frame_render_receipt, capture_fullscreen_shell_frame_model,
 };
-use super::shell_presentation::{ConversationTranscriptCardRow, TurnSteerConfirmationScreenModel};
+use super::shell_presentation::{
+    ConversationTranscriptCardRow, TurnSteerConfirmationScreenModel, startup_ascii_art_lines,
+};
 #[cfg(test)]
 use super::*;
 use super::{AkraTheme, ShellFrontendMode, ShellOverlay, TranscriptCardHitArea};
@@ -282,7 +284,8 @@ fn draw_fullscreen_conversation_shell(
                 // returning after only the tail would silently discard the logo.
                 let tail_height = tail_view.rendered_height(frame_area.width, frame_area.height);
                 let available_logo_height = frame_area.height.saturating_sub(tail_height);
-                let logo_height = count_wrapped_rows(&transcript_lines, frame_area.width)
+                let logo_lines = startup_ascii_art_lines(Some(available_logo_height));
+                let logo_height = count_wrapped_rows(&logo_lines, frame_area.width)
                     .min(usize::from(available_logo_height))
                     as u16;
                 let logo_area =
@@ -298,10 +301,10 @@ fn draw_fullscreen_conversation_shell(
                 let transcript_viewport_card_hit_areas = render_fullscreen_transcript(
                     frame,
                     logo_area,
-                    transcript_lines,
-                    transcript_card_rows,
-                    transcript_scroll_offset,
-                    transcript_has_unseen_output,
+                    logo_lines,
+                    Vec::new(),
+                    0,
+                    false,
                 );
                 return FullscreenConversationShellRenderReceipt {
                     queue_receipt_undo_hit_area: render_bottom_anchored_tail(
