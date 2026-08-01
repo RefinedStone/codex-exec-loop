@@ -219,20 +219,6 @@ impl TuiLanguage {
         }
     }
 
-    pub(super) const fn composer_dialog_hold_status(self) -> &'static str {
-        match self {
-            Self::English => "Response held while the dialog is open",
-            Self::Korean => "대화 상자가 열려 있어 응답 표시가 보류되었습니다",
-        }
-    }
-
-    pub(super) const fn composer_dialog_resume_action(self) -> &'static str {
-        match self {
-            Self::English => "Close the dialog to resume input",
-            Self::Korean => "입력을 계속하려면 대화 상자를 닫으세요",
-        }
-    }
-
     pub(super) const fn composer_loading_status(self) -> &'static str {
         match self {
             Self::English => "Preparing the prompt…",
@@ -1426,8 +1412,8 @@ impl TuiLanguage {
 
     pub(super) const fn shell_command_help_context(self) -> &'static str {
         match self {
-            Self::English => " / inline inspection",
-            Self::Korean => " / 인라인 보기",
+            Self::English => " / focused view",
+            Self::Korean => " / 집중 보기",
         }
     }
 
@@ -1858,32 +1844,6 @@ impl TuiLanguage {
         match self {
             Self::English => "[--:--:--] Supervisor: no parallel events yet.",
             Self::Korean => "[--:--:--] Supervisor: 아직 parallel 이벤트가 없습니다.",
-        }
-    }
-
-    pub(super) fn parallel_delivery_retention_gap(
-        self,
-        missing_from: u64,
-        missing_through: u64,
-    ) -> String {
-        match self {
-            Self::English => format!(
-                "[retention gap] parallel events {missing_from}..={missing_through} expired before terminal delivery"
-            ),
-            Self::Korean => format!(
-                "[보존 누락] parallel 이벤트 {missing_from}..={missing_through}가 terminal 전달 전에 만료되었습니다"
-            ),
-        }
-    }
-
-    pub(super) const fn parallel_delivery_uncertain(self) -> &'static str {
-        match self {
-            Self::English => {
-                "[terminal delivery uncertain] host output will not be replayed; replace the terminal surface to recover"
-            }
-            Self::Korean => {
-                "[terminal 전달 불확실] host 출력을 재전송하지 않습니다; terminal surface를 교체해 복구하세요"
-            }
         }
     }
 

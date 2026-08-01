@@ -120,6 +120,7 @@ where
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn test_post_turn_evaluation_is_in_flight(
         &self,
         thread_id: &str,

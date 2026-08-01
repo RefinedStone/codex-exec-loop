@@ -1,7 +1,7 @@
 /*
  * ConversationViewModel의 message mutation 경계다. domain message log는 `messages`가
- * 보관하고, transcript를 바꾸는 함수는 이 파일 안에서 retention과 handoff bookkeeping을
- * 함께 끝내 shell footer, snapshot replay, scroll 계산이 같은 원본을 보게 한다.
+ * 보관하고, transcript를 바꾸는 함수는 이 파일 안에서 retention과 revision bookkeeping을
+ * 함께 끝내 renderer, snapshot replay, scroll 계산이 같은 원본을 보게 한다.
  */
 use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
 use crate::domain::planning::{
@@ -18,20 +18,14 @@ const MAX_RETAINED_MESSAGE_TEXT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_RETAINED_MESSAGE_TEXT_LINES: usize = 8_192;
 const MAX_RETAINED_MESSAGE_METADATA_BYTES: usize = 64 * 1024;
 const MAX_RETAINED_MESSAGE_METADATA_LINES: usize = 128;
-const MAX_BUFFERED_TOOL_MESSAGES: usize = 256;
-const MAX_BUFFERED_TOOL_MESSAGE_BYTES: usize = 1024 * 1024;
-const MAX_BUFFERED_TOOL_MESSAGE_LINES: usize = 2_048;
 const MAX_QUEUE_RECEIPT_TITLE_CHARS: usize = 96;
 const TRANSCRIPT_RETENTION_NOTICE: &str =
     "conversation transcript was trimmed to the latest bounded TUI history";
-const TOOL_RETENTION_NOTICE: &str =
-    "older buffered tool notices were trimmed before transcript delivery";
 const TEXT_RETENTION_MARKER: &str = "\n[truncated by Akra TUI retention policy]";
-const VIEWPORT_NAVIGATION_BLOCKED_STATUS_PREFIX: &str = "conversation is busy; wait before ";
 
 /*
- * 메시지 조작은 세 갈래를 한 impl에 묶어 둔다. app-server stream의 agent delta는
- * live buffer에 누적하고, tool/status notice는 transcript에 순서 있게 편입하며,
+ * 메시지 조작은 한 갈래를 이 impl에 묶어 둔다. app-server stream의 agent delta는
+ * item_id로 canonical transcript row를 제자리 갱신하고, tool/status notice는 즉시 순서대로 편입하며,
  * auto-follow와 planning handoff가 읽는 최신 user/agent text는 transcript 기준으로
  * 노출한다.
  */
@@ -45,9 +39,10 @@ impl ConversationViewModel {
     }
 
     /*
-     * Batch append는 session load나 buffered tool flush처럼 이미 순서가 정해진 message
+     * Batch append는 session load처럼 이미 순서가 정해진 message
      * 묶음을 transcript에 붙인다. 빈 iterator는 transcript를 그대로 둔다.
      */
+    #[cfg(test)]
     pub(super) fn push_messages<I>(&mut self, messages: I)
     where
         I: IntoIterator<Item = ConversationMessage>,
@@ -99,9 +94,6 @@ impl ConversationViewModel {
         }
 
         self.messages.drain(0..remove_count);
-        if let Some(start) = self.viewport_transcript_handoff_start.as_mut() {
-            *start = start.saturating_sub(remove_count);
-        }
         self.extend_runtime_notices([TRANSCRIPT_RETENTION_NOTICE.to_string()]);
         true
     }
@@ -186,25 +178,25 @@ impl ConversationViewModel {
     }
 
     /*
-     * Tool notice는 streaming agent text와 바로 섞이면 transcript ordering이 흐려진다.
-     * 먼저 buffer에 모아 두고 turn boundary나 explicit flush에서 한꺼번에 옮겨 agent
-     * reply와 tool activity copy의 상대 순서를 안정화한다.
+     * Tool notice는 도착한 시점에 canonical transcript에 바로 들어간다. Streaming agent
+     * item은 같은 Vec 안에서 item_id로 제자리 갱신되므로 tool 뒤에 늦게 도착한 agent
+     * completion이 기존 행을 이동시키거나 transcript를 다시 조립하지 않는다.
      */
     #[cfg(test)]
-    pub(crate) fn buffer_tool_message(&mut self, text: impl Into<String>) {
-        self.buffer_tool_message_with_label(text, None);
+    pub(crate) fn append_tool_message(&mut self, text: impl Into<String>) {
+        self.append_tool_message_with_label(text, None);
     }
 
     #[cfg(test)]
-    pub(crate) fn buffer_tool_message_with_label(
+    pub(crate) fn append_tool_message_with_label(
         &mut self,
         text: impl Into<String>,
         display_label: Option<String>,
     ) {
-        self.buffer_tool_message_with_detail(text, display_label, None, None);
+        self.append_tool_message_with_detail(text, display_label, None, None);
     }
 
-    pub(crate) fn buffer_tool_message_with_detail(
+    pub(crate) fn append_tool_message_with_detail(
         &mut self,
         text: impl Into<String>,
         display_label: Option<String>,
@@ -217,8 +209,13 @@ impl ConversationViewModel {
         }
 
         if let Some(detail) = detail.as_deref().filter(|detail| !detail.trim().is_empty()) {
-            text.push('\n');
-            text.push_str(detail);
+            let mut merged_lines = text.lines().map(str::to_string).collect::<Vec<_>>();
+            for detail_line in detail.lines() {
+                if !merged_lines.iter().any(|existing| existing == detail_line) {
+                    merged_lines.push(detail_line.to_string());
+                }
+            }
+            text = merged_lines.join("\n");
         }
 
         let mut message =
@@ -226,80 +223,24 @@ impl ConversationViewModel {
         if let Some(display_label) = display_label {
             message = message.with_display_label(display_label);
         }
-        bound_conversation_message(&mut message);
-        self.buffered_tool_messages.push(message);
-        let mut retained_bytes = self
-            .buffered_tool_messages
-            .iter()
-            .map(conversation_message_retained_bytes)
-            .sum::<usize>();
-        let mut retained_lines = self
-            .buffered_tool_messages
-            .iter()
-            .map(conversation_message_retained_lines)
-            .sum::<usize>();
-        let mut remove_count = 0;
-        while remove_count < self.buffered_tool_messages.len()
-            && (self
-                .buffered_tool_messages
-                .len()
-                .saturating_sub(remove_count)
-                > MAX_BUFFERED_TOOL_MESSAGES
-                || retained_bytes > MAX_BUFFERED_TOOL_MESSAGE_BYTES
-                || retained_lines > MAX_BUFFERED_TOOL_MESSAGE_LINES)
-        {
-            retained_bytes = retained_bytes.saturating_sub(conversation_message_retained_bytes(
-                &self.buffered_tool_messages[remove_count],
-            ));
-            retained_lines = retained_lines.saturating_sub(conversation_message_retained_lines(
-                &self.buffered_tool_messages[remove_count],
-            ));
-            remove_count += 1;
-        }
-        if remove_count > 0 {
-            self.buffered_tool_messages.drain(0..remove_count);
-            self.extend_runtime_notices([TOOL_RETENTION_NOTICE.to_string()]);
-        }
+        self.push_message(message);
     }
 
     /*
-     * Buffered tool messages의 commit point다. `take`로 buffer를 비워 flush 재호출이
-     * 같은 notice를 중복 append하지 않게 하고, retention은 `push_messages`의 batch
-     * 규칙에 맡긴다.
-     */
-    pub(crate) fn flush_buffered_tool_messages(&mut self) -> bool {
-        if self.buffered_tool_messages.is_empty() {
-            return false;
-        }
-
-        let buffered_messages = std::mem::take(&mut self.buffered_tool_messages);
-        let buffered_message_count = buffered_messages.len();
-        self.push_messages(buffered_messages);
-        if self.has_running_turn() && self.viewport_transcript_handoff_start.is_none() {
-            self.viewport_transcript_handoff_start = Some(
-                self.messages
-                    .len()
-                    .saturating_sub(buffered_message_count.min(self.messages.len())),
-            );
-        }
-        true
-    }
-
-    /*
-     * Agent delta는 codex stream item_id 단위로 이어 붙는다. 같은 item이면 live
-     * message에 누적하고, 다른 item이 열리면 기존 live message를 먼저 transcript에
-     * commit해 두 agent response가 하나의 message로 합쳐지지 않게 한다.
+     * Agent delta는 codex stream item_id 단위로 canonical transcript 행을 제자리
+     * 갱신한다. Tool card가 두 delta 사이에 들어와도 기존 agent 행의 index는 바뀌지 않는다.
      */
     #[cfg(test)]
-    pub(crate) fn push_live_agent_delta(
+    pub(crate) fn append_agent_delta(
         &mut self,
         item_id: String,
         phase: Option<String>,
         delta: String,
     ) {
-        if let Some(message) = self.live_agent_message.as_mut()
-            && message.item_id.as_deref() == Some(item_id.as_str())
-        {
+        if let Some(message) = self.messages.iter_mut().rev().find(|message| {
+            message.kind == ConversationMessageKind::Agent
+                && message.item_id.as_deref() == Some(item_id.as_str())
+        }) {
             append_bounded_text(
                 &mut message.text,
                 &delta,
@@ -310,74 +251,56 @@ impl ConversationViewModel {
             if phase.is_some() {
                 message.phase = phase;
             }
+            bound_conversation_message(message);
+            self.enforce_transcript_retention();
+            self.advance_transcript_revision();
             return;
         }
 
-        self.commit_live_agent_message();
-        self.flush_buffered_tool_messages();
-        let mut message =
+        let message =
             ConversationMessage::new(ConversationMessageKind::Agent, delta, phase, Some(item_id));
-        bound_conversation_message(&mut message);
-        self.live_agent_message = Some(message);
+        self.push_message(message);
     }
 
-    pub(crate) fn sync_live_agent_draft(
+    pub(crate) fn upsert_agent_draft(
         &mut self,
         item_id: String,
         phase: Option<String>,
         text: String,
     ) {
-        if let Some(message) = self.live_agent_message.as_mut()
-            && message.item_id.as_deref() == Some(item_id.as_str())
-        {
+        if let Some(message) = self.messages.iter_mut().rev().find(|message| {
+            message.kind == ConversationMessageKind::Agent
+                && message.item_id.as_deref() == Some(item_id.as_str())
+        }) {
             message.text = text;
             if phase.is_some() {
                 message.phase = phase;
             }
             bound_conversation_message(message);
+            self.enforce_transcript_retention();
+            self.advance_transcript_revision();
             return;
         }
 
-        self.commit_live_agent_message();
-        self.flush_buffered_tool_messages();
-        let mut message =
+        let message =
             ConversationMessage::new(ConversationMessageKind::Agent, text, phase, Some(item_id));
-        bound_conversation_message(&mut message);
-        self.live_agent_message = Some(message);
+        self.push_message(message);
     }
 
     /*
-     * Completion event는 live delta를 authoritative final text로 닫는다. 같은
-     * item_id의 live message가 있으면 그 값을 교체해 transcript에 넣고, live
-     * buffer에 없으면 기존 transcript의 같은 item을 뒤에서 찾아 보정한다. 둘 다
-     * 없으면 completion만으로 agent message를 생성해 late completion도 화면에 남긴다.
+     * Completion event는 같은 item_id의 canonical 행을 authoritative final text로
+     * 갱신한다. 행이 없을 때만 새 행을 추가하므로 late completion도 유실되지 않는다.
      */
-    pub(crate) fn complete_live_agent_message(
+    pub(crate) fn finalize_agent_message(
         &mut self,
         item_id: String,
         phase: Option<String>,
         text: String,
     ) -> bool {
-        if let Some(mut message) = self.live_agent_message.take() {
-            if message.item_id.as_deref() == Some(item_id.as_str()) {
-                message.text = text;
-                message.phase = phase;
-                self.flush_buffered_tool_messages();
-                self.push_message(message);
-                self.hold_latest_committed_agent_in_viewport();
-                return true;
-            }
-
-            // 이전 item의 늦은 completion은 현재 streaming item의 lifecycle을 닫지 않는다.
-            self.live_agent_message = Some(message);
-        }
-
-        if let Some(message) = self
-            .messages
-            .iter_mut()
-            .rev()
-            .find(|message| message.item_id.as_deref() == Some(item_id.as_str()))
-        {
+        if let Some(message) = self.messages.iter_mut().rev().find(|message| {
+            message.kind == ConversationMessageKind::Agent
+                && message.item_id.as_deref() == Some(item_id.as_str())
+        }) {
             message.text = text;
             message.phase = phase;
             bound_conversation_message(message);
@@ -386,43 +309,18 @@ impl ConversationViewModel {
             return true;
         }
 
-        self.flush_buffered_tool_messages();
         self.push_message(ConversationMessage::new(
             ConversationMessageKind::Agent,
             text,
             phase,
             Some(item_id),
         ));
-        self.hold_latest_committed_agent_in_viewport();
         true
     }
 
-    /*
-     * Live agent buffer를 transcript로 확정한다. turn finish, 새 item delta, session
-     * snapshot 전환 경로가 이 함수를 써서 streaming 중이던 답변을
-     * latest-agent query와 renderer가 볼 수 있게 한다.
-     */
-    pub(crate) fn commit_live_agent_message(&mut self) -> bool {
-        let Some(message) = self.live_agent_message.take() else {
-            return false;
-        };
-
-        self.push_message(message);
-        self.hold_latest_committed_agent_in_viewport();
-        true
-    }
-
-    pub(crate) fn buffered_tool_messages(&self) -> &[ConversationMessage] {
-        &self.buffered_tool_messages
-    }
-
-    pub(crate) fn visible_inline_tool_message_has_digest(&self, digest: [u8; 32]) -> bool {
-        self.viewport_transcript_handoff_messages()
-            .or_else(|| self.viewport_transcript_handoff_release_messages())
-            .into_iter()
-            .flatten()
-            .chain(self.buffered_tool_messages.iter())
-            .chain(self.live_agent_message.iter())
+    pub(crate) fn visible_tool_message_has_digest(&self, digest: [u8; 32]) -> bool {
+        self.messages
+            .iter()
             .filter(|message| message.kind == ConversationMessageKind::Tool)
             .any(|message| {
                 super::super::progressive_activity_cards::tool_message_digest(
@@ -432,132 +330,12 @@ impl ConversationViewModel {
             })
     }
 
-    pub(crate) fn host_scrollback_messages(&self) -> &[ConversationMessage] {
-        let end = if self.viewport_transcript_handoff_release_pending {
-            self.messages.len()
-        } else {
-            self.viewport_transcript_handoff_start
-                .unwrap_or(self.messages.len())
-                .min(self.messages.len())
-        };
-        &self.messages[..end]
-    }
-
-    pub(crate) fn viewport_transcript_handoff_messages(&self) -> Option<&[ConversationMessage]> {
-        if self.viewport_transcript_handoff_release_pending {
-            return None;
-        }
-        let start = self.viewport_transcript_handoff_start?;
-        let messages = self.messages.get(start..)?;
-        (!messages.is_empty()).then_some(messages)
-    }
-
-    pub(crate) fn viewport_transcript_handoff_release_messages(
-        &self,
-    ) -> Option<&[ConversationMessage]> {
-        if !self.viewport_transcript_handoff_release_pending {
-            return None;
-        }
-        let start = self.viewport_transcript_handoff_start?;
-        let messages = self.messages.get(start..)?;
-        (!messages.is_empty()).then_some(messages)
-    }
-
-    fn hold_latest_committed_agent_in_viewport(&mut self) {
-        if self.has_running_turn()
-            && self.viewport_transcript_handoff_start.is_none()
-            && !self.messages.is_empty()
-        {
-            self.viewport_transcript_handoff_start = Some(self.messages.len() - 1);
-        }
-    }
-
-    pub(super) fn hold_latest_transcript_message_in_viewport(&mut self) {
-        if self.viewport_transcript_handoff_start.is_none() && !self.messages.is_empty() {
-            self.viewport_transcript_handoff_start = Some(self.messages.len() - 1);
-        }
-    }
-
     pub(crate) fn record_status_message(&mut self, status_text: String) {
-        let is_navigation_block =
-            status_text.starts_with(VIEWPORT_NAVIGATION_BLOCKED_STATUS_PREFIX);
-        if self.has_pending_viewport_transcript_handoff() && is_navigation_block {
-            if self.viewport_transcript_handoff_status_restore.is_none() {
-                self.viewport_transcript_handoff_status_restore = Some(self.status_text.clone());
-            }
-        } else if !is_navigation_block {
-            self.viewport_transcript_handoff_status_restore = None;
-        }
         self.status_text = status_text;
     }
 
     pub(crate) fn status_text_for_viewport(&self) -> &str {
-        if self.viewport_transcript_handoff_release_pending
-            && self
-                .status_text
-                .starts_with(VIEWPORT_NAVIGATION_BLOCKED_STATUS_PREFIX)
-        {
-            return self
-                .viewport_transcript_handoff_status_restore
-                .as_deref()
-                .unwrap_or_default();
-        }
         &self.status_text
-    }
-
-    pub(crate) fn has_pending_viewport_transcript_handoff(&self) -> bool {
-        self.viewport_transcript_handoff_start.is_some()
-    }
-
-    pub(super) fn begin_viewport_transcript_handoff_release(&mut self, turn_id: Option<&str>) {
-        if self.viewport_transcript_handoff_start.is_none()
-            || self.viewport_transcript_handoff_release_pending
-        {
-            return;
-        }
-        self.viewport_transcript_handoff_generation = self
-            .viewport_transcript_handoff_generation
-            .checked_add(1)
-            .expect("transcript handoff generation exhausted");
-        self.viewport_transcript_handoff_turn_id = turn_id.map(str::to_string);
-        self.viewport_transcript_handoff_release_pending = true;
-    }
-
-    pub(crate) fn viewport_transcript_handoff_correlation(
-        &self,
-    ) -> Option<super::TranscriptHandoffCorrelation> {
-        self.viewport_transcript_handoff_release_pending.then(|| {
-            super::TranscriptHandoffCorrelation {
-                generation: self.viewport_transcript_handoff_generation,
-                transcript_revision: self.transcript_revision,
-                thread_id: self.thread_id.clone(),
-                turn_id: self.viewport_transcript_handoff_turn_id.clone(),
-            }
-        })
-    }
-
-    pub(crate) fn acknowledge_viewport_transcript_handoff_flush(
-        &mut self,
-        correlation: &super::TranscriptHandoffCorrelation,
-    ) -> bool {
-        if self.viewport_transcript_handoff_correlation().as_ref() != Some(correlation) {
-            return false;
-        }
-        self.viewport_transcript_handoff_start = None;
-        self.viewport_transcript_handoff_release_pending = false;
-        self.viewport_transcript_handoff_turn_id = None;
-        if self
-            .status_text
-            .starts_with(VIEWPORT_NAVIGATION_BLOCKED_STATUS_PREFIX)
-        {
-            self.status_text = self
-                .viewport_transcript_handoff_status_restore
-                .take()
-                .unwrap_or_default();
-        } else {
-            self.viewport_transcript_handoff_status_restore = None;
-        }
-        true
     }
 
     fn advance_transcript_revision(&mut self) {
@@ -567,10 +345,14 @@ impl ConversationViewModel {
             .expect("conversation transcript revision exhausted");
     }
 
+    pub(crate) fn transcript_revision(&self) -> u64 {
+        self.transcript_revision
+    }
+
     /*
      * Auto-follow decision은 마지막 agent reply를 planning runtime request의 근거로
-     * 넘긴다. transcript에 commit된 non-empty agent message만 보므로 live buffer는
-     * 먼저 commit되어야 하고, status/tool notice는 자동 후속 판단 입력에서 제외된다.
+     * 넘긴다. canonical transcript의 non-empty agent message만 읽으며,
+     * status/tool notice는 자동 후속 판단 입력에서 제외된다.
      */
     pub(crate) fn latest_agent_message_text(&self) -> Option<&str> {
         self.messages
@@ -744,53 +526,48 @@ mod retention_tests {
     #[test]
     fn live_delta_and_message_lines_are_bounded_before_rendering() {
         let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
-        conversation.push_live_agent_delta(
+        conversation.append_agent_delta(
             "item-1".to_string(),
             None,
             "line\n".repeat(MAX_RETAINED_MESSAGE_TEXT_LINES + 10),
         );
 
         let live = conversation
-            .live_agent_message
-            .as_ref()
-            .expect("live message should remain available");
+            .messages
+            .iter()
+            .find(|message| message.item_id.as_deref() == Some("item-1"))
+            .expect("streaming message should remain in the canonical transcript");
         assert!(live.text.len() <= MAX_RETAINED_MESSAGE_TEXT_BYTES);
         assert!(text_line_count(&live.text) <= MAX_RETAINED_MESSAGE_TEXT_LINES);
         assert!(live.text.ends_with(TEXT_RETENTION_MARKER));
     }
 
     #[test]
-    fn buffered_tool_retention_preserves_the_latest_notices() {
+    fn tool_activity_is_immediately_visible_in_the_canonical_transcript() {
         let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
-        for index in 0..=MAX_BUFFERED_TOOL_MESSAGES {
-            conversation.buffer_tool_message(format!("tool-{index}"));
-        }
+        conversation.append_tool_message("Read src/lib.rs");
 
         assert_eq!(
-            conversation.buffered_tool_messages.len(),
-            MAX_BUFFERED_TOOL_MESSAGES
-        );
-        assert_eq!(conversation.buffered_tool_messages[0].text, "tool-1");
-        assert_eq!(
             conversation
-                .buffered_tool_messages
-                .last()
-                .map(|message| message.text.as_str()),
-            Some("tool-256")
+                .messages
+                .iter()
+                .map(|message| (message.kind, message.text.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(ConversationMessageKind::Tool, "Read src/lib.rs")]
         );
     }
 
     #[test]
-    fn buffered_tool_is_committed_before_the_next_agent_commentary() {
+    fn appended_tool_precedes_the_next_agent_commentary() {
         let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
-        assert!(conversation.complete_live_agent_message(
+        assert!(conversation.finalize_agent_message(
             "agent-commentary-1".to_string(),
             Some("commentary".to_string()),
             "I will inspect the event reducer.".to_string(),
         ));
-        conversation.buffer_tool_message("Read src/lib.rs");
+        conversation.append_tool_message("Read src/lib.rs");
 
-        assert!(conversation.complete_live_agent_message(
+        assert!(conversation.finalize_agent_message(
             "agent-commentary-2".to_string(),
             Some("commentary".to_string()),
             "The event reducer is next.".to_string(),
@@ -810,6 +587,87 @@ mod retention_tests {
                 ),
                 (ConversationMessageKind::Tool, "Read src/lib.rs"),
                 (ConversationMessageKind::Agent, "The event reducer is next."),
+            ]
+        );
+    }
+
+    #[test]
+    fn command_detail_merge_keeps_read_targets_once_and_appends_output() {
+        let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
+        conversation.append_tool_message_with_detail(
+            "Explored 2 targets\n1. Read src/core/app.rs\n2. Read src/domain/conversation.rs",
+            Some("explore".to_string()),
+            Some("command-1".to_string()),
+            Some(
+                "explore details\n1. Read src/core/app.rs\n2. Read src/domain/conversation.rs\n\nCommand output\nok"
+                    .to_string(),
+            ),
+        );
+
+        let text = &conversation.messages[0].text;
+        assert_eq!(text.matches("1. Read src/core/app.rs").count(), 1);
+        assert_eq!(
+            text.matches("2. Read src/domain/conversation.rs").count(),
+            1
+        );
+        assert!(text.contains("Command output\nok"));
+    }
+
+    #[test]
+    fn late_agent_completion_updates_in_place_without_reassembling_history() {
+        let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
+        conversation.upsert_agent_draft(
+            "agent-1".to_string(),
+            Some("commentary".to_string()),
+            "I will inspect the reducer.".to_string(),
+        );
+        conversation.append_tool_message_with_detail(
+            "Read src/lib.rs",
+            Some("explore".to_string()),
+            Some("tool-1".to_string()),
+            Some("src/lib.rs:1-40".to_string()),
+        );
+        conversation.upsert_agent_draft(
+            "agent-2".to_string(),
+            Some("commentary".to_string()),
+            "The renderer is next.".to_string(),
+        );
+
+        assert!(conversation.finalize_agent_message(
+            "agent-1".to_string(),
+            Some("commentary".to_string()),
+            "I inspected the reducer.".to_string(),
+        ));
+
+        let rows = conversation
+            .messages
+            .iter()
+            .map(|message| {
+                (
+                    message.item_id.as_deref(),
+                    message.kind,
+                    message.text.lines().next().unwrap_or_default(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rows,
+            vec![
+                (
+                    Some("agent-1"),
+                    ConversationMessageKind::Agent,
+                    "I inspected the reducer."
+                ),
+                (
+                    Some("tool-1"),
+                    ConversationMessageKind::Tool,
+                    "Read src/lib.rs"
+                ),
+                (
+                    Some("agent-2"),
+                    ConversationMessageKind::Agent,
+                    "The renderer is next."
+                ),
             ]
         );
     }

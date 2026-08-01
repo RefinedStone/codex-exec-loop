@@ -18,7 +18,7 @@ use copy::{
 use projection::build_detail_doc_selection_projection;
 
 // Renderer contract for the directions maintenance overlay.
-// The inline and popup renderers can lay out every step with the same panel slots because this DTO keeps
+// The fullscreen and popup renderers can lay out every step with the same panel slots because this DTO keeps
 // chrome, summary, actions, diagnostics, and key guidance separated.
 pub(crate) struct DirectionsMaintenanceOverlayView {
     // Header identifies the maintenance surface and anchors it in the shared Akra overlay chrome.

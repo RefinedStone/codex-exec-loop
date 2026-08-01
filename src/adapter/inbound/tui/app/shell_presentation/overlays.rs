@@ -68,6 +68,8 @@ pub(crate) use list_projection::{OverlayListEntryView, OverlayListView};
 // modal popup variant는 popup module 안에 숨기고, shell frontend에는 builder와 view DTO만
 // 공개한다. 이 경계를 유지해야 planning/session/queue popup layout 변경이 frontend import
 // churn으로 번지지 않는다.
+#[cfg(test)]
+pub(crate) use popup::build_planning_init_overlay_view;
 pub(crate) use popup::{
     LanguageSelectionFrameInput, LanguageSelectionOverlayView, ModelSelectionFrameInput,
     ModelSelectionOverlayView, ParallelPeekOverlayView, PlanningDraftEditorOverlayView,
@@ -82,5 +84,3 @@ pub(crate) use popup::{
     build_supersession_overlay_view, build_view_selection_overlay_view,
     build_work_center_overlay_view,
 };
-#[cfg(test)]
-pub(crate) use popup::{build_parallel_peek_overlay_view, build_planning_init_overlay_view};

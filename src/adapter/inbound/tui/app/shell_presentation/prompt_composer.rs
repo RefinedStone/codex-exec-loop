@@ -14,7 +14,7 @@ const PROMPT_PRIMARY_PREFIX: &str = " > ";
 const PROMPT_CONTINUATION_PREFIX: &str = "   ";
 
 pub(super) struct PromptBufferView {
-    // Prompt text is already split into ratatui Lines so popup and inline tail renderers share one projection.
+    // Prompt text is already split into ratatui Lines so popup and shell tail renderers share one projection.
     pub(super) lines: Vec<Line<'static>>,
 }
 

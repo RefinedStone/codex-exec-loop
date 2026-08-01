@@ -1,101 +1,107 @@
 use std::rc::Rc;
 
-use super::inline_frame_model::ApprovalInlineScreenModel;
-pub(super) use super::inline_frame_model::{
-    InlineConversationFrameProjection, InlineFrameRenderReceipt, InlineInspectionFrameModel,
-    InlineShellFrameModel,
+use super::fullscreen_frame_model::ApprovalFullscreenScreenModel;
+pub(super) use super::fullscreen_frame_model::{
+    FullscreenConversationFrameProjection, FullscreenFrameRenderReceipt,
+    FullscreenInspectionFrameModel, FullscreenShellFrameModel,
 };
 #[cfg(test)]
-use super::inline_frame_model::{
-    apply_inline_frame_render_receipt, capture_inline_shell_frame_model,
+use super::fullscreen_frame_model::{
+    apply_fullscreen_frame_render_receipt, capture_fullscreen_shell_frame_model,
 };
 use super::shell_presentation::{ConversationTranscriptCardRow, TurnSteerConfirmationScreenModel};
 #[cfg(test)]
 use super::*;
-use super::{AkraTheme, InlineTranscriptCardHitArea, ShellFrontendMode, ShellOverlay};
+use super::{AkraTheme, ShellFrontendMode, ShellOverlay, TranscriptCardHitArea};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph, Wrap};
 
 /*
- * 이 파일은 native inline shell의 ratatui frame boundary다.
- * presentation layer가 Line 기반 read model을 만들고, inline_layout이 frame 분할을 정하면,
- * 이 module은 base inline conversation, 선택적 inline inspection, exit confirmation modal 순서로 layer를 적용한다.
+ * 이 파일은 native fullscreen shell의 ratatui frame boundary다.
+ * presentation layer가 Line 기반 read model을 만들고, fullscreen_layout이 frame 분할을 정하면,
+ * 이 module은 app-owned conversation viewport, 선택적 fullscreen inspection, exit confirmation modal 순서로 layer를 적용한다.
  */
-#[path = "shell_rendering/inline_inspection.rs"]
-mod inline_inspection;
-#[path = "shell_rendering/inline_layout.rs"]
-mod inline_layout;
+#[path = "shell_rendering/fullscreen_inspection.rs"]
+mod fullscreen_inspection;
+#[path = "shell_rendering/fullscreen_layout.rs"]
+mod fullscreen_layout;
 
-use inline_inspection::draw_inline_shell_inspection;
-#[cfg(test)]
-use inline_layout::centered_rect;
-use inline_layout::{
-    build_inline_terminal_flow_layout, centered_fixed_rect, inline_body_render_area,
-    inline_tail_render_area, render_inline_body_suffix, set_cursor_if_visible,
+use fullscreen_inspection::draw_fullscreen_shell_inspection;
+use fullscreen_layout::{
+    build_fullscreen_flow_layout, centered_fixed_rect, fullscreen_tail_render_area,
+    render_body_suffix, set_cursor_if_visible,
 };
-pub(in crate::adapter::inbound::tui::app) use inline_layout::{
-    count_rendered_inline_rows, inline_section_height,
+pub(in crate::adapter::inbound::tui::app) use fullscreen_layout::{
+    count_wrapped_rows, fullscreen_section_height,
 };
 
-#[cfg(test)]
-pub(super) fn prepare_render_state(app: &mut NativeTuiApp, mode: ShellFrontendMode, area: Rect) {
-    let projection = InlineConversationFrameProjection::from_app(app, area.width);
-    let model = capture_inline_shell_frame_model(app, mode, area, projection);
-    let (_, _, receipt) = model.into_parts();
-    assert!(apply_inline_frame_render_receipt(app, receipt));
-}
-
-pub(super) fn inline_parallel_event_stream_area(
-    projection: &InlineConversationFrameProjection,
+pub(super) fn fullscreen_parallel_event_stream_area(
+    projection: &FullscreenConversationFrameProjection,
     frame_area: Rect,
 ) -> Rect {
     if !projection.parallel_mode_enabled && projection.shell_overlay != ShellOverlay::Supersession {
         return Rect::default();
     }
 
-    let layout =
-        build_inline_terminal_flow_layout(projection, frame_area, &projection.tail_view.lines);
+    let layout = build_fullscreen_flow_layout(projection, frame_area, &projection.tail_view.lines);
     projection
         .supersession_overlay_view
         .as_deref()
         .map_or(Rect::default(), |view| {
-            inline_inspection::parallel_event_stream_area(view, layout[0])
+            fullscreen_inspection::parallel_event_stream_area(view, layout[0])
         })
 }
 
 #[cfg(test)]
 pub(super) fn draw(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: ShellFrontendMode) {
-    let projection = InlineConversationFrameProjection::from_app(app, frame.area().width);
-    let model = capture_inline_shell_frame_model(app, mode, frame.area(), projection);
+    let projection = FullscreenConversationFrameProjection::from_app(app, frame.area().width);
+    let model = capture_fullscreen_shell_frame_model(app, mode, frame.area(), projection);
     let receipt = draw_projected(frame, mode, model);
-    assert!(apply_inline_frame_render_receipt(app, receipt));
+    assert!(apply_fullscreen_frame_render_receipt(app, receipt));
 }
 
 pub(super) fn draw_projected(
     frame: &mut Frame<'_>,
     mode: ShellFrontendMode,
-    model: InlineShellFrameModel,
-) -> InlineFrameRenderReceipt {
+    model: FullscreenShellFrameModel,
+) -> FullscreenFrameRenderReceipt {
     let (mut projection, inspection, mut receipt) = model.into_parts();
     // 현재 native shell renderer는 하나뿐이지만, mode 인자를 유지해 app runtime과 shell frontend 추상화를 한 경계에서 묶는다.
     let _ = mode;
     let frame_area = frame.area();
     // tail view는 status/prompt line과 cursor offset을 함께 담는다.
-    // 같은 tail 높이가 inline inspection/body 분할 기준도 된다.
-    let layout =
-        build_inline_terminal_flow_layout(&projection, frame_area, &projection.tail_view.lines);
+    // 같은 tail 높이가 fullscreen inspection/body 분할 기준도 된다.
+    let layout = build_fullscreen_flow_layout(&projection, frame_area, &projection.tail_view.lines);
+    let transcript_scroll_offset = if projection.shell_overlay == ShellOverlay::Hidden {
+        let content_rows = count_wrapped_rows(&projection.transcript_lines, layout[0].width);
+        receipt.resolve_transcript_viewport(
+            projection.transcript_document_identity.clone(),
+            content_rows,
+            layout[0].height,
+            projection.transcript_revision,
+        )
+    } else {
+        0
+    };
+    let transcript_has_unseen_output = receipt.transcript_has_unseen_output();
     let turn_steer_confirmation = projection.turn_steer_confirmation.take();
     let exit_confirmation_visible = projection.exit_confirmation_visible;
 
-    let conversation_receipt = draw_inline_conversation_shell(frame, projection, &layout);
-    receipt.record_queue_receipt_undo_hit_area(conversation_receipt.queue_receipt_undo_hit_area);
-    receipt.record_inline_transcript_cards(
-        conversation_receipt.inline_transcript_card_digests,
-        conversation_receipt.inline_transcript_card_hit_areas,
+    let conversation_receipt = draw_fullscreen_conversation_shell(
+        frame,
+        projection,
+        &layout,
+        transcript_scroll_offset,
+        transcript_has_unseen_output,
     );
-    if let Some(list_state) = draw_inline_shell_inspection(frame, layout[0], inspection) {
+    receipt.record_queue_receipt_undo_hit_area(conversation_receipt.queue_receipt_undo_hit_area);
+    receipt.record_transcript_cards(
+        conversation_receipt.transcript_viewport_card_digests,
+        conversation_receipt.transcript_viewport_card_hit_areas,
+    );
+    if let Some(list_state) = draw_fullscreen_shell_inspection(frame, layout[0], inspection) {
         receipt.record_session_list_state(list_state);
     }
     if let Some(confirmation) = turn_steer_confirmation.as_ref() {
@@ -108,11 +114,11 @@ pub(super) fn draw_projected(
     receipt
 }
 
-pub(super) fn inline_frame_inspection_area(
-    projection: &InlineConversationFrameProjection,
+pub(super) fn fullscreen_frame_inspection_area(
+    projection: &FullscreenConversationFrameProjection,
     area: Rect,
 ) -> Rect {
-    build_inline_terminal_flow_layout(projection, area, &projection.tail_view.lines)[0]
+    build_fullscreen_flow_layout(projection, area, &projection.tail_view.lines)[0]
 }
 
 fn draw_turn_steer_confirmation(
@@ -242,24 +248,24 @@ fn draw_exit_confirmation(frame: &mut Frame<'_>) {
     frame.render_widget(popup, popup_area);
 }
 
-struct InlineConversationShellRenderReceipt {
+struct FullscreenConversationShellRenderReceipt {
     queue_receipt_undo_hit_area: Option<Rect>,
-    inline_transcript_card_digests: Vec<[u8; 32]>,
-    inline_transcript_card_hit_areas: Vec<InlineTranscriptCardHitArea>,
+    transcript_viewport_card_digests: Vec<[u8; 32]>,
+    transcript_viewport_card_hit_areas: Vec<TranscriptCardHitArea>,
 }
 
-fn draw_inline_conversation_shell(
+fn draw_fullscreen_conversation_shell(
     frame: &mut Frame<'_>,
-    projection: InlineConversationFrameProjection,
+    projection: FullscreenConversationFrameProjection,
     layout: &Rc<[Rect]>,
-) -> InlineConversationShellRenderReceipt {
-    let InlineConversationFrameProjection {
+    transcript_scroll_offset: usize,
+    transcript_has_unseen_output: bool,
+) -> FullscreenConversationShellRenderReceipt {
+    let FullscreenConversationFrameProjection {
         tail_view,
-        live_transcript_lines,
-        live_transcript_card_rows,
+        transcript_lines,
+        transcript_card_rows,
         shell_overlay,
-        parallel_mode_enabled,
-        renders_parallel_viewport_handoff,
         ..
     } = projection;
     // 더 좁은 overlay나 더 짧은 tail이 terminal buffer에 stale cell을 남기지 않도록 항상 전체 frame을 먼저 지운다.
@@ -268,17 +274,6 @@ fn draw_inline_conversation_shell(
     // hidden-overlay path는 일반 conversation shell이다.
     // inspection layout을 우회해 transcript가 tail 위의 전체 공간을 채우게 한다.
     if shell_overlay == ShellOverlay::Hidden {
-        if parallel_mode_enabled && !renders_parallel_viewport_handoff {
-            let tail_band = layout.get(1).copied().unwrap_or(frame_area);
-            let tail_area = inline_tail_render_area(tail_band, &tail_view);
-            return InlineConversationShellRenderReceipt {
-                queue_receipt_undo_hit_area: render_bottom_anchored_tail(
-                    frame, tail_area, tail_view,
-                ),
-                inline_transcript_card_digests: Vec::new(),
-                inline_transcript_card_hit_areas: Vec::new(),
-            };
-        }
         // startup banner 같은 presentation state는 의도적으로 상단부터 전체 frame을 소유하므로 bottom anchored가 아니어야 한다.
         if tail_view.render_from_top {
             let top_area = Rect::new(
@@ -287,48 +282,47 @@ fn draw_inline_conversation_shell(
                 frame_area.width,
                 tail_view.rendered_height(frame_area.width, frame_area.height),
             );
-            return InlineConversationShellRenderReceipt {
+            return FullscreenConversationShellRenderReceipt {
                 queue_receipt_undo_hit_area: render_bottom_anchored_tail(
                     frame, top_area, tail_view,
                 ),
-                inline_transcript_card_digests: Vec::new(),
-                inline_transcript_card_hit_areas: Vec::new(),
+                transcript_viewport_card_digests: Vec::new(),
+                transcript_viewport_card_hit_areas: Vec::new(),
             };
         }
         // standard shell에서는 tail 높이를 먼저 재고 live transcript line을 그 위 공간에 clip한다.
         let tail_band = layout.get(1).copied().unwrap_or(frame_area);
-        let tail_area = inline_tail_render_area(tail_band, &tail_view);
-        let inline_transcript_card_digests = live_transcript_card_rows
-            .iter()
-            .map(|row| row.digest)
-            .collect();
-        let inline_transcript_card_hit_areas = render_inline_live_transcript(
+        let tail_area = fullscreen_tail_render_area(tail_band, &tail_view);
+        let transcript_viewport_card_digests =
+            transcript_card_rows.iter().map(|row| row.digest).collect();
+        let transcript_viewport_card_hit_areas = render_fullscreen_transcript(
             frame,
-            frame_area,
-            tail_area,
-            live_transcript_lines,
-            live_transcript_card_rows,
+            layout[0],
+            transcript_lines,
+            transcript_card_rows,
+            transcript_scroll_offset,
+            transcript_has_unseen_output,
         );
-        return InlineConversationShellRenderReceipt {
+        return FullscreenConversationShellRenderReceipt {
             queue_receipt_undo_hit_area: render_bottom_anchored_tail(frame, tail_area, tail_view),
-            inline_transcript_card_digests,
-            inline_transcript_card_hit_areas,
+            transcript_viewport_card_digests,
+            transcript_viewport_card_hit_areas,
         };
     }
     // overlay/modal이 active이면 layout[0]은 inspection이 쓰고 layout[1]은 그 아래에 tail을 고정한다.
     // exit modal은 두 영역을 모두 덮어야 하므로 이 함수 밖에서 계속 그린다.
-    let tail_area = inline_tail_render_area(layout[1], &tail_view);
-    InlineConversationShellRenderReceipt {
+    let tail_area = fullscreen_tail_render_area(layout[1], &tail_view);
+    FullscreenConversationShellRenderReceipt {
         queue_receipt_undo_hit_area: render_tail_surface(frame, tail_area, tail_view, false),
-        inline_transcript_card_digests: Vec::new(),
-        inline_transcript_card_hit_areas: Vec::new(),
+        transcript_viewport_card_digests: Vec::new(),
+        transcript_viewport_card_hit_areas: Vec::new(),
     }
 }
 
 fn render_bottom_anchored_tail(
     frame: &mut Frame<'_>,
     tail_area: Rect,
-    tail_view: super::shell_presentation::InlineTailView,
+    tail_view: super::shell_presentation::ShellTailView,
 ) -> Option<Rect> {
     render_tail_surface(frame, tail_area, tail_view, true)
 }
@@ -336,7 +330,7 @@ fn render_bottom_anchored_tail(
 fn render_tail_surface(
     frame: &mut Frame<'_>,
     tail_area: Rect,
-    tail_view: super::shell_presentation::InlineTailView,
+    tail_view: super::shell_presentation::ShellTailView,
     prompt_can_focus: bool,
 ) -> Option<Rect> {
     let Some(surface) = tail_view.composer_surface.clone() else {
@@ -352,7 +346,7 @@ fn render_tail_surface(
         let mut compact_lines = surface.body_lines;
         compact_lines.push(surface.action_line);
         let focus_row = surface.cursor_offset.map(|(_, y)| y);
-        let dropped_rows = render_inline_body_suffix(frame, tail_area, compact_lines, focus_row);
+        let dropped_rows = render_body_suffix(frame, tail_area, compact_lines, focus_row);
         let cursor_offset = surface
             .cursor_offset
             .and_then(|(x, y)| y.checked_sub(dropped_rows).map(|y| (x, y)));
@@ -380,10 +374,10 @@ fn render_tail_surface(
     );
 
     let dropped_prefix_rows = if prefix_height == 0 {
-        count_rendered_inline_rows(tail_view.prefix_lines(), tail_area.width)
-            .min(usize::from(u16::MAX)) as u16
+        count_wrapped_rows(tail_view.prefix_lines(), tail_area.width).min(usize::from(u16::MAX))
+            as u16
     } else {
-        render_inline_body_suffix(frame, prefix_area, tail_view.prefix_lines().to_vec(), None)
+        render_body_suffix(frame, prefix_area, tail_view.prefix_lines().to_vec(), None)
     };
 
     let rail_style = AkraTheme::composer_rail(surface.focused && prompt_can_focus);
@@ -420,8 +414,7 @@ fn render_tail_surface(
         );
     }
     let focus_row = surface.cursor_offset.map(|(_, y)| y);
-    let dropped_body_rows =
-        render_inline_body_suffix(frame, body_area, surface.body_lines, focus_row);
+    let dropped_body_rows = render_body_suffix(frame, body_area, surface.body_lines, focus_row);
     let mut footer_spans = vec![Span::styled("╰ ", rail_style)];
     footer_spans.extend(surface.action_line.spans);
     frame.render_widget(Paragraph::new(Line::from(footer_spans)), footer_area);
@@ -442,11 +435,11 @@ fn render_tail_surface(
 fn render_flat_tail(
     frame: &mut Frame<'_>,
     tail_area: Rect,
-    tail_view: super::shell_presentation::InlineTailView,
+    tail_view: super::shell_presentation::ShellTailView,
     prompt_can_focus: bool,
 ) -> Option<Rect> {
     let focus_row = tail_view.prompt_cursor_offset.map(|(_, y)| y);
-    let dropped_rows = render_inline_body_suffix(frame, tail_area, tail_view.lines, focus_row);
+    let dropped_rows = render_body_suffix(frame, tail_area, tail_view.lines, focus_row);
     let hit_area = tail_view
         .queue_receipt_undo_hit_area
         .and_then(|area| scroll_relative_rect(area, dropped_rows));
@@ -487,64 +480,72 @@ fn resolve_queue_receipt_undo_hit_area(
     })
 }
 
-fn render_inline_live_transcript(
+fn render_fullscreen_transcript(
     frame: &mut Frame<'_>,
-    frame_area: Rect,
-    tail_area: Rect,
-    live_transcript_lines: Vec<Line<'static>>,
+    transcript_area: Rect,
+    transcript_lines: Vec<Line<'static>>,
     card_rows: Vec<ConversationTranscriptCardRow>,
-) -> Vec<InlineTranscriptCardHitArea> {
-    // transcript line이 없거나 tail 위의 vertical space가 없으면 live region에 그릴 유효 내용이 없다.
-    if live_transcript_lines.is_empty() || tail_area.y <= frame_area.y {
+    scroll_offset: usize,
+    has_unseen_output: bool,
+) -> Vec<TranscriptCardHitArea> {
+    if transcript_lines.is_empty() || transcript_area.width == 0 || transcript_area.height == 0 {
         return Vec::new();
     }
-    // live container는 frame 상단부터 prompt tail 직전 row까지다.
-    // inner render area를 bottom-align해 최신 출력이 prompt에 가장 가깝게 앉게 한다.
-    let live_container = Rect::new(
-        frame_area.x,
-        frame_area.y,
-        frame_area.width,
-        tail_area.y.saturating_sub(frame_area.y),
-    );
-    let live_area = inline_body_render_area(live_container, &live_transcript_lines);
     let projected_rows = card_rows
         .into_iter()
         .filter_map(|row| {
-            if row.line_index >= live_transcript_lines.len() {
+            if row.line_index >= transcript_lines.len() {
                 return None;
             }
-            let start = count_rendered_inline_rows(
-                &live_transcript_lines[..row.line_index],
-                live_area.width,
-            );
-            let end = count_rendered_inline_rows(
-                &live_transcript_lines[..=row.line_index],
-                live_area.width,
-            );
+            let start =
+                count_wrapped_rows(&transcript_lines[..row.line_index], transcript_area.width);
+            let end =
+                count_wrapped_rows(&transcript_lines[..=row.line_index], transcript_area.width);
             (end > start).then_some((row.digest, start, end))
         })
         .collect::<Vec<_>>();
-    let dropped_rows = usize::from(render_inline_body_suffix(
-        frame,
-        live_area,
-        live_transcript_lines,
-        None,
-    ));
-    let visible_end = dropped_rows.saturating_add(usize::from(live_area.height));
+    let (window_start_line, window_scroll_offset) =
+        transcript_window_for_scroll(&transcript_lines, transcript_area.width, scroll_offset);
+    let paragraph = Paragraph::new(
+        transcript_lines
+            .into_iter()
+            .skip(window_start_line)
+            .collect::<Vec<_>>(),
+    )
+    .wrap(Wrap { trim: false });
+    frame.render_widget(paragraph.scroll((window_scroll_offset, 0)), transcript_area);
+
+    if has_unseen_output {
+        let label = " ↓ new output · Ctrl+End ";
+        let label_width = label.chars().count().min(usize::from(u16::MAX)) as u16;
+        let width = label_width.min(transcript_area.width);
+        let area = Rect::new(
+            transcript_area.right().saturating_sub(width),
+            transcript_area.bottom().saturating_sub(1),
+            width,
+            1,
+        );
+        frame.render_widget(
+            Paragraph::new(Line::styled(label, AkraTheme::accent())),
+            area,
+        );
+    }
+
+    let visible_end = scroll_offset.saturating_add(usize::from(transcript_area.height));
     projected_rows
         .into_iter()
         .filter_map(|(digest, start, end)| {
-            let clipped_start = start.max(dropped_rows);
+            let clipped_start = start.max(scroll_offset);
             let clipped_end = end.min(visible_end);
-            (clipped_end > clipped_start).then(|| InlineTranscriptCardHitArea {
+            (clipped_end > clipped_start).then(|| TranscriptCardHitArea {
                 digest,
                 area: Rect::new(
-                    live_area.x,
-                    live_area.y.saturating_add(
-                        u16::try_from(clipped_start.saturating_sub(dropped_rows))
+                    transcript_area.x,
+                    transcript_area.y.saturating_add(
+                        u16::try_from(clipped_start.saturating_sub(scroll_offset))
                             .unwrap_or(u16::MAX),
                     ),
-                    live_area.width,
+                    transcript_area.width,
                     u16::try_from(clipped_end.saturating_sub(clipped_start)).unwrap_or(u16::MAX),
                 ),
             })
@@ -552,11 +553,22 @@ fn render_inline_live_transcript(
         .collect()
 }
 
+fn transcript_window_for_scroll(lines: &[Line<'_>], width: u16, top_row: usize) -> (usize, u16) {
+    let mut preceding_rows = 0usize;
+    for (line_index, line) in lines.iter().enumerate() {
+        let line_rows = count_wrapped_rows(std::slice::from_ref(line), width).max(1);
+        let following_rows = preceding_rows.saturating_add(line_rows);
+        if top_row < following_rows {
+            return (
+                line_index,
+                u16::try_from(top_row.saturating_sub(preceding_rows)).unwrap_or(u16::MAX),
+            );
+        }
+        preceding_rows = following_rows;
+    }
+    (lines.len(), 0)
+}
+
 #[cfg(test)]
-// contract test는 overlay layout, inline tail behavior, viewport replay를 고정한다.
-#[path = "shell_rendering_contract_tests.rs"]
-mod contract_tests;
-#[cfg(test)]
-// snapshot test는 runtime state별 대표 shell frame을 고정한다.
-#[path = "shell_rendering_tests.rs"]
+#[path = "fullscreen_rendering_tests.rs"]
 mod tests;

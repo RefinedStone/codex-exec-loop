@@ -1,17 +1,18 @@
 use std::io;
+use std::io::Write;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use crossterm::cursor::{MoveToNextLine, Show};
+use crossterm::cursor::Show;
 use crossterm::event;
 use crossterm::execute;
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
-use super::inline_terminal_adapter::{
-    InlineTerminalAdapter, InlineTerminalBackend, terminal_options_for_render_mode,
-};
+use super::fullscreen_terminal_adapter::FullscreenTerminalAdapter;
 use super::shell_runtime::ShellRuntime;
 
 const READY_EVENT_DRAIN_LIMIT: usize = 64;
@@ -33,36 +34,19 @@ pub(super) fn run(
      * 먼저 guard로 감싼다. 이후 backend 생성, draw, event read 중 어디서 실패해도 Drop이
      * 사용자 shell을 복구하는 단일 경로가 된다.
      */
-    let mut restore_guard = TerminalRestoreGuard::activate()?;
+    let _restore_guard = TerminalRestoreGuard::activate()?;
     let backend = CrosstermBackend::new(io::stdout());
-    /*
-     * inline history mode는 ratatui TerminalOptions와 adapter의 history 정책이 같은 전제를
-     * 보게 해야 한다. 그래서 Terminal을 만들기 전에 runtime에서 현재 presentation setting을
-     * 읽고, 그 값으로 backend wrapper의 viewport 옵션을 확정한다.
-     */
-    let render_mode = runtime.inline_history_render_mode();
-    let terminal = build_terminal(backend, render_mode)?;
-    /*
-     * Terminal ownership은 InlineTerminalAdapter가 갖는다. frontend loop는 "언제 그릴지"만
-     * 결정하고, frame 준비와 host scrollback 보정은 adapter/runtime 조합에 맡긴다.
-     */
-    let mut adapter = InlineTerminalAdapter::new(terminal);
-    run_event_loop(&mut adapter, &mut runtime, shutdown, &mut restore_guard)
+    let terminal = build_terminal(backend)?;
+    let mut adapter = FullscreenTerminalAdapter::new(terminal);
+    run_event_loop(&mut adapter, &mut runtime, shutdown)
 }
 
-/*
- * CrosstermBackend는 process stdout이라는 실제 출력 장치에 묶여 있고,
- * InlineTerminalBackend는 그 앞에서 inline viewport와 host scrollback 간의 보정을 제공한다.
- * 이 작은 조립 함수가 concrete terminal stack의 타입 경계를 한곳에 모아 둔다.
- */
+// Fullscreen Ratatui owns the alternate-screen surface directly; no second
+// terminal backend or host-history synchronization layer participates.
 fn build_terminal(
     backend: CrosstermBackend<io::Stdout>,
-    render_mode: super::InlineHistoryRenderMode,
-) -> io::Result<Terminal<InlineTerminalBackend<CrosstermBackend<io::Stdout>>>> {
-    Terminal::with_options(
-        InlineTerminalBackend::new(backend),
-        terminal_options_for_render_mode(render_mode),
-    )
+) -> io::Result<Terminal<CrosstermBackend<io::Stdout>>> {
+    Terminal::new(backend)
 }
 
 /*
@@ -71,12 +55,11 @@ fn build_terminal(
  * reducer에 넘긴다. key binding, resize, focus lost 같은 의미 해석은 이 층에 두지 않는다.
  */
 fn run_event_loop(
-    adapter: &mut InlineTerminalAdapter<InlineTerminalBackend<CrosstermBackend<io::Stdout>>>,
+    adapter: &mut FullscreenTerminalAdapter<CrosstermBackend<io::Stdout>>,
     runtime: &mut ShellRuntime,
     shutdown: &crate::shutdown::GracefulShutdown,
-    restore_guard: &mut TerminalRestoreGuard,
 ) -> Result<()> {
-    match run_event_loop_until_exit(adapter, runtime, shutdown, restore_guard) {
+    match run_event_loop_until_exit(adapter, runtime, shutdown) {
         /*
          * Closing a Unix PTY can make the terminal descriptor report EIO before the process-level
          * SIGHUP flag becomes visible. Broken pipes and EOF are equivalent output/input closure
@@ -89,10 +72,9 @@ fn run_event_loop(
 }
 
 fn run_event_loop_until_exit(
-    adapter: &mut InlineTerminalAdapter<InlineTerminalBackend<CrosstermBackend<io::Stdout>>>,
+    adapter: &mut FullscreenTerminalAdapter<CrosstermBackend<io::Stdout>>,
     runtime: &mut ShellRuntime,
     shutdown: &crate::shutdown::GracefulShutdown,
-    restore_guard: &mut TerminalRestoreGuard,
 ) -> Result<()> {
     while !runtime.should_quit() && !shutdown.is_requested() {
         /*
@@ -106,11 +88,9 @@ fn run_event_loop_until_exit(
             break;
         }
         if draw_due {
-            let transaction_completed = adapter.draw_inline_transaction(runtime)?;
+            let transaction_completed = adapter.draw_fullscreen_transaction(runtime)?;
             runtime.finish_pending_quit_after_transaction(transaction_completed);
         }
-        // Preserve normal terminal selection and wheel scrolling unless the current frame owns a clickable action.
-        restore_guard.sync_mouse_capture(runtime.mouse_capture_requested())?;
         /*
          * poll timeout은 기본 idle wait와 다음 scheduled draw deadline의 교집합이다. 입력이 없어도
          * delayed draw 시점에는 poll이 깨어나 frame coalescing이 실제 화면에 반영된다.
@@ -207,7 +187,6 @@ fn drain_ready_terminal_events_with(
  */
 struct TerminalRestoreGuard {
     bracketed_paste_enabled: bool,
-    mouse_capture_enabled: bool,
 }
 
 impl TerminalRestoreGuard {
@@ -218,29 +197,15 @@ impl TerminalRestoreGuard {
          * focus events는 focus lost 중 draw를 늦추는 runtime scheduler 정책의 입력이다. enable이
          * 실패하면 raw mode만 켜진 반쪽 상태가 되므로 즉시 되돌리고 startup 실패로 전파한다.
          */
-        if let Err(error) = execute!(stdout, event::EnableFocusChange) {
+        if let Err(error) = enter_fullscreen_terminal_session(&mut stdout) {
+            let _ = leave_fullscreen_terminal_session(&mut stdout, false);
             let _ = disable_raw_mode();
             return Err(error.into());
         }
-        let bracketed_paste_enabled = execute!(stdout, event::EnableBracketedPaste).is_ok();
+        let bracketed_paste_enabled = enable_bracketed_paste(&mut stdout).is_ok();
         Ok(Self {
             bracketed_paste_enabled,
-            mouse_capture_enabled: false,
         })
-    }
-
-    fn sync_mouse_capture(&mut self, requested: bool) -> Result<()> {
-        if requested == self.mouse_capture_enabled {
-            return Ok(());
-        }
-        let mut stdout = io::stdout();
-        if requested {
-            execute!(stdout, event::EnableMouseCapture)?;
-        } else {
-            execute!(stdout, event::DisableMouseCapture)?;
-        }
-        self.mouse_capture_enabled = requested;
-        Ok(())
     }
 }
 
@@ -251,20 +216,53 @@ impl Drop for TerminalRestoreGuard {
          * 실패해도 raw mode 해제, focus 구독 해제, cursor 복구를 계속 시도하는 편이 낫다.
          */
         let mut stdout = io::stdout();
-        if self.mouse_capture_enabled {
-            let _ = execute!(stdout, event::DisableMouseCapture);
-        }
-        if self.bracketed_paste_enabled {
-            let _ = execute!(stdout, event::DisableBracketedPaste);
-        }
-        let _ = execute!(stdout, event::DisableFocusChange);
+        let _ = leave_fullscreen_terminal_session(&mut stdout, self.bracketed_paste_enabled);
         let _ = disable_raw_mode();
-        /*
-         * inline renderer는 마지막 frame의 prompt/tail을 현재 줄에 남길 수 있다. 한 줄 내리고
-         * cursor를 다시 보이게 해서 앱 종료 뒤 shell prompt가 앱 출력과 겹치지 않게 한다.
-         */
-        let _ = execute!(stdout, MoveToNextLine(1));
-        let _ = execute!(stdout, Show);
+    }
+}
+
+fn enter_fullscreen_terminal_session(writer: &mut impl Write) -> io::Result<()> {
+    execute!(
+        writer,
+        EnterAlternateScreen,
+        event::EnableFocusChange,
+        event::EnableMouseCapture
+    )
+}
+
+fn enable_bracketed_paste(writer: &mut impl Write) -> io::Result<()> {
+    execute!(writer, event::EnableBracketedPaste)
+}
+
+fn leave_fullscreen_terminal_session(
+    writer: &mut impl Write,
+    bracketed_paste_enabled: bool,
+) -> io::Result<()> {
+    let mut first_error = None;
+    remember_terminal_restore_error(
+        &mut first_error,
+        execute!(writer, event::DisableMouseCapture),
+    );
+    if bracketed_paste_enabled {
+        remember_terminal_restore_error(
+            &mut first_error,
+            execute!(writer, event::DisableBracketedPaste),
+        );
+    }
+    remember_terminal_restore_error(
+        &mut first_error,
+        execute!(writer, event::DisableFocusChange),
+    );
+    remember_terminal_restore_error(&mut first_error, execute!(writer, LeaveAlternateScreen));
+    remember_terminal_restore_error(&mut first_error, execute!(writer, Show));
+    first_error.map_or(Ok(()), Err)
+}
+
+fn remember_terminal_restore_error(first_error: &mut Option<io::Error>, result: io::Result<()>) {
+    if let Err(error) = result
+        && first_error.is_none()
+    {
+        *first_error = Some(error);
     }
 }
 
@@ -274,7 +272,30 @@ mod tests {
 
     #[cfg(unix)]
     use super::terminal_disconnected;
-    use super::terminal_io_disconnected;
+    use super::{
+        enable_bracketed_paste, enter_fullscreen_terminal_session,
+        leave_fullscreen_terminal_session, terminal_io_disconnected,
+    };
+
+    #[test]
+    fn fullscreen_terminal_session_enters_and_restores_every_owned_mode() {
+        let mut entered = Vec::new();
+        enter_fullscreen_terminal_session(&mut entered).expect("enter commands");
+        enable_bracketed_paste(&mut entered).expect("paste command");
+        let entered = String::from_utf8(entered).expect("terminal commands are utf-8 escape bytes");
+        assert!(entered.contains("\u{1b}[?1049h"));
+        assert!(entered.contains("\u{1b}[?1004h"));
+        assert!(entered.contains("\u{1b}[?2004h"));
+
+        let mut restored = Vec::new();
+        leave_fullscreen_terminal_session(&mut restored, true).expect("restore commands");
+        let restored =
+            String::from_utf8(restored).expect("terminal commands are utf-8 escape bytes");
+        assert!(restored.contains("\u{1b}[?2004l"));
+        assert!(restored.contains("\u{1b}[?1004l"));
+        assert!(restored.contains("\u{1b}[?1049l"));
+        assert!(restored.contains("\u{1b}[?25h"));
+    }
 
     #[cfg(unix)]
     #[test]

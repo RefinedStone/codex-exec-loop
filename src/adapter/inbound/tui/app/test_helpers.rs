@@ -78,7 +78,7 @@ pub(crate) fn sample_planning_runtime_projection(
     /*
      * This snapshot models the normal ready queue: a head task, another active task, and one blocked
      * task that should appear only in skipped/diagnostic surfaces. Tests can vary prompt and summary
-     * copy while preserving a queue shape rich enough for footer, popup, and inline-tail projections.
+     * copy while preserving a queue shape rich enough for footer, overlay, and shell-tail projections.
      */
     let queue_head = sample_queue_head();
     PlanningRuntimeProjection::ready_with_queue_projection(
@@ -570,17 +570,6 @@ pub(super) fn test_native_tui_app_with_services() -> (NativeTuiApp, PlanningServ
         None,
     );
     (app, services)
-}
-
-pub(super) fn test_native_tui_app_with_review_center_repository(
-    review_center_repository: Arc<dyn ReviewCenterRepositoryPort>,
-) -> NativeTuiApp {
-    let planning = test_planning_services(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
-    test_native_tui_app_with_planning_and_review_center_repository(
-        planning,
-        review_center_repository,
-        None,
-    )
 }
 
 pub(super) fn test_native_tui_app_with_planning(

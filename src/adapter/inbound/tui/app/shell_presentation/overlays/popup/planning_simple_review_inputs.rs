@@ -1,5 +1,5 @@
 use super::super::super::super::{
-    FOOTER_NOTICE_DETAIL_LIMIT, PlanningInitSimpleReviewState, compact_inline_detail,
+    FOOTER_NOTICE_DETAIL_LIMIT, PlanningInitSimpleReviewState, compact_shell_detail,
 };
 use super::copy::PlanningSimpleReviewCopy;
 
@@ -33,7 +33,7 @@ pub(super) fn build_simple_review_copy(
         // 긴 메시지는 footer detail limit과 같은 폭 정책으로 줄여 popup layout을 보호한다.
         first_error: validation_report
             .and_then(|report| report.errors().into_iter().next())
-            .map(|issue| compact_inline_detail(issue.message.as_str(), FOOTER_NOTICE_DETAIL_LIMIT)),
+            .map(|issue| compact_shell_detail(issue.message.as_str(), FOOTER_NOTICE_DETAIL_LIMIT)),
         // auto-turn budget은 planning init 자체의 산출물은 아니지만, promote 직후 이어질
         // 자동 실행량을 같은 decision surface에서 조정하게 해 주는 adjacent control이다.
         max_auto_turns_label,

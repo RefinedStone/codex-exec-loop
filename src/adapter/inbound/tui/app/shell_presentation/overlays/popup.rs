@@ -31,8 +31,6 @@ pub(crate) use language_selection::{
     LanguageSelectionFrameInput, build_language_selection_overlay_view,
 };
 pub(crate) use model_selection::{ModelSelectionFrameInput, build_model_selection_overlay_view};
-#[cfg(test)]
-pub(crate) use parallel_peek::build_parallel_peek_overlay_view;
 pub(crate) use parallel_peek::build_parallel_peek_overlay_view_from_snapshot;
 #[cfg(test)]
 pub(crate) use planning::build_planning_init_overlay_view;

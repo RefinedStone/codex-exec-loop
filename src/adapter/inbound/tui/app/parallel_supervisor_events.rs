@@ -26,13 +26,7 @@ pub(super) struct ParallelStreamEventId {
 }
 
 impl ParallelStreamEventId {
-    pub(super) fn new(stream_generation: u64, ordinal: u64) -> Self {
-        Self {
-            stream_generation,
-            ordinal,
-        }
-    }
-
+    #[cfg(test)]
     pub(super) fn stream_generation(self) -> u64 {
         self.stream_generation
     }
@@ -154,10 +148,12 @@ impl Default for ParallelEventStreamSnapshot {
 }
 
 impl ParallelEventStreamSnapshot {
+    #[cfg(test)]
     pub(super) fn generation(&self) -> u64 {
         self.generation
     }
 
+    #[cfg(test)]
     pub(super) fn first_ordinal(&self) -> u64 {
         self.first_ordinal
     }
@@ -724,7 +720,7 @@ fn rendered_parallel_event_tail_start_index(
              * contract splits at logical events. If the viewport boundary lands
              * inside an event, keep that whole event durable and begin the live
              * suffix at the next event so no wrapped rows disappear below the
-             * inline panel.
+             * fullscreen event viewport.
              */
             return index + 1;
         }
@@ -772,11 +768,6 @@ impl super::NativeTuiApp {
         self.shell.parallel_event_stream.lines()
     }
 
-    #[cfg(test)]
-    pub(crate) fn parallel_supervisor_event_scrollback_lines(&self) -> Vec<Line<'static>> {
-        self.shell.parallel_event_stream.window_lines()
-    }
-
     pub(super) fn record_parallel_supervisor_snapshot_for_stream(
         &mut self,
         snapshot: &ParallelModeSupervisorSnapshot,
@@ -787,18 +778,6 @@ impl super::NativeTuiApp {
         self.shell
             .parallel_event_stream
             .record_runtime_feed_from_supervisor_snapshot(snapshot);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn push_parallel_supervisor_event_for_test(
-        &mut self,
-        timestamp_label: impl Into<String>,
-        actor: impl Into<String>,
-        body: impl Into<String>,
-    ) {
-        self.shell
-            .parallel_event_stream
-            .push_for_test(timestamp_label, actor, body);
     }
 }
 

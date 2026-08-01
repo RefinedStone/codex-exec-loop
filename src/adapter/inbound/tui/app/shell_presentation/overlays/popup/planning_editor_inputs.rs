@@ -1,7 +1,7 @@
 use crate::domain::planning::PlanningValidationReport;
 
 use super::super::super::super::super::planning_draft_editor_ui::PlanningDraftEditorCloseRisk;
-use super::super::super::super::{FOOTER_NOTICE_DETAIL_LIMIT, compact_inline_detail};
+use super::super::super::super::{FOOTER_NOTICE_DETAIL_LIMIT, compact_shell_detail};
 use super::copy::{PlanningDraftEditorIssueCopy, PlanningDraftEditorStatusCopy};
 
 /*
@@ -32,7 +32,7 @@ pub(super) fn build_planning_draft_editor_status_copy<'a>(
         // Compact editor status shows one issue; full report ordering remains owned by domain validation.
         first_issue: build_first_issue_copy(validation_report),
         // Staged path and dirty summaries use the same footer detail budget as other shell status rows.
-        staged_path_summary: compact_inline_detail(staged_path, FOOTER_NOTICE_DETAIL_LIMIT),
+        staged_path_summary: compact_shell_detail(staged_path, FOOTER_NOTICE_DETAIL_LIMIT),
         dirty_label_summary: summarize_dirty_labels(dirty_labels),
         has_dirty_labels: !dirty_labels.is_empty(),
         next_action,
@@ -51,7 +51,7 @@ fn build_first_issue_copy(
         // Severity survives for status color; detail is compacted for the narrow footer/status panel.
         .map(|issue| PlanningDraftEditorIssueCopy {
             severity: issue.severity,
-            detail: compact_inline_detail(&issue.message, FOOTER_NOTICE_DETAIL_LIMIT),
+            detail: compact_shell_detail(&issue.message, FOOTER_NOTICE_DETAIL_LIMIT),
         })
 }
 
@@ -61,7 +61,7 @@ fn summarize_dirty_labels(dirty_labels: &[String]) -> String {
         "none".to_string()
     } else {
         // Join before compaction so the whole label sentence is truncated once, not label-by-label.
-        compact_inline_detail(&dirty_labels.join(", "), FOOTER_NOTICE_DETAIL_LIMIT)
+        compact_shell_detail(&dirty_labels.join(", "), FOOTER_NOTICE_DETAIL_LIMIT)
     }
 }
 

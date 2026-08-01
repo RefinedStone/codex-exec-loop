@@ -6,8 +6,8 @@ use crate::adapter::inbound::tui::conversation_text::conversation_message_label;
 
 use super::overlays::build_inline_diff_preview;
 use super::{
-    AkraTheme, ConversationMessage, ConversationMessageKind, ConversationViewMode, Line,
-    MAX_CONVERSATION_HISTORY_LINES, Modifier, Span, Style,
+    AkraTheme, ConversationMessage, ConversationMessageKind, ConversationViewMode, Line, Modifier,
+    Span, Style,
 };
 
 const INLINE_DIFF_PREVIEW_ROWS: u16 = 8;
@@ -27,50 +27,24 @@ pub(in super::super) struct ConversationTranscriptView {
     pub(in super::super) card_rows: Vec<ConversationTranscriptCardRow>,
 }
 
-// Default transcript formatting is user-facing: message debug detail stays hidden unless a debug-aware caller opts in.
-#[cfg(test)]
-pub(in super::super) fn format_conversation_lines(
-    messages: &[ConversationMessage],
-) -> Vec<Line<'static>> {
-    format_conversation_lines_for_view(messages, ConversationViewMode::Medium, false)
-}
-
 #[cfg(test)]
 pub(in super::super) fn format_conversation_lines_for_view(
     messages: &[ConversationMessage],
     view_mode: ConversationViewMode,
     show_debug_details: bool,
 ) -> Vec<Line<'static>> {
-    format_conversation_lines_capped(
+    format_conversation_projection_uncapped(
         messages,
         view_mode,
         show_debug_details,
         None,
         DEFAULT_TRANSCRIPT_WIDTH,
     )
+    .lines
 }
 
 #[cfg(test)]
-pub(in super::super) fn format_conversation_lines_with_debug(
-    messages: &[ConversationMessage],
-    // Debug detail is operator-only transcript copy and stays out of cached/default message lines.
-    show_debug_details: bool,
-) -> Vec<Line<'static>> {
-    let view_mode = if show_debug_details {
-        ConversationViewMode::Detail
-    } else {
-        ConversationViewMode::Medium
-    };
-    format_conversation_lines_capped(
-        messages,
-        view_mode,
-        show_debug_details,
-        None,
-        DEFAULT_TRANSCRIPT_WIDTH,
-    )
-}
-
-pub(in super::super) fn format_conversation_scrollback_lines_with_expand_at_width(
+pub(in super::super) fn format_fullscreen_conversation_lines_with_expand_at_width(
     messages: &[ConversationMessage],
     view_mode: ConversationViewMode,
     show_debug_details: bool,
@@ -87,68 +61,20 @@ pub(in super::super) fn format_conversation_scrollback_lines_with_expand_at_widt
     .lines
 }
 
-pub(in super::super) fn format_live_conversation_transcript_view(
-    handoff_messages: Option<&[ConversationMessage]>,
-    buffered_tool_messages: &[ConversationMessage],
-    live_agent_message: Option<&ConversationMessage>,
+pub(in super::super) fn format_fullscreen_conversation_transcript_view(
+    messages: &[ConversationMessage],
     view_mode: ConversationViewMode,
     show_debug_details: bool,
     expand_state: &ProgressiveActivityExpandState,
     width: u16,
 ) -> ConversationTranscriptView {
-    let mut projection = ConversationTranscriptView {
-        lines: Vec::new(),
-        card_rows: Vec::new(),
-    };
-    if let Some(messages) = handoff_messages {
-        append_conversation_messages(
-            &mut projection,
-            messages,
-            view_mode,
-            show_debug_details,
-            Some(expand_state),
-            width,
-        );
-    }
-    append_conversation_messages(
-        &mut projection,
-        buffered_tool_messages,
+    format_conversation_projection_uncapped(
+        messages,
         view_mode,
         show_debug_details,
         Some(expand_state),
         width,
-    );
-    if let Some(message) = live_agent_message {
-        append_conversation_messages(
-            &mut projection,
-            std::slice::from_ref(message),
-            view_mode,
-            show_debug_details,
-            Some(expand_state),
-            width,
-        );
-    }
-    cap_conversation_projection(&mut projection);
-    projection
-}
-
-#[cfg(test)]
-fn format_conversation_lines_capped(
-    messages: &[ConversationMessage],
-    view_mode: ConversationViewMode,
-    show_debug_details: bool,
-    expand_state: Option<&ProgressiveActivityExpandState>,
-    width: u16,
-) -> Vec<Line<'static>> {
-    let mut projection = format_conversation_projection_uncapped(
-        messages,
-        view_mode,
-        show_debug_details,
-        expand_state,
-        width,
-    );
-    cap_conversation_projection(&mut projection);
-    projection.lines
+    )
 }
 
 // Project logical conversation messages into terminal transcript lines.
@@ -234,7 +160,7 @@ fn append_conversation_messages(
             }
         }
 
-        // Separator participates in history capping so rendered scroll height matches what the user sees.
+        // Separators participate in the same wrapped-row calculation used by the viewport.
         lines.push(Line::from(""));
     }
 }
@@ -251,18 +177,6 @@ fn append_empty_transcript_message(
             format!("No messages visible in {} view.", view_mode.label())
         };
         lines.push(Line::from(empty_message));
-    }
-}
-
-fn cap_conversation_projection(projection: &mut ConversationTranscriptView) {
-    if projection.lines.len() <= MAX_CONVERSATION_HISTORY_LINES {
-        return;
-    }
-    let dropped = projection.lines.len() - MAX_CONVERSATION_HISTORY_LINES;
-    projection.lines.drain(0..dropped);
-    projection.card_rows.retain(|row| row.line_index >= dropped);
-    for row in &mut projection.card_rows {
-        row.line_index -= dropped;
     }
 }
 
@@ -712,7 +626,7 @@ mod tests {
         let mut expand_state = ProgressiveActivityExpandState::default();
         expand_state.expand_tool(tool_message_digest(Some("read-1"), text));
 
-        let rendered = format_conversation_scrollback_lines_with_expand_at_width(
+        let rendered = format_fullscreen_conversation_lines_with_expand_at_width(
             &messages,
             ConversationViewMode::Medium,
             false,

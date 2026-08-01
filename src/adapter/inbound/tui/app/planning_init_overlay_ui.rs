@@ -6,7 +6,7 @@ use crate::domain::planning::PlanningValidationReport;
 /*
 planning init overlay state는 service state가 아니라 TUI wizard의 화면-local
 state다. controller는 이 값을 보고 key routing을 결정하고, presentation router는
-같은 값을 popup/inline view DTO로 투영한다. 그래서 여기에는 실제 planning 작업
+같은 값을 popup/fullscreen view DTO로 투영한다. 그래서 여기에는 실제 planning 작업
 수행 결과가 아니라 현재 step, 선택 cursor, staged simple draft의 review copy만 둔다.
 */
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,7 +21,7 @@ pub(super) enum PlanningInitOverlayStep {
     DetailSelection,
     // simple mode staging이 끝난 뒤 promote/edit/budget 조정을 고르는 confirmation surface다.
     SimpleReview,
-    // shared draft editor가 planning init overlay의 inline surface를 소유하는 단계다.
+    // shared draft editor가 planning init overlay의 fullscreen surface를 소유하는 단계다.
     ManualEditor,
 }
 

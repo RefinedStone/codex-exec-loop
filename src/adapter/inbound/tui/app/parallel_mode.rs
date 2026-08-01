@@ -5,8 +5,6 @@ use crate::adapter::inbound::tui::shell_chrome::{ShellChromeEvent, ShellOverlay}
 #[cfg(test)]
 use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneBackgroundEvent;
 #[cfg(test)]
-use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneEffectId;
-#[cfg(test)]
 use crate::application::service::parallel_mode::control_plane::parallel_mode_distributor_tick_signature;
 use crate::application::service::parallel_mode::control_plane::{
     ParallelModeControlPlaneCommand, ParallelModeControlPlanePresentationEvent,
@@ -125,12 +123,6 @@ impl NativeTuiApp {
         self.current_parallel_mode_readiness_projection()
     }
     #[cfg(test)]
-    pub(crate) fn parallel_mode_control_effect_in_flight(&self) -> bool {
-        self.runtime
-            .client_runtime
-            .parallel_control_effect_in_flight_for_test()
-    }
-    #[cfg(test)]
     pub(crate) fn parallel_mode_automation_epoch_id(&self) -> Option<u64> {
         let workspace_directory = self.planning_workspace_directory();
         self.runtime
@@ -138,59 +130,11 @@ impl NativeTuiApp {
             .current_parallel_epoch_id_for_workspace(&workspace_directory)
     }
     #[cfg(test)]
-    pub(crate) fn parallel_mode_supervisor_refresh_in_flight(&self) -> bool {
-        self.runtime
-            .client_runtime
-            .parallel_supervisor_refresh_in_flight_for_test()
-    }
-    #[cfg(test)]
-    pub(crate) fn parallel_mode_orchestrator_wake_in_flight(&self) -> bool {
-        self.runtime
-            .client_runtime
-            .parallel_orchestrator_wake_in_flight_for_test()
-    }
-    #[cfg(test)]
     pub(crate) fn set_parallel_mode_enabled_for_test(&mut self, enabled: bool) {
         let workspace_directory = self.planning_workspace_directory();
         self.runtime
             .client_runtime
             .force_parallel_mode_for_test(workspace_directory, enabled);
-    }
-    #[cfg(test)]
-    pub(crate) fn set_parallel_mode_initial_pool_reset_completed_for_test(
-        &mut self,
-        completed: bool,
-    ) {
-        self.runtime
-            .client_runtime
-            .force_parallel_initial_pool_reset_completed_for_test(completed);
-    }
-    #[cfg(test)]
-    pub(crate) fn set_parallel_mode_automation_epoch_for_test(&mut self, epoch_id: u64) {
-        let workspace_directory = self.planning_workspace_directory();
-        self.runtime
-            .client_runtime
-            .force_parallel_epoch_for_test(workspace_directory, epoch_id);
-    }
-    #[cfg(test)]
-    pub(crate) fn mark_parallel_mode_supervisor_refresh_in_flight_for_test(
-        &mut self,
-    ) -> (u64, ParallelModeControlPlaneEffectId) {
-        let workspace_directory = self.planning_workspace_directory();
-        let epoch_id = self.parallel_mode_automation_epoch_id().unwrap_or(1);
-        let effect_id = self
-            .runtime
-            .client_runtime
-            .force_parallel_supervisor_refresh_in_flight_for_test(workspace_directory, epoch_id);
-        (epoch_id, effect_id)
-    }
-    #[cfg(test)]
-    pub(crate) fn last_parallel_mode_automation_trigger(
-        &self,
-    ) -> Option<ParallelModeAutomationTrigger> {
-        self.runtime
-            .client_runtime
-            .last_parallel_automation_trigger()
     }
     pub(crate) fn parallel_mode_supervisor_snapshot(&self) -> ParallelModeSupervisorSnapshot {
         let workspace_directory = self.planning_workspace_directory();
@@ -239,12 +183,6 @@ impl NativeTuiApp {
             .parallel_mode
             .supervisor
             .map(|snapshot| *snapshot)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn parallel_mode_activity_pulse_visible(&self) -> bool {
-        let sample = ParallelPanelProjectionSample::capture(self);
-        self.parallel_mode_activity_pulse_visible_with_sample(&sample)
     }
 
     pub(crate) fn parallel_mode_prompt_input_locked(&self) -> bool {
@@ -356,7 +294,7 @@ impl NativeTuiApp {
     pub(super) fn handle_parallel_shell_command(&mut self, argument: Option<&str>) {
         /*
          * `:parallel` commands are operator controls, not prompt text. Each
-         * branch updates the same conversation status line so the inline shell,
+         * branch updates the same conversation status line so the fullscreen shell,
          * footer, and popup all report the most recent control action.
          */
         match parse_parallel_mode_shell_argument(argument) {
@@ -472,16 +410,6 @@ impl NativeTuiApp {
         );
     }
 
-    #[cfg(test)]
-    pub(super) fn apply_parallel_mode_orchestrator_wake_request(
-        &mut self,
-        workspace_directory: String,
-        trigger: ParallelModeAutomationTrigger,
-        epoch_id: u64,
-    ) {
-        self.request_parallel_mode_dispatch(workspace_directory, trigger, Some(epoch_id));
-    }
-
     pub(super) fn request_parallel_mode_dispatch(
         &mut self,
         workspace_directory: String,
@@ -517,26 +445,6 @@ impl NativeTuiApp {
         .presentation_changed
     }
 
-    #[cfg(test)]
-    pub(super) fn parallel_mode_supervisor_refresh_due_for_test(&self, now: Instant) -> bool {
-        let sample = ParallelPanelProjectionSample::capture(self);
-        self.parallel_mode_supervisor_refresh_due_with_sample_for_test(now, &sample)
-    }
-
-    #[cfg(test)]
-    pub(super) fn parallel_mode_supervisor_refresh_due_with_sample_for_test(
-        &self,
-        now: Instant,
-        sample: &ParallelPanelProjectionSample,
-    ) -> bool {
-        self.runtime
-            .client_runtime
-            .parallel_supervisor_refresh_due_for_test(
-                now,
-                self.parallel_mode_activity_pulse_visible_with_sample(sample),
-            )
-    }
-
     fn sync_core_parallel_mode_readiness_projection(
         &mut self,
         snapshot: Option<ParallelModeReadinessSnapshot>,
@@ -559,22 +467,6 @@ impl NativeTuiApp {
         self.dispatch_client_event(CoreInput::ParallelModeSupervisorProjectionChanged(
             snapshot.map(Box::new),
         ));
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_parallel_mode_readiness_snapshot_for_test(
-        &mut self,
-        snapshot: Option<ParallelModeReadinessSnapshot>,
-    ) {
-        self.sync_core_parallel_mode_readiness_projection(snapshot);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_parallel_mode_supervisor_snapshot_for_test(
-        &mut self,
-        snapshot: Option<ParallelModeSupervisorSnapshot>,
-    ) {
-        self.sync_core_parallel_mode_supervisor_projection(snapshot);
     }
 }
 

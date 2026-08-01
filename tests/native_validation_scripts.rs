@@ -140,7 +140,7 @@ fn capture_helpers_expose_capture_role_contract() {
         "scripts/capture_native_validation.sh",
         &[
             "--frontend",
-            "inline",
+            "fullscreen",
             "--check-profile",
             "replay-policy-representative",
             "--capture-role",
@@ -3388,12 +3388,12 @@ commit: abc123
 os: Ubuntu 24.04.2 LTS / WSL2 6.6.114.1-microsoft-standard-WSL2
 terminal: tmux 3.4 detached PTY
 shell: bash
-frontend: inline
+frontend: fullscreen
 term: tmux-256color
 capture_role: counted-row
 check_profile: prompt-input-delay-pty
 checks:
-- launch inline TUI in tmux PTY
+- launch fullscreen TUI in tmux PTY
 result: pass
 notes: prompt echo under budget
 "#,
@@ -3406,7 +3406,7 @@ commit: abc123
 os: macOS 14.5
 terminal: Terminal.app
 shell: zsh
-frontend: inline
+frontend: fullscreen
 term: xterm-256color
 capture_role: counted-row
 check_profile: terminal-baseline
@@ -3421,7 +3421,7 @@ notes: baseline only
 
     assert!(output.contains("check profile: prompt-input-delay-pty"));
     assert!(output.contains("required pass: 1/5"));
-    assert!(output.contains("Linux / tmux detached PTY / bash / inline"));
+    assert!(output.contains("Linux / tmux detached PTY / bash / fullscreen"));
     assert!(output.contains("prompt-tmux.txt"));
     assert!(!output.contains("baseline-terminal-app.txt"));
     assert!(!output.contains("Unmatched Records"));
@@ -3440,12 +3440,12 @@ commit: abc123
 os: Ubuntu 24.04.2 LTS / WSL2 6.6.114.1-microsoft-standard-WSL2
 terminal: tmux 3.4 detached PTY
 shell: bash
-frontend: inline
+frontend: fullscreen
 term: tmux-256color
 capture_role: counted-row
 check_profile: prompt-input-delay-pty
 checks:
-- launch inline TUI in tmux PTY
+- launch fullscreen TUI in tmux PTY
 result: pass
 notes: prompt echo under budget
 "#,
@@ -3455,10 +3455,10 @@ notes: prompt echo under budget
         "baseline-terminal-app.txt",
         r#"date: 2026-05-09
 commit: abc123
-os: macOS 14.5
-terminal: Terminal.app
-shell: zsh
-frontend: inline
+os: Ubuntu 24.04.2 LTS
+terminal: Linux terminal
+shell: bash
+frontend: fullscreen
 term: xterm-256color
 capture_role: counted-row
 check_profile: terminal-baseline
@@ -3488,10 +3488,10 @@ fn supplemental_unmatched_exact_row_does_not_count_toward_terminal_baseline() {
         "supplemental-terminal-app.txt",
         r#"date: 2026-05-09
 commit: abc123
-os: macOS 14.5
-terminal: Terminal.app
-shell: zsh
-frontend: inline
+os: Ubuntu 24.04.2 LTS
+terminal: Linux terminal
+shell: bash
+frontend: fullscreen
 term: xterm-256color
 capture_role: supplemental-unmatched
 check_profile: terminal-baseline
@@ -3509,7 +3509,11 @@ notes: supplemental replay-only evidence
     assert!(output.contains("required missing: 4"));
     assert!(output.contains("Unmatched Records"));
     assert!(output.contains("supplemental-terminal-app.txt"));
-    assert!(!output.contains("Terminal.app / zsh / inline (supplemental-terminal-app.txt)"));
+    assert!(
+        !output.contains(
+            "Linux / direct terminal / bash / fullscreen (supplemental-terminal-app.txt)"
+        )
+    );
 
     fs::remove_dir_all(records_dir).expect("validation temp dir should be removed");
 }
@@ -3522,10 +3526,10 @@ fn missing_capture_role_does_not_count_toward_terminal_baseline() {
         "missing-role-terminal-app.txt",
         r#"date: 2026-05-09
 commit: abc123
-os: macOS 14.5
-terminal: Terminal.app
-shell: zsh
-frontend: inline
+os: Ubuntu 24.04.2 LTS
+terminal: Linux terminal
+shell: bash
+frontend: fullscreen
 term: xterm-256color
 check_profile: terminal-baseline
 checks:
@@ -3553,10 +3557,10 @@ fn missing_checks_block_does_not_count_toward_terminal_baseline() {
         "missing-checks-terminal-app.txt",
         r#"date: 2026-05-09
 commit: abc123
-os: macOS 14.5
-terminal: Terminal.app
-shell: zsh
-frontend: inline
+os: Ubuntu 24.04.2 LTS
+terminal: Linux terminal
+shell: bash
+frontend: fullscreen
 term: xterm-256color
 capture_role: counted-row
 check_profile: terminal-baseline
@@ -3583,10 +3587,10 @@ fn missing_check_profile_does_not_count_toward_terminal_baseline() {
         "missing-profile-terminal-app.txt",
         r#"date: 2026-05-09
 commit: abc123
-os: macOS 14.5
-terminal: Terminal.app
-shell: zsh
-frontend: inline
+os: Ubuntu 24.04.2 LTS
+terminal: Linux terminal
+shell: bash
+frontend: fullscreen
 term: xterm-256color
 capture_role: counted-row
 checks:
@@ -3611,7 +3615,7 @@ fn crlf_counted_rows_still_count_toward_terminal_baseline() {
     write_record(
         &records_dir,
         "crlf-terminal-app.txt",
-        "date: 2026-05-09\r\ncommit: abc123\r\nos: macOS 14.5\r\nterminal: Terminal.app\r\nshell: zsh\r\nfrontend: inline\r\nterm: xterm-256color\r\ncapture_role: counted-row\r\ncheck_profile: terminal-baseline\r\nchecks:\r\n- launch and exit\r\nresult: pass\r\nnotes: crlf baseline row\r\n",
+        "date: 2026-05-09\r\ncommit: abc123\r\nos: Ubuntu 24.04.2 LTS\r\nterminal: Linux terminal\r\nshell: bash\r\nfrontend: fullscreen\r\nterm: xterm-256color\r\ncapture_role: counted-row\r\ncheck_profile: terminal-baseline\r\nchecks:\r\n- launch and exit\r\nresult: pass\r\nnotes: crlf baseline row\r\n",
     );
 
     let output = summarize(&records_dir, &[]);
@@ -3631,10 +3635,10 @@ fn default_summary_warns_when_required_rows_are_incomplete() {
         "baseline-terminal-app.txt",
         r#"date: 2026-05-09
 commit: abc123
-os: macOS 14.5
-terminal: Terminal.app
-shell: zsh
-frontend: inline
+os: Ubuntu 24.04.2 LTS
+terminal: Linux terminal
+shell: bash
+frontend: fullscreen
 term: xterm-256color
 capture_role: counted-row
 check_profile: terminal-baseline
@@ -3661,10 +3665,10 @@ fn fail_on_incomplete_turns_summary_into_a_gate() {
         "baseline-terminal-app.txt",
         r#"date: 2026-05-09
 commit: abc123
-os: macOS 14.5
-terminal: Terminal.app
-shell: zsh
-frontend: inline
+os: Ubuntu 24.04.2 LTS
+terminal: Linux terminal
+shell: bash
+frontend: fullscreen
 term: xterm-256color
 capture_role: counted-row
 check_profile: terminal-baseline

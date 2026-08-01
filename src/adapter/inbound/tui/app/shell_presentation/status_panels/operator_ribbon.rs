@@ -5,8 +5,8 @@ use crate::application::service::planning::PlanningApplicationProjection;
 
 use super::super::{
     AkraTheme, AutoFollowSnapshotPresentation, ConversationScreenModel, ConversationViewModel,
-    INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT, ShellActionAvailability, ShellOverlay, StartupState,
-    TuiLanguage, compact_inline_detail,
+    SHELL_TAIL_AUTO_FOLLOW_DETAIL_LIMIT, ShellActionAvailability, ShellOverlay, StartupState,
+    TuiLanguage, compact_shell_detail,
 };
 use super::tail_shared::compact_auto_follow_status_summary;
 
@@ -170,7 +170,7 @@ pub(super) fn build_operator_ribbon_line(
         Span::styled("Akra", AkraTheme::brand()),
         Span::raw(" / "),
         Span::styled(
-            compact_inline_detail(&workspace_label, workspace_limit),
+            compact_shell_detail(&workspace_label, workspace_limit),
             AkraTheme::accent(),
         ),
         separator(compact_metrics),
@@ -231,7 +231,7 @@ pub(super) fn build_operator_ribbon_line(
                 "auto: {} · done: {}",
                 compact_auto_follow_status_summary(
                     conversation,
-                    INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT,
+                    SHELL_TAIL_AUTO_FOLLOW_DETAIL_LIMIT,
                 ),
                 conversation.auto_follow_state().progress_label(),
             ),

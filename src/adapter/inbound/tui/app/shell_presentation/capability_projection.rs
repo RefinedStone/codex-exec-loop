@@ -13,7 +13,7 @@ use super::{AkraTheme, Line, Span, StartupState, TuiLanguage};
  * capability_projection은 typed frame input을 renderer-ready Line/String으로 접는 계층이다.
  * capability_copy가 문구 자체를 소유하고, 이 파일은 StartupState/SessionState 같은
  * 명시적인 read model만 읽는다. NativeTuiApp sampling은 terminal frame capture 경계가
- * 한 번만 수행하고 shell_core와 inline inspection은 이 projection 결과만 배치한다.
+ * 한 번만 수행하고 shell_core와 fullscreen inspection은 이 projection 결과만 배치한다.
  */
 pub(super) fn build_startup_overlay_summary_lines(
     startup_state: &StartupState,

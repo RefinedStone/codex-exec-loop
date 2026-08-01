@@ -2,7 +2,7 @@ use super::super::terminal_text::{display_width, pad_right_to_cells};
 use super::super::{AkraTheme, InlineShellCommand, Line, TuiLanguage};
 
 // help overlay는 domain/runtime projection이 아니라 shell command catalog의 read-only view다.
-// section을 header, command list, key footer로 미리 나눠 inline inspection renderer가
+// section을 header, command list, key footer로 미리 나눠 fullscreen inspection renderer가
 // `InlineShellCommand` registry나 column alignment 규칙을 직접 알지 않게 한다.
 pub(crate) struct HelpOverlayView {
     // header는 이 화면이 command 실행 surface가 아니라 prompt 위 inspection임을 알려 준다.

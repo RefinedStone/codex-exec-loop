@@ -12,7 +12,7 @@ use super::{
 // shell presentation의 런타임 상태 문구를 한곳에 모아 둔다. 컨트롤러 상태를 다시
 // 해석하지 않고 사전에 캡처한 runtime-status projection만 읽어, 화면 조각들이 같은
 // working/idle 판단과 auto-follow 문구를 공유하게 한다.
-pub(super) fn compact_inline_detail(text: &str, max_len: usize) -> String {
+pub(super) fn compact_shell_detail(text: &str, max_len: usize) -> String {
     let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let mut control_safe = String::with_capacity(compact.len());
     for character in compact.chars() {
@@ -46,7 +46,7 @@ pub(super) fn build_working_line(
     let started_at = runtime_status.working_started_at?;
     // status line은 terminal 폭을 가장 먼저 잃는 영역이라 detail을 whitespace 단위로
     // 접어 두고, elapsed는 monotonic Instant 기준으로만 계산한다.
-    let detail = compact_inline_detail(&detail, max_detail_len);
+    let detail = compact_shell_detail(&detail, max_detail_len);
     let elapsed = format_elapsed(rendered_at.saturating_duration_since(started_at));
     let label = format!("◦ {state_label}");
     let detail_prefix = format!(" ({elapsed} • ");

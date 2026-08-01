@@ -29,7 +29,7 @@ pub(crate) fn build_language_selection_overlay_view(
 
     LanguageSelectionOverlayView {
         header_lines: vec![
-            AkraTheme::title_line("Select Language", " / inline inspection"),
+            AkraTheme::title_line("Select Language", " / focused view"),
             Line::from("Choose the language used for TUI-generated system messages."),
         ],
         language_lines,

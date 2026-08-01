@@ -339,33 +339,39 @@ impl NativeTuiApp {
         }
     }
 
-    pub(super) fn progressive_activity_mouse_capture_requested(&self) -> bool {
-        self.shell.chrome.shell_overlay == ShellOverlay::Activity
-            && self
-                .shell
-                .progressive_activity_overlay_ui_state
-                .mouse_capture_requested()
-    }
-
     pub(super) fn clear_progressive_activity_card_hit_areas(&mut self) {
         self.shell
             .progressive_activity_overlay_ui_state
             .clear_card_hit_areas();
     }
 
-    pub(super) fn inline_transcript_mouse_capture_requested(&self) -> bool {
+    pub(super) fn clear_transcript_card_hit_areas(&mut self) {
+        self.shell
+            .transcript_viewport_ui_state
+            .clear_card_hit_areas();
+    }
+
+    pub(super) fn scroll_transcript_page_up(&mut self) -> bool {
         self.shell.chrome.shell_overlay == ShellOverlay::Hidden
-            && self
-                .shell
-                .inline_transcript_ui_state
-                .mouse_capture_requested()
+            && self.shell.transcript_viewport_ui_state.page_up()
     }
 
-    pub(super) fn clear_inline_transcript_card_hit_areas(&mut self) {
-        self.shell.inline_transcript_ui_state.clear_card_hit_areas();
+    pub(super) fn scroll_transcript_page_down(&mut self) -> bool {
+        self.shell.chrome.shell_overlay == ShellOverlay::Hidden
+            && self.shell.transcript_viewport_ui_state.page_down()
     }
 
-    fn toggle_inline_transcript_tool_card(&mut self, digest: [u8; 32]) -> bool {
+    pub(super) fn jump_transcript_to_top(&mut self) -> bool {
+        self.shell.chrome.shell_overlay == ShellOverlay::Hidden
+            && self.shell.transcript_viewport_ui_state.jump_to_top()
+    }
+
+    pub(super) fn follow_latest_transcript(&mut self) -> bool {
+        self.shell.chrome.shell_overlay == ShellOverlay::Hidden
+            && self.shell.transcript_viewport_ui_state.follow_latest()
+    }
+
+    fn toggle_transcript_tool_card(&mut self, digest: [u8; 32]) -> bool {
         if self.shell.chrome.shell_overlay != ShellOverlay::Hidden {
             return false;
         }
@@ -374,7 +380,7 @@ impl NativeTuiApp {
         else {
             return false;
         };
-        if !conversation.visible_inline_tool_message_has_digest(digest) {
+        if !conversation.visible_tool_message_has_digest(digest) {
             return false;
         }
         self.shell
@@ -384,31 +390,37 @@ impl NativeTuiApp {
         true
     }
 
-    pub(super) fn toggle_latest_inline_transcript_tool_card(&mut self) -> bool {
-        let Some(digest) = self.shell.inline_transcript_ui_state.latest_digest() else {
+    pub(super) fn toggle_latest_transcript_tool_card(&mut self) -> bool {
+        let Some(digest) = self.shell.transcript_viewport_ui_state.latest_digest() else {
             return false;
         };
-        self.toggle_inline_transcript_tool_card(digest)
+        self.toggle_transcript_tool_card(digest)
     }
 
-    pub(super) fn handle_inline_transcript_mouse_event(
-        &mut self,
-        mouse: event::MouseEvent,
-    ) -> bool {
+    pub(super) fn handle_transcript_mouse_event(&mut self, mouse: event::MouseEvent) -> bool {
         if self.shell.chrome.shell_overlay != ShellOverlay::Hidden
-            || mouse.kind != event::MouseEventKind::Down(event::MouseButton::Left)
             || mouse.modifiers != KeyModifiers::NONE
         {
             return false;
         }
+        match mouse.kind {
+            event::MouseEventKind::ScrollUp => {
+                return self.shell.transcript_viewport_ui_state.scroll_up(3);
+            }
+            event::MouseEventKind::ScrollDown => {
+                return self.shell.transcript_viewport_ui_state.scroll_down(3);
+            }
+            event::MouseEventKind::Down(event::MouseButton::Left) => {}
+            _ => return false,
+        }
         let Some(digest) = self
             .shell
-            .inline_transcript_ui_state
+            .transcript_viewport_ui_state
             .digest_at(mouse.column, mouse.row)
         else {
             return false;
         };
-        self.toggle_inline_transcript_tool_card(digest)
+        self.toggle_transcript_tool_card(digest)
     }
 
     pub(super) fn handle_progressive_activity_mouse_event(

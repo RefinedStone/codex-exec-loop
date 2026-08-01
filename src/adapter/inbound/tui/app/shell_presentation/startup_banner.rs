@@ -30,7 +30,7 @@ pub(in super::super) fn startup_ascii_art_lines(max_height: Option<u16>) -> Vec<
     if let Some(max_height) = max_height {
         let max_height = max_height as usize;
         if max_height > 0 && art_lines.len() > max_height {
-            // Center cropping preserves the logo's visual weight when the inline terminal has fewer rows than the full mark.
+            // Center cropping preserves the logo's visual weight when the fullscreen viewport has fewer rows than the full mark.
             let start = art_lines.len().saturating_sub(max_height) / 2;
             art_lines = &art_lines[start..start + max_height];
         }

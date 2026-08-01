@@ -183,13 +183,9 @@ impl ProgressiveActivityOverlayUiState {
             .map(|hit_area| hit_area.card_index)
     }
 
+    #[cfg(test)]
     pub(super) fn mouse_capture_requested(&self) -> bool {
         !self.card_hit_areas.is_empty()
-    }
-
-    #[cfg(test)]
-    pub(super) fn card_hit_areas(&self) -> &[ProgressiveActivityCardHitArea] {
-        &self.card_hit_areas
     }
 
     #[cfg(test)]

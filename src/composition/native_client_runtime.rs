@@ -359,6 +359,7 @@ impl NativeClientRuntime {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn new_with_github_review_polling_setup_loader(
         startup_service: StartupService,
         session_service: SessionService,
@@ -601,6 +602,7 @@ impl NativeClientRuntime {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn last_parallel_automation_trigger(&self) -> Option<ParallelModeAutomationTrigger> {
         self.parallel_control_plane.last_automation_trigger()
     }
@@ -627,6 +629,7 @@ impl NativeClientRuntime {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn test_post_turn_evaluation_is_in_flight(
         &self,
         thread_id: &str,
@@ -648,6 +651,7 @@ impl NativeClientRuntime {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn force_parallel_initial_pool_reset_completed_for_test(&self, completed: bool) {
         self.parallel_control_plane
             .force_initial_pool_reset_completed_for_test(completed);
@@ -684,6 +688,7 @@ impl NativeClientRuntime {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn force_parallel_supervisor_refresh_in_flight_for_test(
         &self,
         workspace_directory: impl Into<String>,
@@ -695,21 +700,25 @@ impl NativeClientRuntime {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn parallel_control_effect_in_flight_for_test(&self) -> bool {
         self.parallel_control_plane.control_effect_in_flight()
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn parallel_supervisor_refresh_in_flight_for_test(&self) -> bool {
         self.parallel_control_plane.supervisor_refresh_in_flight()
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn parallel_orchestrator_wake_in_flight_for_test(&self) -> bool {
         self.parallel_control_plane.orchestrator_wake_in_flight()
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn parallel_supervisor_refresh_due_for_test(
         &self,
         now: Instant,
