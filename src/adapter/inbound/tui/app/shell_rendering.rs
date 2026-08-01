@@ -276,6 +276,41 @@ fn draw_fullscreen_conversation_shell(
     if shell_overlay == ShellOverlay::Hidden {
         // startup banner 같은 presentation state는 의도적으로 상단부터 전체 frame을 소유하므로 bottom anchored가 아니어야 한다.
         if tail_view.render_from_top {
+            if !transcript_lines.is_empty() {
+                // The startup logo is modeled as transcript content so the first frame stays
+                // immutable and renderer-owned. Keep it directly above the top-anchored tail;
+                // returning after only the tail would silently discard the logo.
+                let tail_height = tail_view.rendered_height(frame_area.width, frame_area.height);
+                let available_logo_height = frame_area.height.saturating_sub(tail_height);
+                let logo_height = count_wrapped_rows(&transcript_lines, frame_area.width)
+                    .min(usize::from(available_logo_height))
+                    as u16;
+                let logo_area =
+                    Rect::new(frame_area.x, frame_area.y, frame_area.width, logo_height);
+                let tail_area = Rect::new(
+                    frame_area.x,
+                    logo_area.bottom(),
+                    frame_area.width,
+                    tail_height,
+                );
+                let transcript_viewport_card_digests =
+                    transcript_card_rows.iter().map(|row| row.digest).collect();
+                let transcript_viewport_card_hit_areas = render_fullscreen_transcript(
+                    frame,
+                    logo_area,
+                    transcript_lines,
+                    transcript_card_rows,
+                    transcript_scroll_offset,
+                    transcript_has_unseen_output,
+                );
+                return FullscreenConversationShellRenderReceipt {
+                    queue_receipt_undo_hit_area: render_bottom_anchored_tail(
+                        frame, tail_area, tail_view,
+                    ),
+                    transcript_viewport_card_digests,
+                    transcript_viewport_card_hit_areas,
+                };
+            }
             let top_area = Rect::new(
                 frame_area.x,
                 frame_area.y,

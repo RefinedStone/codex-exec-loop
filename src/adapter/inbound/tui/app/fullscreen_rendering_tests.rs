@@ -82,6 +82,25 @@ fn fullscreen_transcript_owns_history_and_keeps_the_composer_visible() {
 }
 
 #[test]
+fn startup_screen_renders_the_akra_logo_above_the_composer() {
+    let mut app = test_native_tui_app();
+    app.shell.show_startup_ascii_art = true;
+
+    let screen = render(&mut app, 80, 24);
+
+    assert!(screen.contains("██████╗"));
+    assert!(screen.contains("Describe a task"));
+    let logo_position = screen.find("██████╗").expect("startup logo should render");
+    let composer_position = screen
+        .find("Describe a task")
+        .expect("composer should remain visible");
+    assert!(
+        logo_position < composer_position,
+        "startup logo should stay above the composer:\n{screen}"
+    );
+}
+
+#[test]
 fn transcript_window_rebases_scroll_offsets_beyond_u16_without_losing_the_target_row() {
     let lines = (0..1_000)
         .map(|index| Line::from(format!("{index:04}:{}", "x".repeat(75))))
