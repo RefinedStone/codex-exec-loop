@@ -308,7 +308,7 @@ row requires the exact locally admitted correlation.
 | parallel wake/effect ordering and stale-completion guards | application control-plane |
 | task/direction/queue authority, leases, session records, delivery claims | SQLite-backed stores |
 | eligibility, capacity, retry, validation, stale-event decisions | domain |
-| delivered frame, viewport/back-buffer trust, host-scrollback receipt, terminal recovery | terminal transaction/adapter |
+| delivered frame, transcript viewport trust, frame receipt, terminal recovery | terminal transaction/adapter |
 
 State that affects an invariant or must survive restart cannot live only in TUI state. Rendering or
 focus state should not be promoted to domain authority. Adapter-local presentation state must not
@@ -330,9 +330,9 @@ crate-private, and a Rust AST guard rejects field assignments, mutable borrows, 
 replacement outside the dispatch seam, and non-exhaustive event routing.
 
 Production terminal/frontend code cannot borrow `NativeTuiApp` from `ShellRuntime`. The runtime
-returns owned terminal-sync projections and `InlineShellFrameModel` values, then accepts only named,
-narrow mutations for render receipts, transcript-handoff acknowledgement, and queue hit-area
-cleanup. `app()` and `app_mut()` remain test-only fixtures. Architecture tests pin the four-slice
+returns one sampled projection and owned `FullscreenShellFrameModel` values, then accepts only a
+typed `FullscreenFrameRenderReceipt` plus narrow failure cleanup. `app()` and `app_mut()` remain
+test-only fixtures. Architecture tests pin the four-slice
 field ledger, reject aggregate-reference and trait escape hatches, and reject reintroduction of the
 retired duplicate correlation gates.
 
@@ -545,8 +545,7 @@ containment. Same-user hostile racing remains outside the filesystem-only threat
 
 TUI changes must keep state/reducer, controller/effect, projection/copy, theme/chrome,
 rendering/layout, and terminal-adapter responsibilities separate. Visual tokens belong behind
-`AkraTheme`; append-only rows split across host scrollback and live viewport cannot insert panel
-chrome into the stream.
+`AkraTheme`; conversation and operational streams remain inside one app-owned fullscreen viewport.
 
 Every actual shell-overlay identity change is emitted by the reducer as one typed
 `ShellOverlayTransition` containing its `from`, `to`, and exit mode. The root TUI coordinator
@@ -558,12 +557,13 @@ approval closes; other approval interruptions return to hidden chrome without er
 in-flight local state. Explicit close only dispatches `OverlayClosed`; all exit cleanup is derived
 once from the returned transition.
 
-The inline conversation tail path combines adapter-local UI state with one owned
+The fullscreen conversation path combines adapter-local UI state with one owned
 `RevisionedPlanningParallelProjection` from `revisioned_planning_parallel_projection()` into an
 immutable `ConversationScreenModel`. The terminal transaction captures that narrow Core projection
 once; it does not clone the broader `AppSnapshot` or its startup, session-catalog, and conversation
-payloads for a frame. A single owned tail projection derived from the screen model is compared by
-the redraw cache and then painted by the terminal transaction. Tail status, planning, parallel,
+payloads for a frame. `ConversationViewModel.messages` is the single canonical transcript; streaming
+assistant items update their `item_id` row in place and tool rows append immediately. A single owned
+projection derived from the screen model is painted by the terminal transaction. Tail status, planning, parallel,
 queue, GitHub, transcript, layout, animation, and prompt-focus helpers do not receive
 `NativeTuiApp` or application service handles. Conversation semantic state stores messages, not
 cached Ratatui `Line` values.
@@ -571,13 +571,13 @@ cached Ratatui `Line` values.
 The same transaction captures parallel mode, in-flight effect, supervisor inspection, withheld
 reason, the typed owned unsettled-cleanup notice projection, and event-stream facts once. The
 `ConversationScreenModel` combines those facts without mutating conversation state, and pure draw
-consumes the result. Supersession row planning, host-scrollback/live-tail splitting, prompt lock,
-animation, and drawing consume that immutable projection instead of reacquiring the control-plane
+consumes the result. Supersession row planning, app-owned stream geometry, prompt lock, animation,
+and drawing consume that immutable projection instead of reacquiring the control-plane
 mutex or sampling another clock. High-frequency prompt, pulse, and scheduler checks share a
 panel-only projection and do not clone transcript or event-stream rows.
 
-Focused Supersession is a full inline-main-buffer inspection, not an alternate-screen TUI. It hides
-and locks the composer, preserves its draft, and renders one responsive 16-row Parallel Operations
+Focused Supersession is a fullscreen inspection inside the same alternate-screen transaction. It
+hides and locks the composer, preserves its draft, and renders one responsive Parallel Operations
 view. Hidden Supersession while parallel mode remains enabled is passive and leaves the composer
 available. Lane selection stores stable slot/session identities and resolves them against each new
 snapshot, so refresh reorder cannot silently move focus to another worker. The selected lane
@@ -585,7 +585,7 @@ separates typed commit, validation, PR, review, integration, remote-verification
 absence of an owned fact remains `unknown`.
 
 Before `Terminal::draw`, the transaction combines the conversation projection and exactly one
-active overlay into an owned `InlineShellFrameModel`. Its `InlineInspectionFrameModel` variant owns
+active overlay into an owned `FullscreenShellFrameModel`. Its `FullscreenInspectionFrameModel` variant owns
 the view, widget-local state, geometry-dependent scroll decisions, and expected feedback baseline.
 `ShellRuntime` samples Client Runtime once into `ConversationProjectionFrameInput`; the UI capture
 boundary then lowers the four private app slices into feature-specific conversation, startup,
@@ -595,12 +595,11 @@ contract by the architecture guard.
 The capture boundary may read UI-local state but cannot reacquire Core, application services, the
 parallel control plane, or outbound I/O. Production `shell_rendering.rs` and
 `shell_rendering/**` consume only this owned frame model, mutate only Ratatui's `Frame`, and return
-an `InlineFrameRenderReceipt`; they cannot receive `NativeTuiApp`, dispatch commands, sample
+an `FullscreenFrameRenderReceipt`; they cannot receive `NativeTuiApp`, dispatch commands, sample
 clocks, or retain adapter state.
 
 The terminal transaction commits a render receipt only after the draw and post-draw terminal-size
-checks succeed. Its exact attempt gate discards failed, resize-raced, stale, and duplicate
-receipts. Receipt application compares the captured baseline before applying activity, editor,
+and resize-epoch checks succeed. Receipt application compares the captured baseline before applying activity, editor,
 help, approval, session-list, or queue-hit-area feedback, so an older frame cannot overwrite a
 newer UI edit.
 
@@ -645,12 +644,10 @@ round-trip mapper.
 The detailed, test-guarded contract is
 [TUI Layered Architecture](../design/07-tui-layered-architecture-and-aesthetic-contract.md).
 
-[Typed Terminal Delivery Transaction](../design/08-typed-terminal-delivery-transaction.md)
-is the shipped narrow extraction for the parallel host-scrollback/live-tail path. Stable event
-identity reaches one adapter-owned monotonic delivery frontier; one plan owns disjoint host and live
-models; host, frame, and conversation receipts settle independently; and renderers receive only the
-typed live model. `ViewportReplay` does not write the host frontier. Automatic host insertion uses
-the newline fallback, while the standard scroll-region strategy is an explicit diagnostic override.
+Parallel events use one app-owned `ParallelLiveStreamModel`. Frame capture finalizes its viewport
+geometry before draw, and `render_fullscreen_parallel_event_stream` receives only that typed model.
+There is no host delivery frontier, durable/live split, transcript handoff, or history insertion
+strategy in the production TUI.
 
 ## Forbidden Directions and Gates
 

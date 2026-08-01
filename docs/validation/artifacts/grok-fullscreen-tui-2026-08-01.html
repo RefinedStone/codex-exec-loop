@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Akra Grok-style Fullscreen TUI — validation capture</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #11151c;
+      --panel: #191f29;
+      --border: #303a49;
+      --text: #e8edf5;
+      --muted: #909bad;
+      --cyan: #42e8d0;
+      --violet: #c384ff;
+      --green: #72e39a;
+      --red: #ff7b8a;
+      --amber: #efc66b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: radial-gradient(circle at 20% 0%, #1a2730 0, var(--bg) 38rem);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+    }
+    main { width: min(1180px, calc(100% - 48px)); margin: 42px auto 64px; }
+    header { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 22px; }
+    h1 { margin: 0 0 8px; font-size: 28px; letter-spacing: -0.02em; }
+    p { margin: 0; color: var(--muted); line-height: 1.5; }
+    .badges { display: flex; flex-wrap: wrap; gap: 8px; justify-content: end; }
+    .badge { border: 1px solid var(--border); background: #151b23; border-radius: 999px; padding: 7px 11px; color: #bdc8d7; font-size: 12px; }
+    .badge.pass { color: var(--green); border-color: #2d7650; }
+    .terminal {
+      overflow: hidden;
+      border: 1px solid #3a4657;
+      border-radius: 14px;
+      background: #242a33;
+      box-shadow: 0 24px 70px #0008;
+    }
+    .chrome { height: 38px; display: flex; align-items: center; gap: 8px; padding: 0 14px; background: #1c222b; border-bottom: 1px solid #333d4b; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: #586476; }
+    .dot:first-child { background: #ff6f7d; } .dot:nth-child(2) { background: #e7bd55; } .dot:nth-child(3) { background: #61d18b; }
+    .chrome strong { margin-left: 9px; font: 600 12px/1 ui-monospace, SFMono-Regular, Consolas, monospace; color: #9da9ba; }
+    pre {
+      margin: 0;
+      min-height: 660px;
+      padding: 24px 28px 26px;
+      font: 15px/1.45 "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+      white-space: pre-wrap;
+      color: var(--text);
+    }
+    .role { color: var(--cyan); font-weight: 700; }
+    .tool { color: var(--violet); font-weight: 700; }
+    .subtle { color: var(--muted); }
+    .minus { color: var(--red); background: #5c253055; }
+    .plus { color: var(--green); background: #204d3355; }
+    .status { color: var(--amber); }
+    .composer { color: var(--cyan); }
+    section { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 18px; }
+    article { border: 1px solid var(--border); background: var(--panel); border-radius: 10px; padding: 15px; }
+    article strong { display: block; margin-bottom: 6px; font-size: 13px; }
+    article p { font-size: 13px; }
+    footer { margin-top: 14px; color: #7e8999; font: 12px/1.45 ui-monospace, monospace; }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>Akra · app-owned fullscreen transcript</h1>
+      <p>100×30 frame emitted by the production renderer through Ratatui <code>TestBackend</code>.</p>
+    </div>
+    <div class="badges">
+      <span class="badge pass">actual renderer · pass</span>
+      <span class="badge">alternate screen</span>
+      <span class="badge">Grok-style single viewport</span>
+    </div>
+  </header>
+
+  <div class="terminal" aria-label="Akra fullscreen terminal capture">
+    <div class="chrome"><span class="dot"></span><span class="dot"></span><span class="dot"></span><strong>AKRA · fullscreen 100×30</strong></div>
+    <pre><span class="role">You:</span>
+  Refactor the transcript into one app-owned fullscreen viewport.
+
+<span class="role">Codex Commentary:</span>
+  I’ll inspect the stream reducer and terminal transaction.
+
+<span class="tool">› ◆ explore</span>   Explored 3 targets
+
+<span class="role">Codex Commentary:</span>
+  The canonical row can now be updated in place without transcript replay.
+
+<span class="tool">▼ ◆ patch</span>     file change: update transcript viewport  <span class="subtle">7 lines</span>
+    [update] src/adapter/inbound/tui/app/transcript_viewport_ui.rs
+• Edited transcript_viewport_ui.rs
+<span class="minus">42 -host_scrollback</span>
+<span class="plus">42 +app_owned_viewport</span>
+
+
+
+
+
+
+
+
+Akra / root  ·  PENDING  ·  queue off  ·  agents off  ·  terminals 0  ·  gpt-5.5/high
+<span class="status">startup: startup checks still running</span>
+<span class="subtle">… CHECKING  ·  input pending  ·  Ctrl+D details</span>
+<span class="composer">╭ Task
+│ &gt; Describe a task or type : for commands
+╰</span>  Type now  |  submission waits for startup</pre>
+  </div>
+
+  <section>
+    <article><strong>One ordered document</strong><p>User, commentary, tool, and patch rows retain app-server order; late completion updates its own row.</p></article>
+    <article><strong>Progressive disclosure</strong><p>Explore stays quiet while collapsed. Click or Ctrl+E expands exact targets inside the conversation.</p></article>
+    <article><strong>Semantic code change</strong><p>Expanded patch rows retain line numbers and distinct deletion/addition color bands.</p></article>
+  </section>
+  <footer>Proof: adapter::inbound::tui::app::shell_rendering::tests::reference_capture_is_rendered_by_the_real_fullscreen_testbackend · 2026-08-01</footer>
+</main>
+</body>
+</html>

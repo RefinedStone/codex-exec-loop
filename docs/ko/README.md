@@ -13,7 +13,7 @@ Akra는 시작 진단, 세션 재개, 프롬프트 스트리밍, 승인된 plann
 
 | 화면 | 현재 역할 |
 | --- | --- |
-| 네이티브 TUI | Ratatui/Crossterm inline main-buffer shell. 세션, planning, queue, review, activity, parallel overlay와 host scrollback을 제공합니다. |
+| 네이티브 TUI | Ratatui/Crossterm alternate-screen fullscreen shell. 앱 소유 transcript viewport, 세션, planning, queue, review, activity, parallel inspection을 제공합니다. |
 | Core runtime | 시작, 세션, turn 제출, stream, 완료, post-turn 평가를 위한 headless command/effect/completion/snapshot 흐름입니다. |
 | Planning | SQLite 권한 저장소와 `.codex-exec-loop/planning/` 아래의 staged planning 산출물을 사용합니다. |
 | Parallel mode | 보호된 worktree 3개, worker lease, 공식 완료 갱신, 검토된 GitHub 전달, 통합, 정리를 관리합니다. |

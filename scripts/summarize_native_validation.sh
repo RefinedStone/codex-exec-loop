@@ -105,7 +105,7 @@ canonical_frontend() {
   value="$(slugify "$1")"
   case "${value}" in
     alternate|alternate-screen|fullscreen|alt)
-      printf 'alternate'
+      printf 'fullscreen'
       ;;
     inline|inline-main-buffer|main-buffer)
       printf 'inline'
@@ -210,25 +210,26 @@ load_row_specs() {
   case "${selected_profile}" in
     terminal-baseline|phase1-operator-surface)
       row_specs=(
-        "required|macos|terminal-app|zsh|inline|macOS / Terminal.app / zsh / inline"
-        "required|macos|iterm2|zsh|inline|macOS / iTerm2 / zsh / inline"
-        "required|windows|windows-terminal|powershell|inline|Windows / Windows Terminal / PowerShell / inline"
-        "required|windows|windows-terminal|wsl-bash|inline|Windows / Windows Terminal / WSL bash / inline"
-        "optional|windows|git-bash|bash|inline|Windows / Git Bash / bash / inline"
-        "optional|windows|jetbrains-terminal|wsl-bash|inline|Windows / JetBrains IDE terminal / WSL bash / inline"
+        "required|linux|linux-terminal|bash|fullscreen|Linux / direct terminal / bash / fullscreen"
+        "required|linux|tmux|bash|fullscreen|Linux / tmux detached PTY / bash / fullscreen"
+        "required|windows|windows-terminal|powershell|fullscreen|Windows / Windows Terminal / PowerShell / fullscreen"
+        "required|windows|windows-terminal|wsl-bash|fullscreen|Windows / Windows Terminal / WSL bash / fullscreen"
+        "optional|macos|terminal-app|zsh|fullscreen|macOS / Terminal.app / zsh / fullscreen"
+        "optional|macos|iterm2|zsh|fullscreen|macOS / iTerm2 / zsh / fullscreen"
+        "optional|windows|jetbrains-terminal|wsl-bash|fullscreen|Windows / JetBrains IDE terminal / WSL bash / fullscreen"
       )
       ;;
     prompt-input-delay-pty)
       row_specs=(
-        "required|linux|linux-terminal|bash|inline|Linux / direct terminal / bash / inline"
-        "required|linux|tmux|bash|inline|Linux / tmux detached PTY / bash / inline"
-        "required|linux|zellij|bash|inline|Linux / Zellij / bash / inline"
-        "required|windows|windows-terminal|powershell|inline|Windows / Windows Terminal / PowerShell / inline"
-        "required|windows|windows-terminal|wsl-bash|inline|Windows / Windows Terminal / WSL bash / inline"
-        "optional|macos|terminal-app|zsh|inline|macOS / Terminal.app / zsh / inline"
-        "optional|macos|iterm2|zsh|inline|macOS / iTerm2 / zsh / inline"
-        "optional|windows|jetbrains-terminal|wsl-bash|inline|Windows / JetBrains IDE terminal / WSL bash / inline"
-        "optional|linux|vscode|bash|inline|Linux / VS Code integrated terminal / bash / inline"
+        "required|linux|linux-terminal|bash|fullscreen|Linux / direct terminal / bash / fullscreen"
+        "required|linux|tmux|bash|fullscreen|Linux / tmux detached PTY / bash / fullscreen"
+        "required|linux|zellij|bash|fullscreen|Linux / Zellij / bash / fullscreen"
+        "required|windows|windows-terminal|powershell|fullscreen|Windows / Windows Terminal / PowerShell / fullscreen"
+        "required|windows|windows-terminal|wsl-bash|fullscreen|Windows / Windows Terminal / WSL bash / fullscreen"
+        "optional|macos|terminal-app|zsh|fullscreen|macOS / Terminal.app / zsh / fullscreen"
+        "optional|macos|iterm2|zsh|fullscreen|macOS / iTerm2 / zsh / fullscreen"
+        "optional|windows|jetbrains-terminal|wsl-bash|fullscreen|Windows / JetBrains IDE terminal / WSL bash / fullscreen"
+        "optional|linux|vscode|bash|fullscreen|Linux / VS Code integrated terminal / bash / fullscreen"
       )
       ;;
     *)

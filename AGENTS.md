@@ -22,7 +22,7 @@ Read this first, then open only the referenced markdown that matches the task.
 
 - Layout: `src/core`, `src/domain`, `src/application/service`, `src/application/port`, `src/adapter/inbound/{tui,cli,admin_api,telegram_bot}`, `src/adapter/outbound/{app_server,db,filesystem,git,github,telegram}`, `schema`, `templates`, `assets`, `scripts`, and `docs`
 - Architecture: `adapter/inbound -> core or application -> domain`; define ports before adding a real outbound boundary; keep mapping logic in adapters
-- Current implementation: Ratatui/Crossterm inline shell, headless core runtime, app-server runtime, SQLite planning authority store, filesystem planning workspace, admin web UI/API, Telegram bot control plane, Git/GitHub parallel-mode control-plane delivery, npm/native release packaging
+- Current implementation: Ratatui/Crossterm alternate-screen fullscreen shell, headless core runtime, app-server runtime, SQLite planning authority store, filesystem planning workspace, admin web UI/API, Telegram bot control plane, Git/GitHub parallel-mode control-plane delivery, npm/native release packaging
 - Style: explicit, Kotlin-readable Rust; small single-purpose functions; consistent `Service` / `Port` / `Adapter` / `Request` / `Response` / `State` naming
 - Commands: source `"$HOME/.cargo/env"`, then run `cargo run`, `cargo build`, `cargo test`, or `cargo fmt`; add `cargo clippy --all-targets --all-features -D warnings` for lint-sensitive work; use `bash scripts/check_native_pr.sh` before broad native/TUI PRs
 - Tests: unit tests beside modules, integration tests under `tests/`; focus on startup checks, app-server parsing, stream reduction, and session list mapping

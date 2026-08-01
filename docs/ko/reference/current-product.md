@@ -8,8 +8,8 @@
 ## 제품 형태
 
 - Akra는 공식 `codex app-server` interface 위에 만든 native-first Rust client입니다.
-- Inline main-buffer TUI가 기본 화면입니다. 완료된 출력은 host terminal scrollback으로 보내고,
-  live viewport는 prompt, stream tail, overlay, compact notice를 담당합니다.
+- Alternate-screen fullscreen TUI가 기본 화면입니다. 앱이 소유하는 transcript viewport 하나가
+  대화 이력, streaming row, tool card, overlay, status, composer를 함께 담당합니다.
 - Agent text는 app-server state에서 raw Markdown으로 유지하고 TUI projection 경계에서 렌더링합니다.
   fenced code delimiter와 language label은 대화 본문으로 표시하지 않습니다.
 - `src/core`가 headless app command, effect, completion, event, snapshot을 조정합니다.
@@ -24,7 +24,7 @@
 | Diagnostics | `Ctrl+d`, `:diag` | 시작 준비 상태와 blocker 확인 |
 | Sessions | `Ctrl+o`, `:sessions` | 세션 검색·이름 변경·재개 또는 새 draft 시작 |
 | Reviews | `:reviews` | 제한된 review center projection 확인 |
-| Activity | `:activity [all\|diff\|output\|command\|patch\|…]`, `:act` | 보존된 progressive activity 카드 목록·선택 상세 확인; diff 상세는 줄 번호 unified diff로 표시 (라이브/오버레이 펼침; host scrollback은 정적) |
+| Activity | `:activity [all\|diff\|output\|command\|patch\|…]`, `:act` | 보존된 progressive activity 카드 목록·선택 상세 확인; 줄 번호 unified diff를 표시하며 read/explore와 patch 상세는 실제 대화에서도 펼칠 수 있음 |
 | Queue | `:queue`, `:q`, `akra queue` | 승인된 head, proposal, skip, receipt 확인 |
 | Planning | `:planning`, `:planning-init` | planning 변경 staging·검증·승격 |
 | Directions | `:directions` | direction과 queue-idle 지원 자료 관리 |
@@ -74,8 +74,10 @@ Modal이 focus를 소유할 때는 전역 키보다 우선할 수 있으며, 표
 3. `Tab`으로 정확한 활성 turn에 전달할 내용을 확인할 수 있습니다. Core는 correlation된 steer
    worker 하나만 승인하고 provider 확인 전까지 draft를 유지하며 stale completion을 버립니다. 이후
    편집했거나 같은 문구를 다시 입력한 draft는 이전 확인 응답으로 지우지 않습니다.
-4. 활성 출력은 live inline tail에 머물고 최종 assistant 출력은 committed history로 이동합니다.
-5. Typed activity, runtime notice, approval, warning은 같은 shell projection을 갱신합니다.
+4. Streaming assistant 출력은 canonical `item_id` row를 제자리에서 갱신합니다. Tool row는 도착
+   시점에 추가되므로 늦은 최종 assistant event가 transcript 순서를 바꾸지 못합니다.
+5. Typed activity, runtime notice, approval, warning, 펼칠 수 있는 tool card는 같은 fullscreen
+   projection을 갱신합니다.
 6. Post-turn 평가는 승인된 planning 상태에 따라 continuation을 진행·일시정지·종료합니다.
 
 상호작용 가능한 main conversation만 검토 가능한 명령 또는 제한된 추가 권한 요청에 답할 수
@@ -123,6 +125,9 @@ marker로 linked worktree를 공유하고 독립 clone을 분리합니다.
 
 Board는 readiness, pool slot, active roster, 선택한 lifecycle, distributor head, queue 상태,
 dispatch 보류 사유를 읽기 전용으로 보여줍니다.
+Focused board도 같은 alternate-screen fullscreen frame transaction을 사용합니다. Parallel event는
+앱이 소유하는 하나의 stream model로 렌더링하며 host history insertion이나 durable/live 분할을
+사용하지 않습니다. 높이가 부족하면 title만 숨기고 event 순서와 row는 유지합니다.
 `:peek`은 활성 agent 대화를 읽기 전용으로 미리 보여줍니다. Agent나 overlay를 바꾸면 늦게 도착한
 결과가 최신 preview 또는 interactive conversation을 교체하지 못합니다.
 

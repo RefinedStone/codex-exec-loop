@@ -249,7 +249,7 @@ pending feedback, status, selected row의 표시 정산만 제어합니다.
 | parallel wake/effect ordering, stale-completion guard | application control-plane |
 | task/direction/queue authority, lease, session record, delivery claim | SQLite-backed store |
 | eligibility, capacity, retry, validation, stale-event decision | domain |
-| 전달된 frame, viewport/back-buffer 신뢰, host-scrollback receipt, terminal 복구 | terminal transaction/adapter |
+| 전달된 frame, transcript viewport 신뢰, frame receipt, terminal 복구 | terminal transaction/adapter |
 
 Invariant에 영향을 주거나 재시작 후에도 남아야 하는 상태는 TUI에만 둘 수 없습니다. Rendering이나
 focus만을 위한 상태는 domain authority로 올리지 않습니다. Adapter-local presentation state는 Core가
@@ -270,8 +270,8 @@ crate-private이고, Rust AST guard는 dispatch seam 밖의 field assignment, mu
 whole-state replacement와 non-exhaustive event routing을 거부합니다.
 
 Production terminal/frontend code는 `ShellRuntime`에서 `NativeTuiApp`을 빌릴 수 없습니다. Runtime은
-owned terminal-sync projection과 `InlineShellFrameModel`만 반환하고, render receipt,
-transcript-handoff ACK, queue hit-area cleanup에는 이름이 명확한 좁은 mutation API만 제공합니다.
+sampled projection 하나와 owned `FullscreenShellFrameModel`만 반환하고, typed
+`FullscreenFrameRenderReceipt` 및 실패 cleanup에는 이름이 명확한 좁은 API만 제공합니다.
 `app()`과 `app_mut()`은 test fixture로만 남습니다. Architecture test가 네 slice field ledger,
 aggregate reference/trait escape, 제거된 duplicate correlation gate의 재도입을 차단합니다.
 
@@ -452,8 +452,8 @@ containment, Windows는 kill-on-close Job, 그 밖의 Unix는 process-group cont
 ## TUI 소유권
 
 TUI 변경은 state/reducer, controller/effect, projection/copy, theme/chrome, rendering/layout,
-terminal-adapter 책임을 분리합니다. 시각 token은 `AkraTheme` 뒤에 두고 host scrollback과 live
-viewport에 나뉘는 append-only row 사이에 panel chrome을 삽입하지 않습니다.
+terminal-adapter 책임을 분리합니다. 시각 token은 `AkraTheme` 뒤에 두며 대화와 운영 stream은
+앱이 소유하는 fullscreen viewport 하나에 유지합니다.
 
 실제 shell overlay identity 변경은 reducer가 `from`, `to`, exit mode를 담은 typed
 `ShellOverlayTransition` 하나로 발행합니다. Root TUI coordinator는 reduced state를 먼저 적용한 뒤
@@ -466,13 +466,14 @@ close는 `OverlayClosed`만 dispatch하고, exit cleanup은 반환된 transition
 파생합니다.
 
 같은 terminal transaction은 parallel mode, 진행 중 effect, supervisor inspection, withheld
-reason, event-stream fact도 각각 한 번만 캡처합니다. Supersession row plan,
-host-scrollback/live-tail 분할, prompt lock, animation, draw는 control-plane mutex나 별도 clock을
+reason, event-stream fact도 각각 한 번만 캡처합니다. `ConversationViewModel.messages`는 유일한
+canonical transcript입니다. Assistant streaming은 `item_id` row를 제자리 갱신하고 tool row는
+즉시 추가합니다. Supersession row plan, app-owned stream geometry, prompt lock, animation, draw는 control-plane mutex나 별도 clock을
 다시 읽지 않고 이 immutable projection을 사용합니다. 자주 실행되는 prompt, pulse, scheduler
 검사는 panel 전용 경량 projection을 공유하며 transcript나 event-stream row를 복제하지 않습니다.
 
 `Terminal::draw` 전에 terminal transaction은 conversation projection과 활성 overlay 하나를
-owned `InlineShellFrameModel`로 합칩니다. 그 안의 `InlineInspectionFrameModel` variant가 view,
+owned `FullscreenShellFrameModel`로 합칩니다. 그 안의 `FullscreenInspectionFrameModel` variant가 view,
 widget-local state, geometry에 따른 scroll 결정, feedback 비교 기준을 소유합니다.
 `ShellRuntime`은 Client Runtime을 `ConversationProjectionFrameInput`으로 한 번만 sample하고,
 UI capture 경계는 네 private app slice를 conversation, startup, session, selection, planning,
@@ -482,11 +483,11 @@ contract에서 제외합니다. Capture boundary는 UI-local state만 읽을 수
 application service, parallel control plane,
 outbound I/O를 다시 조회할 수 없습니다. Production `shell_rendering.rs`와
 `shell_rendering/**`는 이 owned frame model만 소비하고 Ratatui `Frame`만 변경한 뒤
-`InlineFrameRenderReceipt`를 반환합니다. `NativeTuiApp`, command dispatch, clock, retained
+`FullscreenFrameRenderReceipt`를 반환합니다. `NativeTuiApp`, command dispatch, clock, retained
 adapter state는 renderer 경계를 넘지 않습니다.
 
-Terminal transaction은 draw와 draw 이후 terminal size 검증이 성공한 뒤에만 receipt를
-commit합니다. Exact attempt gate가 failed, resize-raced, stale, duplicate receipt를 버립니다.
+Terminal transaction은 draw와 draw 이후 terminal size 및 resize epoch 검증이 성공한 뒤에만
+receipt를 commit합니다.
 Receipt 적용은 capture 당시 baseline과 현재 값을 비교하므로 activity, editor, help, approval,
 session list, queue hit area에 관한 오래된 frame feedback이 더 최신 UI edit를 덮을 수 없습니다.
 

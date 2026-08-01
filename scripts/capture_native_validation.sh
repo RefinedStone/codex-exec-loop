@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  bash scripts/capture_native_validation.sh --frontend <inline|alternate> [options]
+  bash scripts/capture_native_validation.sh --frontend fullscreen [options]
 
 Options:
   --frontend <value>   Validation row frontend label. Required.
@@ -131,7 +131,7 @@ render_checks() {
 - input editing
 - overlay flow
 - streaming visibility
-- resize and scrollback
+- transcript scroll, card expansion, and resize
 - failure and recovery
 EOF
       ;;
@@ -142,7 +142,7 @@ EOF
 - input editing
 - overlay flow
 - streaming visibility
-- resize and scrollback
+- transcript scroll, card expansion, and resize
 - failure and recovery
 - status language and next action
 - resumed session context
@@ -167,7 +167,7 @@ EOF
 - input editing
 - overlay flow
 - streaming visibility
-- resize and scrollback
+- transcript scroll, card expansion, and resize
 - failure and recovery
 EOF
       ;;

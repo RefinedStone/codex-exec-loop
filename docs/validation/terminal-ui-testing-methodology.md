@@ -1,426 +1,109 @@
 # Terminal UI Testing Methodology
 
-[한국어 통합 안내](../ko/reference/validation.md)
+The executable inventory is [`tui-coverage-matrix.md`](./tui-coverage-matrix.md). Akra's native
+shell is one alternate screen application, not a host-scrollback formatter. Validation therefore
+proves state, ordered frames, terminal lifecycle, and real-terminal restoration separately.
+This document is paired with `docs/validation/tui-coverage-matrix.md`.
 
-Use this method when native TUI changes affect terminal rendering, history insertion, viewport
-state, resize behavior, overlays, prompt editing, or live-tail presentation.
+## Fullscreen Default and Ownership
 
-## Current-Stack Default And Compatibility Ownership
+The Ratatui/Crossterm fullscreen stack remains the default posture. There is no runtime override
+for an inline renderer, host scrollback delivery, transcript replay mode, or newline-insertion
+fallback.
 
-Stay on the current Ratatui/Crossterm stack by default. Option A remains the shipped path. The
-[Typed Terminal Delivery Transaction](../design/08-typed-terminal-delivery-transaction.md)
-decision record ships one narrow Option B extraction for parallel host delivery after documenting
-the Round 6 trigger evidence and satisfying its implementation completion criteria.
-Option A proof hardening is the default for every shipped path. Any broader structural extraction
-remains blocked unless the Decision Record explicitly proves the Round 6 trigger evidence.
-This contract keeps `invariant × first-class environment × branch family` explicit in repo-facing docs and guards.
-The current stack remains the default posture for native runtime proof.
-Manual terminal capture stays primitive-sensitive only.
-The first-class rendering contract does not replace the broader terminal-baseline rows in
-`docs/plan/12-platform-validation-matrix.md` for shipped/default terminal behavior.
-That broader required baseline includes macOS Terminal.app and iTerm2; naming those environments
-here does not mark either row as passed without a real capture.
-The smaller-representative-set rule below can reduce the number of supplemental captures a PR needs, but it does not waive counted baseline rows by itself.
+- `NativeTuiApp` owns the canonical conversation and the app-owned transcript viewport.
+- `ConversationViewModel.messages` is the only ordered transcript.
+- `TranscriptViewportUiState` owns top row, follow-tail, unseen revision, document identity, and
+  clickable card geometry.
+- `FullscreenShellFrameModel` and `FullscreenInspectionFrameModel` are immutable owned draw input.
+- `FullscreenFrameRenderReceipt` is the Stable frame receipt and compare-and-apply boundary.
+- The Thin terminal layer enters the alternate screen, captures one sample, draws one frame, checks
+  resize stability, and only then commits the receipt.
+- The Render/layout boundary does no application, filesystem, network, clock, or terminal I/O.
 
+### Environment key
 
-### First-class environment key
+- **E1** = Windows Terminal + WSL bash + fullscreen
+- **E2** = Windows Terminal + PowerShell + fullscreen
+- **E3** = tmux detached PTY + fullscreen
+- **E4** = direct Linux terminal + fullscreen
 
-- **E1** = Windows Terminal + WSL bash + inline
-- **E2** = Windows Terminal + PowerShell + inline
-- **E3** = tmux detached PTY + inline
-- **E4** = direct Linux terminal + inline
+The proof join is invariant × first-class environment. macOS Terminal.app and iTerm2 remain
+representative compatibility targets in `docs/plan/12-platform-validation-matrix.md`.
 
-## Compatibility-Tier Ownership Table
+## Responsibility Summary
 
-| Policy area | Current owner / source | Decision point | First-class default | Fallback / experimental handling | Override mechanism | Downgrade semantics | Proof obligation |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Environment class | approved spec + validation docs | release policy / docs / PR review | E1 Windows Terminal + WSL bash, E2 Windows Terminal + PowerShell, E3 tmux detached PTY, E4 direct Linux terminal | other environments stay explicitly fallback or experimental | none at runtime | non-first-class paths are non-blocking unless they contaminate first-class behavior | first-class invariants are release-blocking; fallback/experimental rows stay representative |
-| Default `InlineHistoryRenderMode` | `src/adapter/inbound/tui/app.rs` | app startup / env parse | `HostScrollback` via `InlineHistoryRenderMode::from_env_values(None)` | `ViewportReplay` remains explicit-only | `CODEX_EXEC_LOOP_INLINE_HISTORY_MODE` | replay-only paths stay representative unless release policy promotes them | `HostScrollback` rows are release-blocking; `ViewportReplay` rows stay representative by default |
-| Default `HistoryInsertionMode` | `src/adapter/inbound/tui/app/history_insertion.rs` | adapter-local mode resolution | `Automatic`: `NewlineFallback` for every host-delivery path | `StandardScrollRegion` remains an explicit diagnostic path; non-first-class terminals remain representative-only unless they contaminate first-class behavior | explicit `CODEX_EXEC_LOOP_HISTORY_INSERT_MODE` override | an explicit standard-path failure does not downgrade the automatic path, but any first-class automatic-path failure remains blocking | newline fallback needs default-path proof; standard needs representative proof only when explicitly exercised or claimed |
-| Terminal primitive behavior ownership | `history_insertion.rs`, `inline_terminal_adapter.rs` | implementation boundary | preserve release-blocking invariants across E1-E4 | representative proof is acceptable for downgraded environments | env override plus explicit manual capture | primitive divergence outside first-class policy must be documented | automated proof always; manual capture only for primitive-sensitive changes |
-| Reviewer gate / release semantics | validation docs + PR policy + architecture guards | review / merge | release blocks on first-class invariant failures | fallback/experimental failures do not block unless they contaminate first-class behavior | none | downgrades must be explicit in docs and review notes | first-class rows require pass; fallback/experimental rows require representative evidence |
+| Responsibility | Current owner / source | Decision point | First-class default | Proof obligation |
+|---|---|---|---|---|
+| Semantic ordering | `ConversationViewModel.messages` | app-server event reduction | one canonical vector | agent/tool/agent order never changes after late completion |
+| Reader position | `TranscriptViewportUiState` | input reducer + frame receipt | follow tail until user scrolls | streaming append does not move a reader |
+| Rendering | `FullscreenShellFrameModel` | frame capture | owned immutable model | repeated draw has no effects |
+| Delivery | `FullscreenTerminalAdapter` | post-draw geometry check | one Ratatui transaction | stale resize applies no UI receipt |
+| Terminal modes | `TerminalRestoreGuard` | startup/drop | alternate screen + mouse/focus/paste | every enabled mode is restored |
 
-### Branch-family key
+The current stack remains the default posture because it minimizes bug-class recurrence across terminal boundaries,
+future test-growth cost, and maintainability cost.
 
-- **B1** = `HostScrollback`
-- **B2** = `ViewportReplay`
-- **B3** = `StandardScrollRegion`
-- **B4** = `NewlineFallback`
-- Compatibility-path family summary: `HostScrollback`, `ViewportReplay`, `StandardScrollRegion`, `NewlineFallback`.
-- Required Decision Record axes: `bug-class recurrence across compatibility boundaries`, `fallback masking risk`, `future test-growth cost`, `maintainability cost`.
+## Deterministic Layers
 
-## Responsibility Candidate Summary
+1. Reducer tests prove message ordering, thread identity, viewport movement, follow-tail, unseen
+   output, tool-card expansion, and diff semantics.
+2. Ratatui `TestBackend` tests render full frames at representative sizes. They assert the composer
+   remains visible, old rows remain readable, expanded cards stay in the transcript, and semantic
+   diff rows use the intended style.
+3. Transaction tests prove the stable frame receipt applies once and a resize race applies nothing.
+4. Lifecycle tests assert alternate-screen escape sequences, focus/mouse/paste modes, cursor
+   restoration, and best-effort cleanup ordering.
+5. Static architecture tests prove renderers cannot reacquire application authority and retired
+   host delivery files cannot return unnoticed.
 
-| Surface | Keep owning | Candidate extraction / clarification |
-| --- | --- | --- |
-| `NativeTuiApp` | four private typed adapter slices and env-derived/local presentation state; semantic lifecycle remains Core-owned | cannot be borrowed by production frontend/terminal/renderer code; only owned projection/model capture and named receipt APIs cross `ShellRuntime` |
-| Thin terminal layer | terminal lifecycle, scrollback writes, viewport sync, clear/reset, pre-draw owned-frame capture, typed parallel delivery, stable-delivery receipt commit, cursor-sensitive effects | the parallel-delivery extraction is shipped; broader extraction still requires a separate decision |
-| Owned frame boundary | `InlineShellFrameModel`, active `InlineInspectionFrameModel`, expected feedback baselines, `InlineFrameRenderReceipt` compare-and-apply | must not reacquire Core/application/control-plane authority or perform provider I/O |
-| Render/layout boundary | pure consumption of owned frame models, typed render surfaces, append-only stream continuity, titleless live-tail behavior, panel chrome exclusion from host scrollback | may mutate only Ratatui `Frame`; must stay distinct from terminal primitive emission and application/core state authority |
-| Shared render transaction model | reconcile history delta, geometry state, back-buffer trust, redraw decision, terminal-side flush ordering | the parallel-delivery state machine is shipped; broader shared-transaction extraction remains conditional |
-
-
-## Test Layers
-
-Choose the lowest layer that can expose the bug, but prefer temporal evidence when the failure
-depends on redraw order. Use this priority for TUI flow regressions:
-
-1. direct frame recorder: store every rendered buffer, host scrollback, and relevant app-side stream
-   state after each draw transaction; assert the rows that must survive in each frame
-2. Ratatui `TestBackend`: inspect deterministic in-memory screen and scrollback buffers
-3. `insta` snapshot: pin stable full-frame presentation once the flow is already covered
-4. vt100 parser: validate real ANSI/cursor/clear behavior when terminal escape handling is the risk
-
-### 1. Pure Projection Tests
-
-Use for line builders, status copy, overlays, prompt composition, and transcript projection.
-
-- no real terminal backend
-- deterministic input structs and rendered `Line` output
-- owned `InlineShellFrameModel`/`InlineInspectionFrameModel` fixtures with no live app handle
-- deterministic `InlineFrameRenderReceipt` output and compare-and-apply assertions for UI feedback
-- assertions for presence, absence, order, truncation, and visible key copy
-- snapshots only when layout density is the contract
-
-### 2. Reducer And Runtime State Tests
-
-Use for shell input, command dispatch, streaming state, startup/session lifecycle, and the boundary
-between committed transcript and live turn state.
-
-Required assertions:
-
-- completed messages move into committed history state
-- streaming deltas remain live until turn completion
-- clear and thread switch empty pending/deferred history queues
-- command-safe buffering does not mutate transcript during unsafe streaming windows
-- resize events request redraw without directly mutating conversation state
-
-### 3. Terminal Primitive Tests
-
-Use for code that writes escape sequences, calls `insert_before`, manipulates scrollback, clears the
-screen, or invalidates frame buffers.
-
-Required fixtures:
-
-- fake or test backend that exposes screen contents
-- vt100-compatible backend when escape sequences matter
-- helpers to render buffer contents into plain strings
-- helpers to inspect scrollback separately from the active viewport when supported
-
-Required cases:
-
-- insert one committed history block above the viewport
-- insert wrapped lines and clear continuation rows
-- insert wide characters and verify stale cells are cleared
-- clear visible screen plus scrollback and redraw a clean header
-- reset pending history and prove stale lines cannot flush after reset
-- retain the sampled transcript handoff token only on a committed history result
-
-### 4. Frame And Viewport Transaction Tests
-
-Use for frontend draw loop, viewport mode selection, and redraw-order bugs. When a bug mentions
-lost rows, duplicated rows, disappearing history, live-tail drift, prompt movement, scrollback
-insertion, frame invalidation, or event-stream retention, add a direct frame-recorder-style test
-that captures every draw transaction in the sequence before using snapshots as broad coverage.
-
-Frame recorder assertions should include:
-
-- screen text for the current live viewport
-- host scrollback text without live panel chrome
-- combined terminal history when the user-visible scrollback contract matters
-- app-side event stream or transcript state when runtime state must outlive redraws
-- before and after frames named for the user flow that triggered the regression
-
-Required cases:
-
-- `HostScrollback` writes new committed history to host scrollback
-- `ViewportReplay` does not write committed history to host scrollback
-- `ViewportReplay` stays explicit-only and keeps inline viewport positioning
-- shrink/restore frame sequences leave no duplicate live tail, stale rows, or misplaced prompt
-- draw-time `Terminal::draw` autoresize cannot append the live tail into host scrollback
-- overlay open/close resets live-tail redraw cache
-- hidden tail skips redundant frames but redraws on width and height changes
-- frame invalidation forces a full repaint after terminal-side scrolling
-- a stale conversation identity or transcript-frontier receipt cannot clear the current handoff
-- an injected terminal draw failure leaves the handoff pending and forces an unchanged-frame retry
-- failed draw and draw-internal resize discard the whole `InlineFrameRenderReceipt`
-- one stable delivery commits the exact render-attempt receipt once; stale and duplicate attempts
-  cannot change activity, editor, help, approval, session-list, or queue-hit-area state
-- a UI edit made after frame capture wins over an older receipt through compare-and-apply
-- one generation-qualified parallel event window produces disjoint host and live models
-- resize, focus, overlay, and mode transitions never decrease the parallel host frontier
-- the newest undelivered parallel event remains live when wrapping exceeds the viewport
-- a newly durable parallel boundary event retains physical reflow guards through reopen and a
-  second shrink/restore cycle
-- committed, duplicate, stale, pre-write-aborted, and ambiguous host outcomes settle through
-  exhaustive typed receipt paths
-
-### 5. Event And Scheduler Tests
-
-Use when changing crossterm event mapping, redraw requests, background ticks, or live activity
-pulsing.
-
-Required cases:
-
-- resize maps to a draw request
-- a true focus-loss/focus-gain transition invalidates the visible back buffer and repaints the
-  semantic frame once without replaying host scrollback; duplicate focus-gain events coalesce
-- focus lost does not force a frame unless product behavior needs it
-- multiple immediate frame requests coalesce into one draw notification
-- delayed and immediate frame requests choose the earliest safe draw
-- paused/resumed input sources do not steal events from nested terminal programs
-
-### 6. Terminal Lifecycle Tests
-
-Use a real controlling PTY when changing the terminal event backend, signal handling, raw-mode
-lifetime, or process shutdown. The test harness must wait until the native binary has completed its
-first visible frame, close the PTY master without sending the normal quit key, and require the
-process to exit within a bounded deadline.
-
-The harness must start a controlled app-server fixture through the production executable-pinning
-and JSON-RPC startup path, prove that child is initialized and live before disconnecting, and then
-prove both processes are gone. It must also own a final cleanup guard so a failing assertion or
-regression cannot leak the native process. Forced cleanup is failure containment only: the exit
-assertion must settle before the guard is disarmed, and a guard-initiated kill must never count as a
-passing shutdown.
-
-Required cases:
-
-- closing the controlling PTY after the first frame exits the real native binary
-- an initialized app-server child is live before disconnect and is gone after native shutdown
-- the exit completes before the deadline without a CPU-spin survivor
-- startup failure and assertion failure still reap the isolated child
-- PTY descriptors not intended for the child are close-on-exec so the harness cannot keep its own
-  terminal alive accidentally
-
-### 7. User-Visible Snapshot Tests
-
-Use snapshots for stable surfaces that are hard to validate with a few assertions:
-
-- ready shell
-- streaming shell
-- viewport replay shell
-- queue overlay
-- planning editor
-- diagnostics/session/help inspection
-- narrow-height and narrow-width variants
-
-Snapshot policy:
-
-- keep dimensions explicit in test names or helper calls
-- normalize OS-specific paths and terminal capabilities
-- avoid snapshots for copy that changes often unless the copy is the contract
-- add one targeted assertion near a snapshot for the bug class it protects
-
-## Required Regression Matrix
-
-Every TUI rendering PR should state which rows it touches.
-
-| Area | Required automated proof |
-| --- | --- |
-| Host scrollback history | pending suffix insert, shifted window insert, no duplicate replay |
-| Viewport replay | explicit-only fallback, no host scrollback insert, visible recent transcript, inline viewport contract |
-| Resize | shrink/restore frame sequence with no stale rows or duplicated live tail |
-| Focus reacquire | replaced visible tail repaints once; duplicate focus events do not draw or replay scrollback |
-| Clear/reset | pending history dropped, viewport reset, fresh header redraw |
-| Thread/session switch | old transcript and deferred history cannot leak into new thread |
-| Streaming turn | active cell or live delta stays live, final output becomes committed history |
-| Transcript handoff receipt | exact conversation/turn/generation/revision ACK only; stale identity and later-appended transcript remain pending; terminal draw failure retries without ACK |
-| Frame render receipt | owned model captured before draw; failed/resize-raced/stale/duplicate delivery applies nothing; exact stable attempt compare-and-applies feedback once |
-| Inline conversation cards | tool completion is visible before the next Commentary; folded read targets open by click and `Ctrl+E`; patch previews retain semantic line numbers/bands; resize or stale receipts expose no old hit area; host scrollback never advertises a click target |
-| Overlay | opening overlay clears stale live-tail rows and closing redraws normal tail |
-| Parallel event stream | frame recorder proves stable event identity, disjoint host/live ownership, monotonic receipt settlement, initial status-row continuity, newest-live clipping, focused cursor parking, durable resize guards, and a titleless live tail without panel chrome in host scrollback |
-| Terminal fallback | automatic newline fallback preserves host history, viewport state, and cursor; explicit standard mode remains representative diagnostic coverage |
-| Terminal disconnect | real native binary reaches its first PTY frame with a live initialized app-server child, loses the PTY master, and both processes exit within the deadline without guard-initiated cleanup |
+Temporal tests must compare sequential states. The core invariant is: **streaming append does not
+move a reader**. A final screenshot alone cannot prove it.
 
 ## Architectural Guardrails
 
-- Stream surfaces that can span host scrollback and the live viewport must preserve row continuity:
-  no panel title may be inserted between durable scrollback rows and live rows.
-- Inline inspection code must use the typed render surface API: `InlineTitledPanel` for ordinary
-  titled panels, `InlineScrolledPanel` for ordinary scrolled panels, and `InlineAppendOnlyStream`
-  for append-only stream rows.
-- Parallel event stream rendering must use the dedicated stream renderer and
-  `InlineAppendOnlyStream`, not a generic titled scrolled section with new ad hoc copy.
-- Production `shell_rendering.rs` and `shell_rendering/**` must accept one owned
-  `InlineShellFrameModel` and return `InlineFrameRenderReceipt`. Architecture guards reject
-  `NativeTuiApp`, Core/application/outbound/control-plane/service or I/O dependencies, production
-  glob imports, and mutable-reference inputs other than Ratatui `Frame`; `#[cfg(test)]` fixtures
-  are excluded from that scan.
-- `inline_frame_model.rs` is the sole pre-draw app-sampling boundary. It may capture UI-local
-  values, but architecture guards reject direct Core/application/control-plane reacquisition.
-- A TUI PR that changes stream row retention, scroll offset, title visibility, host scrollback, or
-  live-tail chrome must include `tui_testkit::InlineFrameRecorder` coverage for the exact failing
-  redraw sequence.
-- The architecture tests intentionally check this methodology, the design contract, the shared
-  frame recorder, and the named parallel stream regression tests. Update the design first if the
-  contract itself changes.
+- Conversation, tool/read/explore, status, and assistant rows share one app-owned fullscreen viewport.
+- There is no host scrollback delivery and no transcript handoff ACK.
+- Parallel focused events use a dedicated fullscreen stream renderer and the typed
+  `FullscreenAppendOnlyStream` surface.
+- The parallel title may collapse without splitting the stream; event rows remain semantic data.
+- `Ctrl+E` and mouse click expand the same card identity. PageUp/PageDown and wheel scroll the same
+  viewport. `Ctrl+Home` leaves follow-tail; `Ctrl+End` resumes it.
+- A thread identity change resets viewport offset and stale hit areas atomically.
 
 ## Manual Capture Contract
 
-Manual capture is required **only** for primitive-sensitive changes: scrollback insertion or host scrollback behavior,
-viewport mode behavior, clear or restore behavior, resize-dependent redraw behavior, cursor restoration,
-or emitted escape-sequence behavior.
-
-### Required artifact fields
-
-For primitive-sensitive review, the artifact set must distinguish between:
-- a **matrix-row capture** counted by `scripts/summarize_native_validation.sh`
-- a **supplemental representative capture** that documents branch-family or environment-specific primitive behavior
-
-Current capture helpers emit the shared baseline fields only:
-- date
-- commit SHA
-- OS / distro
-- terminal program
-- shell
-- frontend
-- `TERM` when available
-- capture_role (`counted-row` or `supplemental-unmatched`)
-- check profile
-- generic checklist labels
-- result
-- notes
-
-When primitive-sensitive review needs more detail than the helpers emit, append manual metadata below the helper output instead of omitting it.
-If a field cannot be recovered after capture, record `not recorded` explicitly.
-For `HistoryInsertionMode`, reviewers should prefer a concrete value; use `not recorded` only when the artifact is purely supplemental and the named automated proof covers the insertion branch.
-
-Each supplemental primitive-sensitive artifact should record:
-- artifact id / file name
-- whether it is `counted-row` or `supplemental-unmatched`
-- commit SHA
-- PR or work item id
-- capture date/time
-- operator/reviewer initials
-- frontend (`inline`)
-- environment class (`first-class`, `fallback`, `experimental`)
-- terminal program and version
-- shell and version
-- OS / distro / kernel
-- multiplexer state (`none`, `tmux detached PTY`, or other)
-- configured `InlineHistoryRenderMode`
-- configured `HistoryInsertionMode`
-- whether override env vars were used
-- check profile / scenario set name
-- pass/fail per scenario, or a named automated-proof reference when the artifact is a representative manual addendum
-- notes on deviations
-
-### Environment stamp contents
-
-Minimum environment stamp:
-
-- terminal name + version
-- shell name + version
-- OS / distro
-- kernel / platform
-- inline frontend
-- whether tmux detached PTY is involved
-- effective `InlineHistoryRenderMode`
-- effective `HistoryInsertionMode`
-- relevant env overrides (`CODEX_EXEC_LOOP_INLINE_HISTORY_MODE`,
-  `CODEX_EXEC_LOOP_HISTORY_INSERT_MODE`, `WT_SESSION` if relevant)
-
-### Scenario checklist minimums
-
-For a primitive-sensitive change, the artifact must show at least:
-
-1. committed history insertion above live viewport
-2. no duplicate replay after redraw
-3. shrink then restore with no stale rows / duplicated tail
-4. clear/reset path with clean header and viewport recovery
-5. thread or session switch with no transcript/history leakage
-6. if parallel/live-tail changed: split scrollback/live-tail continuity without panel chrome
-   inside host scrollback
-7. if fallback insertion changed: fallback-specific proof of viewport state and cursor
-   restoration
-8. focus-loss/reacquire after visible-frame replacement: exact live-tail recovery with no duplicate
-   host history, stale rows, or cursor drift
+Manual terminal capture stays primitive-sensitive only. It is required when alternate-screen
+escape sequences, viewport mode, clear or restore behavior, mouse capture behavior, terminal
+wrapping, cursor placement, or resize primitives change. Copy-only and pure reducer changes use
+deterministic tests unless a reviewer asks for more evidence.
 
 ### Reviewer gate
 
-- A primitive-sensitive PR cannot be approved without manual capture artifacts attached.
-- Reviewer must confirm artifact type (`counted-row` vs `supplemental-unmatched`), environment stamp,
-  required scenarios, explicit downgrade handling, and updated matrix rows.
-- `scripts/capture_native_validation.sh` / `.ps1` do not satisfy the supplemental metadata contract by
-  themselves; representative artifacts may need manual augmentation after capture.
+Capture must show:
 
-### When all four first-class environments are required
+1. the fullscreen transcript and composer at 80×24 or narrower;
+2. PageUp while streaming, with the reader anchor unchanged and a `new output` badge;
+3. Ctrl+End returning to the newest row;
+4. a collapsed read/explore card and its expanded detail;
+5. a collapsed patch card and expanded green/red semantic diff;
+6. clean shell restoration after exit.
 
-Capture all four first-class environments when:
+### When all first-class environments are required
 
-- the change alters shared primitive behavior expected across E1-E4
-- the change touches defaulting logic or common adapter code affecting multiple first-class
-  classes
-- the change changes release-policy claims or downgrade semantics
+Run E1–E4 when terminal mode, resize, cursor, wrapping, mouse, or restoration code changes.
 
-If a required candidate-specific row cannot be executed, record it as `not executed` and document
-the resulting release-evidence downgrade. Historical artifacts may support an unchanged primitive
-branch, but they must retain their original candidate identity and cannot be relabeled as a pass
-for the current candidate.
+### When a representative set is sufficient
 
-### When a smaller representative set is sufficient
+Use one Windows-family and one Linux-family environment for presentation-only changes. Record why
+the smaller set cannot mask a terminal primitive regression.
 
-A smaller representative set is sufficient when:
-
-- the change is primitive-sensitive but isolated to one branch family or one environment-specific
-  default
-- the changed logic is clearly scoped to a single first-class environment plus one
-  representative alternate path
-- reviewer agrees unaffected first-class environments are covered by unchanged automated proof
-  and unchanged primitive path
-
-Representative minimum in that case:
-
-- every directly affected first-class environment
-- plus one contrasting representative path if branch-family behavior differs (`HostScrollback`
-  vs `ViewportReplay`, or `StandardScrollRegion` vs `NewlineFallback`)
-
-## Current Automated Entry Points
-
-- `docs/validation/tui-coverage-matrix.md`
-- `src/adapter/inbound/tui/app/shell_rendering_tests.rs`
-- `src/adapter/inbound/tui/app/shell_rendering_contract_tests.rs`
-- `src/adapter/inbound/tui/app/inline_terminal_adapter/tests/`
-- `src/adapter/inbound/tui/app/shell_runtime/tests/`
-- `src/adapter/inbound/tui/app/snapshots/`
-- `tests/native_validation_scripts.rs`
-- `tests/tui_terminal_disconnect.rs`
-
-Representative replay-policy workflow:
-- generate the baseline capture skeleton with `scripts/capture_native_validation.sh` or `.ps1` using `--check-profile replay-policy-representative --capture-role supplemental-unmatched`
-- if the proof requires an explicit render-mode override, record the exact env key/value that activated it
-- append the supplemental metadata fields and per-scenario results required above
-
-## Validation Commands
+## Release Commands
 
 ```bash
-. "$HOME/.cargo/env"
 cargo fmt --all -- --check
-cargo test
+cargo test --lib -- --test-threads=1
+cargo test --test architecture_boundaries -- --test-threads=1
 cargo clippy --all-targets --all-features -- -D warnings
-```
-
-For TUI visual/presentation work:
-
-```bash
-bash scripts/check_tui_layering.sh
-```
-
-For broad native/TUI PRs:
-
-```bash
 bash scripts/check_native_pr.sh
 ```
-
-Manual terminal evidence is still required when the change alters escape sequences, viewport mode,
-clear behavior, or scrollback behavior. Record manual rows with
-`scripts/capture_native_validation.sh` or `scripts/capture_native_validation.ps1`.
-
-## Related Docs
-
-- [README.md](README.md)
-- [../reference/current-product.md](../reference/current-product.md)
-- [../plan/12-platform-validation-matrix.md](../plan/12-platform-validation-matrix.md)
-- [../design/07-tui-layered-architecture-and-aesthetic-contract.md](../design/07-tui-layered-architecture-and-aesthetic-contract.md)
-- [../design/08-typed-terminal-delivery-transaction.md](../design/08-typed-terminal-delivery-transaction.md)

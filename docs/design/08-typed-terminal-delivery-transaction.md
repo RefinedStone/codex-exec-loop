@@ -1,4 +1,9 @@
-# Typed Terminal Delivery Transaction
+# Typed Terminal Delivery Transaction (Superseded)
+
+> Historical design record. The host-scrollback delivery transaction described below was removed
+> when the production TUI moved to the app-owned alternate-screen fullscreen contract in
+> [`07-tui-layered-architecture-and-aesthetic-contract.md`](./07-tui-layered-architecture-and-aesthetic-contract.md).
+> It is retained only to explain earlier releases and must not be treated as current architecture.
 
 Status: **Implemented and shipped on `prerelease`**
 
