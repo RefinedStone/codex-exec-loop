@@ -145,6 +145,8 @@ mod shell_presentation;
 mod shell_rendering;
 #[path = "app/shell_runtime.rs"]
 mod shell_runtime;
+#[path = "app/terminal_interaction_ui.rs"]
+mod terminal_interaction_ui;
 #[cfg(test)]
 #[path = "app/test_helpers.rs"]
 pub(crate) mod test_helpers;
@@ -244,8 +246,12 @@ pub use shell_entrypoint::run;
 use shell_frontend::ShellFrontendMode;
 #[cfg(test)]
 use shell_presentation::build_planning_init_overlay_view;
+use terminal_interaction_ui::TerminalUiEffect;
 use theme::AkraTheme;
-use transcript_viewport_ui::{TranscriptCardHitArea, TranscriptViewportUiState};
+use transcript_viewport_ui::{
+    TranscriptCardHitArea, TranscriptRenderedRow, TranscriptSelectionFinish,
+    TranscriptViewportFrame, TranscriptViewportUiState,
+};
 use view_selection_overlay_ui::{
     ConversationViewMode, VIEW_SELECTION_MODE_OPTIONS, ViewSelectionOverlayUiState,
 };

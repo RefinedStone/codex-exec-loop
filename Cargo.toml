@@ -10,6 +10,7 @@ tokio-console = ["dep:console-subscriber", "tokio/tracing"]
 [dependencies]
 anyhow = "1.0"
 askama = "0.12"
+base64 = "0.22"
 axum = { version = "0.8", features = ["form", "json", "macros"] }
 axum-extra = { version = "0.10", features = ["cookie"] }
 chrono = "0.4"

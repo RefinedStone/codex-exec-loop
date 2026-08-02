@@ -14,9 +14,12 @@ use super::shell_presentation::{
 };
 #[cfg(test)]
 use super::*;
-use super::{AkraTheme, ShellFrontendMode, ShellOverlay, TranscriptCardHitArea};
+use super::{
+    AkraTheme, ShellFrontendMode, ShellOverlay, TranscriptCardHitArea, TranscriptRenderedRow,
+    TranscriptViewportFrame, TranscriptViewportUiState,
+};
 use ratatui::Frame;
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph, Wrap};
 
@@ -91,17 +94,22 @@ pub(super) fn draw_projected(
     let turn_steer_confirmation = projection.turn_steer_confirmation.take();
     let exit_confirmation_visible = projection.exit_confirmation_visible;
 
-    let conversation_receipt = draw_fullscreen_conversation_shell(
-        frame,
-        projection,
-        &layout,
-        transcript_scroll_offset,
-        transcript_has_unseen_output,
-    );
+    let conversation_receipt = {
+        let transcript_viewport_state = receipt.transcript_viewport_state();
+        draw_fullscreen_conversation_shell(
+            frame,
+            projection,
+            &layout,
+            transcript_scroll_offset,
+            transcript_has_unseen_output,
+            transcript_viewport_state,
+        )
+    };
     receipt.record_queue_receipt_undo_hit_area(conversation_receipt.queue_receipt_undo_hit_area);
-    receipt.record_transcript_cards(
+    receipt.record_transcript_frame(
         conversation_receipt.transcript_viewport_card_digests,
         conversation_receipt.transcript_viewport_card_hit_areas,
+        conversation_receipt.transcript_viewport_frame_snapshot,
     );
     if let Some(list_state) = draw_fullscreen_shell_inspection(frame, layout[0], inspection) {
         receipt.record_session_list_state(list_state);
@@ -254,6 +262,7 @@ struct FullscreenConversationShellRenderReceipt {
     queue_receipt_undo_hit_area: Option<Rect>,
     transcript_viewport_card_digests: Vec<[u8; 32]>,
     transcript_viewport_card_hit_areas: Vec<TranscriptCardHitArea>,
+    transcript_viewport_frame_snapshot: Option<TranscriptViewportFrame>,
 }
 
 fn draw_fullscreen_conversation_shell(
@@ -262,6 +271,7 @@ fn draw_fullscreen_conversation_shell(
     layout: &Rc<[Rect]>,
     transcript_scroll_offset: usize,
     transcript_has_unseen_output: bool,
+    transcript_viewport_state: &TranscriptViewportUiState,
 ) -> FullscreenConversationShellRenderReceipt {
     let FullscreenConversationFrameProjection {
         tail_view,
@@ -298,20 +308,22 @@ fn draw_fullscreen_conversation_shell(
                 );
                 let transcript_viewport_card_digests =
                     transcript_card_rows.iter().map(|row| row.digest).collect();
-                let transcript_viewport_card_hit_areas = render_fullscreen_transcript(
+                let transcript_receipt = render_fullscreen_transcript(
                     frame,
                     logo_area,
                     logo_lines,
                     Vec::new(),
                     0,
                     false,
+                    transcript_viewport_state,
                 );
                 return FullscreenConversationShellRenderReceipt {
                     queue_receipt_undo_hit_area: render_bottom_anchored_tail(
                         frame, tail_area, tail_view,
                     ),
                     transcript_viewport_card_digests,
-                    transcript_viewport_card_hit_areas,
+                    transcript_viewport_card_hit_areas: transcript_receipt.card_hit_areas,
+                    transcript_viewport_frame_snapshot: transcript_receipt.frame_snapshot,
                 };
             }
             let top_area = Rect::new(
@@ -326,6 +338,7 @@ fn draw_fullscreen_conversation_shell(
                 ),
                 transcript_viewport_card_digests: Vec::new(),
                 transcript_viewport_card_hit_areas: Vec::new(),
+                transcript_viewport_frame_snapshot: None,
             };
         }
         // standard shell에서는 tail 높이를 먼저 재고 live transcript line을 그 위 공간에 clip한다.
@@ -333,18 +346,20 @@ fn draw_fullscreen_conversation_shell(
         let tail_area = fullscreen_tail_render_area(tail_band, &tail_view);
         let transcript_viewport_card_digests =
             transcript_card_rows.iter().map(|row| row.digest).collect();
-        let transcript_viewport_card_hit_areas = render_fullscreen_transcript(
+        let transcript_receipt = render_fullscreen_transcript(
             frame,
             layout[0],
             transcript_lines,
             transcript_card_rows,
             transcript_scroll_offset,
             transcript_has_unseen_output,
+            transcript_viewport_state,
         );
         return FullscreenConversationShellRenderReceipt {
             queue_receipt_undo_hit_area: render_bottom_anchored_tail(frame, tail_area, tail_view),
             transcript_viewport_card_digests,
-            transcript_viewport_card_hit_areas,
+            transcript_viewport_card_hit_areas: transcript_receipt.card_hit_areas,
+            transcript_viewport_frame_snapshot: transcript_receipt.frame_snapshot,
         };
     }
     // overlay/modal이 active이면 layout[0]은 inspection이 쓰고 layout[1]은 그 아래에 tail을 고정한다.
@@ -354,6 +369,7 @@ fn draw_fullscreen_conversation_shell(
         queue_receipt_undo_hit_area: render_tail_surface(frame, tail_area, tail_view, false),
         transcript_viewport_card_digests: Vec::new(),
         transcript_viewport_card_hit_areas: Vec::new(),
+        transcript_viewport_frame_snapshot: None,
     }
 }
 
@@ -518,6 +534,11 @@ fn resolve_queue_receipt_undo_hit_area(
     })
 }
 
+struct RenderedTranscriptReceipt {
+    card_hit_areas: Vec<TranscriptCardHitArea>,
+    frame_snapshot: Option<TranscriptViewportFrame>,
+}
+
 fn render_fullscreen_transcript(
     frame: &mut Frame<'_>,
     transcript_area: Rect,
@@ -525,9 +546,13 @@ fn render_fullscreen_transcript(
     card_rows: Vec<ConversationTranscriptCardRow>,
     scroll_offset: usize,
     has_unseen_output: bool,
-) -> Vec<TranscriptCardHitArea> {
+    transcript_viewport_state: &TranscriptViewportUiState,
+) -> RenderedTranscriptReceipt {
     if transcript_lines.is_empty() || transcript_area.width == 0 || transcript_area.height == 0 {
-        return Vec::new();
+        return RenderedTranscriptReceipt {
+            card_hit_areas: Vec::new(),
+            frame_snapshot: None,
+        };
     }
     let projected_rows = card_rows
         .into_iter()
@@ -542,6 +567,7 @@ fn render_fullscreen_transcript(
             (end > start).then_some((row.digest, start, end))
         })
         .collect::<Vec<_>>();
+    let wrapped_rows = transcript_wrapped_row_layout(&transcript_lines, transcript_area.width);
     let (window_start_line, window_scroll_offset) =
         transcript_window_for_scroll(&transcript_lines, transcript_area.width, scroll_offset);
     let paragraph = Paragraph::new(
@@ -552,6 +578,14 @@ fn render_fullscreen_transcript(
     )
     .wrap(Wrap { trim: false });
     frame.render_widget(paragraph.scroll((window_scroll_offset, 0)), transcript_area);
+
+    let frame_snapshot = capture_transcript_frame_snapshot(
+        frame,
+        transcript_area,
+        scroll_offset,
+        &wrapped_rows,
+        transcript_viewport_state,
+    );
 
     if has_unseen_output {
         let label = " ↓ new output · Ctrl+End ";
@@ -570,7 +604,7 @@ fn render_fullscreen_transcript(
     }
 
     let visible_end = scroll_offset.saturating_add(usize::from(transcript_area.height));
-    projected_rows
+    let card_hit_areas = projected_rows
         .into_iter()
         .filter_map(|(digest, start, end)| {
             let clipped_start = start.max(scroll_offset);
@@ -588,7 +622,70 @@ fn render_fullscreen_transcript(
                 ),
             })
         })
-        .collect()
+        .collect();
+    RenderedTranscriptReceipt {
+        card_hit_areas,
+        frame_snapshot: Some(frame_snapshot),
+    }
+}
+
+fn transcript_wrapped_row_layout(lines: &[Line<'_>], width: u16) -> Vec<(usize, bool)> {
+    let mut rows = Vec::new();
+    for (logical_line_index, line) in lines.iter().enumerate() {
+        let row_count = count_wrapped_rows(std::slice::from_ref(line), width).max(1);
+        rows.extend(
+            (0..row_count).map(|row_index| (logical_line_index, row_index + 1 < row_count)),
+        );
+    }
+    rows
+}
+
+fn capture_transcript_frame_snapshot(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    scroll_offset: usize,
+    wrapped_rows: &[(usize, bool)],
+    transcript_viewport_state: &TranscriptViewportUiState,
+) -> TranscriptViewportFrame {
+    let mut rows = Vec::new();
+    for visible_row in 0..area.height {
+        let absolute_row = scroll_offset.saturating_add(usize::from(visible_row));
+        let Some((logical_line_index, soft_wrap_continues)) =
+            wrapped_rows.get(absolute_row).copied()
+        else {
+            break;
+        };
+        if let Some((start_column, end_column)) =
+            transcript_viewport_state.selection_columns_for_row(absolute_row, area.width)
+        {
+            for column in start_column..=end_column {
+                if let Some(cell) = frame.buffer_mut().cell_mut(Position::new(
+                    area.x.saturating_add(column),
+                    area.y.saturating_add(visible_row),
+                )) {
+                    cell.set_style(AkraTheme::transcript_selection());
+                }
+            }
+        }
+        let cells = (0..area.width)
+            .map(|column| {
+                frame
+                    .buffer_mut()
+                    .cell(Position::new(
+                        area.x.saturating_add(column),
+                        area.y.saturating_add(visible_row),
+                    ))
+                    .map_or_else(String::new, |cell| cell.symbol().to_string())
+            })
+            .collect();
+        rows.push(TranscriptRenderedRow {
+            absolute_row,
+            logical_line_index,
+            soft_wrap_continues,
+            cells,
+        });
+    }
+    TranscriptViewportFrame { area, rows }
 }
 
 fn transcript_window_for_scroll(lines: &[Line<'_>], width: u16, top_row: usize) -> (usize, u16) {

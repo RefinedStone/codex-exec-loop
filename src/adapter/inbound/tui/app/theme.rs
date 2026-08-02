@@ -161,6 +161,12 @@ impl AkraTheme {
             .add_modifier(Modifier::BOLD)
     }
 
+    // Transcript drag selection preserves syntax and semantic foreground colors;
+    // only the background is overlaid so diffs, Markdown, and tool labels remain legible.
+    pub(super) fn transcript_selection() -> Style {
+        Style::default().bg(Color::Rgb(42, 72, 112))
+    }
+
     // panel chrome은 accent-only다. title content는 caller가 title_line이나 custom Line으로 별도 의미를 입힌다.
     pub(super) fn panel() -> Style {
         Self::accent()

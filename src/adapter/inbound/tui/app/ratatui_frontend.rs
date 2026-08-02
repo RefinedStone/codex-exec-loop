@@ -3,6 +3,8 @@ use std::io::Write;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use crossterm::cursor::Show;
 use crossterm::event;
 use crossterm::execute;
@@ -12,6 +14,7 @@ use crossterm::terminal::{
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
+use super::TerminalUiEffect;
 use super::fullscreen_terminal_adapter::FullscreenTerminalAdapter;
 use super::shell_runtime::ShellRuntime;
 
@@ -34,11 +37,12 @@ pub(super) fn run(
      * 먼저 guard로 감싼다. 이후 backend 생성, draw, event read 중 어디서 실패해도 Drop이
      * 사용자 shell을 복구하는 단일 경로가 된다.
      */
-    let _restore_guard = TerminalRestoreGuard::activate()?;
+    let mut restore_guard =
+        TerminalRestoreGuard::activate(runtime.terminal_mouse_capture_enabled())?;
     let backend = CrosstermBackend::new(io::stdout());
     let terminal = build_terminal(backend)?;
     let mut adapter = FullscreenTerminalAdapter::new(terminal);
-    run_event_loop(&mut adapter, &mut runtime, shutdown)
+    run_event_loop(&mut adapter, &mut runtime, shutdown, &mut restore_guard)
 }
 
 // Fullscreen Ratatui owns the alternate-screen surface directly; no second
@@ -58,8 +62,9 @@ fn run_event_loop(
     adapter: &mut FullscreenTerminalAdapter<CrosstermBackend<io::Stdout>>,
     runtime: &mut ShellRuntime,
     shutdown: &crate::shutdown::GracefulShutdown,
+    terminal_session: &mut TerminalRestoreGuard,
 ) -> Result<()> {
-    match run_event_loop_until_exit(adapter, runtime, shutdown) {
+    match run_event_loop_until_exit(adapter, runtime, shutdown, terminal_session) {
         /*
          * Closing a Unix PTY can make the terminal descriptor report EIO before the process-level
          * SIGHUP flag becomes visible. Broken pipes and EOF are equivalent output/input closure
@@ -75,6 +80,7 @@ fn run_event_loop_until_exit(
     adapter: &mut FullscreenTerminalAdapter<CrosstermBackend<io::Stdout>>,
     runtime: &mut ShellRuntime,
     shutdown: &crate::shutdown::GracefulShutdown,
+    terminal_session: &mut TerminalRestoreGuard,
 ) -> Result<()> {
     while !runtime.should_quit() && !shutdown.is_requested() {
         /*
@@ -84,6 +90,7 @@ fn run_event_loop_until_exit(
          * resize ABA가 cursor와 history 보정에서 누락되지 않는다.
          */
         let draw_due = prepare_runtime_for_due_draw(runtime, read_ready_terminal_event)?;
+        apply_pending_terminal_ui_effects(runtime, terminal_session)?;
         if runtime.should_quit() {
             break;
         }
@@ -107,6 +114,7 @@ fn run_event_loop_until_exit(
          */
         runtime.handle_terminal_event(event::read()?);
         drain_ready_terminal_events(runtime)?;
+        apply_pending_terminal_ui_effects(runtime, terminal_session)?;
     }
 
     Ok(())
@@ -181,31 +189,80 @@ fn drain_ready_terminal_events_with(
     Ok(())
 }
 
+fn apply_pending_terminal_ui_effects(
+    runtime: &mut ShellRuntime,
+    terminal_session: &mut TerminalRestoreGuard,
+) -> Result<()> {
+    for effect in runtime.take_terminal_ui_effects() {
+        match effect {
+            TerminalUiEffect::CopyToClipboard(text) => write_terminal_clipboard(&text)?,
+            TerminalUiEffect::SetMouseCapture(enabled) => {
+                terminal_session.set_mouse_capture(enabled)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn write_terminal_clipboard(text: &str) -> io::Result<()> {
+    let tmux_passthrough = std::env::var_os("TMUX").is_some();
+    let sequence = terminal_clipboard_sequence(text, tmux_passthrough);
+    let mut stdout = io::stdout();
+    stdout.write_all(sequence.as_bytes())?;
+    stdout.flush()
+}
+
+fn terminal_clipboard_sequence(text: &str, tmux_passthrough: bool) -> String {
+    let encoded = BASE64_STANDARD.encode(text.as_bytes());
+    let osc52 = format!("\u{1b}]52;c;{encoded}\u{7}");
+    if !tmux_passthrough {
+        return osc52;
+    }
+    let escaped = osc52.replace('\u{1b}', "\u{1b}\u{1b}");
+    format!("\u{1b}Ptmux;{escaped}\u{1b}\\")
+}
+
 /*
  * RAII guard의 activate 성공은 raw mode, focus-change event 구독, paste event 구독을
  * frontend가 소유한다는 뜻이고, Drop은 정상 종료, 오류 반환, early return 모두에서 복구를 시도한다.
  */
 struct TerminalRestoreGuard {
     bracketed_paste_enabled: bool,
+    mouse_capture_enabled: bool,
 }
 
 impl TerminalRestoreGuard {
-    fn activate() -> Result<Self> {
+    fn activate(mouse_capture_enabled: bool) -> Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         /*
          * focus events는 focus lost 중 draw를 늦추는 runtime scheduler 정책의 입력이다. enable이
          * 실패하면 raw mode만 켜진 반쪽 상태가 되므로 즉시 되돌리고 startup 실패로 전파한다.
          */
-        if let Err(error) = enter_fullscreen_terminal_session(&mut stdout) {
-            let _ = leave_fullscreen_terminal_session(&mut stdout, false);
+        if let Err(error) = enter_fullscreen_terminal_session(&mut stdout, mouse_capture_enabled) {
+            let _ = leave_fullscreen_terminal_session(&mut stdout, false, mouse_capture_enabled);
             let _ = disable_raw_mode();
             return Err(error.into());
         }
         let bracketed_paste_enabled = enable_bracketed_paste(&mut stdout).is_ok();
         Ok(Self {
             bracketed_paste_enabled,
+            mouse_capture_enabled,
         })
+    }
+
+    fn set_mouse_capture(&mut self, enabled: bool) -> io::Result<()> {
+        if self.mouse_capture_enabled == enabled {
+            return Ok(());
+        }
+        let mut stdout = io::stdout();
+        if enabled {
+            execute!(stdout, event::EnableMouseCapture)?;
+        } else {
+            execute!(stdout, event::DisableMouseCapture)?;
+        }
+        self.mouse_capture_enabled = enabled;
+        Ok(())
     }
 }
 
@@ -216,18 +273,24 @@ impl Drop for TerminalRestoreGuard {
          * 실패해도 raw mode 해제, focus 구독 해제, cursor 복구를 계속 시도하는 편이 낫다.
          */
         let mut stdout = io::stdout();
-        let _ = leave_fullscreen_terminal_session(&mut stdout, self.bracketed_paste_enabled);
+        let _ = leave_fullscreen_terminal_session(
+            &mut stdout,
+            self.bracketed_paste_enabled,
+            self.mouse_capture_enabled,
+        );
         let _ = disable_raw_mode();
     }
 }
 
-fn enter_fullscreen_terminal_session(writer: &mut impl Write) -> io::Result<()> {
-    execute!(
-        writer,
-        EnterAlternateScreen,
-        event::EnableFocusChange,
-        event::EnableMouseCapture
-    )
+fn enter_fullscreen_terminal_session(
+    writer: &mut impl Write,
+    mouse_capture_enabled: bool,
+) -> io::Result<()> {
+    execute!(writer, EnterAlternateScreen, event::EnableFocusChange)?;
+    if mouse_capture_enabled {
+        execute!(writer, event::EnableMouseCapture)?;
+    }
+    Ok(())
 }
 
 fn enable_bracketed_paste(writer: &mut impl Write) -> io::Result<()> {
@@ -237,12 +300,15 @@ fn enable_bracketed_paste(writer: &mut impl Write) -> io::Result<()> {
 fn leave_fullscreen_terminal_session(
     writer: &mut impl Write,
     bracketed_paste_enabled: bool,
+    mouse_capture_enabled: bool,
 ) -> io::Result<()> {
     let mut first_error = None;
-    remember_terminal_restore_error(
-        &mut first_error,
-        execute!(writer, event::DisableMouseCapture),
-    );
+    if mouse_capture_enabled {
+        remember_terminal_restore_error(
+            &mut first_error,
+            execute!(writer, event::DisableMouseCapture),
+        );
+    }
     if bracketed_paste_enabled {
         remember_terminal_restore_error(
             &mut first_error,
@@ -274,13 +340,13 @@ mod tests {
     use super::terminal_disconnected;
     use super::{
         enable_bracketed_paste, enter_fullscreen_terminal_session,
-        leave_fullscreen_terminal_session, terminal_io_disconnected,
+        leave_fullscreen_terminal_session, terminal_clipboard_sequence, terminal_io_disconnected,
     };
 
     #[test]
     fn fullscreen_terminal_session_enters_and_restores_every_owned_mode() {
         let mut entered = Vec::new();
-        enter_fullscreen_terminal_session(&mut entered).expect("enter commands");
+        enter_fullscreen_terminal_session(&mut entered, true).expect("enter commands");
         enable_bracketed_paste(&mut entered).expect("paste command");
         let entered = String::from_utf8(entered).expect("terminal commands are utf-8 escape bytes");
         assert!(entered.contains("\u{1b}[?1049h"));
@@ -288,13 +354,39 @@ mod tests {
         assert!(entered.contains("\u{1b}[?2004h"));
 
         let mut restored = Vec::new();
-        leave_fullscreen_terminal_session(&mut restored, true).expect("restore commands");
+        leave_fullscreen_terminal_session(&mut restored, true, true).expect("restore commands");
         let restored =
             String::from_utf8(restored).expect("terminal commands are utf-8 escape bytes");
         assert!(restored.contains("\u{1b}[?2004l"));
         assert!(restored.contains("\u{1b}[?1004l"));
         assert!(restored.contains("\u{1b}[?1049l"));
         assert!(restored.contains("\u{1b}[?25h"));
+    }
+
+    #[test]
+    fn native_selection_mode_skips_mouse_reporting_lifecycle() {
+        let mut entered = Vec::new();
+        enter_fullscreen_terminal_session(&mut entered, false).expect("enter commands");
+        let entered = String::from_utf8(entered).expect("terminal commands are utf-8 escape bytes");
+        assert!(entered.contains("\u{1b}[?1049h"));
+        assert!(!entered.contains("\u{1b}[?1000h"));
+
+        let mut restored = Vec::new();
+        leave_fullscreen_terminal_session(&mut restored, false, false).expect("restore commands");
+        let restored =
+            String::from_utf8(restored).expect("terminal commands are utf-8 escape bytes");
+        assert!(!restored.contains("\u{1b}[?1000l"));
+        assert!(restored.contains("\u{1b}[?1049l"));
+    }
+
+    #[test]
+    fn clipboard_sequence_supports_direct_and_tmux_osc52() {
+        let direct = terminal_clipboard_sequence("hello", false);
+        assert_eq!(direct, "\u{1b}]52;c;aGVsbG8=\u{7}");
+
+        let tmux = terminal_clipboard_sequence("hello", true);
+        assert!(tmux.starts_with("\u{1b}Ptmux;\u{1b}\u{1b}]52;c;aGVsbG8="));
+        assert!(tmux.ends_with("\u{7}\u{1b}\\"));
     }
 
     #[cfg(unix)]
