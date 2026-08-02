@@ -603,6 +603,12 @@ and resize-epoch checks succeed. Receipt application compares the captured basel
 help, approval, session-list, or queue-hit-area feedback, so an older frame cannot overwrite a
 newer UI edit.
 
+Transcript drag selection is adapter-local UI state. The renderer records the exact stable Ratatui
+cell map in that same receipt; pointer input reduces against the committed map and queues a typed
+terminal effect. The thin terminal frontend alone encodes clipboard text as OSC 52 (including tmux
+passthrough) or changes Crossterm mouse reporting. Clipboard payloads, selection geometry, and the
+mouse-mode preference never enter Core, application authority, or durable conversation state.
+
 Activity frame capture joins retained progressive payloads with the Core-published item-lifecycle
 snapshot through exact item identity and authoritative consistency records. The resulting owned
 frame carries typed outcome, summary, elapsed time, and wait reason; presentation must not infer
