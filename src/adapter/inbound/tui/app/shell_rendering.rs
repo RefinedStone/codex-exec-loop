@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+use std::mem;
 use std::rc::Rc;
 
 use super::fullscreen_frame_model::ApprovalFullscreenScreenModel;
@@ -22,6 +24,8 @@ use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph, Wrap};
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 /*
  * 이 파일은 native fullscreen shell의 ratatui frame boundary다.
@@ -579,14 +583,6 @@ fn render_fullscreen_transcript(
     .wrap(Wrap { trim: false });
     frame.render_widget(paragraph.scroll((window_scroll_offset, 0)), transcript_area);
 
-    let frame_snapshot = capture_transcript_frame_snapshot(
-        frame,
-        transcript_area,
-        scroll_offset,
-        &wrapped_rows,
-        transcript_viewport_state,
-    );
-
     if has_unseen_output {
         let label = " ↓ new output · Ctrl+End ";
         let label_width = label.chars().count().min(usize::from(u16::MAX)) as u16;
@@ -602,6 +598,17 @@ fn render_fullscreen_transcript(
             area,
         );
     }
+
+    // The snapshot is the selection authority for this committed frame. Capture
+    // it only after every transcript-area overlay is drawn so pointer selection,
+    // highlight, and clipboard text all describe the same visible cells.
+    let frame_snapshot = capture_transcript_frame_snapshot(
+        frame,
+        transcript_area,
+        scroll_offset,
+        &wrapped_rows,
+        transcript_viewport_state,
+    );
 
     let visible_end = scroll_offset.saturating_add(usize::from(transcript_area.height));
     let card_hit_areas = projected_rows
@@ -629,32 +636,186 @@ fn render_fullscreen_transcript(
     }
 }
 
-fn transcript_wrapped_row_layout(lines: &[Line<'_>], width: u16) -> Vec<(usize, bool)> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TranscriptWrappedRowLayout {
+    logical_line_index: usize,
+    soft_wrap_separator: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TranscriptWrapGrapheme {
+    symbol: String,
+    source_index: usize,
+}
+
+impl TranscriptWrapGrapheme {
+    fn width(&self) -> u16 {
+        u16::try_from(self.symbol.as_str().width()).unwrap_or(u16::MAX)
+    }
+
+    fn is_whitespace(&self) -> bool {
+        self.symbol == "\u{200b}"
+            || (self.symbol.chars().all(char::is_whitespace) && self.symbol != "\u{00a0}")
+    }
+}
+
+fn transcript_wrapped_row_layout(
+    lines: &[Line<'_>],
+    width: u16,
+) -> Vec<TranscriptWrappedRowLayout> {
     let mut rows = Vec::new();
     for (logical_line_index, line) in lines.iter().enumerate() {
-        let row_count = count_wrapped_rows(std::slice::from_ref(line), width).max(1);
-        rows.extend(
-            (0..row_count).map(|row_index| (logical_line_index, row_index + 1 < row_count)),
-        );
+        let source = transcript_line_graphemes(line);
+        let wrapped = wrap_transcript_graphemes(&source, width);
+        rows.extend(wrapped.iter().enumerate().map(|(row_index, row)| {
+            let soft_wrap_separator = wrapped
+                .get(row_index + 1)
+                .map_or_else(String::new, |next_row| {
+                    wrap_boundary_separator(&source, row, next_row)
+                });
+            TranscriptWrappedRowLayout {
+                logical_line_index,
+                soft_wrap_separator,
+            }
+        }));
     }
     rows
+}
+
+fn transcript_line_graphemes(line: &Line<'_>) -> Vec<TranscriptWrapGrapheme> {
+    line.spans
+        .iter()
+        .flat_map(|span| UnicodeSegmentation::graphemes(span.content.as_ref(), true))
+        .enumerate()
+        .map(|(source_index, symbol)| TranscriptWrapGrapheme {
+            symbol: symbol.to_string(),
+            source_index,
+        })
+        .collect()
+}
+
+/// Mirrors Ratatui's `WordWrapper` with `trim: false`, while retaining source
+/// indices for whitespace that the renderer consumes at a wrap boundary.
+fn wrap_transcript_graphemes(
+    source: &[TranscriptWrapGrapheme],
+    max_line_width: u16,
+) -> Vec<Vec<TranscriptWrapGrapheme>> {
+    if max_line_width == 0 {
+        return Vec::new();
+    }
+
+    let mut wrapped_lines = Vec::new();
+    let mut pending_line = Vec::new();
+    let mut pending_word = Vec::new();
+    let mut pending_whitespace: VecDeque<TranscriptWrapGrapheme> = VecDeque::new();
+    let mut line_width = 0_u16;
+    let mut word_width = 0_u16;
+    let mut whitespace_width = 0_u16;
+    let mut non_whitespace_previous = false;
+
+    for grapheme in source.iter().cloned() {
+        let is_whitespace = grapheme.is_whitespace();
+        let symbol_width = grapheme.width();
+        if symbol_width > max_line_width {
+            continue;
+        }
+
+        let word_found = non_whitespace_previous && is_whitespace;
+        let untrimmed_overflow = pending_line.is_empty()
+            && word_width
+                .saturating_add(whitespace_width)
+                .saturating_add(symbol_width)
+                > max_line_width;
+        if word_found || untrimmed_overflow {
+            pending_line.extend(pending_whitespace.drain(..));
+            line_width = line_width.saturating_add(whitespace_width);
+            pending_line.append(&mut pending_word);
+            line_width = line_width.saturating_add(word_width);
+            whitespace_width = 0;
+            word_width = 0;
+        }
+
+        let line_full = line_width >= max_line_width;
+        let pending_word_overflow = symbol_width > 0
+            && line_width
+                .saturating_add(whitespace_width)
+                .saturating_add(word_width)
+                >= max_line_width;
+        if line_full || pending_word_overflow {
+            let mut remaining_width = max_line_width.saturating_sub(line_width);
+            wrapped_lines.push(mem::take(&mut pending_line));
+            line_width = 0;
+
+            while let Some(pending) = pending_whitespace.front() {
+                let width = pending.width();
+                if width > remaining_width {
+                    break;
+                }
+                whitespace_width = whitespace_width.saturating_sub(width);
+                remaining_width = remaining_width.saturating_sub(width);
+                pending_whitespace.pop_front();
+            }
+
+            if is_whitespace && pending_whitespace.is_empty() {
+                continue;
+            }
+        }
+
+        if is_whitespace {
+            whitespace_width = whitespace_width.saturating_add(symbol_width);
+            pending_whitespace.push_back(grapheme);
+        } else {
+            word_width = word_width.saturating_add(symbol_width);
+            pending_word.push(grapheme);
+        }
+        non_whitespace_previous = !is_whitespace;
+    }
+
+    pending_line.extend(pending_whitespace);
+    pending_line.append(&mut pending_word);
+    if !pending_line.is_empty() {
+        wrapped_lines.push(pending_line);
+    }
+    if wrapped_lines.is_empty() {
+        wrapped_lines.push(Vec::new());
+    }
+    wrapped_lines
+}
+
+fn wrap_boundary_separator(
+    source: &[TranscriptWrapGrapheme],
+    row: &[TranscriptWrapGrapheme],
+    next_row: &[TranscriptWrapGrapheme],
+) -> String {
+    let Some(start) = row
+        .last()
+        .map(|grapheme| grapheme.source_index.saturating_add(1))
+    else {
+        return String::new();
+    };
+    let Some(end) = next_row.first().map(|grapheme| grapheme.source_index) else {
+        return String::new();
+    };
+    source
+        .get(start..end)
+        .unwrap_or_default()
+        .iter()
+        .filter(|grapheme| grapheme.is_whitespace())
+        .map(|grapheme| grapheme.symbol.as_str())
+        .collect()
 }
 
 fn capture_transcript_frame_snapshot(
     frame: &mut Frame<'_>,
     area: Rect,
     scroll_offset: usize,
-    wrapped_rows: &[(usize, bool)],
+    wrapped_rows: &[TranscriptWrappedRowLayout],
     transcript_viewport_state: &TranscriptViewportUiState,
 ) -> TranscriptViewportFrame {
     let mut rows = Vec::new();
     for visible_row in 0..area.height {
         let absolute_row = scroll_offset.saturating_add(usize::from(visible_row));
-        let Some((logical_line_index, soft_wrap_continues)) =
-            wrapped_rows.get(absolute_row).copied()
-        else {
-            break;
-        };
+        let row_layout = wrapped_rows.get(absolute_row);
         if let Some((start_column, end_column)) =
             transcript_viewport_state.selection_columns_for_row(absolute_row, area.width)
         {
@@ -680,8 +841,13 @@ fn capture_transcript_frame_snapshot(
             .collect();
         rows.push(TranscriptRenderedRow {
             absolute_row,
-            logical_line_index,
-            soft_wrap_continues,
+            logical_line_index: row_layout.map_or_else(
+                || usize::MAX.saturating_sub(usize::from(visible_row)),
+                |layout| layout.logical_line_index,
+            ),
+            soft_wrap_separator: row_layout
+                .map(|layout| layout.soft_wrap_separator.clone())
+                .unwrap_or_default(),
             cells,
         });
     }
