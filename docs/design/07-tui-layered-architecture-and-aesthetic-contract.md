@@ -55,7 +55,8 @@ The shell tail is intentionally quiet:
 ## App-Owned Transcript Viewport
 
 `TranscriptViewportUiState` owns the wrapped-row anchor, page height, maximum scroll, follow-tail,
-latest and seen revisions, document identity, and card hit areas.
+latest and seen revisions, document identity, card hit areas, the last stable rendered-cell map,
+and transcript selection.
 
 - Default: follow the newest output.
 - PageUp / mouse wheel up: freeze an absolute reader anchor.
@@ -64,9 +65,17 @@ latest and seen revisions, document identity, and card hit areas.
 - Ctrl+Home: jump to the first row.
 - Ctrl+End: resume the newest row and clear unseen state.
 - Thread/session switch: reset the viewport and stale card geometry.
+- Left drag: freeze the current absolute reader anchor, highlight the selected rendered cells, and
+  copy on release without waiting for another frame.
+- Resize: invalidate selection geometry before the next pointer event; a stale frame receipt cannot
+  restore it.
 
 The terminal emulator does not own conversation history. No host scrollback delivery, cursor-based
 history insertion, transcript handoff, or viewport replay mode exists in the production path.
+Terminal-native text selection is still available as an explicit interaction mode: `:mouse off`
+disables mouse reporting while retaining the same alternate-screen frame and `:mouse on` restores
+app-owned pointer handling. Clipboard delivery is a thin terminal effect (OSC 52, including tmux
+passthrough), never transcript authority.
 
 ## Tool and Diff Cards
 
@@ -131,6 +140,8 @@ dashboard made of boxes.
    across every cleanup step.
 6. New conversation features extend the canonical transcript/card model rather than adding a live
    buffer, host history, or separate visible log.
+7. Selection reads only the rendered-cell snapshot returned by a stable frame receipt; controller
+   input never guesses Ratatui wrapping from raw strings.
 
 ## Acceptance Scenarios
 
@@ -142,3 +153,6 @@ dashboard made of boxes.
 - Late assistant completion preserves interleaved tool ordering.
 - A resize race does not apply stale scroll or hit-area state.
 - Entering and exiting restores the caller's terminal cleanly on Windows and Linux families.
+- Forward and reverse drags copy the same semantic order, preserve Korean/wide glyphs, and retain a
+  visible selection background until the next selection or geometry invalidation.
+- `:mouse off` emits no mouse-reporting enable sequence at startup or after the mode change.

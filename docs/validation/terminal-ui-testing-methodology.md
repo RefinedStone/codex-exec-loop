@@ -13,8 +13,8 @@ fallback.
 
 - `NativeTuiApp` owns the canonical conversation and the app-owned transcript viewport.
 - `ConversationViewModel.messages` is the only ordered transcript.
-- `TranscriptViewportUiState` owns top row, follow-tail, unseen revision, document identity, and
-  clickable card geometry.
+- `TranscriptViewportUiState` owns top row, follow-tail, unseen revision, document identity,
+  clickable card geometry, the stable rendered-cell map, and drag selection.
 - `FullscreenShellFrameModel` and `FullscreenInspectionFrameModel` are immutable owned draw input.
 - `FullscreenFrameRenderReceipt` is the Stable frame receipt and compare-and-apply boundary.
 - The Thin terminal layer enters the alternate screen, captures one sample, draws one frame, checks
@@ -36,10 +36,11 @@ representative compatibility targets in `docs/plan/12-platform-validation-matrix
 | Responsibility | Current owner / source | Decision point | First-class default | Proof obligation |
 |---|---|---|---|---|
 | Semantic ordering | `ConversationViewModel.messages` | app-server event reduction | one canonical vector | agent/tool/agent order never changes after late completion |
-| Reader position | `TranscriptViewportUiState` | input reducer + frame receipt | follow tail until user scrolls | streaming append does not move a reader |
+| Reader position | `TranscriptViewportUiState` | input reducer + frame receipt | follow tail until user scrolls or selects | streaming append does not move a reader or active selection |
 | Rendering | `FullscreenShellFrameModel` | frame capture | owned immutable model | repeated draw has no effects |
 | Delivery | `FullscreenTerminalAdapter` | post-draw geometry check | one Ratatui transaction | stale resize applies no UI receipt |
 | Terminal modes | `TerminalRestoreGuard` | startup/drop | alternate screen + mouse/focus/paste | every enabled mode is restored |
+| Clipboard | terminal UI effect pump | explicit drag or `:copy` | OSC 52; tmux passthrough when attached | UTF-8 payload is base64 encoded and never printed as cells |
 
 The current stack remains the default posture because it minimizes bug-class recurrence across terminal boundaries,
 future test-growth cost, and maintainability cost.
@@ -70,6 +71,10 @@ move a reader**. A final screenshot alone cannot prove it.
 - `Ctrl+E` and mouse click expand the same card identity. PageUp/PageDown and wheel scroll the same
   viewport. `Ctrl+Home` leaves follow-tail; `Ctrl+End` resumes it.
 - A thread identity change resets viewport offset and stale hit areas atomically.
+- Left down/drag/up uses the last committed rendered-cell map. A click still toggles the same tool
+  digest; movement turns the gesture into selection and copies only on release.
+- `:mouse off` and `AKRA_TUI_MOUSE_CAPTURE=off` skip mouse reporting so the emulator can own native
+  selection; `:mouse on` restores app-owned pointer input without changing transcript ownership.
 
 ## Manual Capture Contract
 
@@ -88,6 +93,9 @@ Capture must show:
 4. a collapsed read/explore card and its expanded detail;
 5. a collapsed patch card and expanded green/red semantic diff;
 6. clean shell restoration after exit.
+7. forward and reverse transcript drag, visible selection highlighting, and clipboard paste into a
+   separate application;
+8. `:mouse off` native terminal selection and `:mouse on` restoration.
 
 ### When all first-class environments are required
 

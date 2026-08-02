@@ -58,6 +58,8 @@ The source registry is `src/adapter/inbound/tui/app/inline_shell_commands.rs`.
 :view [simple|medium|detail]
 :language [english|korean]
 :think <none|minimal|low|medium|high|xhigh|default>
+:copy [selection|last]
+:mouse [on|off|toggle]
 :planning [doctor]
 :doctor
 :reset <queue|directions|all>
@@ -68,6 +70,15 @@ The source registry is `src/adapter/inbound/tui/app/inline_shell_commands.rs`.
 `:turns` controls single-session auto-follow. Parallel automation is a separate explicit opt-in.
 `:stop` terminates active app-server sessions, closes the active parallel epoch, and disarms both
 continuation paths. A later `:parallel` re-arms only parallel continuation.
+
+In the conversation, a left-button drag selects the exact rendered transcript cells, keeps their
+background highlighted, and copies the resulting text through OSC 52 when the button is released.
+The clipboard path supports direct terminals and tmux passthrough. `:copy selection` repeats the
+last completed selection; `:copy last` copies the latest raw assistant answer. `:mouse off` hands
+drag selection back to the terminal emulator without leaving fullscreen, while `:mouse on`
+restores app-owned scrolling, cards, and selection. `Shift+drag` remains the terminal-native bypass
+on emulators that provide it. Set `AKRA_TUI_MOUSE_CAPTURE=off` before startup to begin in the
+terminal-native mode.
 
 ## Turn and Approval Flow
 
