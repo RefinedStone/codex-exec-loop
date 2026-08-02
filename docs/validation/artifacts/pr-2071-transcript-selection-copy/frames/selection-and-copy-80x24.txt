@@ -1,0 +1,20 @@
+You:
+  Reply exactly with: [selection bg RGB(42,72,112)]selectable[/selection] words
+
+
+
+
+
+
+
+
+Akra / akra-tui-...  ·  READY  ·  queue blocked  ·  agents off  ·  terminals 0
+status: copied selection to terminal clipboard (10 characters)
+! DEGRADED  ·  runtime degraded  ·  warnings 2  ·  Ctrl+D details
+planning: invalid  |  isolated proof worktree has no planning workspace
+╭ Task
+│ > Describe a task or type : for commands
+╰  Type a task  |  : commands
+
+Normalized frame note: the marker around `selectable` represents the observed SGR background
+sequence ESC[48;2;42;72;112m and its reset. Runtime paths and warning details were shortened.

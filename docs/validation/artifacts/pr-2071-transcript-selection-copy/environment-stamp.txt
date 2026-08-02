@@ -1,0 +1,28 @@
+artifact_id: pr2071-e3-transcript-selection-copy
+pr_or_work_item: PR 2071
+capture_role: supplemental-unmatched
+environment_class: first-class E3
+check_profile: fullscreen-transcript-selection-copy-v1
+captured_at_local: 2026-08-02T10:04+09:00
+operator: Codex /root
+reviewer: pending PR review
+candidate_commit: 1f867fd52a255ce85ef68a51d2d3a05d8e8ef311
+candidate_tree: 36cc3381c59691133fec3fdbe56f8bdcb9bc61ca
+candidate_production_inputs_match_commit: true
+worktree_state_during_capture: production inputs clean; evidence draft not yet created
+binary_sha256: 8d0131e63866f650afcd342d4fb337725aa2b6304df5427366071ca749ffd844
+source_build: true
+runtime_authority: production akra composition with actual Codex app-server startup
+terminal: tmux 3.4 detached PTY
+multiplexer: tmux 3.4
+shell: GNU bash 5.2.21(1)-release
+os: Ubuntu 24.04.2 LTS / WSL2
+kernel: Linux 6.18.33.2-microsoft-standard-WSL2 x86_64
+frontend: Ratatui alternate-screen fullscreen
+term: tmux-256color
+mode_toggle_geometry: 120x40
+selection_geometry: 80x24
+mouse_start_mode: on
+native_selection_start_override: AKRA_TUI_MOUSE_CAPTURE=off in separate proof session
+runtime_exit: confirmed shell exit; alternate screen, focus, and cursor restored
+notes_on_deviations: E1, E2, and E4 candidate-specific manual rows not executed; see README evidence matrix
