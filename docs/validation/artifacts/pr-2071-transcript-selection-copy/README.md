@@ -1,10 +1,12 @@
 # PR 2071 Transcript Selection And Copy Evidence
 
-This supplemental artifact records primitive-sensitive validation for implementation commit
-`1f867fd52a255ce85ef68a51d2d3a05d8e8ef311`. It exercises app-owned transcript drag selection,
-tmux OSC 52 clipboard delivery, live mouse-capture switching, startup native-selection mode, and
-terminal restoration against an actual tmux 3.4 detached PTY and the production `akra` runtime.
-The later PR-head delta contains this evidence only and does not change production behavior.
+This supplemental artifact records primitive-sensitive validation captured at foundational
+implementation commit `1f867fd52a255ce85ef68a51d2d3a05d8e8ef311`. It exercises app-owned
+transcript drag selection, tmux OSC 52 clipboard delivery, live mouse-capture switching, startup
+native-selection mode, and terminal restoration against an actual tmux 3.4 detached PTY and the
+production `akra` runtime. Post-review behavior commit
+`f860af193616317b346b520e5348952f2003c0eb` keeps that terminal protocol path unchanged and adds
+automated coverage for final-overlay snapshots, exact-width wrap separators, and wide-glyph cells.
 
 The artifact is `supplemental-unmatched`: it is a candidate-specific first-class E3 observation.
 It does not relabel E1, E2, or E4 as candidate passes.

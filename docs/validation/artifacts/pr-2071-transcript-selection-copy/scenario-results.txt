@@ -24,6 +24,11 @@ overall_result: pass for candidate-specific E3; explicit E1/E2/E4 evidence downg
    Named proofs: streaming_redraw_cannot_replace_the_selection_source_snapshot;
    reverse_drag_normalizes_copy_order; drag_selection_freezes_tail_and_reconstructs_soft_wrapped_text;
    transcript_drag_highlights_exact_cells_and_queues_clipboard_copy.
+9. post_review_visible_cell_fidelity: automated addendum at f860af193616317b346b520e5348952f2003c0eb
+   Named proofs: new_output_badge_is_part_of_the_selectable_committed_frame;
+   exact_width_word_wrap_preserves_the_consumed_separator;
+   wide_glyph_continuation_cells_snap_to_the_visible_glyph;
+   transcript_wrap_layout_matches_ratatui_row_counts.
 
 baseline_gate_note:
   WSL full Rust suite passed 2844/2853. The remaining parallel delivery timing failures are outside
