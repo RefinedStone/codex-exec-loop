@@ -380,14 +380,19 @@ impl FullscreenFrameRenderReceipt {
         )
     }
 
-    pub(super) fn record_transcript_cards(
+    pub(super) fn record_transcript_frame(
         &mut self,
         card_digests: Vec<[u8; 32]>,
         hit_areas: Vec<TranscriptCardHitArea>,
+        frame_snapshot: Option<TranscriptViewportFrame>,
     ) {
         self.transcript_viewport
             .next
-            .bind_cards(card_digests, hit_areas);
+            .bind_frame(card_digests, hit_areas, frame_snapshot);
+    }
+
+    pub(super) fn transcript_viewport_state(&self) -> &TranscriptViewportUiState {
+        &self.transcript_viewport.next
     }
 
     pub(super) fn transcript_has_unseen_output(&self) -> bool {

@@ -174,6 +174,16 @@ const TUI_COVERAGE_SURFACES: &[TuiCoverageSurface] = &[
         ],
     },
     TuiCoverageSurface {
+        name: "Transcript selection and clipboard",
+        doc_marker: "| Transcript selection and clipboard |",
+        source_prefixes: &["src/adapter/inbound/tui/app/terminal_interaction_ui.rs"],
+        test_entrypoints: &[
+            "src/adapter/inbound/tui/app/terminal_interaction_ui.rs",
+            "src/adapter/inbound/tui/app/fullscreen_rendering_tests.rs",
+            "src/adapter/inbound/tui/app/ratatui_frontend.rs",
+        ],
+    },
+    TuiCoverageSurface {
         name: "Parallel event stream, live-tail, prompt position, command hints",
         doc_marker: "| Parallel event stream, live-tail, prompt position, command hints |",
         source_prefixes: &[

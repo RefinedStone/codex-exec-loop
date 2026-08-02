@@ -226,6 +226,8 @@ impl NativeTuiApp {
                 self.handle_language_shell_command(command_input.argument())
             }
             InlineShellCommand::Think => self.handle_think_shell_command(command_input.argument()),
+            InlineShellCommand::Copy => self.handle_copy_shell_command(command_input.argument()),
+            InlineShellCommand::Mouse => self.handle_mouse_shell_command(command_input.argument()),
             InlineShellCommand::Doctor => self.run_planning_doctor(),
             InlineShellCommand::PlanningInit => {
                 self.handle_planning_shell_command(command_input.argument())
@@ -348,7 +350,7 @@ impl NativeTuiApp {
     pub(super) fn clear_transcript_card_hit_areas(&mut self) {
         self.shell
             .transcript_viewport_ui_state
-            .clear_card_hit_areas();
+            .clear_frame_geometry();
     }
 
     pub(super) fn scroll_transcript_page_up(&mut self) -> bool {
@@ -410,17 +412,42 @@ impl NativeTuiApp {
             event::MouseEventKind::ScrollDown => {
                 return self.shell.transcript_viewport_ui_state.scroll_down(3);
             }
-            event::MouseEventKind::Down(event::MouseButton::Left) => {}
+            event::MouseEventKind::Down(event::MouseButton::Left) => {
+                return self
+                    .shell
+                    .transcript_viewport_ui_state
+                    .begin_selection(mouse.column, mouse.row);
+            }
+            event::MouseEventKind::Drag(event::MouseButton::Left) => {
+                return self
+                    .shell
+                    .transcript_viewport_ui_state
+                    .update_selection(mouse.column, mouse.row);
+            }
+            event::MouseEventKind::Up(event::MouseButton::Left) => {}
             _ => return false,
         }
-        let Some(digest) = self
+        let clicked_digest = self
             .shell
             .transcript_viewport_ui_state
-            .digest_at(mouse.column, mouse.row)
-        else {
-            return false;
-        };
-        self.toggle_transcript_tool_card(digest)
+            .digest_at(mouse.column, mouse.row);
+        match self
+            .shell
+            .transcript_viewport_ui_state
+            .finish_selection(mouse.column, mouse.row)
+        {
+            TranscriptSelectionFinish::Ignored => false,
+            TranscriptSelectionFinish::Click => {
+                if let Some(digest) = clicked_digest {
+                    self.toggle_transcript_tool_card(digest);
+                }
+                true
+            }
+            TranscriptSelectionFinish::Copy(text) => {
+                self.request_selection_copy(text);
+                true
+            }
+        }
     }
 
     pub(super) fn handle_progressive_activity_mouse_event(

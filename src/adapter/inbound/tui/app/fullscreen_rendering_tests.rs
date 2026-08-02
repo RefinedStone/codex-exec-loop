@@ -4,6 +4,7 @@ use crossterm::event::{
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
+use ratatui::layout::Position;
 
 use super::*;
 use crate::adapter::inbound::tui::app::shell_runtime::ShellRuntime;
@@ -25,6 +26,15 @@ fn render(app: &mut NativeTuiApp, width: u16, height: u16) -> String {
         .draw(|frame| draw(frame, app, ShellFrontendMode::Fullscreen))
         .expect("fullscreen frame should render");
     buffer_text(terminal.backend().buffer())
+}
+
+fn render_buffer(app: &mut NativeTuiApp, width: u16, height: u16) -> Buffer {
+    let mut terminal =
+        Terminal::new(TestBackend::new(width, height)).expect("fullscreen test terminal");
+    terminal
+        .draw(|frame| draw(frame, app, ShellFrontendMode::Fullscreen))
+        .expect("fullscreen frame should render");
+    terminal.backend().buffer().clone()
 }
 
 fn buffer_text(buffer: &Buffer) -> String {
@@ -58,15 +68,31 @@ fn seed_long_transcript(app: &mut NativeTuiApp, rows: usize) {
     }
 }
 
-fn click_first_visible_tool_card(app: &mut NativeTuiApp, width: u16, height: u16) -> bool {
-    (0..height).any(|row| {
-        app.handle_transcript_mouse_event(MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: width.saturating_sub(1),
-            row,
-            modifiers: KeyModifiers::NONE,
-        })
-    })
+fn click_first_visible_tool_card(app: &mut NativeTuiApp, _width: u16, _height: u16) -> bool {
+    let Some(hit_area) = app
+        .shell
+        .transcript_viewport_ui_state
+        .card_hit_areas()
+        .first()
+        .copied()
+    else {
+        return false;
+    };
+    let column = hit_area.area.x;
+    let row = hit_area.area.y;
+    let down = app.handle_transcript_mouse_event(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    });
+    let up = app.handle_transcript_mouse_event(MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    });
+    down && up
 }
 
 #[test]
@@ -236,6 +262,76 @@ fn ctrl_e_expands_the_latest_visible_tool_card() {
 
     assert!(expanded.contains("src/core/app.rs"));
     assert!(expanded.contains("src/domain/conversation.rs"));
+}
+
+#[test]
+fn transcript_drag_highlights_exact_cells_and_queues_clipboard_copy() {
+    let mut app = test_native_tui_app();
+    let conversation = ready_conversation_mut(&mut app);
+    conversation.messages.clear();
+    assert!(conversation.finalize_agent_message(
+        "agent-selection".to_string(),
+        Some("final".to_string()),
+        "selectable words".to_string(),
+    ));
+    let _ = render(&mut app, 80, 24);
+    let snapshot = app
+        .shell
+        .transcript_viewport_ui_state
+        .frame_snapshot()
+        .cloned()
+        .expect("stable draw should bind transcript cells");
+    let (visible_row, start_column) = snapshot
+        .rows
+        .iter()
+        .enumerate()
+        .find_map(|(visible_row, row)| {
+            row.cells
+                .windows("selectable".len())
+                .position(|window| {
+                    window.iter().map(String::as_str).collect::<String>() == "selectable"
+                })
+                .map(|column| (visible_row as u16, column as u16))
+        })
+        .expect("selection fixture should be visible");
+    let row = snapshot.area.y.saturating_add(visible_row);
+    let start = snapshot.area.x.saturating_add(start_column);
+    let end = start.saturating_add("selectable".len() as u16 - 1);
+
+    assert!(app.handle_transcript_mouse_event(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: start,
+        row,
+        modifiers: KeyModifiers::NONE,
+    }));
+    assert!(app.handle_transcript_mouse_event(MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: end,
+        row,
+        modifiers: KeyModifiers::NONE,
+    }));
+    let highlighted = render_buffer(&mut app, 80, 24);
+    for column in start..=end {
+        assert_eq!(
+            highlighted
+                .cell(Position::new(column, row))
+                .expect("selected cell")
+                .style()
+                .bg,
+            AkraTheme::transcript_selection().bg
+        );
+    }
+
+    assert!(app.handle_transcript_mouse_event(MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: end,
+        row,
+        modifiers: KeyModifiers::NONE,
+    }));
+    assert_eq!(
+        app.take_terminal_ui_effects(),
+        vec![TerminalUiEffect::CopyToClipboard("selectable".to_string())]
+    );
 }
 
 #[test]

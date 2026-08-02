@@ -17,6 +17,7 @@ use super::fullscreen_frame_model::{
 use super::shell_presentation::{ConversationProjectionFrameInput, ConversationProjectionSample};
 use super::{
     BackgroundMessage, InputCursorMovement, NativeTuiApp, ShellChromeEvent, ShellFrontendMode,
+    TerminalUiEffect,
 };
 
 const BACKGROUND_MESSAGE_DRAIN_BUDGET: usize = 128;
@@ -105,6 +106,12 @@ impl ShellRuntime {
     }
     pub(super) fn clear_transcript_card_hit_areas(&mut self) {
         self.app.clear_transcript_card_hit_areas();
+    }
+    pub(super) fn terminal_mouse_capture_enabled(&self) -> bool {
+        self.app.terminal_mouse_capture_enabled()
+    }
+    pub(super) fn take_terminal_ui_effects(&mut self) -> Vec<TerminalUiEffect> {
+        self.app.take_terminal_ui_effects()
     }
     pub(super) fn should_quit(&self) -> bool {
         self.should_quit
@@ -613,12 +620,13 @@ mod tests {
             .app_mut()
             .shell
             .transcript_viewport_ui_state
-            .bind_cards(
+            .bind_frame(
                 vec![[7; 32]],
                 vec![TranscriptCardHitArea {
                     digest: [7; 32],
                     area: Rect::new(2, 3, 20, 1),
                 }],
+                None,
             );
         assert_eq!(
             runtime

@@ -31,6 +31,8 @@ pub(crate) enum InlineShellCommand {
     View,
     Language,
     Think,
+    Copy,
+    Mouse,
     Doctor,
     PlanningInit,
     Reset,
@@ -195,8 +197,6 @@ pub(crate) struct InlineShellCommandHelpEntry {
     pub(crate) usage: &'static str,
     pub(crate) detail: &'static str,
 }
-#[cfg(test)]
-const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :work  :parallel [off]  :peek  :activity [all|diff|output|command|…]  :sessions  :reviews  :queue  :directions  :turns <positive|infinite|off>  :stop  :model [default]  :view [simple|medium|detail]  :language [english|korean]  :think <none|minimal|low|medium|high|xhigh|default>  :planning [doctor]  :doctor  :reset <queue|directions|all>  :new  :help";
 const ACTIVITY_USAGE: &str = "Type `:activity [all|diff|output|command|patch|…]` to inspect retained progressive activity cards.";
 const RESET_USAGE: &str =
     "Type `:reset <queue|directions|all>` and press Enter to reset planning state.";
@@ -206,6 +206,12 @@ const LANGUAGE_USAGE: &str =
     "Type `:language` to choose the TUI language, or `:language english|korean`.";
 const THINK_USAGE: &str =
     "Type `:think <none|minimal|low|medium|high|xhigh|default>` to choose reasoning effort.";
+const COPY_USAGE: &str =
+    "Type `:copy` to copy the selection or latest answer; use `:copy selection|last` explicitly.";
+const MOUSE_USAGE: &str =
+    "Type `:mouse` for status, or `:mouse on|off|toggle` to control app mouse capture.";
+#[cfg(test)]
+const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :work  :parallel [off]  :peek  :activity [all|diff|output|command|…]  :sessions  :reviews  :queue  :directions  :turns <positive|infinite|off>  :stop  :model [default]  :view [simple|medium|detail]  :language [english|korean]  :think <none|minimal|low|medium|high|xhigh|default>  :copy [selection|last]  :mouse [on|off|toggle]  :planning [doctor]  :doctor  :reset <queue|directions|all>  :new  :help";
 const THINK_SUPPORTED_VALUES: &str = ConversationReasoningEffort::SUPPORTED_LABELS;
 
 const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
@@ -330,6 +336,22 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         requires_argument: true,
     },
     InlineShellCommandSpec {
+        command: InlineShellCommand::Copy,
+        primary_name: ":copy",
+        aliases: &[":copy"],
+        buffered_hint: COPY_USAGE,
+        execution_status: None,
+        requires_argument: false,
+    },
+    InlineShellCommandSpec {
+        command: InlineShellCommand::Mouse,
+        primary_name: ":mouse",
+        aliases: &[":mouse"],
+        buffered_hint: MOUSE_USAGE,
+        execution_status: None,
+        requires_argument: false,
+    },
+    InlineShellCommandSpec {
         command: InlineShellCommand::Doctor,
         primary_name: ":doctor",
         aliases: &[":doctor"],
@@ -407,6 +429,8 @@ impl InlineShellCommandInput {
             InlineShellCommand::View => view_argument_hint(self.argument()),
             InlineShellCommand::Language => language_argument_hint(self.argument()),
             InlineShellCommand::Think => think_argument_hint(self.argument()),
+            InlineShellCommand::Copy => copy_argument_hint(self.argument()),
+            InlineShellCommand::Mouse => mouse_argument_hint(self.argument()),
             InlineShellCommand::Queue => {
                 planning_overlay_argument_hint(self.argument(), InlineShellCommand::Queue, "queue")
             }
@@ -441,6 +465,8 @@ impl InlineShellCommandInput {
             InlineShellCommand::View => None,
             InlineShellCommand::Language => None,
             InlineShellCommand::Think => None,
+            InlineShellCommand::Copy => None,
+            InlineShellCommand::Mouse => None,
             _ => self.command.spec().execution_status.map(str::to_string),
         }
     }
@@ -575,6 +601,8 @@ impl InlineShellCommand {
             InlineShellCommand::View => ":view",
             InlineShellCommand::Language => ":language",
             InlineShellCommand::Think => ":think ",
+            InlineShellCommand::Copy => ":copy",
+            InlineShellCommand::Mouse => ":mouse",
             InlineShellCommand::Diagnostics
             | InlineShellCommand::Work
             | InlineShellCommand::Parallel
@@ -615,6 +643,8 @@ impl InlineShellCommand {
             InlineShellCommand::View => ":view [simple|medium|detail]",
             InlineShellCommand::Language => ":language [english|korean]",
             InlineShellCommand::Think => ":think <none|minimal|low|medium|high|xhigh|default>",
+            InlineShellCommand::Copy => ":copy [selection|last]",
+            InlineShellCommand::Mouse => ":mouse [on|off|toggle]",
             InlineShellCommand::PlanningInit => ":planning [doctor]",
             InlineShellCommand::Reset => ":reset <queue|directions|all>",
             InlineShellCommand::Diagnostics
@@ -755,6 +785,34 @@ fn think_argument_hint(argument: Option<&str>) -> String {
             "Press Enter to apply `:think {}`. Supported values: {THINK_SUPPORTED_VALUES}.",
             argument.trim()
         ),
+    }
+}
+fn copy_argument_hint(argument: Option<&str>) -> String {
+    match argument
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        None | Some("selection" | "selected" | "last" | "answer" | "response") => {
+            COPY_USAGE.to_string()
+        }
+        Some(value) => {
+            format!("`:copy {value}` is unsupported. Supported values: selection, last.")
+        }
+    }
+}
+fn mouse_argument_hint(argument: Option<&str>) -> String {
+    match argument
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        None | Some("status" | "on" | "off" | "toggle" | "enable" | "disable") => {
+            MOUSE_USAGE.to_string()
+        }
+        Some(value) => {
+            format!("`:mouse {value}` is unsupported. Supported values: on, off, toggle.")
+        }
     }
 }
 fn planning_argument_hint(argument: Option<&str>) -> String {

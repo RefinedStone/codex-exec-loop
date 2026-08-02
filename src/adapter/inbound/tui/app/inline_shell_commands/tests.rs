@@ -119,6 +119,12 @@ fn parse_recognizes_supported_aliases() {
             Some((InlineShellCommand::Reset, Some("directions confirm"))),
         ),
         (":new", Some((InlineShellCommand::NewDraft, None))),
+        (":copy", Some((InlineShellCommand::Copy, None))),
+        (
+            ":copy selection",
+            Some((InlineShellCommand::Copy, Some("selection"))),
+        ),
+        (":mouse off", Some((InlineShellCommand::Mouse, Some("off")))),
         (":help", Some((InlineShellCommand::Help, None))),
         ("  :help  ", Some((InlineShellCommand::Help, None))),
         (":unknown", None),
@@ -158,6 +164,8 @@ fn suggestions_show_all_commands_for_colon_only() {
             InlineShellCommand::View,
             InlineShellCommand::Language,
             InlineShellCommand::Think,
+            InlineShellCommand::Copy,
+            InlineShellCommand::Mouse,
             InlineShellCommand::Doctor,
             InlineShellCommand::PlanningInit,
             InlineShellCommand::Reset,
@@ -229,7 +237,7 @@ fn suggestions_filter_by_prefix() {
     );
     assert_eq!(
         InlineShellCommand::suggestions(":mo"),
-        vec![InlineShellCommand::Model]
+        vec![InlineShellCommand::Model, InlineShellCommand::Mouse]
     );
     assert_eq!(
         InlineShellCommand::suggestions(":v"),
