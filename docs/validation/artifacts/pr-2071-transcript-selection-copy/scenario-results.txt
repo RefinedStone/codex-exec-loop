@@ -1,0 +1,32 @@
+scenario_set: fullscreen-transcript-selection-copy-v1
+overall_result: pass for candidate-specific E3; explicit E1/E2/E4 evidence downgrade recorded
+
+1. startup_mouse_capture_on: pass
+   Alternate-screen marker ESC[?1049h was present.
+   Mouse markers ESC[?1000h, ?1002h, ?1003h, ?1015h, and ?1006h were present.
+2. app_owned_exact_cell_highlight: pass
+   SGR mouse down at column 23,row 2 and drag to column 32,row 2 selected `selectable`.
+   The committed frame contained ESC[48;2;42;72;112m immediately before the selected text.
+3. tmux_osc52_copy_on_release: pass
+   SGR mouse release emitted DCS prefix ESC Ptmux; ESC ESC ]52;c;.
+   Payload c2VsZWN0YWJsZQ== was present and decodes exactly to `selectable`.
+4. post_copy_visible_feedback: pass
+   Highlight remained visible after release.
+   Status changed to `copied selection to terminal clipboard (10 characters)`.
+5. live_mouse_mode_switch: pass
+   `:mouse off` emitted ?1000l, ?1002l, ?1003l, ?1015l, and ?1006l.
+   `:mouse on` emitted the corresponding five enable markers.
+6. startup_native_selection_fallback: pass
+   With AKRA_TUI_MOUSE_CAPTURE=off, ESC[?1049h was present and ?1000h/?1006h were absent.
+7. clean_terminal_restore: pass
+   Confirmed exit emitted ?1049l, ?1004l, and ?25h.
+8. streaming_resize_and_reverse_drag: automated addendum
+   Named proofs: streaming_redraw_cannot_replace_the_selection_source_snapshot;
+   reverse_drag_normalizes_copy_order; drag_selection_freezes_tail_and_reconstructs_soft_wrapped_text;
+   transcript_drag_highlights_exact_cells_and_queues_clipboard_copy.
+
+baseline_gate_note:
+  WSL full Rust suite passed 2844/2853. The remaining parallel delivery timing failures are outside
+  the TUI diff. Representative Timeout failure
+  guarded_enqueue_pool_busy_stops_within_one_retry_interval_after_gate_advance reproduced unchanged
+  on origin/prerelease commit ac20ef07 under the same WSL environment.
