@@ -28,7 +28,7 @@ struct TranscriptSelection {
 pub(super) struct TranscriptRenderedRow {
     pub(super) absolute_row: usize,
     pub(super) logical_line_index: usize,
-    pub(super) soft_wrap_continues: bool,
+    pub(super) soft_wrap_separator: String,
     pub(super) cells: Vec<String>,
 }
 
@@ -128,8 +128,13 @@ impl TranscriptViewportUiState {
         &mut self,
         card_digests: Vec<[u8; 32]>,
         card_hit_areas: Vec<TranscriptCardHitArea>,
-        frame_snapshot: Option<TranscriptViewportFrame>,
+        mut frame_snapshot: Option<TranscriptViewportFrame>,
     ) {
+        if let Some(frame_snapshot) = frame_snapshot.as_mut() {
+            for row in &mut frame_snapshot.rows {
+                normalize_rendered_row_cells(&mut row.cells);
+            }
+        }
         self.card_digests = card_digests;
         self.card_hit_areas = card_hit_areas;
         self.frame_snapshot = frame_snapshot;
@@ -361,14 +366,8 @@ impl TranscriptViewportUiState {
             };
             if next_row.logical_line_index != rendered_row.logical_line_index {
                 text.push('\n');
-            } else if rendered_row.soft_wrap_continues
-                && visible_text_width(rendered_row) < snapshot.area.width
-                && !segment.ends_with(char::is_whitespace)
-            {
-                // Ratatui's word wrapper removes the separating whitespace at a
-                // soft wrap. Reinsert one space for copy text when the row did
-                // not fill the viewport; full-width rows are hard wraps.
-                text.push(' ');
+            } else {
+                text.push_str(&rendered_row.soft_wrap_separator);
             }
         }
         (!text.is_empty()).then_some(text)
@@ -426,13 +425,25 @@ fn selection_point_in_frame(
     let rendered_row = frame.rows.get(visible_row)?;
     let mut relative_column = column.saturating_sub(frame.area.x);
     relative_column = relative_column.min(frame.area.width.saturating_sub(1));
-    while relative_column > 0
-        && rendered_row
-            .cells
-            .get(usize::from(relative_column))
-            .is_some_and(String::is_empty)
+    let current_index = usize::from(relative_column);
+    if rendered_row
+        .cells
+        .get(current_index)
+        .is_some_and(|cell| cell.is_empty() || cell == " ")
     {
-        relative_column = relative_column.saturating_sub(1);
+        for candidate in (0..current_index).rev() {
+            let Some(symbol) = rendered_row.cells.get(candidate) else {
+                continue;
+            };
+            if symbol.is_empty() {
+                continue;
+            }
+            let symbol_width = symbol.as_str().width().max(1);
+            if candidate.saturating_add(symbol_width) > current_index {
+                relative_column = u16::try_from(candidate).unwrap_or(relative_column);
+            }
+            break;
+        }
     }
     Some(TranscriptSelectionPoint {
         absolute_row: rendered_row.absolute_row,
@@ -440,36 +451,47 @@ fn selection_point_in_frame(
     })
 }
 
-fn visible_text_width(row: &TranscriptRenderedRow) -> u16 {
-    row.cells
-        .iter()
-        .rposition(|cell| !cell.is_empty() && cell != " ")
-        .map_or(0, |index| {
-            let symbol_width = row.cells[index].as_str().width().max(1);
-            u16::try_from(index.saturating_add(symbol_width)).unwrap_or(u16::MAX)
-        })
+fn normalize_rendered_row_cells(cells: &mut [String]) {
+    let mut column = 0;
+    while column < cells.len() {
+        let width = cells[column].as_str().width().max(1);
+        for continuation in 1..width {
+            let Some(cell) = cells.get_mut(column.saturating_add(continuation)) else {
+                break;
+            };
+            cell.clear();
+        }
+        column = column.saturating_add(width);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn frame_snapshot(lines: &[(&str, usize, bool)]) -> TranscriptViewportFrame {
+    fn frame_snapshot(lines: &[(&str, usize, &str)]) -> TranscriptViewportFrame {
+        frame_snapshot_with_width(8, lines)
+    }
+
+    fn frame_snapshot_with_width(
+        width: u16,
+        lines: &[(&str, usize, &str)],
+    ) -> TranscriptViewportFrame {
         TranscriptViewportFrame {
-            area: Rect::new(2, 3, 8, lines.len() as u16),
+            area: Rect::new(2, 3, width, lines.len() as u16),
             rows: lines
                 .iter()
                 .enumerate()
-                .map(|(index, (text, logical_line_index, soft_wrap_continues))| {
+                .map(|(index, (text, logical_line_index, soft_wrap_separator))| {
                     let mut cells = text
                         .chars()
                         .map(|value| value.to_string())
                         .collect::<Vec<_>>();
-                    cells.resize(8, " ".to_string());
+                    cells.resize(usize::from(width), " ".to_string());
                     TranscriptRenderedRow {
                         absolute_row: 10 + index,
                         logical_line_index: *logical_line_index,
-                        soft_wrap_continues: *soft_wrap_continues,
+                        soft_wrap_separator: (*soft_wrap_separator).to_string(),
                         cells,
                     }
                 })
@@ -507,7 +529,7 @@ mod tests {
                 digest: [1; 32],
                 area: Rect::new(0, 0, 10, 1),
             }],
-            Some(frame_snapshot(&[("alpha", 0, false)])),
+            Some(frame_snapshot(&[("alpha", 0, "")])),
         );
         state.page_up();
 
@@ -526,7 +548,7 @@ mod tests {
         state.bind_frame(
             Vec::new(),
             Vec::new(),
-            Some(frame_snapshot(&[("hello", 0, true), ("world", 0, false)])),
+            Some(frame_snapshot(&[("hello", 0, " "), ("world", 0, "")])),
         );
 
         assert!(state.begin_selection(2, 3));
@@ -546,13 +568,65 @@ mod tests {
     }
 
     #[test]
+    fn exact_width_word_wrap_preserves_the_consumed_separator() {
+        let mut state = TranscriptViewportUiState::default();
+        state.resolve_frame(2, 2, 1);
+        state.bind_frame(
+            Vec::new(),
+            Vec::new(),
+            Some(frame_snapshot_with_width(
+                5,
+                &[("hello", 0, " "), ("world", 0, "")],
+            )),
+        );
+
+        assert!(state.begin_selection(2, 3));
+        assert!(state.update_selection(6, 4));
+        assert_eq!(
+            state.finish_selection(6, 4),
+            TranscriptSelectionFinish::Copy("hello world".to_string())
+        );
+    }
+
+    #[test]
+    fn wide_glyph_continuation_cells_snap_to_the_visible_glyph() {
+        let mut state = TranscriptViewportUiState::default();
+        state.resolve_frame(1, 1, 1);
+        state.bind_frame(
+            Vec::new(),
+            Vec::new(),
+            Some(TranscriptViewportFrame {
+                area: Rect::new(2, 3, 4, 1),
+                rows: vec![TranscriptRenderedRow {
+                    absolute_row: 0,
+                    logical_line_index: 0,
+                    soft_wrap_separator: String::new(),
+                    cells: vec![
+                        "한".to_string(),
+                        " ".to_string(),
+                        "글".to_string(),
+                        " ".to_string(),
+                    ],
+                }],
+            }),
+        );
+
+        assert!(state.begin_selection(3, 3));
+        assert!(state.update_selection(5, 3));
+        assert_eq!(
+            state.finish_selection(5, 3),
+            TranscriptSelectionFinish::Copy("한글".to_string())
+        );
+    }
+
+    #[test]
     fn click_without_drag_restores_follow_tail() {
         let mut state = TranscriptViewportUiState::default();
         state.resolve_frame(12, 2, 1);
         state.bind_frame(
             Vec::new(),
             Vec::new(),
-            Some(frame_snapshot(&[("click", 0, false)])),
+            Some(frame_snapshot(&[("click", 0, "")])),
         );
 
         assert!(state.begin_selection(3, 3));
@@ -570,7 +644,7 @@ mod tests {
         state.bind_frame(
             Vec::new(),
             Vec::new(),
-            Some(frame_snapshot(&[("alpha", 0, false), ("beta", 1, false)])),
+            Some(frame_snapshot(&[("alpha", 0, ""), ("beta", 1, "")])),
         );
 
         assert!(state.begin_selection(5, 4));
@@ -588,12 +662,12 @@ mod tests {
         state.bind_frame(
             Vec::new(),
             Vec::new(),
-            Some(frame_snapshot(&[("stable", 0, false)])),
+            Some(frame_snapshot(&[("stable", 0, "")])),
         );
         assert!(state.begin_selection(2, 3));
         assert!(state.update_selection(7, 3));
 
-        let mut replacement_frame = frame_snapshot(&[("mutate", 0, false)]);
+        let mut replacement_frame = frame_snapshot(&[("mutate", 0, "")]);
         replacement_frame.rows[0].absolute_row = 40;
         state.bind_frame(Vec::new(), Vec::new(), Some(replacement_frame));
 

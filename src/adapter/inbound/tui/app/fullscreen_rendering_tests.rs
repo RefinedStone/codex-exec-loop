@@ -161,6 +161,37 @@ fn transcript_window_rebases_scroll_offsets_beyond_u16_without_losing_the_target
 }
 
 #[test]
+fn transcript_wrap_layout_preserves_word_separators_without_inventing_hard_wrap_spaces() {
+    let word_wrap = transcript_wrapped_row_layout(&[Line::from("hello world")], 5);
+    assert_eq!(word_wrap.len(), 2);
+    assert_eq!(word_wrap[0].soft_wrap_separator, " ");
+    assert!(word_wrap[1].soft_wrap_separator.is_empty());
+
+    let hard_wrap = transcript_wrapped_row_layout(&[Line::from("helloworld")], 5);
+    assert_eq!(hard_wrap.len(), 2);
+    assert!(hard_wrap[0].soft_wrap_separator.is_empty());
+}
+
+#[test]
+fn transcript_wrap_layout_matches_ratatui_row_counts() {
+    for (text, width) in [
+        ("", 5),
+        ("hello world", 5),
+        ("hello  world", 5),
+        ("helloworld", 5),
+        ("한글 문장 줄바꿈", 6),
+        (" leading and trailing ", 8),
+    ] {
+        let lines = [Line::from(text)];
+        assert_eq!(
+            transcript_wrapped_row_layout(&lines, width).len(),
+            count_wrapped_rows(&lines, width),
+            "row metadata must track Ratatui for {text:?} at width {width}"
+        );
+    }
+}
+
+#[test]
 fn streaming_append_does_not_move_a_reader_and_exposes_a_new_output_badge() {
     let mut app = test_native_tui_app();
     seed_long_transcript(&mut app, 48);
@@ -184,6 +215,70 @@ fn streaming_append_does_not_move_a_reader_and_exposes_a_new_output_badge() {
     let latest = render(&mut app, 80, 24);
     assert!(latest.contains("late streaming output"));
     assert!(!latest.contains("new output"));
+}
+
+#[test]
+fn new_output_badge_is_part_of_the_selectable_committed_frame() {
+    let mut app = test_native_tui_app();
+    let conversation = ready_conversation_mut(&mut app);
+    conversation.messages.clear();
+    assert!(conversation.finalize_agent_message(
+        "agent-initial".to_string(),
+        Some("commentary".to_string()),
+        "initial output".to_string(),
+    ));
+    let _ = render(&mut app, 80, 24);
+    assert!(app.jump_transcript_to_top());
+    assert!(ready_conversation_mut(&mut app).finalize_agent_message(
+        "agent-late".to_string(),
+        Some("commentary".to_string()),
+        "late streaming output".to_string(),
+    ));
+    let _ = render(&mut app, 80, 24);
+    let snapshot = app
+        .shell
+        .transcript_viewport_ui_state
+        .frame_snapshot()
+        .cloned()
+        .expect("badge draw should bind the committed transcript cells");
+    let (visible_row, start_column) = snapshot
+        .rows
+        .iter()
+        .enumerate()
+        .find_map(|(visible_row, row)| {
+            row.cells
+                .windows("new output".len())
+                .position(|window| {
+                    window.iter().map(String::as_str).collect::<String>() == "new output"
+                })
+                .map(|column| (visible_row as u16, column as u16))
+        })
+        .expect("new output badge must exist in the selection snapshot");
+    let row = snapshot.area.y.saturating_add(visible_row);
+    let start = snapshot.area.x.saturating_add(start_column);
+    let end = start.saturating_add("new output".len() as u16 - 1);
+
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Drag(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        let column = if matches!(kind, MouseEventKind::Down(_)) {
+            start
+        } else {
+            end
+        };
+        assert!(app.handle_transcript_mouse_event(MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }));
+    }
+    assert_eq!(
+        app.take_terminal_ui_effects(),
+        vec![TerminalUiEffect::CopyToClipboard("new output".to_string())]
+    );
 }
 
 #[test]
