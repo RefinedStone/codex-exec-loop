@@ -93,7 +93,15 @@ pane_target=""
 
 cleanup() {
   tmux -L "$socket_name" kill-server >/dev/null 2>&1 || true
-  rm -rf "$raw_root"
+  if [[ "${AKRA_CAPTURE_KEEP_RAW:-0}" == 1 ]]; then
+    printf 'retained raw interaction capture: %s\n' "$raw_root" >&2
+    return
+  fi
+  for ((cleanup_attempt = 1; cleanup_attempt <= 10; cleanup_attempt += 1)); do
+    rm -rf "$raw_root" 2>/dev/null || true
+    [[ ! -e "$raw_root" ]] && break
+    sleep 0.05
+  done
 }
 trap cleanup EXIT
 trap 'exit 130' INT
@@ -296,6 +304,7 @@ wait_for_text() {
     sleep 0.05
   done
   printf 'timed out waiting for pane text: %s\n' "$needle" >&2
+  capture_plain >&2 || true
   return 1
 }
 
