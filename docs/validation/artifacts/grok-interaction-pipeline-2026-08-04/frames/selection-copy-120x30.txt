@@ -1,0 +1,30 @@
+You:
+  PROMPT_CHROME_CANARY
+
+Codex:
+  Response surface ready.
+  The transcript owns stable rendered cells.
+  Pointer reports are collected independently.
+  Prompt cards remain application chrome.
+  Assistant output remains selectable.
+  Fast drag samples collapse before repaint.
+  Wide glyph mapping remains stable.
+  Resize receipts remain guarded.
+  Clipboard delivery uses OSC 52.
+  SELECTABLE_RESPONSE_CANARY
+
+
+
+
+
+
+Akra / workspace  ·  READY  ·  queue 1  ·  agents off  ·  terminals 0  ·  gpt-5.5/high
+status: copied selection to terminal clipboard (2...
+! NOTICE  ·  runtime update  ·  runtime notice 1  ·  Ctrl+D details
+◦ Waiting for model response (0s • agent message bytes=0; phase=final_answer...)
+planning: stale
+now: PROMPT_CHROME_CANARY
+notice: activity: active:agent | model:gpt-5.6-synthetic | task:PROMPT_CHROME_CANARY
+╭ Task
+│ > Describe a task or type : for commands
+╰  Type a follow-up  |  Tab steers after typing

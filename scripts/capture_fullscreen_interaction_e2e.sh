@@ -428,6 +428,7 @@ mkdir -p "$output_dir/frames"
 sed \
   -e "s|$raw_root|<isolated>|g" \
   -e "s|$repo_root|<repo>|g" \
+  -e 's/[[:space:]]*$//' \
   "$raw_root/selection-frame.txt" >"$output_dir/frames/selection-copy-120x30.txt"
 
 cat >"$output_dir/environment-stamp.txt" <<EOF
