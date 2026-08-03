@@ -737,13 +737,13 @@ impl CodexAppServerAdapter {
                 Some(&requested_cwd),
                 Some(self.execution_policy.approval_policy),
                 self.execution_policy.approvals_reviewer,
-                Some(SandboxModeValue::ReadOnly),
+                Some(self.execution_policy.sandbox_mode),
             );
             let thread_response = connection.start_thread(ThreadStartParams {
                 cwd: Some(workspace.cwd),
                 approval_policy: Some(self.execution_policy.approval_policy),
                 approvals_reviewer: self.execution_policy.approvals_reviewer,
-                sandbox: Some(SandboxModeValue::ReadOnly),
+                sandbox: Some(self.execution_policy.sandbox_mode),
                 config: Some(workspace.config),
                 ..ThreadStartParams::default()
             })?;
@@ -856,15 +856,15 @@ impl CodexAppServerAdapter {
                 Some(PLANNING_WORKER_MODEL),
                 None,
                 Some(&requested_cwd),
-                Some(ApprovalPolicyValue::Never),
-                None,
-                Some(SandboxModeValue::ReadOnly),
+                Some(self.execution_policy.approval_policy),
+                self.execution_policy.approvals_reviewer,
+                Some(self.execution_policy.sandbox_mode),
             );
             let thread_response = connection.start_thread(ThreadStartParams {
                 cwd: Some(workspace.cwd),
-                approval_policy: Some(ApprovalPolicyValue::Never),
-                approvals_reviewer: None,
-                sandbox: Some(SandboxModeValue::ReadOnly),
+                approval_policy: Some(self.execution_policy.approval_policy),
+                approvals_reviewer: self.execution_policy.approvals_reviewer,
+                sandbox: Some(self.execution_policy.sandbox_mode),
                 config: Some(workspace.config),
                 model: Some(PLANNING_WORKER_MODEL.to_string()),
                 developer_instructions: Some(PLANNING_WORKER_DEVELOPER_INSTRUCTIONS.to_string()),
@@ -932,9 +932,9 @@ impl CodexAppServerAdapter {
                 },
                 &local_interrupt_signal,
                 observed_interrupt_generation,
-                ApprovalPolicyValue::Never,
-                None,
-                SandboxModeValue::ReadOnly,
+                self.execution_policy.approval_policy,
+                self.execution_policy.approvals_reviewer,
+                self.execution_policy.sandbox_mode,
             )
         });
         match &result {
@@ -1424,12 +1424,18 @@ impl CodexAppServerAdapter {
 
     fn elevated_policy_warnings(&self) -> Vec<String> {
         let mut warnings = Vec::new();
-        let mut elevated_risks = self
-            .execution_policy
-            .elevated_risk_labels()
-            .into_iter()
-            .map(str::to_string)
-            .collect::<Vec<_>>();
+        // Full access is Akra's explicit product default and is always visible in the startup
+        // policy summary. Treat only a non-default execution profile as a degraded warning so a
+        // healthy default launch does not permanently render `DEGRADED` chrome.
+        let mut elevated_risks = if self.execution_policy == AppServerExecutionPolicy::default() {
+            Vec::new()
+        } else {
+            self.execution_policy
+                .elevated_risk_labels()
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        };
         if self.connection_config.uses_full_process_environment() {
             elevated_risks.push("process-env=all inherits parent secrets".to_string());
         }
@@ -1631,14 +1637,14 @@ impl InteractiveTurnRuntimePort for CodexAppServerAdapter {
                 Some(&requested_cwd),
                 Some(self.execution_policy.approval_policy),
                 self.execution_policy.approvals_reviewer,
-                Some(SandboxModeValue::ReadOnly),
+                Some(self.execution_policy.sandbox_mode),
             );
             let resume_response = connection.resume_thread(ThreadResumeParams {
                 thread_id: thread_id.to_string(),
                 cwd: Some(workspace.cwd),
                 approval_policy: Some(self.execution_policy.approval_policy),
                 approvals_reviewer: self.execution_policy.approvals_reviewer,
-                sandbox: Some(SandboxModeValue::ReadOnly),
+                sandbox: Some(self.execution_policy.sandbox_mode),
                 config: Some(workspace.config),
             })?;
             if resume_response.thread.id != thread_id {
@@ -1740,13 +1746,13 @@ impl ParallelAgentWorkerPort for CodexAppServerAdapter {
                 Some(&requested_cwd),
                 Some(self.execution_policy.approval_policy),
                 self.execution_policy.approvals_reviewer,
-                Some(SandboxModeValue::ReadOnly),
+                Some(self.execution_policy.sandbox_mode),
             );
             let thread_response = connection.start_thread(ThreadStartParams {
                 cwd: Some(workspace.cwd),
                 approval_policy: Some(self.execution_policy.approval_policy),
                 approvals_reviewer: self.execution_policy.approvals_reviewer,
-                sandbox: Some(SandboxModeValue::ReadOnly),
+                sandbox: Some(self.execution_policy.sandbox_mode),
                 config: Some(workspace.config),
                 model: None,
                 developer_instructions: Some(request.developer_instructions.to_string()),
@@ -2083,11 +2089,10 @@ mod tests {
     };
     #[cfg(unix)]
     use crate::domain::conversation_runtime_envelope::{
-        ConversationRuntimeApprovalPolicy, ConversationRuntimeApprovalsReviewer,
-        ConversationRuntimeConfigurationRequest, ConversationRuntimeModelRerouteReason,
-        ConversationRuntimeProcessEnvironment, ConversationRuntimeRequestedValue,
-        ConversationRuntimeSandboxPolicy, ConversationRuntimeShellEnvironment,
-        ConversationRuntimeThreadStatus,
+        ConversationRuntimeApprovalPolicy, ConversationRuntimeConfigurationRequest,
+        ConversationRuntimeModelRerouteReason, ConversationRuntimeProcessEnvironment,
+        ConversationRuntimeRequestedValue, ConversationRuntimeSandboxPolicy,
+        ConversationRuntimeShellEnvironment, ConversationRuntimeThreadStatus,
     };
     use crate::domain::conversation_runtime_envelope::{
         ConversationRuntimeEnvelope, ConversationRuntimeEnvelopeObservation,
@@ -2109,7 +2114,7 @@ mod tests {
             .expect("startup context should come from fake app-server");
         assert_eq!(
             startup.initialize_detail,
-            "linux-x64 / unix / codex-app-server/fake / app-server policy: approval=on-request, reviewer=user, sandbox=workspace-write, process-env=scrubbed, api-key-auth=disabled, shell-env=core"
+            "linux-x64 / unix / codex-app-server/fake / app-server policy: approval=never, reviewer=none, sandbox=danger-full-access, process-env=scrubbed, api-key-auth=disabled, shell-env=core"
         );
         assert_eq!(
             startup.account_detail,
@@ -2321,7 +2326,7 @@ mod tests {
         assert!(matches!(
             new_turn_request.sandbox,
             ConversationRuntimeRequestedValue::Value(
-                ConversationRuntimeSandboxPolicy::WorkspaceWrite { .. }
+                ConversationRuntimeSandboxPolicy::DangerFullAccess
             )
         ));
 
@@ -2427,13 +2432,17 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(thread_starts[0]["params"]["model"].is_null());
-        assert_eq!(thread_starts[0]["params"]["sandbox"], "read-only");
+        assert_eq!(thread_starts[0]["params"]["approvalPolicy"], "never");
+        assert!(thread_starts[0]["params"]["approvalsReviewer"].is_null());
+        assert_eq!(thread_starts[0]["params"]["sandbox"], "danger-full-access");
         assert_eq!(
             thread_starts[0]["params"]["config"]["projects"]["/repo"]["trust_level"],
             "untrusted"
         );
         assert_eq!(thread_resumes[0]["params"]["cwd"], "/repo");
-        assert_eq!(thread_resumes[0]["params"]["sandbox"], "read-only");
+        assert_eq!(thread_resumes[0]["params"]["approvalPolicy"], "never");
+        assert!(thread_resumes[0]["params"]["approvalsReviewer"].is_null());
+        assert_eq!(thread_resumes[0]["params"]["sandbox"], "danger-full-access");
         assert_eq!(
             thread_resumes[0]["params"]["config"]["projects"]["/repo"]["trust_level"],
             "untrusted"
@@ -2442,14 +2451,16 @@ mod tests {
         assert_eq!(turn_starts[0]["params"]["effort"], "high");
         assert_eq!(
             turn_starts[0]["params"]["sandboxPolicy"]["type"],
-            "workspaceWrite"
+            "dangerFullAccess"
         );
+        assert_eq!(turn_starts[0]["params"]["approvalPolicy"], "never");
         assert_eq!(turn_starts[1]["params"]["model"], "gpt-5.4");
         assert_eq!(turn_starts[1]["params"]["effort"], "high");
         assert_eq!(
             turn_starts[1]["params"]["sandboxPolicy"]["type"],
-            "workspaceWrite"
+            "dangerFullAccess"
         );
+        assert_eq!(turn_starts[1]["params"]["approvalPolicy"], "never");
     }
 
     #[cfg(unix)]
@@ -2690,7 +2701,7 @@ mod tests {
         );
         assert_eq!(
             parallel_turn_request.approvals_reviewer,
-            ConversationRuntimeRequestedValue::Value(ConversationRuntimeApprovalsReviewer::User)
+            ConversationRuntimeRequestedValue::Omitted
         );
 
         let requests = fake_codex.logged_requests();
@@ -2707,7 +2718,7 @@ mod tests {
         assert_eq!(thread_starts[0]["params"]["model"], "gpt-5.4");
         assert_eq!(thread_starts[0]["params"]["ephemeral"], true);
         assert_eq!(thread_starts[0]["params"]["approvalPolicy"], "never");
-        assert_eq!(thread_starts[0]["params"]["sandbox"], "read-only");
+        assert_eq!(thread_starts[0]["params"]["sandbox"], "danger-full-access");
         assert_eq!(
             thread_starts[0]["params"]["config"]["projects"]["/repo"]["trust_level"],
             "untrusted"
@@ -2723,11 +2734,13 @@ mod tests {
             "akra-parallel-worker"
         );
         assert_eq!(thread_starts[1]["params"]["ephemeral"], false);
+        assert_eq!(thread_starts[1]["params"]["approvalPolicy"], "never");
+        assert!(thread_starts[1]["params"]["approvalsReviewer"].is_null());
         assert_eq!(
             thread_starts[1]["params"]["developerInstructions"],
             "You are an isolated worker."
         );
-        assert_eq!(thread_starts[1]["params"]["sandbox"], "read-only");
+        assert_eq!(thread_starts[1]["params"]["sandbox"], "danger-full-access");
         assert_eq!(
             thread_starts[1]["params"]["config"]["projects"]["/repo/slot-1"]["trust_level"],
             "untrusted"
@@ -2739,7 +2752,7 @@ mod tests {
         assert_eq!(turn_starts[0]["params"]["approvalPolicy"], "never");
         assert_eq!(
             turn_starts[0]["params"]["sandboxPolicy"]["type"],
-            "readOnly"
+            "dangerFullAccess"
         );
         let thread_archives = requests
             .iter()
@@ -3116,7 +3129,7 @@ mod tests {
         let adapter = test_adapter();
         assert_eq!(
             adapter.active_policy_summary(),
-            "app-server policy: approval=on-request, reviewer=user, sandbox=workspace-write, process-env=scrubbed, api-key-auth=disabled, shell-env=core"
+            "app-server policy: approval=never, reviewer=none, sandbox=danger-full-access, process-env=scrubbed, api-key-auth=disabled, shell-env=core"
         );
         assert!(adapter.elevated_policy_warnings().is_empty());
 

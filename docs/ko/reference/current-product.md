@@ -80,7 +80,17 @@ Modal이 focus를 소유할 때는 전역 키보다 우선할 수 있으며, 표
    projection을 갱신합니다.
 6. Post-turn 평가는 승인된 planning 상태에 따라 continuation을 진행·일시정지·종료합니다.
 
-상호작용 가능한 main conversation만 검토 가능한 명령 또는 제한된 추가 권한 요청에 답할 수
+기본 app-server 실행 profile은 `approval=never`, `reviewer=none`,
+`sandbox=danger-full-access`입니다. Main conversation, 재개 thread, hidden planning worker,
+parallel worker의 thread/turn 경계가 모두 같은 profile을 사용합니다. Repository-local 설정이 Akra의
+process 계약을 몰래 바꾸지 못하도록 project는 app-server 설정에서 계속 untrusted로 표시합니다.
+Diagnostics에는 활성 profile이 항상 보이지만, 의도된 기본값 자체를 degraded warning으로 만들지는
+않습니다.
+
+제한된 배포는 `CODEX_EXEC_LOOP_APP_SERVER_APPROVAL_POLICY`,
+`CODEX_EXEC_LOOP_APP_SERVER_APPROVALS_REVIEWER`,
+`CODEX_EXEC_LOOP_APP_SERVER_SANDBOX_MODE`로 권한을 낮출 수 있습니다. Approval을 다시 켠 경우에만
+상호작용 가능한 main conversation이 검토 가능한 명령 또는 제한된 추가 권한 요청에 답할 수
 있습니다. `Y`는 한 번 승인하고 `N`/`Esc`는 거부하며 `Enter`는 아무 동작도 하지 않습니다. Timeout,
 interrupt, disconnect, 잘못된 payload, 검토할 수 없는 file-change 요청, unattended worker는 모두
 fail-closed입니다. 세션 전체 grant는 저장하지 않습니다.
@@ -96,7 +106,8 @@ fail-closed입니다. 세션 전체 grant는 저장하지 않습니다.
 - Queue-idle 동작은 승인된 direction authority를 따릅니다.
 - Admin/API intake는 검증된 `ready` task 하나를 만들며 `in_progress` task를 중단하지 않습니다.
 - `akra planning-tool`은 automation caller의 구조화된 list/create/update 경계입니다.
-- Hidden planning worker는 read-only이며 host가 구조화 명령을 검증하고 적용합니다.
+- Hidden planning worker는 활성 app-server 실행 profile을 상속합니다. Developer 계약은 계속
+  planning-only이며 host가 구조화 명령을 검증하고 적용합니다.
 
 Git과 non-Git workspace 모두 `${AKRA_HOME:-~/.akra}/projects/<project>/runtime/planning-authority.db`
 아래의 권한 저장소를 사용합니다. Git 저장소는 canonical Git common directory의 private incarnation
@@ -113,7 +124,9 @@ marker로 linked worktree를 공유하고 독립 clone을 분리합니다.
   보호된 복구를 위해 남깁니다. Board를 닫는 것만으로 parallel mode가 꺼지지는 않습니다.
 - Pool, lease, task, session, distributor mutation은 application과 durable cross-process gate를
   통과합니다. TUI state는 capacity, retry, dispatch 정책을 결정하지 않습니다.
-- Worker는 unattended `workspace-write`로 실행되고 변경을 commit하지 않으며 approval을 거부합니다.
+- Worker는 활성 app-server 실행 profile을 상속합니다. 기본값은 approval prompt가 없는 unattended
+  `danger-full-access`이고 변경을 commit하지 않습니다. 제한 profile에서 발생한 approval 요청은
+  unattended connection이 계속 거부합니다.
   Host가 정확한 lease, worktree, branch, 고정 base, 변경 파일 제한, 최종 clean 상태를 확인한 뒤
   source commit을 만듭니다.
 - 전달은 source push, PR 자동화/검토 확인, 정확히 검토된 범위의 integration branch 통합, remote

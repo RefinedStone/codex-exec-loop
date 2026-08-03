@@ -28,7 +28,7 @@ const SANDBOX_MODE_ALLOWED_VALUES: &str = "read-only, workspace-write, or danger
 pub(super) struct AppServerExecutionPolicy {
     // tool 실행 전에 app-server가 approval을 요구할지 결정하는 protocol 값이다.
     pub(super) approval_policy: ApprovalPolicyValue,
-    // approval이 필요한 설정일 때 누가 검토할지 나타낸다. 현재 기본은 사용자 검토 경로다.
+    // approval이 필요한 설정일 때 누가 검토할지 나타낸다. full-access 기본값에서는 reviewer가 없다.
     pub(super) approvals_reviewer: Option<ApprovalsReviewerValue>,
     // app-server process/turn이 사용할 filesystem/network sandbox 강도다.
     pub(super) sandbox_mode: SandboxModeValue,
@@ -36,15 +36,15 @@ pub(super) struct AppServerExecutionPolicy {
 
 impl Default for AppServerExecutionPolicy {
     /*
-     * 기본값은 secure-by-default다. 명시적 override가 없으면 app-server 세션도
-     * approval review와 workspace sandbox 안에서 시작한다. 더 관대한 실행이 꼭 필요하면
-     * 운영자가 env override로 명시적으로 풀어야 한다.
+     * Akra는 로컬 operator가 소유한 automation harness이므로 별도 설정이 없으면 app-server
+     * 세션을 approval prompt 없이 full-access로 시작한다. 제한된 실행이 필요한 deployment는
+     * adapter-owned env override로 on-request/workspace-write 또는 read-only를 선택할 수 있다.
      */
     fn default() -> Self {
         Self {
-            approval_policy: ApprovalPolicyValue::OnRequest,
-            approvals_reviewer: Some(ApprovalsReviewerValue::User),
-            sandbox_mode: SandboxModeValue::WorkspaceWrite,
+            approval_policy: ApprovalPolicyValue::Never,
+            approvals_reviewer: None,
+            sandbox_mode: SandboxModeValue::DangerFullAccess,
         }
     }
 }
@@ -56,7 +56,7 @@ impl AppServerExecutionPolicy {
             approval_policy_label(self.approval_policy),
             self.approvals_reviewer
                 .map(approvals_reviewer_label)
-                .unwrap_or("default"),
+                .unwrap_or("none"),
             sandbox_mode_label(self.sandbox_mode)
         )
     }
@@ -126,6 +126,14 @@ impl AppServerExecutionPolicy {
 
         if let Some(approval_policy) = parse_approval_policy_value(approval_policy_value) {
             policy.approval_policy = approval_policy;
+        }
+        // A restrictive approval override without an explicit reviewer remains usable for the
+        // interactive main conversation. Unattended workers still decline requests at their
+        // connection boundary instead of inventing an automatic grant.
+        if policy.approval_policy != ApprovalPolicyValue::Never
+            && parse_approvals_reviewer_value(approvals_reviewer_value).is_none()
+        {
+            policy.approvals_reviewer = Some(ApprovalsReviewerValue::User);
         }
         if let Some(approvals_reviewer) = parse_approvals_reviewer_value(approvals_reviewer_value) {
             policy.approvals_reviewer = Some(approvals_reviewer);
@@ -208,7 +216,7 @@ fn invalid_execution_policy_warnings(
             let is_nonempty = value.is_some_and(|value| !value.trim().is_empty());
             (is_nonempty && !is_valid).then(|| {
                 format!(
-                    "invalid {environment_variable}; expected {allowed_values}; using secure default"
+                    "invalid {environment_variable}; expected {allowed_values}; using product default"
                 )
             })
         })
@@ -230,7 +238,8 @@ fn parse_approval_policy_value(value: Option<&str>) -> Option<ApprovalPolicyValu
 }
 
 /*
- * 기본 reviewer는 user이고, automatic reviewer는 운영자가 env로 정확히 opt-in할 때만 허용한다.
+ * Full-access 기본값에서는 reviewer가 필요하지 않다. Approval을 다시 켠 profile의 reviewer는
+ * user이고, automatic reviewer는 운영자가 env로 정확히 opt-in할 때만 허용한다.
  * auto-review는 canonical wire value이고 guardian-subagent는 upstream compatibility alias다.
  * automatic reviewer는 operator confirmation 없이 승인할 수 있다. reviewer가 처리하지 않고 client로 보낸
  * server approval request는 connection layer가 계속 명시적으로 거절한다.
@@ -269,17 +278,17 @@ mod tests {
     };
 
     #[test]
-    fn execution_policy_defaults_to_workspace_write_with_on_request_approval() {
+    fn execution_policy_defaults_to_full_access_without_approval_prompts() {
         /*
-         * env override가 없을 때도 app-server 기본 동작은 reviewable/sandboxed여야 한다.
-         * 이 회귀 테스트가 깨지면 Akra 전체가 다시 무승인·무샌드박스로 후퇴할 수 있다.
+         * operator-owned harness 기본 profile은 별도 승인 대기나 sandbox 재시도 없이
+         * main, planning, parallel 작업을 수행할 수 있어야 한다.
          */
         assert_eq!(
             AppServerExecutionPolicy::from_env_values(None, None, None),
             AppServerExecutionPolicy {
-                approval_policy: ApprovalPolicyValue::OnRequest,
-                approvals_reviewer: Some(ApprovalsReviewerValue::User),
-                sandbox_mode: SandboxModeValue::WorkspaceWrite,
+                approval_policy: ApprovalPolicyValue::Never,
+                approvals_reviewer: None,
+                sandbox_mode: SandboxModeValue::DangerFullAccess,
             }
         );
     }
@@ -342,22 +351,44 @@ mod tests {
     }
 
     #[test]
+    fn restrictive_approval_override_restores_the_user_reviewer() {
+        let policy = AppServerExecutionPolicy::from_env_values(
+            Some("on-request"),
+            None,
+            Some("workspace-write"),
+        );
+
+        assert_eq!(policy.approval_policy, ApprovalPolicyValue::OnRequest);
+        assert_eq!(
+            policy.approvals_reviewer,
+            Some(ApprovalsReviewerValue::User)
+        );
+        assert_eq!(policy.sandbox_mode, SandboxModeValue::WorkspaceWrite);
+    }
+
+    #[test]
     fn execution_policy_ignores_invalid_environment_values() {
         /*
-         * invalid override는 hard error가 아니라 secure default fallback이어야 한다.
-         * 오타 난 env 값이 다시 무승인·무샌드박스 실행으로 새어 나가면 안 된다.
+         * invalid override는 hard error가 아니라 명시된 product default fallback이어야 한다.
+         * 일부 field만 유효할 때도 각각 독립적으로 적용되어야 한다.
          */
         assert_eq!(
             AppServerExecutionPolicy::from_env_values(Some("bogus"), Some("nope"), Some("unknown")),
             AppServerExecutionPolicy::default()
         );
+        let partially_valid = AppServerExecutionPolicy::from_env_values(
+            Some("on-failure"),
+            Some("user"),
+            Some("workspace-write"),
+        );
+        assert_eq!(partially_valid.approval_policy, ApprovalPolicyValue::Never);
         assert_eq!(
-            AppServerExecutionPolicy::from_env_values(
-                Some("on-failure"),
-                Some("user"),
-                Some("workspace-write"),
-            ),
-            AppServerExecutionPolicy::default()
+            partially_valid.approvals_reviewer,
+            Some(ApprovalsReviewerValue::User)
+        );
+        assert_eq!(
+            partially_valid.sandbox_mode,
+            SandboxModeValue::WorkspaceWrite
         );
     }
 

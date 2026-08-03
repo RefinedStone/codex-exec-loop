@@ -105,10 +105,20 @@ Completed rows stay visually quiet while active work remains dominant. Unified d
 source line numbers and extend addition/deletion backgrounds across the code region while keeping
 the gutter neutral.
 
-Only the interactive main conversation can answer a reviewable command or bounded additional
-permission request. `Y` accepts once; `N`/`Esc` declines; `Enter` is inert. Timeout, interrupt,
-disconnect, invalid payloads, uninspectable file-change requests, and unattended workers fail
-closed. No session-wide grant is cached.
+The default app-server execution profile is `approval=never`, `reviewer=none`, and
+`sandbox=danger-full-access`. Main conversations, resumed threads, hidden planning workers, and
+parallel workers use that same profile at both thread and turn boundaries. The project is still
+marked untrusted in app-server configuration so repository-local configuration cannot silently
+replace Akra's process contract. Diagnostics always show the active profile, but the intentional
+default is informational rather than a permanent degraded warning.
+
+Deployments can opt down with `CODEX_EXEC_LOOP_APP_SERVER_APPROVAL_POLICY`,
+`CODEX_EXEC_LOOP_APP_SERVER_APPROVALS_REVIEWER`, and
+`CODEX_EXEC_LOOP_APP_SERVER_SANDBOX_MODE`. When approvals are enabled, only the interactive main
+conversation can answer a reviewable command or bounded additional permission request. `Y`
+accepts once; `N`/`Esc` declines; `Enter` is inert. Timeout, interrupt, disconnect, invalid
+payloads, uninspectable file-change requests, and unattended workers fail closed. No session-wide
+grant is cached.
 
 ## Planning Contract
 
@@ -122,7 +132,8 @@ closed. No session-wide grant is cached.
 - Queue-idle behavior comes from accepted direction authority.
 - Admin/API intake creates one validated `ready` task and never interrupts an `in_progress` task.
 - `akra planning-tool` is the structured list/create/update boundary for automation callers.
-- Hidden planning workers are read-only. The host validates and applies their structured commands.
+- Hidden planning workers inherit the active app-server execution profile. Their developer
+  contract remains planning-only, and the host validates and applies their structured commands.
 
 Authority lives below `${AKRA_HOME:-~/.akra}/projects/<project>/runtime/planning-authority.db` for
 both Git and non-Git workspaces. Git repositories use a private incarnation marker in the canonical
@@ -144,7 +155,9 @@ Git common directory so linked worktrees share one authority and independent clo
   renders it without a separate adapter or conversation ledger.
 - Global cleanup-notice events invalidate the current frame for redraw only; exact retry settlement
   changes the control-plane projection.
-- Workers run unattended with `workspace-write`, leave edits uncommitted, and decline approvals.
+- Workers inherit the active app-server execution profile; the default is unattended
+  `danger-full-access` with no approval prompts. They leave edits uncommitted, and a restrictive
+  profile still declines approval requests in unattended connections.
   The host validates the exact lease, worktree, branch, frozen base, changed-file bounds, and final
   cleanliness before creating a source commit.
 - Delivery is serial: source push, PR automation/review verification, exact reviewed-range
