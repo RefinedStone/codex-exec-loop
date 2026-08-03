@@ -162,12 +162,16 @@ fn transcript_window_rebases_scroll_offsets_beyond_u16_without_losing_the_target
 
 #[test]
 fn transcript_wrap_layout_preserves_word_separators_without_inventing_hard_wrap_spaces() {
-    let word_wrap = transcript_wrapped_row_layout(&[Line::from("hello world")], 5);
+    let interactions = [ConversationTranscriptLineInteraction {
+        selection_range_id: Some(1),
+        selectable_from_column: 0,
+    }];
+    let word_wrap = transcript_wrapped_row_layout(&[Line::from("hello world")], &interactions, 5);
     assert_eq!(word_wrap.len(), 2);
     assert_eq!(word_wrap[0].soft_wrap_separator, " ");
     assert!(word_wrap[1].soft_wrap_separator.is_empty());
 
-    let hard_wrap = transcript_wrapped_row_layout(&[Line::from("helloworld")], 5);
+    let hard_wrap = transcript_wrapped_row_layout(&[Line::from("helloworld")], &interactions, 5);
     assert_eq!(hard_wrap.len(), 2);
     assert!(hard_wrap[0].soft_wrap_separator.is_empty());
 }
@@ -184,7 +188,18 @@ fn transcript_wrap_layout_matches_ratatui_row_counts() {
     ] {
         let lines = [Line::from(text)];
         assert_eq!(
-            transcript_wrapped_row_layout(&lines, width).len(),
+            transcript_wrapped_row_layout(
+                &lines,
+                &vec![
+                    ConversationTranscriptLineInteraction {
+                        selection_range_id: Some(1),
+                        selectable_from_column: 0,
+                    };
+                    lines.len()
+                ],
+                width,
+            )
+            .len(),
             count_wrapped_rows(&lines, width),
             "row metadata must track Ratatui for {text:?} at width {width}"
         );
@@ -218,7 +233,7 @@ fn streaming_append_does_not_move_a_reader_and_exposes_a_new_output_badge() {
 }
 
 #[test]
-fn new_output_badge_is_part_of_the_selectable_committed_frame() {
+fn new_output_badge_remains_non_selectable_ui_chrome() {
     let mut app = test_native_tui_app();
     let conversation = ready_conversation_mut(&mut app);
     conversation.messages.clear();
@@ -256,29 +271,17 @@ fn new_output_badge_is_part_of_the_selectable_committed_frame() {
         .expect("new output badge must exist in the selection snapshot");
     let row = snapshot.area.y.saturating_add(visible_row);
     let start = snapshot.area.x.saturating_add(start_column);
-    let end = start.saturating_add("new output".len() as u16 - 1);
-
-    for kind in [
-        MouseEventKind::Down(MouseButton::Left),
-        MouseEventKind::Drag(MouseButton::Left),
-        MouseEventKind::Up(MouseButton::Left),
-    ] {
-        let column = if matches!(kind, MouseEventKind::Down(_)) {
-            start
-        } else {
-            end
-        };
-        assert!(app.handle_transcript_mouse_event(MouseEvent {
-            kind,
-            column,
-            row,
-            modifiers: KeyModifiers::NONE,
-        }));
-    }
     assert_eq!(
-        app.take_terminal_ui_effects(),
-        vec![TerminalUiEffect::CopyToClipboard("new output".to_string())]
+        snapshot.rows[usize::from(visible_row)].selection_range_id,
+        None
     );
+    assert!(!app.handle_transcript_mouse_event(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: start,
+        row,
+        modifiers: KeyModifiers::NONE,
+    }));
+    assert!(app.take_terminal_ui_effects().is_empty());
 }
 
 #[test]
@@ -426,6 +429,56 @@ fn transcript_drag_highlights_exact_cells_and_queues_clipboard_copy() {
     assert_eq!(
         app.take_terminal_ui_effects(),
         vec![TerminalUiEffect::CopyToClipboard("selectable".to_string())]
+    );
+}
+
+#[test]
+fn submitted_prompt_is_visible_but_does_not_capture_a_drag() {
+    let mut app = test_native_tui_app();
+    let conversation = ready_conversation_mut(&mut app);
+    conversation.messages.clear();
+    conversation.messages.push(ConversationMessage::new(
+        ConversationMessageKind::User,
+        "prompt remains application chrome",
+        None,
+        Some("user-selection-zone".to_string()),
+    ));
+    assert!(conversation.finalize_agent_message(
+        "agent-selection-zone".to_string(),
+        Some("final".to_string()),
+        "response remains selectable".to_string(),
+    ));
+    let _ = render(&mut app, 80, 24);
+    let snapshot = app
+        .shell
+        .transcript_viewport_ui_state
+        .frame_snapshot()
+        .cloned()
+        .expect("stable draw should bind transcript cells");
+    let (visible_row, start_column) = snapshot
+        .rows
+        .iter()
+        .enumerate()
+        .find_map(|(visible_row, row)| {
+            row.cells
+                .windows("prompt remains".len())
+                .position(|window| {
+                    window.iter().map(String::as_str).collect::<String>() == "prompt remains"
+                })
+                .map(|column| (visible_row, column as u16))
+        })
+        .expect("prompt fixture should be visible");
+    assert_eq!(snapshot.rows[visible_row].selection_range_id, None);
+    assert!(
+        !app.handle_transcript_mouse_event(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: snapshot.area.x.saturating_add(start_column),
+            row: snapshot
+                .area
+                .y
+                .saturating_add(u16::try_from(visible_row).unwrap_or(u16::MAX)),
+            modifiers: KeyModifiers::NONE,
+        })
     );
 }
 

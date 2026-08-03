@@ -17,6 +17,7 @@ use ratatui::backend::CrosstermBackend;
 use super::TerminalUiEffect;
 use super::fullscreen_terminal_adapter::FullscreenTerminalAdapter;
 use super::shell_runtime::ShellRuntime;
+use crate::composition::native_terminal_event_ingress::NativeTerminalEventIngress;
 
 const READY_EVENT_DRAIN_LIMIT: usize = 64;
 const READY_DRAG_EVENT_SCAN_LIMIT: usize = 4_096;
@@ -43,7 +44,14 @@ pub(super) fn run(
     let backend = CrosstermBackend::new(io::stdout());
     let terminal = build_terminal(backend)?;
     let mut adapter = FullscreenTerminalAdapter::new(terminal);
-    run_event_loop(&mut adapter, &mut runtime, shutdown, &mut restore_guard)
+    let event_ingress = NativeTerminalEventIngress::open();
+    run_event_loop(
+        &mut adapter,
+        &mut runtime,
+        shutdown,
+        &mut restore_guard,
+        &event_ingress,
+    )
 }
 
 // Fullscreen Ratatui owns the alternate-screen surface directly; no second
@@ -64,8 +72,9 @@ fn run_event_loop(
     runtime: &mut ShellRuntime,
     shutdown: &crate::shutdown::GracefulShutdown,
     terminal_session: &mut TerminalRestoreGuard,
+    event_ingress: &NativeTerminalEventIngress,
 ) -> Result<()> {
-    match run_event_loop_until_exit(adapter, runtime, shutdown, terminal_session) {
+    match run_event_loop_until_exit(adapter, runtime, shutdown, terminal_session, event_ingress) {
         /*
          * Closing a Unix PTY can make the terminal descriptor report EIO before the process-level
          * SIGHUP flag becomes visible. Broken pipes and EOF are equivalent output/input closure
@@ -82,6 +91,7 @@ fn run_event_loop_until_exit(
     runtime: &mut ShellRuntime,
     shutdown: &crate::shutdown::GracefulShutdown,
     terminal_session: &mut TerminalRestoreGuard,
+    event_ingress: &NativeTerminalEventIngress,
 ) -> Result<()> {
     while !runtime.should_quit() && !shutdown.is_requested() {
         /*
@@ -90,7 +100,8 @@ fn run_event_loop_until_exit(
          * 이미 준비된 terminal event도 draw deadline을 소비하기 전에 반영해야 같은 크기로 돌아온
          * resize ABA가 cursor와 history 보정에서 누락되지 않는다.
          */
-        let draw_due = prepare_runtime_for_due_draw(runtime, read_ready_terminal_event)?;
+        let draw_due =
+            prepare_runtime_for_due_draw(runtime, || event_ingress.try_read().map_err(Into::into))?;
         apply_pending_terminal_ui_effects(runtime, terminal_session)?;
         if runtime.should_quit() {
             break;
@@ -105,16 +116,16 @@ fn run_event_loop_until_exit(
          */
         let poll_timeout =
             runtime.next_event_poll_timeout(std::time::Instant::now(), Duration::from_millis(100));
-        if !event::poll(poll_timeout)? {
+        let Some(terminal_event) = event_ingress.wait(poll_timeout)? else {
             continue;
-        }
+        };
 
         /*
          * crossterm event는 여기서 해석하지 않는다. frontend가 raw event를 그대로 넘겨야 runtime의
          * reducer, draw scheduler, overlay state가 한곳에서 동일한 정책으로 반응할 수 있다.
          */
-        runtime.handle_terminal_event(event::read()?);
-        drain_ready_terminal_events(runtime)?;
+        runtime.handle_terminal_event(terminal_event);
+        drain_ready_terminal_events_with(runtime, || event_ingress.try_read().map_err(Into::into))?;
         apply_pending_terminal_ui_effects(runtime, terminal_session)?;
     }
 
@@ -156,17 +167,6 @@ pub(super) fn prepare_runtime_for_due_draw(
         return Ok(false);
     }
     Ok(runtime.take_due_draw_request(Instant::now()))
-}
-
-fn drain_ready_terminal_events(runtime: &mut ShellRuntime) -> Result<()> {
-    drain_ready_terminal_events_with(runtime, read_ready_terminal_event)
-}
-
-fn read_ready_terminal_event() -> Result<Option<event::Event>> {
-    if !event::poll(Duration::ZERO)? {
-        return Ok(None);
-    }
-    Ok(Some(event::read()?))
 }
 
 fn drain_ready_terminal_events_with(
@@ -478,6 +478,8 @@ mod tests {
                         absolute_row: 0,
                         logical_line_index: 0,
                         soft_wrap_separator: String::new(),
+                        selection_range_id: Some(1),
+                        selectable_from_column: 0,
                         cells: vec!["x".to_string(); 256],
                     }],
                 }),

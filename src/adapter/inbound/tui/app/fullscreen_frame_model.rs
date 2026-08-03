@@ -8,18 +8,18 @@ use crate::domain::parallel_mode::ParallelModeSupervisorSnapshot;
 use super::shell_presentation::{
     ActivityOverlayDocument, ActivityOverlayView, ConversationProjectionSample,
     ConversationScreenFrameInput, ConversationScreenModel, ConversationTranscriptCardRow,
-    ConversationTranscriptView, DirectionsMaintenanceFrameInput, DirectionsMaintenanceOverlayView,
-    HelpOverlayView, LanguageSelectionFrameInput, LanguageSelectionOverlayView,
-    MAX_GITHUB_REVIEW_NOTICE_LEN, ModelSelectionFrameInput, ModelSelectionOverlayView,
-    ParallelPeekOverlayView, PlanningDraftEditorOverlayView, PlanningInitOverlayFrameInput,
-    PlanningInitOverlayView, QueueMutationTailState, QueueOverlayView, ReviewsOverlayView,
-    SessionOverlayView, ShellTailView, StartupBannerFrameInput, StartupOverlayFrameInput,
-    StartupOverlayView, SupersessionOverlayView, TurnSteerConfirmationScreenModel,
-    ViewSelectionFrameInput, ViewSelectionOverlayView, WorkCenterOverlayView,
-    build_activity_overlay_list_view, build_directions_maintenance_overlay_view,
-    build_help_overlay_view, build_language_selection_overlay_view,
-    build_model_selection_overlay_view, build_operator_diagnostic_lines,
-    build_parallel_peek_overlay_view_from_snapshot,
+    ConversationTranscriptLineInteraction, ConversationTranscriptView,
+    DirectionsMaintenanceFrameInput, DirectionsMaintenanceOverlayView, HelpOverlayView,
+    LanguageSelectionFrameInput, LanguageSelectionOverlayView, MAX_GITHUB_REVIEW_NOTICE_LEN,
+    ModelSelectionFrameInput, ModelSelectionOverlayView, ParallelPeekOverlayView,
+    PlanningDraftEditorOverlayView, PlanningInitOverlayFrameInput, PlanningInitOverlayView,
+    QueueMutationTailState, QueueOverlayView, ReviewsOverlayView, SessionOverlayView,
+    ShellTailView, StartupBannerFrameInput, StartupOverlayFrameInput, StartupOverlayView,
+    SupersessionOverlayView, TurnSteerConfirmationScreenModel, ViewSelectionFrameInput,
+    ViewSelectionOverlayView, WorkCenterOverlayView, build_activity_overlay_list_view,
+    build_directions_maintenance_overlay_view, build_help_overlay_view,
+    build_language_selection_overlay_view, build_model_selection_overlay_view,
+    build_operator_diagnostic_lines, build_parallel_peek_overlay_view_from_snapshot,
     build_planning_draft_editor_overlay_view_from_state,
     build_planning_init_overlay_view_from_projection, build_queue_overlay_view_from_screen_model,
     build_reviews_overlay_view, build_session_overlay_view, build_shell_tail_view,
@@ -118,6 +118,7 @@ pub(super) struct FullscreenConversationFrameProjection {
     pub(super) rendered_at_epoch_millis: Option<i64>,
     pub(super) tail_view: ShellTailView,
     pub(super) transcript_lines: Vec<Line<'static>>,
+    pub(super) transcript_line_interactions: Vec<ConversationTranscriptLineInteraction>,
     pub(super) transcript_card_rows: Vec<ConversationTranscriptCardRow>,
     pub(super) transcript_document_identity: Option<String>,
     pub(super) transcript_revision: u64,
@@ -195,6 +196,7 @@ impl FullscreenConversationFrameProjection {
                     0,
                     ConversationTranscriptView {
                         lines: Vec::new(),
+                        line_interactions: Vec::new(),
                         card_rows: Vec::new(),
                     },
                 ),
@@ -210,6 +212,13 @@ impl FullscreenConversationFrameProjection {
             )
         {
             transcript_view.lines = lines;
+            transcript_view.line_interactions = vec![
+                ConversationTranscriptLineInteraction {
+                    selection_range_id: None,
+                    selectable_from_column: 0,
+                };
+                transcript_view.lines.len()
+            ];
             transcript_view.card_rows.clear();
         }
         Self::from_screen_model(
@@ -236,6 +245,7 @@ impl FullscreenConversationFrameProjection {
         let tail_view = build_shell_tail_view(&screen_model, content_width);
         let ConversationTranscriptView {
             lines: transcript_lines,
+            line_interactions: transcript_line_interactions,
             card_rows: transcript_card_rows,
         } = transcript_view;
         let sampled_parallel_supervisor = Box::new(screen_model.parallel_mode_supervisor);
@@ -245,6 +255,7 @@ impl FullscreenConversationFrameProjection {
             rendered_at_epoch_millis: i64::try_from(screen_model.animation_elapsed_millis).ok(),
             tail_view,
             transcript_lines,
+            transcript_line_interactions,
             transcript_card_rows,
             transcript_document_identity,
             transcript_revision,

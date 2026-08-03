@@ -12,7 +12,8 @@ use super::fullscreen_frame_model::{
     apply_fullscreen_frame_render_receipt, capture_fullscreen_shell_frame_model,
 };
 use super::shell_presentation::{
-    ConversationTranscriptCardRow, TurnSteerConfirmationScreenModel, startup_ascii_art_lines,
+    ConversationTranscriptCardRow, ConversationTranscriptLineInteraction,
+    TurnSteerConfirmationScreenModel, startup_ascii_art_lines,
 };
 #[cfg(test)]
 use super::*;
@@ -280,6 +281,7 @@ fn draw_fullscreen_conversation_shell(
     let FullscreenConversationFrameProjection {
         tail_view,
         transcript_lines,
+        transcript_line_interactions,
         transcript_card_rows,
         shell_overlay,
         ..
@@ -316,6 +318,7 @@ fn draw_fullscreen_conversation_shell(
                     frame,
                     logo_area,
                     logo_lines,
+                    Vec::new(),
                     Vec::new(),
                     0,
                     false,
@@ -354,6 +357,7 @@ fn draw_fullscreen_conversation_shell(
             frame,
             layout[0],
             transcript_lines,
+            transcript_line_interactions,
             transcript_card_rows,
             transcript_scroll_offset,
             transcript_has_unseen_output,
@@ -547,6 +551,7 @@ fn render_fullscreen_transcript(
     frame: &mut Frame<'_>,
     transcript_area: Rect,
     transcript_lines: Vec<Line<'static>>,
+    transcript_line_interactions: Vec<ConversationTranscriptLineInteraction>,
     card_rows: Vec<ConversationTranscriptCardRow>,
     scroll_offset: usize,
     has_unseen_output: bool,
@@ -571,7 +576,11 @@ fn render_fullscreen_transcript(
             (end > start).then_some((row.digest, start, end))
         })
         .collect::<Vec<_>>();
-    let wrapped_rows = transcript_wrapped_row_layout(&transcript_lines, transcript_area.width);
+    let wrapped_rows = transcript_wrapped_row_layout(
+        &transcript_lines,
+        &transcript_line_interactions,
+        transcript_area.width,
+    );
     let (window_start_line, window_scroll_offset) =
         transcript_window_for_scroll(&transcript_lines, transcript_area.width, scroll_offset);
     let paragraph = Paragraph::new(
@@ -583,7 +592,7 @@ fn render_fullscreen_transcript(
     .wrap(Wrap { trim: false });
     frame.render_widget(paragraph.scroll((window_scroll_offset, 0)), transcript_area);
 
-    if has_unseen_output {
+    let unseen_badge_area = if has_unseen_output {
         let label = " ↓ new output · Ctrl+End ";
         let label_width = label.chars().count().min(usize::from(u16::MAX)) as u16;
         let width = label_width.min(transcript_area.width);
@@ -597,7 +606,10 @@ fn render_fullscreen_transcript(
             Paragraph::new(Line::styled(label, AkraTheme::accent())),
             area,
         );
-    }
+        Some(area)
+    } else {
+        None
+    };
 
     // The snapshot is the selection authority for this committed frame. Capture
     // it only after every transcript-area overlay is drawn so pointer selection,
@@ -608,6 +620,7 @@ fn render_fullscreen_transcript(
         scroll_offset,
         &wrapped_rows,
         transcript_viewport_state,
+        unseen_badge_area.as_slice(),
     );
 
     let visible_end = scroll_offset.saturating_add(usize::from(transcript_area.height));
@@ -640,6 +653,8 @@ fn render_fullscreen_transcript(
 struct TranscriptWrappedRowLayout {
     logical_line_index: usize,
     soft_wrap_separator: String,
+    selection_range_id: Option<u64>,
+    selectable_from_column: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -661,12 +676,20 @@ impl TranscriptWrapGrapheme {
 
 fn transcript_wrapped_row_layout(
     lines: &[Line<'_>],
+    line_interactions: &[ConversationTranscriptLineInteraction],
     width: u16,
 ) -> Vec<TranscriptWrappedRowLayout> {
     let mut rows = Vec::new();
     for (logical_line_index, line) in lines.iter().enumerate() {
         let source = transcript_line_graphemes(line);
         let wrapped = wrap_transcript_graphemes(&source, width);
+        let interaction = line_interactions
+            .get(logical_line_index)
+            .copied()
+            .unwrap_or(ConversationTranscriptLineInteraction {
+                selection_range_id: None,
+                selectable_from_column: 0,
+            });
         rows.extend(wrapped.iter().enumerate().map(|(row_index, row)| {
             let soft_wrap_separator = wrapped
                 .get(row_index + 1)
@@ -676,6 +699,14 @@ fn transcript_wrapped_row_layout(
             TranscriptWrappedRowLayout {
                 logical_line_index,
                 soft_wrap_separator,
+                selection_range_id: interaction.selection_range_id,
+                selectable_from_column: if row_index == 0 {
+                    interaction
+                        .selectable_from_column
+                        .min(width.saturating_sub(1))
+                } else {
+                    0
+                },
             }
         }));
     }
@@ -811,13 +842,22 @@ fn capture_transcript_frame_snapshot(
     scroll_offset: usize,
     wrapped_rows: &[TranscriptWrappedRowLayout],
     transcript_viewport_state: &TranscriptViewportUiState,
+    selection_exclusions: &[Rect],
 ) -> TranscriptViewportFrame {
     let mut rows = Vec::new();
     for visible_row in 0..area.height {
         let absolute_row = scroll_offset.saturating_add(usize::from(visible_row));
         let row_layout = wrapped_rows.get(absolute_row);
-        if let Some((start_column, end_column)) =
-            transcript_viewport_state.selection_columns_for_row(absolute_row, area.width)
+        let screen_row = area.y.saturating_add(visible_row);
+        let row_is_selection_chrome = selection_exclusions.iter().any(|exclusion| {
+            screen_row >= exclusion.top()
+                && screen_row < exclusion.bottom()
+                && exclusion.right() > area.left()
+                && exclusion.left() < area.right()
+        });
+        if !row_is_selection_chrome
+            && let Some((start_column, end_column)) =
+                transcript_viewport_state.selection_columns_for_row(absolute_row, area.width)
         {
             for column in start_column..=end_column {
                 if let Some(cell) = frame.buffer_mut().cell_mut(Position::new(
@@ -847,6 +887,12 @@ fn capture_transcript_frame_snapshot(
             ),
             soft_wrap_separator: row_layout
                 .map(|layout| layout.soft_wrap_separator.clone())
+                .unwrap_or_default(),
+            selection_range_id: (!row_is_selection_chrome)
+                .then(|| row_layout.and_then(|layout| layout.selection_range_id))
+                .flatten(),
+            selectable_from_column: row_layout
+                .map(|layout| layout.selectable_from_column)
                 .unwrap_or_default(),
             cells,
         });
