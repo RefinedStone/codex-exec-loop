@@ -12,8 +12,8 @@ surface. Raw PTY bytes and isolated paths are intentionally not retained.
 
 ## Result
 
-- 1,200 SGR drag samples settled and copied the latest semantic range in 102ms.
-- 3,000 unused all-motion reports followed by ordinary input displayed the key in 137ms.
+- 1,200 SGR drag samples settled and copied the latest semantic range in 109ms.
+- 3,000 unused all-motion reports followed by ordinary input displayed the key in 170ms.
 - The selected cells retained the observed `RGB(42,72,112)` background.
 - Raw PTY inspection found the exact OSC 52 base64 payload for
   `SELECTABLE_RESPONSE_CANARY`.
@@ -23,9 +23,12 @@ surface. Raw PTY bytes and isolated paths are intentionally not retained.
 ## Evidence
 
 - [Rendered PTY frame](./frames/selection-copy-120x30.png)
+- [Sanitized ANSI PTY frame](./frames/selection-copy-120x30.ansi)
 - [Plain PTY frame](./frames/selection-copy-120x30.txt)
 - [Scenario results](./scenario-results.txt)
 - [Environment stamp](./environment-stamp.txt)
 
-The PNG is rendered from tmux's ANSI-preserving `capture-pane -e` output. It is a visual
-representation of the captured terminal cells, not a hand-authored mockup.
+The PNG is rendered cell-for-cell from the sanitized ANSI-preserving tmux capture. It is a visual
+representation of the captured terminal frame, not a hand-authored mockup. The evidence commit
+only packages this run; the production and harness sources remain exactly those identified by the
+candidate commit and tree in the environment stamp.

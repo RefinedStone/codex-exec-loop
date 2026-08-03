@@ -1,0 +1,30 @@
+[1m[38;5;3mYou:[0m                                                        
+  PROMPT_CHROME_CANARY                                      
+                                                            
+[1m[38;2;0;229;183mCodex:[0m                                                      
+  Response surface ready.                                   
+  The transcript owns stable rendered cells.                
+  Pointer reports are collected independently.                                                                          
+  Prompt cards remain application chrome.                   
+  Assistant output remains selectable.                      
+  Fast drag samples collapse before repaint.                
+  Wide glyph mapping remains stable.                        
+  Resize receipts remain guarded.                           
+  Clipboard delivery uses OSC 52.                           
+  [48;2;42;72;112mSELECTABLE_RESPONSE_CANARY[49m  
+
+
+
+
+
+
+[1m[38;2;0;229;183mAkra[0m / [38;2;91;141;239mworkspace[38;5;8m  ·  [1m[38;5;2mREADY[0m[38;5;8m  ·  [38;5;2mqueue 1[38;5;8m  ·  [38;5;7magents off[38;5;8m  ·  [38;5;7mterminals 0[38;5;8m  ·  [38;5;7mgpt-5.5/high[39m                                  
+status: copied selection to terminal clipboard (2...                                                                    
+[1m[38;5;7m! NOTICE[0m[38;5;8m  ·  [38;5;7mruntime update  ·  runtime notice 1[38;5;8m  ·  [1m[38;5;3mCtrl+D details[0m                                                     
+[1m[38;5;7m◦ Waiting for model response[0m[38;5;8m (0s • agent message bytes=0; phase=final_answer...)[39m                                        
+planning: stale                                                                                                         
+now: PROMPT_CHROME_CANARY                                                                                               
+notice: activity: active:agent | model:gpt-5.6-synthetic | task:PROMPT_CHROME_CANARY                                    
+[1m[38;2;0;229;183m╭ Task[0m                        
+[1m[38;2;0;229;183m│ > [0m[38;5;8mDescribe a task or type : for commands[39m                  
+[1m[38;2;0;229;183m╰ [0m Type a follow-up  |  Tab steers after typing             

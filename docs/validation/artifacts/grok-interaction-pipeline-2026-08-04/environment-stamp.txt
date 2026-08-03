@@ -1,12 +1,13 @@
-candidate_commit: 3a4a1d3e14eff391d70671a2a27401c9905897ad
-candidate_tree: 81870a906f103bdc6777268380812a9a290a8e0c
-binary_sha256: 82ea435eeef34a2ce678374755e0cb5557278238aa17a2fd9e785e20f63790e0
+candidate_commit: 29246ff5a6fc74271b9d700afd33f4bf1e20beb4
+candidate_tree: c861dfd7b895e59ee70c9aca7121e1377b119511
+binary_sha256: e41ea6e6cc1c629ada523e21814b165e3a97fcda3b7ae426d4922b0ebbba73e5
 synthetic_codex_sha256: c20213857363b8f2238efea6b165b6e8dbc197d20c6670bea9977e40f7ad9eb3
-captured_at_utc: 2026-08-03T19:09:06Z
+captured_at_utc: 2026-08-03T20:07:32Z
 environment: Ubuntu 24.04.2 LTS / Linux 6.18.33.2-microsoft-standard-WSL2 x86_64 GNU/Linux
 terminal: tmux 3.4 detached PTY
 geometry: 120x30
 frontend: fullscreen alternate-screen
 candidate_clean_checks: before-build, after-build, after-capture
-visual_renderer: Pillow 11.2.1 with Cascadia Mono 18px from ANSI-preserving tmux capture
-rendered_frame_sha256: a0534d48e84d7a9903610135904c6ca956570ec5765edb77f8fe133a9c0b810d
+ansi_frame_sha256: 3a08f53c1dd4f00dae7fe4a93130eff99c3fa41a65f09ea40e54413fa614ddbf
+visual_renderer: Pillow 12.2.0 with Cascadia Mono 18px from sanitized ANSI-preserving tmux capture
+rendered_frame_sha256: d7ac26713ded7fefb6cddbcfbf566141fe3ef37bdcdfe9e07919f82786a110d4
