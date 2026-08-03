@@ -1,0 +1,30 @@
+ › Refactor the transcript into one app-owned fullscreen viewport.
+
+Codex Commentary:
+  I’ll inspect the stream reducer and terminal transaction.
+
+› ◆ explore   Explored 3 targets
+
+Codex Commentary:
+  The canonical row can now be updated in place without transcript replay.
+
+▼ ◆ patch     file change: update transcript viewport  7 lines
+    [update] src/adapter/inbound/tui/app/transcript_viewport_ui.rs
+• Edited transcript_viewport_ui.rs
+42 -host_scrollback
+42 +app_owned_viewport
+
+
+
+
+
+
+
+
+
+Akra / root  ·  PENDING  ·  queue off  ·  agents off  ·  terminals 0  ·  gpt-5.5/high
+startup: startup checks still running
+… CHECKING  ·  input pending  ·  Ctrl+D details
+╭ Task ────────────────────────────────────────────────────────────────────────────────────────────╮
+│ > Describe a task or type : for commands                                                         │
+╰  Type now  |  submission waits for startup  ─────────────────────────────────────────────────────╯
