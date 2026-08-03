@@ -325,7 +325,7 @@ pane_dead() {
 
 wait_for_file "$pipe_ready" 200
 : >"$launch_gate"
-wait_for_text 'prompt: new thread ready' 400
+wait_for_text 'Describe a task or type' 400
 tmux -L "$socket_name" send-keys -t "$pane_target" -l 'PROMPT_CHROME_CANARY'
 tmux -L "$socket_name" send-keys -t "$pane_target" Enter
 wait_for_text 'SELECTABLE_RESPONSE_CANARY' 400
@@ -379,7 +379,8 @@ sleep 0.1
   exit 1
 }
 
-wait_for_text 'prompt: session ready' 400
+wait_for_text 'Final frame delivery remains coherent.' 400
+sleep 0.2
 move_payload=""
 for ((sample = 0; sample < 3000; sample += 1)); do
   move_payload+="$(printf '\033[<35;%s;%sM' "$((20 + sample % 40))" "$((5 + sample % 10))")"
