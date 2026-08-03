@@ -25,18 +25,33 @@ pub(in super::super) struct ConversationTranscriptCardRow {
 pub(in super::super) struct ConversationTranscriptLineInteraction {
     pub(in super::super) selection_range_id: Option<u64>,
     pub(in super::super) selectable_from_column: u16,
+    pub(in super::super) surface: ConversationTranscriptLineSurface,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in super::super) enum ConversationTranscriptLineSurface {
+    Plain,
+    UserPrompt,
 }
 
 impl ConversationTranscriptLineInteraction {
     const CHROME: Self = Self {
         selection_range_id: None,
         selectable_from_column: 0,
+        surface: ConversationTranscriptLineSurface::Plain,
+    };
+
+    const USER_PROMPT: Self = Self {
+        selection_range_id: None,
+        selectable_from_column: 0,
+        surface: ConversationTranscriptLineSurface::UserPrompt,
     };
 
     const fn selectable(selection_range_id: u64, selectable_from_column: u16) -> Self {
         Self {
             selection_range_id: Some(selection_range_id),
             selectable_from_column,
+            surface: ConversationTranscriptLineSurface::Plain,
         }
     }
 }
@@ -120,8 +135,9 @@ pub(in super::super) fn format_fullscreen_conversation_transcript_view(
     )
 }
 
-// Project logical conversation messages into terminal transcript lines.
-// Each message becomes a styled label, indented body/debug lines, and a blank separator so history reads as blocks.
+// Project logical conversation messages into terminal transcript lines. User prompts use one compact
+// semantic surface; other messages retain role labels and indented body rows. Every block ends with
+// one separator so the viewport can preserve readable message rhythm without adding nested panels.
 fn format_conversation_projection_uncapped(
     messages: &[ConversationMessage],
     view_mode: ConversationViewMode,
@@ -182,6 +198,15 @@ fn append_conversation_messages(
             continue;
         }
 
+        if message.kind == ConversationMessageKind::User {
+            append_user_prompt_message(projection, message, show_debug_details);
+            projection.push_line(
+                Line::from(""),
+                ConversationTranscriptLineInteraction::CHROME,
+            );
+            continue;
+        }
+
         // Labels use the shared conversation_text helper so transcript, approval, and other surfaces name speakers alike.
         let label = conversation_message_label(message);
         projection.push_line(
@@ -196,9 +221,8 @@ fn append_conversation_messages(
             ConversationMessageKind::Agent => {
                 ConversationTranscriptLineInteraction::selectable(selection_range_id, 2)
             }
-            ConversationMessageKind::User | ConversationMessageKind::Status => {
-                ConversationTranscriptLineInteraction::CHROME
-            }
+            ConversationMessageKind::Status => ConversationTranscriptLineInteraction::CHROME,
+            ConversationMessageKind::User => unreachable!("user messages return above"),
             ConversationMessageKind::Tool => unreachable!("tool messages return above"),
         };
 
@@ -228,6 +252,53 @@ fn append_conversation_messages(
             Line::from(""),
             ConversationTranscriptLineInteraction::CHROME,
         );
+    }
+}
+
+fn append_user_prompt_message(
+    projection: &mut ConversationTranscriptView,
+    message: &ConversationMessage,
+    show_debug_details: bool,
+) {
+    let mut markdown_code_fence = None;
+    let mut marker_pending = true;
+    for text_line in message.text.lines() {
+        let Some(mut line) = format_markdown_body_line(text_line, &mut markdown_code_fence) else {
+            continue;
+        };
+        let marker = if marker_pending {
+            marker_pending = false;
+            Span::styled(" › ", AkraTheme::user_prompt_marker())
+        } else {
+            Span::raw("   ")
+        };
+        if let Some(indent) = line.spans.first_mut() {
+            *indent = marker;
+        } else {
+            line.spans.push(marker);
+        }
+        projection.push_line(line, ConversationTranscriptLineInteraction::USER_PROMPT);
+    }
+
+    // A syntactically empty prompt still owns one visible compact row. This keeps the projection
+    // structurally honest without resurrecting a speaker label as fallback chrome.
+    if marker_pending {
+        projection.push_line(
+            Line::from(Span::styled(" › ", AkraTheme::user_prompt_marker())),
+            ConversationTranscriptLineInteraction::USER_PROMPT,
+        );
+    }
+
+    if show_debug_details && let Some(debug_detail) = message.debug_detail.as_deref() {
+        for detail_line in debug_detail.lines() {
+            projection.push_line(
+                Line::from(vec![
+                    Span::raw("   "),
+                    Span::styled(expand_tui_tabs(detail_line), AkraTheme::muted()),
+                ]),
+                ConversationTranscriptLineInteraction::USER_PROMPT,
+            );
+        }
     }
 }
 
@@ -613,6 +684,49 @@ fn label_style(kind: ConversationMessageKind) -> Style {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn user_prompt_projects_as_one_compact_surface_without_a_role_label() {
+        let messages = vec![ConversationMessage::new(
+            ConversationMessageKind::User,
+            "first instruction\nsecond instruction",
+            None,
+            Some("user-1".to_string()),
+        )];
+
+        let projection = format_fullscreen_conversation_transcript_view(
+            &messages,
+            ConversationViewMode::Medium,
+            false,
+            &ProgressiveActivityExpandState::default(),
+            DEFAULT_TRANSCRIPT_WIDTH,
+        );
+        let rendered = projection.lines.iter().map(line_text).collect::<Vec<_>>();
+
+        assert_eq!(
+            rendered,
+            vec![" › first instruction", "   second instruction", ""]
+        );
+        assert!(rendered.iter().all(|line| !line.contains("You:")));
+        assert_eq!(
+            projection.line_interactions[0].surface,
+            ConversationTranscriptLineSurface::UserPrompt
+        );
+        assert_eq!(
+            projection.line_interactions[1].surface,
+            ConversationTranscriptLineSurface::UserPrompt
+        );
+        assert_eq!(
+            projection.line_interactions[2].surface,
+            ConversationTranscriptLineSurface::Plain
+        );
+        assert!(
+            projection
+                .line_interactions
+                .iter()
+                .all(|interaction| interaction.selection_range_id.is_none())
+        );
+    }
 
     #[test]
     fn tool_messages_collapse_to_one_line_headers_in_medium_view() {

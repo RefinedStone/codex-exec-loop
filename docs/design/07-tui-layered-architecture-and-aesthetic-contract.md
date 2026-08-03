@@ -80,6 +80,9 @@ and transcript selection.
 - Submitted user prompts, status rows, the composer, and transient badges are interaction chrome,
   not selectable transcript text. Assistant bodies and tool cards own independent semantic
   selection ranges, so a drag cannot leak across prompts or unrelated responses.
+- A submitted prompt is one compact low-luminance row surface with a `›` intent marker and no
+  separate `You:` role row. Explicit and soft-wrapped continuation rows retain the same surface;
+  the marker appears only once.
 - Mouse wheel input is accepted only inside the committed transcript rectangle. Scrolling over the
   composer or fixed shell tail does not move conversation history.
 - Resize: invalidate selection geometry before the next pointer event; a stale frame receipt cannot
@@ -149,6 +152,10 @@ The composer frame may be complete because it replaces, rather than adds to, the
 already included in its height calculation.
 Normal conversation prose remains borderless. The screen should read as a calm document, not a
 dashboard made of boxes.
+
+User prompt cards use fill, not another border. Their full-row background, one-cell marker inset,
+and single blank message separator establish hierarchy while keeping more transcript rows available
+than a role-label-plus-body block.
 
 ## Responsive Contract
 

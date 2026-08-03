@@ -13,7 +13,7 @@ use super::fullscreen_frame_model::{
 };
 use super::shell_presentation::{
     ConversationTranscriptCardRow, ConversationTranscriptLineInteraction,
-    TurnSteerConfirmationScreenModel, startup_ascii_art_lines,
+    ConversationTranscriptLineSurface, TurnSteerConfirmationScreenModel, startup_ascii_art_lines,
 };
 #[cfg(test)]
 use super::*;
@@ -582,6 +582,7 @@ fn render_fullscreen_transcript(
     )
     .wrap(Wrap { trim: false });
     frame.render_widget(paragraph.scroll((window_scroll_offset, 0)), transcript_area);
+    render_transcript_row_surfaces(frame, transcript_area, scroll_offset, &wrapped_rows);
 
     let unseen_badge_area = if has_unseen_output {
         let label = " ↓ new output · Ctrl+End ";
@@ -646,6 +647,7 @@ struct TranscriptWrappedRowLayout {
     soft_wrap_separator: String,
     selection_range_id: Option<u64>,
     selectable_from_column: u16,
+    surface: ConversationTranscriptLineSurface,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -680,6 +682,7 @@ fn transcript_wrapped_row_layout(
             .unwrap_or(ConversationTranscriptLineInteraction {
                 selection_range_id: None,
                 selectable_from_column: 0,
+                surface: ConversationTranscriptLineSurface::Plain,
             });
         rows.extend(wrapped.iter().enumerate().map(|(row_index, row)| {
             let soft_wrap_separator = wrapped
@@ -698,10 +701,36 @@ fn transcript_wrapped_row_layout(
                 } else {
                     0
                 },
+                surface: interaction.surface,
             }
         }));
     }
     rows
+}
+
+fn render_transcript_row_surfaces(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    scroll_offset: usize,
+    wrapped_rows: &[TranscriptWrappedRowLayout],
+) {
+    for visible_row in 0..area.height {
+        let absolute_row = scroll_offset.saturating_add(usize::from(visible_row));
+        let Some(row) = wrapped_rows.get(absolute_row) else {
+            continue;
+        };
+        if row.surface != ConversationTranscriptLineSurface::UserPrompt {
+            continue;
+        }
+        for column in 0..area.width {
+            if let Some(cell) = frame.buffer_mut().cell_mut(Position::new(
+                area.x.saturating_add(column),
+                area.y.saturating_add(visible_row),
+            )) {
+                cell.set_style(AkraTheme::user_prompt_surface());
+            }
+        }
+    }
 }
 
 fn transcript_line_graphemes(line: &Line<'_>) -> Vec<TranscriptWrapGrapheme> {

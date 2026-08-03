@@ -228,6 +228,7 @@ fn transcript_wrap_layout_preserves_word_separators_without_inventing_hard_wrap_
     let interactions = [ConversationTranscriptLineInteraction {
         selection_range_id: Some(1),
         selectable_from_column: 0,
+        surface: ConversationTranscriptLineSurface::Plain,
     }];
     let word_wrap = transcript_wrapped_row_layout(&[Line::from("hello world")], &interactions, 5);
     assert_eq!(word_wrap.len(), 2);
@@ -257,6 +258,7 @@ fn transcript_wrap_layout_matches_ratatui_row_counts() {
                     ConversationTranscriptLineInteraction {
                         selection_range_id: Some(1),
                         selectable_from_column: 0,
+                        surface: ConversationTranscriptLineSurface::Plain,
                     };
                     lines.len()
                 ],
@@ -573,7 +575,10 @@ fn submitted_prompt_is_visible_but_does_not_capture_a_drag() {
         Some("final".to_string()),
         "response remains selectable".to_string(),
     ));
-    let _ = render(&mut app, 80, 24);
+    let buffer = render_buffer(&mut app, 80, 24);
+    let screen = buffer_text(&buffer);
+    assert!(screen.contains(" › prompt remains application chrome"));
+    assert!(!screen.contains("You:"));
     let snapshot = app
         .shell
         .transcript_viewport_ui_state
@@ -594,17 +599,90 @@ fn submitted_prompt_is_visible_but_does_not_capture_a_drag() {
         })
         .expect("prompt fixture should be visible");
     assert_eq!(snapshot.rows[visible_row].selection_range_id, None);
-    assert!(
-        !app.handle_transcript_mouse_event(MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: snapshot.area.x.saturating_add(start_column),
-            row: snapshot
-                .area
-                .y
-                .saturating_add(u16::try_from(visible_row).unwrap_or(u16::MAX)),
-            modifiers: KeyModifiers::NONE,
-        })
+    let screen_row = snapshot
+        .area
+        .y
+        .saturating_add(u16::try_from(visible_row).unwrap_or(u16::MAX));
+    for column in 0..snapshot.area.width {
+        assert_eq!(
+            buffer
+                .cell(Position::new(
+                    snapshot.area.x.saturating_add(column),
+                    screen_row
+                ))
+                .expect("prompt surface cell")
+                .style()
+                .bg,
+            AkraTheme::user_prompt_surface().bg,
+            "the prompt surface should fill the complete viewport row at column {column}"
+        );
+    }
+    assert_eq!(
+        buffer
+            .cell(Position::new(snapshot.area.x.saturating_add(1), screen_row))
+            .expect("prompt marker cell")
+            .style()
+            .fg,
+        AkraTheme::user_prompt_marker().fg
     );
+    assert!(!app.handle_transcript_mouse_event(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: snapshot.area.x.saturating_add(start_column),
+        row: screen_row,
+        modifiers: KeyModifiers::NONE,
+    }));
+}
+
+#[test]
+fn wrapped_user_prompt_keeps_the_surface_across_every_visual_row() {
+    let mut app = test_native_tui_app();
+    let conversation = ready_conversation_mut(&mut app);
+    conversation.messages.clear();
+    conversation.messages.push(ConversationMessage::new(
+        ConversationMessageKind::User,
+        "A deliberately long operator instruction that wraps across several compact prompt rows.",
+        None,
+        Some("wrapped-user-prompt".to_string()),
+    ));
+
+    let buffer = render_buffer(&mut app, 32, 16);
+    let snapshot = app
+        .shell
+        .transcript_viewport_ui_state
+        .frame_snapshot()
+        .expect("stable draw should bind wrapped transcript cells");
+    let prompt_background = AkraTheme::user_prompt_surface().bg;
+    let shaded_rows = (0..snapshot.area.height)
+        .filter(|visible_row| {
+            buffer
+                .cell(Position::new(
+                    snapshot.area.x,
+                    snapshot.area.y.saturating_add(*visible_row),
+                ))
+                .is_some_and(|cell| cell.style().bg == prompt_background)
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        shaded_rows.len() >= 3,
+        "fixture should wrap across multiple rows"
+    );
+    for visible_row in shaded_rows {
+        for column in 0..snapshot.area.width {
+            assert_eq!(
+                buffer
+                    .cell(Position::new(
+                        snapshot.area.x.saturating_add(column),
+                        snapshot.area.y.saturating_add(visible_row),
+                    ))
+                    .expect("wrapped prompt surface cell")
+                    .style()
+                    .bg,
+                prompt_background
+            );
+        }
+    }
+    assert_eq!(buffer_text(&buffer).matches('›').count(), 1);
 }
 
 #[test]

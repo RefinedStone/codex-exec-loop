@@ -37,6 +37,8 @@ document identity, clickable card geometry를 소유합니다.
 - PageDown: tail에 닿으면 follow-tail을 다시 켭니다.
 - Ctrl+Home / Ctrl+End: 처음 / 최신으로 이동합니다.
 - Session이나 thread identity가 바뀌면 offset과 stale hit area를 함께 초기화합니다.
+- 제출된 prompt는 별도 `You:` row 없이 `›` 하나를 둔 낮은 명도의 compact surface로 표시합니다.
+  명시적 줄바꿈과 soft wrap row도 같은 음영을 유지하고, 표식은 첫 row에만 표시합니다.
 
 Terminal emulator의 scrollback은 대화 저장소가 아닙니다. Production에는 host history insertion,
 transcript handoff ACK, viewport replay, newline fallback 분기가 없습니다.
@@ -78,6 +80,10 @@ Parallel event는 `ParallelLiveStreamModel` 하나로 projection합니다. Geome
 
 일반 대화 본문은 borderless 문서처럼 읽혀야 합니다. Border는 overlay, card, composer처럼 grouping이
 실제로 도움이 되는 곳에만 사용합니다.
+
+User prompt card는 border를 하나 더 두지 않고 full-row fill, 작은 marker inset, message separator만으로
+구분합니다. 따라서 role label과 본문을 두 row로 쓰지 않으면서도 operator intent와 agent output이
+분명히 나뉩니다.
 
 하단 status row는 낮은 명도의 surface를 사용하고, focused composer는 그보다 조금 밝은 surface와
 완전한 둥근 frame으로 입력 소유권을 구분합니다. 이 frame은 기존 composer 높이 예산 안에서 open
