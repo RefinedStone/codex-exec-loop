@@ -16,7 +16,8 @@ an explicitly proposed document, not here.
   fenced-code delimiters and language labels are not shown as conversation text.
 - Submitted operator prompts render as compact full-width low-luminance cards with one `›` marker.
   They do not spend a separate row on a `You:` label, keep the same surface through wrapping, and
-  remain non-selectable interaction chrome.
+  remain non-selectable interaction chrome. A non-default origin such as `Auto Follow-up` remains
+  visible as a compact inline badge inside the card.
 - `src/core` coordinates headless app commands, effects, completions, events, and snapshots;
   composition-owned `NativeClientRuntime` gives the TUI one typed `CoreInput` dispatch boundary.
 - CLI, Admin, Telegram, and automation adapters reuse application services instead of owning
