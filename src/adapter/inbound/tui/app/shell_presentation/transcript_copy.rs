@@ -262,11 +262,13 @@ fn append_user_prompt_message(
 ) {
     let mut markdown_code_fence = None;
     let mut marker_pending = true;
+    let origin_label = user_prompt_origin_label(message);
     for text_line in message.text.lines() {
         let Some(mut line) = format_markdown_body_line(text_line, &mut markdown_code_fence) else {
             continue;
         };
-        let marker = if marker_pending {
+        let is_first_visible_line = marker_pending;
+        let marker = if is_first_visible_line {
             marker_pending = false;
             Span::styled(" › ", AkraTheme::user_prompt_marker())
         } else {
@@ -277,14 +279,27 @@ fn append_user_prompt_message(
         } else {
             line.spans.push(marker);
         }
+        if is_first_visible_line && let Some(label) = origin_label {
+            line.spans.insert(
+                1,
+                Span::styled(format!("{label} · "), AkraTheme::user_prompt_origin()),
+            );
+        }
         projection.push_line(line, ConversationTranscriptLineInteraction::USER_PROMPT);
     }
 
     // A syntactically empty prompt still owns one visible compact row. This keeps the projection
     // structurally honest without resurrecting a speaker label as fallback chrome.
     if marker_pending {
+        let mut spans = vec![Span::styled(" › ", AkraTheme::user_prompt_marker())];
+        if let Some(label) = origin_label {
+            spans.push(Span::styled(
+                label.to_string(),
+                AkraTheme::user_prompt_origin(),
+            ));
+        }
         projection.push_line(
-            Line::from(Span::styled(" › ", AkraTheme::user_prompt_marker())),
+            Line::from(spans),
             ConversationTranscriptLineInteraction::USER_PROMPT,
         );
     }
@@ -300,6 +315,11 @@ fn append_user_prompt_message(
             );
         }
     }
+}
+
+fn user_prompt_origin_label(message: &ConversationMessage) -> Option<&str> {
+    let label = conversation_message_label(message).trim();
+    (!label.is_empty() && !label.eq_ignore_ascii_case("you")).then_some(label)
 }
 
 fn append_empty_transcript_message(
@@ -725,6 +745,46 @@ mod tests {
                 .line_interactions
                 .iter()
                 .all(|interaction| interaction.selection_range_id.is_none())
+        );
+    }
+
+    #[test]
+    fn labeled_user_prompt_preserves_its_origin_inside_the_compact_surface() {
+        let messages = vec![
+            ConversationMessage::new(
+                ConversationMessageKind::User,
+                "continue from the accepted queue",
+                None,
+                Some("auto-follow-1".to_string()),
+            )
+            .with_display_label("Auto Follow-up"),
+        ];
+
+        let projection = format_fullscreen_conversation_transcript_view(
+            &messages,
+            ConversationViewMode::Medium,
+            false,
+            &ProgressiveActivityExpandState::default(),
+            DEFAULT_TRANSCRIPT_WIDTH,
+        );
+
+        assert_eq!(
+            line_text(&projection.lines[0]),
+            " › Auto Follow-up · continue from the accepted queue"
+        );
+        assert_eq!(
+            projection.lines[0].spans[1].style,
+            AkraTheme::user_prompt_origin()
+        );
+        assert_eq!(
+            projection.line_interactions[0].surface,
+            ConversationTranscriptLineSurface::UserPrompt
+        );
+        assert!(
+            projection
+                .lines
+                .iter()
+                .all(|line| !line_text(line).starts_with("Auto Follow-up:"))
         );
     }
 

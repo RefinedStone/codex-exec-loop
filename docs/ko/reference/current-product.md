@@ -14,7 +14,8 @@
   fenced code delimiter와 language label은 대화 본문으로 표시하지 않습니다.
 - 제출된 운영자 prompt는 `›` 표식 하나만 둔 낮은 명도의 full-width compact card로 표시합니다.
   별도의 `You:` label row를 쓰지 않고 줄바꿈 뒤에도 같은 surface를 유지하며, interaction chrome으로서
-  선택되지 않습니다.
+  선택되지 않습니다. `Auto Follow-up`처럼 기본값이 아닌 출처는 card 안의 compact inline badge로
+  유지합니다.
 - `src/core`가 headless app command, effect, completion, event, snapshot을 조정합니다.
 - CLI, Admin, Telegram, automation adapter는 planning이나 parallel 정책을 별도로 구현하지 않고
   application service를 공유합니다.

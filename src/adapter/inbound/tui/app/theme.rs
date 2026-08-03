@@ -182,6 +182,10 @@ impl AkraTheme {
         Self::brand()
     }
 
+    pub(super) fn user_prompt_origin() -> Style {
+        Self::accent().add_modifier(Modifier::BOLD)
+    }
+
     // panel chrome은 accent-only다. title content는 caller가 title_line이나 custom Line으로 별도 의미를 입힌다.
     pub(super) fn panel() -> Style {
         Self::accent()
