@@ -480,6 +480,7 @@ mod tests {
                         soft_wrap_separator: String::new(),
                         selection_range_id: Some(1),
                         selectable_from_column: 0,
+                        selection_excluded_columns: Vec::new(),
                         cells: vec!["x".to_string(); 256],
                     }],
                 }),

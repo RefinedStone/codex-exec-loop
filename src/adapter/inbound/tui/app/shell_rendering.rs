@@ -866,17 +866,15 @@ fn capture_transcript_frame_snapshot(
         let absolute_row = scroll_offset.saturating_add(usize::from(visible_row));
         let row_layout = wrapped_rows.get(absolute_row);
         let screen_row = area.y.saturating_add(visible_row);
-        let row_is_selection_chrome = selection_exclusions.iter().any(|exclusion| {
-            screen_row >= exclusion.top()
-                && screen_row < exclusion.bottom()
-                && exclusion.right() > area.left()
-                && exclusion.left() < area.right()
-        });
-        if !row_is_selection_chrome
-            && let Some((start_column, end_column)) =
-                transcript_viewport_state.selection_columns_for_row(absolute_row, area.width)
+        let row_selection_exclusions =
+            selection_excluded_columns_for_row(area, screen_row, selection_exclusions);
+        if let Some((start_column, end_column)) =
+            transcript_viewport_state.selection_columns_for_row(absolute_row, area.width)
         {
             for column in start_column..=end_column {
+                if selection_column_is_excluded(column, &row_selection_exclusions) {
+                    continue;
+                }
                 if let Some(cell) = frame.buffer_mut().cell_mut(Position::new(
                     area.x.saturating_add(column),
                     area.y.saturating_add(visible_row),
@@ -905,16 +903,42 @@ fn capture_transcript_frame_snapshot(
             soft_wrap_separator: row_layout
                 .map(|layout| layout.soft_wrap_separator.clone())
                 .unwrap_or_default(),
-            selection_range_id: (!row_is_selection_chrome)
-                .then(|| row_layout.and_then(|layout| layout.selection_range_id))
-                .flatten(),
+            selection_range_id: row_layout.and_then(|layout| layout.selection_range_id),
             selectable_from_column: row_layout
                 .map(|layout| layout.selectable_from_column)
                 .unwrap_or_default(),
+            selection_excluded_columns: row_selection_exclusions,
             cells,
         });
     }
     TranscriptViewportFrame { area, rows }
+}
+
+fn selection_excluded_columns_for_row(
+    area: Rect,
+    screen_row: u16,
+    exclusions: &[Rect],
+) -> Vec<(u16, u16)> {
+    exclusions
+        .iter()
+        .filter(|exclusion| {
+            screen_row >= exclusion.top()
+                && screen_row < exclusion.bottom()
+                && exclusion.right() > area.left()
+                && exclusion.left() < area.right()
+        })
+        .filter_map(|exclusion| {
+            let start = exclusion.left().max(area.left()).saturating_sub(area.x);
+            let end_exclusive = exclusion.right().min(area.right()).saturating_sub(area.x);
+            (end_exclusive > start).then_some((start, end_exclusive.saturating_sub(1)))
+        })
+        .collect()
+}
+
+fn selection_column_is_excluded(column: u16, exclusions: &[(u16, u16)]) -> bool {
+    exclusions
+        .iter()
+        .any(|(start, end)| column >= *start && column <= *end)
 }
 
 fn transcript_window_for_scroll(lines: &[Line<'_>], width: u16, top_row: usize) -> (usize, u16) {

@@ -129,10 +129,7 @@ impl Drop for NativeTerminalEventIngress {
 }
 
 fn disconnected_reader_error() -> io::Error {
-    io::Error::new(
-        io::ErrorKind::UnexpectedEof,
-        "terminal event reader stopped unexpectedly",
-    )
+    io::Error::other("terminal event reader stopped unexpectedly")
 }
 
 fn is_unobserved_pointer_motion(event: &Event) -> bool {
@@ -159,6 +156,18 @@ mod tests {
     struct ScriptedEventSource {
         events: VecDeque<io::Result<Event>>,
         poll_count: Arc<AtomicUsize>,
+    }
+
+    struct PanickingEventSource;
+
+    impl NativeTerminalEventSource for PanickingEventSource {
+        fn poll(&mut self, _timeout: Duration) -> io::Result<bool> {
+            panic!("synthetic terminal reader panic")
+        }
+
+        fn read(&mut self) -> io::Result<Event> {
+            unreachable!("poll panics before read")
+        }
     }
 
     impl NativeTerminalEventSource for ScriptedEventSource {
@@ -221,6 +230,20 @@ mod tests {
             .wait(Duration::from_secs(1))
             .expect_err("reader failure should be delivered");
         assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+    }
+
+    #[test]
+    fn reader_panic_is_not_misreported_as_a_clean_terminal_eof() {
+        let ingress = NativeTerminalEventIngress::open_with_source(PanickingEventSource);
+
+        let error = ingress
+            .wait(Duration::from_secs(1))
+            .expect_err("reader panic should disconnect the mailbox as a failure");
+        assert_eq!(error.kind(), io::ErrorKind::Other);
+        assert_eq!(
+            error.to_string(),
+            "terminal event reader stopped unexpectedly"
+        );
     }
 
     #[test]
