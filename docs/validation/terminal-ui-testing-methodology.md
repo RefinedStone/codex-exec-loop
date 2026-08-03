@@ -55,7 +55,8 @@ future test-growth cost, and maintainability cost.
    output, tool-card expansion, and diff semantics.
 2. Ratatui `TestBackend` tests render full frames at representative sizes. They assert the composer
    remains visible, old rows remain readable, expanded cards stay in the transcript, and semantic
-   diff rows use the intended style.
+   diff rows use the intended style. Prompt-card tests also assert that `You:` is absent, the `›`
+   marker appears once, and the low-luminance surface fills every explicit or soft-wrapped row.
 3. Transaction tests prove the stable frame receipt applies once and a resize race applies nothing.
 4. Lifecycle tests assert alternate-screen escape sequences, focus/mouse/paste modes, cursor
    restoration, and best-effort cleanup ordering.
@@ -86,6 +87,8 @@ move a reader**. A final screenshot alone cannot prove it.
 - User/status rows, the composer, and transient overlay badges are non-selectable interaction
   chrome. Agent/tool output uses per-message semantic ranges, and a drag stays inside its anchor
   range even when the pointer crosses another surface.
+- User prompt ownership is typed before draw. The renderer may fill rows from that surface metadata
+  but must never infer prompt identity from a label string or cell contents.
 - Plain `MouseEventKind::Moved` reports have no TUI meaning and are removed at input ingress. A
   16ms frame-admission floor coalesces dirty state while the reader continues collecting input.
 - `:mouse off` and `AKRA_TUI_MOUSE_CAPTURE=off` skip mouse reporting so the emulator can own native

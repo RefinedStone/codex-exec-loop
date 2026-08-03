@@ -14,6 +14,9 @@ an explicitly proposed document, not here.
   a closed terminal or PTY must not leave the TUI or its app-server runtime resident.
 - Agent text stays raw Markdown in app-server state and is rendered at the TUI projection boundary;
   fenced-code delimiters and language labels are not shown as conversation text.
+- Submitted operator prompts render as compact full-width low-luminance cards with one `›` marker.
+  They do not spend a separate row on a `You:` label, keep the same surface through wrapping, and
+  remain non-selectable interaction chrome.
 - `src/core` coordinates headless app commands, effects, completions, events, and snapshots;
   composition-owned `NativeClientRuntime` gives the TUI one typed `CoreInput` dispatch boundary.
 - CLI, Admin, Telegram, and automation adapters reuse application services instead of owning

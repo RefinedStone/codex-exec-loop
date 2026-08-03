@@ -568,6 +568,12 @@ queue, GitHub, transcript, layout, animation, and prompt-focus helpers do not re
 `NativeTuiApp` or application service handles. Conversation semantic state stores messages, not
 cached Ratatui `Line` values.
 
+Transcript projection carries a typed `ConversationTranscriptLineSurface` beside the existing
+selection metadata. Submitted user rows are projected as `UserPrompt`; wrapping copies that surface
+onto every visual row, and the renderer applies only the semantic `AkraTheme` background. This keeps
+compact prompt-card styling out of canonical conversation state and avoids rediscovering ownership
+from rendered `You:` text.
+
 The same transaction captures parallel mode, in-flight effect, supervisor inspection, withheld
 reason, the typed owned unsettled-cleanup notice projection, and event-stream facts once. The
 `ConversationScreenModel` combines those facts without mutating conversation state, and pure draw

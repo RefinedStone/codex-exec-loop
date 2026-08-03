@@ -15,6 +15,9 @@ impl AkraTheme {
     // runtime status from the editor without turning the conversation into a boxed dashboard.
     pub(super) const STATUS_SURFACE_BACKGROUND: Color = Color::Rgb(10, 16, 23);
     pub(super) const COMPOSER_SURFACE_BACKGROUND: Color = Color::Rgb(17, 27, 38);
+    // Submitted prompts sit inside the transcript but remain operator-owned interaction chrome.
+    // A quiet filled row separates intent from output without spending another line on a role label.
+    pub(super) const USER_PROMPT_SURFACE_BACKGROUND: Color = Color::Rgb(19, 30, 42);
 
     // Akra label이나 active route marker처럼 강한 identity text에 쓰는 style이다.
     pub(super) fn brand() -> Style {
@@ -169,6 +172,14 @@ impl AkraTheme {
     // only the background is overlaid so diffs, Markdown, and tool labels remain legible.
     pub(super) fn transcript_selection() -> Style {
         Style::default().bg(Color::Rgb(42, 72, 112))
+    }
+
+    pub(super) fn user_prompt_surface() -> Style {
+        Style::default().bg(Self::USER_PROMPT_SURFACE_BACKGROUND)
+    }
+
+    pub(super) fn user_prompt_marker() -> Style {
+        Self::brand()
     }
 
     // panel chrome은 accent-only다. title content는 caller가 title_line이나 custom Line으로 별도 의미를 입힌다.
