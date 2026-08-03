@@ -237,10 +237,14 @@ fn new_output_badge_remains_non_selectable_ui_chrome() {
     let mut app = test_native_tui_app();
     let conversation = ready_conversation_mut(&mut app);
     conversation.messages.clear();
+    let initial_output = (0..40)
+        .map(|index| format!("selectable transcript row {index:02}"))
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(conversation.finalize_agent_message(
         "agent-initial".to_string(),
         Some("commentary".to_string()),
-        "initial output".to_string(),
+        initial_output,
     ));
     let _ = render(&mut app, 80, 24);
     assert!(app.jump_transcript_to_top());
@@ -271,9 +275,19 @@ fn new_output_badge_remains_non_selectable_ui_chrome() {
         .expect("new output badge must exist in the selection snapshot");
     let row = snapshot.area.y.saturating_add(visible_row);
     let start = snapshot.area.x.saturating_add(start_column);
-    assert_eq!(
-        snapshot.rows[usize::from(visible_row)].selection_range_id,
-        None
+    let badge_row = &snapshot.rows[usize::from(visible_row)];
+    assert!(
+        badge_row.selection_range_id.is_some(),
+        "the badge must overlap a real selectable transcript row for this regression"
+    );
+    assert!(
+        badge_row
+            .selection_excluded_columns
+            .iter()
+            .any(|(range_start, range_end)| {
+                start_column >= *range_start && start_column <= *range_end
+            }),
+        "only the badge columns should be marked as selection chrome"
     );
     assert!(!app.handle_transcript_mouse_event(MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
@@ -282,6 +296,54 @@ fn new_output_badge_remains_non_selectable_ui_chrome() {
         modifiers: KeyModifiers::NONE,
     }));
     assert!(app.take_terminal_ui_effects().is_empty());
+
+    let response_start_column = badge_row.selectable_from_column;
+    let response_end_column = start_column.saturating_sub(1);
+    assert!(response_end_column > response_start_column);
+    let viewport = &mut app.shell.transcript_viewport_ui_state;
+    assert!(viewport.begin_selection(snapshot.area.x.saturating_add(response_start_column), row,));
+    assert!(
+        viewport.update_selection(
+            snapshot
+                .area
+                .x
+                .saturating_add(response_start_column.saturating_add(3)),
+            row,
+        )
+    );
+    let highlighted = render_buffer(&mut app, 80, 24);
+    for column in response_start_column..=response_start_column.saturating_add(3) {
+        assert_eq!(
+            highlighted
+                .cell(Position::new(snapshot.area.x.saturating_add(column), row))
+                .expect("selected response cell")
+                .style()
+                .bg,
+            AkraTheme::transcript_selection().bg
+        );
+    }
+    for column in start_column..snapshot.area.width {
+        assert_ne!(
+            highlighted
+                .cell(Position::new(snapshot.area.x.saturating_add(column), row))
+                .expect("badge cell")
+                .style()
+                .bg,
+            AkraTheme::transcript_selection().bg,
+            "badge columns must not inherit transcript selection styling"
+        );
+    }
+    let viewport = &mut app.shell.transcript_viewport_ui_state;
+    assert!(matches!(
+        viewport.finish_selection(
+            snapshot
+                .area
+                .x
+                .saturating_add(response_start_column.saturating_add(3)),
+            row,
+        ),
+        TranscriptSelectionFinish::Copy(_)
+    ));
 }
 
 #[test]

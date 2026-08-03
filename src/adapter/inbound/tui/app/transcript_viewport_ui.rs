@@ -32,7 +32,40 @@ pub(super) struct TranscriptRenderedRow {
     pub(super) soft_wrap_separator: String,
     pub(super) selection_range_id: Option<u64>,
     pub(super) selectable_from_column: u16,
+    pub(super) selection_excluded_columns: Vec<(u16, u16)>,
     pub(super) cells: Vec<String>,
+}
+
+impl TranscriptRenderedRow {
+    fn column_is_selectable(&self, column: u16, width: u16) -> bool {
+        self.selection_range_id.is_some()
+            && column < width
+            && column >= self.selectable_from_column
+            && !self
+                .selection_excluded_columns
+                .iter()
+                .any(|(start, end)| column >= *start && column <= *end)
+    }
+
+    fn first_selectable_column(&self, width: u16) -> Option<u16> {
+        (self.selectable_from_column.min(width)..width)
+            .find(|column| self.column_is_selectable(*column, width))
+    }
+
+    fn last_selectable_column(&self, width: u16) -> Option<u16> {
+        (0..width)
+            .rev()
+            .find(|column| self.column_is_selectable(*column, width))
+    }
+
+    fn nearest_selectable_column(&self, target: u16, width: u16) -> Option<u16> {
+        let first = self.first_selectable_column(width)?;
+        let last = self.last_selectable_column(width)?;
+        let target = target.clamp(first, last);
+        (first..=last)
+            .filter(|column| self.column_is_selectable(*column, width))
+            .min_by_key(|column| column.abs_diff(target))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -332,16 +365,17 @@ impl TranscriptViewportUiState {
         if source_row.selection_range_id != Some(selection.anchor.selection_range_id) {
             return None;
         }
-        let last_column = width.saturating_sub(1);
+        let first_selectable = source_row.first_selectable_column(width)?;
+        let last_selectable = source_row.last_selectable_column(width)?;
         let start_column = if absolute_row == start.absolute_row {
-            start.column.min(last_column)
+            start.column.min(last_selectable)
         } else {
-            source_row.selectable_from_column.min(last_column)
+            first_selectable
         };
         let end_column = if absolute_row == end.absolute_row {
-            end.column.min(last_column)
+            end.column.min(last_selectable)
         } else {
-            last_column
+            last_selectable
         };
         Some((start_column, end_column))
     }
@@ -379,21 +413,27 @@ impl TranscriptViewportUiState {
             let start_column = if rendered_row.absolute_row == start.absolute_row {
                 start.column
             } else {
-                rendered_row.selectable_from_column
+                rendered_row.first_selectable_column(snapshot.area.width)?
             };
             let end_column = if rendered_row.absolute_row == end.absolute_row {
                 end.column
             } else {
-                snapshot.area.width.saturating_sub(1)
+                rendered_row.last_selectable_column(snapshot.area.width)?
             };
             let segment = rendered_row
                 .cells
                 .iter()
+                .enumerate()
                 .skip(usize::from(start_column))
                 .take(usize::from(
                     end_column.saturating_sub(start_column).saturating_add(1),
                 ))
-                .map(String::as_str)
+                .filter(|(column, _)| {
+                    u16::try_from(*column).is_ok_and(|column| {
+                        rendered_row.column_is_selectable(column, snapshot.area.width)
+                    })
+                })
+                .map(|(_, cell)| cell.as_str())
                 .collect::<String>();
             let segment = segment.trim_end_matches(' ');
             text.push_str(segment);
@@ -463,9 +503,6 @@ fn selection_point_in_frame(
     let selection_range_id = rendered_row.selection_range_id?;
     let mut relative_column = column.saturating_sub(frame.area.x);
     relative_column = relative_column.min(frame.area.width.saturating_sub(1));
-    if relative_column < rendered_row.selectable_from_column {
-        return None;
-    }
     let current_index = usize::from(relative_column);
     if rendered_row
         .cells
@@ -485,6 +522,9 @@ fn selection_point_in_frame(
             }
             break;
         }
+    }
+    if !rendered_row.column_is_selectable(relative_column, frame.area.width) {
+        return None;
     }
     Some(TranscriptSelectionPoint {
         absolute_row: rendered_row.absolute_row,
@@ -514,18 +554,20 @@ fn drag_selection_point_in_frame(
         .rows
         .iter()
         .enumerate()
-        .filter(|(_, candidate)| candidate.selection_range_id == Some(selection_range_id))
+        .filter(|(_, candidate)| {
+            candidate.selection_range_id == Some(selection_range_id)
+                && candidate
+                    .first_selectable_column(frame.area.width)
+                    .is_some()
+        })
         .min_by_key(|(index, _)| index.abs_diff(target_visible_row))?;
-    let last_column = frame.area.width.saturating_sub(1);
     let relative_column = if target_visible_row < candidate_index {
-        candidate_row.selectable_from_column.min(last_column)
+        candidate_row.first_selectable_column(frame.area.width)?
     } else if target_visible_row > candidate_index {
-        last_column
+        candidate_row.last_selectable_column(frame.area.width)?
     } else {
-        column.saturating_sub(frame.area.x).clamp(
-            candidate_row.selectable_from_column.min(last_column),
-            last_column,
-        )
+        candidate_row
+            .nearest_selectable_column(column.saturating_sub(frame.area.x), frame.area.width)?
     };
     Some(TranscriptSelectionPoint {
         absolute_row: candidate_row.absolute_row,
@@ -577,6 +619,7 @@ mod tests {
                         soft_wrap_separator: (*soft_wrap_separator).to_string(),
                         selection_range_id: Some(1),
                         selectable_from_column: 0,
+                        selection_excluded_columns: Vec::new(),
                         cells,
                     }
                 })
@@ -692,6 +735,7 @@ mod tests {
                     soft_wrap_separator: String::new(),
                     selection_range_id: Some(1),
                     selectable_from_column: 0,
+                    selection_excluded_columns: Vec::new(),
                     cells: vec![
                         "한".to_string(),
                         " ".to_string(),
@@ -784,6 +828,7 @@ mod tests {
                         soft_wrap_separator: String::new(),
                         selection_range_id: None,
                         selectable_from_column: 0,
+                        selection_excluded_columns: Vec::new(),
                         cells: padded_cells("prompt", 8),
                     },
                     TranscriptRenderedRow {
@@ -792,6 +837,7 @@ mod tests {
                         soft_wrap_separator: String::new(),
                         selection_range_id: Some(9),
                         selectable_from_column: 2,
+                        selection_excluded_columns: Vec::new(),
                         cells: padded_cells("  answer", 8),
                     },
                     TranscriptRenderedRow {
@@ -800,6 +846,7 @@ mod tests {
                         soft_wrap_separator: String::new(),
                         selection_range_id: Some(9),
                         selectable_from_column: 2,
+                        selection_excluded_columns: Vec::new(),
                         cells: padded_cells("  detail", 8),
                     },
                 ],
@@ -830,6 +877,29 @@ mod tests {
         assert_eq!(
             state.finish_selection(7, 4),
             TranscriptSelectionFinish::Copy("first".to_string())
+        );
+    }
+
+    #[test]
+    fn column_exclusion_rejects_chrome_without_disabling_the_response_row() {
+        let mut state = TranscriptViewportUiState::default();
+        let mut frame = frame_snapshot_with_width(12, &[("answerBADGE", 0, "")]);
+        frame.rows[0].selection_excluded_columns = vec![(6, 11)];
+        state.resolve_frame(1, 1, 1);
+        state.bind_frame(Vec::new(), Vec::new(), Some(frame));
+
+        assert!(!state.begin_selection(8, 3), "badge cell is chrome");
+        assert!(
+            state.begin_selection(2, 3),
+            "response cell remains selectable"
+        );
+        assert!(
+            state.update_selection(13, 3),
+            "drag over chrome clamps to the last response cell"
+        );
+        assert_eq!(
+            state.finish_selection(13, 3),
+            TranscriptSelectionFinish::Copy("answer".to_string())
         );
     }
 

@@ -645,6 +645,7 @@ mod tests {
                         soft_wrap_separator: String::new(),
                         selection_range_id: Some(1),
                         selectable_from_column: 0,
+                        selection_excluded_columns: Vec::new(),
                         cells: text
                             .chars()
                             .map(|character| character.to_string())
