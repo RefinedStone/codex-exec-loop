@@ -340,15 +340,23 @@ target_literal='SELECTABLE_RESPONSE_CANARY'
 target_length="${#target_literal}"
 target_end_column="$((target_column_one_based + target_length - 1))"
 
-drag_payload="$(printf '\033[<0;%s;%sM' "$target_column_one_based" "$target_row_one_based")"
-for ((sample = 0; sample < 1200; sample += 1)); do
-  sample_column="$((target_column_one_based + (sample % target_length)))"
-  drag_payload+="$(printf '\033[<32;%s;%sM' "$sample_column" "$target_row_one_based")"
-done
-drag_payload+="$(printf '\033[<32;%s;%sM' "$target_end_column" "$target_row_one_based")"
-drag_payload+="$(printf '\033[<0;%s;%sm' "$target_end_column" "$target_row_one_based")"
 drag_started_ms="$(date +%s%3N)"
-tmux -L "$socket_name" send-keys -t "$pane_target" -l -- "$drag_payload"
+printf -v drag_down_payload '\033[<0;%s;%sM' \
+  "$target_column_one_based" "$target_row_one_based"
+tmux -L "$socket_name" send-keys -t "$pane_target" -l -- \
+  "$drag_down_payload"
+for ((batch_start = 0; batch_start < 1200; batch_start += 100)); do
+  drag_payload=""
+  for ((sample = batch_start; sample < batch_start + 100; sample += 1)); do
+    sample_column="$((target_column_one_based + (sample % target_length)))"
+    printf -v drag_event '\033[<32;%s;%sM' "$sample_column" "$target_row_one_based"
+    drag_payload+="$drag_event"
+  done
+  tmux -L "$socket_name" send-keys -t "$pane_target" -l -- "$drag_payload"
+done
+printf -v drag_release_payload '\033[<32;%s;%sM\033[<0;%s;%sm' \
+  "$target_end_column" "$target_row_one_based" "$target_end_column" "$target_row_one_based"
+tmux -L "$socket_name" send-keys -t "$pane_target" -l -- "$drag_release_payload"
 wait_for_text 'copied selection to terminal clipboard' 100
 drag_completed_ms="$(date +%s%3N)"
 drag_latency_ms="$((drag_completed_ms - drag_started_ms))"
@@ -381,12 +389,16 @@ sleep 0.1
 
 wait_for_text 'Final frame delivery remains coherent.' 400
 sleep 0.2
-move_payload=""
-for ((sample = 0; sample < 3000; sample += 1)); do
-  move_payload+="$(printf '\033[<35;%s;%sM' "$((20 + sample % 40))" "$((5 + sample % 10))")"
-done
 move_started_ms="$(date +%s%3N)"
-tmux -L "$socket_name" send-keys -t "$pane_target" -l -- "$move_payload"
+for ((batch_start = 0; batch_start < 3000; batch_start += 100)); do
+  move_payload=""
+  for ((sample = batch_start; sample < batch_start + 100; sample += 1)); do
+    printf -v move_event '\033[<35;%s;%sM' \
+      "$((20 + sample % 40))" "$((5 + sample % 10))"
+    move_payload+="$move_event"
+  done
+  tmux -L "$socket_name" send-keys -t "$pane_target" -l -- "$move_payload"
+done
 tmux -L "$socket_name" send-keys -t "$pane_target" -l 'LAG_INPUT_CANARY'
 wait_for_text 'LAG_INPUT_CANARY' 100
 move_completed_ms="$(date +%s%3N)"
