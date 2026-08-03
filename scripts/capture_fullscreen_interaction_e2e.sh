@@ -428,6 +428,10 @@ mkdir -p "$output_dir/frames"
 sed \
   -e "s|$raw_root|<isolated>|g" \
   -e "s|$repo_root|<repo>|g" \
+  "$raw_root/selection-frame.ansi" >"$output_dir/frames/selection-copy-120x30.ansi"
+sed \
+  -e "s|$raw_root|<isolated>|g" \
+  -e "s|$repo_root|<repo>|g" \
   -e 's/[[:space:]]*$//' \
   "$raw_root/selection-frame.txt" >"$output_dir/frames/selection-copy-120x30.txt"
 
@@ -442,6 +446,7 @@ terminal: $(tmux -V) detached PTY
 geometry: 120x30
 frontend: fullscreen alternate-screen
 candidate_clean_checks: before-build, after-build, after-capture
+ansi_frame_sha256: $(sha256sum "$output_dir/frames/selection-copy-120x30.ansi" | cut -d' ' -f1)
 EOF
 
 cat >"$output_dir/scenario-results.txt" <<EOF
