@@ -35,6 +35,11 @@ the original assistant row in place and cannot reorder assistant/tool/assistant 
 the selected focused view. `FullscreenFrameRenderReceipt` carries only UI feedback that may be
 committed after a stable terminal draw.
 
+Terminal input is collected continuously by the composition-owned `NativeTerminalEventIngress`.
+The TUI receives only its opaque event mailbox, never a thread or process capability. This keeps
+mouse/key intake moving while Ratatui writes a frame, while all application reduction still occurs
+in order on `ShellRuntime`.
+
 ## Fullscreen Layout
 
 The frame has two vertical regions:
@@ -67,6 +72,11 @@ and transcript selection.
 - Thread/session switch: reset the viewport and stale card geometry.
 - Left drag: freeze the current absolute reader anchor, highlight the selected rendered cells, and
   copy on release without waiting for another frame.
+- Submitted user prompts, status rows, the composer, and transient badges are interaction chrome,
+  not selectable transcript text. Assistant bodies and tool cards own independent semantic
+  selection ranges, so a drag cannot leak across prompts or unrelated responses.
+- Mouse wheel input is accepted only inside the committed transcript rectangle. Scrolling over the
+  composer or fixed shell tail does not move conversation history.
 - Resize: invalidate selection geometry before the next pointer event; a stale frame receipt cannot
   restore it.
 
@@ -78,8 +88,12 @@ app-owned pointer handling. Clipboard delivery is a thin terminal effect (OSC 52
 passthrough), never transcript authority.
 
 Ready input batches coalesce consecutive drag coordinates to the newest point before the next
-frame while preserving button-down, button-up, resize, and keyboard ordering. `Ctrl+C` copies an
-active transcript selection before its interrupt/navigation/exit meanings are considered.
+frame while preserving button-down, button-up, resize, and keyboard ordering. Crossterm all-motion
+reports are discarded because Akra has no hover behavior; keeping them would place invisible work
+ahead of the next real input. Frame admission is capped at a 16ms boundary, so a drag burst creates
+at most one current frame per display interval rather than a delayed replay of old pointer samples.
+`Ctrl+C` copies an active transcript selection before its interrupt/navigation/exit meanings are
+considered.
 
 Snapshot hydration projects an exact Akra main-session prompt envelope back to its user-authored
 `user-prompt`. A hidden manual-intake handoff projects its `original-user-prompt`; execution,
@@ -151,6 +165,10 @@ dashboard made of boxes.
    buffer, host history, or separate visible log.
 7. Selection reads only the rendered-cell snapshot returned by a stable frame receipt; controller
    input never guesses Ratatui wrapping from raw strings.
+8. Composition owns the joinable terminal reader and its redacted panic boundary; the inbound TUI
+   owns only ordered event reduction.
+9. A frame burst is dirty-coalesced behind one 60Hz admission boundary. Terminal input continues to
+   drain while the one admitted Ratatui transaction is in progress.
 
 ## Acceptance Scenarios
 
@@ -164,6 +182,9 @@ dashboard made of boxes.
 - Entering and exiting restores the caller's terminal cleanly on Windows and Linux families.
 - Forward and reverse drags copy the same semantic order, preserve Korean/wide glyphs, and retain a
   visible selection background until the next selection or geometry invalidation.
+- A high-rate drag settles to its latest coordinate without replaying stale highlight frames; plain
+  pointer motion cannot delay the next key.
+- Dragging a submitted prompt, status badge, or composer does not start transcript selection.
 - `:mouse off` emits no mouse-reporting enable sequence at startup or after the mode change.
 - A resumed Akra main session shows the original operator prompt, never its internal Codex prompt
   envelope.

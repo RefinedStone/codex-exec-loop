@@ -1,0 +1,13 @@
+result: pass
+synthetic_app_server: true
+source_build: true
+rapid_drag_samples: 1200
+rapid_drag_settle_ms: 102
+unused_motion_samples: 3000
+motion_then_key_visible_ms: 137
+selection_text: SELECTABLE_RESPONSE_CANARY
+selection_background: RGB(42,72,112)
+osc52_payload_verified: true
+ctrl_c_preserved_session: true
+clean_exit_status: 0
+raw_pty_retained: false

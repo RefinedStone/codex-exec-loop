@@ -16,6 +16,7 @@ architecture-test exception ledger cover different failure classes and must stay
 | Unified Work Center | `app/work_center_overlay_ui.rs` | colocated reducer tests | Read-only aggregate; no shadow authority. |
 | Fullscreen terminal, transcript viewport, resize, redraw transaction | `app/fullscreen_terminal_adapter.rs`, `app/fullscreen_frame_model.rs`, `app/transcript_viewport_ui.rs`, `app/ratatui_frontend.rs` | fullscreen frame, viewport, lifecycle, and rendering regressions | One app-owned viewport; stable resize-gated receipt. |
 | Transcript selection and clipboard | `app/transcript_viewport_ui.rs`, `app/terminal_interaction_ui.rs`, `app/ratatui_frontend.rs` | forward/reverse selection, rendered-cell highlight, OSC 52/tmux, mouse-mode lifecycle | Stable frame cells are selectable; terminal-native selection is an explicit fallback. |
+| Terminal input admission and frame cadence | `composition/native_terminal_event_ingress.rs`, `app/ratatui_frontend.rs`, `app/shell_runtime.rs` | ingress mailbox, motion filtering, drag-burst reduction, scheduler tests, E3 PTY capture | Input drains during frame writes; unused motion is dropped; one latest frame is admitted per 16ms boundary. |
 | Parallel event stream, live-tail, prompt position, command hints | `app/parallel_*`, supersession presentation | parallel stream, supervisor, peek, and fullscreen regressions | One canonical event window rendered entirely inside Ratatui. |
 | Overlay surfaces: help, session, planning, model/view/language selection, parallel peek, progressive activity | overlay and presentation modules | colocated projection/reducer tests plus fullscreen rendering | Overlays consume owned immutable screen models. |
 | Shell runtime input flow: key events, command palette, submit, escape/cancel | conversation input, shell controller, command modules | reducer/controller tests plus fullscreen interaction tests | PageUp/PageDown, Ctrl+Home/End, Ctrl+E, mouse and composer focus have one owner. |
@@ -35,6 +36,7 @@ architecture-test exception ledger cover different failure classes and must stay
 | F5 | Parallel stream stays app-owned | focused parallel layout changes |
 | F6 | Alternate-screen lifecycle restores the terminal | Crossterm mode or escape-sequence changes |
 | F7 | Drag selection freezes the reader anchor and copies rendered UTF-8 text | selection, wrapping, clipboard, or mouse-reporting changes |
+| F8 | Semantic interaction zones and continuous input admission prevent stale drag replay | input ingress, selection ranges, or frame cadence changes |
 
 ## Environment Applicability
 

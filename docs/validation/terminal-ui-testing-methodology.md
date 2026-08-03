@@ -17,6 +17,8 @@ fallback.
   clickable card geometry, the stable rendered-cell map, and drag selection.
 - `FullscreenShellFrameModel` and `FullscreenInspectionFrameModel` are immutable owned draw input.
 - `FullscreenFrameRenderReceipt` is the Stable frame receipt and compare-and-apply boundary.
+- `NativeTerminalEventIngress` is a composition-owned continuous reader. It exposes an opaque
+  mailbox to the TUI and drops unused all-motion reports before they can form an input backlog.
 - The Thin terminal layer enters the alternate screen, captures one sample, draws one frame, checks
   resize stability, and only then commits the receipt.
 - The Render/layout boundary does no application, filesystem, network, clock, or terminal I/O.
@@ -39,6 +41,8 @@ representative compatibility targets in `docs/plan/12-platform-validation-matrix
 | Reader position | `TranscriptViewportUiState` | input reducer + frame receipt | follow tail until user scrolls or selects | streaming append does not move a reader or active selection |
 | Rendering | `FullscreenShellFrameModel` | frame capture | owned immutable model | repeated draw has no effects |
 | Delivery | `FullscreenTerminalAdapter` | post-draw geometry check | one Ratatui transaction | stale resize applies no UI receipt |
+| Input collection | `NativeTerminalEventIngress` | composition reader boundary | continuous while a frame writes | drag/key events leave the host queue promptly; unused hover motion is absent |
+| Frame admission | `TuiFrameScheduler` | shell runtime | dirty-coalesced at a 16ms boundary | a burst paints the latest state, never a slow replay |
 | Terminal modes | `TerminalRestoreGuard` | startup/drop | alternate screen + mouse/focus/paste | every enabled mode is restored |
 | Clipboard | terminal UI effect pump | explicit drag or `:copy` | OSC 52; tmux passthrough when attached | UTF-8 payload is base64 encoded and never printed as cells |
 
@@ -57,6 +61,9 @@ future test-growth cost, and maintainability cost.
    restoration, and best-effort cleanup ordering.
 5. Static architecture tests prove renderers cannot reacquire application authority and retired
    host delivery files cannot return unnoticed.
+6. Input-ingress tests prove collection crosses the redacted composition boundary, errors are
+   delivered without panic leakage, and thousands of unused motion reports cannot queue ahead of a
+   real key.
 
 Temporal tests must compare sequential states. The core invariant is: **streaming append does not
 move a reader**. A final screenshot alone cannot prove it.
@@ -76,6 +83,11 @@ move a reader**. A final screenshot alone cannot prove it.
 - A ready burst may collapse consecutive drag coordinates to its newest point, but it must retain
   down/up and every non-drag event in order. `Ctrl+C` with an active selection is a copy chord and
   cannot reach conversation interruption, navigation, or process-exit handling.
+- User/status rows, the composer, and transient overlay badges are non-selectable interaction
+  chrome. Agent/tool output uses per-message semantic ranges, and a drag stays inside its anchor
+  range even when the pointer crosses another surface.
+- Plain `MouseEventKind::Moved` reports have no TUI meaning and are removed at input ingress. A
+  16ms frame-admission floor coalesces dirty state while the reader continues collecting input.
 - `:mouse off` and `AKRA_TUI_MOUSE_CAPTURE=off` skip mouse reporting so the emulator can own native
   selection; `:mouse on` restores app-owned pointer input without changing transcript ownership.
 - Snapshot contract tests resume a generated Akra main-session user message and assert that only
@@ -103,6 +115,9 @@ Capture must show:
 8. `:mouse off` native terminal selection and `:mouse on` restoration.
 9. resume the selected session and confirm no execution/reporting/manual-intake prompt contract is
    visible.
+10. inject a high-rate SGR drag plus unused all-motion reports and record drag settle time, next-key
+    visibility, selection RGB, OSC 52 payload, Ctrl+C behavior, and exit status. The checked-in E3
+    reference is [`artifacts/grok-interaction-pipeline-2026-08-04/`](./artifacts/grok-interaction-pipeline-2026-08-04/).
 
 ### When all first-class environments are required
 
