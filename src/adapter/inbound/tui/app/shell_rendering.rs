@@ -316,13 +316,15 @@ fn draw_fullscreen_conversation_shell(
                     transcript_card_rows.iter().map(|row| row.digest).collect();
                 let transcript_receipt = render_fullscreen_transcript(
                     frame,
-                    logo_area,
-                    logo_lines,
-                    Vec::new(),
-                    Vec::new(),
-                    0,
-                    false,
-                    transcript_viewport_state,
+                    FullscreenTranscriptRenderRequest {
+                        area: logo_area,
+                        lines: logo_lines,
+                        line_interactions: Vec::new(),
+                        card_rows: Vec::new(),
+                        scroll_offset: 0,
+                        has_unseen_output: false,
+                        viewport_state: transcript_viewport_state,
+                    },
                 );
                 return FullscreenConversationShellRenderReceipt {
                     queue_receipt_undo_hit_area: render_bottom_anchored_tail(
@@ -355,13 +357,15 @@ fn draw_fullscreen_conversation_shell(
             transcript_card_rows.iter().map(|row| row.digest).collect();
         let transcript_receipt = render_fullscreen_transcript(
             frame,
-            layout[0],
-            transcript_lines,
-            transcript_line_interactions,
-            transcript_card_rows,
-            transcript_scroll_offset,
-            transcript_has_unseen_output,
-            transcript_viewport_state,
+            FullscreenTranscriptRenderRequest {
+                area: layout[0],
+                lines: transcript_lines,
+                line_interactions: transcript_line_interactions,
+                card_rows: transcript_card_rows,
+                scroll_offset: transcript_scroll_offset,
+                has_unseen_output: transcript_has_unseen_output,
+                viewport_state: transcript_viewport_state,
+            },
         );
         return FullscreenConversationShellRenderReceipt {
             queue_receipt_undo_hit_area: render_bottom_anchored_tail(frame, tail_area, tail_view),
@@ -547,16 +551,29 @@ struct RenderedTranscriptReceipt {
     frame_snapshot: Option<TranscriptViewportFrame>,
 }
 
-fn render_fullscreen_transcript(
-    frame: &mut Frame<'_>,
-    transcript_area: Rect,
-    transcript_lines: Vec<Line<'static>>,
-    transcript_line_interactions: Vec<ConversationTranscriptLineInteraction>,
+struct FullscreenTranscriptRenderRequest<'a> {
+    area: Rect,
+    lines: Vec<Line<'static>>,
+    line_interactions: Vec<ConversationTranscriptLineInteraction>,
     card_rows: Vec<ConversationTranscriptCardRow>,
     scroll_offset: usize,
     has_unseen_output: bool,
-    transcript_viewport_state: &TranscriptViewportUiState,
+    viewport_state: &'a TranscriptViewportUiState,
+}
+
+fn render_fullscreen_transcript(
+    frame: &mut Frame<'_>,
+    request: FullscreenTranscriptRenderRequest<'_>,
 ) -> RenderedTranscriptReceipt {
+    let FullscreenTranscriptRenderRequest {
+        area: transcript_area,
+        lines: transcript_lines,
+        line_interactions: transcript_line_interactions,
+        card_rows,
+        scroll_offset,
+        has_unseen_output,
+        viewport_state: transcript_viewport_state,
+    } = request;
     if transcript_lines.is_empty() || transcript_area.width == 0 || transcript_area.height == 0 {
         return RenderedTranscriptReceipt {
             card_hit_areas: Vec::new(),
