@@ -287,6 +287,14 @@ impl TranscriptViewportUiState {
         self.last_copied_selection.as_deref()
     }
 
+    pub(super) fn active_selection_text(&self) -> Option<String> {
+        let selection = self.selection.as_ref()?;
+        if selection.anchor == selection.focus {
+            return None;
+        }
+        self.selected_text_from_snapshot()
+    }
+
     pub(super) fn selection_columns_for_row(
         &self,
         absolute_row: usize,
@@ -554,6 +562,10 @@ mod tests {
         assert!(state.begin_selection(2, 3));
         assert!(!state.follow_tail());
         assert!(state.update_selection(6, 4));
+        assert_eq!(
+            state.active_selection_text(),
+            Some("hello world".to_string())
+        );
         assert_eq!(
             state.finish_selection(6, 4),
             TranscriptSelectionFinish::Copy("hello world".to_string())

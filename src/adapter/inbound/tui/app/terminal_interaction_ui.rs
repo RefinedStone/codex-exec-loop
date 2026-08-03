@@ -74,6 +74,18 @@ impl NativeTuiApp {
         self.queue_clipboard_copy(text, ClipboardCopySource::Selection);
     }
 
+    pub(super) fn copy_active_transcript_selection(&mut self) -> bool {
+        let Some(text) = self
+            .shell
+            .transcript_viewport_ui_state
+            .active_selection_text()
+        else {
+            return false;
+        };
+        self.queue_clipboard_copy(text, ClipboardCopySource::Selection);
+        true
+    }
+
     pub(super) fn handle_copy_shell_command(&mut self, argument: Option<&str>) {
         let argument = argument.map(str::trim).filter(|value| !value.is_empty());
         let selection = self

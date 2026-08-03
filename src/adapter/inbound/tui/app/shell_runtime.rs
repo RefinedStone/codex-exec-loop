@@ -307,6 +307,18 @@ impl ShellRuntime {
     }
 
     fn handle_key_press(&mut self, key: KeyEvent, now: Instant) {
+        // Transcript selection owns the conventional copy chord before Ctrl+C
+        // is overloaded as turn interruption, navigation, or exit intent. This
+        // is especially important on Windows Terminal + WSL, where the same
+        // chord otherwise appears to terminate the selected session.
+        if key.modifiers == KeyModifiers::CONTROL
+            && key.code == KeyCode::Char('c')
+            && self.app.copy_active_transcript_selection()
+        {
+            self.request_redraw_at(now);
+            return;
+        }
+
         // Exit confirmation owns the first key pass so Escape/Enter cannot leak into
         // overlays or prompt editing while the quit dialog is active.
         if let Some(confirmed_exit) = self.app.handle_exit_confirmation_key(key) {
@@ -572,16 +584,51 @@ impl TuiFrameScheduler {
 
 #[cfg(test)]
 mod tests {
-    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+    use crossterm::event::{
+        Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
     use ratatui::layout::Rect;
 
     use super::ShellRuntime;
     use crate::adapter::inbound::tui::app::{
-        TranscriptCardHitArea, test_helpers::test_native_tui_app,
+        ConversationState, TerminalUiEffect, TranscriptCardHitArea, TranscriptRenderedRow,
+        TranscriptViewportFrame, test_helpers::test_native_tui_app,
     };
 
     fn key(code: KeyCode, modifiers: KeyModifiers) -> Event {
         Event::Key(KeyEvent::new(code, modifiers))
+    }
+
+    fn mouse(kind: MouseEventKind, column: u16) -> Event {
+        Event::Mouse(MouseEvent {
+            kind,
+            column,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
+
+    fn bind_selectable_row(runtime: &mut ShellRuntime, text: &str) {
+        runtime
+            .app_mut()
+            .shell
+            .transcript_viewport_ui_state
+            .bind_frame(
+                Vec::new(),
+                Vec::new(),
+                Some(TranscriptViewportFrame {
+                    area: Rect::new(0, 0, text.chars().count() as u16, 1),
+                    rows: vec![TranscriptRenderedRow {
+                        absolute_row: 0,
+                        logical_line_index: 0,
+                        soft_wrap_separator: String::new(),
+                        cells: text
+                            .chars()
+                            .map(|character| character.to_string())
+                            .collect(),
+                    }],
+                }),
+            );
     }
 
     #[test]
@@ -651,5 +698,31 @@ mod tests {
         );
         assert!(runtime.take_redraw_request());
         assert!(!runtime.take_redraw_request());
+    }
+
+    #[test]
+    fn ctrl_c_copies_an_active_transcript_selection_without_leaving_the_session() {
+        let mut runtime = ShellRuntime::new(test_native_tui_app());
+        bind_selectable_row(&mut runtime, "selectable");
+
+        runtime.handle_terminal_event(mouse(MouseEventKind::Down(MouseButton::Left), 0));
+        runtime.handle_terminal_event(mouse(MouseEventKind::Drag(MouseButton::Left), 9));
+        runtime.handle_terminal_event(mouse(MouseEventKind::Up(MouseButton::Left), 9));
+        assert_eq!(
+            runtime.take_terminal_ui_effects(),
+            vec![TerminalUiEffect::CopyToClipboard("selectable".to_string())]
+        );
+
+        runtime.handle_terminal_event(key(KeyCode::Char('c'), KeyModifiers::CONTROL));
+
+        assert_eq!(
+            runtime.take_terminal_ui_effects(),
+            vec![TerminalUiEffect::CopyToClipboard("selectable".to_string())]
+        );
+        assert!(!runtime.should_quit());
+        assert!(matches!(
+            runtime.app().conversation.lifecycle.conversation_state,
+            ConversationState::Ready(_)
+        ));
     }
 }
