@@ -8,6 +8,7 @@ mod item_lifecycle;
 mod progressive_activity;
 mod runtime_envelope;
 mod turn_notifications;
+mod user_message_projection;
 
 #[cfg(test)]
 use self::item_lifecycle::{
@@ -29,6 +30,7 @@ pub(super) use self::turn_notifications::{
     ActiveTurnNotificationState, AppServerNotification, TurnNotificationHandling,
     handle_turn_notification,
 };
+use self::user_message_projection::{project_akra_user_message, visible_akra_user_prompt};
 use super::{
     MAX_SNAPSHOT_MESSAGES, MAX_SNAPSHOT_TOTAL_TEXT_BYTES, MAX_STREAM_COMPLETED_MESSAGE_BYTES,
     MAX_STREAM_IDENTIFIER_BYTES, MAX_STREAM_METADATA_BYTES, STREAM_TRUNCATION_MARKER,
@@ -73,7 +75,10 @@ pub(super) fn to_session_summary(thread_record: ThreadRecord) -> SessionSummary 
         name: thread_record
             .name
             .map(|name| bounded_stream_text(name, MAX_STREAM_METADATA_BYTES)),
-        preview: bounded_stream_text(thread_record.preview, MAX_STREAM_METADATA_BYTES),
+        preview: bounded_stream_text(
+            project_akra_user_message(thread_record.preview),
+            MAX_STREAM_METADATA_BYTES,
+        ),
         cwd: bounded_stream_text(thread_record.cwd, MAX_STREAM_METADATA_BYTES),
         source: thread_record.source.label().to_string(),
         model_provider: bounded_stream_text(
@@ -188,8 +193,8 @@ pub(super) fn thread_title(thread_record: &ThreadRecord) -> String {
         .clone()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| {
-            thread_record
-                .preview
+            visible_akra_user_prompt(&thread_record.preview)
+                .unwrap_or(&thread_record.preview)
                 .lines()
                 .next()
                 .map(str::trim)
@@ -834,10 +839,38 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        SessionSourceValue, ThreadReadResponse, ThreadSetNameParams, ThreadSetNameResponse,
-        ThreadStartResponse, TurnInputItem, TurnSteerParams, TurnSteerResponse,
-        to_conversation_snapshot, to_session_summary,
+        SessionSourceValue, ThreadReadResponse, ThreadRecord, ThreadSetNameParams,
+        ThreadSetNameResponse, ThreadStartResponse, TurnInputItem, TurnSteerParams,
+        TurnSteerResponse, thread_title, to_conversation_snapshot, to_session_summary,
     };
+
+    #[test]
+    fn session_catalog_preview_and_fallback_title_hide_akra_prompt_contracts() {
+        let raw_prompt = concat!(
+            "# akra-main-session-turn\n\n",
+            "[execution-contract]\ninternal execution rule\n\n",
+            "[reporting-contract]\ninternal reporting rule\n\n",
+            "[user-prompt]\nresume-visible prompt"
+        );
+        let record = serde_json::from_value::<ThreadRecord>(json!({
+            "id": "thread-akra",
+            "name": null,
+            "preview": raw_prompt,
+            "cwd": "/workspace",
+            "source": "appServer",
+            "modelProvider": "openai",
+            "updatedAt": 1,
+            "path": null,
+            "status": { "type": "idle" },
+            "gitInfo": null
+        }))
+        .expect("thread record should deserialize");
+
+        assert_eq!(thread_title(&record), "resume-visible prompt");
+        let summary = to_session_summary(record);
+        assert_eq!(summary.preview, "resume-visible prompt");
+        assert!(!summary.preview.contains("execution-contract"));
+    }
 
     #[test]
     fn turn_steer_contract_serializes_exact_precondition_and_text_input() {

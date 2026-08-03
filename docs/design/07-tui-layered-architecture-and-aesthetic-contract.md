@@ -77,6 +77,15 @@ disables mouse reporting while retaining the same alternate-screen frame and `:m
 app-owned pointer handling. Clipboard delivery is a thin terminal effect (OSC 52, including tmux
 passthrough), never transcript authority.
 
+Ready input batches coalesce consecutive drag coordinates to the newest point before the next
+frame while preserving button-down, button-up, resize, and keyboard ordering. `Ctrl+C` copies an
+active transcript selection before its interrupt/navigation/exit meanings are considered.
+
+Snapshot hydration projects an exact Akra main-session prompt envelope back to its user-authored
+`user-prompt`. A hidden manual-intake handoff projects its `original-user-prompt`; execution,
+reporting, task-authority, and rules sections never enter the visible canonical transcript. Text
+that does not match the exact generated grammar is preserved unchanged.
+
 ## Tool and Diff Cards
 
 Tool activity appears where it happened in the conversation.
@@ -156,3 +165,5 @@ dashboard made of boxes.
 - Forward and reverse drags copy the same semantic order, preserve Korean/wide glyphs, and retain a
   visible selection background until the next selection or geometry invalidation.
 - `:mouse off` emits no mouse-reporting enable sequence at startup or after the mode change.
+- A resumed Akra main session shows the original operator prompt, never its internal Codex prompt
+  envelope.

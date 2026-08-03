@@ -608,6 +608,15 @@ cell map in that same receipt; pointer input reduces against the committed map a
 terminal effect. The thin terminal frontend alone encodes clipboard text as OSC 52 (including tmux
 passthrough) or changes Crossterm mouse reporting. Clipboard payloads, selection geometry, and the
 mouse-mode preference never enter Core, application authority, or durable conversation state.
+The frontend may coalesce only consecutive mouse-drag coordinates before reduction; button,
+keyboard, resize, and focus ordering remain lossless. An active selection owns `Ctrl+C` before the
+conversation-intent reducer interprets that key as stop, navigation, or exit.
+
+The app-server protocol adapter owns one additional privacy projection for snapshot hydration. It
+recognizes only Akra's exact generated main-session prompt document and maps it back to the final
+operator `user-prompt`, preferring a nested manual-intake `original-user-prompt`. Unrecognized or
+malformed text is preserved, and internal execution/reporting/task-authority sections never become
+canonical TUI transcript messages or session-preview copy.
 
 Activity frame capture joins retained progressive payloads with the Core-published item-lifecycle
 snapshot through exact item identity and authoritative consistency records. The resulting owned

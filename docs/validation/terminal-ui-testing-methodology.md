@@ -73,8 +73,13 @@ move a reader**. A final screenshot alone cannot prove it.
 - A thread identity change resets viewport offset and stale hit areas atomically.
 - Left down/drag/up uses the last committed rendered-cell map. A click still toggles the same tool
   digest; movement turns the gesture into selection and copies only on release.
+- A ready burst may collapse consecutive drag coordinates to its newest point, but it must retain
+  down/up and every non-drag event in order. `Ctrl+C` with an active selection is a copy chord and
+  cannot reach conversation interruption, navigation, or process-exit handling.
 - `:mouse off` and `AKRA_TUI_MOUSE_CAPTURE=off` skip mouse reporting so the emulator can own native
   selection; `:mouse on` restores app-owned pointer input without changing transcript ownership.
+- Snapshot contract tests resume a generated Akra main-session user message and assert that only
+  `user-prompt`, or nested `original-user-prompt`, reaches the transcript and session preview.
 
 ## Manual Capture Contract
 
@@ -96,6 +101,8 @@ Capture must show:
 7. forward and reverse transcript drag, visible selection highlighting, and clipboard paste into a
    separate application;
 8. `:mouse off` native terminal selection and `:mouse on` restoration.
+9. resume the selected session and confirm no execution/reporting/manual-intake prompt contract is
+   visible.
 
 ### When all first-class environments are required
 

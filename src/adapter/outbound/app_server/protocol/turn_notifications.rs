@@ -33,6 +33,7 @@ use crate::domain::turn_terminal::{
 };
 
 use super::item_lifecycle::{command_action_label, command_action_summary, parse_command_actions};
+use super::user_message_projection::project_akra_user_message;
 
 const MAX_TERMINAL_PROTOCOL_TEXT_BYTES: usize = 4 * 1024;
 pub(super) const MAX_RETAINED_ITEM_EFFECT_IDENTITIES: usize =
@@ -1134,7 +1135,7 @@ pub(super) fn to_conversation_message(item: Value) -> Option<ConversationMessage
 
             Some(ConversationMessage::new(
                 ConversationMessageKind::User,
-                text,
+                project_akra_user_message(text),
                 None,
                 item.get("id").and_then(Value::as_str).map(str::to_string),
             ))
@@ -1771,6 +1772,34 @@ mod terminal_receipt_tests {
             )
         );
         assert!(!format!("{message:?}").contains(raw_command));
+    }
+
+    #[test]
+    fn snapshot_user_message_projects_akra_contracts_back_to_operator_text() {
+        let item = json!({
+            "id": "user-item",
+            "type": "userMessage",
+            "content": [{
+                "type": "text",
+                "text": concat!(
+                    "# akra-main-session-turn\n\n",
+                    "[execution-contract]\ninternal execution rule\n\n",
+                    "[reporting-contract]\ninternal reporting rule\n\n",
+                    "[user-prompt]\n",
+                    "# manual-intake-task-handoff\n\n",
+                    "[task]\nintent=Execute the hidden task.\n\n",
+                    "[original-user-prompt]\nfind two event Rust files\n\n",
+                    "[rules]\n- Keep authority unchanged."
+                )
+            }]
+        });
+
+        let message = to_conversation_message(item).expect("snapshot user message");
+
+        assert_eq!(message.kind, ConversationMessageKind::User);
+        assert_eq!(message.text, "find two event Rust files");
+        assert!(!message.text.contains("execution-contract"));
+        assert!(!message.text.contains("manual-intake-task-handoff"));
     }
 
     #[test]

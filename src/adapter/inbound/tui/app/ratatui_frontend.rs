@@ -19,6 +19,7 @@ use super::fullscreen_terminal_adapter::FullscreenTerminalAdapter;
 use super::shell_runtime::ShellRuntime;
 
 const READY_EVENT_DRAIN_LIMIT: usize = 64;
+const READY_DRAG_EVENT_SCAN_LIMIT: usize = 4_096;
 
 /*
  * 이 모듈은 TUI의 concrete terminal boundary다. ShellRuntime은 app state, background
@@ -177,16 +178,70 @@ fn drain_ready_terminal_events_with(
      * is being rendered. Draining the ready batch lets the scheduler coalesce
      * them without losing intermediate resize epochs.
      */
-    for _ in 0..READY_EVENT_DRAIN_LIMIT {
+    let mut regular_event_count = 0usize;
+    let mut scanned_event_count = 0usize;
+    let mut pending_drag = None;
+    while regular_event_count < READY_EVENT_DRAIN_LIMIT
+        && scanned_event_count < READY_DRAG_EVENT_SCAN_LIMIT
+    {
         if runtime.should_quit() {
             break;
         }
-        let Some(event) = read_ready_event()? else {
+        let Some(ready_event) = read_ready_event()? else {
             break;
         };
-        runtime.handle_terminal_event(event);
+        scanned_event_count = scanned_event_count.saturating_add(1);
+
+        if is_mouse_drag_event(&ready_event) {
+            if pending_drag
+                .as_ref()
+                .is_some_and(|previous| same_mouse_drag_stream(previous, &ready_event))
+            {
+                pending_drag = Some(ready_event);
+                continue;
+            }
+            if let Some(previous_drag) = pending_drag.replace(ready_event) {
+                runtime.handle_terminal_event(previous_drag);
+            }
+            continue;
+        }
+
+        if let Some(previous_drag) = pending_drag.take() {
+            runtime.handle_terminal_event(previous_drag);
+            if runtime.should_quit() {
+                break;
+            }
+        }
+        runtime.handle_terminal_event(ready_event);
+        regular_event_count = regular_event_count.saturating_add(1);
+    }
+    if !runtime.should_quit()
+        && let Some(previous_drag) = pending_drag
+    {
+        runtime.handle_terminal_event(previous_drag);
     }
     Ok(())
+}
+
+fn is_mouse_drag_event(terminal_event: &event::Event) -> bool {
+    matches!(
+        terminal_event,
+        event::Event::Mouse(event::MouseEvent {
+            kind: event::MouseEventKind::Drag(_),
+            ..
+        })
+    )
+}
+
+fn same_mouse_drag_stream(left: &event::Event, right: &event::Event) -> bool {
+    match (left, right) {
+        (event::Event::Mouse(left), event::Event::Mouse(right)) => {
+            matches!(left.kind, event::MouseEventKind::Drag(_))
+                && left.kind == right.kind
+                && left.modifiers == right.modifiers
+        }
+        _ => false,
+    }
 }
 
 fn apply_pending_terminal_ui_effects(
@@ -334,14 +389,32 @@ fn remember_terminal_restore_error(first_error: &mut Option<io::Error>, result: 
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
     use std::io;
+
+    use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use ratatui::layout::Rect;
 
     #[cfg(unix)]
     use super::terminal_disconnected;
     use super::{
-        enable_bracketed_paste, enter_fullscreen_terminal_session,
-        leave_fullscreen_terminal_session, terminal_clipboard_sequence, terminal_io_disconnected,
+        ShellRuntime, drain_ready_terminal_events_with, enable_bracketed_paste,
+        enter_fullscreen_terminal_session, leave_fullscreen_terminal_session,
+        terminal_clipboard_sequence, terminal_io_disconnected,
     };
+    use crate::adapter::inbound::tui::app::{
+        TerminalUiEffect, TranscriptRenderedRow, TranscriptViewportFrame,
+        test_helpers::test_native_tui_app,
+    };
+
+    fn mouse(kind: MouseEventKind, column: u16) -> Event {
+        Event::Mouse(MouseEvent {
+            kind,
+            column,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
 
     #[test]
     fn fullscreen_terminal_session_enters_and_restores_every_owned_mode() {
@@ -387,6 +460,41 @@ mod tests {
         let tmux = terminal_clipboard_sequence("hello", true);
         assert!(tmux.starts_with("\u{1b}Ptmux;\u{1b}\u{1b}]52;c;aGVsbG8="));
         assert!(tmux.ends_with("\u{7}\u{1b}\\"));
+    }
+
+    #[test]
+    fn a_fast_drag_backlog_is_coalesced_through_release_before_the_next_frame() {
+        let mut runtime = ShellRuntime::new(test_native_tui_app());
+        runtime
+            .app_mut()
+            .shell
+            .transcript_viewport_ui_state
+            .bind_frame(
+                Vec::new(),
+                Vec::new(),
+                Some(TranscriptViewportFrame {
+                    area: Rect::new(0, 0, 256, 1),
+                    rows: vec![TranscriptRenderedRow {
+                        absolute_row: 0,
+                        logical_line_index: 0,
+                        soft_wrap_separator: String::new(),
+                        cells: vec!["x".to_string(); 256],
+                    }],
+                }),
+            );
+        let mut ready_events = VecDeque::from([mouse(MouseEventKind::Down(MouseButton::Left), 0)]);
+        ready_events
+            .extend((1..=255).map(|column| mouse(MouseEventKind::Drag(MouseButton::Left), column)));
+        ready_events.push_back(mouse(MouseEventKind::Up(MouseButton::Left), 255));
+
+        drain_ready_terminal_events_with(&mut runtime, || Ok(ready_events.pop_front()))
+            .expect("ready drag batch should reduce");
+
+        assert!(ready_events.is_empty());
+        assert_eq!(
+            runtime.take_terminal_ui_effects(),
+            vec![TerminalUiEffect::CopyToClipboard("x".repeat(256))]
+        );
     }
 
     #[cfg(unix)]
