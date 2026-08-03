@@ -1,6 +1,6 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders};
+use ratatui::widgets::{Block, BorderType, Borders};
 
 // TUI semantic style token을 모아 둔 stateless namespace다.
 // presentation builder는 직접 색을 고르지 않고 danger, selected, key-line 같은 의미를 요청한다.
@@ -11,6 +11,10 @@ impl AkraTheme {
     pub(super) const BRAND: Color = Color::Rgb(0, 229, 183);
     // accent는 secondary chrome emphasis다. border와 auxiliary label을 brand/selection tier보다 낮은 시각 계층에 둔다.
     pub(super) const ACCENT: Color = Color::Rgb(91, 141, 239);
+    // The fixed shell tail uses two close dark surfaces. The small luminance step separates
+    // runtime status from the editor without turning the conversation into a boxed dashboard.
+    pub(super) const STATUS_SURFACE_BACKGROUND: Color = Color::Rgb(10, 16, 23);
+    pub(super) const COMPOSER_SURFACE_BACKGROUND: Color = Color::Rgb(17, 27, 38);
 
     // Akra label이나 active route marker처럼 강한 identity text에 쓰는 style이다.
     pub(super) fn brand() -> Style {
@@ -183,15 +187,36 @@ impl AkraTheme {
             .title(title)
     }
 
-    // The fullscreen composer uses an open focus rail instead of a full-width box. A horizontal
-    // border can reflow into extra terminal rows during a physical resize and push
-    // the live prompt out of the viewport.
-    pub(super) fn composer_rail(focused: bool) -> Style {
+    pub(super) fn status_surface() -> Style {
+        Style::default().bg(Self::STATUS_SURFACE_BACKGROUND)
+    }
+
+    pub(super) fn status_block<'a>() -> Block<'a> {
+        Block::default().style(Self::status_surface())
+    }
+
+    pub(super) fn composer_surface() -> Style {
+        Style::default().bg(Self::COMPOSER_SURFACE_BACKGROUND)
+    }
+
+    pub(super) fn composer_border(focused: bool) -> Style {
         if focused {
             Self::brand()
         } else {
             Self::subtle()
         }
+    }
+
+    // Composer chrome occupies the same two rows that the old open rail reserved, so resize and
+    // short-viewport behavior stay stable while the input surface gains an unambiguous boundary.
+    pub(super) fn composer_block<'a>(focused: bool, action_line: Line<'a>) -> Block<'a> {
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Self::composer_border(focused))
+            .style(Self::composer_surface())
+            .title(Line::styled(" Task ", Self::composer_border(focused)))
+            .title_bottom(action_line)
     }
 
     // shared heading grammar다. brand, section title, suffix가 surface마다 예측 가능한 span 순서로 배치된다.

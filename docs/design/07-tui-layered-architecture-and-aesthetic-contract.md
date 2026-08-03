@@ -57,6 +57,11 @@ The shell tail is intentionally quiet:
 - composer label, buffer, and key hint;
 - no repeated transcript summaries.
 
+The status rows use one low-contrast surface and the focused composer uses a slightly lighter
+surface inside a complete rounded frame. Both stay inside the existing tail height budget. The
+luminance step and frame establish input ownership without adding another dashboard panel or
+moving transcript history during resize.
+
 ## App-Owned Transcript Viewport
 
 `TranscriptViewportUiState` owns the wrapped-row anchor, page height, maximum scroll, follow-tail,
@@ -140,6 +145,8 @@ their order is unchanged.
 - Magenta: sparing identity accents, never whole paragraphs.
 
 Borders are reserved for focused overlays, cards, and the composer when they improve grouping.
+The composer frame may be complete because it replaces, rather than adds to, the two chrome rows
+already included in its height calculation.
 Normal conversation prose remains borderless. The screen should read as a calm document, not a
 dashboard made of boxes.
 

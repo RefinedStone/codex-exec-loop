@@ -79,6 +79,10 @@ Parallel event는 `ParallelLiveStreamModel` 하나로 projection합니다. Geome
 일반 대화 본문은 borderless 문서처럼 읽혀야 합니다. Border는 overlay, card, composer처럼 grouping이
 실제로 도움이 되는 곳에만 사용합니다.
 
+하단 status row는 낮은 명도의 surface를 사용하고, focused composer는 그보다 조금 밝은 surface와
+완전한 둥근 frame으로 입력 소유권을 구분합니다. 이 frame은 기존 composer 높이 예산 안에서 open
+rail을 대체하므로 resize 때 transcript를 밀거나 별도 dashboard panel을 만들지 않습니다.
+
 ## 반응형 계약
 
 - 80 columns: 한 column, metadata 압축, composer 보존

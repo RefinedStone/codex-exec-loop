@@ -405,7 +405,7 @@ fn render_tail_surface(
     if !prompt_can_focus || !surface.focused {
         return render_flat_tail(frame, tail_area, tail_view, false);
     }
-    if tail_area.width < 2 {
+    if tail_area.width < 4 {
         return render_flat_tail(frame, tail_area, tail_view, prompt_can_focus);
     }
     if tail_area.height < 3 {
@@ -420,7 +420,7 @@ fn render_tail_surface(
         return None;
     }
 
-    let body_width = tail_area.width.saturating_sub(1);
+    let body_width = super::shell_presentation::composer_inner_width(tail_area.width);
     let desired_body_height = Paragraph::new(surface.body_lines.clone())
         .wrap(Wrap { trim: false })
         .line_count(body_width)
@@ -443,47 +443,21 @@ fn render_tail_surface(
         count_wrapped_rows(tail_view.prefix_lines(), tail_area.width).min(usize::from(u16::MAX))
             as u16
     } else {
+        frame.render_widget(AkraTheme::status_block(), prefix_area);
         render_body_suffix(frame, prefix_area, tail_view.prefix_lines().to_vec(), None)
     };
 
-    let rail_style = AkraTheme::composer_rail(surface.focused && prompt_can_focus);
-    let header_area = Rect::new(composer_area.x, composer_area.y, composer_area.width, 1);
-    let body_shell_area = Rect::new(
-        composer_area.x,
-        composer_area.y.saturating_add(1),
-        composer_area.width,
-        composer_area.height.saturating_sub(2),
+    let mut footer_spans = vec![Span::raw(" ")];
+    footer_spans.extend(surface.action_line.spans);
+    footer_spans.push(Span::raw(" "));
+    let composer_block = AkraTheme::composer_block(
+        surface.focused && prompt_can_focus,
+        Line::from(footer_spans),
     );
-    let body_area = Rect::new(
-        body_shell_area.x.saturating_add(1),
-        body_shell_area.y,
-        body_shell_area.width.saturating_sub(1),
-        body_shell_area.height,
-    );
-    let footer_area = Rect::new(
-        composer_area.x,
-        composer_area.bottom().saturating_sub(1),
-        composer_area.width,
-        1,
-    );
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("╭ ", rail_style),
-            Span::styled("Task", rail_style),
-        ])),
-        header_area,
-    );
-    for y in body_shell_area.top()..body_shell_area.bottom() {
-        frame.render_widget(
-            Paragraph::new(Line::styled("│", rail_style)),
-            Rect::new(body_shell_area.x, y, 1, 1),
-        );
-    }
+    let body_area = composer_block.inner(composer_area);
+    frame.render_widget(composer_block, composer_area);
     let focus_row = surface.cursor_offset.map(|(_, y)| y);
     let dropped_body_rows = render_body_suffix(frame, body_area, surface.body_lines, focus_row);
-    let mut footer_spans = vec![Span::styled("╰ ", rail_style)];
-    footer_spans.extend(surface.action_line.spans);
-    frame.render_widget(Paragraph::new(Line::from(footer_spans)), footer_area);
 
     if prompt_can_focus {
         let cursor_offset = surface

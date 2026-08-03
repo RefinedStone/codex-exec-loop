@@ -101,7 +101,7 @@ pub(crate) fn build_shell_tail_view(
     let queue_receipt_undo_hit_area =
         find_inline_action_hit_area(&lines, content_width, QUEUE_RECEIPT_UNDO_ACTION_LABEL);
 
-    // Cursor placement includes the focus rail and every wrapped status row
+    // Cursor placement includes the composer frame and every wrapped status row
     // before the composer.
     let prompt_cursor_offset =
         build_inline_prompt_cursor_offset_for_lines(screen_model, content_width, &lines);
@@ -117,7 +117,7 @@ pub(crate) fn build_shell_tail_view(
 }
 
 pub(crate) fn composer_inner_width(content_width: u16) -> u16 {
-    content_width.saturating_sub(1).max(1)
+    content_width.saturating_sub(2).max(1)
 }
 
 fn composer_surface_height(surface: &ComposerSurfaceView, content_width: u16) -> usize {
@@ -270,8 +270,8 @@ fn rendered_rows(lines: &[Line<'static>], content_width: u16) -> usize {
         .line_count(content_width)
 }
 
-// Convert the prompt-local cursor into a tail-local cursor. The focus rail adds
-// one cell on the left and one row above the prompt body.
+// Convert the prompt-local cursor into a tail-local cursor. The composer frame adds one cell on
+// the left and one row above the prompt body.
 fn build_inline_prompt_cursor_offset_for_lines(
     screen_model: &ConversationScreenModel<'_>,
     content_width: u16,
