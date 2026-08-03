@@ -81,7 +81,7 @@ pub(super) use shell_core::{
     shell_conversation_state,
 };
 pub(super) use startup_banner::startup_ascii_art_lines;
-pub(super) use status_panels::ShellTailView;
+pub(super) use status_panels::{ShellTailView, composer_inner_width};
 pub(super) use transcript_copy::{
     ConversationTranscriptCardRow, ConversationTranscriptLineInteraction,
     ConversationTranscriptView, format_fullscreen_conversation_transcript_view,

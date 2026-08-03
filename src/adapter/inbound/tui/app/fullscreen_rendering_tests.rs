@@ -108,6 +108,69 @@ fn fullscreen_transcript_owns_history_and_keeps_the_composer_visible() {
 }
 
 #[test]
+fn focused_composer_uses_a_complete_frame_and_distinct_tail_surfaces() {
+    let mut app = test_native_tui_app();
+    let buffer = render_buffer(&mut app, 80, 24);
+    let composer_top = (0..buffer.area.height)
+        .find(|row| {
+            buffer
+                .cell(Position::new(0, *row))
+                .is_some_and(|cell| cell.symbol() == "╭")
+        })
+        .expect("focused composer should render a rounded top-left corner");
+    let composer_bottom = (composer_top.saturating_add(1)..buffer.area.height)
+        .find(|row| {
+            buffer
+                .cell(Position::new(0, *row))
+                .is_some_and(|cell| cell.symbol() == "╰")
+        })
+        .expect("focused composer should render a rounded bottom-left corner");
+
+    assert_eq!(
+        buffer
+            .cell(Position::new(0, composer_top))
+            .expect("composer top-left cell")
+            .fg,
+        AkraTheme::BRAND
+    );
+    assert_eq!(
+        buffer
+            .cell(Position::new(79, composer_top))
+            .expect("composer top-right cell")
+            .symbol(),
+        "╮"
+    );
+    assert_eq!(
+        buffer
+            .cell(Position::new(0, composer_bottom))
+            .expect("composer bottom-left cell")
+            .symbol(),
+        "╰"
+    );
+    assert_eq!(
+        buffer
+            .cell(Position::new(79, composer_bottom))
+            .expect("composer bottom-right cell")
+            .symbol(),
+        "╯"
+    );
+    assert_eq!(
+        buffer
+            .cell(Position::new(2, composer_top.saturating_add(1)))
+            .expect("composer body cell")
+            .bg,
+        AkraTheme::COMPOSER_SURFACE_BACKGROUND
+    );
+    assert_eq!(
+        buffer
+            .cell(Position::new(2, composer_top.saturating_sub(1)))
+            .expect("status surface cell")
+            .bg,
+        AkraTheme::STATUS_SURFACE_BACKGROUND
+    );
+}
+
+#[test]
 fn startup_screen_renders_the_akra_logo_above_the_composer() {
     let mut app = test_native_tui_app();
     app.shell.show_startup_ascii_art = true;

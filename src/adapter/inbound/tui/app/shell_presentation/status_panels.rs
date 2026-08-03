@@ -30,7 +30,7 @@ mod tail_copy;
 mod tail_shared;
 
 // Rendering needs the full layout DTO; callers outside the TUI adapter should never see this presentation type.
-pub(in super::super) use live_status_layout::ShellTailView;
+pub(in super::super) use live_status_layout::{ShellTailView, composer_inner_width};
 
 // Production entrypoint for the fullscreen bottom region: text rows plus cursor/layout metadata.
 pub(crate) fn build_shell_tail_view(
