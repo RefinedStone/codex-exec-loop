@@ -407,9 +407,23 @@ impl NativeTuiApp {
         }
         match mouse.kind {
             event::MouseEventKind::ScrollUp => {
+                if !self
+                    .shell
+                    .transcript_viewport_ui_state
+                    .contains_transcript_position(mouse.column, mouse.row)
+                {
+                    return false;
+                }
                 return self.shell.transcript_viewport_ui_state.scroll_up(3);
             }
             event::MouseEventKind::ScrollDown => {
+                if !self
+                    .shell
+                    .transcript_viewport_ui_state
+                    .contains_transcript_position(mouse.column, mouse.row)
+                {
+                    return false;
+                }
                 return self.shell.transcript_viewport_ui_state.scroll_down(3);
             }
             event::MouseEventKind::Down(event::MouseButton::Left) => {

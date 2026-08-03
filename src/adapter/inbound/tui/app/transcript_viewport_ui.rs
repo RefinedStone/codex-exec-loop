@@ -13,6 +13,7 @@ pub(super) struct TranscriptCardHitArea {
 struct TranscriptSelectionPoint {
     absolute_row: usize,
     column: u16,
+    selection_range_id: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,6 +30,8 @@ pub(super) struct TranscriptRenderedRow {
     pub(super) absolute_row: usize,
     pub(super) logical_line_index: usize,
     pub(super) soft_wrap_separator: String,
+    pub(super) selection_range_id: Option<u64>,
+    pub(super) selectable_from_column: u16,
     pub(super) cells: Vec<String>,
 }
 
@@ -199,6 +202,12 @@ impl TranscriptViewportUiState {
             .map(|hit_area| hit_area.digest)
     }
 
+    pub(super) fn contains_transcript_position(&self, column: u16, row: u16) -> bool {
+        self.frame_snapshot
+            .as_ref()
+            .is_some_and(|frame| frame.area.contains(Position::new(column, row)))
+    }
+
     pub(super) fn latest_digest(&self) -> Option<[u8; 32]> {
         self.card_digests.last().copied()
     }
@@ -227,7 +236,14 @@ impl TranscriptViewportUiState {
             .selection
             .as_ref()
             .filter(|selection| selection.dragging)
-            .and_then(|selection| selection_point_in_frame(&selection.source_frame, column, row))
+            .and_then(|selection| {
+                drag_selection_point_in_frame(
+                    &selection.source_frame,
+                    column,
+                    row,
+                    selection.anchor.selection_range_id,
+                )
+            })
         else {
             return false;
         };
@@ -251,11 +267,14 @@ impl TranscriptViewportUiState {
         {
             return TranscriptSelectionFinish::Ignored;
         }
-        if let Some(point) = self
-            .selection
-            .as_ref()
-            .and_then(|selection| selection_point_in_frame(&selection.source_frame, column, row))
-            && let Some(selection) = self.selection.as_mut()
+        if let Some(point) = self.selection.as_ref().and_then(|selection| {
+            drag_selection_point_in_frame(
+                &selection.source_frame,
+                column,
+                row,
+                selection.anchor.selection_range_id,
+            )
+        }) && let Some(selection) = self.selection.as_mut()
         {
             selection.focus = point;
         }
@@ -305,11 +324,19 @@ impl TranscriptViewportUiState {
         if absolute_row < start.absolute_row || absolute_row > end.absolute_row || width == 0 {
             return None;
         }
+        let source_row = selection
+            .source_frame
+            .rows
+            .iter()
+            .find(|row| row.absolute_row == absolute_row)?;
+        if source_row.selection_range_id != Some(selection.anchor.selection_range_id) {
+            return None;
+        }
         let last_column = width.saturating_sub(1);
         let start_column = if absolute_row == start.absolute_row {
             start.column.min(last_column)
         } else {
-            0
+            source_row.selectable_from_column.min(last_column)
         };
         let end_column = if absolute_row == end.absolute_row {
             end.column.min(last_column)
@@ -336,7 +363,9 @@ impl TranscriptViewportUiState {
             .rows
             .iter()
             .filter(|row| {
-                row.absolute_row >= start.absolute_row && row.absolute_row <= end.absolute_row
+                row.absolute_row >= start.absolute_row
+                    && row.absolute_row <= end.absolute_row
+                    && row.selection_range_id == Some(selection.anchor.selection_range_id)
             })
             .collect::<Vec<_>>();
         if selected_rows.first()?.absolute_row != start.absolute_row
@@ -350,7 +379,7 @@ impl TranscriptViewportUiState {
             let start_column = if rendered_row.absolute_row == start.absolute_row {
                 start.column
             } else {
-                0
+                rendered_row.selectable_from_column
             };
             let end_column = if rendered_row.absolute_row == end.absolute_row {
                 end.column
@@ -431,8 +460,12 @@ fn selection_point_in_frame(
     }
     let visible_row = usize::from(row.saturating_sub(frame.area.y));
     let rendered_row = frame.rows.get(visible_row)?;
+    let selection_range_id = rendered_row.selection_range_id?;
     let mut relative_column = column.saturating_sub(frame.area.x);
     relative_column = relative_column.min(frame.area.width.saturating_sub(1));
+    if relative_column < rendered_row.selectable_from_column {
+        return None;
+    }
     let current_index = usize::from(relative_column);
     if rendered_row
         .cells
@@ -456,6 +489,48 @@ fn selection_point_in_frame(
     Some(TranscriptSelectionPoint {
         absolute_row: rendered_row.absolute_row,
         column: relative_column,
+        selection_range_id,
+    })
+}
+
+fn drag_selection_point_in_frame(
+    frame: &TranscriptViewportFrame,
+    column: u16,
+    row: u16,
+    selection_range_id: u64,
+) -> Option<TranscriptSelectionPoint> {
+    if frame.area.width == 0 || frame.rows.is_empty() {
+        return None;
+    }
+    if let Some(point) = selection_point_in_frame(frame, column, row)
+        && point.selection_range_id == selection_range_id
+    {
+        return Some(point);
+    }
+
+    let target_visible_row =
+        usize::from(row.saturating_sub(frame.area.y)).min(frame.rows.len().saturating_sub(1));
+    let (candidate_index, candidate_row) = frame
+        .rows
+        .iter()
+        .enumerate()
+        .filter(|(_, candidate)| candidate.selection_range_id == Some(selection_range_id))
+        .min_by_key(|(index, _)| index.abs_diff(target_visible_row))?;
+    let last_column = frame.area.width.saturating_sub(1);
+    let relative_column = if target_visible_row < candidate_index {
+        candidate_row.selectable_from_column.min(last_column)
+    } else if target_visible_row > candidate_index {
+        last_column
+    } else {
+        column.saturating_sub(frame.area.x).clamp(
+            candidate_row.selectable_from_column.min(last_column),
+            last_column,
+        )
+    };
+    Some(TranscriptSelectionPoint {
+        absolute_row: candidate_row.absolute_row,
+        column: relative_column,
+        selection_range_id,
     })
 }
 
@@ -500,6 +575,8 @@ mod tests {
                         absolute_row: 10 + index,
                         logical_line_index: *logical_line_index,
                         soft_wrap_separator: (*soft_wrap_separator).to_string(),
+                        selection_range_id: Some(1),
+                        selectable_from_column: 0,
                         cells,
                     }
                 })
@@ -613,6 +690,8 @@ mod tests {
                     absolute_row: 0,
                     logical_line_index: 0,
                     soft_wrap_separator: String::new(),
+                    selection_range_id: Some(1),
+                    selectable_from_column: 0,
                     cells: vec![
                         "한".to_string(),
                         " ".to_string(),
@@ -687,5 +766,79 @@ mod tests {
             state.finish_selection(7, 3),
             TranscriptSelectionFinish::Copy("stable".to_string())
         );
+    }
+
+    #[test]
+    fn prompt_rows_reject_drag_while_response_range_remains_selectable() {
+        let mut state = TranscriptViewportUiState::default();
+        state.resolve_frame(3, 3, 1);
+        state.bind_frame(
+            Vec::new(),
+            Vec::new(),
+            Some(TranscriptViewportFrame {
+                area: Rect::new(2, 3, 8, 3),
+                rows: vec![
+                    TranscriptRenderedRow {
+                        absolute_row: 0,
+                        logical_line_index: 0,
+                        soft_wrap_separator: String::new(),
+                        selection_range_id: None,
+                        selectable_from_column: 0,
+                        cells: padded_cells("prompt", 8),
+                    },
+                    TranscriptRenderedRow {
+                        absolute_row: 1,
+                        logical_line_index: 1,
+                        soft_wrap_separator: String::new(),
+                        selection_range_id: Some(9),
+                        selectable_from_column: 2,
+                        cells: padded_cells("  answer", 8),
+                    },
+                    TranscriptRenderedRow {
+                        absolute_row: 2,
+                        logical_line_index: 2,
+                        soft_wrap_separator: String::new(),
+                        selection_range_id: Some(9),
+                        selectable_from_column: 2,
+                        cells: padded_cells("  detail", 8),
+                    },
+                ],
+            }),
+        );
+
+        assert!(!state.begin_selection(2, 3));
+        assert!(!state.begin_selection(3, 4), "indent rail is not text");
+        assert!(state.begin_selection(4, 4));
+        assert!(state.update_selection(9, 5));
+        assert_eq!(
+            state.finish_selection(9, 5),
+            TranscriptSelectionFinish::Copy("answer\ndetail".to_string())
+        );
+    }
+
+    #[test]
+    fn drag_cannot_cross_into_a_different_semantic_response() {
+        let mut state = TranscriptViewportUiState::default();
+        let mut frame = frame_snapshot(&[("first", 0, ""), ("second", 1, "")]);
+        frame.rows[0].selection_range_id = Some(1);
+        frame.rows[1].selection_range_id = Some(2);
+        state.resolve_frame(2, 2, 1);
+        state.bind_frame(Vec::new(), Vec::new(), Some(frame));
+
+        assert!(state.begin_selection(2, 3));
+        assert!(state.update_selection(7, 4));
+        assert_eq!(
+            state.finish_selection(7, 4),
+            TranscriptSelectionFinish::Copy("first".to_string())
+        );
+    }
+
+    fn padded_cells(text: &str, width: usize) -> Vec<String> {
+        let mut cells = text
+            .chars()
+            .map(|character| character.to_string())
+            .collect::<Vec<_>>();
+        cells.resize(width, " ".to_string());
+        cells
     }
 }

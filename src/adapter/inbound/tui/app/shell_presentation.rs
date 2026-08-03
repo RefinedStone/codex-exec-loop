@@ -83,8 +83,8 @@ pub(super) use shell_core::{
 pub(super) use startup_banner::startup_ascii_art_lines;
 pub(super) use status_panels::ShellTailView;
 pub(super) use transcript_copy::{
-    ConversationTranscriptCardRow, ConversationTranscriptView,
-    format_fullscreen_conversation_transcript_view,
+    ConversationTranscriptCardRow, ConversationTranscriptLineInteraction,
+    ConversationTranscriptView, format_fullscreen_conversation_transcript_view,
 };
 
 pub(super) fn build_shell_tail_view(

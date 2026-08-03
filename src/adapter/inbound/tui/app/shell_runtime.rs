@@ -22,6 +22,7 @@ use super::{
 
 const BACKGROUND_MESSAGE_DRAIN_BUDGET: usize = 128;
 const TERMINAL_RESIZE_RETRY_DELAY: Duration = Duration::from_millis(16);
+const MIN_FULLSCREEN_FRAME_INTERVAL: Duration = Duration::from_millis(16);
 const _: () = assert!(TUI_BACKGROUND_CHANNEL_CAPACITY > BACKGROUND_MESSAGE_DRAIN_BUDGET);
 
 /* ShellRuntime is the thin event-loop owner around NativeTuiApp. It drains
@@ -121,7 +122,7 @@ impl ShellRuntime {
     }
     #[cfg(test)]
     pub(super) fn take_redraw_request(&mut self) -> bool {
-        self.take_due_draw_request(Instant::now())
+        self.frame_scheduler.take_pending_for_test()
     }
     pub(super) fn take_due_draw_request(&mut self, now: Instant) -> bool {
         self.frame_scheduler.take_due(now)
@@ -522,6 +523,7 @@ impl ShellRuntime {
 struct TuiFrameScheduler {
     focused: bool,
     next_deadline: Option<Instant>,
+    last_frame_admitted_at: Option<Instant>,
 }
 
 impl TuiFrameScheduler {
@@ -529,15 +531,16 @@ impl TuiFrameScheduler {
         let mut scheduler = Self {
             focused: true,
             next_deadline: None,
+            last_frame_admitted_at: None,
         };
         scheduler.request_immediate(now);
         scheduler
     }
     fn request_immediate(&mut self, now: Instant) {
-        self.coalesce_deadline(now);
+        self.coalesce_deadline(self.next_admissible_deadline(now));
     }
     fn request_delayed(&mut self, now: Instant, delay: Duration) {
-        self.coalesce_deadline(now + delay);
+        self.coalesce_deadline(self.next_admissible_deadline(now + delay));
     }
     fn take_due(&mut self, now: Instant) -> bool {
         if !self.focused {
@@ -551,6 +554,7 @@ impl TuiFrameScheduler {
         }
 
         self.next_deadline = None;
+        self.last_frame_admitted_at = Some(now);
         true
     }
     fn next_poll_timeout(&self, now: Instant, default_timeout: Duration) -> Duration {
@@ -580,16 +584,33 @@ impl TuiFrameScheduler {
             self.next_deadline = Some(deadline);
         }
     }
+
+    fn next_admissible_deadline(&self, requested: Instant) -> Instant {
+        self.last_frame_admitted_at
+            .map(|last_frame| requested.max(last_frame + MIN_FULLSCREEN_FRAME_INTERVAL))
+            .unwrap_or(requested)
+    }
+
+    #[cfg(test)]
+    fn take_pending_for_test(&mut self) -> bool {
+        if !self.focused || self.next_deadline.is_none() {
+            return false;
+        }
+        self.next_deadline = None;
+        true
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
     use crossterm::event::{
         Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     };
     use ratatui::layout::Rect;
 
-    use super::ShellRuntime;
+    use super::{MIN_FULLSCREEN_FRAME_INTERVAL, ShellRuntime, TuiFrameScheduler};
     use crate::adapter::inbound::tui::app::{
         ConversationState, TerminalUiEffect, TranscriptCardHitArea, TranscriptRenderedRow,
         TranscriptViewportFrame, test_helpers::test_native_tui_app,
@@ -622,6 +643,8 @@ mod tests {
                         absolute_row: 0,
                         logical_line_index: 0,
                         soft_wrap_separator: String::new(),
+                        selection_range_id: Some(1),
+                        selectable_from_column: 0,
                         cells: text
                             .chars()
                             .map(|character| character.to_string())
@@ -629,6 +652,34 @@ mod tests {
                     }],
                 }),
             );
+    }
+
+    #[test]
+    fn frame_scheduler_coalesces_bursts_at_a_sixty_hertz_boundary() {
+        let started_at = Instant::now();
+        let mut scheduler = TuiFrameScheduler::new(started_at);
+        assert!(scheduler.take_due(started_at));
+
+        scheduler.request_immediate(started_at + Duration::from_millis(1));
+        scheduler.request_immediate(started_at + Duration::from_millis(4));
+        scheduler.request_immediate(started_at + Duration::from_millis(9));
+
+        assert!(!scheduler.take_due(started_at + Duration::from_millis(15)));
+        assert!(scheduler.take_due(started_at + MIN_FULLSCREEN_FRAME_INTERVAL));
+        assert!(!scheduler.take_due(started_at + MIN_FULLSCREEN_FRAME_INTERVAL));
+    }
+
+    #[test]
+    fn focus_pause_retains_one_dirty_frame_for_resume() {
+        let started_at = Instant::now();
+        let mut scheduler = TuiFrameScheduler::new(started_at);
+        assert!(scheduler.take_due(started_at));
+        assert!(scheduler.set_focused(false, started_at));
+        scheduler.request_immediate(started_at + Duration::from_millis(1));
+
+        assert!(!scheduler.take_due(started_at + Duration::from_secs(1)));
+        assert!(scheduler.set_focused(true, started_at + Duration::from_secs(1)));
+        assert!(scheduler.take_due(started_at + Duration::from_secs(1)));
     }
 
     #[test]

@@ -21,10 +21,53 @@ pub(in super::super) struct ConversationTranscriptCardRow {
     pub(in super::super) digest: [u8; 32],
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in super::super) struct ConversationTranscriptLineInteraction {
+    pub(in super::super) selection_range_id: Option<u64>,
+    pub(in super::super) selectable_from_column: u16,
+}
+
+impl ConversationTranscriptLineInteraction {
+    const CHROME: Self = Self {
+        selection_range_id: None,
+        selectable_from_column: 0,
+    };
+
+    const fn selectable(selection_range_id: u64, selectable_from_column: u16) -> Self {
+        Self {
+            selection_range_id: Some(selection_range_id),
+            selectable_from_column,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in super::super) struct ConversationTranscriptView {
     pub(in super::super) lines: Vec<Line<'static>>,
+    pub(in super::super) line_interactions: Vec<ConversationTranscriptLineInteraction>,
     pub(in super::super) card_rows: Vec<ConversationTranscriptCardRow>,
+}
+
+impl ConversationTranscriptView {
+    fn push_line(
+        &mut self,
+        line: Line<'static>,
+        interaction: ConversationTranscriptLineInteraction,
+    ) {
+        self.lines.push(line);
+        self.line_interactions.push(interaction);
+        debug_assert_eq!(self.lines.len(), self.line_interactions.len());
+    }
+
+    fn extend_lines(
+        &mut self,
+        lines: impl IntoIterator<Item = Line<'static>>,
+        interaction: ConversationTranscriptLineInteraction,
+    ) {
+        for line in lines {
+            self.push_line(line, interaction);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -88,6 +131,7 @@ fn format_conversation_projection_uncapped(
 ) -> ConversationTranscriptView {
     let mut projection = ConversationTranscriptView {
         lines: Vec::new(),
+        line_interactions: Vec::new(),
         card_rows: Vec::new(),
     };
     append_conversation_messages(
@@ -98,7 +142,7 @@ fn format_conversation_projection_uncapped(
         expand_state,
         width,
     );
-    append_empty_transcript_message(&mut projection.lines, messages.len(), view_mode);
+    append_empty_transcript_message(&mut projection, messages.len(), view_mode);
     projection
 }
 
@@ -110,73 +154,98 @@ fn append_conversation_messages(
     expand_state: Option<&ProgressiveActivityExpandState>,
     width: u16,
 ) {
-    let lines = &mut projection.lines;
-
-    for message in messages {
+    for (message_index, message) in messages.iter().enumerate() {
         if !view_mode.includes_message(message) {
             continue;
         }
 
+        let selection_range_id = u64::try_from(message_index)
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
+
         if message.kind == ConversationMessageKind::Tool {
-            let line_index = lines.len();
+            let line_index = projection.lines.len();
             let digest = tool_message_digest(message.item_id.as_deref(), &message.text);
             if tool_message_is_expandable(&message.text) {
                 projection
                     .card_rows
                     .push(ConversationTranscriptCardRow { line_index, digest });
             }
-            lines.extend(format_tool_card_lines(
-                message,
-                view_mode,
-                expand_state,
-                width,
-            ));
-            lines.push(Line::from(""));
+            projection.extend_lines(
+                format_tool_card_lines(message, view_mode, expand_state, width),
+                ConversationTranscriptLineInteraction::selectable(selection_range_id, 0),
+            );
+            projection.push_line(
+                Line::from(""),
+                ConversationTranscriptLineInteraction::CHROME,
+            );
             continue;
         }
 
         // Labels use the shared conversation_text helper so transcript, approval, and other surfaces name speakers alike.
         let label = conversation_message_label(message);
-        lines.push(Line::from(Span::styled(
-            format!("{label}:"),
-            label_style(message.kind),
-        )));
+        projection.push_line(
+            Line::from(Span::styled(format!("{label}:"), label_style(message.kind))),
+            ConversationTranscriptLineInteraction::CHROME,
+        );
+
+        // Grok-style mixed interaction: prompts and status chrome remain app controls,
+        // while assistant output is a semantic text surface. This prevents a drag that
+        // starts on a prompt from stealing focus or repainting the composer.
+        let body_interaction = match message.kind {
+            ConversationMessageKind::Agent => {
+                ConversationTranscriptLineInteraction::selectable(selection_range_id, 2)
+            }
+            ConversationMessageKind::User | ConversationMessageKind::Status => {
+                ConversationTranscriptLineInteraction::CHROME
+            }
+            ConversationMessageKind::Tool => unreachable!("tool messages return above"),
+        };
 
         // Preserve author line breaks but indent body rows under the label; tabs are normalized for stable TUI width.
         let mut markdown_code_fence = None;
         for text_line in message.text.lines() {
             if let Some(line) = format_markdown_body_line(text_line, &mut markdown_code_fence) {
-                lines.push(line);
+                projection.push_line(line, body_interaction);
             }
         }
 
         // Debug rows follow the body in the same block, but muted style keeps them visually secondary.
         if show_debug_details && let Some(debug_detail) = message.debug_detail.as_deref() {
             for detail_line in debug_detail.lines() {
-                lines.push(Line::from(Span::styled(
-                    format!("  {}", expand_tui_tabs(detail_line)),
-                    AkraTheme::muted(),
-                )));
+                projection.push_line(
+                    Line::from(Span::styled(
+                        format!("  {}", expand_tui_tabs(detail_line)),
+                        AkraTheme::muted(),
+                    )),
+                    body_interaction,
+                );
             }
         }
 
         // Separators participate in the same wrapped-row calculation used by the viewport.
-        lines.push(Line::from(""));
+        projection.push_line(
+            Line::from(""),
+            ConversationTranscriptLineInteraction::CHROME,
+        );
     }
 }
 
 fn append_empty_transcript_message(
-    lines: &mut Vec<Line<'static>>,
+    projection: &mut ConversationTranscriptView,
     source_message_count: usize,
     view_mode: ConversationViewMode,
 ) {
-    if lines.is_empty() {
+    if projection.lines.is_empty() {
         let empty_message = if source_message_count == 0 {
             "No messages in this thread yet.".to_string()
         } else {
             format!("No messages visible in {} view.", view_mode.label())
         };
-        lines.push(Line::from(empty_message));
+        projection.push_line(
+            Line::from(empty_message),
+            ConversationTranscriptLineInteraction::CHROME,
+        );
     }
 }
 
@@ -855,6 +924,78 @@ mod tests {
                 indent: 0,
             }
         ));
+    }
+
+    #[test]
+    fn mixed_interaction_marks_only_response_and_tool_surfaces_selectable() {
+        let messages = vec![
+            ConversationMessage::new(
+                ConversationMessageKind::User,
+                "operator prompt",
+                None,
+                Some("user-1".to_string()),
+            ),
+            ConversationMessage::new(
+                ConversationMessageKind::Agent,
+                "assistant response",
+                None,
+                Some("agent-1".to_string()),
+            ),
+            ConversationMessage::new(
+                ConversationMessageKind::Tool,
+                "Read src/lib.rs\nexact output",
+                None,
+                Some("tool-1".to_string()),
+            )
+            .with_display_label("read"),
+            ConversationMessage::new(
+                ConversationMessageKind::Status,
+                "runtime notice",
+                None,
+                None,
+            ),
+        ];
+
+        let projection = format_fullscreen_conversation_transcript_view(
+            &messages,
+            ConversationViewMode::Detail,
+            false,
+            &ProgressiveActivityExpandState::default(),
+            DEFAULT_TRANSCRIPT_WIDTH,
+        );
+        assert_eq!(projection.lines.len(), projection.line_interactions.len());
+
+        let interaction_for = |needle: &str| {
+            let index = projection
+                .lines
+                .iter()
+                .position(|line| line_text(line).contains(needle))
+                .expect("expected transcript line");
+            projection.line_interactions[index]
+        };
+        assert_eq!(
+            interaction_for("operator prompt").selection_range_id,
+            None,
+            "the submitted prompt remains app chrome"
+        );
+        assert_eq!(
+            interaction_for("runtime notice").selection_range_id,
+            None,
+            "runtime status remains app chrome"
+        );
+        let response = interaction_for("assistant response");
+        assert!(response.selection_range_id.is_some());
+        assert_eq!(response.selectable_from_column, 2);
+        assert!(
+            interaction_for("Read src/lib.rs")
+                .selection_range_id
+                .is_some()
+        );
+        assert_ne!(
+            interaction_for("Read src/lib.rs").selection_range_id,
+            response.selection_range_id,
+            "each semantic output block owns an independent selection range"
+        );
     }
 
     fn line_text(line: &Line<'_>) -> String {
