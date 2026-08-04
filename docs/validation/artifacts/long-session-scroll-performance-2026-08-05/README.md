@@ -56,3 +56,10 @@ immutable renderer read model and cannot mutate or outlive canonical session sta
 - [`baseline.txt`](./baseline.txt)
 - [`optimized-60.txt`](./optimized-60.txt)
 - [`optimized-600.txt`](./optimized-600.txt)
+
+## Developer retrospective
+
+The Korean visual report connects these raw measurements to the root cause, architecture decision,
+validation boundary, limitations, and prioritized follow-up work:
+
+- [`Long-session scroll troubleshooting retrospective`](../../reports/long-session-scroll-retrospective-2026-08-05/index.html)
