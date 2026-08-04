@@ -1,6 +1,6 @@
 // startup probe는 app-server initialize/account 조회 실패를 application service로 올려야 하므로
 // 공통 오류 타입인 `anyhow::Result`를 사용한다. 실패는 TUI에서 `StartupState::Failed`로 줄어든다.
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 
 // attachment profile은 app-server가 새로 launch 되었는지, 기존 runtime에 reattach 되었는지를
 // domain vocabulary로 표현하는 값이다. port contract에 이 domain 타입을 싣기 때문에 startup service와 TUI는
@@ -30,6 +30,20 @@ pub struct AppServerStartupContext {
     pub warnings: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalStartupPrerequisites {
+    pub current_directory: String,
+    pub codex_binary_detail: String,
+    pub workspace_status: StartupWorkspaceStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartupWorkspaceStatus {
+    pub ok: bool,
+    pub path: String,
+    pub detail: String,
+}
+
 // `StartupProbePort`는 application service가 outbound app-server adapter에 요구하는 startup 전용 계약이다.
 // interactive turn 실행이나 session catalog 조회와 분리된 port를 두면 startup overlay가 필요한 짧은 probe만
 // 독립적으로 테스트하고 교체할 수 있다.
@@ -37,6 +51,13 @@ pub struct AppServerStartupContext {
 // `Send + Sync`는 이 port가 background startup task로 넘어갈 수 있다는 의미이다.
 // TUI는 화면을 그리는 thread와 별도로 startup checks를 실행하므로, port 구현은 thread-safe 공유가 가능해야 한다.
 pub trait StartupProbePort: Send + Sync {
+    fn load_local_startup_prerequisites(
+        &self,
+        _workspace_directory: &str,
+    ) -> Result<LocalStartupPrerequisites> {
+        Err(anyhow!("local startup prerequisite probe is unavailable"))
+    }
+
     // app-server에 연결해 startup context를 읽는다. 성공하면 정규화된 context를,
     // 실패하면 startup service가 `StartupState::Failed`로 바꿀 수 있는 오류를 반환한다.
     fn load_startup_context(&self) -> Result<AppServerStartupContext>;

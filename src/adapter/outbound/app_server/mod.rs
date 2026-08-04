@@ -17,6 +17,7 @@ mod planning_worker;
 mod planning_worker_skill;
 pub(crate) mod protocol;
 pub(crate) mod runtime;
+mod startup_environment;
 mod steering;
 
 use std::collections::BTreeMap;
@@ -1455,6 +1456,14 @@ impl CodexAppServerAdapter {
 }
 
 impl StartupProbePort for CodexAppServerAdapter {
+    fn load_local_startup_prerequisites(
+        &self,
+        workspace_directory: &str,
+    ) -> Result<crate::application::port::outbound::startup_probe_port::LocalStartupPrerequisites>
+    {
+        startup_environment::load_local_startup_prerequisites(workspace_directory)
+    }
+
     fn load_startup_context(&self) -> Result<AppServerStartupContext> {
         /*
          * Startup context is the first consumer of the shared runtime batch. It combines
