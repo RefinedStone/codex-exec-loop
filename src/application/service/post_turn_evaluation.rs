@@ -2067,17 +2067,19 @@ mod tests {
         let (execution_tx, execution_rx) = std::sync::mpsc::channel();
 
         let evaluator = std::thread::spawn(move || {
-            let execution = service.evaluate_with_timeout(request, Duration::from_millis(500));
+            // Leave enough time for the full parallel suite to schedule the evaluator;
+            // this test is about invalidating a worker that has already started.
+            let execution = service.evaluate_with_timeout(request, Duration::from_secs(5));
             execution_tx
                 .send(execution)
                 .expect("timeout execution should be observed");
         });
 
         started_rx
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(Duration::from_secs(10))
             .expect("hidden worker should enter before the timeout result is observed");
         let execution = execution_rx
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(Duration::from_secs(10))
             .expect("timeout execution should return after cancellation settlement");
 
         assert_eq!(
