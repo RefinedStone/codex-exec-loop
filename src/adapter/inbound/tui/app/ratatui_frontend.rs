@@ -39,19 +39,12 @@ pub(super) fn run(
      * 먼저 guard로 감싼다. 이후 backend 생성, draw, event read 중 어디서 실패해도 Drop이
      * 사용자 shell을 복구하는 단일 경로가 된다.
      */
-    let mut restore_guard =
-        TerminalRestoreGuard::activate(runtime.terminal_mouse_capture_enabled())?;
+    let _restore_guard = TerminalRestoreGuard::activate(runtime.terminal_mouse_capture_enabled())?;
     let backend = CrosstermBackend::new(io::stdout());
     let terminal = build_terminal(backend)?;
     let mut adapter = FullscreenTerminalAdapter::new(terminal);
     let event_ingress = NativeTerminalEventIngress::open();
-    run_event_loop(
-        &mut adapter,
-        &mut runtime,
-        shutdown,
-        &mut restore_guard,
-        &event_ingress,
-    )
+    run_event_loop(&mut adapter, &mut runtime, shutdown, &event_ingress)
 }
 
 // Fullscreen Ratatui owns the alternate-screen surface directly; no second
@@ -71,10 +64,9 @@ fn run_event_loop(
     adapter: &mut FullscreenTerminalAdapter<CrosstermBackend<io::Stdout>>,
     runtime: &mut ShellRuntime,
     shutdown: &crate::shutdown::GracefulShutdown,
-    terminal_session: &mut TerminalRestoreGuard,
     event_ingress: &NativeTerminalEventIngress,
 ) -> Result<()> {
-    match run_event_loop_until_exit(adapter, runtime, shutdown, terminal_session, event_ingress) {
+    match run_event_loop_until_exit(adapter, runtime, shutdown, event_ingress) {
         /*
          * Closing a Unix PTY can make the terminal descriptor report EIO before the process-level
          * SIGHUP flag becomes visible. Broken pipes and EOF are equivalent output/input closure
@@ -90,7 +82,6 @@ fn run_event_loop_until_exit(
     adapter: &mut FullscreenTerminalAdapter<CrosstermBackend<io::Stdout>>,
     runtime: &mut ShellRuntime,
     shutdown: &crate::shutdown::GracefulShutdown,
-    terminal_session: &mut TerminalRestoreGuard,
     event_ingress: &NativeTerminalEventIngress,
 ) -> Result<()> {
     while !runtime.should_quit() && !shutdown.is_requested() {
@@ -102,7 +93,7 @@ fn run_event_loop_until_exit(
          */
         let draw_due =
             prepare_runtime_for_due_draw(runtime, || event_ingress.try_read().map_err(Into::into))?;
-        apply_pending_terminal_ui_effects(runtime, terminal_session)?;
+        apply_pending_terminal_ui_effects(runtime)?;
         if runtime.should_quit() {
             break;
         }
@@ -126,7 +117,7 @@ fn run_event_loop_until_exit(
          */
         runtime.handle_terminal_event(terminal_event);
         drain_ready_terminal_events_with(runtime, || event_ingress.try_read().map_err(Into::into))?;
-        apply_pending_terminal_ui_effects(runtime, terminal_session)?;
+        apply_pending_terminal_ui_effects(runtime)?;
     }
 
     Ok(())
@@ -244,16 +235,10 @@ fn same_mouse_drag_stream(left: &event::Event, right: &event::Event) -> bool {
     }
 }
 
-fn apply_pending_terminal_ui_effects(
-    runtime: &mut ShellRuntime,
-    terminal_session: &mut TerminalRestoreGuard,
-) -> Result<()> {
+fn apply_pending_terminal_ui_effects(runtime: &mut ShellRuntime) -> Result<()> {
     for effect in runtime.take_terminal_ui_effects() {
         match effect {
             TerminalUiEffect::CopyToClipboard(text) => write_terminal_clipboard(&text)?,
-            TerminalUiEffect::SetMouseCapture(enabled) => {
-                terminal_session.set_mouse_capture(enabled)?;
-            }
         }
     }
     Ok(())
@@ -304,20 +289,6 @@ impl TerminalRestoreGuard {
             bracketed_paste_enabled,
             mouse_capture_enabled,
         })
-    }
-
-    fn set_mouse_capture(&mut self, enabled: bool) -> io::Result<()> {
-        if self.mouse_capture_enabled == enabled {
-            return Ok(());
-        }
-        let mut stdout = io::stdout();
-        if enabled {
-            execute!(stdout, event::EnableMouseCapture)?;
-        } else {
-            execute!(stdout, event::DisableMouseCapture)?;
-        }
-        self.mouse_capture_enabled = enabled;
-        Ok(())
     }
 }
 

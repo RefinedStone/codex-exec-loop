@@ -124,7 +124,8 @@ fn parse_recognizes_supported_aliases() {
             ":copy selection",
             Some((InlineShellCommand::Copy, Some("selection"))),
         ),
-        (":mouse off", Some((InlineShellCommand::Mouse, Some("off")))),
+        (":mouse", None),
+        (":mouse off", None),
         (":help", Some((InlineShellCommand::Help, None))),
         ("  :help  ", Some((InlineShellCommand::Help, None))),
         (":unknown", None),
@@ -165,7 +166,6 @@ fn suggestions_show_all_commands_for_colon_only() {
             InlineShellCommand::Language,
             InlineShellCommand::Think,
             InlineShellCommand::Copy,
-            InlineShellCommand::Mouse,
             InlineShellCommand::Doctor,
             InlineShellCommand::PlanningInit,
             InlineShellCommand::Reset,
@@ -237,7 +237,7 @@ fn suggestions_filter_by_prefix() {
     );
     assert_eq!(
         InlineShellCommand::suggestions(":mo"),
-        vec![InlineShellCommand::Model, InlineShellCommand::Mouse]
+        vec![InlineShellCommand::Model]
     );
     assert_eq!(
         InlineShellCommand::suggestions(":v"),
@@ -368,6 +368,7 @@ fn help_entries_use_renderable_command_forms() {
     );
     assert!(!rendered.contains(":auto"));
     assert!(rendered.contains(":help - command help"));
+    assert!(!rendered.contains(":mouse"));
 
     let korean = InlineShellCommand::help_entries(TuiLanguage::Korean)
         .iter()
@@ -377,6 +378,7 @@ fn help_entries_use_renderable_command_forms() {
     assert!(korean.contains(":diag - 진단"));
     assert!(korean.contains(":turns <positive|infinite|off> - 자동 후속 실행 설정"));
     assert!(korean.contains(":help - 명령 도움말"));
+    assert!(!korean.contains(":mouse"));
     assert!(!rendered.contains(InlineShellCommand::command_list_line()));
 }
 

@@ -155,24 +155,6 @@ impl TuiLanguage {
         }
     }
 
-    pub(super) fn terminal_mouse_status(self, enabled: bool) -> String {
-        match (self, enabled) {
-            (Self::English, true) => "mouse capture on; drag selects and copies transcript text (Shift+drag uses native terminal selection)".to_string(),
-            (Self::English, false) => "mouse capture off; the terminal owns drag selection (:mouse on restores app selection)".to_string(),
-            (Self::Korean, true) => "마우스 캡처 켜짐: 드래그하면 대화문을 선택·복사합니다 (Shift+드래그는 터미널 기본 선택)".to_string(),
-            (Self::Korean, false) => "마우스 캡처 꺼짐: 터미널이 드래그 선택을 처리합니다 (:mouse on으로 복구)".to_string(),
-        }
-    }
-
-    pub(super) fn terminal_mouse_usage(self) -> String {
-        match self {
-            Self::English => {
-                "supported forms: :mouse, :mouse on, :mouse off, :mouse toggle".to_string()
-            }
-            Self::Korean => "지원 명령: :mouse, :mouse on, :mouse off, :mouse toggle".to_string(),
-        }
-    }
-
     pub(super) const fn language_set_status(self) -> &'static str {
         match self {
             Self::English => "language set to English",
@@ -970,8 +952,6 @@ impl TuiLanguage {
         match (self, command) {
             (Self::English, InlineShellCommand::Copy) => "copy transcript text",
             (Self::Korean, InlineShellCommand::Copy) => "대화문 텍스트 복사",
-            (Self::English, InlineShellCommand::Mouse) => "mouse capture",
-            (Self::Korean, InlineShellCommand::Mouse) => "마우스 캡처",
             (Self::English, InlineShellCommand::Diagnostics) => "diagnostics",
             (Self::English, InlineShellCommand::Work) => "unified work center",
             (Self::English, InlineShellCommand::Parallel) => "parallel mode",
@@ -1107,7 +1087,6 @@ impl TuiLanguage {
             (Self::English, InlineShellCommand::Language) => "[english|korean]",
             (Self::English, InlineShellCommand::Think) => "<level|default>",
             (Self::English, InlineShellCommand::Copy) => "[selection|last]",
-            (Self::English, InlineShellCommand::Mouse) => "[on|off|toggle]",
             (Self::English, InlineShellCommand::PlanningInit) => "[doctor]",
             (Self::English, InlineShellCommand::Reset) => "<queue|directions|all>",
             (Self::English, _) => "none",
@@ -1119,7 +1098,6 @@ impl TuiLanguage {
             (Self::Korean, InlineShellCommand::Language) => "[english|korean]",
             (Self::Korean, InlineShellCommand::Think) => "<수준|default>",
             (Self::Korean, InlineShellCommand::Copy) => "[selection|last]",
-            (Self::Korean, InlineShellCommand::Mouse) => "[on|off|toggle]",
             (Self::Korean, InlineShellCommand::PlanningInit) => "[doctor]",
             (Self::Korean, InlineShellCommand::Reset) => "<queue|directions|all>",
             (Self::Korean, _) => "없음",
@@ -1134,8 +1112,6 @@ impl TuiLanguage {
         match (self, command) {
             (Self::English, InlineShellCommand::Copy) => "copy selection or latest answer",
             (Self::Korean, InlineShellCommand::Copy) => "선택 영역이나 마지막 답변 복사",
-            (Self::English, InlineShellCommand::Mouse) => "control app mouse capture",
-            (Self::Korean, InlineShellCommand::Mouse) => "앱 마우스 캡처 제어",
             (Self::English, InlineShellCommand::Diagnostics) => "open startup diagnostics",
             (Self::English, InlineShellCommand::Work) => {
                 "open task, agent, terminal, approval, and delivery summary"
@@ -1251,7 +1227,6 @@ impl TuiLanguage {
             InlineShellCommand::Language => "Enter로 TUI 언어를 선택합니다.",
             InlineShellCommand::Think => "`:think <level>`로 추론 수준을 선택합니다.",
             InlineShellCommand::Copy => "`:copy`로 선택 영역 또는 마지막 답변을 복사합니다.",
-            InlineShellCommand::Mouse => "`:mouse on|off|toggle`로 앱 마우스 캡처를 제어합니다.",
             InlineShellCommand::Doctor => "Enter로 계획 상태를 점검합니다.",
             InlineShellCommand::PlanningInit => "Enter로 계획 제어 센터를 엽니다.",
             InlineShellCommand::Reset => {
@@ -1435,7 +1410,6 @@ impl TuiLanguage {
             | InlineShellCommand::Sessions
             | InlineShellCommand::Stop
             | InlineShellCommand::Copy
-            | InlineShellCommand::Mouse
             | InlineShellCommand::Doctor
             | InlineShellCommand::NewDraft
             | InlineShellCommand::Help => base_hint(),
