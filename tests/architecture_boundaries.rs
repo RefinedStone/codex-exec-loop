@@ -8991,6 +8991,85 @@ fn tui_transcript_viewport_commit_requires_a_stable_fullscreen_delivery_receipt(
 }
 
 #[test]
+fn tui_long_transcript_projection_cache_is_single_entry_and_scroll_bounded() {
+    let runtime_source =
+        fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/shell_runtime.rs"))
+            .expect("shell runtime source should load");
+    let frame_model_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/fullscreen_frame_model.rs"),
+    )
+    .expect("fullscreen frame model source should load");
+    let rendering_source =
+        fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/shell_rendering.rs"))
+            .expect("shell rendering source should load");
+    let document_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/shell_rendering/transcript_document.rs"),
+    )
+    .expect("transcript render document source should load");
+
+    assert!(
+        runtime_source
+            .contains("transcript_projection_cache: ConversationTranscriptProjectionCache"),
+        "ShellRuntime must own the transcript presentation cache outside canonical app state"
+    );
+    assert!(
+        frame_model_source.contains("entry: Option<ConversationTranscriptProjectionCacheEntry>"),
+        "the transcript presentation cache must remain a single replaceable entry"
+    );
+    for required_key in [
+        "transcript_document_revision: u64",
+        "transcript_document_identity: Option<String>",
+        "transcript_revision: u64",
+        "view_mode: ConversationViewMode",
+        "show_debug_details: bool",
+        "activity_expand_revision: u64",
+        "content_width: u16",
+    ] {
+        assert!(
+            frame_model_source.contains(required_key),
+            "transcript cache invalidation is missing {required_key}"
+        );
+    }
+    for forbidden_cache_shape in [
+        "HashMap<",
+        "BTreeMap<",
+        "Vec<ConversationTranscriptProjectionCacheEntry>",
+    ] {
+        assert!(
+            !frame_model_source.contains(forbidden_cache_shape),
+            "transcript cache must not retain history by session, width, or revision: {forbidden_cache_shape}"
+        );
+    }
+
+    let render_transcript =
+        top_level_function_source(&rendering_source, "render_fullscreen_transcript");
+    for forbidden_scroll_work in [
+        "format_fullscreen_conversation_transcript_view",
+        "transcript_wrapped_row_layout",
+        "count_wrapped_rows",
+    ] {
+        assert!(
+            !render_transcript.contains(forbidden_scroll_work),
+            "a scroll frame must not redo full transcript work: {forbidden_scroll_work}"
+        );
+    }
+    for required in [
+        "fn paragraph_window(",
+        "self.lines[start_line..end_line]",
+        "span.content.as_ref()",
+    ] {
+        assert!(
+            document_source.contains(required),
+            "the cached transcript document must borrow only its visible line window: {required}"
+        );
+    }
+    assert!(
+        render_transcript.contains("partition_point(|row| row.end <= scroll_offset)"),
+        "visible tool-card lookup must start from the indexed scroll window"
+    );
+}
+
+#[test]
 fn tui_turn_steer_confirmation_draws_one_owned_screen_model() {
     let screen_model_source = fs::read_to_string(
         repo_root().join("src/adapter/inbound/tui/app/shell_presentation/shell_core.rs"),
@@ -10576,14 +10655,26 @@ fn conversation_streaming_uses_one_canonical_ordered_transcript() {
     )
     .expect("fullscreen frame model source should load");
     for required in [
-        "transcript_lines: Vec<Line<'static>>",
-        "transcript_card_rows: Vec<ConversationTranscriptCardRow>",
+        "transcript_document: Rc<FullscreenTranscriptDocument>",
         "format_fullscreen_conversation_transcript_view(",
         "&conversation.messages",
     ] {
         assert!(
             frame_source.contains(required),
             "fullscreen projection must render directly from the canonical transcript: {required}"
+        );
+    }
+    let document_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/shell_rendering/transcript_document.rs"),
+    )
+    .expect("transcript render document source should load");
+    for required in [
+        "lines: Rc<[Line<'static>]>",
+        "card_rows: Rc<[TranscriptProjectedCardRow]>",
+    ] {
+        assert!(
+            document_source.contains(required),
+            "the immutable render document must own canonical transcript projections: {required}"
         );
     }
 }

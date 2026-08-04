@@ -1,0 +1,10 @@
+environment: Windows PowerShell, release test binary, 120x40 TestBackend
+fixture: 2048 messages, four body lines per message, 60 scroll frames
+
+ExitCode          : 0
+CpuMs             : 500.000
+PeakWorkingSetMiB : 19.094
+PeakPrivateMiB    : 10.066
+
+AKRA_LONG_SESSION_PROFILE messages=2048 frames=60 projection_rebuilds=1 warmup_ms=28.444 scroll_total_ms=46.812 scroll_mean_ms=0.780
+test result: ok. 1 passed
