@@ -92,7 +92,7 @@ fn try_acquire_pool_mutation_permit_at_with_owner(
         })
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn acquire_pool_mutation_lock_at(
     pool_root: &Path,
 ) -> Result<Box<dyn ParallelPoolMutationPermit>, String> {
