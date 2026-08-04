@@ -3,12 +3,12 @@ use std::thread;
 
 use anyhow::{Result, anyhow};
 
-use crate::application::port::outbound::planning_worker_port::{
-    PlanningWorkerOperation, PlanningWorkerPort, PlanningWorkerRequest, PlanningWorkerResponse,
-};
-use crate::application::service::conversation_runtime_event::{
+use crate::application::port::conversation_stream::{
     ConversationRuntimeEnvelopeProjection, ConversationRuntimeEnvelopeProjectionRejection,
     ConversationStreamEvent, ConversationStreamSender, conversation_stream_channel,
+};
+use crate::application::port::outbound::planning_worker_port::{
+    PlanningWorkerOperation, PlanningWorkerPort, PlanningWorkerRequest, PlanningWorkerResponse,
 };
 use crate::diagnostics::event_log;
 use crate::domain::turn_terminal::ConversationTurnTerminalReceipt;
@@ -301,10 +301,10 @@ mod tests {
     use anyhow::Result;
 
     use super::{AppServerPlanningWorkerAdapter, PlanningThreadLauncher};
+    use crate::application::port::conversation_stream::ConversationStreamEvent;
     use crate::application::port::outbound::planning_worker_port::{
         PlanningWorkerOperation, PlanningWorkerPort, PlanningWorkerRequest,
     };
-    use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
     use crate::domain::conversation_runtime_envelope::{
         ConversationRuntimeConfigurationObservation, ConversationRuntimeConfigurationRequest,
         ConversationRuntimeEnvelope, ConversationRuntimeLaunchEnvironment,
@@ -339,7 +339,7 @@ mod tests {
             prompt: &str,
             parent_thread_id: Option<&str>,
             parent_turn_id: Option<&str>,
-            event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
+            event_sender: crate::application::port::conversation_stream::ConversationStreamSender,
             _continuation_permit: Option<crate::domain::planning::PostTurnContinuationPermit>,
         ) -> Result<ConversationTurnTerminalReceipt> {
             /*

@@ -2,6 +2,7 @@ use super::*;
 use crate::adapter::outbound::filesystem::{
     FilesystemParallelAgentProfileRepositoryAdapter, FilesystemPlanningWorkspaceAdapter,
 };
+use crate::application::port::conversation_stream::ConversationStreamEvent;
 use crate::application::port::outbound::parallel_agent_worker_port::{
     ParallelAgentWorkerPort, ParallelAgentWorkerStreamRequest,
 };
@@ -17,7 +18,6 @@ use crate::application::port::outbound::planning_worker_port::{
     NoopPlanningWorkerPort, PlanningWorkerPort, PlanningWorkerRequest, PlanningWorkerResponse,
     test_planning_worker_runtime_envelope,
 };
-use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::parallel_agent_profile::{
     ParallelAgentProfile, ParallelAgentProfileConfig, ParallelAgentProfileService,
 };
@@ -69,7 +69,7 @@ impl ParallelAgentWorkerPort for CountingParallelAgentWorkerPort {
     fn run_isolated_new_thread_stream(
         &self,
         _request: ParallelAgentWorkerStreamRequest<'_>,
-        event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
+        event_sender: crate::application::port::conversation_stream::ConversationStreamSender,
     ) -> anyhow::Result<ConversationTurnTerminalReceipt> {
         self.launch_count.fetch_add(1, Ordering::SeqCst);
         let _ = event_sender.send(ConversationStreamEvent::Failed {
@@ -117,7 +117,7 @@ impl ParallelAgentWorkerPort for HoldingParallelAgentWorkerPort {
     fn run_isolated_new_thread_stream(
         &self,
         request: ParallelAgentWorkerStreamRequest<'_>,
-        _event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
+        _event_sender: crate::application::port::conversation_stream::ConversationStreamSender,
     ) -> anyhow::Result<ConversationTurnTerminalReceipt> {
         self.launches
             .lock()
@@ -151,7 +151,7 @@ impl ParallelAgentWorkerPort for CompletingParallelAgentWorkerPort {
     fn run_isolated_new_thread_stream(
         &self,
         request: ParallelAgentWorkerStreamRequest<'_>,
-        event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
+        event_sender: crate::application::port::conversation_stream::ConversationStreamSender,
     ) -> anyhow::Result<ConversationTurnTerminalReceipt> {
         let launch_index = self.launch_count.fetch_add(1, Ordering::SeqCst);
         let result_file = format!("worker-result-{launch_index}.txt");
@@ -199,7 +199,7 @@ impl ParallelAgentWorkerPort for MissingTerminalUnconfirmedParallelAgentWorkerPo
     fn run_isolated_new_thread_stream(
         &self,
         request: ParallelAgentWorkerStreamRequest<'_>,
-        event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
+        event_sender: crate::application::port::conversation_stream::ConversationStreamSender,
     ) -> anyhow::Result<ConversationTurnTerminalReceipt> {
         event_sender.send(ConversationStreamEvent::ThreadPrepared {
             thread_id: "worker-thread-unconfirmed".to_string(),

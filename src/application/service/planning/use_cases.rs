@@ -1612,11 +1612,11 @@ mod tests {
         PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningDraftStageRecord,
         PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
     };
-    use crate::application::service::planning::shared::contract::RESULT_OUTPUT_FILE_PATH;
     use crate::application::service::planning::task_tool::PlanningTaskToolListRequest;
     use crate::application::service::planning::{
         PlanningQueueCancellationTarget, PlanningServices,
     };
+    use crate::domain::planning::RESULT_OUTPUT_FILE_PATH;
     use crate::domain::planning::{
         DirectionCatalogDocument, DirectionDefinition, DirectionState, OriginSessionKind,
         PlanningOfficialCompletionRefreshPayload, PriorityQueueService, PriorityQueueTask,

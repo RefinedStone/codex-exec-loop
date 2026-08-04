@@ -58,7 +58,6 @@ use crate::application::port::outbound::planning_authority_port::{
 use crate::application::port::outbound::planning_task_repository_port::{
     PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
 };
-use crate::application::service::planning::shared::contract::RESULT_OUTPUT_FILE_PATH;
 use crate::application::service::planning::{
     PlanningApplicationProjection, PlanningRuntimeProjection,
 };
@@ -70,6 +69,7 @@ use crate::domain::parallel_mode::{
     ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState, ParallelModeSupervisorState,
     ParallelModeTaskDispatchBlockSnapshot,
 };
+use crate::domain::planning::RESULT_OUTPUT_FILE_PATH;
 use crate::domain::planning::{
     PostTurnContinuationGate, PriorityQueueProjection, PriorityQueueTask, TaskActor,
     TaskAuthorityDocument, TaskDefinition, TaskStatus,

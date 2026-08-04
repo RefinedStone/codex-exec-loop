@@ -277,7 +277,7 @@ Admin diorama로 decoration이 아닌 실제 progress를 표현한다.
 **소유 경계**
 
 - `src/domain/conversation*.rs`
-- `src/application/service/conversation_runtime_event.rs`
+- `src/application/port/conversation_stream.rs`
 - `src/core/app/turn_stream.rs`
 - `src/adapter/outbound/app_server/protocol/turn_notifications.rs`
 - `src/adapter/inbound/tui/app/conversation_model/turn_activity.rs`

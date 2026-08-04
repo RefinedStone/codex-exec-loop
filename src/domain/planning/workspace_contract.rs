@@ -1,6 +1,3 @@
-pub use crate::domain::planning::{
-    ACTIVE_PLANNING_FILE_PATHS, RESULT_OUTPUT_FILE_PATH, canonical_active_planning_file_path,
-};
 use std::fmt;
 
 // result-output은 현재 accepted planning state를 대표하는 active planning artifact이다. admin draft,
@@ -81,13 +78,15 @@ pub fn default_direction_detail_doc_path(direction_id: &str) -> String {
     )
 }
 
-// shared contract tests는 path normalization policy를 application layer 가까이에 고정한다.
+// workspace contract tests keep path and storage identity rules in the pure domain layer.
 #[cfg(test)]
 mod tests {
     // test는 canonical lookup 함수와 expected canonical constant만 사용해 public contract를 검증한다.
     use super::{
-        PLANNING_DRAFT_NAME_MAX_BYTES, PlanningDraftNameError, RESULT_OUTPUT_FILE_PATH,
-        canonical_active_planning_file_path, validate_planning_draft_name,
+        PLANNING_DRAFT_NAME_MAX_BYTES, PlanningDraftNameError, validate_planning_draft_name,
+    };
+    use crate::domain::planning::runtime_contracts::{
+        RESULT_OUTPUT_FILE_PATH, canonical_active_planning_file_path,
     };
 
     // 이 test는 absolute active file은 canonical path로 인정하고, legacy/raw authority 또는 일반

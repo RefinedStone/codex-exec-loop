@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use rusqlite::{OptionalExtension, params};
 
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord;
-use crate::application::service::planning::RESULT_OUTPUT_FILE_PATH;
+use crate::domain::planning::RESULT_OUTPUT_FILE_PATH;
 
 /*
  * `PlanningWorkspaceLoadRecord`를 repo-scoped authority DB의 `active_documents` 테이블에 반영한다.

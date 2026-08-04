@@ -13,10 +13,8 @@ use crate::application::port::outbound::planning_task_repository_port::PlanningT
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord;
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
-use crate::application::service::planning::shared::contract::{
-    RESULT_OUTPUT_FILE_PATH, canonical_active_planning_file_path,
-};
 use crate::domain::planning::{ExecutionSnapshot as DomainExecutionSnapshot, PriorityQueueService};
+use crate::domain::planning::{RESULT_OUTPUT_FILE_PATH, canonical_active_planning_file_path};
 
 pub use super::ledger_recovery::PlanningQueueProjectionAction;
 pub use super::prompt::{

@@ -12,7 +12,7 @@ use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftStageRecord, PlanningFileSyncCandidateRecord, PlanningStagedFileRecord,
     PlanningWorkspaceLoadRecord, PlanningWorkspacePort, RepoScopedPlanningWorkspacePort,
 };
-use crate::application::service::planning::{
+use crate::domain::planning::{
     ACTIVE_PLANNING_FILE_PATHS, PLANNING_DRAFTS_DIRECTORY, PLANNING_REJECTED_DIRECTORY,
     RESULT_OUTPUT_FILE_PATH, canonical_active_planning_file_path, validate_planning_draft_name,
 };

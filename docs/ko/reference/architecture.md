@@ -46,13 +46,14 @@ application service로 해석합니다.
 | `adapter/inbound` | 입력 mapping, rendering, local focus/editor/selection state | domain 정책, durable task truth, dispatch 정책 |
 | `core` | framework와 독립된 client runtime: command/event/effect/completion 흐름, process-local client state, projection, snapshot | business/domain 권한, TUI/HTTP/Telegram type, application service, 구체 DB/Git/filesystem adapter |
 | `application/service` | use-case orchestration, ordering gate, transaction, control-plane handle | widget, terminal event, transport DTO |
-| `application/port` | application service가 요구하는 outbound contract | 구체 integration 상세 |
+| `application/port` | adapter와 독립적인 경계 계약과 application service가 요구하는 outbound capability | service 구현, 구체 integration 상세 |
 | `domain` | 순수 invariant, validation, decision, state transition | async runtime, IO, logging, UI, DB, filesystem, Git 호출 |
 | `adapter/outbound` | app-server, DB, filesystem, Git, GitHub, Telegram integration | business policy |
 | `composition` | dependency 생성과 concrete wiring | domain decision |
 
-Mapping은 adapter에, policy는 domain 또는 application service에 둡니다. 실제 outbound boundary가
-있을 때만 port를 추가합니다.
+Mapping은 adapter에, policy는 domain 또는 application service에 둡니다. 여러 adapter가 공유하는
+stream 계약은 service 구현 안이 아니라 application 경계에 두고, concrete integration capability는
+outbound port로 유지합니다.
 
 ## Core runtime
 

@@ -13,12 +13,12 @@ use crate::application::port::outbound::planning_workspace_port::{
 };
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
 use crate::application::service::planning::shared::authority_seed::PlanningAuthoritySeedService;
-use crate::application::service::planning::shared::contract::RESULT_OUTPUT_FILE_PATH;
 use crate::application::service::planning::task_mutation::{
     PlanningTaskCreateInput, PlanningTaskCreatePreview, PlanningTaskCreatePreviewRequest,
     PlanningTaskMutationService, PlanningTaskMutationSource,
 };
 use crate::domain::planning::PriorityQueueService;
+use crate::domain::planning::RESULT_OUTPUT_FILE_PATH;
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionState, PLANNING_FORMAT_VERSION, PlanningWorkspaceFiles,
     PriorityQueueTask, TaskAuthorityDocument, TaskDefinition, TaskMutationProvenance,
@@ -554,8 +554,8 @@ pub(super) mod tests {
     use crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort;
     use crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord;
     use crate::application::service::planning::runtime::validation::PlanningValidationService;
-    use crate::application::service::planning::shared::contract::RESULT_OUTPUT_FILE_PATH;
     use crate::domain::planning::PriorityQueueService;
+    use crate::domain::planning::RESULT_OUTPUT_FILE_PATH;
     use crate::domain::planning::{
         DirectionCatalogDocument, DirectionDefinition, DirectionState, QueueIdleConfig,
         TaskAuthorityDocument, TaskMutationProvenance,

@@ -1,3 +1,9 @@
+/*
+ * Conversation stream types form the application-owned boundary shared by
+ * inbound consumers and outbound app-server producers. Keeping the mailbox
+ * contract under `port` prevents either adapter direction from importing a
+ * concrete application service implementation.
+ */
 use std::collections::VecDeque;
 use std::fmt;
 use std::sync::mpsc::{RecvError, RecvTimeoutError, SendError, TryRecvError, TrySendError};

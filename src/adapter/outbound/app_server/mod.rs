@@ -51,6 +51,9 @@ use self::runtime::{
     SharedRuntimeRequestKind, request_failure_outcome,
 };
 use self::steering::AppServerTurnSteerBroker;
+use crate::application::port::conversation_stream::{
+    ConversationStreamEvent, ConversationStreamSender,
+};
 use crate::application::port::outbound::app_server_prompt_log_port::{
     APP_SERVER_PROMPT_LOG_MAX_BODY_CHARS, APP_SERVER_PROMPT_LOG_MAX_ITEMS_PER_DIRECTION,
     APP_SERVER_PROMPT_LOG_MAX_METADATA_CHARS, AppServerPromptInputRecord,
@@ -65,10 +68,7 @@ use crate::application::port::outbound::session_catalog_port::SessionCatalogPort
 use crate::application::port::outbound::startup_probe_port::{
     AppServerStartupContext, StartupProbePort,
 };
-use crate::application::service::conversation_runtime_event::{
-    ConversationStreamEvent, ConversationStreamSender,
-};
-use crate::application::service::planning::task_tool::{
+use crate::application::port::planning_task_tool_contract::{
     PLANNING_TOOL_PARENT_THREAD_ID_ENV, PLANNING_TOOL_PARENT_TURN_ID_ENV,
 };
 use crate::diagnostics::event_log;
@@ -2057,6 +2057,9 @@ mod tests {
     };
     #[cfg(unix)]
     use super::{ConversationTurnTerminalOutcome, PLANNING_WORKER_MODEL};
+    use crate::application::port::conversation_stream::{
+        ConversationStreamEvent, conversation_stream_channel,
+    };
     #[cfg(unix)]
     use crate::application::port::outbound::app_server_prompt_log_port::{
         AppServerPromptInteractionRecord, AppServerPromptInteractionSnapshot,
@@ -2071,10 +2074,7 @@ mod tests {
     use crate::application::port::outbound::session_catalog_port::SessionCatalogPort;
     #[cfg(unix)]
     use crate::application::port::outbound::startup_probe_port::StartupProbePort;
-    use crate::application::service::conversation_runtime_event::{
-        ConversationStreamEvent, conversation_stream_channel,
-    };
-    use crate::application::service::planning::task_tool::{
+    use crate::application::port::planning_task_tool_contract::{
         PLANNING_TOOL_PARENT_THREAD_ID_ENV, PLANNING_TOOL_PARENT_TURN_ID_ENV,
     };
     use crate::domain::conversation::{
@@ -2537,7 +2537,7 @@ mod tests {
             Some(ConversationStreamEvent::TurnTerminal { receipt })
                 if receipt.is_completed_and_confirmed()
         ));
-        let mut application_projection = crate::application::service::conversation_runtime_event::ConversationRuntimeEnvelopeProjection::default();
+        let mut application_projection = crate::application::port::conversation_stream::ConversationRuntimeEnvelopeProjection::default();
         for event in &events {
             application_projection.apply_event(event);
         }
@@ -3680,7 +3680,7 @@ mod tests {
         let mut capture = AppServerPromptOutputCapture::default();
         assert!(
             prompt_log_output_record(&ConversationStreamEvent::TurnTerminal {
-                receipt: crate::application::service::conversation_runtime_event::confirmed_test_terminal_receipt(),
+                receipt: crate::application::port::conversation_stream::confirmed_test_terminal_receipt(),
             })
             .is_none()
         );

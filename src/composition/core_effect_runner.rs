@@ -2088,7 +2088,7 @@ mod tests {
             _cwd: &str,
             _prompt: &str,
             _options: crate::domain::conversation::ConversationTurnOptions,
-            _event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
+            _event_sender: crate::application::port::conversation_stream::ConversationStreamSender,
         ) -> Result<crate::domain::turn_terminal::ConversationTurnTerminalReceipt> {
             anyhow::bail!("conversation streaming is unused by this effect-runner test")
         }
@@ -2098,7 +2098,7 @@ mod tests {
             _thread_id: &str,
             _prompt: &str,
             _options: crate::domain::conversation::ConversationTurnOptions,
-            _event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
+            _event_sender: crate::application::port::conversation_stream::ConversationStreamSender,
         ) -> Result<crate::domain::turn_terminal::ConversationTurnTerminalReceipt> {
             anyhow::bail!("conversation streaming is unused by this effect-runner test")
         }

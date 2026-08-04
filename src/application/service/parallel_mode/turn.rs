@@ -1,5 +1,5 @@
+use crate::application::port::conversation_stream::ConversationStreamEvent;
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelWorkerCommitOutcome;
-use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::parallel_mode::{
     ParallelModeOfficialCompletionReport, ParallelModeOrchestratorTrigger, ParallelModeService,
 };
@@ -1311,11 +1311,11 @@ mod tests {
     };
     use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
     use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
+    use crate::application::port::conversation_stream::ConversationStreamEvent;
     use crate::application::port::outbound::github_automation_port::{
         GithubAutomationCapabilities, GithubAutomationPort, GithubAutomationPullRequest,
         GithubRepositoryVisibility,
     };
-    use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
     use crate::application::service::parallel_mode::{
         ParallelModeAutomationGuard, ParallelModeService, agent_session_detail_record_path,
         derive_default_pool_root, write_slot_lease,

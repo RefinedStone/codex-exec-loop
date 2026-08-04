@@ -1,7 +1,7 @@
 use std::sync::mpsc;
 
 #[cfg(test)]
-use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+use crate::application::port::conversation_stream::ConversationStreamEvent;
 #[cfg(test)]
 use crate::application::service::conversation_service::ConversationService;
 #[cfg(test)]
@@ -566,9 +566,9 @@ mod tests {
             cwd: &str,
             _prompt: &str,
             _options: crate::domain::conversation::ConversationTurnOptions,
-            event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
+            event_sender: crate::application::port::conversation_stream::ConversationStreamSender,
         ) -> Result<crate::domain::turn_terminal::ConversationTurnTerminalReceipt> {
-            crate::application::service::conversation_runtime_event::emit_confirmed_test_terminal_receipt(
+            crate::application::port::conversation_stream::emit_confirmed_test_terminal_receipt(
                 &event_sender,
                 "test-thread",
                 cwd,
@@ -580,9 +580,9 @@ mod tests {
             thread_id: &str,
             _prompt: &str,
             _options: crate::domain::conversation::ConversationTurnOptions,
-            event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
+            event_sender: crate::application::port::conversation_stream::ConversationStreamSender,
         ) -> Result<crate::domain::turn_terminal::ConversationTurnTerminalReceipt> {
-            crate::application::service::conversation_runtime_event::emit_confirmed_test_terminal_receipt(
+            crate::application::port::conversation_stream::emit_confirmed_test_terminal_receipt(
                 &event_sender,
                 thread_id,
                 "/tmp/test-workspace",

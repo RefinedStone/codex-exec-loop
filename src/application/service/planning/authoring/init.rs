@@ -16,10 +16,8 @@ use crate::application::service::planning::authoring::bootstrap::{
 };
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
 use crate::application::service::planning::shared::authority_mutation_guard::with_authority_mutation_guard;
-use crate::application::service::planning::shared::contract::{
-    DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
-};
 use crate::domain::planning::PriorityQueueService;
+use crate::domain::planning::{DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, RESULT_OUTPUT_FILE_PATH};
 use crate::domain::planning::{
     DirectionCatalogDocument, PLANNING_FORMAT_VERSION, PlanningValidationReport,
     TaskAuthorityDocument,

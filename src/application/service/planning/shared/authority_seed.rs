@@ -244,10 +244,8 @@ mod tests {
     };
     use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
     use crate::application::service::planning::PlanningValidationService;
-    use crate::application::service::planning::shared::contract::{
-        DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
-    };
     use crate::domain::planning::PriorityQueueService;
+    use crate::domain::planning::{DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, RESULT_OUTPUT_FILE_PATH};
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
 

@@ -13,12 +13,12 @@ use crate::application::service::planning::runtime::validation::PlanningValidati
 use crate::application::service::planning::shared::authority_mutation_guard::with_authority_mutation_guard;
 use crate::application::service::planning::shared::authority_seed::PlanningAuthoritySeedService;
 use crate::application::service::planning::shared::auto_follow_copy::DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN;
-use crate::application::service::planning::shared::contract::{
+use crate::application::service::planning::shared::planning_paths::is_valid_planning_markdown_path;
+use crate::domain::planning::PriorityQueueService;
+use crate::domain::planning::{
     DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, PLANNING_DIRECTION_DOCS_DIRECTORY,
     PLANNING_PROMPTS_DIRECTORY, RESULT_OUTPUT_FILE_PATH, default_direction_detail_doc_path,
 };
-use crate::application::service::planning::shared::planning_paths::is_valid_planning_markdown_path;
-use crate::domain::planning::PriorityQueueService;
 use crate::domain::planning::{
     DirectionCatalogDocument, PlanningValidationReport, QueueIdlePolicy,
 };

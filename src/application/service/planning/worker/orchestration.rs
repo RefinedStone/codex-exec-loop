@@ -1247,9 +1247,9 @@ mod tests {
     use crate::application::service::planning::runtime::policy::PlanningRuntimePolicyService;
     use crate::application::service::planning::runtime::prompt::PlanningPromptService;
     use crate::application::service::planning::runtime::validation::PlanningValidationService;
-    use crate::application::service::planning::shared::contract::RESULT_OUTPUT_FILE_PATH;
     use crate::application::service::turn_prompt_assembly_service::TurnPromptAssemblyService;
     use crate::diagnostics::trace_event_log::AKRA_EVENT_TARGET;
+    use crate::domain::planning::RESULT_OUTPUT_FILE_PATH;
     use crate::domain::planning::{
         DirectionCatalogDocument, DirectionDefinition, DirectionState, OriginSessionKind,
         PLANNING_FORMAT_VERSION, PlanningOfficialCompletionRefreshPayload,

@@ -20,12 +20,12 @@ use crate::application::service::planning::authoring::bootstrap::{
 };
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
 use crate::application::service::planning::shared::authority_mutation_guard::with_authority_mutation_guard;
-use crate::application::service::planning::shared::contract::{
+use crate::domain::planning::PriorityQueueService;
+use crate::domain::planning::{
     DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, PLANNING_DIRECTION_DOCS_DIRECTORY,
     PLANNING_DRAFTS_DIRECTORY, PLANNING_PROMPTS_DIRECTORY, PLANNING_REJECTED_DIRECTORY,
     RESULT_OUTPUT_FILE_PATH,
 };
-use crate::domain::planning::PriorityQueueService;
 use crate::domain::planning::{DirectionCatalogDocument, TaskAuthorityDocument, TaskStatus};
 
 /*

@@ -5,8 +5,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::adapter::outbound::app_server::{AppServerEventSender, send_required_app_server_event};
-use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
-use crate::application::service::planning::canonical_active_planning_file_path;
+use crate::application::port::conversation_stream::ConversationStreamEvent;
 use crate::domain::conversation::{
     ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationMessage,
     ConversationMessageKind, ConversationToolActivity, ConversationToolActivityKind,
@@ -26,6 +25,7 @@ use crate::domain::conversation_progressive_activity::{
 use crate::domain::conversation_runtime_envelope::{
     ConversationRuntimeEnvelopeObservation, ConversationRuntimeObservationGap,
 };
+use crate::domain::planning::canonical_active_planning_file_path;
 use crate::domain::turn_terminal::{
     ConversationTurnError, ConversationTurnErrorInfo, ConversationTurnItemsView,
     ConversationTurnObservations, ConversationTurnTerminalOutcome, ConversationTurnTerminalReceipt,
