@@ -80,11 +80,9 @@ In the conversation, a left-button drag selects the exact rendered transcript ce
 background highlighted, and copies the resulting text through OSC 52 when the button is released.
 The clipboard path supports direct terminals and tmux passthrough. `:copy selection` repeats the
 last completed selection; `:copy last` copies the latest raw assistant answer. Akra owns mouse
-capture by default so wheel scrolling, cards, and transcript selection behave consistently without
-a user-facing mode switch. `Shift+drag` remains the terminal-native bypass on emulators that
-provide it. `AKRA_TUI_MOUSE_CAPTURE=off` is a startup-only compatibility and recovery escape hatch;
-it hands pointer handling to the emulator and therefore disables Akra pointer interactions until
-the process is restarted with capture enabled.
+reporting for the entire fullscreen lifecycle so wheel scrolling, cards, and transcript selection
+behave consistently. There is no runtime or startup capture switch, and terminal-native drag
+selection is not a supported Akra fullscreen interaction.
 
 ## Turn and Approval Flow
 

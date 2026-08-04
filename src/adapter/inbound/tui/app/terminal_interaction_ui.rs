@@ -3,37 +3,17 @@ use std::collections::VecDeque;
 use super::{ConversationInputEvent, ConversationState, NativeTuiApp};
 use crate::domain::conversation::ConversationMessageKind;
 
-pub(super) const TUI_MOUSE_CAPTURE_ENV_VAR: &str = "AKRA_TUI_MOUSE_CAPTURE";
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum TerminalUiEffect {
     CopyToClipboard(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(super) struct TerminalInteractionUiState {
-    mouse_capture_enabled: bool,
     pending_effects: VecDeque<TerminalUiEffect>,
 }
 
 impl TerminalInteractionUiState {
-    pub(super) fn from_environment() -> Self {
-        Self::new(mouse_capture_enabled_from_value(
-            std::env::var(TUI_MOUSE_CAPTURE_ENV_VAR).ok().as_deref(),
-        ))
-    }
-
-    fn new(mouse_capture_enabled: bool) -> Self {
-        Self {
-            mouse_capture_enabled,
-            pending_effects: VecDeque::new(),
-        }
-    }
-
-    pub(super) fn mouse_capture_enabled(&self) -> bool {
-        self.mouse_capture_enabled
-    }
-
     fn request_clipboard_copy(&mut self, text: String) {
         self.pending_effects
             .push_back(TerminalUiEffect::CopyToClipboard(text));
@@ -45,13 +25,6 @@ impl TerminalInteractionUiState {
 }
 
 impl NativeTuiApp {
-    pub(super) fn terminal_mouse_capture_enabled(&self) -> bool {
-        self.shell
-            .transcript_viewport_ui_state
-            .terminal_interaction()
-            .mouse_capture_enabled()
-    }
-
     pub(super) fn take_terminal_ui_effects(&mut self) -> Vec<TerminalUiEffect> {
         self.shell
             .transcript_viewport_ui_state
@@ -161,42 +134,20 @@ enum ClipboardCopySource {
     LastAnswer,
 }
 
-fn mouse_capture_enabled_from_value(value: Option<&str>) -> bool {
-    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
-        return true;
-    };
-    !matches!(
-        value.to_ascii_lowercase().as_str(),
-        "0" | "false" | "no" | "off" | "disabled"
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::adapter::inbound::tui::app::test_helpers::test_native_tui_app;
 
     #[test]
-    fn mouse_capture_defaults_on_and_accepts_explicit_false_values() {
-        assert!(mouse_capture_enabled_from_value(None));
-        assert!(mouse_capture_enabled_from_value(Some("on")));
-        assert!(!mouse_capture_enabled_from_value(Some("off")));
-        assert!(!mouse_capture_enabled_from_value(Some("FALSE")));
-    }
-
-    #[test]
-    fn document_switch_preserves_startup_terminal_mode_and_pending_copy() {
+    fn document_switch_preserves_pending_terminal_copy() {
         let mut app = test_native_tui_app();
-        *app.shell
-            .transcript_viewport_ui_state
-            .terminal_interaction_mut() = TerminalInteractionUiState::new(false);
         app.request_selection_copy("selected transcript".to_string());
 
         app.shell
             .transcript_viewport_ui_state
             .bind_document(Some("another-thread".to_string()));
 
-        assert!(!app.terminal_mouse_capture_enabled());
         assert_eq!(
             app.take_terminal_ui_effects(),
             vec![TerminalUiEffect::CopyToClipboard(

@@ -280,7 +280,7 @@ chmod 600 "$tmux_config"
 
 capture_path="$fake_bin_dir:/usr/bin:/bin"
 launch_command="$(printf \
-  'while test ! -e %q; do sleep 0.01; done; exec /usr/bin/env -i HOME=%q USERPROFILE=%q USER=akra-capture LOGNAME=akra-capture SHELL=/bin/bash AKRA_HOME=%q CODEX_HOME=%q PATH=%q LANG=C.UTF-8 LC_ALL=C.UTF-8 TERM=tmux-256color AKRA_APP_SERVER_PROMPT_LOG=0 CODEX_EXEC_LOOP_SHOW_STARTUP_ASCII_ART=0 AKRA_TUI_MOUSE_CAPTURE=on %q' \
+  'while test ! -e %q; do sleep 0.01; done; exec /usr/bin/env -i HOME=%q USERPROFILE=%q USER=akra-capture LOGNAME=akra-capture SHELL=/bin/bash AKRA_HOME=%q CODEX_HOME=%q PATH=%q LANG=C.UTF-8 LC_ALL=C.UTF-8 TERM=tmux-256color AKRA_APP_SERVER_PROMPT_LOG=0 CODEX_EXEC_LOOP_SHOW_STARTUP_ASCII_ART=0 %q' \
   "$launch_gate" "$isolated_home" "$isolated_home" "$akra_home" "$codex_home" \
   "$capture_path" "$binary")"
 pane_target="$(tmux -L "$socket_name" -f "$tmux_config" new-session -d -P -F '#{pane_id}' \

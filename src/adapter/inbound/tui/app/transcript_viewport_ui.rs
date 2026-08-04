@@ -125,7 +125,7 @@ impl Default for TranscriptViewportUiState {
             frame_snapshot: None,
             selection: None,
             last_copied_selection: None,
-            terminal_interaction: TerminalInteractionUiState::from_environment(),
+            terminal_interaction: TerminalInteractionUiState::default(),
         }
     }
 }
@@ -471,10 +471,6 @@ impl TranscriptViewportUiState {
     #[cfg(test)]
     pub(super) fn frame_snapshot(&self) -> Option<&TranscriptViewportFrame> {
         self.frame_snapshot.as_ref()
-    }
-
-    pub(super) fn terminal_interaction(&self) -> &TerminalInteractionUiState {
-        &self.terminal_interaction
     }
 
     pub(super) fn terminal_interaction_mut(&mut self) -> &mut TerminalInteractionUiState {
