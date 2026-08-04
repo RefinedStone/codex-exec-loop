@@ -125,8 +125,11 @@ function Invoke-WindowsPortableChecks {
         "check", "--locked", "--all-features", "--lib", "--bins", "--target", $windowsTarget
     )
 
-    $testFilters = @(
-        "process_liveness::tests::",
+    $testFilters = @("process_liveness::tests::")
+    if ($IncludeCleanHostContracts) {
+        $testFilters += "trusted_executable::tests::native_"
+    }
+    $testFilters += @(
         "sqlite_planning_authority_adapter::tests::authority_store_",
         "windows_plain_workspace_uses_private_authority_for_active_and_draft_flows",
         "windows_plain_workspace_production_flow_initializes_edits_and_resets_private_authority",
@@ -143,11 +146,10 @@ function Invoke-WindowsPortableChecks {
         "application::service::parallel_mode::pool::paths::tests::"
     )
     if ($IncludeCleanHostContracts) {
-        $testFilters = @(
-            "trusted_executable::tests::native_",
+        $testFilters += @(
             "reconcile_provisions_missing_slots_into_idle_baselines",
             "host_owned_worker_commit_"
-        ) + $testFilters
+        )
     }
     foreach ($testFilter in $testFilters) {
         Invoke-ExternalStep "Windows contract: $testFilter" "cargo" @(
