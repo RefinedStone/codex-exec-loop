@@ -20,16 +20,13 @@ pub(crate) struct ComposerSurfaceView {
 }
 
 // ShellTailView is the renderer-facing plan for the live status tail.
-// It keeps text lines, cursor placement, and startup anchoring together so rendering uses one coherent snapshot.
+// It keeps text lines and cursor placement together so rendering uses one coherent snapshot.
 #[derive(Clone)]
 pub(crate) struct ShellTailView {
     // Status, notice, planning detail, and prompt lines in final draw order.
     pub(crate) lines: Vec<Line<'static>>,
     // Cursor offset relative to the tail area; None means the renderer should not move the terminal cursor.
     pub(crate) prompt_cursor_offset: Option<(u16, u16)>,
-    // Startup stays top-anchored so a short fullscreen viewport always keeps the
-    // compact HUD and focused composer inside the physical screen.
-    pub(crate) render_from_top: bool,
     // The prompt suffix is rendered as one semantic focus surface. `lines` remains
     // the stable flattened projection used by terminal diff/cache contracts.
     pub(crate) composer_surface: Option<ComposerSurfaceView>,
@@ -109,7 +106,6 @@ pub(crate) fn build_shell_tail_view(
     ShellTailView {
         lines,
         prompt_cursor_offset,
-        render_from_top: screen_model.startup_screen_is_active(),
         composer_surface,
         composer_start_line_index,
         queue_receipt_undo_hit_area,

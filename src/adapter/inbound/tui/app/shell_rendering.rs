@@ -13,7 +13,7 @@ use super::fullscreen_frame_model::{
 };
 use super::shell_presentation::{
     ConversationTranscriptCardRow, ConversationTranscriptLineInteraction,
-    ConversationTranscriptLineSurface, TurnSteerConfirmationScreenModel, startup_ascii_art_lines,
+    ConversationTranscriptLineSurface, TurnSteerConfirmationScreenModel,
 };
 #[cfg(test)]
 use super::*;
@@ -292,64 +292,8 @@ fn draw_fullscreen_conversation_shell(
     // hidden-overlay path는 일반 conversation shell이다.
     // inspection layout을 우회해 transcript가 tail 위의 전체 공간을 채우게 한다.
     if shell_overlay == ShellOverlay::Hidden {
-        // startup banner 같은 presentation state는 의도적으로 상단부터 전체 frame을 소유하므로 bottom anchored가 아니어야 한다.
-        if tail_view.render_from_top {
-            if !transcript_lines.is_empty() {
-                // The startup logo is modeled as transcript content so the first frame stays
-                // immutable and renderer-owned. Keep it directly above the top-anchored tail;
-                // returning after only the tail would silently discard the logo.
-                let tail_height = tail_view.rendered_height(frame_area.width, frame_area.height);
-                let available_logo_height = frame_area.height.saturating_sub(tail_height);
-                let logo_lines = startup_ascii_art_lines(Some(available_logo_height));
-                let logo_height = count_wrapped_rows(&logo_lines, frame_area.width)
-                    .min(usize::from(available_logo_height))
-                    as u16;
-                let logo_area =
-                    Rect::new(frame_area.x, frame_area.y, frame_area.width, logo_height);
-                let tail_area = Rect::new(
-                    frame_area.x,
-                    logo_area.bottom(),
-                    frame_area.width,
-                    tail_height,
-                );
-                let transcript_viewport_card_digests =
-                    transcript_card_rows.iter().map(|row| row.digest).collect();
-                let transcript_receipt = render_fullscreen_transcript(
-                    frame,
-                    FullscreenTranscriptRenderRequest {
-                        area: logo_area,
-                        lines: logo_lines,
-                        line_interactions: Vec::new(),
-                        card_rows: Vec::new(),
-                        scroll_offset: 0,
-                        has_unseen_output: false,
-                        viewport_state: transcript_viewport_state,
-                    },
-                );
-                return FullscreenConversationShellRenderReceipt {
-                    queue_receipt_undo_hit_area: render_bottom_anchored_tail(
-                        frame, tail_area, tail_view,
-                    ),
-                    transcript_viewport_card_digests,
-                    transcript_viewport_card_hit_areas: transcript_receipt.card_hit_areas,
-                    transcript_viewport_frame_snapshot: transcript_receipt.frame_snapshot,
-                };
-            }
-            let top_area = Rect::new(
-                frame_area.x,
-                frame_area.y,
-                frame_area.width,
-                tail_view.rendered_height(frame_area.width, frame_area.height),
-            );
-            return FullscreenConversationShellRenderReceipt {
-                queue_receipt_undo_hit_area: render_bottom_anchored_tail(
-                    frame, top_area, tail_view,
-                ),
-                transcript_viewport_card_digests: Vec::new(),
-                transcript_viewport_card_hit_areas: Vec::new(),
-                transcript_viewport_frame_snapshot: None,
-            };
-        }
+        // Welcome content belongs to the transcript band. Every conversation state shares the
+        // same bottom-anchored tail, so the composer never jumps after the first submission.
         // standard shell에서는 tail 높이를 먼저 재고 live transcript line을 그 위 공간에 clip한다.
         let tail_band = layout.get(1).copied().unwrap_or(frame_area);
         let tail_area = fullscreen_tail_render_area(tail_band, &tail_view);

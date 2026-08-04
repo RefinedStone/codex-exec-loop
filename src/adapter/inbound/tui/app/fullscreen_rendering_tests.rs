@@ -56,6 +56,19 @@ fn buffer_text(buffer: &Buffer) -> String {
         .join("\n")
 }
 
+fn composer_bottom_row(buffer: &Buffer) -> u16 {
+    (0..buffer.area.height)
+        .filter(|row| {
+            (0..buffer.area.width).any(|column| {
+                buffer
+                    .cell(Position::new(column, *row))
+                    .is_some_and(|cell| cell.bg == AkraTheme::COMPOSER_SURFACE_BACKGROUND)
+            })
+        })
+        .max()
+        .expect("focused composer surface should be visible")
+}
+
 fn seed_long_transcript(app: &mut NativeTuiApp, rows: usize) {
     let conversation = ready_conversation_mut(app);
     conversation.messages.clear();
@@ -190,25 +203,52 @@ fn startup_screen_renders_the_akra_logo_above_the_composer() {
 }
 
 #[test]
-fn short_startup_screen_centers_the_logo_without_transcript_scrolling() {
+fn startup_editing_and_active_conversation_share_the_same_bottom_anchored_composer() {
     let mut app = test_native_tui_app();
     app.shell.show_startup_ascii_art = true;
-    let projection = FullscreenConversationFrameProjection::from_app(&app, 80);
-    let available_logo_height = 8_u16.saturating_sub(projection.tail_view.rendered_height(80, 8));
-    let expected_logo_lines = startup_ascii_art_lines(Some(available_logo_height))
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>();
+    let startup = render_buffer(&mut app, 80, 24);
 
-    let screen = render(&mut app, 80, 8);
+    ready_conversation_mut(&mut app).composer.input_buffer = "hello from startup".to_string();
+    let editing = render_buffer(&mut app, 80, 24);
 
-    for line in expected_logo_lines {
-        assert!(
-            screen.contains(&line),
-            "missing centered startup logo row: {line}"
+    let conversation = ready_conversation_mut(&mut app);
+    conversation.composer.clear_input_buffer();
+    conversation.messages.push(ConversationMessage::new(
+        ConversationMessageKind::User,
+        "hello from startup",
+        None,
+        None,
+    ));
+    let active = render_buffer(&mut app, 80, 24);
+
+    for buffer in [&startup, &editing, &active] {
+        assert_eq!(composer_bottom_row(buffer), buffer.area.height - 1);
+    }
+    assert_eq!(composer_bottom_row(&startup), composer_bottom_row(&editing));
+    assert_eq!(composer_bottom_row(&editing), composer_bottom_row(&active));
+    assert!(buffer_text(&startup).contains("Describe a task"));
+    assert!(buffer_text(&editing).contains("hello from startup"));
+    assert!(buffer_text(&active).contains("hello from startup"));
+
+    if std::env::var_os("AKRA_CAPTURE_STABLE_STARTUP_COMPOSER").is_some() {
+        println!(
+            "\n--- AKRA STARTUP EMPTY 80x24 ---\n{}\n--- AKRA STARTUP EDITING 80x24 ---\n{}\n--- AKRA ACTIVE CONVERSATION 80x24 ---\n{}\n--- END STABLE COMPOSER FRAMES ---",
+            buffer_text(&startup),
+            buffer_text(&editing),
+            buffer_text(&active),
         );
     }
-    assert!(screen.contains("Describe a task"));
+}
+
+#[test]
+fn short_startup_screen_keeps_the_composer_on_the_physical_bottom_row() {
+    let mut app = test_native_tui_app();
+    app.shell.show_startup_ascii_art = true;
+
+    let buffer = render_buffer(&mut app, 80, 8);
+
+    assert_eq!(composer_bottom_row(&buffer), 7);
+    assert!(buffer_text(&buffer).contains("Describe a task"));
 }
 
 #[test]
