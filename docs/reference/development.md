@@ -44,53 +44,68 @@ split mixed-responsibility files before they pass roughly 800 LOC.
 
 ## Commands and Tests
 
-```bash
-. "$HOME/.cargo/env"
+Start with the deterministic change planner. It classifies the current diff using the same policy as
+GitHub Actions and prints the smallest safe local gate:
+
+```text
+node scripts/agent-plan.mjs
+```
+
+Common commands are platform-neutral:
+
+```text
 cargo run
 cargo build
 cargo fmt --all -- --check
-cargo test --locked
 cargo clippy --locked --all-targets --all-features -- -D warnings
 ```
 
-Use unit tests beside modules and integration tests under `tests/`. Prioritize startup checks,
-app-server parsing, stream reduction, session mapping, planning authority mutations, and parallel
-recovery boundaries.
-
-For broad native/TUI work:
+The complete Rust suite and npm release archive tests require a POSIX environment. Run the broad
+POSIX/CI gate with:
 
 ```bash
+. "$HOME/.cargo/env"
 bash scripts/check_native_pr.sh
 ```
 
-The gate runs TUI layering, Node surfaces, rustfmt, Rust tests, and clippy. Primitive-sensitive
-terminal changes also follow [the validation methodology](../validation/terminal-ui-testing-methodology.md)
-and attach the required real-terminal evidence.
+On Windows, use the native PowerShell gate instead of invoking the POSIX script through Git Bash or
+WSL:
+
+```powershell
+powershell -File scripts/check_native_pr.ps1 -Mode Full
+```
+
+The Windows gate runs native TUI policy checks, Windows-safe Node/admin checks, rustfmt, clippy, and
+the code-deterministic Windows security/process/worktree contracts. `-Mode Rust` and `-Mode Admin`
+provide proportional local subsets. `-Mode Portable` is the clean-runner CI mode and additionally
+checks host executable trust/ACL behavior, which can legitimately reject a developer machine's
+mutable Node or package-manager install. The full `cargo test --locked` suite remains Ubuntu/CI-owned
+because many subprocess and filesystem tests intentionally assume a POSIX host.
+
+Use unit tests beside modules and integration tests under `tests/`. Prioritize startup checks,
+app-server parsing, stream reduction, session mapping, planning authority mutations, and parallel
+recovery boundaries. Primitive-sensitive terminal changes also follow
+[the validation methodology](../validation/terminal-ui-testing-methodology.md) and attach the
+required real-terminal evidence.
 
 ## Worktree Lane
 
-Every change uses a dedicated worktree, normally based on the latest `origin/prerelease`:
+Read-only diagnosis, review, and planning use the current checkout. Create a dedicated worktree only
+before the first tracked mutation, normally from the latest `origin/prerelease`:
 
 ```bash
 git fetch origin
 git worktree add ../codex-exec-loop-worktrees/docs-native-platform-reference \
-  -b docs/native-platform-reference origin/prerelease
+  -b codex/docs-native-platform-reference origin/prerelease
 ```
 
-Use one branch, one reviewable slice, and one PR per worktree. Inspect `git worktree list`, local
-branches, and open PRs before choosing a lane. Prefer disjoint file ownership; document exact
-collision files when overlap is intentional.
+Use one user-visible outcome, one branch, and one PR per worktree. Multiple small commits may belong
+to that outcome; a commit is not itself a reason to create another PR. Inspect `git worktree list`,
+local branches, and open PRs before choosing a lane. Codex-authored branches use
+`codex/<outcome-name>`. Prefer disjoint file ownership and identify exact collision files when
+overlap is intentional.
 
-Branch patterns:
-
-```text
-feature/native-<lane>-<zone>-<slice>
-fix/native-<lane>-<zone>-<slice>
-docs/native-<lane>-<zone>-<slice>
-chore/native-<lane>-<zone>-<slice>
-```
-
-Keep local `prerelease` checked out only in the integration checkout. Feature worktrees rebase onto
+Keep local `prerelease` checked out only in the integration checkout. Feature worktrees start from
 `origin/prerelease`; do not branch from another in-flight feature unless the dependency is explicit.
 
 Common hotspots include the TUI runtime/controller/presentation files, planning authoring/runtime
@@ -101,10 +116,13 @@ touching them.
 
 This repository uses the repo-local `RefinedStone` delivery identity. Before the first remote write:
 
-```bash
+```text
 git config --get akra.githubLogin
-bash scripts/gh-akra.sh auth write-status
 ```
+
+On POSIX, verify API writes with `bash scripts/gh-akra.sh auth write-status`. On Windows, use the
+native `gh api user --jq .login` check when Git Bash cannot bridge the Windows credential helper.
+Both results must match `RefinedStone` before a remote write.
 
 Do not stop only because global `GITHUB_TOKEN`, connector identity, or `gh auth status` differs.
 Check the repo-local login and credential helper first. Never print credential values.
@@ -119,19 +137,17 @@ verified, do not write remotely.
 The normal completed slice is:
 
 ```text
-commit -> push -> PR targeting prerelease -> review -> rebase -> linear integration -> PR close
+commit -> push -> PR targeting prerelease -> CI Gate -> rebase merge -> cleanup
 ```
 
-Before integration:
+`prerelease` is protected by a repository ruleset: every update must arrive through a PR, the stable
+`CI Gate` check must pass, and history remains linear. GitHub auto-merge and branch deletion are
+enabled. Use rebase merge; do not push the integration checkout directly.
 
-1. inspect every review thread and address only correct, in-scope feedback
-2. `git fetch origin && git rebase origin/prerelease`
-3. rerun the proportional verification gates
-4. push the reviewed head (`--force-with-lease` only after a rebase of an existing PR)
-5. fast-forward local `prerelease` from the integration checkout and push it
-6. close the PR after the base contains the reviewed commits
-
-Do not use a GitHub merge commit. Keep linear history and never reset unrelated user work.
+Inspect review threads and address only correct, in-scope feedback. Rebase an existing PR only for
+an actual conflict, a requested base refresh, or a dependency it needs; a harmless base advance does
+not justify another full CI run. After changing the reviewed head, rerun proportional local checks
+and push normally, using `--force-with-lease` only when that explicit rebase rewrote the branch.
 
 ## Cleanup
 
@@ -139,7 +155,7 @@ After the branch is integrated, run from the integration checkout:
 
 ```bash
 bash scripts/cleanup_merged_worktrees.sh --apply \
-  --branch docs/native-platform-reference
+  --branch codex/docs-native-platform-reference
 ```
 
 The helper removes only a clean, merged, non-root worktree. Use `--force-dirty` only for one

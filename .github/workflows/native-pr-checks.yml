@@ -51,18 +51,18 @@ jobs:
       summary: ${{ steps.classify.outputs.summary }}
     steps:
       - name: Check out repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: Install Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
 
-      - name: Test CI scope policy
-        run: node --test scripts/ci-scope.test.mjs
+      - name: Test CI and agent planning policy
+        run: node --test scripts/ci-scope.test.mjs scripts/agent-plan.test.mjs
 
       - name: Classify validation scope
         id: classify
@@ -70,6 +70,7 @@ jobs:
           AKRA_CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
           AKRA_CI_EVENT_NAME: ${{ github.event_name }}
           AKRA_CI_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          AKRA_CI_REF: ${{ github.ref }}
           AKRA_CI_REQUESTED_SCOPE: ${{ inputs.scope || 'auto' }}
         run: node scripts/ci-scope.mjs classify
 
@@ -81,7 +82,7 @@ jobs:
     timeout-minutes: 35
     steps:
       - name: Check out repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
 
@@ -89,7 +90,7 @@ jobs:
         uses: dtolnay/rust-toolchain@eac0f66a48bc4b70a10b9acd4c4e930f835d95ff # 1.95.0
 
       - name: Restore Rust test cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
             ~/.cargo/registry/index
@@ -112,7 +113,7 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Check out repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
 
@@ -122,7 +123,7 @@ jobs:
           components: clippy,rustfmt
 
       - name: Restore Rust lint cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
             ~/.cargo/registry/index
@@ -160,12 +161,12 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Check out repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
 
       - name: Install Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
           cache: npm
@@ -192,7 +193,7 @@ jobs:
             label: macos-aarch64
     steps:
       - name: Check out repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
 
@@ -202,7 +203,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Restore portable Rust cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
             ~/.cargo/registry/index
@@ -213,98 +214,29 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ matrix.target }}-portable-
 
+      - name: Run Windows portable validation
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: ./scripts/check_native_pr.ps1 -Mode Portable
+
       - name: Check native target
+        if: matrix.target != 'x86_64-pc-windows-msvc'
         shell: bash
         run: cargo check --locked --all-features --lib --bins --target "${{ matrix.target }}"
 
       - name: Test native process identity
+        if: matrix.target != 'x86_64-pc-windows-msvc'
         shell: bash
         run: >-
           cargo test --locked --all-features --lib --target "${{ matrix.target }}"
           process_liveness::tests:: -- --nocapture
 
       - name: Test native executable format validation
+        if: matrix.target != 'x86_64-pc-windows-msvc'
         shell: bash
         run: >-
           cargo test --locked --all-features --lib --target "${{ matrix.target }}"
           trusted_executable::tests::native_ -- --nocapture
-
-      - name: Test Windows authority-store path security
-        if: matrix.target == 'x86_64-pc-windows-msvc'
-        shell: bash
-        run: >-
-          cargo test --locked --all-features --lib --target "${{ matrix.target }}"
-          sqlite_planning_authority_adapter::tests::authority_store_ -- --nocapture
-
-      - name: Test Windows plain-workspace planning flow
-        if: matrix.target == 'x86_64-pc-windows-msvc'
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo test --locked --all-features --lib --target "${{ matrix.target }}" \
-            windows_plain_workspace_uses_private_authority_for_active_and_draft_flows -- --nocapture
-          cargo test --locked --all-features --lib --target "${{ matrix.target }}" \
-            windows_plain_workspace_production_flow_initializes_edits_and_resets_private_authority -- --nocapture
-
-      - name: Test Windows Telegram private config security
-        if: matrix.target == 'x86_64-pc-windows-msvc'
-        shell: bash
-        run: >-
-          cargo test --locked --all-features --lib --target "${{ matrix.target }}"
-          telegram_bot::tests::telegram_config_windows_ -- --nocapture
-
-      - name: Test Windows Telegram global stream gate
-        if: matrix.target == 'x86_64-pc-windows-msvc'
-        shell: bash
-        run: >-
-          cargo test --locked --all-features --lib --target "${{ matrix.target }}"
-          telegram_global_runner_lease::tests:: -- --nocapture
-
-      - name: Test Windows trace private path security
-        if: matrix.target == 'x86_64-pc-windows-msvc'
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo test --locked --all-features --lib --target "${{ matrix.target }}" \
-            trace_event_log::tests::exact_trace_file_rejects_windows_ -- --nocapture
-          cargo test --locked --all-features --lib --target "${{ matrix.target }}" \
-            trace_event_log::tests::windows_trace_file_and_rolling_directory_receive_private_owner_acl -- --nocapture
-
-      - name: Test Windows app-server environment key handling
-        if: matrix.target == 'x86_64-pc-windows-msvc'
-        shell: bash
-        run: >-
-          cargo test --locked --all-features --lib --target "${{ matrix.target }}"
-          actual_windows_environment_filter_accepts_mixed_case_allowlisted_keys -- --nocapture
-
-      - name: Test Windows admin security
-        if: matrix.target == 'x86_64-pc-windows-msvc'
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo test --locked --all-features --lib --target "${{ matrix.target }}" \
-            admin_api::security::tests:: -- --nocapture
-          for test_name in \
-            admin_router_rejects_non_local_host_on_read_only_routes \
-            admin_router_requires_capability_and_exact_loopback_authority \
-            admin_login_exchanges_capability_for_strict_http_only_session_cookie \
-            admin_json_mutations_require_header_csrf_and_share_reset_guard
-          do
-            cargo test --locked --all-features --lib --target "${{ matrix.target }}" \
-              "$test_name" -- --nocapture
-          done
-
-      - name: Test Windows parallel worktree and host-owned worker commit
-        if: matrix.target == 'x86_64-pc-windows-msvc'
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo test --locked --all-features --lib --target "${{ matrix.target }}" \
-            application::service::parallel_mode::pool::paths::tests:: -- --nocapture
-          cargo test --locked --all-features --lib --target "${{ matrix.target }}" \
-            reconcile_provisions_missing_slots_into_idle_baselines -- --nocapture
-          cargo test --locked --all-features --lib --target "${{ matrix.target }}" \
-            host_owned_worker_commit_ -- --nocapture
 
   smoke_check:
     name: Rust Smoke Check
@@ -314,7 +246,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check out repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
 
@@ -322,7 +254,7 @@ jobs:
         uses: dtolnay/rust-toolchain@eac0f66a48bc4b70a10b9acd4c4e930f835d95ff # 1.95.0
 
       - name: Restore Rust smoke cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
             ~/.cargo/registry/index
@@ -351,12 +283,12 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Check out repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
 
       - name: Install Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
 

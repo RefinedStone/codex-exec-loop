@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { classifyChangedPaths, evaluateGate } from "./ci-scope.mjs";
+import {
+  classifyChangedPaths,
+  evaluateGate,
+  resolveEffectiveScope,
+} from "./ci-scope.mjs";
 
 test("documentation-only changes use the cheap docs plan", () => {
   assert.deepEqual(classifyChangedPaths(["docs/reference/development.md", "README.md"]), {
@@ -51,6 +55,12 @@ test("forced scopes are deterministic", () => {
   assert.equal(classifyChangedPaths([], "admin").node, true);
   assert.equal(classifyChangedPaths([], "smoke").smoke, true);
   assert.equal(classifyChangedPaths([], "full").full, true);
+});
+
+test("protected prerelease pushes use smoke while main pushes remain full", () => {
+  assert.equal(resolveEffectiveScope("auto", "push", "refs/heads/prerelease"), "smoke");
+  assert.equal(resolveEffectiveScope("auto", "push", "refs/heads/main"), "full");
+  assert.equal(resolveEffectiveScope("docs", "workflow_dispatch", "refs/heads/prerelease"), "docs");
 });
 
 test("the gate ignores skipped optional jobs and requires selected jobs", () => {
