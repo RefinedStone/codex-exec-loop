@@ -1,10 +1,8 @@
 use super::super::ConversationViewModel;
-use crate::application::service::planning::{
-    PlanningApplicationProjection, PlanningRuntimeProjection, PlanningRuntimeRepairAttempt,
-    PlanningRuntimeSummaryLine, PlanningRuntimeSummaryLineRequest,
-    build_planning_runtime_summary_line,
+use crate::application::port::inbound::planning_projection_port::PlanningApplicationProjection;
+use crate::domain::planning::{
+    PlanningWorkspaceState, RuntimeProjection as PlanningRuntimeProjection, RuntimeWorkspaceStatus,
 };
-use crate::domain::planning::PlanningWorkspaceState;
 use crate::domain::text::compact_whitespace_detail;
 use ratatui::text::Line;
 
@@ -13,6 +11,12 @@ use ratatui::text::Line;
 // plus optional queue framing, and diagnostics can ask for longer details.
 const RESUMED_SESSION_DETAIL_LIMIT: usize = 96;
 const STATUS_SEGMENT_SEPARATOR: &str = "  |  ";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PlanningRuntimeSummaryLine {
+    pub(crate) text: String,
+    pub(crate) workspace_state: PlanningWorkspaceState,
+}
 
 // The surface projection is the presentation boundary for planning runtime
 // state. It deliberately separates persistent status, transient notices, and
@@ -152,40 +156,132 @@ fn append_resumed_status_detail(status_text: &mut String, label: &str, detail: O
     ));
 }
 
-// Summary generation stays delegated to the pure planning policy so the TUI
-// does not duplicate readiness/repair wording. The adapter only contributes
-// shell context: whether a turn is running, whether a repair is in flight,
-// and whether a separate notice line already exists.
+// Summary generation is adapter-owned mapping: the application exposes runtime
+// facts, while the TUI decides which compact labels and segments fit its footer.
 pub(crate) fn build_planning_summary_line(
     conversation: &ConversationViewModel,
     runtime_projection: &PlanningRuntimeProjection,
     max_detail_len: usize,
     always_show: bool,
 ) -> Option<PlanningRuntimeSummaryLine> {
-    build_planning_runtime_summary_line(PlanningRuntimeSummaryLineRequest {
-        projection: runtime_projection,
-        has_running_turn: conversation.has_running_turn(),
-        is_repairing: conversation.planning_repair_state.is_some(),
-        repair_failure_summary: conversation
-            .planning_repair_state
-            .as_ref()
-            .map(|state| state.latest_request.failure_summary.as_str()),
-        repair_attempt: conversation.planning_repair_state.as_ref().map(|state| {
-            PlanningRuntimeRepairAttempt {
-                attempts_used: state.attempts_used,
-                max_attempts: state.max_attempts,
+    let workspace_state = if conversation.planning_repair_state.is_some() {
+        PlanningWorkspaceState::Repairing
+    } else {
+        match runtime_projection.workspace_status() {
+            RuntimeWorkspaceStatus::Uninitialized => PlanningWorkspaceState::Uninitialized,
+            RuntimeWorkspaceStatus::Invalid => PlanningWorkspaceState::BlockedInvalid,
+            RuntimeWorkspaceStatus::ReadyNoTask | RuntimeWorkspaceStatus::ReadyWithTask
+                if conversation.has_running_turn() =>
+            {
+                PlanningWorkspaceState::Executing
             }
-        }),
-        has_notice: conversation
-            .planning_notice_summary(max_detail_len)
-            .is_some(),
-        max_detail_len,
-        always_show,
+            RuntimeWorkspaceStatus::ReadyNoTask | RuntimeWorkspaceStatus::ReadyWithTask => {
+                PlanningWorkspaceState::Ready
+            }
+        }
+    };
+    let has_notice = conversation
+        .planning_notice_summary(max_detail_len)
+        .is_some();
+    if !always_show && workspace_state == PlanningWorkspaceState::Uninitialized && !has_notice {
+        return None;
+    }
+
+    let mut segments = vec![format!(
+        "planning: {}",
+        planning_workspace_status_label(workspace_state)
+    )];
+    if let Some(repair) = conversation.planning_repair_state.as_ref() {
+        segments.push(format!(
+            "repair: {}/{}",
+            repair.attempts_used, repair.max_attempts
+        ));
+    }
+    let failure_summary = conversation
+        .planning_repair_state
+        .as_ref()
+        .map(|state| state.latest_request.failure_summary.as_str())
+        .or_else(|| runtime_projection.auto_follow_pause_reason())
+        .or_else(|| runtime_projection.failure_reason());
+    match workspace_state {
+        PlanningWorkspaceState::Ready | PlanningWorkspaceState::Executing => {
+            append_runtime_queue_segment(&mut segments, runtime_projection, max_detail_len);
+            append_runtime_detail_segment(
+                &mut segments,
+                "proposals",
+                runtime_projection.proposal_summary(),
+                max_detail_len,
+            );
+        }
+        PlanningWorkspaceState::Repairing => {
+            append_runtime_detail_segment(
+                &mut segments,
+                "failure",
+                failure_summary,
+                max_detail_len,
+            );
+            append_runtime_queue_segment(&mut segments, runtime_projection, max_detail_len);
+            append_runtime_detail_segment(
+                &mut segments,
+                "proposals",
+                runtime_projection.proposal_summary(),
+                max_detail_len,
+            );
+        }
+        PlanningWorkspaceState::BlockedInvalid => {
+            append_runtime_detail_segment(&mut segments, "failure", failure_summary, max_detail_len)
+        }
+        PlanningWorkspaceState::Uninitialized => {}
+    }
+
+    let text =
+        remove_legacy_valid_planning_summary_prefix(segments.join(STATUS_SEGMENT_SEPARATOR))?;
+    Some(PlanningRuntimeSummaryLine {
+        text,
+        workspace_state,
     })
-    .and_then(|mut summary| {
-        summary.text = remove_legacy_valid_planning_summary_prefix(summary.text)?;
-        Some(summary)
-    })
+}
+
+fn planning_workspace_status_label(state: PlanningWorkspaceState) -> &'static str {
+    match state {
+        PlanningWorkspaceState::Uninitialized => "inactive",
+        PlanningWorkspaceState::Ready => "valid",
+        PlanningWorkspaceState::Executing => "stale",
+        PlanningWorkspaceState::Repairing => "repairing",
+        PlanningWorkspaceState::BlockedInvalid => "invalid",
+    }
+}
+
+fn append_runtime_queue_segment(
+    segments: &mut Vec<String>,
+    projection: &PlanningRuntimeProjection,
+    max_detail_len: usize,
+) {
+    let Some(summary) = projection.queue_summary() else {
+        return;
+    };
+    let mut detail = compact_whitespace_detail(summary, max_detail_len);
+    if projection.queue_head().is_none() {
+        detail.push_str(&format!(
+            " / policy {}",
+            projection.queue_idle_policy().label()
+        ));
+    }
+    segments.push(format!("queue: {detail}"));
+}
+
+fn append_runtime_detail_segment(
+    segments: &mut Vec<String>,
+    label: &str,
+    detail: Option<&str>,
+    max_detail_len: usize,
+) {
+    if let Some(detail) = detail {
+        segments.push(format!(
+            "{label}: {}",
+            compact_whitespace_detail(detail, max_detail_len)
+        ));
+    }
 }
 
 fn remove_legacy_valid_planning_summary_prefix(summary_line: String) -> Option<String> {

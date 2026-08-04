@@ -6,17 +6,18 @@
  */
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use crate::application::service::parallel_mode::control_plane::{
-    ParallelModeControlPlanePresentationProjection, ParallelModeGlobalRuntimeNoticeProjection,
-};
-use crate::application::service::planning::PlanningRuntimeProjection;
 use crate::core::app::{
     AutoFollowPhase, ParallelModeProjection, PlanningParallelProjection,
     RevisionedPlanningParallelProjection,
 };
+use crate::core::native_client_port::{
+    ParallelModeControlPlanePresentationProjection, ParallelModeGlobalRuntimeNoticeProjection,
+};
 use crate::domain::conversation::{ConversationMessageKind, ConversationTurnSteerRequest};
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
-use crate::domain::planning::PlanningWorkerPanelState;
+use crate::domain::planning::{
+    PlanningWorkerPanelState, RuntimeProjection as PlanningRuntimeProjection,
+};
 
 use super::super::parallel_presentation_bridge::{
     ParallelModePresentationLoadingStage, pending_parallel_mode_supervisor_snapshot,

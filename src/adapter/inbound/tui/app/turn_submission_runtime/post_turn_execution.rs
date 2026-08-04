@@ -1,13 +1,14 @@
-use crate::application::service::planning::{
-    PlanningRuntimeProjection, PlanningTurnExecutionSnapshotCapture,
-};
-use crate::application::service::post_turn_evaluation::{
-    PostTurnAutoFollowSkipReason,
-    PostTurnContinuationAction as ApplicationPostTurnContinuationAction, PostTurnEvaluationContext,
-    PostTurnEvaluationExecution, PostTurnEvaluationOutcome as ApplicationPostTurnEvaluationOutcome,
-    PostTurnEvaluationProvenance as ApplicationPostTurnEvaluationProvenance,
-};
 use crate::core::app::{AppCommand, CoreInput, PostTurnEvaluationCorrelation};
+use crate::domain::planning::{
+    PostTurnAutoFollowSkipReason, PostTurnContext as PostTurnEvaluationContext,
+    PostTurnContinuationAction as ApplicationPostTurnContinuationAction,
+    PostTurnExecution as PostTurnEvaluationExecution,
+    PostTurnOutcome as ApplicationPostTurnEvaluationOutcome,
+    PostTurnProvenance as ApplicationPostTurnEvaluationProvenance,
+    PostTurnRequest as ApplicationPostTurnEvaluationRequest,
+    RuntimeProjection as PlanningRuntimeProjection,
+    TurnSnapshotCapture as PlanningTurnExecutionSnapshotCapture,
+};
 
 use super::super::conversation_model::PlanningRepairState;
 use super::super::conversation_runtime::{
@@ -80,8 +81,8 @@ impl NativeTuiApp {
 fn application_post_turn_request(
     request: PostTurnEvaluationRequest,
     context: PostTurnEvaluationContext,
-) -> crate::application::service::post_turn_evaluation::PostTurnEvaluationRequest {
-    crate::application::service::post_turn_evaluation::PostTurnEvaluationRequest {
+) -> ApplicationPostTurnEvaluationRequest {
+    ApplicationPostTurnEvaluationRequest {
         context,
         workspace_directory: request.workspace_directory,
         completed_turn_id: request.completed_turn_id,

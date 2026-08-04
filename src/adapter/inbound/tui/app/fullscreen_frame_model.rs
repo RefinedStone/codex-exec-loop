@@ -4,8 +4,8 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::text::Line;
 use ratatui::widgets::ListState;
 
-use crate::application::service::planning::PlanningRuntimeProjection;
 use crate::domain::parallel_mode::ParallelModeSupervisorSnapshot;
+use crate::domain::planning::RuntimeProjection as PlanningRuntimeProjection;
 
 use super::shell_presentation::{
     ActivityOverlayDocument, ActivityOverlayView, ConversationProjectionSample,

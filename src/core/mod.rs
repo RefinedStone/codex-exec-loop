@@ -8,4 +8,5 @@
  * adapters.
  */
 pub mod app;
+pub(crate) mod native_client_port;
 pub(crate) mod runtime;

@@ -17,9 +17,6 @@ use super::conversation_model::{
 use crate::adapter::inbound::tui::conversation_text::{
     approval_review_manual_client_action_notice, attachment_runtime_notice,
 };
-use crate::application::service::planning::{
-    PlanningTaskHandoff, PlanningTurnExecutionSnapshotCapture,
-};
 use crate::core::app::{TurnStreamProgressiveActivityUpdate, TurnStreamSnapshot, TurnStreamUpdate};
 use crate::diagnostics::event_log;
 #[cfg(test)]
@@ -34,7 +31,10 @@ use crate::domain::conversation_runtime_envelope::{
 };
 use crate::domain::operator_alert::OperatorAlert;
 use crate::domain::parallel_mode::ParallelModePostTurnQueueSignal;
-use crate::domain::planning::PlanningQueueMutationReceipt;
+use crate::domain::planning::{
+    PlanningQueueMutationReceipt, TaskHandoff as PlanningTaskHandoff,
+    TurnSnapshotCapture as PlanningTurnExecutionSnapshotCapture,
+};
 use serde_json::json;
 #[derive(Debug, Clone)]
 pub(super) enum ConversationRuntimeEvent {

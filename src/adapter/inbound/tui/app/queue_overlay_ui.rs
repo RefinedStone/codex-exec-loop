@@ -4,15 +4,16 @@ use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Position, Rect};
 
 use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
-use crate::application::service::planning::{
+use crate::application::port::inbound::planning_projection_port::{
     PlanningApplicationProjection, PlanningApplicationQueueTask, PlanningApplicationSkippedTask,
-    PlanningQueueAuthorityProjection, PlanningQueueAuthoritySnapshot, PlanningRuntimeProjection,
 };
 pub(super) use crate::core::app::QueueMutationKind;
 use crate::core::app::{
     QueueAuthorityLoadCorrelation, QueueMutationCorrelation, QueueMutationIntent,
 };
-use crate::domain::planning::TaskStatus;
+use crate::domain::planning::{
+    RuntimeProjection as PlanningRuntimeProjection, TaskDefinition, TaskStatus,
+};
 
 use super::{ConversationInputState, ConversationState, NativeTuiApp, TuiLanguage};
 
@@ -36,7 +37,17 @@ pub(super) struct QueueMutationContext {
     pub(super) active_thread_id: Option<String>,
 }
 
-pub(super) type QueueMutationAuthoritySnapshot = PlanningQueueAuthorityProjection;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PlanningQueueAuthoritySnapshot {
+    pub(super) planning_revision: i64,
+    pub(super) tasks: Vec<TaskDefinition>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct QueueMutationAuthoritySnapshot {
+    pub(super) runtime_projection: PlanningRuntimeProjection,
+    pub(super) queue_authority: PlanningQueueAuthoritySnapshot,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct QueueOverlayAuthorityLoadRequest {

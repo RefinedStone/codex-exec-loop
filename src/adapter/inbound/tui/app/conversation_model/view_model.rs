@@ -18,14 +18,15 @@ use crate::core::app::{
     ConversationRuntimeSnapshot, PostTurnAuthoritySnapshot,
 };
 
-use crate::application::service::planning::PlanningTaskHandoff;
 use crate::domain::conversation::{
     ConversationApprovalDecision, ConversationApprovalRequest, ConversationApprovalReview,
     ConversationMessage, ConversationMessageKind, ConversationRuntimeControlTruth,
     ConversationSnapshot,
 };
 use crate::domain::conversation_runtime_envelope::ConversationRuntimeEnvelope;
-use crate::domain::planning::{PlanningQueueMutationReceipt, PlanningRepairRequestSnapshot};
+use crate::domain::planning::{
+    PlanningQueueMutationReceipt, PlanningRepairRequestSnapshot, TaskHandoff as PlanningTaskHandoff,
+};
 
 use super::activity_rail::ActivityRailTerminalState;
 use super::auto_follow::{

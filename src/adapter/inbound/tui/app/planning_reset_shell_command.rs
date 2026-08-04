@@ -1,4 +1,4 @@
-use crate::application::service::planning::PlanningResetTarget;
+use crate::domain::planning::PlanningResetTarget;
 
 /*
  * TUI reset spelling is an inbound grammar detail. The parser emits

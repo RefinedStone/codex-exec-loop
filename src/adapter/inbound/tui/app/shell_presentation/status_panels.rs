@@ -2,7 +2,7 @@
 // needed by shell rendering, overlays, and contract tests.
 use ratatui::text::Line;
 
-use crate::application::service::planning::PlanningRuntimeProjection;
+use crate::domain::planning::RuntimeProjection as PlanningRuntimeProjection;
 
 use super::ConversationScreenModel;
 

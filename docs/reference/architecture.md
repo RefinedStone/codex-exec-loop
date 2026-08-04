@@ -8,29 +8,29 @@ The arrows below are **compile-time source dependencies** (`A -> B` means A impo
 owned by B). They are not the order in which a command executes:
 
 ```text
-adapter/inbound/tui -> core + application contracts/projections + opaque composition facade + domain
+adapter/inbound/tui -> core + application inbound ports + opaque composition bootstrap + domain
 adapter/inbound/{cli,admin_api,telegram_bot} -> application inbound ports + domain
 application services -> inbound ports + outbound ports + domain
 adapter/outbound -> application ports + domain
 composition -> core + application + adapter/outbound
 ```
 
-The TUI line deliberately permits inward, data-only application/domain contracts and projections.
-Those imports carry immutable values for mapping and rendering; they are not runtime capabilities
-and do not invert the dependency direction. Production bootstrap does not receive raw application
-services: composition consumes them while constructing one opaque native application object. The
-adapter receives only `NativeClientRuntime` and immutable runtime-control truth. The parallel
-control-plane handle, event sink, and completion mailbox remain private composition details.
+Production driving adapters do not import `application/service`. Composition consumes concrete
+services while constructing opaque application objects and injects implementations behind typed
+inbound boundaries. The TUI stores the Core-owned `Box<dyn NativeClientPort>` plus immutable domain truth; its planning
+read DTOs come from `PlanningProjectionPort`, while queue mapping remains adapter-local. The
+concrete `NativeClientRuntime`, parallel control-plane handle, event sink, and completion mailbox
+remain private composition details.
 
 The client command loop has a different, intentionally round-trip **runtime flow**:
 
 ```text
 TUI intent
-  -> composition/NativeClientRuntime::dispatch_client_event(NativeClientEvent)
+  -> NativeClientPort::dispatch_client_event(NativeClientEvent)
   -> core reducer/CoreEffect or application parallel control plane/effect
   -> application use case / outbound port
   -> private bounded completion mailbox
-  -> composition/NativeClientRuntime::poll_pending_client_event
+  -> NativeClientPort::poll_pending_client_event
   -> owning reducer
   -> snapshot/presentation event
   -> TUI projection
@@ -62,7 +62,8 @@ than full service graphs. Admin uses `PlanningAdminPort`, `ParallelModeAdminPort
 `AdminDebugPort`, `ParallelAgentProfilePort`, and `AppServerPromptLogQueryPort`; its Axum state has
 no concrete application service or outbound repository capability. Review-center, parallel-agent
 profile, and app-server prompt-log values are domain-owned contracts; repository ports persist
-them but do not own them.
+them but do not own them. The native shell uses the Core inbound-client `NativeClientPort`; shared planning read contracts
+are owned by `PlanningProjectionPort`, whose implementation remains in the planning service layer.
 
 The process-lifetime parallel control-plane handle and completion channel belong to the
 `ParallelModeAdminPort` implementation. Browser requests map transport actions to typed admin
@@ -85,9 +86,10 @@ explicit contracts are:
 - `RevisionedPlanningParallelProjection`: revision plus planning/parallel state for the TUI frame
   hot path
 
-Composition owns the opaque `NativeClientRuntime` used by the native shell. It alone assembles the
+Composition owns the concrete `NativeClientRuntime` used behind the native shell's
+`NativeClientPort`. It alone assembles the
 bounded mailboxes, `CoreEffectRunner`, `CoreRuntime` driver, and application-owned parallel
-control-plane handle. The TUI dispatches only `NativeClientEvent` through `dispatch_client_event`
+control-plane handle. The TUI dispatches only `NativeClientEvent` through the port
 and reads owned snapshots or projections; it cannot name the parallel completion ingress or call a
 raw driver/handle. UI-originated inputs remain synchronous so an adapter can bind an accepted
 admission before applying an immediate outcome. Core and parallel worker completions return through
@@ -685,6 +687,8 @@ strategy in the production TUI.
 - `domain` must not import application, core, adapters, runtime, or IO frameworks.
 - `application` must not import core, TUI, HTTP, Telegram, or concrete outbound adapters.
 - `core` must not import inbound UI/transport types or concrete outbound adapters.
+- Production inbound adapters must not import `application/service`; they enter through inbound
+  ports, core contracts, or domain values.
 - TUI must not bypass core/application command gates for planning or parallel mutation.
 - Outbound adapters must not encode domain policy.
 

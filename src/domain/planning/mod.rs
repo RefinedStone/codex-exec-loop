@@ -37,7 +37,7 @@ pub(crate) use queue_follow::{
     PlanningQueueFollowPolicy, PlanningQueueFollowPromptMode,
 };
 pub use runtime_contracts::{
-    ACTIVE_PLANNING_FILE_PATHS, RESULT_OUTPUT_FILE_PATH, TaskHandoff,
+    ACTIVE_PLANNING_FILE_PATHS, QUEUED_TASK_TRANSCRIPT_TEXT, RESULT_OUTPUT_FILE_PATH, TaskHandoff,
     canonical_active_planning_file_path,
 };
 pub(crate) use runtime_contracts::{

@@ -6,21 +6,16 @@
 #[path = "turn_submission_runtime/post_turn_execution.rs"]
 mod post_turn_execution;
 
-use crate::application::service::manual_prompt_preparation::{
-    ManualPlanningBootstrapFailureKind, ManualPromptPreparationResult,
-};
-use crate::application::service::parallel_mode::turn::ParallelTurnSlotLeaseHandoff;
-use crate::application::service::planning::{
-    ManualPromptIntakeOutcome, QUEUED_TASK_TRANSCRIPT_TEXT,
-};
 use crate::core::app::{
     AppCommand, AppEvent, CoreInput, CorePromptOrigin, ManualPromptPreparationAdmission,
     ManualPromptPreparationIntent, TurnSubmissionAdmission, TurnSubmissionRequest,
 };
 use crate::domain::parallel_mode::ParallelModeAutomationTrigger;
-use crate::domain::planning::ManualPromptCorrelation;
 use crate::domain::planning::{
-    PlanningQueueMutationKind, PlanningQueueMutationReceipt, PlanningQueueMutationReceiptEntry,
+    ManualPlanningBootstrapFailureKind, ManualPromptCorrelation, ManualPromptIntakeOutcome,
+    ManualPromptOutcome as ManualPromptPreparationResult,
+    ParallelTurnHandoff as ParallelTurnSlotLeaseHandoff, PlanningQueueMutationKind,
+    PlanningQueueMutationReceipt, PlanningQueueMutationReceiptEntry, QUEUED_TASK_TRANSCRIPT_TEXT,
     TaskStatus,
 };
 use post_turn_execution::PostTurnEvaluationRequest;
@@ -716,7 +711,7 @@ impl NativeTuiApp {
         verb: &str,
         task_id: String,
         committed_planning_revision: i64,
-        handoff: crate::application::service::planning::ManualPromptMainSessionHandoff,
+        handoff: crate::domain::planning::ManualPromptMainSessionHandoff,
         expected_transcript_text: &str,
     ) {
         if handoff.transcript_text != expected_transcript_text {
