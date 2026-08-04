@@ -922,6 +922,10 @@ fn rust_toolchain_is_pinned_consistently_for_ci_and_releases() {
     );
     assert!(native_checks.contains("bash scripts/check_windows_portable.sh"));
     assert!(
+        native_checks
+            .contains("github.event_name == 'workflow_dispatch' && github.run_id || github.ref")
+    );
+    assert!(
         windows_portable
             .contains("actual_windows_environment_filter_accepts_mixed_case_allowlisted_keys")
     );
