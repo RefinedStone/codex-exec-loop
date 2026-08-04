@@ -256,10 +256,26 @@ fn transcript_window_rebases_scroll_offsets_beyond_u16_without_losing_the_target
     let lines = (0..1_000)
         .map(|index| Line::from(format!("{index:04}:{}", "x".repeat(75))))
         .collect::<Vec<_>>();
+    let line_interactions = vec![
+        ConversationTranscriptLineInteraction {
+            selection_range_id: Some(1),
+            selectable_from_column: 0,
+            surface: ConversationTranscriptLineSurface::Plain,
+        };
+        lines.len()
+    ];
+    let document = FullscreenTranscriptDocument::from_view(
+        ConversationTranscriptView {
+            lines,
+            line_interactions,
+            card_rows: Vec::new(),
+        },
+        1,
+    );
 
-    let (line_index, local_scroll) = transcript_window_for_scroll(&lines, 1, 70_000);
+    let (window, local_scroll) = document.paragraph_window(70_000, 1);
 
-    assert_eq!(line_index, 875);
+    assert!(window[0].spans[0].content.starts_with("0875:"));
     assert_eq!(local_scroll, 0);
 }
 

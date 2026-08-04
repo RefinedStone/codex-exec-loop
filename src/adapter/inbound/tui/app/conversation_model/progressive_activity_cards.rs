@@ -180,6 +180,7 @@ impl ProgressiveActivityCard {
 pub(crate) struct ProgressiveActivityExpandState {
     expanded: Vec<ProgressiveActivityCardKey>,
     expanded_tool_digests: Vec<[u8; 32]>,
+    revision: u64,
 }
 
 impl ProgressiveActivityExpandState {
@@ -195,6 +196,7 @@ impl ProgressiveActivityExpandState {
             self.expanded.remove(0);
         }
         self.expanded.push(key);
+        self.advance_revision();
     }
 
     pub(crate) fn is_tool_expanded(&self, digest: [u8; 32]) -> bool {
@@ -209,11 +211,13 @@ impl ProgressiveActivityExpandState {
             self.expanded_tool_digests.remove(0);
         }
         self.expanded_tool_digests.push(digest);
+        self.advance_revision();
     }
 
     pub(crate) fn toggle_card(&mut self, key: ProgressiveActivityCardKey) -> bool {
         if let Some(index) = self.expanded.iter().position(|entry| *entry == key) {
             self.expanded.remove(index);
+            self.advance_revision();
             return false;
         }
         self.expand_card(key);
@@ -227,10 +231,22 @@ impl ProgressiveActivityExpandState {
             .position(|entry| *entry == digest)
         {
             self.expanded_tool_digests.remove(index);
+            self.advance_revision();
             return false;
         }
         self.expand_tool(digest);
         true
+    }
+
+    pub(crate) const fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    fn advance_revision(&mut self) {
+        self.revision = self
+            .revision
+            .checked_add(1)
+            .expect("progressive activity expand revision exhausted");
     }
 }
 
@@ -240,6 +256,7 @@ impl fmt::Debug for ProgressiveActivityExpandState {
             .debug_struct("ProgressiveActivityExpandState")
             .field("expanded_cards", &self.expanded.len())
             .field("expanded_tools", &self.expanded_tool_digests.len())
+            .field("revision", &self.revision)
             .finish()
     }
 }
@@ -1597,10 +1614,19 @@ mod tests {
             sequence: 1,
             kind: ProgressiveActivityCardKind::Command,
         };
+        assert_eq!(state.revision(), 0);
         assert!(state.toggle_card(key));
         assert!(state.is_card_expanded(key));
+        assert_eq!(state.revision(), 1);
+        state.expand_card(key);
+        assert_eq!(
+            state.revision(),
+            1,
+            "a no-op expand must keep the cache key stable"
+        );
         assert!(!state.toggle_card(key));
         assert!(!state.is_card_expanded(key));
+        assert_eq!(state.revision(), 2);
 
         for sequence in 0..40 {
             state.expand_card(ProgressiveActivityCardKey {

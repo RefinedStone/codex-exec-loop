@@ -11,8 +11,9 @@ use crate::domain::operator_alert::OperatorAlert;
 
 use super::app_runtime::TUI_BACKGROUND_CHANNEL_CAPACITY;
 use super::fullscreen_frame_model::{
-    FullscreenConversationFrameProjection, FullscreenFrameRenderReceipt, FullscreenShellFrameModel,
-    apply_fullscreen_frame_render_receipt, capture_fullscreen_shell_frame_model,
+    ConversationTranscriptProjectionCache, FullscreenConversationFrameProjection,
+    FullscreenFrameRenderReceipt, FullscreenShellFrameModel, apply_fullscreen_frame_render_receipt,
+    capture_fullscreen_shell_frame_model,
 };
 use super::shell_presentation::{ConversationProjectionFrameInput, ConversationProjectionSample};
 use super::{
@@ -38,6 +39,7 @@ pub(super) struct ShellRuntime {
     first_frame_delivered: bool,
     last_live_activity_pulse: Option<u64>,
     background_drain_limited: bool,
+    transcript_projection_cache: ConversationTranscriptProjectionCache,
 }
 
 impl ShellRuntime {
@@ -52,6 +54,7 @@ impl ShellRuntime {
             first_frame_delivered: false,
             last_live_activity_pulse: None,
             background_drain_limited: false,
+            transcript_projection_cache: ConversationTranscriptProjectionCache::default(),
         }
     }
     #[cfg(test)]
@@ -78,15 +81,21 @@ impl ShellRuntime {
         })
     }
     pub(super) fn capture_fullscreen_conversation_frame_projection(
-        &self,
+        &mut self,
         terminal_width: u16,
         sample: &ConversationProjectionSample,
     ) -> FullscreenConversationFrameProjection {
-        FullscreenConversationFrameProjection::from_app_with_sample(
+        FullscreenConversationFrameProjection::from_app_with_sample_and_cache(
             &self.app,
             terminal_width,
             sample,
+            &mut self.transcript_projection_cache,
         )
+    }
+
+    #[cfg(test)]
+    pub(super) const fn transcript_projection_rebuild_count(&self) -> usize {
+        self.transcript_projection_cache.rebuild_count()
     }
     pub(super) fn capture_fullscreen_shell_frame_model(
         &self,

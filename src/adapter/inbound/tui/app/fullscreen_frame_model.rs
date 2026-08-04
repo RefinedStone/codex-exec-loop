@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::text::Line;
 use ratatui::widgets::ListState;
@@ -7,20 +9,19 @@ use crate::domain::parallel_mode::ParallelModeSupervisorSnapshot;
 
 use super::shell_presentation::{
     ActivityOverlayDocument, ActivityOverlayView, ConversationProjectionSample,
-    ConversationScreenFrameInput, ConversationScreenModel, ConversationTranscriptCardRow,
-    ConversationTranscriptLineInteraction, ConversationTranscriptLineSurface,
-    ConversationTranscriptView, DirectionsMaintenanceFrameInput, DirectionsMaintenanceOverlayView,
-    HelpOverlayView, LanguageSelectionFrameInput, LanguageSelectionOverlayView,
-    MAX_GITHUB_REVIEW_NOTICE_LEN, ModelSelectionFrameInput, ModelSelectionOverlayView,
-    ParallelPeekOverlayView, PlanningDraftEditorOverlayView, PlanningInitOverlayFrameInput,
-    PlanningInitOverlayView, QueueMutationTailState, QueueOverlayView, ReviewsOverlayView,
-    SessionOverlayView, ShellTailView, StartupBannerFrameInput, StartupOverlayFrameInput,
-    StartupOverlayView, SupersessionOverlayView, TurnSteerConfirmationScreenModel,
-    ViewSelectionFrameInput, ViewSelectionOverlayView, WorkCenterOverlayView,
-    build_activity_overlay_list_view, build_directions_maintenance_overlay_view,
-    build_help_overlay_view, build_language_selection_overlay_view,
-    build_model_selection_overlay_view, build_operator_diagnostic_lines,
-    build_parallel_peek_overlay_view_from_snapshot,
+    ConversationScreenFrameInput, ConversationScreenModel, ConversationTranscriptLineInteraction,
+    ConversationTranscriptLineSurface, ConversationTranscriptView, DirectionsMaintenanceFrameInput,
+    DirectionsMaintenanceOverlayView, HelpOverlayView, LanguageSelectionFrameInput,
+    LanguageSelectionOverlayView, MAX_GITHUB_REVIEW_NOTICE_LEN, ModelSelectionFrameInput,
+    ModelSelectionOverlayView, ParallelPeekOverlayView, PlanningDraftEditorOverlayView,
+    PlanningInitOverlayFrameInput, PlanningInitOverlayView, QueueMutationTailState,
+    QueueOverlayView, ReviewsOverlayView, SessionOverlayView, ShellTailView,
+    StartupBannerFrameInput, StartupOverlayFrameInput, StartupOverlayView, SupersessionOverlayView,
+    TurnSteerConfirmationScreenModel, ViewSelectionFrameInput, ViewSelectionOverlayView,
+    WorkCenterOverlayView, build_activity_overlay_list_view,
+    build_directions_maintenance_overlay_view, build_help_overlay_view,
+    build_language_selection_overlay_view, build_model_selection_overlay_view,
+    build_operator_diagnostic_lines, build_parallel_peek_overlay_view_from_snapshot,
     build_planning_draft_editor_overlay_view_from_state,
     build_planning_init_overlay_view_from_projection, build_queue_overlay_view_from_screen_model,
     build_reviews_overlay_view, build_session_overlay_view, build_shell_tail_view,
@@ -30,8 +31,8 @@ use super::shell_presentation::{
     shell_conversation_state,
 };
 use super::shell_rendering::{
-    count_wrapped_rows, fullscreen_frame_inspection_area, fullscreen_parallel_event_stream_area,
-    fullscreen_section_height,
+    FullscreenTranscriptDocument, count_wrapped_rows, fullscreen_frame_inspection_area,
+    fullscreen_parallel_event_stream_area, fullscreen_section_height,
 };
 use super::*;
 
@@ -115,12 +116,65 @@ fn capture_session_overlay_screen_model(app: &NativeTuiApp) -> SessionOverlayScr
     )
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConversationTranscriptProjectionCacheKey {
+    transcript_document_revision: u64,
+    transcript_document_identity: Option<String>,
+    transcript_revision: u64,
+    view_mode: ConversationViewMode,
+    show_debug_details: bool,
+    activity_expand_revision: u64,
+    content_width: u16,
+}
+
+struct ConversationTranscriptProjectionCacheEntry {
+    key: ConversationTranscriptProjectionCacheKey,
+    document: Rc<FullscreenTranscriptDocument>,
+}
+
+#[derive(Default)]
+pub(super) struct ConversationTranscriptProjectionCache {
+    entry: Option<ConversationTranscriptProjectionCacheEntry>,
+    #[cfg(test)]
+    rebuild_count: usize,
+}
+
+impl ConversationTranscriptProjectionCache {
+    fn resolve(
+        &mut self,
+        key: ConversationTranscriptProjectionCacheKey,
+        build_view: impl FnOnce() -> ConversationTranscriptView,
+    ) -> Rc<FullscreenTranscriptDocument> {
+        if let Some(entry) = self.entry.as_ref()
+            && entry.key == key
+        {
+            return Rc::clone(&entry.document);
+        }
+        let document = Rc::new(FullscreenTranscriptDocument::from_view(
+            build_view(),
+            key.content_width,
+        ));
+        self.entry = Some(ConversationTranscriptProjectionCacheEntry {
+            key,
+            document: Rc::clone(&document),
+        });
+        #[cfg(test)]
+        {
+            self.rebuild_count = self.rebuild_count.saturating_add(1);
+        }
+        document
+    }
+
+    #[cfg(test)]
+    pub(super) const fn rebuild_count(&self) -> usize {
+        self.rebuild_count
+    }
+}
+
 pub(super) struct FullscreenConversationFrameProjection {
     pub(super) rendered_at_epoch_millis: Option<i64>,
     pub(super) tail_view: ShellTailView,
-    pub(super) transcript_lines: Vec<Line<'static>>,
-    pub(super) transcript_line_interactions: Vec<ConversationTranscriptLineInteraction>,
-    pub(super) transcript_card_rows: Vec<ConversationTranscriptCardRow>,
+    pub(super) transcript_document: Rc<FullscreenTranscriptDocument>,
     pub(super) transcript_document_identity: Option<String>,
     pub(super) transcript_revision: u64,
     pub(super) shell_overlay: ShellOverlay,
@@ -141,10 +195,21 @@ impl FullscreenConversationFrameProjection {
         Self::from_app_with_sample(app, content_width, &sample)
     }
 
+    #[cfg(test)]
     pub(super) fn from_app_with_sample(
         app: &NativeTuiApp,
         content_width: u16,
         sample: &ConversationProjectionSample,
+    ) -> Self {
+        let mut transcript_cache = ConversationTranscriptProjectionCache::default();
+        Self::from_app_with_sample_and_cache(app, content_width, sample, &mut transcript_cache)
+    }
+
+    pub(super) fn from_app_with_sample_and_cache(
+        app: &NativeTuiApp,
+        content_width: u16,
+        sample: &ConversationProjectionSample,
+        transcript_cache: &mut ConversationTranscriptProjectionCache,
     ) -> Self {
         let screen_model = ConversationScreenModel::from_screen_frame_input(
             capture_conversation_screen_frame_input(app, sample),
@@ -167,43 +232,18 @@ impl FullscreenConversationFrameProjection {
                     content_width,
                 ))
             });
-        let (transcript_document_identity, transcript_revision, mut transcript_view) =
-            match screen_model.ready_conversation() {
-                Some(conversation) => {
-                    let identity = if conversation.thread_id.trim().is_empty() {
-                        format!("draft:{}", conversation.draft_workspace_directory())
-                    } else {
-                        format!("thread:{}", conversation.thread_id)
-                    };
-                    (
-                        Some(identity),
-                        conversation.transcript_revision(),
-                        format_fullscreen_conversation_transcript_view(
-                            &conversation.messages,
-                            app.conversation.conversation_view_mode,
-                            app.conversation
-                                .conversation_view_mode
-                                .shows_debug_details()
-                                || app.planning_worker_shows_debug_details(),
-                            app.shell
-                                .progressive_activity_overlay_ui_state
-                                .expand_state(),
-                            content_width,
-                        ),
-                    )
-                }
-                None => (
-                    None,
-                    0,
-                    ConversationTranscriptView {
-                        lines: Vec::new(),
-                        line_interactions: Vec::new(),
-                        card_rows: Vec::new(),
-                    },
-                ),
-            };
-        if screen_model.startup_screen_is_active()
-            && let Some(lines) = build_startup_banner_lines(
+        let (transcript_document_identity, transcript_revision) = screen_model
+            .ready_conversation()
+            .map_or((None, 0), |conversation| {
+                let identity = if conversation.thread_id.trim().is_empty() {
+                    format!("draft:{}", conversation.draft_workspace_directory())
+                } else {
+                    format!("thread:{}", conversation.thread_id)
+                };
+                (Some(identity), conversation.transcript_revision())
+            });
+        let startup_banner = screen_model.startup_screen_is_active().then(|| {
+            build_startup_banner_lines(
                 StartupBannerFrameInput {
                     show_startup_ascii_art: app.shell.show_startup_ascii_art,
                     parallel_mode_enabled: screen_model.parallel_mode_enabled,
@@ -211,22 +251,69 @@ impl FullscreenConversationFrameProjection {
                 },
                 None,
             )
-        {
-            transcript_view.lines = lines;
-            transcript_view.line_interactions = vec![
+            .unwrap_or_default()
+        });
+        let transcript_document = if let Some(lines) = startup_banner {
+            let line_interactions = vec![
                 ConversationTranscriptLineInteraction {
                     selection_range_id: None,
                     selectable_from_column: 0,
                     surface: ConversationTranscriptLineSurface::Plain,
                 };
-                transcript_view.lines.len()
+                lines.len()
             ];
-            transcript_view.card_rows.clear();
-        }
+            Rc::new(FullscreenTranscriptDocument::from_view(
+                ConversationTranscriptView {
+                    lines,
+                    line_interactions,
+                    card_rows: Vec::new(),
+                },
+                content_width,
+            ))
+        } else if let Some(conversation) = screen_model.ready_conversation() {
+            let show_debug_details = app
+                .conversation
+                .conversation_view_mode
+                .shows_debug_details()
+                || app.planning_worker_shows_debug_details();
+            let key = ConversationTranscriptProjectionCacheKey {
+                transcript_document_revision: app.conversation.transcript_document_revision,
+                transcript_document_identity: transcript_document_identity.clone(),
+                transcript_revision,
+                view_mode: app.conversation.conversation_view_mode,
+                show_debug_details,
+                activity_expand_revision: app
+                    .shell
+                    .progressive_activity_overlay_ui_state
+                    .expand_state()
+                    .revision(),
+                content_width,
+            };
+            transcript_cache.resolve(key, || {
+                format_fullscreen_conversation_transcript_view(
+                    &conversation.messages,
+                    app.conversation.conversation_view_mode,
+                    show_debug_details,
+                    app.shell
+                        .progressive_activity_overlay_ui_state
+                        .expand_state(),
+                    content_width,
+                )
+            })
+        } else {
+            Rc::new(FullscreenTranscriptDocument::from_view(
+                ConversationTranscriptView {
+                    lines: Vec::new(),
+                    line_interactions: Vec::new(),
+                    card_rows: Vec::new(),
+                },
+                content_width,
+            ))
+        };
         Self::from_screen_model(
             screen_model,
             content_width,
-            transcript_view,
+            transcript_document,
             transcript_document_identity,
             transcript_revision,
             supersession_overlay_view,
@@ -237,7 +324,7 @@ impl FullscreenConversationFrameProjection {
     fn from_screen_model(
         screen_model: ConversationScreenModel<'_>,
         content_width: u16,
-        transcript_view: ConversationTranscriptView,
+        transcript_document: Rc<FullscreenTranscriptDocument>,
         transcript_document_identity: Option<String>,
         transcript_revision: u64,
         supersession_overlay_view: Option<Box<SupersessionOverlayView>>,
@@ -245,20 +332,13 @@ impl FullscreenConversationFrameProjection {
     ) -> Self {
         let operator_diagnostic_lines = build_operator_diagnostic_lines(&screen_model);
         let tail_view = build_shell_tail_view(&screen_model, content_width);
-        let ConversationTranscriptView {
-            lines: transcript_lines,
-            line_interactions: transcript_line_interactions,
-            card_rows: transcript_card_rows,
-        } = transcript_view;
         let sampled_parallel_supervisor = Box::new(screen_model.parallel_mode_supervisor);
         let sampled_planning_runtime_projection =
             Box::new(screen_model.planning_runtime_projection);
         Self {
             rendered_at_epoch_millis: i64::try_from(screen_model.animation_elapsed_millis).ok(),
             tail_view,
-            transcript_lines,
-            transcript_line_interactions,
-            transcript_card_rows,
+            transcript_document,
             transcript_document_identity,
             transcript_revision,
             shell_overlay: screen_model.shell_overlay,
@@ -395,7 +475,7 @@ impl FullscreenFrameRenderReceipt {
 
     pub(super) fn record_transcript_frame(
         &mut self,
-        card_digests: Vec<[u8; 32]>,
+        card_digests: SharedTranscriptCardDigests,
         hit_areas: Vec<TranscriptCardHitArea>,
         frame_snapshot: Option<TranscriptViewportFrame>,
     ) {

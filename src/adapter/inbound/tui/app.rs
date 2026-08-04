@@ -18,6 +18,8 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use std::sync::mpsc::{Receiver, SyncSender};
 
+type SharedTranscriptCardDigests = std::sync::Arc<[[u8; 32]]>;
+
 /*
  * This module is the native TUI state and module root. Production service
  * wiring lives in crate::composition::production; this file keeps shared

@@ -1,5 +1,3 @@
-use std::collections::VecDeque;
-use std::mem;
 use std::rc::Rc;
 
 use super::fullscreen_frame_model::ApprovalFullscreenScreenModel;
@@ -11,22 +9,23 @@ pub(super) use super::fullscreen_frame_model::{
 use super::fullscreen_frame_model::{
     apply_fullscreen_frame_render_receipt, capture_fullscreen_shell_frame_model,
 };
+#[cfg(test)]
 use super::shell_presentation::{
-    ConversationTranscriptCardRow, ConversationTranscriptLineInteraction,
+    ConversationTranscriptLineInteraction, ConversationTranscriptView,
+};
+use super::shell_presentation::{
     ConversationTranscriptLineSurface, TurnSteerConfirmationScreenModel,
 };
 #[cfg(test)]
 use super::*;
 use super::{
-    AkraTheme, ShellFrontendMode, ShellOverlay, TranscriptCardHitArea, TranscriptRenderedRow,
-    TranscriptViewportFrame, TranscriptViewportUiState,
+    AkraTheme, SharedTranscriptCardDigests, ShellFrontendMode, ShellOverlay, TranscriptCardHitArea,
+    TranscriptRenderedRow, TranscriptViewportFrame, TranscriptViewportUiState,
 };
 use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph, Wrap};
-use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
 
 /*
  * 이 파일은 native fullscreen shell의 ratatui frame boundary다.
@@ -37,6 +36,8 @@ use unicode_width::UnicodeWidthStr;
 mod fullscreen_inspection;
 #[path = "shell_rendering/fullscreen_layout.rs"]
 mod fullscreen_layout;
+#[path = "shell_rendering/transcript_document.rs"]
+mod transcript_document;
 
 use fullscreen_inspection::draw_fullscreen_shell_inspection;
 use fullscreen_layout::{
@@ -46,6 +47,10 @@ use fullscreen_layout::{
 pub(in crate::adapter::inbound::tui::app) use fullscreen_layout::{
     count_wrapped_rows, fullscreen_section_height,
 };
+pub(super) use transcript_document::FullscreenTranscriptDocument;
+use transcript_document::TranscriptWrappedRowLayout;
+#[cfg(test)]
+use transcript_document::transcript_wrapped_row_layout;
 
 pub(super) fn fullscreen_parallel_event_stream_area(
     projection: &FullscreenConversationFrameProjection,
@@ -85,7 +90,7 @@ pub(super) fn draw_projected(
     // 같은 tail 높이가 fullscreen inspection/body 분할 기준도 된다.
     let layout = build_fullscreen_flow_layout(&projection, frame_area, &projection.tail_view.lines);
     let transcript_scroll_offset = if projection.shell_overlay == ShellOverlay::Hidden {
-        let content_rows = count_wrapped_rows(&projection.transcript_lines, layout[0].width);
+        let content_rows = projection.transcript_document.content_rows();
         receipt.resolve_transcript_viewport(
             projection.transcript_document_identity.clone(),
             content_rows,
@@ -265,7 +270,7 @@ fn draw_exit_confirmation(frame: &mut Frame<'_>) {
 
 struct FullscreenConversationShellRenderReceipt {
     queue_receipt_undo_hit_area: Option<Rect>,
-    transcript_viewport_card_digests: Vec<[u8; 32]>,
+    transcript_viewport_card_digests: SharedTranscriptCardDigests,
     transcript_viewport_card_hit_areas: Vec<TranscriptCardHitArea>,
     transcript_viewport_frame_snapshot: Option<TranscriptViewportFrame>,
 }
@@ -280,9 +285,7 @@ fn draw_fullscreen_conversation_shell(
 ) -> FullscreenConversationShellRenderReceipt {
     let FullscreenConversationFrameProjection {
         tail_view,
-        transcript_lines,
-        transcript_line_interactions,
-        transcript_card_rows,
+        transcript_document,
         shell_overlay,
         ..
     } = projection;
@@ -297,15 +300,12 @@ fn draw_fullscreen_conversation_shell(
         // standard shell에서는 tail 높이를 먼저 재고 live transcript line을 그 위 공간에 clip한다.
         let tail_band = layout.get(1).copied().unwrap_or(frame_area);
         let tail_area = fullscreen_tail_render_area(tail_band, &tail_view);
-        let transcript_viewport_card_digests =
-            transcript_card_rows.iter().map(|row| row.digest).collect();
+        let transcript_viewport_card_digests = transcript_document.card_digests();
         let transcript_receipt = render_fullscreen_transcript(
             frame,
             FullscreenTranscriptRenderRequest {
                 area: layout[0],
-                lines: transcript_lines,
-                line_interactions: transcript_line_interactions,
-                card_rows: transcript_card_rows,
+                document: transcript_document,
                 scroll_offset: transcript_scroll_offset,
                 has_unseen_output: transcript_has_unseen_output,
                 viewport_state: transcript_viewport_state,
@@ -323,7 +323,7 @@ fn draw_fullscreen_conversation_shell(
     let tail_area = fullscreen_tail_render_area(layout[1], &tail_view);
     FullscreenConversationShellRenderReceipt {
         queue_receipt_undo_hit_area: render_tail_surface(frame, tail_area, tail_view, false),
-        transcript_viewport_card_digests: Vec::new(),
+        transcript_viewport_card_digests: SharedTranscriptCardDigests::from(Vec::new()),
         transcript_viewport_card_hit_areas: Vec::new(),
         transcript_viewport_frame_snapshot: None,
     }
@@ -471,9 +471,7 @@ struct RenderedTranscriptReceipt {
 
 struct FullscreenTranscriptRenderRequest<'a> {
     area: Rect,
-    lines: Vec<Line<'static>>,
-    line_interactions: Vec<ConversationTranscriptLineInteraction>,
-    card_rows: Vec<ConversationTranscriptCardRow>,
+    document: Rc<FullscreenTranscriptDocument>,
     scroll_offset: usize,
     has_unseen_output: bool,
     viewport_state: &'a TranscriptViewportUiState,
@@ -485,48 +483,27 @@ fn render_fullscreen_transcript(
 ) -> RenderedTranscriptReceipt {
     let FullscreenTranscriptRenderRequest {
         area: transcript_area,
-        lines: transcript_lines,
-        line_interactions: transcript_line_interactions,
-        card_rows,
+        document,
         scroll_offset,
         has_unseen_output,
         viewport_state: transcript_viewport_state,
     } = request;
-    if transcript_lines.is_empty() || transcript_area.width == 0 || transcript_area.height == 0 {
+    if document.is_empty() || transcript_area.width == 0 || transcript_area.height == 0 {
         return RenderedTranscriptReceipt {
             card_hit_areas: Vec::new(),
             frame_snapshot: None,
         };
     }
-    let projected_rows = card_rows
-        .into_iter()
-        .filter_map(|row| {
-            if row.line_index >= transcript_lines.len() {
-                return None;
-            }
-            let start =
-                count_wrapped_rows(&transcript_lines[..row.line_index], transcript_area.width);
-            let end =
-                count_wrapped_rows(&transcript_lines[..=row.line_index], transcript_area.width);
-            (end > start).then_some((row.digest, start, end))
-        })
-        .collect::<Vec<_>>();
-    let wrapped_rows = transcript_wrapped_row_layout(
-        &transcript_lines,
-        &transcript_line_interactions,
-        transcript_area.width,
-    );
-    let (window_start_line, window_scroll_offset) =
-        transcript_window_for_scroll(&transcript_lines, transcript_area.width, scroll_offset);
-    let paragraph = Paragraph::new(
-        transcript_lines
-            .into_iter()
-            .skip(window_start_line)
-            .collect::<Vec<_>>(),
-    )
-    .wrap(Wrap { trim: false });
+    let (paragraph_lines, window_scroll_offset) =
+        document.paragraph_window(scroll_offset, transcript_area.height);
+    let paragraph = Paragraph::new(paragraph_lines).wrap(Wrap { trim: false });
     frame.render_widget(paragraph.scroll((window_scroll_offset, 0)), transcript_area);
-    render_transcript_row_surfaces(frame, transcript_area, scroll_offset, &wrapped_rows);
+    render_transcript_row_surfaces(
+        frame,
+        transcript_area,
+        scroll_offset,
+        document.wrapped_rows(),
+    );
 
     let unseen_badge_area = if has_unseen_output {
         let label = " ↓ new output · Ctrl+End ";
@@ -554,19 +531,22 @@ fn render_fullscreen_transcript(
         frame,
         transcript_area,
         scroll_offset,
-        &wrapped_rows,
+        document.wrapped_rows(),
         transcript_viewport_state,
         unseen_badge_area.as_slice(),
     );
 
     let visible_end = scroll_offset.saturating_add(usize::from(transcript_area.height));
-    let card_hit_areas = projected_rows
-        .into_iter()
-        .filter_map(|(digest, start, end)| {
-            let clipped_start = start.max(scroll_offset);
-            let clipped_end = end.min(visible_end);
+    let card_rows = document.card_rows();
+    let first_visible_card = card_rows.partition_point(|row| row.end <= scroll_offset);
+    let card_hit_areas = card_rows[first_visible_card..]
+        .iter()
+        .take_while(|row| row.start < visible_end)
+        .filter_map(|row| {
+            let clipped_start = row.start.max(scroll_offset);
+            let clipped_end = row.end.min(visible_end);
             (clipped_end > clipped_start).then(|| TranscriptCardHitArea {
-                digest,
+                digest: row.digest,
                 area: Rect::new(
                     transcript_area.x,
                     transcript_area.y.saturating_add(
@@ -583,73 +563,6 @@ fn render_fullscreen_transcript(
         card_hit_areas,
         frame_snapshot: Some(frame_snapshot),
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct TranscriptWrappedRowLayout {
-    logical_line_index: usize,
-    soft_wrap_separator: String,
-    selection_range_id: Option<u64>,
-    selectable_from_column: u16,
-    surface: ConversationTranscriptLineSurface,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct TranscriptWrapGrapheme {
-    symbol: String,
-    source_index: usize,
-}
-
-impl TranscriptWrapGrapheme {
-    fn width(&self) -> u16 {
-        u16::try_from(self.symbol.as_str().width()).unwrap_or(u16::MAX)
-    }
-
-    fn is_whitespace(&self) -> bool {
-        self.symbol == "\u{200b}"
-            || (self.symbol.chars().all(char::is_whitespace) && self.symbol != "\u{00a0}")
-    }
-}
-
-fn transcript_wrapped_row_layout(
-    lines: &[Line<'_>],
-    line_interactions: &[ConversationTranscriptLineInteraction],
-    width: u16,
-) -> Vec<TranscriptWrappedRowLayout> {
-    let mut rows = Vec::new();
-    for (logical_line_index, line) in lines.iter().enumerate() {
-        let source = transcript_line_graphemes(line);
-        let wrapped = wrap_transcript_graphemes(&source, width);
-        let interaction = line_interactions
-            .get(logical_line_index)
-            .copied()
-            .unwrap_or(ConversationTranscriptLineInteraction {
-                selection_range_id: None,
-                selectable_from_column: 0,
-                surface: ConversationTranscriptLineSurface::Plain,
-            });
-        rows.extend(wrapped.iter().enumerate().map(|(row_index, row)| {
-            let soft_wrap_separator = wrapped
-                .get(row_index + 1)
-                .map_or_else(String::new, |next_row| {
-                    wrap_boundary_separator(&source, row, next_row)
-                });
-            TranscriptWrappedRowLayout {
-                logical_line_index,
-                soft_wrap_separator,
-                selection_range_id: interaction.selection_range_id,
-                selectable_from_column: if row_index == 0 {
-                    interaction
-                        .selectable_from_column
-                        .min(width.saturating_sub(1))
-                } else {
-                    0
-                },
-                surface: interaction.surface,
-            }
-        }));
-    }
-    rows
 }
 
 fn render_transcript_row_surfaces(
@@ -675,129 +588,6 @@ fn render_transcript_row_surfaces(
             }
         }
     }
-}
-
-fn transcript_line_graphemes(line: &Line<'_>) -> Vec<TranscriptWrapGrapheme> {
-    line.spans
-        .iter()
-        .flat_map(|span| UnicodeSegmentation::graphemes(span.content.as_ref(), true))
-        .enumerate()
-        .map(|(source_index, symbol)| TranscriptWrapGrapheme {
-            symbol: symbol.to_string(),
-            source_index,
-        })
-        .collect()
-}
-
-/// Mirrors Ratatui's `WordWrapper` with `trim: false`, while retaining source
-/// indices for whitespace that the renderer consumes at a wrap boundary.
-fn wrap_transcript_graphemes(
-    source: &[TranscriptWrapGrapheme],
-    max_line_width: u16,
-) -> Vec<Vec<TranscriptWrapGrapheme>> {
-    if max_line_width == 0 {
-        return Vec::new();
-    }
-
-    let mut wrapped_lines = Vec::new();
-    let mut pending_line = Vec::new();
-    let mut pending_word = Vec::new();
-    let mut pending_whitespace: VecDeque<TranscriptWrapGrapheme> = VecDeque::new();
-    let mut line_width = 0_u16;
-    let mut word_width = 0_u16;
-    let mut whitespace_width = 0_u16;
-    let mut non_whitespace_previous = false;
-
-    for grapheme in source.iter().cloned() {
-        let is_whitespace = grapheme.is_whitespace();
-        let symbol_width = grapheme.width();
-        if symbol_width > max_line_width {
-            continue;
-        }
-
-        let word_found = non_whitespace_previous && is_whitespace;
-        let untrimmed_overflow = pending_line.is_empty()
-            && word_width
-                .saturating_add(whitespace_width)
-                .saturating_add(symbol_width)
-                > max_line_width;
-        if word_found || untrimmed_overflow {
-            pending_line.extend(pending_whitespace.drain(..));
-            line_width = line_width.saturating_add(whitespace_width);
-            pending_line.append(&mut pending_word);
-            line_width = line_width.saturating_add(word_width);
-            whitespace_width = 0;
-            word_width = 0;
-        }
-
-        let line_full = line_width >= max_line_width;
-        let pending_word_overflow = symbol_width > 0
-            && line_width
-                .saturating_add(whitespace_width)
-                .saturating_add(word_width)
-                >= max_line_width;
-        if line_full || pending_word_overflow {
-            let mut remaining_width = max_line_width.saturating_sub(line_width);
-            wrapped_lines.push(mem::take(&mut pending_line));
-            line_width = 0;
-
-            while let Some(pending) = pending_whitespace.front() {
-                let width = pending.width();
-                if width > remaining_width {
-                    break;
-                }
-                whitespace_width = whitespace_width.saturating_sub(width);
-                remaining_width = remaining_width.saturating_sub(width);
-                pending_whitespace.pop_front();
-            }
-
-            if is_whitespace && pending_whitespace.is_empty() {
-                continue;
-            }
-        }
-
-        if is_whitespace {
-            whitespace_width = whitespace_width.saturating_add(symbol_width);
-            pending_whitespace.push_back(grapheme);
-        } else {
-            word_width = word_width.saturating_add(symbol_width);
-            pending_word.push(grapheme);
-        }
-        non_whitespace_previous = !is_whitespace;
-    }
-
-    pending_line.extend(pending_whitespace);
-    pending_line.append(&mut pending_word);
-    if !pending_line.is_empty() {
-        wrapped_lines.push(pending_line);
-    }
-    if wrapped_lines.is_empty() {
-        wrapped_lines.push(Vec::new());
-    }
-    wrapped_lines
-}
-
-fn wrap_boundary_separator(
-    source: &[TranscriptWrapGrapheme],
-    row: &[TranscriptWrapGrapheme],
-    next_row: &[TranscriptWrapGrapheme],
-) -> String {
-    let Some(start) = row
-        .last()
-        .map(|grapheme| grapheme.source_index.saturating_add(1))
-    else {
-        return String::new();
-    };
-    let Some(end) = next_row.first().map(|grapheme| grapheme.source_index) else {
-        return String::new();
-    };
-    source
-        .get(start..end)
-        .unwrap_or_default()
-        .iter()
-        .filter(|grapheme| grapheme.is_whitespace())
-        .map(|grapheme| grapheme.symbol.as_str())
-        .collect()
 }
 
 fn capture_transcript_frame_snapshot(
@@ -886,22 +676,6 @@ fn selection_column_is_excluded(column: u16, exclusions: &[(u16, u16)]) -> bool 
     exclusions
         .iter()
         .any(|(start, end)| column >= *start && column <= *end)
-}
-
-fn transcript_window_for_scroll(lines: &[Line<'_>], width: u16, top_row: usize) -> (usize, u16) {
-    let mut preceding_rows = 0usize;
-    for (line_index, line) in lines.iter().enumerate() {
-        let line_rows = count_wrapped_rows(std::slice::from_ref(line), width).max(1);
-        let following_rows = preceding_rows.saturating_add(line_rows);
-        if top_row < following_rows {
-            return (
-                line_index,
-                u16::try_from(top_row.saturating_sub(preceding_rows)).unwrap_or(u16::MAX),
-            );
-        }
-        preceding_rows = following_rows;
-    }
-    (lines.len(), 0)
 }
 
 #[cfg(test)]
