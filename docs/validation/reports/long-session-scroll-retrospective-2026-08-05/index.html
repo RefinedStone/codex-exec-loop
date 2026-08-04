@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Akra 긴 세션 스크롤 지연 해결의 원인, 성과, 검증, 후속 보강안을 정리한 개발자 성과 리포트">
+  <title>Akra · 긴 세션 스크롤 지연 트러블슈팅 리포트</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#report">본문으로 이동</a>
+  <header class="hero">
+    <div class="hero__glow" aria-hidden="true"></div>
+    <nav class="topbar" aria-label="리포트 탐색">
+      <a class="brand" href="#top" aria-label="Akra 리포트 처음으로">
+        <span class="brand__mark">A</span>
+        <span>AKRA ENGINEERING</span>
+      </a>
+      <div class="topbar__links">
+        <a href="#root-cause">원인</a>
+        <a href="#validation">검증</a>
+        <a href="#next">보강안</a>
+      </div>
+    </nav>
+
+    <div class="hero__content" id="top">
+      <div class="eyebrow"><span class="status-dot"></span> RESOLVED · 2026-08-05</div>
+      <p class="hero__kicker">TUI PERFORMANCE / DEVELOPER ACHIEVEMENT</p>
+      <h1>긴 대화도<br><span>손끝을 따라오도록.</span></h1>
+      <p class="hero__summary">
+        <code>:sessions</code>에서 긴 세션을 열면 스크롤 한 프레임마다 전체 대화를 다시
+        포맷·줄바꿈·복사하던 병목을 제거했습니다. 정본 대화 상태는 그대로 두고,
+        렌더러에 폭 기반 단일 투영 문서와 보이는 구간 탐색을 도입했습니다.
+      </p>
+      <div class="hero__actions">
+        <a class="button button--primary" href="#outcome">성과 보기</a>
+        <a class="button" href="../../artifacts/long-session-scroll-performance-2026-08-05/README.md">측정 원본</a>
+        <a class="button" href="https://github.com/RefinedStone/codex-exec-loop/pull/2077">PR #2077</a>
+      </div>
+      <dl class="hero__meta">
+        <div><dt>상태</dt><dd>prerelease 반영 완료</dd></div>
+        <div><dt>대상</dt><dd>Ratatui fullscreen transcript</dd></div>
+        <div><dt>검증 크기</dt><dd>2,048 messages · 120×40</dd></div>
+      </dl>
+    </div>
+  </header>
+
+  <main id="report">
+    <section class="section section--metrics" id="outcome" aria-labelledby="outcome-title">
+      <div class="section-heading">
+        <p class="section-label">01 / OUTCOME</p>
+        <h2 id="outcome-title">체감 지연을 측정 가능한 성과로</h2>
+        <p>동일한 release 테스트 바이너리와 동일한 2,048 메시지 fixture를 사용한 전후 비교입니다.</p>
+      </div>
+
+      <div class="metric-grid">
+        <article class="metric metric--hero">
+          <p class="metric__label">평균 스크롤 프레임</p>
+          <p class="metric__value"><strong>0.780</strong><span>ms</span></p>
+          <p class="metric__delta">127.744ms 대비 <b>99.4% 감소</b></p>
+          <div class="compare-bar" aria-label="이전 127.744밀리초, 이후 0.780밀리초">
+            <span class="compare-bar__before" style="--size:100%"></span>
+            <span class="compare-bar__after" style="--size:0.61%"></span>
+          </div>
+        </article>
+        <article class="metric">
+          <p class="metric__label">상대 속도</p>
+          <p class="metric__value"><strong>163.8</strong><span>×</span></p>
+          <p class="metric__delta metric__delta--good">viewport-bound rendering</p>
+        </article>
+        <article class="metric">
+          <p class="metric__label">프로세스 CPU</p>
+          <p class="metric__value"><strong>−93.9</strong><span>%</span></p>
+          <p class="metric__delta">8,218.750 → 500.000ms</p>
+        </article>
+        <article class="metric">
+          <p class="metric__label">투영 재생성</p>
+          <p class="metric__value"><strong>1</strong><span>회</span></p>
+          <p class="metric__delta">스크롤 600프레임에도 유지</p>
+        </article>
+      </div>
+
+      <div class="table-card">
+        <table>
+          <caption>긴 세션 release 프로파일 전후 비교</caption>
+          <thead><tr><th scope="col">측정 항목</th><th scope="col">Before</th><th scope="col">After</th><th scope="col">변화</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">초기 긴 세션 프레임</th><td>134.189ms</td><td>28.444ms</td><td class="positive">−78.8%</td></tr>
+            <tr><th scope="row">60 스크롤 프레임 합계</th><td>7,664.641ms</td><td>46.812ms</td><td class="positive">−99.4%</td></tr>
+            <tr><th scope="row">평균 스크롤 프레임</th><td>127.744ms</td><td>0.780ms</td><td class="positive">163.8×</td></tr>
+            <tr><th scope="row">Peak working set</th><td>21.418MiB</td><td>19.094MiB</td><td class="positive">−10.9%</td></tr>
+            <tr><th scope="row">Peak private bytes</th><td>12.988MiB</td><td>10.066MiB</td><td class="positive">−22.5%</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <aside class="soak-callout">
+        <span class="soak-callout__icon" aria-hidden="true">↻</span>
+        <div>
+          <h3>10배 장시간 스크롤에서도 안정적</h3>
+          <p>600프레임 soak 평균 <strong>0.786ms</strong>, 투영 재생성 <strong>1회</strong>,
+            working set <strong>19.320MiB</strong>. 캐시나 메모리가 스크롤 횟수에 따라 증가하지 않았습니다.</p>
+        </div>
+      </aside>
+    </section>
+
+    <section class="section" id="root-cause" aria-labelledby="root-cause-title">
+      <div class="section-heading">
+        <p class="section-label">02 / ROOT CAUSE</p>
+        <h2 id="root-cause-title">한 칸 움직일 때마다 책 전체를 다시 제본했습니다</h2>
+        <p>스크롤 입력 자체가 느린 것이 아니라, 스크롤 뒤의 렌더링 경로가 대화 길이에 비례해 커졌습니다.</p>
+      </div>
+
+      <div class="cause-grid">
+        <article class="panel panel--danger">
+          <div class="panel__tag">BEFORE · O(history) / frame</div>
+          <h3>매 프레임 전체 투영</h3>
+          <ol class="flow-list">
+            <li><span>01</span>모든 메시지 재포맷</li>
+            <li><span>02</span>모든 grapheme 재분해</li>
+            <li><span>03</span>전체 soft-wrap 재계산</li>
+            <li><span>04</span>카드 prefix 반복 합산</li>
+            <li><span>05</span>남은 transcript를 새 Paragraph로 복사</li>
+          </ol>
+          <p class="panel__note">짧은 대화에서는 숨겨졌지만, 2,048개 메시지에서 프레임당 약 128ms로 증폭됐습니다.</p>
+        </article>
+
+        <article class="panel panel--success">
+          <div class="panel__tag">AFTER · O(viewport) / scroll</div>
+          <h3>단일 문서 + 보이는 구간</h3>
+          <ol class="flow-list">
+            <li><span>01</span>폭 기반 immutable 문서 1회 생성</li>
+            <li><span>02</span>line-row 시작점과 카드 범위 보존</li>
+            <li><span>03</span><code>partition_point</code>로 시작 행 탐색</li>
+            <li><span>04</span>보이는 paragraph만 빌려 렌더링</li>
+            <li><span>05</span>key 변경 시 단일 캐시 교체</li>
+          </ol>
+          <p class="panel__note">세션·폭·revision별 캐시를 누적하지 않아 메모리 상한도 명확합니다.</p>
+        </article>
+      </div>
+
+      <div class="architecture" aria-label="대화 정본과 렌더링 투영의 데이터 흐름">
+        <div class="architecture__node architecture__node--source">
+          <small>SEMANTIC AUTHORITY</small>
+          <strong>ConversationViewModel.messages</strong>
+          <span>정본 대화 상태 · 변경 없음</span>
+        </div>
+        <div class="architecture__arrow" aria-hidden="true">→</div>
+        <div class="architecture__node">
+          <small>SINGLE REPLACEABLE CACHE</small>
+          <strong>FullscreenTranscriptDocument</strong>
+          <span>lines · wrapped rows · card ranges</span>
+        </div>
+        <div class="architecture__arrow" aria-hidden="true">→</div>
+        <div class="architecture__node architecture__node--view">
+          <small>VISIBLE WINDOW</small>
+          <strong>Ratatui Paragraph</strong>
+          <span>현재 viewport만 렌더링</span>
+        </div>
+      </div>
+
+      <details>
+        <summary>캐시 무효화 키와 불변 조건 보기</summary>
+        <div class="details-body">
+          <p>키는 문서 identity/revision, transcript revision, view/debug mode, activity expansion revision,
+            terminal width를 포함합니다. 스크롤 offset은 키가 아니므로 문서를 재생성하지 않습니다.</p>
+          <ul>
+            <li>정본 메시지는 렌더러 캐시가 수정하거나 소유하지 않습니다.</li>
+            <li>캐시는 정확히 한 문서만 보유하며 이전 revision을 누적하지 않습니다.</li>
+            <li>Unicode grapheme은 포맷된 line에서 빌려 임시 <code>String</code> 할당을 줄였습니다.</li>
+          </ul>
+        </div>
+      </details>
+    </section>
+
+    <section class="section section--tinted" id="implementation" aria-labelledby="implementation-title">
+      <div class="section-heading">
+        <p class="section-label">03 / TROUBLESHOOTING</p>
+        <h2 id="implementation-title">증상에서 구조적 원인까지 좁힌 과정</h2>
+      </div>
+      <ol class="timeline">
+        <li>
+          <div class="timeline__step">01</div>
+          <div><h3>재현 고정</h3><p><code>:sessions</code> 진입 조건을 2,048 메시지·본문 4줄·120×40 backend로 고정해 “길다”를 측정 가능한 fixture로 바꿨습니다.</p></div>
+        </li>
+        <li>
+          <div class="timeline__step">02</div>
+          <div><h3>CPU와 메모리 분리 측정</h3><p>Cargo 빌드 시간은 제외하고 release 테스트 프로세스만 추적했습니다. wall time은 renderer 내부 <code>Instant</code>, CPU·메모리는 Windows Process에서 수집했습니다.</p></div>
+        </li>
+        <li>
+          <div class="timeline__step">03</div>
+          <div><h3>프레임별 전체 작업 확인</h3><p>입력 이벤트보다 transcript 포맷·wrap·card projection과 임시 할당이 매 scroll draw마다 반복되는 것이 지배 비용임을 확인했습니다.</p></div>
+        </li>
+        <li>
+          <div class="timeline__step">04</div>
+          <div><h3>표현 계층에만 캐시 배치</h3><p>application/domain 정본을 건드리지 않고 <code>ShellRuntime</code>이 단일 presentation document를 소유하도록 경계를 고정했습니다.</p></div>
+        </li>
+        <li>
+          <div class="timeline__step">05</div>
+          <div><h3>회귀를 실행 가능한 계약으로</h3><p>60프레임 프로파일, 600프레임 soak, 캐시 key·단일 entry·viewport 탐색 정적 가드를 함께 추가했습니다.</p></div>
+        </li>
+      </ol>
+    </section>
+
+    <section class="section" id="validation" aria-labelledby="validation-title">
+      <div class="section-heading">
+        <p class="section-label">04 / VALIDATION</p>
+        <h2 id="validation-title">빠른 한 장이 아니라, 깨지지 않는 경로</h2>
+        <p>렌더링 결과, viewport 의미, 캐시 무효화와 아키텍처 경계를 서로 다른 층에서 확인했습니다.</p>
+      </div>
+
+      <div class="validation-grid">
+        <article class="check-card"><span class="check-card__count">17</span><h3>Renderer tests</h3><p>텍스트·카드·diff·Unicode 표현 회귀</p></article>
+        <article class="check-card"><span class="check-card__count">12</span><h3>Viewport tests</h3><p>anchor·scroll·resize·streaming 의미 보존</p></article>
+        <article class="check-card"><span class="check-card__count">1</span><h3>Cache invalidation</h3><p>입력 key 변화 시에만 재생성</p></article>
+        <article class="check-card"><span class="check-card__count">119</span><h3>Architecture guards</h3><p>단일 entry와 presentation 경계 보호</p></article>
+      </div>
+
+      <div class="evidence-grid">
+        <div class="evidence">
+          <h3>측정 원본</h3>
+          <a href="../../artifacts/long-session-scroll-performance-2026-08-05/baseline.txt">Baseline · 60 frames</a>
+          <a href="../../artifacts/long-session-scroll-performance-2026-08-05/optimized-60.txt">Optimized · 60 frames</a>
+          <a href="../../artifacts/long-session-scroll-performance-2026-08-05/optimized-600.txt">Optimized · 600-frame soak</a>
+        </div>
+        <div class="evidence">
+          <h3>코드와 계약</h3>
+          <a href="../../../../src/adapter/inbound/tui/app/shell_rendering/transcript_document.rs">FullscreenTranscriptDocument</a>
+          <a href="../../../../src/adapter/inbound/tui/app/fullscreen_terminal_adapter.rs">Performance fixture</a>
+          <a href="../../../../tests/architecture_boundaries.rs">Architecture guards</a>
+        </div>
+        <div class="evidence">
+          <h3>배포 기록</h3>
+          <a href="https://github.com/RefinedStone/codex-exec-loop/pull/2077">PR #2077 · merged</a>
+          <a href="https://github.com/RefinedStone/codex-exec-loop/commit/651e15f7">Performance guard commit</a>
+          <a href="../../../design/07-tui-layered-architecture-and-aesthetic-contract.md">TUI architecture contract</a>
+        </div>
+      </div>
+
+      <aside class="limits">
+        <h3>숫자를 해석할 때의 한계</h3>
+        <ul>
+          <li><code>TestBackend</code> 수치는 렌더러 비용을 격리한 것이며, 물리 PTY의 입력→화면 표시 지연은 포함하지 않습니다.</li>
+          <li>CPU에는 fixture hydration, 최초 투영, 스크롤 burst가 함께 포함됩니다.</li>
+          <li>최초 긴 세션 투영은 28.444ms로 크게 줄었지만, 아직 한 프레임 예산 16ms보다 큽니다.</li>
+          <li>메모리 수치는 Windows process 표본이며 allocator·OS별 절대값은 달라질 수 있습니다.</li>
+        </ul>
+      </aside>
+    </section>
+
+    <section class="section section--tinted" id="retrospective" aria-labelledby="retrospective-title">
+      <div class="section-heading">
+        <p class="section-label">05 / RETROSPECTIVE</p>
+        <h2 id="retrospective-title">이번 수정에서 배운 것</h2>
+      </div>
+      <div class="retro-grid">
+        <article>
+          <h3><span class="retro-icon retro-icon--good">+</span>잘한 점</h3>
+          <ul>
+            <li>사용자 체감을 production retention ceiling과 release fixture로 재현했습니다.</li>
+            <li>성능 때문에 정본 대화 authority를 renderer로 옮기지 않았습니다.</li>
+            <li>짧은 벤치마크뿐 아니라 600프레임 soak로 캐시 성장 여부까지 확인했습니다.</li>
+            <li>수치, 원본 로그, 아키텍처 계약을 함께 체크인해 재검증 가능하게 했습니다.</li>
+          </ul>
+        </article>
+        <article>
+          <h3><span class="retro-icon retro-icon--warn">!</span>늦게 발견한 점</h3>
+          <ul>
+            <li>기능 테스트는 정답 화면을 확인했지만 프레임 비용의 session-length 민감도를 보지 못했습니다.</li>
+            <li>순수 함수처럼 보이는 projection 경로가 전체 문서 재작업을 숨기고 있었습니다.</li>
+            <li>대화가 긴 실제 세션을 여는 수동 시나리오가 성능 gate로 승격되지 않았습니다.</li>
+            <li>초기 투영과 streaming append 비용은 scroll 비용과 별도 예산으로 관리해야 합니다.</li>
+          </ul>
+        </article>
+      </div>
+
+      <div class="decision-note">
+        <div class="decision-note__mark" aria-hidden="true">UX</div>
+        <div>
+          <h3>후속 정리: 사용자가 마우스 캡처 모드를 운영하지 않도록</h3>
+          <p>Akra의 wheel·card·selection은 앱이 캡처를 소유할 때 한 제품처럼 동작합니다. 공개
+            <code>:mouse</code> 토글은 상태에 따라 기능이 고장 난 것처럼 보이게 하므로 제거했습니다.
+            기본값은 app-owned ON이며, <code>Shift+drag</code> native bypass와 시작 전
+            <code>AKRA_TUI_MOUSE_CAPTURE=off</code> 비상 호환 경로만 유지합니다.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="next" aria-labelledby="next-title">
+      <div class="section-heading">
+        <p class="section-label">06 / NEXT HARDENING</p>
+        <h2 id="next-title">더 보강할 수 있는 지점</h2>
+        <p>“더 빠르게”가 아니라 다음 회귀를 조기에 막는 순서로 우선순위를 정했습니다.</p>
+      </div>
+
+      <div class="roadmap">
+        <article class="roadmap__item roadmap__item--p0">
+          <div class="priority">P0</div>
+          <div><h3>CI 성능 예산</h3><p>2,048 메시지 scroll p95 ≤ 2ms, rebuild = 1을 gate로 두고 기준 대비 20% 이상 악화 시 실패시킵니다.</p></div>
+        </article>
+        <article class="roadmap__item roadmap__item--p0">
+          <div class="priority">P0</div>
+          <div><h3>Streaming tail 증분 투영</h3><p>현재 transcript revision 변화는 전체 문서를 재생성합니다. append-only update p95 ≤ 4ms를 목표로 tail block만 갱신합니다.</p></div>
+        </article>
+        <article class="roadmap__item roadmap__item--p1">
+          <div class="priority">P1</div>
+          <div><h3>실제 PTY 지연 매트릭스</h3><p>Windows Terminal·WSL·tmux·macOS에서 입력→표시 p95 ≤ 16ms와 빠른 drag/copy를 자동 캡처합니다.</p></div>
+        </article>
+        <article class="roadmap__item roadmap__item--p1">
+          <div class="priority">P1</div>
+          <div><h3>개발자 성능 계측</h3><p>projection hit/miss, build/render ms, visible rows, coalesced pointer sample을 진단 overlay와 JSON artifact로 노출합니다.</p></div>
+        </article>
+        <article class="roadmap__item roadmap__item--p1">
+          <div class="priority">P1</div>
+          <div><h3>Resize burst 안정화</h3><p>연속 resize 중 폭별 재투영을 합치고, burst 종료 뒤 한 번만 rebuild되는 계약을 추가합니다.</p></div>
+        </article>
+        <article class="roadmap__item roadmap__item--p2">
+          <div class="priority">P2</div>
+          <div><h3>Block/page virtualization</h3><p>retention ceiling이 2,048을 넘어갈 때를 대비해 문서를 block 단위로 보관하고 메모리 상한을 명시합니다.</p></div>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p><strong>Akra Engineering</strong> · Evidence before confidence.</p>
+    <p>측정일 2026-08-05 · 대상 <code>prerelease@651e15f7</code></p>
+  </footer>
+</body>
+</html>
