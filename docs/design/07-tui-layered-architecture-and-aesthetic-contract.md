@@ -35,6 +35,14 @@ the original assistant row in place and cannot reorder assistant/tool/assistant 
 the selected focused view. `FullscreenFrameRenderReceipt` carries only UI feedback that may be
 committed after a stable terminal draw.
 
+`ShellRuntime` owns one bounded, width-bound transcript presentation cache. Its key includes the
+canonical transcript document/revision, view and debug modes, tool-card expansion revision, and
+terminal width. The cached document materializes formatted lines, Unicode wrapped-row metadata,
+line row starts, and card row ranges once. A scroll-only frame borrows only the visible logical
+lines and uses the row index to locate them; it never reformats or clones the full conversation.
+Changing any key input replaces the single entry, so the cache cannot grow across sessions,
+revisions, or resize history. It is a renderer read model, never a second transcript authority.
+
 Terminal input is collected continuously by the composition-owned `NativeTerminalEventIngress`.
 The TUI receives only its opaque event mailbox, never a thread or process capability. This keeps
 mouse/key intake moving while Ratatui writes a frame, while all application reduction still occurs
@@ -187,6 +195,8 @@ than a role-label-plus-body block.
    owns only ordered event reduction.
 9. A frame burst is dirty-coalesced behind one 60Hz admission boundary. Terminal input continues to
    drain while the one admitted Ratatui transaction is in progress.
+10. Long-session scrolling reuses one immutable transcript presentation document; cache replacement
+    is keyed by semantic presentation inputs and remains bounded to one entry.
 
 ## Acceptance Scenarios
 

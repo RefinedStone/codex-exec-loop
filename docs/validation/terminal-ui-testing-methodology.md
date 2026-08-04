@@ -67,6 +67,10 @@ future test-growth cost, and maintainability cost.
 6. Input-ingress tests prove collection crosses the redacted composition boundary, errors are
    delivered without panic leakage, and thousands of unused motion reports cannot queue ahead of a
    real key.
+7. Long-session tests prove unchanged scroll frames reuse one width-bound transcript projection,
+   while transcript/view/expansion/resize changes invalidate it. The reproducible release CPU and
+   memory profile is recorded in
+   [`artifacts/long-session-scroll-performance-2026-08-05/`](./artifacts/long-session-scroll-performance-2026-08-05/).
 
 Temporal tests must compare sequential states. The core invariant is: **streaming append does not
 move a reader**. A final screenshot alone cannot prove it.
