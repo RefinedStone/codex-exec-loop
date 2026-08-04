@@ -12,7 +12,7 @@ const FULL_PATHS = [
   /^AGENTS\.md$/,
   /^Cargo\.(toml|lock)$/,
   /^rust-toolchain(?:\.toml)?$/,
-  /^scripts\/(?:check_|ci-scope\.|package_|validate_|verify_)/,
+  /^scripts\/(?:agent-plan\.|check_|ci-scope\.|package_|validate_|verify_)/,
   /^(?:deny|clippy)\.toml$/,
 ];
 
@@ -140,13 +140,20 @@ export function evaluateGate(plan, results) {
   return required.filter(([, result]) => result !== "success").map(([job, result]) => ({ job, result }));
 }
 
+export function resolveEffectiveScope(requestedScope, eventName, gitRef) {
+  if (eventName !== "push" || requestedScope !== "auto") {
+    return requestedScope;
+  }
+  return gitRef === "refs/heads/prerelease" ? "smoke" : "full";
+}
+
 function changedPathsFromGit(baseSha, headSha) {
   if (!baseSha || !headSha || /^0+$/.test(baseSha)) {
     return [];
   }
   const output = execFileSync(
     "git",
-    ["diff", "--name-only", "--diff-filter=ACMR", baseSha, headSha],
+    ["diff", "--name-only", "--diff-filter=ACMRD", baseSha, headSha],
     { encoding: "utf8" },
   );
   return output.split(/\r?\n/);
@@ -210,7 +217,11 @@ function runClassify() {
   const paths = requestedScope === "auto"
     ? changedPathsFromGit(process.env.AKRA_CI_BASE_SHA, process.env.AKRA_CI_HEAD_SHA)
     : [];
-  const effectiveScope = eventName === "push" && requestedScope === "auto" ? "full" : requestedScope;
+  const effectiveScope = resolveEffectiveScope(
+    requestedScope,
+    eventName,
+    process.env.AKRA_CI_REF,
+  );
   const plan = classifyChangedPaths(paths, effectiveScope);
   writeOutputs(plan, paths);
 }

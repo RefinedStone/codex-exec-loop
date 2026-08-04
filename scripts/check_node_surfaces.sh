@@ -14,6 +14,8 @@ done
 printf '\n==> repository Node script syntax\n'
 for script_path in \
   scripts/capture_admin_graphic.mjs \
+  scripts/agent-plan.mjs \
+  scripts/ci-scope.mjs \
   scripts/normalize_codex_app_server_schema.mjs \
   npm/scripts/publish-package.mjs \
   npm/scripts/stage-npm-packages.mjs \
@@ -21,6 +23,9 @@ for script_path in \
   npm/bin/akra.js; do
   node --check "${script_path}"
 done
+
+printf '\n==> CI and agent planning policy tests\n'
+node --test scripts/ci-scope.test.mjs scripts/agent-plan.test.mjs
 
 printf '\n==> npm launcher tests\n'
 npm --prefix npm test
