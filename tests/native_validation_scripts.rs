@@ -896,6 +896,8 @@ fn rust_toolchain_is_pinned_consistently_for_ci_and_releases() {
         .expect("Rust toolchain policy should be readable");
     let native_checks = fs::read_to_string(root.join(".github/workflows/native-pr-checks.yml"))
         .expect("native checks workflow should be readable");
+    let windows_portable = fs::read_to_string(root.join("scripts/check_windows_portable.sh"))
+        .expect("Windows portable validation script should be readable");
     let release = fs::read_to_string(root.join(".github/workflows/release-native-assets.yml"))
         .expect("release workflow should be readable");
 
@@ -918,8 +920,9 @@ fn rust_toolchain_is_pinned_consistently_for_ci_and_releases() {
         native_checks.matches("persist-credentials: false").count(),
         "every native-check checkout must avoid persisting the job token"
     );
+    assert!(native_checks.contains("bash scripts/check_windows_portable.sh"));
     assert!(
-        native_checks
+        windows_portable
             .contains("actual_windows_environment_filter_accepts_mixed_case_allowlisted_keys")
     );
 }

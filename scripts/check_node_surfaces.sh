@@ -24,6 +24,9 @@ for script_path in \
   node --check "${script_path}"
 done
 
+printf '\n==> shell script syntax\n'
+bash -n scripts/check_windows_portable.sh
+
 printf '\n==> CI and agent planning policy tests\n'
 node --test scripts/ci-scope.test.mjs scripts/agent-plan.test.mjs
 
