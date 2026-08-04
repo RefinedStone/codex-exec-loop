@@ -1023,20 +1023,40 @@ fn native_tui_uses_one_composition_owned_client_runtime_ingress() {
         .filter(|character| !character.is_whitespace())
         .collect::<String>();
 
+    let client_contract_source = fs::read_to_string("src/core/native_client_port.rs")
+        .expect("native client port should load");
+    let compact_client_contract = production_lines(&client_contract_source)
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+
     for required in [
         "pub(crate)structNativeClientRuntime",
         "core:NativeCoreRuntime",
         "parallel_control_plane:ParallelModeControlPlaneHandle<NativeParallelModeControlPlaneEventSink>",
         "parallel_completion_rx:Receiver<ParallelModeControlPlaneBackgroundEvent>",
-        "pub(crate)enumNativeClientEvent",
-        "pub(crate)fncore(input:CoreInput)->Self",
-        "Self::Core(Box::new(input))",
         "pub(crate)fndispatch_client_event(&mutself,event:NativeClientEvent,)->NativeClientDispatchOutcome",
         "NativeClientEvent::Core(input)=>self.dispatch_core_input(*input)",
+        "implNativeClientPortforNativeClientRuntime",
     ] {
         assert!(
             compact_facade.contains(required),
             "NativeClientRuntime must retain its typed facade contract: {required}"
+        );
+    }
+    for required in [
+        "pub(crate)traitNativeClientPort:Send",
+        "pub(crate)enumNativeClientEvent",
+        "pub(crate)fncore(input:CoreInput)->Self",
+        "Self::Core(Box::new(input))",
+    ] {
+        assert!(
+            compact_client_contract.contains(required),
+            "Core must own the native client inbound contract: {required}"
         );
     }
     assert_eq!(
@@ -1119,28 +1139,30 @@ fn native_tui_uses_one_composition_owned_client_runtime_ingress() {
         .filter(|character| !character.is_whitespace())
         .collect::<String>();
     assert!(
-        compact_tui_app.contains("client_runtime:NativeClientRuntime"),
-        "NativeTuiApp must retain only the opaque composition-owned client runtime"
+        compact_tui_app.contains("client_runtime:Box<dynNativeClientPort>"),
+        "NativeTuiApp must retain only the Core-owned client port interface"
     );
 }
 
 #[test]
 fn native_client_event_routing_is_exhaustive_and_tui_background_lane_is_presentation_only() {
+    let client_contract = fs::read_to_string("src/core/native_client_port.rs")
+        .expect("native client port source should load");
     let facade = fs::read_to_string("src/composition/native_client_runtime.rs")
         .expect("native client runtime source should load");
     let app_runtime = fs::read_to_string("src/adapter/inbound/tui/app/app_runtime.rs")
         .expect("TUI app runtime source should load")
         .replace("\r\n", "\n");
 
-    verify_native_client_event_contract(&facade, &app_runtime)
+    verify_native_client_event_contract(&client_contract, &facade, &app_runtime)
         .unwrap_or_else(|error| panic!("single ClientEvent contract must remain closed: {error}"));
 
-    let unrouted_event = facade.replacen(
+    let unrouted_event = client_contract.replacen(
         "pub(crate) enum NativeClientEvent {",
         "pub(crate) enum NativeClientEvent {\n    UnroutedSemanticMutation,",
         1,
     );
-    let error = verify_native_client_event_contract(&unrouted_event, &app_runtime)
+    let error = verify_native_client_event_contract(&unrouted_event, &facade, &app_runtime)
         .expect_err("a new event without an exact dispatch arm must fail");
     assert!(
         error.contains("exactly cover"),
@@ -1152,8 +1174,9 @@ fn native_client_event_routing_is_exhaustive_and_tui_background_lane_is_presenta
         "_ => {",
         1,
     );
-    let error = verify_native_client_event_contract(&wildcard_router, &app_runtime)
-        .expect_err("a wildcard client-event route must fail");
+    let error =
+        verify_native_client_event_contract(&client_contract, &wildcard_router, &app_runtime)
+            .expect_err("a wildcard client-event route must fail");
     assert!(
         error.contains("wildcard"),
         "unexpected wildcard router error: {error}"
@@ -1164,8 +1187,9 @@ fn native_client_event_routing_is_exhaustive_and_tui_background_lane_is_presenta
         "    ConversationRuntimeNotice(String),",
         1,
     );
-    let error = verify_native_client_event_contract(&facade, &semantic_background_lane)
-        .expect_err("a production semantic BackgroundMessage variant must fail");
+    let error =
+        verify_native_client_event_contract(&client_contract, &facade, &semantic_background_lane)
+            .expect_err("a production semantic BackgroundMessage variant must fail");
     assert!(
         error.contains("presentation-only"),
         "unexpected semantic background-lane error: {error}"
@@ -1304,7 +1328,7 @@ fn native_tui_app_owns_exactly_four_typed_private_state_slices() {
         (
             "NativeTuiRuntimeState",
             &[
-                ("client_runtime", "NativeClientRuntime"),
+                ("client_runtime", "Box<dyn NativeClientPort>"),
                 ("github_review_polling_state", "GithubReviewPollingState"),
                 ("tx", "SyncSender<BackgroundMessage>"),
                 ("rx", "Receiver<BackgroundMessage>"),
@@ -1328,7 +1352,10 @@ fn native_tui_app_owns_exactly_four_typed_private_state_slices() {
                 matches!(field.vis, syn::Visibility::Inherited),
                 "{slice_name}.{expected_name} must stay private"
             );
-            let exact_type = if let Some((outer, inner)) = expected_type.split_once('<') {
+            let exact_type = if expected_type.contains("dyn ") {
+                field.ty.to_token_stream().to_string().replace(' ', "")
+                    == expected_type.replace(' ', "")
+            } else if let Some((outer, inner)) = expected_type.split_once('<') {
                 is_single_generic_named_type(
                     &field.ty,
                     outer,
@@ -11832,6 +11859,42 @@ fn production_tui_receives_only_opaque_runtime_capabilities() {
 }
 
 #[test]
+fn production_driving_adapters_depend_on_inbound_ports_not_application_services() {
+    assert_no_forbidden_references_in_paths(
+        "production driving adapters must enter through core/domain contracts or application inbound ports",
+        &["src/adapter/inbound"],
+        &["crate::application::service"],
+    );
+
+    let tui_source = fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app.rs"))
+        .expect("native TUI app source should load");
+    assert!(
+        tui_source.contains("client_runtime: Box<dyn NativeClientPort>"),
+        "the native TUI must retain an inbound port interface instead of a concrete runtime"
+    );
+
+    let planning_projection_source = fs::read_to_string(
+        repo_root().join("src/application/service/planning/application_projection.rs"),
+    )
+    .expect("planning projection implementation should load");
+    assert!(
+        planning_projection_source
+            .contains("impl PlanningProjectionPort for PlanningRuntimeFacadeService"),
+        "the planning service must implement the inbound planning projection port"
+    );
+    for forbidden_definition in [
+        "pub struct PlanningApplicationProjection",
+        "pub struct PlanningApplicationQueueTask",
+        "pub struct PlanningApplicationSkippedTask",
+    ] {
+        assert!(
+            !planning_projection_source.contains(forbidden_definition),
+            "planning projection contracts must remain owned by the inbound port: {forbidden_definition}"
+        );
+    }
+}
+
+#[test]
 fn tui_runtime_capability_guard_ignores_fixtures_and_rejects_real_escapes() {
     let harmless = r#"
         fn production(app: NativeClientRuntime) {
@@ -13296,7 +13359,7 @@ fn forbidden_tui_runtime_capability_references(source: &str) -> Vec<String> {
                     | "ParallelModeControlPlaneComposition"
             ) || identifier.ends_with("Service")
                 || identifier.ends_with("Services")
-                || identifier.ends_with("Port")
+                || (identifier.ends_with("Port") && identifier != "NativeClientPort")
                 || identifier.ends_with("Repository")
                 || identifier.ends_with("_service")
                 || identifier.ends_with("_services")
@@ -13652,12 +13715,15 @@ fn push_use_reference(segments: &[String], line: usize, references: &mut Vec<Cra
 }
 
 fn verify_native_client_event_contract(
+    native_client_contract: &str,
     native_facade: &str,
     tui_app_runtime: &str,
 ) -> Result<(), String> {
+    let contract_syntax = syn::parse_file(native_client_contract)
+        .map_err(|error| format!("native client contract must parse: {error}"))?;
     let facade_syntax = syn::parse_file(native_facade)
         .map_err(|error| format!("native client facade must parse: {error}"))?;
-    let client_events = facade_syntax
+    let client_events = contract_syntax
         .items
         .iter()
         .filter_map(|item| match item {

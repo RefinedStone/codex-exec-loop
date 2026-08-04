@@ -3,10 +3,10 @@ use super::super::{
     AutoFollowControlEvent, ConversationState, NativeTuiApp, PendingResumedSessionPlanningRefresh,
     StartupState,
 };
-use crate::application::service::planning::PlanningRuntimeProjection;
 use crate::core::app::{
     AppCommand, AppEvent, CoreDispatchOutcome, CoreInput, PlanningRuntimeRefreshCorrelation,
 };
+use crate::domain::planning::RuntimeProjection as PlanningRuntimeProjection;
 
 /*
 conversation controller는 shell startup, editable draft, resumed thread 사이의 workspace boundary를 소유한다.

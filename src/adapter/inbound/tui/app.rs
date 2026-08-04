@@ -4,14 +4,15 @@ use crate::adapter::inbound::tui::shell_chrome::{
     ShellOverlayTransition, StartupState, reduce_shell_chrome,
 };
 use crate::adapter::inbound::tui::supersession_mud::SupersessionMudUiState;
-use crate::application::service::planning::PlanningTaskHandoff;
-use crate::composition::native_client_runtime::NativeClientRuntime;
 use crate::core::app::{PlanningRuntimeRefreshCorrelation, TurnSteerCorrelation};
+use crate::core::native_client_port::NativeClientPort;
 use crate::domain::conversation::{
     ConversationMessage, ConversationMessageKind, ConversationReasoningEffort,
     ConversationTurnOptions, ConversationTurnSteerRequest,
 };
-use crate::domain::planning::{ManualPromptCorrelation, PlanningWorkerPanelState};
+use crate::domain::planning::{
+    ManualPromptCorrelation, PlanningWorkerPanelState, TaskHandoff as PlanningTaskHandoff,
+};
 use crossterm::event::{self, KeyCode, KeyModifiers};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -383,7 +384,7 @@ struct NativeTuiPlanningState {
 }
 
 struct NativeTuiRuntimeState {
-    client_runtime: NativeClientRuntime,
+    client_runtime: Box<dyn NativeClientPort>,
     github_review_polling_state: GithubReviewPollingState,
     tx: SyncSender<BackgroundMessage>,
     rx: Receiver<BackgroundMessage>,

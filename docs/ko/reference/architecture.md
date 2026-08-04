@@ -8,29 +8,29 @@
 뜻이며 command의 실행 순서를 뜻하지 않습니다.
 
 ```text
-adapter/inbound/tui -> core + application contracts/projections + opaque composition facade + domain
+adapter/inbound/tui -> core + application inbound ports + opaque composition bootstrap + domain
 adapter/inbound/{cli,admin_api,telegram_bot} -> application inbound ports + domain
 application services -> inbound ports + outbound ports + domain
 adapter/outbound -> application ports + domain
 composition -> core + application + adapter/outbound
 ```
 
-TUI 행은 안쪽을 향하는 data-only application/domain contract와 projection 의존성을 명시적으로
-허용합니다. 이 import는 mapping/rendering에 쓰는 immutable value이며 runtime capability가 아니므로
-의존성 방향을 뒤집지 않습니다. Production bootstrap은 raw application service를 받지 않습니다.
-Composition이 service를 소비해 하나의 opaque native application object를 만들며 adapter는
-`NativeClientRuntime`과 immutable runtime-control truth만 받습니다. Parallel control-plane handle,
-event sink, completion mailbox는 composition 내부에만 남습니다.
+Production driving adapter는 `application/service`를 import하지 않습니다. Composition이 concrete
+service를 소비해 opaque application object를 만들고 typed inbound boundary 뒤에 구현을 주입합니다.
+TUI는 Core가 소유한 `Box<dyn NativeClientPort>`와 immutable domain truth만 보유합니다. Planning read DTO는
+`PlanningProjectionPort`가 소유하고 queue mapping은 adapter 내부에 남습니다. Concrete
+`NativeClientRuntime`, parallel control-plane handle, event sink, completion mailbox는 composition
+내부에만 남습니다.
 
 Client command loop의 **런타임 실행 흐름**은 의도적으로 왕복합니다.
 
 ```text
 TUI intent
-  -> composition/NativeClientRuntime::dispatch_client_event(NativeClientEvent)
+  -> NativeClientPort::dispatch_client_event(NativeClientEvent)
   -> core reducer/CoreEffect 또는 application parallel control-plane/effect
   -> application use case / outbound port
   -> private bounded completion mailbox
-  -> composition/NativeClientRuntime::poll_pending_client_event
+  -> NativeClientPort::poll_pending_client_event
   -> 해당 authority reducer
   -> snapshot/presentation event
   -> TUI projection
@@ -61,7 +61,9 @@ integration capability는 outbound port로 유지합니다. CLI와 Telegram은 �
 `PlanningAdminPort`, `ParallelModeAdminPort`, `AdminDebugPort`, `ParallelAgentProfilePort`,
 `AppServerPromptLogQueryPort`만 보유하며 Axum state에는 concrete application service나 outbound
 repository capability가 없습니다. Review center, parallel agent profile, app-server prompt-log
-값은 domain 계약이며 repository port는 이를 저장하지만 소유하지 않습니다.
+값은 domain 계약이며 repository port는 이를 저장하지만 소유하지 않습니다. Native shell은 Core
+inbound-client `NativeClientPort`를 사용하고 공용 planning read 계약은 `PlanningProjectionPort`가 소유하며 그
+구현은 planning service 계층에 남습니다.
 
 프로세스 수명의 parallel control-plane handle과 completion channel은 `ParallelModeAdminPort`
 구현이 소유합니다. Browser request는 transport action을 typed admin command로 mapping하고,
@@ -80,8 +82,9 @@ case에 진입하면서도 이 process-local TUI runtime을 채택할 필요가 
 - `AppEvent`: 외부에 유용한 전이
 - `AppSnapshot`/projection: adapter가 읽는 view model
 
-Composition만 bounded mailbox, `CoreEffectRunner`, `CoreRuntime` driver와 application 소유 parallel
-control-plane handle을 조립합니다. TUI는 `dispatch_client_event`로 `NativeClientEvent`만 전달하고
+Composition만 concrete `NativeClientRuntime`, bounded mailbox, `CoreEffectRunner`, `CoreRuntime`
+driver와 application 소유 parallel control-plane handle을 조립합니다. TUI는
+`NativeClientPort::dispatch_client_event`로 `NativeClientEvent`만 전달하고
 owned snapshot/projection만 읽습니다. TUI는 parallel completion 진입점을 이름 붙이거나 raw
 runtime/handle/service를 직접 호출할 수 없습니다. Core와 parallel worker의
 success/failure/panic completion은 private mailbox를 거쳐 `poll_pending_client_event`로 해당
@@ -536,6 +539,8 @@ TUI presentation은 adapter 소유 status DTO나 왕복 mapper 없이 label과 c
 - `domain`은 application, core, adapter, runtime, IO framework를 import하지 않습니다.
 - `application`은 core, TUI, HTTP, Telegram, concrete outbound adapter를 import하지 않습니다.
 - `core`는 inbound UI/transport type이나 concrete outbound adapter를 import하지 않습니다.
+- Production inbound adapter는 `application/service`를 import하지 않고 inbound port, core 계약,
+  domain value를 통해 진입합니다.
 - TUI는 planning/parallel mutation의 core/application command gate를 우회하지 않습니다.
 - Outbound adapter는 domain policy를 구현하지 않습니다.
 

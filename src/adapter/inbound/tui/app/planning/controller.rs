@@ -8,7 +8,6 @@ use super::super::{
     PlanningRuntimeRefreshOperation, PlanningRuntimeRefreshUiState,
     PlanningWorkspaceOperationUiSettlement, ShellChromeEvent, ShellOverlay,
 };
-use crate::application::service::planning::PlanningResetTarget;
 use crate::core::app::{
     AppCommand, AppEvent, CoreInput, PlanningDoctorSnapshot, PlanningDoctorSnapshotState,
     PlanningEditorMutationAction, PlanningEditorMutationIdentity, PlanningEditorMutationRequest,
@@ -18,6 +17,7 @@ use crate::core::app::{
     PlanningWorkspaceOperationCorrelation, PlanningWorkspaceOperationKind,
     PlanningWorkspaceResetIntent, PlanningWorkspaceResetSnapshot, PlanningWorkspaceResetTarget,
 };
+use crate::domain::planning::PlanningResetTarget;
 use crossterm::event::{self, KeyCode, KeyModifiers};
 
 fn core_planning_reset_target(target: PlanningResetTarget) -> PlanningWorkspaceResetTarget {

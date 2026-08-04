@@ -6,11 +6,10 @@ use crate::adapter::inbound::tui::shell_chrome::{ShellChromeEvent, ShellOverlay}
 use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneBackgroundEvent;
 #[cfg(test)]
 use crate::application::service::parallel_mode::control_plane::parallel_mode_distributor_tick_signature;
-use crate::application::service::parallel_mode::control_plane::{
-    ParallelModeControlPlaneCommand, ParallelModeControlPlanePresentationEvent,
-};
-use crate::composition::native_client_runtime::NativeClientEvent;
 use crate::core::app::{AppCommand, CoreInput};
+use crate::core::native_client_port::{
+    NativeClientEvent, ParallelModeControlPlaneCommand, ParallelModeControlPlanePresentationEvent,
+};
 use crate::diagnostics::event_log;
 use crate::domain::parallel_mode::{
     ParallelModeAutomationTrigger, ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot,
@@ -134,7 +133,7 @@ impl NativeTuiApp {
         let workspace_directory = self.planning_workspace_directory();
         self.runtime
             .client_runtime
-            .force_parallel_mode_for_test(workspace_directory, enabled);
+            .force_parallel_mode_for_test(&workspace_directory, enabled);
     }
     pub(crate) fn parallel_mode_supervisor_snapshot(&self) -> ParallelModeSupervisorSnapshot {
         let workspace_directory = self.planning_workspace_directory();
@@ -776,7 +775,7 @@ mod global_runtime_notice_tests {
             );
             assert_eq!(
                 app.runtime.client_runtime.parallel_epoch_snapshot(),
-                crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneEpochSnapshot {
+                crate::core::native_client_port::ParallelModeControlPlaneEpochSnapshot {
                     workspace_directory: Some(replacement_workspace),
                     current_epoch_id: Some(2),
                 },

@@ -47,8 +47,9 @@ pub use self::admin::{
     PlanningAdminOverview, PlanningAdminResetOutcome, PlanningAdminSessionView,
     PlanningAdminTaskDeleteRequest, PlanningAdminTaskMutationRequest,
 };
-pub use self::application_projection::{
+pub use crate::application::port::inbound::planning_projection_port::{
     PlanningApplicationProjection, PlanningApplicationQueueTask, PlanningApplicationSkippedTask,
+    PlanningProjectionPort,
 };
 // bootstrap 타입은 새 planning workspace를 세팅할 때 필요한 산출물과 실행 모드를 외부 초기화 흐름에 제공한다.
 pub use self::authoring::bootstrap::{

@@ -1,4 +1,4 @@
-use crate::application::service::planning::PlanningRuntimeProjection;
+use crate::domain::planning::RuntimeProjection as PlanningRuntimeProjection;
 
 #[cfg(test)]
 use super::super::super::super::NativeTuiApp;

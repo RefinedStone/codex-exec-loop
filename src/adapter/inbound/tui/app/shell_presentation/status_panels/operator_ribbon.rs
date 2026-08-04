@@ -1,7 +1,7 @@
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use crate::application::service::planning::PlanningApplicationProjection;
+use crate::application::port::inbound::planning_projection_port::PlanningApplicationProjection;
 
 use super::super::{
     AkraTheme, AutoFollowSnapshotPresentation, ConversationScreenModel, ConversationViewModel,

@@ -1,13 +1,11 @@
 use crossterm::event::{self, KeyCode, KeyModifiers};
 
-use crate::application::service::planning::{
-    PlanningQueueAuthorityProjection, PlanningQueueAuthoritySnapshot,
-};
 use crate::core::app::{
     AppCommand, AppEvent, CoreInput, QueueAuthorityLoadCorrelation, QueueMutationCorrelation,
     QueueMutationIntent, QueueMutationResult, QueueMutationTarget,
 };
 
+use super::queue_overlay_ui::{PlanningQueueAuthoritySnapshot, QueueMutationAuthoritySnapshot};
 use super::{ConversationState, NativeTuiApp, ShellChromeEvent, ShellOverlay, queue_overlay_ui};
 
 impl NativeTuiApp {
@@ -83,7 +81,7 @@ impl NativeTuiApp {
                 return queue_overlay_ui::QueueOverlayAuthorityLoadCompletion::Applied;
             }
         };
-        let authority = PlanningQueueAuthorityProjection {
+        let authority = QueueMutationAuthoritySnapshot {
             runtime_projection: authority.runtime_projection,
             queue_authority: PlanningQueueAuthoritySnapshot {
                 planning_revision: authority.planning_revision,
@@ -490,7 +488,7 @@ impl NativeTuiApp {
 
         let operation_id = correlation.generation;
         let authority = match completion.authority {
-            Ok(authority) => PlanningQueueAuthorityProjection {
+            Ok(authority) => QueueMutationAuthoritySnapshot {
                 runtime_projection: authority.runtime_projection,
                 queue_authority: PlanningQueueAuthoritySnapshot {
                     planning_revision: authority.planning_revision,
@@ -680,7 +678,7 @@ impl NativeTuiApp {
     pub(super) fn settle_correlated_queue_receipt(
         &mut self,
         correlation: &QueueMutationCorrelation,
-        authority: &crate::application::service::planning::PlanningQueueAuthoritySnapshot,
+        authority: &PlanningQueueAuthoritySnapshot,
     ) {
         let ConversationState::Ready(conversation) =
             &mut self.conversation.lifecycle.conversation_state
@@ -722,7 +720,7 @@ impl NativeTuiApp {
     pub(super) fn reconcile_correlated_queue_receipt(
         &mut self,
         correlation: &QueueMutationCorrelation,
-        authority: &crate::application::service::planning::PlanningQueueAuthoritySnapshot,
+        authority: &PlanningQueueAuthoritySnapshot,
     ) {
         let ConversationState::Ready(conversation) =
             &mut self.conversation.lifecycle.conversation_state
@@ -766,7 +764,7 @@ impl NativeTuiApp {
 
     pub(super) fn reconcile_latest_queue_receipt_with_authority(
         &mut self,
-        authority: &crate::application::service::planning::PlanningQueueAuthoritySnapshot,
+        authority: &PlanningQueueAuthoritySnapshot,
     ) {
         let ConversationState::Ready(conversation) =
             &mut self.conversation.lifecycle.conversation_state
@@ -783,7 +781,7 @@ impl NativeTuiApp {
 
     fn queue_receipt_reconciled_with_authority(
         receipt: &crate::domain::planning::PlanningQueueMutationReceipt,
-        authority: &crate::application::service::planning::PlanningQueueAuthoritySnapshot,
+        authority: &PlanningQueueAuthoritySnapshot,
     ) -> crate::domain::planning::PlanningQueueMutationReceipt {
         let mut reconciled = receipt.clone();
         reconciled.planning_revision = authority.planning_revision;

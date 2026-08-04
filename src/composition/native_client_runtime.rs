@@ -1,16 +1,21 @@
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 #[cfg(test)]
 use std::time::Duration;
+#[cfg(test)]
 use std::time::Instant;
 
 use crate::application::service::conversation_service::ConversationService;
 #[cfg(test)]
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
 use crate::application::service::parallel_mode::control_plane::{
-    ParallelModeControlPlaneBackgroundEvent, ParallelModeControlPlaneCommand,
-    ParallelModeControlPlaneComposition, ParallelModeControlPlaneEpochSnapshot,
+    ParallelModeControlPlaneBackgroundEvent,
+    ParallelModeControlPlaneCommand as ApplicationParallelModeControlPlaneCommand,
+    ParallelModeControlPlaneComposition,
+    ParallelModeControlPlaneEpochSnapshot as ApplicationParallelModeControlPlaneEpochSnapshot,
     ParallelModeControlPlaneEventSink, ParallelModeControlPlaneHandle,
-    ParallelModeControlPlanePresentationEvent, ParallelModeControlPlanePresentationProjection,
+    ParallelModeControlPlaneLoadingStage as ApplicationParallelModeControlPlaneLoadingStage,
+    ParallelModeControlPlanePresentationEvent as ApplicationParallelModeControlPlanePresentationEvent,
+    ParallelModeControlPlanePresentationProjection as ApplicationParallelModeControlPlanePresentationProjection,
 };
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::planning::PlanningServices;
@@ -25,6 +30,13 @@ use crate::core::app::{
 };
 #[cfg(test)]
 use crate::core::app::{GithubReviewPollingSetupRequest, TurnSubmissionCorrelation};
+use crate::core::native_client_port::{
+    NativeClientDispatchOutcome, NativeClientEvent, NativeClientPort,
+    NativeParallelDispatchOutcome, ParallelModeControlPlaneCommand,
+    ParallelModeControlPlaneEpochSnapshot, ParallelModeControlPlaneLoadingStage,
+    ParallelModeControlPlanePresentationEvent, ParallelModeControlPlanePresentationProjection,
+    ParallelModeDispatchCleanupCorrelation, ParallelModeGlobalRuntimeNoticeProjection,
+};
 use crate::core::runtime::{CoreRuntime, core_input_channel};
 use crate::domain::conversation::ConversationRuntimeControlTruth;
 #[cfg(test)]
@@ -85,48 +97,10 @@ enum NativeClientPollLane {
     Parallel,
 }
 
-pub(crate) enum NativeClientEvent {
-    Core(Box<CoreInput>),
-    ParallelCommand(ParallelModeControlPlaneCommand),
-    ParallelTick {
-        now: Instant,
-        workspace_directory: String,
-        activity_pulse_visible: bool,
-    },
-    ClearParallelDispatchWithheldReason,
-}
-
-impl NativeClientEvent {
-    pub(crate) fn core(input: CoreInput) -> Self {
-        Self::Core(Box::new(input))
-    }
-}
-
-pub(crate) enum NativeClientDispatchOutcome {
-    Core(CoreDispatchOutcome),
-    Parallel(NativeParallelDispatchOutcome),
-    Combined {
-        core: CoreDispatchOutcome,
-        parallel: NativeParallelDispatchOutcome,
-    },
-}
-
-pub(crate) struct NativeParallelDispatchOutcome {
-    pub(crate) presentation_events: Vec<ParallelModeControlPlanePresentationEvent>,
-}
-
 struct InternalPostTurnRoutingRequest {
     event_index: usize,
     correlation: PostTurnEvaluationCorrelation,
     execution: Box<PostTurnExecution>,
-}
-
-impl NativeParallelDispatchOutcome {
-    fn from_events(presentation_events: Vec<ParallelModeControlPlanePresentationEvent>) -> Self {
-        Self {
-            presentation_events,
-        }
-    }
 }
 
 fn take_internal_post_turn_routing_requests(
@@ -228,6 +202,168 @@ const fn post_turn_route_resolution(
     PostTurnRouteResolution::NoContinuation
 }
 
+fn application_parallel_command(
+    command: ParallelModeControlPlaneCommand,
+) -> ApplicationParallelModeControlPlaneCommand {
+    match command {
+        ParallelModeControlPlaneCommand::OpenEpoch {
+            workspace_directory,
+        } => ApplicationParallelModeControlPlaneCommand::OpenEpoch {
+            workspace_directory,
+        },
+        ParallelModeControlPlaneCommand::Enable {
+            workspace_directory,
+        } => ApplicationParallelModeControlPlaneCommand::Enable {
+            workspace_directory,
+        },
+        ParallelModeControlPlaneCommand::Disable {
+            workspace_directory,
+        } => ApplicationParallelModeControlPlaneCommand::Disable {
+            workspace_directory,
+        },
+        ParallelModeControlPlaneCommand::InspectSupervisor {
+            workspace_directory,
+            reconcile_pool,
+            show_status,
+        } => ApplicationParallelModeControlPlaneCommand::InspectSupervisor {
+            workspace_directory,
+            reconcile_pool,
+            show_status,
+        },
+        ParallelModeControlPlaneCommand::RefreshSupervisor {
+            workspace_directory,
+        } => ApplicationParallelModeControlPlaneCommand::RefreshSupervisor {
+            workspace_directory,
+        },
+        ParallelModeControlPlaneCommand::RequestDispatch {
+            workspace_directory,
+            trigger,
+        } => ApplicationParallelModeControlPlaneCommand::RequestDispatch {
+            workspace_directory,
+            trigger,
+        },
+        ParallelModeControlPlaneCommand::RequestDispatchForEpoch {
+            workspace_directory,
+            trigger,
+            epoch_id,
+        } => ApplicationParallelModeControlPlaneCommand::RequestDispatchForEpoch {
+            workspace_directory,
+            trigger,
+            epoch_id,
+        },
+    }
+}
+
+fn client_loading_stage(
+    stage: ApplicationParallelModeControlPlaneLoadingStage,
+) -> ParallelModeControlPlaneLoadingStage {
+    match stage {
+        ApplicationParallelModeControlPlaneLoadingStage::ReconcilingPool => {
+            ParallelModeControlPlaneLoadingStage::ReconcilingPool
+        }
+    }
+}
+
+fn client_presentation_event(
+    event: ApplicationParallelModeControlPlanePresentationEvent,
+) -> ParallelModeControlPlanePresentationEvent {
+    match event {
+        ApplicationParallelModeControlPlanePresentationEvent::EnterProgress {
+            workspace_directory,
+            epoch_id: _,
+            effect_id: _,
+            readiness_snapshot,
+            loading_stage,
+            status_text,
+        } => ParallelModeControlPlanePresentationEvent::EnterProgress {
+            workspace_directory,
+            readiness_snapshot,
+            loading_stage: client_loading_stage(loading_stage),
+            status_text,
+        },
+        ApplicationParallelModeControlPlanePresentationEvent::ReadinessSnapshotChanged {
+            workspace_directory,
+            snapshot,
+        } => ParallelModeControlPlanePresentationEvent::ReadinessSnapshotChanged {
+            workspace_directory,
+            snapshot,
+        },
+        ApplicationParallelModeControlPlanePresentationEvent::SupervisorSnapshotChanged {
+            workspace_directory,
+            snapshot,
+        } => ParallelModeControlPlanePresentationEvent::SupervisorSnapshotChanged {
+            workspace_directory,
+            snapshot,
+        },
+        ApplicationParallelModeControlPlanePresentationEvent::StatusShown {
+            workspace_directory,
+            status_text,
+        } => ParallelModeControlPlanePresentationEvent::StatusShown {
+            workspace_directory,
+            status_text,
+        },
+        ApplicationParallelModeControlPlanePresentationEvent::ConversationRuntimeNotice {
+            workspace_directory,
+            notice,
+        } => ParallelModeControlPlanePresentationEvent::ConversationRuntimeNotice {
+            workspace_directory,
+            notice,
+        },
+        ApplicationParallelModeControlPlanePresentationEvent::GlobalRuntimeNoticesChanged => {
+            ParallelModeControlPlanePresentationEvent::GlobalRuntimeNoticesChanged
+        }
+        ApplicationParallelModeControlPlanePresentationEvent::PostTurnAutoFollowPromptConsumed => {
+            ParallelModeControlPlanePresentationEvent::PostTurnAutoFollowPromptConsumed
+        }
+        ApplicationParallelModeControlPlanePresentationEvent::PlanningRuntimeRefreshRequested {
+            workspace_directory,
+        } => ParallelModeControlPlanePresentationEvent::PlanningRuntimeRefreshRequested {
+            workspace_directory,
+        },
+        ApplicationParallelModeControlPlanePresentationEvent::ModeDisabled { .. } => {
+            ParallelModeControlPlanePresentationEvent::ModeDisabled
+        }
+    }
+}
+
+fn client_presentation_events(
+    events: Vec<ApplicationParallelModeControlPlanePresentationEvent>,
+) -> Vec<ParallelModeControlPlanePresentationEvent> {
+    events.into_iter().map(client_presentation_event).collect()
+}
+
+fn client_control_plane_projection(
+    projection: ApplicationParallelModeControlPlanePresentationProjection,
+) -> ParallelModeControlPlanePresentationProjection {
+    ParallelModeControlPlanePresentationProjection {
+        mode_enabled: projection.mode_enabled,
+        control_effect_in_flight: projection.control_effect_in_flight,
+        last_dispatch_withheld_reason: projection.last_dispatch_withheld_reason,
+        global_runtime_notices: projection
+            .global_runtime_notices
+            .into_iter()
+            .map(|projection| ParallelModeGlobalRuntimeNoticeProjection {
+                cleanup_correlation: ParallelModeDispatchCleanupCorrelation {
+                    operation_id: projection.cleanup_correlation.operation_id,
+                    workspace_directory: projection.cleanup_correlation.workspace_directory,
+                    epoch_id: projection.cleanup_correlation.epoch_id,
+                    command_identity: projection.cleanup_correlation.command_identity,
+                },
+                notice: projection.notice,
+            })
+            .collect(),
+    }
+}
+
+fn client_epoch_snapshot(
+    snapshot: ApplicationParallelModeControlPlaneEpochSnapshot,
+) -> ParallelModeControlPlaneEpochSnapshot {
+    ParallelModeControlPlaneEpochSnapshot {
+        workspace_directory: snapshot.workspace_directory,
+        current_epoch_id: snapshot.current_epoch_id,
+    }
+}
+
 impl NativeTuiApplicationComposition {
     pub(in crate::composition) fn from_services(
         startup_service: StartupService,
@@ -264,8 +400,8 @@ impl NativeTuiApplicationComposition {
 }
 
 impl BoundNativeTuiApplication {
-    pub(crate) fn into_parts(self) -> (NativeClientRuntime, ConversationRuntimeControlTruth) {
-        (self.client_runtime, self.turn_control_truth)
+    pub(crate) fn into_parts(self) -> (Box<dyn NativeClientPort>, ConversationRuntimeControlTruth) {
+        (Box::new(self.client_runtime), self.turn_control_truth)
     }
 }
 
@@ -395,18 +531,22 @@ impl NativeClientRuntime {
     ) -> NativeClientDispatchOutcome {
         match event {
             NativeClientEvent::Core(input) => self.dispatch_core_input(*input),
-            NativeClientEvent::ParallelCommand(command) => {
-                NativeClientDispatchOutcome::Parallel(NativeParallelDispatchOutcome::from_events(
-                    self.parallel_control_plane.handle_command(command),
-                ))
-            }
+            NativeClientEvent::ParallelCommand(command) => NativeClientDispatchOutcome::Parallel(
+                NativeParallelDispatchOutcome::from_events(client_presentation_events(
+                    self.parallel_control_plane
+                        .handle_command(application_parallel_command(command)),
+                )),
+            ),
             NativeClientEvent::ParallelTick {
                 now,
                 workspace_directory,
                 activity_pulse_visible,
             } => NativeClientDispatchOutcome::Parallel(NativeParallelDispatchOutcome::from_events(
-                self.parallel_control_plane
-                    .tick(now, workspace_directory, activity_pulse_visible),
+                client_presentation_events(self.parallel_control_plane.tick(
+                    now,
+                    workspace_directory,
+                    activity_pulse_visible,
+                )),
             )),
             NativeClientEvent::ClearParallelDispatchWithheldReason => {
                 self.parallel_control_plane.clear_dispatch_withheld_reason();
@@ -516,6 +656,7 @@ impl NativeClientRuntime {
             .is_some_and(|outcome| outcome.auto_follow_prompt_consumed);
         let presentation_events = parallel_outcome
             .map(|outcome| outcome.presentation_events)
+            .map(client_presentation_events)
             .unwrap_or_default();
 
         let resolution = post_turn_route_resolution(
@@ -552,8 +693,10 @@ impl NativeClientRuntime {
         completion: ParallelModeControlPlaneBackgroundEvent,
     ) -> NativeClientDispatchOutcome {
         NativeClientDispatchOutcome::Parallel(NativeParallelDispatchOutcome::from_events(
-            self.parallel_control_plane
-                .handle_background_event(completion),
+            client_presentation_events(
+                self.parallel_control_plane
+                    .handle_background_event(completion),
+            ),
         ))
     }
 
@@ -586,11 +729,11 @@ impl NativeClientRuntime {
     pub(crate) fn parallel_control_plane_projection(
         &self,
     ) -> ParallelModeControlPlanePresentationProjection {
-        self.parallel_control_plane.presentation_projection()
+        client_control_plane_projection(self.parallel_control_plane.presentation_projection())
     }
 
     pub(crate) fn parallel_epoch_snapshot(&self) -> ParallelModeControlPlaneEpochSnapshot {
-        self.parallel_control_plane.epoch_snapshot()
+        client_epoch_snapshot(self.parallel_control_plane.epoch_snapshot())
     }
 
     pub(crate) fn current_parallel_epoch_id_for_workspace(
@@ -726,6 +869,88 @@ impl NativeClientRuntime {
     ) -> bool {
         self.parallel_control_plane
             .supervisor_refresh_due(now, activity_pulse_visible)
+    }
+}
+
+impl NativeClientPort for NativeClientRuntime {
+    fn dispatch_client_event(&mut self, event: NativeClientEvent) -> NativeClientDispatchOutcome {
+        NativeClientRuntime::dispatch_client_event(self, event)
+    }
+
+    fn poll_pending_client_event(&mut self) -> Option<NativeClientDispatchOutcome> {
+        NativeClientRuntime::poll_pending_client_event(self)
+    }
+
+    fn snapshot(&self) -> AppSnapshot {
+        NativeClientRuntime::snapshot(self)
+    }
+
+    fn revisioned_planning_parallel_projection(&self) -> RevisionedPlanningParallelProjection {
+        NativeClientRuntime::revisioned_planning_parallel_projection(self)
+    }
+
+    fn parallel_mode_projection(&self) -> ParallelModeProjection {
+        NativeClientRuntime::parallel_mode_projection(self)
+    }
+
+    fn parallel_mode_enabled(&self) -> bool {
+        NativeClientRuntime::parallel_mode_enabled(self)
+    }
+
+    fn parallel_control_plane_projection(&self) -> ParallelModeControlPlanePresentationProjection {
+        NativeClientRuntime::parallel_control_plane_projection(self)
+    }
+
+    fn parallel_epoch_snapshot(&self) -> ParallelModeControlPlaneEpochSnapshot {
+        NativeClientRuntime::parallel_epoch_snapshot(self)
+    }
+
+    fn current_parallel_epoch_id_for_workspace(&self, workspace_directory: &str) -> Option<u64> {
+        NativeClientRuntime::current_parallel_epoch_id_for_workspace(self, workspace_directory)
+    }
+
+    #[cfg(test)]
+    fn dispatch_parallel_completion_for_test(
+        &mut self,
+        event: ParallelModeControlPlaneBackgroundEvent,
+    ) -> NativeClientDispatchOutcome {
+        NativeClientRuntime::dispatch_parallel_completion_for_test(self, event)
+    }
+
+    #[cfg(test)]
+    fn begin_test_turn_submission(&mut self) -> TurnSubmissionCorrelation {
+        NativeClientRuntime::begin_test_turn_submission(self)
+    }
+
+    #[cfg(test)]
+    fn force_parallel_mode_for_test(&self, workspace_directory: &str, enabled: bool) {
+        NativeClientRuntime::force_parallel_mode_for_test(self, workspace_directory, enabled);
+    }
+
+    #[cfg(test)]
+    fn force_parallel_epoch_for_test(&self, workspace_directory: &str, epoch_id: u64) {
+        NativeClientRuntime::force_parallel_epoch_for_test(self, workspace_directory, epoch_id);
+    }
+
+    #[cfg(test)]
+    fn parallel_automation_epoch_is_active_for_test(
+        &self,
+        workspace_directory: &str,
+        epoch_id: u64,
+    ) -> bool {
+        NativeClientRuntime::parallel_automation_epoch_is_active_for_test(
+            self,
+            workspace_directory,
+            epoch_id,
+        )
+    }
+
+    #[cfg(test)]
+    fn recv_parallel_completion_for_test(
+        &self,
+        timeout: Duration,
+    ) -> ParallelModeControlPlaneBackgroundEvent {
+        NativeClientRuntime::recv_parallel_completion_for_test(self, timeout)
     }
 }
 

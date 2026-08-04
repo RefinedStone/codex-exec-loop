@@ -7,6 +7,10 @@ use crate::domain::planning::{
     TaskAuthorityDocument, TaskStatus,
 };
 
+// Manual input and queue-driven continuation share this transcript marker so
+// adapters can distinguish operator text from an automatic task handoff.
+pub const QUEUED_TASK_TRANSCRIPT_TEXT: &str = "다음 queued-task 1개를 이어서 진행합니다.";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeWorkspaceStatus {
     Uninitialized,

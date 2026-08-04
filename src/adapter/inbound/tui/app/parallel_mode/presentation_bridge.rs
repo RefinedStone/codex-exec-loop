@@ -1,4 +1,4 @@
-use crate::application::service::parallel_mode::control_plane::{
+use crate::core::native_client_port::{
     ParallelModeControlPlaneLoadingStage, ParallelModeControlPlanePresentationEvent,
 };
 use crate::domain::parallel_mode::{
@@ -129,8 +129,6 @@ fn parallel_mode_presentation_actions_for_event(
     match event {
         ParallelModeControlPlanePresentationEvent::EnterProgress {
             workspace_directory,
-            epoch_id: _,
-            effect_id: _,
             readiness_snapshot,
             loading_stage,
             status_text,
@@ -212,7 +210,7 @@ fn parallel_mode_presentation_actions_for_event(
             )
             .into_iter()
             .collect(),
-        ParallelModeControlPlanePresentationEvent::ModeDisabled { .. } => Vec::new(),
+        ParallelModeControlPlanePresentationEvent::ModeDisabled => Vec::new(),
     }
 }
 
@@ -246,9 +244,6 @@ pub(super) fn pending_parallel_mode_supervisor_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::service::parallel_mode::control_plane::{
-        ParallelModeControlPlaneEffectId, ParallelModeControlPlaneEffectKind,
-    };
     use crate::domain::parallel_mode::ParallelModeReadinessState;
 
     fn readiness_snapshot(workspace: &str) -> ParallelModeReadinessSnapshot {
@@ -260,13 +255,6 @@ mod tests {
         )
     }
 
-    fn entry_effect(sequence: u64) -> ParallelModeControlPlaneEffectId {
-        ParallelModeControlPlaneEffectId {
-            sequence,
-            kind: ParallelModeControlPlaneEffectKind::EnterParallelMode,
-        }
-    }
-
     #[test]
     fn enter_progress_maps_to_projection_and_status_actions_for_current_workspace() {
         let context = ParallelModePresentationBridgeContext::new("/work".to_string(), true);
@@ -276,8 +264,6 @@ mod tests {
             &context,
             ParallelModeControlPlanePresentationEvent::EnterProgress {
                 workspace_directory: "/work".to_string(),
-                epoch_id: 1,
-                effect_id: entry_effect(1),
                 readiness_snapshot: Some(readiness.clone()),
                 loading_stage: ParallelModeControlPlaneLoadingStage::ReconcilingPool,
                 status_text: "parallel mode: loading".to_string(),
@@ -326,8 +312,6 @@ mod tests {
             &context,
             ParallelModeControlPlanePresentationEvent::EnterProgress {
                 workspace_directory: "/work".to_string(),
-                epoch_id: 1,
-                effect_id: entry_effect(1),
                 readiness_snapshot: None,
                 loading_stage: ParallelModeControlPlaneLoadingStage::ReconcilingPool,
                 status_text: "parallel mode: loading".to_string(),

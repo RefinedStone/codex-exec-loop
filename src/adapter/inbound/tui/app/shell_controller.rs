@@ -2096,9 +2096,7 @@ mod tests {
         while Instant::now() < deadline {
             if let Some(outcome) = app.runtime.client_runtime.poll_pending_client_event() {
                 match outcome {
-                    crate::composition::native_client_runtime::NativeClientDispatchOutcome::Core(
-                        outcome,
-                    ) => {
+                    crate::core::native_client_port::NativeClientDispatchOutcome::Core(outcome) => {
                         for event in outcome.events {
                             match event {
                                 AppEvent::QueueMutationCompleted {
@@ -2109,14 +2107,14 @@ mod tests {
                             }
                         }
                     }
-                    crate::composition::native_client_runtime::NativeClientDispatchOutcome::Parallel(
+                    crate::core::native_client_port::NativeClientDispatchOutcome::Parallel(
                         outcome,
                     ) => {
                         app.apply_parallel_mode_control_plane_presentation_events(
                             outcome.presentation_events,
                         );
                     }
-                    crate::composition::native_client_runtime::NativeClientDispatchOutcome::Combined {
+                    crate::core::native_client_port::NativeClientDispatchOutcome::Combined {
                         core,
                         parallel,
                     } => {
@@ -4115,10 +4113,11 @@ mod tests {
                 unchanged_since_mutation: true,
             }],
         };
-        let authority = crate::application::service::planning::PlanningQueueAuthoritySnapshot {
-            planning_revision: 5,
-            tasks: Vec::new(),
-        };
+        let authority =
+            crate::adapter::inbound::tui::app::queue_overlay_ui::PlanningQueueAuthoritySnapshot {
+                planning_revision: 5,
+                tasks: Vec::new(),
+            };
 
         for settle in [true, false] {
             ready_conversation_mut(&mut app).latest_queue_mutation_receipt =

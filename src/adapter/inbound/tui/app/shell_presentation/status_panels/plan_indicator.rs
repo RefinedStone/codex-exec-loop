@@ -1,5 +1,7 @@
-use crate::application::service::planning::{
-    PlanningApplicationProjection, PlanningRuntimeProjection, PlanningRuntimeWorkspaceStatus,
+use crate::application::port::inbound::planning_projection_port::PlanningApplicationProjection;
+use crate::domain::planning::{
+    RuntimeProjection as PlanningRuntimeProjection,
+    RuntimeWorkspaceStatus as PlanningRuntimeWorkspaceStatus,
 };
 
 // Derive the execution-level substate that sits beside the broader workspace lifecycle label.

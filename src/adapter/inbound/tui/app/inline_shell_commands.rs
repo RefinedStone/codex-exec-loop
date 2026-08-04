@@ -11,8 +11,8 @@ use super::progressive_activity_overlay_ui::{
     parse_progressive_activity_card_filter, parse_progressive_activity_detail_kind,
 };
 use super::view_selection_overlay_ui::ConversationViewMode;
-use crate::application::service::planning::PlanningResetTarget;
 use crate::domain::conversation::ConversationReasoningEffort;
+use crate::domain::planning::PlanningResetTarget;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InlineShellCommand {

@@ -1,8 +1,10 @@
-use crate::application::service::planning::{
-    PlanningRuntimeProjection, PlanningRuntimeWorkspaceStatus,
+use crate::application::port::inbound::planning_projection_port::{
+    PlanningApplicationProjection, PlanningApplicationQueueTask, PlanningApplicationSkippedTask,
+    PlanningProjectionPort,
 };
+use crate::application::service::planning::runtime::facade::PlanningRuntimeFacadeService;
 use crate::domain::planning::{
-    PriorityQueueSkippedTask, PriorityQueueTask, QueueIdlePolicy, TaskStatus,
+    PriorityQueueSkippedTask, PriorityQueueTask, RuntimeProjection as PlanningRuntimeProjection,
 };
 
 /*
@@ -10,51 +12,6 @@ use crate::domain::planning::{
  * 공통 read model이다. 지금은 PlanningRuntimeProjection에서 시작하지만, 목표는 admin/TUI/CLI/Telegram이
  * queue/proposal/blocked 상태를 각자 다시 해석하지 않고 이 타입을 통해 같은 사실을 보는 것이다.
  */
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PlanningApplicationProjection {
-    pub workspace_present: bool,
-    pub workspace_status: PlanningRuntimeWorkspaceStatus,
-    pub planning_revision: Option<i64>,
-    pub task_authority_signature: Option<u64>,
-    pub queue_head_task_signature: Option<u64>,
-    pub auto_follow_paused: bool,
-    pub status_label: String,
-    pub status_detail: Option<String>,
-    pub queue_summary: Option<String>,
-    pub proposal_summary: Option<String>,
-    pub queue_idle_policy: QueueIdlePolicy,
-    pub queue_idle_prompt_path: Option<String>,
-    pub has_structured_queue_projection: bool,
-    pub queue_head: Option<PlanningApplicationQueueTask>,
-    pub visible_tasks: Vec<PlanningApplicationQueueTask>,
-    pub proposed_tasks: Vec<PlanningApplicationQueueTask>,
-    pub skipped_tasks: Vec<PlanningApplicationSkippedTask>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PlanningApplicationQueueTask {
-    pub rank: usize,
-    pub task_id: String,
-    pub task_title: String,
-    pub direction_id: String,
-    pub direction_title: String,
-    pub status: TaskStatus,
-    pub status_label: String,
-    pub combined_priority: i32,
-    pub updated_at: String,
-    pub rank_reasons: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PlanningApplicationSkippedTask {
-    pub task_id: String,
-    pub task_title: String,
-    pub direction_id: String,
-    pub status: TaskStatus,
-    pub status_label: String,
-    pub reason: String,
-}
-
 impl PlanningApplicationProjection {
     pub fn from_runtime_projection(runtime_projection: &PlanningRuntimeProjection) -> Self {
         /*
@@ -114,6 +71,16 @@ impl PlanningApplicationProjection {
             proposed_tasks,
             skipped_tasks,
         }
+    }
+}
+
+impl PlanningProjectionPort for PlanningRuntimeFacadeService {
+    fn load_application_projection(
+        &self,
+        workspace_directory: &str,
+    ) -> anyhow::Result<PlanningApplicationProjection> {
+        self.inspect_runtime_projection(workspace_directory)
+            .map(|projection| PlanningApplicationProjection::from_runtime_projection(&projection))
     }
 }
 

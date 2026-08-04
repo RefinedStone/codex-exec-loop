@@ -9,7 +9,7 @@ use crate::adapter::inbound::tui::app::queue_overlay_ui::{
     QueueActionBlockReason, QueueOverlayAuthorityScreenModel, QueueOverlayConversationScreenModel,
     QueueOverlayScreenModel,
 };
-use crate::application::service::planning::{
+use crate::application::port::inbound::planning_projection_port::{
     PlanningApplicationProjection, PlanningApplicationQueueTask, PlanningApplicationSkippedTask,
 };
 

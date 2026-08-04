@@ -16,10 +16,9 @@ use crate::application::service::planning::PlanningServices;
 use crate::application::service::session_service::SessionService;
 #[cfg(test)]
 use crate::application::service::startup_service::StartupService;
-use crate::composition::native_client_runtime::{
-    NativeClientDispatchOutcome, NativeClientEvent, NativeClientRuntime,
-    NativeTuiApplicationComposition,
-};
+#[cfg(test)]
+use crate::composition::native_client_runtime::NativeClientRuntime;
+use crate::composition::native_client_runtime::NativeTuiApplicationComposition;
 #[cfg(test)]
 use crate::core::app::StartupReadySnapshot;
 #[cfg(test)]
@@ -28,6 +27,9 @@ use crate::core::app::{
     AppCommand, AppEvent, ConversationSnapshot as CoreConversationSnapshot, CoreDispatchOutcome,
     CoreInput, SessionCatalogLoadIntent, SessionCatalogLoadMode, SessionCatalogSnapshot,
     StartupSnapshot,
+};
+use crate::core::native_client_port::{
+    NativeClientDispatchOutcome, NativeClientEvent, NativeClientPort,
 };
 #[cfg(test)]
 use crate::domain::conversation::ConversationSnapshot;
@@ -1026,7 +1028,7 @@ mod tests {
 
         assert_eq!(
             app.runtime.client_runtime.parallel_epoch_snapshot(),
-            crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneEpochSnapshot {
+            crate::core::native_client_port::ParallelModeControlPlaneEpochSnapshot {
                 workspace_directory: None,
                 current_epoch_id: None,
             }
@@ -1538,7 +1540,7 @@ impl NativeTuiApp {
             parallel_mode_control_plane,
         );
         Self::new_with_bound_application(
-            client_runtime,
+            Box::new(client_runtime),
             runtime_channels,
             turn_control_truth,
             GithubReviewPollingBootstrap::disabled(),
@@ -1561,7 +1563,7 @@ impl NativeTuiApp {
     }
 
     fn new_with_bound_application(
-        client_runtime: NativeClientRuntime,
+        client_runtime: Box<dyn NativeClientPort>,
         runtime_channels: NativeTuiAppRuntimeChannels,
         turn_control_truth: crate::domain::conversation::ConversationRuntimeControlTruth,
         github_review_polling: GithubReviewPollingBootstrap,

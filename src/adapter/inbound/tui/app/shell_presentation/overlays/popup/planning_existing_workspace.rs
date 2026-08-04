@@ -1,4 +1,4 @@
-use crate::application::service::planning::PlanningRuntimeProjection;
+use crate::domain::planning::RuntimeProjection as PlanningRuntimeProjection;
 
 use super::super::PlanningInitOverlayView;
 use super::existing_workspace_inputs::build_existing_workspace_copy;
