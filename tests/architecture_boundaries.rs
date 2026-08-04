@@ -441,6 +441,20 @@ fn outbound_adapters_implement_outbound_ports_without_service_dependencies() {
 }
 
 #[test]
+fn planning_cli_and_telegram_enter_application_through_inbound_ports() {
+    assert_no_forbidden_references_in_paths(
+        "planning CLI and Telegram production code must not depend on planning service implementations",
+        &[
+            "src/adapter/inbound/cli.rs",
+            "src/adapter/inbound/cli",
+            "src/adapter/inbound/telegram_bot/message.rs",
+            "src/adapter/inbound/telegram_bot/mod.rs",
+        ],
+        &["crate::application::service::planning"],
+    );
+}
+
+#[test]
 fn parallel_agent_profile_service_has_no_direct_filesystem_dependency() {
     assert_no_forbidden_references_in_paths(
         "parallel agent profile application service must use its repository port",
@@ -11635,6 +11649,46 @@ fn outbound_port_modules_follow_port_naming_contract() {
     assert!(
         violations.is_empty(),
         "outbound port naming contract violations:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn inbound_port_modules_follow_port_naming_contract() {
+    let repo_root = repo_root();
+    let port_root = repo_root.join("src/application/port/inbound");
+    let mut violations = Vec::new();
+
+    for path in rust_files_under(&port_root) {
+        let file_name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        if file_name == "mod.rs" || is_test_only_path(&path) {
+            continue;
+        }
+        if !file_name.ends_with("_port.rs") {
+            violations.push(format!(
+                "{}: inbound port modules must use the *_port.rs suffix",
+                relative_path(&repo_root, &path)
+            ));
+            continue;
+        }
+
+        let source = fs::read_to_string(&path).unwrap_or_else(|error| {
+            panic!("failed to read {}: {error}", path.display());
+        });
+        if !source.contains("trait ") || !source.contains("Port") {
+            violations.push(format!(
+                "{}: inbound port module must define a Port trait contract",
+                relative_path(&repo_root, &path)
+            ));
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "inbound port naming/contract violations:\n{}",
         violations.join("\n")
     );
 }

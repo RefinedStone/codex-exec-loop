@@ -4,6 +4,9 @@
  * 알고 있다. 이 모듈은 그 풍부한 runtime projection을 CLI/TUI caller가 표시하고 exit-code 판단에
  * 사용할 수 있는 compact report로 낮춘다.
  */
+pub use crate::application::port::inbound::planning_workspace_maintenance_port::{
+    PlanningDoctorReport, PlanningDoctorState,
+};
 use crate::application::service::planning::runtime::prompt::PlanningPromptService;
 use crate::application::service::planning::runtime::prompt::{
     PlanningRuntimeProjection, PlanningRuntimeWorkspaceStatus,
@@ -13,133 +16,43 @@ use crate::domain::text::compact_whitespace_detail;
 // runtime validation은 현재 필수 planning file 누락을 이 prefix로 표시한다.
 const INCOMPLETE_PREFIX: &str = "planning files incomplete:";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /*
- * doctor state는 runtime status를 1:1로 노출하지 않는 operator-facing projection이다.
- * 두 ready 상태는 모두 성공 exit이지만, 분리해 두면 UI가 healthy idle queue와 곧 실행할
- * 구체적 task가 있는 healthy workspace를 구분할 수 있다.
+ * runtime projection을 inbound doctor report 계약으로 projection한다.
+ * ready projection은 queue policy와 summary를 노출하고, incomplete/invalid projection은 queue detail을 숨긴다.
  */
-pub enum PlanningDoctorState {
-    Absent,
-    Incomplete,
-    Invalid,
-    ReadyWithoutTask,
-    ReadyWithTask,
-}
-impl PlanningDoctorState {
-    // label은 CLI/API presentation layer가 쓰는 stable 외부 문자열이다.
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Absent => "absent",
-            Self::Incomplete => "incomplete",
-            Self::Invalid => "invalid",
-            Self::ReadyWithoutTask => "ready_without_task",
-            Self::ReadyWithTask => "ready_with_task",
+fn planning_doctor_report_from_runtime_projection(
+    projection: &PlanningRuntimeProjection,
+) -> PlanningDoctorReport {
+    let planning_state = classify_doctor_state(projection);
+    let is_ready = matches!(
+        planning_state,
+        PlanningDoctorState::ReadyWithoutTask | PlanningDoctorState::ReadyWithTask
+    );
+    let note = None;
+    let health = match planning_state {
+        PlanningDoctorState::Absent => Some("planning workspace is not initialized".to_string()),
+        PlanningDoctorState::ReadyWithoutTask | PlanningDoctorState::ReadyWithTask => {
+            Some("planning workspace is healthy".to_string())
         }
-    }
+        PlanningDoctorState::Incomplete | PlanningDoctorState::Invalid => None,
+    };
 
-    // prompt loading이 inspection 중 기본 authority를 초기화할 수 있으므로 absence는 error가 아니다.
-    pub fn exit_code(self) -> i32 {
-        match self {
-            Self::Absent | Self::ReadyWithoutTask | Self::ReadyWithTask => 0,
-            Self::Incomplete | Self::Invalid => 1,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-/*
- * inbound adapter로 반환되는 compact report 객체다.
- * field를 private으로 두어 presentation code가 accessor를 거치게 한다. 그래야 runtime projection field와
- * doctor 전용 display fallback 사이의 내부 구분에 adapter가 우연히 의존하지 않는다.
- */
-pub struct PlanningDoctorReport {
-    planning_state: PlanningDoctorState,
-    queue_idle_policy: Option<String>,
-    queue_summary: Option<String>,
-    proposal_summary: Option<String>,
-    health: Option<String>,
-    issue: Option<String>,
-    note: Option<String>,
-}
-impl PlanningDoctorReport {
-    // runtime projection loading이 report를 만들기 전에 caller가 workspace path를 거절했을 때 쓴다.
-    pub fn path_issue(issue: String) -> Self {
-        Self {
-            planning_state: PlanningDoctorState::Invalid,
-            queue_idle_policy: None,
-            queue_summary: None,
-            proposal_summary: None,
-            health: None,
-            issue: Some(issue),
-            note: None,
-        }
-    }
-
-    pub fn planning_state(&self) -> PlanningDoctorState {
-        self.planning_state
-    }
-    pub fn queue_idle_policy(&self) -> Option<&str> {
-        self.queue_idle_policy.as_deref()
-    }
-    pub fn queue_summary(&self) -> Option<&str> {
-        self.queue_summary.as_deref()
-    }
-    pub fn proposal_summary(&self) -> Option<&str> {
-        self.proposal_summary.as_deref()
-    }
-    pub fn health(&self) -> Option<&str> {
-        self.health.as_deref()
-    }
-    pub fn issue(&self) -> Option<&str> {
-        self.issue.as_deref()
-    }
-    pub fn note(&self) -> Option<&str> {
-        self.note.as_deref()
-    }
-    pub fn exit_code(&self) -> i32 {
-        self.planning_state.exit_code()
-    }
-
-    /*
-     * runtime projection을 doctor report 계약으로 projection한다.
-     * ready projection은 queue policy와 summary를 노출하고, incomplete/invalid projection은 queue detail을 숨긴 뒤
-     * runtime failure reason을 actionable issue로 보존한다.
-     */
-    fn from_runtime_projection(projection: &PlanningRuntimeProjection) -> Self {
-        let planning_state = classify_doctor_state(projection);
-        let is_ready = matches!(
-            planning_state,
-            PlanningDoctorState::ReadyWithoutTask | PlanningDoctorState::ReadyWithTask
-        );
-        let note = None;
-        let health = match planning_state {
-            PlanningDoctorState::Absent => {
-                Some("planning workspace is not initialized".to_string())
-            }
-            PlanningDoctorState::ReadyWithoutTask | PlanningDoctorState::ReadyWithTask => {
-                Some("planning workspace is healthy".to_string())
-            }
-            PlanningDoctorState::Incomplete | PlanningDoctorState::Invalid => None,
-        };
-
-        Self {
-            planning_state,
-            queue_idle_policy: is_ready.then(|| projection.queue_idle_policy().label().to_string()),
-            queue_summary: is_ready.then(|| doctor_queue_summary(projection)).flatten(),
-            proposal_summary: is_ready
-                .then(|| doctor_proposal_summary(projection))
-                .flatten(),
-            health,
-            issue: matches!(
-                planning_state,
-                PlanningDoctorState::Incomplete | PlanningDoctorState::Invalid
-            )
-            .then(|| projection.failure_reason().map(str::to_string))
+    PlanningDoctorReport::from_parts(
+        planning_state,
+        is_ready.then(|| projection.queue_idle_policy().label().to_string()),
+        is_ready.then(|| doctor_queue_summary(projection)).flatten(),
+        is_ready
+            .then(|| doctor_proposal_summary(projection))
             .flatten(),
-            note,
-        }
-    }
+        health,
+        matches!(
+            planning_state,
+            PlanningDoctorState::Incomplete | PlanningDoctorState::Invalid
+        )
+        .then(|| projection.failure_reason().map(str::to_string))
+        .flatten(),
+        note,
+    )
 }
 
 // 구체적인 active queue head를 우선하고, head가 없으면 runtime projection의 aggregate queue copy로 후퇴한다.
@@ -191,7 +104,7 @@ impl PlanningDoctorService {
                     "failed to load planning workspace: {error}"
                 ))
             });
-        PlanningDoctorReport::from_runtime_projection(&projection)
+        planning_doctor_report_from_runtime_projection(&projection)
     }
 }
 
@@ -298,13 +211,13 @@ mod tests {
 
     #[test]
     fn runtime_projection_classifies_absent_incomplete_and_invalid_states() {
-        let absent = PlanningDoctorReport::from_runtime_projection(
+        let absent = planning_doctor_report_from_runtime_projection(
             &PlanningRuntimeProjection::uninitialized(),
         );
-        let incomplete = PlanningDoctorReport::from_runtime_projection(
+        let incomplete = planning_doctor_report_from_runtime_projection(
             &PlanningRuntimeProjection::invalid(format!("{INCOMPLETE_PREFIX} task file missing")),
         );
-        let invalid = PlanningDoctorReport::from_runtime_projection(
+        let invalid = planning_doctor_report_from_runtime_projection(
             &PlanningRuntimeProjection::invalid("task authority JSON is invalid"),
         );
 
@@ -347,7 +260,7 @@ mod tests {
             Some("queue.md".to_string()),
         );
 
-        let report = PlanningDoctorReport::from_runtime_projection(&projection);
+        let report = planning_doctor_report_from_runtime_projection(&projection);
 
         assert_eq!(report.planning_state(), PlanningDoctorState::ReadyWithTask);
         assert_eq!(report.health(), Some("planning workspace is healthy"));
@@ -370,7 +283,7 @@ mod tests {
             None,
         );
 
-        let report = PlanningDoctorReport::from_runtime_projection(&projection);
+        let report = planning_doctor_report_from_runtime_projection(&projection);
 
         assert_eq!(
             report.planning_state(),

@@ -11,6 +11,7 @@
 - `src/domain/`: 순수 conversation, session, planning, parallel, terminal, review model
 - `src/application/service/`: use-case orchestration과 control-plane service
 - `src/application/port/`: adapter와 독립적인 application 경계 계약
+- `src/application/port/inbound/`: adapter-facing use-case interface와 request/response 계약
 - `src/application/port/outbound/`: application 소유 integration capability 계약
 - `src/adapter/inbound/tui/`: inline Ratatui/Crossterm shell
 - `src/adapter/inbound/{cli,admin_api,telegram_bot}/`: 다른 운영 adapter
@@ -30,6 +31,7 @@
   사용합니다.
 - Macro 중심 또는 추측성 abstraction보다 단순한 struct와 method를 우선합니다.
 - Mapping은 adapter, 순수 decision은 domain에 둡니다.
+- Inbound adapter는 좁은 inbound port에 의존하고 service/use case가 해당 port를 구현하게 합니다.
 - 실패 가능한 boundary는 `Result`를 반환하고 test 밖의 `panic!`은 피합니다.
 - 실제 integration boundary가 있을 때만 outbound port를 추가합니다.
 - Composition wiring은 entrypoint 가까이에 두고 feature code가 concrete leaf adapter를 직접

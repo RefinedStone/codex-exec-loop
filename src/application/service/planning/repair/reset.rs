@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 
+use crate::application::port::inbound::planning_workspace_maintenance_port::PlanningWorkspaceResetResult;
 use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityActiveDocumentMutation, PlanningAuthorityDocumentCommit, PlanningAuthorityPort,
 };
@@ -20,6 +21,7 @@ use crate::application::service::planning::authoring::bootstrap::{
 };
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
 use crate::application::service::planning::shared::authority_mutation_guard::with_authority_mutation_guard;
+use crate::domain::planning::PlanningResetTarget;
 use crate::domain::planning::PriorityQueueService;
 use crate::domain::planning::{
     DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, PLANNING_DIRECTION_DOCS_DIRECTORY,
@@ -44,32 +46,6 @@ const RESET_DIRECTIONS_REMOVED_PATHS: &[&str] = &[
 // full reset은 generated draft/rejection도 지워 오래된 planning 상태가 bootstrap 뒤에 남지 않게 한다.
 const RESET_ALL_GENERATED_ARTIFACT_PATHS: &[&str] =
     &[PLANNING_DRAFTS_DIRECTORY, PLANNING_REJECTED_DIRECTORY];
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-// CLI, admin API, Telegram, TUI, control command adapter가 공유하는 공개 reset 대상이다.
-pub enum PlanningResetTarget {
-    Queue,
-    Directions,
-    All,
-}
-impl PlanningResetTarget {
-    // label은 외부 command/report 표면에 노출되는 stable 문자열이다.
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Queue => "queue",
-            Self::Directions => "directions",
-            Self::All => "all",
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-// 결과는 외부에 보이는 파일 효과만 보고하고, DB authority rewrite는 target 선택 자체로 표현한다.
-pub struct PlanningWorkspaceResetResult {
-    pub target: PlanningResetTarget,
-    pub rewritten_paths: Vec<String>,
-    pub removed_paths: Vec<String>,
-}
 
 #[derive(Clone)]
 /*

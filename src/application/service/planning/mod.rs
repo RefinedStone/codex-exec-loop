@@ -70,9 +70,11 @@ pub use self::authoring::proposal_promotion::{
 };
 // control 타입은 planning subsystem을 명령형으로 조작하는 경로를 제공한다. CLI/admin이 service 내부 구조를 몰라도
 // command/reply 단위로 호출할 수 있다.
-pub use self::control::{
-    PlanningControlCommand, PlanningControlFacadeService, PlanningControlReply,
-    PlanningControlRequest, PlanningControlResponse, PlanningControlService,
+pub use self::control::{PlanningControlFacadeService, PlanningControlService};
+pub use crate::application::port::inbound::planning_control_port::{
+    PLANNING_CONTROL_HELP_TEXT, PlanningControlCommand, PlanningControlPort,
+    PlanningControlQueueEntry, PlanningControlReply, PlanningControlRequest,
+    PlanningControlResetOutcome, PlanningControlResponse, PlanningControlStatusSnapshot,
 };
 // PlanningFeature는 adapter가 가장 많이 받는 planning facade다. 내부 feature 모듈은 숨기고 타입 이름만 공개한다.
 pub use self::feature::PlanningFeature;
@@ -80,7 +82,10 @@ pub use self::feature::PlanningFeature;
 // 위해 같은 타입을 옛 이름으로도 재수출한다.
 pub use self::feature::PlanningFeature as PlanningServices;
 // doctor 타입은 workspace 상태 진단 결과를 admin/runtime 화면으로 전달하는 공개 projection이다.
-pub use self::repair::doctor::{PlanningDoctorReport, PlanningDoctorState};
+pub use crate::application::port::inbound::planning_workspace_maintenance_port::{
+    PlanningDoctorReport, PlanningDoctorState, PlanningWorkspaceMaintenancePort,
+    PlanningWorkspaceResetResult,
+};
 // reconciliation 재수출은 턴 실행 후 planning 파일과 task authority를 맞추는 과정의 snapshot, repair request, queue action
 // 계약을 한곳으로 올린다.
 pub use self::repair::reconciliation::{
@@ -88,7 +93,7 @@ pub use self::repair::reconciliation::{
     PlanningReconciliationResult, PlanningRepairRequest, PlanningRepairRetryReason,
 };
 // reset 타입은 admin reset 요청이 어떤 범위를 되돌렸고 어떤 결과를 냈는지 표현한다.
-pub use self::repair::reset::{PlanningResetTarget, PlanningWorkspaceResetResult};
+pub use crate::domain::planning::PlanningResetTarget;
 // runtime facade 타입은 TUI 턴 제출 경로가 task handoff, auto-follow 판단, preview, status projection을 다룰 때 쓰는
 // 중심 계약이다.
 pub use self::runtime::facade::{
@@ -138,9 +143,11 @@ pub use self::task_mutation::{
 };
 // task tool 재수출은 app-server tool schema와 요청/응답 타입을 함께 노출해 adapter가 같은 contract로 JSON tool 호출을
 // 구성하게 한다.
-pub use self::task_tool::{
-    PlanningTaskToolRequest, PlanningTaskToolResponse, PlanningTaskToolService,
-    planning_task_tool_contract_json,
+pub use self::task_tool::PlanningTaskToolService;
+pub use crate::application::port::inbound::planning_task_tool_port::{
+    PlanningTaskCreatePayload, PlanningTaskToolCreateRequest, PlanningTaskToolListRequest,
+    PlanningTaskToolPort, PlanningTaskToolRequest, PlanningTaskToolResponse,
+    PlanningTaskToolUpdateRequest, PlanningTaskUpdatePayload, planning_task_tool_contract_json,
 };
 // use case 묶음 재수출은 PlanningFeature의 필드 타입을 외부에서도 명시하거나 테스트 fixture에서 사용할 수 있게 한다.
 pub use self::use_cases::{

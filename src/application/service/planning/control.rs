@@ -1,8 +1,13 @@
-use super::PlanningResetTarget;
+pub use crate::application::port::inbound::planning_control_port::{
+    PLANNING_CONTROL_HELP_TEXT, PlanningControlCommand, PlanningControlPort,
+    PlanningControlQueueEntry, PlanningControlReply, PlanningControlRequest,
+    PlanningControlResetOutcome, PlanningControlResponse, PlanningControlStatusSnapshot,
+};
 use crate::application::service::planning::{
     PlanningApplicationProjection, PlanningApplicationQueueTask, PlanningDoctorReport,
     PlanningServices, PlanningWorkspaceResetResult,
 };
+use crate::domain::planning::PlanningResetTarget;
 use anyhow::Result;
 use std::sync::Arc;
 
@@ -12,92 +17,6 @@ use std::sync::Arc;
  * 있는 stable text reply로 낮춘다. inbound adapter는 command enum과 text reply만 다루고, queue/proposal
  * 판단은 application projection 뒤에 둔다.
  */
-const CONTROL_HELP_TEXT: &str = "지원 명령어\n\
-/help\n\
-/status\n\
-/queue\n\
-/reset queue\n\
-/reset directions\n\
-/reset all";
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PlanningControlCommand {
-    Help,
-    Status,
-    Queue,
-    // reset은 target enum을 통해서만 들어온다. caller가 free-form 파괴 명령 문자열을 reset use case로 넘기지 못하게 한다.
-    Reset(PlanningResetTarget),
-}
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PlanningControlReply {
-    pub text: String,
-}
-impl PlanningControlReply {
-    fn new(text: impl Into<String>) -> Self {
-        Self { text: text.into() }
-    }
-}
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PlanningControlRequest {
-    pub command: PlanningControlCommand,
-}
-impl PlanningControlRequest {
-    pub fn new(command: PlanningControlCommand) -> Self {
-        Self { command }
-    }
-}
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PlanningControlResponse {
-    pub workspace_dir: String,
-    pub reply: PlanningControlReply,
-}
-impl PlanningControlResponse {
-    fn new(workspace_dir: impl Into<String>, reply: PlanningControlReply) -> Self {
-        Self {
-            workspace_dir: workspace_dir.into(),
-            reply,
-        }
-    }
-}
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PlanningControlQueueEntry {
-    // queue entry는 operator text에 필요한 field만 남긴다. rich admin view가 UI 전용 metadata를 늘려도
-    // command API의 compact line 계약은 바뀌지 않는다.
-    pub task_id: String,
-    pub task_title: String,
-    pub direction_id: String,
-    pub status: String,
-    pub combined_priority: i32,
-}
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PlanningControlStatusSnapshot {
-    // snapshot data는 rendering을 위해 denormalize되어 있다. /status와 /queue를 format하는 동안 application
-    // facade를 반복 호출하지 않고, 같은 관측 시점의 health/queue/proposal 상태를 함께 보여 주기 위해서다.
-    pub workspace_dir: String,
-    pub planning_state: String,
-    pub task_authority_signature: Option<u64>,
-    pub queue_head_task_signature: Option<u64>,
-    pub queue_summary: Option<String>,
-    pub proposal_summary: Option<String>,
-    pub health: Option<String>,
-    pub issue: Option<String>,
-    pub note: Option<String>,
-    pub preview_status_label: String,
-    pub preview_detail: Option<String>,
-    pub queue_head: Option<PlanningControlQueueEntry>,
-    pub visible_tasks: Vec<PlanningControlQueueEntry>,
-    pub proposed_tasks: Vec<PlanningControlQueueEntry>,
-}
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PlanningControlResetOutcome {
-    // reset output은 reset 결과를 반영하되 doctor state를 납작하게 합친다. command caller가 reset 효과와
-    // post-reset health를 한 reply 안에서 보여 줄 수 있게 하는 shape다.
-    pub target: String,
-    pub rewritten_paths: Vec<String>,
-    pub removed_paths: Vec<String>,
-    pub planning_state: String,
-    pub health: Option<String>,
-    pub issue: Option<String>,
-}
 pub trait PlanningControlSurface: Send + Sync {
     // 좁은 trait은 command executor를 testable하게 만들고, text layer가 full planning facade API에 의존하지 않게 한다.
     fn workspace_dir(&self) -> &str;
@@ -190,7 +109,9 @@ impl PlanningControlService {
     pub fn execute(&self, command: PlanningControlCommand) -> Result<PlanningControlReply> {
         // execute는 의도적으로 dispatch와 formatting만 담당한다. 모든 read/write는 PlanningControlSurface 경계를 지난다.
         match command {
-            PlanningControlCommand::Help => Ok(PlanningControlReply::new(CONTROL_HELP_TEXT)),
+            PlanningControlCommand::Help => {
+                Ok(PlanningControlReply::new(PLANNING_CONTROL_HELP_TEXT))
+            }
             PlanningControlCommand::Status => {
                 let snapshot = self.surface.load_status_snapshot()?;
                 Ok(PlanningControlReply::new(format_status(&snapshot)))
@@ -206,7 +127,13 @@ impl PlanningControlService {
         }
     }
     pub fn help_text(&self) -> &'static str {
-        CONTROL_HELP_TEXT
+        PLANNING_CONTROL_HELP_TEXT
+    }
+}
+
+impl PlanningControlPort for PlanningControlService {
+    fn execute_request(&self, request: PlanningControlRequest) -> Result<PlanningControlResponse> {
+        PlanningControlService::execute_request(self, request)
     }
 }
 fn map_control_status_snapshot(

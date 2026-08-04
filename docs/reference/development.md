@@ -11,6 +11,7 @@ GitHub delivery workflow. `AGENTS.md` remains the compact instruction entrypoint
 - `src/domain/`: pure conversation, session, planning, parallel, terminal, and review models
 - `src/application/service/`: use-case orchestration and control-plane services
 - `src/application/port/`: adapter-independent boundary contracts
+- `src/application/port/inbound/`: adapter-facing use-case interfaces and request/response contracts
 - `src/application/port/outbound/`: application-owned integration capability contracts
 - `src/adapter/inbound/tui/`: alternate-screen fullscreen Ratatui/Crossterm shell
 - `src/adapter/inbound/{cli,admin_api,telegram_bot}/`: other operator adapters
@@ -31,6 +32,7 @@ GitHub delivery workflow. `AGENTS.md` remains the compact instruction entrypoint
   `Response`, and `State` names.
 - Prefer straightforward structs and methods over macro-heavy or speculative abstractions.
 - Keep mapping in adapters and pure decisions in domain code.
+- Make inbound adapters depend on narrow inbound ports; implement those ports in services/use cases.
 - Return `Result` at fallible boundaries; avoid `panic!` outside tests.
 - Add an outbound port only when a real integration boundary exists.
 - Keep composition wiring near entrypoints; feature code must not import convenient concrete leaves.

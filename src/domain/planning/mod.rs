@@ -58,7 +58,8 @@ pub use validation::PlanningSemanticValidationService;
 pub use workspace_contract::{
     DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, PLANNING_DIRECTION_DOCS_DIRECTORY,
     PLANNING_DRAFTS_DIRECTORY, PLANNING_PROMPTS_DIRECTORY, PLANNING_REJECTED_DIRECTORY,
-    PlanningDraftNameError, default_direction_detail_doc_path, validate_planning_draft_name,
+    PlanningDraftNameError, PlanningResetTarget, default_direction_detail_doc_path,
+    validate_planning_draft_name,
 };
 
 // planning authority 문서의 schema version이다. adapter와 validation은 이 값을 기준으로 호환성을 판단한다.

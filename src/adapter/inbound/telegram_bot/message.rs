@@ -1,12 +1,7 @@
-use std::sync::Arc;
-
-use anyhow::{Result, bail};
-
-use crate::application::service::planning::control::{
-    PlanningControlResetOutcome, PlanningControlService, PlanningControlStatusSnapshot,
-    PlanningControlSurface,
+use crate::application::port::inbound::planning_control_port::{
+    PLANNING_CONTROL_HELP_TEXT, PlanningControlCommand,
 };
-use crate::application::service::planning::{PlanningControlCommand, PlanningResetTarget};
+use crate::domain::planning::PlanningResetTarget;
 
 /*
  * Telegram 메시지 파서는 inbound adapter의 가장 얇은 명령 해석 경계다.
@@ -164,12 +159,11 @@ pub(super) fn parse_message(text: Option<&str>) -> TelegramParsedMessage {
         "/reset" => parse_reset_arguments(&arguments),
         /*
          * slash로 시작하면 사용자가 봇 명령을 의도한 것이므로 침묵하지 않고 help를 붙인다.
-         * help_text를 만들기 위해 service를 쓰지만, 아래 Noop surface가 실제 I/O 실행을
-         * 막아 파서가 여전히 순수한 문자열 해석 경계로 남는다.
+         * help copy는 inbound port 계약이 소유하므로 파서가 service를 조립하거나 I/O를 실행하지 않는다.
          */
         token if token.starts_with('/') => TelegramParsedMessage::Error(format!(
             "지원하지 않는 명령어입니다: {token}\n{}\n/parallel\n/reviews\n/whoami",
-            PlanningControlService::new(Arc::new(NoopPlanningControlSurface)).help_text()
+            PLANNING_CONTROL_HELP_TEXT
         )),
         /*
          * slash가 없는 나머지 텍스트는 일반 대화로 간주한다. 사용자가 그룹 채팅에서
@@ -255,25 +249,4 @@ fn normalize_command(raw_command: &str) -> String {
     let lowered = raw_command.to_ascii_lowercase();
     let mut parts = lowered.split('@');
     parts.next().unwrap_or_default().to_string()
-}
-
-/*
- * 이 surface는 unsupported slash command의 help text를 렌더링하기 위한 placeholder다.
- * PlanningControlService::help_text는 상태 조회나 reset을 호출하지 않으므로 정상 경로에서는
- * 아래 메서드들이 실행되지 않는다. 실행되면 파서가 자기 책임을 넘어섰다는 뜻이므로 즉시 실패한다.
- */
-struct NoopPlanningControlSurface;
-
-impl PlanningControlSurface for NoopPlanningControlSurface {
-    fn workspace_dir(&self) -> &str {
-        ""
-    }
-
-    fn load_status_snapshot(&self) -> Result<PlanningControlStatusSnapshot> {
-        bail!("noop control surface should not execute");
-    }
-
-    fn reset_workspace(&self, _target: PlanningResetTarget) -> Result<PlanningControlResetOutcome> {
-        bail!("noop control surface should not execute");
-    }
 }

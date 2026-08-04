@@ -14,9 +14,7 @@ use super::repair::reconciliation::{
     PlanningExecutionSnapshot, PlanningReconciliationResult, PlanningRepairRequest,
     PlanningRepairRetryReason,
 };
-use super::repair::reset::{
-    PlanningResetService, PlanningResetTarget, PlanningWorkspaceResetResult,
-};
+use super::repair::reset::PlanningResetService;
 use super::runtime::facade::{
     PlanningMainSessionHandoff, PlanningRuntimeAutoFollowDecision,
     PlanningRuntimeAutoFollowPreview, PlanningRuntimeAutoFollowPreviewRequest,
@@ -40,21 +38,25 @@ use super::task_mutation::{
     PlanningTaskMutationCommitResult, PlanningTaskMutationService,
     validate_queue_cancellation_request,
 };
-use super::task_tool::{
-    PlanningTaskToolRequest, PlanningTaskToolResponse, PlanningTaskToolService,
-    planning_task_tool_contract_json,
-};
+use super::task_tool::PlanningTaskToolService;
 use super::worker::orchestration::{
     PlanningLedgerRepairRequest, PlanningOfficialCompletionRefreshRequest,
     PlanningQueueRefreshMode, PlanningQueueRefreshRequest, PlanningWorkerOrchestrationService,
     PlanningWorkerRunOutcome,
 };
+use crate::application::port::inbound::planning_task_tool_port::{
+    PlanningTaskToolPort, PlanningTaskToolRequest, PlanningTaskToolResponse,
+    planning_task_tool_contract_json,
+};
+use crate::application::port::inbound::planning_workspace_maintenance_port::{
+    PlanningWorkspaceMaintenancePort, PlanningWorkspaceResetResult,
+};
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::port::outbound::planning_task_repository_port::PlanningTaskAuthorityMutationRecord;
 use crate::application::service::parallel_agent_profile::ParallelAgentProfile;
 use crate::domain::planning::{
-    OriginSessionKind, PlanningOfficialCompletionRefreshContract, PostTurnContinuationPermit,
-    PriorityQueueTask, QueueIdlePolicy, TaskMutationProvenance,
+    OriginSessionKind, PlanningOfficialCompletionRefreshContract, PlanningResetTarget,
+    PostTurnContinuationPermit, PriorityQueueTask, QueueIdlePolicy, TaskMutationProvenance,
     TurnSnapshotCapture as DomainTurnSnapshotCapture,
     TurnSnapshotCaptureState as DomainTurnSnapshotCaptureState,
 };
@@ -341,6 +343,20 @@ impl PlanningWorkspaceUseCases {
     ) -> anyhow::Result<PlanningDraftEditorSession> {
         self.directions_service
             .stage_queue_idle_prompt_editor_session(workspace_dir)
+    }
+}
+
+impl PlanningWorkspaceMaintenancePort for PlanningWorkspaceUseCases {
+    fn inspect_workspace(&self, workspace_dir: &str) -> PlanningDoctorReport {
+        PlanningWorkspaceUseCases::inspect_workspace(self, workspace_dir)
+    }
+
+    fn reset_workspace(
+        &self,
+        workspace_dir: &str,
+        target: PlanningResetTarget,
+    ) -> anyhow::Result<PlanningWorkspaceResetResult> {
+        PlanningWorkspaceUseCases::reset_workspace(self, workspace_dir, target)
     }
 }
 #[derive(Clone)]
@@ -1039,6 +1055,20 @@ impl PlanningTaskToolUseCases {
         request: PlanningTaskToolRequest,
     ) -> anyhow::Result<PlanningTaskToolResponse> {
         self.task_tool.handle_request(workspace_dir, request)
+    }
+}
+
+impl PlanningTaskToolPort for PlanningTaskToolUseCases {
+    fn contract_json(&self) -> &'static str {
+        PlanningTaskToolUseCases::contract_json(self)
+    }
+
+    fn run(
+        &self,
+        workspace_dir: &str,
+        request: PlanningTaskToolRequest,
+    ) -> anyhow::Result<PlanningTaskToolResponse> {
+        PlanningTaskToolUseCases::run(self, workspace_dir, request)
     }
 }
 #[derive(Clone)]

@@ -9,8 +9,8 @@ owned by B). They are not the order in which a command executes:
 
 ```text
 adapter/inbound/tui -> core + application contracts/projections + opaque composition facade + domain
-adapter/inbound/{cli,admin_api,telegram_bot} -> application -> domain
-application -> outbound ports
+adapter/inbound/{cli,admin_api,telegram_bot} -> application inbound ports + domain
+application services -> inbound ports + outbound ports + domain
 adapter/outbound -> application ports + domain
 composition -> core + application + adapter/outbound
 ```
@@ -45,15 +45,19 @@ while composition interprets it with application services.
 | --- | --- | --- |
 | `adapter/inbound` | input mapping, rendering, local focus/editor/selection state | domain policy, durable task truth, dispatch policy |
 | `core` | framework-free client runtime: command/event/effect/completion flow, process-local client state, projections, snapshots | business/domain authority, TUI/HTTP/Telegram types, application services, or concrete DB/Git/filesystem adapters |
-| `application/service` | use-case orchestration, ordering gates, transactions, control-plane handles | widgets, terminal events, transport DTOs |
-| `application/port` | adapter-independent boundary contracts and outbound capabilities required by application services | service implementations, concrete integration details |
+| `application/service` | implementations of inbound use cases, orchestration, ordering gates, transactions, control-plane handles | widgets, terminal events, transport DTOs |
+| `application/port/inbound` | adapter-facing use-case interfaces plus request/response contracts | service implementations, transport-specific mapping |
+| `application/port/outbound` | integration capabilities required by application services | service implementations, concrete integration details |
 | `domain` | pure invariants, validation, decisions, state transitions | async runtime, IO, logging, UI, database, filesystem, or Git calls |
 | `adapter/outbound` | app-server, DB, filesystem, Git, GitHub, and Telegram integration | business policy |
 | `composition` | dependency construction and concrete wiring | domain decisions |
 
-Mapping stays in adapters. Policy stays in domain or application services. Cross-adapter stream
-contracts live at the application boundary instead of inside a service implementation; concrete
-integration capabilities remain outbound ports.
+Mapping stays in adapters. Policy stays in domain or application services. Inbound adapters retain
+only inbound port capabilities; composition injects service/use-case implementations behind those
+traits. Cross-adapter stream contracts live at the application boundary instead of inside a service
+implementation; concrete integration capabilities remain outbound ports. The planning CLI and
+Telegram paths use the narrow `PlanningControlPort`, `PlanningWorkspaceMaintenancePort`, and
+`PlanningTaskToolPort` contracts rather than a full planning service graph.
 
 The Admin server owns one process-lifetime parallel control-plane handle in addition to its passive
 dashboard composition. Browser control requests map only to typed enable, dispatch, refresh, and
@@ -65,8 +69,9 @@ implementation.
 
 `src/core` is the framework-free **Client Runtime** outside the business hexagon, at its inbound
 client boundary. It is a long-lived state coordinator for the native client, not another business
-layer and not a replacement for application or domain. CLI, Admin, and Telegram may call the same
-application services without adopting this process-local TUI runtime. Its explicit contracts are:
+layer and not a replacement for application or domain. CLI, Admin, and Telegram may enter the same
+application use cases through inbound ports without adopting this process-local TUI runtime. Its
+explicit contracts are:
 
 - `AppCommand` or `CoreInput`: user, lifecycle, tick, or completion intent
 - `Effect`: work core requests outside itself

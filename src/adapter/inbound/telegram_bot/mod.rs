@@ -7,6 +7,9 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use rand::RngCore;
 
+use crate::application::port::inbound::planning_control_port::{
+    PlanningControlCommand, PlanningControlPort, PlanningControlRequest,
+};
 use crate::application::port::outbound::parallel_mode_runtime_event_log_port::ParallelModeRuntimeEventLogRequest;
 use crate::application::port::outbound::telegram_bot_port::{
     TELEGRAM_LONG_POLL_TRANSPORT_MARGIN_SECONDS, TelegramBotPort, TelegramInboundMessage,
@@ -20,9 +23,6 @@ use crate::application::port::outbound::telegram_update_ledger_port::{
     TelegramUpdateClaimDecision, TelegramUpdateLedgerPort,
 };
 use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneComposition;
-use crate::application::service::planning::{
-    PlanningControlCommand, PlanningControlRequest, PlanningControlService,
-};
 use crate::application::service::review_center::ReviewCenterReadService;
 use crate::composition::production;
 
@@ -113,7 +113,7 @@ where
 }
 
 struct TelegramApplication {
-    control_service: PlanningControlService,
+    control_service: Arc<dyn PlanningControlPort>,
     parallel_control_surface: Arc<dyn TelegramParallelControlSurface>,
     review_center_read_service: ReviewCenterReadService,
     telegram_update_ledger_port: Arc<dyn TelegramUpdateLedgerPort>,
@@ -216,7 +216,7 @@ struct TelegramBotRunner {
     binding_workspace_dir: String,
     stream_key: String,
     // Application boundary shared with non-Telegram control surfaces.
-    control_service: PlanningControlService,
+    control_service: Arc<dyn PlanningControlPort>,
     parallel_control_surface: Arc<dyn TelegramParallelControlSurface>,
     review_center_read_service: Option<ReviewCenterReadService>,
     policy: TelegramBotPolicy,
@@ -247,7 +247,7 @@ impl TelegramBotRunner {
         gateway: Arc<dyn TelegramBotPort>,
         global_runner_lease: Arc<dyn TelegramGlobalRunnerLeasePort>,
         update_ledger: Arc<dyn TelegramUpdateLedgerPort>,
-        control_service: PlanningControlService,
+        control_service: impl PlanningControlPort + 'static,
         parallel_control_surface: Arc<dyn TelegramParallelControlSurface>,
         config: TelegramBotRuntimeConfig,
     ) -> Self {
@@ -258,7 +258,7 @@ impl TelegramBotRunner {
             workspace_dir: config.workspace_dir,
             binding_workspace_dir: config.binding_workspace_dir,
             stream_key: config.stream_key,
-            control_service,
+            control_service: Arc::new(control_service),
             parallel_control_surface,
             review_center_read_service: None,
             policy: config.policy,
