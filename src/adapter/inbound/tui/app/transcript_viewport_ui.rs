@@ -1,6 +1,7 @@
 use ratatui::layout::{Position, Rect};
 use unicode_width::UnicodeWidthStr;
 
+use super::SharedTranscriptCardDigests;
 use super::terminal_interaction_ui::TerminalInteractionUiState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,7 +102,7 @@ pub(super) struct TranscriptViewportUiState {
     latest_revision: u64,
     seen_revision: u64,
     document_identity: Option<String>,
-    card_digests: Vec<[u8; 32]>,
+    card_digests: SharedTranscriptCardDigests,
     card_hit_areas: Vec<TranscriptCardHitArea>,
     frame_snapshot: Option<TranscriptViewportFrame>,
     selection: Option<TranscriptSelection>,
@@ -119,7 +120,7 @@ impl Default for TranscriptViewportUiState {
             latest_revision: 0,
             seen_revision: 0,
             document_identity: None,
-            card_digests: Vec::new(),
+            card_digests: SharedTranscriptCardDigests::from(Vec::new()),
             card_hit_areas: Vec::new(),
             frame_snapshot: None,
             selection: None,
@@ -160,18 +161,20 @@ impl TranscriptViewportUiState {
         self.top_row
     }
 
-    pub(super) fn bind_frame(
+    pub(super) fn bind_frame<D>(
         &mut self,
-        card_digests: Vec<[u8; 32]>,
+        card_digests: D,
         card_hit_areas: Vec<TranscriptCardHitArea>,
         mut frame_snapshot: Option<TranscriptViewportFrame>,
-    ) {
+    ) where
+        D: Into<SharedTranscriptCardDigests>,
+    {
         if let Some(frame_snapshot) = frame_snapshot.as_mut() {
             for row in &mut frame_snapshot.rows {
                 normalize_rendered_row_cells(&mut row.cells);
             }
         }
-        self.card_digests = card_digests;
+        self.card_digests = card_digests.into();
         self.card_hit_areas = card_hit_areas;
         self.frame_snapshot = frame_snapshot;
     }
