@@ -1,9 +1,13 @@
 use std::fmt;
+use std::sync::Arc;
 
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+use crate::domain::planning::PlanningResetTarget;
+
 /*
- * admin surface는 의도적으로 data-heavy한 모듈이다. inbound admin route/template과 planning application
+ * PlanningAdminPort 계약은 의도적으로 data-heavy하다. inbound admin route/template과 planning application
  * service 사이의 안정적인 JSON/view 계약을 여기에 모아두면, domain document는 service 경계 뒤에 남고 admin
  * UI는 editor-friendly label, markdown body, 요약, mutation form만 다룬다. 이 계층이 얇아 보여도 중요한
  * 이유는 route가 domain enum이나 persistence snapshot을 직접 serialize하기 시작하면 authority format 변경이
@@ -411,6 +415,160 @@ pub struct PlanningAdminResetOutcome {
     pub rewritten_paths: Vec<String>,
     pub removed_paths: Vec<String>,
     pub doctor: PlanningAdminDoctorSummary,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PlanningAdminDraftPromotionOutcome {
+    pub promoted_file_count: usize,
+    pub is_valid: bool,
+    pub session: PlanningAdminSessionView,
+}
+
+pub trait PlanningAdminPort: Send + Sync {
+    fn workspace_dir(&self) -> &str;
+
+    fn load_overview(&self) -> Result<PlanningAdminOverview>;
+
+    fn load_runtime_summary(&self) -> Result<PlanningAdminRuntimeSummary>;
+
+    fn load_management_view(&self) -> Result<PlanningAdminManagementView>;
+
+    fn upsert_direction(
+        &self,
+        request: PlanningAdminDirectionMutationRequest,
+    ) -> Result<PlanningAdminCrudOutcome>;
+
+    fn delete_direction(
+        &self,
+        request: PlanningAdminDirectionDeleteRequest,
+    ) -> Result<PlanningAdminCrudOutcome>;
+
+    fn upsert_task(
+        &self,
+        request: PlanningAdminTaskMutationRequest,
+    ) -> Result<PlanningAdminCrudOutcome>;
+
+    fn delete_task(
+        &self,
+        request: PlanningAdminTaskDeleteRequest,
+    ) -> Result<PlanningAdminCrudOutcome>;
+
+    fn create_draft_session(
+        &self,
+        kind: PlanningAdminDraftKind,
+        direction_id: Option<&str>,
+    ) -> Result<PlanningAdminSessionView>;
+
+    fn load_draft_session(
+        &self,
+        request: PlanningAdminDraftLoadRequest,
+    ) -> Result<PlanningAdminSessionView>;
+
+    fn save_draft_session(
+        &self,
+        request: PlanningAdminDraftMutationRequest,
+    ) -> Result<PlanningAdminSessionView>;
+
+    fn promote_draft_session(
+        &self,
+        request: PlanningAdminDraftMutationRequest,
+    ) -> Result<PlanningAdminDraftPromotionOutcome>;
+
+    fn export_active_files_for_edit(&self) -> Result<PlanningAdminFileSyncOutcome>;
+
+    fn apply_exported_files(&self) -> Result<PlanningAdminFileSyncOutcome>;
+
+    fn reset_workspace(&self, target: PlanningResetTarget) -> Result<PlanningAdminResetOutcome>;
+}
+
+impl<T> PlanningAdminPort for Arc<T>
+where
+    T: PlanningAdminPort + ?Sized,
+{
+    fn workspace_dir(&self) -> &str {
+        self.as_ref().workspace_dir()
+    }
+
+    fn load_overview(&self) -> Result<PlanningAdminOverview> {
+        self.as_ref().load_overview()
+    }
+
+    fn load_runtime_summary(&self) -> Result<PlanningAdminRuntimeSummary> {
+        self.as_ref().load_runtime_summary()
+    }
+
+    fn load_management_view(&self) -> Result<PlanningAdminManagementView> {
+        self.as_ref().load_management_view()
+    }
+
+    fn upsert_direction(
+        &self,
+        request: PlanningAdminDirectionMutationRequest,
+    ) -> Result<PlanningAdminCrudOutcome> {
+        self.as_ref().upsert_direction(request)
+    }
+
+    fn delete_direction(
+        &self,
+        request: PlanningAdminDirectionDeleteRequest,
+    ) -> Result<PlanningAdminCrudOutcome> {
+        self.as_ref().delete_direction(request)
+    }
+
+    fn upsert_task(
+        &self,
+        request: PlanningAdminTaskMutationRequest,
+    ) -> Result<PlanningAdminCrudOutcome> {
+        self.as_ref().upsert_task(request)
+    }
+
+    fn delete_task(
+        &self,
+        request: PlanningAdminTaskDeleteRequest,
+    ) -> Result<PlanningAdminCrudOutcome> {
+        self.as_ref().delete_task(request)
+    }
+
+    fn create_draft_session(
+        &self,
+        kind: PlanningAdminDraftKind,
+        direction_id: Option<&str>,
+    ) -> Result<PlanningAdminSessionView> {
+        self.as_ref().create_draft_session(kind, direction_id)
+    }
+
+    fn load_draft_session(
+        &self,
+        request: PlanningAdminDraftLoadRequest,
+    ) -> Result<PlanningAdminSessionView> {
+        self.as_ref().load_draft_session(request)
+    }
+
+    fn save_draft_session(
+        &self,
+        request: PlanningAdminDraftMutationRequest,
+    ) -> Result<PlanningAdminSessionView> {
+        self.as_ref().save_draft_session(request)
+    }
+
+    fn promote_draft_session(
+        &self,
+        request: PlanningAdminDraftMutationRequest,
+    ) -> Result<PlanningAdminDraftPromotionOutcome> {
+        self.as_ref().promote_draft_session(request)
+    }
+
+    fn export_active_files_for_edit(&self) -> Result<PlanningAdminFileSyncOutcome> {
+        self.as_ref().export_active_files_for_edit()
+    }
+
+    fn apply_exported_files(&self) -> Result<PlanningAdminFileSyncOutcome> {
+        self.as_ref().apply_exported_files()
+    }
+
+    fn reset_workspace(&self, target: PlanningResetTarget) -> Result<PlanningAdminResetOutcome> {
+        self.as_ref().reset_workspace(target)
+    }
 }
 
 #[cfg(test)]

@@ -25,6 +25,7 @@ mod facade;
 // file_sync는 DB authority와 workspace file 상태를 맞추는 동기화 흐름이다.
 // planning admin이 파일과 authoritative storage 사이의 drift를 다룰 때 이 영역을 통과한다.
 mod file_sync;
+mod inbound_port;
 // overview는 admin 화면이나 API가 한 번에 보여 줄 요약 projection을 조립한다.
 // 세부 mutation과 분리해 read model 성격을 분명히 한다.
 mod overview;
@@ -34,13 +35,8 @@ mod projection;
 // reset은 planning workspace나 authority state를 재초기화하는 위험도가 높은 관리 동작을 따로 모은다.
 // 일반 mutation과 분리해 호출 의도를 더 잘 드러낸다.
 mod reset;
-// surface는 facade 바깥으로 노출되는 Request/Response/State DTO를 모으는 public contract 영역이다.
-// 하위 구현 module의 private type이 inbound adapter로 새지 않게 한다.
-mod surface;
-
 // facade service re-export는 caller가 `planning::admin::PlanningAdminFacadeService`만 import하면 되게 해 준다.
 // 내부 파일 구조를 public dependency로 만들지 않는 module 표면이다.
 pub use self::facade::PlanningAdminFacadeService;
-// surface DTO 전체를 re-export해 inbound adapter가 admin command/result type을 이 module 경계에서 가져오게 한다.
-// 구현 module은 숨기고 contract type만 넓게 공개하는 역할이다.
-pub use self::surface::*;
+// 기존 application 내부 호출자의 점진적 이전을 위해 port-owned 계약을 이 경계에서도 재수출한다.
+pub use crate::application::port::inbound::planning_admin_port::*;

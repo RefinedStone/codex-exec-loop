@@ -29,6 +29,7 @@ use crate::domain::planning::PlanningOfficialCompletionRefreshContract;
 use crate::domain::planning::PriorityQueueTask;
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
+pub(crate) mod admin;
 mod automation_guard;
 mod branch_names;
 mod completion;

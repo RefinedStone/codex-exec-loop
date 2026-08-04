@@ -1,9 +1,8 @@
-use crate::application::port::outbound::parallel_mode_runtime_event_log_port::ParallelModeRuntimeEventLogRequest;
-use crate::application::service::parallel_agent_profile::{
-    ParallelAgentProfileConfig, ParallelAgentProfileService,
+use crate::application::port::inbound::parallel_agent_profile_port::{
+    ParallelAgentProfileConfig, ParallelAgentProfilePort,
 };
-use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneComposition;
-use crate::application::service::planning::PlanningAdminFacadeService;
+use crate::application::port::inbound::parallel_mode_admin_port::ParallelModeAdminPort;
+use crate::application::port::inbound::planning_admin_port::PlanningAdminPort;
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeDistributorQueueItem, ParallelModePoolSlotSnapshot,
     ParallelModePoolSlotState, ParallelModeQueueItemState, ParallelModeReadinessSnapshot,
@@ -452,22 +451,19 @@ pub(super) struct GuildMetricsView {
 }
 
 pub(super) fn build_akra_dashboard_view(
-    planning_admin: &PlanningAdminFacadeService,
-    parallel_mode_control_plane: &ParallelModeControlPlaneComposition,
-    parallel_agent_profile_service: &ParallelAgentProfileService,
+    planning_admin: &dyn PlanningAdminPort,
+    parallel_mode_admin_port: &dyn ParallelModeAdminPort,
+    parallel_agent_profile_port: &dyn ParallelAgentProfilePort,
 ) -> Result<AkraAdminDashboardView> {
     let workspace_dir = planning_admin.workspace_dir();
-    let planning_projection = planning_admin.load_runtime_application_projection()?;
-    let snapshot = parallel_mode_control_plane.inspect_dashboard_snapshot_from_projection(
-        workspace_dir,
-        &planning_projection,
-        ParallelModeRuntimeEventLogRequest::recent(DASHBOARD_EVENT_LIMIT),
-    );
-    let planning_revision = planning_projection.planning_revision;
+    let snapshot =
+        parallel_mode_admin_port.load_dashboard_snapshot(workspace_dir, DASHBOARD_EVENT_LIMIT);
+    let planning_revision = snapshot.planning_revision;
+    let structured_task_count = snapshot.structured_task_count;
     let readiness = snapshot.readiness;
     let supervisor = snapshot.supervisor;
     let events = snapshot.events;
-    let agent_profiles = parallel_agent_profile_service
+    let agent_profiles = parallel_agent_profile_port
         .load_config(workspace_dir)
         .map_err(anyhow::Error::msg)?;
 
@@ -513,9 +509,7 @@ pub(super) fn build_akra_dashboard_view(
                 .or_else(|| readiness.top_alert.clone()),
         },
         kpis: AkraKpiView {
-            total_tasks: planning_projection
-                .has_structured_queue_projection
-                .then_some(planning_projection.visible_tasks.len()),
+            total_tasks: structured_task_count,
             success_rate: None,
             today_throughput: None,
             active_agents: agents.active_count,
@@ -1137,17 +1131,11 @@ fn map_distributor(supervisor: &ParallelModeSupervisorSnapshot) -> DistributorVi
 
 pub(super) fn build_akra_events_view(
     workspace_dir: &str,
-    parallel_mode_control_plane: &ParallelModeControlPlaneComposition,
+    parallel_mode_admin_port: &dyn ParallelModeAdminPort,
     limit: usize,
     after_sequence: Option<i64>,
 ) -> (EventFeedView, Vec<RuntimeEventView>) {
-    let request = match after_sequence {
-        Some(sequence) => {
-            ParallelModeRuntimeEventLogRequest::recent(limit).after_sequence(sequence)
-        }
-        None => ParallelModeRuntimeEventLogRequest::recent(limit),
-    };
-    let events = parallel_mode_control_plane.build_runtime_events_snapshot(workspace_dir, request);
+    let events = parallel_mode_admin_port.load_runtime_events(workspace_dir, limit, after_sequence);
     let feed = map_event_feed(&events, limit, after_sequence.is_some());
     let entries = events.entries.iter().map(map_runtime_event).collect();
     (feed, entries)
@@ -1764,7 +1752,7 @@ fn current_git_branch(workspace_dir: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::service::parallel_agent_profile::ParallelAgentProfile;
+    use crate::domain::parallel_agent_profile::ParallelAgentProfile;
     use crate::domain::parallel_mode::{
         ParallelModeAgentRosterSnapshot, ParallelModeAgentSessionDetailSnapshot,
         ParallelModeAgentSessionHistoryEntry, ParallelModeDistributorSnapshot,

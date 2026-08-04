@@ -53,7 +53,7 @@ use crate::application::port::inbound::planning_workspace_maintenance_port::{
 };
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::port::outbound::planning_task_repository_port::PlanningTaskAuthorityMutationRecord;
-use crate::application::service::parallel_agent_profile::ParallelAgentProfile;
+use crate::domain::parallel_agent_profile::ParallelAgentProfile;
 use crate::domain::planning::{
     OriginSessionKind, PlanningOfficialCompletionRefreshContract, PlanningResetTarget,
     PostTurnContinuationPermit, PriorityQueueTask, QueueIdlePolicy, TaskMutationProvenance,

@@ -57,8 +57,15 @@ port capability만 보유하고 composition이 그 trait 뒤에 service/use-case
 adapter가 공유하는 stream 계약은 service 구현 안이 아니라 application 경계에 두고, concrete
 integration capability는 outbound port로 유지합니다. CLI와 Telegram은 전체 service graph 대신
 좁은 `PlanningControlPort`, `PlanningWorkspaceMaintenancePort`, `PlanningTaskToolPort`,
-`ParallelModeControlPort`, `ReviewCenterQueryPort` 계약을 사용합니다. Review center의 thread,
-inbox, history 값은 domain read model이며 repository port는 이를 저장하지만 소유하지 않습니다.
+`ParallelModeControlPort`, `ReviewCenterQueryPort` 계약을 사용합니다. Admin은
+`PlanningAdminPort`, `ParallelModeAdminPort`, `AdminDebugPort`, `ParallelAgentProfilePort`,
+`AppServerPromptLogQueryPort`만 보유하며 Axum state에는 concrete application service나 outbound
+repository capability가 없습니다. Review center, parallel agent profile, app-server prompt-log
+값은 domain 계약이며 repository port는 이를 저장하지만 소유하지 않습니다.
+
+프로세스 수명의 parallel control-plane handle과 completion channel은 `ParallelModeAdminPort`
+구현이 소유합니다. Browser request는 transport action을 typed admin command로 mapping하고,
+enable/dispatch/refresh/disable 정책과 effect completion drain은 application service가 담당합니다.
 
 ## Core runtime
 

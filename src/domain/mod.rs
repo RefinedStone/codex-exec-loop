@@ -2,6 +2,7 @@
  * domain 계층은 adapter나 I/O 없이도 설명 가능한 핵심 상태와 규칙을 둔다.
  * service는 이 모델들을 조합하고, adapter는 domain 타입을 화면이나 외부 API 형식으로 변환한다.
  */
+pub(crate) mod app_server_prompt_log;
 pub(crate) mod conversation;
 // conversation_runtime_envelope preserves requested, applied, and later-observed app-server
 // execution state without exposing raw provider configuration or credentials.
@@ -14,6 +15,7 @@ pub(crate) mod github_review;
 // operator_alert는 TUI/Telegram 같은 delivery adapter가 공유할 수 있는 사용자 알림 이벤트다.
 pub(crate) mod operator_alert;
 // parallel_mode는 lane, branch, worktree처럼 병렬 작업 자체의 의미를 담는다.
+pub(crate) mod parallel_agent_profile;
 pub(crate) mod parallel_mode;
 // planning은 direction, task, queue, validation 같은 실행 계획의 중심 모델이다.
 pub(crate) mod planning;

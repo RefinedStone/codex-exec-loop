@@ -2560,12 +2560,12 @@ fn admin_html_and_json_draft_routes_share_mutation_facade_methods() {
             "{label} draft path should use the shared draft mutation request"
         );
         assert!(
-            source.contains(".save_draft("),
-            "{label} draft path should call the shared save facade method"
+            source.contains(".save_draft_session("),
+            "{label} draft path should call the shared save inbound-port method"
         );
         assert!(
-            source.contains(".promote_draft("),
-            "{label} draft path should call the shared promote facade method"
+            source.contains(".promote_draft_session("),
+            "{label} draft path should call the shared promote inbound-port method"
         );
     }
     assert!(ADMIN_PAGES.contains("page_mutation_request(draft_name, form)"));
@@ -3492,14 +3492,14 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
 }
 
 #[test]
-fn akra_dashboard_reads_planning_queue_through_admin_facade_projection() {
+fn akra_dashboard_reads_planning_queue_through_admin_inbound_ports() {
     assert!(
-        AKRA_DASHBOARD_RS.contains("load_runtime_application_projection"),
-        "dashboard should ask the admin facade for the shared planning projection"
+        AKRA_DASHBOARD_RS.contains("load_dashboard_snapshot"),
+        "dashboard should ask the parallel admin port for one application-owned snapshot"
     );
     assert!(
-        AKRA_DASHBOARD_RS.contains("inspect_dashboard_snapshot_from_projection"),
-        "dashboard should pass planning projection facts into parallel control-plane readiness"
+        AKRA_DASHBOARD_RS.contains("ParallelModeAdminPort"),
+        "dashboard should depend on the parallel admin inbound contract"
     );
     assert!(
         !AKRA_DASHBOARD_RS.contains("PlanningApplicationProjection::from_runtime_projection"),
@@ -3522,26 +3522,27 @@ fn akra_parallel_admin_surface_reuses_typed_control_plane_for_browser_commands()
      * same typed application control plane used by the native surface.
      */
     assert!(
-        AKRA_DASHBOARD_RS.contains("inspect_dashboard_snapshot_from_projection"),
-        "admin dashboard should render through the parallel control-plane composition"
+        AKRA_DASHBOARD_RS.contains("load_dashboard_snapshot"),
+        "admin dashboard should render through the parallel admin inbound port"
     );
     assert!(
-        AKRA_DASHBOARD_RS.contains("build_runtime_events_snapshot"),
-        "admin event feed should render through the control-plane read surface"
+        AKRA_DASHBOARD_RS.contains("load_runtime_events"),
+        "admin event feed should render through the parallel admin inbound port"
     );
     for command in [
-        "ParallelModeControlPlaneCommand::Enable",
-        "ParallelModeControlPlaneCommand::RequestDispatch",
-        "ParallelModeControlPlaneCommand::InspectSupervisor",
-        "ParallelModeControlPlaneCommand::Disable",
+        "ParallelModeAdminCommand::Enable",
+        "ParallelModeAdminCommand::Dispatch",
+        "ParallelModeAdminCommand::Refresh",
+        "ParallelModeAdminCommand::Disable",
     ] {
         assert!(
             ADMIN_API.contains(command),
-            "admin API should reuse typed control-plane command {command}"
+            "admin API should map transport actions to typed inbound command {command}"
         );
     }
     assert!(ADMIN_MOD.contains("\"/api/admin/akra/control\""));
     assert!(!AKRA_DASHBOARD_RS.contains("ParallelModeService"));
+    assert!(!ADMIN_API.contains("ParallelModeControlPlaneCommand"));
     assert!(!ADMIN_API.contains("process_distributor_queue"));
 }
 

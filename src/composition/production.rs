@@ -13,7 +13,14 @@ use crate::adapter::outbound::filesystem::{
 use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
 use crate::adapter::outbound::github::{GithubAutomationAdapter, GithubReviewPollerAdapter};
 use crate::adapter::outbound::telegram::CurlTelegramBotAdapter;
+use crate::application::port::inbound::admin_debug_port::{
+    AdminDebugHarnessConfig, AdminDebugPort,
+};
+use crate::application::port::inbound::app_server_prompt_log_query_port::AppServerPromptLogQueryPort;
+use crate::application::port::inbound::parallel_agent_profile_port::ParallelAgentProfilePort;
+use crate::application::port::inbound::parallel_mode_admin_port::ParallelModeAdminPort;
 use crate::application::port::inbound::parallel_mode_control_port::ParallelModeControlPort;
+use crate::application::port::inbound::planning_admin_port::PlanningAdminPort;
 use crate::application::port::inbound::planning_control_port::PlanningControlPort;
 use crate::application::port::inbound::planning_task_tool_port::PlanningTaskToolPort;
 use crate::application::port::inbound::planning_workspace_maintenance_port::PlanningWorkspaceMaintenancePort;
@@ -34,12 +41,12 @@ use crate::application::port::outbound::review_center_repository_port::ReviewCen
 use crate::application::port::outbound::telegram_bot_port::TelegramBotPort;
 use crate::application::port::outbound::telegram_global_runner_lease_port::TelegramGlobalRunnerLeasePort;
 use crate::application::port::outbound::telegram_update_ledger_port::TelegramUpdateLedgerPort;
-use crate::application::service::admin_debug_harness::{
-    AdminDebugHarnessConfig, AdminDebugHarnessService,
-};
+use crate::application::service::admin_debug_harness::AdminDebugHarnessService;
+use crate::application::service::app_server_prompt_log_query::AppServerPromptLogQueryService;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
 use crate::application::service::parallel_agent_profile::ParallelAgentProfileService;
+use crate::application::service::parallel_mode::admin::ParallelModeAdminService;
 use crate::application::service::parallel_mode::{
     ParallelModeService, control_plane::ParallelModeControlPlaneComposition,
 };
@@ -57,11 +64,11 @@ const APP_SERVER_CLIENT_NAME: &str = "codex-exec-loop-native";
 const AKRA_APP_SERVER_PROMPT_LOG_ENV_VAR: &str = "AKRA_APP_SERVER_PROMPT_LOG";
 
 pub(crate) struct ProductionAdminApplication {
-    pub(crate) facade: Arc<PlanningAdminFacadeService>,
-    pub(crate) parallel_mode_control_plane: Arc<ParallelModeControlPlaneComposition>,
-    pub(crate) admin_debug_harness_service: AdminDebugHarnessService,
-    pub(crate) app_server_prompt_log_port: Arc<dyn AppServerPromptLogPort>,
-    pub(crate) parallel_agent_profile_service: ParallelAgentProfileService,
+    pub(crate) facade: Arc<dyn PlanningAdminPort>,
+    pub(crate) parallel_mode_admin_port: Arc<dyn ParallelModeAdminPort>,
+    pub(crate) admin_debug_port: Arc<dyn AdminDebugPort>,
+    pub(crate) app_server_prompt_log_query_port: Arc<dyn AppServerPromptLogQueryPort>,
+    pub(crate) parallel_agent_profile_port: Arc<dyn ParallelAgentProfilePort>,
     #[allow(dead_code)]
     pub(crate) review_center_query_port: Arc<dyn ReviewCenterQueryPort>,
 }
@@ -172,30 +179,38 @@ pub(crate) fn build_admin_application_with_debug_harness(
         workspace_dir.clone(),
         ports.review_center_repository_port.clone(),
     );
+    let app_server_prompt_log_query_port: Arc<dyn AppServerPromptLogQueryPort> = Arc::new(
+        AppServerPromptLogQueryService::new(ports.app_server_prompt_log_port.clone()),
+    );
     let parallel_agent_profile_service = parallel_agent_profile_service_from_ports(&ports);
+    let parallel_agent_profile_port: Arc<dyn ParallelAgentProfilePort> =
+        Arc::new(parallel_agent_profile_service.clone());
     let parallel_mode_control_plane = Arc::new(parallel_mode_control_plane_from_parts(
         planning.clone(),
         ports.planning_authority_port.clone(),
         ports.parallel_agent_worker_port.clone(),
         parallel_agent_profile_service.clone(),
     ));
-    let facade = Arc::new(PlanningAdminFacadeService::from_planning_with_authority(
-        workspace_dir,
-        planning,
-        ports.planning_workspace_port,
-        ports.planning_authority_port,
-        ports.planning_task_repository_port,
-    ));
+    let parallel_mode_admin_port: Arc<dyn ParallelModeAdminPort> =
+        Arc::new(ParallelModeAdminService::new(parallel_mode_control_plane));
+    let facade: Arc<dyn PlanningAdminPort> =
+        Arc::new(PlanningAdminFacadeService::from_planning_with_authority(
+            workspace_dir,
+            planning,
+            ports.planning_workspace_port,
+            ports.planning_authority_port,
+            ports.planning_task_repository_port,
+        ));
     ProductionAdminApplication {
         facade,
-        parallel_mode_control_plane,
-        admin_debug_harness_service: AdminDebugHarnessService::new(if debug_harness_enabled {
+        parallel_mode_admin_port,
+        admin_debug_port: Arc::new(AdminDebugHarnessService::new(if debug_harness_enabled {
             AdminDebugHarnessConfig::enabled()
         } else {
             AdminDebugHarnessConfig::disabled()
-        }),
-        app_server_prompt_log_port: ports.app_server_prompt_log_port,
-        parallel_agent_profile_service,
+        })),
+        app_server_prompt_log_query_port,
+        parallel_agent_profile_port,
         review_center_query_port: Arc::new(review_center_read_service),
     }
 }
@@ -545,9 +560,9 @@ mod tests {
         assert_eq!(admin.facade.workspace_dir(), workspace_dir);
         let admin_projection = admin
             .facade
-            .load_runtime_application_projection()
+            .load_runtime_summary()
             .expect("admin facade should load the shared planning projection");
-        assert!(!admin_projection.status_label.trim().is_empty());
+        assert!(!admin_projection.preview_status_label.trim().is_empty());
 
         let telegram = build_telegram_application(workspace_dir.clone());
         let help = telegram

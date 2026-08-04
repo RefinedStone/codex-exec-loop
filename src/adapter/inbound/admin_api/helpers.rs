@@ -1,4 +1,4 @@
-use crate::application::service::planning::validate_planning_draft_name;
+use crate::domain::planning::validate_planning_draft_name;
 use askama::Template;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Response};

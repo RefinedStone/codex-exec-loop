@@ -2,10 +2,10 @@ use super::admin_debug_dashboard::{
     AdminDebugHarnessView, actor_visual_state, build_debug_events_view, build_pool, build_scene,
     stage_readiness,
 };
-use crate::application::service::admin_debug_harness::{
-    AdminDebugHarnessCommand, AdminDebugHarnessConfig, AdminDebugHarnessService,
-    AdminDebugScenario, AdminDebugStage,
+use crate::application::port::inbound::admin_debug_port::{
+    AdminDebugHarnessCommand, AdminDebugHarnessConfig, AdminDebugScenario, AdminDebugStage,
 };
+use crate::application::service::admin_debug_harness::AdminDebugHarnessService;
 
 #[test]
 fn fake_projection_generates_stable_incremental_event_sequences() {

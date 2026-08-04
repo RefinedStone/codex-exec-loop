@@ -18,15 +18,14 @@ use crate::application::port::outbound::planning_worker_port::{
     NoopPlanningWorkerPort, PlanningWorkerPort, PlanningWorkerRequest, PlanningWorkerResponse,
     test_planning_worker_runtime_envelope,
 };
-use crate::application::service::parallel_agent_profile::{
-    ParallelAgentProfile, ParallelAgentProfileConfig, ParallelAgentProfileService,
-};
+use crate::application::service::parallel_agent_profile::ParallelAgentProfileService;
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::parallel_mode::{
     ParallelModeDispatchOrchestratorTickRequest, ParallelModeOrchestratorLoopEvent,
 };
 use crate::application::service::planning::{PlanningServices, PlanningTaskIntakeRequest};
 use crate::diagnostics::trace_event_log::AKRA_EVENT_TARGET;
+use crate::domain::parallel_agent_profile::{ParallelAgentProfile, ParallelAgentProfileConfig};
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeAutomationTrigger,
     ParallelModeControlPlaneWorkerEventKind, ParallelModeDispatchCommandSnapshot,
