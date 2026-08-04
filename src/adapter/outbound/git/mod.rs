@@ -3,4 +3,6 @@
  * public 표면은 worktree/branch 준비와 정리를 담당하는 parallel_mode_runtime에 집중되어 있다.
  */
 pub mod parallel_mode_runtime;
+mod parallel_normalization_fs;
+mod parallel_pool_lock;
 mod parallel_worker_commit;

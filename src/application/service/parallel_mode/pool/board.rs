@@ -1,3 +1,4 @@
+use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::domain::parallel_mode::{
     ParallelModePoolBoardSnapshot, ParallelModePoolSlotSnapshot, ParallelModePoolSlotState,
@@ -13,6 +14,7 @@ pool board builder는 git/worktree 검사 결과를 TUI와 API가 소비하는 d
 목록 shape, fallback board, pool root label 계산을 한곳에서 맞춘다.
 */
 pub(super) fn build_pool_board_from_context(
+    runtime: &dyn ParallelModeRuntimePort,
     context: &PoolRuntimeContext,
     reconcile_status: impl Into<String>,
 ) -> ParallelModePoolBoardSnapshot {
@@ -23,7 +25,7 @@ pub(super) fn build_pool_board_from_context(
     supervisor snapshot, dispatch capacity 계산, operator recovery notice의 공통 입력이 된다.
     */
     // runtime context가 준비된 경우에는 모든 slot을 실제 Git/worktree 상태로 검사한다.
-    let slots = build_pool_slots(context);
+    let slots = build_pool_slots(runtime, context);
     // pool root label은 절대경로 대신 repo 기준으로 접어, TUI board에서 긴 path가
     // slot 목록을 밀어내지 않게 한다.
     let pool_root_label = display_pool_path(&context.canonical_repo_root, &context.pool_root);
@@ -33,7 +35,10 @@ pub(super) fn build_pool_board_from_context(
     ParallelModePoolBoardSnapshot::new(DEFAULT_POOL_SIZE, pool_root_label, reconcile_status, slots)
 }
 
-pub(super) fn build_pool_slots(context: &PoolRuntimeContext) -> Vec<ParallelModePoolSlotSnapshot> {
+pub(super) fn build_pool_slots(
+    runtime: &dyn ParallelModeRuntimePort,
+    context: &PoolRuntimeContext,
+) -> Vec<ParallelModePoolSlotSnapshot> {
     /*
     slot vector는 항상 `DEFAULT_POOL_SIZE`개의 고정 순서 항목을 만든다. TUI board는
     slot-1, slot-2, slot-3처럼 안정된 위치를 기대하고, dispatch plan도 idle count를 이 projection
@@ -42,7 +47,7 @@ pub(super) fn build_pool_slots(context: &PoolRuntimeContext) -> Vec<ParallelMode
     */
     (1..=DEFAULT_POOL_SIZE)
         // 숫자 slot은 `slot-1` 같은 canonical id로 바꾼 뒤 inspection에 넘긴다.
-        .map(|slot_number| inspect_pool_slot(context, &slot_id(slot_number)))
+        .map(|slot_number| inspect_pool_slot(runtime, context, &slot_id(slot_number)))
         // board snapshot이 소유하는 Vec로 확정해 caller가 context 수명과 무관하게 들고 갈 수 있다.
         .collect::<Vec<_>>()
 }

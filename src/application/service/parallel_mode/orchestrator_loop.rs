@@ -31,7 +31,7 @@ use std::sync::mpsc::Sender;
 use std::thread;
 
 use super::ParallelModeService;
-use super::pool::load_pool_runtime_context;
+use super::pool::load_pool_runtime_context_with_runtime;
 
 pub struct ParallelModeDispatchOrchestratorTickRequest {
     pub workspace_directory: String,
@@ -586,15 +586,19 @@ fn active_parallel_agent_ids(
     service: &ParallelModeService,
     workspace_directory: &str,
 ) -> BTreeSet<String> {
-    load_pool_runtime_context(service.planning_authority.as_ref(), workspace_directory)
-        .map(|context| {
-            context
-                .slot_leases
-                .values()
-                .map(|lease| lease.agent_id.clone())
-                .collect()
-        })
-        .unwrap_or_default()
+    load_pool_runtime_context_with_runtime(
+        service.parallel_runtime.as_ref(),
+        service.planning_authority.as_ref(),
+        workspace_directory,
+    )
+    .map(|context| {
+        context
+            .slot_leases
+            .values()
+            .map(|lease| lease.agent_id.clone())
+            .collect()
+    })
+    .unwrap_or_default()
 }
 
 fn parallel_runtime_event_for_dispatch_trigger(

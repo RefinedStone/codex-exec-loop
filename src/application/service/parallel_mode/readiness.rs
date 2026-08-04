@@ -2,6 +2,8 @@
 use super::{
     remote_branch_name, try_parallel_mode_integration_branch_for_repo, try_push_remote_name,
 };
+#[cfg(test)]
+use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::service::planning::{
@@ -10,22 +12,22 @@ use crate::application::service::planning::{
 use crate::domain::parallel_mode::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
 };
-use crate::git_subprocess;
-use crate::subprocess;
-use std::process::Stdio;
 
 /*
 readiness의 첫 단계는 현재 workspace가 git repository 안에 있는지 찾는 것이다. 병렬 모드는 git
 worktree와 branch를 강하게 전제하므로, repo root가 없으면 나머지 capability는 모두 prerequisite
 blocked 상태가 된다.
 */
+pub(super) fn detect_git_repo_root_with_runtime(
+    runtime: &dyn ParallelModeRuntimePort,
+    workspace_dir: &str,
+) -> Option<String> {
+    runtime.detect_git_repo_root(workspace_dir)
+}
+
+#[cfg(test)]
 pub(super) fn detect_git_repo_root(workspace_dir: &str) -> Option<String> {
-    run_command(
-        "git",
-        ["-C", workspace_dir, "rev-parse", "--show-toplevel"],
-        None,
-    )
-    .filter(|value| !value.is_empty())
+    GitParallelModeRuntimeAdapter::new().detect_git_repo_root(workspace_dir)
 }
 
 /*
@@ -543,18 +545,12 @@ readiness와 pool helper의 low-level command 실행은 interactive prompt를 �
 TUI를 멈추지 않게 한다. 값이 필요한 경우에는 `run_command`, 성공 여부만 필요한 경우에는 이
 함수를 사용한다.
 */
-pub(super) fn command_succeeds<const N: usize>(program: &str, args: [&str; N]) -> bool {
-    if crate::git_execution_guard::ensure_git_command_execution_config_safe(program, &args, None)
-        .is_err()
-    {
-        return false;
-    }
-    let mut command = git_subprocess::command_for_program(program, args);
-    command.stdin(Stdio::null());
-    command.stdout(Stdio::null());
-    command.stderr(Stdio::null());
-    subprocess::command_output(&mut command, &format!("{program} {}", args.join(" ")))
-        .is_ok_and(|output| output.status.success())
+pub(super) fn command_succeeds_with_runtime<const N: usize>(
+    runtime: &dyn ParallelModeRuntimePort,
+    program: &str,
+    args: [&str; N],
+) -> bool {
+    runtime.command_succeeds(program, &args)
 }
 
 /*
@@ -562,32 +558,25 @@ run_command는 readiness와 git helper가 짧은 stdout 값을 얻을 때 쓰는
 실패하거나 stdout이 비어 있으면 None을 반환해 호출자가 capability degraded/blocked를 명시적으로
 선택하게 한다. stderr는 숨겨 capability 화면에 raw command noise가 섞이지 않게 한다.
 */
+pub(super) fn run_command_with_runtime<const N: usize>(
+    runtime: &dyn ParallelModeRuntimePort,
+    program: &str,
+    args: [&str; N],
+    current_dir: Option<&str>,
+) -> Option<String> {
+    runtime.run_command(program, &args, current_dir)
+}
+
+#[cfg(test)]
+pub(super) fn command_succeeds<const N: usize>(program: &str, args: [&str; N]) -> bool {
+    GitParallelModeRuntimeAdapter::new().command_succeeds(program, &args)
+}
+
+#[cfg(test)]
 pub(super) fn run_command<const N: usize>(
     program: &str,
     args: [&str; N],
     current_dir: Option<&str>,
 ) -> Option<String> {
-    if crate::git_execution_guard::ensure_git_command_execution_config_safe(
-        program,
-        &args,
-        current_dir,
-    )
-    .is_err()
-    {
-        return None;
-    }
-    let mut command = git_subprocess::command_for_program(program, args);
-    if let Some(current_dir) = current_dir {
-        command.current_dir(current_dir);
-    }
-    command.stdin(Stdio::null());
-    command.stderr(Stdio::null());
-    let output =
-        subprocess::command_output(&mut command, &format!("{program} {}", args.join(" "))).ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let stdout = String::from_utf8(output.stdout).ok()?;
-    let trimmed = stdout.trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_string())
+    GitParallelModeRuntimeAdapter::new().run_command(program, &args, current_dir)
 }

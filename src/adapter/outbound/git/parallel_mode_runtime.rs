@@ -1,19 +1,23 @@
+use std::ffi::OsString;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use chrono::Utc;
+use rand::RngCore;
 
 #[cfg(unix)]
 use crate::adapter::outbound::filesystem::secure_fs;
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::parallel_mode_runtime_port::{
+    ParallelCommandOutput, ParallelPinnedDirectory, ParallelPoolMutationPermit,
     ParallelWorkerCommitOutcome, ParallelWorkerCommitRequest,
 };
 use crate::git_subprocess;
 use crate::subprocess;
 
-use super::parallel_worker_commit;
+use super::{parallel_normalization_fs, parallel_pool_lock, parallel_worker_commit};
 
 /*
  * GitParallelModeRuntimeAdapter는 parallel mode application service가 요청하는 낮은 수준의
@@ -51,7 +55,153 @@ impl GitParallelModeRuntimeAdapter {
     }
 }
 
+fn path_chain_is_link_free(path: &Path) -> bool {
+    path.ancestors()
+        .take_while(|ancestor| !ancestor.as_os_str().is_empty())
+        .all(|ancestor| {
+            std::fs::symlink_metadata(ancestor)
+                .is_ok_and(|metadata| !metadata_is_link_or_reparse(&metadata))
+        })
+}
+
+#[cfg(windows)]
+fn metadata_is_link_or_reparse(metadata: &std::fs::Metadata) -> bool {
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+    use std::os::windows::fs::MetadataExt;
+
+    metadata.file_type().is_symlink()
+        || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn metadata_is_link_or_reparse(metadata: &std::fs::Metadata) -> bool {
+    metadata.file_type().is_symlink()
+}
+
 impl ParallelModeRuntimePort for GitParallelModeRuntimeAdapter {
+    fn acquire_pool_mutation_permit(
+        &self,
+        canonical_repo_root: &Path,
+        pool_root: &Path,
+        timeout: Duration,
+        retry_delay: Duration,
+    ) -> Result<Box<dyn ParallelPoolMutationPermit>, String> {
+        parallel_pool_lock::acquire_pool_mutation_permit(
+            canonical_repo_root,
+            pool_root,
+            timeout,
+            retry_delay,
+        )
+    }
+
+    fn try_acquire_pool_mutation_permit(
+        &self,
+        pool_root: &Path,
+    ) -> Result<Option<Box<dyn ParallelPoolMutationPermit>>, String> {
+        parallel_pool_lock::try_acquire_pool_mutation_permit(pool_root)
+    }
+
+    fn environment_variable(&self, name: &str) -> Result<Option<String>, String> {
+        match std::env::var(name) {
+            Ok(value) => Ok(Some(value)),
+            Err(std::env::VarError::NotPresent) => Ok(None),
+            Err(std::env::VarError::NotUnicode(_)) => Err(format!("{name} is not valid Unicode")),
+        }
+    }
+
+    fn current_process_id(&self) -> u32 {
+        std::process::id()
+    }
+
+    fn required_process_start_identity(&self, process_id: u32) -> Result<String, String> {
+        crate::process_liveness::required_process_start_identity(process_id)
+            .map_err(|error| error.to_string())
+    }
+
+    fn ensure_git_execution_safe(&self, path: &Path) -> Result<(), String> {
+        crate::git_execution_guard::ensure_host_git_execution_config_safe(path)
+            .map_err(|error| error.to_string())
+    }
+
+    fn run_git_command(
+        &self,
+        args: &[OsString],
+        stdin: Option<&[u8]>,
+    ) -> Result<ParallelCommandOutput, String> {
+        let mut command = git_subprocess::command(args.iter());
+        let output = match stdin {
+            Some(input) => subprocess::command_output_with_input(
+                &mut command,
+                "parallel runtime git command",
+                input,
+            ),
+            None => subprocess::command_output(&mut command, "parallel runtime git command"),
+        }
+        .map_err(|error| error.to_string())?;
+        Ok(ParallelCommandOutput {
+            exit_code: output.status.code(),
+            stdout: output.stdout,
+            stderr: output.stderr,
+        })
+    }
+
+    fn canonicalize_path(&self, path: &Path) -> std::io::Result<PathBuf> {
+        std::fs::canonicalize(path)
+    }
+
+    fn read_directory_paths(&self, path: &Path) -> std::io::Result<Vec<PathBuf>> {
+        std::fs::read_dir(path)?
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect()
+    }
+
+    fn path_is_symlink(&self, path: &Path) -> std::io::Result<bool> {
+        std::fs::symlink_metadata(path).map(|metadata| metadata_is_link_or_reparse(&metadata))
+    }
+
+    fn path_exists_checked(&self, path: &Path) -> std::io::Result<bool> {
+        match std::fs::symlink_metadata(path) {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn paths_match_securely(&self, left: &Path, right: &Path) -> bool {
+        if !left.is_absolute()
+            || !right.is_absolute()
+            || !path_chain_is_link_free(left)
+            || !path_chain_is_link_free(right)
+        {
+            return false;
+        }
+        match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
+            (Ok(left), Ok(right)) => left == right,
+            _ => false,
+        }
+    }
+
+    fn create_private_staging_directory(
+        &self,
+        path: &Path,
+    ) -> Result<Box<dyn ParallelPinnedDirectory>, String> {
+        parallel_normalization_fs::create_private_staging_directory(path)
+    }
+
+    fn atomic_rename_noreplace(&self, source: &Path, destination: &Path) -> std::io::Result<()> {
+        parallel_normalization_fs::atomic_rename_noreplace(source, destination)
+    }
+
+    fn read_bounded_unshared_regular_file(&self, path: &Path, max_bytes: usize) -> Option<Vec<u8>> {
+        parallel_normalization_fs::read_bounded_unshared_regular_file(path, max_bytes)
+    }
+
+    fn fill_secure_random(&self, bytes: &mut [u8]) -> Result<(), String> {
+        rand::rngs::OsRng
+            .try_fill_bytes(bytes)
+            .map_err(|error| error.to_string())
+    }
+
     fn detect_git_repo_root(&self, workspace_dir: &str) -> Option<String> {
         /*
          * parallel pool은 사용자가 repo 하위 디렉터리나 slot worktree 안에서 실행해도 canonical repo 기준을

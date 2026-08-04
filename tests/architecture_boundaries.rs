@@ -425,6 +425,35 @@ fn startup_service_expresses_local_environment_effects_through_its_outbound_port
 }
 
 #[test]
+fn application_services_have_no_direct_infrastructure_io() {
+    assert_no_forbidden_references(BoundaryRule {
+        name: "application services must express filesystem, process, environment, and Git effects through outbound ports",
+        root: "src/application/service",
+        forbidden_patterns: &[
+            "crate::git_execution_guard",
+            "crate::git_subprocess",
+            "crate::private_fs",
+            "crate::process_liveness",
+            "crate::subprocess",
+            "crate::trusted_executable",
+            "std::fs",
+            "std::process",
+            "std::env",
+            "Command::new",
+            "File::",
+            "OpenOptions",
+            ".exists()",
+            ".try_exists()",
+            ".canonicalize()",
+            ".metadata()",
+            ".symlink_metadata()",
+            ".is_file()",
+            ".is_dir()",
+        ],
+    });
+}
+
+#[test]
 fn hexagonal_boundary_guards_cover_at_least_ninety_percent_of_rust_sources() {
     let repo_root = repo_root();
     let all_sources = rust_files_under(&repo_root.join("src"));

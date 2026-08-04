@@ -535,7 +535,10 @@ where
                             };
                             Ok(format!(
                                 "reset {count} pool slot worktree(s) to {} after {entry_label}{live_suffix} / {}",
-                                distributor_integration_branch_for_repo(&workspace_directory),
+                                distributor_integration_branch_for_repo(
+                                    parallel_mode_service.parallel_runtime.as_ref(),
+                                    &workspace_directory,
+                                ),
                                 ParallelModePoolResetScope::PoolOnly.status_detail()
                             ))
                         })

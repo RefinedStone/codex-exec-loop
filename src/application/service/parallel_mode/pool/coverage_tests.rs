@@ -14,6 +14,12 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 
 const POOL_BASELINE_BRANCH: &str = "prerelease";
+
+fn git_runtime()
+-> crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter {
+    crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter::new()
+}
+
 #[derive(Default)]
 struct MirrorRuntime {
     existing_paths: BTreeSet<PathBuf>,
@@ -555,7 +561,7 @@ fn inspection_and_reset_entrypoints_surface_blocked_boards_for_non_git_workspace
         .expect_err("non-git workspace should block inspection");
     let reset_error = reset_pool_for_parallel_enable(
         &planning_authority,
-        &MirrorRuntime::default(),
+        &git_runtime(),
         &workspace_dir,
         ParallelModePoolResetPolicy::ProtectLive,
     )
@@ -576,10 +582,13 @@ fn low_level_context_loaders_report_missing_git_inventory_or_baseline() {
     ));
     fs::create_dir_all(&workspace).expect("workspace should be created");
     let workspace_dir = workspace.to_string_lossy().to_string();
+    let runtime =
+        crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter::new();
 
-    assert!(load_worktree_records(&workspace_dir).is_none());
+    assert!(load_worktree_records(&runtime, &workspace_dir).is_none());
     assert_eq!(
         load_pool_runtime_context_from_roots(
+            &runtime,
             &NoopPlanningAuthorityPort::default(),
             &workspace_dir,
             &workspace
@@ -600,10 +609,12 @@ fn persistent_mutation_lock_alone_does_not_claim_an_existing_pool() {
     fs::create_dir_all(&pool_root).expect("pool root should create");
     fs::write(pool_root.join(POOL_MUTATION_LOCK_FILE), "owner\n")
         .expect("persistent mutation lock fixture should write");
+    let runtime =
+        crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter::new();
 
-    assert!(!pool_root_has_managed_state(&pool_root));
+    assert!(!pool_root_has_managed_state(&runtime, &pool_root));
     fs::create_dir(pool_root.join(".leases")).expect("managed pool metadata should create");
-    assert!(pool_root_has_managed_state(&pool_root));
+    assert!(pool_root_has_managed_state(&runtime, &pool_root));
 
     let _ = fs::remove_dir_all(pool_root);
 }
@@ -617,19 +628,16 @@ fn pool_entrypoints_report_canonical_root_failures() {
 
     let reset_error = reset_pool_for_parallel_enable(
         &planning_authority,
-        &MirrorRuntime::default(),
+        &git_runtime(),
         &workspace,
         ParallelModePoolResetPolicy::ProtectLive,
     )
     .expect_err("canonical root failure should block reset");
     assert_eq!(reset_error, "canonical repository root is unavailable");
 
-    let reconcile_error = reconcile_pool_board_and_context(
-        &planning_authority,
-        &MirrorRuntime::default(),
-        &workspace,
-    )
-    .expect_err("canonical root failure should block reconcile");
+    let reconcile_error =
+        reconcile_pool_board_and_context(&planning_authority, &git_runtime(), &workspace)
+            .expect_err("canonical root failure should block reconcile");
     let (pool, detail) = *reconcile_error;
     assert!(
         pool.reconcile_status
@@ -663,7 +671,7 @@ fn pool_reset_surfaces_authority_projection_write_failures() {
 
     let clear_error = reset_pool_for_parallel_enable(
         &clear_authority,
-        &MirrorRuntime::default(),
+        &git_runtime(),
         &clear_workspace,
         ParallelModePoolResetPolicy::ForceDisposable,
     )
@@ -686,7 +694,7 @@ fn pool_reset_surfaces_authority_projection_write_failures() {
 
     let task_clear_error = reset_pool_for_parallel_enable(
         &task_clear_authority,
-        &MirrorRuntime::default(),
+        &git_runtime(),
         &task_clear_workspace,
         ParallelModePoolResetPolicy::ForceDisposable,
     )
@@ -703,7 +711,7 @@ fn pool_reset_surfaces_authority_projection_write_failures() {
 
     let apply_error = reset_pool_for_parallel_enable(
         &apply_authority,
-        &MirrorRuntime::default(),
+        &git_runtime(),
         &apply_workspace,
         ParallelModePoolResetPolicy::ProtectLive,
     )
@@ -857,7 +865,7 @@ fn traced_parallel_enable_reset_covers_live_blocker_and_reset_event_payloads() {
     let report = with_akra_event_trace(|| {
         reset_pool_for_parallel_enable(
             &adapter,
-            &MirrorRuntime::default(),
+            &git_runtime(),
             &workspace,
             ParallelModePoolResetPolicy::ProtectLive,
         )

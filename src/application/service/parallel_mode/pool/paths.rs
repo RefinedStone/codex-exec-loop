@@ -1,5 +1,7 @@
+use super::super::readiness::run_command_with_runtime;
 use super::super::{
-    remote_tracking_branch_ref, try_parallel_mode_integration_branch_for_repo, try_push_remote_name,
+    remote_tracking_branch_ref, try_parallel_mode_integration_branch_for_repo_with_runtime,
+    try_push_remote_name_with_runtime,
 };
 use super::*;
 
@@ -67,17 +69,26 @@ pool baseline head는 configured remote branch를 먼저 보고, read-only inspe
 local branch를 fallback으로 쓴다. mutating reconcile은 원격 branch를 fetch하고 local/remote SHA가
 일치할 때만 진행하며 원격 branch를 암묵적으로 만들지 않는다.
 */
-pub(super) fn resolve_pool_baseline_head(repo_root: &str) -> Option<String> {
-    let push_remote = try_push_remote_name(repo_root).ok()?;
-    let baseline_branch = try_parallel_mode_integration_branch_for_repo(repo_root).ok()?;
-    resolve_branch_head(
+pub(super) fn resolve_pool_baseline_head_with_runtime(
+    runtime: &dyn ParallelModeRuntimePort,
+    repo_root: &str,
+) -> Option<String> {
+    let push_remote = try_push_remote_name_with_runtime(runtime, repo_root).ok()?;
+    let baseline_branch =
+        try_parallel_mode_integration_branch_for_repo_with_runtime(runtime, repo_root).ok()?;
+    resolve_branch_head_with_runtime(
+        runtime,
         repo_root,
         &remote_tracking_branch_ref(push_remote.as_str(), &baseline_branch),
     )
-    .or_else(|| resolve_branch_head(repo_root, &baseline_branch))
+    .or_else(|| resolve_branch_head_with_runtime(runtime, repo_root, &baseline_branch))
 }
 
-pub(super) fn resolve_branch_head(repo_root: &str, branch_name: &str) -> Option<String> {
+pub(super) fn resolve_branch_head_with_runtime(
+    runtime: &dyn ParallelModeRuntimePort,
+    repo_root: &str,
+    branch_name: &str,
+) -> Option<String> {
     /*
     branch head resolution은 pool reconcile이 baseline과 agent branch의 실제 commit을
     비교할 때 쓰는 가장 작은 git query이다. branch name은 local branch, remote tracking ref,
@@ -85,7 +96,12 @@ pub(super) fn resolve_branch_head(repo_root: &str, branch_name: &str) -> Option<
     않고 `None`으로 접는 이유는 caller가 local prerelease 부재, remote만 존재, fresh repo 같은
     정상적인 fallback 순서를 직접 결정해야 하기 때문이다.
     */
-    run_command("git", ["-C", repo_root, "rev-parse", branch_name], None)
+    run_command_with_runtime(
+        runtime,
+        "git",
+        ["-C", repo_root, "rev-parse", branch_name],
+        None,
+    )
 }
 
 /*
@@ -159,19 +175,21 @@ git dir 안의 MERGE_HEAD/rebase-merge/rebase-apply/CHERRY_PICK_HEAD 같은 meta
 lock으로 진행 중인 작업도 감지한다. 파일 변경이 없더라도 실제 operation metadata나 lock이
 남아 있으면 자동 조작은 위험하기 때문이다.
 */
-pub(in crate::application::service::parallel_mode) fn inspect_slot_git_status(
+pub(in crate::application::service::parallel_mode) fn inspect_slot_git_status_with_runtime(
+    runtime: &dyn ParallelModeRuntimePort,
     slot_path: &Path,
 ) -> Result<SlotGitStatus, SlotGitStatusInspectionError> {
-    crate::git_execution_guard::ensure_host_git_execution_config_safe(slot_path).map_err(
-        |error| {
+    runtime
+        .ensure_git_execution_safe(slot_path)
+        .map_err(|error| {
             SlotGitStatusInspectionError(format!(
                 "Git status inspection is blocked for `{}`: {error}",
                 slot_path.display()
             ))
-        },
-    )?;
+        })?;
     let slot_path_string = slot_path.display().to_string();
-    let status_output = run_command(
+    let status_output = run_command_with_runtime(
+        runtime,
         "git",
         [
             "-C",
@@ -218,18 +236,21 @@ pub(in crate::application::service::parallel_mode) fn inspect_slot_git_status(
 
     // status output에는 merge/rebase 진행 중 metadata가 항상 직접 드러나지 않으므로
     // git dir을 별도로 찾아 자동 조작을 막아야 하는 pending 상태까지 합산한다.
-    let git_dir = resolve_git_dir(slot_path).ok_or_else(|| {
+    let git_dir = resolve_git_dir_with_runtime(runtime, slot_path).ok_or_else(|| {
         SlotGitStatusInspectionError(format!(
             "Git directory could not be resolved for `{}`",
             slot_path.display()
         ))
     })?;
-    status.has_pending_operation = git_dir_has_pending_operation(&git_dir);
+    status.has_pending_operation = git_dir_has_pending_operation_with_runtime(runtime, &git_dir);
 
     Ok(status)
 }
 
-pub(super) fn git_dir_has_pending_operation(git_dir: &Path) -> bool {
+pub(super) fn git_dir_has_pending_operation_with_runtime(
+    runtime: &dyn ParallelModeRuntimePort,
+    git_dir: &Path,
+) -> bool {
     // `AUTO_MERGE` is intentionally excluded: Git's ort strategy can retain that ref after a
     // successful cherry-pick, so its presence alone does not prove an operation is pending.
     [
@@ -245,7 +266,7 @@ pub(super) fn git_dir_has_pending_operation(git_dir: &Path) -> bool {
         "HEAD.lock",
     ]
     .into_iter()
-    .any(|path| git_dir.join(path).exists())
+    .any(|path| runtime.path_exists(&git_dir.join(path)))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -259,7 +280,10 @@ impl std::fmt::Display for SlotGitStatusInspectionError {
 
 impl std::error::Error for SlotGitStatusInspectionError {}
 
-pub(super) fn resolve_git_dir(slot_path: &Path) -> Option<PathBuf> {
+pub(super) fn resolve_git_dir_with_runtime(
+    runtime: &dyn ParallelModeRuntimePort,
+    slot_path: &Path,
+) -> Option<PathBuf> {
     /*
     worktree의 `.git`은 일반 디렉터리일 수도 있고, common git dir을 가리키는 파일일
     수도 있다. `git rev-parse --git-dir`를 쓰면 두 경우를 git이 직접 해석해 주므로,
@@ -267,12 +291,36 @@ pub(super) fn resolve_git_dir(slot_path: &Path) -> Option<PathBuf> {
     반환 경로가 상대 경로일 수 있어 아래에서 slot path 기준 절대 경로로 보정한다.
     */
     let slot_path_string = slot_path.display().to_string();
-    let git_dir = run_command(
+    let git_dir = run_command_with_runtime(
+        runtime,
         "git",
         ["-C", slot_path_string.as_str(), "rev-parse", "--git-dir"],
         None,
     )?;
     Some(absolutize_path(slot_path, Path::new(&git_dir)))
+}
+
+#[cfg(test)]
+pub(super) fn resolve_branch_head(repo_root: &str, branch_name: &str) -> Option<String> {
+    let runtime =
+        crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter::new();
+    resolve_branch_head_with_runtime(&runtime, repo_root, branch_name)
+}
+
+#[cfg(test)]
+pub(in crate::application::service::parallel_mode) fn inspect_slot_git_status(
+    slot_path: &Path,
+) -> Result<SlotGitStatus, SlotGitStatusInspectionError> {
+    let runtime =
+        crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter::new();
+    inspect_slot_git_status_with_runtime(&runtime, slot_path)
+}
+
+#[cfg(test)]
+pub(super) fn resolve_git_dir(slot_path: &Path) -> Option<PathBuf> {
+    let runtime =
+        crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter::new();
+    resolve_git_dir_with_runtime(&runtime, slot_path)
 }
 
 fn absolutize_path(base_dir: &Path, path: &Path) -> PathBuf {
@@ -315,64 +363,25 @@ pub(super) fn annotate_worktree_label(base_label: String, detail: &str) -> Strin
     }
 }
 
-pub(super) fn canonicalize_best_effort(path: &Path) -> PathBuf {
-    /*
-    canonicalize는 symlink와 `..`를 실제 경로로 접어 주지만, 아직 생성되지 않은 slot이나
-    테스트 중 제거된 worktree에서는 실패할 수 있다. 여기서는 실패를 치명 오류로 만들지 않고
-    원래 path를 보존해, caller가 존재하지 않는 경로도 비교와 표시 흐름에서 계속 다룰 수 있게
-    한다.
-    */
-    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
-}
-
 /*
 worktree path 비교는 Git inventory와 Akra가 생성한 live slot identity를 결합하는 보안 경계다.
 두 경로의 허용된 lexical spelling, metadata, canonical target을 모두 확인하고 어느 검사라도
 실패하면 일치하지 않는 것으로 닫는다. 존재하지 않거나 link alias인 경로를 lease, reset,
 cleanup 대상으로 승인해서는 안 된다.
 */
+pub(super) fn worktree_paths_match_with_runtime(
+    runtime: &dyn ParallelModeRuntimePort,
+    left: &Path,
+    right: &Path,
+) -> bool {
+    runtime.paths_match_securely(left, right)
+}
+
+#[cfg(test)]
 pub(super) fn worktree_paths_match(left: &Path, right: &Path) -> bool {
-    /*
-    Windows Git porcelain may spell a registered worktree as `C:/...` while
-    `fs::canonicalize` produced a `\\?\C:\...` path and expanded an 8.3 ancestor
-    name. Both spellings are accepted only when every live path component is a
-    plain filesystem object. This keeps legitimate Windows aliases working while
-    preventing a symlink or junction ancestor from redirecting slot ownership.
-    */
-    if !left.is_absolute()
-        || !right.is_absolute()
-        || !path_chain_is_link_free(left)
-        || !path_chain_is_link_free(right)
-    {
-        return false;
-    }
-    match (fs::canonicalize(left), fs::canonicalize(right)) {
-        (Ok(left), Ok(right)) => left == right,
-        _ => false,
-    }
-}
-
-fn path_chain_is_link_free(path: &Path) -> bool {
-    path.ancestors()
-        .take_while(|ancestor| !ancestor.as_os_str().is_empty())
-        .all(|ancestor| {
-            fs::symlink_metadata(ancestor)
-                .is_ok_and(|metadata| !metadata_is_link_or_reparse(&metadata))
-        })
-}
-
-#[cfg(windows)]
-fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
-    use std::os::windows::fs::MetadataExt;
-
-    metadata.file_type().is_symlink()
-        || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-}
-
-#[cfg(not(windows))]
-fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
-    metadata.file_type().is_symlink()
+    let runtime =
+        crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter::new();
+    worktree_paths_match_with_runtime(&runtime, left, right)
 }
 
 #[cfg(test)]

@@ -594,7 +594,8 @@ pub(super) fn record_cleanup_pending_session_detail(
             let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
             detail.state_label = "cleanup_pending".to_string();
             detail.completion_state_label = "merged".to_string();
-            let integration_branch = distributor_integration_branch_for_repo(workspace_dir);
+            let integration_branch =
+                distributor_integration_branch_for_repo(runtime, workspace_dir);
             detail.latest_summary = format!(
                 "agent branch is merged into {} and awaiting slot cleanup",
                 integration_branch
@@ -644,7 +645,8 @@ pub(super) fn record_cleaned_session_detail(
             let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
             detail.state_label = "cleaned".to_string();
             detail.completion_state_label = "cleaned".to_string();
-            let integration_branch = distributor_integration_branch_for_repo(workspace_dir);
+            let integration_branch =
+                distributor_integration_branch_for_repo(runtime, workspace_dir);
             detail.latest_summary =
                 "merged session cleaned up and the slot returned to the idle pool".to_string();
             detail.distributor_outcome = Some(format!(

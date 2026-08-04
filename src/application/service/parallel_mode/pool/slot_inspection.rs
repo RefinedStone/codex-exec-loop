@@ -16,11 +16,12 @@ branch가 있는데 lease가 없음", "lease와 branch가 일치함"처럼 여�
 출력은 supervisor pool board, reconcile summary, cleanup 후보 판단에 연결된다.
 */
 pub(super) fn inspect_pool_slot(
+    runtime: &dyn ParallelModeRuntimePort,
     context: &PoolRuntimeContext,
     slot_id: &str,
 ) -> ParallelModePoolSlotSnapshot {
     let slot_path = context.pool_root.join(slot_id);
-    let baseline_branch = pool_baseline_branch_for_repo(&context.repo_root);
+    let baseline_branch = pool_baseline_branch_for_repo(runtime, &context.repo_root);
     let base_worktree_label = display_pool_path(&context.canonical_repo_root, &slot_path);
     let slot_lease = context.slot_leases.get(slot_id);
     if context.invalid_slot_leases.contains(slot_id) {
@@ -41,7 +42,7 @@ pub(super) fn inspect_pool_slot(
     let Some(worktree_record) = context
         .worktree_records
         .iter()
-        .find(|record| worktree_paths_match(&record.path, &slot_path))
+        .find(|record| worktree_paths_match_with_runtime(runtime, &record.path, &slot_path))
     else {
         /*
         worktree inventory에 slot path가 없다는 것은 세 가지로 나뉜다. lease가 있으면 runtime은
@@ -63,7 +64,7 @@ pub(super) fn inspect_pool_slot(
             )
             .with_owner_identity_from_lease(slot_lease);
         }
-        if slot_path.exists() {
+        if runtime.path_exists(&slot_path) {
             return ParallelModePoolSlotSnapshot::new(
                 slot_id,
                 ParallelModePoolSlotState::Blocked,
@@ -83,7 +84,7 @@ pub(super) fn inspect_pool_slot(
             "reconcile pending",
         );
     };
-    let Ok(slot_status) = inspect_slot_git_status(&slot_path) else {
+    let Ok(slot_status) = inspect_slot_git_status_with_runtime(runtime, &slot_path) else {
         /*
         git status를 읽지 못하면 이 slot이 clean baseline인지, rebase/cherry-pick 중인지,
         untracked 파일을 품고 있는지 알 수 없다. unknown 상태에서 idle이나 cleanup-ready로 분류하면
@@ -187,6 +188,7 @@ pub(super) fn inspect_pool_slot(
                     worktree_clean,
                     worktree_clean
                         && branch_patch_is_integrated(
+                            runtime,
                             &context.repo_root,
                             branch_name,
                             &context.baseline_head,
@@ -222,6 +224,7 @@ pub(super) fn inspect_pool_slot(
                     annotate_worktree_label(
                         base_worktree_label,
                         &orphan_agent_branch_without_lease_detail(
+                            runtime,
                             context,
                             branch_name,
                             slot_status,
@@ -248,7 +251,11 @@ pub(super) fn inspect_pool_slot(
                 )
                 .with_owner_identity_from_lease(slot_lease);
             }
-            if !worktree_paths_match(Path::new(&slot_lease.worktree_path), &slot_path) {
+            if !worktree_paths_match_with_runtime(
+                runtime,
+                Path::new(&slot_lease.worktree_path),
+                &slot_path,
+            ) {
                 /*
                 lease worktree path mismatch는 같은 slot id라도 실제 디렉터리 연결이 어긋났다는
                 뜻이다. nested workspace resolve나 cleanup 경로가 path를 기준으로 동작하므로,
@@ -455,6 +462,7 @@ cleanup만 남은 branch이거나, 아직 통합되지 않은 작업 branch가 �
 함수는 git ancestry와 worktree 청결도를 합쳐 어떤 복구 문구를 보여 줄지 결정한다.
 */
 fn orphan_agent_branch_without_lease_detail(
+    runtime: &dyn ParallelModeRuntimePort,
     context: &PoolRuntimeContext,
     branch_name: &str,
     slot_status: SlotGitStatus,
@@ -462,7 +470,12 @@ fn orphan_agent_branch_without_lease_detail(
     let mut parts = Vec::new();
     if !context.integration_target_proof_is_fresh {
         parts.push(INTEGRATION_PROOF_UNAVAILABLE_DETAIL.to_string());
-    } else if branch_patch_is_integrated(&context.repo_root, branch_name, &context.baseline_head) {
+    } else if branch_patch_is_integrated(
+        runtime,
+        &context.repo_root,
+        branch_name,
+        &context.baseline_head,
+    ) {
         parts.push("cleanup-ready agent branch has no lease metadata".to_string());
     } else {
         parts.push(NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_DETAIL.to_string());

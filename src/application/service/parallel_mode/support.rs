@@ -1,19 +1,17 @@
-// filesystem helpers는 pool/slot directory 보장에 사용된다. 이 module은 service logic에서
-// 반복되는 작은 filesystem boundary를 표준화한다.
-use std::fs;
 // Path reference를 받아 caller가 String 변환 없이 workspace/slot path를 넘기게 한다.
 use std::path::Path;
+
+use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 
 // UTC timestamp는 parallel mode record들이 서로 다른 process에서 생성되어도 비교 가능한 시간 언어이다.
 use chrono::Utc;
 
 // slot reset helper는 unstarted branch discard 전에 worktree를 akra baseline으로 되돌린다.
 use super::pool::{
-    PoolMutationLock, delete_cleaned_slot_branch_if_unchanged, inspect_slot_git_status,
-    reset_slot_worktree_to_ref,
+    PoolMutationLock, delete_cleaned_slot_branch_if_unchanged,
+    inspect_slot_git_status_with_runtime, reset_slot_worktree_to_ref,
 };
-// readiness command runner는 git query 실패를 Option/String 형태로 접는 공통 command boundary이다.
-use super::readiness::run_command;
+use super::readiness::run_command_with_runtime;
 
 /*
 directory creation은 pool root, lease root, slot parent처럼 여러 모듈에서 반복되는
@@ -22,21 +20,11 @@ directory creation은 pool root, lease root, slot parent처럼 여러 모듈에�
 맞는 메시지로 감싼다.
 */
 // 이 helper는 "directory가 있으면 계속, 없으면 생성"이라는 pool setup의 공통 intent를 표현한다.
-pub(crate) fn ensure_directory_exists(path: &Path) -> std::io::Result<()> {
-    /*
-    `exists`를 먼저 보는 것은 이미 디렉터리가 준비된 hot path에서 불필요한 syscall
-    error handling을 줄이기 위한 단순 guard이다. 단, 파일이 같은 path에 있어도 `exists`는 true를
-    반환하므로 이 helper는 "path가 directory인지 검증"하는 강한 invariant checker가 아니다.
-    그런 검증은 pool inspection처럼 operator recovery를 구분해야 하는 모듈에서 따로 수행한다.
-    */
-    // 이미 존재하는 path는 성공으로 본다. directory type 검증까지 필요한 caller는 별도 guard를 둔다.
-    if path.exists() {
-        // hot path에서는 create_dir_all을 다시 호출하지 않고 바로 성공을 반환한다.
-        return Ok(());
-    }
-
-    // 없는 경우에는 parent directory까지 모두 만들고, filesystem error는 caller context로 올라간다.
-    fs::create_dir_all(path)
+pub(crate) fn ensure_directory_exists(
+    runtime: &dyn ParallelModeRuntimePort,
+    path: &Path,
+) -> std::io::Result<()> {
+    runtime.ensure_directory_exists(path)
 }
 
 /*
@@ -62,7 +50,10 @@ current_branch_name은 slot worktree와 integration worktree가 기대 branch에
 검사가 모두 이 함수를 통해 branch drift를 감지한다.
 */
 // 이 함수는 worktree의 현재 git branch name을 조회해 lifecycle guard가 branch drift를 판단하게 한다.
-pub(crate) fn current_branch_name(worktree_path: &Path) -> Option<String> {
+pub(crate) fn current_branch_name(
+    runtime: &dyn ParallelModeRuntimePort,
+    worktree_path: &Path,
+) -> Option<String> {
     /*
     `rev-parse --abbrev-ref HEAD`는 detached HEAD에서 `HEAD`를 돌려줄 수 있다. caller는
     이 값을 그대로 branch 이름처럼 믿지 않고, detached baseline인지 agent branch인지 각 문맥에서
@@ -71,7 +62,8 @@ pub(crate) fn current_branch_name(worktree_path: &Path) -> Option<String> {
     */
     // command runner는 argv에 &str을 받으므로 Path display 값을 String으로 보관해 수명을 맞춘다.
     let worktree_path_string = worktree_path.display().to_string();
-    run_command(
+    run_command_with_runtime(
+        runtime,
         "git",
         [
             "-C",
@@ -92,6 +84,7 @@ unstarted slot branch discard는 lease 저장 실패나 stream startup failure�
 */
 // 이 rollback helper는 agent가 작업을 시작하기 전에 만들어진 slot branch만 폐기한다.
 pub(in crate::application::service::parallel_mode) fn discard_unstarted_slot_branch(
+    runtime: &dyn ParallelModeRuntimePort,
     // repo_root는 branch delete command를 실행할 canonical repository root이다.
     repo_root: &str,
     // slot_path는 reset 대상 worktree이다. branch 삭제 전에 먼저 baseline으로 되돌린다.
@@ -114,7 +107,8 @@ pub(in crate::application::service::parallel_mode) fn discard_unstarted_slot_bra
     {
         return false;
     }
-    let Some(source_oid) = run_command(
+    let Some(source_oid) = run_command_with_runtime(
+        runtime,
         "git",
         [
             "-C",
@@ -127,16 +121,19 @@ pub(in crate::application::service::parallel_mode) fn discard_unstarted_slot_bra
         return false;
     };
     let slot_path_string = slot_path.display().to_string();
-    inspect_slot_git_status(slot_path).is_ok_and(|status| status.is_clean_baseline())
-        && current_branch_name(slot_path).as_deref() == Some(branch_name)
-        && run_command(
+    inspect_slot_git_status_with_runtime(runtime, slot_path)
+        .is_ok_and(|status| status.is_clean_baseline())
+        && current_branch_name(runtime, slot_path).as_deref() == Some(branch_name)
+        && run_command_with_runtime(
+            runtime,
             "git",
             ["-C", slot_path_string.as_str(), "rev-parse", "HEAD"],
             None,
         )
         .as_deref()
             == Some(source_oid.as_str())
-        && reset_slot_worktree_to_ref(slot_path, expected_baseline_oid).succeeded()
-        && inspect_slot_git_status(slot_path).is_ok_and(|status| status.is_clean_baseline())
-        && delete_cleaned_slot_branch_if_unchanged(repo_root, branch_name, &source_oid)
+        && reset_slot_worktree_to_ref(runtime, slot_path, expected_baseline_oid).succeeded()
+        && inspect_slot_git_status_with_runtime(runtime, slot_path)
+            .is_ok_and(|status| status.is_clean_baseline())
+        && delete_cleaned_slot_branch_if_unchanged(runtime, repo_root, branch_name, &source_oid)
 }

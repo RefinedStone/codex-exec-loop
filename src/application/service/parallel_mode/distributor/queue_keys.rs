@@ -10,7 +10,10 @@ queue item id, high-resolution timestamp를 함께 넣어 같은 프로세스가
 */
 // 이 함수는 queue head를 claim할 때 authority store에 기록할 owner token을 만든다. token 안에
 // process id와 sanitized queue item id를 넣어 로그/진단에서 어느 실행이 무엇을 잡았는지 추적하게 한다.
-pub(super) fn distributor_claim_owner_token(queue_item_id: &str) -> String {
+pub(super) fn distributor_claim_owner_token(
+    runtime: &dyn crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort,
+    queue_item_id: &str,
+) -> String {
     // timestamp suffix는 같은 process가 같은 queue item을 빠르게 재시도해도 이전 claim과 새
     // claim을 구분하게 한다. system clock 오류 시에도 default 0으로 떨어져 token 생성 자체는 실패하지 않는다.
     let unique_suffix = SystemTime::now()
@@ -20,7 +23,7 @@ pub(super) fn distributor_claim_owner_token(queue_item_id: &str) -> String {
     format!(
         "distributor-queue-head-{}-{}-{unique_suffix}",
         // process id는 같은 machine에서 병렬로 뜬 distributor 실행을 구분하는 값이다.
-        std::process::id(),
+        runtime.current_process_id(),
         // queue item id는 worker/session metadata에서 유래하므로 token/storage key에 넣기 전에 안전한
         // runtime record key 문자 집합으로 줄인다.
         sanitize_runtime_record_key(queue_item_id)

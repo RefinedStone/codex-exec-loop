@@ -13,14 +13,17 @@ use crate::domain::parallel_mode::{
 use super::{
     AKRA_AGENT_BRANCH_PREFIX, ParallelModeService, PoolSlotCleanupIdentity,
     PoolSlotCleanupLeaseAuthority, acquire_pool_mutation_lock, allocate_agent_branch_name,
-    branch_is_integrated_into, build_pool_slots, cleanup_slot_to_ref_locked, command_succeeds,
-    current_branch_name, current_timestamp, discard_unstarted_slot_branch, inspect_slot_git_status,
-    load_pool_runtime_context, pool_baseline_branch_for_repo, record_assigned_session_detail,
-    record_cleanup_pending_session_detail, record_failed_start_dispatch_block,
-    record_failed_start_session_detail, record_running_session_detail,
-    record_thread_prepared_session_detail, resolve_workspace_head_sha,
-    resolve_workspace_slot_lease, rollback_slot_lease_write_failure, transition_slot_lease,
-    try_parallel_mode_integration_branch_for_repo, try_push_remote_name, write_slot_lease,
+    branch_is_integrated_into, build_pool_slots, cleanup_slot_to_ref_locked,
+    command_succeeds_with_runtime, current_branch_name, current_timestamp,
+    discard_unstarted_slot_branch, inspect_slot_git_status_with_runtime,
+    load_pool_runtime_context_with_runtime, pool_baseline_branch_for_repo,
+    record_assigned_session_detail, record_cleanup_pending_session_detail,
+    record_failed_start_dispatch_block, record_failed_start_session_detail,
+    record_running_session_detail, record_thread_prepared_session_detail,
+    resolve_workspace_head_sha_with_runtime, resolve_workspace_slot_lease_with_runtime,
+    rollback_slot_lease_write_failure, transition_slot_lease,
+    try_parallel_mode_integration_branch_for_repo_with_runtime, try_push_remote_name_with_runtime,
+    write_slot_lease,
 };
 
 impl ParallelModeService {
@@ -81,8 +84,11 @@ impl ParallelModeService {
     where
         F: FnOnce(),
     {
-        let mutation_lock =
-            acquire_pool_mutation_lock(self.planning_authority.as_ref(), workspace_dir)?;
+        let mutation_lock = acquire_pool_mutation_lock(
+            self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
+            workspace_dir,
+        )?;
         // Obtain the immutable remote proof before reconcile can create, reset,
         // or clean any slot. A stale tracking ref must never authorize local
         // destructive work merely because a later exact fetch detects drift.
@@ -141,9 +147,13 @@ impl ParallelModeService {
                     .to_string(),
             );
         }
-        let verified_push_remote = try_push_remote_name(&context.repo_root)?;
+        let verified_push_remote =
+            try_push_remote_name_with_runtime(self.parallel_runtime.as_ref(), &context.repo_root)?;
         let verified_integration_branch =
-            try_parallel_mode_integration_branch_for_repo(&context.repo_root)?;
+            try_parallel_mode_integration_branch_for_repo_with_runtime(
+                self.parallel_runtime.as_ref(),
+                &context.repo_root,
+            )?;
         let verified_push_url = self
             .github_automation
             .credential_redacted_push_url_for_remote(&context.repo_root, &verified_push_remote)
@@ -207,16 +217,23 @@ impl ParallelModeService {
 
         // slot snapshot은 lease 파일과 worktree 상태를 합친 view다. 여기서 Idle만 고르면
         // cleanup pending이나 dirty slot을 새 작업에 재사용하지 않는다.
-        let Some((idle_slot, slot_path)) = build_pool_slots(&context)
-            .into_iter()
-            .filter(|slot| slot.state == ParallelModePoolSlotState::Idle)
-            .find_map(|slot| {
-                let slot_path = context.pool_root.join(&slot.slot_id);
-                let detached = current_branch_name(&slot_path).as_deref() == Some("HEAD");
-                let exact_head = resolve_workspace_head_sha(&slot_path).as_deref()
-                    == Some(context.baseline_head.as_str());
-                (detached && exact_head).then_some((slot, slot_path))
-            })
+        let Some((idle_slot, slot_path)) =
+            build_pool_slots(self.parallel_runtime.as_ref(), &context)
+                .into_iter()
+                .filter(|slot| slot.state == ParallelModePoolSlotState::Idle)
+                .find_map(|slot| {
+                    let slot_path = context.pool_root.join(&slot.slot_id);
+                    let detached = current_branch_name(self.parallel_runtime.as_ref(), &slot_path)
+                        .as_deref()
+                        == Some("HEAD");
+                    let exact_head = resolve_workspace_head_sha_with_runtime(
+                        self.parallel_runtime.as_ref(),
+                        &slot_path,
+                    )
+                    .as_deref()
+                        == Some(context.baseline_head.as_str());
+                    (detached && exact_head).then_some((slot, slot_path))
+                })
         else {
             return Err("no remote-verified idle slot is available for lease".to_string());
         };
@@ -240,6 +257,7 @@ impl ParallelModeService {
         let lease_generation = new_slot_lease_generation()?;
         let branch_instance_id = test_branch_instance_id.unwrap_or(&lease_generation[..16]);
         let branch_name = allocate_agent_branch_name(
+            self.parallel_runtime.as_ref(),
             &context.repo_root,
             &idle_slot.slot_id,
             &request.task_slug,
@@ -249,9 +267,11 @@ impl ParallelModeService {
             &live_remote_branch_names,
         )?;
         mutation_lock.verify_pool_root(&context.pool_root)?;
-        crate::git_execution_guard::ensure_host_git_execution_config_safe(&slot_path)
-            .map_err(|error| format!("slot checkout blocked: {error:#}"))?;
-        if !command_succeeds(
+        self.parallel_runtime
+            .ensure_git_execution_safe(&slot_path)
+            .map_err(|error| format!("slot checkout blocked: {error}"))?;
+        if !command_succeeds_with_runtime(
+            self.parallel_runtime.as_ref(),
             "git",
             [
                 "-C",
@@ -267,11 +287,14 @@ impl ParallelModeService {
                 idle_slot.slot_id
             ));
         }
-        if current_branch_name(&slot_path).as_deref() != Some(branch_name.as_str())
-            || resolve_workspace_head_sha(&slot_path).as_deref()
+        if current_branch_name(self.parallel_runtime.as_ref(), &slot_path).as_deref()
+            != Some(branch_name.as_str())
+            || resolve_workspace_head_sha_with_runtime(self.parallel_runtime.as_ref(), &slot_path)
+                .as_deref()
                 != Some(context.baseline_head.as_str())
         {
             let _ = discard_unstarted_slot_branch(
+                self.parallel_runtime.as_ref(),
                 &context.repo_root,
                 &slot_path,
                 branch_name.as_str(),
@@ -316,6 +339,7 @@ impl ParallelModeService {
                 &lease,
             );
             let _ = discard_unstarted_slot_branch(
+                self.parallel_runtime.as_ref(),
                 &context.repo_root,
                 &slot_path,
                 branch_name.as_str(),
@@ -362,10 +386,17 @@ impl ParallelModeService {
         agent_id: &str,
         expected_lease: Option<&ParallelModeSlotLeaseSnapshot>,
     ) -> Result<ParallelModeSlotLeaseSnapshot, String> {
-        let mutation_lock =
-            acquire_pool_mutation_lock(self.planning_authority.as_ref(), workspace_dir)?;
-        let context = load_pool_runtime_context(self.planning_authority.as_ref(), workspace_dir)
-            .map_err(|(_, detail)| detail.to_string())?;
+        let mutation_lock = acquire_pool_mutation_lock(
+            self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
+            workspace_dir,
+        )?;
+        let context = load_pool_runtime_context_with_runtime(
+            self.parallel_runtime.as_ref(),
+            self.planning_authority.as_ref(),
+            workspace_dir,
+        )
+        .map_err(|(_, detail)| detail.to_string())?;
         mutation_lock.verify_pool_root(&context.pool_root)?;
         let mut lease = context
             .slot_leases
@@ -395,7 +426,11 @@ impl ParallelModeService {
 
         // worktree checkout이 lease branch와 다르면 파일 변경이 어느 branch 소유인지 알 수
         // 없으므로 상태 전이를 중단한다.
-        if current_branch_name(Path::new(&lease.worktree_path)).as_deref()
+        if current_branch_name(
+            self.parallel_runtime.as_ref(),
+            Path::new(&lease.worktree_path),
+        )
+        .as_deref()
             != Some(lease.branch_name.as_str())
         {
             return Err(format!(
@@ -464,12 +499,18 @@ impl ParallelModeService {
         thread_id: &str,
         expected_lease: Option<&ParallelModeSlotLeaseSnapshot>,
     ) -> Result<Option<ParallelModeAgentSessionDetailSnapshot>, String> {
-        let mutation_lock =
-            acquire_pool_mutation_lock(self.planning_authority.as_ref(), workspace_dir)?;
+        let mutation_lock = acquire_pool_mutation_lock(
+            self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
+            workspace_dir,
+        )?;
         // turn service는 slot_id를 모르고 launch workspace만 안다. 역해결이 실패하는 것은
         // 오류가 아니라 일반 대화 경로일 수 있으므로 Option으로 바깥에 전달한다.
-        let Some(resolution) =
-            resolve_workspace_slot_lease(self.planning_authority.as_ref(), workspace_dir)?
+        let Some(resolution) = resolve_workspace_slot_lease_with_runtime(
+            self.parallel_runtime.as_ref(),
+            self.planning_authority.as_ref(),
+            workspace_dir,
+        )?
         else {
             return Ok(None);
         };
@@ -505,8 +546,11 @@ impl ParallelModeService {
         slot_id: &str,
         agent_id: &str,
     ) -> Result<ParallelModeSlotLeaseSnapshot, String> {
-        let mutation_lock =
-            acquire_pool_mutation_lock(self.planning_authority.as_ref(), workspace_dir)?;
+        let mutation_lock = acquire_pool_mutation_lock(
+            self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
+            workspace_dir,
+        )?;
         self.mark_slot_cleanup_pending_locked(workspace_dir, slot_id, agent_id, &mutation_lock)
     }
 
@@ -517,8 +561,12 @@ impl ParallelModeService {
         agent_id: &str,
         mutation_lock: &super::PoolMutationLock,
     ) -> Result<ParallelModeSlotLeaseSnapshot, String> {
-        let context = load_pool_runtime_context(self.planning_authority.as_ref(), workspace_dir)
-            .map_err(|(_, detail)| detail.to_string())?;
+        let context = load_pool_runtime_context_with_runtime(
+            self.parallel_runtime.as_ref(),
+            self.planning_authority.as_ref(),
+            workspace_dir,
+        )
+        .map_err(|(_, detail)| detail.to_string())?;
         mutation_lock.verify_pool_root(&context.pool_root)?;
         let mut lease = context
             .slot_leases
@@ -549,7 +597,11 @@ impl ParallelModeService {
             return Ok(lease);
         }
 
-        if current_branch_name(Path::new(&lease.worktree_path)).as_deref()
+        if current_branch_name(
+            self.parallel_runtime.as_ref(),
+            Path::new(&lease.worktree_path),
+        )
+        .as_deref()
             != Some(lease.branch_name.as_str())
         {
             return Err(format!(
@@ -564,6 +616,7 @@ impl ParallelModeService {
             .fetch_fresh_pool_integration_target(&context.repo_root)?
             .commit_sha;
         if !branch_is_integrated_into(
+            self.parallel_runtime.as_ref(),
             &context.repo_root,
             &lease.branch_name,
             &integration_target_oid,
@@ -571,7 +624,7 @@ impl ParallelModeService {
             return Err(format!(
                 "slot `{slot_id}` branch `{}` is not integrated into `{}` yet",
                 lease.branch_name,
-                pool_baseline_branch_for_repo(&context.repo_root)
+                pool_baseline_branch_for_repo(self.parallel_runtime.as_ref(), &context.repo_root)
             ));
         }
 
@@ -610,8 +663,11 @@ impl ParallelModeService {
     ) -> Result<Option<ParallelModeSlotLeaseSnapshot>, String> {
         // workspace path가 pool slot에 속하지 않으면 병렬 모드 이벤트가 아니다. 에러 대신
         // None을 반환해 상위 stream reducer가 일반 turn으로 계속 진행할 수 있게 한다.
-        let Some(resolution) =
-            resolve_workspace_slot_lease(self.planning_authority.as_ref(), workspace_dir)?
+        let Some(resolution) = resolve_workspace_slot_lease_with_runtime(
+            self.parallel_runtime.as_ref(),
+            self.planning_authority.as_ref(),
+            workspace_dir,
+        )?
         else {
             return Ok(None);
         };
@@ -688,11 +744,17 @@ impl ParallelModeService {
     where
         F: FnOnce(),
     {
-        let mutation_lock =
-            acquire_pool_mutation_lock(self.planning_authority.as_ref(), workspace_dir)?;
+        let mutation_lock = acquire_pool_mutation_lock(
+            self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
+            workspace_dir,
+        )?;
         // slot workspace가 아니라면 실패한 시작 이벤트도 병렬 pool과 무관하다.
-        let Some(resolution) =
-            resolve_workspace_slot_lease(self.planning_authority.as_ref(), workspace_dir)?
+        let Some(resolution) = resolve_workspace_slot_lease_with_runtime(
+            self.parallel_runtime.as_ref(),
+            self.planning_authority.as_ref(),
+            workspace_dir,
+        )?
         else {
             return Ok(None);
         };
@@ -723,7 +785,10 @@ impl ParallelModeService {
 
         // cleanup 전에 git 상태를 읽지 못하면 lease를 남긴다. pool을 오염시키는 것보다
         // 사용자가 수동으로 확인할 수 있는 active lease가 안전하다.
-        let Ok(slot_status) = inspect_slot_git_status(&resolution.workspace_path) else {
+        let Ok(slot_status) = inspect_slot_git_status_with_runtime(
+            self.parallel_runtime.as_ref(),
+            &resolution.workspace_path,
+        ) else {
             return Err(format!(
                 "slot `{}` could not be inspected after startup failure",
                 resolution.lease.slot_id
@@ -766,7 +831,10 @@ impl ParallelModeService {
             return Err(format!(
                 "slot `{}` could not be reset to `{}` after startup failure",
                 resolution.lease.slot_id,
-                pool_baseline_branch_for_repo(&resolution.context.repo_root)
+                pool_baseline_branch_for_repo(
+                    self.parallel_runtime.as_ref(),
+                    &resolution.context.repo_root,
+                )
             ));
         }
 

@@ -1,7 +1,30 @@
 // parallel mode는 git worktree path, pool directory, lease files, temporary command output을 많이
 // 다룬다. `Path`/`PathBuf`를 port 계약에 직접 사용해 문자열 경로 조작을 service 계층에
 // 흩뿌리지 않고, filesystem 의미가 있는 값은 처음부터 path 타입으로 전달한다.
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+pub trait ParallelPoolMutationPermit: Send {
+    fn verify_pool_root(&self, pool_root: &Path) -> Result<(), String>;
+}
+
+pub trait ParallelPinnedDirectory: Send {
+    fn verify(&self) -> Result<(), String>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParallelCommandOutput {
+    pub exit_code: Option<i32>,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
+impl ParallelCommandOutput {
+    pub fn succeeded(&self) -> bool {
+        self.exit_code == Some(0)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParallelWorkerCommitDisposition {
@@ -52,6 +75,102 @@ pub struct ParallelWorkerCommitRequest<'a> {
 // 즉 adapter는 명령 실행과 filesystem 호출을 맡고, 어떤 순서로 recovery/readiness/cleanup을
 // 진행할지는 service가 결정한다.
 pub trait ParallelModeRuntimePort: Send + Sync {
+    fn acquire_pool_mutation_permit(
+        &self,
+        _canonical_repo_root: &Path,
+        _pool_root: &Path,
+        _timeout: Duration,
+        _retry_delay: Duration,
+    ) -> Result<Box<dyn ParallelPoolMutationPermit>, String> {
+        Err("parallel pool mutation locking is unavailable in this runtime".to_string())
+    }
+
+    fn try_acquire_pool_mutation_permit(
+        &self,
+        _pool_root: &Path,
+    ) -> Result<Option<Box<dyn ParallelPoolMutationPermit>>, String> {
+        Err("parallel pool mutation locking is unavailable in this runtime".to_string())
+    }
+
+    fn environment_variable(&self, _name: &str) -> Result<Option<String>, String> {
+        Ok(None)
+    }
+
+    fn current_process_id(&self) -> u32 {
+        0
+    }
+
+    fn required_process_start_identity(&self, _process_id: u32) -> Result<String, String> {
+        Err("process start identity is unavailable in this runtime".to_string())
+    }
+
+    fn ensure_git_execution_safe(&self, _path: &Path) -> Result<(), String> {
+        Err("guarded Git execution is unavailable in this runtime".to_string())
+    }
+
+    fn run_git_command(
+        &self,
+        _args: &[OsString],
+        _stdin: Option<&[u8]>,
+    ) -> Result<ParallelCommandOutput, String> {
+        Err("raw Git command execution is unavailable in this runtime".to_string())
+    }
+
+    fn canonicalize_path(&self, _path: &Path) -> std::io::Result<PathBuf> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "path canonicalization is unavailable in this runtime",
+        ))
+    }
+
+    fn read_directory_paths(&self, _path: &Path) -> std::io::Result<Vec<PathBuf>> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "directory inspection is unavailable in this runtime",
+        ))
+    }
+
+    fn path_is_symlink(&self, _path: &Path) -> std::io::Result<bool> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "path metadata inspection is unavailable in this runtime",
+        ))
+    }
+
+    fn path_exists_checked(&self, path: &Path) -> std::io::Result<bool> {
+        Ok(self.path_exists(path))
+    }
+
+    fn paths_match_securely(&self, _left: &Path, _right: &Path) -> bool {
+        false
+    }
+
+    fn create_private_staging_directory(
+        &self,
+        _path: &Path,
+    ) -> Result<Box<dyn ParallelPinnedDirectory>, String> {
+        Err("private staging directories are unavailable in this runtime".to_string())
+    }
+
+    fn atomic_rename_noreplace(&self, _source: &Path, _destination: &Path) -> std::io::Result<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "atomic no-replace rename is unavailable in this runtime",
+        ))
+    }
+
+    fn read_bounded_unshared_regular_file(
+        &self,
+        _path: &Path,
+        _max_bytes: usize,
+    ) -> Option<Vec<u8>> {
+        None
+    }
+
+    fn fill_secure_random(&self, _bytes: &mut [u8]) -> Result<(), String> {
+        Err("secure randomness is unavailable in this runtime".to_string())
+    }
+
     // workspace가 속한 git repository root를 찾는다. pool service는 이 root를 기준으로 worktree
     // pool path와 baseline branch 상태를 계산하고, repo 밖에서 parallel mode가 켜지는 경우를 blocked로 돌린다.
     fn detect_git_repo_root(&self, workspace_dir: &str) -> Option<String>;

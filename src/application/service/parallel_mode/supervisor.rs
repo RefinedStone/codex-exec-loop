@@ -1,10 +1,11 @@
 use super::distributor::{ParallelModeDistributorQueueRecord, ParallelModeDistributorService};
 use super::{
-    PoolBoardWithContextResult, PoolRuntimeContext, build_pool_board,
+    PoolBoardWithContextResult, PoolRuntimeContext, build_pool_board_with_runtime,
     default_authority_refresh_outcome, default_supervisor_notice, default_validation_summary,
-    format_elapsed_label_from_timestamp, inspect_pool_board_and_context, lease_session_key,
-    pool_operator_recovery_notice,
+    format_elapsed_label_from_timestamp, inspect_pool_board_and_context_with_runtime,
+    lease_session_key, pool_operator_recovery_notice,
 };
+use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterSnapshot, ParallelModeAgentSessionDetailSnapshot,
@@ -39,6 +40,7 @@ impl ParallelModeSupervisorService {
     */
     pub(super) fn build_snapshot(
         &self,
+        runtime: &dyn ParallelModeRuntimePort,
         planning_authority: &dyn PlanningAuthorityPort,
         workspace_dir: &str,
         mode_enabled: bool,
@@ -51,7 +53,11 @@ impl ParallelModeSupervisorService {
             .unwrap_or_else(|| workspace_dir.to_string());
         let (pool, roster, detail) = match readiness_snapshot {
             Some(snapshot) if snapshot.allows_parallel_mode() => build_supervisor_views(
-                inspect_pool_board_and_context(planning_authority, workspace_dir),
+                inspect_pool_board_and_context_with_runtime(
+                    runtime,
+                    planning_authority,
+                    workspace_dir,
+                ),
                 mode_enabled,
             ),
             /*
@@ -60,7 +66,12 @@ impl ParallelModeSupervisorService {
             diagnostics visible without implying new agents can be launched.
             */
             _ => (
-                build_pool_board(planning_authority, workspace_dir, readiness_snapshot),
+                build_pool_board_with_runtime(
+                    runtime,
+                    planning_authority,
+                    workspace_dir,
+                    readiness_snapshot,
+                ),
                 build_placeholder_roster(mode_enabled, readiness_snapshot),
                 build_supervisor_detail(readiness_snapshot),
             ),
@@ -79,6 +90,7 @@ impl ParallelModeSupervisorService {
 
     pub(super) fn build_passive_snapshot(
         &self,
+        runtime: &dyn ParallelModeRuntimePort,
         planning_authority: &dyn PlanningAuthorityPort,
         workspace_dir: &str,
         readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
@@ -94,7 +106,7 @@ impl ParallelModeSupervisorService {
             .map(|snapshot| snapshot.workspace_path.clone())
             .unwrap_or_else(|| workspace_dir.to_string());
         let (pool, roster, detail) = build_supervisor_views(
-            inspect_pool_board_and_context(planning_authority, workspace_dir),
+            inspect_pool_board_and_context_with_runtime(runtime, planning_authority, workspace_dir),
             false,
         );
         let passive_notice =
