@@ -396,6 +396,35 @@ fn application_layer_has_no_concrete_adapter_dependencies() {
 }
 
 #[test]
+fn startup_service_expresses_local_environment_effects_through_its_outbound_port() {
+    assert_no_forbidden_references_in_paths(
+        "startup service must express filesystem, process, and environment effects through its outbound port",
+        &["src/application/service/startup_service.rs"],
+        &[
+            "crate::git_execution_guard",
+            "crate::git_subprocess",
+            "crate::private_fs",
+            "crate::process_liveness",
+            "crate::subprocess",
+            "crate::trusted_executable",
+            "std::fs",
+            "std::process",
+            "std::env",
+            "Command::new",
+            "File::",
+            "OpenOptions",
+        ],
+    );
+
+    let port = fs::read_to_string("src/application/port/outbound/startup_probe_port.rs")
+        .expect("startup probe port should load");
+    let adapter = fs::read_to_string("src/adapter/outbound/app_server/mod.rs")
+        .expect("app-server adapter should load");
+    assert!(port.contains("fn load_local_startup_prerequisites("));
+    assert!(adapter.contains("fn load_local_startup_prerequisites("));
+}
+
+#[test]
 fn hexagonal_boundary_guards_cover_at_least_ninety_percent_of_rust_sources() {
     let repo_root = repo_root();
     let all_sources = rust_files_under(&repo_root.join("src"));

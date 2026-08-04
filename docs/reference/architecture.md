@@ -193,7 +193,10 @@ case directly.
 
 Native TUI startup also owns prompt-log privacy maintenance through this effect path. Production
 composition injects a typed maintenance port into `StartupService` but performs no SQLite purge or
-clear while building the app. The startup command captures a monotonic generation and the exact
+clear while building the app. The same startup outbound contract supplies the current directory,
+trusted Codex executable, and Git workspace projection; `StartupService` combines those normalized
+values without importing process, filesystem, environment, or Git execution helpers. The startup
+command captures a monotonic generation and the exact
 requested workspace; the existing Core startup worker runs maintenance first and then startup
 checks for that same workspace. Capture enabled selects retention purge, while capture disabled
 selects full clear. A maintenance error or panic becomes a fixed, redacted, non-fatal startup
