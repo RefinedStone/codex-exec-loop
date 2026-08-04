@@ -9,29 +9,181 @@ on:
     branches:
       - main
       - prerelease
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: Validation scope to exercise
+        required: true
+        default: auto
+        type: choice
+        options:
+          - auto
+          - docs
+          - rust
+          - tui
+          - admin
+          - full
+          - smoke
 
 permissions:
   contents: read
 
 concurrency:
-  group: native-pr-checks-${{ github.ref }}
+  group: native-pr-checks-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
 
 jobs:
-  portable-native-check:
+  scope:
+    name: CI Scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      full: ${{ steps.classify.outputs.full }}
+      rust: ${{ steps.classify.outputs.rust }}
+      node: ${{ steps.classify.outputs.node }}
+      portable: ${{ steps.classify.outputs.portable }}
+      smoke: ${{ steps.classify.outputs.smoke }}
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+      summary: ${{ steps.classify.outputs.summary }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Test CI scope policy
+        run: node --test scripts/ci-scope.test.mjs
+
+      - name: Classify validation scope
+        id: classify
+        env:
+          AKRA_CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
+          AKRA_CI_EVENT_NAME: ${{ github.event_name }}
+          AKRA_CI_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          AKRA_CI_REQUESTED_SCOPE: ${{ inputs.scope || 'auto' }}
+        run: node scripts/ci-scope.mjs classify
+
+  rust_tests:
+    name: Rust Tests
+    needs: scope
+    if: needs.scope.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@eac0f66a48bc4b70a10b9acd4c4e930f835d95ff # 1.95.0
+
+      - name: Restore Rust test cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-rust-tests-${{ hashFiles('Cargo.lock') }}-v1
+          restore-keys: |
+            ${{ runner.os }}-rust-tests-
+            ${{ runner.os }}-rust-
+
+      - name: Run Rust tests
+        run: cargo test --locked
+
+  rust_lint:
+    name: Rust Lint and Architecture
+    needs: scope
+    if: needs.scope.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@eac0f66a48bc4b70a10b9acd4c4e930f835d95ff # 1.95.0
+        with:
+          components: clippy,rustfmt
+
+      - name: Restore Rust lint cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-rust-lint-${{ hashFiles('Cargo.lock') }}-v1
+          restore-keys: |
+            ${{ runner.os }}-rust-lint-
+            ${{ runner.os }}-rust-
+
+      - name: Ensure shell tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v rg >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y ripgrep
+          fi
+
+      - name: Check TUI architecture
+        run: bash scripts/check_tui_layering.sh
+
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Rust clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+  node_surfaces:
+    name: Node and Admin Surfaces
+    needs: scope
+    if: needs.scope.outputs.node == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: assets/admin/game/package-lock.json
+
+      - name: Run Node and admin checks
+        run: bash scripts/check_node_surfaces.sh
+
+  portable_native:
     name: Portable Rust Check (${{ matrix.label }})
+    needs: scope
+    if: needs.scope.outputs.portable == 'true'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            label: linux-x86_64
           - runner: windows-latest
             target: x86_64-pc-windows-msvc
             label: windows-x86_64
@@ -48,6 +200,18 @@ jobs:
         uses: dtolnay/rust-toolchain@eac0f66a48bc4b70a10b9acd4c4e930f835d95ff # 1.95.0
         with:
           targets: ${{ matrix.target }}
+
+      - name: Restore portable Rust cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-portable-${{ hashFiles('Cargo.lock') }}-v1
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-portable-
 
       - name: Check native target
         shell: bash
@@ -142,10 +306,12 @@ jobs:
           cargo test --locked --all-features --lib --target "${{ matrix.target }}" \
             host_owned_worker_commit_ -- --nocapture
 
-  native-pr-checks:
-    name: Native PR Checks
+  smoke_check:
+    name: Rust Smoke Check
+    needs: scope
+    if: needs.scope.outputs.smoke == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 15
     steps:
       - name: Check out repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -154,23 +320,56 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@eac0f66a48bc4b70a10b9acd4c4e930f835d95ff # 1.95.0
+
+      - name: Restore Rust smoke cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          components: clippy,rustfmt
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-rust-smoke-${{ hashFiles('Cargo.lock') }}-v1
+          restore-keys: |
+            ${{ runner.os }}-rust-smoke-
+            ${{ runner.os }}-rust-
+
+      - name: Check native smoke target
+        run: cargo check --locked --all-features --lib --bins
+
+  ci_gate:
+    name: CI Gate
+    needs:
+      - scope
+      - rust_tests
+      - rust_lint
+      - node_surfaces
+      - portable_native
+      - smoke_check
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - name: Install Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: assets/admin/game/package-lock.json
 
-      - name: Install shell tooling
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y ripgrep
-
-      - name: Run native PR checks
-        shell: bash
-        run: bash scripts/check_native_pr.sh
+      - name: Evaluate required jobs
+        env:
+          AKRA_CI_NODE_REQUIRED: ${{ needs.scope.outputs.node }}
+          AKRA_CI_NODE_RESULT: ${{ needs.node_surfaces.result }}
+          AKRA_CI_PORTABLE_REQUIRED: ${{ needs.scope.outputs.portable }}
+          AKRA_CI_PORTABLE_RESULT: ${{ needs.portable_native.result }}
+          AKRA_CI_RUST_LINT_RESULT: ${{ needs.rust_lint.result }}
+          AKRA_CI_RUST_REQUIRED: ${{ needs.scope.outputs.rust }}
+          AKRA_CI_RUST_TESTS_RESULT: ${{ needs.rust_tests.result }}
+          AKRA_CI_SCOPE_RESULT: ${{ needs.scope.result }}
+          AKRA_CI_SMOKE_REQUIRED: ${{ needs.scope.outputs.smoke }}
+          AKRA_CI_SMOKE_RESULT: ${{ needs.smoke_check.result }}
+        run: node scripts/ci-scope.mjs gate
