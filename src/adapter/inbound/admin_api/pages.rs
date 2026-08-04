@@ -13,8 +13,8 @@ use super::views::{
 };
 use super::{AdminAppState, parse_reset_target};
 use crate::adapter::inbound::admin_api::admin_debug_dashboard::build_admin_dashboard_view;
-use crate::application::service::parallel_agent_profile::parse_parallel_agent_profile_config_json;
-use crate::application::service::planning::{
+use crate::application::port::inbound::parallel_agent_profile_port::parse_parallel_agent_profile_config_json;
+use crate::application::port::inbound::planning_admin_port::{
     PlanningAdminDirectionDeleteRequest, PlanningAdminDirectionMutationRequest,
     PlanningAdminDraftFileUpdate, PlanningAdminDraftKind, PlanningAdminDraftLoadRequest,
     PlanningAdminDraftMutationRequest, PlanningAdminFileKey, PlanningAdminSessionView,
@@ -570,7 +570,7 @@ pub(super) async fn controls_page(
         .load_overview()
         .map_err(internal_server_error)?;
     let agent_profile_config = state
-        .parallel_agent_profile_service
+        .parallel_agent_profile_port
         .load_config(state.facade.workspace_dir())
         .map_err(|error| internal_server_error(anyhow!(error)))?;
     let agent_profile_config_json = agent_profile_config.to_pretty_json();
@@ -596,7 +596,7 @@ pub(super) async fn app_server_prompts_page(
 ) -> std::result::Result<Response, StatusCode> {
     let (jar, csrf_token) = ensure_csrf_cookie(jar);
     let snapshot = state
-        .app_server_prompt_log_port
+        .app_server_prompt_log_query_port
         .load_recent_app_server_prompt_interactions(state.facade.workspace_dir(), 80)
         .map_err(internal_server_error)?;
     render_html(
@@ -609,7 +609,7 @@ pub(super) async fn app_server_prompts_page(
             notice: query.get("notice").cloned(),
             prompt_log: AppServerPromptLogView::from_records(
                 snapshot.records,
-                state.app_server_prompt_log_port.is_enabled(),
+                state.app_server_prompt_log_query_port.is_enabled(),
             ),
         },
     )
@@ -624,7 +624,7 @@ pub(super) async fn update_agent_profiles_page(
     let config = parse_parallel_agent_profile_config_json(&form.profiles_json)
         .map_err(|_| StatusCode::BAD_REQUEST)?;
     state
-        .parallel_agent_profile_service
+        .parallel_agent_profile_port
         .save_config(state.facade.workspace_dir(), &config)
         .map_err(|error| internal_server_error(anyhow!(error)))?;
     Ok(Redirect::to(&notice_location(
@@ -710,9 +710,9 @@ pub(super) async fn save_draft_page(
     verify_draft_name_path(&draft_name)?;
     let csrf_token = form.csrf_token.clone();
     let surface = PlanningAdminSurface::from_token(form.surface.as_deref());
-    let (_, session) = state
+    let session = state
         .facade
-        .save_draft(page_mutation_request(draft_name, form))
+        .save_draft_session(page_mutation_request(draft_name, form))
         .map_err(internal_server_error)?;
     if is_htmx_request(&headers) {
         return render_fragment(DraftStatusTemplate {
@@ -746,9 +746,9 @@ pub(super) async fn validate_draft_page(
     verify_draft_name_path(&draft_name)?;
     let csrf_token = form.csrf_token.clone();
     let surface = PlanningAdminSurface::from_token(form.surface.as_deref());
-    let (_, session) = state
+    let session = state
         .facade
-        .save_draft(page_mutation_request(draft_name, form))
+        .save_draft_session(page_mutation_request(draft_name, form))
         .map_err(internal_server_error)?;
     if is_htmx_request(&headers) {
         return render_fragment(DraftStatusTemplate {
@@ -781,11 +781,11 @@ pub(super) async fn promote_draft_page(
     verify_draft_name_path(&draft_name)?;
     let csrf_token = form.csrf_token.clone();
     let surface = PlanningAdminSurface::from_token(form.surface.as_deref());
-    let (result, session) = state
+    let result = state
         .facade
-        .promote_draft(page_mutation_request(draft_name, form))
+        .promote_draft_session(page_mutation_request(draft_name, form))
         .map_err(internal_server_error)?;
-    let notice = if result.promoted_file_count > 0 && result.validation_report.is_valid() {
+    let notice = if result.promoted_file_count > 0 && result.is_valid {
         Some(format!(
             "draft promoted into active planning ({} files)",
             result.promoted_file_count
@@ -799,7 +799,7 @@ pub(super) async fn promote_draft_page(
         csrf_token,
         notice,
         surface,
-        session,
+        result.session,
     )
 }
 

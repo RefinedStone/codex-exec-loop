@@ -1,5 +1,5 @@
 use super::akra_dashboard::{GameStaticPose, GameVisualState};
-use crate::application::service::admin_debug_harness::AdminDebugStage;
+use crate::application::port::inbound::admin_debug_port::AdminDebugStage;
 
 pub(super) const DEBUG_AGENT_COUNT: usize = 3;
 

@@ -1,13 +1,11 @@
+use crate::application::port::inbound::admin_debug_port::AdminDebugPort;
+use crate::application::port::inbound::app_server_prompt_log_query_port::AppServerPromptLogQueryPort;
+use crate::application::port::inbound::parallel_agent_profile_port::ParallelAgentProfilePort;
+use crate::application::port::inbound::parallel_mode_admin_port::ParallelModeAdminPort;
+use crate::application::port::inbound::planning_admin_port::PlanningAdminPort;
 use crate::application::port::inbound::review_center_query_port::ReviewCenterQueryPort;
-use crate::application::port::outbound::app_server_prompt_log_port::AppServerPromptLogPort;
-use crate::application::service::admin_debug_harness::AdminDebugHarnessService;
-use crate::application::service::parallel_agent_profile::ParallelAgentProfileService;
-use crate::application::service::parallel_mode::control_plane::{
-    ParallelModeControlPlaneBackgroundEvent, ParallelModeControlPlaneComposition,
-    ParallelModeControlPlaneEventSink, ParallelModeControlPlaneHandle,
-};
-use crate::application::service::planning::{PlanningAdminFacadeService, PlanningResetTarget};
 use crate::composition::production;
+use crate::domain::planning::PlanningResetTarget;
 use anyhow::{Context, Result, anyhow, bail};
 use axum::Router;
 use axum::extract::{Request, State};
@@ -18,13 +16,13 @@ use axum::routing::{get, post};
 use axum_extra::extract::CookieJar;
 use std::io::IsTerminal;
 use std::net::Ipv4Addr;
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::Arc;
 
 /*
  * admin_api는 planning administration을 로컬 HTTP surface로 노출하는 inbound adapter다.
  * loopback bind, CLI server argument, route table, CSRF boundary, HTML/JSON handler wiring은 이
  * 모듈의 transport 책임이다. 반대로 queue/direction/task/draft의 의미, workspace mutation policy,
- * authority-store write rule은 PlanningAdminFacadeService 아래 application layer에 남긴다.
+ * authority-store write rule은 PlanningAdminPort 구현 아래 application layer에 남긴다.
  * 그래서 이 파일은 "어떤 URL이 어떤 transport contract로 facade를 호출하는가"만 설명하고,
  * planning 자체의 판정은 직접 복제하지 않는다.
  */
@@ -57,53 +55,15 @@ struct AdminAppState {
      * 여기에는 Arc facade만 두어 HTTP layer가 별도 planning cache나 mutation policy를 갖지 못하게 한다.
      * HTML page handler와 JSON API handler가 같은 facade instance를 바라보므로 두 surface의 상태 해석도 함께 묶인다.
      */
-    facade: Arc<PlanningAdminFacadeService>,
-    parallel_mode_control_plane: Arc<ParallelModeControlPlaneComposition>,
-    parallel_control_runtime: AdminParallelControlRuntime,
-    admin_debug_harness_service: AdminDebugHarnessService,
-    parallel_agent_profile_service: ParallelAgentProfileService,
-    app_server_prompt_log_port: Arc<dyn AppServerPromptLogPort>,
+    facade: Arc<dyn PlanningAdminPort>,
+    parallel_mode_admin_port: Arc<dyn ParallelModeAdminPort>,
+    admin_debug_port: Arc<dyn AdminDebugPort>,
+    parallel_agent_profile_port: Arc<dyn ParallelAgentProfilePort>,
+    app_server_prompt_log_query_port: Arc<dyn AppServerPromptLogQueryPort>,
     review_center_query_port: Arc<dyn ReviewCenterQueryPort>,
     graphic: AdminGraphicConfig,
     command_ledger: realtime::AdminCommandLedger,
     security: AdminSecurityConfig,
-}
-
-#[derive(Clone)]
-struct AdminParallelControlEventSink {
-    tx: mpsc::Sender<ParallelModeControlPlaneBackgroundEvent>,
-}
-
-impl ParallelModeControlPlaneEventSink for AdminParallelControlEventSink {
-    fn send_control_plane_event(&self, event: ParallelModeControlPlaneBackgroundEvent) {
-        let _ = self.tx.send(event);
-    }
-}
-
-#[derive(Clone)]
-struct AdminParallelControlRuntime {
-    handle: ParallelModeControlPlaneHandle<AdminParallelControlEventSink>,
-    pending_events: Arc<Mutex<mpsc::Receiver<ParallelModeControlPlaneBackgroundEvent>>>,
-}
-
-impl AdminParallelControlRuntime {
-    fn new(composition: &ParallelModeControlPlaneComposition) -> Self {
-        let (tx, rx) = mpsc::channel();
-        Self {
-            handle: composition.bind_event_sink(AdminParallelControlEventSink { tx }),
-            pending_events: Arc::new(Mutex::new(rx)),
-        }
-    }
-
-    fn drain_pending_events(&self) {
-        let receiver = self
-            .pending_events
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        while let Ok(event) = receiver.try_recv() {
-            let _ = self.handle.handle_background_event(event);
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -252,15 +212,12 @@ fn build_admin_state_with_debug_harness(
         workspace_dir,
         debug_harness_enabled,
     );
-    let parallel_control_runtime =
-        AdminParallelControlRuntime::new(application.parallel_mode_control_plane.as_ref());
     AdminAppState {
         facade: application.facade,
-        parallel_mode_control_plane: application.parallel_mode_control_plane,
-        parallel_control_runtime,
-        admin_debug_harness_service: application.admin_debug_harness_service,
-        parallel_agent_profile_service: application.parallel_agent_profile_service,
-        app_server_prompt_log_port: application.app_server_prompt_log_port,
+        parallel_mode_admin_port: application.parallel_mode_admin_port,
+        admin_debug_port: application.admin_debug_port,
+        parallel_agent_profile_port: application.parallel_agent_profile_port,
+        app_server_prompt_log_query_port: application.app_server_prompt_log_query_port,
         review_center_query_port: application.review_center_query_port,
         graphic: AdminGraphicConfig::from_env(),
         command_ledger: realtime::AdminCommandLedger::default(),

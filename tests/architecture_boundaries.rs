@@ -455,6 +455,42 @@ fn cli_and_telegram_enter_application_through_inbound_ports() {
 }
 
 #[test]
+fn admin_api_enters_application_through_inbound_ports() {
+    assert_no_forbidden_references_in_paths(
+        "admin API production code must depend on inbound contracts, not service or outbound implementations",
+        &["src/adapter/inbound/admin_api"],
+        &[
+            "crate::application::service::",
+            "crate::application::port::outbound::",
+        ],
+    );
+}
+
+#[test]
+fn admin_boundary_contracts_are_not_owned_by_service_modules() {
+    let planning_port = fs::read_to_string("src/application/port/inbound/planning_admin_port.rs")
+        .expect("planning admin inbound port should load");
+    let debug_port = fs::read_to_string("src/application/port/inbound/admin_debug_port.rs")
+        .expect("admin debug inbound port should load");
+    let profile_domain = fs::read_to_string("src/domain/parallel_agent_profile.rs")
+        .expect("parallel agent profile domain should load");
+    let profile_service = fs::read_to_string("src/application/service/parallel_agent_profile.rs")
+        .expect("parallel agent profile service should load");
+    let prompt_domain = fs::read_to_string("src/domain/app_server_prompt_log.rs")
+        .expect("app-server prompt-log domain should load");
+    let prompt_outbound =
+        fs::read_to_string("src/application/port/outbound/app_server_prompt_log_port.rs")
+            .expect("app-server prompt-log outbound port should load");
+
+    assert!(planning_port.contains("pub trait PlanningAdminPort"));
+    assert!(debug_port.contains("pub trait AdminDebugPort"));
+    assert!(profile_domain.contains("pub struct ParallelAgentProfileConfig"));
+    assert!(!profile_service.contains("pub struct ParallelAgentProfileConfig"));
+    assert!(prompt_domain.contains("pub struct AppServerPromptInteractionRecord"));
+    assert!(!prompt_outbound.contains("pub struct AppServerPromptInteractionRecord"));
+}
+
+#[test]
 fn review_center_read_models_are_domain_owned() {
     let domain = fs::read_to_string("src/domain/review_center.rs")
         .expect("review center domain contracts should load");

@@ -11,16 +11,17 @@ use super::{
     verify_draft_name_path, verify_header_csrf,
 };
 use crate::adapter::inbound::admin_api::akra_dashboard::{EventFeedView, RuntimeEventView};
-use crate::application::service::admin_debug_harness::{
+use crate::application::port::inbound::admin_debug_port::{
     AdminDebugHarnessCommand, AdminDebugScenario,
 };
-use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneCommand;
-use crate::application::service::planning::{
+use crate::application::port::inbound::parallel_mode_admin_port::{
+    ParallelModeAdminCommand, ParallelModeAdminCommandEffect,
+};
+use crate::application::port::inbound::planning_admin_port::{
     PlanningAdminDirectionDeleteRequest, PlanningAdminDirectionMutationRequest,
     PlanningAdminDraftLoadRequest, PlanningAdminDraftMutationRequest,
     PlanningAdminTaskDeleteRequest, PlanningAdminTaskMutationRequest,
 };
-use crate::domain::parallel_mode::ParallelModeAutomationTrigger;
 use axum::extract::{Json, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -100,12 +101,7 @@ struct AkraStreamFrame {
 }
 
 fn akra_control_view(state: &AdminAppState, message: impl Into<String>) -> AkraControlApiResponse {
-    state.parallel_control_runtime.drain_pending_events();
-    let projection = state
-        .parallel_control_runtime
-        .handle
-        .presentation_projection();
-    let epoch = state.parallel_control_runtime.handle.epoch_snapshot();
+    let projection = state.parallel_mode_admin_port.load_control_status();
     let latest_command = state.command_ledger.reconcile_latest(
         projection.control_effect_in_flight,
         projection.last_dispatch_withheld_reason.as_deref(),
@@ -113,7 +109,7 @@ fn akra_control_view(state: &AdminAppState, message: impl Into<String>) -> AkraC
     AkraControlApiResponse {
         mode_enabled: projection.mode_enabled,
         control_effect_in_flight: projection.control_effect_in_flight,
-        current_epoch_id: epoch.current_epoch_id,
+        current_epoch_id: projection.current_epoch_id,
         last_dispatch_withheld_reason: projection.last_dispatch_withheld_reason,
         latest_command,
         message: message.into(),
@@ -140,49 +136,31 @@ pub(super) async fn mutate_akra_control_api(
     Json(request): Json<AkraControlRequest>,
 ) -> std::result::Result<Response, StatusCode> {
     verify_header_csrf(&jar, &headers)?;
-    if state.admin_debug_harness_service.projection().enabled {
+    if state.admin_debug_port.projection().enabled {
         return Err(StatusCode::CONFLICT);
     }
-    state.parallel_control_runtime.drain_pending_events();
     let workspace_directory = state.facade.workspace_dir().to_string();
-    let handle = &state.parallel_control_runtime.handle;
     let action = request.action.trim();
-    let message = match action {
-        "enable" => {
-            let _ = handle.handle_command(ParallelModeControlPlaneCommand::Enable {
-                workspace_directory,
-            });
-            "자동 루프 시작을 요청했습니다."
-        }
-        "dispatch" => {
-            if handle.mode_enabled() {
-                let _ = handle.handle_command(ParallelModeControlPlaneCommand::RequestDispatch {
-                    workspace_directory,
-                    trigger: ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
-                });
-                "승인된 다음 작업 투입을 요청했습니다."
-            } else {
-                let _ = handle.handle_command(ParallelModeControlPlaneCommand::Enable {
-                    workspace_directory,
-                });
-                "루프가 꺼져 있어 시작 요청으로 전환했습니다."
-            }
-        }
-        "refresh" => {
-            let _ = handle.handle_command(ParallelModeControlPlaneCommand::InspectSupervisor {
-                workspace_directory,
-                reconcile_pool: handle.mode_enabled(),
-                show_status: false,
-            });
-            "관제 투영 동기화를 요청했습니다."
-        }
-        "disable" => {
-            let _ = handle.handle_command(ParallelModeControlPlaneCommand::Disable {
-                workspace_directory,
-            });
-            "자동 루프 정지를 요청했습니다."
-        }
+    let command = match action {
+        "enable" => ParallelModeAdminCommand::Enable,
+        "dispatch" => ParallelModeAdminCommand::Dispatch,
+        "refresh" => ParallelModeAdminCommand::Refresh,
+        "disable" => ParallelModeAdminCommand::Disable,
         _ => return Err(StatusCode::BAD_REQUEST),
+    };
+    let outcome = state
+        .parallel_mode_admin_port
+        .execute_control(&workspace_directory, command);
+    let message = match outcome.effect {
+        ParallelModeAdminCommandEffect::Enabled => "자동 루프 시작을 요청했습니다.",
+        ParallelModeAdminCommandEffect::DispatchRequested => {
+            "승인된 다음 작업 투입을 요청했습니다."
+        }
+        ParallelModeAdminCommandEffect::EnabledInsteadOfDispatch => {
+            "루프가 꺼져 있어 시작 요청으로 전환했습니다."
+        }
+        ParallelModeAdminCommandEffect::RefreshRequested => "관제 투영 동기화를 요청했습니다.",
+        ParallelModeAdminCommandEffect::Disabled => "자동 루프 정지를 요청했습니다.",
     };
     state.command_ledger.begin(action, message);
     Ok(akra_control_response(&state, message))
@@ -218,7 +196,7 @@ pub(super) async fn akra_stream_api(
 
     let stream = IntervalStream::new(interval).map(move |_| {
         let control = akra_control_view(&state, "realtime control projection");
-        let debug_projection = state.admin_debug_harness_service.projection();
+        let debug_projection = state.admin_debug_port.projection();
         let debug_harness = map_harness_view(&debug_projection);
         let (feed, events) = build_admin_events_view(&state, 50, after_sequence);
         let control_signature =
@@ -365,10 +343,7 @@ pub(super) async fn akra_events_api(
 pub(super) async fn akra_debug_harness_api(
     State(state): State<AdminAppState>,
 ) -> std::result::Result<Response, StatusCode> {
-    Ok(Json(map_harness_view(
-        &state.admin_debug_harness_service.projection(),
-    ))
-    .into_response())
+    Ok(Json(map_harness_view(&state.admin_debug_port.projection())).into_response())
 }
 
 pub(super) async fn mutate_akra_debug_harness_api(
@@ -393,7 +368,7 @@ pub(super) async fn mutate_akra_debug_harness_api(
         _ => return Err(StatusCode::BAD_REQUEST),
     };
     let projection = state
-        .admin_debug_harness_service
+        .admin_debug_port
         .execute(command)
         .map_err(|_| StatusCode::NOT_FOUND)?;
     Ok(Json(map_harness_view(&projection)).into_response())
@@ -454,9 +429,9 @@ pub(super) async fn save_draft_api(
      */
     verify_header_csrf(&jar, &headers)?;
     verify_draft_name_path(&draft_name)?;
-    let (_, session) = state
+    let session = state
         .facade
-        .save_draft(PlanningAdminDraftMutationRequest {
+        .save_draft_session(PlanningAdminDraftMutationRequest {
             draft_name,
             kind: request.kind,
             direction_id: request.direction_id,
@@ -480,9 +455,9 @@ pub(super) async fn validate_draft_api(
      */
     verify_header_csrf(&jar, &headers)?;
     verify_draft_name_path(&draft_name)?;
-    let (_, session) = state
+    let session = state
         .facade
-        .save_draft(PlanningAdminDraftMutationRequest {
+        .save_draft_session(PlanningAdminDraftMutationRequest {
             draft_name,
             kind: request.kind,
             direction_id: request.direction_id,
@@ -506,9 +481,9 @@ pub(super) async fn promote_draft_api(
      */
     verify_header_csrf(&jar, &headers)?;
     verify_draft_name_path(&draft_name)?;
-    let (result, session) = state
+    let result = state
         .facade
-        .promote_draft(PlanningAdminDraftMutationRequest {
+        .promote_draft_session(PlanningAdminDraftMutationRequest {
             draft_name,
             kind: request.kind,
             direction_id: request.direction_id,
@@ -517,8 +492,8 @@ pub(super) async fn promote_draft_api(
         .map_err(internal_server_error)?;
     Ok(Json(DraftPromoteApiResponse {
         promoted_file_count: result.promoted_file_count,
-        is_valid: result.validation_report.is_valid(),
-        session,
+        is_valid: result.is_valid,
+        session: result.session,
     })
     .into_response())
 }

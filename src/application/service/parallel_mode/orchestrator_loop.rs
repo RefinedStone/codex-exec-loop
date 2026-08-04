@@ -6,7 +6,6 @@ use crate::application::port::outbound::parallel_agent_worker_port::{
     ParallelAgentWorkerPort, ParallelAgentWorkerStreamRequest,
 };
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelWorkerCommitDisposition;
-use crate::application::service::parallel_agent_profile::ParallelAgentProfileConfig;
 use crate::application::service::parallel_mode::turn::{
     ParallelModeTurnService, ParallelOfficialCompletionFinalizeFailureStage,
     ParallelOfficialCompletionFinalizeOutcome,
@@ -16,6 +15,7 @@ use crate::application::service::planning::{
     PlanningRuntimeWorkspaceStatus, PlanningServices, PlanningTaskHandoff,
 };
 use crate::diagnostics::event_log;
+use crate::domain::parallel_agent_profile::ParallelAgentProfileConfig;
 use crate::domain::parallel_mode::{
     ParallelModeAutomationTrigger, ParallelModeControlPlaneWorkerEvent,
     ParallelModeControlPlaneWorkerEventKind, ParallelModeDispatchCommandSnapshot,

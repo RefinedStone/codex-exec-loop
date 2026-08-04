@@ -58,14 +58,16 @@ traits. Cross-adapter stream contracts live at the application boundary instead 
 implementation; concrete integration capabilities remain outbound ports. The CLI and Telegram
 paths use narrow `PlanningControlPort`, `PlanningWorkspaceMaintenancePort`,
 `PlanningTaskToolPort`, `ParallelModeControlPort`, and `ReviewCenterQueryPort` contracts rather
-than full service graphs. Review-center thread, inbox, and history values are domain read models;
-the repository port persists them but does not own them.
+than full service graphs. Admin uses `PlanningAdminPort`, `ParallelModeAdminPort`,
+`AdminDebugPort`, `ParallelAgentProfilePort`, and `AppServerPromptLogQueryPort`; its Axum state has
+no concrete application service or outbound repository capability. Review-center, parallel-agent
+profile, and app-server prompt-log values are domain-owned contracts; repository ports persist
+them but do not own them.
 
-The Admin server owns one process-lifetime parallel control-plane handle in addition to its passive
-dashboard composition. Browser control requests map only to typed enable, dispatch, refresh, and
-disable commands. Effect completions return through an adapter-owned bounded channel and are
-drained through the same handle, so HTTP polling never becomes a second pool or delivery policy
-implementation.
+The process-lifetime parallel control-plane handle and completion channel belong to the
+`ParallelModeAdminPort` implementation. Browser requests map transport actions to typed admin
+commands, while the application service owns enable/dispatch/refresh/disable policy and drains
+effect completions through the same handle.
 
 ## Core Runtime
 

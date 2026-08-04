@@ -11,7 +11,7 @@ use super::akra_dashboard::{
     PoolSlotView, PoolSummaryView, RuntimeEventView, SelectedTaskView, build_akra_dashboard_view,
     build_akra_events_view,
 };
-use crate::application::service::admin_debug_harness::{
+use crate::application::port::inbound::admin_debug_port::{
     AdminDebugHarnessProjection, AdminDebugScenarioOption, AdminDebugStage,
 };
 use chrono::Utc;
@@ -67,10 +67,10 @@ pub(super) fn build_admin_dashboard_view(
 ) -> anyhow::Result<AkraAdminDashboardView> {
     let mut dashboard = build_akra_dashboard_view(
         state.facade.as_ref(),
-        state.parallel_mode_control_plane.as_ref(),
-        &state.parallel_agent_profile_service,
+        state.parallel_mode_admin_port.as_ref(),
+        state.parallel_agent_profile_port.as_ref(),
     )?;
-    let projection = state.admin_debug_harness_service.projection();
+    let projection = state.admin_debug_port.projection();
     apply_admin_debug_harness(&mut dashboard, &projection);
     Ok(dashboard)
 }
@@ -80,13 +80,13 @@ pub(super) fn build_admin_events_view(
     limit: usize,
     after_sequence: Option<i64>,
 ) -> (EventFeedView, Vec<RuntimeEventView>) {
-    let projection = state.admin_debug_harness_service.projection();
+    let projection = state.admin_debug_port.projection();
     if projection.enabled {
         build_debug_events_view(&projection, limit, after_sequence)
     } else {
         build_akra_events_view(
             state.facade.workspace_dir(),
-            state.parallel_mode_control_plane.as_ref(),
+            state.parallel_mode_admin_port.as_ref(),
             limit,
             after_sequence,
         )

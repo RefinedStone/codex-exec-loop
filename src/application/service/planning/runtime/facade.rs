@@ -4,7 +4,6 @@
  * inbound adapter가 바로 소비할 return shape로 순서화한다. adapter는 내부 service graph를 모르고 이 facade의
  * 작은 DTO와 method만 알면 된다.
  */
-use crate::application::service::parallel_agent_profile::ParallelAgentProfile;
 use crate::application::service::planning::repair::reconciliation::{
     PlanningExecutionSnapshot, PlanningReconciliationResult, PlanningReconciliationService,
 };
@@ -25,6 +24,7 @@ use crate::application::service::turn_prompt_assembly_service::{
     SubSessionPromptAssemblyRequest, TurnPromptAssemblyService,
 };
 use crate::diagnostics::event_log;
+use crate::domain::parallel_agent_profile::ParallelAgentProfile;
 use crate::domain::planning::{
     MainSessionHandoff as DomainMainSessionHandoff, PriorityQueueTask,
     RuntimeQueuedAutoFollowPrompt as DomainRuntimeQueuedAutoFollowPrompt,
