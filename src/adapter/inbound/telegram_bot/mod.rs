@@ -7,10 +7,11 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use rand::RngCore;
 
+use crate::application::port::inbound::parallel_mode_control_port::ParallelModeControlPort;
 use crate::application::port::inbound::planning_control_port::{
     PlanningControlCommand, PlanningControlPort, PlanningControlRequest,
 };
-use crate::application::port::outbound::parallel_mode_runtime_event_log_port::ParallelModeRuntimeEventLogRequest;
+use crate::application::port::inbound::review_center_query_port::ReviewCenterQueryPort;
 use crate::application::port::outbound::telegram_bot_port::{
     TELEGRAM_LONG_POLL_TRANSPORT_MARGIN_SECONDS, TelegramBotPort, TelegramInboundMessage,
     TelegramPollRequest, TelegramSendMessageRequest, TelegramUpdate,
@@ -22,14 +23,12 @@ use crate::application::port::outbound::telegram_global_runner_lease_port::{
 use crate::application::port::outbound::telegram_update_ledger_port::{
     TelegramUpdateClaimDecision, TelegramUpdateLedgerPort,
 };
-use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneComposition;
-use crate::application::service::review_center::ReviewCenterReadService;
 use crate::composition::production;
 
 /*
 이 module은 Telegram을 "또 하나의 shell"로 붙이는 inbound adapter다. Telegram Bot API
 polling과 응답 전송은 `TelegramBotPort` 뒤에 숨기고, 실제 planning 조작은 CLI/TUI가 쓰는
-`PlanningControlService`로 넘긴다. 그래서 여기의 핵심 책임은 bootstrapping, chat allowlist,
+`PlanningControlPort`로 넘긴다. 그래서 여기의 핵심 책임은 bootstrapping, chat allowlist,
 update cursor 관리, 메시지 단위 장애 격리다.
 */
 const DEFAULT_POLL_TIMEOUT_SECONDS: u16 = 30;
@@ -91,8 +90,8 @@ where
         production::build_telegram_bot_port(args.token),
         application.telegram_global_runner_lease_port,
         application.telegram_update_ledger_port,
-        application.control_service,
-        application.parallel_control_surface,
+        application.planning_control_port,
+        application.parallel_mode_control_port,
         TelegramBotRuntimeConfig {
             workspace_dir: workspace_dir.clone(),
             binding_workspace_dir,
@@ -108,14 +107,14 @@ where
             failure_backoff: DEFAULT_FAILURE_BACKOFF,
         },
     )
-    .with_review_center_read_service(application.review_center_read_service);
+    .with_review_center_query_port(application.review_center_query_port);
     runner.run(&shutdown)
 }
 
 struct TelegramApplication {
-    control_service: Arc<dyn PlanningControlPort>,
-    parallel_control_surface: Arc<dyn TelegramParallelControlSurface>,
-    review_center_read_service: ReviewCenterReadService,
+    planning_control_port: Arc<dyn PlanningControlPort>,
+    parallel_mode_control_port: Arc<dyn ParallelModeControlPort>,
+    review_center_query_port: Arc<dyn ReviewCenterQueryPort>,
     telegram_update_ledger_port: Arc<dyn TelegramUpdateLedgerPort>,
     telegram_global_runner_lease_port: Arc<dyn TelegramGlobalRunnerLeasePort>,
 }
@@ -123,17 +122,13 @@ struct TelegramApplication {
 fn build_telegram_application(workspace_dir: String) -> TelegramApplication {
     /*
     Telegram commands use the same application control facades as the CLI/admin/TUI command surfaces.
-    Planning status/reset goes through PlanningControlService, while read-only parallel status uses
-    ParallelModeControlPlaneComposition instead of reaching around to ParallelModeService.
+    Planning status/reset and read-only parallel status both enter through narrow inbound ports.
     */
-    let application = production::build_telegram_application(workspace_dir.clone());
+    let application = production::build_telegram_application(workspace_dir);
     TelegramApplication {
-        control_service: application.control_service,
-        parallel_control_surface: Arc::new(TelegramParallelControlPlaneSurface {
-            workspace_dir,
-            control_plane: application.parallel_mode_control_plane,
-        }),
-        review_center_read_service: application.review_center_read_service,
+        planning_control_port: application.planning_control_port,
+        parallel_mode_control_port: application.parallel_mode_control_port,
+        review_center_query_port: application.review_center_query_port,
         telegram_update_ledger_port: application.telegram_update_ledger_port,
         telegram_global_runner_lease_port: application.telegram_global_runner_lease_port,
     }
@@ -176,32 +171,6 @@ impl TelegramBotPolicy {
     }
 }
 
-trait TelegramParallelControlSurface: Send + Sync {
-    fn render_parallel_status(&self) -> Result<String>;
-}
-
-struct TelegramParallelControlPlaneSurface {
-    workspace_dir: String,
-    control_plane: Arc<ParallelModeControlPlaneComposition>,
-}
-
-impl TelegramParallelControlSurface for TelegramParallelControlPlaneSurface {
-    fn render_parallel_status(&self) -> Result<String> {
-        let snapshot = self.control_plane.inspect_dashboard_snapshot(
-            &self.workspace_dir,
-            ParallelModeRuntimeEventLogRequest::recent(5),
-        );
-        Ok(format!(
-            "병렬 상태\nreadiness: {}\npool: {}\nactive_agents: {}\nqueue_depth: {}\nevents: {}",
-            snapshot.readiness.readiness_label(),
-            snapshot.supervisor.pool.reconcile_status,
-            snapshot.supervisor.roster.active_count(),
-            snapshot.supervisor.distributor.queue_depth(),
-            snapshot.events.visible_count(),
-        ))
-    }
-}
-
 /*
 `TelegramBotRunner` is the long-running orchestration loop. It owns no planning domain
 logic: it polls updates, checks Telegram-specific authorization, delegates command execution,
@@ -216,9 +185,9 @@ struct TelegramBotRunner {
     binding_workspace_dir: String,
     stream_key: String,
     // Application boundary shared with non-Telegram control surfaces.
-    control_service: Arc<dyn PlanningControlPort>,
-    parallel_control_surface: Arc<dyn TelegramParallelControlSurface>,
-    review_center_read_service: Option<ReviewCenterReadService>,
+    planning_control_port: Arc<dyn PlanningControlPort>,
+    parallel_mode_control_port: Arc<dyn ParallelModeControlPort>,
+    review_center_query_port: Option<Arc<dyn ReviewCenterQueryPort>>,
     policy: TelegramBotPolicy,
     // Long polling timeout is configurable because Telegram HTTP infrastructure decides practical latency.
     poll_timeout_seconds: u16,
@@ -247,8 +216,8 @@ impl TelegramBotRunner {
         gateway: Arc<dyn TelegramBotPort>,
         global_runner_lease: Arc<dyn TelegramGlobalRunnerLeasePort>,
         update_ledger: Arc<dyn TelegramUpdateLedgerPort>,
-        control_service: impl PlanningControlPort + 'static,
-        parallel_control_surface: Arc<dyn TelegramParallelControlSurface>,
+        planning_control_port: impl PlanningControlPort + 'static,
+        parallel_mode_control_port: impl ParallelModeControlPort + 'static,
         config: TelegramBotRuntimeConfig,
     ) -> Self {
         Self {
@@ -258,9 +227,9 @@ impl TelegramBotRunner {
             workspace_dir: config.workspace_dir,
             binding_workspace_dir: config.binding_workspace_dir,
             stream_key: config.stream_key,
-            control_service: Arc::new(control_service),
-            parallel_control_surface,
-            review_center_read_service: None,
+            planning_control_port: Arc::new(planning_control_port),
+            parallel_mode_control_port: Arc::new(parallel_mode_control_port),
+            review_center_query_port: None,
             policy: config.policy,
             poll_timeout_seconds: config.poll_timeout_seconds,
             drop_pending_updates: config.drop_pending_updates,
@@ -272,11 +241,11 @@ impl TelegramBotRunner {
         }
     }
 
-    fn with_review_center_read_service(
+    fn with_review_center_query_port(
         mut self,
-        review_center_read_service: ReviewCenterReadService,
+        review_center_query_port: impl ReviewCenterQueryPort + 'static,
     ) -> Self {
-        self.review_center_read_service = Some(review_center_read_service);
+        self.review_center_query_port = Some(Arc::new(review_center_query_port));
         self
     }
 
@@ -567,9 +536,7 @@ impl TelegramBotRunner {
                 if !self.policy.is_allowed(message) {
                     return Ok(Some(self.render_unauthorized(message)));
                 }
-                Ok(Some(
-                    self.parallel_control_surface.render_parallel_status()?,
-                ))
+                Ok(Some(self.render_parallel_status()?))
             }
             TelegramParsedMessage::Command(TelegramInboundCommand::Reviews) => {
                 if !self.policy.is_allowed(message) {
@@ -589,7 +556,7 @@ impl TelegramBotRunner {
 
                 // From this point on, Telegram is just another adapter calling the planning control service.
                 let response = self
-                    .control_service
+                    .planning_control_port
                     .execute_request(PlanningControlRequest::new(command))?;
                 Ok(Some(response.reply.text))
             }
@@ -632,6 +599,21 @@ impl TelegramBotRunner {
         )
     }
 
+    fn render_parallel_status(&self) -> Result<String> {
+        let snapshot = self
+            .parallel_mode_control_port
+            .load_status(&self.workspace_dir, 5)
+            .map_err(anyhow::Error::msg)?;
+        Ok(format!(
+            "병렬 상태\nreadiness: {}\npool: {}\nactive_agents: {}\nqueue_depth: {}\nevents: {}",
+            snapshot.readiness_label,
+            snapshot.reconcile_status,
+            snapshot.active_agent_count,
+            snapshot.queue_depth,
+            snapshot.visible_event_count,
+        ))
+    }
+
     fn render_unauthorized(&self, message: &TelegramInboundMessage) -> String {
         let chat_id = message.chat_id;
         let user_id = message
@@ -660,22 +642,22 @@ impl TelegramBotRunner {
         // `/whoami` lives in this adapter, so append it to the shared planning control help text.
         format!(
             "{}\n/parallel\n/reviews\n/whoami",
-            self.control_service.help_text()
+            self.planning_control_port.help_text()
         )
     }
 
     fn render_reviews_summary(&self) -> Result<String> {
-        let review_center_read_service = self
-            .review_center_read_service
+        let review_center_query_port = self
+            .review_center_query_port
             .as_ref()
-            .context("telegram review center read service is not configured")?;
-        let inbox = review_center_read_service.load_pending_inbox()?;
+            .context("telegram review center query port is not configured")?;
+        let inbox = review_center_query_port.load_pending_inbox()?;
         let current_thread_id = inbox.first().map(|item| item.thread_id.clone());
         let current_thread_reviews = match current_thread_id.as_deref() {
-            Some(thread_id) => review_center_read_service.load_thread_reviews(thread_id)?,
+            Some(thread_id) => review_center_query_port.load_thread_reviews(thread_id)?,
             None => Vec::new(),
         };
-        let history = review_center_read_service.load_recent_history()?;
+        let history = review_center_query_port.load_recent_history()?;
 
         let mut lines = vec!["리뷰 센터".to_string(), format!("inbox: {}", inbox.len())];
 

@@ -13,9 +13,11 @@ use crate::adapter::outbound::filesystem::{
 use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
 use crate::adapter::outbound::github::{GithubAutomationAdapter, GithubReviewPollerAdapter};
 use crate::adapter::outbound::telegram::CurlTelegramBotAdapter;
+use crate::application::port::inbound::parallel_mode_control_port::ParallelModeControlPort;
 use crate::application::port::inbound::planning_control_port::PlanningControlPort;
 use crate::application::port::inbound::planning_task_tool_port::PlanningTaskToolPort;
 use crate::application::port::inbound::planning_workspace_maintenance_port::PlanningWorkspaceMaintenancePort;
+use crate::application::port::inbound::review_center_query_port::ReviewCenterQueryPort;
 use crate::application::port::outbound::app_server_prompt_log_port::{
     AppServerPromptLogMaintenanceMode, AppServerPromptLogMaintenancePort, AppServerPromptLogPort,
     NoopAppServerPromptLogPort,
@@ -61,16 +63,16 @@ pub(crate) struct ProductionAdminApplication {
     pub(crate) app_server_prompt_log_port: Arc<dyn AppServerPromptLogPort>,
     pub(crate) parallel_agent_profile_service: ParallelAgentProfileService,
     #[allow(dead_code)]
-    pub(crate) review_center_read_service: ReviewCenterReadService,
+    pub(crate) review_center_query_port: Arc<dyn ReviewCenterQueryPort>,
 }
 
 pub(crate) struct ProductionTelegramApplication {
-    pub(crate) control_service: Arc<dyn PlanningControlPort>,
-    pub(crate) parallel_mode_control_plane: Arc<ParallelModeControlPlaneComposition>,
+    pub(crate) planning_control_port: Arc<dyn PlanningControlPort>,
+    pub(crate) parallel_mode_control_port: Arc<dyn ParallelModeControlPort>,
     pub(crate) telegram_update_ledger_port: Arc<dyn TelegramUpdateLedgerPort>,
     pub(crate) telegram_global_runner_lease_port: Arc<dyn TelegramGlobalRunnerLeasePort>,
     #[allow(dead_code)]
-    pub(crate) review_center_read_service: ReviewCenterReadService,
+    pub(crate) review_center_query_port: Arc<dyn ReviewCenterQueryPort>,
 }
 
 struct ProductionSharedPorts {
@@ -147,6 +149,12 @@ pub(crate) fn build_parallel_mode_control_plane_composition(
     )
 }
 
+pub(crate) fn build_parallel_mode_control_port(
+    workspace_dir: &str,
+) -> Arc<dyn ParallelModeControlPort> {
+    Arc::new(build_parallel_mode_control_plane_composition(workspace_dir))
+}
+
 #[cfg(test)]
 pub(crate) fn build_admin_application(workspace_dir: String) -> ProductionAdminApplication {
     build_admin_application_with_debug_harness(workspace_dir, false)
@@ -188,7 +196,7 @@ pub(crate) fn build_admin_application_with_debug_harness(
         }),
         app_server_prompt_log_port: ports.app_server_prompt_log_port,
         parallel_agent_profile_service,
-        review_center_read_service,
+        review_center_query_port: Arc::new(review_center_read_service),
     }
 }
 
@@ -206,18 +214,18 @@ pub(crate) fn build_telegram_application(workspace_dir: String) -> ProductionTel
         workspace_dir,
         planning.clone(),
     )));
-    let parallel_mode_control_plane = Arc::new(parallel_mode_control_plane_from_parts(
+    let parallel_mode_control_port = Arc::new(parallel_mode_control_plane_from_parts(
         planning,
         ports.planning_authority_port,
         ports.parallel_agent_worker_port,
         parallel_agent_profile_service,
     ));
     ProductionTelegramApplication {
-        control_service: Arc::new(control_service),
-        parallel_mode_control_plane,
+        planning_control_port: Arc::new(control_service),
+        parallel_mode_control_port,
         telegram_update_ledger_port: ports.telegram_update_ledger_port,
         telegram_global_runner_lease_port: ports.telegram_global_runner_lease_port,
-        review_center_read_service,
+        review_center_query_port: Arc::new(review_center_read_service),
     }
 }
 
@@ -449,7 +457,6 @@ mod tests {
     use crate::application::port::outbound::app_server_prompt_log_port::{
         AppServerPromptInputRecord, AppServerPromptInteractionRecord,
     };
-    use crate::application::port::outbound::parallel_mode_runtime_event_log_port::ParallelModeRuntimeEventLogRequest;
     use crate::application::service::planning::{PlanningControlCommand, PlanningControlRequest};
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -544,17 +551,15 @@ mod tests {
 
         let telegram = build_telegram_application(workspace_dir.clone());
         let help = telegram
-            .control_service
+            .planning_control_port
             .execute_request(PlanningControlRequest::new(PlanningControlCommand::Help))
             .expect("telegram control service should share the planning control surface");
         assert!(help.reply.text.contains("/status"));
         let telegram_snapshot = telegram
-            .parallel_mode_control_plane
-            .inspect_dashboard_snapshot(
-                &workspace_dir,
-                ParallelModeRuntimeEventLogRequest::recent(1),
-            );
-        assert!(telegram_snapshot.events.visible_count() <= 1);
+            .parallel_mode_control_port
+            .load_status(&workspace_dir, 1)
+            .expect("telegram parallel control port should inspect status");
+        assert!(telegram_snapshot.visible_event_count <= 1);
 
         let _tui = build_native_tui_application();
     }

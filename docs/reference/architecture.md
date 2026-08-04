@@ -55,9 +55,11 @@ while composition interprets it with application services.
 Mapping stays in adapters. Policy stays in domain or application services. Inbound adapters retain
 only inbound port capabilities; composition injects service/use-case implementations behind those
 traits. Cross-adapter stream contracts live at the application boundary instead of inside a service
-implementation; concrete integration capabilities remain outbound ports. The planning CLI and
-Telegram paths use the narrow `PlanningControlPort`, `PlanningWorkspaceMaintenancePort`, and
-`PlanningTaskToolPort` contracts rather than a full planning service graph.
+implementation; concrete integration capabilities remain outbound ports. The CLI and Telegram
+paths use narrow `PlanningControlPort`, `PlanningWorkspaceMaintenancePort`,
+`PlanningTaskToolPort`, `ParallelModeControlPort`, and `ReviewCenterQueryPort` contracts rather
+than full service graphs. Review-center thread, inbox, and history values are domain read models;
+the repository port persists them but does not own them.
 
 The Admin server owns one process-lifetime parallel control-plane handle in addition to its passive
 dashboard composition. Browser control requests map only to typed enable, dispatch, refresh, and

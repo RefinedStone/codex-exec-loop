@@ -441,17 +441,47 @@ fn outbound_adapters_implement_outbound_ports_without_service_dependencies() {
 }
 
 #[test]
-fn planning_cli_and_telegram_enter_application_through_inbound_ports() {
+fn cli_and_telegram_enter_application_through_inbound_ports() {
     assert_no_forbidden_references_in_paths(
-        "planning CLI and Telegram production code must not depend on planning service implementations",
+        "CLI and Telegram production code must not depend on application service implementations",
         &[
             "src/adapter/inbound/cli.rs",
             "src/adapter/inbound/cli",
             "src/adapter/inbound/telegram_bot/message.rs",
             "src/adapter/inbound/telegram_bot/mod.rs",
         ],
-        &["crate::application::service::planning"],
+        &["crate::application::service::"],
     );
+}
+
+#[test]
+fn review_center_read_models_are_domain_owned() {
+    let domain = fs::read_to_string("src/domain/review_center.rs")
+        .expect("review center domain contracts should load");
+    let outbound_port =
+        fs::read_to_string("src/application/port/outbound/review_center_repository_port.rs")
+            .expect("review center repository port should load");
+
+    for contract in [
+        "ReviewCenterThreadProjection",
+        "ReviewCenterInboxItem",
+        "ReviewCenterHistoryEntry",
+    ] {
+        assert!(
+            domain.contains(&format!("pub struct {contract}")),
+            "domain must own {contract}"
+        );
+        assert!(
+            !outbound_port.contains(&format!("pub struct {contract}")),
+            "outbound repository ports must consume, not own, {contract}"
+        );
+    }
+
+    assert_no_forbidden_references(BoundaryRule {
+        name: "inbound adapters must query review center through its inbound port",
+        root: "src/adapter/inbound",
+        forbidden_patterns: &["crate::application::port::outbound::review_center_repository_port"],
+    });
 }
 
 #[test]

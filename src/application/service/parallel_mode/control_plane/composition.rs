@@ -1,6 +1,9 @@
 use std::sync::Arc;
 use std::sync::mpsc;
 
+use crate::application::port::inbound::parallel_mode_control_port::{
+    ParallelModeControlPort, ParallelModeControlStatusSnapshot,
+};
 use crate::application::port::outbound::parallel_agent_worker_port::ParallelAgentWorkerPort;
 use crate::application::port::outbound::parallel_mode_runtime_event_log_port::ParallelModeRuntimeEventLogRequest;
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
@@ -189,5 +192,32 @@ impl ParallelModeControlPlaneComposition {
             ),
         );
         ParallelModeControlPlaneHandle::new(service)
+    }
+}
+
+impl ParallelModeControlPort for ParallelModeControlPlaneComposition {
+    fn load_status(
+        &self,
+        workspace_dir: &str,
+        recent_event_limit: usize,
+    ) -> Result<ParallelModeControlStatusSnapshot, String> {
+        let snapshot = self.inspect_dashboard_snapshot(
+            workspace_dir,
+            ParallelModeRuntimeEventLogRequest::recent(recent_event_limit),
+        );
+        Ok(ParallelModeControlStatusSnapshot {
+            readiness_label: snapshot.readiness.readiness_label().to_string(),
+            reconcile_status: snapshot.supervisor.pool.reconcile_status,
+            active_agent_count: snapshot.supervisor.roster.active_count(),
+            queue_depth: snapshot.supervisor.distributor.queue_depth(),
+            visible_event_count: snapshot.events.visible_count(),
+        })
+    }
+
+    fn run_manual_orchestrator_tick(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<ParallelModeOrchestratorTickResult, String> {
+        ParallelModeControlPlaneComposition::run_manual_orchestrator_tick(self, workspace_dir)
     }
 }

@@ -55,9 +55,10 @@ application service로 해석합니다.
 Mapping은 adapter에, policy는 domain 또는 application service에 둡니다. Inbound adapter는 inbound
 port capability만 보유하고 composition이 그 trait 뒤에 service/use-case 구현을 주입합니다. 여러
 adapter가 공유하는 stream 계약은 service 구현 안이 아니라 application 경계에 두고, concrete
-integration capability는 outbound port로 유지합니다. Planning CLI와 Telegram은 전체 planning
-service graph 대신 좁은 `PlanningControlPort`, `PlanningWorkspaceMaintenancePort`,
-`PlanningTaskToolPort` 계약을 사용합니다.
+integration capability는 outbound port로 유지합니다. CLI와 Telegram은 전체 service graph 대신
+좁은 `PlanningControlPort`, `PlanningWorkspaceMaintenancePort`, `PlanningTaskToolPort`,
+`ParallelModeControlPort`, `ReviewCenterQueryPort` 계약을 사용합니다. Review center의 thread,
+inbox, history 값은 domain read model이며 repository port는 이를 저장하지만 소유하지 않습니다.
 
 ## Core runtime
 

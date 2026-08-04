@@ -1,3 +1,6 @@
+pub use crate::application::port::inbound::parallel_mode_control_port::{
+    ParallelModeOrchestratorTickResult, ParallelModeOrchestratorTrigger,
+};
 #[cfg(test)]
 use crate::application::port::outbound::github_automation_port::DEFAULT_GITHUB_PUSH_REMOTE_NAME;
 use crate::application::port::outbound::github_automation_port::{
@@ -17,11 +20,10 @@ use crate::domain::parallel_mode::{
     PARALLEL_DISPATCH_COMMAND_STALE_AFTER_SECS, ParallelModeAutomationTrigger,
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
     ParallelModeDispatchCommandSnapshot, ParallelModeDispatchTaskCandidate,
-    ParallelModeOrchestratorState, ParallelModeOrchestratorStateMachine,
-    ParallelModePoolResetPolicy, ParallelModePoolResetReport, ParallelModePoolSlotState,
-    ParallelModeReadinessSnapshot, ParallelModeReadinessState, ParallelModeRuntimeEvent,
-    ParallelModeRuntimeEventsSnapshot, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
-    ParallelModeSupervisorSnapshot,
+    ParallelModeOrchestratorStateMachine, ParallelModePoolResetPolicy, ParallelModePoolResetReport,
+    ParallelModePoolSlotState, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
+    ParallelModeRuntimeEvent, ParallelModeRuntimeEventsSnapshot, ParallelModeSlotLeaseSnapshot,
+    ParallelModeSlotLeaseState, ParallelModeSupervisorSnapshot,
 };
 use crate::domain::planning::PlanningOfficialCompletionRefreshContract;
 use crate::domain::planning::PriorityQueueTask;
@@ -317,31 +319,6 @@ pub struct ParallelModeDispatchPlan {
     pub candidates: Vec<PriorityQueueTask>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/*
-orchestrator trigger는 queue processing을 왜 실행했는지 남기는 provenance다. main turn이 끝나서
-실행한 tick, official planning refresh가 끝나서 실행한 tick, 사용자가 수동 dispatch한 tick은
-같은 distributor queue를 움직이지만, notice와 telemetry를 해석할 때 원인이 다르다. enum으로 두면
-호출자가 임의 문자열을 만들지 않고 정해진 사건만 넘기게 된다.
-*/
-pub enum ParallelModeOrchestratorTrigger {
-    MainTurnCompleted,
-    PlanningRefreshCompleted,
-    ManualDispatch,
-}
-#[derive(Debug, Clone, PartialEq, Eq)]
-/*
-orchestrator tick result는 distributor queue를 한 번 움직인 결과다. blocked가 true이면 integration
-worktree 자체가 잘못되어 queue processing에 들어가지 못한 것이고, false이면 queue processing은
-실행되었으며 notices에 실제 push/PR/integration/cleanup 결과가 들어간다. 이 구분은 TUI가
-"운영자가 먼저 worktree를 고쳐야 함"과 "queue가 정상 처리됨"을 다르게 표시하게 한다.
-*/
-pub struct ParallelModeOrchestratorTickResult {
-    pub trigger: ParallelModeOrchestratorTrigger,
-    pub state: ParallelModeOrchestratorState,
-    pub blocked: bool,
-    pub notices: Vec<String>,
-}
 #[derive(Clone)]
 /*
 ParallelModeService는 병렬 모드 application 계층의 facade다. TUI는 이 타입을 통해 readiness,
