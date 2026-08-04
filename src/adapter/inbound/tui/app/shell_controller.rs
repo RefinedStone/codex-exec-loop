@@ -227,7 +227,6 @@ impl NativeTuiApp {
             }
             InlineShellCommand::Think => self.handle_think_shell_command(command_input.argument()),
             InlineShellCommand::Copy => self.handle_copy_shell_command(command_input.argument()),
-            InlineShellCommand::Mouse => self.handle_mouse_shell_command(command_input.argument()),
             InlineShellCommand::Doctor => self.run_planning_doctor(),
             InlineShellCommand::PlanningInit => {
                 self.handle_planning_shell_command(command_input.argument())

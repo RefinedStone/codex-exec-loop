@@ -8,7 +8,6 @@ pub(super) const TUI_MOUSE_CAPTURE_ENV_VAR: &str = "AKRA_TUI_MOUSE_CAPTURE";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum TerminalUiEffect {
     CopyToClipboard(String),
-    SetMouseCapture(bool),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,16 +32,6 @@ impl TerminalInteractionUiState {
 
     pub(super) fn mouse_capture_enabled(&self) -> bool {
         self.mouse_capture_enabled
-    }
-
-    fn set_mouse_capture_enabled(&mut self, enabled: bool) -> bool {
-        if self.mouse_capture_enabled == enabled {
-            return false;
-        }
-        self.mouse_capture_enabled = enabled;
-        self.pending_effects
-            .push_back(TerminalUiEffect::SetMouseCapture(enabled));
-        true
     }
 
     fn request_clipboard_copy(&mut self, text: String) {
@@ -128,45 +117,6 @@ impl NativeTuiApp {
         self.queue_clipboard_copy(text, source);
     }
 
-    pub(super) fn handle_mouse_shell_command(&mut self, argument: Option<&str>) {
-        let current = self.terminal_mouse_capture_enabled();
-        let requested = match argument
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_ascii_lowercase)
-            .as_deref()
-        {
-            None | Some("status") => {
-                self.show_terminal_interaction_status(
-                    self.shell.tui_language.terminal_mouse_status(current),
-                );
-                return;
-            }
-            Some("on" | "enable" | "enabled") => true,
-            Some("off" | "disable" | "disabled") => false,
-            Some("toggle") => !current,
-            Some(_) => {
-                self.show_terminal_interaction_status(
-                    self.shell.tui_language.terminal_mouse_usage(),
-                );
-                return;
-            }
-        };
-
-        self.shell
-            .transcript_viewport_ui_state
-            .terminal_interaction_mut()
-            .set_mouse_capture_enabled(requested);
-        if !requested {
-            self.shell
-                .transcript_viewport_ui_state
-                .clear_frame_geometry();
-        }
-        self.show_terminal_interaction_status(
-            self.shell.tui_language.terminal_mouse_status(requested),
-        );
-    }
-
     fn latest_agent_answer_text(&self) -> Option<String> {
         let ConversationState::Ready(conversation) =
             &self.conversation.lifecycle.conversation_state
@@ -235,33 +185,12 @@ mod tests {
     }
 
     #[test]
-    fn mouse_command_queues_only_real_terminal_mode_changes() {
+    fn document_switch_preserves_startup_terminal_mode_and_pending_copy() {
         let mut app = test_native_tui_app();
         *app.shell
             .transcript_viewport_ui_state
-            .terminal_interaction_mut() = TerminalInteractionUiState::new(true);
-        app.handle_mouse_shell_command(Some("off"));
-        assert_eq!(
-            app.take_terminal_ui_effects(),
-            vec![TerminalUiEffect::SetMouseCapture(false)]
-        );
-
-        app.handle_mouse_shell_command(Some("off"));
-        assert!(app.take_terminal_ui_effects().is_empty());
-        app.handle_mouse_shell_command(Some("on"));
-        assert_eq!(
-            app.take_terminal_ui_effects(),
-            vec![TerminalUiEffect::SetMouseCapture(true)]
-        );
-    }
-
-    #[test]
-    fn document_switch_preserves_terminal_mode_and_pending_effects() {
-        let mut app = test_native_tui_app();
-        *app.shell
-            .transcript_viewport_ui_state
-            .terminal_interaction_mut() = TerminalInteractionUiState::new(true);
-        app.handle_mouse_shell_command(Some("off"));
+            .terminal_interaction_mut() = TerminalInteractionUiState::new(false);
+        app.request_selection_copy("selected transcript".to_string());
 
         app.shell
             .transcript_viewport_ui_state
@@ -270,7 +199,9 @@ mod tests {
         assert!(!app.terminal_mouse_capture_enabled());
         assert_eq!(
             app.take_terminal_ui_effects(),
-            vec![TerminalUiEffect::SetMouseCapture(false)]
+            vec![TerminalUiEffect::CopyToClipboard(
+                "selected transcript".to_string()
+            )]
         );
     }
 

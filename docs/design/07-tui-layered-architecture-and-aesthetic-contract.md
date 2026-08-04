@@ -102,9 +102,10 @@ and transcript selection.
 
 The terminal emulator does not own conversation history. No host scrollback delivery, cursor-based
 history insertion, transcript handoff, or viewport replay mode exists in the production path.
-Terminal-native text selection is still available as an explicit interaction mode: `:mouse off`
-disables mouse reporting while retaining the same alternate-screen frame and `:mouse on` restores
-app-owned pointer handling. Clipboard delivery is a thin terminal effect (OSC 52, including tmux
+Akra owns pointer handling by default and does not expose a runtime mouse-mode command. Emulators
+that support it may use `Shift+drag` as a native-selection bypass. The startup-only
+`AKRA_TUI_MOUSE_CAPTURE=off` compatibility escape hatch disables app pointer interactions until a
+restart with capture enabled. Clipboard delivery is a thin terminal effect (OSC 52, including tmux
 passthrough), never transcript authority.
 
 Ready input batches coalesce consecutive drag coordinates to the newest point before the next
@@ -215,6 +216,7 @@ than a role-label-plus-body block.
 - A high-rate drag settles to its latest coordinate without replaying stale highlight frames; plain
   pointer motion cannot delay the next key.
 - Dragging a submitted prompt, status badge, or composer does not start transcript selection.
-- `:mouse off` emits no mouse-reporting enable sequence at startup or after the mode change.
+- `AKRA_TUI_MOUSE_CAPTURE=off` emits no mouse-reporting enable sequence at startup; a default-mode
+  restart enables reporting and restores it cleanly on exit.
 - A resumed Akra main session shows the original operator prompt, never its internal Codex prompt
   envelope.
