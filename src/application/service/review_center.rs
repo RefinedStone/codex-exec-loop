@@ -3,6 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use chrono::Utc;
 
+use crate::application::port::inbound::review_center_query_port::ReviewCenterQueryPort;
 use crate::application::port::outbound::review_center_repository_port::{
     ReviewCenterHistoryEntry, ReviewCenterInboxItem, ReviewCenterRepositoryPort,
     ReviewCenterThreadProjection,
@@ -84,6 +85,24 @@ impl ReviewCenterReadService {
     ) -> Result<Vec<ReviewCenterHistoryEntry>> {
         self.review_center_repository
             .load_recent_history(workspace_dir)
+    }
+}
+
+impl ReviewCenterQueryPort for ReviewCenterReadService {
+    fn workspace_dir(&self) -> &str {
+        ReviewCenterReadService::workspace_dir(self)
+    }
+
+    fn load_thread_reviews(&self, thread_id: &str) -> Result<Vec<ReviewCenterThreadProjection>> {
+        ReviewCenterReadService::load_thread_reviews(self, thread_id)
+    }
+
+    fn load_pending_inbox(&self) -> Result<Vec<ReviewCenterInboxItem>> {
+        ReviewCenterReadService::load_pending_inbox(self)
+    }
+
+    fn load_recent_history(&self) -> Result<Vec<ReviewCenterHistoryEntry>> {
+        ReviewCenterReadService::load_recent_history(self)
     }
 }
 

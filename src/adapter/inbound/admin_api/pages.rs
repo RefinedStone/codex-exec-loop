@@ -342,19 +342,19 @@ pub(super) async fn reviews_page(
     // review center page는 shared projection을 read-only로 노출해 operator가 inbox, inbox-head thread, recent history를 한 화면에서 확인하게 한다.
     let (jar, csrf_token) = ensure_csrf_cookie(jar);
     let inbox = state
-        .review_center_read_service
+        .review_center_query_port
         .load_pending_inbox()
         .map_err(internal_server_error)?;
     let current_thread_id = inbox.first().map(|item| item.thread_id.clone());
     let current_thread_reviews = match current_thread_id.as_deref() {
         Some(thread_id) => state
-            .review_center_read_service
+            .review_center_query_port
             .load_thread_reviews(thread_id)
             .map_err(internal_server_error)?,
         None => Vec::new(),
     };
     let history = state
-        .review_center_read_service
+        .review_center_query_port
         .load_recent_history()
         .map_err(internal_server_error)?;
     render_html(

@@ -3,6 +3,8 @@
  * Implementations live under application/service; CLI, HTTP, Telegram, and TUI
  * adapters depend on these traits and request/response values instead.
  */
+pub mod parallel_mode_control_port;
 pub mod planning_control_port;
 pub mod planning_task_tool_port;
 pub mod planning_workspace_maintenance_port;
+pub mod review_center_query_port;

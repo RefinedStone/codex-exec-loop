@@ -1,3 +1,4 @@
+use crate::application::port::inbound::review_center_query_port::ReviewCenterQueryPort;
 use crate::application::port::outbound::app_server_prompt_log_port::AppServerPromptLogPort;
 use crate::application::service::admin_debug_harness::AdminDebugHarnessService;
 use crate::application::service::parallel_agent_profile::ParallelAgentProfileService;
@@ -6,7 +7,6 @@ use crate::application::service::parallel_mode::control_plane::{
     ParallelModeControlPlaneEventSink, ParallelModeControlPlaneHandle,
 };
 use crate::application::service::planning::{PlanningAdminFacadeService, PlanningResetTarget};
-use crate::application::service::review_center::ReviewCenterReadService;
 use crate::composition::production;
 use anyhow::{Context, Result, anyhow, bail};
 use axum::Router;
@@ -63,7 +63,7 @@ struct AdminAppState {
     admin_debug_harness_service: AdminDebugHarnessService,
     parallel_agent_profile_service: ParallelAgentProfileService,
     app_server_prompt_log_port: Arc<dyn AppServerPromptLogPort>,
-    review_center_read_service: ReviewCenterReadService,
+    review_center_query_port: Arc<dyn ReviewCenterQueryPort>,
     graphic: AdminGraphicConfig,
     command_ledger: realtime::AdminCommandLedger,
     security: AdminSecurityConfig,
@@ -261,7 +261,7 @@ fn build_admin_state_with_debug_harness(
         admin_debug_harness_service: application.admin_debug_harness_service,
         parallel_agent_profile_service: application.parallel_agent_profile_service,
         app_server_prompt_log_port: application.app_server_prompt_log_port,
-        review_center_read_service: application.review_center_read_service,
+        review_center_query_port: application.review_center_query_port,
         graphic: AdminGraphicConfig::from_env(),
         command_ledger: realtime::AdminCommandLedger::default(),
         security,

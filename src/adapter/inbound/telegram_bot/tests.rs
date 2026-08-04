@@ -8,10 +8,13 @@ use super::config::{
 use super::config::{telegram_env_file_path_if_present, utf8_environment_value};
 use super::{
     TelegramBotPolicy, TelegramBotRunner, TelegramBotRuntimeConfig, TelegramInboundCommand,
-    TelegramParallelControlSurface, TelegramParsedMessage, parse_message,
-    telegram_max_curl_request_seconds, telegram_runner_lease_ttl_seconds,
+    TelegramParsedMessage, parse_message, telegram_max_curl_request_seconds,
+    telegram_runner_lease_ttl_seconds,
 };
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
+use crate::application::port::inbound::parallel_mode_control_port::{
+    ParallelModeControlPort, ParallelModeControlStatusSnapshot, ParallelModeOrchestratorTickResult,
+};
 use crate::application::port::outbound::review_center_repository_port::{
     ReviewCenterHistoryEntry, ReviewCenterInboxItem, ReviewCenterRepositoryPort,
     ReviewCenterThreadProjection,
@@ -154,9 +157,26 @@ impl PlanningControlSurface for FlakyPlanningControlSurface {
 
 struct FakeTelegramParallelControlSurface;
 
-impl TelegramParallelControlSurface for FakeTelegramParallelControlSurface {
-    fn render_parallel_status(&self) -> Result<String> {
-        Ok("병렬 상태\nreadiness: ready\npool: supervised\nactive_agents: 1\nqueue_depth: 2\nevents: 3".to_string())
+impl ParallelModeControlPort for FakeTelegramParallelControlSurface {
+    fn load_status(
+        &self,
+        _workspace_dir: &str,
+        _recent_event_limit: usize,
+    ) -> std::result::Result<ParallelModeControlStatusSnapshot, String> {
+        Ok(ParallelModeControlStatusSnapshot {
+            readiness_label: "ready".to_string(),
+            reconcile_status: "supervised".to_string(),
+            active_agent_count: 1,
+            queue_depth: 2,
+            visible_event_count: 3,
+        })
+    }
+
+    fn run_manual_orchestrator_tick(
+        &self,
+        _workspace_dir: &str,
+    ) -> std::result::Result<ParallelModeOrchestratorTickResult, String> {
+        Err("manual tick is not used by Telegram tests".to_string())
     }
 }
 
@@ -776,8 +796,7 @@ fn build_runner_with_reviews(
     let (gateway, runner) = build_runner(allowed_chat_ids);
     (
         gateway,
-        runner
-            .with_review_center_read_service(ReviewCenterReadService::new("/tmp/repo", repository)),
+        runner.with_review_center_query_port(ReviewCenterReadService::new("/tmp/repo", repository)),
     )
 }
 

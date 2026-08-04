@@ -1,3 +1,4 @@
+use crate::application::port::inbound::parallel_mode_control_port::ParallelModeOrchestratorTickResult;
 use crate::application::port::inbound::planning_control_port::{
     PlanningControlCommand, PlanningControlRequest,
 };
@@ -8,7 +9,6 @@ use crate::application::port::inbound::planning_task_tool_port::{
 use crate::application::port::planning_task_tool_contract::{
     PLANNING_TOOL_PARENT_THREAD_ID_ENV, PLANNING_TOOL_PARENT_TURN_ID_ENV,
 };
-use crate::application::service::parallel_mode::ParallelModeOrchestratorTickResult;
 use crate::composition::production;
 use crate::domain::planning::PlanningResetTarget;
 use anyhow::{Context, Result, bail};
@@ -261,7 +261,7 @@ fn run_parallel_tick(workspace_arg: Option<&OsStr>, stdout: &mut impl Write) -> 
     let workspace_path = resolve_workspace_path(workspace_arg)?;
     validate_workspace_path(&workspace_path).map_err(anyhow::Error::msg)?;
     let workspace_label = workspace_path.display().to_string();
-    let control_plane = production::build_parallel_mode_control_plane_composition(&workspace_label);
+    let control_plane = production::build_parallel_mode_control_port(&workspace_label);
 
     writeln!(stdout, "workspace: {workspace_label}")?;
     // 이 command는 TUI가 supervise하는 같은 distributor queue를 수동/cron 환경에서 tick하는 driver다.
