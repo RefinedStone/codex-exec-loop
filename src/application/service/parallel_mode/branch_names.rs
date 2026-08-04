@@ -1,9 +1,12 @@
 use std::collections::BTreeSet;
+use std::ffi::OsString;
 
-use super::readiness::command_succeeds;
+use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
+
+use super::readiness::command_succeeds_with_runtime;
 use super::{
     AGENT_BRANCH_TRUNCATION_HASH_LEN, AKRA_AGENT_BRANCH_PREFIX, MAX_AGENT_BRANCH_SLUG_LEN,
-    try_push_remote_name,
+    try_push_remote_name_with_runtime,
 };
 
 /*
@@ -16,7 +19,9 @@ tracking/live remote branch를 모두 확인한다. slug 후보는 task_slug, ta
 64-bit prefix를 함께 넣으면 GitHub/local git log에서 소유 slot을 읽을 수 있고, 서로 다른 clone이
 동시에 같은 task slug를 배정해도 같은 source branch를 장시간 공유하지 않는다.
 */
+#[allow(clippy::too_many_arguments)]
 pub(super) fn allocate_agent_branch_name(
+    runtime: &dyn ParallelModeRuntimePort,
     repo_root: &str,
     slot_id: &str,
     task_slug: &str,
@@ -44,7 +49,7 @@ pub(super) fn allocate_agent_branch_name(
     // remote branch 목록은 루프 밖에서 한 번만 읽는다. allocation 중 같은 프로세스가
     // 만든 local branch 충돌은 `branch_exists`가 잡고, 이미 원격에 있던 이름은 이 set이 잡는다.
     let remote_branch_names =
-        remote_agent_branch_names(repo_root, slot_id, live_remote_branch_names)?;
+        remote_agent_branch_names(runtime, repo_root, slot_id, live_remote_branch_names)?;
     let mut collision_index = 1usize;
     loop {
         let candidate = build_agent_branch_name(
@@ -53,7 +58,7 @@ pub(super) fn allocate_agent_branch_name(
             branch_instance_id,
             collision_index,
         );
-        if agent_branch_name_is_available(repo_root, &candidate, &remote_branch_names) {
+        if agent_branch_name_is_available(runtime, repo_root, &candidate, &remote_branch_names) {
             return Ok(candidate);
         }
         collision_index = collision_index
@@ -68,11 +73,12 @@ branch name availability는 local ref와 remote ref를 함께 본다. local만 �
 remote 정보를 미리 반영하면 lease 획득 시점에 안정적인 branch 이름을 선택할 수 있다.
 */
 fn agent_branch_name_is_available(
+    runtime: &dyn ParallelModeRuntimePort,
     repo_root: &str,
     branch_name: &str,
     remote_branch_names: &BTreeSet<String>,
 ) -> bool {
-    !branch_exists(repo_root, branch_name) && !remote_branch_names.contains(branch_name)
+    !branch_exists(runtime, repo_root, branch_name) && !remote_branch_names.contains(branch_name)
 }
 
 /*
@@ -198,10 +204,15 @@ pub(super) fn sanitize_task_slug(input: &str) -> Option<String> {
     (!slug.is_empty()).then_some(slug)
 }
 
-pub(super) fn branch_exists(repo_root: &str, branch_name: &str) -> bool {
+pub(super) fn branch_exists(
+    runtime: &dyn ParallelModeRuntimePort,
+    repo_root: &str,
+    branch_name: &str,
+) -> bool {
     // local branch existence는 `git branch --list` 대신 exact ref 확인으로 본다.
     // prefix가 같은 다른 agent branch가 있어도 현재 후보만 충돌로 처리해야 하기 때문이다.
-    command_succeeds(
+    command_succeeds_with_runtime(
+        runtime,
         "git",
         [
             "-C",
@@ -220,12 +231,13 @@ origin 상태이고, live ls-remote는 아직 fetch되지 않은 원격 branch�
 오래된 local tracking 정보와 최신 remote reality 사이의 틈에서 branch 이름 충돌이 생기지 않는다.
 */
 fn remote_agent_branch_names(
+    runtime: &dyn ParallelModeRuntimePort,
     repo_root: &str,
     slot_id: &str,
     live_remote_branch_names: &[String],
 ) -> Result<BTreeSet<String>, String> {
     let branch_prefix = format!("{AKRA_AGENT_BRANCH_PREFIX}/{slot_id}/");
-    let mut branch_names = remote_tracking_agent_branch_names(repo_root, slot_id)?;
+    let mut branch_names = remote_tracking_agent_branch_names(runtime, repo_root, slot_id)?;
     for branch_name in live_remote_branch_names {
         if !branch_name.starts_with(&branch_prefix) {
             return Err(format!(
@@ -238,29 +250,26 @@ fn remote_agent_branch_names(
 }
 
 fn remote_tracking_agent_branch_names(
+    runtime: &dyn ParallelModeRuntimePort,
     repo_root: &str,
     slot_id: &str,
 ) -> Result<BTreeSet<String>, String> {
     // tracking ref는 `refs/remotes/<push-remote>/...` 형태라 실제 branch name으로
     // 비교하려면 remote prefix를 제거하고 `akra-agent/<slot>/...` 형태로 되돌려야 한다.
-    let push_remote = try_push_remote_name(repo_root)?;
+    let push_remote = try_push_remote_name_with_runtime(runtime, repo_root)?;
     let refs_prefix = format!("refs/remotes/{push_remote}/{AKRA_AGENT_BRANCH_PREFIX}/{slot_id}/");
     let branch_prefix = format!("{AKRA_AGENT_BRANCH_PREFIX}/{slot_id}/");
-    let mut command = crate::git_subprocess::command([
-        "-C",
-        repo_root,
-        "for-each-ref",
-        "--format=%(refname)",
-        refs_prefix.as_str(),
-    ]);
-    let output = crate::subprocess::command_output(
-        &mut command,
-        "git for-each-ref <configured-agent-prefix>",
-    )
-    .map_err(|error| {
+    let args = [
+        OsString::from("-C"),
+        OsString::from(repo_root),
+        OsString::from("for-each-ref"),
+        OsString::from("--format=%(refname)"),
+        OsString::from(refs_prefix.as_str()),
+    ];
+    let output = runtime.run_git_command(&args, None).map_err(|error| {
         format!("configured push remote refs could not be inspected safely: {error}")
     })?;
-    if !output.status.success() {
+    if !output.succeeded() {
         return Err("configured push remote refs could not be inspected safely".to_string());
     }
     Ok(String::from_utf8_lossy(&output.stdout)

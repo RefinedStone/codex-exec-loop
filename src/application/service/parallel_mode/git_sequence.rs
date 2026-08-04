@@ -3,8 +3,8 @@
  * report로 감싸는 실행 경계다. cleanup, rollback, recovery 같은 상위 서비스는 shell 문자열을 직접
  * 만들지 않고 이 구조를 통해 "무엇을 실행했고 어디서 멈췄는지"를 일관된 진단으로 받는다.
  */
-use crate::git_subprocess;
-use crate::subprocess;
+use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
+use std::ffi::OsString;
 use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,6 +105,7 @@ git sequence 실행은 첫 실패에서 멈춘다. reset/cleanup처럼 순서가
 step report는 모두 남기므로, 실패 후에도 어디까지 진행되었는지 추적할 수 있다.
 */
 pub(super) fn run_git_sequence(
+    runtime: &dyn ParallelModeRuntimePort,
     label: impl Into<String>,
     steps: Vec<GitCommandStep>,
 ) -> GitCommandSequenceReport {
@@ -112,7 +113,7 @@ pub(super) fn run_git_sequence(
     let mut reports = Vec::new();
 
     for step in steps {
-        let report = run_git_step(step);
+        let report = run_git_step(runtime, step);
         let succeeded = report.succeeded();
         reports.push(report);
         // 실패 뒤의 reset/clean/cherry-pick 단계를 실행하지 않는 것이 worktree 보존에 더 안전하다.
@@ -132,10 +133,12 @@ pub(super) fn run_git_sequence(
 credential prompt나 interactive input이 뜨면 TUI/background workflow가 멈출 수 있으므로,
 실패는 stderr로 수집하고 호출자가 block/retry 정책을 결정하게 한다.
 */
-fn run_git_step(step: GitCommandStep) -> GitCommandStepReport {
+fn run_git_step(
+    runtime: &dyn ParallelModeRuntimePort,
+    step: GitCommandStep,
+) -> GitCommandStepReport {
     if let Some(repo_or_worktree) = git_step_repository(&step.args)
-        && let Err(error) =
-            crate::git_execution_guard::ensure_host_git_execution_config_safe(repo_or_worktree)
+        && let Err(error) = runtime.ensure_git_execution_safe(repo_or_worktree)
     {
         return GitCommandStepReport {
             label: step.label,
@@ -145,15 +148,14 @@ fn run_git_step(step: GitCommandStep) -> GitCommandStepReport {
             stderr: error.to_string(),
         };
     }
-    let mut command = git_subprocess::command(step.args.iter());
-    let command_label = format!("git {}", step.args.join(" "));
-    let output = subprocess::command_output(&mut command, &command_label);
+    let args = step.args.iter().map(OsString::from).collect::<Vec<_>>();
+    let output = runtime.run_git_command(&args, None);
 
     match output {
         Ok(output) => GitCommandStepReport {
             label: step.label,
             args: step.args,
-            exit_code: output.status.code(),
+            exit_code: output.exit_code,
             stdout: String::from_utf8_lossy(&output.stdout).trim().to_string(),
             stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
         },
@@ -177,6 +179,7 @@ fn git_step_repository(args: &[String]) -> Option<&Path> {
 #[cfg(test)]
 mod tests {
     use super::{GitCommandStep, run_git_sequence};
+    use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
 
     #[test]
     fn git_sequence_stops_at_first_failed_step_and_keeps_diagnostic() {
@@ -186,6 +189,7 @@ mod tests {
          * operator-facing failure summary가 실패 label을 포함하는지 고정한다.
          */
         let report = run_git_sequence(
+            &GitParallelModeRuntimeAdapter::new(),
             "invalid sequence",
             vec![
                 GitCommandStep::new("git version", ["--version"]),

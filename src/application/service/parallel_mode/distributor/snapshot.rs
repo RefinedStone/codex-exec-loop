@@ -2,9 +2,10 @@ use super::super::supervisor::selected_runtime_session_detail;
 use super::super::{
     DEFAULT_PARALLEL_MODE_INTEGRATION_BRANCH, PoolRuntimeContext, current_branch_name,
     derive_integration_worktree_path, distributor_integration_branch_for_repo,
-    inspect_slot_git_status, short_sha,
+    inspect_slot_git_status_with_runtime, short_sha,
 };
 use super::{ParallelModeDistributorQueueRecord, matching_lease_for_queue_record};
+use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityRuntimeEventRecord;
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeCompletionFeedEntry,
@@ -22,6 +23,7 @@ distributor snapshot은 durable queue와 session history를 TUI용 읽기 모델
 distributor 패널이 같은 "현재 가장 볼 만한 세션" 기준을 공유해야 하기 때문이다.
 */
 pub(super) fn build_distributor_snapshot_from_context(
+    runtime: &dyn ParallelModeRuntimePort,
     context: &PoolRuntimeContext,
 ) -> ParallelModeDistributorSnapshot {
     let history = context.session_details.clone();
@@ -31,7 +33,7 @@ pub(super) fn build_distributor_snapshot_from_context(
         .find(|record| record.queue_state.is_active())
         .and_then(|record| record.delivery_target.as_ref())
         .map(|target| target.integration_branch.clone())
-        .unwrap_or_else(|| distributor_integration_branch_for_repo(&context.repo_root));
+        .unwrap_or_else(|| distributor_integration_branch_for_repo(runtime, &context.repo_root));
     let queue_records = context.distributor_queue_records.clone();
     let runtime_event_feed = build_runtime_event_feed(&context.runtime_events);
     /*
@@ -59,7 +61,7 @@ pub(super) fn build_distributor_snapshot_from_context(
         )
         .with_head_blocked_detail(blocked_head_detail(queue_head))
         .with_head_rebase_provenance(rebase_provenance_label(queue_head, &integration_branch))
-        .with_orchestrator_status(build_orchestrator_status(context, queue_head))
+        .with_orchestrator_status(build_orchestrator_status(runtime, context, queue_head))
         .with_runtime_event_feed(runtime_event_feed);
     }
     let Some(detail) = selected_runtime_session_detail(context, &history, &queue_records) else {
@@ -67,7 +69,7 @@ pub(super) fn build_distributor_snapshot_from_context(
             ParallelModeQueueItemState::Idle.label(),
             "no distributor queue items are waiting",
         )
-        .with_orchestrator_status(build_idle_orchestrator_status(context))
+        .with_orchestrator_status(build_idle_orchestrator_status(runtime, context))
         .with_runtime_event_feed(runtime_event_feed);
     };
     /*
@@ -102,7 +104,7 @@ pub(super) fn build_distributor_snapshot_from_context(
     };
     ParallelModeDistributorSnapshot::new(queue_items, completion_feed, head_summary, note)
         .with_head_rebase_provenance(history_rebase_provenance(&detail))
-        .with_orchestrator_status(build_idle_orchestrator_status(context))
+        .with_orchestrator_status(build_idle_orchestrator_status(runtime, context))
         .with_runtime_event_feed(runtime_event_feed)
 }
 
@@ -132,6 +134,7 @@ orchestrator status는 queue head 하나가 왜 진행 중이거나 막혀 있�
 이 값은 단순 queue item 목록보다 "다음에 무엇을 복구해야 하는가"에 초점을 둔다.
 */
 fn build_orchestrator_status(
+    runtime: &dyn ParallelModeRuntimePort,
     context: &PoolRuntimeContext,
     queue_head: &ParallelModeDistributorQueueRecord,
 ) -> ParallelModeOrchestratorStatus {
@@ -163,17 +166,21 @@ fn build_orchestrator_status(
         }),
         conflict_files: queue_head.conflict_files.clone(),
         held_queue_count: active_record_count.saturating_sub(1),
-        integration_worktree_readiness: inspect_integration_worktree_readiness(context),
+        integration_worktree_readiness: inspect_integration_worktree_readiness(runtime, context),
         slot_return_wait_reason: slot_return_wait_reason(queue_head, matching_lease),
     }
 }
-fn build_idle_orchestrator_status(context: &PoolRuntimeContext) -> ParallelModeOrchestratorStatus {
+fn build_idle_orchestrator_status(
+    runtime: &dyn ParallelModeRuntimePort,
+    context: &PoolRuntimeContext,
+) -> ParallelModeOrchestratorStatus {
     let mut status = ParallelModeOrchestratorStatus::idle();
     /*
     idle orchestrator도 integration worktree readiness를 덮어쓴다. queue가 비어 있는
     동안 dirty branch를 먼저 고치면 다음 commit_ready가 들어왔을 때 즉시 처리할 수 있다.
     */
-    status.integration_worktree_readiness = inspect_integration_worktree_readiness(context);
+    status.integration_worktree_readiness =
+        inspect_integration_worktree_readiness(runtime, context);
     status
 }
 fn orchestrator_barrier_state(
@@ -206,7 +213,10 @@ integration worktree readiness는 queue가 비어 있을 때도 계속 보여 �
 남아 있으면 다음 delivery tick이 막힌다. snapshot에서 미리 드러내면 사용자가 queue가
 생기기 전에 작업대를 정리할 수 있다.
 */
-fn inspect_integration_worktree_readiness(context: &PoolRuntimeContext) -> String {
+fn inspect_integration_worktree_readiness(
+    runtime: &dyn ParallelModeRuntimePort,
+    context: &PoolRuntimeContext,
+) -> String {
     let Some(record) = context
         .distributor_queue_records
         .iter()
@@ -223,19 +233,19 @@ fn inspect_integration_worktree_readiness(context: &PoolRuntimeContext) -> Strin
         &target.github_repository,
         &target.integration_branch,
     );
-    if !integration_path.exists() {
+    if !runtime.path_exists(&integration_path) {
         return format!(
             "ready: dedicated integration worktree will be created at {}",
             integration_path.display()
         );
     }
-    let Ok(status) = inspect_slot_git_status(&integration_path) else {
+    let Ok(status) = inspect_slot_git_status_with_runtime(runtime, &integration_path) else {
         return "unknown: git status could not be inspected".to_string();
     };
     if !status.is_clean_baseline() {
         return format!("blocked: {}", status.detail_label());
     }
-    if let Some(branch_name) = current_branch_name(&integration_path) {
+    if let Some(branch_name) = current_branch_name(runtime, &integration_path) {
         return format!("blocked: dedicated worktree is attached to `{branch_name}`");
     }
     format!(

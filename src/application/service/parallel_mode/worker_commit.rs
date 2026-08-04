@@ -4,8 +4,8 @@ use crate::application::port::outbound::parallel_mode_runtime_port::{
 use crate::domain::parallel_mode::{ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState};
 
 use super::{
-    ParallelModeService, acquire_pool_mutation_lock, resolve_workspace_head_sha,
-    resolve_workspace_slot_lease,
+    ParallelModeService, acquire_pool_mutation_lock, resolve_workspace_head_sha_with_runtime,
+    resolve_workspace_slot_lease_with_runtime,
 };
 
 impl ParallelModeService {
@@ -15,6 +15,7 @@ impl ParallelModeService {
     ) -> Result<ParallelWorkerCommitOutcome, String> {
         let mutation_lock = acquire_pool_mutation_lock(
             self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
             &expected_lease.worktree_path,
         )?;
         let resolution = self.resolve_exact_running_worker_lease(expected_lease)?;
@@ -24,13 +25,16 @@ impl ParallelModeService {
             .delivery_target
             .as_ref()
             .ok_or_else(|| "parallel worker lease has no frozen delivery target".to_string())?;
-        let expected_head =
-            resolve_workspace_head_sha(&resolution.workspace_path).ok_or_else(|| {
-                format!(
-                    "slot `{}` HEAD could not be resolved before host commit",
-                    resolution.lease.slot_id
-                )
-            })?;
+        let expected_head = resolve_workspace_head_sha_with_runtime(
+            self.parallel_runtime.as_ref(),
+            &resolution.workspace_path,
+        )
+        .ok_or_else(|| {
+            format!(
+                "slot `{}` HEAD could not be resolved before host commit",
+                resolution.lease.slot_id
+            )
+        })?;
         let commit_message = format!("akra: complete {}", resolution.lease.branch_name);
         let outcome =
             self.parallel_runtime
@@ -45,13 +49,16 @@ impl ParallelModeService {
 
         let refreshed = self.resolve_exact_running_worker_lease(expected_lease)?;
         mutation_lock.verify_pool_root(&refreshed.context.pool_root)?;
-        let refreshed_head =
-            resolve_workspace_head_sha(&refreshed.workspace_path).ok_or_else(|| {
-                format!(
-                    "slot `{}` HEAD could not be resolved after host commit",
-                    refreshed.lease.slot_id
-                )
-            })?;
+        let refreshed_head = resolve_workspace_head_sha_with_runtime(
+            self.parallel_runtime.as_ref(),
+            &refreshed.workspace_path,
+        )
+        .ok_or_else(|| {
+            format!(
+                "slot `{}` HEAD could not be resolved after host commit",
+                refreshed.lease.slot_id
+            )
+        })?;
         if refreshed_head != outcome.commit_sha {
             return Err(format!(
                 "slot `{}` HEAD changed after host commit; expected `{}`",
@@ -65,7 +72,8 @@ impl ParallelModeService {
         &self,
         expected_lease: &ParallelModeSlotLeaseSnapshot,
     ) -> Result<super::WorkspaceSlotLeaseResolution, String> {
-        let resolution = resolve_workspace_slot_lease(
+        let resolution = resolve_workspace_slot_lease_with_runtime(
+            self.parallel_runtime.as_ref(),
             self.planning_authority.as_ref(),
             &expected_lease.worktree_path,
         )?

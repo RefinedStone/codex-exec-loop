@@ -2,8 +2,6 @@
 // queue record 차단, slot lease context, Git 상태 조회와 같은 주변 흐름을 같은 어휘로 다루게 한다.
 use super::*;
 
-use std::fs;
-
 use crate::application::service::parallel_mode::PoolMutationLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,7 +88,7 @@ pub(super) fn prepare_distributor_integration_worktree(
     }
 
     let remote_ref = remote_tracking_branch_ref(&target.push_remote, &target.integration_branch);
-    if !integration_path.exists() {
+    if !runtime.path_exists(&integration_path) {
         if let Some(notice) = block_if_automation_epoch_closed(
             planning_authority,
             runtime,
@@ -122,9 +120,7 @@ pub(super) fn prepare_distributor_integration_worktree(
             )?;
             return Err(message);
         }
-        if let Err(error) = crate::git_execution_guard::ensure_host_git_execution_config_safe(
-            Path::new(&canonical_repo_root),
-        ) {
+        if let Err(error) = runtime.ensure_git_execution_safe(Path::new(&canonical_repo_root)) {
             let message = format!(
                 "dedicated integration worktree creation was blocked by Git execution configuration: {error}"
             );
@@ -139,7 +135,8 @@ pub(super) fn prepare_distributor_integration_worktree(
             )?;
             return Err(message);
         }
-        if !command_succeeds(
+        if !command_succeeds_with_runtime(
+            runtime,
             "git",
             [
                 "-C",
@@ -168,9 +165,8 @@ pub(super) fn prepare_distributor_integration_worktree(
         }
     }
 
-    if fs::symlink_metadata(&integration_path)
-        .is_ok_and(|metadata| metadata.file_type().is_symlink())
-        || !worktrees_share_common_git_dir(&canonical_repo_root, &integration_repo_root)
+    if runtime.path_is_symlink(&integration_path).unwrap_or(true)
+        || !worktrees_share_common_git_dir(runtime, &canonical_repo_root, &integration_repo_root)
     {
         let message = format!(
             "dedicated integration path `{}` is not the generated worktree registered for this repository",
@@ -188,7 +184,8 @@ pub(super) fn prepare_distributor_integration_worktree(
         return Err(message);
     }
 
-    if command_succeeds(
+    if command_succeeds_with_runtime(
+        runtime,
         "git",
         [
             "-C",
@@ -213,7 +210,7 @@ pub(super) fn prepare_distributor_integration_worktree(
 
     // Git 상태 조회 자체가 실패한 경우에는 clean 여부를 판단할 수 없으므로, 안전한
     // 기본값으로 delivery를 막고 사람이 worktree를 점검하게 한다.
-    let Ok(status) = inspect_slot_git_status(&integration_path) else {
+    let Ok(status) = inspect_slot_git_status_with_runtime(runtime, &integration_path) else {
         // status detail이 없는 실패라서 고정 문구만 남긴다. 이 문구는 block reason과
         // 함수 오류 문자열로 그대로 공유된다.
         let message = "integration worktree git status could not be inspected".to_string();
@@ -257,7 +254,8 @@ pub(super) fn prepare_distributor_integration_worktree(
         return Err(message);
     }
 
-    let Some(local_head) = resolve_workspace_head_sha(&integration_path) else {
+    let Some(local_head) = resolve_workspace_head_sha_with_runtime(runtime, &integration_path)
+    else {
         return block_integration_preparation(
             planning_authority,
             runtime,
@@ -266,7 +264,8 @@ pub(super) fn prepare_distributor_integration_worktree(
             "dedicated integration worktree HEAD could not be resolved".to_string(),
         );
     };
-    let Some(remote_head) = resolve_workspace_head_sha_for_ref(&canonical_repo_root, &remote_ref)
+    let Some(remote_head) =
+        resolve_workspace_head_sha_for_ref(runtime, &canonical_repo_root, &remote_ref)
     else {
         return block_integration_preparation(
             planning_authority,
@@ -278,6 +277,7 @@ pub(super) fn prepare_distributor_integration_worktree(
     };
 
     let state = classify_prepared_integration_state(
+        runtime,
         &integration_repo_root,
         &remote_head,
         &local_head,
@@ -357,6 +357,7 @@ fn block_integration_preparation<T>(
 }
 
 fn classify_prepared_integration_state(
+    runtime: &dyn ParallelModeRuntimePort,
     integration_repo_root: &str,
     remote_head: &str,
     local_head: &str,
@@ -400,17 +401,25 @@ fn classify_prepared_integration_state(
         return Ok(PreparedIntegrationState::Fresh);
     }
 
-    validate_recovered_integration_range(integration_repo_root, frozen_base, local_head, record)?;
+    validate_recovered_integration_range(
+        runtime,
+        integration_repo_root,
+        frozen_base,
+        local_head,
+        record,
+    )?;
     Ok(PreparedIntegrationState::ResumePendingPush)
 }
 
 fn validate_recovered_integration_range(
+    runtime: &dyn ParallelModeRuntimePort,
     repo_root: &str,
     frozen_base: &str,
     local_head: &str,
     record: &ParallelModeDistributorQueueRecord,
 ) -> Result<(), String> {
-    let source_states_at_base = distributor_source_cherry_states(repo_root, frozen_base, record)?;
+    let source_states_at_base =
+        distributor_source_cherry_states(runtime, repo_root, frozen_base, record)?;
     let pending_source_count = source_states_at_base
         .iter()
         .filter(|(_, equivalent)| !*equivalent)
@@ -422,14 +431,14 @@ fn validate_recovered_integration_range(
     }
 
     let recovered_commits =
-        resolve_linear_distributor_source_range(repo_root, frozen_base, local_head)?;
+        resolve_linear_distributor_source_range(runtime, repo_root, frozen_base, local_head)?;
     if recovered_commits.len() != pending_source_count {
         return Err(format!(
             "recovered integration range contains {} commit(s), expected {pending_source_count}",
             recovered_commits.len()
         ));
     }
-    if !distributor_source_cherry_states(repo_root, local_head, record)?
+    if !distributor_source_cherry_states(runtime, repo_root, local_head, record)?
         .iter()
         .all(|(_, equivalent)| *equivalent)
     {
@@ -457,7 +466,8 @@ fn validate_recovered_integration_range(
     }
 
     let source_tip = record.effective_source_commit_sha();
-    let output = run_command(
+    let output = run_command_with_runtime(
+        runtime,
         "git",
         [
             "-C",
@@ -495,9 +505,14 @@ fn validate_recovered_integration_range(
     Ok(())
 }
 
-fn worktrees_share_common_git_dir(canonical_repo_root: &str, integration_repo_root: &str) -> bool {
+fn worktrees_share_common_git_dir(
+    runtime: &dyn ParallelModeRuntimePort,
+    canonical_repo_root: &str,
+    integration_repo_root: &str,
+) -> bool {
     let resolve = |repo_root: &str| {
-        run_command(
+        run_command_with_runtime(
+            runtime,
             "git",
             [
                 "-C",
@@ -508,7 +523,7 @@ fn worktrees_share_common_git_dir(canonical_repo_root: &str, integration_repo_ro
             ],
             None,
         )
-        .and_then(|path| fs::canonicalize(path).ok())
+        .and_then(|path| runtime.canonicalize_path(Path::new(&path)).ok())
     };
     resolve(canonical_repo_root).is_some_and(|canonical_common_dir| {
         resolve(integration_repo_root).as_ref() == Some(&canonical_common_dir)
@@ -535,8 +550,17 @@ pub(super) fn fetch_integration_remote_branch(
         .is_ok()
 }
 
-fn resolve_workspace_head_sha_for_ref(repo_root: &str, reference: &str) -> Option<String> {
-    run_command("git", ["-C", repo_root, "rev-parse", reference], None)
+fn resolve_workspace_head_sha_for_ref(
+    runtime: &dyn ParallelModeRuntimePort,
+    repo_root: &str,
+    reference: &str,
+) -> Option<String> {
+    run_command_with_runtime(
+        runtime,
+        "git",
+        ["-C", repo_root, "rev-parse", reference],
+        None,
+    )
 }
 
 /*
@@ -545,8 +569,12 @@ unmerged file만 수집해 queue record의 conflict_files에 저장할 짧은 �
 그 목록은 supervisor orchestrator status와 blocked notice에서 사용자가 어디를 봐야 하는지
 알려 주는 복구 단서가 된다.
 */
-pub(super) fn collect_cherry_pick_conflict_files(repo_root: &str) -> Vec<String> {
-    run_command(
+pub(super) fn collect_cherry_pick_conflict_files(
+    runtime: &dyn ParallelModeRuntimePort,
+    repo_root: &str,
+) -> Vec<String> {
+    run_command_with_runtime(
+        runtime,
         "git",
         ["-C", repo_root, "diff", "--name-only", "--diff-filter=U"],
         None,

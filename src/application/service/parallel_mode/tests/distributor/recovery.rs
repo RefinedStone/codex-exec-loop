@@ -269,7 +269,8 @@ fn stale_guarded_enqueue_preflight_does_not_block_or_mutate_replacement_generati
             .with_current(|| -> Result<(), String> {
                 let authority = SqlitePlanningAuthorityAdapter::new();
                 let runtime = test_parallel_runtime();
-                let pool_lock = acquire_pool_mutation_lock(&authority, &transition_workspace)?;
+                let pool_lock =
+                    acquire_pool_mutation_lock(&authority, &runtime, &transition_workspace)?;
                 pool_lock.verify_pool_root(&transition_pool_root)?;
                 write_slot_lease(
                     &authority,
@@ -385,7 +386,8 @@ fn guarded_enqueue_pool_busy_stops_within_one_retry_interval_after_gate_advance(
         .expect("enqueue should pause after preflight");
 
     let authority = SqlitePlanningAuthorityAdapter::new();
-    let pool_lock = acquire_pool_mutation_lock(&authority, &repo.workspace_dir())
+    let runtime = test_parallel_runtime();
+    let pool_lock = acquire_pool_mutation_lock(&authority, &runtime, &repo.workspace_dir())
         .expect("test should hold the pool lock across the first final attempt");
     pool_lock
         .verify_pool_root(&repo.pool_root())
@@ -1426,6 +1428,7 @@ fn supervisor_snapshot_reclassifies_integrated_queue_head_from_store_backed_reco
     );
     let frozen_states =
         crate::application::service::parallel_mode::distributor::distributor_source_cherry_states(
+            &test_parallel_runtime(),
             &repo.workspace_dir(),
             "refs/remotes/origin/prerelease",
             &queue_record,

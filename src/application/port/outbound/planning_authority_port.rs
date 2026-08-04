@@ -360,6 +360,12 @@ pub struct PlanningAuthorityDocumentSnapshot {
  * application service는 이 trait만 보고 공식 SQLite authority인지 테스트용 Noop인지 구분하지 않습니다.
  */
 pub trait PlanningAuthorityPort: ParallelModeRuntimeEventLogPort + Send + Sync {
+    fn current_process_claim_identity(&self) -> Result<(u32, String)> {
+        Err(anyhow::anyhow!(
+            "planning authority process identity is unavailable"
+        ))
+    }
+
     // Atomic document rewrites are required for production operator mutations.
     // Lightweight test adapters may return false and exercise the explicit
     // sequential fallback owned by the application service.
@@ -804,6 +810,10 @@ impl ParallelModeRuntimeEventLogPort for NoopPlanningAuthorityPort {
 
 #[cfg(test)]
 impl PlanningAuthorityPort for NoopPlanningAuthorityPort {
+    fn current_process_claim_identity(&self) -> Result<(u32, String)> {
+        Ok((1, "noop-process-start".to_string()))
+    }
+
     fn allows_non_atomic_planning_authority_rewrite_for_tests(&self) -> bool {
         true
     }

@@ -891,6 +891,7 @@ fn allocate_agent_branch_name_numbers_collisions_without_exceeding_slug_limit() 
 
     assert!(sanitized_slug.len() > MAX_AGENT_BRANCH_SLUG_LEN);
     let first = allocate_agent_branch_name(
+        &test_parallel_runtime(),
         &repo.workspace_dir(),
         "slot-1",
         &long_slug,
@@ -902,6 +903,7 @@ fn allocate_agent_branch_name_numbers_collisions_without_exceeding_slug_limit() 
     .expect("configured remote should be valid");
     run_git(&repo.repo_root, &["branch", first.as_str(), "prerelease"]);
     let second = allocate_agent_branch_name(
+        &test_parallel_runtime(),
         &repo.workspace_dir(),
         "slot-1",
         &long_slug,
@@ -930,6 +932,7 @@ fn allocate_agent_branch_name_numbers_collisions_without_exceeding_slug_limit() 
 fn allocate_agent_branch_name_is_unique_across_concurrent_lease_instances() {
     let repo = TempGitRepo::new("lease-slot-cross-process-branch-identity");
     let first = allocate_agent_branch_name(
+        &test_parallel_runtime(),
         &repo.workspace_dir(),
         "slot-1",
         "task-one",
@@ -940,6 +943,7 @@ fn allocate_agent_branch_name_is_unique_across_concurrent_lease_instances() {
     )
     .expect("first lease branch should allocate");
     let second = allocate_agent_branch_name(
+        &test_parallel_runtime(),
         &repo.workspace_dir(),
         "slot-1",
         "task-one",
@@ -966,6 +970,7 @@ fn allocate_agent_branch_name_numbers_remote_tracking_collisions() {
         "prerelease",
     );
     let branch_name = allocate_agent_branch_name(
+        &test_parallel_runtime(),
         &repo.workspace_dir(),
         "slot-1",
         "task-one",
@@ -2023,6 +2028,7 @@ fn atomic_branch_delete_rejects_source_ref_movement() {
     .expect("moved source should resolve");
 
     assert!(!delete_cleaned_slot_branch_if_unchanged(
+        &test_parallel_runtime(),
         &repo.workspace_dir(),
         &branch_name,
         &frozen_source,
@@ -2051,7 +2057,8 @@ fn generic_slot_reset_preserves_ignored_write_and_reports_failure() {
     let slot_path = repo.create_detached_slot(1);
     fs::write(slot_path.join("late-reset.tmp"), "late reset write\n")
         .expect("ignored late write should be created");
-    let report = reset_slot_worktree_to_ref(&slot_path, POOL_BASELINE_BRANCH);
+    let report =
+        reset_slot_worktree_to_ref(&test_parallel_runtime(), &slot_path, POOL_BASELINE_BRANCH);
 
     assert!(!report.succeeded());
     assert_eq!(
@@ -2118,7 +2125,7 @@ fn assert_managed_ancestor_alias_is_rejected(
         &lease.branch_name,
     );
     let error = identity
-        .validate()
+        .validate(&test_parallel_runtime())
         .expect_err("managed ancestor alias must fail closed");
 
     assert!(error.contains("symlink or reparse point"));

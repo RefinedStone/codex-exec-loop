@@ -65,6 +65,20 @@ profile, and app-server prompt-log values are domain-owned contracts; repository
 them but do not own them. The native shell uses the Core inbound-client `NativeClientPort`; shared planning read contracts
 are owned by `PlanningProjectionPort`, whose implementation remains in the planning service layer.
 
+An inbound port is required where a driving adapter enters an application use case. Internal
+single-purpose helpers do not gain mirror-image interfaces merely because they are named services;
+the application facade may implement several narrow adapter-facing inbound ports. Conversely, host
+effects are never hidden in those services. `ParallelModeRuntimePort` is the outbound boundary for
+pool locking, environment and process identity, guarded Git execution, path identity, secure
+normalization staging and atomic moves, and pool-local runtime mirrors. Application services retain
+the ordering and recovery policy while the Git outbound adapter owns commands, syscalls, and
+filesystem object checks.
+
+The architecture suite enforces this split across production application sources. Direct
+filesystem, process, environment, trusted-executable, and Git-helper references—including direct
+`Path::exists()` and `Path::symlink_metadata()` calls—fail the boundary guard. The guarded roots
+must cover at least 90% of Rust sources, so adding an unguarded layer also fails the suite.
+
 The process-lifetime parallel control-plane handle and completion channel belong to the
 `ParallelModeAdminPort` implementation. Browser requests map transport actions to typed admin
 commands, while the application service owns enable/dispatch/refresh/disable policy and drains

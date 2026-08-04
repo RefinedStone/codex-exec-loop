@@ -2218,7 +2218,7 @@ fn parallel_mode_integration_branch_uses_repo_local_configuration() {
     );
 
     assert_eq!(
-        parallel_mode_integration_branch_for_repo(&repo.workspace_dir())
+        parallel_mode_integration_branch_for_repo(&test_parallel_runtime(), &repo.workspace_dir())
             .expect("configured integration branch should be valid"),
         "pre-release"
     );

@@ -28,6 +28,7 @@ use crate::domain::parallel_mode::{
 use crate::domain::planning::PlanningOfficialCompletionRefreshContract;
 use crate::domain::planning::PriorityQueueTask;
 use chrono::{DateTime, Utc};
+use std::path::Path;
 use std::sync::Arc;
 pub(crate) mod admin;
 mod automation_guard;
@@ -72,20 +73,22 @@ use self::pool::detect_canonical_repo_root;
 use self::pool::{
     PoolBoardWithContextResult, PoolMutationLock, PoolRuntimeContext, PoolSlotCleanupIdentity,
     PoolSlotCleanupLeaseAuthority, WorkspaceSlotLeaseResolution, acquire_pool_mutation_lock,
-    branch_is_integrated_into, build_pool_board, build_pool_slots, cleanup_slot_to_ref_locked,
-    derive_default_pool_root, derive_integration_worktree_path, inspect_pool_board_and_context,
-    inspect_slot_git_status, load_pool_runtime_context, pool_operator_recovery_notice,
+    branch_is_integrated_into, build_pool_board_with_runtime, build_pool_slots,
+    cleanup_slot_to_ref_locked, derive_default_pool_root, derive_integration_worktree_path,
+    inspect_pool_board_and_context_with_runtime, inspect_slot_git_status_with_runtime,
+    load_pool_runtime_context_with_runtime, pool_operator_recovery_notice,
     pool_root_has_managed_state, reconcile_pool_board_and_context_with_target_locked,
-    reset_pool_for_parallel_enable_with_target_locked, resolve_workspace_head_sha,
-    resolve_workspace_slot_lease, rollback_slot_lease_write_failure, short_sha,
+    reset_pool_for_parallel_enable_with_target_locked, resolve_workspace_head_sha_with_runtime,
+    resolve_workspace_slot_lease_with_runtime, rollback_slot_lease_write_failure, short_sha,
     transition_slot_lease, write_slot_lease,
 };
 #[cfg(test)]
 use self::pool::{
-    cleanup_slot_to_ref_with_hooks, delete_cleaned_slot_branch_if_unchanged,
-    install_after_normalization_quarantine_move_hook, install_before_normalization_quarantine_hook,
-    normalization_quarantine_path, reconcile_pool_board, reset_slot_worktree_to_ref, slot_id,
-    slot_lease_file_path,
+    build_pool_board, cleanup_slot_to_ref_with_hooks, delete_cleaned_slot_branch_if_unchanged,
+    inspect_slot_git_status, install_after_normalization_quarantine_move_hook,
+    install_before_normalization_quarantine_hook, normalization_quarantine_path,
+    reconcile_pool_board, reset_slot_worktree_to_ref, resolve_workspace_head_sha,
+    resolve_workspace_slot_lease, slot_id, slot_lease_file_path,
 };
 #[cfg(all(test, unix))]
 use self::pool::{
@@ -93,13 +96,13 @@ use self::pool::{
     install_before_normalization_staging_provision_hook,
 };
 use self::readiness::{
-    blocked_prerequisite_capability, command_succeeds, inspect_authority_store,
-    inspect_git_worktree, inspect_planning, inspect_planning_projection, run_command,
+    blocked_prerequisite_capability, command_succeeds_with_runtime, inspect_authority_store,
+    inspect_git_worktree, inspect_planning, inspect_planning_projection, run_command_with_runtime,
 };
 #[cfg(test)]
 use self::readiness::{
-    inspect_akra_branch, inspect_gh_auth, inspect_gh_binary, inspect_push_remote,
-    parse_https_remote,
+    command_succeeds, inspect_akra_branch, inspect_gh_auth, inspect_gh_binary, inspect_push_remote,
+    parse_https_remote, run_command,
 };
 #[cfg(test)]
 use self::session_detail::{agent_session_detail_record_path, read_agent_session_detail_record};
@@ -137,22 +140,32 @@ fn unavailable_integration_branch_label(error: &str) -> String {
     format!("unavailable (invalid integration branch configuration: {error})")
 }
 
-fn distributor_integration_branch_for_repo(repo_root: &str) -> String {
-    try_parallel_mode_integration_branch_for_repo(repo_root)
+fn distributor_integration_branch_for_repo(
+    runtime: &dyn ParallelModeRuntimePort,
+    repo_root: &str,
+) -> String {
+    try_parallel_mode_integration_branch_for_repo_with_runtime(runtime, repo_root)
         .unwrap_or_else(|error| unavailable_integration_branch_label(&error))
 }
 
-fn pool_baseline_branch_for_repo(repo_root: &str) -> String {
-    distributor_integration_branch_for_repo(repo_root)
+fn pool_baseline_branch_for_repo(runtime: &dyn ParallelModeRuntimePort, repo_root: &str) -> String {
+    distributor_integration_branch_for_repo(runtime, repo_root)
 }
 
-pub(crate) fn parallel_mode_integration_branch_for_repo(repo_root: &str) -> Result<String, String> {
-    try_parallel_mode_integration_branch_for_repo(repo_root)
+pub(crate) fn parallel_mode_integration_branch_for_repo(
+    runtime: &dyn ParallelModeRuntimePort,
+    repo_root: &str,
+) -> Result<String, String> {
+    try_parallel_mode_integration_branch_for_repo_with_runtime(runtime, repo_root)
 }
 
-fn try_parallel_mode_integration_branch_for_repo(repo_root: &str) -> Result<String, String> {
-    let env_value = std::env::var(AKRA_PARALLEL_INTEGRATION_BRANCH_ENV_VAR).ok();
-    let config_value = run_command(
+fn try_parallel_mode_integration_branch_for_repo_with_runtime(
+    runtime: &dyn ParallelModeRuntimePort,
+    repo_root: &str,
+) -> Result<String, String> {
+    let env_value = runtime.environment_variable(AKRA_PARALLEL_INTEGRATION_BRANCH_ENV_VAR)?;
+    let config_value = run_command_with_runtime(
+        runtime,
         "git",
         [
             "-C",
@@ -195,9 +208,13 @@ fn resolve_parallel_mode_integration_branch_strict(
     Ok(DEFAULT_PARALLEL_MODE_INTEGRATION_BRANCH.to_string())
 }
 
-fn try_push_remote_name(repo_root: &str) -> Result<String, String> {
-    let env_value = std::env::var(AKRA_GITHUB_PUSH_REMOTE_ENV_VAR).ok();
-    let config_value = run_command(
+fn try_push_remote_name_with_runtime(
+    runtime: &dyn ParallelModeRuntimePort,
+    repo_root: &str,
+) -> Result<String, String> {
+    let env_value = runtime.environment_variable(AKRA_GITHUB_PUSH_REMOTE_ENV_VAR)?;
+    let config_value = run_command_with_runtime(
+        runtime,
         "git",
         [
             "-C",
@@ -210,6 +227,20 @@ fn try_push_remote_name(repo_root: &str) -> Result<String, String> {
     );
     resolve_github_push_remote_name_strict(env_value.as_deref(), config_value.as_deref())
         .map_err(str::to_string)
+}
+
+#[cfg(test)]
+fn try_parallel_mode_integration_branch_for_repo(repo_root: &str) -> Result<String, String> {
+    let runtime =
+        crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter::new();
+    try_parallel_mode_integration_branch_for_repo_with_runtime(&runtime, repo_root)
+}
+
+#[cfg(test)]
+fn try_push_remote_name(repo_root: &str) -> Result<String, String> {
+    let runtime =
+        crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter::new();
+    try_push_remote_name_with_runtime(&runtime, repo_root)
 }
 
 fn resolve_parent_high_risk_opt_in(
@@ -226,14 +257,14 @@ fn resolve_parent_high_risk_opt_in(
     }
 }
 
-fn parent_high_risk_opt_in(variable_name: &str) -> Result<bool, String> {
-    match std::env::var(variable_name) {
-        Ok(value) => resolve_parent_high_risk_opt_in(variable_name, Some(&value)),
-        Err(std::env::VarError::NotPresent) => resolve_parent_high_risk_opt_in(variable_name, None),
-        Err(std::env::VarError::NotUnicode(_)) => Err(format!(
-            "{variable_name} is not valid Unicode; high-risk delivery remains disabled"
-        )),
-    }
+fn parent_high_risk_opt_in(
+    runtime: &dyn ParallelModeRuntimePort,
+    variable_name: &str,
+) -> Result<bool, String> {
+    let value = runtime
+        .environment_variable(variable_name)
+        .map_err(|error| format!("{error}; high-risk delivery remains disabled"))?;
+    resolve_parent_high_risk_opt_in(variable_name, value.as_deref())
 }
 
 #[derive(Debug, Clone)]
@@ -243,12 +274,14 @@ struct ParallelModeDeliverySafetyPolicy {
 }
 
 impl ParallelModeDeliverySafetyPolicy {
-    fn from_parent_environment() -> Self {
+    fn from_parent_environment(runtime: &dyn ParallelModeRuntimePort) -> Self {
         Self {
             allow_public_repository: parent_high_risk_opt_in(
+                runtime,
                 AKRA_PARALLEL_ALLOW_PUBLIC_REPOSITORY_ENV_VAR,
             ),
             allow_autonomous_delivery: parent_high_risk_opt_in(
+                runtime,
                 AKRA_PARALLEL_AUTONOMOUS_DELIVERY_ENV_VAR,
             ),
         }
@@ -361,7 +394,8 @@ impl ParallelModeService {
         github_automation: Arc<dyn GithubAutomationPort>,
         parallel_runtime: Arc<dyn ParallelModeRuntimePort>,
     ) -> Self {
-        let delivery_safety_policy = ParallelModeDeliverySafetyPolicy::from_parent_environment();
+        let delivery_safety_policy =
+            ParallelModeDeliverySafetyPolicy::from_parent_environment(parallel_runtime.as_ref());
         Self {
             distributor_service: ParallelModeDistributorService::with_planning_authority(
                 github_automation.clone(),
@@ -394,8 +428,12 @@ impl ParallelModeService {
             .parallel_runtime
             .detect_git_repo_root(workspace_dir)
             .ok_or_else(|| "git repository is unavailable".to_string())?;
-        let push_remote = try_push_remote_name(&repo_root)?;
-        let integration_branch = try_parallel_mode_integration_branch_for_repo(&repo_root)?;
+        let push_remote =
+            try_push_remote_name_with_runtime(self.parallel_runtime.as_ref(), &repo_root)?;
+        let integration_branch = try_parallel_mode_integration_branch_for_repo_with_runtime(
+            self.parallel_runtime.as_ref(),
+            &repo_root,
+        )?;
         let credential_redacted_push_url = self
             .github_automation
             .credential_redacted_push_url_for_remote(&repo_root, &push_remote)
@@ -403,7 +441,8 @@ impl ParallelModeService {
                 format!("credential-redacted pool delivery target could not be frozen: {error}")
             })?;
         let tracking_ref = remote_tracking_branch_ref(&push_remote, &integration_branch);
-        let prior_tracking_oid = run_command(
+        let prior_tracking_oid = run_command_with_runtime(
+            self.parallel_runtime.as_ref(),
             "git",
             ["-C", &repo_root, "rev-parse", tracking_ref.as_str()],
             None,
@@ -419,12 +458,16 @@ impl ParallelModeService {
                     || !snapshot.dispatch_commands.is_empty()
             })
             .unwrap_or(true);
-        let filesystem_has_pool_state =
-            std::fs::canonicalize(&repo_root)
-                .ok()
-                .is_none_or(|canonical| {
-                    pool_root_has_managed_state(&derive_default_pool_root(&canonical))
-                });
+        let filesystem_has_pool_state = self
+            .parallel_runtime
+            .canonicalize_path(Path::new(&repo_root))
+            .ok()
+            .is_none_or(|canonical| {
+                pool_root_has_managed_state(
+                    self.parallel_runtime.as_ref(),
+                    &derive_default_pool_root(&canonical),
+                )
+            });
         let existing_pool_requires_stable_observation =
             prior_tracking_oid.is_some() || authority_has_pool_state || filesystem_has_pool_state;
         let commit_sha = self
@@ -448,9 +491,13 @@ impl ParallelModeService {
             );
         }
 
-        let verified_push_remote = try_push_remote_name(&repo_root)?;
+        let verified_push_remote =
+            try_push_remote_name_with_runtime(self.parallel_runtime.as_ref(), &repo_root)?;
         let verified_integration_branch =
-            try_parallel_mode_integration_branch_for_repo(&repo_root)?;
+            try_parallel_mode_integration_branch_for_repo_with_runtime(
+                self.parallel_runtime.as_ref(),
+                &repo_root,
+            )?;
         let verified_push_url = self
             .github_automation
             .credential_redacted_push_url_for_remote(&repo_root, &verified_push_remote)
@@ -519,10 +566,16 @@ impl ParallelModeService {
         workspace_dir: &str,
         expected_lease: Option<&ParallelModeSlotLeaseSnapshot>,
     ) -> Result<Option<u64>, String> {
-        let mutation_lock =
-            acquire_pool_mutation_lock(self.planning_authority.as_ref(), workspace_dir)?;
-        let Some(resolution) =
-            resolve_workspace_slot_lease(self.planning_authority.as_ref(), workspace_dir)?
+        let mutation_lock = acquire_pool_mutation_lock(
+            self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
+            workspace_dir,
+        )?;
+        let Some(resolution) = resolve_workspace_slot_lease_with_runtime(
+            self.parallel_runtime.as_ref(),
+            self.planning_authority.as_ref(),
+            workspace_dir,
+        )?
         else {
             return Ok(None);
         };
@@ -636,15 +689,20 @@ impl ParallelModeService {
             .map(|repo_root| self.github_automation.inspect_capabilities(repo_root));
         let akra_branch = match &repo_root {
             Some(repo_root) => {
-                let exact_target = try_push_remote_name(repo_root).and_then(|push_remote| {
-                    let integration_branch =
-                        try_parallel_mode_integration_branch_for_repo(repo_root)?;
-                    let push_url = self
-                        .github_automation
-                        .credential_redacted_push_url_for_remote(repo_root, &push_remote)
-                        .map_err(|error| error.to_string())?;
-                    Ok((push_remote, integration_branch, push_url))
-                });
+                let exact_target =
+                    try_push_remote_name_with_runtime(self.parallel_runtime.as_ref(), repo_root)
+                        .and_then(|push_remote| {
+                            let integration_branch =
+                                try_parallel_mode_integration_branch_for_repo_with_runtime(
+                                    self.parallel_runtime.as_ref(),
+                                    repo_root,
+                                )?;
+                            let push_url = self
+                                .github_automation
+                                .credential_redacted_push_url_for_remote(repo_root, &push_remote)
+                                .map_err(|error| error.to_string())?;
+                            Ok((push_remote, integration_branch, push_url))
+                        });
                 match exact_target.and_then(|(push_remote, integration_branch, push_url)| {
                     self.github_automation
                         .remote_branch_head_for_delivery_target(
@@ -759,6 +817,7 @@ impl ParallelModeService {
         readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
     ) -> ParallelModeSupervisorSnapshot {
         let snapshot = self.supervisor_service.build_snapshot(
+            self.parallel_runtime.as_ref(),
             self.planning_authority.as_ref(),
             workspace_dir,
             mode_enabled,
@@ -774,6 +833,7 @@ impl ParallelModeService {
         readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
     ) -> ParallelModeSupervisorSnapshot {
         let snapshot = self.supervisor_service.build_passive_snapshot(
+            self.parallel_runtime.as_ref(),
             self.planning_authority.as_ref(),
             workspace_dir,
             readiness_snapshot,
@@ -875,8 +935,11 @@ impl ParallelModeService {
         }
         if mode_enabled
             && readiness_snapshot.is_some_and(ParallelModeReadinessSnapshot::allows_parallel_mode)
-            && let Ok(mutation_lock) =
-                acquire_pool_mutation_lock(self.planning_authority.as_ref(), workspace_dir)
+            && let Ok(mutation_lock) = acquire_pool_mutation_lock(
+                self.planning_authority.as_ref(),
+                self.parallel_runtime.as_ref(),
+                workspace_dir,
+            )
         {
             if permit.is_some_and(|permit| !permit.is_active()) {
                 return Err(
@@ -953,8 +1016,11 @@ impl ParallelModeService {
         workspace_dir: &str,
         policy: ParallelModePoolResetPolicy,
     ) -> Result<ParallelModePoolResetReport, String> {
-        let mutation_lock =
-            acquire_pool_mutation_lock(self.planning_authority.as_ref(), workspace_dir)?;
+        let mutation_lock = acquire_pool_mutation_lock(
+            self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
+            workspace_dir,
+        )?;
         let target = self.fetch_fresh_pool_integration_target(workspace_dir)?;
         reset_pool_for_parallel_enable_with_target_locked(
             self.planning_authority.as_ref(),
@@ -979,8 +1045,11 @@ impl ParallelModeService {
         planning_projection: &PlanningRuntimeProjection,
         requested_count: usize,
     ) -> Result<ParallelModeDispatchPlan, String> {
-        let mutation_lock =
-            acquire_pool_mutation_lock(self.planning_authority.as_ref(), workspace_dir)?;
+        let mutation_lock = acquire_pool_mutation_lock(
+            self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
+            workspace_dir,
+        )?;
         let target = self.fetch_fresh_pool_integration_target(workspace_dir)?;
         let (context, _) = reconcile_pool_board_and_context_with_target_locked(
             self.planning_authority.as_ref(),
@@ -990,7 +1059,7 @@ impl ParallelModeService {
             &mutation_lock,
         )
         .map_err(|error| error.1)?;
-        let idle_slot_count = build_pool_slots(&context)
+        let idle_slot_count = build_pool_slots(self.parallel_runtime.as_ref(), &context)
             .into_iter()
             .filter(|slot| slot.state == ParallelModePoolSlotState::Idle)
             .count();
@@ -1100,7 +1169,10 @@ impl ParallelModeService {
         workspace_dir: &str,
     ) -> Result<Option<ParallelModeDispatchCommandSnapshot>, String> {
         self.planning_authority
-            .try_claim_next_runtime_dispatch_command(workspace_dir, &dispatch_command_owner_token())
+            .try_claim_next_runtime_dispatch_command(
+                workspace_dir,
+                &dispatch_command_owner_token(self.parallel_runtime.as_ref()),
+            )
             .map_err(|error| error.to_string())
     }
 
@@ -1366,6 +1438,7 @@ impl ParallelModeService {
         }
         if let Some(blocked_notice) = inspect_akra_integration_worktree_blocker(
             self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
             workspace_dir,
         ) {
             /*
@@ -1396,10 +1469,10 @@ impl ParallelModeService {
     }
 }
 
-fn dispatch_command_owner_token() -> String {
+fn dispatch_command_owner_token(runtime: &dyn ParallelModeRuntimePort) -> String {
     format!(
         "pid={} created_at={}",
-        std::process::id(),
+        runtime.current_process_id(),
         current_timestamp()
     )
 }

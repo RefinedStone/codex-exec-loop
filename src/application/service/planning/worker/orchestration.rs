@@ -548,7 +548,11 @@ impl PlanningWorkerOrchestrationService {
         continuation_permit: Option<&PostTurnContinuationPermit>,
     ) -> Result<OfficialCompletionRefreshPermit> {
         // owner token에는 process/time entropy를 넣는다. 같은 order에 대한 반복 refresh loop도 authority store에서 구분된다.
-        let owner_token = authority_claim_owner_token("official-refresh", refresh_order)?;
+        let owner_token = authority_claim_owner_token(
+            self.planning_authority.as_ref(),
+            "official-refresh",
+            refresh_order,
+        )?;
         loop {
             if continuation_permit.is_some_and(|permit| !permit.is_current()) {
                 anyhow::bail!(
@@ -1049,18 +1053,18 @@ fn authority_load_status<T>(result: Result<Option<T>>) -> String {
     }
 }
 
-fn authority_claim_owner_token(prefix: &str, nonce: u64) -> Result<String> {
+fn authority_claim_owner_token(
+    planning_authority: &dyn PlanningAuthorityPort,
+    prefix: &str,
+    nonce: u64,
+) -> Result<String> {
     // token은 security-sensitive하지 않다. local concurrent refresh attempt 사이에서 claim/release bookkeeping을 위한
     // collision-resistant owner id다.
-    let pid = std::process::id();
+    let (pid, identity) = planning_authority.current_process_claim_identity()?;
     let unique_suffix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    let identity =
-        crate::process_liveness::required_process_start_identity(pid).map_err(|error| {
-            anyhow::anyhow!("official refresh owner identity is unavailable: {error}")
-        })?;
     Ok(format!(
         "{prefix}-{pid}-{nonce}-{unique_suffix}-process-start:{identity}"
     ))
@@ -2353,8 +2357,12 @@ mod tests {
             .expect("current process identity probe should succeed")
             .expect("supported OS should expose process start identity");
 
-        let token = authority_claim_owner_token("official-refresh", 17)
-            .expect("official refresh owner token should include a birth identity");
+        let token = authority_claim_owner_token(
+            &SqlitePlanningAuthorityAdapter::new(),
+            "official-refresh",
+            17,
+        )
+        .expect("official refresh owner token should include a birth identity");
 
         assert!(token.starts_with(&format!("official-refresh-{pid}-17-")));
         assert!(token.ends_with(&format!("-process-start:{identity}")));

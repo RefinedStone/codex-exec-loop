@@ -1108,6 +1108,13 @@ impl ParallelModeRuntimeEventLogPort for SqlitePlanningAuthorityAdapter {
 }
 
 impl PlanningAuthorityPort for SqlitePlanningAuthorityAdapter {
+    fn current_process_claim_identity(&self) -> Result<(u32, String)> {
+        let process_id = std::process::id();
+        let start_identity = crate::process_liveness::required_process_start_identity(process_id)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        Ok((process_id, start_identity))
+    }
+
     fn supports_atomic_planning_authority_documents(&self) -> bool {
         true
     }

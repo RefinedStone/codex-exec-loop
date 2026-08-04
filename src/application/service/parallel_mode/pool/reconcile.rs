@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 
+use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::domain::parallel_mode::ParallelModeSlotLeaseSnapshot;
 
@@ -10,9 +11,9 @@ use super::{
     GitWorktreeRecord, NormalizationRecoveryRequest, PoolMutationLock, ensure_directory_exists,
     ensure_normalization_recovery_authority_is_empty, has_empty_linked_worktree_index,
     has_normalization_replacement_artifact_for_slot, has_target_equivalent_lf_normalization_drift,
-    inspect_slot_git_status, normalization_replacement_artifacts_for_slot,
+    inspect_slot_git_status_with_runtime, normalization_replacement_artifacts_for_slot,
     quarantine_empty_index_and_replace_slot, quarantine_normalization_drift_and_replace_slot,
-    reset_slot_worktree_to_ref, slot_id, worktree_paths_match,
+    reset_slot_worktree_to_ref, slot_id, worktree_paths_match_with_runtime,
 };
 
 pub(super) struct ReusableDetachedBaselineResetContext<'a> {
@@ -50,7 +51,9 @@ inspection에서 Blocked로 보여 준다.
 아니라 baseline commit에 매달린 중립 worktree여야 lease 획득 시 새 agent branch로 전환하기
 쉽기 때문이다.
 */
+#[allow(clippy::too_many_arguments)]
 pub(super) fn provision_missing_slots(
+    runtime: &dyn ParallelModeRuntimePort,
     repo_root: &str,
     canonical_repo_root: &Path,
     pool_root: &Path,
@@ -60,14 +63,20 @@ pub(super) fn provision_missing_slots(
     mutation_lock: &PoolMutationLock,
 ) -> Result<usize, String> {
     mutation_lock.verify_pool_root(pool_root)?;
-    crate::git_execution_guard::ensure_host_git_execution_config_safe(Path::new(repo_root))
-        .map_err(|error| format!("pool provisioning blocked: {error:#}"))?;
-    let canonical_repo_root = std::fs::canonicalize(canonical_repo_root).map_err(|error| {
-        format!("canonical repository root could not be pinned before slot provisioning: {error}")
-    })?;
+    runtime
+        .ensure_git_execution_safe(Path::new(repo_root))
+        .map_err(|error| format!("pool provisioning blocked: {error}"))?;
+    let canonical_repo_root = runtime
+        .canonicalize_path(canonical_repo_root)
+        .map_err(|error| {
+            format!(
+                "canonical repository root could not be pinned before slot provisioning: {error}"
+            )
+        })?;
     let git_source_root = git_command_directory(&canonical_repo_root)?;
-    crate::git_execution_guard::ensure_host_git_execution_config_safe(Path::new(&git_source_root))
-        .map_err(|error| format!("pool provisioning blocked: {error:#}"))?;
+    runtime
+        .ensure_git_execution_safe(Path::new(&git_source_root))
+        .map_err(|error| format!("pool provisioning blocked: {error}"))?;
     /*
     git worktree inventory에는 없지만 slot path가 남아 있으면 그 경로의 소유권을 증명할 수 없다.
     lease 유무와 관계없이 보존하고 slot inspection이 split-brain 상태를 드러내게 둔다. 이전 실패의
@@ -83,7 +92,7 @@ pub(super) fn provision_missing_slots(
         let slot_path = pool_root.join(&slot_id);
         if worktree_records
             .iter()
-            .any(|record| worktree_paths_match(&record.path, &slot_path))
+            .any(|record| worktree_paths_match_with_runtime(runtime, &record.path, &slot_path))
         {
             /*
             worktree inventory에 있으면 이미 git이 관리하는 slot이다. stale/dirty detached 상태는
@@ -93,7 +102,7 @@ pub(super) fn provision_missing_slots(
             continue;
         }
         let replacement_artifacts =
-            normalization_replacement_artifacts_for_slot(pool_root, &slot_id)?;
+            normalization_replacement_artifacts_for_slot(runtime, pool_root, &slot_id)?;
         if !replacement_artifacts.is_empty() {
             return Err(format!(
                 "pool provisioning blocked: normalization recovery for slot `{slot_id}` is incomplete; preserved artifact(s): {}",
@@ -104,14 +113,14 @@ pub(super) fn provision_missing_slots(
                     .join(", ")
             ));
         }
-        if slot_path.symlink_metadata().is_ok() {
+        if runtime.path_exists_checked(&slot_path).unwrap_or(true) {
             continue;
         }
 
         let Some(slot_parent) = slot_path.parent() else {
             continue;
         };
-        ensure_directory_exists(slot_parent).map_err(|error| {
+        ensure_directory_exists(runtime, slot_parent).map_err(|error| {
             format!(
                 "slot `{slot_id}` parent directory could not be created at `{}`: {error}",
                 slot_parent.display()
@@ -121,15 +130,15 @@ pub(super) fn provision_missing_slots(
         // Git for Windows는 `\\?\` destination을 worktree path parser에서 거부할 수 있다.
         // 검증된 sibling-relative path를 쓰면 verbatim prefix 없이도 긴 absolute prefix를 피할 수 있다.
         mutation_lock.verify_pool_root(pool_root)?;
-        crate::git_execution_guard::ensure_host_git_execution_config_safe(Path::new(
-            &git_source_root,
-        ))
-        .map_err(|error| format!("pool provisioning blocked: {error:#}"))?;
+        runtime
+            .ensure_git_execution_safe(Path::new(&git_source_root))
+            .map_err(|error| format!("pool provisioning blocked: {error}"))?;
         let git_slot_path = git_worktree_destination(&canonical_repo_root, &slot_path)?;
         let git_slot_path = git_slot_path.to_str().ok_or_else(|| {
             format!("slot `{slot_id}` worktree destination is not valid Unicode for Git")
         })?;
         let report = run_git_sequence(
+            runtime,
             format!("provision parallel pool slot `{slot_id}`"),
             vec![GitCommandStep::new(
                 "create detached slot worktree",
@@ -217,6 +226,7 @@ reconcile이 pool 위생을 맞추면서도 실행 중인 병렬 작업을 방�
 pub(super) fn reset_reusable_detached_baseline_slots(
     context: ReusableDetachedBaselineResetContext<'_>,
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     mutation_lock: &PoolMutationLock,
 ) -> ReusableDetachedBaselineResetReport {
     /*
@@ -248,7 +258,7 @@ pub(super) fn reset_reusable_detached_baseline_slots(
         let Some(worktree_record) = context
             .worktree_records
             .iter()
-            .find(|record| worktree_paths_match(&record.path, &slot_path))
+            .find(|record| worktree_paths_match_with_runtime(runtime, &record.path, &slot_path))
         else {
             // inventory에 없는 slot은 provisioning/inspection 단계가 다루며, reset 대상이 아니다.
             continue;
@@ -263,6 +273,7 @@ pub(super) fn reset_reusable_detached_baseline_slots(
         }
         if worktree_record.head_sha != context.baseline_ref
             && !branch_is_integrated_into(
+                runtime,
                 context.repo_root,
                 &worktree_record.head_sha,
                 context.baseline_ref,
@@ -271,7 +282,7 @@ pub(super) fn reset_reusable_detached_baseline_slots(
             continue;
         }
         // head SHA와 worktree dirtiness를 함께 봐야 stale baseline과 dirty idle slot을 모두 잡을 수 있다.
-        let slot_status = inspect_slot_git_status(&slot_path);
+        let slot_status = inspect_slot_git_status_with_runtime(runtime, &slot_path);
         let recovery_artifact_exists = has_normalization_replacement_artifact_for_slot(
             context.normalization_recovery_artifacts,
             &slot_id,
@@ -279,7 +290,7 @@ pub(super) fn reset_reusable_detached_baseline_slots(
         let has_empty_index = slot_status.is_err()
             && context.normalization_recovery_is_unowned
             && !recovery_artifact_exists
-            && has_empty_linked_worktree_index(&slot_path);
+            && has_empty_linked_worktree_index(runtime, &slot_path);
         if worktree_record.head_sha == context.baseline_ref && !has_empty_index {
             continue;
         }
@@ -297,6 +308,7 @@ pub(super) fn reset_reusable_detached_baseline_slots(
                 )
             };
             let outcome = quarantine_empty_index_and_replace_slot(
+                runtime,
                 NormalizationRecoveryRequest {
                     repo_root: context.repo_root,
                     pool_root: context.pool_root,
@@ -320,6 +332,7 @@ pub(super) fn reset_reusable_detached_baseline_slots(
             && context.normalization_recovery_is_unowned
             && !recovery_artifact_exists
             && has_target_equivalent_lf_normalization_drift(
+                runtime,
                 &slot_path,
                 slot_status,
                 context.baseline_ref,
@@ -338,6 +351,7 @@ pub(super) fn reset_reusable_detached_baseline_slots(
                 )
             };
             let outcome = quarantine_normalization_drift_and_replace_slot(
+                runtime,
                 NormalizationRecoveryRequest {
                     repo_root: context.repo_root,
                     pool_root: context.pool_root,
@@ -352,7 +366,7 @@ pub(super) fn reset_reusable_detached_baseline_slots(
             (outcome.report, outcome.quarantine_path)
         } else {
             (
-                reset_slot_worktree_to_ref(&slot_path, context.baseline_ref),
+                reset_slot_worktree_to_ref(runtime, &slot_path, context.baseline_ref),
                 None,
             )
         };

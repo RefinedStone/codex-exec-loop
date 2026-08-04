@@ -76,7 +76,7 @@ pub(super) fn process_distributor_queue_record(
     integration_target_oid: &str,
     autonomous_delivery_allowed: &Result<bool, String>,
 ) -> Result<Vec<String>, String> {
-    if !Path::new(&record.worktree_path).exists() {
+    if !runtime.path_exists(Path::new(&record.worktree_path)) {
         // source worktree가 없으면 lease를 신뢰할 수 없어 delivery를 시작하지 않고 durable block으로 남긴다.
         return Ok(vec![block_distributor_queue_record(
             planning_authority,
@@ -90,7 +90,11 @@ pub(super) fn process_distributor_queue_record(
     }
 
     // delivery는 queue record의 worktree path를 runtime lease로 되검증해 stale queue item을 차단한다.
-    let resolution = match resolve_workspace_slot_lease(planning_authority, &record.worktree_path) {
+    let resolution = match resolve_workspace_slot_lease_with_runtime(
+        runtime,
+        planning_authority,
+        &record.worktree_path,
+    ) {
         Ok(Some(resolution)) => resolution,
         Ok(None) => {
             return Ok(vec![block_distributor_queue_record(
@@ -124,7 +128,9 @@ pub(super) fn process_distributor_queue_record(
             | ParallelModeQueueItemState::MergePending
             | ParallelModeQueueItemState::Integrating
     );
-    if delivery_window && let Err(detail) = validate_frozen_source_workspace(&resolution, record) {
+    if delivery_window
+        && let Err(detail) = validate_frozen_source_workspace(runtime, &resolution, record)
+    {
         return Ok(vec![block_distributor_queue_record(
             planning_authority,
             runtime,
@@ -138,6 +144,7 @@ pub(super) fn process_distributor_queue_record(
 
     claim_permit.renew("delivery target validation")?;
     if let Err(detail) = validate_distributor_delivery_target(
+        runtime,
         github_automation,
         &resolution.context.repo_root,
         record,
@@ -218,6 +225,7 @@ pub(super) fn process_distributor_queue_record(
 }
 
 fn validate_frozen_source_workspace(
+    runtime: &dyn ParallelModeRuntimePort,
     resolution: &WorkspaceSlotLeaseResolution,
     record: &ParallelModeDistributorQueueRecord,
 ) -> Result<(), String> {
@@ -239,12 +247,13 @@ fn validate_frozen_source_workspace(
         ));
     }
 
-    let slot_status = inspect_slot_git_status(&resolution.workspace_path).map_err(|error| {
-        format!(
-            "slot `{}` git status could not be inspected for distributor delivery: {error}",
-            lease.slot_id
-        )
-    })?;
+    let slot_status = inspect_slot_git_status_with_runtime(runtime, &resolution.workspace_path)
+        .map_err(|error| {
+            format!(
+                "slot `{}` git status could not be inspected for distributor delivery: {error}",
+                lease.slot_id
+            )
+        })?;
     if slot_status.has_pending_operation {
         return Err(format!(
             "slot `{}` has pending merge or rebase metadata and cannot be delivered",
@@ -257,19 +266,22 @@ fn validate_frozen_source_workspace(
             lease.slot_id
         ));
     }
-    if current_branch_name(&resolution.workspace_path).as_deref() != Some(source_branch.as_str()) {
+    if current_branch_name(runtime, &resolution.workspace_path).as_deref()
+        != Some(source_branch.as_str())
+    {
         return Err(format!(
             "slot `{}` is no longer checked out to frozen source branch `{source_branch}`",
             lease.slot_id
         ));
     }
 
-    let current_head = resolve_workspace_head_sha(&resolution.workspace_path).ok_or_else(|| {
-        format!(
-            "slot `{}` workspace head could not be resolved for distributor delivery",
-            lease.slot_id
-        )
-    })?;
+    let current_head = resolve_workspace_head_sha_with_runtime(runtime, &resolution.workspace_path)
+        .ok_or_else(|| {
+            format!(
+                "slot `{}` workspace head could not be resolved for distributor delivery",
+                lease.slot_id
+            )
+        })?;
     if current_head != source_commit_sha {
         return Err(format!(
             "branch head drifted from expected commit `{}` to `{}` before source delivery",
@@ -279,6 +291,7 @@ fn validate_frozen_source_workspace(
     }
 
     resolve_linear_distributor_source_range(
+        runtime,
         &resolution.context.repo_root,
         &record.source_base_commit_sha,
         &source_commit_sha,
@@ -325,6 +338,7 @@ fn block_if_delivery_target_changed(
         "delivery target verification before {side_effect}"
     ))?;
     let Err(detail) = validate_distributor_delivery_target(
+        runtime,
         github_automation,
         &resolution.context.repo_root,
         record,
@@ -369,12 +383,13 @@ fn distributor_integrate_branch(
     let source_base_commit_sha = record.source_base_commit_sha.clone();
     let source_commit_sha = record.effective_source_commit_sha();
     // slot git status는 cherry-pick 전에 pending merge/rebase metadata를 잡는 첫 guard이다.
-    let slot_status = inspect_slot_git_status(&resolution.workspace_path).map_err(|error| {
-        format!(
-            "slot `{}` git status could not be inspected for distributor delivery: {error}",
-            resolution.lease.slot_id
-        )
-    })?;
+    let slot_status = inspect_slot_git_status_with_runtime(runtime, &resolution.workspace_path)
+        .map_err(|error| {
+            format!(
+                "slot `{}` git status could not be inspected for distributor delivery: {error}",
+                resolution.lease.slot_id
+            )
+        })?;
     if slot_status.has_pending_operation {
         return block_distributor_queue_record(
             planning_authority,
@@ -404,7 +419,9 @@ fn distributor_integrate_branch(
         );
     }
 
-    if current_branch_name(&resolution.workspace_path).as_deref() != Some(source_branch.as_str()) {
+    if current_branch_name(runtime, &resolution.workspace_path).as_deref()
+        != Some(source_branch.as_str())
+    {
         // branch drift는 queue record가 가리키는 agent output과 실제 worktree가 달라졌다는 뜻이다.
         return block_distributor_queue_record(
             planning_authority,
@@ -421,12 +438,13 @@ fn distributor_integrate_branch(
     }
 
     // commit SHA까지 고정해 force-push나 추가 commit이 섞인 source branch를 자동 통합하지 않는다.
-    let current_head = resolve_workspace_head_sha(&resolution.workspace_path).ok_or_else(|| {
-        format!(
-            "slot `{}` workspace head could not be resolved for distributor delivery",
-            resolution.lease.slot_id
-        )
-    })?;
+    let current_head = resolve_workspace_head_sha_with_runtime(runtime, &resolution.workspace_path)
+        .ok_or_else(|| {
+            format!(
+                "slot `{}` workspace head could not be resolved for distributor delivery",
+                resolution.lease.slot_id
+            )
+        })?;
     if current_head != source_commit_sha {
         return block_distributor_queue_record(
             planning_authority,
@@ -494,6 +512,7 @@ fn distributor_integrate_branch(
     claim_permit.renew("dedicated integration worktree preparation")?;
     let integration_mutation_lock = match acquire_pool_mutation_lock(
         planning_authority,
+        runtime,
         &resolution.context.repo_root,
     ) {
         Ok(mutation_lock) => mutation_lock,
@@ -599,9 +618,7 @@ fn distributor_integrate_branch(
                 format!("cherry-pick lost its pool mutation permit: {error}"),
             );
         }
-        if let Err(error) = crate::git_execution_guard::ensure_host_git_execution_config_safe(
-            Path::new(&integration_repo_root),
-        ) {
+        if let Err(error) = runtime.ensure_git_execution_safe(Path::new(&integration_repo_root)) {
             return block_distributor_queue_record(
                 planning_authority,
                 runtime,
@@ -613,7 +630,8 @@ fn distributor_integrate_branch(
             );
         }
         let cherry_states =
-            match distributor_source_cherry_states(&integration_repo_root, "HEAD", record) {
+            match distributor_source_cherry_states(runtime, &integration_repo_root, "HEAD", record)
+            {
                 Ok(states) => states,
                 Err(detail) => {
                     return block_distributor_queue_record(
@@ -645,6 +663,7 @@ fn distributor_integrate_branch(
             ];
             cherry_pick_args.extend(pending_commits.iter().cloned());
             let cherry_pick = run_git_sequence(
+                runtime,
                 "cherry-pick frozen distributor source range",
                 vec![GitCommandStep::new(
                     "cherry-pick reviewed source commits",
@@ -653,7 +672,8 @@ fn distributor_integrate_branch(
             );
             if !cherry_pick.succeeded() {
                 // conflict file list는 dedicated worktree에 보존된 index에서 수집한다.
-                let conflict_files = collect_cherry_pick_conflict_files(&integration_repo_root);
+                let conflict_files =
+                    collect_cherry_pick_conflict_files(runtime, &integration_repo_root);
                 record.conflict_files = conflict_files.clone();
                 record.recovery_note = Some(
                     "inspect the dedicated integration worktree and resolve or abort the conflict manually before retry"
@@ -683,7 +703,7 @@ fn distributor_integrate_branch(
             );
         }
         let Some(integration_commit_sha) =
-            resolve_workspace_head_sha(Path::new(&integration_repo_root))
+            resolve_workspace_head_sha_with_runtime(runtime, Path::new(&integration_repo_root))
         else {
             return block_distributor_queue_record(
                 planning_authority,
@@ -830,7 +850,7 @@ fn distributor_integrate_branch(
         claim_permit.renew("failed integration push recovery fetch")?;
         let remote_equivalent =
             fetch_integration_remote_branch(&repo_root, &target, github_automation)
-                && distributor_source_cherry_states(&repo_root, &remote_ref, record)
+                && distributor_source_cherry_states(runtime, &repo_root, &remote_ref, record)
                     .is_ok_and(|states| states.iter().all(|(_, equivalent)| *equivalent));
         let recovery_detail = if remote_equivalent {
             " remote now contains an equivalent patch, but local integration history was preserved; reconcile the branch manually"
@@ -865,7 +885,7 @@ fn distributor_integrate_branch(
             ),
         );
     }
-    let pushed_head = resolve_workspace_head_sha(Path::new(&repo_root));
+    let pushed_head = resolve_workspace_head_sha_with_runtime(runtime, Path::new(&repo_root));
     claim_permit.renew("integration target head verification")?;
     let verified_remote_head = github_automation.remote_branch_head_for_delivery_target(
         &repo_root,
@@ -1114,9 +1134,12 @@ fn distributor_cleanup_integrated_slot(
     }
     run_before_distributor_cleanup_lock_hook();
     let mutation_lock =
-        acquire_pool_mutation_lock(planning_authority, &resolution.context.repo_root)?;
-    let Some(locked_resolution) =
-        resolve_workspace_slot_lease(planning_authority, &resolution.lease.worktree_path)?
+        acquire_pool_mutation_lock(planning_authority, runtime, &resolution.context.repo_root)?;
+    let Some(locked_resolution) = resolve_workspace_slot_lease_with_runtime(
+        runtime,
+        planning_authority,
+        &resolution.lease.worktree_path,
+    )?
     else {
         return block_distributor_queue_record(
             planning_authority,

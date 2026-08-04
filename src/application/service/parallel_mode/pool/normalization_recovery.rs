@@ -1,18 +1,20 @@
 use std::ffi::OsString;
-use std::fs::{File, OpenOptions};
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Output;
 
-use rand::RngCore;
+use crate::application::port::outbound::parallel_mode_runtime_port::{
+    ParallelCommandOutput, ParallelModeRuntimePort,
+};
 
 use super::super::git_sequence::{
     GitCommandSequenceReport, GitCommandStep, GitCommandStepReport, run_git_sequence,
 };
-use super::paths::{git_dir_has_pending_operation, resolve_git_dir};
+use super::paths::{git_dir_has_pending_operation_with_runtime, resolve_git_dir_with_runtime};
+#[cfg(test)]
+use super::worktree_paths_match;
 use super::{
     PoolMutationLock, SlotGitStatus, git_command_directory, git_worktree_destination,
-    inspect_slot_git_status, parse_worktree_records, worktree_paths_match,
+    inspect_slot_git_status_with_runtime, parse_worktree_records,
+    worktree_paths_match_with_runtime,
 };
 
 const MAX_NORMALIZATION_PATHS: usize = 64;
@@ -69,23 +71,24 @@ mode must already equal the frozen target tree. `hash-object --no-filters --stdi
 identities without invoking a repository filter between proof steps.
 */
 pub(super) fn has_target_equivalent_lf_normalization_drift(
+    runtime: &dyn ParallelModeRuntimePort,
     slot_path: &Path,
     slot_status: SlotGitStatus,
     target_ref: &str,
 ) -> bool {
     if !slot_status.has_only_unstaged_changes()
         || target_ref.trim().is_empty()
-        || crate::git_execution_guard::ensure_host_git_execution_config_safe(slot_path).is_err()
-        || !index_has_only_normal_entries(slot_path)
-        || index_has_unmerged_entries(slot_path)
+        || runtime.ensure_git_execution_safe(slot_path).is_err()
+        || !index_has_only_normal_entries(runtime, slot_path)
+        || index_has_unmerged_entries(runtime, slot_path)
     {
         return false;
     }
 
-    let Some(target_oid) = resolve_target_oid(slot_path, target_ref) else {
+    let Some(target_oid) = resolve_target_oid(runtime, slot_path, target_ref) else {
         return false;
     };
-    let Some(path_proofs) = load_normalization_path_proofs(slot_path) else {
+    let Some(path_proofs) = load_normalization_path_proofs(runtime, slot_path) else {
         return false;
     };
     if path_proofs.is_empty() || path_proofs.len() > MAX_NORMALIZATION_PATHS {
@@ -93,25 +96,30 @@ pub(super) fn has_target_equivalent_lf_normalization_drift(
     }
 
     path_proofs.iter().all(|proof| {
-        path_bytes_match_index_and_target(slot_path, &target_oid, proof)
-            && path_has_safe_lf_attributes(slot_path, &proof.path, false)
-            && path_has_safe_lf_attributes(slot_path, &proof.path, true)
-    }) && differs_only_by_cr_at_eol(slot_path)
+        path_bytes_match_index_and_target(runtime, slot_path, &target_oid, proof)
+            && path_has_safe_lf_attributes(runtime, slot_path, &proof.path, false)
+            && path_has_safe_lf_attributes(runtime, slot_path, &proof.path, true)
+    }) && differs_only_by_cr_at_eol(runtime, slot_path)
 }
 
-pub(super) fn has_empty_linked_worktree_index(slot_path: &Path) -> bool {
+pub(super) fn has_empty_linked_worktree_index(
+    runtime: &dyn ParallelModeRuntimePort,
+    slot_path: &Path,
+) -> bool {
     // A zero-byte index is the narrow interrupted-write signature observed on WSL. Keep every
     // other status failure blocked, including active Git locks and non-empty malformed indexes.
-    if crate::git_execution_guard::ensure_host_git_execution_config_safe(slot_path).is_err() {
+    if runtime.ensure_git_execution_safe(slot_path).is_err() {
         return false;
     }
-    let Some(git_dir) = resolve_git_dir(slot_path) else {
+    let Some(git_dir) = resolve_git_dir_with_runtime(runtime, slot_path) else {
         return false;
     };
-    if git_dir_has_pending_operation(&git_dir) {
+    if git_dir_has_pending_operation_with_runtime(runtime, &git_dir) {
         return false;
     }
-    read_bounded_unshared_regular_file(&git_dir.join("index")).is_some_and(|bytes| bytes.is_empty())
+    runtime
+        .read_bounded_unshared_regular_file(&git_dir.join("index"), MAX_NORMALIZATION_FILE_BYTES)
+        .is_some_and(|bytes| bytes.is_empty())
 }
 
 /*
@@ -123,11 +131,13 @@ writer using an old file descriptor follows the legacy inode into quarantine, wh
 writer that recreates the brief canonical gap makes the final move fail without overwriting bytes.
 */
 pub(super) fn quarantine_normalization_drift_and_replace_slot(
+    runtime: &dyn ParallelModeRuntimePort,
     request: NormalizationRecoveryRequest<'_>,
     mutation_lock: &PoolMutationLock,
     recheck_unowned_authority: &dyn Fn() -> Result<(), String>,
 ) -> NormalizationRecoveryOutcome {
     quarantine_slot_and_replace(
+        runtime,
         request,
         mutation_lock,
         recheck_unowned_authority,
@@ -136,11 +146,13 @@ pub(super) fn quarantine_normalization_drift_and_replace_slot(
 }
 
 pub(super) fn quarantine_empty_index_and_replace_slot(
+    runtime: &dyn ParallelModeRuntimePort,
     request: NormalizationRecoveryRequest<'_>,
     mutation_lock: &PoolMutationLock,
     recheck_unowned_authority: &dyn Fn() -> Result<(), String>,
 ) -> NormalizationRecoveryOutcome {
     quarantine_slot_and_replace(
+        runtime,
         request,
         mutation_lock,
         recheck_unowned_authority,
@@ -149,23 +161,31 @@ pub(super) fn quarantine_empty_index_and_replace_slot(
 }
 
 fn quarantine_slot_and_replace(
+    runtime: &dyn ParallelModeRuntimePort,
     request: NormalizationRecoveryRequest<'_>,
     mutation_lock: &PoolMutationLock,
     recheck_unowned_authority: &dyn Fn() -> Result<(), String>,
     source_status_proof: LegacySlotStatusProof,
 ) -> NormalizationRecoveryOutcome {
-    let quarantine_path =
-        new_normalization_quarantine_path(request.pool_root, request.slot_id, request.source_oid);
+    let quarantine_path = new_normalization_quarantine_path(
+        runtime,
+        request.pool_root,
+        request.slot_id,
+        request.source_oid,
+    );
     let result = (|| {
         mutation_lock.verify_pool_root(request.pool_root)?;
         let canonical_slot_path = request.pool_root.join(request.slot_id);
-        if !worktree_paths_match(request.slot_path, &canonical_slot_path) {
+        if !worktree_paths_match_with_runtime(runtime, request.slot_path, &canonical_slot_path) {
             return Err(
                 "normalization recovery slot path is outside its canonical lane".to_string(),
             );
         }
-        let incomplete_replacements =
-            normalization_replacement_artifacts_for_slot(request.pool_root, request.slot_id)?;
+        let incomplete_replacements = normalization_replacement_artifacts_for_slot(
+            runtime,
+            request.pool_root,
+            request.slot_id,
+        )?;
         if !incomplete_replacements.is_empty() {
             return Err(format!(
                 "normalization recovery for slot `{}` is already incomplete; preserved replacement artifact(s): {}",
@@ -177,23 +197,29 @@ fn quarantine_slot_and_replace(
                     .join(", ")
             ));
         }
-        let target_oid = resolve_target_oid(request.slot_path, request.target_ref)
+        let target_oid = resolve_target_oid(runtime, request.slot_path, request.target_ref)
             .ok_or_else(|| "normalization recovery target OID could not be resolved".to_string())?;
         let quarantine_path = quarantine_path.as_ref().map_err(Clone::clone)?;
-        let replacement_path =
-            new_normalization_replacement_path(request.pool_root, request.slot_id, &target_oid)?;
-        ensure_path_absent(quarantine_path, "quarantine")?;
-        ensure_path_absent(&replacement_path, "replacement staging")?;
-        let canonical_repo_root = std::fs::canonicalize(request.repo_root).map_err(|error| {
-            format!("normalization recovery repository root could not be pinned: {error}")
-        })?;
+        let replacement_path = new_normalization_replacement_path(
+            runtime,
+            request.pool_root,
+            request.slot_id,
+            &target_oid,
+        )?;
+        ensure_path_absent(runtime, quarantine_path, "quarantine")?;
+        ensure_path_absent(runtime, &replacement_path, "replacement staging")?;
+        let canonical_repo_root = runtime
+            .canonicalize_path(Path::new(request.repo_root))
+            .map_err(|error| {
+                format!("normalization recovery repository root could not be pinned: {error}")
+            })?;
         let git_repo_root = git_command_directory(&canonical_repo_root)?;
-        crate::git_execution_guard::ensure_host_git_execution_config_safe(Path::new(
-            request.repo_root,
-        ))
-        .map_err(|error| format!("normalization recovery Git execution is unsafe: {error}"))?;
+        runtime
+            .ensure_git_execution_safe(Path::new(request.repo_root))
+            .map_err(|error| format!("normalization recovery Git execution is unsafe: {error}"))?;
         recheck_unowned_authority()?;
         verify_registered_detached_worktree(
+            runtime,
             &git_repo_root,
             request.slot_path,
             request.source_oid,
@@ -205,11 +231,12 @@ fn quarantine_slot_and_replace(
         let git_slot_path = git_worktree_path(&canonical_repo_root, request.slot_path)?;
         let git_quarantine_path = git_worktree_path(&canonical_repo_root, quarantine_path)?;
         let git_replacement_path = git_worktree_path(&canonical_repo_root, &replacement_path)?;
-        let staging_directory = create_private_staging_directory(&replacement_path)?;
+        let staging_directory = runtime.create_private_staging_directory(&replacement_path)?;
         mutation_lock.verify_pool_root(request.pool_root)?;
         run_before_normalization_staging_provision_hook(request.slot_path, &replacement_path);
         staging_directory.verify()?;
         let mut report = run_git_sequence(
+            runtime,
             "quarantine target-equivalent LF normalization drift",
             vec![GitCommandStep::new(
                 "provision clean replacement in normalization staging",
@@ -236,6 +263,7 @@ fn quarantine_slot_and_replace(
             return Ok(report);
         }
         if let Err(detail) = verify_registered_detached_worktree(
+            runtime,
             &git_repo_root,
             &replacement_path,
             &target_oid,
@@ -254,8 +282,9 @@ fn quarantine_slot_and_replace(
         let pre_move_validation = (|| {
             mutation_lock.verify_pool_root(request.pool_root)?;
             recheck_unowned_authority()?;
-            ensure_path_absent(quarantine_path, "quarantine")?;
+            ensure_path_absent(runtime, quarantine_path, "quarantine")?;
             verify_registered_detached_worktree(
+                runtime,
                 &git_repo_root,
                 request.slot_path,
                 request.source_oid,
@@ -264,6 +293,7 @@ fn quarantine_slot_and_replace(
             )?;
             staging_directory.verify()?;
             verify_registered_detached_worktree(
+                runtime,
                 &git_repo_root,
                 &replacement_path,
                 &target_oid,
@@ -282,6 +312,7 @@ fn quarantine_slot_and_replace(
 
         run_before_normalization_atomic_rename_hook(quarantine_path);
         if !append_atomic_rename_step(
+            runtime,
             &mut report,
             "atomically move legacy slot to normalization recovery quarantine",
             request.slot_path,
@@ -298,6 +329,7 @@ fn quarantine_slot_and_replace(
             return Ok(report);
         }
         let repair_quarantine_report = run_git_sequence(
+            runtime,
             "quarantine target-equivalent LF normalization drift",
             vec![GitCommandStep::new(
                 "repair quarantined worktree registration",
@@ -319,8 +351,9 @@ fn quarantine_slot_and_replace(
         let pre_install_validation = (|| {
             mutation_lock.verify_pool_root(request.pool_root)?;
             recheck_unowned_authority()?;
-            ensure_path_absent(request.slot_path, "canonical slot")?;
+            ensure_path_absent(runtime, request.slot_path, "canonical slot")?;
             verify_registered_detached_worktree(
+                runtime,
                 &git_repo_root,
                 quarantine_path,
                 request.source_oid,
@@ -329,6 +362,7 @@ fn quarantine_slot_and_replace(
             )?;
             staging_directory.verify()?;
             verify_registered_detached_worktree(
+                runtime,
                 &git_repo_root,
                 &replacement_path,
                 &target_oid,
@@ -350,6 +384,7 @@ fn quarantine_slot_and_replace(
         drop(staging_directory);
         run_before_normalization_atomic_rename_hook(request.slot_path);
         if !append_atomic_rename_step(
+            runtime,
             &mut report,
             "atomically move staged replacement into the canonical pool slot",
             &replacement_path,
@@ -366,6 +401,7 @@ fn quarantine_slot_and_replace(
             return Ok(report);
         }
         let repair_replacement_report = run_git_sequence(
+            runtime,
             "quarantine target-equivalent LF normalization drift",
             vec![GitCommandStep::new(
                 "repair canonical replacement worktree registration",
@@ -388,6 +424,7 @@ fn quarantine_slot_and_replace(
                 .verify_pool_root(request.pool_root)
                 .and_then(|()| {
                     verify_completed_recovery(
+                        runtime,
                         &git_repo_root,
                         request.slot_path,
                         quarantine_path,
@@ -436,15 +473,16 @@ pub(in crate::application::service::parallel_mode) fn normalization_quarantine_p
 }
 
 fn new_normalization_quarantine_path(
+    runtime: &dyn ParallelModeRuntimePort,
     pool_root: &Path,
     slot_id: &str,
     source_oid: &str,
 ) -> Result<PathBuf, String> {
     let base_path = normalization_quarantine_path(pool_root, slot_id, source_oid)
         .ok_or_else(|| "normalization recovery source identity is invalid".to_string())?;
-    match base_path.symlink_metadata() {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(base_path),
-        Ok(_) => Ok(base_path.with_file_name(format!(
+    match runtime.path_exists_checked(&base_path) {
+        Ok(false) => Ok(base_path),
+        Ok(true) => Ok(base_path.with_file_name(format!(
             "{}-{}",
             base_path
                 .file_name()
@@ -452,7 +490,7 @@ fn new_normalization_quarantine_path(
                 .ok_or_else(|| {
                     "normalization recovery quarantine name is not valid Unicode".to_string()
                 })?,
-            random_normalization_nonce()?
+            random_normalization_nonce(runtime)?
         ))),
         Err(error) => Err(format!(
             "normalization quarantine path could not be inspected at `{}`: {error}",
@@ -462,6 +500,7 @@ fn new_normalization_quarantine_path(
 }
 
 fn new_normalization_replacement_path(
+    runtime: &dyn ParallelModeRuntimePort,
     pool_root: &Path,
     slot_id: &str,
     target_oid: &str,
@@ -475,25 +514,26 @@ fn new_normalization_replacement_path(
     {
         return Err("normalization recovery target identity is invalid".to_string());
     }
-    let nonce = random_normalization_nonce()?;
+    let nonce = random_normalization_nonce(runtime)?;
     Ok(pool_root.join(format!(
         "{NORMALIZATION_REPLACEMENT_PREFIX}{slot_id}-{}-{nonce}",
         target_oid.to_ascii_lowercase()
     )))
 }
 
-fn random_normalization_nonce() -> Result<String, String> {
+fn random_normalization_nonce(runtime: &dyn ParallelModeRuntimePort) -> Result<String, String> {
     let mut nonce = [0_u8; 16];
-    rand::rngs::OsRng
-        .try_fill_bytes(&mut nonce)
+    runtime
+        .fill_secure_random(&mut nonce)
         .map_err(|error| format!("normalization recovery requires OS randomness: {error}"))?;
     Ok(nonce.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 pub(super) fn normalization_recovery_artifact_paths(
+    runtime: &dyn ParallelModeRuntimePort,
     pool_root: &Path,
 ) -> Result<Vec<PathBuf>, String> {
-    let entries = match std::fs::read_dir(pool_root) {
+    let entries = match runtime.read_directory_paths(pool_root) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => {
@@ -504,18 +544,15 @@ pub(super) fn normalization_recovery_artifact_paths(
         }
     };
     let mut artifacts = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|error| {
-            format!(
-                "normalization recovery pool entry could not be inspected under `{}`: {error}",
-                pool_root.display()
-            )
-        })?;
-        let path = entry.path();
-        if entry.file_name().to_str().is_some_and(|name| {
-            normalization_quarantine_slot_id(name).is_some()
-                || normalization_replacement_slot_id(name).is_some()
-        }) {
+    for path in entries {
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| {
+                normalization_quarantine_slot_id(name).is_some()
+                    || normalization_replacement_slot_id(name).is_some()
+            })
+        {
             artifacts.push(path);
         }
     }
@@ -559,10 +596,11 @@ fn is_hex_identifier(value: &str, allowed_lengths: &[usize]) -> bool {
 }
 
 pub(super) fn normalization_replacement_artifacts_for_slot(
+    runtime: &dyn ParallelModeRuntimePort,
     pool_root: &Path,
     slot_id: &str,
 ) -> Result<Vec<PathBuf>, String> {
-    normalization_recovery_artifact_paths(pool_root).map(|artifacts| {
+    normalization_recovery_artifact_paths(runtime, pool_root).map(|artifacts| {
         artifacts
             .into_iter()
             .filter(|path| {
@@ -587,10 +625,14 @@ pub(super) fn has_normalization_replacement_artifact_for_slot(
     })
 }
 
-fn ensure_path_absent(path: &Path, label: &str) -> Result<(), String> {
-    match path.symlink_metadata() {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Ok(_) => Err(format!(
+fn ensure_path_absent(
+    runtime: &dyn ParallelModeRuntimePort,
+    path: &Path,
+    label: &str,
+) -> Result<(), String> {
+    match runtime.path_exists_checked(path) {
+        Ok(false) => Ok(()),
+        Ok(true) => Err(format!(
             "normalization {label} path already exists at `{}`",
             path.display()
         )),
@@ -599,148 +641,6 @@ fn ensure_path_absent(path: &Path, label: &str) -> Result<(), String> {
             path.display()
         )),
     }
-}
-
-struct PinnedStagingDirectory {
-    path: PathBuf,
-    opened: File,
-}
-
-impl PinnedStagingDirectory {
-    fn verify(&self) -> Result<(), String> {
-        verify_pinned_staging_directory(&self.path, &self.opened)
-    }
-}
-
-fn create_private_staging_directory(path: &Path) -> Result<PinnedStagingDirectory, String> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        let mut builder = std::fs::DirBuilder::new();
-        builder.mode(0o700);
-        builder.create(path).map_err(|error| {
-            format!(
-                "normalization replacement staging could not be claimed at `{}`: {error}",
-                path.display()
-            )
-        })?;
-    }
-    #[cfg(not(unix))]
-    std::fs::create_dir(path).map_err(|error| {
-        format!(
-            "normalization replacement staging could not be claimed at `{}`: {error}",
-            path.display()
-        )
-    })?;
-    let opened = open_pinned_staging_directory(path)?;
-    let staging = PinnedStagingDirectory {
-        path: path.to_path_buf(),
-        opened,
-    };
-    staging.verify()?;
-    Ok(staging)
-}
-
-#[cfg(unix)]
-fn open_pinned_staging_directory(path: &Path) -> Result<File, String> {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW)
-        .open(path)
-        .map_err(|error| {
-            format!(
-                "normalization replacement staging could not be pinned at `{}`: {error}",
-                path.display()
-            )
-        })
-}
-
-#[cfg(windows)]
-fn open_pinned_staging_directory(path: &Path) -> Result<File, String> {
-    use std::os::windows::fs::OpenOptionsExt;
-
-    use crate::private_fs::{
-        WINDOWS_FILE_FLAG_BACKUP_SEMANTICS, WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT,
-        WINDOWS_GENERIC_READ, WINDOWS_READ_CONTROL,
-    };
-
-    const FILE_SHARE_READ_WRITE: u32 = 0x0000_0001 | 0x0000_0002;
-    OpenOptions::new()
-        .read(true)
-        .access_mode(WINDOWS_GENERIC_READ | WINDOWS_READ_CONTROL)
-        // Deliberately omit FILE_SHARE_DELETE so the staging identity cannot be renamed or
-        // replaced while Git is populating it.
-        .share_mode(FILE_SHARE_READ_WRITE)
-        .custom_flags(WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT | WINDOWS_FILE_FLAG_BACKUP_SEMANTICS)
-        .open(path)
-        .map_err(|error| {
-            format!(
-                "normalization replacement staging could not be pinned at `{}`: {error}",
-                path.display()
-            )
-        })
-}
-
-#[cfg(not(any(unix, windows)))]
-fn open_pinned_staging_directory(path: &Path) -> Result<File, String> {
-    Err(format!(
-        "normalization replacement staging identity pinning is unsupported at `{}`",
-        path.display()
-    ))
-}
-
-#[cfg(unix)]
-fn verify_pinned_staging_directory(path: &Path, opened: &File) -> Result<(), String> {
-    use std::os::unix::fs::MetadataExt;
-
-    let opened_metadata = opened.metadata().map_err(|error| {
-        format!(
-            "normalization replacement staging handle could not be inspected at `{}`: {error}",
-            path.display()
-        )
-    })?;
-    let path_metadata = path.symlink_metadata().map_err(|error| {
-        format!(
-            "normalization replacement staging path could not be reinspected at `{}`: {error}",
-            path.display()
-        )
-    })?;
-    if !opened_metadata.is_dir()
-        || !path_metadata.is_dir()
-        || path_metadata.file_type().is_symlink()
-        || opened_metadata.dev() != path_metadata.dev()
-        || opened_metadata.ino() != path_metadata.ino()
-        || opened_metadata.uid() != unsafe { libc::geteuid() }
-        || path_metadata.uid() != opened_metadata.uid()
-        || opened_metadata.mode() & 0o077 != 0
-        || path_metadata.mode() & 0o077 != 0
-    {
-        return Err(format!(
-            "normalization replacement staging identity changed or is not private at `{}`",
-            path.display()
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(windows)]
-fn verify_pinned_staging_directory(path: &Path, opened: &File) -> Result<(), String> {
-    crate::private_fs::validate_windows_path_identity_only(path, opened, true).map_err(|error| {
-        format!(
-            "normalization replacement staging identity changed at `{}`: {error}",
-            path.display()
-        )
-    })
-}
-
-#[cfg(not(any(unix, windows)))]
-fn verify_pinned_staging_directory(path: &Path, _opened: &File) -> Result<(), String> {
-    Err(format!(
-        "normalization replacement staging identity verification is unsupported at `{}`",
-        path.display()
-    ))
 }
 
 fn git_worktree_path(canonical_repo_root: &Path, worktree_path: &Path) -> Result<String, String> {
@@ -756,12 +656,13 @@ fn git_worktree_path(canonical_repo_root: &Path, worktree_path: &Path) -> Result
 }
 
 fn append_atomic_rename_step(
+    runtime: &dyn ParallelModeRuntimePort,
     report: &mut GitCommandSequenceReport,
     label: &str,
     source: &Path,
     destination: &Path,
 ) -> bool {
-    let result = atomic_rename_noreplace(source, destination);
+    let result = runtime.atomic_rename_noreplace(source, destination);
     report.steps.push(GitCommandStepReport {
         label: label.to_string(),
         args: vec![
@@ -781,132 +682,23 @@ fn append_atomic_rename_step(
     report.succeeded()
 }
 
-#[cfg(target_vendor = "apple")]
-fn atomic_rename_noreplace(source: &Path, destination: &Path) -> std::io::Result<()> {
-    use std::ffi::CString;
-    use std::os::unix::ffi::OsStrExt;
-
-    let source = CString::new(source.as_os_str().as_bytes())
-        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
-    let destination = CString::new(destination.as_os_str().as_bytes())
-        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
-    // SAFETY: both C strings are NUL-terminated owned buffers valid for this syscall.
-    let result =
-        unsafe { libc::renamex_np(source.as_ptr(), destination.as_ptr(), libc::RENAME_EXCL) };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
-    }
-}
-
-#[cfg(any(all(target_os = "linux", target_env = "gnu"), target_os = "android"))]
-fn atomic_rename_noreplace(source: &Path, destination: &Path) -> std::io::Result<()> {
-    use std::ffi::CString;
-    use std::os::unix::ffi::OsStrExt;
-
-    let source = CString::new(source.as_os_str().as_bytes())
-        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
-    let destination = CString::new(destination.as_os_str().as_bytes())
-        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
-    // SAFETY: both C strings are NUL-terminated owned buffers valid for this syscall.
-    let result = unsafe {
-        libc::renameat2(
-            libc::AT_FDCWD,
-            source.as_ptr(),
-            libc::AT_FDCWD,
-            destination.as_ptr(),
-            libc::RENAME_NOREPLACE,
-        )
-    };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
-    }
-}
-
-#[cfg(all(target_os = "linux", not(target_env = "gnu")))]
-fn atomic_rename_noreplace(source: &Path, destination: &Path) -> std::io::Result<()> {
-    use std::ffi::CString;
-    use std::os::unix::ffi::OsStrExt;
-
-    let source = CString::new(source.as_os_str().as_bytes())
-        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
-    let destination = CString::new(destination.as_os_str().as_bytes())
-        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
-    // SAFETY: both C strings are NUL-terminated owned buffers valid for this syscall.
-    let result = unsafe {
-        libc::syscall(
-            libc::SYS_renameat2,
-            libc::AT_FDCWD,
-            source.as_ptr(),
-            libc::AT_FDCWD,
-            destination.as_ptr(),
-            libc::RENAME_NOREPLACE,
-        )
-    };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
-    }
-}
-
-#[cfg(windows)]
-fn atomic_rename_noreplace(source: &Path, destination: &Path) -> std::io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-
-    use windows_sys::Win32::Storage::FileSystem::MoveFileW;
-
-    let source = source
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
-    let destination = destination
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
-    // SAFETY: both vectors are NUL-terminated and remain alive through the call. MoveFileW
-    // fails when the destination already exists, unlike Rust's replacement-capable rename.
-    if unsafe { MoveFileW(source.as_ptr(), destination.as_ptr()) } != 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
-    }
-}
-
-#[cfg(not(any(
-    target_vendor = "apple",
-    target_os = "linux",
-    target_os = "android",
-    windows
-)))]
-fn atomic_rename_noreplace(_source: &Path, _destination: &Path) -> std::io::Result<()> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "atomic no-replace worktree moves are unsupported on this platform",
-    ))
-}
-
 fn verify_registered_detached_worktree(
+    runtime: &dyn ParallelModeRuntimePort,
     repo_root: &str,
     worktree_path: &Path,
     expected_oid: &str,
     require_clean: bool,
     status_proof: LegacySlotStatusProof,
 ) -> Result<(), String> {
-    if !worktree_paths_match(worktree_path, worktree_path) {
+    if !worktree_paths_match_with_runtime(runtime, worktree_path, worktree_path) {
         return Err(format!(
             "normalization recovery worktree path is missing or link-aliased at `{}`",
             worktree_path.display()
         ));
     }
-    let records = load_worktree_inventory(repo_root)?;
+    let records = load_worktree_inventory(runtime, repo_root)?;
     if !records.iter().any(|record| {
-        worktree_paths_match(&record.path, worktree_path)
+        worktree_paths_match_with_runtime(runtime, &record.path, worktree_path)
             && record.detached
             && record.head_sha.eq_ignore_ascii_case(expected_oid)
     }) {
@@ -916,7 +708,7 @@ fn verify_registered_detached_worktree(
         ));
     }
     if status_proof == LegacySlotStatusProof::EmptyIndex {
-        return has_empty_linked_worktree_index(worktree_path)
+        return has_empty_linked_worktree_index(runtime, worktree_path)
             .then_some(())
             .ok_or_else(|| {
                 format!(
@@ -925,7 +717,7 @@ fn verify_registered_detached_worktree(
                 )
             });
     }
-    let status = inspect_slot_git_status(worktree_path).map_err(|error| {
+    let status = inspect_slot_git_status_with_runtime(runtime, worktree_path).map_err(|error| {
         format!(
             "normalization recovery status could not be inspected at `{}`: {error}",
             worktree_path.display()
@@ -946,14 +738,17 @@ fn verify_registered_detached_worktree(
     Ok(())
 }
 
-fn load_worktree_inventory(repo_root: &str) -> Result<Vec<super::GitWorktreeRecord>, String> {
+fn load_worktree_inventory(
+    runtime: &dyn ParallelModeRuntimePort,
+    repo_root: &str,
+) -> Result<Vec<super::GitWorktreeRecord>, String> {
     let output = run_git(
+        runtime,
         Path::new(repo_root),
         ["worktree", "list", "--porcelain"],
-        "inspect normalization recovery worktree inventory",
     )
     .ok_or_else(|| "normalization recovery worktree inventory command failed".to_string())?;
-    if !output.status.success() {
+    if !output.succeeded() {
         return Err("normalization recovery worktree inventory could not be read".to_string());
     }
     let output = std::str::from_utf8(&output.stdout)
@@ -961,7 +756,9 @@ fn load_worktree_inventory(repo_root: &str) -> Result<Vec<super::GitWorktreeReco
     Ok(parse_worktree_records(output))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn verify_completed_recovery(
+    runtime: &dyn ParallelModeRuntimePort,
     repo_root: &str,
     slot_path: &Path,
     quarantine_path: &Path,
@@ -971,6 +768,7 @@ fn verify_completed_recovery(
     source_status_proof: LegacySlotStatusProof,
 ) -> Result<(), String> {
     verify_registered_detached_worktree(
+        runtime,
         repo_root,
         quarantine_path,
         source_oid,
@@ -978,14 +776,15 @@ fn verify_completed_recovery(
         source_status_proof,
     )?;
     verify_registered_detached_worktree(
+        runtime,
         repo_root,
         slot_path,
         target_oid,
         true,
         LegacySlotStatusProof::Readable,
     )?;
-    ensure_path_absent(replacement_path, "replacement staging")?;
-    let records = load_worktree_inventory(repo_root)?;
+    ensure_path_absent(runtime, replacement_path, "replacement staging")?;
+    let records = load_worktree_inventory(runtime, repo_root)?;
     if records.iter().any(|record| record.path == replacement_path) {
         return Err(format!(
             "normalization replacement staging remains registered at `{}`",
@@ -1018,25 +817,25 @@ fn normalization_recovery_preflight_failure(detail: String) -> GitCommandSequenc
     }
 }
 
-fn resolve_target_oid(slot_path: &Path, target_ref: &str) -> Option<String> {
+fn resolve_target_oid(
+    runtime: &dyn ParallelModeRuntimePort,
+    slot_path: &Path,
+    target_ref: &str,
+) -> Option<String> {
     let commit_ref = format!("{target_ref}^{{commit}}");
     let output = run_git(
+        runtime,
         slot_path,
         ["rev-parse", "--verify", commit_ref.as_str()],
-        "resolve normalization recovery target",
     )?;
     successful_ascii_stdout(output)
 }
 
-fn index_has_only_normal_entries(slot_path: &Path) -> bool {
-    let Some(output) = run_git(
-        slot_path,
-        ["ls-files", "-v", "-z", "--"],
-        "inspect normalization recovery index flags",
-    ) else {
+fn index_has_only_normal_entries(runtime: &dyn ParallelModeRuntimePort, slot_path: &Path) -> bool {
+    let Some(output) = run_git(runtime, slot_path, ["ls-files", "-v", "-z", "--"]) else {
         return false;
     };
-    output.status.success()
+    output.succeeded()
         && output
             .stdout
             .split(|byte| *byte == 0)
@@ -1044,17 +843,17 @@ fn index_has_only_normal_entries(slot_path: &Path) -> bool {
             .all(|record| record.starts_with(b"H "))
 }
 
-fn index_has_unmerged_entries(slot_path: &Path) -> bool {
-    run_git(
-        slot_path,
-        ["ls-files", "--unmerged", "-z", "--"],
-        "inspect normalization recovery unmerged index",
-    )
-    .is_none_or(|output| !output.status.success() || !output.stdout.is_empty())
+fn index_has_unmerged_entries(runtime: &dyn ParallelModeRuntimePort, slot_path: &Path) -> bool {
+    run_git(runtime, slot_path, ["ls-files", "--unmerged", "-z", "--"])
+        .is_none_or(|output| !output.succeeded() || !output.stdout.is_empty())
 }
 
-fn load_normalization_path_proofs(slot_path: &Path) -> Option<Vec<NormalizationPathProof>> {
+fn load_normalization_path_proofs(
+    runtime: &dyn ParallelModeRuntimePort,
+    slot_path: &Path,
+) -> Option<Vec<NormalizationPathProof>> {
     let output = run_git(
+        runtime,
         slot_path,
         [
             "status",
@@ -1064,9 +863,8 @@ fn load_normalization_path_proofs(slot_path: &Path) -> Option<Vec<NormalizationP
             "--ignored=matching",
             "--ignore-submodules=none",
         ],
-        "inspect normalization recovery status",
     )?;
-    if !output.status.success() || output.stdout.len() > MAX_NORMALIZATION_STATUS_BYTES {
+    if !output.succeeded() || output.stdout.len() > MAX_NORMALIZATION_STATUS_BYTES {
         return None;
     }
 
@@ -1101,8 +899,9 @@ fn load_normalization_path_proofs(slot_path: &Path) -> Option<Vec<NormalizationP
     Some(proofs)
 }
 
-fn differs_only_by_cr_at_eol(slot_path: &Path) -> bool {
+fn differs_only_by_cr_at_eol(runtime: &dyn ParallelModeRuntimePort, slot_path: &Path) -> bool {
     run_git(
+        runtime,
         slot_path,
         [
             "diff",
@@ -1113,12 +912,15 @@ fn differs_only_by_cr_at_eol(slot_path: &Path) -> bool {
             "--ignore-submodules=none",
             "--",
         ],
-        "verify CR-at-EOL-only normalization drift",
     )
-    .is_some_and(|output| output.status.success())
+    .is_some_and(|output| output.succeeded())
 }
 
-fn normalization_candidate_path(slot_path: &Path, path: &str) -> Option<PathBuf> {
+fn normalization_candidate_path(
+    runtime: &dyn ParallelModeRuntimePort,
+    slot_path: &Path,
+    path: &str,
+) -> Option<PathBuf> {
     let relative_path = Path::new(path);
     if relative_path.as_os_str().is_empty()
         || relative_path
@@ -1128,64 +930,18 @@ fn normalization_candidate_path(slot_path: &Path, path: &str) -> Option<PathBuf>
         return None;
     }
     let candidate_path = slot_path.join(relative_path);
-    if !worktree_paths_match(&candidate_path, &candidate_path) {
+    if !worktree_paths_match_with_runtime(runtime, &candidate_path, &candidate_path) {
         return None;
     }
     Some(candidate_path)
 }
 
-fn read_bounded_unshared_regular_file(path: &Path) -> Option<Vec<u8>> {
-    let mut options = std::fs::OpenOptions::new();
-    options.read(true);
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
-    }
-    #[cfg(windows)]
-    {
-        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-        use std::os::windows::fs::OpenOptionsExt;
-        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-    }
-
-    let file = options.open(path).ok()?;
-    let metadata = file.metadata().ok()?;
-    if !metadata.file_type().is_file()
-        || metadata.len() > MAX_NORMALIZATION_FILE_BYTES as u64
-        || !opened_file_has_one_link_and_no_reparse(&file, &metadata)
-    {
-        return None;
-    }
-    let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    file.take(MAX_NORMALIZATION_FILE_BYTES as u64 + 1)
-        .read_to_end(&mut bytes)
-        .ok()?;
-    (bytes.len() <= MAX_NORMALIZATION_FILE_BYTES).then_some(bytes)
-}
-
-#[cfg(unix)]
-fn opened_file_has_one_link_and_no_reparse(_file: &File, metadata: &std::fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    metadata.nlink() == 1
-}
-
-#[cfg(windows)]
-fn opened_file_has_one_link_and_no_reparse(file: &File, metadata: &std::fs::Metadata) -> bool {
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
-    use std::os::windows::fs::MetadataExt;
-
-    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
-        && crate::private_fs::windows_file_link_count(file).is_ok_and(|links| links == 1)
-}
-
-#[cfg(not(any(unix, windows)))]
-fn opened_file_has_one_link_and_no_reparse(_file: &File, _metadata: &std::fs::Metadata) -> bool {
-    true
-}
-
-fn path_has_safe_lf_attributes(slot_path: &Path, path: &str, cached: bool) -> bool {
+fn path_has_safe_lf_attributes(
+    runtime: &dyn ParallelModeRuntimePort,
+    slot_path: &Path,
+    path: &str,
+    cached: bool,
+) -> bool {
     let mut args = vec![OsString::from("check-attr")];
     if cached {
         args.push(OsString::from("--cached"));
@@ -1201,11 +957,10 @@ fn path_has_safe_lf_attributes(slot_path: &Path, path: &str, cached: bool) -> bo
         OsString::from("--"),
         OsString::from(path),
     ]);
-    let Some(output) = run_git_os(slot_path, args, "inspect normalization recovery attributes")
-    else {
+    let Some(output) = run_git_os(runtime, slot_path, args) else {
         return false;
     };
-    if !output.status.success() {
+    if !output.succeeded() {
         return false;
     }
     let fields = output
@@ -1226,17 +981,20 @@ fn path_has_safe_lf_attributes(slot_path: &Path, path: &str, cached: bool) -> bo
 }
 
 fn path_bytes_match_index_and_target(
+    runtime: &dyn ParallelModeRuntimePort,
     slot_path: &Path,
     target_oid: &str,
     proof: &NormalizationPathProof,
 ) -> bool {
-    let Some(candidate_path) = normalization_candidate_path(slot_path, &proof.path) else {
+    let Some(candidate_path) = normalization_candidate_path(runtime, slot_path, &proof.path) else {
         return false;
     };
-    let Some(raw_bytes) = read_bounded_unshared_regular_file(&candidate_path) else {
+    let Some(raw_bytes) =
+        runtime.read_bounded_unshared_regular_file(&candidate_path, MAX_NORMALIZATION_FILE_BYTES)
+    else {
         return false;
     };
-    let Some(raw_oid) = hash_blob_bytes(slot_path, &raw_bytes) else {
+    let Some(raw_oid) = hash_blob_bytes(runtime, slot_path, &raw_bytes) else {
         return false;
     };
     if raw_oid != proof.index_oid {
@@ -1246,10 +1004,10 @@ fn path_bytes_match_index_and_target(
     if normalized_bytes == raw_bytes {
         return false;
     }
-    let Some(normalized_oid) = hash_blob_bytes(slot_path, &normalized_bytes) else {
+    let Some(normalized_oid) = hash_blob_bytes(runtime, slot_path, &normalized_bytes) else {
         return false;
     };
-    target_tree_matches_blob(slot_path, target_oid, proof, &normalized_oid)
+    target_tree_matches_blob(runtime, slot_path, target_oid, proof, &normalized_oid)
 }
 
 fn normalize_crlf(bytes: &[u8]) -> Vec<u8> {
@@ -1267,37 +1025,36 @@ fn normalize_crlf(bytes: &[u8]) -> Vec<u8> {
     normalized
 }
 
-fn hash_blob_bytes(slot_path: &Path, bytes: &[u8]) -> Option<String> {
+fn hash_blob_bytes(
+    runtime: &dyn ParallelModeRuntimePort,
+    slot_path: &Path,
+    bytes: &[u8],
+) -> Option<String> {
     let mut command_args = vec![OsString::from("-C"), slot_path.as_os_str().to_os_string()];
     command_args.extend([
         OsString::from("hash-object"),
         OsString::from("--no-filters"),
         OsString::from("--stdin"),
     ]);
-    let mut command = crate::git_subprocess::command(command_args);
-    let output = crate::subprocess::command_output_with_input(
-        &mut command,
-        "hash normalization recovery bytes",
-        bytes,
-    )
-    .ok()?;
+    let output = runtime.run_git_command(&command_args, Some(bytes)).ok()?;
     successful_ascii_stdout(output)
 }
 
 fn target_tree_matches_blob(
+    runtime: &dyn ParallelModeRuntimePort,
     slot_path: &Path,
     target_oid: &str,
     proof: &NormalizationPathProof,
     normalized_oid: &str,
 ) -> bool {
     let Some(output) = run_git(
+        runtime,
         slot_path,
         ["ls-tree", "-z", target_oid, "--", proof.path.as_str()],
-        "inspect normalization recovery target tree",
     ) else {
         return false;
     };
-    if !output.status.success() {
+    if !output.succeeded() {
         return false;
     }
     let records = output
@@ -1324,26 +1081,29 @@ fn target_tree_matches_blob(
 }
 
 fn run_git<const N: usize>(
+    runtime: &dyn ParallelModeRuntimePort,
     slot_path: &Path,
     args: [&str; N],
-    command_label: &str,
-) -> Option<Output> {
+) -> Option<ParallelCommandOutput> {
     run_git_os(
+        runtime,
         slot_path,
         args.into_iter().map(OsString::from).collect(),
-        command_label,
     )
 }
 
-fn run_git_os(slot_path: &Path, args: Vec<OsString>, command_label: &str) -> Option<Output> {
+fn run_git_os(
+    runtime: &dyn ParallelModeRuntimePort,
+    slot_path: &Path,
+    args: Vec<OsString>,
+) -> Option<ParallelCommandOutput> {
     let mut command_args = vec![OsString::from("-C"), slot_path.as_os_str().to_os_string()];
     command_args.extend(args);
-    let mut command = crate::git_subprocess::command(command_args);
-    crate::subprocess::command_output(&mut command, command_label).ok()
+    runtime.run_git_command(&command_args, None).ok()
 }
 
-fn successful_ascii_stdout(output: Output) -> Option<String> {
-    if !output.status.success() {
+fn successful_ascii_stdout(output: ParallelCommandOutput) -> Option<String> {
+    if !output.succeeded() {
         return None;
     }
     let value = std::str::from_utf8(&output.stdout).ok()?.trim();

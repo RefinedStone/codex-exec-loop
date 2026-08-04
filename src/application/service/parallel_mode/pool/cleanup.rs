@@ -1,4 +1,4 @@
-use std::{fs, path::Path};
+use std::path::Path;
 
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
@@ -6,11 +6,11 @@ use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeDispatchBlockReason,
     ParallelModePoolSlotCleanupDecision, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
 };
-use crate::git_subprocess;
 use chrono::{DateTime, TimeDelta, Utc};
+use std::ffi::OsString;
 
 use super::super::git_sequence::{GitCommandStep, GitCommandStepReport, run_git_sequence};
-use super::super::readiness::{command_succeeds, run_command};
+use super::super::readiness::{command_succeeds_with_runtime, run_command_with_runtime};
 use super::super::{
     branch_exists, current_timestamp, record_cleaned_session_detail,
     record_failed_start_dispatch_block, record_failed_start_session_detail,
@@ -19,10 +19,11 @@ use super::super::{
 use super::acquire_pool_mutation_lock;
 use super::{
     AKRA_AGENT_BRANCH_PREFIX, DEFAULT_POOL_SIZE, GitWorktreeRecord, PoolMutationLock,
-    SlotGitStatus, current_branch_name, derive_default_pool_root, inspect_slot_git_status,
-    load_worktree_records, orphaned_slot_lease_mirror_matches_identity_or_missing,
+    SlotGitStatus, current_branch_name, derive_default_pool_root,
+    inspect_slot_git_status_with_runtime, load_worktree_records,
+    orphaned_slot_lease_mirror_matches_identity_or_missing,
     remove_orphaned_slot_lease_mirror_if_matches, remove_slot_lease, slot_id,
-    slot_lease_mirror_matches_or_missing, worktree_paths_match,
+    slot_lease_mirror_matches_or_missing, worktree_paths_match_with_runtime,
 };
 
 const STALE_LEASED_SLOT_RELEASE_AFTER_SECS: i64 = 120;
@@ -102,16 +103,20 @@ impl<'a> PoolSlotCleanupIdentity<'a> {
         }
     }
 
-    pub(in crate::application::service::parallel_mode) fn validate(&self) -> Result<(), String> {
-        self.validate_worktree_registration(true)
+    pub(in crate::application::service::parallel_mode) fn validate(
+        &self,
+        runtime: &dyn ParallelModeRuntimePort,
+    ) -> Result<(), String> {
+        self.validate_worktree_registration(runtime, true)
     }
 
-    fn validate_detached(&self) -> Result<(), String> {
-        self.validate_worktree_registration(false)
+    fn validate_detached(&self, runtime: &dyn ParallelModeRuntimePort) -> Result<(), String> {
+        self.validate_worktree_registration(runtime, false)
     }
 
     fn validate_worktree_registration(
         &self,
+        runtime: &dyn ParallelModeRuntimePort,
         branch_must_be_checked_out: bool,
     ) -> Result<(), String> {
         if !(1..=DEFAULT_POOL_SIZE).any(|number| slot_id(number) == self.slot_id) {
@@ -155,26 +160,29 @@ impl<'a> PoolSlotCleanupIdentity<'a> {
             expected_pool_root.as_path(),
             expected_slot_path.as_path(),
         ] {
-            let metadata = fs::symlink_metadata(managed_path).map_err(|error| {
+            let is_link = runtime.path_is_symlink(managed_path).map_err(|error| {
                 format!(
                     "managed pool path `{}` could not be inspected: {error}",
                     managed_path.display()
                 )
             })?;
-            if metadata_is_link_or_reparse(&metadata) {
+            if is_link {
                 return Err(format!(
                     "managed pool path `{}` must not be a symlink or reparse point",
                     managed_path.display()
                 ));
             }
         }
-        let canonical_expected = fs::canonicalize(&expected_slot_path).map_err(|error| {
-            format!(
-                "generated pool path `{}` could not be canonicalized: {error}",
-                expected_slot_path.display()
-            )
-        })?;
-        let canonical_slot = fs::canonicalize(self.slot_path).map_err(|error| {
+        let canonical_expected =
+            runtime
+                .canonicalize_path(&expected_slot_path)
+                .map_err(|error| {
+                    format!(
+                        "generated pool path `{}` could not be canonicalized: {error}",
+                        expected_slot_path.display()
+                    )
+                })?;
+        let canonical_slot = runtime.canonicalize_path(self.slot_path).map_err(|error| {
             format!(
                 "slot cleanup path `{}` could not be canonicalized: {error}",
                 self.slot_path.display()
@@ -187,10 +195,10 @@ impl<'a> PoolSlotCleanupIdentity<'a> {
             ));
         }
 
-        let worktree_records = load_worktree_records(self.repo_root)
+        let worktree_records = load_worktree_records(runtime, self.repo_root)
             .ok_or_else(|| "git worktree inventory could not be loaded for cleanup".to_string())?;
         let registered = worktree_records.iter().any(|record| {
-            fs::canonicalize(&record.path).ok().as_ref() == Some(&canonical_slot)
+            runtime.canonicalize_path(&record.path).ok().as_ref() == Some(&canonical_slot)
                 && if branch_must_be_checked_out {
                     record.branch_name.as_deref() == Some(self.branch_name) && !record.detached
                 } else {
@@ -205,20 +213,6 @@ impl<'a> PoolSlotCleanupIdentity<'a> {
         }
         Ok(())
     }
-}
-
-#[cfg(windows)]
-fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
-    metadata.file_type().is_symlink()
-        || std::os::windows::fs::MetadataExt::file_attributes(metadata)
-            & FILE_ATTRIBUTE_REPARSE_POINT
-            != 0
-}
-
-#[cfg(not(windows))]
-fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
-    metadata.file_type().is_symlink()
 }
 
 pub(super) struct ReconciledPoolCleanupContext<'a> {
@@ -274,7 +268,7 @@ pub(super) fn cleanup_reusable_slots(
         let Some(worktree_record) = context
             .worktree_records
             .iter()
-            .find(|record| worktree_paths_match(&record.path, &slot_path))
+            .find(|record| worktree_paths_match_with_runtime(runtime, &record.path, &slot_path))
         else {
             // git worktree inventory에 없으면 cleanup보다 provisioning/inspection 경로가 먼저 다룬다.
             continue;
@@ -292,7 +286,8 @@ pub(super) fn cleanup_reusable_slots(
         let lease_state = slot_lease.map(|lease| lease.state);
         // lease가 없을 때만 worktree cleanliness가 cleanup 근거가 된다. lease가 있으면 lease state가 우선이다.
         let worktree_clean = lease_state.is_none()
-            && inspect_slot_git_status(&slot_path).is_ok_and(SlotGitStatus::is_clean_baseline);
+            && inspect_slot_git_status_with_runtime(runtime, &slot_path)
+                .is_ok_and(SlotGitStatus::is_clean_baseline);
         // branch integration은 active lease가 아닌 경우에만 확인하며, cleanup pending은 명시적 승인 신호다.
         let branch_integrated = !matches!(
             lease_state,
@@ -302,6 +297,7 @@ pub(super) fn cleanup_reusable_slots(
             Some(ParallelModeSlotLeaseState::CleanupPending)
         ) || worktree_clean)
             && branch_patch_is_integrated(
+                runtime,
                 context.repo_root,
                 branch_name,
                 context.integration_target_oid,
@@ -359,14 +355,14 @@ pub(super) fn cleanup_stale_leased_startup_slots(
         let Some(worktree_record) = context
             .worktree_records
             .iter()
-            .find(|record| worktree_paths_match(&record.path, &slot_path))
+            .find(|record| worktree_paths_match_with_runtime(runtime, &record.path, &slot_path))
         else {
             continue;
         };
         if worktree_record.branch_name.as_deref() != Some(lease.branch_name.as_str()) {
             continue;
         }
-        let Ok(slot_status) = inspect_slot_git_status(&slot_path) else {
+        let Ok(slot_status) = inspect_slot_git_status_with_runtime(runtime, &slot_path) else {
             continue;
         };
         if !slot_status.is_clean_baseline() {
@@ -442,18 +438,19 @@ pub(super) fn cleanup_clean_baseline_split_brain_leases(
         let Some(worktree_record) = context
             .worktree_records
             .iter()
-            .find(|record| worktree_paths_match(&record.path, &slot_path))
+            .find(|record| worktree_paths_match_with_runtime(runtime, &record.path, &slot_path))
         else {
             continue;
         };
         if !worktree_is_clean_reusable_baseline(
+            runtime,
             worktree_record,
             context.integration_target_oid,
             &slot_path,
         ) {
             continue;
         }
-        let branch_still_exists = branch_exists(context.repo_root, &lease.branch_name);
+        let branch_still_exists = branch_exists(runtime, context.repo_root, &lease.branch_name);
         if branch_still_exists {
             let identity = PoolSlotCleanupIdentity::new(
                 context.repo_root,
@@ -463,11 +460,14 @@ pub(super) fn cleanup_clean_baseline_split_brain_leases(
                 &slot_path,
                 &lease.branch_name,
             );
-            let Some(source_oid) = resolve_commit_oid(context.repo_root, &lease.branch_name) else {
+            let Some(source_oid) =
+                resolve_commit_oid(runtime, context.repo_root, &lease.branch_name)
+            else {
                 continue;
             };
-            if identity.validate_detached().is_err()
+            if identity.validate_detached(runtime).is_err()
                 || !branch_patch_is_integrated(
+                    runtime,
                     context.repo_root,
                     &source_oid,
                     context.integration_target_oid,
@@ -478,13 +478,15 @@ pub(super) fn cleanup_clean_baseline_split_brain_leases(
                     &PoolSlotCleanupLeaseAuthority::CleanupPending(lease),
                 )
                 || !delete_cleaned_slot_branch_if_unchanged(
+                    runtime,
                     context.repo_root,
                     &lease.branch_name,
                     &source_oid,
                 )
-                || resolve_workspace_commit_oid(&slot_path).as_deref()
+                || resolve_workspace_commit_oid(runtime, &slot_path).as_deref()
                     != Some(context.integration_target_oid)
-                || !inspect_slot_git_status(&slot_path).is_ok_and(SlotGitStatus::is_clean_baseline)
+                || !inspect_slot_git_status_with_runtime(runtime, &slot_path)
+                    .is_ok_and(SlotGitStatus::is_clean_baseline)
             {
                 continue;
             }
@@ -514,11 +516,13 @@ pub(super) fn cleanup_clean_baseline_split_brain_leases(
 }
 
 fn worktree_is_clean_reusable_baseline(
+    runtime: &dyn ParallelModeRuntimePort,
     worktree_record: &GitWorktreeRecord,
     baseline_head: &str,
     slot_path: &Path,
 ) -> bool {
-    inspect_slot_git_status(slot_path).is_ok_and(SlotGitStatus::is_clean_baseline)
+    inspect_slot_git_status_with_runtime(runtime, slot_path)
+        .is_ok_and(SlotGitStatus::is_clean_baseline)
         && worktree_record.head_sha == baseline_head
 }
 
@@ -556,11 +560,13 @@ cleanup readiness의 핵심 git 질문은 "agent branch의 변경이 pool baseli
 확인하므로, true이면 branch를 지워도 baseline이 그 변경을 잃지 않는다는 뜻이다.
 */
 pub(in crate::application::service::parallel_mode) fn branch_is_integrated_into(
+    runtime: &dyn ParallelModeRuntimePort,
     repo_root: &str,
     branch_name: &str,
     base_branch: &str,
 ) -> bool {
-    command_succeeds(
+    command_succeeds_with_runtime(
+        runtime,
         "git",
         [
             "-C",
@@ -606,10 +612,13 @@ where
     AfterDetach: FnOnce(),
 {
     let (before_detach, after_detach) = hooks;
-    if mutation_lock.verify_pool_root(identity.pool_root).is_err() || identity.validate().is_err() {
+    if mutation_lock.verify_pool_root(identity.pool_root).is_err()
+        || identity.validate(runtime).is_err()
+    {
         return false;
     }
-    if crate::git_execution_guard::ensure_host_git_execution_config_safe(identity.slot_path)
+    if runtime
+        .ensure_git_execution_safe(identity.slot_path)
         .is_err()
     {
         return false;
@@ -617,19 +626,22 @@ where
     if !mirror_still_allows_cleanup(runtime, identity, &authority) {
         return false;
     }
-    let Some(source_oid) = resolve_commit_oid(identity.repo_root, identity.branch_name) else {
+    let Some(source_oid) = resolve_commit_oid(runtime, identity.repo_root, identity.branch_name)
+    else {
         return false;
     };
-    let Some(baseline_oid) = resolve_commit_oid(identity.repo_root, baseline_ref) else {
+    let Some(baseline_oid) = resolve_commit_oid(runtime, identity.repo_root, baseline_ref) else {
         return false;
     };
-    let Ok(initial_status) = inspect_slot_git_status(identity.slot_path) else {
+    let Ok(initial_status) = inspect_slot_git_status_with_runtime(runtime, identity.slot_path)
+    else {
         return false;
     };
     if !initial_status.is_clean_for_frozen_delivery()
-        || current_branch_name(identity.slot_path).as_deref() != Some(identity.branch_name)
-        || resolve_workspace_commit_oid(identity.slot_path).as_deref() != Some(source_oid.as_str())
-        || !branch_patch_is_integrated(identity.repo_root, &source_oid, &baseline_oid)
+        || current_branch_name(runtime, identity.slot_path).as_deref() != Some(identity.branch_name)
+        || resolve_workspace_commit_oid(runtime, identity.slot_path).as_deref()
+            != Some(source_oid.as_str())
+        || !branch_patch_is_integrated(runtime, identity.repo_root, &source_oid, &baseline_oid)
     {
         return false;
     }
@@ -643,13 +655,15 @@ where
     {
         return false;
     }
-    if !clean_ignored_worker_output(identity.slot_path) {
+    if !clean_ignored_worker_output(runtime, identity.slot_path) {
         return false;
     }
-    if !inspect_slot_git_status(identity.slot_path).is_ok_and(SlotGitStatus::is_clean_baseline)
-        || current_branch_name(identity.slot_path).as_deref() != Some(identity.branch_name)
-        || resolve_workspace_commit_oid(identity.slot_path).as_deref() != Some(source_oid.as_str())
-        || resolve_commit_oid(identity.repo_root, identity.branch_name).as_deref()
+    if !inspect_slot_git_status_with_runtime(runtime, identity.slot_path)
+        .is_ok_and(SlotGitStatus::is_clean_baseline)
+        || current_branch_name(runtime, identity.slot_path).as_deref() != Some(identity.branch_name)
+        || resolve_workspace_commit_oid(runtime, identity.slot_path).as_deref()
+            != Some(source_oid.as_str())
+        || resolve_commit_oid(runtime, identity.repo_root, identity.branch_name).as_deref()
             != Some(source_oid.as_str())
         || !projection_still_allows_cleanup(planning_authority, identity, &authority)
         || !mirror_still_allows_cleanup(runtime, identity, &authority)
@@ -660,10 +674,12 @@ where
     }
 
     before_detach();
-    if !inspect_slot_git_status(identity.slot_path).is_ok_and(SlotGitStatus::is_clean_baseline)
-        || current_branch_name(identity.slot_path).as_deref() != Some(identity.branch_name)
-        || resolve_workspace_commit_oid(identity.slot_path).as_deref() != Some(source_oid.as_str())
-        || resolve_commit_oid(identity.repo_root, identity.branch_name).as_deref()
+    if !inspect_slot_git_status_with_runtime(runtime, identity.slot_path)
+        .is_ok_and(SlotGitStatus::is_clean_baseline)
+        || current_branch_name(runtime, identity.slot_path).as_deref() != Some(identity.branch_name)
+        || resolve_workspace_commit_oid(runtime, identity.slot_path).as_deref()
+            != Some(source_oid.as_str())
+        || resolve_commit_oid(runtime, identity.repo_root, identity.branch_name).as_deref()
             != Some(source_oid.as_str())
         || !projection_still_allows_cleanup(planning_authority, identity, &authority)
         || !mirror_still_allows_cleanup(runtime, identity, &authority)
@@ -676,13 +692,15 @@ where
     // The source tree is now clean and still CAS-bound. A concurrent late writer after
     // the ignored-output purge makes the following checks fail and remains inspectable.
     if mutation_lock.verify_pool_root(identity.pool_root).is_err()
-        || crate::git_execution_guard::ensure_host_git_execution_config_safe(identity.slot_path)
+        || runtime
+            .ensure_git_execution_safe(identity.slot_path)
             .is_err()
     {
         return false;
     }
     let slot_path = identity.slot_path.display().to_string();
-    if !command_succeeds(
+    if !command_succeeds_with_runtime(
+        runtime,
         "git",
         [
             "-C",
@@ -695,11 +713,12 @@ where
         return false;
     }
     after_detach();
-    if current_branch_name(identity.slot_path).as_deref() != Some("HEAD")
-        || resolve_workspace_commit_oid(identity.slot_path).as_deref()
+    if current_branch_name(runtime, identity.slot_path).as_deref() != Some("HEAD")
+        || resolve_workspace_commit_oid(runtime, identity.slot_path).as_deref()
             != Some(baseline_oid.as_str())
-        || !inspect_slot_git_status(identity.slot_path).is_ok_and(SlotGitStatus::is_clean_baseline)
-        || resolve_commit_oid(identity.repo_root, identity.branch_name).as_deref()
+        || !inspect_slot_git_status_with_runtime(runtime, identity.slot_path)
+            .is_ok_and(SlotGitStatus::is_clean_baseline)
+        || resolve_commit_oid(runtime, identity.repo_root, identity.branch_name).as_deref()
             != Some(source_oid.as_str())
         || !projection_still_allows_cleanup(planning_authority, identity, &authority)
         || !mirror_still_allows_cleanup(runtime, identity, &authority)
@@ -707,16 +726,18 @@ where
         return false;
     }
     if !delete_cleaned_slot_branch_if_unchanged(
+        runtime,
         identity.repo_root,
         identity.branch_name,
         &source_oid,
     ) {
         return false;
     }
-    if current_branch_name(identity.slot_path).as_deref() != Some("HEAD")
-        || resolve_workspace_commit_oid(identity.slot_path).as_deref()
+    if current_branch_name(runtime, identity.slot_path).as_deref() != Some("HEAD")
+        || resolve_workspace_commit_oid(runtime, identity.slot_path).as_deref()
             != Some(baseline_oid.as_str())
-        || !inspect_slot_git_status(identity.slot_path).is_ok_and(SlotGitStatus::is_clean_baseline)
+        || !inspect_slot_git_status_with_runtime(runtime, identity.slot_path)
+            .is_ok_and(SlotGitStatus::is_clean_baseline)
     {
         return false;
     }
@@ -745,7 +766,8 @@ where
     }
 
     // 마지막 git status 재검증은 metadata 제거 성공과 실제 worktree 재사용 가능 상태를 함께 확인한다.
-    inspect_slot_git_status(identity.slot_path).is_ok_and(SlotGitStatus::is_clean_baseline)
+    inspect_slot_git_status_with_runtime(runtime, identity.slot_path)
+        .is_ok_and(SlotGitStatus::is_clean_baseline)
 }
 
 #[cfg(test)]
@@ -764,7 +786,8 @@ where
     BeforeDetach: FnOnce(),
     AfterDetach: FnOnce(),
 {
-    let Ok(mutation_lock) = acquire_pool_mutation_lock(planning_authority, identity.repo_root)
+    let Ok(mutation_lock) =
+        acquire_pool_mutation_lock(planning_authority, runtime, identity.repo_root)
     else {
         return false;
     };
@@ -789,8 +812,13 @@ where
     )
 }
 
-fn resolve_commit_oid(repo_root: &str, reference: &str) -> Option<String> {
-    run_command(
+fn resolve_commit_oid(
+    runtime: &dyn ParallelModeRuntimePort,
+    repo_root: &str,
+    reference: &str,
+) -> Option<String> {
+    run_command_with_runtime(
+        runtime,
         "git",
         [
             "-C",
@@ -802,9 +830,12 @@ fn resolve_commit_oid(repo_root: &str, reference: &str) -> Option<String> {
     )
 }
 
-fn resolve_workspace_commit_oid(slot_path: &Path) -> Option<String> {
+fn resolve_workspace_commit_oid(
+    runtime: &dyn ParallelModeRuntimePort,
+    slot_path: &Path,
+) -> Option<String> {
     let slot_path = slot_path.display().to_string();
-    resolve_commit_oid(&slot_path, "HEAD")
+    resolve_commit_oid(runtime, &slot_path, "HEAD")
 }
 
 fn projection_still_allows_cleanup(
@@ -859,19 +890,21 @@ fn projection_has_matching_delivery_lease(
         })
 }
 
-fn clean_ignored_worker_output(slot_path: &Path) -> bool {
-    let mut command = git_subprocess::command(std::iter::empty::<&str>());
-    command
-        .arg("-C")
-        .arg(slot_path)
-        .args(["clean", "-fdX", "--"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    crate::subprocess::command_output(&mut command, "git clean ignored parallel worker output")
-        .is_ok_and(|output| output.status.success())
+fn clean_ignored_worker_output(runtime: &dyn ParallelModeRuntimePort, slot_path: &Path) -> bool {
+    let args = [
+        OsString::from("-C"),
+        slot_path.as_os_str().to_os_string(),
+        OsString::from("clean"),
+        OsString::from("-fdX"),
+        OsString::from("--"),
+    ];
+    runtime
+        .run_git_command(&args, None)
+        .is_ok_and(|output| output.succeeded())
 }
 
 pub(in crate::application::service::parallel_mode) fn branch_patch_is_integrated(
+    runtime: &dyn ParallelModeRuntimePort,
     repo_root: &str,
     branch_name: &str,
     baseline_ref: &str,
@@ -879,7 +912,7 @@ pub(in crate::application::service::parallel_mode) fn branch_patch_is_integrated
     // Exact ancestry is the strongest proof and remains valid for a branch whose
     // history legitimately contains merge commits. Patch-equivalence is only a
     // fallback for rebased/squashed delivery.
-    if branch_is_integrated_into(repo_root, branch_name, baseline_ref) {
+    if branch_is_integrated_into(runtime, repo_root, branch_name, baseline_ref) {
         return true;
     }
 
@@ -888,45 +921,46 @@ pub(in crate::application::service::parallel_mode) fn branch_patch_is_integrated
     // all-`-` cherry result cannot prove such a range is preserved. Treat command
     // failure and every non-empty merge result as unsafe.
     let range = format!("{baseline_ref}..{branch_name}");
-    let mut merge_command = git_subprocess::command([
+    let merge_args = [
         "-C",
         repo_root,
         "rev-list",
         "--min-parents=2",
         "--max-count=1",
-        range.as_str(),
-    ]);
-    let Ok(merge_output) = crate::subprocess::command_output(
-        &mut merge_command,
-        "git rev-list --min-parents=2 --max-count=1 <frozen-integration-ref>..<source-branch>",
-    ) else {
+        &range,
+    ]
+    .into_iter()
+    .map(OsString::from)
+    .collect::<Vec<_>>();
+    let Ok(merge_output) = runtime.run_git_command(&merge_args, None) else {
         return false;
     };
-    if !merge_output.status.success() || !merge_output.stdout.is_empty() {
+    if !merge_output.succeeded() || !merge_output.stdout.is_empty() {
         return false;
     }
 
-    let mut command =
-        git_subprocess::command(["-C", repo_root, "cherry", baseline_ref, branch_name]);
-    let Ok(output) = crate::subprocess::command_output(
-        &mut command,
-        "git cherry <frozen-integration-ref> <source-branch>",
-    ) else {
+    let cherry_args = ["-C", repo_root, "cherry", baseline_ref, branch_name]
+        .into_iter()
+        .map(OsString::from)
+        .collect::<Vec<_>>();
+    let Ok(output) = runtime.run_git_command(&cherry_args, None) else {
         return false;
     };
-    output.status.success()
+    output.succeeded()
         && String::from_utf8_lossy(&output.stdout)
             .lines()
             .all(|line| line.trim_start().starts_with('-'))
 }
 
 pub(in crate::application::service::parallel_mode) fn delete_cleaned_slot_branch_if_unchanged(
+    runtime: &dyn ParallelModeRuntimePort,
     repo_root: &str,
     branch_name: &str,
     expected_source_oid: &str,
 ) -> bool {
     let branch_ref = format!("refs/heads/{branch_name}");
-    command_succeeds(
+    command_succeeds_with_runtime(
+        runtime,
         "git",
         [
             "-C",
@@ -947,13 +981,13 @@ branch를 소유하지 않는 중립 상태여야 다음 lease가 새 agent bran
 때문이다.
 */
 pub(in crate::application::service::parallel_mode) fn reset_slot_worktree_to_ref(
+    runtime: &dyn ParallelModeRuntimePort,
     slot_path: &Path,
     baseline_ref: &str,
 ) -> super::super::git_sequence::GitCommandSequenceReport {
     // git sequence API는 argv 조각을 문자열로 받으므로 Path 변환은 sequence 조립 직전에만 수행한다.
     let slot_path_string = slot_path.display().to_string();
-    if let Err(error) = crate::git_execution_guard::ensure_host_git_execution_config_safe(slot_path)
-    {
+    if let Err(error) = runtime.ensure_git_execution_safe(slot_path) {
         return super::super::git_sequence::GitCommandSequenceReport {
             label: "reset slot worktree to pool baseline".to_string(),
             steps: vec![GitCommandStepReport {
@@ -965,8 +999,9 @@ pub(in crate::application::service::parallel_mode) fn reset_slot_worktree_to_ref
             }],
         };
     }
-    let baseline_oid = resolve_commit_oid(&slot_path_string, baseline_ref);
+    let baseline_oid = resolve_commit_oid(runtime, &slot_path_string, baseline_ref);
     let mut report = run_git_sequence(
+        runtime,
         "reset slot worktree to pool baseline",
         vec![GitCommandStep::new(
             "checkout pool baseline detached without overwriting late writes",
@@ -981,9 +1016,10 @@ pub(in crate::application::service::parallel_mode) fn reset_slot_worktree_to_ref
     );
     let verified = baseline_oid.as_deref().is_some_and(|baseline_oid| {
         report.succeeded()
-            && current_branch_name(slot_path).as_deref() == Some("HEAD")
-            && resolve_workspace_commit_oid(slot_path).as_deref() == Some(baseline_oid)
-            && inspect_slot_git_status(slot_path).is_ok_and(SlotGitStatus::is_clean_baseline)
+            && current_branch_name(runtime, slot_path).as_deref() == Some("HEAD")
+            && resolve_workspace_commit_oid(runtime, slot_path).as_deref() == Some(baseline_oid)
+            && inspect_slot_git_status_with_runtime(runtime, slot_path)
+                .is_ok_and(SlotGitStatus::is_clean_baseline)
     });
     if !verified && report.succeeded() {
         report.steps.push(GitCommandStepReport {

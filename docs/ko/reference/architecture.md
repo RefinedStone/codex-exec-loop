@@ -65,6 +65,19 @@ repository capability가 없습니다. Review center, parallel agent profile, ap
 inbound-client `NativeClientPort`를 사용하고 공용 planning read 계약은 `PlanningProjectionPort`가 소유하며 그
 구현은 planning service 계층에 남습니다.
 
+Driving adapter가 application use case에 진입하는 지점에는 inbound port가 필요합니다. 반대로 내부
+단일 목적 helper는 이름이 service라는 이유만으로 구현과 같은 모양의 interface를 추가하지 않습니다.
+Application facade 하나가 adapter-facing의 좁은 inbound port 여러 개를 구현할 수 있습니다. Host
+effect는 service 안에 숨기지 않습니다. `ParallelModeRuntimePort`는 pool lock, environment와 process
+identity, 보호된 Git 실행, path identity, 안전한 normalization staging과 atomic move, pool-local
+runtime mirror를 담당하는 outbound 경계입니다. Application service에는 실행 순서와 recovery 정책을
+남기고 Git outbound adapter가 command, syscall, filesystem object 검증을 소유합니다.
+
+Architecture suite는 production application source 전체에서 이 분리를 강제합니다. Filesystem,
+process, environment, trusted executable, Git helper 직접 참조뿐 아니라 `Path::exists()`와
+`Path::symlink_metadata()` 직접 호출도 boundary guard를 실패시킵니다. Guard 대상 root는 Rust source의
+90% 이상이어야 하므로, 검사되지 않는 새 계층을 추가해도 suite가 실패합니다.
+
 프로세스 수명의 parallel control-plane handle과 completion channel은 `ParallelModeAdminPort`
 구현이 소유합니다. Browser request는 transport action을 typed admin command로 mapping하고,
 enable/dispatch/refresh/disable 정책과 effect completion drain은 application service가 담당합니다.

@@ -1,13 +1,16 @@
 use std::collections::BTreeSet;
 
+use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::domain::parallel_mode::ParallelModeDispatchBlockReason;
 use chrono::DateTime;
 
 // orchestration service는 slot pool의 runtime 관찰값과 distributor queue를 함께 본다.
 // 하위 pool helper가 repo root 탐색과 git 상태 판정을 맡고, 이 파일은 tick을 막을지 결정한다.
-use super::pool::{PoolRuntimeContext, inspect_slot_git_status};
-use super::{current_branch_name, derive_integration_worktree_path, load_pool_runtime_context};
+use super::pool::{PoolRuntimeContext, inspect_slot_git_status_with_runtime};
+use super::{
+    current_branch_name, derive_integration_worktree_path, load_pool_runtime_context_with_runtime,
+};
 
 /*
 병렬 디스패처가 새 작업을 고를 때 이미 "누군가 처리 중인" 작업을 다시 뽑으면
@@ -121,9 +124,11 @@ distributor queue는 완성된 슬롯 결과를 integration worktree에서 차�
 */
 pub(super) fn inspect_akra_integration_worktree_blocker(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     workspace_dir: &str,
 ) -> Option<String> {
-    let context = load_pool_runtime_context(planning_authority, workspace_dir).ok()?;
+    let context =
+        load_pool_runtime_context_with_runtime(runtime, planning_authority, workspace_dir).ok()?;
     let record = context
         .distributor_queue_records
         .iter()
@@ -140,11 +145,11 @@ pub(super) fn inspect_akra_integration_worktree_blocker(
         &target.github_repository,
         &target.integration_branch,
     );
-    if !integration_path.exists() {
+    if !runtime.path_exists(&integration_path) {
         return None;
     }
 
-    let status = match inspect_slot_git_status(&integration_path) {
+    let status = match inspect_slot_git_status_with_runtime(runtime, &integration_path) {
         Ok(status) => status,
         Err(error) => {
             return Some(format!(
@@ -158,7 +163,7 @@ pub(super) fn inspect_akra_integration_worktree_blocker(
             status.detail_label()
         ));
     }
-    if let Some(branch_name) = current_branch_name(&integration_path) {
+    if let Some(branch_name) = current_branch_name(runtime, &integration_path) {
         return Some(format!(
             "orchestrator blocked / dedicated integration worktree must remain detached but is on `{branch_name}`"
         ));

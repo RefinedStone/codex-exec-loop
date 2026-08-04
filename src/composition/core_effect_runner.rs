@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 
+use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
 use crate::application::port::outbound::review_center_repository_port::{
     ReviewCenterHistoryEntry, ReviewCenterInboxItem, ReviewCenterThreadProjection,
 };
@@ -1020,9 +1021,11 @@ fn load_github_review_polling_setup(
             Ok(Some((target.clone(), service)))
         }
         GithubReviewPollingSetupMode::Discover => {
-            let integration_branch =
-                parallel_mode_integration_branch_for_repo(&request.workspace_directory)
-                    .map_err(anyhow::Error::msg)?;
+            let integration_branch = parallel_mode_integration_branch_for_repo(
+                &GitParallelModeRuntimeAdapter::new(),
+                &request.workspace_directory,
+            )
+            .map_err(anyhow::Error::msg)?;
             production::discover_github_review_poller_service_for_current_branch(
                 workspace,
                 &integration_branch,

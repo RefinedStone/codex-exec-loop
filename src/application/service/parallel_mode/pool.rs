@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg(test)]
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -22,15 +23,19 @@ use crate::domain::parallel_mode::{
 };
 
 use super::current_branch_name;
-use super::readiness::{detect_git_repo_root, run_command};
+#[cfg(test)]
+use super::readiness::detect_git_repo_root;
+use super::readiness::{detect_git_repo_root_with_runtime, run_command_with_runtime};
 #[cfg(test)]
 use super::remote_tracking_branch_ref;
 use super::{
     AKRA_AGENT_BRANCH_PREFIX, DEFAULT_POOL_SIZE, FreshPoolIntegrationTargetProof,
     NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_DETAIL, NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_NEXT_ACTION,
     ensure_directory_exists, pool_baseline_branch_for_repo,
-    try_parallel_mode_integration_branch_for_repo, try_push_remote_name,
+    try_parallel_mode_integration_branch_for_repo_with_runtime, try_push_remote_name_with_runtime,
 };
+#[cfg(test)]
+use super::{try_parallel_mode_integration_branch_for_repo, try_push_remote_name};
 
 /*
 pool 모듈은 병렬 실행의 filesystem-facing 경계다. public surface는 supervisor,
@@ -93,14 +98,17 @@ pub(super) use self::normalization_recovery::{
     install_before_normalization_staging_provision_hook,
 };
 #[cfg(test)]
-use self::paths::resolve_branch_head;
+pub(super) use self::paths::inspect_slot_git_status;
 use self::paths::{
-    annotate_worktree_label, canonicalize_best_effort, parse_worktree_records,
-    resolve_pool_baseline_head, worktree_paths_match,
+    annotate_worktree_label, parse_worktree_records, resolve_pool_baseline_head_with_runtime,
+    worktree_paths_match_with_runtime,
 };
 pub(super) use self::paths::{
-    derive_default_pool_root, derive_integration_worktree_path, inspect_slot_git_status,
+    derive_default_pool_root, derive_integration_worktree_path,
+    inspect_slot_git_status_with_runtime,
 };
+#[cfg(test)]
+use self::paths::{resolve_branch_head, worktree_paths_match};
 use self::reconcile::{
     ReusableDetachedBaselineResetContext, git_command_directory, git_worktree_destination,
     provision_missing_slots, reset_reusable_detached_baseline_slots,
@@ -111,17 +119,22 @@ use super::session_detail::agent_session_detail_record_path;
 
 const POOL_RESET_RETRY_DELAY: Duration = Duration::from_millis(50);
 
-pub(super) fn pool_root_has_managed_state(pool_root: &Path) -> bool {
-    let entries = match std::fs::read_dir(pool_root) {
+pub(super) fn pool_root_has_managed_state(
+    runtime: &dyn ParallelModeRuntimePort,
+    pool_root: &Path,
+) -> bool {
+    if !runtime.path_exists(pool_root) {
+        return false;
+    }
+    let entries = match runtime.read_directory_paths(pool_root) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
         Err(_) => return true,
     };
     for entry in entries {
-        let Ok(entry) = entry else {
-            return true;
-        };
-        if entry.file_name() != POOL_MUTATION_LOCK_FILE {
+        if entry
+            .file_name()
+            .is_none_or(|name| name != POOL_MUTATION_LOCK_FILE)
+        {
             return true;
         }
     }
@@ -267,14 +280,15 @@ build_pool_board는 read-only board entrypoint다. readiness가 아직 없거나
 filesystem reconcile을 실행하지 않고 unavailable board를 반환해 TUI refresh가 slot 상태를
 바꾸지 않게 한다.
 */
-pub(super) fn build_pool_board(
+pub(super) fn build_pool_board_with_runtime(
+    runtime: &dyn ParallelModeRuntimePort,
     planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
     readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
 ) -> ParallelModePoolBoardSnapshot {
     match readiness_snapshot {
         Some(snapshot) if snapshot.allows_parallel_mode() => {
-            inspect_pool_board(planning_authority, workspace_dir)
+            inspect_pool_board_with_runtime(runtime, planning_authority, workspace_dir)
         }
         Some(snapshot) => build_unavailable_pool_board(
             planning_authority,
@@ -296,6 +310,22 @@ pub(super) fn build_pool_board(
             "n/a",
         ),
     }
+}
+
+#[cfg(test)]
+pub(super) fn build_pool_board(
+    planning_authority: &dyn PlanningAuthorityPort,
+    workspace_dir: &str,
+    readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
+) -> ParallelModePoolBoardSnapshot {
+    let runtime =
+        crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter::new();
+    build_pool_board_with_runtime(
+        &runtime,
+        planning_authority,
+        workspace_dir,
+        readiness_snapshot,
+    )
 }
 
 /*
@@ -363,8 +393,8 @@ pub(super) fn reset_pool_for_parallel_enable_with_target(
     policy: ParallelModePoolResetPolicy,
     target: &FreshPoolIntegrationTargetProof,
 ) -> Result<ParallelModePoolResetReport, String> {
-    let mutation_lock =
-        acquire_pool_mutation_lock(planning_authority, workspace_dir).map_err(|detail| {
+    let mutation_lock = acquire_pool_mutation_lock(planning_authority, runtime, workspace_dir)
+        .map_err(|detail| {
             if detail == "canonical root inspection failed" {
                 "canonical repository root is unavailable".to_string()
             } else {
@@ -389,11 +419,12 @@ pub(super) fn reset_pool_for_parallel_enable_with_target_locked(
     target: &FreshPoolIntegrationTargetProof,
     mutation_lock: &PoolMutationLock,
 ) -> Result<ParallelModePoolResetReport, String> {
-    let Some(repo_root) = detect_git_repo_root(workspace_dir) else {
+    let Some(repo_root) = detect_git_repo_root_with_runtime(runtime, workspace_dir) else {
         return Err("git repository is unavailable".to_string());
     };
-    let current_push_remote = try_push_remote_name(&repo_root)?;
-    let current_integration_branch = try_parallel_mode_integration_branch_for_repo(&repo_root)?;
+    let current_push_remote = try_push_remote_name_with_runtime(runtime, &repo_root)?;
+    let current_integration_branch =
+        try_parallel_mode_integration_branch_for_repo_with_runtime(runtime, &repo_root)?;
     if target.repo_root != repo_root
         || target.push_remote != current_push_remote
         || target.integration_branch != current_integration_branch
@@ -411,13 +442,18 @@ pub(super) fn reset_pool_for_parallel_enable_with_target_locked(
     };
     let pool_root = derive_default_pool_root(&canonical_repo_root);
     mutation_lock.verify_pool_root(&pool_root)?;
-    ensure_directory_exists(&pool_root)
+    ensure_directory_exists(runtime, &pool_root)
         .map_err(|error| format!("pool root could not be created: {error}"))?;
-    let normalization_recovery_artifacts = normalization_recovery_artifact_paths(&pool_root)?;
+    let normalization_recovery_artifacts =
+        normalization_recovery_artifact_paths(runtime, &pool_root)?;
     let integration_target_oid = target.commit_sha.clone();
-    let mut context =
-        load_pool_runtime_context_from_roots(planning_authority, &repo_root, &canonical_repo_root)
-            .map_err(|detail| detail.to_string())?;
+    let mut context = load_pool_runtime_context_from_roots(
+        runtime,
+        planning_authority,
+        &repo_root,
+        &canonical_repo_root,
+    )
+    .map_err(|detail| detail.to_string())?;
     context.baseline_head = integration_target_oid.clone();
     context.integration_target_proof_is_fresh = true;
     let cleanup_context = ReconciledPoolCleanupContext::new(
@@ -442,6 +478,7 @@ pub(super) fn reset_pool_for_parallel_enable_with_target_locked(
     );
     if pre_reset_cleaned_slots > 0 {
         context = load_pool_runtime_context_from_roots(
+            runtime,
             planning_authority,
             &repo_root,
             &canonical_repo_root,
@@ -465,6 +502,7 @@ pub(super) fn reset_pool_for_parallel_enable_with_target_locked(
     );
     if reusable_cleaned_slots > 0 {
         context = load_pool_runtime_context_from_roots(
+            runtime,
             planning_authority,
             &repo_root,
             &canonical_repo_root,
@@ -526,7 +564,7 @@ pub(super) fn reset_pool_for_parallel_enable_with_target_locked(
         let Some(_worktree_record) = context
             .worktree_records
             .iter()
-            .find(|record| worktree_paths_match(&record.path, &slot_path))
+            .find(|record| worktree_paths_match_with_runtime(runtime, &record.path, &slot_path))
         else {
             if policy == ParallelModePoolResetPolicy::ForceDisposable {
                 collect_reset_projection_keys(&mut report, &context, &slot_id);
@@ -576,7 +614,7 @@ pub(super) fn reset_pool_for_parallel_enable_with_target_locked(
         let Some(worktree_record) = context
             .worktree_records
             .iter()
-            .find(|record| worktree_paths_match(&record.path, &slot_path))
+            .find(|record| worktree_paths_match_with_runtime(runtime, &record.path, &slot_path))
         else {
             continue;
         };
@@ -586,7 +624,7 @@ pub(super) fn reset_pool_for_parallel_enable_with_target_locked(
             continue;
         }
 
-        let Ok(slot_status) = inspect_slot_git_status(&slot_path) else {
+        let Ok(slot_status) = inspect_slot_git_status_with_runtime(runtime, &slot_path) else {
             report
                 .slot_reports
                 .push(ParallelModePoolResetSlotReport::new(
@@ -597,10 +635,11 @@ pub(super) fn reset_pool_for_parallel_enable_with_target_locked(
                 ));
             continue;
         };
-        let baseline_branch = pool_baseline_branch_for_repo(&repo_root);
+        let baseline_branch = pool_baseline_branch_for_repo(runtime, &repo_root);
         let reset_is_proven_safe = if worktree_record.detached {
             worktree_record.head_sha == context.baseline_head
                 || branch_is_integrated_into(
+                    runtime,
                     &repo_root,
                     &worktree_record.head_sha,
                     &integration_target_oid,
@@ -612,6 +651,7 @@ pub(super) fn reset_pool_for_parallel_enable_with_target_locked(
                 lease.state != ParallelModeSlotLeaseState::Running
                     && lease.branch_name == worktree_record.branch_name.clone().unwrap_or_default()
                     && branch_is_integrated_into(
+                        runtime,
                         &repo_root,
                         &lease.branch_name,
                         &integration_target_oid,
@@ -637,6 +677,7 @@ pub(super) fn reset_pool_for_parallel_enable_with_target_locked(
                 &slot_id,
             )
             && has_target_equivalent_lf_normalization_drift(
+                runtime,
                 &slot_path,
                 slot_status,
                 &integration_target_oid,
@@ -660,7 +701,7 @@ pub(super) fn reset_pool_for_parallel_enable_with_target_locked(
                 "pool_root": pool_root,
                 "slot_id": slot_id,
                 "slot_path": slot_path,
-                "baseline_branch": pool_baseline_branch_for_repo(&repo_root),
+                "baseline_branch": pool_baseline_branch_for_repo(runtime, &repo_root),
             })
         });
         mutation_lock.verify_pool_root(&pool_root)?;
@@ -668,6 +709,7 @@ pub(super) fn reset_pool_for_parallel_enable_with_target_locked(
             let recheck_unowned_authority =
                 || ensure_normalization_recovery_authority_is_empty(planning_authority, &repo_root);
             let outcome = quarantine_normalization_drift_and_replace_slot(
+                runtime,
                 NormalizationRecoveryRequest {
                     repo_root: &repo_root,
                     pool_root: &pool_root,
@@ -687,7 +729,7 @@ pub(super) fn reset_pool_for_parallel_enable_with_target_locked(
             )
         } else {
             (
-                reset_slot_worktree_to_ref_with_retry(&slot_path, &integration_target_oid),
+                reset_slot_worktree_to_ref_with_retry(runtime, &slot_path, &integration_target_oid),
                 None,
             )
         };
@@ -716,7 +758,7 @@ pub(super) fn reset_pool_for_parallel_enable_with_target_locked(
                     "pool_root": pool_root,
                     "slot_id": slot_id,
                     "slot_path": slot_path,
-                    "baseline_branch": pool_baseline_branch_for_repo(&repo_root),
+                    "baseline_branch": pool_baseline_branch_for_repo(runtime, &repo_root),
                     "normalization_quarantine": normalization_quarantine,
                     "succeeded": true,
                 })
@@ -742,7 +784,7 @@ pub(super) fn reset_pool_for_parallel_enable_with_target_locked(
                 "pool_root": pool_root,
                 "slot_id": slot_id,
                 "slot_path": slot_path,
-                "baseline_branch": pool_baseline_branch_for_repo(&repo_root),
+                "baseline_branch": pool_baseline_branch_for_repo(runtime, &repo_root),
                 "normalization_quarantine": normalization_quarantine,
                 "succeeded": false,
                 "failure": failure_summary,
@@ -814,16 +856,17 @@ fn disposable_runtime_task_ids(context: &PoolRuntimeContext) -> Vec<String> {
 }
 
 fn reset_slot_worktree_to_ref_with_retry(
+    runtime: &dyn ParallelModeRuntimePort,
     slot_path: &Path,
     integration_target_oid: &str,
 ) -> super::git_sequence::GitCommandSequenceReport {
-    let first_report = reset_slot_worktree_to_ref(slot_path, integration_target_oid);
+    let first_report = reset_slot_worktree_to_ref(runtime, slot_path, integration_target_oid);
     if first_report.succeeded() {
         return first_report;
     }
 
     thread::sleep(POOL_RESET_RETRY_DELAY);
-    reset_slot_worktree_to_ref(slot_path, integration_target_oid)
+    reset_slot_worktree_to_ref(runtime, slot_path, integration_target_oid)
 }
 
 fn collect_reset_projection_keys(
@@ -942,8 +985,8 @@ pub(super) fn reconcile_pool_board_and_context_with_target(
     workspace_dir: &str,
     target: &FreshPoolIntegrationTargetProof,
 ) -> PoolBoardWithContextResult {
-    let mutation_lock =
-        acquire_pool_mutation_lock(planning_authority, workspace_dir).map_err(|detail| {
+    let mutation_lock = acquire_pool_mutation_lock(planning_authority, runtime, workspace_dir)
+        .map_err(|detail| {
             let reconcile_status = if detail == "canonical root inspection failed" {
                 "reconcile failed / canonical repository root is unavailable"
             } else if detail.contains("pool root could not be created") {
@@ -982,7 +1025,7 @@ pub(super) fn reconcile_pool_board_and_context_with_target_locked(
     target: &FreshPoolIntegrationTargetProof,
     mutation_lock: &PoolMutationLock,
 ) -> PoolBoardWithContextResult {
-    let Some(repo_root) = detect_git_repo_root(workspace_dir) else {
+    let Some(repo_root) = detect_git_repo_root_with_runtime(runtime, workspace_dir) else {
         return Err(Box::new((
             build_blocked_pool_board(
                 planning_authority,
@@ -993,29 +1036,32 @@ pub(super) fn reconcile_pool_board_and_context_with_target_locked(
             "repository inspection failed".to_string(),
         )));
     };
-    let current_push_remote = try_push_remote_name(&repo_root).map_err(|detail| {
-        Box::new((
-            build_blocked_pool_board(
-                planning_authority,
-                workspace_dir,
-                "reconcile blocked / invalid push remote configuration",
-                &detail,
-            ),
-            detail,
-        ))
-    })?;
-    let current_integration_branch = try_parallel_mode_integration_branch_for_repo(&repo_root)
-        .map_err(|detail| {
+    let current_push_remote =
+        try_push_remote_name_with_runtime(runtime, &repo_root).map_err(|detail| {
             Box::new((
                 build_blocked_pool_board(
                     planning_authority,
                     workspace_dir,
-                    "reconcile blocked / invalid integration branch configuration",
+                    "reconcile blocked / invalid push remote configuration",
                     &detail,
                 ),
                 detail,
             ))
         })?;
+    let current_integration_branch = try_parallel_mode_integration_branch_for_repo_with_runtime(
+        runtime, &repo_root,
+    )
+    .map_err(|detail| {
+        Box::new((
+            build_blocked_pool_board(
+                planning_authority,
+                workspace_dir,
+                "reconcile blocked / invalid integration branch configuration",
+                &detail,
+            ),
+            detail,
+        ))
+    })?;
     if target.repo_root != repo_root
         || target.push_remote != current_push_remote
         || target.integration_branch != current_integration_branch
@@ -1061,13 +1107,13 @@ pub(super) fn reconcile_pool_board_and_context_with_target_locked(
                 detail,
             ))
         })?;
-    let pool_root_existed = pool_root.exists();
+    let pool_root_existed = runtime.path_exists(&pool_root);
     /*
     pool root는 canonical repo sibling 아래에 둔다. 사용자가 slot worktree 안에서
     reconcile을 호출해도 pool 위치가 slot 기준으로 흔들리지 않아야 모든 lane이 같은
     slot inventory를 공유한다.
     */
-    if ensure_directory_exists(&pool_root).is_err() {
+    if ensure_directory_exists(runtime, &pool_root).is_err() {
         return Err(Box::new((
             build_blocked_pool_board(
                 planning_authority,
@@ -1078,8 +1124,8 @@ pub(super) fn reconcile_pool_board_and_context_with_target_locked(
             "pool root creation failed".to_string(),
         )));
     }
-    let normalization_recovery_artifacts = normalization_recovery_artifact_paths(&pool_root)
-        .map_err(|detail| {
+    let normalization_recovery_artifacts =
+        normalization_recovery_artifact_paths(runtime, &pool_root).map_err(|detail| {
             Box::new((
                 build_blocked_pool_board(
                     planning_authority,
@@ -1110,7 +1156,7 @@ pub(super) fn reconcile_pool_board_and_context_with_target_locked(
     */
     let baseline_head = target.commit_sha.clone();
     let created_baseline_branch = false;
-    let Some(mut worktree_records) = load_worktree_records(&repo_root) else {
+    let Some(mut worktree_records) = load_worktree_records(runtime, &repo_root) else {
         return Err(Box::new((
             build_blocked_pool_board(
                 planning_authority,
@@ -1159,7 +1205,7 @@ pub(super) fn reconcile_pool_board_and_context_with_target_locked(
                     detail.to_string(),
                 ))
             })?;
-        if let Some(refreshed_records) = load_worktree_records(&repo_root) {
+        if let Some(refreshed_records) = load_worktree_records(runtime, &repo_root) {
             worktree_records = refreshed_records;
         }
     }
@@ -1183,6 +1229,7 @@ pub(super) fn reconcile_pool_board_and_context_with_target_locked(
             baseline_ref: &baseline_head,
         },
         planning_authority,
+        runtime,
         mutation_lock,
     );
     for quarantine_path in &reset_reusable_baseline_slots.normalization_quarantines {
@@ -1210,10 +1257,11 @@ pub(super) fn reconcile_pool_board_and_context_with_target_locked(
     baseline으로 다시 관측되며, 사용자가 알아야 하는 action count는 아래 cleanup pass가
     반환하는 "실제로 slot을 돌려놓은 수"에 더 가깝다.
     */
-    if let Some(refreshed_records) = load_worktree_records(&repo_root) {
+    if let Some(refreshed_records) = load_worktree_records(runtime, &repo_root) {
         worktree_records = refreshed_records;
     }
     let provisioned_slots = provision_missing_slots(
+        runtime,
         &repo_root,
         &canonical_repo_root,
         &pool_root,
@@ -1241,7 +1289,7 @@ pub(super) fn reconcile_pool_board_and_context_with_target_locked(
     cleanup과 board projection을 돌려야 missing slot이 같은 reconcile tick 안에서
     계속 missing으로 보이는 일이 없다.
     */
-    let Some(reloaded_worktree_records) = load_worktree_records(&repo_root) else {
+    let Some(reloaded_worktree_records) = load_worktree_records(runtime, &repo_root) else {
         return Err(Box::new((
             build_blocked_pool_board(
                 planning_authority,
@@ -1272,9 +1320,12 @@ pub(super) fn reconcile_pool_board_and_context_with_target_locked(
     cleanup 이후에 다시 로드한다. 이전 projection을 재사용하면 반환된 slot이 roster나
     detail에 남는 stale supervisor 상태가 된다.
     */
-    let Ok(mut context) =
-        load_pool_runtime_context_from_roots(planning_authority, &repo_root, &canonical_repo_root)
-    else {
+    let Ok(mut context) = load_pool_runtime_context_from_roots(
+        runtime,
+        planning_authority,
+        &repo_root,
+        &canonical_repo_root,
+    ) else {
         return Err(Box::new((
             build_blocked_pool_board(
                 planning_authority,
@@ -1290,7 +1341,7 @@ pub(super) fn reconcile_pool_board_and_context_with_target_locked(
     context.baseline_head = baseline_head;
     context.integration_target_proof_is_fresh = true;
     let normalization_recovery_artifacts =
-        normalization_recovery_artifact_paths(&context.pool_root).map_err(|detail| {
+        normalization_recovery_artifact_paths(runtime, &context.pool_root).map_err(|detail| {
             Box::new((
                 build_blocked_pool_board(
                     planning_authority,
@@ -1302,9 +1353,10 @@ pub(super) fn reconcile_pool_board_and_context_with_target_locked(
             ))
         })?;
     let pool = build_pool_board_from_context(
+        runtime,
         &context,
         summarize_pool_reconcile_status(
-            &build_pool_slots(&context),
+            &build_pool_slots(runtime, &context),
             &context.pool_root,
             &target.integration_branch,
             Some(PoolReconcileExecution {
@@ -1319,11 +1371,12 @@ pub(super) fn reconcile_pool_board_and_context_with_target_locked(
     Ok((context, pool))
 }
 
-fn inspect_pool_board(
+fn inspect_pool_board_with_runtime(
+    runtime: &dyn ParallelModeRuntimePort,
     planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
 ) -> ParallelModePoolBoardSnapshot {
-    match inspect_pool_board_and_context(planning_authority, workspace_dir) {
+    match inspect_pool_board_and_context_with_runtime(runtime, planning_authority, workspace_dir) {
         Ok((_, pool)) => pool,
         Err(error) => {
             let (pool, _) = *error;
@@ -1332,19 +1385,30 @@ fn inspect_pool_board(
     }
 }
 
+#[cfg(test)]
+fn inspect_pool_board(
+    planning_authority: &dyn PlanningAuthorityPort,
+    workspace_dir: &str,
+) -> ParallelModePoolBoardSnapshot {
+    let runtime =
+        crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter::new();
+    inspect_pool_board_with_runtime(&runtime, planning_authority, workspace_dir)
+}
+
 /*
 inspect_pool_board_and_context는 filesystem을 고치지 않는 projection path다. 실패해도
 사용자에게 보여 줄 blocked board를 함께 반환해 caller가 error string만으로 UI 상태를
 재구성하지 않게 한다.
 */
-pub(super) fn inspect_pool_board_and_context(
+pub(super) fn inspect_pool_board_and_context_with_runtime(
+    runtime: &dyn ParallelModeRuntimePort,
     planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
 ) -> PoolBoardWithContextResult {
-    match load_pool_runtime_context(planning_authority, workspace_dir) {
+    match load_pool_runtime_context_with_runtime(runtime, planning_authority, workspace_dir) {
         Ok(context) => {
             let normalization_recovery_artifacts =
-                normalization_recovery_artifact_paths(&context.pool_root).map_err(|detail| {
+                normalization_recovery_artifact_paths(runtime, &context.pool_root).map_err(|detail| {
                     Box::new((
                         build_blocked_pool_board(
                             planning_authority,
@@ -1356,11 +1420,12 @@ pub(super) fn inspect_pool_board_and_context(
                     ))
                 })?;
             let pool = build_pool_board_from_context(
+                runtime,
                 &context,
                 summarize_pool_reconcile_status(
-                    &build_pool_slots(&context),
+                    &build_pool_slots(runtime, &context),
                     &context.pool_root,
-                    &pool_baseline_branch_for_repo(&context.repo_root),
+                    &pool_baseline_branch_for_repo(runtime, &context.repo_root),
                     None,
                     &normalization_recovery_artifacts,
                 ),
@@ -1373,8 +1438,22 @@ pub(super) fn inspect_pool_board_and_context(
         ))),
     }
 }
-pub(super) fn build_pool_slots(context: &PoolRuntimeContext) -> Vec<ParallelModePoolSlotSnapshot> {
-    build_pool_slots_from_context(context)
+
+#[cfg(test)]
+pub(super) fn inspect_pool_board_and_context(
+    planning_authority: &dyn PlanningAuthorityPort,
+    workspace_dir: &str,
+) -> PoolBoardWithContextResult {
+    let runtime =
+        crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter::new();
+    inspect_pool_board_and_context_with_runtime(&runtime, planning_authority, workspace_dir)
+}
+
+pub(super) fn build_pool_slots(
+    runtime: &dyn ParallelModeRuntimePort,
+    context: &PoolRuntimeContext,
+) -> Vec<ParallelModePoolSlotSnapshot> {
+    build_pool_slots_from_context(runtime, context)
 }
 
 /*
@@ -1382,11 +1461,12 @@ runtime context loading은 inspection과 reconciliation이 공유하는 read pha
 canonical authority root, pool baseline head, worktree list, authority projections를 같은
 순서로 읽어 board/distributor/cleanup이 서로 다른 기준 시점을 쓰는 일을 줄인다.
 */
-pub(super) fn load_pool_runtime_context(
+pub(super) fn load_pool_runtime_context_with_runtime(
+    runtime: &dyn ParallelModeRuntimePort,
     planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
 ) -> Result<PoolRuntimeContext, (&'static str, &'static str)> {
-    let Some(repo_root) = detect_git_repo_root(workspace_dir) else {
+    let Some(repo_root) = detect_git_repo_root_with_runtime(runtime, workspace_dir) else {
         return Err((
             "reconcile failed / git repository is unavailable",
             "repository inspection failed",
@@ -1400,13 +1480,18 @@ pub(super) fn load_pool_runtime_context(
         ));
     };
 
-    load_pool_runtime_context_from_roots(planning_authority, &repo_root, &canonical_repo_root)
-        .map_err(|detail| {
-            (
-                "reconcile failed / pool runtime state could not be loaded",
-                detail,
-            )
-        })
+    load_pool_runtime_context_from_roots(
+        runtime,
+        planning_authority,
+        &repo_root,
+        &canonical_repo_root,
+    )
+    .map_err(|detail| {
+        (
+            "reconcile failed / pool runtime state could not be loaded",
+            detail,
+        )
+    })
 }
 
 /*
@@ -1414,20 +1499,20 @@ workspace lease resolution은 path match만으로 끝내지 않고 현재 checke
 slot worktree path가 맞더라도 사용자가 수동 checkout을 바꾼 상태면 turn cleanup이 잘못된
 branch를 reset할 수 있기 때문이다.
 */
-pub(super) fn resolve_workspace_slot_lease(
+pub(super) fn resolve_workspace_slot_lease_with_runtime(
+    runtime: &dyn ParallelModeRuntimePort,
     planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
 ) -> Result<Option<WorkspaceSlotLeaseResolution>, String> {
-    let Some(repo_root) = detect_git_repo_root(workspace_dir) else {
+    let Some(repo_root) = detect_git_repo_root_with_runtime(runtime, workspace_dir) else {
         return Err("repository inspection failed".to_string());
     };
     let Some(canonical_repo_root) = detect_canonical_repo_root(planning_authority, workspace_dir)
     else {
         return Err("canonical root inspection failed".to_string());
     };
-    let workspace_path = canonicalize_best_effort(Path::new(&repo_root));
-    crate::git_execution_guard::ensure_host_git_execution_config_safe(&workspace_path)
-        .map_err(|error| error.to_string())?;
+    let workspace_path = runtime.canonicalize_best_effort(Path::new(&repo_root));
+    runtime.ensure_git_execution_safe(&workspace_path)?;
     let runtime_projection = load_runtime_projection_snapshot(
         planning_authority,
         canonical_repo_root.to_str().unwrap_or(repo_root.as_str()),
@@ -1436,7 +1521,13 @@ pub(super) fn resolve_workspace_slot_lease(
     let matching_lease_count = runtime_projection
         .slot_leases
         .values()
-        .filter(|lease| worktree_paths_match(&workspace_path, Path::new(&lease.worktree_path)))
+        .filter(|lease| {
+            worktree_paths_match_with_runtime(
+                runtime,
+                &workspace_path,
+                Path::new(&lease.worktree_path),
+            )
+        })
         .count();
     if matching_lease_count == 0 {
         return Ok(None);
@@ -1448,10 +1539,14 @@ pub(super) fn resolve_workspace_slot_lease(
         ));
     }
 
-    let context =
-        load_pool_runtime_context_from_roots(planning_authority, &repo_root, &canonical_repo_root)
-            .map_err(str::to_string)?;
-    let Some(current_branch) = current_branch_name(&workspace_path) else {
+    let context = load_pool_runtime_context_from_roots(
+        runtime,
+        planning_authority,
+        &repo_root,
+        &canonical_repo_root,
+    )
+    .map_err(str::to_string)?;
+    let Some(current_branch) = current_branch_name(runtime, &workspace_path) else {
         return Err(format!(
             "workspace `{}` does not currently resolve to a branch",
             workspace_path.display()
@@ -1460,7 +1555,13 @@ pub(super) fn resolve_workspace_slot_lease(
     let mut matching_leases = context
         .slot_leases
         .values()
-        .filter(|lease| worktree_paths_match(&workspace_path, Path::new(&lease.worktree_path)))
+        .filter(|lease| {
+            worktree_paths_match_with_runtime(
+                runtime,
+                &workspace_path,
+                Path::new(&lease.worktree_path),
+            )
+        })
         .cloned()
         .collect::<Vec<_>>();
     /*
@@ -1490,7 +1591,7 @@ pub(super) fn resolve_workspace_slot_lease(
         ));
     }
     let expected_slot_path = context.pool_root.join(&lease.slot_id);
-    if !worktree_paths_match(&workspace_path, &expected_slot_path) {
+    if !worktree_paths_match_with_runtime(runtime, &workspace_path, &expected_slot_path) {
         return Err(format!(
             "workspace `{}` is not the generated path for pool slot `{}`",
             workspace_path.display(),
@@ -1505,7 +1606,7 @@ pub(super) fn resolve_workspace_slot_lease(
         Path::new(&lease.worktree_path),
         &lease.branch_name,
     )
-    .validate()?;
+    .validate(runtime)?;
     Ok(Some(WorkspaceSlotLeaseResolution {
         context,
         lease,
@@ -1514,14 +1615,15 @@ pub(super) fn resolve_workspace_slot_lease(
 }
 
 fn load_pool_runtime_context_from_roots(
+    runtime: &dyn ParallelModeRuntimePort,
     planning_authority: &dyn PlanningAuthorityPort,
     repo_root: &str,
     canonical_repo_root: &Path,
 ) -> Result<PoolRuntimeContext, &'static str> {
-    let Some(baseline_head) = resolve_pool_baseline_head(repo_root) else {
+    let Some(baseline_head) = resolve_pool_baseline_head_with_runtime(runtime, repo_root) else {
         return Err("pool baseline is unavailable during inspection");
     };
-    let Some(worktree_records) = load_worktree_records(repo_root) else {
+    let Some(worktree_records) = load_worktree_records(runtime, repo_root) else {
         return Err("worktree list inspection failed");
     };
     let pool_root = derive_default_pool_root(canonical_repo_root);
@@ -1592,13 +1694,17 @@ pub(super) fn ensure_normalization_recovery_authority_is_empty(
     }
 }
 
-fn load_worktree_records(repo_root: &str) -> Option<Vec<GitWorktreeRecord>> {
+fn load_worktree_records(
+    runtime: &dyn ParallelModeRuntimePort,
+    repo_root: &str,
+) -> Option<Vec<GitWorktreeRecord>> {
     /*
     `git worktree list --porcelain` is the inventory source for both reconcile
     and inspection. Keeping it as an Option lets callers choose their own blocked
     board copy instead of leaking command failures through a generic error.
     */
-    let worktree_output = run_command(
+    let worktree_output = run_command_with_runtime(
+        runtime,
         "git",
         ["-C", repo_root, "worktree", "list", "--porcelain"],
         None,
@@ -1624,9 +1730,44 @@ pub(super) fn short_sha(commit_sha: &str) -> String {
     commit_sha.chars().take(7).collect::<String>()
 }
 
-pub(super) fn resolve_workspace_head_sha(workspace_path: &Path) -> Option<String> {
+pub(super) fn resolve_workspace_head_sha_with_runtime(
+    runtime: &dyn ParallelModeRuntimePort,
+    workspace_path: &Path,
+) -> Option<String> {
     let workspace = workspace_path.display().to_string();
-    run_command("git", ["-C", workspace.as_str(), "rev-parse", "HEAD"], None)
+    run_command_with_runtime(
+        runtime,
+        "git",
+        ["-C", workspace.as_str(), "rev-parse", "HEAD"],
+        None,
+    )
+}
+
+#[cfg(test)]
+pub(super) fn load_pool_runtime_context(
+    planning_authority: &dyn PlanningAuthorityPort,
+    workspace_dir: &str,
+) -> Result<PoolRuntimeContext, (&'static str, &'static str)> {
+    let runtime =
+        crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter::new();
+    load_pool_runtime_context_with_runtime(&runtime, planning_authority, workspace_dir)
+}
+
+#[cfg(test)]
+pub(super) fn resolve_workspace_slot_lease(
+    planning_authority: &dyn PlanningAuthorityPort,
+    workspace_dir: &str,
+) -> Result<Option<WorkspaceSlotLeaseResolution>, String> {
+    let runtime =
+        crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter::new();
+    resolve_workspace_slot_lease_with_runtime(&runtime, planning_authority, workspace_dir)
+}
+
+#[cfg(test)]
+pub(super) fn resolve_workspace_head_sha(workspace_path: &Path) -> Option<String> {
+    let runtime =
+        crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter::new();
+    resolve_workspace_head_sha_with_runtime(&runtime, workspace_path)
 }
 
 #[cfg(test)]

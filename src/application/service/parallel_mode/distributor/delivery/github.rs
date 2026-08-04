@@ -750,7 +750,7 @@ fn resolve_pull_request_delivery_mode(
     runtime: &dyn ParallelModeRuntimePort,
     repo_root: &str,
 ) -> Result<PullRequestDeliveryMode, String> {
-    if let Ok(value) = std::env::var(AKRA_GITHUB_PR_MODE_ENV) {
+    if let Some(value) = runtime.environment_variable(AKRA_GITHUB_PR_MODE_ENV)? {
         return parse_pull_request_delivery_mode(&value).ok_or_else(|| {
             format!("{AKRA_GITHUB_PR_MODE_ENV} is invalid; expected required, auto, or disabled")
         });
