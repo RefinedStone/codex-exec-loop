@@ -1265,9 +1265,107 @@ fn draw_fullscreen_session_list_panel(
 
 #[cfg(test)]
 mod tests {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
     use ratatui::text::Line;
 
-    use super::selected_content_scroll_offset;
+    use super::*;
+
+    fn lines(label: &str, count: usize) -> Vec<Line<'static>> {
+        (0..count)
+            .map(|index| Line::from(format!("{label} {index}")))
+            .collect()
+    }
+
+    fn section(label: &str) -> Vec<Line<'static>> {
+        lines(label, 3)
+    }
+
+    fn buffer_text(buffer: &Buffer) -> String {
+        if buffer.area.width == 0 {
+            return String::new();
+        }
+        buffer
+            .content
+            .chunks(usize::from(buffer.area.width))
+            .map(|cells| {
+                cells
+                    .iter()
+                    .map(|cell| cell.symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn render_model(
+        model: FullscreenInspectionFrameModel,
+        width: u16,
+        height: u16,
+    ) -> (String, Option<usize>) {
+        let mut terminal =
+            Terminal::new(TestBackend::new(width, height)).expect("inspection test terminal");
+        let mut selected_index = None;
+        terminal
+            .draw(|frame| {
+                selected_index = draw_fullscreen_shell_inspection(frame, frame.area(), model)
+                    .and_then(|state| state.selected());
+            })
+            .expect("inspection model should render");
+        (buffer_text(terminal.backend().buffer()), selected_index)
+    }
+
+    fn parallel_stream(dense: bool) -> ParallelLiveStreamModel {
+        let status_lines = if dense {
+            lines("parallel event", 12)
+        } else {
+            vec![Line::from("parallel ready")]
+        };
+        let mut stream =
+            ParallelLiveStreamModel::pending_viewport(&Default::default(), status_lines);
+        if dense {
+            stream.finalize_pending_geometry(Rect::new(0, 0, 20, 2));
+        }
+        stream
+    }
+
+    fn supersession_view(
+        focused_full_viewport: bool,
+        dense_stream: bool,
+    ) -> SupersessionOverlayView {
+        SupersessionOverlayView {
+            focused_full_viewport,
+            header_lines: section("parallel header"),
+            overview_lines: section("parallel overview"),
+            accepted_queue_lines: section("accepted queue"),
+            timeline_lines: section("timeline"),
+            lane_lines: lines("lane", 10),
+            compact_lane_lines: section("compact lane"),
+            selected_lane_lines: lines("selected lane", 8),
+            compact_selected_lane_lines: section("compact selected lane"),
+            event_stream: parallel_stream(dense_stream),
+            key_lines: section("parallel key"),
+        }
+    }
+
+    fn queue_view(header_has_body: bool) -> QueueOverlayView {
+        QueueOverlayView {
+            header_lines: if header_has_body {
+                section("queue header")
+            } else {
+                vec![Line::from("queue header")]
+            },
+            summary_lines: section("queue summary"),
+            queue_lines: lines("queued task", 8),
+            proposal_lines: section("proposed task"),
+            note_lines: section("queue note"),
+            selected_content_line_index: Some(7),
+            key_lines: section("queue key"),
+        }
+    }
 
     #[test]
     fn selected_content_scroll_keeps_marker_when_row_is_taller_than_viewport() {
@@ -1280,6 +1378,300 @@ mod tests {
             selected_content_scroll_offset(&lines, Some(1), 48, 2),
             1,
             "a tall selected row should start at its marker instead of its wrapped tail"
+        );
+    }
+
+    #[test]
+    fn fullscreen_inspection_renders_every_overlay_contract() {
+        let (conversation, selected) =
+            render_model(FullscreenInspectionFrameModel::Conversation, 120, 40);
+        assert!(conversation.trim().is_empty());
+        assert_eq!(selected, None);
+
+        let cases = vec![
+            (
+                FullscreenInspectionFrameModel::WorkCenter(WorkCenterOverlayView {
+                    header_lines: section("work header"),
+                    summary_lines: section("work summary"),
+                    item_lines: lines("work item", 8),
+                    detail_lines: section("work detail"),
+                    key_lines: section("work key"),
+                }),
+                "Work Center",
+            ),
+            (
+                FullscreenInspectionFrameModel::Activity(ActivityOverlayView {
+                    header_lines: section("activity header"),
+                    card_rows: Vec::new(),
+                    detail_title: Line::from("Activity Detail"),
+                    detail_lines: lines("activity detail", 12),
+                    key_lines: section("activity key"),
+                    current_page_cursor: Default::default(),
+                    next_page_cursor: None,
+                }),
+                "Activity Detail",
+            ),
+            (
+                FullscreenInspectionFrameModel::Approval(ApprovalFullscreenScreenModel {
+                    available: true,
+                    header_lines: section("approval header"),
+                    detail_lines: lines("approval detail", 12),
+                    key_lines: section("approval key"),
+                    scroll_offset: 1,
+                    visible_start: 2,
+                    visible_end: 8,
+                    rendered_detail_rows: 12,
+                }),
+                "Approval Required",
+            ),
+            (
+                FullscreenInspectionFrameModel::ParallelPeek {
+                    view: ParallelPeekOverlayView {
+                        header_lines: section("peek header"),
+                        agent_lines: lines("agent", 10),
+                        conversation_lines: lines("conversation", 12),
+                        status_lines: section("peek status"),
+                        key_lines: section("peek key"),
+                    },
+                    step: ParallelPeekOverlayStep::AgentList,
+                    scroll_from_bottom: 0,
+                },
+                "Active Agents",
+            ),
+            (
+                FullscreenInspectionFrameModel::ParallelPeek {
+                    view: ParallelPeekOverlayView {
+                        header_lines: section("peek header"),
+                        agent_lines: lines("agent", 10),
+                        conversation_lines: lines("conversation", 24),
+                        status_lines: section("peek status"),
+                        key_lines: section("peek key"),
+                    },
+                    step: ParallelPeekOverlayStep::ConversationPreview,
+                    scroll_from_bottom: 2,
+                },
+                "Conversation Preview",
+            ),
+            (
+                FullscreenInspectionFrameModel::Help {
+                    language: TuiLanguage::English,
+                    view: HelpOverlayView {
+                        header_lines: section("help header"),
+                        command_lines: lines("help command", 18),
+                        key_lines: section("help key"),
+                    },
+                    scroll_offset: 2,
+                },
+                "Commands",
+            ),
+            (
+                FullscreenInspectionFrameModel::Directions(DirectionsMaintenanceOverlayView {
+                    header_lines: section("directions header"),
+                    summary_lines: section("directions summary"),
+                    option_lines: lines("directions option", 10),
+                    status_lines: section("directions status"),
+                    key_lines: section("directions key"),
+                }),
+                "Directions",
+            ),
+            (
+                FullscreenInspectionFrameModel::Startup {
+                    view: StartupOverlayView {
+                        header_lines: section("startup header"),
+                        summary_lines: section("startup summary"),
+                        check_lines: lines("startup check", 12),
+                        warning_lines: Vec::new(),
+                        key_lines: section("startup key"),
+                    },
+                    warning_scroll_offset: 0,
+                },
+                "Diagnostics",
+            ),
+            (
+                FullscreenInspectionFrameModel::Sessions {
+                    view: SessionOverlayView {
+                        header_lines: section("session header"),
+                        list_view: OverlayListView {
+                            message_lines: None,
+                            items: Vec::new(),
+                            selected_index: None,
+                        },
+                        detail_lines: section("session detail"),
+                        warning_lines: section("session warning"),
+                        key_lines: section("session key"),
+                    },
+                    list_state: ListState::default(),
+                },
+                "Recent Sessions",
+            ),
+            (
+                FullscreenInspectionFrameModel::ModelSelection(ModelSelectionOverlayView {
+                    header_lines: section("model header"),
+                    model_lines: lines("model", 12),
+                    effort_lines: lines("effort", 8),
+                    status_lines: section("model status"),
+                    key_lines: section("model key"),
+                }),
+                "Select Model and Effort",
+            ),
+            (
+                FullscreenInspectionFrameModel::ViewSelection(ViewSelectionOverlayView {
+                    header_lines: section("view header"),
+                    mode_lines: lines("view mode", 8),
+                    status_lines: section("view status"),
+                    key_lines: section("view key"),
+                }),
+                "Select Conversation View",
+            ),
+            (
+                FullscreenInspectionFrameModel::LanguageSelection(LanguageSelectionOverlayView {
+                    header_lines: section("language header"),
+                    language_lines: lines("language", 8),
+                    status_lines: section("language status"),
+                    key_lines: section("language key"),
+                }),
+                "Select Language",
+            ),
+            (
+                FullscreenInspectionFrameModel::Supersession(supersession_view(true, false)),
+                "Parallel Operations",
+            ),
+            (
+                FullscreenInspectionFrameModel::Queue(queue_view(true)),
+                "Planning Queue",
+            ),
+            (
+                FullscreenInspectionFrameModel::Reviews(ReviewsOverlayView {
+                    header_lines: section("reviews header"),
+                    summary_lines: section("reviews summary"),
+                    current_thread_reviews: Vec::new(),
+                    inbox_reviews: Vec::new(),
+                    history_reviews: Vec::new(),
+                    key_lines: section("reviews key"),
+                }),
+                "Review Center",
+            ),
+            (
+                FullscreenInspectionFrameModel::PlanningInit(PlanningInitOverlayView {
+                    header_lines: section("planning header"),
+                    summary_lines: section("planning summary"),
+                    option_lines: lines("planning option", 10),
+                    status_lines: section("planning status"),
+                    key_lines: section("planning key"),
+                }),
+                "Planning",
+            ),
+            (
+                FullscreenInspectionFrameModel::DraftEditor {
+                    title: "Draft Editor",
+                    view: Some(PlanningDraftEditorOverlayView {
+                        header_lines: section("draft header"),
+                        file_lines: section("draft file"),
+                        editor_title: "Active Document".to_string(),
+                        editor_lines: lines("draft content", 14),
+                        editor_scroll: 2,
+                        editor_cursor_offset: Some((1, 1)),
+                        status_lines: section("draft status"),
+                        key_lines: section("draft key"),
+                    }),
+                },
+                "Draft Editor",
+            ),
+        ];
+
+        for (model, expected) in cases {
+            let (screen, _) = render_model(model, 120, 40);
+            assert!(
+                screen.contains(expected),
+                "expected `{expected}` in rendered inspection:\n{screen}"
+            );
+        }
+    }
+
+    #[test]
+    fn fullscreen_inspection_renders_compact_and_degraded_branches() {
+        let compact_models = [
+            FullscreenInspectionFrameModel::WorkCenter(WorkCenterOverlayView {
+                header_lines: section("compact work header"),
+                summary_lines: section("compact work summary"),
+                item_lines: section("compact work item"),
+                detail_lines: section("compact work detail"),
+                key_lines: section("compact work key"),
+            }),
+            FullscreenInspectionFrameModel::Startup {
+                view: StartupOverlayView {
+                    header_lines: section("warning header"),
+                    summary_lines: section("warning summary"),
+                    check_lines: lines("warning check", 8),
+                    warning_lines: lines("attention warning", 8),
+                    key_lines: section("warning key"),
+                },
+                warning_scroll_offset: 2,
+            },
+            FullscreenInspectionFrameModel::Approval(ApprovalFullscreenScreenModel {
+                available: false,
+                header_lines: Vec::new(),
+                detail_lines: Vec::new(),
+                key_lines: Vec::new(),
+                scroll_offset: 0,
+                visible_start: 0,
+                visible_end: 0,
+                rendered_detail_rows: 0,
+            }),
+            FullscreenInspectionFrameModel::Sessions {
+                view: SessionOverlayView {
+                    header_lines: section("degraded session header"),
+                    list_view: OverlayListView {
+                        message_lines: Some(section("session unavailable")),
+                        items: Vec::new(),
+                        selected_index: None,
+                    },
+                    detail_lines: section("degraded session detail"),
+                    warning_lines: section("degraded session warning"),
+                    key_lines: section("degraded session key"),
+                },
+                list_state: ListState::default(),
+            },
+            FullscreenInspectionFrameModel::Queue(queue_view(false)),
+            FullscreenInspectionFrameModel::DraftEditor {
+                title: "Unavailable Draft",
+                view: None,
+            },
+        ];
+
+        for model in compact_models {
+            render_model(model, 80, 16);
+        }
+
+        let (passive, _) = render_model(
+            FullscreenInspectionFrameModel::Supersession(supersession_view(false, false)),
+            100,
+            24,
+        );
+        assert!(passive.contains(PARALLEL_EVENT_STREAM_TITLE));
+
+        let (wide_compact, _) = render_model(
+            FullscreenInspectionFrameModel::Supersession(supersession_view(true, true)),
+            140,
+            18,
+        );
+        assert!(wide_compact.contains("Parallel Operations"));
+        assert!(!wide_compact.contains(PARALLEL_EVENT_STREAM_TITLE));
+
+        let (narrow, _) = render_model(
+            FullscreenInspectionFrameModel::Supersession(supersession_view(true, false)),
+            100,
+            30,
+        );
+        assert!(narrow.contains("Selected Lane"));
+
+        assert_eq!(
+            inline_preview_scroll_offset(Rect::new(0, 0, 80, 4), 12, 2),
+            7
+        );
+        assert_eq!(
+            wrapped_approval_panel_height(&lines("wrapped", 2), 80, 6),
+            6
         );
     }
 }
