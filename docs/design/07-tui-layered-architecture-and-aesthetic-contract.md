@@ -50,6 +50,10 @@ The frame has two vertical regions:
 The body gets the remaining height. The composer never disappears because output grows. At narrow
 widths, copy wraps and secondary metadata compresses; the semantic order does not change.
 
+The welcome logo is body content, not a separate startup layout. An empty draft, a draft being
+edited, and the first active turn all use the same two-band geometry from their first frame. Only
+the body content changes; the status/composer tail remains anchored to the physical bottom row.
+
 The shell tail is intentionally quiet:
 
 - one product/context row when useful;
@@ -186,6 +190,8 @@ than a role-label-plus-body block.
 
 ## Acceptance Scenarios
 
+- The welcome logo, first prompt edit, and first submitted prompt keep the composer on the same
+  physical bottom row without a startup-to-conversation layout jump.
 - A long conversation remains scrollable while the composer stays visible.
 - Streaming append does not move a reader who paged up.
 - The unseen badge appears only while output is newer than the reader's seen revision.
