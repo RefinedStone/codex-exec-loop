@@ -29,7 +29,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: native-pr-checks-${{ github.workflow }}-${{ github.ref }}
+  group: native-pr-checks-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
   cancel-in-progress: true
 
 env:
