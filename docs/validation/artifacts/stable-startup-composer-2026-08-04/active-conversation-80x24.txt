@@ -1,0 +1,24 @@
+ › hello from startup
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Akra / root  ·  PENDING  ·  queue off  ·  agents off  ·  terminals 0
+startup: startup checks still running
+… CHECKING  ·  input pending  ·  Ctrl+D details
+╭ Task ────────────────────────────────────────────────────────────────────────╮
+│ > Describe a task or type : for commands                                     │
+╰  Type now  |  submission waits for startup  ─────────────────────────────────╯

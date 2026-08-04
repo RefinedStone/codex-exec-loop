@@ -10,6 +10,8 @@ an explicitly proposed document, not here.
 - Akra is a native-first Rust client over official `codex app-server` interfaces.
 - The alternate-screen fullscreen TUI is the primary surface. One app-owned transcript viewport
   owns conversation history, streaming rows, tool cards, overlays, status, and the composer.
+- The startup logo occupies that transcript viewport; startup, draft editing, and active turns use
+  one bottom-anchored status/composer geometry, so the first submission never moves the input box.
 - Losing the controlling terminal terminates the native TUI through its normal shutdown boundary;
   a closed terminal or PTY must not leave the TUI or its app-server runtime resident.
 - Agent text stays raw Markdown in app-server state and is rendered at the TUI projection boundary;

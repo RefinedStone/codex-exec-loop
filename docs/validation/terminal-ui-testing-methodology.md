@@ -57,6 +57,8 @@ future test-growth cost, and maintainability cost.
    remains visible, old rows remain readable, expanded cards stay in the transcript, and semantic
    diff rows use the intended style. Prompt-card tests also assert that `You:` is absent, the `›`
    marker appears once, and the low-luminance surface fills every explicit or soft-wrapped row.
+   Startup continuity tests render an empty welcome frame, an edited welcome frame, and the first
+   active-conversation frame in sequence and require the composer bottom row to remain identical.
 3. Transaction tests prove the stable frame receipt applies once and a resize race applies nothing.
 4. Lifecycle tests assert alternate-screen escape sequences, focus/mouse/paste modes, cursor
    restoration, and best-effort cleanup ordering.
@@ -107,7 +109,8 @@ deterministic tests unless a reviewer asks for more evidence.
 
 Capture must show:
 
-1. the fullscreen transcript and composer at 80×24 or narrower;
+1. the empty welcome frame, first-prompt editing frame, and first active-conversation frame at
+   80×24 or narrower, with the composer fixed to the same physical bottom row;
 2. PageUp while streaming, with the reader anchor unchanged and a `new output` badge;
 3. Ctrl+End returning to the newest row;
 4. a collapsed read/explore card and its expanded detail;
