@@ -1103,7 +1103,7 @@ mod tests {
             _cwd: &str,
             _prompt: &str,
             _options: ConversationTurnOptions,
-            _event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
+            _event_sender: crate::application::port::conversation_stream::ConversationStreamSender,
         ) -> anyhow::Result<ConversationTurnTerminalReceipt> {
             unreachable!("routing test does not run turn effects")
         }
@@ -1113,7 +1113,7 @@ mod tests {
             _thread_id: &str,
             _prompt: &str,
             _options: ConversationTurnOptions,
-            _event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
+            _event_sender: crate::application::port::conversation_stream::ConversationStreamSender,
         ) -> anyhow::Result<ConversationTurnTerminalReceipt> {
             unreachable!("routing test does not run turn effects")
         }

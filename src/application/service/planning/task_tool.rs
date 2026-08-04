@@ -11,9 +11,6 @@ use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-pub(crate) const PLANNING_TOOL_PARENT_THREAD_ID_ENV: &str = "AKRA_PLANNING_TOOL_PARENT_THREAD_ID";
-pub(crate) const PLANNING_TOOL_PARENT_TURN_ID_ENV: &str = "AKRA_PLANNING_TOOL_PARENT_TURN_ID";
-
 /*
  * planning task tool은 worker-facing task authority write API다. full planning admin surface보다
  * 의도적으로 좁게 설계되어 worker는 task를 읽고, `PlanningTaskMutationService`를 통해 한 번에

@@ -6,7 +6,7 @@ use anyhow::Result;
 // parallel worker도 일반 conversation stream과 같은 `ConversationStreamEvent` 계약을 쓴다.
 // 이 공유 vocabulary 덕분에 dispatch worker는 worker 전용 protocol을 새로 만들지 않고도
 // final assistant text, completion, failure, tool activity를 기존 reducer 관점으로 관찰할 수 있다.
-use crate::application::service::conversation_runtime_event::ConversationStreamSender;
+use crate::application::port::conversation_stream::ConversationStreamSender;
 use crate::domain::turn_terminal::ConversationTurnTerminalReceipt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,7 +67,7 @@ mod tests {
     use super::{
         NoopParallelAgentWorkerPort, ParallelAgentWorkerPort, ParallelAgentWorkerStreamRequest,
     };
-    use crate::application::service::conversation_runtime_event::conversation_stream_channel;
+    use crate::application::port::conversation_stream::conversation_stream_channel;
 
     #[test]
     fn noop_worker_does_not_invent_a_completed_terminal_receipt() {

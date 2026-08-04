@@ -10,7 +10,8 @@
 - `src/core/`: headless app command/effect/completion/snapshot runtime
 - `src/domain/`: 순수 conversation, session, planning, parallel, terminal, review model
 - `src/application/service/`: use-case orchestration과 control-plane service
-- `src/application/port/outbound/`: application 소유 integration contract
+- `src/application/port/`: adapter와 독립적인 application 경계 계약
+- `src/application/port/outbound/`: application 소유 integration capability 계약
 - `src/adapter/inbound/tui/`: inline Ratatui/Crossterm shell
 - `src/adapter/inbound/{cli,admin_api,telegram_bot}/`: 다른 운영 adapter
 - `src/adapter/outbound/{app_server,db,filesystem,git,github,telegram}/`: concrete boundary

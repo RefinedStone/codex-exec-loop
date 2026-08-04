@@ -533,9 +533,9 @@ impl InteractiveTurnRuntimePort for TestAppServerPort {
         cwd: &str,
         _prompt: &str,
         _options: crate::domain::conversation::ConversationTurnOptions,
-        event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
+        event_sender: crate::application::port::conversation_stream::ConversationStreamSender,
     ) -> Result<crate::domain::turn_terminal::ConversationTurnTerminalReceipt> {
-        crate::application::service::conversation_runtime_event::emit_confirmed_test_terminal_receipt(
+        crate::application::port::conversation_stream::emit_confirmed_test_terminal_receipt(
             &event_sender,
             "test-thread",
             cwd,
@@ -547,9 +547,9 @@ impl InteractiveTurnRuntimePort for TestAppServerPort {
         thread_id: &str,
         _prompt: &str,
         _options: crate::domain::conversation::ConversationTurnOptions,
-        event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
+        event_sender: crate::application::port::conversation_stream::ConversationStreamSender,
     ) -> Result<crate::domain::turn_terminal::ConversationTurnTerminalReceipt> {
-        crate::application::service::conversation_runtime_event::emit_confirmed_test_terminal_receipt(
+        crate::application::port::conversation_stream::emit_confirmed_test_terminal_receipt(
             &event_sender,
             thread_id,
             "/tmp/test-workspace",
@@ -724,7 +724,7 @@ mod tests {
             .request_stop_all_sessions()
             .expect("stop fixture should succeed");
         let (event_sender, _event_receiver) =
-            crate::application::service::conversation_runtime_event::conversation_stream_channel();
+            crate::application::port::conversation_stream::conversation_stream_channel();
         app_server_port
             .run_new_thread_stream(
                 "/tmp/root",

@@ -426,7 +426,7 @@ sub-slices.
   [`runtime_envelopes.json`](../../../src/adapter/outbound/app_server/protocol/fixtures/runtime_envelopes.json)
   fixture fail closed on malformed stable responses while preserving missing, null, defaulted,
   unavailable, bounded unknown, and closed source values;
-- [`conversation_runtime_event.rs`](../../../src/application/service/conversation_runtime_event.rs)
+- [`conversation_stream.rs`](../../../src/application/port/conversation_stream.rs)
   provides the shared application projection used by planning and parallel paths, while the Core
   reducer owns current main/resume state without reparsing app-server wire values;
 - pre-thread-response settings are discarded at the response chronology boundary, later

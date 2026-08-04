@@ -11,8 +11,8 @@ use super::{
     ThreadReadResponse, TurnNotificationHandling, UNKNOWN_ITEM_PROJECTION_DECISION,
     handle_turn_notification, initialize_detail, to_conversation_snapshot, to_session_summary,
 };
+use crate::application::port::conversation_stream::ConversationStreamEvent;
 use crate::application::port::outbound::startup_probe_port::AppServerStartupContext;
-use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::planning::RESULT_OUTPUT_FILE_PATH;
 use crate::domain::conversation::{
     ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationMessageKind,

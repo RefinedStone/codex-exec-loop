@@ -70,6 +70,16 @@ struct TuiCoverageSourceException {
     reason: &'static str,
 }
 
+const HEXAGONAL_GUARDED_ROOTS: &[&str] = &[
+    "src/domain",
+    "src/application/port",
+    "src/application/service",
+    "src/core",
+    "src/adapter/inbound",
+    "src/adapter/outbound",
+    "src/composition",
+];
+
 const PARALLEL_CONTROL_PLANE_BYPASS_DEBTS: &[PatternDebtRule] = &[
     PatternDebtRule {
         path_suffix: "src/application/service/parallel_mode/control_plane/composition.rs",
@@ -382,6 +392,51 @@ fn application_layer_has_no_concrete_adapter_dependencies() {
         name: "application must depend on ports and domain, not concrete adapters",
         root: "src/application",
         forbidden_patterns: &["crate::adapter::"],
+    });
+}
+
+#[test]
+fn hexagonal_boundary_guards_cover_at_least_ninety_percent_of_rust_sources() {
+    let repo_root = repo_root();
+    let all_sources = rust_files_under(&repo_root.join("src"));
+    let guarded_sources = HEXAGONAL_GUARDED_ROOTS
+        .iter()
+        .flat_map(|root| rust_files_under(&repo_root.join(root)))
+        .collect::<HashSet<_>>();
+
+    assert!(!all_sources.is_empty(), "src must contain Rust sources");
+    assert!(
+        guarded_sources.len() * 100 >= all_sources.len() * 90,
+        "hexagonal boundary guards cover only {}/{} Rust sources ({:.1}%); expected at least 90%",
+        guarded_sources.len(),
+        all_sources.len(),
+        guarded_sources.len() as f64 * 100.0 / all_sources.len() as f64,
+    );
+}
+
+#[test]
+fn application_ports_do_not_depend_on_service_implementations_or_outer_layers() {
+    assert_no_forbidden_references(BoundaryRule {
+        name: "application ports must own contracts without depending on implementations or outer layers",
+        root: "src/application/port",
+        forbidden_patterns: &[
+            "crate::application::service::",
+            "crate::adapter::",
+            "crate::composition::",
+            "crate::core::",
+        ],
+    });
+}
+
+#[test]
+fn outbound_adapters_implement_outbound_ports_without_service_dependencies() {
+    assert_no_forbidden_references(BoundaryRule {
+        name: "outbound adapters must implement outbound ports without importing application services",
+        root: "src/adapter/outbound",
+        forbidden_patterns: &[
+            "crate::application::service::",
+            "crate::application::port::inbound::",
+        ],
     });
 }
 

@@ -1,6 +1,6 @@
-use crate::application::service::planning::shared::contract::RESULT_OUTPUT_FILE_PATH;
 use crate::application::service::planning::task_tool::planning_task_tool_contract_json;
 use crate::application::service::prompt_component::PromptDocumentBuilder;
+use crate::domain::planning::RESULT_OUTPUT_FILE_PATH;
 
 /*
  * worker refresh prompt와 repair prompt가 같은 DB-authority contract를 공유하게 하는 공통

@@ -10,7 +10,8 @@ GitHub delivery workflow. `AGENTS.md` remains the compact instruction entrypoint
 - `src/core/`: headless app command/effect/completion/snapshot runtime
 - `src/domain/`: pure conversation, session, planning, parallel, terminal, and review models
 - `src/application/service/`: use-case orchestration and control-plane services
-- `src/application/port/outbound/`: application-owned integration contracts
+- `src/application/port/`: adapter-independent boundary contracts
+- `src/application/port/outbound/`: application-owned integration capability contracts
 - `src/adapter/inbound/tui/`: alternate-screen fullscreen Ratatui/Crossterm shell
 - `src/adapter/inbound/{cli,admin_api,telegram_bot}/`: other operator adapters
 - `src/adapter/outbound/{app_server,db,filesystem,git,github,telegram}/`: concrete boundaries

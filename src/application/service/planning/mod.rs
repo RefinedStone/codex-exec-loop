@@ -121,7 +121,7 @@ pub use self::runtime::validation::PlanningValidationService;
 pub use self::shared::auto_follow_copy::QUEUED_TASK_TRANSCRIPT_TEXT;
 // shared contract 재수출은 planning 파일 경로와 디렉터리 이름을 한 계약으로 고정한다. adapter가 문자열을 직접
 // 재정의하지 않고 이 상수를 쓰면 workspace layout drift를 줄일 수 있다.
-pub use self::shared::contract::{
+pub use crate::domain::planning::{
     ACTIVE_PLANNING_FILE_PATHS, DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH,
     PLANNING_DIRECTION_DOCS_DIRECTORY, PLANNING_DRAFTS_DIRECTORY, PLANNING_PROMPTS_DIRECTORY,
     PLANNING_REJECTED_DIRECTORY, PlanningDraftNameError, RESULT_OUTPUT_FILE_PATH,

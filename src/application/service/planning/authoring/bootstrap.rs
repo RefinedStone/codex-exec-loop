@@ -1,8 +1,6 @@
 use crate::application::port::outbound::planning_workspace_port::PlanningDraftFileRecord;
 use crate::application::service::planning::shared::auto_follow_copy::DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN;
-use crate::application::service::planning::shared::contract::{
-    DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
-};
+use crate::domain::planning::{DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, RESULT_OUTPUT_FILE_PATH};
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionDefinition, DirectionState, PLANNING_FORMAT_VERSION,
     QueueIdleConfig, QueueIdlePolicy, TaskAuthorityDocument,
@@ -181,7 +179,7 @@ fn directions_for_mode(mode: PlanningBootstrapMode) -> DirectionCatalogDocument 
 #[cfg(test)]
 mod tests {
     use super::{PlanningBootstrapMode, PlanningBootstrapService};
-    use crate::application::service::planning::shared::contract::DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH;
+    use crate::domain::planning::DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH;
     use crate::domain::planning::{DirectionState, PLANNING_FORMAT_VERSION, QueueIdlePolicy};
 
     #[test]

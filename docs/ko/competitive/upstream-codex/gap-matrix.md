@@ -413,7 +413,7 @@ Telegram과 자동화는 제한된 명령/뷰다. 이들은 터미널 사실, �
   [`runtime_envelopes.json`](../../../../src/adapter/outbound/app_server/protocol/fixtures/runtime_envelopes.json)
   픽스처는 누락, null, 기본값 적용, 사용 불가, 제한된 알 수 없음과 닫힌 소스 값을 보존하면서
   잘못된 안정 응답을 실패로 닫는다.
-- [`conversation_runtime_event.rs`](../../../../src/application/service/conversation_runtime_event.rs)는
+- [`conversation_stream.rs`](../../../../src/application/port/conversation_stream.rs)는
   계획 및 병렬 경로에서 사용하는 공유 애플리케이션 프로젝션을 제공하고, Core 리듀서는 app-server
   wire 값을 다시 파싱하지 않고 현재 main/재개 상태를 소유한다.
 - 스레드 응답 전의 설정은 응답 시간 순서 경계에서 버리고, 이후 설정/재라우팅/상태 관찰은 정확한

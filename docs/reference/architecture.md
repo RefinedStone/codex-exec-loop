@@ -46,13 +46,14 @@ while composition interprets it with application services.
 | `adapter/inbound` | input mapping, rendering, local focus/editor/selection state | domain policy, durable task truth, dispatch policy |
 | `core` | framework-free client runtime: command/event/effect/completion flow, process-local client state, projections, snapshots | business/domain authority, TUI/HTTP/Telegram types, application services, or concrete DB/Git/filesystem adapters |
 | `application/service` | use-case orchestration, ordering gates, transactions, control-plane handles | widgets, terminal events, transport DTOs |
-| `application/port` | outbound contracts required by application services | concrete integration details |
+| `application/port` | adapter-independent boundary contracts and outbound capabilities required by application services | service implementations, concrete integration details |
 | `domain` | pure invariants, validation, decisions, state transitions | async runtime, IO, logging, UI, database, filesystem, or Git calls |
 | `adapter/outbound` | app-server, DB, filesystem, Git, GitHub, and Telegram integration | business policy |
 | `composition` | dependency construction and concrete wiring | domain decisions |
 
-Mapping stays in adapters. Policy stays in domain or application services. Add a port only for a
-real outbound boundary.
+Mapping stays in adapters. Policy stays in domain or application services. Cross-adapter stream
+contracts live at the application boundary instead of inside a service implementation; concrete
+integration capabilities remain outbound ports.
 
 The Admin server owns one process-lifetime parallel control-plane handle in addition to its passive
 dashboard composition. Browser control requests map only to typed enable, dispatch, refresh, and

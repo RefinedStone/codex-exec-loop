@@ -24,7 +24,7 @@ use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningDraftLoadFileRecord, PlanningDraftLoadRecord,
     PlanningDraftStageRecord, PlanningFileSyncBaselineRecord, PlanningStagedFileRecord,
 };
-use crate::application::service::planning::validate_planning_draft_name;
+use crate::domain::planning::validate_planning_draft_name;
 
 use super::store::upsert_authority_metadata;
 use super::workspace_paths::{draft_directory_display_path, draft_display_path};

@@ -15,7 +15,7 @@ use crate::application::port::outbound::review_center_repository_port::{
 };
 // conversation runtime event는 이전 계층에서 정리한 스트림 계약이다.
 // service는 이 이벤트 타입을 알고 있지만 이벤트 payload를 직접 만들거나 줄이지 않는다.
-use crate::application::service::conversation_runtime_event::ConversationStreamSender;
+use crate::application::port::conversation_stream::ConversationStreamSender;
 use crate::application::service::review_center::{
     ReviewCenterReadService, ReviewCenterWriteService,
 };
@@ -389,7 +389,7 @@ mod tests {
             _options: ConversationTurnOptions,
             event_sender: ConversationStreamSender,
         ) -> Result<ConversationTurnTerminalReceipt> {
-            crate::application::service::conversation_runtime_event::emit_confirmed_test_terminal_receipt(
+            crate::application::port::conversation_stream::emit_confirmed_test_terminal_receipt(
                 &event_sender,
                 "test-thread",
                 cwd,
@@ -403,7 +403,7 @@ mod tests {
             _options: ConversationTurnOptions,
             event_sender: ConversationStreamSender,
         ) -> Result<ConversationTurnTerminalReceipt> {
-            crate::application::service::conversation_runtime_event::emit_confirmed_test_terminal_receipt(
+            crate::application::port::conversation_stream::emit_confirmed_test_terminal_receipt(
                 &event_sender,
                 thread_id,
                 "/tmp/test-workspace",

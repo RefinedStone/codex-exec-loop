@@ -1109,7 +1109,7 @@ mod tests {
     use crate::adapter::inbound::tui::app::{
         AutoFollowSubmitContext, ManualIntakeSubmitContext, PromptOrigin,
     };
-    use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+    use crate::application::port::conversation_stream::ConversationStreamEvent;
     use crate::application::service::planning::{
         PlanningExecutionSnapshot, PlanningTurnExecutionSnapshotCapture,
     };

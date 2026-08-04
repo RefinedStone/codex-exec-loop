@@ -1,4 +1,4 @@
-use crate::application::service::conversation_runtime_event::{
+use crate::application::port::conversation_stream::{
     ConversationStreamEvent, ConversationStreamSender, conversation_stream_channel,
 };
 use crate::application::service::conversation_service::ConversationService;

@@ -40,9 +40,7 @@ pub(crate) fn is_valid_planning_markdown_path(path: &str, required_prefix: &str)
 #[cfg(test)]
 mod tests {
     use super::is_valid_planning_markdown_path;
-    use crate::application::service::planning::shared::contract::{
-        PLANNING_DIRECTION_DOCS_DIRECTORY, PLANNING_PROMPTS_DIRECTORY,
-    };
+    use crate::domain::planning::{PLANNING_DIRECTION_DOCS_DIRECTORY, PLANNING_PROMPTS_DIRECTORY};
 
     #[test]
     fn planning_markdown_path_rejects_prefix_mismatch_and_traversal_edges() {

@@ -1,7 +1,7 @@
-use crate::application::service::parallel_mode::ParallelModeOrchestratorTickResult;
-use crate::application::service::planning::task_tool::{
+use crate::application::port::planning_task_tool_contract::{
     PLANNING_TOOL_PARENT_THREAD_ID_ENV, PLANNING_TOOL_PARENT_TURN_ID_ENV,
 };
+use crate::application::service::parallel_mode::ParallelModeOrchestratorTickResult;
 use crate::application::service::planning::{
     PlanningControlCommand, PlanningControlRequest, PlanningResetTarget, PlanningServices,
     PlanningTaskToolRequest, PlanningTaskToolResponse,

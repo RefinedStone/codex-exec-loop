@@ -1,11 +1,11 @@
+use crate::application::port::conversation_stream::{
+    ConversationRuntimeEnvelopeProjection, ConversationRuntimeEnvelopeProjectionRejection,
+    ConversationStreamEvent, conversation_stream_channel,
+};
 use crate::application::port::outbound::parallel_agent_worker_port::{
     ParallelAgentWorkerPort, ParallelAgentWorkerStreamRequest,
 };
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelWorkerCommitDisposition;
-use crate::application::service::conversation_runtime_event::{
-    ConversationRuntimeEnvelopeProjection, ConversationRuntimeEnvelopeProjectionRejection,
-    ConversationStreamEvent, conversation_stream_channel,
-};
 use crate::application::service::parallel_agent_profile::ParallelAgentProfileConfig;
 use crate::application::service::parallel_mode::turn::{
     ParallelModeTurnService, ParallelOfficialCompletionFinalizeFailureStage,
@@ -1729,6 +1729,7 @@ mod tests {
     use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
+    use crate::application::port::conversation_stream::ConversationStreamEvent;
     use crate::application::port::outbound::github_automation_port::{
         GithubAutomationCapabilities, GithubAutomationPort, GithubAutomationPullRequest,
         GithubRepositoryVisibility,
@@ -1738,7 +1739,6 @@ mod tests {
         ParallelAgentWorkerPort, ParallelAgentWorkerStreamRequest,
     };
     use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;
-    use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
     use crate::application::service::parallel_agent_profile::ParallelAgentProfileService;
     use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
     use crate::application::service::parallel_mode::{
@@ -2055,7 +2055,7 @@ mod tests {
         fn run_isolated_new_thread_stream(
             &self,
             _request: ParallelAgentWorkerStreamRequest<'_>,
-            event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
+            event_sender: crate::application::port::conversation_stream::ConversationStreamSender,
         ) -> Result<ConversationTurnTerminalReceipt> {
             let events = self
                 .events

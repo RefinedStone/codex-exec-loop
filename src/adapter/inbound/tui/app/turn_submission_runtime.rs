@@ -1051,9 +1051,9 @@ mod tests {
             cwd: &str,
             _prompt: &str,
             _options: crate::domain::conversation::ConversationTurnOptions,
-            event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
+            event_sender: crate::application::port::conversation_stream::ConversationStreamSender,
         ) -> Result<crate::domain::turn_terminal::ConversationTurnTerminalReceipt> {
-            crate::application::service::conversation_runtime_event::emit_confirmed_test_terminal_receipt(
+            crate::application::port::conversation_stream::emit_confirmed_test_terminal_receipt(
                 &event_sender,
                 "test-thread",
                 cwd,
@@ -1065,9 +1065,9 @@ mod tests {
             thread_id: &str,
             _prompt: &str,
             _options: crate::domain::conversation::ConversationTurnOptions,
-            event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
+            event_sender: crate::application::port::conversation_stream::ConversationStreamSender,
         ) -> Result<crate::domain::turn_terminal::ConversationTurnTerminalReceipt> {
-            crate::application::service::conversation_runtime_event::emit_confirmed_test_terminal_receipt(
+            crate::application::port::conversation_stream::emit_confirmed_test_terminal_receipt(
                 &event_sender,
                 thread_id,
                 "/tmp/test-workspace",
@@ -2109,7 +2109,7 @@ mod tests {
         );
         assert!(port.request_stop_all_sessions().is_ok());
         let (tx, _rx) =
-            crate::application::service::conversation_runtime_event::conversation_stream_channel();
+            crate::application::port::conversation_stream::conversation_stream_channel();
         assert!(
             port.run_turn_stream("thread-1", "prompt", Default::default(), tx,)
                 .is_ok()

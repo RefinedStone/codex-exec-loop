@@ -20,7 +20,7 @@ use anyhow::{Context, Result, bail};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
-use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+use crate::application::port::conversation_stream::ConversationStreamEvent;
 use crate::domain::conversation::{
     ConversationApprovalDecision, ConversationApprovalRequest, ConversationApprovalRequestIdentity,
     ConversationApprovalResolution, ConversationTurnSteerReceipt,
@@ -3749,7 +3749,7 @@ mod tests {
         TurnStartParams,
     };
     use crate::adapter::outbound::app_server::steering::AppServerTurnSteerBroker;
-    use crate::application::service::conversation_runtime_event::{
+    use crate::application::port::conversation_stream::{
         CONVERSATION_STREAM_CHANNEL_CAPACITY, ConversationStreamEvent, conversation_stream_channel,
     };
     use crate::application::service::planning::RESULT_OUTPUT_FILE_PATH;

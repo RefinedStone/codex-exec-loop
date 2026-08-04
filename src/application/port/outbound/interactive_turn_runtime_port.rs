@@ -4,7 +4,7 @@ use anyhow::Result;
 
 // `ConversationStreamEvent`는 outbound runtime이 TUI로 보내는 application-level stream contract이다.
 // port는 app-server protocol event가 아니라 이 정규화된 enum만 노출한다.
-use crate::application::service::conversation_runtime_event::ConversationStreamSender;
+use crate::application::port::conversation_stream::ConversationStreamSender;
 // snapshot은 저장된 conversation read model이고, runtime control truth는 중단/제어의 실제 소유자를 나타낸다.
 // 둘 다 TUI가 구체 adapter 타입을 몰라도 대화 화면과 제어 버튼을 구성하게 해 주는 domain 값이다.
 use crate::domain::conversation::{
