@@ -9,8 +9,8 @@
 
 ```text
 adapter/inbound/tui -> core + application contracts/projections + opaque composition facade + domain
-adapter/inbound/{cli,admin_api,telegram_bot} -> application -> domain
-application -> outbound ports
+adapter/inbound/{cli,admin_api,telegram_bot} -> application inbound ports + domain
+application services -> inbound ports + outbound ports + domain
 adapter/outbound -> application ports + domain
 composition -> core + application + adapter/outbound
 ```
@@ -45,22 +45,26 @@ application service로 해석합니다.
 | --- | --- | --- |
 | `adapter/inbound` | 입력 mapping, rendering, local focus/editor/selection state | domain 정책, durable task truth, dispatch 정책 |
 | `core` | framework와 독립된 client runtime: command/event/effect/completion 흐름, process-local client state, projection, snapshot | business/domain 권한, TUI/HTTP/Telegram type, application service, 구체 DB/Git/filesystem adapter |
-| `application/service` | use-case orchestration, ordering gate, transaction, control-plane handle | widget, terminal event, transport DTO |
-| `application/port` | adapter와 독립적인 경계 계약과 application service가 요구하는 outbound capability | service 구현, 구체 integration 상세 |
+| `application/service` | inbound use case 구현, orchestration, ordering gate, transaction, control-plane handle | widget, terminal event, transport DTO |
+| `application/port/inbound` | adapter-facing use-case interface와 request/response 계약 | service 구현, transport별 mapping |
+| `application/port/outbound` | application service가 요구하는 integration capability | service 구현, 구체 integration 상세 |
 | `domain` | 순수 invariant, validation, decision, state transition | async runtime, IO, logging, UI, DB, filesystem, Git 호출 |
 | `adapter/outbound` | app-server, DB, filesystem, Git, GitHub, Telegram integration | business policy |
 | `composition` | dependency 생성과 concrete wiring | domain decision |
 
-Mapping은 adapter에, policy는 domain 또는 application service에 둡니다. 여러 adapter가 공유하는
-stream 계약은 service 구현 안이 아니라 application 경계에 두고, concrete integration capability는
-outbound port로 유지합니다.
+Mapping은 adapter에, policy는 domain 또는 application service에 둡니다. Inbound adapter는 inbound
+port capability만 보유하고 composition이 그 trait 뒤에 service/use-case 구현을 주입합니다. 여러
+adapter가 공유하는 stream 계약은 service 구현 안이 아니라 application 경계에 두고, concrete
+integration capability는 outbound port로 유지합니다. Planning CLI와 Telegram은 전체 planning
+service graph 대신 좁은 `PlanningControlPort`, `PlanningWorkspaceMaintenancePort`,
+`PlanningTaskToolPort` 계약을 사용합니다.
 
 ## Core runtime
 
 `src/core`는 business hexagon 바깥의 inbound client 경계에 놓인 framework 독립 **Client Runtime**입니다.
 Native client의 장기 수명 상태 coordinator이며 별도의 business layer도 아니고 application/domain
-layer를 대체하지도 않습니다. CLI, Admin, Telegram은 같은 application service를 사용하면서도 이
-process-local TUI runtime을 채택할 필요가 없습니다.
+layer를 대체하지도 않습니다. CLI, Admin, Telegram은 inbound port를 통해 같은 application use
+case에 진입하면서도 이 process-local TUI runtime을 채택할 필요가 없습니다.
 
 - `AppCommand` 또는 `CoreInput`: 사용자·lifecycle·tick·completion intent
 - `Effect`: core 바깥에서 실행할 작업

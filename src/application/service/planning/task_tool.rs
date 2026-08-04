@@ -2,13 +2,14 @@ use super::task_mutation::{
     PlanningTaskCreateInput, PlanningTaskMutationCommand, PlanningTaskMutationRequest,
     PlanningTaskMutationService, PlanningTaskMutationSource, PlanningTaskUpdateInput,
 };
-use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
-use crate::domain::planning::{
-    OriginSessionKind, PriorityQueueService, PriorityQueueTask, TaskDefinition,
-    TaskMutationProvenance, TaskStatus,
+pub use crate::application::port::inbound::planning_task_tool_port::{
+    PlanningTaskCreatePayload, PlanningTaskToolCreateRequest, PlanningTaskToolListRequest,
+    PlanningTaskToolRequest, PlanningTaskToolResponse, PlanningTaskToolUpdateRequest,
+    PlanningTaskUpdatePayload, planning_task_tool_contract_json,
 };
+use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
+use crate::domain::planning::{OriginSessionKind, PriorityQueueService, TaskMutationProvenance};
 use anyhow::{Result, anyhow};
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 /*
@@ -17,168 +18,6 @@ use std::sync::Arc;
  * 하나의 create/update만 적용할 수 있다. 파일 편집, SQL rewrite, 광범위한 backlog batch는 이
  * tool boundary 밖에 둬서 model output이 accepted DB authority를 우회하지 못하게 한다.
  */
-const TASK_TOOL_CONTRACT_JSON: &str = concat!(
-    r#"{"tool":"akra planning-tool","version":1,"#,
-    r#""commands":["akra planning-tool contract","akra planning-tool run . < request.json"],"#,
-    r#""request":{"version":1,"op":"list_tasks|create_task|update_task","apply":"true for create/update","provenance":"application-controlled","fields":"flat"},"#,
-    r#""examples":{"list_tasks":{"version":1,"op":"list_tasks","status":["ready","blocked"],"limit":20},"#,
-    r#""create_task":{"version":1,"op":"create_task","apply":true,"title":"Review queue handoff","status":"ready","depends_on":[],"blocked_by":[]},"#,
-    r#""update_task":{"version":1,"op":"update_task","apply":true,"task_id":"task-123","status":"blocked","priority_reason":"waiting for operator"}},"#,
-    r#""rules":["Use before final planning_task_commands.","#,
-    r#""Do not edit files, SQL, or JSON authority.","#,
-    r#""Run against `.`; in completion prompts do not use payload.worktree_path.","#,
-    r#""list_tasks before create/update.","#,
-    r#""One narrow task per call; no broad backlog.","#,
-    r#""If mutation succeeds, final commands must be empty."],"#,
-    r#""create_task_fields":["title required","description optional","direction_id optional","direction_relation_note optional","status optional","base_priority optional","dynamic_priority_delta optional","priority_reason optional","depends_on optional array","blocked_by optional array"],"#,
-    r#""update_task_fields":["task_id required","existing descriptions are preserved","other fields optional"],"#,
-    r#""response":{"ok":"boolean","error":"string","tasks":"list result","committed_task_ids":"mutation result","queue_head":"after mutation"}}"#
-);
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
-pub enum PlanningTaskToolRequest {
-    // tagged enum은 JSON `op` field와 직접 대응한다. 잘못된 operation 이름은 mutation code에
-    // 닿기 전에 serde 단계에서 실패해 tool command surface를 작게 유지한다.
-    ListTasks(PlanningTaskToolListRequest),
-    CreateTask(PlanningTaskToolCreateRequest),
-    UpdateTask(PlanningTaskToolUpdateRequest),
-}
-
-impl PlanningTaskToolRequest {
-    pub(crate) fn apply_cli_host_context(
-        &mut self,
-        parent_thread_id: Option<String>,
-        parent_turn_id: Option<String>,
-    ) {
-        let parent_thread_id = normalized_host_identifier(parent_thread_id);
-        let parent_turn_id = normalized_host_identifier(parent_turn_id);
-        match self {
-            Self::ListTasks(_) => {}
-            Self::CreateTask(request) => {
-                request.legacy_source_turn_id = None;
-                request.origin_session_kind = Some(OriginSessionKind::Planner);
-                request.thread_id = None;
-                request.turn_id = None;
-                request.parent_thread_id = parent_thread_id;
-                request.parent_turn_id = parent_turn_id;
-            }
-            Self::UpdateTask(request) => {
-                request.legacy_source_turn_id = None;
-                request.origin_session_kind = Some(OriginSessionKind::Planner);
-                request.thread_id = None;
-                request.turn_id = None;
-                request.parent_thread_id = parent_thread_id;
-                request.parent_turn_id = parent_turn_id;
-            }
-        }
-    }
-}
-
-fn normalized_host_identifier(identifier: Option<String>) -> Option<String> {
-    identifier.and_then(|identifier| {
-        let identifier = identifier.trim();
-        (!identifier.is_empty()).then(|| identifier.to_string())
-    })
-}
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PlanningTaskToolListRequest {
-    pub version: u32,
-    // 빈 status는 "모든 task 표시"다. 명시 status는 model이 자체 filter 언어를 만들지 않고
-    // ready/proposed/blocked 같은 authority 상태로만 목록을 좁히게 한다.
-    #[serde(default)]
-    pub status: Vec<TaskStatus>,
-    pub limit: Option<usize>,
-}
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PlanningTaskToolCreateRequest {
-    pub version: u32,
-    // mutation에는 명시적인 apply flag가 필요하다. prompt가 authority 변경을 허용하기 전
-    // dry planning/list 단계로 model을 유도할 수 있게 하는 안전장치다.
-    pub apply: bool,
-    // Legacy lookup key accepted only for host-injected payloads; workers should omit it.
-    #[serde(rename = "source_turn_id")]
-    pub legacy_source_turn_id: Option<String>,
-    // Provider-neutral audit fields are host-controlled. They stay in the parser for adapter use,
-    // but the worker-facing contract intentionally does not ask the model to populate them.
-    pub origin_session_kind: Option<OriginSessionKind>,
-    pub thread_id: Option<String>,
-    pub turn_id: Option<String>,
-    pub parent_thread_id: Option<String>,
-    pub parent_turn_id: Option<String>,
-    // flatten은 model이 생성할 JSON을 단순하게 만든다. nested task object 대신
-    // {"op":"create_task","title":"..."} 형태를 유지해 prompt 예시와 실제 schema가 가까워진다.
-    #[serde(flatten)]
-    pub input: PlanningTaskCreatePayload,
-}
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PlanningTaskToolUpdateRequest {
-    pub version: u32,
-    pub apply: bool,
-    // Legacy lookup key accepted only for host-injected payloads; workers should omit it.
-    #[serde(rename = "source_turn_id")]
-    pub legacy_source_turn_id: Option<String>,
-    // Provider-neutral audit fields are host-controlled. They stay in the parser for adapter use,
-    // but the worker-facing contract intentionally does not ask the model to populate them.
-    pub origin_session_kind: Option<OriginSessionKind>,
-    pub thread_id: Option<String>,
-    pub turn_id: Option<String>,
-    pub parent_thread_id: Option<String>,
-    pub parent_turn_id: Option<String>,
-    #[serde(flatten)]
-    pub input: PlanningTaskUpdatePayload,
-}
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PlanningTaskCreatePayload {
-    // payload는 JSON ergonomics를 제외하면 `PlanningTaskCreateInput`과 의도적으로 같은 의미를
-    // 갖는다. 변환을 기계적으로 유지하고, default/validation은 mutation service 한 곳에 남긴다.
-    pub direction_id: Option<String>,
-    pub direction_relation_note: Option<String>,
-    pub title: String,
-    pub description: Option<String>,
-    pub status: Option<TaskStatus>,
-    pub base_priority: Option<i32>,
-    pub dynamic_priority_delta: Option<i32>,
-    pub priority_reason: Option<String>,
-    #[serde(default)]
-    pub depends_on: Vec<String>,
-    #[serde(default)]
-    pub blocked_by: Vec<String>,
-}
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PlanningTaskUpdatePayload {
-    // update field는 optional patch다. 누락된 값은 현재 task를 보존하고,
-    // Some(Vec::new())은 dependency/blocker 목록을 명시적으로 비우는 의미를 갖는다.
-    pub task_id: String,
-    pub direction_id: Option<String>,
-    pub direction_relation_note: Option<String>,
-    pub title: Option<String>,
-    pub description: Option<String>,
-    pub status: Option<TaskStatus>,
-    pub base_priority: Option<i32>,
-    pub dynamic_priority_delta: Option<i32>,
-    pub priority_reason: Option<String>,
-    pub depends_on: Option<Vec<String>>,
-    pub blocked_by: Option<Vec<String>>,
-}
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PlanningTaskToolResponse {
-    pub ok: bool,
-    pub operation: String,
-    // mutation result field를 직접 노출해 worker가 성공한 tool call 뒤 final planning_task_commands를
-    // 다시 적용하는 double-apply를 피하게 한다.
-    pub task_authority_changed: bool,
-    pub applied_command_count: usize,
-    pub committed_task_ids: Vec<String>,
-    pub committed_planning_revision: Option<i64>,
-    pub queue_head: Option<PriorityQueueTask>,
-    pub tasks: Vec<TaskDefinition>,
-    pub guidance: Vec<String>,
-}
 #[derive(Clone)]
 pub struct PlanningTaskToolService {
     planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
@@ -368,12 +207,6 @@ impl From<PlanningTaskUpdatePayload> for PlanningTaskUpdateInput {
         }
     }
 }
-pub fn planning_task_tool_contract_json() -> &'static str {
-    // contract는 prompt와 CLI output에 삽입된다. runtime에 Rust type에서 재생성하지 않고
-    // compact/stable 문자열로 고정해 model-facing schema drift를 리뷰 가능한 diff로 남긴다.
-    TASK_TOOL_CONTRACT_JSON
-}
-
 fn task_tool_provenance(
     origin_session_kind: Option<OriginSessionKind>,
     thread_id: Option<String>,

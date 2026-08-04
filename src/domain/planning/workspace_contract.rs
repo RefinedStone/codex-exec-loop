@@ -1,5 +1,22 @@
 use std::fmt;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanningResetTarget {
+    Queue,
+    Directions,
+    All,
+}
+
+impl PlanningResetTarget {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Queue => "queue",
+            Self::Directions => "directions",
+            Self::All => "all",
+        }
+    }
+}
+
 // result-output은 현재 accepted planning state를 대표하는 active planning artifact이다. admin draft,
 // runtime validation, workspace adapter가 같은 domain runtime contract를 보도록 여기서 재수출한다.
 // direction detail docs는 direction catalog의 항목별 상세 설명을 markdown으로 저장하는 디렉터리이다.
@@ -83,7 +100,8 @@ pub fn default_direction_detail_doc_path(direction_id: &str) -> String {
 mod tests {
     // test는 canonical lookup 함수와 expected canonical constant만 사용해 public contract를 검증한다.
     use super::{
-        PLANNING_DRAFT_NAME_MAX_BYTES, PlanningDraftNameError, validate_planning_draft_name,
+        PLANNING_DRAFT_NAME_MAX_BYTES, PlanningDraftNameError, PlanningResetTarget,
+        validate_planning_draft_name,
     };
     use crate::domain::planning::runtime_contracts::{
         RESULT_OUTPUT_FILE_PATH, canonical_active_planning_file_path,
@@ -159,5 +177,12 @@ mod tests {
                 "{invalid:?} should be rejected"
             );
         }
+    }
+
+    #[test]
+    fn planning_reset_targets_have_stable_labels() {
+        assert_eq!(PlanningResetTarget::Queue.label(), "queue");
+        assert_eq!(PlanningResetTarget::Directions.label(), "directions");
+        assert_eq!(PlanningResetTarget::All.label(), "all");
     }
 }

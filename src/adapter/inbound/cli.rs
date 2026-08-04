@@ -1,12 +1,16 @@
+use crate::application::port::inbound::planning_control_port::{
+    PlanningControlCommand, PlanningControlRequest,
+};
+use crate::application::port::inbound::planning_task_tool_port::{
+    PlanningTaskToolPort, PlanningTaskToolRequest, PlanningTaskToolResponse,
+    planning_task_tool_contract_json,
+};
 use crate::application::port::planning_task_tool_contract::{
     PLANNING_TOOL_PARENT_THREAD_ID_ENV, PLANNING_TOOL_PARENT_TURN_ID_ENV,
 };
 use crate::application::service::parallel_mode::ParallelModeOrchestratorTickResult;
-use crate::application::service::planning::{
-    PlanningControlCommand, PlanningControlRequest, PlanningResetTarget, PlanningServices,
-    PlanningTaskToolRequest, PlanningTaskToolResponse,
-};
 use crate::composition::production;
+use crate::domain::planning::PlanningResetTarget;
 use anyhow::{Context, Result, bail};
 use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
@@ -202,7 +206,7 @@ fn run_planning_control_command(
         writeln!(stdout, "issue: {issue}")?;
         return Ok(1);
     }
-    let control = production::build_planning_control_service(workspace_label);
+    let control = production::build_planning_control_port(workspace_label);
     let response = control.execute_request(PlanningControlRequest::new(command))?;
     writeln!(stdout, "{}", response.reply.text)?;
     Ok(0)
@@ -216,15 +220,14 @@ fn run_planning_tool(
     // planning tool은 의도적으로 script/worker 지향이다. contract는 schema를 출력하고 run은 stdin payload를 소비한다.
     match subcommand.to_str() {
         Some("contract") => {
-            let planning = production::build_planning_services();
-            writeln!(stdout, "{}", planning.task_tool.contract_json())?;
+            writeln!(stdout, "{}", planning_task_tool_contract_json())?;
             Ok(0)
         }
         Some("run") => {
             let workspace_path = resolve_workspace_path(workspace_arg)?;
             let workspace_label = workspace_path.display().to_string();
-            let planning = production::build_planning_services_for_workspace(&workspace_label);
-            let result = run_planning_tool_request(&planning, &workspace_path);
+            let task_tool = production::build_planning_task_tool_port(&workspace_label);
+            let result = run_planning_tool_request(task_tool.as_ref(), &workspace_path);
             // tool caller는 anyhow backtrace보다 structured failure output을 기대한다.
             match result {
                 Ok(response) => {
@@ -287,7 +290,7 @@ fn render_parallel_tick_result(
 }
 
 fn run_planning_tool_request(
-    planning: &PlanningServices,
+    task_tool: &dyn PlanningTaskToolPort,
     workspace_path: &Path,
 ) -> Result<PlanningTaskToolResponse> {
     validate_workspace_path(workspace_path).map_err(anyhow::Error::msg)?;
@@ -302,9 +305,7 @@ fn run_planning_tool_request(
         optional_utf8_environment(PLANNING_TOOL_PARENT_THREAD_ID_ENV)?,
         optional_utf8_environment(PLANNING_TOOL_PARENT_TURN_ID_ENV)?,
     );
-    planning
-        .task_tool
-        .run(workspace_path.to_string_lossy().as_ref(), request)
+    task_tool.run(workspace_path.to_string_lossy().as_ref(), request)
 }
 
 fn optional_utf8_environment(name: &str) -> Result<Option<String>> {
@@ -359,10 +360,8 @@ fn inspect_workspace(workspace_path: &Path) -> DoctorReport {
     if let Err(issue) = validate_workspace_path(workspace_path) {
         return DoctorReport::path_issue(workspace_label, issue);
     }
-    let planning = production::build_planning_services_for_workspace(&workspace_label);
-    let report = planning
-        .workspace
-        .inspect_workspace(workspace_path.to_string_lossy().as_ref());
+    let workspace = production::build_planning_workspace_maintenance_port(&workspace_label);
+    let report = workspace.inspect_workspace(workspace_path.to_string_lossy().as_ref());
     // report shaping은 CLI adapter에 남긴다. application service가 UI-neutral하게 유지되게 하기 위해서다.
     DoctorReport::from_service_report(workspace_label, report)
 }
@@ -372,11 +371,8 @@ fn reset_workspace(workspace_path: &Path, target: PlanningResetTarget) -> ResetR
     if let Err(issue) = validate_workspace_path(workspace_path) {
         return ResetReport::path_issue(workspace_label, issue);
     }
-    let planning = production::build_planning_services_for_workspace(&workspace_label);
-    match planning
-        .workspace
-        .reset_workspace(workspace_path.to_string_lossy().as_ref(), target)
-    {
+    let workspace = production::build_planning_workspace_maintenance_port(&workspace_label);
+    match workspace.reset_workspace(workspace_path.to_string_lossy().as_ref(), target) {
         Ok(result) => ResetReport::success(workspace_label, &result),
         Err(error) => ResetReport::failure(workspace_label, target, error.to_string()),
     }

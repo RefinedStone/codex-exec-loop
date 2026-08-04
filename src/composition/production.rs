@@ -13,6 +13,9 @@ use crate::adapter::outbound::filesystem::{
 use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
 use crate::adapter::outbound::github::{GithubAutomationAdapter, GithubReviewPollerAdapter};
 use crate::adapter::outbound::telegram::CurlTelegramBotAdapter;
+use crate::application::port::inbound::planning_control_port::PlanningControlPort;
+use crate::application::port::inbound::planning_task_tool_port::PlanningTaskToolPort;
+use crate::application::port::inbound::planning_workspace_maintenance_port::PlanningWorkspaceMaintenancePort;
 use crate::application::port::outbound::app_server_prompt_log_port::{
     AppServerPromptLogMaintenanceMode, AppServerPromptLogMaintenancePort, AppServerPromptLogPort,
     NoopAppServerPromptLogPort,
@@ -62,7 +65,7 @@ pub(crate) struct ProductionAdminApplication {
 }
 
 pub(crate) struct ProductionTelegramApplication {
-    pub(crate) control_service: PlanningControlService,
+    pub(crate) control_service: Arc<dyn PlanningControlPort>,
     pub(crate) parallel_mode_control_plane: Arc<ParallelModeControlPlaneComposition>,
     pub(crate) telegram_update_ledger_port: Arc<dyn TelegramUpdateLedgerPort>,
     pub(crate) telegram_global_runner_lease_port: Arc<dyn TelegramGlobalRunnerLeasePort>,
@@ -85,6 +88,7 @@ struct ProductionSharedPorts {
     telegram_global_runner_lease_port: Arc<dyn TelegramGlobalRunnerLeasePort>,
 }
 
+#[cfg(all(test, windows))]
 pub(crate) fn build_planning_services() -> PlanningServices {
     let ports = build_shared_ports();
     planning_services_from_ports(&ports)
@@ -103,6 +107,28 @@ pub(crate) fn build_planning_control_service(workspace_dir: String) -> PlanningC
         workspace_dir,
         planning,
     )))
+}
+
+pub(crate) fn build_planning_control_port(workspace_dir: String) -> Arc<dyn PlanningControlPort> {
+    Arc::new(build_planning_control_service(workspace_dir))
+}
+
+pub(crate) fn build_planning_task_tool_port(workspace_dir: &str) -> Arc<dyn PlanningTaskToolPort> {
+    Arc::new(
+        build_planning_services_for_workspace(workspace_dir)
+            .task_tool
+            .clone(),
+    )
+}
+
+pub(crate) fn build_planning_workspace_maintenance_port(
+    workspace_dir: &str,
+) -> Arc<dyn PlanningWorkspaceMaintenancePort> {
+    Arc::new(
+        build_planning_services_for_workspace(workspace_dir)
+            .workspace
+            .clone(),
+    )
 }
 
 pub(crate) fn build_parallel_mode_control_plane_composition(
@@ -187,7 +213,7 @@ pub(crate) fn build_telegram_application(workspace_dir: String) -> ProductionTel
         parallel_agent_profile_service,
     ));
     ProductionTelegramApplication {
-        control_service,
+        control_service: Arc::new(control_service),
         parallel_mode_control_plane,
         telegram_update_ledger_port: ports.telegram_update_ledger_port,
         telegram_global_runner_lease_port: ports.telegram_global_runner_lease_port,
@@ -318,6 +344,7 @@ fn parse_bool_env_flag(value: &str) -> Option<bool> {
     }
 }
 
+#[cfg(all(test, windows))]
 fn build_shared_ports() -> ProductionSharedPorts {
     build_shared_ports_for_prompt_logging(app_server_prompt_logging_enabled())
 }

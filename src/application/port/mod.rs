@@ -4,5 +4,6 @@
  * capability를 소유하며, 구체 service/adapter 구현 타입에는 의존하지 않는다.
  */
 pub mod conversation_stream;
+pub mod inbound;
 pub mod outbound;
 pub(crate) mod planning_task_tool_contract;

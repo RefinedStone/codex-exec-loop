@@ -1,6 +1,7 @@
-use crate::application::service::planning::{
-    PlanningDoctorReport, PlanningResetTarget, PlanningWorkspaceResetResult,
+use crate::application::port::inbound::planning_workspace_maintenance_port::{
+    PlanningDoctorReport, PlanningWorkspaceResetResult,
 };
+use crate::domain::planning::PlanningResetTarget;
 use anyhow::{Context, Result};
 use serde::Serialize;
 use std::io::Write;
