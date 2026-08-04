@@ -1,5 +1,9 @@
 # PR 2071 Transcript Selection And Copy Evidence
 
+> Historical evidence only. This directory records behavior at the named older commits, including
+> interaction modes that have since been removed. It is not a current product contract or a
+> supported operator-control reference.
+
 This supplemental artifact records primitive-sensitive validation captured at foundational
 implementation commit `1f867fd52a255ce85ef68a51d2d3a05d8e8ef311`. It exercises app-owned
 transcript drag selection, tmux OSC 52 clipboard delivery, live mouse-capture switching, startup
@@ -22,8 +26,8 @@ It does not relabel E1, E2, or E4 as candidate passes.
   `copied selection to terminal clipboard (10 characters)`.
 - `:mouse on` emitted the complete 1000/1002/1003/1015/1006 enable set; `:mouse off` emitted the
   matching disable set.
-- Starting with `AKRA_TUI_MOUSE_CAPTURE=off` still entered the alternate screen but emitted no
-  1000 or 1006 mouse-reporting enable sequence.
+- A legacy startup override, since removed from the product, entered the alternate screen without
+  emitting the 1000 or 1006 mouse-reporting enable sequence.
 - Confirmed exit restored alternate screen, focus reporting, and cursor visibility.
 
 ## Evidence Matrix

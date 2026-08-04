@@ -39,7 +39,7 @@ pub(super) fn run(
      * 먼저 guard로 감싼다. 이후 backend 생성, draw, event read 중 어디서 실패해도 Drop이
      * 사용자 shell을 복구하는 단일 경로가 된다.
      */
-    let _restore_guard = TerminalRestoreGuard::activate(runtime.terminal_mouse_capture_enabled())?;
+    let _restore_guard = TerminalRestoreGuard::activate()?;
     let backend = CrosstermBackend::new(io::stdout());
     let terminal = build_terminal(backend)?;
     let mut adapter = FullscreenTerminalAdapter::new(terminal);
@@ -268,26 +268,25 @@ fn terminal_clipboard_sequence(text: &str, tmux_passthrough: bool) -> String {
  */
 struct TerminalRestoreGuard {
     bracketed_paste_enabled: bool,
-    mouse_capture_enabled: bool,
 }
 
 impl TerminalRestoreGuard {
-    fn activate(mouse_capture_enabled: bool) -> Result<Self> {
+    fn activate() -> Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         /*
-         * focus events는 focus lost 중 draw를 늦추는 runtime scheduler 정책의 입력이다. enable이
-         * 실패하면 raw mode만 켜진 반쪽 상태가 되므로 즉시 되돌리고 startup 실패로 전파한다.
+         * focus events는 focus lost 중 draw를 늦추는 runtime scheduler 정책의 입력이고 mouse
+         * reporting은 fullscreen 상호작용의 불변식이다. 어느 하나라도 enable에 실패하면 raw
+         * mode만 켜진 반쪽 상태가 되므로 즉시 되돌리고 startup 실패로 전파한다.
          */
-        if let Err(error) = enter_fullscreen_terminal_session(&mut stdout, mouse_capture_enabled) {
-            let _ = leave_fullscreen_terminal_session(&mut stdout, false, mouse_capture_enabled);
+        if let Err(error) = enter_fullscreen_terminal_session(&mut stdout) {
+            let _ = leave_fullscreen_terminal_session(&mut stdout, false);
             let _ = disable_raw_mode();
             return Err(error.into());
         }
         let bracketed_paste_enabled = enable_bracketed_paste(&mut stdout).is_ok();
         Ok(Self {
             bracketed_paste_enabled,
-            mouse_capture_enabled,
         })
     }
 }
@@ -299,23 +298,14 @@ impl Drop for TerminalRestoreGuard {
          * 실패해도 raw mode 해제, focus 구독 해제, cursor 복구를 계속 시도하는 편이 낫다.
          */
         let mut stdout = io::stdout();
-        let _ = leave_fullscreen_terminal_session(
-            &mut stdout,
-            self.bracketed_paste_enabled,
-            self.mouse_capture_enabled,
-        );
+        let _ = leave_fullscreen_terminal_session(&mut stdout, self.bracketed_paste_enabled);
         let _ = disable_raw_mode();
     }
 }
 
-fn enter_fullscreen_terminal_session(
-    writer: &mut impl Write,
-    mouse_capture_enabled: bool,
-) -> io::Result<()> {
+fn enter_fullscreen_terminal_session(writer: &mut impl Write) -> io::Result<()> {
     execute!(writer, EnterAlternateScreen, event::EnableFocusChange)?;
-    if mouse_capture_enabled {
-        execute!(writer, event::EnableMouseCapture)?;
-    }
+    execute!(writer, event::EnableMouseCapture)?;
     Ok(())
 }
 
@@ -326,15 +316,12 @@ fn enable_bracketed_paste(writer: &mut impl Write) -> io::Result<()> {
 fn leave_fullscreen_terminal_session(
     writer: &mut impl Write,
     bracketed_paste_enabled: bool,
-    mouse_capture_enabled: bool,
 ) -> io::Result<()> {
     let mut first_error = None;
-    if mouse_capture_enabled {
-        remember_terminal_restore_error(
-            &mut first_error,
-            execute!(writer, event::DisableMouseCapture),
-        );
-    }
+    remember_terminal_restore_error(
+        &mut first_error,
+        execute!(writer, event::DisableMouseCapture),
+    );
     if bracketed_paste_enabled {
         remember_terminal_restore_error(
             &mut first_error,
@@ -390,37 +377,32 @@ mod tests {
     #[test]
     fn fullscreen_terminal_session_enters_and_restores_every_owned_mode() {
         let mut entered = Vec::new();
-        enter_fullscreen_terminal_session(&mut entered, true).expect("enter commands");
+        enter_fullscreen_terminal_session(&mut entered).expect("enter commands");
         enable_bracketed_paste(&mut entered).expect("paste command");
         let entered = String::from_utf8(entered).expect("terminal commands are utf-8 escape bytes");
         assert!(entered.contains("\u{1b}[?1049h"));
         assert!(entered.contains("\u{1b}[?1004h"));
+        // Crossterm owns mouse capture through the console API on Windows and ANSI elsewhere.
+        #[cfg(not(windows))]
+        {
+            assert!(entered.contains("\u{1b}[?1000h"));
+            assert!(entered.contains("\u{1b}[?1006h"));
+        }
         assert!(entered.contains("\u{1b}[?2004h"));
 
         let mut restored = Vec::new();
-        leave_fullscreen_terminal_session(&mut restored, true, true).expect("restore commands");
+        leave_fullscreen_terminal_session(&mut restored, true).expect("restore commands");
         let restored =
             String::from_utf8(restored).expect("terminal commands are utf-8 escape bytes");
+        #[cfg(not(windows))]
+        {
+            assert!(restored.contains("\u{1b}[?1000l"));
+            assert!(restored.contains("\u{1b}[?1006l"));
+        }
         assert!(restored.contains("\u{1b}[?2004l"));
         assert!(restored.contains("\u{1b}[?1004l"));
         assert!(restored.contains("\u{1b}[?1049l"));
         assert!(restored.contains("\u{1b}[?25h"));
-    }
-
-    #[test]
-    fn native_selection_mode_skips_mouse_reporting_lifecycle() {
-        let mut entered = Vec::new();
-        enter_fullscreen_terminal_session(&mut entered, false).expect("enter commands");
-        let entered = String::from_utf8(entered).expect("terminal commands are utf-8 escape bytes");
-        assert!(entered.contains("\u{1b}[?1049h"));
-        assert!(!entered.contains("\u{1b}[?1000h"));
-
-        let mut restored = Vec::new();
-        leave_fullscreen_terminal_session(&mut restored, false, false).expect("restore commands");
-        let restored =
-            String::from_utf8(restored).expect("terminal commands are utf-8 escape bytes");
-        assert!(!restored.contains("\u{1b}[?1000l"));
-        assert!(restored.contains("\u{1b}[?1049l"));
     }
 
     #[test]

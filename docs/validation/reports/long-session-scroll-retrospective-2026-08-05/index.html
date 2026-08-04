@@ -278,11 +278,11 @@
       <div class="decision-note">
         <div class="decision-note__mark" aria-hidden="true">UX</div>
         <div>
-          <h3>후속 정리: 사용자가 마우스 캡처 모드를 운영하지 않도록</h3>
+          <h3>후속 정리: 마우스 캡처를 완전한 제품 불변식으로</h3>
           <p>Akra의 wheel·card·selection은 앱이 캡처를 소유할 때 한 제품처럼 동작합니다. 공개
             <code>:mouse</code> 토글은 상태에 따라 기능이 고장 난 것처럼 보이게 하므로 제거했습니다.
-            기본값은 app-owned ON이며, <code>Shift+drag</code> native bypass와 시작 전
-            <code>AKRA_TUI_MOUSE_CAPTURE=off</code> 비상 호환 경로만 유지합니다.</p>
+            이어서 시작 전 호환 우회도 제거해 fullscreen 진입마다 mouse reporting을 켜고,
+            종료 복원 과정에서 항상 끄는 단일 lifecycle로 고정했습니다.</p>
         </div>
       </div>
     </section>

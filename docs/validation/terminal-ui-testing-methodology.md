@@ -97,10 +97,9 @@ move a reader**. A final screenshot alone cannot prove it.
   but must never infer prompt identity from a label string or cell contents.
 - Plain `MouseEventKind::Moved` reports have no TUI meaning and are removed at input ingress. A
   16ms frame-admission floor coalesces dirty state while the reader continues collecting input.
-- Mouse capture is app-owned by default and has no public runtime toggle. The startup-only
-  `AKRA_TUI_MOUSE_CAPTURE=off` compatibility escape hatch skips mouse reporting so the emulator can
-  own native selection; restarting without that override restores app-owned pointer input without
-  changing transcript ownership.
+- Mouse capture is an unconditional fullscreen invariant. Startup always enables app-owned mouse
+  reporting, and terminal restoration always attempts the matching disable sequence. There is no
+  runtime or startup ownership switch.
 - Snapshot contract tests resume a generated Akra main-session user message and assert that only
   `user-prompt`, or nested `original-user-prompt`, reaches the transcript and session preview.
 
@@ -124,8 +123,8 @@ Capture must show:
 6. clean shell restoration after exit.
 7. forward and reverse transcript drag, visible selection highlighting, and clipboard paste into a
    separate application;
-8. startup with `AKRA_TUI_MOUSE_CAPTURE=off` for terminal-native selection, then restart without
-   the override and confirm app-owned pointer behavior is restored.
+8. confirm fullscreen startup emits the complete mouse-reporting enable set and clean exit emits
+   the matching disable set before alternate-screen restoration;
 9. resume the selected session and confirm no execution/reporting/manual-intake prompt contract is
    visible.
 10. inject a high-rate SGR drag plus unused all-motion reports and record drag settle time, next-key

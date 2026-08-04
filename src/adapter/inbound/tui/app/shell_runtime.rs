@@ -117,9 +117,6 @@ impl ShellRuntime {
     pub(super) fn clear_transcript_card_hit_areas(&mut self) {
         self.app.clear_transcript_card_hit_areas();
     }
-    pub(super) fn terminal_mouse_capture_enabled(&self) -> bool {
-        self.app.terminal_mouse_capture_enabled()
-    }
     pub(super) fn take_terminal_ui_effects(&mut self) -> Vec<TerminalUiEffect> {
         self.app.take_terminal_ui_effects()
     }

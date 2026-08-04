@@ -23,6 +23,6 @@ term: tmux-256color
 mode_toggle_geometry: 120x40
 selection_geometry: 80x24
 mouse_start_mode: on
-native_selection_start_override: AKRA_TUI_MOUSE_CAPTURE=off in separate proof session
+legacy_native_selection_start_override: enabled in separate proof session; removed from current product
 runtime_exit: confirmed shell exit; alternate screen, focus, and cursor restored
 notes_on_deviations: E1, E2, and E4 candidate-specific manual rows not executed; see README evidence matrix

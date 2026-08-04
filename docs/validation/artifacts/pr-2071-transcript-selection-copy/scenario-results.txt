@@ -17,7 +17,7 @@ overall_result: pass for candidate-specific E3; explicit E1/E2/E4 evidence downg
    `:mouse off` emitted ?1000l, ?1002l, ?1003l, ?1015l, and ?1006l.
    `:mouse on` emitted the corresponding five enable markers.
 6. startup_native_selection_fallback: pass
-   With AKRA_TUI_MOUSE_CAPTURE=off, ESC[?1049h was present and ?1000h/?1006h were absent.
+   With the legacy startup override (now removed), ESC[?1049h was present and ?1000h/?1006h were absent.
 7. clean_terminal_restore: pass
    Confirmed exit emitted ?1049l, ?1004l, and ?25h.
 8. streaming_resize_and_reverse_drag: automated addendum

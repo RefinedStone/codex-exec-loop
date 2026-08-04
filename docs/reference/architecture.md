@@ -612,8 +612,8 @@ newer UI edit.
 Transcript drag selection is adapter-local UI state. The renderer records the exact stable Ratatui
 cell map in that same receipt; pointer input reduces against the committed map and queues a typed
 terminal effect. The thin terminal frontend alone encodes clipboard text as OSC 52 (including tmux
-passthrough) or changes Crossterm mouse reporting. Clipboard payloads, selection geometry, and the
-mouse-mode preference never enter Core, application authority, or durable conversation state.
+passthrough) and owns the unconditional Crossterm mouse-reporting lifecycle. Clipboard payloads and
+selection geometry never enter Core, application authority, or durable conversation state.
 The frontend may coalesce only consecutive mouse-drag coordinates before reduction; button,
 keyboard, resize, and focus ordering remain lossless. An active selection owns `Ctrl+C` before the
 conversation-intent reducer interprets that key as stop, navigation, or exit.
