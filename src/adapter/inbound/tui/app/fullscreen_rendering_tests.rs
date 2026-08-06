@@ -184,28 +184,31 @@ fn focused_composer_uses_a_complete_frame_and_distinct_tail_surfaces() {
 }
 
 #[test]
-fn startup_screen_renders_the_akra_logo_above_the_composer() {
+fn startup_screen_renders_the_operator_ledger_above_the_composer() {
     let mut app = test_native_tui_app();
-    app.shell.show_startup_ascii_art = true;
+    app.shell.show_startup_visual = true;
 
     let screen = render(&mut app, 80, 24);
 
-    assert!(screen.contains("██████╗"));
+    assert!(screen.contains("AKRA / operator ledger"));
+    assert!(screen.contains("task intake"));
     assert!(screen.contains("Describe a task"));
-    let logo_position = screen.find("██████╗").expect("startup logo should render");
+    let ledger_position = screen
+        .find("AKRA / operator ledger")
+        .expect("startup operator ledger should render");
     let composer_position = screen
         .find("Describe a task")
         .expect("composer should remain visible");
     assert!(
-        logo_position < composer_position,
-        "startup logo should stay above the composer:\n{screen}"
+        ledger_position < composer_position,
+        "startup operator ledger should stay above the composer:\n{screen}"
     );
 }
 
 #[test]
 fn startup_editing_and_active_conversation_share_the_same_bottom_anchored_composer() {
     let mut app = test_native_tui_app();
-    app.shell.show_startup_ascii_art = true;
+    app.shell.show_startup_visual = true;
     let startup = render_buffer(&mut app, 80, 24);
 
     ready_conversation_mut(&mut app).composer.input_buffer = "hello from startup".to_string();
@@ -243,7 +246,7 @@ fn startup_editing_and_active_conversation_share_the_same_bottom_anchored_compos
 #[test]
 fn short_startup_screen_keeps_the_composer_on_the_physical_bottom_row() {
     let mut app = test_native_tui_app();
-    app.shell.show_startup_ascii_art = true;
+    app.shell.show_startup_visual = true;
 
     let buffer = render_buffer(&mut app, 80, 8);
 

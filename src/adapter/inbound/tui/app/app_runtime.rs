@@ -51,7 +51,7 @@ use super::{
     max_auto_turns_command, reduce_auto_follow_overlay_ui, reduce_conversation_input,
     reduce_conversation_intents, reduce_conversation_lifecycle,
     reduce_conversation_runtime_with_transition, reduce_shell_chrome,
-    startup_ascii_art_enabled_from_environment,
+    startup_visual_enabled_from_environment,
 };
 
 // Background control-plane and poll results are lower volume than token events,
@@ -1601,7 +1601,7 @@ impl NativeTuiApp {
                     super::LanguageSelectionOverlayUiState::default(),
                 model_selection_overlay_ui_state: super::ModelSelectionOverlayUiState::default(),
                 view_selection_overlay_ui_state: super::ViewSelectionOverlayUiState::default(),
-                show_startup_ascii_art: startup_ascii_art_enabled_from_environment(),
+                show_startup_visual: startup_visual_enabled_from_environment(),
             },
             conversation: super::NativeTuiConversationState {
                 lifecycle: ConversationLifecycleState {

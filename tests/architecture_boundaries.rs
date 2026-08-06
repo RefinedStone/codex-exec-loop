@@ -1325,7 +1325,7 @@ fn native_tui_app_owns_exactly_four_typed_private_state_slices() {
                     "view_selection_overlay_ui_state",
                     "ViewSelectionOverlayUiState",
                 ),
-                ("show_startup_ascii_art", "bool"),
+                ("show_startup_visual", "bool"),
             ],
         ),
         (

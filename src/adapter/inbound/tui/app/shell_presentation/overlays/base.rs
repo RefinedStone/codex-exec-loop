@@ -1,5 +1,6 @@
 use super::super::{
-    ConversationViewModel, Line, conversation_startup_screen_is_active, startup_ascii_art_lines,
+    ConversationViewModel, Line, conversation_startup_screen_is_active,
+    startup_operator_ledger_lines,
 };
 
 /*
@@ -9,7 +10,7 @@ use super::super::{
  */
 #[derive(Clone, Copy)]
 pub(crate) struct StartupBannerFrameInput<'a> {
-    pub(crate) show_startup_ascii_art: bool,
+    pub(crate) show_startup_visual: bool,
     pub(crate) parallel_mode_enabled: bool,
     pub(crate) conversation: Option<&'a ConversationViewModel>,
 }
@@ -19,11 +20,11 @@ pub(crate) fn build_startup_banner_lines(
     max_height: Option<u16>,
 ) -> Option<Vec<Line<'static>>> {
     /*
-     * Startup art uses the same pure predicate as ConversationScreenModel without constructing a
-     * second core snapshot or render clock during history synchronization. max_height is optional
-     * because renderers sometimes ask for the natural logo and sometimes need a cropped variant.
+     * The startup ledger uses the same pure predicate as ConversationScreenModel without
+     * constructing a second core snapshot or render clock during history synchronization.
+     * max_height is optional because short inspection callers may request a compact projection.
      */
-    if !input.show_startup_ascii_art
+    if !input.show_startup_visual
         || !conversation_startup_screen_is_active(input.parallel_mode_enabled, input.conversation)
     {
         return None;
@@ -33,5 +34,5 @@ pub(crate) fn build_startup_banner_lines(
         value => value,
     };
 
-    Some(startup_ascii_art_lines(max_height))
+    Some(startup_operator_ledger_lines(max_height))
 }

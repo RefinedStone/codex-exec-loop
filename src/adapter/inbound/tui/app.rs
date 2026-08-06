@@ -38,7 +38,8 @@ const INFINITE_AUTO_FOLLOW_MAX_TURNS: usize = usize::MAX;
 const INFINITE_AUTO_FOLLOW_MAX_TURNS_TOKEN: &str = "infinite";
 const MIN_TRANSCRIPT_PANEL_HEIGHT: u16 = 12;
 const MAX_SHELL_TAIL_HEIGHT: u16 = 10;
-const STARTUP_ASCII_ART_ENV_VAR: &str = "CODEX_EXEC_LOOP_SHOW_STARTUP_ASCII_ART";
+const STARTUP_VISUAL_ENV_VAR: &str = "CODEX_EXEC_LOOP_SHOW_STARTUP_VISUAL";
+const LEGACY_STARTUP_ASCII_ART_ENV_VAR: &str = "CODEX_EXEC_LOOP_SHOW_STARTUP_ASCII_ART";
 
 /*
  * The #[path] list is deliberately flat: each child file owns one reducer,
@@ -348,7 +349,7 @@ struct NativeTuiShellState {
     language_selection_overlay_ui_state: LanguageSelectionOverlayUiState,
     model_selection_overlay_ui_state: ModelSelectionOverlayUiState,
     view_selection_overlay_ui_state: ViewSelectionOverlayUiState,
-    show_startup_ascii_art: bool,
+    show_startup_visual: bool,
 }
 
 struct NativeTuiConversationState {
@@ -397,13 +398,18 @@ struct NativeTuiApp {
     runtime: NativeTuiRuntimeState,
 }
 
-// Startup ASCII art is opt-out because it is useful in an attached TUI, but it
-// can pollute automated captures. Falsey env values disable only the art; they
-// do not alter startup checks or shell readiness.
-fn startup_ascii_art_enabled_from_environment() -> bool {
-    startup_ascii_art_enabled_from_value(std::env::var(STARTUP_ASCII_ART_ENV_VAR).ok().as_deref())
+// The startup visual is opt-out because it is useful in an attached TUI, but it can pollute
+// automated captures. The former art selector remains a fallback so existing launch scripts keep
+// their behavior. Falsey values affect only the visual, never startup checks or shell readiness.
+fn startup_visual_enabled_from_environment() -> bool {
+    let current_value = std::env::var(STARTUP_VISUAL_ENV_VAR).ok();
+    let legacy_value = std::env::var(LEGACY_STARTUP_ASCII_ART_ENV_VAR).ok();
+    startup_visual_enabled_from_values(current_value.as_deref(), legacy_value.as_deref())
 }
-fn startup_ascii_art_enabled_from_value(value: Option<&str>) -> bool {
+fn startup_visual_enabled_from_values(current: Option<&str>, legacy: Option<&str>) -> bool {
+    startup_visual_enabled_from_value(current.or(legacy))
+}
+fn startup_visual_enabled_from_value(value: Option<&str>) -> bool {
     let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
         return true;
     };
@@ -415,22 +421,37 @@ fn startup_ascii_art_enabled_from_value(value: Option<&str>) -> bool {
 }
 
 #[cfg(test)]
-mod startup_ascii_art_env_tests {
-    use super::{PlanningWorkerVisibility, startup_ascii_art_enabled_from_value};
+mod startup_visual_env_tests {
+    use super::{
+        PlanningWorkerVisibility, startup_visual_enabled_from_value,
+        startup_visual_enabled_from_values,
+    };
     #[test]
-    fn startup_ascii_art_defaults_to_enabled() {
-        assert!(startup_ascii_art_enabled_from_value(None));
-        assert!(startup_ascii_art_enabled_from_value(Some("")));
-        assert!(startup_ascii_art_enabled_from_value(Some("true")));
-        assert!(startup_ascii_art_enabled_from_value(Some("1")));
-        assert!(startup_ascii_art_enabled_from_value(Some("yes")));
+    fn startup_visual_defaults_to_enabled() {
+        assert!(startup_visual_enabled_from_value(None));
+        assert!(startup_visual_enabled_from_value(Some("")));
+        assert!(startup_visual_enabled_from_value(Some("true")));
+        assert!(startup_visual_enabled_from_value(Some("1")));
+        assert!(startup_visual_enabled_from_value(Some("yes")));
     }
     #[test]
-    fn startup_ascii_art_turns_off_for_falsey_values() {
-        assert!(!startup_ascii_art_enabled_from_value(Some("false")));
-        assert!(!startup_ascii_art_enabled_from_value(Some("0")));
-        assert!(!startup_ascii_art_enabled_from_value(Some("off")));
-        assert!(!startup_ascii_art_enabled_from_value(Some("no")));
+    fn startup_visual_turns_off_for_falsey_values() {
+        assert!(!startup_visual_enabled_from_value(Some("false")));
+        assert!(!startup_visual_enabled_from_value(Some("0")));
+        assert!(!startup_visual_enabled_from_value(Some("off")));
+        assert!(!startup_visual_enabled_from_value(Some("no")));
+    }
+    #[test]
+    fn current_startup_visual_setting_overrides_the_legacy_art_setting() {
+        assert!(!startup_visual_enabled_from_values(
+            Some("off"),
+            Some("true")
+        ));
+        assert!(startup_visual_enabled_from_values(
+            Some("true"),
+            Some("off")
+        ));
+        assert!(!startup_visual_enabled_from_values(None, Some("off")));
     }
     #[test]
     fn planning_worker_visibility_defaults_to_normal() {

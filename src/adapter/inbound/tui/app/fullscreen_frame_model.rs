@@ -245,7 +245,7 @@ impl FullscreenConversationFrameProjection {
         let startup_banner = screen_model.startup_screen_is_active().then(|| {
             build_startup_banner_lines(
                 StartupBannerFrameInput {
-                    show_startup_ascii_art: app.shell.show_startup_ascii_art,
+                    show_startup_visual: app.shell.show_startup_visual,
                     parallel_mode_enabled: screen_model.parallel_mode_enabled,
                     conversation: screen_model.ready_conversation(),
                 },

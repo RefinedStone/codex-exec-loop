@@ -1,62 +1,86 @@
-use super::Line;
+use super::{AkraTheme, Line, Span};
 
-// Startup banner art is intentionally compile-time data: the first shell frame can be built before diagnostics,
-// file IO, or app-server attachment complete, and every frontend receives the same terminal-safe glyph grid.
-const STARTUP_ASCII_ART_DEFAULT: &str = r#"
- █████╗ ██╗  ██╗██████╗  █████╗
-██╔══██╗██║ ██╔╝██╔══██╗██╔══██╗
-███████║█████╔╝ ██████╔╝███████║
-██╔══██║██╔═██╗ ██╔══██╗██╔══██║
-██║  ██║██║  ██╗██║  ██║██║  ██║
-╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝
-"#;
+// The welcome surface is terminal data, not an image asset. Keeping this projection static means
+// the first frame is available before diagnostics, file IO, or app-server attachment complete.
+const STARTUP_LEDGER_RULE: &str = "  +----------------------------------------------------------";
 
-// Convert the raw AKRA logo into ratatui lines and apply the only geometry policy owned by this module.
-// Callers decide whether a startup banner is active; this function only normalizes and crops the art.
-pub(in super::super) fn startup_ascii_art_lines(max_height: Option<u16>) -> Vec<Line<'static>> {
-    let art_lines_vec = STARTUP_ASCII_ART_DEFAULT.lines().collect::<Vec<_>>();
-    // The raw string is formatted for source readability; trim only the outer decorative blank rows.
-    let start = art_lines_vec
-        .iter()
-        .position(|line| !line.trim().is_empty())
-        .unwrap_or(0);
-    let end = art_lines_vec
-        .iter()
-        .rposition(|line| !line.trim().is_empty())
-        .map(|index| index + 1)
-        .unwrap_or(art_lines_vec.len());
-    let mut art_lines = &art_lines_vec[start..end];
+// Build the C2 startup treatment: a compact identity line and an honest orientation ledger.
+// These rows describe where work appears after the first task; they intentionally do not invent
+// readiness, delivery, or worker state before the runtime has produced it.
+pub(in super::super) fn startup_operator_ledger_lines(
+    max_height: Option<u16>,
+) -> Vec<Line<'static>> {
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled("  [#] ", AkraTheme::brand()),
+            Span::styled("AKRA", AkraTheme::title()),
+            Span::styled(" / operator ledger", AkraTheme::subtle()),
+        ]),
+        Line::styled(STARTUP_LEDGER_RULE, AkraTheme::subtle()),
+        Line::default(),
+        Line::styled("  OPERATOR LEDGER", AkraTheme::accent()),
+        ledger_row(
+            "[>]",
+            AkraTheme::brand(),
+            " task intake",
+            "  compose in the fixed editor below",
+        ),
+        ledger_row(
+            "[ ]",
+            AkraTheme::muted(),
+            " activity trace",
+            "  starts with the first turn",
+        ),
+        ledger_row(
+            "[ ]",
+            AkraTheme::muted(),
+            " delivery lane",
+            "  activates for parallel work",
+        ),
+    ];
 
     if let Some(max_height) = max_height {
-        let max_height = max_height as usize;
-        if max_height > 0 && art_lines.len() > max_height {
-            // Center cropping preserves the logo's visual weight when the fullscreen viewport has fewer rows than the full mark.
-            let start = art_lines.len().saturating_sub(max_height) / 2;
-            art_lines = &art_lines[start..start + max_height];
-        }
+        lines.truncate(usize::from(max_height));
     }
+    lines
+}
 
-    // Borrowing from a static string keeps startup projection allocation-light apart from the Vec itself.
-    art_lines.iter().map(|line| Line::from(*line)).collect()
+fn ledger_row(
+    marker: &'static str,
+    marker_style: ratatui::style::Style,
+    label: &'static str,
+    detail: &'static str,
+) -> Line<'static> {
+    Line::from(vec![
+        Span::raw("  "),
+        Span::styled(marker, marker_style),
+        Span::styled(label, AkraTheme::muted()),
+        Span::styled(detail, AkraTheme::subtle()),
+    ])
 }
 
 #[cfg(test)]
 mod tests {
-    use super::startup_ascii_art_lines;
+    use super::{AkraTheme, startup_operator_ledger_lines};
 
-    // The startup frame appears before richer diagnostics, so the mark must stay plain text with predictable width.
     #[test]
-    fn startup_ascii_art_uses_plain_terminal_safe_glyphs() {
-        let rendered = startup_ascii_art_lines(None)
-            .into_iter()
-            .map(|line| line.to_string())
-            .collect::<Vec<_>>();
+    fn startup_operator_ledger_is_compact_and_terminal_safe() {
+        let rendered = startup_operator_ledger_lines(None);
 
-        assert_eq!(rendered.len(), 6);
-        assert!(rendered.iter().any(|line| line.contains("██████")));
-        // Keep ANSI escapes, emoji, and ambiguous-width glyphs out of the first paint path.
-        assert!(rendered.iter().all(|line| line.chars().all(|ch| {
-            matches!(ch, ' ' | '█' | '╗' | '╔' | '╝' | '╚' | '═' | '║')
-        })));
+        assert_eq!(rendered.len(), 7);
+        assert_eq!(rendered[0].to_string(), "  [#] AKRA / operator ledger");
+        assert!(rendered[1].to_string().starts_with("  +---"));
+        assert!(rendered.iter().all(|line| line.to_string().is_ascii()));
+        assert_eq!(rendered[0].spans[0].style, AkraTheme::brand());
+        assert_eq!(rendered[0].spans[1].style, AkraTheme::title());
+        assert_eq!(rendered[4].spans[1].style, AkraTheme::brand());
+    }
+
+    #[test]
+    fn startup_operator_ledger_truncates_from_the_bottom_on_short_viewports() {
+        let rendered = startup_operator_ledger_lines(Some(3));
+
+        assert_eq!(rendered.len(), 3);
+        assert_eq!(rendered[0].to_string(), "  [#] AKRA / operator ledger");
     }
 }
