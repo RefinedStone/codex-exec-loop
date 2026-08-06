@@ -116,31 +116,11 @@ export const IDLE_IN_PLACE_CYCLE_MS = 960;
 export const IDLE_IN_PLACE_AMPLITUDE_RATIO = 0.65;
 export const WALK_SWAY_WORLD_PX = 0.7;
 export const WALK_LIFT_WORLD_PX = 1.6;
-export const STEP_CROSSFADE_START = 0.68;
 
 const MAX_MOVEMENT_DELTA_MS = 50;
 
-const visibleStepState = (
-  gaitProgress: number
-): { frameIndex: number; nextFrameIndex: number; blend: number } => {
-  const frameProgress = gaitProgress * 4;
-  const frameBase = Math.floor(frameProgress);
-  const frameFraction = frameProgress - frameBase;
-  const rawBlend = Math.max(
-    0,
-    Math.min(
-      1,
-      (frameFraction - STEP_CROSSFADE_START) /
-        (1 - STEP_CROSSFADE_START)
-    )
-  );
-  const blend = rawBlend * rawBlend * (3 - 2 * rawBlend);
-  return {
-    frameIndex: frameBase % 4,
-    nextFrameIndex: (frameBase + 1) % 4,
-    blend,
-  };
-};
+const visibleStepFrameIndex = (gaitProgress: number): number =>
+  Math.floor(gaitProgress * 4) % 4;
 
 const applyVisibleStepAppearance = (
   unit: AgentUnit,
@@ -150,43 +130,30 @@ const applyVisibleStepAppearance = (
   gaitOffsetX: number,
   gaitOffsetY: number
 ): void => {
-  const step = visibleStepState(gaitProgress);
+  const frameIndex = visibleStepFrameIndex(gaitProgress);
   const currentAlignment = alignmentForFacing(
     unit.archetype,
     facing,
-    step.frameIndex
-  );
-  const nextAlignment = alignmentForFacing(
-    unit.archetype,
-    facing,
-    step.nextFrameIndex
+    frameIndex
   );
   unit.sprite.texture = frameForFacing(
     frameSets,
     unit.archetype,
     facing,
-    step.frameIndex
-  );
-  unit.blendSprite.texture = frameForFacing(
-    frameSets,
-    unit.archetype,
-    facing,
-    step.nextFrameIndex
+    frameIndex
   );
   unit.sprite.position.set(
     gaitOffsetX + currentAlignment.x * AGENT_SPRITE_SCALE,
     gaitOffsetY + currentAlignment.y * AGENT_SPRITE_SCALE
   );
-  unit.blendSprite.position.set(
-    gaitOffsetX + nextAlignment.x * AGENT_SPRITE_SCALE,
-    gaitOffsetY + nextAlignment.y * AGENT_SPRITE_SCALE
-  );
-  unit.sprite.alpha = Math.sqrt(1 - step.blend);
-  unit.blendSprite.alpha = Math.sqrt(step.blend);
+  // Pixel-art poses vary in silhouette width. Blending full poses makes that
+  // silhouette temporarily wider, which reads as an unintended scale pulse.
+  unit.sprite.alpha = 1;
+  unit.blendSprite.alpha = 0;
   unit.sprite.roundPixels = false;
-  unit.blendSprite.roundPixels = false;
-  unit.animationFrameIndex = step.frameIndex;
-  unit.animationBlend = step.blend;
+  unit.blendSprite.roundPixels = true;
+  unit.animationFrameIndex = frameIndex;
+  unit.animationBlend = 0;
 };
 
 const relevantPacketTarget = (unit: AgentUnit): Point | null => {
@@ -451,13 +418,10 @@ export class AgentWorld {
         const lift = Math.abs(stride);
         spriteOffsetX = stride * WALK_SWAY_WORLD_PX * gaitAmplitude;
         spriteOffsetY = -lift * WALK_LIFT_WORLD_PX * gaitAmplitude;
-        unit.shadow.scale.set(
-          1 - lift * 0.075 * gaitAmplitude,
-          1 - lift * 0.035 * gaitAmplitude
-        );
-        unit.shadow.alpha =
-          (unit.presenceKind === "active" ? 0.34 : 0.25) -
-          lift * 0.055 * gaitAmplitude;
+        // Keep a stable footprint: a pulsing shadow reinforces the same false
+        // size-change impression that a moving pixel silhouette can create.
+        unit.shadow.scale.set(1);
+        unit.shadow.alpha = unit.presenceKind === "active" ? 0.34 : 0.25;
       } else if (!this.reducedMotion && unit.visualState === "blocked") {
         offsetX = Math.sin(elapsedMilliseconds * 0.014 + unit.motionPhase) * 2.2;
       } else if (
@@ -829,12 +793,10 @@ export class AgentWorld {
     };
     group.on("pointerover", () => {
       unit.hovered = true;
-      unit.group.scale.set(1.055);
       this.syncUnitLabel(unit);
     });
     group.on("pointerout", () => {
       unit.hovered = false;
-      unit.group.scale.set(1);
       this.syncUnitLabel(unit);
     });
     group.on("pointertap", () => {

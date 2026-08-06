@@ -3136,11 +3136,11 @@ fn akra_graphic_dashboard_game_bundle_is_vite_typescript_input() {
         "export const IDLE_IN_PLACE_AMPLITUDE_RATIO = 0.65",
         "export const WALK_SWAY_WORLD_PX = 0.7",
         "export const WALK_LIFT_WORLD_PX = 1.6",
-        "export const STEP_CROSSFADE_START = 0.68",
-        "const visibleStepState",
+        "const visibleStepFrameIndex",
         "const applyVisibleStepAppearance",
-        "Math.sqrt(1 - step.blend)",
-        "Math.sqrt(step.blend)",
+        "Pixel-art poses vary in silhouette width",
+        "unit.sprite.alpha = 1",
+        "unit.blendSprite.alpha = 0",
         "blendSprite",
         "animationKind: unit.animationKind",
         "animationBlend: Number(unit.animationBlend.toFixed(3))",
@@ -3325,6 +3325,17 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         assert!(
             admin_game_source_contains(semantic_motion),
             "truthful dynamic scene should keep semantic motion token {semantic_motion}"
+        );
+    }
+
+    for removed_scale_pulse in [
+        "Math.sqrt(1 - step.blend)",
+        "Math.sqrt(step.blend)",
+        "unit.group.scale.set(1.055)",
+    ] {
+        assert!(
+            !admin_game_source_contains(removed_scale_pulse),
+            "agent movement must not reintroduce a perceived scale pulse: {removed_scale_pulse}"
         );
     }
 
