@@ -109,10 +109,12 @@ pub enum ConversationReasoningEffort {
     Medium,
     High,
     XHigh,
+    Max,
 }
 
 impl ConversationReasoningEffort {
-    pub const SUPPORTED_LABELS: &'static str = "none, minimal, low, medium, high, xhigh, default";
+    pub const SUPPORTED_LABELS: &'static str =
+        "none, minimal, low, medium, high, xhigh, max, default";
 
     pub fn parse(value: &str) -> Option<Self> {
         match normalize_turn_option_value(value).as_deref() {
@@ -122,6 +124,7 @@ impl ConversationReasoningEffort {
             Some("medium") => Some(Self::Medium),
             Some("high") => Some(Self::High),
             Some("xhigh") | Some("extra-high") | Some("x-high") => Some(Self::XHigh),
+            Some("max") => Some(Self::Max),
             _ => None,
         }
     }
@@ -134,6 +137,7 @@ impl ConversationReasoningEffort {
             Self::Medium => "medium",
             Self::High => "high",
             Self::XHigh => "xhigh",
+            Self::Max => "max",
         }
     }
 }
@@ -421,6 +425,7 @@ mod tests {
             ("extra high", ConversationReasoningEffort::XHigh),
             ("extra_high", ConversationReasoningEffort::XHigh),
             ("x-high", ConversationReasoningEffort::XHigh),
+            ("max", ConversationReasoningEffort::Max),
         ];
 
         for (input, expected) in cases {
@@ -444,6 +449,7 @@ mod tests {
             (ConversationReasoningEffort::Medium, "medium"),
             (ConversationReasoningEffort::High, "high"),
             (ConversationReasoningEffort::XHigh, "xhigh"),
+            (ConversationReasoningEffort::Max, "max"),
         ];
 
         for (effort, label) in cases {

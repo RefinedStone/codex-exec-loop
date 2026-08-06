@@ -1607,7 +1607,7 @@ impl NativeTuiApp {
         self.close_shell_overlay();
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text: format!(
-                "model set to {}; think set to {}",
+                "model set to {}; reasoning set to {}",
                 model_option.label, effort_option.label
             ),
         });
@@ -4821,11 +4821,11 @@ mod tests {
         assert!(app.handle_model_selection_overlay_key(key(KeyCode::Enter)));
         assert_eq!(
             app.conversation.turn_options.model.as_deref(),
-            Some("gpt-5.4")
+            Some("gpt-5.6-terra")
         );
         assert_eq!(
             app.conversation.turn_options.reasoning_effort,
-            Some(ConversationReasoningEffort::High)
+            Some(ConversationReasoningEffort::Medium)
         );
 
         assert!(!app.handle_view_selection_overlay_key(key(KeyCode::Enter)));
@@ -4849,6 +4849,31 @@ mod tests {
         app.show_language_selection_overlay();
         assert!(app.handle_language_selection_overlay_key(key(KeyCode::Enter)));
         assert_eq!(app.shell.tui_language, TuiLanguage::English);
+    }
+
+    #[test]
+    fn model_selection_applies_gpt_5_6_max_reasoning() {
+        let mut app = test_native_tui_app();
+        app.show_model_selection_overlay();
+
+        assert!(app.handle_model_selection_overlay_key(key(KeyCode::Char('1'))));
+        assert_eq!(
+            app.shell
+                .model_selection_overlay_ui_state
+                .staged_model()
+                .model,
+            Some("gpt-5.6-sol")
+        );
+        assert!(app.handle_model_selection_overlay_key(key(KeyCode::Char('5'))));
+
+        assert_eq!(
+            app.conversation.turn_options.model.as_deref(),
+            Some("gpt-5.6-sol")
+        );
+        assert_eq!(
+            app.conversation.turn_options.reasoning_effort,
+            Some(ConversationReasoningEffort::Max)
+        );
     }
 
     #[test]

@@ -199,16 +199,16 @@ pub(crate) struct InlineShellCommandHelpEntry {
 const ACTIVITY_USAGE: &str = "Type `:activity [all|diff|output|command|patch|…]` to inspect retained progressive activity cards.";
 const RESET_USAGE: &str =
     "Type `:reset <queue|directions|all>` and press Enter to reset planning state.";
-const MODEL_USAGE: &str = "Type `:model` to choose the model and think level, or `:model default` to use app-server defaults.";
+const MODEL_USAGE: &str = "Type `:model` to choose the model and reasoning level, or `:model default` to use app-server defaults.";
 const VIEW_USAGE: &str = "Type `:view` to choose transcript visibility for tool/status rows.";
 const LANGUAGE_USAGE: &str =
     "Type `:language` to choose the TUI language, or `:language english|korean`.";
 const THINK_USAGE: &str =
-    "Type `:think <none|minimal|low|medium|high|xhigh|default>` to choose reasoning effort.";
+    "Type `:think <none|minimal|low|medium|high|xhigh|max|default>` to choose reasoning effort.";
 const COPY_USAGE: &str =
     "Type `:copy` to copy the selection or latest answer; use `:copy selection|last` explicitly.";
 #[cfg(test)]
-const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :work  :parallel [off]  :peek  :activity [all|diff|output|command|…]  :sessions  :reviews  :queue  :directions  :turns <positive|infinite|off>  :stop  :model [default]  :view [simple|medium|detail]  :language [english|korean]  :think <none|minimal|low|medium|high|xhigh|default>  :copy [selection|last]  :planning [doctor]  :doctor  :reset <queue|directions|all>  :new  :help";
+const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :work  :parallel [off]  :peek  :activity [all|diff|output|command|…]  :sessions  :reviews  :queue  :directions  :turns <positive|infinite|off>  :stop  :model [default]  :view [simple|medium|detail]  :language [english|korean]  :think <none|minimal|low|medium|high|xhigh|max|default>  :copy [selection|last]  :planning [doctor]  :doctor  :reset <queue|directions|all>  :new  :help";
 const THINK_SUPPORTED_VALUES: &str = ConversationReasoningEffort::SUPPORTED_LABELS;
 
 const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
@@ -628,7 +628,7 @@ impl InlineShellCommand {
             InlineShellCommand::Model => ":model",
             InlineShellCommand::View => ":view [simple|medium|detail]",
             InlineShellCommand::Language => ":language [english|korean]",
-            InlineShellCommand::Think => ":think <none|minimal|low|medium|high|xhigh|default>",
+            InlineShellCommand::Think => ":think <none|minimal|low|medium|high|xhigh|max|default>",
             InlineShellCommand::Copy => ":copy [selection|last]",
             InlineShellCommand::PlanningInit => ":planning [doctor]",
             InlineShellCommand::Reset => ":reset <queue|directions|all>",

@@ -63,7 +63,7 @@ The source registry is `src/adapter/inbound/tui/app/inline_shell_commands.rs`.
 :model [default]
 :view [simple|medium|detail]
 :language [english|korean]
-:think <none|minimal|low|medium|high|xhigh|default>
+:think <none|minimal|low|medium|high|xhigh|max|default>
 :copy [selection|last]
 :planning [doctor]
 :doctor
@@ -71,6 +71,11 @@ The source registry is `src/adapter/inbound/tui/app/inline_shell_commands.rs`.
 :new
 :help
 ```
+
+`:model` opens a staged `Model → Reasoning` picker. It shows the active provider without
+inventing unavailable providers, then exposes only the selected model's reasoning choices and
+marks its recommended level. The OpenAI catalog begins with GPT-5.6 Sol, Terra, and Luna; its
+GPT-5.6 rows offer `max` and omit `minimal`.
 
 `:turns` controls single-session auto-follow. Parallel automation is a separate explicit opt-in.
 `:stop` terminates active app-server sessions, closes the active parallel epoch, and disarms both

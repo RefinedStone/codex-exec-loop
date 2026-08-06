@@ -1952,6 +1952,7 @@ fn reasoning_effort_label(effort: ReasoningEffortValue) -> &'static str {
         ReasoningEffortValue::Medium => "medium",
         ReasoningEffortValue::High => "high",
         ReasoningEffortValue::XHigh => "xhigh",
+        ReasoningEffortValue::Max => "max",
     }
 }
 
@@ -3685,6 +3686,7 @@ mod tests {
         );
         assert_eq!(reasoning_effort_label(ReasoningEffortValue::High), "high");
         assert_eq!(reasoning_effort_label(ReasoningEffortValue::XHigh), "xhigh");
+        assert_eq!(reasoning_effort_label(ReasoningEffortValue::Max), "max");
 
         let mut capture = AppServerPromptOutputCapture::default();
         assert!(

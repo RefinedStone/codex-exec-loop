@@ -577,7 +577,6 @@ pub(super) fn capture_fullscreen_shell_frame_model(
                     selected_model_index: state.selected_model_index(),
                     selected_effort_index: state.selected_effort_index(),
                     staged_model_index: state.staged_model_index(),
-                    staged_model_label: state.staged_model().label,
                     current_model_label: app
                         .conversation
                         .turn_options

@@ -26,9 +26,12 @@ pub(crate) fn overlay_option_line(
     // marker+shortcut, bold label, detail을 별도 span으로 나눠 label만 scan anchor가
     // 되게 한다. prefix 폭은 marker와 idle marker가 맞춰 주므로 선택 이동 때 row
     // text가 좌우로 밀리지 않는다.
-    Line::from(vec![
+    let mut spans = vec![
         Span::styled(format!("{marker}{shortcut}. "), style),
         Span::styled(label.to_string(), style.bold()),
-        Span::styled(format!("  {detail}"), style),
-    ])
+    ];
+    if !detail.is_empty() {
+        spans.push(Span::styled(format!("  {detail}"), style));
+    }
+    Line::from(spans)
 }

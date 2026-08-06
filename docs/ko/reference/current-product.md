@@ -58,13 +58,17 @@ Modal이 focus를 소유할 때는 전역 키보다 우선할 수 있으며, 표
 :model [default]
 :view [simple|medium|detail]
 :language [english|korean]
-:think <none|minimal|low|medium|high|xhigh|default>
+:think <none|minimal|low|medium|high|xhigh|max|default>
 :planning [doctor]
 :doctor
 :reset <queue|directions|all>
 :new
 :help
 ```
+
+`:model`은 `모델 → 추론` 순서의 단계형 선택기를 엽니다. 실제 활성 provider만 표시하고,
+선택한 모델이 지원하는 추론 수준과 그 추천값만 보여 줍니다. OpenAI 목록은 GPT-5.6 Sol,
+Terra, Luna로 시작하며 GPT-5.6 행에는 `max`가 있고 `minimal`은 없습니다.
 
 `:turns`는 단일 세션 auto-follow를 제어합니다. Parallel 자동화는 별도의 명시적 opt-in입니다.
 `:stop`은 활성 app-server 세션을 중지하고 parallel epoch를 닫으며 두 continuation 경로를 모두
