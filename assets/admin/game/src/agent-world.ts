@@ -12,6 +12,7 @@ import {
   buildAgentFrameSets,
   frameForFacing,
   resolveRestTexture,
+  scaleForFacing,
   type AgentFrameSet,
 } from "./agent-atlas";
 import type {
@@ -83,6 +84,8 @@ interface AgentUnit {
   gaitOffsetX: number;
   gaitOffsetY: number;
   restTexture: Texture;
+  restFrameScale: number;
+  frameScale: number;
   restResolvedAtlasFrameIndex: number | null;
   restPoseFallback: boolean;
   resolvedAtlasFrameIndex: number | null;
@@ -136,6 +139,7 @@ const applyVisibleStepAppearance = (
     facing,
     frameIndex
   );
+  unit.frameScale = scaleForFacing(unit.archetype, facing, frameIndex);
   unit.sprite.texture = frameForFacing(
     frameSets,
     unit.archetype,
@@ -143,8 +147,8 @@ const applyVisibleStepAppearance = (
     frameIndex
   );
   unit.sprite.position.set(
-    gaitOffsetX + currentAlignment.x * AGENT_SPRITE_SCALE,
-    gaitOffsetY + currentAlignment.y * AGENT_SPRITE_SCALE
+    gaitOffsetX + currentAlignment.x * AGENT_SPRITE_SCALE * unit.frameScale,
+    gaitOffsetY + currentAlignment.y * AGENT_SPRITE_SCALE * unit.frameScale
   );
   // Pixel-art poses vary in silhouette width. Blending full poses makes that
   // silhouette temporarily wider, which reads as an unintended scale pulse.
@@ -465,6 +469,7 @@ export class AgentWorld {
         unit.poseFallback = unit.pose !== "neutral";
       } else {
         unit.sprite.texture = unit.restTexture;
+        unit.frameScale = unit.restFrameScale;
         unit.sprite.position.set(spriteOffsetX, spriteOffsetY);
         unit.sprite.roundPixels = !inPlaceWalking;
         unit.blendSprite.position.set(spriteOffsetX, spriteOffsetY);
@@ -495,12 +500,12 @@ export class AgentWorld {
         }
       }
       unit.sprite.scale.set(
-        (unit.flipX ? -1 : 1) * AGENT_SPRITE_SCALE,
-        AGENT_SPRITE_SCALE
+        (unit.flipX ? -1 : 1) * AGENT_SPRITE_SCALE * unit.frameScale,
+        AGENT_SPRITE_SCALE * unit.frameScale
       );
       unit.blendSprite.scale.set(
-        (unit.flipX ? -1 : 1) * AGENT_SPRITE_SCALE,
-        AGENT_SPRITE_SCALE
+        (unit.flipX ? -1 : 1) * AGENT_SPRITE_SCALE * unit.frameScale,
+        AGENT_SPRITE_SCALE * unit.frameScale
       );
     }
 
@@ -566,6 +571,7 @@ export class AgentWorld {
           animationBlend: Number(unit.animationBlend.toFixed(3)),
           gaitOffsetX: Number(unit.gaitOffsetX.toFixed(2)),
           gaitOffsetY: Number(unit.gaitOffsetY.toFixed(2)),
+          frameScale: Number(unit.frameScale.toFixed(3)),
           resolvedAtlasFrameIndex: unit.resolvedAtlasFrameIndex,
           poseFallback: unit.poseFallback,
           displayWidth: Math.round(spriteBounds.width),
@@ -592,6 +598,7 @@ export class AgentWorld {
           animationBlend: Number(unit.animationBlend.toFixed(3)),
           gaitOffsetX: Number(unit.gaitOffsetX.toFixed(2)),
           gaitOffsetY: Number(unit.gaitOffsetY.toFixed(2)),
+          frameScale: Number(unit.frameScale.toFixed(3)),
           locationIndex: unit.locationIndex,
           resolvedAtlasFrameIndex: unit.resolvedAtlasFrameIndex,
           poseFallback: unit.poseFallback,
@@ -783,6 +790,8 @@ export class AgentWorld {
       gaitOffsetY: 0,
       restTexture:
         resolved.texture ?? frameForFacing(this.frameSets, archetype, "down", 0),
+      restFrameScale: resolved.frameScale,
+      frameScale: resolved.frameScale,
       restResolvedAtlasFrameIndex: resolved.resolvedAtlasFrameIndex,
       restPoseFallback: resolved.poseFallback,
       resolvedAtlasFrameIndex: resolved.resolvedAtlasFrameIndex,
@@ -821,6 +830,7 @@ export class AgentWorld {
       unit.pose
     );
     if (resolved.texture) unit.restTexture = resolved.texture;
+    unit.restFrameScale = resolved.frameScale;
     unit.restResolvedAtlasFrameIndex = resolved.resolvedAtlasFrameIndex;
     unit.restPoseFallback = resolved.poseFallback;
     const color = STATUS_PALETTE[unit.severity];

@@ -246,6 +246,7 @@ try {
             animationBlend,
             gaitOffsetX,
             gaitOffsetY,
+            frameScale,
             ...actor
           }) => actor,
         ),
@@ -285,6 +286,7 @@ try {
         opacity,
         boardX,
         boardY,
+        ambientActivity,
         resolvedAtlasFrameIndex,
         poseFallback,
         animationKind,
@@ -292,35 +294,20 @@ try {
         animationBlend,
         gaitOffsetX,
         gaitOffsetY,
+        frameScale,
         ...character
       }) => character,
     );
-    const expectedStandbyPoints = [
-      { x: 135, y: 756 },
-      { x: 245, y: 745 },
-      { x: 355, y: 720 },
-    ];
     const expectedStandbyPoses = ["laptop", "sit", "laptop"];
-    const expectedStandbyFrames = [40, 47, 48];
     const standbyCoordinateKeys = new Set(
       standbyParity.canvasCharacters.map((character) => `${character.x}:${character.y}`),
     );
-    const standbyPointsMatch = standbyParity.canvasCharacters.every((character) => {
-      const expected = expectedStandbyPoints[character.locationIndex - 1];
-      return (
-        expected &&
-        character.x === expected.x &&
-        character.y === expected.y &&
-        character.x > 0 &&
-        character.x < 1672 &&
-        character.y > 0 &&
-        character.y < 941
-      );
-    });
-    const standbySpacingIsSafe = standbyParity.canvasCharacters.every((character, index, all) =>
-      all.slice(index + 1).every(
-        (other) => Math.hypot(character.x - other.x, character.y - other.y) >= 110,
-      ),
+    const standbyWithinLounge = standbyParity.canvasCharacters.every(
+      (character) =>
+        character.x >= 70 &&
+        character.x <= 430 &&
+        character.y >= 660 &&
+        character.y <= 780,
     );
     const minimumStandbyWidth = width >= 1920 ? 64 : 40;
     const minimumStandbyHeight = width >= 1920 ? 96 : 60;
@@ -358,8 +345,7 @@ try {
       standbyParity.standbyTotalCount < standbyParity.standbyCount ||
       standbyParity.characterCount !== standbyParity.actorCount + standbyParity.standbyCount ||
       standbyCoordinateKeys.size !== standbyParity.canvasCharacters.length ||
-      !standbyPointsMatch ||
-      !standbySpacingIsSafe ||
+      !standbyWithinLounge ||
       !standbyCharactersAreLegible ||
       !standbyBoundsAreInsideCanvas ||
       !standbyScreenSpacingIsSafe ||
@@ -367,13 +353,17 @@ try {
         const index = character.locationIndex - 1;
         return (
           character.pose !== expectedStandbyPoses[index] ||
-          character.resolvedAtlasFrameIndex !== expectedStandbyFrames[index] ||
-          character.poseFallback
+          !character.ambientActivity ||
+          character.animationKind !== "walk" ||
+          !Number.isInteger(character.animationFrameIndex) ||
+          character.resolvedAtlasFrameIndex !== null ||
+          !character.poseFallback ||
+          character.frameScale < 0.99
         );
       })
     ) {
       throw new Error(
-        `${label} configured standby characters are missing or not using seated atlas poses: ${JSON.stringify(standbyParity)}`,
+        `${label} configured standby characters are missing or not visibly walking in the lounge: ${JSON.stringify(standbyParity)}`,
       );
     }
     if (width === 1920) {
@@ -485,6 +475,38 @@ try {
       }
       await page.evaluate(() => {
         const dashboard = window.__akraVisualProbeDashboard;
+        const probe = dashboard?.scene?.actors?.find(
+          (actor) => actor.actorId === "visual-probe-session",
+        );
+        if (!probe) throw new Error("Guardian walk probe cannot find the active actor");
+        probe.visualState = "delivering";
+        probe.staticPose = "neutral";
+        window.AkraAdminGame?.applyDashboard?.(dashboard);
+      });
+      await page.waitForFunction(() => {
+        window.AkraAdminGame?.applyDashboard?.(window.__akraVisualProbeDashboard);
+        const guardian = window.AkraAdminGame
+          ?.inspectScene?.()
+          ?.actors.find((actor) => actor.actorId === "visual-probe-session");
+        return guardian?.animationKind === "walk" && guardian.frameScale >= 1.09;
+      });
+      const guardianWalkProbe = await page.evaluate(() =>
+        window.AkraAdminGame
+          ?.inspectScene?.()
+          ?.actors.find((actor) => actor.actorId === "visual-probe-session"),
+      );
+      if (
+        !guardianWalkProbe ||
+        guardianWalkProbe.visualState !== "delivering" ||
+        guardianWalkProbe.animationKind !== "walk" ||
+        guardianWalkProbe.frameScale < 1.09
+      ) {
+        throw new Error(
+          `${label} Guardian side walk did not normalize its shorter source frame: ${JSON.stringify(guardianWalkProbe)}`,
+        );
+      }
+      await page.evaluate(() => {
+        const dashboard = window.__akraVisualProbeDashboard;
         dashboard.scene.actors = dashboard.scene.actors.filter(
           (actor) => actor.actorId !== "visual-probe-session",
         );
@@ -530,7 +552,7 @@ try {
           ?.standbyCharacters.find(
             (candidate) => candidate.characterId === "standby:visual-ranger-probe",
           );
-        return character?.animationKind === "idle"
+        return character?.animationKind === "walk"
           && Number.isInteger(character.animationFrameIndex);
       });
       const rangerStandbyProbe = await page.evaluate(() =>
@@ -543,18 +565,19 @@ try {
       if (
         !rangerStandbyProbe ||
         rangerStandbyProbe.pose !== "neutral" ||
-        rangerStandbyProbe.animationKind !== "idle" ||
+        !rangerStandbyProbe.ambientActivity ||
+        rangerStandbyProbe.animationKind !== "walk" ||
         !Number.isInteger(rangerStandbyProbe.animationFrameIndex) ||
         rangerStandbyProbe.resolvedAtlasFrameIndex !== null ||
         rangerStandbyProbe.poseFallback
       ) {
         throw new Error(
-          `${label} Ranger standby did not keep its explicit neutral pose: ${JSON.stringify(rangerStandbyProbe)}`,
+          `${label} Ranger standby did not start its neutral lounge walk: ${JSON.stringify(rangerStandbyProbe)}`,
         );
       }
-      const idleAnimationSamples = [];
+      const loungeWalkSamples = [];
       for (let sampleIndex = 0; sampleIndex < 4; sampleIndex += 1) {
-        idleAnimationSamples.push(
+        loungeWalkSamples.push(
           await page.evaluate(() => {
             window.AkraAdminGame?.applyDashboard?.(window.__akraVisualProbeDashboard);
             return window.AkraAdminGame
@@ -567,15 +590,15 @@ try {
         );
         await page.waitForTimeout(560);
       }
-      const idleFrames = new Set(
-        idleAnimationSamples.map((character) => character?.animationFrameIndex),
+      const loungeWalkFrames = new Set(
+        loungeWalkSamples.map((character) => character?.animationFrameIndex),
       );
-      const idleSemanticPoints = new Set(
-        idleAnimationSamples.map((character) => `${character?.x}:${character?.y}`),
+      const loungeWalkPoints = new Set(
+        loungeWalkSamples.map((character) => `${character?.x}:${character?.y}`),
       );
-      if (idleFrames.size < 2 || idleSemanticPoints.size !== 1) {
+      if (loungeWalkFrames.size < 2 || loungeWalkPoints.size < 2) {
         throw new Error(
-          `${label} Ranger standby animation did not change frames at one semantic point: ${JSON.stringify(idleAnimationSamples)}`,
+          `${label} Ranger standby did not advance through its lounge walk: ${JSON.stringify(loungeWalkSamples)}`,
         );
       }
       await page.evaluate(() => {

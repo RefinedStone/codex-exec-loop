@@ -26,6 +26,7 @@ export interface ResolvedAgentTexture {
   texture: Texture | null;
   resolvedAtlasFrameIndex: number | null;
   poseFallback: boolean;
+  frameScale: number;
 }
 
 const STATIC_POSE_MANIFEST: Record<ArchetypeKey, Record<StaticPose, number | null>> = {
@@ -86,6 +87,42 @@ export const WALK_FRAME_ALIGNMENT: Record<
   },
 };
 
+// The source atlas was composed from perspective-specific illustrations. Their
+// opaque bounds are not a uniform height: notably, Guardian's 173px front row
+// becomes a 153-158px side row. Keeping one raw scale makes an agent visibly
+// shrink as it turns. These factors normalize each frame to that archetype's
+// down-facing reference height while retaining the intended side silhouette.
+// They are applied uniformly about the bottom anchor, so feet stay on the same
+// map plane and the pixel art does not stretch.
+export const WALK_FRAME_VISUAL_SCALE: Record<
+  ArchetypeKey,
+  Record<Facing, readonly number[]>
+> = {
+  planner: {
+    down: [1, 1, 0.994, 0.994],
+    side: [1.092, 1.099, 1.121, 1.099],
+    up: [1.031, 1.037, 1.037, 1.031],
+  },
+  coffee_addict: {
+    down: [1, 1, 1, 1],
+    side: [1.149, 1.149, 1.149, 1.157],
+    up: [1.029, 1.035, 1.035, 1.029],
+  },
+  ai_researcher: {
+    down: [1, 1, 1, 1],
+    side: [1.095, 1.131, 1.095, 1.131],
+    // The source atlas has no rear-facing Guardian row; `up` deliberately
+    // falls back to this calibrated side row.
+    up: [1.095, 1.131, 1.095, 1.131],
+  },
+  designer: {
+    down: [1, 1, 1, 1],
+    side: [1.068, 1.068, 1.055, 1.062],
+    // The designer source also has no separate rear-facing walk row.
+    up: [1.068, 1.068, 1.055, 1.062],
+  },
+};
+
 export const buildAgentFrameSets = (texture: Texture): Record<ArchetypeKey, AgentFrameSet> => ({
   planner: {
     down: makeFrameRow(texture, 0, 0),
@@ -129,6 +166,12 @@ export const alignmentForFacing = (
 ): AgentFrameAlignment =>
   WALK_FRAME_ALIGNMENT[archetype][facing][frameIndex % 4] ?? { x: 0, y: 0 };
 
+export const scaleForFacing = (
+  archetype: ArchetypeKey,
+  facing: Facing,
+  frameIndex: number
+): number => WALK_FRAME_VISUAL_SCALE[archetype][facing][frameIndex % 4] ?? 1;
+
 export const resolveRestTexture = (
   atlas: Texture,
   frames: Record<ArchetypeKey, AgentFrameSet>,
@@ -143,6 +186,7 @@ export const resolveRestTexture = (
       texture: frameForFacing(frames, archetype, "up", 0),
       resolvedAtlasFrameIndex: null,
       poseFallback: pose !== "neutral",
+      frameScale: scaleForFacing(archetype, "up", 0),
     };
   }
   const atlasFrameIndex = STATIC_POSE_MANIFEST[archetype][pose];
@@ -151,6 +195,7 @@ export const resolveRestTexture = (
       texture: makeAtlasFrameByIndex(atlas, atlasFrameIndex),
       resolvedAtlasFrameIndex: atlasFrameIndex,
       poseFallback: false,
+      frameScale: 1,
     };
   }
   const facing: Facing =
@@ -159,6 +204,7 @@ export const resolveRestTexture = (
     texture: frameForFacing(frames, archetype, facing, 0),
     resolvedAtlasFrameIndex: null,
     poseFallback: pose !== "neutral",
+    frameScale: scaleForFacing(archetype, facing, 0),
   };
 };
 
