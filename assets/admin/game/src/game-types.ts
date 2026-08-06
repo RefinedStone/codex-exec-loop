@@ -96,6 +96,7 @@ export interface SceneInspectionActor {
 export interface SceneInspectionStandby {
   characterId: string;
   presenceKind: "configured_standby";
+  ambientActivity: boolean;
   agentId: string;
   visualState: VisualState;
   pose: StaticPose;
@@ -121,6 +122,7 @@ export interface SceneInspection {
   actorCount: number;
   characterCount: number;
   standbyCount: number;
+  ambientActivityCount: number;
   packetCount: number;
   semanticMotionCount: number;
   movementSpeedRatio: number;

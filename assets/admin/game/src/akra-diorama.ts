@@ -28,6 +28,7 @@ const emptyInspection = (): SceneInspection => ({
   actorCount: 0,
   characterCount: 0,
   standbyCount: 0,
+  ambientActivityCount: 0,
   packetCount: 0,
   semanticMotionCount: 0,
   movementSpeedRatio: 0.3,
@@ -76,6 +77,7 @@ const emptyInspection = (): SceneInspection => ({
       container.dataset.sceneActorCount = String(inspection.actorCount);
       container.dataset.sceneCharacterCount = String(inspection.characterCount);
       container.dataset.sceneStandbyCount = String(inspection.standbyCount);
+      container.dataset.sceneAmbientActivityCount = String(inspection.ambientActivityCount);
       container.dataset.scenePacketCount = String(inspection.packetCount);
       container.dataset.sceneSemanticMotionCount = String(inspection.semanticMotionCount);
       container.dataset.sceneMovementSpeedRatio = String(inspection.movementSpeedRatio);
@@ -104,6 +106,7 @@ const emptyInspection = (): SceneInspection => ({
         inspection.standbyCharacters.map((character) => ({
           characterId: character.characterId,
           agentId: character.agentId,
+          ambientActivity: character.ambientActivity,
           visualState: character.visualState,
           pose: character.pose,
           animationKind: character.animationKind,

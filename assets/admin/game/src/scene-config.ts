@@ -25,6 +25,29 @@ export const STANDBY_LOUNGE_POINTS: Point[] = [
   { x: 355, y: 720 },
 ];
 
+export const STANDBY_LOUNGE_PATROL_ROUTES: Point[][] = [
+  [
+    { x: 135, y: 756 },
+    { x: 94, y: 763 },
+    { x: 116, y: 716 },
+    { x: 166, y: 726 },
+  ],
+  [
+    { x: 245, y: 745 },
+    { x: 204, y: 764 },
+    { x: 216, y: 710 },
+    { x: 273, y: 700 },
+    { x: 294, y: 744 },
+  ],
+  [
+    { x: 355, y: 720 },
+    { x: 315, y: 744 },
+    { x: 321, y: 688 },
+    { x: 383, y: 680 },
+    { x: 406, y: 718 },
+  ],
+];
+
 export const REVIEW_STATION_POINTS: Point[] = [
   { x: 210, y: 382 },
   { x: 302, y: 382 },
