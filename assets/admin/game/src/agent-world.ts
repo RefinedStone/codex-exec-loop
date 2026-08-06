@@ -39,6 +39,7 @@ import {
   POINTS_OF_INTEREST,
   REVIEW_STATION_POINTS,
   SLOT_SEATS,
+  STANDBY_LOUNGE_PATROL_ROUTES,
   STANDBY_LOUNGE_POINTS,
   STATE_LABELS,
   STATUS_PALETTE,
@@ -86,6 +87,9 @@ interface AgentUnit {
   restPoseFallback: boolean;
   resolvedAtlasFrameIndex: number | null;
   poseFallback: boolean;
+  standbyPatrolRoute: Point[];
+  standbyPatrolIndex: number;
+  ambientActivity: boolean;
 }
 
 interface SignalPacket {
@@ -106,6 +110,7 @@ const copyPoint = (point: Point): Point => ({ x: point.x, y: point.y });
 
 export const AGENT_MOVEMENT_SPEED_RATIO = 0.3;
 export const AGENT_TRAVEL_SPEED_WORLD_PX_PER_SECOND = 168;
+export const STANDBY_LOUNGE_TRAVEL_SPEED_WORLD_PX_PER_SECOND = 52;
 export const WALK_IN_PLACE_CYCLE_MS = 760;
 export const IDLE_IN_PLACE_CYCLE_MS = 960;
 export const IDLE_IN_PLACE_AMPLITUDE_RATIO = 0.65;
@@ -262,6 +267,17 @@ const actorTargetPoint = (projection: CharacterProjection, stableIndex: number):
   return pointAt(STANDBY_LOUNGE_POINTS, projection.locationIndex - 1);
 };
 
+const standbyPatrolRoute = (locationIndex: number): Point[] => {
+  const configuredRoute =
+    STANDBY_LOUNGE_PATROL_ROUTES[
+      Math.max(0, locationIndex - 1) % STANDBY_LOUNGE_PATROL_ROUTES.length
+    ] ?? [];
+  const fallback = pointAt(STANDBY_LOUNGE_POINTS, Math.max(0, locationIndex - 1));
+  return configuredRoute.length > 1
+    ? configuredRoute.map(copyPoint)
+    : [copyPoint(fallback)];
+};
+
 const initialPoint = (
   projection: CharacterProjection,
   homePoint: Point,
@@ -350,7 +366,17 @@ export class AgentWorld {
         existing.bubbleLabel = projection.bubbleLabel;
         existing.archetype = archetypeForProfile(projection.archetypeKey);
         existing.homePoint = copyPoint(homePoint);
-        existing.targetPoint = copyPoint(targetPoint);
+        if (existing.presenceKind === "configured_standby") {
+          existing.standbyPatrolRoute = standbyPatrolRoute(existing.locationIndex);
+          existing.ambientActivity =
+            !this.reducedMotion && existing.standbyPatrolRoute.length > 1;
+          if (!existing.ambientActivity) {
+            existing.standbyPatrolIndex = 0;
+            existing.targetPoint = copyPoint(homePoint);
+          }
+        } else {
+          existing.targetPoint = copyPoint(targetPoint);
+        }
         this.syncUnitAppearance(existing);
         return;
       }
@@ -382,6 +408,7 @@ export class AgentWorld {
         MAX_MOVEMENT_DELTA_MS
       ) / 1000;
     for (const unit of this.units.values()) {
+      this.advanceStandbyPatrol(unit);
       const remaining = distance(unit.currentPoint, unit.targetPoint);
       let moving = remaining > 1.4;
       if (moving && this.reducedMotion) {
@@ -390,7 +417,7 @@ export class AgentWorld {
       } else if (moving) {
         const travelStep = Math.min(
           remaining,
-          AGENT_TRAVEL_SPEED_WORLD_PX_PER_SECOND * movementDeltaSeconds
+          this.travelSpeedFor(unit) * movementDeltaSeconds
         );
         unit.currentPoint.x +=
           ((unit.targetPoint.x - unit.currentPoint.x) / remaining) * travelStep;
@@ -544,13 +571,17 @@ export class AgentWorld {
       actorCount: activeUnits.length,
       characterCount: this.units.size,
       standbyCount: standbyUnits.length,
+      ambientActivityCount: standbyUnits.filter(
+        (unit) => unit.ambientActivity
+      ).length,
       packetCount: this.packets.size,
       semanticMotionCount: this.reducedMotion
         ? 0
         : [...this.units.values()].filter(
             (unit) =>
-              unit.visualState !== "idle" ||
-              distance(unit.currentPoint, unit.targetPoint) > 1.4
+              unit.presenceKind === "active" &&
+              (unit.visualState !== "idle" ||
+                distance(unit.currentPoint, unit.targetPoint) > 1.4)
           ).length,
       movementSpeedRatio: AGENT_MOVEMENT_SPEED_RATIO,
       renderCount: this.renderCount,
@@ -588,6 +619,7 @@ export class AgentWorld {
         return {
           characterId: unit.key.replace(/^standby:/, ""),
           presenceKind: "configured_standby",
+          ambientActivity: unit.ambientActivity,
           agentId: unit.agentId,
           visualState: unit.visualState,
           pose: unit.pose,
@@ -699,6 +731,12 @@ export class AgentWorld {
   ): AgentUnit {
     const presenceKind: PresenceKind =
       "actorId" in projection ? "active" : "configured_standby";
+    const standbyRoute =
+      "locationIndex" in projection
+        ? standbyPatrolRoute(projection.locationIndex)
+        : [];
+    const ambientActivity = !this.reducedMotion && standbyRoute.length > 1;
+    const standbyPatrolIndex = ambientActivity ? 1 : 0;
     const archetype = archetypeForProfile(projection.archetypeKey);
     const resolved = resolveRestTexture(
       this.atlasTexture,
@@ -766,7 +804,10 @@ export class AgentWorld {
       label,
       homePoint: copyPoint(homePoint),
       currentPoint: copyPoint(currentPoint),
-      targetPoint: copyPoint(targetPoint),
+      targetPoint:
+        ambientActivity
+          ? copyPoint(standbyRoute[standbyPatrolIndex] ?? targetPoint)
+          : copyPoint(targetPoint),
       facing: "down",
       flipX: false,
       motionPhase: (stableNumber(key) + index) % 17,
@@ -782,6 +823,9 @@ export class AgentWorld {
       restPoseFallback: resolved.poseFallback,
       resolvedAtlasFrameIndex: resolved.resolvedAtlasFrameIndex,
       poseFallback: resolved.poseFallback,
+      standbyPatrolRoute: standbyRoute,
+      standbyPatrolIndex,
+      ambientActivity,
     };
     group.on("pointerover", () => {
       unit.hovered = true;
@@ -820,6 +864,28 @@ export class AgentWorld {
     const color = STATUS_PALETTE[unit.severity];
     drawStaticMarker(unit.marker, unit.visualState, color, unit.presenceKind);
     this.syncUnitLabel(unit);
+  }
+
+  private advanceStandbyPatrol(unit: AgentUnit): void {
+    if (
+      !unit.ambientActivity ||
+      unit.presenceKind !== "configured_standby" ||
+      unit.standbyPatrolRoute.length < 2 ||
+      distance(unit.currentPoint, unit.targetPoint) > 1.4
+    ) {
+      return;
+    }
+    unit.standbyPatrolIndex =
+      (unit.standbyPatrolIndex + 1) % unit.standbyPatrolRoute.length;
+    unit.targetPoint = copyPoint(
+      unit.standbyPatrolRoute[unit.standbyPatrolIndex] ?? unit.homePoint
+    );
+  }
+
+  private travelSpeedFor(unit: AgentUnit): number {
+    return unit.presenceKind === "configured_standby"
+      ? STANDBY_LOUNGE_TRAVEL_SPEED_WORLD_PX_PER_SECOND
+      : AGENT_TRAVEL_SPEED_WORLD_PX_PER_SECOND;
   }
 
   private syncUnitLabel(unit: AgentUnit): void {
