@@ -3119,6 +3119,8 @@ fn akra_graphic_dashboard_game_bundle_is_vite_typescript_input() {
         "export interface AgentFrameSet",
         "export const WALK_FRAME_ALIGNMENT",
         "export const alignmentForFacing",
+        "export const WALK_FRAME_VISUAL_SCALE",
+        "export const scaleForFacing",
         "export type VisualState",
         "export type PresenceKind",
         "const STATIC_POSE_MANIFEST",

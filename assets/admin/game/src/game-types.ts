@@ -82,6 +82,7 @@ export interface SceneInspectionActor {
   animationBlend: number;
   gaitOffsetX: number;
   gaitOffsetY: number;
+  frameScale: number;
   resolvedAtlasFrameIndex: number | null;
   poseFallback: boolean;
   displayWidth: number;
@@ -105,6 +106,7 @@ export interface SceneInspectionStandby {
   animationBlend: number;
   gaitOffsetX: number;
   gaitOffsetY: number;
+  frameScale: number;
   locationIndex: number;
   resolvedAtlasFrameIndex: number | null;
   poseFallback: boolean;
