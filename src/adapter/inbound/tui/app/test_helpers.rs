@@ -670,7 +670,7 @@ fn test_native_tui_app_with_parallel_mode_binding(
         conversation_service,
         parallel_mode_binding,
     );
-    app.shell.show_startup_ascii_art = false;
+    app.shell.show_startup_visual = false;
     let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
     else {
         panic!("test app should start with a ready draft conversation");
@@ -753,6 +753,6 @@ mod tests {
         };
         assert_eq!(conversation.cwd, "/tmp/root");
         assert_eq!(conversation.draft_workspace_directory, "/tmp/root");
-        assert!(!app.shell.show_startup_ascii_art);
+        assert!(!app.shell.show_startup_visual);
     }
 }

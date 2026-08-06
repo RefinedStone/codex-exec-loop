@@ -80,7 +80,7 @@ pub(super) use shell_core::{
     conversation_startup_screen_is_active, presentation_workspace_directory,
     shell_conversation_state,
 };
-pub(super) use startup_banner::startup_ascii_art_lines;
+pub(super) use startup_banner::startup_operator_ledger_lines;
 pub(super) use status_panels::{ShellTailView, composer_inner_width};
 pub(super) use transcript_copy::{
     ConversationTranscriptLineInteraction, ConversationTranscriptLineSurface,
