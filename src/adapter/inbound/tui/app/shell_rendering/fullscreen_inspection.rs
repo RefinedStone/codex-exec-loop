@@ -592,49 +592,40 @@ fn draw_fullscreen_model_selection_inspection(
 ) {
     let ModelSelectionOverlayView {
         header_lines,
-        model_lines,
-        effort_lines,
-        status_lines,
+        selection_title,
+        selection_lines,
+        summary_lines,
         key_lines,
     } = overlay_view;
     let body_lines = take_panel_body_lines(header_lines);
+    let summary_height = count_wrapped_rows(&summary_lines, area.width).clamp(1, 2) as u16;
+    let key_height = count_wrapped_rows(&key_lines, area.width).clamp(1, 2) as u16;
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(fullscreen_section_height(&body_lines, 4)),
-            Constraint::Min(12),
-            Constraint::Length(fullscreen_section_height(&status_lines, 4)),
-            Constraint::Length(fullscreen_section_height(&key_lines, 3)),
+            Constraint::Min(6),
+            Constraint::Length(summary_height),
+            Constraint::Length(key_height),
         ])
         .split(area);
 
     render_fullscreen_titled_panel(
         frame,
         layout[0],
-        fullscreen_overlay_title("Select Model and Effort"),
+        AkraTheme::title_line("Model setup", ""),
         body_lines,
         true,
     );
-    let picker_layout = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
-        .split(layout[1]);
-    render_fullscreen_titled_panel(
-        frame,
-        picker_layout[0],
-        Line::from("Models"),
-        model_lines,
-        false,
+    render_fullscreen_titled_panel(frame, layout[1], selection_title, selection_lines, true);
+    frame.render_widget(
+        Paragraph::new(summary_lines).wrap(Wrap { trim: true }),
+        layout[2],
     );
-    render_fullscreen_titled_panel(
-        frame,
-        picker_layout[1],
-        Line::from("Think Level"),
-        effort_lines,
-        false,
+    frame.render_widget(
+        Paragraph::new(key_lines).wrap(Wrap { trim: true }),
+        layout[3],
     );
-    render_fullscreen_titled_panel(frame, layout[2], Line::from("Status"), status_lines, true);
-    render_fullscreen_titled_panel(frame, layout[3], Line::from("Keys"), key_lines, true);
 }
 fn draw_fullscreen_view_selection_inspection(
     frame: &mut Frame<'_>,
@@ -1507,12 +1498,12 @@ mod tests {
             (
                 FullscreenInspectionFrameModel::ModelSelection(ModelSelectionOverlayView {
                     header_lines: section("model header"),
-                    model_lines: lines("model", 12),
-                    effort_lines: lines("effort", 8),
-                    status_lines: section("model status"),
+                    selection_title: Line::from("Choose model"),
+                    selection_lines: lines("model", 12),
+                    summary_lines: section("model summary"),
                     key_lines: section("model key"),
                 }),
-                "Select Model and Effort",
+                "Model setup",
             ),
             (
                 FullscreenInspectionFrameModel::ViewSelection(ViewSelectionOverlayView {

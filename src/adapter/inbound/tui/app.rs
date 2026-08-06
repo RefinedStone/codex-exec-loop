@@ -213,8 +213,8 @@ use inline_shell_commands::{
 };
 use language::{LANGUAGE_SELECTION_OPTIONS, LanguageSelectionOverlayUiState, TuiLanguage};
 use model_selection_overlay_ui::{
-    MODEL_SELECTION_EFFORT_OPTIONS, MODEL_SELECTION_MODEL_OPTIONS, ModelSelectionOverlayUiState,
-    ModelSelectionStep,
+    MODEL_SELECTION_MODEL_OPTIONS, ModelSelectionModelOption, ModelSelectionOverlayUiState,
+    ModelSelectionStep, model_selection_effort_option,
 };
 use parallel_panel_controller::{
     ParallelPanelStateController, ParallelPanelUiEvent, ParallelPanelUiState,

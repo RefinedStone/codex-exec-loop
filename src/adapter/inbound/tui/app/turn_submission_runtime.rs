@@ -2821,7 +2821,7 @@ mod tests {
                 .contains("ignored the typed argument")
         );
         app.handle_model_selection_overlay_key(crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Char('2'),
+            crossterm::event::KeyCode::Char('5'),
             crossterm::event::KeyModifiers::NONE,
         ));
         app.handle_model_selection_overlay_key(crossterm::event::KeyEvent::new(

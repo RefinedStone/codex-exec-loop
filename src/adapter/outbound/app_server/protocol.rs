@@ -406,6 +406,8 @@ pub(super) enum ReasoningEffortValue {
     High,
     #[serde(rename = "xhigh")]
     XHigh,
+    #[serde(rename = "max")]
+    Max,
 }
 
 impl From<ConversationReasoningEffort> for ReasoningEffortValue {
@@ -417,6 +419,7 @@ impl From<ConversationReasoningEffort> for ReasoningEffortValue {
             ConversationReasoningEffort::Medium => Self::Medium,
             ConversationReasoningEffort::High => Self::High,
             ConversationReasoningEffort::XHigh => Self::XHigh,
+            ConversationReasoningEffort::Max => Self::Max,
         }
     }
 }
@@ -430,6 +433,7 @@ impl ReasoningEffortValue {
             Self::Medium => "medium",
             Self::High => "high",
             Self::XHigh => "xhigh",
+            Self::Max => "max",
         }
     }
 }

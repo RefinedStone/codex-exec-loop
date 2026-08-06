@@ -96,6 +96,7 @@ fn parse_recognizes_supported_aliases() {
             ":think xhigh",
             Some((InlineShellCommand::Think, Some("xhigh"))),
         ),
+        (":think max", Some((InlineShellCommand::Think, Some("max")))),
         (":auto", None),
         (":automation", None),
         (":doctor", Some((InlineShellCommand::Doctor, None))),
@@ -360,11 +361,12 @@ fn help_entries_use_renderable_command_forms() {
         rendered.contains(":turns <positive|infinite|off> - auto-follow opt-in; off or 0 disables")
     );
     assert!(rendered.contains(":stop - stop active sessions"));
-    assert!(rendered.contains(":model - model and think"));
+    assert!(rendered.contains(":model - model and reasoning"));
     assert!(rendered.contains(":view [simple|medium|detail] - conversation view"));
     assert!(rendered.contains(":language [english|korean] - TUI language"));
     assert!(
-        rendered.contains(":think <none|minimal|low|medium|high|xhigh|default> - reasoning effort")
+        rendered
+            .contains(":think <none|minimal|low|medium|high|xhigh|max|default> - reasoning effort")
     );
     assert!(!rendered.contains(":auto"));
     assert!(rendered.contains(":help - command help"));
@@ -580,6 +582,7 @@ fn model_view_language_and_think_command_hints_are_argument_aware() {
     let think_high = InlineShellCommandInput::parse(":think high").expect("command should parse");
     let think_xhigh =
         InlineShellCommandInput::parse(":think x_high").expect("command should parse");
+    let think_max = InlineShellCommandInput::parse(":think max").expect("command should parse");
     let think_clear =
         InlineShellCommandInput::parse(":think default").expect("command should parse");
     let think_invalid =
@@ -587,7 +590,7 @@ fn model_view_language_and_think_command_hints_are_argument_aware() {
 
     assert_eq!(
         model_plain.buffered_hint(),
-        "Type `:model` to choose the model and think level, or `:model default` to use app-server defaults."
+        "Type `:model` to choose the model and reasoning level, or `:model default` to use app-server defaults."
     );
     assert_eq!(
         model_set.buffered_hint(),
@@ -639,7 +642,7 @@ fn model_view_language_and_think_command_hints_are_argument_aware() {
     );
     assert_eq!(
         think_plain.buffered_hint(),
-        "Type `:think <none|minimal|low|medium|high|xhigh|default>` to choose reasoning effort."
+        "Type `:think <none|minimal|low|medium|high|xhigh|max|default>` to choose reasoning effort."
     );
     assert_eq!(
         think_high.buffered_hint(),
@@ -650,12 +653,16 @@ fn model_view_language_and_think_command_hints_are_argument_aware() {
         "Press Enter to set think to `xhigh`."
     );
     assert_eq!(
+        think_max.buffered_hint(),
+        "Press Enter to set think to `max`."
+    );
+    assert_eq!(
         think_clear.buffered_hint(),
         "Press Enter to reset think to the app-server default."
     );
     assert_eq!(
         think_invalid.buffered_hint(),
-        "Press Enter to apply `:think fast`. Supported values: none, minimal, low, medium, high, xhigh, default."
+        "Press Enter to apply `:think fast`. Supported values: none, minimal, low, medium, high, xhigh, max, default."
     );
 }
 

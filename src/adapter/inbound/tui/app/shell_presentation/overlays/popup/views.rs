@@ -46,18 +46,17 @@ pub(crate) struct SessionOverlayView {
 }
 
 /*
- * Model selection overlay mirrors the Codex-style two-step picker: choose a
- * model first, then choose the reasoning effort that should be applied with it.
+ * Model selection is a progressive two-step flow. Each model carries its own
+ * supported reasoning catalog, so the renderer receives only the active choice.
  */
 pub(crate) struct ModelSelectionOverlayView {
-    // Picker title and current override summary.
+    // Picker identity, current stage, and live provider context.
     pub(crate) header_lines: Vec<Line<'static>>,
-    // Model rows with selection styling already applied.
-    pub(crate) model_lines: Vec<Line<'static>>,
-    // Reasoning-effort rows with selection/staged context already applied.
-    pub(crate) effort_lines: Vec<Line<'static>>,
-    // Step-specific status copy that explains what Enter will do.
-    pub(crate) status_lines: Vec<Line<'static>>,
+    // The single active choice list for this stage.
+    pub(crate) selection_title: Line<'static>,
+    pub(crate) selection_lines: Vec<Line<'static>>,
+    // Current configuration or staged selection, kept to one compact row.
+    pub(crate) summary_lines: Vec<Line<'static>>,
     // Navigation and close hints for the current step.
     pub(crate) key_lines: Vec<Line<'static>>,
 }

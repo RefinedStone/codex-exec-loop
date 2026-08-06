@@ -184,6 +184,39 @@ fn focused_composer_uses_a_complete_frame_and_distinct_tail_surfaces() {
 }
 
 #[test]
+fn model_selection_is_a_compact_staged_provider_flow() {
+    let mut app = test_native_tui_app();
+    app.show_model_selection_overlay();
+
+    let model_screen = render(&mut app, 100, 30);
+    assert!(model_screen.contains("Model setup"));
+    assert!(model_screen.contains("Provider: OpenAI"));
+    assert!(model_screen.contains("Choose model"));
+    assert!(model_screen.contains("GPT-5.6 Sol"));
+    assert!(!model_screen.contains("Think Level"));
+    assert!(!model_screen.contains("Frontier model for complex coding"));
+
+    assert!(
+        app.handle_model_selection_overlay_key(KeyEvent::new(
+            KeyCode::Char('1'),
+            KeyModifiers::NONE,
+        ))
+    );
+    let reasoning_screen = render(&mut app, 100, 30);
+    assert!(reasoning_screen.contains("Choose reasoning"));
+    assert!(reasoning_screen.contains("GPT-5.6 Sol"));
+    assert!(reasoning_screen.contains("recommended"));
+    assert!(reasoning_screen.contains("max"));
+    assert!(!reasoning_screen.contains("minimal"));
+
+    if std::env::var_os("AKRA_CAPTURE_MODEL_SELECTION").is_some() {
+        println!(
+            "\n--- AKRA MODEL SELECTION 100x30 ---\n{model_screen}\n--- AKRA REASONING SELECTION 100x30 ---\n{reasoning_screen}\n--- END MODEL SELECTION FRAMES ---"
+        );
+    }
+}
+
+#[test]
 fn startup_screen_renders_the_operator_ledger_above_the_composer() {
     let mut app = test_native_tui_app();
     app.shell.show_startup_visual = true;
