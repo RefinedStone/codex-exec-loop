@@ -243,6 +243,7 @@ try {
             poseFallback,
             animationKind,
             animationFrameIndex,
+            sourceFrameIndex,
             animationBlend,
             gaitOffsetX,
             gaitOffsetY,
@@ -291,6 +292,7 @@ try {
         poseFallback,
         animationKind,
         animationFrameIndex,
+        sourceFrameIndex,
         animationBlend,
         gaitOffsetX,
         gaitOffsetY,
@@ -368,6 +370,31 @@ try {
     }
     if (width === 1920) {
       const baselineActorCount = firstScene.actorCount;
+      const guardianStandbyWalkSamples = [];
+      for (let sampleIndex = 0; sampleIndex < 12; sampleIndex += 1) {
+        await page.waitForTimeout(100);
+        const sample = await page.evaluate(() =>
+          window.AkraAdminGame
+            ?.inspectScene?.()
+            ?.standbyCharacters.find(
+              (character) => character.agentId === "agent-guardian",
+            ),
+        );
+        if (sample) guardianStandbyWalkSamples.push(sample);
+      }
+      const guardianStandbySourceFrames = new Set(
+        guardianStandbyWalkSamples.map((sample) => sample.sourceFrameIndex),
+      );
+      if (
+        guardianStandbySourceFrames.has(2) ||
+        !guardianStandbySourceFrames.has(0) ||
+        !guardianStandbySourceFrames.has(1) ||
+        !guardianStandbySourceFrames.has(3)
+      ) {
+        throw new Error(
+          `${label} Guardian standby walk did not preserve its verified source stride: ${JSON.stringify(guardianStandbyWalkSamples)}`,
+        );
+      }
       await page.evaluate(async () => {
         const nativeFetch = window.fetch.bind(window);
         const response = await nativeFetch("/api/admin/akra/dashboard", {
@@ -495,14 +522,31 @@ try {
           ?.inspectScene?.()
           ?.actors.find((actor) => actor.actorId === "visual-probe-session"),
       );
+      const guardianWalkSamples = [];
+      for (let sampleIndex = 0; sampleIndex < 12; sampleIndex += 1) {
+        await page.waitForTimeout(100);
+        const sample = await page.evaluate(() =>
+          window.AkraAdminGame
+            ?.inspectScene?.()
+            ?.actors.find((actor) => actor.actorId === "visual-probe-session"),
+        );
+        if (sample) guardianWalkSamples.push(sample);
+      }
+      const guardianSourceFrames = new Set(
+        guardianWalkSamples.map((sample) => sample.sourceFrameIndex),
+      );
       if (
         !guardianWalkProbe ||
         guardianWalkProbe.visualState !== "delivering" ||
         guardianWalkProbe.animationKind !== "walk" ||
-        guardianWalkProbe.frameScale < 1.09
+        guardianWalkProbe.frameScale < 1.09 ||
+        guardianSourceFrames.has(2) ||
+        !guardianSourceFrames.has(0) ||
+        !guardianSourceFrames.has(1) ||
+        !guardianSourceFrames.has(3)
       ) {
         throw new Error(
-          `${label} Guardian side walk did not normalize its shorter source frame: ${JSON.stringify(guardianWalkProbe)}`,
+          `${label} Guardian side walk did not preserve its verified source stride: ${JSON.stringify({ guardianWalkProbe, guardianWalkSamples })}`,
         );
       }
       await page.evaluate(() => {

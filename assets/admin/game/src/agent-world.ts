@@ -13,6 +13,7 @@ import {
   frameForFacing,
   resolveRestTexture,
   scaleForFacing,
+  sourceFrameIndexForFacing,
   type AgentFrameSet,
 } from "./agent-atlas";
 import type {
@@ -80,6 +81,7 @@ interface AgentUnit {
   hovered: boolean;
   animationKind: AgentAnimationKind;
   animationFrameIndex: number | null;
+  sourceFrameIndex: number | null;
   animationBlend: number;
   gaitOffsetX: number;
   gaitOffsetY: number;
@@ -134,6 +136,11 @@ const applyVisibleStepAppearance = (
   gaitOffsetY: number
 ): void => {
   const frameIndex = visibleStepFrameIndex(gaitProgress);
+  const sourceFrameIndex = sourceFrameIndexForFacing(
+    unit.archetype,
+    facing,
+    frameIndex
+  );
   const currentAlignment = alignmentForFacing(
     unit.archetype,
     facing,
@@ -157,6 +164,7 @@ const applyVisibleStepAppearance = (
   unit.sprite.roundPixels = false;
   unit.blendSprite.roundPixels = true;
   unit.animationFrameIndex = frameIndex;
+  unit.sourceFrameIndex = sourceFrameIndex;
   unit.animationBlend = 0;
 };
 
@@ -483,6 +491,7 @@ export class AgentWorld {
                 ? "blocked"
                 : "rest";
         unit.animationFrameIndex = null;
+        unit.sourceFrameIndex = null;
         unit.resolvedAtlasFrameIndex = unit.restResolvedAtlasFrameIndex;
         unit.poseFallback = unit.restPoseFallback;
         unit.flipX = false;
@@ -568,6 +577,7 @@ export class AgentWorld {
           pose: unit.pose,
           animationKind: unit.animationKind,
           animationFrameIndex: unit.animationFrameIndex,
+          sourceFrameIndex: unit.sourceFrameIndex,
           animationBlend: Number(unit.animationBlend.toFixed(3)),
           gaitOffsetX: Number(unit.gaitOffsetX.toFixed(2)),
           gaitOffsetY: Number(unit.gaitOffsetY.toFixed(2)),
@@ -595,6 +605,7 @@ export class AgentWorld {
           pose: unit.pose,
           animationKind: unit.animationKind,
           animationFrameIndex: unit.animationFrameIndex,
+          sourceFrameIndex: unit.sourceFrameIndex,
           animationBlend: Number(unit.animationBlend.toFixed(3)),
           gaitOffsetX: Number(unit.gaitOffsetX.toFixed(2)),
           gaitOffsetY: Number(unit.gaitOffsetY.toFixed(2)),
@@ -785,6 +796,7 @@ export class AgentWorld {
       hovered: false,
       animationKind: "rest",
       animationFrameIndex: null,
+      sourceFrameIndex: null,
       animationBlend: 0,
       gaitOffsetX: 0,
       gaitOffsetY: 0,

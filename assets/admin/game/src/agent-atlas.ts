@@ -53,6 +53,42 @@ export const makeAtlasFrameByIndex = (texture: Texture, atlasFrameIndex: number)
 const makeFrameRow = (texture: Texture, row: number, startCol: number): Texture[] =>
   Array.from({ length: 4 }, (_, index) => makeAtlasFrame(texture, startCol + index, row));
 
+const DEFAULT_WALK_FRAME_SOURCE_ORDER = [0, 1, 2, 3] as const;
+const GUARDIAN_WALK_FRAME_SOURCE_ORDER = [0, 1, 0, 3] as const;
+
+// The source atlas's numbered cells are not always a playback sequence. The
+// Guardian walk rows mirror the pack's RPG Maker mapping: `01` is neutral,
+// `02` and `04` are the alternating steps, and `03` is not part of its stable
+// walk. Keep the presentation phases explicit so a source-order regression
+// cannot make the character appear to walk backwards.
+export const WALK_FRAME_SOURCE_ORDER: Record<
+  ArchetypeKey,
+  Record<Facing, readonly number[]>
+> = {
+  planner: {
+    down: DEFAULT_WALK_FRAME_SOURCE_ORDER,
+    side: DEFAULT_WALK_FRAME_SOURCE_ORDER,
+    up: DEFAULT_WALK_FRAME_SOURCE_ORDER,
+  },
+  coffee_addict: {
+    down: DEFAULT_WALK_FRAME_SOURCE_ORDER,
+    side: DEFAULT_WALK_FRAME_SOURCE_ORDER,
+    up: DEFAULT_WALK_FRAME_SOURCE_ORDER,
+  },
+  ai_researcher: {
+    down: GUARDIAN_WALK_FRAME_SOURCE_ORDER,
+    side: GUARDIAN_WALK_FRAME_SOURCE_ORDER,
+    // The source atlas has no rear-facing Guardian row, so its calibrated
+    // side fallback must retain the same verified stride order.
+    up: GUARDIAN_WALK_FRAME_SOURCE_ORDER,
+  },
+  designer: {
+    down: DEFAULT_WALK_FRAME_SOURCE_ORDER,
+    side: DEFAULT_WALK_FRAME_SOURCE_ORDER,
+    up: DEFAULT_WALK_FRAME_SOURCE_ORDER,
+  },
+};
+
 const aligned = (
   x: readonly number[],
   y: readonly number[] = [0, 0, 0, 0]
@@ -149,6 +185,17 @@ export const buildAgentFrameSets = (texture: Texture): Record<ArchetypeKey, Agen
 export const archetypeForProfile = (profile: string): ArchetypeKey =>
   ARCHETYPE_BY_PROFILE[profile] ?? "coffee_addict";
 
+export const sourceFrameIndexForFacing = (
+  archetype: ArchetypeKey,
+  facing: Facing,
+  frameIndex: number
+): number => {
+  const sourceOrder = WALK_FRAME_SOURCE_ORDER[archetype][facing];
+  const normalizedIndex =
+    ((frameIndex % sourceOrder.length) + sourceOrder.length) % sourceOrder.length;
+  return sourceOrder[normalizedIndex] ?? 0;
+};
+
 export const frameForFacing = (
   frames: Record<ArchetypeKey, AgentFrameSet>,
   archetype: ArchetypeKey,
@@ -156,21 +203,39 @@ export const frameForFacing = (
   frameIndex: number
 ): Texture => {
   const row = frames[archetype][facing];
-  return row[frameIndex % row.length] ?? row[0];
+  const sourceFrameIndex = sourceFrameIndexForFacing(
+    archetype,
+    facing,
+    frameIndex
+  );
+  return row[sourceFrameIndex % row.length] ?? row[0];
 };
 
 export const alignmentForFacing = (
   archetype: ArchetypeKey,
   facing: Facing,
   frameIndex: number
-): AgentFrameAlignment =>
-  WALK_FRAME_ALIGNMENT[archetype][facing][frameIndex % 4] ?? { x: 0, y: 0 };
+): AgentFrameAlignment => {
+  const sourceFrameIndex = sourceFrameIndexForFacing(
+    archetype,
+    facing,
+    frameIndex
+  );
+  return WALK_FRAME_ALIGNMENT[archetype][facing][sourceFrameIndex] ?? { x: 0, y: 0 };
+};
 
 export const scaleForFacing = (
   archetype: ArchetypeKey,
   facing: Facing,
   frameIndex: number
-): number => WALK_FRAME_VISUAL_SCALE[archetype][facing][frameIndex % 4] ?? 1;
+): number => {
+  const sourceFrameIndex = sourceFrameIndexForFacing(
+    archetype,
+    facing,
+    frameIndex
+  );
+  return WALK_FRAME_VISUAL_SCALE[archetype][facing][sourceFrameIndex] ?? 1;
+};
 
 export const resolveRestTexture = (
   atlas: Texture,
