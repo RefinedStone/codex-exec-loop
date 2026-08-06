@@ -71,7 +71,7 @@ pub(super) const MODEL_SELECTION_MODEL_OPTIONS: &[ModelSelectionModelOption] = &
         provider_label: OPENAI_PROVIDER_LABEL,
         detail: "frontier",
         supported_efforts: GPT_5_6_REASONING_EFFORTS,
-        recommended_effort: Some(ConversationReasoningEffort::High),
+        recommended_effort: Some(ConversationReasoningEffort::Medium),
     },
     ModelSelectionModelOption {
         label: "GPT-5.6 Terra",
@@ -79,7 +79,7 @@ pub(super) const MODEL_SELECTION_MODEL_OPTIONS: &[ModelSelectionModelOption] = &
         provider_label: OPENAI_PROVIDER_LABEL,
         detail: "balanced",
         supported_efforts: GPT_5_6_REASONING_EFFORTS,
-        recommended_effort: Some(ConversationReasoningEffort::Medium),
+        recommended_effort: Some(ConversationReasoningEffort::Max),
     },
     ModelSelectionModelOption {
         label: "GPT-5.6 Luna",
@@ -87,7 +87,7 @@ pub(super) const MODEL_SELECTION_MODEL_OPTIONS: &[ModelSelectionModelOption] = &
         provider_label: OPENAI_PROVIDER_LABEL,
         detail: "fast",
         supported_efforts: GPT_5_6_REASONING_EFFORTS,
-        recommended_effort: Some(ConversationReasoningEffort::Low),
+        recommended_effort: Some(ConversationReasoningEffort::Max),
     },
     ModelSelectionModelOption {
         label: "GPT-5.5",
@@ -344,7 +344,7 @@ mod tests {
         assert_eq!(state.staged_model().model, Some("gpt-5.6-sol"));
         assert_eq!(
             state.selected_effort().effort,
-            Some(ConversationReasoningEffort::High)
+            Some(ConversationReasoningEffort::Medium)
         );
     }
 
@@ -400,23 +400,27 @@ mod tests {
         assert_eq!(state.staged_model().model, Some("gpt-5.6-sol"));
         assert_eq!(
             state.selected_effort().effort,
-            Some(ConversationReasoningEffort::High)
+            Some(ConversationReasoningEffort::Medium)
         );
     }
 
     #[test]
-    fn changing_models_selects_that_models_recommended_effort() {
+    fn changing_models_selects_their_configured_recommended_effort() {
         let mut state = ModelSelectionOverlayUiState::default();
-        let terra_index = model_option_index("gpt-5.6-terra").unwrap();
-        assert!(state.select_active_index(terra_index));
+        for (model, expected_effort) in [
+            ("gpt-5.6-sol", ConversationReasoningEffort::Medium),
+            ("gpt-5.6-terra", ConversationReasoningEffort::Max),
+            ("gpt-5.6-luna", ConversationReasoningEffort::Max),
+        ] {
+            let model_index = model_option_index(model).unwrap();
+            assert!(state.select_active_index(model_index));
 
-        state.advance_from_model_selection();
+            state.advance_from_model_selection();
 
-        assert_eq!(state.staged_model().model, Some("gpt-5.6-terra"));
-        assert_eq!(
-            state.selected_effort().effort,
-            Some(ConversationReasoningEffort::Medium)
-        );
+            assert_eq!(state.staged_model().model, Some(model));
+            assert_eq!(state.selected_effort().effort, Some(expected_effort));
+            state.return_to_model_selection();
+        }
     }
 
     #[test]

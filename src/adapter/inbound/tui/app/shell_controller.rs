@@ -4825,7 +4825,7 @@ mod tests {
         );
         assert_eq!(
             app.conversation.turn_options.reasoning_effort,
-            Some(ConversationReasoningEffort::Medium)
+            Some(ConversationReasoningEffort::Max)
         );
 
         assert!(!app.handle_view_selection_overlay_key(key(KeyCode::Enter)));
