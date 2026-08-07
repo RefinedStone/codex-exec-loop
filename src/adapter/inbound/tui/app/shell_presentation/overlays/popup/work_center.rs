@@ -1,6 +1,8 @@
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
+use crate::domain::parallel_mode::PrValidationOperatorState;
+
 use super::super::super::super::{
     AkraTheme, ProgressiveActivityCardKind, ProgressiveActivityCardOutcome, WorkCenterSection,
     language::WorkCenterLocalizedCopy,
@@ -303,10 +305,18 @@ fn delivery_item(screen_model: &ConversationScreenModel<'_>) -> WorkCenterItem {
         .queue_items
         .iter()
         .find(|item| item.queue_state.is_active());
+    let validation = screen_model.parallel_mode_supervisor.pr_validation.as_ref();
     let state = if desync {
         "DESYNC"
     } else if blocker.is_some() {
         "BLOCKED"
+    } else if let Some(validation) = validation {
+        match validation.state {
+            PrValidationOperatorState::Pending => "PENDING",
+            PrValidationOperatorState::Blocking => "BLOCKED",
+            PrValidationOperatorState::Remediation => "REMEDIATE",
+            PrValidationOperatorState::Terminal => "TERMINAL",
+        }
     } else if active_item.is_some() {
         "WORKING"
     } else if !screen_model.parallel_mode_enabled && distributor.queue_items.is_empty() {
@@ -314,27 +324,39 @@ fn delivery_item(screen_model: &ConversationScreenModel<'_>) -> WorkCenterItem {
     } else {
         "IDLE"
     };
-    let summary = active_item.map_or_else(
+    let summary = validation.map_or_else(
         || {
-            compact_inline(&format!(
-                "{} · depth {}",
-                distributor.head_summary,
-                distributor.queue_depth()
-            ))
+            active_item.map_or_else(
+                || {
+                    compact_inline(&format!(
+                        "{} · depth {}",
+                        distributor.head_summary,
+                        distributor.queue_depth()
+                    ))
+                },
+                |item| {
+                    compact_inline(&format!(
+                        "{} · {} · {}",
+                        item.queue_state.label(),
+                        item.task_title,
+                        distributor.head_summary
+                    ))
+                },
+            )
         },
-        |item| {
-            compact_inline(&format!(
-                "{} · {} · {}",
-                item.queue_state.label(),
-                item.task_title,
-                distributor.head_summary
-            ))
-        },
+        |validation| validation.compact_label(),
     );
     let detail = if desync {
         "Delivery authority cannot be correlated with the current lane projection".to_string()
     } else if let Some(blocker) = blocker {
         compact_inline(&blocker)
+    } else if let Some(validation) = validation {
+        format!(
+            "{} · target {} · {}",
+            validation.phase_label(),
+            validation.target_short_sha,
+            validation.next_action()
+        )
     } else {
         compact_inline(&format!(
             "barrier {} · head {} · {}",
@@ -400,7 +422,8 @@ mod tests {
     };
     use crate::domain::parallel_mode::{
         ParallelModeAgentRosterEntry, ParallelModePoolBoardSnapshot, ParallelModePoolSlotSnapshot,
-        ParallelModePoolSlotState,
+        ParallelModePoolSlotState, PrValidationOperatorState, PrValidationOperatorSummary,
+        PrValidationPhase,
     };
 
     fn screen_text(app: &NativeTuiApp, selected: WorkCenterSection) -> String {
@@ -525,6 +548,33 @@ mod tests {
 
         assert!(text.contains("AGENTS DESYNC"), "{text}");
         assert!(text.contains("DELIVERY DESYNC"), "{text}");
+    }
+
+    #[test]
+    fn work_center_delivery_projects_durable_pr_validation_state() {
+        let app = test_native_tui_app();
+        let mut screen = ConversationScreenModel::from_app(&app);
+        screen.parallel_mode_supervisor.pr_validation = Some(PrValidationOperatorSummary {
+            pull_request_number: 42,
+            state: PrValidationOperatorState::Remediation,
+            phase: PrValidationPhase::RemediationRunning,
+            target_short_sha: "aaaaaaaaaaaa".to_string(),
+            finding_count: 2,
+            remediation_count: 1,
+            observation_revision: 7,
+            post_merge_checkpoint_observed: false,
+        });
+
+        let text = normalized_view_text(build_work_center_overlay_view(
+            &screen,
+            WorkCenterSection::Delivery,
+            120,
+        ));
+
+        assert!(text.contains("DELIVERY REMEDIATE"), "{text}");
+        assert!(text.contains("PR #42 remediation"), "{text}");
+        assert!(text.contains("remediation_running"), "{text}");
+        assert!(text.contains("target aaaaaaaaaaaa"), "{text}");
     }
 
     #[test]

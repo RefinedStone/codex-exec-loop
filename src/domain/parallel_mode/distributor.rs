@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     ParallelModeAgentRosterSnapshot, ParallelModePoolBoardSnapshot,
-    ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorState,
+    ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorState, PrValidationOperatorSummary,
 };
 
 // distributor queue state는 병렬 작업이 slot 실행을 끝낸 뒤 prerelease로
@@ -274,6 +274,7 @@ pub struct ParallelModeSupervisorSnapshot {
     pub roster: ParallelModeAgentRosterSnapshot,
     pub detail: ParallelModeSupervisorDetailSnapshot,
     pub distributor: ParallelModeDistributorSnapshot,
+    pub pr_validation: Option<PrValidationOperatorSummary>,
     pub top_notice: Option<String>,
 }
 
@@ -296,8 +297,17 @@ impl ParallelModeSupervisorSnapshot {
             roster,
             detail,
             distributor,
+            pr_validation: None,
             top_notice,
         }
+    }
+
+    pub fn with_pr_validation(
+        mut self,
+        pr_validation: Option<PrValidationOperatorSummary>,
+    ) -> Self {
+        self.pr_validation = pr_validation;
+        self
     }
 
     pub fn state_label(&self) -> &'static str {

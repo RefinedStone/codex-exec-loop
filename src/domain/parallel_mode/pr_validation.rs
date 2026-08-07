@@ -2,6 +2,10 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+#[cfg(test)]
+#[path = "pr_validation_projection_tests.rs"]
+mod projection_tests;
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct PrValidationRecordKey(String);
 
@@ -554,6 +558,33 @@ impl PrValidationRecord {
         self.terminal_reason.as_ref()
     }
 
+    pub fn operator_summary(&self) -> PrValidationOperatorSummary {
+        let state = match self.phase {
+            PrValidationPhase::Settled => PrValidationOperatorState::Terminal,
+            PrValidationPhase::RemediationQueued | PrValidationPhase::RemediationRunning => {
+                PrValidationOperatorState::Remediation
+            }
+            PrValidationPhase::PreMergeObservation | PrValidationPhase::PostMergeObservation
+                if !self.findings.is_empty() =>
+            {
+                PrValidationOperatorState::Blocking
+            }
+            PrValidationPhase::Registered
+            | PrValidationPhase::PreMergeObservation
+            | PrValidationPhase::PostMergeObservation => PrValidationOperatorState::Pending,
+        };
+        PrValidationOperatorSummary {
+            pull_request_number: self.target.pull_request_number,
+            state,
+            phase: self.phase,
+            target_short_sha: self.target_shas.source_sha.as_str()[..12].to_string(),
+            finding_count: self.findings.len(),
+            remediation_count: self.remediations.len(),
+            observation_revision: self.observation_revision,
+            post_merge_checkpoint_observed: self.post_merge_checkpoint_revision.is_some(),
+        }
+    }
+
     pub fn transition(
         &self,
         event: PrValidationEvent,
@@ -691,6 +722,75 @@ impl PrValidationRecord {
             }
         }
         Ok(next)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrValidationOperatorState {
+    Pending,
+    Blocking,
+    Remediation,
+    Terminal,
+}
+
+impl PrValidationOperatorState {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Blocking => "blocking",
+            Self::Remediation => "remediation",
+            Self::Terminal => "terminal",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrValidationOperatorSummary {
+    pub pull_request_number: u64,
+    pub state: PrValidationOperatorState,
+    pub phase: PrValidationPhase,
+    pub target_short_sha: String,
+    pub finding_count: usize,
+    pub remediation_count: usize,
+    pub observation_revision: u64,
+    pub post_merge_checkpoint_observed: bool,
+}
+
+impl PrValidationOperatorSummary {
+    pub fn phase_label(&self) -> &'static str {
+        match self.phase {
+            PrValidationPhase::Registered => "registered",
+            PrValidationPhase::PreMergeObservation => "pre_merge_observation",
+            PrValidationPhase::RemediationQueued => "remediation_queued",
+            PrValidationPhase::RemediationRunning => "remediation_running",
+            PrValidationPhase::PostMergeObservation => "post_merge_observation",
+            PrValidationPhase::Settled => "settled",
+        }
+    }
+
+    pub fn next_action(&self) -> &'static str {
+        match self.state {
+            PrValidationOperatorState::Pending => {
+                "wait for configured validation sources and final catch-up"
+            }
+            PrValidationOperatorState::Blocking => {
+                "remediation required for observed validation findings"
+            }
+            PrValidationOperatorState::Remediation => {
+                "wait for the correlated remediation task to complete"
+            }
+            PrValidationOperatorState::Terminal => "all configured validation sources are complete",
+        }
+    }
+
+    pub fn compact_label(&self) -> String {
+        format!(
+            "PR #{} {} · findings {} · remediation {}",
+            self.pull_request_number,
+            self.state.label(),
+            self.finding_count,
+            self.remediation_count
+        )
     }
 }
 

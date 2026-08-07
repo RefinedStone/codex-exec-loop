@@ -706,6 +706,15 @@ pub trait PlanningAuthorityPort: ParallelModeRuntimeEventLogPort + Send + Sync {
         Ok(None)
     }
 
+    // Resolve one durable validation record by the operator-visible pull request number.
+    fn load_runtime_pr_validation_record_for_pr(
+        &self,
+        _workspace_dir: &str,
+        _pull_request_number: u64,
+    ) -> Result<Option<PrValidationRecord>> {
+        Ok(None)
+    }
+
     // Resolve the validation record correlated to one ordinary remediation task.
     fn load_runtime_pr_validation_record_for_remediation(
         &self,

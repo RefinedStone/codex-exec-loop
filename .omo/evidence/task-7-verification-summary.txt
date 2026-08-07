@@ -1,0 +1,29 @@
+Todo 7 verification summary (2026-08-08 local workstation date)
+
+Focused projection tests:
+- cargo test --locked --lib domain::parallel_mode::pr_validation::projection_tests::pr_validation_operator_projection_is_deterministic_bounded_and_secret_free -- --exact --nocapture
+  PASS: 1 passed, 0 failed, 2757 filtered out.
+- cargo test --locked --lib adapter::inbound::cli::tests::status_pr_reads_bounded_durable_validation_projection_and_rejects_malformed_input -- --exact --nocapture
+  PASS: 1 passed, 0 failed, 2757 filtered out.
+- cargo test --locked --lib adapter::inbound::tui::app::shell_presentation::overlays::popup::work_center::tests::work_center_delivery_projects_durable_pr_validation_state -- --exact --nocapture
+  PASS: 1 passed, 0 failed, 2757 filtered out.
+
+Manual CLI QA (target/debug/akra built with cargo build --locked --bin akra):
+- target/debug/akra --help
+  PASS (exit 0): help includes `Usage: akra status [workspace_dir] | akra status --pr <number> [workspace_dir]`.
+- target/debug/akra status --pr 42 C:/dev/akra-queue/akra-async-pr-ci-validator
+  EXPECTED NO-RECORD SURFACE (exit 1): bounded output reports PR 42, `state: unavailable`, and no durable validation record.
+- target/debug/akra status --pr not-a-number
+  EXPECTED MALFORMED-ARG SURFACE (exit 1): reports invalid pull request number and status usage.
+
+Gates:
+- cargo fmt --all -- --check
+  PASS (exit 0, no output).
+- cargo check --locked --all-targets --all-features
+  PASS (exit 0).
+- cargo test --locked --test architecture_boundaries
+  PASS: 130 passed, 0 failed.
+- git diff --check
+  PASS (exit 0; Git emitted only working-copy LF/CRLF conversion warnings on this Windows checkout).
+- node scripts/agent-plan.mjs
+  PASS (exit 0): classified cumulative branch change as full and prescribed the Windows Full gate; Todo 7's explicitly requested proportional gates are recorded above.
