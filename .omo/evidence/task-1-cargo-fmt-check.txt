@@ -1,0 +1,3 @@
+$ cargo fmt --check
+
+exit_code=0

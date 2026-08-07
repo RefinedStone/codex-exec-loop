@@ -12,6 +12,12 @@ use super::{
     ParallelModeReadinessState, ParallelModeRuntimeEvent, ParallelModeRuntimeEventEntry,
     ParallelModeRuntimeEventsSnapshot, ParallelModeSlotLeaseRequest, ParallelModeSlotLeaseSnapshot,
     ParallelModeSlotLeaseState, ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorState,
+    PrValidationCatchUpState, PrValidationCheckKind, PrValidationCommitSha, PrValidationCompletion,
+    PrValidationCompletionBlocker, PrValidationEvent, PrValidationFinding, PrValidationFindingKey,
+    PrValidationFindingSource, PrValidationPhase, PrValidationProviderCompletion,
+    PrValidationProviderKey, PrValidationRecord, PrValidationRecordKey,
+    PrValidationRemediationCorrelation, PrValidationRequiredCheck, PrValidationTarget,
+    PrValidationTargetShaSnapshot, PrValidationTerminalReason, PrValidationTransitionRejection,
 };
 
 // readiness 집계의 최우선 안전 규칙을 고정한다. 하나라도 Blocked가 있으면 다른
@@ -1202,6 +1208,235 @@ fn supervisor_detail_lane_sessions_are_sorted_deduplicated_and_exactly_joined() 
             .is_none(),
         "an agent mismatch must remain unknown instead of borrowing another lane's detail"
     );
+}
+
+#[test]
+fn pr_validation_legal_transitions_preserve_immutable_identity_and_correlation() {
+    let registered = validation_record();
+    let finding = finding("review", "event-7", "review requested a change");
+    let correlation = PrValidationRemediationCorrelation::new(
+        finding.key().clone(),
+        PrValidationRecordKey::new("unit-remediation-7").unwrap(),
+    );
+
+    let observing = registered
+        .transition(PrValidationEvent::BeginPreMergeObservation)
+        .unwrap();
+    let with_finding = observing
+        .transition(PrValidationEvent::FindingObserved(finding.clone()))
+        .unwrap();
+    let queued = with_finding
+        .transition(PrValidationEvent::RemediationQueued(correlation.clone()))
+        .unwrap();
+    let running = queued
+        .transition(PrValidationEvent::RemediationStarted {
+            finding_key: finding.key().clone(),
+        })
+        .unwrap();
+    let resumed = running
+        .transition(PrValidationEvent::RemediationCompleted {
+            finding_key: finding.key().clone(),
+        })
+        .unwrap();
+
+    assert_eq!(registered.phase(), PrValidationPhase::Registered);
+    assert_eq!(observing.phase(), PrValidationPhase::PreMergeObservation);
+    assert_eq!(queued.phase(), PrValidationPhase::RemediationQueued);
+    assert_eq!(running.phase(), PrValidationPhase::RemediationRunning);
+    assert_eq!(resumed.phase(), PrValidationPhase::PreMergeObservation);
+    assert_eq!(resumed.key(), registered.key());
+    assert_eq!(resumed.target(), registered.target());
+    assert_eq!(resumed.remediation_for(finding.key()), Some(&correlation));
+}
+
+#[test]
+fn pr_validation_duplicate_and_reordered_findings_have_stable_identity() {
+    let review = finding("review", "event-7", "first body");
+    let edited_review = finding("review", "event-7", "edited body");
+    let check = finding("check_run", "event-9", "failed check");
+    assert_eq!(review.key(), edited_review.key());
+
+    let forward = observing_validation_record()
+        .transition(PrValidationEvent::FindingObserved(review.clone()))
+        .unwrap()
+        .transition(PrValidationEvent::FindingObserved(check.clone()))
+        .unwrap()
+        .transition(PrValidationEvent::FindingObserved(edited_review))
+        .unwrap();
+    let reversed = observing_validation_record()
+        .transition(PrValidationEvent::FindingObserved(check))
+        .unwrap()
+        .transition(PrValidationEvent::FindingObserved(review))
+        .unwrap();
+
+    assert_eq!(forward.finding_keys(), reversed.finding_keys());
+    assert_eq!(forward.finding_keys().len(), 2);
+}
+
+#[test]
+fn pr_validation_sha_change_resets_completion_and_rejects_stale_evidence() {
+    let old_completion = complete_validation("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    let new_target = PrValidationTargetShaSnapshot::new(
+        sha("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+        sha("2222222222222222222222222222222222222222"),
+    );
+    let changed = observing_validation_record()
+        .transition(PrValidationEvent::TargetShaChanged(new_target.clone()))
+        .unwrap();
+
+    assert_eq!(changed.target_shas(), &new_target);
+    assert_eq!(changed.phase(), PrValidationPhase::PreMergeObservation);
+    assert_eq!(
+        changed.transition(PrValidationEvent::Settle(old_completion)),
+        Err(PrValidationTransitionRejection::TargetShaMismatch {
+            expected: new_target.source_sha().clone(),
+            observed: sha("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        })
+    );
+}
+
+#[test]
+fn pr_validation_completion_predicate_reports_every_incomplete_branch() {
+    let target_sha = sha("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    let pending_provider = PrValidationProviderKey::new("code-review").unwrap();
+    let watchable_provider = PrValidationProviderKey::new("external-review").unwrap();
+    let pending_check =
+        PrValidationRequiredCheck::new(PrValidationCheckKind::CheckRun, "cargo-test", false)
+            .unwrap();
+    let completion = PrValidationCompletion::new(
+        target_sha,
+        vec![
+            PrValidationProviderCompletion::pending(pending_provider.clone()),
+            PrValidationProviderCompletion::watchable(watchable_provider.clone()),
+        ],
+        vec![pending_check.clone()],
+        PrValidationCatchUpState::NotObserved,
+    );
+
+    assert_eq!(
+        completion.blockers(),
+        vec![
+            PrValidationCompletionBlocker::ProviderNotTerminal(pending_provider),
+            PrValidationCompletionBlocker::ProviderHasNoCompletionContract(watchable_provider),
+            PrValidationCompletionBlocker::RequiredCheckNotTerminal(pending_check.key().clone()),
+            PrValidationCompletionBlocker::FinalCatchUpNotObserved,
+        ]
+    );
+
+    let unseen = PrValidationCompletion::new(
+        sha("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        vec![],
+        vec![],
+        PrValidationCatchUpState::UnseenRelevantEvents,
+    );
+    assert_eq!(
+        unseen.blockers(),
+        vec![PrValidationCompletionBlocker::FinalCatchUpHasUnseenRelevantEvents]
+    );
+    assert!(!unseen.is_complete());
+}
+
+#[test]
+fn pr_validation_settle_requires_post_merge_and_complete_sha_bound_evidence() {
+    let merge_sha = sha("cccccccccccccccccccccccccccccccccccccccc");
+    let post_merge = observing_validation_record()
+        .transition(PrValidationEvent::MergeObserved(merge_sha.clone()))
+        .unwrap()
+        .transition(PrValidationEvent::BeginPostMergeObservation)
+        .unwrap();
+    let unfinished = PrValidationCompletion::new(
+        merge_sha.clone(),
+        vec![PrValidationProviderCompletion::pending(
+            PrValidationProviderKey::new("code-review").unwrap(),
+        )],
+        vec![],
+        PrValidationCatchUpState::NoUnseenRelevantEvents,
+    );
+
+    assert!(matches!(
+        post_merge
+            .clone()
+            .transition(PrValidationEvent::Settle(unfinished)),
+        Err(PrValidationTransitionRejection::CompletionIncomplete(_))
+    ));
+
+    let settled = post_merge
+        .transition(PrValidationEvent::Settle(complete_validation(
+            merge_sha.as_str(),
+        )))
+        .unwrap();
+    assert_eq!(settled.phase(), PrValidationPhase::Settled);
+    assert_eq!(
+        settled.terminal_reason(),
+        Some(&PrValidationTerminalReason::AllConfiguredSourcesComplete)
+    );
+}
+
+#[test]
+fn pr_validation_invalid_transitions_are_typed_and_never_panic() {
+    let registered = validation_record();
+    let rejection = registered
+        .transition(PrValidationEvent::BeginPostMergeObservation)
+        .unwrap_err();
+
+    assert_eq!(
+        rejection,
+        PrValidationTransitionRejection::InvalidTransition {
+            phase: PrValidationPhase::Registered,
+            event: "begin_post_merge_observation",
+        }
+    );
+}
+
+fn validation_record() -> PrValidationRecord {
+    PrValidationRecord::register(
+        PrValidationRecordKey::new("unit-42").unwrap(),
+        PrValidationTarget::new("Owner/Repository", 42).unwrap(),
+        PrValidationTargetShaSnapshot::new(
+            sha("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            sha("1111111111111111111111111111111111111111"),
+        ),
+    )
+}
+
+fn observing_validation_record() -> PrValidationRecord {
+    validation_record()
+        .transition(PrValidationEvent::BeginPreMergeObservation)
+        .unwrap()
+}
+
+fn finding(source: &str, event_id: &str, summary: &str) -> PrValidationFinding {
+    PrValidationFinding::new(
+        PrValidationFindingKey::new(PrValidationFindingSource::new(source).unwrap(), event_id)
+            .unwrap(),
+        sha("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        summary,
+    )
+    .unwrap()
+}
+
+fn complete_validation(target_sha: &str) -> PrValidationCompletion {
+    PrValidationCompletion::new(
+        sha(target_sha),
+        vec![PrValidationProviderCompletion::terminal(
+            PrValidationProviderKey::new("code-review").unwrap(),
+        )],
+        vec![
+            PrValidationRequiredCheck::new(PrValidationCheckKind::CheckRun, "cargo-test", true)
+                .unwrap(),
+            PrValidationRequiredCheck::new(
+                PrValidationCheckKind::WorkflowRun,
+                "native-validation",
+                true,
+            )
+            .unwrap(),
+        ],
+        PrValidationCatchUpState::NoUnseenRelevantEvents,
+    )
+}
+
+fn sha(value: &str) -> PrValidationCommitSha {
+    PrValidationCommitSha::new(value).unwrap()
 }
 
 // 테스트 fixture lease는 실제 pool allocation이 만드는 branch/worktree naming을 축약한다.

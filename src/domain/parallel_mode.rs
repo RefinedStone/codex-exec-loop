@@ -7,6 +7,8 @@ mod control_plane;
 mod distributor;
 mod orchestrator;
 mod pool_reset;
+#[cfg_attr(not(test), allow(dead_code))]
+mod pr_validation;
 mod readiness;
 mod runtime_events;
 
@@ -50,6 +52,16 @@ pub use self::pool_reset::{
     ParallelModePoolResetPolicy, ParallelModePoolResetReport, ParallelModePoolResetRunId,
     ParallelModePoolResetSlotAction, ParallelModePoolResetSlotOutcome,
     ParallelModePoolResetSlotReport,
+};
+#[allow(unused_imports)]
+pub use self::pr_validation::{
+    PrValidationCatchUpState, PrValidationCheckKind, PrValidationCommitSha, PrValidationCompletion,
+    PrValidationCompletionBlocker, PrValidationEvent, PrValidationFinding, PrValidationFindingKey,
+    PrValidationFindingSource, PrValidationPhase, PrValidationProviderCompletion,
+    PrValidationProviderKey, PrValidationRecord, PrValidationRecordKey,
+    PrValidationRemediationCorrelation, PrValidationRequiredCheck, PrValidationRequiredCheckKey,
+    PrValidationTarget, PrValidationTargetShaSnapshot, PrValidationTerminalReason,
+    PrValidationTransitionRejection,
 };
 pub use self::readiness::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
