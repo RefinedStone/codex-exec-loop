@@ -2155,6 +2155,7 @@ mod distributor;
 mod orchestrator_loop;
 mod pool;
 mod pr_validation_persistence;
+mod pr_validation_service;
 mod runtime_events;
 mod supervisor;
 

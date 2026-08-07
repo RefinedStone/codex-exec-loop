@@ -30,6 +30,8 @@ pub mod planning_task_repository_port;
 pub mod planning_worker_port;
 // planning workspace port는 directions와 supporting files가 놓인 작업공간 접근을 추상화한다.
 pub mod planning_workspace_port;
+// PR validation remediation port는 finding별 idempotent 작업 요청 경계를 정의한다.
+pub mod pr_validation_remediation_port;
 // session catalog port는 app-server 세션 목록과 상세 조회를 service에서 사용할 계약으로 둔다.
 pub mod session_catalog_port;
 // startup probe port는 실행 전 환경 점검을 외부 명령이나 파일 접근에서 분리한다.

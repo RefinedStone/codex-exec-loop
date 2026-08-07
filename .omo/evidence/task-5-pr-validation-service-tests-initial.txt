@@ -1,0 +1,23 @@
+   Compiling codex-exec-loop-native v1.3.5 (C:\dev\akra-queue\akra-async-pr-ci-validator)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 37.76s
+     Running unittests src\lib.rs (target\debug\deps\codex_exec_loop_native-45fb1a92e07ab689.exe)
+
+running 5 tests
+
+thread 'application::service::parallel_mode::tests::pr_validation_service::duplicate_delivery_creates_one_idempotent_remediation_request' (39000) panicked at src\application\service\parallel_mode\tests\pr_validation_service.rs:181:10:
+called `Result::unwrap()` on an `Err` value: "failed to serialize PR validation record: key must be a string"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test application::service::parallel_mode::tests::pr_validation_service::duplicate_delivery_creates_one_idempotent_remediation_request ... FAILED
+test application::service::parallel_mode::tests::pr_validation_service::validation_waits_for_ci_without_holding_a_worktree_or_slot_lease ... ok
+test application::service::parallel_mode::tests::pr_validation_service::stale_delivery_order_is_ignored_before_observation_or_persistence ... ok
+test application::service::parallel_mode::tests::pr_validation_service::target_sha_change_resets_cursor_and_revision_evidence_before_polling ... ok
+test application::service::parallel_mode::tests::pr_validation_service::post_merge_requires_a_clean_catch_up_poll_before_settlement ... ok
+
+failures:
+
+failures:
+    application::service::parallel_mode::tests::pr_validation_service::duplicate_delivery_creates_one_idempotent_remediation_request
+
+test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 2748 filtered out; finished in 0.97s
+
+error: test failed, to rerun pass `--lib`

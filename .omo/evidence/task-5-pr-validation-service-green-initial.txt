@@ -1,0 +1,81 @@
+   Compiling codex-exec-loop-native v1.3.5 (C:\dev\akra-queue\akra-async-pr-ci-validator)
+error[E0277]: the trait bound `CoreWrapper<CtVariableCoreWrapper<Sha256VarCore, ..., ...>>: LowerHex` is not satisfied
+   --> src\application\service\parallel_mode\pr_validation.rs:258:61
+    |
+258 |     PrValidationRemediationKey::new(format!("pr-remediation-{digest:x}"))
+    |                                                             ^^^^^^^^^^ the trait `LowerHex` is not implemented for `CoreWrapper<CtVariableCoreWrapper<Sha256VarCore, UInt<..., ...>, ...>>`
+    |
+    = help: the following other types implement trait `LowerHex`:
+              &T
+              &mut T
+              Borders
+              GenericArray<u8, T>
+              KeyEventState
+              KeyboardEnhancementFlags
+              OpenFlags
+              PrepFlags
+            and 49 others
+    = note: the full name for the type has been written to 'C:\dev\akra-queue\akra-async-pr-ci-validator\target\debug\deps\codex_exec_loop_native-461808420babdd4c.long-type-8827549131440851161.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: the trait bound `CoreWrapper<CtVariableCoreWrapper<Sha256VarCore, ..., ...>>: LowerHex` is not satisfied
+   --> src\application\service\parallel_mode\pr_validation.rs:291:14
+    |
+291 |     format!("{digest:x}")
+    |              ^^^^^^^^^^ the trait `LowerHex` is not implemented for `CoreWrapper<CtVariableCoreWrapper<Sha256VarCore, UInt<..., ...>, ...>>`
+    |
+    = help: the following other types implement trait `LowerHex`:
+              &T
+              &mut T
+              Borders
+              GenericArray<u8, T>
+              KeyEventState
+              KeyboardEnhancementFlags
+              OpenFlags
+              PrepFlags
+            and 49 others
+    = note: the full name for the type has been written to 'C:\dev\akra-queue\akra-async-pr-ci-validator\target\debug\deps\codex_exec_loop_native-461808420babdd4c.long-type-8827549131440851161.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `codex-exec-loop-native` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error[E0277]: the trait bound `CoreWrapper<CtVariableCoreWrapper<Sha256VarCore, ..., ...>>: LowerHex` is not satisfied
+   --> src\application\service\parallel_mode\pr_validation.rs:258:61
+    |
+258 |     PrValidationRemediationKey::new(format!("pr-remediation-{digest:x}"))
+    |                                                             ^^^^^^^^^^ the trait `LowerHex` is not implemented for `CoreWrapper<CtVariableCoreWrapper<Sha256VarCore, UInt<..., ...>, ...>>`
+    |
+    = help: the following other types implement trait `LowerHex`:
+              &T
+              &mut T
+              Borders
+              GenericArray<u8, T>
+              KeyEventState
+              KeyboardEnhancementFlags
+              OpenFlags
+              PrepFlags
+            and 49 others
+    = note: the full name for the type has been written to 'C:\dev\akra-queue\akra-async-pr-ci-validator\target\debug\deps\codex_exec_loop_native-45fb1a92e07ab689.long-type-2708612489963547291.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: the trait bound `CoreWrapper<CtVariableCoreWrapper<Sha256VarCore, ..., ...>>: LowerHex` is not satisfied
+   --> src\application\service\parallel_mode\pr_validation.rs:291:14
+    |
+291 |     format!("{digest:x}")
+    |              ^^^^^^^^^^ the trait `LowerHex` is not implemented for `CoreWrapper<CtVariableCoreWrapper<Sha256VarCore, UInt<..., ...>, ...>>`
+    |
+    = help: the following other types implement trait `LowerHex`:
+              &T
+              &mut T
+              Borders
+              GenericArray<u8, T>
+              KeyEventState
+              KeyboardEnhancementFlags
+              OpenFlags
+              PrepFlags
+            and 49 others
+    = note: the full name for the type has been written to 'C:\dev\akra-queue\akra-async-pr-ci-validator\target\debug\deps\codex_exec_loop_native-45fb1a92e07ab689.long-type-2708612489963547291.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error: could not compile `codex-exec-loop-native` (lib test) due to 2 previous errors
