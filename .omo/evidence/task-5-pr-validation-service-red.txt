@@ -1,0 +1,26 @@
+   Compiling codex-exec-loop-native v1.3.5 (C:\dev\akra-queue\akra-async-pr-ci-validator)
+error[E0432]: unresolved import `crate::application::port::outbound::pr_validation_remediation_port`
+  --> src\application\service\parallel_mode\tests\pr_validation_service.rs:12:41
+   |
+12 | use crate::application::port::outbound::pr_validation_remediation_port::{
+   |                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ could not find `pr_validation_remediation_port` in `outbound`
+
+error[E0432]: unresolved imports `crate::application::service::parallel_mode::PrValidationPollRequest`, `crate::application::service::parallel_mode::PrValidationPollResult`
+  --> src\application\service\parallel_mode\tests\pr_validation_service.rs:16:5
+   |
+16 |     PrValidationPollRequest, PrValidationPollResult,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^ no `PrValidationPollResult` in `application::service::parallel_mode`
+   |     |
+   |     no `PrValidationPollRequest` in `application::service::parallel_mode`
+
+warning: unused import: `Arc`
+ --> src\application\service\parallel_mode\tests\pr_validation_service.rs:2:17
+  |
+2 | use std::sync::{Arc, Mutex};
+  |                 ^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+For more information about this error, try `rustc --explain E0432`.
+warning: `codex-exec-loop-native` (lib test) generated 1 warning
+error: could not compile `codex-exec-loop-native` (lib test) due to 2 previous errors; 1 warning emitted

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct PrValidationRecordKey(String);
@@ -31,6 +31,14 @@ impl PrValidationTarget {
             repository,
             pull_request_number,
         })
+    }
+
+    pub fn repository(&self) -> &str {
+        &self.repository
+    }
+
+    pub fn pull_request_number(&self) -> u64 {
+        self.pull_request_number
     }
 }
 
@@ -80,9 +88,13 @@ impl PrValidationFindingSource {
     pub fn new(value: impl Into<String>) -> Result<Self, String> {
         non_empty(value, "PR validation finding source").map(Self)
     }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PrValidationFindingKey {
     source: PrValidationFindingSource,
     provider_event_id: String,
@@ -97,6 +109,56 @@ impl PrValidationFindingKey {
             source,
             provider_event_id: non_empty(provider_event_id, "PR validation provider event id")?,
         })
+    }
+
+    pub fn source(&self) -> &PrValidationFindingSource {
+        &self.source
+    }
+
+    pub fn provider_event_id(&self) -> &str {
+        &self.provider_event_id
+    }
+}
+
+// JSON object keys must serialize as strings. Length-prefixing the source keeps the persisted
+// identity reversible even when provider IDs contain punctuation.
+impl Serialize for PrValidationFindingKey {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&format!(
+            "{}:{}{}",
+            self.source.as_str().len(),
+            self.source.as_str(),
+            self.provider_event_id
+        ))
+    }
+}
+
+impl<'de> Deserialize<'de> for PrValidationFindingKey {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let encoded = String::deserialize(deserializer)?;
+        let (length, identity) = encoded
+            .split_once(':')
+            .ok_or_else(|| serde::de::Error::custom("invalid PR validation finding key"))?;
+        let source_length = length
+            .parse::<usize>()
+            .map_err(|_| serde::de::Error::custom("invalid PR validation finding source length"))?;
+        if source_length > identity.len() || !identity.is_char_boundary(source_length) {
+            return Err(serde::de::Error::custom(
+                "invalid PR validation finding source boundary",
+            ));
+        }
+        let (source, provider_event_id) = identity.split_at(source_length);
+        Self::new(
+            PrValidationFindingSource::new(source).map_err(serde::de::Error::custom)?,
+            provider_event_id,
+        )
+        .map_err(serde::de::Error::custom)
     }
 }
 
@@ -122,6 +184,14 @@ impl PrValidationFinding {
 
     pub fn key(&self) -> &PrValidationFindingKey {
         &self.key
+    }
+
+    pub fn target_sha(&self) -> &PrValidationCommitSha {
+        &self.target_sha
+    }
+
+    pub fn summary(&self) -> &str {
+        &self.summary
     }
 }
 
@@ -325,11 +395,20 @@ pub enum PrValidationEvent {
     BeginPreMergeObservation,
     FindingObserved(PrValidationFinding),
     RemediationQueued(PrValidationRemediationCorrelation),
-    RemediationStarted { finding_key: PrValidationFindingKey },
-    RemediationCompleted { finding_key: PrValidationFindingKey },
+    RemediationStarted {
+        finding_key: PrValidationFindingKey,
+    },
+    RemediationCompleted {
+        finding_key: PrValidationFindingKey,
+    },
     TargetShaChanged(PrValidationTargetShaSnapshot),
     MergeObserved(PrValidationCommitSha),
     BeginPostMergeObservation,
+    ObservationCheckpointed {
+        delivery_revision: u64,
+        cursor: Option<String>,
+        evidence_fingerprint: String,
+    },
     Settle(PrValidationCompletion),
 }
 
@@ -344,6 +423,7 @@ impl PrValidationEvent {
             Self::TargetShaChanged(_) => "target_sha_changed",
             Self::MergeObserved(_) => "merge_observed",
             Self::BeginPostMergeObservation => "begin_post_merge_observation",
+            Self::ObservationCheckpointed { .. } => "observation_checkpointed",
             Self::Settle(_) => "settle",
         }
     }
@@ -374,6 +454,10 @@ pub struct PrValidationRecord {
     remediations: BTreeMap<PrValidationFindingKey, PrValidationRemediationCorrelation>,
     active_remediation: Option<PrValidationFindingKey>,
     merge_sha: Option<PrValidationCommitSha>,
+    observation_revision: u64,
+    observation_cursor: Option<String>,
+    evidence_fingerprint: Option<String>,
+    post_merge_checkpoint_revision: Option<u64>,
     completion: Option<PrValidationCompletion>,
     terminal_reason: Option<PrValidationTerminalReason>,
 }
@@ -393,6 +477,10 @@ impl PrValidationRecord {
             remediations: BTreeMap::new(),
             active_remediation: None,
             merge_sha: None,
+            observation_revision: 0,
+            observation_cursor: None,
+            evidence_fingerprint: None,
+            post_merge_checkpoint_revision: None,
             completion: None,
             terminal_reason: None,
         }
@@ -423,6 +511,22 @@ impl PrValidationRecord {
         finding_key: &PrValidationFindingKey,
     ) -> Option<&PrValidationRemediationCorrelation> {
         self.remediations.get(finding_key)
+    }
+
+    pub fn observation_revision(&self) -> u64 {
+        self.observation_revision
+    }
+
+    pub fn observation_cursor(&self) -> Option<&str> {
+        self.observation_cursor.as_deref()
+    }
+
+    pub fn evidence_fingerprint(&self) -> Option<&str> {
+        self.evidence_fingerprint.as_deref()
+    }
+
+    pub fn has_post_merge_checkpoint(&self) -> bool {
+        self.post_merge_checkpoint_revision.is_some()
     }
 
     pub fn terminal_reason(&self) -> Option<&PrValidationTerminalReason> {
@@ -513,6 +617,9 @@ impl PrValidationRecord {
                 next.remediations.clear();
                 next.active_remediation = None;
                 next.merge_sha = None;
+                next.observation_cursor = None;
+                next.evidence_fingerprint = None;
+                next.post_merge_checkpoint_revision = None;
                 next.completion = None;
                 next.terminal_reason = None;
             }
@@ -526,6 +633,20 @@ impl PrValidationRecord {
                     && next.merge_sha.is_some() =>
             {
                 next.phase = PrValidationPhase::PostMergeObservation;
+            }
+            PrValidationEvent::ObservationCheckpointed {
+                delivery_revision,
+                cursor,
+                evidence_fingerprint,
+            } if next.phase != PrValidationPhase::Settled
+                && delivery_revision > next.observation_revision =>
+            {
+                next.observation_revision = delivery_revision;
+                next.observation_cursor = cursor;
+                next.evidence_fingerprint = Some(evidence_fingerprint);
+                if next.phase == PrValidationPhase::PostMergeObservation {
+                    next.post_merge_checkpoint_revision = Some(delivery_revision);
+                }
             }
             PrValidationEvent::Settle(completion)
                 if next.phase == PrValidationPhase::PostMergeObservation =>

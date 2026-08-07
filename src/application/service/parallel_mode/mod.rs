@@ -41,6 +41,7 @@ mod git_sequence;
 mod orchestration;
 mod orchestrator_loop;
 mod pool;
+mod pr_validation;
 mod pr_validation_store;
 mod readiness;
 mod session_detail;
@@ -97,6 +98,7 @@ use self::pool::{
     install_before_normalization_atomic_rename_hook,
     install_before_normalization_staging_provision_hook,
 };
+pub use self::pr_validation::{PrValidationPollRequest, PrValidationPollResult};
 #[cfg(test)]
 use self::pr_validation_store::pr_validation_record_relative_path;
 use self::pr_validation_store::{
