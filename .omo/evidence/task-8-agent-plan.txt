@@ -1,0 +1,92 @@
+warning: in the working copy of 'src/domain/parallel_mode/pr_validation.rs', LF will be replaced by CRLF the next time Git touches it
+Change plan: full (82 path(s) against origin/prerelease)
+  .omo/evidence/task-1-async-pr-ci-validator-red.txt
+  .omo/evidence/task-1-cargo-check-lib.txt
+  .omo/evidence/task-1-cargo-fmt-check.txt
+  .omo/evidence/task-1-cargo-test-parallel-mode.txt
+  .omo/evidence/task-1-cargo-test-pr-validation.txt
+  .omo/evidence/task-2-async-pr-ci-validator.txt
+  .omo/evidence/task-3-architecture-boundaries.txt
+  .omo/evidence/task-3-authority-schema-test-initial-failure.txt
+  .omo/evidence/task-3-authority-schema-test.txt
+  .omo/evidence/task-3-cargo-check-lib-initial-failure.txt
+  .omo/evidence/task-3-cargo-check-lib.txt
+  .omo/evidence/task-3-cargo-fmt-check.txt
+  .omo/evidence/task-3-git-diff-check.txt
+  .omo/evidence/task-3-pr-validation-persistence-red.txt
+  .omo/evidence/task-3-targeted-persistence-tests.txt
+  .omo/evidence/task-4-architecture-boundaries.txt
+  .omo/evidence/task-4-cargo-check-lib.txt
+  .omo/evidence/task-4-cargo-fmt-check.txt
+  .omo/evidence/task-4-github-validation-red.txt
+  .omo/evidence/task-4-targeted-tests-initial.txt
+  .omo/evidence/task-4-targeted-tests.txt
+  .omo/evidence/task-5-pr-validation-service-green-initial.txt
+  .omo/evidence/task-5-pr-validation-service-red.txt
+  .omo/evidence/task-5-pr-validation-service-tests-initial.txt
+  .omo/evidence/task-5-pr-validation-service-tests.txt
+  .omo/evidence/task-6-independent-recovery.txt
+  .omo/evidence/task-7-agent-plan.txt
+  .omo/evidence/task-7-architecture-boundaries.txt
+  .omo/evidence/task-7-cargo-check.txt
+  .omo/evidence/task-7-cargo-fmt-check.txt
+  .omo/evidence/task-7-focused-cli-projection.txt
+  .omo/evidence/task-7-focused-domain-projection.txt
+  .omo/evidence/task-7-focused-tui-projection.txt
+  .omo/evidence/task-7-git-diff-check.txt
+  .omo/evidence/task-7-manual-cli-qa.txt
+  .omo/evidence/task-7-verification-summary.txt
+  .omo/evidence/task-8-agent-plan.txt
+  .omo/evidence/task-8-targeted-e2e-final.txt
+  .omo/evidence/task-8-targeted-e2e-initial.txt
+  .omo/evidence/task-8-targeted-e2e-secure-temp-initial.txt
+  .omo/evidence/task-8-windows-acl-baseline-check.txt
+  src/adapter/inbound/cli.rs
+  src/adapter/inbound/cli/usage.rs
+  src/adapter/inbound/tui/app/shell_presentation/overlays/popup/work_center.rs
+  src/adapter/outbound/db/sqlite_planning_authority_adapter.rs
+  src/adapter/outbound/db/sqlite_planning_authority_adapter/runtime_projection.rs
+  src/adapter/outbound/db/sqlite_planning_authority_adapter/store.rs
+  src/adapter/outbound/db/sqlite_planning_authority_adapter/tests.rs
+  src/adapter/outbound/github/mod.rs
+  src/adapter/outbound/github/pr_validation.rs
+  src/adapter/outbound/github/pr_validation/tests.rs
+  src/adapter/outbound/github/review_poller.rs
+  src/application/port/inbound/mod.rs
+  src/application/port/inbound/pr_validation_query_port.rs
+  src/application/port/outbound/github_pr_validation_port.rs
+  src/application/port/outbound/mod.rs
+  src/application/port/outbound/planning_authority_port.rs
+  src/application/port/outbound/pr_validation_remediation_port.rs
+  src/application/service/mod.rs
+  src/application/service/parallel_mode/distributor/delivery.rs
+  src/application/service/parallel_mode/distributor/delivery/github.rs
+  src/application/service/parallel_mode/mod.rs
+  src/application/service/parallel_mode/pr_validation.rs
+  src/application/service/parallel_mode/pr_validation_store.rs
+  src/application/service/parallel_mode/slot_lifecycle.rs
+  src/application/service/parallel_mode/supervisor.rs
+  src/application/service/parallel_mode/tests.rs
+  src/application/service/parallel_mode/tests/pr_validation_e2e.rs
+  src/application/service/parallel_mode/tests/pr_validation_persistence.rs
+  src/application/service/parallel_mode/tests/pr_validation_service.rs
+  src/application/service/planning/mod.rs
+  src/application/service/planning/task_mutation.rs
+  src/application/service/planning/task_mutation/tests.rs
+  src/application/service/planning/use_cases.rs
+  src/application/service/pr_validation_query.rs
+  src/composition/production.rs
+  src/domain/github_review.rs
+  src/domain/parallel_mode.rs
+  src/domain/parallel_mode/distributor.rs
+  src/domain/parallel_mode/pr_validation.rs
+  src/domain/parallel_mode/pr_validation_projection_tests.rs
+  src/domain/parallel_mode/tests.rs
+
+Required local checks:
+  git diff --check
+  powershell -File scripts/check_native_pr.ps1 -Mode Full
+
+Delivery unit: one PR for this user-visible outcome.
+
+EXIT_CODE=0

@@ -221,7 +221,6 @@ impl ParallelModeService {
 
     /// Executes one poll/trigger delivery. Waiting is represented by returning `Waiting`; this
     /// service never acquires a pool mutation lock, worktree, or slot lease between deliveries.
-
     pub fn poll_pr_validation_into_normal_queue(
         &self,
         observation: &dyn GithubPrValidationPort,

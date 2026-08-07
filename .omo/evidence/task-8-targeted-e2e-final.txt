@@ -1,0 +1,12 @@
+   Compiling codex-exec-loop-native v1.3.5 (C:\dev\akra-queue\akra-async-pr-ci-validator)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 23.83s
+     Running unittests src\lib.rs (target\debug\deps\codex_exec_loop_native-45fb1a92e07ab689.exe)
+
+running 2 tests
+test application::service::parallel_mode::tests::pr_validation_e2e::tests::unknown_provider_and_late_event_cannot_false_settle ... ok
+test application::service::parallel_mode::tests::pr_validation_e2e::tests::delivery_remediation_merge_and_post_merge_settle ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2758 filtered out; finished in 12.92s
+
+
+EXIT_CODE=0

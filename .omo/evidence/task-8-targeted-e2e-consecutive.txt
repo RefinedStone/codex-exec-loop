@@ -1,0 +1,132 @@
+COMMAND_1=cargo test pr_validation_e2e -- --test-threads=1
+   Compiling codex-exec-loop-native v1.3.5 (C:\dev\akra-queue\akra-async-pr-ci-validator)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 21.01s
+     Running unittests src\lib.rs (target\debug\deps\codex_exec_loop_native-45fb1a92e07ab689.exe)
+
+running 2 tests
+test application::service::parallel_mode::tests::pr_validation_e2e::tests::delivery_remediation_merge_and_post_merge_settle ... ok
+test application::service::parallel_mode::tests::pr_validation_e2e::tests::unknown_provider_and_late_event_cannot_false_settle ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2758 filtered out; finished in 13.42s
+
+     Running unittests src\bin\akra.rs (target\debug\deps\akra-e8cda54dc2c54231.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\bin\akra-admin.rs (target\debug\deps\akra_admin-38e98462fe3267d2.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\bin\akra-telegram.rs (target\debug\deps\akra_telegram-7d308de8b14e8da1.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\main.rs (target\debug\deps\codex_exec_loop_native-7bc145e0f93a70a8.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\architecture_boundaries.rs (target\debug\deps\architecture_boundaries-0ffd92e19a8747c1.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 130 filtered out; finished in 0.00s
+
+     Running tests\binary_entrypoints.rs (target\debug\deps\binary_entrypoints-9f8cf5423be4ffc6.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests\native_validation_scripts.rs (target\debug\deps\native_validation_scripts-43552ad94f25c64e.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\repository_hygiene.rs (target\debug\deps\repository_hygiene-b6ca4d9c59e30cbe.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests\tui_terminal_disconnect.rs (target\debug\deps\tui_terminal_disconnect-0889aa01dc53a923.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+EXIT_CODE_1=0
+
+COMMAND_2=cargo test pr_validation_e2e -- --test-threads=1
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s
+     Running unittests src\lib.rs (target\debug\deps\codex_exec_loop_native-45fb1a92e07ab689.exe)
+
+running 2 tests
+test application::service::parallel_mode::tests::pr_validation_e2e::tests::delivery_remediation_merge_and_post_merge_settle ... ok
+test application::service::parallel_mode::tests::pr_validation_e2e::tests::unknown_provider_and_late_event_cannot_false_settle ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2758 filtered out; finished in 13.58s
+
+     Running unittests src\bin\akra.rs (target\debug\deps\akra-e8cda54dc2c54231.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\bin\akra-admin.rs (target\debug\deps\akra_admin-38e98462fe3267d2.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\bin\akra-telegram.rs (target\debug\deps\akra_telegram-7d308de8b14e8da1.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\main.rs (target\debug\deps\codex_exec_loop_native-7bc145e0f93a70a8.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\architecture_boundaries.rs (target\debug\deps\architecture_boundaries-0ffd92e19a8747c1.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 130 filtered out; finished in 0.00s
+
+     Running tests\binary_entrypoints.rs (target\debug\deps\binary_entrypoints-9f8cf5423be4ffc6.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests\native_validation_scripts.rs (target\debug\deps\native_validation_scripts-43552ad94f25c64e.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\repository_hygiene.rs (target\debug\deps\repository_hygiene-b6ca4d9c59e30cbe.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests\tui_terminal_disconnect.rs (target\debug\deps\tui_terminal_disconnect-0889aa01dc53a923.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+EXIT_CODE_2=0
