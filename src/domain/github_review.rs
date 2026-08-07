@@ -1,5 +1,36 @@
 use std::path::Path;
 
+/// Opaque GitHub identifier shared by normalized read contracts.
+///
+/// GitHub identifiers are not assumed to fit a Rust integer and are never parsed by
+/// application code. Endpoint provenance supplies the namespace when identities are compared.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct GithubOpaqueId(String);
+
+impl GithubOpaqueId {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Immutable commit identity used to bind validation observations to one PR revision.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct GithubCommitSha(String);
+
+impl GithubCommitSha {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /*
  * GitHub review polling은 adapter가 GitHub REST 응답을 그대로 흘려보내지 않고, application/TUI가
  * 필요한 PR 단위 activity model로 줄여서 다룬다. 이 파일의 타입들은 "어떤 PR을 보고 있는가",
