@@ -110,6 +110,62 @@ fn seed(
     .unwrap();
 }
 #[test]
+fn replayed_system_admission_returns_one_ordinary_task_identity() {
+    let repo = repo();
+    let workspace = workspace("system-admission-replay");
+    seed(
+        repo.as_ref(),
+        &workspace,
+        TaskAuthorityDocument {
+            version: PLANNING_FORMAT_VERSION,
+            tasks: Vec::new(),
+        },
+    );
+    let service = PlanningTaskMutationService::new(
+        repo.clone(),
+        crate::domain::planning::PriorityQueueService::new(),
+    );
+    let input = PlanningTaskCreateInput {
+        direction_id: None,
+        direction_relation_note: Some("remediates validation finding".to_string()),
+        title: "Remediate failed PR validation".to_string(),
+        description: Some("Run the ordinary planning/distributor lifecycle".to_string()),
+        status: Some(TaskStatus::Ready),
+        base_priority: None,
+        dynamic_priority_delta: None,
+        priority_reason: None,
+        depends_on: Vec::new(),
+        blocked_by: Vec::new(),
+    };
+
+    let first = service
+        .admit_system_task_once(&workspace, "validation-record:finding", input.clone())
+        .unwrap();
+    let replay = service
+        .admit_system_task_once(&workspace, "validation-record:finding", input)
+        .unwrap();
+
+    assert!(first.created);
+    assert!(!replay.created);
+    assert_eq!(replay.task_id, first.task_id);
+    let authority = repo
+        .load_task_authority_snapshot(&workspace)
+        .unwrap()
+        .unwrap()
+        .task_authority;
+    assert_eq!(authority.tasks.len(), 1);
+    assert_eq!(authority.tasks[0].id, first.task_id);
+    assert_eq!(
+        authority.tasks[0].provenance.origin_session_kind,
+        Some(OriginSessionKind::System)
+    );
+    assert_eq!(
+        authority.tasks[0].provenance.turn_id.as_deref(),
+        Some("validation-record:finding")
+    );
+}
+
+#[test]
 fn user_preview_and_worker_create_share_defaults_and_audit() {
     /*
      * user preview와 worker command commit은 서로 다른 public method로 들어오지만 task default,

@@ -1,0 +1,10 @@
+cargo test pr_validation: PASS
+cargo fmt --check: PASS
+cargo check --lib: PASS
+cargo test --test architecture_boundaries: PASS
+git diff --check: PASS
+
+Independent recovery verified the Todo 6 validation-to-normal-planning-task integration:
+- validation observation remains lease-free;
+- remediation uses an ordinary planning task identity;
+- task start and distributor cleanup advance the correlated validation record idempotently.

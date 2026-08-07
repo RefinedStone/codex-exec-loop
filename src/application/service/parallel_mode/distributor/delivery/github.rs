@@ -434,6 +434,13 @@ pub(super) fn distributor_ensure_pull_request(
         &resolution.context.pool_root,
         record,
     )?;
+    super::super::super::pr_validation::register_distributor_pr_validation_with_ports(
+        planning_authority,
+        runtime,
+        &resolution.context.repo_root,
+        &resolution.context.pool_root,
+        record,
+    )?;
 
     Ok(format!(
         "distributor ensured pull request / agent: {} / pr: #{}",

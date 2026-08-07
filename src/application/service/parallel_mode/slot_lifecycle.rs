@@ -10,6 +10,7 @@ use crate::domain::parallel_mode::{
     ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
 };
 
+use super::pr_validation::transition_pr_validation_remediation_with_ports;
 use super::{
     AKRA_AGENT_BRANCH_PREFIX, ParallelModeService, PoolSlotCleanupIdentity,
     PoolSlotCleanupLeaseAuthority, acquire_pool_mutation_lock, allocate_agent_branch_name,
@@ -464,6 +465,14 @@ impl ParallelModeService {
             &context.pool_root,
             &lease,
         );
+        transition_pr_validation_remediation_with_ports(
+            self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
+            &context.repo_root,
+            &context.pool_root,
+            &lease.task_id,
+            false,
+        )?;
         Ok(lease)
     }
 

@@ -101,6 +101,12 @@ pub struct PlanningQueueAuthoritySnapshot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningIdempotentTaskAdmission {
+    pub task_id: String,
+    pub created: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningQueueCancellationTarget {
     pub task_id: String,
     pub expected_status: TaskStatus,
@@ -361,6 +367,74 @@ impl PlanningTaskMutationService {
         bail!(
             "planning task mutation could not commit because planning state kept changing after observed revision {observed_revision}"
         )
+    }
+
+    /// Admits one system-authored task through the ordinary planning queue. The idempotency key
+    /// is stored as system provenance and rechecked after every optimistic-authority conflict, so
+    /// concurrent/replayed admissions return one stable task identity.
+    pub fn admit_system_task_once(
+        &self,
+        workspace_directory: &str,
+        idempotency_key: &str,
+        input: PlanningTaskCreateInput,
+    ) -> Result<PlanningIdempotentTaskAdmission> {
+        let idempotency_key = required_id(idempotency_key, "task admission idempotency key")?;
+        let provenance =
+            TaskMutationProvenance::new(crate::domain::planning::OriginSessionKind::System)
+                .with_thread_turn(None, Some(idempotency_key.to_string()));
+        for _ in 0..=MAX_REVISION_CONFLICT_RETRIES {
+            let context = self.load_context(workspace_directory)?;
+            if let Some(task) = context.task_authority.tasks.iter().find(|task| {
+                task.provenance.origin_session_kind
+                    == Some(crate::domain::planning::OriginSessionKind::System)
+                    && task.provenance.turn_id.as_deref() == Some(idempotency_key)
+            }) {
+                return Ok(PlanningIdempotentTaskAdmission {
+                    task_id: task.id.clone(),
+                    created: false,
+                });
+            }
+
+            let generated_at = Utc::now();
+            let task = self.build_unique_task(
+                &input,
+                TaskMutationAuditContext {
+                    source: PlanningTaskMutationSource::System,
+                    legacy_source_turn_id: None,
+                    provenance: &provenance,
+                },
+                PlanningTaskAuthorityView {
+                    directions: &context.directions,
+                    task_authority: &context.task_authority,
+                },
+                generated_at,
+                None,
+            )?;
+            let task_id = task.id.clone();
+            let mut candidate = context.task_authority.clone();
+            candidate.tasks.push(task);
+            let queue_projection = self.validate_and_project(&context.directions, &candidate)?;
+            match self.commit_authority(
+                workspace_directory,
+                Some(context.task_planning_revision),
+                &candidate,
+                &queue_projection,
+                PlanningTaskAuthorityMutationAudit {
+                    task_ids: std::slice::from_ref(&task_id),
+                    legacy_source_turn_id: None,
+                    provenance: &provenance,
+                },
+            )? {
+                PlanningTaskAuthorityCommitResult::Committed { .. } => {
+                    return Ok(PlanningIdempotentTaskAdmission {
+                        task_id,
+                        created: true,
+                    });
+                }
+                PlanningTaskAuthorityCommitResult::Conflict { .. } => continue,
+            }
+        }
+        bail!("planning task admission could not commit because planning state kept changing")
     }
 
     pub fn load_queue_authority_snapshot(

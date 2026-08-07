@@ -1458,6 +1458,14 @@ impl PlanningAuthorityPort for SqlitePlanningAuthorityAdapter {
         Self::load_runtime_pr_validation_record(workspace_dir, record_key)
     }
 
+    fn load_runtime_pr_validation_record_for_remediation(
+        &self,
+        workspace_dir: &str,
+        task_id: &str,
+    ) -> Result<Option<PrValidationRecord>> {
+        Self::load_runtime_pr_validation_record_for_remediation(workspace_dir, task_id)
+    }
+
     fn compare_and_swap_runtime_pr_validation_record(
         &self,
         workspace_dir: &str,

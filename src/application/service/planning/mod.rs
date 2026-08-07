@@ -136,9 +136,10 @@ pub use crate::domain::planning::{
 };
 // task mutation 타입은 task 생성/수정 명령 추출, preview, commit 결과를 외부 입력 처리 경로에 제공한다.
 pub use self::task_mutation::{
-    PlanningQueueAuthoritySnapshot, PlanningQueueCancellationRequest,
-    PlanningQueueCancellationTarget, PlanningTaskCommandExtraction, PlanningTaskCreateInput,
-    PlanningTaskCreatePreview, PlanningTaskCreatePreviewRequest, PlanningTaskMutationCommand,
+    PlanningIdempotentTaskAdmission, PlanningQueueAuthoritySnapshot,
+    PlanningQueueCancellationRequest, PlanningQueueCancellationTarget,
+    PlanningTaskCommandExtraction, PlanningTaskCreateInput, PlanningTaskCreatePreview,
+    PlanningTaskCreatePreviewRequest, PlanningTaskMutationCommand,
     PlanningTaskMutationCommitResult, PlanningTaskMutationRequest, PlanningTaskMutationService,
     PlanningTaskMutationSource, PlanningTaskUpdateInput, extract_planning_task_commands,
 };

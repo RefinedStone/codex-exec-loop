@@ -7,17 +7,23 @@ use crate::application::port::outbound::github_pr_validation_port::{
     GithubPrMergeState, GithubPrValidationObservationRequest, GithubPrValidationPort,
     GithubPrValidationSnapshot, GithubValidationRunStatus, GithubValidationSourceStatus,
 };
+use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
+use crate::application::port::outbound::planning_authority_port::{
+    PlanningAuthorityDistributorQueueRecord, PlanningAuthorityPort,
+};
 use crate::application::port::outbound::pr_validation_remediation_port::{
     PrValidationRemediationKey, PrValidationRemediationPort, PrValidationRemediationRequest,
 };
+use crate::application::service::planning::{PlanningQueueUseCases, PlanningTaskCreateInput};
 use crate::domain::github_review::{GithubCommitSha, GithubPullRequestTarget};
 use crate::domain::parallel_mode::{
     PrValidationCatchUpState, PrValidationCheckKind, PrValidationCommitSha, PrValidationCompletion,
     PrValidationEvent, PrValidationFinding, PrValidationFindingKey, PrValidationFindingSource,
-    PrValidationPhase, PrValidationProviderCompletion, PrValidationProviderKey,
+    PrValidationPhase, PrValidationProviderCompletion, PrValidationProviderKey, PrValidationRecord,
     PrValidationRecordKey, PrValidationRemediationCorrelation, PrValidationRequiredCheck,
-    PrValidationTargetShaSnapshot,
+    PrValidationTarget, PrValidationTargetShaSnapshot,
 };
+use crate::domain::planning::TaskStatus;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrValidationPollRequest {
@@ -38,9 +44,230 @@ pub enum PrValidationPollResult {
     StaleDeliveryIgnored,
 }
 
+pub struct PlanningQueuePrValidationRemediationPort<'a> {
+    queue: &'a PlanningQueueUseCases,
+    workspace_dir: &'a str,
+}
+
+impl<'a> PlanningQueuePrValidationRemediationPort<'a> {
+    pub fn new(queue: &'a PlanningQueueUseCases, workspace_dir: &'a str) -> Self {
+        Self {
+            queue,
+            workspace_dir,
+        }
+    }
+}
+
+impl PrValidationRemediationPort for PlanningQueuePrValidationRemediationPort<'_> {
+    fn request_remediation(
+        &self,
+        request: &PrValidationRemediationRequest,
+    ) -> anyhow::Result<PrValidationRecordKey> {
+        let admission = self.queue.admit_system_task_once(
+            self.workspace_dir,
+            request.idempotency_key.as_str(),
+            PlanningTaskCreateInput {
+                direction_id: None,
+                direction_relation_note: Some(format!(
+                    "Remediates validation record {} for {}#{}",
+                    request.validation_record_key.as_str(),
+                    request.target.repository(),
+                    request.target.pull_request_number()
+                )),
+                title: format!(
+                    "Remediate PR #{} validation finding",
+                    request.target.pull_request_number()
+                ),
+                description: Some(format!(
+                    "Validation record: {}\nTarget SHA: {}\nFinding: {}",
+                    request.validation_record_key.as_str(),
+                    request.target_sha.as_str(),
+                    request.summary
+                )),
+                status: Some(TaskStatus::Ready),
+                base_priority: None,
+                dynamic_priority_delta: None,
+                priority_reason: None,
+                depends_on: Vec::new(),
+                blocked_by: Vec::new(),
+            },
+        )?;
+        PrValidationRecordKey::new(admission.task_id).map_err(anyhow::Error::msg)
+    }
+}
+
+pub(super) fn register_distributor_pr_validation_with_ports(
+    planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
+    workspace_dir: &str,
+    pool_root: &std::path::Path,
+    record: &PlanningAuthorityDistributorQueueRecord,
+) -> Result<PrValidationRecordKey, String> {
+    let target = record.delivery_target.as_ref().ok_or_else(|| {
+        "cannot register PR validation without an immutable delivery target".to_string()
+    })?;
+    let pull_request_number = record.pull_request_number.ok_or_else(|| {
+        "cannot register PR validation before a pull request is ensured".to_string()
+    })?;
+    let key = PrValidationRecordKey::new(&record.queue_item_id)?;
+    let registered = PrValidationRecord::register(
+        key.clone(),
+        PrValidationTarget::new(&target.github_repository, pull_request_number)?,
+        PrValidationTargetShaSnapshot::new(
+            PrValidationCommitSha::new(record.effective_source_commit_sha())?,
+            PrValidationCommitSha::new(&record.source_base_commit_sha)?,
+        ),
+    );
+    match super::pr_validation_store::recover_pr_validation_record_mirror(
+        planning_authority,
+        runtime,
+        workspace_dir,
+        pool_root,
+        &key,
+    )? {
+        Some(existing) if existing == registered => Ok(key),
+        Some(existing)
+            if existing.target() == registered.target()
+                && existing.target_shas() == registered.target_shas() =>
+        {
+            Ok(key)
+        }
+        Some(_) => Err(format!(
+            "PR validation record `{}` is already registered with different immutable identity",
+            key.as_str()
+        )),
+        None => {
+            super::pr_validation_store::persist_pr_validation_record(
+                planning_authority,
+                runtime,
+                workspace_dir,
+                pool_root,
+                None,
+                &registered,
+            )?;
+            Ok(key)
+        }
+    }
+}
+
+pub(super) fn transition_pr_validation_remediation_with_ports(
+    planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
+    workspace_dir: &str,
+    pool_root: &std::path::Path,
+    task_id: &str,
+    complete: bool,
+) -> Result<bool, String> {
+    let Some(current) = planning_authority
+        .load_runtime_pr_validation_record_for_remediation(workspace_dir, task_id)
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(false);
+    };
+    let correlation = current
+        .remediation_for_task(task_id)
+        .cloned()
+        .expect("persistence lookup returned the matching remediation");
+    let next = match (current.phase(), complete) {
+        (PrValidationPhase::RemediationQueued, false) => current
+            .transition(PrValidationEvent::RemediationStarted {
+                finding_key: correlation.finding_key().clone(),
+            })
+            .map_err(transition_error)?,
+        (PrValidationPhase::RemediationQueued, true) => current
+            .transition(PrValidationEvent::RemediationStarted {
+                finding_key: correlation.finding_key().clone(),
+            })
+            .and_then(|record| {
+                record.transition(PrValidationEvent::RemediationCompleted {
+                    finding_key: correlation.finding_key().clone(),
+                })
+            })
+            .map_err(transition_error)?,
+        (PrValidationPhase::RemediationRunning, true) => current
+            .transition(PrValidationEvent::RemediationCompleted {
+                finding_key: correlation.finding_key().clone(),
+            })
+            .map_err(transition_error)?,
+        (PrValidationPhase::RemediationRunning, false) => return Ok(false),
+        _ => return Ok(false),
+    };
+    super::pr_validation_store::persist_pr_validation_record(
+        planning_authority,
+        runtime,
+        workspace_dir,
+        pool_root,
+        Some(&current),
+        &next,
+    )?;
+    Ok(true)
+}
+
 impl ParallelModeService {
+    pub fn register_distributor_pr_validation(
+        &self,
+        workspace_dir: &str,
+        pool_root: &std::path::Path,
+        record: &PlanningAuthorityDistributorQueueRecord,
+    ) -> Result<PrValidationRecordKey, String> {
+        register_distributor_pr_validation_with_ports(
+            self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
+            workspace_dir,
+            pool_root,
+            record,
+        )
+    }
+
     /// Executes one poll/trigger delivery. Waiting is represented by returning `Waiting`; this
     /// service never acquires a pool mutation lock, worktree, or slot lease between deliveries.
+
+    pub fn poll_pr_validation_into_normal_queue(
+        &self,
+        observation: &dyn GithubPrValidationPort,
+        queue: &PlanningQueueUseCases,
+        request: PrValidationPollRequest,
+    ) -> Result<PrValidationPollResult, String> {
+        let workspace_dir = request.workspace_dir.clone();
+        let remediation = PlanningQueuePrValidationRemediationPort::new(queue, &workspace_dir);
+        self.poll_pr_validation(observation, &remediation, request)
+    }
+
+    pub fn transition_pr_validation_remediation_started(
+        &self,
+        workspace_dir: &str,
+        pool_root: &std::path::Path,
+        task_id: &str,
+    ) -> Result<bool, String> {
+        self.transition_pr_validation_remediation(workspace_dir, pool_root, task_id, false)
+    }
+
+    pub fn transition_pr_validation_remediation_completed(
+        &self,
+        workspace_dir: &str,
+        pool_root: &std::path::Path,
+        task_id: &str,
+    ) -> Result<bool, String> {
+        self.transition_pr_validation_remediation(workspace_dir, pool_root, task_id, true)
+    }
+
+    fn transition_pr_validation_remediation(
+        &self,
+        workspace_dir: &str,
+        pool_root: &std::path::Path,
+        task_id: &str,
+        complete: bool,
+    ) -> Result<bool, String> {
+        transition_pr_validation_remediation_with_ports(
+            self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
+            workspace_dir,
+            pool_root,
+            task_id,
+            complete,
+        )
+    }
+
     pub fn poll_pr_validation(
         &self,
         observation: &dyn GithubPrValidationPort,
@@ -109,7 +336,7 @@ impl ParallelModeService {
                     .transition(PrValidationEvent::FindingObserved(finding.clone()))
                     .map_err(transition_error)?;
                 let idempotency_key = remediation_key(next.key(), &finding);
-                remediation
+                let remediation_task_key = remediation
                     .request_remediation(&PrValidationRemediationRequest {
                         idempotency_key: idempotency_key.clone(),
                         validation_record_key: next.key().clone(),
@@ -125,8 +352,7 @@ impl ParallelModeService {
                     .transition(PrValidationEvent::RemediationQueued(
                         PrValidationRemediationCorrelation::new(
                             finding.key().clone(),
-                            PrValidationRecordKey::new(idempotency_key.as_str())
-                                .map_err(|error| error.to_string())?,
+                            remediation_task_key,
                         ),
                     ))
                     .map_err(transition_error)?;
