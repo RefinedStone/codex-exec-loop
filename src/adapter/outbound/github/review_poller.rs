@@ -812,6 +812,10 @@ impl GithubReviewPollerAdapter {
         self.fetch_json_with_budget(endpoint, None)
     }
 
+    pub(super) fn fetch_validation_json(&self, endpoint: &str) -> Result<String> {
+        self.fetch_json_with_budget(endpoint, None)
+    }
+
     fn fetch_json_with_budget(
         &self,
         endpoint: &str,
