@@ -1,0 +1,321 @@
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
+use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
+use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
+use crate::domain::parallel_mode::{
+    PrValidationCommitSha, PrValidationEvent, PrValidationRecord, PrValidationRecordKey,
+    PrValidationTarget, PrValidationTargetShaSnapshot,
+};
+
+use super::super::{
+    persist_pr_validation_record, pr_validation_record_relative_path,
+    recover_pr_validation_record_mirror,
+};
+
+#[derive(Default)]
+struct ValidationMirrorRuntime {
+    files: Mutex<BTreeMap<PathBuf, String>>,
+    reject_next_compare_and_swap: AtomicBool,
+}
+
+impl ValidationMirrorRuntime {
+    fn reject_next_compare_and_swap(&self) {
+        self.reject_next_compare_and_swap
+            .store(true, Ordering::SeqCst);
+    }
+
+    fn clear(&self) {
+        self.files.lock().expect("mirror lock").clear();
+    }
+
+    fn body(&self, relative: &Path) -> Option<String> {
+        self.files
+            .lock()
+            .expect("mirror lock")
+            .get(relative)
+            .cloned()
+    }
+}
+
+impl ParallelModeRuntimePort for ValidationMirrorRuntime {
+    fn detect_git_repo_root(&self, workspace_dir: &str) -> Option<String> {
+        Some(workspace_dir.to_string())
+    }
+
+    fn command_succeeds(&self, _program: &str, _args: &[&str]) -> bool {
+        false
+    }
+
+    fn run_command(
+        &self,
+        _program: &str,
+        _args: &[&str],
+        _current_dir: Option<&str>,
+    ) -> Option<String> {
+        None
+    }
+
+    fn run_command_with_stdin(
+        &self,
+        _program: &str,
+        _args: &[&str],
+        _stdin_body: &str,
+    ) -> Option<String> {
+        None
+    }
+
+    fn find_executable(&self, _program: &str) -> Option<PathBuf> {
+        None
+    }
+
+    fn gh_auth_status(&self, _repo_root: Option<&str>) -> bool {
+        false
+    }
+
+    fn current_timestamp(&self) -> String {
+        "2026-08-07T00:00:00Z".to_string()
+    }
+
+    fn canonicalize_best_effort(&self, path: &Path) -> PathBuf {
+        path.to_path_buf()
+    }
+
+    fn path_exists(&self, path: &Path) -> bool {
+        path.exists()
+    }
+
+    fn ensure_directory_exists(&self, _path: &Path) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn write_runtime_mirror_atomic(
+        &self,
+        _pool_root: &Path,
+        relative: &Path,
+        body: &str,
+    ) -> std::io::Result<()> {
+        self.files
+            .lock()
+            .expect("mirror lock")
+            .insert(relative.to_path_buf(), body.to_string());
+        Ok(())
+    }
+
+    fn read_runtime_mirror_optional(
+        &self,
+        _pool_root: &Path,
+        relative: &Path,
+    ) -> std::io::Result<Option<String>> {
+        Ok(self.body(relative))
+    }
+
+    fn read_runtime_mirror_directory(
+        &self,
+        _pool_root: &Path,
+        relative: &Path,
+    ) -> std::io::Result<Vec<(PathBuf, String)>> {
+        Ok(self
+            .files
+            .lock()
+            .expect("mirror lock")
+            .iter()
+            .filter_map(|(path, body)| {
+                path.strip_prefix(relative)
+                    .ok()
+                    .map(|path| (path.to_path_buf(), body.clone()))
+            })
+            .collect())
+    }
+
+    fn remove_runtime_mirror_file(
+        &self,
+        _pool_root: &Path,
+        relative: &Path,
+    ) -> std::io::Result<()> {
+        self.files.lock().expect("mirror lock").remove(relative);
+        Ok(())
+    }
+
+    fn compare_and_swap_runtime_mirror_file(
+        &self,
+        _pool_root: &Path,
+        relative: &Path,
+        expected_body: Option<&str>,
+        replacement_body: Option<&str>,
+    ) -> std::io::Result<bool> {
+        if self
+            .reject_next_compare_and_swap
+            .swap(false, Ordering::SeqCst)
+        {
+            return Ok(false);
+        }
+        let mut files = self.files.lock().expect("mirror lock");
+        if files.get(relative).map(String::as_str) != expected_body {
+            return Ok(false);
+        }
+        match replacement_body {
+            Some(body) => {
+                files.insert(relative.to_path_buf(), body.to_string());
+            }
+            None => {
+                files.remove(relative);
+            }
+        }
+        Ok(true)
+    }
+}
+
+fn temp_workspace(prefix: &str) -> String {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "akra-pr-validation-{prefix}-{}-{unique}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&path).expect("workspace should create");
+    path.display().to_string()
+}
+
+fn registered_record(key: &str) -> PrValidationRecord {
+    PrValidationRecord::register(
+        PrValidationRecordKey::new(key).expect("record key"),
+        PrValidationTarget::new("acme/widgets", 42).expect("target"),
+        PrValidationTargetShaSnapshot::new(
+            PrValidationCommitSha::new("1111111111111111111111111111111111111111")
+                .expect("source sha"),
+            PrValidationCommitSha::new("2222222222222222222222222222222222222222")
+                .expect("base sha"),
+        ),
+    )
+}
+
+#[test]
+fn validation_record_survives_authority_restart_and_repairs_a_missing_mirror() {
+    let workspace = temp_workspace("restart-mirror");
+    let pool_root = PathBuf::from(&workspace).join("pool");
+    let authority = SqlitePlanningAuthorityAdapter::new();
+    let runtime = ValidationMirrorRuntime::default();
+    let record = registered_record("validation/restart");
+
+    persist_pr_validation_record(&authority, &runtime, &workspace, &pool_root, None, &record)
+        .expect("initial record should persist");
+    let relative = pr_validation_record_relative_path(record.key());
+    assert_eq!(
+        runtime.body(&relative).as_deref(),
+        Some(
+            serde_json::to_string_pretty(&record)
+                .expect("record should serialize")
+                .as_str()
+        )
+    );
+
+    runtime.clear();
+    let restarted = SqlitePlanningAuthorityAdapter::new();
+    let recovered = recover_pr_validation_record_mirror(
+        &restarted,
+        &runtime,
+        &workspace,
+        &pool_root,
+        record.key(),
+    )
+    .expect("authority-backed recovery should succeed")
+    .expect("record should survive restart");
+
+    assert_eq!(recovered, record);
+    assert_eq!(
+        runtime.body(&relative),
+        Some(serde_json::to_string_pretty(&record).expect("record should serialize"))
+    );
+}
+
+#[test]
+fn validation_record_authority_compare_and_swap_rejects_a_stale_transition() {
+    let workspace = temp_workspace("authority-cas");
+    let pool_root = PathBuf::from(&workspace).join("pool");
+    let authority = SqlitePlanningAuthorityAdapter::new();
+    let runtime = ValidationMirrorRuntime::default();
+    let registered = registered_record("validation/cas");
+    let observing = registered
+        .transition(PrValidationEvent::BeginPreMergeObservation)
+        .expect("observation transition");
+    let competing = registered
+        .transition(PrValidationEvent::TargetShaChanged(
+            PrValidationTargetShaSnapshot::new(
+                PrValidationCommitSha::new("3333333333333333333333333333333333333333")
+                    .expect("replacement source sha"),
+                PrValidationCommitSha::new("4444444444444444444444444444444444444444")
+                    .expect("replacement base sha"),
+            ),
+        ))
+        .expect("competing transition");
+
+    persist_pr_validation_record(
+        &authority,
+        &runtime,
+        &workspace,
+        &pool_root,
+        None,
+        &registered,
+    )
+    .expect("registration should persist");
+    persist_pr_validation_record(
+        &authority,
+        &runtime,
+        &workspace,
+        &pool_root,
+        Some(&registered),
+        &observing,
+    )
+    .expect("first transition should persist");
+
+    let error = persist_pr_validation_record(
+        &authority,
+        &runtime,
+        &workspace,
+        &pool_root,
+        Some(&registered),
+        &competing,
+    )
+    .expect_err("stale transition must lose authority CAS");
+
+    assert!(error.contains("changed before validation transition"));
+    assert_eq!(
+        authority
+            .load_runtime_pr_validation_record(&workspace, registered.key())
+            .expect("authority record should load"),
+        Some(observing)
+    );
+}
+
+#[test]
+fn validation_record_mirror_cas_failure_rolls_back_the_exact_authority_write() {
+    let workspace = temp_workspace("mirror-cas-rollback");
+    let pool_root = PathBuf::from(&workspace).join("pool");
+    let authority = SqlitePlanningAuthorityAdapter::new();
+    let runtime = ValidationMirrorRuntime::default();
+    let record = registered_record("validation/rollback");
+    runtime.reject_next_compare_and_swap();
+
+    let error =
+        persist_pr_validation_record(&authority, &runtime, &workspace, &pool_root, None, &record)
+            .expect_err("mirror CAS failure should fail persistence");
+
+    assert!(error.contains("exact previous authority snapshot restored"));
+    assert_eq!(
+        authority
+            .load_runtime_pr_validation_record(&workspace, record.key())
+            .expect("authority should remain readable"),
+        None
+    );
+    assert_eq!(
+        runtime.body(&pr_validation_record_relative_path(record.key())),
+        None
+    );
+}

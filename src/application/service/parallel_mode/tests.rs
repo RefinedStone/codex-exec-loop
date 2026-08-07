@@ -2154,6 +2154,7 @@ fn test_parallel_runtime() -> GitParallelModeRuntimeAdapter {
 mod distributor;
 mod orchestrator_loop;
 mod pool;
+mod pr_validation_persistence;
 mod runtime_events;
 mod supervisor;
 

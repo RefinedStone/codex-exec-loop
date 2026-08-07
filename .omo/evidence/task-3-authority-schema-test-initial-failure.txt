@@ -1,0 +1,21 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s
+     Running unittests src\lib.rs (target\debug\deps\codex_exec_loop_native-45fb1a92e07ab689.exe)
+
+running 1 test
+test adapter::outbound::db::sqlite_planning_authority_adapter::tests::authority_schema_migrates_v7_through_v9_additively_and_rejects_unsupported_versions ... FAILED
+
+failures:
+
+---- adapter::outbound::db::sqlite_planning_authority_adapter::tests::authority_schema_migrates_v7_through_v9_additively_and_rejects_unsupported_versions stdout ----
+
+thread 'adapter::outbound::db::sqlite_planning_authority_adapter::tests::authority_schema_migrates_v7_through_v9_additively_and_rejects_unsupported_versions' (53492) panicked at src\adapter\outbound\db\sqlite_planning_authority_adapter\tests.rs:516:14:
+unsupported authority schema must fail closed: Connection { path: Some("C:\\Users\\dorani\\AppData\\Local\\Temp\\.akra\\tests\\projects\\codex-exec-loop-db-schema-reject-unsupported-41108-1786141794591136300-28b49e7902bf\\runtime\\planning-authority.db") }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    adapter::outbound::db::sqlite_planning_authority_adapter::tests::authority_schema_migrates_v7_through_v9_additively_and_rejects_unsupported_versions
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2741 filtered out; finished in 0.22s
+
+error: test failed, to rerun pass `--lib`

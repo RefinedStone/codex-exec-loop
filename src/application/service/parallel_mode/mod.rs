@@ -23,7 +23,8 @@ use crate::domain::parallel_mode::{
     ParallelModeOrchestratorStateMachine, ParallelModePoolResetPolicy, ParallelModePoolResetReport,
     ParallelModePoolSlotState, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
     ParallelModeRuntimeEvent, ParallelModeRuntimeEventsSnapshot, ParallelModeSlotLeaseSnapshot,
-    ParallelModeSlotLeaseState, ParallelModeSupervisorSnapshot,
+    ParallelModeSlotLeaseState, ParallelModeSupervisorSnapshot, PrValidationRecord,
+    PrValidationRecordKey,
 };
 use crate::domain::planning::PlanningOfficialCompletionRefreshContract;
 use crate::domain::planning::PriorityQueueTask;
@@ -40,6 +41,7 @@ mod git_sequence;
 mod orchestration;
 mod orchestrator_loop;
 mod pool;
+mod pr_validation_store;
 mod readiness;
 mod session_detail;
 mod slot_lifecycle;
@@ -94,6 +96,11 @@ use self::pool::{
 use self::pool::{
     install_before_normalization_atomic_rename_hook,
     install_before_normalization_staging_provision_hook,
+};
+#[cfg(test)]
+use self::pr_validation_store::pr_validation_record_relative_path;
+use self::pr_validation_store::{
+    persist_pr_validation_record, recover_pr_validation_record_mirror,
 };
 use self::readiness::{
     blocked_prerequisite_capability, command_succeeds_with_runtime, inspect_authority_store,
@@ -418,6 +425,38 @@ impl ParallelModeService {
     ) -> Self {
         self.parallel_agent_profile_service = Some(service);
         self
+    }
+
+    pub fn persist_pr_validation_record(
+        &self,
+        workspace_dir: &str,
+        pool_root: &Path,
+        expected: Option<&PrValidationRecord>,
+        replacement: &PrValidationRecord,
+    ) -> Result<(), String> {
+        persist_pr_validation_record(
+            self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
+            workspace_dir,
+            pool_root,
+            expected,
+            replacement,
+        )
+    }
+
+    pub fn recover_pr_validation_record(
+        &self,
+        workspace_dir: &str,
+        pool_root: &Path,
+        record_key: &PrValidationRecordKey,
+    ) -> Result<Option<PrValidationRecord>, String> {
+        recover_pr_validation_record_mirror(
+            self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
+            workspace_dir,
+            pool_root,
+            record_key,
+        )
     }
 
     fn fetch_fresh_pool_integration_target(

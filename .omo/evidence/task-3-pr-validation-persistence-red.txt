@@ -1,0 +1,135 @@
+   Compiling codex-exec-loop-native v1.3.5 (C:\dev\akra-queue\akra-async-pr-ci-validator)
+error[E0432]: unresolved imports `super::super::persist_pr_validation_record`, `super::super::pr_validation_record_relative_path`, `super::super::recover_pr_validation_record_mirror`
+  --> src\application\service\parallel_mode\tests\pr_validation_persistence.rs:16:5
+   |
+16 |     persist_pr_validation_record, pr_validation_record_relative_path,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `pr_validation_record_relative_path` in `application::service::parallel_mode`
+   |     |
+   |     no `persist_pr_validation_record` in `application::service::parallel_mode`
+17 |     recover_pr_validation_record_mirror,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `recover_pr_validation_record_mirror` in `application::service::parallel_mode`
+
+warning: unused import: `crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort`
+ --> src\application\service\parallel_mode\tests\pr_validation_persistence.rs:9:5
+  |
+9 | use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+error[E0277]: the trait bound `PrValidationRecord: serde::Serialize` is not satisfied
+    --> src\application\service\parallel_mode\tests\pr_validation_persistence.rs:220:42
+     |
+ 220 |             serde_json::to_string_pretty(&record)
+     |             ---------------------------- ^^^^^^^ unsatisfied trait bound
+     |             |
+     |             required by a bound introduced by this call
+     |
+help: the trait `Serialize` is not implemented for `PrValidationRecord`
+    --> src\domain\parallel_mode\pr_validation.rs:362:1
+     |
+ 362 | pub struct PrValidationRecord {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: for local types consider adding `#[derive(serde::Serialize)]` to your `PrValidationRecord` type
+     = note: for types from other crates check whether the crate offers a `serde` feature flag
+     = help: the following other types implement trait `Serialize`:
+               &'a T
+               &'a mut T
+               ()
+               (T,)
+               (T0, T1)
+               (T0, T1, T2)
+               (T0, T1, T2, T3)
+               (T0, T1, T2, T3, T4)
+             and 246 others
+note: required by a bound in `to_string_pretty`
+    --> C:\Users\dorani\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_json-1.0.149\src\ser.rs:2266:17
+     |
+2264 | pub fn to_string_pretty<T>(value: &T) -> Result<String>
+     |        ---------------- required by a bound in this function
+2265 | where
+2266 |     T: ?Sized + Serialize,
+     |                 ^^^^^^^^^ required by this bound in `to_string_pretty`
+
+error[E0277]: the trait bound `PrValidationRecord: serde::Serialize` is not satisfied
+    --> src\application\service\parallel_mode\tests\pr_validation_persistence.rs:241:43
+     |
+ 241 |         Some(serde_json::to_string_pretty(&record).expect("record should serialize"))
+     |              ---------------------------- ^^^^^^^ unsatisfied trait bound
+     |              |
+     |              required by a bound introduced by this call
+     |
+help: the trait `Serialize` is not implemented for `PrValidationRecord`
+    --> src\domain\parallel_mode\pr_validation.rs:362:1
+     |
+ 362 | pub struct PrValidationRecord {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: for local types consider adding `#[derive(serde::Serialize)]` to your `PrValidationRecord` type
+     = note: for types from other crates check whether the crate offers a `serde` feature flag
+     = help: the following other types implement trait `Serialize`:
+               &'a T
+               &'a mut T
+               ()
+               (T,)
+               (T0, T1)
+               (T0, T1, T2)
+               (T0, T1, T2, T3)
+               (T0, T1, T2, T3, T4)
+             and 246 others
+note: required by a bound in `to_string_pretty`
+    --> C:\Users\dorani\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_json-1.0.149\src\ser.rs:2266:17
+     |
+2264 | pub fn to_string_pretty<T>(value: &T) -> Result<String>
+     |        ---------------- required by a bound in this function
+2265 | where
+2266 |     T: ?Sized + Serialize,
+     |                 ^^^^^^^^^ required by this bound in `to_string_pretty`
+
+error[E0599]: no method named `load_runtime_pr_validation_record` found for struct `sqlite_planning_authority_adapter::SqlitePlanningAuthorityAdapter` in the current scope
+   --> src\application\service\parallel_mode\tests\pr_validation_persistence.rs:298:14
+    |
+297 | /         authority
+298 | |             .load_runtime_pr_validation_record(&workspace, registered.key())
+    | |_____________-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: src\adapter\outbound\db\sqlite_planning_authority_adapter.rs:115:1
+    |
+115 |   pub struct SqlitePlanningAuthorityAdapter;
+    |   ----------------------------------------- method `load_runtime_pr_validation_record` not found for this struct
+    |
+help: there is a method `load_runtime_projections` with a similar name, but with different arguments
+   --> src\application\port\outbound\planning_authority_port.rs:536:5
+    |
+536 | /     fn load_runtime_projections(
+537 | |         &self,
+538 | |         // Authority namespace to read.
+539 | |         workspace_dir: &str,
+540 | |     ) -> Result<PlanningAuthorityRuntimeProjectionSnapshot>;
+    | |____________________________________________________________^
+
+error[E0599]: no method named `load_runtime_pr_validation_record` found for struct `sqlite_planning_authority_adapter::SqlitePlanningAuthorityAdapter` in the current scope
+   --> src\application\service\parallel_mode\tests\pr_validation_persistence.rs:326:14
+    |
+325 | /         authority
+326 | |             .load_runtime_pr_validation_record(&workspace, record.key())
+    | |_____________-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: src\adapter\outbound\db\sqlite_planning_authority_adapter.rs:115:1
+    |
+115 |   pub struct SqlitePlanningAuthorityAdapter;
+    |   ----------------------------------------- method `load_runtime_pr_validation_record` not found for this struct
+    |
+help: there is a method `load_runtime_projections` with a similar name, but with different arguments
+   --> src\application\port\outbound\planning_authority_port.rs:536:5
+    |
+536 | /     fn load_runtime_projections(
+537 | |         &self,
+538 | |         // Authority namespace to read.
+539 | |         workspace_dir: &str,
+540 | |     ) -> Result<PlanningAuthorityRuntimeProjectionSnapshot>;
+    | |____________________________________________________________^
+
+Some errors have detailed explanations: E0277, E0432, E0599.
+For more information about an error, try `rustc --explain E0277`.
+warning: `codex-exec-loop-native` (lib test) generated 1 warning
+error: could not compile `codex-exec-loop-native` (lib test) due to 5 previous errors; 1 warning emitted

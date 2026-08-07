@@ -1,0 +1,8 @@
+   Compiling codex-exec-loop-native v1.3.5 (C:\dev\akra-queue\akra-async-pr-ci-validator)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 24.17s
+     Running unittests src\lib.rs (target\debug\deps\codex_exec_loop_native-45fb1a92e07ab689.exe)
+
+running 1 test
+test adapter::outbound::db::sqlite_planning_authority_adapter::tests::authority_schema_migrates_v7_through_v10_additively_and_rejects_unsupported_versions ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2741 filtered out; finished in 0.33s
