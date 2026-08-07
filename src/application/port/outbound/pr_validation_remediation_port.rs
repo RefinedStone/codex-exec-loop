@@ -36,5 +36,10 @@ pub struct PrValidationRemediationRequest {
 /// Write boundary for handing actionable validation findings to the task/remediation runtime.
 /// Idempotency belongs to this boundary rather than an in-memory service cache.
 pub trait PrValidationRemediationPort: Send + Sync {
-    fn request_remediation(&self, request: &PrValidationRemediationRequest) -> Result<()>;
+    /// Returns the durable ordinary planning-task identity admitted for this request. Replays of
+    /// the same idempotency key must return the same identity.
+    fn request_remediation(
+        &self,
+        request: &PrValidationRemediationRequest,
+    ) -> Result<PrValidationRecordKey>;
 }

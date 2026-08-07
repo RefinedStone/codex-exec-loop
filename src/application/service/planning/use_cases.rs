@@ -34,9 +34,9 @@ use super::runtime::policy::PlanningAutoFollowBlockReason;
 use super::runtime::prompt::{PlanningRuntimeProjection, PlanningRuntimeWorkspaceStatus};
 use super::shared::authority_mutation_guard::with_task_mutation_guard;
 use super::task_mutation::{
-    PlanningQueueAuthoritySnapshot, PlanningQueueCancellationRequest,
-    PlanningTaskMutationCommitResult, PlanningTaskMutationService,
-    validate_queue_cancellation_request,
+    PlanningIdempotentTaskAdmission, PlanningQueueAuthoritySnapshot,
+    PlanningQueueCancellationRequest, PlanningTaskCreateInput, PlanningTaskMutationCommitResult,
+    PlanningTaskMutationService, validate_queue_cancellation_request,
 };
 use super::task_tool::PlanningTaskToolService;
 use super::worker::orchestration::{
@@ -107,6 +107,16 @@ impl PlanningQueueUseCases {
             authority,
             runtime_facade,
         }
+    }
+
+    pub fn admit_system_task_once(
+        &self,
+        workspace_directory: &str,
+        idempotency_key: &str,
+        input: PlanningTaskCreateInput,
+    ) -> anyhow::Result<PlanningIdempotentTaskAdmission> {
+        self.task_mutation
+            .admit_system_task_once(workspace_directory, idempotency_key, input)
     }
 
     pub fn load_authority_snapshot(

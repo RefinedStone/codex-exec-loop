@@ -706,6 +706,15 @@ pub trait PlanningAuthorityPort: ParallelModeRuntimeEventLogPort + Send + Sync {
         Ok(None)
     }
 
+    // Resolve the validation record correlated to one ordinary remediation task.
+    fn load_runtime_pr_validation_record_for_remediation(
+        &self,
+        _workspace_dir: &str,
+        _task_id: &str,
+    ) -> Result<Option<PrValidationRecord>> {
+        Ok(None)
+    }
+
     // Advance or remove a validation record only when the exact prior snapshot still owns the key.
     fn compare_and_swap_runtime_pr_validation_record(
         &self,

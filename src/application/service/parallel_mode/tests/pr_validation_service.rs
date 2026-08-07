@@ -53,7 +53,10 @@ struct RemediationPort {
 }
 
 impl PrValidationRemediationPort for RemediationPort {
-    fn request_remediation(&self, request: &PrValidationRemediationRequest) -> Result<()> {
+    fn request_remediation(
+        &self,
+        request: &PrValidationRemediationRequest,
+    ) -> Result<PrValidationRecordKey> {
         let mut unique = self.unique.lock().unwrap();
         if unique.insert(request.idempotency_key.as_str().to_string()) {
             self.deliveries.lock().unwrap().push(request.clone());
@@ -62,7 +65,10 @@ impl PrValidationRemediationPort for RemediationPort {
         if let Some(after_delivery) = self.after_delivery.lock().unwrap().take() {
             after_delivery();
         }
-        Ok(())
+        Ok(
+            PrValidationRecordKey::new(format!("task-{}", request.idempotency_key.as_str()))
+                .unwrap(),
+        )
     }
 }
 
@@ -220,6 +226,92 @@ fn replayed_event_and_stale_update_admit_no_duplicate() {
     assert_eq!(stale, PrValidationPollResult::StaleDeliveryIgnored);
     assert_eq!(remediation.deliveries.lock().unwrap().len(), 1);
     assert_eq!(observation.requests.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn remediation_uses_the_ordinary_task_identity_and_lifecycle_transitions_are_replay_safe() {
+    let (repo, observation, remediation) = setup(
+        "validation-remediation-lifecycle",
+        vec![snapshot(HEAD_A, GithubValidationRunStatus::Failed)],
+    );
+    let service = test_parallel_mode_service();
+    service
+        .persist_pr_validation_record(
+            &repo.workspace_dir(),
+            &repo.pool_root(),
+            None,
+            &registered_record(),
+        )
+        .unwrap();
+
+    service
+        .poll_pr_validation(&observation, &remediation, request(&repo, 1, HEAD_A))
+        .unwrap();
+    let delivery = remediation.deliveries.lock().unwrap()[0].clone();
+    let task_id = format!("task-{}", delivery.idempotency_key.as_str());
+    let queued = service
+        .recover_pr_validation_record(
+            &repo.workspace_dir(),
+            &repo.pool_root(),
+            &PrValidationRecordKey::new("acme/widgets#42").unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+    let finding_key = queued.finding_keys().into_iter().next().unwrap();
+    assert_eq!(
+        queued
+            .remediation_for(&finding_key)
+            .unwrap()
+            .remediation_key()
+            .as_str(),
+        task_id
+    );
+
+    assert!(
+        service
+            .transition_pr_validation_remediation_started(
+                &repo.workspace_dir(),
+                &repo.pool_root(),
+                &task_id,
+            )
+            .unwrap()
+    );
+    assert!(
+        !service
+            .transition_pr_validation_remediation_started(
+                &repo.workspace_dir(),
+                &repo.pool_root(),
+                &task_id,
+            )
+            .unwrap()
+    );
+    assert!(
+        service
+            .transition_pr_validation_remediation_completed(
+                &repo.workspace_dir(),
+                &repo.pool_root(),
+                &task_id,
+            )
+            .unwrap()
+    );
+    assert!(
+        !service
+            .transition_pr_validation_remediation_completed(
+                &repo.workspace_dir(),
+                &repo.pool_root(),
+                &task_id,
+            )
+            .unwrap()
+    );
+    let completed = service
+        .recover_pr_validation_record(
+            &repo.workspace_dir(),
+            &repo.pool_root(),
+            &PrValidationRecordKey::new("acme/widgets#42").unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(completed.phase(), PrValidationPhase::PreMergeObservation);
 }
 
 #[test]

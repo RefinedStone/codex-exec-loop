@@ -79,6 +79,10 @@ impl PrValidationTargetShaSnapshot {
     pub fn source_sha(&self) -> &PrValidationCommitSha {
         &self.source_sha
     }
+
+    pub fn base_sha(&self) -> &PrValidationCommitSha {
+        &self.base_sha
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -210,6 +214,14 @@ impl PrValidationRemediationCorrelation {
             finding_key,
             remediation_key,
         }
+    }
+
+    pub fn finding_key(&self) -> &PrValidationFindingKey {
+        &self.finding_key
+    }
+
+    pub fn remediation_key(&self) -> &PrValidationRecordKey {
+        &self.remediation_key
     }
 }
 
@@ -511,6 +523,15 @@ impl PrValidationRecord {
         finding_key: &PrValidationFindingKey,
     ) -> Option<&PrValidationRemediationCorrelation> {
         self.remediations.get(finding_key)
+    }
+
+    pub fn remediation_for_task(
+        &self,
+        task_id: &str,
+    ) -> Option<&PrValidationRemediationCorrelation> {
+        self.remediations
+            .values()
+            .find(|correlation| correlation.remediation_key.as_str() == task_id)
     }
 
     pub fn observation_revision(&self) -> u64 {

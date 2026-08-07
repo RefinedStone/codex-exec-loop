@@ -1202,6 +1202,14 @@ fn distributor_cleanup_integrated_slot(
             );
         };
 
+    super::super::pr_validation::transition_pr_validation_remediation_with_ports(
+        planning_authority,
+        runtime,
+        &resolution.context.repo_root,
+        &resolution.context.pool_root,
+        &record.task_id,
+        true,
+    )?;
     claim_permit.renew("slot cleanup")?;
     if !cleanup_slot_to_ref_locked(
         planning_authority,
