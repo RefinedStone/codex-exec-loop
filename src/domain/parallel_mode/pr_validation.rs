@@ -602,13 +602,13 @@ impl PrValidationRecord {
                 });
             }
         }
-        if let PrValidationEvent::FindingObserved(finding) = &event {
-            if finding.target_sha != *next.target_shas.source_sha() {
-                return Err(PrValidationTransitionRejection::TargetShaMismatch {
-                    expected: next.target_shas.source_sha().clone(),
-                    observed: finding.target_sha.clone(),
-                });
-            }
+        if let PrValidationEvent::FindingObserved(finding) = &event
+            && finding.target_sha != *next.target_shas.source_sha()
+        {
+            return Err(PrValidationTransitionRejection::TargetShaMismatch {
+                expected: next.target_shas.source_sha().clone(),
+                observed: finding.target_sha.clone(),
+            });
         }
 
         match event {
@@ -658,7 +658,11 @@ impl PrValidationRecord {
                     && next.active_remediation.as_ref() == Some(&finding_key) =>
             {
                 next.active_remediation = None;
-                next.phase = PrValidationPhase::PreMergeObservation;
+                next.phase = if next.merge_sha.is_some() {
+                    PrValidationPhase::PostMergeObservation
+                } else {
+                    PrValidationPhase::PreMergeObservation
+                };
             }
             PrValidationEvent::TargetShaChanged(target_shas)
                 if next.phase != PrValidationPhase::Settled =>

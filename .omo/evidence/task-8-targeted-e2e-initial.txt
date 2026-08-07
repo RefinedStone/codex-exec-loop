@@ -1,0 +1,21 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running unittests src\lib.rs (target\debug\deps\codex_exec_loop_native-45fb1a92e07ab689.exe)
+
+running 2 tests
+test application::service::parallel_mode::tests::pr_validation_e2e::tests::unknown_provider_and_late_event_cannot_false_settle ... ok
+
+thread 'application::service::parallel_mode::tests::pr_validation_e2e::tests::delivery_remediation_merge_and_post_merge_settle' (35900) panicked at src\application\service\parallel_mode\tests\pr_validation_e2e.rs:297:14:
+called `Result::unwrap()` on an `Err` value: "pool root could not be created before mutation lock: trusted Windows executable ACL grants mutation rights to another principal: \\\\?\\C:\\Users\\dorani\\AppData\\Local\\Temp\\parallel-mode-pr-validation-e2e-happy-1786145742642886800"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test application::service::parallel_mode::tests::pr_validation_e2e::tests::delivery_remediation_merge_and_post_merge_settle ... FAILED
+
+failures:
+
+failures:
+    application::service::parallel_mode::tests::pr_validation_e2e::tests::delivery_remediation_merge_and_post_merge_settle
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 2758 filtered out; finished in 1.05s
+
+error: test failed, to rerun pass `--lib`
+
+EXIT_CODE=101
