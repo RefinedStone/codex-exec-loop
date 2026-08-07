@@ -1,15 +1,21 @@
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct PrValidationRecordKey(String);
 
 impl PrValidationRecordKey {
     pub fn new(value: impl Into<String>) -> Result<Self, String> {
         non_empty(value, "PR validation record key").map(Self)
     }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrValidationTarget {
     repository: String,
     pull_request_number: u64,
@@ -28,7 +34,7 @@ impl PrValidationTarget {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct PrValidationCommitSha(String);
 
 impl PrValidationCommitSha {
@@ -48,7 +54,7 @@ impl PrValidationCommitSha {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrValidationTargetShaSnapshot {
     source_sha: PrValidationCommitSha,
     base_sha: PrValidationCommitSha,
@@ -67,7 +73,7 @@ impl PrValidationTargetShaSnapshot {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct PrValidationFindingSource(String);
 
 impl PrValidationFindingSource {
@@ -76,7 +82,7 @@ impl PrValidationFindingSource {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct PrValidationFindingKey {
     source: PrValidationFindingSource,
     provider_event_id: String,
@@ -94,7 +100,7 @@ impl PrValidationFindingKey {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrValidationFinding {
     key: PrValidationFindingKey,
     target_sha: PrValidationCommitSha,
@@ -119,7 +125,7 @@ impl PrValidationFinding {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrValidationRemediationCorrelation {
     finding_key: PrValidationFindingKey,
     remediation_key: PrValidationRecordKey,
@@ -137,7 +143,7 @@ impl PrValidationRemediationCorrelation {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PrValidationPhase {
     Registered,
     PreMergeObservation,
@@ -147,19 +153,19 @@ pub enum PrValidationPhase {
     Settled,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum PrValidationCheckKind {
     CheckRun,
     WorkflowRun,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct PrValidationRequiredCheckKey {
     kind: PrValidationCheckKind,
     name: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrValidationRequiredCheck {
     key: PrValidationRequiredCheckKey,
     terminal: bool,
@@ -185,7 +191,7 @@ impl PrValidationRequiredCheck {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct PrValidationProviderKey(String);
 
 impl PrValidationProviderKey {
@@ -194,14 +200,14 @@ impl PrValidationProviderKey {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 enum PrValidationProviderCompletionState {
     Pending,
     Watchable,
     Terminal,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrValidationProviderCompletion {
     provider: PrValidationProviderKey,
     state: PrValidationProviderCompletionState,
@@ -230,14 +236,14 @@ impl PrValidationProviderCompletion {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PrValidationCatchUpState {
     NotObserved,
     UnseenRelevantEvents,
     NoUnseenRelevantEvents,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PrValidationCompletionBlocker {
     ProviderNotTerminal(PrValidationProviderKey),
     ProviderHasNoCompletionContract(PrValidationProviderKey),
@@ -246,7 +252,7 @@ pub enum PrValidationCompletionBlocker {
     FinalCatchUpHasUnseenRelevantEvents,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrValidationCompletion {
     target_sha: PrValidationCommitSha,
     providers: Vec<PrValidationProviderCompletion>,
@@ -309,12 +315,12 @@ impl PrValidationCompletion {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PrValidationTerminalReason {
     AllConfiguredSourcesComplete,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PrValidationEvent {
     BeginPreMergeObservation,
     FindingObserved(PrValidationFinding),
@@ -343,7 +349,7 @@ impl PrValidationEvent {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PrValidationTransitionRejection {
     InvalidTransition {
         phase: PrValidationPhase,
@@ -358,7 +364,7 @@ pub enum PrValidationTransitionRejection {
     CompletionIncomplete(Vec<PrValidationCompletionBlocker>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrValidationRecord {
     key: PrValidationRecordKey,
     target: PrValidationTarget,

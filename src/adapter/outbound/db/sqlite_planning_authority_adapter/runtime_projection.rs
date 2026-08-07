@@ -26,7 +26,7 @@ use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeDispatchCommandSnapshot,
     ParallelModeDispatchCommandState, ParallelModePoolResetReport, ParallelModeRuntimeEventEntry,
     ParallelModeRuntimeEventsSnapshot, ParallelModeSlotLeaseSnapshot,
-    ParallelModeTaskDispatchBlockSnapshot,
+    ParallelModeTaskDispatchBlockSnapshot, PrValidationRecord, PrValidationRecordKey,
 };
 
 // metadata upsert helper는 store 모듈의 스키마 관리와 같은 규칙을 공유한다.
@@ -1412,6 +1412,159 @@ impl SqlitePlanningAuthorityAdapter {
             .commit()
             .context("failed to close runtime event read snapshot")?;
         Ok(snapshot)
+    }
+
+    pub(crate) fn load_runtime_pr_validation_record(
+        workspace_dir: &str,
+        record_key: &PrValidationRecordKey,
+    ) -> Result<Option<PrValidationRecord>> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let connection = open_authority_connection(&location)?;
+        let content = connection
+            .query_row(
+                "SELECT content FROM runtime_pr_validation_records WHERE record_key = ?1",
+                params![record_key.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .with_context(|| {
+                format!(
+                    "failed to load runtime PR validation record `{}`",
+                    record_key.as_str()
+                )
+            })?;
+        let Some(content) = content else {
+            return Ok(None);
+        };
+        let record = serde_json::from_str::<PrValidationRecord>(&content).with_context(|| {
+            format!(
+                "failed to deserialize runtime PR validation record `{}`",
+                record_key.as_str()
+            )
+        })?;
+        if record.key() != record_key {
+            anyhow::bail!(
+                "runtime PR validation row `{}` contains record key `{}`",
+                record_key.as_str(),
+                record.key().as_str()
+            );
+        }
+        Ok(Some(record))
+    }
+
+    pub(crate) fn compare_and_swap_runtime_pr_validation_record(
+        workspace_dir: &str,
+        record_key: &PrValidationRecordKey,
+        expected: Option<&PrValidationRecord>,
+        replacement: Option<&PrValidationRecord>,
+    ) -> Result<bool> {
+        if expected.is_some_and(|record| record.key() != record_key)
+            || replacement.is_some_and(|record| record.key() != record_key)
+        {
+            anyhow::bail!(
+                "runtime PR validation compare-and-swap cannot change record identity `{}`",
+                record_key.as_str()
+            );
+        }
+        let expected_json = expected
+            .map(serde_json::to_string)
+            .transpose()
+            .context("failed to serialize expected runtime PR validation record")?;
+        let replacement_json = replacement
+            .map(serde_json::to_string)
+            .transpose()
+            .context("failed to serialize replacement runtime PR validation record")?;
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .context("failed to open runtime PR validation compare-and-swap transaction")?;
+        let current_json = transaction
+            .query_row(
+                "SELECT content FROM runtime_pr_validation_records WHERE record_key = ?1",
+                params![record_key.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .with_context(|| {
+                format!(
+                    "failed to inspect runtime PR validation record `{}`",
+                    record_key.as_str()
+                )
+            })?;
+        if current_json != expected_json {
+            transaction
+                .commit()
+                .context("failed to close unmatched runtime PR validation transaction")?;
+            return Ok(false);
+        }
+
+        ensure_no_admin_authority_mutation_guard(&transaction, "PR validation record", None)?;
+        upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
+        match replacement_json.as_deref() {
+            Some(content) => {
+                transaction
+                    .execute(
+                        "INSERT INTO runtime_pr_validation_records (record_key, updated_at, content)
+                         VALUES (?1, ?2, ?3)
+                         ON CONFLICT(record_key) DO UPDATE
+                         SET updated_at = excluded.updated_at, content = excluded.content",
+                        params![record_key.as_str(), Utc::now().to_rfc3339(), content],
+                    )
+                    .with_context(|| {
+                        format!(
+                            "failed to persist runtime PR validation record `{}`",
+                            record_key.as_str()
+                        )
+                    })?;
+            }
+            None => {
+                transaction
+                    .execute(
+                        "DELETE FROM runtime_pr_validation_records WHERE record_key = ?1",
+                        params![record_key.as_str()],
+                    )
+                    .with_context(|| {
+                        format!(
+                            "failed to remove runtime PR validation record `{}`",
+                            record_key.as_str()
+                        )
+                    })?;
+            }
+        }
+        let (event_kind, summary) = if let Some(record) = replacement {
+            (
+                "pr_validation_record_replaced_if_matches",
+                format!(
+                    "runtime PR validation record stored / key: {} / phase: {:?}",
+                    record_key.as_str(),
+                    record.phase()
+                ),
+            )
+        } else {
+            (
+                "pr_validation_record_removed_if_matches",
+                format!(
+                    "runtime PR validation record removed / key: {}",
+                    record_key.as_str()
+                ),
+            )
+        };
+        append_runtime_event(
+            &transaction,
+            event_kind,
+            "pr_validation_record",
+            record_key.as_str(),
+            &summary,
+            replacement_json
+                .as_deref()
+                .or(expected_json.as_deref())
+                .unwrap_or("{}"),
+        )?;
+        transaction
+            .commit()
+            .context("failed to commit runtime PR validation compare-and-swap transaction")?;
+        Ok(true)
     }
 
     // parallel mode의 slot lease snapshot을 authority DB의 현재 런타임 투영으로 저장한다.

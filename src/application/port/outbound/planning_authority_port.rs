@@ -19,7 +19,8 @@ use crate::domain::parallel_mode::ParallelModeRuntimeEventsSnapshot;
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeDispatchCommandSnapshot,
     ParallelModeDistributorQueueItem, ParallelModePoolResetReport, ParallelModeQueueItemState,
-    ParallelModeSlotLeaseSnapshot, ParallelModeTaskDispatchBlockSnapshot,
+    ParallelModeSlotLeaseSnapshot, ParallelModeTaskDispatchBlockSnapshot, PrValidationRecord,
+    PrValidationRecordKey,
 };
 #[cfg(test)]
 use crate::domain::planning::PlanningAuthorityShadowStoreSyncState;
@@ -695,6 +696,28 @@ pub trait PlanningAuthorityPort: ParallelModeRuntimeEventLogPort + Send + Sync {
         // Queue record containing branch, commit, PR, state, and recovery metadata.
         record: &PlanningAuthorityDistributorQueueRecord,
     ) -> Result<()>;
+
+    // Load one authoritative PR validation record across process/restart boundaries.
+    fn load_runtime_pr_validation_record(
+        &self,
+        _workspace_dir: &str,
+        _record_key: &PrValidationRecordKey,
+    ) -> Result<Option<PrValidationRecord>> {
+        Ok(None)
+    }
+
+    // Advance or remove a validation record only when the exact prior snapshot still owns the key.
+    fn compare_and_swap_runtime_pr_validation_record(
+        &self,
+        _workspace_dir: &str,
+        _record_key: &PrValidationRecordKey,
+        _expected: Option<&PrValidationRecord>,
+        _replacement: Option<&PrValidationRecord>,
+    ) -> Result<bool> {
+        Err(anyhow!(
+            "PR validation authority compare-and-swap is unsupported by this adapter"
+        ))
+    }
 }
 
 #[derive(Default)]

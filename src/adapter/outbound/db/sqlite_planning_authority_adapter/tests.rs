@@ -414,8 +414,8 @@ fn authority_connection(workspace_dir: &str) -> rusqlite::Connection {
 }
 
 #[test]
-fn authority_schema_migrates_v7_through_v9_additively_and_rejects_unsupported_versions() {
-    for legacy_version in [7, 8, 9] {
+fn authority_schema_migrates_v7_through_v10_additively_and_rejects_unsupported_versions() {
+    for legacy_version in [7, 8, 9, 10] {
         let workspace_dir = temp_workspace(&format!("schema-migrate-v{legacy_version}"));
         let location = SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
             &workspace_dir,
@@ -453,7 +453,7 @@ fn authority_schema_migrates_v7_through_v9_additively_and_rejects_unsupported_ve
                 |row| row.get(0),
             )
             .expect("migrated version should load");
-        assert_eq!(version, "10");
+        assert_eq!(version, "11");
         assert_eq!(
             migrated
                 .query_row(
@@ -496,9 +496,22 @@ fn authority_schema_migrates_v7_through_v9_additively_and_rejects_unsupported_ve
                 "{object_type} `{object_name}` should be recreated from v{legacy_version}"
             );
         }
+        assert!(
+            migrated
+                .query_row(
+                    "SELECT 1 FROM sqlite_master
+                     WHERE type = 'table' AND name = 'runtime_pr_validation_records'",
+                    [],
+                    |_| Ok(()),
+                )
+                .optional()
+                .expect("PR validation authority table should inspect")
+                .is_some(),
+            "PR validation authority table should be created from v{legacy_version}"
+        );
     }
 
-    for unsupported_version in ["6", "11", "not-a-version"] {
+    for unsupported_version in ["6", "12", "not-a-version"] {
         let workspace_dir = temp_workspace("schema-reject-unsupported");
         let location = SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
             &workspace_dir,

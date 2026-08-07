@@ -1,0 +1,9 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running unittests src\lib.rs (target\debug\deps\codex_exec_loop_native-45fb1a92e07ab689.exe)
+
+running 3 tests
+test application::service::parallel_mode::tests::pr_validation_persistence::validation_record_survives_authority_restart_and_repairs_a_missing_mirror ... ok
+test application::service::parallel_mode::tests::pr_validation_persistence::validation_record_mirror_cas_failure_rolls_back_the_exact_authority_write ... ok
+test application::service::parallel_mode::tests::pr_validation_persistence::validation_record_authority_compare_and_swap_rejects_a_stale_transition ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 2739 filtered out; finished in 0.17s

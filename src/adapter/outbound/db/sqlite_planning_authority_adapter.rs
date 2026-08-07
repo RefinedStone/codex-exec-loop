@@ -42,7 +42,7 @@ use crate::application::port::outbound::review_center_repository_port::{
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeDispatchCommandSnapshot,
     ParallelModePoolResetReport, ParallelModeRuntimeEventsSnapshot, ParallelModeSlotLeaseSnapshot,
-    ParallelModeTaskDispatchBlockSnapshot,
+    ParallelModeTaskDispatchBlockSnapshot, PrValidationRecord, PrValidationRecordKey,
 };
 // app-server prompt 입출력 trace를 authority DB runtime 영역에 저장하는 모듈이다.
 mod app_server_prompt_log;
@@ -77,7 +77,7 @@ use crate::domain::planning::{
 };
 
 // authority DB schema가 바뀔 때 올리는 adapter 내부 schema marker이다.
-const AUTHORITY_STORE_SCHEMA_VERSION: i64 = 10;
+const AUTHORITY_STORE_SCHEMA_VERSION: i64 = 11;
 const MINIMUM_MIGRATABLE_AUTHORITY_STORE_SCHEMA_VERSION: i64 = 7;
 // metadata에 저장되는 store mode 값으로, 다른 DB 파일과 planning authority store를 구분한다.
 const AUTHORITY_STORE_MODE: &str = "authority-store";
@@ -1448,6 +1448,29 @@ impl PlanningAuthorityPort for SqlitePlanningAuthorityAdapter {
         record: &PlanningAuthorityDistributorQueueRecord,
     ) -> Result<()> {
         Self::upsert_runtime_distributor_queue_record(workspace_dir, record)
+    }
+
+    fn load_runtime_pr_validation_record(
+        &self,
+        workspace_dir: &str,
+        record_key: &PrValidationRecordKey,
+    ) -> Result<Option<PrValidationRecord>> {
+        Self::load_runtime_pr_validation_record(workspace_dir, record_key)
+    }
+
+    fn compare_and_swap_runtime_pr_validation_record(
+        &self,
+        workspace_dir: &str,
+        record_key: &PrValidationRecordKey,
+        expected: Option<&PrValidationRecord>,
+        replacement: Option<&PrValidationRecord>,
+    ) -> Result<bool> {
+        Self::compare_and_swap_runtime_pr_validation_record(
+            workspace_dir,
+            record_key,
+            expected,
+            replacement,
+        )
     }
 }
 

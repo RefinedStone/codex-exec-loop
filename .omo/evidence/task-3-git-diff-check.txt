@@ -1,0 +1,2 @@
+warning: in the working copy of 'src/adapter/outbound/db/sqlite_planning_authority_adapter/runtime_projection.rs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/application/service/parallel_mode/mod.rs', LF will be replaced by CRLF the next time Git touches it

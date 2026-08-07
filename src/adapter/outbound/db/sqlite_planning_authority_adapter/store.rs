@@ -296,6 +296,12 @@ pub(super) fn ensure_schema(
                 content TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS runtime_pr_validation_records (
+                record_key TEXT PRIMARY KEY,
+                updated_at TEXT NOT NULL,
+                content TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS runtime_dispatch_commands (
                 command_id TEXT PRIMARY KEY,
                 command_kind TEXT NOT NULL,
