@@ -1452,6 +1452,34 @@ impl SqlitePlanningAuthorityAdapter {
         Ok(Some(record))
     }
 
+    pub(crate) fn load_runtime_pr_validation_record_for_pr(
+        workspace_dir: &str,
+        pull_request_number: u64,
+    ) -> Result<Option<PrValidationRecord>> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let connection = open_authority_connection(&location)?;
+        let mut statement = connection
+            .prepare("SELECT content FROM runtime_pr_validation_records ORDER BY record_key")
+            .context("failed to prepare runtime PR validation operator lookup")?;
+        let contents = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .context("failed to query runtime PR validation operator records")?;
+        let mut matched = None;
+        for content in contents {
+            let record = serde_json::from_str::<PrValidationRecord>(&content?)
+                .context("failed to deserialize runtime PR validation operator record")?;
+            if record.target().pull_request_number() == pull_request_number {
+                if matched.is_some() {
+                    anyhow::bail!(
+                        "pull request #{pull_request_number} is correlated to multiple PR validation records"
+                    );
+                }
+                matched = Some(record);
+            }
+        }
+        Ok(matched)
+    }
+
     pub(crate) fn load_runtime_pr_validation_record_for_remediation(
         workspace_dir: &str,
         task_id: &str,

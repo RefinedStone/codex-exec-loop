@@ -24,6 +24,7 @@ use crate::application::port::inbound::planning_admin_port::PlanningAdminPort;
 use crate::application::port::inbound::planning_control_port::PlanningControlPort;
 use crate::application::port::inbound::planning_task_tool_port::PlanningTaskToolPort;
 use crate::application::port::inbound::planning_workspace_maintenance_port::PlanningWorkspaceMaintenancePort;
+use crate::application::port::inbound::pr_validation_query_port::PrValidationQueryPort;
 use crate::application::port::inbound::review_center_query_port::ReviewCenterQueryPort;
 use crate::application::port::outbound::app_server_prompt_log_port::{
     AppServerPromptLogMaintenanceMode, AppServerPromptLogMaintenancePort, AppServerPromptLogPort,
@@ -54,6 +55,7 @@ use crate::application::service::planning::{
     PlanningAdminFacadeService, PlanningControlFacadeService, PlanningControlService,
     PlanningServices,
 };
+use crate::application::service::pr_validation_query::PrValidationQueryService;
 use crate::application::service::review_center::ReviewCenterReadService;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
@@ -120,6 +122,15 @@ pub(crate) fn build_planning_control_service(workspace_dir: String) -> PlanningC
 
 pub(crate) fn build_planning_control_port(workspace_dir: String) -> Arc<dyn PlanningControlPort> {
     Arc::new(build_planning_control_service(workspace_dir))
+}
+
+pub(crate) fn build_pr_validation_query_port(
+    workspace_dir: &str,
+) -> Arc<dyn PrValidationQueryPort> {
+    Arc::new(PrValidationQueryService::new(
+        workspace_dir,
+        Arc::new(SqlitePlanningAuthorityAdapter::new()),
+    ))
 }
 
 pub(crate) fn build_planning_task_tool_port(workspace_dir: &str) -> Arc<dyn PlanningTaskToolPort> {

@@ -1,0 +1,25 @@
+$ target/debug/akra --help
+Usage: akra admin [--port <port>]
+Alias: akra admin-server [--port <port>]
+Usage: akra telegram [--allow-chat-id <chat_id>]... [--allow-user-id <user_id>]... [--poll-timeout-seconds <seconds>] [--keep-pending] [--rebind-workspace]
+Alias: akra telegram-bot [--allow-chat-id <chat_id>]... [--allow-user-id <user_id>]... [--poll-timeout-seconds <seconds>] [--keep-pending] [--rebind-workspace]
+Usage: akra doctor [workspace_dir]
+Usage: akra status [workspace_dir] | akra status --pr <number> [workspace_dir]
+Usage: akra queue [workspace_dir]
+Usage: akra reset <queue|directions|all> [workspace_dir]
+Usage: akra planning-tool <contract|run> [workspace_dir]
+Usage: akra parallel-tick [workspace_dir]
+[exit=0]
+
+$ target/debug/akra status --pr 42 C:/dev/akra-queue/akra-async-pr-ci-validator
+PR validation
+pr: 42
+state: unavailable
+next: no durable validation record was found
+[exit=1]
+
+$ target/debug/akra status --pr not-a-number
+invalid pull request number; Usage: akra status [workspace_dir] | akra status --pr <number> [workspace_dir]
+[exit=1]
+
+observed: help_exit=0 valid_syntax_no_record_exit=1 malformed_exit=1

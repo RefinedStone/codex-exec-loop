@@ -1,0 +1,7 @@
+warning: in the working copy of 'src/adapter/inbound/cli.rs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/adapter/outbound/db/sqlite_planning_authority_adapter/runtime_projection.rs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/application/service/parallel_mode/supervisor.rs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/domain/parallel_mode.rs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/domain/parallel_mode/distributor.rs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/domain/parallel_mode/pr_validation.rs', LF will be replaced by CRLF the next time Git touches it
+git_diff_check_exit=0

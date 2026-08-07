@@ -9,10 +9,11 @@ use crate::application::port::outbound::parallel_mode_runtime_port::ParallelMode
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterSnapshot, ParallelModeAgentSessionDetailSnapshot,
-    ParallelModeLiveSessionDetailDefaults, ParallelModePoolBoardSnapshot,
-    ParallelModeReadinessSnapshot, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
-    ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
-    ParallelModeSupervisorState,
+    ParallelModeDistributorSnapshot, ParallelModeLiveSessionDetailDefaults,
+    ParallelModePoolBoardSnapshot, ParallelModeReadinessSnapshot, ParallelModeSlotLeaseSnapshot,
+    ParallelModeSlotLeaseState, ParallelModeSupervisorDetailSnapshot,
+    ParallelModeSupervisorSnapshot, ParallelModeSupervisorState, PrValidationOperatorSummary,
+    PrValidationRecordKey,
 };
 use std::collections::BTreeMap;
 #[derive(Debug, Clone, Default)]
@@ -77,15 +78,20 @@ impl ParallelModeSupervisorService {
             ),
         };
         let top_notice = supervisor_top_notice(&pool, mode_enabled, readiness_snapshot);
+        let distributor =
+            distributor_service.build_snapshot(workspace_dir, mode_enabled, readiness_snapshot);
+        let pr_validation =
+            project_head_pr_validation(planning_authority, workspace_dir, &distributor);
         ParallelModeSupervisorSnapshot::new(
             state,
             workspace_path,
             pool,
             roster,
             detail,
-            distributor_service.build_snapshot(workspace_dir, mode_enabled, readiness_snapshot),
+            distributor,
             top_notice,
         )
+        .with_pr_validation(pr_validation)
     }
 
     pub(super) fn build_passive_snapshot(
@@ -118,16 +124,40 @@ impl ParallelModeSupervisorService {
             Some(notice) => format!("{passive_notice} / {notice}"),
             None => passive_notice.to_string(),
         });
+        let distributor = distributor_service.inspect_snapshot(workspace_dir);
+        let pr_validation =
+            project_head_pr_validation(planning_authority, workspace_dir, &distributor);
         ParallelModeSupervisorSnapshot::new(
             ParallelModeSupervisorState::Prepare,
             workspace_path,
             pool,
             roster,
             detail,
-            distributor_service.inspect_snapshot(workspace_dir),
+            distributor,
             top_notice,
         )
+        .with_pr_validation(pr_validation)
     }
+}
+
+fn project_head_pr_validation(
+    planning_authority: &dyn PlanningAuthorityPort,
+    workspace_dir: &str,
+    distributor: &ParallelModeDistributorSnapshot,
+) -> Option<PrValidationOperatorSummary> {
+    let record_key = distributor
+        .queue_items
+        .iter()
+        .find(|item| item.queue_state.is_active())
+        .or_else(|| distributor.queue_items.first())?
+        .identity
+        .as_ref()
+        .and_then(|identity| PrValidationRecordKey::new(&identity.queue_item_id).ok())?;
+    planning_authority
+        .load_runtime_pr_validation_record(workspace_dir, &record_key)
+        .ok()
+        .flatten()
+        .map(|record| record.operator_summary())
 }
 
 /*

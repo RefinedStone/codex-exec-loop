@@ -24,6 +24,8 @@ pub mod post_turn_evaluation;
 pub mod planning;
 // prompt_component는 사용자에게 보이지 않는 prompt 조각을 service 내부에서 재사용하게 한다.
 pub(crate) mod prompt_component;
+// pr_validation_query는 durable validation authority를 bounded operator projection으로 조회한다.
+pub mod pr_validation_query;
 // session_service는 저장된 세션 목록과 상세 조회를 application 경계로 노출한다.
 pub mod session_service;
 // startup_service는 TUI 시작 전 환경 점검과 진단 정보를 모은다.

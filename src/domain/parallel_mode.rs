@@ -57,11 +57,11 @@ pub use self::pool_reset::{
 pub use self::pr_validation::{
     PrValidationCatchUpState, PrValidationCheckKind, PrValidationCommitSha, PrValidationCompletion,
     PrValidationCompletionBlocker, PrValidationEvent, PrValidationFinding, PrValidationFindingKey,
-    PrValidationFindingSource, PrValidationPhase, PrValidationProviderCompletion,
-    PrValidationProviderKey, PrValidationRecord, PrValidationRecordKey,
-    PrValidationRemediationCorrelation, PrValidationRequiredCheck, PrValidationRequiredCheckKey,
-    PrValidationTarget, PrValidationTargetShaSnapshot, PrValidationTerminalReason,
-    PrValidationTransitionRejection,
+    PrValidationFindingSource, PrValidationOperatorState, PrValidationOperatorSummary,
+    PrValidationPhase, PrValidationProviderCompletion, PrValidationProviderKey, PrValidationRecord,
+    PrValidationRecordKey, PrValidationRemediationCorrelation, PrValidationRequiredCheck,
+    PrValidationRequiredCheckKey, PrValidationTarget, PrValidationTargetShaSnapshot,
+    PrValidationTerminalReason, PrValidationTransitionRejection,
 };
 pub use self::readiness::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,

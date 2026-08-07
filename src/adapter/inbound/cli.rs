@@ -6,6 +6,7 @@ use crate::application::port::inbound::planning_task_tool_port::{
     PlanningTaskToolPort, PlanningTaskToolRequest, PlanningTaskToolResponse,
     planning_task_tool_contract_json,
 };
+use crate::application::port::inbound::pr_validation_query_port::PrValidationStatusRequest;
 use crate::application::port::planning_task_tool_contract::{
     PLANNING_TOOL_PARENT_THREAD_ID_ENV, PLANNING_TOOL_PARENT_TURN_ID_ENV,
 };
@@ -68,6 +69,24 @@ where
         [command] if command == OsStr::new("doctor") => Ok(Some(run_doctor(None, stdout)?)),
         [command, workspace] if command == OsStr::new("doctor") => {
             Ok(Some(run_doctor(Some(workspace.as_os_str()), stdout)?))
+        }
+        [command, flag, pull_request]
+            if command == OsStr::new("status") && flag == OsStr::new("--pr") =>
+        {
+            Ok(Some(run_pr_validation_status(
+                pull_request.as_os_str(),
+                None,
+                stdout,
+            )?))
+        }
+        [command, flag, pull_request, workspace]
+            if command == OsStr::new("status") && flag == OsStr::new("--pr") =>
+        {
+            Ok(Some(run_pr_validation_status(
+                pull_request.as_os_str(),
+                Some(workspace.as_os_str()),
+                stdout,
+            )?))
         }
         [command] if command == OsStr::new("status") => Ok(Some(run_planning_control_command(
             PlanningControlCommand::Status,
@@ -192,6 +211,56 @@ fn run_reset(
     let report = reset_workspace(&workspace_path, target);
     render_reset_report(stdout, &report)?;
     Ok(report.exit_code())
+}
+
+fn run_pr_validation_status(
+    pull_request_arg: &OsStr,
+    workspace_arg: Option<&OsStr>,
+    stdout: &mut impl Write,
+) -> Result<i32> {
+    let pull_request_number = pull_request_arg
+        .to_str()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|number| *number > 0)
+        .ok_or_else(|| anyhow::anyhow!("invalid pull request number; {STATUS_USAGE}"))?;
+    let workspace_path = resolve_workspace_path(workspace_arg)?;
+    validate_workspace_path(&workspace_path).map_err(anyhow::Error::msg)?;
+    let workspace_label = workspace_path.display().to_string();
+    let query = production::build_pr_validation_query_port(&workspace_label);
+    let Some(summary) = query.status_for_pr(PrValidationStatusRequest {
+        pull_request_number,
+    })?
+    else {
+        writeln!(stdout, "PR validation")?;
+        writeln!(stdout, "pr: {pull_request_number}")?;
+        writeln!(stdout, "state: unavailable")?;
+        writeln!(stdout, "next: no durable validation record was found")?;
+        return Ok(1);
+    };
+
+    writeln!(stdout, "PR validation")?;
+    writeln!(stdout, "pr: {}", summary.pull_request_number)?;
+    writeln!(stdout, "state: {}", summary.state.label())?;
+    writeln!(stdout, "phase: {}", summary.phase_label())?;
+    writeln!(stdout, "target: {}", summary.target_short_sha)?;
+    writeln!(stdout, "findings: {}", summary.finding_count)?;
+    writeln!(stdout, "remediations: {}", summary.remediation_count)?;
+    writeln!(
+        stdout,
+        "observation_revision: {}",
+        summary.observation_revision
+    )?;
+    writeln!(
+        stdout,
+        "post_merge_checkpoint: {}",
+        if summary.post_merge_checkpoint_observed {
+            "observed"
+        } else {
+            "pending"
+        }
+    )?;
+    writeln!(stdout, "next: {}", summary.next_action())?;
+    Ok(0)
 }
 
 fn run_planning_control_command(
@@ -401,11 +470,16 @@ mod tests {
         resolve_workspace_path, run_doctor, run_parallel_tick, run_planning_control_command,
         run_planning_tool, run_reset, run_with_args, validate_workspace_path,
     };
+    use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
     use crate::application::service::parallel_mode::{
         ParallelModeOrchestratorTickResult, ParallelModeOrchestratorTrigger,
     };
     use crate::application::service::planning::{PlanningControlCommand, PlanningResetTarget};
-    use crate::domain::parallel_mode::ParallelModeOrchestratorStateMachine;
+    use crate::domain::parallel_mode::{
+        ParallelModeOrchestratorStateMachine, PrValidationCommitSha, PrValidationEvent,
+        PrValidationFinding, PrValidationFindingKey, PrValidationFindingSource, PrValidationRecord,
+        PrValidationRecordKey, PrValidationTarget, PrValidationTargetShaSnapshot,
+    };
     use std::ffi::OsStr;
     use std::path::PathBuf;
 
@@ -710,8 +784,74 @@ mod tests {
         assert!(rendered.contains("akra queue [workspace_dir]"));
         assert!(rendered.contains("akra planning-tool <contract|run>"));
         assert!(rendered.contains("akra parallel-tick [workspace_dir]"));
+        assert!(rendered.contains("akra status --pr <number>"));
         assert!(!rendered.contains("akra init"));
     }
+
+    #[test]
+    fn status_pr_reads_bounded_durable_validation_projection_and_rejects_malformed_input() {
+        let workspace = create_temp_workspace("cli-pr-validation-status");
+        let key = PrValidationRecordKey::new("queue-pr-42").unwrap();
+        let source_sha =
+            PrValidationCommitSha::new("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+        let record = PrValidationRecord::register(
+            key.clone(),
+            PrValidationTarget::new("acme/widgets", 42).unwrap(),
+            PrValidationTargetShaSnapshot::new(
+                source_sha.clone(),
+                PrValidationCommitSha::new("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap(),
+            ),
+        )
+        .transition(PrValidationEvent::BeginPreMergeObservation)
+        .unwrap()
+        .transition(PrValidationEvent::FindingObserved(
+            PrValidationFinding::new(
+                PrValidationFindingKey::new(
+                    PrValidationFindingSource::new("check_run").unwrap(),
+                    "ghp_provider_secret_canary",
+                )
+                .unwrap(),
+                source_sha,
+                "Authorization: Bearer ghp_payload_secret_canary ".to_string()
+                    + &"raw".repeat(10_000),
+            )
+            .unwrap(),
+        ))
+        .unwrap();
+        assert!(
+            SqlitePlanningAuthorityAdapter::compare_and_swap_runtime_pr_validation_record(
+                &workspace,
+                &key,
+                None,
+                Some(&record),
+            )
+            .unwrap()
+        );
+
+        let mut output = Vec::new();
+        let exit = run_with_args(["status", "--pr", "42", workspace.as_str()], &mut output)
+            .expect("PR status should render")
+            .expect("PR status should exit");
+        let rendered = String::from_utf8(output).unwrap();
+
+        assert_eq!(exit, 0);
+        assert!(rendered.contains("state: blocking"), "{rendered}");
+        assert!(rendered.contains("phase: pre_merge_observation"));
+        assert!(rendered.contains("target: aaaaaaaaaaaa"));
+        assert!(rendered.contains("findings: 1"));
+        assert!(rendered.len() < 512);
+        assert!(!rendered.contains("ghp_provider_secret_canary"));
+        assert!(!rendered.contains("ghp_payload_secret_canary"));
+
+        for malformed in ["0", "not-a-number", "-1"] {
+            let error = dispatch_error(&["status", "--pr", malformed]);
+            assert!(error.contains("invalid pull request number"), "{error}");
+            assert!(error.contains("akra status --pr <number>"), "{error}");
+        }
+
+        std::fs::remove_dir_all(workspace).unwrap();
+    }
+
     #[test]
     fn planning_tool_contract_is_json_and_worker_oriented() {
         let mut output = Vec::new();
