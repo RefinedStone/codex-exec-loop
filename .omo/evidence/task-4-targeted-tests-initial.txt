@@ -1,0 +1,40 @@
+warning: trait `GithubValidationApi` is more private than the item `GithubPrValidationAdapter<A>`
+   --> src\adapter\outbound\github\pr_validation.rs:238:1
+    |
+238 | impl<A: GithubValidationApi> GithubPrValidationAdapter<A> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ implementation `GithubPrValidationAdapter<A>` is reachable at visibility `pub`
+    |
+note: but trait `GithubValidationApi` is only usable at visibility `pub(self)`
+   --> src\adapter\outbound\github\pr_validation.rs:56:1
+    |
+ 56 | trait GithubValidationApi: Send + Sync {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: `#[warn(private_bounds)]` on by default
+
+warning: `codex-exec-loop-native` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s
+     Running unittests src\lib.rs (target\debug\deps\codex_exec_loop_native-45fb1a92e07ab689.exe)
+
+running 4 tests
+test adapter::outbound::github::pr_validation::tests::head_sha_mismatch_fails_before_collecting_revision_evidence ... ok
+test adapter::outbound::github::pr_validation::tests::rejects_check_or_workflow_rows_not_bound_to_the_requested_sha ... ok
+test adapter::outbound::github::pr_validation::tests::collects_sha_bound_merge_activity_checks_and_workflows_in_canonical_order ... FAILED
+test adapter::outbound::github::pr_validation::tests::full_pages_return_a_replayable_cursor_and_resume_only_unfinished_sources ... ok
+
+failures:
+
+---- adapter::outbound::github::pr_validation::tests::collects_sha_bound_merge_activity_checks_and_workflows_in_canonical_order stdout ----
+
+thread 'adapter::outbound::github::pr_validation::tests::collects_sha_bound_merge_activity_checks_and_workflows_in_canonical_order' (372) panicked at src\adapter\outbound\github\pr_validation\tests.rs:121:5:
+assertion `left == right` failed
+  left: [(IssueComment, "issue-comment:8"), (Review, "review:9007199254740993"), (ReviewThread, "review-thread:10"), (ReviewComment, "review-comment:12")]
+ right: [(IssueComment, "issue-comment:8"), (ReviewThread, "review-thread:10"), (Review, "review:9007199254740993"), (ReviewComment, "review-comment:12")]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    adapter::outbound::github::pr_validation::tests::collects_sha_bound_merge_activity_checks_and_workflows_in_canonical_order
+
+test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 2742 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

@@ -1,0 +1,13 @@
+   Compiling codex-exec-loop-native v1.3.5 (C:\dev\akra-queue\akra-async-pr-ci-validator)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 26.05s
+     Running unittests src\lib.rs (target\debug\deps\codex_exec_loop_native-45fb1a92e07ab689.exe)
+
+running 6 tests
+test adapter::outbound::github::pr_validation::tests::pagination_refuses_to_continue_past_the_trusted_page_bound ... ok
+test adapter::outbound::github::pr_validation::tests::head_sha_mismatch_fails_before_collecting_revision_evidence ... ok
+test adapter::outbound::github::pr_validation::tests::head_sha_mismatch_after_collection_discards_all_observed_evidence ... ok
+test adapter::outbound::github::pr_validation::tests::rejects_check_or_workflow_rows_not_bound_to_the_requested_sha ... ok
+test adapter::outbound::github::pr_validation::tests::collects_sha_bound_merge_activity_checks_and_workflows_in_canonical_order ... ok
+test adapter::outbound::github::pr_validation::tests::full_pages_return_a_replayable_cursor_and_resume_only_unfinished_sources ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 2742 filtered out; finished in 0.00s

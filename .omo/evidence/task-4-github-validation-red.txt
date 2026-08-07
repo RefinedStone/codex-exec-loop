@@ -1,0 +1,17 @@
+   Compiling codex-exec-loop-native v1.3.5 (C:\dev\akra-queue\akra-async-pr-ci-validator)
+error[E0432]: unresolved imports `super::GithubPrValidationAdapter`, `super::GithubValidationApi`
+ --> src\adapter\outbound\github\pr_validation\tests.rs:6:13
+  |
+6 | use super::{GithubPrValidationAdapter, GithubValidationApi};
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^ no `GithubValidationApi` in `adapter::outbound::github::pr_validation`
+  |             |
+  |             no `GithubPrValidationAdapter` in `adapter::outbound::github::pr_validation`
+
+error[E0432]: unresolved import `self::pr_validation::GithubPrValidationAdapter`
+  --> src\adapter\outbound\github\mod.rs:12:9
+   |
+12 | pub use self::pr_validation::GithubPrValidationAdapter;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `GithubPrValidationAdapter` in `adapter::outbound::github::pr_validation`
+
+For more information about this error, try `rustc --explain E0432`.
+error: could not compile `codex-exec-loop-native` (lib test) due to 2 previous errors

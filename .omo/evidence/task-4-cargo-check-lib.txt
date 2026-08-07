@@ -1,0 +1,4 @@
+$ cargo check --lib
+    Checking codex-exec-loop-native v1.3.5 (C:\dev\akra-queue\akra-async-pr-ci-validator)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 11.65s
+exit: 0
