@@ -502,6 +502,82 @@ pub mod tests {
     }
 
     #[test]
+    fn runtime_tick_polls_durable_validation_with_monotonic_revisions_and_normal_remediation() {
+        let repo = temp_repo("pr-validation-runtime-tick");
+        let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let planning = planning(authority.clone());
+        bootstrap(authority.as_ref(), &repo.workspace_dir());
+        let github = Arc::new(DeterministicGithub {
+            snapshots: Mutex::new(
+                vec![
+                    snapshot(HEAD_A, GithubValidationRunStatus::InProgress),
+                    snapshot(HEAD_A, GithubValidationRunStatus::Failed),
+                ]
+                .into(),
+            ),
+            requests: Mutex::new(Vec::new()),
+            pool_root: repo.pool_root(),
+        });
+        let service =
+            build_service(authority.clone()).with_pr_validation_observation(github.clone());
+        service
+            .persist_pr_validation_record(&repo.workspace_dir(), &repo.pool_root(), None, &record())
+            .unwrap();
+
+        assert_eq!(
+            service
+                .poll_pr_validations_for_runtime_tick(&repo.workspace_dir(), &planning.queue)
+                .unwrap(),
+            vec![PrValidationPollResult::Waiting]
+        );
+        assert!(
+            !repo.pool_root().join(".leases").exists(),
+            "waiting validation must not reserve a parallel slot"
+        );
+        assert!(matches!(
+            service
+                .poll_pr_validations_for_runtime_tick(&repo.workspace_dir(), &planning.queue)
+                .unwrap()
+                .as_slice(),
+            [PrValidationPollResult::RemediationRequested { .. }]
+        ));
+
+        let persisted = service
+            .recover_pr_validation_record(
+                &repo.workspace_dir(),
+                &repo.pool_root(),
+                &PrValidationRecordKey::new("akra-unit-42").unwrap(),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(persisted.observation_revision(), 2);
+        assert_eq!(github.requests.lock().unwrap().len(), 2);
+        let queue = planning
+            .queue
+            .load_authority_snapshot(&repo.workspace_dir())
+            .unwrap();
+        assert_eq!(queue.tasks.len(), 1);
+        let queue_projection =
+            SqlitePlanningAuthorityAdapter::load_task_authority_snapshot(&repo.workspace_dir())
+                .unwrap()
+                .unwrap()
+                .queue_projection;
+        let projection = PlanningRuntimeProjection::ready_with_queue_projection(
+            "runtime validation remediation".to_string(),
+            queue_projection.queue_summary(),
+            None,
+            queue_projection.next_task.clone(),
+            queue_projection,
+        );
+        let dispatch = service
+            .build_dispatch_plan(&repo.workspace_dir(), &projection, usize::MAX)
+            .unwrap();
+        assert_eq!(dispatch.candidates.len(), 1);
+        assert_eq!(dispatch.candidates[0].task_id, queue.tasks[0].id);
+        assert!(!repo.pool_root().join(".leases").exists());
+    }
+
+    #[test]
     fn unknown_provider_and_late_event_cannot_false_settle() {
         let repo = temp_repo("pr-validation-e2e-blocked");
         let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());

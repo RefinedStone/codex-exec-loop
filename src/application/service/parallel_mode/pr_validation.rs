@@ -219,6 +219,59 @@ impl ParallelModeService {
         )
     }
 
+    /// Activates every durable, pollable validation record for one existing runtime tick.
+    /// Revisions derive from persisted authority, so restarts and repeated ticks remain monotonic.
+    pub fn poll_pr_validations_for_runtime_tick(
+        &self,
+        workspace_dir: &str,
+        queue: &PlanningQueueUseCases,
+    ) -> Result<Vec<PrValidationPollResult>, String> {
+        let Some(observation) = self.pr_validation_observation.as_ref() else {
+            return Ok(Vec::new());
+        };
+        let repo_root = self
+            .parallel_runtime
+            .detect_git_repo_root(workspace_dir)
+            .ok_or_else(|| "git repository is unavailable for PR validation polling".to_string())?;
+        let pool_root = super::derive_default_pool_root(std::path::Path::new(&repo_root));
+        let records = self
+            .planning_authority
+            .load_runtime_pr_validation_records(workspace_dir)
+            .map_err(|error| format!("failed to load runtime PR validation records: {error}"))?;
+        let mut results = Vec::new();
+        for record in records.into_iter().filter(|record| {
+            matches!(
+                record.phase(),
+                PrValidationPhase::Registered
+                    | PrValidationPhase::PreMergeObservation
+                    | PrValidationPhase::PostMergeObservation
+            )
+        }) {
+            let delivery_revision =
+                record
+                    .observation_revision()
+                    .checked_add(1)
+                    .ok_or_else(|| {
+                        format!(
+                            "PR validation record `{}` exhausted delivery revisions",
+                            record.key().as_str()
+                        )
+                    })?;
+            results.push(self.poll_pr_validation_into_normal_queue(
+                observation.as_ref(),
+                queue,
+                PrValidationPollRequest {
+                    workspace_dir: workspace_dir.to_string(),
+                    pool_root: pool_root.clone(),
+                    record_key: record.key().clone(),
+                    target_shas: record.target_shas().clone(),
+                    delivery_revision,
+                },
+            )?);
+        }
+        Ok(results)
+    }
+
     /// Executes one poll/trigger delivery. Waiting is represented by returning `Waiting`; this
     /// service never acquires a pool mutation lock, worktree, or slot lease between deliveries.
     pub fn poll_pr_validation_into_normal_queue(

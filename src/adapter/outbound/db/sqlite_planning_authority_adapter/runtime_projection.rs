@@ -1414,6 +1414,25 @@ impl SqlitePlanningAuthorityAdapter {
         Ok(snapshot)
     }
 
+    pub(crate) fn load_runtime_pr_validation_records(
+        workspace_dir: &str,
+    ) -> Result<Vec<PrValidationRecord>> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let connection = open_authority_connection(&location)?;
+        let mut statement = connection
+            .prepare("SELECT content FROM runtime_pr_validation_records ORDER BY record_key")
+            .context("failed to prepare runtime PR validation polling lookup")?;
+        let contents = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .context("failed to query runtime PR validation polling records")?;
+        contents
+            .map(|content| {
+                serde_json::from_str::<PrValidationRecord>(&content?)
+                    .context("failed to deserialize runtime PR validation polling record")
+            })
+            .collect()
+    }
+
     pub(crate) fn load_runtime_pr_validation_record(
         workspace_dir: &str,
         record_key: &PrValidationRecordKey,

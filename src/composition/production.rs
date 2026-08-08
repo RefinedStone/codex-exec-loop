@@ -11,7 +11,9 @@ use crate::adapter::outbound::filesystem::{
     FilesystemParallelAgentProfileRepositoryAdapter, FilesystemPlanningWorkspaceAdapter,
 };
 use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
-use crate::adapter::outbound::github::{GithubAutomationAdapter, GithubReviewPollerAdapter};
+use crate::adapter::outbound::github::{
+    GithubAutomationAdapter, GithubPrValidationAdapter, GithubReviewPollerAdapter,
+};
 use crate::adapter::outbound::telegram::CurlTelegramBotAdapter;
 use crate::application::port::inbound::admin_debug_port::{
     AdminDebugHarnessConfig, AdminDebugPort,
@@ -31,6 +33,7 @@ use crate::application::port::outbound::app_server_prompt_log_port::{
     NoopAppServerPromptLogPort,
 };
 use crate::application::port::outbound::github_automation_port::GithubAutomationPort;
+use crate::application::port::outbound::github_pr_validation_port::GithubPrValidationPort;
 use crate::application::port::outbound::github_review_poller_port::GithubReviewPollerPort;
 use crate::application::port::outbound::parallel_agent_profile_repository_port::ParallelAgentProfileRepositoryPort;
 use crate::application::port::outbound::parallel_agent_worker_port::ParallelAgentWorkerPort;
@@ -164,6 +167,9 @@ pub(crate) fn build_parallel_mode_control_plane_composition(
         ports.planning_authority_port,
         ports.parallel_agent_worker_port,
         parallel_agent_profile_service,
+        Arc::new(GithubPrValidationAdapter::for_local_github_credentials(
+            workspace_dir,
+        )),
     )
 }
 
@@ -201,6 +207,9 @@ pub(crate) fn build_admin_application_with_debug_harness(
         ports.planning_authority_port.clone(),
         ports.parallel_agent_worker_port.clone(),
         parallel_agent_profile_service.clone(),
+        Arc::new(GithubPrValidationAdapter::for_local_github_credentials(
+            &workspace_dir,
+        )),
     ));
     let parallel_mode_admin_port: Arc<dyn ParallelModeAdminPort> =
         Arc::new(ParallelModeAdminService::new(parallel_mode_control_plane));
@@ -237,7 +246,7 @@ pub(crate) fn build_telegram_application(workspace_dir: String) -> ProductionTel
         ports.review_center_repository_port.clone(),
     );
     let control_service = PlanningControlService::new(Arc::new(PlanningControlFacadeService::new(
-        workspace_dir,
+        workspace_dir.clone(),
         planning.clone(),
     )));
     let parallel_mode_control_port = Arc::new(parallel_mode_control_plane_from_parts(
@@ -245,6 +254,9 @@ pub(crate) fn build_telegram_application(workspace_dir: String) -> ProductionTel
         ports.planning_authority_port,
         ports.parallel_agent_worker_port,
         parallel_agent_profile_service,
+        Arc::new(GithubPrValidationAdapter::for_local_github_credentials(
+            &workspace_dir,
+        )),
     ));
     ProductionTelegramApplication {
         planning_control_port: Arc::new(control_service),
@@ -276,8 +288,10 @@ pub(crate) fn build_native_tui_application() -> NativeTuiApplicationComposition 
             maintenance_mode,
         );
     let session_service = SessionService::new(ports.app_server_adapter.clone());
-    let review_center_read_service =
-        ReviewCenterReadService::new(workspace_dir, ports.review_center_repository_port.clone());
+    let review_center_read_service = ReviewCenterReadService::new(
+        workspace_dir.clone(),
+        ports.review_center_repository_port.clone(),
+    );
     let conversation_service = ConversationService::new(ports.app_server_adapter.clone())
         .with_review_center_read_service(review_center_read_service.clone());
     let planning = planning_services_from_ports(&ports);
@@ -287,6 +301,9 @@ pub(crate) fn build_native_tui_application() -> NativeTuiApplicationComposition 
         ports.planning_authority_port,
         ports.parallel_agent_worker_port,
         parallel_agent_profile_service,
+        Arc::new(GithubPrValidationAdapter::for_local_github_credentials(
+            workspace_dir,
+        )),
     );
     NativeTuiApplicationComposition::from_services(
         startup_service,
@@ -449,12 +466,14 @@ fn parallel_mode_control_plane_from_parts(
     planning_authority_port: Arc<dyn PlanningAuthorityPort>,
     parallel_agent_worker_port: Arc<dyn ParallelAgentWorkerPort>,
     parallel_agent_profile_service: ParallelAgentProfileService,
+    pr_validation_observation: Arc<dyn GithubPrValidationPort>,
 ) -> ParallelModeControlPlaneComposition {
     let parallel_mode_service = ParallelModeService::new(
         planning_authority_port,
         github_automation_port(),
         Arc::new(GitParallelModeRuntimeAdapter::new()),
     )
+    .with_pr_validation_observation(pr_validation_observation)
     .with_parallel_agent_profile_service(parallel_agent_profile_service);
     ParallelModeControlPlaneComposition::new(
         parallel_mode_service,
@@ -483,8 +502,20 @@ mod tests {
     use crate::application::port::outbound::app_server_prompt_log_port::{
         AppServerPromptInputRecord, AppServerPromptInteractionRecord,
     };
+    use crate::application::port::outbound::github_pr_validation_port::{
+        GithubPrMergeState, GithubPrValidationObservationRequest, GithubPrValidationPort,
+        GithubPrValidationSnapshot, GithubValidationCheckRun, GithubValidationRunStatus,
+        GithubValidationSource, GithubValidationSourceObservation, GithubValidationSourceStatus,
+    };
     use crate::application::service::planning::{PlanningControlCommand, PlanningControlRequest};
+    use crate::domain::github_review::{GithubCommitSha, GithubOpaqueId, GithubPullRequestTarget};
+    use crate::domain::parallel_mode::{
+        PrValidationCommitSha, PrValidationRecord, PrValidationRecordKey, PrValidationTarget,
+        PrValidationTargetShaSnapshot,
+    };
     use std::path::{Path, PathBuf};
+    use std::process::Command;
+    use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     struct TempWorkspace {
@@ -512,8 +543,92 @@ mod tests {
 
     impl Drop for TempWorkspace {
         fn drop(&mut self) {
+            let pool_parent = self.path.with_file_name(format!(
+                "{}-akra-worktrees",
+                self.path
+                    .file_name()
+                    .expect("temp workspace should have a name")
+                    .to_string_lossy()
+            ));
+            let _ = std::fs::remove_dir_all(pool_parent);
             let _ = std::fs::remove_dir_all(&self.path);
         }
+    }
+
+    struct RecordingValidationAdapter {
+        snapshots: Mutex<Vec<GithubPrValidationSnapshot>>,
+        requests: Mutex<Vec<GithubPrValidationObservationRequest>>,
+    }
+
+    impl GithubPrValidationPort for RecordingValidationAdapter {
+        fn load_validation_snapshot(
+            &self,
+            request: &GithubPrValidationObservationRequest,
+        ) -> Result<GithubPrValidationSnapshot> {
+            self.requests.lock().unwrap().push(request.clone());
+            Ok(self.snapshots.lock().unwrap().remove(0))
+        }
+    }
+
+    fn validation_snapshot(status: GithubValidationRunStatus) -> GithubPrValidationSnapshot {
+        const HEAD: &str = "1111111111111111111111111111111111111111";
+        GithubPrValidationSnapshot {
+            target: GithubPullRequestTarget::new("acme/widgets", 42),
+            target_sha: GithubCommitSha::new(HEAD),
+            merge_state: GithubPrMergeState::Open,
+            merge_sha: None,
+            activities: Vec::new(),
+            check_runs: vec![GithubValidationCheckRun::new(
+                GithubOpaqueId::new("check:ci"),
+                "ci",
+                GithubCommitSha::new(HEAD),
+                status,
+            )],
+            workflow_runs: Vec::new(),
+            sources: GithubValidationSource::ALL
+                .into_iter()
+                .map(|source| {
+                    GithubValidationSourceObservation::new(
+                        source,
+                        format!("rest:{source:?}"),
+                        GithubValidationSourceStatus::Complete,
+                        None,
+                    )
+                })
+                .collect(),
+            next_cursor: None,
+        }
+    }
+
+    fn initialize_git_workspace(workspace: &TempWorkspace) {
+        for args in [
+            vec!["init", "-b", "prerelease"],
+            vec!["config", "user.name", "Akra Test"],
+            vec!["config", "user.email", "akra@example.invalid"],
+            vec!["commit", "--allow-empty", "-m", "initial"],
+        ] {
+            let output = Command::new("git")
+                .args(args)
+                .current_dir(workspace.path())
+                .output()
+                .expect("git fixture command should start");
+            assert!(
+                output.status.success(),
+                "git fixture command failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+
+    fn contains_lease_directory(path: &Path) -> bool {
+        let Ok(entries) = std::fs::read_dir(path) else {
+            return false;
+        };
+        entries.filter_map(Result::ok).any(|entry| {
+            entry.file_name() == ".leases"
+                || (entry.file_type().is_ok_and(|kind| kind.is_dir())
+                    && contains_lease_directory(&entry.path()))
+        })
     }
 
     fn sample_prompt_record(workspace_dir: &str) -> AppServerPromptInteractionRecord {
@@ -541,6 +656,82 @@ mod tests {
             started_at: now.clone(),
             completed_at: now,
         }
+    }
+
+    #[test]
+    fn production_composition_runtime_tick_activates_durable_pr_validation_without_a_lease() {
+        const HEAD: &str = "1111111111111111111111111111111111111111";
+        const BASE: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let workspace = TempWorkspace::new("pr-validation-runtime-tick");
+        initialize_git_workspace(&workspace);
+        let workspace_dir = workspace.path().display().to_string();
+        let ports = build_shared_ports();
+        let planning = planning_services_from_ports(&ports);
+        planning
+            .workspace
+            .initialize_simple_workspace(&workspace_dir)
+            .expect("production planning authority should initialize");
+        let record = PrValidationRecord::register(
+            PrValidationRecordKey::new("akra-unit-42").unwrap(),
+            PrValidationTarget::new("acme/widgets", 42).unwrap(),
+            PrValidationTargetShaSnapshot::new(
+                PrValidationCommitSha::new(HEAD).unwrap(),
+                PrValidationCommitSha::new(BASE).unwrap(),
+            ),
+        );
+        assert!(
+            ports
+                .planning_authority_port
+                .compare_and_swap_runtime_pr_validation_record(
+                    &workspace_dir,
+                    record.key(),
+                    None,
+                    Some(&record),
+                )
+                .expect("validation authority record should register")
+        );
+        let observation = Arc::new(RecordingValidationAdapter {
+            snapshots: Mutex::new(vec![
+                validation_snapshot(GithubValidationRunStatus::InProgress),
+                validation_snapshot(GithubValidationRunStatus::Failed),
+            ]),
+            requests: Mutex::new(Vec::new()),
+        });
+        let composition = parallel_mode_control_plane_from_parts(
+            planning.clone(),
+            ports.planning_authority_port.clone(),
+            ports.parallel_agent_worker_port.clone(),
+            parallel_agent_profile_service_from_ports(&ports),
+            observation.clone(),
+        );
+
+        composition
+            .run_manual_orchestrator_tick(&workspace_dir)
+            .expect("first production-composed runtime tick should complete");
+        composition
+            .run_manual_orchestrator_tick(&workspace_dir)
+            .expect("second production-composed runtime tick should complete");
+
+        let persisted = ports
+            .planning_authority_port
+            .load_runtime_pr_validation_record(&workspace_dir, record.key())
+            .unwrap()
+            .unwrap();
+        assert_eq!(persisted.observation_revision(), 2);
+        assert_eq!(observation.requests.lock().unwrap().len(), 2);
+        let queue = planning
+            .queue
+            .load_authority_snapshot(&workspace_dir)
+            .expect("normal planning queue should contain remediation");
+        assert_eq!(queue.tasks.len(), 1);
+        let pool_parent = workspace.path().with_file_name(format!(
+            "{}-akra-worktrees",
+            workspace.path().file_name().unwrap().to_string_lossy()
+        ));
+        assert!(
+            !contains_lease_directory(&pool_parent),
+            "runtime validation polling must not create or hold a slot lease"
+        );
     }
 
     // R10 behavior regression: production composition must execute use cases through
