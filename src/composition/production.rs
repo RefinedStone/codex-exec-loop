@@ -666,7 +666,7 @@ mod tests {
         let workspace = TempWorkspace::new("pr-validation-runtime-tick");
         initialize_git_workspace(&workspace);
         let workspace_dir = workspace.path().display().to_string();
-        let ports = build_shared_ports();
+        let ports = build_shared_ports_for_prompt_logging(false);
         let planning = planning_services_from_ports(&ports);
         planning
             .workspace
