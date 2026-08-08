@@ -575,6 +575,7 @@ mod tests {
         GithubPrValidationSnapshot {
             target: GithubPullRequestTarget::new("acme/widgets", 42),
             target_sha: GithubCommitSha::new(HEAD),
+            evidence_sha: GithubCommitSha::new(HEAD),
             merge_state: GithubPrMergeState::Open,
             merge_sha: None,
             activities: Vec::new(),
