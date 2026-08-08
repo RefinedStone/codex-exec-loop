@@ -1,0 +1,73 @@
+Async PR/CI validator final evidence
+===================================
+
+Plan: .omo/plans/async-pr-ci-validator.md
+Branch: codex/async-pr-ci-validator
+Captured: 2026-08-07
+
+Required repository gates
+-------------------------
+
+PASS  node scripts/agent-plan.mjs
+PASS  powershell -File scripts/check_native_pr.ps1 -Mode Full
+      Final line: Windows native PR checks passed (Full mode)
+PASS  cargo test --locked pr_validation -- --nocapture
+PASS  cargo test --locked --test architecture_boundaries -- --nocapture
+PASS  cargo fmt --all -- --check
+PASS  git diff --check
+
+Corrective behavior coverage
+----------------------------
+
+PASS  production_composition_runtime_tick_activates_durable_pr_validation_without_a_lease
+      Durable validation polling is invoked from the production runtime tick without
+      reserving a validator-owned slot lease.
+
+PASS  exhausted_pool_keeps_remediation_queued_without_duplicate_lease
+      Three running ordinary pool slots exhaust capacity; a validation remediation stays
+      queued exactly once and replay does not create another lease or queue item.
+
+PASS  failed_or_cancelled_evidence_cannot_settle_after_remediation_completion
+      Failed and cancelled provider checks cannot settle validation.
+
+PASS  malicious_provider_identity_and_name_are_bounded_before_remediation
+      Provider-controlled identifiers and text are bounded before remediation persistence.
+
+PASS  merge_sha_evidence_mismatch_persists_failure_before_checkpointing
+      Post-merge evidence bound to another SHA becomes a durable failure before checkpointing.
+
+PASS  delivery_remediation_merge_and_post_merge_settle
+      The fake GitHub lifecycle covers remediation, merge, post-merge evidence, and settlement.
+
+PASS  operator_surface_shows_pr_remediation_merge_and_late_event
+      The native CLI projects Akra ID, canonical PR URL, queued remediation, short merge SHA,
+      observed post-merge checkpoint, and recovery action from a durable late-review record.
+
+PASS  forbids_time_completion_and_direct_git_writes
+      The architecture guard rejects sleep-based settlement and direct Git mutation entry points
+      in validator code, while requiring the successful-evidence completion predicate.
+
+Manual-surface evidence
+-----------------------
+
+The native CLI happy-path, unavailable-record, malformed PR argument, and --help surfaces are
+captured in .omo/evidence/task-8-real-cli-qa.txt. Native TUI startup and blocked recovery
+projection were exercised in the final worktree; this workstation's unsafe codex.cmd ACL blocks
+interactive work-center startup, while the deterministic CLI and TUI recovery tests above cover
+the validator-specific rendering.
+
+Full-suite baseline limitation
+------------------------------
+
+`cargo test --locked` was attempted after the final changes and reported 2388 passing tests and
+381 failures in pool-reconciliation fixtures. An isolated failing test,
+`completed_quarantine_does_not_block_the_same_source_normalization_recovery`, fails identically
+on the unmodified origin/prerelease checkout before validator code is involved:
+
+  git worktree add --detach \\?\C:\...\akra-pool\slot-1 prerelease
+  fatal: could not create leading directories of '//?/C:/.../.git': Invalid argument
+
+The validator branch changes the shared parallel test entry point only by adding the three
+PR-validation test modules. The required Windows native PR gate above passes, and the failure is
+therefore recorded as a pre-existing local Git extended-path harness limitation rather than a
+validator regression.
