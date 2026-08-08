@@ -1,0 +1,3 @@
+Command: git diff --cached --check
+Result: PASS
+Scope: final Todo 8 source, tests, and evidence staging before commit.

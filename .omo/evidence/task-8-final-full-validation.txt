@@ -1,0 +1,4 @@
+Command: powershell -File scripts/check_native_pr.ps1 -Mode Full
+Result: PASS
+Observed final line: Windows native PR checks passed (Full mode)
+Context: rerun after fixing the Todo 8 clippy findings without warning suppressions.
