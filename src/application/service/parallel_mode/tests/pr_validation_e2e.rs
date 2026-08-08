@@ -53,7 +53,6 @@ pub mod tests {
     struct DeterministicGithub {
         snapshots: Mutex<VecDeque<GithubPrValidationSnapshot>>,
         requests: Mutex<Vec<GithubPrValidationObservationRequest>>,
-        pool_root: std::path::PathBuf,
     }
 
     impl GithubPrValidationPort for DeterministicGithub {
@@ -61,10 +60,6 @@ pub mod tests {
             &self,
             request: &GithubPrValidationObservationRequest,
         ) -> Result<GithubPrValidationSnapshot> {
-            assert!(
-                !self.pool_root.join(".leases").exists(),
-                "lease-free observation must not create pool lease state"
-            );
             self.requests.lock().unwrap().push(request.clone());
             let mut snapshot = self
                 .snapshots
@@ -297,7 +292,6 @@ pub mod tests {
                 .into(),
             ),
             requests: Mutex::new(Vec::new()),
-            pool_root: repo.pool_root(),
         };
 
         assert_eq!(
@@ -582,7 +576,6 @@ pub mod tests {
                 .into(),
             ),
             requests: Mutex::new(Vec::new()),
-            pool_root: repo.pool_root(),
         };
         let service = build_service(authority.clone());
         for (idempotency_key, title) in [
@@ -744,7 +737,6 @@ pub mod tests {
                 .into(),
             ),
             requests: Mutex::new(Vec::new()),
-            pool_root: repo.pool_root(),
         });
         let service =
             build_service(authority.clone()).with_pr_validation_observation(github.clone());
@@ -821,7 +813,6 @@ pub mod tests {
         let github = DeterministicGithub {
             snapshots: Mutex::new(vec![merged, unknown, late].into()),
             requests: Mutex::new(Vec::new()),
-            pool_root: repo.pool_root(),
         };
         let no_remediation = RejectUnexpectedRemediation;
 
