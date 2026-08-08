@@ -239,12 +239,27 @@ fn run_pr_validation_status(
     };
 
     writeln!(stdout, "PR validation")?;
+    writeln!(stdout, "akra_id: {}", summary.akra_id)?;
     writeln!(stdout, "pr: {}", summary.pull_request_number)?;
+    writeln!(stdout, "url: {}", summary.canonical_pr_url)?;
     writeln!(stdout, "state: {}", summary.state.label())?;
     writeln!(stdout, "phase: {}", summary.phase_label())?;
+    writeln!(stdout, "reason: {}", summary.reason)?;
+    writeln!(
+        stdout,
+        "blocker: {}",
+        summary.blocker.as_deref().unwrap_or("none")
+    )?;
     writeln!(stdout, "target: {}", summary.target_short_sha)?;
     writeln!(stdout, "findings: {}", summary.finding_count)?;
     writeln!(stdout, "remediations: {}", summary.remediation_count)?;
+    for correlation in &summary.correlations {
+        writeln!(
+            stdout,
+            "correlation: {} -> {}",
+            correlation.finding, correlation.remediation_akra_id
+        )?;
+    }
     writeln!(
         stdout,
         "observation_revision: {}",
@@ -259,7 +274,7 @@ fn run_pr_validation_status(
             "pending"
         }
     )?;
-    writeln!(stdout, "next: {}", summary.next_action())?;
+    writeln!(stdout, "recovery: {}", summary.next_action())?;
     Ok(0)
 }
 
@@ -478,7 +493,8 @@ mod tests {
     use crate::domain::parallel_mode::{
         ParallelModeOrchestratorStateMachine, PrValidationCommitSha, PrValidationEvent,
         PrValidationFinding, PrValidationFindingKey, PrValidationFindingSource, PrValidationRecord,
-        PrValidationRecordKey, PrValidationTarget, PrValidationTargetShaSnapshot,
+        PrValidationRecordKey, PrValidationRemediationCorrelation, PrValidationTarget,
+        PrValidationTargetShaSnapshot,
     };
     use std::ffi::OsStr;
     use std::path::PathBuf;
@@ -817,6 +833,17 @@ mod tests {
             )
             .unwrap(),
         ))
+        .unwrap()
+        .transition(PrValidationEvent::RemediationQueued(
+            PrValidationRemediationCorrelation::new(
+                PrValidationFindingKey::new(
+                    PrValidationFindingSource::new("check_run").unwrap(),
+                    "ghp_provider_secret_canary",
+                )
+                .unwrap(),
+                PrValidationRecordKey::new("remediation-task-42").unwrap(),
+            ),
+        ))
         .unwrap();
         assert!(
             SqlitePlanningAuthorityAdapter::compare_and_swap_runtime_pr_validation_record(
@@ -835,11 +862,21 @@ mod tests {
         let rendered = String::from_utf8(output).unwrap();
 
         assert_eq!(exit, 0);
-        assert!(rendered.contains("state: blocking"), "{rendered}");
-        assert!(rendered.contains("phase: pre_merge_observation"));
+        assert!(rendered.contains("akra_id: queue-pr-42"), "{rendered}");
+        assert!(
+            rendered.contains("url: https://github.com/acme/widgets/pull/42"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("state: remediation"), "{rendered}");
+        assert!(rendered.contains("phase: remediation_queued"));
+        assert!(rendered.contains("reason: check_run finding"));
+        assert!(rendered.contains("blocker: check_run finding"));
         assert!(rendered.contains("target: aaaaaaaaaaaa"));
         assert!(rendered.contains("findings: 1"));
-        assert!(rendered.len() < 512);
+        assert!(rendered.contains("correlation: check_run:"));
+        assert!(rendered.contains("-> remediation-task-42"));
+        assert!(rendered.contains("recovery: complete the correlated remediation task"));
+        assert!(rendered.len() < 768);
         assert!(!rendered.contains("ghp_provider_secret_canary"));
         assert!(!rendered.contains("ghp_payload_secret_canary"));
 

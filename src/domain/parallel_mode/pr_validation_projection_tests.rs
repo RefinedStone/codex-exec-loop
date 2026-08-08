@@ -1,8 +1,8 @@
 use super::{
     PrValidationCommitSha, PrValidationEvent, PrValidationFinding, PrValidationFindingKey,
-    PrValidationFindingSource, PrValidationOperatorState, PrValidationRecord,
+    PrValidationFindingSource, PrValidationOperatorState, PrValidationPhase, PrValidationRecord,
     PrValidationRecordKey, PrValidationRemediationCorrelation, PrValidationTarget,
-    PrValidationTargetShaSnapshot,
+    PrValidationTargetShaSnapshot, PrValidationTerminalReason,
 };
 
 const SOURCE_SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -59,20 +59,72 @@ fn pr_validation_operator_projection_is_deterministic_bounded_and_secret_free() 
         remediation_summary.state,
         PrValidationOperatorState::Remediation
     );
+    assert_eq!(blocking_summary.akra_id, "queue-42");
+    assert_eq!(
+        blocking_summary.canonical_pr_url,
+        "https://github.com/acme/widgets/pull/42"
+    );
     assert_eq!(blocking_summary.target_short_sha, "aaaaaaaaaaaa");
     assert_eq!(blocking_summary.finding_count, 1);
     assert_eq!(blocking_summary.remediation_count, 0);
+    assert_eq!(remediation_summary.correlations.len(), 1);
+    assert_eq!(
+        remediation_summary.correlations[0].remediation_akra_id,
+        "remediation-task-1"
+    );
+    assert!(
+        remediation_summary.correlations[0]
+            .finding
+            .starts_with("check_run:")
+    );
+    assert!(blocking_summary.reason.contains("check_run finding"));
     assert_eq!(blocking_summary, blocking.operator_summary());
 
     let visible = format!(
-        "{} {} {} {}",
+        "{} {} {} {} {} {} {:?}",
+        blocking_summary.akra_id,
+        blocking_summary.canonical_pr_url,
         blocking_summary.compact_label(),
         blocking_summary.phase_label(),
         blocking_summary.target_short_sha,
-        blocking_summary.next_action()
+        blocking_summary.next_action(),
+        remediation_summary.correlations
     );
-    assert!(visible.len() < 256, "operator projection must stay bounded");
+    assert!(visible.len() < 512, "operator projection must stay bounded");
     assert!(!visible.contains("ghp_secret_canary"));
     assert!(!visible.contains("raw payload"));
     assert!(!visible.contains("provider-event"));
+}
+
+#[test]
+fn blocked_and_failed_are_durable_terminal_states_with_recovery_reasons() {
+    for (event, phase, state, reason, recovery) in [
+        (
+            PrValidationEvent::Block(PrValidationTerminalReason::PullRequestClosedWithoutMerge),
+            PrValidationPhase::Blocked,
+            PrValidationOperatorState::Blocked,
+            "pull request closed without merge",
+            "reopen the pull request",
+        ),
+        (
+            PrValidationEvent::Fail(PrValidationTerminalReason::ObservationFailed),
+            PrValidationPhase::Failed,
+            PrValidationOperatorState::Failed,
+            "trusted validation observation failed",
+            "rerun validation",
+        ),
+    ] {
+        let terminal = registered().transition(event).unwrap();
+        let summary = terminal.operator_summary();
+
+        assert_eq!(terminal.phase(), phase);
+        assert_eq!(summary.state, state);
+        assert_eq!(summary.reason, reason);
+        assert!(summary.recovery_action.contains(recovery));
+        assert!(
+            terminal
+                .transition(PrValidationEvent::BeginPreMergeObservation)
+                .is_err()
+        );
+    }
 }

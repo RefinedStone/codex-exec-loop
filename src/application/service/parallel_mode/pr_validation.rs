@@ -21,7 +21,7 @@ use crate::domain::parallel_mode::{
     PrValidationEvent, PrValidationFinding, PrValidationFindingKey, PrValidationFindingSource,
     PrValidationPhase, PrValidationProviderCompletion, PrValidationProviderKey, PrValidationRecord,
     PrValidationRecordKey, PrValidationRemediationCorrelation, PrValidationRequiredCheck,
-    PrValidationTarget, PrValidationTargetShaSnapshot,
+    PrValidationTarget, PrValidationTargetShaSnapshot, PrValidationTerminalReason,
 };
 use crate::domain::planning::TaskStatus;
 
@@ -41,6 +41,8 @@ pub enum PrValidationPollResult {
         idempotency_key: PrValidationRemediationKey,
     },
     Settled,
+    Blocked,
+    Failed,
     StaleDeliveryIgnored,
 }
 
@@ -341,6 +343,12 @@ impl ParallelModeService {
         if request.delivery_revision <= current.observation_revision() {
             return Ok(PrValidationPollResult::StaleDeliveryIgnored);
         }
+        match current.phase() {
+            PrValidationPhase::Settled => return Ok(PrValidationPollResult::Settled),
+            PrValidationPhase::Blocked => return Ok(PrValidationPollResult::Blocked),
+            PrValidationPhase::Failed => return Ok(PrValidationPollResult::Failed),
+            _ => {}
+        }
 
         let mut next = current.clone();
         if next.target_shas() != &request.target_shas {
@@ -372,15 +380,57 @@ impl ParallelModeService {
             next.merge_sha()
                 .map(|sha| GithubCommitSha::new(sha.as_str())),
         );
-        let snapshot = observation
-            .load_validation_snapshot(&observation_request)
-            .map_err(|error| format!("failed to obtain trusted PR validation snapshot: {error}"))?;
-        validate_snapshot_identity(&snapshot, &target, &target_sha)?;
+        let snapshot = match observation.load_validation_snapshot(&observation_request) {
+            Ok(snapshot) => snapshot,
+            Err(_) => {
+                next = next
+                    .transition(PrValidationEvent::Fail(
+                        PrValidationTerminalReason::ObservationFailed,
+                    ))
+                    .map_err(transition_error)?;
+                self.persist_pr_validation_record(
+                    &request.workspace_dir,
+                    &request.pool_root,
+                    Some(&current),
+                    &next,
+                )?;
+                return Ok(PrValidationPollResult::Failed);
+            }
+        };
+        if validate_snapshot_identity(&snapshot, &target, &target_sha).is_err() {
+            next = next
+                .transition(PrValidationEvent::Fail(
+                    PrValidationTerminalReason::ObservationFailed,
+                ))
+                .map_err(transition_error)?;
+            self.persist_pr_validation_record(
+                &request.workspace_dir,
+                &request.pool_root,
+                Some(&current),
+                &next,
+            )?;
+            return Ok(PrValidationPollResult::Failed);
+        }
+        if snapshot.merge_state == GithubPrMergeState::Closed {
+            next = next
+                .transition(PrValidationEvent::Block(
+                    PrValidationTerminalReason::PullRequestClosedWithoutMerge,
+                ))
+                .map_err(transition_error)?;
+            self.persist_pr_validation_record(
+                &request.workspace_dir,
+                &request.pool_root,
+                Some(&current),
+                &next,
+            )?;
+            return Ok(PrValidationPollResult::Blocked);
+        }
 
         let fingerprint = snapshot_fingerprint(&snapshot);
         let prior_fingerprint = next.evidence_fingerprint().map(str::to_string);
         let had_post_merge_checkpoint = next.has_post_merge_checkpoint();
         let mut requested_remediation = None;
+        let mut remediation_failed = false;
 
         if matches!(
             next.phase(),
@@ -394,32 +444,42 @@ impl ParallelModeService {
                     .transition(PrValidationEvent::FindingObserved(finding.clone()))
                     .map_err(transition_error)?;
                 let idempotency_key = remediation_key(next.key(), &finding);
-                let remediation_task_key = remediation
-                    .request_remediation(&PrValidationRemediationRequest {
+                let remediation_task_key =
+                    remediation.request_remediation(&PrValidationRemediationRequest {
                         idempotency_key: idempotency_key.clone(),
                         validation_record_key: next.key().clone(),
                         target: next.target().clone(),
                         target_sha: finding.target_sha().clone(),
                         finding_key: finding.key().clone(),
                         summary: finding.summary().to_string(),
-                    })
-                    .map_err(|error| {
-                        format!("failed to request PR validation remediation: {error}")
-                    })?;
-                next = next
-                    .transition(PrValidationEvent::RemediationQueued(
-                        PrValidationRemediationCorrelation::new(
-                            finding.key().clone(),
-                            remediation_task_key,
-                        ),
-                    ))
-                    .map_err(transition_error)?;
-                requested_remediation = Some(idempotency_key);
+                    });
+                match remediation_task_key {
+                    Ok(remediation_task_key) => {
+                        next = next
+                            .transition(PrValidationEvent::RemediationQueued(
+                                PrValidationRemediationCorrelation::new(
+                                    finding.key().clone(),
+                                    remediation_task_key,
+                                ),
+                            ))
+                            .map_err(transition_error)?;
+                        requested_remediation = Some(idempotency_key);
+                    }
+                    Err(_) => {
+                        next = next
+                            .transition(PrValidationEvent::Fail(
+                                PrValidationTerminalReason::RemediationAdmissionFailed,
+                            ))
+                            .map_err(transition_error)?;
+                        remediation_failed = true;
+                    }
+                }
                 break;
             }
         }
 
-        let starting_post_merge = next.phase() == PrValidationPhase::PreMergeObservation
+        let starting_post_merge = !remediation_failed
+            && next.phase() == PrValidationPhase::PreMergeObservation
             && snapshot.merge_state == GithubPrMergeState::Merged;
         if starting_post_merge {
             let merge_sha = snapshot
@@ -432,16 +492,18 @@ impl ParallelModeService {
                 .map_err(transition_error)?;
         }
 
-        next = next
-            .transition(PrValidationEvent::ObservationCheckpointed {
-                delivery_revision: request.delivery_revision,
-                cursor: snapshot
-                    .next_cursor
-                    .as_ref()
-                    .map(|cursor| cursor.as_str().to_string()),
-                evidence_fingerprint: fingerprint.clone(),
-            })
-            .map_err(transition_error)?;
+        if !remediation_failed {
+            next = next
+                .transition(PrValidationEvent::ObservationCheckpointed {
+                    delivery_revision: request.delivery_revision,
+                    cursor: snapshot
+                        .next_cursor
+                        .as_ref()
+                        .map(|cursor| cursor.as_str().to_string()),
+                    evidence_fingerprint: fingerprint.clone(),
+                })
+                .map_err(transition_error)?;
+        }
 
         let can_settle = requested_remediation.is_none()
             && !starting_post_merge
@@ -464,7 +526,9 @@ impl ParallelModeService {
             )?;
         }
 
-        if let Some(idempotency_key) = requested_remediation {
+        if remediation_failed {
+            Ok(PrValidationPollResult::Failed)
+        } else if let Some(idempotency_key) = requested_remediation {
             Ok(PrValidationPollResult::RemediationRequested { idempotency_key })
         } else if can_settle {
             Ok(PrValidationPollResult::Settled)
@@ -517,6 +581,37 @@ fn actionable_findings(
 ) -> Result<Vec<PrValidationFinding>, String> {
     let target_sha = commit_sha(&snapshot.target_sha)?;
     let mut findings = Vec::new();
+    for activity in &snapshot.activities {
+        if activity
+            .commit_sha
+            .as_ref()
+            .is_some_and(|sha| sha != &snapshot.target_sha)
+        {
+            continue;
+        }
+        let (source, summary) = match activity.kind {
+            crate::application::port::outbound::github_pr_validation_port::GithubValidationActivityKind::Review => {
+                ("review", "pull request review requires remediation")
+            }
+            crate::application::port::outbound::github_pr_validation_port::GithubValidationActivityKind::IssueComment => {
+                ("issue_comment", "pull request issue comment requires remediation")
+            }
+            crate::application::port::outbound::github_pr_validation_port::GithubValidationActivityKind::ReviewThread => {
+                ("review_thread", "pull request review thread requires remediation")
+            }
+            crate::application::port::outbound::github_pr_validation_port::GithubValidationActivityKind::ReviewComment => {
+                ("review_comment", "pull request review comment requires remediation")
+            }
+        };
+        findings.push(PrValidationFinding::new(
+            PrValidationFindingKey::new(
+                PrValidationFindingSource::new(source)?,
+                activity.id.as_str(),
+            )?,
+            target_sha.clone(),
+            summary,
+        )?);
+    }
     for run in &snapshot.check_runs {
         if is_actionable_failure(&run.status) {
             findings.push(PrValidationFinding::new(

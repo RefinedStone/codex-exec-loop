@@ -45,6 +45,17 @@ impl GithubPrValidationPort for SnapshotPort {
     }
 }
 
+struct FailingSnapshotPort;
+
+impl GithubPrValidationPort for FailingSnapshotPort {
+    fn load_validation_snapshot(
+        &self,
+        _request: &GithubPrValidationObservationRequest,
+    ) -> Result<GithubPrValidationSnapshot> {
+        anyhow::bail!("Authorization: Bearer ghp_provider_secret_canary")
+    }
+}
+
 #[derive(Default)]
 struct RemediationPort {
     unique: Mutex<BTreeSet<String>>,
@@ -151,6 +162,137 @@ fn setup(
         pool_root: repo.pool_root(),
     };
     (repo, observation, RemediationPort::default())
+}
+
+#[test]
+fn actionable_review_comment_and_thread_activity_admit_idempotent_remediation() {
+    for (index, kind, expected_source) in [
+        (0, GithubValidationActivityKind::Review, "review"),
+        (
+            1,
+            GithubValidationActivityKind::IssueComment,
+            "issue_comment",
+        ),
+        (
+            2,
+            GithubValidationActivityKind::ReviewThread,
+            "review_thread",
+        ),
+        (
+            3,
+            GithubValidationActivityKind::ReviewComment,
+            "review_comment",
+        ),
+    ] {
+        let mut observed = snapshot(HEAD_A, GithubValidationRunStatus::Succeeded);
+        observed.activities.push(
+            GithubValidationActivity::new(
+                GithubOpaqueId::new(format!("activity:{index}")),
+                kind,
+                "2026-08-08T00:00:00Z",
+            )
+            .with_commit_sha(GithubCommitSha::new(HEAD_A)),
+        );
+        let (repo, observation, remediation) = setup(
+            &format!("validation-actionable-{index}"),
+            vec![observed.clone(), observed],
+        );
+        let service = test_parallel_mode_service();
+        service
+            .persist_pr_validation_record(
+                &repo.workspace_dir(),
+                &repo.pool_root(),
+                None,
+                &registered_record(),
+            )
+            .unwrap();
+
+        assert!(matches!(
+            service
+                .poll_pr_validation(&observation, &remediation, request(&repo, 1, HEAD_A))
+                .unwrap(),
+            PrValidationPollResult::RemediationRequested { .. }
+        ));
+        assert_eq!(
+            service
+                .poll_pr_validation(&observation, &remediation, request(&repo, 2, HEAD_A))
+                .unwrap(),
+            PrValidationPollResult::Waiting
+        );
+        let deliveries = remediation.deliveries.lock().unwrap();
+        assert_eq!(deliveries.len(), 1);
+        assert_eq!(deliveries[0].finding_key.source().as_str(), expected_source);
+    }
+}
+
+#[test]
+fn closed_pr_and_observation_error_persist_blocked_and_failed_reasons_without_secrets() {
+    let mut closed = snapshot(HEAD_A, GithubValidationRunStatus::Succeeded);
+    closed.merge_state = GithubPrMergeState::Closed;
+    let (blocked_repo, observation, remediation) =
+        setup("validation-blocked-terminal", vec![closed]);
+    let service = test_parallel_mode_service();
+    service
+        .persist_pr_validation_record(
+            &blocked_repo.workspace_dir(),
+            &blocked_repo.pool_root(),
+            None,
+            &registered_record(),
+        )
+        .unwrap();
+    assert_eq!(
+        service
+            .poll_pr_validation(
+                &observation,
+                &remediation,
+                request(&blocked_repo, 1, HEAD_A),
+            )
+            .unwrap(),
+        PrValidationPollResult::Blocked
+    );
+    let blocked = service
+        .recover_pr_validation_record(
+            &blocked_repo.workspace_dir(),
+            &blocked_repo.pool_root(),
+            &PrValidationRecordKey::new("acme/widgets#42").unwrap(),
+        )
+        .unwrap()
+        .unwrap()
+        .operator_summary();
+    assert_eq!(blocked.phase, PrValidationPhase::Blocked);
+    assert_eq!(blocked.reason, "pull request closed without merge");
+
+    let failed_repo = TempGitRepo::new("validation-failed-terminal");
+    service
+        .persist_pr_validation_record(
+            &failed_repo.workspace_dir(),
+            &failed_repo.pool_root(),
+            None,
+            &registered_record(),
+        )
+        .unwrap();
+    assert_eq!(
+        service
+            .poll_pr_validation(
+                &FailingSnapshotPort,
+                &remediation,
+                request(&failed_repo, 1, HEAD_A),
+            )
+            .unwrap(),
+        PrValidationPollResult::Failed
+    );
+    let failed = service
+        .recover_pr_validation_record(
+            &failed_repo.workspace_dir(),
+            &failed_repo.pool_root(),
+            &PrValidationRecordKey::new("acme/widgets#42").unwrap(),
+        )
+        .unwrap()
+        .unwrap()
+        .operator_summary();
+    assert_eq!(failed.phase, PrValidationPhase::Failed);
+    assert_eq!(failed.reason, "trusted validation observation failed");
+    assert!(!format!("{failed:?}").contains("ghp_provider_secret_canary"));
 }
 
 #[test]
@@ -493,7 +635,7 @@ fn malicious_provider_identity_and_name_are_bounded_before_remediation() {
 }
 
 #[test]
-fn merge_sha_evidence_mismatch_is_rejected_before_checkpointing() {
+fn merge_sha_evidence_mismatch_persists_failure_before_checkpointing() {
     let mut merged = merged_snapshot();
     merged.evidence_sha = GithubCommitSha::new(HEAD_A);
     merged.check_runs[0].target_sha = GithubCommitSha::new(HEAD_A);
@@ -508,11 +650,12 @@ fn merge_sha_evidence_mismatch_is_rejected_before_checkpointing() {
         )
         .unwrap();
 
-    let error = service
-        .poll_pr_validation(&observation, &remediation, request(&repo, 1, HEAD_A))
-        .expect_err("post-merge evidence must be bound to the merge SHA");
-
-    assert!(error.contains("evidence for another revision"));
+    assert_eq!(
+        service
+            .poll_pr_validation(&observation, &remediation, request(&repo, 1, HEAD_A))
+            .unwrap(),
+        PrValidationPollResult::Failed
+    );
     let record = service
         .recover_pr_validation_record(
             &repo.workspace_dir(),
@@ -521,6 +664,11 @@ fn merge_sha_evidence_mismatch_is_rejected_before_checkpointing() {
         )
         .unwrap()
         .unwrap();
+    assert_eq!(record.phase(), PrValidationPhase::Failed);
+    assert_eq!(
+        record.operator_summary().reason,
+        "trusted validation observation failed"
+    );
     assert_eq!(record.observation_revision(), 0);
 }
 
@@ -528,14 +676,12 @@ fn merge_sha_evidence_mismatch_is_rejected_before_checkpointing() {
 fn terminal_provider_check_and_catch_up_settle_once() {
     let merged = merged_snapshot();
     let mut late_event = merged.clone();
-    late_event.activities.push(
-        GithubValidationActivity::new(
-            GithubOpaqueId::new("review:late"),
-            GithubValidationActivityKind::Review,
-            "2026-08-07T22:00:00Z",
-        )
-        .with_commit_sha(GithubCommitSha::new(HEAD_A)),
-    );
+    late_event.check_runs.push(GithubValidationCheckRun::new(
+        GithubOpaqueId::new("check:late-success"),
+        "late successful check",
+        GithubCommitSha::new(MERGE),
+        GithubValidationRunStatus::Succeeded,
+    ));
     let (repo, observation, remediation) = setup(
         "validation-post-merge",
         vec![merged, late_event.clone(), late_event],
