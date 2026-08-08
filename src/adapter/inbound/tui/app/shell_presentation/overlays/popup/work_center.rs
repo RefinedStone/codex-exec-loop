@@ -60,20 +60,21 @@ pub(crate) fn build_work_center_overlay_view(
             .iter()
             .map(|item| work_center_item_line(item, selected_section, line_width))
             .collect(),
-        detail_lines: vec![Line::styled(
-            truncate_end_to_cells(
-                &format!(
-                    "{} · {} · {} → {} · {}",
-                    copy.selected_prefix,
-                    selected_item.label,
-                    selected_item.state,
-                    selected_item.destination,
-                    selected_item.detail
-                ),
-                line_width,
-            ),
-            AkraTheme::muted(),
-        )],
+        detail_lines: std::iter::once(format!(
+            "{} · {} · {} → {}",
+            copy.selected_prefix,
+            selected_item.label,
+            selected_item.state,
+            selected_item.destination,
+        ))
+        .chain(selected_item.detail.split(" · ").map(str::to_string))
+        .map(|detail| {
+            Line::styled(
+                truncate_end_to_cells(&detail, line_width),
+                AkraTheme::muted(),
+            )
+        })
+        .collect(),
         key_lines: vec![
             AkraTheme::key_line(truncate_end_to_cells(copy.keys_navigation, line_width)),
             AkraTheme::key_line(truncate_end_to_cells(copy.keys_direct, line_width)),
@@ -316,6 +317,8 @@ fn delivery_item(screen_model: &ConversationScreenModel<'_>) -> WorkCenterItem {
             PrValidationOperatorState::Blocking => "BLOCKED",
             PrValidationOperatorState::Remediation => "REMEDIATE",
             PrValidationOperatorState::Terminal => "TERMINAL",
+            PrValidationOperatorState::Blocked => "BLOCKED",
+            PrValidationOperatorState::Failed => "FAILED",
         }
     } else if active_item.is_some() {
         "WORKING"
@@ -351,11 +354,27 @@ fn delivery_item(screen_model: &ConversationScreenModel<'_>) -> WorkCenterItem {
     } else if let Some(blocker) = blocker {
         compact_inline(&blocker)
     } else if let Some(validation) = validation {
+        let correlation = validation
+            .correlations
+            .first()
+            .map(|correlation| {
+                format!(
+                    " · {} -> {}",
+                    correlation.finding, correlation.remediation_akra_id
+                )
+            })
+            .unwrap_or_default();
         format!(
-            "{} · target {} · {}",
+            "{} · {} · {} · {} · {}{}",
+            validation.akra_id,
+            validation.canonical_pr_url,
+            validation
+                .blocker
+                .as_deref()
+                .unwrap_or(validation.reason.as_str()),
             validation.phase_label(),
-            validation.target_short_sha,
-            validation.next_action()
+            validation.next_action(),
+            correlation
         )
     } else {
         compact_inline(&format!(
@@ -555,12 +574,22 @@ mod tests {
         let app = test_native_tui_app();
         let mut screen = ConversationScreenModel::from_app(&app);
         screen.parallel_mode_supervisor.pr_validation = Some(PrValidationOperatorSummary {
+            akra_id: "akra-unit-42".to_string(),
+            canonical_pr_url: "https://github.com/acme/widgets/pull/42".to_string(),
             pull_request_number: 42,
             state: PrValidationOperatorState::Remediation,
             phase: PrValidationPhase::RemediationRunning,
             target_short_sha: "aaaaaaaaaaaa".to_string(),
             finding_count: 2,
             remediation_count: 1,
+            reason: "check_run finding has correlated remediation".to_string(),
+            blocker: Some("check_run finding has correlated remediation".to_string()),
+            recovery: crate::domain::parallel_mode::PrValidationRecoveryAction::CompleteCorrelatedRemediation,
+            recovery_action: "complete the correlated remediation task".to_string(),
+            correlations: vec![crate::domain::parallel_mode::PrValidationOperatorCorrelation {
+                finding: "check_run:0123456789ab".to_string(),
+                remediation_akra_id: "remediation-task-1".to_string(),
+            }],
             observation_revision: 7,
             post_merge_checkpoint_observed: false,
         });
@@ -574,7 +603,12 @@ mod tests {
         assert!(text.contains("DELIVERY REMEDIATE"), "{text}");
         assert!(text.contains("PR #42 remediation"), "{text}");
         assert!(text.contains("remediation_running"), "{text}");
-        assert!(text.contains("target aaaaaaaaaaaa"), "{text}");
+        assert!(text.contains("akra-unit-42"), "{text}");
+        assert!(
+            text.contains("https://github.com/acme/widgets/pull/42"),
+            "{text}"
+        );
+        assert!(text.contains("check_run finding"), "{text}");
     }
 
     #[test]

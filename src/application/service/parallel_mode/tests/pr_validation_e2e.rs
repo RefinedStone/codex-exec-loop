@@ -462,7 +462,7 @@ pub mod tests {
         );
 
         let restarted = build_service(authority.clone());
-        assert_eq!(
+        assert!(matches!(
             restarted
                 .poll_pr_validation_into_normal_queue(
                     &github,
@@ -470,8 +470,59 @@ pub mod tests {
                     request(&repo, 6, HEAD_B),
                 )
                 .unwrap(),
-            PrValidationPollResult::Waiting,
-            "new successful evidence requires one stable catch-up poll"
+            PrValidationPollResult::RemediationRequested { .. }
+        ));
+        let queue = planning
+            .queue
+            .load_authority_snapshot(&repo.workspace_dir())
+            .unwrap();
+        assert_eq!(queue.tasks.len(), 3);
+        let review_remediation_task = queue.tasks[2].clone();
+        let queue_projection =
+            SqlitePlanningAuthorityAdapter::load_task_authority_snapshot(&repo.workspace_dir())
+                .unwrap()
+                .unwrap()
+                .queue_projection;
+        let projection = PlanningRuntimeProjection::ready_with_queue_projection(
+            "authority-backed review remediation queue".to_string(),
+            queue_projection.queue_summary(),
+            None,
+            queue_projection.next_task.clone(),
+            queue_projection,
+        );
+        let dispatch = restarted
+            .build_dispatch_plan(&repo.workspace_dir(), &projection, usize::MAX)
+            .unwrap();
+        assert_eq!(dispatch.candidates.len(), 1);
+        assert_eq!(dispatch.candidates[0].task_id, review_remediation_task.id);
+        restarted
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request(
+                    &review_remediation_task.id,
+                    &review_remediation_task.title,
+                    "agent-review-remediation",
+                    "review-pr-validation-remediation",
+                ),
+            )
+            .expect("review remediation must acquire an ordinary pool lease");
+        assert!(
+            restarted
+                .transition_pr_validation_remediation_started(
+                    &repo.workspace_dir(),
+                    &repo.pool_root(),
+                    &review_remediation_task.id,
+                )
+                .unwrap()
+        );
+        assert!(
+            restarted
+                .transition_pr_validation_remediation_completed(
+                    &repo.workspace_dir(),
+                    &repo.pool_root(),
+                    &review_remediation_task.id,
+                )
+                .unwrap()
         );
         assert_eq!(
             restarted
@@ -503,18 +554,15 @@ pub mod tests {
             .unwrap();
         assert_eq!(summary.phase, PrValidationPhase::Settled);
         assert_eq!(
-            summary.finding_count, 1,
-            "SHA reset clears pre-merge findings"
+            summary.finding_count, 2,
+            "the completed post-merge check and review remain visible"
         );
         assert_eq!(
-            summary.remediation_count, 1,
-            "SHA reset clears pre-merge correlations"
+            summary.remediation_count, 2,
+            "the post-merge check and review each retain a correlation"
         );
         assert!(summary.post_merge_checkpoint_observed);
-        assert_eq!(
-            summary.next_action(),
-            "all configured validation sources are complete"
-        );
+        assert_eq!(summary.next_action(), "none");
     }
 
     #[test]

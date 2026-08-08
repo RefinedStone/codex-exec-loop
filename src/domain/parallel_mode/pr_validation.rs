@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use sha2::{Digest, Sha256};
 
 #[cfg(test)]
 #[path = "pr_validation_projection_tests.rs"]
@@ -28,6 +29,20 @@ pub struct PrValidationTarget {
 impl PrValidationTarget {
     pub fn new(repository: impl Into<String>, pull_request_number: u64) -> Result<Self, String> {
         let repository = non_empty(repository, "PR validation repository")?;
+        let mut segments = repository.split('/');
+        if repository.len() > 200
+            || segments.clone().count() != 2
+            || segments.any(|segment| {
+                segment.is_empty()
+                    || !segment.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
+                    })
+            })
+        {
+            return Err(
+                "PR validation repository must be a canonical GitHub owner/name".to_string(),
+            );
+        }
         if pull_request_number == 0 {
             return Err("PR validation pull request number must be positive".to_string());
         }
@@ -35,6 +50,13 @@ impl PrValidationTarget {
             repository,
             pull_request_number,
         })
+    }
+
+    pub fn canonical_url(&self) -> String {
+        format!(
+            "https://github.com/{}/pull/{}",
+            self.repository, self.pull_request_number
+        )
     }
 
     pub fn repository(&self) -> &str {
@@ -237,6 +259,8 @@ pub enum PrValidationPhase {
     RemediationRunning,
     PostMergeObservation,
     Settled,
+    Blocked,
+    Failed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -404,6 +428,62 @@ impl PrValidationCompletion {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PrValidationTerminalReason {
     AllConfiguredSourcesComplete,
+    PullRequestClosedWithoutMerge,
+    ObservationFailed,
+    RemediationAdmissionFailed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PrValidationRecoveryAction {
+    None,
+    PollAgain,
+    RunCorrelatedRemediation,
+    CompleteCorrelatedRemediation,
+    ReopenOrReplacePullRequest,
+    RerunWithFreshRecord,
+    RestoreQueueAndRerun,
+}
+
+impl PrValidationRecoveryAction {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::PollAgain => "poll validation again after provider activity",
+            Self::RunCorrelatedRemediation => "run the remediation correlated to the finding",
+            Self::CompleteCorrelatedRemediation => "complete the correlated remediation task",
+            Self::ReopenOrReplacePullRequest => {
+                "reopen the pull request or register validation for its replacement"
+            }
+            Self::RerunWithFreshRecord => {
+                "rerun validation to create a fresh Akra validation record"
+            }
+            Self::RestoreQueueAndRerun => {
+                "restore the planning queue and rerun validation with a fresh Akra record"
+            }
+        }
+    }
+}
+
+impl PrValidationTerminalReason {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::AllConfiguredSourcesComplete => "all configured validation sources completed",
+            Self::PullRequestClosedWithoutMerge => "pull request closed without merge",
+            Self::ObservationFailed => "trusted validation observation failed",
+            Self::RemediationAdmissionFailed => "validation remediation admission failed",
+        }
+    }
+
+    pub fn recovery_action(&self) -> PrValidationRecoveryAction {
+        match self {
+            Self::AllConfiguredSourcesComplete => PrValidationRecoveryAction::None,
+            Self::PullRequestClosedWithoutMerge => {
+                PrValidationRecoveryAction::ReopenOrReplacePullRequest
+            }
+            Self::ObservationFailed => PrValidationRecoveryAction::RerunWithFreshRecord,
+            Self::RemediationAdmissionFailed => PrValidationRecoveryAction::RestoreQueueAndRerun,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -426,6 +506,8 @@ pub enum PrValidationEvent {
         evidence_fingerprint: String,
     },
     Settle(PrValidationCompletion),
+    Block(PrValidationTerminalReason),
+    Fail(PrValidationTerminalReason),
 }
 
 impl PrValidationEvent {
@@ -441,6 +523,8 @@ impl PrValidationEvent {
             Self::BeginPostMergeObservation => "begin_post_merge_observation",
             Self::ObservationCheckpointed { .. } => "observation_checkpointed",
             Self::Settle(_) => "settle",
+            Self::Block(_) => "block",
+            Self::Fail(_) => "fail",
         }
     }
 }
@@ -565,6 +649,8 @@ impl PrValidationRecord {
     pub fn operator_summary(&self) -> PrValidationOperatorSummary {
         let state = match self.phase {
             PrValidationPhase::Settled => PrValidationOperatorState::Terminal,
+            PrValidationPhase::Blocked => PrValidationOperatorState::Blocked,
+            PrValidationPhase::Failed => PrValidationOperatorState::Failed,
             PrValidationPhase::RemediationQueued | PrValidationPhase::RemediationRunning => {
                 PrValidationOperatorState::Remediation
             }
@@ -577,15 +663,71 @@ impl PrValidationRecord {
             | PrValidationPhase::PreMergeObservation
             | PrValidationPhase::PostMergeObservation => PrValidationOperatorState::Pending,
         };
+        let reason = self.operator_reason(state);
+        let recovery = self
+            .terminal_reason
+            .as_ref()
+            .map(PrValidationTerminalReason::recovery_action)
+            .unwrap_or_else(|| state.recovery_action());
+        let blocker =
+            (!matches!(state, PrValidationOperatorState::Terminal)).then(|| reason.clone());
+        let correlations = self
+            .remediations
+            .values()
+            .take(4)
+            .map(|correlation| PrValidationOperatorCorrelation {
+                finding: format!(
+                    "{}:{}",
+                    correlation.finding_key.source.as_str(),
+                    opaque_reference(&correlation.finding_key.provider_event_id)
+                ),
+                remediation_akra_id: bounded_identifier(correlation.remediation_key.as_str()),
+            })
+            .collect();
         PrValidationOperatorSummary {
+            akra_id: bounded_identifier(self.key.as_str()),
+            canonical_pr_url: self.target.canonical_url(),
             pull_request_number: self.target.pull_request_number,
             state,
             phase: self.phase,
             target_short_sha: self.target_shas.source_sha.as_str()[..12].to_string(),
             finding_count: self.findings.len(),
             remediation_count: self.remediations.len(),
+            reason,
+            blocker,
+            recovery,
+            recovery_action: recovery.label().to_string(),
+            correlations,
             observation_revision: self.observation_revision,
             post_merge_checkpoint_observed: self.post_merge_checkpoint_revision.is_some(),
+        }
+    }
+
+    fn operator_reason(&self, state: PrValidationOperatorState) -> String {
+        if let Some(reason) = self.terminal_reason.as_ref() {
+            return reason.label().to_string();
+        }
+        match state {
+            PrValidationOperatorState::Pending => {
+                "validation sources or final catch-up are not complete".to_string()
+            }
+            PrValidationOperatorState::Blocking => self
+                .findings
+                .keys()
+                .next()
+                .map(|key| format!("{} finding requires remediation", key.source.as_str()))
+                .unwrap_or_else(|| "validation finding requires remediation".to_string()),
+            PrValidationOperatorState::Remediation => self
+                .active_remediation
+                .as_ref()
+                .or_else(|| self.remediations.keys().next())
+                .map(|key| format!("{} finding has correlated remediation", key.source.as_str()))
+                .unwrap_or_else(|| "correlated remediation is pending".to_string()),
+            PrValidationOperatorState::Terminal => {
+                "all configured validation sources completed".to_string()
+            }
+            PrValidationOperatorState::Blocked => "validation is blocked".to_string(),
+            PrValidationOperatorState::Failed => "validation failed".to_string(),
         }
     }
 
@@ -669,7 +811,12 @@ impl PrValidationRecord {
                 };
             }
             PrValidationEvent::TargetShaChanged(target_shas)
-                if next.phase != PrValidationPhase::Settled =>
+                if !matches!(
+                    next.phase,
+                    PrValidationPhase::Settled
+                        | PrValidationPhase::Blocked
+                        | PrValidationPhase::Failed
+                ) =>
             {
                 next.target_shas = target_shas;
                 next.phase = PrValidationPhase::PreMergeObservation;
@@ -698,8 +845,10 @@ impl PrValidationRecord {
                 delivery_revision,
                 cursor,
                 evidence_fingerprint,
-            } if next.phase != PrValidationPhase::Settled
-                && delivery_revision > next.observation_revision =>
+            } if !matches!(
+                next.phase,
+                PrValidationPhase::Settled | PrValidationPhase::Blocked | PrValidationPhase::Failed
+            ) && delivery_revision > next.observation_revision =>
             {
                 next.observation_revision = delivery_revision;
                 next.observation_cursor = cursor;
@@ -722,6 +871,28 @@ impl PrValidationRecord {
                     Some(PrValidationTerminalReason::AllConfiguredSourcesComplete);
                 next.phase = PrValidationPhase::Settled;
             }
+            PrValidationEvent::Block(reason)
+                if !matches!(
+                    next.phase,
+                    PrValidationPhase::Settled
+                        | PrValidationPhase::Blocked
+                        | PrValidationPhase::Failed
+                ) =>
+            {
+                next.terminal_reason = Some(reason);
+                next.phase = PrValidationPhase::Blocked;
+            }
+            PrValidationEvent::Fail(reason)
+                if !matches!(
+                    next.phase,
+                    PrValidationPhase::Settled
+                        | PrValidationPhase::Blocked
+                        | PrValidationPhase::Failed
+                ) =>
+            {
+                next.terminal_reason = Some(reason);
+                next.phase = PrValidationPhase::Failed;
+            }
             invalid => {
                 return Err(PrValidationTransitionRejection::InvalidTransition {
                     phase: next.phase,
@@ -739,6 +910,8 @@ pub enum PrValidationOperatorState {
     Blocking,
     Remediation,
     Terminal,
+    Blocked,
+    Failed,
 }
 
 impl PrValidationOperatorState {
@@ -748,18 +921,44 @@ impl PrValidationOperatorState {
             Self::Blocking => "blocking",
             Self::Remediation => "remediation",
             Self::Terminal => "terminal",
+            Self::Blocked => "blocked",
+            Self::Failed => "failed",
+        }
+    }
+
+    fn recovery_action(self) -> PrValidationRecoveryAction {
+        match self {
+            Self::Pending => PrValidationRecoveryAction::PollAgain,
+            Self::Blocking => PrValidationRecoveryAction::RunCorrelatedRemediation,
+            Self::Remediation => PrValidationRecoveryAction::CompleteCorrelatedRemediation,
+            Self::Terminal => PrValidationRecoveryAction::None,
+            Self::Blocked => PrValidationRecoveryAction::ReopenOrReplacePullRequest,
+            Self::Failed => PrValidationRecoveryAction::RerunWithFreshRecord,
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrValidationOperatorCorrelation {
+    pub finding: String,
+    pub remediation_akra_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrValidationOperatorSummary {
+    pub akra_id: String,
+    pub canonical_pr_url: String,
     pub pull_request_number: u64,
     pub state: PrValidationOperatorState,
     pub phase: PrValidationPhase,
     pub target_short_sha: String,
     pub finding_count: usize,
     pub remediation_count: usize,
+    pub reason: String,
+    pub blocker: Option<String>,
+    pub recovery: PrValidationRecoveryAction,
+    pub recovery_action: String,
+    pub correlations: Vec<PrValidationOperatorCorrelation>,
     pub observation_revision: u64,
     pub post_merge_checkpoint_observed: bool,
 }
@@ -773,22 +972,13 @@ impl PrValidationOperatorSummary {
             PrValidationPhase::RemediationRunning => "remediation_running",
             PrValidationPhase::PostMergeObservation => "post_merge_observation",
             PrValidationPhase::Settled => "settled",
+            PrValidationPhase::Blocked => "blocked",
+            PrValidationPhase::Failed => "failed",
         }
     }
 
-    pub fn next_action(&self) -> &'static str {
-        match self.state {
-            PrValidationOperatorState::Pending => {
-                "wait for configured validation sources and final catch-up"
-            }
-            PrValidationOperatorState::Blocking => {
-                "remediation required for observed validation findings"
-            }
-            PrValidationOperatorState::Remediation => {
-                "wait for the correlated remediation task to complete"
-            }
-            PrValidationOperatorState::Terminal => "all configured validation sources are complete",
-        }
+    pub fn next_action(&self) -> &str {
+        &self.recovery_action
     }
 
     pub fn compact_label(&self) -> String {
@@ -799,6 +989,23 @@ impl PrValidationOperatorSummary {
             self.finding_count,
             self.remediation_count
         )
+    }
+}
+
+fn opaque_reference(value: &str) -> String {
+    let digest = Sha256::digest(value.as_bytes());
+    format!("{:x}", digest)[..12].to_string()
+}
+
+fn bounded_identifier(value: &str) -> String {
+    if value.len() <= 80
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':' | b'/' | b'#')
+        })
+    {
+        value.to_string()
+    } else {
+        format!("opaque:{}", opaque_reference(value))
     }
 }
 
