@@ -1,9 +1,0 @@
-Akra / tui-ux-competitiv...  •  ready  •  gpt-5.5/high  •  queue: idle
-╭ Task
-│ > :
-│palette 1/19
-│> :diag  diagnostics
-│  :parallel  parallel mode
-│  :peek  parallel agent peek
-│  :activity  progressive activity cards
-╰  ↑/↓ or Tab select  |  Enter choose  |  Esc close

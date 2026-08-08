@@ -14,7 +14,7 @@ primary surface; CLI, Admin, Telegram, and automation adapters reuse the same ap
 
 | Surface | Current role |
 | --- | --- |
-| Native TUI | Ratatui/Crossterm inline main-buffer shell with host scrollback, sessions, planning, queue, review, activity, and parallel overlays |
+| Native TUI | Ratatui/Crossterm alternate-screen fullscreen shell with an app-owned transcript viewport, sessions, planning, queue, review, activity, and parallel inspection |
 | Core runtime | Headless command/effect/completion/snapshot flow for startup, sessions, turns, streams, and post-turn evaluation |
 | Planning | SQLite authority with staged planning artifacts under `.codex-exec-loop/planning/` |
 | Parallel mode | Three guarded worktree slots, worker leases, official completion refresh, reviewed GitHub delivery, integration, and cleanup |
@@ -140,4 +140,5 @@ contract in [.gemini/styleguide.md](.gemini/styleguide.md).
 - [Competitive research](docs/competitive/README.md) ([한국어](docs/ko/competitive/README.md))
 
 Current implementation references are compact and have Korean translations under `docs/ko/`.
-Future plans and reproducible competitor research remain unabridged.
+Future plans are explicitly labeled, and competitive research keeps one current pinned brief per
+product plus a compact Korean index.

@@ -152,6 +152,22 @@ Focused board도 같은 alternate-screen fullscreen frame transaction을 사용�
 `:peek`은 활성 agent 대화를 읽기 전용으로 미리 보여줍니다. Agent나 overlay를 바꾸면 늦게 도착한
 결과가 최신 preview 또는 interactive conversation을 교체하지 못합니다.
 
+## Admin 게임 프런트엔드
+
+로컬 Admin 그래픽 dashboard는 같은 planning·parallel fact를 수동적으로 보여 주지만, harness
+control은 실제 application command입니다. CSRF로 보호된 browser action은 하나의 persistent
+`ParallelModeControlPlaneHandle`을 통해 automation epoch 활성화, 다음 accepted task 요청,
+supervisor refresh, loop 비활성화를 수행합니다. HTTP adapter가 Git, GitHub, pool, distributor
+adapter를 직접 호출하지 않습니다.
+
+`/admin/akra`의 PixiJS 8 world는 같은 dashboard snapshot을 사용합니다. 검증된 frontend store,
+semantic camera zoom, worker 이동, 가구 occlusion, scene selection은 presentation에만 속합니다.
+상세 영문 계약은 [Admin Game Frontend](../../reference/admin-game-frontend.md)에 있습니다.
+
+`akra admin --debug-harness`는 같은 dashboard 계약 뒤에서 application이 소유하는 비영속 Fake
+scenario clock을 시작합니다. Normal delivery, blocked recovery, queue pressure를 실제 planning,
+parallel, Git, GitHub 권위를 바꾸지 않고 재생합니다.
+
 ## 복구와 제한
 
 - 잘못되거나 충돌한 planning update는 continuation을 멈추고 검토 근거를 보존합니다.

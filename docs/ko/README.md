@@ -133,7 +133,7 @@ bash scripts/check_native_pr.sh
 - [개발 및 전달 가이드](reference/development.md)
 - [TUI 시각 계약](reference/tui-contract.md)
 - [검증 가이드](reference/validation.md)
-- [경쟁 앱 조사 원문](../competitive/README.md)
+- [경쟁 앱 조사](competitive/README.md) · [canonical 원문](../competitive/README.md)
 
-현재 구현 참조 문서는 compact하게 유지하고 `docs/ko/`에서 한국어 번역을 관리합니다. 미래 계획과
-재현 가능한 경쟁 앱 조사는 원문을 축약하지 않습니다.
+현재 구현 참조 문서는 compact하게 유지하고 `docs/ko/`에서 한국어 번역을 관리합니다. 미래 계획은
+상태를 명시하며, 경쟁 앱 조사는 제품별 최신 canonical 원문과 compact 한국어 index만 유지합니다.
