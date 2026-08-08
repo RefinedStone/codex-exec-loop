@@ -25530,3 +25530,47 @@ fn relative_path(repo_root: &Path, path: &Path) -> String {
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
+
+#[test]
+fn forbids_time_completion_and_direct_git_writes() {
+    let root = repo_root();
+    let validator_sources = [
+        "src/application/service/parallel_mode/pr_validation.rs",
+        "src/adapter/outbound/github/pr_validation.rs",
+    ];
+    let forbidden_operations = [
+        "std::thread::sleep",
+        "tokio::time::sleep",
+        ".sleep(",
+        "Command::new(\"git\")",
+        "git push",
+        "git merge",
+        "git rebase",
+        "git checkout",
+        "git commit",
+    ];
+
+    for relative_path in validator_sources {
+        let source = std::fs::read_to_string(root.join(relative_path))
+            .unwrap_or_else(|error| panic!("failed to read {relative_path}: {error}"));
+        for forbidden in forbidden_operations {
+            assert!(
+                !source.contains(forbidden),
+                "{relative_path} must not contain `{forbidden}`"
+            );
+        }
+    }
+
+    let service_source = std::fs::read_to_string(
+        root.join("src/application/service/parallel_mode/pr_validation.rs"),
+    )
+    .expect("validator service source must be readable");
+    assert!(
+        service_source.contains("snapshot.is_successfully_complete()"),
+        "validation settlement must be gated by successful evidence"
+    );
+    assert!(
+        !service_source.contains("snapshot.is_terminally_complete()"),
+        "terminal-but-failed evidence must not settle validation"
+    );
+}
