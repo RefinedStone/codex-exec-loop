@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result, anyhow, bail};
 use base64::Engine;
@@ -42,6 +43,18 @@ impl GithubPrValidationAdapter {
             )?),
         })
     }
+
+    /// Defers credential discovery until the runtime has a durable validation record to poll.
+    /// Production composition can therefore install validation at startup without making an
+    /// unrelated missing credential fatal before parallel delivery is active.
+    pub fn for_local_github_credentials(repo_root: impl Into<PathBuf>) -> Self {
+        Self {
+            api: Box::new(LocalCredentialsGithubValidationApi {
+                repo_root: repo_root.into(),
+                poller: OnceLock::new(),
+            }),
+        }
+    }
 }
 
 impl GithubPrValidationAdapter {
@@ -53,6 +66,24 @@ impl GithubPrValidationAdapter {
 
 trait GithubValidationApi: Send + Sync {
     fn get(&self, endpoint: &str) -> Result<String>;
+}
+
+struct LocalCredentialsGithubValidationApi {
+    repo_root: PathBuf,
+    poller: OnceLock<Result<GithubReviewPollerAdapter, String>>,
+}
+
+impl GithubValidationApi for LocalCredentialsGithubValidationApi {
+    fn get(&self, endpoint: &str) -> Result<String> {
+        let poller = self.poller.get_or_init(|| {
+            GithubReviewPollerAdapter::from_local_github_credentials(&self.repo_root)
+                .map_err(|error| error.to_string())
+        });
+        match poller {
+            Ok(poller) => poller.fetch_validation_json(endpoint),
+            Err(error) => Err(anyhow!(error.clone())),
+        }
+    }
 }
 
 impl GithubValidationApi for GithubReviewPollerAdapter {

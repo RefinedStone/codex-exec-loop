@@ -1450,6 +1450,13 @@ impl PlanningAuthorityPort for SqlitePlanningAuthorityAdapter {
         Self::upsert_runtime_distributor_queue_record(workspace_dir, record)
     }
 
+    fn load_runtime_pr_validation_records(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<Vec<PrValidationRecord>> {
+        Self::load_runtime_pr_validation_records(workspace_dir)
+    }
+
     fn load_runtime_pr_validation_record(
         &self,
         workspace_dir: &str,

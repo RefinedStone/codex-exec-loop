@@ -697,6 +697,14 @@ pub trait PlanningAuthorityPort: ParallelModeRuntimeEventLogPort + Send + Sync {
         record: &PlanningAuthorityDistributorQueueRecord,
     ) -> Result<()>;
 
+    // Load all authoritative PR validation records for one runtime polling delivery.
+    fn load_runtime_pr_validation_records(
+        &self,
+        _workspace_dir: &str,
+    ) -> Result<Vec<PrValidationRecord>> {
+        Ok(Vec::new())
+    }
+
     // Load one authoritative PR validation record across process/restart boundaries.
     fn load_runtime_pr_validation_record(
         &self,

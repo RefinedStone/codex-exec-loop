@@ -7,6 +7,7 @@ use crate::application::port::outbound::github_automation_port::{
     AKRA_GITHUB_PUSH_REMOTE_CONFIG_KEY, AKRA_GITHUB_PUSH_REMOTE_ENV_VAR, GithubAutomationPort,
     resolve_github_push_remote_name_strict,
 };
+use crate::application::port::outbound::github_pr_validation_port::GithubPrValidationPort;
 use crate::application::port::outbound::parallel_mode_runtime_event_log_port::ParallelModeRuntimeEventLogRequest;
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::{
@@ -378,6 +379,7 @@ pub struct ParallelModeService {
     planning_authority: Arc<dyn PlanningAuthorityPort>,
     parallel_runtime: Arc<dyn ParallelModeRuntimePort>,
     github_automation: Arc<dyn GithubAutomationPort>,
+    pr_validation_observation: Option<Arc<dyn GithubPrValidationPort>>,
     delivery_safety_policy: ParallelModeDeliverySafetyPolicy,
     parallel_agent_profile_service: Option<ParallelAgentProfileService>,
 }
@@ -416,9 +418,18 @@ impl ParallelModeService {
             planning_authority,
             parallel_runtime,
             github_automation,
+            pr_validation_observation: None,
             delivery_safety_policy,
             parallel_agent_profile_service: None,
         }
+    }
+
+    pub fn with_pr_validation_observation(
+        mut self,
+        observation: Arc<dyn GithubPrValidationPort>,
+    ) -> Self {
+        self.pr_validation_observation = Some(observation);
+        self
     }
 
     pub fn with_parallel_agent_profile_service(
