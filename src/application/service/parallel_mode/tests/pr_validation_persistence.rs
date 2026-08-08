@@ -20,6 +20,7 @@ use super::super::{
 #[derive(Default)]
 struct ValidationMirrorRuntime {
     files: Mutex<BTreeMap<PathBuf, String>>,
+    ensured_directories: Mutex<Vec<PathBuf>>,
     reject_next_compare_and_swap: AtomicBool,
 }
 
@@ -39,6 +40,20 @@ impl ValidationMirrorRuntime {
             .expect("mirror lock")
             .get(relative)
             .cloned()
+    }
+
+    fn ensured_directories(&self) -> Vec<PathBuf> {
+        self.ensured_directories
+            .lock()
+            .expect("directory lock")
+            .clone()
+    }
+
+    fn clear_ensured_directories(&self) {
+        self.ensured_directories
+            .lock()
+            .expect("directory lock")
+            .clear();
     }
 }
 
@@ -89,7 +104,11 @@ impl ParallelModeRuntimePort for ValidationMirrorRuntime {
         path.exists()
     }
 
-    fn ensure_directory_exists(&self, _path: &Path) -> std::io::Result<()> {
+    fn ensure_directory_exists(&self, path: &Path) -> std::io::Result<()> {
+        self.ensured_directories
+            .lock()
+            .expect("directory lock")
+            .push(path.to_path_buf());
         Ok(())
     }
 
@@ -217,6 +236,7 @@ fn validation_record_survives_authority_restart_and_repairs_a_missing_mirror() {
     );
 
     runtime.clear();
+    runtime.clear_ensured_directories();
     let restarted = SqlitePlanningAuthorityAdapter::new();
     let recovered = recover_pr_validation_record_mirror(
         &restarted,
@@ -233,6 +253,21 @@ fn validation_record_survives_authority_restart_and_repairs_a_missing_mirror() {
         runtime.body(&relative),
         Some(serde_json::to_string_pretty(&record).expect("record should serialize"))
     );
+    assert_eq!(runtime.ensured_directories(), vec![pool_root]);
+}
+
+#[test]
+fn validation_persistence_prepares_pool_root_before_touching_mirror() {
+    let workspace = temp_workspace("prepare-mirror-root");
+    let pool_root = PathBuf::from(&workspace).join("pool");
+    let authority = SqlitePlanningAuthorityAdapter::new();
+    let runtime = ValidationMirrorRuntime::default();
+    let record = registered_record("validation/prepare-mirror-root");
+
+    persist_pr_validation_record(&authority, &runtime, &workspace, &pool_root, None, &record)
+        .expect("validation record should persist");
+
+    assert_eq!(runtime.ensured_directories(), vec![pool_root]);
 }
 
 #[test]
