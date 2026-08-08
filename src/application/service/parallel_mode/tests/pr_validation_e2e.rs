@@ -31,7 +31,9 @@ pub mod tests {
     use crate::application::service::parallel_mode::{
         ParallelModeService, PrValidationPollRequest, PrValidationPollResult,
     };
-    use crate::application::service::planning::{PlanningRuntimeProjection, PlanningServices};
+    use crate::application::service::planning::{
+        PlanningRuntimeProjection, PlanningServices, PlanningTaskCreateInput,
+    };
     use crate::application::service::pr_validation_query::PrValidationQueryService;
     use crate::domain::github_review::{GithubCommitSha, GithubOpaqueId, GithubPullRequestTarget};
     use crate::domain::parallel_mode::{
@@ -40,7 +42,7 @@ pub mod tests {
     };
     use crate::domain::planning::{
         DirectionCatalogDocument, DirectionDefinition, DirectionState, PLANNING_FORMAT_VERSION,
-        PriorityQueueProjection, QueueIdleConfig, TaskAuthorityDocument,
+        PriorityQueueProjection, QueueIdleConfig, TaskAuthorityDocument, TaskStatus,
     };
 
     const HEAD_A: &str = "1111111111111111111111111111111111111111";
@@ -563,6 +565,168 @@ pub mod tests {
         );
         assert!(summary.post_merge_checkpoint_observed);
         assert_eq!(summary.next_action(), "none");
+    }
+
+    #[test]
+    fn exhausted_pool_keeps_remediation_queued_without_duplicate_lease() {
+        let repo = temp_repo("pr-validation-exhausted-pool");
+        let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let planning = planning(authority.clone());
+        bootstrap(authority.as_ref(), &repo.workspace_dir());
+        let github = DeterministicGithub {
+            snapshots: Mutex::new(
+                vec![
+                    snapshot(HEAD_A, GithubValidationRunStatus::Failed),
+                    snapshot(HEAD_A, GithubValidationRunStatus::Failed),
+                ]
+                .into(),
+            ),
+            requests: Mutex::new(Vec::new()),
+            pool_root: repo.pool_root(),
+        };
+        let service = build_service(authority.clone());
+        for (idempotency_key, title) in [
+            (
+                "occupy-normal-pool-capacity-1",
+                "Hold ordinary pool capacity one",
+            ),
+            (
+                "occupy-normal-pool-capacity-2",
+                "Hold ordinary pool capacity two",
+            ),
+            (
+                "occupy-normal-pool-capacity-3",
+                "Hold ordinary pool capacity three",
+            ),
+        ] {
+            planning
+                .queue
+                .admit_system_task_once(
+                    &repo.workspace_dir(),
+                    idempotency_key,
+                    PlanningTaskCreateInput {
+                        direction_id: None,
+                        direction_relation_note: Some(
+                            "occupies an ordinary pool slot".to_string(),
+                        ),
+                        title: title.to_string(),
+                        description: Some(
+                            "Keeps normal pool capacity exhausted while PR validation admits remediation."
+                                .to_string(),
+                        ),
+                        status: Some(TaskStatus::Ready),
+                        base_priority: None,
+                        dynamic_priority_delta: None,
+                        priority_reason: None,
+                        depends_on: Vec::new(),
+                        blocked_by: Vec::new(),
+                    },
+                )
+                .unwrap();
+        }
+        let queue = planning
+            .queue
+            .load_authority_snapshot(&repo.workspace_dir())
+            .unwrap();
+        assert_eq!(queue.tasks.len(), 3);
+        let first_capacity_task = queue.tasks[0].clone();
+        let second_capacity_task = queue.tasks[1].clone();
+        let third_capacity_task = queue.tasks[2].clone();
+        for (task, agent_id, session_label) in [
+            (
+                first_capacity_task.clone(),
+                "agent-holding-capacity-one",
+                "pr-validation-capacity-exhaustion-one",
+            ),
+            (
+                second_capacity_task.clone(),
+                "agent-holding-capacity-two",
+                "pr-validation-capacity-exhaustion-two",
+            ),
+            (
+                third_capacity_task.clone(),
+                "agent-holding-capacity-three",
+                "pr-validation-capacity-exhaustion-three",
+            ),
+        ] {
+            let lease = service
+                .acquire_slot_lease(
+                    &repo.workspace_dir(),
+                    sample_lease_request(&task.id, &task.title, agent_id, session_label),
+                )
+                .expect("the capacity holder must occupy an ordinary pool slot");
+            assert_eq!(lease.task_id, task.id);
+            service
+                .mark_workspace_slot_running(&lease.worktree_path)
+                .expect("capacity holder must transition to running");
+        }
+        let held_capacity_task_ids = [
+            first_capacity_task.id,
+            second_capacity_task.id,
+            third_capacity_task.id,
+        ];
+
+        service
+            .persist_pr_validation_record(&repo.workspace_dir(), &repo.pool_root(), None, &record())
+            .unwrap();
+
+        assert!(matches!(
+            service
+                .poll_pr_validation_into_normal_queue(
+                    &github,
+                    &planning.queue,
+                    request(&repo, 1, HEAD_A),
+                )
+                .unwrap(),
+            PrValidationPollResult::RemediationRequested { .. }
+        ));
+        let queue = planning
+            .queue
+            .load_authority_snapshot(&repo.workspace_dir())
+            .unwrap();
+        assert_eq!(queue.tasks.len(), 4);
+        let queued_remediation_task = queue
+            .tasks
+            .iter()
+            .find(|task| !held_capacity_task_ids.contains(&task.id))
+            .cloned()
+            .expect("PR remediation must remain queued");
+        let queue_projection =
+            SqlitePlanningAuthorityAdapter::load_task_authority_snapshot(&repo.workspace_dir())
+                .unwrap()
+                .unwrap()
+                .queue_projection;
+        let projection = PlanningRuntimeProjection::ready_with_queue_projection(
+            "authority-backed exhausted remediation queue".to_string(),
+            queue_projection.queue_summary(),
+            None,
+            queue_projection.next_task.clone(),
+            queue_projection,
+        );
+        let dispatch = service
+            .build_dispatch_plan(&repo.workspace_dir(), &projection, usize::MAX)
+            .unwrap();
+        assert_eq!(dispatch.idle_slot_count, 0);
+        assert!(dispatch.candidates.is_empty());
+
+        service
+            .poll_pr_validation_into_normal_queue(
+                &github,
+                &planning.queue,
+                request(&repo, 2, HEAD_A),
+            )
+            .unwrap();
+        let queue = planning
+            .queue
+            .load_authority_snapshot(&repo.workspace_dir())
+            .unwrap();
+        assert_eq!(queue.tasks.len(), 4);
+        assert!(
+            queue
+                .tasks
+                .iter()
+                .any(|task| task.id == queued_remediation_task.id)
+        );
     }
 
     #[test]
