@@ -254,21 +254,21 @@ pub struct PrValidationRequiredCheckKey {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrValidationRequiredCheck {
     key: PrValidationRequiredCheckKey,
-    terminal: bool,
+    successful: bool,
 }
 
 impl PrValidationRequiredCheck {
     pub fn new(
         kind: PrValidationCheckKind,
         name: impl Into<String>,
-        terminal: bool,
+        successful: bool,
     ) -> Result<Self, String> {
         Ok(Self {
             key: PrValidationRequiredCheckKey {
                 kind,
                 name: non_empty(name, "PR validation required check name")?,
             },
-            terminal,
+            successful,
         })
     }
 
@@ -333,7 +333,7 @@ pub enum PrValidationCatchUpState {
 pub enum PrValidationCompletionBlocker {
     ProviderNotTerminal(PrValidationProviderKey),
     ProviderHasNoCompletionContract(PrValidationProviderKey),
-    RequiredCheckNotTerminal(PrValidationRequiredCheckKey),
+    RequiredCheckNotSuccessful(PrValidationRequiredCheckKey),
     FinalCatchUpNotObserved,
     FinalCatchUpHasUnseenRelevantEvents,
 }
@@ -379,9 +379,9 @@ impl PrValidationCompletion {
         blockers.extend(
             self.required_checks
                 .iter()
-                .filter(|check| !check.terminal)
+                .filter(|check| !check.successful)
                 .map(|check| {
-                    PrValidationCompletionBlocker::RequiredCheckNotTerminal(check.key.clone())
+                    PrValidationCompletionBlocker::RequiredCheckNotSuccessful(check.key.clone())
                 }),
         );
         match self.catch_up {
@@ -536,6 +536,10 @@ impl PrValidationRecord {
         self.remediations
             .values()
             .find(|correlation| correlation.remediation_key.as_str() == task_id)
+    }
+
+    pub fn merge_sha(&self) -> Option<&PrValidationCommitSha> {
+        self.merge_sha.as_ref()
     }
 
     pub fn observation_revision(&self) -> u64 {

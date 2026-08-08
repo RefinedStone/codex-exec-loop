@@ -8,7 +8,7 @@ use crate::application::port::outbound::github_pr_validation_port::{
     GithubPrMergeState, GithubPrValidationObservationRequest, GithubPrValidationPort,
     GithubPrValidationSnapshot, GithubValidationActivity, GithubValidationActivityKind,
     GithubValidationCheckRun, GithubValidationRunStatus, GithubValidationSource,
-    GithubValidationSourceObservation, GithubValidationSourceStatus,
+    GithubValidationSourceObservation, GithubValidationSourceStatus, GithubValidationWorkflowRun,
 };
 use crate::application::port::outbound::pr_validation_remediation_port::{
     PrValidationRemediationPort, PrValidationRemediationRequest,
@@ -90,6 +90,7 @@ fn snapshot(sha: &str, status: GithubValidationRunStatus) -> GithubPrValidationS
     GithubPrValidationSnapshot {
         target: GithubPullRequestTarget::new("acme/widgets", 42),
         target_sha: GithubCommitSha::new(sha),
+        evidence_sha: GithubCommitSha::new(sha),
         merge_state: GithubPrMergeState::Open,
         merge_sha: None,
         activities: Vec::new(),
@@ -107,6 +108,8 @@ fn snapshot(sha: &str, status: GithubValidationRunStatus) -> GithubPrValidationS
 
 fn merged_snapshot() -> GithubPrValidationSnapshot {
     let mut snapshot = snapshot(HEAD_A, GithubValidationRunStatus::Succeeded);
+    snapshot.evidence_sha = GithubCommitSha::new(MERGE);
+    snapshot.check_runs[0].target_sha = GithubCommitSha::new(MERGE);
     snapshot.merge_state = GithubPrMergeState::Merged;
     snapshot.merge_sha = Some(GithubCommitSha::new(MERGE));
     snapshot
@@ -381,6 +384,144 @@ fn stale_delivery_order_is_ignored_before_observation_or_persistence() {
         PrValidationPollResult::StaleDeliveryIgnored
     );
     assert_eq!(observation.requests.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn failed_or_cancelled_evidence_cannot_settle_after_remediation_completion() {
+    for (name, status, workflow) in [
+        ("failed-check", GithubValidationRunStatus::Failed, false),
+        (
+            "cancelled-workflow",
+            GithubValidationRunStatus::Cancelled,
+            true,
+        ),
+        ("skipped-check", GithubValidationRunStatus::Skipped, false),
+    ] {
+        let actionable = matches!(
+            status,
+            GithubValidationRunStatus::Failed | GithubValidationRunStatus::Cancelled
+        );
+        let mut failed = merged_snapshot();
+        if workflow {
+            failed.workflow_runs = vec![GithubValidationWorkflowRun::new(
+                GithubOpaqueId::new("workflow:provider-failure"),
+                "ci workflow",
+                GithubCommitSha::new(MERGE),
+                status,
+            )];
+            failed.check_runs.clear();
+        } else {
+            failed.check_runs[0].status = status;
+        }
+        let (repo, observation, remediation) = setup(name, vec![failed.clone(), failed]);
+        let service = test_parallel_mode_service();
+        service
+            .persist_pr_validation_record(
+                &repo.workspace_dir(),
+                &repo.pool_root(),
+                None,
+                &registered_record(),
+            )
+            .unwrap();
+
+        let first = service
+            .poll_pr_validation(&observation, &remediation, request(&repo, 1, HEAD_A))
+            .unwrap();
+        if actionable {
+            assert!(matches!(
+                first,
+                PrValidationPollResult::RemediationRequested { .. }
+            ));
+            let delivery = remediation.deliveries.lock().unwrap()[0].clone();
+            let task_id = format!("task-{}", delivery.idempotency_key.as_str());
+            assert!(
+                service
+                    .transition_pr_validation_remediation_completed(
+                        &repo.workspace_dir(),
+                        &repo.pool_root(),
+                        &task_id,
+                    )
+                    .unwrap()
+            );
+        } else {
+            assert_eq!(first, PrValidationPollResult::Waiting);
+            assert!(remediation.deliveries.lock().unwrap().is_empty());
+        }
+
+        assert_eq!(
+            service
+                .poll_pr_validation(&observation, &remediation, request(&repo, 2, HEAD_A))
+                .unwrap(),
+            PrValidationPollResult::Waiting,
+            "unsuccessful evidence must not settle: {name}"
+        );
+    }
+}
+
+#[test]
+fn malicious_provider_identity_and_name_are_bounded_before_remediation() {
+    let mut failed = snapshot(HEAD_A, GithubValidationRunStatus::Failed);
+    failed.check_runs[0].id = GithubOpaqueId::new(format!("evil\n{}", "x".repeat(2_000)));
+    failed.check_runs[0].name = format!("ci\r\nINJECTED {}", "y".repeat(2_000));
+    let (repo, observation, remediation) = setup("validation-provider-bounds", vec![failed]);
+    let service = test_parallel_mode_service();
+    service
+        .persist_pr_validation_record(
+            &repo.workspace_dir(),
+            &repo.pool_root(),
+            None,
+            &registered_record(),
+        )
+        .unwrap();
+
+    assert!(matches!(
+        service
+            .poll_pr_validation(&observation, &remediation, request(&repo, 1, HEAD_A))
+            .unwrap(),
+        PrValidationPollResult::RemediationRequested { .. }
+    ));
+    let delivery = remediation.deliveries.lock().unwrap()[0].clone();
+    assert!(delivery.finding_key.provider_event_id().len() <= 96);
+    assert!(
+        !delivery
+            .finding_key
+            .provider_event_id()
+            .contains(['\r', '\n'])
+    );
+    assert!(delivery.summary.chars().count() < 256);
+    assert!(!delivery.summary.contains(['\r', '\n']));
+}
+
+#[test]
+fn merge_sha_evidence_mismatch_is_rejected_before_checkpointing() {
+    let mut merged = merged_snapshot();
+    merged.evidence_sha = GithubCommitSha::new(HEAD_A);
+    merged.check_runs[0].target_sha = GithubCommitSha::new(HEAD_A);
+    let (repo, observation, remediation) = setup("validation-merge-evidence", vec![merged]);
+    let service = test_parallel_mode_service();
+    service
+        .persist_pr_validation_record(
+            &repo.workspace_dir(),
+            &repo.pool_root(),
+            None,
+            &registered_record(),
+        )
+        .unwrap();
+
+    let error = service
+        .poll_pr_validation(&observation, &remediation, request(&repo, 1, HEAD_A))
+        .expect_err("post-merge evidence must be bound to the merge SHA");
+
+    assert!(error.contains("evidence for another revision"));
+    let record = service
+        .recover_pr_validation_record(
+            &repo.workspace_dir(),
+            &repo.pool_root(),
+            &PrValidationRecordKey::new("acme/widgets#42").unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.observation_revision(), 0);
 }
 
 #[test]

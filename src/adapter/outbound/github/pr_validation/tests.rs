@@ -106,20 +106,24 @@ fn complete_fixture() -> FixtureApi {
             ),
         ),
         (
-            endpoint(&format!("commits/{SHA}/check-runs?per_page=100&page=1")),
+            endpoint(&format!(
+                "commits/{MERGE_SHA}/check-runs?per_page=100&page=1"
+            )),
             format!(
                 r#"{{"total_count":2,"check_runs":[
-                    {{"id":22,"name":"zeta","head_sha":"{SHA}","status":"completed","conclusion":"failure"}},
-                    {{"id":21,"name":"alpha","head_sha":"{SHA}","status":"completed","conclusion":"success"}}
+                    {{"id":22,"name":"zeta","head_sha":"{MERGE_SHA}","status":"completed","conclusion":"failure"}},
+                    {{"id":21,"name":"alpha","head_sha":"{MERGE_SHA}","status":"completed","conclusion":"success"}}
                 ]}}"#
             ),
         ),
         (
-            endpoint(&format!("actions/runs?head_sha={SHA}&per_page=100&page=1")),
+            endpoint(&format!(
+                "actions/runs?head_sha={MERGE_SHA}&per_page=100&page=1"
+            )),
             format!(
                 r#"{{"total_count":2,"workflow_runs":[
-                    {{"id":32,"name":"release","head_sha":"{SHA}","status":"completed","conclusion":"cancelled"}},
-                    {{"id":31,"name":"ci","head_sha":"{SHA}","status":"in_progress","conclusion":null}}
+                    {{"id":32,"name":"release","head_sha":"{MERGE_SHA}","status":"completed","conclusion":"cancelled"}},
+                    {{"id":31,"name":"ci","head_sha":"{MERGE_SHA}","status":"in_progress","conclusion":null}}
                 ]}}"#
             ),
         ),
@@ -140,6 +144,7 @@ fn collects_sha_bound_merge_activity_checks_and_workflows_in_canonical_order() {
         GithubPullRequestTarget::new("acme/widgets", 42)
     );
     assert_eq!(snapshot.target_sha.as_str(), SHA);
+    assert_eq!(snapshot.evidence_sha.as_str(), MERGE_SHA);
     assert_eq!(snapshot.merge_state, GithubPrMergeState::Merged);
     assert_eq!(
         snapshot.merge_sha.as_ref().map(GithubCommitSha::as_str),
@@ -192,7 +197,7 @@ fn collects_sha_bound_merge_activity_checks_and_workflows_in_canonical_order() {
     );
     assert!(snapshot.next_cursor.is_none());
     assert!(snapshot.observations_complete());
-    assert!(!snapshot.is_terminally_complete());
+    assert!(!snapshot.is_successfully_complete());
     assert_eq!(snapshot.sources.len(), GithubValidationSource::ALL.len());
     assert!(snapshot.sources.iter().all(|source| {
         source.status == GithubValidationSourceStatus::Complete && source.next_cursor.is_none()
@@ -200,7 +205,7 @@ fn collects_sha_bound_merge_activity_checks_and_workflows_in_canonical_order() {
 }
 
 #[test]
-fn full_pages_return_a_replayable_cursor_and_resume_only_unfinished_sources() {
+fn cursor_polls_return_stable_cumulative_evidence_across_all_sources() {
     let mut responses = complete_fixture().responses;
     let reviews = (0..100)
         .map(|id| {
@@ -246,8 +251,19 @@ fn full_pages_return_a_replayable_cursor_and_resume_only_unfinished_sources() {
         .load_validation_snapshot(&request(Some(cursor.clone())))
         .expect("cursor should resume");
 
-    assert_eq!(second.activities.len(), 1);
-    assert_eq!(second.activities[0].id.as_str(), "review:2000");
+    assert_eq!(second.activities.len(), 104);
+    assert!(
+        second
+            .activities
+            .iter()
+            .any(|activity| activity.id.as_str() == "review:1000")
+    );
+    assert!(
+        second
+            .activities
+            .iter()
+            .any(|activity| activity.id.as_str() == "review:2000")
+    );
     assert!(second.next_cursor.is_none());
     assert!(second.observations_complete());
     let requested = resumed_requests.lock().expect("request lock").clone();
@@ -255,7 +271,16 @@ fn full_pages_return_a_replayable_cursor_and_resume_only_unfinished_sources() {
         requested,
         vec![
             endpoint("pulls/42"),
+            endpoint("pulls/42/reviews?per_page=100&page=1"),
             endpoint("pulls/42/reviews?per_page=100&page=2"),
+            endpoint("issues/42/comments?per_page=100&page=1"),
+            endpoint("pulls/42/comments?per_page=100&page=1"),
+            endpoint(&format!(
+                "commits/{MERGE_SHA}/check-runs?per_page=100&page=1"
+            )),
+            endpoint(&format!(
+                "actions/runs?head_sha={MERGE_SHA}&per_page=100&page=1"
+            )),
             endpoint("pulls/42"),
         ]
     );
@@ -326,12 +351,12 @@ fn rejects_check_or_workflow_rows_not_bound_to_the_requested_sha() {
         let wrong_sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         if bad_endpoint == "check" {
             responses.insert(
-                endpoint(&format!("commits/{SHA}/check-runs?per_page=100&page=1")),
+                endpoint(&format!("commits/{MERGE_SHA}/check-runs?per_page=100&page=1")),
                 format!(r#"{{"total_count":1,"check_runs":[{{"id":1,"name":"ci","head_sha":"{wrong_sha}","status":"completed","conclusion":"success"}}]}}"#),
             );
         } else {
             responses.insert(
-                endpoint(&format!("actions/runs?head_sha={SHA}&per_page=100&page=1")),
+                endpoint(&format!("actions/runs?head_sha={MERGE_SHA}&per_page=100&page=1")),
                 format!(r#"{{"total_count":1,"workflow_runs":[{{"id":1,"name":"ci","head_sha":"{wrong_sha}","status":"completed","conclusion":"success"}}]}}"#),
             );
         }

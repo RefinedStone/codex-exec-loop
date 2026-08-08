@@ -8,6 +8,9 @@ use crate::domain::github_review::{GithubCommitSha, GithubOpaqueId, GithubPullRe
 pub struct GithubPrValidationObservationRequest {
     pub target: GithubPullRequestTarget,
     pub target_sha: GithubCommitSha,
+    /// Previously recorded merge SHA for post-merge polls. `None` means the adapter must discover
+    /// the current evidence target from the PR response.
+    pub evidence_sha: Option<GithubCommitSha>,
     pub cursor: Option<GithubValidationCursor>,
 }
 
@@ -20,8 +23,14 @@ impl GithubPrValidationObservationRequest {
         Self {
             target,
             target_sha,
+            evidence_sha: None,
             cursor,
         }
+    }
+
+    pub fn with_evidence_sha(mut self, evidence_sha: Option<GithubCommitSha>) -> Self {
+        self.evidence_sha = evidence_sha;
+        self
     }
 }
 
@@ -221,6 +230,9 @@ impl GithubValidationWorkflowRun {
 pub struct GithubPrValidationSnapshot {
     pub target: GithubPullRequestTarget,
     pub target_sha: GithubCommitSha,
+    /// Immutable commit whose check and workflow evidence was actually observed. Before merge this
+    /// is the PR head; after merge it must be GitHub's reported merge commit SHA.
+    pub evidence_sha: GithubCommitSha,
     pub merge_state: GithubPrMergeState,
     pub merge_sha: Option<GithubCommitSha>,
     pub activities: Vec<GithubValidationActivity>,
@@ -268,18 +280,24 @@ impl GithubPrValidationSnapshot {
             })
     }
 
-    /// Reports explicit terminal evidence only; elapsed time is deliberately absent.
-    pub fn is_terminally_complete(&self) -> bool {
+    /// Reports explicit successful evidence only; failed, cancelled, skipped, unknown, and active
+    /// runs cannot settle validation merely because some of them are terminal.
+    pub fn is_successfully_complete(&self) -> bool {
+        let expected_evidence_sha = match self.merge_state {
+            GithubPrMergeState::Merged => self.merge_sha.as_ref(),
+            GithubPrMergeState::Open | GithubPrMergeState::Closed => Some(&self.target_sha),
+            GithubPrMergeState::Unknown(_) => None,
+        };
         self.observations_complete()
-            && !matches!(self.merge_state, GithubPrMergeState::Unknown(_))
-            && self
-                .check_runs
-                .iter()
-                .all(|run| run.target_sha == self.target_sha && run.status.is_terminal())
-            && self
-                .workflow_runs
-                .iter()
-                .all(|run| run.target_sha == self.target_sha && run.status.is_terminal())
+            && expected_evidence_sha == Some(&self.evidence_sha)
+            && self.check_runs.iter().all(|run| {
+                run.target_sha == self.evidence_sha
+                    && run.status == GithubValidationRunStatus::Succeeded
+            })
+            && self.workflow_runs.iter().all(|run| {
+                run.target_sha == self.evidence_sha
+                    && run.status == GithubValidationRunStatus::Succeeded
+            })
     }
 }
 
@@ -329,6 +347,7 @@ mod tests {
         GithubPrValidationSnapshot {
             target: GithubPullRequestTarget::new("owner/repo", 42),
             target_sha: target_sha.clone(),
+            evidence_sha: target_sha.clone(),
             merge_state: GithubPrMergeState::Open,
             merge_sha: None,
             activities: vec![
@@ -405,7 +424,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["check:not-a-number", "check:9007199254740993"]
         );
-        assert!(snapshot.is_terminally_complete());
+        assert!(snapshot.is_successfully_complete());
         assert!(snapshot.observations_complete());
     }
 
@@ -414,14 +433,14 @@ mod tests {
         let mut unknown = complete_snapshot();
         unknown.sources[0].status = GithubValidationSourceStatus::Unknown;
         assert!(!unknown.observations_complete());
-        assert!(!unknown.is_terminally_complete());
+        assert!(!unknown.is_successfully_complete());
 
         let mut paginated = complete_snapshot();
         paginated.sources[0].status = GithubValidationSourceStatus::Paginated;
         paginated.sources[0].next_cursor = Some(GithubValidationCursor::new("source:page-2"));
         paginated.next_cursor = Some(GithubValidationCursor::new("snapshot:page-2"));
         assert!(!paginated.observations_complete());
-        assert!(!paginated.is_terminally_complete());
+        assert!(!paginated.is_successfully_complete());
 
         let mut missing_source = complete_snapshot();
         missing_source.sources.pop();
