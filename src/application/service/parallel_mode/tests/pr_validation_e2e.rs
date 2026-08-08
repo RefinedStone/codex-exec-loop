@@ -275,7 +275,7 @@ pub mod tests {
         late.check_runs[0] = GithubValidationCheckRun::new(
             GithubOpaqueId::new("check:late"),
             "late-ci",
-            GithubCommitSha::new(HEAD_B),
+            GithubCommitSha::new(MERGE),
             GithubValidationRunStatus::Failed,
         );
         let mut reordered_late = late.clone();
@@ -289,6 +289,7 @@ pub mod tests {
                     snapshot(HEAD_B, GithubValidationRunStatus::InProgress),
                     merged_snapshot(HEAD_B),
                     late,
+                    reordered_late.clone(),
                     reordered_late,
                 ]
                 .into(),
@@ -469,6 +470,17 @@ pub mod tests {
                     request(&repo, 6, HEAD_B),
                 )
                 .unwrap(),
+            PrValidationPollResult::Waiting,
+            "new successful evidence requires one stable catch-up poll"
+        );
+        assert_eq!(
+            restarted
+                .poll_pr_validation_into_normal_queue(
+                    &github,
+                    &planning.queue,
+                    request(&repo, 7, HEAD_B),
+                )
+                .unwrap(),
             PrValidationPollResult::Settled
         );
         assert_eq!(
@@ -476,7 +488,7 @@ pub mod tests {
                 .poll_pr_validation_into_normal_queue(
                     &github,
                     &planning.queue,
-                    request(&repo, 6, HEAD_B),
+                    request(&repo, 7, HEAD_B),
                 )
                 .unwrap(),
             PrValidationPollResult::StaleDeliveryIgnored
