@@ -1,5 +1,0 @@
-Akra / tui-ux-re...  ·  READY  ·  queue off  ·  agents off  ·  terminals 0
-! DEGRADED  ·  runtime degraded  ·  warning 1  ·  Ctrl+D details
-╭ Task
-│ > Describe a task or type : for commands
-╰  Type a task  |  : commands

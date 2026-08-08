@@ -22,8 +22,8 @@ GitHub delivery workflow. `AGENTS.md` remains the compact instruction entrypoint
 - `npm/`: launcher, platform packages, and Node tests
 - `scripts/`: validation, packaging, GitHub identity, planning, and cleanup helpers
 - `tests/`: cross-layer integration and architecture gates
-- `docs/`: current references, executable validation contracts, future plans, evidence, and
-  competitor research
+- `docs/`: current references, executable validation contracts, explicit future plans, evidence,
+  and compact pinned competitor research
 
 ## Coding Rules
 

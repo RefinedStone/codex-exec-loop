@@ -1,163 +1,103 @@
 # Competitive Research
 
-[한국어](../ko/competitive/README.md)
+[한국어 요약](../ko/competitive/README.md)
 
-This directory is the durable evidence base for products that compete with, wrap, or materially
-shape Akra. Each analyzed product owns one directory. The goal is not a feature checklist. The goal
-is to decide what makes Akra worth choosing as a Codex-first operator runtime and to turn verified
-gaps into testable product work.
+Status: current snapshot, not implementation truth
+
+Audit date: 2026-08-08 (Asia/Seoul)
+
+Akra baseline: `0c94f7e8b4549c2358f8b6d4b0c1ebc7e206dd48` (`prerelease`)
+
+This directory keeps one compact, current brief per product. It exists to decide what Akra should
+adopt, reject, or differentiate—not to mirror vendor documentation or maintain a permanent feature
+ledger. Superseded snapshots and detailed one-off reports remain available in Git history.
 
 ## Product Position
-
-Akra should not become another broad model harness. Its defensible position is:
 
 > Akra is the Codex-first operating and delivery layer that turns official `codex app-server`
 > sessions into durable, inspectable, review-delivered work.
 
-That position has three required pillars:
+The position has three boundaries:
 
-1. **Protocol-native interaction**: expose useful Codex capabilities quickly and faithfully through
-   a high-density native TUI.
-2. **Long-horizon delivery**: persist planning authority, isolate parallel work, deliver through
-   commits and pull requests by default, and incorporate valid review feedback.
-3. **Operator control**: project the same application truth through TUI, Admin, CLI, Telegram, and
-   automation instead of building disconnected frontends.
+1. **Protocol-native:** follow official app-server semantics instead of owning a provider harness.
+2. **Delivery-native:** keep planning authority, isolated worktrees, review evidence, integration,
+   and cleanup as one lifecycle.
+3. **One application truth:** project the same state through TUI, Admin, CLI, Telegram, and
+   automation.
 
-The reviewed path is the product default, not an absolute current invariant. When a parent process
-supplies the explicit high-risk autonomous-delivery opt-in, the runtime distributor may bypass
-review/check gates while retaining a PR, and eligible PR modes may skip PR automation entirely.
-Competitive conclusions treat those paths as exceptions and require them to be projected with
-review-skipped policy provenance, not counted as reviewed delivery.
+Provider count, tool count, and agent count are not product goals by themselves.
 
-Competitive work should sharpen or disprove this position. It must not silently turn provider
-breadth, tool count, or UI surface count into the product goal.
+## Current Coverage
 
-## Coverage
-
-Cross-product reports:
-
-- [Akra TUI UX Competitive Refresh](reports/tui-ux-refresh-2026-08-01/README.md): latest
-  <code>prerelease</code> recapture at 120×30 and 80×24, deliberate startup-blocked reproduction,
-  and local Codex/Grok command-surface comparison. Confirms the previous top three slices shipped
-  and reprioritizes the remaining work around failure recovery, truthful empty states, and return
-  recap. Snapshot: 2026-08-01 (Asia/Seoul).
-- [Akra TUI UX Priority Audit](reports/tui-ux-priority-2026-07-31/README.md): current Akra
-  Windows ConPTY captures compared with official Codex, Grok Build, OpenCode, Claude Code,
-  Gemini CLI, and Pi evidence, ending in three commercial-UX slices and a prioritized backlog.
-  Snapshot: 2026-07-31 (Asia/Seoul).
-- [Coding-Agent TUI Architecture Field Report](reports/tui-architecture/README.md): interactive,
-  official-source comparison of GJC, OpenCode, Codex, Claude Code, Pi, and jcode, including
-  renderer stacks, state authority, mouse undo mechanics, extension surfaces, critical debt, and
-  Akra decisions. Snapshot: 2026-07-16 (Asia/Seoul).
-- [Grok Build Open-Source Competitive Report](reports/grok-build/index.html): interactive HTML
-  audit of SpaceXAI `xai-org/grok-build` — features, differentiators, and Akra adopt/reject matrix.
-  Snapshot: 2026-07-16 (Asia/Seoul).
-- [Grok Build Fast Worktree Deep Dive](reports/grok-build/fast-worktree.html): CoW / BTRFS /
-  overlay / pool-sync technical deep dive for `xai-fast-worktree`. Snapshot: 2026-07-16.
-- [Grok Build TUI Rendering Architecture Deep Dive](grok-build/tui-rendering-architecture.md):
-  source-level reconstruction of Akra's lost-scrollback and settlement-clipping regressions against
-  Grok Build's full/minimal rendering paths. Snapshot: 2026-07-21.
-
-| Product | Snapshot | Status | Primary threat |
+| Product | Current pin | Previous audited pin | Why it matters to Akra |
 | --- | --- | --- | --- |
-| [Grok Build](grok-build/analysis.md) | OSS publish `b189869b7755d2b482969acf6c92da3ecfeffd36` | current as of 2026-07-16 (Asia/Seoul) | full-stack harness breadth, extension stack, plan/dashboard UX, PTY e2e density |
-| [Upstream OpenAI Codex](upstream-codex/analysis.md) | v0.144.1, `44918ea10c0f99151c6710411b4322c2f5c96bea` | current as of 2026-07-12 (Asia/Seoul) | runtime authority, typed in-process TUI, protocol truth and release velocity |
-| [jcode](jcode/analysis.md) | v0.43.0, `649276753ae11948759192c067dfc4c90fafd47f` | current as of 2026-07-12 (Asia/Seoul) | native TUI performance, multi-session runtime, memory, swarm |
-| [Agent Canvas](agent-canvas/analysis.md) | v1.2.1, `56d51c0767fb6fedc51c466f5138fdfc116a2707` | current as of 2026-07-12 (Asia/Seoul) | browser session inspection, remote backends, durable automation |
-| [OpenCode](opencode/analysis.md) | v1.17.18, `b1fc8113948b518835c2a39ece49553cffe9b30c` | current as of 2026-07-12 (Asia/Seoul) | broad TUI/server/desktop surface, attach continuity, permissions, GitHub automation |
-| [Orca](orca/analysis.md) | v1.4.137, `6013055491943336660e12e5dec93c9ece4575bb` | current as of 2026-07-14 (Asia/Seoul) | worktree-native agent fleet UX, external reconciliation, terminal continuity, and safe retirement |
+| [OpenAI Codex](upstream-codex/README.md) | [v0.147.0](https://github.com/openai/codex/releases/tag/rust-v0.147.0), `be6e8eac029b183056b7e4402879f15d2c85f61b` | v0.144.1 | upstream runtime and protocol authority |
+| [Senpi + OmO Native](omo-native/README.md) | Senpi [v2026.8.7](https://github.com/code-yeongyu/senpi/releases/tag/v2026.8.7); OmO public v4.19.4 plus installed public-source dev adapter | new | cache affinity, context accounting, durable child sessions, token observability |
+| [jcode](jcode/README.md) | [v0.68.0](https://github.com/1jehuang/jcode/releases/tag/v0.68.0), `fcf53909f8fe3b8cb1167dc3a03b178b0a635f39` | v0.43.0 | native multi-session harness, desktop, performance instrumentation |
+| [OpenCode](opencode/README.md) | [v1.18.15](https://github.com/anomalyco/opencode/releases/tag/v1.18.15), `d7b115f623760e68a4749d16508a9eca350f246f` | v1.17.18 | broad TUI/server/desktop harness and session continuity |
+| [Orca](orca/README.md) | [v1.4.176](https://github.com/stablyai/orca/releases/tag/v1.4.176), `02cea8a51ac3b69fcda7fe8ccc4f3ed0f68c445b` | v1.4.137 | worktree-first desktop fleet, terminal recovery, remote/mobile reach |
+| [Agent Canvas](agent-canvas/README.md) | [v1.6.1](https://github.com/OpenHands/agent-canvas/releases/tag/v1.6.1), `43f091baf135142ed6c146f888f44a957141193f` | v1.2.1 | browser/desktop inspector, remote backends, durable automations |
+| [Grok Build](grok-build/README.md) | public HEAD `afbc0fb710320c7add294c2106d447ecc3e3af2e` | `b189869b...` | full-stack Rust harness, TUI breadth, fast worktrees |
 
-Next research order:
+The focused cross-product study is [Cache and Token Efficiency](cache-and-token-efficiency.md).
+Evidence grades, refresh rules, privacy boundaries, and snapshot requirements are in
+[Methodology](methodology.md).
 
-1. Amp: terminal interaction, hooks/skills, subagents, and long-horizon control.
-2. Aider, Cline/Roo, Cursor, and Windsurf: editing, IDE, review, and remote-delivery patterns after
-   the initial native/runtime architecture set.
+## Current Decisions
 
-Do not create an empty product directory. Add it only when its snapshot and first evidence ledger
-are ready to review.
+### Adopt
 
-## Required Files
+- Preserve official thread identity and long-lived app-server continuity wherever correctness
+  allows it.
+- Promote provider-reported cached-input facts, context pressure, compaction, model changes, and
+  runtime restarts into truthful operator telemetry.
+- Keep large tool results, child results, and planning handoffs bounded at their application
+  boundaries.
+- Match the best competitors on reconnect, resume, terminal recovery, narrow-layout readability,
+  and measurable latency.
+- Treat worktree creation performance as an adapter optimization only after measurement.
 
-Every product directory must contain:
+### Reject
 
-- `analysis.md`: product thesis, architecture, UX, performance, safety, strengths, and weaknesses.
-- `evidence.md`: immutable snapshot, source ledger, local inspection commands, and evidence limits.
-- `gap-matrix.md`: Akra-relative findings, adopt/reject/differentiate decisions, and testable work.
+- Reimplementing provider requests, authentication, cache keys, private affinity headers, or model
+  fallback inside Akra.
+- Treating a high cache-hit percentage as proof of lower context use, lower spend, or fewer total
+  tokens.
+- Blind cache-warming turns, hard-coded provider TTLs, or background polling that repeatedly
+  replays model context.
+- Broad agent/tool marketplaces as a substitute for a reliable reviewed-delivery lifecycle.
+- Maintaining parallel English/Korean copies of fast-moving source audits.
 
-Use [_template.md](_template.md) as the minimum contract. More files are allowed only when the
-source volume or a separately reviewable experiment requires them.
+### Differentiate
 
-## Evidence Classes
+- Make reviewed delivery evidence, explicit high-risk bypass provenance, and cleanup visible as
+  first-class state.
+- Measure the whole lifecycle: session continuity, uncached input, compaction, output, worktree
+  isolation, checks, review, merge, and cleanup.
+- Reuse official Codex capabilities quickly while keeping planning and delivery authority outside
+  the model harness.
 
-Every consequential statement should be classifiable as one of these:
+## Directory Contract
 
-| Class | Meaning | Allowed conclusion |
-| --- | --- | --- |
-| `verified` | inspected in source, a release artifact, or locally reproduced output | may support a product or implementation decision |
-| `documented` | stated by the product's official documentation but not reproduced | may support a hypothesis, not a performance claim |
-| `proposed` | explicitly marked design, proposed, experimental, beta, or incomplete | may inform direction; must not be scored as shipped |
-| `inferred` | reasoned from multiple verified facts | must state the inference and its uncertainty |
-| `unverified` | marketing claim, missing raw data, inaccessible source, or ambiguous behavior | may be recorded only with the limitation visible |
+Each product directory contains one `README.md` with:
 
-Screenshots and demos prove presentation, not correctness, latency, durability, or release support.
-Code presence proves an implementation exists, not that the public product enables it by default.
+- an immutable release or source pin;
+- material change since the prior Akra audit;
+- current strengths and limits;
+- explicit Akra decisions;
+- direct primary-source links and known evidence gaps.
 
-## Comparison Dimensions
+Reusable app-server probes and terminal captures remain under
+[upstream-codex](upstream-codex/README.md) because repository tests consume some of them. Generated
+reports, screenshots created for completed UI slices, raw guard output, and translated copies do
+not belong here.
 
-Each analysis must cover the dimensions that apply:
+## Maintenance
 
-- product audience and reason to choose it
-- runtime authority and client/server topology
-- provider, model, tool, MCP, skill, and plugin boundaries
-- session continuity, context compaction, memory, and provenance
-- TUI information architecture, input ergonomics, rendering, and terminal compatibility
-- desktop, web, Admin, remote, mobile, and automation surfaces
-- parallel execution, isolation, coordination, completion, and integration
-- permissions, sandboxing, secrets, unattended work, and auditability
-- startup, input, streaming, rendering, memory, and build performance
-- tests, release validation, maintainability, and architecture debt
-
-Performance comparisons require process-tree accounting, exact versions, authentication state,
-warm/cold state, terminal geometry, run count, raw samples, and an environment stamp. A mean or
-best-case number without those fields is not comparable evidence.
-
-## Akra Baseline
-
-An analysis must pin the Akra commit it compares against and read current source, not only product
-docs. At minimum inspect:
-
-- `src/core/`
-- `src/application/service/`
-- `src/application/port/`
-- `src/adapter/inbound/tui/`
-- `src/adapter/inbound/admin_api/`
-- `src/adapter/outbound/app_server/`
-- `src/application/service/parallel_mode/`
-- `docs/reference/current-product.md`
-
-Conflicts between Akra documentation and code are findings, not details to smooth over.
-
-## Decision Rules
-
-- **Adopt** only when the pattern improves Akra's chosen product position and maps to an owned
-  boundary.
-- **Reject** when copying it would duplicate `codex app-server`, weaken safety, or broaden the
-  product without improving the operator loop.
-- **Differentiate** when Akra already has a stronger primitive, such as worktree-isolated delivery
-  instead of same-checkout agent coordination.
-- Every accepted gap needs a proof target: test, benchmark artifact, terminal capture, API response,
-  persisted state transition, or merged delivery path.
-- Keep speculative backlog outside this directory. A work item belongs here only as a consequence
-  of an evidence-backed comparison.
-
-## Refresh Policy
-
-Refresh an app analysis when any of these occurs:
-
-- a new major release or architecture migration
-- a release that changes the compared TUI, runtime, parallel, memory, or control-plane behavior
-- the snapshot is older than 90 days and is still used to justify active work
-- an Akra implementation slice closes or invalidates a recorded gap
-
-Preserve old conclusions through git history. Update the snapshot and evidence ledger in place so
-the current directory remains the decision source.
+- Refresh a brief when its decision changes, its pin is older than 90 days, or a material release
+  invalidates a claim.
+- Replace the snapshot in place; use Git history for the old one.
+- Prefer release notes, immutable source, installed package metadata, and reproducible runtime
+  evidence over marketing copy.
+- Do not turn a competitor finding directly into shipped Akra truth. Put accepted future work in
+  an explicitly proposed plan or issue.

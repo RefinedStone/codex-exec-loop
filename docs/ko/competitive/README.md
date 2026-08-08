@@ -1,139 +1,83 @@
-# 경쟁 제품 조사
+# 경쟁 앱 조사
 
-[English](../../competitive/README.md)
+[영문 원문](../../competitive/README.md)
 
-이 디렉터리는 Akra와 경쟁하거나 Akra를 감싸거나 Akra의 방향에 실질적인 영향을 주는 제품을
-지속적으로 기록하는 근거 저장소입니다. 분석한 제품마다 디렉터리 하나를 둡니다. 목표는 기능
-목록을 만드는 것이 아닙니다. Codex 우선 운영자 런타임으로서 Akra를 선택할 이유를 판단하고,
-검증된 격차를 시험 가능한 제품 작업으로 전환하는 것이 목표입니다.
+상태: 2026-08-08 최신 스냅샷
 
-## 제품 포지션
+Akra 기준: `0c94f7e8b4549c2358f8b6d4b0c1ebc7e206dd48` (`prerelease`)
 
-Akra는 또 하나의 범용 모델 하네스가 되어서는 안 됩니다. Akra가 지켜야 할 포지션은 다음과
-같습니다.
+빠르게 변하는 경쟁 제품 문서를 영문·한글로 통째로 복제하면 두 버전이 곧 어긋난다. 따라서 제품별
+근거와 버전은 영문 원문 한 벌만 유지하고, 이 문서는 한국어 탐색과 핵심 결론만 제공한다. 이전 상세
+번역과 일회성 리포트는 Git 이력에서 확인할 수 있다.
 
-> Akra는 공식 `codex app-server` 세션을 영속적이고 검사할 수 있으며 검토를 거쳐 전달되는
-> 작업으로 전환하는 Codex 우선 운영 및 전달 계층입니다.
+## Akra의 위치
 
-이 포지션에는 세 가지 필수 축이 있습니다.
+> Akra는 공식 `codex app-server` 세션을 지속 가능하고 검사 가능하며 리뷰를 거쳐 전달되는 작업으로
+> 바꾸는 Codex-first 운영·전달 계층이다.
 
-1. **프로토콜 네이티브 상호작용**: 고밀도 네이티브 TUI를 통해 유용한 Codex 기능을 빠르고
-   충실하게 제공합니다.
-2. **장기 작업 전달**: 계획 권한을 영속화하고 병렬 작업을 격리하며 기본적으로 커밋과 풀
-   리퀘스트를 통해 전달하고 유효한 검토 의견을 반영합니다.
-3. **운영자 제어**: 서로 단절된 프런트엔드를 만드는 대신 TUI, Admin, CLI, Telegram, 자동화에
-   동일한 애플리케이션 상태를 투영합니다.
+경쟁 제품의 provider 수, tool 수, agent 수를 그대로 따라가는 것이 목표가 아니다. Akra의 핵심은 공식
+프로토콜 충실도, planning/worktree 권위, review·merge·cleanup 증거, 그리고 TUI/Admin/CLI/Telegram이
+공유하는 하나의 application truth다.
 
-검토 경로는 제품의 기본값이지만 언제나 성립하는 현재의 절대 불변 조건은 아닙니다. 상위
-프로세스가 고위험 자율 전달에 대한 명시적 사용 동의를 제공하면 런타임 분배기는 풀 리퀘스트를
-유지하면서 검토 및 검사 관문을 우회할 수 있고, 조건에 맞는 풀 리퀘스트 모드는 풀 리퀘스트
-자동화를 완전히 생략할 수 있습니다. 경쟁 제품에 관한 결론에서는 이러한 경로를 예외로 취급하며,
-검토된 전달로 계산하지 않고 검토 생략 정책의 출처와 함께 투영하도록 요구합니다.
+## 현재 조사
 
-경쟁 제품 조사는 이 포지션을 더 선명하게 하거나 반증해야 합니다. 공급자 범위, 도구 수, UI
-접점 수를 제품 목표로 몰래 바꾸어서는 안 됩니다.
-
-## 조사 범위
-
-| 제품 | 스냅샷 | 상태 | 주요 위협 |
-| --- | --- | --- | --- |
-| [Upstream OpenAI Codex](upstream-codex/analysis.md) | v0.144.1, `44918ea10c0f99151c6710411b4322c2f5c96bea` | 2026-07-12 (Asia/Seoul) 기준 최신 | 런타임 권한, 타입이 지정된 프로세스 내 TUI, 프로토콜의 실제 동작과 릴리스 속도 |
-| [jcode](jcode/analysis.md) | v0.43.0, `649276753ae11948759192c067dfc4c90fafd47f` | 2026-07-12 (Asia/Seoul) 기준 최신 | 네이티브 TUI 성능, 다중 세션 런타임, 메모리, 군집 운영 |
-| [Agent Canvas](agent-canvas/analysis.md) | v1.2.1, `56d51c0767fb6fedc51c466f5138fdfc116a2707` | 2026-07-12 (Asia/Seoul) 기준 최신 | 브라우저 세션 검사, 원격 백엔드, 영속 자동화 |
-| [OpenCode](opencode/analysis.md) | v1.17.18, `b1fc8113948b518835c2a39ece49553cffe9b30c` | 2026-07-12 (Asia/Seoul) 기준 최신 | 폭넓은 TUI/서버/데스크톱 화면, 연결 연속성, 권한, GitHub 자동화 |
-| [Orca](orca/analysis.md) | v1.4.137, `6013055491943336660e12e5dec93c9ece4575bb` | 2026-07-14 (Asia/Seoul) 기준 최신 | 워크트리 네이티브 에이전트 플릿 UX, 외부 상태 조정, 터미널 연속성, 안전한 정리 |
-
-다음 조사 순서는 아래와 같습니다.
-
-1. Claude Code, Amp, Pi: 터미널 상호작용, 훅과 스킬, 하위 에이전트, 장기 작업 제어.
-2. Aider, Cline/Roo, Cursor, Windsurf: 초기 네이티브 및 런타임 아키텍처 제품군 이후에 편집,
-   IDE, 검토, 원격 전달 패턴을 조사합니다.
-
-빈 제품 디렉터리를 만들지 않습니다. 스냅샷과 첫 근거 원장을 검토할 준비가 되었을 때만
-추가합니다.
-
-## 필수 파일
-
-모든 제품 디렉터리에는 다음 파일이 있어야 합니다.
-
-- `analysis.md`: 제품 논지, 아키텍처, UX, 성능, 안전성, 강점, 약점.
-- `evidence.md`: 불변 스냅샷, 출처 원장, 로컬 검사 명령, 근거의 한계.
-- `gap-matrix.md`: Akra 기준 조사 결과, 채택·거부·차별화 결정, 시험 가능한 작업.
-
-[_template.md](_template.md)을 최소 계약으로 사용합니다. 출처 분량이나 별도로 검토할 수 있는
-실험에 필요할 때만 파일을 더 추가할 수 있습니다.
-
-## 근거 분류
-
-결론에 영향을 주는 모든 진술은 다음 중 하나로 분류할 수 있어야 합니다.
-
-| 분류 | 의미 | 허용되는 결론 |
+| 제품 | 현재 기준 | 핵심 위협 |
 | --- | --- | --- |
-| `verified` | 소스, 릴리스 산출물 또는 로컬에서 재현한 출력으로 검사함 | 제품 또는 구현 결정을 뒷받침할 수 있음 |
-| `documented` | 제품 공식 문서에 명시되어 있지만 재현하지 않음 | 성능 주장이 아닌 가설을 뒷받침할 수 있음 |
-| `proposed` | 설계, 제안, 실험, 베타 또는 미완성으로 명시되어 있음 | 방향 설정에 참고할 수 있지만 출시된 것으로 평가해서는 안 됨 |
-| `inferred` | 검증된 여러 사실을 바탕으로 추론함 | 추론과 불확실성을 밝혀야 함 |
-| `unverified` | 마케팅 주장, 원시 데이터 누락, 접근할 수 없는 소스 또는 모호한 동작 | 한계를 드러낸 경우에만 기록할 수 있음 |
+| [OpenAI Codex](../../competitive/upstream-codex/README.md) | v0.147.0 | upstream runtime·protocol의 빠른 변화 |
+| [Senpi + OmO Native](../../competitive/omo-native/README.md) | Senpi v2026.8.7, 설치된 OmO dev adapter | 캐시 친화성, 토큰 관측, 장기 child session |
+| [jcode](../../competitive/jcode/README.md) | v0.68.0 | native multi-session harness, desktop, 성능 계측 |
+| [OpenCode](../../competitive/opencode/README.md) | v1.18.15 | TUI/server/desktop 연속성과 넓은 생태계 |
+| [Orca](../../competitive/orca/README.md) | v1.4.176 | worktree 중심 desktop fleet와 복구 UX |
+| [Agent Canvas](../../competitive/agent-canvas/README.md) | v1.6.1 | browser/desktop inspector와 automation |
+| [Grok Build](../../competitive/grok-build/README.md) | public HEAD `afbc0fb7...` | Rust full-stack harness, TUI, fast worktree |
 
-스크린샷과 시연은 표현 방식만 증명하며 정확성, 지연 시간, 지속성 또는 릴리스 지원을 증명하지
-않습니다. 코드가 존재한다는 사실은 구현이 있음을 증명할 뿐, 공개 제품에서 이를 기본으로
-활성화한다는 뜻은 아닙니다.
+조사 등급과 갱신 기준은 [방법론](../../competitive/methodology.md), 캐시 수식과 로컬 측정은
+[캐시·토큰 효율](../../competitive/cache-and-token-efficiency.md)에 있다.
 
-## 비교 차원
+## 캐시·토큰 결론
 
-각 분석은 적용되는 다음 차원을 다루어야 합니다.
+Windows에 설치된 이름은 **Senpi**이며 “Senpai”가 아니다. “OmO Native”는 Senpi 안에서 실행되는
+`@code-yeongyu/omo-senpi` adapter다.
 
-- 제품의 대상 사용자와 선택 이유
-- 런타임 권한과 클라이언트/서버 토폴로지
-- 공급자, 모델, 도구, MCP, 스킬, 플러그인의 경계
-- 세션 연속성, 컨텍스트 압축, 메모리, 출처 추적
-- TUI 정보 구조, 입력 사용성, 렌더링, 터미널 호환성
-- 데스크톱, 웹, Admin, 원격, 모바일, 자동화 인터페이스
-- 병렬 실행, 격리, 조정, 완료, 통합
-- 권한, 샌드박스, 비밀 정보, 무인 작업, 감사 가능성
-- 시작, 입력, 스트리밍, 렌더링, 메모리, 빌드 성능
-- 테스트, 릴리스 검증, 유지보수성, 아키텍처 부채
+2026-08-08의 개인정보 제거 rolling snapshot은 6개 session 파일, 1,979개 assistant request에서
+provider가 보고한 cache-read 비율 **75.07%**를 보였다. 이는 긴 prefix가 실제로 재사용됐다는 강한
+근거지만 다음을 뜻하지 않는다.
 
-성능을 비교하려면 프로세스 트리 집계, 정확한 버전, 인증 상태, 웜/콜드 상태, 터미널 크기,
-실행 횟수, 원시 표본, 환경 식별 정보가 필요합니다. 이러한 항목이 없는 평균값이나 최상의 수치는
-비교 가능한 근거가 아닙니다.
+- context 사용량이 75% 줄었다.
+- 전체 token이나 비용이 75% 줄었다.
+- Akra보다 75% 효율적이다.
+- `cacheWrite = 0`이므로 cache write가 없었다.
 
-## Akra 기준선
+Senpi는 provider 요청을 직접 소유하므로 `prompt_cache_key`, affinity header, WebSocket
+continuation을 제어한다. Akra는 공식 app-server client이므로 이를 복제하면 안 된다. Akra가 해야 할
+일은 `cachedInputTokens / inputTokens`를 정확히 보여 주고, thread/app-server 연속성을 지키며,
+중복 문맥·polling turn·큰 tool/child 결과를 줄이고 upstream compaction을 따르는 것이다.
 
-분석은 비교 대상인 Akra 커밋을 고정하고 제품 문서뿐 아니라 현재 소스도 읽어야 합니다. 최소한
-다음을 검사합니다.
+## 현재 결정
 
-- `src/core/`
-- `src/application/service/`
-- `src/application/port/`
-- `src/adapter/inbound/tui/`
-- `src/adapter/inbound/admin_api/`
-- `src/adapter/outbound/app_server/`
-- `src/application/service/parallel_mode/`
-- `docs/reference/current-product.md`
+### 도입
 
-Akra 문서와 코드의 충돌은 덮어 둘 세부 사항이 아니라 조사 결과입니다.
+- cache read, context pressure, compaction, model change, reconnect/restart를 분리해 관측한다.
+- tool·child·planning handoff를 bounded하게 유지한다.
+- reconnect/resume/terminal recovery와 long-session 성능을 측정한다.
+- worktree fleet와 review/delivery 상태를 한 운영 화면에서 읽게 한다.
 
-## 결정 규칙
+### 거부
 
-- **채택**은 패턴이 Akra가 선택한 제품 포지션을 강화하고 소유 경계에 대응할 때만 합니다.
-- **거부**는 패턴을 복사하면 `codex app-server`를 중복하거나 안전성을 약화하거나 운영자 흐름을
-  개선하지 않으면서 제품 범위를 넓힐 때 합니다.
-- **차별화**는 같은 체크아웃에서 에이전트를 조정하는 대신 워크트리로 격리해 전달하는 방식처럼
-  Akra에 이미 더 강한 기반 요소가 있을 때 합니다.
-- 수용한 모든 격차에는 테스트, 벤치마크 산출물, 터미널 캡처, API 응답, 영속 상태 전이 또는
-  병합된 전달 경로 중 하나를 증명 목표로 지정해야 합니다.
-- 추측성 백로그는 이 디렉터리 밖에 둡니다. 근거에 기반한 비교의 결과일 때만 작업 항목을 여기에
-  둡니다.
+- provider/auth/cache key/private header/TTL 재구현
+- cache hit를 token 절감이나 비용 절감으로 바로 환산
+- 이득이 검증되지 않은 cache-warming turn과 model-visible polling
+- 넓은 harness 생태계를 review-delivery 권위의 대체물로 취급
 
-## 갱신 정책
+### 차별화
 
-다음 중 하나가 발생하면 제품 분석을 갱신합니다.
+- 공식 Codex 의미를 가장 빠르고 정확하게 투영한다.
+- planning lease와 exact-source worktree를 review·merge·cleanup까지 연결한다.
+- 고위험 bypass가 사용되면 생략된 gate와 정책 근거를 숨기지 않는다.
 
-- 새로운 주요 릴리스 또는 아키텍처 마이그레이션
-- 비교 대상인 TUI, 런타임, 병렬 처리, 메모리 또는 제어 영역 동작을 바꾸는 릴리스
-- 스냅샷이 90일보다 오래되었고 현재 작업의 근거로 여전히 사용되는 경우
-- Akra 구현 단위가 기록된 격차를 해소하거나 무효화한 경우
+## 유지 규칙
 
-이전 결론은 Git 이력에 보존합니다. 현재 디렉터리가 결정의 출처로 유지되도록 스냅샷과 근거
-원장을 제자리에서 갱신합니다.
+- 제품별 현재 스냅샷은 영문 원문에서 제자리 갱신하고 과거본은 Git 이력을 사용한다.
+- 한국어 인덱스는 결론이나 탐색 경로가 달라질 때 함께 갱신한다.
+- 경쟁 조사에서 나온 아이디어는 자동으로 현재 구현 계약이 되지 않는다. 채택된 미래 작업은
+  명시적으로 proposed인 plan 또는 issue로 옮긴다.

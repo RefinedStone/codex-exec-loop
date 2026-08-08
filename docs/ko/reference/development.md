@@ -13,7 +13,7 @@
 - `src/application/port/`: adapter와 독립적인 application 경계 계약
 - `src/application/port/inbound/`: adapter-facing use-case interface와 request/response 계약
 - `src/application/port/outbound/`: application 소유 integration capability 계약
-- `src/adapter/inbound/tui/`: inline Ratatui/Crossterm shell
+- `src/adapter/inbound/tui/`: alternate-screen fullscreen Ratatui/Crossterm shell
 - `src/adapter/inbound/{cli,admin_api,telegram_bot}/`: 다른 운영 adapter
 - `src/adapter/outbound/{app_server,db,filesystem,git,github,telegram}/`: concrete boundary
 - `src/composition/`: production dependency wiring
@@ -22,7 +22,8 @@
 - `npm/`: launcher, platform package, Node test
 - `scripts/`: validation, packaging, GitHub identity, planning, cleanup helper
 - `tests/`: cross-layer integration과 architecture gate
-- `docs/`: 현재 reference, executable validation contract, 미래 계획, 근거, 경쟁 분석
+- `docs/`: 현재 reference, executable validation contract, 명시적 미래 계획, 근거, 최신 pin을
+  유지하는 compact 경쟁 분석
 
 ## 코딩 규칙
 
