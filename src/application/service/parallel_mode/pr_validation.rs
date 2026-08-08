@@ -493,13 +493,15 @@ impl ParallelModeService {
         }
 
         if !remediation_failed {
+            let checkpoint_cursor = snapshot.next_cursor.as_ref().or_else(|| {
+                (!starting_post_merge)
+                    .then_some(observation_request.cursor.as_ref())
+                    .flatten()
+            });
             next = next
                 .transition(PrValidationEvent::ObservationCheckpointed {
                     delivery_revision: request.delivery_revision,
-                    cursor: snapshot
-                        .next_cursor
-                        .as_ref()
-                        .map(|cursor| cursor.as_str().to_string()),
+                    cursor: checkpoint_cursor.map(|cursor| cursor.as_str().to_string()),
                     evidence_fingerprint: fingerprint.clone(),
                 })
                 .map_err(transition_error)?;

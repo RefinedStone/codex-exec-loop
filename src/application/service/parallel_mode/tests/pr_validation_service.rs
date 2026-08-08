@@ -7,8 +7,9 @@ use super::{TempGitRepo, test_parallel_mode_service};
 use crate::application::port::outbound::github_pr_validation_port::{
     GithubPrMergeState, GithubPrValidationObservationRequest, GithubPrValidationPort,
     GithubPrValidationSnapshot, GithubValidationActivity, GithubValidationActivityKind,
-    GithubValidationCheckRun, GithubValidationRunStatus, GithubValidationSource,
-    GithubValidationSourceObservation, GithubValidationSourceStatus, GithubValidationWorkflowRun,
+    GithubValidationCheckRun, GithubValidationCursor, GithubValidationRunStatus,
+    GithubValidationSource, GithubValidationSourceObservation, GithubValidationSourceStatus,
+    GithubValidationWorkflowRun,
 };
 use crate::application::port::outbound::pr_validation_remediation_port::{
     PrValidationRemediationPort, PrValidationRemediationRequest,
@@ -729,4 +730,124 @@ fn terminal_provider_check_and_catch_up_settle_once() {
         .unwrap()
         .unwrap();
     assert_eq!(record.phase(), PrValidationPhase::Settled);
+}
+
+#[test]
+fn terminal_pagination_cursor_is_reused_for_stable_catch_up() {
+    let merged = merged_snapshot();
+    let mut partial = merged.clone();
+    partial.sources[0].status = GithubValidationSourceStatus::Paginated;
+    partial.sources[0].next_cursor = Some(GithubValidationCursor::new("source:page-2"));
+    partial.next_cursor = Some(GithubValidationCursor::new("page-2"));
+
+    let (repo, observation, remediation) = setup(
+        "validation-terminal-pagination-cursor",
+        vec![partial, merged.clone(), merged],
+    );
+    let service = test_parallel_mode_service();
+    service
+        .persist_pr_validation_record(
+            &repo.workspace_dir(),
+            &repo.pool_root(),
+            None,
+            &registered_record(),
+        )
+        .unwrap();
+
+    assert_eq!(
+        service
+            .poll_pr_validation(&observation, &remediation, request(&repo, 1, HEAD_A))
+            .unwrap(),
+        PrValidationPollResult::Waiting
+    );
+    assert_eq!(
+        service
+            .poll_pr_validation(&observation, &remediation, request(&repo, 2, HEAD_A))
+            .unwrap(),
+        PrValidationPollResult::Waiting
+    );
+    assert_eq!(
+        service
+            .poll_pr_validation(&observation, &remediation, request(&repo, 3, HEAD_A))
+            .unwrap(),
+        PrValidationPollResult::Settled
+    );
+    assert_eq!(
+        observation
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|request| {
+                request
+                    .cursor
+                    .as_ref()
+                    .map(|cursor| cursor.as_str().to_string())
+            })
+            .collect::<Vec<_>>(),
+        vec![None, Some("page-2".to_string()), Some("page-2".to_string()),]
+    );
+}
+
+#[test]
+fn merge_observation_clears_pre_merge_terminal_cursor() {
+    let mut pre_merge_partial = snapshot(HEAD_A, GithubValidationRunStatus::Succeeded);
+    pre_merge_partial.sources[0].status = GithubValidationSourceStatus::Paginated;
+    pre_merge_partial.sources[0].next_cursor = Some(GithubValidationCursor::new("source:page-2"));
+    pre_merge_partial.next_cursor = Some(GithubValidationCursor::new("page-2"));
+    let pre_merge_complete = snapshot(HEAD_A, GithubValidationRunStatus::Succeeded);
+    let merged = merged_snapshot();
+    let (repo, observation, remediation) = setup(
+        "validation-merge-clears-terminal-cursor",
+        vec![
+            pre_merge_partial,
+            pre_merge_complete,
+            merged.clone(),
+            merged,
+        ],
+    );
+    let service = test_parallel_mode_service();
+    service
+        .persist_pr_validation_record(
+            &repo.workspace_dir(),
+            &repo.pool_root(),
+            None,
+            &registered_record(),
+        )
+        .unwrap();
+
+    for revision in 1..=3 {
+        assert_eq!(
+            service
+                .poll_pr_validation(&observation, &remediation, request(&repo, revision, HEAD_A),)
+                .unwrap(),
+            PrValidationPollResult::Waiting
+        );
+    }
+    assert_eq!(
+        service
+            .poll_pr_validation(&observation, &remediation, request(&repo, 4, HEAD_A))
+            .unwrap(),
+        PrValidationPollResult::Settled
+    );
+    assert_eq!(
+        observation
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|request| {
+                request
+                    .cursor
+                    .as_ref()
+                    .map(|cursor| cursor.as_str().to_string())
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            None,
+            Some("page-2".to_string()),
+            Some("page-2".to_string()),
+            None,
+        ]
+    );
 }

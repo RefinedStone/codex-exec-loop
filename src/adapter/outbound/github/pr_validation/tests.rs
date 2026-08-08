@@ -301,6 +301,80 @@ fn cursor_polls_return_stable_cumulative_evidence_across_all_sources() {
 }
 
 #[test]
+fn merged_evidence_restarts_pagination_from_pre_merge_cursor() {
+    let mut open_responses = complete_fixture().responses;
+    let merged_check_runs = open_responses
+        .remove(&endpoint(&format!(
+            "commits/{MERGE_SHA}/check-runs?per_page=100&page=1"
+        )))
+        .expect("merged check fixture")
+        .replace(MERGE_SHA, SHA);
+    let merged_workflow_runs = open_responses
+        .remove(&endpoint(&format!(
+            "actions/runs?head_sha={MERGE_SHA}&per_page=100&page=1"
+        )))
+        .expect("merged workflow fixture")
+        .replace(MERGE_SHA, SHA);
+    open_responses.insert(
+        endpoint("pulls/42"),
+        format!(
+            r#"{{"state":"open","merged":false,"merge_commit_sha":null,"head":{{"sha":"{SHA}"}}}}"#
+        ),
+    );
+    open_responses.insert(
+        endpoint(&format!("commits/{SHA}/check-runs?per_page=100&page=1")),
+        merged_check_runs,
+    );
+    open_responses.insert(
+        endpoint(&format!("actions/runs?head_sha={SHA}&per_page=100&page=1")),
+        merged_workflow_runs,
+    );
+    let reviews = (0..100)
+        .map(|id| {
+            format!(
+                r#"{{"id":{},"submitted_at":"2026-08-07T10:00:00Z","commit_id":"{SHA}"}}"#,
+                1000 + id
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    open_responses.insert(
+        endpoint("pulls/42/reviews?per_page=100&page=1"),
+        format!("[{reviews}]"),
+    );
+    open_responses.insert(
+        endpoint("pulls/42/reviews?per_page=100&page=2"),
+        format!(r#"[{{"id":2000,"submitted_at":"2026-08-07T10:01:00Z","commit_id":"{SHA}"}}]"#),
+    );
+
+    let first = GithubPrValidationAdapter::with_api(FixtureApi::new(open_responses))
+        .load_validation_snapshot(&request(None))
+        .expect("open pagination should load");
+    let cursor = first.next_cursor.expect("open page should continue");
+
+    let mut merged_responses = complete_fixture().responses;
+    merged_responses.insert(
+        endpoint("pulls/42/reviews?per_page=100&page=1"),
+        format!("[{reviews}]"),
+    );
+    merged_responses.insert(
+        endpoint("pulls/42/reviews?per_page=100&page=2"),
+        format!(r#"[{{"id":2000,"submitted_at":"2026-08-07T10:01:00Z","commit_id":"{SHA}"}}]"#),
+    );
+    let merged_api = FixtureApi::new(merged_responses);
+    let merged_requests = merged_api.request_log();
+    let merged = GithubPrValidationAdapter::with_api(merged_api)
+        .load_validation_snapshot(&request(Some(cursor)))
+        .expect("merged evidence should restart pagination");
+
+    assert_eq!(merged.evidence_sha.as_str(), MERGE_SHA);
+    assert!(merged.next_cursor.is_some());
+    let requested = merged_requests.lock().expect("request lock").clone();
+    assert!(requested.contains(&endpoint("pulls/42/reviews?per_page=100&page=1")));
+    assert!(!requested.contains(&endpoint("pulls/42/reviews?per_page=100&page=2")));
+}
+
+#[test]
 fn head_sha_mismatch_fails_before_collecting_revision_evidence() {
     let api = FixtureApi::new([(
         endpoint("pulls/42"),
