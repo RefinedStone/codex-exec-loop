@@ -691,6 +691,10 @@ impl PrValidationRecord {
             state,
             phase: self.phase,
             target_short_sha: self.target_shas.source_sha.as_str()[..12].to_string(),
+            merge_short_sha: self
+                .merge_sha
+                .as_ref()
+                .map(|merge_sha| merge_sha.as_str()[..12].to_string()),
             finding_count: self.findings.len(),
             remediation_count: self.remediations.len(),
             reason,
@@ -952,6 +956,7 @@ pub struct PrValidationOperatorSummary {
     pub state: PrValidationOperatorState,
     pub phase: PrValidationPhase,
     pub target_short_sha: String,
+    pub merge_short_sha: Option<String>,
     pub finding_count: usize,
     pub remediation_count: usize,
     pub reason: String,

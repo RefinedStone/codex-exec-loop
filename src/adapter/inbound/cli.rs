@@ -251,6 +251,11 @@ fn run_pr_validation_status(
         summary.blocker.as_deref().unwrap_or("none")
     )?;
     writeln!(stdout, "target: {}", summary.target_short_sha)?;
+    writeln!(
+        stdout,
+        "merge: {}",
+        summary.merge_short_sha.as_deref().unwrap_or("pending")
+    )?;
     writeln!(stdout, "findings: {}", summary.finding_count)?;
     writeln!(stdout, "remediations: {}", summary.remediation_count)?;
     for correlation in &summary.correlations {
@@ -885,6 +890,89 @@ mod tests {
             assert!(error.contains("invalid pull request number"), "{error}");
             assert!(error.contains("akra status --pr <number>"), "{error}");
         }
+
+        std::fs::remove_dir_all(workspace).unwrap();
+    }
+
+    #[test]
+    fn operator_surface_shows_pr_remediation_merge_and_late_event() {
+        let workspace = create_temp_workspace("cli-pr-validation-post-merge-status");
+        let key = PrValidationRecordKey::new("queue-pr-42").unwrap();
+        let source_sha =
+            PrValidationCommitSha::new("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+        let merge_sha =
+            PrValidationCommitSha::new("cccccccccccccccccccccccccccccccccccccccc").unwrap();
+        let late_finding = PrValidationFinding::new(
+            PrValidationFindingKey::new(
+                PrValidationFindingSource::new("review").unwrap(),
+                "late-review-42",
+            )
+            .unwrap(),
+            source_sha.clone(),
+            "post-merge late review requires remediation",
+        )
+        .unwrap();
+        let record = PrValidationRecord::register(
+            key.clone(),
+            PrValidationTarget::new("acme/widgets", 42).unwrap(),
+            PrValidationTargetShaSnapshot::new(
+                source_sha,
+                PrValidationCommitSha::new("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap(),
+            ),
+        )
+        .transition(PrValidationEvent::BeginPreMergeObservation)
+        .unwrap()
+        .transition(PrValidationEvent::MergeObserved(merge_sha))
+        .unwrap()
+        .transition(PrValidationEvent::BeginPostMergeObservation)
+        .unwrap()
+        .transition(PrValidationEvent::ObservationCheckpointed {
+            delivery_revision: 1,
+            cursor: None,
+            evidence_fingerprint: "merge-evidence".to_string(),
+        })
+        .unwrap()
+        .transition(PrValidationEvent::FindingObserved(late_finding.clone()))
+        .unwrap()
+        .transition(PrValidationEvent::RemediationQueued(
+            PrValidationRemediationCorrelation::new(
+                late_finding.key().clone(),
+                PrValidationRecordKey::new("remediation-task-42").unwrap(),
+            ),
+        ))
+        .unwrap();
+        assert!(
+            SqlitePlanningAuthorityAdapter::compare_and_swap_runtime_pr_validation_record(
+                &workspace,
+                &key,
+                None,
+                Some(&record),
+            )
+            .unwrap()
+        );
+
+        let mut output = Vec::new();
+        let exit = run_with_args(["status", "--pr", "42", workspace.as_str()], &mut output)
+            .unwrap()
+            .unwrap();
+        let rendered = String::from_utf8(output).unwrap();
+
+        assert_eq!(exit, 0);
+        assert!(rendered.contains("akra_id: queue-pr-42"), "{rendered}");
+        assert!(
+            rendered.contains("url: https://github.com/acme/widgets/pull/42"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("phase: remediation_queued"), "{rendered}");
+        assert!(rendered.contains("merge: cccccccccccc"), "{rendered}");
+        assert!(
+            rendered.contains("post_merge_checkpoint: observed"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("recovery: complete the correlated remediation task"),
+            "{rendered}"
+        );
 
         std::fs::remove_dir_all(workspace).unwrap();
     }
