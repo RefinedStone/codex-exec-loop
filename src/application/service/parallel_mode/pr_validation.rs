@@ -361,13 +361,19 @@ impl ParallelModeService {
             next.target().pull_request_number(),
         );
         let target_sha = GithubCommitSha::new(next.target_shas().source_sha().as_str());
+        let observation_request = GithubPrValidationObservationRequest::new(
+            target.clone(),
+            target_sha.clone(),
+            next.observation_cursor().map(
+                crate::application::port::outbound::github_pr_validation_port::GithubValidationCursor::new,
+            ),
+        )
+        .with_evidence_sha(
+            next.merge_sha()
+                .map(|sha| GithubCommitSha::new(sha.as_str())),
+        );
         let snapshot = observation
-            .load_validation_snapshot(&GithubPrValidationObservationRequest::new(
-                target.clone(),
-                target_sha.clone(),
-                next.observation_cursor()
-                    .map(crate::application::port::outbound::github_pr_validation_port::GithubValidationCursor::new),
-            ))
+            .load_validation_snapshot(&observation_request)
             .map_err(|error| format!("failed to obtain trusted PR validation snapshot: {error}"))?;
         validate_snapshot_identity(&snapshot, &target, &target_sha)?;
 
@@ -442,7 +448,7 @@ impl ParallelModeService {
             && had_post_merge_checkpoint
             && prior_fingerprint.as_deref() == Some(fingerprint.as_str())
             && next.phase() == PrValidationPhase::PostMergeObservation
-            && snapshot.is_terminally_complete();
+            && snapshot.is_successfully_complete();
         if can_settle {
             next = next
                 .transition(PrValidationEvent::Settle(completion(&snapshot)?))
@@ -479,14 +485,25 @@ fn validate_snapshot_identity(
                 .to_string(),
         );
     }
-    if snapshot
-        .check_runs
-        .iter()
-        .any(|run| &run.target_sha != target_sha)
+    let expected_evidence_sha = match snapshot.merge_state {
+        GithubPrMergeState::Merged => snapshot
+            .merge_sha
+            .as_ref()
+            .ok_or_else(|| "merged PR snapshot omitted its merge SHA".to_string())?,
+        GithubPrMergeState::Open | GithubPrMergeState::Closed => target_sha,
+        GithubPrMergeState::Unknown(_) => {
+            return Err("trusted PR validation snapshot had an unknown merge state".to_string());
+        }
+    };
+    if &snapshot.evidence_sha != expected_evidence_sha
+        || snapshot
+            .check_runs
+            .iter()
+            .any(|run| &run.target_sha != expected_evidence_sha)
         || snapshot
             .workflow_runs
             .iter()
-            .any(|run| &run.target_sha != target_sha)
+            .any(|run| &run.target_sha != expected_evidence_sha)
     {
         return Err(
             "trusted PR validation snapshot contained evidence for another revision".to_string(),
@@ -505,10 +522,14 @@ fn actionable_findings(
             findings.push(PrValidationFinding::new(
                 PrValidationFindingKey::new(
                     PrValidationFindingSource::new("check_run")?,
-                    run.id.as_str(),
+                    sanitized_provider_id(run.id.as_str()),
                 )?,
                 target_sha.clone(),
-                format!("required check `{}` ended with {:?}", run.name, run.status),
+                format!(
+                    "required check `{}` ended with {:?}",
+                    sanitized_provider_text(&run.name, 160),
+                    run.status
+                ),
             )?);
         }
     }
@@ -517,10 +538,14 @@ fn actionable_findings(
             findings.push(PrValidationFinding::new(
                 PrValidationFindingKey::new(
                     PrValidationFindingSource::new("workflow_run")?,
-                    run.id.as_str(),
+                    sanitized_provider_id(run.id.as_str()),
                 )?,
                 target_sha.clone(),
-                format!("workflow `{}` ended with {:?}", run.name, run.status),
+                format!(
+                    "workflow `{}` ended with {:?}",
+                    sanitized_provider_text(&run.name, 160),
+                    run.status
+                ),
             )?);
         }
     }
@@ -553,6 +578,7 @@ fn remediation_key(
 fn snapshot_fingerprint(snapshot: &GithubPrValidationSnapshot) -> String {
     let mut digest = Sha256::new();
     digest.update(snapshot.target_sha.as_str());
+    digest.update(snapshot.evidence_sha.as_str());
     digest.update(format!("{:?}", snapshot.merge_state));
     digest.update(
         snapshot
@@ -630,8 +656,8 @@ fn completion(snapshot: &GithubPrValidationSnapshot) -> Result<PrValidationCompl
         .map(|run| {
             PrValidationRequiredCheck::new(
                 PrValidationCheckKind::CheckRun,
-                &run.name,
-                run.status.is_terminal(),
+                sanitized_provider_text(&run.name, 160),
+                run.status == GithubValidationRunStatus::Succeeded,
             )
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -642,8 +668,8 @@ fn completion(snapshot: &GithubPrValidationSnapshot) -> Result<PrValidationCompl
             .map(|run| {
                 PrValidationRequiredCheck::new(
                     PrValidationCheckKind::WorkflowRun,
-                    &run.name,
-                    run.status.is_terminal(),
+                    sanitized_provider_text(&run.name, 160),
+                    run.status == GithubValidationRunStatus::Succeeded,
                 )
             })
             .collect::<Result<Vec<_>, String>>()?,
@@ -654,6 +680,58 @@ fn completion(snapshot: &GithubPrValidationSnapshot) -> Result<PrValidationCompl
         checks,
         PrValidationCatchUpState::NoUnseenRelevantEvents,
     ))
+}
+
+fn sanitized_provider_id(value: &str) -> String {
+    const MAX_ID_LEN: usize = 96;
+    const DIGEST_LEN: usize = 16;
+
+    let sanitized = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | ':') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if !sanitized.is_empty() && sanitized == value && sanitized.chars().count() <= MAX_ID_LEN {
+        return sanitized;
+    }
+
+    let digest = format!("{:x}", Sha256::digest(value.as_bytes()));
+    let prefix_len = MAX_ID_LEN - DIGEST_LEN - 1;
+    let prefix = sanitized.chars().take(prefix_len).collect::<String>();
+    format!("{prefix}-{}", &digest[..DIGEST_LEN])
+}
+
+fn sanitized_provider_text(value: &str, max_len: usize) -> String {
+    let mut sanitized = String::new();
+    let mut pending_space = false;
+    for character in value.chars() {
+        if character.is_control() || character.is_whitespace() {
+            pending_space = !sanitized.is_empty();
+            continue;
+        }
+        if pending_space {
+            sanitized.push(' ');
+            pending_space = false;
+        }
+        sanitized.push(character);
+    }
+    if sanitized.chars().count() <= max_len {
+        return sanitized;
+    }
+    if max_len <= 3 {
+        return ".".repeat(max_len);
+    }
+    let mut bounded = sanitized.chars().take(max_len - 3).collect::<String>();
+    while bounded.ends_with(' ') {
+        bounded.pop();
+    }
+    bounded.push_str("...");
+    bounded
 }
 
 fn commit_sha(sha: &GithubCommitSha) -> Result<PrValidationCommitSha, String> {

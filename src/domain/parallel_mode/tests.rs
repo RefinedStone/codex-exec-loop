@@ -1318,7 +1318,7 @@ fn pr_validation_completion_predicate_reports_every_incomplete_branch() {
         vec![
             PrValidationCompletionBlocker::ProviderNotTerminal(pending_provider),
             PrValidationCompletionBlocker::ProviderHasNoCompletionContract(watchable_provider),
-            PrValidationCompletionBlocker::RequiredCheckNotTerminal(pending_check.key().clone()),
+            PrValidationCompletionBlocker::RequiredCheckNotSuccessful(pending_check.key().clone()),
             PrValidationCompletionBlocker::FinalCatchUpNotObserved,
         ]
     );

@@ -93,6 +93,7 @@ pub mod tests {
         GithubPrValidationSnapshot {
             target: GithubPullRequestTarget::new("acme/widgets", 42),
             target_sha: GithubCommitSha::new(sha),
+            evidence_sha: GithubCommitSha::new(sha),
             merge_state: GithubPrMergeState::Open,
             merge_sha: None,
             activities: Vec::new(),
@@ -110,6 +111,8 @@ pub mod tests {
 
     fn merged_snapshot(sha: &str) -> GithubPrValidationSnapshot {
         let mut snapshot = snapshot(sha, GithubValidationRunStatus::Succeeded);
+        snapshot.evidence_sha = GithubCommitSha::new(MERGE);
+        snapshot.check_runs[0].target_sha = GithubCommitSha::new(MERGE);
         snapshot.merge_state = GithubPrMergeState::Merged;
         snapshot.merge_sha = Some(GithubCommitSha::new(MERGE));
         snapshot
@@ -277,6 +280,7 @@ pub mod tests {
         );
         let mut reordered_late = late.clone();
         reordered_late.activities.reverse();
+        reordered_late.check_runs[0].status = GithubValidationRunStatus::Succeeded;
         let github = DeterministicGithub {
             snapshots: Mutex::new(
                 vec![

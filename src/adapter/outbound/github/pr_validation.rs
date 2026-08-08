@@ -6,6 +6,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use super::review_poller::GithubReviewPollerAdapter;
 use crate::application::port::outbound::github_pr_validation_port::{
@@ -19,7 +20,7 @@ use crate::domain::github_review::{GithubCommitSha, GithubOpaqueId};
 
 const PER_PAGE: usize = 100;
 const MAX_PAGINATED_PAGES: usize = 20;
-const CURSOR_VERSION: u8 = 1;
+const CURSOR_VERSION: u8 = 2;
 
 /// Read-only GitHub adapter for one immutable PR revision.
 ///
@@ -97,7 +98,7 @@ impl GithubPrValidationPort for GithubPrValidationAdapter {
         &self,
         request: &GithubPrValidationObservationRequest,
     ) -> Result<GithubPrValidationSnapshot> {
-        let mut pages = ValidationPages::for_request(request)?;
+        validate_cursor_target(request)?;
         let repository = &request.target.repository;
         let number = request.target.number;
 
@@ -105,9 +106,28 @@ impl GithubPrValidationPort for GithubPrValidationAdapter {
         // produce a snapshot labelled with the stale SHA supplied by the application.
         let pull_path = format!("/repos/{repository}/pulls/{number}");
         let pull: PullRequestResponse = self.get_json(&pull_path)?;
+        ensure_commit_sha(&pull.head.sha, "PR head")?;
         if pull.head.sha != request.target_sha.as_str() {
             bail!("GitHub PR head SHA changed before validation observation completed")
         }
+        let initial_merge = normalize_merge_state(&pull)?;
+        let reported_evidence_sha = initial_merge
+            .1
+            .as_ref()
+            .unwrap_or(&request.target_sha)
+            .clone();
+        if request
+            .evidence_sha
+            .as_ref()
+            .is_some_and(|recorded| recorded != &reported_evidence_sha)
+        {
+            bail!("GitHub PR merge SHA did not match the recorded post-merge evidence target")
+        }
+        let evidence_sha = request
+            .evidence_sha
+            .clone()
+            .unwrap_or(reported_evidence_sha);
+        let mut pages = ValidationPages::for_request(request, &evidence_sha)?;
 
         let mut activities = Vec::new();
         let mut check_runs = Vec::new();
@@ -118,132 +138,151 @@ impl GithubPrValidationPort for GithubPrValidationAdapter {
             SourcePageState::Complete,
         );
 
-        if let Some(page) = pages.reviews {
+        let review_page = pages.reviews.poll_page();
+        let mut review_count = 0;
+        for page in pages.reviews.pages_through_poll() {
             let path = paged_path(&format!("/repos/{repository}/pulls/{number}/reviews"), page);
             let rows: Vec<ReviewResponse> = self.get_json(&path)?;
             ensure_page_bound(&rows, &path)?;
-            let count = rows.len();
+            if page == review_page {
+                review_count = rows.len();
+            }
             activities.extend(rows.into_iter().filter_map(normalize_review));
-            source_states.insert(
-                GithubValidationSource::Reviews,
-                advance_array_page(&mut pages.reviews, page, count)?,
-            );
-        } else {
-            source_states.insert(GithubValidationSource::Reviews, SourcePageState::Complete);
         }
+        source_states.insert(
+            GithubValidationSource::Reviews,
+            advance_array_page(&mut pages.reviews, review_page, review_count)?,
+        );
 
-        if let Some(page) = pages.issue_comments {
+        let issue_comment_page = pages.issue_comments.poll_page();
+        let mut issue_comment_count = 0;
+        for page in pages.issue_comments.pages_through_poll() {
             let path = paged_path(
                 &format!("/repos/{repository}/issues/{number}/comments"),
                 page,
             );
             let rows: Vec<IssueCommentResponse> = self.get_json(&path)?;
             ensure_page_bound(&rows, &path)?;
-            let count = rows.len();
+            if page == issue_comment_page {
+                issue_comment_count = rows.len();
+            }
             activities.extend(rows.into_iter().map(normalize_issue_comment));
-            source_states.insert(
-                GithubValidationSource::IssueComments,
-                advance_array_page(&mut pages.issue_comments, page, count)?,
-            );
-        } else {
-            source_states.insert(
-                GithubValidationSource::IssueComments,
-                SourcePageState::Complete,
-            );
         }
+        source_states.insert(
+            GithubValidationSource::IssueComments,
+            advance_array_page(
+                &mut pages.issue_comments,
+                issue_comment_page,
+                issue_comment_count,
+            )?,
+        );
 
-        if let Some(page) = pages.review_threads {
+        let review_thread_page = pages.review_threads.poll_page();
+        let mut review_thread_count = 0;
+        for page in pages.review_threads.pages_through_poll() {
             let path = paged_path(
                 &format!("/repos/{repository}/pulls/{number}/comments"),
                 page,
             );
             let rows: Vec<ReviewCommentResponse> = self.get_json(&path)?;
             ensure_page_bound(&rows, &path)?;
-            let count = rows.len();
+            if page == review_thread_page {
+                review_thread_count = rows.len();
+            }
             activities.extend(normalize_review_threads(rows));
-            source_states.insert(
-                GithubValidationSource::ReviewThreads,
-                advance_array_page(&mut pages.review_threads, page, count)?,
-            );
-        } else {
-            source_states.insert(
-                GithubValidationSource::ReviewThreads,
-                SourcePageState::Complete,
-            );
         }
+        source_states.insert(
+            GithubValidationSource::ReviewThreads,
+            advance_array_page(
+                &mut pages.review_threads,
+                review_thread_page,
+                review_thread_count,
+            )?,
+        );
 
-        if let Some(page) = pages.check_runs {
+        let check_run_page = pages.check_runs.poll_page();
+        let mut check_run_count = 0;
+        let mut check_run_total = None;
+        for page in pages.check_runs.pages_through_poll() {
             let path = paged_path(
                 &format!(
                     "/repos/{repository}/commits/{}/check-runs",
-                    request.target_sha.as_str()
+                    evidence_sha.as_str()
                 ),
                 page,
             );
             let response: CheckRunsResponse = self.get_json(&path)?;
             ensure_page_bound(&response.check_runs, &path)?;
+            ensure_stable_total(&mut check_run_total, response.total_count)?;
+            if page == check_run_page {
+                check_run_count = response.check_runs.len();
+            }
             for row in response.check_runs {
-                ensure_run_sha(&row.head_sha, &request.target_sha)?;
+                ensure_run_sha(&row.head_sha, &evidence_sha)?;
                 check_runs.push(GithubValidationCheckRun::new(
                     row.id.opaque("check-run"),
-                    row.name,
+                    sanitized_provider_text(&row.name, 160),
                     GithubCommitSha::new(row.head_sha),
                     normalize_run_status(&row.status, row.conclusion.as_deref()),
                 ));
             }
-            source_states.insert(
-                GithubValidationSource::CheckRuns,
-                advance_counted_page(
-                    &mut pages.check_runs,
-                    page,
-                    check_runs.len(),
-                    response.total_count,
-                )?,
-            );
-        } else {
-            source_states.insert(GithubValidationSource::CheckRuns, SourcePageState::Complete);
         }
+        source_states.insert(
+            GithubValidationSource::CheckRuns,
+            advance_counted_page(
+                &mut pages.check_runs,
+                check_run_page,
+                check_run_count,
+                check_run_total.unwrap_or_default(),
+            )?,
+        );
 
-        if let Some(page) = pages.workflow_runs {
+        let workflow_run_page = pages.workflow_runs.poll_page();
+        let mut workflow_run_count = 0;
+        let mut workflow_run_total = None;
+        for page in pages.workflow_runs.pages_through_poll() {
             let base = format!(
                 "/repos/{repository}/actions/runs?head_sha={}",
-                request.target_sha.as_str()
+                evidence_sha.as_str()
             );
             let path = paged_query(&base, page);
             let response: WorkflowRunsResponse = self.get_json(&path)?;
             ensure_page_bound(&response.workflow_runs, &path)?;
+            ensure_stable_total(&mut workflow_run_total, response.total_count)?;
+            if page == workflow_run_page {
+                workflow_run_count = response.workflow_runs.len();
+            }
             for row in response.workflow_runs {
-                ensure_run_sha(&row.head_sha, &request.target_sha)?;
+                ensure_run_sha(&row.head_sha, &evidence_sha)?;
                 workflow_runs.push(GithubValidationWorkflowRun::new(
                     row.id.opaque("workflow-run"),
-                    row.name,
+                    sanitized_provider_text(&row.name, 160),
                     GithubCommitSha::new(row.head_sha),
                     normalize_run_status(&row.status, row.conclusion.as_deref()),
                 ));
             }
-            source_states.insert(
-                GithubValidationSource::WorkflowRuns,
-                advance_counted_page(
-                    &mut pages.workflow_runs,
-                    page,
-                    workflow_runs.len(),
-                    response.total_count,
-                )?,
-            );
-        } else {
-            source_states.insert(
-                GithubValidationSource::WorkflowRuns,
-                SourcePageState::Complete,
-            );
         }
+        source_states.insert(
+            GithubValidationSource::WorkflowRuns,
+            advance_counted_page(
+                &mut pages.workflow_runs,
+                workflow_run_page,
+                workflow_run_count,
+                workflow_run_total.unwrap_or_default(),
+            )?,
+        );
 
         // Re-read the PR after collecting its endpoint families. This closes the race where the
         // branch moves after the first identity check but before the snapshot is returned.
         let pull: PullRequestResponse = self.get_json(&pull_path)?;
+        ensure_commit_sha(&pull.head.sha, "PR head")?;
         if pull.head.sha != request.target_sha.as_str() {
             bail!("GitHub PR head SHA changed before validation observation completed")
         }
-        let (merge_state, merge_sha) = normalize_merge_state(pull);
+        let (merge_state, merge_sha) = normalize_merge_state(&pull)?;
+        if (merge_state.clone(), merge_sha.clone()) != initial_merge {
+            bail!("GitHub PR merge identity changed before validation observation completed")
+        }
 
         let next_cursor = pages.has_more().then(|| pages.to_cursor()).transpose()?;
         let sources = GithubValidationSource::ALL
@@ -275,6 +314,7 @@ impl GithubPrValidationPort for GithubPrValidationAdapter {
         let mut snapshot = GithubPrValidationSnapshot {
             target: request.target.clone(),
             target_sha: request.target_sha.clone(),
+            evidence_sha,
             merge_state,
             merge_sha,
             activities,
@@ -302,26 +342,50 @@ struct ValidationPages {
     repository: String,
     number: u64,
     target_sha: String,
-    reviews: Option<usize>,
-    issue_comments: Option<usize>,
-    review_threads: Option<usize>,
-    check_runs: Option<usize>,
-    workflow_runs: Option<usize>,
+    evidence_sha: String,
+    reviews: PageProgress,
+    issue_comments: PageProgress,
+    review_threads: PageProgress,
+    check_runs: PageProgress,
+    workflow_runs: PageProgress,
+}
+
+fn validate_cursor_target(request: &GithubPrValidationObservationRequest) -> Result<()> {
+    let Some(cursor) = request.cursor.as_ref() else {
+        return Ok(());
+    };
+    let bytes = URL_SAFE_NO_PAD
+        .decode(cursor.as_str())
+        .context("GitHub validation cursor was malformed")?;
+    let pages: ValidationPages =
+        serde_json::from_slice(&bytes).context("GitHub validation cursor payload was malformed")?;
+    if pages.version != CURSOR_VERSION
+        || pages.repository != request.target.repository
+        || pages.number != request.target.number
+        || pages.target_sha != request.target_sha.as_str()
+    {
+        bail!("GitHub validation cursor does not match the requested PR revision")
+    }
+    Ok(())
 }
 
 impl ValidationPages {
-    fn for_request(request: &GithubPrValidationObservationRequest) -> Result<Self> {
+    fn for_request(
+        request: &GithubPrValidationObservationRequest,
+        evidence_sha: &GithubCommitSha,
+    ) -> Result<Self> {
         let Some(cursor) = request.cursor.as_ref() else {
             return Ok(Self {
                 version: CURSOR_VERSION,
                 repository: request.target.repository.clone(),
                 number: request.target.number,
                 target_sha: request.target_sha.as_str().to_string(),
-                reviews: Some(1),
-                issue_comments: Some(1),
-                review_threads: Some(1),
-                check_runs: Some(1),
-                workflow_runs: Some(1),
+                evidence_sha: evidence_sha.as_str().to_string(),
+                reviews: PageProgress::initial(),
+                issue_comments: PageProgress::initial(),
+                review_threads: PageProgress::initial(),
+                check_runs: PageProgress::initial(),
+                workflow_runs: PageProgress::initial(),
             });
         };
         let bytes = URL_SAFE_NO_PAD
@@ -333,6 +397,7 @@ impl ValidationPages {
             || pages.repository != request.target.repository
             || pages.number != request.target.number
             || pages.target_sha != request.target_sha.as_str()
+            || pages.evidence_sha != evidence_sha.as_str()
         {
             bail!("GitHub validation cursor does not match the requested PR revision")
         }
@@ -344,8 +409,7 @@ impl ValidationPages {
             pages.workflow_runs,
         ]
         .into_iter()
-        .flatten()
-        .any(|page| !(2..=MAX_PAGINATED_PAGES).contains(&page))
+        .any(|progress| !progress.is_valid())
         {
             bail!("GitHub validation cursor contained an invalid page")
         }
@@ -353,17 +417,47 @@ impl ValidationPages {
     }
 
     fn has_more(&self) -> bool {
-        self.reviews.is_some()
-            || self.issue_comments.is_some()
-            || self.review_threads.is_some()
-            || self.check_runs.is_some()
-            || self.workflow_runs.is_some()
+        self.reviews.next.is_some()
+            || self.issue_comments.next.is_some()
+            || self.review_threads.next.is_some()
+            || self.check_runs.next.is_some()
+            || self.workflow_runs.next.is_some()
     }
 
     fn to_cursor(&self) -> Result<GithubValidationCursor> {
         let bytes =
             serde_json::to_vec(self).context("failed to encode GitHub validation cursor")?;
         Ok(GithubValidationCursor::new(URL_SAFE_NO_PAD.encode(bytes)))
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct PageProgress {
+    observed_through: usize,
+    next: Option<usize>,
+}
+
+impl PageProgress {
+    fn initial() -> Self {
+        Self {
+            observed_through: 0,
+            next: Some(1),
+        }
+    }
+
+    fn poll_page(self) -> usize {
+        self.next.unwrap_or(self.observed_through)
+    }
+
+    fn pages_through_poll(self) -> std::ops::RangeInclusive<usize> {
+        1..=self.poll_page()
+    }
+
+    fn is_valid(self) -> bool {
+        (1..=MAX_PAGINATED_PAGES).contains(&self.observed_through)
+            && self
+                .next
+                .is_none_or(|page| page == self.observed_through + 1 && page <= MAX_PAGINATED_PAGES)
     }
 }
 
@@ -374,22 +468,23 @@ enum SourcePageState {
 }
 
 fn advance_array_page(
-    slot: &mut Option<usize>,
+    progress: &mut PageProgress,
     page: usize,
     count: usize,
 ) -> Result<SourcePageState> {
+    progress.observed_through = page;
     if count == PER_PAGE {
         let next = next_page(page)?;
-        *slot = Some(next);
+        progress.next = Some(next);
         Ok(SourcePageState::Next(next))
     } else {
-        *slot = None;
+        progress.next = None;
         Ok(SourcePageState::Complete)
     }
 }
 
 fn advance_counted_page(
-    slot: &mut Option<usize>,
+    progress: &mut PageProgress,
     page: usize,
     count: usize,
     total_count: usize,
@@ -399,15 +494,16 @@ fn advance_counted_page(
         .and_then(|page_index| page_index.checked_mul(PER_PAGE))
         .and_then(|offset| offset.checked_add(count))
         .ok_or_else(|| anyhow!("GitHub validation pagination count overflowed"))?;
+    progress.observed_through = page;
     if observed_through < total_count {
         if count != PER_PAGE {
             bail!("GitHub validation counted response ended before its declared total")
         }
         let next = next_page(page)?;
-        *slot = Some(next);
+        progress.next = Some(next);
         Ok(SourcePageState::Next(next))
     } else {
-        *slot = None;
+        progress.next = None;
         Ok(SourcePageState::Complete)
     }
 }
@@ -423,6 +519,21 @@ fn next_page(page: usize) -> Result<usize> {
 fn ensure_page_bound<T>(rows: &[T], endpoint: &str) -> Result<()> {
     if rows.len() > PER_PAGE {
         bail!("GitHub validation response exceeded the {PER_PAGE}-item page bound for {endpoint}")
+    }
+    Ok(())
+}
+
+fn ensure_stable_total(observed: &mut Option<usize>, current: usize) -> Result<()> {
+    if observed.is_some_and(|expected| expected != current) {
+        bail!("GitHub validation pagination total changed during cumulative observation")
+    }
+    *observed = Some(current);
+    Ok(())
+}
+
+fn ensure_commit_sha(value: &str, label: &str) -> Result<()> {
+    if value.len() != 40 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        bail!("GitHub validation {label} SHA was malformed")
     }
     Ok(())
 }
@@ -447,20 +558,25 @@ fn source_label(source: GithubValidationSource) -> &'static str {
 }
 
 fn normalize_merge_state(
-    response: PullRequestResponse,
-) -> (GithubPrMergeState, Option<GithubCommitSha>) {
+    response: &PullRequestResponse,
+) -> Result<(GithubPrMergeState, Option<GithubCommitSha>)> {
     if response.merged {
-        return (
+        let merge_sha = response
+            .merge_commit_sha
+            .as_deref()
+            .ok_or_else(|| anyhow!("merged GitHub PR response omitted its merge SHA"))?;
+        ensure_commit_sha(merge_sha, "PR merge")?;
+        return Ok((
             GithubPrMergeState::Merged,
-            response.merge_commit_sha.map(GithubCommitSha::new),
-        );
+            Some(GithubCommitSha::new(merge_sha)),
+        ));
     }
     let state = match response.state.as_str() {
         "open" => GithubPrMergeState::Open,
         "closed" => GithubPrMergeState::Closed,
-        other => GithubPrMergeState::Unknown(other.to_string()),
+        other => GithubPrMergeState::Unknown(sanitized_provider_text(other, 64)),
     };
-    (state, None)
+    Ok((state, None))
 }
 
 fn normalize_review(row: ReviewResponse) -> Option<GithubValidationActivity> {
@@ -468,9 +584,12 @@ fn normalize_review(row: ReviewResponse) -> Option<GithubValidationActivity> {
         GithubValidationActivity::new(
             row.id.opaque("review"),
             GithubValidationActivityKind::Review,
-            observed_at,
+            sanitized_provider_text(&observed_at, 64),
         )
-        .with_commit_sha(GithubCommitSha::new(row.commit_id))
+        .with_commit_sha(GithubCommitSha::new(sanitized_provider_text(
+            &row.commit_id,
+            40,
+        )))
     })
 }
 
@@ -478,7 +597,7 @@ fn normalize_issue_comment(row: IssueCommentResponse) -> GithubValidationActivit
     GithubValidationActivity::new(
         row.id.opaque("issue-comment"),
         GithubValidationActivityKind::IssueComment,
-        row.updated_at,
+        sanitized_provider_text(&row.updated_at, 64),
     )
 }
 
@@ -492,9 +611,12 @@ fn normalize_review_threads(rows: Vec<ReviewCommentResponse>) -> Vec<GithubValid
         let thread = GithubValidationActivity::new(
             GithubOpaqueId::new(thread_id.clone()),
             GithubValidationActivityKind::ReviewThread,
-            row.updated_at.clone(),
+            sanitized_provider_text(&row.updated_at, 64),
         )
-        .with_commit_sha(GithubCommitSha::new(row.commit_id.clone()));
+        .with_commit_sha(GithubCommitSha::new(sanitized_provider_text(
+            &row.commit_id,
+            40,
+        )));
         match threads.get(&thread_id) {
             // The root comment is the canonical thread activity. A reply may synthesize a thread
             // only when its root is absent from this page; it must never replace root identity.
@@ -508,9 +630,12 @@ fn normalize_review_threads(rows: Vec<ReviewCommentResponse>) -> Vec<GithubValid
                 GithubValidationActivity::new(
                     row.id.opaque("review-comment"),
                     GithubValidationActivityKind::ReviewComment,
-                    row.updated_at,
+                    sanitized_provider_text(&row.updated_at, 64),
                 )
-                .with_commit_sha(GithubCommitSha::new(row.commit_id)),
+                .with_commit_sha(GithubCommitSha::new(sanitized_provider_text(
+                    &row.commit_id,
+                    40,
+                ))),
             );
         }
     }
@@ -522,10 +647,64 @@ fn normalize_review_threads(rows: Vec<ReviewCommentResponse>) -> Vec<GithubValid
 }
 
 fn ensure_run_sha(observed: &str, expected: &GithubCommitSha) -> Result<()> {
+    ensure_commit_sha(observed, "validation run")?;
     if observed != expected.as_str() {
         bail!("GitHub validation run was not bound to the requested target SHA")
     }
     Ok(())
+}
+
+fn sanitized_provider_id(value: &str) -> String {
+    const MAX_ID_LEN: usize = 96;
+    const DIGEST_LEN: usize = 16;
+
+    let sanitized = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | ':') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if !sanitized.is_empty() && sanitized == value && sanitized.chars().count() <= MAX_ID_LEN {
+        return sanitized;
+    }
+    let digest = format!("{:x}", Sha256::digest(value.as_bytes()));
+    let prefix = sanitized
+        .chars()
+        .take(MAX_ID_LEN - DIGEST_LEN - 1)
+        .collect::<String>();
+    format!("{prefix}-{}", &digest[..DIGEST_LEN])
+}
+
+fn sanitized_provider_text(value: &str, max_len: usize) -> String {
+    let mut sanitized = String::new();
+    let mut pending_space = false;
+    for character in value.chars() {
+        if character.is_control() || character.is_whitespace() {
+            pending_space = !sanitized.is_empty();
+            continue;
+        }
+        if pending_space {
+            sanitized.push(' ');
+            pending_space = false;
+        }
+        sanitized.push(character);
+    }
+    if sanitized.chars().count() <= max_len {
+        return sanitized;
+    }
+    if max_len <= 3 {
+        return ".".repeat(max_len);
+    }
+    let mut bounded = sanitized.chars().take(max_len - 3).collect::<String>();
+    while bounded.ends_with(' ') {
+        bounded.pop();
+    }
+    bounded.push_str("...");
+    bounded
 }
 
 fn normalize_run_status(status: &str, conclusion: Option<&str>) -> GithubValidationRunStatus {
@@ -539,10 +718,13 @@ fn normalize_run_status(status: &str, conclusion: Option<&str>) -> GithubValidat
             }
             Some("cancelled") => GithubValidationRunStatus::Cancelled,
             Some("skipped" | "neutral") => GithubValidationRunStatus::Skipped,
-            Some(other) => GithubValidationRunStatus::Unknown(format!("completed:{other}")),
+            Some(other) => GithubValidationRunStatus::Unknown(format!(
+                "completed:{}",
+                sanitized_provider_text(other, 64)
+            )),
             None => GithubValidationRunStatus::Unknown("completed".to_string()),
         },
-        other => GithubValidationRunStatus::Unknown(other.to_string()),
+        other => GithubValidationRunStatus::Unknown(sanitized_provider_text(other, 64)),
     }
 }
 
@@ -617,11 +799,14 @@ impl ProviderId {
     }
 
     fn label(&self, namespace: &str) -> String {
-        format!("{namespace}:{}", self.value())
+        format!("{namespace}:{}", sanitized_provider_id(&self.value()))
     }
 
     fn opaque(&self, namespace: &str) -> GithubOpaqueId {
-        GithubOpaqueId::new(self.label(namespace))
+        GithubOpaqueId::new(format!(
+            "{namespace}:{}",
+            sanitized_provider_id(&self.value())
+        ))
     }
 }
 
