@@ -127,7 +127,10 @@ impl GithubPrValidationPort for GithubPrValidationAdapter {
             .evidence_sha
             .clone()
             .unwrap_or(reported_evidence_sha);
-        let mut pages = ValidationPages::for_request(request, &evidence_sha)?;
+        let allow_cursor_evidence_reset =
+            request.evidence_sha.is_none() && initial_merge.0 == GithubPrMergeState::Merged;
+        let mut pages =
+            ValidationPages::for_request(request, &evidence_sha, allow_cursor_evidence_reset)?;
 
         let mut activities = Vec::new();
         let mut check_runs = Vec::new();
@@ -370,23 +373,31 @@ fn validate_cursor_target(request: &GithubPrValidationObservationRequest) -> Res
 }
 
 impl ValidationPages {
+    fn initial(
+        request: &GithubPrValidationObservationRequest,
+        evidence_sha: &GithubCommitSha,
+    ) -> Self {
+        Self {
+            version: CURSOR_VERSION,
+            repository: request.target.repository.clone(),
+            number: request.target.number,
+            target_sha: request.target_sha.as_str().to_string(),
+            evidence_sha: evidence_sha.as_str().to_string(),
+            reviews: PageProgress::initial(),
+            issue_comments: PageProgress::initial(),
+            review_threads: PageProgress::initial(),
+            check_runs: PageProgress::initial(),
+            workflow_runs: PageProgress::initial(),
+        }
+    }
+
     fn for_request(
         request: &GithubPrValidationObservationRequest,
         evidence_sha: &GithubCommitSha,
+        allow_evidence_reset: bool,
     ) -> Result<Self> {
         let Some(cursor) = request.cursor.as_ref() else {
-            return Ok(Self {
-                version: CURSOR_VERSION,
-                repository: request.target.repository.clone(),
-                number: request.target.number,
-                target_sha: request.target_sha.as_str().to_string(),
-                evidence_sha: evidence_sha.as_str().to_string(),
-                reviews: PageProgress::initial(),
-                issue_comments: PageProgress::initial(),
-                review_threads: PageProgress::initial(),
-                check_runs: PageProgress::initial(),
-                workflow_runs: PageProgress::initial(),
-            });
+            return Ok(Self::initial(request, evidence_sha));
         };
         let bytes = URL_SAFE_NO_PAD
             .decode(cursor.as_str())
@@ -397,8 +408,13 @@ impl ValidationPages {
             || pages.repository != request.target.repository
             || pages.number != request.target.number
             || pages.target_sha != request.target_sha.as_str()
-            || pages.evidence_sha != evidence_sha.as_str()
         {
+            bail!("GitHub validation cursor does not match the requested PR revision")
+        }
+        if pages.evidence_sha != evidence_sha.as_str() {
+            if allow_evidence_reset {
+                return Ok(Self::initial(request, evidence_sha));
+            }
             bail!("GitHub validation cursor does not match the requested PR revision")
         }
         if [

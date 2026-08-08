@@ -290,6 +290,7 @@ impl GithubPrValidationSnapshot {
         };
         self.observations_complete()
             && expected_evidence_sha == Some(&self.evidence_sha)
+            && (!self.check_runs.is_empty() || !self.workflow_runs.is_empty())
             && self.check_runs.iter().all(|run| {
                 run.target_sha == self.evidence_sha
                     && run.status == GithubValidationRunStatus::Succeeded
@@ -426,6 +427,16 @@ mod tests {
         );
         assert!(snapshot.is_successfully_complete());
         assert!(snapshot.observations_complete());
+    }
+
+    #[test]
+    fn successful_completion_requires_explicit_ci_evidence() {
+        let mut snapshot = complete_snapshot();
+        snapshot.check_runs.clear();
+        snapshot.workflow_runs.clear();
+
+        assert!(snapshot.observations_complete());
+        assert!(!snapshot.is_successfully_complete());
     }
 
     #[test]
