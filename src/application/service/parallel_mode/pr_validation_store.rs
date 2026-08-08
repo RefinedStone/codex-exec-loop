@@ -8,6 +8,15 @@ use crate::domain::parallel_mode::{PrValidationRecord, PrValidationRecordKey};
 
 const PR_VALIDATION_MIRROR_ROOT: &str = ".pr-validation";
 
+fn ensure_pr_validation_mirror_root(
+    runtime: &dyn ParallelModeRuntimePort,
+    pool_root: &Path,
+) -> Result<(), String> {
+    runtime
+        .ensure_directory_exists(pool_root)
+        .map_err(|error| format!("PR validation mirror root could not be initialized: {error}"))
+}
+
 pub(super) fn pr_validation_record_relative_path(key: &PrValidationRecordKey) -> PathBuf {
     let digest = Sha256::digest(key.as_str().as_bytes());
     PathBuf::from(PR_VALIDATION_MIRROR_ROOT).join(format!("{digest:x}.json"))
@@ -25,6 +34,7 @@ pub(crate) fn persist_pr_validation_record(
         return Err("PR validation persistence cannot change record identity".to_string());
     }
 
+    ensure_pr_validation_mirror_root(runtime, pool_root)?;
     let relative = pr_validation_record_relative_path(replacement.key());
     let observed_mirror = runtime
         .read_runtime_mirror_optional(pool_root, &relative)
@@ -120,6 +130,7 @@ pub(crate) fn recover_pr_validation_record_mirror(
                 record_key.as_str()
             )
         })?;
+    ensure_pr_validation_mirror_root(runtime, pool_root)?;
     let relative = pr_validation_record_relative_path(record_key);
     let observed_mirror = runtime
         .read_runtime_mirror_optional(pool_root, &relative)
