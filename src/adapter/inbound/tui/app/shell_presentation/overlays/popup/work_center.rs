@@ -364,8 +364,13 @@ fn delivery_item(screen_model: &ConversationScreenModel<'_>) -> WorkCenterItem {
                 )
             })
             .unwrap_or_default();
+        let merge = validation
+            .merge_short_sha
+            .as_deref()
+            .map(|merge_short_sha| format!(" · merge {merge_short_sha}"))
+            .unwrap_or_default();
         format!(
-            "{} · {} · {} · {} · {}{}",
+            "{} · {} · {} · {} · {}{}{}",
             validation.akra_id,
             validation.canonical_pr_url,
             validation
@@ -374,7 +379,8 @@ fn delivery_item(screen_model: &ConversationScreenModel<'_>) -> WorkCenterItem {
                 .unwrap_or(validation.reason.as_str()),
             validation.phase_label(),
             validation.next_action(),
-            correlation
+            correlation,
+            merge
         )
     } else {
         compact_inline(&format!(
@@ -580,6 +586,7 @@ mod tests {
             state: PrValidationOperatorState::Remediation,
             phase: PrValidationPhase::RemediationRunning,
             target_short_sha: "aaaaaaaaaaaa".to_string(),
+            merge_short_sha: Some("bbbbbbbbbbbb".to_string()),
             finding_count: 2,
             remediation_count: 1,
             reason: "check_run finding has correlated remediation".to_string(),
@@ -609,6 +616,7 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("check_run finding"), "{text}");
+        assert!(text.contains("merge bbbbbbbbbbbb"), "{text}");
     }
 
     #[test]
