@@ -116,10 +116,11 @@ impl GithubPrValidationPort for GithubPrValidationAdapter {
             .as_ref()
             .unwrap_or(&request.target_sha)
             .clone();
-        if request
-            .evidence_sha
-            .as_ref()
-            .is_some_and(|recorded| recorded != &reported_evidence_sha)
+        if initial_merge.0 == GithubPrMergeState::Merged
+            && request
+                .evidence_sha
+                .as_ref()
+                .is_some_and(|recorded| recorded != &reported_evidence_sha)
         {
             bail!("GitHub PR merge SHA did not match the recorded post-merge evidence target")
         }

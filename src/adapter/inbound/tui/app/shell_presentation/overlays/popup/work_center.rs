@@ -364,10 +364,12 @@ fn delivery_item(screen_model: &ConversationScreenModel<'_>) -> WorkCenterItem {
                 )
             })
             .unwrap_or_default();
-        let merge = validation
-            .merge_short_sha
-            .as_deref()
-            .map(|merge_short_sha| format!(" · merge {merge_short_sha}"))
+        let integration = validation
+            .integration_method
+            .zip(validation.evidence_short_sha.as_deref())
+            .map(|(method, evidence)| {
+                format!(" · integration {} · evidence {evidence}", method.label())
+            })
             .unwrap_or_default();
         format!(
             "{} · {} · {} · {} · {}{}{}",
@@ -380,7 +382,7 @@ fn delivery_item(screen_model: &ConversationScreenModel<'_>) -> WorkCenterItem {
             validation.phase_label(),
             validation.next_action(),
             correlation,
-            merge
+            integration
         )
     } else {
         compact_inline(&format!(
@@ -586,6 +588,10 @@ mod tests {
             state: PrValidationOperatorState::Remediation,
             phase: PrValidationPhase::RemediationRunning,
             target_short_sha: "aaaaaaaaaaaa".to_string(),
+            integration_method: Some(
+                crate::domain::parallel_mode::IntegrationMethod::GithubRebaseMerge,
+            ),
+            evidence_short_sha: Some("bbbbbbbbbbbb".to_string()),
             merge_short_sha: Some("bbbbbbbbbbbb".to_string()),
             finding_count: 2,
             remediation_count: 1,
@@ -616,7 +622,8 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("check_run finding"), "{text}");
-        assert!(text.contains("merge bbbbbbbbbbbb"), "{text}");
+        assert!(text.contains("integration github_rebase_merge"), "{text}");
+        assert!(text.contains("evidence bbbbbbbbbbbb"), "{text}");
     }
 
     #[test]

@@ -3,6 +3,10 @@
 use super::*;
 
 use crate::application::service::parallel_mode::PoolMutationLock;
+use crate::application::service::parallel_mode::git_sequence::{GitCommandStep, run_git_sequence};
+use crate::application::service::parallel_mode::pool::{
+    git_command_directory, git_worktree_destination,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PreparedIntegrationState {
@@ -135,22 +139,35 @@ pub(super) fn prepare_distributor_integration_worktree(
             )?;
             return Err(message);
         }
-        if !command_succeeds_with_runtime(
+        let git_source_root = git_command_directory(&resolution.context.canonical_repo_root)?;
+        let git_integration_path =
+            git_worktree_destination(&resolution.context.canonical_repo_root, &integration_path)?;
+        let git_integration_path = git_integration_path.to_str().ok_or_else(|| {
+            "dedicated integration worktree destination is not valid Unicode for Git".to_string()
+        })?;
+        let creation = run_git_sequence(
             runtime,
-            "git",
-            [
-                "-C",
-                canonical_repo_root.as_str(),
-                "worktree",
-                "add",
-                "--detach",
-                integration_repo_root.as_str(),
-                remote_ref.as_str(),
-            ],
-        ) {
+            "create dedicated distributor integration worktree",
+            vec![GitCommandStep::new(
+                "git worktree add for verified integration",
+                [
+                    "-C",
+                    git_source_root.as_str(),
+                    "worktree",
+                    "add",
+                    "--detach",
+                    git_integration_path,
+                    remote_ref.as_str(),
+                ],
+            )],
+        );
+        if !creation.succeeded() {
+            let detail = creation
+                .failure_summary()
+                .unwrap_or_else(|| "git worktree add failed without a diagnostic".to_string());
             let message = format!(
-                "dedicated integration worktree could not be created from `{}/{}`",
-                target.push_remote, target.integration_branch
+                "dedicated integration worktree could not be created from `{}/{}`: {detail}",
+                target.push_remote, target.integration_branch,
             );
             let _ = block_distributor_queue_record(
                 planning_authority,

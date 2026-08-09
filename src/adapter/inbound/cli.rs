@@ -253,6 +253,19 @@ fn run_pr_validation_status(
     writeln!(stdout, "target: {}", summary.target_short_sha)?;
     writeln!(
         stdout,
+        "integration: {}",
+        summary
+            .integration_method
+            .map(|method| method.label())
+            .unwrap_or("pending")
+    )?;
+    writeln!(
+        stdout,
+        "evidence: {}",
+        summary.evidence_short_sha.as_deref().unwrap_or("pending")
+    )?;
+    writeln!(
+        stdout,
         "merge: {}",
         summary.merge_short_sha.as_deref().unwrap_or("pending")
     )?;
@@ -965,6 +978,11 @@ mod tests {
         );
         assert!(rendered.contains("phase: remediation_queued"), "{rendered}");
         assert!(rendered.contains("merge: cccccccccccc"), "{rendered}");
+        assert!(
+            rendered.contains("integration: github_rebase_merge"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("evidence: cccccccccccc"), "{rendered}");
         assert!(
             rendered.contains("post_merge_checkpoint: observed"),
             "{rendered}"

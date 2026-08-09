@@ -76,6 +76,10 @@ use crate::domain::planning::{
 };
 use std::collections::BTreeMap;
 use std::fs;
+#[cfg(windows)]
+use std::fs::OpenOptions;
+#[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -104,6 +108,28 @@ impl TempGitRepo {
         let root = std::env::temp_dir().join(format!("parallel-mode-{prefix}-{unique}"));
         let repo_root = root.join("repo");
         fs::create_dir_all(&repo_root).expect("temp repo root should be created");
+        #[cfg(windows)]
+        {
+            use crate::private_fs::{
+                WINDOWS_FILE_FLAG_BACKUP_SEMANTICS, WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT,
+                WINDOWS_FILE_SHARE_ALL, WINDOWS_GENERIC_READ, WINDOWS_READ_CONTROL,
+                WINDOWS_WRITE_DAC, set_windows_private_acl, validate_windows_private_owner_and_acl,
+            };
+
+            let root_handle = OpenOptions::new()
+                .read(true)
+                .access_mode(WINDOWS_GENERIC_READ | WINDOWS_READ_CONTROL | WINDOWS_WRITE_DAC)
+                .share_mode(WINDOWS_FILE_SHARE_ALL)
+                .custom_flags(
+                    WINDOWS_FILE_FLAG_BACKUP_SEMANTICS | WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT,
+                )
+                .open(&root)
+                .expect("Windows parallel-mode temp root should open for ACL hardening");
+            set_windows_private_acl(&root_handle, true)
+                .expect("Windows parallel-mode temp root should become owner-private");
+            validate_windows_private_owner_and_acl(&root, &root_handle)
+                .expect("Windows parallel-mode temp root should retain its private ACL");
+        }
 
         run_git(&repo_root, &["init", "-q"]);
         run_git(&repo_root, &["config", "user.name", "RefinedStone"]);
@@ -854,6 +880,7 @@ struct FakeGithubAutomationPort {
     pre_push_inspect_overrides: Arc<Mutex<Option<FakePullRequestReadinessOverrides>>>,
     close_error: Arc<Mutex<Option<String>>>,
     remote_branch_listing_error: Arc<Mutex<Option<String>>>,
+    integration_remote_head_after_reads: Arc<Mutex<Option<(usize, String)>>>,
     source_branch_cleanup_calls: Arc<Mutex<usize>>,
 }
 impl FakeGithubAutomationPort {
@@ -914,6 +941,7 @@ impl FakeGithubAutomationPort {
             pre_push_inspect_overrides: Arc::new(Mutex::new(None)),
             close_error: Arc::new(Mutex::new(None)),
             remote_branch_listing_error: Arc::new(Mutex::new(None)),
+            integration_remote_head_after_reads: Arc::new(Mutex::new(None)),
             source_branch_cleanup_calls: Arc::new(Mutex::new(0)),
         }
     }
@@ -970,6 +998,19 @@ impl FakeGithubAutomationPort {
             .integration_push_error
             .lock()
             .expect("fake github integration-push error mutex poisoned") = Some(error.to_string());
+        github
+    }
+
+    fn with_integration_remote_head_after_reads(
+        reads_before_override: usize,
+        remote_head: &str,
+    ) -> Self {
+        let github = Self::ready();
+        *github
+            .integration_remote_head_after_reads
+            .lock()
+            .expect("fake github integration-head override mutex poisoned") =
+            Some((reads_before_override, remote_head.to_string()));
         github
     }
 
@@ -1729,6 +1770,18 @@ impl GithubAutomationPort for FakeGithubAutomationPort {
         _credential_redacted_push_url: &str,
         branch_name: &str,
     ) -> anyhow::Result<Option<String>> {
+        if branch_name == POOL_BASELINE_BRANCH {
+            let mut override_after_reads = self
+                .integration_remote_head_after_reads
+                .lock()
+                .expect("fake github integration-head override mutex poisoned");
+            if let Some((remaining_reads, remote_head)) = override_after_reads.as_mut() {
+                if *remaining_reads == 0 {
+                    return Ok(Some(remote_head.clone()));
+                }
+                *remaining_reads -= 1;
+            }
+        }
         self.remote_branch_head(repo_root, push_remote, branch_name)
     }
     fn delete_branch_if_unchanged(

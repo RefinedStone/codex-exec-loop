@@ -167,7 +167,9 @@ pub(super) fn provision_missing_slots(
     Ok(provisioned_slots)
 }
 
-pub(super) fn git_command_directory(canonical_repo_root: &Path) -> Result<String, String> {
+pub(in crate::application::service::parallel_mode) fn git_command_directory(
+    canonical_repo_root: &Path,
+) -> Result<String, String> {
     let path = canonical_repo_root.to_str().ok_or_else(|| {
         "canonical repository root is not valid Unicode for Git provisioning".to_string()
     })?;
@@ -183,7 +185,7 @@ pub(super) fn git_command_directory(canonical_repo_root: &Path) -> Result<String
     }
 }
 
-pub(super) fn git_worktree_destination(
+pub(in crate::application::service::parallel_mode) fn git_worktree_destination(
     canonical_repo_root: &Path,
     slot_path: &Path,
 ) -> Result<PathBuf, String> {

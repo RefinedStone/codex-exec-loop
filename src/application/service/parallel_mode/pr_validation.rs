@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use chrono::Utc;
 use sha2::{Digest, Sha256};
 
 use super::ParallelModeService;
@@ -17,11 +18,13 @@ use crate::application::port::outbound::pr_validation_remediation_port::{
 use crate::application::service::planning::{PlanningQueueUseCases, PlanningTaskCreateInput};
 use crate::domain::github_review::{GithubCommitSha, GithubPullRequestTarget};
 use crate::domain::parallel_mode::{
-    PrValidationCatchUpState, PrValidationCheckKind, PrValidationCommitSha, PrValidationCompletion,
-    PrValidationEvent, PrValidationFinding, PrValidationFindingKey, PrValidationFindingSource,
-    PrValidationPhase, PrValidationProviderCompletion, PrValidationProviderKey, PrValidationRecord,
+    IntegrationAttestation, IntegrationMethod, PrValidationCatchUpState, PrValidationCheckKind,
+    PrValidationCommitSha, PrValidationCompletion, PrValidationEvent, PrValidationFinding,
+    PrValidationFindingKey, PrValidationFindingSource, PrValidationPhase,
+    PrValidationProviderCompletion, PrValidationProviderKey, PrValidationRecord,
     PrValidationRecordKey, PrValidationRemediationCorrelation, PrValidationRequiredCheck,
     PrValidationTarget, PrValidationTargetShaSnapshot, PrValidationTerminalReason,
+    PrValidationTransitionRejection,
 };
 use crate::domain::planning::TaskStatus;
 
@@ -150,6 +153,82 @@ pub(super) fn register_distributor_pr_validation_with_ports(
             Ok(key)
         }
     }
+}
+
+pub(super) fn attest_distributor_pr_validation_with_ports(
+    planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
+    workspace_dir: &str,
+    pool_root: &std::path::Path,
+    record: &PlanningAuthorityDistributorQueueRecord,
+) -> Result<(), String> {
+    let key = PrValidationRecordKey::new(&record.queue_item_id)?;
+    let current = super::pr_validation_store::recover_pr_validation_record_mirror(
+        planning_authority,
+        runtime,
+        workspace_dir,
+        pool_root,
+        &key,
+    )?
+    .ok_or_else(|| {
+        format!(
+            "PR validation record `{}` is missing before integration attestation",
+            key.as_str()
+        )
+    })?;
+    let integration_base_sha = record
+        .integration_base_commit_sha
+        .as_deref()
+        .ok_or_else(|| {
+            "cannot attest distributor integration without its frozen base SHA".to_string()
+        })?;
+    let evidence_sha = record.integration_commit_sha.as_deref().ok_or_else(|| {
+        "cannot attest distributor integration without its verified evidence SHA".to_string()
+    })?;
+    let observed_at = Utc::now();
+    let attestation = IntegrationAttestation::new(
+        IntegrationMethod::DistributorCherryPick,
+        PrValidationCommitSha::new(record.effective_source_commit_sha())?,
+        Some(PrValidationCommitSha::new(integration_base_sha)?),
+        PrValidationCommitSha::new(evidence_sha)?,
+        record.pull_request_number,
+        None,
+        observed_at,
+        observed_at,
+    )?;
+    let next = match current.transition(PrValidationEvent::IntegrationAttested(attestation)) {
+        Ok(next) => next,
+        Err(PrValidationTransitionRejection::IntegrationAuthorityConflict { .. }) => {
+            let failed = current
+                .transition(PrValidationEvent::Fail(
+                    PrValidationTerminalReason::IntegrationAuthorityConflict,
+                ))
+                .map_err(transition_error)?;
+            super::pr_validation_store::persist_pr_validation_record(
+                planning_authority,
+                runtime,
+                workspace_dir,
+                pool_root,
+                Some(&current),
+                &failed,
+            )?;
+            return Err(
+                "distributor integration conflicts with persisted validation authority".to_string(),
+            );
+        }
+        Err(error) => return Err(transition_error(error)),
+    };
+    if next == current {
+        return Ok(());
+    }
+    super::pr_validation_store::persist_pr_validation_record(
+        planning_authority,
+        runtime,
+        workspace_dir,
+        pool_root,
+        Some(&current),
+        &next,
+    )
 }
 
 pub(super) fn transition_pr_validation_remediation_with_ports(
@@ -377,7 +456,7 @@ impl ParallelModeService {
             ),
         )
         .with_evidence_sha(
-            next.merge_sha()
+            next.evidence_sha()
                 .map(|sha| GithubCommitSha::new(sha.as_str())),
         );
         let snapshot = match observation.load_validation_snapshot(&observation_request) {
@@ -397,7 +476,8 @@ impl ParallelModeService {
                 return Ok(PrValidationPollResult::Failed);
             }
         };
-        if validate_snapshot_identity(&snapshot, &target, &target_sha).is_err() {
+        if validate_snapshot_identity(&snapshot, &target, &target_sha, next.evidence_sha()).is_err()
+        {
             next = next
                 .transition(PrValidationEvent::Fail(
                     PrValidationTerminalReason::ObservationFailed,
@@ -411,10 +491,10 @@ impl ParallelModeService {
             )?;
             return Ok(PrValidationPollResult::Failed);
         }
-        if snapshot.merge_state == GithubPrMergeState::Closed {
+        if snapshot.merge_state == GithubPrMergeState::Closed && next.evidence_sha().is_none() {
             next = next
                 .transition(PrValidationEvent::Block(
-                    PrValidationTerminalReason::PullRequestClosedWithoutMerge,
+                    PrValidationTerminalReason::IntegrationEvidenceMissing,
                 ))
                 .map_err(transition_error)?;
             self.persist_pr_validation_record(
@@ -425,6 +505,45 @@ impl ParallelModeService {
             )?;
             return Ok(PrValidationPollResult::Blocked);
         }
+
+        let was_post_merge = next.phase() == PrValidationPhase::PostMergeObservation;
+        if snapshot.merge_state == GithubPrMergeState::Merged {
+            let merge_sha = snapshot
+                .merge_sha
+                .as_ref()
+                .ok_or_else(|| "merged PR snapshot omitted its merge SHA".to_string())?;
+            let observed_at = Utc::now();
+            let attestation = IntegrationAttestation::new(
+                IntegrationMethod::GithubRebaseMerge,
+                next.target_shas().source_sha().clone(),
+                Some(next.target_shas().base_sha().clone()),
+                commit_sha(merge_sha)?,
+                Some(next.target().pull_request_number()),
+                Some(commit_sha(merge_sha)?),
+                observed_at,
+                observed_at,
+            )?;
+            next = match next.transition(PrValidationEvent::IntegrationAttested(attestation)) {
+                Ok(next) => next,
+                Err(PrValidationTransitionRejection::IntegrationAuthorityConflict { .. }) => {
+                    let failed = next
+                        .transition(PrValidationEvent::Fail(
+                            PrValidationTerminalReason::IntegrationAuthorityConflict,
+                        ))
+                        .map_err(transition_error)?;
+                    self.persist_pr_validation_record(
+                        &request.workspace_dir,
+                        &request.pool_root,
+                        Some(&current),
+                        &failed,
+                    )?;
+                    return Ok(PrValidationPollResult::Failed);
+                }
+                Err(error) => return Err(transition_error(error)),
+            };
+        }
+        let starting_post_merge =
+            !was_post_merge && next.phase() == PrValidationPhase::PostMergeObservation;
 
         let fingerprint = snapshot_fingerprint(&snapshot);
         let prior_fingerprint = next.evidence_fingerprint().map(str::to_string);
@@ -476,20 +595,6 @@ impl ParallelModeService {
                 }
                 break;
             }
-        }
-
-        let starting_post_merge = !remediation_failed
-            && next.phase() == PrValidationPhase::PreMergeObservation
-            && snapshot.merge_state == GithubPrMergeState::Merged;
-        if starting_post_merge {
-            let merge_sha = snapshot
-                .merge_sha
-                .as_ref()
-                .ok_or_else(|| "merged PR snapshot omitted its merge SHA".to_string())?;
-            next = next
-                .transition(PrValidationEvent::MergeObserved(commit_sha(merge_sha)?))
-                .and_then(|record| record.transition(PrValidationEvent::BeginPostMergeObservation))
-                .map_err(transition_error)?;
         }
 
         if !remediation_failed {
@@ -544,6 +649,7 @@ fn validate_snapshot_identity(
     snapshot: &GithubPrValidationSnapshot,
     target: &GithubPullRequestTarget,
     target_sha: &GithubCommitSha,
+    attested_evidence_sha: Option<&PrValidationCommitSha>,
 ) -> Result<(), String> {
     if &snapshot.target != target || &snapshot.target_sha != target_sha {
         return Err(
@@ -551,12 +657,26 @@ fn validate_snapshot_identity(
                 .to_string(),
         );
     }
+    let attested_evidence_sha = attested_evidence_sha.map(|sha| GithubCommitSha::new(sha.as_str()));
     let expected_evidence_sha = match snapshot.merge_state {
-        GithubPrMergeState::Merged => snapshot
-            .merge_sha
-            .as_ref()
-            .ok_or_else(|| "merged PR snapshot omitted its merge SHA".to_string())?,
-        GithubPrMergeState::Open | GithubPrMergeState::Closed => target_sha,
+        GithubPrMergeState::Merged => {
+            let merge_sha = snapshot
+                .merge_sha
+                .as_ref()
+                .ok_or_else(|| "merged PR snapshot omitted its merge SHA".to_string())?;
+            if attested_evidence_sha
+                .as_ref()
+                .is_some_and(|attested| attested != merge_sha)
+            {
+                return Err(
+                    "GitHub merge SHA conflicts with attested integration evidence".to_string(),
+                );
+            }
+            merge_sha
+        }
+        GithubPrMergeState::Open | GithubPrMergeState::Closed => {
+            attested_evidence_sha.as_ref().unwrap_or(target_sha)
+        }
         GithubPrMergeState::Unknown(_) => {
             return Err("trusted PR validation snapshot had an unknown merge state".to_string());
         }

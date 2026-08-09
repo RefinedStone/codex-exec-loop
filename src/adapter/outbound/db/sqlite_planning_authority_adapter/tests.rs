@@ -40,12 +40,12 @@ use crate::application::service::planning::{
     RESULT_OUTPUT_FILE_PATH,
 };
 use crate::domain::parallel_mode::{
-    ParallelModeAgentSessionDetailSnapshot, ParallelModeAutomationTrigger,
+    IntegrationMethod, ParallelModeAgentSessionDetailSnapshot, ParallelModeAutomationTrigger,
     ParallelModeDispatchBlockReason, ParallelModeDispatchCommandSnapshot,
     ParallelModeDispatchCommandState, ParallelModePoolResetPolicy, ParallelModePoolResetReport,
     ParallelModePoolResetRunId, ParallelModePoolResetSlotAction, ParallelModePoolResetSlotOutcome,
     ParallelModePoolResetSlotReport, ParallelModeQueueItemState, ParallelModeSlotLeaseSnapshot,
-    ParallelModeSlotLeaseState, ParallelModeTaskDispatchBlockSnapshot,
+    ParallelModeSlotLeaseState, ParallelModeTaskDispatchBlockSnapshot, PrValidationRecordKey,
 };
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionDefinition, DirectionState, OriginSessionKind,
@@ -414,8 +414,8 @@ fn authority_connection(workspace_dir: &str) -> rusqlite::Connection {
 }
 
 #[test]
-fn authority_schema_migrates_v7_through_v10_additively_and_rejects_unsupported_versions() {
-    for legacy_version in [7, 8, 9, 10] {
+fn authority_schema_migrates_v7_through_v11_additively_and_rejects_unsupported_versions() {
+    for legacy_version in [7, 8, 9, 10, 11] {
         let workspace_dir = temp_workspace(&format!("schema-migrate-v{legacy_version}"));
         let location = SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
             &workspace_dir,
@@ -453,7 +453,7 @@ fn authority_schema_migrates_v7_through_v10_additively_and_rejects_unsupported_v
                 |row| row.get(0),
             )
             .expect("migrated version should load");
-        assert_eq!(version, "11");
+        assert_eq!(version, "12");
         assert_eq!(
             migrated
                 .query_row(
@@ -511,7 +511,7 @@ fn authority_schema_migrates_v7_through_v10_additively_and_rejects_unsupported_v
         );
     }
 
-    for unsupported_version in ["6", "12", "not-a-version"] {
+    for unsupported_version in ["6", "13", "not-a-version"] {
         let workspace_dir = temp_workspace("schema-reject-unsupported");
         let location = SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
             &workspace_dir,
@@ -549,6 +549,109 @@ fn authority_schema_migrates_v7_through_v10_additively_and_rejects_unsupported_v
     let error =
         open_authority_connection(&location).expect_err("missing schema marker must fail closed");
     assert!(error.to_string().contains("schema version is missing"));
+}
+
+#[test]
+fn authority_schema_migrates_v11_legacy_merge_evidence_without_data_loss() {
+    let workspace_dir = temp_workspace("schema-migrate-v11-pr-validation");
+    let location =
+        SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(&workspace_dir)
+            .expect("authority location should resolve");
+    let connection = open_authority_connection(&location).expect("current store should open");
+    let legacy = serde_json::json!({
+        "key": "legacy-validation-42",
+        "target": {
+            "repository": "acme/widgets",
+            "pull_request_number": 42
+        },
+        "target_shas": {
+            "source_sha": "1111111111111111111111111111111111111111",
+            "base_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "phase": "PostMergeObservation",
+        "findings": {},
+        "remediations": {},
+        "active_remediation": null,
+        "merge_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "observation_revision": 3,
+        "observation_cursor": "legacy-cursor",
+        "evidence_fingerprint": "legacy-fingerprint",
+        "post_merge_checkpoint_revision": 3,
+        "completion": null,
+        "terminal_reason": null
+    });
+    connection
+        .execute_batch(
+            "DROP TABLE runtime_pr_validation_records;
+             CREATE TABLE runtime_pr_validation_records (
+                 record_key TEXT PRIMARY KEY,
+                 updated_at TEXT NOT NULL,
+                 content TEXT NOT NULL
+             );
+             UPDATE authority_metadata SET value = '11' WHERE key = 'schema_version';",
+        )
+        .expect("v11 table fixture should install");
+    connection
+        .execute(
+            "INSERT INTO runtime_pr_validation_records (record_key, updated_at, content)
+             VALUES (?1, ?2, ?3)",
+            (
+                "legacy-validation-42",
+                "2026-08-10T00:00:00Z",
+                legacy.to_string(),
+            ),
+        )
+        .expect("legacy validation fixture should persist");
+    drop(connection);
+
+    let migrated = open_authority_connection(&location).expect("v11 store should migrate");
+    let version: String = migrated
+        .query_row(
+            "SELECT value FROM authority_metadata WHERE key = 'schema_version'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("migrated version should load");
+    assert_eq!(version, "12");
+    let (method, evidence_sha, content): (String, String, String) = migrated
+        .query_row(
+            "SELECT integration_method, integration_evidence_sha, content
+             FROM runtime_pr_validation_records WHERE record_key = 'legacy-validation-42'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("migrated attestation columns should load");
+    assert_eq!(method, "github_rebase_merge");
+    assert_eq!(evidence_sha, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    assert!(!content.contains("\"merge_sha\""));
+
+    drop(migrated);
+    let record = SqlitePlanningAuthorityAdapter::load_runtime_pr_validation_record(
+        &workspace_dir,
+        &PrValidationRecordKey::new("legacy-validation-42").unwrap(),
+    )
+    .expect("migrated record should load")
+    .expect("migrated record should remain present");
+    let attestation = record
+        .integration_attestation()
+        .expect("legacy merge evidence should become an attestation");
+    assert_eq!(attestation.method(), IntegrationMethod::GithubRebaseMerge);
+    assert_eq!(record.observation_revision(), 3);
+    assert_eq!(record.observation_cursor(), Some("legacy-cursor"));
+
+    let migrated = open_authority_connection(&location).expect("migrated store should reopen");
+    migrated
+        .execute_batch(
+            "CREATE TRIGGER reject_replayed_pr_validation_migration
+             BEFORE UPDATE ON runtime_pr_validation_records
+             BEGIN
+                 SELECT RAISE(FAIL, 'PR validation data migration replayed');
+             END;",
+        )
+        .expect("migration replay guard should install");
+    drop(migrated);
+    open_authority_connection(&location)
+        .expect("schema v12 reopen must not replay the v11 data migration");
 }
 
 #[test]
@@ -672,7 +775,13 @@ fn authority_schema_migration_rolls_back_additive_ddl_when_version_update_fails(
     connection
         .execute_batch(
             "DROP TABLE planning_file_sync_baselines;
-             UPDATE authority_metadata SET value = '8' WHERE key = 'schema_version';
+             DROP TABLE runtime_pr_validation_records;
+             CREATE TABLE runtime_pr_validation_records (
+                 record_key TEXT PRIMARY KEY,
+                 updated_at TEXT NOT NULL,
+                 content TEXT NOT NULL
+             );
+             UPDATE authority_metadata SET value = '11' WHERE key = 'schema_version';
              CREATE TRIGGER fail_schema_migration_version
              BEFORE UPDATE OF value ON authority_metadata
              WHEN OLD.key = 'schema_version'
@@ -703,6 +812,17 @@ fn authority_schema_migration_rolls_back_additive_ddl_when_version_update_fails(
         .expect("rolled-back table should inspect")
         .is_none(),
         "failed migration must roll back additive DDL"
+    );
+    assert_eq!(
+        raw.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('runtime_pr_validation_records')
+             WHERE name = 'integration_evidence_sha'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("rolled-back attestation column should inspect"),
+        0,
+        "failed migration must roll back PR validation attestation columns"
     );
 }
 

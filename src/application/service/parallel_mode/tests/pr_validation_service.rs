@@ -2,6 +2,7 @@ use std::collections::{BTreeSet, VecDeque};
 use std::sync::Mutex;
 
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 
 use super::{TempGitRepo, test_parallel_mode_service};
 use crate::application::port::outbound::github_pr_validation_port::{
@@ -17,8 +18,9 @@ use crate::application::port::outbound::pr_validation_remediation_port::{
 use crate::application::service::parallel_mode::{PrValidationPollRequest, PrValidationPollResult};
 use crate::domain::github_review::{GithubCommitSha, GithubOpaqueId, GithubPullRequestTarget};
 use crate::domain::parallel_mode::{
-    PrValidationCommitSha, PrValidationEvent, PrValidationPhase, PrValidationRecord,
-    PrValidationRecordKey, PrValidationTarget, PrValidationTargetShaSnapshot,
+    IntegrationAttestation, IntegrationMethod, PrValidationCommitSha, PrValidationEvent,
+    PrValidationPhase, PrValidationRecord, PrValidationRecordKey, PrValidationTarget,
+    PrValidationTargetShaSnapshot,
 };
 
 const HEAD_A: &str = "1111111111111111111111111111111111111111";
@@ -142,6 +144,27 @@ fn registered_record() -> PrValidationRecord {
     )
 }
 
+fn distributor_attested_record() -> PrValidationRecord {
+    let observed_at = DateTime::parse_from_rfc3339("2026-08-10T00:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    registered_record()
+        .transition(PrValidationEvent::IntegrationAttested(
+            IntegrationAttestation::new(
+                IntegrationMethod::DistributorCherryPick,
+                PrValidationCommitSha::new(HEAD_A).unwrap(),
+                Some(PrValidationCommitSha::new(BASE).unwrap()),
+                PrValidationCommitSha::new(MERGE).unwrap(),
+                Some(42),
+                None,
+                observed_at,
+                observed_at,
+            )
+            .unwrap(),
+        ))
+        .unwrap()
+}
+
 fn request(repo: &TempGitRepo, revision: u64, sha: &str) -> PrValidationPollRequest {
     PrValidationPollRequest {
         workspace_dir: repo.workspace_dir(),
@@ -261,7 +284,7 @@ fn closed_pr_and_observation_error_persist_blocked_and_failed_reasons_without_se
         .unwrap()
         .operator_summary();
     assert_eq!(blocked.phase, PrValidationPhase::Blocked);
-    assert_eq!(blocked.reason, "pull request closed without merge");
+    assert_eq!(blocked.reason, "integration evidence is missing");
 
     let failed_repo = TempGitRepo::new("validation-failed-terminal");
     service
@@ -671,6 +694,87 @@ fn merge_sha_evidence_mismatch_persists_failure_before_checkpointing() {
         "trusted validation observation failed"
     );
     assert_eq!(record.observation_revision(), 0);
+}
+
+#[test]
+fn closed_pr_with_distributor_attestation_continues_post_merge_validation() {
+    let mut closed = snapshot(HEAD_A, GithubValidationRunStatus::Succeeded);
+    closed.merge_state = GithubPrMergeState::Closed;
+    closed.evidence_sha = GithubCommitSha::new(MERGE);
+    closed.check_runs[0].target_sha = GithubCommitSha::new(MERGE);
+    let (repo, observation, remediation) = setup(
+        "validation-distributor-attested-closed",
+        vec![closed.clone(), closed],
+    );
+    let service = test_parallel_mode_service();
+    service
+        .persist_pr_validation_record(
+            &repo.workspace_dir(),
+            &repo.pool_root(),
+            None,
+            &distributor_attested_record(),
+        )
+        .unwrap();
+
+    assert_eq!(
+        service
+            .poll_pr_validation(&observation, &remediation, request(&repo, 1, HEAD_A))
+            .unwrap(),
+        PrValidationPollResult::Waiting
+    );
+    assert_eq!(
+        observation.requests.lock().unwrap()[0]
+            .evidence_sha
+            .as_ref()
+            .map(GithubCommitSha::as_str),
+        Some(MERGE)
+    );
+    let record = service
+        .recover_pr_validation_record(
+            &repo.workspace_dir(),
+            &repo.pool_root(),
+            &PrValidationRecordKey::new("acme/widgets#42").unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.phase(), PrValidationPhase::PostMergeObservation);
+}
+
+#[test]
+fn github_merge_cannot_replace_distributor_integration_authority() {
+    let (repo, observation, remediation) = setup(
+        "validation-integration-authority-conflict",
+        vec![merged_snapshot()],
+    );
+    let service = test_parallel_mode_service();
+    service
+        .persist_pr_validation_record(
+            &repo.workspace_dir(),
+            &repo.pool_root(),
+            None,
+            &distributor_attested_record(),
+        )
+        .unwrap();
+
+    assert_eq!(
+        service
+            .poll_pr_validation(&observation, &remediation, request(&repo, 1, HEAD_A))
+            .unwrap(),
+        PrValidationPollResult::Failed
+    );
+    let record = service
+        .recover_pr_validation_record(
+            &repo.workspace_dir(),
+            &repo.pool_root(),
+            &PrValidationRecordKey::new("acme/widgets#42").unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.phase(), PrValidationPhase::Failed);
+    assert_eq!(
+        record.operator_summary().reason,
+        "integration authority conflicts with trusted evidence"
+    );
 }
 
 #[test]

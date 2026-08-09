@@ -205,6 +205,56 @@ fn collects_sha_bound_merge_activity_checks_and_workflows_in_canonical_order() {
 }
 
 #[test]
+fn closed_unmerged_pr_uses_distributor_attested_evidence_sha() {
+    let api = FixtureApi::new([
+        (
+            endpoint("pulls/42"),
+            format!(
+                r#"{{"state":"closed","merged":false,"merge_commit_sha":null,"head":{{"sha":"{SHA}"}}}}"#
+            ),
+        ),
+        (
+            endpoint("pulls/42/reviews?per_page=100&page=1"),
+            "[]".to_string(),
+        ),
+        (
+            endpoint("issues/42/comments?per_page=100&page=1"),
+            "[]".to_string(),
+        ),
+        (
+            endpoint("pulls/42/comments?per_page=100&page=1"),
+            "[]".to_string(),
+        ),
+        (
+            endpoint(&format!(
+                "commits/{MERGE_SHA}/check-runs?per_page=100&page=1"
+            )),
+            format!(
+                r#"{{"total_count":1,"check_runs":[{{"id":21,"name":"Post-Merge Gate","head_sha":"{MERGE_SHA}","status":"completed","conclusion":"success"}}]}}"#
+            ),
+        ),
+        (
+            endpoint(&format!(
+                "actions/runs?head_sha={MERGE_SHA}&per_page=100&page=1"
+            )),
+            r#"{"total_count":0,"workflow_runs":[]}"#.to_string(),
+        ),
+    ]);
+    let adapter = GithubPrValidationAdapter::with_api(api);
+    let observation = request(None).with_evidence_sha(Some(GithubCommitSha::new(MERGE_SHA)));
+
+    let snapshot = adapter
+        .load_validation_snapshot(&observation)
+        .expect("distributor evidence should remain observable after PR close");
+
+    assert_eq!(snapshot.merge_state, GithubPrMergeState::Closed);
+    assert!(snapshot.merge_sha.is_none());
+    assert_eq!(snapshot.evidence_sha.as_str(), MERGE_SHA);
+    assert_eq!(snapshot.check_runs.len(), 1);
+    assert_eq!(snapshot.check_runs[0].target_sha.as_str(), MERGE_SHA);
+}
+
+#[test]
 fn cursor_polls_return_stable_cumulative_evidence_across_all_sources() {
     let mut responses = complete_fixture().responses;
     let reviews = (0..100)

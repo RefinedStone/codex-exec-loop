@@ -1578,13 +1578,32 @@ impl SqlitePlanningAuthorityAdapter {
         upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
         match replacement_json.as_deref() {
             Some(content) => {
+                let attestation = replacement.and_then(PrValidationRecord::integration_attestation);
+                let remote_verified_at =
+                    attestation.map(|value| value.remote_verified_at().to_rfc3339());
                 transaction
                     .execute(
-                        "INSERT INTO runtime_pr_validation_records (record_key, updated_at, content)
-                         VALUES (?1, ?2, ?3)
+                        "INSERT INTO runtime_pr_validation_records (
+                             record_key, updated_at, content, integration_method,
+                             integration_source_sha, integration_evidence_sha,
+                             integration_remote_verified_at
+                         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
                          ON CONFLICT(record_key) DO UPDATE
-                         SET updated_at = excluded.updated_at, content = excluded.content",
-                        params![record_key.as_str(), Utc::now().to_rfc3339(), content],
+                         SET updated_at = excluded.updated_at,
+                             content = excluded.content,
+                             integration_method = excluded.integration_method,
+                             integration_source_sha = excluded.integration_source_sha,
+                             integration_evidence_sha = excluded.integration_evidence_sha,
+                             integration_remote_verified_at = excluded.integration_remote_verified_at",
+                        params![
+                            record_key.as_str(),
+                            Utc::now().to_rfc3339(),
+                            content,
+                            attestation.map(|value| value.method().label()),
+                            attestation.map(|value| value.source_sha().as_str()),
+                            attestation.map(|value| value.evidence_sha().as_str()),
+                            remote_verified_at,
+                        ],
                     )
                     .with_context(|| {
                         format!(

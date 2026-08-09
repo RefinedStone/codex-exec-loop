@@ -240,6 +240,13 @@ pub trait ParallelModeRuntimePort: Send + Sync {
     // `std::io::Result`를 그대로 보존한다.
     fn ensure_directory_exists(&self, path: &Path) -> std::io::Result<()>;
 
+    // Runtime mirror를 실제 filesystem에 저장하는 adapter는 mirror root를 먼저 준비한다.
+    // Windows native adapter처럼 mirror I/O가 authority-only no-op인 구현은 이 hook을
+    // override해 보안 pool namespace를 일반 directory creation으로 선점하지 않는다.
+    fn prepare_runtime_mirror_root(&self, path: &Path) -> std::io::Result<()> {
+        self.ensure_directory_exists(path)
+    }
+
     // Pool-local runtime mirrors are security-sensitive host metadata. The adapter must anchor
     // every relative path beneath the pinned pool root, reject links and shared objects, and
     // install a complete private file atomically. Callers never construct temporary paths.

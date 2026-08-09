@@ -407,6 +407,21 @@ impl ParallelModeRuntimePort for GitParallelModeRuntimeAdapter {
         std::fs::create_dir_all(path)
     }
 
+    fn prepare_runtime_mirror_root(&self, path: &Path) -> std::io::Result<()> {
+        #[cfg(unix)]
+        {
+            self.ensure_directory_exists(path)
+        }
+        #[cfg(windows)]
+        {
+            // Windows native runtime projections are authority-backed and the mirror methods
+            // below intentionally perform no filesystem I/O. Creating the pool namespace here
+            // with generic ACL inheritance would preempt the hardened pool-lock creator.
+            let _ = path;
+            Ok(())
+        }
+    }
+
     fn write_runtime_mirror_atomic(
         &self,
         pool_root: &Path,

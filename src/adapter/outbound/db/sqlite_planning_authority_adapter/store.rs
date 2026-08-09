@@ -24,6 +24,7 @@ use crate::application::port::outbound::planning_workspace_port::PlanningWorkspa
 use crate::application::port::outbound::review_center_repository_port::{
     ReviewCenterHistoryEntry, ReviewCenterInboxItem, ReviewCenterThreadProjection,
 };
+use crate::domain::parallel_mode::PrValidationRecord;
 use crate::domain::planning::{
     DirectionCatalogDocument, PLANNING_FORMAT_VERSION, PlanningAuthorityLocation,
     PriorityQueueProjection, PriorityQueueSkippedTask, PriorityQueueTask, RESULT_OUTPUT_FILE_PATH,
@@ -64,6 +65,11 @@ pub(super) fn ensure_schema(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .context("failed to open authority-store schema migration transaction")?;
+    let previous_schema_version = if table_exists(&transaction, "authority_metadata")? {
+        read_metadata_i64_connection(&transaction, "schema_version")?
+    } else {
+        None
+    };
     transaction
         .execute_batch(
             r#"
@@ -299,7 +305,11 @@ pub(super) fn ensure_schema(
             CREATE TABLE IF NOT EXISTS runtime_pr_validation_records (
                 record_key TEXT PRIMARY KEY,
                 updated_at TEXT NOT NULL,
-                content TEXT NOT NULL
+                content TEXT NOT NULL,
+                integration_method TEXT,
+                integration_source_sha TEXT,
+                integration_evidence_sha TEXT,
+                integration_remote_verified_at TEXT
             );
 
             CREATE TABLE IF NOT EXISTS runtime_dispatch_commands (
@@ -348,6 +358,10 @@ pub(super) fn ensure_schema(
         )
         .context("failed to initialize authority-store schema")?;
     ensure_planning_task_provenance_columns(&transaction)?;
+    ensure_pr_validation_attestation_columns(&transaction)?;
+    if previous_schema_version.is_some_and(|version| version < AUTHORITY_STORE_SCHEMA_VERSION) {
+        migrate_legacy_pr_validation_attestations(&transaction)?;
+    }
     upsert_metadata(
         &transaction,
         "schema_version",
@@ -409,6 +423,113 @@ fn planning_tasks_column_exists(connection: &Connection, column_name: &str) -> R
         }
     }
     Ok(false)
+}
+
+fn ensure_pr_validation_attestation_columns(connection: &Connection) -> Result<()> {
+    for (column_name, column_definition) in [
+        ("integration_method", "integration_method TEXT"),
+        ("integration_source_sha", "integration_source_sha TEXT"),
+        ("integration_evidence_sha", "integration_evidence_sha TEXT"),
+        (
+            "integration_remote_verified_at",
+            "integration_remote_verified_at TEXT",
+        ),
+    ] {
+        if !table_column_exists(connection, "runtime_pr_validation_records", column_name)? {
+            connection
+                .execute(
+                    &format!(
+                        "ALTER TABLE runtime_pr_validation_records ADD COLUMN {column_definition}"
+                    ),
+                    [],
+                )
+                .with_context(|| {
+                    format!(
+                        "failed to add runtime_pr_validation_records attestation column `{column_name}`"
+                    )
+                })?;
+        }
+    }
+    Ok(())
+}
+
+fn table_column_exists(
+    connection: &Connection,
+    table_name: &str,
+    column_name: &str,
+) -> Result<bool> {
+    let mut statement = connection
+        .prepare(&format!("PRAGMA table_info({table_name})"))
+        .with_context(|| format!("failed to inspect {table_name} schema"))?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+    for row in rows {
+        if row? == column_name {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn migrate_legacy_pr_validation_attestations(connection: &Connection) -> Result<()> {
+    let rows = {
+        let mut statement = connection
+            .prepare(
+                "SELECT record_key, updated_at, content
+                 FROM runtime_pr_validation_records ORDER BY record_key",
+            )
+            .context("failed to prepare legacy PR validation attestation migration")?;
+        statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for (record_key, updated_at, content) in rows {
+        let record = serde_json::from_str::<PrValidationRecord>(&content).with_context(|| {
+            format!("failed to deserialize legacy PR validation record `{record_key}`")
+        })?;
+        let observed_at = chrono::DateTime::parse_from_rfc3339(&updated_at)
+            .with_context(|| {
+                format!("legacy PR validation record `{record_key}` has an invalid timestamp")
+            })?
+            .with_timezone(&Utc);
+        let migrated = record
+            .with_migrated_legacy_attestation(observed_at)
+            .map_err(|error| {
+                anyhow::anyhow!("failed to migrate PR validation record `{record_key}`: {error}")
+            })?;
+        let migrated_content = serde_json::to_string(&migrated).with_context(|| {
+            format!("failed to serialize migrated PR validation record `{record_key}`")
+        })?;
+        let attestation = migrated.integration_attestation();
+        let remote_verified_at = attestation.map(|value| value.remote_verified_at().to_rfc3339());
+        connection
+            .execute(
+                "UPDATE runtime_pr_validation_records
+                 SET content = ?2,
+                     integration_method = ?3,
+                     integration_source_sha = ?4,
+                     integration_evidence_sha = ?5,
+                     integration_remote_verified_at = ?6
+                 WHERE record_key = ?1",
+                params![
+                    record_key,
+                    migrated_content,
+                    attestation.map(|value| value.method().label()),
+                    attestation.map(|value| value.source_sha().as_str()),
+                    attestation.map(|value| value.evidence_sha().as_str()),
+                    remote_verified_at,
+                ],
+            )
+            .with_context(|| {
+                format!("failed to persist migrated PR validation record `{record_key}`")
+            })?;
+    }
+    Ok(())
 }
 
 /*

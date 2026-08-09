@@ -1,4 +1,5 @@
 use super::*;
+use crate::domain::parallel_mode::{IntegrationMethod, PrValidationCommitSha, PrValidationPhase};
 
 #[test]
 fn enqueue_blocks_public_repository_without_exact_operator_opt_in() {
@@ -446,7 +447,8 @@ fn process_distributor_queue_delivers_commit_ready_result_into_akra_and_cleans_s
     assert!(
         notices
             .iter()
-            .any(|notice| notice.contains("distributor integrated queue head into prerelease"))
+            .any(|notice| notice.contains("distributor integrated queue head into prerelease")),
+        "unexpected distributor notices: {notices:?}"
     );
     assert!(
         notices
@@ -547,6 +549,34 @@ fn process_distributor_queue_delivers_commit_ready_result_into_akra_and_cleans_s
         fs::read_to_string(repo.repo_root.join("operator-note.tmp"))
             .expect("canonical untracked note should be preserved"),
         "local note\n"
+    );
+    let validation = SqlitePlanningAuthorityAdapter::load_runtime_pr_validation_record_for_pr(
+        &repo.workspace_dir(),
+        77,
+    )
+    .expect("integrated validation authority should load")
+    .expect("distributor delivery should persist integration evidence");
+    assert_eq!(validation.phase(), PrValidationPhase::PostMergeObservation);
+    assert_eq!(
+        validation
+            .integration_attestation()
+            .expect("verified push should persist an attestation")
+            .method(),
+        IntegrationMethod::DistributorCherryPick
+    );
+    assert_eq!(
+        validation.evidence_sha().map(PrValidationCommitSha::as_str),
+        run_command(
+            "git",
+            [
+                "-C",
+                repo.workspace_dir().as_str(),
+                "rev-parse",
+                "refs/remotes/origin/prerelease",
+            ],
+            None,
+        )
+        .as_deref()
     );
 }
 
