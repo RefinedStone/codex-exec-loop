@@ -64,17 +64,10 @@ impl PrValidationSchedulerConfig {
                 "git repository is unavailable for PR validation scheduler configuration"
                     .to_string()
             })?;
-        let configured = service.parallel_runtime.run_command(
-            "git",
-            &[
-                "-C",
-                repo_root.as_str(),
-                "config",
-                "--get",
-                AKRA_PR_VALIDATION_MODE_CONFIG_KEY,
-            ],
-            None,
-        );
+        let command_args = repository_mode_git_args(repo_root.as_str());
+        let configured = service
+            .parallel_runtime
+            .run_command("git", &command_args, None);
         let mode = configured
             .as_deref()
             .map(PrValidationSchedulerMode::parse)
@@ -85,6 +78,17 @@ impl PrValidationSchedulerConfig {
             ..Self::default()
         })
     }
+}
+
+fn repository_mode_git_args(repo_root: &str) -> [&str; 6] {
+    [
+        "-C",
+        repo_root,
+        "config",
+        "--local",
+        "--get",
+        AKRA_PR_VALIDATION_MODE_CONFIG_KEY,
+    ]
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -522,5 +526,25 @@ impl Drop for PrValidationSchedulerRuntimeInner {
         {
             let _ = join.join();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scheduler_mode_command_cannot_inherit_global_or_system_configuration() {
+        assert_eq!(
+            repository_mode_git_args("repo"),
+            [
+                "-C",
+                "repo",
+                "config",
+                "--local",
+                "--get",
+                AKRA_PR_VALIDATION_MODE_CONFIG_KEY,
+            ]
+        );
     }
 }

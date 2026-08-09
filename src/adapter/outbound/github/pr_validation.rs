@@ -730,10 +730,16 @@ fn normalize_review_threads(rows: Vec<ReviewCommentResponse>) -> Vec<GithubValid
         .collect()
 }
 
-fn ensure_run_sha(observed: &str, expected: &GithubCommitSha) -> Result<()> {
-    ensure_commit_sha(observed, "validation run")?;
+fn ensure_run_sha(
+    observed: &str,
+    expected: &GithubCommitSha,
+) -> std::result::Result<(), GithubPrValidationError> {
+    ensure_commit_sha(observed, "validation run")
+        .map_err(|error| GithubPrValidationError::integrity_failed(error.to_string()))?;
     if observed != expected.as_str() {
-        bail!("GitHub validation run was not bound to the requested target SHA")
+        return Err(GithubPrValidationError::identity_failed(
+            "GitHub validation run was not bound to the requested target SHA",
+        ));
     }
     Ok(())
 }

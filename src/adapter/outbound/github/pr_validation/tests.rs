@@ -6,9 +6,10 @@ use chrono::{TimeZone, Utc};
 
 use super::{GithubPrValidationAdapter, GithubValidationApi, GithubValidationApiResponse};
 use crate::application::port::outbound::github_pr_validation_port::{
-    GithubPrMergeState, GithubPrValidationError, GithubPrValidationObservationRequest,
-    GithubPrValidationPort, GithubValidationActivityKind, GithubValidationProviderMetadata,
-    GithubValidationRunStatus, GithubValidationSource, GithubValidationSourceStatus,
+    GithubPrMergeState, GithubPrValidationError, GithubPrValidationErrorClass,
+    GithubPrValidationObservationRequest, GithubPrValidationPort, GithubValidationActivityKind,
+    GithubValidationProviderMetadata, GithubValidationRunStatus, GithubValidationSource,
+    GithubValidationSourceStatus,
 };
 use crate::domain::github_review::{GithubCommitSha, GithubPullRequestTarget};
 use crate::domain::parallel_mode::PostMergeValidationContract;
@@ -646,6 +647,7 @@ fn rejects_check_or_workflow_rows_not_bound_to_the_requested_sha() {
                 .to_string()
                 .contains("was not bound to the requested target SHA")
         );
+        assert_eq!(error.class, GithubPrValidationErrorClass::IdentityFailed);
         assert!(!error.to_string().contains(wrong_sha));
     }
 }
