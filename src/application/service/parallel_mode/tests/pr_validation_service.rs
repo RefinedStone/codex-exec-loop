@@ -38,7 +38,10 @@ impl GithubPrValidationPort for SnapshotPort {
     fn load_validation_snapshot(
         &self,
         request: &GithubPrValidationObservationRequest,
-    ) -> Result<GithubPrValidationSnapshot> {
+    ) -> std::result::Result<
+        GithubPrValidationSnapshot,
+        crate::application::port::outbound::github_pr_validation_port::GithubPrValidationError,
+    > {
         assert!(
             !self.pool_root.join(".leases").exists(),
             "validation polling must not hold a worktree/slot lease while waiting"
@@ -54,8 +57,15 @@ impl GithubPrValidationPort for FailingSnapshotPort {
     fn load_validation_snapshot(
         &self,
         _request: &GithubPrValidationObservationRequest,
-    ) -> Result<GithubPrValidationSnapshot> {
-        anyhow::bail!("Authorization: Bearer ghp_provider_secret_canary")
+    ) -> std::result::Result<
+        GithubPrValidationSnapshot,
+        crate::application::port::outbound::github_pr_validation_port::GithubPrValidationError,
+    > {
+        Err(
+            crate::application::port::outbound::github_pr_validation_port::GithubPrValidationError::retryable(
+                "provider unavailable",
+            ),
+        )
     }
 }
 
@@ -125,6 +135,7 @@ fn snapshot(sha: &str, status: GithubValidationRunStatus) -> GithubPrValidationS
         workflow_runs: Vec::new(),
         sources: sources(),
         next_cursor: None,
+        provider_metadata: Default::default(),
     }
 }
 
@@ -258,7 +269,7 @@ fn actionable_review_comment_and_thread_activity_admit_idempotent_remediation() 
 }
 
 #[test]
-fn closed_pr_and_observation_error_persist_blocked_and_failed_reasons_without_secrets() {
+fn closed_pr_blocks_but_retryable_provider_error_does_not_persist_terminal_failure() {
     let mut closed = snapshot(HEAD_A, GithubValidationRunStatus::Succeeded);
     closed.merge_state = GithubPrMergeState::Closed;
     let (blocked_repo, observation, remediation) =
@@ -303,16 +314,16 @@ fn closed_pr_and_observation_error_persist_blocked_and_failed_reasons_without_se
             &registered_record(),
         )
         .unwrap();
-    assert_eq!(
-        service
-            .poll_pr_validation(
-                &FailingSnapshotPort,
-                &remediation,
-                request(&failed_repo, 1, HEAD_A),
-            )
-            .unwrap(),
-        PrValidationPollResult::Failed
-    );
+    let error = service
+        .poll_pr_validation(
+            &FailingSnapshotPort,
+            &remediation,
+            request(&failed_repo, 1, HEAD_A),
+        )
+        .expect_err(
+            "retryable provider failure must be scheduled outside the record state machine",
+        );
+    assert_eq!(error, "provider unavailable");
     let failed = service
         .recover_pr_validation_record(
             &failed_repo.workspace_dir(),
@@ -322,8 +333,11 @@ fn closed_pr_and_observation_error_persist_blocked_and_failed_reasons_without_se
         .unwrap()
         .unwrap()
         .operator_summary();
-    assert_eq!(failed.phase, PrValidationPhase::Failed);
-    assert_eq!(failed.reason, "trusted validation observation failed");
+    assert_eq!(failed.phase, PrValidationPhase::Registered);
+    assert_eq!(
+        failed.reason,
+        "validation sources or final catch-up are not complete"
+    );
     assert!(!format!("{failed:?}").contains("ghp_provider_secret_canary"));
 }
 
@@ -957,7 +971,7 @@ fn merge_sha_evidence_mismatch_persists_failure_before_checkpointing() {
     assert_eq!(record.phase(), PrValidationPhase::Failed);
     assert_eq!(
         record.operator_summary().reason,
-        "trusted validation observation failed"
+        "trusted validation identity did not match the record"
     );
     assert_eq!(record.observation_revision(), 0);
 }

@@ -11,11 +11,11 @@ use sha2::{Digest, Sha256};
 
 use super::review_poller::GithubReviewPollerAdapter;
 use crate::application::port::outbound::github_pr_validation_port::{
-    GithubPrMergeState, GithubPrValidationObservationRequest, GithubPrValidationPort,
-    GithubPrValidationSnapshot, GithubValidationActivity, GithubValidationActivityKind,
-    GithubValidationCheckRun, GithubValidationCursor, GithubValidationRunStatus,
-    GithubValidationSource, GithubValidationSourceObservation, GithubValidationSourceStatus,
-    GithubValidationWorkflowRun,
+    GithubPrMergeState, GithubPrValidationError, GithubPrValidationObservationRequest,
+    GithubPrValidationPort, GithubPrValidationSnapshot, GithubValidationActivity,
+    GithubValidationActivityKind, GithubValidationCheckRun, GithubValidationCursor,
+    GithubValidationProviderMetadata, GithubValidationRunStatus, GithubValidationSource,
+    GithubValidationSourceObservation, GithubValidationSourceStatus, GithubValidationWorkflowRun,
 };
 use crate::domain::github_review::{GithubCommitSha, GithubOpaqueId};
 
@@ -67,7 +67,16 @@ impl GithubPrValidationAdapter {
 }
 
 trait GithubValidationApi: Send + Sync {
-    fn get(&self, endpoint: &str) -> Result<String>;
+    fn get(
+        &self,
+        endpoint: &str,
+    ) -> std::result::Result<GithubValidationApiResponse, GithubPrValidationError>;
+}
+
+#[derive(Debug)]
+pub(super) struct GithubValidationApiResponse {
+    pub(super) body: String,
+    pub(super) metadata: GithubValidationProviderMetadata,
 }
 
 struct LocalCredentialsGithubValidationApi {
@@ -76,21 +85,29 @@ struct LocalCredentialsGithubValidationApi {
 }
 
 impl GithubValidationApi for LocalCredentialsGithubValidationApi {
-    fn get(&self, endpoint: &str) -> Result<String> {
+    fn get(
+        &self,
+        endpoint: &str,
+    ) -> std::result::Result<GithubValidationApiResponse, GithubPrValidationError> {
         let poller = self.poller.get_or_init(|| {
             GithubReviewPollerAdapter::from_local_github_credentials(&self.repo_root)
                 .map_err(|error| error.to_string())
         });
         match poller {
-            Ok(poller) => poller.fetch_validation_json(endpoint),
-            Err(error) => Err(anyhow!(error.clone())),
+            Ok(poller) => poller.fetch_validation_response(endpoint),
+            Err(_) => Err(GithubPrValidationError::authentication_blocked(
+                "GitHub validation credentials are unavailable",
+            )),
         }
     }
 }
 
 impl GithubValidationApi for GithubReviewPollerAdapter {
-    fn get(&self, endpoint: &str) -> Result<String> {
-        self.fetch_validation_json(endpoint)
+    fn get(
+        &self,
+        endpoint: &str,
+    ) -> std::result::Result<GithubValidationApiResponse, GithubPrValidationError> {
+        self.fetch_validation_response(endpoint)
     }
 }
 
@@ -98,18 +115,21 @@ impl GithubPrValidationPort for GithubPrValidationAdapter {
     fn load_validation_snapshot(
         &self,
         request: &GithubPrValidationObservationRequest,
-    ) -> Result<GithubPrValidationSnapshot> {
+    ) -> std::result::Result<GithubPrValidationSnapshot, GithubPrValidationError> {
         validate_cursor_target(request)?;
+        let mut provider_metadata = GithubValidationProviderMetadata::default();
         let repository = &request.target.repository;
         let number = request.target.number;
 
         // Head identity is checked before any activity or run endpoint. A moved branch must never
         // produce a snapshot labelled with the stale SHA supplied by the application.
         let pull_path = format!("/repos/{repository}/pulls/{number}");
-        let pull: PullRequestResponse = self.get_json(&pull_path)?;
+        let pull: PullRequestResponse = self.get_json(&pull_path, &mut provider_metadata)?;
         ensure_commit_sha(&pull.head.sha, "PR head")?;
         if pull.head.sha != request.target_sha.as_str() {
-            bail!("GitHub PR head SHA changed before validation observation completed")
+            return Err(GithubPrValidationError::identity_failed(
+                "GitHub PR head SHA changed before validation observation completed",
+            ));
         }
         let initial_merge = normalize_merge_state(&pull)?;
         let reported_evidence_sha = initial_merge
@@ -123,7 +143,9 @@ impl GithubPrValidationPort for GithubPrValidationAdapter {
                 .as_ref()
                 .is_some_and(|recorded| recorded != &reported_evidence_sha)
         {
-            bail!("GitHub PR merge SHA did not match the recorded post-merge evidence target")
+            return Err(GithubPrValidationError::identity_failed(
+                "GitHub PR merge SHA did not match the recorded post-merge evidence target",
+            ));
         }
         let evidence_sha = request
             .evidence_sha
@@ -147,7 +169,7 @@ impl GithubPrValidationPort for GithubPrValidationAdapter {
         let mut review_count = 0;
         for page in pages.reviews.pages_through_poll() {
             let path = paged_path(&format!("/repos/{repository}/pulls/{number}/reviews"), page);
-            let rows: Vec<ReviewResponse> = self.get_json(&path)?;
+            let rows: Vec<ReviewResponse> = self.get_json(&path, &mut provider_metadata)?;
             ensure_page_bound(&rows, &path)?;
             if page == review_page {
                 review_count = rows.len();
@@ -166,7 +188,7 @@ impl GithubPrValidationPort for GithubPrValidationAdapter {
                 &format!("/repos/{repository}/issues/{number}/comments"),
                 page,
             );
-            let rows: Vec<IssueCommentResponse> = self.get_json(&path)?;
+            let rows: Vec<IssueCommentResponse> = self.get_json(&path, &mut provider_metadata)?;
             ensure_page_bound(&rows, &path)?;
             if page == issue_comment_page {
                 issue_comment_count = rows.len();
@@ -189,7 +211,7 @@ impl GithubPrValidationPort for GithubPrValidationAdapter {
                 &format!("/repos/{repository}/pulls/{number}/comments"),
                 page,
             );
-            let rows: Vec<ReviewCommentResponse> = self.get_json(&path)?;
+            let rows: Vec<ReviewCommentResponse> = self.get_json(&path, &mut provider_metadata)?;
             ensure_page_bound(&rows, &path)?;
             if page == review_thread_page {
                 review_thread_count = rows.len();
@@ -214,7 +236,7 @@ impl GithubPrValidationPort for GithubPrValidationAdapter {
                 evidence_sha.as_str()
             );
             let path = paged_query(&base, page);
-            let response: CheckRunsResponse = self.get_json(&path)?;
+            let response: CheckRunsResponse = self.get_json(&path, &mut provider_metadata)?;
             ensure_page_bound(&response.check_runs, &path)?;
             ensure_stable_total(&mut check_run_total, response.total_count)?;
             if page == check_run_page {
@@ -264,7 +286,7 @@ impl GithubPrValidationPort for GithubPrValidationAdapter {
                 evidence_sha.as_str()
             );
             let path = paged_query(&base, page);
-            let response: WorkflowRunsResponse = self.get_json(&path)?;
+            let response: WorkflowRunsResponse = self.get_json(&path, &mut provider_metadata)?;
             ensure_page_bound(&response.workflow_runs, &path)?;
             ensure_stable_total(&mut workflow_run_total, response.total_count)?;
             if page == workflow_run_page {
@@ -273,7 +295,9 @@ impl GithubPrValidationPort for GithubPrValidationAdapter {
             for row in response.workflow_runs {
                 ensure_run_sha(&row.head_sha, &evidence_sha)?;
                 if row.run_attempt == 0 {
-                    bail!("GitHub validation workflow run attempt must be positive")
+                    return Err(GithubPrValidationError::integrity_failed(
+                        "GitHub validation workflow run attempt must be positive",
+                    ));
                 }
                 let check_suite_id = row.check_suite_id.map(|id| id.opaque("check-suite"));
                 let run_started_at =
@@ -304,14 +328,18 @@ impl GithubPrValidationPort for GithubPrValidationAdapter {
 
         // Re-read the PR after collecting its endpoint families. This closes the race where the
         // branch moves after the first identity check but before the snapshot is returned.
-        let pull: PullRequestResponse = self.get_json(&pull_path)?;
+        let pull: PullRequestResponse = self.get_json(&pull_path, &mut provider_metadata)?;
         ensure_commit_sha(&pull.head.sha, "PR head")?;
         if pull.head.sha != request.target_sha.as_str() {
-            bail!("GitHub PR head SHA changed before validation observation completed")
+            return Err(GithubPrValidationError::identity_failed(
+                "GitHub PR head SHA changed before validation observation completed",
+            ));
         }
         let (merge_state, merge_sha) = normalize_merge_state(&pull)?;
         if (merge_state.clone(), merge_sha.clone()) != initial_merge {
-            bail!("GitHub PR merge identity changed before validation observation completed")
+            return Err(GithubPrValidationError::identity_failed(
+                "GitHub PR merge identity changed before validation observation completed",
+            ));
         }
 
         let next_cursor = pages.has_more().then(|| pages.to_cursor()).transpose()?;
@@ -352,6 +380,7 @@ impl GithubPrValidationPort for GithubPrValidationAdapter {
             workflow_runs,
             sources,
             next_cursor,
+            provider_metadata,
         };
         snapshot.normalize();
         Ok(snapshot)
@@ -359,10 +388,22 @@ impl GithubPrValidationPort for GithubPrValidationAdapter {
 }
 
 impl GithubPrValidationAdapter {
-    fn get_json<T: for<'de> Deserialize<'de>>(&self, endpoint: &str) -> Result<T> {
-        let body = self.api.get(endpoint)?;
-        serde_json::from_str(&body)
-            .with_context(|| format!("failed to parse GitHub validation response for {endpoint}"))
+    fn get_json<T: for<'de> Deserialize<'de>>(
+        &self,
+        endpoint: &str,
+        provider_metadata: &mut GithubValidationProviderMetadata,
+    ) -> std::result::Result<T, GithubPrValidationError> {
+        let response = self.api.get(endpoint).map_err(|mut error| {
+            error.provider_metadata.merge(provider_metadata);
+            error
+        })?;
+        provider_metadata.merge(&response.metadata);
+        serde_json::from_str(&response.body).map_err(|_| {
+            GithubPrValidationError::integrity_failed(format!(
+                "failed to parse GitHub validation response for {endpoint}"
+            ))
+            .with_provider_metadata(provider_metadata.clone())
+        })
     }
 }
 

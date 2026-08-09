@@ -565,6 +565,21 @@ pub enum PrValidationPhase {
     Failed,
 }
 
+impl PrValidationPhase {
+    pub const fn storage_label(self) -> &'static str {
+        match self {
+            Self::Registered => "Registered",
+            Self::PreMergeObservation => "PreMergeObservation",
+            Self::RemediationQueued => "RemediationQueued",
+            Self::RemediationRunning => "RemediationRunning",
+            Self::PostMergeObservation => "PostMergeObservation",
+            Self::Settled => "Settled",
+            Self::Blocked => "Blocked",
+            Self::Failed => "Failed",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum PrValidationCheckKind {
     CheckRun,
@@ -734,6 +749,7 @@ pub enum PrValidationTerminalReason {
     IntegrationEvidenceMissing,
     IntegrationAuthorityConflict,
     PostMergeContractBlocked,
+    IdentityViolation,
     ObservationFailed,
     RemediationAdmissionFailed,
 }
@@ -789,6 +805,7 @@ impl PrValidationTerminalReason {
             Self::PostMergeContractBlocked => {
                 "required post-merge check context is missing, skipped, or unknown"
             }
+            Self::IdentityViolation => "trusted validation identity did not match the record",
             Self::ObservationFailed => "trusted validation observation failed",
             Self::RemediationAdmissionFailed => "validation remediation admission failed",
         }
@@ -805,6 +822,7 @@ impl PrValidationTerminalReason {
             }
             Self::IntegrationAuthorityConflict => PrValidationRecoveryAction::RerunWithFreshRecord,
             Self::PostMergeContractBlocked => PrValidationRecoveryAction::RestoreValidationContract,
+            Self::IdentityViolation => PrValidationRecoveryAction::RerunWithFreshRecord,
             Self::ObservationFailed => PrValidationRecoveryAction::RerunWithFreshRecord,
             Self::RemediationAdmissionFailed => PrValidationRecoveryAction::RestoreQueueAndRerun,
         }

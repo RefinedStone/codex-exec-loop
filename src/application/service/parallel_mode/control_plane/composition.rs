@@ -9,7 +9,7 @@ use crate::application::port::outbound::parallel_mode_runtime_event_log_port::Pa
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::parallel_mode::{
     ParallelModeAutomationGuard, ParallelModeOrchestratorTickResult,
-    ParallelModeOrchestratorTrigger, ParallelModeService,
+    ParallelModeOrchestratorTrigger, ParallelModeService, PrValidationSchedulerRuntime,
 };
 use crate::application::service::planning::{PlanningApplicationProjection, PlanningServices};
 use crate::domain::parallel_mode::{
@@ -30,6 +30,7 @@ pub struct ParallelModeControlPlaneComposition {
     planning: PlanningServices,
     worker_port: Arc<dyn ParallelAgentWorkerPort>,
     automation_guard: ParallelModeAutomationGuard,
+    _pr_validation_scheduler: PrValidationSchedulerRuntime,
 }
 
 pub struct ParallelModeControlPlaneDashboardSnapshot {
@@ -60,7 +61,13 @@ impl ParallelModeControlPlaneComposition {
             planning,
             worker_port,
             automation_guard: ParallelModeAutomationGuard::default(),
+            _pr_validation_scheduler: PrValidationSchedulerRuntime::default(),
         }
+    }
+
+    pub fn with_pr_validation_scheduler(mut self, scheduler: PrValidationSchedulerRuntime) -> Self {
+        self._pr_validation_scheduler = scheduler;
+        self
     }
 
     pub fn parallel_mode_turn_service(&self) -> ParallelModeTurnService {

@@ -2,13 +2,13 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use anyhow::{Result, anyhow};
+use chrono::{TimeZone, Utc};
 
-use super::{GithubPrValidationAdapter, GithubValidationApi};
+use super::{GithubPrValidationAdapter, GithubValidationApi, GithubValidationApiResponse};
 use crate::application::port::outbound::github_pr_validation_port::{
-    GithubPrMergeState, GithubPrValidationObservationRequest, GithubPrValidationPort,
-    GithubValidationActivityKind, GithubValidationRunStatus, GithubValidationSource,
-    GithubValidationSourceStatus,
+    GithubPrMergeState, GithubPrValidationError, GithubPrValidationObservationRequest,
+    GithubPrValidationPort, GithubValidationActivityKind, GithubValidationProviderMetadata,
+    GithubValidationRunStatus, GithubValidationSource, GithubValidationSourceStatus,
 };
 use crate::domain::github_review::{GithubCommitSha, GithubPullRequestTarget};
 use crate::domain::parallel_mode::PostMergeValidationContract;
@@ -35,7 +35,10 @@ impl FixtureApi {
 }
 
 impl GithubValidationApi for FixtureApi {
-    fn get(&self, endpoint: &str) -> Result<String> {
+    fn get(
+        &self,
+        endpoint: &str,
+    ) -> std::result::Result<GithubValidationApiResponse, GithubPrValidationError> {
         self.requests
             .lock()
             .expect("request lock")
@@ -43,7 +46,15 @@ impl GithubValidationApi for FixtureApi {
         self.responses
             .get(endpoint)
             .cloned()
-            .ok_or_else(|| anyhow!("unexpected fixture endpoint: {endpoint}"))
+            .map(|body| GithubValidationApiResponse {
+                body,
+                metadata: GithubValidationProviderMetadata::default(),
+            })
+            .ok_or_else(|| {
+                GithubPrValidationError::integrity_failed(format!(
+                    "unexpected fixture endpoint: {endpoint}"
+                ))
+            })
     }
 }
 
@@ -52,12 +63,51 @@ struct MovingHeadApi {
     pull_reads: AtomicUsize,
 }
 
+struct MetadataErrorApi {
+    calls: AtomicUsize,
+}
+
+impl GithubValidationApi for MetadataErrorApi {
+    fn get(
+        &self,
+        _endpoint: &str,
+    ) -> std::result::Result<GithubValidationApiResponse, GithubPrValidationError> {
+        let first_reset = Utc.with_ymd_and_hms(2026, 8, 10, 0, 1, 0).unwrap();
+        let final_reset = Utc.with_ymd_and_hms(2026, 8, 10, 0, 2, 0).unwrap();
+        if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            return Ok(GithubValidationApiResponse {
+                body: format!(
+                    r#"{{"state":"open","merged":false,"merge_commit_sha":null,"head":{{"sha":"{SHA}"}}}}"#
+                ),
+                metadata: GithubValidationProviderMetadata {
+                    rate_limit_remaining: Some(100),
+                    rate_limit_reset_at: Some(first_reset),
+                },
+            });
+        }
+        Err(
+            GithubPrValidationError::retryable("GitHub HTTP 503").with_provider_metadata(
+                GithubValidationProviderMetadata {
+                    rate_limit_remaining: Some(80),
+                    rate_limit_reset_at: Some(final_reset),
+                },
+            ),
+        )
+    }
+}
+
 impl GithubValidationApi for MovingHeadApi {
-    fn get(&self, endpoint: &str) -> Result<String> {
+    fn get(
+        &self,
+        endpoint: &str,
+    ) -> std::result::Result<GithubValidationApiResponse, GithubPrValidationError> {
         if endpoint == "/repos/acme/widgets/pulls/42"
             && self.pull_reads.fetch_add(1, Ordering::SeqCst) == 1
         {
-            return Ok(r#"{"state":"open","merged":false,"merge_commit_sha":null,"head":{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}"#.to_string());
+            return Ok(GithubValidationApiResponse {
+                body: r#"{"state":"open","merged":false,"merge_commit_sha":null,"head":{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}"#.to_string(),
+                metadata: GithubValidationProviderMetadata::default(),
+            });
         }
         self.fixture.get(endpoint)
     }
@@ -77,6 +127,21 @@ fn request(
 
 fn endpoint(path: &str) -> String {
     format!("/repos/acme/widgets/{path}")
+}
+
+#[test]
+fn provider_error_preserves_metadata_accumulated_before_a_later_endpoint_failure() {
+    let adapter = GithubPrValidationAdapter::with_api(MetadataErrorApi {
+        calls: AtomicUsize::new(0),
+    });
+    let error = adapter
+        .load_validation_snapshot(&request(None))
+        .expect_err("the second endpoint should fail");
+    assert_eq!(error.provider_metadata.rate_limit_remaining, Some(80));
+    assert_eq!(
+        error.provider_metadata.rate_limit_reset_at,
+        Some(Utc.with_ymd_and_hms(2026, 8, 10, 0, 2, 0).unwrap())
+    );
 }
 
 fn complete_fixture() -> FixtureApi {

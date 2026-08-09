@@ -9,6 +9,8 @@ mod orchestrator;
 mod pool_reset;
 #[cfg_attr(not(test), allow(dead_code))]
 mod pr_validation;
+#[cfg_attr(not(test), allow(dead_code))]
+mod pr_validation_scheduler;
 mod readiness;
 mod runtime_events;
 
@@ -66,6 +68,8 @@ pub use self::pr_validation::{
     PrValidationRequiredCheck, PrValidationRequiredCheckKey, PrValidationTarget,
     PrValidationTargetShaSnapshot, PrValidationTerminalReason, PrValidationTransitionRejection,
 };
+#[allow(unused_imports)]
+pub use self::pr_validation_scheduler::{PrValidationPollErrorClass, PrValidationSchedulerMode};
 pub use self::readiness::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
     ParallelModeReadinessSnapshot, ParallelModeReadinessState,

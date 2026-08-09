@@ -10,6 +10,9 @@ use crate::application::port::outbound::github_automation_port::{
     AKRA_GITHUB_PUSH_REMOTE_CONFIG_KEY, AKRA_GITHUB_PUSH_REMOTE_ENV_VAR,
     parse_github_repository_identity, resolve_github_push_remote_name_strict,
 };
+use crate::application::port::outbound::github_pr_validation_port::{
+    GithubPrValidationError, GithubPrValidationErrorClass, GithubValidationProviderMetadata,
+};
 use crate::application::port::outbound::github_review_poller_port::GithubReviewPollerPort;
 use crate::domain::github_review::{
     GithubPullRequestActivityEvent, GithubPullRequestActivityKind,
@@ -18,6 +21,7 @@ use crate::domain::github_review::{
 use crate::git_subprocess;
 use crate::subprocess;
 use anyhow::{Context, Result, anyhow, bail};
+use chrono::{DateTime, TimeDelta, TimeZone, Utc};
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -43,6 +47,7 @@ const CURL_MAX_TIME_SECONDS: &str = "30";
 const CURL_SPAWN_ATTEMPTS: usize = 3;
 const CURL_SPAWN_RETRY_DELAY: Duration = Duration::from_millis(10);
 const LEGACY_CREDENTIAL_SCAN_ENV: &str = "AKRA_GITHUB_LEGACY_CREDENTIAL_SCAN";
+const VALIDATION_HTTP_STATUS_MARKER: &str = "\nAKRA_VALIDATION_HTTP_STATUS:";
 
 #[cfg(unix)]
 fn unresolved_curl_executable_path() -> PathBuf {
@@ -812,8 +817,39 @@ impl GithubReviewPollerAdapter {
         self.fetch_json_with_budget(endpoint, None)
     }
 
-    pub(super) fn fetch_validation_json(&self, endpoint: &str) -> Result<String> {
-        self.fetch_json_with_budget(endpoint, None)
+    pub(super) fn fetch_validation_response(
+        &self,
+        endpoint: &str,
+    ) -> std::result::Result<
+        super::pr_validation::GithubValidationApiResponse,
+        GithubPrValidationError,
+    > {
+        if self.curl_resolution_error.is_some() {
+            return Err(GithubPrValidationError::integrity_failed(
+                "trusted curl executable could not be pinned for GitHub validation",
+            ));
+        }
+        let url = format!("{}{}", self.api_base_url, endpoint);
+        let authorization = format!("Authorization: Bearer {}", self.token);
+        let user_agent = format!("User-Agent: {}", self.user_agent);
+        let api_version = format!("X-GitHub-Api-Version: {}", GITHUB_API_VERSION);
+        let output = self
+            .run_validation_curl_process(
+                &url,
+                &api_version,
+                &authorization,
+                &user_agent,
+                self.subprocess_timeout,
+            )
+            .map_err(|_| {
+                GithubPrValidationError::retryable("GitHub validation request failed or timed out")
+            })?;
+        if !output.status.success() {
+            return Err(GithubPrValidationError::retryable(
+                "GitHub validation transport failed",
+            ));
+        }
+        parse_validation_http_response(&output.stdout, Utc::now())
     }
 
     fn fetch_json_with_budget(
@@ -922,6 +958,65 @@ impl GithubReviewPollerAdapter {
         unreachable!("curl spawn retry loop should return from every attempt")
     }
 
+    fn run_validation_curl_process(
+        &self,
+        url: &str,
+        api_version: &str,
+        authorization: &str,
+        user_agent: &str,
+        request_timeout: Duration,
+    ) -> io::Result<Output> {
+        let config = build_curl_stdin_config(api_version, authorization, user_agent);
+        let command_label = format!("{} {url}", self.curl_path);
+        for attempt in 1..=CURL_SPAWN_ATTEMPTS {
+            let mut command = Command::new(&self.curl_path);
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            crate::trusted_executable::configure_credential_command_environment(
+                &mut command,
+                &cwd,
+                false,
+            )
+            .map_err(io::Error::other)?;
+            command
+                .arg("-q")
+                .args([
+                    "-sS",
+                    "--proto",
+                    "=https",
+                    "--connect-timeout",
+                    CURL_CONNECT_TIMEOUT_SECONDS,
+                    "--max-time",
+                    CURL_MAX_TIME_SECONDS,
+                    "--max-filesize",
+                    &MAX_GITHUB_RESPONSE_BYTES.to_string(),
+                    "--dump-header",
+                    "-",
+                    "--write-out",
+                    &format!("{VALIDATION_HTTP_STATUS_MARKER}%{{http_code}}"),
+                    "--config",
+                    "-",
+                ])
+                .arg(url);
+            let output = match subprocess::command_output_with_input_and_timeout(
+                &mut command,
+                &command_label,
+                config.as_bytes(),
+                request_timeout,
+            ) {
+                Ok(output) => output,
+                Err(error)
+                    if attempt < CURL_SPAWN_ATTEMPTS && is_transient_curl_spawn_error(&error) =>
+                {
+                    thread::sleep(CURL_SPAWN_RETRY_DELAY);
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            return Ok(output);
+        }
+        unreachable!("validation curl spawn retry loop should return from every attempt")
+    }
+
     fn parse_json<T>(body: &str, endpoint: &str) -> Result<T>
     where
         T: DeserializeOwned,
@@ -1024,6 +1119,119 @@ impl GithubReviewPollerAdapter {
             path: None,
         }
     }
+}
+
+fn parse_validation_http_response(
+    output: &[u8],
+    observed_at: DateTime<Utc>,
+) -> std::result::Result<super::pr_validation::GithubValidationApiResponse, GithubPrValidationError>
+{
+    if output.len() > MAX_GITHUB_RESPONSE_BYTES + 64 * 1024 {
+        return Err(GithubPrValidationError::integrity_failed(
+            "GitHub validation response exceeded its bounded envelope",
+        ));
+    }
+    let output = String::from_utf8(output.to_vec()).map_err(|_| {
+        GithubPrValidationError::integrity_failed("GitHub validation response was not valid UTF-8")
+    })?;
+    let marker_index = output.rfind(VALIDATION_HTTP_STATUS_MARKER).ok_or_else(|| {
+        GithubPrValidationError::integrity_failed(
+            "GitHub validation response omitted its HTTP status",
+        )
+    })?;
+    let status = output[marker_index + VALIDATION_HTTP_STATUS_MARKER.len()..]
+        .trim()
+        .parse::<u16>()
+        .map_err(|_| {
+            GithubPrValidationError::integrity_failed(
+                "GitHub validation response contained an invalid HTTP status",
+            )
+        })?;
+    let (headers, body) = split_validation_http_envelope(&output[..marker_index])?;
+    let metadata = GithubValidationProviderMetadata {
+        rate_limit_remaining: validation_header(headers, "x-ratelimit-remaining")
+            .and_then(|value| value.parse::<u64>().ok()),
+        rate_limit_reset_at: validation_header(headers, "x-ratelimit-reset")
+            .and_then(|value| value.parse::<i64>().ok())
+            .and_then(|seconds| Utc.timestamp_opt(seconds, 0).single()),
+    };
+    if (200..300).contains(&status) {
+        return Ok(super::pr_validation::GithubValidationApiResponse {
+            body: body.to_string(),
+            metadata,
+        });
+    }
+    let retry_after_at = validation_header(headers, "retry-after").and_then(|value| {
+        value
+            .parse::<i64>()
+            .ok()
+            .and_then(TimeDelta::try_seconds)
+            .map(|delay| observed_at + delay)
+            .or_else(|| {
+                DateTime::parse_from_rfc2822(value)
+                    .ok()
+                    .map(|value| value.with_timezone(&Utc))
+            })
+    });
+    let class = match status {
+        403 if metadata.rate_limit_remaining == Some(0) || retry_after_at.is_some() => {
+            GithubPrValidationErrorClass::RetryableProvider
+        }
+        401 | 403 => GithubPrValidationErrorClass::AuthenticationBlocked,
+        408 | 425 | 429 | 500..=599 => GithubPrValidationErrorClass::RetryableProvider,
+        404 | 409 | 422 => GithubPrValidationErrorClass::IdentityFailed,
+        _ => GithubPrValidationErrorClass::IntegrityFailed,
+    };
+    Err(GithubPrValidationError::new(
+        class,
+        format!("GitHub validation request returned HTTP {status}"),
+    )
+    .with_retry_after_at(retry_after_at)
+    .with_provider_metadata(metadata))
+}
+
+fn split_validation_http_envelope(
+    mut payload: &str,
+) -> std::result::Result<(&str, &str), GithubPrValidationError> {
+    let mut last_headers = None;
+    while payload.starts_with("HTTP/") {
+        let (headers, body) = split_validation_header_block(payload).ok_or_else(|| {
+            GithubPrValidationError::integrity_failed(
+                "GitHub validation response contained an incomplete HTTP header block",
+            )
+        })?;
+        last_headers = Some(headers);
+        payload = body;
+        if !payload.starts_with("HTTP/") {
+            break;
+        }
+    }
+    let headers = last_headers.ok_or_else(|| {
+        GithubPrValidationError::integrity_failed(
+            "GitHub validation response omitted its HTTP headers",
+        )
+    })?;
+    Ok((headers, payload))
+}
+
+fn split_validation_header_block(value: &str) -> Option<(&str, &str)> {
+    value
+        .find("\r\n\r\n")
+        .map(|index| (&value[..index], &value[index + 4..]))
+        .or_else(|| {
+            value
+                .find("\n\n")
+                .map(|index| (&value[..index], &value[index + 2..]))
+        })
+}
+
+fn validation_header<'a>(headers: &'a str, name: &str) -> Option<&'a str> {
+    headers.lines().find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        key.trim()
+            .eq_ignore_ascii_case(name)
+            .then_some(value.trim())
+    })
 }
 
 fn build_curl_stdin_config(api_version: &str, authorization: &str, user_agent: &str) -> String {
@@ -1142,6 +1350,83 @@ struct IssueCommentResponse {
 struct GitHubUser {
     login: String,
 }
+
+#[cfg(test)]
+mod validation_http_tests {
+    use chrono::{TimeDelta, TimeZone, Utc};
+
+    use super::{VALIDATION_HTTP_STATUS_MARKER, parse_validation_http_response};
+    use crate::application::port::outbound::github_pr_validation_port::GithubPrValidationErrorClass;
+
+    fn response(status: u16, headers: &str, body: &str) -> Vec<u8> {
+        format!("HTTP/2 {status}\r\n{headers}\r\n\r\n{body}{VALIDATION_HTTP_STATUS_MARKER}{status}")
+            .into_bytes()
+    }
+
+    #[test]
+    fn validation_http_success_preserves_body_and_rate_metadata() {
+        let observed_at = Utc.with_ymd_and_hms(2026, 8, 10, 0, 0, 0).unwrap();
+        let parsed = parse_validation_http_response(
+            &response(
+                200,
+                "x-ratelimit-remaining: 4998\r\nx-ratelimit-reset: 1786320600",
+                "{\"ok\":true}",
+            ),
+            observed_at,
+        )
+        .unwrap();
+        assert_eq!(parsed.body, "{\"ok\":true}");
+        assert_eq!(parsed.metadata.rate_limit_remaining, Some(4_998));
+        assert_eq!(
+            parsed.metadata.rate_limit_reset_at,
+            Utc.timestamp_opt(1_786_320_600, 0).single()
+        );
+    }
+
+    #[test]
+    fn validation_http_429_and_rate_limited_403_are_retryable_with_retry_after() {
+        let observed_at = Utc.with_ymd_and_hms(2026, 8, 10, 0, 0, 0).unwrap();
+        for status in [429, 403] {
+            let error = parse_validation_http_response(
+                &response(
+                    status,
+                    "Retry-After: 75\r\nX-RateLimit-Remaining: 0\r\nX-RateLimit-Reset: 1786320600",
+                    "{\"message\":\"redacted\"}",
+                ),
+                observed_at,
+            )
+            .unwrap_err();
+            assert_eq!(error.class, GithubPrValidationErrorClass::RetryableProvider);
+            assert_eq!(
+                error.retry_after_at,
+                Some(observed_at + TimeDelta::seconds(75))
+            );
+            assert_eq!(error.provider_metadata.rate_limit_remaining, Some(0));
+            assert!(!error.message.contains("redacted"));
+        }
+    }
+
+    #[test]
+    fn validation_http_5xx_retries_but_plain_403_blocks_authentication() {
+        let observed_at = Utc.with_ymd_and_hms(2026, 8, 10, 0, 0, 0).unwrap();
+        let unavailable =
+            parse_validation_http_response(&response(503, "", "provider detail"), observed_at)
+                .unwrap_err();
+        assert_eq!(
+            unavailable.class,
+            GithubPrValidationErrorClass::RetryableProvider
+        );
+        let forbidden =
+            parse_validation_http_response(&response(403, "", "secret detail"), observed_at)
+                .unwrap_err();
+        assert_eq!(
+            forbidden.class,
+            GithubPrValidationErrorClass::AuthenticationBlocked
+        );
+        assert!(!forbidden.message.contains("secret detail"));
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests;
 

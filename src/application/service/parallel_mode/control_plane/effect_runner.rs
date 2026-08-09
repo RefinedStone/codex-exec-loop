@@ -349,7 +349,6 @@ where
         effect_id: ParallelModeControlPlaneEffectId,
     ) {
         let parallel_mode_service = self.parallel_mode_service.clone();
-        let planning = self.planning.clone();
         let event_sink = self.event_sink.clone();
         let automation_guard = self.automation_guard.clone();
         let panic_completion = effect_failed(
@@ -371,11 +370,8 @@ where
             event_log::emit_lazy("parallel_orchestrator_retry_started", || {
                 orchestrator_retry_started_payload(&workspace_directory, &signature)
             });
-            let validation_error = parallel_mode_service
-                .poll_pr_validations_for_runtime_tick(&workspace_directory, &planning.queue)
-                .err();
             let permit = automation_guard.permit(&workspace_directory, epoch_id);
-            let (blocked, mut notices) = match parallel_mode_service.run_orchestrator_tick_guarded(
+            let (blocked, notices) = match parallel_mode_service.run_orchestrator_tick_guarded(
                 &workspace_directory,
                 ParallelModeOrchestratorTrigger::ManualDispatch,
                 &permit,
@@ -386,9 +382,6 @@ where
                     vec![format!("orchestrator retry tick failed: {error}")],
                 ),
             };
-            if let Some(error) = validation_error {
-                notices.push(format!("PR validation poll failed: {error}"));
-            }
             event_log::emit_lazy("parallel_orchestrator_retry_completed", || {
                 orchestrator_retry_completed_payload(
                     &workspace_directory,
@@ -747,7 +740,6 @@ where
         correlation: ParallelModePendingDispatchPollCorrelation,
     ) {
         let parallel_mode_service = self.parallel_mode_service.clone();
-        let planning = self.planning.clone();
         let event_sink = self.event_sink.clone();
         let automation_guard = self.automation_guard.clone();
         let panic_completion = ParallelModeControlPlaneBackgroundEvent::PendingDispatchWakePolled {
@@ -761,18 +753,6 @@ where
             {
                 Err("pending dispatch poll belongs to an inactive automation epoch".to_string())
             } else {
-                if let Err(error) = parallel_mode_service.poll_pr_validations_for_runtime_tick(
-                    &correlation.workspace_directory,
-                    &planning.queue,
-                ) {
-                    event_log::emit_lazy("parallel_pr_validation_poll_failed", || {
-                        serde_json::json!({
-                            "workspace": &correlation.workspace_directory,
-                            "epoch_id": correlation.epoch_id,
-                            "error": error,
-                        })
-                    });
-                }
                 parallel_mode_service
                     .pending_dispatch_wake(&correlation.workspace_directory, correlation.epoch_id)
             };
