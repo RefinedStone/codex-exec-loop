@@ -18,7 +18,9 @@ use crate::application::port::outbound::parallel_mode_runtime_event_log_port::Pa
 use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityDistributorQueueRecord, PlanningAuthorityOfficialRefreshClaimStatus,
     PlanningAuthorityOfficialRefreshRecoveryStatus, PlanningAuthorityRuntimeEventRecord,
-    PlanningAuthorityRuntimeProjectionSnapshot, PrValidationPollLeaseClaim,
+    PlanningAuthorityRuntimeProjectionSnapshot, PrValidationAuthorityBoardSummary,
+    PrValidationAuthorityPage, PrValidationAuthorityPagePosition, PrValidationAuthorityPageRequest,
+    PrValidationAuthorityRecordSnapshot, PrValidationPollLeaseClaim,
     PrValidationPollLeaseClaimRequest, PrValidationPollLeaseRenewalRequest,
     PrValidationPollSettlement,
 };
@@ -27,8 +29,9 @@ use crate::application::port::outbound::planning_authority_port::{
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeDispatchCommandSnapshot,
     ParallelModeDispatchCommandState, ParallelModePoolResetReport, ParallelModeRuntimeEventEntry,
-    ParallelModeRuntimeEventsSnapshot, ParallelModeSlotLeaseSnapshot,
-    ParallelModeTaskDispatchBlockSnapshot, PrValidationRecord, PrValidationRecordKey,
+    ParallelModeRuntimeEventSeverity, ParallelModeRuntimeEventsSnapshot,
+    ParallelModeSlotLeaseSnapshot, ParallelModeTaskDispatchBlockSnapshot, PrValidationPhase,
+    PrValidationPollErrorClass, PrValidationRecord, PrValidationRecordKey,
 };
 
 // metadata upsert helper는 store 모듈의 스키마 관리와 같은 규칙을 공유한다.
@@ -1435,6 +1438,149 @@ impl SqlitePlanningAuthorityAdapter {
             .collect()
     }
 
+    pub(crate) fn load_runtime_pr_validation_page(
+        workspace_dir: &str,
+        request: &PrValidationAuthorityPageRequest,
+    ) -> Result<PrValidationAuthorityPage> {
+        if request.limit == 0 || request.limit > 50 {
+            anyhow::bail!("PR validation board limit must be between 1 and 50");
+        }
+        DateTime::parse_from_rfc3339(&request.terminal_since)
+            .context("PR validation terminal cutoff must be RFC3339")?;
+        if let Some(after) = request.after.as_ref() {
+            if after.terminal_rank > 1 || after.record_key.trim().is_empty() {
+                anyhow::bail!("PR validation board cursor position is invalid");
+            }
+            DateTime::parse_from_rfc3339(&after.updated_at)
+                .context("PR validation board cursor timestamp must be RFC3339")?;
+        }
+
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let connection = open_authority_connection(&location)?;
+        let transaction = connection
+            .unchecked_transaction()
+            .context("failed to open PR validation board read snapshot")?;
+        let revision = read_metadata_i64(&transaction, "runtime_event_sequence")?.unwrap_or(0);
+        let cursor_reset_required = request
+            .expected_revision
+            .is_some_and(|expected| expected != revision);
+        let after = (!cursor_reset_required)
+            .then_some(request.after.as_ref())
+            .flatten();
+
+        let summary = transaction
+            .query_row(
+                "SELECT
+                    SUM(CASE WHEN validation_phase NOT IN ('Settled', 'Blocked', 'Failed') THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN integration_evidence_sha IS NOT NULL THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN validation_phase = 'PostMergeObservation' THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN validation_phase IN ('RemediationQueued', 'RemediationRunning') THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN validation_phase = 'Settled' THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN validation_phase = 'Blocked' THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN validation_phase = 'Failed' THEN 1 ELSE 0 END)
+                 FROM runtime_pr_validation_records
+                 WHERE validation_phase NOT IN ('Settled', 'Blocked', 'Failed')
+                    OR updated_at >= ?1",
+                params![request.terminal_since],
+                |row| {
+                    Ok(PrValidationAuthorityBoardSummary {
+                        active: sqlite_count(row.get::<_, Option<i64>>(0)?)?,
+                        integrated: sqlite_count(row.get::<_, Option<i64>>(1)?)?,
+                        verifying: sqlite_count(row.get::<_, Option<i64>>(2)?)?,
+                        remediation: sqlite_count(row.get::<_, Option<i64>>(3)?)?,
+                        verified: sqlite_count(row.get::<_, Option<i64>>(4)?)?,
+                        blocked: sqlite_count(row.get::<_, Option<i64>>(5)?)?,
+                        failed: sqlite_count(row.get::<_, Option<i64>>(6)?)?,
+                    })
+                },
+            )
+            .context("failed to summarize PR validation board")?;
+
+        let after_rank = after.map(|position| i64::from(position.terminal_rank));
+        let after_updated_at = after.map(|position| position.updated_at.as_str());
+        let after_record_key = after.map(|position| position.record_key.as_str());
+        let query_limit = i64::try_from(request.limit + 1).unwrap_or(51);
+        let mut statement = transaction
+            .prepare(
+                "WITH ranked AS (
+                    SELECT record_key, updated_at, content, last_polled_at, next_poll_at,
+                           poll_attempt, consecutive_error_count, last_error_class,
+                           rate_limit_remaining, rate_limit_reset_at,
+                           CASE WHEN validation_phase IN ('Settled', 'Blocked', 'Failed')
+                                THEN 1 ELSE 0 END AS terminal_rank
+                    FROM runtime_pr_validation_records
+                    WHERE validation_phase NOT IN ('Settled', 'Blocked', 'Failed')
+                       OR updated_at >= ?1
+                 )
+                 SELECT record_key, updated_at, content, last_polled_at, next_poll_at,
+                        poll_attempt, consecutive_error_count, last_error_class,
+                        rate_limit_remaining, rate_limit_reset_at, terminal_rank
+                 FROM ranked
+                 WHERE ?2 IS NULL
+                    OR terminal_rank > ?2
+                    OR (terminal_rank = ?2 AND updated_at < ?3)
+                    OR (terminal_rank = ?2 AND updated_at = ?3 AND record_key > ?4)
+                 ORDER BY terminal_rank ASC, updated_at DESC, record_key ASC
+                 LIMIT ?5",
+            )
+            .context("failed to prepare PR validation board page")?;
+        let rows = statement
+            .query_map(
+                params![
+                    request.terminal_since,
+                    after_rank,
+                    after_updated_at,
+                    after_record_key,
+                    query_limit,
+                ],
+                decode_pr_validation_authority_row,
+            )
+            .context("failed to query PR validation board page")?;
+        let mut records = rows
+            .map(|row| row.context("failed to decode PR validation board row"))
+            .collect::<Result<Vec<_>>>()?;
+        let has_more = records.len() > request.limit;
+        if has_more {
+            records.pop();
+        }
+        let next_position = has_more
+            .then(|| records.last().map(pr_validation_page_position))
+            .flatten();
+        drop(statement);
+        transaction
+            .commit()
+            .context("failed to close PR validation board read snapshot")?;
+        Ok(PrValidationAuthorityPage {
+            revision,
+            summary,
+            records,
+            next_position,
+            cursor_reset_required,
+        })
+    }
+
+    pub(crate) fn load_runtime_pr_validation_record_snapshot(
+        workspace_dir: &str,
+        record_key: &PrValidationRecordKey,
+    ) -> Result<Option<PrValidationAuthorityRecordSnapshot>> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let connection = open_authority_connection(&location)?;
+        connection
+            .query_row(
+                "SELECT record_key, updated_at, content, last_polled_at, next_poll_at,
+                        poll_attempt, consecutive_error_count, last_error_class,
+                        rate_limit_remaining, rate_limit_reset_at,
+                        CASE WHEN validation_phase IN ('Settled', 'Blocked', 'Failed')
+                             THEN 1 ELSE 0 END AS terminal_rank
+                 FROM runtime_pr_validation_records
+                 WHERE record_key = ?1",
+                params![record_key.as_str()],
+                decode_pr_validation_authority_row,
+            )
+            .optional()
+            .context("failed to load PR validation detail snapshot")
+    }
+
     pub(crate) fn load_due_runtime_pr_validation_record_keys(
         workspace_dir: &str,
         due_at: DateTime<Utc>,
@@ -1779,25 +1925,41 @@ impl SqlitePlanningAuthorityAdapter {
             })?;
         if changed == 1 {
             upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
+            let (event_kind, summary) = if settlement.error_class.is_some() {
+                (
+                    "pr_validation_poll_deferred",
+                    format!(
+                        "PR validation poll deferred / key: {} / next: {} / error: {}",
+                        record_key.as_str(),
+                        settlement.next_poll_at.to_rfc3339(),
+                        settlement
+                            .error_class
+                            .map(|class| class.label())
+                            .unwrap_or("none")
+                    ),
+                )
+            } else {
+                (
+                    "pr_validation_poll_scheduled",
+                    format!(
+                        "PR validation poll scheduled / key: {} / next: {}",
+                        record_key.as_str(),
+                        settlement.next_poll_at.to_rfc3339(),
+                    ),
+                )
+            };
             append_runtime_event(
                 &transaction,
-                "pr_validation_poll_settled",
-                "pr_validation_poll",
+                event_kind,
+                "pr_validation",
                 record_key.as_str(),
-                &format!(
-                    "PR validation poll settled / key: {} / next: {} / error: {}",
-                    record_key.as_str(),
-                    settlement.next_poll_at.to_rfc3339(),
-                    settlement
-                        .error_class
-                        .map(|class| class.label())
-                        .unwrap_or("none")
-                ),
+                &summary,
                 &serde_json::json!({
+                    "schema_version": 1,
                     "record_key": record_key.as_str(),
                     "next_poll_at": settlement.next_poll_at.to_rfc3339(),
                     "consecutive_error_count": settlement.consecutive_error_count,
-                    "error_class": settlement.error_class.map(|class| class.label()),
+                    "error_class": settlement.error_class,
                     "rate_limit_remaining": settlement.rate_limit_remaining,
                     "rate_limit_reset_at": settlement
                         .rate_limit_reset_at
@@ -2029,34 +2191,65 @@ impl SqlitePlanningAuthorityAdapter {
                     })?;
             }
         }
-        let (event_kind, summary) = if let Some(record) = replacement {
-            (
-                "pr_validation_record_replaced_if_matches",
-                format!(
-                    "runtime PR validation record stored / key: {} / phase: {:?}",
-                    record_key.as_str(),
-                    record.phase()
-                ),
-            )
-        } else {
-            (
-                "pr_validation_record_removed_if_matches",
-                format!(
-                    "runtime PR validation record removed / key: {}",
-                    record_key.as_str()
-                ),
-            )
+        let previous_phase = expected.map(PrValidationRecord::phase);
+        let next_phase = replacement.map(PrValidationRecord::phase);
+        let event_kind = match (previous_phase, next_phase) {
+            (_, Some(PrValidationPhase::Settled))
+                if previous_phase != Some(PrValidationPhase::Settled) =>
+            {
+                "pr_validation_verified"
+            }
+            (_, Some(PrValidationPhase::RemediationQueued))
+                if previous_phase != Some(PrValidationPhase::RemediationQueued) =>
+            {
+                "pr_validation_remediation_admitted"
+            }
+            (previous, Some(next)) if previous != Some(next) => "pr_validation_phase_changed",
+            (_, Some(_)) => "pr_validation_observed",
+            (_, None) => "pr_validation_record_removed",
         };
+        let summary = match replacement {
+            Some(record) => format!(
+                "PR validation state stored / key: {} / phase: {}",
+                record_key.as_str(),
+                record.phase().storage_label()
+            ),
+            None => format!(
+                "PR validation record removed / key: {}",
+                record_key.as_str()
+            ),
+        };
+        let event_payload = replacement
+            .map(|record| {
+                let operator = record.operator_summary();
+                serde_json::json!({
+                    "schema_version": 1,
+                    "record_key": record_key.as_str(),
+                    "previous_phase": previous_phase,
+                    "phase": record.phase(),
+                    "observation_revision": record.observation_revision(),
+                    "post_merge_checkpoint_observed": record.has_post_merge_checkpoint(),
+                    "integration_evidence_sha": record.evidence_sha().map(|sha| sha.as_str()),
+                    "finding_count": operator.finding_count,
+                    "remediation_count": operator.remediation_count,
+                })
+            })
+            .unwrap_or_else(|| {
+                serde_json::json!({
+                    "schema_version": 1,
+                    "record_key": record_key.as_str(),
+                    "previous_phase": previous_phase,
+                    "phase": serde_json::Value::Null,
+                })
+            })
+            .to_string();
         append_runtime_event(
             &transaction,
             event_kind,
-            "pr_validation_record",
+            "pr_validation",
             record_key.as_str(),
             &summary,
-            replacement_json
-                .as_deref()
-                .or(expected_json.as_deref())
-                .unwrap_or("{}"),
+            &event_payload,
         )?;
         transaction
             .commit()
@@ -2832,6 +3025,113 @@ impl SqlitePlanningAuthorityAdapter {
     }
 }
 
+fn sqlite_count(value: Option<i64>) -> rusqlite::Result<usize> {
+    usize::try_from(value.unwrap_or(0)).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            0,
+            rusqlite::types::Type::Integer,
+            Box::new(error),
+        )
+    })
+}
+
+fn decode_pr_validation_authority_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<PrValidationAuthorityRecordSnapshot> {
+    let record_key = row.get::<_, String>(0)?;
+    let content = row.get::<_, String>(2)?;
+    let record = serde_json::from_str::<PrValidationRecord>(&content).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(error))
+    })?;
+    if record.key().as_str() != record_key {
+        return Err(rusqlite::Error::FromSqlConversionFailure(
+            0,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "PR validation row key does not match its content",
+            )),
+        ));
+    }
+    let stored_terminal_rank = row.get::<_, i64>(10)?;
+    let expected_terminal_rank = i64::from(matches!(
+        record.phase(),
+        PrValidationPhase::Settled | PrValidationPhase::Blocked | PrValidationPhase::Failed
+    ));
+    if stored_terminal_rank != expected_terminal_rank {
+        return Err(rusqlite::Error::FromSqlConversionFailure(
+            10,
+            rusqlite::types::Type::Integer,
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "PR validation row phase projection is inconsistent",
+            )),
+        ));
+    }
+    let last_error_class = row
+        .get::<_, Option<String>>(7)?
+        .map(|value| {
+            PrValidationPollErrorClass::parse(&value).map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    7,
+                    rusqlite::types::Type::Text,
+                    Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, error)),
+                )
+            })
+        })
+        .transpose()?;
+    let poll_attempt = u64::try_from(row.get::<_, i64>(5)?).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            5,
+            rusqlite::types::Type::Integer,
+            Box::new(error),
+        )
+    })?;
+    let consecutive_error_count = u32::try_from(row.get::<_, i64>(6)?).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            6,
+            rusqlite::types::Type::Integer,
+            Box::new(error),
+        )
+    })?;
+    let rate_limit_remaining = row
+        .get::<_, Option<i64>>(8)?
+        .map(|value| {
+            u64::try_from(value).map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    8,
+                    rusqlite::types::Type::Integer,
+                    Box::new(error),
+                )
+            })
+        })
+        .transpose()?;
+    Ok(PrValidationAuthorityRecordSnapshot {
+        record,
+        updated_at: row.get(1)?,
+        last_polled_at: row.get(3)?,
+        next_poll_at: row.get(4)?,
+        poll_attempt,
+        consecutive_error_count,
+        last_error_class,
+        rate_limit_remaining,
+        rate_limit_reset_at: row.get(9)?,
+    })
+}
+
+fn pr_validation_page_position(
+    snapshot: &PrValidationAuthorityRecordSnapshot,
+) -> PrValidationAuthorityPagePosition {
+    PrValidationAuthorityPagePosition {
+        terminal_rank: u8::from(matches!(
+            snapshot.record.phase(),
+            PrValidationPhase::Settled | PrValidationPhase::Blocked | PrValidationPhase::Failed
+        )),
+        updated_at: snapshot.updated_at.clone(),
+        record_key: snapshot.record.key().as_str().to_string(),
+    }
+}
+
 // runtime projection 테이블들을 한 번씩 읽어 application port가 요구하는 snapshot 구조로 조립한다.
 // 저장 함수들은 table별 current row를 유지하고, 이 함수는 그 row들을 domain/application 타입으로 되돌리는 반대편이다.
 fn load_runtime_projection_snapshot(
@@ -3053,37 +3353,36 @@ fn load_runtime_event_log_snapshot(
         )
         .context("failed to count runtime events")?;
     let limit = request.bounded_limit() as i64;
-    let mut statement = connection
-        .prepare(
-            "SELECT sequence,
-                    event_kind,
-                    projection_kind,
-                    projection_key,
-                    observed_planning_revision,
-                    summary,
-                    recorded_at
+    let page_query = if after_sequence.is_some() {
+        "SELECT sequence, event_kind, projection_kind, projection_key,
+                observed_planning_revision, summary, payload_json, recorded_at
+         FROM (
+             SELECT sequence, event_kind, projection_kind, projection_key,
+                    observed_planning_revision, summary, payload_json, recorded_at
              FROM runtime_events
              WHERE (?1 IS NULL OR projection_kind = ?1)
                AND (?2 IS NULL OR projection_key = ?2)
-               AND (?3 IS NULL OR sequence > ?3)
-             ORDER BY sequence DESC
-             LIMIT ?4",
-        )
+               AND sequence > ?3
+             ORDER BY sequence ASC
+             LIMIT ?4
+         ) AS oldest_unseen
+         ORDER BY sequence DESC"
+    } else {
+        "SELECT sequence, event_kind, projection_kind, projection_key,
+                observed_planning_revision, summary, payload_json, recorded_at
+         FROM runtime_events
+         WHERE (?1 IS NULL OR projection_kind = ?1)
+           AND (?2 IS NULL OR projection_key = ?2)
+         ORDER BY sequence DESC
+         LIMIT ?4"
+    };
+    let mut statement = connection
+        .prepare(page_query)
         .context("failed to read runtime events")?;
     let rows = statement
         .query_map(
             params![projection_kind, projection_key, after_sequence, limit],
-            |row| {
-                Ok(ParallelModeRuntimeEventEntry::new(
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, i64>(4)?,
-                    row.get::<_, String>(5)?,
-                    row.get::<_, String>(6)?,
-                ))
-            },
+            decode_runtime_event_entry,
         )
         .context("failed to iterate runtime events")?;
 
@@ -3105,6 +3404,84 @@ fn load_runtime_event_log_snapshot(
         ParallelModeRuntimeEventsSnapshot::new(entries, total_event_count, empty_state)
             .with_event_cursor(event_cursor),
     )
+}
+
+fn decode_runtime_event_entry(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<ParallelModeRuntimeEventEntry> {
+    let event_kind = row.get::<_, String>(1)?;
+    let projection_kind = row.get::<_, String>(2)?;
+    let payload_json = row.get::<_, String>(6)?;
+    let mut entry = ParallelModeRuntimeEventEntry::new(
+        row.get::<_, i64>(0)?,
+        event_kind,
+        projection_kind.clone(),
+        row.get::<_, String>(3)?,
+        row.get::<_, i64>(4)?,
+        row.get::<_, String>(5)?,
+        row.get::<_, String>(7)?,
+    );
+    if projection_kind == "pr_validation" {
+        entry.severity = pr_validation_runtime_event_severity(&payload_json).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                6,
+                rusqlite::types::Type::Text,
+                Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, error)),
+            )
+        })?;
+    }
+    Ok(entry)
+}
+
+fn pr_validation_runtime_event_severity(
+    payload_json: &str,
+) -> std::result::Result<ParallelModeRuntimeEventSeverity, String> {
+    let payload = serde_json::from_str::<serde_json::Value>(payload_json)
+        .map_err(|error| format!("invalid semantic PR validation event payload: {error}"))?;
+    let phase = payload
+        .get("phase")
+        .filter(|value| !value.is_null())
+        .cloned()
+        .map(serde_json::from_value::<PrValidationPhase>)
+        .transpose()
+        .map_err(|error| format!("invalid semantic PR validation event phase: {error}"))?;
+    let error_class = payload
+        .get("error_class")
+        .filter(|value| !value.is_null())
+        .cloned()
+        .map(serde_json::from_value::<PrValidationPollErrorClass>)
+        .transpose()
+        .map_err(|error| format!("invalid semantic PR validation event error class: {error}"))?;
+
+    if matches!(
+        error_class,
+        Some(
+            PrValidationPollErrorClass::AuthenticationBlocked
+                | PrValidationPollErrorClass::PolicyBlocked
+                | PrValidationPollErrorClass::IdentityFailed
+                | PrValidationPollErrorClass::IntegrityFailed
+        )
+    ) || matches!(
+        phase,
+        Some(PrValidationPhase::Blocked | PrValidationPhase::Failed)
+    ) {
+        Ok(ParallelModeRuntimeEventSeverity::Danger)
+    } else if matches!(
+        error_class,
+        Some(
+            PrValidationPollErrorClass::RetryableProvider
+                | PrValidationPollErrorClass::AdmissionRetryable
+        )
+    ) || matches!(
+        phase,
+        Some(PrValidationPhase::RemediationQueued | PrValidationPhase::RemediationRunning)
+    ) {
+        Ok(ParallelModeRuntimeEventSeverity::Warning)
+    } else if phase == Some(PrValidationPhase::Settled) {
+        Ok(ParallelModeRuntimeEventSeverity::Success)
+    } else {
+        Ok(ParallelModeRuntimeEventSeverity::Info)
+    }
 }
 
 fn preserve_failed_start_dispatch_blocks(transaction: &Transaction<'_>) -> Result<usize> {

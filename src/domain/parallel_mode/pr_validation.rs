@@ -152,6 +152,262 @@ impl PrValidationCheckContext {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrValidationObservedCheckStatus {
+    Missing,
+    Pending,
+    Succeeded,
+    ActionableFailure,
+    PolicyBlocked,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrValidationObservedCheck {
+    context: PrValidationCheckContext,
+    status: PrValidationObservedCheckStatus,
+    latest_attempt: Option<u64>,
+    started_at: Option<String>,
+    completed_at: Option<String>,
+}
+
+impl PrValidationObservedCheck {
+    pub fn new(
+        context: PrValidationCheckContext,
+        status: PrValidationObservedCheckStatus,
+        latest_attempt: Option<u64>,
+        started_at: Option<String>,
+        completed_at: Option<String>,
+    ) -> Self {
+        Self {
+            context,
+            status,
+            latest_attempt,
+            started_at,
+            completed_at,
+        }
+    }
+
+    pub fn context(&self) -> &PrValidationCheckContext {
+        &self.context
+    }
+
+    pub fn status(&self) -> PrValidationObservedCheckStatus {
+        self.status
+    }
+
+    pub fn latest_attempt(&self) -> Option<u64> {
+        self.latest_attempt
+    }
+
+    pub fn started_at(&self) -> Option<&str> {
+        self.started_at.as_deref()
+    }
+
+    pub fn completed_at(&self) -> Option<&str> {
+        self.completed_at.as_deref()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrValidationObservedRunStatus {
+    Queued,
+    InProgress,
+    Succeeded,
+    Failed,
+    Cancelled,
+    Skipped,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrValidationObservedWorkflow {
+    name: String,
+    status: PrValidationObservedRunStatus,
+    run_attempt: u64,
+    started_at: Option<String>,
+    updated_at: Option<String>,
+}
+
+impl PrValidationObservedWorkflow {
+    pub fn new(
+        name: impl Into<String>,
+        status: PrValidationObservedRunStatus,
+        run_attempt: u64,
+        started_at: Option<String>,
+        updated_at: Option<String>,
+    ) -> Result<Self, String> {
+        let name = non_empty(name, "PR validation workflow name")?;
+        if name.len() > 200 {
+            return Err("PR validation workflow name must be at most 200 bytes".to_string());
+        }
+        if run_attempt == 0 {
+            return Err("PR validation workflow attempt must be positive".to_string());
+        }
+        Ok(Self {
+            name,
+            status,
+            run_attempt,
+            started_at,
+            updated_at,
+        })
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn status(&self) -> PrValidationObservedRunStatus {
+        self.status
+    }
+
+    pub fn run_attempt(&self) -> u64 {
+        self.run_attempt
+    }
+
+    pub fn started_at(&self) -> Option<&str> {
+        self.started_at.as_deref()
+    }
+
+    pub fn updated_at(&self) -> Option<&str> {
+        self.updated_at.as_deref()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrValidationObservedProviderLifecycle {
+    Finite,
+    Watchable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrValidationObservedProviderStatus {
+    Pending,
+    Complete,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrValidationObservedProvider {
+    key: String,
+    lifecycle: PrValidationObservedProviderLifecycle,
+    status: PrValidationObservedProviderStatus,
+    page_complete: bool,
+}
+
+impl PrValidationObservedProvider {
+    pub fn new(
+        key: impl Into<String>,
+        lifecycle: PrValidationObservedProviderLifecycle,
+        status: PrValidationObservedProviderStatus,
+        page_complete: bool,
+    ) -> Result<Self, String> {
+        let key = non_empty(key, "PR validation provider projection key")?;
+        if key.len() > 160 {
+            return Err(
+                "PR validation provider projection key must be at most 160 bytes".to_string(),
+            );
+        }
+        Ok(Self {
+            key,
+            lifecycle,
+            status,
+            page_complete,
+        })
+    }
+
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+
+    pub fn lifecycle(&self) -> PrValidationObservedProviderLifecycle {
+        self.lifecycle
+    }
+
+    pub fn status(&self) -> PrValidationObservedProviderStatus {
+        self.status
+    }
+
+    pub fn page_complete(&self) -> bool {
+        self.page_complete
+    }
+}
+
+/// Bounded, provider-neutral evidence retained for operator read models. It intentionally omits
+/// raw review/comment bodies, opaque provider IDs, cursors, credentials, and response payloads.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct PrValidationObservationProjection {
+    required_checks: Vec<PrValidationObservedCheck>,
+    optional_checks: Vec<PrValidationObservedCheck>,
+    workflows: Vec<PrValidationObservedWorkflow>,
+    providers: Vec<PrValidationObservedProvider>,
+}
+
+impl PrValidationObservationProjection {
+    pub fn new(
+        required_checks: Vec<PrValidationObservedCheck>,
+        optional_checks: Vec<PrValidationObservedCheck>,
+        workflows: Vec<PrValidationObservedWorkflow>,
+        providers: Vec<PrValidationObservedProvider>,
+    ) -> Result<Self, String> {
+        if required_checks.len() + optional_checks.len() > 64
+            || workflows.len() > 32
+            || providers.len() > 16
+        {
+            return Err(
+                "PR validation observation projection exceeded its bounded limits".to_string(),
+            );
+        }
+        for timestamp in required_checks
+            .iter()
+            .chain(&optional_checks)
+            .flat_map(|check| [check.started_at(), check.completed_at()])
+            .chain(
+                workflows
+                    .iter()
+                    .flat_map(|workflow| [workflow.started_at(), workflow.updated_at()]),
+            )
+            .flatten()
+        {
+            validate_observation_timestamp(timestamp)?;
+        }
+        Ok(Self {
+            required_checks,
+            optional_checks,
+            workflows,
+            providers,
+        })
+    }
+
+    pub fn required_checks(&self) -> &[PrValidationObservedCheck] {
+        &self.required_checks
+    }
+
+    pub fn optional_checks(&self) -> &[PrValidationObservedCheck] {
+        &self.optional_checks
+    }
+
+    pub fn workflows(&self) -> &[PrValidationObservedWorkflow] {
+        &self.workflows
+    }
+
+    pub fn providers(&self) -> &[PrValidationObservedProvider] {
+        &self.providers
+    }
+}
+
+fn validate_observation_timestamp(value: &str) -> Result<(), String> {
+    if value.len() > 64 || DateTime::parse_from_rfc3339(value).is_err() {
+        return Err(
+            "PR validation observation timestamps must be bounded RFC3339 values".to_string(),
+        );
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PrValidationCompletionSource {
     CheckRuns,
 }
@@ -853,6 +1109,7 @@ pub enum PrValidationEvent {
     IntegrationAttested(IntegrationAttestation),
     MergeObserved(PrValidationCommitSha),
     BeginPostMergeObservation,
+    ObservationProjected(PrValidationObservationProjection),
     ObservationCheckpointed {
         delivery_revision: u64,
         cursor: Option<String>,
@@ -876,6 +1133,7 @@ impl PrValidationEvent {
             Self::IntegrationAttested(_) => "integration_attested",
             Self::MergeObserved(_) => "merge_observed",
             Self::BeginPostMergeObservation => "begin_post_merge_observation",
+            Self::ObservationProjected(_) => "observation_projected",
             Self::ObservationCheckpointed { .. } => "observation_checkpointed",
             Self::Settle(_) => "settle",
             Self::Block(_) => "block",
@@ -927,6 +1185,8 @@ pub struct PrValidationRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     merge_sha: Option<PrValidationCommitSha>,
     observation_revision: u64,
+    #[serde(default)]
+    observation_projection: PrValidationObservationProjection,
     observation_cursor: Option<String>,
     evidence_fingerprint: Option<String>,
     post_merge_checkpoint_revision: Option<u64>,
@@ -952,6 +1212,7 @@ impl PrValidationRecord {
             integration_attestation: None,
             merge_sha: None,
             observation_revision: 0,
+            observation_projection: PrValidationObservationProjection::default(),
             observation_cursor: None,
             evidence_fingerprint: None,
             post_merge_checkpoint_revision: None,
@@ -1056,6 +1317,10 @@ impl PrValidationRecord {
 
     pub fn observation_revision(&self) -> u64 {
         self.observation_revision
+    }
+
+    pub fn observation_projection(&self) -> &PrValidationObservationProjection {
+        &self.observation_projection
     }
 
     pub fn observation_cursor(&self) -> Option<&str> {
@@ -1361,6 +1626,7 @@ impl PrValidationRecord {
                 next.integration_attestation = None;
                 next.merge_sha = None;
                 next.observation_cursor = None;
+                next.observation_projection = PrValidationObservationProjection::default();
                 next.evidence_fingerprint = None;
                 next.post_merge_checkpoint_revision = None;
                 next.completion = None;
@@ -1396,6 +1662,16 @@ impl PrValidationRecord {
                     && next.evidence_sha().is_some() =>
             {
                 next.phase = PrValidationPhase::PostMergeObservation;
+            }
+            PrValidationEvent::ObservationProjected(projection)
+                if !matches!(
+                    next.phase,
+                    PrValidationPhase::Registered
+                        | PrValidationPhase::Blocked
+                        | PrValidationPhase::Failed
+                ) =>
+            {
+                next.observation_projection = projection;
             }
             PrValidationEvent::ObservationCheckpointed {
                 delivery_revision,

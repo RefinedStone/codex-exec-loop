@@ -937,13 +937,19 @@ fn ensure_schema(connection: &mut Connection) -> Result<()> {
     connection
         .execute_batch("PRAGMA foreign_keys = ON; PRAGMA secure_delete = ON;")
         .context("failed to enable global Telegram runner store safety pragmas")?;
-    let application_id = connection
+    // Serialize the first metadata read with schema creation/migration. Separate autocommit
+    // PRAGMA reads can otherwise straddle another opener's commit and observe an impossible
+    // mixed snapshot such as application_id=0 with user_version=3.
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .context("failed to open global Telegram runner schema transaction")?;
+    let application_id = transaction
         .pragma_query_value(None, "application_id", |row| row.get::<_, i64>(0))
         .context("failed to inspect global Telegram runner store application id")?;
-    let schema_version = connection
+    let schema_version = transaction
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .context("failed to inspect global Telegram runner store schema version")?;
-    let object_count = connection
+    let object_count = transaction
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master
              WHERE name NOT LIKE 'sqlite_%'",
@@ -952,9 +958,6 @@ fn ensure_schema(connection: &mut Connection) -> Result<()> {
         )
         .context("failed to inspect global Telegram runner store objects")?;
     if application_id == 0 && schema_version == 0 && object_count == 0 {
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .context("failed to open global Telegram runner schema transaction")?;
         create_global_telegram_schema(&transaction)?;
         transaction
             .pragma_update(None, "application_id", GLOBAL_TELEGRAM_STORE_APPLICATION_ID)
@@ -962,26 +965,23 @@ fn ensure_schema(connection: &mut Connection) -> Result<()> {
         transaction
             .pragma_update(None, "user_version", GLOBAL_TELEGRAM_STORE_SCHEMA_VERSION)
             .context("failed to mark global Telegram runner store schema version")?;
-        transaction
-            .commit()
-            .context("failed to commit global Telegram runner schema")?;
-        validate_global_telegram_schema(connection)?;
-        return Ok(());
-    }
-    if application_id != GLOBAL_TELEGRAM_STORE_APPLICATION_ID {
+    } else if application_id != GLOBAL_TELEGRAM_STORE_APPLICATION_ID {
         bail!(
             "unsupported global Telegram runner store identity or schema version: application_id={application_id}, schema_version={schema_version}"
         );
-    }
-    if schema_version == LEGACY_GLOBAL_TELEGRAM_STORE_SCHEMA_VERSION {
-        migrate_global_telegram_schema_v1(connection)?;
+    } else if schema_version == LEGACY_GLOBAL_TELEGRAM_STORE_SCHEMA_VERSION {
+        migrate_global_telegram_schema_v1_in_transaction(&transaction)?;
     } else if schema_version == PREVIOUS_GLOBAL_TELEGRAM_STORE_SCHEMA_VERSION {
-        migrate_global_telegram_schema_v2(connection)?;
+        migrate_global_telegram_schema_v2_in_transaction(&transaction)?;
     } else if schema_version != GLOBAL_TELEGRAM_STORE_SCHEMA_VERSION {
         bail!(
             "unsupported global Telegram runner store identity or schema version: application_id={application_id}, schema_version={schema_version}"
         );
     }
+    validate_global_telegram_schema(&transaction)?;
+    transaction
+        .commit()
+        .context("failed to commit global Telegram runner schema transaction")?;
     validate_global_telegram_schema(connection)
 }
 
@@ -1040,10 +1040,18 @@ fn create_global_telegram_schema(transaction: &Transaction<'_>) -> Result<()> {
         .context("failed to create global Telegram stream schema")
 }
 
+#[cfg(test)]
 fn migrate_global_telegram_schema_v2(connection: &mut Connection) -> Result<()> {
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .context("failed to open global Telegram v2 migration transaction")?;
+    migrate_global_telegram_schema_v2_in_transaction(&transaction)?;
+    transaction
+        .commit()
+        .context("failed to commit global Telegram v2 migration")
+}
+
+fn migrate_global_telegram_schema_v2_in_transaction(transaction: &Transaction<'_>) -> Result<()> {
     transaction
         .execute_batch(
             "ALTER TABLE telegram_global_runner_bindings
@@ -1052,23 +1060,17 @@ fn migrate_global_telegram_schema_v2(connection: &mut Connection) -> Result<()> 
         .context("failed to add Telegram process start identity to the v2 store")?;
     transaction
         .pragma_update(None, "user_version", GLOBAL_TELEGRAM_STORE_SCHEMA_VERSION)
-        .context("failed to mark global Telegram v3 schema")?;
-    transaction
-        .commit()
-        .context("failed to commit global Telegram v2 migration")
+        .context("failed to mark global Telegram v3 schema")
 }
 
-fn migrate_global_telegram_schema_v1(connection: &mut Connection) -> Result<()> {
-    let transaction = connection
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .context("failed to open global Telegram v1 migration transaction")?;
+fn migrate_global_telegram_schema_v1_in_transaction(transaction: &Transaction<'_>) -> Result<()> {
     transaction
         .execute_batch(
             "ALTER TABLE telegram_global_runner_bindings
                  RENAME TO telegram_global_runner_bindings_v1;",
         )
         .context("failed to preserve the global Telegram v1 binding table")?;
-    create_global_telegram_schema(&transaction)?;
+    create_global_telegram_schema(transaction)?;
     transaction
         .execute_batch(
             "INSERT INTO telegram_global_runner_bindings
@@ -1108,10 +1110,7 @@ fn migrate_global_telegram_schema_v1(connection: &mut Connection) -> Result<()> 
         .context("failed to remove migrated global Telegram v1 binding table")?;
     transaction
         .pragma_update(None, "user_version", GLOBAL_TELEGRAM_STORE_SCHEMA_VERSION)
-        .context("failed to mark global Telegram v3 schema")?;
-    transaction
-        .commit()
-        .context("failed to commit global Telegram v1 migration")
+        .context("failed to mark global Telegram v3 schema")
 }
 
 fn validate_global_telegram_schema(connection: &Connection) -> Result<()> {

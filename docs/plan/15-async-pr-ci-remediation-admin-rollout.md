@@ -487,14 +487,14 @@ provider를 pagination 완료와 혼동하지 않는다.
 
 권장 branch: `codex/admin-pr-validation-read-model`
 
-- [ ] bounded board/detail inbound query를 추가한다.
-- [ ] 모든 active record와 최근 terminal record를 stable order/cursor로 project한다.
-- [ ] Admin dashboard snapshot/view에 validation summary를 추가한다.
-- [ ] dashboard bootstrap과 bounded validation endpoint를 제공한다.
-- [ ] SSE가 typed validation event에 dashboard invalidation을 발생시킨다.
-- [ ] event severity가 phase/error class를 반영하게 한다.
-- [ ] secret/raw body/provider token redaction test를 추가한다.
-- [ ] 이 PR은 read-only로 유지한다.
+- [x] bounded board/detail inbound query를 추가한다.
+- [x] 모든 active record와 최근 terminal record를 stable order/cursor로 project한다.
+- [x] Admin dashboard snapshot/view에 validation summary를 추가한다.
+- [x] dashboard bootstrap과 bounded validation endpoint를 제공한다.
+- [x] SSE가 typed validation event에 dashboard invalidation을 발생시킨다.
+- [x] event severity가 phase/error class를 반영하게 한다.
+- [x] secret/raw body/provider token redaction test를 추가한다.
+- [x] 이 PR은 read-only로 유지한다.
 
 필수 테스트:
 

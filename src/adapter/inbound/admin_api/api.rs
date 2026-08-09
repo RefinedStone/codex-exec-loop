@@ -22,6 +22,10 @@ use crate::application::port::inbound::planning_admin_port::{
     PlanningAdminDraftLoadRequest, PlanningAdminDraftMutationRequest,
     PlanningAdminTaskDeleteRequest, PlanningAdminTaskMutationRequest,
 };
+use crate::application::port::inbound::pr_validation_query_port::{
+    PR_VALIDATION_BOARD_DEFAULT_LIMIT, PrValidationBoardCursorError, PrValidationBoardRequest,
+    PrValidationDetailRequest,
+};
 use axum::extract::{Json, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -52,6 +56,13 @@ pub(super) struct AkraEventsQuery {
 #[serde(rename_all = "camelCase")]
 pub(super) struct AkraStreamQuery {
     pub after_sequence: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct AkraValidationsQuery {
+    pub limit: Option<usize>,
+    pub cursor: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -97,7 +108,16 @@ struct AkraStreamFrame {
     events: Vec<RuntimeEventView>,
     control: AkraControlApiResponse,
     debug_harness: AdminDebugHarnessView,
+    validation: PrValidationStreamInvalidation,
     server_time: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PrValidationStreamInvalidation {
+    revision: Option<i64>,
+    changed: bool,
+    cursor_reset_required: bool,
 }
 
 fn akra_control_view(state: &AdminAppState, message: impl Into<String>) -> AkraControlApiResponse {
@@ -191,6 +211,7 @@ pub(super) async fn akra_stream_api(
     let mut first_frame = true;
     let mut last_control_signature = String::new();
     let mut last_debug_revision = 0;
+    let mut last_validation_revision = None;
     let mut interval = tokio::time::interval(Duration::from_millis(1_500));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -199,20 +220,32 @@ pub(super) async fn akra_stream_api(
         let debug_projection = state.admin_debug_port.projection();
         let debug_harness = map_harness_view(&debug_projection);
         let (feed, events) = build_admin_events_view(&state, 50, after_sequence);
+        // The validation board revision is the same authority event sequence carried by the
+        // already-loaded event feed. Reuse it so the SSE heartbeat never performs a second board
+        // and correlation scan merely to decide whether clients should invalidate their cursor.
+        let validation_revision = feed.event_cursor;
+        let validation_changed = validation_revision != last_validation_revision;
+        let validation_cursor_reset_required = !first_frame && validation_changed;
         let control_signature =
             serde_json::to_string(&control).expect("AKRA control projection should serialize");
         let control_changed = control_signature != last_control_signature;
-        let cursor_reset_required =
-            feed.incremental && feed.total_event_count > feed.visible_event_count;
+        let cursor_reset_required = after_sequence
+            .zip(feed.event_cursor)
+            .is_some_and(|(requested, authority)| requested > authority);
         let debug_changed = debug_harness.enabled && debug_harness.revision != last_debug_revision;
-        let refresh_dashboard =
-            first_frame || control_changed || debug_changed || !events.is_empty();
+        let refresh_dashboard = first_frame
+            || control_changed
+            || debug_changed
+            || validation_changed
+            || !events.is_empty();
         let reason = if first_frame {
             "connected"
         } else if cursor_reset_required {
             "cursor_reset"
         } else if !events.is_empty() {
             "runtime_event"
+        } else if validation_changed {
+            "validation"
         } else if control_changed {
             "control"
         } else if debug_changed {
@@ -221,12 +254,15 @@ pub(super) async fn akra_stream_api(
             "heartbeat"
         };
         let event_id = feed.newest_sequence;
-        if let Some(sequence) = event_id {
+        if cursor_reset_required {
+            after_sequence = None;
+        } else if let Some(sequence) = event_id {
             after_sequence = Some(sequence);
         }
         first_frame = false;
         last_control_signature = control_signature;
         last_debug_revision = debug_harness.revision;
+        last_validation_revision = validation_revision;
         let frame = AkraStreamFrame {
             schema_version: 1,
             reason,
@@ -236,6 +272,11 @@ pub(super) async fn akra_stream_api(
             events,
             control,
             debug_harness,
+            validation: PrValidationStreamInvalidation {
+                revision: validation_revision,
+                changed: validation_changed,
+                cursor_reset_required: validation_cursor_reset_required,
+            },
             server_time: chrono::Utc::now().to_rfc3339(),
         };
         let mut event = Event::default()
@@ -338,6 +379,45 @@ pub(super) async fn akra_events_api(
     }
     let (feed, events) = build_admin_events_view(&state, limit, query.after_sequence);
     Ok(Json(AkraEventsApiResponse { feed, events }).into_response())
+}
+
+pub(super) async fn akra_validations_api(
+    State(state): State<AdminAppState>,
+    Query(query): Query<AkraValidationsQuery>,
+) -> std::result::Result<Response, StatusCode> {
+    let request = PrValidationBoardRequest::new(
+        query.limit.unwrap_or(PR_VALIDATION_BOARD_DEFAULT_LIMIT),
+        query.cursor,
+    )
+    .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let board = state
+        .pr_validation_query_port
+        .load_board(request)
+        .map_err(|error| {
+            if error
+                .downcast_ref::<PrValidationBoardCursorError>()
+                .is_some()
+            {
+                StatusCode::BAD_REQUEST
+            } else {
+                internal_server_error(error)
+            }
+        })?;
+    Ok(Json(board).into_response())
+}
+
+pub(super) async fn akra_validation_detail_api(
+    State(state): State<AdminAppState>,
+    Path(record_key): Path<String>,
+) -> std::result::Result<Response, StatusCode> {
+    let request =
+        PrValidationDetailRequest::new(record_key).map_err(|_| StatusCode::BAD_REQUEST)?;
+    state
+        .pr_validation_query_port
+        .load_detail(request)
+        .map_err(internal_server_error)?
+        .map(|detail| Json(detail).into_response())
+        .ok_or(StatusCode::NOT_FOUND)
 }
 
 pub(super) async fn akra_debug_harness_api(

@@ -737,6 +737,16 @@ impl GithubPrValidationSnapshot {
         }
     }
 
+    /// Returns diagnostic workflow metadata for the selected check without making workflow runs
+    /// part of the success contract. Admin projections use only the bounded attempt/timestamp
+    /// fields and never retain provider IDs or payloads.
+    pub fn diagnostic_workflow_for_check(
+        &self,
+        run: &GithubValidationCheckRun,
+    ) -> Option<&GithubValidationWorkflowRun> {
+        self.latest_correlated_workflow(run)
+    }
+
     fn latest_correlated_workflow(
         &self,
         run: &GithubValidationCheckRun,

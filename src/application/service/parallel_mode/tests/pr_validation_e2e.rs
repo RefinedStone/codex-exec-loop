@@ -1319,7 +1319,10 @@ pub mod tests {
         .unwrap();
         let due_at = Utc::now() + TimeDelta::seconds(1);
         let first = thread::spawn(move || scheduler_a.run_due_once_at(due_at));
-        for _ in 0..100 {
+        // The full Windows test binary can briefly starve a newly spawned thread while many
+        // unrelated tests are active. Wait for the provider boundary, not for a sub-second
+        // scheduler assumption; a real failure still times out deterministically.
+        for _ in 0..600 {
             if github.calls.load(Ordering::SeqCst) == 1 {
                 break;
             }

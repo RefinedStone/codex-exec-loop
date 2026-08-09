@@ -26,9 +26,10 @@ use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityActiveDocumentMutation, PlanningAuthorityDistributorQueueRecord,
     PlanningAuthorityDocumentCommit, PlanningAuthorityDocumentSnapshot,
     PlanningAuthorityOfficialRefreshClaimStatus, PlanningAuthorityOfficialRefreshRecoveryStatus,
-    PlanningAuthorityPort, PlanningAuthorityRuntimeProjectionSnapshot, PrValidationPollLeaseClaim,
-    PrValidationPollLeaseClaimRequest, PrValidationPollLeaseRenewalRequest,
-    PrValidationPollSettlement,
+    PlanningAuthorityPort, PlanningAuthorityRuntimeProjectionSnapshot, PrValidationAuthorityPage,
+    PrValidationAuthorityPageRequest, PrValidationAuthorityRecordSnapshot,
+    PrValidationPollLeaseClaim, PrValidationPollLeaseClaimRequest,
+    PrValidationPollLeaseRenewalRequest, PrValidationPollSettlement,
 };
 use crate::application::port::outbound::planning_task_repository_port::{
     PlanningAuthoritySnapshotCommit, PlanningDirectionAuthorityCommit,
@@ -106,7 +107,11 @@ const TASK_LEDGER_VERSION_METADATA_KEY: &str = "task_authority_version";
 // SQLite wait absorbs ordinary transaction overlap without hiding a persistently wedged writer.
 const AUTHORITY_STORE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const AUTHORITY_STORE_SIDECAR_SUFFIXES: [&str; 3] = ["-journal", "-wal", "-shm"];
-const AUTHORITY_STORE_SIDECAR_IDENTITY_RETRIES: usize = 32;
+// SQLite can briefly replace or ACL-adjust a DELETE journal while another process performs its
+// first secure open. Keep retries bounded and below the database busy timeout; permanent denial
+// still fails closed, while legitimate Windows journal churn gets enough scheduling headroom.
+const AUTHORITY_STORE_SIDECAR_IDENTITY_RETRIES: usize = 200;
+const AUTHORITY_STORE_SIDECAR_IDENTITY_RETRY_DELAY: Duration = Duration::from_millis(5);
 #[derive(Default)]
 /*
 SQLite planning authority adapter의 값 타입이다.
@@ -1460,6 +1465,22 @@ impl PlanningAuthorityPort for SqlitePlanningAuthorityAdapter {
         Self::load_runtime_pr_validation_records(workspace_dir)
     }
 
+    fn load_runtime_pr_validation_page(
+        &self,
+        workspace_dir: &str,
+        request: &PrValidationAuthorityPageRequest,
+    ) -> Result<PrValidationAuthorityPage> {
+        Self::load_runtime_pr_validation_page(workspace_dir, request)
+    }
+
+    fn load_runtime_pr_validation_record_snapshot(
+        &self,
+        workspace_dir: &str,
+        record_key: &PrValidationRecordKey,
+    ) -> Result<Option<PrValidationAuthorityRecordSnapshot>> {
+        Self::load_runtime_pr_validation_record_snapshot(workspace_dir, record_key)
+    }
+
     fn load_due_runtime_pr_validation_record_keys(
         &self,
         workspace_dir: &str,
@@ -1800,7 +1821,7 @@ fn prepare_private_authority_sidecar_files(path: &Path) -> Result<Vec<File>> {
 }
 
 fn authority_sidecar_identity_retry_delay() {
-    std::thread::sleep(Duration::from_millis(1));
+    std::thread::sleep(AUTHORITY_STORE_SIDECAR_IDENTITY_RETRY_DELAY);
 }
 
 fn authority_store_sidecar_path(path: &Path, suffix: &str) -> PathBuf {
@@ -2045,9 +2066,11 @@ fn windows_sidecar_file_identity(file: &File) -> Result<Option<WindowsFileIdenti
 
 #[cfg(windows)]
 fn windows_sidecar_io_error_is_transient(error: &std::io::Error) -> bool {
-    use windows_sys::Win32::Foundation::ERROR_DELETE_PENDING;
+    use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_DELETE_PENDING};
 
     error.kind() == std::io::ErrorKind::NotFound
+        || error.kind() == std::io::ErrorKind::PermissionDenied
+        || error.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32)
         || error.raw_os_error() == Some(ERROR_DELETE_PENDING as i32)
 }
 
