@@ -379,6 +379,9 @@ pub(super) fn ensure_schema(
     if previous_schema_version.is_none_or(|version| version < 13) {
         migrate_pr_validation_scheduler_projection(&transaction)?;
     }
+    if previous_schema_version.is_some_and(|version| version < 14) {
+        migrate_pr_validation_review_watch_projection(&transaction)?;
+    }
     upsert_metadata(
         &transaction,
         "schema_version",
@@ -581,6 +584,62 @@ fn migrate_pr_validation_scheduler_projection(connection: &Connection) -> Result
             )
             .with_context(|| {
                 format!("failed to migrate PR validation scheduler record `{record_key}`")
+            })?;
+    }
+    Ok(())
+}
+
+fn migrate_pr_validation_review_watch_projection(connection: &Connection) -> Result<()> {
+    let rows = {
+        let mut statement = connection
+            .prepare(
+                "SELECT record_key, updated_at, content
+                 FROM runtime_pr_validation_records
+                 WHERE validation_phase = 'Settled'
+                 ORDER BY record_key",
+            )
+            .context("failed to prepare PR validation review-watch migration")?;
+        statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for (record_key, updated_at, content) in rows {
+        let record = serde_json::from_str::<PrValidationRecord>(&content).with_context(|| {
+            format!("failed to deserialize PR validation review-watch record `{record_key}`")
+        })?;
+        let migrated = record.clone().with_migrated_review_watch_completion();
+        if migrated == record && !migrated.review_watch_active() {
+            continue;
+        }
+        let migrated_content = serde_json::to_string(&migrated).with_context(|| {
+            format!("failed to serialize PR validation review-watch record `{record_key}`")
+        })?;
+        let review_watch_active = i64::from(migrated.review_watch_active());
+        connection
+            .execute(
+                "UPDATE runtime_pr_validation_records
+                 SET content = ?2,
+                     review_watch_active = ?3,
+                     next_poll_at = CASE
+                         WHEN ?3 = 1 THEN COALESCE(next_poll_at, ?4)
+                         ELSE next_poll_at
+                     END
+                 WHERE record_key = ?1",
+                params![
+                    record_key,
+                    migrated_content,
+                    review_watch_active,
+                    updated_at,
+                ],
+            )
+            .with_context(|| {
+                format!("failed to migrate PR validation review-watch record `{record_key}`")
             })?;
     }
     Ok(())

@@ -12,7 +12,7 @@ use crate::application::port::outbound::github_pr_validation_port::{
     GithubExpectedCheckStatus, GithubPostMergeValidationDecision, GithubPrMergeState,
     GithubPrValidationError, GithubPrValidationErrorClass, GithubPrValidationObservationRequest,
     GithubPrValidationPort, GithubPrValidationSnapshot, GithubValidationProviderMetadata,
-    GithubValidationSourceLifecycle, GithubValidationSourceStatus,
+    GithubValidationSource, GithubValidationSourceLifecycle, GithubValidationSourceStatus,
 };
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::{
@@ -953,7 +953,11 @@ fn actionable_findings(
 ) -> Result<Vec<PrValidationFinding>, String> {
     let target_sha = commit_sha(&snapshot.target_sha)?;
     let mut findings = Vec::new();
-    for activity in &snapshot.activities {
+    let reviews_complete = snapshot
+        .sources
+        .iter()
+        .any(|source| source.source == GithubValidationSource::Reviews && source.is_complete());
+    for activity in policy.effective_activities(&snapshot.activities, reviews_complete) {
         let ActionableFindingDecision::Admit(admission) =
             policy.decide(activity, &snapshot.target_sha)
         else {

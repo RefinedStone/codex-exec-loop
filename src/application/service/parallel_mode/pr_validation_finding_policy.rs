@@ -1,3 +1,8 @@
+use std::cmp::Ordering;
+use std::collections::BTreeMap;
+
+use chrono::{DateTime, Utc};
+
 use crate::application::port::outbound::github_pr_validation_port::{
     GithubValidationActivity, GithubValidationActivityKind, GithubValidationReviewState,
 };
@@ -95,18 +100,27 @@ impl ActionableFindingPolicy {
                     )
                 }
             }
-            GithubValidationActivityKind::ReviewThread => match activity.thread_resolved {
-                Some(false) => Self::admit(
-                    "review_thread",
-                    "unresolved pull request review thread requires remediation",
-                ),
-                Some(true) => {
-                    ActionableFindingDecision::Ignore(ActionableFindingIgnoreReason::ResolvedThread)
+            GithubValidationActivityKind::ReviewThread => {
+                if activity.body_marker.is_explicit_command() {
+                    Self::admit(
+                        "review_thread_command",
+                        "pull request review thread explicitly requested remediation",
+                    )
+                } else {
+                    match activity.thread_resolved {
+                        Some(false) => Self::admit(
+                            "review_thread",
+                            "unresolved pull request review thread requires remediation",
+                        ),
+                        Some(true) => ActionableFindingDecision::Ignore(
+                            ActionableFindingIgnoreReason::ResolvedThread,
+                        ),
+                        None => ActionableFindingDecision::Ignore(
+                            ActionableFindingIgnoreReason::UntrustedThreadResolution,
+                        ),
+                    }
                 }
-                None => ActionableFindingDecision::Ignore(
-                    ActionableFindingIgnoreReason::UntrustedThreadResolution,
-                ),
-            },
+            }
             GithubValidationActivityKind::ReviewComment => {
                 if activity.body_marker.is_explicit_command() {
                     Self::admit(
@@ -125,6 +139,70 @@ impl ActionableFindingPolicy {
     fn admit(source: &'static str, summary: &'static str) -> ActionableFindingDecision {
         ActionableFindingDecision::Admit(ActionableFindingAdmission { source, summary })
     }
+
+    /// Reduces review history to the latest effective submission per case-insensitive actor and
+    /// target SHA before semantic admission. A paginated review source is deliberately withheld:
+    /// an approval on a later page must be able to supersede an earlier change request before any
+    /// remediation task is created.
+    pub fn effective_activities<'a>(
+        &self,
+        activities: &'a [GithubValidationActivity],
+        reviews_complete: bool,
+    ) -> Vec<&'a GithubValidationActivity> {
+        let mut effective = Vec::new();
+        let mut latest_reviews =
+            BTreeMap::<(String, Option<String>), &'a GithubValidationActivity>::new();
+        for activity in activities {
+            if activity.kind != GithubValidationActivityKind::Review {
+                effective.push(activity);
+                continue;
+            }
+            if !reviews_complete {
+                continue;
+            }
+            let Some(actor) = activity.actor.as_ref() else {
+                effective.push(activity);
+                continue;
+            };
+            let key = (
+                actor.login.to_ascii_lowercase(),
+                activity
+                    .commit_sha
+                    .as_ref()
+                    .map(|sha| sha.as_str().to_string()),
+            );
+            match latest_reviews.get(&key) {
+                Some(current) if review_activity_order(activity, current) != Ordering::Greater => {}
+                _ => {
+                    latest_reviews.insert(key, activity);
+                }
+            }
+        }
+        effective.extend(latest_reviews.into_values());
+        effective.sort_by(|left, right| {
+            left.observed_at
+                .cmp(&right.observed_at)
+                .then_with(|| left.kind.cmp(&right.kind))
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        effective
+    }
+}
+
+fn review_activity_order(
+    left: &GithubValidationActivity,
+    right: &GithubValidationActivity,
+) -> Ordering {
+    normalized_timestamp(&left.observed_at)
+        .cmp(&normalized_timestamp(&right.observed_at))
+        .then_with(|| left.observed_at.cmp(&right.observed_at))
+        .then_with(|| left.id.cmp(&right.id))
+}
+
+fn normalized_timestamp(value: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|timestamp| timestamp.with_timezone(&Utc))
 }
 
 #[cfg(test)]
@@ -215,8 +293,11 @@ mod tests {
             activity(GithubValidationActivityKind::ReviewThread).with_thread_resolved(false);
         let command = activity(GithubValidationActivityKind::IssueComment)
             .with_body_marker(GithubValidationBodyMarker::AkraRemediate);
+        let resolved_thread_command = activity(GithubValidationActivityKind::ReviewThread)
+            .with_thread_resolved(true)
+            .with_body_marker(GithubValidationBodyMarker::AkraFix);
 
-        for candidate in [&changes, &thread, &command] {
+        for candidate in [&changes, &thread, &command, &resolved_thread_command] {
             assert!(matches!(
                 policy.decide(candidate, &GithubCommitSha::new(SHA)),
                 ActionableFindingDecision::Admit(_)
@@ -233,5 +314,44 @@ mod tests {
             ActionableFindingPolicy::default().decide(&candidate, &GithubCommitSha::new(SHA)),
             ActionableFindingDecision::Ignore(ActionableFindingIgnoreReason::PastRevision)
         );
+    }
+
+    #[test]
+    fn latest_review_per_actor_and_sha_supersedes_earlier_change_requests() {
+        let policy = ActionableFindingPolicy::default();
+        let changes = activity(GithubValidationActivityKind::Review)
+            .with_review_state(GithubValidationReviewState::ChangesRequested);
+        let approved = GithubValidationActivity::new(
+            GithubOpaqueId::new("activity:2"),
+            GithubValidationActivityKind::Review,
+            "2026-08-10T00:01:00Z",
+        )
+        .with_commit_sha(GithubCommitSha::new(SHA))
+        .with_actor(Some(GithubValidationActor::new(
+            "REVIEWER",
+            GithubValidationActorKind::User,
+        )))
+        .with_review_state(GithubValidationReviewState::Approved);
+
+        let activities = [changes, approved];
+        let effective = policy.effective_activities(&activities, true);
+
+        assert_eq!(effective.len(), 1);
+        assert_eq!(effective[0].id.as_str(), "activity:2");
+        assert_eq!(
+            policy.decide(effective[0], &GithubCommitSha::new(SHA)),
+            ActionableFindingDecision::Ignore(
+                ActionableFindingIgnoreReason::NonActionableReviewState
+            )
+        );
+    }
+
+    #[test]
+    fn paginated_review_history_is_withheld_until_latest_state_is_known() {
+        let policy = ActionableFindingPolicy::default();
+        let changes = activity(GithubValidationActivityKind::Review)
+            .with_review_state(GithubValidationReviewState::ChangesRequested);
+
+        assert!(policy.effective_activities(&[changes], false).is_empty());
     }
 }

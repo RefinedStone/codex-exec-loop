@@ -243,7 +243,7 @@ impl GithubValidationSourceObservation {
         }
     }
 
-    fn is_complete(&self) -> bool {
+    pub fn is_complete(&self) -> bool {
         self.status == GithubValidationSourceStatus::Complete && self.next_cursor.is_none()
     }
 }

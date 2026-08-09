@@ -40,9 +40,12 @@ query AkraPullRequestReviewThreads(
         nodes {
           id
           isResolved
-          comments(first: 1) {
+          comments(first: 100) {
+            totalCount
+            pageInfo { hasNextPage endCursor }
             nodes {
               id
+              replyTo { id }
               body
               updatedAt
               author { login __typename }
@@ -907,41 +910,82 @@ fn normalize_review_threads(
 ) -> std::result::Result<Vec<GithubValidationActivity>, GithubPrValidationError> {
     let mut activities = Vec::new();
     for row in rows.into_iter().flatten() {
-        let root = row
+        ensure_page_bound(&row.comments.nodes, "graphql:review-thread-comments")
+            .map_err(|error| GithubPrValidationError::integrity_failed(error.to_string()))?;
+        if row.comments.page_info.has_next_page
+            || row.comments.total_count != row.comments.nodes.len()
+        {
+            return Err(GithubPrValidationError::integrity_failed(
+                "GitHub review thread comments exceeded the bounded observation page",
+            ));
+        }
+        let comments = row
             .comments
             .nodes
             .into_iter()
             .flatten()
-            .next()
-            .ok_or_else(|| {
-                GithubPrValidationError::integrity_failed(
-                    "GitHub review thread omitted its root comment",
-                )
-            })?;
-        let commit = root.commit.ok_or_else(|| {
+            .map(normalize_review_thread_comment)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let mut roots = comments.iter().filter(|comment| comment.is_root);
+        let root = roots.next().ok_or_else(|| {
             GithubPrValidationError::integrity_failed(
-                "GitHub review thread root omitted its commit identity",
+                "GitHub review thread omitted its root comment",
             )
         })?;
-        ensure_commit_sha(&commit.oid, "review thread commit")
-            .map_err(|error| GithubPrValidationError::integrity_failed(error.to_string()))?;
-        let observed_at =
-            normalize_provider_timestamp(Some(root.updated_at), "review thread root update")
-                .map_err(|error| GithubPrValidationError::integrity_failed(error.to_string()))?
-                .expect("review thread update was supplied");
+        if roots.next().is_some() {
+            return Err(GithubPrValidationError::integrity_failed(
+                "GitHub review thread returned multiple root comments",
+            ));
+        }
+        let semantic_comment = comments
+            .iter()
+            .filter(|comment| {
+                comment.body_marker.is_explicit_command()
+                    && comment.actor.as_ref().is_some_and(|actor| actor.is_human())
+            })
+            .max_by(|left, right| {
+                left.observed_at
+                    .cmp(&right.observed_at)
+                    .then_with(|| left.id.cmp(&right.id))
+            })
+            .unwrap_or(root);
         activities.push(
             GithubValidationActivity::new(
                 row.id.opaque("review-thread"),
                 GithubValidationActivityKind::ReviewThread,
-                observed_at,
+                semantic_comment.observed_at.clone(),
             )
-            .with_commit_sha(GithubCommitSha::new(commit.oid))
-            .with_actor(normalize_graphql_actor(root.author))
-            .with_body_marker(explicit_body_marker(&root.body))
+            .with_commit_sha(semantic_comment.commit_sha.clone())
+            .with_actor(semantic_comment.actor.clone())
+            .with_body_marker(semantic_comment.body_marker)
             .with_thread_resolved(row.is_resolved),
         );
     }
     Ok(activities)
+}
+
+fn normalize_review_thread_comment(
+    row: ReviewThreadCommentGraphqlNode,
+) -> std::result::Result<NormalizedReviewThreadComment, GithubPrValidationError> {
+    let commit = row.commit.ok_or_else(|| {
+        GithubPrValidationError::integrity_failed(
+            "GitHub review thread comment omitted its commit identity",
+        )
+    })?;
+    ensure_commit_sha(&commit.oid, "review thread comment commit")
+        .map_err(|error| GithubPrValidationError::integrity_failed(error.to_string()))?;
+    let observed_at =
+        normalize_provider_timestamp(Some(row.updated_at), "review thread comment update")
+            .map_err(|error| GithubPrValidationError::integrity_failed(error.to_string()))?
+            .expect("review thread comment update was supplied");
+    Ok(NormalizedReviewThreadComment {
+        id: row.id.opaque("review-comment"),
+        is_root: row.reply_to.is_none(),
+        observed_at,
+        commit_sha: GithubCommitSha::new(commit.oid),
+        actor: normalize_graphql_actor(row.author),
+        body_marker: explicit_body_marker(&row.body),
+    })
 }
 
 fn normalize_review_state(state: &str) -> GithubValidationReviewState {
@@ -1211,15 +1255,18 @@ struct ReviewThreadGraphqlNode {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ReviewThreadCommentsGraphqlConnection {
+    total_count: usize,
+    page_info: GraphqlPageInfo,
     nodes: Vec<Option<ReviewThreadCommentGraphqlNode>>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ReviewThreadCommentGraphqlNode {
-    #[allow(dead_code)]
     id: ProviderId,
+    reply_to: Option<GraphqlCommentIdentityResponse>,
     body: String,
     updated_at: String,
     author: Option<GraphqlActorResponse>,
@@ -1236,6 +1283,21 @@ struct GraphqlActorResponse {
 #[derive(Deserialize)]
 struct GraphqlCommitResponse {
     oid: String,
+}
+
+#[derive(Deserialize)]
+struct GraphqlCommentIdentityResponse {
+    #[allow(dead_code)]
+    id: ProviderId,
+}
+
+struct NormalizedReviewThreadComment {
+    id: GithubOpaqueId,
+    is_root: bool,
+    observed_at: String,
+    commit_sha: GithubCommitSha,
+    actor: Option<GithubValidationActor>,
+    body_marker: GithubValidationBodyMarker,
 }
 
 #[derive(Deserialize)]

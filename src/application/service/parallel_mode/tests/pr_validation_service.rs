@@ -293,6 +293,14 @@ fn approved_lgtm_bot_self_resolved_and_past_revision_activity_admit_nothing() {
     let mut observed = snapshot(HEAD_A, GithubValidationRunStatus::Succeeded);
     observed.activities = vec![
         GithubValidationActivity::new(
+            GithubOpaqueId::new("review:superseded-changes"),
+            GithubValidationActivityKind::Review,
+            "2026-08-07T23:59:59Z",
+        )
+        .with_commit_sha(GithubCommitSha::new(HEAD_A))
+        .with_actor(human())
+        .with_review_state(GithubValidationReviewState::ChangesRequested),
+        GithubValidationActivity::new(
             GithubOpaqueId::new("review:approved"),
             GithubValidationActivityKind::Review,
             "2026-08-08T00:00:00Z",
@@ -377,6 +385,51 @@ fn approved_lgtm_bot_self_resolved_and_past_revision_activity_admit_nothing() {
         .unwrap()
         .unwrap();
     assert!(record.finding_keys().is_empty());
+}
+
+#[test]
+fn paginated_review_history_does_not_admit_before_the_latest_state_is_observed() {
+    let mut observed = snapshot(HEAD_A, GithubValidationRunStatus::Succeeded);
+    let review_source = observed
+        .sources
+        .iter_mut()
+        .find(|source| source.source == GithubValidationSource::Reviews)
+        .expect("review source should exist");
+    review_source.status = GithubValidationSourceStatus::Paginated;
+    review_source.next_cursor = Some(GithubValidationCursor::new("reviews:2"));
+    observed.next_cursor = Some(GithubValidationCursor::new("snapshot:reviews:2"));
+    observed.activities.push(
+        GithubValidationActivity::new(
+            GithubOpaqueId::new("review:changes-page-1"),
+            GithubValidationActivityKind::Review,
+            "2026-08-08T00:00:00Z",
+        )
+        .with_commit_sha(GithubCommitSha::new(HEAD_A))
+        .with_actor(Some(GithubValidationActor::new(
+            "reviewer",
+            GithubValidationActorKind::User,
+        )))
+        .with_review_state(GithubValidationReviewState::ChangesRequested),
+    );
+    let (repo, observation, remediation) =
+        setup("validation-paginated-review-history", vec![observed]);
+    let service = test_parallel_mode_service();
+    service
+        .persist_pr_validation_record(
+            &repo.workspace_dir(),
+            &repo.pool_root(),
+            None,
+            &registered_record(),
+        )
+        .unwrap();
+
+    assert_eq!(
+        service
+            .poll_pr_validation(&observation, &remediation, request(&repo, 1, HEAD_A))
+            .unwrap(),
+        PrValidationPollResult::Waiting
+    );
+    assert!(remediation.deliveries.lock().unwrap().is_empty());
 }
 
 #[test]
