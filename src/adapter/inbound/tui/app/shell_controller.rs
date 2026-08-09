@@ -1131,6 +1131,15 @@ impl NativeTuiApp {
             }
             return true;
         }
+        if self.shell.chrome.shell_overlay == ShellOverlay::Supersession
+            && self.parallel_mode_prompt_input_locked()
+        {
+            // Loading owns the focused board but not the hidden task draft.
+            // Preserve explicit board controls while consuming every key before
+            // it can reach the ordinary composer pipeline.
+            let _ = self.handle_supersession_overlay_key(key);
+            return true;
+        }
         if self.shell.chrome.shell_overlay == ShellOverlay::WorkCenter {
             return self.handle_work_center_overlay_key(key);
         }
@@ -1138,10 +1147,10 @@ impl NativeTuiApp {
             return true;
         }
         if self.shell.chrome.shell_overlay == ShellOverlay::Supersession {
-            // Focused Parallel Operations owns the full main buffer. Unhandled
-            // text must not leak into the hidden composer; close the board first
-            // to resume ordinary prompt editing.
-            return true;
+            // Focused Parallel Operations and the task composer share one frame.
+            // The board owns only its explicit shortcuts; every other key
+            // continues through the ordinary composer pipeline.
+            return false;
         }
         if self.shell.chrome.shell_overlay == ShellOverlay::ModelSelection {
             return self.handle_model_selection_overlay_key(key);

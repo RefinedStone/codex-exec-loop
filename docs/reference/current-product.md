@@ -183,12 +183,17 @@ detail, optional role profile, distributor head, queue state, and withheld-dispa
 read-only projection; a missing join is shown as `DESYNC` or `unknown`, never invented progress.
 Accepted dispatch work is visually separate from active leases.
 
-Selection is keyed by slot/session identity and survives projection reorder on refresh. `Enter` or
-`Space` inspects the selected lane, `V` opens the read-only active-agent picker, `Ctrl+R` refreshes,
-`Ctrl+P` disables parallel mode, and `Esc` closes the focused board. Closing restores the unchanged
-composer while the enabled passive projection continues; submitting a parallel task reopens the
-board so dispatch progress is visible. The 80-column layout stacks lanes before selected detail,
-while 120- and 160-column layouts show lifecycle, lanes, and detail together.
+Selection is keyed by slot/session identity and survives projection reorder on refresh. With an
+empty task composer, `Tab`, `Shift+Tab`, and the arrow keys navigate the board and `Enter` inspects
+the selected lane. `Ctrl+R` refreshes, `Ctrl+P` disables parallel mode, `:peek` opens the read-only
+active-agent picker, and `Esc` closes the focused board. Once task input is non-empty, navigation,
+printable keys, whitespace, and `Enter` belong to the composer so work can be submitted without
+leaving Parallel Operations. The composer remains hidden and locked only while the supervisor
+projection is loading; an existing draft is preserved until loading finishes. A genuine readiness
+blocker remains the board's first actionable fact after loading and does not take task input away.
+Closing preserves the draft while the enabled passive projection continues. The 80-column layout
+stacks lanes before selected detail, while 120- and 160-column layouts show lifecycle, lanes, and
+detail together; each ready focused layout reserves a composer tail.
 
 Parallel event delivery keeps one generation-qualified canonical event window. The frame capture
 turns it into one app-owned `ParallelLiveStreamModel`, finalizes geometry before drawing, and never

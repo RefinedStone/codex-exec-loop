@@ -9,7 +9,14 @@ use ratatui::layout::Position;
 use super::*;
 use crate::adapter::inbound::tui::app::shell_runtime::ShellRuntime;
 use crate::adapter::inbound::tui::app::test_helpers::test_native_tui_app;
+use crate::core::app::CoreInput;
 use crate::domain::conversation::ConversationMessageKind;
+use crate::domain::parallel_mode::{
+    ParallelModeAgentRosterSnapshot, ParallelModeDistributorSnapshot,
+    ParallelModePoolBoardSnapshot, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
+    ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
+    ParallelModeSupervisorState,
+};
 
 fn ready_conversation_mut(app: &mut NativeTuiApp) -> &mut ConversationViewModel {
     let ConversationState::Ready(conversation) = &mut app.conversation.lifecycle.conversation_state
@@ -17,6 +24,30 @@ fn ready_conversation_mut(app: &mut NativeTuiApp) -> &mut ConversationViewModel 
         panic!("test app should contain a ready conversation");
     };
     conversation
+}
+
+fn seed_ready_parallel_mode(app: &mut NativeTuiApp) {
+    let workspace = app.planning_workspace_directory();
+    app.set_parallel_mode_enabled_for_test(true);
+    app.dispatch_client_event(CoreInput::ParallelModeReadinessProjectionChanged(Some(
+        Box::new(ParallelModeReadinessSnapshot::new(
+            &workspace,
+            ParallelModeReadinessState::Ready,
+            Vec::new(),
+            None,
+        )),
+    )));
+    app.dispatch_client_event(CoreInput::ParallelModeSupervisorProjectionChanged(Some(
+        Box::new(ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Supervise,
+            &workspace,
+            ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "ready", Vec::new()),
+            ParallelModeAgentRosterSnapshot::new(Vec::new(), "idle"),
+            ParallelModeSupervisorDetailSnapshot::new(None, "idle"),
+            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "idle"),
+            None,
+        )),
+    )));
 }
 
 fn render(app: &mut NativeTuiApp, width: u16, height: u16) -> String {
@@ -181,6 +212,44 @@ fn focused_composer_uses_a_complete_frame_and_distinct_tail_surfaces() {
             .bg,
         AkraTheme::STATUS_SURFACE_BACKGROUND
     );
+}
+
+#[test]
+fn focused_parallel_operations_renders_the_cjk_task_composer() {
+    let mut app = test_native_tui_app();
+    seed_ready_parallel_mode(&mut app);
+    ready_conversation_mut(&mut app).composer.input_buffer = "verify 작업".to_string();
+    app.show_supersession_overlay();
+
+    let buffer = render_buffer(&mut app, 120, 32);
+    let screen = buffer_text(&buffer);
+    let glyph_position = |glyph: &str| {
+        (0..buffer.area.height).find_map(|row| {
+            (0..buffer.area.width)
+                .find(|column| {
+                    buffer
+                        .cell(Position::new(*column, row))
+                        .is_some_and(|cell| cell.symbol() == glyph)
+                })
+                .map(|column| Position::new(column, row))
+        })
+    };
+    let first_cjk_glyph = glyph_position("작").expect("first CJK task glyph should render");
+    let second_cjk_glyph = glyph_position("업").expect("second CJK task glyph should render");
+
+    assert!(screen.contains("verify"));
+    assert_eq!(first_cjk_glyph.y, second_cjk_glyph.y);
+    assert_eq!(
+        second_cjk_glyph.x,
+        first_cjk_glyph.x.saturating_add(2),
+        "Ratatui should place adjacent full-width CJK glyphs without clipping:\n{screen}"
+    );
+
+    if std::env::var_os("AKRA_CAPTURE_PARALLEL_COMPOSER").is_some() {
+        println!(
+            "\n--- AKRA PARALLEL COMPOSER 120x32 ---\n{screen}\n--- END PARALLEL COMPOSER FRAME ---"
+        );
+    }
 }
 
 #[test]

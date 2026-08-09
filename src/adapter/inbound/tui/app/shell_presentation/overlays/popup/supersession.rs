@@ -120,7 +120,7 @@ fn build_command_hint_lines(
      * to only "Ctrl+R" while off/close/peek remain hidden below it.
      */
     let primary = if parallel_mode_enabled && focused_full_viewport {
-        "Enter inspect  ·  V agent view  ·  Ctrl+R refresh  ·  Ctrl+P off  ·  Esc close"
+        "Ctrl+R refresh  ·  Ctrl+P off  ·  Ctrl+O/Esc close"
     } else if parallel_mode_enabled {
         "Ctrl+O board  ·  :parallel refresh  ·  :peek agents  ·  :parallel off"
     } else if readiness_allows_parallel_mode {
@@ -129,9 +129,9 @@ fn build_command_hint_lines(
         "Ctrl+R refresh  ·  fix readiness then :parallel  ·  Ctrl+O/Esc/Ctrl+C close"
     };
     let secondary = if focused_full_viewport && prompt_input_locked {
-        "Tab section  ·  ↑↓ select  ·  Enter/Space inspect"
+        "Parallel setup in progress  ·  draft preserved until task input unlocks"
     } else if focused_full_viewport {
-        "Tab section  ·  ↑↓ select  ·  Enter/Space inspect  ·  V opens agent picker"
+        "Type task below  ·  empty prompt: Tab section  ·  ↑↓ select  ·  Enter inspect"
     } else if prompt_input_locked {
         "Parallel setup in progress  ·  draft preserved  ·  Ctrl+O opens operations"
     } else {
