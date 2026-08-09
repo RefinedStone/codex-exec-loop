@@ -625,6 +625,13 @@ impl PrValidationProviderKey {
     pub fn new(value: impl Into<String>) -> Result<Self, String> {
         non_empty(value, "PR validation provider key").map(Self)
     }
+
+    fn is_review_watch_provider(&self) -> bool {
+        matches!(
+            self.0.as_str(),
+            "github:Reviews" | "github:IssueComments" | "github:ReviewThreads"
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1069,6 +1076,25 @@ impl PrValidationRecord {
                 .completion
                 .as_ref()
                 .is_some_and(PrValidationCompletion::has_watchable_providers)
+    }
+
+    /// Additive schema migration for records settled before review provider lifecycle was
+    /// represented independently from pagination completion. Only the three GitHub review
+    /// families are upgraded; finite CI and pull-request evidence remains terminal.
+    pub fn with_migrated_review_watch_completion(mut self) -> Self {
+        if self.phase != PrValidationPhase::Settled {
+            return self;
+        }
+        if let Some(completion) = self.completion.as_mut() {
+            for provider in &mut completion.providers {
+                if provider.provider.is_review_watch_provider()
+                    && provider.state == PrValidationProviderCompletionState::Terminal
+                {
+                    provider.state = PrValidationProviderCompletionState::Watchable;
+                }
+            }
+        }
+        self
     }
 
     pub fn terminal_reason(&self) -> Option<&PrValidationTerminalReason> {

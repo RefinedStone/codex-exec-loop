@@ -223,8 +223,11 @@ fn review_thread_node(index: usize) -> serde_json::Value {
         "id": format!("PRRT_stable_{index:03}"),
         "isResolved": false,
         "comments": {
+            "totalCount": 1,
+            "pageInfo": {"hasNextPage": false, "endCursor": null},
             "nodes": [{
                 "id": format!("PRRC_root_{index:03}"),
+                "replyTo": null,
                 "body": "thread root",
                 "updatedAt": "2026-08-07T10:00:02Z",
                 "author": {"login": "reviewer", "__typename": "User"},
@@ -308,17 +311,35 @@ fn complete_fixture() -> FixtureApi {
         ),
         (
             "POST /graphql".to_string(),
-            format!(
-                r#"{{"data":{{"repository":{{"pullRequest":{{"reviewThreads":{{
-                    "pageInfo":{{"hasNextPage":false,"endCursor":null}},
-                    "nodes":[{{"id":"PRRT_stable_10","isResolved":false,"comments":{{"nodes":[{{
-                        "id":"PRRC_root_10","body":"please fix this","updatedAt":"2026-08-07T10:00:02Z",
-                        "author":{{"login":"reviewer","__typename":"User"}},"commit":{{"oid":"{SHA}"}}
-                    }},{{
-                        "id":"PRRC_reply_10","body":"a reordered reply must not become a second finding","updatedAt":"2026-08-07T10:00:04Z",
-                        "author":{{"login":"other-reviewer","__typename":"User"}},"commit":{{"oid":"{SHA}"}}
-                    }}]}}}}]
-                }}}}}}}}}}"#
+            review_threads_page(
+                vec![serde_json::json!({
+                    "id": "PRRT_stable_10",
+                    "isResolved": false,
+                    "comments": {
+                        "totalCount": 2,
+                        "pageInfo": {"hasNextPage": false, "endCursor": null},
+                        "nodes": [
+                            {
+                                "id": "PRRC_root_10",
+                                "replyTo": null,
+                                "body": "please fix this",
+                                "updatedAt": "2026-08-07T10:00:02Z",
+                                "author": {"login": "reviewer", "__typename": "User"},
+                                "commit": {"oid": SHA}
+                            },
+                            {
+                                "id": "PRRC_reply_10",
+                                "replyTo": {"id": "PRRC_root_10"},
+                                "body": "@akra fix reply command",
+                                "updatedAt": "2026-08-07T10:00:04Z",
+                                "author": {"login": "other-reviewer", "__typename": "User"},
+                                "commit": {"oid": SHA}
+                            }
+                        ]
+                    }
+                })],
+                false,
+                None,
             ),
         ),
         (
@@ -378,12 +399,12 @@ fn collects_sha_bound_merge_activity_checks_and_workflows_in_canonical_order() {
                 "issue-comment:8"
             ),
             (
-                GithubValidationActivityKind::ReviewThread,
-                "review-thread:PRRT_stable_10"
-            ),
-            (
                 GithubValidationActivityKind::Review,
                 "review:9007199254740993"
+            ),
+            (
+                GithubValidationActivityKind::ReviewThread,
+                "review-thread:PRRT_stable_10"
             ),
         ]
     );
@@ -415,8 +436,9 @@ fn collects_sha_bound_merge_activity_checks_and_workflows_in_canonical_order() {
     assert_eq!(thread.thread_resolved, Some(false));
     assert_eq!(
         thread.actor.as_ref().map(|actor| actor.login.as_str()),
-        Some("reviewer")
+        Some("other-reviewer")
     );
+    assert_eq!(thread.body_marker, GithubValidationBodyMarker::AkraFix);
     let thread_source = snapshot
         .sources
         .iter()
@@ -453,6 +475,65 @@ fn collects_sha_bound_merge_activity_checks_and_workflows_in_canonical_order() {
     assert!(snapshot.sources.iter().all(|source| {
         source.status == GithubValidationSourceStatus::Complete && source.next_cursor.is_none()
     }));
+}
+
+#[test]
+fn resolved_thread_folds_a_human_reply_command_into_one_stable_activity() {
+    let mut responses = complete_fixture().responses;
+    responses.insert(
+        "POST /graphql".to_string(),
+        review_threads_page(
+            vec![serde_json::json!({
+                "id": "PRRT_command_thread",
+                "isResolved": true,
+                "comments": {
+                    "totalCount": 2,
+                    "pageInfo": {"hasNextPage": false, "endCursor": null},
+                    "nodes": [
+                        {
+                            "id": "PRRC_human_reply",
+                            "replyTo": {"id": "PRRC_bot_root"},
+                            "body": "/akra remediate this thread",
+                            "updatedAt": "2026-08-07T10:00:04Z",
+                            "author": {"login": "human-reviewer", "__typename": "User"},
+                            "commit": {"oid": SHA}
+                        },
+                        {
+                            "id": "PRRC_bot_root",
+                            "replyTo": null,
+                            "body": "automated note",
+                            "updatedAt": "2026-08-07T10:00:02Z",
+                            "author": {"login": "review-bot", "__typename": "Bot"},
+                            "commit": {"oid": SHA}
+                        }
+                    ]
+                }
+            })],
+            false,
+            None,
+        ),
+    );
+
+    let snapshot = GithubPrValidationAdapter::with_api(FixtureApi::new(responses))
+        .load_validation_snapshot(&request(None))
+        .expect("reply command should normalize");
+    let threads = snapshot
+        .activities
+        .iter()
+        .filter(|activity| activity.kind == GithubValidationActivityKind::ReviewThread)
+        .collect::<Vec<_>>();
+
+    assert_eq!(threads.len(), 1);
+    assert_eq!(threads[0].id.as_str(), "review-thread:PRRT_command_thread");
+    assert_eq!(threads[0].thread_resolved, Some(true));
+    assert_eq!(
+        threads[0].actor.as_ref().map(|actor| actor.login.as_str()),
+        Some("human-reviewer")
+    );
+    assert_eq!(
+        threads[0].body_marker,
+        GithubValidationBodyMarker::AkraRemediate
+    );
 }
 
 #[test]
@@ -584,8 +665,8 @@ fn cursor_polls_return_stable_cumulative_evidence_across_all_sources() {
     let reviews = (0..100)
         .map(|id| {
             format!(
-                r#"{{"id":{},"body":"","state":"COMMENTED","submitted_at":"2026-08-07T10:00:00Z","commit_id":"{SHA}","user":{{"login":"reviewer","type":"User"}}}}"#,
-                1000 + id
+                r#"{{"id":{},"body":"","state":"COMMENTED","submitted_at":"2026-08-07T10:00:00Z","commit_id":"{SHA}","user":{{"login":"reviewer-{id}","type":"User"}}}}"#,
+                1000 + id,
             )
         })
         .collect::<Vec<_>>()
@@ -596,7 +677,7 @@ fn cursor_polls_return_stable_cumulative_evidence_across_all_sources() {
     );
     responses.insert(
         endpoint("pulls/42/reviews?per_page=100&page=2"),
-        format!(r#"[{{"id":2000,"body":"","state":"COMMENTED","submitted_at":"2026-08-07T10:01:00Z","commit_id":"{SHA}","user":{{"login":"reviewer","type":"User"}}}}]"#),
+        format!(r#"[{{"id":2000,"body":"","state":"COMMENTED","submitted_at":"2026-08-07T10:01:00Z","commit_id":"{SHA}","user":{{"login":"reviewer-2000","type":"User"}}}}]"#),
     );
     let first_api = FixtureApi::new(responses.clone());
     let first = GithubPrValidationAdapter::with_api(first_api)
@@ -765,6 +846,45 @@ fn graphql_review_thread_errors_fail_closed_without_leaking_provider_copy() {
         "GitHub validation GraphQL query was rejected"
     );
     assert!(!error.to_string().contains("ghp_secret_canary"));
+}
+
+#[test]
+fn review_thread_comment_overflow_fails_closed_instead_of_missing_reply_commands() {
+    let mut responses = complete_fixture().responses;
+    responses.insert(
+        "POST /graphql".to_string(),
+        review_threads_page(
+            vec![serde_json::json!({
+                "id": "PRRT_overflow",
+                "isResolved": false,
+                "comments": {
+                    "totalCount": 101,
+                    "pageInfo": {"hasNextPage": true, "endCursor": "comment-100"},
+                    "nodes": [{
+                        "id": "PRRC_root",
+                        "replyTo": null,
+                        "body": "root",
+                        "updatedAt": "2026-08-07T10:00:02Z",
+                        "author": {"login": "reviewer", "__typename": "User"},
+                        "commit": {"oid": SHA}
+                    }]
+                }
+            })],
+            false,
+            None,
+        ),
+    );
+
+    let error = GithubPrValidationAdapter::with_api(FixtureApi::new(responses))
+        .load_validation_snapshot(&request(None))
+        .expect_err("an unobserved comment tail must not be treated as complete");
+
+    assert_eq!(error.class, GithubPrValidationErrorClass::IntegrityFailed);
+    assert!(
+        error
+            .to_string()
+            .contains("comments exceeded the bounded observation page")
+    );
 }
 
 #[test]

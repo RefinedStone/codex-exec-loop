@@ -45,8 +45,10 @@ use crate::domain::parallel_mode::{
     ParallelModeDispatchCommandState, ParallelModePoolResetPolicy, ParallelModePoolResetReport,
     ParallelModePoolResetRunId, ParallelModePoolResetSlotAction, ParallelModePoolResetSlotOutcome,
     ParallelModePoolResetSlotReport, ParallelModeQueueItemState, ParallelModeSlotLeaseSnapshot,
-    ParallelModeSlotLeaseState, ParallelModeTaskDispatchBlockSnapshot, PrValidationCommitSha,
-    PrValidationRecord, PrValidationRecordKey, PrValidationTarget, PrValidationTargetShaSnapshot,
+    ParallelModeSlotLeaseState, ParallelModeTaskDispatchBlockSnapshot, PrValidationCatchUpState,
+    PrValidationCommitSha, PrValidationCompletion, PrValidationEvent,
+    PrValidationProviderCompletion, PrValidationProviderKey, PrValidationRecord,
+    PrValidationRecordKey, PrValidationTarget, PrValidationTargetShaSnapshot,
 };
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionDefinition, DirectionState, OriginSessionKind,
@@ -639,6 +641,129 @@ fn authority_schema_migrates_v12_pr_validation_schedule_without_data_loss() {
     drop(migrated);
 
     let due_at = "2026-08-10T00:00:01+00:00"
+        .parse::<DateTime<Utc>>()
+        .unwrap();
+    assert_eq!(
+        SqlitePlanningAuthorityAdapter::load_due_runtime_pr_validation_record_keys(
+            &workspace_dir,
+            due_at,
+            due_at - chrono::TimeDelta::seconds(30),
+            8,
+        )
+        .unwrap(),
+        vec![record.key().clone()]
+    );
+}
+
+#[test]
+fn authority_schema_migrates_v13_settled_reviews_into_durable_watch() {
+    let workspace_dir = temp_workspace("schema-migrate-v13-pr-validation-review-watch");
+    let location =
+        SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(&workspace_dir)
+            .expect("authority location should resolve");
+    let connection = open_authority_connection(&location).expect("current store should open");
+    let source_sha =
+        PrValidationCommitSha::new("1111111111111111111111111111111111111111").unwrap();
+    let evidence_sha =
+        PrValidationCommitSha::new("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap();
+    let record = PrValidationRecord::register(
+        PrValidationRecordKey::new("settled-review-watch-42").unwrap(),
+        PrValidationTarget::new("acme/widgets", 42).unwrap(),
+        PrValidationTargetShaSnapshot::new(
+            source_sha,
+            PrValidationCommitSha::new("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
+        ),
+    )
+    .transition(PrValidationEvent::BeginPreMergeObservation)
+    .unwrap()
+    .transition(PrValidationEvent::MergeObserved(evidence_sha.clone()))
+    .unwrap()
+    .transition(PrValidationEvent::BeginPostMergeObservation)
+    .unwrap()
+    .transition(PrValidationEvent::Settle(PrValidationCompletion::new(
+        evidence_sha,
+        vec![
+            PrValidationProviderCompletion::terminal(
+                PrValidationProviderKey::new("github:Reviews").unwrap(),
+            ),
+            PrValidationProviderCompletion::terminal(
+                PrValidationProviderKey::new("github:CheckRuns").unwrap(),
+            ),
+        ],
+        Vec::new(),
+        PrValidationCatchUpState::NoUnseenRelevantEvents,
+    )))
+    .unwrap();
+    assert!(!record.review_watch_active());
+    let updated_at = "2026-08-10T00:00:00+00:00";
+    let next_poll_at = "2026-08-10T00:05:00+00:00";
+    connection
+        .execute_batch(
+            "DROP TABLE runtime_pr_validation_records;
+             CREATE TABLE runtime_pr_validation_records (
+                 record_key TEXT PRIMARY KEY,
+                 updated_at TEXT NOT NULL,
+                 content TEXT NOT NULL,
+                 integration_method TEXT,
+                 integration_source_sha TEXT,
+                 integration_evidence_sha TEXT,
+                 integration_remote_verified_at TEXT,
+                 validation_repository TEXT,
+                 validation_phase TEXT,
+                 next_poll_at TEXT,
+                 last_polled_at TEXT,
+                 poll_attempt INTEGER NOT NULL DEFAULT 0,
+                 consecutive_error_count INTEGER NOT NULL DEFAULT 0,
+                 poll_lease_owner TEXT,
+                 poll_lease_token TEXT,
+                 poll_lease_expires_at TEXT,
+                 last_error_class TEXT,
+                 rate_limit_remaining INTEGER,
+                 rate_limit_reset_at TEXT
+             );
+             UPDATE authority_metadata SET value = '13' WHERE key = 'schema_version';",
+        )
+        .expect("v13 review-watch fixture should install");
+    connection
+        .execute(
+            "INSERT INTO runtime_pr_validation_records (
+                 record_key, updated_at, content, validation_repository,
+                 validation_phase, next_poll_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            (
+                record.key().as_str(),
+                updated_at,
+                serde_json::to_string(&record).unwrap(),
+                record.target().repository(),
+                record.phase().storage_label(),
+                next_poll_at,
+            ),
+        )
+        .expect("v13 settled validation record should persist");
+    drop(connection);
+
+    let migrated = open_authority_connection(&location).expect("v13 store should migrate");
+    let (watch_active, projected_next_poll, content): (i64, String, String) = migrated
+        .query_row(
+            "SELECT review_watch_active, next_poll_at, content
+             FROM runtime_pr_validation_records WHERE record_key = ?1",
+            [record.key().as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("migrated review-watch projection should load");
+    assert_eq!(watch_active, 1);
+    assert_eq!(projected_next_poll, next_poll_at);
+    assert!(content.contains("\"Watchable\""));
+    drop(migrated);
+
+    let migrated_record = SqlitePlanningAuthorityAdapter::load_runtime_pr_validation_record(
+        &workspace_dir,
+        record.key(),
+    )
+    .expect("migrated record should load")
+    .expect("migrated record should remain present");
+    assert!(migrated_record.review_watch_active());
+    let due_at = "2026-08-10T00:06:00+00:00"
         .parse::<DateTime<Utc>>()
         .unwrap();
     assert_eq!(
