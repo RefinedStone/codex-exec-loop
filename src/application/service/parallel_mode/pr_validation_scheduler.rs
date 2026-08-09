@@ -21,6 +21,7 @@ use crate::domain::parallel_mode::{
 
 pub const AKRA_PR_VALIDATION_MODE_CONFIG_KEY: &str = "akra.prValidationMode";
 const DEFAULT_ACTIVE_INTERVAL_SECS: i64 = 30;
+const DEFAULT_REVIEW_WATCH_INTERVAL_SECS: i64 = 5 * 60;
 const DEFAULT_MAX_BACKOFF_SECS: i64 = 5 * 60;
 const DEFAULT_LEASE_TTL_SECS: i64 = 3 * 60;
 const DEFAULT_LEASE_RENEW_INTERVAL_SECS: u64 = 45;
@@ -31,6 +32,7 @@ const DEFAULT_DUE_SCAN_LIMIT: usize = 8;
 pub struct PrValidationSchedulerConfig {
     pub mode: PrValidationSchedulerMode,
     active_interval: TimeDelta,
+    review_watch_interval: TimeDelta,
     max_backoff: TimeDelta,
     lease_ttl: TimeDelta,
     lease_renew_interval: Duration,
@@ -43,6 +45,7 @@ impl Default for PrValidationSchedulerConfig {
         Self {
             mode: PrValidationSchedulerMode::Observe,
             active_interval: TimeDelta::seconds(DEFAULT_ACTIVE_INTERVAL_SECS),
+            review_watch_interval: TimeDelta::seconds(DEFAULT_REVIEW_WATCH_INTERVAL_SECS),
             max_backoff: TimeDelta::seconds(DEFAULT_MAX_BACKOFF_SECS),
             lease_ttl: TimeDelta::seconds(DEFAULT_LEASE_TTL_SECS),
             lease_renew_interval: Duration::from_secs(DEFAULT_LEASE_RENEW_INTERVAL_SECS),
@@ -359,6 +362,9 @@ impl PrValidationSchedulerService {
             ),
         };
         let mut next_poll_at = match error_class {
+            None if matches!(result.as_ref(), Some(PrValidationPollResult::Settled)) => {
+                settled_at + self.config.review_watch_interval
+            }
             None => settled_at + self.config.active_interval,
             Some(PrValidationPollErrorClass::PolicyBlocked)
             | Some(PrValidationPollErrorClass::IdentityFailed)

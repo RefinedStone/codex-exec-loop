@@ -1,12 +1,15 @@
 use super::{
-    PrValidationCommitSha, PrValidationEvent, PrValidationFinding, PrValidationFindingKey,
-    PrValidationFindingSource, PrValidationOperatorState, PrValidationPhase, PrValidationRecord,
-    PrValidationRecordKey, PrValidationRemediationCorrelation, PrValidationTarget,
-    PrValidationTargetShaSnapshot, PrValidationTerminalReason,
+    PrValidationCatchUpState, PrValidationCommitSha, PrValidationCompletion, PrValidationEvent,
+    PrValidationFinding, PrValidationFindingKey, PrValidationFindingSource,
+    PrValidationOperatorState, PrValidationPhase, PrValidationProviderCompletion,
+    PrValidationProviderKey, PrValidationRecord, PrValidationRecordKey,
+    PrValidationRemediationCorrelation, PrValidationTarget, PrValidationTargetShaSnapshot,
+    PrValidationTerminalReason,
 };
 
 const SOURCE_SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const BASE_SHA: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const MERGE_SHA: &str = "cccccccccccccccccccccccccccccccccccccccc";
 
 fn registered() -> PrValidationRecord {
     PrValidationRecord::register(
@@ -30,6 +33,25 @@ fn finding() -> PrValidationFinding {
         "raw payload token=ghp_secret_canary ".to_string() + &"x".repeat(20_000),
     )
     .unwrap()
+}
+
+fn settled_with_provider(provider: PrValidationProviderCompletion) -> PrValidationRecord {
+    registered()
+        .transition(PrValidationEvent::BeginPreMergeObservation)
+        .unwrap()
+        .transition(PrValidationEvent::MergeObserved(
+            PrValidationCommitSha::new(MERGE_SHA).unwrap(),
+        ))
+        .unwrap()
+        .transition(PrValidationEvent::BeginPostMergeObservation)
+        .unwrap()
+        .transition(PrValidationEvent::Settle(PrValidationCompletion::new(
+            PrValidationCommitSha::new(MERGE_SHA).unwrap(),
+            vec![provider],
+            Vec::new(),
+            PrValidationCatchUpState::NoUnseenRelevantEvents,
+        )))
+        .unwrap()
 }
 
 #[test]
@@ -170,5 +192,34 @@ fn validation_record_snapshots_contract_and_migrates_legacy_json_to_v1() {
             .required_check_contexts()[0]
             .context(),
         "CI Gate"
+    );
+}
+
+#[test]
+fn watchable_completion_settles_one_cycle_but_keeps_the_late_review_boundary_active() {
+    let provider = PrValidationProviderKey::new("github:ReviewThreads").unwrap();
+    let settled = settled_with_provider(PrValidationProviderCompletion::watchable(provider));
+
+    assert_eq!(settled.phase(), PrValidationPhase::Settled);
+    assert!(settled.review_watch_active());
+    let reopened = settled
+        .transition(PrValidationEvent::LateFindingObserved(finding()))
+        .expect("a trusted late event should reopen a watchable settled record");
+    assert_eq!(reopened.phase(), PrValidationPhase::PostMergeObservation);
+    assert!(!reopened.review_watch_active());
+    assert_eq!(reopened.finding_keys().len(), 1);
+}
+
+#[test]
+fn finite_completion_is_terminal_and_rejects_late_review_reopen() {
+    let provider = PrValidationProviderKey::new("github:CheckRuns").unwrap();
+    let settled = settled_with_provider(PrValidationProviderCompletion::terminal(provider));
+
+    assert_eq!(settled.phase(), PrValidationPhase::Settled);
+    assert!(!settled.review_watch_active());
+    assert!(
+        settled
+            .transition(PrValidationEvent::LateFindingObserved(finding()))
+            .is_err()
     );
 }

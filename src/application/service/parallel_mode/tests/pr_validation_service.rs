@@ -4,13 +4,14 @@ use std::sync::Mutex;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 
-use super::{TempGitRepo, test_parallel_mode_service};
+use super::{TempGitRepo, run_git, test_parallel_mode_service};
 use crate::application::port::outbound::github_pr_validation_port::{
     GithubPrMergeState, GithubPrValidationObservationRequest, GithubPrValidationPort,
     GithubPrValidationSnapshot, GithubValidationActivity, GithubValidationActivityKind,
-    GithubValidationCheckRun, GithubValidationCursor, GithubValidationRunStatus,
-    GithubValidationSource, GithubValidationSourceObservation, GithubValidationSourceStatus,
-    GithubValidationWorkflowRun,
+    GithubValidationActor, GithubValidationActorKind, GithubValidationBodyMarker,
+    GithubValidationCheckRun, GithubValidationCursor, GithubValidationReviewState,
+    GithubValidationRunStatus, GithubValidationSource, GithubValidationSourceObservation,
+    GithubValidationSourceStatus, GithubValidationWorkflowRun,
 };
 use crate::application::port::outbound::pr_validation_remediation_port::{
     PrValidationRemediationPort, PrValidationRemediationRequest,
@@ -208,13 +209,13 @@ fn setup(
 }
 
 #[test]
-fn actionable_review_comment_and_thread_activity_admit_idempotent_remediation() {
+fn semantic_activity_policy_admits_only_actionable_human_events_idempotently() {
     for (index, kind, expected_source) in [
         (0, GithubValidationActivityKind::Review, "review"),
         (
             1,
             GithubValidationActivityKind::IssueComment,
-            "issue_comment",
+            "issue_comment_command",
         ),
         (
             2,
@@ -224,18 +225,31 @@ fn actionable_review_comment_and_thread_activity_admit_idempotent_remediation() 
         (
             3,
             GithubValidationActivityKind::ReviewComment,
-            "review_comment",
+            "review_comment_command",
         ),
     ] {
         let mut observed = snapshot(HEAD_A, GithubValidationRunStatus::Succeeded);
-        observed.activities.push(
-            GithubValidationActivity::new(
-                GithubOpaqueId::new(format!("activity:{index}")),
-                kind,
-                "2026-08-08T00:00:00Z",
-            )
-            .with_commit_sha(GithubCommitSha::new(HEAD_A)),
-        );
+        let mut activity = GithubValidationActivity::new(
+            GithubOpaqueId::new(format!("activity:{index}")),
+            kind,
+            "2026-08-08T00:00:00Z",
+        )
+        .with_commit_sha(GithubCommitSha::new(HEAD_A))
+        .with_actor(Some(GithubValidationActor::new(
+            "reviewer",
+            GithubValidationActorKind::User,
+        )));
+        activity = match kind {
+            GithubValidationActivityKind::Review => {
+                activity.with_review_state(GithubValidationReviewState::ChangesRequested)
+            }
+            GithubValidationActivityKind::ReviewThread => activity.with_thread_resolved(false),
+            GithubValidationActivityKind::IssueComment
+            | GithubValidationActivityKind::ReviewComment => {
+                activity.with_body_marker(GithubValidationBodyMarker::AkraRemediate)
+            }
+        };
+        observed.activities.push(activity);
         let (repo, observation, remediation) = setup(
             &format!("validation-actionable-{index}"),
             vec![observed.clone(), observed],
@@ -266,6 +280,103 @@ fn actionable_review_comment_and_thread_activity_admit_idempotent_remediation() 
         assert_eq!(deliveries.len(), 1);
         assert_eq!(deliveries[0].finding_key.source().as_str(), expected_source);
     }
+}
+
+#[test]
+fn approved_lgtm_bot_self_resolved_and_past_revision_activity_admit_nothing() {
+    let human = || {
+        Some(GithubValidationActor::new(
+            "reviewer",
+            GithubValidationActorKind::User,
+        ))
+    };
+    let mut observed = snapshot(HEAD_A, GithubValidationRunStatus::Succeeded);
+    observed.activities = vec![
+        GithubValidationActivity::new(
+            GithubOpaqueId::new("review:approved"),
+            GithubValidationActivityKind::Review,
+            "2026-08-08T00:00:00Z",
+        )
+        .with_commit_sha(GithubCommitSha::new(HEAD_A))
+        .with_actor(human())
+        .with_review_state(GithubValidationReviewState::Approved),
+        GithubValidationActivity::new(
+            GithubOpaqueId::new("issue:lgtm"),
+            GithubValidationActivityKind::IssueComment,
+            "2026-08-08T00:00:01Z",
+        )
+        .with_actor(human()),
+        GithubValidationActivity::new(
+            GithubOpaqueId::new("review:bot"),
+            GithubValidationActivityKind::Review,
+            "2026-08-08T00:00:02Z",
+        )
+        .with_commit_sha(GithubCommitSha::new(HEAD_A))
+        .with_actor(Some(GithubValidationActor::new(
+            "dependabot[bot]",
+            GithubValidationActorKind::Bot,
+        )))
+        .with_review_state(GithubValidationReviewState::ChangesRequested),
+        GithubValidationActivity::new(
+            GithubOpaqueId::new("review:self"),
+            GithubValidationActivityKind::Review,
+            "2026-08-08T00:00:03Z",
+        )
+        .with_commit_sha(GithubCommitSha::new(HEAD_A))
+        .with_actor(Some(GithubValidationActor::new(
+            "RefinedStone",
+            GithubValidationActorKind::User,
+        )))
+        .with_review_state(GithubValidationReviewState::ChangesRequested),
+        GithubValidationActivity::new(
+            GithubOpaqueId::new("thread:resolved"),
+            GithubValidationActivityKind::ReviewThread,
+            "2026-08-08T00:00:04Z",
+        )
+        .with_commit_sha(GithubCommitSha::new(HEAD_A))
+        .with_actor(human())
+        .with_thread_resolved(true),
+        GithubValidationActivity::new(
+            GithubOpaqueId::new("review:past"),
+            GithubValidationActivityKind::Review,
+            "2026-08-08T00:00:05Z",
+        )
+        .with_commit_sha(GithubCommitSha::new(HEAD_B))
+        .with_actor(human())
+        .with_review_state(GithubValidationReviewState::ChangesRequested),
+    ];
+    let (repo, observation, remediation) =
+        setup("validation-semantic-false-positive", vec![observed]);
+    run_git(
+        &repo.repo_root,
+        &["config", "akra.githubLogin", "RefinedStone"],
+    );
+    let service = test_parallel_mode_service();
+    service
+        .persist_pr_validation_record(
+            &repo.workspace_dir(),
+            &repo.pool_root(),
+            None,
+            &registered_record(),
+        )
+        .unwrap();
+
+    assert_eq!(
+        service
+            .poll_pr_validation(&observation, &remediation, request(&repo, 1, HEAD_A))
+            .unwrap(),
+        PrValidationPollResult::Waiting
+    );
+    assert!(remediation.deliveries.lock().unwrap().is_empty());
+    let record = service
+        .recover_pr_validation_record(
+            &repo.workspace_dir(),
+            &repo.pool_root(),
+            &PrValidationRecordKey::new("acme/widgets#42").unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+    assert!(record.finding_keys().is_empty());
 }
 
 #[test]
@@ -1124,6 +1235,98 @@ fn terminal_provider_check_and_catch_up_settle_once() {
         .unwrap()
         .unwrap();
     assert_eq!(record.phase(), PrValidationPhase::Settled);
+}
+
+#[test]
+fn verified_record_reopens_once_for_a_late_actionable_event_after_restart() {
+    let merged = merged_snapshot();
+    let mut late = merged.clone();
+    late.activities.push(
+        GithubValidationActivity::new(
+            GithubOpaqueId::new("issue-command:late"),
+            GithubValidationActivityKind::IssueComment,
+            "2026-08-10T00:10:00Z",
+        )
+        .with_actor(Some(GithubValidationActor::new(
+            "operator",
+            GithubValidationActorKind::User,
+        )))
+        .with_body_marker(GithubValidationBodyMarker::AkraFix),
+    );
+    let (repo, observation, remediation) = setup(
+        "validation-late-event-reopen",
+        vec![merged.clone(), merged, late.clone(), late],
+    );
+    let service = test_parallel_mode_service();
+    service
+        .persist_pr_validation_record(
+            &repo.workspace_dir(),
+            &repo.pool_root(),
+            None,
+            &registered_record(),
+        )
+        .unwrap();
+
+    assert_eq!(
+        service
+            .poll_pr_validation(&observation, &remediation, request(&repo, 1, HEAD_A))
+            .unwrap(),
+        PrValidationPollResult::Waiting
+    );
+    assert_eq!(
+        service
+            .poll_pr_validation(&observation, &remediation, request(&repo, 2, HEAD_A))
+            .unwrap(),
+        PrValidationPollResult::Settled
+    );
+    let verified = service
+        .recover_pr_validation_record(
+            &repo.workspace_dir(),
+            &repo.pool_root(),
+            &PrValidationRecordKey::new("acme/widgets#42").unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+    assert!(verified.review_watch_active());
+
+    let restarted = test_parallel_mode_service();
+    assert!(matches!(
+        restarted
+            .poll_pr_validation(&observation, &remediation, request(&repo, 3, HEAD_A))
+            .unwrap(),
+        PrValidationPollResult::RemediationRequested { .. }
+    ));
+    let queued = restarted
+        .recover_pr_validation_record(
+            &repo.workspace_dir(),
+            &repo.pool_root(),
+            &PrValidationRecordKey::new("acme/widgets#42").unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(queued.phase(), PrValidationPhase::RemediationQueued);
+    let task_id = remediation.deliveries.lock().unwrap()[0]
+        .idempotency_key
+        .as_str()
+        .to_string();
+    let task_id = format!("task-{task_id}");
+    assert!(
+        restarted
+            .transition_pr_validation_remediation_completed(
+                &repo.workspace_dir(),
+                &repo.pool_root(),
+                &task_id,
+            )
+            .unwrap()
+    );
+
+    assert_eq!(
+        restarted
+            .poll_pr_validation(&observation, &remediation, request(&repo, 4, HEAD_A))
+            .unwrap(),
+        PrValidationPollResult::Settled
+    );
+    assert_eq!(remediation.deliveries.lock().unwrap().len(), 1);
 }
 
 #[test]

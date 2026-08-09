@@ -312,6 +312,7 @@ pub(super) fn ensure_schema(
                 integration_remote_verified_at TEXT,
                 validation_repository TEXT,
                 validation_phase TEXT,
+                review_watch_active INTEGER NOT NULL DEFAULT 0,
                 next_poll_at TEXT,
                 last_polled_at TEXT,
                 poll_attempt INTEGER NOT NULL DEFAULT 0,
@@ -473,6 +474,10 @@ fn ensure_pr_validation_scheduler_columns(connection: &Connection) -> Result<()>
     for (column_name, column_definition) in [
         ("validation_repository", "validation_repository TEXT"),
         ("validation_phase", "validation_phase TEXT"),
+        (
+            "review_watch_active",
+            "review_watch_active INTEGER NOT NULL DEFAULT 0",
+        ),
         ("next_poll_at", "next_poll_at TEXT"),
         ("last_polled_at", "last_polled_at TEXT"),
         ("poll_attempt", "poll_attempt INTEGER NOT NULL DEFAULT 0"),
@@ -505,7 +510,13 @@ fn ensure_pr_validation_scheduler_columns(connection: &Connection) -> Result<()>
     connection
         .execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_runtime_pr_validation_due
-                 ON runtime_pr_validation_records(validation_phase, next_poll_at, record_key);
+                 ON runtime_pr_validation_records(
+                     validation_phase, review_watch_active, next_poll_at, record_key
+                 );
+             CREATE INDEX IF NOT EXISTS idx_runtime_pr_validation_watch_due
+                 ON runtime_pr_validation_records(
+                     review_watch_active, validation_phase, next_poll_at, record_key
+                 );
              CREATE INDEX IF NOT EXISTS idx_runtime_pr_validation_repository_lease
                  ON runtime_pr_validation_records(
                      validation_repository, poll_lease_expires_at, record_key

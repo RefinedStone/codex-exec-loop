@@ -187,6 +187,26 @@ impl GithubValidationSource {
         Self::CheckRuns,
         Self::WorkflowRuns,
     ];
+
+    pub const fn lifecycle(self) -> GithubValidationSourceLifecycle {
+        match self {
+            Self::Reviews | Self::IssueComments | Self::ReviewThreads => {
+                GithubValidationSourceLifecycle::Watchable
+            }
+            Self::PullRequest | Self::CheckRuns | Self::WorkflowRuns => {
+                GithubValidationSourceLifecycle::Finite
+            }
+        }
+    }
+}
+
+/// Whether an endpoint family has a finite completion boundary or remains eligible for a
+/// bounded late-event watch after the check contract is verified. Pagination status is kept
+/// separate: a watchable source can still finish one complete observation cycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GithubValidationSourceLifecycle {
+    Finite,
+    Watchable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -201,6 +221,7 @@ pub enum GithubValidationSourceStatus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GithubValidationSourceObservation {
     pub source: GithubValidationSource,
+    pub lifecycle: GithubValidationSourceLifecycle,
     pub endpoint: String,
     pub status: GithubValidationSourceStatus,
     pub next_cursor: Option<GithubValidationCursor>,
@@ -215,6 +236,7 @@ impl GithubValidationSourceObservation {
     ) -> Self {
         Self {
             source,
+            lifecycle: source.lifecycle(),
             endpoint: endpoint.into(),
             status,
             next_cursor,
@@ -235,11 +257,70 @@ pub enum GithubValidationActivityKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GithubValidationReviewState {
+    Approved,
+    ChangesRequested,
+    Commented,
+    Dismissed,
+    Pending,
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GithubValidationActorKind {
+    User,
+    Bot,
+    Organization,
+    Mannequin,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GithubValidationActor {
+    pub login: String,
+    pub kind: GithubValidationActorKind,
+}
+
+impl GithubValidationActor {
+    pub fn new(login: impl Into<String>, kind: GithubValidationActorKind) -> Self {
+        Self {
+            login: login.into(),
+            kind,
+        }
+    }
+
+    pub fn is_human(&self) -> bool {
+        self.kind == GithubValidationActorKind::User
+            && !self.login.to_ascii_lowercase().ends_with("[bot]")
+    }
+}
+
+/// The only body information allowed across the GitHub adapter boundary. Raw review/comment
+/// bodies stay inside the adapter and cannot leak into persistence, logs, or Admin projections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GithubValidationBodyMarker {
+    #[default]
+    None,
+    AkraFix,
+    AkraRemediate,
+}
+
+impl GithubValidationBodyMarker {
+    pub fn is_explicit_command(self) -> bool {
+        !matches!(self, Self::None)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GithubValidationActivity {
     pub id: GithubOpaqueId,
     pub kind: GithubValidationActivityKind,
     pub observed_at: String,
     pub commit_sha: Option<GithubCommitSha>,
+    pub review_state: Option<GithubValidationReviewState>,
+    pub actor: Option<GithubValidationActor>,
+    pub body_marker: GithubValidationBodyMarker,
+    pub thread_resolved: Option<bool>,
 }
 
 impl GithubValidationActivity {
@@ -253,11 +334,35 @@ impl GithubValidationActivity {
             kind,
             observed_at: observed_at.into(),
             commit_sha: None,
+            review_state: None,
+            actor: None,
+            body_marker: GithubValidationBodyMarker::None,
+            thread_resolved: None,
         }
     }
 
     pub fn with_commit_sha(mut self, commit_sha: GithubCommitSha) -> Self {
         self.commit_sha = Some(commit_sha);
+        self
+    }
+
+    pub fn with_review_state(mut self, review_state: GithubValidationReviewState) -> Self {
+        self.review_state = Some(review_state);
+        self
+    }
+
+    pub fn with_actor(mut self, actor: Option<GithubValidationActor>) -> Self {
+        self.actor = actor;
+        self
+    }
+
+    pub fn with_body_marker(mut self, body_marker: GithubValidationBodyMarker) -> Self {
+        self.body_marker = body_marker;
+        self
+    }
+
+    pub fn with_thread_resolved(mut self, thread_resolved: bool) -> Self {
+        self.thread_resolved = Some(thread_resolved);
         self
     }
 }

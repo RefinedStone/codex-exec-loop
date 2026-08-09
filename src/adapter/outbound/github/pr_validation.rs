@@ -13,15 +13,48 @@ use super::review_poller::GithubReviewPollerAdapter;
 use crate::application::port::outbound::github_pr_validation_port::{
     GithubPrMergeState, GithubPrValidationError, GithubPrValidationObservationRequest,
     GithubPrValidationPort, GithubPrValidationSnapshot, GithubValidationActivity,
-    GithubValidationActivityKind, GithubValidationCheckRun, GithubValidationCursor,
-    GithubValidationProviderMetadata, GithubValidationRunStatus, GithubValidationSource,
-    GithubValidationSourceObservation, GithubValidationSourceStatus, GithubValidationWorkflowRun,
+    GithubValidationActivityKind, GithubValidationActor, GithubValidationActorKind,
+    GithubValidationBodyMarker, GithubValidationCheckRun, GithubValidationCursor,
+    GithubValidationProviderMetadata, GithubValidationReviewState, GithubValidationRunStatus,
+    GithubValidationSource, GithubValidationSourceObservation, GithubValidationSourceStatus,
+    GithubValidationWorkflowRun,
 };
 use crate::domain::github_review::{GithubCommitSha, GithubOpaqueId};
 
 const PER_PAGE: usize = 100;
 const MAX_PAGINATED_PAGES: usize = 20;
 const CURSOR_VERSION: u8 = 2;
+const REVIEW_THREADS_GRAPHQL_OPERATION: &str = "AkraPullRequestReviewThreads";
+const REVIEW_THREADS_GRAPHQL_QUERY: &str = r#"
+query AkraPullRequestReviewThreads(
+  $owner: String!
+  $name: String!
+  $number: Int!
+  $first: Int!
+  $after: String
+) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewThreads(first: $first, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id
+          isResolved
+          comments(first: 1) {
+            nodes {
+              id
+              body
+              updatedAt
+              author { login __typename }
+              commit { oid }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"#;
 
 /// Read-only GitHub adapter for one immutable PR revision.
 ///
@@ -71,6 +104,16 @@ trait GithubValidationApi: Send + Sync {
         &self,
         endpoint: &str,
     ) -> std::result::Result<GithubValidationApiResponse, GithubPrValidationError>;
+
+    fn post(
+        &self,
+        _endpoint: &str,
+        _body: &str,
+    ) -> std::result::Result<GithubValidationApiResponse, GithubPrValidationError> {
+        Err(GithubPrValidationError::integrity_failed(
+            "GitHub validation API does not support bounded POST requests",
+        ))
+    }
 }
 
 #[derive(Debug)]
@@ -100,6 +143,28 @@ impl GithubValidationApi for LocalCredentialsGithubValidationApi {
             )),
         }
     }
+
+    fn post(
+        &self,
+        endpoint: &str,
+        body: &str,
+    ) -> std::result::Result<GithubValidationApiResponse, GithubPrValidationError> {
+        if endpoint != "/graphql" {
+            return Err(GithubPrValidationError::integrity_failed(
+                "GitHub validation attempted an unsupported POST endpoint",
+            ));
+        }
+        let poller = self.poller.get_or_init(|| {
+            GithubReviewPollerAdapter::from_local_github_credentials(&self.repo_root)
+                .map_err(|error| error.to_string())
+        });
+        match poller {
+            Ok(poller) => poller.fetch_validation_graphql_response(body),
+            Err(_) => Err(GithubPrValidationError::authentication_blocked(
+                "GitHub validation credentials are unavailable",
+            )),
+        }
+    }
 }
 
 impl GithubValidationApi for GithubReviewPollerAdapter {
@@ -108,6 +173,19 @@ impl GithubValidationApi for GithubReviewPollerAdapter {
         endpoint: &str,
     ) -> std::result::Result<GithubValidationApiResponse, GithubPrValidationError> {
         self.fetch_validation_response(endpoint)
+    }
+
+    fn post(
+        &self,
+        endpoint: &str,
+        body: &str,
+    ) -> std::result::Result<GithubValidationApiResponse, GithubPrValidationError> {
+        if endpoint != "/graphql" {
+            return Err(GithubPrValidationError::integrity_failed(
+                "GitHub validation attempted an unsupported POST endpoint",
+            ));
+        }
+        self.fetch_validation_graphql_response(body)
     }
 }
 
@@ -174,7 +252,11 @@ impl GithubPrValidationPort for GithubPrValidationAdapter {
             if page == review_page {
                 review_count = rows.len();
             }
-            activities.extend(rows.into_iter().filter_map(normalize_review));
+            for row in rows {
+                if let Some(activity) = normalize_review(row)? {
+                    activities.push(activity);
+                }
+            }
         }
         source_states.insert(
             GithubValidationSource::Reviews,
@@ -193,7 +275,9 @@ impl GithubPrValidationPort for GithubPrValidationAdapter {
             if page == issue_comment_page {
                 issue_comment_count = rows.len();
             }
-            activities.extend(rows.into_iter().map(normalize_issue_comment));
+            for row in rows {
+                activities.push(normalize_issue_comment(row));
+            }
         }
         source_states.insert(
             GithubValidationSource::IssueComments,
@@ -204,26 +288,53 @@ impl GithubPrValidationPort for GithubPrValidationAdapter {
             )?,
         );
 
+        let (repository_owner, repository_name) = repository_parts(repository)?;
         let review_thread_page = pages.review_threads.poll_page();
-        let mut review_thread_count = 0;
-        for page in pages.review_threads.pages_through_poll() {
-            let path = paged_path(
-                &format!("/repos/{repository}/pulls/{number}/comments"),
-                page,
-            );
-            let rows: Vec<ReviewCommentResponse> = self.get_json(&path, &mut provider_metadata)?;
-            ensure_page_bound(&rows, &path)?;
-            if page == review_thread_page {
-                review_thread_count = rows.len();
+        let mut review_thread_observed_page = 0;
+        let mut review_thread_has_next_page = false;
+        let mut review_thread_after = None;
+        for page in 1..=review_thread_page {
+            let body = review_threads_graphql_body(
+                repository_owner,
+                repository_name,
+                number,
+                review_thread_after.as_deref(),
+            )?;
+            let response: ReviewThreadsGraphqlData =
+                self.post_graphql_json(&body, &mut provider_metadata)?;
+            let connection = response
+                .repository
+                .ok_or_else(|| {
+                    GithubPrValidationError::authentication_blocked(
+                        "GitHub review thread repository was unavailable",
+                    )
+                })?
+                .pull_request
+                .ok_or_else(|| {
+                    GithubPrValidationError::identity_failed(
+                        "GitHub review thread pull request was unavailable",
+                    )
+                })?
+                .review_threads;
+            ensure_page_bound(&connection.nodes, "graphql:review-threads")?;
+            activities.extend(normalize_review_threads(connection.nodes)?);
+            review_thread_observed_page = page;
+            review_thread_has_next_page = connection.page_info.has_next_page;
+            if !review_thread_has_next_page {
+                break;
             }
-            activities.extend(normalize_review_threads(rows));
+            review_thread_after = Some(connection.page_info.end_cursor.ok_or_else(|| {
+                GithubPrValidationError::integrity_failed(
+                    "GitHub review thread page omitted its continuation cursor",
+                )
+            })?);
         }
         source_states.insert(
             GithubValidationSource::ReviewThreads,
-            advance_array_page(
+            advance_connection_page(
                 &mut pages.review_threads,
-                review_thread_page,
-                review_thread_count,
+                review_thread_observed_page,
+                review_thread_has_next_page,
             )?,
         );
 
@@ -362,7 +473,7 @@ impl GithubPrValidationPort for GithubPrValidationAdapter {
                 };
                 GithubValidationSourceObservation::new(
                     source,
-                    format!("rest:{}", source_label(source)),
+                    source_endpoint_label(source),
                     status,
                     cursor,
                 )
@@ -402,6 +513,37 @@ impl GithubPrValidationAdapter {
             GithubPrValidationError::integrity_failed(format!(
                 "failed to parse GitHub validation response for {endpoint}"
             ))
+            .with_provider_metadata(provider_metadata.clone())
+        })
+    }
+
+    fn post_graphql_json<T: for<'de> Deserialize<'de>>(
+        &self,
+        body: &str,
+        provider_metadata: &mut GithubValidationProviderMetadata,
+    ) -> std::result::Result<T, GithubPrValidationError> {
+        let response = self.api.post("/graphql", body).map_err(|mut error| {
+            error.provider_metadata.merge(provider_metadata);
+            error
+        })?;
+        provider_metadata.merge(&response.metadata);
+        let envelope =
+            serde_json::from_str::<GraphqlEnvelope<T>>(&response.body).map_err(|_| {
+                GithubPrValidationError::integrity_failed(
+                    "failed to parse GitHub validation GraphQL response",
+                )
+                .with_provider_metadata(provider_metadata.clone())
+            })?;
+        if !envelope.errors.is_empty() {
+            return Err(GithubPrValidationError::authentication_blocked(
+                "GitHub validation GraphQL query was rejected",
+            )
+            .with_provider_metadata(provider_metadata.clone()));
+        }
+        envelope.data.ok_or_else(|| {
+            GithubPrValidationError::integrity_failed(
+                "GitHub validation GraphQL response omitted its data envelope",
+            )
             .with_provider_metadata(provider_metadata.clone())
         })
     }
@@ -567,6 +709,25 @@ fn advance_array_page(
     }
 }
 
+fn advance_connection_page(
+    progress: &mut PageProgress,
+    page: usize,
+    has_next_page: bool,
+) -> Result<SourcePageState> {
+    if page == 0 {
+        bail!("GitHub validation connection returned no observable page")
+    }
+    progress.observed_through = page;
+    if has_next_page {
+        let next = next_page(page)?;
+        progress.next = Some(next);
+        Ok(SourcePageState::Next(next))
+    } else {
+        progress.next = None;
+        Ok(SourcePageState::Complete)
+    }
+}
+
 fn advance_counted_page(
     progress: &mut PageProgress,
     page: usize,
@@ -630,6 +791,49 @@ fn paged_query(base: &str, page: usize) -> String {
     format!("{base}&per_page={PER_PAGE}&page={page}")
 }
 
+fn repository_parts(repository: &str) -> Result<(&str, &str), GithubPrValidationError> {
+    let Some((owner, name)) = repository.split_once('/') else {
+        return Err(GithubPrValidationError::identity_failed(
+            "GitHub validation repository identity was malformed",
+        ));
+    };
+    if owner.is_empty() || name.is_empty() || name.contains('/') {
+        return Err(GithubPrValidationError::identity_failed(
+            "GitHub validation repository identity was malformed",
+        ));
+    }
+    Ok((owner, name))
+}
+
+fn review_threads_graphql_body(
+    owner: &str,
+    name: &str,
+    number: u64,
+    after: Option<&str>,
+) -> Result<String, GithubPrValidationError> {
+    let number = i64::try_from(number).map_err(|_| {
+        GithubPrValidationError::identity_failed(
+            "GitHub validation pull request number exceeded GraphQL range",
+        )
+    })?;
+    serde_json::to_string(&serde_json::json!({
+        "operationName": REVIEW_THREADS_GRAPHQL_OPERATION,
+        "query": REVIEW_THREADS_GRAPHQL_QUERY,
+        "variables": {
+            "owner": owner,
+            "name": name,
+            "number": number,
+            "first": PER_PAGE,
+            "after": after,
+        }
+    }))
+    .map_err(|_| {
+        GithubPrValidationError::integrity_failed(
+            "failed to encode GitHub validation GraphQL request",
+        )
+    })
+}
+
 fn source_label(source: GithubValidationSource) -> &'static str {
     match source {
         GithubValidationSource::PullRequest => "pull-request",
@@ -663,18 +867,29 @@ fn normalize_merge_state(
     Ok((state, None))
 }
 
-fn normalize_review(row: ReviewResponse) -> Option<GithubValidationActivity> {
-    row.submitted_at.map(|observed_at| {
+fn normalize_review(
+    row: ReviewResponse,
+) -> std::result::Result<Option<GithubValidationActivity>, GithubPrValidationError> {
+    let Some(observed_at) = normalize_provider_timestamp(row.submitted_at, "review submission")
+        .map_err(|error| GithubPrValidationError::integrity_failed(error.to_string()))?
+    else {
+        return Ok(None);
+    };
+    ensure_commit_sha(&row.commit_id, "review commit")
+        .map_err(|error| GithubPrValidationError::integrity_failed(error.to_string()))?;
+    Ok(Some(
         GithubValidationActivity::new(
             row.id.opaque("review"),
             GithubValidationActivityKind::Review,
-            sanitized_provider_text(&observed_at, 64),
+            observed_at,
         )
-        .with_commit_sha(GithubCommitSha::new(sanitized_provider_text(
-            &row.commit_id,
-            40,
-        )))
-    })
+        .with_commit_sha(GithubCommitSha::new(row.commit_id))
+        .with_review_state(normalize_review_state(&row.state))
+        .with_actor(normalize_actor(row.user))
+        .with_body_marker(explicit_body_marker(
+            row.body.as_deref().unwrap_or_default(),
+        )),
+    ))
 }
 
 fn normalize_issue_comment(row: IssueCommentResponse) -> GithubValidationActivity {
@@ -683,51 +898,125 @@ fn normalize_issue_comment(row: IssueCommentResponse) -> GithubValidationActivit
         GithubValidationActivityKind::IssueComment,
         sanitized_provider_text(&row.updated_at, 64),
     )
+    .with_actor(normalize_actor(row.user))
+    .with_body_marker(explicit_body_marker(&row.body))
 }
 
-fn normalize_review_threads(rows: Vec<ReviewCommentResponse>) -> Vec<GithubValidationActivity> {
-    let mut threads = BTreeMap::<String, (GithubValidationActivity, bool)>::new();
-    let mut comments = Vec::new();
-    for row in rows {
-        let is_root = row.in_reply_to_id.is_none();
-        let root = row.in_reply_to_id.as_ref().unwrap_or(&row.id);
-        let thread_id = root.label("review-thread");
-        let thread = GithubValidationActivity::new(
-            GithubOpaqueId::new(thread_id.clone()),
-            GithubValidationActivityKind::ReviewThread,
-            sanitized_provider_text(&row.updated_at, 64),
-        )
-        .with_commit_sha(GithubCommitSha::new(sanitized_provider_text(
-            &row.commit_id,
-            40,
-        )));
-        match threads.get(&thread_id) {
-            // The root comment is the canonical thread activity. A reply may synthesize a thread
-            // only when its root is absent from this page; it must never replace root identity.
-            Some((_, current_is_root)) if *current_is_root || !is_root => {}
-            _ => {
-                threads.insert(thread_id, (thread, is_root));
-            }
-        }
-        if !is_root {
-            comments.push(
-                GithubValidationActivity::new(
-                    row.id.opaque("review-comment"),
-                    GithubValidationActivityKind::ReviewComment,
-                    sanitized_provider_text(&row.updated_at, 64),
+fn normalize_review_threads(
+    rows: Vec<Option<ReviewThreadGraphqlNode>>,
+) -> std::result::Result<Vec<GithubValidationActivity>, GithubPrValidationError> {
+    let mut activities = Vec::new();
+    for row in rows.into_iter().flatten() {
+        let root = row
+            .comments
+            .nodes
+            .into_iter()
+            .flatten()
+            .next()
+            .ok_or_else(|| {
+                GithubPrValidationError::integrity_failed(
+                    "GitHub review thread omitted its root comment",
                 )
-                .with_commit_sha(GithubCommitSha::new(sanitized_provider_text(
-                    &row.commit_id,
-                    40,
-                ))),
-            );
+            })?;
+        let commit = root.commit.ok_or_else(|| {
+            GithubPrValidationError::integrity_failed(
+                "GitHub review thread root omitted its commit identity",
+            )
+        })?;
+        ensure_commit_sha(&commit.oid, "review thread commit")
+            .map_err(|error| GithubPrValidationError::integrity_failed(error.to_string()))?;
+        let observed_at =
+            normalize_provider_timestamp(Some(root.updated_at), "review thread root update")
+                .map_err(|error| GithubPrValidationError::integrity_failed(error.to_string()))?
+                .expect("review thread update was supplied");
+        activities.push(
+            GithubValidationActivity::new(
+                row.id.opaque("review-thread"),
+                GithubValidationActivityKind::ReviewThread,
+                observed_at,
+            )
+            .with_commit_sha(GithubCommitSha::new(commit.oid))
+            .with_actor(normalize_graphql_actor(root.author))
+            .with_body_marker(explicit_body_marker(&root.body))
+            .with_thread_resolved(row.is_resolved),
+        );
+    }
+    Ok(activities)
+}
+
+fn normalize_review_state(state: &str) -> GithubValidationReviewState {
+    match state.trim().to_ascii_uppercase().as_str() {
+        "APPROVED" => GithubValidationReviewState::Approved,
+        "CHANGES_REQUESTED" => GithubValidationReviewState::ChangesRequested,
+        "COMMENTED" => GithubValidationReviewState::Commented,
+        "DISMISSED" => GithubValidationReviewState::Dismissed,
+        "PENDING" => GithubValidationReviewState::Pending,
+        _ => GithubValidationReviewState::Unknown(sanitized_provider_text(state, 64)),
+    }
+}
+
+fn source_endpoint_label(source: GithubValidationSource) -> String {
+    let transport = if source == GithubValidationSource::ReviewThreads {
+        "graphql"
+    } else {
+        "rest"
+    };
+    format!("{transport}:{}", source_label(source))
+}
+
+fn normalize_actor(actor: Option<ValidationActorResponse>) -> Option<GithubValidationActor> {
+    let actor = actor?;
+    normalized_actor(&actor.login, &actor.kind)
+}
+
+fn normalize_graphql_actor(actor: Option<GraphqlActorResponse>) -> Option<GithubValidationActor> {
+    let actor = actor?;
+    normalized_actor(&actor.login, &actor.typename)
+}
+
+fn normalized_actor(login: &str, kind: &str) -> Option<GithubValidationActor> {
+    let login = non_empty_provider_text(login, 160)?;
+    let kind = match kind.trim().to_ascii_lowercase().as_str() {
+        "user" => GithubValidationActorKind::User,
+        "bot" => GithubValidationActorKind::Bot,
+        "organization" => GithubValidationActorKind::Organization,
+        "mannequin" => GithubValidationActorKind::Mannequin,
+        _ => GithubValidationActorKind::Unknown,
+    };
+    Some(GithubValidationActor::new(login, kind))
+}
+
+fn explicit_body_marker(body: &str) -> GithubValidationBodyMarker {
+    let mut fenced = false;
+    for raw_line in body.lines() {
+        if !fenced && (raw_line.starts_with("    ") || raw_line.starts_with('\t')) {
+            continue;
+        }
+        let line = raw_line.trim();
+        if line.starts_with("```") || line.starts_with("~~~") {
+            fenced = !fenced;
+            continue;
+        }
+        if fenced || line.starts_with('>') {
+            continue;
+        }
+        let line = line.to_ascii_lowercase();
+        if explicit_command_line(&line, "@akra fix") {
+            return GithubValidationBodyMarker::AkraFix;
+        }
+        if explicit_command_line(&line, "/akra remediate") {
+            return GithubValidationBodyMarker::AkraRemediate;
         }
     }
-    threads
-        .into_values()
-        .map(|(thread, _)| thread)
-        .chain(comments)
-        .collect()
+    GithubValidationBodyMarker::None
+}
+
+fn explicit_command_line(line: &str, command: &str) -> bool {
+    line == command
+        || line
+            .strip_prefix(command)
+            .and_then(|suffix| suffix.chars().next())
+            .is_some_and(char::is_whitespace)
 }
 
 fn ensure_run_sha(
@@ -853,22 +1142,100 @@ struct PullRequestHead {
 #[derive(Deserialize)]
 struct ReviewResponse {
     id: ProviderId,
+    body: Option<String>,
+    state: String,
     submitted_at: Option<String>,
     commit_id: String,
+    user: Option<ValidationActorResponse>,
 }
 
 #[derive(Deserialize)]
 struct IssueCommentResponse {
     id: ProviderId,
+    body: String,
     updated_at: String,
+    user: Option<ValidationActorResponse>,
 }
 
 #[derive(Deserialize)]
-struct ReviewCommentResponse {
+struct ValidationActorResponse {
+    login: String,
+    #[serde(rename = "type")]
+    kind: String,
+}
+
+#[derive(Deserialize)]
+struct GraphqlEnvelope<T> {
+    data: Option<T>,
+    #[serde(default)]
+    errors: Vec<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+struct ReviewThreadsGraphqlData {
+    repository: Option<ReviewThreadsGraphqlRepository>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewThreadsGraphqlRepository {
+    pull_request: Option<ReviewThreadsGraphqlPullRequest>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewThreadsGraphqlPullRequest {
+    review_threads: ReviewThreadsGraphqlConnection,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewThreadsGraphqlConnection {
+    page_info: GraphqlPageInfo,
+    nodes: Vec<Option<ReviewThreadGraphqlNode>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GraphqlPageInfo {
+    has_next_page: bool,
+    end_cursor: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewThreadGraphqlNode {
     id: ProviderId,
+    is_resolved: bool,
+    comments: ReviewThreadCommentsGraphqlConnection,
+}
+
+#[derive(Deserialize)]
+struct ReviewThreadCommentsGraphqlConnection {
+    nodes: Vec<Option<ReviewThreadCommentGraphqlNode>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewThreadCommentGraphqlNode {
+    #[allow(dead_code)]
+    id: ProviderId,
+    body: String,
     updated_at: String,
-    commit_id: String,
-    in_reply_to_id: Option<ProviderId>,
+    author: Option<GraphqlActorResponse>,
+    commit: Option<GraphqlCommitResponse>,
+}
+
+#[derive(Deserialize)]
+struct GraphqlActorResponse {
+    login: String,
+    #[serde(rename = "__typename")]
+    typename: String,
+}
+
+#[derive(Deserialize)]
+struct GraphqlCommitResponse {
+    oid: String,
 }
 
 #[derive(Deserialize)]
@@ -938,10 +1305,6 @@ impl ProviderId {
             Self::String(value) => value.clone(),
             Self::Unsigned(value) => value.to_string(),
         }
-    }
-
-    fn label(&self, namespace: &str) -> String {
-        format!("{namespace}:{}", sanitized_provider_id(&self.value()))
     }
 
     fn opaque(&self, namespace: &str) -> GithubOpaqueId {

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -8,7 +8,8 @@ use super::{GithubPrValidationAdapter, GithubValidationApi, GithubValidationApiR
 use crate::application::port::outbound::github_pr_validation_port::{
     GithubPrMergeState, GithubPrValidationError, GithubPrValidationErrorClass,
     GithubPrValidationObservationRequest, GithubPrValidationPort, GithubValidationActivityKind,
-    GithubValidationProviderMetadata, GithubValidationRunStatus, GithubValidationSource,
+    GithubValidationActorKind, GithubValidationBodyMarker, GithubValidationProviderMetadata,
+    GithubValidationReviewState, GithubValidationRunStatus, GithubValidationSource,
     GithubValidationSourceStatus,
 };
 use crate::domain::github_review::{GithubCommitSha, GithubPullRequestTarget};
@@ -24,8 +25,12 @@ struct FixtureApi {
 
 impl FixtureApi {
     fn new(responses: impl IntoIterator<Item = (String, String)>) -> Self {
+        let mut responses = responses.into_iter().collect::<BTreeMap<_, _>>();
+        responses
+            .entry("POST /graphql".to_string())
+            .or_insert_with(empty_review_threads_graphql_response);
         Self {
-            responses: responses.into_iter().collect(),
+            responses,
             requests: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -55,6 +60,93 @@ impl GithubValidationApi for FixtureApi {
                 GithubPrValidationError::integrity_failed(format!(
                     "unexpected fixture endpoint: {endpoint}"
                 ))
+            })
+    }
+
+    fn post(
+        &self,
+        endpoint: &str,
+        _body: &str,
+    ) -> std::result::Result<GithubValidationApiResponse, GithubPrValidationError> {
+        let key = format!("POST {endpoint}");
+        self.requests
+            .lock()
+            .expect("request lock")
+            .push(key.clone());
+        self.responses
+            .get(&key)
+            .cloned()
+            .map(|body| GithubValidationApiResponse {
+                body,
+                metadata: GithubValidationProviderMetadata::default(),
+            })
+            .ok_or_else(|| {
+                GithubPrValidationError::integrity_failed(format!(
+                    "unexpected fixture endpoint: {key}"
+                ))
+            })
+    }
+}
+
+struct SequencedGraphqlApi {
+    fixture: FixtureApi,
+    graphql_responses: Mutex<VecDeque<String>>,
+    graphql_bodies: Arc<Mutex<Vec<String>>>,
+}
+
+impl SequencedGraphqlApi {
+    fn new(fixture: FixtureApi, responses: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            fixture,
+            graphql_responses: Mutex::new(responses.into_iter().collect()),
+            graphql_bodies: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn graphql_bodies(&self) -> Arc<Mutex<Vec<String>>> {
+        Arc::clone(&self.graphql_bodies)
+    }
+}
+
+impl GithubValidationApi for SequencedGraphqlApi {
+    fn get(
+        &self,
+        endpoint: &str,
+    ) -> std::result::Result<GithubValidationApiResponse, GithubPrValidationError> {
+        self.fixture.get(endpoint)
+    }
+
+    fn post(
+        &self,
+        endpoint: &str,
+        body: &str,
+    ) -> std::result::Result<GithubValidationApiResponse, GithubPrValidationError> {
+        if endpoint != "/graphql" {
+            return Err(GithubPrValidationError::integrity_failed(
+                "unexpected sequenced fixture endpoint",
+            ));
+        }
+        self.fixture
+            .requests
+            .lock()
+            .expect("request lock")
+            .push("POST /graphql".to_string());
+        self.graphql_bodies
+            .lock()
+            .expect("GraphQL body lock")
+            .push(body.to_string());
+        self.graphql_responses
+            .lock()
+            .expect("GraphQL response lock")
+            .pop_front()
+            .map(|body| GithubValidationApiResponse {
+                body,
+                metadata: GithubValidationProviderMetadata::default(),
+            })
+            .ok_or_else(|| {
+                GithubPrValidationError::integrity_failed(
+                    "sequenced GraphQL fixture exhausted its responses",
+                )
             })
     }
 }
@@ -112,6 +204,57 @@ impl GithubValidationApi for MovingHeadApi {
         }
         self.fixture.get(endpoint)
     }
+
+    fn post(
+        &self,
+        endpoint: &str,
+        body: &str,
+    ) -> std::result::Result<GithubValidationApiResponse, GithubPrValidationError> {
+        self.fixture.post(endpoint, body)
+    }
+}
+
+fn empty_review_threads_graphql_response() -> String {
+    r#"{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}"#.to_string()
+}
+
+fn review_thread_node(index: usize) -> serde_json::Value {
+    serde_json::json!({
+        "id": format!("PRRT_stable_{index:03}"),
+        "isResolved": false,
+        "comments": {
+            "nodes": [{
+                "id": format!("PRRC_root_{index:03}"),
+                "body": "thread root",
+                "updatedAt": "2026-08-07T10:00:02Z",
+                "author": {"login": "reviewer", "__typename": "User"},
+                "commit": {"oid": SHA}
+            }]
+        }
+    })
+}
+
+fn review_threads_page(
+    nodes: Vec<serde_json::Value>,
+    has_next_page: bool,
+    end_cursor: Option<&str>,
+) -> String {
+    serde_json::json!({
+        "data": {
+            "repository": {
+                "pullRequest": {
+                    "reviewThreads": {
+                        "pageInfo": {
+                            "hasNextPage": has_next_page,
+                            "endCursor": end_cursor
+                        },
+                        "nodes": nodes
+                    }
+                }
+            }
+        }
+    })
+    .to_string()
 }
 
 fn request(
@@ -156,20 +299,26 @@ fn complete_fixture() -> FixtureApi {
         (
             endpoint("pulls/42/reviews?per_page=100&page=1"),
             format!(
-                r#"[{{"id":9007199254740993,"submitted_at":"2026-08-07T10:00:03Z","commit_id":"{SHA}"}}]"#
+                r#"[{{"id":9007199254740993,"body":"LGTM","state":"COMMENTED","submitted_at":"2026-08-07T10:00:03Z","commit_id":"{SHA}","user":{{"login":"reviewer","type":"User"}}}}]"#
             ),
         ),
         (
             endpoint("issues/42/comments?per_page=100&page=1"),
-            r#"[{"id":8,"updated_at":"2026-08-07T10:00:01Z"}]"#.to_string(),
+            r#"[{"id":8,"body":"ordinary conversation","updated_at":"2026-08-07T10:00:01Z","user":{"login":"operator","type":"User"}}]"#.to_string(),
         ),
         (
-            endpoint("pulls/42/comments?per_page=100&page=1"),
+            "POST /graphql".to_string(),
             format!(
-                r#"[
-                    {{"id":12,"updated_at":"2026-08-07T10:00:04Z","commit_id":"{SHA}","in_reply_to_id":10}},
-                    {{"id":10,"updated_at":"2026-08-07T10:00:02Z","commit_id":"{SHA}","in_reply_to_id":null}}
-                ]"#
+                r#"{{"data":{{"repository":{{"pullRequest":{{"reviewThreads":{{
+                    "pageInfo":{{"hasNextPage":false,"endCursor":null}},
+                    "nodes":[{{"id":"PRRT_stable_10","isResolved":false,"comments":{{"nodes":[{{
+                        "id":"PRRC_root_10","body":"please fix this","updatedAt":"2026-08-07T10:00:02Z",
+                        "author":{{"login":"reviewer","__typename":"User"}},"commit":{{"oid":"{SHA}"}}
+                    }},{{
+                        "id":"PRRC_reply_10","body":"a reordered reply must not become a second finding","updatedAt":"2026-08-07T10:00:04Z",
+                        "author":{{"login":"other-reviewer","__typename":"User"}},"commit":{{"oid":"{SHA}"}}
+                    }}]}}}}]
+                }}}}}}}}}}"#
             ),
         ),
         (
@@ -230,18 +379,50 @@ fn collects_sha_bound_merge_activity_checks_and_workflows_in_canonical_order() {
             ),
             (
                 GithubValidationActivityKind::ReviewThread,
-                "review-thread:10"
+                "review-thread:PRRT_stable_10"
             ),
             (
                 GithubValidationActivityKind::Review,
                 "review:9007199254740993"
             ),
-            (
-                GithubValidationActivityKind::ReviewComment,
-                "review-comment:12"
-            ),
         ]
     );
+    let issue = snapshot
+        .activities
+        .iter()
+        .find(|activity| activity.kind == GithubValidationActivityKind::IssueComment)
+        .expect("issue comment activity");
+    assert_eq!(issue.body_marker, GithubValidationBodyMarker::None);
+    assert_eq!(
+        issue.actor.as_ref().map(|actor| actor.kind),
+        Some(GithubValidationActorKind::User)
+    );
+    let review = snapshot
+        .activities
+        .iter()
+        .find(|activity| activity.kind == GithubValidationActivityKind::Review)
+        .expect("review activity");
+    assert_eq!(
+        review.review_state,
+        Some(GithubValidationReviewState::Commented)
+    );
+    assert_eq!(review.body_marker, GithubValidationBodyMarker::None);
+    let thread = snapshot
+        .activities
+        .iter()
+        .find(|activity| activity.kind == GithubValidationActivityKind::ReviewThread)
+        .expect("review thread activity");
+    assert_eq!(thread.thread_resolved, Some(false));
+    assert_eq!(
+        thread.actor.as_ref().map(|actor| actor.login.as_str()),
+        Some("reviewer")
+    );
+    let thread_source = snapshot
+        .sources
+        .iter()
+        .find(|source| source.source == GithubValidationSource::ReviewThreads)
+        .expect("review thread source");
+    assert_eq!(thread_source.endpoint, "graphql:review-threads");
     assert_eq!(
         snapshot
             .check_runs
@@ -291,10 +472,6 @@ fn pr2100_push_fixture_treats_successful_required_and_skipped_optional_checks_as
         ),
         (
             endpoint("issues/42/comments?per_page=100&page=1"),
-            "[]".to_string(),
-        ),
-        (
-            endpoint("pulls/42/comments?per_page=100&page=1"),
             "[]".to_string(),
         ),
         (
@@ -373,10 +550,6 @@ fn closed_unmerged_pr_uses_distributor_attested_evidence_sha() {
             "[]".to_string(),
         ),
         (
-            endpoint("pulls/42/comments?per_page=100&page=1"),
-            "[]".to_string(),
-        ),
-        (
             endpoint(&format!(
                 "commits/{MERGE_SHA}/check-runs?filter=all&per_page=100&page=1"
             )),
@@ -411,7 +584,7 @@ fn cursor_polls_return_stable_cumulative_evidence_across_all_sources() {
     let reviews = (0..100)
         .map(|id| {
             format!(
-                r#"{{"id":{},"submitted_at":"2026-08-07T10:00:00Z","commit_id":"{SHA}"}}"#,
+                r#"{{"id":{},"body":"","state":"COMMENTED","submitted_at":"2026-08-07T10:00:00Z","commit_id":"{SHA}","user":{{"login":"reviewer","type":"User"}}}}"#,
                 1000 + id
             )
         })
@@ -423,7 +596,7 @@ fn cursor_polls_return_stable_cumulative_evidence_across_all_sources() {
     );
     responses.insert(
         endpoint("pulls/42/reviews?per_page=100&page=2"),
-        format!(r#"[{{"id":2000,"submitted_at":"2026-08-07T10:01:00Z","commit_id":"{SHA}"}}]"#),
+        format!(r#"[{{"id":2000,"body":"","state":"COMMENTED","submitted_at":"2026-08-07T10:01:00Z","commit_id":"{SHA}","user":{{"login":"reviewer","type":"User"}}}}]"#),
     );
     let first_api = FixtureApi::new(responses.clone());
     let first = GithubPrValidationAdapter::with_api(first_api)
@@ -433,7 +606,7 @@ fn cursor_polls_return_stable_cumulative_evidence_across_all_sources() {
         .next_cursor
         .clone()
         .expect("full page should continue");
-    assert_eq!(first.activities.len(), 103);
+    assert_eq!(first.activities.len(), 102);
     let review_source = first
         .sources
         .iter()
@@ -452,7 +625,7 @@ fn cursor_polls_return_stable_cumulative_evidence_across_all_sources() {
         .load_validation_snapshot(&request(Some(cursor.clone())))
         .expect("cursor should resume");
 
-    assert_eq!(second.activities.len(), 104);
+    assert_eq!(second.activities.len(), 103);
     assert!(
         second
             .activities
@@ -475,7 +648,7 @@ fn cursor_polls_return_stable_cumulative_evidence_across_all_sources() {
             endpoint("pulls/42/reviews?per_page=100&page=1"),
             endpoint("pulls/42/reviews?per_page=100&page=2"),
             endpoint("issues/42/comments?per_page=100&page=1"),
-            endpoint("pulls/42/comments?per_page=100&page=1"),
+            "POST /graphql".to_string(),
             endpoint(&format!(
                 "commits/{MERGE_SHA}/check-runs?filter=all&per_page=100&page=1"
             )),
@@ -499,6 +672,99 @@ fn cursor_polls_return_stable_cumulative_evidence_across_all_sources() {
             .to_string()
             .contains("does not match the requested PR revision")
     );
+}
+
+#[test]
+fn review_thread_pagination_refetches_stable_thread_ids_without_reply_duplicates() {
+    let first_page = (0..100).map(review_thread_node).collect::<Vec<_>>();
+    let first_api = SequencedGraphqlApi::new(
+        complete_fixture(),
+        [review_threads_page(
+            first_page.clone(),
+            true,
+            Some("cursor-100"),
+        )],
+    );
+    let first = GithubPrValidationAdapter::with_api(first_api)
+        .load_validation_snapshot(&request(None))
+        .expect("first review thread page should load");
+    let cursor = first
+        .next_cursor
+        .expect("a continued review thread connection should retain a cursor");
+    assert_eq!(
+        first
+            .activities
+            .iter()
+            .filter(|activity| activity.kind == GithubValidationActivityKind::ReviewThread)
+            .count(),
+        100
+    );
+
+    let mut reordered_first_page = first_page;
+    reordered_first_page.reverse();
+    let resumed_api = SequencedGraphqlApi::new(
+        complete_fixture(),
+        [
+            review_threads_page(reordered_first_page, true, Some("cursor-100")),
+            review_threads_page(vec![review_thread_node(100)], false, None),
+        ],
+    );
+    let bodies = resumed_api.graphql_bodies();
+    let resumed = GithubPrValidationAdapter::with_api(resumed_api)
+        .load_validation_snapshot(&request(Some(cursor)))
+        .expect("review thread pagination should resume cumulatively");
+    let thread_ids = resumed
+        .activities
+        .iter()
+        .filter(|activity| activity.kind == GithubValidationActivityKind::ReviewThread)
+        .map(|activity| activity.id.as_str().to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(thread_ids.len(), 101);
+    assert_eq!(
+        thread_ids.iter().collect::<BTreeSet<_>>().len(),
+        thread_ids.len(),
+        "reply order and cumulative refetch must not duplicate a thread finding"
+    );
+    assert!(
+        thread_ids
+            .iter()
+            .any(|id| id == "review-thread:PRRT_stable_000")
+    );
+    assert!(
+        thread_ids
+            .iter()
+            .any(|id| id == "review-thread:PRRT_stable_100")
+    );
+    assert!(resumed.next_cursor.is_none());
+
+    let bodies = bodies.lock().expect("GraphQL body lock");
+    assert_eq!(bodies.len(), 2);
+    let first_body: serde_json::Value = serde_json::from_str(&bodies[0]).unwrap();
+    let second_body: serde_json::Value = serde_json::from_str(&bodies[1]).unwrap();
+    assert!(first_body["variables"]["after"].is_null());
+    assert_eq!(second_body["variables"]["after"], "cursor-100");
+}
+
+#[test]
+fn graphql_review_thread_errors_fail_closed_without_leaking_provider_copy() {
+    let mut responses = complete_fixture().responses;
+    responses.insert(
+        "POST /graphql".to_string(),
+        r#"{"data":null,"errors":[{"message":"token ghp_secret_canary denied"}]}"#.to_string(),
+    );
+    let error = GithubPrValidationAdapter::with_api(FixtureApi::new(responses))
+        .load_validation_snapshot(&request(None))
+        .expect_err("GraphQL errors must not be treated as an empty review thread result");
+
+    assert_eq!(
+        error.class,
+        GithubPrValidationErrorClass::AuthenticationBlocked
+    );
+    assert_eq!(
+        error.to_string(),
+        "GitHub validation GraphQL query was rejected"
+    );
+    assert!(!error.to_string().contains("ghp_secret_canary"));
 }
 
 #[test]
@@ -535,7 +801,7 @@ fn merged_evidence_restarts_pagination_from_pre_merge_cursor() {
     let reviews = (0..100)
         .map(|id| {
             format!(
-                r#"{{"id":{},"submitted_at":"2026-08-07T10:00:00Z","commit_id":"{SHA}"}}"#,
+                r#"{{"id":{},"body":"","state":"COMMENTED","submitted_at":"2026-08-07T10:00:00Z","commit_id":"{SHA}","user":{{"login":"reviewer","type":"User"}}}}"#,
                 1000 + id
             )
         })
@@ -547,7 +813,7 @@ fn merged_evidence_restarts_pagination_from_pre_merge_cursor() {
     );
     open_responses.insert(
         endpoint("pulls/42/reviews?per_page=100&page=2"),
-        format!(r#"[{{"id":2000,"submitted_at":"2026-08-07T10:01:00Z","commit_id":"{SHA}"}}]"#),
+        format!(r#"[{{"id":2000,"body":"","state":"COMMENTED","submitted_at":"2026-08-07T10:01:00Z","commit_id":"{SHA}","user":{{"login":"reviewer","type":"User"}}}}]"#),
     );
 
     let first = GithubPrValidationAdapter::with_api(FixtureApi::new(open_responses))
@@ -562,7 +828,7 @@ fn merged_evidence_restarts_pagination_from_pre_merge_cursor() {
     );
     merged_responses.insert(
         endpoint("pulls/42/reviews?per_page=100&page=2"),
-        format!(r#"[{{"id":2000,"submitted_at":"2026-08-07T10:01:00Z","commit_id":"{SHA}"}}]"#),
+        format!(r#"[{{"id":2000,"body":"","state":"COMMENTED","submitted_at":"2026-08-07T10:01:00Z","commit_id":"{SHA}","user":{{"login":"reviewer","type":"User"}}}}]"#),
     );
     let merged_api = FixtureApi::new(merged_responses);
     let merged_requests = merged_api.request_log();
@@ -650,4 +916,30 @@ fn rejects_check_or_workflow_rows_not_bound_to_the_requested_sha() {
         assert_eq!(error.class, GithubPrValidationErrorClass::IdentityFailed);
         assert!(!error.to_string().contains(wrong_sha));
     }
+}
+
+#[test]
+fn body_marker_accepts_only_unquoted_unfenced_explicit_commands() {
+    for body in [
+        "> @akra fix",
+        "```\n/akra remediate\n```",
+        "    @akra fix",
+        "\t/akra remediate",
+        "please consider @akra fix later",
+        "@akra fixture",
+    ] {
+        assert_eq!(
+            super::explicit_body_marker(body),
+            GithubValidationBodyMarker::None,
+            "non-command body must stay non-actionable: {body:?}"
+        );
+    }
+    assert_eq!(
+        super::explicit_body_marker("context\n  @AKRA FIX now"),
+        GithubValidationBodyMarker::AkraFix
+    );
+    assert_eq!(
+        super::explicit_body_marker("/akra remediate"),
+        GithubValidationBodyMarker::AkraRemediate
+    );
 }
