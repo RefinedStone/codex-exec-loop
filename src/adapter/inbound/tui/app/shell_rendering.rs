@@ -322,7 +322,12 @@ fn draw_fullscreen_conversation_shell(
     // exit modal은 두 영역을 모두 덮어야 하므로 이 함수 밖에서 계속 그린다.
     let tail_area = fullscreen_tail_render_area(layout[1], &tail_view);
     FullscreenConversationShellRenderReceipt {
-        queue_receipt_undo_hit_area: render_tail_surface(frame, tail_area, tail_view, false),
+        queue_receipt_undo_hit_area: render_tail_surface(
+            frame,
+            tail_area,
+            tail_view,
+            shell_overlay == ShellOverlay::Supersession,
+        ),
         transcript_viewport_card_digests: SharedTranscriptCardDigests::from(Vec::new()),
         transcript_viewport_card_hit_areas: Vec::new(),
         transcript_viewport_frame_snapshot: None,
