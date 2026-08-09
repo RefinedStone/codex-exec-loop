@@ -1177,9 +1177,9 @@ fn parse_validation_http_response(
         403 if metadata.rate_limit_remaining == Some(0) || retry_after_at.is_some() => {
             GithubPrValidationErrorClass::RetryableProvider
         }
-        401 | 403 => GithubPrValidationErrorClass::AuthenticationBlocked,
+        401 | 403 | 404 => GithubPrValidationErrorClass::AuthenticationBlocked,
         408 | 425 | 429 | 500..=599 => GithubPrValidationErrorClass::RetryableProvider,
-        404 | 409 | 422 => GithubPrValidationErrorClass::IdentityFailed,
+        409 | 422 => GithubPrValidationErrorClass::IdentityFailed,
         _ => GithubPrValidationErrorClass::IntegrityFailed,
     };
     Err(GithubPrValidationError::new(
@@ -1407,7 +1407,7 @@ mod validation_http_tests {
     }
 
     #[test]
-    fn validation_http_5xx_retries_but_plain_403_blocks_authentication() {
+    fn validation_http_5xx_retries_but_plain_403_and_404_block_authentication() {
         let observed_at = Utc.with_ymd_and_hms(2026, 8, 10, 0, 0, 0).unwrap();
         let unavailable =
             parse_validation_http_response(&response(503, "", "provider detail"), observed_at)
@@ -1424,6 +1424,14 @@ mod validation_http_tests {
             GithubPrValidationErrorClass::AuthenticationBlocked
         );
         assert!(!forbidden.message.contains("secret detail"));
+        let hidden_private_repository =
+            parse_validation_http_response(&response(404, "", "secret detail"), observed_at)
+                .unwrap_err();
+        assert_eq!(
+            hidden_private_repository.class,
+            GithubPrValidationErrorClass::AuthenticationBlocked
+        );
+        assert!(!hidden_private_repository.message.contains("secret detail"));
     }
 }
 
