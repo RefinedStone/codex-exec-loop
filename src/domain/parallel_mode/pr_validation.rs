@@ -686,8 +686,8 @@ pub enum PrValidationTransitionRejection {
         observed: u64,
     },
     IntegrationAuthorityConflict {
-        expected: IntegrationAttestation,
-        observed: IntegrationAttestation,
+        expected: Box<IntegrationAttestation>,
+        observed: Box<IntegrationAttestation>,
     },
     FindingNotObserved(PrValidationFindingKey),
     RemediationNotQueued(PrValidationFindingKey),
@@ -1003,8 +1003,8 @@ impl PrValidationRecord {
                 }
                 return Err(
                     PrValidationTransitionRejection::IntegrationAuthorityConflict {
-                        expected: expected.clone(),
-                        observed: attestation.clone(),
+                        expected: Box::new(expected.clone()),
+                        observed: Box::new(attestation.clone()),
                     },
                 );
             }
@@ -1025,8 +1025,8 @@ impl PrValidationRecord {
                 .expect("legacy GitHub merge identity is structurally valid");
                 return Err(
                     PrValidationTransitionRejection::IntegrationAuthorityConflict {
-                        expected: legacy,
-                        observed: attestation.clone(),
+                        expected: Box::new(legacy),
+                        observed: Box::new(attestation.clone()),
                     },
                 );
             }
