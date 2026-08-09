@@ -824,6 +824,74 @@ fn successful_latest_attempt_suppresses_an_older_failed_attempt() {
 }
 
 #[test]
+fn active_rerun_cannot_settle_from_the_previous_attempts_successful_gate() {
+    let suite_id = GithubOpaqueId::new("check-suite:ci");
+    let mut active = merged_snapshot();
+    active.workflow_runs = vec![
+        GithubValidationWorkflowRun::new(
+            GithubOpaqueId::new("workflow:rerun"),
+            "Native PR Checks",
+            GithubCommitSha::new(MERGE),
+            GithubValidationRunStatus::InProgress,
+        )
+        .with_attempt_metadata(
+            2,
+            Some("2026-08-08T00:00:00Z".to_string()),
+            Some("2026-08-08T01:01:00Z".to_string()),
+        )
+        .with_attempt_correlation(
+            Some(suite_id.clone()),
+            Some("2026-08-08T01:00:00Z".to_string()),
+        ),
+    ];
+    let mut completed = active.clone();
+    completed.check_runs.push(
+        GithubValidationCheckRun::new(
+            GithubOpaqueId::new("check:ci-attempt-2"),
+            "Post-Merge Gate",
+            GithubCommitSha::new(MERGE),
+            GithubValidationRunStatus::Succeeded,
+        )
+        .with_attempt_metadata(
+            Some("github-actions".to_string()),
+            Some(suite_id),
+            Some("2026-08-08T01:10:00Z".to_string()),
+            Some("2026-08-08T01:11:00Z".to_string()),
+        ),
+    );
+    completed.workflow_runs[0].status = GithubValidationRunStatus::Succeeded;
+    let (repo, observation, remediation) = setup(
+        "validation-active-rerun",
+        vec![active.clone(), active, completed.clone(), completed],
+    );
+    let service = test_parallel_mode_service();
+    service
+        .persist_pr_validation_record(
+            &repo.workspace_dir(),
+            &repo.pool_root(),
+            None,
+            &registered_record(),
+        )
+        .unwrap();
+
+    for revision in 1..=3 {
+        assert_eq!(
+            service
+                .poll_pr_validation(&observation, &remediation, request(&repo, revision, HEAD_A))
+                .unwrap(),
+            PrValidationPollResult::Waiting
+        );
+    }
+    assert_eq!(
+        service
+            .poll_pr_validation(&observation, &remediation, request(&repo, 4, HEAD_A))
+            .unwrap(),
+        PrValidationPollResult::Settled
+    );
+    assert!(remediation.deliveries.lock().unwrap().is_empty());
+}
+
+#[test]
 fn malicious_provider_identity_is_bounded_before_remediation() {
     let mut failed = snapshot(HEAD_A, GithubValidationRunStatus::Failed);
     failed.check_runs[0].id = GithubOpaqueId::new(format!("evil\n{}", "x".repeat(2_000)));

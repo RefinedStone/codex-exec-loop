@@ -940,10 +940,12 @@ fn snapshot_fingerprint(snapshot: &GithubPrValidationSnapshot) -> String {
     }
     for run in &snapshot.workflow_runs {
         digest.update(format!(
-            "workflow:{}:{}:{}:{:?}:{:?}:{:?}",
+            "workflow:{}:{}:{}:{:?}:{:?}:{:?}:{:?}:{:?}",
             run.id.as_str(),
             run.name,
             run.run_attempt,
+            run.check_suite_id.as_ref().map(|id| id.as_str()),
+            run.run_started_at,
             run.created_at,
             run.updated_at,
             run.status

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use chrono::DateTime;
 
 use crate::domain::github_review::{GithubCommitSha, GithubOpaqueId, GithubPullRequestTarget};
 use crate::domain::parallel_mode::{
@@ -233,7 +234,9 @@ pub struct GithubValidationWorkflowRun {
     pub name: String,
     pub target_sha: GithubCommitSha,
     pub status: GithubValidationRunStatus,
+    pub check_suite_id: Option<GithubOpaqueId>,
     pub run_attempt: u64,
+    pub run_started_at: Option<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
 }
@@ -250,7 +253,9 @@ impl GithubValidationWorkflowRun {
             name: name.into(),
             target_sha,
             status,
+            check_suite_id: None,
             run_attempt: 1,
+            run_started_at: None,
             created_at: None,
             updated_at: None,
         }
@@ -265,6 +270,16 @@ impl GithubValidationWorkflowRun {
         self.run_attempt = run_attempt;
         self.created_at = created_at;
         self.updated_at = updated_at;
+        self
+    }
+
+    pub fn with_attempt_correlation(
+        mut self,
+        check_suite_id: Option<GithubOpaqueId>,
+        run_started_at: Option<String>,
+    ) -> Self {
+        self.check_suite_id = check_suite_id;
+        self.run_started_at = run_started_at;
         self
     }
 }
@@ -361,8 +376,10 @@ impl GithubPrValidationSnapshot {
             left.name
                 .cmp(&right.name)
                 .then_with(|| left.run_attempt.cmp(&right.run_attempt))
+                .then_with(|| left.run_started_at.cmp(&right.run_started_at))
                 .then_with(|| left.created_at.cmp(&right.created_at))
                 .then_with(|| left.updated_at.cmp(&right.updated_at))
+                .then_with(|| left.check_suite_id.cmp(&right.check_suite_id))
                 .then_with(|| left.id.cmp(&right.id))
         });
         self.sources.sort_by(|left, right| {
@@ -439,10 +456,20 @@ impl GithubPrValidationSnapshot {
         context: &PrValidationCheckContext,
         latest_attempt_only: bool,
     ) -> GithubExpectedCheckEvaluation {
-        let mut matching = self
+        let matching_context = self
             .check_runs
             .iter()
             .filter(|run| context.matches(run.app_slug.as_deref(), &run.name))
+            .collect::<Vec<_>>();
+        let awaiting_current_attempt = matching_context.iter().any(|run| {
+            !self.check_run_is_current_workflow_attempt(run)
+                && self
+                    .latest_correlated_workflow(run)
+                    .is_some_and(|workflow| !workflow.status.is_terminal())
+        });
+        let mut matching = matching_context
+            .into_iter()
+            .filter(|run| self.check_run_is_current_workflow_attempt(run))
             .collect::<Vec<_>>();
         matching.sort_by(|left, right| check_attempt_order(left, right));
         let selected_run = matching.last().copied().cloned();
@@ -451,7 +478,9 @@ impl GithubPrValidationSnapshot {
         } else {
             matching
         };
-        let status = if statuses.is_empty() {
+        let status = if statuses.is_empty() && awaiting_current_attempt {
+            GithubExpectedCheckStatus::Pending
+        } else if statuses.is_empty() {
             GithubExpectedCheckStatus::Missing
         } else if statuses.iter().any(|run| {
             matches!(
@@ -483,6 +512,35 @@ impl GithubPrValidationSnapshot {
             selected_run,
         }
     }
+
+    fn check_run_is_current_workflow_attempt(&self, run: &GithubValidationCheckRun) -> bool {
+        let Some(workflow) = self.latest_correlated_workflow(run) else {
+            return true;
+        };
+        if workflow.run_attempt <= 1 {
+            return true;
+        }
+        match (
+            run.started_at.as_deref(),
+            workflow.run_started_at.as_deref(),
+        ) {
+            (Some(check_started_at), Some(workflow_started_at)) => {
+                timestamp_at_or_after(check_started_at, workflow_started_at)
+            }
+            _ => false,
+        }
+    }
+
+    fn latest_correlated_workflow(
+        &self,
+        run: &GithubValidationCheckRun,
+    ) -> Option<&GithubValidationWorkflowRun> {
+        let suite_id = run.check_suite_id.as_ref()?;
+        self.workflow_runs
+            .iter()
+            .filter(|workflow| workflow.check_suite_id.as_ref() == Some(suite_id))
+            .max_by(|left, right| workflow_attempt_order(left, right))
+    }
 }
 
 fn check_attempt_order(
@@ -494,6 +552,27 @@ fn check_attempt_order(
         .then_with(|| left.completed_at.cmp(&right.completed_at))
         .then_with(|| opaque_id_order(left.check_suite_id.as_ref(), right.check_suite_id.as_ref()))
         .then_with(|| opaque_id_order(Some(&left.id), Some(&right.id)))
+}
+
+fn workflow_attempt_order(
+    left: &GithubValidationWorkflowRun,
+    right: &GithubValidationWorkflowRun,
+) -> std::cmp::Ordering {
+    left.run_attempt
+        .cmp(&right.run_attempt)
+        .then_with(|| left.run_started_at.cmp(&right.run_started_at))
+        .then_with(|| left.updated_at.cmp(&right.updated_at))
+        .then_with(|| opaque_id_order(Some(&left.id), Some(&right.id)))
+}
+
+fn timestamp_at_or_after(observed: &str, lower_bound: &str) -> bool {
+    match (
+        DateTime::parse_from_rfc3339(observed),
+        DateTime::parse_from_rfc3339(lower_bound),
+    ) {
+        (Ok(observed), Ok(lower_bound)) => observed >= lower_bound,
+        _ => false,
+    }
 }
 
 fn opaque_id_order(
@@ -749,6 +828,84 @@ mod tests {
         assert!(forward_decision.is_successful());
         assert_eq!(
             forward_decision.required[0]
+                .selected_run
+                .as_ref()
+                .map(|run| run.id.as_str()),
+            Some("check:attempt-2")
+        );
+    }
+
+    #[test]
+    fn active_workflow_rerun_hides_a_successful_gate_from_the_previous_attempt() {
+        let target_sha = GithubCommitSha::new("head-sha");
+        let suite_id = GithubOpaqueId::new("check-suite:rerun");
+        let old_gate = GithubValidationCheckRun::new(
+            GithubOpaqueId::new("check:attempt-1"),
+            "Post-Merge Gate",
+            target_sha.clone(),
+            GithubValidationRunStatus::Succeeded,
+        )
+        .with_attempt_metadata(
+            Some("github-actions".to_string()),
+            Some(suite_id.clone()),
+            Some("2026-08-07T10:00:00Z".to_string()),
+            Some("2026-08-07T10:01:00Z".to_string()),
+        );
+        let active_rerun = GithubValidationWorkflowRun::new(
+            GithubOpaqueId::new("workflow:rerun"),
+            "Native PR Checks",
+            target_sha.clone(),
+            GithubValidationRunStatus::InProgress,
+        )
+        .with_attempt_metadata(
+            2,
+            Some("2026-08-07T10:00:00Z".to_string()),
+            Some("2026-08-07T11:01:00Z".to_string()),
+        )
+        .with_attempt_correlation(
+            Some(suite_id.clone()),
+            Some("2026-08-07T11:00:00Z".to_string()),
+        );
+        let contract = PostMergeValidationContract::production_v1();
+        let mut snapshot = complete_snapshot();
+        snapshot.check_runs = vec![old_gate];
+        snapshot.workflow_runs = vec![active_rerun.clone()];
+
+        let active = snapshot.evaluate_post_merge_contract(&contract);
+        assert_eq!(
+            active.required[0].status,
+            GithubExpectedCheckStatus::Pending
+        );
+        assert!(active.required[0].selected_run.is_none());
+        assert!(!snapshot.is_successfully_complete(&contract, &target_sha));
+
+        snapshot.workflow_runs[0].status = GithubValidationRunStatus::Succeeded;
+        let missing_gate = snapshot.evaluate_post_merge_contract(&contract);
+        assert_eq!(
+            missing_gate.required[0].status,
+            GithubExpectedCheckStatus::Missing
+        );
+        assert!(missing_gate.has_policy_blocker());
+        assert!(!snapshot.is_successfully_complete(&contract, &target_sha));
+
+        snapshot.check_runs.push(
+            GithubValidationCheckRun::new(
+                GithubOpaqueId::new("check:attempt-2"),
+                "Post-Merge Gate",
+                target_sha.clone(),
+                GithubValidationRunStatus::Succeeded,
+            )
+            .with_attempt_metadata(
+                Some("github-actions".to_string()),
+                Some(suite_id),
+                Some("2026-08-07T11:10:00Z".to_string()),
+                Some("2026-08-07T11:11:00Z".to_string()),
+            ),
+        );
+        let complete = snapshot.evaluate_post_merge_contract(&contract);
+        assert!(complete.is_successful());
+        assert_eq!(
+            complete.required[0]
                 .selected_run
                 .as_ref()
                 .map(|run| run.id.as_str()),

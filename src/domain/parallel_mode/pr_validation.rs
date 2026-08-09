@@ -235,6 +235,36 @@ impl PostMergeValidationContract {
         .expect("built-in post-merge validation contract is valid")
     }
 
+    /// Restores the check policy used by records written before the contract field existed. Those
+    /// records predate the dedicated Post-Merge Gate, so applying `production_v1` retroactively
+    /// would turn otherwise valid CI Gate evidence into a permanent policy blocker.
+    pub fn legacy_ci_gate_v1() -> Self {
+        let github_actions = |context: &str| {
+            PrValidationCheckContext::new(Some("github-actions".to_string()), context)
+                .expect("built-in GitHub Actions context is valid")
+        };
+        Self::new(
+            POST_MERGE_VALIDATION_CONTRACT_VERSION,
+            vec![github_actions("CI Gate")],
+            [
+                "Post-Merge Gate",
+                "CI Scope",
+                "Rust Tests",
+                "Rust Lint and Architecture",
+                "Node and Admin Surfaces",
+                "Portable Rust Check (windows-x86_64)",
+                "Portable Rust Check (macos-aarch64)",
+                "Rust Smoke Check",
+            ]
+            .into_iter()
+            .map(github_actions)
+            .collect(),
+            PrValidationCompletionSource::CheckRuns,
+            true,
+        )
+        .expect("built-in legacy post-merge validation contract is valid")
+    }
+
     pub fn version(&self) -> u32 {
         self.version
     }
@@ -858,7 +888,7 @@ pub struct PrValidationRecord {
     key: PrValidationRecordKey,
     target: PrValidationTarget,
     target_shas: PrValidationTargetShaSnapshot,
-    #[serde(default = "PostMergeValidationContract::production_v1")]
+    #[serde(default = "PostMergeValidationContract::legacy_ci_gate_v1")]
     post_merge_validation_contract: PostMergeValidationContract,
     phase: PrValidationPhase,
     findings: BTreeMap<PrValidationFindingKey, PrValidationFinding>,

@@ -275,6 +275,9 @@ impl GithubPrValidationPort for GithubPrValidationAdapter {
                 if row.run_attempt == 0 {
                     bail!("GitHub validation workflow run attempt must be positive")
                 }
+                let check_suite_id = row.check_suite_id.map(|id| id.opaque("check-suite"));
+                let run_started_at =
+                    normalize_provider_timestamp(row.run_started_at, "workflow start")?;
                 let created_at = normalize_provider_timestamp(row.created_at, "workflow creation")?;
                 let updated_at = normalize_provider_timestamp(row.updated_at, "workflow update")?;
                 workflow_runs.push(
@@ -284,11 +287,8 @@ impl GithubPrValidationPort for GithubPrValidationAdapter {
                         GithubCommitSha::new(row.head_sha),
                         normalize_run_status(&row.status, row.conclusion.as_deref()),
                     )
-                    .with_attempt_metadata(
-                        row.run_attempt,
-                        created_at,
-                        updated_at,
-                    ),
+                    .with_attempt_metadata(row.run_attempt, created_at, updated_at)
+                    .with_attempt_correlation(check_suite_id, run_started_at),
                 );
             }
         }
@@ -866,8 +866,10 @@ struct WorkflowRunResponse {
     head_sha: String,
     status: String,
     conclusion: Option<String>,
+    check_suite_id: Option<ProviderId>,
     #[serde(default = "default_run_attempt")]
     run_attempt: u64,
+    run_started_at: Option<String>,
     created_at: Option<String>,
     updated_at: Option<String>,
 }

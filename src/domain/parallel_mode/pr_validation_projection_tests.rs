@@ -169,6 +169,6 @@ fn validation_record_snapshots_contract_and_migrates_legacy_json_to_v1() {
             .post_merge_validation_contract()
             .required_check_contexts()[0]
             .context(),
-        "Post-Merge Gate"
+        "CI Gate"
     );
 }
