@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -109,6 +109,156 @@ impl PrValidationTargetShaSnapshot {
 
     pub fn base_sha(&self) -> &PrValidationCommitSha {
         &self.base_sha
+    }
+}
+
+pub const POST_MERGE_VALIDATION_CONTRACT_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct PrValidationCheckContext {
+    app_slug: Option<String>,
+    context: String,
+}
+
+impl PrValidationCheckContext {
+    pub fn new(app_slug: Option<String>, context: impl Into<String>) -> Result<Self, String> {
+        let app_slug = app_slug
+            .map(|value| non_empty(value, "PR validation check app slug"))
+            .transpose()?;
+        let context = non_empty(context, "PR validation check context")?;
+        if app_slug.as_ref().is_some_and(|value| value.len() > 160) || context.len() > 160 {
+            return Err(
+                "PR validation check context metadata must be at most 160 bytes".to_string(),
+            );
+        }
+        Ok(Self { app_slug, context })
+    }
+
+    pub fn app_slug(&self) -> Option<&str> {
+        self.app_slug.as_deref()
+    }
+
+    pub fn context(&self) -> &str {
+        &self.context
+    }
+
+    pub fn matches(&self, app_slug: Option<&str>, context: &str) -> bool {
+        self.context == context
+            && self
+                .app_slug
+                .as_deref()
+                .is_none_or(|expected| Some(expected) == app_slug)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PrValidationCompletionSource {
+    CheckRuns,
+}
+
+/// Immutable expected-check snapshot captured when a validation record is registered. Workflow
+/// configuration can evolve without changing the success contract of an already integrated SHA.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PostMergeValidationContract {
+    version: u32,
+    required_check_contexts: Vec<PrValidationCheckContext>,
+    optional_check_contexts: Vec<PrValidationCheckContext>,
+    completion_source: PrValidationCompletionSource,
+    latest_attempt_only: bool,
+}
+
+impl PostMergeValidationContract {
+    pub fn new(
+        version: u32,
+        required_check_contexts: Vec<PrValidationCheckContext>,
+        optional_check_contexts: Vec<PrValidationCheckContext>,
+        completion_source: PrValidationCompletionSource,
+        latest_attempt_only: bool,
+    ) -> Result<Self, String> {
+        if version == 0 {
+            return Err("post-merge validation contract version must be positive".to_string());
+        }
+        if required_check_contexts.is_empty() {
+            return Err(
+                "post-merge validation contract must contain a required check context".to_string(),
+            );
+        }
+        let required = required_check_contexts
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let optional = optional_check_contexts
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if required.len() != required_check_contexts.len()
+            || optional.len() != optional_check_contexts.len()
+            || !required.is_disjoint(&optional)
+        {
+            return Err(
+                "post-merge validation contract contexts must be unique and disjoint".to_string(),
+            );
+        }
+        Ok(Self {
+            version,
+            required_check_contexts,
+            optional_check_contexts,
+            completion_source,
+            latest_attempt_only,
+        })
+    }
+
+    pub fn production_v1() -> Self {
+        let github_actions = |context: &str| {
+            PrValidationCheckContext::new(Some("github-actions".to_string()), context)
+                .expect("built-in GitHub Actions context is valid")
+        };
+        Self::new(
+            POST_MERGE_VALIDATION_CONTRACT_VERSION,
+            vec![github_actions("Post-Merge Gate")],
+            [
+                "CI Scope",
+                "Rust Tests",
+                "Rust Lint and Architecture",
+                "Node and Admin Surfaces",
+                "Portable Rust Check (windows-x86_64)",
+                "Portable Rust Check (macos-aarch64)",
+                "Rust Smoke Check",
+                "CI Gate",
+            ]
+            .into_iter()
+            .map(github_actions)
+            .collect(),
+            PrValidationCompletionSource::CheckRuns,
+            true,
+        )
+        .expect("built-in post-merge validation contract is valid")
+    }
+
+    pub fn version(&self) -> u32 {
+        self.version
+    }
+
+    pub fn required_check_contexts(&self) -> &[PrValidationCheckContext] {
+        &self.required_check_contexts
+    }
+
+    pub fn optional_check_contexts(&self) -> &[PrValidationCheckContext] {
+        &self.optional_check_contexts
+    }
+
+    pub fn completion_source(&self) -> PrValidationCompletionSource {
+        self.completion_source
+    }
+
+    pub fn latest_attempt_only(&self) -> bool {
+        self.latest_attempt_only
+    }
+}
+
+impl Default for PostMergeValidationContract {
+    fn default() -> Self {
+        Self::production_v1()
     }
 }
 
@@ -553,6 +703,7 @@ pub enum PrValidationTerminalReason {
     PullRequestClosedWithoutMerge,
     IntegrationEvidenceMissing,
     IntegrationAuthorityConflict,
+    PostMergeContractBlocked,
     ObservationFailed,
     RemediationAdmissionFailed,
 }
@@ -565,6 +716,7 @@ pub enum PrValidationRecoveryAction {
     CompleteCorrelatedRemediation,
     ReopenOrReplacePullRequest,
     RestoreIntegrationEvidence,
+    RestoreValidationContract,
     RerunWithFreshRecord,
     RestoreQueueAndRerun,
 }
@@ -581,6 +733,9 @@ impl PrValidationRecoveryAction {
             }
             Self::RestoreIntegrationEvidence => {
                 "restore trusted integration evidence and rerun validation"
+            }
+            Self::RestoreValidationContract => {
+                "restore the required post-merge check contract and rerun validation"
             }
             Self::RerunWithFreshRecord => {
                 "rerun validation to create a fresh Akra validation record"
@@ -601,6 +756,9 @@ impl PrValidationTerminalReason {
             Self::IntegrationAuthorityConflict => {
                 "integration authority conflicts with trusted evidence"
             }
+            Self::PostMergeContractBlocked => {
+                "required post-merge check context is missing, skipped, or unknown"
+            }
             Self::ObservationFailed => "trusted validation observation failed",
             Self::RemediationAdmissionFailed => "validation remediation admission failed",
         }
@@ -616,6 +774,7 @@ impl PrValidationTerminalReason {
                 PrValidationRecoveryAction::RestoreIntegrationEvidence
             }
             Self::IntegrationAuthorityConflict => PrValidationRecoveryAction::RerunWithFreshRecord,
+            Self::PostMergeContractBlocked => PrValidationRecoveryAction::RestoreValidationContract,
             Self::ObservationFailed => PrValidationRecoveryAction::RerunWithFreshRecord,
             Self::RemediationAdmissionFailed => PrValidationRecoveryAction::RestoreQueueAndRerun,
         }
@@ -699,6 +858,8 @@ pub struct PrValidationRecord {
     key: PrValidationRecordKey,
     target: PrValidationTarget,
     target_shas: PrValidationTargetShaSnapshot,
+    #[serde(default = "PostMergeValidationContract::production_v1")]
+    post_merge_validation_contract: PostMergeValidationContract,
     phase: PrValidationPhase,
     findings: BTreeMap<PrValidationFindingKey, PrValidationFinding>,
     remediations: BTreeMap<PrValidationFindingKey, PrValidationRemediationCorrelation>,
@@ -725,6 +886,7 @@ impl PrValidationRecord {
             key,
             target,
             target_shas,
+            post_merge_validation_contract: PostMergeValidationContract::production_v1(),
             phase: PrValidationPhase::Registered,
             findings: BTreeMap::new(),
             remediations: BTreeMap::new(),
@@ -750,6 +912,10 @@ impl PrValidationRecord {
 
     pub fn target_shas(&self) -> &PrValidationTargetShaSnapshot {
         &self.target_shas
+    }
+
+    pub fn post_merge_validation_contract(&self) -> &PostMergeValidationContract {
+        &self.post_merge_validation_contract
     }
 
     pub fn phase(&self) -> PrValidationPhase {

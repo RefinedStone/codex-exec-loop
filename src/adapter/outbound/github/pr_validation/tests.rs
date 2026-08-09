@@ -11,6 +11,9 @@ use crate::application::port::outbound::github_pr_validation_port::{
     GithubValidationSourceStatus,
 };
 use crate::domain::github_review::{GithubCommitSha, GithubPullRequestTarget};
+use crate::domain::parallel_mode::{
+    PostMergeValidationContract, PrValidationCheckContext, PrValidationCompletionSource,
+};
 
 const SHA: &str = "1111111111111111111111111111111111111111";
 const MERGE_SHA: &str = "2222222222222222222222222222222222222222";
@@ -107,7 +110,7 @@ fn complete_fixture() -> FixtureApi {
         ),
         (
             endpoint(&format!(
-                "commits/{MERGE_SHA}/check-runs?per_page=100&page=1"
+                "commits/{MERGE_SHA}/check-runs?filter=all&per_page=100&page=1"
             )),
             format!(
                 r#"{{"total_count":2,"check_runs":[
@@ -197,11 +200,100 @@ fn collects_sha_bound_merge_activity_checks_and_workflows_in_canonical_order() {
     );
     assert!(snapshot.next_cursor.is_none());
     assert!(snapshot.observations_complete());
-    assert!(!snapshot.is_successfully_complete(&snapshot.evidence_sha));
+    assert!(!snapshot.is_successfully_complete(
+        &PostMergeValidationContract::production_v1(),
+        &snapshot.evidence_sha,
+    ));
     assert_eq!(snapshot.sources.len(), GithubValidationSource::ALL.len());
     assert!(snapshot.sources.iter().all(|source| {
         source.status == GithubValidationSourceStatus::Complete && source.next_cursor.is_none()
     }));
+}
+
+#[test]
+fn pr2100_push_fixture_treats_successful_required_and_skipped_optional_checks_as_complete() {
+    const SOURCE: &str = "2c28eca0dfc2ebd4681a6552b95859a72859c01e";
+    const EVIDENCE: &str = "6037d07b8e9a6cc8614610569b044f95f6fa9075";
+    let api = FixtureApi::new([
+        (
+            endpoint("pulls/42"),
+            format!(
+                r#"{{"state":"closed","merged":true,"merge_commit_sha":"{EVIDENCE}","head":{{"sha":"{SOURCE}"}}}}"#
+            ),
+        ),
+        (
+            endpoint("pulls/42/reviews?per_page=100&page=1"),
+            "[]".to_string(),
+        ),
+        (
+            endpoint("issues/42/comments?per_page=100&page=1"),
+            "[]".to_string(),
+        ),
+        (
+            endpoint("pulls/42/comments?per_page=100&page=1"),
+            "[]".to_string(),
+        ),
+        (
+            endpoint(&format!(
+                "commits/{EVIDENCE}/check-runs?filter=all&per_page=100&page=1"
+            )),
+            include_str!("fixtures/pr2100-check-runs.json").to_string(),
+        ),
+        (
+            endpoint(&format!(
+                "actions/runs?head_sha={EVIDENCE}&per_page=100&page=1"
+            )),
+            include_str!("fixtures/pr2100-workflow-runs.json").to_string(),
+        ),
+    ]);
+    let request = GithubPrValidationObservationRequest::new(
+        GithubPullRequestTarget::new("acme/widgets", 42),
+        GithubCommitSha::new(SOURCE),
+        None,
+    );
+    let snapshot = GithubPrValidationAdapter::with_api(api)
+        .load_validation_snapshot(&request)
+        .expect("captured PR #2100 push evidence should normalize");
+    let context = |name: &str| {
+        PrValidationCheckContext::new(Some("github-actions".to_string()), name).unwrap()
+    };
+    let contract = PostMergeValidationContract::new(
+        1,
+        vec![context("CI Gate")],
+        vec![
+            context("Rust Tests"),
+            context("Rust Lint and Architecture"),
+            context("Node and Admin Surfaces"),
+            context("Rust Smoke Check"),
+            context("CI Scope"),
+        ],
+        PrValidationCompletionSource::CheckRuns,
+        true,
+    )
+    .unwrap();
+
+    let decision = snapshot.evaluate_post_merge_contract(&contract);
+    assert!(decision.is_successful());
+    assert_eq!(snapshot.workflow_runs[0].run_attempt, 1);
+    let gate = snapshot
+        .check_runs
+        .iter()
+        .find(|run| run.name == "CI Gate")
+        .expect("captured required gate");
+    assert_eq!(gate.app_slug.as_deref(), Some("github-actions"));
+    assert_eq!(
+        gate.check_suite_id.as_ref().map(|id| id.as_str()),
+        Some("check-suite:84760241806")
+    );
+    assert_eq!(gate.started_at.as_deref(), Some("2026-08-08T02:34:50Z"));
+    assert_eq!(
+        snapshot.workflow_runs[0].updated_at.as_deref(),
+        Some("2026-08-08T02:35:00Z")
+    );
+    assert!(snapshot.check_runs.iter().any(|run| {
+        run.name == "Rust Tests" && run.status == GithubValidationRunStatus::Skipped
+    }));
+    assert!(snapshot.is_successfully_complete(&contract, &GithubCommitSha::new(EVIDENCE)));
 }
 
 #[test]
@@ -227,7 +319,7 @@ fn closed_unmerged_pr_uses_distributor_attested_evidence_sha() {
         ),
         (
             endpoint(&format!(
-                "commits/{MERGE_SHA}/check-runs?per_page=100&page=1"
+                "commits/{MERGE_SHA}/check-runs?filter=all&per_page=100&page=1"
             )),
             format!(
                 r#"{{"total_count":1,"check_runs":[{{"id":21,"name":"Post-Merge Gate","head_sha":"{MERGE_SHA}","status":"completed","conclusion":"success"}}]}}"#
@@ -326,7 +418,7 @@ fn cursor_polls_return_stable_cumulative_evidence_across_all_sources() {
             endpoint("issues/42/comments?per_page=100&page=1"),
             endpoint("pulls/42/comments?per_page=100&page=1"),
             endpoint(&format!(
-                "commits/{MERGE_SHA}/check-runs?per_page=100&page=1"
+                "commits/{MERGE_SHA}/check-runs?filter=all&per_page=100&page=1"
             )),
             endpoint(&format!(
                 "actions/runs?head_sha={MERGE_SHA}&per_page=100&page=1"
@@ -355,7 +447,7 @@ fn merged_evidence_restarts_pagination_from_pre_merge_cursor() {
     let mut open_responses = complete_fixture().responses;
     let merged_check_runs = open_responses
         .remove(&endpoint(&format!(
-            "commits/{MERGE_SHA}/check-runs?per_page=100&page=1"
+            "commits/{MERGE_SHA}/check-runs?filter=all&per_page=100&page=1"
         )))
         .expect("merged check fixture")
         .replace(MERGE_SHA, SHA);
@@ -372,7 +464,9 @@ fn merged_evidence_restarts_pagination_from_pre_merge_cursor() {
         ),
     );
     open_responses.insert(
-        endpoint(&format!("commits/{SHA}/check-runs?per_page=100&page=1")),
+        endpoint(&format!(
+            "commits/{SHA}/check-runs?filter=all&per_page=100&page=1"
+        )),
         merged_check_runs,
     );
     open_responses.insert(
@@ -475,7 +569,9 @@ fn rejects_check_or_workflow_rows_not_bound_to_the_requested_sha() {
         let wrong_sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         if bad_endpoint == "check" {
             responses.insert(
-                endpoint(&format!("commits/{MERGE_SHA}/check-runs?per_page=100&page=1")),
+                endpoint(&format!(
+                    "commits/{MERGE_SHA}/check-runs?filter=all&per_page=100&page=1"
+                )),
                 format!(r#"{{"total_count":1,"check_runs":[{{"id":1,"name":"ci","head_sha":"{wrong_sha}","status":"completed","conclusion":"success"}}]}}"#),
             );
         } else {

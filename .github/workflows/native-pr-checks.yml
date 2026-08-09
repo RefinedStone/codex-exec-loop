@@ -24,12 +24,13 @@ on:
           - admin
           - full
           - smoke
+          - postmerge
 
 permissions:
   contents: read
 
 concurrency:
-  group: native-pr-checks-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  group: native-pr-checks-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -43,6 +44,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       full: ${{ steps.classify.outputs.full }}
+      postmerge: ${{ steps.classify.outputs.postmerge }}
       rust: ${{ steps.classify.outputs.rust }}
       node: ${{ steps.classify.outputs.node }}
       portable: ${{ steps.classify.outputs.portable }}
@@ -293,6 +295,43 @@ jobs:
           node-version: 22
 
       - name: Evaluate required jobs
+        env:
+          AKRA_CI_NODE_REQUIRED: ${{ needs.scope.outputs.node }}
+          AKRA_CI_NODE_RESULT: ${{ needs.node_surfaces.result }}
+          AKRA_CI_PORTABLE_REQUIRED: ${{ needs.scope.outputs.portable }}
+          AKRA_CI_PORTABLE_RESULT: ${{ needs.portable_native.result }}
+          AKRA_CI_RUST_LINT_RESULT: ${{ needs.rust_lint.result }}
+          AKRA_CI_RUST_REQUIRED: ${{ needs.scope.outputs.rust }}
+          AKRA_CI_RUST_TESTS_RESULT: ${{ needs.rust_tests.result }}
+          AKRA_CI_SCOPE_RESULT: ${{ needs.scope.result }}
+          AKRA_CI_SMOKE_REQUIRED: ${{ needs.scope.outputs.smoke }}
+          AKRA_CI_SMOKE_RESULT: ${{ needs.smoke_check.result }}
+        run: node scripts/ci-scope.mjs gate
+
+  post_merge_gate:
+    name: Post-Merge Gate
+    needs:
+      - scope
+      - rust_tests
+      - rust_lint
+      - node_surfaces
+      - portable_native
+      - smoke_check
+    if: always() && needs.scope.outputs.postmerge == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+
+      - name: Evaluate post-merge jobs
         env:
           AKRA_CI_NODE_REQUIRED: ${{ needs.scope.outputs.node }}
           AKRA_CI_NODE_RESULT: ${{ needs.node_surfaces.result }}

@@ -94,12 +94,20 @@ pub mod tests {
             merge_state: GithubPrMergeState::Open,
             merge_sha: None,
             activities: Vec::new(),
-            check_runs: vec![GithubValidationCheckRun::new(
-                GithubOpaqueId::new("check:ci"),
-                "ci",
-                GithubCommitSha::new(sha),
-                status,
-            )],
+            check_runs: vec![
+                GithubValidationCheckRun::new(
+                    GithubOpaqueId::new("check:ci"),
+                    "Post-Merge Gate",
+                    GithubCommitSha::new(sha),
+                    status,
+                )
+                .with_attempt_metadata(
+                    Some("github-actions".to_string()),
+                    Some(GithubOpaqueId::new("check-suite:ci")),
+                    Some("2026-08-08T00:00:00Z".to_string()),
+                    Some("2026-08-08T00:01:00Z".to_string()),
+                ),
+            ],
             workflow_runs: Vec::new(),
             sources: complete_sources(),
             next_cursor: None,
@@ -271,9 +279,15 @@ pub mod tests {
         let mut late = with_late_review(merged_snapshot(HEAD_B));
         late.check_runs[0] = GithubValidationCheckRun::new(
             GithubOpaqueId::new("check:late"),
-            "late-ci",
+            "Post-Merge Gate",
             GithubCommitSha::new(MERGE),
             GithubValidationRunStatus::Failed,
+        )
+        .with_attempt_metadata(
+            Some("github-actions".to_string()),
+            Some(GithubOpaqueId::new("check-suite:late")),
+            Some("2026-08-08T00:02:00Z".to_string()),
+            Some("2026-08-08T00:03:00Z".to_string()),
         );
         let mut reordered_late = late.clone();
         reordered_late.activities.reverse();

@@ -4,7 +4,16 @@ import { appendFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
-const VALID_SCOPES = new Set(["auto", "docs", "rust", "tui", "admin", "full", "smoke"]);
+const VALID_SCOPES = new Set([
+  "auto",
+  "docs",
+  "rust",
+  "tui",
+  "admin",
+  "full",
+  "smoke",
+  "postmerge",
+]);
 
 const FULL_PATHS = [
   /^\.github\//,
@@ -58,6 +67,8 @@ function forcedPlan(scope) {
       return buildPlan(scope, false, true, false, false, false);
     case "smoke":
       return buildPlan(scope, false, false, false, true, false);
+    case "postmerge":
+      return buildPlan(scope, true, true, true, false, false, false, true);
     case "rust":
     case "tui":
       return buildPlan(scope, true, false, true, false, false);
@@ -68,10 +79,20 @@ function forcedPlan(scope) {
   }
 }
 
-function buildPlan(scope, rust, node, portable, smoke, docsOnly, full = false) {
+function buildPlan(
+  scope,
+  rust,
+  node,
+  portable,
+  smoke,
+  docsOnly,
+  full = false,
+  postmerge = false,
+) {
   return {
     scope,
     full,
+    postmerge,
     rust,
     node,
     portable,
@@ -144,7 +165,7 @@ export function resolveEffectiveScope(requestedScope, eventName, gitRef) {
   if (eventName !== "push" || requestedScope !== "auto") {
     return requestedScope;
   }
-  return gitRef === "refs/heads/prerelease" ? "smoke" : "full";
+  return gitRef === "refs/heads/prerelease" ? "postmerge" : "full";
 }
 
 function changedPathsFromGit(baseSha, headSha) {
@@ -173,7 +194,7 @@ function writeOutputs(plan, paths) {
   if (summaryPath) {
     appendFileSync(
       summaryPath,
-      `## CI scope\n\n- Plan: \`${plan.scope}\`\n- Changed paths: ${paths.length}\n- Rust: ${plan.rust}\n- Node/admin: ${plan.node}\n- Portable: ${plan.portable}\n- Smoke: ${plan.smoke}\n`,
+      `## CI scope\n\n- Plan: \`${plan.scope}\`\n- Changed paths: ${paths.length}\n- Rust: ${plan.rust}\n- Node/admin: ${plan.node}\n- Portable: ${plan.portable}\n- Smoke: ${plan.smoke}\n- Post-merge: ${plan.postmerge}\n`,
       "utf8",
     );
   }

@@ -128,3 +128,47 @@ fn blocked_and_failed_are_durable_terminal_states_with_recovery_reasons() {
         );
     }
 }
+
+#[test]
+fn validation_record_snapshots_contract_and_migrates_legacy_json_to_v1() {
+    let record = registered();
+    assert_eq!(record.post_merge_validation_contract().version(), 1);
+    assert_eq!(
+        record
+            .post_merge_validation_contract()
+            .required_check_contexts()[0]
+            .context(),
+        "Post-Merge Gate"
+    );
+
+    let mut persisted = serde_json::to_value(&record).unwrap();
+    persisted["post_merge_validation_contract"]["version"] = serde_json::json!(7);
+    persisted["post_merge_validation_contract"]["required_check_contexts"] =
+        serde_json::json!([{"app_slug":"github-actions","context":"Frozen Gate"}]);
+    persisted["post_merge_validation_contract"]["optional_check_contexts"] = serde_json::json!([]);
+    let frozen: PrValidationRecord = serde_json::from_value(persisted.clone()).unwrap();
+    assert_eq!(frozen.post_merge_validation_contract().version(), 7);
+    assert_eq!(
+        frozen
+            .post_merge_validation_contract()
+            .required_check_contexts()[0]
+            .context(),
+        "Frozen Gate"
+    );
+    assert_eq!(serde_json::to_value(&frozen).unwrap(), persisted);
+
+    let mut legacy = serde_json::to_value(&record).unwrap();
+    legacy
+        .as_object_mut()
+        .unwrap()
+        .remove("post_merge_validation_contract");
+    let migrated: PrValidationRecord = serde_json::from_value(legacy).unwrap();
+    assert_eq!(migrated.post_merge_validation_contract().version(), 1);
+    assert_eq!(
+        migrated
+            .post_merge_validation_contract()
+            .required_check_contexts()[0]
+            .context(),
+        "Post-Merge Gate"
+    );
+}

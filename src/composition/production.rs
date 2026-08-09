@@ -579,12 +579,20 @@ mod tests {
             merge_state: GithubPrMergeState::Open,
             merge_sha: None,
             activities: Vec::new(),
-            check_runs: vec![GithubValidationCheckRun::new(
-                GithubOpaqueId::new("check:ci"),
-                "ci",
-                GithubCommitSha::new(HEAD),
-                status,
-            )],
+            check_runs: vec![
+                GithubValidationCheckRun::new(
+                    GithubOpaqueId::new("check:ci"),
+                    "Post-Merge Gate",
+                    GithubCommitSha::new(HEAD),
+                    status,
+                )
+                .with_attempt_metadata(
+                    Some("github-actions".to_string()),
+                    Some(GithubOpaqueId::new("check-suite:ci")),
+                    Some("2026-08-08T00:00:00Z".to_string()),
+                    Some("2026-08-08T00:01:00Z".to_string()),
+                ),
+            ],
             workflow_runs: Vec::new(),
             sources: GithubValidationSource::ALL
                 .into_iter()
