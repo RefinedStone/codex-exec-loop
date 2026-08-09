@@ -9,7 +9,8 @@ use sha2::{Digest, Sha256};
 use super::ParallelModeService;
 use crate::application::port::outbound::github_pr_validation_port::{
     GithubExpectedCheckStatus, GithubPostMergeValidationDecision, GithubPrMergeState,
-    GithubPrValidationObservationRequest, GithubPrValidationPort, GithubPrValidationSnapshot,
+    GithubPrValidationError, GithubPrValidationErrorClass, GithubPrValidationObservationRequest,
+    GithubPrValidationPort, GithubPrValidationSnapshot, GithubValidationProviderMetadata,
     GithubValidationSourceStatus,
 };
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
@@ -25,10 +26,10 @@ use crate::domain::parallel_mode::{
     IntegrationAttestation, IntegrationMethod, PrValidationCatchUpState, PrValidationCheckKind,
     PrValidationCommitSha, PrValidationCompletion, PrValidationEvent, PrValidationFinding,
     PrValidationFindingKey, PrValidationFindingSource, PrValidationPhase,
-    PrValidationProviderCompletion, PrValidationProviderKey, PrValidationRecord,
-    PrValidationRecordKey, PrValidationRemediationCorrelation, PrValidationRequiredCheck,
-    PrValidationTarget, PrValidationTargetShaSnapshot, PrValidationTerminalReason,
-    PrValidationTransitionRejection,
+    PrValidationPollErrorClass, PrValidationProviderCompletion, PrValidationProviderKey,
+    PrValidationRecord, PrValidationRecordKey, PrValidationRemediationCorrelation,
+    PrValidationRequiredCheck, PrValidationSchedulerMode, PrValidationTarget,
+    PrValidationTargetShaSnapshot, PrValidationTerminalReason, PrValidationTransitionRejection,
 };
 use crate::domain::planning::TaskStatus;
 
@@ -82,6 +83,85 @@ pub enum PrValidationPollResult {
     Blocked,
     Failed,
     StaleDeliveryIgnored,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PrValidationPollExecution {
+    pub result: PrValidationPollResult,
+    pub provider_metadata: GithubValidationProviderMetadata,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PrValidationPollFailure {
+    pub class: PrValidationPollErrorClass,
+    pub message: String,
+    pub retry_after_at: Option<chrono::DateTime<Utc>>,
+    pub provider_metadata: GithubValidationProviderMetadata,
+}
+
+impl PrValidationPollFailure {
+    fn from_provider(error: GithubPrValidationError) -> Self {
+        let class = match error.class {
+            GithubPrValidationErrorClass::RetryableProvider => {
+                PrValidationPollErrorClass::RetryableProvider
+            }
+            GithubPrValidationErrorClass::AuthenticationBlocked => {
+                PrValidationPollErrorClass::AuthenticationBlocked
+            }
+            GithubPrValidationErrorClass::IdentityFailed => {
+                PrValidationPollErrorClass::IdentityFailed
+            }
+            GithubPrValidationErrorClass::IntegrityFailed => {
+                PrValidationPollErrorClass::IntegrityFailed
+            }
+        };
+        Self {
+            class,
+            message: bounded_poll_error(error.message),
+            retry_after_at: error.retry_after_at,
+            provider_metadata: error.provider_metadata,
+        }
+    }
+
+    fn admission(message: impl Into<String>) -> Self {
+        Self {
+            class: PrValidationPollErrorClass::AdmissionRetryable,
+            message: bounded_poll_error(message.into()),
+            retry_after_at: None,
+            provider_metadata: GithubValidationProviderMetadata::default(),
+        }
+    }
+}
+
+impl From<String> for PrValidationPollFailure {
+    fn from(message: String) -> Self {
+        Self {
+            class: PrValidationPollErrorClass::IntegrityFailed,
+            message: bounded_poll_error(message),
+            retry_after_at: None,
+            provider_metadata: GithubValidationProviderMetadata::default(),
+        }
+    }
+}
+
+fn bounded_poll_error(value: String) -> String {
+    let one_line = value.replace(['\r', '\n'], " ");
+    let bounded = one_line.chars().take(320).collect::<String>();
+    if bounded.trim().is_empty() {
+        "PR validation poll failed".to_string()
+    } else {
+        bounded
+    }
+}
+
+fn poll_execution(
+    result: PrValidationPollResult,
+    provider_metadata: GithubValidationProviderMetadata,
+) -> PrValidationPollExecution {
+    PrValidationPollExecution {
+        result,
+        provider_metadata,
+    }
 }
 
 pub struct PlanningQueuePrValidationRemediationPort<'a> {
@@ -393,59 +473,6 @@ impl ParallelModeService {
         )
     }
 
-    /// Activates every durable, pollable validation record for one existing runtime tick.
-    /// Revisions derive from persisted authority, so restarts and repeated ticks remain monotonic.
-    pub fn poll_pr_validations_for_runtime_tick(
-        &self,
-        workspace_dir: &str,
-        queue: &PlanningQueueUseCases,
-    ) -> Result<Vec<PrValidationPollResult>, String> {
-        let Some(observation) = self.pr_validation_observation.as_ref() else {
-            return Ok(Vec::new());
-        };
-        let repo_root = self
-            .parallel_runtime
-            .detect_git_repo_root(workspace_dir)
-            .ok_or_else(|| "git repository is unavailable for PR validation polling".to_string())?;
-        let pool_root = super::derive_default_pool_root(std::path::Path::new(&repo_root));
-        let records = self
-            .planning_authority
-            .load_runtime_pr_validation_records(workspace_dir)
-            .map_err(|error| format!("failed to load runtime PR validation records: {error}"))?;
-        let mut results = Vec::new();
-        for record in records.into_iter().filter(|record| {
-            matches!(
-                record.phase(),
-                PrValidationPhase::Registered
-                    | PrValidationPhase::PreMergeObservation
-                    | PrValidationPhase::PostMergeObservation
-            )
-        }) {
-            let delivery_revision =
-                record
-                    .observation_revision()
-                    .checked_add(1)
-                    .ok_or_else(|| {
-                        format!(
-                            "PR validation record `{}` exhausted delivery revisions",
-                            record.key().as_str()
-                        )
-                    })?;
-            results.push(self.poll_pr_validation_into_normal_queue(
-                observation.as_ref(),
-                queue,
-                PrValidationPollRequest {
-                    workspace_dir: workspace_dir.to_string(),
-                    pool_root: pool_root.clone(),
-                    record_key: record.key().clone(),
-                    target_shas: record.target_shas().clone(),
-                    delivery_revision,
-                },
-            )?);
-        }
-        Ok(results)
-    }
-
     /// Executes one poll/trigger delivery. Waiting is represented by returning `Waiting`; this
     /// service never acquires a pool mutation lock, worktree, or slot lease between deliveries.
     pub fn poll_pr_validation_into_normal_queue(
@@ -500,6 +527,37 @@ impl ParallelModeService {
         remediation: &dyn PrValidationRemediationPort,
         request: PrValidationPollRequest,
     ) -> Result<PrValidationPollResult, String> {
+        self.poll_pr_validation_with_mode(
+            observation,
+            remediation,
+            request,
+            PrValidationSchedulerMode::Remediate,
+        )
+        .map(|execution| execution.result)
+        .map_err(|failure| failure.message)
+    }
+
+    pub(crate) fn poll_pr_validation_into_normal_queue_for_scheduler(
+        &self,
+        queue: &PlanningQueueUseCases,
+        request: PrValidationPollRequest,
+        mode: PrValidationSchedulerMode,
+    ) -> Result<PrValidationPollExecution, PrValidationPollFailure> {
+        let observation = self.pr_validation_observation.as_ref().ok_or_else(|| {
+            PrValidationPollFailure::from("PR validation observation is unavailable".to_string())
+        })?;
+        let workspace_dir = request.workspace_dir.clone();
+        let remediation = PlanningQueuePrValidationRemediationPort::new(queue, &workspace_dir);
+        self.poll_pr_validation_with_mode(observation.as_ref(), &remediation, request, mode)
+    }
+
+    fn poll_pr_validation_with_mode(
+        &self,
+        observation: &dyn GithubPrValidationPort,
+        remediation: &dyn PrValidationRemediationPort,
+        request: PrValidationPollRequest,
+        mode: PrValidationSchedulerMode,
+    ) -> Result<PrValidationPollExecution, PrValidationPollFailure> {
         let current = self
             .recover_pr_validation_record(
                 &request.workspace_dir,
@@ -513,12 +571,30 @@ impl ParallelModeService {
                 )
             })?;
         if request.delivery_revision <= current.observation_revision() {
-            return Ok(PrValidationPollResult::StaleDeliveryIgnored);
+            return Ok(poll_execution(
+                PrValidationPollResult::StaleDeliveryIgnored,
+                GithubValidationProviderMetadata::default(),
+            ));
         }
         match current.phase() {
-            PrValidationPhase::Settled => return Ok(PrValidationPollResult::Settled),
-            PrValidationPhase::Blocked => return Ok(PrValidationPollResult::Blocked),
-            PrValidationPhase::Failed => return Ok(PrValidationPollResult::Failed),
+            PrValidationPhase::Settled => {
+                return Ok(poll_execution(
+                    PrValidationPollResult::Settled,
+                    GithubValidationProviderMetadata::default(),
+                ));
+            }
+            PrValidationPhase::Blocked => {
+                return Ok(poll_execution(
+                    PrValidationPollResult::Blocked,
+                    GithubValidationProviderMetadata::default(),
+                ));
+            }
+            PrValidationPhase::Failed => {
+                return Ok(poll_execution(
+                    PrValidationPollResult::Failed,
+                    GithubValidationProviderMetadata::default(),
+                ));
+            }
             _ => {}
         }
 
@@ -554,10 +630,11 @@ impl ParallelModeService {
         );
         let snapshot = match observation.load_validation_snapshot(&observation_request) {
             Ok(snapshot) => snapshot,
-            Err(_) => {
+            Err(error) if error.class == GithubPrValidationErrorClass::IdentityFailed => {
+                let provider_metadata = error.provider_metadata.clone();
                 next = next
                     .transition(PrValidationEvent::Fail(
-                        PrValidationTerminalReason::ObservationFailed,
+                        PrValidationTerminalReason::IdentityViolation,
                     ))
                     .map_err(transition_error)?;
                 self.persist_pr_validation_record(
@@ -566,14 +643,19 @@ impl ParallelModeService {
                     Some(&current),
                     &next,
                 )?;
-                return Ok(PrValidationPollResult::Failed);
+                return Ok(poll_execution(
+                    PrValidationPollResult::Failed,
+                    provider_metadata,
+                ));
             }
+            Err(error) => return Err(PrValidationPollFailure::from_provider(error)),
         };
+        let provider_metadata = snapshot.provider_metadata.clone();
         if validate_snapshot_identity(&snapshot, &target, &target_sha, next.evidence_sha()).is_err()
         {
             next = next
                 .transition(PrValidationEvent::Fail(
-                    PrValidationTerminalReason::ObservationFailed,
+                    PrValidationTerminalReason::IdentityViolation,
                 ))
                 .map_err(transition_error)?;
             self.persist_pr_validation_record(
@@ -582,7 +664,10 @@ impl ParallelModeService {
                 Some(&current),
                 &next,
             )?;
-            return Ok(PrValidationPollResult::Failed);
+            return Ok(poll_execution(
+                PrValidationPollResult::Failed,
+                provider_metadata,
+            ));
         }
         if snapshot.merge_state == GithubPrMergeState::Closed && next.evidence_sha().is_none() {
             next = next
@@ -596,7 +681,10 @@ impl ParallelModeService {
                 Some(&current),
                 &next,
             )?;
-            return Ok(PrValidationPollResult::Blocked);
+            return Ok(poll_execution(
+                PrValidationPollResult::Blocked,
+                provider_metadata,
+            ));
         }
 
         let was_post_merge = next.phase() == PrValidationPhase::PostMergeObservation;
@@ -630,9 +718,12 @@ impl ParallelModeService {
                         Some(&current),
                         &failed,
                     )?;
-                    return Ok(PrValidationPollResult::Failed);
+                    return Ok(poll_execution(
+                        PrValidationPollResult::Failed,
+                        provider_metadata,
+                    ));
                 }
-                Err(error) => return Err(transition_error(error)),
+                Err(error) => return Err(transition_error(error).into()),
             };
         }
         let starting_post_merge =
@@ -644,7 +735,6 @@ impl ParallelModeService {
         let prior_fingerprint = next.evidence_fingerprint().map(str::to_string);
         let had_post_merge_checkpoint = next.has_post_merge_checkpoint();
         let mut requested_remediation = None;
-        let mut remediation_failed = false;
 
         if matches!(
             next.phase(),
@@ -658,6 +748,9 @@ impl ParallelModeService {
                     .transition(PrValidationEvent::FindingObserved(finding.clone()))
                     .map_err(transition_error)?;
                 let idempotency_key = remediation_key(next.key(), &finding);
+                if !mode.admits_remediation() {
+                    continue;
+                }
                 let remediation_task_key =
                     remediation.request_remediation(&PrValidationRemediationRequest {
                         idempotency_key: idempotency_key.clone(),
@@ -679,33 +772,28 @@ impl ParallelModeService {
                             .map_err(transition_error)?;
                         requested_remediation = Some(idempotency_key);
                     }
-                    Err(_) => {
-                        next = next
-                            .transition(PrValidationEvent::Fail(
-                                PrValidationTerminalReason::RemediationAdmissionFailed,
-                            ))
-                            .map_err(transition_error)?;
-                        remediation_failed = true;
+                    Err(error) => {
+                        return Err(PrValidationPollFailure::admission(format!(
+                            "PR validation remediation admission will retry: {error}"
+                        )));
                     }
                 }
                 break;
             }
         }
 
-        if !remediation_failed {
-            let checkpoint_cursor = snapshot.next_cursor.as_ref().or_else(|| {
-                (!starting_post_merge)
-                    .then_some(observation_request.cursor.as_ref())
-                    .flatten()
-            });
-            next = next
-                .transition(PrValidationEvent::ObservationCheckpointed {
-                    delivery_revision: request.delivery_revision,
-                    cursor: checkpoint_cursor.map(|cursor| cursor.as_str().to_string()),
-                    evidence_fingerprint: fingerprint.clone(),
-                })
-                .map_err(transition_error)?;
-        }
+        let checkpoint_cursor = snapshot.next_cursor.as_ref().or_else(|| {
+            (!starting_post_merge)
+                .then_some(observation_request.cursor.as_ref())
+                .flatten()
+        });
+        next = next
+            .transition(PrValidationEvent::ObservationCheckpointed {
+                delivery_revision: request.delivery_revision,
+                cursor: checkpoint_cursor.map(|cursor| cursor.as_str().to_string()),
+                evidence_fingerprint: fingerprint.clone(),
+            })
+            .map_err(transition_error)?;
 
         let settlement_evidence_sha = next.evidence_sha().cloned();
         let successful_settlement_evidence = settlement_evidence_sha.as_ref().is_some_and(|sha| {
@@ -715,7 +803,6 @@ impl ParallelModeService {
             )
         });
         let can_finalize_contract = requested_remediation.is_none()
-            && !remediation_failed
             && !starting_post_merge
             && had_post_merge_checkpoint
             && prior_fingerprint.as_deref() == Some(fingerprint.as_str())
@@ -760,16 +847,26 @@ impl ParallelModeService {
             )?;
         }
 
-        if remediation_failed {
-            Ok(PrValidationPollResult::Failed)
-        } else if let Some(idempotency_key) = requested_remediation {
-            Ok(PrValidationPollResult::RemediationRequested { idempotency_key })
+        if let Some(idempotency_key) = requested_remediation {
+            Ok(poll_execution(
+                PrValidationPollResult::RemediationRequested { idempotency_key },
+                provider_metadata,
+            ))
         } else if contract_blocked {
-            Ok(PrValidationPollResult::Blocked)
+            Ok(poll_execution(
+                PrValidationPollResult::Blocked,
+                provider_metadata,
+            ))
         } else if can_settle {
-            Ok(PrValidationPollResult::Settled)
+            Ok(poll_execution(
+                PrValidationPollResult::Settled,
+                provider_metadata,
+            ))
         } else {
-            Ok(PrValidationPollResult::Waiting)
+            Ok(poll_execution(
+                PrValidationPollResult::Waiting,
+                provider_metadata,
+            ))
         }
     }
 }

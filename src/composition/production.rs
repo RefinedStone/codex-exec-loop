@@ -52,7 +52,8 @@ use crate::application::service::github_review_poller_service::GithubReviewPolle
 use crate::application::service::parallel_agent_profile::ParallelAgentProfileService;
 use crate::application::service::parallel_mode::admin::ParallelModeAdminService;
 use crate::application::service::parallel_mode::{
-    ParallelModeService, control_plane::ParallelModeControlPlaneComposition,
+    ParallelModeService, PrValidationSchedulerConfig, PrValidationSchedulerRuntime,
+    PrValidationSchedulerService, control_plane::ParallelModeControlPlaneComposition,
 };
 use crate::application::service::planning::{
     PlanningAdminFacadeService, PlanningControlFacadeService, PlanningControlService,
@@ -163,6 +164,7 @@ pub(crate) fn build_parallel_mode_control_plane_composition(
     let planning = planning_services_from_ports(&ports);
     let parallel_agent_profile_service = parallel_agent_profile_service_from_ports(&ports);
     parallel_mode_control_plane_from_parts(
+        workspace_dir,
         planning,
         ports.planning_authority_port,
         ports.parallel_agent_worker_port,
@@ -203,6 +205,7 @@ pub(crate) fn build_admin_application_with_debug_harness(
     let parallel_agent_profile_port: Arc<dyn ParallelAgentProfilePort> =
         Arc::new(parallel_agent_profile_service.clone());
     let parallel_mode_control_plane = Arc::new(parallel_mode_control_plane_from_parts(
+        &workspace_dir,
         planning.clone(),
         ports.planning_authority_port.clone(),
         ports.parallel_agent_worker_port.clone(),
@@ -250,6 +253,7 @@ pub(crate) fn build_telegram_application(workspace_dir: String) -> ProductionTel
         planning.clone(),
     )));
     let parallel_mode_control_port = Arc::new(parallel_mode_control_plane_from_parts(
+        &workspace_dir,
         planning,
         ports.planning_authority_port,
         ports.parallel_agent_worker_port,
@@ -297,12 +301,13 @@ pub(crate) fn build_native_tui_application() -> NativeTuiApplicationComposition 
     let planning = planning_services_from_ports(&ports);
     let parallel_agent_profile_service = parallel_agent_profile_service_from_ports(&ports);
     let parallel_mode_control_plane = parallel_mode_control_plane_from_parts(
+        &workspace_dir,
         planning,
         ports.planning_authority_port,
         ports.parallel_agent_worker_port,
         parallel_agent_profile_service,
         Arc::new(GithubPrValidationAdapter::for_local_github_credentials(
-            workspace_dir,
+            &workspace_dir,
         )),
     );
     NativeTuiApplicationComposition::from_services(
@@ -462,6 +467,7 @@ fn parallel_agent_profile_service_from_ports(
 }
 
 fn parallel_mode_control_plane_from_parts(
+    workspace_dir: &str,
     planning: PlanningServices,
     planning_authority_port: Arc<dyn PlanningAuthorityPort>,
     parallel_agent_worker_port: Arc<dyn ParallelAgentWorkerPort>,
@@ -475,11 +481,46 @@ fn parallel_mode_control_plane_from_parts(
     )
     .with_pr_validation_observation(pr_validation_observation)
     .with_parallel_agent_profile_service(parallel_agent_profile_service);
+    let scheduler =
+        build_pr_validation_scheduler_runtime(&parallel_mode_service, &planning, workspace_dir);
     ParallelModeControlPlaneComposition::new(
         parallel_mode_service,
         planning,
         parallel_agent_worker_port,
     )
+    .with_pr_validation_scheduler(scheduler)
+}
+
+fn build_pr_validation_scheduler_runtime(
+    parallel_mode_service: &ParallelModeService,
+    planning: &PlanningServices,
+    workspace_dir: &str,
+) -> PrValidationSchedulerRuntime {
+    let result = PrValidationSchedulerConfig::from_repository(parallel_mode_service, workspace_dir)
+        .and_then(|config| {
+            PrValidationSchedulerService::new(
+                parallel_mode_service.clone(),
+                planning.queue.clone(),
+                workspace_dir,
+                config,
+            )
+        })
+        .and_then(PrValidationSchedulerRuntime::start);
+    match result {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            crate::diagnostics::event_log::emit_lazy(
+                "pr_validation_scheduler_start_blocked",
+                || {
+                    serde_json::json!({
+                        "workspace": workspace_dir,
+                        "error": error,
+                    })
+                },
+            );
+            PrValidationSchedulerRuntime::default()
+        }
+    }
 }
 
 fn app_server_adapter(
@@ -516,7 +557,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::sync::Mutex;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     struct TempWorkspace {
         path: PathBuf,
@@ -564,7 +605,10 @@ mod tests {
         fn load_validation_snapshot(
             &self,
             request: &GithubPrValidationObservationRequest,
-        ) -> Result<GithubPrValidationSnapshot> {
+        ) -> std::result::Result<
+            GithubPrValidationSnapshot,
+            crate::application::port::outbound::github_pr_validation_port::GithubPrValidationError,
+        > {
             self.requests.lock().unwrap().push(request.clone());
             Ok(self.snapshots.lock().unwrap().remove(0))
         }
@@ -606,6 +650,7 @@ mod tests {
                 })
                 .collect(),
             next_cursor: None,
+            provider_metadata: Default::default(),
         }
     }
 
@@ -668,7 +713,7 @@ mod tests {
     }
 
     #[test]
-    fn production_composition_runtime_tick_activates_durable_pr_validation_without_a_lease() {
+    fn production_composition_scheduler_is_independent_from_manual_runtime_ticks() {
         const HEAD: &str = "1111111111111111111111111111111111111111";
         const BASE: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let workspace = TempWorkspace::new("pr-validation-runtime-tick");
@@ -700,13 +745,13 @@ mod tests {
                 .expect("validation authority record should register")
         );
         let observation = Arc::new(RecordingValidationAdapter {
-            snapshots: Mutex::new(vec![
-                validation_snapshot(GithubValidationRunStatus::InProgress),
-                validation_snapshot(GithubValidationRunStatus::Failed),
-            ]),
+            snapshots: Mutex::new(vec![validation_snapshot(
+                GithubValidationRunStatus::InProgress,
+            )]),
             requests: Mutex::new(Vec::new()),
         });
         let composition = parallel_mode_control_plane_from_parts(
+            &workspace_dir,
             planning.clone(),
             ports.planning_authority_port.clone(),
             ports.parallel_agent_worker_port.clone(),
@@ -714,25 +759,39 @@ mod tests {
             observation.clone(),
         );
 
-        composition
-            .run_manual_orchestrator_tick(&workspace_dir)
-            .expect("first production-composed runtime tick should complete");
-        composition
-            .run_manual_orchestrator_tick(&workspace_dir)
-            .expect("second production-composed runtime tick should complete");
+        for _ in 0..100 {
+            if observation.requests.lock().unwrap().len() == 1 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(observation.requests.lock().unwrap().len(), 1);
+        for _ in 0..5 {
+            composition
+                .run_manual_orchestrator_tick(&workspace_dir)
+                .expect("production-composed runtime tick should complete");
+        }
+        std::thread::sleep(Duration::from_millis(100));
 
         let persisted = ports
             .planning_authority_port
             .load_runtime_pr_validation_record(&workspace_dir, record.key())
             .unwrap()
             .unwrap();
-        assert_eq!(persisted.observation_revision(), 2);
-        assert_eq!(observation.requests.lock().unwrap().len(), 2);
+        assert_eq!(persisted.observation_revision(), 1);
+        assert_eq!(
+            observation.requests.lock().unwrap().len(),
+            1,
+            "control-plane refreshes must not invoke the validation provider"
+        );
         let queue = planning
             .queue
             .load_authority_snapshot(&workspace_dir)
-            .expect("normal planning queue should contain remediation");
-        assert_eq!(queue.tasks.len(), 1);
+            .expect("normal planning queue should remain readable");
+        assert!(
+            queue.tasks.is_empty(),
+            "observe mode must not admit remediation"
+        );
         let pool_parent = workspace.path().with_file_name(format!(
             "{}-akra-worktrees",
             workspace.path().file_name().unwrap().to_string_lossy()

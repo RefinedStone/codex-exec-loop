@@ -45,7 +45,8 @@ use crate::domain::parallel_mode::{
     ParallelModeDispatchCommandState, ParallelModePoolResetPolicy, ParallelModePoolResetReport,
     ParallelModePoolResetRunId, ParallelModePoolResetSlotAction, ParallelModePoolResetSlotOutcome,
     ParallelModePoolResetSlotReport, ParallelModeQueueItemState, ParallelModeSlotLeaseSnapshot,
-    ParallelModeSlotLeaseState, ParallelModeTaskDispatchBlockSnapshot, PrValidationRecordKey,
+    ParallelModeSlotLeaseState, ParallelModeTaskDispatchBlockSnapshot, PrValidationCommitSha,
+    PrValidationRecord, PrValidationRecordKey, PrValidationTarget, PrValidationTargetShaSnapshot,
 };
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionDefinition, DirectionState, OriginSessionKind,
@@ -53,7 +54,7 @@ use crate::domain::planning::{
     PriorityQueueSkippedTask, PriorityQueueTask, QueueIdleConfig, QueueIdlePolicy, TaskActor,
     TaskAuthorityDocument, TaskDefinition, TaskMutationProvenance, TaskStatus,
 };
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use rusqlite::OptionalExtension;
 use std::sync::{Arc, Barrier};
 
@@ -414,8 +415,8 @@ fn authority_connection(workspace_dir: &str) -> rusqlite::Connection {
 }
 
 #[test]
-fn authority_schema_migrates_v7_through_v11_additively_and_rejects_unsupported_versions() {
-    for legacy_version in [7, 8, 9, 10, 11] {
+fn authority_schema_migrates_v7_through_v12_additively_and_rejects_unsupported_versions() {
+    for legacy_version in [7, 8, 9, 10, 11, 12] {
         let workspace_dir = temp_workspace(&format!("schema-migrate-v{legacy_version}"));
         let location = SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
             &workspace_dir,
@@ -453,7 +454,7 @@ fn authority_schema_migrates_v7_through_v11_additively_and_rejects_unsupported_v
                 |row| row.get(0),
             )
             .expect("migrated version should load");
-        assert_eq!(version, "12");
+        assert_eq!(version, "13");
         assert_eq!(
             migrated
                 .query_row(
@@ -511,7 +512,7 @@ fn authority_schema_migrates_v7_through_v11_additively_and_rejects_unsupported_v
         );
     }
 
-    for unsupported_version in ["6", "13", "not-a-version"] {
+    for unsupported_version in ["6", "14", "not-a-version"] {
         let workspace_dir = temp_workspace("schema-reject-unsupported");
         let location = SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
             &workspace_dir,
@@ -549,6 +550,105 @@ fn authority_schema_migrates_v7_through_v11_additively_and_rejects_unsupported_v
     let error =
         open_authority_connection(&location).expect_err("missing schema marker must fail closed");
     assert!(error.to_string().contains("schema version is missing"));
+}
+
+#[test]
+fn authority_schema_migrates_v12_pr_validation_schedule_without_data_loss() {
+    let workspace_dir = temp_workspace("schema-migrate-v12-pr-validation-scheduler");
+    let location =
+        SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(&workspace_dir)
+            .expect("authority location should resolve");
+    let connection = open_authority_connection(&location).expect("current store should open");
+    let record = PrValidationRecord::register(
+        PrValidationRecordKey::new("scheduler-validation-42").unwrap(),
+        PrValidationTarget::new("acme/widgets", 42).unwrap(),
+        PrValidationTargetShaSnapshot::new(
+            PrValidationCommitSha::new("1111111111111111111111111111111111111111").unwrap(),
+            PrValidationCommitSha::new("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
+        ),
+    );
+    let updated_at = "2026-08-10T00:00:00+00:00";
+    connection
+        .execute_batch(
+            "DROP TABLE runtime_pr_validation_records;
+             CREATE TABLE runtime_pr_validation_records (
+                 record_key TEXT PRIMARY KEY,
+                 updated_at TEXT NOT NULL,
+                 content TEXT NOT NULL,
+                 integration_method TEXT,
+                 integration_source_sha TEXT,
+                 integration_evidence_sha TEXT,
+                 integration_remote_verified_at TEXT
+             );
+             UPDATE authority_metadata SET value = '12' WHERE key = 'schema_version';",
+        )
+        .expect("v12 scheduler fixture should install");
+    connection
+        .execute(
+            "INSERT INTO runtime_pr_validation_records (record_key, updated_at, content)
+             VALUES (?1, ?2, ?3)",
+            (
+                record.key().as_str(),
+                updated_at,
+                serde_json::to_string(&record).unwrap(),
+            ),
+        )
+        .expect("v12 validation record should persist");
+    drop(connection);
+
+    let migrated = open_authority_connection(&location).expect("v12 store should migrate");
+    let row: (String, String, String, i64, i64) = migrated
+        .query_row(
+            "SELECT validation_repository, validation_phase, next_poll_at,
+                    poll_attempt, consecutive_error_count
+             FROM runtime_pr_validation_records WHERE record_key = ?1",
+            [record.key().as_str()],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .expect("migrated scheduler columns should load");
+    assert_eq!(
+        row,
+        (
+            "acme/widgets".to_string(),
+            "Registered".to_string(),
+            updated_at.to_string(),
+            0,
+            0
+        )
+    );
+    assert_eq!(
+        migrated
+            .query_row(
+                "SELECT value FROM authority_metadata WHERE key = 'schema_version'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "13"
+    );
+    drop(migrated);
+
+    let due_at = "2026-08-10T00:00:01+00:00"
+        .parse::<DateTime<Utc>>()
+        .unwrap();
+    assert_eq!(
+        SqlitePlanningAuthorityAdapter::load_due_runtime_pr_validation_record_keys(
+            &workspace_dir,
+            due_at,
+            due_at - chrono::TimeDelta::seconds(30),
+            8,
+        )
+        .unwrap(),
+        vec![record.key().clone()]
+    );
 }
 
 #[test]
@@ -612,7 +712,7 @@ fn authority_schema_migrates_v11_legacy_merge_evidence_without_data_loss() {
             |row| row.get(0),
         )
         .expect("migrated version should load");
-    assert_eq!(version, "12");
+    assert_eq!(version, "13");
     let (method, evidence_sha, content): (String, String, String) = migrated
         .query_row(
             "SELECT integration_method, integration_evidence_sha, content
@@ -651,7 +751,7 @@ fn authority_schema_migrates_v11_legacy_merge_evidence_without_data_loss() {
         .expect("migration replay guard should install");
     drop(migrated);
     open_authority_connection(&location)
-        .expect("schema v12 reopen must not replay the v11 data migration");
+        .expect("schema v13 reopen must not replay the v11 data migration");
 }
 
 #[test]
@@ -823,6 +923,17 @@ fn authority_schema_migration_rolls_back_additive_ddl_when_version_update_fails(
         .expect("rolled-back attestation column should inspect"),
         0,
         "failed migration must roll back PR validation attestation columns"
+    );
+    assert_eq!(
+        raw.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('runtime_pr_validation_records')
+             WHERE name = 'next_poll_at'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("rolled-back scheduler column should inspect"),
+        0,
+        "failed migration must roll back PR validation scheduler columns"
     );
 }
 

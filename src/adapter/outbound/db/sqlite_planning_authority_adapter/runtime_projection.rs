@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Context, Result};
 // 클레임 만료와 큐 처리 시각은 DB 행에 문자열로 남기기 때문에,
 // UTC 기준 RFC3339 타임스탬프를 만드는 `Utc`가 이 파일의 공통 시간 원천이다.
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 // `Connection`은 helper 함수들이 트랜잭션 밖 조회를 수행할 때 필요하고,
 // `OptionalExtension`은 "행 없음"을 오류가 아닌 Option으로 바꿔 클레임 부재를 표현한다.
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
@@ -18,7 +18,9 @@ use crate::application::port::outbound::parallel_mode_runtime_event_log_port::Pa
 use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityDistributorQueueRecord, PlanningAuthorityOfficialRefreshClaimStatus,
     PlanningAuthorityOfficialRefreshRecoveryStatus, PlanningAuthorityRuntimeEventRecord,
-    PlanningAuthorityRuntimeProjectionSnapshot,
+    PlanningAuthorityRuntimeProjectionSnapshot, PrValidationPollLeaseClaim,
+    PrValidationPollLeaseClaimRequest, PrValidationPollLeaseRenewalRequest,
+    PrValidationPollSettlement,
 };
 // parallel mode의 slot lease와 agent session은 domain 타입이므로,
 // 여기서는 DB row를 도메인이 이해하는 스냅샷 값으로 복원하는 역할만 맡는다.
@@ -1433,6 +1435,377 @@ impl SqlitePlanningAuthorityAdapter {
             .collect()
     }
 
+    pub(crate) fn load_due_runtime_pr_validation_record_keys(
+        workspace_dir: &str,
+        due_at: DateTime<Utc>,
+        repository_cooldown_since: DateTime<Utc>,
+        limit: usize,
+    ) -> Result<Vec<PrValidationRecordKey>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        if repository_cooldown_since > due_at {
+            anyhow::bail!("PR validation repository cooldown cannot follow the due time");
+        }
+        let bounded_limit = i64::try_from(limit.min(32)).unwrap_or(32);
+        let due_at = due_at.to_rfc3339();
+        let repository_cooldown_since = repository_cooldown_since.to_rfc3339();
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let connection = open_authority_connection(&location)?;
+        let mut statement = connection
+            .prepare(
+                "SELECT candidate.record_key
+                 FROM runtime_pr_validation_records AS candidate
+                 WHERE validation_phase IN (
+                     'Registered', 'PreMergeObservation', 'PostMergeObservation'
+                 )
+                   AND next_poll_at IS NOT NULL
+                   AND next_poll_at <= ?1
+                   AND (
+                       poll_lease_expires_at IS NULL OR poll_lease_expires_at <= ?1
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM runtime_pr_validation_records AS held
+                       WHERE held.record_key <> candidate.record_key
+                         AND held.validation_repository = candidate.validation_repository
+                         AND held.poll_lease_expires_at > ?1
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM runtime_pr_validation_records AS recently_polled
+                       WHERE recently_polled.validation_repository =
+                                 candidate.validation_repository
+                         AND recently_polled.last_polled_at > ?2
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM runtime_pr_validation_records AS provider_hold
+                       WHERE provider_hold.validation_repository =
+                                 candidate.validation_repository
+                         AND provider_hold.last_error_class IN (
+                             'retryable_provider', 'authentication_blocked'
+                         )
+                         AND provider_hold.next_poll_at > ?1
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM runtime_pr_validation_records AS rate_limited
+                       WHERE rate_limited.validation_repository =
+                                 candidate.validation_repository
+                         AND rate_limited.rate_limit_remaining = 0
+                         AND rate_limited.rate_limit_reset_at > ?1
+                   )
+                 ORDER BY next_poll_at, record_key
+                 LIMIT ?3",
+            )
+            .context("failed to prepare due PR validation lookup")?;
+        let rows = statement
+            .query_map(
+                params![due_at, repository_cooldown_since, bounded_limit],
+                |row| row.get::<_, String>(0),
+            )
+            .context("failed to query due PR validation records")?;
+        rows.map(|row| {
+            PrValidationRecordKey::new(row?).map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    0,
+                    rusqlite::types::Type::Text,
+                    Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, error)),
+                )
+            })
+        })
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .context("failed to decode due PR validation keys")
+    }
+
+    pub(crate) fn try_claim_runtime_pr_validation_poll(
+        workspace_dir: &str,
+        request: PrValidationPollLeaseClaimRequest<'_>,
+    ) -> Result<Option<PrValidationPollLeaseClaim>> {
+        let PrValidationPollLeaseClaimRequest {
+            record_key,
+            owner,
+            token,
+            claimed_at,
+            expires_at,
+            repository_cooldown_since,
+        } = request;
+        if owner.trim().is_empty() || token.trim().is_empty() {
+            anyhow::bail!("PR validation poll claim owner and token must be non-empty");
+        }
+        if expires_at <= claimed_at {
+            anyhow::bail!("PR validation poll lease expiry must follow its claim time");
+        }
+        if repository_cooldown_since > claimed_at {
+            anyhow::bail!("PR validation repository cooldown cannot follow its claim time");
+        }
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .context("failed to open PR validation poll claim transaction")?;
+        let claimed_at_text = claimed_at.to_rfc3339();
+        let expires_at_text = expires_at.to_rfc3339();
+        let changed = transaction
+            .execute(
+                "UPDATE runtime_pr_validation_records AS candidate
+                 SET poll_lease_owner = ?2,
+                     poll_lease_token = ?3,
+                     poll_lease_expires_at = ?5,
+                     poll_attempt = poll_attempt + 1
+                 WHERE record_key = ?1
+                   AND validation_phase IN (
+                       'Registered', 'PreMergeObservation', 'PostMergeObservation'
+                   )
+                   AND next_poll_at IS NOT NULL
+                   AND next_poll_at <= ?4
+                   AND (
+                       poll_lease_expires_at IS NULL OR poll_lease_expires_at <= ?4
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM runtime_pr_validation_records AS held
+                       WHERE held.record_key <> candidate.record_key
+                         AND held.validation_repository = candidate.validation_repository
+                         AND held.poll_lease_expires_at > ?4
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM runtime_pr_validation_records AS recently_polled
+                       WHERE recently_polled.validation_repository =
+                                 candidate.validation_repository
+                         AND recently_polled.last_polled_at > ?6
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM runtime_pr_validation_records AS provider_hold
+                       WHERE provider_hold.validation_repository =
+                                 candidate.validation_repository
+                         AND provider_hold.last_error_class IN (
+                             'retryable_provider', 'authentication_blocked'
+                         )
+                         AND provider_hold.next_poll_at > ?4
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM runtime_pr_validation_records AS rate_limited
+                       WHERE rate_limited.validation_repository =
+                                 candidate.validation_repository
+                         AND rate_limited.rate_limit_remaining = 0
+                         AND rate_limited.rate_limit_reset_at > ?4
+                   )",
+                params![
+                    record_key.as_str(),
+                    owner,
+                    token,
+                    claimed_at_text,
+                    expires_at_text,
+                    repository_cooldown_since.to_rfc3339(),
+                ],
+            )
+            .with_context(|| {
+                format!(
+                    "failed to claim PR validation poll `{}`",
+                    record_key.as_str()
+                )
+            })?;
+        if changed == 0 {
+            transaction
+                .commit()
+                .context("failed to close unmatched PR validation poll claim")?;
+            return Ok(None);
+        }
+        let row = transaction
+            .query_row(
+                "SELECT content, validation_repository, validation_phase,
+                        poll_attempt, consecutive_error_count
+                 FROM runtime_pr_validation_records
+                 WHERE record_key = ?1
+                   AND poll_lease_owner = ?2
+                   AND poll_lease_token = ?3
+                   AND poll_lease_expires_at = ?4",
+                params![record_key.as_str(), owner, token, expires_at_text],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
+                    ))
+                },
+            )
+            .context("claimed PR validation poll row disappeared")?;
+        let record = serde_json::from_str::<PrValidationRecord>(&row.0)
+            .context("failed to deserialize claimed PR validation record")?;
+        if record.key() != record_key {
+            anyhow::bail!(
+                "claimed PR validation row `{}` contains record key `{}`",
+                record_key.as_str(),
+                record.key().as_str()
+            );
+        }
+        if record.target().repository() != row.1 || record.phase().storage_label() != row.2 {
+            anyhow::bail!(
+                "claimed PR validation row `{}` has an inconsistent scheduler projection",
+                record_key.as_str()
+            );
+        }
+        transaction
+            .commit()
+            .context("failed to commit PR validation poll claim")?;
+        Ok(Some(PrValidationPollLeaseClaim {
+            record,
+            repository: row.1,
+            owner: owner.to_string(),
+            token: token.to_string(),
+            expires_at,
+            poll_attempt: u64::try_from(row.3)
+                .context("PR validation poll attempt was negative")?,
+            consecutive_error_count: u32::try_from(row.4)
+                .context("PR validation consecutive error count was invalid")?,
+        }))
+    }
+
+    pub(crate) fn renew_runtime_pr_validation_poll_lease(
+        workspace_dir: &str,
+        request: PrValidationPollLeaseRenewalRequest<'_>,
+    ) -> Result<bool> {
+        let PrValidationPollLeaseRenewalRequest {
+            record_key,
+            owner,
+            token,
+            expected_expires_at,
+            renewed_at,
+            renewed_expires_at,
+        } = request;
+        if renewed_expires_at <= expected_expires_at || renewed_at >= expected_expires_at {
+            return Ok(false);
+        }
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let connection = open_authority_connection(&location)?;
+        let changed = connection
+            .execute(
+                "UPDATE runtime_pr_validation_records
+                 SET poll_lease_expires_at = ?5
+                 WHERE record_key = ?1
+                   AND poll_lease_owner = ?2
+                   AND poll_lease_token = ?3
+                   AND poll_lease_expires_at = ?4
+                   AND poll_lease_expires_at > ?6",
+                params![
+                    record_key.as_str(),
+                    owner,
+                    token,
+                    expected_expires_at.to_rfc3339(),
+                    renewed_expires_at.to_rfc3339(),
+                    renewed_at.to_rfc3339(),
+                ],
+            )
+            .with_context(|| {
+                format!(
+                    "failed to renew PR validation poll lease `{}`",
+                    record_key.as_str()
+                )
+            })?;
+        Ok(changed == 1)
+    }
+
+    pub(crate) fn settle_runtime_pr_validation_poll(
+        workspace_dir: &str,
+        record_key: &PrValidationRecordKey,
+        owner: &str,
+        token: &str,
+        expected_expires_at: DateTime<Utc>,
+        settlement: &PrValidationPollSettlement,
+    ) -> Result<bool> {
+        if settlement.next_poll_at <= settlement.polled_at {
+            anyhow::bail!("PR validation next poll must follow the completed poll time");
+        }
+        let rate_limit_remaining = settlement
+            .rate_limit_remaining
+            .map(i64::try_from)
+            .transpose()
+            .context("GitHub rate-limit remaining value exceeded SQLite range")?;
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .context("failed to open PR validation poll settlement transaction")?;
+        let changed = transaction
+            .execute(
+                "UPDATE runtime_pr_validation_records
+                 SET last_polled_at = ?5,
+                     next_poll_at = ?6,
+                     consecutive_error_count = ?7,
+                     last_error_class = ?8,
+                     rate_limit_remaining = ?9,
+                     rate_limit_reset_at = ?10,
+                     poll_lease_owner = NULL,
+                     poll_lease_token = NULL,
+                     poll_lease_expires_at = NULL
+                 WHERE record_key = ?1
+                   AND poll_lease_owner = ?2
+                   AND poll_lease_token = ?3
+                   AND poll_lease_expires_at = ?4
+                   AND poll_lease_expires_at > ?5",
+                params![
+                    record_key.as_str(),
+                    owner,
+                    token,
+                    expected_expires_at.to_rfc3339(),
+                    settlement.polled_at.to_rfc3339(),
+                    settlement.next_poll_at.to_rfc3339(),
+                    i64::from(settlement.consecutive_error_count),
+                    settlement.error_class.map(|class| class.label()),
+                    rate_limit_remaining,
+                    settlement
+                        .rate_limit_reset_at
+                        .map(|value| value.to_rfc3339()),
+                ],
+            )
+            .with_context(|| {
+                format!(
+                    "failed to settle PR validation poll `{}`",
+                    record_key.as_str()
+                )
+            })?;
+        if changed == 1 {
+            upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
+            append_runtime_event(
+                &transaction,
+                "pr_validation_poll_settled",
+                "pr_validation_poll",
+                record_key.as_str(),
+                &format!(
+                    "PR validation poll settled / key: {} / next: {} / error: {}",
+                    record_key.as_str(),
+                    settlement.next_poll_at.to_rfc3339(),
+                    settlement
+                        .error_class
+                        .map(|class| class.label())
+                        .unwrap_or("none")
+                ),
+                &serde_json::json!({
+                    "record_key": record_key.as_str(),
+                    "next_poll_at": settlement.next_poll_at.to_rfc3339(),
+                    "consecutive_error_count": settlement.consecutive_error_count,
+                    "error_class": settlement.error_class.map(|class| class.label()),
+                    "rate_limit_remaining": settlement.rate_limit_remaining,
+                    "rate_limit_reset_at": settlement
+                        .rate_limit_reset_at
+                        .map(|value| value.to_rfc3339()),
+                })
+                .to_string(),
+            )?;
+        }
+        transaction
+            .commit()
+            .context("failed to commit PR validation poll settlement")?;
+        Ok(changed == 1)
+    }
+
     pub(crate) fn load_runtime_pr_validation_record(
         workspace_dir: &str,
         record_key: &PrValidationRecordKey,
@@ -1586,15 +1959,25 @@ impl SqlitePlanningAuthorityAdapter {
                         "INSERT INTO runtime_pr_validation_records (
                              record_key, updated_at, content, integration_method,
                              integration_source_sha, integration_evidence_sha,
-                             integration_remote_verified_at
-                         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                             integration_remote_verified_at, validation_repository,
+                             validation_phase, next_poll_at
+                         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?2)
                          ON CONFLICT(record_key) DO UPDATE
                          SET updated_at = excluded.updated_at,
                              content = excluded.content,
                              integration_method = excluded.integration_method,
                              integration_source_sha = excluded.integration_source_sha,
                              integration_evidence_sha = excluded.integration_evidence_sha,
-                             integration_remote_verified_at = excluded.integration_remote_verified_at",
+                             integration_remote_verified_at = excluded.integration_remote_verified_at,
+                             validation_repository = excluded.validation_repository,
+                             validation_phase = excluded.validation_phase,
+                             next_poll_at = MIN(
+                                 COALESCE(
+                                     runtime_pr_validation_records.next_poll_at,
+                                     excluded.next_poll_at
+                                 ),
+                                 excluded.next_poll_at
+                             )",
                         params![
                             record_key.as_str(),
                             Utc::now().to_rfc3339(),
@@ -1603,6 +1986,14 @@ impl SqlitePlanningAuthorityAdapter {
                             attestation.map(|value| value.source_sha().as_str()),
                             attestation.map(|value| value.evidence_sha().as_str()),
                             remote_verified_at,
+                            replacement
+                                .expect("replacement exists in the upsert branch")
+                                .target()
+                                .repository(),
+                            replacement
+                                .expect("replacement exists in the upsert branch")
+                                .phase()
+                                .storage_label(),
                         ],
                     )
                     .with_context(|| {

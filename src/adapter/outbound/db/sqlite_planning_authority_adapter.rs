@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
+use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 
 use crate::application::port::outbound::parallel_mode_runtime_event_log_port::{
@@ -25,7 +26,9 @@ use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityActiveDocumentMutation, PlanningAuthorityDistributorQueueRecord,
     PlanningAuthorityDocumentCommit, PlanningAuthorityDocumentSnapshot,
     PlanningAuthorityOfficialRefreshClaimStatus, PlanningAuthorityOfficialRefreshRecoveryStatus,
-    PlanningAuthorityPort, PlanningAuthorityRuntimeProjectionSnapshot,
+    PlanningAuthorityPort, PlanningAuthorityRuntimeProjectionSnapshot, PrValidationPollLeaseClaim,
+    PrValidationPollLeaseClaimRequest, PrValidationPollLeaseRenewalRequest,
+    PrValidationPollSettlement,
 };
 use crate::application::port::outbound::planning_task_repository_port::{
     PlanningAuthoritySnapshotCommit, PlanningDirectionAuthorityCommit,
@@ -77,7 +80,7 @@ use crate::domain::planning::{
 };
 
 // authority DB schema가 바뀔 때 올리는 adapter 내부 schema marker이다.
-const AUTHORITY_STORE_SCHEMA_VERSION: i64 = 12;
+const AUTHORITY_STORE_SCHEMA_VERSION: i64 = 13;
 const MINIMUM_MIGRATABLE_AUTHORITY_STORE_SCHEMA_VERSION: i64 = 7;
 // metadata에 저장되는 store mode 값으로, 다른 DB 파일과 planning authority store를 구분한다.
 const AUTHORITY_STORE_MODE: &str = "authority-store";
@@ -1455,6 +1458,56 @@ impl PlanningAuthorityPort for SqlitePlanningAuthorityAdapter {
         workspace_dir: &str,
     ) -> Result<Vec<PrValidationRecord>> {
         Self::load_runtime_pr_validation_records(workspace_dir)
+    }
+
+    fn load_due_runtime_pr_validation_record_keys(
+        &self,
+        workspace_dir: &str,
+        due_at: DateTime<Utc>,
+        repository_cooldown_since: DateTime<Utc>,
+        limit: usize,
+    ) -> Result<Vec<PrValidationRecordKey>> {
+        Self::load_due_runtime_pr_validation_record_keys(
+            workspace_dir,
+            due_at,
+            repository_cooldown_since,
+            limit,
+        )
+    }
+
+    fn try_claim_runtime_pr_validation_poll(
+        &self,
+        workspace_dir: &str,
+        request: PrValidationPollLeaseClaimRequest<'_>,
+    ) -> Result<Option<PrValidationPollLeaseClaim>> {
+        Self::try_claim_runtime_pr_validation_poll(workspace_dir, request)
+    }
+
+    fn renew_runtime_pr_validation_poll_lease(
+        &self,
+        workspace_dir: &str,
+        request: PrValidationPollLeaseRenewalRequest<'_>,
+    ) -> Result<bool> {
+        Self::renew_runtime_pr_validation_poll_lease(workspace_dir, request)
+    }
+
+    fn settle_runtime_pr_validation_poll(
+        &self,
+        workspace_dir: &str,
+        record_key: &PrValidationRecordKey,
+        owner: &str,
+        token: &str,
+        expected_expires_at: DateTime<Utc>,
+        settlement: &PrValidationPollSettlement,
+    ) -> Result<bool> {
+        Self::settle_runtime_pr_validation_poll(
+            workspace_dir,
+            record_key,
+            owner,
+            token,
+            expected_expires_at,
+            settlement,
+        )
     }
 
     fn load_runtime_pr_validation_record(

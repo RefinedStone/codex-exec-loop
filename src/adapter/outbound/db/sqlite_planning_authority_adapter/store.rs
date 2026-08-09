@@ -309,7 +309,19 @@ pub(super) fn ensure_schema(
                 integration_method TEXT,
                 integration_source_sha TEXT,
                 integration_evidence_sha TEXT,
-                integration_remote_verified_at TEXT
+                integration_remote_verified_at TEXT,
+                validation_repository TEXT,
+                validation_phase TEXT,
+                next_poll_at TEXT,
+                last_polled_at TEXT,
+                poll_attempt INTEGER NOT NULL DEFAULT 0,
+                consecutive_error_count INTEGER NOT NULL DEFAULT 0,
+                poll_lease_owner TEXT,
+                poll_lease_token TEXT,
+                poll_lease_expires_at TEXT,
+                last_error_class TEXT,
+                rate_limit_remaining INTEGER,
+                rate_limit_reset_at TEXT
             );
 
             CREATE TABLE IF NOT EXISTS runtime_dispatch_commands (
@@ -359,8 +371,12 @@ pub(super) fn ensure_schema(
         .context("failed to initialize authority-store schema")?;
     ensure_planning_task_provenance_columns(&transaction)?;
     ensure_pr_validation_attestation_columns(&transaction)?;
-    if previous_schema_version.is_some_and(|version| version < AUTHORITY_STORE_SCHEMA_VERSION) {
+    ensure_pr_validation_scheduler_columns(&transaction)?;
+    if previous_schema_version.is_some_and(|version| version < 12) {
         migrate_legacy_pr_validation_attestations(&transaction)?;
+    }
+    if previous_schema_version.is_none_or(|version| version < 13) {
+        migrate_pr_validation_scheduler_projection(&transaction)?;
     }
     upsert_metadata(
         &transaction,
@@ -449,6 +465,112 @@ fn ensure_pr_validation_attestation_columns(connection: &Connection) -> Result<(
                     )
                 })?;
         }
+    }
+    Ok(())
+}
+
+fn ensure_pr_validation_scheduler_columns(connection: &Connection) -> Result<()> {
+    for (column_name, column_definition) in [
+        ("validation_repository", "validation_repository TEXT"),
+        ("validation_phase", "validation_phase TEXT"),
+        ("next_poll_at", "next_poll_at TEXT"),
+        ("last_polled_at", "last_polled_at TEXT"),
+        ("poll_attempt", "poll_attempt INTEGER NOT NULL DEFAULT 0"),
+        (
+            "consecutive_error_count",
+            "consecutive_error_count INTEGER NOT NULL DEFAULT 0",
+        ),
+        ("poll_lease_owner", "poll_lease_owner TEXT"),
+        ("poll_lease_token", "poll_lease_token TEXT"),
+        ("poll_lease_expires_at", "poll_lease_expires_at TEXT"),
+        ("last_error_class", "last_error_class TEXT"),
+        ("rate_limit_remaining", "rate_limit_remaining INTEGER"),
+        ("rate_limit_reset_at", "rate_limit_reset_at TEXT"),
+    ] {
+        if !table_column_exists(connection, "runtime_pr_validation_records", column_name)? {
+            connection
+                .execute(
+                    &format!(
+                        "ALTER TABLE runtime_pr_validation_records ADD COLUMN {column_definition}"
+                    ),
+                    [],
+                )
+                .with_context(|| {
+                    format!(
+                        "failed to add runtime_pr_validation_records scheduler column `{column_name}`"
+                    )
+                })?;
+        }
+    }
+    connection
+        .execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_runtime_pr_validation_due
+                 ON runtime_pr_validation_records(validation_phase, next_poll_at, record_key);
+             CREATE INDEX IF NOT EXISTS idx_runtime_pr_validation_repository_lease
+                 ON runtime_pr_validation_records(
+                     validation_repository, poll_lease_expires_at, record_key
+                 );
+             CREATE INDEX IF NOT EXISTS idx_runtime_pr_validation_repository_poll
+                 ON runtime_pr_validation_records(
+                     validation_repository, last_polled_at, record_key
+                 );
+             CREATE INDEX IF NOT EXISTS idx_runtime_pr_validation_repository_provider_hold
+                 ON runtime_pr_validation_records(
+                     validation_repository, last_error_class, next_poll_at, record_key
+                 );
+             CREATE INDEX IF NOT EXISTS idx_runtime_pr_validation_repository_rate_limit
+                 ON runtime_pr_validation_records(
+                     validation_repository, rate_limit_remaining,
+                     rate_limit_reset_at, record_key
+                 );",
+        )
+        .context("failed to initialize PR validation scheduler indexes")?;
+    Ok(())
+}
+
+fn migrate_pr_validation_scheduler_projection(connection: &Connection) -> Result<()> {
+    let rows = {
+        let mut statement = connection
+            .prepare(
+                "SELECT record_key, updated_at, content
+                 FROM runtime_pr_validation_records
+                 WHERE validation_repository IS NULL
+                    OR validation_phase IS NULL
+                    OR next_poll_at IS NULL
+                 ORDER BY record_key",
+            )
+            .context("failed to prepare PR validation scheduler migration")?;
+        statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for (record_key, updated_at, content) in rows {
+        let record = serde_json::from_str::<PrValidationRecord>(&content).with_context(|| {
+            format!("failed to deserialize PR validation scheduler record `{record_key}`")
+        })?;
+        connection
+            .execute(
+                "UPDATE runtime_pr_validation_records
+                 SET validation_repository = ?2,
+                     validation_phase = ?3,
+                     next_poll_at = COALESCE(next_poll_at, ?4)
+                 WHERE record_key = ?1",
+                params![
+                    record_key,
+                    record.target().repository(),
+                    record.phase().storage_label(),
+                    updated_at,
+                ],
+            )
+            .with_context(|| {
+                format!("failed to migrate PR validation scheduler record `{record_key}`")
+            })?;
     }
     Ok(())
 }

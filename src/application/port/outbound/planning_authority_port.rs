@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, anyhow};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::application::port::outbound::github_automation_port::{
@@ -19,8 +20,8 @@ use crate::domain::parallel_mode::ParallelModeRuntimeEventsSnapshot;
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeDispatchCommandSnapshot,
     ParallelModeDistributorQueueItem, ParallelModePoolResetReport, ParallelModeQueueItemState,
-    ParallelModeSlotLeaseSnapshot, ParallelModeTaskDispatchBlockSnapshot, PrValidationRecord,
-    PrValidationRecordKey,
+    ParallelModeSlotLeaseSnapshot, ParallelModeTaskDispatchBlockSnapshot,
+    PrValidationPollErrorClass, PrValidationRecord, PrValidationRecordKey,
 };
 #[cfg(test)]
 use crate::domain::planning::PlanningAuthorityShadowStoreSyncState;
@@ -297,6 +298,54 @@ pub struct PlanningAuthorityRuntimeProjectionSnapshot {
     pub dispatch_commands: Vec<ParallelModeDispatchCommandSnapshot>,
     // Recent append-only runtime events, newest first and bounded by the adapter.
     pub runtime_events: Vec<PlanningAuthorityRuntimeEventRecord>,
+}
+
+/// Exact durable ownership returned after a scheduler wins one due validation record. The token is
+/// single-claim entropy; owner, token, and expiry must all match for renew or settle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrValidationPollLeaseClaim {
+    pub record: PrValidationRecord,
+    pub repository: String,
+    pub owner: String,
+    pub token: String,
+    pub expires_at: DateTime<Utc>,
+    pub poll_attempt: u64,
+    pub consecutive_error_count: u32,
+}
+
+/// Atomic inputs for claiming one due validation record. Grouping the lease identity and timing
+/// constraints keeps every adapter implementation aligned with the same compare-and-swap contract.
+#[derive(Debug, Clone, Copy)]
+pub struct PrValidationPollLeaseClaimRequest<'a> {
+    pub record_key: &'a PrValidationRecordKey,
+    pub owner: &'a str,
+    pub token: &'a str,
+    pub claimed_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub repository_cooldown_since: DateTime<Utc>,
+}
+
+/// Atomic inputs for extending one exact live validation lease.
+#[derive(Debug, Clone, Copy)]
+pub struct PrValidationPollLeaseRenewalRequest<'a> {
+    pub record_key: &'a PrValidationRecordKey,
+    pub owner: &'a str,
+    pub token: &'a str,
+    pub expected_expires_at: DateTime<Utc>,
+    pub renewed_at: DateTime<Utc>,
+    pub renewed_expires_at: DateTime<Utc>,
+}
+
+/// Scheduler settlement metadata stored beside the domain record so cadence, provider health, and
+/// rate-limit state stay queryable without parsing JSON.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrValidationPollSettlement {
+    pub polled_at: DateTime<Utc>,
+    pub next_poll_at: DateTime<Utc>,
+    pub consecutive_error_count: u32,
+    pub error_class: Option<PrValidationPollErrorClass>,
+    pub rate_limit_remaining: Option<u64>,
+    pub rate_limit_reset_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -703,6 +752,54 @@ pub trait PlanningAuthorityPort: ParallelModeRuntimeEventLogPort + Send + Sync {
         _workspace_dir: &str,
     ) -> Result<Vec<PrValidationRecord>> {
         Ok(Vec::new())
+    }
+
+    /// Select a bounded set of due, pollable keys without loading every validation record.
+    fn load_due_runtime_pr_validation_record_keys(
+        &self,
+        _workspace_dir: &str,
+        _due_at: DateTime<Utc>,
+        _repository_cooldown_since: DateTime<Utc>,
+        _limit: usize,
+    ) -> Result<Vec<PrValidationRecordKey>> {
+        Ok(Vec::new())
+    }
+
+    /// Claim one due record when no unexpired lease already owns the same repository.
+    fn try_claim_runtime_pr_validation_poll(
+        &self,
+        _workspace_dir: &str,
+        _request: PrValidationPollLeaseClaimRequest<'_>,
+    ) -> Result<Option<PrValidationPollLeaseClaim>> {
+        Err(anyhow!(
+            "PR validation poll lease claims are unsupported by this adapter"
+        ))
+    }
+
+    /// Extend only the exact live claim. A stale owner cannot revive an expired or replaced lease.
+    fn renew_runtime_pr_validation_poll_lease(
+        &self,
+        _workspace_dir: &str,
+        _request: PrValidationPollLeaseRenewalRequest<'_>,
+    ) -> Result<bool> {
+        Err(anyhow!(
+            "PR validation poll lease renewal is unsupported by this adapter"
+        ))
+    }
+
+    /// Release the exact claim and atomically publish its next schedule/provider metadata.
+    fn settle_runtime_pr_validation_poll(
+        &self,
+        _workspace_dir: &str,
+        _record_key: &PrValidationRecordKey,
+        _owner: &str,
+        _token: &str,
+        _expected_expires_at: DateTime<Utc>,
+        _settlement: &PrValidationPollSettlement,
+    ) -> Result<bool> {
+        Err(anyhow!(
+            "PR validation poll settlement is unsupported by this adapter"
+        ))
     }
 
     // Load one authoritative PR validation record across process/restart boundaries.

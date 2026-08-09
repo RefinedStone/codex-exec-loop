@@ -25574,3 +25574,30 @@ fn forbids_time_completion_and_direct_git_writes() {
         "terminal-but-failed evidence must not settle validation"
     );
 }
+
+#[test]
+fn pr_validation_scheduler_is_composition_owned_and_not_driven_by_control_plane_refreshes() {
+    let root = repo_root();
+    let effect_runner = std::fs::read_to_string(
+        root.join("src/application/service/parallel_mode/control_plane/effect_runner.rs"),
+    )
+    .expect("control-plane effect runner source must be readable");
+    assert!(
+        !effect_runner.contains("poll_pr_validation"),
+        "control-plane refresh/tick effects must never drive GitHub validation polling"
+    );
+
+    let scheduler = std::fs::read_to_string(
+        root.join("src/application/service/parallel_mode/pr_validation_scheduler.rs"),
+    )
+    .expect("PR validation scheduler source must be readable");
+    assert!(scheduler.contains("load_due_runtime_pr_validation_record_keys"));
+    assert!(scheduler.contains("try_claim_runtime_pr_validation_poll"));
+    assert!(scheduler.contains("pub fn start(service: PrValidationSchedulerService)"));
+
+    let production = std::fs::read_to_string(root.join("src/composition/production.rs"))
+        .expect("production composition source must be readable");
+    assert!(production.contains("build_pr_validation_scheduler_runtime"));
+    assert!(production.contains("PrValidationSchedulerRuntime::start"));
+    assert!(production.contains("with_pr_validation_scheduler(scheduler)"));
+}

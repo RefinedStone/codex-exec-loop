@@ -1,5 +1,6 @@
-use anyhow::Result;
-use chrono::DateTime;
+use std::fmt;
+
+use chrono::{DateTime, Utc};
 
 use crate::domain::github_review::{GithubCommitSha, GithubOpaqueId, GithubPullRequestTarget};
 use crate::domain::parallel_mode::{
@@ -44,7 +45,106 @@ pub trait GithubPrValidationPort: Send + Sync {
     fn load_validation_snapshot(
         &self,
         request: &GithubPrValidationObservationRequest,
-    ) -> Result<GithubPrValidationSnapshot>;
+    ) -> Result<GithubPrValidationSnapshot, GithubPrValidationError>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GithubPrValidationErrorClass {
+    RetryableProvider,
+    AuthenticationBlocked,
+    IdentityFailed,
+    IntegrityFailed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct GithubValidationProviderMetadata {
+    pub rate_limit_remaining: Option<u64>,
+    pub rate_limit_reset_at: Option<DateTime<Utc>>,
+}
+
+impl GithubValidationProviderMetadata {
+    pub fn merge(&mut self, other: &Self) {
+        self.rate_limit_remaining = match (self.rate_limit_remaining, other.rate_limit_remaining) {
+            (Some(left), Some(right)) => Some(left.min(right)),
+            (left, right) => left.or(right),
+        };
+        self.rate_limit_reset_at = match (self.rate_limit_reset_at, other.rate_limit_reset_at) {
+            (Some(left), Some(right)) => Some(left.max(right)),
+            (left, right) => left.or(right),
+        };
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GithubPrValidationError {
+    pub class: GithubPrValidationErrorClass,
+    pub message: String,
+    pub retry_after_at: Option<DateTime<Utc>>,
+    pub provider_metadata: GithubValidationProviderMetadata,
+}
+
+impl GithubPrValidationError {
+    pub fn new(class: GithubPrValidationErrorClass, message: impl Into<String>) -> Self {
+        Self {
+            class,
+            message: bounded_provider_error(message.into()),
+            retry_after_at: None,
+            provider_metadata: GithubValidationProviderMetadata::default(),
+        }
+    }
+
+    pub fn retryable(message: impl Into<String>) -> Self {
+        Self::new(GithubPrValidationErrorClass::RetryableProvider, message)
+    }
+
+    pub fn authentication_blocked(message: impl Into<String>) -> Self {
+        Self::new(GithubPrValidationErrorClass::AuthenticationBlocked, message)
+    }
+
+    pub fn identity_failed(message: impl Into<String>) -> Self {
+        Self::new(GithubPrValidationErrorClass::IdentityFailed, message)
+    }
+
+    pub fn integrity_failed(message: impl Into<String>) -> Self {
+        Self::new(GithubPrValidationErrorClass::IntegrityFailed, message)
+    }
+
+    pub fn with_retry_after_at(mut self, retry_after_at: Option<DateTime<Utc>>) -> Self {
+        self.retry_after_at = retry_after_at;
+        self
+    }
+
+    pub fn with_provider_metadata(
+        mut self,
+        provider_metadata: GithubValidationProviderMetadata,
+    ) -> Self {
+        self.provider_metadata = provider_metadata;
+        self
+    }
+}
+
+impl fmt::Display for GithubPrValidationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for GithubPrValidationError {}
+
+impl From<anyhow::Error> for GithubPrValidationError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::integrity_failed(error.to_string())
+    }
+}
+
+fn bounded_provider_error(value: String) -> String {
+    let one_line = value.replace(['\r', '\n'], " ");
+    let bounded = one_line.chars().take(320).collect::<String>();
+    if bounded.trim().is_empty() {
+        "GitHub validation provider failed".to_string()
+    } else {
+        bounded
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -352,6 +452,7 @@ pub struct GithubPrValidationSnapshot {
     pub workflow_runs: Vec<GithubValidationWorkflowRun>,
     pub sources: Vec<GithubValidationSourceObservation>,
     pub next_cursor: Option<GithubValidationCursor>,
+    pub provider_metadata: GithubValidationProviderMetadata,
 }
 
 impl GithubPrValidationSnapshot {
@@ -598,11 +699,12 @@ fn opaque_id_order(
 #[cfg(test)]
 mod tests {
     use super::{
-        GithubExpectedCheckStatus, GithubPrMergeState, GithubPrValidationObservationRequest,
-        GithubPrValidationPort, GithubPrValidationSnapshot, GithubValidationActivity,
-        GithubValidationActivityKind, GithubValidationCheckRun, GithubValidationCursor,
-        GithubValidationRunStatus, GithubValidationSource, GithubValidationSourceObservation,
-        GithubValidationSourceStatus, GithubValidationWorkflowRun,
+        GithubExpectedCheckStatus, GithubPrMergeState, GithubPrValidationError,
+        GithubPrValidationObservationRequest, GithubPrValidationPort, GithubPrValidationSnapshot,
+        GithubValidationActivity, GithubValidationActivityKind, GithubValidationCheckRun,
+        GithubValidationCursor, GithubValidationRunStatus, GithubValidationSource,
+        GithubValidationSourceObservation, GithubValidationSourceStatus,
+        GithubValidationWorkflowRun,
     };
     use crate::domain::github_review::{GithubCommitSha, GithubOpaqueId, GithubPullRequestTarget};
     use crate::domain::parallel_mode::PostMergeValidationContract;
@@ -615,7 +717,7 @@ mod tests {
         fn load_validation_snapshot(
             &self,
             _request: &GithubPrValidationObservationRequest,
-        ) -> anyhow::Result<GithubPrValidationSnapshot> {
+        ) -> Result<GithubPrValidationSnapshot, GithubPrValidationError> {
             let mut snapshot = self.snapshot.clone();
             snapshot.normalize();
             Ok(snapshot)
@@ -685,6 +787,7 @@ mod tests {
             )],
             sources: complete_sources(),
             next_cursor: None,
+            provider_metadata: Default::default(),
         }
     }
 
