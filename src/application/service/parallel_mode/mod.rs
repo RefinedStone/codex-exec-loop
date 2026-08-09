@@ -43,6 +43,7 @@ mod orchestration;
 mod orchestrator_loop;
 mod pool;
 mod pr_validation;
+mod pr_validation_finding_policy;
 mod pr_validation_scheduler;
 mod pr_validation_store;
 mod readiness;

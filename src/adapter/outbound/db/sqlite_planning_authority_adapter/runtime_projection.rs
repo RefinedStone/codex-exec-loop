@@ -1456,8 +1456,11 @@ impl SqlitePlanningAuthorityAdapter {
             .prepare(
                 "SELECT candidate.record_key
                  FROM runtime_pr_validation_records AS candidate
-                 WHERE validation_phase IN (
-                     'Registered', 'PreMergeObservation', 'PostMergeObservation'
+                 WHERE (
+                     validation_phase IN (
+                         'Registered', 'PreMergeObservation', 'PostMergeObservation'
+                     )
+                     OR (validation_phase = 'Settled' AND review_watch_active = 1)
                  )
                    AND next_poll_at IS NOT NULL
                    AND next_poll_at <= ?1
@@ -1555,8 +1558,11 @@ impl SqlitePlanningAuthorityAdapter {
                      poll_lease_expires_at = ?5,
                      poll_attempt = poll_attempt + 1
                  WHERE record_key = ?1
-                   AND validation_phase IN (
-                       'Registered', 'PreMergeObservation', 'PostMergeObservation'
+                   AND (
+                       validation_phase IN (
+                           'Registered', 'PreMergeObservation', 'PostMergeObservation'
+                       )
+                       OR (validation_phase = 'Settled' AND review_watch_active = 1)
                    )
                    AND next_poll_at IS NOT NULL
                    AND next_poll_at <= ?4
@@ -1960,8 +1966,8 @@ impl SqlitePlanningAuthorityAdapter {
                              record_key, updated_at, content, integration_method,
                              integration_source_sha, integration_evidence_sha,
                              integration_remote_verified_at, validation_repository,
-                             validation_phase, next_poll_at
-                         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?2)
+                             validation_phase, review_watch_active, next_poll_at
+                         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?2)
                          ON CONFLICT(record_key) DO UPDATE
                          SET updated_at = excluded.updated_at,
                              content = excluded.content,
@@ -1971,6 +1977,7 @@ impl SqlitePlanningAuthorityAdapter {
                              integration_remote_verified_at = excluded.integration_remote_verified_at,
                              validation_repository = excluded.validation_repository,
                              validation_phase = excluded.validation_phase,
+                             review_watch_active = excluded.review_watch_active,
                              next_poll_at = MIN(
                                  COALESCE(
                                      runtime_pr_validation_records.next_poll_at,
@@ -1994,6 +2001,11 @@ impl SqlitePlanningAuthorityAdapter {
                                 .expect("replacement exists in the upsert branch")
                                 .phase()
                                 .storage_label(),
+                            i64::from(
+                                replacement
+                                    .expect("replacement exists in the upsert branch")
+                                    .review_watch_active(),
+                            ),
                         ],
                     )
                     .with_context(|| {

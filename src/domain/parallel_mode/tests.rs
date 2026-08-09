@@ -1409,11 +1409,11 @@ fn pr_validation_completion_predicate_reports_every_incomplete_branch() {
         completion.blockers(),
         vec![
             PrValidationCompletionBlocker::ProviderNotTerminal(pending_provider),
-            PrValidationCompletionBlocker::ProviderHasNoCompletionContract(watchable_provider),
             PrValidationCompletionBlocker::RequiredCheckNotSuccessful(pending_check.key().clone()),
             PrValidationCompletionBlocker::FinalCatchUpNotObserved,
         ]
     );
+    assert!(completion.has_watchable_providers());
 
     let unseen = PrValidationCompletion::new(
         sha("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),

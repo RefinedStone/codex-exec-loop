@@ -385,14 +385,14 @@ read-only로 시작하고 mutation은 read model이 안정된 다음 PR에서 �
 
 권장 branch: `codex/pr-validation-integration-attestation`
 
-- [ ] `IntegrationAttestation`과 evidence identity invariant를 domain에 추가한다.
-- [ ] `merge_sha` 단독 의미를 `evidence_sha` 기반으로 전환하되 기존 JSON을 읽는다.
-- [ ] authority store schema v11에서 다음 version으로 additive migration한다.
-- [ ] distributor remote verification 성공 지점에서 attestation을 CAS 저장한다.
-- [ ] GitHub merged PR을 같은 attestation으로 normalize한다.
-- [ ] closed-unmerged PR이라도 유효한 distributor attestation이 있으면 검증 단계로 간다.
-- [ ] attestation 없는 closed PR은 `IntegrationEvidenceMissing` blocker로 둔다.
-- [ ] TUI/CLI summary에 integration method/evidence short SHA를 추가한다.
+- [x] `IntegrationAttestation`과 evidence identity invariant를 domain에 추가한다.
+- [x] `merge_sha` 단독 의미를 `evidence_sha` 기반으로 전환하되 기존 JSON을 읽는다.
+- [x] authority store schema v11에서 다음 version으로 additive migration한다.
+- [x] distributor remote verification 성공 지점에서 attestation을 CAS 저장한다.
+- [x] GitHub merged PR을 같은 attestation으로 normalize한다.
+- [x] closed-unmerged PR이라도 유효한 distributor attestation이 있으면 검증 단계로 간다.
+- [x] attestation 없는 closed PR은 `IntegrationEvidenceMissing` blocker로 둔다.
+- [x] TUI/CLI summary에 integration method/evidence short SHA를 추가한다.
 
 주요 파일: domain/service `pr_validation.rs`, distributor delivery, planning authority port,
 SQLite adapter와 migration tests.
@@ -412,15 +412,15 @@ Ruleset은 이 PR에서 변경하지 않는다.
 
 권장 branch: `codex/post-merge-check-contract`
 
-- [ ] `PostMergeValidationContract`를 record 생성 시 snapshot한다.
-- [ ] check DTO에 app/context, suite identity와 timestamps를, workflow DTO에 `run_attempt`를
+- [x] `PostMergeValidationContract`를 record 생성 시 snapshot한다.
+- [x] check DTO에 app/context, suite identity와 timestamps를, workflow DTO에 `run_attempt`를
       추가한다.
-- [ ] expected context별 최신 attempt reducer를 pure decision으로 만든다.
-- [ ] optional/skipped와 required/skipped를 분리한다.
-- [ ] workflow run은 진단 metadata로 유지하고 check run과 이중 판정하지 않는다.
-- [ ] `ci-scope.mjs`에 `postmerge` scope를 추가한다.
-- [ ] prerelease push가 `smoke`가 아닌 `postmerge` plan을 선택하게 한다.
-- [ ] stable `Post-Merge Gate` job/context를 추가한다.
+- [x] expected context별 최신 attempt reducer를 pure decision으로 만든다.
+- [x] optional/skipped와 required/skipped를 분리한다.
+- [x] workflow run은 진단 metadata로 유지하고 check run과 이중 판정하지 않는다.
+- [x] `ci-scope.mjs`에 `postmerge` scope를 추가한다.
+- [x] prerelease push가 `smoke`가 아닌 `postmerge` plan을 선택하게 한다.
+- [x] stable `Post-Merge Gate` job/context를 추가한다.
 
 주요 파일: GitHub validation port/adapter/service, `scripts/ci-scope.mjs`, 관련 Node test,
 `.github/workflows/native-pr-checks.yml`.
@@ -440,14 +440,14 @@ required context는 아직 바꾸지 않는다.
 
 권장 branch: `codex/pr-validation-durable-scheduler`
 
-- [ ] `PrValidationSchedulerService`와 due-record query를 추가한다.
-- [ ] schedule/lease/rate-limit column을 additive migration한다.
-- [ ] exact owner/token/expiry CAS로 poll claim, renew, settle을 구현한다.
-- [ ] control-plane 1초 tick이 모든 record를 직접 poll하지 않게 한다.
-- [ ] TUI와 Admin process가 같은 scheduler composition을 사용하게 한다.
-- [ ] retryable/blocked/terminal 오류와 bounded backoff/jitter를 구현한다.
-- [ ] provider rate-limit/Retry-After 정보를 normalized metadata로 전달한다.
-- [ ] scheduler mode `off | observe | remediate`를 typed 설정으로 만든다.
+- [x] `PrValidationSchedulerService`와 due-record query를 추가한다.
+- [x] schedule/lease/rate-limit column을 additive migration한다.
+- [x] exact owner/token/expiry CAS로 poll claim, renew, settle을 구현한다.
+- [x] control-plane 1초 tick이 모든 record를 직접 poll하지 않게 한다.
+- [x] TUI와 Admin process가 같은 scheduler composition을 사용하게 한다.
+- [x] retryable/blocked/terminal 오류와 bounded backoff/jitter를 구현한다.
+- [x] provider rate-limit/Retry-After 정보를 normalized metadata로 전달한다.
+- [x] scheduler mode `off | observe | remediate`를 typed 설정으로 만든다.
 
 필수 테스트:
 
@@ -464,13 +464,13 @@ required context는 아직 바꾸지 않는다.
 
 권장 branch: `codex/pr-validation-actionable-findings`
 
-- [ ] review state, actor, body marker를 normalized contract에 추가한다.
-- [ ] GraphQL 또는 동등한 trusted 경로로 thread stable ID와 `isResolved`를 얻는다.
-- [ ] root/reply를 하나의 thread finding으로 fold한다.
-- [ ] `ActionableFindingPolicy`를 pure decision으로 구현한다.
-- [ ] bot/self deny와 explicit human command allow policy를 추가한다.
-- [ ] CI completion과 review watch lifecycle을 분리한다.
-- [ ] Verified 이후 late event는 명시적 reopen/correlation 정책을 사용한다.
+- [x] review state, actor, body marker를 normalized contract에 추가한다.
+- [x] GraphQL 또는 동등한 trusted 경로로 thread stable ID와 `isResolved`를 얻는다.
+- [x] root/reply를 하나의 thread finding으로 fold한다.
+- [x] `ActionableFindingPolicy`를 pure decision으로 구현한다.
+- [x] bot/self deny와 explicit human command allow policy를 추가한다.
+- [x] CI completion과 review watch lifecycle을 분리한다.
+- [x] Verified 이후 late event는 명시적 reopen/correlation 정책을 사용한다.
 
 필수 테스트:
 

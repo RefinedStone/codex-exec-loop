@@ -673,7 +673,6 @@ pub enum PrValidationCatchUpState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PrValidationCompletionBlocker {
     ProviderNotTerminal(PrValidationProviderKey),
-    ProviderHasNoCompletionContract(PrValidationProviderKey),
     RequiredCheckNotSuccessful(PrValidationRequiredCheckKey),
     FinalCatchUpNotObserved,
     FinalCatchUpHasUnseenRelevantEvents,
@@ -709,12 +708,8 @@ impl PrValidationCompletion {
                 PrValidationProviderCompletionState::Pending => blockers.push(
                     PrValidationCompletionBlocker::ProviderNotTerminal(provider.provider.clone()),
                 ),
-                PrValidationProviderCompletionState::Watchable => blockers.push(
-                    PrValidationCompletionBlocker::ProviderHasNoCompletionContract(
-                        provider.provider.clone(),
-                    ),
-                ),
-                PrValidationProviderCompletionState::Terminal => {}
+                PrValidationProviderCompletionState::Watchable
+                | PrValidationProviderCompletionState::Terminal => {}
             }
         }
         blockers.extend(
@@ -739,6 +734,12 @@ impl PrValidationCompletion {
 
     pub fn is_complete(&self) -> bool {
         self.blockers().is_empty()
+    }
+
+    pub fn has_watchable_providers(&self) -> bool {
+        self.providers
+            .iter()
+            .any(|provider| provider.state == PrValidationProviderCompletionState::Watchable)
     }
 }
 
@@ -833,6 +834,7 @@ impl PrValidationTerminalReason {
 pub enum PrValidationEvent {
     BeginPreMergeObservation,
     FindingObserved(PrValidationFinding),
+    LateFindingObserved(PrValidationFinding),
     RemediationQueued(PrValidationRemediationCorrelation),
     RemediationStarted {
         finding_key: PrValidationFindingKey,
@@ -859,6 +861,7 @@ impl PrValidationEvent {
         match self {
             Self::BeginPreMergeObservation => "begin_pre_merge_observation",
             Self::FindingObserved(_) => "finding_observed",
+            Self::LateFindingObserved(_) => "late_finding_observed",
             Self::RemediationQueued(_) => "remediation_queued",
             Self::RemediationStarted { .. } => "remediation_started",
             Self::RemediationCompleted { .. } => "remediation_completed",
@@ -1060,6 +1063,14 @@ impl PrValidationRecord {
         self.post_merge_checkpoint_revision.is_some()
     }
 
+    pub fn review_watch_active(&self) -> bool {
+        self.phase == PrValidationPhase::Settled
+            && self
+                .completion
+                .as_ref()
+                .is_some_and(PrValidationCompletion::has_watchable_providers)
+    }
+
     pub fn terminal_reason(&self) -> Option<&PrValidationTerminalReason> {
         self.terminal_reason.as_ref()
     }
@@ -1184,7 +1195,8 @@ impl PrValidationRecord {
                 });
             }
         }
-        if let PrValidationEvent::FindingObserved(finding) = &event
+        if let PrValidationEvent::FindingObserved(finding)
+        | PrValidationEvent::LateFindingObserved(finding) = &event
             && finding.target_sha != *next.target_shas.source_sha()
         {
             return Err(PrValidationTransitionRejection::TargetShaMismatch {
@@ -1260,6 +1272,14 @@ impl PrValidationRecord {
                 ) =>
             {
                 next.findings.insert(finding.key.clone(), finding);
+            }
+            PrValidationEvent::LateFindingObserved(finding)
+                if next.phase == PrValidationPhase::Settled && next.review_watch_active() =>
+            {
+                next.findings.insert(finding.key.clone(), finding);
+                next.completion = None;
+                next.terminal_reason = None;
+                next.phase = PrValidationPhase::PostMergeObservation;
             }
             PrValidationEvent::RemediationQueued(correlation)
                 if matches!(
@@ -1357,7 +1377,7 @@ impl PrValidationRecord {
                 evidence_fingerprint,
             } if !matches!(
                 next.phase,
-                PrValidationPhase::Settled | PrValidationPhase::Blocked | PrValidationPhase::Failed
+                PrValidationPhase::Blocked | PrValidationPhase::Failed
             ) && delivery_revision > next.observation_revision =>
             {
                 next.observation_revision = delivery_revision;

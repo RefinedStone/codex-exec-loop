@@ -415,8 +415,8 @@ fn authority_connection(workspace_dir: &str) -> rusqlite::Connection {
 }
 
 #[test]
-fn authority_schema_migrates_v7_through_v12_additively_and_rejects_unsupported_versions() {
-    for legacy_version in [7, 8, 9, 10, 11, 12] {
+fn authority_schema_migrates_v7_through_v13_additively_and_rejects_unsupported_versions() {
+    for legacy_version in [7, 8, 9, 10, 11, 12, 13] {
         let workspace_dir = temp_workspace(&format!("schema-migrate-v{legacy_version}"));
         let location = SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
             &workspace_dir,
@@ -454,7 +454,7 @@ fn authority_schema_migrates_v7_through_v12_additively_and_rejects_unsupported_v
                 |row| row.get(0),
             )
             .expect("migrated version should load");
-        assert_eq!(version, "13");
+        assert_eq!(version, "14");
         assert_eq!(
             migrated
                 .query_row(
@@ -512,7 +512,7 @@ fn authority_schema_migrates_v7_through_v12_additively_and_rejects_unsupported_v
         );
     }
 
-    for unsupported_version in ["6", "14", "not-a-version"] {
+    for unsupported_version in ["6", "15", "not-a-version"] {
         let workspace_dir = temp_workspace("schema-reject-unsupported");
         let location = SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
             &workspace_dir,
@@ -597,9 +597,9 @@ fn authority_schema_migrates_v12_pr_validation_schedule_without_data_loss() {
     drop(connection);
 
     let migrated = open_authority_connection(&location).expect("v12 store should migrate");
-    let row: (String, String, String, i64, i64) = migrated
+    let row: (String, String, i64, String, i64, i64) = migrated
         .query_row(
-            "SELECT validation_repository, validation_phase, next_poll_at,
+            "SELECT validation_repository, validation_phase, review_watch_active, next_poll_at,
                     poll_attempt, consecutive_error_count
              FROM runtime_pr_validation_records WHERE record_key = ?1",
             [record.key().as_str()],
@@ -610,6 +610,7 @@ fn authority_schema_migrates_v12_pr_validation_schedule_without_data_loss() {
                     row.get(2)?,
                     row.get(3)?,
                     row.get(4)?,
+                    row.get(5)?,
                 ))
             },
         )
@@ -619,6 +620,7 @@ fn authority_schema_migrates_v12_pr_validation_schedule_without_data_loss() {
         (
             "acme/widgets".to_string(),
             "Registered".to_string(),
+            0,
             updated_at.to_string(),
             0,
             0
@@ -632,7 +634,7 @@ fn authority_schema_migrates_v12_pr_validation_schedule_without_data_loss() {
                 |row| row.get::<_, String>(0),
             )
             .unwrap(),
-        "13"
+        "14"
     );
     drop(migrated);
 
@@ -712,7 +714,7 @@ fn authority_schema_migrates_v11_legacy_merge_evidence_without_data_loss() {
             |row| row.get(0),
         )
         .expect("migrated version should load");
-    assert_eq!(version, "13");
+    assert_eq!(version, "14");
     let (method, evidence_sha, content): (String, String, String) = migrated
         .query_row(
             "SELECT integration_method, integration_evidence_sha, content
@@ -751,7 +753,7 @@ fn authority_schema_migrates_v11_legacy_merge_evidence_without_data_loss() {
         .expect("migration replay guard should install");
     drop(migrated);
     open_authority_connection(&location)
-        .expect("schema v13 reopen must not replay the v11 data migration");
+        .expect("schema v14 reopen must not replay the v11 data migration");
 }
 
 #[test]

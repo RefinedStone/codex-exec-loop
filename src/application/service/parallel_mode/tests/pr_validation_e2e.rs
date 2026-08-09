@@ -22,9 +22,10 @@ pub mod tests {
     use crate::application::port::outbound::github_pr_validation_port::{
         GithubPrMergeState, GithubPrValidationError, GithubPrValidationObservationRequest,
         GithubPrValidationPort, GithubPrValidationSnapshot, GithubValidationActivity,
-        GithubValidationActivityKind, GithubValidationCheckRun, GithubValidationProviderMetadata,
-        GithubValidationRunStatus, GithubValidationSource, GithubValidationSourceObservation,
-        GithubValidationSourceStatus,
+        GithubValidationActivityKind, GithubValidationActor, GithubValidationActorKind,
+        GithubValidationCheckRun, GithubValidationProviderMetadata, GithubValidationReviewState,
+        GithubValidationRunStatus, GithubValidationSource, GithubValidationSourceLifecycle,
+        GithubValidationSourceObservation, GithubValidationSourceStatus,
     };
     use crate::application::port::outbound::planning_authority_port::{
         PrValidationPollLeaseClaimRequest, PrValidationPollLeaseRenewalRequest,
@@ -196,13 +197,22 @@ pub mod tests {
                 GithubValidationActivityKind::Review,
                 "2026-08-07T22:00:02Z",
             )
-            .with_commit_sha(GithubCommitSha::new(HEAD_B)),
+            .with_commit_sha(GithubCommitSha::new(HEAD_B))
+            .with_actor(Some(GithubValidationActor::new(
+                "reviewer",
+                GithubValidationActorKind::User,
+            )))
+            .with_review_state(GithubValidationReviewState::ChangesRequested),
             GithubValidationActivity::new(
                 GithubOpaqueId::new("comment:late-a"),
                 GithubValidationActivityKind::ReviewComment,
                 "2026-08-07T22:00:01Z",
             )
-            .with_commit_sha(GithubCommitSha::new(HEAD_B)),
+            .with_commit_sha(GithubCommitSha::new(HEAD_B))
+            .with_actor(Some(GithubValidationActor::new(
+                "reviewer",
+                GithubValidationActorKind::User,
+            ))),
         ];
         snapshot
     }
@@ -350,7 +360,7 @@ pub mod tests {
             .persist_pr_validation_record(&repo.workspace_dir(), &repo.pool_root(), None, &record())
             .unwrap();
 
-        let mut late = with_late_review(merged_snapshot(HEAD_B));
+        let mut late = merged_snapshot(HEAD_B);
         late.check_runs[0] = GithubValidationCheckRun::new(
             GithubOpaqueId::new("check:late"),
             "Post-Merge Gate",
@@ -363,7 +373,7 @@ pub mod tests {
             Some("2026-08-08T00:02:00Z".to_string()),
             Some("2026-08-08T00:03:00Z".to_string()),
         );
-        let mut reordered_late = late.clone();
+        let mut reordered_late = with_late_review(late.clone());
         reordered_late.activities.reverse();
         reordered_late.check_runs[0].status = GithubValidationRunStatus::Succeeded;
         let github = DeterministicGithub {
@@ -986,6 +996,164 @@ pub mod tests {
             "observe mode must never admit a remediation task"
         );
         assert_eq!(github.requests.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn sqlite_due_projection_claims_only_settled_records_with_an_active_review_watch() {
+        for (suffix, watchable) in [("watchable", true), ("finite", false)] {
+            let repo = temp_repo(&format!("pr-validation-settled-{suffix}"));
+            let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+            let mut observed = merged_snapshot(HEAD_A);
+            if !watchable {
+                for source in &mut observed.sources {
+                    source.lifecycle = GithubValidationSourceLifecycle::Finite;
+                }
+            }
+            let github = DeterministicGithub {
+                snapshots: Mutex::new(vec![observed.clone(), observed].into()),
+                requests: Mutex::new(Vec::new()),
+            };
+            let service = build_service(authority);
+            service
+                .persist_pr_validation_record(
+                    &repo.workspace_dir(),
+                    &repo.pool_root(),
+                    None,
+                    &record(),
+                )
+                .unwrap();
+            assert_eq!(
+                service
+                    .poll_pr_validation(
+                        &github,
+                        &RejectUnexpectedRemediation,
+                        request(&repo, 1, HEAD_A),
+                    )
+                    .unwrap(),
+                PrValidationPollResult::Waiting
+            );
+            assert_eq!(
+                service
+                    .poll_pr_validation(
+                        &github,
+                        &RejectUnexpectedRemediation,
+                        request(&repo, 2, HEAD_A),
+                    )
+                    .unwrap(),
+                PrValidationPollResult::Settled
+            );
+            let settled = service
+                .recover_pr_validation_record(
+                    &repo.workspace_dir(),
+                    &repo.pool_root(),
+                    record().key(),
+                )
+                .unwrap()
+                .unwrap();
+            assert_eq!(settled.review_watch_active(), watchable);
+
+            let due_at = Utc::now() + TimeDelta::seconds(1);
+            let due = SqlitePlanningAuthorityAdapter::load_due_runtime_pr_validation_record_keys(
+                &repo.workspace_dir(),
+                due_at,
+                due_at - TimeDelta::seconds(30),
+                8,
+            )
+            .unwrap();
+            if watchable {
+                assert_eq!(due, vec![record().key().clone()]);
+                assert!(
+                    SqlitePlanningAuthorityAdapter::try_claim_runtime_pr_validation_poll(
+                        &repo.workspace_dir(),
+                        PrValidationPollLeaseClaimRequest {
+                            record_key: record().key(),
+                            owner: "watch-owner",
+                            token: "watch-token",
+                            claimed_at: due_at,
+                            expires_at: due_at + TimeDelta::seconds(180),
+                            repository_cooldown_since: due_at - TimeDelta::seconds(30),
+                        },
+                    )
+                    .unwrap()
+                    .is_some()
+                );
+            } else {
+                assert!(due.is_empty());
+                assert!(
+                    SqlitePlanningAuthorityAdapter::try_claim_runtime_pr_validation_poll(
+                        &repo.workspace_dir(),
+                        PrValidationPollLeaseClaimRequest {
+                            record_key: record().key(),
+                            owner: "finite-owner",
+                            token: "finite-token",
+                            claimed_at: due_at,
+                            expires_at: due_at + TimeDelta::seconds(180),
+                            repository_cooldown_since: due_at - TimeDelta::seconds(30),
+                        },
+                    )
+                    .unwrap()
+                    .is_none()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn scheduler_moves_verified_records_from_active_cadence_to_bounded_review_watch_cadence() {
+        let repo = temp_repo("pr-validation-review-watch-cadence");
+        let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let planning = planning(authority.clone());
+        bootstrap(authority.as_ref(), &repo.workspace_dir());
+        let observed = merged_snapshot(HEAD_A);
+        let github = Arc::new(DeterministicGithub {
+            snapshots: Mutex::new(vec![observed.clone(), observed.clone(), observed].into()),
+            requests: Mutex::new(Vec::new()),
+        });
+        let service = build_service(authority).with_pr_validation_observation(github.clone());
+        service
+            .persist_pr_validation_record(&repo.workspace_dir(), &repo.pool_root(), None, &record())
+            .unwrap();
+        let scheduler = PrValidationSchedulerService::new(
+            service,
+            planning.queue,
+            repo.workspace_dir(),
+            PrValidationSchedulerConfig::default(),
+        )
+        .unwrap();
+
+        let first_due = Utc::now() + TimeDelta::seconds(1);
+        let active_next = match scheduler.run_due_once_at(first_due).unwrap() {
+            PrValidationSchedulerRunOutcome::PollSettled {
+                result: PrValidationPollResult::Waiting,
+                next_poll_at,
+                ..
+            } => next_poll_at,
+            outcome => panic!("unexpected initial validation outcome: {outcome:?}"),
+        };
+        let settle_at = active_next + TimeDelta::seconds(1);
+        let watch_next = match scheduler.run_due_once_at(settle_at).unwrap() {
+            PrValidationSchedulerRunOutcome::PollSettled {
+                result: PrValidationPollResult::Settled,
+                next_poll_at,
+                ..
+            } => next_poll_at,
+            outcome => panic!("unexpected verified validation outcome: {outcome:?}"),
+        };
+        assert!(watch_next >= settle_at + TimeDelta::seconds(299));
+        assert_eq!(
+            scheduler
+                .run_due_once_at(watch_next - TimeDelta::milliseconds(1))
+                .unwrap(),
+            PrValidationSchedulerRunOutcome::Idle
+        );
+        assert!(matches!(
+            scheduler.run_due_once_at(watch_next).unwrap(),
+            PrValidationSchedulerRunOutcome::PollSettled {
+                result: PrValidationPollResult::Settled,
+                ..
+            }
+        ));
+        assert_eq!(github.requests.lock().unwrap().len(), 3);
     }
 
     #[test]

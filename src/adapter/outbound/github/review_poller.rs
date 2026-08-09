@@ -839,6 +839,7 @@ impl GithubReviewPollerAdapter {
                 &api_version,
                 &authorization,
                 &user_agent,
+                None,
                 self.subprocess_timeout,
             )
             .map_err(|_| {
@@ -847,6 +848,49 @@ impl GithubReviewPollerAdapter {
         if !output.status.success() {
             return Err(GithubPrValidationError::retryable(
                 "GitHub validation transport failed",
+            ));
+        }
+        parse_validation_http_response(&output.stdout, Utc::now())
+    }
+
+    pub(super) fn fetch_validation_graphql_response(
+        &self,
+        request_body: &str,
+    ) -> std::result::Result<
+        super::pr_validation::GithubValidationApiResponse,
+        GithubPrValidationError,
+    > {
+        if self.curl_resolution_error.is_some() {
+            return Err(GithubPrValidationError::integrity_failed(
+                "trusted curl executable could not be pinned for GitHub validation",
+            ));
+        }
+        if request_body.len() > 64 * 1024 {
+            return Err(GithubPrValidationError::integrity_failed(
+                "GitHub validation GraphQL request exceeded its bounded envelope",
+            ));
+        }
+        let url = format!("{}/graphql", self.api_base_url.trim_end_matches('/'));
+        let authorization = format!("Authorization: Bearer {}", self.token);
+        let user_agent = format!("User-Agent: {}", self.user_agent);
+        let api_version = format!("X-GitHub-Api-Version: {}", GITHUB_API_VERSION);
+        let output = self
+            .run_validation_curl_process(
+                &url,
+                &api_version,
+                &authorization,
+                &user_agent,
+                Some(request_body),
+                self.subprocess_timeout,
+            )
+            .map_err(|_| {
+                GithubPrValidationError::retryable(
+                    "GitHub validation GraphQL request failed or timed out",
+                )
+            })?;
+        if !output.status.success() {
+            return Err(GithubPrValidationError::retryable(
+                "GitHub validation GraphQL transport failed",
             ));
         }
         parse_validation_http_response(&output.stdout, Utc::now())
@@ -964,6 +1008,7 @@ impl GithubReviewPollerAdapter {
         api_version: &str,
         authorization: &str,
         user_agent: &str,
+        request_body: Option<&str>,
         request_timeout: Duration,
     ) -> io::Result<Output> {
         let config = build_curl_stdin_config(api_version, authorization, user_agent);
@@ -997,6 +1042,17 @@ impl GithubReviewPollerAdapter {
                     "-",
                 ])
                 .arg(url);
+            if let Some(request_body) = request_body {
+                command
+                    .args([
+                        "--request",
+                        "POST",
+                        "--header",
+                        "Content-Type: application/json",
+                    ])
+                    .arg("--data-binary")
+                    .arg(request_body);
+            }
             let output = match subprocess::command_output_with_input_and_timeout(
                 &mut command,
                 &command_label,
@@ -1440,7 +1496,7 @@ mod tests;
 
 #[cfg(all(test, unix))]
 mod timeout_policy_tests {
-    use super::GithubReviewPollerAdapter;
+    use super::{GithubReviewPollerAdapter, VALIDATION_HTTP_STATUS_MARKER};
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
@@ -1578,6 +1634,63 @@ printf '{{"ok":true}}'
         );
         assert!(!argv.contains("secret-token"));
         assert!(!stdin.contains("url = \"https://api.test/repos/acme/widgets/pulls/42\""));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn validation_graphql_posts_a_bounded_body_without_exposing_the_bearer_token_in_argv() {
+        let root = unique_temp_dir("review-poller-graphql-post");
+        fs::create_dir_all(&root).expect("fixture root should be created");
+        let argv_path = root.join("curl-argv.txt");
+        let stdin_path = root.join("curl-stdin.txt");
+        let script = write_executable_script(
+            &root,
+            "fake-curl",
+            &format!(
+                r#"#!/bin/sh
+set -eu
+printf '%s\n' "$@" > "{}"
+cat > "{}"
+printf 'HTTP/2 200\r\nX-RateLimit-Remaining: 4999\r\n\r\n{{"data":{{}}}}{}200'
+"#,
+                argv_path.display(),
+                stdin_path.display(),
+                VALIDATION_HTTP_STATUS_MARKER,
+            ),
+        );
+        let adapter = GithubReviewPollerAdapter {
+            curl_path: script.display().to_string(),
+            curl_resolution_error: None,
+            api_base_url: "https://api.test".to_string(),
+            user_agent: "akra-test".to_string(),
+            token: "secret-token".to_string(),
+            subprocess_timeout: std::time::Duration::from_secs(1),
+        };
+        let request =
+            r#"{"operationName":"AkraPullRequestReviewThreads","variables":{"owner":"acme"}}"#;
+
+        let response = adapter
+            .fetch_validation_graphql_response(request)
+            .expect("fake curl should return a normalized GraphQL response");
+        let argv = fs::read_to_string(&argv_path).expect("curl argv capture should be readable");
+        let stdin = fs::read_to_string(&stdin_path).expect("curl stdin capture should be readable");
+
+        assert_eq!(response.body, r#"{"data":{}}"#);
+        assert_eq!(response.metadata.rate_limit_remaining, Some(4_999));
+        for expected in [
+            "https://api.test/graphql",
+            "--request\nPOST",
+            "--header\nContent-Type: application/json",
+            "--data-binary",
+            request,
+        ] {
+            assert!(
+                argv.contains(expected),
+                "missing GraphQL curl argument: {argv}"
+            );
+        }
+        assert!(!argv.contains("secret-token"));
+        assert!(stdin.contains("header = \"Authorization: Bearer secret-token\""));
         let _ = fs::remove_dir_all(&root);
     }
 

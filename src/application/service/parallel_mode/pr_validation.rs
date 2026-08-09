@@ -7,11 +7,12 @@ use chrono::Utc;
 use sha2::{Digest, Sha256};
 
 use super::ParallelModeService;
+use super::pr_validation_finding_policy::{ActionableFindingDecision, ActionableFindingPolicy};
 use crate::application::port::outbound::github_pr_validation_port::{
     GithubExpectedCheckStatus, GithubPostMergeValidationDecision, GithubPrMergeState,
     GithubPrValidationError, GithubPrValidationErrorClass, GithubPrValidationObservationRequest,
     GithubPrValidationPort, GithubPrValidationSnapshot, GithubValidationProviderMetadata,
-    GithubValidationSourceStatus,
+    GithubValidationSourceLifecycle, GithubValidationSourceStatus,
 };
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::{
@@ -576,13 +577,8 @@ impl ParallelModeService {
                 GithubValidationProviderMetadata::default(),
             ));
         }
+        let was_settled = current.phase() == PrValidationPhase::Settled;
         match current.phase() {
-            PrValidationPhase::Settled => {
-                return Ok(poll_execution(
-                    PrValidationPollResult::Settled,
-                    GithubValidationProviderMetadata::default(),
-                ));
-            }
             PrValidationPhase::Blocked => {
                 return Ok(poll_execution(
                     PrValidationPollResult::Blocked,
@@ -738,15 +734,22 @@ impl ParallelModeService {
 
         if matches!(
             next.phase(),
-            PrValidationPhase::PreMergeObservation | PrValidationPhase::PostMergeObservation
+            PrValidationPhase::PreMergeObservation
+                | PrValidationPhase::PostMergeObservation
+                | PrValidationPhase::Settled
         ) {
-            for finding in actionable_findings(&snapshot, &contract_decision)? {
+            let self_login = self.configured_pr_validation_github_login(&request.workspace_dir);
+            let finding_policy = ActionableFindingPolicy::new(self_login.as_deref());
+            for finding in actionable_findings(&snapshot, &contract_decision, &finding_policy)? {
                 if next.finding_keys().contains(finding.key()) {
                     continue;
                 }
-                next = next
-                    .transition(PrValidationEvent::FindingObserved(finding.clone()))
-                    .map_err(transition_error)?;
+                let finding_event = if next.phase() == PrValidationPhase::Settled {
+                    PrValidationEvent::LateFindingObserved(finding.clone())
+                } else {
+                    PrValidationEvent::FindingObserved(finding.clone())
+                };
+                next = next.transition(finding_event).map_err(transition_error)?;
                 let idempotency_key = remediation_key(next.key(), &finding);
                 if !mode.admits_remediation() {
                     continue;
@@ -857,7 +860,7 @@ impl ParallelModeService {
                 PrValidationPollResult::Blocked,
                 provider_metadata,
             ))
-        } else if can_settle {
+        } else if can_settle || (was_settled && next.phase() == PrValidationPhase::Settled) {
             Ok(poll_execution(
                 PrValidationPollResult::Settled,
                 provider_metadata,
@@ -868,6 +871,25 @@ impl ParallelModeService {
                 provider_metadata,
             ))
         }
+    }
+
+    fn configured_pr_validation_github_login(&self, workspace_dir: &str) -> Option<String> {
+        let repo_root = self.parallel_runtime.detect_git_repo_root(workspace_dir)?;
+        self.parallel_runtime
+            .run_command(
+                "git",
+                &[
+                    "-C",
+                    repo_root.as_str(),
+                    "config",
+                    "--local",
+                    "--get",
+                    "akra.githubLogin",
+                ],
+                None,
+            )
+            .map(|login| login.trim().to_string())
+            .filter(|login| !login.is_empty())
     }
 }
 
@@ -927,38 +949,23 @@ fn validate_snapshot_identity(
 fn actionable_findings(
     snapshot: &GithubPrValidationSnapshot,
     contract_decision: &GithubPostMergeValidationDecision,
+    policy: &ActionableFindingPolicy,
 ) -> Result<Vec<PrValidationFinding>, String> {
     let target_sha = commit_sha(&snapshot.target_sha)?;
     let mut findings = Vec::new();
     for activity in &snapshot.activities {
-        if activity
-            .commit_sha
-            .as_ref()
-            .is_some_and(|sha| sha != &snapshot.target_sha)
-        {
+        let ActionableFindingDecision::Admit(admission) =
+            policy.decide(activity, &snapshot.target_sha)
+        else {
             continue;
-        }
-        let (source, summary) = match activity.kind {
-            crate::application::port::outbound::github_pr_validation_port::GithubValidationActivityKind::Review => {
-                ("review", "pull request review requires remediation")
-            }
-            crate::application::port::outbound::github_pr_validation_port::GithubValidationActivityKind::IssueComment => {
-                ("issue_comment", "pull request issue comment requires remediation")
-            }
-            crate::application::port::outbound::github_pr_validation_port::GithubValidationActivityKind::ReviewThread => {
-                ("review_thread", "pull request review thread requires remediation")
-            }
-            crate::application::port::outbound::github_pr_validation_port::GithubValidationActivityKind::ReviewComment => {
-                ("review_comment", "pull request review comment requires remediation")
-            }
         };
         findings.push(PrValidationFinding::new(
             PrValidationFindingKey::new(
-                PrValidationFindingSource::new(source)?,
+                PrValidationFindingSource::new(admission.source)?,
                 activity.id.as_str(),
             )?,
             target_sha.clone(),
-            summary,
+            admission.summary,
         )?);
     }
     for evaluation in contract_decision.actionable_failures() {
@@ -1016,11 +1023,18 @@ fn snapshot_fingerprint(snapshot: &GithubPrValidationSnapshot) -> String {
             .is_none_or(|sha| sha == &snapshot.target_sha)
     }) {
         digest.update(format!(
-            "activity:{:?}:{}:{}:{:?}",
+            "activity:{:?}:{}:{}:{:?}:{:?}:{:?}:{:?}:{:?}",
             activity.kind,
             activity.id.as_str(),
             activity.observed_at,
-            activity.commit_sha.as_ref().map(GithubCommitSha::as_str)
+            activity.commit_sha.as_ref().map(GithubCommitSha::as_str),
+            activity.review_state,
+            activity
+                .actor
+                .as_ref()
+                .map(|actor| (actor.login.as_str(), actor.kind)),
+            activity.body_marker,
+            activity.thread_resolved,
         ));
     }
     for run in &snapshot.check_runs {
@@ -1073,12 +1087,23 @@ fn completion(
         .iter()
         .map(|source| {
             let provider = PrValidationProviderKey::new(format!("github:{:?}", source.source))?;
-            Ok(match source.status {
-                GithubValidationSourceStatus::Complete if source.next_cursor.is_none() => {
-                    PrValidationProviderCompletion::terminal(provider)
-                }
-                _ => PrValidationProviderCompletion::pending(provider),
-            })
+            Ok(
+                match (
+                    source.lifecycle,
+                    source.status,
+                    source.next_cursor.is_none(),
+                ) {
+                    (GithubValidationSourceLifecycle::Watchable, _, _) => {
+                        PrValidationProviderCompletion::watchable(provider)
+                    }
+                    (
+                        GithubValidationSourceLifecycle::Finite,
+                        GithubValidationSourceStatus::Complete,
+                        true,
+                    ) => PrValidationProviderCompletion::terminal(provider),
+                    _ => PrValidationProviderCompletion::pending(provider),
+                },
+            )
         })
         .collect::<Result<Vec<_>, String>>()?;
     let checks = contract_decision
