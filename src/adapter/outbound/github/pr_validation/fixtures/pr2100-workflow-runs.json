@@ -1,6 +1,6 @@
 {
   "total_count": 1,
   "workflow_runs": [
-    {"id":31235240198,"name":"Native PR Checks","head_sha":"6037d07b8e9a6cc8614610569b044f95f6fa9075","status":"completed","conclusion":"success","run_attempt":1,"created_at":"2026-08-08T02:33:51Z","updated_at":"2026-08-08T02:35:00Z"}
+    {"id":31235240198,"name":"Native PR Checks","head_sha":"6037d07b8e9a6cc8614610569b044f95f6fa9075","status":"completed","conclusion":"success","check_suite_id":84760241806,"run_attempt":1,"run_started_at":"2026-08-08T02:33:51Z","created_at":"2026-08-08T02:33:51Z","updated_at":"2026-08-08T02:35:00Z"}
   ]
 }

@@ -11,9 +11,7 @@ use crate::application::port::outbound::github_pr_validation_port::{
     GithubValidationSourceStatus,
 };
 use crate::domain::github_review::{GithubCommitSha, GithubPullRequestTarget};
-use crate::domain::parallel_mode::{
-    PostMergeValidationContract, PrValidationCheckContext, PrValidationCompletionSource,
-};
+use crate::domain::parallel_mode::PostMergeValidationContract;
 
 const SHA: &str = "1111111111111111111111111111111111111111";
 const MERGE_SHA: &str = "2222222222222222222222222222222222222222";
@@ -254,27 +252,22 @@ fn pr2100_push_fixture_treats_successful_required_and_skipped_optional_checks_as
     let snapshot = GithubPrValidationAdapter::with_api(api)
         .load_validation_snapshot(&request)
         .expect("captured PR #2100 push evidence should normalize");
-    let context = |name: &str| {
-        PrValidationCheckContext::new(Some("github-actions".to_string()), name).unwrap()
-    };
-    let contract = PostMergeValidationContract::new(
-        1,
-        vec![context("CI Gate")],
-        vec![
-            context("Rust Tests"),
-            context("Rust Lint and Architecture"),
-            context("Node and Admin Surfaces"),
-            context("Rust Smoke Check"),
-            context("CI Scope"),
-        ],
-        PrValidationCompletionSource::CheckRuns,
-        true,
-    )
-    .unwrap();
+    let contract = PostMergeValidationContract::legacy_ci_gate_v1();
 
     let decision = snapshot.evaluate_post_merge_contract(&contract);
     assert!(decision.is_successful());
     assert_eq!(snapshot.workflow_runs[0].run_attempt, 1);
+    assert_eq!(
+        snapshot.workflow_runs[0]
+            .check_suite_id
+            .as_ref()
+            .map(|id| id.as_str()),
+        Some("check-suite:84760241806")
+    );
+    assert_eq!(
+        snapshot.workflow_runs[0].run_started_at.as_deref(),
+        Some("2026-08-08T02:33:51Z")
+    );
     let gate = snapshot
         .check_runs
         .iter()
