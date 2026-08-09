@@ -163,16 +163,38 @@ pub(super) fn attest_distributor_pr_validation_with_ports(
     record: &PlanningAuthorityDistributorQueueRecord,
 ) -> Result<(), String> {
     let key = PrValidationRecordKey::new(&record.queue_item_id)?;
-    let current = super::pr_validation_store::recover_pr_validation_record_mirror(
+    let mut current = super::pr_validation_store::recover_pr_validation_record_mirror(
         planning_authority,
         runtime,
         workspace_dir,
         pool_root,
         &key,
-    )?
-    .ok_or_else(|| {
+    )?;
+    if current.is_none() {
+        // Explicit direct-delivery compatibility has no PR identity to validate and must not
+        // fabricate one. A preserved/ensured PR does have enough immutable identity, so recover
+        // a missing registration before recording the verified distributor evidence.
+        if record.pull_request_number.is_none() {
+            return Ok(());
+        }
+        register_distributor_pr_validation_with_ports(
+            planning_authority,
+            runtime,
+            workspace_dir,
+            pool_root,
+            record,
+        )?;
+        current = super::pr_validation_store::recover_pr_validation_record_mirror(
+            planning_authority,
+            runtime,
+            workspace_dir,
+            pool_root,
+            &key,
+        )?;
+    }
+    let current = current.ok_or_else(|| {
         format!(
-            "PR validation record `{}` is missing before integration attestation",
+            "PR validation record `{}` is missing after integration registration",
             key.as_str()
         )
     })?;
