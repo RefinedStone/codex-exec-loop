@@ -33,6 +33,7 @@ their exact headings, phrases, surface rows, or test-entrypoint inventory.
 
 The following content is not implementation truth:
 
+- [plan/15-async-pr-ci-remediation-admin-rollout.md](plan/15-async-pr-ci-remediation-admin-rollout.md): proposed execution order for durable post-merge validation, remediation queueing, and the Akra Admin operations surface
 - [plan/14-codex-for-oss-application.md](plan/14-codex-for-oss-application.md): future program application draft with explicitly archival metrics
 - [competitive/README.md](competitive/README.md): current compact competitive snapshots, methodology, and cache/token study ([한국어 요약](ko/competitive/README.md))
 
