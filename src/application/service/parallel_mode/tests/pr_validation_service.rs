@@ -729,6 +729,12 @@ fn closed_pr_with_distributor_attestation_continues_post_merge_validation() {
             .map(GithubCommitSha::as_str),
         Some(MERGE)
     );
+    assert_eq!(
+        service
+            .poll_pr_validation(&observation, &remediation, request(&repo, 2, HEAD_A))
+            .unwrap(),
+        PrValidationPollResult::Settled
+    );
     let record = service
         .recover_pr_validation_record(
             &repo.workspace_dir(),
@@ -737,7 +743,11 @@ fn closed_pr_with_distributor_attestation_continues_post_merge_validation() {
         )
         .unwrap()
         .unwrap();
-    assert_eq!(record.phase(), PrValidationPhase::PostMergeObservation);
+    assert_eq!(record.phase(), PrValidationPhase::Settled);
+    assert_eq!(
+        record.evidence_sha().map(PrValidationCommitSha::as_str),
+        Some(MERGE)
+    );
 }
 
 #[test]

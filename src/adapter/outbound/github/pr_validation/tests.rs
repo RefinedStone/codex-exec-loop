@@ -197,7 +197,7 @@ fn collects_sha_bound_merge_activity_checks_and_workflows_in_canonical_order() {
     );
     assert!(snapshot.next_cursor.is_none());
     assert!(snapshot.observations_complete());
-    assert!(!snapshot.is_successfully_complete());
+    assert!(!snapshot.is_successfully_complete(&snapshot.evidence_sha));
     assert_eq!(snapshot.sources.len(), GithubValidationSource::ALL.len());
     assert!(snapshot.sources.iter().all(|source| {
         source.status == GithubValidationSourceStatus::Complete && source.next_cursor.is_none()

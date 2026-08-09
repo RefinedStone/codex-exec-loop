@@ -5,16 +5,24 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
+use crate::application::port::outbound::github_automation_port::GithubRepositoryVisibility;
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
-use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
+use crate::application::port::outbound::planning_authority_port::{
+    PlanningAuthorityDistributorDeliveryTarget, PlanningAuthorityDistributorQueueRecord,
+    PlanningAuthorityPort,
+};
 use crate::domain::parallel_mode::{
-    IntegrationAttestation, IntegrationMethod, PrValidationCommitSha, PrValidationEvent,
-    PrValidationFinding, PrValidationFindingKey, PrValidationFindingSource, PrValidationRecord,
-    PrValidationRecordKey, PrValidationRemediationCorrelation, PrValidationTarget,
-    PrValidationTargetShaSnapshot,
+    IntegrationAttestation, IntegrationMethod, ParallelModeQueueItemState, PrValidationCommitSha,
+    PrValidationEvent, PrValidationFinding, PrValidationFindingKey, PrValidationFindingSource,
+    PrValidationRecord, PrValidationRecordKey, PrValidationRemediationCorrelation,
+    PrValidationTarget, PrValidationTargetShaSnapshot,
 };
 use chrono::{DateTime, Utc};
 
+use super::super::pr_validation::{
+    attest_distributor_pr_validation_with_ports,
+    install_before_distributor_attestation_persist_hook,
+};
 use super::super::{
     persist_pr_validation_record, pr_validation_record_relative_path,
     recover_pr_validation_record_mirror,
@@ -239,6 +247,48 @@ fn distributor_attestation() -> IntegrationAttestation {
     .expect("distributor attestation")
 }
 
+fn distributor_queue_record(key: &str) -> PlanningAuthorityDistributorQueueRecord {
+    PlanningAuthorityDistributorQueueRecord {
+        queue_item_id: key.to_string(),
+        queue_order_key: 1,
+        session_key: "session-attestation-race".to_string(),
+        slot_id: "slot-1".to_string(),
+        agent_id: "agent-1".to_string(),
+        task_id: "task-attestation-race".to_string(),
+        task_title: "Attestation race".to_string(),
+        delivery_target: Some(PlanningAuthorityDistributorDeliveryTarget::new(
+            "origin",
+            "acme/widgets",
+            GithubRepositoryVisibility::Private,
+            "prerelease",
+        )),
+        source_branch: "akra-agent/slot-1/attestation-race".to_string(),
+        source_base_commit_sha: "2222222222222222222222222222222222222222".to_string(),
+        source_commit_sha: "1111111111111111111111111111111111111111".to_string(),
+        branch_name: "akra-agent/slot-1/attestation-race".to_string(),
+        worktree_path: "worktree-attestation-race".to_string(),
+        commit_sha: "1111111111111111111111111111111111111111".to_string(),
+        original_commit_sha: None,
+        planning_refresh_state: "complete".to_string(),
+        integration_state: "integrating".to_string(),
+        integration_base_commit_sha: Some("2222222222222222222222222222222222222222".to_string()),
+        integration_commit_sha: Some("3333333333333333333333333333333333333333".to_string()),
+        conflict_files: Vec::new(),
+        recovery_note: None,
+        validation_summary: "passed".to_string(),
+        authority_refresh_outcome: "complete".to_string(),
+        github_capabilities: None,
+        pull_request_number: Some(42),
+        pull_request_url: Some("https://github.com/acme/widgets/pull/42".to_string()),
+        queue_state: ParallelModeQueueItemState::Integrating,
+        integration_note: "remote integration head verified".to_string(),
+        enqueued_at: "2026-08-10T00:00:00Z".to_string(),
+        updated_at: "2026-08-10T00:00:00Z".to_string(),
+        retry_attempts: 0,
+        retry_not_before: None,
+    }
+}
+
 #[test]
 fn validation_record_survives_authority_restart_and_repairs_a_missing_mirror() {
     let workspace = temp_workspace("restart-mirror");
@@ -435,6 +485,68 @@ fn validation_record_authority_compare_and_swap_rejects_a_stale_transition() {
             .load_runtime_pr_validation_record(&workspace, registered.key())
             .expect("authority record should load after stale attestation"),
         Some(observing)
+    );
+}
+
+#[test]
+fn distributor_attestation_retries_a_benign_authority_cas_race() {
+    let workspace = temp_workspace("attestation-cas-retry");
+    let pool_root = PathBuf::from(&workspace).join("pool");
+    let authority = SqlitePlanningAuthorityAdapter::new();
+    let runtime = ValidationMirrorRuntime::default();
+    let registered = registered_record("validation/attestation-race");
+    persist_pr_validation_record(
+        &authority,
+        &runtime,
+        &workspace,
+        &pool_root,
+        None,
+        &registered,
+    )
+    .expect("registration should persist before the scripted race");
+    let race_workspace = workspace.clone();
+    let race_registered = registered.clone();
+    install_before_distributor_attestation_persist_hook(move || {
+        let concurrent = race_registered
+            .transition(PrValidationEvent::BeginPreMergeObservation)
+            .expect("scripted concurrent observation should be valid");
+        assert!(
+            SqlitePlanningAuthorityAdapter::new()
+                .compare_and_swap_runtime_pr_validation_record(
+                    &race_workspace,
+                    race_registered.key(),
+                    Some(&race_registered),
+                    Some(&concurrent),
+                )
+                .expect("scripted concurrent authority CAS should execute"),
+            "scripted concurrent observation should win the first authority CAS"
+        );
+    });
+
+    attest_distributor_pr_validation_with_ports(
+        &authority,
+        &runtime,
+        &workspace,
+        &pool_root,
+        &distributor_queue_record("validation/attestation-race"),
+    )
+    .expect("benign concurrent observation should be retried");
+
+    let stored = authority
+        .load_runtime_pr_validation_record(&workspace, registered.key())
+        .expect("authority should remain readable")
+        .expect("attested record should remain present");
+    assert_eq!(
+        stored
+            .integration_attestation()
+            .expect("distributor evidence should be attested")
+            .evidence_sha()
+            .as_str(),
+        "3333333333333333333333333333333333333333"
+    );
+    assert_eq!(
+        runtime.body(&pr_validation_record_relative_path(stored.key())),
+        Some(serde_json::to_string_pretty(&stored).expect("stored record should serialize"))
     );
 }
 
