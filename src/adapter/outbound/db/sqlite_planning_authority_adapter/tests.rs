@@ -17,7 +17,8 @@ use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityActiveDocumentMutation, PlanningAuthorityDistributorDeliveryTarget,
     PlanningAuthorityDistributorQueueRecord, PlanningAuthorityDocumentCommit,
     PlanningAuthorityOfficialRefreshClaimStatus, PlanningAuthorityOfficialRefreshRecoveryStatus,
-    PlanningAuthorityPort,
+    PlanningAuthorityPort, PrValidationAuthorityPageRequest, PrValidationPollLeaseClaimRequest,
+    PrValidationPollSettlement,
 };
 use crate::application::port::outbound::planning_task_repository_port::{
     PlanningDirectionAuthorityCommit, PlanningTaskAuthorityCommit,
@@ -44,11 +45,14 @@ use crate::domain::parallel_mode::{
     ParallelModeDispatchBlockReason, ParallelModeDispatchCommandSnapshot,
     ParallelModeDispatchCommandState, ParallelModePoolResetPolicy, ParallelModePoolResetReport,
     ParallelModePoolResetRunId, ParallelModePoolResetSlotAction, ParallelModePoolResetSlotOutcome,
-    ParallelModePoolResetSlotReport, ParallelModeQueueItemState, ParallelModeSlotLeaseSnapshot,
-    ParallelModeSlotLeaseState, ParallelModeTaskDispatchBlockSnapshot, PrValidationCatchUpState,
-    PrValidationCommitSha, PrValidationCompletion, PrValidationEvent,
-    PrValidationProviderCompletion, PrValidationProviderKey, PrValidationRecord,
-    PrValidationRecordKey, PrValidationTarget, PrValidationTargetShaSnapshot,
+    ParallelModePoolResetSlotReport, ParallelModeQueueItemState, ParallelModeRuntimeEventSeverity,
+    ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
+    ParallelModeTaskDispatchBlockSnapshot, PrValidationCatchUpState, PrValidationCommitSha,
+    PrValidationCompletion, PrValidationEvent, PrValidationFinding, PrValidationFindingKey,
+    PrValidationFindingSource, PrValidationPollErrorClass, PrValidationProviderCompletion,
+    PrValidationProviderKey, PrValidationRecord, PrValidationRecordKey,
+    PrValidationRemediationCorrelation, PrValidationTarget, PrValidationTargetShaSnapshot,
+    PrValidationTerminalReason,
 };
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionDefinition, DirectionState, OriginSessionKind,
@@ -57,7 +61,7 @@ use crate::domain::planning::{
     TaskAuthorityDocument, TaskDefinition, TaskMutationProvenance, TaskStatus,
 };
 use chrono::{DateTime, Utc};
-use rusqlite::OptionalExtension;
+use rusqlite::{Connection, OptionalExtension};
 use std::sync::{Arc, Barrier};
 
 use super::{
@@ -69,6 +73,7 @@ use super::{
 use super::{
     WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT, WINDOWS_FILE_SHARE_ALL, WINDOWS_GENERIC_READ,
     WINDOWS_GENERIC_WRITE, WINDOWS_READ_CONTROL, WINDOWS_WRITE_DAC,
+    windows_sidecar_io_error_is_transient,
 };
 #[cfg(any(unix, windows))]
 use super::{
@@ -2931,6 +2936,12 @@ fn authority_store_open_survives_concurrent_delete_journal_churn() {
 #[test]
 fn authority_store_sidecar_retry_handles_delete_pending_and_rejects_hardlink_replacement() {
     use std::os::windows::fs::OpenOptionsExt;
+
+    assert!(windows_sidecar_io_error_is_transient(
+        &std::io::Error::from_raw_os_error(
+            windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED as i32,
+        ),
+    ));
 
     let fixture_root = std::path::PathBuf::from(temp_workspace("authority-sidecar-replacement"));
     let store = fixture_root
@@ -6969,6 +6980,297 @@ fn runtime_task_dispatch_block_keeps_newer_block_when_older_update_arrives() {
 }
 
 #[test]
+fn pr_validation_board_pages_active_before_recent_terminal_with_stable_cursor_reset() {
+    let workspace_dir = temp_workspace("pr-validation-board-pages");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let active_old = authority_validation_record("active-a", 101)
+        .transition(PrValidationEvent::BeginPreMergeObservation)
+        .unwrap();
+    let active_new = authority_integrated_record("active-b", 102);
+    let terminal_new = authority_validation_record("terminal-c", 103)
+        .transition(PrValidationEvent::Block(
+            PrValidationTerminalReason::PullRequestClosedWithoutMerge,
+        ))
+        .unwrap();
+    let integrated_terminal = authority_integrated_record("terminal-d", 104);
+    let terminal_old = integrated_terminal
+        .transition(PrValidationEvent::Settle(PrValidationCompletion::new(
+            integrated_terminal.evidence_sha().unwrap().clone(),
+            vec![PrValidationProviderCompletion::terminal(
+                PrValidationProviderKey::new("github:CheckRuns").unwrap(),
+            )],
+            Vec::new(),
+            PrValidationCatchUpState::NoUnseenRelevantEvents,
+        )))
+        .unwrap();
+    let terminal_expired = authority_validation_record("terminal-expired", 106)
+        .transition(PrValidationEvent::Block(
+            PrValidationTerminalReason::PullRequestClosedWithoutMerge,
+        ))
+        .unwrap();
+
+    for record in [
+        &active_old,
+        &active_new,
+        &terminal_new,
+        &terminal_old,
+        &terminal_expired,
+    ] {
+        persist_authority_validation_record(&adapter, &workspace_dir, None, record);
+    }
+    let location = adapter
+        .resolve_authority_location(&workspace_dir)
+        .expect("authority location should resolve");
+    let connection = Connection::open(&location.authority_store_path)
+        .expect("authority DB should open for deterministic fixture timestamps");
+    for (key, updated_at) in [
+        ("active-a", "2026-08-10T09:00:00+00:00"),
+        ("active-b", "2026-08-10T10:00:00+00:00"),
+        ("terminal-c", "2026-08-10T11:00:00+00:00"),
+        ("terminal-d", "2026-08-10T08:00:00+00:00"),
+        ("terminal-expired", "2026-07-01T08:00:00+00:00"),
+    ] {
+        connection
+            .execute(
+                "UPDATE runtime_pr_validation_records SET updated_at = ?2 WHERE record_key = ?1",
+                (key, updated_at),
+            )
+            .unwrap();
+    }
+    drop(connection);
+
+    let first = adapter
+        .load_runtime_pr_validation_page(
+            &workspace_dir,
+            &PrValidationAuthorityPageRequest {
+                limit: 2,
+                terminal_since: "2026-08-01T00:00:00+00:00".to_string(),
+                after: None,
+                expected_revision: None,
+            },
+        )
+        .expect("first validation page should load");
+    assert_eq!(
+        first
+            .records
+            .iter()
+            .map(|snapshot| snapshot.record.key().as_str())
+            .collect::<Vec<_>>(),
+        vec!["active-b", "active-a"]
+    );
+    assert_eq!(first.summary.active, 2);
+    assert_eq!(first.summary.verified, 1);
+    assert_eq!(first.summary.blocked, 1);
+    let after = first
+        .next_position
+        .clone()
+        .expect("bounded first page should expose a continuation");
+    let second = adapter
+        .load_runtime_pr_validation_page(
+            &workspace_dir,
+            &PrValidationAuthorityPageRequest {
+                limit: 2,
+                terminal_since: "2026-08-01T00:00:00+00:00".to_string(),
+                after: Some(after.clone()),
+                expected_revision: Some(first.revision),
+            },
+        )
+        .expect("second validation page should load");
+    assert!(!second.cursor_reset_required);
+    assert_eq!(
+        second
+            .records
+            .iter()
+            .map(|snapshot| snapshot.record.key().as_str())
+            .collect::<Vec<_>>(),
+        vec!["terminal-c", "terminal-d"]
+    );
+    assert!(second.next_position.is_none());
+
+    let newest = authority_validation_record("active-0", 105)
+        .transition(PrValidationEvent::BeginPreMergeObservation)
+        .unwrap();
+    persist_authority_validation_record(&adapter, &workspace_dir, None, &newest);
+    let location = adapter.resolve_authority_location(&workspace_dir).unwrap();
+    Connection::open(&location.authority_store_path)
+        .unwrap()
+        .execute(
+            "UPDATE runtime_pr_validation_records SET updated_at = ?2 WHERE record_key = ?1",
+            ("active-0", "2026-08-10T12:00:00+00:00"),
+        )
+        .unwrap();
+    let reset = adapter
+        .load_runtime_pr_validation_page(
+            &workspace_dir,
+            &PrValidationAuthorityPageRequest {
+                limit: 2,
+                terminal_since: "2026-08-01T00:00:00+00:00".to_string(),
+                after: Some(after),
+                expected_revision: Some(first.revision),
+            },
+        )
+        .expect("stale validation cursor should reset safely");
+    assert!(reset.cursor_reset_required);
+    assert_eq!(reset.records[0].record.key().as_str(), "active-0");
+}
+
+#[test]
+fn pr_validation_runtime_events_are_semantic_typed_and_do_not_copy_sensitive_record_data() {
+    let workspace_dir = temp_workspace("pr-validation-semantic-events");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let observing = authority_validation_record("validation-secret", 201)
+        .transition(PrValidationEvent::BeginPreMergeObservation)
+        .unwrap();
+    persist_authority_validation_record(&adapter, &workspace_dir, None, &observing);
+    let finding = PrValidationFinding::new(
+        PrValidationFindingKey::new(
+            PrValidationFindingSource::new("review").unwrap(),
+            "provider-token-secret",
+        )
+        .unwrap(),
+        observing.target_shas().source_sha().clone(),
+        "raw-body-secret",
+    )
+    .unwrap();
+    let observed = observing
+        .transition(PrValidationEvent::FindingObserved(finding.clone()))
+        .unwrap();
+    persist_authority_validation_record(&adapter, &workspace_dir, Some(&observing), &observed);
+    let queued = observed
+        .transition(PrValidationEvent::RemediationQueued(
+            PrValidationRemediationCorrelation::new(
+                finding.key().clone(),
+                PrValidationRecordKey::new("remediation-task-201").unwrap(),
+            ),
+        ))
+        .unwrap();
+    persist_authority_validation_record(&adapter, &workspace_dir, Some(&observed), &queued);
+    let blocked = queued
+        .transition(PrValidationEvent::Block(
+            PrValidationTerminalReason::RemediationAdmissionFailed,
+        ))
+        .unwrap();
+    persist_authority_validation_record(&adapter, &workspace_dir, Some(&queued), &blocked);
+
+    let events = adapter
+        .load_runtime_event_log(
+            &workspace_dir,
+            ParallelModeRuntimeEventLogRequest::for_projection(
+                "pr_validation",
+                "validation-secret",
+                20,
+            ),
+        )
+        .expect("semantic validation events should load");
+    assert!(events.entries.iter().any(|event| {
+        event.event_kind == "pr_validation_remediation_admitted"
+            && event.severity == ParallelModeRuntimeEventSeverity::Warning
+    }));
+    assert!(events.entries.iter().any(|event| {
+        event.event_kind == "pr_validation_phase_changed"
+            && event.severity == ParallelModeRuntimeEventSeverity::Danger
+    }));
+    assert!(
+        events
+            .entries
+            .iter()
+            .all(|event| !event.summary.contains("raw-body-secret"))
+    );
+
+    let location = adapter.resolve_authority_location(&workspace_dir).unwrap();
+    let connection = Connection::open(&location.authority_store_path).unwrap();
+    let payloads = connection
+        .prepare(
+            "SELECT payload_json FROM runtime_events
+             WHERE projection_kind = 'pr_validation' AND projection_key = ?1
+             ORDER BY sequence",
+        )
+        .unwrap()
+        .query_map(["validation-secret"], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap()
+        .join("\n");
+    assert!(!payloads.contains("raw-body-secret"));
+    assert!(!payloads.contains("provider-token-secret"));
+    assert!(!payloads.contains("observation_cursor"));
+    assert!(!payloads.contains("findings"));
+}
+
+#[test]
+fn pr_validation_poll_error_class_drives_typed_event_severity_without_lease_secrets() {
+    let workspace_dir = temp_workspace("pr-validation-poll-event-severity");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let record = authority_validation_record("validation-provider-blocked", 202);
+    persist_authority_validation_record(&adapter, &workspace_dir, None, &record);
+    let claimed_at = Utc::now() + chrono::TimeDelta::seconds(1);
+    let expires_at = claimed_at + chrono::TimeDelta::seconds(30);
+    let lease = adapter
+        .try_claim_runtime_pr_validation_poll(
+            &workspace_dir,
+            PrValidationPollLeaseClaimRequest {
+                record_key: record.key(),
+                owner: "scheduler-owner-secret",
+                token: "scheduler-token-secret",
+                claimed_at,
+                expires_at,
+                repository_cooldown_since: claimed_at - chrono::TimeDelta::hours(1),
+            },
+        )
+        .expect("provider-blocked fixture poll should claim")
+        .expect("provider-blocked fixture should be due");
+    assert!(
+        adapter
+            .settle_runtime_pr_validation_poll(
+                &workspace_dir,
+                record.key(),
+                &lease.owner,
+                &lease.token,
+                lease.expires_at,
+                &PrValidationPollSettlement {
+                    polled_at: claimed_at + chrono::TimeDelta::seconds(1),
+                    next_poll_at: claimed_at + chrono::TimeDelta::minutes(5),
+                    consecutive_error_count: 1,
+                    error_class: Some(PrValidationPollErrorClass::AuthenticationBlocked),
+                    rate_limit_remaining: Some(17),
+                    rate_limit_reset_at: None,
+                },
+            )
+            .expect("provider-blocked fixture poll should settle")
+    );
+
+    let events = adapter
+        .load_runtime_event_log(
+            &workspace_dir,
+            ParallelModeRuntimeEventLogRequest::for_projection(
+                "pr_validation",
+                record.key().as_str(),
+                10,
+            ),
+        )
+        .unwrap();
+    let deferred = events
+        .entries
+        .iter()
+        .find(|event| event.event_kind == "pr_validation_poll_deferred")
+        .expect("poll settlement should emit a semantic deferred event");
+    assert_eq!(deferred.severity, ParallelModeRuntimeEventSeverity::Danger);
+    let location = adapter.resolve_authority_location(&workspace_dir).unwrap();
+    let payload: String = Connection::open(&location.authority_store_path)
+        .unwrap()
+        .query_row(
+            "SELECT payload_json FROM runtime_events
+             WHERE event_kind = 'pr_validation_poll_deferred'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(payload.contains("authentication_blocked"));
+    assert!(!payload.contains("scheduler-owner-secret"));
+    assert!(!payload.contains("scheduler-token-secret"));
+}
+
+#[test]
 fn runtime_event_log_without_authority_events_keeps_cursor_unknown() {
     let workspace_dir = temp_workspace("runtime-events-no-authority-events");
     let adapter = SqlitePlanningAuthorityAdapter::new();
@@ -7074,6 +7376,92 @@ fn runtime_event_log_port_filters_events_after_sequence() {
     assert_eq!(latest.sequence, 2);
     assert!(latest.sequence > 1);
     assert!(latest.summary.contains("state: running"));
+}
+
+fn authority_validation_record(key: &str, pull_request_number: u64) -> PrValidationRecord {
+    PrValidationRecord::register(
+        PrValidationRecordKey::new(key).unwrap(),
+        PrValidationTarget::new("acme/widgets", pull_request_number).unwrap(),
+        PrValidationTargetShaSnapshot::new(
+            PrValidationCommitSha::new(format!("{pull_request_number:040x}")).unwrap(),
+            PrValidationCommitSha::new("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
+        ),
+    )
+}
+
+fn authority_integrated_record(key: &str, pull_request_number: u64) -> PrValidationRecord {
+    authority_validation_record(key, pull_request_number)
+        .transition(PrValidationEvent::BeginPreMergeObservation)
+        .unwrap()
+        .transition(PrValidationEvent::MergeObserved(
+            PrValidationCommitSha::new(format!("{pull_request_number:039x}b")).unwrap(),
+        ))
+        .unwrap()
+        .transition(PrValidationEvent::BeginPostMergeObservation)
+        .unwrap()
+}
+
+fn persist_authority_validation_record(
+    adapter: &SqlitePlanningAuthorityAdapter,
+    workspace_dir: &str,
+    expected: Option<&PrValidationRecord>,
+    replacement: &PrValidationRecord,
+) {
+    assert!(
+        adapter
+            .compare_and_swap_runtime_pr_validation_record(
+                workspace_dir,
+                replacement.key(),
+                expected,
+                Some(replacement),
+            )
+            .expect("PR validation record compare-and-swap should execute")
+    );
+}
+
+#[test]
+fn runtime_event_log_incremental_pages_do_not_skip_backlog_events() {
+    let workspace_dir = temp_workspace("runtime-events-lossless-backlog");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+
+    for index in 1..=5 {
+        adapter
+            .upsert_runtime_session_detail(
+                &workspace_dir,
+                &failed_start_session_detail(
+                    &format!("session-{index:02}"),
+                    &format!("task-{index:02}"),
+                    &format!("2026-05-04T12:{index:02}:00+00:00"),
+                ),
+            )
+            .expect("runtime event should persist");
+    }
+
+    let first_page = adapter
+        .load_runtime_event_log(
+            &workspace_dir,
+            ParallelModeRuntimeEventLogRequest::recent(2).after_sequence(0),
+        )
+        .expect("first incremental page should load");
+    let first_sequences = first_page
+        .entries
+        .iter()
+        .map(|entry| entry.sequence)
+        .collect::<Vec<_>>();
+    assert_eq!(first_sequences, vec![2, 1]);
+
+    let second_page = adapter
+        .load_runtime_event_log(
+            &workspace_dir,
+            ParallelModeRuntimeEventLogRequest::recent(2).after_sequence(2),
+        )
+        .expect("second incremental page should load");
+    let second_sequences = second_page
+        .entries
+        .iter()
+        .map(|entry| entry.sequence)
+        .collect::<Vec<_>>();
+    assert_eq!(second_sequences, vec![4, 3]);
 }
 
 #[test]

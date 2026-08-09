@@ -5,6 +5,25 @@
  * 시간축 projection이다.
  */
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParallelModeRuntimeEventSeverity {
+    Info,
+    Success,
+    Warning,
+    Danger,
+}
+
+impl ParallelModeRuntimeEventSeverity {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Info => "info",
+            Self::Success => "success",
+            Self::Warning => "warning",
+            Self::Danger => "danger",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParallelModeRuntimeEventEntry {
     // Authority store가 부여한 단조 증가 순서다. recorded_at이 같아도 sequence로 정렬이 안정된다.
@@ -19,6 +38,8 @@ pub struct ParallelModeRuntimeEventEntry {
     pub observed_planning_revision: i64,
     // 사람이 로그를 훑을 때 바로 이해할 수 있는 한 줄 설명이다.
     pub summary: String,
+    // 이벤트 생산자가 정한 의미 기반 심각도다. 표시 계층은 event_kind나 summary를 파싱하지 않는다.
+    pub severity: ParallelModeRuntimeEventSeverity,
     // 이벤트 기록 시각이다. 표시 계층이 그대로 보여줄 수 있게 RFC3339 문자열로 둔다.
     pub recorded_at: String,
 }
@@ -34,9 +55,11 @@ impl ParallelModeRuntimeEventEntry {
         summary: impl Into<String>,
         recorded_at: impl Into<String>,
     ) -> Self {
+        let event_kind = event_kind.into();
         Self {
             sequence,
-            event_kind: event_kind.into(),
+            severity: legacy_event_severity(&event_kind),
+            event_kind,
             projection_kind: projection_kind.into(),
             projection_key: projection_key.into(),
             observed_planning_revision,
@@ -45,8 +68,45 @@ impl ParallelModeRuntimeEventEntry {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_severity(
+        sequence: i64,
+        event_kind: impl Into<String>,
+        projection_kind: impl Into<String>,
+        projection_key: impl Into<String>,
+        observed_planning_revision: i64,
+        summary: impl Into<String>,
+        recorded_at: impl Into<String>,
+        severity: ParallelModeRuntimeEventSeverity,
+    ) -> Self {
+        Self {
+            sequence,
+            event_kind: event_kind.into(),
+            projection_kind: projection_kind.into(),
+            projection_key: projection_key.into(),
+            observed_planning_revision,
+            summary: summary.into(),
+            severity,
+            recorded_at: recorded_at.into(),
+        }
+    }
+
     pub fn target_label(&self) -> String {
         format!("{}:{}", self.projection_kind, self.projection_key)
+    }
+}
+
+// Legacy runtime producers predate typed event metadata. Keep their established presentation
+// while new semantic producers use `new_with_severity` explicitly.
+fn legacy_event_severity(event_kind: &str) -> ParallelModeRuntimeEventSeverity {
+    if event_kind.contains("failed") || event_kind.contains("blocked") {
+        ParallelModeRuntimeEventSeverity::Danger
+    } else if event_kind.contains("cleanup") {
+        ParallelModeRuntimeEventSeverity::Success
+    } else if event_kind.contains("status") {
+        ParallelModeRuntimeEventSeverity::Warning
+    } else {
+        ParallelModeRuntimeEventSeverity::Info
     }
 }
 

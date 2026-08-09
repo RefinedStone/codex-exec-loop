@@ -62,11 +62,15 @@ pub use self::pr_validation::{
     PrValidationCheckKind, PrValidationCommitSha, PrValidationCompletion,
     PrValidationCompletionBlocker, PrValidationCompletionSource, PrValidationEvent,
     PrValidationFinding, PrValidationFindingKey, PrValidationFindingSource,
-    PrValidationOperatorCorrelation, PrValidationOperatorState, PrValidationOperatorSummary,
-    PrValidationPhase, PrValidationProviderCompletion, PrValidationProviderKey, PrValidationRecord,
-    PrValidationRecordKey, PrValidationRecoveryAction, PrValidationRemediationCorrelation,
-    PrValidationRequiredCheck, PrValidationRequiredCheckKey, PrValidationTarget,
-    PrValidationTargetShaSnapshot, PrValidationTerminalReason, PrValidationTransitionRejection,
+    PrValidationObservationProjection, PrValidationObservedCheck, PrValidationObservedCheckStatus,
+    PrValidationObservedProvider, PrValidationObservedProviderLifecycle,
+    PrValidationObservedProviderStatus, PrValidationObservedRunStatus,
+    PrValidationObservedWorkflow, PrValidationOperatorCorrelation, PrValidationOperatorState,
+    PrValidationOperatorSummary, PrValidationPhase, PrValidationProviderCompletion,
+    PrValidationProviderKey, PrValidationRecord, PrValidationRecordKey, PrValidationRecoveryAction,
+    PrValidationRemediationCorrelation, PrValidationRequiredCheck, PrValidationRequiredCheckKey,
+    PrValidationTarget, PrValidationTargetShaSnapshot, PrValidationTerminalReason,
+    PrValidationTransitionRejection,
 };
 #[allow(unused_imports)]
 pub use self::pr_validation_scheduler::{PrValidationPollErrorClass, PrValidationSchedulerMode};
@@ -74,7 +78,10 @@ pub use self::readiness::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
     ParallelModeReadinessSnapshot, ParallelModeReadinessState,
 };
-pub use self::runtime_events::{ParallelModeRuntimeEventEntry, ParallelModeRuntimeEventsSnapshot};
+pub use self::runtime_events::{
+    ParallelModeRuntimeEventEntry, ParallelModeRuntimeEventSeverity,
+    ParallelModeRuntimeEventsSnapshot,
+};
 
 // supervisor 상태는 병렬 모드 전체 제어면의 큰 흐름이다. 준비, 정상 감독,
 // 복구를 readiness gate와 사용자의 mode toggle 조합으로만 판정한다.

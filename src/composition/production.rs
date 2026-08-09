@@ -75,6 +75,7 @@ pub(crate) struct ProductionAdminApplication {
     pub(crate) admin_debug_port: Arc<dyn AdminDebugPort>,
     pub(crate) app_server_prompt_log_query_port: Arc<dyn AppServerPromptLogQueryPort>,
     pub(crate) parallel_agent_profile_port: Arc<dyn ParallelAgentProfilePort>,
+    pub(crate) pr_validation_query_port: Arc<dyn PrValidationQueryPort>,
     #[allow(dead_code)]
     pub(crate) review_center_query_port: Arc<dyn ReviewCenterQueryPort>,
 }
@@ -216,6 +217,9 @@ pub(crate) fn build_admin_application_with_debug_harness(
     ));
     let parallel_mode_admin_port: Arc<dyn ParallelModeAdminPort> =
         Arc::new(ParallelModeAdminService::new(parallel_mode_control_plane));
+    let pr_validation_query_port: Arc<dyn PrValidationQueryPort> = Arc::new(
+        PrValidationQueryService::new(workspace_dir.clone(), ports.planning_authority_port.clone()),
+    );
     let facade: Arc<dyn PlanningAdminPort> =
         Arc::new(PlanningAdminFacadeService::from_planning_with_authority(
             workspace_dir,
@@ -234,6 +238,7 @@ pub(crate) fn build_admin_application_with_debug_harness(
         })),
         app_server_prompt_log_query_port,
         parallel_agent_profile_port,
+        pr_validation_query_port,
         review_center_query_port: Arc::new(review_center_read_service),
     }
 }

@@ -10,6 +10,7 @@ use super::{
     parse_args, parse_reset_target,
 };
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
+use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::port::outbound::review_center_repository_port::{
     ReviewCenterInboxItem, ReviewCenterRepositoryPort, ReviewCenterThreadProjection,
 };
@@ -19,16 +20,29 @@ use crate::application::service::planning::admin::{
 use crate::application::service::planning::{
     PlanningAdminDraftKind, PlanningAdminFileKey, PlanningAdminSessionView, PlanningResetTarget,
 };
+use crate::domain::parallel_mode::{
+    IntegrationAttestation, IntegrationMethod, ParallelModeSlotLeaseSnapshot,
+    ParallelModeSlotLeaseState, PrValidationCatchUpState, PrValidationCheckContext,
+    PrValidationCommitSha, PrValidationCompletion, PrValidationEvent, PrValidationFinding,
+    PrValidationFindingKey, PrValidationFindingSource, PrValidationObservationProjection,
+    PrValidationObservedCheck, PrValidationObservedCheckStatus, PrValidationObservedProvider,
+    PrValidationObservedProviderLifecycle, PrValidationObservedProviderStatus,
+    PrValidationObservedRunStatus, PrValidationObservedWorkflow, PrValidationProviderCompletion,
+    PrValidationProviderKey, PrValidationRecord, PrValidationRecordKey,
+    PrValidationRemediationCorrelation, PrValidationTarget, PrValidationTargetShaSnapshot,
+};
 use askama::Template;
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode, header};
 use axum::response::Response;
 use axum_extra::extract::CookieJar;
+use rusqlite::Connection;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::fs;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio_stream::StreamExt;
 use tower::ServiceExt;
 
 struct BrokenTemplate;
@@ -221,6 +235,40 @@ async fn text_body(response: axum::response::Response) -> String {
         .await
         .expect("response body should be readable");
     String::from_utf8(body.to_vec()).expect("response body should be UTF-8")
+}
+
+async fn first_sse_json_frame(response: axum::response::Response) -> (i64, Value) {
+    let mut chunks = response.into_body().into_data_stream();
+    let mut text = String::new();
+    loop {
+        let chunk = tokio::time::timeout(Duration::from_secs(3), chunks.next())
+            .await
+            .expect("SSE frame should arrive before timeout")
+            .expect("SSE response should remain open")
+            .expect("SSE body chunk should be readable");
+        text.push_str(std::str::from_utf8(&chunk).expect("SSE frame should be UTF-8"));
+        let normalized = text.replace("\r\n", "\n");
+        if let Some((frame, _)) = normalized.split_once("\n\n") {
+            let event_id = frame
+                .lines()
+                .find_map(|line| line.strip_prefix("id:"))
+                .expect("SSE update should carry an event id")
+                .trim()
+                .parse::<i64>()
+                .expect("SSE event id should be numeric");
+            let data = frame
+                .lines()
+                .filter_map(|line| line.strip_prefix("data:"))
+                .map(str::trim_start)
+                .collect::<Vec<_>>()
+                .join("\n");
+            return (
+                event_id,
+                serde_json::from_str(&data).expect("SSE data should be JSON"),
+            );
+        }
+        assert!(text.len() < 1_000_000, "SSE first frame must stay bounded");
+    }
 }
 
 async fn bytes_body(response: axum::response::Response) -> Vec<u8> {
@@ -1542,6 +1590,524 @@ async fn admin_akra_realtime_stream_is_authenticated_sse_with_resume_cursor() {
         response.headers().get(header::CACHE_CONTROL),
         Some(&HeaderValue::from_static("no-store, max-age=0"))
     );
+}
+
+#[tokio::test]
+async fn admin_akra_realtime_stream_resumes_oldest_unseen_events_without_loss() {
+    let workspace = TempAdminWorkspace::new("akra-realtime-lossless-resume");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    for index in 0..30 {
+        let record = admin_validation_record("validation-stream", 400 + index);
+        assert!(
+            adapter
+                .compare_and_swap_runtime_pr_validation_record(
+                    &workspace.path,
+                    record.key(),
+                    None,
+                    Some(&record),
+                )
+                .unwrap()
+        );
+        assert!(
+            adapter
+                .compare_and_swap_runtime_pr_validation_record(
+                    &workspace.path,
+                    record.key(),
+                    Some(&record),
+                    None,
+                )
+                .unwrap()
+        );
+    }
+    let router = admin_test_router(&workspace);
+
+    let first_response = router
+        .clone()
+        .oneshot(
+            admin_request_builder()
+                .method(Method::GET)
+                .uri("/api/admin/akra/stream?afterSequence=0")
+                .header("last-event-id", "0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_response.status(), StatusCode::OK);
+    let (first_id, first) = first_sse_json_frame(first_response).await;
+    assert_eq!(first_id, 50);
+    assert_eq!(first["feed"]["eventCursor"], 60);
+    assert_eq!(first["feed"]["visibleEventCount"], 50);
+    assert_eq!(first["cursorResetRequired"], false);
+    assert_eq!(first["validation"]["changed"], true);
+
+    let second_response = router
+        .oneshot(
+            admin_request_builder()
+                .method(Method::GET)
+                .uri("/api/admin/akra/stream")
+                .header("last-event-id", first_id.to_string())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (second_id, second) = first_sse_json_frame(second_response).await;
+    assert_eq!(second_id, 60);
+    assert_eq!(second["feed"]["visibleEventCount"], 10);
+    assert_eq!(second["cursorResetRequired"], false);
+
+    let mut sequences = first["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .chain(second["events"].as_array().unwrap())
+        .map(|event| event["sequence"].as_i64().unwrap())
+        .collect::<Vec<_>>();
+    sequences.sort_unstable();
+    assert_eq!(sequences, (1..=60).collect::<Vec<_>>());
+}
+
+fn admin_validation_record(key: &str, pull_request_number: u64) -> PrValidationRecord {
+    PrValidationRecord::register(
+        PrValidationRecordKey::new(key).unwrap(),
+        PrValidationTarget::new("acme/widgets", pull_request_number).unwrap(),
+        PrValidationTargetShaSnapshot::new(
+            PrValidationCommitSha::new(format!("{pull_request_number:040x}")).unwrap(),
+            PrValidationCommitSha::new("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
+        ),
+    )
+}
+
+fn admin_integrated_validation_record(key: &str, pull_request_number: u64) -> PrValidationRecord {
+    let record = admin_validation_record(key, pull_request_number);
+    let evidence_sha = PrValidationCommitSha::new(format!("{pull_request_number:039x}b")).unwrap();
+    let integrated_at = chrono::DateTime::parse_from_rfc3339("2026-08-10T07:58:00+00:00")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let attestation = IntegrationAttestation::new(
+        IntegrationMethod::DistributorCherryPick,
+        record.target_shas().source_sha().clone(),
+        Some(record.target_shas().base_sha().clone()),
+        evidence_sha,
+        Some(pull_request_number),
+        None,
+        integrated_at,
+        integrated_at + chrono::Duration::seconds(5),
+    )
+    .unwrap();
+    record
+        .transition(PrValidationEvent::BeginPreMergeObservation)
+        .unwrap()
+        .transition(PrValidationEvent::IntegrationAttested(attestation))
+        .unwrap()
+}
+
+fn persist_admin_validation_record(
+    adapter: &SqlitePlanningAuthorityAdapter,
+    workspace: &TempAdminWorkspace,
+    record: &PrValidationRecord,
+) {
+    assert!(
+        adapter
+            .compare_and_swap_runtime_pr_validation_record(
+                &workspace.path,
+                record.key(),
+                None,
+                Some(record),
+            )
+            .expect("admin validation fixture should persist")
+    );
+}
+
+fn admin_validation_observation(
+    required_status: PrValidationObservedCheckStatus,
+) -> PrValidationObservationProjection {
+    PrValidationObservationProjection::new(
+        vec![PrValidationObservedCheck::new(
+            PrValidationCheckContext::new(Some("github-actions".to_string()), "Post-Merge Gate")
+                .unwrap(),
+            required_status,
+            Some(3),
+            Some("2026-08-10T08:00:00+00:00".to_string()),
+            (required_status == PrValidationObservedCheckStatus::Succeeded)
+                .then(|| "2026-08-10T08:02:00+00:00".to_string()),
+        )],
+        vec![PrValidationObservedCheck::new(
+            PrValidationCheckContext::new(Some("github-actions".to_string()), "CI Scope").unwrap(),
+            PrValidationObservedCheckStatus::Succeeded,
+            Some(2),
+            Some("2026-08-10T07:59:00+00:00".to_string()),
+            Some("2026-08-10T08:01:00+00:00".to_string()),
+        )],
+        vec![
+            PrValidationObservedWorkflow::new(
+                "Post-Merge Validation",
+                if required_status == PrValidationObservedCheckStatus::Succeeded {
+                    PrValidationObservedRunStatus::Succeeded
+                } else {
+                    PrValidationObservedRunStatus::InProgress
+                },
+                3,
+                Some("2026-08-10T08:00:00+00:00".to_string()),
+                Some("2026-08-10T08:02:00+00:00".to_string()),
+            )
+            .unwrap(),
+        ],
+        vec![
+            PrValidationObservedProvider::new(
+                "github:CheckRuns",
+                PrValidationObservedProviderLifecycle::Finite,
+                if required_status == PrValidationObservedCheckStatus::Succeeded {
+                    PrValidationObservedProviderStatus::Complete
+                } else {
+                    PrValidationObservedProviderStatus::Pending
+                },
+                true,
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn admin_pr_validation_board_endpoint_is_available_when_empty() {
+    let workspace = TempAdminWorkspace::new("pr-validation-board-empty");
+    let router = admin_test_router(&workspace);
+
+    let response = router
+        .oneshot(
+            admin_request_builder()
+                .method(Method::GET)
+                .uri("/api/admin/akra/validations?limit=20")
+                .body(Body::empty())
+                .expect("validation board request should build"),
+        )
+        .await
+        .expect("validation board request should be served");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    assert_eq!(body["records"], json!([]));
+    assert_eq!(body["summary"]["active"], 0);
+    assert_eq!(body["cursorResetRequired"], false);
+}
+
+#[tokio::test]
+async fn admin_pr_validation_board_pages_phases_evidence_correlations_and_redaction() {
+    let workspace = TempAdminWorkspace::new("pr-validation-board-records");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let integrated = admin_integrated_validation_record("validation-integrated", 301);
+    let verifying = admin_integrated_validation_record("validation-verifying", 302)
+        .transition(PrValidationEvent::ObservationProjected(
+            admin_validation_observation(PrValidationObservedCheckStatus::Pending),
+        ))
+        .unwrap()
+        .transition(PrValidationEvent::ObservationCheckpointed {
+            delivery_revision: 7,
+            cursor: Some("provider-cursor-secret".to_string()),
+            evidence_fingerprint: "safe-fingerprint".to_string(),
+        })
+        .unwrap();
+    let queued_base = admin_integrated_validation_record("validation-queued", 303);
+    let queued_finding = PrValidationFinding::new(
+        PrValidationFindingKey::new(
+            PrValidationFindingSource::new("review").unwrap(),
+            "provider-event-secret",
+        )
+        .unwrap(),
+        queued_base.target_shas().source_sha().clone(),
+        "raw-body-secret",
+    )
+    .unwrap();
+    let queued = queued_base
+        .transition(PrValidationEvent::FindingObserved(queued_finding.clone()))
+        .unwrap()
+        .transition(PrValidationEvent::RemediationQueued(
+            PrValidationRemediationCorrelation::new(
+                queued_finding.key().clone(),
+                PrValidationRecordKey::new("remediation-task-queued").unwrap(),
+            ),
+        ))
+        .unwrap();
+    let running_base = admin_integrated_validation_record("validation-running", 304);
+    let running_finding = PrValidationFinding::new(
+        PrValidationFindingKey::new(
+            PrValidationFindingSource::new("check_run").unwrap(),
+            "provider-run-secret",
+        )
+        .unwrap(),
+        running_base.target_shas().source_sha().clone(),
+        "raw-running-body-secret",
+    )
+    .unwrap();
+    let running_key = running_finding.key().clone();
+    let running = running_base
+        .transition(PrValidationEvent::FindingObserved(running_finding))
+        .unwrap()
+        .transition(PrValidationEvent::RemediationQueued(
+            PrValidationRemediationCorrelation::new(
+                running_key.clone(),
+                PrValidationRecordKey::new("remediation-task-running").unwrap(),
+            ),
+        ))
+        .unwrap()
+        .transition(PrValidationEvent::RemediationStarted {
+            finding_key: running_key,
+        })
+        .unwrap();
+    let verified_observing = admin_integrated_validation_record("validation-verified", 305)
+        .transition(PrValidationEvent::ObservationProjected(
+            admin_validation_observation(PrValidationObservedCheckStatus::Succeeded),
+        ))
+        .unwrap()
+        .transition(PrValidationEvent::ObservationCheckpointed {
+            delivery_revision: 9,
+            cursor: None,
+            evidence_fingerprint: "verified-fingerprint".to_string(),
+        })
+        .unwrap();
+    let verified = verified_observing
+        .transition(PrValidationEvent::Settle(PrValidationCompletion::new(
+            verified_observing.evidence_sha().unwrap().clone(),
+            vec![PrValidationProviderCompletion::terminal(
+                PrValidationProviderKey::new("github:CheckRuns").unwrap(),
+            )],
+            Vec::new(),
+            PrValidationCatchUpState::NoUnseenRelevantEvents,
+        )))
+        .unwrap();
+    let provider_blocked = admin_integrated_validation_record("validation-provider-blocked", 306);
+
+    for record in [
+        &integrated,
+        &verifying,
+        &queued,
+        &running,
+        &verified,
+        &provider_blocked,
+    ] {
+        persist_admin_validation_record(&adapter, &workspace, record);
+    }
+    adapter
+        .upsert_runtime_slot_lease(
+            &workspace.path,
+            &ParallelModeSlotLeaseSnapshot::new(
+                "slot-validation",
+                "remediation-task-running",
+                "Repair post-merge check",
+                "agent-validation",
+                "akra-agent/slot-validation/remediation",
+                "C:/tmp/slot-validation",
+                ParallelModeSlotLeaseState::Leased,
+                "2026-08-10T08:10:00+00:00",
+                None,
+            ),
+        )
+        .unwrap();
+    let location = adapter.resolve_authority_location(&workspace.path).unwrap();
+    let connection = Connection::open(&location.authority_store_path).unwrap();
+    for (key, updated_at) in [
+        ("validation-integrated", "2026-08-10T10:00:00+00:00"),
+        ("validation-verifying", "2026-08-10T11:00:00+00:00"),
+        ("validation-queued", "2026-08-10T12:00:00+00:00"),
+        ("validation-running", "2026-08-10T13:00:00+00:00"),
+        ("validation-provider-blocked", "2026-08-10T14:00:00+00:00"),
+        ("validation-verified", "2026-08-10T15:00:00+00:00"),
+    ] {
+        connection
+            .execute(
+                "UPDATE runtime_pr_validation_records SET updated_at = ?2 WHERE record_key = ?1",
+                (key, updated_at),
+            )
+            .unwrap();
+    }
+    connection
+        .execute(
+            "UPDATE runtime_pr_validation_records
+             SET last_polled_at = '2026-08-10T14:00:00+00:00',
+                 next_poll_at = '2026-08-10T14:05:00+00:00',
+                 poll_attempt = 4,
+                 consecutive_error_count = 2,
+                 last_error_class = 'authentication_blocked',
+                 rate_limit_remaining = 17,
+                 rate_limit_reset_at = '2026-08-10T14:10:00+00:00',
+                 poll_lease_owner = 'poll-owner-secret',
+                 poll_lease_token = 'poll-lease-token-secret',
+                 poll_lease_expires_at = '2026-08-10T14:01:00+00:00'
+             WHERE record_key = 'validation-provider-blocked'",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+
+    let router = admin_test_router(&workspace);
+    let dashboard_response = router
+        .clone()
+        .oneshot(
+            admin_request_builder()
+                .method(Method::GET)
+                .uri("/api/admin/akra/dashboard")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(dashboard_response.status(), StatusCode::OK);
+    let dashboard = json_body(dashboard_response).await;
+    assert_eq!(dashboard["validation"]["summary"]["active"], 5);
+    assert_eq!(dashboard["validation"]["summary"]["verified"], 1);
+
+    let first_response = router
+        .clone()
+        .oneshot(
+            admin_request_builder()
+                .method(Method::GET)
+                .uri("/api/admin/akra/validations?limit=3")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_response.status(), StatusCode::OK);
+    let first = json_body(first_response).await;
+    assert_eq!(first["records"].as_array().unwrap().len(), 3);
+    let cursor = first["nextCursor"]
+        .as_str()
+        .expect("first bounded page should have a cursor");
+    let second_response = router
+        .clone()
+        .oneshot(
+            admin_request_builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/api/admin/akra/validations?limit=3&cursor={cursor}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second_response.status(), StatusCode::OK);
+    let second = json_body(second_response).await;
+    assert_eq!(second["records"].as_array().unwrap().len(), 3);
+
+    let records = first["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .chain(second["records"].as_array().unwrap())
+        .collect::<Vec<_>>();
+    let phases = records
+        .iter()
+        .filter_map(|record| record["phase"].as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    for expected in [
+        "integrated",
+        "verifying",
+        "remediation_queued",
+        "remediation_running",
+        "verified",
+    ] {
+        assert!(
+            phases.contains(expected),
+            "missing phase {expected}: {phases:?}"
+        );
+    }
+    let verifying_json = records
+        .iter()
+        .find(|record| record["recordKey"] == "validation-verifying")
+        .unwrap();
+    assert_eq!(verifying_json["checks"][0]["latestAttempt"], 3);
+    assert_eq!(verifying_json["requiredChecksTotal"], 1);
+    assert_eq!(verifying_json["evidenceSha"].as_str().unwrap().len(), 40);
+    assert_eq!(verifying_json["integrationPullRequestNumber"], 302);
+    assert_eq!(verifying_json["baseBeforeSha"].as_str().unwrap().len(), 40);
+    assert_eq!(verifying_json["integratedAt"], "2026-08-10T07:58:00+00:00");
+    assert_eq!(
+        verifying_json["remoteVerifiedAt"],
+        "2026-08-10T07:58:05+00:00"
+    );
+    let provider_json = records
+        .iter()
+        .find(|record| record["recordKey"] == "validation-provider-blocked")
+        .unwrap();
+    assert_eq!(provider_json["providerBlocked"], true);
+    assert_eq!(provider_json["severity"], "danger");
+    assert_eq!(
+        provider_json["schedule"]["errorClass"],
+        "authentication_blocked"
+    );
+    assert_eq!(provider_json["schedule"]["pollAttempt"], 4);
+
+    let detail_response = router
+        .clone()
+        .oneshot(
+            admin_request_builder()
+                .method(Method::GET)
+                .uri("/api/admin/akra/validations/validation-running")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(detail_response.status(), StatusCode::OK);
+    let detail = json_body(detail_response).await;
+    assert_eq!(detail["correlations"][0]["slotId"], "slot-validation");
+    assert_eq!(detail["correlations"][0]["taskState"], "leased");
+
+    let visible_json = format!("{first}\n{second}\n{detail}");
+    for secret in [
+        "raw-body-secret",
+        "raw-running-body-secret",
+        "provider-event-secret",
+        "provider-run-secret",
+        "provider-cursor-secret",
+        "poll-owner-secret",
+        "poll-lease-token-secret",
+    ] {
+        assert!(
+            !visible_json.contains(secret),
+            "admin validation JSON leaked {secret}"
+        );
+    }
+
+    let new_record = admin_validation_record("validation-new", 307)
+        .transition(PrValidationEvent::BeginPreMergeObservation)
+        .unwrap();
+    persist_admin_validation_record(&adapter, &workspace, &new_record);
+    let reset_response = router
+        .clone()
+        .oneshot(
+            admin_request_builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/api/admin/akra/validations?limit=3&cursor={cursor}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(reset_response.status(), StatusCode::OK);
+    assert_eq!(json_body(reset_response).await["cursorResetRequired"], true);
+}
+
+#[tokio::test]
+async fn admin_pr_validation_board_rejects_malformed_opaque_cursor() {
+    let workspace = TempAdminWorkspace::new("pr-validation-invalid-cursor");
+    let response = admin_test_router(&workspace)
+        .oneshot(
+            admin_request_builder()
+                .method(Method::GET)
+                .uri("/api/admin/akra/validations?cursor=not-a-valid-cursor")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

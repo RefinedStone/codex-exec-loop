@@ -1,6 +1,7 @@
 use super::{
     PrValidationCatchUpState, PrValidationCommitSha, PrValidationCompletion, PrValidationEvent,
     PrValidationFinding, PrValidationFindingKey, PrValidationFindingSource,
+    PrValidationObservationProjection, PrValidationObservedCheck, PrValidationObservedCheckStatus,
     PrValidationOperatorState, PrValidationPhase, PrValidationProviderCompletion,
     PrValidationProviderKey, PrValidationRecord, PrValidationRecordKey,
     PrValidationRemediationCorrelation, PrValidationTarget, PrValidationTargetShaSnapshot,
@@ -222,4 +223,27 @@ fn finite_completion_is_terminal_and_rejects_late_review_reopen() {
             .transition(PrValidationEvent::LateFindingObserved(finding()))
             .is_err()
     );
+}
+
+#[test]
+fn observation_projection_rejects_unbounded_or_malformed_provider_timestamps() {
+    let context =
+        super::PrValidationCheckContext::new(Some("github-actions".to_string()), "Post-Merge Gate")
+            .unwrap();
+    for timestamp in ["not-rfc3339".to_string(), "2".repeat(65)] {
+        let error = PrValidationObservationProjection::new(
+            vec![PrValidationObservedCheck::new(
+                context.clone(),
+                PrValidationObservedCheckStatus::Pending,
+                Some(1),
+                Some(timestamp),
+                None,
+            )],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap_err();
+        assert!(error.contains("bounded RFC3339"));
+    }
 }

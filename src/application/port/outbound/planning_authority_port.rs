@@ -348,6 +348,54 @@ pub struct PrValidationPollSettlement {
     pub rate_limit_reset_at: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrValidationAuthorityRecordSnapshot {
+    pub record: PrValidationRecord,
+    pub updated_at: String,
+    pub last_polled_at: Option<String>,
+    pub next_poll_at: Option<String>,
+    pub poll_attempt: u64,
+    pub consecutive_error_count: u32,
+    pub last_error_class: Option<PrValidationPollErrorClass>,
+    pub rate_limit_remaining: Option<u64>,
+    pub rate_limit_reset_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrValidationAuthorityPagePosition {
+    pub terminal_rank: u8,
+    pub updated_at: String,
+    pub record_key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrValidationAuthorityPageRequest {
+    pub limit: usize,
+    pub terminal_since: String,
+    pub after: Option<PrValidationAuthorityPagePosition>,
+    pub expected_revision: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PrValidationAuthorityBoardSummary {
+    pub active: usize,
+    pub integrated: usize,
+    pub verifying: usize,
+    pub remediation: usize,
+    pub verified: usize,
+    pub blocked: usize,
+    pub failed: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrValidationAuthorityPage {
+    pub revision: i64,
+    pub summary: PrValidationAuthorityBoardSummary,
+    pub records: Vec<PrValidationAuthorityRecordSnapshot>,
+    pub next_position: Option<PrValidationAuthorityPagePosition>,
+    pub cursor_reset_required: bool,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum PlanningAuthorityActiveDocumentMutation<'a> {
     Replace {
@@ -752,6 +800,30 @@ pub trait PlanningAuthorityPort: ParallelModeRuntimeEventLogPort + Send + Sync {
         _workspace_dir: &str,
     ) -> Result<Vec<PrValidationRecord>> {
         Ok(Vec::new())
+    }
+
+    /// Bounded keyset page used by operator read models. Implementations must return all
+    /// non-terminal records before recent terminal records and must never expose lease tokens.
+    fn load_runtime_pr_validation_page(
+        &self,
+        _workspace_dir: &str,
+        _request: &PrValidationAuthorityPageRequest,
+    ) -> Result<PrValidationAuthorityPage> {
+        Ok(PrValidationAuthorityPage {
+            revision: 0,
+            summary: PrValidationAuthorityBoardSummary::default(),
+            records: Vec::new(),
+            next_position: None,
+            cursor_reset_required: false,
+        })
+    }
+
+    fn load_runtime_pr_validation_record_snapshot(
+        &self,
+        _workspace_dir: &str,
+        _record_key: &PrValidationRecordKey,
+    ) -> Result<Option<PrValidationAuthorityRecordSnapshot>> {
+        Ok(None)
     }
 
     /// Select a bounded set of due, pollable keys without loading every validation record.

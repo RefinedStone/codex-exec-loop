@@ -3,6 +3,9 @@ use crate::application::port::inbound::parallel_agent_profile_port::{
 };
 use crate::application::port::inbound::parallel_mode_admin_port::ParallelModeAdminPort;
 use crate::application::port::inbound::planning_admin_port::PlanningAdminPort;
+use crate::application::port::inbound::pr_validation_query_port::{
+    PrValidationBoardRequest, PrValidationBoardSnapshot, PrValidationQueryPort,
+};
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeDistributorQueueItem, ParallelModePoolSlotSnapshot,
     ParallelModePoolSlotState, ParallelModeQueueItemState, ParallelModeReadinessSnapshot,
@@ -36,6 +39,7 @@ pub(super) struct AkraAdminDashboardView {
     pub metrics: GuildMetricsView,
     pub campaign: CampaignView,
     pub event_feed: EventFeedView,
+    pub validation: PrValidationBoardSnapshot,
     pub generated_at: String,
     pub generated_time_label: String,
     pub planning_revision: Option<i64>,
@@ -454,6 +458,7 @@ pub(super) fn build_akra_dashboard_view(
     planning_admin: &dyn PlanningAdminPort,
     parallel_mode_admin_port: &dyn ParallelModeAdminPort,
     parallel_agent_profile_port: &dyn ParallelAgentProfilePort,
+    pr_validation_query_port: &dyn PrValidationQueryPort,
 ) -> Result<AkraAdminDashboardView> {
     let workspace_dir = planning_admin.workspace_dir();
     let snapshot =
@@ -466,6 +471,7 @@ pub(super) fn build_akra_dashboard_view(
     let agent_profiles = parallel_agent_profile_port
         .load_config(workspace_dir)
         .map_err(anyhow::Error::msg)?;
+    let validation = pr_validation_query_port.load_board(PrValidationBoardRequest::default())?;
 
     let pool = map_pool(&supervisor);
     let agents = map_agents(&supervisor, &agent_profiles);
@@ -532,6 +538,7 @@ pub(super) fn build_akra_dashboard_view(
         metrics,
         campaign,
         event_feed,
+        validation,
         generated_at: generated_at.to_rfc3339(),
         generated_time_label: generated_at.format("%H:%M:%S").to_string(),
         planning_revision,
@@ -1209,7 +1216,7 @@ fn map_runtime_event(entry: &ParallelModeRuntimeEventEntry) -> RuntimeEventView 
         summary: entry.summary.clone(),
         recorded_at: entry.recorded_at.clone(),
         icon: event_icon(entry.event_kind.as_str()).to_string(),
-        severity: event_severity(entry.event_kind.as_str()).to_string(),
+        severity: entry.severity.label().to_string(),
     }
 }
 
@@ -1723,19 +1730,12 @@ fn event_icon(event_kind: &str) -> &'static str {
         "distributor_queue" => "route",
         "worktree_status" => "git",
         "cleanup_completed" => "clean",
+        "pr_validation_phase_changed"
+        | "pr_validation_poll_deferred"
+        | "pr_validation_poll_scheduled"
+        | "pr_validation_remediation_admitted"
+        | "pr_validation_verified" => "check",
         _ => "event",
-    }
-}
-
-fn event_severity(event_kind: &str) -> &'static str {
-    if event_kind.contains("failed") || event_kind.contains("blocked") {
-        "danger"
-    } else if event_kind.contains("cleanup") {
-        "success"
-    } else if event_kind.contains("status") {
-        "warning"
-    } else {
-        "info"
     }
 }
 
@@ -2635,10 +2635,62 @@ mod tests {
         assert_eq!(event_icon("distributor_queue"), "route");
         assert_eq!(event_icon("worktree_status"), "git");
         assert_eq!(event_icon("unknown"), "event");
-        assert_eq!(event_severity("worker_failed"), "danger");
-        assert_eq!(event_severity("cleanup_completed"), "success");
-        assert_eq!(event_severity("worktree_status"), "warning");
-        assert_eq!(event_severity("slot_lease_upsert"), "info");
+        assert_eq!(
+            ParallelModeRuntimeEventEntry::new(
+                1,
+                "worker_failed",
+                "worker",
+                "slot-1",
+                1,
+                "failed",
+                "2026-08-10T00:00:00Z",
+            )
+            .severity
+            .label(),
+            "danger"
+        );
+        assert_eq!(
+            ParallelModeRuntimeEventEntry::new(
+                2,
+                "cleanup_completed",
+                "worker",
+                "slot-1",
+                1,
+                "clean",
+                "2026-08-10T00:00:00Z",
+            )
+            .severity
+            .label(),
+            "success"
+        );
+        assert_eq!(
+            ParallelModeRuntimeEventEntry::new(
+                3,
+                "worktree_status",
+                "worker",
+                "slot-1",
+                1,
+                "status",
+                "2026-08-10T00:00:00Z",
+            )
+            .severity
+            .label(),
+            "warning"
+        );
+        assert_eq!(
+            ParallelModeRuntimeEventEntry::new(
+                4,
+                "slot_lease_upsert",
+                "worker",
+                "slot-1",
+                1,
+                "lease",
+                "2026-08-10T00:00:00Z",
+            )
+            .severity
+            .label(),
+            "info"
+        );
     }
 
     #[test]

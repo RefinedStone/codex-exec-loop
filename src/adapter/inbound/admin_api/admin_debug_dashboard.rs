@@ -69,6 +69,7 @@ pub(super) fn build_admin_dashboard_view(
         state.facade.as_ref(),
         state.parallel_mode_admin_port.as_ref(),
         state.parallel_agent_profile_port.as_ref(),
+        state.pr_validation_query_port.as_ref(),
     )?;
     let projection = state.admin_debug_port.projection();
     apply_admin_debug_harness(&mut dashboard, &projection);

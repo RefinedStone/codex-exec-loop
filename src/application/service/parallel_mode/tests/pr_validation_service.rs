@@ -957,6 +957,23 @@ fn optional_skip_and_workflow_failure_are_diagnostic_when_the_required_check_suc
 #[test]
 fn successful_latest_attempt_suppresses_an_older_failed_attempt() {
     let mut observed = merged_snapshot();
+    observed.workflow_runs = vec![
+        GithubValidationWorkflowRun::new(
+            GithubOpaqueId::new("workflow:attempt-2-secret"),
+            "Post-Merge Validation",
+            GithubCommitSha::new(MERGE),
+            GithubValidationRunStatus::Succeeded,
+        )
+        .with_attempt_metadata(
+            2,
+            Some("2026-08-08T00:00:00Z".to_string()),
+            Some("2026-08-08T00:02:00Z".to_string()),
+        )
+        .with_attempt_correlation(
+            Some(GithubOpaqueId::new("check-suite:ci")),
+            Some("2026-08-08T00:00:00Z".to_string()),
+        ),
+    ];
     observed.check_runs.insert(
         0,
         GithubValidationCheckRun::new(
@@ -992,6 +1009,30 @@ fn successful_latest_attempt_suppresses_an_older_failed_attempt() {
             .unwrap(),
         PrValidationPollResult::Waiting
     );
+    let projected = service
+        .recover_pr_validation_record(
+            &repo.workspace_dir(),
+            &repo.pool_root(),
+            &PrValidationRecordKey::new("acme/widgets#42").unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        projected.observation_projection().required_checks()[0].latest_attempt(),
+        Some(2)
+    );
+    assert_eq!(
+        projected.observation_projection().workflows()[0].run_attempt(),
+        2
+    );
+    let visible_projection = serde_json::to_string(projected.observation_projection()).unwrap();
+    for provider_secret in [
+        "check:attempt-1",
+        "check-suite:ci",
+        "workflow:attempt-2-secret",
+    ] {
+        assert!(!visible_projection.contains(provider_secret));
+    }
     assert_eq!(
         service
             .poll_pr_validation(&observation, &remediation, request(&repo, 2, HEAD_A))

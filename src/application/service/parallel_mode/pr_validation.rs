@@ -26,7 +26,10 @@ use crate::domain::github_review::{GithubCommitSha, GithubPullRequestTarget};
 use crate::domain::parallel_mode::{
     IntegrationAttestation, IntegrationMethod, PrValidationCatchUpState, PrValidationCheckKind,
     PrValidationCommitSha, PrValidationCompletion, PrValidationEvent, PrValidationFinding,
-    PrValidationFindingKey, PrValidationFindingSource, PrValidationPhase,
+    PrValidationFindingKey, PrValidationFindingSource, PrValidationObservationProjection,
+    PrValidationObservedCheck, PrValidationObservedCheckStatus, PrValidationObservedProvider,
+    PrValidationObservedProviderLifecycle, PrValidationObservedProviderStatus,
+    PrValidationObservedRunStatus, PrValidationObservedWorkflow, PrValidationPhase,
     PrValidationPollErrorClass, PrValidationProviderCompletion, PrValidationProviderKey,
     PrValidationRecord, PrValidationRecordKey, PrValidationRemediationCorrelation,
     PrValidationRequiredCheck, PrValidationSchedulerMode, PrValidationTarget,
@@ -791,6 +794,11 @@ impl ParallelModeService {
                 .flatten()
         });
         next = next
+            .transition(PrValidationEvent::ObservationProjected(
+                observation_projection(&snapshot, &contract_decision)?,
+            ))
+            .map_err(transition_error)?;
+        next = next
             .transition(PrValidationEvent::ObservationCheckpointed {
                 delivery_revision: request.delivery_revision,
                 cursor: checkpoint_cursor.map(|cursor| cursor.as_str().to_string()),
@@ -1127,6 +1135,141 @@ fn completion(
         checks,
         PrValidationCatchUpState::NoUnseenRelevantEvents,
     ))
+}
+
+fn observation_projection(
+    snapshot: &GithubPrValidationSnapshot,
+    contract_decision: &GithubPostMergeValidationDecision,
+) -> Result<PrValidationObservationProjection, String> {
+    let required_checks = contract_decision
+        .required
+        .iter()
+        .map(|evaluation| observed_check(snapshot, evaluation))
+        .collect();
+    let optional_checks = contract_decision
+        .optional
+        .iter()
+        .map(|evaluation| observed_check(snapshot, evaluation))
+        .collect();
+
+    let mut latest_workflows = std::collections::BTreeMap::new();
+    for workflow in &snapshot.workflow_runs {
+        let replace = latest_workflows
+            .get(&workflow.name)
+            .is_none_or(|current: &&crate::application::port::outbound::github_pr_validation_port::GithubValidationWorkflowRun| {
+                workflow.run_attempt > current.run_attempt
+                    || (workflow.run_attempt == current.run_attempt
+                        && workflow.updated_at > current.updated_at)
+            });
+        if replace {
+            latest_workflows.insert(workflow.name.clone(), workflow);
+        }
+    }
+    let workflows = latest_workflows
+        .into_values()
+        .take(32)
+        .map(|workflow| {
+            PrValidationObservedWorkflow::new(
+                workflow.name.clone(),
+                observed_run_status(&workflow.status),
+                workflow.run_attempt,
+                workflow.run_started_at.clone(),
+                workflow.updated_at.clone(),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let providers = snapshot
+        .sources
+        .iter()
+        .map(|source| {
+            PrValidationObservedProvider::new(
+                format!("github:{}", github_source_label(source.source)),
+                match source.lifecycle {
+                    GithubValidationSourceLifecycle::Finite => {
+                        PrValidationObservedProviderLifecycle::Finite
+                    }
+                    GithubValidationSourceLifecycle::Watchable => {
+                        PrValidationObservedProviderLifecycle::Watchable
+                    }
+                },
+                match source.status {
+                    GithubValidationSourceStatus::Complete => {
+                        PrValidationObservedProviderStatus::Complete
+                    }
+                    GithubValidationSourceStatus::Paginated => {
+                        PrValidationObservedProviderStatus::Pending
+                    }
+                    GithubValidationSourceStatus::Unknown => {
+                        PrValidationObservedProviderStatus::Failed
+                    }
+                },
+                source.next_cursor.is_none(),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    PrValidationObservationProjection::new(required_checks, optional_checks, workflows, providers)
+}
+
+fn observed_check(
+    snapshot: &GithubPrValidationSnapshot,
+    evaluation: &crate::application::port::outbound::github_pr_validation_port::GithubExpectedCheckEvaluation,
+) -> PrValidationObservedCheck {
+    let workflow = evaluation
+        .selected_run
+        .as_ref()
+        .and_then(|run| snapshot.diagnostic_workflow_for_check(run));
+    PrValidationObservedCheck::new(
+        evaluation.context.clone(),
+        match evaluation.status {
+            GithubExpectedCheckStatus::Missing => PrValidationObservedCheckStatus::Missing,
+            GithubExpectedCheckStatus::Pending => PrValidationObservedCheckStatus::Pending,
+            GithubExpectedCheckStatus::Succeeded => PrValidationObservedCheckStatus::Succeeded,
+            GithubExpectedCheckStatus::ActionableFailure => {
+                PrValidationObservedCheckStatus::ActionableFailure
+            }
+            GithubExpectedCheckStatus::PolicyBlocked => {
+                PrValidationObservedCheckStatus::PolicyBlocked
+            }
+        },
+        workflow.map(|workflow| workflow.run_attempt),
+        evaluation
+            .selected_run
+            .as_ref()
+            .and_then(|run| run.started_at.clone()),
+        evaluation
+            .selected_run
+            .as_ref()
+            .and_then(|run| run.completed_at.clone()),
+    )
+}
+
+fn observed_run_status(
+    status: &crate::application::port::outbound::github_pr_validation_port::GithubValidationRunStatus,
+) -> PrValidationObservedRunStatus {
+    use crate::application::port::outbound::github_pr_validation_port::GithubValidationRunStatus;
+    match status {
+        GithubValidationRunStatus::Queued => PrValidationObservedRunStatus::Queued,
+        GithubValidationRunStatus::InProgress => PrValidationObservedRunStatus::InProgress,
+        GithubValidationRunStatus::Succeeded => PrValidationObservedRunStatus::Succeeded,
+        GithubValidationRunStatus::Failed => PrValidationObservedRunStatus::Failed,
+        GithubValidationRunStatus::Cancelled => PrValidationObservedRunStatus::Cancelled,
+        GithubValidationRunStatus::Skipped => PrValidationObservedRunStatus::Skipped,
+        GithubValidationRunStatus::Unknown(_) => PrValidationObservedRunStatus::Unknown,
+    }
+}
+
+fn github_source_label(
+    source: crate::application::port::outbound::github_pr_validation_port::GithubValidationSource,
+) -> &'static str {
+    use crate::application::port::outbound::github_pr_validation_port::GithubValidationSource;
+    match source {
+        GithubValidationSource::PullRequest => "pull_request",
+        GithubValidationSource::Reviews => "reviews",
+        GithubValidationSource::IssueComments => "issue_comments",
+        GithubValidationSource::ReviewThreads => "review_threads",
+        GithubValidationSource::CheckRuns => "check_runs",
+        GithubValidationSource::WorkflowRuns => "workflow_runs",
+    }
 }
 
 fn check_context_label(context: &crate::domain::parallel_mode::PrValidationCheckContext) -> String {
