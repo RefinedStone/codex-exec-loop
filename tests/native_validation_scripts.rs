@@ -922,8 +922,10 @@ fn rust_toolchain_is_pinned_consistently_for_ci_and_releases() {
     );
     assert!(native_checks.contains("bash scripts/check_windows_portable.sh"));
     assert!(
-        native_checks
-            .contains("github.event_name == 'workflow_dispatch' && github.run_id || github.ref")
+        native_checks.contains(
+            "github.event_name == 'workflow_dispatch' && github.run_id || github.event_name == 'push' && github.sha || github.ref"
+        ),
+        "native check concurrency must isolate manual runs, evidence SHAs, and branch refs"
     );
     assert!(
         windows_portable
