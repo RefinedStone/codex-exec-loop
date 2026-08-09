@@ -15,12 +15,40 @@ const MAX_WINDOWS_CODEX_SHIM_BYTES: usize = 16 * 1024;
 const MAX_NATIVE_EXECUTABLE_METADATA_BYTES: u64 = 16 * 1024 * 1024;
 #[cfg(target_os = "macos")]
 const MACOS_ADMIN_GROUP_ID: u32 = 80;
+const REQUIRE_TRUSTED_CODEX_EXECUTABLE_ENV_VAR: &str = "AKRA_REQUIRE_TRUSTED_CODEX_EXECUTABLE";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CodexExecutableTrustPolicy {
+    AllowUntrusted,
+    RequireTrusted,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TrustedCommand {
     pub(crate) program: PathBuf,
     pub(crate) prefix_args: Vec<OsString>,
     pub(crate) source_executable: PathBuf,
+    pub(crate) trust_warning: Option<String>,
+}
+
+fn resolve_codex_executable_trust_policy(
+    value: Option<&str>,
+) -> Result<CodexExecutableTrustPolicy> {
+    match value {
+        None | Some("0") => Ok(CodexExecutableTrustPolicy::AllowUntrusted),
+        Some("1") => Ok(CodexExecutableTrustPolicy::RequireTrusted),
+        Some(_) => bail!("{REQUIRE_TRUSTED_CODEX_EXECUTABLE_ENV_VAR} must be exactly `1` or `0`"),
+    }
+}
+
+fn configured_codex_executable_trust_policy() -> Result<CodexExecutableTrustPolicy> {
+    match std::env::var(REQUIRE_TRUSTED_CODEX_EXECUTABLE_ENV_VAR) {
+        Ok(value) => resolve_codex_executable_trust_policy(Some(&value)),
+        Err(std::env::VarError::NotPresent) => resolve_codex_executable_trust_policy(None),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            bail!("{REQUIRE_TRUSTED_CODEX_EXECUTABLE_ENV_VAR} must be exactly `1` or `0`")
+        }
+    }
 }
 
 #[cfg(any(windows, test))]
@@ -109,7 +137,62 @@ pub(crate) fn resolve_native_from_path(program: &str, path: &OsStr, cwd: &Path) 
     Ok(executable)
 }
 
+fn resolve_native_from_path_with_policy(
+    program: &str,
+    path: &OsStr,
+    cwd: &Path,
+    policy: CodexExecutableTrustPolicy,
+) -> Result<PathBuf> {
+    if policy == CodexExecutableTrustPolicy::RequireTrusted {
+        return resolve_native_from_path(program, path, cwd);
+    }
+    let executable = resolve_from_path_with_policy(program, path, cwd, policy)?;
+    validate_native_executable_with_policy(&executable, policy)?;
+    Ok(executable)
+}
+
 pub(crate) fn resolve_codex_command_from_path(path: &OsStr, cwd: &Path) -> Result<TrustedCommand> {
+    resolve_codex_command_from_path_with_policy(
+        path,
+        cwd,
+        configured_codex_executable_trust_policy()?,
+    )
+}
+
+fn resolve_codex_command_from_path_with_policy(
+    path: &OsStr,
+    cwd: &Path,
+    policy: CodexExecutableTrustPolicy,
+) -> Result<TrustedCommand> {
+    let trust_error = match resolve_codex_command_from_path_for_policy(
+        path,
+        cwd,
+        CodexExecutableTrustPolicy::RequireTrusted,
+    ) {
+        Ok(command) => return Ok(command),
+        Err(error) => error,
+    };
+    if policy == CodexExecutableTrustPolicy::RequireTrusted {
+        return Err(trust_error);
+    }
+
+    let mut command =
+        resolve_codex_command_from_path_for_policy(path, cwd, policy).with_context(|| {
+            format!(
+                "trusted Codex executable resolution failed ({trust_error:#}); permissive resolution also failed"
+            )
+    })?;
+    command.trust_warning = Some(format!(
+        "Codex executable trust checks failed and a mutation-capable principal may replace the pinned path before spawn; startup continued because {REQUIRE_TRUSTED_CODEX_EXECUTABLE_ENV_VAR}=1 is not set: {trust_error:#}"
+    ));
+    Ok(command)
+}
+
+fn resolve_codex_command_from_path_for_policy(
+    path: &OsStr,
+    cwd: &Path,
+    policy: CodexExecutableTrustPolicy,
+) -> Result<TrustedCommand> {
     let untrusted_roots = untrusted_roots(cwd);
     let entries = std::env::split_paths(path).collect::<Vec<_>>();
     if entries.is_empty() {
@@ -127,14 +210,15 @@ pub(crate) fn resolve_codex_command_from_path(path: &OsStr, cwd: &Path) -> Resul
             let candidate = directory.join(name);
             match fs::symlink_metadata(&candidate) {
                 Ok(_) => {
-                    let source_executable = validate_candidate(&candidate, &untrusted_roots)
-                        .with_context(|| {
-                            format!(
-                                "PATH selected an unsafe `codex` executable at `{}`",
-                                candidate.display()
-                            )
-                        })?;
-                    match resolve_codex_command(source_executable.clone(), path, cwd)? {
+                    let source_executable =
+                        validate_candidate_with_policy(&candidate, &untrusted_roots, policy)
+                            .with_context(|| {
+                                format!(
+                                    "PATH selected an unsafe `codex` executable at `{}`",
+                                    candidate.display()
+                                )
+                            })?;
+                    match resolve_codex_command(source_executable.clone(), path, cwd, policy)? {
                         Some(command) => return Ok(command),
                         None => unsupported_launcher = Some(source_executable),
                     }
@@ -154,19 +238,26 @@ pub(crate) fn resolve_codex_command_from_path(path: &OsStr, cwd: &Path) -> Resul
             launcher.display()
         )
     }
-    bail!("`codex` was not found on the trusted absolute PATH")
+    let qualifier = if policy == CodexExecutableTrustPolicy::RequireTrusted {
+        "trusted "
+    } else {
+        ""
+    };
+    bail!("`codex` was not found on the {qualifier}absolute PATH")
 }
 
 fn resolve_codex_command(
     source_executable: PathBuf,
     path: &OsStr,
     cwd: &Path,
+    policy: CodexExecutableTrustPolicy,
 ) -> Result<Option<TrustedCommand>> {
-    if validate_native_executable(&source_executable).is_ok() {
+    if validate_native_executable_with_policy(&source_executable, policy).is_ok() {
         return Ok(Some(TrustedCommand {
             program: source_executable.clone(),
             prefix_args: Vec::new(),
             source_executable,
+            trust_warning: None,
         }));
     }
     #[cfg(windows)]
@@ -178,10 +269,11 @@ fn resolve_codex_command(
         {
             bail!("Windows Codex launcher must be a native executable or an npm .cmd shim")
         }
-        let shim = read_validated_bytes(
+        let shim = read_codex_launcher_bytes(
             &source_executable,
             MAX_WINDOWS_CODEX_SHIM_BYTES,
             "Windows Codex npm shim",
+            policy,
         )?;
         let shim = std::str::from_utf8(&shim).context("Windows Codex npm shim is not UTF-8")?;
         let relative_target = parse_windows_npm_codex_cmd_shim(shim)?;
@@ -189,21 +281,22 @@ fn resolve_codex_command(
             .parent()
             .context("Windows Codex npm shim has no parent directory")?
             .join(relative_target);
-        let target = validate_absolute(&target, cwd)
+        let target = validate_absolute_with_policy(&target, cwd, policy)
             .context("Windows Codex npm target failed executable trust validation")?;
         if !has_codex_package_script_suffix(&target) {
             bail!("Windows Codex npm target is outside @openai/codex/bin/codex.js")
         }
-        let node = resolve_native_from_path("node", path, cwd)?;
+        let node = resolve_native_from_path_with_policy("node", path, cwd, policy)?;
         Ok(Some(TrustedCommand {
             program: node,
-            prefix_args: vec![target.as_os_str().to_os_string()],
+            prefix_args: vec![windows_process_argument_path(&target)?],
             source_executable,
+            trust_warning: None,
         }))
     }
     #[cfg(unix)]
     {
-        let first_line = read_validated_first_line(&source_executable)?;
+        let first_line = read_codex_launcher_first_line(&source_executable, policy)?;
         if first_line.len() > 128
             || first_line
                 .iter()
@@ -215,14 +308,16 @@ fn resolve_codex_command(
             .context("Codex launcher shebang is not UTF-8")?
             .trim_end_matches('\r');
         let node = match shebang {
-            "#!/usr/bin/env node" => resolve_native_from_path("node", path, cwd)?,
+            "#!/usr/bin/env node" => {
+                resolve_native_from_path_with_policy("node", path, cwd, policy)?
+            }
             value if value.starts_with("#!") && !value[2..].contains(char::is_whitespace) => {
                 let interpreter = Path::new(&value[2..]);
                 if !interpreter.is_absolute() {
                     bail!("Codex launcher interpreter must be absolute")
                 }
-                let interpreter = validate_absolute(interpreter, cwd)?;
-                validate_native_executable(&interpreter)?;
+                let interpreter = validate_absolute_with_policy(interpreter, cwd, policy)?;
+                validate_native_executable_with_policy(&interpreter, policy)?;
                 let name = interpreter
                     .file_name()
                     .and_then(OsStr::to_str)
@@ -238,8 +333,46 @@ fn resolve_codex_command(
             program: node,
             prefix_args: vec![source_executable.as_os_str().to_os_string()],
             source_executable,
+            trust_warning: None,
         }))
     }
+}
+
+#[cfg(windows)]
+fn windows_process_argument_path(path: &Path) -> Result<OsString> {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+    const EXTENDED_PREFIX: [u16; 4] = [b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16];
+    const EXTENDED_UNC_PREFIX: [u16; 8] = [
+        b'\\' as u16,
+        b'\\' as u16,
+        b'?' as u16,
+        b'\\' as u16,
+        b'U' as u16,
+        b'N' as u16,
+        b'C' as u16,
+        b'\\' as u16,
+    ];
+
+    let encoded = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    if let Some(suffix) = encoded.strip_prefix(&EXTENDED_UNC_PREFIX) {
+        let mut normalized = vec![b'\\' as u16, b'\\' as u16];
+        normalized.extend_from_slice(suffix);
+        return Ok(OsString::from_wide(&normalized));
+    }
+    if let Some(suffix) = encoded.strip_prefix(&EXTENDED_PREFIX) {
+        let drive = suffix.first().copied().unwrap_or_default();
+        if suffix.len() < 3
+            || !((b'A' as u16..=b'Z' as u16).contains(&drive)
+                || (b'a' as u16..=b'z' as u16).contains(&drive))
+            || suffix[1] != b':' as u16
+            || suffix[2] != b'\\' as u16
+        {
+            bail!("Windows Codex npm target uses an unsupported extended path form")
+        }
+        return Ok(OsString::from_wide(suffix));
+    }
+    Ok(path.as_os_str().to_os_string())
 }
 
 #[cfg(unix)]
@@ -407,6 +540,44 @@ fn read_validated_bytes(path: &Path, maximum: usize, label: &str) -> Result<Vec<
     Ok(bytes)
 }
 
+#[cfg(windows)]
+fn read_untrusted_bytes(path: &Path, maximum: usize, label: &str) -> Result<Vec<u8>> {
+    let mut file = fs::File::open(path)
+        .with_context(|| format!("failed to open {label} `{}`", path.display()))?;
+    if !file
+        .metadata()
+        .with_context(|| format!("failed to inspect {label} `{}`", path.display()))?
+        .is_file()
+    {
+        bail!("{label} is not a regular file")
+    }
+    let read_limit = maximum
+        .checked_add(1)
+        .context("file read limit overflowed")?;
+    let mut bytes = Vec::with_capacity(read_limit);
+    file.by_ref()
+        .take(read_limit as u64)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("failed to read {label} from `{}`", path.display()))?;
+    if bytes.len() > maximum {
+        bail!("{label} exceeds the {maximum}-byte security limit")
+    }
+    Ok(bytes)
+}
+
+#[cfg(windows)]
+fn read_codex_launcher_bytes(
+    path: &Path,
+    maximum: usize,
+    label: &str,
+    policy: CodexExecutableTrustPolicy,
+) -> Result<Vec<u8>> {
+    match policy {
+        CodexExecutableTrustPolicy::AllowUntrusted => read_untrusted_bytes(path, maximum, label),
+        CodexExecutableTrustPolicy::RequireTrusted => read_validated_bytes(path, maximum, label),
+    }
+}
+
 #[cfg(unix)]
 fn read_validated_first_line(path: &Path) -> Result<Vec<u8>> {
     let (file, identity) = open_validated_file(path)?;
@@ -428,6 +599,46 @@ fn read_validated_first_line(path: &Path) -> Result<Vec<u8>> {
     line.pop();
     finish_validated_file_read(path, &file, identity)?;
     Ok(line)
+}
+
+#[cfg(unix)]
+fn read_untrusted_first_line(path: &Path) -> Result<Vec<u8>> {
+    let file = fs::File::open(path)
+        .with_context(|| format!("failed to open Codex launcher `{}`", path.display()))?;
+    if !file
+        .metadata()
+        .context("failed to inspect Codex launcher")?
+        .is_file()
+    {
+        bail!("Codex launcher is not a regular file")
+    }
+    let read_limit = MAX_CODEX_SHEBANG_BYTES
+        .checked_add(1)
+        .context("Codex shebang read limit overflowed")?;
+    let mut reader = BufReader::new(file.take(read_limit as u64));
+    let mut line = Vec::with_capacity(128);
+    let read = reader
+        .read_until(b'\n', &mut line)
+        .with_context(|| format!("failed to read Codex launcher `{}`", path.display()))?;
+    if read == 0 || !line.ends_with(b"\n") {
+        bail!("Codex launcher first line is missing a bounded newline")
+    }
+    if line.len() > MAX_CODEX_SHEBANG_BYTES {
+        bail!("Codex launcher first line exceeds the security limit")
+    }
+    line.pop();
+    Ok(line)
+}
+
+#[cfg(unix)]
+fn read_codex_launcher_first_line(
+    path: &Path,
+    policy: CodexExecutableTrustPolicy,
+) -> Result<Vec<u8>> {
+    match policy {
+        CodexExecutableTrustPolicy::AllowUntrusted => read_untrusted_first_line(path),
+        CodexExecutableTrustPolicy::RequireTrusted => read_validated_first_line(path),
+    }
 }
 
 #[cfg(any(windows, test))]
@@ -536,32 +747,60 @@ fn has_codex_package_script_suffix(target: &Path) -> bool {
             .all(|(actual, expected)| actual.eq_ignore_ascii_case(expected))
 }
 
+fn validate_native_executable_format(file: &mut fs::File, file_length: u64) -> Result<()> {
+    let prefix_length = file_length.min(64);
+    let bytes = read_file_range(
+        file,
+        0,
+        prefix_length,
+        file_length,
+        "native executable header",
+    )?;
+    #[cfg(windows)]
+    validate_pe_executable(file, &bytes, file_length)?;
+    #[cfg(target_os = "macos")]
+    validate_macho_executable(file, &bytes, file_length)?;
+    #[cfg(all(unix, not(target_os = "macos")))]
+    validate_elf_executable(file, &bytes, file_length)?;
+    #[cfg(not(any(unix, windows)))]
+    bail!("native executable validation is unsupported on this platform");
+    Ok(())
+}
+
 pub(crate) fn validate_native_executable(path: &Path) -> Result<()> {
-    inspect_validated_file(path, |file, file_length| {
-        let prefix_length = file_length.min(64);
-        let bytes = read_file_range(
-            file,
-            0,
-            prefix_length,
-            file_length,
-            "native executable header",
-        )?;
-        #[cfg(windows)]
-        validate_pe_executable(file, &bytes, file_length)?;
-        #[cfg(target_os = "macos")]
-        validate_macho_executable(file, &bytes, file_length)?;
-        #[cfg(all(unix, not(target_os = "macos")))]
-        validate_elf_executable(file, &bytes, file_length)?;
-        #[cfg(not(any(unix, windows)))]
-        bail!("native executable validation is unsupported on this platform");
-        Ok(())
-    })
-    .with_context(|| {
+    inspect_validated_file(path, validate_native_executable_format).with_context(|| {
         format!(
             "security-sensitive executable failed native format validation: {}",
             path.display()
         )
     })
+}
+
+fn validate_untrusted_native_executable(path: &Path) -> Result<()> {
+    let mut file = fs::File::open(path)
+        .with_context(|| format!("failed to open native executable `{}`", path.display()))?;
+    let metadata = file
+        .metadata()
+        .context("failed to inspect native executable")?;
+    if !metadata.is_file() {
+        bail!("native executable is not a regular file")
+    }
+    validate_native_executable_format(&mut file, metadata.len()).with_context(|| {
+        format!(
+            "executable failed native format validation: {}",
+            path.display()
+        )
+    })
+}
+
+fn validate_native_executable_with_policy(
+    path: &Path,
+    policy: CodexExecutableTrustPolicy,
+) -> Result<()> {
+    match policy {
+        CodexExecutableTrustPolicy::AllowUntrusted => validate_untrusted_native_executable(path),
+        CodexExecutableTrustPolicy::RequireTrusted => validate_native_executable(path),
+    }
 }
 
 fn checked_bytes<'a>(
@@ -1171,6 +1410,20 @@ pub(crate) fn copy_native_executable_fixture(path: &Path) -> Result<()> {
 }
 
 pub(crate) fn resolve_from_path(program: &str, path: &OsStr, cwd: &Path) -> Result<PathBuf> {
+    resolve_from_path_with_policy(
+        program,
+        path,
+        cwd,
+        CodexExecutableTrustPolicy::RequireTrusted,
+    )
+}
+
+fn resolve_from_path_with_policy(
+    program: &str,
+    path: &OsStr,
+    cwd: &Path,
+    policy: CodexExecutableTrustPolicy,
+) -> Result<PathBuf> {
     if program.is_empty()
         || Path::new(program).components().count() != 1
         || program.contains(['/', '\\'])
@@ -1193,12 +1446,13 @@ pub(crate) fn resolve_from_path(program: &str, path: &OsStr, cwd: &Path) -> Resu
             let candidate = directory.join(name);
             match fs::symlink_metadata(&candidate) {
                 Ok(_) => {
-                    return validate_candidate(&candidate, &untrusted_roots).with_context(|| {
-                        format!(
-                            "PATH selected an unsafe `{program}` executable at `{}`",
-                            candidate.display()
-                        )
-                    });
+                    return validate_candidate_with_policy(&candidate, &untrusted_roots, policy)
+                        .with_context(|| {
+                            format!(
+                                "PATH selected an unsafe `{program}` executable at `{}`",
+                                candidate.display()
+                            )
+                        });
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(error) => {
@@ -1209,7 +1463,12 @@ pub(crate) fn resolve_from_path(program: &str, path: &OsStr, cwd: &Path) -> Resu
             }
         }
     }
-    bail!("`{program}` was not found on the trusted absolute PATH")
+    let qualifier = if policy == CodexExecutableTrustPolicy::RequireTrusted {
+        "trusted "
+    } else {
+        ""
+    };
+    bail!("`{program}` was not found on the {qualifier}absolute PATH")
 }
 
 pub(crate) fn sanitized_path(path: &OsStr, cwd: &Path) -> Result<OsString> {
@@ -1237,10 +1496,18 @@ pub(crate) fn sanitized_path(path: &OsStr, cwd: &Path) -> Result<OsString> {
 }
 
 pub(crate) fn validate_absolute(path: &Path, cwd: &Path) -> Result<PathBuf> {
+    validate_absolute_with_policy(path, cwd, CodexExecutableTrustPolicy::RequireTrusted)
+}
+
+fn validate_absolute_with_policy(
+    path: &Path,
+    cwd: &Path,
+    policy: CodexExecutableTrustPolicy,
+) -> Result<PathBuf> {
     if !path.is_absolute() {
         bail!("pinned executable path must be absolute")
     }
-    validate_candidate(path, &untrusted_roots(cwd))
+    validate_candidate_with_policy(path, &untrusted_roots(cwd), policy)
 }
 
 pub(crate) fn configure_credential_command_environment(
@@ -1392,6 +1659,24 @@ fn validate_candidate(candidate: &Path, untrusted_roots: &[PathBuf]) -> Result<P
             .context("trusted executable has no parent directory")?,
     )?;
     validate_file(&canonical)?;
+    Ok(canonical)
+}
+
+fn validate_candidate_with_policy(
+    candidate: &Path,
+    untrusted_roots: &[PathBuf],
+    policy: CodexExecutableTrustPolicy,
+) -> Result<PathBuf> {
+    if policy == CodexExecutableTrustPolicy::RequireTrusted {
+        return validate_candidate(candidate, untrusted_roots);
+    }
+    let canonical = fs::canonicalize(candidate)
+        .with_context(|| format!("failed to canonicalize `{}`", candidate.display()))?;
+    let metadata = fs::metadata(&canonical)
+        .with_context(|| format!("failed to inspect executable `{}`", canonical.display()))?;
+    if !metadata.is_file() {
+        bail!("pinned executable target is not a regular file")
+    }
     Ok(canonical)
 }
 
@@ -1670,6 +1955,65 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn codex_executable_trust_policy_defaults_to_permissive_and_accepts_exact_strict_opt_in() {
+        assert_eq!(
+            super::resolve_codex_executable_trust_policy(None)
+                .expect("missing policy should use the default"),
+            super::CodexExecutableTrustPolicy::AllowUntrusted
+        );
+        assert_eq!(
+            super::resolve_codex_executable_trust_policy(Some("0"))
+                .expect("zero should retain the permissive default"),
+            super::CodexExecutableTrustPolicy::AllowUntrusted
+        );
+        assert_eq!(
+            super::resolve_codex_executable_trust_policy(Some("1"))
+                .expect("one should require trusted executables"),
+            super::CodexExecutableTrustPolicy::RequireTrusted
+        );
+        assert!(super::resolve_codex_executable_trust_policy(Some("true")).is_err());
+        assert_eq!(
+            super::REQUIRE_TRUSTED_CODEX_EXECUTABLE_ENV_VAR,
+            "AKRA_REQUIRE_TRUSTED_CODEX_EXECUTABLE"
+        );
+    }
+
+    #[test]
+    fn permissive_codex_resolution_pins_repository_binary_and_reports_trust_warning() {
+        let root = fixture_root("permissive-codex-resolution");
+        let workspace = root.join("workspace");
+        let bin = workspace.join("bin");
+        fs::create_dir_all(&bin).expect("repository bin should be created");
+        let codex = bin.join(if cfg!(windows) { "codex.exe" } else { "codex" });
+        copy_native_executable_fixture(&codex).expect("native Codex fixture should copy");
+
+        let command = super::resolve_codex_command_from_path_with_policy(
+            bin.as_os_str(),
+            &workspace,
+            super::CodexExecutableTrustPolicy::AllowUntrusted,
+        )
+        .expect("permissive policy should pin a repository-controlled Codex binary");
+
+        assert_eq!(
+            command.program,
+            fs::canonicalize(&codex).expect("Codex fixture should canonicalize")
+        );
+        assert_eq!(command.source_executable, command.program);
+        assert!(command.prefix_args.is_empty());
+        assert!(command.trust_warning.is_some());
+        assert!(
+            super::resolve_codex_command_from_path_with_policy(
+                bin.as_os_str(),
+                &workspace,
+                super::CodexExecutableTrustPolicy::RequireTrusted,
+            )
+            .is_err()
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
     #[cfg(unix)]
     #[test]
     fn native_unix_mode_policy_limits_group_writes_to_privileged_macos_directories() {
@@ -1810,6 +2154,27 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn windows_process_argument_path_normalizes_only_drive_and_unc_extended_forms() {
+        assert_eq!(
+            super::windows_process_argument_path(Path::new(r"\\?\C:\tools\codex.js"))
+                .expect("extended drive path should normalize"),
+            std::ffi::OsString::from(r"C:\tools\codex.js")
+        );
+        assert_eq!(
+            super::windows_process_argument_path(Path::new(r"\\?\UNC\server\share\codex.js"))
+                .expect("extended UNC path should normalize"),
+            std::ffi::OsString::from(r"\\server\share\codex.js")
+        );
+        assert!(
+            super::windows_process_argument_path(Path::new(
+                r"\\?\Volume{00000000-0000-0000-0000-000000000000}\codex.js"
+            ))
+            .is_err()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn native_windows_codex_shim_pins_node_and_package_script() {
         let root = fixture_root("native-windows-codex-shim");
         let workspace = root.join("workspace");
@@ -1848,14 +2213,8 @@ mod tests {
             plan.source_executable,
             fs::canonicalize(shim).expect("Codex shim should canonicalize")
         );
-        assert_eq!(
-            plan.prefix_args,
-            vec![
-                fs::canonicalize(target)
-                    .expect("Codex package target should canonicalize")
-                    .into_os_string()
-            ]
-        );
+        assert_eq!(plan.prefix_args, vec![target.into_os_string()]);
+        assert!(!plan.prefix_args[0].to_string_lossy().starts_with(r"\\?\"));
         let _ = fs::remove_dir_all(root);
     }
 

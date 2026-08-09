@@ -79,6 +79,7 @@ impl StartupService {
                 path: workspace_directory.to_string(),
                 detail: format!("git repo: {workspace_directory}"),
             },
+            warnings: Vec::new(),
         });
         self
     }
@@ -105,7 +106,8 @@ impl StartupService {
         let maintenance_warning = self.maintain_prompt_logs_best_effort(workspace_directory);
         let local = load_local_prerequisites()?;
         let startup_context = self.startup_probe_port.load_startup_context()?;
-        let mut warnings = startup_context.warnings;
+        let mut warnings = local.warnings;
+        warnings.extend(startup_context.warnings);
         if let Some(warning) = maintenance_warning {
             warnings.push(warning.operator_message().to_string());
         }
@@ -305,6 +307,27 @@ mod tests {
     }
 
     #[test]
+    fn local_executable_trust_warning_is_preserved_in_startup_diagnostics() {
+        let service = StartupService::new(Arc::new(UnusedStartupProbePort));
+        let diagnostics = service
+            .run_checks_with_local_prerequisites("/tmp/workspace-a", || {
+                Ok(LocalStartupPrerequisites {
+                    current_directory: "/tmp/workspace-a".to_string(),
+                    codex_binary_detail: "/usr/bin/codex".to_string(),
+                    workspace_status: StartupWorkspaceStatus {
+                        ok: true,
+                        path: "/tmp/workspace-a".to_string(),
+                        detail: "git repo: /tmp/workspace-a".to_string(),
+                    },
+                    warnings: vec!["local-trust-warning".to_string()],
+                })
+            })
+            .expect("a local trust warning must not block startup");
+
+        assert_eq!(diagnostics.warnings, ["local-trust-warning"]);
+    }
+
+    #[test]
     fn prompt_log_maintenance_uses_the_requested_workspace_and_typed_mode() {
         let maintenance = Arc::new(RecordingPromptLogMaintenancePort::succeeding());
         let service = StartupService::new(Arc::new(UnusedStartupProbePort))
@@ -380,6 +403,7 @@ mod tests {
                         path: "/tmp/workspace-a".to_string(),
                         detail: "git repo: /tmp/workspace-a".to_string(),
                     },
+                    warnings: Vec::new(),
                 })
             })
             .expect("ordered startup checks should succeed");

@@ -121,6 +121,14 @@ marked untrusted in app-server configuration so repository-local configuration c
 replace Akra's process contract. Diagnostics always show the active profile, but the intentional
 default is informational rather than a permanent degraded warning.
 
+Codex discovery still pins an absolute launcher, native interpreter, and canonical package script
+before spawn. Ownership, ACL, or repository-boundary trust failures are non-blocking by default and
+remain visible as startup warnings; launcher shape, native format, absolute-path, and package-target
+validation still apply. A principal with mutation rights can still replace a permissively accepted
+path before spawn. Set `AKRA_REQUIRE_TRUSTED_CODEX_EXECUTABLE=1` to restore the strict fail-closed
+trust boundary and block that exposure. An absent value or exact `0` keeps the permissive default,
+while any other value rejects startup as invalid configuration.
+
 Deployments can opt down with `CODEX_EXEC_LOOP_APP_SERVER_APPROVAL_POLICY`,
 `CODEX_EXEC_LOOP_APP_SERVER_APPROVALS_REVIEWER`, and
 `CODEX_EXEC_LOOP_APP_SERVER_SANDBOX_MODE`. When approvals are enabled, only the interactive main

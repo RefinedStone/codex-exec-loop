@@ -16,12 +16,13 @@ pub(super) fn load_local_startup_prerequisites(
         .display()
         .to_string();
     let codex_command = crate::trusted_executable::pinned_codex_command()
-        .context("failed to pin a trusted `codex` executable at startup")?;
+        .context("failed to pin a `codex` executable at startup")?;
 
     Ok(LocalStartupPrerequisites {
         current_directory,
         codex_binary_detail: codex_command.source_executable.display().to_string(),
         workspace_status: detect_workspace_status_for(Path::new(workspace_directory))?,
+        warnings: codex_command.trust_warning.into_iter().collect(),
     })
 }
 

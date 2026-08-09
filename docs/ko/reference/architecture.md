@@ -180,11 +180,12 @@ application/planning handle을 보관하거나 planning workspace/runtime use ca
 
 Native TUI의 prompt-log privacy maintenance도 이 effect 경로가 소유합니다. Production composition은
 typed maintenance port를 `StartupService`에 주입하지만 app을 build하는 동안 SQLite purge/clear를
-실행하지 않습니다. 같은 startup outbound 계약이 현재 directory, 신뢰된 Codex executable, Git
-workspace projection을 제공하며, `StartupService`는 process/filesystem/environment/Git 실행 helper를
-import하지 않고 정규화된 값만 조합합니다. Startup command는 단조 증가 generation과 요청된 정확한 workspace를 캡처하고,
-기존 Core startup worker가 같은 workspace에서 maintenance를 먼저 실행한 뒤 startup check를
-순서대로 실행합니다. Capture가 켜져 있으면 retention purge, 꺼져 있으면 전체 clear를 선택합니다.
+실행하지 않습니다. 같은 startup outbound 계약이 현재 directory, 고정된 Codex executable, 선택적
+trust warning, Git workspace projection을 제공하며, `StartupService`는
+process/filesystem/environment/Git 실행 helper를 import하지 않고 정규화된 값만 조합합니다.
+Startup command는 단조 증가 generation과 요청된 정확한 workspace를 캡처하고, 기존 Core startup
+worker가 같은 workspace에서 maintenance를 먼저 실행한 뒤 startup check를 순서대로 실행합니다.
+Capture가 켜져 있으면 retention purge, 꺼져 있으면 전체 clear를 선택합니다.
 Maintenance error 또는 panic은 원문을 포함하지 않는 고정된 non-fatal startup warning이 됩니다.
 Startup provider panic은 같은 correlation을 가진 redacted failure completion 하나로 돌아옵니다.
 민감한 Core worker 범위는 process 전체에 한 번 설치되는 delegating panic hook을 공유합니다.
@@ -469,7 +470,8 @@ drift는 해당 mutation 전에 차단합니다.
 
 Host 소유 Git 작업은 다음을 지킵니다.
 
-- 신뢰하는 native executable을 고정하고 상속된 Git 실행/route 제어를 제거합니다.
+- native executable의 absolute path를 고정하고 Git helper에는 trust를 요구하며, strict opt-in이
+  없으면 Codex trust 실패를 startup warning으로 남긴 뒤 상속된 Git 실행/route 제어를 제거합니다.
 - hook, fsmonitor, signing, replacement object, lazy fetch, prompt, external diff를 끕니다.
 - mutation 전에 effective repository/worktree config key 이름을 검사합니다.
 - 실행 가능한 filter/driver, unsafe worktree redirect, alternate ref, external tool, 특수 경로,
