@@ -28,17 +28,9 @@ pub(super) fn build_fullscreen_flow_layout(
         MAX_FOCUSED_VIEW_TAIL_HEIGHT
     };
     let _ = tail_lines;
-    // The explicit operations board is a focused inspection surface. It owns
-    // the full main buffer and exposes direct keys instead of a hidden composer.
-    // Passive parallel mode still uses ShellOverlay::Hidden and keeps the normal
-    // composer beneath its live board.
-    let tail_height = if projection.shell_overlay == ShellOverlay::Supersession {
-        0
-    } else {
-        projection
-            .tail_view
-            .rendered_height(area.width, tail_max_height)
-    };
+    let tail_height = projection
+        .tail_view
+        .rendered_height(area.width, tail_max_height);
     let inspection_constraint = if projection.shell_overlay == ShellOverlay::Hidden {
         // The prompt tail owns short viewports; transcript receives every remaining row.
         Constraint::Min(0)
@@ -295,6 +287,8 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
+    use crate::adapter::inbound::tui::app::test_helpers::test_native_tui_app;
+
     use super::*;
 
     #[test]
@@ -331,5 +325,19 @@ mod tests {
             .expect("suffix should render");
 
         terminal.backend().assert_buffer_lines(["bravo", "charl"]);
+    }
+
+    #[test]
+    fn focused_parallel_operations_reserves_the_task_composer_tail() {
+        let mut app = test_native_tui_app();
+        app.show_supersession_overlay();
+        let projection = FullscreenConversationFrameProjection::from_app(&app, 120);
+        let layout =
+            build_fullscreen_flow_layout(&projection, Rect::new(0, 0, 120, 32), &Vec::new());
+
+        assert!(
+            layout[1].height > 0,
+            "focused parallel operations should retain the task composer tail"
+        );
     }
 }

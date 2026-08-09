@@ -611,13 +611,17 @@ and drawing consume that immutable projection instead of reacquiring the control
 mutex or sampling another clock. High-frequency prompt, pulse, and scheduler checks share a
 panel-only projection and do not clone transcript or event-stream rows.
 
-Focused Supersession is a fullscreen inspection inside the same alternate-screen transaction. It
-hides and locks the composer, preserves its draft, and renders one responsive Parallel Operations
-view. Hidden Supersession while parallel mode remains enabled is passive and leaves the composer
-available. Lane selection stores stable slot/session identities and resolves them against each new
-snapshot, so refresh reorder cannot silently move focus to another worker. The selected lane
-separates typed commit, validation, PR, review, integration, remote-verification, and cleanup gates;
-absence of an owned fact remains `unknown`.
+Focused Supersession and the task composer share one alternate-screen transaction. While the
+supervisor projection is loading, the board hides and locks the composer and preserves its draft.
+After loading, layout planning reserves a composer tail and prompt focus becomes active even when
+the board is displaying a readiness blocker. Explicit board controls are consumed first; with an
+empty composer, board navigation and lane inspection also retain ownership. Every unhandled key,
+and all navigation or `Enter` once task text exists, continues through the ordinary composer
+pipeline. Hidden Supersession while parallel mode remains enabled is passive and leaves the
+composer available. Lane selection stores stable slot/session identities and resolves them against
+each new snapshot, so refresh reorder cannot silently move focus to another worker. The selected
+lane separates typed commit, validation, PR, review, integration, remote-verification, and cleanup
+gates; absence of an owned fact remains `unknown`.
 
 Before `Terminal::draw`, the transaction combines the conversation projection and exactly one
 active overlay into an owned `FullscreenShellFrameModel`. Its `FullscreenInspectionFrameModel` variant owns

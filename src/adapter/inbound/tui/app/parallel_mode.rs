@@ -470,12 +470,22 @@ impl NativeTuiApp {
 }
 
 impl NativeTuiApp {
+    fn focused_parallel_composer_has_input(&self) -> bool {
+        let super::ConversationState::Ready(conversation) =
+            &self.conversation.lifecycle.conversation_state
+        else {
+            return false;
+        };
+        !conversation.composer.input_buffer.is_empty()
+    }
+
     pub(super) fn handle_supersession_overlay_key(&mut self, key: event::KeyEvent) -> bool {
         // Return false outside the overlay so the normal shell keymap can handle
         // the event. Supersession shortcuts are scoped to the control tower.
         if self.shell.chrome.shell_overlay != ShellOverlay::Supersession {
             return false;
         }
+        let composer_has_input = self.focused_parallel_composer_has_input();
         match key.code {
             KeyCode::Char('r') if key.modifiers == KeyModifiers::CONTROL => {
                 // Ctrl+R is the operator's explicit "re-read the world" command:
@@ -493,51 +503,244 @@ impl NativeTuiApp {
                 // command path as `:parallel off` so status copy stays identical.
                 self.handle_parallel_shell_command(Some("off"));
             }
-            KeyCode::Tab if key.modifiers.is_empty() => {
+            KeyCode::Tab if key.modifiers.is_empty() && !composer_has_input => {
                 self.shell.supersession_mud_ui_state.focus_next_zone();
                 let snapshot = self.parallel_mode_supervisor_snapshot();
                 self.shell
                     .supersession_mud_ui_state
                     .clamp_to_snapshot(&snapshot);
             }
-            KeyCode::BackTab => {
+            KeyCode::BackTab if !composer_has_input => {
                 self.shell.supersession_mud_ui_state.focus_previous_zone();
                 let snapshot = self.parallel_mode_supervisor_snapshot();
                 self.shell
                     .supersession_mud_ui_state
                     .clamp_to_snapshot(&snapshot);
             }
-            KeyCode::Left | KeyCode::Up if key.modifiers.is_empty() => {
+            KeyCode::Left | KeyCode::Up if key.modifiers.is_empty() && !composer_has_input => {
                 let snapshot = self.parallel_mode_supervisor_snapshot();
                 self.shell
                     .supersession_mud_ui_state
                     .move_selection(&snapshot, -1);
             }
-            KeyCode::Right | KeyCode::Down if key.modifiers.is_empty() => {
+            KeyCode::Right | KeyCode::Down if key.modifiers.is_empty() && !composer_has_input => {
                 let snapshot = self.parallel_mode_supervisor_snapshot();
                 self.shell
                     .supersession_mud_ui_state
                     .move_selection(&snapshot, 1);
             }
-            KeyCode::Enter if key.modifiers.is_empty() => {
+            KeyCode::Enter if key.modifiers.is_empty() && !composer_has_input => {
                 let snapshot = self.parallel_mode_supervisor_snapshot();
                 self.shell
                     .supersession_mud_ui_state
                     .inspect_focused(&snapshot);
-            }
-            KeyCode::Char(' ') if key.modifiers.is_empty() => {
-                let snapshot = self.parallel_mode_supervisor_snapshot();
-                self.shell
-                    .supersession_mud_ui_state
-                    .inspect_focused(&snapshot);
-            }
-            KeyCode::Char('v') if key.modifiers.is_empty() => {
-                self.open_parallel_peek_overlay(None);
             }
             _ => return false,
         }
 
         true
+    }
+}
+
+#[cfg(test)]
+mod prompt_activation_tests {
+    use super::*;
+    use crate::adapter::inbound::tui::app::{
+        ConversationState, StartupState, shell_runtime::ShellRuntime,
+        test_helpers::test_native_tui_app,
+    };
+    use crate::application::service::manual_prompt_preparation::ManualPromptPreparationResult;
+    use crate::application::service::planning::{
+        ManualPromptIntakeOutcome, ManualPromptMainSessionHandoff, PlanningRuntimeProjection,
+        PlanningTaskHandoff,
+    };
+    use crate::core::app::StartupReadySnapshot;
+    use crate::domain::parallel_mode::{
+        ParallelModeAgentRosterSnapshot, ParallelModeDistributorSnapshot,
+        ParallelModePoolBoardSnapshot, ParallelModeReadinessState,
+        ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorState,
+    };
+    use crate::domain::startup_diagnostics::StartupDiagnostics;
+    use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
+    use crossterm::event::{Event, KeyEvent};
+
+    fn ready_supervisor_snapshot(workspace: &str) -> ParallelModeSupervisorSnapshot {
+        ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Supervise,
+            workspace,
+            ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "ready", Vec::new()),
+            ParallelModeAgentRosterSnapshot::new(Vec::new(), "idle"),
+            ParallelModeSupervisorDetailSnapshot::new(None, "idle"),
+            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "idle"),
+            None,
+        )
+    }
+
+    fn startup_ready_snapshot(workspace: &str) -> Box<StartupReadySnapshot> {
+        Box::new(StartupReadySnapshot::from_diagnostics(StartupDiagnostics {
+            cwd: workspace.to_string(),
+            codex_binary_ok: true,
+            codex_binary_detail: "ok".to_string(),
+            workspace_ok: true,
+            workspace_path: workspace.to_string(),
+            workspace_detail: "ok".to_string(),
+            attachment_profile: TerminalBridgeAttachmentProfile::codex_app_server(),
+            initialize_ok: true,
+            initialize_detail: "ok".to_string(),
+            account_ok: true,
+            account_detail: "ok".to_string(),
+            warnings: Vec::new(),
+            schema_snapshot: "schema".to_string(),
+        }))
+    }
+
+    #[test]
+    fn ready_parallel_control_tower_keeps_task_composer_active() {
+        let mut app = test_native_tui_app();
+        let workspace = app.planning_workspace_directory();
+        app.shell.chrome.startup_state = StartupState::Ready(startup_ready_snapshot(&workspace));
+        app.set_parallel_mode_enabled_for_test(true);
+        app.sync_core_parallel_mode_readiness_projection(Some(ParallelModeReadinessSnapshot::new(
+            &workspace,
+            ParallelModeReadinessState::Ready,
+            Vec::new(),
+            None,
+        )));
+        app.sync_core_parallel_mode_supervisor_projection(Some(ready_supervisor_snapshot(
+            &workspace,
+        )));
+        app.inspect_parallel_mode_shell();
+        let mut runtime = ShellRuntime::new(app);
+
+        assert!(
+            runtime
+                .app_mut()
+                .handle_shell_overlay_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            "an empty task composer should preserve focused lane inspection"
+        );
+
+        for character in "verify 작업".chars() {
+            runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+                KeyCode::Char(character),
+                KeyModifiers::NONE,
+            )));
+        }
+
+        assert_eq!(
+            runtime.app().shell.chrome.shell_overlay,
+            ShellOverlay::Supersession,
+            "typing a task should keep the focused operations board visible"
+        );
+        let ConversationState::Ready(conversation) =
+            &runtime.app().conversation.lifecycle.conversation_state
+        else {
+            panic!("task input should preserve the ready conversation");
+        };
+        assert_eq!(
+            conversation.composer.input_buffer, "verify 작업",
+            "focused parallel operations should route task text into the composer"
+        );
+
+        runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+
+        let ConversationState::Ready(conversation) =
+            &runtime.app().conversation.lifecycle.conversation_state
+        else {
+            panic!("parallel task submission should preserve the ready conversation");
+        };
+        assert_eq!(conversation.composer.input_buffer, "verify 작업");
+        assert_eq!(
+            conversation.status_text,
+            "parallel task intake: preparing operator prompt"
+        );
+        let correlation = runtime
+            .app()
+            .conversation
+            .pending_manual_prompt_preparation
+            .as_ref()
+            .expect("Enter should admit task-intake preparation")
+            .correlation
+            .clone();
+
+        runtime.app_mut().apply_manual_prompt_preparation(
+            ManualPromptPreparationResult::PromptReady {
+                correlation,
+                transcript_text: "verify 작업".to_string(),
+                runtime_projection: Box::new(PlanningRuntimeProjection::ready_with_details(
+                    "Planning Context".to_string(),
+                    "queue idle".to_string(),
+                    None,
+                    None,
+                )),
+                intake: Box::new(ManualPromptIntakeOutcome::TaskCommitted {
+                    committed_task_id: "task-1".to_string(),
+                    committed_planning_revision: 1,
+                    handoff: ManualPromptMainSessionHandoff {
+                        prompt: "wrapped task prompt".to_string(),
+                        transcript_text: "verify 작업".to_string(),
+                        task: Some(PlanningTaskHandoff {
+                            task_id: "task-1".to_string(),
+                            task_title: "verify 작업".to_string(),
+                            direction_id: "general-workstream".to_string(),
+                            combined_priority: 10,
+                            updated_at: "2026-08-09T00:00:00Z".to_string(),
+                            status_label: "Ready".to_string(),
+                        }),
+                    },
+                }),
+            },
+        );
+
+        let ConversationState::Ready(conversation) =
+            &runtime.app().conversation.lifecycle.conversation_state
+        else {
+            panic!("parallel task intake should preserve the ready conversation");
+        };
+        assert!(
+            conversation.composer.input_buffer.is_empty(),
+            "focused parallel operations should submit and clear the task composer"
+        );
+        assert_eq!(
+            conversation.status_text,
+            "parallel task intake: committed task-1 / dispatch requested"
+        );
+    }
+
+    #[test]
+    fn loading_parallel_control_tower_preserves_the_hidden_task_draft() {
+        let mut app = test_native_tui_app();
+        app.set_parallel_mode_enabled_for_test(true);
+        let ConversationState::Ready(conversation) =
+            &mut app.conversation.lifecycle.conversation_state
+        else {
+            panic!("test app should contain a ready conversation");
+        };
+        conversation.composer.input_buffer = "draft".to_string();
+        app.show_supersession_overlay();
+        assert!(app.parallel_mode_prompt_input_locked());
+        let mut runtime = ShellRuntime::new(app);
+
+        for key in [
+            KeyCode::Char('x'),
+            KeyCode::Char(' '),
+            KeyCode::Char('v'),
+            KeyCode::Enter,
+        ] {
+            runtime.handle_terminal_event(Event::Key(KeyEvent::new(key, KeyModifiers::NONE)));
+        }
+
+        let ConversationState::Ready(conversation) =
+            &runtime.app().conversation.lifecycle.conversation_state
+        else {
+            panic!("loading input lock should preserve the ready conversation");
+        };
+        assert_eq!(
+            conversation.composer.input_buffer, "draft",
+            "loading parallel operations should preserve the hidden task draft"
+        );
     }
 }
 
