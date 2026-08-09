@@ -95,6 +95,14 @@ process 계약을 몰래 바꾸지 못하도록 project는 app-server 설정에�
 Diagnostics에는 활성 profile이 항상 보이지만, 의도된 기본값 자체를 degraded warning으로 만들지는
 않습니다.
 
+Codex 탐색은 spawn 전에 absolute launcher, native interpreter, canonical package script를 계속
+고정합니다. Ownership, ACL, repository boundary trust 실패는 기본적으로 startup을 막지 않고
+warning으로 남지만 launcher shape, native format, absolute path, package target 검증은 유지합니다.
+Mutation 권한이 있는 principal은 permissive하게 허용된 path를 spawn 전에 교체할 수 있습니다.
+`AKRA_REQUIRE_TRUSTED_CODEX_EXECUTABLE=1`을 설정하면 이 노출을 차단하는 기존 strict fail-closed
+trust boundary를 복원합니다. 값이 없거나 정확히 `0`이면 permissive 기본값을 유지하고, 그 외 값은
+잘못된 설정으로 startup을 거부합니다.
+
 제한된 배포는 `CODEX_EXEC_LOOP_APP_SERVER_APPROVAL_POLICY`,
 `CODEX_EXEC_LOOP_APP_SERVER_APPROVALS_REVIEWER`,
 `CODEX_EXEC_LOOP_APP_SERVER_SANDBOX_MODE`로 권한을 낮출 수 있습니다. Approval을 다시 켠 경우에만

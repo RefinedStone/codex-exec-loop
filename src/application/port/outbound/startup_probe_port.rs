@@ -35,6 +35,7 @@ pub struct LocalStartupPrerequisites {
     pub current_directory: String,
     pub codex_binary_detail: String,
     pub workspace_status: StartupWorkspaceStatus,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
