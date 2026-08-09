@@ -535,16 +535,25 @@ fn distributor_auto_mode_direct_integrates_when_pull_request_workflow_is_unavail
             "push-integration:prerelease".to_string(),
         ]
     );
-    let queue_record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
-        .into_iter()
-        .next()
-        .expect("queue record should persist");
+    let queue_record =
+        SqlitePlanningAuthorityAdapter::load_runtime_projections(&repo.workspace_dir())
+            .expect("authoritative runtime projection should remain readable")
+            .distributor_queue_records
+            .into_iter()
+            .next()
+            .expect("queue record should persist");
     assert_eq!(queue_record.queue_state, ParallelModeQueueItemState::Done);
     assert!(queue_record.pull_request_number.is_none());
     assert!(
         queue_record
             .integration_note
             .contains("direct delivery completed without PR automation")
+    );
+    assert!(
+        SqlitePlanningAuthorityAdapter::load_runtime_pr_validation_records(&repo.workspace_dir())
+            .expect("PR validation authority should remain readable")
+            .is_empty(),
+        "direct delivery without a PR must not fabricate a PR validation identity"
     );
     assert!(
         !Path::new(&lease.worktree_path)
@@ -589,10 +598,13 @@ fn distributor_disabled_mode_skips_pull_request_workflow_even_when_available() {
             "push-integration:prerelease".to_string(),
         ]
     );
-    let queue_record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
-        .into_iter()
-        .next()
-        .expect("queue record should persist");
+    let queue_record =
+        SqlitePlanningAuthorityAdapter::load_runtime_projections(&repo.workspace_dir())
+            .expect("authoritative runtime projection should remain readable")
+            .distributor_queue_records
+            .into_iter()
+            .next()
+            .expect("queue record should persist");
     assert_eq!(queue_record.queue_state, ParallelModeQueueItemState::Done);
     assert!(queue_record.pull_request_number.is_none());
 }
@@ -648,7 +660,9 @@ fn distributor_skip_preserves_existing_pull_request_metadata_for_close() {
     let service = test_parallel_mode_service_with_autonomous_github(Arc::new(github));
     let lease = enqueue_single_commit_ready_result(&service, &repo, "turn-preserve-pr");
     let mut queue_record =
-        load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+        SqlitePlanningAuthorityAdapter::load_runtime_projections(&repo.workspace_dir())
+            .expect("authoritative runtime projection should remain readable")
+            .distributor_queue_records
             .into_iter()
             .next()
             .expect("queue record should exist");
@@ -700,12 +714,37 @@ fn distributor_skip_preserves_existing_pull_request_metadata_for_close() {
             .all(|operation| !operation.starts_with("ensure-pr:")),
         "skip mode must not create or re-ensure a PR: {operations:?}"
     );
-    let queue_record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
-        .into_iter()
-        .next()
-        .expect("queue record should persist");
+    let queue_record =
+        SqlitePlanningAuthorityAdapter::load_runtime_projections(&repo.workspace_dir())
+            .expect("authoritative runtime projection should remain readable")
+            .distributor_queue_records
+            .into_iter()
+            .next()
+            .expect("queue record should persist");
     assert_eq!(queue_record.queue_state, ParallelModeQueueItemState::Done);
     assert_eq!(queue_record.pull_request_number, Some(123));
+    let validation = SqlitePlanningAuthorityAdapter::load_runtime_pr_validation_record(
+        &repo.workspace_dir(),
+        &crate::domain::parallel_mode::PrValidationRecordKey::new(&queue_record.queue_item_id)
+            .expect("queue identity should be a valid validation key"),
+    )
+    .expect("PR validation authority should remain readable")
+    .expect("preserved PR metadata should recover a validation record before attestation");
+    let attestation = validation
+        .integration_attestation()
+        .expect("verified distributor integration should be attested");
+    assert_eq!(
+        attestation.method(),
+        IntegrationMethod::DistributorCherryPick
+    );
+    assert_eq!(attestation.pull_request_number(), Some(123));
+    assert_eq!(
+        attestation.evidence_sha().as_str(),
+        queue_record
+            .integration_commit_sha
+            .as_deref()
+            .expect("completed integration should retain its evidence SHA")
+    );
 }
 
 // source branch push가 실패하면 PR ensure를 실행하지 않아야 한다. 빈 원격 branch에 대한
