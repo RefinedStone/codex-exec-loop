@@ -282,14 +282,15 @@ impl GithubPrValidationSnapshot {
 
     /// Reports explicit successful evidence only; failed, cancelled, skipped, unknown, and active
     /// runs cannot settle validation merely because some of them are terminal.
-    pub fn is_successfully_complete(&self) -> bool {
-        let expected_evidence_sha = match self.merge_state {
-            GithubPrMergeState::Merged => self.merge_sha.as_ref(),
-            GithubPrMergeState::Open | GithubPrMergeState::Closed => Some(&self.target_sha),
-            GithubPrMergeState::Unknown(_) => None,
+    pub fn is_successfully_complete(&self, expected_evidence_sha: &GithubCommitSha) -> bool {
+        let merge_identity_matches = match self.merge_state {
+            GithubPrMergeState::Merged => self.merge_sha.as_ref() == Some(expected_evidence_sha),
+            GithubPrMergeState::Open | GithubPrMergeState::Closed => true,
+            GithubPrMergeState::Unknown(_) => false,
         };
         self.observations_complete()
-            && expected_evidence_sha == Some(&self.evidence_sha)
+            && merge_identity_matches
+            && &self.evidence_sha == expected_evidence_sha
             && (!self.check_runs.is_empty() || !self.workflow_runs.is_empty())
             && self.check_runs.iter().all(|run| {
                 run.target_sha == self.evidence_sha
@@ -425,7 +426,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["check:not-a-number", "check:9007199254740993"]
         );
-        assert!(snapshot.is_successfully_complete());
+        assert!(snapshot.is_successfully_complete(&GithubCommitSha::new("head-sha")));
         assert!(snapshot.observations_complete());
     }
 
@@ -436,7 +437,24 @@ mod tests {
         snapshot.workflow_runs.clear();
 
         assert!(snapshot.observations_complete());
-        assert!(!snapshot.is_successfully_complete());
+        assert!(!snapshot.is_successfully_complete(&GithubCommitSha::new("head-sha")));
+    }
+
+    #[test]
+    fn closed_pull_request_completion_uses_the_attested_evidence_sha() {
+        let mut snapshot = complete_snapshot();
+        let evidence_sha = GithubCommitSha::new("distributor-evidence-sha");
+        snapshot.merge_state = GithubPrMergeState::Closed;
+        snapshot.evidence_sha = evidence_sha.clone();
+        for run in &mut snapshot.check_runs {
+            run.target_sha = evidence_sha.clone();
+        }
+        for run in &mut snapshot.workflow_runs {
+            run.target_sha = evidence_sha.clone();
+        }
+
+        assert!(snapshot.is_successfully_complete(&evidence_sha));
+        assert!(!snapshot.is_successfully_complete(&snapshot.target_sha));
     }
 
     #[test]
@@ -444,14 +462,14 @@ mod tests {
         let mut unknown = complete_snapshot();
         unknown.sources[0].status = GithubValidationSourceStatus::Unknown;
         assert!(!unknown.observations_complete());
-        assert!(!unknown.is_successfully_complete());
+        assert!(!unknown.is_successfully_complete(&GithubCommitSha::new("head-sha")));
 
         let mut paginated = complete_snapshot();
         paginated.sources[0].status = GithubValidationSourceStatus::Paginated;
         paginated.sources[0].next_cursor = Some(GithubValidationCursor::new("source:page-2"));
         paginated.next_cursor = Some(GithubValidationCursor::new("snapshot:page-2"));
         assert!(!paginated.observations_complete());
-        assert!(!paginated.is_successfully_complete());
+        assert!(!paginated.is_successfully_complete(&GithubCommitSha::new("head-sha")));
 
         let mut missing_source = complete_snapshot();
         missing_source.sources.pop();

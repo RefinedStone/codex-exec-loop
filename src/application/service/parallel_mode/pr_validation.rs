@@ -1,5 +1,8 @@
 use std::path::PathBuf;
 
+#[cfg(test)]
+use std::cell::RefCell;
+
 use chrono::Utc;
 use sha2::{Digest, Sha256};
 
@@ -27,6 +30,37 @@ use crate::domain::parallel_mode::{
     PrValidationTransitionRejection,
 };
 use crate::domain::planning::TaskStatus;
+
+#[cfg(test)]
+thread_local! {
+    static BEFORE_DISTRIBUTOR_ATTESTATION_PERSIST_HOOK: RefCell<Option<Box<dyn FnOnce()>>> =
+        RefCell::new(None);
+}
+
+#[cfg(test)]
+pub(in crate::application::service::parallel_mode) fn install_before_distributor_attestation_persist_hook(
+    hook: impl FnOnce() + 'static,
+) {
+    BEFORE_DISTRIBUTOR_ATTESTATION_PERSIST_HOOK.with(|slot| {
+        let previous = slot.borrow_mut().replace(Box::new(hook));
+        assert!(
+            previous.is_none(),
+            "distributor attestation test hook already installed"
+        );
+    });
+}
+
+#[cfg(test)]
+fn run_before_distributor_attestation_persist_hook() {
+    BEFORE_DISTRIBUTOR_ATTESTATION_PERSIST_HOOK.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn run_before_distributor_attestation_persist_hook() {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrValidationPollRequest {
@@ -192,7 +226,7 @@ pub(super) fn attest_distributor_pr_validation_with_ports(
             &key,
         )?;
     }
-    let current = current.ok_or_else(|| {
+    let mut current = current.ok_or_else(|| {
         format!(
             "PR validation record `{}` is missing after integration registration",
             key.as_str()
@@ -218,39 +252,75 @@ pub(super) fn attest_distributor_pr_validation_with_ports(
         observed_at,
         observed_at,
     )?;
-    let next = match current.transition(PrValidationEvent::IntegrationAttested(attestation)) {
-        Ok(next) => next,
-        Err(PrValidationTransitionRejection::IntegrationAuthorityConflict { .. }) => {
-            let failed = current
-                .transition(PrValidationEvent::Fail(
-                    PrValidationTerminalReason::IntegrationAuthorityConflict,
-                ))
-                .map_err(transition_error)?;
-            super::pr_validation_store::persist_pr_validation_record(
-                planning_authority,
-                runtime,
-                workspace_dir,
-                pool_root,
-                Some(&current),
-                &failed,
-            )?;
-            return Err(
-                "distributor integration conflicts with persisted validation authority".to_string(),
-            );
+    const MAX_ATTESTATION_CAS_ATTEMPTS: usize = 4;
+    for attempt in 1..=MAX_ATTESTATION_CAS_ATTEMPTS {
+        let next =
+            match current.transition(PrValidationEvent::IntegrationAttested(attestation.clone())) {
+                Ok(next) => next,
+                Err(PrValidationTransitionRejection::IntegrationAuthorityConflict { .. }) => {
+                    let failed = current
+                        .transition(PrValidationEvent::Fail(
+                            PrValidationTerminalReason::IntegrationAuthorityConflict,
+                        ))
+                        .map_err(transition_error)?;
+                    super::pr_validation_store::persist_pr_validation_record(
+                        planning_authority,
+                        runtime,
+                        workspace_dir,
+                        pool_root,
+                        Some(&current),
+                        &failed,
+                    )?;
+                    return Err(
+                        "distributor integration conflicts with persisted validation authority"
+                            .to_string(),
+                    );
+                }
+                Err(error) => return Err(transition_error(error)),
+            };
+        if next == current {
+            return Ok(());
         }
-        Err(error) => return Err(transition_error(error)),
-    };
-    if next == current {
-        return Ok(());
+        run_before_distributor_attestation_persist_hook();
+        let persistence_error = match super::pr_validation_store::persist_pr_validation_record(
+            planning_authority,
+            runtime,
+            workspace_dir,
+            pool_root,
+            Some(&current),
+            &next,
+        ) {
+            Ok(()) => return Ok(()),
+            Err(error) => error,
+        };
+        let latest = super::pr_validation_store::recover_pr_validation_record_mirror(
+            planning_authority,
+            runtime,
+            workspace_dir,
+            pool_root,
+            &key,
+        )?
+        .ok_or_else(|| {
+            format!(
+                "PR validation record `{}` disappeared during integration attestation",
+                key.as_str()
+            )
+        })?;
+        if latest == next {
+            return Ok(());
+        }
+        if latest == current {
+            return Err(persistence_error);
+        }
+        if attempt == MAX_ATTESTATION_CAS_ATTEMPTS {
+            return Err(format!(
+                "PR validation record `{}` kept changing during integration attestation after {MAX_ATTESTATION_CAS_ATTEMPTS} attempts: {persistence_error}",
+                key.as_str()
+            ));
+        }
+        current = latest;
     }
-    super::pr_validation_store::persist_pr_validation_record(
-        planning_authority,
-        runtime,
-        workspace_dir,
-        pool_root,
-        Some(&current),
-        &next,
-    )
+    unreachable!("bounded distributor attestation loop always returns")
 }
 
 pub(super) fn transition_pr_validation_remediation_with_ports(
@@ -634,15 +704,25 @@ impl ParallelModeService {
                 .map_err(transition_error)?;
         }
 
+        let settlement_evidence_sha = next.evidence_sha().cloned();
+        let successful_settlement_evidence = settlement_evidence_sha.as_ref().is_some_and(|sha| {
+            snapshot.is_successfully_complete(&GithubCommitSha::new(sha.as_str()))
+        });
         let can_settle = requested_remediation.is_none()
             && !starting_post_merge
             && had_post_merge_checkpoint
             && prior_fingerprint.as_deref() == Some(fingerprint.as_str())
             && next.phase() == PrValidationPhase::PostMergeObservation
-            && snapshot.is_successfully_complete();
+            && successful_settlement_evidence;
         if can_settle {
+            let evidence_sha = settlement_evidence_sha
+                .as_ref()
+                .expect("successful settlement evidence was checked above");
             next = next
-                .transition(PrValidationEvent::Settle(completion(&snapshot)?))
+                .transition(PrValidationEvent::Settle(completion(
+                    &snapshot,
+                    evidence_sha,
+                )?))
                 .map_err(transition_error)?;
         }
 
@@ -871,11 +951,10 @@ fn snapshot_fingerprint(snapshot: &GithubPrValidationSnapshot) -> String {
     format!("{:x}", digest.finalize())
 }
 
-fn completion(snapshot: &GithubPrValidationSnapshot) -> Result<PrValidationCompletion, String> {
-    let merge_sha = snapshot
-        .merge_sha
-        .as_ref()
-        .ok_or_else(|| "post-merge completion requires a merge SHA".to_string())?;
+fn completion(
+    snapshot: &GithubPrValidationSnapshot,
+    evidence_sha: &PrValidationCommitSha,
+) -> Result<PrValidationCompletion, String> {
     let providers = snapshot
         .sources
         .iter()
@@ -914,7 +993,7 @@ fn completion(snapshot: &GithubPrValidationSnapshot) -> Result<PrValidationCompl
             .collect::<Result<Vec<_>, String>>()?,
     );
     Ok(PrValidationCompletion::new(
-        commit_sha(merge_sha)?,
+        evidence_sha.clone(),
         providers,
         checks,
         PrValidationCatchUpState::NoUnseenRelevantEvents,
