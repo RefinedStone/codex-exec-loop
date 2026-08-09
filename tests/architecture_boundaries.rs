@@ -25566,7 +25566,7 @@ fn forbids_time_completion_and_direct_git_writes() {
     )
     .expect("validator service source must be readable");
     assert!(
-        service_source.contains("snapshot.is_successfully_complete(&GithubCommitSha::new("),
+        service_source.contains("snapshot.is_successfully_complete("),
         "validation settlement must be gated by successful evidence"
     );
     assert!(

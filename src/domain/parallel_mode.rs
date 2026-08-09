@@ -55,9 +55,11 @@ pub use self::pool_reset::{
 };
 #[allow(unused_imports)]
 pub use self::pr_validation::{
-    IntegrationAttestation, IntegrationMethod, PrValidationCatchUpState, PrValidationCheckKind,
-    PrValidationCommitSha, PrValidationCompletion, PrValidationCompletionBlocker,
-    PrValidationEvent, PrValidationFinding, PrValidationFindingKey, PrValidationFindingSource,
+    IntegrationAttestation, IntegrationMethod, POST_MERGE_VALIDATION_CONTRACT_VERSION,
+    PostMergeValidationContract, PrValidationCatchUpState, PrValidationCheckContext,
+    PrValidationCheckKind, PrValidationCommitSha, PrValidationCompletion,
+    PrValidationCompletionBlocker, PrValidationCompletionSource, PrValidationEvent,
+    PrValidationFinding, PrValidationFindingKey, PrValidationFindingSource,
     PrValidationOperatorCorrelation, PrValidationOperatorState, PrValidationOperatorSummary,
     PrValidationPhase, PrValidationProviderCompletion, PrValidationProviderKey, PrValidationRecord,
     PrValidationRecordKey, PrValidationRecoveryAction, PrValidationRemediationCorrelation,

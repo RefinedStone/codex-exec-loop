@@ -5,6 +5,7 @@ use std::sync::OnceLock;
 use anyhow::{Context, Result, anyhow, bail};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -208,13 +209,11 @@ impl GithubPrValidationPort for GithubPrValidationAdapter {
         let mut check_run_count = 0;
         let mut check_run_total = None;
         for page in pages.check_runs.pages_through_poll() {
-            let path = paged_path(
-                &format!(
-                    "/repos/{repository}/commits/{}/check-runs",
-                    evidence_sha.as_str()
-                ),
-                page,
+            let base = format!(
+                "/repos/{repository}/commits/{}/check-runs?filter=all",
+                evidence_sha.as_str()
             );
+            let path = paged_query(&base, page);
             let response: CheckRunsResponse = self.get_json(&path)?;
             ensure_page_bound(&response.check_runs, &path)?;
             ensure_stable_total(&mut check_run_total, response.total_count)?;
@@ -223,12 +222,27 @@ impl GithubPrValidationPort for GithubPrValidationAdapter {
             }
             for row in response.check_runs {
                 ensure_run_sha(&row.head_sha, &evidence_sha)?;
-                check_runs.push(GithubValidationCheckRun::new(
-                    row.id.opaque("check-run"),
-                    sanitized_provider_text(&row.name, 160),
-                    GithubCommitSha::new(row.head_sha),
-                    normalize_run_status(&row.status, row.conclusion.as_deref()),
-                ));
+                let app_slug = row
+                    .app
+                    .and_then(|app| non_empty_provider_text(&app.slug, 160));
+                let check_suite_id = row.check_suite.map(|suite| suite.id.opaque("check-suite"));
+                let started_at = normalize_provider_timestamp(row.started_at, "check start")?;
+                let completed_at =
+                    normalize_provider_timestamp(row.completed_at, "check completion")?;
+                check_runs.push(
+                    GithubValidationCheckRun::new(
+                        row.id.opaque("check-run"),
+                        sanitized_provider_text(&row.name, 160),
+                        GithubCommitSha::new(row.head_sha),
+                        normalize_run_status(&row.status, row.conclusion.as_deref()),
+                    )
+                    .with_attempt_metadata(
+                        app_slug,
+                        check_suite_id,
+                        started_at,
+                        completed_at,
+                    ),
+                );
             }
         }
         source_states.insert(
@@ -258,12 +272,24 @@ impl GithubPrValidationPort for GithubPrValidationAdapter {
             }
             for row in response.workflow_runs {
                 ensure_run_sha(&row.head_sha, &evidence_sha)?;
-                workflow_runs.push(GithubValidationWorkflowRun::new(
-                    row.id.opaque("workflow-run"),
-                    sanitized_provider_text(&row.name, 160),
-                    GithubCommitSha::new(row.head_sha),
-                    normalize_run_status(&row.status, row.conclusion.as_deref()),
-                ));
+                if row.run_attempt == 0 {
+                    bail!("GitHub validation workflow run attempt must be positive")
+                }
+                let created_at = normalize_provider_timestamp(row.created_at, "workflow creation")?;
+                let updated_at = normalize_provider_timestamp(row.updated_at, "workflow update")?;
+                workflow_runs.push(
+                    GithubValidationWorkflowRun::new(
+                        row.id.opaque("workflow-run"),
+                        sanitized_provider_text(&row.name, 160),
+                        GithubCommitSha::new(row.head_sha),
+                        normalize_run_status(&row.status, row.conclusion.as_deref()),
+                    )
+                    .with_attempt_metadata(
+                        row.run_attempt,
+                        created_at,
+                        updated_at,
+                    ),
+                );
             }
         }
         source_states.insert(
@@ -724,6 +750,25 @@ fn sanitized_provider_text(value: &str, max_len: usize) -> String {
     bounded
 }
 
+fn non_empty_provider_text(value: &str, max_len: usize) -> Option<String> {
+    let value = sanitized_provider_text(value, max_len);
+    (!value.is_empty()).then_some(value)
+}
+
+fn normalize_provider_timestamp(value: Option<String>, label: &str) -> Result<Option<String>> {
+    value
+        .map(|value| {
+            DateTime::parse_from_rfc3339(&value)
+                .with_context(|| format!("GitHub validation {label} timestamp was malformed"))
+                .map(|timestamp| {
+                    timestamp
+                        .with_timezone(&Utc)
+                        .to_rfc3339_opts(SecondsFormat::AutoSi, true)
+                })
+        })
+        .transpose()
+}
+
 fn normalize_run_status(status: &str, conclusion: Option<&str>) -> GithubValidationRunStatus {
     match status {
         "queued" | "waiting" | "requested" | "pending" => GithubValidationRunStatus::Queued,
@@ -782,22 +827,53 @@ struct ReviewCommentResponse {
 #[derive(Deserialize)]
 struct CheckRunsResponse {
     total_count: usize,
-    check_runs: Vec<RunResponse>,
+    check_runs: Vec<CheckRunResponse>,
 }
 
 #[derive(Deserialize)]
 struct WorkflowRunsResponse {
     total_count: usize,
-    workflow_runs: Vec<RunResponse>,
+    workflow_runs: Vec<WorkflowRunResponse>,
 }
 
 #[derive(Deserialize)]
-struct RunResponse {
+struct CheckRunResponse {
     id: ProviderId,
     name: String,
     head_sha: String,
     status: String,
     conclusion: Option<String>,
+    app: Option<CheckAppResponse>,
+    check_suite: Option<CheckSuiteResponse>,
+    started_at: Option<String>,
+    completed_at: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct CheckAppResponse {
+    slug: String,
+}
+
+#[derive(Deserialize)]
+struct CheckSuiteResponse {
+    id: ProviderId,
+}
+
+#[derive(Deserialize)]
+struct WorkflowRunResponse {
+    id: ProviderId,
+    name: String,
+    head_sha: String,
+    status: String,
+    conclusion: Option<String>,
+    #[serde(default = "default_run_attempt")]
+    run_attempt: u64,
+    created_at: Option<String>,
+    updated_at: Option<String>,
+}
+
+fn default_run_attempt() -> u64 {
+    1
 }
 
 #[derive(Clone, Deserialize)]

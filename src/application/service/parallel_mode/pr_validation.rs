@@ -8,8 +8,9 @@ use sha2::{Digest, Sha256};
 
 use super::ParallelModeService;
 use crate::application::port::outbound::github_pr_validation_port::{
-    GithubPrMergeState, GithubPrValidationObservationRequest, GithubPrValidationPort,
-    GithubPrValidationSnapshot, GithubValidationRunStatus, GithubValidationSourceStatus,
+    GithubExpectedCheckStatus, GithubPostMergeValidationDecision, GithubPrMergeState,
+    GithubPrValidationObservationRequest, GithubPrValidationPort, GithubPrValidationSnapshot,
+    GithubValidationSourceStatus,
 };
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::{
@@ -638,6 +639,8 @@ impl ParallelModeService {
             !was_post_merge && next.phase() == PrValidationPhase::PostMergeObservation;
 
         let fingerprint = snapshot_fingerprint(&snapshot);
+        let contract_decision =
+            snapshot.evaluate_post_merge_contract(next.post_merge_validation_contract());
         let prior_fingerprint = next.evidence_fingerprint().map(str::to_string);
         let had_post_merge_checkpoint = next.has_post_merge_checkpoint();
         let mut requested_remediation = None;
@@ -647,7 +650,7 @@ impl ParallelModeService {
             next.phase(),
             PrValidationPhase::PreMergeObservation | PrValidationPhase::PostMergeObservation
         ) {
-            for finding in actionable_findings(&snapshot)? {
+            for finding in actionable_findings(&snapshot, &contract_decision)? {
                 if next.finding_keys().contains(finding.key()) {
                     continue;
                 }
@@ -706,14 +709,35 @@ impl ParallelModeService {
 
         let settlement_evidence_sha = next.evidence_sha().cloned();
         let successful_settlement_evidence = settlement_evidence_sha.as_ref().is_some_and(|sha| {
-            snapshot.is_successfully_complete(&GithubCommitSha::new(sha.as_str()))
+            snapshot.is_successfully_complete(
+                next.post_merge_validation_contract(),
+                &GithubCommitSha::new(sha.as_str()),
+            )
         });
-        let can_settle = requested_remediation.is_none()
+        let can_finalize_contract = requested_remediation.is_none()
+            && !remediation_failed
             && !starting_post_merge
             && had_post_merge_checkpoint
             && prior_fingerprint.as_deref() == Some(fingerprint.as_str())
-            && next.phase() == PrValidationPhase::PostMergeObservation
-            && successful_settlement_evidence;
+            && next.phase() == PrValidationPhase::PostMergeObservation;
+        let missing_context_is_final = !contract_decision.has_missing_required()
+            || (!snapshot.workflow_runs.is_empty()
+                && snapshot
+                    .workflow_runs
+                    .iter()
+                    .all(|run| run.status.is_terminal()));
+        let contract_blocked = can_finalize_contract
+            && (contract_decision.has_explicit_policy_blocker()
+                || (contract_decision.has_missing_required() && missing_context_is_final));
+        if contract_blocked {
+            next = next
+                .transition(PrValidationEvent::Block(
+                    PrValidationTerminalReason::PostMergeContractBlocked,
+                ))
+                .map_err(transition_error)?;
+        }
+        let can_settle =
+            can_finalize_contract && !contract_blocked && successful_settlement_evidence;
         if can_settle {
             let evidence_sha = settlement_evidence_sha
                 .as_ref()
@@ -722,6 +746,7 @@ impl ParallelModeService {
                 .transition(PrValidationEvent::Settle(completion(
                     &snapshot,
                     evidence_sha,
+                    &contract_decision,
                 )?))
                 .map_err(transition_error)?;
         }
@@ -739,6 +764,8 @@ impl ParallelModeService {
             Ok(PrValidationPollResult::Failed)
         } else if let Some(idempotency_key) = requested_remediation {
             Ok(PrValidationPollResult::RemediationRequested { idempotency_key })
+        } else if contract_blocked {
+            Ok(PrValidationPollResult::Blocked)
         } else if can_settle {
             Ok(PrValidationPollResult::Settled)
         } else {
@@ -802,6 +829,7 @@ fn validate_snapshot_identity(
 
 fn actionable_findings(
     snapshot: &GithubPrValidationSnapshot,
+    contract_decision: &GithubPostMergeValidationDecision,
 ) -> Result<Vec<PrValidationFinding>, String> {
     let target_sha = commit_sha(&snapshot.target_sha)?;
     let mut findings = Vec::new();
@@ -836,46 +864,24 @@ fn actionable_findings(
             summary,
         )?);
     }
-    for run in &snapshot.check_runs {
-        if is_actionable_failure(&run.status) {
-            findings.push(PrValidationFinding::new(
-                PrValidationFindingKey::new(
-                    PrValidationFindingSource::new("check_run")?,
-                    sanitized_provider_id(run.id.as_str()),
-                )?,
-                target_sha.clone(),
-                format!(
-                    "required check `{}` ended with {:?}",
-                    sanitized_provider_text(&run.name, 160),
-                    run.status
-                ),
-            )?);
-        }
-    }
-    for run in &snapshot.workflow_runs {
-        if is_actionable_failure(&run.status) {
-            findings.push(PrValidationFinding::new(
-                PrValidationFindingKey::new(
-                    PrValidationFindingSource::new("workflow_run")?,
-                    sanitized_provider_id(run.id.as_str()),
-                )?,
-                target_sha.clone(),
-                format!(
-                    "workflow `{}` ended with {:?}",
-                    sanitized_provider_text(&run.name, 160),
-                    run.status
-                ),
-            )?);
-        }
+    for evaluation in contract_decision.actionable_failures() {
+        let Some(run) = evaluation.selected_run.as_ref() else {
+            continue;
+        };
+        findings.push(PrValidationFinding::new(
+            PrValidationFindingKey::new(
+                PrValidationFindingSource::new("check_run")?,
+                sanitized_provider_id(run.id.as_str()),
+            )?,
+            target_sha.clone(),
+            format!(
+                "required check `{}` ended with {:?}",
+                check_context_label(&evaluation.context),
+                run.status
+            ),
+        )?);
     }
     Ok(findings)
-}
-
-fn is_actionable_failure(status: &GithubValidationRunStatus) -> bool {
-    matches!(
-        status,
-        GithubValidationRunStatus::Failed | GithubValidationRunStatus::Cancelled
-    )
 }
 
 fn remediation_key(
@@ -922,17 +928,24 @@ fn snapshot_fingerprint(snapshot: &GithubPrValidationSnapshot) -> String {
     }
     for run in &snapshot.check_runs {
         digest.update(format!(
-            "check:{}:{}:{:?}",
+            "check:{}:{}:{:?}:{:?}:{:?}:{:?}:{:?}",
             run.id.as_str(),
             run.name,
+            run.app_slug,
+            run.check_suite_id.as_ref().map(|id| id.as_str()),
+            run.started_at,
+            run.completed_at,
             run.status
         ));
     }
     for run in &snapshot.workflow_runs {
         digest.update(format!(
-            "workflow:{}:{}:{:?}",
+            "workflow:{}:{}:{}:{:?}:{:?}:{:?}",
             run.id.as_str(),
             run.name,
+            run.run_attempt,
+            run.created_at,
+            run.updated_at,
             run.status
         ));
     }
@@ -954,6 +967,7 @@ fn snapshot_fingerprint(snapshot: &GithubPrValidationSnapshot) -> String {
 fn completion(
     snapshot: &GithubPrValidationSnapshot,
     evidence_sha: &PrValidationCommitSha,
+    contract_decision: &GithubPostMergeValidationDecision,
 ) -> Result<PrValidationCompletion, String> {
     let providers = snapshot
         .sources
@@ -968,36 +982,30 @@ fn completion(
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
-    let mut checks = snapshot
-        .check_runs
+    let checks = contract_decision
+        .required
         .iter()
-        .map(|run| {
+        .map(|evaluation| {
             PrValidationRequiredCheck::new(
                 PrValidationCheckKind::CheckRun,
-                sanitized_provider_text(&run.name, 160),
-                run.status == GithubValidationRunStatus::Succeeded,
+                check_context_label(&evaluation.context),
+                evaluation.status == GithubExpectedCheckStatus::Succeeded,
             )
         })
         .collect::<Result<Vec<_>, String>>()?;
-    checks.extend(
-        snapshot
-            .workflow_runs
-            .iter()
-            .map(|run| {
-                PrValidationRequiredCheck::new(
-                    PrValidationCheckKind::WorkflowRun,
-                    sanitized_provider_text(&run.name, 160),
-                    run.status == GithubValidationRunStatus::Succeeded,
-                )
-            })
-            .collect::<Result<Vec<_>, String>>()?,
-    );
     Ok(PrValidationCompletion::new(
         evidence_sha.clone(),
         providers,
         checks,
         PrValidationCatchUpState::NoUnseenRelevantEvents,
     ))
+}
+
+fn check_context_label(context: &crate::domain::parallel_mode::PrValidationCheckContext) -> String {
+    context
+        .app_slug()
+        .map(|app| format!("{app}/{}", context.context()))
+        .unwrap_or_else(|| context.context().to_string())
 }
 
 fn sanitized_provider_id(value: &str) -> String {
@@ -1022,34 +1030,6 @@ fn sanitized_provider_id(value: &str) -> String {
     let prefix_len = MAX_ID_LEN - DIGEST_LEN - 1;
     let prefix = sanitized.chars().take(prefix_len).collect::<String>();
     format!("{prefix}-{}", &digest[..DIGEST_LEN])
-}
-
-fn sanitized_provider_text(value: &str, max_len: usize) -> String {
-    let mut sanitized = String::new();
-    let mut pending_space = false;
-    for character in value.chars() {
-        if character.is_control() || character.is_whitespace() {
-            pending_space = !sanitized.is_empty();
-            continue;
-        }
-        if pending_space {
-            sanitized.push(' ');
-            pending_space = false;
-        }
-        sanitized.push(character);
-    }
-    if sanitized.chars().count() <= max_len {
-        return sanitized;
-    }
-    if max_len <= 3 {
-        return ".".repeat(max_len);
-    }
-    let mut bounded = sanitized.chars().take(max_len - 3).collect::<String>();
-    while bounded.ends_with(' ') {
-        bounded.pop();
-    }
-    bounded.push_str("...");
-    bounded
 }
 
 fn commit_sha(sha: &GithubCommitSha) -> Result<PrValidationCommitSha, String> {

@@ -108,12 +108,20 @@ fn snapshot(sha: &str, status: GithubValidationRunStatus) -> GithubPrValidationS
         merge_state: GithubPrMergeState::Open,
         merge_sha: None,
         activities: Vec::new(),
-        check_runs: vec![GithubValidationCheckRun::new(
-            GithubOpaqueId::new("check:ci"),
-            "ci",
-            GithubCommitSha::new(sha),
-            status,
-        )],
+        check_runs: vec![
+            GithubValidationCheckRun::new(
+                GithubOpaqueId::new("check:ci"),
+                "Post-Merge Gate",
+                GithubCommitSha::new(sha),
+                status,
+            )
+            .with_attempt_metadata(
+                Some("github-actions".to_string()),
+                Some(GithubOpaqueId::new("check-suite:ci")),
+                Some("2026-08-08T00:00:00Z".to_string()),
+                Some("2026-08-08T00:01:00Z".to_string()),
+            ),
+        ],
         workflow_runs: Vec::new(),
         sources: sources(),
         next_cursor: None,
@@ -554,31 +562,12 @@ fn stale_delivery_order_is_ignored_before_observation_or_persistence() {
 
 #[test]
 fn failed_or_cancelled_evidence_cannot_settle_after_remediation_completion() {
-    for (name, status, workflow) in [
-        ("failed-check", GithubValidationRunStatus::Failed, false),
-        (
-            "cancelled-workflow",
-            GithubValidationRunStatus::Cancelled,
-            true,
-        ),
-        ("skipped-check", GithubValidationRunStatus::Skipped, false),
+    for (name, status) in [
+        ("failed-check", GithubValidationRunStatus::Failed),
+        ("cancelled-check", GithubValidationRunStatus::Cancelled),
     ] {
-        let actionable = matches!(
-            status,
-            GithubValidationRunStatus::Failed | GithubValidationRunStatus::Cancelled
-        );
         let mut failed = merged_snapshot();
-        if workflow {
-            failed.workflow_runs = vec![GithubValidationWorkflowRun::new(
-                GithubOpaqueId::new("workflow:provider-failure"),
-                "ci workflow",
-                GithubCommitSha::new(MERGE),
-                status,
-            )];
-            failed.check_runs.clear();
-        } else {
-            failed.check_runs[0].status = status;
-        }
+        failed.check_runs[0].status = status;
         let (repo, observation, remediation) = setup(name, vec![failed.clone(), failed]);
         let service = test_parallel_mode_service();
         service
@@ -593,26 +582,21 @@ fn failed_or_cancelled_evidence_cannot_settle_after_remediation_completion() {
         let first = service
             .poll_pr_validation(&observation, &remediation, request(&repo, 1, HEAD_A))
             .unwrap();
-        if actionable {
-            assert!(matches!(
-                first,
-                PrValidationPollResult::RemediationRequested { .. }
-            ));
-            let delivery = remediation.deliveries.lock().unwrap()[0].clone();
-            let task_id = format!("task-{}", delivery.idempotency_key.as_str());
-            assert!(
-                service
-                    .transition_pr_validation_remediation_completed(
-                        &repo.workspace_dir(),
-                        &repo.pool_root(),
-                        &task_id,
-                    )
-                    .unwrap()
-            );
-        } else {
-            assert_eq!(first, PrValidationPollResult::Waiting);
-            assert!(remediation.deliveries.lock().unwrap().is_empty());
-        }
+        assert!(matches!(
+            first,
+            PrValidationPollResult::RemediationRequested { .. }
+        ));
+        let delivery = remediation.deliveries.lock().unwrap()[0].clone();
+        let task_id = format!("task-{}", delivery.idempotency_key.as_str());
+        assert!(
+            service
+                .transition_pr_validation_remediation_completed(
+                    &repo.workspace_dir(),
+                    &repo.pool_root(),
+                    &task_id,
+                )
+                .unwrap()
+        );
 
         assert_eq!(
             service
@@ -625,10 +609,224 @@ fn failed_or_cancelled_evidence_cannot_settle_after_remediation_completion() {
 }
 
 #[test]
-fn malicious_provider_identity_and_name_are_bounded_before_remediation() {
+fn required_missing_or_skipped_check_becomes_a_stable_policy_blocker() {
+    for (name, status) in [
+        ("missing", None),
+        ("skipped", Some(GithubValidationRunStatus::Skipped)),
+    ] {
+        let mut observed = merged_snapshot();
+        if let Some(status) = status {
+            observed.check_runs[0].status = status;
+        } else {
+            observed.check_runs.clear();
+            observed.workflow_runs = vec![
+                GithubValidationWorkflowRun::new(
+                    GithubOpaqueId::new("workflow:terminal-without-required-context"),
+                    "Native PR Checks",
+                    GithubCommitSha::new(MERGE),
+                    GithubValidationRunStatus::Succeeded,
+                )
+                .with_attempt_metadata(
+                    1,
+                    Some("2026-08-08T00:00:00Z".to_string()),
+                    Some("2026-08-08T00:10:00Z".to_string()),
+                ),
+            ];
+        }
+        let (repo, observation, remediation) = setup(
+            &format!("validation-required-{name}"),
+            vec![observed.clone(), observed],
+        );
+        let service = test_parallel_mode_service();
+        service
+            .persist_pr_validation_record(
+                &repo.workspace_dir(),
+                &repo.pool_root(),
+                None,
+                &registered_record(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            service
+                .poll_pr_validation(&observation, &remediation, request(&repo, 1, HEAD_A))
+                .unwrap(),
+            PrValidationPollResult::Waiting
+        );
+        assert_eq!(
+            service
+                .poll_pr_validation(&observation, &remediation, request(&repo, 2, HEAD_A))
+                .unwrap(),
+            PrValidationPollResult::Blocked
+        );
+        assert!(remediation.deliveries.lock().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn missing_required_check_waits_while_the_workflow_container_is_active() {
+    let mut observed = merged_snapshot();
+    observed.check_runs.clear();
+    observed.workflow_runs = vec![
+        GithubValidationWorkflowRun::new(
+            GithubOpaqueId::new("workflow:active-before-gate"),
+            "Native PR Checks",
+            GithubCommitSha::new(MERGE),
+            GithubValidationRunStatus::InProgress,
+        )
+        .with_attempt_metadata(
+            1,
+            Some("2026-08-08T00:00:00Z".to_string()),
+            Some("2026-08-08T00:01:00Z".to_string()),
+        ),
+    ];
+    let (repo, observation, remediation) = setup(
+        "validation-required-missing-active-workflow",
+        vec![observed.clone(), observed.clone(), observed],
+    );
+    let service = test_parallel_mode_service();
+    service
+        .persist_pr_validation_record(
+            &repo.workspace_dir(),
+            &repo.pool_root(),
+            None,
+            &registered_record(),
+        )
+        .unwrap();
+
+    for revision in 1..=3 {
+        assert_eq!(
+            service
+                .poll_pr_validation(&observation, &remediation, request(&repo, revision, HEAD_A),)
+                .unwrap(),
+            PrValidationPollResult::Waiting
+        );
+    }
+    assert_eq!(
+        service
+            .recover_pr_validation_record(
+                &repo.workspace_dir(),
+                &repo.pool_root(),
+                &PrValidationRecordKey::new("acme/widgets#42").unwrap(),
+            )
+            .unwrap()
+            .unwrap()
+            .phase(),
+        PrValidationPhase::PostMergeObservation
+    );
+    assert!(remediation.deliveries.lock().unwrap().is_empty());
+}
+
+#[test]
+fn optional_skip_and_workflow_failure_are_diagnostic_when_the_required_check_succeeds() {
+    let mut observed = merged_snapshot();
+    observed.check_runs.push(
+        GithubValidationCheckRun::new(
+            GithubOpaqueId::new("check:optional-rust"),
+            "Rust Tests",
+            GithubCommitSha::new(MERGE),
+            GithubValidationRunStatus::Skipped,
+        )
+        .with_attempt_metadata(
+            Some("github-actions".to_string()),
+            Some(GithubOpaqueId::new("check-suite:optional-rust")),
+            Some("2026-08-08T00:00:00Z".to_string()),
+            Some("2026-08-08T00:00:00Z".to_string()),
+        ),
+    );
+    observed.workflow_runs = vec![
+        GithubValidationWorkflowRun::new(
+            GithubOpaqueId::new("workflow:provider-failure"),
+            "Native PR Checks",
+            GithubCommitSha::new(MERGE),
+            GithubValidationRunStatus::Cancelled,
+        )
+        .with_attempt_metadata(
+            2,
+            Some("2026-08-08T00:00:00Z".to_string()),
+            Some("2026-08-08T00:02:00Z".to_string()),
+        ),
+    ];
+    let (repo, observation, remediation) = setup(
+        "validation-workflow-diagnostic",
+        vec![observed.clone(), observed],
+    );
+    let service = test_parallel_mode_service();
+    service
+        .persist_pr_validation_record(
+            &repo.workspace_dir(),
+            &repo.pool_root(),
+            None,
+            &registered_record(),
+        )
+        .unwrap();
+
+    assert_eq!(
+        service
+            .poll_pr_validation(&observation, &remediation, request(&repo, 1, HEAD_A))
+            .unwrap(),
+        PrValidationPollResult::Waiting
+    );
+    assert_eq!(
+        service
+            .poll_pr_validation(&observation, &remediation, request(&repo, 2, HEAD_A))
+            .unwrap(),
+        PrValidationPollResult::Settled
+    );
+    assert!(remediation.deliveries.lock().unwrap().is_empty());
+}
+
+#[test]
+fn successful_latest_attempt_suppresses_an_older_failed_attempt() {
+    let mut observed = merged_snapshot();
+    observed.check_runs.insert(
+        0,
+        GithubValidationCheckRun::new(
+            GithubOpaqueId::new("check:attempt-1"),
+            "Post-Merge Gate",
+            GithubCommitSha::new(MERGE),
+            GithubValidationRunStatus::Failed,
+        )
+        .with_attempt_metadata(
+            Some("github-actions".to_string()),
+            Some(GithubOpaqueId::new("check-suite:attempt-1")),
+            Some("2026-08-07T23:00:00Z".to_string()),
+            Some("2026-08-07T23:01:00Z".to_string()),
+        ),
+    );
+    let (repo, observation, remediation) = setup(
+        "validation-latest-attempt-success",
+        vec![observed.clone(), observed],
+    );
+    let service = test_parallel_mode_service();
+    service
+        .persist_pr_validation_record(
+            &repo.workspace_dir(),
+            &repo.pool_root(),
+            None,
+            &registered_record(),
+        )
+        .unwrap();
+
+    assert_eq!(
+        service
+            .poll_pr_validation(&observation, &remediation, request(&repo, 1, HEAD_A))
+            .unwrap(),
+        PrValidationPollResult::Waiting
+    );
+    assert_eq!(
+        service
+            .poll_pr_validation(&observation, &remediation, request(&repo, 2, HEAD_A))
+            .unwrap(),
+        PrValidationPollResult::Settled
+    );
+    assert!(remediation.deliveries.lock().unwrap().is_empty());
+}
+
+#[test]
+fn malicious_provider_identity_is_bounded_before_remediation() {
     let mut failed = snapshot(HEAD_A, GithubValidationRunStatus::Failed);
     failed.check_runs[0].id = GithubOpaqueId::new(format!("evil\n{}", "x".repeat(2_000)));
-    failed.check_runs[0].name = format!("ci\r\nINJECTED {}", "y".repeat(2_000));
     let (repo, observation, remediation) = setup("validation-provider-bounds", vec![failed]);
     let service = test_parallel_mode_service();
     service
