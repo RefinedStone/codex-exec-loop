@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 
@@ -108,6 +109,127 @@ impl PrValidationTargetShaSnapshot {
 
     pub fn base_sha(&self) -> &PrValidationCommitSha {
         &self.base_sha
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IntegrationMethod {
+    GithubRebaseMerge,
+    DistributorCherryPick,
+}
+
+impl IntegrationMethod {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::GithubRebaseMerge => "github_rebase_merge",
+            Self::DistributorCherryPick => "distributor_cherry_pick",
+        }
+    }
+}
+
+/// Durable proof that one reviewed source revision reached the integration branch.
+/// Validation completion remains a separate lifecycle transition bound to `evidence_sha`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IntegrationAttestation {
+    method: IntegrationMethod,
+    source_sha: PrValidationCommitSha,
+    base_before_sha: Option<PrValidationCommitSha>,
+    evidence_sha: PrValidationCommitSha,
+    pull_request_number: Option<u64>,
+    github_merge_sha: Option<PrValidationCommitSha>,
+    integrated_at: DateTime<Utc>,
+    remote_verified_at: DateTime<Utc>,
+}
+
+impl IntegrationAttestation {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        method: IntegrationMethod,
+        source_sha: PrValidationCommitSha,
+        base_before_sha: Option<PrValidationCommitSha>,
+        evidence_sha: PrValidationCommitSha,
+        pull_request_number: Option<u64>,
+        github_merge_sha: Option<PrValidationCommitSha>,
+        integrated_at: DateTime<Utc>,
+        remote_verified_at: DateTime<Utc>,
+    ) -> Result<Self, String> {
+        if pull_request_number == Some(0) {
+            return Err("integration attestation pull request number must be positive".to_string());
+        }
+        if remote_verified_at < integrated_at {
+            return Err(
+                "integration attestation remote verification cannot predate integration"
+                    .to_string(),
+            );
+        }
+        match method {
+            IntegrationMethod::GithubRebaseMerge
+                if github_merge_sha.as_ref() != Some(&evidence_sha) =>
+            {
+                return Err(
+                    "GitHub merge attestation must bind its merge SHA to the evidence SHA"
+                        .to_string(),
+                );
+            }
+            IntegrationMethod::DistributorCherryPick if github_merge_sha.is_some() => {
+                return Err(
+                    "distributor cherry-pick attestation cannot claim a GitHub merge SHA"
+                        .to_string(),
+                );
+            }
+            _ => {}
+        }
+        Ok(Self {
+            method,
+            source_sha,
+            base_before_sha,
+            evidence_sha,
+            pull_request_number,
+            github_merge_sha,
+            integrated_at,
+            remote_verified_at,
+        })
+    }
+
+    pub fn method(&self) -> IntegrationMethod {
+        self.method
+    }
+
+    pub fn source_sha(&self) -> &PrValidationCommitSha {
+        &self.source_sha
+    }
+
+    pub fn base_before_sha(&self) -> Option<&PrValidationCommitSha> {
+        self.base_before_sha.as_ref()
+    }
+
+    pub fn evidence_sha(&self) -> &PrValidationCommitSha {
+        &self.evidence_sha
+    }
+
+    pub fn pull_request_number(&self) -> Option<u64> {
+        self.pull_request_number
+    }
+
+    pub fn github_merge_sha(&self) -> Option<&PrValidationCommitSha> {
+        self.github_merge_sha.as_ref()
+    }
+
+    pub fn integrated_at(&self) -> DateTime<Utc> {
+        self.integrated_at
+    }
+
+    pub fn remote_verified_at(&self) -> DateTime<Utc> {
+        self.remote_verified_at
+    }
+
+    fn has_same_authority_identity(&self, other: &Self) -> bool {
+        self.method == other.method
+            && self.source_sha == other.source_sha
+            && self.base_before_sha == other.base_before_sha
+            && self.evidence_sha == other.evidence_sha
+            && self.pull_request_number == other.pull_request_number
+            && self.github_merge_sha == other.github_merge_sha
     }
 }
 
@@ -429,6 +551,8 @@ impl PrValidationCompletion {
 pub enum PrValidationTerminalReason {
     AllConfiguredSourcesComplete,
     PullRequestClosedWithoutMerge,
+    IntegrationEvidenceMissing,
+    IntegrationAuthorityConflict,
     ObservationFailed,
     RemediationAdmissionFailed,
 }
@@ -440,6 +564,7 @@ pub enum PrValidationRecoveryAction {
     RunCorrelatedRemediation,
     CompleteCorrelatedRemediation,
     ReopenOrReplacePullRequest,
+    RestoreIntegrationEvidence,
     RerunWithFreshRecord,
     RestoreQueueAndRerun,
 }
@@ -453,6 +578,9 @@ impl PrValidationRecoveryAction {
             Self::CompleteCorrelatedRemediation => "complete the correlated remediation task",
             Self::ReopenOrReplacePullRequest => {
                 "reopen the pull request or register validation for its replacement"
+            }
+            Self::RestoreIntegrationEvidence => {
+                "restore trusted integration evidence and rerun validation"
             }
             Self::RerunWithFreshRecord => {
                 "rerun validation to create a fresh Akra validation record"
@@ -469,6 +597,10 @@ impl PrValidationTerminalReason {
         match self {
             Self::AllConfiguredSourcesComplete => "all configured validation sources completed",
             Self::PullRequestClosedWithoutMerge => "pull request closed without merge",
+            Self::IntegrationEvidenceMissing => "integration evidence is missing",
+            Self::IntegrationAuthorityConflict => {
+                "integration authority conflicts with trusted evidence"
+            }
             Self::ObservationFailed => "trusted validation observation failed",
             Self::RemediationAdmissionFailed => "validation remediation admission failed",
         }
@@ -480,6 +612,10 @@ impl PrValidationTerminalReason {
             Self::PullRequestClosedWithoutMerge => {
                 PrValidationRecoveryAction::ReopenOrReplacePullRequest
             }
+            Self::IntegrationEvidenceMissing => {
+                PrValidationRecoveryAction::RestoreIntegrationEvidence
+            }
+            Self::IntegrationAuthorityConflict => PrValidationRecoveryAction::RerunWithFreshRecord,
             Self::ObservationFailed => PrValidationRecoveryAction::RerunWithFreshRecord,
             Self::RemediationAdmissionFailed => PrValidationRecoveryAction::RestoreQueueAndRerun,
         }
@@ -498,6 +634,7 @@ pub enum PrValidationEvent {
         finding_key: PrValidationFindingKey,
     },
     TargetShaChanged(PrValidationTargetShaSnapshot),
+    IntegrationAttested(IntegrationAttestation),
     MergeObserved(PrValidationCommitSha),
     BeginPostMergeObservation,
     ObservationCheckpointed {
@@ -519,6 +656,7 @@ impl PrValidationEvent {
             Self::RemediationStarted { .. } => "remediation_started",
             Self::RemediationCompleted { .. } => "remediation_completed",
             Self::TargetShaChanged(_) => "target_sha_changed",
+            Self::IntegrationAttested(_) => "integration_attested",
             Self::MergeObserved(_) => "merge_observed",
             Self::BeginPostMergeObservation => "begin_post_merge_observation",
             Self::ObservationCheckpointed { .. } => "observation_checkpointed",
@@ -539,6 +677,18 @@ pub enum PrValidationTransitionRejection {
         expected: PrValidationCommitSha,
         observed: PrValidationCommitSha,
     },
+    IntegrationSourceShaMismatch {
+        expected: PrValidationCommitSha,
+        observed: PrValidationCommitSha,
+    },
+    IntegrationPullRequestMismatch {
+        expected: u64,
+        observed: u64,
+    },
+    IntegrationAuthorityConflict {
+        expected: IntegrationAttestation,
+        observed: IntegrationAttestation,
+    },
     FindingNotObserved(PrValidationFindingKey),
     RemediationNotQueued(PrValidationFindingKey),
     CompletionIncomplete(Vec<PrValidationCompletionBlocker>),
@@ -553,6 +703,9 @@ pub struct PrValidationRecord {
     findings: BTreeMap<PrValidationFindingKey, PrValidationFinding>,
     remediations: BTreeMap<PrValidationFindingKey, PrValidationRemediationCorrelation>,
     active_remediation: Option<PrValidationFindingKey>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    integration_attestation: Option<IntegrationAttestation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     merge_sha: Option<PrValidationCommitSha>,
     observation_revision: u64,
     observation_cursor: Option<String>,
@@ -576,6 +729,7 @@ impl PrValidationRecord {
             findings: BTreeMap::new(),
             remediations: BTreeMap::new(),
             active_remediation: None,
+            integration_attestation: None,
             merge_sha: None,
             observation_revision: 0,
             observation_cursor: None,
@@ -623,7 +777,57 @@ impl PrValidationRecord {
     }
 
     pub fn merge_sha(&self) -> Option<&PrValidationCommitSha> {
-        self.merge_sha.as_ref()
+        self.integration_attestation
+            .as_ref()
+            .and_then(IntegrationAttestation::github_merge_sha)
+            .or(self.merge_sha.as_ref())
+    }
+
+    pub fn integration_attestation(&self) -> Option<&IntegrationAttestation> {
+        self.integration_attestation.as_ref()
+    }
+
+    pub fn evidence_sha(&self) -> Option<&PrValidationCommitSha> {
+        self.integration_attestation
+            .as_ref()
+            .map(IntegrationAttestation::evidence_sha)
+            .or(self.merge_sha.as_ref())
+    }
+
+    pub fn with_migrated_legacy_attestation(
+        &self,
+        observed_at: DateTime<Utc>,
+    ) -> Result<Self, String> {
+        let Some(legacy_merge_sha) = self.merge_sha.as_ref() else {
+            return Ok(self.clone());
+        };
+        if let Some(attestation) = self.integration_attestation.as_ref() {
+            if attestation.method() != IntegrationMethod::GithubRebaseMerge
+                || attestation.evidence_sha() != legacy_merge_sha
+            {
+                return Err(
+                    "legacy merge SHA conflicts with the persisted integration attestation"
+                        .to_string(),
+                );
+            }
+            let mut migrated = self.clone();
+            migrated.merge_sha = None;
+            return Ok(migrated);
+        }
+        let attestation = IntegrationAttestation::new(
+            IntegrationMethod::GithubRebaseMerge,
+            self.target_shas.source_sha.clone(),
+            Some(self.target_shas.base_sha.clone()),
+            legacy_merge_sha.clone(),
+            Some(self.target.pull_request_number),
+            Some(legacy_merge_sha.clone()),
+            observed_at,
+            observed_at,
+        )?;
+        let mut migrated = self.clone();
+        migrated.integration_attestation = Some(attestation);
+        migrated.merge_sha = None;
+        Ok(migrated)
     }
 
     pub fn observation_revision(&self) -> u64 {
@@ -691,9 +895,20 @@ impl PrValidationRecord {
             state,
             phase: self.phase,
             target_short_sha: self.target_shas.source_sha.as_str()[..12].to_string(),
-            merge_short_sha: self
-                .merge_sha
+            integration_method: self
+                .integration_attestation
                 .as_ref()
+                .map(IntegrationAttestation::method)
+                .or_else(|| {
+                    self.merge_sha
+                        .as_ref()
+                        .map(|_| IntegrationMethod::GithubRebaseMerge)
+                }),
+            evidence_short_sha: self
+                .evidence_sha()
+                .map(|evidence_sha| evidence_sha.as_str()[..12].to_string()),
+            merge_short_sha: self
+                .merge_sha()
                 .map(|merge_sha| merge_sha.as_str()[..12].to_string()),
             finding_count: self.findings.len(),
             remediation_count: self.remediations.len(),
@@ -713,7 +928,11 @@ impl PrValidationRecord {
         }
         match state {
             PrValidationOperatorState::Pending => {
-                "validation sources or final catch-up are not complete".to_string()
+                if self.evidence_sha().is_some() {
+                    "integration is attested; validation sources are not complete".to_string()
+                } else {
+                    "validation sources or final catch-up are not complete".to_string()
+                }
             }
             PrValidationOperatorState::Blocking => self
                 .findings
@@ -742,8 +961,7 @@ impl PrValidationRecord {
         let mut next = self.clone();
         if let PrValidationEvent::Settle(completion) = &event {
             let expected = next
-                .merge_sha
-                .as_ref()
+                .evidence_sha()
                 .unwrap_or_else(|| next.target_shas.source_sha());
             if &completion.target_sha != expected {
                 return Err(PrValidationTransitionRejection::TargetShaMismatch {
@@ -759,6 +977,59 @@ impl PrValidationRecord {
                 expected: next.target_shas.source_sha().clone(),
                 observed: finding.target_sha.clone(),
             });
+        }
+        if let PrValidationEvent::IntegrationAttested(attestation) = &event {
+            if attestation.source_sha() != next.target_shas.source_sha() {
+                return Err(
+                    PrValidationTransitionRejection::IntegrationSourceShaMismatch {
+                        expected: next.target_shas.source_sha().clone(),
+                        observed: attestation.source_sha().clone(),
+                    },
+                );
+            }
+            if let Some(observed) = attestation.pull_request_number()
+                && observed != next.target.pull_request_number
+            {
+                return Err(
+                    PrValidationTransitionRejection::IntegrationPullRequestMismatch {
+                        expected: next.target.pull_request_number,
+                        observed,
+                    },
+                );
+            }
+            if let Some(expected) = next.integration_attestation.as_ref() {
+                if expected.has_same_authority_identity(attestation) {
+                    return Ok(next);
+                }
+                return Err(
+                    PrValidationTransitionRejection::IntegrationAuthorityConflict {
+                        expected: expected.clone(),
+                        observed: attestation.clone(),
+                    },
+                );
+            }
+            if let Some(legacy_merge_sha) = next.merge_sha.as_ref()
+                && (attestation.method() != IntegrationMethod::GithubRebaseMerge
+                    || attestation.evidence_sha() != legacy_merge_sha)
+            {
+                let legacy = IntegrationAttestation::new(
+                    IntegrationMethod::GithubRebaseMerge,
+                    next.target_shas.source_sha.clone(),
+                    Some(next.target_shas.base_sha.clone()),
+                    legacy_merge_sha.clone(),
+                    Some(next.target.pull_request_number),
+                    Some(legacy_merge_sha.clone()),
+                    attestation.integrated_at(),
+                    attestation.remote_verified_at(),
+                )
+                .expect("legacy GitHub merge identity is structurally valid");
+                return Err(
+                    PrValidationTransitionRejection::IntegrationAuthorityConflict {
+                        expected: legacy,
+                        observed: attestation.clone(),
+                    },
+                );
+            }
         }
 
         match event {
@@ -808,7 +1079,7 @@ impl PrValidationRecord {
                     && next.active_remediation.as_ref() == Some(&finding_key) =>
             {
                 next.active_remediation = None;
-                next.phase = if next.merge_sha.is_some() {
+                next.phase = if next.evidence_sha().is_some() {
                     PrValidationPhase::PostMergeObservation
                 } else {
                     PrValidationPhase::PreMergeObservation
@@ -827,6 +1098,7 @@ impl PrValidationRecord {
                 next.findings.clear();
                 next.remediations.clear();
                 next.active_remediation = None;
+                next.integration_attestation = None;
                 next.merge_sha = None;
                 next.observation_cursor = None;
                 next.evidence_fingerprint = None;
@@ -834,14 +1106,34 @@ impl PrValidationRecord {
                 next.completion = None;
                 next.terminal_reason = None;
             }
+            PrValidationEvent::IntegrationAttested(attestation)
+                if matches!(
+                    next.phase,
+                    PrValidationPhase::Registered
+                        | PrValidationPhase::PreMergeObservation
+                        | PrValidationPhase::RemediationQueued
+                        | PrValidationPhase::RemediationRunning
+                        | PrValidationPhase::PostMergeObservation
+                ) =>
+            {
+                next.integration_attestation = Some(attestation);
+                next.merge_sha = None;
+                if matches!(
+                    next.phase,
+                    PrValidationPhase::Registered | PrValidationPhase::PreMergeObservation
+                ) {
+                    next.phase = PrValidationPhase::PostMergeObservation;
+                }
+            }
             PrValidationEvent::MergeObserved(merge_sha)
-                if next.phase == PrValidationPhase::PreMergeObservation =>
+                if next.phase == PrValidationPhase::PreMergeObservation
+                    && next.integration_attestation.is_none() =>
             {
                 next.merge_sha = Some(merge_sha);
             }
             PrValidationEvent::BeginPostMergeObservation
                 if next.phase == PrValidationPhase::PreMergeObservation
-                    && next.merge_sha.is_some() =>
+                    && next.evidence_sha().is_some() =>
             {
                 next.phase = PrValidationPhase::PostMergeObservation;
             }
@@ -956,6 +1248,8 @@ pub struct PrValidationOperatorSummary {
     pub state: PrValidationOperatorState,
     pub phase: PrValidationPhase,
     pub target_short_sha: String,
+    pub integration_method: Option<IntegrationMethod>,
+    pub evidence_short_sha: Option<String>,
     pub merge_short_sha: Option<String>,
     pub finding_count: usize,
     pub remediation_count: usize,
@@ -987,10 +1281,16 @@ impl PrValidationOperatorSummary {
     }
 
     pub fn compact_label(&self) -> String {
+        let integration = self
+            .integration_method
+            .zip(self.evidence_short_sha.as_deref())
+            .map(|(method, evidence)| format!(" · {} {evidence}", method.label()))
+            .unwrap_or_default();
         format!(
-            "PR #{} {} · findings {} · remediation {}",
+            "PR #{} {}{} · findings {} · remediation {}",
             self.pull_request_number,
             self.state.label(),
+            integration,
             self.finding_count,
             self.remediation_count
         )

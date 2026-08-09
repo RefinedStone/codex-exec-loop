@@ -1,18 +1,21 @@
 use std::collections::BTreeMap;
 
+use chrono::{DateTime, Utc};
+
 use super::orchestrator::{ParallelModeDispatchCommandKind, ParallelModePostTurnQueueDecision};
 use super::{
-    ParallelModeAgentSessionDetailSnapshot, ParallelModeAutomationTrigger,
-    ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
-    ParallelModeDispatchBlockReason, ParallelModeDispatchCommandState, ParallelModeDispatchOutcome,
-    ParallelModeDispatchTaskCandidate, ParallelModeLiveSessionDetailDefaults,
-    ParallelModeOrchestratorState, ParallelModeOrchestratorStateMachine,
-    ParallelModePoolResetPolicy, ParallelModePoolResetScope, ParallelModePoolSlotCleanupDecision,
-    ParallelModePoolSlotState, ParallelModePostTurnQueueSignal, ParallelModeReadinessSnapshot,
-    ParallelModeReadinessState, ParallelModeRuntimeEvent, ParallelModeRuntimeEventEntry,
-    ParallelModeRuntimeEventsSnapshot, ParallelModeSlotLeaseRequest, ParallelModeSlotLeaseSnapshot,
-    ParallelModeSlotLeaseState, ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorState,
-    PrValidationCatchUpState, PrValidationCheckKind, PrValidationCommitSha, PrValidationCompletion,
+    IntegrationAttestation, IntegrationMethod, ParallelModeAgentSessionDetailSnapshot,
+    ParallelModeAutomationTrigger, ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot,
+    ParallelModeCapabilityState, ParallelModeDispatchBlockReason, ParallelModeDispatchCommandState,
+    ParallelModeDispatchOutcome, ParallelModeDispatchTaskCandidate,
+    ParallelModeLiveSessionDetailDefaults, ParallelModeOrchestratorState,
+    ParallelModeOrchestratorStateMachine, ParallelModePoolResetPolicy, ParallelModePoolResetScope,
+    ParallelModePoolSlotCleanupDecision, ParallelModePoolSlotState,
+    ParallelModePostTurnQueueSignal, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
+    ParallelModeRuntimeEvent, ParallelModeRuntimeEventEntry, ParallelModeRuntimeEventsSnapshot,
+    ParallelModeSlotLeaseRequest, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
+    ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorState, PrValidationCatchUpState,
+    PrValidationCheckKind, PrValidationCommitSha, PrValidationCompletion,
     PrValidationCompletionBlocker, PrValidationEvent, PrValidationFinding, PrValidationFindingKey,
     PrValidationFindingSource, PrValidationPhase, PrValidationProviderCompletion,
     PrValidationProviderKey, PrValidationRecord, PrValidationRecordKey,
@@ -1293,6 +1296,95 @@ fn pr_validation_sha_change_resets_completion_and_rejects_stale_evidence() {
             observed: sha("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
         })
     );
+}
+
+#[test]
+fn pr_validation_attestation_owns_post_merge_identity_and_rejects_conflicts() {
+    let integrated_at = DateTime::parse_from_rfc3339("2026-08-10T00:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let evidence_sha = sha("cccccccccccccccccccccccccccccccccccccccc");
+    let attestation = IntegrationAttestation::new(
+        IntegrationMethod::DistributorCherryPick,
+        sha("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        Some(sha("1111111111111111111111111111111111111111")),
+        evidence_sha.clone(),
+        Some(42),
+        None,
+        integrated_at,
+        integrated_at,
+    )
+    .unwrap();
+    let integrated = validation_record()
+        .transition(PrValidationEvent::IntegrationAttested(attestation.clone()))
+        .unwrap();
+
+    assert_eq!(integrated.phase(), PrValidationPhase::PostMergeObservation);
+    assert_eq!(integrated.integration_attestation(), Some(&attestation));
+    assert_eq!(integrated.evidence_sha(), Some(&evidence_sha));
+    assert_eq!(
+        integrated
+            .clone()
+            .transition(PrValidationEvent::IntegrationAttested(attestation))
+            .unwrap(),
+        integrated,
+        "replayed remote verification must be idempotent"
+    );
+
+    let github_conflict = IntegrationAttestation::new(
+        IntegrationMethod::GithubRebaseMerge,
+        sha("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        Some(sha("1111111111111111111111111111111111111111")),
+        evidence_sha.clone(),
+        Some(42),
+        Some(evidence_sha),
+        integrated_at,
+        integrated_at,
+    )
+    .unwrap();
+    assert!(matches!(
+        integrated.transition(PrValidationEvent::IntegrationAttested(github_conflict)),
+        Err(PrValidationTransitionRejection::IntegrationAuthorityConflict { .. })
+    ));
+}
+
+#[test]
+fn pr_validation_attestation_rejects_wrong_source_and_remote_time_order() {
+    let integrated_at = DateTime::parse_from_rfc3339("2026-08-10T00:00:02Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let verified_at = DateTime::parse_from_rfc3339("2026-08-10T00:00:01Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    assert!(
+        IntegrationAttestation::new(
+            IntegrationMethod::DistributorCherryPick,
+            sha("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            None,
+            sha("cccccccccccccccccccccccccccccccccccccccc"),
+            Some(42),
+            None,
+            integrated_at,
+            verified_at,
+        )
+        .is_err()
+    );
+
+    let wrong_source = IntegrationAttestation::new(
+        IntegrationMethod::DistributorCherryPick,
+        sha("dddddddddddddddddddddddddddddddddddddddd"),
+        None,
+        sha("cccccccccccccccccccccccccccccccccccccccc"),
+        Some(42),
+        None,
+        verified_at,
+        verified_at,
+    )
+    .unwrap();
+    assert!(matches!(
+        validation_record().transition(PrValidationEvent::IntegrationAttested(wrong_source)),
+        Err(PrValidationTransitionRejection::IntegrationSourceShaMismatch { .. })
+    ));
 }
 
 #[test]

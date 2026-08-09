@@ -887,13 +887,45 @@ fn distributor_integrate_branch(
     }
     let pushed_head = resolve_workspace_head_sha_with_runtime(runtime, Path::new(&repo_root));
     claim_permit.renew("integration target head verification")?;
-    let verified_remote_head = github_automation.remote_branch_head_for_delivery_target(
+    let verified_remote_head = match github_automation.remote_branch_head_for_delivery_target(
         &repo_root,
         &target.push_remote,
         &credential_redacted_push_url,
         &target.integration_branch,
-    );
-    if verified_remote_head.ok().flatten() != pushed_head {
+    ) {
+        Ok(Some(verified_remote_head)) => verified_remote_head,
+        Ok(None) => {
+            return block_distributor_queue_record(
+                planning_authority,
+                runtime,
+                &resolution.context.repo_root,
+                &resolution.context.pool_root,
+                Some(&resolution.lease),
+                record,
+                format!(
+                    "integration push succeeded but `{}/{}` disappeared during remote verification",
+                    target.push_remote, target.integration_branch
+                ),
+            );
+        }
+        Err(error) => {
+            return block_distributor_queue_record(
+                planning_authority,
+                runtime,
+                &resolution.context.repo_root,
+                &resolution.context.pool_root,
+                Some(&resolution.lease),
+                record,
+                format!(
+                    "integration push succeeded but `{}/{}` could not be remotely verified: {error}",
+                    target.push_remote, target.integration_branch
+                ),
+            );
+        }
+    };
+    if pushed_head.as_deref() != Some(integration_commit_sha.as_str())
+        || verified_remote_head != integration_commit_sha
+    {
         return block_distributor_queue_record(
             planning_authority,
             runtime,
@@ -905,6 +937,23 @@ fn distributor_integrate_branch(
                 "integration push succeeded but `{}/{}` did not verify at the dedicated worktree HEAD; preserve the worktree for operator inspection",
                 target.push_remote, target.integration_branch
             ),
+        );
+    }
+    if let Err(error) = super::super::pr_validation::attest_distributor_pr_validation_with_ports(
+        planning_authority,
+        runtime,
+        &resolution.context.repo_root,
+        &resolution.context.pool_root,
+        record,
+    ) {
+        return block_distributor_queue_record(
+            planning_authority,
+            runtime,
+            &resolution.context.repo_root,
+            &resolution.context.pool_root,
+            Some(&resolution.lease),
+            record,
+            format!("verified integration evidence could not be attested: {error}"),
         );
     }
     let mut preserved_review_surface_note = None;

@@ -64,8 +64,14 @@ impl GitCommandStepReport {
         let detail = self
             .stderr
             .lines()
+            .rev()
             .find(|line| !line.trim().is_empty())
-            .or_else(|| self.stdout.lines().find(|line| !line.trim().is_empty()))
+            .or_else(|| {
+                self.stdout
+                    .lines()
+                    .rev()
+                    .find(|line| !line.trim().is_empty())
+            })
             .unwrap_or("git command exited without diagnostic output");
         format!("{} failed: {detail}", self.label)
     }

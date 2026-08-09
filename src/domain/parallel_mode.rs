@@ -55,14 +55,14 @@ pub use self::pool_reset::{
 };
 #[allow(unused_imports)]
 pub use self::pr_validation::{
-    PrValidationCatchUpState, PrValidationCheckKind, PrValidationCommitSha, PrValidationCompletion,
-    PrValidationCompletionBlocker, PrValidationEvent, PrValidationFinding, PrValidationFindingKey,
-    PrValidationFindingSource, PrValidationOperatorCorrelation, PrValidationOperatorState,
-    PrValidationOperatorSummary, PrValidationPhase, PrValidationProviderCompletion,
-    PrValidationProviderKey, PrValidationRecord, PrValidationRecordKey, PrValidationRecoveryAction,
-    PrValidationRemediationCorrelation, PrValidationRequiredCheck, PrValidationRequiredCheckKey,
-    PrValidationTarget, PrValidationTargetShaSnapshot, PrValidationTerminalReason,
-    PrValidationTransitionRejection,
+    IntegrationAttestation, IntegrationMethod, PrValidationCatchUpState, PrValidationCheckKind,
+    PrValidationCommitSha, PrValidationCompletion, PrValidationCompletionBlocker,
+    PrValidationEvent, PrValidationFinding, PrValidationFindingKey, PrValidationFindingSource,
+    PrValidationOperatorCorrelation, PrValidationOperatorState, PrValidationOperatorSummary,
+    PrValidationPhase, PrValidationProviderCompletion, PrValidationProviderKey, PrValidationRecord,
+    PrValidationRecordKey, PrValidationRecoveryAction, PrValidationRemediationCorrelation,
+    PrValidationRequiredCheck, PrValidationRequiredCheckKey, PrValidationTarget,
+    PrValidationTargetShaSnapshot, PrValidationTerminalReason, PrValidationTransitionRejection,
 };
 pub use self::readiness::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,

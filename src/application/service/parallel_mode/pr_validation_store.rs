@@ -13,7 +13,7 @@ fn ensure_pr_validation_mirror_root(
     pool_root: &Path,
 ) -> Result<(), String> {
     runtime
-        .ensure_directory_exists(pool_root)
+        .prepare_runtime_mirror_root(pool_root)
         .map_err(|error| format!("PR validation mirror root could not be initialized: {error}"))
 }
 

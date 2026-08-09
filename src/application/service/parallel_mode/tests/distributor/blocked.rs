@@ -1281,6 +1281,68 @@ fn distributor_blocks_when_integration_branch_push_is_rejected_without_remote_eq
 }
 
 #[test]
+fn distributor_rejects_moved_remote_head_before_integration_attestation() {
+    const MOVED_REMOTE_HEAD: &str = "dddddddddddddddddddddddddddddddddddddddd";
+
+    let repo = TempGitRepo::new("dist-moved-head");
+    let github =
+        FakeGithubAutomationPort::with_integration_remote_head_after_reads(1, MOVED_REMOTE_HEAD);
+    let operations = github.operations.clone();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    enqueue_single_commit_ready_result(&service, &repo, "turn-moved-remote-attestation");
+    run_git(&repo.repo_root, &["checkout", "prerelease"]);
+
+    let notices = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("moved remote head should become a durable queue block");
+
+    assert!(
+        notices.iter().any(|notice| {
+            notice.contains("integration push succeeded")
+                && notice.contains("did not verify at the dedicated worktree HEAD")
+        }),
+        "remote movement after push must fail exact verification: {notices:?}"
+    );
+    let operations = operations
+        .lock()
+        .expect("fake github operations mutex poisoned")
+        .clone();
+    assert!(
+        operations
+            .iter()
+            .any(|operation| operation == "push-integration:prerelease")
+    );
+    assert!(
+        operations
+            .iter()
+            .all(|operation| operation != "close-pr:77"),
+        "PR close must not run before remote equivalence is attested: {operations:?}"
+    );
+
+    let queue_record =
+        SqlitePlanningAuthorityAdapter::load_runtime_projections(&repo.workspace_dir())
+            .expect("authoritative runtime projection should remain readable")
+            .distributor_queue_records
+            .into_iter()
+            .next()
+            .expect("blocked queue record should remain durable");
+    assert_eq!(
+        queue_record.queue_state,
+        ParallelModeQueueItemState::Blocked
+    );
+    let validation = SqlitePlanningAuthorityAdapter::load_runtime_pr_validation_record_for_pr(
+        &repo.workspace_dir(),
+        77,
+    )
+    .expect("validation authority should remain readable")
+    .expect("PR validation should have been registered before integration");
+    assert!(
+        validation.integration_attestation().is_none(),
+        "a moved remote head must never acquire integration authority"
+    );
+}
+
+#[test]
 fn distributor_blocks_when_pull_request_close_fails_after_integration_push() {
     let repo = TempGitRepo::new("distributor-pr-close-failure");
     let github = FakeGithubAutomationPort::with_close_error("close rejected by policy");
@@ -1315,10 +1377,13 @@ fn distributor_blocks_when_pull_request_close_fails_after_integration_push() {
             "close-pr:77".to_string(),
         ]
     );
-    let queue_record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
-        .into_iter()
-        .next()
-        .expect("queue record should persist");
+    let queue_record =
+        SqlitePlanningAuthorityAdapter::load_runtime_projections(&repo.workspace_dir())
+            .expect("authoritative runtime projection should remain readable")
+            .distributor_queue_records
+            .into_iter()
+            .next()
+            .expect("queue record should persist");
     assert_eq!(
         queue_record.queue_state,
         ParallelModeQueueItemState::Blocked
@@ -1327,6 +1392,20 @@ fn distributor_blocks_when_pull_request_close_fails_after_integration_push() {
         queue_record
             .integration_note
             .contains("pull request #77 could not be closed")
+    );
+    let validation = SqlitePlanningAuthorityAdapter::load_runtime_pr_validation_record_for_pr(
+        &repo.workspace_dir(),
+        77,
+    )
+    .expect("validation authority should remain readable")
+    .expect("verified integration must be attested before PR close");
+    assert_eq!(validation.phase(), PrValidationPhase::PostMergeObservation);
+    assert_eq!(
+        validation
+            .integration_attestation()
+            .expect("close failure must not erase integration proof")
+            .method(),
+        IntegrationMethod::DistributorCherryPick
     );
 }
 

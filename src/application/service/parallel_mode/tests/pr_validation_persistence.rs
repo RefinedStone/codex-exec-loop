@@ -8,9 +8,12 @@ use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::domain::parallel_mode::{
-    PrValidationCommitSha, PrValidationEvent, PrValidationRecord, PrValidationRecordKey,
-    PrValidationTarget, PrValidationTargetShaSnapshot,
+    IntegrationAttestation, IntegrationMethod, PrValidationCommitSha, PrValidationEvent,
+    PrValidationFinding, PrValidationFindingKey, PrValidationFindingSource, PrValidationRecord,
+    PrValidationRecordKey, PrValidationRemediationCorrelation, PrValidationTarget,
+    PrValidationTargetShaSnapshot,
 };
+use chrono::{DateTime, Utc};
 
 use super::super::{
     persist_pr_validation_record, pr_validation_record_relative_path,
@@ -215,6 +218,27 @@ fn registered_record(key: &str) -> PrValidationRecord {
     )
 }
 
+fn distributor_attestation() -> IntegrationAttestation {
+    let observed_at = DateTime::parse_from_rfc3339("2026-08-10T00:00:00Z")
+        .expect("attestation timestamp")
+        .with_timezone(&Utc);
+    IntegrationAttestation::new(
+        IntegrationMethod::DistributorCherryPick,
+        PrValidationCommitSha::new("1111111111111111111111111111111111111111").expect("source sha"),
+        Some(
+            PrValidationCommitSha::new("2222222222222222222222222222222222222222")
+                .expect("base sha"),
+        ),
+        PrValidationCommitSha::new("3333333333333333333333333333333333333333")
+            .expect("evidence sha"),
+        Some(42),
+        None,
+        observed_at,
+        observed_at,
+    )
+    .expect("distributor attestation")
+}
+
 #[test]
 fn validation_record_survives_authority_restart_and_repairs_a_missing_mirror() {
     let workspace = temp_workspace("restart-mirror");
@@ -254,6 +278,69 @@ fn validation_record_survives_authority_restart_and_repairs_a_missing_mirror() {
         Some(serde_json::to_string_pretty(&record).expect("record should serialize"))
     );
     assert_eq!(runtime.ensured_directories(), vec![pool_root]);
+}
+
+#[test]
+fn validation_attestation_and_remediation_correlation_survive_authority_restart() {
+    let workspace = temp_workspace("restart-attestation-correlation");
+    let pool_root = PathBuf::from(&workspace).join("pool");
+    let authority = SqlitePlanningAuthorityAdapter::new();
+    let runtime = ValidationMirrorRuntime::default();
+    let finding = PrValidationFinding::new(
+        PrValidationFindingKey::new(
+            PrValidationFindingSource::new("check_run").unwrap(),
+            "check:post-merge-gate",
+        )
+        .unwrap(),
+        PrValidationCommitSha::new("1111111111111111111111111111111111111111").unwrap(),
+        "Post-Merge Gate failed",
+    )
+    .unwrap();
+    let record = registered_record("validation/restart-attested")
+        .transition(PrValidationEvent::BeginPreMergeObservation)
+        .unwrap()
+        .transition(PrValidationEvent::FindingObserved(finding.clone()))
+        .unwrap()
+        .transition(PrValidationEvent::RemediationQueued(
+            PrValidationRemediationCorrelation::new(
+                finding.key().clone(),
+                PrValidationRecordKey::new("remediation-restart-42").unwrap(),
+            ),
+        ))
+        .unwrap()
+        .transition(PrValidationEvent::RemediationStarted {
+            finding_key: finding.key().clone(),
+        })
+        .unwrap()
+        .transition(PrValidationEvent::IntegrationAttested(
+            distributor_attestation(),
+        ))
+        .unwrap();
+
+    persist_pr_validation_record(&authority, &runtime, &workspace, &pool_root, None, &record)
+        .expect("attested record should persist");
+    runtime.clear();
+    let restarted = SqlitePlanningAuthorityAdapter::new();
+    let recovered = recover_pr_validation_record_mirror(
+        &restarted,
+        &runtime,
+        &workspace,
+        &pool_root,
+        record.key(),
+    )
+    .expect("restart recovery should succeed")
+    .expect("attested record should survive restart");
+
+    assert_eq!(recovered, record);
+    assert_eq!(
+        recovered.integration_attestation(),
+        Some(&distributor_attestation())
+    );
+    assert!(
+        recovered
+            .remediation_for_task("remediation-restart-42")
+            .is_some()
+    );
 }
 
 #[test]
@@ -325,6 +412,28 @@ fn validation_record_authority_compare_and_swap_rejects_a_stale_transition() {
         authority
             .load_runtime_pr_validation_record(&workspace, registered.key())
             .expect("authority record should load"),
+        Some(observing.clone())
+    );
+
+    let attested = registered
+        .transition(PrValidationEvent::IntegrationAttested(
+            distributor_attestation(),
+        ))
+        .expect("attestation transition");
+    let error = persist_pr_validation_record(
+        &authority,
+        &runtime,
+        &workspace,
+        &pool_root,
+        Some(&registered),
+        &attested,
+    )
+    .expect_err("stale integration attestation must lose authority CAS");
+    assert!(error.contains("changed before validation transition"));
+    assert_eq!(
+        authority
+            .load_runtime_pr_validation_record(&workspace, registered.key())
+            .expect("authority record should load after stale attestation"),
         Some(observing)
     );
 }

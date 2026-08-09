@@ -110,9 +110,10 @@ pub(super) use self::paths::{
 #[cfg(test)]
 use self::paths::{resolve_branch_head, worktree_paths_match};
 use self::reconcile::{
-    ReusableDetachedBaselineResetContext, git_command_directory, git_worktree_destination,
-    provision_missing_slots, reset_reusable_detached_baseline_slots,
+    ReusableDetachedBaselineResetContext, provision_missing_slots,
+    reset_reusable_detached_baseline_slots,
 };
+pub(super) use self::reconcile::{git_command_directory, git_worktree_destination};
 pub(super) use self::slot_inspection::pool_operator_recovery_notice;
 use self::slot_inspection::summarize_pool_reconcile_status;
 use super::session_detail::agent_session_detail_record_path;

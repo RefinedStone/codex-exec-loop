@@ -8,8 +8,8 @@ use crate::domain::github_review::{GithubCommitSha, GithubOpaqueId, GithubPullRe
 pub struct GithubPrValidationObservationRequest {
     pub target: GithubPullRequestTarget,
     pub target_sha: GithubCommitSha,
-    /// Previously recorded merge SHA for post-merge polls. `None` means the adapter must discover
-    /// the current evidence target from the PR response.
+    /// Authority-attested evidence SHA for post-integration polls. GitHub merges must match the PR
+    /// merge SHA; distributor integrations remain valid even while the PR is open or closed.
     pub evidence_sha: Option<GithubCommitSha>,
     pub cursor: Option<GithubValidationCursor>,
 }
