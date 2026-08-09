@@ -2,7 +2,7 @@ use crossterm::event::{
     Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use ratatui::Terminal;
-use ratatui::backend::TestBackend;
+use ratatui::backend::{Backend, TestBackend};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Position;
 
@@ -66,6 +66,23 @@ fn render_buffer(app: &mut NativeTuiApp, width: u16, height: u16) -> Buffer {
         .draw(|frame| draw(frame, app, ShellFrontendMode::Fullscreen))
         .expect("fullscreen frame should render");
     terminal.backend().buffer().clone()
+}
+
+fn render_buffer_with_cursor(
+    app: &mut NativeTuiApp,
+    width: u16,
+    height: u16,
+) -> (Buffer, Position) {
+    let mut terminal =
+        Terminal::new(TestBackend::new(width, height)).expect("fullscreen test terminal");
+    terminal
+        .draw(|frame| draw(frame, app, ShellFrontendMode::Fullscreen))
+        .expect("fullscreen frame should render");
+    let cursor = terminal
+        .backend_mut()
+        .get_cursor_position()
+        .expect("fullscreen cursor position");
+    (terminal.backend().buffer().clone(), cursor)
 }
 
 fn buffer_text(buffer: &Buffer) -> String {
@@ -218,10 +235,12 @@ fn focused_composer_uses_a_complete_frame_and_distinct_tail_surfaces() {
 fn focused_parallel_operations_renders_the_cjk_task_composer() {
     let mut app = test_native_tui_app();
     seed_ready_parallel_mode(&mut app);
-    ready_conversation_mut(&mut app).composer.input_buffer = "verify 작업".to_string();
+    let composer = &mut ready_conversation_mut(&mut app).composer;
+    composer.input_buffer = "verify 작업".to_string();
+    composer.set_input_cursor_byte_index("verify 작".len());
     app.show_supersession_overlay();
 
-    let buffer = render_buffer(&mut app, 120, 32);
+    let (buffer, cursor) = render_buffer_with_cursor(&mut app, 120, 32);
     let screen = buffer_text(&buffer);
     let glyph_position = |glyph: &str| {
         (0..buffer.area.height).find_map(|row| {
@@ -243,6 +262,23 @@ fn focused_parallel_operations_renders_the_cjk_task_composer() {
         second_cjk_glyph.x,
         first_cjk_glyph.x.saturating_add(2),
         "Ratatui should place adjacent full-width CJK glyphs without clipping:\n{screen}"
+    );
+    let composer_top_left = buffer
+        .cell(Position::new(0, first_cjk_glyph.y.saturating_sub(1)))
+        .expect("focused composer top-left cell")
+        .symbol();
+    let composer_bottom_left = buffer
+        .cell(Position::new(0, first_cjk_glyph.y.saturating_add(1)))
+        .expect("focused composer bottom-left cell")
+        .symbol();
+    assert_eq!(
+        (cursor, composer_top_left, composer_bottom_left),
+        (
+            Position::new(second_cjk_glyph.x, second_cjk_glyph.y),
+            "╭",
+            "╰",
+        ),
+        "focused Parallel Operations should render the composer frame and terminal cursor"
     );
 
     if std::env::var_os("AKRA_CAPTURE_PARALLEL_COMPOSER").is_some() {
