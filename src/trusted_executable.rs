@@ -1662,6 +1662,11 @@ fn validate_candidate(candidate: &Path, untrusted_roots: &[PathBuf]) -> Result<P
     Ok(canonical)
 }
 
+#[cfg(any(unix, test))]
+fn unix_executable_mode_is_set(mode: u32) -> bool {
+    mode & 0o111 != 0
+}
+
 fn validate_candidate_with_policy(
     candidate: &Path,
     untrusted_roots: &[PathBuf],
@@ -1676,6 +1681,14 @@ fn validate_candidate_with_policy(
         .with_context(|| format!("failed to inspect executable `{}`", canonical.display()))?;
     if !metadata.is_file() {
         bail!("pinned executable target is not a regular file")
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        if !unix_executable_mode_is_set(metadata.permissions().mode()) {
+            bail!("pinned executable target is not executable")
+        }
     }
     Ok(canonical)
 }
@@ -2012,6 +2025,46 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn permissive_codex_resolution_rejects_native_binary_without_execute_bits() {
+        let root = fixture_root("permissive-non-executable-codex");
+        let workspace = root.join("workspace");
+        let bin = workspace.join("bin");
+        fs::create_dir_all(&bin).expect("repository bin should be created");
+        let codex = bin.join("codex");
+        copy_native_executable_fixture(&codex).expect("native Codex fixture should copy");
+        let mut permissions = fs::metadata(&codex)
+            .expect("native Codex fixture should have metadata")
+            .permissions();
+        permissions.set_mode(0o600);
+        fs::set_permissions(&codex, permissions)
+            .expect("native Codex fixture should lose execute bits");
+
+        let error = super::resolve_codex_command_from_path_with_policy(
+            bin.as_os_str(),
+            &workspace,
+            super::CodexExecutableTrustPolicy::AllowUntrusted,
+        )
+        .expect_err("permissive policy must retain native execute-bit validation");
+
+        assert!(
+            error
+                .chain()
+                .map(ToString::to_string)
+                .any(|detail| detail.contains("not executable"))
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unix_executable_mode_requires_at_least_one_execute_bit() {
+        assert!(!super::unix_executable_mode_is_set(0o600));
+        assert!(super::unix_executable_mode_is_set(0o100));
+        assert!(super::unix_executable_mode_is_set(0o010));
+        assert!(super::unix_executable_mode_is_set(0o001));
     }
 
     #[cfg(unix)]
