@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-08-10T14:55:31.941Z",
+  "generatedAt": "2026-08-10T15:18:43.025Z",
   "repository": "RefinedStone/codex-exec-loop",
   "baseBranch": "prerelease",
   "decision": {
@@ -12,10 +12,69 @@
   },
   "sample": {
     "pullRequestCount": 10,
-    "earliestMergedAt": "2026-08-09T04:12:19.000Z",
-    "latestMergedAt": "2026-08-10T12:43:12.000Z",
-    "windowHours": 32.51,
+    "earliestMergedAt": "2026-08-09T06:10:22.000Z",
+    "latestMergedAt": "2026-08-10T15:06:42.000Z",
+    "windowHours": 32.94,
     "rows": [
+      {
+        "number": 2112,
+        "title": "feat: complete post-merge validation rollout",
+        "url": "https://github.com/RefinedStone/codex-exec-loop/pull/2112",
+        "mergedAt": "2026-08-10T15:06:42Z",
+        "headSha": "a104456f61f53e1748a4a0f37377a41c91104107",
+        "mergeSha": "ab4bd956d0ab2c06a33a168b93e4c5c6002c31ad",
+        "preMerge": {
+          "id": 31400846618,
+          "event": "pull_request",
+          "headSha": "a104456f61f53e1748a4a0f37377a41c91104107",
+          "conclusion": "success",
+          "createdAt": "2026-08-10T14:56:01Z",
+          "updatedAt": "2026-08-10T15:05:45Z",
+          "url": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31400846618",
+          "fastGate": {
+            "seconds": 173,
+            "conclusion": "success",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31400846618/job/93495952474",
+            "source": "actual"
+          },
+          "ciGate": {
+            "seconds": 583,
+            "conclusion": "success",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31400846618/job/93498009590"
+          },
+          "postMergeGate": {
+            "seconds": 570,
+            "conclusion": "skipped",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31400846618/job/93498010367"
+          }
+        },
+        "postMerge": {
+          "id": 31401817497,
+          "event": "push",
+          "headSha": "ab4bd956d0ab2c06a33a168b93e4c5c6002c31ad",
+          "conclusion": "success",
+          "createdAt": "2026-08-10T15:06:45Z",
+          "updatedAt": "2026-08-10T15:15:43Z",
+          "url": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31401817497",
+          "fastGate": {
+            "seconds": 114,
+            "conclusion": "skipped",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31401817497/job/93498957208",
+            "source": "actual"
+          },
+          "ciGate": {
+            "seconds": 537,
+            "conclusion": "success",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31401817497/job/93500972080"
+          },
+          "postMergeGate": {
+            "seconds": 534,
+            "conclusion": "success",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31401817497/job/93500972099"
+          }
+        },
+        "evidenceShaMatchesActionsTarget": true
+      },
       {
         "number": 2111,
         "title": "feat(admin): operate post-merge validation",
@@ -514,57 +573,6 @@
           "postMergeGate": null
         },
         "evidenceShaMatchesActionsTarget": true
-      },
-      {
-        "number": 2102,
-        "title": "fix(tui): keep parallel task input active",
-        "url": "https://github.com/RefinedStone/codex-exec-loop/pull/2102",
-        "mergedAt": "2026-08-09T04:12:19Z",
-        "headSha": "bbab29f4df633239b8c43b435864a283f1778b48",
-        "mergeSha": "f5653412ce2b1ca826074349d9091015873a6a68",
-        "preMerge": {
-          "id": 31293754363,
-          "event": "pull_request",
-          "headSha": "bbab29f4df633239b8c43b435864a283f1778b48",
-          "conclusion": "success",
-          "createdAt": "2026-08-09T04:03:41Z",
-          "updatedAt": "2026-08-09T04:11:50Z",
-          "url": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31293754363",
-          "fastGate": {
-            "seconds": 94,
-            "conclusion": "success",
-            "jobUrl": null,
-            "source": "projected_from_existing_jobs"
-          },
-          "ciGate": {
-            "seconds": 488,
-            "conclusion": "success",
-            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31293754363/job/93196077128"
-          },
-          "postMergeGate": null
-        },
-        "postMerge": {
-          "id": 31294067981,
-          "event": "push",
-          "headSha": "f5653412ce2b1ca826074349d9091015873a6a68",
-          "conclusion": "success",
-          "createdAt": "2026-08-09T04:12:22Z",
-          "updatedAt": "2026-08-09T04:13:40Z",
-          "url": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31294067981",
-          "fastGate": {
-            "seconds": 66,
-            "conclusion": "success",
-            "jobUrl": null,
-            "source": "projected_from_existing_jobs"
-          },
-          "ciGate": {
-            "seconds": 78,
-            "conclusion": "success",
-            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31294067981/job/93196243056"
-          },
-          "postMergeGate": null
-        },
-        "evidenceShaMatchesActionsTarget": true
       }
     ]
   },
@@ -572,57 +580,57 @@
     "fastGate": {
       "sampleCount": 10,
       "p50Seconds": 88,
-      "p95Seconds": 101,
-      "label": "projected"
+      "p95Seconds": 173,
+      "label": "mixed_actual_and_projected"
     },
     "actualFastGate": {
       "sampleCount": 1,
-      "p50Seconds": 114,
-      "p95Seconds": 114,
+      "p50Seconds": 173,
+      "p95Seconds": 173,
       "label": "actual"
     },
     "ciGate": {
       "sampleCount": 10,
-      "p50Seconds": 488,
-      "p95Seconds": 535,
+      "p50Seconds": 501,
+      "p95Seconds": 583,
       "label": "actual"
     },
     "postMergeGate": {
-      "sampleCount": 5,
+      "sampleCount": 6,
       "p50Seconds": 517,
-      "p95Seconds": 528,
+      "p95Seconds": 534,
       "label": "actual"
     }
   },
   "actualFastGateRuns": [
     {
-      "id": 31400129391,
-      "headSha": "47068fb1684de022221cbb3ea67b2bc87dc01b3c",
+      "id": 31400846618,
+      "headSha": "a104456f61f53e1748a4a0f37377a41c91104107",
       "conclusion": "success",
-      "seconds": 114,
-      "runUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31400129391",
-      "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31400129391/job/93493230239"
+      "seconds": 173,
+      "runUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31400846618",
+      "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31400846618/job/93495952474"
     }
   ],
   "postMerge": {
-    "sampleCount": 5,
+    "sampleCount": 6,
     "failureCount": 0,
     "failureRatePercent": 0
   },
   "quota": {
     "limit": 5000,
-    "remaining": 4995,
-    "used": 5,
+    "remaining": 4683,
+    "used": 317,
     "reset": 1786377195,
     "collectorRequests": 3,
-    "usedPercent": 0.1
+    "usedPercent": 6.34
   },
   "criteria": {
     "sampleWindow": {
       "status": "pass",
       "observed": {
         "pullRequests": 10,
-        "windowHours": 32.51
+        "windowHours": 32.94
       },
       "limit": {
         "pullRequests": 10,
@@ -640,7 +648,7 @@
     },
     "apiBudget": {
       "status": "pass",
-      "observed": 0.1,
+      "observed": 6.34,
       "limit": 50,
       "source": "github_rate_limit",
       "note": "percentage of the authenticated core quota currently consumed"
@@ -684,10 +692,10 @@
   "canaries": {
     "productionSuccess": {
       "status": "pass",
-      "pullRequestNumber": 2111,
-      "mergeSha": "3b4ef4b4085d132317079d43331fff1c44edbfd3",
-      "runId": 31389346076,
-      "runUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31389346076"
+      "pullRequestNumber": 2112,
+      "mergeSha": "ab4bd956d0ab2c06a33a168b93e4c5c6002c31ad",
+      "runId": 31401817497,
+      "runUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31401817497"
     },
     "failure": {
       "status": "pass",
@@ -827,7 +835,14 @@
       "verifiedAt": "2026-08-10T14:51:04.9234027Z",
       "repositoryLocalSchedulerMode": "remediate",
       "queueAdmission": "enabled_for_typed_actionable_findings",
-      "githubRuleset": "unchanged_approval_required"
+      "githubRuleset": "unchanged_approval_required",
+      "pr7": {
+        "pullRequest": 2112,
+        "mergeSha": "ab4bd956d0ab2c06a33a168b93e4c5c6002c31ad",
+        "postMergeRunId": 31401817497,
+        "postMergeGate": "success",
+        "dedicatedWorktreeCleanup": "complete"
+      }
     }
   }
 }
