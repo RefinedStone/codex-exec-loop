@@ -1,0 +1,238 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-08-10T21:54:57.421Z",
+  "commit": "c0f961c1d55f3cc3390ddcb2bfaa5923135c994d",
+  "target": "/admin/akra",
+  "composition": "production",
+  "observationMillis": 15000,
+  "api": {
+    "dashboardBytes": 9709,
+    "evidenceDetailBytes": 9671,
+    "latestStatus": "ready",
+    "latestGeneratedAt": "2026-08-10T15:18:43.025+00:00",
+    "historyRows": 1,
+    "trendMetrics": [
+      "actual_fast_gate",
+      "ci_gate",
+      "post_merge_gate"
+    ],
+    "warningKinds": [
+      "insufficient_actual_samples"
+    ],
+    "collection": {
+      "state": "cooldown",
+      "revision": 1,
+      "lastCollectedAt": "2026-08-10T21:54:36.722917700+00:00",
+      "lastOutcome": "collected",
+      "lastErrorClass": null,
+      "nextCollectAtEpochMillis": 1786398881722,
+      "staleLeaseRecoveryCount": 0,
+      "identityConflictCount": 0
+    },
+    "revision": 1
+  },
+  "wide": {
+    "viewport": {
+      "width": 1600,
+      "height": 1000
+    },
+    "before": {
+      "document": {
+        "innerWidth": 1600,
+        "rootClientWidth": 1600,
+        "rootOffsetWidth": 1600,
+        "rootScrollWidth": 1600,
+        "bodyClientWidth": 1600,
+        "bodyOffsetWidth": 1600,
+        "bodyScrollWidth": 1600,
+        "bodyBounds": {
+          "left": 0,
+          "right": 1600,
+          "width": 1600
+        },
+        "bodyOverflowX": "visible",
+        "rootOverflowX": "visible"
+      },
+      "nodes": 443,
+      "scrollHeight": 1455,
+      "horizontalOverflowPixels": 0,
+      "evidenceState": "ready",
+      "drawerMode": "evidence",
+      "drawerVisible": true,
+      "overflowElements": [],
+      "historyRows": 1,
+      "metricCards": [
+        {
+          "metric": "historicalFastGate",
+          "text": "Projected Fast GateMIXED p5088초 p95173초 표본 10historical pr sample2026. 8. 11. 오전 12:18:43"
+        },
+        {
+          "metric": "actualFastGate",
+          "text": "Actual Fast GateACTUAL p50173초 p95173초 표본 1independent actual runs2026. 8. 11. 오전 12:18:43"
+        },
+        {
+          "metric": "ciGate",
+          "text": "CI GateACTUAL p50501초 p95583초 표본 10pre merge runs2026. 8. 11. 오전 12:18:43"
+        },
+        {
+          "metric": "postMergeGate",
+          "text": "Post-Merge GateACTUAL p50517초 p95534초 표본 6post merge push runs2026. 8. 11. 오전 12:18:43"
+        }
+      ],
+      "realtime": "realtime stream · live snapshot · live events"
+    },
+    "after": {
+      "document": {
+        "innerWidth": 1600,
+        "rootClientWidth": 1600,
+        "rootOffsetWidth": 1600,
+        "rootScrollWidth": 1600,
+        "bodyClientWidth": 1600,
+        "bodyOffsetWidth": 1600,
+        "bodyScrollWidth": 1600,
+        "bodyBounds": {
+          "left": 0,
+          "right": 1600,
+          "width": 1600
+        },
+        "bodyOverflowX": "visible",
+        "rootOverflowX": "visible"
+      },
+      "nodes": 443,
+      "scrollHeight": 1455,
+      "horizontalOverflowPixels": 0,
+      "evidenceState": "ready",
+      "drawerMode": "evidence",
+      "drawerVisible": true,
+      "overflowElements": [],
+      "historyRows": 1,
+      "metricCards": [
+        {
+          "metric": "historicalFastGate",
+          "text": "Projected Fast GateMIXED p5088초 p95173초 표본 10historical pr sample2026. 8. 11. 오전 12:18:43"
+        },
+        {
+          "metric": "actualFastGate",
+          "text": "Actual Fast GateACTUAL p50173초 p95173초 표본 1independent actual runs2026. 8. 11. 오전 12:18:43"
+        },
+        {
+          "metric": "ciGate",
+          "text": "CI GateACTUAL p50501초 p95583초 표본 10pre merge runs2026. 8. 11. 오전 12:18:43"
+        },
+        {
+          "metric": "postMergeGate",
+          "text": "Post-Merge GateACTUAL p50517초 p95534초 표본 6post merge push runs2026. 8. 11. 오전 12:18:43"
+        }
+      ],
+      "realtime": "realtime stream · live snapshot · live events"
+    },
+    "nodeDelta": 0,
+    "scrollHeightDelta": 0,
+    "taskDurationDeltaMillis": 449.91,
+    "scriptDurationDeltaMillis": 205.252,
+    "jsHeapUsedBeforeBytes": 6344856,
+    "jsHeapUsedAfterBytes": 6597016,
+    "browserWarningOrErrorCount": 0
+  },
+  "narrow": {
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "beforeDrawer": {
+      "document": {
+        "innerWidth": 390,
+        "rootClientWidth": 390,
+        "rootOffsetWidth": 390,
+        "rootScrollWidth": 390,
+        "bodyClientWidth": 390,
+        "bodyOffsetWidth": 390,
+        "bodyScrollWidth": 390,
+        "bodyBounds": {
+          "left": 0,
+          "right": 390,
+          "width": 390
+        },
+        "bodyOverflowX": "visible",
+        "rootOverflowX": "visible"
+      },
+      "nodes": 356,
+      "scrollHeight": 3669,
+      "horizontalOverflowPixels": 0,
+      "evidenceState": "ready",
+      "drawerMode": null,
+      "drawerVisible": false,
+      "overflowElements": [],
+      "historyRows": 0,
+      "metricCards": [
+        {
+          "metric": "historicalFastGate",
+          "text": "Projected Fast Gatemixed_actual_and_projected p5088s p95173s 표본 10historical_pr_sample2026-08-10T15:18:43.025+00:00"
+        },
+        {
+          "metric": "actualFastGate",
+          "text": "Actual Fast Gateactual p50173s p95173s 표본 1independent_actual_runs2026-08-10T15:18:43.025+00:00"
+        },
+        {
+          "metric": "ciGate",
+          "text": "CI Gateactual p50501s p95583s 표본 10pre_merge_runs2026-08-10T15:18:43.025+00:00"
+        },
+        {
+          "metric": "postMergeGate",
+          "text": "Post-Merge Gateactual p50517s p95534s 표본 6post_merge_push_runs2026-08-10T15:18:43.025+00:00"
+        }
+      ],
+      "realtime": "realtime stream · live snapshot · live events"
+    },
+    "dom": {
+      "document": {
+        "innerWidth": 390,
+        "rootClientWidth": 390,
+        "rootOffsetWidth": 390,
+        "rootScrollWidth": 390,
+        "bodyClientWidth": 390,
+        "bodyOffsetWidth": 390,
+        "bodyScrollWidth": 390,
+        "bodyBounds": {
+          "left": 0,
+          "right": 390,
+          "width": 390
+        },
+        "bodyOverflowX": "visible",
+        "rootOverflowX": "visible"
+      },
+      "nodes": 444,
+      "scrollHeight": 3669,
+      "horizontalOverflowPixels": 0,
+      "evidenceState": "ready",
+      "drawerMode": "evidence",
+      "drawerVisible": true,
+      "overflowElements": [],
+      "historyRows": 1,
+      "metricCards": [
+        {
+          "metric": "historicalFastGate",
+          "text": "Projected Fast Gatemixed_actual_and_projected p5088s p95173s 표본 10historical_pr_sample2026-08-10T15:18:43.025+00:00"
+        },
+        {
+          "metric": "actualFastGate",
+          "text": "Actual Fast Gateactual p50173s p95173s 표본 1independent_actual_runs2026-08-10T15:18:43.025+00:00"
+        },
+        {
+          "metric": "ciGate",
+          "text": "CI Gateactual p50501s p95583s 표본 10pre_merge_runs2026-08-10T15:18:43.025+00:00"
+        },
+        {
+          "metric": "postMergeGate",
+          "text": "Post-Merge Gateactual p50517s p95534s 표본 6post_merge_push_runs2026-08-10T15:18:43.025+00:00"
+        }
+      ],
+      "realtime": "realtime stream · live snapshot · live events"
+    },
+    "browserWarningOrErrorCount": 0
+  },
+  "screenshots": {
+    "wide": "admin-validation-evidence-wide.png",
+    "narrow": "admin-validation-evidence-narrow.png"
+  }
+}

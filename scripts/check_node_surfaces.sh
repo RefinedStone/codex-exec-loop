@@ -14,6 +14,7 @@ done
 printf '\n==> repository Node script syntax\n'
 for script_path in \
   scripts/capture_admin_graphic.mjs \
+  scripts/capture_admin_validation_evidence.mjs \
   scripts/agent-plan.mjs \
   scripts/ci-scope.mjs \
   scripts/normalize_codex_app_server_schema.mjs \
@@ -27,8 +28,11 @@ done
 printf '\n==> shell script syntax\n'
 bash -n scripts/check_windows_portable.sh
 
-printf '\n==> CI and agent planning policy tests\n'
-node --test scripts/ci-scope.test.mjs scripts/agent-plan.test.mjs
+printf '\n==> CI, agent planning, and approval-package tests\n'
+node --test \
+  scripts/ci-scope.test.mjs \
+  scripts/agent-plan.test.mjs \
+  scripts/pr-validation-approval-package.test.mjs
 
 printf '\n==> npm launcher tests\n'
 npm --prefix npm test

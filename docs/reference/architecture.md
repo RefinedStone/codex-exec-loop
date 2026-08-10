@@ -556,6 +556,25 @@ CLI, TUI, and Admin consume narrow application projections. Admin request handle
 own scheduler cadence or call the GitHub/SQLite adapters directly. Repository-local mode is typed
 `off | observe | remediate`; the safe default is `observe`.
 
+Rollout evidence uses a separate application-owned read model. The filesystem
+`PrValidationRolloutEvidencePort` supplies bounded collector documents; the
+`PrValidationRolloutEvidenceQueryService` validates schema, repository/base, generated time,
+content identity, and freshness before exposing `PrValidationRolloutEvidenceQueryPort` to inbound
+surfaces. It preserves historical and independently actual Fast Gate metrics as different typed
+snapshots, and it never treats a missing sample as zero. The optional
+`PrValidationRolloutEvidenceStorePort` persists only validated/redacted DTO JSON plus minimal
+identity and collection metadata. SQLite retains 64 snapshots, uses an exact collection lease/CAS,
+and orders bounded pages by generated time and artifact SHA. Raw GitHub payloads, provider error
+strings, credentials, and local artifact paths do not cross that port.
+
+Admin bootstrap receives only the latest compact evidence summary. The authenticated evidence API
+loads at most 20 history rows on demand, while SSE carries only a monotonic evidence revision and
+cursor-reset invalidation. Reconnect, duplicate, and regressed revisions force or preserve an
+authoritative snapshot instead of replaying browser-owned state. Durable reads recalculate the
+48-hour freshness decision on every process, successful recollection supersedes transient failure
+ordering without erasing the failure observation, and a store/source failure falls back to the last
+valid read-only projection without taking down the parallel control plane.
+
 Post-turn mutation captures continuation and parallel-epoch permits. Long work stays outside their
 bounded commit sections; an invalidated permit may still produce diagnostics but cannot change task
 authority or enqueue delivery.

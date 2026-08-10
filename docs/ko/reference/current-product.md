@@ -177,9 +177,18 @@ RemediationQueued, RemediationRunning, Verified, Blocked, Failed를 구분하고
 mode, Queue admission, Ruleset 별도 승인 경계를 표시합니다. 자세한 운영 절차는
 [PR 검증 운영 전환 runbook](pr-validation-rollout.md)에 있습니다.
 
+Rollout timing evidence는 별도 read path를 사용합니다. Application query service가 collector schema,
+repository/base identity, generated time, evidence SHA, 48시간 freshness 경계를 검증한 뒤 actual과
+historical Fast Gate 분포, CI/Post-Merge timing, 표본 범위, quota, typed warning을 projection합니다.
+Repository authority는 redacted snapshot 최대 64개와 정확한 collection lease/CAS 상태를 보관합니다.
+Dashboard bootstrap에는 최신 summary만 들어가고 evidence drawer가 cursor로 안정 정렬된 history를
+최대 20개까지 lazy load합니다. SSE는 evidence revision invalidation만 전달합니다. Durable replay는
+freshness를 다시 계산하며 source/store 장애가 발생해도 마지막 유효 read-only projection으로
+degrade하고 parallel control plane은 중단하지 않습니다.
+
 `/admin/akra`의 PixiJS 8 world는 같은 dashboard snapshot을 사용합니다. 검증된 frontend store,
 semantic camera zoom, worker 이동, 가구 occlusion, scene selection은 presentation에만 속합니다.
-상세 영문 계약은 [Admin Game Frontend](../../reference/admin-game-frontend.md)에 있습니다.
+상세 계약은 [Admin 게임 프런트엔드](admin-game-frontend.md)에 있습니다.
 
 `akra admin --debug-harness`는 같은 dashboard 계약 뒤에서 application이 소유하는 비영속 Fake
 scenario clock을 시작합니다. Normal delivery, blocked recovery, queue pressure를 실제 planning,

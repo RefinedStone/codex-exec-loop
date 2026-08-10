@@ -1,6 +1,9 @@
 # Admin PR validation 실행 선택·evidence 정합성 계획
 
-상태: **proposed**
+상태: **implemented**
+
+아래의 "현재 상태와 공백"은 계획 작성 시점의 진단 기록이다. 구현 결과와 전달 lineage는
+[11. 구현 결과](#11-구현-결과)에 정리한다.
 
 ## 1. 목적
 
@@ -112,15 +115,15 @@ Admin은 최종 상태만 표시하지 않고 다음 질문에 답할 수 있어
 
 ### 5.1 canonical workflow run reducer
 
-- [ ] provider run identity별로 observation을 그룹화한다.
-- [ ] 같은 run 안에서 높은 `run_attempt`를 선택한다.
-- [ ] 같은 run·attempt 중복은 `updated_at`으로 최신 observation을 선택한다.
-- [ ] workflow 이름별 대표 run은 `created_at`, `updated_at`, provider identity 순으로 결정한다.
-- [ ] timestamp 누락 시 사용할 결정론적이고 fail-closed인 fallback 규칙을 정의한다.
-- [ ] reducer를 pure decision으로 분리해 collector fixture와 Rust runtime fixture가 같은 결과를
+- [x] provider run identity별로 observation을 그룹화한다.
+- [x] 같은 run 안에서 높은 `run_attempt`를 선택한다.
+- [x] 같은 run·attempt 중복은 `updated_at`으로 최신 observation을 선택한다.
+- [x] workflow 이름별 대표 run은 `created_at`, `updated_at`, provider identity 순으로 결정한다.
+- [x] timestamp 누락 시 사용할 결정론적이고 fail-closed인 fallback 규칙을 정의한다.
+- [x] reducer를 pure decision으로 분리해 collector fixture와 Rust runtime fixture가 같은 결과를
       검증하게 한다.
-- [ ] required check 평가와 workflow metadata 선택을 별도 함수로 유지한다.
-- [ ] 최대 workflow 수와 입력 bounds를 유지한다.
+- [x] required check 평가와 workflow metadata 선택을 별도 함수로 유지한다.
+- [x] 최대 workflow 수와 입력 bounds를 유지한다.
 
 필수 fixture:
 
@@ -135,13 +138,13 @@ Admin은 최종 상태만 표시하지 않고 다음 질문에 답할 수 있어
 
 ### 5.2 provider-neutral durable projection
 
-- [ ] `PrValidationObservedWorkflow`에 `created_at`과 선택 provenance를 additive하게 추가한다.
-- [ ] legacy record에서 새 필드가 없을 때 안전한 기본 상태로 deserialize한다.
-- [ ] provider run ID는 reducer 입력으로만 사용하고 durable/Admin projection에서는 제거한다.
-- [ ] 운영자가 run 교체를 인지할 수 있도록 비식별 selection basis를 보존한다.
-- [ ] timestamp validation, 길이 제한, workflow count bound를 유지한다.
-- [ ] record replay와 process restart 후 동일한 projection이 생성되는지 검증한다.
-- [ ] SQLite authority의 기존 JSON fixture와 migration compatibility test를 추가한다.
+- [x] `PrValidationObservedWorkflow`에 `created_at`과 선택 provenance를 additive하게 추가한다.
+- [x] legacy record에서 새 필드가 없을 때 안전한 기본 상태로 deserialize한다.
+- [x] provider run ID는 reducer 입력으로만 사용하고 durable/Admin projection에서는 제거한다.
+- [x] 운영자가 run 교체를 인지할 수 있도록 비식별 selection basis를 보존한다.
+- [x] timestamp validation, 길이 제한, workflow count bound를 유지한다.
+- [x] record replay와 process restart 후 동일한 projection이 생성되는지 검증한다.
+- [x] SQLite authority의 기존 JSON fixture와 migration compatibility test를 추가한다.
 
 권장 projection 의미:
 
@@ -157,101 +160,101 @@ selection_basis = newest_run | latest_attempt | deterministic_tie_break
 
 ### 5.3 Admin workflow read model과 API
 
-- [ ] `PrValidationAdminWorkflow`에 `createdAt`, `selectionBasis`, `selected`를 추가한다.
-- [ ] board row에는 latest selected run의 간결한 요약만 포함한다.
-- [ ] detail endpoint에는 bounded workflow history와 선택 근거를 포함한다.
-- [ ] board payload가 과도하게 커지지 않도록 history는 detail에서만 조회한다.
-- [ ] API가 run ID, check suite ID, token, raw provider body를 redaction하는지 검증한다.
-- [ ] legacy workflow는 `selectionBasis=legacy_unknown`으로 명확히 표시한다.
-- [ ] cursor revision 불일치와 record 갱신 경합 시 기존 authoritative refresh 동작을 유지한다.
+- [x] `PrValidationAdminWorkflow`에 `createdAt`, `selectionBasis`, `selected`를 추가한다.
+- [x] board row에는 latest selected run의 간결한 요약만 포함한다.
+- [x] detail endpoint에는 bounded workflow history와 선택 근거를 포함한다.
+- [x] board payload가 과도하게 커지지 않도록 history는 detail에서만 조회한다.
+- [x] API가 run ID, check suite ID, token, raw provider body를 redaction하는지 검증한다.
+- [x] legacy workflow는 `selectionBasis=legacy_unknown`으로 명확히 표시한다.
+- [x] cursor revision 불일치와 record 갱신 경합 시 기존 authoritative refresh 동작을 유지한다.
 
 ### 5.4 rollout evidence application contract
 
-- [ ] rollout evidence를 읽는 narrow port와 application service를 정의한다.
-- [ ] collector schema version, repository, base branch, generated-at, evidence SHA를 검증한다.
-- [ ] evidence 상태를 `ready`, `hold`, `stale`, `unavailable`, `invalid`로 normalize한다.
-- [ ] historical Fast Gate와 actual Fast Gate를 서로 다른 metric snapshot으로 모델링한다.
-- [ ] 각 metric에 `label`, `sample_count`, `p50_seconds`, `p95_seconds`, `source`를 보존한다.
-- [ ] CI Gate와 Post-Merge Gate, failure rate, quota usage, sample window를 함께 project한다.
-- [ ] actual run을 historical 분포에 실제 포함하지 않았다면 historical label을 projected로 유지한다.
-- [ ] mixed label은 historical sample row 자체에 actual Fast Gate가 포함됐을 때만 허용한다.
-- [ ] evidence 누락·schema 오류·SHA mismatch·stale 상태는 mode 승인 근거에서 fail-closed 처리한다.
-- [ ] 브라우저가 artifact 경로나 JSON 파일을 직접 해석하지 않게 한다.
+- [x] rollout evidence를 읽는 narrow port와 application service를 정의한다.
+- [x] collector schema version, repository, base branch, generated-at, evidence SHA를 검증한다.
+- [x] evidence 상태를 `ready`, `hold`, `stale`, `unavailable`, `invalid`로 normalize한다.
+- [x] historical Fast Gate와 actual Fast Gate를 서로 다른 metric snapshot으로 모델링한다.
+- [x] 각 metric에 `label`, `sample_count`, `p50_seconds`, `p95_seconds`, `source`를 보존한다.
+- [x] CI Gate와 Post-Merge Gate, failure rate, quota usage, sample window를 함께 project한다.
+- [x] actual run을 historical 분포에 실제 포함하지 않았다면 historical label을 projected로 유지한다.
+- [x] mixed label은 historical sample row 자체에 actual Fast Gate가 포함됐을 때만 허용한다.
+- [x] evidence 누락·schema 오류·SHA mismatch·stale 상태는 mode 승인 근거에서 fail-closed 처리한다.
+- [x] 브라우저가 artifact 경로나 JSON 파일을 직접 해석하지 않게 한다.
 
 ### 5.5 evidence 저장과 이력
 
-- [ ] 최신 evidence snapshot과 bounded history를 durable authority에 저장한다.
-- [ ] repository/base/evidence SHA/generated-at 조합으로 중복 snapshot을 억제한다.
-- [ ] actual 표본이 누적될 때 projected history를 덮어쓰지 않는다.
-- [ ] 수집 실패도 성공 snapshot과 구분되는 typed observation으로 기록한다.
-- [ ] retention과 pagination 기준을 정의한다.
-- [ ] scheduler ownership과 evidence collection ownership을 분리한다.
-- [ ] 여러 Admin/TUI process가 동시에 떠 있어도 중복 수집·중복 저장하지 않도록 lease/CAS를 적용한다.
+- [x] 최신 evidence snapshot과 bounded history를 durable authority에 저장한다.
+- [x] repository/base/evidence SHA/generated-at 조합으로 중복 snapshot을 억제한다.
+- [x] actual 표본이 누적될 때 projected history를 덮어쓰지 않는다.
+- [x] 수집 실패도 성공 snapshot과 구분되는 typed observation으로 기록한다.
+- [x] retention과 pagination 기준을 정의한다.
+- [x] scheduler ownership과 evidence collection ownership을 분리한다.
+- [x] 여러 Admin/TUI process가 동시에 떠 있어도 중복 수집·중복 저장하지 않도록 lease/CAS를 적용한다.
 
 ### 5.6 Admin Validation Rail
 
-- [ ] rollout banner 아래에 compact evidence summary를 추가한다.
-- [ ] `Projected Fast Gate`와 `Actual Fast Gate`를 별도 카드로 표시한다.
-- [ ] 각 카드에 label, sample count, p50, p95, generated-at을 표시한다.
-- [ ] CI Gate와 Post-Merge Gate 비교값을 같은 단위로 표시한다.
-- [ ] `stale`, `unavailable`, `invalid`, `hold` 상태를 색상 외 text/icon으로 구분한다.
-- [ ] actual 표본이 없을 때 `0s`가 아니라 `미수집`을 표시한다.
-- [ ] 좁은 화면에서는 카드가 단일 열로 전환되고 수치가 잘리지 않게 한다.
-- [ ] evidence가 mode와 불일치하면 attention strip에 원인과 안전한 조치를 표시한다.
+- [x] rollout banner 아래에 compact evidence summary를 추가한다.
+- [x] `Projected Fast Gate`와 `Actual Fast Gate`를 별도 카드로 표시한다.
+- [x] 각 카드에 label, sample count, p50, p95, generated-at을 표시한다.
+- [x] CI Gate와 Post-Merge Gate 비교값을 같은 단위로 표시한다.
+- [x] `stale`, `unavailable`, `invalid`, `hold` 상태를 색상 외 text/icon으로 구분한다.
+- [x] actual 표본이 없을 때 `0s`가 아니라 `미수집`을 표시한다.
+- [x] 좁은 화면에서는 카드가 단일 열로 전환되고 수치가 잘리지 않게 한다.
+- [x] evidence가 mode와 불일치하면 attention strip에 원인과 안전한 조치를 표시한다.
 
 ### 5.7 validation detail drawer
 
-- [ ] 선택된 workflow에 `최신 run`, `run 내부 attempt N`을 분리해 표시한다.
-- [ ] created/start/update timestamp를 같은 시간대와 포맷으로 표시한다.
-- [ ] selection basis를 운영자 문장으로 변환한다.
-- [ ] 더 오래된 고차 attempt가 선택되지 않은 이유를 확인할 수 있게 한다.
-- [ ] evidence section에 actual/projected 출처와 표본 범위를 표시한다.
-- [ ] check context, workflow container, rollout metric을 시각적으로 구분한다.
-- [ ] keyboard navigation, focus return, screen-reader label을 유지한다.
-- [ ] 외부 링크가 필요하면 application이 허용한 canonical URL만 사용한다.
+- [x] 선택된 workflow에 `최신 run`, `run 내부 attempt N`을 분리해 표시한다.
+- [x] created/start/update timestamp를 같은 시간대와 포맷으로 표시한다.
+- [x] selection basis를 운영자 문장으로 변환한다.
+- [x] 더 오래된 고차 attempt가 선택되지 않은 이유를 확인할 수 있게 한다.
+- [x] evidence section에 actual/projected 출처와 표본 범위를 표시한다.
+- [x] check context, workflow container, rollout metric을 시각적으로 구분한다.
+- [x] keyboard navigation, focus return, screen-reader label을 유지한다.
+- [x] 외부 링크가 필요하면 application이 허용한 canonical URL만 사용한다.
 
 ### 5.8 Debug Harness와 fixture
 
-- [ ] 기존 lifecycle 시나리오를 보존하고 evidence/run-selection fixture를 추가한다.
-- [ ] 오래된 run attempt 3과 새로운 run attempt 1 시나리오를 재현한다.
-- [ ] 같은 run의 attempt 증가 시나리오를 재현한다.
-- [ ] actual 표본 없음, 독립 actual 1개, sample 내 actual 혼합을 각각 재현한다.
-- [ ] stale evidence, invalid schema, SHA mismatch, partial pagination을 재현한다.
-- [ ] provider rate-limit과 retry/backoff 중에도 마지막 valid evidence가 구분되어 보이게 한다.
-- [ ] API, DOM, accessibility projection이 같은 selected run과 metric label을 보고하는지 검증한다.
-- [ ] Pixi scene은 validation phase만 반영하고 metric 수치에 따라 가짜 worker를 만들지 않게 한다.
+- [x] 기존 lifecycle 시나리오를 보존하고 evidence/run-selection fixture를 추가한다.
+- [x] 오래된 run attempt 3과 새로운 run attempt 1 시나리오를 재현한다.
+- [x] 같은 run의 attempt 증가 시나리오를 재현한다.
+- [x] actual 표본 없음, 독립 actual 1개, sample 내 actual 혼합을 각각 재현한다.
+- [x] stale evidence, invalid schema, SHA mismatch, partial pagination을 재현한다.
+- [x] provider rate-limit과 retry/backoff 중에도 마지막 valid evidence가 구분되어 보이게 한다.
+- [x] API, DOM, accessibility projection이 같은 selected run과 metric label을 보고하는지 검증한다.
+- [x] Pixi scene은 validation phase만 반영하고 metric 수치에 따라 가짜 worker를 만들지 않게 한다.
 
 ### 5.9 추세와 이상 징후
 
-- [ ] actual Fast Gate, CI Gate, Post-Merge Gate의 bounded history를 제공한다.
-- [ ] actual/projected 편차와 sample count 변화를 계산한다.
-- [ ] 같은 이름의 workflow가 새 run으로 교체된 이력을 표시한다.
-- [ ] Post-Merge failure, stale evidence, SHA mismatch, duplicate remediation을 별도 지표로 유지한다.
-- [ ] 표본 부족, 급격한 지연, evidence freshness 초과를 typed warning으로 만든다.
-- [ ] 차트가 없어도 표와 텍스트로 동일 정보를 이해할 수 있게 한다.
-- [ ] history query에 cursor, upper bound, stable ordering을 적용한다.
+- [x] actual Fast Gate, CI Gate, Post-Merge Gate의 bounded history를 제공한다.
+- [x] actual/projected 편차와 sample count 변화를 계산한다.
+- [x] 같은 이름의 workflow가 새 run으로 교체된 이력을 표시한다.
+- [x] Post-Merge failure, stale evidence, SHA mismatch, duplicate remediation을 별도 지표로 유지한다.
+- [x] 표본 부족, 급격한 지연, evidence freshness 초과를 typed warning으로 만든다.
+- [x] 차트가 없어도 표와 텍스트로 동일 정보를 이해할 수 있게 한다.
+- [x] history query에 cursor, upper bound, stable ordering을 적용한다.
 
 ### 5.10 Ruleset 승인 패키지
 
-- [ ] actual/projected Fast Gate p50/p95와 표본 수를 함께 제공한다.
-- [ ] 현재 CI Gate 대비 차이를 동일 기준으로 계산한다.
-- [ ] Post-Merge Gate failure rate와 production success canary를 연결한다.
-- [ ] false actionable, duplicate remediation, stale, lease takeover, phase mismatch, SHA mismatch를
+- [x] actual/projected Fast Gate p50/p95와 표본 수를 함께 제공한다.
+- [x] 현재 CI Gate 대비 차이를 동일 기준으로 계산한다.
+- [x] Post-Merge Gate failure rate와 production success canary를 연결한다.
+- [x] false actionable, duplicate remediation, stale, lease takeover, phase mismatch, SHA mismatch를
       표시한다.
-- [ ] GitHub API quota와 evidence freshness를 포함한다.
-- [ ] rollback 절차와 현재 required context를 읽기 전용으로 표시한다.
-- [ ] 승인 전에는 Ruleset 변경 command를 제공하지 않는다.
-- [ ] 승인 작업이 별도로 수행되더라도 broad bypass actor 추가와 protection disable을 금지한다.
+- [x] GitHub API quota와 evidence freshness를 포함한다.
+- [x] rollback 절차와 현재 required context를 읽기 전용으로 표시한다.
+- [x] 승인 전에는 Ruleset 변경 command를 제공하지 않는다.
+- [x] 승인 작업이 별도로 수행되더라도 broad bypass actor 추가와 protection disable을 금지한다.
 
 ### 5.11 성능과 복구
 
-- [ ] dashboard bootstrap에는 latest summary만 포함한다.
-- [ ] detail/history는 lazy load하고 response bound를 둔다.
-- [ ] SSE validation revision이 바뀔 때 필요한 surface만 reconcile한다.
-- [ ] reconnect, duplicate event, cursor reset, revision regression을 테스트한다.
-- [ ] 긴 Admin 세션에서 CPU, memory, DOM node 수, payload 크기를 측정한다.
-- [ ] hidden tab에서는 불필요한 metric animation과 polling을 중단한다.
-- [ ] evidence port 장애가 parallel control plane이나 기존 Admin dashboard를 중단시키지 않게 한다.
+- [x] dashboard bootstrap에는 latest summary만 포함한다.
+- [x] detail/history는 lazy load하고 response bound를 둔다.
+- [x] SSE validation revision이 바뀔 때 필요한 surface만 reconcile한다.
+- [x] reconnect, duplicate event, cursor reset, revision regression을 테스트한다.
+- [x] 긴 Admin 세션에서 CPU, memory, DOM node 수, payload 크기를 측정한다.
+- [x] hidden tab에서는 불필요한 metric animation과 polling을 중단한다.
+- [x] evidence port 장애가 parallel control plane이나 기존 Admin dashboard를 중단시키지 않게 한다.
 
 ## 6. API 초안
 
@@ -379,22 +382,22 @@ bash scripts/check_admin_graphic_visual.sh
 
 ## 9. 완료 조건
 
-- [ ] 오래된 run의 높은 attempt가 새로운 run을 이기지 않는다.
-- [ ] 같은 run 안에서는 최신 attempt가 선택된다.
-- [ ] 선택 결과가 restart, replay, pagination 순서와 무관하게 결정론적이다.
-- [ ] required check success 계약은 workflow metadata와 중복 계산되지 않는다.
-- [ ] Admin board와 detail이 같은 selected run을 표시한다.
-- [ ] historical projected와 독립 actual Fast Gate가 서로 다른 분포로 표시된다.
-- [ ] mixed label은 실제 혼합 표본이 있을 때만 사용된다.
-- [ ] 표본·timestamp 누락이 0 또는 success로 표현되지 않는다.
-- [ ] evidence freshness와 mode 불일치가 fail-closed warning으로 표시된다.
-- [ ] raw provider ID, credential, response body가 durable/Admin projection에 노출되지 않는다.
-- [ ] legacy durable validation record를 데이터 초기화 없이 읽는다.
-- [ ] Debug Harness, API, DOM, accessibility projection의 의미가 일치한다.
-- [ ] desktop과 narrow viewport에서 Validation Rail과 drawer가 정상 동작한다.
-- [ ] Admin 장시간 세션에서 bounded payload와 안정적인 reconciliation을 유지한다.
-- [ ] Ruleset은 별도 사용자 승인 없이는 변경되지 않는다.
-- [ ] English/Korean 운영 문서와 checked-in evidence가 실제 shipped behavior를 설명한다.
+- [x] 오래된 run의 높은 attempt가 새로운 run을 이기지 않는다.
+- [x] 같은 run 안에서는 최신 attempt가 선택된다.
+- [x] 선택 결과가 restart, replay, pagination 순서와 무관하게 결정론적이다.
+- [x] required check success 계약은 workflow metadata와 중복 계산되지 않는다.
+- [x] Admin board와 detail이 같은 selected run을 표시한다.
+- [x] historical projected와 독립 actual Fast Gate가 서로 다른 분포로 표시된다.
+- [x] mixed label은 실제 혼합 표본이 있을 때만 사용된다.
+- [x] 표본·timestamp 누락이 0 또는 success로 표현되지 않는다.
+- [x] evidence freshness와 mode 불일치가 fail-closed warning으로 표시된다.
+- [x] raw provider ID, credential, response body가 durable/Admin projection에 노출되지 않는다.
+- [x] legacy durable validation record를 데이터 초기화 없이 읽는다.
+- [x] Debug Harness, API, DOM, accessibility projection의 의미가 일치한다.
+- [x] desktop과 narrow viewport에서 Validation Rail과 drawer가 정상 동작한다.
+- [x] Admin 장시간 세션에서 bounded payload와 안정적인 reconciliation을 유지한다.
+- [x] Ruleset은 별도 사용자 승인 없이는 변경되지 않는다.
+- [x] English/Korean 운영 문서와 checked-in evidence가 실제 shipped behavior를 설명한다.
 
 ## 10. 비목표
 
@@ -406,4 +409,22 @@ bash scripts/check_admin_graphic_visual.sh
 - validation metric을 이유로 passive CI용 가짜 worker 생성
 - 기존 planning Queue 밖의 별도 remediation queue 도입
 - 기존 validation record 삭제나 DB 초기화
-- 일정, 기간, 인력 추정
+
+## 11. 구현 결과
+
+- PR A: [#2115](https://github.com/RefinedStone/codex-exec-loop/pull/2115) — canonical run selection과
+  durable provenance.
+- PR B: [#2116](https://github.com/RefinedStone/codex-exec-loop/pull/2116) — rollout evidence read model,
+  freshness, bounded API.
+- PR C: [#2117](https://github.com/RefinedStone/codex-exec-loop/pull/2117) — Validation Rail, detail drawer,
+  Debug Harness와 responsive/accessibility projection.
+- PR D: [#2118](https://github.com/RefinedStone/codex-exec-loop/pull/2118) — SQLite snapshot history,
+  retention, trend/warning, collection lease/CAS와 recovery.
+- PR E: 이 전달 — 읽기 전용 Ruleset 승인 패키지, English/Korean reference 동기화, production Admin
+  browser/performance evidence.
+
+최종 운영 근거는
+[`admin-pr-validation-approval-package-2026-08-11`](../validation/artifacts/admin-pr-validation-approval-package-2026-08-11/README.md)에
+있다. 캡처 시 현재 required context는 `CI Gate`, bypass actor는 0명이었고 Ruleset write는 수행하지
+않았다. Desktop/narrow evidence drawer는 전역 horizontal overflow 0px, 브라우저 warning/error 0건,
+15초 관찰 중 DOM node와 scroll height 변화 0으로 검증했다.

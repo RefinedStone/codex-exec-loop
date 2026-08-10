@@ -467,6 +467,24 @@ SQLite는 record와 exact poll lease를 저장하고 CLI/TUI/Admin은 narrow app
 직접 호출하지 않습니다. 저장소 로컬 mode는 typed `off | observe | remediate`이고 안전한 기본값은
 `observe`입니다.
 
+Rollout evidence는 application이 소유하는 별도 read model을 사용합니다. Filesystem
+`PrValidationRolloutEvidencePort`가 bounded collector document를 공급하고,
+`PrValidationRolloutEvidenceQueryService`가 schema, repository/base, generated time, content identity,
+freshness를 검증한 뒤 inbound surface에 `PrValidationRolloutEvidenceQueryPort`를 제공합니다. Historical
+Fast Gate와 독립 actual Fast Gate를 서로 다른 typed snapshot으로 보존하며 누락 표본을 0으로
+취급하지 않습니다. 선택적인 `PrValidationRolloutEvidenceStorePort`는 검증·redaction된 DTO JSON과
+최소 identity/collection metadata만 저장합니다. SQLite는 snapshot 최대 64개를 보존하고 exact
+collection lease/CAS를 사용하며 generated time과 artifact SHA로 bounded page를 안정 정렬합니다.
+Raw GitHub payload, provider error string, credential, local artifact path는 이 port를 통과하지 않습니다.
+
+Admin bootstrap은 최신 compact evidence summary만 받습니다. 인증된 evidence API가 history를 요청
+시점에 최대 20개까지 읽고, SSE는 monotonic evidence revision과 cursor-reset invalidation만
+전달합니다. Reconnect, duplicate, regression revision은 browser-owned state를 재생하지 않고
+authoritative snapshot을 유지하거나 다시 읽게 합니다. Durable read는 process마다 48시간 freshness를
+다시 계산하고, 성공 recollection은 failure observation을 지우지 않으면서 transient failure보다
+앞선 최신 evidence가 됩니다. Store/source 장애는 parallel control plane을 중단하지 않고 마지막
+유효 read-only projection으로 fallback합니다.
+
 Post-turn mutation은 continuation permit과 parallel epoch permit을 캡처합니다. 긴 작업은 제한된
 commit section 밖에서 실행합니다. 무효화된 permit 결과는 진단에 남을 수 있지만 task authority를
 변경하거나 delivery를 enqueue할 수 없습니다.

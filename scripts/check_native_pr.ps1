@@ -63,6 +63,7 @@ function Invoke-NodeAdminChecks {
     Write-Host "`n==> repository Node script syntax"
     $scriptPaths = @(
         "scripts/capture_admin_graphic.mjs",
+        "scripts/capture_admin_validation_evidence.mjs",
         "scripts/normalize_codex_app_server_schema.mjs",
         "scripts/agent-plan.mjs",
         "scripts/ci-scope.mjs",
@@ -74,6 +75,11 @@ function Invoke-NodeAdminChecks {
     foreach ($scriptPath in $scriptPaths) {
         Invoke-ExternalStep "node --check $scriptPath" "node" @("--check", $scriptPath)
     }
+
+    Invoke-ExternalStep "PR validation approval package" "node" @(
+        "--test",
+        "scripts/pr-validation-approval-package.test.mjs"
+    )
 
     Invoke-ExternalStep "Windows-safe npm launcher tests" "node" @(
         "--test",

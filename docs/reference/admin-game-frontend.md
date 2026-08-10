@@ -1,5 +1,7 @@
 # Admin Game Frontend
 
+[한국어](../ko/reference/admin-game-frontend.md)
+
 This reference records the shipped `/admin/akra` game-frontend contract. It does not change the
 native TUI, planning authority, parallel policy, or application control plane.
 
@@ -42,6 +44,15 @@ native TUI, planning authority, parallel policy, or application control plane.
 - The detail drawer exposes attestation, exact evidence SHA, required and optional checks, latest
   attempt, provider/backoff, timeline, and finding-task-slot correlation. Mutations use CSRF,
   expected revision, stable command identity, and the application command port.
+- The rollout evidence summary is application-computed. It keeps historical/projected and
+  independently actual Fast Gate metrics separate, reports missing samples as unavailable, and
+  exposes freshness/mode mismatch through typed text and icon warnings.
+- Dashboard bootstrap carries only the latest summary. Opening the evidence drawer lazily requests
+  at most 20 cursor-ordered history rows, three text-first trend comparisons, typed collection
+  ownership/recovery, and warnings. The durable store retains at most 64 redacted snapshots.
+- Evidence SSE frames contain only revision/cursor-reset invalidation. Hidden documents close the
+  EventSource and skip fallback polling; visibility recovery reconciles dashboard and events once
+  before reconnecting.
 - Passive validation appears as a QA/CI station and signal packet. A worker character exists only
   when a correlated ordinary Queue task owns an actual worker lease.
 - The application-owned debug harness supplies ten deterministic validation scenarios. API, DOM,
@@ -139,9 +150,14 @@ diagonal chairs, painterly blur, and baked status icons.
 Run:
 
 ```text
+node --check scripts/capture_admin_validation_evidence.mjs
 node --check assets/admin/scripts/akra-dashboard.js
 npm --prefix assets/admin/game run check
 npm --prefix assets/admin/game run build
 cargo test akra_graphic_dashboard --lib
 bash scripts/check_admin_graphic_visual.sh
 ```
+
+The checked-in production-composition evidence drawer capture and 15-second DOM/payload/performance
+sample are in
+[`admin-pr-validation-approval-package-2026-08-11`](../validation/artifacts/admin-pr-validation-approval-package-2026-08-11/README.md).
