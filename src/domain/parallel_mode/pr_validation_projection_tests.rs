@@ -2,10 +2,10 @@ use super::{
     PrValidationCatchUpState, PrValidationCommitSha, PrValidationCompletion, PrValidationEvent,
     PrValidationFinding, PrValidationFindingKey, PrValidationFindingSource,
     PrValidationObservationProjection, PrValidationObservedCheck, PrValidationObservedCheckStatus,
-    PrValidationOperatorState, PrValidationPhase, PrValidationProviderCompletion,
-    PrValidationProviderKey, PrValidationRecord, PrValidationRecordKey,
-    PrValidationRemediationCorrelation, PrValidationTarget, PrValidationTargetShaSnapshot,
-    PrValidationTerminalReason,
+    PrValidationObservedRunStatus, PrValidationObservedWorkflow, PrValidationOperatorState,
+    PrValidationPhase, PrValidationProviderCompletion, PrValidationProviderKey, PrValidationRecord,
+    PrValidationRecordKey, PrValidationRemediationCorrelation, PrValidationTarget,
+    PrValidationTargetShaSnapshot, PrValidationTerminalReason, PrValidationWorkflowSelectionBasis,
 };
 
 const SOURCE_SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -246,4 +246,67 @@ fn observation_projection_rejects_unbounded_or_malformed_provider_timestamps() {
         .unwrap_err();
         assert!(error.contains("bounded RFC3339"));
     }
+
+    let error = PrValidationObservationProjection::new(
+        Vec::new(),
+        Vec::new(),
+        vec![
+            PrValidationObservedWorkflow::selected(
+                "Native PR Checks",
+                PrValidationObservedRunStatus::InProgress,
+                1,
+                Some("not-rfc3339".to_string()),
+                None,
+                None,
+                PrValidationWorkflowSelectionBasis::NewestRun,
+            )
+            .unwrap(),
+        ],
+        Vec::new(),
+    )
+    .unwrap_err();
+    assert!(error.contains("bounded RFC3339"));
+}
+
+#[test]
+fn observed_workflow_additive_fields_round_trip_and_legacy_json_defaults_safely() {
+    let legacy = serde_json::json!({
+        "name": "Native PR Checks",
+        "status": "in_progress",
+        "run_attempt": 2,
+        "started_at": "2026-08-10T01:00:00Z",
+        "updated_at": "2026-08-10T01:01:00Z"
+    });
+    let legacy_workflow: PrValidationObservedWorkflow =
+        serde_json::from_value(legacy).expect("legacy workflow projection should deserialize");
+    assert_eq!(legacy_workflow.created_at(), None);
+    assert_eq!(
+        legacy_workflow.selection_basis(),
+        PrValidationWorkflowSelectionBasis::LegacyUnknown
+    );
+
+    let workflow = PrValidationObservedWorkflow::selected(
+        "Native PR Checks",
+        PrValidationObservedRunStatus::Succeeded,
+        3,
+        Some("2026-08-10T00:00:00Z".to_string()),
+        Some("2026-08-10T00:10:00Z".to_string()),
+        Some("2026-08-10T00:11:00Z".to_string()),
+        PrValidationWorkflowSelectionBasis::LatestAttempt,
+    )
+    .unwrap();
+    let projection =
+        PrValidationObservationProjection::new(Vec::new(), Vec::new(), vec![workflow], Vec::new())
+            .unwrap();
+    let projected = registered()
+        .transition(PrValidationEvent::BeginPreMergeObservation)
+        .unwrap()
+        .transition(PrValidationEvent::ObservationProjected(projection))
+        .unwrap();
+
+    let serialized = serde_json::to_string(&projected).unwrap();
+    assert!(serialized.contains("\"created_at\":\"2026-08-10T00:00:00Z\""));
+    assert!(serialized.contains("\"selection_basis\":\"latest_attempt\""));
+    let replayed: PrValidationRecord = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(replayed, projected);
 }

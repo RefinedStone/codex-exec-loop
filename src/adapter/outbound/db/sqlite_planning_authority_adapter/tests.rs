@@ -51,10 +51,11 @@ use crate::domain::parallel_mode::{
     ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
     ParallelModeTaskDispatchBlockSnapshot, PrValidationCatchUpState, PrValidationCommitSha,
     PrValidationCompletion, PrValidationEvent, PrValidationFinding, PrValidationFindingKey,
-    PrValidationFindingSource, PrValidationPollErrorClass, PrValidationProviderCompletion,
+    PrValidationFindingSource, PrValidationObservationProjection, PrValidationObservedRunStatus,
+    PrValidationObservedWorkflow, PrValidationPollErrorClass, PrValidationProviderCompletion,
     PrValidationProviderKey, PrValidationRecord, PrValidationRecordKey,
     PrValidationRemediationCorrelation, PrValidationTarget, PrValidationTargetShaSnapshot,
-    PrValidationTerminalReason,
+    PrValidationTerminalReason, PrValidationWorkflowSelectionBasis,
 };
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionDefinition, DirectionState, OriginSessionKind,
@@ -7155,6 +7156,71 @@ fn pr_validation_board_pages_active_before_recent_terminal_with_stable_cursor_re
         .expect("stale validation cursor should reset safely");
     assert!(reset.cursor_reset_required);
     assert_eq!(reset.records[0].record.key().as_str(), "active-0");
+}
+
+#[test]
+fn pr_validation_sqlite_authority_reads_legacy_workflow_json_without_selection_fields() {
+    let workspace_dir = temp_workspace("pr-validation-legacy-workflow-projection");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let key = PrValidationRecordKey::new("legacy-workflow-selection").unwrap();
+    let projection = PrValidationObservationProjection::new(
+        Vec::new(),
+        Vec::new(),
+        vec![
+            PrValidationObservedWorkflow::selected(
+                "Native PR Checks",
+                PrValidationObservedRunStatus::Succeeded,
+                2,
+                Some("2026-08-10T00:00:00Z".to_string()),
+                Some("2026-08-10T00:01:00Z".to_string()),
+                Some("2026-08-10T00:02:00Z".to_string()),
+                PrValidationWorkflowSelectionBasis::LatestAttempt,
+            )
+            .unwrap(),
+        ],
+        Vec::new(),
+    )
+    .unwrap();
+    let record = authority_validation_record(key.as_str(), 107)
+        .transition(PrValidationEvent::BeginPreMergeObservation)
+        .unwrap()
+        .transition(PrValidationEvent::ObservationProjected(projection))
+        .unwrap();
+    persist_authority_validation_record(&adapter, &workspace_dir, None, &record);
+
+    let location = adapter.resolve_authority_location(&workspace_dir).unwrap();
+    let connection = Connection::open(&location.authority_store_path).unwrap();
+    let content: String = connection
+        .query_row(
+            "SELECT content FROM runtime_pr_validation_records WHERE record_key = ?1",
+            [key.as_str()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut legacy: serde_json::Value = serde_json::from_str(&content).unwrap();
+    let workflow = legacy["observation_projection"]["workflows"][0]
+        .as_object_mut()
+        .unwrap();
+    workflow.remove("created_at");
+    workflow.remove("selection_basis");
+    connection
+        .execute(
+            "UPDATE runtime_pr_validation_records SET content = ?2 WHERE record_key = ?1",
+            (key.as_str(), legacy.to_string()),
+        )
+        .unwrap();
+    drop(connection);
+
+    let replayed =
+        SqlitePlanningAuthorityAdapter::load_runtime_pr_validation_record(&workspace_dir, &key)
+            .unwrap()
+            .unwrap();
+    let workflow = &replayed.observation_projection().workflows()[0];
+    assert_eq!(workflow.created_at(), None);
+    assert_eq!(
+        workflow.selection_basis(),
+        PrValidationWorkflowSelectionBasis::LegacyUnknown
+    );
 }
 
 #[test]

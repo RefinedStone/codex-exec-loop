@@ -70,7 +70,7 @@ pub use self::pr_validation::{
     PrValidationProviderKey, PrValidationRecord, PrValidationRecordKey, PrValidationRecoveryAction,
     PrValidationRemediationCorrelation, PrValidationRequiredCheck, PrValidationRequiredCheckKey,
     PrValidationTarget, PrValidationTargetShaSnapshot, PrValidationTerminalReason,
-    PrValidationTransitionRejection,
+    PrValidationTransitionRejection, PrValidationWorkflowSelectionBasis,
 };
 #[allow(unused_imports)]
 pub use self::pr_validation_scheduler::{PrValidationPollErrorClass, PrValidationSchedulerMode};

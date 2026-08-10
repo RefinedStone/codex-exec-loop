@@ -20,8 +20,8 @@ use crate::application::service::parallel_mode::{PrValidationPollRequest, PrVali
 use crate::domain::github_review::{GithubCommitSha, GithubOpaqueId, GithubPullRequestTarget};
 use crate::domain::parallel_mode::{
     IntegrationAttestation, IntegrationMethod, PrValidationCommitSha, PrValidationEvent,
-    PrValidationPhase, PrValidationRecord, PrValidationRecordKey, PrValidationTarget,
-    PrValidationTargetShaSnapshot,
+    PrValidationObservedRunStatus, PrValidationPhase, PrValidationRecord, PrValidationRecordKey,
+    PrValidationTarget, PrValidationTargetShaSnapshot, PrValidationWorkflowSelectionBasis,
 };
 
 const HEAD_A: &str = "1111111111111111111111111111111111111111";
@@ -1038,6 +1038,80 @@ fn successful_latest_attempt_suppresses_an_older_failed_attempt() {
             .poll_pr_validation(&observation, &remediation, request(&repo, 2, HEAD_A))
             .unwrap(),
         PrValidationPollResult::Settled
+    );
+    assert!(remediation.deliveries.lock().unwrap().is_empty());
+}
+
+#[test]
+fn newer_workflow_run_replaces_an_older_high_attempt_and_prevents_stale_settlement() {
+    let mut observed = merged_snapshot();
+    observed.workflow_runs = vec![
+        GithubValidationWorkflowRun::new(
+            GithubOpaqueId::new("workflow:older-run"),
+            "Native PR Checks",
+            GithubCommitSha::new(MERGE),
+            GithubValidationRunStatus::Succeeded,
+        )
+        .with_attempt_metadata(
+            3,
+            Some("2026-08-08T00:00:00Z".to_string()),
+            Some("2026-08-08T04:00:00Z".to_string()),
+        ),
+        GithubValidationWorkflowRun::new(
+            GithubOpaqueId::new("workflow:newer-run"),
+            "Native PR Checks",
+            GithubCommitSha::new(MERGE),
+            GithubValidationRunStatus::InProgress,
+        )
+        .with_attempt_metadata(
+            1,
+            Some("2026-08-08T05:00:00Z".to_string()),
+            Some("2026-08-08T05:01:00Z".to_string()),
+        ),
+    ];
+    let (repo, observation, remediation) = setup(
+        "validation-newer-run-selection",
+        vec![observed.clone(), observed],
+    );
+    let service = test_parallel_mode_service();
+    service
+        .persist_pr_validation_record(
+            &repo.workspace_dir(),
+            &repo.pool_root(),
+            None,
+            &registered_record(),
+        )
+        .unwrap();
+
+    assert_eq!(
+        service
+            .poll_pr_validation(&observation, &remediation, request(&repo, 1, HEAD_A))
+            .unwrap(),
+        PrValidationPollResult::Waiting
+    );
+    let projected = service
+        .recover_pr_validation_record(
+            &repo.workspace_dir(),
+            &repo.pool_root(),
+            &PrValidationRecordKey::new("acme/widgets#42").unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+    let workflow = &projected.observation_projection().workflows()[0];
+    assert_eq!(workflow.run_attempt(), 1);
+    assert_eq!(workflow.status(), PrValidationObservedRunStatus::InProgress);
+    assert_eq!(workflow.created_at(), Some("2026-08-08T05:00:00Z"));
+    assert_eq!(
+        workflow.selection_basis(),
+        PrValidationWorkflowSelectionBasis::NewestRun
+    );
+
+    assert_eq!(
+        service
+            .poll_pr_validation(&observation, &remediation, request(&repo, 2, HEAD_A))
+            .unwrap(),
+        PrValidationPollResult::Waiting,
+        "the older successful check must not settle while the newer run is active"
     );
     assert!(remediation.deliveries.lock().unwrap().is_empty());
 }

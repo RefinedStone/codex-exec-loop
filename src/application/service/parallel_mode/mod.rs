@@ -46,6 +46,7 @@ mod pr_validation;
 mod pr_validation_finding_policy;
 mod pr_validation_scheduler;
 mod pr_validation_store;
+mod pr_validation_workflow_selection;
 mod readiness;
 mod session_detail;
 mod slot_lifecycle;

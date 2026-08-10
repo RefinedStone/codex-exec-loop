@@ -426,9 +426,14 @@ function compareProviderIdsDescending(left, right) {
 
 export function latestRun(runs, event, sha) {
   const latestAttemptByRun = new Map();
-  for (const candidate of runs.filter(
+  const candidates = runs.filter(
     (run) => run.event === event && run.head_sha === sha && run.status === "completed",
-  )) {
+  );
+  for (const candidate of candidates) {
+    // A single candidate never enters Array#sort, so validate ordering evidence before grouping.
+    // Missing or malformed timestamps must not silently become the latest run.
+    asDate(candidate.created_at, "run created_at");
+    asDate(candidate.updated_at, "run updated_at");
     const key = String(candidate.id);
     const existing = latestAttemptByRun.get(key);
     if (!existing

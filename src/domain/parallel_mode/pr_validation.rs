@@ -220,13 +220,27 @@ pub enum PrValidationObservedRunStatus {
     Unknown,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrValidationWorkflowSelectionBasis {
+    #[default]
+    LegacyUnknown,
+    NewestRun,
+    LatestAttempt,
+    DeterministicTieBreak,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrValidationObservedWorkflow {
     name: String,
     status: PrValidationObservedRunStatus,
     run_attempt: u64,
+    #[serde(default)]
+    created_at: Option<String>,
     started_at: Option<String>,
     updated_at: Option<String>,
+    #[serde(default)]
+    selection_basis: PrValidationWorkflowSelectionBasis,
 }
 
 impl PrValidationObservedWorkflow {
@@ -248,9 +262,26 @@ impl PrValidationObservedWorkflow {
             name,
             status,
             run_attempt,
+            created_at: None,
             started_at,
             updated_at,
+            selection_basis: PrValidationWorkflowSelectionBasis::LegacyUnknown,
         })
+    }
+
+    pub fn selected(
+        name: impl Into<String>,
+        status: PrValidationObservedRunStatus,
+        run_attempt: u64,
+        created_at: Option<String>,
+        started_at: Option<String>,
+        updated_at: Option<String>,
+        selection_basis: PrValidationWorkflowSelectionBasis,
+    ) -> Result<Self, String> {
+        let mut workflow = Self::new(name, status, run_attempt, started_at, updated_at)?;
+        workflow.created_at = created_at;
+        workflow.selection_basis = selection_basis;
+        Ok(workflow)
     }
 
     pub fn name(&self) -> &str {
@@ -265,12 +296,20 @@ impl PrValidationObservedWorkflow {
         self.run_attempt
     }
 
+    pub fn created_at(&self) -> Option<&str> {
+        self.created_at.as_deref()
+    }
+
     pub fn started_at(&self) -> Option<&str> {
         self.started_at.as_deref()
     }
 
     pub fn updated_at(&self) -> Option<&str> {
         self.updated_at.as_deref()
+    }
+
+    pub fn selection_basis(&self) -> PrValidationWorkflowSelectionBasis {
+        self.selection_basis
     }
 }
 
@@ -364,11 +403,13 @@ impl PrValidationObservationProjection {
             .iter()
             .chain(&optional_checks)
             .flat_map(|check| [check.started_at(), check.completed_at()])
-            .chain(
-                workflows
-                    .iter()
-                    .flat_map(|workflow| [workflow.started_at(), workflow.updated_at()]),
-            )
+            .chain(workflows.iter().flat_map(|workflow| {
+                [
+                    workflow.created_at(),
+                    workflow.started_at(),
+                    workflow.updated_at(),
+                ]
+            }))
             .flatten()
         {
             validate_observation_timestamp(timestamp)?;

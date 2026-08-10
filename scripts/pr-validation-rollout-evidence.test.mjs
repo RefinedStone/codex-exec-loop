@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 
 import {
   buildRolloutEvidence,
@@ -114,6 +115,44 @@ test("latest run prefers a newer run over an older rerun attempt for the same SH
   );
   assert.equal(selected.id, 200);
   assert.equal(selected.run_attempt, 2);
+});
+
+test("latest run matches the canonical Rust workflow-selection fixture", () => {
+  const fixture = JSON.parse(readFileSync(
+    new URL("../tests/fixtures/pr_validation_workflow_selection.json", import.meta.url),
+    "utf8",
+  ));
+  for (const selectionCase of fixture.cases) {
+    const runs = selectionCase.runs.map((run) => ({
+      id: run.id,
+      event: "pull_request",
+      head_sha: "shared-head",
+      status: "completed",
+      conclusion: "success",
+      created_at: run.createdAt,
+      updated_at: run.updatedAt,
+      run_attempt: run.runAttempt,
+    }));
+    const selected = latestRun(runs, "pull_request", "shared-head");
+    assert.equal(selected.id, selectionCase.expectedId, selectionCase.name);
+    assert.equal(selected.run_attempt, selectionCase.expectedAttempt, selectionCase.name);
+  }
+});
+
+test("latest run fails closed when required ordering timestamps are unavailable", () => {
+  assert.throws(
+    () => latestRun([{
+      id: 700,
+      event: "pull_request",
+      head_sha: "shared-head",
+      status: "completed",
+      conclusion: "success",
+      created_at: null,
+      updated_at: "2026-08-10T00:01:00Z",
+      run_attempt: 1,
+    }], "pull_request", "shared-head"),
+    /run created_at is required/,
+  );
 });
 
 test("passing live and deterministic evidence recommends remediate without changing Rulesets", () => {
