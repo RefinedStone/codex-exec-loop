@@ -101,6 +101,7 @@ use self::pool::{
     install_before_normalization_atomic_rename_hook,
     install_before_normalization_staging_provision_hook,
 };
+pub(crate) use self::pr_validation::{PlanningQueuePrValidationRemediationPort, remediation_key};
 pub use self::pr_validation::{PrValidationPollRequest, PrValidationPollResult};
 pub use self::pr_validation_scheduler::{
     AKRA_PR_VALIDATION_MODE_CONFIG_KEY, PrValidationSchedulerConfig,

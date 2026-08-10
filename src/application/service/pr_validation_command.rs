@@ -13,11 +13,24 @@ use crate::application::port::outbound::planning_authority_port::{
     PrValidationAuthorityAdminCommandOutcome, PrValidationAuthorityAdminCommandRejection,
     PrValidationAuthorityAdminCommandRequest, PrValidationAuthorityAdminCommandState,
 };
-use crate::domain::parallel_mode::{PrValidationRecordKey, PrValidationSchedulerMode};
+use crate::application::port::outbound::pr_validation_remediation_port::{
+    PrValidationRemediationPort, PrValidationRemediationRequest,
+};
+use crate::application::service::parallel_mode::{
+    PlanningQueuePrValidationRemediationPort, remediation_key,
+};
+use crate::application::service::planning::PlanningQueueUseCases;
+use crate::domain::parallel_mode::{
+    PrValidationEvent, PrValidationRecordKey, PrValidationRemediationCorrelation,
+    PrValidationSchedulerMode,
+};
+
+const MAX_REMEDIATION_CORRELATION_ATTEMPTS: usize = 4;
 
 pub struct PrValidationCommandService {
     workspace_dir: String,
     planning_authority: Arc<dyn PlanningAuthorityPort>,
+    planning_queue: PlanningQueueUseCases,
     scheduler_mode: PrValidationSchedulerMode,
 }
 
@@ -25,13 +38,85 @@ impl PrValidationCommandService {
     pub fn new(
         workspace_dir: impl Into<String>,
         planning_authority: Arc<dyn PlanningAuthorityPort>,
+        planning_queue: PlanningQueueUseCases,
         scheduler_mode: PrValidationSchedulerMode,
     ) -> Self {
         Self {
             workspace_dir: workspace_dir.into(),
             planning_authority,
+            planning_queue,
             scheduler_mode,
         }
+    }
+
+    fn admit_queue_remediation(
+        &self,
+        outcome: &PrValidationAuthorityAdminCommandOutcome,
+    ) -> Result<PrValidationRecordKey> {
+        let finding_key = outcome
+            .remediation_finding_key
+            .as_ref()
+            .context("applied Queue remediation command lost its finding identity")?;
+        let record_key = PrValidationRecordKey::new(&outcome.record_key)
+            .map_err(anyhow::Error::msg)
+            .context("applied Queue remediation command has an invalid record identity")?;
+        let remediation = PlanningQueuePrValidationRemediationPort::new(
+            &self.planning_queue,
+            &self.workspace_dir,
+        );
+
+        for _ in 0..MAX_REMEDIATION_CORRELATION_ATTEMPTS {
+            let current = self
+                .planning_authority
+                .load_runtime_pr_validation_record(&self.workspace_dir, &record_key)
+                .context("failed to reload Queue remediation target")?
+                .context("Queue remediation target disappeared after command acceptance")?;
+            if let Some(existing) = current.remediation_for(finding_key) {
+                return Ok(existing.remediation_key().clone());
+            }
+            let finding = current
+                .finding(finding_key)
+                .cloned()
+                .context("Queue remediation finding disappeared before admission")?;
+            let remediation_task_key = remediation
+                .request_remediation(&PrValidationRemediationRequest {
+                    idempotency_key: remediation_key(current.key(), &finding),
+                    validation_record_key: current.key().clone(),
+                    target: current.target().clone(),
+                    target_sha: finding.target_sha().clone(),
+                    finding_key: finding.key().clone(),
+                    summary: finding.summary().to_string(),
+                })
+                .context("failed to admit Queue remediation through the normal Planning Queue")?;
+            let next = current
+                .transition(PrValidationEvent::RemediationQueued(
+                    PrValidationRemediationCorrelation::new(
+                        finding.key().clone(),
+                        remediation_task_key.clone(),
+                    ),
+                ))
+                .map_err(|error| {
+                    anyhow::anyhow!(
+                        "Queue remediation could not correlate its Planning task: {error:?}"
+                    )
+                })?;
+            if self
+                .planning_authority
+                .compare_and_swap_runtime_pr_validation_record(
+                    &self.workspace_dir,
+                    &record_key,
+                    Some(&current),
+                    Some(&next),
+                )
+                .context("failed to correlate Queue remediation with its Planning task")?
+            {
+                return Ok(remediation_task_key);
+            }
+        }
+
+        anyhow::bail!(
+            "Queue remediation target kept changing after {MAX_REMEDIATION_CORRELATION_ATTEMPTS} attempts"
+        )
     }
 }
 
@@ -105,7 +190,7 @@ impl PrValidationCommandPort for PrValidationCommandService {
         let record_key =
             PrValidationRecordKey::new(&request.record_key).map_err(anyhow::Error::msg)?;
         let action = map_admin_action(request.action);
-        let outcome = self
+        let mut outcome = self
             .planning_authority
             .execute_runtime_pr_validation_admin_command(
                 &self.workspace_dir,
@@ -119,6 +204,19 @@ impl PrValidationCommandPort for PrValidationCommandService {
                 },
             )
             .context("failed to execute PR validation Admin command")?;
+        if request.action == PrValidationAdminCommandAction::QueueRemediation
+            && outcome.state == PrValidationAuthorityAdminCommandState::Applied
+        {
+            let remediation_task = self.admit_queue_remediation(&outcome)?;
+            outcome.board_revision = self
+                .planning_authority
+                .load_runtime_pr_validation_revision(&self.workspace_dir)
+                .context("failed to refresh the PR validation board revision after admission")?;
+            outcome.message = format!(
+                "remediation task `{}` admitted through the normal Planning Queue",
+                remediation_task.as_str()
+            );
+        }
         Ok(map_admin_outcome(request.action, outcome))
     }
 }
@@ -143,6 +241,7 @@ mod tests {
                 board_revision: 8,
                 message: "observe mode blocks remediation admission".to_string(),
                 applied_at: "2026-08-10T00:00:00Z".to_string(),
+                remediation_finding_key: None,
             },
         );
         assert_eq!(

@@ -873,7 +873,7 @@ fn authority_schema_migrates_v11_legacy_merge_evidence_without_data_loss() {
             |row| row.get(0),
         )
         .expect("migrated version should load");
-    assert_eq!(version, "14");
+    assert_eq!(version, "15");
     let (method, evidence_sha, content): (String, String, String) = migrated
         .query_row(
             "SELECT integration_method, integration_evidence_sha, content
@@ -912,7 +912,7 @@ fn authority_schema_migrates_v11_legacy_merge_evidence_without_data_loss() {
         .expect("migration replay guard should install");
     drop(migrated);
     open_authority_connection(&location)
-        .expect("schema v14 reopen must not replay the v11 data migration");
+        .expect("schema v15 reopen must not replay the v11 data migration");
 }
 
 #[test]
@@ -7318,6 +7318,21 @@ fn pr_validation_admin_commands_are_revision_safe_idempotent_and_pause_due_polli
         .expect("resumed validation snapshot should exist");
     assert!(!resumed.operator_paused);
 
+    let deferred_poll_at = (requested_at + chrono::Duration::hours(1)).to_rfc3339();
+    let rate_limit_reset_at = (requested_at + chrono::Duration::hours(2)).to_rfc3339();
+    authority_connection(&workspace_dir)
+        .execute(
+            "UPDATE runtime_pr_validation_records
+             SET next_poll_at = ?2, rate_limit_remaining = 0, rate_limit_reset_at = ?3
+             WHERE record_key = ?1",
+            (
+                key.as_str(),
+                deferred_poll_at.as_str(),
+                rate_limit_reset_at.as_str(),
+            ),
+        )
+        .unwrap();
+
     let queue = adapter
         .execute_runtime_pr_validation_admin_command(
             &workspace_dir,
@@ -7332,6 +7347,25 @@ fn pr_validation_admin_commands_are_revision_safe_idempotent_and_pause_due_polli
         )
         .unwrap();
     assert_eq!(queue.state, PrValidationAuthorityAdminCommandState::Applied);
+    assert_eq!(
+        queue.remediation_finding_key.as_ref(),
+        observed
+            .first_unremediated_finding()
+            .map(|finding| finding.key())
+    );
+    let queued_snapshot = adapter
+        .load_runtime_pr_validation_record_snapshot(&workspace_dir, &key)
+        .unwrap()
+        .expect("Queue command target should remain present");
+    assert_eq!(
+        queued_snapshot.next_poll_at.as_deref(),
+        Some(deferred_poll_at.as_str()),
+        "Queue remediation must not masquerade as a provider poll retry"
+    );
+    assert_eq!(
+        queued_snapshot.last_operator_command_id.as_deref(),
+        Some("admin-command-queue")
+    );
     let due = adapter
         .load_due_runtime_pr_validation_record_keys(
             &workspace_dir,
@@ -7340,7 +7374,10 @@ fn pr_validation_admin_commands_are_revision_safe_idempotent_and_pause_due_polli
             20,
         )
         .unwrap();
-    assert!(due.iter().any(|candidate| candidate == &key));
+    assert!(
+        due.iter().all(|candidate| candidate != &key),
+        "provider polling remains rate-limited; application admission must not depend on this scan"
+    );
 
     let acknowledge = adapter
         .execute_runtime_pr_validation_admin_command(

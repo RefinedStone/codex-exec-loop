@@ -1245,10 +1245,19 @@ impl PrValidationRecord {
         self.findings.keys().cloned().collect()
     }
 
-    pub fn has_unremediated_findings(&self) -> bool {
+    pub fn finding(&self, finding_key: &PrValidationFindingKey) -> Option<&PrValidationFinding> {
+        self.findings.get(finding_key)
+    }
+
+    pub fn first_unremediated_finding(&self) -> Option<&PrValidationFinding> {
         self.findings
-            .keys()
-            .any(|finding_key| !self.remediations.contains_key(finding_key))
+            .iter()
+            .find(|(finding_key, _)| !self.remediations.contains_key(*finding_key))
+            .map(|(_, finding)| finding)
+    }
+
+    pub fn has_unremediated_findings(&self) -> bool {
+        self.first_unremediated_finding().is_some()
     }
 
     pub fn remediation_for(

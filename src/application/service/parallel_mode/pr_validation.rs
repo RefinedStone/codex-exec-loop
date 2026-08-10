@@ -1002,7 +1002,7 @@ fn actionable_findings(
     Ok(findings)
 }
 
-fn remediation_key(
+pub(crate) fn remediation_key(
     record_key: &PrValidationRecordKey,
     finding: &PrValidationFinding,
 ) -> PrValidationRemediationKey {
