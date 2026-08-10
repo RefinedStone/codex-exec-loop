@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 
 use super::ParallelModeService;
 use super::pr_validation_finding_policy::{ActionableFindingDecision, ActionableFindingPolicy};
+use super::pr_validation_workflow_selection::select_latest_workflows_by_name;
 use crate::application::port::outbound::github_pr_validation_port::{
     GithubExpectedCheckStatus, GithubPostMergeValidationDecision, GithubPrMergeState,
     GithubPrValidationError, GithubPrValidationErrorClass, GithubPrValidationObservationRequest,
@@ -1154,29 +1155,18 @@ fn observation_projection(
         .map(|evaluation| observed_check(snapshot, evaluation))
         .collect();
 
-    let mut latest_workflows = std::collections::BTreeMap::new();
-    for workflow in &snapshot.workflow_runs {
-        let replace = latest_workflows
-            .get(&workflow.name)
-            .is_none_or(|current: &&crate::application::port::outbound::github_pr_validation_port::GithubValidationWorkflowRun| {
-                workflow.run_attempt > current.run_attempt
-                    || (workflow.run_attempt == current.run_attempt
-                        && workflow.updated_at > current.updated_at)
-            });
-        if replace {
-            latest_workflows.insert(workflow.name.clone(), workflow);
-        }
-    }
-    let workflows = latest_workflows
-        .into_values()
-        .take(32)
-        .map(|workflow| {
-            PrValidationObservedWorkflow::new(
+    let workflows = select_latest_workflows_by_name(&snapshot.workflow_runs)?
+        .into_iter()
+        .map(|selection| {
+            let workflow = selection.workflow;
+            PrValidationObservedWorkflow::selected(
                 workflow.name.clone(),
                 observed_run_status(&workflow.status),
                 workflow.run_attempt,
+                workflow.created_at.clone(),
                 workflow.run_started_at.clone(),
                 workflow.updated_at.clone(),
+                selection.basis,
             )
         })
         .collect::<Result<Vec<_>, _>>()?;

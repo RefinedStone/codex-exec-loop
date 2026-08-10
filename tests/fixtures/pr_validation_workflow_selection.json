@@ -1,0 +1,92 @@
+{
+  "cases": [
+    {
+      "name": "newer run beats older high attempt",
+      "runs": [
+        {
+          "id": 100,
+          "workflowName": "Native PR Checks",
+          "runAttempt": 3,
+          "createdAt": "2026-08-10T00:00:00Z",
+          "updatedAt": "2026-08-10T04:00:00Z"
+        },
+        {
+          "id": 200,
+          "workflowName": "Native PR Checks",
+          "runAttempt": 1,
+          "createdAt": "2026-08-10T05:00:00Z",
+          "updatedAt": "2026-08-10T05:01:00Z"
+        }
+      ],
+      "expectedId": 200,
+      "expectedAttempt": 1,
+      "expectedBasis": "newest_run"
+    },
+    {
+      "name": "latest attempt wins inside one run",
+      "runs": [
+        {
+          "id": 300,
+          "workflowName": "Native PR Checks",
+          "runAttempt": 1,
+          "createdAt": "2026-08-10T06:00:00Z",
+          "updatedAt": "2026-08-10T06:01:00Z"
+        },
+        {
+          "id": 300,
+          "workflowName": "Native PR Checks",
+          "runAttempt": 2,
+          "createdAt": "2026-08-10T06:00:00Z",
+          "updatedAt": "2026-08-10T06:05:00Z"
+        }
+      ],
+      "expectedId": 300,
+      "expectedAttempt": 2,
+      "expectedBasis": "latest_attempt"
+    },
+    {
+      "name": "latest update wins duplicate attempt",
+      "runs": [
+        {
+          "id": 400,
+          "workflowName": "Native PR Checks",
+          "runAttempt": 2,
+          "createdAt": "2026-08-10T07:00:00Z",
+          "updatedAt": "2026-08-10T07:01:00Z"
+        },
+        {
+          "id": 400,
+          "workflowName": "Native PR Checks",
+          "runAttempt": 2,
+          "createdAt": "2026-08-10T07:00:00Z",
+          "updatedAt": "2026-08-10T07:03:00Z"
+        }
+      ],
+      "expectedId": 400,
+      "expectedAttempt": 2,
+      "expectedBasis": "deterministic_tie_break"
+    },
+    {
+      "name": "provider identity breaks an exact run timestamp tie",
+      "runs": [
+        {
+          "id": 500,
+          "workflowName": "Native PR Checks",
+          "runAttempt": 1,
+          "createdAt": "2026-08-10T08:00:00Z",
+          "updatedAt": "2026-08-10T08:01:00Z"
+        },
+        {
+          "id": 501,
+          "workflowName": "Native PR Checks",
+          "runAttempt": 1,
+          "createdAt": "2026-08-10T08:00:00Z",
+          "updatedAt": "2026-08-10T08:01:00Z"
+        }
+      ],
+      "expectedId": 501,
+      "expectedAttempt": 1,
+      "expectedBasis": "deterministic_tie_break"
+    }
+  ]
+}
