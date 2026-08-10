@@ -4131,7 +4131,8 @@ fn akra_graphic_dashboard_validation_rail_keeps_accessible_typed_operations_cont
         "Findings",
         "Remediation",
         "Verified",
-        "latest attempt {{ record.latest_required_attempt() }}",
+        "latest attempt {{ record.latest_required_attempt }}",
+        "{{ record.correlation_count }} worker link",
         "@media (max-width: 860px)",
         "content: attr(data-label)",
     ] {
