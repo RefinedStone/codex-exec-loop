@@ -577,6 +577,11 @@ false-positive/duplicate/API 사용량, rollback 절차를 포함한다.
 
 검증 증거: [`post-merge-validation-rollout-2026-08-10`](../validation/artifacts/post-merge-validation-rollout-2026-08-10/README.md)
 
+PR 7 delivery: [#2112](https://github.com/RefinedStone/codex-exec-loop/pull/2112) / merge SHA
+`ab4bd956d0ab2c06a33a168b93e4c5c6002c31ad` / [Post-Merge Gate
+success](https://github.com/RefinedStone/codex-exec-loop/actions/runs/31401817497) / dedicated
+worktree cleanup complete.
+
 ## 8. Dependency와 병렬화 정책
 
 ```text
@@ -674,7 +679,7 @@ Rollback:
 - [x] shadow 기준을 충족하고 evidence가 체크인된다.
 - [ ] Ruleset 변경 여부를 별도 승인받고 결과를 기록한다.
 - [x] current English/Korean reference가 실제 shipped behavior로 갱신된다.
-- [ ] 모든 PR이 CI Gate, rebase merge, cleanup을 완료한다.
+- [x] PR 1~7이 CI Gate, rebase merge, cleanup을 완료한다.
 
 이 체크리스트가 완료되기 전에는 “선 병합 후 자동 복구 시스템이 production-ready”라고 표현하지
 않는다.

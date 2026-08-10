@@ -114,6 +114,13 @@
     "verifiedAt": "2026-08-10T14:51:04.9234027Z",
     "repositoryLocalSchedulerMode": "remediate",
     "queueAdmission": "enabled_for_typed_actionable_findings",
-    "githubRuleset": "unchanged_approval_required"
+    "githubRuleset": "unchanged_approval_required",
+    "pr7": {
+      "pullRequest": 2112,
+      "mergeSha": "ab4bd956d0ab2c06a33a168b93e4c5c6002c31ad",
+      "postMergeRunId": 31401817497,
+      "postMergeGate": "success",
+      "dedicatedWorktreeCleanup": "complete"
+    }
   }
 }

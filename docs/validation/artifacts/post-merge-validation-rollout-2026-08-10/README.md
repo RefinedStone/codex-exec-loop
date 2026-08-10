@@ -1,6 +1,6 @@
 # PR Validation Rollout Evidence
 
-Generated at `2026-08-10T14:55:31.941Z` for `RefinedStone/codex-exec-loop` / `prerelease`.
+Generated at `2026-08-10T15:18:43.025Z` for `RefinedStone/codex-exec-loop` / `prerelease`.
 
 ## Decision
 
@@ -13,11 +13,12 @@ Generated at `2026-08-10T14:55:31.941Z` for `RefinedStone/codex-exec-loop` / `pr
 ## Sample Window
 
 - 10 merged PRs
-- 32.51 hours from `2026-08-09T04:12:19.000Z` to `2026-08-10T12:43:12.000Z`
+- 32.94 hours from `2026-08-09T06:10:22.000Z` to `2026-08-10T15:06:42.000Z`
 - older rows without the stable Post-Merge Gate remain visible as `not available`; they are not counted as successful canaries
 
 | PR | merge SHA | Fast Gate | CI Gate | Post-Merge Gate | Actions target SHA |
 | --- | --- | ---: | ---: | ---: | --- |
+| [#2112](https://github.com/RefinedStone/codex-exec-loop/pull/2112) | `ab4bd956` | 173s (actual) | 583s | 534s / success | pass |
 | [#2111](https://github.com/RefinedStone/codex-exec-loop/pull/2111) | `3b4ef4b4` | 91s (projected_from_existing_jobs) | 535s | 477s / success | pass |
 | [#2110](https://github.com/RefinedStone/codex-exec-loop/pull/2110) | `a63fd6d4` | 84s (projected_from_existing_jobs) | 509s | 517s / success | pass |
 | [#2109](https://github.com/RefinedStone/codex-exec-loop/pull/2109) | `414e51fb` | 86s (projected_from_existing_jobs) | 512s | 521s / success | pass |
@@ -27,7 +28,6 @@ Generated at `2026-08-10T14:55:31.941Z` for `RefinedStone/codex-exec-loop` / `pr
 | [#2105](https://github.com/RefinedStone/codex-exec-loop/pull/2105) | `45a512cf` | 88s (projected_from_existing_jobs) | 480s | - / not available | pass |
 | [#2104](https://github.com/RefinedStone/codex-exec-loop/pull/2104) | `6ced31be` | 18s (projected_from_existing_jobs) | 29s | - / not available | pass |
 | [#2103](https://github.com/RefinedStone/codex-exec-loop/pull/2103) | `e0a80092` | 101s (projected_from_existing_jobs) | 503s | - / not available | pass |
-| [#2102](https://github.com/RefinedStone/codex-exec-loop/pull/2102) | `f5653412` | 94s (projected_from_existing_jobs) | 488s | - / not available | pass |
 
 ## Gate Timing
 
@@ -37,26 +37,26 @@ for; actual values are reported separately once the stable job exists.
 
 | Gate | samples | p50 | p95 | source |
 | --- | ---: | ---: | ---: | --- |
-| Fast Gate | 10 | 88s | 101s | projected |
-| Actual Fast Gate | 1 | 114s | 114s | actual |
-| CI Gate | 10 | 488s | 535s | actual |
-| Post-Merge Gate | 5 | 517s | 528s | actual |
+| Fast Gate | 10 | 88s | 173s | mixed_actual_and_projected |
+| Actual Fast Gate | 1 | 173s | 173s | actual |
+| CI Gate | 10 | 501s | 583s | actual |
+| Post-Merge Gate | 6 | 517s | 534s | actual |
 
 Actual stable Fast Gate runs supplied independently of the merged-PR sample:
 
-- [run 31400129391](https://github.com/RefinedStone/codex-exec-loop/actions/runs/31400129391) / `47068fb1` / 114s / success
+- [run 31400846618](https://github.com/RefinedStone/codex-exec-loop/actions/runs/31400846618) / `a104456f` / 173s / success
 
-- Post-Merge Gate failure rate: 0% (0/5)
-- GitHub core quota used: 0.1% (5/5000)
+- Post-Merge Gate failure rate: 0% (0/6)
+- GitHub core quota used: 6.34% (317/5000)
 - reported core counter delta during collection: 3
 
 ## Rollout Criteria
 
 | Criterion | status | observed | limit | evidence |
 | --- | --- | --- | --- | --- |
-| sampleWindow | pass | {"pullRequests":10,"windowHours":32.51} | {"pullRequests":10,"windowHours":24} | github_live_sample |
+| sampleWindow | pass | {"pullRequests":10,"windowHours":32.94} | {"pullRequests":10,"windowHours":24} | github_live_sample |
 | evidenceShaMismatch | pass | 0 | 0 | github_live_sample |
-| apiBudget | pass | 0.1 | 50 | github_rate_limit |
+| apiBudget | pass | 6.34 | 50 | github_rate_limit |
 | duplicateRemediation | pass | 0 | 0 | deterministic_contract |
 | falseActionable | pass | 0 | 0 | deterministic_contract |
 | expiredLeaseTakeoverFailure | pass | 0 | 0 | deterministic_contract |
@@ -65,7 +65,7 @@ Actual stable Fast Gate runs supplied independently of the merged-PR sample:
 
 ## Canaries
 
-- production success: pass — [PR #2111 run](https://github.com/RefinedStone/codex-exec-loop/actions/runs/31389346076)
+- production success: pass — [PR #2112 run](https://github.com/RefinedStone/codex-exec-loop/actions/runs/31401817497)
 - failure canary: pass — the failure canary ran only in the application-owned harness; no intentionally broken commit entered prerelease
 
 
