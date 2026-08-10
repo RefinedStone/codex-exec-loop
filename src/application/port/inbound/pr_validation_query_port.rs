@@ -93,10 +93,23 @@ pub enum PrValidationAdminSeverity {
     Danger,
 }
 
+impl std::fmt::Display for PrValidationAdminSeverity {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Muted => "muted",
+            Self::Info => "info",
+            Self::Success => "success",
+            Self::Warning => "warning",
+            Self::Danger => "danger",
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PrValidationAdminCheckStatus {
     Unobserved,
+    Skipped,
     Missing,
     Pending,
     Succeeded,
@@ -144,6 +157,7 @@ pub struct PrValidationAdminCorrelation {
     pub slot_id: Option<String>,
     pub session_key: Option<String>,
     pub worker_state: Option<String>,
+    pub lease_active: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -157,6 +171,25 @@ pub struct PrValidationAdminSchedule {
     pub error_class: Option<String>,
     pub rate_limit_remaining: Option<u64>,
     pub rate_limit_reset_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrValidationAdminCommandAvailability {
+    pub action: String,
+    pub label: String,
+    pub enabled: bool,
+    pub disabled_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrValidationAdminTimelineEntry {
+    pub kind: String,
+    pub label: String,
+    pub state: String,
+    pub occurred_at: Option<String>,
+    pub attempt: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -198,8 +231,24 @@ pub struct PrValidationAdminRecord {
     pub remediation_count: usize,
     pub correlations: Vec<PrValidationAdminCorrelation>,
     pub schedule: PrValidationAdminSchedule,
+    pub paused: bool,
+    pub acknowledged_at: Option<String>,
+    pub last_command_id: Option<String>,
+    pub commands: Vec<PrValidationAdminCommandAvailability>,
+    pub timeline: Vec<PrValidationAdminTimelineEntry>,
     pub observation_revision: u64,
     pub post_merge_checkpoint_observed: bool,
+}
+
+impl PrValidationAdminRecord {
+    pub fn latest_required_attempt(&self) -> u64 {
+        self.checks
+            .iter()
+            .filter(|check| check.required)
+            .filter_map(|check| check.latest_attempt)
+            .max()
+            .unwrap_or(0)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
@@ -209,15 +258,18 @@ pub struct PrValidationBoardSummary {
     pub integrated: usize,
     pub verifying: usize,
     pub remediation: usize,
+    pub remediation_queued: usize,
     pub verified: usize,
     pub blocked: usize,
     pub failed: usize,
+    pub stale: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrValidationBoardSnapshot {
     pub revision: i64,
+    pub scheduler_mode: String,
     pub summary: PrValidationBoardSummary,
     pub records: Vec<PrValidationAdminRecord>,
     pub next_cursor: Option<String>,

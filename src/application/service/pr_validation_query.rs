@@ -7,12 +7,12 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::application::port::inbound::pr_validation_query_port::{
-    PrValidationAdminCheck, PrValidationAdminCheckStatus, PrValidationAdminCorrelation,
-    PrValidationAdminPhase, PrValidationAdminProvider, PrValidationAdminRecord,
-    PrValidationAdminSchedule, PrValidationAdminSeverity, PrValidationAdminWorkflow,
-    PrValidationBoardCursorError, PrValidationBoardRequest, PrValidationBoardSnapshot,
-    PrValidationBoardSummary, PrValidationDetailRequest, PrValidationQueryPort,
-    PrValidationStatusRequest,
+    PrValidationAdminCheck, PrValidationAdminCheckStatus, PrValidationAdminCommandAvailability,
+    PrValidationAdminCorrelation, PrValidationAdminPhase, PrValidationAdminProvider,
+    PrValidationAdminRecord, PrValidationAdminSchedule, PrValidationAdminSeverity,
+    PrValidationAdminTimelineEntry, PrValidationAdminWorkflow, PrValidationBoardCursorError,
+    PrValidationBoardRequest, PrValidationBoardSnapshot, PrValidationBoardSummary,
+    PrValidationDetailRequest, PrValidationQueryPort, PrValidationStatusRequest,
 };
 use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityPort, PlanningAuthorityRuntimeProjectionSnapshot,
@@ -23,7 +23,7 @@ use crate::domain::parallel_mode::{
     PrValidationObservedCheck, PrValidationObservedCheckStatus,
     PrValidationObservedProviderLifecycle, PrValidationObservedProviderStatus,
     PrValidationObservedRunStatus, PrValidationPhase, PrValidationPollErrorClass,
-    PrValidationRecord, PrValidationRecordKey,
+    PrValidationRecord, PrValidationRecordKey, PrValidationSchedulerMode,
 };
 
 const BOARD_CURSOR_VERSION: u8 = 1;
@@ -34,6 +34,7 @@ const STALE_AFTER_SECONDS: i64 = 120;
 pub struct PrValidationQueryService {
     workspace_dir: String,
     planning_authority: Arc<dyn PlanningAuthorityPort>,
+    scheduler_mode: PrValidationSchedulerMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,7 +55,13 @@ impl PrValidationQueryService {
         Self {
             workspace_dir: workspace_dir.into(),
             planning_authority,
+            scheduler_mode: PrValidationSchedulerMode::Observe,
         }
+    }
+
+    pub fn with_scheduler_mode(mut self, scheduler_mode: PrValidationSchedulerMode) -> Self {
+        self.scheduler_mode = scheduler_mode;
+        self
     }
 
     fn board_cursor(
@@ -149,6 +156,8 @@ impl PrValidationQueryPort for PrValidationQueryService {
                 &PrValidationAuthorityPageRequest {
                     limit: request.limit,
                     terminal_since: terminal_since.clone(),
+                    stale_before: (generated_at - Duration::seconds(STALE_AFTER_SECONDS))
+                        .to_rfc3339(),
                     after: cursor
                         .as_ref()
                         .map(|cursor| PrValidationAuthorityPagePosition {
@@ -164,7 +173,7 @@ impl PrValidationQueryPort for PrValidationQueryService {
         let records = authority_page
             .records
             .iter()
-            .map(|snapshot| map_admin_record(snapshot, &runtime, generated_at))
+            .map(|snapshot| map_admin_record(snapshot, &runtime, generated_at, self.scheduler_mode))
             .collect::<Result<Vec<_>>>()?;
         let next_cursor = authority_page
             .next_position
@@ -172,14 +181,17 @@ impl PrValidationQueryPort for PrValidationQueryService {
             .transpose()?;
         Ok(PrValidationBoardSnapshot {
             revision: authority_page.revision,
+            scheduler_mode: self.scheduler_mode.label().to_string(),
             summary: PrValidationBoardSummary {
                 active: authority_page.summary.active,
                 integrated: authority_page.summary.integrated,
                 verifying: authority_page.summary.verifying,
                 remediation: authority_page.summary.remediation,
+                remediation_queued: authority_page.summary.remediation_queued,
                 verified: authority_page.summary.verified,
                 blocked: authority_page.summary.blocked,
                 failed: authority_page.summary.failed,
+                stale: authority_page.summary.stale,
             },
             records,
             next_cursor,
@@ -208,7 +220,7 @@ impl PrValidationQueryPort for PrValidationQueryService {
             return Ok(None);
         };
         let runtime = self.runtime_projection()?;
-        map_admin_record(&snapshot, &runtime, Utc::now()).map(Some)
+        map_admin_record(&snapshot, &runtime, Utc::now(), self.scheduler_mode).map(Some)
     }
 }
 
@@ -216,6 +228,7 @@ fn map_admin_record(
     snapshot: &PrValidationAuthorityRecordSnapshot,
     runtime: &PlanningAuthorityRuntimeProjectionSnapshot,
     now: DateTime<Utc>,
+    scheduler_mode: PrValidationSchedulerMode,
 ) -> Result<PrValidationAdminRecord> {
     let record = &snapshot.record;
     let operator = record.operator_summary();
@@ -250,7 +263,9 @@ fn map_admin_record(
         .correlations
         .iter()
         .map(|correlation| map_correlation(correlation, runtime))
-        .collect();
+        .collect::<Vec<_>>();
+    let timeline = admin_timeline(snapshot, record, &correlations);
+    let commands = admin_commands(snapshot, record, phase, scheduler_mode, now);
     Ok(PrValidationAdminRecord {
         record_key: record.key().as_str().to_string(),
         akra_id: operator.akra_id,
@@ -334,9 +349,177 @@ fn map_admin_record(
             rate_limit_remaining: snapshot.rate_limit_remaining,
             rate_limit_reset_at: snapshot.rate_limit_reset_at.clone(),
         },
+        paused: snapshot.operator_paused,
+        acknowledged_at: snapshot.operator_acknowledged_at.clone(),
+        last_command_id: snapshot.last_operator_command_id.clone(),
+        commands,
+        timeline,
         observation_revision: operator.observation_revision,
         post_merge_checkpoint_observed: operator.post_merge_checkpoint_observed,
     })
+}
+
+fn admin_commands(
+    snapshot: &PrValidationAuthorityRecordSnapshot,
+    record: &PrValidationRecord,
+    phase: PrValidationAdminPhase,
+    scheduler_mode: PrValidationSchedulerMode,
+    now: DateTime<Utc>,
+) -> Vec<PrValidationAdminCommandAvailability> {
+    let terminal_failure = matches!(
+        phase,
+        PrValidationAdminPhase::Blocked | PrValidationAdminPhase::Failed
+    );
+    let verified = phase == PrValidationAdminPhase::Verified;
+    let rate_limit_active = snapshot.rate_limit_remaining == Some(0)
+        && snapshot
+            .rate_limit_reset_at
+            .as_deref()
+            .is_some_and(|value| {
+                DateTime::parse_from_rfc3339(value)
+                    .map(|reset| reset.with_timezone(&Utc) > now)
+                    .unwrap_or(true)
+            });
+    let command = |action: &str, label: &str, disabled_reason: Option<&str>| {
+        PrValidationAdminCommandAvailability {
+            action: action.to_string(),
+            label: label.to_string(),
+            enabled: disabled_reason.is_none(),
+            disabled_reason: disabled_reason.map(str::to_string),
+        }
+    };
+    vec![
+        command(
+            "retry_now",
+            "지금 재시도",
+            if snapshot.operator_paused {
+                Some("일시정지를 먼저 해제하세요.")
+            } else if terminal_failure || verified {
+                Some("종료 상태에서는 새 validation record가 필요합니다.")
+            } else if rate_limit_active {
+                Some("provider rate-limit reset 시각을 기다리는 중입니다.")
+            } else {
+                None
+            },
+        ),
+        command(
+            "pause",
+            "검증 일시정지",
+            if snapshot.operator_paused {
+                Some("이미 일시정지되었습니다.")
+            } else if terminal_failure || verified {
+                Some("종료 상태는 일시정지할 수 없습니다.")
+            } else {
+                None
+            },
+        ),
+        command(
+            "resume",
+            "검증 재개",
+            if terminal_failure || verified {
+                Some("종료 상태에서는 새 validation record가 필요합니다.")
+            } else if snapshot.operator_paused {
+                None
+            } else {
+                Some("현재 일시정지 상태가 아닙니다.")
+            },
+        ),
+        command(
+            "queue_remediation",
+            "복구 Queue 등록",
+            if !scheduler_mode.admits_remediation() {
+                Some("observe mode에서는 Queue admission이 차단됩니다.")
+            } else if snapshot.operator_paused {
+                Some("일시정지를 먼저 해제하세요.")
+            } else if terminal_failure || verified {
+                Some("종료 상태에서는 새 validation record가 필요합니다.")
+            } else if !record.has_unremediated_findings() {
+                Some("상관관계가 없는 actionable finding이 없습니다.")
+            } else {
+                None
+            },
+        ),
+        command(
+            "acknowledge",
+            "확인 처리",
+            if snapshot.operator_acknowledged_at.is_some() {
+                Some("이미 확인 처리되었습니다.")
+            } else if !terminal_failure && record.operator_summary().finding_count == 0 {
+                Some("확인할 실패 또는 finding이 없습니다.")
+            } else {
+                None
+            },
+        ),
+    ]
+}
+
+fn admin_timeline(
+    snapshot: &PrValidationAuthorityRecordSnapshot,
+    record: &PrValidationRecord,
+    correlations: &[PrValidationAdminCorrelation],
+) -> Vec<PrValidationAdminTimelineEntry> {
+    let mut timeline = Vec::new();
+    if let Some(attestation) = record.integration_attestation() {
+        timeline.push(PrValidationAdminTimelineEntry {
+            kind: "integration".to_string(),
+            label: "통합 증거 확인".to_string(),
+            state: attestation.method().label().to_string(),
+            occurred_at: Some(attestation.integrated_at().to_rfc3339()),
+            attempt: None,
+        });
+    }
+    timeline.extend(
+        record
+            .observation_projection()
+            .workflows()
+            .iter()
+            .map(|workflow| PrValidationAdminTimelineEntry {
+                kind: "workflow".to_string(),
+                label: workflow.name().to_string(),
+                state: observed_run_status_label(workflow.status()).to_string(),
+                occurred_at: workflow
+                    .updated_at()
+                    .or(workflow.started_at())
+                    .map(str::to_string),
+                attempt: Some(workflow.run_attempt()),
+            }),
+    );
+    timeline.extend(correlations.iter().map(|correlation| {
+        PrValidationAdminTimelineEntry {
+            kind: "remediation".to_string(),
+            label: correlation.remediation_akra_id.clone(),
+            state: correlation
+                .worker_state
+                .clone()
+                .or_else(|| correlation.task_state.clone())
+                .unwrap_or_else(|| "queued".to_string()),
+            occurred_at: None,
+            attempt: None,
+        }
+    }));
+    if let Some(last_polled_at) = snapshot.last_polled_at.clone() {
+        timeline.push(PrValidationAdminTimelineEntry {
+            kind: "poll".to_string(),
+            label: "provider observation".to_string(),
+            state: snapshot
+                .last_error_class
+                .map(|value| value.label().to_string())
+                .unwrap_or_else(|| "observed".to_string()),
+            occurred_at: Some(last_polled_at),
+            attempt: Some(snapshot.poll_attempt),
+        });
+    }
+    if let Some(acknowledged_at) = snapshot.operator_acknowledged_at.clone() {
+        timeline.push(PrValidationAdminTimelineEntry {
+            kind: "operator".to_string(),
+            label: "운영자 확인".to_string(),
+            state: "acknowledged".to_string(),
+            occurred_at: Some(acknowledged_at),
+            attempt: None,
+        });
+    }
+    timeline.sort_by(|left, right| right.occurred_at.cmp(&left.occurred_at));
+    timeline
 }
 
 fn admin_phase(record: &PrValidationRecord) -> PrValidationAdminPhase {
@@ -535,6 +718,7 @@ fn map_correlation(
             .map(|session| session.session_key.clone())
             .or_else(|| queue.map(|queue| queue.session_key.clone())),
         worker_state: session.map(|session| session.completion_state_label.clone()),
+        lease_active: lease.is_some(),
     }
 }
 
@@ -555,11 +739,63 @@ mod tests {
     use super::*;
 
     use crate::domain::parallel_mode::{
-        PrValidationCatchUpState, PrValidationCheckKind, PrValidationCommitSha,
-        PrValidationCompletion, PrValidationEvent, PrValidationProviderCompletion,
-        PrValidationProviderKey, PrValidationRequiredCheck, PrValidationTarget,
-        PrValidationTargetShaSnapshot,
+        ParallelModeAgentSessionDetailSnapshot, ParallelModeSlotLeaseSnapshot,
+        ParallelModeSlotLeaseState, PrValidationCatchUpState, PrValidationCheckKind,
+        PrValidationCommitSha, PrValidationCompletion, PrValidationEvent,
+        PrValidationOperatorCorrelation, PrValidationProviderCompletion, PrValidationProviderKey,
+        PrValidationRequiredCheck, PrValidationTarget, PrValidationTargetShaSnapshot,
     };
+
+    #[test]
+    fn correlation_keeps_historical_session_links_without_fabricating_a_live_lease() {
+        let correlation = PrValidationOperatorCorrelation {
+            finding: "finding-1".to_string(),
+            remediation_akra_id: "remediation-1".to_string(),
+        };
+        let session = ParallelModeAgentSessionDetailSnapshot {
+            session_key: "session-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            task_id: "remediation-1".to_string(),
+            task_title: "Remediation".to_string(),
+            slot_id: "slot-1".to_string(),
+            thread_id: Some("thread-1".to_string()),
+            worktree_path: "C:/worktree".to_string(),
+            branch_name: "codex/remediation-1".to_string(),
+            lease_started_at: "2026-08-10T00:00:00Z".to_string(),
+            state_label: "completed".to_string(),
+            completion_state_label: "integrated".to_string(),
+            latest_summary: "completed".to_string(),
+            validation_summary: "pass".to_string(),
+            authority_refresh_outcome: "refreshed".to_string(),
+            distributor_outcome: Some("integrated".to_string()),
+            history: Vec::new(),
+            updated_at: "2026-08-10T00:01:00Z".to_string(),
+        };
+        let mut runtime = PlanningAuthorityRuntimeProjectionSnapshot {
+            session_details: vec![session],
+            ..PlanningAuthorityRuntimeProjectionSnapshot::default()
+        };
+
+        let historical = map_correlation(&correlation, &runtime);
+        assert_eq!(historical.slot_id.as_deref(), Some("slot-1"));
+        assert!(!historical.lease_active);
+
+        runtime.slot_leases.insert(
+            "slot-1".to_string(),
+            ParallelModeSlotLeaseSnapshot::new(
+                "slot-1",
+                "remediation-1",
+                "Remediation",
+                "agent-1",
+                "codex/remediation-1",
+                "C:/worktree",
+                ParallelModeSlotLeaseState::Running,
+                "2026-08-10T00:00:00Z",
+                Some("2026-08-10T00:00:05Z".to_string()),
+            ),
+        );
+        assert!(map_correlation(&correlation, &runtime).lease_active);
+    }
 
     #[test]
     fn board_cursor_rejects_forged_unbounded_cutoffs_and_negative_revisions() {
@@ -642,5 +878,37 @@ mod tests {
                 .iter()
                 .all(|check| { check.status != PrValidationAdminCheckStatus::Missing })
         );
+
+        let snapshot = PrValidationAuthorityRecordSnapshot {
+            record: settled.clone(),
+            updated_at: "2026-08-10T12:00:00Z".to_string(),
+            last_polled_at: None,
+            next_poll_at: None,
+            poll_attempt: 0,
+            consecutive_error_count: 0,
+            last_error_class: None,
+            rate_limit_remaining: None,
+            rate_limit_reset_at: None,
+            operator_paused: true,
+            operator_acknowledged_at: None,
+            last_operator_command_id: None,
+        };
+        let commands = admin_commands(
+            &snapshot,
+            &settled,
+            PrValidationAdminPhase::Verified,
+            PrValidationSchedulerMode::Remediate,
+            Utc::now(),
+        );
+        for action in ["resume", "queue_remediation"] {
+            let command = commands
+                .iter()
+                .find(|command| command.action == action)
+                .expect("terminal command availability should be present");
+            assert!(
+                !command.enabled,
+                "terminal validation must not expose `{action}` as executable"
+            );
+        }
     }
 }

@@ -11,6 +11,7 @@ fi
 
 port="${ADMIN_GRAPHIC_PORT:-18444}"
 capture_mode="${ADMIN_GRAPHIC_CAPTURE:-auto}"
+debug_harness="${ADMIN_GRAPHIC_DEBUG_HARNESS:-0}"
 output_dir="${ADMIN_GRAPHIC_OUTPUT_DIR:-target/admin-graphic-visual}"
 tmp_root="${ADMIN_GRAPHIC_TMP_DIR:-${repo_root}/target/admin-graphic-tmp}"
 server_log="${output_dir}/akra-admin.log"
@@ -60,6 +61,14 @@ case "${capture_mode}" in
   auto | always) ;;
   *)
     echo "ADMIN_GRAPHIC_CAPTURE must be auto or always" >&2
+    exit 1
+    ;;
+esac
+
+case "${debug_harness}" in
+  0 | 1) ;;
+  *)
+    echo "ADMIN_GRAPHIC_DEBUG_HARNESS must be 0 or 1" >&2
     exit 1
     ;;
 esac
@@ -223,9 +232,14 @@ chmod 600 "${login_form}"
 # an empty server log that looks like an admin runtime failure.
 cargo build --quiet --locked --bin akra-admin
 
+admin_server_args=(--port "${port}")
+if [[ "${debug_harness}" == "1" ]]; then
+  admin_server_args+=(--debug-harness)
+fi
+
 AKRA_ADMIN_TOKEN="${admin_token}" \
   AKRA_HOME="${auth_tmp_dir}/akra-home" \
-  cargo run --quiet --locked --bin akra-admin -- --port "${port}" >"${server_log}" 2>&1 &
+  cargo run --quiet --locked --bin akra-admin -- "${admin_server_args[@]}" >"${server_log}" 2>&1 &
 server_pid="$!"
 
 for _ in $(seq 1 80); do
@@ -341,6 +355,9 @@ for token in \
   'data-scene-actor-list' \
   'data-scene-diagnostics' \
   'data-event-feed-status' \
+  'aria-label="PR 검증 핵심 지표"' \
+  'id="validation-rail"' \
+  'data-validation-list' \
   'gamebaljeonguk_atlas_64x96.png' \
   'background-image: var(--agent-sprite-sheet)' \
   'background: var(--office-bg-image) 0 0 / 100% 100% no-repeat' \
@@ -353,9 +370,6 @@ for token in \
   'class="attention-strip' \
   'class="command-controls"' \
   '<h3>활성 레인</h3>' \
-  'data-standby-character="true"' \
-  'data-presence-kind="configured_standby"' \
-  '대기 프로필 3' \
   'background-size: 384px 504px' \
   'avatar-Artificer' \
   'grid-template-columns: minmax(0, 1fr)' \
@@ -365,6 +379,15 @@ for token in \
   '@media (max-width: 860px)'; do
   require_contains "${admin_html}" "${token}"
 done
+
+if [[ "${debug_harness}" == "0" ]]; then
+  for token in \
+    'data-standby-character="true"' \
+    'data-presence-kind="configured_standby"' \
+    '대기 프로필 3'; do
+    require_contains "${admin_html}" "${token}"
+  done
+fi
 
 for token in \
   'akraHashTabRoutes' \
@@ -385,6 +408,12 @@ for token in \
   'sceneSignature' \
   'dashboardRequest' \
   'eventsRequest' \
+  'renderValidationRail' \
+  'renderValidationDetail' \
+  'runValidationCommand' \
+  'validationCommandFeedback' \
+  'validationCommandOutcome' \
+  'fresh: true' \
   'agentAvatarClass' \
   'prependEventRows' \
   'stale snapshot'; do
@@ -398,6 +427,9 @@ for token in \
   'inspectScene' \
   'configured_standby' \
   'sceneStandbyCount' \
+  'sceneValidationPhase' \
+  'sceneValidationWorkerLeaseActive' \
+  'queue_to_worker' \
   'Promise.allSettled' \
   'PixiJS - The MIT License'; do
   require_contains "${game_js}" "${token}"
@@ -531,7 +563,8 @@ for token in \
   '"intelCards"' \
   '"events"' \
   '"generatedTimeLabel"' \
-  '"planningRevision"'; do
+  '"planningRevision"' \
+  '"validation"'; do
   require_contains "${dashboard_json}" "${token}"
 done
 

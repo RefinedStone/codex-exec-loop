@@ -61,9 +61,20 @@ export interface GameStandbyProjection {
   bubbleLabel: string;
 }
 
+export interface GameValidationProjection {
+  stationState: string;
+  severity: StatusSeverity;
+  label: string;
+  recordKey: string | null;
+  phase: string | null;
+  packetKind: string | null;
+  workerLeaseActive: boolean;
+}
+
 export interface GameSceneProjection {
   actors: GameActorProjection[];
   standbyCharacters: GameStandbyProjection[];
+  validation: GameValidationProjection;
 }
 
 export interface DashboardSceneSnapshot {
@@ -134,6 +145,16 @@ export interface SceneInspection {
   planningRevision: number | null;
   zoomLevel: SemanticZoomLevel;
   cameraZoom: number;
+  validation: {
+    stationState: string;
+    severity: StatusSeverity;
+    label: string;
+    recordKey: string | null;
+    phase: string | null;
+    packetKind: string | null;
+    packetVisible: boolean;
+    workerLeaseActive: boolean;
+  };
   actors: SceneInspectionActor[];
   standbyCharacters: SceneInspectionStandby[];
 }

@@ -17,8 +17,10 @@ use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityActiveDocumentMutation, PlanningAuthorityDistributorDeliveryTarget,
     PlanningAuthorityDistributorQueueRecord, PlanningAuthorityDocumentCommit,
     PlanningAuthorityOfficialRefreshClaimStatus, PlanningAuthorityOfficialRefreshRecoveryStatus,
-    PlanningAuthorityPort, PrValidationAuthorityPageRequest, PrValidationPollLeaseClaimRequest,
-    PrValidationPollSettlement,
+    PlanningAuthorityPort, PrValidationAuthorityAdminAction,
+    PrValidationAuthorityAdminCommandRejection, PrValidationAuthorityAdminCommandRequest,
+    PrValidationAuthorityAdminCommandState, PrValidationAuthorityPageRequest,
+    PrValidationPollLeaseClaimRequest, PrValidationPollSettlement,
 };
 use crate::application::port::outbound::planning_task_repository_port::{
     PlanningDirectionAuthorityCommit, PlanningTaskAuthorityCommit,
@@ -422,8 +424,8 @@ fn authority_connection(workspace_dir: &str) -> rusqlite::Connection {
 }
 
 #[test]
-fn authority_schema_migrates_v7_through_v13_additively_and_rejects_unsupported_versions() {
-    for legacy_version in [7, 8, 9, 10, 11, 12, 13] {
+fn authority_schema_migrates_v7_through_v14_additively_and_rejects_unsupported_versions() {
+    for legacy_version in [7, 8, 9, 10, 11, 12, 13, 14] {
         let workspace_dir = temp_workspace(&format!("schema-migrate-v{legacy_version}"));
         let location = SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
             &workspace_dir,
@@ -445,6 +447,11 @@ fn authority_schema_migrates_v7_through_v13_additively_and_rejects_unsupported_v
                  DROP INDEX idx_planning_task_mutation_events_revision;
                  DROP TABLE planning_task_mutation_events;
                  DROP TABLE planning_file_sync_baselines;
+                 DROP INDEX idx_runtime_pr_validation_admin_commands_record;
+                 DROP TABLE runtime_pr_validation_admin_commands;
+                 ALTER TABLE runtime_pr_validation_records DROP COLUMN operator_paused;
+                 ALTER TABLE runtime_pr_validation_records DROP COLUMN operator_acknowledged_at;
+                 ALTER TABLE runtime_pr_validation_records DROP COLUMN last_operator_command_id;
                  INSERT OR REPLACE INTO active_documents (relative_path, content)
                  VALUES ('legacy.md', 'legacy body');
                  UPDATE authority_metadata SET value = '{legacy_version}'
@@ -461,7 +468,7 @@ fn authority_schema_migrates_v7_through_v13_additively_and_rejects_unsupported_v
                 |row| row.get(0),
             )
             .expect("migrated version should load");
-        assert_eq!(version, "14");
+        assert_eq!(version, "15");
         assert_eq!(
             migrated
                 .query_row(
@@ -482,12 +489,16 @@ fn authority_schema_migrates_v7_through_v13_additively_and_rejects_unsupported_v
                 ("table", "planning_file_sync_baselines"),
                 ("table", "planning_task_mutation_events"),
                 ("index", "idx_planning_task_mutation_events_revision"),
+                ("table", "runtime_pr_validation_admin_commands"),
+                ("index", "idx_runtime_pr_validation_admin_commands_record"),
             ]
         } else {
             vec![
                 ("table", "planning_file_sync_baselines"),
                 ("table", "planning_task_mutation_events"),
                 ("index", "idx_planning_task_mutation_events_revision"),
+                ("table", "runtime_pr_validation_admin_commands"),
+                ("index", "idx_runtime_pr_validation_admin_commands_record"),
             ]
         };
         for (object_type, object_name) in expected_objects {
@@ -517,9 +528,27 @@ fn authority_schema_migrates_v7_through_v13_additively_and_rejects_unsupported_v
                 .is_some(),
             "PR validation authority table should be created from v{legacy_version}"
         );
+        let admin_columns = migrated
+            .prepare("PRAGMA table_info(runtime_pr_validation_records)")
+            .and_then(|mut statement| {
+                statement
+                    .query_map([], |row| row.get::<_, String>(1))?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+            })
+            .expect("PR validation Admin columns should inspect");
+        for column in [
+            "operator_paused",
+            "operator_acknowledged_at",
+            "last_operator_command_id",
+        ] {
+            assert!(
+                admin_columns.iter().any(|candidate| candidate == column),
+                "Admin column `{column}` should migrate from v{legacy_version}"
+            );
+        }
     }
 
-    for unsupported_version in ["6", "15", "not-a-version"] {
+    for unsupported_version in ["6", "16", "not-a-version"] {
         let workspace_dir = temp_workspace("schema-reject-unsupported");
         let location = SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
             &workspace_dir,
@@ -641,7 +670,7 @@ fn authority_schema_migrates_v12_pr_validation_schedule_without_data_loss() {
                 |row| row.get::<_, String>(0),
             )
             .unwrap(),
-        "14"
+        "15"
     );
     drop(migrated);
 
@@ -7045,6 +7074,7 @@ fn pr_validation_board_pages_active_before_recent_terminal_with_stable_cursor_re
             &PrValidationAuthorityPageRequest {
                 limit: 2,
                 terminal_since: "2026-08-01T00:00:00+00:00".to_string(),
+                stale_before: "2026-01-01T00:00:00+00:00".to_string(),
                 after: None,
                 expected_revision: None,
             },
@@ -7081,6 +7111,7 @@ fn pr_validation_board_pages_active_before_recent_terminal_with_stable_cursor_re
             &PrValidationAuthorityPageRequest {
                 limit: 2,
                 terminal_since: "2026-08-01T00:00:00+00:00".to_string(),
+                stale_before: "2026-01-01T00:00:00+00:00".to_string(),
                 after: Some(after.clone()),
                 expected_revision: Some(first.revision),
             },
@@ -7116,6 +7147,7 @@ fn pr_validation_board_pages_active_before_recent_terminal_with_stable_cursor_re
             &PrValidationAuthorityPageRequest {
                 limit: 2,
                 terminal_since: "2026-08-01T00:00:00+00:00".to_string(),
+                stale_before: "2026-01-01T00:00:00+00:00".to_string(),
                 after: Some(after),
                 expected_revision: Some(first.revision),
             },
@@ -7123,6 +7155,271 @@ fn pr_validation_board_pages_active_before_recent_terminal_with_stable_cursor_re
         .expect("stale validation cursor should reset safely");
     assert!(reset.cursor_reset_required);
     assert_eq!(reset.records[0].record.key().as_str(), "active-0");
+}
+
+#[test]
+fn pr_validation_admin_commands_are_revision_safe_idempotent_and_pause_due_polling() {
+    let workspace_dir = temp_workspace("pr-validation-admin-commands");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let observing = authority_validation_record("validation-admin", 107)
+        .transition(PrValidationEvent::BeginPreMergeObservation)
+        .unwrap();
+    let finding = PrValidationFinding::new(
+        PrValidationFindingKey::new(
+            PrValidationFindingSource::new("required_check").unwrap(),
+            "Fast Gate",
+        )
+        .unwrap(),
+        observing.target_shas().source_sha().clone(),
+        "required check failed",
+    )
+    .unwrap();
+    let observed = observing
+        .transition(PrValidationEvent::FindingObserved(finding))
+        .unwrap();
+    persist_authority_validation_record(&adapter, &workspace_dir, None, &observed);
+    let key = PrValidationRecordKey::new("validation-admin").unwrap();
+    let requested_at = DateTime::parse_from_rfc3339("2026-08-10T12:00:00+00:00")
+        .unwrap()
+        .with_timezone(&Utc);
+    let expected_revision = observed.observation_revision();
+
+    let pause = adapter
+        .execute_runtime_pr_validation_admin_command(
+            &workspace_dir,
+            PrValidationAuthorityAdminCommandRequest {
+                command_id: "admin-command-pause",
+                record_key: &key,
+                action: PrValidationAuthorityAdminAction::Pause,
+                expected_observation_revision: expected_revision,
+                requested_at,
+                remediation_admission_allowed: false,
+            },
+        )
+        .unwrap();
+    assert_eq!(pause.state, PrValidationAuthorityAdminCommandState::Applied);
+    assert_eq!(pause.rejection, None);
+    let snapshot = adapter
+        .load_runtime_pr_validation_record_snapshot(&workspace_dir, &key)
+        .unwrap()
+        .expect("paused validation snapshot should exist");
+    assert!(snapshot.operator_paused);
+    assert_eq!(
+        snapshot.last_operator_command_id.as_deref(),
+        Some("admin-command-pause")
+    );
+
+    let replay = adapter
+        .execute_runtime_pr_validation_admin_command(
+            &workspace_dir,
+            PrValidationAuthorityAdminCommandRequest {
+                command_id: "admin-command-pause",
+                record_key: &key,
+                action: PrValidationAuthorityAdminAction::Pause,
+                expected_observation_revision: expected_revision,
+                requested_at,
+                remediation_admission_allowed: false,
+            },
+        )
+        .unwrap();
+    assert!(replay.duplicate);
+    assert_eq!(
+        replay.state,
+        PrValidationAuthorityAdminCommandState::Applied
+    );
+
+    let conflicting_reuse = adapter
+        .execute_runtime_pr_validation_admin_command(
+            &workspace_dir,
+            PrValidationAuthorityAdminCommandRequest {
+                command_id: "admin-command-pause",
+                record_key: &key,
+                action: PrValidationAuthorityAdminAction::Resume,
+                expected_observation_revision: expected_revision,
+                requested_at,
+                remediation_admission_allowed: false,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        conflicting_reuse.rejection,
+        Some(PrValidationAuthorityAdminCommandRejection::IdempotencyConflict)
+    );
+
+    let stale = adapter
+        .execute_runtime_pr_validation_admin_command(
+            &workspace_dir,
+            PrValidationAuthorityAdminCommandRequest {
+                command_id: "admin-command-stale",
+                record_key: &key,
+                action: PrValidationAuthorityAdminAction::Acknowledge,
+                expected_observation_revision: expected_revision.saturating_add(1),
+                requested_at,
+                remediation_admission_allowed: false,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        stale.rejection,
+        Some(PrValidationAuthorityAdminCommandRejection::StaleRevision)
+    );
+
+    let observe_admission = adapter
+        .execute_runtime_pr_validation_admin_command(
+            &workspace_dir,
+            PrValidationAuthorityAdminCommandRequest {
+                command_id: "admin-command-observe",
+                record_key: &key,
+                action: PrValidationAuthorityAdminAction::QueueRemediation,
+                expected_observation_revision: expected_revision,
+                requested_at,
+                remediation_admission_allowed: false,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        observe_admission.rejection,
+        Some(PrValidationAuthorityAdminCommandRejection::ObserveModeAdmission)
+    );
+
+    let due = adapter
+        .load_due_runtime_pr_validation_record_keys(
+            &workspace_dir,
+            requested_at + chrono::Duration::days(1),
+            requested_at - chrono::Duration::days(1),
+            20,
+        )
+        .unwrap();
+    assert!(
+        due.iter().all(|candidate| candidate != &key),
+        "paused validation must not be claimed by the durable scheduler"
+    );
+
+    let resume = adapter
+        .execute_runtime_pr_validation_admin_command(
+            &workspace_dir,
+            PrValidationAuthorityAdminCommandRequest {
+                command_id: "admin-command-resume",
+                record_key: &key,
+                action: PrValidationAuthorityAdminAction::Resume,
+                expected_observation_revision: expected_revision,
+                requested_at,
+                remediation_admission_allowed: false,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        resume.state,
+        PrValidationAuthorityAdminCommandState::Applied
+    );
+    let resumed = adapter
+        .load_runtime_pr_validation_record_snapshot(&workspace_dir, &key)
+        .unwrap()
+        .expect("resumed validation snapshot should exist");
+    assert!(!resumed.operator_paused);
+
+    let queue = adapter
+        .execute_runtime_pr_validation_admin_command(
+            &workspace_dir,
+            PrValidationAuthorityAdminCommandRequest {
+                command_id: "admin-command-queue",
+                record_key: &key,
+                action: PrValidationAuthorityAdminAction::QueueRemediation,
+                expected_observation_revision: expected_revision,
+                requested_at,
+                remediation_admission_allowed: true,
+            },
+        )
+        .unwrap();
+    assert_eq!(queue.state, PrValidationAuthorityAdminCommandState::Applied);
+    let due = adapter
+        .load_due_runtime_pr_validation_record_keys(
+            &workspace_dir,
+            requested_at + chrono::Duration::seconds(1),
+            requested_at - chrono::Duration::days(1),
+            20,
+        )
+        .unwrap();
+    assert!(due.iter().any(|candidate| candidate == &key));
+
+    let acknowledge = adapter
+        .execute_runtime_pr_validation_admin_command(
+            &workspace_dir,
+            PrValidationAuthorityAdminCommandRequest {
+                command_id: "admin-command-acknowledge",
+                record_key: &key,
+                action: PrValidationAuthorityAdminAction::Acknowledge,
+                expected_observation_revision: expected_revision,
+                requested_at,
+                remediation_admission_allowed: true,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        acknowledge.state,
+        PrValidationAuthorityAdminCommandState::Applied
+    );
+    let acknowledged = adapter
+        .load_runtime_pr_validation_record_snapshot(&workspace_dir, &key)
+        .unwrap()
+        .expect("acknowledged validation snapshot should exist");
+    assert!(acknowledged.operator_acknowledged_at.is_some());
+
+    let healthy = authority_validation_record("validation-admin-healthy", 108)
+        .transition(PrValidationEvent::BeginPreMergeObservation)
+        .unwrap();
+    persist_authority_validation_record(&adapter, &workspace_dir, None, &healthy);
+    let healthy_key = PrValidationRecordKey::new("validation-admin-healthy").unwrap();
+    let healthy_acknowledge = adapter
+        .execute_runtime_pr_validation_admin_command(
+            &workspace_dir,
+            PrValidationAuthorityAdminCommandRequest {
+                command_id: "admin-command-healthy-acknowledge",
+                record_key: &healthy_key,
+                action: PrValidationAuthorityAdminAction::Acknowledge,
+                expected_observation_revision: healthy.observation_revision(),
+                requested_at,
+                remediation_admission_allowed: true,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        healthy_acknowledge.rejection,
+        Some(PrValidationAuthorityAdminCommandRejection::NoActionableFinding)
+    );
+
+    let integrated = authority_integrated_record("validation-admin-verified", 109);
+    let merge_sha = integrated
+        .merge_sha()
+        .expect("integrated fixture should expose its merge SHA")
+        .clone();
+    let verified = integrated
+        .transition(PrValidationEvent::Settle(PrValidationCompletion::new(
+            merge_sha,
+            Vec::new(),
+            Vec::new(),
+            PrValidationCatchUpState::NoUnseenRelevantEvents,
+        )))
+        .expect("complete integrated fixture should settle");
+    persist_authority_validation_record(&adapter, &workspace_dir, None, &verified);
+    let verified_key = PrValidationRecordKey::new("validation-admin-verified").unwrap();
+    let verified_acknowledge = adapter
+        .execute_runtime_pr_validation_admin_command(
+            &workspace_dir,
+            PrValidationAuthorityAdminCommandRequest {
+                command_id: "admin-command-verified-acknowledge",
+                record_key: &verified_key,
+                action: PrValidationAuthorityAdminAction::Acknowledge,
+                expected_observation_revision: verified.observation_revision(),
+                requested_at,
+                remediation_admission_allowed: true,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        verified_acknowledge.rejection,
+        Some(PrValidationAuthorityAdminCommandRejection::NoActionableFinding)
+    );
 }
 
 #[test]

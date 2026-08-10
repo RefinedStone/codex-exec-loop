@@ -3,6 +3,7 @@ import type {
   GameActorProjection,
   GameSceneProjection,
   GameStandbyProjection,
+  GameValidationProjection,
   StaticPose,
   StatusSeverity,
   VisualState,
@@ -102,6 +103,34 @@ const parseStandby = (value: unknown): GameStandbyProjection | null => {
   };
 };
 
+const emptyValidation = (): GameValidationProjection => ({
+  stationState: "idle",
+  severity: "muted",
+  label: "QA/CI · 관찰 없음",
+  recordKey: null,
+  phase: null,
+  packetKind: null,
+  workerLeaseActive: false,
+});
+
+const parseValidation = (value: unknown): GameValidationProjection => {
+  const validation = asRecord(value);
+  if (!validation) return emptyValidation();
+  const nullableString = (candidate: unknown): string | null => {
+    const parsed = asString(candidate).trim();
+    return parsed === "" ? null : parsed;
+  };
+  return {
+    stationState: asString(validation.stationState, "idle"),
+    severity: asSeverity(validation.severity),
+    label: asString(validation.label, "QA/CI · 관찰 없음"),
+    recordKey: nullableString(validation.recordKey),
+    phase: nullableString(validation.phase),
+    packetKind: nullableString(validation.packetKind),
+    workerLeaseActive: validation.workerLeaseActive === true,
+  };
+};
+
 const parseScene = (value: unknown): GameSceneProjection | null => {
   const scene = asRecord(value);
   if (!scene) return null;
@@ -113,13 +142,13 @@ const parseScene = (value: unknown): GameSceneProjection | null => {
         .map(parseStandby)
         .filter((character): character is GameStandbyProjection => character !== null)
     : [];
-  return { actors, standbyCharacters };
+  return { actors, standbyCharacters, validation: parseValidation(scene.validation) };
 };
 
 export class DashboardSceneStore {
   private snapshot: DashboardSceneSnapshot = {
     planningRevision: null,
-    scene: { actors: [], standbyCharacters: [] },
+    scene: { actors: [], standbyCharacters: [], validation: emptyValidation() },
   };
 
   private signature = "";

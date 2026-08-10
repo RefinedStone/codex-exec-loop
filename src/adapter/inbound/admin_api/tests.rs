@@ -1499,16 +1499,19 @@ async fn admin_debug_harness_drives_fake_application_projection_without_real_con
         .oneshot(json_request(
             Method::POST,
             "/api/admin/akra/debug-harness",
-            json!({ "action": "scenario", "scenario": "blocked_recovery" }),
+            json!({ "action": "scenario", "scenario": "check_failure_recovery" }),
             Some(&cookie),
             Some(&csrf_token),
         ))
         .await
         .expect("debug scenario command should be served");
     assert_eq!(selected.status(), StatusCode::OK);
-    assert_eq!(json_body(selected).await["scenarioKey"], "blocked_recovery");
+    assert_eq!(
+        json_body(selected).await["scenarioKey"],
+        "check_failure_recovery"
+    );
 
-    for _ in 0..4 {
+    for _ in 0..2 {
         let stepped = router
             .clone()
             .oneshot(json_request(
@@ -1537,16 +1540,48 @@ async fn admin_debug_harness_drives_fake_application_projection_without_real_con
     let blocked = json_body(blocked).await;
     assert_eq!(blocked["debugHarness"]["stageKey"], "blocked");
     assert_eq!(blocked["workspace"]["readiness"], "blocked");
-    assert_eq!(blocked["pool"]["summary"]["blocked"], 1);
+    assert_eq!(blocked["pool"]["summary"]["blocked"], 0);
     assert_eq!(
         blocked["scene"]["actors"]
             .as_array()
-            .expect("blocked scene should contain actors")
-            .iter()
-            .filter(|actor| actor["visualState"] == "blocked")
-            .count(),
-        1
+            .expect("blocked scene actor projection should exist")
+            .len(),
+        0,
+        "passive CI failure must not fabricate a worker"
     );
+    assert_eq!(blocked["validation"]["records"][0]["phase"], "verifying");
+    assert_eq!(blocked["scene"]["validation"]["phase"], "verifying");
+    assert_eq!(blocked["scene"]["validation"]["workerLeaseActive"], false);
+
+    for _ in 0..3 {
+        let stepped = router
+            .clone()
+            .oneshot(json_request(
+                Method::POST,
+                "/api/admin/akra/debug-harness",
+                json!({ "action": "step" }),
+                Some(&cookie),
+                Some(&csrf_token),
+            ))
+            .await
+            .expect("debug recovery step should be served");
+        assert_eq!(stepped.status(), StatusCode::OK);
+    }
+    let working = router
+        .clone()
+        .oneshot(
+            admin_request_builder()
+                .method(Method::GET)
+                .uri("/api/admin/akra/dashboard")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let working = json_body(working).await;
+    assert_eq!(working["debugHarness"]["stageKey"], "working");
+    assert_eq!(working["scene"]["actors"].as_array().map(Vec::len), Some(1));
+    assert_eq!(working["scene"]["validation"]["workerLeaseActive"], true);
 
     let real_control = router
         .oneshot(json_request(
@@ -1559,6 +1594,102 @@ async fn admin_debug_harness_drives_fake_application_projection_without_real_con
         .await
         .expect("real control request should be served");
     assert_eq!(real_control.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn admin_debug_harness_all_validation_scenarios_keep_board_and_scene_semantics_aligned() {
+    let workspace = TempAdminWorkspace::new("akra-debug-validation-scenarios");
+    let router = admin_debug_harness_test_router(&workspace);
+    let (cookie, csrf_token) = bootstrap_admin_json_session(&router).await;
+    let scenarios = [
+        "post_merge_success",
+        "check_failure_recovery",
+        "optional_skipped",
+        "required_missing",
+        "rate_limit_recovery",
+        "provider_outage_retry",
+        "closed_unmerged_attested",
+        "restart_verifying",
+        "poll_claim_race",
+        "duplicate_late_review",
+    ];
+
+    for scenario in scenarios {
+        let selected = router
+            .clone()
+            .oneshot(json_request(
+                Method::POST,
+                "/api/admin/akra/debug-harness",
+                json!({ "action": "scenario", "scenario": scenario }),
+                Some(&cookie),
+                Some(&csrf_token),
+            ))
+            .await
+            .expect("validation scenario selection should be served");
+        assert_eq!(selected.status(), StatusCode::OK, "scenario {scenario}");
+        let selected = json_body(selected).await;
+        assert_eq!(selected["scenarioKey"], scenario);
+        assert_eq!(selected["scenarios"].as_array().map(Vec::len), Some(10));
+        let stage_count = selected["stageCount"]
+            .as_u64()
+            .expect("scenario stage count should be numeric") as usize;
+
+        for stage_index in 0..stage_count {
+            let dashboard = router
+                .clone()
+                .oneshot(
+                    admin_request_builder()
+                        .method(Method::GET)
+                        .uri("/api/admin/akra/dashboard")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(dashboard.status(), StatusCode::OK);
+            let dashboard = json_body(dashboard).await;
+            let record = &dashboard["validation"]["records"][0];
+            let scene = &dashboard["scene"]["validation"];
+            assert_eq!(
+                scene["recordKey"], record["recordKey"],
+                "scenario {scenario} stage {stage_index} record identity"
+            );
+            assert_eq!(
+                scene["phase"], record["phase"],
+                "scenario {scenario} stage {stage_index} semantic phase"
+            );
+            let actor_count = dashboard["scene"]["actors"]
+                .as_array()
+                .map(Vec::len)
+                .unwrap_or(0);
+            let lease_active = scene["workerLeaseActive"].as_bool().unwrap_or(false);
+            assert_eq!(
+                actor_count > 0,
+                lease_active,
+                "scenario {scenario} stage {stage_index} must only show an actor for a real fake lease"
+            );
+            if actor_count > 0 {
+                assert_eq!(scenario, "check_failure_recovery");
+                assert_eq!(dashboard["debugHarness"]["stageKey"], "working");
+                assert_eq!(record["phase"], "remediation_running");
+            }
+
+            if stage_index + 1 < stage_count {
+                let stepped = router
+                    .clone()
+                    .oneshot(json_request(
+                        Method::POST,
+                        "/api/admin/akra/debug-harness",
+                        json!({ "action": "step" }),
+                        Some(&cookie),
+                        Some(&csrf_token),
+                    ))
+                    .await
+                    .unwrap();
+                assert_eq!(stepped.status(), StatusCode::OK);
+            }
+        }
+    }
 }
 
 #[tokio::test]
@@ -2131,6 +2262,140 @@ async fn admin_pr_validation_board_rejects_malformed_opaque_cursor() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn admin_pr_validation_commands_require_csrf_and_expose_typed_conflicts() {
+    let workspace = TempAdminWorkspace::new("pr-validation-command-api");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let base = admin_integrated_validation_record("validation-command-api", 308);
+    let finding = PrValidationFinding::new(
+        PrValidationFindingKey::new(
+            PrValidationFindingSource::new("required_check").unwrap(),
+            "Fast Gate",
+        )
+        .unwrap(),
+        base.target_shas().source_sha().clone(),
+        "actionable check failure",
+    )
+    .unwrap();
+    let record = base
+        .transition(PrValidationEvent::FindingObserved(finding))
+        .unwrap();
+    let expected_revision = record.observation_revision();
+    persist_admin_validation_record(&adapter, &workspace, &record);
+
+    let router = admin_test_router(&workspace);
+    let (cookie, csrf_token) = bootstrap_admin_json_session(&router).await;
+    let endpoint = "/api/admin/akra/validations/validation-command-api/commands";
+    let pause_body = json!({
+        "commandId": "api-validation-pause",
+        "action": "pause",
+        "expectedRevision": expected_revision,
+    });
+
+    let forbidden = router
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            endpoint,
+            pause_body.clone(),
+            Some(&cookie),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+
+    let accepted = router
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            endpoint,
+            pause_body.clone(),
+            Some(&cookie),
+            Some(&csrf_token),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(accepted.status(), StatusCode::OK);
+    let accepted = json_body(accepted).await;
+    assert_eq!(accepted["state"], "applied");
+    assert_eq!(accepted["duplicate"], false);
+    assert_eq!(accepted["observedRevision"], expected_revision);
+
+    let replay = router
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            endpoint,
+            pause_body,
+            Some(&cookie),
+            Some(&csrf_token),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), StatusCode::OK);
+    assert_eq!(json_body(replay).await["duplicate"], true);
+
+    let idempotency_conflict = router
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            endpoint,
+            json!({
+                "commandId": "api-validation-pause",
+                "action": "resume",
+                "expectedRevision": expected_revision,
+            }),
+            Some(&cookie),
+            Some(&csrf_token),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(idempotency_conflict.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        json_body(idempotency_conflict).await["rejection"],
+        "idempotency_conflict"
+    );
+
+    let stale = router
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            endpoint,
+            json!({
+                "commandId": "api-validation-stale",
+                "action": "acknowledge",
+                "expectedRevision": expected_revision.saturating_add(1),
+            }),
+            Some(&cookie),
+            Some(&csrf_token),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    assert_eq!(json_body(stale).await["rejection"], "stale_revision");
+
+    let observe_admission = router
+        .oneshot(json_request(
+            Method::POST,
+            endpoint,
+            json!({
+                "commandId": "api-validation-observe",
+                "action": "queue_remediation",
+                "expectedRevision": expected_revision,
+            }),
+            Some(&cookie),
+            Some(&csrf_token),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(observe_admission.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        json_body(observe_admission).await["rejection"],
+        "observe_mode_admission"
+    );
 }
 
 #[tokio::test]
@@ -3656,6 +3921,78 @@ fn akra_graphic_dashboard_keeps_one_primary_surface_per_operational_fact() {
 }
 
 #[test]
+fn akra_graphic_dashboard_validation_rail_keeps_accessible_typed_operations_contract() {
+    for token in [
+        "data-validation-kpi=\"verifying\"",
+        "data-validation-kpi=\"failed\"",
+        "data-validation-kpi=\"queued\"",
+        "data-validation-kpi=\"stale\"",
+        "id=\"validation-rail\"",
+        "data-validation-list",
+        "data-validation-record-key",
+        "PR / Akra ID",
+        "Integrated",
+        "Actions",
+        "Findings",
+        "Remediation",
+        "Verified",
+        "latest attempt {{ record.latest_required_attempt() }}",
+        "@media (max-width: 860px)",
+        "content: attr(data-label)",
+    ] {
+        assert!(
+            AKRA_DASHBOARD_TEMPLATE.contains(token),
+            "validation rail template should keep {token}"
+        );
+    }
+    for token in [
+        "renderValidationRail",
+        "openValidationDetailDrawer",
+        "renderValidationDetail",
+        "runValidationCommand",
+        "X-CSRF-Token",
+        "expectedRevision",
+        "commandId",
+        "validationCommandFeedback",
+        "validationCommandOutcome",
+        "priorDisabledStates",
+        "command.disabled = priorDisabledStates.get(command) ?? true;",
+        "validation: dashboard.validation || null",
+        "latestRequiredAttempt",
+        "data-validation-command-status",
+        "validation: \"#validation-rail [data-validation-record-key]\"",
+    ] {
+        assert!(
+            AKRA_DASHBOARD_JS.contains(token),
+            "validation rail client should keep {token}"
+        );
+    }
+    for token in [
+        "GameValidationProjection",
+        "QA_CI_STATION_POINT",
+        "QA_CI_SIGNAL_POINTS",
+        "buildValidationStation",
+        "syncValidationStation",
+        "sceneValidationPacketVisible",
+        "workerLeaseActive",
+        "packetVisible",
+    ] {
+        assert!(
+            admin_game_source_contains(token),
+            "validation game projection should keep {token}"
+        );
+    }
+    assert!(source_contains(
+        ADMIN_MOD,
+        "\"/api/admin/akra/validations/{record_key}/commands\""
+    ));
+    assert!(source_contains(
+        ADMIN_API,
+        "verify_header_csrf(&jar, &headers)?"
+    ));
+}
+
+#[test]
 fn akra_graphic_dashboard_game_bundle_is_vite_typescript_input() {
     for token in [
         "\"build\": \"vite build --config vite.config.ts && node scripts/promote-build.mjs\"",
@@ -4163,6 +4500,7 @@ fn akra_admin_debug_harness_is_explicit_safe_and_browser_controllable() {
         "data-debug-command=\"step\"",
         "data-debug-command=\"reset\"",
         "data-debug-scenario",
+        "data-debug-stage-count",
     ] {
         assert!(
             AKRA_DASHBOARD_TEMPLATE.contains(token),

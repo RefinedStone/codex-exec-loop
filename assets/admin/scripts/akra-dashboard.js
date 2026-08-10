@@ -8,6 +8,7 @@
   const streamUrl = "/api/admin/akra/stream";
   const controlUrl = "/api/admin/akra/control";
   const debugHarnessUrl = "/api/admin/akra/debug-harness";
+  const validationBaseUrl = "/api/admin/akra/validations";
   const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || "";
 
   const setText = (selector, value) => {
@@ -71,6 +72,9 @@
   const detailDrawerSubtitle = root.querySelector("[data-detail-drawer-subtitle]");
   const detailDrawerBody = root.querySelector("[data-detail-drawer-body]");
   let detailTrigger = null;
+  let validationDetailRequestSequence = 0;
+  let validationCommandRequest = null;
+  let validationCommandFeedback = null;
   const detailRowsByType = {
     slot: [
       ["상태", "detailState", "chip"],
@@ -157,6 +161,7 @@
     if (!source) return "";
     const type = source.dataset.detailType || "detail";
     const stableId = source.dataset.eventSequence
+      || source.dataset.validationRecordKey
       || source.dataset.slotId
       || source.dataset.agentId
       || source.dataset.taskId
@@ -301,11 +306,17 @@
     return row;
   };
 
+  let openValidationDetailDrawer = null;
+
   const openDetailDrawer = (
     source,
     { focusDrawer = true, rememberTrigger = true, trigger = source } = {}
   ) => {
     if (!source || !detailDrawer || !detailDrawerBody) return;
+    if (source.dataset.detailType === "validation" && openValidationDetailDrawer) {
+      openValidationDetailDrawer(source, { focusDrawer, rememberTrigger, trigger });
+      return;
+    }
     if (rememberTrigger) detailTrigger = trigger?.isConnected ? trigger : null;
     const type = source.dataset.detailType;
     const rows = detailRowsByType[type] || [];
@@ -316,6 +327,7 @@
         renderDetailRow(label, source.dataset[key], style, source.dataset.detailSeverity)
       )
     );
+    detailDrawer.dataset.detailMode = type || "generic";
     detailDrawer.hidden = false;
     detailDrawer.setAttribute("aria-hidden", "false");
     window.requestAnimationFrame(() => {
@@ -331,6 +343,8 @@
     const trigger = detailTrigger;
     detailTrigger = null;
     detailDrawer.classList.remove("is-open");
+    validationDetailRequestSequence += 1;
+    delete detailDrawer.dataset.detailMode;
     detailDrawer.setAttribute("aria-hidden", "true");
     setSelectedDetail(null);
     clearRelated();
@@ -641,7 +655,8 @@
       actors: asArray(scene.actors),
       standbyProfileCount: scene.standbyProfileCount,
       standbyCharacters: asArray(scene.standbyCharacters),
-      diagnostics: asArray(scene.diagnostics)
+      diagnostics: asArray(scene.diagnostics),
+      validation: scene.validation || null
     });
     if (root.dataset.sceneSignature === nextSignature) return;
     for (const node of board.querySelectorAll(".desk[data-actor-id], [data-standby-character]")) node.remove();
@@ -785,6 +800,380 @@
     updatePanel("#pipeline", children);
   };
 
+  const validationStageClass = (state) => {
+    if (["verified", "complete", "succeeded", "integrated"].includes(state)) return "is-complete";
+    if (["blocked", "failed", "actionable_failure", "policy_blocked", "missing"].includes(state)) return "is-danger";
+    if (["remediation_queued", "remediation_running", "stale", "paused"].includes(state)) return "is-warning";
+    return "is-active";
+  };
+
+  const createValidationStage = (state, label) => {
+    const stage = createText("span", `validation-stage ${validationStageClass(state)}`, label);
+    stage.dataset.validationStage = state || "unknown";
+    return stage;
+  };
+
+  const createValidationCell = (label, stage, meta) => {
+    const cell = document.createElement("span");
+    cell.className = "validation-cell";
+    cell.dataset.label = label;
+    cell.append(stage, createText("small", "", meta));
+    return cell;
+  };
+
+  const createValidationRecord = (record) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `validation-record ${severityClass(record.severity)}`;
+    setDataset(button, {
+      validationRecordKey: record.recordKey,
+      validationRevision: record.observationRevision,
+      detailType: "validation",
+      detailTitle: `PR #${record.pullRequestNumber} · ${optionalText(record.akraId)}`,
+      detailSubtitle: `${optionalText(record.phaseLabel)} · ${optionalText(record.targetShortSha)}`,
+      detailState: record.phaseLabel,
+      detailSeverity: record.severity
+    });
+    button.setAttribute(
+      "aria-label",
+      `PR ${record.pullRequestNumber}, ${optionalText(record.phaseLabel)}, 검증 상세 보기`
+    );
+
+    const identity = document.createElement("span");
+    identity.className = "validation-cell";
+    identity.dataset.label = "PR / Akra ID";
+    identity.append(
+      createText("strong", "", `#${record.pullRequestNumber} · ${optionalText(record.akraId)}`),
+      createText("small", "", `${optionalText(record.repository)} · ${optionalText(record.targetShortSha)}`)
+    );
+
+    const integratedState = record.integrated ? "integrated" : "pending";
+    const actionsState = record.verified ? "succeeded" : record.phase;
+    const findingsState = Number(record.findingCount) > Number(record.remediationCount)
+      ? "actionable_failure"
+      : "succeeded";
+    const remediationState = ["remediation_queued", "remediation_running"].includes(record.phase)
+      ? record.phase
+      : "complete";
+    const verifiedState = record.verified ? "verified" : record.phase;
+    const latestRequiredAttempt = asArray(record.checks)
+      .filter((check) => Boolean(check?.required))
+      .reduce((latest, check) => Math.max(latest, Number(check?.latestAttempt) || 0), 0);
+
+    button.append(
+      identity,
+      createValidationCell(
+        "Integrated",
+        createValidationStage(integratedState, record.integrated ? "증거 확인" : "대기"),
+        optionalText(record.evidenceShortSha, "evidence 없음")
+      ),
+      createValidationCell(
+        "Actions",
+        createValidationStage(actionsState, `${Number(record.requiredChecksSucceeded) || 0}/${Number(record.requiredChecksTotal) || 0} required`),
+        `latest attempt ${latestRequiredAttempt}`
+      ),
+      createValidationCell(
+        "Findings",
+        createValidationStage(findingsState, `${Number(record.findingCount) || 0} finding`),
+        record.stale ? `stale ${Number(record.staleSeconds) || 0}s` : "관측 최신"
+      ),
+      createValidationCell(
+        "Remediation",
+        createValidationStage(remediationState, `${Number(record.remediationCount) || 0} correlated`),
+        `${asArray(record.correlations).length} worker link`
+      ),
+      createValidationCell(
+        "Verified",
+        createValidationStage(verifiedState, optionalText(record.phaseLabel)),
+        record.paused ? "paused" : `rev ${Number(record.observationRevision) || 0}`
+      )
+    );
+    initializeDetailControl(button);
+    return button;
+  };
+
+  const renderValidationRail = (validation) => {
+    if (!validation) return;
+    setText("[data-validation-mode]", optionalText(validation.schedulerMode, "observe"));
+    setText("[data-validation-count]", String(asArray(validation.records).length));
+    const list = root.querySelector("[data-validation-list]");
+    if (!list) return;
+
+    const head = document.createElement("div");
+    head.className = "validation-rail-head";
+    head.setAttribute("aria-hidden", "true");
+    for (const label of ["PR / Akra ID", "Integrated", "Actions", "Findings", "Remediation", "Verified"]) {
+      head.appendChild(createText("span", "", label));
+    }
+    const records = asArray(validation.records);
+    if (records.length === 0) {
+      const empty = createText("p", "validation-empty", "관찰 중인 PR 검증 레코드가 없습니다.");
+      empty.dataset.validationEmpty = "true";
+      list.replaceChildren(head, empty);
+      return;
+    }
+    list.replaceChildren(head, ...records.map(createValidationRecord));
+  };
+
+  const validationDetailSection = (title, children) => {
+    const section = document.createElement("section");
+    section.className = "validation-detail-section";
+    section.append(createText("h4", "", title), ...children);
+    return section;
+  };
+
+  const validationDetailCard = (title, value, meta = "") => {
+    const card = document.createElement("div");
+    card.className = "validation-detail-card";
+    card.append(createText("strong", "", title), createText("span", "", optionalText(value)));
+    if (String(meta || "").trim() !== "") card.append(createText("small", "", meta));
+    return card;
+  };
+
+  const validationDetailGrid = (cards) => {
+    const grid = document.createElement("div");
+    grid.className = "validation-detail-grid";
+    grid.append(...cards);
+    return grid;
+  };
+
+  const statusLabel = (value) => optionalText(value).replaceAll("_", " ");
+
+  const renderValidationDetail = (record) => {
+    const detail = document.createElement("div");
+    detail.className = "validation-detail";
+    detail.dataset.validationDetailRecordKey = record.recordKey;
+    detail.dataset.validationDetailRevision = String(record.observationRevision ?? "");
+
+    const prLink = document.createElement("a");
+    prLink.href = record.canonicalPrUrl || "#";
+    prLink.target = "_blank";
+    prLink.rel = "noreferrer";
+    prLink.textContent = `PR #${record.pullRequestNumber} 열기`;
+    const identity = validationDetailGrid([
+      validationDetailCard("Akra ID", record.akraId, record.repository),
+      validationDetailCard("상태", record.phaseLabel, `${statusLabel(record.severity)} · rev ${record.observationRevision}`),
+      validationDetailCard("Target / Evidence", record.targetShortSha, optionalText(record.evidenceShortSha, "evidence 없음")),
+      validationDetailCard("Integration", record.integrationMethod, optionalText(record.integratedAt, "integration 미확인"))
+    ]);
+    detail.append(validationDetailSection("검증 증거", [identity, prLink]));
+
+    const checks = asArray(record.checks);
+    const checksGrid = validationDetailGrid(checks.length > 0
+      ? checks.map((check) => validationDetailCard(
+        `${check.required ? "필수" : "선택"} · ${check.context}`,
+        statusLabel(check.status),
+        `attempt ${check.latestAttempt ?? "-"} · ${optionalText(check.appSlug, "provider 미상")}`
+      ))
+      : [validationDetailCard("Checks", "관측 없음")]);
+    detail.append(validationDetailSection("Required / Optional Checks", [checksGrid]));
+
+    const workflows = asArray(record.workflows);
+    const workflowGrid = validationDetailGrid(workflows.length > 0
+      ? workflows.map((workflow) => validationDetailCard(
+        workflow.name,
+        statusLabel(workflow.status),
+        `run attempt ${workflow.runAttempt} · ${optionalText(workflow.updatedAt, "시간 미상")}`
+      ))
+      : [validationDetailCard("Workflow attempts", "관측 없음")]);
+    detail.append(validationDetailSection("Workflow Attempts", [workflowGrid]));
+
+    const providers = asArray(record.providers);
+    const providerCards = providers.map((provider) => validationDetailCard(
+      provider.key,
+      `${statusLabel(provider.lifecycle)} · ${statusLabel(provider.status)}`,
+      provider.pageComplete ? "pagination complete" : "pagination incomplete"
+    ));
+    providerCards.push(validationDetailCard(
+      "Poll / Backoff",
+      `attempt ${record.schedule?.pollAttempt ?? 0} · errors ${record.schedule?.consecutiveErrorCount ?? 0}`,
+      `next ${optionalText(record.schedule?.nextPollAt, "없음")} · rate ${record.schedule?.rateLimitRemaining ?? "-"}`
+    ));
+    detail.append(validationDetailSection("Provider / Retry", [validationDetailGrid(providerCards)]));
+
+    const timeline = asArray(record.timeline);
+    const timelineList = document.createElement("div");
+    timelineList.className = "validation-detail-grid";
+    timelineList.append(...(timeline.length > 0
+      ? timeline.map((entry) => validationDetailCard(
+        entry.label,
+        statusLabel(entry.state),
+        `${optionalText(entry.occurredAt, "시간 미상")} · attempt ${entry.attempt ?? "-"}`
+      ))
+      : [validationDetailCard("Timeline", "관측 없음")]));
+    detail.append(validationDetailSection("검증 Timeline", [timelineList]));
+
+    const correlations = asArray(record.correlations);
+    const correlationGrid = validationDetailGrid(correlations.length > 0
+      ? correlations.map((correlation) => validationDetailCard(
+        correlation.remediationAkraId,
+        correlation.finding,
+        correlation.slotId
+          ? `${correlation.slotId} · ${optionalText(correlation.workerState, correlation.taskState)}`
+          : `queue · ${optionalText(correlation.taskState, "대기")}`
+      ))
+      : [validationDetailCard("Worker correlation", "실제 remediation lease 없음", "passive CI에는 요원을 만들지 않습니다.")]);
+    detail.append(validationDetailSection("Finding / Remediation Correlation", [correlationGrid]));
+
+    const commandList = document.createElement("div");
+    commandList.className = "validation-command-list";
+    for (const command of asArray(record.commands)) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "validation-command";
+      button.dataset.validationCommand = command.action;
+      button.dataset.validationRecordKey = record.recordKey;
+      button.dataset.validationRevision = String(record.observationRevision);
+      button.textContent = command.label;
+      button.disabled = !command.enabled;
+      if (command.disabledReason) {
+        button.title = command.disabledReason;
+        button.setAttribute("aria-describedby", `validation-command-status-${record.observationRevision}`);
+      }
+      commandList.appendChild(button);
+    }
+    const commandFeedback = validationCommandFeedback?.recordKey === record.recordKey
+      ? validationCommandFeedback
+      : null;
+    const commandStatus = createText(
+      "p",
+      "validation-command-status",
+      commandFeedback?.text || (
+        record.paused
+          ? "검증 polling이 운영자에 의해 일시정지되었습니다."
+          : `scheduler ${optionalText(record.schedulerMode, root.querySelector("[data-validation-mode]")?.textContent || "observe")} · optimistic rev ${record.observationRevision}`
+      )
+    );
+    commandStatus.id = `validation-command-status-${record.observationRevision}`;
+    commandStatus.dataset.validationCommandStatus = "true";
+    if (commandFeedback?.state) commandStatus.dataset.validationCommandOutcome = commandFeedback.state;
+    commandStatus.setAttribute("role", "status");
+    commandStatus.setAttribute("aria-live", "polite");
+    detail.append(validationDetailSection("운영 명령", [commandList, commandStatus]));
+    return detail;
+  };
+
+  openValidationDetailDrawer = (
+    source,
+    { focusDrawer = true, rememberTrigger = true, trigger = source } = {}
+  ) => {
+    if (!source || !detailDrawer || !detailDrawerBody) return;
+    if (rememberTrigger) detailTrigger = trigger?.isConnected ? trigger : null;
+    const recordKey = source.dataset.validationRecordKey;
+    const requestSequence = ++validationDetailRequestSequence;
+    detailDrawer.dataset.detailMode = "validation";
+    detailDrawer.dataset.validationRecordKey = recordKey || "";
+    detailDrawerTitle.textContent = source.dataset.detailTitle || "PR 검증 상세";
+    detailDrawerSubtitle.textContent = source.dataset.detailSubtitle || "authoritative validation projection";
+    const loading = createText("p", "validation-empty", "검증 상세를 불러오는 중…");
+    loading.setAttribute("role", "status");
+    detailDrawerBody.replaceChildren(loading);
+    detailDrawer.hidden = false;
+    detailDrawer.setAttribute("aria-hidden", "false");
+    window.requestAnimationFrame(() => {
+      detailDrawer.classList.add("is-open");
+      if (focusDrawer) detailDrawer.focus({ preventScroll: true });
+    });
+    setSelectedDetail(source);
+    markRelated(source);
+
+    fetch(`${validationBaseUrl}/${encodeURIComponent(recordKey)}`, {
+      headers: { "Accept": "application/json" }
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`validation detail ${response.status}`);
+        return response.json();
+      })
+      .then((record) => {
+        if (requestSequence !== validationDetailRequestSequence) return;
+        detailDrawerTitle.textContent = `PR #${record.pullRequestNumber} · ${optionalText(record.akraId)}`;
+        detailDrawerSubtitle.textContent = `${optionalText(record.phaseLabel)} · ${optionalText(record.targetShortSha)} · rev ${record.observationRevision}`;
+        detailDrawerBody.replaceChildren(renderValidationDetail(record));
+      })
+      .catch((error) => {
+        if (requestSequence !== validationDetailRequestSequence) return;
+        detailDrawerBody.replaceChildren(createText("p", "validation-empty severity-danger", `상세 조회 실패 · ${error.message}`));
+      });
+  };
+
+  const validationCommandId = () => {
+    if (globalThis.crypto?.randomUUID) return `admin-${globalThis.crypto.randomUUID()}`;
+    return `admin-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  };
+
+  const runValidationCommand = (button) => {
+    if (!button || button.disabled || validationCommandRequest) return validationCommandRequest;
+    const recordKey = button.dataset.validationRecordKey;
+    const expectedRevision = Number(button.dataset.validationRevision);
+    const action = button.dataset.validationCommand;
+    const commandId = button.dataset.validationCommandId || validationCommandId();
+    button.dataset.validationCommandId = commandId;
+    validationCommandFeedback = null;
+    const status = detailDrawerBody?.querySelector("[data-validation-command-status]");
+    const commandButtons = [
+      ...(detailDrawerBody?.querySelectorAll("[data-validation-command]") || [])
+    ];
+    const priorDisabledStates = new Map(
+      commandButtons.map((command) => [command, command.disabled])
+    );
+    for (const command of commandButtons) {
+      command.disabled = true;
+    }
+    if (status) status.textContent = `${button.textContent} 명령 전송 중…`;
+
+    validationCommandRequest = fetch(
+      `${validationBaseUrl}/${encodeURIComponent(recordKey)}/commands`,
+      {
+        method: "POST",
+        headers: {
+          "Accept": "application/json",
+          "Content-Type": "application/json",
+          "X-CSRF-Token": csrfToken
+        },
+        body: JSON.stringify({ commandId, action, expectedRevision })
+      }
+    )
+      .then(async (response) => {
+        const result = await response.json().catch(() => null);
+        if (!result) throw new Error(`validation command ${response.status}`);
+        const outcome = response.ok ? "적용" : `거절 · ${statusLabel(result.rejection)}`;
+        const feedbackText = `${outcome} · ${optionalText(result.message)}${result.duplicate ? " · duplicate replay" : ""}`;
+        validationCommandFeedback = {
+          recordKey,
+          state: response.ok ? "applied" : `rejected:${optionalText(result.rejection, "unknown")}`,
+          text: feedbackText
+        };
+        if (status) status.textContent = feedbackText;
+        delete button.dataset.validationCommandId;
+        return Promise.allSettled([
+          pollDashboard({ fresh: true }),
+          pollEvents({ fresh: true })
+        ]).then(() => result);
+      })
+      .then((result) => {
+        const currentSource = [...root.querySelectorAll("[data-validation-record-key][data-detail-type='validation']")]
+          .find((candidate) => candidate.dataset.validationRecordKey === recordKey);
+        if (currentSource && detailDrawer?.classList.contains("is-open")) {
+          openValidationDetailDrawer(currentSource, { focusDrawer: false, rememberTrigger: false });
+        } else if (status) {
+          status.textContent = optionalText(result.message);
+        }
+        return result;
+      })
+      .catch((error) => {
+        const feedbackText = `명령 실패 · ${error.message} · 같은 command ID로 다시 시도할 수 있습니다.`;
+        validationCommandFeedback = { recordKey, state: "transport_error", text: feedbackText };
+        if (status) status.textContent = feedbackText;
+        for (const command of commandButtons) {
+          command.disabled = priorDisabledStates.get(command) ?? true;
+        }
+      })
+      .finally(() => {
+        validationCommandRequest = null;
+      });
+    return validationCommandRequest;
+  };
+
   const dashboardSignature = (dashboard) => JSON.stringify({
     agents: dashboard.agents || null,
     scene: dashboard.scene || null,
@@ -796,6 +1185,7 @@
     workspace: dashboard.workspace || null,
     eventFeed: dashboard.eventFeed || null,
     debugHarness: dashboard.debugHarness || null,
+    validation: dashboard.validation || null,
     events: asArray(dashboard.events)
   });
 
@@ -803,6 +1193,7 @@
     renderCampaign(dashboard);
     renderBoard(dashboard);
     renderPipeline(dashboard.distributor);
+    renderValidationRail(dashboard.validation);
     initializeDetailControls();
     syncSelectedDetail();
     window.AkraAdminGame?.applyDashboard?.(dashboard);
@@ -819,6 +1210,10 @@
     setText("[data-summary-idle-slots]", formatValue(dashboard.kpis.poolIdle, "0"));
     setText("[data-summary-queue-depth]", formatValue(dashboard.kpis.queueDepth, "0"));
     setText("[data-summary-generated-time]", optionalText(dashboard.generatedTimeLabel));
+    setText("[data-validation-kpi='verifying']", formatValue(dashboard.kpis.validationVerifying, "0"));
+    setText("[data-validation-kpi='failed']", formatValue(dashboard.kpis.validationFailed, "0"));
+    setText("[data-validation-kpi='queued']", formatValue(dashboard.kpis.validationRemediationQueued, "0"));
+    setText("[data-validation-kpi='stale']", formatValue(dashboard.kpis.validationStale, "0"));
     setText("[data-command-readiness]", optionalText(dashboard.workspace.readiness, "미집계"));
     setText("[data-command-branch]", optionalText(dashboard.workspace.branch, "not-a-git-worktree"));
     setText(
@@ -900,6 +1295,7 @@
     setText("[data-debug-scenario-label]", optionalText(harness.scenarioLabel));
     setText("[data-debug-stage-label]", optionalText(harness.stageLabel));
     setText("[data-debug-stage-index]", String((Number(harness.stageIndex) || 0) + 1));
+    setText("[data-debug-stage-count]", String(Math.max(1, Number(harness.stageCount) || 1)));
     setText("[data-debug-stage-summary]", optionalText(harness.stageSummary));
     const progress = Math.max(0, Math.min(100, Number(harness.progressPercent) || 0));
     const progressBar = root.querySelector("[data-debug-progress]");
@@ -992,7 +1388,10 @@
       .then((control) => {
         renderLoopControl(control);
         if (loopControlStatus) loopControlStatus.textContent = control.message;
-        return Promise.allSettled([pollDashboard(), pollEvents()]).then(() => control);
+        return Promise.allSettled([
+          pollDashboard({ fresh: true }),
+          pollEvents({ fresh: true })
+        ]).then(() => control);
       })
       .catch((error) => {
         renderLoopControl(null);
@@ -1022,7 +1421,10 @@
       })
       .then((harness) => {
         renderDebugHarness(harness);
-        return Promise.allSettled([pollDashboard(), pollEvents({ reset: true })]);
+        return Promise.allSettled([
+          pollDashboard({ fresh: true }),
+          pollEvents({ reset: true, fresh: true })
+        ]);
       })
       .catch((error) => {
         if (debugStatus) debugStatus.textContent = `Fake 명령 실패 · ${error.message}`;
@@ -1056,10 +1458,19 @@
       return;
     }
 
+    const validationCommand = event.target.closest("[data-validation-command]");
+    if (validationCommand) {
+      runValidationCommand(validationCommand);
+      return;
+    }
+
     const refreshButton = event.target.closest("[data-refresh-dashboard]");
     if (refreshButton) {
       setManualRefreshState(true);
-      Promise.allSettled([pollDashboard(), pollEvents()])
+      Promise.allSettled([
+        pollDashboard({ fresh: true }),
+        pollEvents({ fresh: true })
+      ])
         .then(([snapshot, events]) => {
           const snapshotOk = snapshot.status === "fulfilled" && snapshot.value === true;
           const eventsOk = events.status === "fulfilled" && events.value === true;
@@ -1123,7 +1534,8 @@
       review: "#campaign [data-detail-type]",
       pipeline: ".office-board .distributor-desk",
       events: ".office-board .event-board",
-      standby: ".office-board .rest-area"
+      standby: ".office-board .rest-area",
+      validation: "#validation-rail [data-validation-record-key]"
     };
     const selector = selectors[detail.detailTarget];
     const source = selector ? root.querySelector(selector) : null;
@@ -1171,8 +1583,10 @@
   let eventsRequest = null;
   let lastDashboardPollAt = 0;
 
-  const pollDashboard = () => {
-    if (dashboardRequest) return dashboardRequest;
+  const pollDashboard = ({ fresh = false } = {}) => {
+    if (dashboardRequest) {
+      return fresh ? dashboardRequest.then(() => pollDashboard()) : dashboardRequest;
+    }
     dashboardRequest = (async () => {
       try {
         const response = await fetch(dashboardUrl, { headers: { "Accept": "application/json" } });
@@ -1215,8 +1629,12 @@
     setEventStatus();
   };
 
-  const pollEvents = ({ reset = false } = {}) => {
-    if (eventsRequest) return eventsRequest;
+  const pollEvents = ({ reset = false, fresh = false } = {}) => {
+    if (eventsRequest) {
+      return fresh
+        ? eventsRequest.then(() => pollEvents({ reset }))
+        : eventsRequest;
+    }
     eventsRequest = (async () => {
       const latest = Number(root.dataset.latestEventSequence || "0");
       const url = !reset && latest > 0

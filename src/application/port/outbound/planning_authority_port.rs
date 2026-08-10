@@ -359,6 +359,75 @@ pub struct PrValidationAuthorityRecordSnapshot {
     pub last_error_class: Option<PrValidationPollErrorClass>,
     pub rate_limit_remaining: Option<u64>,
     pub rate_limit_reset_at: Option<String>,
+    pub operator_paused: bool,
+    pub operator_acknowledged_at: Option<String>,
+    pub last_operator_command_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrValidationAuthorityAdminAction {
+    RetryNow,
+    Pause,
+    Resume,
+    QueueRemediation,
+    Acknowledge,
+}
+
+impl PrValidationAuthorityAdminAction {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::RetryNow => "retry_now",
+            Self::Pause => "pause",
+            Self::Resume => "resume",
+            Self::QueueRemediation => "queue_remediation",
+            Self::Acknowledge => "acknowledge",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PrValidationAuthorityAdminCommandRequest<'a> {
+    pub command_id: &'a str,
+    pub record_key: &'a PrValidationRecordKey,
+    pub action: PrValidationAuthorityAdminAction,
+    pub expected_observation_revision: u64,
+    pub requested_at: DateTime<Utc>,
+    pub remediation_admission_allowed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrValidationAuthorityAdminCommandState {
+    Applied,
+    Rejected,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrValidationAuthorityAdminCommandRejection {
+    NotFound,
+    StaleRevision,
+    IdempotencyConflict,
+    ObserveModeAdmission,
+    InvalidState,
+    RateLimitActive,
+    NoActionableFinding,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrValidationAuthorityAdminCommandOutcome {
+    pub command_id: String,
+    pub record_key: String,
+    pub action: PrValidationAuthorityAdminAction,
+    pub state: PrValidationAuthorityAdminCommandState,
+    pub rejection: Option<PrValidationAuthorityAdminCommandRejection>,
+    pub duplicate: bool,
+    pub expected_observation_revision: u64,
+    pub observed_revision: Option<u64>,
+    pub board_revision: i64,
+    pub message: String,
+    pub applied_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -372,6 +441,7 @@ pub struct PrValidationAuthorityPagePosition {
 pub struct PrValidationAuthorityPageRequest {
     pub limit: usize,
     pub terminal_since: String,
+    pub stale_before: String,
     pub after: Option<PrValidationAuthorityPagePosition>,
     pub expected_revision: Option<i64>,
 }
@@ -382,9 +452,11 @@ pub struct PrValidationAuthorityBoardSummary {
     pub integrated: usize,
     pub verifying: usize,
     pub remediation: usize,
+    pub remediation_queued: usize,
     pub verified: usize,
     pub blocked: usize,
     pub failed: usize,
+    pub stale: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -830,6 +902,18 @@ pub trait PlanningAuthorityPort: ParallelModeRuntimeEventLogPort + Send + Sync {
         _record_key: &PrValidationRecordKey,
     ) -> Result<Option<PrValidationAuthorityRecordSnapshot>> {
         Ok(None)
+    }
+
+    /// Apply one operator command under the validation record's observation revision. Concrete
+    /// stores must keep command-id replay and record mutation in one transaction.
+    fn execute_runtime_pr_validation_admin_command(
+        &self,
+        _workspace_dir: &str,
+        _request: PrValidationAuthorityAdminCommandRequest<'_>,
+    ) -> Result<PrValidationAuthorityAdminCommandOutcome> {
+        Err(anyhow!(
+            "PR validation Admin commands are unsupported by this adapter"
+        ))
     }
 
     /// Select a bounded set of due, pollable keys without loading every validation record.

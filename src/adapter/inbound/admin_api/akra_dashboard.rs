@@ -4,7 +4,8 @@ use crate::application::port::inbound::parallel_agent_profile_port::{
 use crate::application::port::inbound::parallel_mode_admin_port::ParallelModeAdminPort;
 use crate::application::port::inbound::planning_admin_port::PlanningAdminPort;
 use crate::application::port::inbound::pr_validation_query_port::{
-    PrValidationBoardRequest, PrValidationBoardSnapshot, PrValidationQueryPort,
+    PrValidationAdminPhase, PrValidationAdminRecord, PrValidationBoardRequest,
+    PrValidationBoardSnapshot, PrValidationQueryPort,
 };
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeDistributorQueueItem, ParallelModePoolSlotSnapshot,
@@ -77,6 +78,10 @@ pub(super) struct AkraKpiView {
     pub queue_depth_basis: String,
     pub metric_source_label: String,
     pub distributor_state: String,
+    pub validation_verifying: usize,
+    pub validation_failed: usize,
+    pub validation_remediation_queued: usize,
+    pub validation_stale: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -155,6 +160,19 @@ pub(super) struct GameSceneView {
     pub standby_profile_count: usize,
     pub standby_characters: Vec<GameStandbyCharacterView>,
     pub diagnostics: Vec<GameSceneDiagnosticView>,
+    pub validation: GameValidationSceneView,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct GameValidationSceneView {
+    pub station_state: String,
+    pub severity: String,
+    pub label: String,
+    pub record_key: Option<String>,
+    pub phase: Option<String>,
+    pub packet_kind: Option<String>,
+    pub worker_lease_active: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -475,7 +493,8 @@ pub(super) fn build_akra_dashboard_view(
 
     let pool = map_pool(&supervisor);
     let agents = map_agents(&supervisor, &agent_profiles);
-    let scene = map_game_scene(&supervisor, &agent_profiles);
+    let mut scene = map_game_scene(&supervisor, &agent_profiles);
+    scene.validation = map_game_validation_scene(&validation);
     let selected_task = map_selected_task(&supervisor);
     let distributor = map_distributor(&supervisor);
     let event_feed = map_event_feed(&events, DASHBOARD_EVENT_LIMIT, false);
@@ -528,6 +547,10 @@ pub(super) fn build_akra_dashboard_view(
             queue_depth_basis: "distributor queue depth".to_string(),
             metric_source_label: "snapshot 기반, 미집계 값은 '-'로 표시".to_string(),
             distributor_state: distributor.barrier_state.clone(),
+            validation_verifying: validation.summary.verifying,
+            validation_failed: validation.summary.failed + validation.summary.blocked,
+            validation_remediation_queued: validation.summary.remediation_queued,
+            validation_stale: validation.summary.stale,
         },
         pool,
         agents,
@@ -880,6 +903,91 @@ fn map_game_scene(
         standby_profile_count,
         standby_characters,
         diagnostics,
+        validation: GameValidationSceneView {
+            station_state: "idle".to_string(),
+            severity: "muted".to_string(),
+            label: "검증 대기".to_string(),
+            record_key: None,
+            phase: None,
+            packet_kind: None,
+            worker_lease_active: false,
+        },
+    }
+}
+
+pub(super) fn map_game_validation_scene(
+    validation: &PrValidationBoardSnapshot,
+) -> GameValidationSceneView {
+    let record = validation
+        .records
+        .iter()
+        .min_by_key(|record| validation_attention_rank(record));
+    let Some(record) = record else {
+        return GameValidationSceneView {
+            station_state: "idle".to_string(),
+            severity: "muted".to_string(),
+            label: "검증 대기".to_string(),
+            record_key: None,
+            phase: None,
+            packet_kind: None,
+            worker_lease_active: false,
+        };
+    };
+    let phase = match record.phase {
+        PrValidationAdminPhase::Registered => "registered",
+        PrValidationAdminPhase::PreMerge => "pre_merge",
+        PrValidationAdminPhase::Integrated => "integrated",
+        PrValidationAdminPhase::Verifying => "verifying",
+        PrValidationAdminPhase::RemediationQueued => "remediation_queued",
+        PrValidationAdminPhase::RemediationRunning => "remediation_running",
+        PrValidationAdminPhase::Verified => "verified",
+        PrValidationAdminPhase::Blocked => "blocked",
+        PrValidationAdminPhase::Failed => "failed",
+    };
+    let packet_kind = match record.phase {
+        PrValidationAdminPhase::Integrated | PrValidationAdminPhase::Verifying => "ci_observation",
+        PrValidationAdminPhase::RemediationQueued => "failure_to_queue",
+        PrValidationAdminPhase::RemediationRunning => "queue_to_worker",
+        PrValidationAdminPhase::Verified => "verified_return",
+        PrValidationAdminPhase::Blocked | PrValidationAdminPhase::Failed => "blocked_alert",
+        PrValidationAdminPhase::Registered | PrValidationAdminPhase::PreMerge => "pre_merge",
+    };
+    GameValidationSceneView {
+        station_state: phase.to_string(),
+        severity: match record.severity {
+            crate::application::port::inbound::pr_validation_query_port::PrValidationAdminSeverity::Muted => "muted",
+            crate::application::port::inbound::pr_validation_query_port::PrValidationAdminSeverity::Info => "info",
+            crate::application::port::inbound::pr_validation_query_port::PrValidationAdminSeverity::Success => "success",
+            crate::application::port::inbound::pr_validation_query_port::PrValidationAdminSeverity::Warning => "warning",
+            crate::application::port::inbound::pr_validation_query_port::PrValidationAdminSeverity::Danger => "danger",
+        }
+        .to_string(),
+        label: format!("QA/CI · {}", record.phase_label),
+        record_key: Some(record.record_key.clone()),
+        phase: Some(phase.to_string()),
+        packet_kind: Some(packet_kind.to_string()),
+        worker_lease_active: record
+            .correlations
+            .iter()
+            .any(|correlation| correlation.lease_active),
+    }
+}
+
+fn validation_attention_rank(record: &PrValidationAdminRecord) -> u8 {
+    match record.schedule.error_class.as_deref() {
+        Some("identity_failed" | "integrity_failed") => 0,
+        Some("authentication_blocked" | "retryable_provider") => 1,
+        _ if record.provider_blocked || record.schedule.rate_limit_remaining == Some(0) => 1,
+        _ if record.finding_count > record.remediation_count
+            || matches!(
+                record.phase,
+                PrValidationAdminPhase::Blocked | PrValidationAdminPhase::Failed
+            ) =>
+        {
+            2
+        }
+        _ if record.stale => 3,
+        _ => 4,
     }
 }
 

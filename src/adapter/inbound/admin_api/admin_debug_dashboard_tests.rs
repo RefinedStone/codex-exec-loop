@@ -27,14 +27,14 @@ fn fake_projection_generates_stable_incremental_event_sequences() {
 }
 
 #[test]
-fn blocked_recovery_projection_exposes_a_blocked_actor_and_slot() {
+fn check_failure_recovery_projection_exposes_a_blocked_actor_and_slot() {
     let service = AdminDebugHarnessService::new(AdminDebugHarnessConfig::enabled());
     service
         .execute(AdminDebugHarnessCommand::SelectScenario(
-            AdminDebugScenario::BlockedRecovery,
+            AdminDebugScenario::CheckFailureRecovery,
         ))
         .expect("scenario should select");
-    for _ in 0..4 {
+    for _ in 0..2 {
         service
             .execute(AdminDebugHarnessCommand::Step)
             .expect("scenario should step");

@@ -3,7 +3,7 @@ use super::admin_debug_dashboard::{
 };
 use super::forms::{
     AkraControlRequest, CreateDraftRequest, DraftPromoteApiResponse, EditorQuery,
-    OverviewApiResponse, ResetRequest, SaveDraftRequest,
+    OverviewApiResponse, PrValidationCommandRequest, ResetRequest, SaveDraftRequest,
 };
 use super::realtime::AkraCommandView;
 use super::{
@@ -21,6 +21,10 @@ use crate::application::port::inbound::planning_admin_port::{
     PlanningAdminDirectionDeleteRequest, PlanningAdminDirectionMutationRequest,
     PlanningAdminDraftLoadRequest, PlanningAdminDraftMutationRequest,
     PlanningAdminTaskDeleteRequest, PlanningAdminTaskMutationRequest,
+};
+use crate::application::port::inbound::pr_validation_command_port::{
+    PrValidationAdminCommandAction, PrValidationAdminCommandRejection,
+    PrValidationAdminCommandRequest,
 };
 use crate::application::port::inbound::pr_validation_query_port::{
     PR_VALIDATION_BOARD_DEFAULT_LIMIT, PrValidationBoardCursorError, PrValidationBoardRequest,
@@ -417,6 +421,35 @@ pub(super) async fn akra_validation_detail_api(
         .map_err(internal_server_error)?
         .map(|detail| Json(detail).into_response())
         .ok_or(StatusCode::NOT_FOUND)
+}
+
+pub(super) async fn mutate_akra_validation_command_api(
+    State(state): State<AdminAppState>,
+    Path(record_key): Path<String>,
+    jar: CookieJar,
+    headers: HeaderMap,
+    Json(request): Json<PrValidationCommandRequest>,
+) -> std::result::Result<Response, StatusCode> {
+    verify_header_csrf(&jar, &headers)?;
+    let action =
+        PrValidationAdminCommandAction::from_key(&request.action).ok_or(StatusCode::BAD_REQUEST)?;
+    let command = PrValidationAdminCommandRequest::new(
+        request.command_id,
+        record_key,
+        action,
+        request.expected_revision,
+    )
+    .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let result = state
+        .pr_validation_command_port
+        .execute(command)
+        .map_err(internal_server_error)?;
+    let status = match result.rejection {
+        None => StatusCode::OK,
+        Some(PrValidationAdminCommandRejection::NotFound) => StatusCode::NOT_FOUND,
+        Some(_) => StatusCode::CONFLICT,
+    };
+    Ok((status, Json(result)).into_response())
 }
 
 pub(super) async fn akra_debug_harness_api(

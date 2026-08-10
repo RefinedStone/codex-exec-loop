@@ -18,8 +18,11 @@ use crate::application::port::outbound::parallel_mode_runtime_event_log_port::Pa
 use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityDistributorQueueRecord, PlanningAuthorityOfficialRefreshClaimStatus,
     PlanningAuthorityOfficialRefreshRecoveryStatus, PlanningAuthorityRuntimeEventRecord,
-    PlanningAuthorityRuntimeProjectionSnapshot, PrValidationAuthorityBoardSummary,
-    PrValidationAuthorityPage, PrValidationAuthorityPagePosition, PrValidationAuthorityPageRequest,
+    PlanningAuthorityRuntimeProjectionSnapshot, PrValidationAuthorityAdminAction,
+    PrValidationAuthorityAdminCommandOutcome, PrValidationAuthorityAdminCommandRejection,
+    PrValidationAuthorityAdminCommandRequest, PrValidationAuthorityAdminCommandState,
+    PrValidationAuthorityBoardSummary, PrValidationAuthorityPage,
+    PrValidationAuthorityPagePosition, PrValidationAuthorityPageRequest,
     PrValidationAuthorityRecordSnapshot, PrValidationPollLeaseClaim,
     PrValidationPollLeaseClaimRequest, PrValidationPollLeaseRenewalRequest,
     PrValidationPollSettlement,
@@ -1475,22 +1478,30 @@ impl SqlitePlanningAuthorityAdapter {
                     SUM(CASE WHEN integration_evidence_sha IS NOT NULL THEN 1 ELSE 0 END),
                     SUM(CASE WHEN validation_phase = 'PostMergeObservation' THEN 1 ELSE 0 END),
                     SUM(CASE WHEN validation_phase IN ('RemediationQueued', 'RemediationRunning') THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN validation_phase = 'RemediationQueued' THEN 1 ELSE 0 END),
                     SUM(CASE WHEN validation_phase = 'Settled' THEN 1 ELSE 0 END),
                     SUM(CASE WHEN validation_phase = 'Blocked' THEN 1 ELSE 0 END),
-                    SUM(CASE WHEN validation_phase = 'Failed' THEN 1 ELSE 0 END)
+                    SUM(CASE WHEN validation_phase = 'Failed' THEN 1 ELSE 0 END),
+                    SUM(CASE
+                        WHEN validation_phase <> 'Settled'
+                         AND operator_paused = 0
+                         AND COALESCE(last_polled_at, updated_at) < ?2
+                        THEN 1 ELSE 0 END)
                  FROM runtime_pr_validation_records
                  WHERE validation_phase NOT IN ('Settled', 'Blocked', 'Failed')
                     OR updated_at >= ?1",
-                params![request.terminal_since],
+                params![request.terminal_since, request.stale_before],
                 |row| {
                     Ok(PrValidationAuthorityBoardSummary {
                         active: sqlite_count(row.get::<_, Option<i64>>(0)?)?,
                         integrated: sqlite_count(row.get::<_, Option<i64>>(1)?)?,
                         verifying: sqlite_count(row.get::<_, Option<i64>>(2)?)?,
                         remediation: sqlite_count(row.get::<_, Option<i64>>(3)?)?,
-                        verified: sqlite_count(row.get::<_, Option<i64>>(4)?)?,
-                        blocked: sqlite_count(row.get::<_, Option<i64>>(5)?)?,
-                        failed: sqlite_count(row.get::<_, Option<i64>>(6)?)?,
+                        remediation_queued: sqlite_count(row.get::<_, Option<i64>>(4)?)?,
+                        verified: sqlite_count(row.get::<_, Option<i64>>(5)?)?,
+                        blocked: sqlite_count(row.get::<_, Option<i64>>(6)?)?,
+                        failed: sqlite_count(row.get::<_, Option<i64>>(7)?)?,
+                        stale: sqlite_count(row.get::<_, Option<i64>>(8)?)?,
                     })
                 },
             )
@@ -1507,14 +1518,18 @@ impl SqlitePlanningAuthorityAdapter {
                            poll_attempt, consecutive_error_count, last_error_class,
                            rate_limit_remaining, rate_limit_reset_at,
                            CASE WHEN validation_phase IN ('Settled', 'Blocked', 'Failed')
-                                THEN 1 ELSE 0 END AS terminal_rank
+                                THEN 1 ELSE 0 END AS terminal_rank,
+                           operator_paused, operator_acknowledged_at,
+                           last_operator_command_id
                     FROM runtime_pr_validation_records
                     WHERE validation_phase NOT IN ('Settled', 'Blocked', 'Failed')
                        OR updated_at >= ?1
                  )
                  SELECT record_key, updated_at, content, last_polled_at, next_poll_at,
                         poll_attempt, consecutive_error_count, last_error_class,
-                        rate_limit_remaining, rate_limit_reset_at, terminal_rank
+                        rate_limit_remaining, rate_limit_reset_at, terminal_rank,
+                        operator_paused, operator_acknowledged_at,
+                        last_operator_command_id
                  FROM ranked
                  WHERE ?2 IS NULL
                     OR terminal_rank > ?2
@@ -1577,7 +1592,9 @@ impl SqlitePlanningAuthorityAdapter {
                         poll_attempt, consecutive_error_count, last_error_class,
                         rate_limit_remaining, rate_limit_reset_at,
                         CASE WHEN validation_phase IN ('Settled', 'Blocked', 'Failed')
-                             THEN 1 ELSE 0 END AS terminal_rank
+                             THEN 1 ELSE 0 END AS terminal_rank,
+                        operator_paused, operator_acknowledged_at,
+                        last_operator_command_id
                  FROM runtime_pr_validation_records
                  WHERE record_key = ?1",
                 params![record_key.as_str()],
@@ -1585,6 +1602,299 @@ impl SqlitePlanningAuthorityAdapter {
             )
             .optional()
             .context("failed to load PR validation detail snapshot")
+    }
+
+    pub(crate) fn execute_runtime_pr_validation_admin_command(
+        workspace_dir: &str,
+        request: PrValidationAuthorityAdminCommandRequest<'_>,
+    ) -> Result<PrValidationAuthorityAdminCommandOutcome> {
+        if request.command_id.trim().is_empty() || request.command_id.len() > 160 {
+            anyhow::bail!("PR validation Admin command id must contain 1 to 160 bytes");
+        }
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .context("failed to open PR validation Admin command transaction")?;
+
+        let prior_command = transaction
+            .query_row(
+                "SELECT record_key, command_action, expected_observation_revision, content
+                 FROM runtime_pr_validation_admin_commands
+                 WHERE command_id = ?1",
+                params![request.command_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .optional()
+            .context("failed to inspect PR validation Admin command idempotency record")?;
+        if let Some((record_key, action, expected_revision, content)) = prior_command {
+            let exact_replay = record_key == request.record_key.as_str()
+                && action == request.action.label()
+                && u64::try_from(expected_revision).ok()
+                    == Some(request.expected_observation_revision);
+            if exact_replay {
+                let mut outcome =
+                    serde_json::from_str::<PrValidationAuthorityAdminCommandOutcome>(&content)
+                        .context("failed to decode PR validation Admin command replay")?;
+                outcome.duplicate = true;
+                transaction
+                    .commit()
+                    .context("failed to close duplicate PR validation Admin command")?;
+                return Ok(outcome);
+            }
+            let outcome = PrValidationAuthorityAdminCommandOutcome {
+                command_id: request.command_id.to_string(),
+                record_key: request.record_key.as_str().to_string(),
+                action: request.action,
+                state: PrValidationAuthorityAdminCommandState::Rejected,
+                rejection: Some(PrValidationAuthorityAdminCommandRejection::IdempotencyConflict),
+                duplicate: true,
+                expected_observation_revision: request.expected_observation_revision,
+                observed_revision: None,
+                board_revision: read_runtime_pr_validation_revision(&transaction)?,
+                message: "command id is already bound to a different request".to_string(),
+                applied_at: request.requested_at.to_rfc3339(),
+            };
+            transaction
+                .commit()
+                .context("failed to close conflicting PR validation Admin command")?;
+            return Ok(outcome);
+        }
+
+        let record_row = transaction
+            .query_row(
+                "SELECT content, validation_phase, operator_paused,
+                        operator_acknowledged_at, rate_limit_remaining,
+                        rate_limit_reset_at
+                 FROM runtime_pr_validation_records
+                 WHERE record_key = ?1",
+                params![request.record_key.as_str()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)? != 0,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<i64>>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                    ))
+                },
+            )
+            .optional()
+            .context("failed to load PR validation Admin command target")?;
+
+        let (observed_revision, rejection, message) = match record_row.as_ref() {
+            None => (
+                None,
+                Some(PrValidationAuthorityAdminCommandRejection::NotFound),
+                "validation record was not found".to_string(),
+            ),
+            Some((content, phase, paused, acknowledged_at, rate_remaining, rate_reset_at)) => {
+                let record = serde_json::from_str::<PrValidationRecord>(content)
+                    .context("failed to decode PR validation Admin command target")?;
+                let observed_revision = record.observation_revision();
+                let terminal = matches!(phase.as_str(), "Settled" | "Blocked" | "Failed");
+                let terminal_failure = matches!(phase.as_str(), "Blocked" | "Failed");
+                let rate_limit_active = *rate_remaining == Some(0)
+                    && rate_reset_at.as_deref().is_some_and(|value| {
+                        DateTime::parse_from_rfc3339(value)
+                            .map(|reset| reset.with_timezone(&Utc) > request.requested_at)
+                            .unwrap_or(true)
+                    });
+                let rejection = if observed_revision != request.expected_observation_revision {
+                    Some(PrValidationAuthorityAdminCommandRejection::StaleRevision)
+                } else {
+                    match request.action {
+                        PrValidationAuthorityAdminAction::RetryNow if *paused || terminal => {
+                            Some(PrValidationAuthorityAdminCommandRejection::InvalidState)
+                        }
+                        PrValidationAuthorityAdminAction::RetryNow if rate_limit_active => {
+                            Some(PrValidationAuthorityAdminCommandRejection::RateLimitActive)
+                        }
+                        PrValidationAuthorityAdminAction::Pause if *paused || terminal => {
+                            Some(PrValidationAuthorityAdminCommandRejection::InvalidState)
+                        }
+                        PrValidationAuthorityAdminAction::Resume if !*paused || terminal => {
+                            Some(PrValidationAuthorityAdminCommandRejection::InvalidState)
+                        }
+                        PrValidationAuthorityAdminAction::QueueRemediation
+                            if !request.remediation_admission_allowed =>
+                        {
+                            Some(PrValidationAuthorityAdminCommandRejection::ObserveModeAdmission)
+                        }
+                        PrValidationAuthorityAdminAction::QueueRemediation
+                            if *paused || terminal =>
+                        {
+                            Some(PrValidationAuthorityAdminCommandRejection::InvalidState)
+                        }
+                        PrValidationAuthorityAdminAction::QueueRemediation
+                            if !record.has_unremediated_findings() =>
+                        {
+                            Some(PrValidationAuthorityAdminCommandRejection::NoActionableFinding)
+                        }
+                        PrValidationAuthorityAdminAction::Acknowledge
+                            if acknowledged_at.is_some() =>
+                        {
+                            Some(PrValidationAuthorityAdminCommandRejection::InvalidState)
+                        }
+                        PrValidationAuthorityAdminAction::Acknowledge
+                            if !terminal_failure
+                                && record.operator_summary().finding_count == 0 =>
+                        {
+                            Some(PrValidationAuthorityAdminCommandRejection::NoActionableFinding)
+                        }
+                        _ => None,
+                    }
+                };
+                let message = match rejection {
+                    Some(PrValidationAuthorityAdminCommandRejection::StaleRevision) => {
+                        "record changed; refresh before retrying the command"
+                    }
+                    Some(PrValidationAuthorityAdminCommandRejection::ObserveModeAdmission) => {
+                        "observe mode blocks remediation Queue admission"
+                    }
+                    Some(PrValidationAuthorityAdminCommandRejection::RateLimitActive) => {
+                        "provider rate-limit reset must be observed before RetryNow"
+                    }
+                    Some(PrValidationAuthorityAdminCommandRejection::NoActionableFinding)
+                        if request.action == PrValidationAuthorityAdminAction::Acknowledge =>
+                    {
+                        "no failure or finding is available to acknowledge"
+                    }
+                    Some(PrValidationAuthorityAdminCommandRejection::NoActionableFinding) => {
+                        "no uncorrelated actionable finding is available"
+                    }
+                    Some(PrValidationAuthorityAdminCommandRejection::InvalidState) => {
+                        "command is unavailable for the current validation state"
+                    }
+                    Some(_) => "validation command was rejected",
+                    None => match request.action {
+                        PrValidationAuthorityAdminAction::RetryNow => {
+                            "validation poll scheduled now"
+                        }
+                        PrValidationAuthorityAdminAction::Pause => {
+                            "validation polling paused after any live claim settles"
+                        }
+                        PrValidationAuthorityAdminAction::Resume => "validation polling resumed",
+                        PrValidationAuthorityAdminAction::QueueRemediation => {
+                            "remediation admission scheduled through the normal Planning Queue"
+                        }
+                        PrValidationAuthorityAdminAction::Acknowledge => {
+                            "validation finding acknowledged"
+                        }
+                    },
+                }
+                .to_string();
+                (Some(observed_revision), rejection, message)
+            }
+        };
+
+        let applied = rejection.is_none();
+        if applied {
+            let now = request.requested_at.to_rfc3339();
+            let changed = match request.action {
+                PrValidationAuthorityAdminAction::RetryNow
+                | PrValidationAuthorityAdminAction::QueueRemediation => transaction.execute(
+                    "UPDATE runtime_pr_validation_records
+                     SET next_poll_at = ?2, last_operator_command_id = ?3
+                     WHERE record_key = ?1",
+                    params![request.record_key.as_str(), now, request.command_id],
+                ),
+                PrValidationAuthorityAdminAction::Pause => transaction.execute(
+                    "UPDATE runtime_pr_validation_records
+                     SET operator_paused = 1, last_operator_command_id = ?2
+                     WHERE record_key = ?1",
+                    params![request.record_key.as_str(), request.command_id],
+                ),
+                PrValidationAuthorityAdminAction::Resume => transaction.execute(
+                    "UPDATE runtime_pr_validation_records
+                     SET operator_paused = 0, next_poll_at = ?2,
+                         last_operator_command_id = ?3
+                     WHERE record_key = ?1",
+                    params![request.record_key.as_str(), now, request.command_id],
+                ),
+                PrValidationAuthorityAdminAction::Acknowledge => transaction.execute(
+                    "UPDATE runtime_pr_validation_records
+                     SET operator_acknowledged_at = ?2, last_operator_command_id = ?3
+                     WHERE record_key = ?1",
+                    params![request.record_key.as_str(), now, request.command_id],
+                ),
+            }
+            .context("failed to apply PR validation Admin command mutation")?;
+            if changed != 1 {
+                anyhow::bail!("PR validation Admin command target disappeared during mutation");
+            }
+            append_runtime_event(
+                &transaction,
+                "pr_validation_admin_command",
+                "pr_validation",
+                request.record_key.as_str(),
+                &format!(
+                    "PR validation Admin command applied / key: {} / action: {}",
+                    request.record_key.as_str(),
+                    request.action.label()
+                ),
+                &serde_json::json!({
+                    "schema_version": 1,
+                    "record_key": request.record_key.as_str(),
+                    "command_id": request.command_id,
+                    "action": request.action,
+                    "expected_observation_revision": request.expected_observation_revision,
+                })
+                .to_string(),
+            )?;
+            upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
+        }
+
+        let board_revision = read_runtime_pr_validation_revision(&transaction)?;
+        let outcome = PrValidationAuthorityAdminCommandOutcome {
+            command_id: request.command_id.to_string(),
+            record_key: request.record_key.as_str().to_string(),
+            action: request.action,
+            state: if applied {
+                PrValidationAuthorityAdminCommandState::Applied
+            } else {
+                PrValidationAuthorityAdminCommandState::Rejected
+            },
+            rejection,
+            duplicate: false,
+            expected_observation_revision: request.expected_observation_revision,
+            observed_revision,
+            board_revision,
+            message,
+            applied_at: request.requested_at.to_rfc3339(),
+        };
+        let expected_revision = i64::try_from(request.expected_observation_revision)
+            .context("PR validation Admin expected revision exceeded SQLite range")?;
+        transaction
+            .execute(
+                "INSERT INTO runtime_pr_validation_admin_commands(
+                     command_id, record_key, command_action,
+                     expected_observation_revision, command_state, created_at, content
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    request.command_id,
+                    request.record_key.as_str(),
+                    request.action.label(),
+                    expected_revision,
+                    if applied { "applied" } else { "rejected" },
+                    request.requested_at.to_rfc3339(),
+                    serde_json::to_string(&outcome)
+                        .context("failed to encode PR validation Admin command outcome")?,
+                ],
+            )
+            .context("failed to persist PR validation Admin command outcome")?;
+        transaction
+            .commit()
+            .context("failed to commit PR validation Admin command")?;
+        Ok(outcome)
     }
 
     pub(crate) fn load_due_runtime_pr_validation_record_keys(
@@ -1615,6 +1925,7 @@ impl SqlitePlanningAuthorityAdapter {
                      OR (validation_phase = 'Settled' AND review_watch_active = 1)
                  )
                    AND next_poll_at IS NOT NULL
+                   AND operator_paused = 0
                    AND next_poll_at <= ?1
                    AND (
                        poll_lease_expires_at IS NULL OR poll_lease_expires_at <= ?1
@@ -1717,6 +2028,7 @@ impl SqlitePlanningAuthorityAdapter {
                        OR (validation_phase = 'Settled' AND review_watch_active = 1)
                    )
                    AND next_poll_at IS NOT NULL
+                   AND operator_paused = 0
                    AND next_poll_at <= ?4
                    AND (
                        poll_lease_expires_at IS NULL OR poll_lease_expires_at <= ?4
@@ -3122,6 +3434,9 @@ fn decode_pr_validation_authority_row(
         last_error_class,
         rate_limit_remaining,
         rate_limit_reset_at: row.get(9)?,
+        operator_paused: row.get::<_, i64>(11)? != 0,
+        operator_acknowledged_at: row.get(12)?,
+        last_operator_command_id: row.get(13)?,
     })
 }
 

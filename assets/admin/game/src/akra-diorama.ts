@@ -36,6 +36,16 @@ const emptyInspection = (): SceneInspection => ({
   planningRevision: null,
   zoomLevel: "overview",
   cameraZoom: 1,
+  validation: {
+    stationState: "idle",
+    severity: "muted",
+    label: "QA/CI · 관찰 없음",
+    recordKey: null,
+    phase: null,
+    packetKind: null,
+    packetVisible: false,
+    workerLeaseActive: false,
+  },
   actors: [],
   standbyCharacters: [],
 });
@@ -86,6 +96,15 @@ const emptyInspection = (): SceneInspection => ({
       container.dataset.sceneZoomLevel = inspection.zoomLevel;
       container.dataset.sceneCameraZoom = inspection.cameraZoom.toFixed(3);
       container.dataset.sceneFrameDriver = frameDriver;
+      container.dataset.sceneValidationState = inspection.validation.stationState;
+      container.dataset.sceneValidationSeverity = inspection.validation.severity;
+      container.dataset.sceneValidationRecordKey = inspection.validation.recordKey ?? "";
+      container.dataset.sceneValidationPhase = inspection.validation.phase ?? "";
+      container.dataset.sceneValidationPacketKind = inspection.validation.packetKind ?? "";
+      container.dataset.sceneValidationPacketVisible = String(inspection.validation.packetVisible);
+      container.dataset.sceneValidationWorkerLeaseActive = String(
+        inspection.validation.workerLeaseActive
+      );
       container.dataset.sceneActorSignature = JSON.stringify(
         inspection.actors.map((actor) => ({
           actorId: actor.actorId,

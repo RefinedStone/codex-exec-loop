@@ -23,6 +23,7 @@ import type {
   Facing,
   GameActorProjection,
   GameStandbyProjection,
+  GameValidationProjection,
   Point,
   PresenceKind,
   SceneInspection,
@@ -39,6 +40,8 @@ import {
   MAP_WIDTH,
   OCCLUSION_POLYGONS,
   POINTS_OF_INTEREST,
+  QA_CI_SIGNAL_POINTS,
+  QA_CI_STATION_POINT,
   REVIEW_STATION_POINTS,
   SLOT_SEATS,
   STANDBY_LOUNGE_PATROL_ROUTES,
@@ -104,6 +107,24 @@ interface SignalPacket {
   to: Point;
   phase: number;
 }
+
+interface ValidationStationVisual {
+  group: Container;
+  panel: Graphics;
+  beacon: Graphics;
+  label: Text;
+  modeLabel: Text;
+}
+
+const emptyValidationProjection = (): GameValidationProjection => ({
+  stationState: "idle",
+  severity: "muted",
+  label: "QA/CI · 관찰 없음",
+  recordKey: null,
+  phase: null,
+  packetKind: null,
+  workerLeaseActive: false,
+});
 
 const distance = (from: Point, to: Point): number =>
   Math.hypot(to.x - from.x, to.y - from.y);
@@ -299,6 +320,8 @@ export class AgentWorld {
   private readonly units = new Map<string, AgentUnit>();
   private readonly packets = new Map<string, SignalPacket>();
   private readonly poiLabels: Text[] = [];
+  private validation = emptyValidationProjection();
+  private validationStation: ValidationStationVisual | null = null;
   private planningRevision: number | null = null;
   private zoomLevel: SemanticZoomLevel = "overview";
   private cameraZoom = 1;
@@ -315,6 +338,7 @@ export class AgentWorld {
 
   reconcile(snapshot: DashboardSceneSnapshot): void {
     this.planningRevision = snapshot.planningRevision;
+    this.validation = snapshot.scene.validation;
     const projections: CharacterProjection[] = [
       ...snapshot.scene.actors,
       ...snapshot.scene.standbyCharacters,
@@ -376,6 +400,7 @@ export class AgentWorld {
       unit.label.destroy();
       this.units.delete(key);
     }
+    this.syncValidationStation();
     this.rebuildSignalPackets();
     this.syncZoomPresentation();
   }
@@ -525,7 +550,14 @@ export class AgentWorld {
         packet.from.x + (packet.to.x - packet.from.x) * eased,
         packet.from.y + (packet.to.y - packet.from.y) * eased
       );
+      packet.graphic.rotation = Math.atan2(packet.to.y - packet.from.y, packet.to.x - packet.from.x);
       packet.graphic.alpha = 0.28 + Math.sin(travel * Math.PI) * 0.72;
+    }
+    if (this.validationStation && !this.reducedMotion) {
+      const pulse = 0.82 + Math.sin(elapsedMilliseconds * 0.004) * 0.18;
+      this.validationStation.beacon.alpha = this.validation.stationState === "idle"
+        ? 0.42
+        : pulse;
     }
     this.renderCount += 1;
   }
@@ -566,6 +598,16 @@ export class AgentWorld {
       planningRevision: this.planningRevision,
       zoomLevel: this.zoomLevel,
       cameraZoom: this.cameraZoom,
+      validation: {
+        stationState: this.validation.stationState,
+        severity: this.validation.severity,
+        label: this.validation.label,
+        recordKey: this.validation.recordKey,
+        phase: this.validation.phase,
+        packetKind: this.validation.packetKind,
+        packetVisible: [...this.packets.keys()].some((key) => key.startsWith("validation:")),
+        workerLeaseActive: this.validation.workerLeaseActive,
+      },
       actors: activeUnits.map((unit) => {
         const boardPoint = unit.group.getGlobalPosition();
         const spriteBounds = unit.sprite.getBounds();
@@ -654,7 +696,92 @@ export class AgentWorld {
     occlusionMask.zIndex = 9_999;
     foreground.mask = occlusionMask;
     this.root.addChild(occlusionMask, foreground, this.poiLayer, this.labelLayer);
+    this.buildValidationStation();
     this.buildPointsOfInterest();
+  }
+
+  private buildValidationStation(): void {
+    const group = new Container();
+    group.position.set(QA_CI_STATION_POINT.x, QA_CI_STATION_POINT.y);
+    group.eventMode = "static";
+    group.cursor = "pointer";
+    group.hitArea = new Rectangle(-82, -49, 164, 98);
+
+    const panel = new Graphics();
+    const beacon = new Graphics();
+    const label = new Text({
+      text: "QA / CI",
+      style: {
+        fontFamily: "Galmuri11, monospace",
+        fontSize: 13,
+        fontWeight: "bold",
+        fill: 0xf2f7ff,
+        letterSpacing: 1.2,
+        stroke: { color: 0x03101d, width: 3 },
+      },
+    });
+    label.anchor.set(0.5);
+    label.position.set(0, -18);
+    const modeLabel = new Text({
+      text: "PASSIVE CHECK",
+      style: {
+        fontFamily: "Galmuri11, monospace",
+        fontSize: 9,
+        fontWeight: "bold",
+        fill: 0x98abc4,
+        letterSpacing: 0.8,
+        stroke: { color: 0x03101d, width: 2 },
+      },
+    });
+    modeLabel.anchor.set(0.5);
+    modeLabel.position.set(0, 16);
+    group.addChild(panel, beacon, label, modeLabel);
+    group.on("pointertap", () => {
+      dispatchSceneSelection({ kind: "poi", detailTarget: "validation" });
+    });
+    group.on("pointerover", () => group.scale.set(1.025));
+    group.on("pointerout", () => group.scale.set(1));
+    this.poiLayer.addChild(group);
+    this.validationStation = { group, panel, beacon, label, modeLabel };
+    this.syncValidationStation();
+  }
+
+  private syncValidationStation(): void {
+    const station = this.validationStation;
+    if (!station) return;
+    const color = STATUS_PALETTE[this.validation.severity];
+    station.panel
+      .clear()
+      .roundRect(-78, -43, 156, 86, 7)
+      .fill({ color: 0x04131f, alpha: 0.86 })
+      .stroke({ width: 2.5, color, alpha: 0.86 })
+      .roundRect(-66, -33, 18, 54, 3)
+      .fill({ color: 0x081e31, alpha: 0.95 })
+      .stroke({ width: 1, color: 0x5da9ff, alpha: 0.45 })
+      .moveTo(-62, -20)
+      .lineTo(-52, -20)
+      .moveTo(-62, -8)
+      .lineTo(-52, -8)
+      .moveTo(-62, 4)
+      .lineTo(-52, 4)
+      .stroke({ width: 2, color, alpha: 0.72 });
+    station.beacon
+      .clear()
+      .circle(61, -27, 7)
+      .fill({ color, alpha: this.validation.stationState === "idle" ? 0.32 : 0.9 })
+      .circle(61, -27, 12)
+      .stroke({ width: 1.5, color, alpha: 0.42 });
+    station.label.text = this.validation.label || "QA / CI";
+    station.label.style.fill = color;
+    station.modeLabel.text = this.validation.workerLeaseActive
+      ? "LEASED WORKER"
+      : this.validation.phase
+        ? "PASSIVE CHECK"
+        : "NO RECORD";
+    station.modeLabel.style.fill = this.validation.workerLeaseActive
+      ? STATUS_PALETTE.success
+      : STATUS_PALETTE.muted;
+    station.group.alpha = this.validation.stationState === "idle" ? 0.68 : 1;
   }
 
   private buildPointsOfInterest(): void {
@@ -910,6 +1037,36 @@ export class AgentWorld {
         to: copyPoint(target),
         phase: unit.motionPhase / 17,
       });
+    }
+    const validationSignal = this.validation.packetKind
+      ? QA_CI_SIGNAL_POINTS[this.validation.packetKind]
+      : null;
+    if (validationSignal && this.validation.recordKey) {
+      const validationKey = `validation:${this.validation.recordKey}:${this.validation.packetKind}:${this.validation.severity}`;
+      retained.add(validationKey);
+      const existing = this.packets.get(validationKey);
+      if (existing) {
+        existing.from = copyPoint(validationSignal.from);
+        existing.to = copyPoint(validationSignal.to);
+      } else {
+        const color = STATUS_PALETTE[this.validation.severity];
+        const graphic = new Graphics()
+          .roundRect(-8, -5, 16, 10, 2)
+          .fill({ color, alpha: 0.96 })
+          .stroke({ width: 1.5, color: 0xffffff, alpha: 0.72 })
+          .moveTo(-4, 0)
+          .lineTo(4, 0)
+          .stroke({ width: 1, color: 0x04131f, alpha: 0.78 });
+        graphic.zIndex = Math.max(validationSignal.from.y, validationSignal.to.y);
+        this.packetLayer.addChild(graphic);
+        this.packets.set(validationKey, {
+          unitKey: validationKey,
+          graphic,
+          from: copyPoint(validationSignal.from),
+          to: copyPoint(validationSignal.to),
+          phase: stableNumber(validationKey) % 17 / 17,
+        });
+      }
     }
     for (const [key, packet] of this.packets) {
       if (retained.has(key)) continue;

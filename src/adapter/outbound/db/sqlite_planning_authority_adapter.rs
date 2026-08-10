@@ -26,10 +26,12 @@ use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityActiveDocumentMutation, PlanningAuthorityDistributorQueueRecord,
     PlanningAuthorityDocumentCommit, PlanningAuthorityDocumentSnapshot,
     PlanningAuthorityOfficialRefreshClaimStatus, PlanningAuthorityOfficialRefreshRecoveryStatus,
-    PlanningAuthorityPort, PlanningAuthorityRuntimeProjectionSnapshot, PrValidationAuthorityPage,
-    PrValidationAuthorityPageRequest, PrValidationAuthorityRecordSnapshot,
-    PrValidationPollLeaseClaim, PrValidationPollLeaseClaimRequest,
-    PrValidationPollLeaseRenewalRequest, PrValidationPollSettlement,
+    PlanningAuthorityPort, PlanningAuthorityRuntimeProjectionSnapshot,
+    PrValidationAuthorityAdminCommandOutcome, PrValidationAuthorityAdminCommandRequest,
+    PrValidationAuthorityPage, PrValidationAuthorityPageRequest,
+    PrValidationAuthorityRecordSnapshot, PrValidationPollLeaseClaim,
+    PrValidationPollLeaseClaimRequest, PrValidationPollLeaseRenewalRequest,
+    PrValidationPollSettlement,
 };
 use crate::application::port::outbound::planning_task_repository_port::{
     PlanningAuthoritySnapshotCommit, PlanningDirectionAuthorityCommit,
@@ -81,7 +83,7 @@ use crate::domain::planning::{
 };
 
 // authority DB schema가 바뀔 때 올리는 adapter 내부 schema marker이다.
-const AUTHORITY_STORE_SCHEMA_VERSION: i64 = 14;
+const AUTHORITY_STORE_SCHEMA_VERSION: i64 = 15;
 const MINIMUM_MIGRATABLE_AUTHORITY_STORE_SCHEMA_VERSION: i64 = 7;
 // metadata에 저장되는 store mode 값으로, 다른 DB 파일과 planning authority store를 구분한다.
 const AUTHORITY_STORE_MODE: &str = "authority-store";
@@ -1483,6 +1485,14 @@ impl PlanningAuthorityPort for SqlitePlanningAuthorityAdapter {
         record_key: &PrValidationRecordKey,
     ) -> Result<Option<PrValidationAuthorityRecordSnapshot>> {
         Self::load_runtime_pr_validation_record_snapshot(workspace_dir, record_key)
+    }
+
+    fn execute_runtime_pr_validation_admin_command(
+        &self,
+        workspace_dir: &str,
+        request: PrValidationAuthorityAdminCommandRequest<'_>,
+    ) -> Result<PrValidationAuthorityAdminCommandOutcome> {
+        Self::execute_runtime_pr_validation_admin_command(workspace_dir, request)
     }
 
     fn load_due_runtime_pr_validation_record_keys(

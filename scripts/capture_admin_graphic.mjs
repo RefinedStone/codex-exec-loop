@@ -14,6 +14,7 @@ const compactScreenshotPath = options["compact-screenshot"];
 const fullHdScreenshotPath = options["full-hd-screenshot"];
 const qhdScreenshotPath = options["qhd-screenshot"];
 const token = process.env.AKRA_ADMIN_VISUAL_TOKEN;
+const debugHarness = process.env.ADMIN_GRAPHIC_DEBUG_HARNESS === "1";
 
 if (
   !browserPath ||
@@ -300,7 +301,9 @@ try {
         ...character
       }) => character,
     );
-    const expectedStandbyPoses = ["laptop", "sit", "laptop"];
+    const expectedStandbyPoses = debugHarness
+      ? standbyParity.dom.map((character) => character.pose)
+      : ["laptop", "sit", "laptop"];
     const standbyCoordinateKeys = new Set(
       standbyParity.canvasCharacters.map((character) => `${character.x}:${character.y}`),
     );
@@ -359,7 +362,7 @@ try {
           character.animationKind !== "walk" ||
           !Number.isInteger(character.animationFrameIndex) ||
           character.resolvedAtlasFrameIndex !== null ||
-          !character.poseFallback ||
+          (!debugHarness && !character.poseFallback) ||
           character.frameScale < 0.99
         );
       })
@@ -368,7 +371,7 @@ try {
         `${label} configured standby characters are missing or not visibly walking in the lounge: ${JSON.stringify(standbyParity)}`,
       );
     }
-    if (width === 1920) {
+    if (width === 1920 && !debugHarness) {
       const baselineActorCount = firstScene.actorCount;
       const guardianStandbyWalkSamples = [];
       for (let sampleIndex = 0; sampleIndex < 12; sampleIndex += 1) {
@@ -673,6 +676,7 @@ try {
       const sidebar = document.querySelector(".sidebar");
       const attention = document.querySelector(".attention-strip");
       const commandControls = document.querySelector(".command-controls");
+      const debugHarnessPanel = document.querySelector("[data-debug-harness]");
       const topbar = document.querySelector(".draft-topbar");
       const mainGrid = document.querySelector(".draft-main-grid");
       const shell = document.querySelector(".shell");
@@ -688,6 +692,7 @@ try {
       const sidebarRect = sidebar?.getBoundingClientRect();
       const attentionRect = attention?.getBoundingClientRect();
       const commandControlsRect = commandControls?.getBoundingClientRect();
+      const debugHarnessRect = debugHarnessPanel?.getBoundingClientRect();
       const topbarRect = topbar?.getBoundingClientRect();
       const mainGridRect = mainGrid?.getBoundingClientRect();
       const shellRect = shell?.getBoundingClientRect();
@@ -757,9 +762,11 @@ try {
         sidebarVisible: isVisible(sidebar, sidebarRect),
         attentionVisible: isVisible(attention, attentionRect),
         commandControlsVisible: isVisible(commandControls, commandControlsRect),
+        debugHarnessVisible: isVisible(debugHarnessPanel, debugHarnessRect),
         topbarHeight: topbarRect?.height ?? 0,
         attentionHeight: attentionRect?.height ?? 0,
         commandControlsHeight: commandControlsRect?.height ?? 0,
+        debugHarnessHeight: debugHarnessRect?.height ?? 0,
         graphicCentered:
           Boolean(graphicRect && shellRect) &&
           Math.abs(
@@ -787,6 +794,7 @@ try {
         sidebarRect: rectValue(sidebarRect),
         attentionRect: rectValue(attentionRect),
         commandControlsRect: rectValue(commandControlsRect),
+        debugHarnessRect: rectValue(debugHarnessRect),
         topbarRect: rectValue(topbarRect),
         mainGridRect: rectValue(mainGridRect),
         realtimeStatusRect: rectValue(realtimeStatusRect),
@@ -804,10 +812,13 @@ try {
     if (!layout.canvasInsideBoard) {
       throw new Error(`${label} canvas is not framed inside the office board`);
     }
+    const commandSurfaceVisible = debugHarness
+      ? layout.debugHarnessVisible
+      : layout.commandControlsVisible;
     if (
       !layout.sidebarVisible ||
       !layout.topbarVisible ||
-      !layout.commandControlsVisible ||
+      !commandSurfaceVisible ||
       !layout.boardInFirstViewport
     ) {
       throw new Error(
@@ -848,7 +859,8 @@ try {
         layout.mainBottomGap > 16 ||
         layout.topbarHeight > 90 ||
         layout.attentionHeight > 120 ||
-        layout.commandControlsHeight > 120
+        layout.commandControlsHeight > 120 ||
+        layout.debugHarnessHeight > 150
       ) {
         throw new Error(
           `${label} widescreen layout is stretched, off-center, or clipped: ${JSON.stringify(layout)}`,
@@ -892,12 +904,15 @@ try {
       const commandSummary = document.querySelector(".command-summary");
       const refresh = document.querySelector(".command-summary [data-refresh-dashboard]");
       const commandControls = document.querySelector(".command-controls");
+      const debugHarnessPanel = document.querySelector("[data-debug-harness]");
       const mainGrid = document.querySelector(".draft-main-grid");
       const leftStack = document.querySelector(".left-stack");
       const rightStack = document.querySelector(".right-stack");
       const board = document.querySelector(".office-board");
       const campaign = document.querySelector(".right-stack #campaign");
       const events = document.querySelector(".right-stack #events");
+      const validationHead = document.querySelector(".validation-rail-head");
+      const validationRecord = document.querySelector(".validation-record");
       const rect = (element) => element?.getBoundingClientRect() ?? null;
       const visible = (element) => {
         const bounds = rect(element);
@@ -914,6 +929,9 @@ try {
       const loopControlHeights = [...document.querySelectorAll(".loop-control")].map(
         (control) => rect(control)?.height ?? 0,
       );
+      const debugControlHeights = [
+        ...document.querySelectorAll(".debug-harness-controls select, .debug-harness-controls button"),
+      ].map((control) => rect(control)?.height ?? 0);
       return {
         documentWidth: root.scrollWidth,
         viewportWidth: root.clientWidth,
@@ -922,6 +940,7 @@ try {
         topbarVisible: visible(topbar),
         commandSummaryVisible: visible(commandSummary),
         commandControlsVisible: visible(commandControls),
+        debugHarnessVisible: visible(debugHarnessPanel),
         boardVisible: visible(board),
         refreshVisible: visible(refresh),
         refreshInsideTopbar:
@@ -939,6 +958,9 @@ try {
         campaignOverflow: overflow(campaign),
         eventsOverflow: overflow(events),
         loopControlHeights,
+        debugControlHeights,
+        validationHeadVisible: visible(validationHead),
+        validationRecordColumns: gridColumns(validationRecord),
       };
     });
     if (
@@ -947,17 +969,28 @@ try {
     ) {
       throw new Error(`mobile layout has global horizontal overflow: ${JSON.stringify(layout)}`);
     }
+    const commandSurfaceVisible = debugHarness
+      ? layout.debugHarnessVisible
+      : layout.commandControlsVisible;
     if (
       !layout.sidebarVisible ||
       !layout.topbarVisible ||
       !layout.commandSummaryVisible ||
-      !layout.commandControlsVisible ||
+      !commandSurfaceVisible ||
       !layout.boardVisible ||
       !layout.refreshVisible ||
       !layout.refreshInsideTopbar
     ) {
       throw new Error(`mobile command surfaces are hidden or clipped: ${JSON.stringify(layout)}`);
     }
+    const debugMobileContractBroken =
+      debugHarness &&
+      (layout.debugControlHeights.length < 5 ||
+        layout.debugControlHeights.some((height) => height < 38) ||
+        layout.validationHeadVisible ||
+        layout.validationRecordColumns.split(" ").length !== 2);
+    const productionMobileContractBroken =
+      !debugHarness && layout.loopControlHeights.some((height) => height < 38);
     if (
       layout.refreshWidth < 36 ||
       layout.refreshHeight < 36 ||
@@ -966,7 +999,8 @@ try {
       layout.rightStackColumns.split(" ").length !== 1 ||
       layout.campaignOverflow !== "visible" ||
       layout.eventsOverflow !== "visible" ||
-      layout.loopControlHeights.some((height) => height < 38)
+      debugMobileContractBroken ||
+      productionMobileContractBroken
     ) {
       throw new Error(
         `mobile command layout does not collapse into one readable rail: ${JSON.stringify(layout)}`,

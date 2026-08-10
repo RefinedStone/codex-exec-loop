@@ -744,15 +744,17 @@ impl ParallelModeService {
             let self_login = self.configured_pr_validation_github_login(&request.workspace_dir);
             let finding_policy = ActionableFindingPolicy::new(self_login.as_deref());
             for finding in actionable_findings(&snapshot, &contract_decision, &finding_policy)? {
-                if next.finding_keys().contains(finding.key()) {
+                if !next.finding_keys().contains(finding.key()) {
+                    let finding_event = if next.phase() == PrValidationPhase::Settled {
+                        PrValidationEvent::LateFindingObserved(finding.clone())
+                    } else {
+                        PrValidationEvent::FindingObserved(finding.clone())
+                    };
+                    next = next.transition(finding_event).map_err(transition_error)?;
+                }
+                if next.remediation_for(finding.key()).is_some() {
                     continue;
                 }
-                let finding_event = if next.phase() == PrValidationPhase::Settled {
-                    PrValidationEvent::LateFindingObserved(finding.clone())
-                } else {
-                    PrValidationEvent::FindingObserved(finding.clone())
-                };
-                next = next.transition(finding_event).map_err(transition_error)?;
                 let idempotency_key = remediation_key(next.key(), &finding);
                 if !mode.admits_remediation() {
                     continue;
