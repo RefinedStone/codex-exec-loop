@@ -14,7 +14,7 @@ current pinned brief per product.
 | Product surfaces, commands, planning, parallel flow, limits | [reference/current-product.md](reference/current-product.md) | [ko/reference/current-product.md](ko/reference/current-product.md) |
 | Layer ownership, state authority, security boundaries | [reference/architecture.md](reference/architecture.md) | [ko/reference/architecture.md](ko/reference/architecture.md) |
 | Repository map, coding rules, tests, worktrees, GitHub delivery | [reference/development.md](reference/development.md) | [ko/reference/development.md](ko/reference/development.md) |
-| Admin game frontend runtime and renderer | [reference/admin-game-frontend.md](reference/admin-game-frontend.md) | [Korean overview](ko/reference/current-product.md#admin-게임-프런트엔드) |
+| Admin game frontend runtime and renderer | [reference/admin-game-frontend.md](reference/admin-game-frontend.md) | [ko/reference/admin-game-frontend.md](ko/reference/admin-game-frontend.md) |
 | Post-merge validation rollout, evidence, and rollback | [reference/pr-validation-rollout.md](reference/pr-validation-rollout.md) | [ko/reference/pr-validation-rollout.md](ko/reference/pr-validation-rollout.md) |
 | Install and first run | [../README.md](../README.md) | [ko/README.md](ko/README.md) |
 | Native packaging and publication | [plan/13-native-packaging-and-operator-runbook.md](plan/13-native-packaging-and-operator-runbook.md) | [ko/reference/release.md](ko/reference/release.md) |

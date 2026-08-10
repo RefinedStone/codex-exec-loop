@@ -14,7 +14,8 @@
 | 제품 화면, 명령, planning, parallel 흐름, 제한 | [current-product.md](../reference/current-product.md) | [reference/current-product.md](reference/current-product.md) |
 | 계층·상태 권한·보안 경계 | [architecture.md](../reference/architecture.md) | [reference/architecture.md](reference/architecture.md) |
 | 저장소 지도, 코딩 규칙, 테스트, worktree, GitHub 전달 | [development.md](../reference/development.md) | [reference/development.md](reference/development.md) |
-| Admin 게임 프런트엔드 runtime·renderer | [admin-game-frontend.md](../reference/admin-game-frontend.md) | [현재 제품 요약](reference/current-product.md#admin-게임-프런트엔드) |
+| Admin 게임 프런트엔드 runtime·renderer | [admin-game-frontend.md](../reference/admin-game-frontend.md) | [reference/admin-game-frontend.md](reference/admin-game-frontend.md) |
+| Post-merge validation 운영·evidence·rollback | [pr-validation-rollout.md](../reference/pr-validation-rollout.md) | [reference/pr-validation-rollout.md](reference/pr-validation-rollout.md) |
 | 설치와 첫 실행 | [README.md](../../README.md) | [README.md](README.md) |
 | 네이티브 패키징과 배포 | [영문 runbook](../plan/13-native-packaging-and-operator-runbook.md) | [reference/release.md](reference/release.md) |
 

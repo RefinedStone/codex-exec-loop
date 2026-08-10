@@ -1,0 +1,185 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-10T21:55:49.2263628Z",
+  "repository": "RefinedStone/codex-exec-loop",
+  "baseBranch": "prerelease",
+  "disposition": {
+    "schedulerEvidence": "ready_for_remediate",
+    "rulesetReview": "ready_for_human_review",
+    "requestedRulesetMutation": false,
+    "automaticRulesetMutationAllowed": false,
+    "reason": "The scheduler evidence is ready, but a required-context change remains a separate explicit user decision."
+  },
+  "sourceEvidence": {
+    "path": "../post-merge-validation-rollout-2026-08-10/evidence.json",
+    "generatedAt": "2026-08-10T15:18:43.025Z",
+    "pullRequestCount": 10,
+    "windowHours": 32.94,
+    "historicalMixedFastGate": {
+      "sampleCount": 10,
+      "p50Seconds": 88,
+      "p95Seconds": 173,
+      "label": "mixed_actual_and_projected"
+    }
+  },
+  "gateComparisons": [
+    {
+      "cohort": "projected_only_matching_pull_requests",
+      "sampleCount": 9,
+      "fastGate": {
+        "p50Seconds": 88,
+        "p95Seconds": 101,
+        "source": "projected_from_existing_jobs"
+      },
+      "ciGate": {
+        "p50Seconds": 501,
+        "p95Seconds": 535,
+        "source": "same_nine_pre_merge_runs"
+      },
+      "delta": {
+        "p50SecondsFaster": 413,
+        "p50PercentFaster": 82.44,
+        "p95SecondsFaster": 434,
+        "p95PercentFaster": 81.12
+      }
+    },
+    {
+      "cohort": "actual_stable_fast_gate_matching_pull_request",
+      "sampleCount": 1,
+      "pullRequestNumber": 2112,
+      "runUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31400846618",
+      "fastGate": {
+        "p50Seconds": 173,
+        "p95Seconds": 173,
+        "source": "actual"
+      },
+      "ciGate": {
+        "p50Seconds": 583,
+        "p95Seconds": 583,
+        "source": "same_pre_merge_run"
+      },
+      "delta": {
+        "p50SecondsFaster": 410,
+        "p50PercentFaster": 70.33,
+        "p95SecondsFaster": 410,
+        "p95PercentFaster": 70.33
+      }
+    }
+  ],
+  "postMerge": {
+    "sampleCount": 6,
+    "failureCount": 0,
+    "failureRatePercent": 0,
+    "productionSuccessCanary": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31401817497"
+  },
+  "safetyCounters": {
+    "falseActionable": 0,
+    "duplicateRemediation": 0,
+    "healthyProviderStale": 0,
+    "expiredLeaseTakeoverFailure": 0,
+    "adminCliTuiPhaseMismatch": 0,
+    "evidenceShaMismatch": 0,
+    "staleLeaseRecovery": 0,
+    "identityConflict": 0
+  },
+  "freshness": {
+    "statusAtCapture": "ready",
+    "evidenceGeneratedAt": "2026-08-10T15:18:43.025Z",
+    "capturedAt": "2026-08-10T21:54:57.421Z",
+    "ageSeconds": 23774.396,
+    "freshnessLimitHours": 48,
+    "remainingHoursAtCapture": 41.396
+  },
+  "githubApiQuota": {
+    "evidenceCollection": {
+      "limit": 5000,
+      "used": 317,
+      "remaining": 4683,
+      "usedPercent": 6.34,
+      "collectorRequests": 3
+    },
+    "rulesetFactQuery": {
+      "queriedAt": "2026-08-10T21:55:49.2263628Z",
+      "limit": 5000,
+      "used": 0,
+      "remaining": 5000,
+      "usedPercent": 0
+    }
+  },
+  "rulesetSnapshot": {
+    "queriedAt": "2026-08-10T21:55:49.2263628Z",
+    "readOnly": true,
+    "id": 20411125,
+    "name": "Protect prerelease delivery",
+    "target": "branch",
+    "enforcement": "active",
+    "includedRefs": [
+      "refs/heads/prerelease"
+    ],
+    "excludedRefs": [],
+    "bypassActorCount": 0,
+    "ruleTypes": [
+      "deletion",
+      "non_fast_forward",
+      "required_linear_history",
+      "pull_request",
+      "required_status_checks"
+    ],
+    "requiredStatusChecks": [
+      "CI Gate"
+    ],
+    "legacyBranchProtectionEndpoint": "not_configured_ruleset_is_authoritative"
+  },
+  "rollback": [
+    "Set repository-local akra.prValidationMode to observe to block new remediation admission while preserving evidence and Queue history.",
+    "Use off only when provider polling must stop; do not delete validation or evidence rows.",
+    "Settle existing remediation through the typed Planning Queue workflow instead of deleting correlations.",
+    "If a separately approved Ruleset change has happened, restore CI Gate before investigating Fast Gate."
+  ],
+  "prohibited": [
+    "Ruleset mutation without a separate explicit user approval",
+    "broad bypass actor addition",
+    "branch protection disablement",
+    "deletion or reset of validation evidence history"
+  ],
+  "browserEvidence": {
+    "captureCommit": "c0f961c1d55f3cc3390ddcb2bfaa5923135c994d",
+    "metricsPath": "browser-metrics.json",
+    "wideScreenshot": "admin-validation-evidence-wide.png",
+    "narrowScreenshot": "admin-validation-evidence-narrow.png",
+    "wideViewport": "1600x1000",
+    "narrowViewport": "390x844",
+    "observationMillis": 15000,
+    "dashboardBytes": 9709,
+    "evidenceDetailBytes": 9671,
+    "nodeDelta": 0,
+    "scrollHeightDelta": 0,
+    "horizontalOverflowPixels": 0,
+    "browserWarningOrErrorCount": 0,
+    "taskDurationDeltaMillis": 449.91,
+    "scriptDurationDeltaMillis": 205.252,
+    "jsHeapUsedDeltaBytes": 252160
+  },
+  "deliveryLineage": [
+    {
+      "slice": "PR A",
+      "pullRequest": 2115,
+      "url": "https://github.com/RefinedStone/codex-exec-loop/pull/2115"
+    },
+    {
+      "slice": "PR B",
+      "pullRequest": 2116,
+      "url": "https://github.com/RefinedStone/codex-exec-loop/pull/2116"
+    },
+    {
+      "slice": "PR C",
+      "pullRequest": 2117,
+      "url": "https://github.com/RefinedStone/codex-exec-loop/pull/2117"
+    },
+    {
+      "slice": "PR D",
+      "pullRequest": 2118,
+      "url": "https://github.com/RefinedStone/codex-exec-loop/pull/2118"
+    }
+  ]
+}

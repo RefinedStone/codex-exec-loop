@@ -90,3 +90,11 @@ SHA와 merge evidence SHA가 다르거나, core quota 사용률이 50% 이상이
 
 이번 전환의 체크인된 증거는
 [`post-merge-validation-rollout-2026-08-10`](../../validation/artifacts/post-merge-validation-rollout-2026-08-10/README.md)에 있습니다.
+
+사람이 검토할 읽기 전용 승인 패키지는
+[`admin-pr-validation-approval-package-2026-08-11`](../../validation/artifacts/admin-pr-validation-approval-package-2026-08-11/README.md)에
+있습니다. GitHub API로 읽은 현재 사실은 `refs/heads/prerelease`에 repository Ruleset `Protect
+prerelease delivery`가 활성화되어 있고 required context가 `CI Gate`이며 bypass actor는 0명이라는
+것입니다. 패키지는 Ruleset command를 포함하지 않고 protection write도 수행하지 않았습니다. 또한
+projected-only 9개 PR과 actual stable Fast Gate 1개를 분리한 뒤 각각 같은 cohort의 CI Gate와
+비교합니다.

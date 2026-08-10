@@ -53,6 +53,13 @@ explicit gate.
 
 ## Historical and Review Artifacts
 
+- [artifacts/admin-pr-validation-approval-package-2026-08-11/](artifacts/admin-pr-validation-approval-package-2026-08-11/)
+  contains the read-only current Ruleset facts, like-for-like Fast Gate/CI Gate comparison,
+  rollback boundary, production Admin evidence-drawer captures, and a 15-second
+  DOM/payload/performance sample.
+- [artifacts/admin-pr-validation-evidence-store-2026-08-11/](artifacts/admin-pr-validation-evidence-store-2026-08-11/)
+  records durable evidence retention, lease/CAS, freshness replay, recovery ordering, and lazy
+  Admin history behavior.
 - [artifacts/pr-2061-typed-terminal-delivery/](artifacts/pr-2061-typed-terminal-delivery/) contains
   candidate-specific E3 typed-delivery evidence and explicitly records the unexecuted E1, E2, and
   E4 candidate rows.

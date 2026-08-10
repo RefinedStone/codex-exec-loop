@@ -100,3 +100,11 @@ Before requesting approval, attach:
 
 The checked-in evidence for this rollout is
 [`post-merge-validation-rollout-2026-08-10`](../validation/artifacts/post-merge-validation-rollout-2026-08-10/README.md).
+
+The read-only human approval packet is
+[`admin-pr-validation-approval-package-2026-08-11`](../validation/artifacts/admin-pr-validation-approval-package-2026-08-11/README.md).
+Its GitHub API snapshot found active repository Ruleset `Protect prerelease delivery` on
+`refs/heads/prerelease`, required context `CI Gate`, and zero bypass actors. The packet contains no
+Ruleset command and performed no protection write. It separates the nine projected-only matching
+PRs from the one actual stable Fast Gate run before comparing each cohort with its matching CI Gate
+timing.

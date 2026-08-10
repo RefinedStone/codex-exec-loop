@@ -228,6 +228,16 @@ Integrated, Verifying, RemediationQueued, RemediationRunning, Verified, Blocked,
 rollout banner states the effective mode, Queue admission policy, and separate Ruleset approval
 boundary. See [PR Validation Rollout](pr-validation-rollout.md).
 
+Rollout timing evidence follows a separate read path. The application query service validates the
+collector schema, repository/base identity, generated time, evidence SHA, and 48-hour freshness
+boundary before projecting actual and historical Fast Gate distributions, CI/Post-Merge timing,
+sample scope, quota, and typed warnings. The repository authority retains at most 64 redacted
+snapshots and exact collection lease/CAS state. Dashboard bootstrap contains only the latest
+summary; the evidence drawer lazily requests at most 20 stable, cursor-ordered history rows. SSE
+contains only evidence revision invalidation. A durable replay recalculates freshness, and a source
+or store outage degrades to the last valid read-only projection without stopping the parallel
+control plane.
+
 The `/admin/akra` game projection uses a PixiJS 8 world over the same dashboard snapshot. Its
 validated frontend store, semantic camera zoom, worker movement, furniture occlusion, and scene
 selection remain presentation-only; see [Admin Game Frontend](admin-game-frontend.md).
