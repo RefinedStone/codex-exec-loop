@@ -42,6 +42,8 @@ const MAX_CRITERIA: usize = 32;
 const MAX_METRIC_SECONDS: f64 = 86_400.0;
 const MAX_STRING_LENGTH: usize = 512;
 const LATEST_SUMMARY_CACHE_TTL: StdDuration = StdDuration::from_secs(5);
+const FRESHNESS_BLOCKER: &str = "rollout evidence exceeded the freshness window";
+const INVALID_STORED_GENERATED_AT_BLOCKER: &str = "stored rollout evidence generated-at is invalid";
 
 pub struct PrValidationRolloutEvidenceQueryService {
     workspace_dir: String,
@@ -395,16 +397,17 @@ impl PrValidationRolloutEvidenceQueryService {
             }
         }
         let stored = store.load_snapshot(&self.workspace_dir, &scope_key)?;
-        let projected = stored
+        let mut projected = stored
             .records
             .iter()
             .map(|record| {
-                let snapshot = serde_json::from_str::<PrValidationRolloutEvidenceSnapshot>(
+                let mut snapshot = serde_json::from_str::<PrValidationRolloutEvidenceSnapshot>(
                     &record.snapshot_json,
                 )
                 .map_err(|error| {
                     anyhow::anyhow!("durable rollout evidence snapshot is invalid: {error}")
                 })?;
+                refresh_durable_snapshot_freshness(&mut snapshot, now, self.freshness);
                 let sort_at = DateTime::parse_from_rfc3339(&record.sort_at)
                     .map_err(|_| {
                         anyhow::anyhow!("durable rollout evidence sort timestamp is invalid")
@@ -425,6 +428,9 @@ impl PrValidationRolloutEvidenceQueryService {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
+        if stored.collection.last_outcome.as_deref() == Some("collected") {
+            projected.retain(|document| document.observation_kind != "collection_failure");
+        }
         let collection = collection_snapshot(&stored.collection, now_epoch_millis);
         if projected.is_empty() {
             return Ok(unavailable_page_with_collection(
@@ -813,7 +819,7 @@ impl PrValidationRolloutEvidenceQueryService {
             blockers.push("failure canary did not pass".to_string());
         }
         if stale {
-            blockers.push("rollout evidence exceeded the freshness window".to_string());
+            blockers.push(FRESHNESS_BLOCKER.to_string());
         }
         if blockers.is_empty() && !decision_ready {
             blockers.push("rollout decision keeps scheduler in observe mode".to_string());
@@ -1084,6 +1090,51 @@ fn hex_sha256(content: &[u8]) -> String {
 
 fn short_sha(value: &str) -> String {
     value.chars().take(12).collect()
+}
+
+fn refresh_durable_snapshot_freshness(
+    snapshot: &mut PrValidationRolloutEvidenceSnapshot,
+    now: DateTime<Utc>,
+    freshness: Duration,
+) {
+    if !snapshot.summary.status.is_structurally_valid() {
+        return;
+    }
+    let generated_at = snapshot
+        .summary
+        .generated_at
+        .as_deref()
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&Utc));
+    let Some(generated_at) = generated_at else {
+        snapshot.summary.status = PrValidationRolloutEvidenceStatus::Invalid;
+        snapshot.summary.queue_admission_supported = false;
+        push_unique_blocker(
+            &mut snapshot.summary.blockers,
+            INVALID_STORED_GENERATED_AT_BLOCKER,
+        );
+        return;
+    };
+    if generated_at > now + Duration::minutes(MAX_FUTURE_SKEW_MINUTES) {
+        snapshot.summary.status = PrValidationRolloutEvidenceStatus::Invalid;
+        snapshot.summary.queue_admission_supported = false;
+        push_unique_blocker(
+            &mut snapshot.summary.blockers,
+            INVALID_STORED_GENERATED_AT_BLOCKER,
+        );
+        return;
+    }
+    if now.signed_duration_since(generated_at) > freshness {
+        snapshot.summary.status = PrValidationRolloutEvidenceStatus::Stale;
+        snapshot.summary.queue_admission_supported = false;
+        push_unique_blocker(&mut snapshot.summary.blockers, FRESHNESS_BLOCKER);
+    }
+}
+
+fn push_unique_blocker(blockers: &mut Vec<String>, blocker: &str) {
+    if !blockers.iter().any(|existing| existing == blocker) {
+        blockers.push(blocker.to_string());
+    }
 }
 
 fn random_collection_token(prefix: &str) -> String {
@@ -1633,7 +1684,10 @@ mod tests {
                 });
                 inserted += 1;
             }
-            snapshot.collection.revision += i64::from(inserted > 0);
+            let state_changed = inserted > 0
+                || snapshot.collection.last_outcome.as_deref() != Some(request.outcome.as_str())
+                || snapshot.collection.last_error_class != request.error_class;
+            snapshot.collection.revision += i64::from(state_changed);
             snapshot.collection.last_collected_at = Some(request.collected_at);
             snapshot.collection.last_outcome = Some(request.outcome);
             snapshot.collection.last_error_class = request.error_class;
@@ -2190,9 +2244,9 @@ mod tests {
             "/workspace",
             Some("acme/widgets".to_string()),
             "prerelease",
-            source,
+            source.clone(),
         )
-        .with_store(store)
+        .with_store(store.clone())
         .load_page_at(
             PrValidationRolloutEvidenceRequest::default(),
             Utc.with_ymd_and_hms(2026, 8, 11, 0, 6, 0).unwrap(),
@@ -2217,6 +2271,109 @@ mod tests {
             !serde_json::to_string(&restarted)
                 .unwrap()
                 .contains("private/provider")
+        );
+
+        source.fail.store(false, Ordering::SeqCst);
+        let recovered = PrValidationRolloutEvidenceQueryService::new(
+            "/workspace",
+            Some("acme/widgets".to_string()),
+            "prerelease",
+            source,
+        )
+        .with_store(store.clone())
+        .load_page_at(
+            PrValidationRolloutEvidenceRequest::default(),
+            Utc.with_ymd_and_hms(2026, 8, 11, 0, 12, 0).unwrap(),
+        )
+        .expect("successful recollection should supersede the transient failure");
+        assert_eq!(
+            recovered.latest.summary.status,
+            PrValidationRolloutEvidenceStatus::Ready
+        );
+        assert_eq!(
+            recovered.collection.last_outcome.as_deref(),
+            Some("collected")
+        );
+        assert_eq!(recovered.revision, Some(3));
+        assert!(recovered.history.iter().all(|snapshot| {
+            snapshot.summary.status != PrValidationRolloutEvidenceStatus::Unavailable
+        }));
+        assert!(recovered.warnings.iter().all(|warning| {
+            warning.kind != PrValidationEvidenceWarningKind::CollectionUnavailable
+        }));
+        assert!(
+            store
+                .snapshot
+                .lock()
+                .expect("store lock")
+                .records
+                .iter()
+                .any(|record| record.observation_kind == "source_unavailable")
+        );
+    }
+
+    #[test]
+    fn durable_replay_recomputes_freshness_without_rewriting_the_deduplicated_snapshot() {
+        let source = Arc::new(MutableEvidencePort {
+            documents: Mutex::new(vec![document(
+                valid_evidence("2026-08-10T23:00:00Z", "projected", false),
+                "2026-08-10T23:01:00Z",
+            )]),
+            fail: AtomicBool::new(false),
+        });
+        let store = Arc::new(MemoryEvidenceStore::default());
+        let first = PrValidationRolloutEvidenceQueryService::new(
+            "/workspace",
+            Some("acme/widgets".to_string()),
+            "prerelease",
+            source.clone(),
+        )
+        .with_store(store.clone())
+        .with_freshness(Duration::hours(1))
+        .load_page_at(
+            PrValidationRolloutEvidenceRequest::default(),
+            Utc.with_ymd_and_hms(2026, 8, 10, 23, 30, 0).unwrap(),
+        )
+        .expect("fresh durable evidence should load");
+        assert_eq!(
+            first.latest.summary.status,
+            PrValidationRolloutEvidenceStatus::Ready
+        );
+        assert!(first.latest.summary.queue_admission_supported);
+
+        let stale = PrValidationRolloutEvidenceQueryService::new(
+            "/workspace",
+            Some("acme/widgets".to_string()),
+            "prerelease",
+            source,
+        )
+        .with_store(store)
+        .with_freshness(Duration::hours(1))
+        .load_page_at(
+            PrValidationRolloutEvidenceRequest::default(),
+            Utc.with_ymd_and_hms(2026, 8, 11, 0, 30, 1).unwrap(),
+        )
+        .expect("durable replay should recompute freshness");
+        assert_eq!(
+            stale.latest.summary.status,
+            PrValidationRolloutEvidenceStatus::Stale
+        );
+        assert!(!stale.latest.summary.queue_admission_supported);
+        assert_eq!(
+            stale
+                .latest
+                .summary
+                .blockers
+                .iter()
+                .filter(|blocker| blocker.as_str() == FRESHNESS_BLOCKER)
+                .count(),
+            1
+        );
+        assert!(
+            stale
+                .warnings
+                .iter()
+                .any(|warning| { warning.kind == PrValidationEvidenceWarningKind::StaleEvidence })
         );
     }
 

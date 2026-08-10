@@ -45,6 +45,10 @@ fail closed instead of silently returning a shifted page.
 - retention prunes the oldest rows after the 64-row bound;
 - a restarted query service replays durable history and preserves the last valid snapshot when
   the source becomes unavailable;
+- durable replay recalculates freshness from `generated_at`, so a deduplicated `ready` snapshot
+  becomes `stale` and loses Queue-admission support after the configured boundary;
+- a successful recollection supersedes transient collection failures in evidence ordering while
+  keeping the typed failure observation in durable storage for recovery evidence;
 - a durable-store outage degrades to the existing read-only filesystem projection without taking
   down the Admin dashboard;
 - SSE revision regressions and duplicate revisions do not rewind evidence or validation details;
