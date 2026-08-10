@@ -349,9 +349,6 @@ pub(super) fn ensure_schema(
                 recorded_at TEXT NOT NULL
             );
 
-            CREATE INDEX IF NOT EXISTS idx_runtime_events_projection_sequence
-                ON runtime_events(projection_kind, sequence DESC);
-
             CREATE TABLE IF NOT EXISTS app_server_prompt_interactions (
                 sequence INTEGER PRIMARY KEY AUTOINCREMENT,
                 interaction_id TEXT NOT NULL,
@@ -374,6 +371,7 @@ pub(super) fn ensure_schema(
         )
         .context("failed to initialize authority-store schema")?;
     ensure_planning_task_provenance_columns(&transaction)?;
+    ensure_runtime_event_projection_index(&transaction)?;
     ensure_pr_validation_attestation_columns(&transaction)?;
     ensure_pr_validation_scheduler_columns(&transaction)?;
     if previous_schema_version.is_some_and(|version| version < 12) {
@@ -410,6 +408,25 @@ pub(super) fn ensure_schema(
     transaction
         .commit()
         .context("failed to commit authority-store schema migration")?;
+    Ok(())
+}
+
+fn ensure_runtime_event_projection_index(connection: &Connection) -> Result<()> {
+    if !table_column_exists(connection, "runtime_events", "projection_kind")?
+        || !table_column_exists(connection, "runtime_events", "sequence")?
+    {
+        // Preserve the existing corruption-diagnostic path: a legacy or deliberately malformed
+        // event table must reach the contextual projection write instead of failing while an
+        // optional read-optimization index is installed.
+        return Ok(());
+    }
+    connection
+        .execute(
+            "CREATE INDEX IF NOT EXISTS idx_runtime_events_projection_sequence
+             ON runtime_events(projection_kind, sequence DESC)",
+            [],
+        )
+        .context("failed to initialize runtime event projection index")?;
     Ok(())
 }
 
