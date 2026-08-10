@@ -1733,6 +1733,45 @@ async fn admin_debug_harness_all_validation_scenarios_keep_board_and_scene_seman
                 .unwrap();
             assert_eq!(dashboard.status(), StatusCode::OK);
             let dashboard = json_body(dashboard).await;
+            let evidence = router
+                .clone()
+                .oneshot(
+                    admin_request_builder()
+                        .method(Method::GET)
+                        .uri("/api/admin/akra/pr-validation/evidence?limit=1")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(evidence.status(), StatusCode::OK);
+            let evidence = json_body(evidence).await;
+            assert_eq!(
+                evidence["latest"]["summary"]["status"],
+                dashboard["validation"]["rolloutEvidence"]["status"],
+                "scenario {scenario} stage {stage_index} evidence status"
+            );
+            assert_eq!(
+                evidence["latest"]["summary"]["actualFastGate"]["label"],
+                dashboard["validation"]["rolloutEvidence"]["actualFastGate"]["label"],
+                "scenario {scenario} stage {stage_index} actual metric label"
+            );
+            if evidence["latest"]["summary"]["actualFastGate"]["label"] == "unavailable" {
+                for field in ["sampleCount", "p50Seconds", "p95Seconds"] {
+                    assert!(
+                        evidence["latest"]["summary"]["actualFastGate"][field].is_null(),
+                        "scenario {scenario} stage {stage_index} unavailable actual metric must leave {field} uncollected"
+                    );
+                }
+            }
+            assert_eq!(evidence["history"].as_array().map(Vec::len), Some(1));
+            assert!(evidence["nextCursor"].as_str().is_some());
+            if matches!(
+                evidence["latest"]["summary"]["status"].as_str(),
+                Some("invalid" | "unavailable")
+            ) {
+                assert_eq!(evidence["lastValid"]["summary"]["status"], "ready");
+            }
             let record = &dashboard["validation"]["records"][0];
             let scene = &dashboard["scene"]["validation"];
             assert_eq!(
@@ -4189,6 +4228,77 @@ fn akra_graphic_dashboard_validation_rail_keeps_accessible_typed_operations_cont
         ADMIN_API,
         "verify_header_csrf(&jar, &headers)?"
     ));
+}
+
+#[test]
+fn akra_graphic_dashboard_validation_evidence_is_explainable_responsive_and_accessible() {
+    for token in [
+        "data-validation-evidence",
+        "data-validation-evidence-state",
+        "data-evidence-status",
+        "data-evidence-status-mark",
+        "data-evidence-attention",
+        "data-evidence-attention-action",
+        "data-evidence-detail-trigger",
+        "Projected Fast Gate",
+        "Actual Fast Gate",
+        "CI Gate",
+        "Post-Merge Gate",
+        "data-metric-p50",
+        "data-metric-p95",
+        "data-metric-samples",
+        "data-metric-source",
+        "미수집",
+        ".validation-evidence-metrics { grid-template-columns: 1fr; }",
+        ".validation-workflow-times { grid-template-columns: 1fr; }",
+        "aria-controls=\"akra-detail-drawer\"",
+        "aria-expanded=\"false\"",
+        "role=\"status\"",
+        "aria-live=\"polite\"",
+    ] {
+        assert!(
+            AKRA_DASHBOARD_TEMPLATE.contains(token),
+            "validation evidence template should keep {token}"
+        );
+    }
+    for token in [
+        "renderValidationEvidence",
+        "shell.dataset.validationEvidenceState = status",
+        "const evidenceNumber = (value)",
+        "value === null || value === undefined || value === \"\"",
+        "renderEvidenceAttention",
+        "formatEvidenceSeconds",
+        "formatEvidenceTimestamp",
+        "currentValidationEvidence",
+        "workflowSelectionCopy",
+        "workflowNotSelectedCopy",
+        "workflow.selected ? \" is-selected\"",
+        "newest_run",
+        "latest_attempt",
+        "attempt 번호는 서로 다른 run 사이에서 비교하지 않습니다.",
+        "openEvidenceDetailDrawer",
+        "renderEvidenceHistoryPage",
+        "canonicalGithubUrl",
+        "/api/admin/akra/pr-validation/evidence",
+        "대시보드의 마지막 summary는 유지됩니다.",
+        "evidenceDetailTrigger?.setAttribute(\"aria-expanded\", \"false\")",
+    ] {
+        assert!(
+            AKRA_DASHBOARD_JS.contains(token),
+            "validation evidence client should keep {token}"
+        );
+    }
+    for unsafe_copy in ["0s", "href = record.canonicalPrUrl"] {
+        assert!(
+            !AKRA_DASHBOARD_TEMPLATE.contains(unsafe_copy)
+                && !AKRA_DASHBOARD_JS.contains(unsafe_copy),
+            "validation evidence must not expose unsafe fallback {unsafe_copy}"
+        );
+    }
+    assert!(
+        !AKRA_DASHBOARD_JS.contains("shell.dataset.evidenceStatus"),
+        "evidence shell state must not collide with the nested status badge selector"
+    );
 }
 
 #[test]

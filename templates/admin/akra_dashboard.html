@@ -1502,6 +1502,159 @@
   .validation-rollout.is-remediation { border-color: rgba(80,220,145,.34); }
   .validation-rollout.is-remediation strong { color: var(--game-green); }
   .validation-rollout.is-off { opacity: .78; }
+  .validation-evidence-shell {
+    display: grid;
+    gap: 0;
+    margin-bottom: 10px;
+    border: 1px solid rgba(93,169,255,.25);
+    background: rgba(3,13,24,.76);
+  }
+  .validation-evidence-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-width: 0;
+    padding: 9px 11px;
+    border-bottom: 1px solid rgba(255,255,255,.07);
+  }
+  .validation-evidence-identity {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-width: 0;
+  }
+  .evidence-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+    color: var(--game-muted);
+    font-size: 10px;
+    font-weight: 900;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+  }
+  .evidence-status-mark {
+    display: inline-grid;
+    place-items: center;
+    min-width: 24px;
+    height: 18px;
+    padding-inline: 4px;
+    border: 1px solid currentColor;
+    font: 900 8px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+  }
+  .evidence-status.is-ready { color: var(--game-green); }
+  .evidence-status.is-hold,
+  .evidence-status.is-stale { color: var(--game-yellow); }
+  .evidence-status.is-unavailable { color: var(--game-muted); }
+  .evidence-status.is-invalid { color: var(--game-red); }
+  .validation-evidence-time {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--game-muted);
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .evidence-detail-trigger {
+    flex: 0 0 auto;
+    min-height: 30px;
+    padding: 5px 9px;
+    border: 1px solid rgba(93,169,255,.42);
+    color: var(--game-blue);
+    background: rgba(93,169,255,.08);
+    font: inherit;
+    font-size: 10px;
+    font-weight: 900;
+    cursor: pointer;
+  }
+  .evidence-detail-trigger:hover,
+  .evidence-detail-trigger:focus-visible { background: rgba(93,169,255,.16); }
+  .validation-evidence-attention {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 4px 10px;
+    padding: 9px 11px;
+    border-bottom: 1px solid rgba(245,200,75,.2);
+    color: var(--game-yellow);
+    background: rgba(245,200,75,.075);
+  }
+  .validation-evidence-attention[hidden] { display: none; }
+  .validation-evidence-attention strong { font-size: 10px; letter-spacing: .04em; }
+  .validation-evidence-attention small { color: var(--game-ink); line-height: 1.45; }
+  .validation-evidence-attention code {
+    grid-column: 2;
+    color: var(--game-muted);
+    font: 800 9px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+  }
+  .validation-evidence-metrics {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .evidence-metric {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+    padding: 11px;
+    border-inline-start: 1px solid rgba(255,255,255,.07);
+  }
+  .evidence-metric:nth-child(odd) { border-inline-start: 0; }
+  .evidence-metric:nth-child(n+3) { border-top: 1px solid rgba(255,255,255,.07); }
+  .evidence-metric-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+    min-width: 0;
+  }
+  .evidence-metric-head strong {
+    min-width: 0;
+    color: var(--game-ink);
+    font-size: 11px;
+    overflow-wrap: anywhere;
+  }
+  .evidence-metric-label {
+    flex: 0 0 auto;
+    color: var(--game-blue);
+    font: 800 8px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+  .evidence-metric-label.is-actual { color: var(--game-green); }
+  .evidence-metric-label.is-mixed_actual_and_projected { color: var(--game-yellow); }
+  .evidence-metric-label.is-unavailable { color: var(--game-muted); }
+  .evidence-metric-values {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+  .evidence-metric-value {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+  .evidence-metric-value small { color: var(--game-muted); font-size: 9px; }
+  .evidence-metric-value b {
+    color: var(--game-ink);
+    font-size: 15px;
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+  }
+  .evidence-metric-meta {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+    color: var(--game-muted);
+    font-size: 9px;
+    line-height: 1.4;
+  }
+  .evidence-metric-meta span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .evidence-metric.is-unavailable .evidence-metric-value b { color: var(--game-muted); }
   .validation-rail {
     overflow: hidden;
     border: 1px solid rgba(93, 169, 255, 0.24);
@@ -1606,6 +1759,89 @@
     border: 1px solid rgba(255,255,255,.09);
     background: rgba(255,255,255,.035);
   }
+  .validation-detail-card small,
+  .validation-detail-card span { overflow-wrap: anywhere; }
+  .validation-detail-card.is-check { background: rgba(93,169,255,.045); }
+  .validation-detail-card.is-metric { background: rgba(80,220,145,.045); }
+  .validation-workflow-list {
+    display: grid;
+    gap: 7px;
+  }
+  .validation-workflow {
+    display: grid;
+    gap: 8px;
+    padding: 9px;
+    border: 1px solid rgba(255,255,255,.09);
+    background: rgba(255,255,255,.03);
+  }
+  .validation-workflow.is-selected {
+    border-color: rgba(80,220,145,.38);
+    background: rgba(80,220,145,.07);
+  }
+  .validation-workflow-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 9px;
+  }
+  .validation-workflow-head strong { color: var(--game-ink); overflow-wrap: anywhere; }
+  .validation-workflow-state {
+    flex: 0 0 auto;
+    color: var(--game-muted);
+    font-size: 9px;
+    font-weight: 900;
+    letter-spacing: .04em;
+  }
+  .validation-workflow.is-selected .validation-workflow-state { color: var(--game-green); }
+  .validation-workflow-times {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 5px;
+  }
+  .validation-workflow-times span {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+    color: var(--game-muted);
+    font-size: 9px;
+    overflow-wrap: anywhere;
+  }
+  .validation-workflow-times b { color: var(--game-ink); font-weight: 800; }
+  .validation-workflow-reason {
+    margin: 0;
+    color: var(--game-muted);
+    font-size: 10px;
+    line-height: 1.5;
+  }
+  .validation-workflow.is-selected .validation-workflow-reason { color: var(--game-green); }
+  .evidence-detail-summary {
+    display: grid;
+    gap: 7px;
+    padding: 9px;
+    border: 1px solid rgba(93,169,255,.18);
+    background: rgba(93,169,255,.04);
+  }
+  .evidence-detail-summary strong { color: var(--game-ink); }
+  .evidence-detail-summary small { color: var(--game-muted); line-height: 1.45; overflow-wrap: anywhere; }
+  .evidence-history-list {
+    display: grid;
+    gap: 7px;
+  }
+  .evidence-history-row {
+    display: grid;
+    grid-template-columns: minmax(118px, .7fr) minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+    padding: 8px;
+    border: 1px solid rgba(255,255,255,.08);
+    background: rgba(255,255,255,.025);
+  }
+  .evidence-history-row strong,
+  .evidence-history-row small { overflow-wrap: anywhere; }
+  .evidence-history-row code {
+    color: var(--game-muted);
+    font: 800 9px/1.3 ui-monospace, SFMono-Regular, Consolas, monospace;
+  }
   .validation-command-list { display: flex; flex-wrap: wrap; gap: 7px; }
   .validation-command {
     min-height: 34px;
@@ -1620,18 +1856,25 @@
   }
   .validation-command:disabled { cursor: not-allowed; opacity: .5; }
   .validation-command-status { min-height: 18px; color: var(--game-muted); font-size: 11px; }
-  .admin-detail-drawer[data-detail-mode="validation"] {
+  .admin-detail-drawer[data-detail-mode="validation"],
+  .admin-detail-drawer[data-detail-mode="evidence"] {
     display: grid;
     grid-template-rows: auto minmax(0, 1fr);
     width: 620px;
     max-height: min(78vh, 760px);
     overflow: hidden;
   }
-  .admin-detail-drawer[data-detail-mode="validation"] .drawer-body {
+  .admin-detail-drawer[data-detail-mode="validation"] .drawer-body,
+  .admin-detail-drawer[data-detail-mode="evidence"] .drawer-body {
     min-height: 0;
     overflow: auto;
     overscroll-behavior: contain;
     scrollbar-gutter: stable;
+  }
+  @media (min-width: 1540px) {
+    .validation-evidence-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .evidence-metric:nth-child(n) { border-top: 0; border-inline-start: 1px solid rgba(255,255,255,.07); }
+    .evidence-metric:first-child { border-inline-start: 0; }
   }
   @media (max-width: 1360px) {
     .command-controls {
@@ -1669,6 +1912,17 @@
     .validation-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .validation-rollout { grid-template-columns: 1fr; align-items: start; }
     .validation-rollout code { width: fit-content; }
+    .validation-evidence-head { align-items: flex-start; flex-wrap: wrap; }
+    .validation-evidence-identity { align-items: flex-start; flex-direction: column; }
+    .validation-evidence-time { white-space: normal; overflow-wrap: anywhere; }
+    .validation-evidence-attention { grid-template-columns: 1fr; }
+    .validation-evidence-attention code { grid-column: 1; white-space: normal; }
+    .validation-evidence-metrics { grid-template-columns: 1fr; }
+    .evidence-metric {
+      border-inline-start: 0;
+      border-top: 1px solid rgba(255,255,255,.07);
+    }
+    .evidence-metric:first-child { border-top: 0; }
     .validation-rail-head { display: none; }
     .validation-rail { display: grid; gap: 8px; border: 0; background: transparent; }
     .validation-record {
@@ -1688,6 +1942,8 @@
     }
     .validation-cell:first-child { grid-column: 1 / -1; border-top: 0; }
     .validation-detail-grid { grid-template-columns: 1fr; }
+    .validation-workflow-times { grid-template-columns: 1fr; }
+    .evidence-history-row { grid-template-columns: 1fr; align-items: start; }
     .command-summary {
       grid-column: 1 / -1;
       grid-template-columns: 10px minmax(82px, 0.6fr) minmax(150px, 1.4fr);
@@ -2297,6 +2553,80 @@
         <code data-validation-rollout-admission>{% if dashboard.validation.rollout.queue_admission_enabled %}QUEUE ADMISSION ON{% else %}QUEUE ADMISSION BLOCKED{% endif %}</code>
         <code data-validation-rollout-ruleset>{% if dashboard.validation.rollout.ruleset_change_requires_approval %}RULESET · APPROVAL REQUIRED{% else %}RULESET MANAGED{% endif %}</code>
       </div>
+      <section
+        class="validation-evidence-shell"
+        data-validation-evidence
+        data-validation-evidence-state="{{ dashboard.validation.rollout_evidence.status }}"
+        aria-labelledby="validation-evidence-title"
+      >
+        <div class="validation-evidence-head">
+          <div class="validation-evidence-identity">
+            <span
+              class="evidence-status is-{{ dashboard.validation.rollout_evidence.status }}"
+              data-evidence-status
+              data-state="{{ dashboard.validation.rollout_evidence.status }}"
+            >
+              <span class="evidence-status-mark" data-evidence-status-mark aria-hidden="true">EV</span>
+              <span data-evidence-status-label>{{ dashboard.validation.rollout_evidence.status }}</span>
+            </span>
+            <span class="validation-evidence-time" id="validation-evidence-title" data-evidence-generated-at>
+              Evidence 생성 {{ dashboard.validation.rollout_evidence.generated_at.as_deref().unwrap_or("미수집") }}
+            </span>
+          </div>
+          <button
+            type="button"
+            class="evidence-detail-trigger"
+            data-evidence-detail-trigger
+            aria-controls="akra-detail-drawer"
+            aria-expanded="false"
+          >증거 이력 보기</button>
+        </div>
+        <div
+          class="validation-evidence-attention"
+          data-evidence-attention
+          role="status"
+          aria-live="polite"
+          {% if dashboard.validation.rollout_evidence.status == crate::application::port::inbound::pr_validation_rollout_evidence_query_port::PrValidationRolloutEvidenceStatus::Ready %}hidden{% endif %}
+        >
+          <strong data-evidence-attention-title>자동 전환 보류</strong>
+          <small data-evidence-attention-body>현재 evidence는 운영 mode 전환 근거로 사용할 수 없습니다.</small>
+          <code data-evidence-attention-action>evidence를 갱신하고 blocker를 확인하세요.</code>
+        </div>
+        <div class="validation-evidence-metrics" data-evidence-metrics>
+          <article class="evidence-metric" data-evidence-metric="historicalFastGate">
+            <div class="evidence-metric-head"><strong>Projected Fast Gate</strong><span class="evidence-metric-label is-{{ dashboard.validation.rollout_evidence.historical_fast_gate.label }}" data-metric-label>{{ dashboard.validation.rollout_evidence.historical_fast_gate.label }}</span></div>
+            <div class="evidence-metric-values">
+              <span class="evidence-metric-value"><small>p50</small><b data-metric-p50>{% if dashboard.validation.rollout_evidence.historical_fast_gate.p50_seconds.is_some() %}{{ dashboard.validation.rollout_evidence.historical_fast_gate.p50_seconds.unwrap() }}s{% else %}미수집{% endif %}</b></span>
+              <span class="evidence-metric-value"><small>p95</small><b data-metric-p95>{% if dashboard.validation.rollout_evidence.historical_fast_gate.p95_seconds.is_some() %}{{ dashboard.validation.rollout_evidence.historical_fast_gate.p95_seconds.unwrap() }}s{% else %}미수집{% endif %}</b></span>
+            </div>
+            <small class="evidence-metric-meta"><span data-metric-samples>표본 {% if dashboard.validation.rollout_evidence.historical_fast_gate.sample_count.is_some() %}{{ dashboard.validation.rollout_evidence.historical_fast_gate.sample_count.unwrap() }}{% else %}미수집{% endif %}</span><span data-metric-source>{{ dashboard.validation.rollout_evidence.historical_fast_gate.source }}</span><span data-metric-generated>{{ dashboard.validation.rollout_evidence.generated_at.as_deref().unwrap_or("미수집") }}</span></small>
+          </article>
+          <article class="evidence-metric" data-evidence-metric="actualFastGate">
+            <div class="evidence-metric-head"><strong>Actual Fast Gate</strong><span class="evidence-metric-label is-{{ dashboard.validation.rollout_evidence.actual_fast_gate.label }}" data-metric-label>{{ dashboard.validation.rollout_evidence.actual_fast_gate.label }}</span></div>
+            <div class="evidence-metric-values">
+              <span class="evidence-metric-value"><small>p50</small><b data-metric-p50>{% if dashboard.validation.rollout_evidence.actual_fast_gate.p50_seconds.is_some() %}{{ dashboard.validation.rollout_evidence.actual_fast_gate.p50_seconds.unwrap() }}s{% else %}미수집{% endif %}</b></span>
+              <span class="evidence-metric-value"><small>p95</small><b data-metric-p95>{% if dashboard.validation.rollout_evidence.actual_fast_gate.p95_seconds.is_some() %}{{ dashboard.validation.rollout_evidence.actual_fast_gate.p95_seconds.unwrap() }}s{% else %}미수집{% endif %}</b></span>
+            </div>
+            <small class="evidence-metric-meta"><span data-metric-samples>표본 {% if dashboard.validation.rollout_evidence.actual_fast_gate.sample_count.is_some() %}{{ dashboard.validation.rollout_evidence.actual_fast_gate.sample_count.unwrap() }}{% else %}미수집{% endif %}</span><span data-metric-source>{{ dashboard.validation.rollout_evidence.actual_fast_gate.source }}</span><span data-metric-generated>{{ dashboard.validation.rollout_evidence.generated_at.as_deref().unwrap_or("미수집") }}</span></small>
+          </article>
+          <article class="evidence-metric" data-evidence-metric="ciGate">
+            <div class="evidence-metric-head"><strong>CI Gate</strong><span class="evidence-metric-label is-{{ dashboard.validation.rollout_evidence.ci_gate.label }}" data-metric-label>{{ dashboard.validation.rollout_evidence.ci_gate.label }}</span></div>
+            <div class="evidence-metric-values">
+              <span class="evidence-metric-value"><small>p50</small><b data-metric-p50>{% if dashboard.validation.rollout_evidence.ci_gate.p50_seconds.is_some() %}{{ dashboard.validation.rollout_evidence.ci_gate.p50_seconds.unwrap() }}s{% else %}미수집{% endif %}</b></span>
+              <span class="evidence-metric-value"><small>p95</small><b data-metric-p95>{% if dashboard.validation.rollout_evidence.ci_gate.p95_seconds.is_some() %}{{ dashboard.validation.rollout_evidence.ci_gate.p95_seconds.unwrap() }}s{% else %}미수집{% endif %}</b></span>
+            </div>
+            <small class="evidence-metric-meta"><span data-metric-samples>표본 {% if dashboard.validation.rollout_evidence.ci_gate.sample_count.is_some() %}{{ dashboard.validation.rollout_evidence.ci_gate.sample_count.unwrap() }}{% else %}미수집{% endif %}</span><span data-metric-source>{{ dashboard.validation.rollout_evidence.ci_gate.source }}</span><span data-metric-generated>{{ dashboard.validation.rollout_evidence.generated_at.as_deref().unwrap_or("미수집") }}</span></small>
+          </article>
+          <article class="evidence-metric" data-evidence-metric="postMergeGate">
+            <div class="evidence-metric-head"><strong>Post-Merge Gate</strong><span class="evidence-metric-label is-{{ dashboard.validation.rollout_evidence.post_merge_gate.label }}" data-metric-label>{{ dashboard.validation.rollout_evidence.post_merge_gate.label }}</span></div>
+            <div class="evidence-metric-values">
+              <span class="evidence-metric-value"><small>p50</small><b data-metric-p50>{% if dashboard.validation.rollout_evidence.post_merge_gate.p50_seconds.is_some() %}{{ dashboard.validation.rollout_evidence.post_merge_gate.p50_seconds.unwrap() }}s{% else %}미수집{% endif %}</b></span>
+              <span class="evidence-metric-value"><small>p95</small><b data-metric-p95>{% if dashboard.validation.rollout_evidence.post_merge_gate.p95_seconds.is_some() %}{{ dashboard.validation.rollout_evidence.post_merge_gate.p95_seconds.unwrap() }}s{% else %}미수집{% endif %}</b></span>
+            </div>
+            <small class="evidence-metric-meta"><span data-metric-samples>표본 {% if dashboard.validation.rollout_evidence.post_merge_gate.sample_count.is_some() %}{{ dashboard.validation.rollout_evidence.post_merge_gate.sample_count.unwrap() }}{% else %}미수집{% endif %}</span><span data-metric-source>{{ dashboard.validation.rollout_evidence.post_merge_gate.source }}</span><span data-metric-generated>{{ dashboard.validation.rollout_evidence.generated_at.as_deref().unwrap_or("미수집") }}</span></small>
+          </article>
+        </div>
+      </section>
       <div class="validation-rail" data-validation-list aria-label="PR 검증 레코드">
         <div class="validation-rail-head" aria-hidden="true">
           <span>PR / Akra ID</span><span>Integrated</span><span>Actions</span><span>Findings</span><span>Remediation</span><span>Verified</span>
