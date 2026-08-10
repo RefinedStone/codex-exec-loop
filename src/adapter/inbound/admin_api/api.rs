@@ -220,10 +220,9 @@ pub(super) async fn akra_stream_api(
         let debug_projection = state.admin_debug_port.projection();
         let debug_harness = map_harness_view(&debug_projection);
         let (feed, events) = build_admin_events_view(&state, 50, after_sequence);
-        // The validation board revision is the same authority event sequence carried by the
-        // already-loaded event feed. Reuse it so the SSE heartbeat never performs a second board
-        // and correlation scan merely to decide whether clients should invalidate their cursor.
-        let validation_revision = feed.event_cursor;
+        // Pagination is invalidated only by validation-record events. Unrelated slot/session
+        // activity still refreshes the dashboard through `events`, but cannot rewind the board.
+        let validation_revision = state.pr_validation_query_port.load_board_revision().ok();
         let validation_changed = validation_revision != last_validation_revision;
         let validation_cursor_reset_required = !first_frame && validation_changed;
         let control_signature =

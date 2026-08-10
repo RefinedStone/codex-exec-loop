@@ -1473,6 +1473,10 @@ impl PlanningAuthorityPort for SqlitePlanningAuthorityAdapter {
         Self::load_runtime_pr_validation_page(workspace_dir, request)
     }
 
+    fn load_runtime_pr_validation_revision(&self, workspace_dir: &str) -> Result<i64> {
+        Self::load_runtime_pr_validation_revision(workspace_dir)
+    }
+
     fn load_runtime_pr_validation_record_snapshot(
         &self,
         workspace_dir: &str,

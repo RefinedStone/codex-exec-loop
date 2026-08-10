@@ -7065,6 +7065,16 @@ fn pr_validation_board_pages_active_before_recent_terminal_with_stable_cursor_re
         .next_position
         .clone()
         .expect("bounded first page should expose a continuation");
+    adapter
+        .upsert_runtime_session_detail(
+            &workspace_dir,
+            &failed_start_session_detail(
+                "unrelated-session",
+                "unrelated-task",
+                "2026-08-10T10:30:00+00:00",
+            ),
+        )
+        .expect("unrelated runtime activity should persist");
     let second = adapter
         .load_runtime_pr_validation_page(
             &workspace_dir,
@@ -7077,6 +7087,7 @@ fn pr_validation_board_pages_active_before_recent_terminal_with_stable_cursor_re
         )
         .expect("second validation page should load");
     assert!(!second.cursor_reset_required);
+    assert_eq!(second.revision, first.revision);
     assert_eq!(
         second
             .records

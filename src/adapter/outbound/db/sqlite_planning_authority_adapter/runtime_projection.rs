@@ -1460,7 +1460,7 @@ impl SqlitePlanningAuthorityAdapter {
         let transaction = connection
             .unchecked_transaction()
             .context("failed to open PR validation board read snapshot")?;
-        let revision = read_metadata_i64(&transaction, "runtime_event_sequence")?.unwrap_or(0);
+        let revision = read_runtime_pr_validation_revision(&transaction)?;
         let cursor_reset_required = request
             .expected_revision
             .is_some_and(|expected| expected != revision);
@@ -1557,6 +1557,12 @@ impl SqlitePlanningAuthorityAdapter {
             next_position,
             cursor_reset_required,
         })
+    }
+
+    pub(crate) fn load_runtime_pr_validation_revision(workspace_dir: &str) -> Result<i64> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let connection = open_authority_connection(&location)?;
+        read_runtime_pr_validation_revision(&connection)
     }
 
     pub(crate) fn load_runtime_pr_validation_record_snapshot(
@@ -3130,6 +3136,18 @@ fn pr_validation_page_position(
         updated_at: snapshot.updated_at.clone(),
         record_key: snapshot.record.key().as_str().to_string(),
     }
+}
+
+fn read_runtime_pr_validation_revision(connection: &Connection) -> Result<i64> {
+    connection
+        .query_row(
+            "SELECT COALESCE(MAX(sequence), 0)
+             FROM runtime_events
+             WHERE projection_kind = 'pr_validation'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .context("failed to read PR validation board revision")
 }
 
 // runtime projection 테이블들을 한 번씩 읽어 application port가 요구하는 snapshot 구조로 조립한다.

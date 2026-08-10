@@ -1323,6 +1323,19 @@ impl PrValidationRecord {
         &self.observation_projection
     }
 
+    /// Returns the durable completion result for a required check when an older settled record
+    /// predates the observation projection. `None` means that no per-check evidence survived;
+    /// callers must not reinterpret that absence as a failed or missing check.
+    pub fn completion_required_check_succeeded(&self, name: &str) -> Option<bool> {
+        self.completion.as_ref().and_then(|completion| {
+            completion
+                .required_checks
+                .iter()
+                .find(|check| check.key.name == name)
+                .map(|check| check.successful)
+        })
+    }
+
     pub fn observation_cursor(&self) -> Option<&str> {
         self.observation_cursor.as_deref()
     }

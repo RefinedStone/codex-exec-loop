@@ -96,6 +96,7 @@ pub enum PrValidationAdminSeverity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PrValidationAdminCheckStatus {
+    Unobserved,
     Missing,
     Pending,
     Succeeded,
@@ -231,6 +232,12 @@ pub trait PrValidationQueryPort: Send + Sync {
     ) -> Result<Option<PrValidationOperatorSummary>>;
 
     fn load_board(&self, request: PrValidationBoardRequest) -> Result<PrValidationBoardSnapshot>;
+
+    /// Monotonic revision scoped to validation records. Runtime events from unrelated workers
+    /// must not invalidate a validation-board pagination cursor.
+    fn load_board_revision(&self) -> Result<i64> {
+        Ok(0)
+    }
 
     fn load_detail(
         &self,

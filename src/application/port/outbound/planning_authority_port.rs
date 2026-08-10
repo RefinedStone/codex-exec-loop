@@ -818,6 +818,12 @@ pub trait PlanningAuthorityPort: ParallelModeRuntimeEventLogPort + Send + Sync {
         })
     }
 
+    /// Read the newest authority event that can change the validation board. This deliberately
+    /// excludes unrelated slot, session, and distributor activity.
+    fn load_runtime_pr_validation_revision(&self, _workspace_dir: &str) -> Result<i64> {
+        Ok(0)
+    }
+
     fn load_runtime_pr_validation_record_snapshot(
         &self,
         _workspace_dir: &str,
