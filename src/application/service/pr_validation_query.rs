@@ -279,6 +279,7 @@ fn map_admin_record(
         verified: phase == PrValidationAdminPhase::Verified,
         provider_blocked,
         stale: stale_seconds >= STALE_AFTER_SECONDS as u64
+            && !snapshot.operator_paused
             && !matches!(phase, PrValidationAdminPhase::Verified),
         stale_seconds,
         target_sha: record.target_shas().source_sha().as_str().to_string(),
@@ -371,6 +372,10 @@ fn admin_commands(
         PrValidationAdminPhase::Blocked | PrValidationAdminPhase::Failed
     );
     let verified = phase == PrValidationAdminPhase::Verified;
+    let remediation_active = matches!(
+        phase,
+        PrValidationAdminPhase::RemediationQueued | PrValidationAdminPhase::RemediationRunning
+    );
     let rate_limit_active = snapshot.rate_limit_remaining == Some(0)
         && snapshot
             .rate_limit_reset_at
@@ -433,6 +438,8 @@ fn admin_commands(
                 Some("일시정지를 먼저 해제하세요.")
             } else if terminal_failure || verified {
                 Some("종료 상태에서는 새 validation record가 필요합니다.")
+            } else if remediation_active {
+                Some("이미 remediation task가 진행 중입니다.")
             } else if !record.has_unremediated_findings() {
                 Some("상관관계가 없는 actionable finding이 없습니다.")
             } else {
@@ -910,5 +917,58 @@ mod tests {
                 "terminal validation must not expose `{action}` as executable"
             );
         }
+    }
+
+    #[test]
+    fn paused_record_is_not_marked_stale_when_the_board_kpi_excludes_it() {
+        let record = PrValidationRecord::register(
+            PrValidationRecordKey::new("paused-stale-record").unwrap(),
+            PrValidationTarget::new("acme/widgets", 77).unwrap(),
+            PrValidationTargetShaSnapshot::new(
+                PrValidationCommitSha::new("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
+                PrValidationCommitSha::new("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap(),
+            ),
+        )
+        .transition(PrValidationEvent::BeginPreMergeObservation)
+        .unwrap();
+        let now = DateTime::parse_from_rfc3339("2026-08-10T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let snapshot = PrValidationAuthorityRecordSnapshot {
+            record,
+            updated_at: "2026-08-10T09:00:00Z".to_string(),
+            last_polled_at: Some("2026-08-10T09:00:00Z".to_string()),
+            next_poll_at: None,
+            poll_attempt: 0,
+            consecutive_error_count: 0,
+            last_error_class: None,
+            rate_limit_remaining: None,
+            rate_limit_reset_at: None,
+            operator_paused: true,
+            operator_acknowledged_at: None,
+            last_operator_command_id: Some("pause-command".to_string()),
+        };
+
+        let paused = map_admin_record(
+            &snapshot,
+            &PlanningAuthorityRuntimeProjectionSnapshot::default(),
+            now,
+            PrValidationSchedulerMode::Remediate,
+        )
+        .unwrap();
+        assert!(paused.stale_seconds >= STALE_AFTER_SECONDS as u64);
+        assert!(!paused.stale);
+
+        let active = map_admin_record(
+            &PrValidationAuthorityRecordSnapshot {
+                operator_paused: false,
+                ..snapshot
+            },
+            &PlanningAuthorityRuntimeProjectionSnapshot::default(),
+            now,
+            PrValidationSchedulerMode::Remediate,
+        )
+        .unwrap();
+        assert!(active.stale);
     }
 }

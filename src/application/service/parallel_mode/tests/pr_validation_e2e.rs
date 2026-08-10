@@ -16,6 +16,10 @@ pub mod tests {
     use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
+    use crate::application::port::inbound::pr_validation_command_port::{
+        PrValidationAdminCommandAction, PrValidationAdminCommandRequest,
+        PrValidationAdminCommandState, PrValidationCommandPort,
+    };
     use crate::application::port::inbound::pr_validation_query_port::{
         PrValidationQueryPort, PrValidationStatusRequest,
     };
@@ -28,8 +32,8 @@ pub mod tests {
         GithubValidationSourceObservation, GithubValidationSourceStatus,
     };
     use crate::application::port::outbound::planning_authority_port::{
-        PrValidationPollLeaseClaimRequest, PrValidationPollLeaseRenewalRequest,
-        PrValidationPollSettlement,
+        PlanningAuthorityPort, PrValidationPollLeaseClaimRequest,
+        PrValidationPollLeaseRenewalRequest, PrValidationPollSettlement,
     };
     use crate::application::port::outbound::planning_task_repository_port::{
         PlanningDirectionAuthorityCommit, PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
@@ -45,17 +49,20 @@ pub mod tests {
     use crate::application::service::planning::{
         PlanningRuntimeProjection, PlanningServices, PlanningTaskCreateInput,
     };
+    use crate::application::service::pr_validation_command::PrValidationCommandService;
     use crate::application::service::pr_validation_query::PrValidationQueryService;
     use crate::domain::github_review::{GithubCommitSha, GithubOpaqueId, GithubPullRequestTarget};
     use crate::domain::parallel_mode::{
-        PrValidationCommitSha, PrValidationPhase, PrValidationPollErrorClass, PrValidationRecord,
-        PrValidationRecordKey, PrValidationSchedulerMode, PrValidationTarget,
+        PrValidationCommitSha, PrValidationEvent, PrValidationFinding, PrValidationFindingKey,
+        PrValidationFindingSource, PrValidationPhase, PrValidationPollErrorClass,
+        PrValidationRecord, PrValidationRecordKey, PrValidationSchedulerMode, PrValidationTarget,
         PrValidationTargetShaSnapshot,
     };
     use crate::domain::planning::{
         DirectionCatalogDocument, DirectionDefinition, DirectionState, PLANNING_FORMAT_VERSION,
         PriorityQueueProjection, QueueIdleConfig, TaskAuthorityDocument, TaskStatus,
     };
+    use rusqlite::Connection;
 
     const HEAD_A: &str = "1111111111111111111111111111111111111111";
     const HEAD_B: &str = "2222222222222222222222222222222222222222";
@@ -948,6 +955,102 @@ pub mod tests {
         );
         assert!(
             PrValidationSchedulerConfig::from_repository(&service, &repo.workspace_dir()).is_err()
+        );
+    }
+
+    #[test]
+    fn admin_queue_remediation_admits_the_existing_finding_without_provider_polling() {
+        let repo = temp_repo("admin-pr-validation-remediation");
+        let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let planning = planning(authority.clone());
+        bootstrap(authority.as_ref(), &repo.workspace_dir());
+        let observing = record()
+            .transition(PrValidationEvent::BeginPreMergeObservation)
+            .unwrap();
+        let finding = PrValidationFinding::new(
+            PrValidationFindingKey::new(
+                PrValidationFindingSource::new("required_check").unwrap(),
+                "Fast Gate",
+            )
+            .unwrap(),
+            observing.target_shas().source_sha().clone(),
+            "Fast Gate failed after integration",
+        )
+        .unwrap();
+        let observed = observing
+            .transition(PrValidationEvent::FindingObserved(finding.clone()))
+            .unwrap();
+        assert!(
+            authority
+                .compare_and_swap_runtime_pr_validation_record(
+                    &repo.workspace_dir(),
+                    observed.key(),
+                    None,
+                    Some(&observed),
+                )
+                .unwrap()
+        );
+
+        let authority_location = authority
+            .resolve_authority_location(&repo.workspace_dir())
+            .unwrap();
+        Connection::open(&authority_location.authority_store_path)
+            .unwrap()
+            .execute(
+                "UPDATE runtime_pr_validation_records
+                 SET rate_limit_remaining = 0, rate_limit_reset_at = ?2,
+                     next_poll_at = ?2
+                 WHERE record_key = ?1",
+                (
+                    observed.key().as_str(),
+                    (Utc::now() + TimeDelta::hours(2)).to_rfc3339(),
+                ),
+            )
+            .unwrap();
+
+        let command = PrValidationAdminCommandRequest::new(
+            "admin-queue-remediation-rate-limited",
+            observed.key().as_str(),
+            PrValidationAdminCommandAction::QueueRemediation,
+            observed.observation_revision(),
+        )
+        .unwrap();
+        let command_service = PrValidationCommandService::new(
+            repo.workspace_dir(),
+            authority.clone(),
+            planning.queue.clone(),
+            PrValidationSchedulerMode::Remediate,
+        );
+        let applied = command_service.execute(command.clone()).unwrap();
+        assert_eq!(applied.state, PrValidationAdminCommandState::Applied);
+        assert_eq!(applied.rejection, None);
+
+        let queued_record = authority
+            .load_runtime_pr_validation_record(&repo.workspace_dir(), observed.key())
+            .unwrap()
+            .expect("Queue remediation must retain its validation record");
+        assert_eq!(queued_record.phase(), PrValidationPhase::RemediationQueued);
+        let correlation = queued_record
+            .remediation_for(finding.key())
+            .expect("Queue remediation must correlate the selected finding");
+        let queue = planning
+            .queue
+            .load_authority_snapshot(&repo.workspace_dir())
+            .unwrap();
+        assert_eq!(queue.tasks.len(), 1);
+        assert_eq!(queue.tasks[0].id, correlation.remediation_key().as_str());
+
+        let replay = command_service.execute(command).unwrap();
+        assert!(replay.duplicate);
+        assert_eq!(
+            planning
+                .queue
+                .load_authority_snapshot(&repo.workspace_dir())
+                .unwrap()
+                .tasks
+                .len(),
+            1,
+            "command replay must converge on the same ordinary Planning task"
         );
     }
 

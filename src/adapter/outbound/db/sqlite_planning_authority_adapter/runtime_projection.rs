@@ -1661,6 +1661,7 @@ impl SqlitePlanningAuthorityAdapter {
                 board_revision: read_runtime_pr_validation_revision(&transaction)?,
                 message: "command id is already bound to a different request".to_string(),
                 applied_at: request.requested_at.to_rfc3339(),
+                remediation_finding_key: None,
             };
             transaction
                 .commit()
@@ -1690,11 +1691,14 @@ impl SqlitePlanningAuthorityAdapter {
             .optional()
             .context("failed to load PR validation Admin command target")?;
 
-        let (observed_revision, rejection, message) = match record_row.as_ref() {
+        let (observed_revision, rejection, message, remediation_finding_key) = match record_row
+            .as_ref()
+        {
             None => (
                 None,
                 Some(PrValidationAuthorityAdminCommandRejection::NotFound),
                 "validation record was not found".to_string(),
+                None,
             ),
             Some((content, phase, paused, acknowledged_at, rate_remaining, rate_reset_at)) => {
                 let record = serde_json::from_str::<PrValidationRecord>(content)
@@ -1730,7 +1734,12 @@ impl SqlitePlanningAuthorityAdapter {
                             Some(PrValidationAuthorityAdminCommandRejection::ObserveModeAdmission)
                         }
                         PrValidationAuthorityAdminAction::QueueRemediation
-                            if *paused || terminal =>
+                            if *paused
+                                || terminal
+                                || matches!(
+                                    phase.as_str(),
+                                    "RemediationQueued" | "RemediationRunning"
+                                ) =>
                         {
                             Some(PrValidationAuthorityAdminCommandRejection::InvalidState)
                         }
@@ -1784,7 +1793,7 @@ impl SqlitePlanningAuthorityAdapter {
                         }
                         PrValidationAuthorityAdminAction::Resume => "validation polling resumed",
                         PrValidationAuthorityAdminAction::QueueRemediation => {
-                            "remediation admission scheduled through the normal Planning Queue"
+                            "remediation admission accepted for the normal Planning Queue"
                         }
                         PrValidationAuthorityAdminAction::Acknowledge => {
                             "validation finding acknowledged"
@@ -1792,7 +1801,21 @@ impl SqlitePlanningAuthorityAdapter {
                     },
                 }
                 .to_string();
-                (Some(observed_revision), rejection, message)
+                let remediation_finding_key = (rejection.is_none()
+                    && request.action == PrValidationAuthorityAdminAction::QueueRemediation)
+                    .then(|| {
+                        record
+                            .first_unremediated_finding()
+                            .expect("validated Queue remediation has an actionable finding")
+                            .key()
+                            .clone()
+                    });
+                (
+                    Some(observed_revision),
+                    rejection,
+                    message,
+                    remediation_finding_key,
+                )
             }
         };
 
@@ -1800,12 +1823,17 @@ impl SqlitePlanningAuthorityAdapter {
         if applied {
             let now = request.requested_at.to_rfc3339();
             let changed = match request.action {
-                PrValidationAuthorityAdminAction::RetryNow
-                | PrValidationAuthorityAdminAction::QueueRemediation => transaction.execute(
+                PrValidationAuthorityAdminAction::RetryNow => transaction.execute(
                     "UPDATE runtime_pr_validation_records
                      SET next_poll_at = ?2, last_operator_command_id = ?3
                      WHERE record_key = ?1",
                     params![request.record_key.as_str(), now, request.command_id],
+                ),
+                PrValidationAuthorityAdminAction::QueueRemediation => transaction.execute(
+                    "UPDATE runtime_pr_validation_records
+                     SET last_operator_command_id = ?2
+                     WHERE record_key = ?1",
+                    params![request.record_key.as_str(), request.command_id],
                 ),
                 PrValidationAuthorityAdminAction::Pause => transaction.execute(
                     "UPDATE runtime_pr_validation_records
@@ -1870,6 +1898,7 @@ impl SqlitePlanningAuthorityAdapter {
             board_revision,
             message,
             applied_at: request.requested_at.to_rfc3339(),
+            remediation_finding_key,
         };
         let expected_revision = i64::try_from(request.expected_observation_revision)
             .context("PR validation Admin expected revision exceeded SQLite range")?;

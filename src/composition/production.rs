@@ -235,6 +235,7 @@ pub(crate) fn build_admin_application_with_debug_harness(
         Arc::new(PrValidationCommandService::new(
             workspace_dir.clone(),
             ports.planning_authority_port.clone(),
+            planning.queue.clone(),
             scheduler_mode,
         ));
     let admin_debug_service = Arc::new(AdminDebugHarnessService::new(if debug_harness_enabled {

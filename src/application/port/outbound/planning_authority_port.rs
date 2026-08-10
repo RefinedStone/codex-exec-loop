@@ -20,7 +20,7 @@ use crate::domain::parallel_mode::ParallelModeRuntimeEventsSnapshot;
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeDispatchCommandSnapshot,
     ParallelModeDistributorQueueItem, ParallelModePoolResetReport, ParallelModeQueueItemState,
-    ParallelModeSlotLeaseSnapshot, ParallelModeTaskDispatchBlockSnapshot,
+    ParallelModeSlotLeaseSnapshot, ParallelModeTaskDispatchBlockSnapshot, PrValidationFindingKey,
     PrValidationPollErrorClass, PrValidationRecord, PrValidationRecordKey,
 };
 #[cfg(test)]
@@ -428,6 +428,8 @@ pub struct PrValidationAuthorityAdminCommandOutcome {
     pub board_revision: i64,
     pub message: String,
     pub applied_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remediation_finding_key: Option<PrValidationFindingKey>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
