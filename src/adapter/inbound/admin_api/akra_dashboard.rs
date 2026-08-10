@@ -4,7 +4,7 @@ use crate::application::port::inbound::parallel_agent_profile_port::{
 use crate::application::port::inbound::parallel_mode_admin_port::ParallelModeAdminPort;
 use crate::application::port::inbound::planning_admin_port::PlanningAdminPort;
 use crate::application::port::inbound::pr_validation_query_port::{
-    PrValidationAdminPhase, PrValidationAdminRecord, PrValidationBoardRequest,
+    PrValidationAdminPhase, PrValidationAdminRecordSummary, PrValidationBoardRequest,
     PrValidationBoardSnapshot, PrValidationQueryPort,
 };
 use crate::domain::parallel_mode::{
@@ -966,18 +966,13 @@ pub(super) fn map_game_validation_scene(
         record_key: Some(record.record_key.clone()),
         phase: Some(phase.to_string()),
         packet_kind: Some(packet_kind.to_string()),
-        worker_lease_active: record
-            .correlations
-            .iter()
-            .any(|correlation| correlation.lease_active),
+        worker_lease_active: record.worker_lease_active,
     }
 }
 
-fn validation_attention_rank(record: &PrValidationAdminRecord) -> u8 {
-    match record.schedule.error_class.as_deref() {
-        Some("identity_failed" | "integrity_failed") => 0,
-        Some("authentication_blocked" | "retryable_provider") => 1,
-        _ if record.provider_blocked || record.schedule.rate_limit_remaining == Some(0) => 1,
+fn validation_attention_rank(record: &PrValidationAdminRecordSummary) -> u8 {
+    match () {
+        _ if record.provider_blocked => 1,
         _ if record.finding_count > record.remediation_count
             || matches!(
                 record.phase,

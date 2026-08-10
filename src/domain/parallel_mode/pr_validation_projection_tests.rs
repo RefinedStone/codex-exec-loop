@@ -284,6 +284,7 @@ fn observed_workflow_additive_fields_round_trip_and_legacy_json_defaults_safely(
         legacy_workflow.selection_basis(),
         PrValidationWorkflowSelectionBasis::LegacyUnknown
     );
+    assert!(legacy_workflow.is_selected());
 
     let workflow = PrValidationObservedWorkflow::selected(
         "Native PR Checks",
@@ -295,9 +296,26 @@ fn observed_workflow_additive_fields_round_trip_and_legacy_json_defaults_safely(
         PrValidationWorkflowSelectionBasis::LatestAttempt,
     )
     .unwrap();
-    let projection =
-        PrValidationObservationProjection::new(Vec::new(), Vec::new(), vec![workflow], Vec::new())
-            .unwrap();
+    let older_workflow = PrValidationObservedWorkflow::selected(
+        "Native PR Checks",
+        PrValidationObservedRunStatus::Succeeded,
+        7,
+        Some("2026-08-09T00:00:00Z".to_string()),
+        Some("2026-08-09T00:10:00Z".to_string()),
+        Some("2026-08-09T00:11:00Z".to_string()),
+        PrValidationWorkflowSelectionBasis::NewestRun,
+    )
+    .unwrap()
+    .with_selection_state(false);
+    let projection = PrValidationObservationProjection::new(
+        Vec::new(),
+        Vec::new(),
+        vec![workflow.clone()],
+        Vec::new(),
+    )
+    .unwrap()
+    .with_workflow_history(vec![workflow, older_workflow])
+    .unwrap();
     let projected = registered()
         .transition(PrValidationEvent::BeginPreMergeObservation)
         .unwrap()
@@ -307,6 +325,23 @@ fn observed_workflow_additive_fields_round_trip_and_legacy_json_defaults_safely(
     let serialized = serde_json::to_string(&projected).unwrap();
     assert!(serialized.contains("\"created_at\":\"2026-08-10T00:00:00Z\""));
     assert!(serialized.contains("\"selection_basis\":\"latest_attempt\""));
+    assert!(serialized.contains("\"selected\":false"));
     let replayed: PrValidationRecord = serde_json::from_str(&serialized).unwrap();
     assert_eq!(replayed, projected);
+    assert_eq!(
+        replayed.observation_projection().workflow_history().len(),
+        2
+    );
+
+    let mut legacy_projection = serde_json::to_value(projected.observation_projection()).unwrap();
+    legacy_projection
+        .as_object_mut()
+        .unwrap()
+        .remove("workflow_history");
+    let legacy_projection: PrValidationObservationProjection =
+        serde_json::from_value(legacy_projection).unwrap();
+    assert_eq!(
+        legacy_projection.workflow_history(),
+        legacy_projection.workflows()
+    );
 }

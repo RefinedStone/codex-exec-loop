@@ -1113,6 +1113,12 @@ fn newer_workflow_run_replaces_an_older_high_attempt_and_prevents_stale_settleme
         workflow.selection_basis(),
         PrValidationWorkflowSelectionBasis::NewestRun
     );
+    let history = projected.observation_projection().workflow_history();
+    assert_eq!(history.len(), 2);
+    assert!(history[0].is_selected());
+    assert_eq!(history[0].run_attempt(), 1);
+    assert!(!history[1].is_selected());
+    assert_eq!(history[1].run_attempt(), 3);
 
     assert_eq!(
         service

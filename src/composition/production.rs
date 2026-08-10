@@ -9,6 +9,7 @@ use crate::adapter::outbound::db::{
 };
 use crate::adapter::outbound::filesystem::{
     FilesystemParallelAgentProfileRepositoryAdapter, FilesystemPlanningWorkspaceAdapter,
+    FilesystemPrValidationRolloutEvidenceAdapter,
 };
 use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
 use crate::adapter::outbound::github::{
@@ -28,6 +29,7 @@ use crate::application::port::inbound::planning_task_tool_port::PlanningTaskTool
 use crate::application::port::inbound::planning_workspace_maintenance_port::PlanningWorkspaceMaintenancePort;
 use crate::application::port::inbound::pr_validation_command_port::PrValidationCommandPort;
 use crate::application::port::inbound::pr_validation_query_port::PrValidationQueryPort;
+use crate::application::port::inbound::pr_validation_rollout_evidence_query_port::PrValidationRolloutEvidenceQueryPort;
 use crate::application::port::inbound::review_center_query_port::ReviewCenterQueryPort;
 use crate::application::port::outbound::app_server_prompt_log_port::{
     AppServerPromptLogMaintenanceMode, AppServerPromptLogMaintenancePort, AppServerPromptLogPort,
@@ -62,6 +64,7 @@ use crate::application::service::planning::{
 };
 use crate::application::service::pr_validation_command::PrValidationCommandService;
 use crate::application::service::pr_validation_query::PrValidationQueryService;
+use crate::application::service::pr_validation_rollout_evidence_query::PrValidationRolloutEvidenceQueryService;
 use crate::application::service::review_center::ReviewCenterReadService;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
@@ -78,6 +81,8 @@ pub(crate) struct ProductionAdminApplication {
     pub(crate) app_server_prompt_log_query_port: Arc<dyn AppServerPromptLogQueryPort>,
     pub(crate) parallel_agent_profile_port: Arc<dyn ParallelAgentProfilePort>,
     pub(crate) pr_validation_query_port: Arc<dyn PrValidationQueryPort>,
+    pub(crate) pr_validation_rollout_evidence_query_port:
+        Arc<dyn PrValidationRolloutEvidenceQueryPort>,
     pub(crate) pr_validation_command_port: Arc<dyn PrValidationCommandPort>,
     #[allow(dead_code)]
     pub(crate) review_center_query_port: Arc<dyn ReviewCenterQueryPort>,
@@ -219,6 +224,16 @@ pub(crate) fn build_admin_application_with_debug_harness(
         PrValidationSchedulerConfig::from_repository(&parallel_mode_service, &workspace_dir)
             .map(|config| config.mode)
             .unwrap_or_default();
+    let expected_repository = GithubAutomationAdapter::new()
+        .repository_identity(&workspace_dir)
+        .ok();
+    let pr_validation_rollout_evidence_query_port: Arc<dyn PrValidationRolloutEvidenceQueryPort> =
+        Arc::new(PrValidationRolloutEvidenceQueryService::new(
+            workspace_dir.clone(),
+            expected_repository,
+            "prerelease",
+            Arc::new(FilesystemPrValidationRolloutEvidenceAdapter::new()),
+        ));
     let parallel_mode_control_plane = Arc::new(parallel_mode_control_plane_from_service(
         &workspace_dir,
         planning.clone(),
@@ -229,7 +244,8 @@ pub(crate) fn build_admin_application_with_debug_harness(
         Arc::new(ParallelModeAdminService::new(parallel_mode_control_plane));
     let production_pr_validation_query_port: Arc<dyn PrValidationQueryPort> = Arc::new(
         PrValidationQueryService::new(workspace_dir.clone(), ports.planning_authority_port.clone())
-            .with_scheduler_mode(scheduler_mode),
+            .with_scheduler_mode(scheduler_mode)
+            .with_rollout_evidence(pr_validation_rollout_evidence_query_port.clone()),
     );
     let production_pr_validation_command_port: Arc<dyn PrValidationCommandPort> =
         Arc::new(PrValidationCommandService::new(
@@ -268,6 +284,7 @@ pub(crate) fn build_admin_application_with_debug_harness(
         app_server_prompt_log_query_port,
         parallel_agent_profile_port,
         pr_validation_query_port,
+        pr_validation_rollout_evidence_query_port,
         pr_validation_command_port,
         review_center_query_port: Arc::new(review_center_read_service),
     }

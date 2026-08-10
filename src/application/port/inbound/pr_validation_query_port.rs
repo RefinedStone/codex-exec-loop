@@ -1,6 +1,8 @@
 use anyhow::Result;
 use serde::Serialize;
 
+use super::pr_validation_rollout_evidence_query_port::PrValidationRolloutEvidenceSummary;
+
 use crate::domain::parallel_mode::{PrValidationOperatorSummary, PrValidationSchedulerMode};
 
 pub const PR_VALIDATION_BOARD_DEFAULT_LIMIT: usize = 20;
@@ -135,8 +137,11 @@ pub struct PrValidationAdminWorkflow {
     pub name: String,
     pub status: String,
     pub run_attempt: u64,
+    pub created_at: Option<String>,
     pub started_at: Option<String>,
     pub updated_at: Option<String>,
+    pub selection_basis: String,
+    pub selected: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -249,6 +254,72 @@ impl PrValidationAdminRecord {
             .max()
             .unwrap_or(0)
     }
+
+    pub fn compact_summary(&self) -> PrValidationAdminRecordSummary {
+        PrValidationAdminRecordSummary {
+            record_key: self.record_key.clone(),
+            akra_id: self.akra_id.clone(),
+            repository: self.repository.clone(),
+            pull_request_number: self.pull_request_number,
+            phase: self.phase,
+            phase_label: self.phase_label.clone(),
+            severity: self.severity,
+            integrated: self.integrated,
+            verified: self.verified,
+            provider_blocked: self.provider_blocked,
+            stale: self.stale,
+            stale_seconds: self.stale_seconds,
+            target_short_sha: self.target_short_sha.clone(),
+            evidence_short_sha: self.evidence_short_sha.clone(),
+            required_checks_succeeded: self.required_checks_succeeded,
+            required_checks_total: self.required_checks_total,
+            latest_required_attempt: self.latest_required_attempt(),
+            selected_workflows: self
+                .workflows
+                .iter()
+                .filter(|workflow| workflow.selected)
+                .cloned()
+                .collect(),
+            finding_count: self.finding_count,
+            remediation_count: self.remediation_count,
+            correlation_count: self.correlations.len(),
+            worker_lease_active: self
+                .correlations
+                .iter()
+                .any(|correlation| correlation.lease_active),
+            paused: self.paused,
+            observation_revision: self.observation_revision,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrValidationAdminRecordSummary {
+    pub record_key: String,
+    pub akra_id: String,
+    pub repository: String,
+    pub pull_request_number: u64,
+    pub phase: PrValidationAdminPhase,
+    pub phase_label: String,
+    pub severity: PrValidationAdminSeverity,
+    pub integrated: bool,
+    pub verified: bool,
+    pub provider_blocked: bool,
+    pub stale: bool,
+    pub stale_seconds: u64,
+    pub target_short_sha: String,
+    pub evidence_short_sha: Option<String>,
+    pub required_checks_succeeded: usize,
+    pub required_checks_total: usize,
+    pub latest_required_attempt: u64,
+    pub selected_workflows: Vec<PrValidationAdminWorkflow>,
+    pub finding_count: usize,
+    pub remediation_count: usize,
+    pub correlation_count: usize,
+    pub worker_lease_active: bool,
+    pub paused: bool,
+    pub observation_revision: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -331,14 +402,15 @@ pub struct PrValidationBoardSummary {
     pub stale: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrValidationBoardSnapshot {
     pub revision: i64,
     pub scheduler_mode: String,
     pub rollout: PrValidationRolloutSnapshot,
+    pub rollout_evidence: PrValidationRolloutEvidenceSummary,
     pub summary: PrValidationBoardSummary,
-    pub records: Vec<PrValidationAdminRecord>,
+    pub records: Vec<PrValidationAdminRecordSummary>,
     pub next_cursor: Option<String>,
     pub cursor_reset_required: bool,
     pub generated_at: String,

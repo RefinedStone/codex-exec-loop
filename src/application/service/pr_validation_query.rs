@@ -15,6 +15,7 @@ use crate::application::port::inbound::pr_validation_query_port::{
     PrValidationDetailRequest, PrValidationQueryPort, PrValidationRolloutSnapshot,
     PrValidationStatusRequest,
 };
+use crate::application::port::inbound::pr_validation_rollout_evidence_query_port::PrValidationRolloutEvidenceQueryPort;
 use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityPort, PlanningAuthorityRuntimeProjectionSnapshot,
     PrValidationAuthorityPagePosition, PrValidationAuthorityPageRequest,
@@ -25,6 +26,7 @@ use crate::domain::parallel_mode::{
     PrValidationObservedProviderLifecycle, PrValidationObservedProviderStatus,
     PrValidationObservedRunStatus, PrValidationPhase, PrValidationPollErrorClass,
     PrValidationRecord, PrValidationRecordKey, PrValidationSchedulerMode,
+    PrValidationWorkflowSelectionBasis,
 };
 
 const BOARD_CURSOR_VERSION: u8 = 1;
@@ -36,6 +38,7 @@ pub struct PrValidationQueryService {
     workspace_dir: String,
     planning_authority: Arc<dyn PlanningAuthorityPort>,
     scheduler_mode: PrValidationSchedulerMode,
+    rollout_evidence: Option<Arc<dyn PrValidationRolloutEvidenceQueryPort>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,11 +60,20 @@ impl PrValidationQueryService {
             workspace_dir: workspace_dir.into(),
             planning_authority,
             scheduler_mode: PrValidationSchedulerMode::Observe,
+            rollout_evidence: None,
         }
     }
 
     pub fn with_scheduler_mode(mut self, scheduler_mode: PrValidationSchedulerMode) -> Self {
         self.scheduler_mode = scheduler_mode;
+        self
+    }
+
+    pub fn with_rollout_evidence(
+        mut self,
+        rollout_evidence: Arc<dyn PrValidationRolloutEvidenceQueryPort>,
+    ) -> Self {
+        self.rollout_evidence = Some(rollout_evidence);
         self
     }
 
@@ -174,7 +186,10 @@ impl PrValidationQueryPort for PrValidationQueryService {
         let records = authority_page
             .records
             .iter()
-            .map(|snapshot| map_admin_record(snapshot, &runtime, generated_at, self.scheduler_mode))
+            .map(|snapshot| {
+                map_admin_record(snapshot, &runtime, generated_at, self.scheduler_mode)
+                    .map(|record| record.compact_summary())
+            })
             .collect::<Result<Vec<_>>>()?;
         let next_cursor = authority_page
             .next_position
@@ -184,6 +199,11 @@ impl PrValidationQueryPort for PrValidationQueryService {
             revision: authority_page.revision,
             scheduler_mode: self.scheduler_mode.label().to_string(),
             rollout: PrValidationRolloutSnapshot::from_scheduler_mode(self.scheduler_mode),
+            rollout_evidence: self
+                .rollout_evidence
+                .as_ref()
+                .map(|query| query.load_latest_summary())
+                .unwrap_or_default(),
             summary: PrValidationBoardSummary {
                 active: authority_page.summary.active,
                 integrated: authority_page.summary.integrated,
@@ -307,14 +327,18 @@ fn map_admin_record(
         required_checks_total,
         workflows: record
             .observation_projection()
-            .workflows()
+            .workflow_history()
             .iter()
             .map(|workflow| PrValidationAdminWorkflow {
                 name: workflow.name().to_string(),
                 status: observed_run_status_label(workflow.status()).to_string(),
                 run_attempt: workflow.run_attempt(),
+                created_at: workflow.created_at().map(str::to_string),
                 started_at: workflow.started_at().map(str::to_string),
                 updated_at: workflow.updated_at().map(str::to_string),
+                selection_basis: workflow_selection_basis_label(workflow.selection_basis())
+                    .to_string(),
+                selected: workflow.is_selected(),
             })
             .collect(),
         providers: record
@@ -360,6 +384,15 @@ fn map_admin_record(
         observation_revision: operator.observation_revision,
         post_merge_checkpoint_observed: operator.post_merge_checkpoint_observed,
     })
+}
+
+fn workflow_selection_basis_label(basis: PrValidationWorkflowSelectionBasis) -> &'static str {
+    match basis {
+        PrValidationWorkflowSelectionBasis::LegacyUnknown => "legacy_unknown",
+        PrValidationWorkflowSelectionBasis::NewestRun => "newest_run",
+        PrValidationWorkflowSelectionBasis::LatestAttempt => "latest_attempt",
+        PrValidationWorkflowSelectionBasis::DeterministicTieBreak => "deterministic_tie_break",
+    }
 }
 
 fn admin_commands(

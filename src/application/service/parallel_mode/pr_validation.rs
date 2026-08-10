@@ -8,7 +8,9 @@ use sha2::{Digest, Sha256};
 
 use super::ParallelModeService;
 use super::pr_validation_finding_policy::{ActionableFindingDecision, ActionableFindingPolicy};
-use super::pr_validation_workflow_selection::select_latest_workflows_by_name;
+use super::pr_validation_workflow_selection::{
+    select_bounded_workflow_history, select_latest_workflows_by_name,
+};
 use crate::application::port::outbound::github_pr_validation_port::{
     GithubExpectedCheckStatus, GithubPostMergeValidationDecision, GithubPrMergeState,
     GithubPrValidationError, GithubPrValidationErrorClass, GithubPrValidationObservationRequest,
@@ -1172,6 +1174,22 @@ fn observation_projection(
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let workflow_history = select_bounded_workflow_history(&snapshot.workflow_runs)?
+        .into_iter()
+        .map(|selection| {
+            let workflow = selection.workflow;
+            PrValidationObservedWorkflow::selected(
+                workflow.name.clone(),
+                observed_run_status(&workflow.status),
+                workflow.run_attempt,
+                workflow.created_at.clone(),
+                workflow.run_started_at.clone(),
+                workflow.updated_at.clone(),
+                selection.basis,
+            )
+            .map(|workflow| workflow.with_selection_state(selection.selected))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let providers = snapshot
         .sources
         .iter()
@@ -1201,7 +1219,8 @@ fn observation_projection(
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
-    PrValidationObservationProjection::new(required_checks, optional_checks, workflows, providers)
+    PrValidationObservationProjection::new(required_checks, optional_checks, workflows, providers)?
+        .with_workflow_history(workflow_history)
 }
 
 /// Active workflow containers delay provider catch-up only when they replace the container that

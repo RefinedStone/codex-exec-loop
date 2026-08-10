@@ -226,11 +226,18 @@ impl PrValidationQueryPort for AdminDebugHarnessService {
         &self,
         request: PrValidationDetailRequest,
     ) -> Result<Option<PrValidationAdminRecord>> {
-        let board = self.load_board(PrValidationBoardRequest::default())?;
-        Ok(board
-            .records
-            .into_iter()
-            .find(|record| record.record_key == request.record_key))
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.advance_for_elapsed(&mut state, Instant::now());
+        let projection = self.project(&state);
+        let record = debug_validation_record(
+            &projection,
+            state.validation_paused,
+            state.validation_acknowledged_at.clone(),
+        );
+        Ok((record.record_key == request.record_key).then_some(record))
     }
 }
 
@@ -436,8 +443,9 @@ fn debug_validation_board(
         rollout: PrValidationRolloutSnapshot::from_scheduler_mode(
             PrValidationSchedulerMode::Remediate,
         ),
+        rollout_evidence: Default::default(),
         summary,
-        records: vec![record],
+        records: vec![record.compact_summary()],
         next_cursor: None,
         cursor_reset_required: false,
         generated_at: Utc::now().to_rfc3339(),
@@ -687,8 +695,16 @@ fn debug_validation_record(
             name: "Post-Merge Gate".to_string(),
             status: debug_check_status_label(required_status).to_string(),
             run_attempt: if stage_index >= 5 { 2 } else { 1 },
+            created_at: Some("2026-08-10T08:00:10+00:00".to_string()),
             started_at: Some("2026-08-10T08:00:20+00:00".to_string()),
             updated_at: Some("2026-08-10T08:01:20+00:00".to_string()),
+            selection_basis: if stage_index >= 5 {
+                "latest_attempt"
+            } else {
+                "newest_run"
+            }
+            .to_string(),
+            selected: true,
         }],
         providers: vec![PrValidationAdminProvider {
             key: "github:Actions".to_string(),

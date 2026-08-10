@@ -856,9 +856,7 @@
       ? record.phase
       : "complete";
     const verifiedState = record.verified ? "verified" : record.phase;
-    const latestRequiredAttempt = asArray(record.checks)
-      .filter((check) => Boolean(check?.required))
-      .reduce((latest, check) => Math.max(latest, Number(check?.latestAttempt) || 0), 0);
+    const latestRequiredAttempt = Number(record.latestRequiredAttempt) || 0;
 
     button.append(
       identity,
@@ -880,7 +878,7 @@
       createValidationCell(
         "Remediation",
         createValidationStage(remediationState, `${Number(record.remediationCount) || 0} correlated`),
-        `${asArray(record.correlations).length} worker link`
+        `${Number(record.correlationCount) || 0} worker link`
       ),
       createValidationCell(
         "Verified",

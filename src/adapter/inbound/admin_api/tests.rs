@@ -209,6 +209,91 @@ fn admin_test_router(workspace: &TempAdminWorkspace) -> Router {
     ))
 }
 
+fn write_rollout_evidence_fixture(workspace: &TempAdminWorkspace) {
+    let remote = std::process::Command::new("git")
+        .args([
+            "-C",
+            workspace.path.as_str(),
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/widgets.git",
+        ])
+        .output()
+        .expect("fixture remote command should run");
+    assert!(remote.status.success());
+    let generated_at = chrono::Utc::now();
+    let merge_sha = "0123456789abcdef0123456789abcdef01234567";
+    let evidence = json!({
+        "schemaVersion": 1,
+        "generatedAt": generated_at.to_rfc3339(),
+        "repository": "acme/widgets",
+        "baseBranch": "prerelease",
+        "decision": {
+            "status": "ready_for_remediate",
+            "recommendedSchedulerMode": "remediate",
+            "queueAdmissionEnabled": true,
+            "rulesetChange": "approval_required",
+            "reason": "fixture evidence passed"
+        },
+        "sample": {
+            "pullRequestCount": 1,
+            "earliestMergedAt": (generated_at - chrono::Duration::hours(24)).to_rfc3339(),
+            "latestMergedAt": generated_at.to_rfc3339(),
+            "windowHours": 24,
+            "rows": [{
+                "mergeSha": merge_sha,
+                "evidenceShaMatchesActionsTarget": true,
+                "preMerge": { "fastGate": { "source": "projected" } }
+            }]
+        },
+        "timings": {
+            "fastGate": { "sampleCount": 1, "p50Seconds": 88, "p95Seconds": 88, "label": "projected" },
+            "actualFastGate": { "sampleCount": 1, "p50Seconds": 70, "p95Seconds": 70, "label": "actual" },
+            "ciGate": { "sampleCount": 1, "p50Seconds": 500, "p95Seconds": 500, "label": "actual" },
+            "postMergeGate": { "sampleCount": 1, "p50Seconds": 510, "p95Seconds": 510, "label": "actual" }
+        },
+        "actualFastGateRuns": [{
+            "id": 99,
+            "headSha": merge_sha,
+            "conclusion": "success",
+            "seconds": 70,
+            "runUrl": "https://github.com/acme/widgets/actions/runs/99",
+            "jobUrl": "https://github.com/acme/widgets/actions/runs/99/job/1"
+        }],
+        "postMerge": { "sampleCount": 1, "failureCount": 0, "failureRatePercent": 0 },
+        "quota": {
+            "limit": 5000,
+            "remaining": 4900,
+            "used": 100,
+            "reset": (generated_at + chrono::Duration::hours(1)).timestamp(),
+            "collectorRequests": 3,
+            "usedPercent": 2
+        },
+        "criteria": {
+            "sampleWindow": { "status": "pass", "source": "github_live_sample", "note": "window passed" },
+            "evidenceShaMismatch": { "status": "pass", "source": "github_live_sample", "note": "SHA matched" }
+        },
+        "canaries": {
+            "productionSuccess": {
+                "status": "pass",
+                "pullRequestNumber": 42,
+                "mergeSha": merge_sha,
+                "runUrl": "https://github.com/acme/widgets/actions/runs/99"
+            },
+            "failure": { "status": "pass" }
+        }
+    });
+    let artifact_dir = std::path::Path::new(&workspace.path)
+        .join("docs/validation/artifacts/post-merge-validation-rollout-fixture");
+    fs::create_dir_all(&artifact_dir).expect("artifact directory should create");
+    fs::write(
+        artifact_dir.join("evidence.json"),
+        serde_json::to_vec_pretty(&evidence).expect("evidence should serialize"),
+    )
+    .expect("evidence fixture should write");
+}
+
 fn admin_debug_harness_test_router(workspace: &TempAdminWorkspace) -> Router {
     build_router(build_admin_state_with_debug_harness(
         workspace.path.clone(),
@@ -1949,6 +2034,77 @@ async fn admin_pr_validation_board_endpoint_is_available_when_empty() {
 }
 
 #[tokio::test]
+async fn admin_pr_validation_rollout_evidence_is_typed_bounded_and_redacted() {
+    let workspace = TempAdminWorkspace::new_git("pr-validation-rollout-evidence");
+    write_rollout_evidence_fixture(&workspace);
+    let router = admin_test_router(&workspace);
+
+    let response = router
+        .clone()
+        .oneshot(
+            admin_request_builder()
+                .method(Method::GET)
+                .uri("/api/admin/akra/pr-validation/evidence?limit=1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    assert_eq!(body["latest"]["summary"]["status"], "ready");
+    assert_eq!(
+        body["latest"]["summary"]["historicalFastGate"]["label"],
+        "projected"
+    );
+    assert_eq!(
+        body["latest"]["summary"]["actualFastGate"]["label"],
+        "actual"
+    );
+    assert_eq!(body["latest"]["summary"]["evidenceShortSha"], "01234567");
+    assert_eq!(body["history"].as_array().unwrap().len(), 1);
+    let serialized = body.to_string();
+    assert!(!serialized.contains("evidence.json"));
+    assert!(!serialized.contains("0123456789abcdef0123456789abcdef01234567"));
+
+    for uri in [
+        "/api/admin/akra/pr-validation/evidence?limit=21",
+        "/api/admin/akra/pr-validation/evidence?limit=1&cursor=malformed",
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                admin_request_builder()
+                    .method(Method::GET)
+                    .uri(uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    let dashboard_response = router
+        .oneshot(
+            admin_request_builder()
+                .method(Method::GET)
+                .uri("/api/admin/akra/dashboard")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(dashboard_response.status(), StatusCode::OK);
+    let dashboard = json_body(dashboard_response).await;
+    assert_eq!(
+        dashboard["validation"]["rolloutEvidence"]["status"],
+        "ready"
+    );
+    assert!(dashboard["validation"].get("history").is_none());
+}
+
+#[tokio::test]
 async fn admin_pr_validation_board_pages_phases_evidence_correlations_and_redaction() {
     let workspace = TempAdminWorkspace::new("pr-validation-board-records");
     let adapter = SqlitePlanningAuthorityAdapter::new();
@@ -2173,27 +2329,62 @@ async fn admin_pr_validation_board_pages_phases_evidence_correlations_and_redact
         .iter()
         .find(|record| record["recordKey"] == "validation-verifying")
         .unwrap();
-    assert_eq!(verifying_json["checks"][0]["latestAttempt"], 3);
+    assert_eq!(verifying_json["latestRequiredAttempt"], 3);
     assert_eq!(verifying_json["requiredChecksTotal"], 1);
-    assert_eq!(verifying_json["evidenceSha"].as_str().unwrap().len(), 40);
-    assert_eq!(verifying_json["integrationPullRequestNumber"], 302);
-    assert_eq!(verifying_json["baseBeforeSha"].as_str().unwrap().len(), 40);
-    assert_eq!(verifying_json["integratedAt"], "2026-08-10T07:58:00+00:00");
-    assert_eq!(
-        verifying_json["remoteVerifiedAt"],
-        "2026-08-10T07:58:05+00:00"
-    );
+    assert!(verifying_json["evidenceShortSha"].as_str().is_some());
+    for detail_only in [
+        "checks",
+        "evidenceSha",
+        "baseBeforeSha",
+        "schedule",
+        "correlations",
+    ] {
+        assert!(
+            verifying_json.get(detail_only).is_none(),
+            "board record leaked detail-only field {detail_only}"
+        );
+    }
     let provider_json = records
         .iter()
         .find(|record| record["recordKey"] == "validation-provider-blocked")
         .unwrap();
     assert_eq!(provider_json["providerBlocked"], true);
     assert_eq!(provider_json["severity"], "danger");
+
+    let verifying_detail_response = router
+        .clone()
+        .oneshot(
+            admin_request_builder()
+                .method(Method::GET)
+                .uri("/api/admin/akra/validations/validation-verifying")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(verifying_detail_response.status(), StatusCode::OK);
+    let verifying_detail = json_body(verifying_detail_response).await;
+    assert_eq!(verifying_detail["checks"][0]["latestAttempt"], 3);
     assert_eq!(
-        provider_json["schedule"]["errorClass"],
-        "authentication_blocked"
+        verifying_detail["workflows"][0]["selectionBasis"],
+        "legacy_unknown"
     );
-    assert_eq!(provider_json["schedule"]["pollAttempt"], 4);
+    assert_eq!(verifying_detail["workflows"][0]["selected"], true);
+    assert!(verifying_detail["workflows"][0]["createdAt"].is_null());
+    assert_eq!(verifying_detail["evidenceSha"].as_str().unwrap().len(), 40);
+    assert_eq!(verifying_detail["integrationPullRequestNumber"], 302);
+    assert_eq!(
+        verifying_detail["baseBeforeSha"].as_str().unwrap().len(),
+        40
+    );
+    assert_eq!(
+        verifying_detail["integratedAt"],
+        "2026-08-10T07:58:00+00:00"
+    );
+    assert_eq!(
+        verifying_detail["remoteVerifiedAt"],
+        "2026-08-10T07:58:05+00:00"
+    );
 
     let detail_response = router
         .clone()
@@ -2211,7 +2402,7 @@ async fn admin_pr_validation_board_pages_phases_evidence_correlations_and_redact
     assert_eq!(detail["correlations"][0]["slotId"], "slot-validation");
     assert_eq!(detail["correlations"][0]["taskState"], "leased");
 
-    let visible_json = format!("{first}\n{second}\n{detail}");
+    let visible_json = format!("{first}\n{second}\n{verifying_detail}\n{detail}");
     for secret in [
         "raw-body-secret",
         "raw-running-body-secret",

@@ -17,6 +17,13 @@ pub(super) struct SelectedGithubWorkflow<'a> {
     pub basis: PrValidationWorkflowSelectionBasis,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(super) struct HistoricalGithubWorkflow<'a> {
+    pub workflow: &'a GithubValidationWorkflowRun,
+    pub basis: PrValidationWorkflowSelectionBasis,
+    pub selected: bool,
+}
+
 /// Canonical workflow diagnostic reducer.
 ///
 /// Provider run identity owns attempts. The highest attempt is selected only inside one run;
@@ -65,6 +72,73 @@ pub(super) fn select_latest_workflows_by_name(
         .into_values()
         .map(|runs| select_newest_run(&runs))
         .collect()
+}
+
+pub(super) fn select_bounded_workflow_history(
+    workflows: &[GithubValidationWorkflowRun],
+) -> Result<Vec<HistoricalGithubWorkflow<'_>>, String> {
+    let selected = select_latest_workflows_by_name(workflows)?;
+    let mut history = workflows
+        .iter()
+        .map(|workflow| {
+            let selected_workflow = selected
+                .iter()
+                .find(|candidate| candidate.workflow.name == workflow.name);
+            HistoricalGithubWorkflow {
+                workflow,
+                basis: selected_workflow
+                    .map(|candidate| candidate.basis)
+                    .unwrap_or(PrValidationWorkflowSelectionBasis::DeterministicTieBreak),
+                selected: selected_workflow
+                    .is_some_and(|candidate| std::ptr::eq(candidate.workflow, workflow)),
+            }
+        })
+        .collect::<Vec<_>>();
+    history.sort_by(|left, right| {
+        right
+            .selected
+            .cmp(&left.selected)
+            .then_with(|| left.workflow.name.cmp(&right.workflow.name))
+            .then_with(|| run_order(right.workflow, left.workflow))
+            .then_with(|| right.workflow.run_attempt.cmp(&left.workflow.run_attempt))
+            .then_with(|| {
+                timestamp_key(right.workflow.updated_at.as_deref())
+                    .cmp(&timestamp_key(left.workflow.updated_at.as_deref()))
+            })
+    });
+    let mut visible_workflows: Vec<&GithubValidationWorkflowRun> = Vec::new();
+    history.retain(|candidate| {
+        if visible_workflows
+            .iter()
+            .any(|workflow| same_visible_workflow(workflow, candidate.workflow))
+        {
+            false
+        } else {
+            visible_workflows.push(candidate.workflow);
+            true
+        }
+    });
+    history.truncate(128);
+    if selected.iter().any(|selection| {
+        !history.iter().any(|candidate| {
+            candidate.selected && std::ptr::eq(candidate.workflow, selection.workflow)
+        })
+    }) {
+        return Err("PR validation workflow history bound omitted a selected run".to_string());
+    }
+    Ok(history)
+}
+
+fn same_visible_workflow(
+    left: &GithubValidationWorkflowRun,
+    right: &GithubValidationWorkflowRun,
+) -> bool {
+    left.name == right.name
+        && left.run_attempt == right.run_attempt
+        && left.created_at == right.created_at
+        && left.run_started_at == right.run_started_at
+        && left.updated_at == right.updated_at
+        && left.status == right.status
 }
 
 fn select_attempt_inside_run<'a>(
@@ -329,6 +403,16 @@ mod tests {
 
         let error = select_latest_workflows_by_name(&[left, right]).unwrap_err();
         assert!(error.contains("duplicate observations conflicted"));
+    }
+
+    #[test]
+    fn exact_duplicate_observations_do_not_create_a_false_unselected_history_row() {
+        let selected = workflow(100, 1, "2026-08-10T00:00:00Z", "2026-08-10T00:01:00Z");
+        let observations = [selected.clone(), selected];
+        let history = select_bounded_workflow_history(&observations).unwrap();
+
+        assert_eq!(history.len(), 1);
+        assert!(history[0].selected);
     }
 
     #[test]
