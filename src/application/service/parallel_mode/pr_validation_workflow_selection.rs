@@ -3,7 +3,9 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 
-use crate::application::port::outbound::github_pr_validation_port::GithubValidationWorkflowRun;
+use crate::application::port::outbound::github_pr_validation_port::{
+    GithubValidationWorkflowRun, opaque_id_order,
+};
 use crate::domain::parallel_mode::PrValidationWorkflowSelectionBasis;
 
 const MAX_WORKFLOW_OBSERVATIONS: usize = 512;
@@ -173,7 +175,7 @@ fn run_order(left: &GithubValidationWorkflowRun, right: &GithubValidationWorkflo
             timestamp_key(left.updated_at.as_deref())
                 .cmp(&timestamp_key(right.updated_at.as_deref()))
         })
-        .then_with(|| left.id.cmp(&right.id))
+        .then_with(|| opaque_id_order(Some(&left.id), Some(&right.id)))
 }
 
 fn timestamp_key(value: Option<&str>) -> Option<DateTime<Utc>> {
@@ -243,7 +245,7 @@ mod tests {
                 .into_iter()
                 .map(|run| {
                     GithubValidationWorkflowRun::new(
-                        GithubOpaqueId::new(format!("workflow-run:{:020}", run.id)),
+                        GithubOpaqueId::new(format!("workflow-run:{}", run.id)),
                         run.workflow_name,
                         GithubCommitSha::new(TARGET_SHA),
                         GithubValidationRunStatus::Succeeded,
@@ -259,7 +261,7 @@ mod tests {
             assert_eq!(selected.len(), 1, "{}", case.name);
             assert_eq!(
                 selected[0].workflow.id.as_str(),
-                format!("workflow-run:{:020}", case.expected_id),
+                format!("workflow-run:{}", case.expected_id),
                 "{}",
                 case.name
             );
@@ -312,10 +314,7 @@ mod tests {
         let runs = [higher, lower];
 
         let selected = select_latest_workflows_by_name(&runs).unwrap();
-        assert_eq!(
-            selected[0].workflow.id.as_str(),
-            "workflow-run:00000000000000000601"
-        );
+        assert_eq!(selected[0].workflow.id.as_str(), "workflow-run:601");
         assert_eq!(
             selected[0].basis,
             PrValidationWorkflowSelectionBasis::DeterministicTieBreak
@@ -372,7 +371,7 @@ mod tests {
         updated_at: &str,
     ) -> GithubValidationWorkflowRun {
         GithubValidationWorkflowRun::new(
-            GithubOpaqueId::new(format!("workflow-run:{id:020}")),
+            GithubOpaqueId::new(format!("workflow-run:{id}")),
             "Native PR Checks",
             GithubCommitSha::new(TARGET_SHA),
             GithubValidationRunStatus::Succeeded,

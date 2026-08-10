@@ -87,6 +87,28 @@
       "expectedId": 501,
       "expectedAttempt": 1,
       "expectedBasis": "deterministic_tie_break"
+    },
+    {
+      "name": "numeric provider identity orders ten after nine",
+      "runs": [
+        {
+          "id": 9,
+          "workflowName": "Native PR Checks",
+          "runAttempt": 1,
+          "createdAt": "2026-08-10T09:00:00Z",
+          "updatedAt": "2026-08-10T09:01:00Z"
+        },
+        {
+          "id": 10,
+          "workflowName": "Native PR Checks",
+          "runAttempt": 1,
+          "createdAt": "2026-08-10T09:00:00Z",
+          "updatedAt": "2026-08-10T09:01:00Z"
+        }
+      ],
+      "expectedId": 10,
+      "expectedAttempt": 1,
+      "expectedBasis": "deterministic_tie_break"
     }
   ]
 }

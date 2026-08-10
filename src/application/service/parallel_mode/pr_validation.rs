@@ -732,6 +732,8 @@ impl ParallelModeService {
         let fingerprint = snapshot_fingerprint(&snapshot);
         let contract_decision =
             snapshot.evaluate_post_merge_contract(next.post_merge_validation_contract());
+        let required_workflow_containers_caught_up =
+            required_workflow_containers_caught_up(&snapshot, &contract_decision)?;
         let prior_fingerprint = next.evidence_fingerprint().map(str::to_string);
         let had_post_merge_checkpoint = next.has_post_merge_checkpoint();
         let mut requested_remediation = None;
@@ -814,7 +816,7 @@ impl ParallelModeService {
             snapshot.is_successfully_complete(
                 next.post_merge_validation_contract(),
                 &GithubCommitSha::new(sha.as_str()),
-            )
+            ) && required_workflow_containers_caught_up
         });
         let can_finalize_contract = requested_remediation.is_none()
             && !starting_post_merge
@@ -1200,6 +1202,34 @@ fn observation_projection(
         })
         .collect::<Result<Vec<_>, _>>()?;
     PrValidationObservationProjection::new(required_checks, optional_checks, workflows, providers)
+}
+
+/// Active workflow containers delay provider catch-up only when they replace the container that
+/// produced a selected required check. Unrelated workflows on the same SHA remain diagnostic and
+/// cannot indefinitely block an otherwise complete validation contract.
+fn required_workflow_containers_caught_up(
+    snapshot: &GithubPrValidationSnapshot,
+    contract_decision: &GithubPostMergeValidationDecision,
+) -> Result<bool, String> {
+    let selected_workflows = select_latest_workflows_by_name(&snapshot.workflow_runs)?;
+    for evaluation in &contract_decision.required {
+        let Some(check_run) = evaluation.selected_run.as_ref() else {
+            continue;
+        };
+        let Some(observed_container) = snapshot.diagnostic_workflow_for_check(check_run) else {
+            continue;
+        };
+        let Some(current_container) = selected_workflows
+            .iter()
+            .find(|selection| selection.workflow.name == observed_container.name)
+        else {
+            continue;
+        };
+        if !current_container.workflow.status.is_terminal() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn observed_check(
