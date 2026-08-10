@@ -109,5 +109,11 @@
       "wide": "admin-rollout-remediation-wide.png",
       "mobileComplete": "admin-rollout-remediation-complete-mobile.png"
     }
+  },
+  "operation": {
+    "verifiedAt": "2026-08-10T14:51:04.9234027Z",
+    "repositoryLocalSchedulerMode": "remediate",
+    "queueAdmission": "enabled_for_typed_actionable_findings",
+    "githubRuleset": "unchanged_approval_required"
   }
 }

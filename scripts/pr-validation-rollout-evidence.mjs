@@ -160,6 +160,10 @@ export function buildRolloutEvidence(input) {
   });
 
   const fastValues = rows.map((row) => row.preMerge?.fastGate?.seconds).filter(Number.isFinite);
+  const sampleActualFastValues = rows
+    .filter((row) => row.preMerge?.fastGate?.source === "actual")
+    .map((row) => row.preMerge.fastGate.seconds)
+    .filter(Number.isFinite);
   const actualFastRuns = [
     ...rows.map((row) => row.preMerge),
     ...(input.actualFastRuns || []).map((candidate) =>
@@ -246,7 +250,10 @@ export function buildRolloutEvidence(input) {
       rows,
     },
     timings: {
-      fastGate: percentileMetric(fastValues, actualFastValues.length > 0 ? "mixed_actual_and_projected" : "projected"),
+      fastGate: percentileMetric(
+        fastValues,
+        sampleActualFastValues.length > 0 ? "mixed_actual_and_projected" : "projected",
+      ),
       actualFastGate: percentileMetric(actualFastValues, "actual"),
       ciGate: percentileMetric(ciValues, "actual"),
       postMergeGate: percentileMetric(postMergeValues, "actual"),
