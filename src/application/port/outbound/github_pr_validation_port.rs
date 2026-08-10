@@ -654,10 +654,6 @@ impl GithubPrValidationSnapshot {
                 .workflow_runs
                 .iter()
                 .all(|run| run.target_sha == self.evidence_sha)
-            // Workflow conclusions never satisfy the required-check contract. Active containers
-            // do, however, mean provider observation has not caught up yet, so an older successful
-            // check cannot settle while a newer workflow run is still producing evidence.
-            && self.workflow_runs.iter().all(|run| run.status.is_terminal())
             && self.evaluate_post_merge_contract(contract).is_successful()
     }
 
@@ -795,7 +791,7 @@ fn timestamp_at_or_after(observed: &str, lower_bound: &str) -> bool {
     }
 }
 
-fn opaque_id_order(
+pub(crate) fn opaque_id_order(
     left: Option<&GithubOpaqueId>,
     right: Option<&GithubOpaqueId>,
 ) -> std::cmp::Ordering {
