@@ -924,7 +924,7 @@ fn authority_schema_migrates_v12_pr_validation_schedule_without_data_loss() {
                 |row| row.get::<_, String>(0),
             )
             .unwrap(),
-        "15"
+        "16"
     );
     drop(migrated);
 
@@ -1127,7 +1127,7 @@ fn authority_schema_migrates_v11_legacy_merge_evidence_without_data_loss() {
             |row| row.get(0),
         )
         .expect("migrated version should load");
-    assert_eq!(version, "15");
+    assert_eq!(version, "16");
     let (method, evidence_sha, content): (String, String, String) = migrated
         .query_row(
             "SELECT integration_method, integration_evidence_sha, content
