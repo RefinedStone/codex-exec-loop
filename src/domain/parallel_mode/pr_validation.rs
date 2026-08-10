@@ -241,6 +241,12 @@ pub struct PrValidationObservedWorkflow {
     updated_at: Option<String>,
     #[serde(default)]
     selection_basis: PrValidationWorkflowSelectionBasis,
+    #[serde(default = "default_selected_workflow")]
+    selected: bool,
+}
+
+fn default_selected_workflow() -> bool {
+    true
 }
 
 impl PrValidationObservedWorkflow {
@@ -266,6 +272,7 @@ impl PrValidationObservedWorkflow {
             started_at,
             updated_at,
             selection_basis: PrValidationWorkflowSelectionBasis::LegacyUnknown,
+            selected: true,
         })
     }
 
@@ -282,6 +289,11 @@ impl PrValidationObservedWorkflow {
         workflow.created_at = created_at;
         workflow.selection_basis = selection_basis;
         Ok(workflow)
+    }
+
+    pub fn with_selection_state(mut self, selected: bool) -> Self {
+        self.selected = selected;
+        self
     }
 
     pub fn name(&self) -> &str {
@@ -310,6 +322,10 @@ impl PrValidationObservedWorkflow {
 
     pub fn selection_basis(&self) -> PrValidationWorkflowSelectionBasis {
         self.selection_basis
+    }
+
+    pub fn is_selected(&self) -> bool {
+        self.selected
     }
 }
 
@@ -381,6 +397,8 @@ pub struct PrValidationObservationProjection {
     required_checks: Vec<PrValidationObservedCheck>,
     optional_checks: Vec<PrValidationObservedCheck>,
     workflows: Vec<PrValidationObservedWorkflow>,
+    #[serde(default)]
+    workflow_history: Vec<PrValidationObservedWorkflow>,
     providers: Vec<PrValidationObservedProvider>,
 }
 
@@ -417,9 +435,56 @@ impl PrValidationObservationProjection {
         Ok(Self {
             required_checks,
             optional_checks,
+            workflow_history: workflows.clone(),
             workflows,
             providers,
         })
+    }
+
+    pub fn with_workflow_history(
+        mut self,
+        workflow_history: Vec<PrValidationObservedWorkflow>,
+    ) -> Result<Self, String> {
+        if workflow_history.len() > 128 {
+            return Err("PR validation workflow history exceeded its bounded limit".to_string());
+        }
+        for timestamp in workflow_history
+            .iter()
+            .flat_map(|workflow| {
+                [
+                    workflow.created_at(),
+                    workflow.started_at(),
+                    workflow.updated_at(),
+                ]
+            })
+            .flatten()
+        {
+            validate_observation_timestamp(timestamp)?;
+        }
+        if self.workflows.iter().any(|selected| {
+            !workflow_history.iter().any(|candidate| {
+                candidate.is_selected()
+                    && candidate.name() == selected.name()
+                    && candidate.run_attempt() == selected.run_attempt()
+                    && candidate.created_at() == selected.created_at()
+                    && candidate.updated_at() == selected.updated_at()
+            })
+        }) {
+            return Err("PR validation workflow history omitted a selected workflow".to_string());
+        }
+        if workflow_history
+            .iter()
+            .filter(|candidate| candidate.is_selected())
+            .count()
+            != self.workflows.len()
+        {
+            return Err(
+                "PR validation workflow history contains an unexpected selected workflow"
+                    .to_string(),
+            );
+        }
+        self.workflow_history = workflow_history;
+        Ok(self)
     }
 
     pub fn required_checks(&self) -> &[PrValidationObservedCheck] {
@@ -432,6 +497,14 @@ impl PrValidationObservationProjection {
 
     pub fn workflows(&self) -> &[PrValidationObservedWorkflow] {
         &self.workflows
+    }
+
+    pub fn workflow_history(&self) -> &[PrValidationObservedWorkflow] {
+        if self.workflow_history.is_empty() {
+            &self.workflows
+        } else {
+            &self.workflow_history
+        }
     }
 
     pub fn providers(&self) -> &[PrValidationObservedProvider] {

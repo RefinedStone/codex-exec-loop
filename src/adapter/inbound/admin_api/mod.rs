@@ -5,6 +5,7 @@ use crate::application::port::inbound::parallel_mode_admin_port::ParallelModeAdm
 use crate::application::port::inbound::planning_admin_port::PlanningAdminPort;
 use crate::application::port::inbound::pr_validation_command_port::PrValidationCommandPort;
 use crate::application::port::inbound::pr_validation_query_port::PrValidationQueryPort;
+use crate::application::port::inbound::pr_validation_rollout_evidence_query_port::PrValidationRolloutEvidenceQueryPort;
 use crate::application::port::inbound::review_center_query_port::ReviewCenterQueryPort;
 use crate::composition::production;
 use crate::domain::planning::PlanningResetTarget;
@@ -64,6 +65,7 @@ struct AdminAppState {
     app_server_prompt_log_query_port: Arc<dyn AppServerPromptLogQueryPort>,
     review_center_query_port: Arc<dyn ReviewCenterQueryPort>,
     pr_validation_query_port: Arc<dyn PrValidationQueryPort>,
+    pr_validation_rollout_evidence_query_port: Arc<dyn PrValidationRolloutEvidenceQueryPort>,
     pr_validation_command_port: Arc<dyn PrValidationCommandPort>,
     graphic: AdminGraphicConfig,
     command_ledger: realtime::AdminCommandLedger,
@@ -224,6 +226,8 @@ fn build_admin_state_with_debug_harness(
         app_server_prompt_log_query_port: application.app_server_prompt_log_query_port,
         review_center_query_port: application.review_center_query_port,
         pr_validation_query_port: application.pr_validation_query_port,
+        pr_validation_rollout_evidence_query_port: application
+            .pr_validation_rollout_evidence_query_port,
         pr_validation_command_port: application.pr_validation_command_port,
         graphic: AdminGraphicConfig::from_env(),
         command_ledger: realtime::AdminCommandLedger::default(),
@@ -455,6 +459,10 @@ fn build_router(state: AdminAppState) -> Router {
         .route(
             "/api/admin/akra/validations/{record_key}",
             get(api::akra_validation_detail_api),
+        )
+        .route(
+            "/api/admin/akra/pr-validation/evidence",
+            get(api::akra_validation_evidence_api),
         )
         .route(
             "/api/admin/akra/validations/{record_key}/commands",

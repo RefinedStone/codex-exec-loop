@@ -30,6 +30,10 @@ use crate::application::port::inbound::pr_validation_query_port::{
     PR_VALIDATION_BOARD_DEFAULT_LIMIT, PrValidationBoardCursorError, PrValidationBoardRequest,
     PrValidationDetailRequest,
 };
+use crate::application::port::inbound::pr_validation_rollout_evidence_query_port::{
+    PR_VALIDATION_EVIDENCE_DEFAULT_HISTORY_LIMIT, PrValidationRolloutEvidenceCursorError,
+    PrValidationRolloutEvidenceLimitError, PrValidationRolloutEvidenceRequest,
+};
 use axum::extract::{Json, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -65,6 +69,13 @@ pub(super) struct AkraStreamQuery {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct AkraValidationsQuery {
+    pub limit: Option<usize>,
+    pub cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct AkraValidationEvidenceQuery {
     pub limit: Option<usize>,
     pub cursor: Option<String>,
 }
@@ -421,6 +432,34 @@ pub(super) async fn akra_validation_detail_api(
         .map_err(internal_server_error)?
         .map(|detail| Json(detail).into_response())
         .ok_or(StatusCode::NOT_FOUND)
+}
+
+pub(super) async fn akra_validation_evidence_api(
+    State(state): State<AdminAppState>,
+    Query(query): Query<AkraValidationEvidenceQuery>,
+) -> std::result::Result<Response, StatusCode> {
+    let page = state
+        .pr_validation_rollout_evidence_query_port
+        .load_page(PrValidationRolloutEvidenceRequest {
+            limit: query
+                .limit
+                .unwrap_or(PR_VALIDATION_EVIDENCE_DEFAULT_HISTORY_LIMIT),
+            cursor: query.cursor,
+        })
+        .map_err(|error| {
+            if error
+                .downcast_ref::<PrValidationRolloutEvidenceCursorError>()
+                .is_some()
+                || error
+                    .downcast_ref::<PrValidationRolloutEvidenceLimitError>()
+                    .is_some()
+            {
+                StatusCode::BAD_REQUEST
+            } else {
+                internal_server_error(error)
+            }
+        })?;
+    Ok(Json(page).into_response())
 }
 
 pub(super) async fn mutate_akra_validation_command_api(
