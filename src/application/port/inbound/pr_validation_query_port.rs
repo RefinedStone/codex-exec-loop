@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde::Serialize;
 
-use crate::domain::parallel_mode::PrValidationOperatorSummary;
+use crate::domain::parallel_mode::{PrValidationOperatorSummary, PrValidationSchedulerMode};
 
 pub const PR_VALIDATION_BOARD_DEFAULT_LIMIT: usize = 20;
 pub const PR_VALIDATION_BOARD_MAX_LIMIT: usize = 50;
@@ -251,6 +251,72 @@ impl PrValidationAdminRecord {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrValidationRolloutStage {
+    Off,
+    Shadow,
+    Remediation,
+}
+
+impl std::fmt::Display for PrValidationRolloutStage {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Off => "off",
+            Self::Shadow => "shadow",
+            Self::Remediation => "remediation",
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrValidationRolloutSnapshot {
+    pub stage: PrValidationRolloutStage,
+    pub observation_enabled: bool,
+    pub queue_admission_enabled: bool,
+    pub ruleset_change_requires_approval: bool,
+    pub status_label: String,
+    pub detail: String,
+}
+
+impl PrValidationRolloutSnapshot {
+    pub fn from_scheduler_mode(mode: PrValidationSchedulerMode) -> Self {
+        let (stage, observation_enabled, queue_admission_enabled, status_label, detail) = match mode
+        {
+            PrValidationSchedulerMode::Off => (
+                PrValidationRolloutStage::Off,
+                false,
+                false,
+                "OFF · 기록 보존",
+                "provider polling은 중지되고 기존 validation history는 유지됩니다.",
+            ),
+            PrValidationSchedulerMode::Observe => (
+                PrValidationRolloutStage::Shadow,
+                true,
+                false,
+                "SHADOW · Queue 차단",
+                "GitHub evidence만 관찰하며 remediation task는 자동 admission하지 않습니다.",
+            ),
+            PrValidationSchedulerMode::Remediate => (
+                PrValidationRolloutStage::Remediation,
+                true,
+                true,
+                "REMEDIATE · Queue 활성",
+                "actionable finding만 일반 Planning Queue로 admission하며 Ruleset 변경은 별도 승인입니다.",
+            ),
+        };
+        Self {
+            stage,
+            observation_enabled,
+            queue_admission_enabled,
+            ruleset_change_requires_approval: true,
+            status_label: status_label.to_string(),
+            detail: detail.to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PrValidationBoardSummary {
@@ -270,6 +336,7 @@ pub struct PrValidationBoardSummary {
 pub struct PrValidationBoardSnapshot {
     pub revision: i64,
     pub scheduler_mode: String,
+    pub rollout: PrValidationRolloutSnapshot,
     pub summary: PrValidationBoardSummary,
     pub records: Vec<PrValidationAdminRecord>,
     pub next_cursor: Option<String>,
@@ -295,4 +362,30 @@ pub trait PrValidationQueryPort: Send + Sync {
         &self,
         request: PrValidationDetailRequest,
     ) -> Result<Option<PrValidationAdminRecord>>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rollout_projection_keeps_shadow_safe_and_ruleset_approval_explicit() {
+        let shadow =
+            PrValidationRolloutSnapshot::from_scheduler_mode(PrValidationSchedulerMode::Observe);
+        assert_eq!(shadow.stage, PrValidationRolloutStage::Shadow);
+        assert!(shadow.observation_enabled);
+        assert!(!shadow.queue_admission_enabled);
+        assert!(shadow.ruleset_change_requires_approval);
+
+        let remediation =
+            PrValidationRolloutSnapshot::from_scheduler_mode(PrValidationSchedulerMode::Remediate);
+        assert_eq!(remediation.stage, PrValidationRolloutStage::Remediation);
+        assert!(remediation.queue_admission_enabled);
+        assert!(remediation.ruleset_change_requires_approval);
+
+        let off = PrValidationRolloutSnapshot::from_scheduler_mode(PrValidationSchedulerMode::Off);
+        assert_eq!(off.stage, PrValidationRolloutStage::Off);
+        assert!(!off.observation_enabled);
+        assert!(!off.queue_admission_enabled);
+    }
 }

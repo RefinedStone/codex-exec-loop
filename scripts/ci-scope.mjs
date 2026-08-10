@@ -161,6 +161,20 @@ export function evaluateGate(plan, results) {
   return required.filter(([, result]) => result !== "success").map(([job, result]) => ({ job, result }));
 }
 
+export function evaluateFastGate(plan, results) {
+  const required = [["scope", results.scope]];
+  if (plan.rust) {
+    required.push(["rust_lint", results.rust_lint]);
+  }
+  if (plan.node) {
+    required.push(["node_surfaces", results.node_surfaces]);
+  }
+  if (plan.smoke) {
+    required.push(["smoke_check", results.smoke_check]);
+  }
+  return required.filter(([, result]) => result !== "success").map(([job, result]) => ({ job, result }));
+}
+
 export function resolveEffectiveScope(requestedScope, eventName, gitRef) {
   if (eventName !== "push" || requestedScope !== "auto") {
     return requestedScope;
@@ -205,7 +219,7 @@ function booleanEnvironment(name) {
   return process.env[name] === "true";
 }
 
-function runGate() {
+function gateInputs() {
   const plan = {
     rust: booleanEnvironment("AKRA_CI_RUST_REQUIRED"),
     node: booleanEnvironment("AKRA_CI_NODE_REQUIRED"),
@@ -220,16 +234,31 @@ function runGate() {
     portable_native: process.env.AKRA_CI_PORTABLE_RESULT,
     smoke_check: process.env.AKRA_CI_SMOKE_RESULT,
   };
-  const failures = evaluateGate(plan, results);
+  return { plan, results };
+}
+
+function reportGate(failures, label) {
   if (failures.length > 0) {
-    console.error("CI gate rejected required jobs:");
+    console.error(`${label} rejected required jobs:`);
     for (const failure of failures) {
       console.error(`- ${failure.job}: ${failure.result || "missing"}`);
     }
     process.exitCode = 1;
     return;
   }
-  console.log("CI gate accepted every job required by the selected scope.");
+  console.log(`${label} accepted every job required by the selected scope.`);
+}
+
+function runGate() {
+  const { plan, results } = gateInputs();
+  const failures = evaluateGate(plan, results);
+  reportGate(failures, "CI gate");
+}
+
+function runFastGate() {
+  const { plan, results } = gateInputs();
+  const failures = evaluateFastGate(plan, results);
+  reportGate(failures, "Fast gate");
 }
 
 function runClassify() {
@@ -257,7 +286,11 @@ function main() {
     runGate();
     return;
   }
-  throw new Error("usage: node scripts/ci-scope.mjs <classify|gate>");
+  if (command === "fast-gate") {
+    runFastGate();
+    return;
+  }
+  throw new Error("usage: node scripts/ci-scope.mjs <classify|gate|fast-gate>");
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {

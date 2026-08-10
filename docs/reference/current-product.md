@@ -219,13 +219,23 @@ next accepted task, refresh the supervisor projection, or disable the loop throu
 that handle before reporting control state; it does not call Git, GitHub, pool, or distributor
 adapters directly.
 
+Post-merge PR validation is a durable application scheduler, not an Admin or TUI refresh loop. An
+unset repository-local `akra.prValidationMode` defaults to `observe`: provider evidence and exact
+Actions target SHAs are recorded, but automatic Queue admission is blocked. `remediate` admits only
+typed actionable findings through the ordinary Planning Queue and worker lease/worktree lifecycle;
+`off` stops new polling without deleting history. The Admin Validation Rail distinguishes
+Integrated, Verifying, RemediationQueued, RemediationRunning, Verified, Blocked, and Failed, and its
+rollout banner states the effective mode, Queue admission policy, and separate Ruleset approval
+boundary. See [PR Validation Rollout](pr-validation-rollout.md).
+
 The `/admin/akra` game projection uses a PixiJS 8 world over the same dashboard snapshot. Its
 validated frontend store, semantic camera zoom, worker movement, furniture occlusion, and scene
 selection remain presentation-only; see [Admin Game Frontend](admin-game-frontend.md).
 
 For UI/UX debugging, `akra admin --debug-harness` starts an application-owned, non-durable Fake
 scenario clock behind the same dashboard contract. It supports normal delivery, blocked recovery,
-and queue-pressure playback without mutating real planning, parallel, Git, or GitHub authority.
+queue pressure, and the ten PR-validation recovery scenarios without mutating real planning,
+parallel, Git, or GitHub authority.
 
 ## Recovery and Limits
 

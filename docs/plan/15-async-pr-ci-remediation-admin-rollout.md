@@ -551,16 +551,16 @@ bash scripts/check_admin_graphic_visual.sh
 
 권장 branch: `codex/post-merge-validation-rollout`
 
-- [ ] 기본 mode `observe`로 실제 PR을 관찰하되 Queue admission을 막는다.
-- [ ] 최소 24시간 또는 10개 PR 중 더 긴 조건으로 shadow evidence를 수집한다.
-- [ ] quota, false actionable, stale, duplicate, scheduler ownership을 측정한다.
-- [ ] production repository에서는 성공 canary만 수행한다. 실패 canary는 test repository 또는
+- [x] 기본 mode `observe`로 실제 PR을 관찰하되 Queue admission을 막는다.
+- [x] 최소 24시간 또는 10개 PR 중 더 긴 조건으로 shadow evidence를 수집한다.
+- [x] quota, false actionable, stale, duplicate, scheduler ownership을 측정한다.
+- [x] production repository에서는 성공 canary만 수행한다. 실패 canary는 test repository 또는
       harness에서 수행한다.
 - [ ] shadow 기준 통과 후 mode를 `remediate`로 전환한다.
 - [ ] 그 다음에만 사용자 승인으로 Ruleset required context를 측정된 `Fast Gate`로 변경한다.
-- [ ] broad bypass actor를 추가하거나 protection을 끄지 않는다.
-- [ ] current product/architecture/Admin reference와 한국어 대응 문서를 실제 동작으로 갱신한다.
-- [ ] rollback/runbook과 validation artifact를 체크인한다.
+- [x] broad bypass actor를 추가하거나 protection을 끄지 않는다.
+- [x] current product/architecture/Admin reference와 한국어 대응 문서를 실제 동작으로 갱신한다.
+- [x] rollback/runbook과 validation artifact를 체크인한다.
 
 Shadow 통과 기준:
 
@@ -574,6 +574,8 @@ Shadow 통과 기준:
 
 Ruleset 변경 승인 요청에는 Fast Gate와 기존 CI의 p50/p95, Post-Merge Gate 실패율, shadow
 false-positive/duplicate/API 사용량, rollback 절차를 포함한다.
+
+검증 증거: [`post-merge-validation-rollout-2026-08-10`](../validation/artifacts/post-merge-validation-rollout-2026-08-10/README.md)
 
 ## 8. Dependency와 병렬화 정책
 
@@ -662,16 +664,16 @@ Rollback:
 
 ## 12. 최종 Definition of Done
 
-- [ ] 두 integration method 모두 attested evidence SHA로 검증된다.
-- [ ] 실제 push workflow fixture가 false-incomplete 없이 settle된다.
-- [ ] required latest attempt 실패가 exactly one remediation task를 만든다.
-- [ ] retry/backoff/lease가 restart와 다중 process에서 결정론적으로 동작한다.
-- [ ] review false-positive fixture가 모두 admission 0회를 보장한다.
-- [ ] Admin API/화면에서 Integrated/Verifying/Remediation/Verified가 구분된다.
-- [ ] Debug Harness 열 개 시나리오가 API, DOM, Pixi inspection에서 일치한다.
-- [ ] shadow 기준을 충족하고 evidence가 체크인된다.
+- [x] 두 integration method 모두 attested evidence SHA로 검증된다.
+- [x] 실제 push workflow fixture가 false-incomplete 없이 settle된다.
+- [x] required latest attempt 실패가 exactly one remediation task를 만든다.
+- [x] retry/backoff/lease가 restart와 다중 process에서 결정론적으로 동작한다.
+- [x] review false-positive fixture가 모두 admission 0회를 보장한다.
+- [x] Admin API/화면에서 Integrated/Verifying/Remediation/Verified가 구분된다.
+- [x] Debug Harness 열 개 시나리오가 API, DOM, Pixi inspection에서 일치한다.
+- [x] shadow 기준을 충족하고 evidence가 체크인된다.
 - [ ] Ruleset 변경 여부를 별도 승인받고 결과를 기록한다.
-- [ ] current English/Korean reference가 실제 shipped behavior로 갱신된다.
+- [x] current English/Korean reference가 실제 shipped behavior로 갱신된다.
 - [ ] 모든 PR이 CI Gate, rebase merge, cleanup을 완료한다.
 
 이 체크리스트가 완료되기 전에는 “선 병합 후 자동 복구 시스템이 production-ready”라고 표현하지

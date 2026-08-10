@@ -868,6 +868,10 @@ pub mod tests {
             outcome => panic!("unexpected first scheduler outcome: {outcome:?}"),
         };
         assert!(
+            first_next_poll_at <= first_poll_at + TimeDelta::seconds(60),
+            "a healthy provider must remain within the 2x active-cadence rollout SLA"
+        );
+        assert!(
             !repo.pool_root().join(".leases").exists(),
             "waiting validation must not reserve a parallel slot"
         );

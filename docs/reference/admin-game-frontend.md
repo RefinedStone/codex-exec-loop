@@ -33,6 +33,20 @@ native TUI, planning authority, parallel policy, or application control plane.
   is a browser feedback projection; durable runtime events and the planning authority remain the
   operational source of truth.
 
+## PR validation operations
+
+- The full-width Validation Rail consumes the application-owned bounded validation board. It never
+  reads SQLite or GitHub from the browser and never derives phase or severity from event prose.
+- A typed rollout banner distinguishes `OFF`, `SHADOW`, and `REMEDIATION`, and separately states
+  whether Planning Queue admission is blocked and whether a Ruleset change still needs approval.
+- The detail drawer exposes attestation, exact evidence SHA, required and optional checks, latest
+  attempt, provider/backoff, timeline, and finding-task-slot correlation. Mutations use CSRF,
+  expected revision, stable command identity, and the application command port.
+- Passive validation appears as a QA/CI station and signal packet. A worker character exists only
+  when a correlated ordinary Queue task owns an actual worker lease.
+- The application-owned debug harness supplies ten deterministic validation scenarios. API, DOM,
+  and Pixi inspection must report the same phase, severity, record identity, and lease fact.
+
 ## Operations cockpit information architecture
 
 - The command header is the only always-visible summary of readiness, branch, revision, observation

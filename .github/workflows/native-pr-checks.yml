@@ -271,6 +271,38 @@ jobs:
       - name: Check native smoke target
         run: cargo check --locked --all-features --lib --bins
 
+  fast_gate:
+    name: Fast Gate
+    needs:
+      - scope
+      - rust_lint
+      - node_surfaces
+      - smoke_check
+    if: always() && github.event_name != 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+
+      - name: Evaluate fast admission jobs
+        env:
+          AKRA_CI_NODE_REQUIRED: ${{ needs.scope.outputs.node }}
+          AKRA_CI_NODE_RESULT: ${{ needs.node_surfaces.result }}
+          AKRA_CI_RUST_LINT_RESULT: ${{ needs.rust_lint.result }}
+          AKRA_CI_RUST_REQUIRED: ${{ needs.scope.outputs.rust }}
+          AKRA_CI_SCOPE_RESULT: ${{ needs.scope.result }}
+          AKRA_CI_SMOKE_REQUIRED: ${{ needs.scope.outputs.smoke }}
+          AKRA_CI_SMOKE_RESULT: ${{ needs.smoke_check.result }}
+        run: node scripts/ci-scope.mjs fast-gate
+
   ci_gate:
     name: CI Gate
     needs:

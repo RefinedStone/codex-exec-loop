@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-10T13:13:00Z",
+  "commands": [
+    {
+      "command": "cargo test --locked pr_validation -- --nocapture",
+      "status": "pass",
+      "testsPassed": 105,
+      "testsFailed": 0
+    },
+    {
+      "command": "cargo test --locked admin_debug_harness_all_validation_scenarios_keep_board_and_scene_semantics_aligned -- --nocapture",
+      "status": "pass",
+      "testsPassed": 1,
+      "testsFailed": 0
+    },
+    {
+      "command": "cargo test --locked operator_surface_shows_pr_remediation_merge_and_late_event -- --nocapture",
+      "status": "pass",
+      "testsPassed": 1,
+      "testsFailed": 0
+    },
+    {
+      "command": "cargo test --locked --test architecture_boundaries",
+      "status": "pass",
+      "testsPassed": 132,
+      "testsFailed": 0
+    },
+    {
+      "command": "node --test scripts/ci-scope.test.mjs scripts/agent-plan.test.mjs scripts/pr-validation-rollout-evidence.test.mjs",
+      "status": "pass",
+      "testsPassed": 20,
+      "testsFailed": 0
+    },
+    {
+      "command": "powershell -File scripts/check_native_pr.ps1 -Mode Full",
+      "status": "pass",
+      "note": "Windows Full mode completed formatting, Node/Admin, Windows contracts, native target, and clippy"
+    }
+  ],
+  "metrics": {
+    "duplicateRemediation": {
+      "failures": 0,
+      "note": "replayed events, reordered findings, exhausted-pool replay, and ordinary Queue correlation produced no duplicate task or lease",
+      "tests": [
+        "replayed_event_and_stale_update_admit_no_duplicate",
+        "remediation_uses_the_ordinary_task_identity_and_lifecycle_transitions_are_replay_safe",
+        "exhausted_pool_keeps_remediation_queued_without_duplicate_lease"
+      ]
+    },
+    "falseActionable": {
+      "failures": 0,
+      "note": "APPROVED, LGTM, bot/self, resolved, paginated, and stale-SHA review activity admitted no remediation",
+      "tests": [
+        "approved_lgtm_bot_self_resolved_and_past_revision_activity_admit_nothing",
+        "semantic_activity_policy_admits_only_actionable_human_events_idempotently",
+        "paginated_review_history_does_not_admit_before_the_latest_state_is_observed"
+      ]
+    },
+    "expiredLeaseTakeoverFailure": {
+      "failures": 0,
+      "note": "exact owner/token/expiry CAS rejected early takeover and allowed the replacement owner after expiry",
+      "tests": [
+        "durable_poll_lease_uses_exact_cas_and_allows_takeover_only_after_expiry",
+        "two_scheduler_processes_allow_only_one_provider_caller"
+      ]
+    },
+    "healthyProviderStale": {
+      "failures": 0,
+      "note": "fake-time healthy polling stayed within twice the active cadence and UI-rate refresh did not become the scheduler clock",
+      "tests": [
+        "durable_scheduler_polls_with_fake_time_and_normal_remediation",
+        "scheduler_moves_verified_records_from_active_cadence_to_bounded_review_watch_cadence"
+      ]
+    },
+    "adminCliTuiPhaseMismatch": {
+      "failures": 0,
+      "note": "Admin API/DOM/Pixi, CLI status, and the TUI work center all consumed the typed durable phase projection",
+      "tests": [
+        "admin_debug_harness_all_validation_scenarios_keep_board_and_scene_semantics_aligned",
+        "operator_surface_shows_pr_remediation_merge_and_late_event",
+        "work_center_delivery_projects_durable_pr_validation_state"
+      ]
+    }
+  },
+  "canaries": {
+    "failure": {
+      "status": "pass",
+      "kind": "deterministic_application_admin_harness",
+      "scenario": "check failure -> Queue -> worker lease -> rerun success",
+      "note": "the failure canary ran only in the application-owned harness; no intentionally broken commit entered prerelease"
+    }
+  },
+  "browser": {
+    "status": "pass",
+    "surface": "Admin Debug Harness / Validation Rail",
+    "viewports": [
+      { "width": 1280, "height": 720 },
+      { "width": 420, "height": 900 }
+    ],
+    "horizontalOverflowCount": 0,
+    "consoleErrorCount": 0,
+    "rolloutStage": "remediation",
+    "queueAdmission": "on",
+    "rulesetChange": "approval_required",
+    "lifecycle": ["ready", "delivering", "reviewing", "complete"],
+    "validationPhases": ["Integrated", "Verifying", "Verified"],
+    "screenshots": {
+      "wide": "admin-rollout-remediation-wide.png",
+      "mobileComplete": "admin-rollout-remediation-complete-mobile.png"
+    }
+  }
+}

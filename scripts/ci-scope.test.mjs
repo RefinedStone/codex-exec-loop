@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   classifyChangedPaths,
+  evaluateFastGate,
   evaluateGate,
   resolveEffectiveScope,
 } from "./ci-scope.mjs";
@@ -87,6 +88,19 @@ test("the workflow publishes one stable Post-Merge Gate for postmerge plans", ()
   assert.match(workflow, /github\.event_name == 'push' && github\.sha/);
 });
 
+test("the workflow publishes a stable Fast Gate without weakening CI Gate", () => {
+  const workflow = readFileSync(
+    new URL("../.github/workflows/native-pr-checks.yml", import.meta.url),
+    "utf8",
+  );
+  const fastGate = workflow.match(/\n  fast_gate:[\s\S]*?\n  ci_gate:/)?.[0] || "";
+  assert.match(fastGate, /name: Fast Gate/);
+  assert.match(fastGate, /node scripts\/ci-scope\.mjs fast-gate/);
+  assert.doesNotMatch(fastGate, /\n\s+- rust_tests/);
+  assert.doesNotMatch(fastGate, /\n\s+- portable_native/);
+  assert.match(workflow, /\n  ci_gate:\s*\n\s*name: CI Gate/);
+});
+
 test("postmerge classification writes machine outputs and a readable summary", () => {
   const fixtureRoot = mkdtempSync(join(tmpdir(), "akra-ci-scope-postmerge-"));
   const outputPath = join(fixtureRoot, "output.txt");
@@ -135,4 +149,27 @@ test("the gate ignores skipped optional jobs and requires selected jobs", () => 
     { job: "rust_lint", result: "failure" },
     { job: "portable_native", result: "skipped" },
   ]);
+});
+
+test("the fast gate waits for policy checks but leaves long jobs post-admission", () => {
+  const failures = evaluateFastGate(
+    { rust: true, node: true, portable: true, smoke: false },
+    {
+      scope: "success",
+      rust_tests: "in_progress",
+      rust_lint: "success",
+      node_surfaces: "success",
+      portable_native: "in_progress",
+      smoke_check: "skipped",
+    },
+  );
+  assert.deepEqual(failures, []);
+
+  assert.deepEqual(
+    evaluateFastGate(
+      { rust: true, node: false, portable: true, smoke: false },
+      { scope: "success", rust_lint: "failure" },
+    ),
+    [{ job: "rust_lint", result: "failure" }],
+  );
 });

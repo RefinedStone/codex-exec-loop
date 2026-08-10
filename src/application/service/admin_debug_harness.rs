@@ -22,9 +22,9 @@ use crate::application::port::inbound::pr_validation_query_port::{
     PrValidationAdminRecord, PrValidationAdminSchedule, PrValidationAdminSeverity,
     PrValidationAdminTimelineEntry, PrValidationAdminWorkflow, PrValidationBoardRequest,
     PrValidationBoardSnapshot, PrValidationBoardSummary, PrValidationDetailRequest,
-    PrValidationQueryPort, PrValidationStatusRequest,
+    PrValidationQueryPort, PrValidationRolloutSnapshot, PrValidationStatusRequest,
 };
-use crate::domain::parallel_mode::PrValidationOperatorSummary;
+use crate::domain::parallel_mode::{PrValidationOperatorSummary, PrValidationSchedulerMode};
 
 #[derive(Debug, Clone)]
 struct StoredDebugValidationCommand {
@@ -433,6 +433,9 @@ fn debug_validation_board(
     PrValidationBoardSnapshot {
         revision: i64::try_from(projection.revision).unwrap_or(i64::MAX),
         scheduler_mode: "remediate".to_string(),
+        rollout: PrValidationRolloutSnapshot::from_scheduler_mode(
+            PrValidationSchedulerMode::Remediate,
+        ),
         summary,
         records: vec![record],
         next_cursor: None,
