@@ -4251,6 +4251,8 @@ fn akra_graphic_dashboard_validation_evidence_is_explainable_responsive_and_acce
         "미수집",
         ".validation-evidence-metrics { grid-template-columns: 1fr; }",
         ".validation-workflow-times { grid-template-columns: 1fr; }",
+        ".command-summary-copy strong { font-size: 20px; }",
+        ".command-summary-meta { overflow: hidden; }",
         "aria-controls=\"akra-detail-drawer\"",
         "aria-expanded=\"false\"",
         "role=\"status\"",
