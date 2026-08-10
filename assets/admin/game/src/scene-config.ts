@@ -60,6 +60,30 @@ export const DELIVERY_STATION_POINTS: Point[] = [
   { x: 1375, y: 708 },
 ];
 
+export const QA_CI_STATION_POINT: Point = { x: 1190, y: 326 };
+export const QA_CI_SIGNAL_POINTS: Record<string, { from: Point; to: Point }> = {
+  ci_observation: {
+    from: { x: 942, y: 245 },
+    to: QA_CI_STATION_POINT,
+  },
+  failure_to_queue: {
+    from: QA_CI_STATION_POINT,
+    to: { x: 470, y: 470 },
+  },
+  queue_to_worker: {
+    from: QA_CI_STATION_POINT,
+    to: SLOT_SEATS[1] ?? { x: 962, y: 478 },
+  },
+  verified_return: {
+    from: QA_CI_STATION_POINT,
+    to: { x: 1395, y: 525 },
+  },
+  blocked_alert: {
+    from: { x: QA_CI_STATION_POINT.x - 54, y: QA_CI_STATION_POINT.y },
+    to: { x: QA_CI_STATION_POINT.x + 54, y: QA_CI_STATION_POINT.y },
+  },
+};
+
 export const CLEANUP_STATION_POINTS: Point[] = [
   { x: 160, y: 750 },
   { x: 275, y: 748 },

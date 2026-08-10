@@ -9,7 +9,7 @@ use super::akra_dashboard::{
     DistributorView, EventFeedView, GameActorView, GameSceneView, GameStandbyCharacterView,
     GameStaticPose, GameStationView, GameVisualState, GuildMetricsView, PoolBoardView,
     PoolSlotView, PoolSummaryView, RuntimeEventView, SelectedTaskView, build_akra_dashboard_view,
-    build_akra_events_view,
+    build_akra_events_view, map_game_validation_scene,
 };
 use crate::application::port::inbound::admin_debug_port::{
     AdminDebugHarnessProjection, AdminDebugScenarioOption, AdminDebugStage,
@@ -104,7 +104,7 @@ pub(super) fn apply_admin_debug_harness(
     }
 
     let now = Utc::now();
-    let active_count = active_agent_count(projection.stage);
+    let active_count = active_agent_count(projection);
     let actor_states = (0..active_count)
         .map(|index| actor_visual_state(projection.stage, index))
         .collect::<Vec<_>>();
@@ -144,8 +144,14 @@ pub(super) fn apply_admin_debug_harness(
     dashboard.kpis.queue_depth_basis = "debug scenario application projection".to_string();
     dashboard.kpis.metric_source_label = "deterministic fake harness".to_string();
     dashboard.kpis.distributor_state = distributor.barrier_state.clone();
+    dashboard.kpis.validation_verifying = dashboard.validation.summary.verifying;
+    dashboard.kpis.validation_failed =
+        dashboard.validation.summary.failed + dashboard.validation.summary.blocked;
+    dashboard.kpis.validation_remediation_queued = dashboard.validation.summary.remediation_queued;
+    dashboard.kpis.validation_stale = dashboard.validation.summary.stale;
     dashboard.pool = pool;
     dashboard.scene = build_scene(projection, &actor_states);
+    dashboard.scene.validation = map_game_validation_scene(&dashboard.validation);
     dashboard.selected_task = build_selected_task(projection, &actor_states);
     dashboard.agents = agents;
     dashboard.distributor = distributor;
@@ -211,14 +217,12 @@ fn map_scenario_option(option: &AdminDebugScenarioOption) -> AdminDebugScenarioV
     }
 }
 
-fn active_agent_count(stage: AdminDebugStage) -> usize {
-    match stage {
-        AdminDebugStage::Ready
-        | AdminDebugStage::Intake
-        | AdminDebugStage::QueuePressure
-        | AdminDebugStage::Complete => 0,
-        _ => DEBUG_AGENT_COUNT,
-    }
+fn active_agent_count(projection: &AdminDebugHarnessProjection) -> usize {
+    usize::from(
+        projection.scenario
+            == crate::application::port::inbound::admin_debug_port::AdminDebugScenario::CheckFailureRecovery
+            && projection.stage == AdminDebugStage::Working,
+    )
 }
 
 pub(super) fn stage_readiness(stage: AdminDebugStage) -> &'static str {
@@ -477,7 +481,7 @@ pub(super) fn build_scene(
                 display_name: profile.display_name.to_string(),
                 archetype_key: profile.archetype.to_string(),
                 role_label: profile.role.to_string(),
-                presence_kind: "debug_standby".to_string(),
+                presence_kind: "configured_standby".to_string(),
                 visual_state: GameVisualState::Idle,
                 static_pose: GameStaticPose::Neutral,
                 severity: "muted".to_string(),
@@ -493,6 +497,15 @@ pub(super) fn build_scene(
         standby_profile_count: DEBUG_AGENT_COUNT,
         standby_characters,
         diagnostics: Vec::new(),
+        validation: super::akra_dashboard::GameValidationSceneView {
+            station_state: "idle".to_string(),
+            severity: "muted".to_string(),
+            label: "검증 대기".to_string(),
+            record_key: None,
+            phase: None,
+            packet_kind: None,
+            worker_lease_active: false,
+        },
     }
 }
 

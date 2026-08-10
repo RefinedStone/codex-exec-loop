@@ -6,69 +6,138 @@ const DEFAULT_STEP_INTERVAL: Duration = Duration::from_millis(2_400);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdminDebugScenario {
-    HappyPath,
-    BlockedRecovery,
-    QueuePressure,
+    PostMergeSuccess,
+    CheckFailureRecovery,
+    OptionalSkipped,
+    RequiredMissing,
+    RateLimitRecovery,
+    ProviderOutageRetry,
+    ClosedUnmergedAttested,
+    RestartVerifying,
+    PollClaimRace,
+    DuplicateLateReview,
 }
 
 impl AdminDebugScenario {
+    pub const ALL: [Self; 10] = [
+        Self::PostMergeSuccess,
+        Self::CheckFailureRecovery,
+        Self::OptionalSkipped,
+        Self::RequiredMissing,
+        Self::RateLimitRecovery,
+        Self::ProviderOutageRetry,
+        Self::ClosedUnmergedAttested,
+        Self::RestartVerifying,
+        Self::PollClaimRace,
+        Self::DuplicateLateReview,
+    ];
+
     pub fn key(self) -> &'static str {
         match self {
-            Self::HappyPath => "happy_path",
-            Self::BlockedRecovery => "blocked_recovery",
-            Self::QueuePressure => "queue_pressure",
+            Self::PostMergeSuccess => "post_merge_success",
+            Self::CheckFailureRecovery => "check_failure_recovery",
+            Self::OptionalSkipped => "optional_skipped",
+            Self::RequiredMissing => "required_missing",
+            Self::RateLimitRecovery => "rate_limit_recovery",
+            Self::ProviderOutageRetry => "provider_outage_retry",
+            Self::ClosedUnmergedAttested => "closed_unmerged_attested",
+            Self::RestartVerifying => "restart_verifying",
+            Self::PollClaimRace => "poll_claim_race",
+            Self::DuplicateLateReview => "duplicate_late_review",
         }
     }
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::HappyPath => "정상 배포 루프",
-            Self::BlockedRecovery => "차단 및 복구",
-            Self::QueuePressure => "대기열 압력",
+            Self::PostMergeSuccess => "1 · Post-Merge 성공",
+            Self::CheckFailureRecovery => "2 · 실패 → Queue → 재검증",
+            Self::OptionalSkipped => "3 · Optional skipped",
+            Self::RequiredMissing => "4 · Required missing/skipped",
+            Self::RateLimitRecovery => "5 · Rate limit 복구",
+            Self::ProviderOutageRetry => "6 · Provider outage + RetryNow",
+            Self::ClosedUnmergedAttested => "7 · Closed + distributor attestation",
+            Self::RestartVerifying => "8 · Verifying 중 재시작",
+            Self::PollClaimRace => "9 · Two-process claim race",
+            Self::DuplicateLateReview => "10 · Duplicate + late review",
         }
     }
 
     pub fn from_key(value: &str) -> Option<Self> {
         match value.trim() {
-            "happy_path" => Some(Self::HappyPath),
-            "blocked_recovery" => Some(Self::BlockedRecovery),
-            "queue_pressure" => Some(Self::QueuePressure),
+            "post_merge_success" => Some(Self::PostMergeSuccess),
+            "check_failure_recovery" => Some(Self::CheckFailureRecovery),
+            "optional_skipped" => Some(Self::OptionalSkipped),
+            "required_missing" => Some(Self::RequiredMissing),
+            "rate_limit_recovery" => Some(Self::RateLimitRecovery),
+            "provider_outage_retry" => Some(Self::ProviderOutageRetry),
+            "closed_unmerged_attested" => Some(Self::ClosedUnmergedAttested),
+            "restart_verifying" => Some(Self::RestartVerifying),
+            "poll_claim_race" => Some(Self::PollClaimRace),
+            "duplicate_late_review" => Some(Self::DuplicateLateReview),
             _ => None,
         }
     }
 
     pub(crate) fn stages(self) -> &'static [AdminDebugStage] {
         match self {
-            Self::HappyPath => &[
+            Self::PostMergeSuccess => &[
                 AdminDebugStage::Ready,
+                AdminDebugStage::Delivering,
+                AdminDebugStage::Reviewing,
+                AdminDebugStage::Complete,
+            ],
+            Self::CheckFailureRecovery => &[
+                AdminDebugStage::Ready,
+                AdminDebugStage::Reviewing,
+                AdminDebugStage::Blocked,
                 AdminDebugStage::Intake,
                 AdminDebugStage::Dispatching,
                 AdminDebugStage::Working,
                 AdminDebugStage::Reviewing,
-                AdminDebugStage::Delivering,
-                AdminDebugStage::Cleanup,
                 AdminDebugStage::Complete,
             ],
-            Self::BlockedRecovery => &[
+            Self::OptionalSkipped => &[
                 AdminDebugStage::Ready,
-                AdminDebugStage::Intake,
-                AdminDebugStage::Dispatching,
-                AdminDebugStage::Working,
+                AdminDebugStage::Reviewing,
+                AdminDebugStage::Complete,
+            ],
+            Self::RequiredMissing => &[
+                AdminDebugStage::Ready,
+                AdminDebugStage::Reviewing,
+                AdminDebugStage::Blocked,
+            ],
+            Self::RateLimitRecovery | Self::ProviderOutageRetry => &[
+                AdminDebugStage::Ready,
                 AdminDebugStage::Blocked,
                 AdminDebugStage::Recovering,
-                AdminDebugStage::Working,
                 AdminDebugStage::Reviewing,
-                AdminDebugStage::Delivering,
                 AdminDebugStage::Complete,
             ],
-            Self::QueuePressure => &[
+            Self::ClosedUnmergedAttested => &[
                 AdminDebugStage::Ready,
-                AdminDebugStage::Intake,
-                AdminDebugStage::QueuePressure,
-                AdminDebugStage::Dispatching,
-                AdminDebugStage::Working,
-                AdminDebugStage::Reviewing,
+                AdminDebugStage::Blocked,
                 AdminDebugStage::Delivering,
+                AdminDebugStage::Reviewing,
+                AdminDebugStage::Complete,
+            ],
+            Self::RestartVerifying => &[
+                AdminDebugStage::Ready,
+                AdminDebugStage::Reviewing,
+                AdminDebugStage::Recovering,
+                AdminDebugStage::Reviewing,
+                AdminDebugStage::Complete,
+            ],
+            Self::PollClaimRace => &[
+                AdminDebugStage::Ready,
+                AdminDebugStage::Dispatching,
+                AdminDebugStage::Reviewing,
+                AdminDebugStage::Complete,
+            ],
+            Self::DuplicateLateReview => &[
+                AdminDebugStage::Ready,
+                AdminDebugStage::Reviewing,
+                AdminDebugStage::QueuePressure,
+                AdminDebugStage::Reviewing,
                 AdminDebugStage::Complete,
             ],
         }

@@ -858,7 +858,6 @@
     align-items: start;
     padding: 9px 12px;
     border: 1px solid rgba(245, 200, 75, 0.5);
-    border-left: 4px solid var(--game-yellow);
     border-radius: 6px;
     background: rgba(45, 30, 7, 0.36);
   }
@@ -870,7 +869,6 @@
   }
   .attention-strip.state-blocked {
     border-color: rgba(255, 107, 107, 0.56);
-    border-left-color: var(--game-red);
     background: rgba(54, 16, 21, 0.36);
   }
   .attention-strip-label {
@@ -980,16 +978,16 @@
     margin: 0;
     padding: 8px 11px;
     border: 1px solid rgba(245, 200, 75, 0.52);
-    border-left: 4px solid var(--game-yellow);
     border-radius: 6px;
     background:
       linear-gradient(90deg, rgba(245, 200, 75, 0.08), transparent 42%),
       rgba(7, 20, 31, 0.94);
-    box-shadow: inset 0 0 0 1px rgba(245, 200, 75, 0.08);
+    box-shadow:
+      inset 0 2px 0 rgba(245, 200, 75, 0.24),
+      inset 0 0 0 1px rgba(245, 200, 75, 0.08);
   }
   .debug-harness-panel[data-debug-stage="blocked"] {
     border-color: rgba(255, 107, 107, 0.58);
-    border-left-color: var(--game-red);
     background:
       linear-gradient(90deg, rgba(255, 107, 107, 0.09), transparent 42%),
       rgba(20, 14, 25, 0.96);
@@ -1019,10 +1017,9 @@
     letter-spacing: 0.08em;
   }
   .debug-harness-identity strong {
-    overflow: hidden;
     font-size: 0.82rem;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    line-height: 1.28;
+    overflow-wrap: anywhere;
   }
   .debug-harness-identity small {
     grid-column: 1 / -1;
@@ -1045,10 +1042,11 @@
   }
   .debug-harness-progress span {
     display: block;
-    width: var(--debug-progress, 0%);
+    width: 100%;
     height: 100%;
     background: linear-gradient(90deg, var(--game-blue), var(--game-green));
-    transition: width 180ms ease;
+    clip-path: inset(0 calc(100% - var(--debug-progress, 0%)) 0 0);
+    transition: clip-path 180ms ease;
   }
   .debug-harness-controls {
     display: flex;
@@ -1441,6 +1439,175 @@
     grid-template-columns: minmax(0, 1fr);
     margin-top: 0;
   }
+  .validation-kpis {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .validation-kpi {
+    display: grid;
+    grid-template-columns: 28px minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+    min-height: 48px;
+    padding: 8px 12px;
+    border: 1px solid rgba(93, 169, 255, 0.28);
+    border-radius: 7px;
+    background: rgba(5, 18, 31, 0.9);
+  }
+  .validation-kpi-icon {
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    border: 1px solid rgba(93, 169, 255, 0.38);
+    color: var(--game-blue);
+    background: rgba(93, 169, 255, 0.1);
+    font-size: 11px;
+    font-weight: 900;
+  }
+  .validation-kpi small,
+  .validation-kpi strong { display: block; }
+  .validation-kpi > strong {
+    color: var(--game-ink);
+    font-size: 18px;
+    font-variant-numeric: tabular-nums;
+  }
+  .validation-kpi.is-danger .validation-kpi-icon { color: var(--game-red); border-color: rgba(255,107,107,.42); }
+  .validation-kpi.is-warning .validation-kpi-icon { color: var(--game-yellow); border-color: rgba(245,200,75,.42); }
+  .validation-panel { grid-column: 1 / -1; }
+  .validation-panel .panel-title small { font-variant-numeric: tabular-nums; }
+  .validation-rail {
+    overflow: hidden;
+    border: 1px solid rgba(93, 169, 255, 0.24);
+    background: rgba(3, 13, 24, 0.58);
+  }
+  .validation-rail-head,
+  .validation-record {
+    display: grid;
+    grid-template-columns: minmax(174px, 1.35fr) minmax(116px, .8fr) minmax(150px, 1fr) minmax(118px, .8fr) minmax(150px, 1fr) minmax(116px, .8fr);
+    gap: 1px;
+  }
+  .validation-rail-head {
+    color: var(--game-muted);
+    background: rgba(93, 169, 255, 0.08);
+    font-size: 10px;
+    font-weight: 900;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+  .validation-rail-head span,
+  .validation-cell { padding: 9px 10px; }
+  .validation-record {
+    appearance: none;
+    width: 100%;
+    border: 0;
+    border-top: 1px solid rgba(255,255,255,.07);
+    color: inherit;
+    background: transparent;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background 160ms ease, box-shadow 160ms ease;
+  }
+  .validation-record:hover,
+  .validation-record:focus-visible { background: rgba(93, 169, 255, 0.08); }
+  .validation-record.is-selected { box-shadow: inset 3px 0 0 var(--game-yellow); }
+  .validation-record.severity-danger { box-shadow: inset 3px 0 0 var(--game-red); }
+  .validation-record.severity-warning { box-shadow: inset 3px 0 0 var(--game-yellow); }
+  .validation-record.severity-success { box-shadow: inset 3px 0 0 var(--game-green); }
+  .validation-cell {
+    display: grid;
+    align-content: center;
+    gap: 3px;
+    min-height: 64px;
+    border-left: 1px solid rgba(255,255,255,.045);
+  }
+  .validation-cell:first-child { border-left: 0; }
+  .validation-cell strong,
+  .validation-cell small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .validation-stage {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    width: fit-content;
+    color: var(--game-muted);
+    font-size: 11px;
+    font-weight: 900;
+  }
+  .validation-stage::before {
+    content: "·";
+    display: grid;
+    place-items: center;
+    width: 16px;
+    height: 16px;
+    border: 1px solid currentColor;
+    line-height: 1;
+  }
+  .validation-stage.is-complete { color: var(--game-green); }
+  .validation-stage.is-active { color: var(--game-blue); }
+  .validation-stage.is-warning { color: var(--game-yellow); }
+  .validation-stage.is-danger { color: var(--game-red); }
+  .validation-stage.is-complete::before { content: "✓"; }
+  .validation-stage.is-active::before { content: "↻"; }
+  .validation-stage.is-warning::before { content: "!"; }
+  .validation-stage.is-danger::before { content: "×"; }
+  .validation-empty {
+    margin: 0;
+    padding: 18px;
+    text-align: center;
+  }
+  .validation-detail {
+    display: grid;
+    gap: 14px;
+  }
+  .validation-detail-section {
+    display: grid;
+    gap: 8px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(255,255,255,.08);
+  }
+  .validation-detail-section:first-child { padding-top: 0; border-top: 0; }
+  .validation-detail-section h4 { margin: 0; color: var(--game-ink); font-size: 12px; }
+  .validation-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 7px; }
+  .validation-detail-card {
+    display: grid;
+    gap: 3px;
+    padding: 8px;
+    border: 1px solid rgba(255,255,255,.09);
+    background: rgba(255,255,255,.035);
+  }
+  .validation-command-list { display: flex; flex-wrap: wrap; gap: 7px; }
+  .validation-command {
+    min-height: 34px;
+    padding: 7px 10px;
+    border: 1px solid rgba(93,169,255,.44);
+    color: var(--game-ink);
+    background: rgba(93,169,255,.1);
+    font: inherit;
+    font-size: 11px;
+    font-weight: 900;
+    cursor: pointer;
+  }
+  .validation-command:disabled { cursor: not-allowed; opacity: .5; }
+  .validation-command-status { min-height: 18px; color: var(--game-muted); font-size: 11px; }
+  .admin-detail-drawer[data-detail-mode="validation"] {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    width: 620px;
+    max-height: min(78vh, 760px);
+    overflow: hidden;
+  }
+  .admin-detail-drawer[data-detail-mode="validation"] .drawer-body {
+    min-height: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+  }
   @media (max-width: 1360px) {
     .command-controls {
       grid-template-columns: auto minmax(0, 1fr);
@@ -1474,6 +1641,26 @@
     .draft-topbar {
       grid-template-columns: repeat(3, minmax(0, 1fr));
     }
+    .validation-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .validation-rail-head { display: none; }
+    .validation-rail { display: grid; gap: 8px; border: 0; background: transparent; }
+    .validation-record {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0;
+      border: 1px solid rgba(93,169,255,.24);
+      background: rgba(3,13,24,.66);
+    }
+    .validation-cell { min-height: 58px; border: 0; border-top: 1px solid rgba(255,255,255,.055); }
+    .validation-cell::before {
+      content: attr(data-label);
+      color: var(--game-muted);
+      font-size: 9px;
+      font-weight: 900;
+      letter-spacing: .07em;
+      text-transform: uppercase;
+    }
+    .validation-cell:first-child { grid-column: 1 / -1; border-top: 0; }
+    .validation-detail-grid { grid-template-columns: 1fr; }
     .command-summary {
       grid-column: 1 / -1;
       grid-template-columns: 10px minmax(82px, 0.6fr) minmax(150px, 1.4fr);
@@ -1539,6 +1726,10 @@
     }
     .debug-harness-controls {
       justify-content: flex-start;
+    }
+    .debug-harness-controls select,
+    .debug-harness-controls button {
+      min-height: 40px;
     }
     .debug-harness-status {
       text-align: left;
@@ -1615,6 +1806,29 @@
     </div>
   </div>
 
+  <section class="validation-kpis" aria-label="PR 검증 핵심 지표">
+    <div class="validation-kpi">
+      <span class="validation-kpi-icon" aria-hidden="true">CI</span>
+      <span><small>검증 중</small><strong class="sr-only">현재 검증 중인 PR</strong></span>
+      <strong data-validation-kpi="verifying">{{ dashboard.kpis.validation_verifying }}</strong>
+    </div>
+    <div class="validation-kpi is-danger">
+      <span class="validation-kpi-icon" aria-hidden="true">!</span>
+      <span><small>실패</small><strong class="sr-only">실패 또는 차단된 검증</strong></span>
+      <strong data-validation-kpi="failed">{{ dashboard.kpis.validation_failed }}</strong>
+    </div>
+    <div class="validation-kpi is-warning">
+      <span class="validation-kpi-icon" aria-hidden="true">Q</span>
+      <span><small>복구 Queue</small><strong class="sr-only">복구 큐 대기</strong></span>
+      <strong data-validation-kpi="queued">{{ dashboard.kpis.validation_remediation_queued }}</strong>
+    </div>
+    <div class="validation-kpi is-warning">
+      <span class="validation-kpi-icon" aria-hidden="true">T</span>
+      <span><small>stale</small><strong class="sr-only">관측 지연 검증</strong></span>
+      <strong data-validation-kpi="stale">{{ dashboard.kpis.validation_stale }}</strong>
+    </div>
+  </section>
+
   {% if dashboard.debug_harness.enabled %}
   <section
     class="debug-harness-panel"
@@ -1631,7 +1845,7 @@
     <div class="debug-harness-state">
       <strong>
         <span data-debug-stage-label>{{ dashboard.debug_harness.stage_label }}</span>
-        · <span data-debug-stage-index>{{ dashboard.debug_harness.stage_index + 1 }}</span>/{{ dashboard.debug_harness.stage_count }}
+        · <span data-debug-stage-index>{{ dashboard.debug_harness.stage_index + 1 }}</span>/<span data-debug-stage-count>{{ dashboard.debug_harness.stage_count }}</span>
       </strong>
       <small data-debug-stage-summary>{{ dashboard.debug_harness.stage_summary }}</small>
       <span class="debug-harness-progress" aria-hidden="true">
@@ -2037,6 +2251,43 @@
       </button>
       {% endfor %}
       {% endif %}
+    </section>
+
+    <section class="game-panel validation-panel" id="validation-rail" aria-labelledby="validation-rail-title">
+      <div class="panel-title">
+        <h3 id="validation-rail-title">Validation Rail</h3>
+        <small><span data-validation-mode>{{ dashboard.validation.scheduler_mode }}</span> · <span data-validation-count>{{ dashboard.validation.records.len() }}</span> records</small>
+      </div>
+      <div class="validation-rail" data-validation-list aria-label="PR 검증 레코드">
+        <div class="validation-rail-head" aria-hidden="true">
+          <span>PR / Akra ID</span><span>Integrated</span><span>Actions</span><span>Findings</span><span>Remediation</span><span>Verified</span>
+        </div>
+        {% if dashboard.validation.records.is_empty() %}
+        <p class="validation-empty" data-validation-empty>관찰 중인 PR 검증 레코드가 없습니다.</p>
+        {% else %}
+        {% for record in dashboard.validation.records %}
+        <button
+          type="button"
+          class="validation-record severity-{{ record.severity }}"
+          data-validation-record-key="{{ record.record_key }}"
+          data-validation-revision="{{ record.observation_revision }}"
+          data-detail-type="validation"
+          data-detail-title="PR #{{ record.pull_request_number }} · {{ record.akra_id }}"
+          data-detail-subtitle="{{ record.phase_label }} · {{ record.target_short_sha }}"
+          data-detail-state="{{ record.phase_label }}"
+          data-detail-severity="{{ record.severity }}"
+          aria-label="PR {{ record.pull_request_number }}, {{ record.phase_label }}, 상세 보기"
+        >
+          <span class="validation-cell" data-label="PR / Akra ID"><strong>#{{ record.pull_request_number }} · {{ record.akra_id }}</strong><small>{{ record.repository }} · {{ record.target_short_sha }}</small></span>
+          <span class="validation-cell" data-label="Integrated"><span class="validation-stage {% if record.integrated %}is-complete{% else %}is-warning{% endif %}">{% if record.integrated %}증거 확인{% else %}대기{% endif %}</span><small>{{ record.evidence_short_sha.as_deref().unwrap_or("evidence 없음") }}</small></span>
+          <span class="validation-cell" data-label="Actions"><span class="validation-stage {% if record.phase == crate::application::port::inbound::pr_validation_query_port::PrValidationAdminPhase::Verified %}is-complete{% else %}is-active{% endif %}">{{ record.required_checks_succeeded }}/{{ record.required_checks_total }} required</span><small>latest attempt {{ record.latest_required_attempt() }}</small></span>
+          <span class="validation-cell" data-label="Findings"><span class="validation-stage {% if record.finding_count > record.remediation_count %}is-danger{% else %}is-complete{% endif %}">{{ record.finding_count }} finding</span><small>{% if record.stale %}stale {{ record.stale_seconds }}s{% else %}관측 최신{% endif %}</small></span>
+          <span class="validation-cell" data-label="Remediation"><span class="validation-stage {% if record.phase == crate::application::port::inbound::pr_validation_query_port::PrValidationAdminPhase::RemediationQueued || record.phase == crate::application::port::inbound::pr_validation_query_port::PrValidationAdminPhase::RemediationRunning %}is-warning{% else %}is-complete{% endif %}">{{ record.remediation_count }} correlated</span><small>{{ record.correlations.len() }} worker link</small></span>
+          <span class="validation-cell" data-label="Verified"><span class="validation-stage {% if record.verified %}is-complete{% else if record.phase == crate::application::port::inbound::pr_validation_query_port::PrValidationAdminPhase::Blocked || record.phase == crate::application::port::inbound::pr_validation_query_port::PrValidationAdminPhase::Failed %}is-danger{% else %}is-active{% endif %}">{{ record.phase_label }}</span><small>{% if record.paused %}paused{% else %}rev {{ record.observation_revision }}{% endif %}</small></span>
+        </button>
+        {% endfor %}
+        {% endif %}
+      </div>
     </section>
 
   </div>

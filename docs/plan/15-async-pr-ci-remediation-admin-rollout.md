@@ -510,15 +510,15 @@ provider를 pagination 완료와 혼동하지 않는다.
 
 권장 branch: `codex/admin-pr-validation-operations`
 
-- [ ] KPI `검증 중`, `실패`, `복구 Queue`, `stale`를 추가한다.
-- [ ] delivery pipeline 아래에 full-width Validation Rail을 추가한다.
-- [ ] detail drawer에 checks, attempts, timeline, retry, correlation을 표시한다.
-- [ ] color 외 icon/text, keyboard/focus/accessibility DOM projection을 유지한다.
-- [ ] 좁은 화면에서는 rail을 card list로 전환한다.
-- [ ] 게임 scene에 QA/CI station과 signal packet을 추가한다.
-- [ ] passive CI에는 가짜 worker를 만들지 않고 실제 lease 때만 캐릭터를 이동시킨다.
-- [ ] typed retry/pause/resume/queue/acknowledge command와 CSRF endpoint를 연결한다.
-- [ ] stale revision, duplicate command, observe-mode admission을 안전하게 거절한다.
+- [x] KPI `검증 중`, `실패`, `복구 Queue`, `stale`를 추가한다.
+- [x] delivery pipeline 아래에 full-width Validation Rail을 추가한다.
+- [x] detail drawer에 checks, attempts, timeline, retry, correlation을 표시한다.
+- [x] color 외 icon/text, keyboard/focus/accessibility DOM projection을 유지한다.
+- [x] 좁은 화면에서는 rail을 card list로 전환한다.
+- [x] 게임 scene에 QA/CI station과 signal packet을 추가한다.
+- [x] passive CI에는 가짜 worker를 만들지 않고 실제 lease 때만 캐릭터를 이동시킨다.
+- [x] typed retry/pause/resume/queue/acknowledge command와 CSRF endpoint를 연결한다.
+- [x] stale revision, duplicate command, observe-mode admission을 안전하게 거절한다.
 
 Debug Harness 필수 시나리오:
 
@@ -544,6 +544,8 @@ bash scripts/check_admin_graphic_visual.sh
 ```
 
 완료 조건: 열 개 시나리오에서 API, DOM, Pixi inspection이 같은 semantic state를 보고한다.
+
+검증 증거: [`admin-pr-validation-operations-2026-08-10`](../validation/artifacts/admin-pr-validation-operations-2026-08-10/README.md)
 
 ### PR 7 — Shadow, canary, 운영 정책 전환과 reference 갱신
 

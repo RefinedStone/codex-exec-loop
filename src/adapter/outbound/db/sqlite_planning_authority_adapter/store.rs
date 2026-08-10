@@ -322,7 +322,20 @@ pub(super) fn ensure_schema(
                 poll_lease_expires_at TEXT,
                 last_error_class TEXT,
                 rate_limit_remaining INTEGER,
-                rate_limit_reset_at TEXT
+                rate_limit_reset_at TEXT,
+                operator_paused INTEGER NOT NULL DEFAULT 0,
+                operator_acknowledged_at TEXT,
+                last_operator_command_id TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS runtime_pr_validation_admin_commands (
+                command_id TEXT PRIMARY KEY,
+                record_key TEXT NOT NULL,
+                command_action TEXT NOT NULL,
+                expected_observation_revision INTEGER NOT NULL,
+                command_state TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                content TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS runtime_dispatch_commands (
@@ -374,6 +387,7 @@ pub(super) fn ensure_schema(
     ensure_runtime_event_projection_index(&transaction)?;
     ensure_pr_validation_attestation_columns(&transaction)?;
     ensure_pr_validation_scheduler_columns(&transaction)?;
+    ensure_pr_validation_admin_operation_schema(&transaction)?;
     if previous_schema_version.is_some_and(|version| version < 12) {
         migrate_legacy_pr_validation_attestations(&transaction)?;
     }
@@ -559,6 +573,48 @@ fn ensure_pr_validation_scheduler_columns(connection: &Connection) -> Result<()>
                  );",
         )
         .context("failed to initialize PR validation scheduler indexes")?;
+    Ok(())
+}
+
+fn ensure_pr_validation_admin_operation_schema(connection: &Connection) -> Result<()> {
+    for (column_name, column_definition) in [
+        (
+            "operator_paused",
+            "operator_paused INTEGER NOT NULL DEFAULT 0",
+        ),
+        ("operator_acknowledged_at", "operator_acknowledged_at TEXT"),
+        ("last_operator_command_id", "last_operator_command_id TEXT"),
+    ] {
+        if !table_column_exists(connection, "runtime_pr_validation_records", column_name)? {
+            connection
+                .execute(
+                    &format!(
+                        "ALTER TABLE runtime_pr_validation_records ADD COLUMN {column_definition}"
+                    ),
+                    [],
+                )
+                .with_context(|| {
+                    format!(
+                        "failed to add runtime_pr_validation_records Admin column `{column_name}`"
+                    )
+                })?;
+        }
+    }
+    connection
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS runtime_pr_validation_admin_commands (
+                 command_id TEXT PRIMARY KEY,
+                 record_key TEXT NOT NULL,
+                 command_action TEXT NOT NULL,
+                 expected_observation_revision INTEGER NOT NULL,
+                 command_state TEXT NOT NULL,
+                 created_at TEXT NOT NULL,
+                 content TEXT NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_runtime_pr_validation_admin_commands_record
+                 ON runtime_pr_validation_admin_commands(record_key, created_at DESC);",
+        )
+        .context("failed to initialize PR validation Admin operation schema")?;
     Ok(())
 }
 

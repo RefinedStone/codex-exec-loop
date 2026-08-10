@@ -13,5 +13,6 @@ pub mod planning_control_port;
 pub mod planning_projection_port;
 pub mod planning_task_tool_port;
 pub mod planning_workspace_maintenance_port;
+pub mod pr_validation_command_port;
 pub mod pr_validation_query_port;
 pub mod review_center_query_port;

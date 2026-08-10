@@ -181,6 +181,14 @@ pub(super) struct AkraControlRequest {
     pub(super) action: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct PrValidationCommandRequest {
+    pub(super) command_id: String,
+    pub(super) action: String,
+    pub(super) expected_revision: u64,
+}
+
 /*
  * API response는 browser client에 필요한 adapter metadata와 application read model을 함께 노출한다.
  * summary가 돌려주는 csrf_token은 single-page admin client가 이후 JSON mutation을 시작하기 위한 bootstrap 값이다.
