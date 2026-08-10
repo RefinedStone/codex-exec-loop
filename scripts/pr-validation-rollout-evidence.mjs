@@ -417,11 +417,33 @@ function normalizeJob(job) {
   };
 }
 
-function latestRun(runs, event, sha) {
-  return runs
-    .filter((run) => run.event === event && run.head_sha === sha && run.status === "completed")
-    .toSorted((left, right) => (right.run_attempt || 1) - (left.run_attempt || 1)
-      || asDate(right.updated_at, "run updated_at") - asDate(left.updated_at, "run updated_at"))[0] || null;
+function compareProviderIdsDescending(left, right) {
+  const leftId = BigInt(required(left.id, "run id"));
+  const rightId = BigInt(required(right.id, "run id"));
+  if (leftId === rightId) return 0;
+  return rightId > leftId ? 1 : -1;
+}
+
+export function latestRun(runs, event, sha) {
+  const latestAttemptByRun = new Map();
+  for (const candidate of runs.filter(
+    (run) => run.event === event && run.head_sha === sha && run.status === "completed",
+  )) {
+    const key = String(candidate.id);
+    const existing = latestAttemptByRun.get(key);
+    if (!existing
+      || (candidate.run_attempt || 1) > (existing.run_attempt || 1)
+      || ((candidate.run_attempt || 1) === (existing.run_attempt || 1)
+        && asDate(candidate.updated_at, "run updated_at")
+          > asDate(existing.updated_at, "run updated_at"))) {
+      latestAttemptByRun.set(key, candidate);
+    }
+  }
+
+  return [...latestAttemptByRun.values()].toSorted((left, right) =>
+    asDate(right.created_at, "run created_at") - asDate(left.created_at, "run created_at")
+      || asDate(right.updated_at, "run updated_at") - asDate(left.updated_at, "run updated_at")
+      || compareProviderIdsDescending(left, right))[0] || null;
 }
 
 function readContractEvidence(path) {

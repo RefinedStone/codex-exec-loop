@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-08-10T14:52:43.690Z",
+  "generatedAt": "2026-08-10T14:55:31.941Z",
   "repository": "RefinedStone/codex-exec-loop",
   "baseBranch": "prerelease",
   "decision": {
@@ -611,11 +611,11 @@
   },
   "quota": {
     "limit": 5000,
-    "remaining": 4950,
-    "used": 50,
-    "reset": 1786373563,
+    "remaining": 4995,
+    "used": 5,
+    "reset": 1786377195,
     "collectorRequests": 3,
-    "usedPercent": 1
+    "usedPercent": 0.1
   },
   "criteria": {
     "sampleWindow": {
@@ -640,7 +640,7 @@
     },
     "apiBudget": {
       "status": "pass",
-      "observed": 1,
+      "observed": 0.1,
       "limit": 50,
       "source": "github_rate_limit",
       "note": "percentage of the authenticated core quota currently consumed"

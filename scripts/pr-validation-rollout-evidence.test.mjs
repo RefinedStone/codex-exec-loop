@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   buildRolloutEvidence,
+  latestRun,
   nearestRankPercentile,
   renderRolloutMarkdown,
 } from "./pr-validation-rollout-evidence.mjs";
@@ -74,6 +75,45 @@ test("nearest-rank percentile is deterministic for small rollout samples", () =>
   assert.equal(nearestRankPercentile([9, 1, 5, 2, 7], 0.5), 5);
   assert.equal(nearestRankPercentile([9, 1, 5, 2, 7], 0.95), 9);
   assert.equal(nearestRankPercentile([], 0.5), null);
+});
+
+test("latest run prefers a newer run over an older rerun attempt for the same SHA", () => {
+  const providerRun = (id, createdAt, updatedAt, attempt) => ({
+    id,
+    event: "pull_request",
+    head_sha: "same-head",
+    status: "completed",
+    conclusion: "success",
+    created_at: createdAt,
+    updated_at: updatedAt,
+    run_attempt: attempt,
+  });
+  const olderRerun = providerRun(
+    100,
+    "2026-08-10T00:00:00Z",
+    "2026-08-10T04:00:00Z",
+    3,
+  );
+  const newerRunLatestAttempt = providerRun(
+    200,
+    "2026-08-10T03:00:00Z",
+    "2026-08-10T03:30:00Z",
+    2,
+  );
+  const newerRunOlderAttempt = providerRun(
+    200,
+    "2026-08-10T03:00:00Z",
+    "2026-08-10T03:15:00Z",
+    1,
+  );
+
+  const selected = latestRun(
+    [olderRerun, newerRunOlderAttempt, newerRunLatestAttempt],
+    "pull_request",
+    "same-head",
+  );
+  assert.equal(selected.id, 200);
+  assert.equal(selected.run_attempt, 2);
 });
 
 test("passing live and deterministic evidence recommends remediate without changing Rulesets", () => {
