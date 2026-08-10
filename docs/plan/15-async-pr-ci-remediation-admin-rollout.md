@@ -556,7 +556,7 @@ bash scripts/check_admin_graphic_visual.sh
 - [x] quota, false actionable, stale, duplicate, scheduler ownership을 측정한다.
 - [x] production repository에서는 성공 canary만 수행한다. 실패 canary는 test repository 또는
       harness에서 수행한다.
-- [ ] shadow 기준 통과 후 mode를 `remediate`로 전환한다.
+- [x] shadow 기준 통과 후 mode를 `remediate`로 전환한다.
 - [ ] 그 다음에만 사용자 승인으로 Ruleset required context를 측정된 `Fast Gate`로 변경한다.
 - [x] broad bypass actor를 추가하거나 protection을 끄지 않는다.
 - [x] current product/architecture/Admin reference와 한국어 대응 문서를 실제 동작으로 갱신한다.

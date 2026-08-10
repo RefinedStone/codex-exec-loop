@@ -96,6 +96,7 @@ test("an independently supplied PR run records the first actual stable Fast Gate
   }];
 
   const evidence = buildRolloutEvidence(input);
+  assert.equal(evidence.timings.fastGate.label, "projected");
   assert.equal(evidence.timings.actualFastGate.sampleCount, 1);
   assert.equal(evidence.timings.actualFastGate.p50Seconds, 74);
   assert.deepEqual(evidence.actualFastGateRuns.map((run) => run.id), [9_090]);

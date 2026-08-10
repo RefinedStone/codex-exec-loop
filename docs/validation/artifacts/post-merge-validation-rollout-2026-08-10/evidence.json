@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-08-10T14:46:37.432Z",
+  "generatedAt": "2026-08-10T14:52:43.690Z",
   "repository": "RefinedStone/codex-exec-loop",
   "baseBranch": "prerelease",
   "decision": {
@@ -576,9 +576,9 @@
       "label": "projected"
     },
     "actualFastGate": {
-      "sampleCount": 0,
-      "p50Seconds": null,
-      "p95Seconds": null,
+      "sampleCount": 1,
+      "p50Seconds": 114,
+      "p95Seconds": 114,
       "label": "actual"
     },
     "ciGate": {
@@ -594,7 +594,16 @@
       "label": "actual"
     }
   },
-  "actualFastGateRuns": [],
+  "actualFastGateRuns": [
+    {
+      "id": 31400129391,
+      "headSha": "47068fb1684de022221cbb3ea67b2bc87dc01b3c",
+      "conclusion": "success",
+      "seconds": 114,
+      "runUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31400129391",
+      "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31400129391/job/93493230239"
+    }
+  ],
   "postMerge": {
     "sampleCount": 5,
     "failureCount": 0,
@@ -602,11 +611,11 @@
   },
   "quota": {
     "limit": 5000,
-    "remaining": 4994,
-    "used": 6,
+    "remaining": 4950,
+    "used": 50,
     "reset": 1786373563,
-    "collectorRequests": 4,
-    "usedPercent": 0.12
+    "collectorRequests": 3,
+    "usedPercent": 1
   },
   "criteria": {
     "sampleWindow": {
@@ -631,7 +640,7 @@
     },
     "apiBudget": {
       "status": "pass",
-      "observed": 0.12,
+      "observed": 1,
       "limit": 50,
       "source": "github_rate_limit",
       "note": "percentage of the authenticated core quota currently consumed"
@@ -813,6 +822,12 @@
         "wide": "admin-rollout-remediation-wide.png",
         "mobileComplete": "admin-rollout-remediation-complete-mobile.png"
       }
+    },
+    "operation": {
+      "verifiedAt": "2026-08-10T14:51:04.9234027Z",
+      "repositoryLocalSchedulerMode": "remediate",
+      "queueAdmission": "enabled_for_typed_actionable_findings",
+      "githubRuleset": "unchanged_approval_required"
     }
   }
 }
