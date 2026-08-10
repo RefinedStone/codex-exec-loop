@@ -26,6 +26,9 @@ use crate::application::port::inbound::pr_validation_query_port::{
 };
 use crate::application::port::inbound::pr_validation_rollout_evidence_query_port::{
     PR_VALIDATION_EVIDENCE_MAX_HISTORY_LIMIT, PrValidationCriterionSnapshot,
+    PrValidationEvidenceCollectionSnapshot, PrValidationEvidenceMetricTrendSnapshot,
+    PrValidationEvidenceTrendSnapshot, PrValidationEvidenceWarningKind,
+    PrValidationEvidenceWarningSeverity, PrValidationEvidenceWarningSnapshot,
     PrValidationGateMetricSnapshot, PrValidationMetricLabel, PrValidationProductionCanarySnapshot,
     PrValidationQuotaSnapshot, PrValidationRolloutEvidenceCursorError,
     PrValidationRolloutEvidenceLimitError, PrValidationRolloutEvidencePage,
@@ -278,6 +281,8 @@ impl PrValidationRolloutEvidenceQueryPort for AdminDebugHarnessService {
         }
         let end = (start + request.limit).min(snapshots.len());
         let latest = snapshots[0].clone();
+        let trends = debug_evidence_trends(&snapshots);
+        let warnings = debug_evidence_warnings(&latest);
         let last_valid = snapshots
             .iter()
             .find(|snapshot| snapshot.summary.status.is_structurally_valid())
@@ -287,7 +292,22 @@ impl PrValidationRolloutEvidenceQueryPort for AdminDebugHarnessService {
             last_valid,
             history: snapshots[start..end].to_vec(),
             next_cursor: (end < snapshots.len()).then(|| format!("debug-evidence:{end}")),
+            revision: Some(i64::try_from(self.projection().revision).unwrap_or(i64::MAX)),
+            trends,
+            warnings,
+            collection: PrValidationEvidenceCollectionSnapshot {
+                state: "debug_fixture".to_string(),
+                revision: Some(i64::try_from(self.projection().revision).unwrap_or(i64::MAX)),
+                last_outcome: Some("debug_fixture".to_string()),
+                ..Default::default()
+            },
         })
+    }
+
+    fn load_revision(&self) -> Result<Option<i64>> {
+        Ok(Some(
+            i64::try_from(self.projection().revision).unwrap_or(i64::MAX),
+        ))
     }
 }
 
@@ -521,6 +541,101 @@ fn debug_rollout_evidence_history(
         None,
     );
     vec![current, previous, projected_only]
+}
+
+fn debug_evidence_trends(
+    snapshots: &[PrValidationRolloutEvidenceSnapshot],
+) -> PrValidationEvidenceTrendSnapshot {
+    let Some(current) = snapshots.first().map(|snapshot| &snapshot.summary) else {
+        return PrValidationEvidenceTrendSnapshot::default();
+    };
+    let previous = snapshots.get(1).map(|snapshot| &snapshot.summary);
+    let comparisons = [
+        (
+            "actual_fast_gate",
+            &current.actual_fast_gate,
+            previous.map(|summary| &summary.actual_fast_gate),
+        ),
+        (
+            "ci_gate",
+            &current.ci_gate,
+            previous.map(|summary| &summary.ci_gate),
+        ),
+        (
+            "post_merge_gate",
+            &current.post_merge_gate,
+            previous.map(|summary| &summary.post_merge_gate),
+        ),
+    ]
+    .into_iter()
+    .map(|(metric, current, previous)| {
+        let previous_sample_count = previous.and_then(|value| value.sample_count);
+        let previous_p95_seconds = previous.and_then(|value| value.p95_seconds);
+        PrValidationEvidenceMetricTrendSnapshot {
+            metric: metric.to_string(),
+            current_sample_count: current.sample_count,
+            previous_sample_count,
+            sample_count_delta: current
+                .sample_count
+                .zip(previous_sample_count)
+                .map(|(current, previous)| current as i64 - previous as i64),
+            current_p95_seconds: current.p95_seconds,
+            previous_p95_seconds,
+            p95_delta_seconds: current
+                .p95_seconds
+                .zip(previous_p95_seconds)
+                .map(|(current, previous)| current - previous),
+            p95_delta_percent: current.p95_seconds.zip(previous_p95_seconds).and_then(
+                |(current, previous)| {
+                    (previous > 0.0).then_some(((current - previous) / previous) * 100.0)
+                },
+            ),
+        }
+    })
+    .collect();
+    PrValidationEvidenceTrendSnapshot {
+        comparisons,
+        actual_minus_projected_p95_seconds: current
+            .actual_fast_gate
+            .p95_seconds
+            .zip(current.historical_fast_gate.p95_seconds)
+            .map(|(actual, projected)| actual - projected),
+        actual_to_projected_p95_ratio: current
+            .actual_fast_gate
+            .p95_seconds
+            .zip(current.historical_fast_gate.p95_seconds)
+            .and_then(|(actual, projected)| (projected > 0.0).then_some(actual / projected)),
+    }
+}
+
+fn debug_evidence_warnings(
+    latest: &PrValidationRolloutEvidenceSnapshot,
+) -> Vec<PrValidationEvidenceWarningSnapshot> {
+    let mut warnings = Vec::new();
+    if latest.summary.actual_fast_gate.sample_count.unwrap_or(0) < 3 {
+        warnings.push(PrValidationEvidenceWarningSnapshot {
+            kind: PrValidationEvidenceWarningKind::InsufficientActualSamples,
+            severity: PrValidationEvidenceWarningSeverity::Info,
+            message: "Actual Fast Gate 표본이 3개 미만이라 추세 판단 신뢰도가 낮습니다."
+                .to_string(),
+        });
+    }
+    if latest.summary.status == PrValidationRolloutEvidenceStatus::Stale {
+        warnings.push(PrValidationEvidenceWarningSnapshot {
+            kind: PrValidationEvidenceWarningKind::StaleEvidence,
+            severity: PrValidationEvidenceWarningSeverity::Warning,
+            message: "최신 evidence가 freshness 경계를 초과했습니다.".to_string(),
+        });
+    }
+    if latest.summary.status == PrValidationRolloutEvidenceStatus::Unavailable {
+        warnings.push(PrValidationEvidenceWarningSnapshot {
+            kind: PrValidationEvidenceWarningKind::CollectionUnavailable,
+            severity: PrValidationEvidenceWarningSeverity::Warning,
+            message: "최근 evidence 수집이 실패했으며 마지막 유효 snapshot을 보존합니다."
+                .to_string(),
+        });
+    }
+    warnings
 }
 
 fn debug_rollout_evidence_snapshot(

@@ -338,6 +338,44 @@ pub(super) fn ensure_schema(
                 content TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS runtime_pr_validation_evidence_snapshots (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                scope_key TEXT NOT NULL,
+                dedupe_key TEXT NOT NULL,
+                repository TEXT,
+                base_branch TEXT,
+                evidence_sha TEXT,
+                generated_at TEXT,
+                sort_at TEXT NOT NULL,
+                observed_at TEXT NOT NULL,
+                observation_kind TEXT NOT NULL,
+                status_label TEXT NOT NULL,
+                artifact_sha TEXT NOT NULL,
+                content_json TEXT NOT NULL,
+                stored_at TEXT NOT NULL,
+                UNIQUE (scope_key, dedupe_key)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_runtime_pr_validation_evidence_history
+                ON runtime_pr_validation_evidence_snapshots(
+                    scope_key, sort_at DESC, artifact_sha DESC, sequence DESC
+                );
+
+            CREATE TABLE IF NOT EXISTS runtime_pr_validation_evidence_collection (
+                scope_key TEXT PRIMARY KEY,
+                lease_owner TEXT,
+                lease_token TEXT,
+                lease_expires_at_epoch_millis INTEGER,
+                next_collect_at_epoch_millis INTEGER NOT NULL DEFAULT 0,
+                last_collected_at TEXT,
+                last_outcome TEXT,
+                last_error_class TEXT,
+                revision INTEGER NOT NULL DEFAULT 0,
+                stale_lease_recovery_count INTEGER NOT NULL DEFAULT 0,
+                identity_conflict_count INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS runtime_dispatch_commands (
                 command_id TEXT PRIMARY KEY,
                 command_kind TEXT NOT NULL,

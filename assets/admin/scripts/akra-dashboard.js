@@ -1351,6 +1351,86 @@
     detail.append(validationDetailSection("최신 evidence", [overview]));
     detail.append(validationEvidenceDetail(summary));
 
+    const collection = page?.collection || {};
+    const collectionGrid = validationDetailGrid([
+      validationDetailCard(
+        "수집 상태",
+        optionalText(collection.state, "unavailable"),
+        `rev ${collection.revision ?? "-"} · ${optionalText(collection.lastOutcome, "아직 수집되지 않음")}`,
+        "metric"
+      ),
+      validationDetailCard(
+        "마지막 수집",
+        formatEvidenceTimestamp(collection.lastCollectedAt),
+        collection.lastErrorClass
+          ? `오류 유형 ${collection.lastErrorClass}`
+          : "원본 payload는 저장하지 않습니다.",
+        "metric"
+      ),
+      validationDetailCard(
+        "Lease 복구",
+        String(collection.staleLeaseRecoveryCount ?? 0),
+        "스케줄러 소유권과 분리된 evidence collector",
+        "metric"
+      ),
+      validationDetailCard(
+        "Identity 충돌",
+        String(collection.identityConflictCount ?? 0),
+        "충돌 시 기존 snapshot을 보존",
+        "metric"
+      )
+    ]);
+    detail.append(validationDetailSection("수집 소유권 · 복구", [collectionGrid]));
+
+    const signed = (value, suffix = "") => {
+      if (value === null || value === undefined || value === "") return "비교 표본 없음";
+      const number = Number(value);
+      if (!Number.isFinite(number)) return "비교 표본 없음";
+      return `${number > 0 ? "+" : ""}${number.toFixed(1)}${suffix}`;
+    };
+    const metricNames = {
+      actual_fast_gate: "Actual Fast Gate",
+      ci_gate: "CI Gate",
+      post_merge_gate: "Post-Merge Gate"
+    };
+    const trendCards = asArray(page?.trends?.comparisons).map((trend) => {
+      const hasPrevious = trend.previousSampleCount !== null
+        && trend.previousSampleCount !== undefined;
+      return validationDetailCard(
+        metricNames[trend.metric] || optionalText(trend.metric, "metric"),
+        `${formatEvidenceSeconds(trend.currentP95Seconds)} p95 · 표본 ${trend.currentSampleCount ?? "미수집"}`,
+        hasPrevious
+          ? `직전 대비 ${signed(trend.p95DeltaPercent, "%")} · 표본 ${signed(trend.sampleCountDelta)}`
+          : "직전 유효 snapshot 없음 · 다음 수집부터 비교",
+        "metric"
+      );
+    });
+    trendCards.push(validationDetailCard(
+      "Actual ↔ Projected",
+      signed(page?.trends?.actualMinusProjectedP95Seconds, "초"),
+      page?.trends?.actualToProjectedP95Ratio !== null
+        && page?.trends?.actualToProjectedP95Ratio !== undefined
+        && Number.isFinite(Number(page.trends.actualToProjectedP95Ratio))
+        ? `Actual / Projected ${(Number(page.trends.actualToProjectedP95Ratio) * 100).toFixed(0)}%`
+        : "동일 snapshot의 두 지표를 분리해 비교",
+      "metric"
+    ));
+    detail.append(validationDetailSection("실측 추세 · 직전 유효 snapshot 비교", [
+      validationDetailGrid(trendCards)
+    ]));
+
+    const warningCards = asArray(page?.warnings).map((warning) => validationDetailCard(
+      optionalText(warning.kind, "warning").replaceAll("_", " "),
+      optionalText(warning.severity, "warning").toUpperCase(),
+      optionalText(warning.message, "추가 확인이 필요합니다."),
+      "check"
+    ));
+    detail.append(validationDetailSection("Typed warnings", [
+      validationDetailGrid(warningCards.length > 0
+        ? warningCards
+        : [validationDetailCard("Warning", "없음", "현재 bounded history 기준", "check")])
+    ]));
+
     const blockers = asArray(summary.blockers);
     const blockerGrid = validationDetailGrid(blockers.length > 0
       ? blockers.map((blocker, index) => validationDetailCard(
@@ -1403,7 +1483,7 @@
     return detail;
   };
 
-  const openEvidenceDetailDrawer = () => {
+  const openEvidenceDetailDrawer = ({ focusDrawer = true } = {}) => {
     if (!evidenceDetailTrigger || !detailDrawer || !detailDrawerBody) return;
     detailTrigger = evidenceDetailTrigger;
     const requestSequence = ++evidenceDetailRequestSequence;
@@ -1419,7 +1499,7 @@
     evidenceDetailTrigger.setAttribute("aria-expanded", "true");
     window.requestAnimationFrame(() => {
       detailDrawer.classList.add("is-open");
-      detailDrawer.focus({ preventScroll: true });
+      if (focusDrawer) detailDrawer.focus({ preventScroll: true });
     });
     fetch(`${validationEvidenceUrl}?limit=10`, { headers: { "Accept": "application/json" } })
       .then(async (response) => {
@@ -1979,6 +2059,7 @@
   let lastDashboardPollAt = 0;
 
   const pollDashboard = ({ fresh = false } = {}) => {
+    if (document.hidden) return Promise.resolve(false);
     if (dashboardRequest) {
       return fresh ? dashboardRequest.then(() => pollDashboard()) : dashboardRequest;
     }
@@ -2025,6 +2106,7 @@
   };
 
   const pollEvents = ({ reset = false, fresh = false } = {}) => {
+    if (document.hidden) return Promise.resolve(false);
     if (eventsRequest) {
       return fresh
         ? eventsRequest.then(() => pollEvents({ reset }))
@@ -2058,6 +2140,8 @@
 
   let realtimeSource = null;
   let lastRealtimeFrameAt = 0;
+  let lastValidationRevision = null;
+  let lastEvidenceRevision = null;
 
   const setRealtimeState = (state) => {
     pollState.stream = state;
@@ -2067,6 +2151,18 @@
 
   const applyRealtimeFrame = (frame) => {
     if (!frame || frame.schemaVersion !== 1) return;
+    const reconcileRevision = (invalidation, current) => {
+      const revision = Number(invalidation?.revision);
+      if (!Number.isFinite(revision)) return { accepted: true, advanced: false, revision: current };
+      if (current !== null && revision < current) {
+        return { accepted: false, advanced: false, revision: current };
+      }
+      return { accepted: true, advanced: current === null || revision > current, revision };
+    };
+    const validationRevision = reconcileRevision(frame.validation, lastValidationRevision);
+    const evidenceRevision = reconcileRevision(frame.evidence, lastEvidenceRevision);
+    lastValidationRevision = validationRevision.revision;
+    lastEvidenceRevision = evidenceRevision.revision;
     lastRealtimeFrameAt = Date.now();
     setRealtimeState("live");
     applyEventsPayload(frame);
@@ -2075,20 +2171,40 @@
     if (frame.cursorResetRequired) {
       pollEvents({ reset: true });
     }
-    if (frame.refreshDashboard) {
+    if (frame.validation?.cursorResetRequired && validationRevision.advanced) {
+      validationDetailRequestSequence += 1;
+    }
+    if (frame.evidence?.cursorResetRequired && evidenceRevision.advanced) {
+      evidenceDetailRequestSequence += 1;
+      if (detailDrawer && !detailDrawer.hidden && detailDrawer.dataset.detailMode === "evidence") {
+        openEvidenceDetailDrawer({ focusDrawer: false });
+      }
+    }
+    const revisionDrivenRefresh = frame.reason === "validation"
+      || frame.reason === "validation_evidence";
+    const revisionAdvanced = frame.reason === "validation"
+      ? validationRevision.advanced
+      : evidenceRevision.advanced;
+    if (frame.refreshDashboard && (!revisionDrivenRefresh || revisionAdvanced)) {
       pollDashboard();
     }
   };
 
   const connectRealtimeStream = () => {
+    if (document.hidden) return;
     if (!("EventSource" in window)) {
       setRealtimeState("unsupported");
       return;
     }
+    realtimeSource?.close();
     const latest = Number(root.dataset.latestEventSequence || "0");
-    realtimeSource = new EventSource(`${streamUrl}?afterSequence=${Math.max(latest, 0)}`);
-    realtimeSource.addEventListener("open", () => setRealtimeState("live"));
-    realtimeSource.addEventListener("update", (event) => {
+    const source = new EventSource(`${streamUrl}?afterSequence=${Math.max(latest, 0)}`);
+    realtimeSource = source;
+    source.addEventListener("open", () => {
+      if (realtimeSource === source) setRealtimeState("live");
+    });
+    source.addEventListener("update", (event) => {
+      if (realtimeSource !== source) return;
       try {
         applyRealtimeFrame(JSON.parse(event.data));
       } catch (error) {
@@ -2097,11 +2213,13 @@
         renderPollStatus();
       }
     });
-    realtimeSource.addEventListener("error", () => setRealtimeState("reconnecting"));
-    window.addEventListener("beforeunload", () => realtimeSource?.close(), { once: true });
+    source.addEventListener("error", () => {
+      if (realtimeSource === source && !document.hidden) setRealtimeState("reconnecting");
+    });
   };
 
-  window.setInterval(() => {
+  const fallbackPollTimer = window.setInterval(() => {
+    if (document.hidden) return;
     const streamHealthy =
       pollState.stream === "live" && Date.now() - lastRealtimeFrameAt < 15_000;
     if (!streamHealthy) {
@@ -2114,6 +2232,21 @@
       pollDashboard();
     }
   }, Math.max(pollIntervalMs, 5000));
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      realtimeSource?.close();
+      realtimeSource = null;
+      setRealtimeState("paused");
+      return;
+    }
+    pollDashboard({ fresh: true });
+    pollEvents({ fresh: true });
+    connectRealtimeStream();
+  });
+  window.addEventListener("beforeunload", () => {
+    window.clearInterval(fallbackPollTimer);
+    realtimeSource?.close();
+  }, { once: true });
   pollDashboard();
   pollEvents();
   connectRealtimeStream();
