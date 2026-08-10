@@ -188,6 +188,12 @@ impl PrValidationQueryPort for PrValidationQueryService {
         })
     }
 
+    fn load_board_revision(&self) -> Result<i64> {
+        self.planning_authority
+            .load_runtime_pr_validation_revision(&self.workspace_dir)
+            .context("failed to load PR validation board revision")
+    }
+
     fn load_detail(
         &self,
         request: PrValidationDetailRequest,
@@ -424,6 +430,16 @@ fn admin_checks(record: &PrValidationRecord) -> Vec<PrValidationAdminCheck> {
         )
         .collect::<Vec<_>>();
     if checks.is_empty() {
+        let fallback_status = |context: &str| {
+            if record.phase() != PrValidationPhase::Settled {
+                return PrValidationAdminCheckStatus::Missing;
+            }
+            match record.completion_required_check_succeeded(context) {
+                Some(true) => PrValidationAdminCheckStatus::Succeeded,
+                Some(false) => PrValidationAdminCheckStatus::ActionableFailure,
+                None => PrValidationAdminCheckStatus::Unobserved,
+            }
+        };
         checks.extend(
             record
                 .post_merge_validation_contract()
@@ -433,7 +449,7 @@ fn admin_checks(record: &PrValidationRecord) -> Vec<PrValidationAdminCheck> {
                     context: context.context().to_string(),
                     app_slug: context.app_slug().map(str::to_string),
                     required: true,
-                    status: PrValidationAdminCheckStatus::Missing,
+                    status: fallback_status(context.context()),
                     latest_attempt: None,
                     started_at: None,
                     completed_at: None,
@@ -448,7 +464,11 @@ fn admin_checks(record: &PrValidationRecord) -> Vec<PrValidationAdminCheck> {
                     context: context.context().to_string(),
                     app_slug: context.app_slug().map(str::to_string),
                     required: false,
-                    status: PrValidationAdminCheckStatus::Missing,
+                    status: if record.phase() == PrValidationPhase::Settled {
+                        PrValidationAdminCheckStatus::Unobserved
+                    } else {
+                        PrValidationAdminCheckStatus::Missing
+                    },
                     latest_attempt: None,
                     started_at: None,
                     completed_at: None,
@@ -534,6 +554,13 @@ fn observed_run_status_label(status: PrValidationObservedRunStatus) -> &'static 
 mod tests {
     use super::*;
 
+    use crate::domain::parallel_mode::{
+        PrValidationCatchUpState, PrValidationCheckKind, PrValidationCommitSha,
+        PrValidationCompletion, PrValidationEvent, PrValidationProviderCompletion,
+        PrValidationProviderKey, PrValidationRequiredCheck, PrValidationTarget,
+        PrValidationTargetShaSnapshot,
+    };
+
     #[test]
     fn board_cursor_rejects_forged_unbounded_cutoffs_and_negative_revisions() {
         let now = DateTime::parse_from_rfc3339("2026-08-10T12:00:00+00:00")
@@ -561,5 +588,59 @@ mod tests {
                     .is_some()
             );
         }
+    }
+
+    #[test]
+    fn settled_legacy_record_uses_completion_instead_of_reporting_missing_checks() {
+        let integrated = PrValidationRecord::register(
+            PrValidationRecordKey::new("legacy-settled").unwrap(),
+            PrValidationTarget::new("acme/widgets", 42).unwrap(),
+            PrValidationTargetShaSnapshot::new(
+                PrValidationCommitSha::new("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
+                PrValidationCommitSha::new("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap(),
+            ),
+        )
+        .transition(PrValidationEvent::BeginPreMergeObservation)
+        .unwrap()
+        .transition(PrValidationEvent::MergeObserved(
+            PrValidationCommitSha::new("cccccccccccccccccccccccccccccccccccccccc").unwrap(),
+        ))
+        .unwrap()
+        .transition(PrValidationEvent::BeginPostMergeObservation)
+        .unwrap();
+        let settled = integrated
+            .transition(PrValidationEvent::Settle(PrValidationCompletion::new(
+                integrated.evidence_sha().unwrap().clone(),
+                vec![PrValidationProviderCompletion::terminal(
+                    PrValidationProviderKey::new("github:CheckRuns").unwrap(),
+                )],
+                vec![
+                    PrValidationRequiredCheck::new(
+                        PrValidationCheckKind::CheckRun,
+                        "Post-Merge Gate",
+                        true,
+                    )
+                    .unwrap(),
+                ],
+                PrValidationCatchUpState::NoUnseenRelevantEvents,
+            )))
+            .unwrap();
+
+        let checks = admin_checks(&settled);
+        let required = checks.iter().find(|check| check.required).unwrap();
+        assert_eq!(required.context, "Post-Merge Gate");
+        assert_eq!(required.status, PrValidationAdminCheckStatus::Succeeded);
+        assert!(
+            checks
+                .iter()
+                .filter(|check| !check.required)
+                .all(|check| check.status == PrValidationAdminCheckStatus::Unobserved),
+            "optional checks without a durable observation must remain explicitly unobserved"
+        );
+        assert!(
+            checks
+                .iter()
+                .all(|check| { check.status != PrValidationAdminCheckStatus::Missing })
+        );
     }
 }

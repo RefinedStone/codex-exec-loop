@@ -1619,6 +1619,25 @@ async fn admin_akra_realtime_stream_resumes_oldest_unseen_events_without_loss() 
                 .unwrap()
         );
     }
+    let location = adapter.resolve_authority_location(&workspace.path).unwrap();
+    let connection = Connection::open(&location.authority_store_path).unwrap();
+    connection
+        .execute(
+            "UPDATE authority_metadata SET value = '61' WHERE key = 'runtime_event_sequence'",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO runtime_events (
+                 sequence, event_kind, projection_kind, projection_key,
+                 observed_planning_revision, summary, payload_json, recorded_at
+             ) VALUES (61, 'upsert', 'session_detail', 'unrelated-session', 0,
+                       'unrelated worker activity', '{}', '2026-08-10T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+    drop(connection);
     let router = admin_test_router(&workspace);
 
     let first_response = router
@@ -1636,10 +1655,14 @@ async fn admin_akra_realtime_stream_resumes_oldest_unseen_events_without_loss() 
     assert_eq!(first_response.status(), StatusCode::OK);
     let (first_id, first) = first_sse_json_frame(first_response).await;
     assert_eq!(first_id, 50);
-    assert_eq!(first["feed"]["eventCursor"], 60);
+    assert_eq!(first["feed"]["eventCursor"], 61);
     assert_eq!(first["feed"]["visibleEventCount"], 50);
     assert_eq!(first["cursorResetRequired"], false);
     assert_eq!(first["validation"]["changed"], true);
+    assert_eq!(
+        first["validation"]["revision"], 60,
+        "unrelated runtime backlog must not advance the validation-board revision"
+    );
 
     let second_response = router
         .oneshot(
@@ -1653,8 +1676,8 @@ async fn admin_akra_realtime_stream_resumes_oldest_unseen_events_without_loss() 
         .await
         .unwrap();
     let (second_id, second) = first_sse_json_frame(second_response).await;
-    assert_eq!(second_id, 60);
-    assert_eq!(second["feed"]["visibleEventCount"], 10);
+    assert_eq!(second_id, 61);
+    assert_eq!(second["feed"]["visibleEventCount"], 11);
     assert_eq!(second["cursorResetRequired"], false);
 
     let mut sequences = first["events"]
@@ -1665,7 +1688,7 @@ async fn admin_akra_realtime_stream_resumes_oldest_unseen_events_without_loss() 
         .map(|event| event["sequence"].as_i64().unwrap())
         .collect::<Vec<_>>();
     sequences.sort_unstable();
-    assert_eq!(sequences, (1..=60).collect::<Vec<_>>());
+    assert_eq!(sequences, (1..=61).collect::<Vec<_>>());
 }
 
 fn admin_validation_record(key: &str, pull_request_number: u64) -> PrValidationRecord {
