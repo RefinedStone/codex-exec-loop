@@ -895,6 +895,25 @@
   const renderValidationRail = (validation) => {
     if (!validation) return;
     setText("[data-validation-mode]", optionalText(validation.schedulerMode, "observe"));
+    const rollout = validation.rollout || {};
+    const rolloutStage = optionalText(rollout.stage, "shadow");
+    const rolloutPanel = root.querySelector("[data-validation-rollout]");
+    if (rolloutPanel) {
+      rolloutPanel.dataset.rolloutStage = rolloutStage;
+      rolloutPanel.classList.toggle("is-off", rolloutStage === "off");
+      rolloutPanel.classList.toggle("is-shadow", rolloutStage === "shadow");
+      rolloutPanel.classList.toggle("is-remediation", rolloutStage === "remediation");
+    }
+    setText("[data-validation-rollout-status]", optionalText(rollout.statusLabel, "SHADOW · Queue 차단"));
+    setText("[data-validation-rollout-detail]", optionalText(rollout.detail, "GitHub evidence를 관찰합니다."));
+    setText(
+      "[data-validation-rollout-admission]",
+      rollout.queueAdmissionEnabled ? "QUEUE ADMISSION ON" : "QUEUE ADMISSION BLOCKED"
+    );
+    setText(
+      "[data-validation-rollout-ruleset]",
+      rollout.rulesetChangeRequiresApproval === false ? "RULESET MANAGED" : "RULESET · APPROVAL REQUIRED"
+    );
     setText("[data-validation-count]", String(asArray(validation.records).length));
     const list = root.querySelector("[data-validation-list]");
     if (!list) return;

@@ -458,6 +458,15 @@ Pool mutation은 repository-scoped OS lock도 획득합니다. 각 allocation은
 generation을 받고 lease, session, event, delivery, cleanup까지 전달됩니다. 지연 event는 mutation
 전에 같은 generation인지 비교합니다. 모든 지원 플랫폼에서 SQLite가 권한을 가집니다.
 
+Post-merge 검증도 같은 소유 방향을 따릅니다. `PrValidationRecord`, attestation, check contract,
+finding, schedule, lease identity는 domain fact입니다. Application scheduler만 polling과 remediation
+admission을 소유하며 planning authority에서 due record를 claim한 뒤 slot lease 없이 GitHub outbound
+port를 호출하고 actionable finding 하나를 일반 Planning Queue task 하나와 correlation합니다.
+SQLite는 record와 exact poll lease를 저장하고 CLI/TUI/Admin은 narrow application projection만
+소비합니다. Admin request handler/widget은 scheduler cadence를 소유하거나 GitHub/SQLite adapter를
+직접 호출하지 않습니다. 저장소 로컬 mode는 typed `off | observe | remediate`이고 안전한 기본값은
+`observe`입니다.
+
 Post-turn mutation은 continuation permit과 parallel epoch permit을 캡처합니다. 긴 작업은 제한된
 commit section 밖에서 실행합니다. 무효화된 permit 결과는 진단에 남을 수 있지만 task authority를
 변경하거나 delivery를 enqueue할 수 없습니다.

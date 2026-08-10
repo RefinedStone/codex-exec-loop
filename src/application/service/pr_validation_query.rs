@@ -12,7 +12,8 @@ use crate::application::port::inbound::pr_validation_query_port::{
     PrValidationAdminRecord, PrValidationAdminSchedule, PrValidationAdminSeverity,
     PrValidationAdminTimelineEntry, PrValidationAdminWorkflow, PrValidationBoardCursorError,
     PrValidationBoardRequest, PrValidationBoardSnapshot, PrValidationBoardSummary,
-    PrValidationDetailRequest, PrValidationQueryPort, PrValidationStatusRequest,
+    PrValidationDetailRequest, PrValidationQueryPort, PrValidationRolloutSnapshot,
+    PrValidationStatusRequest,
 };
 use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityPort, PlanningAuthorityRuntimeProjectionSnapshot,
@@ -182,6 +183,7 @@ impl PrValidationQueryPort for PrValidationQueryService {
         Ok(PrValidationBoardSnapshot {
             revision: authority_page.revision,
             scheduler_mode: self.scheduler_mode.label().to_string(),
+            rollout: PrValidationRolloutSnapshot::from_scheduler_mode(self.scheduler_mode),
             summary: PrValidationBoardSummary {
                 active: authority_page.summary.active,
                 integrated: authority_page.summary.integrated,

@@ -168,13 +168,22 @@ control은 실제 application command입니다. CSRF로 보호된 browser action
 supervisor refresh, loop 비활성화를 수행합니다. HTTP adapter가 Git, GitHub, pool, distributor
 adapter를 직접 호출하지 않습니다.
 
+Post-merge PR 검증은 Admin/TUI refresh loop가 아니라 영속 application scheduler입니다. 저장소 로컬
+`akra.prValidationMode`가 없으면 `observe`가 기본이므로 provider evidence와 정확한 Actions target
+SHA는 기록하지만 자동 Queue admission은 차단합니다. `remediate`는 typed actionable finding만 기존
+Planning Queue와 일반 worker lease/worktree 수명주기로 admission하고, `off`는 history를 삭제하지
+않고 새 polling만 중지합니다. Admin Validation Rail은 Integrated, Verifying,
+RemediationQueued, RemediationRunning, Verified, Blocked, Failed를 구분하고 rollout banner에서 실제
+mode, Queue admission, Ruleset 별도 승인 경계를 표시합니다. 자세한 운영 절차는
+[PR 검증 운영 전환 runbook](pr-validation-rollout.md)에 있습니다.
+
 `/admin/akra`의 PixiJS 8 world는 같은 dashboard snapshot을 사용합니다. 검증된 frontend store,
 semantic camera zoom, worker 이동, 가구 occlusion, scene selection은 presentation에만 속합니다.
 상세 영문 계약은 [Admin Game Frontend](../../reference/admin-game-frontend.md)에 있습니다.
 
 `akra admin --debug-harness`는 같은 dashboard 계약 뒤에서 application이 소유하는 비영속 Fake
 scenario clock을 시작합니다. Normal delivery, blocked recovery, queue pressure를 실제 planning,
-parallel, Git, GitHub 권위를 바꾸지 않고 재생합니다.
+parallel, Git, GitHub 권위를 바꾸지 않고 재생하며 PR 검증 복구 시나리오 열 개도 제공합니다.
 
 ## 복구와 제한
 

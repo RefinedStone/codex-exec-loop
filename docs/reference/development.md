@@ -144,6 +144,13 @@ commit -> push -> PR targeting prerelease -> CI Gate -> rebase merge -> cleanup
 `CI Gate` check must pass, and history remains linear. GitHub auto-merge and branch deletion are
 enabled. Use rebase merge; do not push the integration checkout directly.
 
+The workflow also emits a measured `Fast Gate` from the selected policy checks, while long Rust
+tests and portable jobs continue in parallel and are aggregated by `CI Gate` and the push-only
+`Post-Merge Gate`. `CI Gate` remains the required Ruleset context unless the user explicitly
+approves a separate operational change with the evidence package from
+[the rollout runbook](pr-validation-rollout.md). Code changes must not add bypass actors or weaken
+protection.
+
 Inspect review threads and address only correct, in-scope feedback. Rebase an existing PR only for
 an actual conflict, a requested base refresh, or a dependency it needs; a harmless base advance does
 not justify another full CI run. After changing the reviewed head, rerun proportional local checks

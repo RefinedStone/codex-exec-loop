@@ -1,0 +1,818 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-10T14:46:37.432Z",
+  "repository": "RefinedStone/codex-exec-loop",
+  "baseBranch": "prerelease",
+  "decision": {
+    "status": "ready_for_remediate",
+    "recommendedSchedulerMode": "remediate",
+    "queueAdmissionEnabled": true,
+    "rulesetChange": "approval_required",
+    "reason": "shadow and deterministic canary criteria passed; Ruleset remains unchanged"
+  },
+  "sample": {
+    "pullRequestCount": 10,
+    "earliestMergedAt": "2026-08-09T04:12:19.000Z",
+    "latestMergedAt": "2026-08-10T12:43:12.000Z",
+    "windowHours": 32.51,
+    "rows": [
+      {
+        "number": 2111,
+        "title": "feat(admin): operate post-merge validation",
+        "url": "https://github.com/RefinedStone/codex-exec-loop/pull/2111",
+        "mergedAt": "2026-08-10T12:43:12Z",
+        "headSha": "7be6faba436d5afdcefc5a0adedd516444898f18",
+        "mergeSha": "3b4ef4b4085d132317079d43331fff1c44edbfd3",
+        "preMerge": {
+          "id": 31388611696,
+          "event": "pull_request",
+          "headSha": "7be6faba436d5afdcefc5a0adedd516444898f18",
+          "conclusion": "success",
+          "createdAt": "2026-08-10T12:33:49Z",
+          "updatedAt": "2026-08-10T12:42:44Z",
+          "url": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31388611696",
+          "fastGate": {
+            "seconds": 91,
+            "conclusion": "success",
+            "jobUrl": null,
+            "source": "projected_from_existing_jobs"
+          },
+          "ciGate": {
+            "seconds": 535,
+            "conclusion": "success",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31388611696/job/93456846968"
+          },
+          "postMergeGate": {
+            "seconds": 512,
+            "conclusion": "skipped",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31388611696/job/93456847978"
+          }
+        },
+        "postMerge": {
+          "id": 31389346076,
+          "event": "push",
+          "headSha": "3b4ef4b4085d132317079d43331fff1c44edbfd3",
+          "conclusion": "success",
+          "createdAt": "2026-08-10T12:43:15Z",
+          "updatedAt": "2026-08-10T12:51:15Z",
+          "url": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31389346076",
+          "fastGate": {
+            "seconds": 102,
+            "conclusion": "success",
+            "jobUrl": null,
+            "source": "projected_from_existing_jobs"
+          },
+          "ciGate": {
+            "seconds": 480,
+            "conclusion": "success",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31389346076/job/93459050928"
+          },
+          "postMergeGate": {
+            "seconds": 477,
+            "conclusion": "success",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31389346076/job/93459050958"
+          }
+        },
+        "evidenceShaMatchesActionsTarget": true
+      },
+      {
+        "number": 2110,
+        "title": "feat(admin): add PR validation read model",
+        "url": "https://github.com/RefinedStone/codex-exec-loop/pull/2110",
+        "mergedAt": "2026-08-10T00:32:51Z",
+        "headSha": "136545406ecdade85b653a066162b827e000f5e2",
+        "mergeSha": "a63fd6d447a6aa33afbf22f192dea004fb91da71",
+        "preMerge": {
+          "id": 31344342207,
+          "event": "pull_request",
+          "headSha": "136545406ecdade85b653a066162b827e000f5e2",
+          "conclusion": "success",
+          "createdAt": "2026-08-10T00:23:56Z",
+          "updatedAt": "2026-08-10T00:32:26Z",
+          "url": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31344342207",
+          "fastGate": {
+            "seconds": 84,
+            "conclusion": "success",
+            "jobUrl": null,
+            "source": "projected_from_existing_jobs"
+          },
+          "ciGate": {
+            "seconds": 509,
+            "conclusion": "success",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31344342207/job/93324417587"
+          },
+          "postMergeGate": {
+            "seconds": 501,
+            "conclusion": "skipped",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31344342207/job/93324418031"
+          }
+        },
+        "postMerge": {
+          "id": 31344745946,
+          "event": "push",
+          "headSha": "a63fd6d447a6aa33afbf22f192dea004fb91da71",
+          "conclusion": "success",
+          "createdAt": "2026-08-10T00:32:54Z",
+          "updatedAt": "2026-08-10T00:41:32Z",
+          "url": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31344745946",
+          "fastGate": {
+            "seconds": 91,
+            "conclusion": "success",
+            "jobUrl": null,
+            "source": "projected_from_existing_jobs"
+          },
+          "ciGate": {
+            "seconds": 515,
+            "conclusion": "success",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31344745946/job/93325512893"
+          },
+          "postMergeGate": {
+            "seconds": 517,
+            "conclusion": "success",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31344745946/job/93325512883"
+          }
+        },
+        "evidenceShaMatchesActionsTarget": true
+      },
+      {
+        "number": 2109,
+        "title": "Make PR validation findings semantic and watchable",
+        "url": "https://github.com/RefinedStone/codex-exec-loop/pull/2109",
+        "mergedAt": "2026-08-09T22:11:25Z",
+        "headSha": "e9c21ba753987ef01369ab17641a2ed7a7bdfcc6",
+        "mergeSha": "414e51fb6aeabb40ab109abe104ed33b988863c0",
+        "preMerge": {
+          "id": 31338324920,
+          "event": "pull_request",
+          "headSha": "e9c21ba753987ef01369ab17641a2ed7a7bdfcc6",
+          "conclusion": "success",
+          "createdAt": "2026-08-09T22:01:15Z",
+          "updatedAt": "2026-08-09T22:09:48Z",
+          "url": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31338324920",
+          "fastGate": {
+            "seconds": 86,
+            "conclusion": "success",
+            "jobUrl": null,
+            "source": "projected_from_existing_jobs"
+          },
+          "ciGate": {
+            "seconds": 512,
+            "conclusion": "success",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31338324920/job/93308651978"
+          },
+          "postMergeGate": {
+            "seconds": 499,
+            "conclusion": "skipped",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31338324920/job/93308652317"
+          }
+        },
+        "postMerge": {
+          "id": 31338766805,
+          "event": "push",
+          "headSha": "414e51fb6aeabb40ab109abe104ed33b988863c0",
+          "conclusion": "success",
+          "createdAt": "2026-08-09T22:11:27Z",
+          "updatedAt": "2026-08-09T22:20:09Z",
+          "url": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31338766805",
+          "fastGate": {
+            "seconds": 107,
+            "conclusion": "success",
+            "jobUrl": null,
+            "source": "projected_from_existing_jobs"
+          },
+          "ciGate": {
+            "seconds": 520,
+            "conclusion": "success",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31338766805/job/93309845456"
+          },
+          "postMergeGate": {
+            "seconds": 521,
+            "conclusion": "success",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31338766805/job/93309845447"
+          }
+        },
+        "evidenceShaMatchesActionsTarget": true
+      },
+      {
+        "number": 2108,
+        "title": "Add durable PR validation scheduler",
+        "url": "https://github.com/RefinedStone/codex-exec-loop/pull/2108",
+        "mergedAt": "2026-08-09T20:31:50Z",
+        "headSha": "1d22a4f14a32960afe8fc587bf4b9e560e4a49b0",
+        "mergeSha": "a7f75778a4dd3f627495ad1102e57a24c66c194a",
+        "preMerge": {
+          "id": 31334118412,
+          "event": "pull_request",
+          "headSha": "1d22a4f14a32960afe8fc587bf4b9e560e4a49b0",
+          "conclusion": "success",
+          "createdAt": "2026-08-09T20:23:11Z",
+          "updatedAt": "2026-08-09T20:31:33Z",
+          "url": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31334118412",
+          "fastGate": {
+            "seconds": 94,
+            "conclusion": "success",
+            "jobUrl": null,
+            "source": "projected_from_existing_jobs"
+          },
+          "ciGate": {
+            "seconds": 501,
+            "conclusion": "success",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31334118412/job/93297923577"
+          },
+          "postMergeGate": {
+            "seconds": 487,
+            "conclusion": "skipped",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31334118412/job/93297923969"
+          }
+        },
+        "postMerge": {
+          "id": 31334488214,
+          "event": "push",
+          "headSha": "a7f75778a4dd3f627495ad1102e57a24c66c194a",
+          "conclusion": "success",
+          "createdAt": "2026-08-09T20:31:52Z",
+          "updatedAt": "2026-08-09T20:40:05Z",
+          "url": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31334488214",
+          "fastGate": {
+            "seconds": 96,
+            "conclusion": "success",
+            "jobUrl": null,
+            "source": "projected_from_existing_jobs"
+          },
+          "ciGate": {
+            "seconds": 490,
+            "conclusion": "success",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31334488214/job/93298839819"
+          },
+          "postMergeGate": {
+            "seconds": 492,
+            "conclusion": "success",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31334488214/job/93298839807"
+          }
+        },
+        "evidenceShaMatchesActionsTarget": true
+      },
+      {
+        "number": 2107,
+        "title": "feat(pr-validation): evaluate post-merge check contracts",
+        "url": "https://github.com/RefinedStone/codex-exec-loop/pull/2107",
+        "mergedAt": "2026-08-09T19:00:41Z",
+        "headSha": "0e9c18a711835c1853786e3f86ee60239c239c58",
+        "mergeSha": "8c186b9f9db1cfd95b1880293bcfc15f36c9621b",
+        "preMerge": {
+          "id": 31330143547,
+          "event": "pull_request",
+          "headSha": "0e9c18a711835c1853786e3f86ee60239c239c58",
+          "conclusion": "success",
+          "createdAt": "2026-08-09T18:52:11Z",
+          "updatedAt": "2026-08-09T19:00:16Z",
+          "url": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31330143547",
+          "fastGate": {
+            "seconds": 87,
+            "conclusion": "success",
+            "jobUrl": null,
+            "source": "projected_from_existing_jobs"
+          },
+          "ciGate": {
+            "seconds": 485,
+            "conclusion": "success",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31330143547/job/93287827792"
+          },
+          "postMergeGate": {
+            "seconds": 472,
+            "conclusion": "skipped",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31330143547/job/93287828111"
+          }
+        },
+        "postMerge": {
+          "id": 31330516946,
+          "event": "push",
+          "headSha": "8c186b9f9db1cfd95b1880293bcfc15f36c9621b",
+          "conclusion": "success",
+          "createdAt": "2026-08-09T19:00:43Z",
+          "updatedAt": "2026-08-09T19:09:34Z",
+          "url": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31330516946",
+          "fastGate": {
+            "seconds": 86,
+            "conclusion": "success",
+            "jobUrl": null,
+            "source": "projected_from_existing_jobs"
+          },
+          "ciGate": {
+            "seconds": 530,
+            "conclusion": "success",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31330516946/job/93288849818"
+          },
+          "postMergeGate": {
+            "seconds": 528,
+            "conclusion": "success",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31330516946/job/93288849803"
+          }
+        },
+        "evidenceShaMatchesActionsTarget": true
+      },
+      {
+        "number": 2106,
+        "title": "feat(pr-validation): attest integrated revision evidence",
+        "url": "https://github.com/RefinedStone/codex-exec-loop/pull/2106",
+        "mergedAt": "2026-08-09T17:45:32Z",
+        "headSha": "b5a20bbbde776528f3a46ba708a4ee04935d7aac",
+        "mergeSha": "48305bdd7dec497d4e32e35b40be2761185bcd0e",
+        "preMerge": {
+          "id": 31326866207,
+          "event": "pull_request",
+          "headSha": "b5a20bbbde776528f3a46ba708a4ee04935d7aac",
+          "conclusion": "success",
+          "createdAt": "2026-08-09T17:36:56Z",
+          "updatedAt": "2026-08-09T17:45:04Z",
+          "url": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31326866207",
+          "fastGate": {
+            "seconds": 96,
+            "conclusion": "success",
+            "jobUrl": null,
+            "source": "projected_from_existing_jobs"
+          },
+          "ciGate": {
+            "seconds": 487,
+            "conclusion": "success",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31326866207/job/93279389212"
+          },
+          "postMergeGate": null
+        },
+        "postMerge": {
+          "id": 31327245904,
+          "event": "push",
+          "headSha": "48305bdd7dec497d4e32e35b40be2761185bcd0e",
+          "conclusion": "success",
+          "createdAt": "2026-08-09T17:45:34Z",
+          "updatedAt": "2026-08-09T17:46:48Z",
+          "url": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31327245904",
+          "fastGate": {
+            "seconds": 64,
+            "conclusion": "success",
+            "jobUrl": null,
+            "source": "projected_from_existing_jobs"
+          },
+          "ciGate": {
+            "seconds": 73,
+            "conclusion": "success",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31327245904/job/93279591108"
+          },
+          "postMergeGate": null
+        },
+        "evidenceShaMatchesActionsTarget": true
+      },
+      {
+        "number": 2105,
+        "title": "fix(startup): allow untrusted Codex by default",
+        "url": "https://github.com/RefinedStone/codex-exec-loop/pull/2105",
+        "mergedAt": "2026-08-09T15:39:44Z",
+        "headSha": "12e7018bae9fcde5b33311aac07808f4006f9d8c",
+        "mergeSha": "45a512cf6a751c4480d8c1e4fd0c61569c3b9d5d",
+        "preMerge": {
+          "id": 31321351597,
+          "event": "pull_request",
+          "headSha": "12e7018bae9fcde5b33311aac07808f4006f9d8c",
+          "conclusion": "success",
+          "createdAt": "2026-08-09T15:31:42Z",
+          "updatedAt": "2026-08-09T15:39:42Z",
+          "url": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31321351597",
+          "fastGate": {
+            "seconds": 88,
+            "conclusion": "success",
+            "jobUrl": null,
+            "source": "projected_from_existing_jobs"
+          },
+          "ciGate": {
+            "seconds": 480,
+            "conclusion": "success",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31321351597/job/93265588933"
+          },
+          "postMergeGate": null
+        },
+        "postMerge": {
+          "id": 31321708180,
+          "event": "push",
+          "headSha": "45a512cf6a751c4480d8c1e4fd0c61569c3b9d5d",
+          "conclusion": "success",
+          "createdAt": "2026-08-09T15:39:46Z",
+          "updatedAt": "2026-08-09T15:41:11Z",
+          "url": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31321708180",
+          "fastGate": {
+            "seconds": 65,
+            "conclusion": "success",
+            "jobUrl": null,
+            "source": "projected_from_existing_jobs"
+          },
+          "ciGate": {
+            "seconds": 84,
+            "conclusion": "success",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31321708180/job/93265734390"
+          },
+          "postMergeGate": null
+        },
+        "evidenceShaMatchesActionsTarget": true
+      },
+      {
+        "number": 2104,
+        "title": "docs(plan): define async validation admin rollout",
+        "url": "https://github.com/RefinedStone/codex-exec-loop/pull/2104",
+        "mergedAt": "2026-08-09T14:53:35Z",
+        "headSha": "cef01268c89685c050d6c443b820c33eb0d8d465",
+        "mergeSha": "6ced31be6e60747f84ed3bba27da34900d2cf3f1",
+        "preMerge": {
+          "id": 31319593772,
+          "event": "pull_request",
+          "headSha": "cef01268c89685c050d6c443b820c33eb0d8d465",
+          "conclusion": "success",
+          "createdAt": "2026-08-09T14:52:23Z",
+          "updatedAt": "2026-08-09T14:52:53Z",
+          "url": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31319593772",
+          "fastGate": {
+            "seconds": 18,
+            "conclusion": "success",
+            "jobUrl": null,
+            "source": "projected_from_existing_jobs"
+          },
+          "ciGate": {
+            "seconds": 29,
+            "conclusion": "success",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31319593772/job/93260340986"
+          },
+          "postMergeGate": null
+        },
+        "postMerge": {
+          "id": 31319647890,
+          "event": "push",
+          "headSha": "6ced31be6e60747f84ed3bba27da34900d2cf3f1",
+          "conclusion": "success",
+          "createdAt": "2026-08-09T14:53:37Z",
+          "updatedAt": "2026-08-09T14:54:53Z",
+          "url": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31319647890",
+          "fastGate": {
+            "seconds": 58,
+            "conclusion": "success",
+            "jobUrl": null,
+            "source": "projected_from_existing_jobs"
+          },
+          "ciGate": {
+            "seconds": 75,
+            "conclusion": "success",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31319647890/job/93260544645"
+          },
+          "postMergeGate": null
+        },
+        "evidenceShaMatchesActionsTarget": true
+      },
+      {
+        "number": 2103,
+        "title": "fix(tui): render focused parallel composer",
+        "url": "https://github.com/RefinedStone/codex-exec-loop/pull/2103",
+        "mergedAt": "2026-08-09T06:10:22Z",
+        "headSha": "99e9978268c31725055cc30c80e6502db1a48fb1",
+        "mergeSha": "e0a80092dde8bf7d33ea92acdab20abdc5154477",
+        "preMerge": {
+          "id": 31297966627,
+          "event": "pull_request",
+          "headSha": "99e9978268c31725055cc30c80e6502db1a48fb1",
+          "conclusion": "success",
+          "createdAt": "2026-08-09T06:01:35Z",
+          "updatedAt": "2026-08-09T06:09:59Z",
+          "url": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31297966627",
+          "fastGate": {
+            "seconds": 101,
+            "conclusion": "success",
+            "jobUrl": null,
+            "source": "projected_from_existing_jobs"
+          },
+          "ciGate": {
+            "seconds": 503,
+            "conclusion": "success",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31297966627/job/93206737917"
+          },
+          "postMergeGate": null
+        },
+        "postMerge": {
+          "id": 31298286912,
+          "event": "push",
+          "headSha": "e0a80092dde8bf7d33ea92acdab20abdc5154477",
+          "conclusion": "success",
+          "createdAt": "2026-08-09T06:10:24Z",
+          "updatedAt": "2026-08-09T06:11:37Z",
+          "url": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31298286912",
+          "fastGate": {
+            "seconds": 61,
+            "conclusion": "success",
+            "jobUrl": null,
+            "source": "projected_from_existing_jobs"
+          },
+          "ciGate": {
+            "seconds": 72,
+            "conclusion": "success",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31298286912/job/93206883747"
+          },
+          "postMergeGate": null
+        },
+        "evidenceShaMatchesActionsTarget": true
+      },
+      {
+        "number": 2102,
+        "title": "fix(tui): keep parallel task input active",
+        "url": "https://github.com/RefinedStone/codex-exec-loop/pull/2102",
+        "mergedAt": "2026-08-09T04:12:19Z",
+        "headSha": "bbab29f4df633239b8c43b435864a283f1778b48",
+        "mergeSha": "f5653412ce2b1ca826074349d9091015873a6a68",
+        "preMerge": {
+          "id": 31293754363,
+          "event": "pull_request",
+          "headSha": "bbab29f4df633239b8c43b435864a283f1778b48",
+          "conclusion": "success",
+          "createdAt": "2026-08-09T04:03:41Z",
+          "updatedAt": "2026-08-09T04:11:50Z",
+          "url": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31293754363",
+          "fastGate": {
+            "seconds": 94,
+            "conclusion": "success",
+            "jobUrl": null,
+            "source": "projected_from_existing_jobs"
+          },
+          "ciGate": {
+            "seconds": 488,
+            "conclusion": "success",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31293754363/job/93196077128"
+          },
+          "postMergeGate": null
+        },
+        "postMerge": {
+          "id": 31294067981,
+          "event": "push",
+          "headSha": "f5653412ce2b1ca826074349d9091015873a6a68",
+          "conclusion": "success",
+          "createdAt": "2026-08-09T04:12:22Z",
+          "updatedAt": "2026-08-09T04:13:40Z",
+          "url": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31294067981",
+          "fastGate": {
+            "seconds": 66,
+            "conclusion": "success",
+            "jobUrl": null,
+            "source": "projected_from_existing_jobs"
+          },
+          "ciGate": {
+            "seconds": 78,
+            "conclusion": "success",
+            "jobUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31294067981/job/93196243056"
+          },
+          "postMergeGate": null
+        },
+        "evidenceShaMatchesActionsTarget": true
+      }
+    ]
+  },
+  "timings": {
+    "fastGate": {
+      "sampleCount": 10,
+      "p50Seconds": 88,
+      "p95Seconds": 101,
+      "label": "projected"
+    },
+    "actualFastGate": {
+      "sampleCount": 0,
+      "p50Seconds": null,
+      "p95Seconds": null,
+      "label": "actual"
+    },
+    "ciGate": {
+      "sampleCount": 10,
+      "p50Seconds": 488,
+      "p95Seconds": 535,
+      "label": "actual"
+    },
+    "postMergeGate": {
+      "sampleCount": 5,
+      "p50Seconds": 517,
+      "p95Seconds": 528,
+      "label": "actual"
+    }
+  },
+  "actualFastGateRuns": [],
+  "postMerge": {
+    "sampleCount": 5,
+    "failureCount": 0,
+    "failureRatePercent": 0
+  },
+  "quota": {
+    "limit": 5000,
+    "remaining": 4994,
+    "used": 6,
+    "reset": 1786373563,
+    "collectorRequests": 4,
+    "usedPercent": 0.12
+  },
+  "criteria": {
+    "sampleWindow": {
+      "status": "pass",
+      "observed": {
+        "pullRequests": 10,
+        "windowHours": 32.51
+      },
+      "limit": {
+        "pullRequests": 10,
+        "windowHours": 24
+      },
+      "source": "github_live_sample",
+      "note": "both the PR count and elapsed window must pass"
+    },
+    "evidenceShaMismatch": {
+      "status": "pass",
+      "observed": 0,
+      "limit": 0,
+      "source": "github_live_sample",
+      "note": "merge commit SHA compared with push workflow head SHA"
+    },
+    "apiBudget": {
+      "status": "pass",
+      "observed": 0.12,
+      "limit": 50,
+      "source": "github_rate_limit",
+      "note": "percentage of the authenticated core quota currently consumed"
+    },
+    "duplicateRemediation": {
+      "status": "pass",
+      "observed": 0,
+      "limit": 0,
+      "source": "deterministic_contract",
+      "note": "replayed events, reordered findings, exhausted-pool replay, and ordinary Queue correlation produced no duplicate task or lease"
+    },
+    "falseActionable": {
+      "status": "pass",
+      "observed": 0,
+      "limit": 0,
+      "source": "deterministic_contract",
+      "note": "APPROVED, LGTM, bot/self, resolved, paginated, and stale-SHA review activity admitted no remediation"
+    },
+    "expiredLeaseTakeoverFailure": {
+      "status": "pass",
+      "observed": 0,
+      "limit": 0,
+      "source": "deterministic_contract",
+      "note": "exact owner/token/expiry CAS rejected early takeover and allowed the replacement owner after expiry"
+    },
+    "healthyProviderStale": {
+      "status": "pass",
+      "observed": 0,
+      "limit": 0,
+      "source": "deterministic_contract",
+      "note": "fake-time healthy polling stayed within twice the active cadence and UI-rate refresh did not become the scheduler clock"
+    },
+    "adminCliTuiPhaseMismatch": {
+      "status": "pass",
+      "observed": 0,
+      "limit": 0,
+      "source": "deterministic_contract",
+      "note": "Admin API/DOM/Pixi, CLI status, and the TUI work center all consumed the typed durable phase projection"
+    }
+  },
+  "canaries": {
+    "productionSuccess": {
+      "status": "pass",
+      "pullRequestNumber": 2111,
+      "mergeSha": "3b4ef4b4085d132317079d43331fff1c44edbfd3",
+      "runId": 31389346076,
+      "runUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31389346076"
+    },
+    "failure": {
+      "status": "pass",
+      "kind": "deterministic_application_admin_harness",
+      "scenario": "check failure -> Queue -> worker lease -> rerun success",
+      "note": "the failure canary ran only in the application-owned harness; no intentionally broken commit entered prerelease"
+    }
+  },
+  "contractEvidence": {
+    "schemaVersion": 1,
+    "generatedAt": "2026-08-10T13:13:00Z",
+    "commands": [
+      {
+        "command": "cargo test --locked pr_validation -- --nocapture",
+        "status": "pass",
+        "testsPassed": 105,
+        "testsFailed": 0
+      },
+      {
+        "command": "cargo test --locked admin_debug_harness_all_validation_scenarios_keep_board_and_scene_semantics_aligned -- --nocapture",
+        "status": "pass",
+        "testsPassed": 1,
+        "testsFailed": 0
+      },
+      {
+        "command": "cargo test --locked operator_surface_shows_pr_remediation_merge_and_late_event -- --nocapture",
+        "status": "pass",
+        "testsPassed": 1,
+        "testsFailed": 0
+      },
+      {
+        "command": "cargo test --locked --test architecture_boundaries",
+        "status": "pass",
+        "testsPassed": 132,
+        "testsFailed": 0
+      },
+      {
+        "command": "node --test scripts/ci-scope.test.mjs scripts/agent-plan.test.mjs scripts/pr-validation-rollout-evidence.test.mjs",
+        "status": "pass",
+        "testsPassed": 20,
+        "testsFailed": 0
+      },
+      {
+        "command": "powershell -File scripts/check_native_pr.ps1 -Mode Full",
+        "status": "pass",
+        "note": "Windows Full mode completed formatting, Node/Admin, Windows contracts, native target, and clippy"
+      }
+    ],
+    "metrics": {
+      "duplicateRemediation": {
+        "failures": 0,
+        "note": "replayed events, reordered findings, exhausted-pool replay, and ordinary Queue correlation produced no duplicate task or lease",
+        "tests": [
+          "replayed_event_and_stale_update_admit_no_duplicate",
+          "remediation_uses_the_ordinary_task_identity_and_lifecycle_transitions_are_replay_safe",
+          "exhausted_pool_keeps_remediation_queued_without_duplicate_lease"
+        ]
+      },
+      "falseActionable": {
+        "failures": 0,
+        "note": "APPROVED, LGTM, bot/self, resolved, paginated, and stale-SHA review activity admitted no remediation",
+        "tests": [
+          "approved_lgtm_bot_self_resolved_and_past_revision_activity_admit_nothing",
+          "semantic_activity_policy_admits_only_actionable_human_events_idempotently",
+          "paginated_review_history_does_not_admit_before_the_latest_state_is_observed"
+        ]
+      },
+      "expiredLeaseTakeoverFailure": {
+        "failures": 0,
+        "note": "exact owner/token/expiry CAS rejected early takeover and allowed the replacement owner after expiry",
+        "tests": [
+          "durable_poll_lease_uses_exact_cas_and_allows_takeover_only_after_expiry",
+          "two_scheduler_processes_allow_only_one_provider_caller"
+        ]
+      },
+      "healthyProviderStale": {
+        "failures": 0,
+        "note": "fake-time healthy polling stayed within twice the active cadence and UI-rate refresh did not become the scheduler clock",
+        "tests": [
+          "durable_scheduler_polls_with_fake_time_and_normal_remediation",
+          "scheduler_moves_verified_records_from_active_cadence_to_bounded_review_watch_cadence"
+        ]
+      },
+      "adminCliTuiPhaseMismatch": {
+        "failures": 0,
+        "note": "Admin API/DOM/Pixi, CLI status, and the TUI work center all consumed the typed durable phase projection",
+        "tests": [
+          "admin_debug_harness_all_validation_scenarios_keep_board_and_scene_semantics_aligned",
+          "operator_surface_shows_pr_remediation_merge_and_late_event",
+          "work_center_delivery_projects_durable_pr_validation_state"
+        ]
+      }
+    },
+    "canaries": {
+      "failure": {
+        "status": "pass",
+        "kind": "deterministic_application_admin_harness",
+        "scenario": "check failure -> Queue -> worker lease -> rerun success",
+        "note": "the failure canary ran only in the application-owned harness; no intentionally broken commit entered prerelease"
+      }
+    },
+    "browser": {
+      "status": "pass",
+      "surface": "Admin Debug Harness / Validation Rail",
+      "viewports": [
+        {
+          "width": 1280,
+          "height": 720
+        },
+        {
+          "width": 420,
+          "height": 900
+        }
+      ],
+      "horizontalOverflowCount": 0,
+      "consoleErrorCount": 0,
+      "rolloutStage": "remediation",
+      "queueAdmission": "on",
+      "rulesetChange": "approval_required",
+      "lifecycle": [
+        "ready",
+        "delivering",
+        "reviewing",
+        "complete"
+      ],
+      "validationPhases": [
+        "Integrated",
+        "Verifying",
+        "Verified"
+      ],
+      "screenshots": {
+        "wide": "admin-rollout-remediation-wide.png",
+        "mobileComplete": "admin-rollout-remediation-complete-mobile.png"
+      }
+    }
+  }
+}

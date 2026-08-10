@@ -3928,6 +3928,10 @@ fn akra_graphic_dashboard_validation_rail_keeps_accessible_typed_operations_cont
         "data-validation-kpi=\"queued\"",
         "data-validation-kpi=\"stale\"",
         "id=\"validation-rail\"",
+        "data-validation-rollout",
+        "data-rollout-stage=\"{{ dashboard.validation.rollout.stage }}\"",
+        "QUEUE ADMISSION BLOCKED",
+        "RULESET · APPROVAL REQUIRED",
         "data-validation-list",
         "data-validation-record-key",
         "PR / Akra ID",
@@ -3947,6 +3951,9 @@ fn akra_graphic_dashboard_validation_rail_keeps_accessible_typed_operations_cont
     }
     for token in [
         "renderValidationRail",
+        "data-validation-rollout-status",
+        "rollout.queueAdmissionEnabled",
+        "rollout.rulesetChangeRequiresApproval",
         "openValidationDetailDrawer",
         "renderValidationDetail",
         "runValidationCommand",

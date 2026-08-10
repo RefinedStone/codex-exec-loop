@@ -113,20 +113,22 @@ token 변수 또는 신뢰하는 `gh auth token`을 사용합니다. 제거된 l
 완료된 slice의 기본 흐름:
 
 ```text
-commit -> push -> prerelease 대상 PR -> review -> rebase -> linear integration -> PR close
+commit -> push -> prerelease 대상 PR -> CI Gate -> rebase merge -> cleanup
 ```
 
-통합 전:
+`prerelease`는 repository Ruleset으로 보호됩니다. 모든 update는 PR을 거치고 stable `CI Gate`가
+통과해야 하며 linear history를 유지합니다. GitHub auto-merge와 branch deletion은 활성화되어
+있습니다. Rebase merge를 사용하고 integration checkout을 직접 push하지 않습니다.
 
-1. 모든 review thread를 확인하고 올바르며 범위에 맞는 feedback만 반영합니다.
-2. `git fetch origin && git rebase origin/prerelease`
-3. 변경 위험에 맞는 검증 gate를 다시 실행합니다.
-4. 검토된 head를 push합니다. 기존 PR branch를 rebase했을 때만 `--force-with-lease`를 사용합니다.
-5. Integration checkout에서 local `prerelease`를 fast-forward하고 push합니다.
-6. Base에 검토된 commit이 포함된 뒤 PR을 닫습니다.
+Workflow는 선택된 policy check를 집계한 측정용 `Fast Gate`도 발행합니다. 긴 Rust test와 portable
+job은 병렬로 계속 실행하며 `CI Gate`와 push 전용 `Post-Merge Gate`가 집계합니다. 사용자가
+[운영 전환 runbook](pr-validation-rollout.md)의 증거를 보고 별도 승인하기 전까지 required Ruleset
+context는 `CI Gate`입니다. 일반 코드 변경은 bypass actor를 추가하거나 protection을 약화하지
+않습니다.
 
-GitHub merge commit은 사용하지 않습니다. Linear history를 유지하고 관련 없는 사용자 작업을
-reset하지 않습니다.
+Review thread를 확인하고 올바르며 범위에 맞는 feedback만 반영합니다. 실제 conflict, base refresh
+요청, 필요한 dependency가 있을 때만 기존 PR branch를 rebase하며 그 경우에만
+`--force-with-lease`를 사용합니다. 관련 없는 사용자 작업을 reset하지 않습니다.
 
 ## 정리
 

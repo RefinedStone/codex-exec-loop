@@ -1477,6 +1477,31 @@
   .validation-kpi.is-warning .validation-kpi-icon { color: var(--game-yellow); border-color: rgba(245,200,75,.42); }
   .validation-panel { grid-column: 1 / -1; }
   .validation-panel .panel-title small { font-variant-numeric: tabular-nums; }
+  .validation-rollout {
+    display: grid;
+    grid-template-columns: minmax(180px, auto) 1fr auto auto;
+    align-items: center;
+    gap: 8px 14px;
+    margin-bottom: 10px;
+    padding: 9px 11px;
+    border: 1px solid rgba(93,169,255,.25);
+    background: rgba(3,13,24,.7);
+  }
+  .validation-rollout strong { color: var(--game-blue); font-size: 12px; letter-spacing: .04em; }
+  .validation-rollout small { color: var(--game-muted); line-height: 1.45; }
+  .validation-rollout code {
+    padding: 3px 6px;
+    border: 1px solid rgba(255,255,255,.12);
+    color: var(--game-muted);
+    background: rgba(255,255,255,.035);
+    font: 800 9px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace;
+    letter-spacing: .05em;
+  }
+  .validation-rollout.is-shadow { border-color: rgba(245,200,75,.34); }
+  .validation-rollout.is-shadow strong { color: var(--game-yellow); }
+  .validation-rollout.is-remediation { border-color: rgba(80,220,145,.34); }
+  .validation-rollout.is-remediation strong { color: var(--game-green); }
+  .validation-rollout.is-off { opacity: .78; }
   .validation-rail {
     overflow: hidden;
     border: 1px solid rgba(93, 169, 255, 0.24);
@@ -1642,6 +1667,8 @@
       grid-template-columns: repeat(3, minmax(0, 1fr));
     }
     .validation-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .validation-rollout { grid-template-columns: 1fr; align-items: start; }
+    .validation-rollout code { width: fit-content; }
     .validation-rail-head { display: none; }
     .validation-rail { display: grid; gap: 8px; border: 0; background: transparent; }
     .validation-record {
@@ -2257,6 +2284,18 @@
       <div class="panel-title">
         <h3 id="validation-rail-title">Validation Rail</h3>
         <small><span data-validation-mode>{{ dashboard.validation.scheduler_mode }}</span> · <span data-validation-count>{{ dashboard.validation.records.len() }}</span> records</small>
+      </div>
+      <div
+        class="validation-rollout is-{{ dashboard.validation.rollout.stage }}"
+        data-validation-rollout
+        data-rollout-stage="{{ dashboard.validation.rollout.stage }}"
+        role="status"
+        aria-live="polite"
+      >
+        <strong data-validation-rollout-status>{{ dashboard.validation.rollout.status_label }}</strong>
+        <small data-validation-rollout-detail>{{ dashboard.validation.rollout.detail }}</small>
+        <code data-validation-rollout-admission>{% if dashboard.validation.rollout.queue_admission_enabled %}QUEUE ADMISSION ON{% else %}QUEUE ADMISSION BLOCKED{% endif %}</code>
+        <code data-validation-rollout-ruleset>{% if dashboard.validation.rollout.ruleset_change_requires_approval %}RULESET · APPROVAL REQUIRED{% else %}RULESET MANAGED{% endif %}</code>
       </div>
       <div class="validation-rail" data-validation-list aria-label="PR 검증 레코드">
         <div class="validation-rail-head" aria-hidden="true">

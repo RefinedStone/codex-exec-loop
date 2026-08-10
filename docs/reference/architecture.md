@@ -547,6 +547,15 @@ role to the roster at the application boundary; lookup failure leaves those fiel
 TUI joins pool, roster, session detail, and distributor state by those identities and surfaces a
 disagreement as `DESYNC`; rendering never reads Git, GitHub, SQLite, or profile storage.
 
+Post-merge validation follows the same ownership direction. `PrValidationRecord`, attestation,
+check contract, findings, schedule, and lease identity are domain facts. The application scheduler
+is the sole polling and remediation-admission owner; it claims due records through the planning
+authority, calls the GitHub outbound port without holding a slot lease, and correlates an actionable
+finding with one ordinary Planning Queue task. SQLite persists records and exact poll leases, while
+CLI, TUI, and Admin consume narrow application projections. Admin request handlers and widgets never
+own scheduler cadence or call the GitHub/SQLite adapters directly. Repository-local mode is typed
+`off | observe | remediate`; the safe default is `observe`.
+
 Post-turn mutation captures continuation and parallel-epoch permits. Long work stays outside their
 bounded commit sections; an invalidated permit may still produce diagnostics but cannot change task
 authority or enqueue delivery.
