@@ -1,6 +1,6 @@
 # PR Validation Rollout Evidence
 
-Generated at `2026-08-10T14:52:43.690Z` for `RefinedStone/codex-exec-loop` / `prerelease`.
+Generated at `2026-08-10T14:55:31.941Z` for `RefinedStone/codex-exec-loop` / `prerelease`.
 
 ## Decision
 
@@ -47,7 +47,7 @@ Actual stable Fast Gate runs supplied independently of the merged-PR sample:
 - [run 31400129391](https://github.com/RefinedStone/codex-exec-loop/actions/runs/31400129391) / `47068fb1` / 114s / success
 
 - Post-Merge Gate failure rate: 0% (0/5)
-- GitHub core quota used: 1% (50/5000)
+- GitHub core quota used: 0.1% (5/5000)
 - reported core counter delta during collection: 3
 
 ## Rollout Criteria
@@ -56,7 +56,7 @@ Actual stable Fast Gate runs supplied independently of the merged-PR sample:
 | --- | --- | --- | --- | --- |
 | sampleWindow | pass | {"pullRequests":10,"windowHours":32.51} | {"pullRequests":10,"windowHours":24} | github_live_sample |
 | evidenceShaMismatch | pass | 0 | 0 | github_live_sample |
-| apiBudget | pass | 1 | 50 | github_rate_limit |
+| apiBudget | pass | 0.1 | 50 | github_rate_limit |
 | duplicateRemediation | pass | 0 | 0 | deterministic_contract |
 | falseActionable | pass | 0 | 0 | deterministic_contract |
 | expiredLeaseTakeoverFailure | pass | 0 | 0 | deterministic_contract |
