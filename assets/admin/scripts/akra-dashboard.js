@@ -9,6 +9,7 @@
   const controlUrl = "/api/admin/akra/control";
   const debugHarnessUrl = "/api/admin/akra/debug-harness";
   const validationBaseUrl = "/api/admin/akra/validations";
+  const validationEvidenceUrl = "/api/admin/akra/pr-validation/evidence";
   const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || "";
 
   const setText = (selector, value) => {
@@ -71,10 +72,13 @@
   const detailDrawerTitle = root.querySelector("[data-detail-drawer-title]");
   const detailDrawerSubtitle = root.querySelector("[data-detail-drawer-subtitle]");
   const detailDrawerBody = root.querySelector("[data-detail-drawer-body]");
+  const evidenceDetailTrigger = root.querySelector("[data-evidence-detail-trigger]");
   let detailTrigger = null;
   let validationDetailRequestSequence = 0;
+  let evidenceDetailRequestSequence = 0;
   let validationCommandRequest = null;
   let validationCommandFeedback = null;
+  let currentValidationEvidence = null;
   const detailRowsByType = {
     slot: [
       ["상태", "detailState", "chip"],
@@ -318,6 +322,7 @@
       return;
     }
     if (rememberTrigger) detailTrigger = trigger?.isConnected ? trigger : null;
+    evidenceDetailTrigger?.setAttribute("aria-expanded", "false");
     const type = source.dataset.detailType;
     const rows = detailRowsByType[type] || [];
     detailDrawerTitle.textContent = source.dataset.detailTitle || "상세";
@@ -344,8 +349,10 @@
     detailTrigger = null;
     detailDrawer.classList.remove("is-open");
     validationDetailRequestSequence += 1;
+    evidenceDetailRequestSequence += 1;
     delete detailDrawer.dataset.detailMode;
     detailDrawer.setAttribute("aria-hidden", "true");
+    evidenceDetailTrigger?.setAttribute("aria-expanded", "false");
     setSelectedDetail(null);
     clearRelated();
     window.setTimeout(() => {
@@ -890,6 +897,141 @@
     return button;
   };
 
+  const evidenceStatusView = (status) => ({
+    ready: { mark: "OK", label: "READY · 사용 가능" },
+    hold: { mark: "HOLD", label: "HOLD · 관찰 필요" },
+    stale: { mark: "OLD", label: "STALE · 갱신 필요" },
+    unavailable: { mark: "N/A", label: "UNAVAILABLE · 수집 불가" },
+    invalid: { mark: "ERR", label: "INVALID · 증거 거부" }
+  }[status] || { mark: "N/A", label: "UNAVAILABLE · 상태 미상" });
+
+  const metricLabelText = (label) => ({
+    projected: "PROJECTED",
+    mixed_actual_and_projected: "MIXED",
+    actual: "ACTUAL",
+    unavailable: "UNAVAILABLE"
+  }[label] || "UNAVAILABLE");
+
+  const evidenceNumber = (value) => {
+    if (value === null || value === undefined || value === "") return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
+  const formatEvidenceSeconds = (value) => {
+    const parsed = evidenceNumber(value);
+    return parsed === null
+      ? "미수집"
+      : `${new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 1 }).format(parsed)}초`;
+  };
+
+  const formatEvidenceTimestamp = (value) => {
+    if (!value) return "미수집";
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return "미수집";
+    return new Intl.DateTimeFormat("ko-KR", {
+      dateStyle: "medium",
+      timeStyle: "medium"
+    }).format(parsed);
+  };
+
+  const evidenceSourceLabel = (source) => ({
+    debug_fixture_historical_projection: "Historical rollout projection",
+    debug_fixture_historical_with_actual_row: "Historical distribution + actual row",
+    debug_fixture_independent_actual_run: "Independent actual Fast Gate run",
+    debug_fixture_actual_not_collected: "Actual Fast Gate not collected",
+    debug_fixture_ci_gate: "GitHub Actions CI Gate",
+    debug_fixture_post_merge_gate: "GitHub Actions Post-Merge Gate",
+    debug_fixture_rollout_window: "Merged PR sample window",
+    debug_fixture_partial_pagination: "Incomplete provider page window",
+    debug_fixture_previous_window: "Previous valid sample window"
+  }[source] || optionalText(source, "출처 미수집").replaceAll("_", " "));
+
+  const renderEvidenceMetric = (key, metric, generatedAt) => {
+    const card = root.querySelector(`[data-evidence-metric="${key}"]`);
+    if (!card) return;
+    const snapshot = metric || {};
+    const label = optionalText(snapshot.label, "unavailable");
+    const labelNode = card.querySelector("[data-metric-label]");
+    if (labelNode) {
+      labelNode.textContent = metricLabelText(label);
+      labelNode.className = `evidence-metric-label is-${label}`;
+    }
+    const sampleCount = evidenceNumber(snapshot.sampleCount);
+    const hasSamples = sampleCount !== null && sampleCount >= 0;
+    const p50 = card.querySelector("[data-metric-p50]");
+    const p95 = card.querySelector("[data-metric-p95]");
+    const samples = card.querySelector("[data-metric-samples]");
+    const source = card.querySelector("[data-metric-source]");
+    const generated = card.querySelector("[data-metric-generated]");
+    if (p50) p50.textContent = formatEvidenceSeconds(snapshot.p50Seconds);
+    if (p95) p95.textContent = formatEvidenceSeconds(snapshot.p95Seconds);
+    if (samples) samples.textContent = hasSamples ? `표본 ${sampleCount}` : "표본 미수집";
+    if (source) {
+      source.textContent = evidenceSourceLabel(snapshot.source);
+      source.title = optionalText(snapshot.source, "출처 미수집");
+    }
+    if (generated) generated.textContent = formatEvidenceTimestamp(generatedAt);
+    card.classList.toggle("is-unavailable", label === "unavailable");
+  };
+
+  const normalizeSchedulerMode = (value) => {
+    if (value === "remediation") return "remediate";
+    if (value === "shadow") return "observe";
+    return optionalText(value, "off");
+  };
+
+  const renderEvidenceAttention = (evidence, rollout) => {
+    const attention = root.querySelector("[data-evidence-attention]");
+    if (!attention) return;
+    const status = optionalText(evidence?.status, "unavailable");
+    const currentMode = normalizeSchedulerMode(rollout?.stage);
+    const recommendedMode = optionalText(evidence?.recommendedSchedulerMode, "observe");
+    const mismatch = status !== "ready" || currentMode !== recommendedMode;
+    attention.hidden = !mismatch;
+    if (!mismatch) return;
+    const blocker = asArray(evidence?.blockers)[0];
+    const statusCopy = {
+      hold: "관찰 조건이 아직 충족되지 않았습니다.",
+      stale: "evidence freshness window가 지났습니다.",
+      unavailable: "최신 evidence를 읽을 수 없습니다.",
+      invalid: "schema 또는 SHA 검증에서 evidence가 거부되었습니다."
+    }[status];
+    const modeCopy = currentMode !== recommendedMode
+      ? `현재 ${currentMode} · 권장 ${recommendedMode}`
+      : "현재 mode는 유지됩니다.";
+    setText("[data-evidence-attention-title]", status === "ready" ? "운영 mode 불일치" : "자동 전환 보류");
+    setText("[data-evidence-attention-body]", blocker || statusCopy || "evidence 상태를 확인하세요.");
+    setText(
+      "[data-evidence-attention-action]",
+      `${modeCopy} · 자동 전환하지 않습니다. evidence 갱신 후 운영자가 다시 확인하세요.`
+    );
+  };
+
+  const renderValidationEvidence = (evidence, rollout) => {
+    currentValidationEvidence = evidence || null;
+    const status = optionalText(evidence?.status, "unavailable");
+    const statusView = evidenceStatusView(status);
+    const shell = root.querySelector("[data-validation-evidence]");
+    const statusNode = root.querySelector("[data-evidence-status]");
+    if (shell) shell.dataset.validationEvidenceState = status;
+    if (statusNode) {
+      statusNode.dataset.state = status;
+      statusNode.className = `evidence-status is-${status}`;
+    }
+    setText("[data-evidence-status-mark]", statusView.mark);
+    setText("[data-evidence-status-label]", statusView.label);
+    setText(
+      "[data-evidence-generated-at]",
+      `Evidence 생성 ${formatEvidenceTimestamp(evidence?.generatedAt)}`
+    );
+    renderEvidenceAttention(evidence, rollout);
+    renderEvidenceMetric("historicalFastGate", evidence?.historicalFastGate, evidence?.generatedAt);
+    renderEvidenceMetric("actualFastGate", evidence?.actualFastGate, evidence?.generatedAt);
+    renderEvidenceMetric("ciGate", evidence?.ciGate, evidence?.generatedAt);
+    renderEvidenceMetric("postMergeGate", evidence?.postMergeGate, evidence?.generatedAt);
+  };
+
   const renderValidationRail = (validation) => {
     if (!validation) return;
     setText("[data-validation-mode]", optionalText(validation.schedulerMode, "observe"));
@@ -912,6 +1054,7 @@
       "[data-validation-rollout-ruleset]",
       rollout.rulesetChangeRequiresApproval === false ? "RULESET MANAGED" : "RULESET · APPROVAL REQUIRED"
     );
+    renderValidationEvidence(validation.rolloutEvidence || null, rollout);
     setText("[data-validation-count]", String(asArray(validation.records).length));
     const list = root.querySelector("[data-validation-list]");
     if (!list) return;
@@ -939,9 +1082,10 @@
     return section;
   };
 
-  const validationDetailCard = (title, value, meta = "") => {
+  const validationDetailCard = (title, value, meta = "", kind = "") => {
     const card = document.createElement("div");
-    card.className = "validation-detail-card";
+    card.className = `validation-detail-card${kind ? ` is-${kind}` : ""}`;
+    if (kind) card.dataset.detailKind = kind;
     card.append(createText("strong", "", title), createText("span", "", optionalText(value)));
     if (String(meta || "").trim() !== "") card.append(createText("small", "", meta));
     return card;
@@ -956,6 +1100,110 @@
 
   const statusLabel = (value) => optionalText(value).replaceAll("_", " ");
 
+  const workflowSelectionCopy = (basis) => ({
+    newest_run: "가장 늦게 생성된 run을 선택했습니다. attempt 번호는 서로 다른 run 사이에서 비교하지 않습니다.",
+    latest_attempt: "같은 run 안에서 가장 높은 attempt를 선택했습니다.",
+    deterministic_tie_break: "생성 시각이 같은 관측을 갱신 시각과 안정적인 provider 순서로 결정했습니다.",
+    legacy_unknown: "legacy 기록이라 선택 근거를 복원할 수 없습니다. 현재 선택 상태만 보존합니다."
+  }[basis] || "선택 근거가 제공되지 않았습니다.");
+
+  const workflowNotSelectedCopy = (workflow, selected) => {
+    if (!selected) return "선택된 run과 비교할 수 없습니다.";
+    const selectedCreated = Date.parse(selected.createdAt || "");
+    const candidateCreated = Date.parse(workflow.createdAt || "");
+    if (Number.isFinite(selectedCreated) && Number.isFinite(candidateCreated) && selectedCreated > candidateCreated) {
+      return `attempt ${workflow.runAttempt}이 더 높더라도 이전 run입니다. 새 run의 생성 시각이 더 늦어 선택되지 않았습니다.`;
+    }
+    if (selected.createdAt === workflow.createdAt && Number(selected.runAttempt) > Number(workflow.runAttempt)) {
+      return `같은 run의 이전 attempt ${workflow.runAttempt}입니다. attempt ${selected.runAttempt}이 선택되었습니다.`;
+    }
+    return "동일 시각 후보보다 갱신 시각 또는 안정적인 tie-break 순서가 후순위라 선택되지 않았습니다.";
+  };
+
+  const renderWorkflowRow = (workflow, selected) => {
+    const row = document.createElement("article");
+    row.className = `validation-workflow${workflow.selected ? " is-selected" : ""}`;
+    row.dataset.workflowSelected = workflow.selected ? "true" : "false";
+    row.dataset.detailKind = "workflow";
+    const head = document.createElement("div");
+    head.className = "validation-workflow-head";
+    head.append(
+      createText("strong", "", `${optionalText(workflow.name)} · attempt ${workflow.runAttempt ?? "-"}`),
+      createText(
+        "span",
+        "validation-workflow-state",
+        workflow.selected ? `SELECTED · ${statusLabel(workflow.status)}` : `HISTORY · ${statusLabel(workflow.status)}`
+      )
+    );
+    const times = document.createElement("div");
+    times.className = "validation-workflow-times";
+    for (const [label, value] of [
+      ["Created", workflow.createdAt],
+      ["Started", workflow.startedAt],
+      ["Updated", workflow.updatedAt]
+    ]) {
+      const item = document.createElement("span");
+      item.append(createText("b", "", label), document.createTextNode(formatEvidenceTimestamp(value)));
+      times.appendChild(item);
+    }
+    const reason = createText(
+      "p",
+      "validation-workflow-reason",
+      workflow.selected
+        ? workflowSelectionCopy(workflow.selectionBasis)
+        : workflowNotSelectedCopy(workflow, selected)
+    );
+    row.append(head, times, reason);
+    return row;
+  };
+
+  const validationEvidenceDetail = (evidence) => {
+    const summary = evidence || {};
+    const sampleWindow = summary.sampleWindow || {};
+    const grid = validationDetailGrid([
+      validationDetailCard(
+        "Projected Fast Gate",
+        `${formatEvidenceSeconds(summary.historicalFastGate?.p50Seconds)} p50 · ${formatEvidenceSeconds(summary.historicalFastGate?.p95Seconds)} p95`,
+        `${metricLabelText(summary.historicalFastGate?.label)} · 표본 ${summary.historicalFastGate?.sampleCount ?? "미수집"} · ${evidenceSourceLabel(summary.historicalFastGate?.source)}`,
+        "metric"
+      ),
+      validationDetailCard(
+        "Actual Fast Gate",
+        `${formatEvidenceSeconds(summary.actualFastGate?.p50Seconds)} p50 · ${formatEvidenceSeconds(summary.actualFastGate?.p95Seconds)} p95`,
+        `${metricLabelText(summary.actualFastGate?.label)} · 표본 ${summary.actualFastGate?.sampleCount ?? "미수집"} · ${evidenceSourceLabel(summary.actualFastGate?.source)}`,
+        "metric"
+      ),
+      validationDetailCard(
+        "Sample window",
+        sampleWindow.pullRequestCount == null ? "미수집" : `${sampleWindow.pullRequestCount} PR · ${sampleWindow.windowHours ?? "-"}h`,
+        `${formatEvidenceTimestamp(sampleWindow.earliestMergedAt)} → ${formatEvidenceTimestamp(sampleWindow.latestMergedAt)} · ${evidenceSourceLabel(sampleWindow.source)}`,
+        "metric"
+      ),
+      validationDetailCard(
+        "Evidence state",
+        evidenceStatusView(optionalText(summary.status, "unavailable")).label,
+        `생성 ${formatEvidenceTimestamp(summary.generatedAt)} · SHA ${optionalText(summary.evidenceShortSha, "미수집")}`,
+        "metric"
+      )
+    ]);
+    return validationDetailSection("Rollout evidence · 출처와 표본", [grid]);
+  };
+
+  const canonicalGithubUrl = (value, kind) => {
+    try {
+      const url = new URL(value);
+      if (url.protocol !== "https:" || url.hostname !== "github.com" || url.port || url.username || url.password || url.search || url.hash) {
+        return null;
+      }
+      const pattern = kind === "run"
+        ? /^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/actions\/runs\/\d+(?:\/job\/\d+)?\/?$/
+        : /^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/\d+\/?$/;
+      return pattern.test(url.pathname) ? url.href : null;
+    } catch (_error) {
+      return null;
+    }
+  };
+
   const renderValidationDetail = (record) => {
     const detail = document.createElement("div");
     detail.className = "validation-detail";
@@ -963,10 +1211,17 @@
     detail.dataset.validationDetailRevision = String(record.observationRevision ?? "");
 
     const prLink = document.createElement("a");
-    prLink.href = record.canonicalPrUrl || "#";
-    prLink.target = "_blank";
-    prLink.rel = "noreferrer";
-    prLink.textContent = `PR #${record.pullRequestNumber} 열기`;
+    const canonicalPrUrl = canonicalGithubUrl(record.canonicalPrUrl, "pull");
+    prLink.href = canonicalPrUrl || "#";
+    prLink.target = canonicalPrUrl ? "_blank" : "";
+    prLink.rel = canonicalPrUrl ? "noreferrer" : "";
+    prLink.textContent = canonicalPrUrl
+      ? `PR #${record.pullRequestNumber} 열기`
+      : `PR #${record.pullRequestNumber} 링크 검증 불가`;
+    if (!canonicalPrUrl) {
+      prLink.removeAttribute("href");
+      prLink.setAttribute("aria-disabled", "true");
+    }
     const identity = validationDetailGrid([
       validationDetailCard("Akra ID", record.akraId, record.repository),
       validationDetailCard("상태", record.phaseLabel, `${statusLabel(record.severity)} · rev ${record.observationRevision}`),
@@ -980,20 +1235,21 @@
       ? checks.map((check) => validationDetailCard(
         `${check.required ? "필수" : "선택"} · ${check.context}`,
         statusLabel(check.status),
-        `attempt ${check.latestAttempt ?? "-"} · ${optionalText(check.appSlug, "provider 미상")}`
+        `attempt ${check.latestAttempt ?? "-"} · ${optionalText(check.appSlug, "provider 미상")}`,
+        "check"
       ))
-      : [validationDetailCard("Checks", "관측 없음")]);
+      : [validationDetailCard("Checks", "관측 없음", "", "check")]);
     detail.append(validationDetailSection("Required / Optional Checks", [checksGrid]));
 
     const workflows = asArray(record.workflows);
-    const workflowGrid = validationDetailGrid(workflows.length > 0
-      ? workflows.map((workflow) => validationDetailCard(
-        workflow.name,
-        statusLabel(workflow.status),
-        `run attempt ${workflow.runAttempt} · ${optionalText(workflow.updatedAt, "시간 미상")}`
-      ))
-      : [validationDetailCard("Workflow attempts", "관측 없음")]);
-    detail.append(validationDetailSection("Workflow Attempts", [workflowGrid]));
+    const workflowList = document.createElement("div");
+    workflowList.className = "validation-workflow-list";
+    const selectedWorkflow = workflows.find((workflow) => workflow.selected) || null;
+    workflowList.append(...(workflows.length > 0
+      ? workflows.map((workflow) => renderWorkflowRow(workflow, selectedWorkflow))
+      : [validationDetailCard("Workflow attempts", "관측 없음", "", "workflow")]));
+    detail.append(validationDetailSection("Workflow run 선택", [workflowList]));
+    detail.append(validationEvidenceDetail(currentValidationEvidence));
 
     const providers = asArray(record.providers);
     const providerCards = providers.map((provider) => validationDetailCard(
@@ -1070,12 +1326,129 @@
     return detail;
   };
 
+  const renderEvidenceHistoryPage = (page) => {
+    const latest = page?.latest || {};
+    const summary = latest.summary || currentValidationEvidence || {};
+    const detail = document.createElement("div");
+    detail.className = "validation-detail evidence-detail";
+    detail.dataset.evidenceDetail = "true";
+    const statusView = evidenceStatusView(optionalText(summary.status, "unavailable"));
+    const overview = document.createElement("div");
+    overview.className = "evidence-detail-summary";
+    overview.append(
+      createText("strong", "", statusView.label),
+      createText(
+        "small",
+        "",
+        `${optionalText(summary.repository, "repository 미수집")} · ${optionalText(summary.baseBranch, "base 미수집")} · evidence ${optionalText(summary.evidenceShortSha, "미수집")}`
+      ),
+      createText(
+        "small",
+        "",
+        `생성 ${formatEvidenceTimestamp(summary.generatedAt)} · 관측 ${formatEvidenceTimestamp(latest.observedAt)} · 권장 mode ${optionalText(summary.recommendedSchedulerMode, "미정")}`
+      )
+    );
+    detail.append(validationDetailSection("최신 evidence", [overview]));
+    detail.append(validationEvidenceDetail(summary));
+
+    const blockers = asArray(summary.blockers);
+    const blockerGrid = validationDetailGrid(blockers.length > 0
+      ? blockers.map((blocker, index) => validationDetailCard(
+        `Blocker ${index + 1}`,
+        blocker,
+        "자동 mode 전환에는 사용하지 않습니다.",
+        "check"
+      ))
+      : [validationDetailCard("Blocker", "없음", "현재 snapshot 기준", "check")]);
+    detail.append(validationDetailSection("판정과 안전 조치", [blockerGrid]));
+
+    const historyList = document.createElement("div");
+    historyList.className = "evidence-history-list";
+    historyList.append(...asArray(page?.history).map((snapshot) => {
+      const row = document.createElement("article");
+      row.className = "evidence-history-row";
+      row.dataset.evidenceHistoryRow = "true";
+      row.append(
+        createText("strong", "", evidenceStatusView(optionalText(snapshot.summary?.status, "unavailable")).label),
+        createText("small", "", `생성 ${formatEvidenceTimestamp(snapshot.summary?.generatedAt)} · 관측 ${formatEvidenceTimestamp(snapshot.observedAt)}`),
+        createText("code", "", optionalText(snapshot.artifactShortSha, "sha 미수집"))
+      );
+      return row;
+    }));
+    if (!historyList.childElementCount) {
+      historyList.append(validationDetailCard("Evidence history", "관측 없음"));
+    }
+    if (page?.nextCursor) {
+      historyList.append(createText("small", "validation-workflow-reason", "표시 범위 밖의 이전 snapshot이 있습니다. API cursor로 계속 조회할 수 있습니다."));
+    }
+    const lastValid = page?.lastValid;
+    if (lastValid && latest.artifactShortSha !== lastValid.artifactShortSha) {
+      historyList.prepend(createText(
+        "p",
+        "validation-workflow-reason",
+        `최신 snapshot은 사용할 수 없습니다. 마지막 유효 evidence: ${formatEvidenceTimestamp(lastValid.summary?.generatedAt)} · ${optionalText(lastValid.artifactShortSha, "sha 미수집")}`
+      ));
+    }
+    detail.append(validationDetailSection("Bounded evidence history", [historyList]));
+
+    const canaryUrl = canonicalGithubUrl(latest.productionSuccessCanary?.runUrl, "run");
+    if (canaryUrl) {
+      const canaryLink = document.createElement("a");
+      canaryLink.href = canaryUrl;
+      canaryLink.target = "_blank";
+      canaryLink.rel = "noreferrer";
+      canaryLink.textContent = `Production canary PR #${latest.productionSuccessCanary.pullRequestNumber} 실행 열기`;
+      detail.append(validationDetailSection("검증된 외부 링크", [canaryLink]));
+    }
+    return detail;
+  };
+
+  const openEvidenceDetailDrawer = () => {
+    if (!evidenceDetailTrigger || !detailDrawer || !detailDrawerBody) return;
+    detailTrigger = evidenceDetailTrigger;
+    const requestSequence = ++evidenceDetailRequestSequence;
+    validationDetailRequestSequence += 1;
+    detailDrawer.dataset.detailMode = "evidence";
+    detailDrawerTitle.textContent = "Rollout evidence";
+    detailDrawerSubtitle.textContent = "bounded history · application projection";
+    const loading = createText("p", "validation-empty", "검증 evidence 이력을 불러오는 중…");
+    loading.setAttribute("role", "status");
+    detailDrawerBody.replaceChildren(loading);
+    detailDrawer.hidden = false;
+    detailDrawer.setAttribute("aria-hidden", "false");
+    evidenceDetailTrigger.setAttribute("aria-expanded", "true");
+    window.requestAnimationFrame(() => {
+      detailDrawer.classList.add("is-open");
+      detailDrawer.focus({ preventScroll: true });
+    });
+    fetch(`${validationEvidenceUrl}?limit=10`, { headers: { "Accept": "application/json" } })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`evidence history ${response.status}`);
+        return response.json();
+      })
+      .then((page) => {
+        if (requestSequence !== evidenceDetailRequestSequence) return;
+        detailDrawerBody.replaceChildren(renderEvidenceHistoryPage(page));
+      })
+      .catch((error) => {
+        if (requestSequence !== evidenceDetailRequestSequence) return;
+        const failure = createText(
+          "p",
+          "validation-empty severity-danger",
+          `Evidence 이력을 불러오지 못했습니다 · ${error.message}. 대시보드의 마지막 summary는 유지됩니다.`
+        );
+        failure.setAttribute("role", "alert");
+        detailDrawerBody.replaceChildren(failure);
+      });
+  };
+
   openValidationDetailDrawer = (
     source,
     { focusDrawer = true, rememberTrigger = true, trigger = source } = {}
   ) => {
     if (!source || !detailDrawer || !detailDrawerBody) return;
     if (rememberTrigger) detailTrigger = trigger?.isConnected ? trigger : null;
+    evidenceDetailTrigger?.setAttribute("aria-expanded", "false");
     const recordKey = source.dataset.validationRecordKey;
     const requestSequence = ++validationDetailRequestSequence;
     detailDrawer.dataset.detailMode = "validation";
@@ -1460,6 +1833,11 @@
   root.addEventListener("click", (event) => {
     if (event.target.closest("[data-detail-close]")) {
       closeDetailDrawer();
+      return;
+    }
+
+    if (event.target.closest("[data-evidence-detail-trigger]")) {
+      openEvidenceDetailDrawer();
       return;
     }
 

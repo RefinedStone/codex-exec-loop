@@ -15,8 +15,24 @@ pub enum PrValidationRolloutEvidenceStatus {
 }
 
 impl PrValidationRolloutEvidenceStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Hold => "hold",
+            Self::Stale => "stale",
+            Self::Unavailable => "unavailable",
+            Self::Invalid => "invalid",
+        }
+    }
+
     pub fn is_structurally_valid(self) -> bool {
         matches!(self, Self::Ready | Self::Hold | Self::Stale)
+    }
+}
+
+impl std::fmt::Display for PrValidationRolloutEvidenceStatus {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
     }
 }
 
@@ -27,6 +43,23 @@ pub enum PrValidationMetricLabel {
     MixedActualAndProjected,
     Actual,
     Unavailable,
+}
+
+impl PrValidationMetricLabel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Projected => "projected",
+            Self::MixedActualAndProjected => "mixed_actual_and_projected",
+            Self::Actual => "actual",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
+impl std::fmt::Display for PrValidationMetricLabel {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

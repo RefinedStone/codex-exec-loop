@@ -227,13 +227,14 @@ pub(crate) fn build_admin_application_with_debug_harness(
     let expected_repository = GithubAutomationAdapter::new()
         .repository_identity(&workspace_dir)
         .ok();
-    let pr_validation_rollout_evidence_query_port: Arc<dyn PrValidationRolloutEvidenceQueryPort> =
-        Arc::new(PrValidationRolloutEvidenceQueryService::new(
-            workspace_dir.clone(),
-            expected_repository,
-            "prerelease",
-            Arc::new(FilesystemPrValidationRolloutEvidenceAdapter::new()),
-        ));
+    let production_pr_validation_rollout_evidence_query_port: Arc<
+        dyn PrValidationRolloutEvidenceQueryPort,
+    > = Arc::new(PrValidationRolloutEvidenceQueryService::new(
+        workspace_dir.clone(),
+        expected_repository,
+        "prerelease",
+        Arc::new(FilesystemPrValidationRolloutEvidenceAdapter::new()),
+    ));
     let parallel_mode_control_plane = Arc::new(parallel_mode_control_plane_from_service(
         &workspace_dir,
         planning.clone(),
@@ -245,7 +246,7 @@ pub(crate) fn build_admin_application_with_debug_harness(
     let production_pr_validation_query_port: Arc<dyn PrValidationQueryPort> = Arc::new(
         PrValidationQueryService::new(workspace_dir.clone(), ports.planning_authority_port.clone())
             .with_scheduler_mode(scheduler_mode)
-            .with_rollout_evidence(pr_validation_rollout_evidence_query_port.clone()),
+            .with_rollout_evidence(production_pr_validation_rollout_evidence_query_port.clone()),
     );
     let production_pr_validation_command_port: Arc<dyn PrValidationCommandPort> =
         Arc::new(PrValidationCommandService::new(
@@ -269,6 +270,12 @@ pub(crate) fn build_admin_application_with_debug_harness(
     } else {
         production_pr_validation_command_port
     };
+    let pr_validation_rollout_evidence_query_port: Arc<dyn PrValidationRolloutEvidenceQueryPort> =
+        if debug_harness_enabled {
+            admin_debug_service.clone()
+        } else {
+            production_pr_validation_rollout_evidence_query_port
+        };
     let facade: Arc<dyn PlanningAdminPort> =
         Arc::new(PlanningAdminFacadeService::from_planning_with_authority(
             workspace_dir,

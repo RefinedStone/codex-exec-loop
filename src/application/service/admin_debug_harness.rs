@@ -24,6 +24,15 @@ use crate::application::port::inbound::pr_validation_query_port::{
     PrValidationBoardSnapshot, PrValidationBoardSummary, PrValidationDetailRequest,
     PrValidationQueryPort, PrValidationRolloutSnapshot, PrValidationStatusRequest,
 };
+use crate::application::port::inbound::pr_validation_rollout_evidence_query_port::{
+    PR_VALIDATION_EVIDENCE_MAX_HISTORY_LIMIT, PrValidationCriterionSnapshot,
+    PrValidationGateMetricSnapshot, PrValidationMetricLabel, PrValidationProductionCanarySnapshot,
+    PrValidationQuotaSnapshot, PrValidationRolloutEvidenceCursorError,
+    PrValidationRolloutEvidenceLimitError, PrValidationRolloutEvidencePage,
+    PrValidationRolloutEvidenceQueryPort, PrValidationRolloutEvidenceRequest,
+    PrValidationRolloutEvidenceSnapshot, PrValidationRolloutEvidenceStatus,
+    PrValidationRolloutEvidenceSummary, PrValidationSampleWindowSnapshot,
+};
 use crate::domain::parallel_mode::{PrValidationOperatorSummary, PrValidationSchedulerMode};
 
 #[derive(Debug, Clone)]
@@ -241,6 +250,47 @@ impl PrValidationQueryPort for AdminDebugHarnessService {
     }
 }
 
+impl PrValidationRolloutEvidenceQueryPort for AdminDebugHarnessService {
+    fn load_latest_summary(&self) -> PrValidationRolloutEvidenceSummary {
+        debug_rollout_evidence_history(&self.projection())[0]
+            .summary
+            .clone()
+    }
+
+    fn load_page(
+        &self,
+        request: PrValidationRolloutEvidenceRequest,
+    ) -> Result<PrValidationRolloutEvidencePage> {
+        if !(1..=PR_VALIDATION_EVIDENCE_MAX_HISTORY_LIMIT).contains(&request.limit) {
+            return Err(anyhow::Error::new(PrValidationRolloutEvidenceLimitError));
+        }
+        let start = match request.cursor.as_deref() {
+            None => 0,
+            Some("debug-evidence:1") => 1,
+            Some("debug-evidence:2") => 2,
+            Some(_) => {
+                return Err(anyhow::Error::new(PrValidationRolloutEvidenceCursorError));
+            }
+        };
+        let snapshots = debug_rollout_evidence_history(&self.projection());
+        if start > snapshots.len() {
+            return Err(anyhow::Error::new(PrValidationRolloutEvidenceCursorError));
+        }
+        let end = (start + request.limit).min(snapshots.len());
+        let latest = snapshots[0].clone();
+        let last_valid = snapshots
+            .iter()
+            .find(|snapshot| snapshot.summary.status.is_structurally_valid())
+            .cloned();
+        Ok(PrValidationRolloutEvidencePage {
+            latest,
+            last_valid,
+            history: snapshots[start..end].to_vec(),
+            next_cursor: (end < snapshots.len()).then(|| format!("debug-evidence:{end}")),
+        })
+    }
+}
+
 impl PrValidationCommandPort for AdminDebugHarnessService {
     fn execute(
         &self,
@@ -443,12 +493,346 @@ fn debug_validation_board(
         rollout: PrValidationRolloutSnapshot::from_scheduler_mode(
             PrValidationSchedulerMode::Remediate,
         ),
-        rollout_evidence: Default::default(),
+        rollout_evidence: debug_rollout_evidence_history(projection)[0]
+            .summary
+            .clone(),
         summary,
         records: vec![record.compact_summary()],
         next_cursor: None,
         cursor_reset_required: false,
         generated_at: Utc::now().to_rfc3339(),
+    }
+}
+
+fn debug_rollout_evidence_history(
+    projection: &AdminDebugHarnessProjection,
+) -> Vec<PrValidationRolloutEvidenceSnapshot> {
+    let current = debug_rollout_evidence_snapshot(projection);
+    let previous = debug_ready_rollout_evidence_snapshot(
+        "2026-08-10T07:30:00+00:00",
+        "debugb",
+        PrValidationMetricLabel::Actual,
+        Some(1),
+    );
+    let projected_only = debug_ready_rollout_evidence_snapshot(
+        "2026-08-10T06:30:00+00:00",
+        "debuga",
+        PrValidationMetricLabel::Unavailable,
+        None,
+    );
+    vec![current, previous, projected_only]
+}
+
+fn debug_rollout_evidence_snapshot(
+    projection: &AdminDebugHarnessProjection,
+) -> PrValidationRolloutEvidenceSnapshot {
+    let scenario = projection.scenario;
+    let stage = projection.stage;
+    let status = match scenario {
+        AdminDebugScenario::CheckFailureRecovery if stage == AdminDebugStage::Blocked => {
+            PrValidationRolloutEvidenceStatus::Hold
+        }
+        AdminDebugScenario::RequiredMissing | AdminDebugScenario::PollClaimRace => {
+            PrValidationRolloutEvidenceStatus::Hold
+        }
+        AdminDebugScenario::RateLimitRecovery | AdminDebugScenario::ProviderOutageRetry
+            if matches!(
+                stage,
+                AdminDebugStage::Blocked | AdminDebugStage::Recovering
+            ) =>
+        {
+            PrValidationRolloutEvidenceStatus::Unavailable
+        }
+        AdminDebugScenario::ClosedUnmergedAttested | AdminDebugScenario::DuplicateLateReview => {
+            PrValidationRolloutEvidenceStatus::Invalid
+        }
+        AdminDebugScenario::RestartVerifying
+            if matches!(stage, AdminDebugStage::Ready | AdminDebugStage::Reviewing) =>
+        {
+            PrValidationRolloutEvidenceStatus::Stale
+        }
+        _ => PrValidationRolloutEvidenceStatus::Ready,
+    };
+    let actual_label = match scenario {
+        AdminDebugScenario::OptionalSkipped | AdminDebugScenario::RequiredMissing => {
+            PrValidationMetricLabel::Unavailable
+        }
+        _ if matches!(
+            status,
+            PrValidationRolloutEvidenceStatus::Unavailable
+                | PrValidationRolloutEvidenceStatus::Invalid
+        ) =>
+        {
+            PrValidationMetricLabel::Unavailable
+        }
+        _ => PrValidationMetricLabel::Actual,
+    };
+    let actual_sample_count = (actual_label == PrValidationMetricLabel::Actual).then_some(1);
+    let historical_label = if scenario == AdminDebugScenario::CheckFailureRecovery {
+        PrValidationMetricLabel::MixedActualAndProjected
+    } else if matches!(
+        status,
+        PrValidationRolloutEvidenceStatus::Unavailable | PrValidationRolloutEvidenceStatus::Invalid
+    ) {
+        PrValidationMetricLabel::Unavailable
+    } else {
+        PrValidationMetricLabel::Projected
+    };
+    let generated_at = if status == PrValidationRolloutEvidenceStatus::Stale {
+        "2026-08-09T20:00:00+00:00"
+    } else {
+        "2026-08-10T08:10:00+00:00"
+    };
+    let blockers = match scenario {
+        AdminDebugScenario::CheckFailureRecovery if stage == AdminDebugStage::Blocked => {
+            vec!["Post-Merge Gate failure requires correlated remediation".to_string()]
+        }
+        AdminDebugScenario::RequiredMissing => {
+            vec!["required check evidence is missing".to_string()]
+        }
+        AdminDebugScenario::RateLimitRecovery => {
+            vec![
+                "provider rate limit is active; the last valid snapshot remains available"
+                    .to_string(),
+            ]
+        }
+        AdminDebugScenario::ProviderOutageRetry => {
+            vec!["provider observation is unavailable; retry with bounded backoff".to_string()]
+        }
+        AdminDebugScenario::ClosedUnmergedAttested => {
+            vec!["evidence SHA does not match the integrated target".to_string()]
+        }
+        AdminDebugScenario::RestartVerifying => {
+            vec!["evidence freshness window has elapsed".to_string()]
+        }
+        AdminDebugScenario::PollClaimRace => {
+            vec!["provider pagination is incomplete; do not admit the queue".to_string()]
+        }
+        AdminDebugScenario::DuplicateLateReview => {
+            vec!["collector schema is invalid and was rejected".to_string()]
+        }
+        _ => Vec::new(),
+    };
+    let metrics_available = !matches!(
+        status,
+        PrValidationRolloutEvidenceStatus::Unavailable | PrValidationRolloutEvidenceStatus::Invalid
+    );
+    let actual_available = actual_label == PrValidationMetricLabel::Actual;
+    PrValidationRolloutEvidenceSnapshot {
+        artifact_short_sha: Some(format!("debug{:02}", projection.run_id % 100)),
+        observed_at: "2026-08-10T08:10:05+00:00".to_string(),
+        summary: PrValidationRolloutEvidenceSummary {
+            status,
+            generated_at: Some(generated_at.to_string()),
+            repository: Some("RefinedStone/codex-exec-loop".to_string()),
+            base_branch: Some("prerelease".to_string()),
+            evidence_short_sha: Some("2222222".to_string()),
+            recommended_scheduler_mode: Some(
+                if status == PrValidationRolloutEvidenceStatus::Ready {
+                    "remediate"
+                } else {
+                    "observe"
+                }
+                .to_string(),
+            ),
+            queue_admission_supported: status == PrValidationRolloutEvidenceStatus::Ready,
+            sample_window: PrValidationSampleWindowSnapshot {
+                pull_request_count: metrics_available.then_some(12),
+                earliest_merged_at: metrics_available
+                    .then(|| "2026-08-09T08:00:00+00:00".to_string()),
+                latest_merged_at: metrics_available
+                    .then(|| "2026-08-10T08:00:00+00:00".to_string()),
+                window_hours: metrics_available.then_some(24.0),
+                source: if scenario == AdminDebugScenario::PollClaimRace {
+                    "debug_fixture_partial_pagination"
+                } else {
+                    "debug_fixture_rollout_window"
+                }
+                .to_string(),
+            },
+            historical_fast_gate: debug_gate_metric(
+                historical_label,
+                metrics_available.then_some(12),
+                metrics_available.then_some(24.0),
+                metrics_available.then_some(41.0),
+                if historical_label == PrValidationMetricLabel::MixedActualAndProjected {
+                    "debug_fixture_historical_with_actual_row"
+                } else {
+                    "debug_fixture_historical_projection"
+                },
+            ),
+            actual_fast_gate: debug_gate_metric(
+                actual_label,
+                actual_sample_count,
+                actual_available.then_some(28.0),
+                actual_available.then_some(28.0),
+                if actual_available {
+                    "debug_fixture_independent_actual_run"
+                } else {
+                    "debug_fixture_actual_not_collected"
+                },
+            ),
+            ci_gate: debug_gate_metric(
+                if metrics_available {
+                    PrValidationMetricLabel::Actual
+                } else {
+                    PrValidationMetricLabel::Unavailable
+                },
+                metrics_available.then_some(12),
+                metrics_available.then_some(395.0),
+                metrics_available.then_some(520.0),
+                "debug_fixture_ci_gate",
+            ),
+            post_merge_gate: debug_gate_metric(
+                if metrics_available {
+                    PrValidationMetricLabel::Actual
+                } else {
+                    PrValidationMetricLabel::Unavailable
+                },
+                metrics_available.then_some(12),
+                metrics_available.then_some(468.0),
+                metrics_available.then_some(610.0),
+                "debug_fixture_post_merge_gate",
+            ),
+            post_merge_failure_rate_percent: metrics_available.then_some(0.0),
+            quota_used_percent: metrics_available.then_some(22.0),
+            blockers,
+        },
+        quota: PrValidationQuotaSnapshot {
+            limit: metrics_available.then_some(5_000),
+            remaining: metrics_available.then_some(3_900),
+            used: metrics_available.then_some(1_100),
+            used_percent: metrics_available.then_some(22.0),
+            reset_at: metrics_available.then(|| "2026-08-10T09:00:00+00:00".to_string()),
+            collector_requests: metrics_available.then_some(24),
+        },
+        criteria: vec![PrValidationCriterionSnapshot {
+            key: "queue_admission".to_string(),
+            status: if status == PrValidationRolloutEvidenceStatus::Ready {
+                "pass"
+            } else {
+                "hold"
+            }
+            .to_string(),
+            source: "debug_fixture".to_string(),
+            note: "Synthetic evidence for deterministic Admin inspection only".to_string(),
+        }],
+        production_success_canary: actual_available.then(|| PrValidationProductionCanarySnapshot {
+            pull_request_number: 2112,
+            evidence_short_sha: "2222222".to_string(),
+            run_url: Some(
+                "https://github.com/RefinedStone/codex-exec-loop/actions/runs/31419173459"
+                    .to_string(),
+            ),
+        }),
+        failure_canary_status: Some(
+            if status == PrValidationRolloutEvidenceStatus::Ready {
+                "verified"
+            } else {
+                "not_actionable"
+            }
+            .to_string(),
+        ),
+    }
+}
+
+fn debug_ready_rollout_evidence_snapshot(
+    generated_at: &str,
+    artifact_short_sha: &str,
+    actual_label: PrValidationMetricLabel,
+    actual_sample_count: Option<u64>,
+) -> PrValidationRolloutEvidenceSnapshot {
+    let actual_available = actual_label == PrValidationMetricLabel::Actual;
+    PrValidationRolloutEvidenceSnapshot {
+        artifact_short_sha: Some(artifact_short_sha.to_string()),
+        observed_at: generated_at.to_string(),
+        summary: PrValidationRolloutEvidenceSummary {
+            status: PrValidationRolloutEvidenceStatus::Ready,
+            generated_at: Some(generated_at.to_string()),
+            repository: Some("RefinedStone/codex-exec-loop".to_string()),
+            base_branch: Some("prerelease".to_string()),
+            evidence_short_sha: Some(artifact_short_sha.to_string()),
+            recommended_scheduler_mode: Some("remediate".to_string()),
+            queue_admission_supported: true,
+            sample_window: PrValidationSampleWindowSnapshot {
+                pull_request_count: Some(10),
+                earliest_merged_at: Some("2026-08-09T06:30:00+00:00".to_string()),
+                latest_merged_at: Some(generated_at.to_string()),
+                window_hours: Some(24.0),
+                source: "debug_fixture_previous_window".to_string(),
+            },
+            historical_fast_gate: debug_gate_metric(
+                PrValidationMetricLabel::Projected,
+                Some(10),
+                Some(25.0),
+                Some(43.0),
+                "debug_fixture_historical_projection",
+            ),
+            actual_fast_gate: debug_gate_metric(
+                actual_label,
+                actual_sample_count,
+                actual_available.then_some(29.0),
+                actual_available.then_some(29.0),
+                if actual_available {
+                    "debug_fixture_independent_actual_run"
+                } else {
+                    "debug_fixture_actual_not_collected"
+                },
+            ),
+            ci_gate: debug_gate_metric(
+                PrValidationMetricLabel::Actual,
+                Some(10),
+                Some(402.0),
+                Some(530.0),
+                "debug_fixture_ci_gate",
+            ),
+            post_merge_gate: debug_gate_metric(
+                PrValidationMetricLabel::Actual,
+                Some(10),
+                Some(474.0),
+                Some(620.0),
+                "debug_fixture_post_merge_gate",
+            ),
+            post_merge_failure_rate_percent: Some(0.0),
+            quota_used_percent: Some(20.0),
+            blockers: Vec::new(),
+        },
+        quota: PrValidationQuotaSnapshot {
+            limit: Some(5_000),
+            remaining: Some(4_000),
+            used: Some(1_000),
+            used_percent: Some(20.0),
+            reset_at: Some("2026-08-10T09:00:00+00:00".to_string()),
+            collector_requests: Some(20),
+        },
+        criteria: vec![PrValidationCriterionSnapshot {
+            key: "queue_admission".to_string(),
+            status: "pass".to_string(),
+            source: "debug_fixture".to_string(),
+            note: "Previous valid snapshot".to_string(),
+        }],
+        production_success_canary: actual_available.then(|| PrValidationProductionCanarySnapshot {
+            pull_request_number: 2111,
+            evidence_short_sha: artifact_short_sha.to_string(),
+            run_url: None,
+        }),
+        failure_canary_status: Some("verified".to_string()),
+    }
+}
+
+fn debug_gate_metric(
+    label: PrValidationMetricLabel,
+    sample_count: Option<u64>,
+    p50_seconds: Option<f64>,
+    p95_seconds: Option<f64>,
+    source: &str,
+) -> PrValidationGateMetricSnapshot {
+    PrValidationGateMetricSnapshot {
+        label,
+        sample_count,
+        p50_seconds,
+        p95_seconds,
+        source: source.to_string(),
     }
 }
 
@@ -691,21 +1075,7 @@ fn debug_validation_record(
             required_status == PrValidationAdminCheckStatus::Succeeded,
         ),
         required_checks_total: 1,
-        workflows: vec![PrValidationAdminWorkflow {
-            name: "Post-Merge Gate".to_string(),
-            status: debug_check_status_label(required_status).to_string(),
-            run_attempt: if stage_index >= 5 { 2 } else { 1 },
-            created_at: Some("2026-08-10T08:00:10+00:00".to_string()),
-            started_at: Some("2026-08-10T08:00:20+00:00".to_string()),
-            updated_at: Some("2026-08-10T08:01:20+00:00".to_string()),
-            selection_basis: if stage_index >= 5 {
-                "latest_attempt"
-            } else {
-                "newest_run"
-            }
-            .to_string(),
-            selected: true,
-        }],
+        workflows: debug_validation_workflows(scenario, required_status, stage_index),
         providers: vec![PrValidationAdminProvider {
             key: "github:Actions".to_string(),
             lifecycle: "finite".to_string(),
@@ -748,6 +1118,77 @@ fn debug_validation_record(
         observation_revision,
         post_merge_checkpoint_observed: stage_index > 0,
     }
+}
+
+fn debug_validation_workflows(
+    scenario: AdminDebugScenario,
+    required_status: PrValidationAdminCheckStatus,
+    stage_index: usize,
+) -> Vec<PrValidationAdminWorkflow> {
+    let status = debug_check_status_label(required_status).to_string();
+    if scenario == AdminDebugScenario::PostMergeSuccess {
+        return vec![
+            PrValidationAdminWorkflow {
+                name: "Post-Merge Gate".to_string(),
+                status,
+                run_attempt: 1,
+                created_at: Some("2026-08-10T09:00:10+00:00".to_string()),
+                started_at: Some("2026-08-10T09:00:20+00:00".to_string()),
+                updated_at: Some("2026-08-10T09:01:20+00:00".to_string()),
+                selection_basis: "newest_run".to_string(),
+                selected: true,
+            },
+            PrValidationAdminWorkflow {
+                name: "Post-Merge Gate".to_string(),
+                status: "succeeded".to_string(),
+                run_attempt: 3,
+                created_at: Some("2026-08-10T08:00:10+00:00".to_string()),
+                started_at: Some("2026-08-10T08:00:20+00:00".to_string()),
+                updated_at: Some("2026-08-10T08:05:20+00:00".to_string()),
+                selection_basis: "newest_run".to_string(),
+                selected: false,
+            },
+        ];
+    }
+    if scenario == AdminDebugScenario::OptionalSkipped {
+        return vec![
+            PrValidationAdminWorkflow {
+                name: "Post-Merge Gate".to_string(),
+                status,
+                run_attempt: 2,
+                created_at: Some("2026-08-10T08:00:10+00:00".to_string()),
+                started_at: Some("2026-08-10T08:02:20+00:00".to_string()),
+                updated_at: Some("2026-08-10T08:03:20+00:00".to_string()),
+                selection_basis: "latest_attempt".to_string(),
+                selected: true,
+            },
+            PrValidationAdminWorkflow {
+                name: "Post-Merge Gate".to_string(),
+                status: "failed".to_string(),
+                run_attempt: 1,
+                created_at: Some("2026-08-10T08:00:10+00:00".to_string()),
+                started_at: Some("2026-08-10T08:00:20+00:00".to_string()),
+                updated_at: Some("2026-08-10T08:01:20+00:00".to_string()),
+                selection_basis: "latest_attempt".to_string(),
+                selected: false,
+            },
+        ];
+    }
+    vec![PrValidationAdminWorkflow {
+        name: "Post-Merge Gate".to_string(),
+        status,
+        run_attempt: if stage_index >= 5 { 2 } else { 1 },
+        created_at: Some("2026-08-10T08:00:10+00:00".to_string()),
+        started_at: Some("2026-08-10T08:00:20+00:00".to_string()),
+        updated_at: Some("2026-08-10T08:01:20+00:00".to_string()),
+        selection_basis: if stage_index >= 5 {
+            "latest_attempt"
+        } else {
+            "newest_run"
+        }
+        .to_string(),
+        selected: true,
+    }]
 }
 
 fn debug_validation_phase(
@@ -879,6 +1320,13 @@ mod tests {
         AdminDebugHarnessCommand, AdminDebugHarnessConfig, AdminDebugHarnessError,
         AdminDebugHarnessService, AdminDebugScenario, AdminDebugStage,
     };
+    use crate::application::port::inbound::pr_validation_query_port::{
+        PrValidationBoardRequest, PrValidationDetailRequest, PrValidationQueryPort,
+    };
+    use crate::application::port::inbound::pr_validation_rollout_evidence_query_port::{
+        PrValidationMetricLabel, PrValidationRolloutEvidenceQueryPort,
+        PrValidationRolloutEvidenceRequest, PrValidationRolloutEvidenceStatus,
+    };
     use std::thread;
     use std::time::Duration;
 
@@ -927,5 +1375,154 @@ mod tests {
         assert_eq!(projection.stage, AdminDebugStage::Complete);
         assert_eq!(projection.progress_percent(), 100);
         assert!(!projection.playing);
+    }
+
+    #[test]
+    fn debug_workflow_history_explains_newest_run_and_latest_attempt_selection() {
+        let service = AdminDebugHarnessService::new(AdminDebugHarnessConfig::enabled());
+        let board = service
+            .load_board(PrValidationBoardRequest::default())
+            .expect("debug validation board should load");
+        let detail = service
+            .load_detail(
+                PrValidationDetailRequest::new(board.records[0].record_key.clone()).unwrap(),
+            )
+            .expect("debug validation detail should load")
+            .expect("debug validation record should exist");
+        assert_eq!(detail.workflows.len(), 2);
+        assert_eq!(detail.workflows[0].run_attempt, 1);
+        assert!(detail.workflows[0].selected);
+        assert_eq!(detail.workflows[0].selection_basis, "newest_run");
+        assert_eq!(detail.workflows[1].run_attempt, 3);
+        assert!(!detail.workflows[1].selected);
+
+        service
+            .execute(AdminDebugHarnessCommand::SelectScenario(
+                AdminDebugScenario::OptionalSkipped,
+            ))
+            .unwrap();
+        let board = service
+            .load_board(PrValidationBoardRequest::default())
+            .unwrap();
+        let detail = service
+            .load_detail(
+                PrValidationDetailRequest::new(board.records[0].record_key.clone()).unwrap(),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(detail.workflows[0].run_attempt, 2);
+        assert_eq!(detail.workflows[0].selection_basis, "latest_attempt");
+        assert!(detail.workflows[0].selected);
+        assert_eq!(detail.workflows[1].run_attempt, 1);
+        assert!(!detail.workflows[1].selected);
+    }
+
+    #[test]
+    fn debug_evidence_scenarios_keep_actual_projected_and_failure_states_distinct() {
+        let service = AdminDebugHarnessService::new(AdminDebugHarnessConfig::enabled());
+        let cases = [
+            (
+                AdminDebugScenario::PostMergeSuccess,
+                PrValidationRolloutEvidenceStatus::Ready,
+                PrValidationMetricLabel::Actual,
+            ),
+            (
+                AdminDebugScenario::CheckFailureRecovery,
+                PrValidationRolloutEvidenceStatus::Ready,
+                PrValidationMetricLabel::Actual,
+            ),
+            (
+                AdminDebugScenario::OptionalSkipped,
+                PrValidationRolloutEvidenceStatus::Ready,
+                PrValidationMetricLabel::Unavailable,
+            ),
+            (
+                AdminDebugScenario::RequiredMissing,
+                PrValidationRolloutEvidenceStatus::Hold,
+                PrValidationMetricLabel::Unavailable,
+            ),
+            (
+                AdminDebugScenario::ClosedUnmergedAttested,
+                PrValidationRolloutEvidenceStatus::Invalid,
+                PrValidationMetricLabel::Unavailable,
+            ),
+            (
+                AdminDebugScenario::RestartVerifying,
+                PrValidationRolloutEvidenceStatus::Stale,
+                PrValidationMetricLabel::Actual,
+            ),
+            (
+                AdminDebugScenario::PollClaimRace,
+                PrValidationRolloutEvidenceStatus::Hold,
+                PrValidationMetricLabel::Actual,
+            ),
+            (
+                AdminDebugScenario::DuplicateLateReview,
+                PrValidationRolloutEvidenceStatus::Invalid,
+                PrValidationMetricLabel::Unavailable,
+            ),
+        ];
+        for (scenario, expected_status, expected_actual_label) in cases {
+            service
+                .execute(AdminDebugHarnessCommand::SelectScenario(scenario))
+                .unwrap();
+            let summary = service.load_latest_summary();
+            assert_eq!(summary.status, expected_status, "{scenario:?}");
+            assert_eq!(
+                summary.actual_fast_gate.label, expected_actual_label,
+                "{scenario:?}"
+            );
+            if scenario == AdminDebugScenario::CheckFailureRecovery {
+                assert_eq!(
+                    summary.historical_fast_gate.label,
+                    PrValidationMetricLabel::MixedActualAndProjected
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn debug_evidence_history_is_bounded_paginated_and_preserves_last_valid_snapshot() {
+        let service = AdminDebugHarnessService::new(AdminDebugHarnessConfig::enabled());
+        service
+            .execute(AdminDebugHarnessCommand::SelectScenario(
+                AdminDebugScenario::RateLimitRecovery,
+            ))
+            .unwrap();
+        service.execute(AdminDebugHarnessCommand::Step).unwrap();
+
+        let first = service
+            .load_page(PrValidationRolloutEvidenceRequest {
+                limit: 1,
+                cursor: None,
+            })
+            .unwrap();
+        assert_eq!(
+            first.latest.summary.status,
+            PrValidationRolloutEvidenceStatus::Unavailable
+        );
+        assert!(first.last_valid.is_some());
+        assert_eq!(first.history.len(), 1);
+        assert_eq!(first.next_cursor.as_deref(), Some("debug-evidence:1"));
+
+        let second = service
+            .load_page(PrValidationRolloutEvidenceRequest {
+                limit: 1,
+                cursor: first.next_cursor,
+            })
+            .unwrap();
+        assert_eq!(second.history.len(), 1);
+        assert_eq!(
+            second.history[0].summary.status,
+            PrValidationRolloutEvidenceStatus::Ready
+        );
+        assert!(
+            service
+                .load_page(PrValidationRolloutEvidenceRequest {
+                    limit: 1,
+                    cursor: Some("debug-evidence:99".to_string()),
+                })
+                .is_err()
+        );
     }
 }
