@@ -44,6 +44,7 @@ use crate::application::port::outbound::planning_authority_port::PlanningAuthori
 use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
 use crate::application::port::outbound::planning_worker_port::PlanningWorkerPort;
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
+use crate::application::port::outbound::pr_validation_rollout_evidence_store_port::PrValidationRolloutEvidenceStorePort;
 use crate::application::port::outbound::review_center_repository_port::ReviewCenterRepositoryPort;
 use crate::application::port::outbound::telegram_bot_port::TelegramBotPort;
 use crate::application::port::outbound::telegram_global_runner_lease_port::TelegramGlobalRunnerLeasePort;
@@ -110,6 +111,7 @@ struct ProductionSharedPorts {
     app_server_prompt_log_port: Arc<dyn AppServerPromptLogPort>,
     telegram_update_ledger_port: Arc<dyn TelegramUpdateLedgerPort>,
     telegram_global_runner_lease_port: Arc<dyn TelegramGlobalRunnerLeasePort>,
+    pr_validation_rollout_evidence_store_port: Arc<dyn PrValidationRolloutEvidenceStorePort>,
 }
 
 #[cfg(all(test, windows))]
@@ -229,12 +231,15 @@ pub(crate) fn build_admin_application_with_debug_harness(
         .ok();
     let production_pr_validation_rollout_evidence_query_port: Arc<
         dyn PrValidationRolloutEvidenceQueryPort,
-    > = Arc::new(PrValidationRolloutEvidenceQueryService::new(
-        workspace_dir.clone(),
-        expected_repository,
-        "prerelease",
-        Arc::new(FilesystemPrValidationRolloutEvidenceAdapter::new()),
-    ));
+    > = Arc::new(
+        PrValidationRolloutEvidenceQueryService::new(
+            workspace_dir.clone(),
+            expected_repository,
+            "prerelease",
+            Arc::new(FilesystemPrValidationRolloutEvidenceAdapter::new()),
+        )
+        .with_store(ports.pr_validation_rollout_evidence_store_port.clone()),
+    );
     let parallel_mode_control_plane = Arc::new(parallel_mode_control_plane_from_service(
         &workspace_dir,
         planning.clone(),
@@ -479,6 +484,8 @@ fn build_shared_ports_for_prompt_logging(prompt_logging_enabled: bool) -> Produc
         planning_authority_adapter.clone();
     let review_center_repository_port: Arc<dyn ReviewCenterRepositoryPort> =
         planning_authority_adapter.clone();
+    let pr_validation_rollout_evidence_store_port: Arc<dyn PrValidationRolloutEvidenceStorePort> =
+        planning_authority_adapter.clone();
     let telegram_global_adapter = Arc::new(SqliteTelegramGlobalRunnerLeaseAdapter::new());
     let telegram_update_ledger_port: Arc<dyn TelegramUpdateLedgerPort> =
         telegram_global_adapter.clone();
@@ -507,6 +514,7 @@ fn build_shared_ports_for_prompt_logging(prompt_logging_enabled: bool) -> Produc
         app_server_prompt_log_port,
         telegram_update_ledger_port,
         telegram_global_runner_lease_port,
+        pr_validation_rollout_evidence_store_port,
     }
 }
 

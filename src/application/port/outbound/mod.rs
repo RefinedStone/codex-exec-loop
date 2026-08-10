@@ -34,6 +34,8 @@ pub mod planning_workspace_port;
 pub mod pr_validation_remediation_port;
 // PR validation rollout evidence port는 repository-local evidence bytes를 application 판정과 분리한다.
 pub mod pr_validation_rollout_evidence_port;
+// PR validation rollout evidence store port persists validated snapshots and collection ownership.
+pub mod pr_validation_rollout_evidence_store_port;
 // session catalog port는 app-server 세션 목록과 상세 조회를 service에서 사용할 계약으로 둔다.
 pub mod session_catalog_port;
 // startup probe port는 실행 전 환경 점검을 외부 명령이나 파일 접근에서 분리한다.

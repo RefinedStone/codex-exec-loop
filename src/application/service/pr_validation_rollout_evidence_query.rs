@@ -6,11 +6,15 @@ use anyhow::{Result, bail};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, TimeZone, Utc};
+use rand::{RngCore, rngs::OsRng};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::application::port::inbound::pr_validation_rollout_evidence_query_port::{
     PR_VALIDATION_EVIDENCE_MAX_HISTORY_LIMIT, PrValidationCriterionSnapshot,
+    PrValidationEvidenceCollectionSnapshot, PrValidationEvidenceMetricTrendSnapshot,
+    PrValidationEvidenceTrendSnapshot, PrValidationEvidenceWarningKind,
+    PrValidationEvidenceWarningSeverity, PrValidationEvidenceWarningSnapshot,
     PrValidationGateMetricSnapshot, PrValidationMetricLabel, PrValidationProductionCanarySnapshot,
     PrValidationQuotaSnapshot, PrValidationRolloutEvidenceCursorError,
     PrValidationRolloutEvidenceLimitError, PrValidationRolloutEvidencePage,
@@ -20,6 +24,13 @@ use crate::application::port::inbound::pr_validation_rollout_evidence_query_port
 };
 use crate::application::port::outbound::pr_validation_rollout_evidence_port::{
     PrValidationRolloutEvidenceDocument, PrValidationRolloutEvidencePort,
+};
+use crate::application::port::outbound::pr_validation_rollout_evidence_store_port::{
+    PR_VALIDATION_EVIDENCE_COLLECTION_COOLDOWN_MILLIS,
+    PR_VALIDATION_EVIDENCE_COLLECTION_LEASE_MILLIS, PrValidationEvidenceCollectionClaim,
+    PrValidationEvidenceCollectionClaimRequest, PrValidationEvidenceCollectionSettlement,
+    PrValidationEvidenceCollectionSettlementRequest, PrValidationEvidenceCollectionState,
+    PrValidationEvidenceStoredCandidate, PrValidationRolloutEvidenceStorePort,
 };
 
 const SUPPORTED_SCHEMA_VERSION: u64 = 1;
@@ -37,6 +48,8 @@ pub struct PrValidationRolloutEvidenceQueryService {
     expected_repository: Option<String>,
     expected_base_branch: String,
     source: Arc<dyn PrValidationRolloutEvidencePort>,
+    store: Option<Arc<dyn PrValidationRolloutEvidenceStorePort>>,
+    collection_owner_token: String,
     freshness: Duration,
     latest_summary_cache: Mutex<Option<(Instant, PrValidationRolloutEvidenceSummary)>>,
 }
@@ -53,6 +66,16 @@ struct ProjectedDocument {
     sort_at: DateTime<Utc>,
     artifact_sha: String,
     snapshot: PrValidationRolloutEvidenceSnapshot,
+    identity: Option<EvidenceIdentity>,
+    observation_kind: &'static str,
+}
+
+#[derive(Debug, Clone)]
+struct EvidenceIdentity {
+    repository: String,
+    base_branch: String,
+    evidence_sha: String,
+    generated_at: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -201,9 +224,16 @@ impl PrValidationRolloutEvidenceQueryService {
             expected_repository,
             expected_base_branch: expected_base_branch.into(),
             source,
+            store: None,
+            collection_owner_token: random_collection_token("owner"),
             freshness: Duration::hours(DEFAULT_FRESHNESS_HOURS),
             latest_summary_cache: Mutex::new(None),
         }
+    }
+
+    pub fn with_store(mut self, store: Arc<dyn PrValidationRolloutEvidenceStorePort>) -> Self {
+        self.store = Some(store);
+        self
     }
 
     #[cfg(test)]
@@ -226,6 +256,23 @@ impl PrValidationRolloutEvidenceQueryService {
                 "active repository identity is unavailable",
             ));
         }
+        if self.store.is_some() {
+            match self.load_durable_page_at(request.clone(), now) {
+                Ok(page) => return Ok(page),
+                Err(error) => tracing::warn!(
+                    error = %error,
+                    "durable PR validation rollout evidence is unavailable; using bounded source fallback"
+                ),
+            }
+        }
+        self.load_direct_page_at(request, now)
+    }
+
+    fn load_direct_page_at(
+        &self,
+        request: PrValidationRolloutEvidenceRequest,
+        now: DateTime<Utc>,
+    ) -> Result<PrValidationRolloutEvidencePage> {
         let documents = match self.source.load_documents(&self.workspace_dir) {
             Ok(documents) => documents,
             Err(error) => {
@@ -242,11 +289,160 @@ impl PrValidationRolloutEvidenceQueryService {
                 "rollout evidence has not been collected",
             ));
         }
-
-        let mut projected = documents
+        let projected = documents
             .into_iter()
             .map(|document| self.project_document(document, now))
             .collect::<Vec<_>>();
+        self.page_from_projected(
+            request,
+            projected,
+            PrValidationEvidenceCollectionSnapshot {
+                state: "ephemeral".to_string(),
+                ..Default::default()
+            },
+            now,
+        )
+    }
+
+    fn load_durable_page_at(
+        &self,
+        request: PrValidationRolloutEvidenceRequest,
+        now: DateTime<Utc>,
+    ) -> Result<PrValidationRolloutEvidencePage> {
+        let store = self
+            .store
+            .as_ref()
+            .expect("durable evidence path requires a configured store");
+        let scope_key = self.store_scope_key();
+        let now_epoch_millis = now.timestamp_millis();
+        let lease_token = random_collection_token("lease");
+        let claim = store.try_claim_collection(
+            &self.workspace_dir,
+            &PrValidationEvidenceCollectionClaimRequest {
+                scope_key: scope_key.clone(),
+                owner_token: self.collection_owner_token.clone(),
+                lease_token: lease_token.clone(),
+                now_epoch_millis,
+                lease_duration_millis: PR_VALIDATION_EVIDENCE_COLLECTION_LEASE_MILLIS,
+            },
+        )?;
+        if matches!(claim, PrValidationEvidenceCollectionClaim::Acquired { .. }) {
+            let (projected, outcome, error_class) = match self
+                .source
+                .load_documents(&self.workspace_dir)
+            {
+                Ok(documents) if documents.is_empty() => (
+                    vec![unavailable_projected_document(
+                        now,
+                        "rollout evidence has not been collected",
+                        "no_documents",
+                    )],
+                    "no_documents".to_string(),
+                    None,
+                ),
+                Ok(documents) => {
+                    let projected = documents
+                        .into_iter()
+                        .map(|document| self.project_document(document, now))
+                        .collect::<Vec<_>>();
+                    let outcome = if projected
+                        .iter()
+                        .any(|document| document.snapshot.summary.status.is_structurally_valid())
+                    {
+                        "collected"
+                    } else {
+                        "invalid_document"
+                    };
+                    (projected, outcome.to_string(), None)
+                }
+                Err(error) => {
+                    tracing::warn!(error = %error, "PR validation rollout evidence source is unavailable");
+                    (
+                        vec![unavailable_projected_document(
+                            now,
+                            "rollout evidence source is unavailable",
+                            "source_unavailable",
+                        )],
+                        "source_unavailable".to_string(),
+                        Some("source_unavailable".to_string()),
+                    )
+                }
+            };
+            let candidates = projected
+                .iter()
+                .map(|document| stored_candidate(document, now))
+                .collect::<Result<Vec<_>>>()?;
+            let settlement = store.settle_collection(
+                &self.workspace_dir,
+                PrValidationEvidenceCollectionSettlementRequest {
+                    scope_key: scope_key.clone(),
+                    owner_token: self.collection_owner_token.clone(),
+                    lease_token,
+                    now_epoch_millis,
+                    next_collect_at_epoch_millis: now_epoch_millis
+                        + PR_VALIDATION_EVIDENCE_COLLECTION_COOLDOWN_MILLIS,
+                    collected_at: now.to_rfc3339(),
+                    outcome,
+                    error_class,
+                    candidates,
+                },
+            )?;
+            if matches!(
+                settlement,
+                PrValidationEvidenceCollectionSettlement::LostLease
+            ) {
+                tracing::warn!("rollout evidence collection lease expired before settlement");
+            }
+        }
+        let stored = store.load_snapshot(&self.workspace_dir, &scope_key)?;
+        let projected = stored
+            .records
+            .iter()
+            .map(|record| {
+                let snapshot = serde_json::from_str::<PrValidationRolloutEvidenceSnapshot>(
+                    &record.snapshot_json,
+                )
+                .map_err(|error| {
+                    anyhow::anyhow!("durable rollout evidence snapshot is invalid: {error}")
+                })?;
+                let sort_at = DateTime::parse_from_rfc3339(&record.sort_at)
+                    .map_err(|_| {
+                        anyhow::anyhow!("durable rollout evidence sort timestamp is invalid")
+                    })?
+                    .with_timezone(&Utc);
+                Ok(ProjectedDocument {
+                    sort_at,
+                    artifact_sha: record.artifact_sha.clone(),
+                    snapshot,
+                    identity: None,
+                    observation_kind: if record.observation_kind == "snapshot" {
+                        "snapshot"
+                    } else if record.observation_kind == "invalid_document" {
+                        "invalid_document"
+                    } else {
+                        "collection_failure"
+                    },
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let collection = collection_snapshot(&stored.collection, now_epoch_millis);
+        if projected.is_empty() {
+            return Ok(unavailable_page_with_collection(
+                now,
+                "rollout evidence collection is in progress",
+                collection,
+            ));
+        }
+        self.page_from_projected(request, projected, collection, now)
+    }
+
+    fn page_from_projected(
+        &self,
+        request: PrValidationRolloutEvidenceRequest,
+        mut projected: Vec<ProjectedDocument>,
+        collection: PrValidationEvidenceCollectionSnapshot,
+        now: DateTime<Utc>,
+    ) -> Result<PrValidationRolloutEvidencePage> {
         projected.sort_by(|left, right| {
             right
                 .sort_at
@@ -275,12 +471,29 @@ impl PrValidationRolloutEvidenceQueryService {
         let next_cursor = (end < projected.len())
             .then(|| encode_cursor(&projected[end - 1]))
             .transpose()?;
+        let trends = build_trends(&projected);
+        let warnings = build_warnings(&projected, &collection);
         Ok(PrValidationRolloutEvidencePage {
             latest,
             last_valid,
             history,
             next_cursor,
+            revision: collection.revision,
+            trends,
+            warnings,
+            collection,
         })
+    }
+
+    fn store_scope_key(&self) -> String {
+        let repository = self.expected_repository.as_deref().unwrap_or("unavailable");
+        hex_sha256(
+            format!(
+                "rollout-evidence-v1\0{repository}\0{}",
+                self.expected_base_branch
+            )
+            .as_bytes(),
+        )
     }
 
     fn project_document(
@@ -300,21 +513,43 @@ impl PrValidationRolloutEvidenceQueryService {
                         &artifact_sha,
                         "rollout evidence observation timestamp is invalid".to_string(),
                     ),
+                    identity: None,
+                    observation_kind: "invalid_document",
                 };
             }
         };
-        let snapshot = match serde_json::from_slice::<RawEvidence>(&document.content) {
-            Ok(raw) => self
-                .validate_and_project(raw, observed_at, now, &artifact_sha)
-                .unwrap_or_else(|error| {
-                    invalid_snapshot(observed_at, &artifact_sha, error.to_string())
-                }),
-            Err(_) => invalid_snapshot(
-                observed_at,
-                &artifact_sha,
-                "rollout evidence JSON is malformed".to_string(),
-            ),
-        };
+        let (snapshot, identity, observation_kind) =
+            match serde_json::from_slice::<RawEvidence>(&document.content) {
+                Ok(raw) => {
+                    let identity =
+                        raw.canaries
+                            .production_success
+                            .as_ref()
+                            .map(|canary| EvidenceIdentity {
+                                repository: raw.repository.clone(),
+                                base_branch: raw.base_branch.clone(),
+                                evidence_sha: canary.merge_sha.clone(),
+                                generated_at: raw.generated_at.clone(),
+                            });
+                    match self.validate_and_project(raw, observed_at, now, &artifact_sha) {
+                        Ok(snapshot) => (snapshot, identity, "snapshot"),
+                        Err(error) => (
+                            invalid_snapshot(observed_at, &artifact_sha, error.to_string()),
+                            None,
+                            "invalid_document",
+                        ),
+                    }
+                }
+                Err(_) => (
+                    invalid_snapshot(
+                        observed_at,
+                        &artifact_sha,
+                        "rollout evidence JSON is malformed".to_string(),
+                    ),
+                    None,
+                    "invalid_document",
+                ),
+            };
         let sort_at = snapshot
             .summary
             .generated_at
@@ -326,6 +561,8 @@ impl PrValidationRolloutEvidenceQueryService {
             sort_at,
             artifact_sha,
             snapshot,
+            identity,
+            observation_kind,
         }
     }
 
@@ -674,6 +911,16 @@ impl PrValidationRolloutEvidenceQueryPort for PrValidationRolloutEvidenceQuerySe
     ) -> Result<PrValidationRolloutEvidencePage> {
         self.load_page_at(request, Utc::now())
     }
+
+    fn load_revision(&self) -> Result<Option<i64>> {
+        let (Some(store), Some(_)) = (&self.store, &self.expected_repository) else {
+            return Ok(None);
+        };
+        Ok(Some(store.load_revision(
+            &self.workspace_dir,
+            &self.store_scope_key(),
+        )?))
+    }
 }
 
 enum MetricContract {
@@ -839,6 +1086,332 @@ fn short_sha(value: &str) -> String {
     value.chars().take(12).collect()
 }
 
+fn random_collection_token(prefix: &str) -> String {
+    let mut random = [0_u8; 24];
+    OsRng.fill_bytes(&mut random);
+    format!("{prefix}-{}", hex_sha256(&random))
+}
+
+fn unavailable_projected_document(
+    now: DateTime<Utc>,
+    reason: &str,
+    observation_kind: &'static str,
+) -> ProjectedDocument {
+    let five_minute_bucket = now.timestamp().div_euclid(300);
+    let artifact_sha = hex_sha256(
+        format!("rollout-evidence-collection\0{observation_kind}\0{five_minute_bucket}").as_bytes(),
+    );
+    ProjectedDocument {
+        sort_at: now,
+        artifact_sha,
+        snapshot: unavailable_snapshot(now, reason),
+        identity: None,
+        observation_kind,
+    }
+}
+
+fn stored_candidate(
+    document: &ProjectedDocument,
+    now: DateTime<Utc>,
+) -> Result<PrValidationEvidenceStoredCandidate> {
+    let snapshot_json = serde_json::to_string(&document.snapshot).map_err(|error| {
+        anyhow::anyhow!("failed to serialize rollout evidence snapshot: {error}")
+    })?;
+    let (dedupe_key, repository, base_branch, evidence_sha, generated_at) =
+        if let Some(identity) = &document.identity {
+            (
+                hex_sha256(
+                    format!(
+                        "rollout-evidence-identity-v1\0{}\0{}\0{}\0{}",
+                        identity.repository,
+                        identity.base_branch,
+                        identity.evidence_sha,
+                        identity.generated_at
+                    )
+                    .as_bytes(),
+                ),
+                Some(identity.repository.clone()),
+                Some(identity.base_branch.clone()),
+                Some(identity.evidence_sha.clone()),
+                Some(identity.generated_at.clone()),
+            )
+        } else if document.observation_kind == "invalid_document" {
+            (
+                format!("invalid:{}", document.artifact_sha),
+                None,
+                None,
+                None,
+                None,
+            )
+        } else {
+            let five_minute_bucket = now.timestamp().div_euclid(300);
+            (
+                format!(
+                    "collection:{}:{five_minute_bucket}",
+                    document.observation_kind
+                ),
+                None,
+                None,
+                None,
+                None,
+            )
+        };
+    Ok(PrValidationEvidenceStoredCandidate {
+        dedupe_key,
+        repository,
+        base_branch,
+        evidence_sha,
+        generated_at,
+        sort_at: document.sort_at.to_rfc3339(),
+        observed_at: document.snapshot.observed_at.clone(),
+        observation_kind: document.observation_kind.to_string(),
+        status_label: document.snapshot.summary.status.as_str().to_string(),
+        artifact_sha: document.artifact_sha.clone(),
+        snapshot_json,
+    })
+}
+
+fn collection_snapshot(
+    state: &PrValidationEvidenceCollectionState,
+    now_epoch_millis: i64,
+) -> PrValidationEvidenceCollectionSnapshot {
+    let collection_state = if state.lease_active {
+        "collecting"
+    } else if matches!(
+        state.last_outcome.as_deref(),
+        Some("source_unavailable" | "invalid_document")
+    ) {
+        "degraded"
+    } else if state
+        .next_collect_at_epoch_millis
+        .is_some_and(|value| value > now_epoch_millis)
+    {
+        "cooldown"
+    } else {
+        "idle"
+    };
+    PrValidationEvidenceCollectionSnapshot {
+        state: collection_state.to_string(),
+        revision: Some(state.revision),
+        last_collected_at: state.last_collected_at.clone(),
+        last_outcome: state.last_outcome.clone(),
+        last_error_class: state.last_error_class.clone(),
+        next_collect_at_epoch_millis: state.next_collect_at_epoch_millis,
+        stale_lease_recovery_count: state.stale_lease_recovery_count,
+        identity_conflict_count: state.identity_conflict_count,
+    }
+}
+
+fn build_trends(projected: &[ProjectedDocument]) -> PrValidationEvidenceTrendSnapshot {
+    let mut valid = projected
+        .iter()
+        .filter(|document| document.snapshot.summary.status.is_structurally_valid());
+    let Some(current) = valid.next().map(|document| &document.snapshot.summary) else {
+        return PrValidationEvidenceTrendSnapshot::default();
+    };
+    let previous = valid.next().map(|document| &document.snapshot.summary);
+    let comparisons = [
+        (
+            "actual_fast_gate",
+            &current.actual_fast_gate,
+            previous.map(|value| &value.actual_fast_gate),
+        ),
+        (
+            "ci_gate",
+            &current.ci_gate,
+            previous.map(|value| &value.ci_gate),
+        ),
+        (
+            "post_merge_gate",
+            &current.post_merge_gate,
+            previous.map(|value| &value.post_merge_gate),
+        ),
+    ]
+    .into_iter()
+    .map(|(metric, current, previous)| metric_trend(metric, current, previous))
+    .collect();
+    let actual_minus_projected_p95_seconds = current
+        .actual_fast_gate
+        .p95_seconds
+        .zip(current.historical_fast_gate.p95_seconds)
+        .map(|(actual, projected)| actual - projected);
+    let actual_to_projected_p95_ratio = current
+        .actual_fast_gate
+        .p95_seconds
+        .zip(current.historical_fast_gate.p95_seconds)
+        .and_then(|(actual, projected)| (projected > 0.0).then_some(actual / projected));
+    PrValidationEvidenceTrendSnapshot {
+        comparisons,
+        actual_minus_projected_p95_seconds,
+        actual_to_projected_p95_ratio,
+    }
+}
+
+fn metric_trend(
+    metric: &str,
+    current: &PrValidationGateMetricSnapshot,
+    previous: Option<&PrValidationGateMetricSnapshot>,
+) -> PrValidationEvidenceMetricTrendSnapshot {
+    let previous_sample_count = previous.and_then(|value| value.sample_count);
+    let sample_count_delta = current
+        .sample_count
+        .zip(previous_sample_count)
+        .map(|(current, previous)| current as i64 - previous as i64);
+    let previous_p95_seconds = previous.and_then(|value| value.p95_seconds);
+    let p95_delta_seconds = current
+        .p95_seconds
+        .zip(previous_p95_seconds)
+        .map(|(current, previous)| current - previous);
+    let p95_delta_percent =
+        current
+            .p95_seconds
+            .zip(previous_p95_seconds)
+            .and_then(|(current, previous)| {
+                (previous > 0.0).then_some(((current - previous) / previous) * 100.0)
+            });
+    PrValidationEvidenceMetricTrendSnapshot {
+        metric: metric.to_string(),
+        current_sample_count: current.sample_count,
+        previous_sample_count,
+        sample_count_delta,
+        current_p95_seconds: current.p95_seconds,
+        previous_p95_seconds,
+        p95_delta_seconds,
+        p95_delta_percent,
+    }
+}
+
+fn build_warnings(
+    projected: &[ProjectedDocument],
+    collection: &PrValidationEvidenceCollectionSnapshot,
+) -> Vec<PrValidationEvidenceWarningSnapshot> {
+    let mut warnings = Vec::new();
+    let mut valid = projected
+        .iter()
+        .filter(|document| document.snapshot.summary.status.is_structurally_valid());
+    if let Some(current) = valid.next() {
+        let summary = &current.snapshot.summary;
+        if summary.actual_fast_gate.sample_count.unwrap_or(0) < 3 {
+            warnings.push(evidence_warning(
+                PrValidationEvidenceWarningKind::InsufficientActualSamples,
+                PrValidationEvidenceWarningSeverity::Info,
+                "Actual Fast Gate 표본이 3개 미만이라 추세 판단 신뢰도가 낮습니다.",
+            ));
+        }
+        if summary.status == PrValidationRolloutEvidenceStatus::Stale {
+            warnings.push(evidence_warning(
+                PrValidationEvidenceWarningKind::StaleEvidence,
+                PrValidationEvidenceWarningSeverity::Warning,
+                "최신 evidence가 freshness 경계를 초과했습니다.",
+            ));
+        }
+        if summary
+            .post_merge_failure_rate_percent
+            .is_some_and(|value| value > 0.0)
+        {
+            warnings.push(evidence_warning(
+                PrValidationEvidenceWarningKind::PostMergeFailure,
+                PrValidationEvidenceWarningSeverity::Critical,
+                "Post-Merge Gate 실패가 관측됐습니다.",
+            ));
+        }
+        if let Some(previous) = valid.next()
+            && summary
+                .actual_fast_gate
+                .p95_seconds
+                .zip(previous.snapshot.summary.actual_fast_gate.p95_seconds)
+                .is_some_and(|(current, previous)| previous > 0.0 && current > previous * 1.5)
+        {
+            warnings.push(evidence_warning(
+                PrValidationEvidenceWarningKind::LatencySpike,
+                PrValidationEvidenceWarningSeverity::Warning,
+                "Actual Fast Gate p95가 직전 유효 snapshot보다 50% 넘게 증가했습니다.",
+            ));
+        }
+        for criterion in current
+            .snapshot
+            .criteria
+            .iter()
+            .filter(|value| value.status != "pass")
+        {
+            let (kind, message) = if criterion.key.eq_ignore_ascii_case("duplicateRemediation") {
+                (
+                    PrValidationEvidenceWarningKind::DuplicateRemediation,
+                    "중복 remediation 징후가 evidence 기준을 통과하지 못했습니다.",
+                )
+            } else if criterion.key.eq_ignore_ascii_case("phaseMismatch") {
+                (
+                    PrValidationEvidenceWarningKind::PhaseMismatch,
+                    "검증 phase 불일치가 evidence 기준을 통과하지 못했습니다.",
+                )
+            } else if criterion.key.eq_ignore_ascii_case("evidenceShaMismatch") {
+                (
+                    PrValidationEvidenceWarningKind::EvidenceShaMismatch,
+                    "Evidence SHA와 Actions 대상 SHA가 일치하지 않습니다.",
+                )
+            } else {
+                continue;
+            };
+            warnings.push(evidence_warning(
+                kind,
+                PrValidationEvidenceWarningSeverity::Critical,
+                message,
+            ));
+        }
+    } else if projected.iter().any(|document| {
+        document.snapshot.summary.status == PrValidationRolloutEvidenceStatus::Invalid
+            && document
+                .snapshot
+                .summary
+                .blockers
+                .iter()
+                .any(|blocker| blocker.to_ascii_lowercase().contains("sha"))
+    }) {
+        warnings.push(evidence_warning(
+            PrValidationEvidenceWarningKind::EvidenceShaMismatch,
+            PrValidationEvidenceWarningSeverity::Critical,
+            "저장된 evidence의 SHA 정합성을 검증할 수 없습니다.",
+        ));
+    }
+    if matches!(
+        collection.last_outcome.as_deref(),
+        Some("source_unavailable" | "invalid_document")
+    ) {
+        warnings.push(evidence_warning(
+            PrValidationEvidenceWarningKind::CollectionUnavailable,
+            PrValidationEvidenceWarningSeverity::Warning,
+            "최근 evidence 수집이 실패했으며 마지막 유효 snapshot을 보존하고 있습니다.",
+        ));
+    }
+    if collection.stale_lease_recovery_count > 0 {
+        warnings.push(evidence_warning(
+            PrValidationEvidenceWarningKind::StaleLeaseRecovered,
+            PrValidationEvidenceWarningSeverity::Info,
+            "만료된 evidence 수집 lease를 다른 프로세스가 복구한 기록이 있습니다.",
+        ));
+    }
+    if collection.identity_conflict_count > 0 {
+        warnings.push(evidence_warning(
+            PrValidationEvidenceWarningKind::IdentityConflict,
+            PrValidationEvidenceWarningSeverity::Critical,
+            "동일 evidence identity에 서로 다른 내용이 관측되어 기존 snapshot을 보존했습니다.",
+        ));
+    }
+    warnings
+}
+
+fn evidence_warning(
+    kind: PrValidationEvidenceWarningKind,
+    severity: PrValidationEvidenceWarningSeverity,
+    message: &str,
+) -> PrValidationEvidenceWarningSnapshot {
+    PrValidationEvidenceWarningSnapshot {
+        kind,
+        severity,
+        message: message.to_string(),
+    }
+}
+
 fn invalid_snapshot(
     observed_at: DateTime<Utc>,
     artifact_sha: &str,
@@ -870,11 +1443,38 @@ fn unavailable_snapshot(now: DateTime<Utc>, reason: &str) -> PrValidationRollout
 }
 
 fn unavailable_page(now: DateTime<Utc>, reason: &str) -> PrValidationRolloutEvidencePage {
+    unavailable_page_with_collection(
+        now,
+        reason,
+        PrValidationEvidenceCollectionSnapshot {
+            state: "unavailable".to_string(),
+            ..Default::default()
+        },
+    )
+}
+
+fn unavailable_page_with_collection(
+    now: DateTime<Utc>,
+    reason: &str,
+    collection: PrValidationEvidenceCollectionSnapshot,
+) -> PrValidationRolloutEvidencePage {
     PrValidationRolloutEvidencePage {
         latest: unavailable_snapshot(now, reason),
         last_valid: None,
         history: Vec::new(),
         next_cursor: None,
+        revision: collection.revision,
+        trends: PrValidationEvidenceTrendSnapshot::default(),
+        warnings: if collection.last_error_class.is_some() {
+            vec![evidence_warning(
+                PrValidationEvidenceWarningKind::CollectionUnavailable,
+                PrValidationEvidenceWarningSeverity::Warning,
+                "Evidence 수집 상태를 확인해야 합니다.",
+            )]
+        } else {
+            Vec::new()
+        },
+        collection,
     }
 }
 
@@ -925,9 +1525,13 @@ fn encode_cursor(document: &ProjectedDocument) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use serde_json::{Value, json};
+
+    use crate::application::port::outbound::pr_validation_rollout_evidence_store_port::{
+        PrValidationEvidenceStoreSnapshot, PrValidationEvidenceStoredRecord,
+    };
 
     use super::*;
 
@@ -957,6 +1561,114 @@ mod tests {
     struct CountingEvidencePort {
         calls: AtomicUsize,
         document: PrValidationRolloutEvidenceDocument,
+    }
+
+    #[derive(Default)]
+    struct MutableEvidencePort {
+        documents: Mutex<Vec<PrValidationRolloutEvidenceDocument>>,
+        fail: AtomicBool,
+    }
+
+    impl PrValidationRolloutEvidencePort for MutableEvidencePort {
+        fn load_documents(
+            &self,
+            _workspace_dir: &str,
+        ) -> Result<Vec<PrValidationRolloutEvidenceDocument>> {
+            if self.fail.load(Ordering::SeqCst) {
+                bail!("private/provider/error")
+            }
+            Ok(self.documents.lock().expect("documents lock").clone())
+        }
+    }
+
+    #[derive(Default)]
+    struct MemoryEvidenceStore {
+        snapshot: Mutex<PrValidationEvidenceStoreSnapshot>,
+        fail: AtomicBool,
+    }
+
+    impl PrValidationRolloutEvidenceStorePort for MemoryEvidenceStore {
+        fn try_claim_collection(
+            &self,
+            _workspace_dir: &str,
+            request: &PrValidationEvidenceCollectionClaimRequest,
+        ) -> Result<PrValidationEvidenceCollectionClaim> {
+            if self.fail.load(Ordering::SeqCst) {
+                bail!("durable store unavailable")
+            }
+            Ok(PrValidationEvidenceCollectionClaim::Acquired {
+                lease_expires_at_epoch_millis: request.now_epoch_millis + 60_000,
+                recovered_stale_lease: false,
+            })
+        }
+
+        fn settle_collection(
+            &self,
+            _workspace_dir: &str,
+            request: PrValidationEvidenceCollectionSettlementRequest,
+        ) -> Result<PrValidationEvidenceCollectionSettlement> {
+            if self.fail.load(Ordering::SeqCst) {
+                bail!("durable store unavailable")
+            }
+            let mut snapshot = self.snapshot.lock().expect("store lock");
+            let mut inserted = 0;
+            let mut duplicates = 0;
+            for candidate in request.candidates {
+                if snapshot
+                    .records
+                    .iter()
+                    .any(|record| record.dedupe_key == candidate.dedupe_key)
+                {
+                    duplicates += 1;
+                    continue;
+                }
+                let sequence = snapshot.records.len() as i64 + 1;
+                snapshot.records.push(PrValidationEvidenceStoredRecord {
+                    sequence,
+                    dedupe_key: candidate.dedupe_key,
+                    sort_at: candidate.sort_at,
+                    artifact_sha: candidate.artifact_sha,
+                    observation_kind: candidate.observation_kind,
+                    snapshot_json: candidate.snapshot_json,
+                });
+                inserted += 1;
+            }
+            snapshot.collection.revision += i64::from(inserted > 0);
+            snapshot.collection.last_collected_at = Some(request.collected_at);
+            snapshot.collection.last_outcome = Some(request.outcome);
+            snapshot.collection.last_error_class = request.error_class;
+            snapshot.collection.next_collect_at_epoch_millis =
+                Some(request.next_collect_at_epoch_millis);
+            Ok(PrValidationEvidenceCollectionSettlement::Stored {
+                inserted,
+                duplicates,
+                identity_conflicts: 0,
+                revision: snapshot.collection.revision,
+            })
+        }
+
+        fn load_snapshot(
+            &self,
+            _workspace_dir: &str,
+            _scope_key: &str,
+        ) -> Result<PrValidationEvidenceStoreSnapshot> {
+            if self.fail.load(Ordering::SeqCst) {
+                bail!("durable store unavailable")
+            }
+            Ok(self.snapshot.lock().expect("store lock").clone())
+        }
+
+        fn load_revision(&self, _workspace_dir: &str, _scope_key: &str) -> Result<i64> {
+            if self.fail.load(Ordering::SeqCst) {
+                bail!("durable store unavailable")
+            }
+            Ok(self
+                .snapshot
+                .lock()
+                .expect("store lock")
+                .collection
+                .revision)
+        }
     }
 
     impl PrValidationRolloutEvidencePort for CountingEvidencePort {
@@ -1406,5 +2118,135 @@ mod tests {
                 .map(|snapshot| snapshot.summary.status),
             Some(PrValidationRolloutEvidenceStatus::Ready)
         );
+    }
+
+    #[test]
+    fn evidence_history_exposes_typed_trends_and_anomalies_without_a_chart() {
+        let now = Utc.with_ymd_and_hms(2026, 8, 11, 0, 0, 0).unwrap();
+        let previous = valid_evidence("2026-08-10T21:00:00Z", "projected", false);
+        let mut current = valid_evidence("2026-08-10T23:00:00Z", "projected", false);
+        current["timings"]["actualFastGate"]["p95Seconds"] = json!(120);
+        current["postMerge"]["failureCount"] = json!(1);
+        current["postMerge"]["failureRatePercent"] = json!(100);
+        let page = service(vec![
+            document(previous, "2026-08-10T21:01:00Z"),
+            document(current, "2026-08-10T23:01:00Z"),
+        ])
+        .load_page_at(PrValidationRolloutEvidenceRequest::default(), now)
+        .expect("trend history should load");
+
+        let actual = page
+            .trends
+            .comparisons
+            .iter()
+            .find(|trend| trend.metric == "actual_fast_gate")
+            .expect("actual trend should exist");
+        assert_eq!(actual.p95_delta_seconds, Some(50.0));
+        assert_eq!(page.trends.actual_minus_projected_p95_seconds, Some(30.0));
+        assert!(page.warnings.iter().any(|warning| {
+            warning.kind == PrValidationEvidenceWarningKind::InsufficientActualSamples
+        }));
+        assert!(
+            page.warnings
+                .iter()
+                .any(|warning| { warning.kind == PrValidationEvidenceWarningKind::LatencySpike })
+        );
+        assert!(
+            page.warnings.iter().any(|warning| {
+                warning.kind == PrValidationEvidenceWarningKind::PostMergeFailure
+            })
+        );
+    }
+
+    #[test]
+    fn durable_history_survives_service_restart_and_keeps_last_valid_on_collection_failure() {
+        let source = Arc::new(MutableEvidencePort {
+            documents: Mutex::new(vec![document(
+                valid_evidence("2026-08-10T23:00:00Z", "projected", false),
+                "2026-08-10T23:01:00Z",
+            )]),
+            fail: AtomicBool::new(false),
+        });
+        let store = Arc::new(MemoryEvidenceStore::default());
+        let first = PrValidationRolloutEvidenceQueryService::new(
+            "/workspace",
+            Some("acme/widgets".to_string()),
+            "prerelease",
+            source.clone(),
+        )
+        .with_store(store.clone())
+        .load_page_at(
+            PrValidationRolloutEvidenceRequest::default(),
+            Utc.with_ymd_and_hms(2026, 8, 11, 0, 0, 0).unwrap(),
+        )
+        .expect("first durable collection should load");
+        assert_eq!(
+            first.latest.summary.status,
+            PrValidationRolloutEvidenceStatus::Ready
+        );
+
+        source.fail.store(true, Ordering::SeqCst);
+        let restarted = PrValidationRolloutEvidenceQueryService::new(
+            "/workspace",
+            Some("acme/widgets".to_string()),
+            "prerelease",
+            source,
+        )
+        .with_store(store)
+        .load_page_at(
+            PrValidationRolloutEvidenceRequest::default(),
+            Utc.with_ymd_and_hms(2026, 8, 11, 0, 6, 0).unwrap(),
+        )
+        .expect("restarted service should replay durable history");
+        assert_eq!(
+            restarted.latest.summary.status,
+            PrValidationRolloutEvidenceStatus::Unavailable
+        );
+        assert_eq!(
+            restarted
+                .last_valid
+                .as_ref()
+                .map(|value| value.summary.status),
+            Some(PrValidationRolloutEvidenceStatus::Ready)
+        );
+        assert_eq!(restarted.collection.state, "degraded");
+        assert!(restarted.warnings.iter().any(|warning| {
+            warning.kind == PrValidationEvidenceWarningKind::CollectionUnavailable
+        }));
+        assert!(
+            !serde_json::to_string(&restarted)
+                .unwrap()
+                .contains("private/provider")
+        );
+    }
+
+    #[test]
+    fn durable_store_outage_falls_back_to_read_only_source_projection() {
+        let source = Arc::new(MutableEvidencePort {
+            documents: Mutex::new(vec![document(
+                valid_evidence("2026-08-10T23:00:00Z", "projected", false),
+                "2026-08-10T23:01:00Z",
+            )]),
+            fail: AtomicBool::new(false),
+        });
+        let store = Arc::new(MemoryEvidenceStore::default());
+        store.fail.store(true, Ordering::SeqCst);
+        let page = PrValidationRolloutEvidenceQueryService::new(
+            "/workspace",
+            Some("acme/widgets".to_string()),
+            "prerelease",
+            source,
+        )
+        .with_store(store)
+        .load_page_at(
+            PrValidationRolloutEvidenceRequest::default(),
+            Utc.with_ymd_and_hms(2026, 8, 11, 0, 0, 0).unwrap(),
+        )
+        .expect("store outage should not take down the Admin projection");
+        assert_eq!(
+            page.latest.summary.status,
+            PrValidationRolloutEvidenceStatus::Ready
+        );
+        assert_eq!(page.collection.state, "ephemeral");
     }
 }

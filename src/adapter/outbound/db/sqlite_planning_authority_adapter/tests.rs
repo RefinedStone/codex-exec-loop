@@ -31,6 +31,12 @@ use crate::application::port::outbound::planning_worker_port::NoopPlanningWorker
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningWorkspaceLoadRecord, RepoScopedPlanningWorkspacePort,
 };
+use crate::application::port::outbound::pr_validation_rollout_evidence_store_port::{
+    PR_VALIDATION_EVIDENCE_STORE_RETENTION, PrValidationEvidenceCollectionClaim,
+    PrValidationEvidenceCollectionClaimRequest, PrValidationEvidenceCollectionSettlement,
+    PrValidationEvidenceCollectionSettlementRequest, PrValidationEvidenceStoredCandidate,
+    PrValidationRolloutEvidenceStorePort,
+};
 use crate::application::port::outbound::review_center_repository_port::{
     ReviewCenterHistoryEntry, ReviewCenterInboxItem, ReviewCenterRepositoryPort,
     ReviewCenterThreadProjection,
@@ -424,9 +430,247 @@ fn authority_connection(workspace_dir: &str) -> rusqlite::Connection {
     open_authority_connection(&location).expect("authority db should open")
 }
 
+fn evidence_collection_claim(
+    scope_key: &str,
+    owner_token: &str,
+    lease_token: &str,
+    now_epoch_millis: i64,
+) -> PrValidationEvidenceCollectionClaimRequest {
+    PrValidationEvidenceCollectionClaimRequest {
+        scope_key: scope_key.to_string(),
+        owner_token: owner_token.to_string(),
+        lease_token: lease_token.to_string(),
+        now_epoch_millis,
+        lease_duration_millis: 60_000,
+    }
+}
+
+fn evidence_candidate(index: usize, dedupe_key: &str) -> PrValidationEvidenceStoredCandidate {
+    PrValidationEvidenceStoredCandidate {
+        dedupe_key: dedupe_key.to_string(),
+        repository: Some("acme/widgets".to_string()),
+        base_branch: Some("prerelease".to_string()),
+        evidence_sha: Some(format!("{index:064x}")),
+        generated_at: Some(format!("2026-08-10T00:{:02}:00Z", index % 60)),
+        sort_at: format!("2026-08-10T00:{:02}:00Z", index % 60),
+        observed_at: format!("2026-08-10T00:{:02}:01Z", index % 60),
+        observation_kind: "snapshot".to_string(),
+        status_label: "ready".to_string(),
+        artifact_sha: format!("{index:064x}"),
+        snapshot_json: format!("{{\"index\":{index}}}"),
+    }
+}
+
+fn settle_evidence_collection(
+    adapter: &SqlitePlanningAuthorityAdapter,
+    workspace_dir: &str,
+    scope_key: &str,
+    owner_token: &str,
+    lease_token: &str,
+    now_epoch_millis: i64,
+    candidates: Vec<PrValidationEvidenceStoredCandidate>,
+) -> PrValidationEvidenceCollectionSettlement {
+    adapter
+        .settle_collection(
+            workspace_dir,
+            PrValidationEvidenceCollectionSettlementRequest {
+                scope_key: scope_key.to_string(),
+                owner_token: owner_token.to_string(),
+                lease_token: lease_token.to_string(),
+                now_epoch_millis,
+                next_collect_at_epoch_millis: now_epoch_millis + 1,
+                collected_at: "2026-08-10T00:00:00Z".to_string(),
+                outcome: "collected".to_string(),
+                error_class: None,
+                candidates,
+            },
+        )
+        .expect("evidence collection should settle")
+}
+
 #[test]
-fn authority_schema_migrates_v7_through_v14_additively_and_rejects_unsupported_versions() {
-    for legacy_version in [7, 8, 9, 10, 11, 12, 13, 14] {
+fn rollout_evidence_collection_claim_has_exactly_one_cross_process_owner() {
+    let workspace_dir = temp_workspace("evidence-claim-race");
+    let scope_key = "scope-race";
+    let barrier = Arc::new(Barrier::new(3));
+    let mut handles = Vec::new();
+    for index in 0..2 {
+        let workspace_dir = workspace_dir.clone();
+        let barrier = barrier.clone();
+        handles.push(std::thread::spawn(move || {
+            barrier.wait();
+            SqlitePlanningAuthorityAdapter::new()
+                .try_claim_collection(
+                    &workspace_dir,
+                    &evidence_collection_claim(
+                        scope_key,
+                        &format!("owner-{index}"),
+                        &format!("lease-{index}"),
+                        1_000,
+                    ),
+                )
+                .expect("concurrent evidence claim should complete")
+        }));
+    }
+    barrier.wait();
+    let outcomes = handles
+        .into_iter()
+        .map(|handle| handle.join().expect("claim worker should join"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|outcome| matches!(
+                outcome,
+                PrValidationEvidenceCollectionClaim::Acquired { .. }
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|outcome| matches!(outcome, PrValidationEvidenceCollectionClaim::Held { .. }))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn rollout_evidence_collection_recovers_stale_lease_and_rejects_lost_settlement() {
+    let workspace_dir = temp_workspace("evidence-stale-lease");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let scope_key = "scope-stale";
+    let first = PrValidationEvidenceCollectionClaimRequest {
+        lease_duration_millis: 10,
+        ..evidence_collection_claim(scope_key, "owner-a", "lease-a", 1_000)
+    };
+    assert!(matches!(
+        adapter
+            .try_claim_collection(&workspace_dir, &first)
+            .expect("first claim should acquire"),
+        PrValidationEvidenceCollectionClaim::Acquired {
+            recovered_stale_lease: false,
+            ..
+        }
+    ));
+    assert!(matches!(
+        adapter
+            .try_claim_collection(
+                &workspace_dir,
+                &evidence_collection_claim(scope_key, "owner-b", "lease-b", 1_011),
+            )
+            .expect("expired claim should recover"),
+        PrValidationEvidenceCollectionClaim::Acquired {
+            recovered_stale_lease: true,
+            ..
+        }
+    ));
+    assert_eq!(
+        settle_evidence_collection(
+            &adapter,
+            &workspace_dir,
+            scope_key,
+            "owner-a",
+            "lease-a",
+            1_012,
+            vec![evidence_candidate(1, "lost")],
+        ),
+        PrValidationEvidenceCollectionSettlement::LostLease
+    );
+    let stored = settle_evidence_collection(
+        &adapter,
+        &workspace_dir,
+        scope_key,
+        "owner-b",
+        "lease-b",
+        1_012,
+        vec![evidence_candidate(2, "winner")],
+    );
+    assert!(matches!(
+        stored,
+        PrValidationEvidenceCollectionSettlement::Stored { inserted: 1, .. }
+    ));
+    let snapshot = adapter
+        .load_snapshot(&workspace_dir, scope_key)
+        .expect("stored evidence should load");
+    assert_eq!(snapshot.records.len(), 1);
+    assert_eq!(snapshot.collection.stale_lease_recovery_count, 1);
+}
+
+#[test]
+fn rollout_evidence_store_deduplicates_conflicts_and_enforces_retention() {
+    let workspace_dir = temp_workspace("evidence-retention");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let scope_key = "scope-retention";
+    let mut now = 10_000_i64;
+    let mut collect = |candidate: PrValidationEvidenceStoredCandidate| {
+        let lease = format!("lease-{now}");
+        assert!(matches!(
+            adapter
+                .try_claim_collection(
+                    &workspace_dir,
+                    &evidence_collection_claim(scope_key, "owner", &lease, now),
+                )
+                .expect("retention claim should acquire"),
+            PrValidationEvidenceCollectionClaim::Acquired { .. }
+        ));
+        let result = settle_evidence_collection(
+            &adapter,
+            &workspace_dir,
+            scope_key,
+            "owner",
+            &lease,
+            now,
+            vec![candidate],
+        );
+        now += 10;
+        result
+    };
+    let original = evidence_candidate(1, "stable-identity");
+    assert!(matches!(
+        collect(original.clone()),
+        PrValidationEvidenceCollectionSettlement::Stored { inserted: 1, .. }
+    ));
+    assert!(matches!(
+        collect(original.clone()),
+        PrValidationEvidenceCollectionSettlement::Stored { duplicates: 1, .. }
+    ));
+    let mut conflict = original;
+    conflict.artifact_sha = "f".repeat(64);
+    conflict.snapshot_json = "{\"changed\":true}".to_string();
+    assert!(matches!(
+        collect(conflict),
+        PrValidationEvidenceCollectionSettlement::Stored {
+            identity_conflicts: 1,
+            ..
+        }
+    ));
+    for index in 2..=(PR_VALIDATION_EVIDENCE_STORE_RETENTION + 4) {
+        assert!(matches!(
+            collect(evidence_candidate(index, &format!("identity-{index}"))),
+            PrValidationEvidenceCollectionSettlement::Stored { inserted: 1, .. }
+        ));
+    }
+    let snapshot = adapter
+        .load_snapshot(&workspace_dir, scope_key)
+        .expect("retained evidence should load");
+    assert_eq!(
+        snapshot.records.len(),
+        PR_VALIDATION_EVIDENCE_STORE_RETENTION
+    );
+    assert_eq!(snapshot.collection.identity_conflict_count, 1);
+    assert!(
+        snapshot
+            .records
+            .iter()
+            .all(|record| record.dedupe_key != "stable-identity")
+    );
+}
+
+#[test]
+fn authority_schema_migrates_v7_through_v15_additively_and_rejects_unsupported_versions() {
+    for legacy_version in [7, 8, 9, 10, 11, 12, 13, 14, 15] {
         let workspace_dir = temp_workspace(&format!("schema-migrate-v{legacy_version}"));
         let location = SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
             &workspace_dir,
@@ -450,6 +694,9 @@ fn authority_schema_migrates_v7_through_v14_additively_and_rejects_unsupported_v
                  DROP TABLE planning_file_sync_baselines;
                  DROP INDEX idx_runtime_pr_validation_admin_commands_record;
                  DROP TABLE runtime_pr_validation_admin_commands;
+                 DROP INDEX idx_runtime_pr_validation_evidence_history;
+                 DROP TABLE runtime_pr_validation_evidence_snapshots;
+                 DROP TABLE runtime_pr_validation_evidence_collection;
                  ALTER TABLE runtime_pr_validation_records DROP COLUMN operator_paused;
                  ALTER TABLE runtime_pr_validation_records DROP COLUMN operator_acknowledged_at;
                  ALTER TABLE runtime_pr_validation_records DROP COLUMN last_operator_command_id;
@@ -469,7 +716,7 @@ fn authority_schema_migrates_v7_through_v14_additively_and_rejects_unsupported_v
                 |row| row.get(0),
             )
             .expect("migrated version should load");
-        assert_eq!(version, "15");
+        assert_eq!(version, "16");
         assert_eq!(
             migrated
                 .query_row(
@@ -492,6 +739,9 @@ fn authority_schema_migrates_v7_through_v14_additively_and_rejects_unsupported_v
                 ("index", "idx_planning_task_mutation_events_revision"),
                 ("table", "runtime_pr_validation_admin_commands"),
                 ("index", "idx_runtime_pr_validation_admin_commands_record"),
+                ("table", "runtime_pr_validation_evidence_snapshots"),
+                ("index", "idx_runtime_pr_validation_evidence_history"),
+                ("table", "runtime_pr_validation_evidence_collection"),
             ]
         } else {
             vec![
@@ -500,6 +750,9 @@ fn authority_schema_migrates_v7_through_v14_additively_and_rejects_unsupported_v
                 ("index", "idx_planning_task_mutation_events_revision"),
                 ("table", "runtime_pr_validation_admin_commands"),
                 ("index", "idx_runtime_pr_validation_admin_commands_record"),
+                ("table", "runtime_pr_validation_evidence_snapshots"),
+                ("index", "idx_runtime_pr_validation_evidence_history"),
+                ("table", "runtime_pr_validation_evidence_collection"),
             ]
         };
         for (object_type, object_name) in expected_objects {
@@ -549,7 +802,7 @@ fn authority_schema_migrates_v7_through_v14_additively_and_rejects_unsupported_v
         }
     }
 
-    for unsupported_version in ["6", "16", "not-a-version"] {
+    for unsupported_version in ["6", "17", "not-a-version"] {
         let workspace_dir = temp_workspace("schema-reject-unsupported");
         let location = SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
             &workspace_dir,

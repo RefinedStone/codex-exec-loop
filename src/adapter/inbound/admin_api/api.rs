@@ -124,6 +124,7 @@ struct AkraStreamFrame {
     control: AkraControlApiResponse,
     debug_harness: AdminDebugHarnessView,
     validation: PrValidationStreamInvalidation,
+    evidence: PrValidationStreamInvalidation,
     server_time: String,
 }
 
@@ -227,6 +228,7 @@ pub(super) async fn akra_stream_api(
     let mut last_control_signature = String::new();
     let mut last_debug_revision = 0;
     let mut last_validation_revision = None;
+    let mut last_evidence_revision = None;
     let mut interval = tokio::time::interval(Duration::from_millis(1_500));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -240,6 +242,13 @@ pub(super) async fn akra_stream_api(
         let validation_revision = state.pr_validation_query_port.load_board_revision().ok();
         let validation_changed = validation_revision != last_validation_revision;
         let validation_cursor_reset_required = !first_frame && validation_changed;
+        let evidence_revision = state
+            .pr_validation_rollout_evidence_query_port
+            .load_revision()
+            .ok()
+            .flatten();
+        let evidence_changed = evidence_revision != last_evidence_revision;
+        let evidence_cursor_reset_required = !first_frame && evidence_changed;
         let control_signature =
             serde_json::to_string(&control).expect("AKRA control projection should serialize");
         let control_changed = control_signature != last_control_signature;
@@ -251,6 +260,7 @@ pub(super) async fn akra_stream_api(
             || control_changed
             || debug_changed
             || validation_changed
+            || evidence_changed
             || !events.is_empty();
         let reason = if first_frame {
             "connected"
@@ -260,6 +270,8 @@ pub(super) async fn akra_stream_api(
             "runtime_event"
         } else if validation_changed {
             "validation"
+        } else if evidence_changed {
+            "validation_evidence"
         } else if control_changed {
             "control"
         } else if debug_changed {
@@ -277,6 +289,7 @@ pub(super) async fn akra_stream_api(
         last_control_signature = control_signature;
         last_debug_revision = debug_harness.revision;
         last_validation_revision = validation_revision;
+        last_evidence_revision = evidence_revision;
         let frame = AkraStreamFrame {
             schema_version: 1,
             reason,
@@ -290,6 +303,11 @@ pub(super) async fn akra_stream_api(
                 revision: validation_revision,
                 changed: validation_changed,
                 cursor_reset_required: validation_cursor_reset_required,
+            },
+            evidence: PrValidationStreamInvalidation {
+                revision: evidence_revision,
+                changed: evidence_changed,
+                cursor_reset_required: evidence_cursor_reset_required,
             },
             server_time: chrono::Utc::now().to_rfc3339(),
         };

@@ -4278,6 +4278,11 @@ fn akra_graphic_dashboard_validation_evidence_is_explainable_responsive_and_acce
         "attempt 번호는 서로 다른 run 사이에서 비교하지 않습니다.",
         "openEvidenceDetailDrawer",
         "renderEvidenceHistoryPage",
+        "수집 소유권 · 복구",
+        "실측 추세 · 직전 유효 snapshot 비교",
+        "Typed warnings",
+        "staleLeaseRecoveryCount",
+        "identityConflictCount",
         "canonicalGithubUrl",
         "/api/admin/akra/pr-validation/evidence",
         "대시보드의 마지막 summary는 유지됩니다.",
@@ -4299,6 +4304,29 @@ fn akra_graphic_dashboard_validation_evidence_is_explainable_responsive_and_acce
         !AKRA_DASHBOARD_JS.contains("shell.dataset.evidenceStatus"),
         "evidence shell state must not collide with the nested status badge selector"
     );
+}
+
+#[test]
+fn akra_graphic_dashboard_pauses_background_transport_and_rejects_revision_regressions() {
+    for token in [
+        "if (document.hidden) return Promise.resolve(false);",
+        "if (document.hidden) return;",
+        "realtimeSource?.close();",
+        "setRealtimeState(\"paused\")",
+        "pollDashboard({ fresh: true })",
+        "pollEvents({ fresh: true })",
+        "window.clearInterval(fallbackPollTimer)",
+        "revision < current",
+        "frame.evidence?.cursorResetRequired",
+        "validationRevision.advanced",
+        "evidenceRevision.advanced",
+        "openEvidenceDetailDrawer({ focusDrawer: false })",
+    ] {
+        assert!(
+            AKRA_DASHBOARD_JS.contains(token),
+            "dashboard transport lifecycle should keep {token}"
+        );
+    }
 }
 
 #[test]
