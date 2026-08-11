@@ -337,7 +337,7 @@ fn windows_current_user_sid() -> Result<WindowsCurrentUserSid> {
     })
 }
 
-fn validate_windows_owner(path: &Path, file: &File) -> Result<()> {
+pub(crate) fn validate_windows_owner(path: &Path, file: &File) -> Result<()> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Foundation::{ERROR_SUCCESS, HANDLE};
     use windows_sys::Win32::Security::Authorization::{GetSecurityInfo, SE_FILE_OBJECT};
