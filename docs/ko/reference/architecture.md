@@ -87,7 +87,8 @@ enable/dispatch/refresh/disable 정책과 effect completion drain은 application
 환경변수, process-only command override를 leaf별로 검증·병합합니다. Composition은 runtime을 만들기 전에
 이 resolved snapshot을 설치하고 TUI, GitHub, parallel, diagnostics, Admin, app-server, subprocess
 adapter에 주입합니다. 파일 읽기와 변경은 configuration 경계에 두며, adapter가 환경변수 또는 repository
-config를 따로 읽어 resolved setting을 다시 정의하지 않습니다. Thread별 conversation option은 durable
+config를 따로 읽어 resolved setting을 다시 정의하지 않습니다. 명시적으로 지정한 workspace는 project TOML과
+legacy Git 계층만 대상에 맞춰 다시 결합하고, 전역·환경변수·명령행 snapshot은 원래 값을 보존합니다. Thread별 conversation option은 durable
 outbound capability이며 app-server adapter가 제출 option을 기록하고 다른 thread 상태를 바꾸지 않으며
 복원합니다. Interactive preference 저장은 Core의 command/effect/completion을 지나며 single-writer
 coordinator가 빠른 model/effort 선택도 요청 순서대로 보존하고 전역·thread store 실패를 따로 알립니다.

@@ -13,6 +13,8 @@ Akra has one deliberately small, secret-free configuration surface. It configure
 
 Every linked Git worktree has its own project file. A non-Git directory has no project scope and uses only global settings. --help and akra config path, list, get, or doctor never create the global file.
 
+When a command explicitly targets a different workspace, Akra resolves that target's project-TOML and legacy Git layers. Its global, environment, and `-c/--config` inputs remain pinned to the process-start snapshot.
+
 An effective leaf uses this fixed highest-to-lowest order:
 
     -c/--config > environment > project TOML > legacy repository Git config > global TOML > built-in
@@ -72,7 +74,7 @@ CODEX_EXEC_LOOP_GITHUB_PR, RUST_LOG, and AKRA_TRACE_FILE keep their existing spe
 
 ## Persistence, conversation, and safety
 
-Global files are owner-only and their global directory must be current-user-owned and not group- or world-writable; project files are normal, reviewable worktree files. Both readers and writers reject symlinks, hard links/reparse points, non-regular files, unsafe global ownership/permissions, oversized files, and object changes during open. Writes use a path-hashed interprocess lock below AKRA_HOME, reread under the lock, preserve comments with toml_edit, and atomically replace the target.
+Global files are owner-only and their global directory must be current-user-owned and not group- or world-writable; project files are normal, reviewable worktree files. Both readers and writers reject symlinks, hard links/reparse points, non-regular files, unsafe global ownership/permissions, oversized files, and object changes during open. Writes use a path-hashed, OS-backed interprocess file lock below AKRA_HOME, reread under the lock, preserve comments with toml_edit, and atomically replace the target. The lock file may remain, but the operating system releases its exclusion when a writer exits unexpectedly.
 
 Changing :model, :model default, or :think changes the live selection immediately, queues the next-new-thread global default, and, for an active thread, persists its own model/reasoning row. Core serializes rapid selections in request order; a failed global or thread write never rolls the live selection back and is shown separately. A new thread records the submitted options; reopening a saved Akra thread restores them. A pre-existing or external thread with no row deliberately sends None/None to app-server and keeps app-server defaults—later global changes do not rewrite it or another running Akra process.
 
