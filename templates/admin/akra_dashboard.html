@@ -16,6 +16,7 @@
     --game-violet: #9d7cff;
     --office-bg-image: url("/admin/assets/graphics/akra-operations-studio-v3.png");
     --agent-sprite-sheet: url("/admin/assets/graphics/gamebaljeonguk_atlas_64x96.png");
+    --pr-approver-sprite-sheet: url("/admin/assets/graphics/pr-approver-atlas-64x96.png");
     min-height: calc(100vh - 44px);
     color: var(--game-ink);
   }
@@ -1319,6 +1320,49 @@
   .scene-object .agent-sprite {
     display: none;
   }
+  .pr-approver-fallback {
+    left: 72.2%;
+    top: 43.5%;
+    width: 9%;
+    height: 20%;
+  }
+  .pr-approver-sprite {
+    position: absolute;
+    left: 50%;
+    bottom: 0;
+    width: 64px;
+    height: 96px;
+    transform: translateX(-50%);
+    background: var(--pr-approver-sprite-sheet) 0 0 / 384px 384px no-repeat;
+    image-rendering: pixelated;
+    filter: drop-shadow(0 4px 0 rgba(0,0,0,0.36));
+  }
+  .pr-approver-fallback[data-pr-approver-state="reviewing"] .pr-approver-sprite {
+    background-position: 0 -96px;
+  }
+  .pr-approver-fallback[data-pr-approver-state="failure"] .pr-approver-sprite {
+    background-position: -320px -192px;
+  }
+  .pr-approver-fallback[data-pr-approver-state="success"] .pr-approver-sprite {
+    background-position: -320px -288px;
+  }
+  .pr-approver-badge {
+    position: absolute;
+    left: 50%;
+    bottom: -22px;
+    min-width: 118px;
+    transform: translateX(-50%);
+    padding: 4px 7px;
+    border: 1px solid rgba(152,171,196,0.58);
+    background: rgba(4,19,31,0.94);
+    color: #d7e4f5;
+    font: 700 10px/1.2 Galmuri11, monospace;
+    text-align: center;
+    white-space: nowrap;
+  }
+  .pr-approver-fallback[data-pr-approver-state="reviewing"] .pr-approver-badge { border-color: rgba(93,169,255,0.72); color: #9fc9ff; }
+  .pr-approver-fallback[data-pr-approver-state="failure"] .pr-approver-badge { border-color: rgba(255,107,107,0.72); color: #ff9b9b; }
+  .pr-approver-fallback[data-pr-approver-state="success"] .pr-approver-badge { border-color: rgba(53,208,127,0.72); color: #7be4a8; }
   .desk,
   .distributor-desk,
   .event-board,
@@ -2255,6 +2299,23 @@
           <button type="button" data-scene-zoom-in aria-label="맵 확대" title="맵 확대">+</button>
         </div>
         <small class="scene-camera-hint" aria-hidden="true">DRAG · WHEEL/PINCH</small>
+
+        <button
+          type="button"
+          class="scene-object pr-approver-fallback"
+          data-pr-approver="true"
+          data-pr-approver-state="{{ dashboard.scene.validation.approver.state }}"
+          data-validation-record-key="{{ dashboard.scene.validation.approver.record_key.as_deref().unwrap_or("") }}"
+          data-detail-type="validation"
+          data-detail-title="PR 승인관"
+          data-detail-subtitle="{{ dashboard.scene.validation.approver.status_label }}"
+          data-detail-state="{{ dashboard.scene.validation.approver.state }}"
+          data-detail-severity="{{ dashboard.scene.validation.severity }}"
+          {% if dashboard.scene.validation.approver.record_key.is_none() %}disabled{% endif %}
+        >
+          <span class="pr-approver-sprite" aria-hidden="true"></span>
+          <span class="pr-approver-badge" data-pr-approver-badge>{{ dashboard.scene.validation.approver.status_label }}</span>
+        </button>
 
         {% for actor in dashboard.scene.actors %}
         <button

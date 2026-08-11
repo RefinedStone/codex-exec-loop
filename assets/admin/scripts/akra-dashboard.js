@@ -666,6 +666,24 @@
       validation: scene.validation || null
     });
     if (root.dataset.sceneSignature === nextSignature) return;
+    const approver = scene.validation?.approver || {};
+    const approverFallback = board.querySelector("[data-pr-approver]");
+    if (approverFallback) {
+      approverFallback.dataset.prApproverState = optionalText(approver.state, "idle");
+      approverFallback.dataset.validationRecordKey = optionalText(approver.recordKey, "");
+      approverFallback.dataset.detailSubtitle = optionalText(
+        approver.statusLabel,
+        "통합 PR 대기"
+      );
+      approverFallback.dataset.detailState = optionalText(approver.state, "idle");
+      approverFallback.dataset.detailSeverity = optionalText(
+        scene.validation?.severity,
+        "muted"
+      );
+      approverFallback.disabled = !approver.recordKey;
+      const badge = approverFallback.querySelector("[data-pr-approver-badge]");
+      if (badge) badge.textContent = optionalText(approver.statusLabel, "통합 PR 대기");
+    }
     for (const node of board.querySelectorAll(".desk[data-actor-id], [data-standby-character]")) node.remove();
     const anchor = board.querySelector(".distributor-desk") || board.querySelector(".event-board");
     for (const actor of asArray(scene.actors)) board.insertBefore(createActorButton(actor), anchor);
@@ -2013,7 +2031,10 @@
       validation: "#validation-rail [data-validation-record-key]"
     };
     const selector = selectors[detail.detailTarget];
-    const source = selector ? root.querySelector(selector) : null;
+    const source = detail.detailTarget === "validation" && detail.recordKey
+      ? [...root.querySelectorAll("#validation-rail [data-validation-record-key]")]
+        .find((node) => node.dataset.validationRecordKey === detail.recordKey)
+      : selector ? root.querySelector(selector) : null;
     if (source) openDetailDrawer(source);
   });
 

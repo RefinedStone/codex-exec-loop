@@ -1,10 +1,13 @@
 import type {
   DashboardSceneSnapshot,
   GameActorProjection,
+  GamePrApproverProjection,
   GameSceneProjection,
   GameStandbyProjection,
   GameValidationProjection,
   StaticPose,
+  PrApproverQualifier,
+  PrApproverState,
   StatusSeverity,
   VisualState,
 } from "./game-types";
@@ -53,6 +56,19 @@ const asSeverity = (value: unknown): StatusSeverity =>
   value === "muted"
     ? value
     : "normal";
+
+const asPrApproverState = (value: unknown): PrApproverState =>
+  value === "reviewing" || value === "failure" || value === "success"
+    ? value
+    : "idle";
+
+const asPrApproverQualifier = (value: unknown): PrApproverQualifier =>
+  value === "waiting" ||
+  value === "paused" ||
+  value === "stale" ||
+  value === "recovering"
+    ? value
+    : "none";
 
 const parseActor = (value: unknown): GameActorProjection | null => {
   const actor = asRecord(value);
@@ -103,6 +119,21 @@ const parseStandby = (value: unknown): GameStandbyProjection | null => {
   };
 };
 
+const emptyApprover = (): GamePrApproverProjection => ({
+  state: "idle",
+  qualifier: "none",
+  recordKey: null,
+  pullRequestNumber: null,
+  evidenceShortSha: null,
+  integrationMethod: null,
+  requiredChecksSucceeded: 0,
+  requiredChecksTotal: 0,
+  findingCount: 0,
+  remediationCount: 0,
+  statusLabel: "통합 PR 대기",
+  transitionKey: "idle",
+});
+
 const emptyValidation = (): GameValidationProjection => ({
   stationState: "idle",
   severity: "muted",
@@ -111,7 +142,41 @@ const emptyValidation = (): GameValidationProjection => ({
   phase: null,
   packetKind: null,
   workerLeaseActive: false,
+  approver: emptyApprover(),
 });
+
+const parseApprover = (value: unknown): GamePrApproverProjection => {
+  const approver = asRecord(value);
+  if (!approver) return emptyApprover();
+  const nullableString = (candidate: unknown): string | null => {
+    const parsed = asString(candidate).trim();
+    return parsed === "" ? null : parsed;
+  };
+  const pullRequestNumber = asNumber(approver.pullRequestNumber, 0);
+  return {
+    state: asPrApproverState(approver.state),
+    qualifier: asPrApproverQualifier(approver.qualifier),
+    recordKey: nullableString(approver.recordKey),
+    pullRequestNumber: pullRequestNumber > 0 ? Math.trunc(pullRequestNumber) : null,
+    evidenceShortSha: nullableString(approver.evidenceShortSha),
+    integrationMethod: nullableString(approver.integrationMethod),
+    requiredChecksSucceeded: Math.max(
+      0,
+      Math.trunc(asNumber(approver.requiredChecksSucceeded, 0))
+    ),
+    requiredChecksTotal: Math.max(
+      0,
+      Math.trunc(asNumber(approver.requiredChecksTotal, 0))
+    ),
+    findingCount: Math.max(0, Math.trunc(asNumber(approver.findingCount, 0))),
+    remediationCount: Math.max(
+      0,
+      Math.trunc(asNumber(approver.remediationCount, 0))
+    ),
+    statusLabel: asString(approver.statusLabel, "통합 PR 대기"),
+    transitionKey: asString(approver.transitionKey, "idle"),
+  };
+};
 
 const parseValidation = (value: unknown): GameValidationProjection => {
   const validation = asRecord(value);
@@ -128,6 +193,7 @@ const parseValidation = (value: unknown): GameValidationProjection => {
     phase: nullableString(validation.phase),
     packetKind: nullableString(validation.packetKind),
     workerLeaseActive: validation.workerLeaseActive === true,
+    approver: parseApprover(validation.approver),
   };
 };
 

@@ -4,8 +4,8 @@ use crate::application::port::inbound::parallel_agent_profile_port::{
 use crate::application::port::inbound::parallel_mode_admin_port::ParallelModeAdminPort;
 use crate::application::port::inbound::planning_admin_port::PlanningAdminPort;
 use crate::application::port::inbound::pr_validation_query_port::{
-    PrValidationAdminPhase, PrValidationAdminRecordSummary, PrValidationBoardRequest,
-    PrValidationBoardSnapshot, PrValidationQueryPort,
+    PrValidationAdminPhase, PrValidationAdminRecordSummary, PrValidationAdminSeverity,
+    PrValidationBoardRequest, PrValidationBoardSnapshot, PrValidationQueryPort,
 };
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeDistributorQueueItem, ParallelModePoolSlotSnapshot,
@@ -173,6 +173,78 @@ pub(super) struct GameValidationSceneView {
     pub phase: Option<String>,
     pub packet_kind: Option<String>,
     pub worker_lease_active: bool,
+    pub approver: GameApproverSceneView,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum GameApproverState {
+    Idle,
+    Reviewing,
+    Failure,
+    Success,
+}
+
+impl GameApproverState {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Reviewing => "reviewing",
+            Self::Failure => "failure",
+            Self::Success => "success",
+        }
+    }
+}
+
+impl std::fmt::Display for GameApproverState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum GameApproverQualifier {
+    None,
+    Waiting,
+    Paused,
+    Stale,
+    Recovering,
+}
+
+impl GameApproverQualifier {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Waiting => "waiting",
+            Self::Paused => "paused",
+            Self::Stale => "stale",
+            Self::Recovering => "recovering",
+        }
+    }
+}
+
+impl std::fmt::Display for GameApproverQualifier {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct GameApproverSceneView {
+    pub state: GameApproverState,
+    pub qualifier: GameApproverQualifier,
+    pub record_key: Option<String>,
+    pub pull_request_number: Option<u64>,
+    pub evidence_short_sha: Option<String>,
+    pub integration_method: Option<String>,
+    pub required_checks_succeeded: usize,
+    pub required_checks_total: usize,
+    pub finding_count: usize,
+    pub remediation_count: usize,
+    pub status_label: String,
+    pub transition_key: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -911,6 +983,7 @@ fn map_game_scene(
             phase: None,
             packet_kind: None,
             worker_lease_active: false,
+            approver: idle_game_approver_scene(),
         },
     }
 }
@@ -918,10 +991,20 @@ fn map_game_scene(
 pub(super) fn map_game_validation_scene(
     validation: &PrValidationBoardSnapshot,
 ) -> GameValidationSceneView {
-    let record = validation
-        .records
-        .iter()
-        .min_by_key(|record| validation_attention_rank(record));
+    let approver = map_game_approver_scene(validation);
+    // Keep the visible station, packet route, approver, and detail click on the
+    // same PR. General validation attention remains the fallback when there is
+    // no durable GitHub rebase-merge record eligible for the approver.
+    let record = approver
+        .record_key
+        .as_deref()
+        .and_then(|record_key| {
+            validation
+                .records
+                .iter()
+                .find(|record| record.record_key == record_key)
+        })
+        .or_else(|| select_game_validation_record(&validation.records));
     let Some(record) = record else {
         return GameValidationSceneView {
             station_state: "idle".to_string(),
@@ -931,6 +1014,7 @@ pub(super) fn map_game_validation_scene(
             phase: None,
             packet_kind: None,
             worker_lease_active: false,
+            approver,
         };
     };
     let phase = match record.phase {
@@ -967,7 +1051,140 @@ pub(super) fn map_game_validation_scene(
         phase: Some(phase.to_string()),
         packet_kind: Some(packet_kind.to_string()),
         worker_lease_active: record.worker_lease_active,
+        approver,
     }
+}
+
+fn select_game_validation_record(
+    records: &[PrValidationAdminRecordSummary],
+) -> Option<&PrValidationAdminRecordSummary> {
+    records.iter().min_by(|left, right| {
+        validation_attention_rank(left)
+            .cmp(&validation_attention_rank(right))
+            .then_with(|| right.observation_revision.cmp(&left.observation_revision))
+            .then_with(|| left.record_key.cmp(&right.record_key))
+    })
+}
+
+fn map_game_approver_scene(validation: &PrValidationBoardSnapshot) -> GameApproverSceneView {
+    let Some(record) = select_game_approver_record(&validation.records) else {
+        return idle_game_approver_scene();
+    };
+    let state = game_approver_state(record);
+    GameApproverSceneView {
+        state,
+        qualifier: game_approver_qualifier(record),
+        record_key: Some(record.record_key.clone()),
+        pull_request_number: Some(record.pull_request_number),
+        evidence_short_sha: record.evidence_short_sha.clone(),
+        integration_method: record.integration_method.clone(),
+        required_checks_succeeded: record.required_checks_succeeded,
+        required_checks_total: record.required_checks_total,
+        finding_count: record.finding_count,
+        remediation_count: record.remediation_count,
+        status_label: record.phase_label.clone(),
+        transition_key: format!(
+            "{}:{}:{}",
+            record.record_key,
+            record.observation_revision,
+            state.as_str()
+        ),
+    }
+}
+
+pub(super) fn idle_game_approver_scene() -> GameApproverSceneView {
+    GameApproverSceneView {
+        state: GameApproverState::Idle,
+        qualifier: GameApproverQualifier::None,
+        record_key: None,
+        pull_request_number: None,
+        evidence_short_sha: None,
+        integration_method: None,
+        required_checks_succeeded: 0,
+        required_checks_total: 0,
+        finding_count: 0,
+        remediation_count: 0,
+        status_label: "GitHub 리베이스 병합 대기".to_string(),
+        transition_key: "idle".to_string(),
+    }
+}
+
+fn select_game_approver_record(
+    records: &[PrValidationAdminRecordSummary],
+) -> Option<&PrValidationAdminRecordSummary> {
+    records
+        .iter()
+        .filter(|record| game_approver_eligible(record))
+        .min_by(|left, right| {
+            game_approver_attention_rank(left)
+                .cmp(&game_approver_attention_rank(right))
+                .then_with(|| right.observation_revision.cmp(&left.observation_revision))
+                .then_with(|| left.record_key.cmp(&right.record_key))
+        })
+}
+
+fn game_approver_eligible(record: &PrValidationAdminRecordSummary) -> bool {
+    record.integrated
+        && record.evidence_short_sha.is_some()
+        && record.integration_method.as_deref() == Some("github_rebase_merge")
+}
+
+fn game_approver_state(record: &PrValidationAdminRecordSummary) -> GameApproverState {
+    if record.verified && record.phase == PrValidationAdminPhase::Verified {
+        return GameApproverState::Success;
+    }
+    if matches!(
+        record.phase,
+        PrValidationAdminPhase::RemediationQueued
+            | PrValidationAdminPhase::RemediationRunning
+            | PrValidationAdminPhase::Blocked
+            | PrValidationAdminPhase::Failed
+    ) || record.severity == PrValidationAdminSeverity::Danger
+        || record.finding_count > record.remediation_count
+    {
+        return GameApproverState::Failure;
+    }
+    if matches!(
+        record.phase,
+        PrValidationAdminPhase::Integrated | PrValidationAdminPhase::Verifying
+    ) {
+        return GameApproverState::Reviewing;
+    }
+    GameApproverState::Idle
+}
+
+fn game_approver_qualifier(record: &PrValidationAdminRecordSummary) -> GameApproverQualifier {
+    if record.paused {
+        GameApproverQualifier::Paused
+    } else if matches!(
+        record.phase,
+        PrValidationAdminPhase::RemediationQueued | PrValidationAdminPhase::RemediationRunning
+    ) {
+        GameApproverQualifier::Recovering
+    } else if record.provider_blocked {
+        GameApproverQualifier::Waiting
+    } else if record.stale {
+        GameApproverQualifier::Stale
+    } else {
+        GameApproverQualifier::None
+    }
+}
+
+fn game_approver_attention_rank(record: &PrValidationAdminRecordSummary) -> (u8, u8) {
+    let state_rank = match game_approver_state(record) {
+        GameApproverState::Failure => 0,
+        GameApproverState::Reviewing => 1,
+        GameApproverState::Success => 2,
+        GameApproverState::Idle => 3,
+    };
+    let qualifier_rank = match game_approver_qualifier(record) {
+        GameApproverQualifier::Recovering => 0,
+        GameApproverQualifier::Waiting => 1,
+        GameApproverQualifier::Stale => 2,
+        GameApproverQualifier::Paused => 3,
+        GameApproverQualifier::None => 4,
+    };
+    (state_rank, qualifier_rank)
 }
 
 fn validation_attention_rank(record: &PrValidationAdminRecordSummary) -> u8 {
@@ -1855,12 +2072,15 @@ fn current_git_branch(workspace_dir: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::port::inbound::pr_validation_query_port::{
+        PrValidationBoardSummary, PrValidationRolloutSnapshot,
+    };
     use crate::domain::parallel_agent_profile::ParallelAgentProfile;
     use crate::domain::parallel_mode::{
         ParallelModeAgentRosterSnapshot, ParallelModeAgentSessionDetailSnapshot,
         ParallelModeAgentSessionHistoryEntry, ParallelModeDistributorSnapshot,
         ParallelModeOrchestratorStatus, ParallelModePoolBoardSnapshot,
-        ParallelModeRuntimeEventsSnapshot, ParallelModeSupervisorState,
+        ParallelModeRuntimeEventsSnapshot, ParallelModeSupervisorState, PrValidationSchedulerMode,
     };
     use std::path::PathBuf;
     use std::process::Command;
@@ -1871,6 +2091,154 @@ mod tests {
         assert_eq!(ADMIN_RUNTIME_MODE_LABEL, "controlled projection");
         assert_eq!(planning_revision_label(Some(17)), "rev 17");
         assert_eq!(planning_revision_label(None), "미집계");
+    }
+
+    fn approver_record(
+        record_key: &str,
+        phase: PrValidationAdminPhase,
+        observation_revision: u64,
+    ) -> PrValidationAdminRecordSummary {
+        let verified = phase == PrValidationAdminPhase::Verified;
+        PrValidationAdminRecordSummary {
+            record_key: record_key.to_string(),
+            akra_id: format!("akra-{record_key}"),
+            repository: "RefinedStone/codex-exec-loop".to_string(),
+            pull_request_number: 2112,
+            phase,
+            phase_label: format!("{phase:?}"),
+            severity: if verified {
+                PrValidationAdminSeverity::Success
+            } else {
+                PrValidationAdminSeverity::Info
+            },
+            integrated: true,
+            verified,
+            provider_blocked: false,
+            stale: false,
+            stale_seconds: 0,
+            target_short_sha: "111111111111".to_string(),
+            evidence_short_sha: Some("222222222222".to_string()),
+            integration_method: Some("github_rebase_merge".to_string()),
+            required_checks_succeeded: usize::from(verified),
+            required_checks_total: 1,
+            latest_required_attempt: 1,
+            selected_workflows: Vec::new(),
+            finding_count: 0,
+            remediation_count: 0,
+            correlation_count: 0,
+            worker_lease_active: false,
+            paused: false,
+            observation_revision,
+        }
+    }
+
+    fn approver_board(records: Vec<PrValidationAdminRecordSummary>) -> PrValidationBoardSnapshot {
+        PrValidationBoardSnapshot {
+            revision: 1,
+            scheduler_mode: "observe".to_string(),
+            rollout: PrValidationRolloutSnapshot::from_scheduler_mode(
+                PrValidationSchedulerMode::Observe,
+            ),
+            rollout_evidence: Default::default(),
+            summary: PrValidationBoardSummary::default(),
+            records,
+            next_cursor: None,
+            cursor_reset_required: false,
+            generated_at: "2026-08-11T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn game_approver_requires_durable_github_rebase_merge_evidence() {
+        let mut record = approver_record("distributor", PrValidationAdminPhase::Integrated, 1);
+        record.integration_method = Some("distributor_cherry_pick".to_string());
+        let scene = map_game_validation_scene(&approver_board(vec![record.clone()]));
+        assert_eq!(scene.approver.state, GameApproverState::Idle);
+        assert!(scene.approver.record_key.is_none());
+
+        record.integration_method = Some("github_rebase_merge".to_string());
+        record.integrated = false;
+        let scene = map_game_validation_scene(&approver_board(vec![record.clone()]));
+        assert_eq!(scene.approver.state, GameApproverState::Idle);
+
+        record.integrated = true;
+        record.evidence_short_sha = None;
+        let scene = map_game_validation_scene(&approver_board(vec![record]));
+        assert_eq!(scene.approver.state, GameApproverState::Idle);
+    }
+
+    #[test]
+    fn game_approver_uses_verified_as_the_only_success_state() {
+        let mut reviewing = approver_record("review", PrValidationAdminPhase::Verifying, 7);
+        reviewing.required_checks_succeeded = reviewing.required_checks_total;
+        let scene = map_game_validation_scene(&approver_board(vec![reviewing]));
+        assert_eq!(scene.approver.state, GameApproverState::Reviewing);
+        assert_eq!(scene.approver.qualifier, GameApproverQualifier::None);
+        assert_eq!(scene.approver.record_key.as_deref(), Some("review"));
+        assert_eq!(scene.approver.transition_key, "review:7:reviewing");
+
+        let verified = approver_record("verified", PrValidationAdminPhase::Verified, 8);
+        let scene = map_game_validation_scene(&approver_board(vec![verified]));
+        assert_eq!(scene.approver.state, GameApproverState::Success);
+        assert_eq!(scene.approver.transition_key, "verified:8:success");
+    }
+
+    #[test]
+    fn game_approver_projects_failure_and_operational_qualifiers_without_workers() {
+        let mut failed = approver_record("failed", PrValidationAdminPhase::Verifying, 9);
+        failed.severity = PrValidationAdminSeverity::Danger;
+        failed.finding_count = 1;
+        let scene = map_game_validation_scene(&approver_board(vec![failed]));
+        assert_eq!(scene.approver.state, GameApproverState::Failure);
+        assert_eq!(scene.approver.qualifier, GameApproverQualifier::None);
+        assert!(!scene.worker_lease_active);
+
+        let remediation = approver_record(
+            "remediation",
+            PrValidationAdminPhase::RemediationRunning,
+            10,
+        );
+        let scene = map_game_validation_scene(&approver_board(vec![remediation]));
+        assert_eq!(scene.approver.state, GameApproverState::Failure);
+        assert_eq!(scene.approver.qualifier, GameApproverQualifier::Recovering);
+
+        let mut waiting = approver_record("waiting", PrValidationAdminPhase::Verifying, 11);
+        waiting.provider_blocked = true;
+        waiting.severity = PrValidationAdminSeverity::Warning;
+        let scene = map_game_validation_scene(&approver_board(vec![waiting]));
+        assert_eq!(scene.approver.state, GameApproverState::Reviewing);
+        assert_eq!(scene.approver.qualifier, GameApproverQualifier::Waiting);
+
+        let mut paused = approver_record("paused", PrValidationAdminPhase::Verifying, 12);
+        paused.paused = true;
+        paused.stale = true;
+        let scene = map_game_validation_scene(&approver_board(vec![paused]));
+        assert_eq!(scene.approver.qualifier, GameApproverQualifier::Paused);
+    }
+
+    #[test]
+    fn game_approver_record_selection_is_attention_ranked_and_stable() {
+        let success = approver_record("success", PrValidationAdminPhase::Verified, 100);
+        let reviewing = approver_record("reviewing", PrValidationAdminPhase::Verifying, 90);
+        let mut older_failure = approver_record("failure-b", PrValidationAdminPhase::Verifying, 4);
+        older_failure.severity = PrValidationAdminSeverity::Danger;
+        let mut newer_failure = approver_record("failure-a", PrValidationAdminPhase::Verifying, 5);
+        newer_failure.severity = PrValidationAdminSeverity::Danger;
+        let mut ineligible_failure =
+            approver_record("distributor", PrValidationAdminPhase::Failed, 999);
+        ineligible_failure.integration_method = Some("distributor_cherry_pick".to_string());
+
+        let scene = map_game_validation_scene(&approver_board(vec![
+            success,
+            older_failure,
+            ineligible_failure,
+            reviewing,
+            newer_failure,
+        ]));
+        assert_eq!(scene.approver.state, GameApproverState::Failure);
+        assert_eq!(scene.approver.record_key.as_deref(), Some("failure-a"));
+        assert_eq!(scene.approver.transition_key, "failure-a:5:failure");
+        assert_eq!(scene.record_key.as_deref(), Some("failure-a"));
     }
 
     fn temp_path(label: &str) -> PathBuf {

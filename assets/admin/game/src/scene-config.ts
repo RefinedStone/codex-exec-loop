@@ -61,6 +61,8 @@ export const DELIVERY_STATION_POINTS: Point[] = [
 ];
 
 export const QA_CI_STATION_POINT: Point = { x: 1190, y: 326 };
+export const PR_APPROVER_POINT: Point = { x: 1270, y: 560 };
+export const PR_APPROVER_SPRITE_SCALE = 0.78;
 export const QA_CI_SIGNAL_POINTS: Record<string, { from: Point; to: Point }> = {
   ci_observation: {
     from: { x: 942, y: 245 },

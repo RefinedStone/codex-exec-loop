@@ -31,6 +31,16 @@ bundled_asset!(
     GAMEBALJEONGUK_ATLAS_128X192_ETAG,
     "../../../../assets/admin/graphics/gamebaljeonguk_atlas_128x192.png"
 );
+bundled_asset!(
+    PR_APPROVER_ATLAS_64X96,
+    PR_APPROVER_ATLAS_64X96_ETAG,
+    "../../../../assets/admin/graphics/pr-approver-atlas-64x96.png"
+);
+bundled_asset!(
+    PR_APPROVER_ATLAS_128X192,
+    PR_APPROVER_ATLAS_128X192_ETAG,
+    "../../../../assets/admin/graphics/pr-approver-atlas-128x192.png"
+);
 
 bundled_asset!(
     AKRA_DIORAMA_JS,
@@ -116,6 +126,10 @@ pub(super) async fn admin_graphic_asset(
             GAMEBALJEONGUK_ATLAS_128X192,
             &GAMEBALJEONGUK_ATLAS_128X192_ETAG,
         ),
+        "pr-approver-atlas-64x96.png" => (PR_APPROVER_ATLAS_64X96, &PR_APPROVER_ATLAS_64X96_ETAG),
+        "pr-approver-atlas-128x192.png" => {
+            (PR_APPROVER_ATLAS_128X192, &PR_APPROVER_ATLAS_128X192_ETAG)
+        }
         _ => return Err(StatusCode::NOT_FOUND),
     };
 

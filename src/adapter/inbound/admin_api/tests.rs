@@ -89,10 +89,23 @@ const GAMEBALJEONGUK_SPRITE_PACK_README: &str =
 const GAMEBALJEONGUK_SPRITE_METADATA: &str = include_str!(
     "../../../../templates/admin/resources/gamebaljeonguk_sprite_pack/gamebaljeonguk_sprite_metadata.json"
 );
+const PR_APPROVER_SPRITE_PACK_README: &str =
+    include_str!("../../../../templates/admin/resources/pr_approver_sprite_pack/README.md");
+const PR_APPROVER_SPRITE_PROVENANCE: &str =
+    include_str!("../../../../templates/admin/resources/pr_approver_sprite_pack/PROVENANCE.md");
+const PR_APPROVER_SPRITE_METADATA: &str = include_str!(
+    "../../../../templates/admin/resources/pr_approver_sprite_pack/pr-approver-sprite-metadata.json"
+);
+const PR_APPROVER_PREPARE_SCRIPT: &str =
+    include_str!("../../../../assets/admin/game/scripts/prepare-pr-approver-sprites.mjs");
+const PR_APPROVER_VALIDATE_SCRIPT: &str =
+    include_str!("../../../../assets/admin/game/scripts/validate-pr-approver-sprites.mjs");
 const AKRA_DIORAMA_JS: &str = include_str!("../../../../assets/admin/game/akra-diorama.js");
 const AKRA_DIORAMA_TS: &str = include_str!("../../../../assets/admin/game/src/akra-diorama.ts");
 const AKRA_AGENT_WORLD_TS: &str = include_str!("../../../../assets/admin/game/src/agent-world.ts");
 const AKRA_AGENT_ATLAS_TS: &str = include_str!("../../../../assets/admin/game/src/agent-atlas.ts");
+const AKRA_PR_APPROVER_ATLAS_TS: &str =
+    include_str!("../../../../assets/admin/game/src/pr-approver-atlas.ts");
 const AKRA_CAMERA_CONTROLLER_TS: &str =
     include_str!("../../../../assets/admin/game/src/camera-controller.ts");
 const AKRA_GAME_TYPES_TS: &str = include_str!("../../../../assets/admin/game/src/game-types.ts");
@@ -123,6 +136,7 @@ fn admin_game_source_contains(needle: &str) -> bool {
         AKRA_DIORAMA_TS,
         AKRA_AGENT_WORLD_TS,
         AKRA_AGENT_ATLAS_TS,
+        AKRA_PR_APPROVER_ATLAS_TS,
         AKRA_CAMERA_CONTROLLER_TS,
         AKRA_GAME_TYPES_TS,
         AKRA_SCENE_CONFIG_TS,
@@ -1635,8 +1649,20 @@ async fn admin_debug_harness_drives_fake_application_projection_without_real_con
         "passive CI failure must not fabricate a worker"
     );
     assert_eq!(blocked["validation"]["records"][0]["phase"], "verifying");
+    assert_eq!(
+        blocked["validation"]["records"][0]["integrationMethod"],
+        "github_rebase_merge"
+    );
     assert_eq!(blocked["scene"]["validation"]["phase"], "verifying");
     assert_eq!(blocked["scene"]["validation"]["workerLeaseActive"], false);
+    assert_eq!(
+        blocked["scene"]["validation"]["approver"]["state"],
+        "failure"
+    );
+    assert_eq!(
+        blocked["scene"]["validation"]["approver"]["recordKey"],
+        blocked["validation"]["records"][0]["recordKey"]
+    );
 
     for _ in 0..3 {
         let stepped = router
@@ -1667,6 +1693,14 @@ async fn admin_debug_harness_drives_fake_application_projection_without_real_con
     assert_eq!(working["debugHarness"]["stageKey"], "working");
     assert_eq!(working["scene"]["actors"].as_array().map(Vec::len), Some(1));
     assert_eq!(working["scene"]["validation"]["workerLeaseActive"], true);
+    assert_eq!(
+        working["scene"]["validation"]["approver"]["state"],
+        "failure"
+    );
+    assert_eq!(
+        working["scene"]["validation"]["approver"]["qualifier"],
+        "recovering"
+    );
 
     let real_control = router
         .oneshot(json_request(
@@ -1782,6 +1816,54 @@ async fn admin_debug_harness_all_validation_scenarios_keep_board_and_scene_seman
                 scene["phase"], record["phase"],
                 "scenario {scenario} stage {stage_index} semantic phase"
             );
+            let approver = &scene["approver"];
+            let approver_eligible = record["integrated"].as_bool() == Some(true)
+                && record["evidenceShortSha"].as_str().is_some()
+                && record["integrationMethod"].as_str() == Some("github_rebase_merge");
+            if approver_eligible {
+                assert_eq!(
+                    approver["recordKey"], record["recordKey"],
+                    "scenario {scenario} stage {stage_index} approver identity"
+                );
+                assert_eq!(
+                    approver["integrationMethod"], "github_rebase_merge",
+                    "scenario {scenario} stage {stage_index} approver integration authority"
+                );
+                assert!(
+                    approver["transitionKey"].as_str().is_some_and(
+                        |key| key.starts_with(record["recordKey"].as_str().unwrap_or(""))
+                    ),
+                    "scenario {scenario} stage {stage_index} stable approver transition key"
+                );
+            } else {
+                assert_eq!(
+                    approver["state"], "idle",
+                    "scenario {scenario} stage {stage_index} ineligible approver state"
+                );
+                assert!(approver["recordKey"].is_null());
+            }
+            if approver_eligible && record["phase"] == "verified" {
+                assert_eq!(approver["state"], "success");
+            }
+            if approver_eligible
+                && matches!(
+                    record["phase"].as_str(),
+                    Some("remediation_queued" | "remediation_running")
+                )
+            {
+                assert_eq!(approver["state"], "failure");
+                assert_eq!(approver["qualifier"], "recovering");
+            }
+            if approver_eligible && record["severity"] == "danger" {
+                assert_eq!(approver["state"], "failure");
+            }
+            if approver_eligible
+                && record["providerBlocked"].as_bool() == Some(true)
+                && record["severity"] == "warning"
+            {
+                assert_eq!(approver["state"], "reviewing");
+                assert_eq!(approver["qualifier"], "waiting");
+            }
             let actor_count = dashboard["scene"]["actors"]
                 .as_array()
                 .map(Vec::len)
@@ -2793,6 +2875,8 @@ async fn admin_graphic_asset_routes_serve_known_assets_and_reject_unknown_names(
         "akra-operations-studio-v3.png",
         "gamebaljeonguk_atlas_64x96.png",
         "gamebaljeonguk_atlas_128x192.png",
+        "pr-approver-atlas-64x96.png",
+        "pr-approver-atlas-128x192.png",
     ] {
         let response = router
             .clone()
@@ -4753,6 +4837,8 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "../../../../assets/admin/graphics/akra-operations-studio-v3.png",
         "../../../../assets/admin/graphics/gamebaljeonguk_atlas_64x96.png",
         "../../../../assets/admin/graphics/gamebaljeonguk_atlas_128x192.png",
+        "../../../../assets/admin/graphics/pr-approver-atlas-64x96.png",
+        "../../../../assets/admin/graphics/pr-approver-atlas-128x192.png",
         "../../../../assets/admin/game/akra-diorama.js",
         "../../../../assets/admin/scripts/admin-shell.js",
         "../../../../assets/admin/scripts/akra-dashboard.js",
@@ -4890,6 +4976,118 @@ fn akra_graphic_dashboard_gamebaljeonguk_sprite_pack_is_reviewable() {
         assert!(
             GAMEBALJEONGUK_SPRITE_METADATA.contains(token),
             "gamebaljeonguk sprite metadata should keep {token}"
+        );
+    }
+}
+
+#[test]
+fn akra_graphic_dashboard_pr_approver_is_durable_reviewable_and_motion_safe() {
+    for token in [
+        "pr-approver-atlas-128x192.png",
+        "pr-approver-atlas-64x96.png",
+        "6 x 4 grid",
+        "reserved document-arrival frame",
+        "common body center and foot baseline",
+        "Never hand-edit either runtime or archival atlas",
+    ] {
+        assert!(
+            PR_APPROVER_SPRITE_PACK_README.contains(token),
+            "PR approver sprite readme should keep {token}"
+        );
+    }
+    for token in [
+        "OpenAI ImageGen through the Codex image generation tool",
+        "Complete production prompt",
+        "No whole-body crossfade concept",
+        "No white halo",
+        "external hand",
+    ] {
+        assert!(
+            PR_APPROVER_SPRITE_PROVENANCE.contains(token),
+            "PR approver provenance should keep {token}"
+        );
+    }
+    for token in [
+        r#""columns": 6"#,
+        r#""rows": 4"#,
+        r#""frame_width": 128"#,
+        r#""frame_height": 192"#,
+        r#""foot_baseline_y": 189"#,
+        r#""outer_transparent_margin": 2"#,
+        r#""usage": "reserved""#,
+        r#""name": "review_mid_flip""#,
+        r#""name": "failure_hold""#,
+        r#""name": "success_hold""#,
+    ] {
+        assert!(
+            PR_APPROVER_SPRITE_METADATA.contains(token),
+            "PR approver metadata should keep {token}"
+        );
+    }
+    for token in [
+        "shared body anchor and baseline",
+        "buildHalfAtlas",
+        "buildDarkPreview",
+    ] {
+        assert!(
+            PR_APPROVER_PREPARE_SCRIPT.contains(token),
+            "PR approver preparation should keep {token}"
+        );
+    }
+    for token in [
+        "validateTransparentRgb",
+        "validateCellsAndBorders",
+        "validateChromaFringe",
+        "validateExactHalf",
+        "validatePreview",
+        "runtime and archive PNG bytes differ",
+    ] {
+        assert!(
+            PR_APPROVER_VALIDATE_SCRIPT.contains(token),
+            "PR approver validator should keep {token}"
+        );
+    }
+    for token in [
+        "export class PrApproverAnimator",
+        "const CLIPS",
+        "intake: clip([0, 2, 3, 4, 5]",
+        "failure: clip([12, 13, 14, 15, 16, 17]",
+        "success: clip([18, 19, 20, 21, 22, 23]",
+        "this.activeClip === \"intake\"",
+        "representativeFrame",
+    ] {
+        assert!(
+            AKRA_PR_APPROVER_ATLAS_TS.contains(token),
+            "PR approver animation contract should keep {token}"
+        );
+    }
+    for token in [
+        "PR_APPROVER_ATLAS_URL",
+        "sceneApproverSourceFrameIndex",
+        "buildApprover",
+        "syncApproverPresentation",
+        "recordKey: this.validation.approver.recordKey",
+        "PR APPROVER",
+        "PR #${approver.pullRequestNumber}",
+        "pr-approver-fallback",
+        "data-pr-approver-state",
+        "detail.detailTarget === \"validation\" && detail.recordKey",
+    ] {
+        assert!(
+            admin_game_source_contains(token)
+                || AKRA_DASHBOARD_TEMPLATE.contains(token)
+                || AKRA_DASHBOARD_JS.contains(token),
+            "PR approver runtime should keep {token}"
+        );
+    }
+    for forbidden in [
+        "unit.group.scale.set(1.055)",
+        "Math.sqrt(step.blend)",
+        "approverVisual.group.scale",
+    ] {
+        assert!(
+            !admin_game_source_contains(forbidden),
+            "PR approver must not reintroduce silhouette scaling or crossfade token {forbidden}"
         );
     }
 }
