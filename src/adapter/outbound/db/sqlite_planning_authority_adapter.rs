@@ -116,8 +116,8 @@ const AUTHORITY_STORE_SIDECAR_SUFFIXES: [&str; 3] = ["-journal", "-wal", "-shm"]
 // SQLite can briefly replace or ACL-adjust a DELETE journal while another process performs its
 // first secure open. Keep retries bounded and below the database busy timeout; permanent denial
 // still fails closed, while legitimate Windows journal churn gets enough scheduling headroom.
-const AUTHORITY_STORE_SIDECAR_IDENTITY_RETRIES: usize = 200;
-const AUTHORITY_STORE_SIDECAR_IDENTITY_RETRY_DELAY: Duration = Duration::from_millis(5);
+const AUTHORITY_STORE_TRANSIENT_RETRIES: usize = 200;
+const AUTHORITY_STORE_TRANSIENT_RETRY_DELAY: Duration = Duration::from_millis(5);
 #[derive(Default)]
 /*
 SQLite planning authority adapter의 값 타입이다.
@@ -1902,15 +1902,15 @@ fn prepare_private_authority_sidecar_files(path: &Path) -> Result<Vec<File>> {
     for suffix in AUTHORITY_STORE_SIDECAR_SUFFIXES {
         let sidecar = authority_store_sidecar_path(path, suffix);
         let mut anchored = None;
-        for attempt in 0..AUTHORITY_STORE_SIDECAR_IDENTITY_RETRIES {
+        for attempt in 0..AUTHORITY_STORE_TRANSIENT_RETRIES {
             match fs::symlink_metadata(&sidecar) {
                 Ok(_) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
                 Err(error) => {
                     #[cfg(windows)]
-                    if windows_sidecar_io_error_is_transient(&error) {
-                        if attempt + 1 < AUTHORITY_STORE_SIDECAR_IDENTITY_RETRIES {
-                            authority_sidecar_identity_retry_delay();
+                    if windows_authority_store_io_error_is_transient(&error) {
+                        if attempt + 1 < AUTHORITY_STORE_TRANSIENT_RETRIES {
+                            authority_store_transient_retry_delay();
                             continue;
                         }
                         return Err(anyhow!(
@@ -1932,8 +1932,8 @@ fn prepare_private_authority_sidecar_files(path: &Path) -> Result<Vec<File>> {
                     anchored = Some(anchor);
                     break;
                 }
-                None if attempt + 1 < AUTHORITY_STORE_SIDECAR_IDENTITY_RETRIES => {
-                    authority_sidecar_identity_retry_delay();
+                None if attempt + 1 < AUTHORITY_STORE_TRANSIENT_RETRIES => {
+                    authority_store_transient_retry_delay();
                 }
                 None => {
                     return Err(anyhow!(
@@ -1950,8 +1950,32 @@ fn prepare_private_authority_sidecar_files(path: &Path) -> Result<Vec<File>> {
     Ok(anchors)
 }
 
-fn authority_sidecar_identity_retry_delay() {
-    std::thread::sleep(AUTHORITY_STORE_SIDECAR_IDENTITY_RETRY_DELAY);
+fn authority_store_transient_retry_delay() {
+    std::thread::sleep(AUTHORITY_STORE_TRANSIENT_RETRY_DELAY);
+}
+
+fn retry_private_authority_initialization<T>(
+    mut operation: impl FnMut() -> Result<T>,
+) -> Result<T> {
+    #[cfg(windows)]
+    {
+        for attempt in 0..AUTHORITY_STORE_TRANSIENT_RETRIES {
+            match operation() {
+                Err(error)
+                    if windows_authority_store_anyhow_error_is_transient(&error)
+                        && attempt + 1 < AUTHORITY_STORE_TRANSIENT_RETRIES =>
+                {
+                    authority_store_transient_retry_delay();
+                }
+                result => return result,
+            }
+        }
+        unreachable!("bounded Windows authority initialization retry must return")
+    }
+    #[cfg(not(windows))]
+    {
+        operation()
+    }
 }
 
 fn authority_store_sidecar_path(path: &Path, suffix: &str) -> PathBuf {
@@ -1998,7 +2022,7 @@ fn prepare_existing_private_authority_sidecar_file(path: &Path) -> Result<Option
             .open(path)
         {
             Ok(sidecar) => sidecar,
-            Err(error) if windows_sidecar_io_error_is_transient(&error) => return Ok(None),
+            Err(error) if windows_authority_store_io_error_is_transient(&error) => return Ok(None),
             Err(error) => {
                 return Err(error)
                     .with_context(|| format!("failed to securely open {}", path.display()));
@@ -2095,13 +2119,13 @@ fn secure_opened_private_authority_sidecar_file(
         return Ok(None);
     }
     if let Err(error) = set_windows_private_acl(&sidecar) {
-        if windows_sidecar_anyhow_error_is_transient(&error) {
+        if windows_authority_store_anyhow_error_is_transient(&error) {
             return Ok(None);
         }
         return Err(error);
     }
     if let Err(error) = validate_windows_private_owner_and_acl(path, &sidecar) {
-        if windows_sidecar_anyhow_error_is_transient(&error) {
+        if windows_authority_store_anyhow_error_is_transient(&error) {
             return Ok(None);
         }
         return Err(error);
@@ -2136,7 +2160,7 @@ fn authority_windows_sidecar_path_matches_opened_identity(
         .open(path)
     {
         Ok(path_handle) => path_handle,
-        Err(error) if windows_sidecar_io_error_is_transient(&error) => return Ok(false),
+        Err(error) if windows_authority_store_io_error_is_transient(&error) => return Ok(false),
         Err(error) => {
             return Err(error)
                 .with_context(|| format!("failed to reopen Windows path {}", path.display()));
@@ -2180,7 +2204,7 @@ fn validate_windows_sidecar_handle_identity(
     }
     match validate_windows_owner(path, opened) {
         Ok(()) => Ok(true),
-        Err(error) if windows_sidecar_anyhow_error_is_transient(&error) => Ok(false),
+        Err(error) if windows_authority_store_anyhow_error_is_transient(&error) => Ok(false),
         Err(error) => Err(error),
     }
 }
@@ -2189,27 +2213,30 @@ fn validate_windows_sidecar_handle_identity(
 fn windows_sidecar_file_identity(file: &File) -> Result<Option<WindowsFileIdentity>> {
     match windows_file_identity(file) {
         Ok(identity) => Ok(Some(identity)),
-        Err(error) if windows_sidecar_anyhow_error_is_transient(&error) => Ok(None),
+        Err(error) if windows_authority_store_anyhow_error_is_transient(&error) => Ok(None),
         Err(error) => Err(error),
     }
 }
 
 #[cfg(windows)]
-fn windows_sidecar_io_error_is_transient(error: &std::io::Error) -> bool {
-    use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_DELETE_PENDING};
+fn windows_authority_store_io_error_is_transient(error: &std::io::Error) -> bool {
+    use windows_sys::Win32::Foundation::{
+        ERROR_ACCESS_DENIED, ERROR_DELETE_PENDING, ERROR_SHARING_VIOLATION,
+    };
 
     error.kind() == std::io::ErrorKind::NotFound
         || error.kind() == std::io::ErrorKind::PermissionDenied
         || error.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32)
         || error.raw_os_error() == Some(ERROR_DELETE_PENDING as i32)
+        || error.raw_os_error() == Some(ERROR_SHARING_VIOLATION as i32)
 }
 
 #[cfg(windows)]
-fn windows_sidecar_anyhow_error_is_transient(error: &anyhow::Error) -> bool {
+fn windows_authority_store_anyhow_error_is_transient(error: &anyhow::Error) -> bool {
     error
         .chain()
         .filter_map(|cause| cause.downcast_ref::<std::io::Error>())
-        .any(windows_sidecar_io_error_is_transient)
+        .any(windows_authority_store_io_error_is_transient)
 }
 
 /*
@@ -2222,6 +2249,13 @@ directory를 `O_NOFOLLOW|O_DIRECTORY`로 열어 owner와 inode를 확인한 뒤 
 한다. 반환한 descriptor는 SQLite open/identity 검사가 끝날 때까지 directory inode를 고정한다.
 */
 fn prepare_private_authority_directory_tree(parent: &Path) -> Result<Vec<File>> {
+    // Concurrent first-open callers can observe a directory while Windows is
+    // applying its private ACL. Retrying only transient OS errors keeps that
+    // initialization window recoverable without weakening identity checks.
+    retry_private_authority_initialization(|| prepare_private_authority_directory_tree_once(parent))
+}
+
+fn prepare_private_authority_directory_tree_once(parent: &Path) -> Result<Vec<File>> {
     let managed_root = parent.ancestors().nth(2).ok_or_else(|| {
         anyhow!(
             "authority-store parent is outside the managed directory layout: {}",
@@ -2587,6 +2621,10 @@ fn open_and_secure_private_directory(path: &Path) -> Result<File> {
 }
 
 fn prepare_private_authority_store_file(path: &Path) -> Result<File> {
+    retry_private_authority_initialization(|| prepare_private_authority_store_file_once(path))
+}
+
+fn prepare_private_authority_store_file_once(path: &Path) -> Result<File> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
