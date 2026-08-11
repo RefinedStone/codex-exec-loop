@@ -2323,28 +2323,26 @@ fn try_acquire_config_write_lock(path: &Path) -> Result<Option<File>> {
         )
         .share_mode(crate::private_fs::WINDOWS_FILE_SHARE_ALL)
         .custom_flags(crate::private_fs::WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT);
-    let (file, created) = match create_options.open(path) {
-        Ok(file) => (file, true),
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (
-            OpenOptions::new()
-                .read(true)
-                .write(true)
-                .access_mode(
-                    crate::private_fs::WINDOWS_GENERIC_READ
-                        | crate::private_fs::WINDOWS_GENERIC_WRITE
-                        | crate::private_fs::WINDOWS_READ_CONTROL,
+    let file = match create_options.open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => OpenOptions::new()
+            .read(true)
+            .write(true)
+            .access_mode(
+                crate::private_fs::WINDOWS_GENERIC_READ
+                    | crate::private_fs::WINDOWS_GENERIC_WRITE
+                    | crate::private_fs::WINDOWS_READ_CONTROL
+                    | crate::private_fs::WINDOWS_WRITE_DAC,
+            )
+            .share_mode(crate::private_fs::WINDOWS_FILE_SHARE_ALL)
+            .custom_flags(crate::private_fs::WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)
+            .with_context(|| {
+                format!(
+                    "failed to open configuration writer lock {}",
+                    path.display()
                 )
-                .share_mode(crate::private_fs::WINDOWS_FILE_SHARE_ALL)
-                .custom_flags(crate::private_fs::WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT)
-                .open(path)
-                .with_context(|| {
-                    format!(
-                        "failed to open configuration writer lock {}",
-                        path.display()
-                    )
-                })?,
-            false,
-        ),
+            })?,
         Err(error) => {
             return Err(error).with_context(|| {
                 format!(
@@ -2355,9 +2353,11 @@ fn try_acquire_config_write_lock(path: &Path) -> Result<Option<File>> {
         }
     };
     crate::private_fs::validate_windows_path_identity_only(path, &file, false)?;
-    if created {
-        crate::private_fs::set_windows_private_acl(&file, false)?;
-    }
+    // A competing writer can observe a just-created file before its creator
+    // protects the inherited ACL. The private lock root confines that file to
+    // the current user; verify that owner before repairing its ACL ourselves.
+    crate::private_fs::validate_windows_owner(path, &file)?;
+    crate::private_fs::set_windows_private_acl(&file, false)?;
     crate::private_fs::validate_windows_private_owner_and_acl(path, &file)?;
     crate::private_fs::validate_windows_path_identity_only(path, &file, false)?;
     // SAFETY: LockFile receives the valid owned handle and locks one byte at
