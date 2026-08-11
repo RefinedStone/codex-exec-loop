@@ -2027,14 +2027,17 @@
       review: "#campaign [data-detail-type]",
       pipeline: ".office-board .distributor-desk",
       events: ".office-board .event-board",
-      standby: ".office-board .rest-area",
-      validation: "#validation-rail [data-validation-record-key]"
+      standby: ".office-board .rest-area"
     };
+    if (detail.detailTarget === "validation") {
+      if (!detail.recordKey) return;
+      const source = [...root.querySelectorAll("#validation-rail [data-validation-record-key]")]
+        .find((node) => node.dataset.validationRecordKey === detail.recordKey);
+      if (source) openDetailDrawer(source);
+      return;
+    }
     const selector = selectors[detail.detailTarget];
-    const source = detail.detailTarget === "validation" && detail.recordKey
-      ? [...root.querySelectorAll("#validation-rail [data-validation-record-key]")]
-        .find((node) => node.dataset.validationRecordKey === detail.recordKey)
-      : selector ? root.querySelector(selector) : null;
+    const source = selector ? root.querySelector(selector) : null;
     if (source) openDetailDrawer(source);
   });
 

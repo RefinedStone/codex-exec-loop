@@ -4282,7 +4282,9 @@ fn akra_graphic_dashboard_validation_rail_keeps_accessible_typed_operations_cont
         "validation: dashboard.validation || null",
         "latestRequiredAttempt",
         "data-validation-command-status",
-        "validation: \"#validation-rail [data-validation-record-key]\"",
+        "if (detail.detailTarget === \"validation\")",
+        "if (!detail.recordKey) return;",
+        "root.querySelectorAll(\"#validation-rail [data-validation-record-key]\")",
     ] {
         assert!(
             AKRA_DASHBOARD_JS.contains(token),
@@ -5071,7 +5073,7 @@ fn akra_graphic_dashboard_pr_approver_is_durable_reviewable_and_motion_safe() {
         "PR #${approver.pullRequestNumber}",
         "pr-approver-fallback",
         "data-pr-approver-state",
-        "detail.detailTarget === \"validation\" && detail.recordKey",
+        "if (detail.detailTarget === \"validation\")",
     ] {
         assert!(
             admin_game_source_contains(token)
@@ -5090,6 +5092,10 @@ fn akra_graphic_dashboard_pr_approver_is_durable_reviewable_and_motion_safe() {
             "PR approver must not reintroduce silhouette scaling or crossfade token {forbidden}"
         );
     }
+    assert!(AKRA_AGENT_WORLD_TS.contains("private requestApproverSelection(): void"));
+    assert!(AKRA_AGENT_WORLD_TS.contains("if (!recordKey) return;"));
+    assert!(AKRA_DASHBOARD_JS.contains("if (detail.detailTarget === \"validation\")"));
+    assert!(AKRA_DASHBOARD_JS.contains("if (!detail.recordKey) return;"));
 }
 
 /*
