@@ -318,7 +318,7 @@ impl ConfigPaths {
         Self::discover_with_global(cwd, global_config_path()?)
     }
 
-    fn discover_with_global(cwd: &Path, global: PathBuf) -> Result<Self> {
+    pub(crate) fn discover_with_global(cwd: &Path, global: PathBuf) -> Result<Self> {
         let workspace_root = find_git_worktree_root(cwd)?;
         let project = workspace_root
             .as_ref()
@@ -666,7 +666,7 @@ impl ConfigurationService {
         Self::resolve_with_paths(ConfigPaths::discover(cwd)?, overrides)
     }
 
-    fn resolve_with_paths(
+    pub(crate) fn resolve_with_paths(
         paths: ConfigPaths,
         overrides: &[ConfigOverride],
     ) -> Result<ResolvedAkraConfig> {
@@ -759,7 +759,10 @@ impl ConfigurationService {
         Self::path_for_scope_with_paths(ConfigPaths::discover(cwd)?, scope)
     }
 
-    fn path_for_scope_with_paths(paths: ConfigPaths, scope: ConfigScope) -> Result<PathBuf> {
+    pub(crate) fn path_for_scope_with_paths(
+        paths: ConfigPaths,
+        scope: ConfigScope,
+    ) -> Result<PathBuf> {
         Ok(paths.path_for_scope(scope)?.to_path_buf())
     }
 
@@ -767,7 +770,7 @@ impl ConfigurationService {
         Self::layer_for_scope_with_paths(ConfigPaths::discover(cwd)?, scope)
     }
 
-    fn layer_for_scope_with_paths(
+    pub(crate) fn layer_for_scope_with_paths(
         paths: ConfigPaths,
         scope: ConfigScope,
     ) -> Result<Option<AkraConfigLayer>> {
@@ -783,7 +786,7 @@ impl ConfigurationService {
         Self::set_with_paths(ConfigPaths::discover(cwd)?, scope, key, raw_value)
     }
 
-    fn set_with_paths(
+    pub(crate) fn set_with_paths(
         paths: ConfigPaths,
         scope: ConfigScope,
         key: SettingKey,
@@ -804,7 +807,7 @@ impl ConfigurationService {
         Self::unset_with_paths(ConfigPaths::discover(cwd)?, scope, key)
     }
 
-    fn unset_with_paths(
+    pub(crate) fn unset_with_paths(
         paths: ConfigPaths,
         scope: ConfigScope,
         key: SettingKey,
@@ -851,6 +854,13 @@ impl ConfigurationService {
             Ok(paths) => paths,
             Err(error) => return ConfigDoctorReport::path_error(error.to_string()),
         };
+        Self::doctor_with_paths(paths, overrides)
+    }
+
+    pub(crate) fn doctor_with_paths(
+        paths: ConfigPaths,
+        overrides: &[ConfigOverride],
+    ) -> ConfigDoctorReport {
         let global = inspect_layer_file(&paths.global, ConfigScope::Global);
         let project = paths
             .project
