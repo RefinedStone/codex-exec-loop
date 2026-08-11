@@ -570,6 +570,19 @@ impl ConfigurationSourceSnapshot {
             overrides: overrides.to_vec(),
         })
     }
+
+    #[cfg(test)]
+    fn capture_with_environment(
+        global_path: &Path,
+        overrides: &[ConfigOverride],
+        environment: EnvironmentConfigAdapter,
+    ) -> Result<Self> {
+        Ok(Self {
+            global_layer: read_layer_if_present(global_path, ConfigScope::Global)?,
+            environment_values: environment.values,
+            overrides: overrides.to_vec(),
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -661,6 +674,20 @@ impl ConfigurationService {
         Self::resolve_with_source_snapshot(paths, source_snapshot)
     }
 
+    #[cfg(test)]
+    fn resolve_with_paths_and_environment(
+        paths: ConfigPaths,
+        overrides: &[ConfigOverride],
+        environment: EnvironmentConfigAdapter,
+    ) -> Result<ResolvedAkraConfig> {
+        let source_snapshot = ConfigurationSourceSnapshot::capture_with_environment(
+            &paths.global,
+            overrides,
+            environment,
+        )?;
+        Self::resolve_with_source_snapshot(paths, source_snapshot)
+    }
+
     fn resolve_with_source_snapshot(
         paths: ConfigPaths,
         source_snapshot: ConfigurationSourceSnapshot,
@@ -729,13 +756,21 @@ impl ConfigurationService {
     }
 
     pub fn path_for_scope(cwd: &Path, scope: ConfigScope) -> Result<PathBuf> {
-        Ok(ConfigPaths::discover(cwd)?
-            .path_for_scope(scope)?
-            .to_path_buf())
+        Self::path_for_scope_with_paths(ConfigPaths::discover(cwd)?, scope)
+    }
+
+    fn path_for_scope_with_paths(paths: ConfigPaths, scope: ConfigScope) -> Result<PathBuf> {
+        Ok(paths.path_for_scope(scope)?.to_path_buf())
     }
 
     pub fn layer_for_scope(cwd: &Path, scope: ConfigScope) -> Result<Option<AkraConfigLayer>> {
-        let paths = ConfigPaths::discover(cwd)?;
+        Self::layer_for_scope_with_paths(ConfigPaths::discover(cwd)?, scope)
+    }
+
+    fn layer_for_scope_with_paths(
+        paths: ConfigPaths,
+        scope: ConfigScope,
+    ) -> Result<Option<AkraConfigLayer>> {
         read_layer_if_present(paths.path_for_scope(scope)?, scope)
     }
 
@@ -745,11 +780,20 @@ impl ConfigurationService {
         key: SettingKey,
         raw_value: &str,
     ) -> Result<PathBuf> {
+        Self::set_with_paths(ConfigPaths::discover(cwd)?, scope, key, raw_value)
+    }
+
+    fn set_with_paths(
+        paths: ConfigPaths,
+        scope: ConfigScope,
+        key: SettingKey,
+        raw_value: &str,
+    ) -> Result<PathBuf> {
         validate_scope_for_key(scope, key)?;
         let value = parse_cli_value(key, raw_value)?;
-        let paths = ConfigPaths::discover(cwd)?;
+        let global = paths.global.clone();
         let path = paths.path_for_scope(scope)?.to_path_buf();
-        mutate_layer_file(&path, scope, |layer| {
+        mutate_layer_file(&path, scope, &global, |layer| {
             layer.set_value(key, value.clone());
             Ok(())
         })?;
@@ -757,10 +801,18 @@ impl ConfigurationService {
     }
 
     pub fn unset(cwd: &Path, scope: ConfigScope, key: SettingKey) -> Result<PathBuf> {
+        Self::unset_with_paths(ConfigPaths::discover(cwd)?, scope, key)
+    }
+
+    fn unset_with_paths(
+        paths: ConfigPaths,
+        scope: ConfigScope,
+        key: SettingKey,
+    ) -> Result<PathBuf> {
         validate_scope_for_key(scope, key)?;
-        let paths = ConfigPaths::discover(cwd)?;
+        let global = paths.global.clone();
         let path = paths.path_for_scope(scope)?.to_path_buf();
-        mutate_layer_file(&path, scope, |layer| {
+        mutate_layer_file(&path, scope, &global, |layer| {
             layer.unset_value(key);
             Ok(())
         })?;
@@ -781,8 +833,9 @@ impl ConfigurationService {
             reasoning_effort.unwrap_or("default"),
         )?;
         let paths = ConfigPaths::discover(cwd)?;
-        let path = paths.global;
-        mutate_layer_file(&path, ConfigScope::Global, |layer| {
+        let global = paths.global;
+        let path = global.clone();
+        mutate_layer_file(&path, ConfigScope::Global, &global, |layer| {
             layer.set_value(SettingKey::ConversationModel, model.clone());
             layer.set_value(
                 SettingKey::ConversationReasoningEffort,
@@ -1750,7 +1803,7 @@ fn validate_open_config_identity(
 
 fn ensure_global_default_file(path: &Path) -> Result<()> {
     ensure_config_parent(path, ConfigScope::Global)?;
-    let _lock = ConfigWriteLock::acquire(path)?;
+    let _lock = ConfigWriteLock::acquire(path, path)?;
     if read_config_file_if_present(path, ConfigScope::Global)?.is_none() {
         let layer = AkraConfigLayer::canonical_defaults();
         let contents = toml::to_string_pretty(&layer)
@@ -1763,10 +1816,11 @@ fn ensure_global_default_file(path: &Path) -> Result<()> {
 fn mutate_layer_file(
     path: &Path,
     scope: ConfigScope,
+    global_config_path: &Path,
     mutate: impl FnOnce(&mut AkraConfigLayer) -> Result<()>,
 ) -> Result<()> {
     ensure_config_parent(path, scope)?;
-    let _lock = ConfigWriteLock::acquire(path)?;
+    let _lock = ConfigWriteLock::acquire(path, global_config_path)?;
     let before = read_config_file_if_present(path, scope)?;
     let mut layer = match before.as_deref() {
         Some(contents) => toml::from_str::<AkraConfigLayer>(contents).map_err(|error| {
@@ -2133,10 +2187,11 @@ struct ConfigWriteLock {
 }
 
 impl ConfigWriteLock {
-    fn acquire(config_path: &Path) -> Result<Self> {
+    fn acquire(config_path: &Path, global_config_path: &Path) -> Result<Self> {
         // Global config and project config mutations use the same lock root.
-        // For a project config this path is still deterministic under AKRA_HOME.
-        let path = config_write_lock_path(config_path)?;
+        // For a project config this path stays pinned to the same global
+        // configuration root that selected the target paths for this operation.
+        let path = config_write_lock_path(config_path, global_config_path)?;
         let deadline = Instant::now() + CONFIG_LOCK_WAIT;
         loop {
             match try_acquire_config_write_lock(&path)? {
@@ -2153,10 +2208,9 @@ impl ConfigWriteLock {
     }
 }
 
-fn config_write_lock_path(config_path: &Path) -> Result<PathBuf> {
-    let global_config = global_config_path()?;
-    ensure_config_parent(&global_config, ConfigScope::Global)?;
-    let lock_root = global_config
+fn config_write_lock_path(config_path: &Path, global_config_path: &Path) -> Result<PathBuf> {
+    ensure_config_parent(global_config_path, ConfigScope::Global)?;
+    let lock_root = global_config_path
         .parent()
         .ok_or_else(|| anyhow!("global configuration path has no parent"))?
         .join("config-locks");
@@ -2399,7 +2453,7 @@ impl Drop for ConfigWriteLock {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct EnvironmentConfigAdapter {
     values: BTreeMap<SettingKey, (SettingValue, String)>,
     shadow_descriptions: Vec<String>,
@@ -2407,59 +2461,109 @@ struct EnvironmentConfigAdapter {
 
 impl EnvironmentConfigAdapter {
     fn from_process() -> Result<Self> {
+        Self::from_reader(&|variable| match std::env::var(variable) {
+            Ok(value) => Ok(Some(value)),
+            Err(std::env::VarError::NotPresent) => Ok(None),
+            Err(std::env::VarError::NotUnicode(_)) => {
+                bail!("{variable} must contain valid UTF-8")
+            }
+        })
+    }
+
+    #[cfg(test)]
+    fn from_values(values: &[(&str, &str)]) -> Result<Self> {
+        let values = values
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+            .collect::<BTreeMap<_, _>>();
+        Self::from_reader(&|variable| Ok(values.get(variable).cloned()))
+    }
+
+    fn from_reader(reader: &dyn Fn(&str) -> Result<Option<String>>) -> Result<Self> {
         let mut adapter = Self::default();
-        adapter.add_startup_visual(&[
-            "CODEX_EXEC_LOOP_SHOW_STARTUP_VISUAL",
-            "CODEX_EXEC_LOOP_SHOW_STARTUP_ASCII_ART",
-        ])?;
-        adapter.add_planning_worker_visibility(&[
-            "CODEX_EXEC_LOOP_PLANNING_WORKER_VISIBILITY",
-            "CODEX_EXEC_LOOP_PLANNER_VISIBILITY",
-        ])?;
+        adapter.add_startup_visual(
+            &[
+                "CODEX_EXEC_LOOP_SHOW_STARTUP_VISUAL",
+                "CODEX_EXEC_LOOP_SHOW_STARTUP_ASCII_ART",
+            ],
+            reader,
+        )?;
+        adapter.add_planning_worker_visibility(
+            &[
+                "CODEX_EXEC_LOOP_PLANNING_WORKER_VISIBILITY",
+                "CODEX_EXEC_LOOP_PLANNER_VISIBILITY",
+            ],
+            reader,
+        )?;
         adapter.add_unsigned(
             SettingKey::GithubReviewPollIntervalSecs,
             &["CODEX_EXEC_LOOP_GITHUB_POLL_INTERVAL_SECS"],
+            reader,
         )?;
-        adapter.add_text(SettingKey::GithubPushRemote, &["AKRA_GITHUB_PUSH_REMOTE"])?;
-        adapter.add_text(SettingKey::GithubPullRequestMode, &["AKRA_GITHUB_PR_MODE"])?;
+        adapter.add_text(
+            SettingKey::GithubPushRemote,
+            &["AKRA_GITHUB_PUSH_REMOTE"],
+            reader,
+        )?;
+        adapter.add_text(
+            SettingKey::GithubPullRequestMode,
+            &["AKRA_GITHUB_PR_MODE"],
+            reader,
+        )?;
         adapter.add_text(
             SettingKey::ParallelIntegrationBranch,
             &["AKRA_PARALLEL_INTEGRATION_BRANCH"],
+            reader,
         )?;
         adapter.add_unsigned(
             SettingKey::AppServerResponseTimeoutSecs,
             &["CODEX_EXEC_LOOP_APP_SERVER_RESPONSE_TIMEOUT_SECS"],
+            reader,
         )?;
         adapter.add_bool(
             SettingKey::AppServerPromptLog,
             &["AKRA_APP_SERVER_PROMPT_LOG"],
+            reader,
         )?;
         adapter.add_unsigned(
             SettingKey::SubprocessTimeoutSecs,
             &["CODEX_EXEC_LOOP_SUBPROCESS_TIMEOUT_SECS"],
+            reader,
         )?;
-        adapter.add_diagnostics_trace(&["AKRA_TRACE"])?;
-        adapter.add_diagnostics_spans(&["AKRA_TRACE_SPANS"])?;
-        adapter.add_unsigned(SettingKey::DiagnosticsMaxFiles, &["AKRA_TRACE_MAX_FILES"])?;
+        adapter.add_diagnostics_trace(&["AKRA_TRACE"], reader)?;
+        adapter.add_diagnostics_spans(&["AKRA_TRACE_SPANS"], reader)?;
+        adapter.add_unsigned(
+            SettingKey::DiagnosticsMaxFiles,
+            &["AKRA_TRACE_MAX_FILES"],
+            reader,
+        )?;
         adapter.add_unsigned(
             SettingKey::DiagnosticsMaxFileBytes,
             &["AKRA_TRACE_MAX_FILE_BYTES"],
+            reader,
         )?;
         adapter.add_unsigned(
             SettingKey::DiagnosticsMaxTotalBytes,
             &["AKRA_TRACE_MAX_TOTAL_BYTES"],
+            reader,
         )?;
-        adapter.add_bool(SettingKey::DiagnosticsTokioConsole, &["AKRA_TOKIO_CONSOLE"])?;
+        adapter.add_bool(
+            SettingKey::DiagnosticsTokioConsole,
+            &["AKRA_TOKIO_CONSOLE"],
+            reader,
+        )?;
         adapter.add_bool(
             SettingKey::AdminGraphicEnabled,
             &["AKRA_ADMIN_GRAPHIC_ENABLED"],
+            reader,
         )?;
         adapter.add_unsigned(
             SettingKey::AdminGraphicPollIntervalMs,
             &["AKRA_ADMIN_GRAPHIC_POLL_MS"],
+            reader,
         )?;
         for variable in ["RUST_LOG", "AKRA_TRACE_FILE", "CODEX_EXEC_LOOP_GITHUB_PR"] {
-            if std::env::var_os(variable).is_some() {
+            if reader(variable)?.is_some() {
                 adapter
                     .shadow_descriptions
                     .push(format!("{variable} is active outside TOML"));
@@ -2468,8 +2572,13 @@ impl EnvironmentConfigAdapter {
         Ok(adapter)
     }
 
-    fn add_bool(&mut self, key: SettingKey, variables: &[&str]) -> Result<()> {
-        if let Some((raw, variable)) = first_environment_value(variables)? {
+    fn add_bool(
+        &mut self,
+        key: SettingKey,
+        variables: &[&str],
+        reader: &dyn Fn(&str) -> Result<Option<String>>,
+    ) -> Result<()> {
+        if let Some((raw, variable)) = first_environment_value(reader, variables)? {
             let value = parse_bool(&raw)
                 .with_context(|| format!("invalid environment setting {variable}"))?;
             self.record(key, SettingValue::Bool(value), variable);
@@ -2477,8 +2586,12 @@ impl EnvironmentConfigAdapter {
         Ok(())
     }
 
-    fn add_startup_visual(&mut self, variables: &[&str]) -> Result<()> {
-        let Some((raw, variable)) = first_environment_value(variables)? else {
+    fn add_startup_visual(
+        &mut self,
+        variables: &[&str],
+        reader: &dyn Fn(&str) -> Result<Option<String>>,
+    ) -> Result<()> {
+        let Some((raw, variable)) = first_environment_value(reader, variables)? else {
             return Ok(());
         };
         // The pre-layer startup visual accepted every non-falsey value as
@@ -2496,8 +2609,12 @@ impl EnvironmentConfigAdapter {
         Ok(())
     }
 
-    fn add_planning_worker_visibility(&mut self, variables: &[&str]) -> Result<()> {
-        let Some((raw, variable)) = first_environment_value(variables)? else {
+    fn add_planning_worker_visibility(
+        &mut self,
+        variables: &[&str],
+        reader: &dyn Fn(&str) -> Result<Option<String>>,
+    ) -> Result<()> {
+        let Some((raw, variable)) = first_environment_value(reader, variables)? else {
             return Ok(());
         };
         // Existing launchers used boolean and descriptive aliases in addition
@@ -2514,8 +2631,12 @@ impl EnvironmentConfigAdapter {
         Ok(())
     }
 
-    fn add_diagnostics_trace(&mut self, variables: &[&str]) -> Result<()> {
-        let Some((raw, variable)) = first_environment_value(variables)? else {
+    fn add_diagnostics_trace(
+        &mut self,
+        variables: &[&str],
+        reader: &dyn Fn(&str) -> Result<Option<String>>,
+    ) -> Result<()> {
+        let Some((raw, variable)) = first_environment_value(reader, variables)? else {
             return Ok(());
         };
         let value = SettingValue::Text(raw.trim().to_string());
@@ -2525,8 +2646,12 @@ impl EnvironmentConfigAdapter {
         Ok(())
     }
 
-    fn add_diagnostics_spans(&mut self, variables: &[&str]) -> Result<()> {
-        let Some((raw, variable)) = first_environment_value(variables)? else {
+    fn add_diagnostics_spans(
+        &mut self,
+        variables: &[&str],
+        reader: &dyn Fn(&str) -> Result<Option<String>>,
+    ) -> Result<()> {
+        let Some((raw, variable)) = first_environment_value(reader, variables)? else {
             return Ok(());
         };
         // `0` and `off` have always meant no span events. Persist their
@@ -2542,8 +2667,13 @@ impl EnvironmentConfigAdapter {
         Ok(())
     }
 
-    fn add_unsigned(&mut self, key: SettingKey, variables: &[&str]) -> Result<()> {
-        if let Some((raw, variable)) = first_environment_value(variables)? {
+    fn add_unsigned(
+        &mut self,
+        key: SettingKey,
+        variables: &[&str],
+        reader: &dyn Fn(&str) -> Result<Option<String>>,
+    ) -> Result<()> {
+        if let Some((raw, variable)) = first_environment_value(reader, variables)? {
             let value = parse_unsigned(&raw, key)
                 .with_context(|| format!("invalid environment setting {variable}"))?;
             let value = SettingValue::Unsigned(value);
@@ -2554,8 +2684,13 @@ impl EnvironmentConfigAdapter {
         Ok(())
     }
 
-    fn add_text(&mut self, key: SettingKey, variables: &[&str]) -> Result<()> {
-        if let Some((raw, variable)) = first_environment_value(variables)? {
+    fn add_text(
+        &mut self,
+        key: SettingKey,
+        variables: &[&str],
+        reader: &dyn Fn(&str) -> Result<Option<String>>,
+    ) -> Result<()> {
+        if let Some((raw, variable)) = first_environment_value(reader, variables)? {
             let normalized = match key {
                 SettingKey::TuiPlanningWorkerVisibility
                 | SettingKey::GithubPullRequestMode
@@ -2578,14 +2713,13 @@ impl EnvironmentConfigAdapter {
     }
 }
 
-fn first_environment_value(variables: &[&str]) -> Result<Option<(String, String)>> {
+fn first_environment_value(
+    reader: &dyn Fn(&str) -> Result<Option<String>>,
+    variables: &[&str],
+) -> Result<Option<(String, String)>> {
     for variable in variables {
-        match std::env::var(variable) {
-            Ok(value) => return Ok(Some((value, (*variable).to_string()))),
-            Err(std::env::VarError::NotPresent) => {}
-            Err(std::env::VarError::NotUnicode(_)) => {
-                bail!("{variable} must contain valid UTF-8")
-            }
+        if let Some(value) = reader(variable)? {
+            return Ok(Some((value, (*variable).to_string())));
         }
     }
     Ok(None)
@@ -2696,32 +2830,79 @@ fn inspect_layer_file(path: &Path, scope: ConfigScope) -> ConfigFileInspection {
 mod tests {
     use super::*;
 
-    struct EnvGuard {
-        values: Vec<(String, Option<OsString>)>,
+    #[derive(Clone)]
+    struct ConfigFixture {
+        global: PathBuf,
+        environment: EnvironmentConfigAdapter,
     }
 
-    impl EnvGuard {
-        fn set(values: &[(&str, Option<&str>)]) -> Self {
-            let mut previous = Vec::new();
-            for (name, value) in values {
-                previous.push(((*name).to_string(), std::env::var_os(name)));
-                match value {
-                    Some(value) => unsafe { std::env::set_var(name, value) },
-                    None => unsafe { std::env::remove_var(name) },
-                }
-            }
-            Self { values: previous }
+    impl ConfigFixture {
+        fn new(home: &Path) -> Self {
+            Self::with_environment(home, &[])
         }
-    }
 
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            for (name, value) in self.values.drain(..) {
-                match value {
-                    Some(value) => unsafe { std::env::set_var(name, value) },
-                    None => unsafe { std::env::remove_var(name) },
-                }
+        fn with_environment(home: &Path, values: &[(&str, &str)]) -> Self {
+            Self {
+                global: home.join(CONFIG_FILE_NAME),
+                environment: EnvironmentConfigAdapter::from_values(values)
+                    .expect("test environment values should parse"),
             }
+        }
+
+        fn paths(&self, cwd: &Path) -> Result<ConfigPaths> {
+            ConfigPaths::discover_with_global(cwd, self.global.clone())
+        }
+
+        fn resolve_for_startup(
+            &self,
+            cwd: &Path,
+            overrides: &[ConfigOverride],
+        ) -> Result<ResolvedAkraConfig> {
+            let paths = self.paths(cwd)?;
+            ensure_global_default_file(&paths.global)?;
+            ConfigurationService::resolve_with_paths_and_environment(
+                paths,
+                overrides,
+                self.environment.clone(),
+            )
+        }
+
+        fn resolve_read_only(
+            &self,
+            cwd: &Path,
+            overrides: &[ConfigOverride],
+        ) -> Result<ResolvedAkraConfig> {
+            ConfigurationService::resolve_with_paths_and_environment(
+                self.paths(cwd)?,
+                overrides,
+                self.environment.clone(),
+            )
+        }
+
+        fn path_for_scope(&self, cwd: &Path, scope: ConfigScope) -> Result<PathBuf> {
+            ConfigurationService::path_for_scope_with_paths(self.paths(cwd)?, scope)
+        }
+
+        fn layer_for_scope(
+            &self,
+            cwd: &Path,
+            scope: ConfigScope,
+        ) -> Result<Option<AkraConfigLayer>> {
+            ConfigurationService::layer_for_scope_with_paths(self.paths(cwd)?, scope)
+        }
+
+        fn set(
+            &self,
+            cwd: &Path,
+            scope: ConfigScope,
+            key: SettingKey,
+            raw_value: &str,
+        ) -> Result<PathBuf> {
+            ConfigurationService::set_with_paths(self.paths(cwd)?, scope, key, raw_value)
+        }
+
+        fn unset(&self, cwd: &Path, scope: ConfigScope, key: SettingKey) -> Result<PathBuf> {
+            ConfigurationService::unset_with_paths(self.paths(cwd)?, scope, key)
         }
     }
 
@@ -2857,13 +3038,11 @@ mod tests {
 
     #[test]
     fn read_only_resolution_does_not_create_global_file() {
-        let _lock = crate::test_utils::process_environment_mutex()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let root = temporary_directory("readonly");
-        let _environment = EnvGuard::set(&[("AKRA_HOME", Some(root.to_string_lossy().as_ref()))]);
+        let fixture = ConfigFixture::new(&root);
 
-        let resolved = ConfigurationService::resolve_read_only(&root, &[])
+        let resolved = fixture
+            .resolve_read_only(&root, &[])
             .expect("read-only resolution should use builtins");
 
         assert_eq!(
@@ -2876,13 +3055,11 @@ mod tests {
 
     #[test]
     fn normal_resolution_creates_canonical_global_file() {
-        let _lock = crate::test_utils::process_environment_mutex()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let root = temporary_directory("startup");
-        let _environment = EnvGuard::set(&[("AKRA_HOME", Some(root.to_string_lossy().as_ref()))]);
+        let fixture = ConfigFixture::new(&root);
 
-        ConfigurationService::resolve_for_startup(&root, &[])
+        fixture
+            .resolve_for_startup(&root, &[])
             .expect("startup resolution should create global file");
         let contents = fs::read_to_string(root.join(CONFIG_FILE_NAME))
             .expect("global config should be written");
@@ -2894,17 +3071,11 @@ mod tests {
 
     #[test]
     fn environment_overrides_global_layer() {
-        let _lock = crate::test_utils::process_environment_mutex()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let root = temporary_directory("environment");
-        let _environment = EnvGuard::set(&[
-            ("AKRA_HOME", Some(root.to_string_lossy().as_ref())),
-            (
-                "CODEX_EXEC_LOOP_APP_SERVER_RESPONSE_TIMEOUT_SECS",
-                Some("42"),
-            ),
-        ]);
+        let fixture = ConfigFixture::with_environment(
+            &root,
+            &[("CODEX_EXEC_LOOP_APP_SERVER_RESPONSE_TIMEOUT_SECS", "42")],
+        );
         fs::write(
             root.join(CONFIG_FILE_NAME),
             "schema_version = 1\n[app_server]\nresponse_timeout_secs = 20\n",
@@ -2920,7 +3091,8 @@ mod tests {
             .expect("global config fixture should be owner-only");
         }
 
-        let resolved = ConfigurationService::resolve_read_only(&root, &[])
+        let resolved = fixture
+            .resolve_read_only(&root, &[])
             .expect("configuration should resolve");
 
         assert_eq!(resolved.config.app_server.response_timeout_secs, 42);
@@ -2933,20 +3105,19 @@ mod tests {
 
     #[test]
     fn environment_adapter_preserves_legacy_tui_and_trace_spellings() {
-        let _lock = crate::test_utils::process_environment_mutex()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let root = temporary_directory("environment-legacy-aliases");
-        let home_text = root.to_string_lossy().into_owned();
-        let _environment = EnvGuard::set(&[
-            ("AKRA_HOME", Some(&home_text)),
-            ("CODEX_EXEC_LOOP_SHOW_STARTUP_ASCII_ART", Some("capture")),
-            ("CODEX_EXEC_LOOP_PLANNER_VISIBILITY", Some("verbose")),
-            ("AKRA_TRACE", Some("1")),
-            ("AKRA_TRACE_SPANS", Some("off")),
-        ]);
+        let fixture = ConfigFixture::with_environment(
+            &root,
+            &[
+                ("CODEX_EXEC_LOOP_SHOW_STARTUP_ASCII_ART", "capture"),
+                ("CODEX_EXEC_LOOP_PLANNER_VISIBILITY", "verbose"),
+                ("AKRA_TRACE", "1"),
+                ("AKRA_TRACE_SPANS", "off"),
+            ],
+        );
 
-        let resolved = ConfigurationService::resolve_read_only(&root, &[])
+        let resolved = fixture
+            .resolve_read_only(&root, &[])
             .expect("legacy environment values should resolve");
 
         assert!(resolved.config.tui.show_startup_visual);
@@ -2963,9 +3134,6 @@ mod tests {
 
     #[test]
     fn resolver_applies_legacy_project_environment_and_command_precedence_in_order() {
-        let _lock = crate::test_utils::process_environment_mutex()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let root = temporary_directory("full-precedence");
         let workspace = root.join("workspace");
         let initialized = std::process::Command::new("git")
@@ -2986,14 +3154,11 @@ mod tests {
         assert!(configured.success());
 
         let home = root.join("home");
-        let home_text = home.to_string_lossy().into_owned();
-        let _environment = EnvGuard::set(&[
-            ("AKRA_HOME", Some(&home_text)),
-            ("AKRA_GITHUB_PUSH_REMOTE", None),
-        ]);
+        let fixture = ConfigFixture::new(&home);
         write_global_fixture(&home, "[github]\npush_remote = \"global\"\n");
 
-        let legacy = ConfigurationService::resolve_read_only(&workspace, &[])
+        let legacy = fixture
+            .resolve_read_only(&workspace, &[])
             .expect("legacy compatibility layer should resolve");
         assert_eq!(legacy.config.github.push_remote, "legacy");
         assert!(matches!(
@@ -3012,7 +3177,8 @@ mod tests {
         .expect("project configuration directory should create");
         fs::write(&project_path, "[github]\npush_remote = \"project\"\n")
             .expect("project configuration should write");
-        let project = ConfigurationService::resolve_read_only(&workspace, &[])
+        let project = fixture
+            .resolve_read_only(&workspace, &[])
             .expect("project layer should resolve");
         assert_eq!(project.config.github.push_remote, "project");
         assert!(matches!(
@@ -3021,8 +3187,12 @@ mod tests {
         ));
 
         {
-            let _environment = EnvGuard::set(&[("AKRA_GITHUB_PUSH_REMOTE", Some("environment"))]);
-            let environment = ConfigurationService::resolve_read_only(&workspace, &[])
+            let environment_fixture = ConfigFixture::with_environment(
+                &home,
+                &[("AKRA_GITHUB_PUSH_REMOTE", "environment")],
+            );
+            let environment = environment_fixture
+                .resolve_read_only(&workspace, &[])
                 .expect("environment layer should resolve");
             assert_eq!(environment.config.github.push_remote, "environment");
             assert!(matches!(
@@ -3032,7 +3202,8 @@ mod tests {
 
             let override_value = ConfigOverride::parse("github.push_remote=command")
                 .expect("command-line override should parse");
-            let command = ConfigurationService::resolve_read_only(&workspace, &[override_value])
+            let command = environment_fixture
+                .resolve_read_only(&workspace, &[override_value])
                 .expect("command layer should resolve");
             assert_eq!(command.config.github.push_remote, "command");
             assert!(matches!(
@@ -3045,22 +3216,13 @@ mod tests {
 
     #[test]
     fn explicit_workspace_rebinds_project_layers_without_reloading_process_sources() {
-        let _lock = crate::test_utils::process_environment_mutex()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let root = temporary_directory("workspace-rebind");
         let home = root.join("home");
         let workspace_a = root.join("workspace-a");
         let workspace_b = root.join("workspace-b");
         fake_git_worktree(&workspace_a);
         fake_git_worktree(&workspace_b);
-        let home_text = home.to_string_lossy().into_owned();
-        let _environment = EnvGuard::set(&[
-            ("AKRA_HOME", Some(&home_text)),
-            ("AKRA_GITHUB_PUSH_REMOTE", None),
-            ("AKRA_GITHUB_PR_MODE", None),
-            ("AKRA_PARALLEL_INTEGRATION_BRANCH", None),
-        ]);
+        let fixture = ConfigFixture::new(&home);
         write_global_fixture(
             &home,
             "schema_version = 1\n[github]\nreview_poll_interval_secs = 13\n",
@@ -3084,7 +3246,8 @@ mod tests {
         }
         let overrides = [ConfigOverride::parse("github.pull_request_mode=auto")
             .expect("command override should parse")];
-        let source = ConfigurationService::resolve_read_only(&workspace_a, &overrides)
+        let source = fixture
+            .resolve_read_only(&workspace_a, &overrides)
             .expect("source workspace should resolve");
         write_global_fixture(
             &home,
@@ -3116,15 +3279,11 @@ mod tests {
 
     #[test]
     fn mutation_preserves_comments_and_unset_restores_the_higher_leaf() {
-        let _lock = crate::test_utils::process_environment_mutex()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let root = temporary_directory("comments-and-unset");
         let workspace = root.join("workspace");
         fake_git_worktree(&workspace);
         let home = root.join("home");
-        let home_text = home.to_string_lossy().into_owned();
-        let _environment = EnvGuard::set(&[("AKRA_HOME", Some(&home_text))]);
+        let fixture = ConfigFixture::new(&home);
         write_global_fixture(
             &home,
             "# keep this header\nschema_version = 1\n\n[tui]\n# keep this field comment\nshow_startup_visual = false\nplanning_worker_visibility = \"normal\"\n",
@@ -3140,13 +3299,14 @@ mod tests {
         )
         .expect("project config fixture should write");
 
-        ConfigurationService::set(
-            &workspace,
-            ConfigScope::Global,
-            SettingKey::TuiPlanningWorkerVisibility,
-            "debug",
-        )
-        .expect("global mutation should succeed");
+        fixture
+            .set(
+                &workspace,
+                ConfigScope::Global,
+                SettingKey::TuiPlanningWorkerVisibility,
+                "debug",
+            )
+            .expect("global mutation should succeed");
         let updated =
             fs::read_to_string(home.join(CONFIG_FILE_NAME)).expect("updated config should read");
         assert!(updated.contains("# keep this header"));
@@ -3154,7 +3314,8 @@ mod tests {
         assert!(updated.contains("show_startup_visual = false"));
         assert!(updated.contains("planning_worker_visibility = \"debug\""));
 
-        let before_unset = ConfigurationService::resolve_read_only(&workspace, &[])
+        let before_unset = fixture
+            .resolve_read_only(&workspace, &[])
             .expect("project config should resolve before unset");
         assert!(before_unset.config.tui.show_startup_visual);
         assert_eq!(before_unset.config.tui.planning_worker_visibility, "debug");
@@ -3163,13 +3324,15 @@ mod tests {
             SettingOrigin::ProjectToml
         ));
 
-        ConfigurationService::unset(
-            &workspace,
-            ConfigScope::Project,
-            SettingKey::TuiPlanningWorkerVisibility,
-        )
-        .expect("project leaf unset should succeed");
-        let after_unset = ConfigurationService::resolve_read_only(&workspace, &[])
+        fixture
+            .unset(
+                &workspace,
+                ConfigScope::Project,
+                SettingKey::TuiPlanningWorkerVisibility,
+            )
+            .expect("project leaf unset should succeed");
+        let after_unset = fixture
+            .resolve_read_only(&workspace, &[])
             .expect("project config should resolve after unset");
         assert_eq!(after_unset.config.tui.planning_worker_visibility, "debug");
         assert!(matches!(
@@ -3181,17 +3344,14 @@ mod tests {
 
     #[test]
     fn linked_worktree_uses_its_own_project_config_path() {
-        let _lock = crate::test_utils::process_environment_mutex()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let root = temporary_directory("linked-worktree");
         let worktree = root.join("linked");
         fake_git_worktree(&worktree);
         let home = root.join("home");
-        let home_text = home.to_string_lossy().into_owned();
-        let _environment = EnvGuard::set(&[("AKRA_HOME", Some(&home_text))]);
+        let fixture = ConfigFixture::new(&home);
 
-        let discovered = ConfigPaths::discover(&worktree.join("nested"))
+        let discovered = fixture
+            .paths(&worktree.join("nested"))
             .expect("linked worktree paths should discover");
         let canonical_worktree = worktree
             .canonicalize()
@@ -3204,7 +3364,7 @@ mod tests {
             discovered.project.as_deref(),
             Some(canonical_worktree.join(".akra/config.toml").as_path())
         );
-        assert!(ConfigurationService::path_for_scope(&root, ConfigScope::Project).is_err());
+        assert!(fixture.path_for_scope(&root, ConfigScope::Project).is_err());
         let _ = fs::remove_dir_all(root);
     }
 
@@ -3213,23 +3373,20 @@ mod tests {
     fn project_mutation_creates_a_reviewable_file_while_global_remains_private() {
         use std::os::unix::fs::PermissionsExt;
 
-        let _lock = crate::test_utils::process_environment_mutex()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let root = temporary_directory("project-permissions");
         let workspace = root.join("workspace");
         fake_git_worktree(&workspace);
         let home = root.join("home");
-        let home_text = home.to_string_lossy().into_owned();
-        let _environment = EnvGuard::set(&[("AKRA_HOME", Some(&home_text))]);
+        let fixture = ConfigFixture::new(&home);
 
-        ConfigurationService::set(
-            &workspace,
-            ConfigScope::Project,
-            SettingKey::TuiShowStartupVisual,
-            "false",
-        )
-        .expect("project setting should create its configuration");
+        fixture
+            .set(
+                &workspace,
+                ConfigScope::Project,
+                SettingKey::TuiShowStartupVisual,
+                "false",
+            )
+            .expect("project setting should create its configuration");
         let project_mode = fs::metadata(workspace.join(".akra/config.toml"))
             .expect("project configuration should exist")
             .permissions()
@@ -3241,13 +3398,14 @@ mod tests {
             "configuration writes must not create planning runtime state inside .akra"
         );
 
-        ConfigurationService::set(
-            &workspace,
-            ConfigScope::Global,
-            SettingKey::TuiShowStartupVisual,
-            "true",
-        )
-        .expect("global setting should create its configuration");
+        fixture
+            .set(
+                &workspace,
+                ConfigScope::Global,
+                SettingKey::TuiShowStartupVisual,
+                "true",
+            )
+            .expect("global setting should create its configuration");
         let global_mode = fs::metadata(home.join(CONFIG_FILE_NAME))
             .expect("global configuration should exist")
             .permissions()
@@ -3259,28 +3417,27 @@ mod tests {
 
     #[test]
     fn malformed_unknown_and_wrong_scope_files_fail_before_startup() {
-        let _lock = crate::test_utils::process_environment_mutex()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let root = temporary_directory("validation-failures");
         let home = root.join("home");
-        let home_text = home.to_string_lossy().into_owned();
-        let _environment = EnvGuard::set(&[("AKRA_HOME", Some(&home_text))]);
+        let fixture = ConfigFixture::new(&home);
 
         write_global_fixture(&home, "[unknown]\nvalue = true\n");
-        let unknown = ConfigurationService::resolve_read_only(&root, &[])
+        let unknown = fixture
+            .resolve_read_only(&root, &[])
             .expect_err("unknown configuration keys must fail")
             .to_string();
         assert!(unknown.contains("invalid global configuration TOML"));
 
         write_global_fixture(&home, "[tui]\nshow_startup_visual = \"yes\"\n");
-        let wrong_type = ConfigurationService::resolve_read_only(&root, &[])
+        let wrong_type = fixture
+            .resolve_read_only(&root, &[])
             .expect_err("wrong configuration types must fail")
             .to_string();
         assert!(wrong_type.contains("invalid global configuration TOML"));
 
         write_global_fixture(&home, "[conversation]\nmodel = \" custom-model \"\n");
-        let noncanonical_text = ConfigurationService::resolve_read_only(&root, &[])
+        let noncanonical_text = fixture
+            .resolve_read_only(&root, &[])
             .expect_err("TOML model values must not retain whitespace aliases")
             .to_string();
         assert!(noncanonical_text.contains("must not contain whitespace"));
@@ -3293,7 +3450,8 @@ mod tests {
             .expect("project config parent should create");
         fs::write(&project, "[diagnostics]\ntrace = \"full\"\n")
             .expect("wrong-scope project fixture should write");
-        let wrong_scope = ConfigurationService::resolve_read_only(&workspace, &[])
+        let wrong_scope = fixture
+            .resolve_read_only(&workspace, &[])
             .expect_err("machine-only project setting must fail")
             .to_string();
         assert!(
@@ -3308,27 +3466,25 @@ mod tests {
     fn global_symlink_and_hardlink_are_rejected_without_reading_the_target() {
         use std::os::unix::fs::{PermissionsExt, symlink};
 
-        let _lock = crate::test_utils::process_environment_mutex()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let root = temporary_directory("unsafe-links");
         let home = root.join("home");
-        let home_text = home.to_string_lossy().into_owned();
-        let _environment = EnvGuard::set(&[("AKRA_HOME", Some(&home_text))]);
+        let fixture = ConfigFixture::new(&home);
         fs::create_dir_all(&home).expect("global home should create");
         let target = root.join("target.toml");
         fs::write(&target, "schema_version = 1\n").expect("target fixture should write");
         fs::set_permissions(&target, fs::Permissions::from_mode(0o600))
             .expect("target fixture should be private");
         symlink(&target, home.join(CONFIG_FILE_NAME)).expect("global symlink should create");
-        let symlink_error = ConfigurationService::resolve_read_only(&root, &[])
+        let symlink_error = fixture
+            .resolve_read_only(&root, &[])
             .expect_err("global symlink must fail")
             .to_string();
         assert!(symlink_error.contains("regular non-symlink"));
 
         fs::remove_file(home.join(CONFIG_FILE_NAME)).expect("symlink fixture should remove");
         fs::hard_link(&target, home.join(CONFIG_FILE_NAME)).expect("global hardlink should create");
-        let hardlink_error = ConfigurationService::resolve_read_only(&root, &[])
+        let hardlink_error = fixture
+            .resolve_read_only(&root, &[])
             .expect_err("global hardlink must fail")
             .to_string();
         assert!(hardlink_error.contains("hard-linked"));
@@ -3337,17 +3493,15 @@ mod tests {
 
     #[test]
     fn concurrent_global_writers_keep_independent_leaf_updates() {
-        let _lock = crate::test_utils::process_environment_mutex()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let root = temporary_directory("concurrent-writers");
         let home = root.join("home");
-        let home_text = home.to_string_lossy().into_owned();
-        let _environment = EnvGuard::set(&[("AKRA_HOME", Some(&home_text))]);
+        let fixture = ConfigFixture::new(&home);
         let first_root = root.clone();
         let second_root = root.clone();
+        let first_fixture = fixture.clone();
+        let second_fixture = fixture.clone();
         let first = std::thread::spawn(move || {
-            ConfigurationService::set(
+            first_fixture.set(
                 &first_root,
                 ConfigScope::Global,
                 SettingKey::TuiShowStartupVisual,
@@ -3355,7 +3509,7 @@ mod tests {
             )
         });
         let second = std::thread::spawn(move || {
-            ConfigurationService::set(
+            second_fixture.set(
                 &second_root,
                 ConfigScope::Global,
                 SettingKey::GithubReviewPollIntervalSecs,
@@ -3371,7 +3525,8 @@ mod tests {
             .expect("second writer should not panic")
             .expect("second writer should succeed");
 
-        let layer = ConfigurationService::layer_for_scope(&root, ConfigScope::Global)
+        let layer = fixture
+            .layer_for_scope(&root, ConfigScope::Global)
             .expect("global layer should read")
             .expect("writer should create global layer");
         assert_eq!(
@@ -3392,24 +3547,22 @@ mod tests {
     #[cfg(any(unix, windows))]
     #[test]
     fn persistent_config_lock_file_is_reacquired_after_the_holder_exits() {
-        let _lock = crate::test_utils::process_environment_mutex()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let root = temporary_directory("persistent-lock-file");
         let home = root.join("home");
-        let home_text = home.to_string_lossy().into_owned();
-        let _environment = EnvGuard::set(&[("AKRA_HOME", Some(&home_text))]);
-        let config_path = home.join(CONFIG_FILE_NAME);
+        let fixture = ConfigFixture::new(&home);
+        let config_path = fixture.global.clone();
 
-        let first = ConfigWriteLock::acquire(&config_path).expect("first lock should acquire");
-        let lock_path = config_write_lock_path(&config_path).expect("lock path should resolve");
+        let first = ConfigWriteLock::acquire(&config_path, &fixture.global)
+            .expect("first lock should acquire");
+        let lock_path = config_write_lock_path(&config_path, &fixture.global)
+            .expect("lock path should resolve");
         assert!(
             lock_path.is_file(),
             "the durable lock file should remain visible"
         );
         drop(first);
 
-        let second = ConfigWriteLock::acquire(&config_path)
+        let second = ConfigWriteLock::acquire(&config_path, &fixture.global)
             .expect("an unlocked persistent lock file should be reacquired");
         drop(second);
         let _ = fs::remove_dir_all(root);
@@ -3418,18 +3571,15 @@ mod tests {
     #[cfg(any(unix, windows))]
     #[test]
     fn legacy_config_lock_directory_fails_closed_during_migration() {
-        let _lock = crate::test_utils::process_environment_mutex()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let root = temporary_directory("legacy-lock-directory");
         let home = root.join("home");
-        let home_text = home.to_string_lossy().into_owned();
-        let _environment = EnvGuard::set(&[("AKRA_HOME", Some(&home_text))]);
-        let config_path = home.join(CONFIG_FILE_NAME);
-        let lock_path = config_write_lock_path(&config_path).expect("lock path should resolve");
+        let fixture = ConfigFixture::new(&home);
+        let config_path = fixture.global.clone();
+        let lock_path = config_write_lock_path(&config_path, &fixture.global)
+            .expect("lock path should resolve");
         fs::create_dir(&lock_path).expect("legacy directory lock should create");
 
-        let error = match ConfigWriteLock::acquire(&config_path) {
+        let error = match ConfigWriteLock::acquire(&config_path, &fixture.global) {
             Ok(_) => panic!("a legacy directory lock must not be reclaimed blindly"),
             Err(error) => error.to_string(),
         };
@@ -3443,15 +3593,11 @@ mod tests {
     fn project_ancestor_replacement_race_cannot_redirect_a_configuration_write() {
         use std::os::unix::fs::symlink;
 
-        let _lock = crate::test_utils::process_environment_mutex()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let root = temporary_directory("project-ancestor-race");
         let workspace = root.join("workspace");
         fake_git_worktree(&workspace);
         let home = root.join("home");
-        let home_text = home.to_string_lossy().into_owned();
-        let _environment = EnvGuard::set(&[("AKRA_HOME", Some(&home_text))]);
+        let fixture = ConfigFixture::new(&home);
         let project_directory = workspace.join(PROJECT_CONFIG_DIRECTORY);
         fs::create_dir_all(&project_directory).expect("project config directory should create");
         let parked_project_directory = root.join("parked-project-config");
@@ -3470,14 +3616,15 @@ mod tests {
             },
         );
 
-        let error = ConfigurationService::set(
-            &workspace,
-            ConfigScope::Project,
-            SettingKey::TuiShowStartupVisual,
-            "false",
-        )
-        .expect_err("a replaced project ancestor must fail closed")
-        .to_string();
+        let error = fixture
+            .set(
+                &workspace,
+                ConfigScope::Project,
+                SettingKey::TuiShowStartupVisual,
+                "false",
+            )
+            .expect_err("a replaced project ancestor must fail closed")
+            .to_string();
 
         assert!(
             error.contains("failed to atomically replace configuration"),
