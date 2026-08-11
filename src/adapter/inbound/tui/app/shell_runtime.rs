@@ -262,7 +262,7 @@ impl ShellRuntime {
         }
         match event {
             Event::Key(key) => {
-                if !self.accepts_terminal_key_event(&key) {
+                if key.kind != KeyEventKind::Press {
                     return;
                 }
 
@@ -296,22 +296,6 @@ impl ShellRuntime {
             Event::FocusLost => {
                 self.frame_scheduler.set_focused(false, now);
             }
-        }
-    }
-
-    fn accepts_terminal_key_event(&self, key: &KeyEvent) -> bool {
-        match key.kind {
-            KeyEventKind::Press => true,
-            // Enhanced keyboard protocols report a held key as Repeat rather
-            // than another Press. Limit repeat handling to deletion in the
-            // focused composer so Backspace can drain multi-byte input without
-            // allowing repeated submissions, shortcut toggles, or overlay
-            // navigation.
-            KeyEventKind::Repeat => {
-                self.app.prompt_input_has_focus()
-                    && matches!(key.code, KeyCode::Backspace | KeyCode::Delete)
-            }
-            KeyEventKind::Release => false,
         }
     }
 
@@ -628,8 +612,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use crossterm::event::{
-        Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
-        MouseEventKind,
+        Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     };
     use ratatui::layout::Rect;
 
@@ -641,10 +624,6 @@ mod tests {
 
     fn key(code: KeyCode, modifiers: KeyModifiers) -> Event {
         Event::Key(KeyEvent::new(code, modifiers))
-    }
-
-    fn key_with_kind(code: KeyCode, modifiers: KeyModifiers, kind: KeyEventKind) -> Event {
-        Event::Key(KeyEvent::new_with_kind(code, modifiers, kind))
     }
 
     fn mouse(kind: MouseEventKind, column: u16) -> Event {
@@ -736,41 +715,6 @@ mod tests {
         assert_eq!(viewport.top_row(), 110);
         assert!(viewport.follow_tail());
         assert!(runtime.take_redraw_request());
-    }
-
-    #[test]
-    fn held_backspace_clears_all_korean_jamo_from_the_startup_composer() {
-        const INPUT: &str = "ㅁㄴㅇㄹㅁㄴㅇㄹㅁㄴㅇㄹ";
-
-        let mut runtime = ShellRuntime::new(test_native_tui_app());
-        runtime.app_mut().shell.show_startup_visual = true;
-        for character in INPUT.chars() {
-            runtime.handle_terminal_event(key(KeyCode::Char(character), KeyModifiers::NONE));
-        }
-        runtime.handle_terminal_event(key_with_kind(
-            KeyCode::Backspace,
-            KeyModifiers::NONE,
-            KeyEventKind::Press,
-        ));
-        for _ in 1..INPUT.chars().count() {
-            runtime.handle_terminal_event(key_with_kind(
-                KeyCode::Backspace,
-                KeyModifiers::NONE,
-                KeyEventKind::Repeat,
-            ));
-        }
-        runtime.handle_terminal_event(key_with_kind(
-            KeyCode::Backspace,
-            KeyModifiers::NONE,
-            KeyEventKind::Release,
-        ));
-
-        let ConversationState::Ready(conversation) =
-            &runtime.app().conversation.lifecycle.conversation_state
-        else {
-            panic!("startup prompt should retain a ready conversation state");
-        };
-        assert!(conversation.composer.input_buffer.is_empty());
     }
 
     #[test]
