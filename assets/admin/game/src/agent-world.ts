@@ -129,6 +129,7 @@ interface ValidationStationVisual {
 
 interface PrApproverVisual {
   group: Container;
+  interactionTarget: Container;
   sprite: Sprite;
   shadow: Graphics;
   stateMarker: Graphics;
@@ -832,13 +833,7 @@ export class AgentWorld {
     group.cursor = "pointer";
     group.hitArea = new Rectangle(-50, -152, 100, 158);
     group.addChild(stateMarker, shadow, sprite);
-    group.on("pointertap", () => {
-      dispatchSceneSelection({
-        kind: "poi",
-        detailTarget: "validation",
-        recordKey: this.validation.approver.recordKey,
-      });
-    });
+    group.on("pointertap", () => { this.requestApproverSelection(); });
     group.on("pointerover", () => { stateMarker.alpha = 1; });
     group.on("pointerout", () => { stateMarker.alpha = 0.7; });
     this.agentLayer.addChild(group);
@@ -853,18 +848,13 @@ export class AgentWorld {
     interactionTarget.eventMode = "static";
     interactionTarget.cursor = "pointer";
     interactionTarget.hitArea = new Rectangle(-50, -152, 100, 158);
-    interactionTarget.on("pointertap", () => {
-      dispatchSceneSelection({
-        kind: "poi",
-        detailTarget: "validation",
-        recordKey: this.validation.approver.recordKey,
-      });
-    });
+    interactionTarget.on("pointertap", () => { this.requestApproverSelection(); });
     interactionTarget.on("pointerover", () => { stateMarker.alpha = 1; });
     interactionTarget.on("pointerout", () => { stateMarker.alpha = 0.7; });
     this.poiLayer.addChild(interactionTarget);
     this.approverVisual = {
       group,
+      interactionTarget,
       sprite,
       shadow,
       stateMarker,
@@ -872,6 +862,16 @@ export class AgentWorld {
       snapshot,
     };
     this.syncApproverPresentation();
+  }
+
+  private requestApproverSelection(): void {
+    const recordKey = this.validation.approver.recordKey;
+    if (!recordKey) return;
+    dispatchSceneSelection({
+      kind: "poi",
+      detailTarget: "validation",
+      recordKey,
+    });
   }
 
   private updateApprover(deltaMilliseconds: number): void {
@@ -898,6 +898,8 @@ export class AgentWorld {
       ?? Texture.EMPTY;
     visual.group.visible = true;
     visual.group.alpha = projection.state === "idle" ? 0.84 : 1;
+    visual.group.cursor = projection.recordKey ? "pointer" : "default";
+    visual.interactionTarget.cursor = projection.recordKey ? "pointer" : "default";
     visual.group.position.set(PR_APPROVER_POINT.x, PR_APPROVER_POINT.y);
     visual.sprite.position.set(0, 0);
     visual.sprite.scale.set(PR_APPROVER_SPRITE_SCALE);
@@ -964,13 +966,7 @@ export class AgentWorld {
     const progressTrack = new Graphics();
     const progressFill = new Graphics();
     group.addChild(panel, beacon, caption, label, modeLabel, progressTrack, progressFill);
-    group.on("pointertap", () => {
-      dispatchSceneSelection({
-        kind: "poi",
-        detailTarget: "validation",
-        recordKey: this.validation.approver.recordKey,
-      });
-    });
+    group.on("pointertap", () => { this.requestApproverSelection(); });
     group.on("pointerover", () => { panel.alpha = 1; });
     group.on("pointerout", () => { panel.alpha = 0.92; });
     this.poiLayer.addChild(group);
@@ -1035,6 +1031,7 @@ export class AgentWorld {
         .fill({ color, alpha: 0.96 });
     }
     station.group.alpha = approver.state === "idle" ? 0.78 : 1;
+    station.group.cursor = approver.recordKey ? "pointer" : "default";
   }
 
   private buildPointsOfInterest(): void {

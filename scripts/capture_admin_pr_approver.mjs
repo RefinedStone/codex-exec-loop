@@ -445,6 +445,14 @@ const idleDashboardFrom = (dashboard, suffix) => {
   return idle;
 };
 
+const replayApproverTransition = async (page, dashboard, suffix) => {
+  const replay = JSON.parse(JSON.stringify(dashboard));
+  const approver = replay.scene.validation.approver;
+  approver.transitionKey = `${approver.transitionKey}:capture-replay:${suffix}`;
+  await applyDashboard(page, replay);
+  return replay;
+};
+
 const captureBoard = async (page, filePath) => {
   const board = page.locator(".office-board");
   await board.scrollIntoViewIfNeeded();
@@ -568,6 +576,94 @@ const assertApproverCanvasSelection = async (page, dashboard, label) => {
   };
 };
 
+const assertIdleApproverSelectionIgnored = async (page, dashboard, label) => {
+  const inspection = await inspect(page);
+  assertApprover(inspection, dashboard, {
+    state: "idle",
+    qualifier: "none",
+    label,
+  });
+  const approver = inspection.validation.approver;
+  assert(approver.recordKey === null, `${label} unexpectedly has a validation record`, approver);
+
+  const drawer = page.locator("[data-detail-drawer]");
+  if (await drawer.evaluate((element) => element.classList.contains("is-open"))) {
+    await page.locator("[data-detail-close]").click();
+    await page.waitForFunction(
+      () => !document.querySelector("[data-detail-drawer]")?.classList.contains("is-open"),
+      undefined,
+      { timeout: timeoutMs },
+    );
+  }
+
+  await page.evaluate(() => {
+    window.__akraApproverCanvasSelections = [];
+    if (window.__akraApproverCanvasSelectionListenerInstalled) return;
+    window.__akraApproverCanvasSelectionListenerInstalled = true;
+    window.addEventListener("akra:scene-selection-requested", (event) => {
+      window.__akraApproverCanvasSelections.push({ ...(event.detail || {}) });
+    });
+  });
+
+  const canvas = page.locator("#pixi-diorama canvas");
+  const canvasBox = await canvas.boundingBox();
+  assert(Boolean(canvasBox), `${label} canvas has no browser bounds`);
+  const hitPoint = {
+    x: approver.boardX,
+    y: approver.boardY - approver.displayHeight * 0.5,
+  };
+  assert(
+    hitPoint.x > 0
+      && hitPoint.x < canvasBox.width
+      && hitPoint.y > 0
+      && hitPoint.y < canvasBox.height,
+    `${label} computed approver hit point is outside the canvas`,
+    { hitPoint, canvasBox, approver },
+  );
+
+  await canvas.click({ position: hitPoint });
+  await delay(250);
+  const afterCanvasClick = await page.evaluate(() => ({
+    drawerOpen: document.querySelector("[data-detail-drawer]")?.classList.contains("is-open") ?? false,
+    selectedValidationRecordKey: [...document.querySelectorAll(
+      "#validation-rail [data-validation-record-key]",
+    )].find((node) => node.getAttribute("aria-expanded") === "true")
+      ?.getAttribute("data-validation-record-key") ?? null,
+    selectionEvents: [...(window.__akraApproverCanvasSelections || [])],
+  }));
+  assert(!afterCanvasClick.drawerOpen, `${label} canvas click opened a detail drawer`, afterCanvasClick);
+  assert(
+    afterCanvasClick.selectedValidationRecordKey === null,
+    `${label} canvas click selected an unrelated validation record`,
+    afterCanvasClick,
+  );
+  assert(
+    afterCanvasClick.selectionEvents.length === 0,
+    `${label} canvas click emitted a validation selection without a record`,
+    afterCanvasClick,
+  );
+
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent("akra:scene-selection-requested", {
+      detail: { kind: "poi", detailTarget: "validation", recordKey: null },
+    }));
+  });
+  await delay(100);
+  const afterSyntheticEvent = await page.evaluate(() => ({
+    drawerOpen: document.querySelector("[data-detail-drawer]")?.classList.contains("is-open") ?? false,
+    selectedValidationRecordKey: [...document.querySelectorAll(
+      "#validation-rail [data-validation-record-key]",
+    )].find((node) => node.getAttribute("aria-expanded") === "true")
+      ?.getAttribute("data-validation-record-key") ?? null,
+  }));
+  assert(
+    !afterSyntheticEvent.drawerOpen && afterSyntheticEvent.selectedValidationRecordKey === null,
+    `${label} DOM bridge fell back to an unrelated validation record`,
+    afterSyntheticEvent,
+  );
+  return { hitPoint, afterCanvasClick, afterSyntheticEvent };
+};
+
 const assertNamedCountsUnchanged = (namedInspections) => {
   const entries = Object.entries(namedInspections);
   const baseline = countSnapshot(entries[0][1]);
@@ -673,6 +769,11 @@ try {
     assert(idleInspection.validation.approver.settled === true, "idle pose did not hold", idleInspection.validation.approver);
   }
   assertStableCounts(idleSamples, "idle");
+  const idleApproverSelection = await assertIdleApproverSelectionIgnored(
+    normalPage,
+    idleDashboard,
+    "idle approver interaction",
+  );
 
   await applyDashboard(normalPage, successDashboard);
   const reviewingSamples = await sampleAnimation(normalPage, 9, 220);
@@ -735,6 +836,16 @@ try {
       inspection: compactInspection(await inspect(normalPage)),
     });
   }
+
+  // The public debug command waits for its own SSR/SSE reconciliation before
+  // returning. On a busy CI host a short one-shot can legitimately finish
+  // before Playwright starts sampling. Re-key the already-verified projection
+  // so the animation clock, rather than server latency, is under test here.
+  recoveryDashboard = await replayApproverTransition(
+    normalPage,
+    recoveryDashboard,
+    "failure",
+  );
 
   const failureSamples = await sampleAnimation(normalPage, 7, 200);
   for (const failureInspection of failureSamples) {
@@ -802,6 +913,7 @@ try {
 
   evidence.normalMotion = {
     idle: idleSamples.map(compactInspection),
+    idleApproverSelection,
     reviewing: {
       uniqueSourceFrames: [...reviewingFrames],
       samples: reviewingSamples.map(compactInspection),
