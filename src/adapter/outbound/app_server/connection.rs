@@ -285,8 +285,13 @@ impl AppServerConnectionConfig {
 
     pub(super) fn from_environment() -> Self {
         // 운영 override는 response timeout만 열어두고, poll/drain 간격은 stream responsiveness 기준으로 고정한다.
+        let configured_timeout = crate::configuration::current_process_config()
+            .map(|config| config.config.app_server.response_timeout_secs.to_string());
+        let environment_timeout = std::env::var(RESPONSE_TIMEOUT_ENV_VAR).ok();
         let mut config = Self::from_response_timeout_secs_value(
-            std::env::var(RESPONSE_TIMEOUT_ENV_VAR).ok().as_deref(),
+            configured_timeout
+                .as_deref()
+                .or(environment_timeout.as_deref()),
         );
         config.shell_environment_inherit = configured_shell_environment_inherit();
         config.process_environment_policy = configured_process_environment_policy();

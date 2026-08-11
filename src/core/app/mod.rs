@@ -7,6 +7,7 @@ pub mod approval;
 pub mod command;
 mod controller;
 pub mod conversation;
+mod conversation_preferences;
 mod conversation_runtime;
 mod conversation_turn_reducer;
 pub mod directions;
@@ -42,6 +43,10 @@ pub use controller::CoreDispatchOutcome;
 pub use conversation::{
     ConversationReadySnapshot, ConversationSnapshot, ConversationState,
     ConversationThreadReviewSnapshot,
+};
+pub use conversation_preferences::{
+    ConversationPreferencePersistenceCorrelation, ConversationPreferencePersistenceRequest,
+    ConversationPreferencePersistenceResult, ConversationPreferenceThreadTarget,
 };
 pub use conversation_runtime::{
     ActiveTurnPhase, ActiveTurnSnapshot, ApprovalAuthorityPhase, ApprovalAuthoritySnapshot,

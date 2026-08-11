@@ -1256,6 +1256,9 @@ fn windows_pipe_is_closed(error: &io::Error) -> bool {
 }
 
 pub(crate) fn configured_subprocess_timeout() -> Duration {
+    if let Some(config) = crate::configuration::current_process_config() {
+        return Duration::from_secs(config.config.subprocess.timeout_secs);
+    }
     Duration::from_secs(parse_subprocess_timeout_secs(
         std::env::var(SUBPROCESS_TIMEOUT_ENV).ok().as_deref(),
     ))

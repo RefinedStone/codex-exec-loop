@@ -471,12 +471,29 @@ test("stage-npm-packages rejects traversal and link archive members", () => {
       } else if (unsafeKind === "hardlink") {
         fs.linkSync(path.join(source, "payload"), path.join(source, "linked"));
       }
-      const tarArgs = ["--format=ustar", "-czf", archivePath];
       if (unsafeKind === "traversal") {
-        tarArgs.push("--transform", `s#^${sourceName}#../escape#`);
+        // GNU tar's --transform is unavailable on macOS's BSD tar.  Build the
+        // one malicious member directly so this security fixture describes the
+        // same archive on every supported host.
+        const payload = Buffer.from("unsafe\n");
+        const paddedPayload = Buffer.alloc(Math.ceil(payload.length / 512) * 512);
+        payload.copy(paddedPayload);
+        const tar = Buffer.concat([
+          tarHeader("../escape/payload", payload.length, "0"),
+          paddedPayload,
+          Buffer.alloc(1024),
+        ]);
+        fs.writeFileSync(archivePath, gzipSync(tar));
+      } else {
+        execFileSync("tar", [
+          "--format=ustar",
+          "-czf",
+          archivePath,
+          "-C",
+          tmp,
+          sourceName,
+        ]);
       }
-      tarArgs.push("-C", tmp, sourceName);
-      execFileSync("tar", tarArgs);
       writeChecksum(archivePath);
 
       assert.throws(

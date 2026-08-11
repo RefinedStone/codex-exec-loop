@@ -757,6 +757,10 @@ fn resolve_pull_request_delivery_mode(
     runtime: &dyn ParallelModeRuntimePort,
     repo_root: &str,
 ) -> Result<PullRequestDeliveryMode, String> {
+    if let Some(config) = crate::configuration::current_process_config() {
+        return parse_pull_request_delivery_mode(&config.config.github.pull_request_mode)
+            .ok_or_else(|| "resolved github.pull_request_mode is invalid".to_string());
+    }
     if let Some(value) = runtime.environment_variable(AKRA_GITHUB_PR_MODE_ENV)? {
         return parse_pull_request_delivery_mode(&value).ok_or_else(|| {
             format!("{AKRA_GITHUB_PR_MODE_ENV} is invalid; expected required, auto, or disabled")

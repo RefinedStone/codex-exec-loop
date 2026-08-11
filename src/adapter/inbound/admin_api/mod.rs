@@ -237,6 +237,12 @@ fn build_admin_state_with_debug_harness(
 
 impl AdminGraphicConfig {
     fn from_env() -> Self {
+        if let Some(config) = crate::configuration::current_process_config() {
+            return Self {
+                enabled: config.config.admin.graphic_enabled,
+                polling_interval_ms: config.config.admin.graphic_poll_interval_ms,
+            };
+        }
         let enabled = std::env::var("AKRA_ADMIN_GRAPHIC_ENABLED")
             .map(|value| value != "0" && !value.eq_ignore_ascii_case("false"))
             .unwrap_or(true);

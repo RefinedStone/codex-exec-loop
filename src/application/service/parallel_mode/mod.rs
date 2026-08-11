@@ -181,6 +181,9 @@ fn try_parallel_mode_integration_branch_for_repo_with_runtime(
     runtime: &dyn ParallelModeRuntimePort,
     repo_root: &str,
 ) -> Result<String, String> {
+    if let Some(config) = crate::configuration::current_process_config() {
+        return Ok(config.config.parallel.integration_branch.clone());
+    }
     let env_value = runtime.environment_variable(AKRA_PARALLEL_INTEGRATION_BRANCH_ENV_VAR)?;
     let config_value = run_command_with_runtime(
         runtime,
@@ -230,6 +233,9 @@ fn try_push_remote_name_with_runtime(
     runtime: &dyn ParallelModeRuntimePort,
     repo_root: &str,
 ) -> Result<String, String> {
+    if let Some(config) = crate::configuration::current_process_config() {
+        return Ok(config.config.github.push_remote.clone());
+    }
     let env_value = runtime.environment_variable(AKRA_GITHUB_PUSH_REMOTE_ENV_VAR)?;
     let config_value = run_command_with_runtime(
         runtime,

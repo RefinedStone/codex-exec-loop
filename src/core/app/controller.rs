@@ -1,6 +1,7 @@
 mod state;
 
 use self::state::AppState;
+use super::conversation_preferences::ConversationPreferenceFeatureReducer;
 use super::conversation_turn_reducer::{
     ConversationLoadAdmission, ConversationTurnFeatureReducer, LoadedConversationStreamIdentity,
     StopEffectIntent,
@@ -43,6 +44,7 @@ pub(in crate::core) struct CoreController {
     read_models: ReadModelFeatureReducer,
     planning: PlanningFeatureReducer,
     github_review: GithubReviewFeatureReducer,
+    conversation_preferences: ConversationPreferenceFeatureReducer,
 }
 
 impl CoreController {
@@ -55,6 +57,7 @@ impl CoreController {
             read_models: ReadModelFeatureReducer::new(),
             planning: PlanningFeatureReducer::new(),
             github_review: GithubReviewFeatureReducer::new(),
+            conversation_preferences: ConversationPreferenceFeatureReducer::new(),
         }
     }
 
@@ -364,6 +367,19 @@ impl CoreController {
                 };
                 CoreDispatchOutcome {
                     events: vec![AppEvent::ApprovalDecisionAdmissionResolved(admission)],
+                    effects,
+                    snapshot: self.shared_snapshot(),
+                }
+            }
+            CoreInput::Command(AppCommand::PersistConversationPreferences(request)) => {
+                let effects = self
+                    .conversation_preferences
+                    .enqueue(*request)
+                    .into_iter()
+                    .map(|correlation| CoreEffect::PersistConversationPreferences { correlation })
+                    .collect();
+                CoreDispatchOutcome {
+                    events: Vec::new(),
                     effects,
                     snapshot: self.shared_snapshot(),
                 }
@@ -968,6 +984,29 @@ impl CoreController {
                 }
             }
             CoreInput::EffectCompleted(
+                CoreEffectCompletion::ConversationPreferencesPersisted {
+                    correlation,
+                    result,
+                },
+            ) => {
+                let Some(settlement) = self.conversation_preferences.complete(&correlation) else {
+                    return self.unchanged_outcome();
+                };
+                let effects = settlement
+                    .next
+                    .into_iter()
+                    .map(|correlation| CoreEffect::PersistConversationPreferences { correlation })
+                    .collect();
+                CoreDispatchOutcome {
+                    events: vec![AppEvent::ConversationPreferencesPersisted {
+                        correlation,
+                        result,
+                    }],
+                    effects,
+                    snapshot: self.shared_snapshot(),
+                }
+            }
+            CoreInput::EffectCompleted(
                 CoreEffectCompletion::GithubReviewPollingSetupCompleted {
                     correlation,
                     result,
@@ -1538,6 +1577,7 @@ mod tests {
     use crate::application::service::planning::PlanningRuntimeProjection;
     use crate::core::app::{
         ApprovalAuthorityPhase, ApprovalReviewPersistenceCorrelation, AutoFollowPhase,
+        ConversationPreferencePersistenceRequest, ConversationPreferenceThreadTarget,
         ConversationReadySnapshot, ConversationSnapshot, CorePromptOrigin,
         DirectionsMaintenanceDirectionSnapshot, DirectionsMaintenanceLoadCorrelation,
         DirectionsMaintenanceSummarySnapshot, DirectionsSupportingFileStatus,
@@ -1568,7 +1608,8 @@ mod tests {
         ConversationApprovalRequestIdentity, ConversationApprovalRequestKind,
         ConversationApprovalResolution, ConversationApprovalReview,
         ConversationApprovalReviewStatus, ConversationMessage, ConversationMessageKind,
-        ConversationSnapshot as DomainConversationSnapshot, ConversationTurnSteerRequest,
+        ConversationReasoningEffort, ConversationSnapshot as DomainConversationSnapshot,
+        ConversationTurnOptions, ConversationTurnSteerRequest,
     };
     use crate::domain::conversation_item_lifecycle::{
         ConversationItemKind, ConversationItemLifecycleConsistency,
@@ -5340,6 +5381,96 @@ mod tests {
                 .active_approval_decision_for_test()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn conversation_preference_persistence_is_single_writer_and_reports_each_settlement() {
+        let mut controller = CoreController::new();
+        let first_request = conversation_preference_request("gpt-5.6-sol", "thread-a");
+        let second_request = conversation_preference_request("gpt-5.6-terra", "thread-b");
+
+        let first = controller.handle_input(CoreInput::Command(
+            AppCommand::PersistConversationPreferences(Box::new(first_request.clone())),
+        ));
+        let [
+            CoreEffect::PersistConversationPreferences {
+                correlation: first_correlation,
+            },
+        ] = first.effects.as_slice()
+        else {
+            panic!("first preference selection should start a writer");
+        };
+        let first_correlation = first_correlation.clone();
+        assert_eq!(first_correlation.generation, 1);
+        assert_eq!(first_correlation.request, first_request);
+
+        let queued = controller.handle_input(CoreInput::Command(
+            AppCommand::PersistConversationPreferences(Box::new(second_request.clone())),
+        ));
+        assert!(queued.events.is_empty());
+        assert!(queued.effects.is_empty());
+
+        let first_completion = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ConversationPreferencesPersisted {
+                correlation: first_correlation.clone(),
+                result: crate::core::app::ConversationPreferencePersistenceResult {
+                    global: Ok("/tmp/.akra/config.toml".to_string()),
+                    current_thread: Some(Ok(())),
+                },
+            },
+        ));
+        assert!(matches!(
+            first_completion.events.as_slice(),
+            [AppEvent::ConversationPreferencesPersisted {
+                correlation,
+                result,
+            }] if correlation == &first_correlation
+                && result.global.is_ok()
+                && matches!(result.current_thread, Some(Ok(())))
+        ));
+        let [
+            CoreEffect::PersistConversationPreferences {
+                correlation: second_correlation,
+            },
+        ] = first_completion.effects.as_slice()
+        else {
+            panic!("the next preference selection should start after completion");
+        };
+        let second_correlation = second_correlation.clone();
+        assert_eq!(second_correlation.generation, 2);
+        assert_eq!(second_correlation.request, second_request);
+
+        let stale = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ConversationPreferencesPersisted {
+                correlation: first_correlation,
+                result: crate::core::app::ConversationPreferencePersistenceResult {
+                    global: Err("stale".to_string()),
+                    current_thread: None,
+                },
+            },
+        ));
+        assert!(stale.events.is_empty());
+        assert!(stale.effects.is_empty());
+
+        let final_completion = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ConversationPreferencesPersisted {
+                correlation: second_correlation.clone(),
+                result: crate::core::app::ConversationPreferencePersistenceResult {
+                    global: Err("global unavailable".to_string()),
+                    current_thread: Some(Err("thread unavailable".to_string())),
+                },
+            },
+        ));
+        assert!(matches!(
+            final_completion.events.as_slice(),
+            [AppEvent::ConversationPreferencesPersisted {
+                correlation,
+                result,
+            }] if correlation == &second_correlation
+                && result.global == Err("global unavailable".to_string())
+                && result.current_thread == Some(Err("thread unavailable".to_string()))
+        ));
+        assert!(final_completion.effects.is_empty());
     }
 
     #[test]
@@ -9419,6 +9550,23 @@ mod tests {
         ConversationApprovalRequestIdentity {
             approval_id: approval_id.to_string(),
             server_request_id: format!("server-{approval_id}"),
+        }
+    }
+
+    fn conversation_preference_request(
+        model: &str,
+        thread_id: &str,
+    ) -> ConversationPreferencePersistenceRequest {
+        ConversationPreferencePersistenceRequest {
+            global_workspace_directory: Some("/tmp/workspace".to_string()),
+            active_thread: Some(ConversationPreferenceThreadTarget {
+                workspace_directory: "/tmp/workspace".to_string(),
+                thread_id: thread_id.to_string(),
+            }),
+            options: ConversationTurnOptions {
+                model: Some(model.to_string()),
+                reasoning_effort: Some(ConversationReasoningEffort::Medium),
+            },
         }
     }
 

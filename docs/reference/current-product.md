@@ -38,6 +38,7 @@ an explicitly proposed document, not here.
 | Planning | `:planning`, `:planning-init` | stage, validate, and promote planning changes |
 | Directions | `:directions` | maintain directions and queue-idle supporting artifacts |
 | Health | `:doctor`, `:planning doctor`, `akra doctor`, `akra status` | inspect planning authority without authoring |
+| Configuration | `akra config` | inspect effective values and their origins; safely edit global or Git-worktree TOML settings |
 | Parallel | `:parallel`, `:pa` | enable or refresh automation and open the focused Parallel Operations board |
 | Parallel peek | `:peek` | inspect active parallel agent conversations |
 
@@ -76,6 +77,13 @@ The source registry is `src/adapter/inbound/tui/app/inline_shell_commands.rs`.
 inventing unavailable providers, then exposes only the selected model's reasoning choices and
 marks its recommended level. The OpenAI catalog begins with GPT-5.6 Sol, Terra, and Luna; its
 GPT-5.6 rows offer `max` and omit `minimal`.
+
+The initial interactive defaults are GPT-5.6 Sol with `medium` effort. `:model` and `:think`
+change the current selection immediately and persist the next-new-thread default in the global
+configuration; an active thread also retains its selected model and effort independently. Reopening
+an older or external thread without Akra's saved options deliberately leaves both fields unset for
+the app-server rather than applying a newer global default. See the
+[Configuration Reference](configuration.md) for the layered file contract and CLI.
 
 `:turns` controls single-session auto-follow. Parallel automation is a separate explicit opt-in.
 `:stop` terminates active app-server sessions, closes the active parallel epoch, and disarms both

@@ -1,13 +1,13 @@
 use super::{
     ApprovalDecisionCorrelation, ApprovalReviewPersistenceCorrelation, ConversationLoadCorrelation,
-    DirectionsMaintenanceLoadCorrelation, GithubReviewPollCorrelation,
-    GithubReviewPollingSetupCorrelation, GithubReviewPollingSetupRequest,
-    ParallelPeekLoadCorrelation, PlanningEditorMutationRequest, PlanningRuntimeRefreshCorrelation,
-    PlanningWorkspaceOperationCorrelation, PostTurnEvaluationCorrelation,
-    QueueAuthorityLoadCorrelation, QueueMutationCorrelation, ReviewCenterLoadCorrelation,
-    SessionCatalogLoadCorrelation, SessionRenameCorrelation, StartupCheckCorrelation,
-    StopRequestAttempt, StopRequestCorrelation, TurnSteerCorrelation, TurnSubmissionCorrelation,
-    TurnSubmissionRequest,
+    ConversationPreferencePersistenceCorrelation, DirectionsMaintenanceLoadCorrelation,
+    GithubReviewPollCorrelation, GithubReviewPollingSetupCorrelation,
+    GithubReviewPollingSetupRequest, ParallelPeekLoadCorrelation, PlanningEditorMutationRequest,
+    PlanningRuntimeRefreshCorrelation, PlanningWorkspaceOperationCorrelation,
+    PostTurnEvaluationCorrelation, QueueAuthorityLoadCorrelation, QueueMutationCorrelation,
+    ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation, SessionRenameCorrelation,
+    StartupCheckCorrelation, StopRequestAttempt, StopRequestCorrelation, TurnSteerCorrelation,
+    TurnSubmissionCorrelation, TurnSubmissionRequest,
 };
 use crate::domain::conversation::ConversationTurnSteerRequest;
 use crate::domain::github_review::GithubPullRequestPollState;
@@ -89,6 +89,9 @@ pub enum CoreEffect {
     },
     PersistApprovalReview {
         correlation: ApprovalReviewPersistenceCorrelation,
+    },
+    PersistConversationPreferences {
+        correlation: ConversationPreferencePersistenceCorrelation,
     },
     SetupGithubReviewPolling {
         correlation: GithubReviewPollingSetupCorrelation,

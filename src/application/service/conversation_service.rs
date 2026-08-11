@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 // `InteractiveTurnRuntimePort`는 application 계층이 outbound runtime에 기대하는 최소 계약이다.
 // 실제 구현은 Codex app-server adapter이지만, TUI와 service는 trait object만 보므로 테스트 fake나 다른 runtime으로
 // 교체해도 호출 코드는 바뀌지 않는다.
+use crate::application::port::outbound::conversation_thread_turn_options_port::ConversationThreadTurnOptionsPort;
 use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
 use crate::application::port::outbound::review_center_repository_port::{
     ReviewCenterHistoryEntry, ReviewCenterInboxItem, ReviewCenterThreadProjection,
@@ -29,6 +30,7 @@ use crate::domain::turn_terminal::ConversationTurnTerminalReceipt;
 pub struct LoadedConversationThreadSnapshot {
     pub conversation: ConversationSnapshot,
     pub thread_review: Vec<ReviewCenterThreadProjection>,
+    pub turn_options: ConversationTurnOptions,
 }
 
 #[derive(Clone)]
@@ -44,6 +46,7 @@ pub struct ConversationService {
     // trait object를 `Arc`에 담아 소유한다. `dyn InteractiveTurnRuntimePort`는 런타임의 실제 타입을
     // 숨기고, `Arc`는 service clone이 많아져도 같은 runtime 제어면을 공유하게 한다.
     interactive_turn_runtime_port: Arc<dyn InteractiveTurnRuntimePort>,
+    thread_turn_options_port: Option<Arc<dyn ConversationThreadTurnOptionsPort>>,
     review_center_read_service: Option<ReviewCenterReadService>,
     review_center_write_service: Option<ReviewCenterWriteService>,
 }
@@ -54,9 +57,18 @@ impl ConversationService {
     pub fn new(interactive_turn_runtime_port: Arc<dyn InteractiveTurnRuntimePort>) -> Self {
         Self {
             interactive_turn_runtime_port,
+            thread_turn_options_port: None,
             review_center_read_service: None,
             review_center_write_service: None,
         }
+    }
+
+    pub fn with_thread_turn_options_port(
+        mut self,
+        thread_turn_options_port: Arc<dyn ConversationThreadTurnOptionsPort>,
+    ) -> Self {
+        self.thread_turn_options_port = Some(thread_turn_options_port);
+        self
     }
 
     pub fn with_review_center_read_service(
@@ -83,15 +95,15 @@ impl ConversationService {
         fallback_workspace_directory: &str,
     ) -> Result<LoadedConversationThreadSnapshot> {
         let mut conversation = self.load_snapshot(thread_id)?;
+        let workspace_directory = if conversation.cwd.trim().is_empty() {
+            fallback_workspace_directory.to_string()
+        } else {
+            conversation.cwd.clone()
+        };
         let thread_review = match self.review_center_read_service.as_ref() {
             Some(review_center_read_service) => {
-                let workspace_dir = if conversation.cwd.trim().is_empty() {
-                    fallback_workspace_directory
-                } else {
-                    conversation.cwd.as_str()
-                };
                 match review_center_read_service
-                    .load_thread_reviews_for_workspace(workspace_dir, thread_id)
+                    .load_thread_reviews_for_workspace(&workspace_directory, thread_id)
                 {
                     Ok(thread_review) => thread_review,
                     Err(error) => {
@@ -104,10 +116,45 @@ impl ConversationService {
             }
             None => Vec::new(),
         };
+        let (turn_options, restore_notice) =
+            self.load_thread_turn_options(&workspace_directory, thread_id);
+        if let Some(restore_notice) = restore_notice {
+            conversation.runtime_notices.push(restore_notice);
+        }
         Ok(LoadedConversationThreadSnapshot {
             conversation,
             thread_review,
+            turn_options,
         })
+    }
+
+    fn load_thread_turn_options(
+        &self,
+        workspace_directory: &str,
+        thread_id: &str,
+    ) -> (ConversationTurnOptions, Option<String>) {
+        let Some(port) = self.thread_turn_options_port.as_ref() else {
+            return (ConversationTurnOptions::app_server_default(), None);
+        };
+        if !port.is_durable() {
+            return (ConversationTurnOptions::app_server_default(), None);
+        }
+        match port.load_turn_options(workspace_directory, thread_id) {
+            Ok(Some(options)) => (
+                options,
+                Some("restored saved thread model and reasoning selection".to_string()),
+            ),
+            Ok(None) => (
+                ConversationTurnOptions::app_server_default(),
+                Some("thread has no saved turn options; using app-server defaults".to_string()),
+            ),
+            Err(error) => (
+                ConversationTurnOptions::app_server_default(),
+                Some(format!(
+                    "thread turn options could not be restored ({error}); using app-server defaults"
+                )),
+            ),
+        }
     }
 
     pub fn load_review_center_thread_reviews(
@@ -255,12 +302,13 @@ impl ConversationService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::port::outbound::conversation_thread_turn_options_port::ConversationThreadTurnOptionsPort;
     use crate::application::port::outbound::review_center_repository_port::{
         ReviewCenterHistoryEntry, ReviewCenterInboxItem, ReviewCenterRepositoryPort,
         ReviewCenterThreadProjection,
     };
     use crate::domain::conversation::{
-        ConversationApprovalReview, ConversationApprovalReviewStatus,
+        ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationReasoningEffort,
         ConversationRuntimeControlTruth, ConversationTurnOptions, ConversationTurnSteerReceipt,
         ConversationTurnSteerRequest,
     };
@@ -409,6 +457,87 @@ mod tests {
                 "/tmp/test-workspace",
             )
         }
+    }
+
+    struct FakeThreadTurnOptionsPort {
+        loaded: std::result::Result<Option<ConversationTurnOptions>, String>,
+    }
+
+    impl ConversationThreadTurnOptionsPort for FakeThreadTurnOptionsPort {
+        fn load_turn_options(
+            &self,
+            _workspace_dir: &str,
+            _thread_id: &str,
+        ) -> Result<Option<ConversationTurnOptions>> {
+            self.loaded.clone().map_err(anyhow::Error::msg)
+        }
+
+        fn store_turn_options(
+            &self,
+            _workspace_dir: &str,
+            _thread_id: &str,
+            _options: &ConversationTurnOptions,
+        ) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    fn loaded_snapshot_runtime_port() -> Arc<FakeInteractiveTurnRuntimePort> {
+        Arc::new(FakeInteractiveTurnRuntimePort {
+            snapshot: ConversationSnapshot {
+                thread_id: "thread-1".to_string(),
+                title: "Loaded thread".to_string(),
+                cwd: "/tmp/loaded-workspace".to_string(),
+                messages: Vec::new(),
+                warnings: Vec::new(),
+                runtime_notices: Vec::new(),
+                item_lifecycle: Default::default(),
+            },
+            steer_requests: Mutex::new(Vec::new()),
+        })
+    }
+
+    #[test]
+    fn resumed_thread_snapshot_restores_saved_options_and_keeps_missing_rows_on_app_server_defaults()
+     {
+        let saved_options = ConversationTurnOptions {
+            model: Some("gpt-5.6-terra".to_string()),
+            reasoning_effort: Some(ConversationReasoningEffort::Max),
+        };
+        let saved_service = ConversationService::new(loaded_snapshot_runtime_port())
+            .with_thread_turn_options_port(Arc::new(FakeThreadTurnOptionsPort {
+                loaded: Ok(Some(saved_options.clone())),
+            }));
+        let saved_snapshot = saved_service
+            .load_thread_snapshot("thread-1", "/tmp/fallback")
+            .expect("saved thread snapshot should load");
+        assert_eq!(saved_snapshot.turn_options, saved_options);
+        assert!(
+            saved_snapshot
+                .conversation
+                .runtime_notices
+                .iter()
+                .any(|notice| notice.contains("restored saved thread model"))
+        );
+
+        let external_service = ConversationService::new(loaded_snapshot_runtime_port())
+            .with_thread_turn_options_port(Arc::new(FakeThreadTurnOptionsPort {
+                loaded: Ok(None),
+            }));
+        let external_snapshot = external_service
+            .load_thread_snapshot("thread-1", "/tmp/fallback")
+            .expect("external thread snapshot should load");
+        assert_eq!(
+            external_snapshot.turn_options,
+            ConversationTurnOptions::app_server_default()
+        );
+        assert!(
+            external_snapshot
+                .conversation
+                .runtime_notices
+                .iter()
+                .any(|notice| notice.contains("no saved turn options"))
+        );
     }
 
     #[test]

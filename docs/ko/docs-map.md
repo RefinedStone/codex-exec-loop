@@ -12,6 +12,7 @@
 | 필요한 정보 | 영문 원본 | 한국어 |
 | --- | --- | --- |
 | 제품 화면, 명령, planning, parallel 흐름, 제한 | [current-product.md](../reference/current-product.md) | [reference/current-product.md](reference/current-product.md) |
+| 전역·프로젝트·환경변수·명령행 설정 | [configuration.md](../reference/configuration.md) | [reference/configuration.md](reference/configuration.md) |
 | 계층·상태 권한·보안 경계 | [architecture.md](../reference/architecture.md) | [reference/architecture.md](reference/architecture.md) |
 | 저장소 지도, 코딩 규칙, 테스트, worktree, GitHub 전달 | [development.md](../reference/development.md) | [reference/development.md](reference/development.md) |
 | Admin 게임 프런트엔드 runtime·renderer | [admin-game-frontend.md](../reference/admin-game-frontend.md) | [reference/admin-game-frontend.md](reference/admin-game-frontend.md) |

@@ -21,7 +21,7 @@ if ! command -v npm >/dev/null 2>&1; then
   exit 1
 fi
 
-for command_name in chmod mkdir mktemp rm; do
+for command_name in chmod mkdir mktemp rm tr; do
   if ! command -v "${command_name}" >/dev/null 2>&1; then
     echo "validate_npm_release_auth: ${command_name} is required" >&2
     exit 1
@@ -59,7 +59,8 @@ EOF
 chmod 0600 "${runtime_root}/package.json"
 
 while IFS= read -r variable_name; do
-  if [[ "${variable_name^^}" == NPM_CONFIG_* ]]; then
+  normalized_variable_name="$(printf '%s' "${variable_name}" | LC_ALL=C tr '[:lower:]' '[:upper:]')"
+  if [[ "${normalized_variable_name}" == NPM_CONFIG_* ]]; then
     unset "${variable_name}"
   fi
 done < <(compgen -e)

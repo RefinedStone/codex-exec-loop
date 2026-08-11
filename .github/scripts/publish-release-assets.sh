@@ -106,7 +106,10 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
-mapfile -d '' -t files < <(find "${asset_dir}" -maxdepth 1 -type f -print0 | sort -z)
+files=()
+while IFS= read -r -d '' file; do
+  files+=("${file}")
+done < <(find "${asset_dir}" -maxdepth 1 -type f -print0)
 if ((${#files[@]} == 0)); then
   echo "publish-release-assets: no release assets found in ${asset_dir}" >&2
   exit 1
@@ -201,9 +204,9 @@ verify_final_release_asset_bytes() {
     return 1
   fi
   downloaded_names="${verification_dir}/../final-downloaded-asset-names"
-  find "${verification_dir}" -mindepth 1 -maxdepth 1 -printf '%f\n' \
+  find "${verification_dir}" -mindepth 1 -maxdepth 1 -type f -exec basename {} \; \
     | LC_ALL=C sort > "${downloaded_names}"
-  if ! cmp -s -- "${expected_asset_names}" "${downloaded_names}"; then
+  if ! cmp -s "${expected_asset_names}" "${downloaded_names}"; then
     echo "publish-release-assets: final downloaded asset set does not match the expected release" >&2
     return 1
   fi
@@ -215,7 +218,7 @@ verify_final_release_asset_bytes() {
       echo "publish-release-assets: final downloaded asset is missing or unsafe: ${asset_name}" >&2
       return 1
     fi
-    if ! cmp -s -- "${file}" "${downloaded}"; then
+    if ! cmp -s "${file}" "${downloaded}"; then
       echo "publish-release-assets: final release asset differs from local build: ${asset_name}" >&2
       echo "Release assets changed during publication; publish a new version tag." >&2
       return 1
@@ -251,7 +254,7 @@ missing_files=()
 index=0
 for file in "${files[@]}"; do
   asset_name="$(basename "${file}")"
-  if ! grep -Fxq -- "${asset_name}" "${asset_list}"; then
+  if ! grep -Fxq "${asset_name}" "${asset_list}"; then
     missing_files+=("${file}")
     continue
   fi
@@ -271,7 +274,7 @@ for file in "${files[@]}"; do
     echo "publish-release-assets: downloaded asset is missing: ${asset_name}" >&2
     exit 1
   fi
-  if ! cmp -s -- "${file}" "${downloaded}"; then
+  if ! cmp -s "${file}" "${downloaded}"; then
     echo "publish-release-assets: existing asset differs from local build: ${asset_name}" >&2
     echo "Refusing to overwrite immutable release output; publish a new version tag." >&2
     exit 1

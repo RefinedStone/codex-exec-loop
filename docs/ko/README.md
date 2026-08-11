@@ -21,7 +21,8 @@ Akra는 시작 진단, 세션 재개, 프롬프트 스트리밍, 승인된 plann
 | Admin/Telegram | 같은 application service 위에서 loopback Admin UI/API와 allowlist 기반 Telegram 제어를 제공합니다. |
 | 배포 | 네이티브 archive, npm 플랫폼 패키지, 검증 캡처 도구, tag 기반 release workflow를 제공합니다. |
 
-정확한 운영 계약은 [현재 제품 계약](reference/current-product.md), 구조와 상태 소유권은
+정확한 운영 계약은 [현재 제품 계약](reference/current-product.md), 전역·프로젝트 설정은
+[설정 참조](reference/configuration.md), 구조와 상태 소유권은
 [런타임 아키텍처](reference/architecture.md)를 참고하세요.
 
 ## 설치
@@ -84,6 +85,7 @@ akra queue [workspace_dir]
 akra reset <queue|directions|all> [workspace_dir]
 akra planning-tool <contract|run> [workspace_dir]
 akra parallel-tick [workspace_dir]
+akra config <list|get|set|unset|path|doctor> [options]
 akra admin [--port <port>]
 akra telegram [options]
 ```
@@ -101,6 +103,9 @@ capability 기반 login/CSRF 경계를 사용합니다. Telegram은 bot token과
   들어갑니다. task 권한 DB는 아닙니다.
 - `AKRA_APP_SERVER_PROMPT_LOG=1`은 제한된 prompt/response 진단을 활성화합니다. Trace JSONL은
   별도 opt-in이며 body를 기록하지 않습니다.
+- 전역 설정은 `${AKRA_HOME:-~/.akra}/config.toml`, Git worktree 설정은
+  `.akra/config.toml`입니다. 우선순위, 허용 키, 안전한 변경 방법은 [설정 참조](reference/configuration.md)를
+  따릅니다.
 - GitHub 쓰기는 설정된 login과 API credential, 대상 저장소가 일치해야 합니다.
   `bash scripts/gh-akra.sh auth write-status`로 검증합니다.
 
@@ -129,6 +134,7 @@ bash scripts/check_native_pr.sh
 
 - [문서 지도](docs-map.md)
 - [현재 제품 및 운영 계약](reference/current-product.md)
+- [설정 참조](reference/configuration.md)
 - [런타임 아키텍처](reference/architecture.md)
 - [개발 및 전달 가이드](reference/development.md)
 - [TUI 시각 계약](reference/tui-contract.md)

@@ -33,6 +33,7 @@ use crate::core::native_client_port::{
 };
 #[cfg(test)]
 use crate::domain::conversation::ConversationSnapshot;
+use crate::domain::conversation::{ConversationReasoningEffort, ConversationTurnOptions};
 use crate::domain::operator_alert::OperatorAlert;
 
 #[cfg(test)]
@@ -61,6 +62,21 @@ use super::{
 // budget so the event loop can observe backlog and yield without a same-thread
 // producer deadlock.
 pub(super) const TUI_BACKGROUND_CHANNEL_CAPACITY: usize = 256;
+
+fn configured_conversation_turn_options() -> ConversationTurnOptions {
+    let Some(config) = crate::configuration::current_process_config() else {
+        return ConversationTurnOptions::default();
+    };
+    ConversationTurnOptions {
+        model: config.config.conversation.model.clone(),
+        reasoning_effort: config
+            .config
+            .conversation
+            .reasoning_effort
+            .as_deref()
+            .and_then(ConversationReasoningEffort::parse),
+    }
+}
 
 /* NativeTuiApp is assembled as reducer-owned state plus composition-owned runtime
  * facade. Runtime files keep pure reducers away from threads and raw services:
@@ -1375,6 +1391,67 @@ mod tests {
         ))
     }
 
+    fn test_core_conversation_snapshot_with_turn_options(
+        thread_id: &str,
+        turn_options: ConversationTurnOptions,
+    ) -> CoreConversationSnapshot {
+        let CoreConversationSnapshot::Ready(mut ready) = test_core_conversation_snapshot(thread_id)
+        else {
+            unreachable!("test helper always constructs a ready snapshot");
+        };
+        ready.turn_options = turn_options;
+        CoreConversationSnapshot::Ready(ready)
+    }
+
+    #[test]
+    fn loading_a_thread_projects_core_restored_turn_options_and_keeps_missing_rows_on_app_server_defaults()
+     {
+        let saved_options = ConversationTurnOptions {
+            model: Some("gpt-5.6-terra".to_string()),
+            reasoning_effort: Some(ConversationReasoningEffort::Max),
+        };
+        let mut saved_app = test_helpers::test_native_tui_app();
+        saved_app.apply_core_conversation_snapshot(
+            test_core_conversation_snapshot_with_turn_options(
+                "saved-thread",
+                saved_options.clone(),
+            ),
+        );
+        assert_eq!(saved_app.conversation.turn_options, saved_options);
+
+        let mut external_app = test_helpers::test_native_tui_app();
+        let next_new_thread_options = ConversationTurnOptions {
+            model: Some("gpt-5.6-terra".to_string()),
+            reasoning_effort: Some(ConversationReasoningEffort::Max),
+        };
+        external_app.conversation.next_new_thread_turn_options = next_new_thread_options.clone();
+        external_app.conversation.turn_options = ConversationTurnOptions {
+            model: Some("gpt-5.6-sol".to_string()),
+            reasoning_effort: Some(ConversationReasoningEffort::Medium),
+        };
+        external_app.apply_core_conversation_snapshot(
+            test_core_conversation_snapshot_with_turn_options(
+                "external-thread",
+                ConversationTurnOptions::app_server_default(),
+            ),
+        );
+        assert_eq!(
+            external_app.conversation.turn_options,
+            ConversationTurnOptions::app_server_default()
+        );
+        assert_eq!(
+            external_app.conversation.next_new_thread_turn_options,
+            next_new_thread_options
+        );
+        external_app.dispatch_conversation_lifecycle(ConversationLifecycleEvent::NewDraftOpened {
+            workspace_directory: "/tmp/root".to_string(),
+        });
+        assert_eq!(
+            external_app.conversation.turn_options,
+            next_new_thread_options
+        );
+    }
+
     fn test_session_summary(thread_id: &str) -> SessionSummary {
         SessionSummary {
             id: thread_id.to_string(),
@@ -1581,6 +1658,7 @@ impl NativeTuiApp {
             workspace_directory.clone(),
             turn_control_truth,
         );
+        let initial_turn_options = configured_conversation_turn_options();
         let mut app = Self {
             shell: super::NativeTuiShellState {
                 chrome: ShellChromeState::default(),
@@ -1614,7 +1692,8 @@ impl NativeTuiApp {
                 pending_turn_steer: None,
                 transcript_document_revision: 0,
                 transcript_document_thread_id: None,
-                turn_options: Default::default(),
+                next_new_thread_turn_options: initial_turn_options.clone(),
+                turn_options: initial_turn_options,
                 conversation_view_mode: super::ConversationViewMode::default(),
                 auto_follow_overlay_ui_state: AutoFollowOverlayUiState::default(),
             },
@@ -2062,6 +2141,12 @@ impl NativeTuiApp {
                     );
                 }
             }
+            AppEvent::ConversationPreferencesPersisted {
+                correlation,
+                result,
+            } => {
+                self.apply_conversation_preference_persistence_completion(correlation, result);
+            }
             AppEvent::ConversationRuntimeAuthorityChanged(snapshot) => {
                 if previous_runtime.post_turn.is_in_flight()
                     && !snapshot.post_turn.is_in_flight()
@@ -2180,6 +2265,12 @@ impl NativeTuiApp {
 
     pub(super) fn apply_core_conversation_snapshot(&mut self, snapshot: CoreConversationSnapshot) {
         let loaded_successfully = matches!(&snapshot, CoreConversationSnapshot::Ready(_));
+        let loaded_turn_options = match &snapshot {
+            CoreConversationSnapshot::Ready(ready) => Some(ready.turn_options.clone()),
+            CoreConversationSnapshot::Idle
+            | CoreConversationSnapshot::Loading
+            | CoreConversationSnapshot::Failed { .. } => None,
+        };
         let load_finished = matches!(
             &snapshot,
             CoreConversationSnapshot::Ready(_) | CoreConversationSnapshot::Failed { .. }
@@ -2202,6 +2293,9 @@ impl NativeTuiApp {
                 draft_workspace_directory,
             },
         );
+        if let Some(turn_options) = loaded_turn_options {
+            self.conversation.turn_options = turn_options;
+        }
         if !load_finished {
             return;
         }
@@ -2337,6 +2431,7 @@ impl NativeTuiApp {
             reduce_conversation_lifecycle(self.take_conversation_lifecycle_state(), event);
         self.apply_conversation_lifecycle_state(reduction.state);
         if opens_new_history {
+            self.conversation.turn_options = self.conversation.next_new_thread_turn_options.clone();
             self.advance_transcript_document_revision();
             self.conversation.transcript_document_thread_id = None;
         } else if let Some(thread_id) = loaded_history_thread_id {

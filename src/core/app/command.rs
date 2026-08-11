@@ -1,8 +1,8 @@
 use super::{
-    GithubReviewPollingSetupRequest, ManualPromptPreparationIntent, PlanningEditorMutationRequest,
-    PlanningEditorSessionIdentity, PlanningEditorStageTarget, PlanningWorkspaceResetIntent,
-    PostTurnEvaluationCorrelation, PostTurnRouteResolution, QueueMutationIntent,
-    SessionCatalogLoadIntent, TurnSubmissionRequest,
+    ConversationPreferencePersistenceRequest, GithubReviewPollingSetupRequest,
+    ManualPromptPreparationIntent, PlanningEditorMutationRequest, PlanningEditorSessionIdentity,
+    PlanningEditorStageTarget, PlanningWorkspaceResetIntent, PostTurnEvaluationCorrelation,
+    PostTurnRouteResolution, QueueMutationIntent, SessionCatalogLoadIntent, TurnSubmissionRequest,
 };
 use crate::domain::conversation::{
     ConversationApprovalDecision, ConversationApprovalRequestIdentity, ConversationTurnSteerRequest,
@@ -77,6 +77,7 @@ pub enum AppCommand {
         request_identity: ConversationApprovalRequestIdentity,
         decision: ConversationApprovalDecision,
     },
+    PersistConversationPreferences(Box<ConversationPreferencePersistenceRequest>),
     SetAutoFollowMaxTurns {
         value: usize,
     },

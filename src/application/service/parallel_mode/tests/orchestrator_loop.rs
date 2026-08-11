@@ -46,6 +46,12 @@ use std::time::Duration;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 
+// The completion tests exercise a real Git worktree delivery path.  It is
+// intentionally asynchronous and can legitimately spend more than five
+// seconds in host Git on a loaded development filesystem; keep the bound
+// finite while leaving enough room for that reviewed integration work.
+const WORKER_FINALIZATION_TIMEOUT: Duration = Duration::from_secs(20);
+
 fn with_akra_event_trace<T>(body: impl FnOnce() -> T) -> T {
     let subscriber = tracing_subscriber::registry()
         .with(EnvFilter::new(format!("{AKRA_EVENT_TARGET}=debug")))
@@ -1824,7 +1830,7 @@ fn dispatch_uses_task_identity_lease_when_agent_profiles_are_disabled() {
         .send(())
         .expect("holding worker should be releasable");
     let worker_event = match event_receiver
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(WORKER_FINALIZATION_TIMEOUT)
         .expect("released holding worker should report terminal event")
     {
         ParallelModeOrchestratorLoopEvent::WorkerEvent(event) => event,
@@ -2402,7 +2408,7 @@ fn run_completed_worker_with_finalize_fault(
 
     assert_eq!(result.outcome.launched_task_ids.len(), 1);
     let worker_event = match event_receiver
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(WORKER_FINALIZATION_TIMEOUT)
         .expect("worker finalization event should arrive")
     {
         ParallelModeOrchestratorLoopEvent::WorkerEvent(event) => event,
@@ -2559,7 +2565,7 @@ fn missing_terminal_event_preserves_unconfirmed_producer_receipt_reason() {
 
     assert_eq!(result.outcome.launched_task_ids.len(), 1);
     let worker_event = match event_receiver
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(WORKER_FINALIZATION_TIMEOUT)
         .expect("worker failure event should arrive")
     {
         ParallelModeOrchestratorLoopEvent::WorkerEvent(event) => event,
@@ -2626,7 +2632,7 @@ fn completed_worker_stream_records_official_completion_and_sends_worker_event() 
 
     assert_eq!(result.outcome.launched_task_ids.len(), 1);
     let worker_event = match event_receiver
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(WORKER_FINALIZATION_TIMEOUT)
         .expect("worker completion event should arrive")
     {
         ParallelModeOrchestratorLoopEvent::WorkerEvent(event) => event,
@@ -2694,7 +2700,7 @@ fn completed_worker_stream_reports_failed_official_completion_refresh() {
 
     assert_eq!(result.outcome.launched_task_ids.len(), 1);
     let worker_event = match event_receiver
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(WORKER_FINALIZATION_TIMEOUT)
         .expect("worker failure event should arrive")
     {
         ParallelModeOrchestratorLoopEvent::WorkerEvent(event) => event,
@@ -2763,7 +2769,7 @@ fn completed_worker_stream_reports_repair_request_as_stream_failure() {
 
     assert_eq!(result.outcome.launched_task_ids.len(), 1);
     let worker_event = match event_receiver
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(WORKER_FINALIZATION_TIMEOUT)
         .expect("worker repair event should arrive")
     {
         ParallelModeOrchestratorLoopEvent::WorkerEvent(event) => event,

@@ -15,10 +15,11 @@ use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 
+use crate::application::port::outbound::conversation_thread_turn_options_port::ConversationThreadTurnOptionsPort;
 use crate::application::port::outbound::parallel_mode_runtime_event_log_port::{
     ParallelModeRuntimeEventLogPort, ParallelModeRuntimeEventLogRequest,
 };
@@ -79,13 +80,14 @@ use self::active_documents::{
 use self::draft_files::clear_staged_drafts;
 use self::store::*;
 use self::task_authority_rows::{clear_task_authority_tables, replace_task_authority_tables};
+use crate::domain::conversation::{ConversationReasoningEffort, ConversationTurnOptions};
 use crate::domain::planning::{
     PlanningAuthorityLocation, PlanningAuthorityShadowStoreInspection,
     PlanningAuthorityShadowStoreSyncState, TaskAuthorityDocument,
 };
 
 // authority DB schema가 바뀔 때 올리는 adapter 내부 schema marker이다.
-const AUTHORITY_STORE_SCHEMA_VERSION: i64 = 16;
+const AUTHORITY_STORE_SCHEMA_VERSION: i64 = 17;
 const MINIMUM_MIGRATABLE_AUTHORITY_STORE_SCHEMA_VERSION: i64 = 7;
 // metadata에 저장되는 store mode 값으로, 다른 DB 파일과 planning authority store를 구분한다.
 const AUTHORITY_STORE_MODE: &str = "authority-store";
@@ -146,6 +148,83 @@ impl SqlitePlanningAuthorityAdapter {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let connection = open_authority_connection(&location)?;
         load_review_center_thread_reviews_rows(&connection, &location.workspace_root, thread_id)
+    }
+
+    /// Per-thread interactive model/effort choices are intentionally separate
+    /// from app-server snapshots.  A missing row means an older/external thread
+    /// must keep the app-server's existing settings; a present `(NULL, NULL)`
+    /// row means the operator explicitly selected app-server defaults.
+    pub(crate) fn load_conversation_thread_turn_options(
+        workspace_dir: &str,
+        thread_id: &str,
+    ) -> Result<Option<ConversationTurnOptions>> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let connection = open_authority_connection(&location)?;
+        let row = connection
+            .query_row(
+                "SELECT model, reasoning_effort
+                 FROM conversation_thread_turn_options WHERE thread_id = ?1",
+                params![thread_id],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                    ))
+                },
+            )
+            .optional()
+            .context("failed to load conversation thread turn options")?;
+        row.map(|(model, reasoning_effort)| {
+            let reasoning_effort = match reasoning_effort {
+                Some(value) => {
+                    Some(ConversationReasoningEffort::parse(&value).ok_or_else(|| {
+                        anyhow!("stored conversation reasoning effort is invalid")
+                    })?)
+                }
+                None => None,
+            };
+            Ok(ConversationTurnOptions {
+                model,
+                reasoning_effort,
+            })
+        })
+        .transpose()
+    }
+
+    pub(crate) fn upsert_conversation_thread_turn_options(
+        workspace_dir: &str,
+        thread_id: &str,
+        options: &ConversationTurnOptions,
+    ) -> Result<()> {
+        validate_conversation_thread_turn_options(thread_id, options)?;
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let transaction = connection
+            .transaction()
+            .context("failed to open conversation thread turn-options transaction")?;
+        transaction
+            .execute(
+                "INSERT INTO conversation_thread_turn_options
+                 (thread_id, model, reasoning_effort, updated_at)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(thread_id) DO UPDATE SET
+                   model = excluded.model,
+                   reasoning_effort = excluded.reasoning_effort,
+                   updated_at = excluded.updated_at",
+                params![
+                    thread_id,
+                    options.model.as_deref(),
+                    options
+                        .reasoning_effort
+                        .map(ConversationReasoningEffort::label),
+                    Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
+                ],
+            )
+            .context("failed to store conversation thread turn options")?;
+        transaction
+            .commit()
+            .context("failed to commit conversation thread turn options")?;
+        Ok(())
     }
 
     pub(crate) fn load_review_center_pending_inbox_snapshot(
@@ -1042,6 +1121,41 @@ impl SqlitePlanningAuthorityAdapter {
             parity_issue_examples,
         })
     }
+}
+
+impl ConversationThreadTurnOptionsPort for SqlitePlanningAuthorityAdapter {
+    fn load_turn_options(
+        &self,
+        workspace_dir: &str,
+        thread_id: &str,
+    ) -> Result<Option<ConversationTurnOptions>> {
+        Self::load_conversation_thread_turn_options(workspace_dir, thread_id)
+    }
+
+    fn store_turn_options(
+        &self,
+        workspace_dir: &str,
+        thread_id: &str,
+        options: &ConversationTurnOptions,
+    ) -> Result<()> {
+        Self::upsert_conversation_thread_turn_options(workspace_dir, thread_id, options)
+    }
+}
+
+fn validate_conversation_thread_turn_options(
+    thread_id: &str,
+    options: &ConversationTurnOptions,
+) -> Result<()> {
+    if thread_id.is_empty() || thread_id.len() > 4 * 1024 || thread_id.chars().any(char::is_control)
+    {
+        bail!("conversation thread id is invalid for turn-option persistence")
+    }
+    if let Some(model) = &options.model
+        && (model.is_empty() || model.chars().count() > 256 || model.chars().any(char::is_control))
+    {
+        bail!("conversation model is invalid for turn-option persistence")
+    }
+    Ok(())
 }
 
 fn validate_authority_document_mutation_path(relative_path: &str) -> Result<()> {
