@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::Result;
 
 use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
+use crate::application::port::outbound::conversation_thread_turn_options_port::ConversationThreadTurnOptionsPort;
 use crate::application::port::outbound::review_center_repository_port::{
     ReviewCenterHistoryEntry, ReviewCenterInboxItem, ReviewCenterThreadProjection,
 };
@@ -40,9 +41,11 @@ use crate::composition::core_effect_worker::{
 };
 use crate::composition::core_turn_submission;
 use crate::composition::production;
+use crate::configuration::ConfigurationService;
 use crate::core::app::github_review_polling_target_is_valid;
 use crate::core::app::{
     ApprovalDecisionCorrelation, ApprovalReviewPersistenceCorrelation, ConversationLoadCorrelation,
+    ConversationPreferencePersistenceCorrelation, ConversationPreferencePersistenceResult,
     ConversationReadySnapshot, ConversationThreadReviewSnapshot,
     DirectionsMaintenanceDirectionSnapshot, DirectionsMaintenanceLoadCorrelation,
     DirectionsMaintenanceSummarySnapshot,
@@ -84,6 +87,7 @@ pub struct CoreEffectRunner {
     github_review_polling_services: Arc<GithubReviewPollingServiceRegistry>,
     manual_prompt_workers: Arc<EffectExecutionRegistry>,
     stop_request_workers: Arc<EffectExecutionRegistry>,
+    thread_turn_options_port: Arc<dyn ConversationThreadTurnOptionsPort>,
     input_sender: CoreInputSender,
 }
 
@@ -213,6 +217,7 @@ impl EffectExecutionRegistry {
 }
 
 impl CoreEffectRunner {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         startup_service: StartupService,
         session_service: SessionService,
@@ -220,6 +225,7 @@ impl CoreEffectRunner {
         planning_feature: PlanningServices,
         parallel_mode_turn_service: ParallelModeTurnService,
         post_turn_evaluation_service: PostTurnEvaluationService,
+        thread_turn_options_port: Arc<dyn ConversationThreadTurnOptionsPort>,
         input_sender: CoreInputSender,
     ) -> Self {
         let planning_workspace = planning_feature.workspace.clone();
@@ -241,6 +247,7 @@ impl CoreEffectRunner {
             github_review_polling_services: Arc::new(GithubReviewPollingServiceRegistry::default()),
             manual_prompt_workers: Arc::new(EffectExecutionRegistry::default()),
             stop_request_workers: Arc::new(EffectExecutionRegistry::default()),
+            thread_turn_options_port,
             input_sender,
         }
     }
@@ -391,6 +398,10 @@ impl CoreEffectRunner {
             }
             CoreEffect::PersistApprovalReview { correlation } => {
                 self.spawn_approval_review_persistence(correlation);
+                None
+            }
+            CoreEffect::PersistConversationPreferences { correlation } => {
+                self.spawn_conversation_preference_persistence(correlation);
                 None
             }
             CoreEffect::SubmitTurn {
@@ -920,6 +931,64 @@ impl CoreEffectRunner {
         });
     }
 
+    fn spawn_conversation_preference_persistence(
+        &self,
+        correlation: ConversationPreferencePersistenceCorrelation,
+    ) {
+        let thread_turn_options_port = self.thread_turn_options_port.clone();
+        let input_sender = self.input_sender.clone();
+        let panic_completion = conversation_preference_persistence_completion(
+            correlation.clone(),
+            ConversationPreferencePersistenceResult {
+                global: Err("conversation preference persistence worker panicked".to_string()),
+                current_thread: correlation.request.active_thread.as_ref().map(|_| {
+                    Err("conversation preference persistence worker panicked".to_string())
+                }),
+            },
+        );
+        spawn_effect_completion_worker(input_sender, panic_completion, move || {
+            let global = match correlation.request.global_workspace_directory.as_deref() {
+                Some(workspace_directory) => ConfigurationService::set_conversation_defaults(
+                    Path::new(workspace_directory),
+                    correlation.request.options.model.as_deref(),
+                    correlation
+                        .request
+                        .options
+                        .reasoning_effort
+                        .map(crate::domain::conversation::ConversationReasoningEffort::label),
+                )
+                .map(|path| path.display().to_string())
+                .map_err(|error| error.to_string()),
+                None => Err(
+                    "could not determine the current directory for global configuration"
+                        .to_string(),
+                ),
+            };
+            let current_thread = correlation
+                .request
+                .active_thread
+                .as_ref()
+                .and_then(|target| {
+                    thread_turn_options_port.is_durable().then(|| {
+                        thread_turn_options_port
+                            .store_turn_options(
+                                &target.workspace_directory,
+                                &target.thread_id,
+                                &correlation.request.options,
+                            )
+                            .map_err(|error| error.to_string())
+                    })
+                });
+            conversation_preference_persistence_completion(
+                correlation,
+                ConversationPreferencePersistenceResult {
+                    global,
+                    current_thread,
+                },
+            )
+        });
+    }
+
     fn spawn_turn_submission(
         &self,
         correlation: crate::core::app::TurnSubmissionCorrelation,
@@ -1442,6 +1511,16 @@ fn approval_review_persistence_completion(
     }
 }
 
+fn conversation_preference_persistence_completion(
+    correlation: ConversationPreferencePersistenceCorrelation,
+    result: ConversationPreferencePersistenceResult,
+) -> CoreEffectCompletion {
+    CoreEffectCompletion::ConversationPreferencesPersisted {
+        correlation,
+        result,
+    }
+}
+
 fn github_review_poll_completion(
     correlation: GithubReviewPollCorrelation,
     result: Result<crate::domain::github_review::GithubPullRequestPollResult>,
@@ -1704,13 +1783,14 @@ fn stop_request_attempt_completion(
 fn conversation_ready_snapshot(
     snapshot: LoadedConversationThreadSnapshot,
 ) -> ConversationReadySnapshot {
-    ConversationReadySnapshot::from_parts(
+    ConversationReadySnapshot::from_parts_with_turn_options(
         snapshot.conversation,
         snapshot
             .thread_review
             .into_iter()
             .map(review_center_thread_snapshot)
             .collect(),
+        snapshot.turn_options,
     )
 }
 
@@ -1728,6 +1808,7 @@ mod tests {
     use crate::application::port::outbound::app_server_prompt_log_port::{
         AppServerPromptLogMaintenanceMode, AppServerPromptLogMaintenancePort,
     };
+    use crate::application::port::outbound::conversation_thread_turn_options_port::NoopConversationThreadTurnOptionsPort;
     use crate::application::port::outbound::github_review_poller_port::GithubReviewPollerPort;
     use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
     use crate::application::port::outbound::planning_authority_port::NoopPlanningAuthorityPort;
@@ -2144,6 +2225,7 @@ mod tests {
             planning.clone(),
             parallel_turns.clone(),
             PostTurnEvaluationService::new(planning, parallel_turns),
+            Arc::new(NoopConversationThreadTurnOptionsPort),
             input_sender,
         )
     }
@@ -5408,6 +5490,8 @@ mod tests {
                 Ok(LoadedConversationThreadSnapshot {
                     conversation: conversation.clone(),
                     thread_review: vec![thread_review],
+                    turn_options:
+                        crate::domain::conversation::ConversationTurnOptions::app_server_default(),
                 }),
             ),
             CoreEffectCompletion::ConversationLoaded {
@@ -5457,6 +5541,8 @@ mod tests {
                 item_lifecycle: Default::default(),
             },
             thread_review: Vec::new(),
+            turn_options: crate::domain::conversation::ConversationTurnOptions::app_server_default(
+            ),
         };
 
         let CoreEffectCompletion::ConversationLoaded { result, .. } =

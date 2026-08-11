@@ -61,6 +61,9 @@ use crate::application::port::outbound::app_server_prompt_log_port::{
     AppServerPromptInteractionRecord, AppServerPromptLogPort, AppServerPromptOutputRecord,
     NoopAppServerPromptLogPort, bounded_prompt_log_string,
 };
+use crate::application::port::outbound::conversation_thread_turn_options_port::{
+    ConversationThreadTurnOptionsPort, NoopConversationThreadTurnOptionsPort,
+};
 use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
 use crate::application::port::outbound::parallel_agent_worker_port::{
     ParallelAgentWorkerPort, ParallelAgentWorkerStreamRequest,
@@ -614,6 +617,7 @@ pub struct CodexAppServerAdapter {
     turn_steer_broker: Arc<AppServerTurnSteerBroker>,
     planning_worker_skill_adapter: PlanningWorkerSkillAdapter,
     prompt_log_port: Arc<dyn AppServerPromptLogPort>,
+    thread_turn_options_port: Arc<dyn ConversationThreadTurnOptionsPort>,
 }
 
 impl CodexAppServerAdapter {
@@ -637,17 +641,32 @@ impl CodexAppServerAdapter {
         client_version: impl Into<String>,
         prompt_log_port: Arc<dyn AppServerPromptLogPort>,
     ) -> Self {
+        Self::from_environment_with_prompt_log_and_thread_turn_options(
+            client_name,
+            client_version,
+            prompt_log_port,
+            Arc::new(NoopConversationThreadTurnOptionsPort),
+        )
+    }
+
+    pub fn from_environment_with_prompt_log_and_thread_turn_options(
+        client_name: impl Into<String>,
+        client_version: impl Into<String>,
+        prompt_log_port: Arc<dyn AppServerPromptLogPort>,
+        thread_turn_options_port: Arc<dyn ConversationThreadTurnOptionsPort>,
+    ) -> Self {
         /*
          * Adapter construction snapshots env-driven timeout and execution policy once.
          * That keeps a single TUI process from changing approval/sandbox behavior in
          * the middle of shared runtime reuse or hidden worker launches.
          */
-        Self::with_configs_and_prompt_log(
+        Self::with_configs_and_prompt_log_and_thread_turn_options(
             client_name,
             client_version,
             AppServerConnectionConfig::from_environment(),
             AppServerExecutionPolicy::from_environment(),
             prompt_log_port,
+            thread_turn_options_port,
         )
     }
 
@@ -667,12 +686,31 @@ impl CodexAppServerAdapter {
         )
     }
 
+    #[cfg(test)]
     fn with_configs_and_prompt_log(
         client_name: impl Into<String>,
         client_version: impl Into<String>,
         connection_config: AppServerConnectionConfig,
         execution_policy: AppServerExecutionPolicy,
         prompt_log_port: Arc<dyn AppServerPromptLogPort>,
+    ) -> Self {
+        Self::with_configs_and_prompt_log_and_thread_turn_options(
+            client_name,
+            client_version,
+            connection_config,
+            execution_policy,
+            prompt_log_port,
+            Arc::new(NoopConversationThreadTurnOptionsPort),
+        )
+    }
+
+    fn with_configs_and_prompt_log_and_thread_turn_options(
+        client_name: impl Into<String>,
+        client_version: impl Into<String>,
+        connection_config: AppServerConnectionConfig,
+        execution_policy: AppServerExecutionPolicy,
+        prompt_log_port: Arc<dyn AppServerPromptLogPort>,
+        thread_turn_options_port: Arc<dyn ConversationThreadTurnOptionsPort>,
     ) -> Self {
         Self {
             client_name: client_name.into(),
@@ -685,6 +723,39 @@ impl CodexAppServerAdapter {
             turn_steer_broker: Arc::new(AppServerTurnSteerBroker::default()),
             planning_worker_skill_adapter: PlanningWorkerSkillAdapter::new(),
             prompt_log_port,
+            thread_turn_options_port,
+        }
+    }
+
+    fn persisted_turn_options_for_existing_thread(
+        &self,
+        workspace_directory: &str,
+        thread_id: &str,
+        caller_options: ConversationTurnOptions,
+    ) -> (ConversationTurnOptions, Option<String>) {
+        // Standalone adapter construction intentionally has no durable store.
+        // Retaining the caller's option in that narrow mode keeps existing unit
+        // fixtures focused on protocol behavior; production always injects the
+        // SQLite-backed port.
+        if !self.thread_turn_options_port.is_durable() {
+            return (caller_options, None);
+        }
+        match self
+            .thread_turn_options_port
+            .load_turn_options(workspace_directory, thread_id)
+        {
+            Ok(Some(options)) => (options, None),
+            // Pre-v17 or externally created threads have no Akra-owned row.
+            // Do not retroactively apply today's global choice: omitting both
+            // fields preserves the app-server thread's existing defaults.
+            Ok(None) => (ConversationTurnOptions::app_server_default(), None),
+            Err(error) => (
+                ConversationTurnOptions::app_server_default(),
+                Some(format!(
+                    "thread model/think preference could not be restored; using app-server defaults ({})",
+                    bounded_stream_text(error.to_string(), MAX_STREAM_METADATA_BYTES)
+                )),
+            ),
         }
     }
 
@@ -771,11 +842,26 @@ impl CodexAppServerAdapter {
                 ConversationStreamEvent::ThreadPrepared {
                     thread_id: thread_id.clone(),
                     title: thread_title(&thread_response.thread),
-                    cwd: applied_cwd,
+                    cwd: applied_cwd.clone(),
                     runtime_envelope: Box::new(runtime_envelope),
                 },
                 "thread/prepared",
             )?;
+            if let Err(error) =
+                self.thread_turn_options_port
+                    .store_turn_options(&applied_cwd, &thread_id, &options)
+            {
+                send_required_app_server_event(
+                    &event_sender,
+                    ConversationStreamEvent::StatusUpdated {
+                        text: format!(
+                            "thread model/think preference was not saved ({})",
+                            bounded_stream_text(error.to_string(), MAX_STREAM_METADATA_BYTES)
+                        ),
+                    },
+                    "thread/options-persist-warning",
+                )?;
+            }
 
             self.start_turn_and_wait_for_stream(
                 connection,
@@ -1630,14 +1716,19 @@ impl InteractiveTurnRuntimePort for CodexAppServerAdapter {
          * existing app-server session, not a freshly created thread.
          */
         let result = self.with_streaming_runtime(|connection| {
-            let model = options.model.as_deref();
-            let effort = options.reasoning_effort.map(ReasoningEffortValue::from);
             // Resume does not carry a caller-owned cwd, so read the persisted thread
             // record before applying the project-trust override.
             let thread = connection.read_thread(thread_id, false)?.thread;
             if thread.id != thread_id {
                 anyhow::bail!("thread/read response identity did not match requested thread");
             }
+            let (options, restore_warning) = self.persisted_turn_options_for_existing_thread(
+                &thread.cwd,
+                thread_id,
+                options.clone(),
+            );
+            let model = options.model.as_deref();
+            let effort = options.reasoning_effort.map(ReasoningEffortValue::from);
             let workspace = protected_thread_workspace(&thread.cwd)?;
             let requested_cwd = workspace.cwd.clone();
             let thread_request = runtime_configuration_request(
@@ -1683,6 +1774,13 @@ impl InteractiveTurnRuntimePort for CodexAppServerAdapter {
                 },
                 "thread/prepared",
             )?;
+            if let Some(warning) = restore_warning {
+                send_required_app_server_event(
+                    &event_sender,
+                    ConversationStreamEvent::StatusUpdated { text: warning },
+                    "thread/options-restore-warning",
+                )?;
+            }
             self.start_turn_and_wait_for_stream(
                 connection,
                 vec![TurnInputItem::text(prompt)],
@@ -2073,8 +2171,10 @@ mod tests {
     #[cfg(unix)]
     use crate::application::port::outbound::app_server_prompt_log_port::{
         AppServerPromptInteractionRecord, AppServerPromptInteractionSnapshot,
-        AppServerPromptLogPort,
+        AppServerPromptLogPort, NoopAppServerPromptLogPort,
     };
+    #[cfg(unix)]
+    use crate::application::port::outbound::conversation_thread_turn_options_port::ConversationThreadTurnOptionsPort;
     use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
     #[cfg(unix)]
     use crate::application::port::outbound::parallel_agent_worker_port::{
@@ -2112,6 +2212,92 @@ mod tests {
     use crate::domain::recent_sessions::{
         SessionCatalog, SessionCatalogRequest, SessionCatalogTier, SessionRenameRequest,
     };
+
+    #[cfg(unix)]
+    struct StubThreadTurnOptionsPort {
+        loaded: std::result::Result<Option<ConversationTurnOptions>, String>,
+    }
+
+    #[cfg(unix)]
+    impl ConversationThreadTurnOptionsPort for StubThreadTurnOptionsPort {
+        fn load_turn_options(
+            &self,
+            _workspace_dir: &str,
+            _thread_id: &str,
+        ) -> Result<Option<ConversationTurnOptions>> {
+            self.loaded.clone().map_err(anyhow::Error::msg)
+        }
+
+        fn store_turn_options(
+            &self,
+            _workspace_dir: &str,
+            _thread_id: &str,
+            _options: &ConversationTurnOptions,
+        ) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[cfg(unix)]
+    fn adapter_with_thread_turn_options(
+        port: Arc<dyn ConversationThreadTurnOptionsPort>,
+    ) -> CodexAppServerAdapter {
+        CodexAppServerAdapter::with_configs_and_prompt_log_and_thread_turn_options(
+            "test-client",
+            "test-version",
+            AppServerConnectionConfig::default(),
+            AppServerExecutionPolicy::default(),
+            Arc::new(NoopAppServerPromptLogPort),
+            port,
+        )
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persisted_turn_options_restore_saved_rows_and_keep_external_threads_on_app_server_defaults()
+    {
+        let caller = ConversationTurnOptions {
+            model: Some("gpt-5.6-sol".to_string()),
+            reasoning_effort: Some(ConversationReasoningEffort::Medium),
+        };
+        let stored = ConversationTurnOptions {
+            model: Some("gpt-5.6-terra".to_string()),
+            reasoning_effort: Some(ConversationReasoningEffort::Max),
+        };
+        let saved_adapter = adapter_with_thread_turn_options(Arc::new(StubThreadTurnOptionsPort {
+            loaded: Ok(Some(stored.clone())),
+        }));
+        assert_eq!(
+            saved_adapter.persisted_turn_options_for_existing_thread(
+                "/repo",
+                "saved",
+                caller.clone()
+            ),
+            (stored, None)
+        );
+
+        let external_adapter =
+            adapter_with_thread_turn_options(Arc::new(StubThreadTurnOptionsPort {
+                loaded: Ok(None),
+            }));
+        assert_eq!(
+            external_adapter
+                .persisted_turn_options_for_existing_thread("/repo", "external", caller),
+            (ConversationTurnOptions::app_server_default(), None)
+        );
+
+        let failed_adapter =
+            adapter_with_thread_turn_options(Arc::new(StubThreadTurnOptionsPort {
+                loaded: Err("authority unavailable".to_string()),
+            }));
+        let (options, warning) = failed_adapter.persisted_turn_options_for_existing_thread(
+            "/repo",
+            "failed",
+            ConversationTurnOptions::default(),
+        );
+        assert_eq!(options, ConversationTurnOptions::app_server_default());
+        assert!(warning.is_some_and(|warning| warning.contains("could not be restored")));
+    }
 
     #[cfg(unix)]
     #[test]
@@ -2324,14 +2510,14 @@ mod tests {
         let new_turn_request = started_runtime_request(&new_events);
         assert_eq!(
             new_turn_request.model.as_value().map(String::as_str),
-            Some("gpt-5.5")
+            Some("gpt-5.6-sol")
         );
         assert_eq!(
             new_turn_request
                 .reasoning_effort
                 .as_value()
                 .map(String::as_str),
-            Some("high")
+            Some("medium")
         );
         assert!(matches!(
             new_turn_request.sandbox,
@@ -2371,7 +2557,7 @@ mod tests {
                 .model
                 .as_value()
                 .map(String::as_str),
-            Some("gpt-5.5")
+            Some("gpt-5.6-sol")
         );
 
         let methods = fake_codex.logged_methods();
@@ -2392,10 +2578,10 @@ mod tests {
             .into_iter()
             .filter(|request| request["method"] == "turn/start")
             .collect::<Vec<_>>();
-        assert_eq!(turn_starts[0]["params"]["model"], "gpt-5.5");
-        assert_eq!(turn_starts[0]["params"]["effort"], "high");
-        assert_eq!(turn_starts[1]["params"]["model"], "gpt-5.5");
-        assert_eq!(turn_starts[1]["params"]["effort"], "high");
+        assert_eq!(turn_starts[0]["params"]["model"], "gpt-5.6-sol");
+        assert_eq!(turn_starts[0]["params"]["effort"], "medium");
+        assert_eq!(turn_starts[1]["params"]["model"], "gpt-5.6-sol");
+        assert_eq!(turn_starts[1]["params"]["effort"], "medium");
     }
 
     #[cfg(unix)]
@@ -2520,12 +2706,12 @@ mod tests {
             observations[0],
             ConversationRuntimeEnvelopeObservation::SettingsUpdated { settings, .. }
                 if settings.model
-                    == ConversationRuntimeObservedValue::Observed("gpt-5.5".to_string())
+                    == ConversationRuntimeObservedValue::Observed("gpt-5.6-sol".to_string())
         ));
         assert!(matches!(
             observations[1],
             ConversationRuntimeEnvelopeObservation::ModelRerouted { reroute, .. }
-                if reroute.from_model == "gpt-5.5"
+                if reroute.from_model == "gpt-5.6-sol"
                     && reroute.to_model == "gpt-rerouted"
                     && reroute.reason
                         == ConversationRuntimeModelRerouteReason::HighRiskCyberActivity

@@ -28,6 +28,15 @@ pub(super) struct GithubReviewPollingBootstrap {
 impl GithubReviewPollingBootstrap {
     pub(super) fn from_environment() -> Self {
         let pull_request_value = std::env::var(GITHUB_PULL_REQUEST_ENV_VAR).ok();
+        if let Some(config) = crate::configuration::current_process_config() {
+            if !config.config.github.auto_discover_pull_request && pull_request_value.is_none() {
+                return Self::disabled();
+            }
+            return Self::parse_env_values(
+                pull_request_value,
+                Some(config.config.github.review_poll_interval_secs.to_string()),
+            );
+        }
         let interval_seconds_value = std::env::var(GITHUB_POLL_INTERVAL_SECONDS_ENV_VAR).ok();
         Self::parse_env_values(pull_request_value, interval_seconds_value)
     }
@@ -90,7 +99,6 @@ impl GithubReviewPollingBootstrap {
         }
     }
 
-    #[cfg(test)]
     pub(super) fn disabled() -> Self {
         Self {
             state: GithubReviewPollingState::Disabled {

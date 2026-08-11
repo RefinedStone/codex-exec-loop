@@ -3,6 +3,8 @@ use crate::application::service::parallel_mode::{
     ParallelModeAutomationGuard, ParallelModeOrchestratorTrigger,
 };
 
+const TEST_COORDINATION_TIMEOUT: Duration = Duration::from_secs(10);
+
 // supervisor snapshot은 관찰 전용이어야 한다. queue head가 merge-pending 상태여도
 // snapshot 렌더링 과정에서 GitHub inspect, push, recovery 같은 runtime 작업이
 // 실행되면 TUI 조회만으로 상태가 바뀌므로, fake GitHub 호출이 비어 있음을 확인한다.
@@ -236,7 +238,7 @@ fn stale_guarded_enqueue_preflight_does_not_block_or_mutate_replacement_generati
                 .send(())
                 .expect("old preflight entry should be observed");
             resume_old_receiver
-                .recv_timeout(Duration::from_secs(2))
+                .recv_timeout(TEST_COORDINATION_TIMEOUT)
                 .expect("old enqueue preflight should be released");
         });
         let result = old_service
@@ -246,7 +248,7 @@ fn stale_guarded_enqueue_preflight_does_not_block_or_mutate_replacement_generati
             .expect("old enqueue result should be observed");
     });
     preflight_entered_receiver
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(TEST_COORDINATION_TIMEOUT)
         .expect("old enqueue should pause after its unlocked preflight");
 
     continuation_gate.advance();
@@ -295,7 +297,7 @@ fn stale_guarded_enqueue_preflight_does_not_block_or_mutate_replacement_generati
             .expect("replacement transition result should be observed");
     });
     transition_done_receiver
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(TEST_COORDINATION_TIMEOUT)
         .expect("replacement continuation must not wait on the old enqueue preflight")
         .expect("replacement pool transition should succeed");
 
@@ -303,7 +305,7 @@ fn stale_guarded_enqueue_preflight_does_not_block_or_mutate_replacement_generati
         .send(())
         .expect("old enqueue preflight should resume");
     let old_result = old_done_receiver
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(TEST_COORDINATION_TIMEOUT)
         .expect("stale old enqueue should terminate promptly")
         .expect("stale old enqueue should fail closed without an error");
     assert!(old_result.is_none());

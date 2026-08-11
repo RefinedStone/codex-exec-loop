@@ -1,30 +1,142 @@
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelPoolMutationPermit;
 use rand::RngCore;
+use std::collections::HashMap;
 use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
+use std::thread::ThreadId;
 use std::time::{Duration, Instant};
 
 const POOL_MUTATION_LOCK_FILE: &str = ".allocation-lock";
 
 struct GitParallelPoolMutationPermit {
+    process_lock: ProcessLocalPoolMutationPermit,
+}
+
+/*
+ * `flock`/`LockFile` cover independent Akra processes, but their same-process
+ * reentrancy differs by platform.  A service can issue two concurrent pool
+ * operations from different threads, so retain a small process-local permit
+ * in addition to the durable OS-level lock.  Same-thread nesting remains
+ * permitted: several lifecycle helpers intentionally hold an outer permit
+ * while calling a narrower helper for the same pool.
+ */
+struct ProcessLocalPoolMutationPermit {
+    pool_root: PathBuf,
+    owner: ThreadId,
+    lease: Arc<ProcessLocalPoolMutationLease>,
+}
+
+struct ProcessLocalPoolMutationLease {
     platform_lock: platform::PlatformPoolMutationLock,
     lock_path: PathBuf,
     pool_root: PathBuf,
 }
 
-impl ParallelPoolMutationPermit for GitParallelPoolMutationPermit {
+struct ProcessLocalPoolMutationOwner {
+    owner: ThreadId,
+    depth: usize,
+    lease: Arc<ProcessLocalPoolMutationLease>,
+}
+
+fn process_local_pool_mutation_locks()
+-> &'static Mutex<HashMap<PathBuf, ProcessLocalPoolMutationOwner>> {
+    static LOCKS: OnceLock<Mutex<HashMap<PathBuf, ProcessLocalPoolMutationOwner>>> =
+        OnceLock::new();
+    LOCKS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn lock_process_local_pool_mutations()
+-> std::sync::MutexGuard<'static, HashMap<PathBuf, ProcessLocalPoolMutationOwner>> {
+    process_local_pool_mutation_locks()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn try_acquire_process_local_pool_mutation_permit(
+    pool_root: &Path,
+    lock_path: &Path,
+    owner_record: &str,
+) -> std::io::Result<Option<ProcessLocalPoolMutationPermit>> {
+    let canonical_pool_root = std::fs::canonicalize(pool_root)?;
+    let owner = thread::current().id();
+    let mut locks = lock_process_local_pool_mutations();
+    match locks.get_mut(&canonical_pool_root) {
+        Some(existing) if existing.owner != owner => Ok(None),
+        Some(existing) => {
+            existing.depth = existing.depth.checked_add(1).ok_or_else(|| {
+                std::io::Error::other("process-local pool mutation lock recursion overflow")
+            })?;
+            Ok(Some(ProcessLocalPoolMutationPermit {
+                pool_root: canonical_pool_root,
+                owner,
+                lease: existing.lease.clone(),
+            }))
+        }
+        None => {
+            let Some(platform_lock) = platform::try_acquire(pool_root, lock_path, owner_record)?
+            else {
+                return Ok(None);
+            };
+            let lease = Arc::new(ProcessLocalPoolMutationLease {
+                platform_lock,
+                lock_path: lock_path.to_path_buf(),
+                pool_root: pool_root.to_path_buf(),
+            });
+            locks.insert(
+                canonical_pool_root.clone(),
+                ProcessLocalPoolMutationOwner {
+                    owner,
+                    depth: 1,
+                    lease: lease.clone(),
+                },
+            );
+            Ok(Some(ProcessLocalPoolMutationPermit {
+                pool_root: canonical_pool_root,
+                owner,
+                lease,
+            }))
+        }
+    }
+}
+
+impl ProcessLocalPoolMutationPermit {
     fn verify_pool_root(&self, pool_root: &Path) -> Result<(), String> {
-        if self.pool_root != pool_root {
+        if self.lease.pool_root != pool_root {
             return Err(format!(
                 "pool mutation permit for `{}` cannot mutate `{}`",
-                self.pool_root.display(),
+                self.lease.pool_root.display(),
                 pool_root.display()
             ));
         }
-        self.platform_lock
-            .verify_paths(pool_root, &self.lock_path)
+        self.lease
+            .platform_lock
+            .verify_paths(pool_root, &self.lease.lock_path)
             .map_err(|error| format!("pool mutation permit identity changed: {error}"))
+    }
+}
+
+impl Drop for ProcessLocalPoolMutationPermit {
+    fn drop(&mut self) {
+        let mut locks = lock_process_local_pool_mutations();
+        let Some(existing) = locks.get_mut(&self.pool_root) else {
+            return;
+        };
+        if existing.owner != self.owner || !Arc::ptr_eq(&existing.lease, &self.lease) {
+            return;
+        }
+        if existing.depth > 1 {
+            existing.depth -= 1;
+        } else {
+            locks.remove(&self.pool_root);
+        }
+    }
+}
+
+impl ParallelPoolMutationPermit for GitParallelPoolMutationPermit {
+    fn verify_pool_root(&self, pool_root: &Path) -> Result<(), String> {
+        self.process_lock.verify_pool_root(pool_root)
     }
 }
 
@@ -76,20 +188,18 @@ fn try_acquire_pool_mutation_permit_at_with_owner(
     lock_path: &Path,
     owner_record: &str,
 ) -> Result<Option<GitParallelPoolMutationPermit>, String> {
-    platform::try_acquire(pool_root, lock_path, owner_record)
-        .map(|platform_lock| {
-            platform_lock.map(|platform_lock| GitParallelPoolMutationPermit {
-                platform_lock,
-                lock_path: lock_path.to_path_buf(),
-                pool_root: pool_root.to_path_buf(),
-            })
-        })
-        .map_err(|error| {
-            format!(
-                "pool mutation lock could not be acquired at `{}`: {error}",
-                lock_path.display()
-            )
-        })
+    let Some(process_lock) =
+        try_acquire_process_local_pool_mutation_permit(pool_root, lock_path, owner_record)
+            .map_err(|error| {
+                format!(
+                    "process-local pool mutation lock could not be acquired at `{}`: {error}",
+                    lock_path.display()
+                )
+            })?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(GitParallelPoolMutationPermit { process_lock }))
 }
 
 #[cfg(all(test, unix))]
@@ -586,11 +696,15 @@ mod platform {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::{POOL_MUTATION_LOCK_FILE, acquire_pool_mutation_lock_at, platform};
+    use super::{
+        POOL_MUTATION_LOCK_FILE, acquire_pool_mutation_lock_at, platform,
+        try_acquire_process_local_pool_mutation_permit,
+    };
     use std::fs;
     use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::thread;
 
     static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
@@ -694,6 +808,48 @@ mod tests {
         assert_eq!(first_metadata.ino(), second_metadata.ino());
         drop(second);
         assert!(lock_path.is_file());
+        let _ = fs::remove_dir_all(pool_root);
+    }
+
+    #[test]
+    fn process_local_permit_serializes_threads_before_platform_locking() {
+        let pool_root = private_pool_root("process-local");
+        let lock_path = pool_root.join(POOL_MUTATION_LOCK_FILE);
+        let first = try_acquire_process_local_pool_mutation_permit(
+            &pool_root,
+            &lock_path,
+            "first test owner\n",
+        )
+        .expect("first process-local permit should be checked")
+        .expect("first process-local permit should acquire");
+
+        let competing_pool_root = pool_root.clone();
+        let competing_lock_path = lock_path.clone();
+        let competing_acquired = thread::spawn(move || {
+            try_acquire_process_local_pool_mutation_permit(
+                &competing_pool_root,
+                &competing_lock_path,
+                "second test owner\n",
+            )
+            .map(|permit| permit.is_some())
+        })
+        .join()
+        .expect("competing process-local lock thread should not panic")
+        .expect("competing process-local permit should be checked");
+        assert!(
+            !competing_acquired,
+            "a second thread must stop at the process-local permit"
+        );
+
+        drop(first);
+        let second = try_acquire_process_local_pool_mutation_permit(
+            &pool_root,
+            &lock_path,
+            "second test owner\n",
+        )
+        .expect("released process-local permit should be checked")
+        .expect("released process-local permit should acquire");
+        drop(second);
         let _ = fs::remove_dir_all(pool_root);
     }
 

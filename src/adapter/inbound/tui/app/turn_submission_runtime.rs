@@ -2840,6 +2840,10 @@ mod tests {
             app.conversation.turn_options.reasoning_effort,
             Some(ConversationReasoningEffort::High)
         );
+        assert_eq!(
+            app.conversation.next_new_thread_turn_options,
+            app.conversation.turn_options
+        );
 
         app.execute_inline_shell_command_input(
             InlineShellCommandInput::parse(":model default")
@@ -2852,6 +2856,10 @@ mod tests {
 
         assert_eq!(app.conversation.turn_options.model, None);
         assert_eq!(app.conversation.turn_options.reasoning_effort, None);
+        assert_eq!(
+            app.conversation.next_new_thread_turn_options,
+            ConversationTurnOptions::app_server_default()
+        );
     }
 
     #[test]

@@ -12,4 +12,6 @@ pub(super) const RESET_USAGE: &str = "Usage: akra reset <queue|directions|all> [
 pub(super) const PLANNING_TOOL_USAGE: &str =
     "Usage: akra planning-tool <contract|run> [workspace_dir]";
 pub(super) const PARALLEL_TICK_USAGE: &str = "Usage: akra parallel-tick [workspace_dir]";
+pub(super) const CONFIG_USAGE: &str =
+    "Usage: akra config <list|get|set|unset|path|doctor> [--global|--project] [key] [value]";
 pub(super) const TELEGRAM_BOT_USAGE: &str = TELEGRAM_BOT_COMMAND_USAGE;

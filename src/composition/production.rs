@@ -35,6 +35,7 @@ use crate::application::port::outbound::app_server_prompt_log_port::{
     AppServerPromptLogMaintenanceMode, AppServerPromptLogMaintenancePort, AppServerPromptLogPort,
     NoopAppServerPromptLogPort,
 };
+use crate::application::port::outbound::conversation_thread_turn_options_port::ConversationThreadTurnOptionsPort;
 use crate::application::port::outbound::github_automation_port::GithubAutomationPort;
 use crate::application::port::outbound::github_pr_validation_port::GithubPrValidationPort;
 use crate::application::port::outbound::github_review_poller_port::GithubReviewPollerPort;
@@ -109,6 +110,7 @@ struct ProductionSharedPorts {
     parallel_agent_profile_repository_port: Arc<dyn ParallelAgentProfileRepositoryPort>,
     app_server_prompt_log_maintenance_port: Arc<dyn AppServerPromptLogMaintenancePort>,
     app_server_prompt_log_port: Arc<dyn AppServerPromptLogPort>,
+    conversation_thread_turn_options_port: Arc<dyn ConversationThreadTurnOptionsPort>,
     telegram_update_ledger_port: Arc<dyn TelegramUpdateLedgerPort>,
     telegram_global_runner_lease_port: Arc<dyn TelegramGlobalRunnerLeasePort>,
     pr_validation_rollout_evidence_store_port: Arc<dyn PrValidationRolloutEvidenceStorePort>,
@@ -361,6 +363,7 @@ pub(crate) fn build_native_tui_application() -> NativeTuiApplicationComposition 
         ports.review_center_repository_port.clone(),
     );
     let conversation_service = ConversationService::new(ports.app_server_adapter.clone())
+        .with_thread_turn_options_port(ports.conversation_thread_turn_options_port.clone())
         .with_review_center_read_service(review_center_read_service.clone());
     let planning = planning_services_from_ports(&ports);
     let parallel_agent_profile_service = parallel_agent_profile_service_from_ports(&ports);
@@ -379,6 +382,7 @@ pub(crate) fn build_native_tui_application() -> NativeTuiApplicationComposition 
         session_service,
         conversation_service,
         parallel_mode_control_plane,
+        ports.conversation_thread_turn_options_port,
     )
 }
 
@@ -445,6 +449,9 @@ fn build_prompt_log_port_for_setting(
 }
 
 fn app_server_prompt_logging_enabled() -> bool {
+    if let Some(config) = crate::configuration::current_process_config() {
+        return config.config.app_server.prompt_log;
+    }
     app_server_prompt_logging_enabled_from_value(
         std::env::var(AKRA_APP_SERVER_PROMPT_LOG_ENV_VAR)
             .ok()
@@ -479,7 +486,12 @@ fn build_shared_ports_for_prompt_logging(prompt_logging_enabled: bool) -> Produc
     );
     let app_server_prompt_log_maintenance_port: Arc<dyn AppServerPromptLogMaintenancePort> =
         planning_authority_adapter.clone();
-    let app_server_adapter = app_server_adapter(app_server_prompt_log_port.clone());
+    let conversation_thread_turn_options_port: Arc<dyn ConversationThreadTurnOptionsPort> =
+        planning_authority_adapter.clone();
+    let app_server_adapter = app_server_adapter(
+        app_server_prompt_log_port.clone(),
+        conversation_thread_turn_options_port.clone(),
+    );
     let planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort> =
         planning_authority_adapter.clone();
     let review_center_repository_port: Arc<dyn ReviewCenterRepositoryPort> =
@@ -512,6 +524,7 @@ fn build_shared_ports_for_prompt_logging(prompt_logging_enabled: bool) -> Produc
         parallel_agent_profile_repository_port,
         app_server_prompt_log_maintenance_port,
         app_server_prompt_log_port,
+        conversation_thread_turn_options_port,
         telegram_update_ledger_port,
         telegram_global_runner_lease_port,
         pr_validation_rollout_evidence_store_port,
@@ -618,12 +631,16 @@ fn build_pr_validation_scheduler_runtime(
 
 fn app_server_adapter(
     prompt_log_port: Arc<dyn AppServerPromptLogPort>,
+    conversation_thread_turn_options_port: Arc<dyn ConversationThreadTurnOptionsPort>,
 ) -> Arc<CodexAppServerAdapter> {
-    Arc::new(CodexAppServerAdapter::from_environment_with_prompt_log(
-        APP_SERVER_CLIENT_NAME,
-        env!("CARGO_PKG_VERSION"),
-        prompt_log_port,
-    ))
+    Arc::new(
+        CodexAppServerAdapter::from_environment_with_prompt_log_and_thread_turn_options(
+            APP_SERVER_CLIENT_NAME,
+            env!("CARGO_PKG_VERSION"),
+            prompt_log_port,
+            conversation_thread_turn_options_port,
+        ),
+    )
 }
 
 fn github_automation_port() -> Arc<dyn GithubAutomationPort> {

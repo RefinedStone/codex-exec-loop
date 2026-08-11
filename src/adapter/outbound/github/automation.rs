@@ -1081,6 +1081,9 @@ fn test_github_log_directory() -> PathBuf {
 }
 
 fn configured_push_remote_name(repo_root: &str) -> Result<String> {
+    if let Some(config) = crate::configuration::current_process_config() {
+        return Ok(config.config.github.push_remote.clone());
+    }
     let env_value = std::env::var(AKRA_GITHUB_PUSH_REMOTE_ENV_VAR).ok();
     let config_value = run_git_stdout(
         repo_root,
@@ -2769,7 +2772,10 @@ printf '%s\n' 'trusted-helper-executed'
             fixture_root,
             &["clone", path_str(&fixture.remote), path_str(&publisher)],
         );
-        git(&publisher, &["checkout", "-b", "main", "origin/main"]);
+        // Depending on the host's `init.defaultBranch`, clone may already
+        // have created `main`.  Plain checkout handles both that case and a
+        // bare remote whose HEAD has not yet been moved to `main`.
+        git(&publisher, &["checkout", "main"]);
         git(&publisher, &["config", "user.name", "Publisher"]);
         git(
             &publisher,

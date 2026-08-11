@@ -272,6 +272,9 @@ impl GithubReviewPollerAdapter {
         Self::parse_repository_full_name(&remote_url)
     }
     fn resolve_push_remote_name(repo_root: &Path) -> Result<String> {
+        if let Some(config) = crate::configuration::current_process_config() {
+            return Ok(config.config.github.push_remote.clone());
+        }
         let env_value = std::env::var(AKRA_GITHUB_PUSH_REMOTE_ENV_VAR).ok();
         let config_value =
             Self::read_optional_repo_config(repo_root, AKRA_GITHUB_PUSH_REMOTE_CONFIG_KEY)?;

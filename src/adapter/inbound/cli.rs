@@ -11,6 +11,10 @@ use crate::application::port::planning_task_tool_contract::{
     PLANNING_TOOL_PARENT_THREAD_ID_ENV, PLANNING_TOOL_PARENT_TURN_ID_ENV,
 };
 use crate::composition::production;
+use crate::configuration::{
+    ConfigDoctorReport, ConfigOverride, ConfigScope, ConfigurationService, ParsedInvocation,
+    SettingKey,
+};
 use crate::domain::planning::PlanningResetTarget;
 use anyhow::{Context, Result, bail};
 use std::ffi::{OsStr, OsString};
@@ -30,16 +34,32 @@ use self::reports::{
     render_reset_report,
 };
 use self::usage::{
-    ADMIN_SERVER_ALIAS_USAGE, ADMIN_SERVER_USAGE, DOCTOR_USAGE, PARALLEL_TICK_USAGE,
+    ADMIN_SERVER_ALIAS_USAGE, ADMIN_SERVER_USAGE, CONFIG_USAGE, DOCTOR_USAGE, PARALLEL_TICK_USAGE,
     PLANNING_TOOL_USAGE, QUEUE_USAGE, RESET_USAGE, STATUS_USAGE, TELEGRAM_BOT_ALIAS_USAGE,
     TELEGRAM_BOT_USAGE,
 };
 
 pub fn run_with_env_args(stdout: &mut impl Write) -> Result<Option<i32>> {
-    run_with_args(std::env::args_os().skip(1), stdout)
+    let invocation = ParsedInvocation::parse(std::env::args_os().skip(1))?;
+    if invocation.overrides.is_empty() {
+        return run_with_args(invocation.command_args, stdout);
+    }
+    run_with_args_with_config_overrides(invocation.command_args, &invocation.overrides, stdout)
 }
 
 pub(crate) fn run_with_args<I, T>(args: I, stdout: &mut impl Write) -> Result<Option<i32>>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<OsString>,
+{
+    run_with_args_with_config_overrides(args, &[], stdout)
+}
+
+pub(crate) fn run_with_args_with_config_overrides<I, T>(
+    args: I,
+    overrides: &[ConfigOverride],
+    stdout: &mut impl Write,
+) -> Result<Option<i32>>
 where
     I: IntoIterator<Item = T>,
     T: Into<OsString>,
@@ -59,7 +79,11 @@ where
             writeln!(stdout, "{RESET_USAGE}")?;
             writeln!(stdout, "{PLANNING_TOOL_USAGE}")?;
             writeln!(stdout, "{PARALLEL_TICK_USAGE}")?;
+            writeln!(stdout, "{CONFIG_USAGE}")?;
             Ok(Some(0))
+        }
+        [command, rest @ ..] if command == OsStr::new("config") => {
+            Ok(Some(run_config(rest, overrides, stdout)?))
         }
         // long-running async service는 첫 command token 뒤의 parsing을 각자 소유한다.
         [command] if is_admin_command(command) => Ok(Some(run_admin_server(&[])?)),
@@ -154,10 +178,175 @@ where
         [command, _, _, ..] if command == OsStr::new("parallel-tick") => {
             bail!("{PARALLEL_TICK_USAGE}");
         }
+        [command, _, ..] if command == OsStr::new("config") => {
+            bail!("{CONFIG_USAGE}");
+        }
         [command, ..] => {
             bail!("unsupported command: {}", command.to_string_lossy());
         }
     }
+}
+
+fn run_config(
+    args: &[OsString],
+    overrides: &[ConfigOverride],
+    stdout: &mut impl Write,
+) -> Result<i32> {
+    let cwd = std::env::current_dir().context("failed to resolve current directory for config")?;
+    let (scope, positional) = parse_config_scope(args)?;
+    let Some(command) = positional.first().copied() else {
+        bail!("{CONFIG_USAGE}");
+    };
+    let command = command
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("config command must be valid UTF-8"))?;
+    match command {
+        "path" if positional.len() == 1 => {
+            let path =
+                ConfigurationService::path_for_scope(&cwd, scope.unwrap_or(ConfigScope::Global))?;
+            writeln!(stdout, "{}", path.display())?;
+            Ok(0)
+        }
+        "list" if positional.len() == 1 => {
+            match scope {
+                Some(scope) => {
+                    let path = ConfigurationService::path_for_scope(&cwd, scope)?;
+                    writeln!(stdout, "scope: {}", scope.label())?;
+                    writeln!(stdout, "path: {}", path.display())?;
+                    match ConfigurationService::layer_for_scope(&cwd, scope)? {
+                        Some(layer) => {
+                            for key in SettingKey::ALL {
+                                if let Some(value) = layer.configured_value(key) {
+                                    writeln!(stdout, "{} = {} ({})", key, value, scope.label())?;
+                                }
+                            }
+                        }
+                        None => writeln!(stdout, "status: unset")?,
+                    }
+                }
+                None => {
+                    let resolved = ConfigurationService::resolve_read_only(&cwd, overrides)?;
+                    for setting in resolved.effective_settings() {
+                        writeln!(
+                            stdout,
+                            "{} = {} ({})",
+                            setting.key, setting.value, setting.origin
+                        )?;
+                    }
+                }
+            }
+            Ok(0)
+        }
+        "get" if positional.len() == 2 => {
+            let key = parse_config_key(positional[1])?;
+            match scope {
+                Some(scope) => {
+                    let path = ConfigurationService::path_for_scope(&cwd, scope)?;
+                    match ConfigurationService::layer_for_scope(&cwd, scope)?
+                        .and_then(|layer| layer.configured_value(key))
+                    {
+                        Some(value) => writeln!(stdout, "{} = {} ({})", key, value, scope.label())?,
+                        None => writeln!(stdout, "{} = unset ({})", key, scope.label())?,
+                    }
+                    writeln!(stdout, "path: {}", path.display())?;
+                }
+                None => {
+                    let resolved = ConfigurationService::resolve_read_only(&cwd, overrides)?;
+                    let setting = resolved
+                        .effective_settings()
+                        .into_iter()
+                        .find(|setting| setting.key == key)
+                        .expect("known setting must be resolved");
+                    writeln!(
+                        stdout,
+                        "{} = {} ({})",
+                        setting.key, setting.value, setting.origin
+                    )?;
+                }
+            }
+            Ok(0)
+        }
+        "set" if positional.len() == 3 => {
+            let key = parse_config_key(positional[1])?;
+            let value = positional[2]
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("configuration value must be valid UTF-8"))?;
+            let scope = scope.unwrap_or(ConfigScope::Global);
+            let path = ConfigurationService::set(&cwd, scope, key, value)?;
+            writeln!(stdout, "updated: {}", path.display())?;
+            writeln!(stdout, "{} = {} ({})", key, value, scope.label())?;
+            Ok(0)
+        }
+        "unset" if positional.len() == 2 => {
+            let key = parse_config_key(positional[1])?;
+            let scope = scope.unwrap_or(ConfigScope::Global);
+            let path = ConfigurationService::unset(&cwd, scope, key)?;
+            writeln!(stdout, "updated: {}", path.display())?;
+            writeln!(stdout, "{} = unset ({})", key, scope.label())?;
+            Ok(0)
+        }
+        "doctor" if positional.len() == 1 => {
+            let report = ConfigurationService::doctor(&cwd, overrides);
+            render_config_doctor(stdout, &report)?;
+            Ok(if report.is_healthy() { 0 } else { 1 })
+        }
+        _ => bail!("{CONFIG_USAGE}"),
+    }
+}
+
+fn parse_config_scope(args: &[OsString]) -> Result<(Option<ConfigScope>, Vec<&OsString>)> {
+    let mut scope = None;
+    let mut positional = Vec::new();
+    for argument in args {
+        match argument.to_str() {
+            Some("--global") => set_config_scope(&mut scope, ConfigScope::Global)?,
+            Some("--project") => set_config_scope(&mut scope, ConfigScope::Project)?,
+            _ => positional.push(argument),
+        }
+    }
+    Ok((scope, positional))
+}
+
+fn set_config_scope(slot: &mut Option<ConfigScope>, value: ConfigScope) -> Result<()> {
+    if slot.replace(value).is_some() {
+        bail!("choose at most one of --global and --project")
+    }
+    Ok(())
+}
+
+fn parse_config_key(argument: &OsString) -> Result<SettingKey> {
+    let key = argument
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("configuration key must be valid UTF-8"))?;
+    SettingKey::parse(key)
+}
+
+fn render_config_doctor(stdout: &mut impl Write, report: &ConfigDoctorReport) -> Result<()> {
+    let Some(paths) = report.paths.as_ref() else {
+        writeln!(stdout, "configuration: {}", report.global)?;
+        return Ok(());
+    };
+    writeln!(stdout, "global path: {}", paths.global.display())?;
+    writeln!(stdout, "global config: {}", report.global)?;
+    match (&paths.project, &report.project) {
+        (Some(path), Some(inspection)) => {
+            writeln!(stdout, "project path: {}", path.display())?;
+            writeln!(stdout, "project config: {inspection}")?;
+        }
+        _ => writeln!(stdout, "project config: unavailable (not a Git worktree)")?,
+    }
+    for shadow in &report.environment {
+        writeln!(stdout, "environment shadow: {shadow}")?;
+    }
+    for legacy in &report.legacy {
+        writeln!(stdout, "legacy Git config: {legacy}")?;
+    }
+    if let Some(error) = &report.resolution_error {
+        writeln!(stdout, "resolution: error: {error}")?;
+    } else {
+        writeln!(stdout, "resolution: ok")?;
+    }
+    Ok(())
 }
 fn is_help_flag(flag: &OsStr) -> bool {
     matches!(flag.to_str(), Some("-h" | "--help"))
@@ -501,13 +690,15 @@ mod tests {
         STATUS_USAGE, is_admin_command, is_help_flag, is_planning_tool_command,
         is_telegram_command, parse_reset_target, render_parallel_tick_result,
         resolve_workspace_path, run_doctor, run_parallel_tick, run_planning_control_command,
-        run_planning_tool, run_reset, run_with_args, validate_workspace_path,
+        run_planning_tool, run_reset, run_with_args, run_with_args_with_config_overrides,
+        validate_workspace_path,
     };
     use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
     use crate::application::service::parallel_mode::{
         ParallelModeOrchestratorTickResult, ParallelModeOrchestratorTrigger,
     };
     use crate::application::service::planning::{PlanningControlCommand, PlanningResetTarget};
+    use crate::configuration::ConfigOverride;
     use crate::domain::parallel_mode::{
         ParallelModeOrchestratorStateMachine, PrValidationCommitSha, PrValidationEvent,
         PrValidationFinding, PrValidationFindingKey, PrValidationFindingSource, PrValidationRecord,
@@ -516,6 +707,27 @@ mod tests {
     };
     use std::ffi::OsStr;
     use std::path::PathBuf;
+
+    struct EnvironmentGuard {
+        previous_akra_home: Option<std::ffi::OsString>,
+    }
+
+    impl EnvironmentGuard {
+        fn with_akra_home(path: &std::path::Path) -> Self {
+            let previous_akra_home = std::env::var_os("AKRA_HOME");
+            unsafe { std::env::set_var("AKRA_HOME", path) };
+            Self { previous_akra_home }
+        }
+    }
+
+    impl Drop for EnvironmentGuard {
+        fn drop(&mut self) {
+            match self.previous_akra_home.take() {
+                Some(value) => unsafe { std::env::set_var("AKRA_HOME", value) },
+                None => unsafe { std::env::remove_var("AKRA_HOME") },
+            }
+        }
+    }
 
     fn unique_temp_path(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
@@ -568,6 +780,68 @@ mod tests {
             dispatch_error(&["unsupported-command"]),
             "unsupported command: unsupported-command"
         );
+    }
+
+    #[test]
+    fn config_commands_keep_reads_non_mutating_and_render_effective_origins() {
+        let _lock = crate::test_utils::process_environment_mutex()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = unique_temp_path("cli-config-home");
+        let _environment = EnvironmentGuard::with_akra_home(&home);
+        let config_path = home.join("config.toml");
+
+        for command in [
+            vec!["config", "path"],
+            vec!["config", "list"],
+            vec!["config", "get", "conversation.model"],
+            vec!["config", "doctor"],
+        ] {
+            let mut output = Vec::new();
+            let exit = run_with_args(command.iter().copied(), &mut output)
+                .expect("read-only config command should succeed");
+            assert_eq!(exit, Some(0));
+            assert!(
+                !config_path.exists(),
+                "{command:?} must not create a missing global configuration"
+            );
+        }
+
+        let mut set_output = Vec::new();
+        let set_exit = run_with_args(
+            ["config", "set", "conversation.model", "gpt-5.6-terra"],
+            &mut set_output,
+        )
+        .expect("global config set should succeed");
+        assert_eq!(set_exit, Some(0));
+        assert!(config_path.exists());
+
+        let mut get_output = Vec::new();
+        run_with_args(["config", "get", "conversation.model"], &mut get_output)
+            .expect("effective config get should succeed");
+        let rendered_get = String::from_utf8(get_output).expect("config output should be UTF-8");
+        assert!(rendered_get.contains("gpt-5.6-terra (global)"));
+
+        let override_value = ConfigOverride::parse("conversation.model=gpt-5.6-luna")
+            .expect("command-line override should parse");
+        let mut override_output = Vec::new();
+        run_with_args_with_config_overrides(
+            ["config", "get", "conversation.model"],
+            &[override_value],
+            &mut override_output,
+        )
+        .expect("effective config get with override should succeed");
+        let rendered_override =
+            String::from_utf8(override_output).expect("override output should be UTF-8");
+        assert!(rendered_override.contains("gpt-5.6-luna (command line)"));
+
+        let mut unset_output = Vec::new();
+        run_with_args(["config", "unset", "conversation.model"], &mut unset_output)
+            .expect("global config unset should succeed");
+        let contents =
+            std::fs::read_to_string(&config_path).expect("config should remain readable");
+        assert!(!contents.contains("conversation.model"));
+        let _ = std::fs::remove_dir_all(home);
     }
 
     #[test]

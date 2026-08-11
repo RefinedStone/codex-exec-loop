@@ -58,6 +58,32 @@ pub(crate) fn write_file_atomic_with_limit(
     platform::write_file_atomic(root, relative, body)
 }
 
+/// Atomically write with a caller-owned serialization lock while preserving
+/// descriptor-anchored anti-alias guarantees.  Configuration owns a separate
+/// cross-process lock and must not create this module's planning-runtime lock
+/// directory below a reviewable `.akra` directory.
+#[cfg(unix)]
+pub(crate) fn write_file_atomic_unlocked_with_limit_and_unix_mode(
+    root: &Path,
+    relative: &Path,
+    body: &[u8],
+    max_file_bytes: usize,
+    unix_mode: u32,
+) -> Result<()> {
+    validate_file_size_limit(max_file_bytes)?;
+    if body.len() > max_file_bytes {
+        anyhow::bail!(
+            "workspace file exceeds the {} byte limit: {}",
+            max_file_bytes,
+            relative.display()
+        );
+    }
+    if unix_mode == 0 || unix_mode & !0o777 != 0 {
+        anyhow::bail!("workspace file mode must be a nonzero Unix permission mode");
+    }
+    platform::write_file_atomic_unlocked_with_mode(root, relative, body, unix_mode)
+}
+
 pub(crate) fn compare_and_swap_optional_file(
     root: &Path,
     relative: &Path,
@@ -223,10 +249,30 @@ mod platform {
     }
 
     pub(super) fn write_file_atomic(root: &Path, relative: &Path, body: &[u8]) -> Result<()> {
+        write_file_atomic_with_mode(root, relative, body, 0o600)
+    }
+
+    pub(super) fn write_file_atomic_with_mode(
+        root: &Path,
+        relative: &Path,
+        body: &[u8],
+        mode: u32,
+    ) -> Result<()> {
         reject_internal_path(relative)?;
         let root_fd = open_workspace_root(root)?;
         let _mutation_lock = acquire_workspace_mutation_lock(&root_fd)?;
-        write_file_atomic_locked(root, &root_fd, relative, body)
+        write_file_atomic_locked(root, &root_fd, relative, body, mode)
+    }
+
+    pub(super) fn write_file_atomic_unlocked_with_mode(
+        root: &Path,
+        relative: &Path,
+        body: &[u8],
+        mode: u32,
+    ) -> Result<()> {
+        reject_internal_path(relative)?;
+        let root_fd = open_workspace_root(root)?;
+        write_file_atomic_locked(root, &root_fd, relative, body, mode)
     }
 
     fn write_file_atomic_locked(
@@ -234,12 +280,13 @@ mod platform {
         root_fd: &OwnedFd,
         relative: &Path,
         body: &[u8],
+        mode: u32,
     ) -> Result<()> {
         let (parent, leaf) = open_parent(root_fd, relative, true)?;
         let original = open_regular_file(&parent, &leaf)?;
 
         let temp_name = private_temp_name();
-        let temp_fd = open_new_private_file(&parent, &temp_name)?;
+        let temp_fd = open_new_private_file(&parent, &temp_name, mode)?;
         validate_regular_identity(identity_from_fd(temp_fd.as_raw_fd())?, &root.join(relative))?;
         let mut temp_file = File::from(temp_fd);
         let write_result = (|| -> Result<()> {
@@ -302,7 +349,9 @@ mod platform {
         }
 
         match replacement {
-            Some(body) => write_file_atomic_locked(root, &root_fd, relative, body.as_bytes())?,
+            Some(body) => {
+                write_file_atomic_locked(root, &root_fd, relative, body.as_bytes(), 0o600)?
+            }
             None => remove_entry_locked(root, &root_fd, relative)?,
         }
         Ok(true)
@@ -580,7 +629,7 @@ mod platform {
         Ok(Some((File::from(fd), identity)))
     }
 
-    fn open_new_private_file(parent: &OwnedFd, name: &OsStr) -> Result<OwnedFd> {
+    fn open_new_private_file(parent: &OwnedFd, name: &OsStr, mode: u32) -> Result<OwnedFd> {
         let name = c_name(name)?;
         // SAFETY: create is anchored to the pinned parent; O_EXCL and O_NOFOLLOW reject aliases.
         let fd = unsafe {
@@ -588,10 +637,20 @@ mod platform {
                 parent.as_raw_fd(),
                 name.as_ptr(),
                 libc::O_RDWR | libc::O_CREAT | libc::O_EXCL | libc::O_CLOEXEC | libc::O_NOFOLLOW,
-                0o600,
+                mode as libc::c_uint,
             )
         };
-        owned_fd(fd).context("failed to create private planning temporary file")
+        let fd = owned_fd(fd).context("failed to create private planning temporary file")?;
+        // `openat` mode is filtered by the process umask.  The descriptor is
+        // private and not yet reachable by its final name, so normalize its
+        // requested mode before publication without a path-based chmod race.
+        // SAFETY: `fd` is a live owned descriptor and `mode` was validated by
+        // the caller that exposes configurable visibility.
+        if unsafe { libc::fchmod(fd.as_raw_fd(), mode as libc::mode_t) } != 0 {
+            return Err(std::io::Error::last_os_error())
+                .context("failed to set temporary file permissions");
+        }
+        Ok(fd)
     }
 
     fn read_directory_recursive(
@@ -1549,11 +1608,15 @@ mod platform {
             let workspace = workspace("non-utf8-alias");
             let draft = workspace.join("draft");
             std::fs::create_dir(&draft).expect("draft fixture should create");
-            std::fs::write(
-                draft.join(std::ffi::OsString::from_vec(vec![b'x', 0xff])),
-                b"ambiguous",
-            )
-            .expect("non-UTF-8 fixture should write");
+            let non_utf8_path = draft.join(std::ffi::OsString::from_vec(vec![b'x', 0xff]));
+            if let Err(error) = std::fs::write(&non_utf8_path, b"ambiguous") {
+                // APFS rejects invalid UTF-8 path components at the filesystem
+                // boundary (EILSEQ), so the lossy-alias case cannot be created
+                // on that host. Other failures remain a real fixture error.
+                assert_eq!(error.raw_os_error(), Some(libc::EILSEQ), "{error}");
+                let _ = std::fs::remove_dir_all(&workspace);
+                return;
+            }
 
             let error = read_tree(&workspace, Path::new("draft"))
                 .expect_err("non-UTF-8 planning names must not be converted lossily");

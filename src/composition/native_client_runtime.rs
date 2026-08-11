@@ -1,9 +1,13 @@
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 #[cfg(test)]
 use std::time::Duration;
 #[cfg(test)]
 use std::time::Instant;
 
+use crate::application::port::outbound::conversation_thread_turn_options_port::ConversationThreadTurnOptionsPort;
+#[cfg(test)]
+use crate::application::port::outbound::conversation_thread_turn_options_port::NoopConversationThreadTurnOptionsPort;
 use crate::application::service::conversation_service::ConversationService;
 #[cfg(test)]
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
@@ -370,6 +374,7 @@ impl NativeTuiApplicationComposition {
         session_service: SessionService,
         conversation_service: ConversationService,
         parallel_control_plane: ParallelModeControlPlaneComposition,
+        thread_turn_options_port: Arc<dyn ConversationThreadTurnOptionsPort>,
     ) -> Self {
         let turn_control_truth = conversation_service.runtime_control_truth();
         let planning_feature = parallel_control_plane.planning().clone();
@@ -380,6 +385,7 @@ impl NativeTuiApplicationComposition {
             conversation_service,
             planning_feature,
             parallel_mode_turn_service,
+            thread_turn_options_port.clone(),
         );
         Self {
             core_runtime,
@@ -412,6 +418,7 @@ impl NativeCoreRuntime {
         conversation_service: ConversationService,
         planning_feature: PlanningServices,
         parallel_mode_turn_service: ParallelModeTurnService,
+        thread_turn_options_port: Arc<dyn ConversationThreadTurnOptionsPort>,
     ) -> Self {
         Self::new_with_effect_runner_configuration(
             startup_service,
@@ -419,6 +426,7 @@ impl NativeCoreRuntime {
             conversation_service,
             planning_feature,
             parallel_mode_turn_service,
+            thread_turn_options_port,
             |runner| runner,
         )
     }
@@ -429,6 +437,7 @@ impl NativeCoreRuntime {
         conversation_service: ConversationService,
         planning_feature: PlanningServices,
         parallel_mode_turn_service: ParallelModeTurnService,
+        thread_turn_options_port: Arc<dyn ConversationThreadTurnOptionsPort>,
         configure_effect_runner: impl FnOnce(CoreEffectRunner) -> CoreEffectRunner,
     ) -> Self {
         let (input_sender, input_receiver) = core_input_channel();
@@ -443,6 +452,7 @@ impl NativeCoreRuntime {
             planning_feature,
             parallel_mode_turn_service,
             post_turn_evaluation_service,
+            thread_turn_options_port,
             input_sender,
         ));
 
@@ -489,6 +499,7 @@ impl NativeClientRuntime {
                 conversation_service,
                 planning_feature,
                 parallel_mode_turn_service,
+                Arc::new(NoopConversationThreadTurnOptionsPort),
             ),
             parallel_control_plane,
         )
@@ -518,6 +529,7 @@ impl NativeClientRuntime {
                 conversation_service,
                 planning_feature,
                 parallel_mode_turn_service,
+                Arc::new(NoopConversationThreadTurnOptionsPort),
                 |runner| runner.with_github_review_polling_setup_loader(loader),
             ),
             parallel_control_plane,

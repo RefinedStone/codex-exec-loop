@@ -86,12 +86,19 @@ struct TraceEnvironment {
 
 impl TraceEnvironment {
     fn from_process() -> Self {
+        let configuration = crate::configuration::current_process_config();
         Self {
-            akra_trace: std::env::var("AKRA_TRACE").ok(),
+            akra_trace: configuration
+                .map(|config| config.config.diagnostics.trace.clone())
+                .or_else(|| std::env::var("AKRA_TRACE").ok()),
             rust_log: std::env::var("RUST_LOG").ok(),
-            span_mode: std::env::var("AKRA_TRACE_SPANS").ok(),
+            span_mode: configuration
+                .map(|config| config.config.diagnostics.spans.clone())
+                .or_else(|| std::env::var("AKRA_TRACE_SPANS").ok()),
             trace_file: std::env::var_os("AKRA_TRACE_FILE").map(PathBuf::from),
-            tokio_console: std::env::var("AKRA_TOKIO_CONSOLE").ok(),
+            tokio_console: configuration
+                .map(|config| config.config.diagnostics.tokio_console.to_string())
+                .or_else(|| std::env::var("AKRA_TOKIO_CONSOLE").ok()),
             default_log_directory: default_trace_log_directory(),
         }
     }
@@ -1518,6 +1525,9 @@ fn next_rolling_trace_sequence_number(sequence: u32) -> Result<u32, String> {
 }
 
 fn trace_retained_file_count() -> usize {
+    if let Some(config) = crate::configuration::current_process_config() {
+        return config.config.diagnostics.max_files as usize;
+    }
     trace_retained_file_count_from_value(std::env::var(TRACE_MAX_FILES_ENV_VAR).ok().as_deref())
 }
 
@@ -1531,6 +1541,9 @@ fn trace_retained_file_count_from_value(value: Option<&str>) -> usize {
 }
 
 fn trace_max_file_bytes() -> u64 {
+    if let Some(config) = crate::configuration::current_process_config() {
+        return config.config.diagnostics.max_file_bytes;
+    }
     trace_max_file_bytes_from_value(std::env::var(TRACE_MAX_FILE_BYTES_ENV_VAR).ok().as_deref())
 }
 
@@ -1544,6 +1557,9 @@ fn trace_max_file_bytes_from_value(value: Option<&str>) -> u64 {
 }
 
 fn trace_max_total_bytes() -> u64 {
+    if let Some(config) = crate::configuration::current_process_config() {
+        return config.config.diagnostics.max_total_bytes;
+    }
     trace_max_total_bytes_from_value(std::env::var(TRACE_MAX_TOTAL_BYTES_ENV_VAR).ok().as_deref())
 }
 

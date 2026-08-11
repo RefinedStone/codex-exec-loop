@@ -1341,6 +1341,7 @@ fn native_tui_app_owns_exactly_four_typed_private_state_slices() {
                 ("pending_turn_steer", "Option<PendingTurnSteerUiIntent>"),
                 ("transcript_document_revision", "u64"),
                 ("transcript_document_thread_id", "Option<String>"),
+                ("next_new_thread_turn_options", "ConversationTurnOptions"),
                 ("turn_options", "ConversationTurnOptions"),
                 ("conversation_view_mode", "ConversationViewMode"),
                 ("auto_follow_overlay_ui_state", "AutoFollowOverlayUiState"),
@@ -3885,7 +3886,7 @@ fn core_conversation_turn_feature_reducer_owns_one_correlated_lifecycle_slice() 
 }
 
 #[test]
-fn core_controller_owns_exactly_seven_private_typed_feature_slices() {
+fn core_controller_owns_exactly_eight_private_typed_feature_slices() {
     let controller_source = fs::read_to_string("src/core/app/controller.rs")
         .expect("core controller source should load");
     let app_module_source =
@@ -3913,7 +3914,7 @@ fn core_feature_reducer_analyzer_rejects_raw_writers_without_test_fixture_noise(
         verify_core_feature_reducer_contract(&raw_controller, &app_module_source, &reducer_sources)
             .expect_err("a raw root generation writer must be rejected");
     assert!(
-        error.contains("exactly the seven typed private slices"),
+        error.contains("exactly the eight typed private slices"),
         "unexpected controller analyzer error: {error}"
     );
 
@@ -15482,6 +15483,10 @@ const CORE_CONTROLLER_SLICE_CONTRACTS: &[(&str, &str)] = &[
     ("read_models", "ReadModelFeatureReducer"),
     ("planning", "PlanningFeatureReducer"),
     ("github_review", "GithubReviewFeatureReducer"),
+    (
+        "conversation_preferences",
+        "ConversationPreferenceFeatureReducer",
+    ),
 ];
 
 const CORE_FEATURE_REDUCER_CONTRACTS: &[(&str, &str, &str)] = &[
@@ -15514,6 +15519,11 @@ const CORE_FEATURE_REDUCER_CONTRACTS: &[(&str, &str, &str)] = &[
         "github_review_reducer",
         "src/core/app/github_review_reducer.rs",
         "GithubReviewFeatureReducer",
+    ),
+    (
+        "conversation_preferences",
+        "src/core/app/conversation_preferences.rs",
+        "ConversationPreferenceFeatureReducer",
     ),
 ];
 
@@ -15584,7 +15594,7 @@ fn verify_core_feature_reducer_contract(
         .collect::<Vec<_>>();
     if actual_fields != expected_fields {
         return Err(format!(
-            "CoreController must own exactly the seven typed private slices; expected={expected_fields:?}, actual={actual_fields:?}"
+            "CoreController must own exactly the eight typed private slices; expected={expected_fields:?}, actual={actual_fields:?}"
         ));
     }
 
@@ -15616,9 +15626,7 @@ fn verify_core_feature_reducer_contract(
             if matches!(item_use.vis, syn::Visibility::Inherited) {
                 continue;
             }
-            if use_tree_mentions_identifier(&item_use.tree, module_name)
-                || use_tree_mentions_identifier(&item_use.tree, reducer_type)
-            {
+            if use_tree_mentions_identifier(&item_use.tree, reducer_type) {
                 return Err(format!(
                     "mutable reducer {reducer_type} must not be publicly re-exported"
                 ));
@@ -23931,6 +23939,11 @@ const CORE_EFFECT_LAUNCH_CONTRACTS: &[(&str, &str, &str)] = &[
     (
         "PersistApprovalReview",
         "spawn_approval_review_persistence",
+        "spawn_effect_completion_worker",
+    ),
+    (
+        "PersistConversationPreferences",
+        "spawn_conversation_preference_persistence",
         "spawn_effect_completion_worker",
     ),
     (

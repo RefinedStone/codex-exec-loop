@@ -214,7 +214,8 @@ use inline_shell_commands::{
 use language::{LANGUAGE_SELECTION_OPTIONS, LanguageSelectionOverlayUiState, TuiLanguage};
 use model_selection_overlay_ui::{
     MODEL_SELECTION_MODEL_OPTIONS, ModelSelectionModelOption, ModelSelectionOverlayUiState,
-    ModelSelectionStep, model_selection_effort_option,
+    ModelSelectionStep, configured_model_index, model_selection_effort_option,
+    model_selection_label_at, model_selection_option_at,
 };
 use parallel_panel_controller::{
     ParallelPanelStateController, ParallelPanelUiEvent, ParallelPanelUiState,
@@ -365,6 +366,10 @@ struct NativeTuiConversationState {
     // The last authoritative transcript identity survives Loading/Failed so a
     // deferred or failed load cannot make the viewport adopt another document.
     transcript_document_thread_id: Option<String>,
+    // The process-local default for the next newly-created thread. Existing
+    // threads may deliberately carry app-server defaults or their own saved
+    // values, so this must not be overwritten while restoring a session.
+    next_new_thread_turn_options: ConversationTurnOptions,
     turn_options: ConversationTurnOptions,
     conversation_view_mode: ConversationViewMode,
     auto_follow_overlay_ui_state: AutoFollowOverlayUiState,
@@ -402,6 +407,9 @@ struct NativeTuiApp {
 // automated captures. The former art selector remains a fallback so existing launch scripts keep
 // their behavior. Falsey values affect only the visual, never startup checks or shell readiness.
 fn startup_visual_enabled_from_environment() -> bool {
+    if let Some(config) = crate::configuration::current_process_config() {
+        return config.config.tui.show_startup_visual;
+    }
     let current_value = std::env::var(STARTUP_VISUAL_ENV_VAR).ok();
     let legacy_value = std::env::var(LEGACY_STARTUP_ASCII_ART_ENV_VAR).ok();
     startup_visual_enabled_from_values(current_value.as_deref(), legacy_value.as_deref())

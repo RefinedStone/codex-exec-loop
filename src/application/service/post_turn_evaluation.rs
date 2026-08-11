@@ -2560,8 +2560,13 @@ mod tests {
     fn official_completion_capture_failure_updates_panel_state() {
         with_test_event_logging(|| {
             let mut executor = test_executor();
-            let context = test_context(ready_projection(Some(queue_task())));
+            // A private, fresh non-Git directory keeps this failure-path test
+            // independent of any unrelated `/tmp/workspace` fixture residue.
+            let workspace = TempPlanningWorkspace::new("official-capture-panel-failure");
+            let mut context = test_context(ready_projection(Some(queue_task())));
+            context.planning_workspace_directory = workspace.path.clone();
             let mut request = test_request(context.clone());
+            request.workspace_directory = workspace.path.clone();
             request.changed_planning_file_paths =
                 vec![".codex-exec-loop/planning/result.md".into()];
             attach_synthetic_expected_lease(&mut request);

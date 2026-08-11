@@ -1,7 +1,10 @@
 use super::*;
+use crate::configuration::current_process_config;
 use crate::core::app::{
-    AppCommand, AppEvent, ApprovalDecisionAdmission, CoreInput, StopRequestAdmission,
-    StopRequestAttempt, StopRequestCorrelation, TurnSteerAdmission, TurnSteerCorrelation,
+    AppCommand, AppEvent, ApprovalDecisionAdmission, ConversationPreferencePersistenceCorrelation,
+    ConversationPreferencePersistenceRequest, ConversationPreferencePersistenceResult,
+    ConversationPreferenceThreadTarget, CoreInput, StopRequestAdmission, StopRequestAttempt,
+    StopRequestCorrelation, TurnSteerAdmission, TurnSteerCorrelation,
 };
 // Startup diagnostics gate user actions differently from rendering. The
 // controller keeps the three user-facing states here so prompt submission,
@@ -552,8 +555,13 @@ impl NativeTuiApp {
     fn handle_model_shell_command(&mut self, argument: Option<&str>) {
         if argument.is_some_and(is_turn_option_clear_argument) {
             self.conversation.turn_options.model = None;
+            self.conversation.next_new_thread_turn_options.model = None;
+            let mut status_text = "model reset to app-server default".to_string();
+            if self.queue_conversation_default_selection_persistence() {
+                status_text.push_str("; saving global and current-thread defaults");
+            }
             self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                status_text: "model reset to app-server default".to_string(),
+                status_text,
             });
             return;
         }
@@ -604,31 +612,46 @@ impl NativeTuiApp {
         }
     }
     fn handle_think_shell_command(&mut self, argument: Option<&str>) {
-        let status_text = match argument {
-            None => format!(
-                "think override unchanged / current: {} / use :think <{}>",
-                self.conversation
-                    .turn_options
-                    .reasoning_effort
-                    .map(ConversationReasoningEffort::label)
-                    .unwrap_or("default"),
-                ConversationReasoningEffort::SUPPORTED_LABELS
+        let (mut status_text, changed) = match argument {
+            None => (
+                format!(
+                    "think override unchanged / current: {} / use :think <{}>",
+                    self.conversation
+                        .turn_options
+                        .reasoning_effort
+                        .map(ConversationReasoningEffort::label)
+                        .unwrap_or("default"),
+                    ConversationReasoningEffort::SUPPORTED_LABELS
+                ),
+                false,
             ),
             Some(value) if is_turn_option_clear_argument(value) => {
                 self.conversation.turn_options.reasoning_effort = None;
-                "think reset to app-server default".to_string()
+                self.conversation
+                    .next_new_thread_turn_options
+                    .reasoning_effort = None;
+                ("think reset to app-server default".to_string(), true)
             }
             Some(value) => match ConversationReasoningEffort::parse(value) {
                 Some(effort) => {
                     self.conversation.turn_options.reasoning_effort = Some(effort);
-                    format!("think override set to {}", effort.label())
+                    self.conversation
+                        .next_new_thread_turn_options
+                        .reasoning_effort = Some(effort);
+                    (format!("think override set to {}", effort.label()), true)
                 }
-                None => format!(
-                    "think override unchanged; supported values: {}",
-                    ConversationReasoningEffort::SUPPORTED_LABELS
+                None => (
+                    format!(
+                        "think override unchanged; supported values: {}",
+                        ConversationReasoningEffort::SUPPORTED_LABELS
+                    ),
+                    false,
                 ),
             },
         };
+        if changed && self.queue_conversation_default_selection_persistence() {
+            status_text.push_str("; saving global and current-thread defaults");
+        }
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text,
         });
@@ -1606,18 +1629,88 @@ impl NativeTuiApp {
     }
 
     fn apply_model_selection_overlay(&mut self) {
-        let model_option = self.shell.model_selection_overlay_ui_state.staged_model();
+        let model_label = self
+            .shell
+            .model_selection_overlay_ui_state
+            .staged_model_label();
+        let model = self
+            .shell
+            .model_selection_overlay_ui_state
+            .staged_model_id()
+            .map(str::to_string);
         let effort_option = self
             .shell
             .model_selection_overlay_ui_state
             .selected_effort();
-        self.conversation.turn_options.model = model_option.model.map(str::to_string);
+        self.conversation.turn_options.model = model;
         self.conversation.turn_options.reasoning_effort = effort_option.effort;
+        self.conversation.next_new_thread_turn_options = self.conversation.turn_options.clone();
         self.close_shell_overlay();
+        let mut status_text = format!(
+            "model set to {}; reasoning set to {}",
+            model_label, effort_option.label
+        );
+        if self.queue_conversation_default_selection_persistence() {
+            status_text.push_str("; saving global and current-thread defaults");
+        }
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text,
+        });
+    }
+
+    fn queue_conversation_default_selection_persistence(&mut self) -> bool {
+        // Unit-test app instances intentionally do not install a process
+        // configuration; production has one immutable resolved snapshot.
+        if current_process_config().is_none() {
+            return false;
+        }
+
+        let active_thread = match &self.conversation.lifecycle.conversation_state {
+            ConversationState::Ready(conversation) if conversation.has_active_thread() => {
+                Some(ConversationPreferenceThreadTarget {
+                    workspace_directory: conversation.planning_workspace_directory().to_string(),
+                    thread_id: conversation.thread_id.clone(),
+                })
+            }
+            ConversationState::Loading
+            | ConversationState::Failed(_)
+            | ConversationState::Ready(_) => None,
+        };
+        let request = ConversationPreferencePersistenceRequest {
+            global_workspace_directory: std::env::current_dir()
+                .ok()
+                .map(|directory| directory.display().to_string()),
+            active_thread,
+            options: self.conversation.next_new_thread_turn_options.clone(),
+        };
+        self.dispatch_client_event(CoreInput::Command(
+            AppCommand::PersistConversationPreferences(Box::new(request)),
+        ));
+        true
+    }
+
+    pub(super) fn apply_conversation_preference_persistence_completion(
+        &mut self,
+        correlation: ConversationPreferencePersistenceCorrelation,
+        result: ConversationPreferencePersistenceResult,
+    ) {
+        let selection = correlation.request.options.summary_label();
+        let mut messages = Vec::new();
+        match result.global {
+            Ok(path) => messages.push(format!("saved global default to {path}")),
+            Err(error) => messages.push(format!("global default was not saved ({error})")),
+        }
+        match result.current_thread {
+            Some(Ok(())) => messages.push("saved current thread selection".to_string()),
+            Some(Err(error)) => {
+                messages.push(format!("current thread selection was not saved ({error})"));
+            }
+            None => {}
+        }
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text: format!(
-                "model set to {}; reasoning set to {}",
-                model_option.label, effort_option.label
+                "conversation defaults ({selection}): {}",
+                messages.join("; ")
             ),
         });
     }
@@ -1678,14 +1771,17 @@ mod tests {
         PlanningTaskToolRequest,
     };
     use crate::core::app::{
-        ActiveTurnPhase, ActiveTurnSnapshot, CorePromptOrigin, PostTurnAuthoritySnapshot,
+        ActiveTurnPhase, ActiveTurnSnapshot, ConversationPreferencePersistenceCorrelation,
+        ConversationPreferencePersistenceRequest, ConversationPreferencePersistenceResult,
+        ConversationPreferenceThreadTarget, CorePromptOrigin, PostTurnAuthoritySnapshot,
         PostTurnEvaluationCorrelation, PostTurnRouteResolution, QueueAuthorityLoadCorrelation,
         QueueAuthorityLoadError, QueueAuthoritySnapshot, QueueMutationCorrelation,
         QueueMutationIntent, QueueMutationResult, QueueMutationTarget, StartupReadySnapshot,
         TurnSubmissionCorrelation,
     };
     use crate::domain::conversation::{
-        ConversationApprovalRequest, ConversationApprovalRequestKind,
+        ConversationApprovalRequest, ConversationApprovalRequestKind, ConversationReasoningEffort,
+        ConversationTurnOptions,
     };
     use crate::domain::planning::{
         PlanningQueueMutationKind, PlanningQueueMutationReceipt, PlanningQueueMutationReceiptEntry,
@@ -2879,6 +2975,38 @@ mod tests {
         );
         app.execute_inline_shell_command_input(command(":stop"));
         assert!(status_text(&app).contains("stop already requested"));
+    }
+
+    #[test]
+    fn conversation_preference_completion_surfaces_global_and_thread_failures_separately() {
+        let mut app = test_native_tui_app();
+        let correlation = ConversationPreferencePersistenceCorrelation {
+            generation: 7,
+            request: ConversationPreferencePersistenceRequest {
+                global_workspace_directory: Some("/tmp/workspace".to_string()),
+                active_thread: Some(ConversationPreferenceThreadTarget {
+                    workspace_directory: "/tmp/workspace".to_string(),
+                    thread_id: "thread-7".to_string(),
+                }),
+                options: ConversationTurnOptions {
+                    model: Some("gpt-5.6-terra".to_string()),
+                    reasoning_effort: Some(ConversationReasoningEffort::Max),
+                },
+            },
+        };
+
+        app.apply_conversation_preference_persistence_completion(
+            correlation,
+            ConversationPreferencePersistenceResult {
+                global: Err("global disk is read-only".to_string()),
+                current_thread: Some(Err("SQLite is unavailable".to_string())),
+            },
+        );
+
+        let status = status_text(&app);
+        assert!(status.contains("model: gpt-5.6-terra  |  think: max"));
+        assert!(status.contains("global default was not saved (global disk is read-only)"));
+        assert!(status.contains("current thread selection was not saved (SQLite is unavailable)"));
     }
 
     #[test]

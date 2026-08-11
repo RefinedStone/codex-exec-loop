@@ -1,4 +1,6 @@
-use crate::domain::conversation::ConversationSnapshot as DomainConversationSnapshot;
+use crate::domain::conversation::{
+    ConversationSnapshot as DomainConversationSnapshot, ConversationTurnOptions,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConversationThreadReviewSnapshot {
@@ -16,6 +18,10 @@ pub struct ConversationThreadReviewSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConversationReadySnapshot {
     pub conversation: Box<DomainConversationSnapshot>,
+    /// The exact saved option policy for this thread.  The composition layer
+    /// resolves it before Core publishes the immutable snapshot so inbound
+    /// adapters never read persistence ports directly.
+    pub turn_options: ConversationTurnOptions,
     pub thread_id: String,
     pub title: String,
     pub workspace_directory: String,
@@ -30,6 +36,18 @@ impl ConversationReadySnapshot {
         conversation: DomainConversationSnapshot,
         thread_review: Vec<ConversationThreadReviewSnapshot>,
     ) -> Self {
+        Self::from_parts_with_turn_options(
+            conversation,
+            thread_review,
+            ConversationTurnOptions::app_server_default(),
+        )
+    }
+
+    pub fn from_parts_with_turn_options(
+        conversation: DomainConversationSnapshot,
+        thread_review: Vec<ConversationThreadReviewSnapshot>,
+        turn_options: ConversationTurnOptions,
+    ) -> Self {
         Self {
             thread_id: conversation.thread_id.clone(),
             title: conversation.title.clone(),
@@ -38,6 +56,7 @@ impl ConversationReadySnapshot {
             warning_count: conversation.warnings.len(),
             runtime_notice_count: conversation.runtime_notices.len(),
             conversation: Box::new(conversation),
+            turn_options,
             thread_review,
         }
     }
@@ -107,6 +126,7 @@ mod tests {
             ready,
             ConversationReadySnapshot {
                 conversation: Box::new(conversation),
+                turn_options: ConversationTurnOptions::app_server_default(),
                 thread_id: "thread-1".to_string(),
                 title: "Build core runtime".to_string(),
                 workspace_directory: "/tmp/workspace".to_string(),

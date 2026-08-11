@@ -1,6 +1,6 @@
 use super::super::super::{
-    AkraTheme, Line, MODEL_SELECTION_MODEL_OPTIONS, ModelSelectionStep,
-    model_selection_effort_option,
+    AkraTheme, Line, MODEL_SELECTION_MODEL_OPTIONS, ModelSelectionStep, configured_model_index,
+    model_selection_effort_option, model_selection_label_at, model_selection_option_at,
 };
 use super::super::option_lines::overlay_option_line;
 use super::ModelSelectionOverlayView;
@@ -12,6 +12,7 @@ pub(crate) struct ModelSelectionFrameInput<'a> {
     pub(crate) selected_model_index: usize,
     pub(crate) selected_effort_index: usize,
     pub(crate) staged_model_index: usize,
+    pub(crate) configured_model: Option<&'a str>,
     pub(crate) current_model_label: &'a str,
     pub(crate) current_effort_label: &'static str,
 }
@@ -19,13 +20,17 @@ pub(crate) struct ModelSelectionFrameInput<'a> {
 pub(crate) fn build_model_selection_overlay_view(
     input: ModelSelectionFrameInput<'_>,
 ) -> ModelSelectionOverlayView {
-    let staged_model = MODEL_SELECTION_MODEL_OPTIONS[input.staged_model_index];
+    let staged_model = model_selection_option_at(input.staged_model_index);
+    let staged_model_label =
+        model_selection_label_at(input.staged_model_index, input.configured_model);
     let active_model = match input.step {
-        ModelSelectionStep::Model => MODEL_SELECTION_MODEL_OPTIONS[input.selected_model_index],
+        ModelSelectionStep::Model => model_selection_option_at(input.selected_model_index),
         ModelSelectionStep::Effort => staged_model,
     };
     let selection_lines = match input.step {
-        ModelSelectionStep::Model => build_model_selection_lines(input.selected_model_index),
+        ModelSelectionStep::Model => {
+            build_model_selection_lines(input.selected_model_index, input.configured_model)
+        }
         ModelSelectionStep::Effort => {
             build_effort_selection_lines(staged_model, input.selected_effort_index)
         }
@@ -35,20 +40,23 @@ pub(crate) fn build_model_selection_overlay_view(
         header_lines: vec![
             AkraTheme::title_line("Model setup", ""),
             build_model_selection_step_line(input.step),
-            build_provider_line(active_model.provider_label, input.step, staged_model.label),
+            build_provider_line(active_model.provider_label, input.step, &staged_model_label),
         ],
         selection_title: Line::from(match input.step {
             ModelSelectionStep::Model => "Choose model",
             ModelSelectionStep::Effort => "Choose reasoning",
         }),
         selection_lines,
-        summary_lines: build_model_selection_summary_lines(input, staged_model.label),
+        summary_lines: build_model_selection_summary_lines(input, &staged_model_label),
         key_lines: build_model_selection_key_lines(input.step),
     }
 }
 
-fn build_model_selection_lines(selected_model_index: usize) -> Vec<Line<'static>> {
-    MODEL_SELECTION_MODEL_OPTIONS
+fn build_model_selection_lines(
+    selected_model_index: usize,
+    configured_model: Option<&str>,
+) -> Vec<Line<'static>> {
+    let mut lines: Vec<_> = MODEL_SELECTION_MODEL_OPTIONS
         .iter()
         .enumerate()
         .map(|(index, option)| {
@@ -60,7 +68,17 @@ fn build_model_selection_lines(selected_model_index: usize) -> Vec<Line<'static>
                 false,
             )
         })
-        .collect()
+        .collect();
+    if let Some(model) = configured_model {
+        lines.push(overlay_option_line(
+            &(configured_model_index() + 1).to_string(),
+            &format!("Configured: {model}"),
+            "custom",
+            selected_model_index == configured_model_index(),
+            false,
+        ));
+    }
+    lines
 }
 
 fn build_effort_selection_lines(
@@ -107,7 +125,7 @@ fn build_model_selection_step_line(step: ModelSelectionStep) -> Line<'static> {
 fn build_provider_line(
     provider_label: &'static str,
     step: ModelSelectionStep,
-    staged_model_label: &'static str,
+    staged_model_label: &str,
 ) -> Line<'static> {
     match step {
         ModelSelectionStep::Model => Line::from(vec![
@@ -117,14 +135,14 @@ fn build_provider_line(
         ModelSelectionStep::Effort => Line::from(vec![
             Span::styled("Provider", AkraTheme::subtle()),
             Span::raw(format!(": {provider_label}  ·  ")),
-            Span::styled(staged_model_label, AkraTheme::brand()),
+            Span::styled(staged_model_label.to_string(), AkraTheme::brand()),
         ]),
     }
 }
 
 fn build_model_selection_summary_lines(
     input: ModelSelectionFrameInput<'_>,
-    staged_model_label: &'static str,
+    staged_model_label: &str,
 ) -> Vec<Line<'static>> {
     match input.step {
         ModelSelectionStep::Model => vec![Line::styled(
@@ -137,7 +155,7 @@ fn build_model_selection_summary_lines(
         )],
         ModelSelectionStep::Effort => {
             let selected_effort = model_selection_effort_option(
-                MODEL_SELECTION_MODEL_OPTIONS[input.staged_model_index].supported_efforts
+                model_selection_option_at(input.staged_model_index).supported_efforts
                     [input.selected_effort_index],
             );
             vec![Line::styled(
@@ -151,19 +169,19 @@ fn build_model_selection_summary_lines(
     }
 }
 
-fn display_model_label(model: &str) -> &str {
+fn display_model_label(model: &str) -> String {
     if model == "default" {
         return MODEL_SELECTION_MODEL_OPTIONS
             .iter()
             .find(|option| option.model.is_none())
-            .map(|option| option.label)
-            .unwrap_or(model);
+            .map(|option| option.label.to_string())
+            .unwrap_or_else(|| model.to_string());
     }
     MODEL_SELECTION_MODEL_OPTIONS
         .iter()
         .find(|option| option.model == Some(model))
-        .map(|option| option.label)
-        .unwrap_or(model)
+        .map(|option| option.label.to_string())
+        .unwrap_or_else(|| format!("Configured: {model}"))
 }
 
 fn build_model_selection_key_lines(step: ModelSelectionStep) -> Vec<Line<'static>> {
@@ -188,6 +206,7 @@ mod tests {
             selected_model_index: 0,
             selected_effort_index: 2,
             staged_model_index: 0,
+            configured_model: None,
             current_model_label: "gpt-5.5",
             current_effort_label: "high",
         });
@@ -217,6 +236,7 @@ mod tests {
             selected_model_index: 0,
             selected_effort_index: 2,
             staged_model_index: 0,
+            configured_model: None,
             current_model_label: "gpt-5.5",
             current_effort_label: "high",
         });
@@ -237,6 +257,31 @@ mod tests {
                 .selection_lines
                 .iter()
                 .any(|line| line.to_string().contains("minimal"))
+        );
+    }
+
+    #[test]
+    fn configured_model_is_rendered_as_a_temporary_picker_item() {
+        let configured_index = configured_model_index();
+        let view = build_model_selection_overlay_view(ModelSelectionFrameInput {
+            step: ModelSelectionStep::Model,
+            selected_model_index: configured_index,
+            selected_effort_index: 0,
+            staged_model_index: configured_index,
+            configured_model: Some("my-private-model"),
+            current_model_label: "my-private-model",
+            current_effort_label: "max",
+        });
+
+        assert!(
+            view.selection_lines
+                .iter()
+                .any(|line| { line.to_string().contains("Configured: my-private-model") })
+        );
+        assert!(
+            view.summary_lines
+                .iter()
+                .any(|line| line.to_string().contains("Configured: my-private-model"))
         );
     }
 }

@@ -9,6 +9,7 @@ use crate::application::port::outbound::app_server_prompt_log_port::{
     AppServerPromptInputRecord, AppServerPromptInteractionRecord, AppServerPromptLogPort,
     AppServerPromptOutputRecord,
 };
+use crate::application::port::outbound::conversation_thread_turn_options_port::ConversationThreadTurnOptionsPort;
 use crate::application::port::outbound::github_automation_port::GithubRepositoryVisibility;
 use crate::application::port::outbound::parallel_mode_runtime_event_log_port::{
     ParallelModeRuntimeEventLogPort, ParallelModeRuntimeEventLogRequest,
@@ -48,6 +49,7 @@ use crate::application::service::planning::{
     PlanningQueueCancellationRequest, PlanningQueueCancellationTarget, PlanningServices,
     RESULT_OUTPUT_FILE_PATH,
 };
+use crate::domain::conversation::{ConversationReasoningEffort, ConversationTurnOptions};
 use crate::domain::parallel_mode::{
     IntegrationMethod, ParallelModeAgentSessionDetailSnapshot, ParallelModeAutomationTrigger,
     ParallelModeDispatchBlockReason, ParallelModeDispatchCommandSnapshot,
@@ -105,6 +107,45 @@ fn temp_workspace(prefix: &str) -> String {
     // 실패는 테스트 환경 문제이므로 expect로 즉시 드러낸다.
     std::fs::create_dir_all(&path).expect("workspace should create");
     path.display().to_string()
+}
+
+#[test]
+fn conversation_thread_turn_options_round_trip_and_keep_missing_rows_distinct() {
+    let workspace = temp_workspace("conversation-thread-options");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+
+    assert_eq!(
+        adapter
+            .load_turn_options(&workspace, "external-thread")
+            .expect("missing turn options should load"),
+        None,
+        "an external or pre-v17 thread must remain distinct from an explicit default row"
+    );
+
+    let explicit_default = ConversationTurnOptions::app_server_default();
+    adapter
+        .store_turn_options(&workspace, "default-thread", &explicit_default)
+        .expect("explicit app-server defaults should persist");
+    assert_eq!(
+        adapter
+            .load_turn_options(&workspace, "default-thread")
+            .expect("explicit app-server defaults should reload"),
+        Some(explicit_default)
+    );
+
+    let configured = ConversationTurnOptions {
+        model: Some("gpt-5.6-terra".to_string()),
+        reasoning_effort: Some(ConversationReasoningEffort::Max),
+    };
+    adapter
+        .store_turn_options(&workspace, "configured-thread", &configured)
+        .expect("configured turn options should persist");
+    assert_eq!(
+        adapter
+            .load_turn_options(&workspace, "configured-thread")
+            .expect("configured turn options should reload"),
+        Some(configured)
+    );
 }
 
 #[cfg(any(unix, windows))]
@@ -669,8 +710,8 @@ fn rollout_evidence_store_deduplicates_conflicts_and_enforces_retention() {
 }
 
 #[test]
-fn authority_schema_migrates_v7_through_v15_additively_and_rejects_unsupported_versions() {
-    for legacy_version in [7, 8, 9, 10, 11, 12, 13, 14, 15] {
+fn authority_schema_migrates_v7_through_v16_additively_and_rejects_unsupported_versions() {
+    for legacy_version in [7, 8, 9, 10, 11, 12, 13, 14, 15, 16] {
         let workspace_dir = temp_workspace(&format!("schema-migrate-v{legacy_version}"));
         let location = SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
             &workspace_dir,
@@ -700,6 +741,7 @@ fn authority_schema_migrates_v7_through_v15_additively_and_rejects_unsupported_v
                  ALTER TABLE runtime_pr_validation_records DROP COLUMN operator_paused;
                  ALTER TABLE runtime_pr_validation_records DROP COLUMN operator_acknowledged_at;
                  ALTER TABLE runtime_pr_validation_records DROP COLUMN last_operator_command_id;
+                 DROP TABLE conversation_thread_turn_options;
                  INSERT OR REPLACE INTO active_documents (relative_path, content)
                  VALUES ('legacy.md', 'legacy body');
                  UPDATE authority_metadata SET value = '{legacy_version}'
@@ -716,7 +758,7 @@ fn authority_schema_migrates_v7_through_v15_additively_and_rejects_unsupported_v
                 |row| row.get(0),
             )
             .expect("migrated version should load");
-        assert_eq!(version, "16");
+        assert_eq!(version, "17");
         assert_eq!(
             migrated
                 .query_row(
@@ -742,6 +784,7 @@ fn authority_schema_migrates_v7_through_v15_additively_and_rejects_unsupported_v
                 ("table", "runtime_pr_validation_evidence_snapshots"),
                 ("index", "idx_runtime_pr_validation_evidence_history"),
                 ("table", "runtime_pr_validation_evidence_collection"),
+                ("table", "conversation_thread_turn_options"),
             ]
         } else {
             vec![
@@ -753,6 +796,7 @@ fn authority_schema_migrates_v7_through_v15_additively_and_rejects_unsupported_v
                 ("table", "runtime_pr_validation_evidence_snapshots"),
                 ("index", "idx_runtime_pr_validation_evidence_history"),
                 ("table", "runtime_pr_validation_evidence_collection"),
+                ("table", "conversation_thread_turn_options"),
             ]
         };
         for (object_type, object_name) in expected_objects {
@@ -802,7 +846,7 @@ fn authority_schema_migrates_v7_through_v15_additively_and_rejects_unsupported_v
         }
     }
 
-    for unsupported_version in ["6", "17", "not-a-version"] {
+    for unsupported_version in ["6", "18", "not-a-version"] {
         let workspace_dir = temp_workspace("schema-reject-unsupported");
         let location = SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
             &workspace_dir,
@@ -924,7 +968,7 @@ fn authority_schema_migrates_v12_pr_validation_schedule_without_data_loss() {
                 |row| row.get::<_, String>(0),
             )
             .unwrap(),
-        "16"
+        "17"
     );
     drop(migrated);
 
@@ -1127,7 +1171,7 @@ fn authority_schema_migrates_v11_legacy_merge_evidence_without_data_loss() {
             |row| row.get(0),
         )
         .expect("migrated version should load");
-    assert_eq!(version, "16");
+    assert_eq!(version, "17");
     let (method, evidence_sha, content): (String, String, String) = migrated
         .query_row(
             "SELECT integration_method, integration_evidence_sha, content
@@ -5937,9 +5981,25 @@ fn runtime_claim_release_and_stale_timestamp_edges_respect_claim_ownership() {
             .expect("official refresh claim should acquire"),
         PlanningAuthorityOfficialRefreshClaimStatus::Acquired
     );
+    set_claim_timestamp(
+        &workspace_dir,
+        OFFICIAL_REFRESH_CLAIM_KIND,
+        OFFICIAL_REFRESH_SCOPE_KEY,
+        "2999-01-01T00:00:00+00:00",
+    );
     adapter
         .release_official_refresh_claim(&workspace_dir, refresh_order, "wrong-refresh-owner")
         .expect("wrong official owner release should be harmless");
+    assert_eq!(
+        runtime_claim_owner_and_timestamp(
+            &workspace_dir,
+            OFFICIAL_REFRESH_CLAIM_KIND,
+            OFFICIAL_REFRESH_SCOPE_KEY,
+        )
+        .0,
+        "refresh-owner",
+        "a mismatched release must retain the active official refresh claim"
+    );
     assert_eq!(
         adapter
             .acquire_official_refresh_claim(&workspace_dir, refresh_order, "refresh-other")

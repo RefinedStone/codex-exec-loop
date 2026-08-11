@@ -33,6 +33,7 @@
 | Planning | `:planning`, `:planning-init` | planning 변경 staging·검증·승격 |
 | Directions | `:directions` | direction과 queue-idle 지원 자료 관리 |
 | Health | `:doctor`, `:planning doctor`, `akra doctor`, `akra status` | 작성 없이 planning 권한 상태 확인 |
+| Configuration | `akra config` | 유효값과 origin 조회, 전역 또는 Git-worktree TOML 설정의 안전한 변경 |
 | Parallel | `:parallel`, `:pa` | 자동화 활성화/갱신과 supervisor board 열기 |
 | Parallel peek | `:peek` | 활성 병렬 agent 대화 확인 |
 
@@ -69,6 +70,12 @@ Modal이 focus를 소유할 때는 전역 키보다 우선할 수 있으며, 표
 `:model`은 `모델 → 추론` 순서의 단계형 선택기를 엽니다. 실제 활성 provider만 표시하고,
 선택한 모델이 지원하는 추론 수준과 그 추천값만 보여 줍니다. OpenAI 목록은 GPT-5.6 Sol,
 Terra, Luna로 시작하며 GPT-5.6 행에는 `max`가 있고 `minimal`은 없습니다.
+
+초기 interactive 기본값은 GPT-5.6 Sol과 `medium` effort입니다. `:model`, `:think`는 현재 선택을
+즉시 바꾸고 다음 새 thread의 기본값을 전역 설정에 저장합니다. 활성 thread에는 선택한 model과
+effort도 독립적으로 남깁니다. Akra 저장 options가 없는 기존 또는 외부 thread를 다시 열 때는 새 전역
+값을 적용하지 않고 app-server에 두 필드를 unset으로 보냅니다. 계층 파일 계약과 CLI는
+[설정 참조](configuration.md)를 참고하세요.
 
 `:turns`는 단일 세션 auto-follow를 제어합니다. Parallel 자동화는 별도의 명시적 opt-in입니다.
 `:stop`은 활성 app-server 세션을 중지하고 parallel epoch를 닫으며 두 continuation 경로를 모두

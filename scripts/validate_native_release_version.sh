@@ -86,8 +86,12 @@ if [[ ! -f "${manifest_path}" ]]; then
   echo "validate_native_release_version: manifest not found: ${manifest_path}" >&2
   exit 1
 fi
-if ! command -v python3 >/dev/null 2>&1 ||
-  ! python3 -c 'import tomllib' >/dev/null 2>&1; then
+if ! command -v python3 >/dev/null 2>&1 || ! python3 -c '
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli
+' >/dev/null 2>&1; then
   echo "validate_native_release_version: python3 with tomllib support is required" >&2
   exit 1
 fi
@@ -132,13 +136,16 @@ fi
 if ! crate_version="$(python3 - "${manifest_path}" <<'PY'
 import re
 import sys
-import tomllib
+try:
+    import tomllib as toml
+except ModuleNotFoundError:
+    import tomli as toml
 
 manifest_path = sys.argv[1]
 try:
     with open(manifest_path, "rb") as stream:
-        manifest = tomllib.load(stream)
-except (OSError, tomllib.TOMLDecodeError) as error:
+        manifest = toml.load(stream)
+except (OSError, toml.TOMLDecodeError) as error:
     raise SystemExit(f"validate_native_release_version: failed to parse Cargo manifest: {error}")
 package = manifest.get("package")
 version = package.get("version") if isinstance(package, dict) else None

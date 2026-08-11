@@ -15,6 +15,11 @@ pub(in crate::adapter::inbound::tui::app) enum PlanningWorkerVisibility {
 impl PlanningWorkerVisibility {
     // NativeTuiApp calls this during construction; later rendering only consults the stored enum.
     pub(in crate::adapter::inbound::tui::app) fn from_environment() -> Self {
+        if let Some(config) = crate::configuration::current_process_config() {
+            return Self::from_env_value(Some(
+                config.config.tui.planning_worker_visibility.as_str(),
+            ));
+        }
         let value = std::env::var(PLANNING_WORKER_VISIBILITY_ENV_VAR)
             .or_else(|_| std::env::var(LEGACY_PLANNING_WORKER_VISIBILITY_ENV_VAR))
             .ok();

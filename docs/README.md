@@ -12,6 +12,7 @@ current pinned brief per product.
 | Need | Canonical document | Korean |
 | --- | --- | --- |
 | Product surfaces, commands, planning, parallel flow, limits | [reference/current-product.md](reference/current-product.md) | [ko/reference/current-product.md](ko/reference/current-product.md) |
+| Global, project, environment, and command-line configuration | [reference/configuration.md](reference/configuration.md) | [ko/reference/configuration.md](ko/reference/configuration.md) |
 | Layer ownership, state authority, security boundaries | [reference/architecture.md](reference/architecture.md) | [ko/reference/architecture.md](ko/reference/architecture.md) |
 | Repository map, coding rules, tests, worktrees, GitHub delivery | [reference/development.md](reference/development.md) | [ko/reference/development.md](ko/reference/development.md) |
 | Admin game frontend runtime and renderer | [reference/admin-game-frontend.md](reference/admin-game-frontend.md) | [ko/reference/admin-game-frontend.md](ko/reference/admin-game-frontend.md) |

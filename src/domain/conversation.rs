@@ -165,9 +165,9 @@ pub struct ConversationTurnSteerReceipt {
 }
 
 impl ConversationTurnOptions {
-    pub const DEFAULT_MODEL: &'static str = "gpt-5.5";
+    pub const DEFAULT_MODEL: &'static str = "gpt-5.6-sol";
     pub const DEFAULT_REASONING_EFFORT: ConversationReasoningEffort =
-        ConversationReasoningEffort::High;
+        ConversationReasoningEffort::Medium;
 
     pub fn app_server_default() -> Self {
         Self {
@@ -461,13 +461,16 @@ mod tests {
     fn turn_options_default_to_akra_project_model_policy() {
         let options = ConversationTurnOptions::default();
 
-        assert_eq!(options.model.as_deref(), Some("gpt-5.5"));
+        assert_eq!(options.model.as_deref(), Some("gpt-5.6-sol"));
         assert_eq!(
             options.reasoning_effort,
-            Some(ConversationReasoningEffort::High)
+            Some(ConversationReasoningEffort::Medium)
         );
         assert!(options.is_default());
-        assert_eq!(options.summary_label(), "model: gpt-5.5  |  think: high");
+        assert_eq!(
+            options.summary_label(),
+            "model: gpt-5.6-sol  |  think: medium"
+        );
     }
 
     #[test]
@@ -488,7 +491,7 @@ mod tests {
         };
         let wrong_effort = ConversationTurnOptions {
             model: Some(ConversationTurnOptions::DEFAULT_MODEL.to_string()),
-            reasoning_effort: Some(ConversationReasoningEffort::Medium),
+            reasoning_effort: Some(ConversationReasoningEffort::High),
         };
         let missing_model = ConversationTurnOptions {
             model: None,

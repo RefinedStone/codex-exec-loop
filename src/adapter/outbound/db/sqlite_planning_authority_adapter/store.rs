@@ -54,6 +54,7 @@ authority store가 필요로 하는 전체 schema를 idempotent하게 보장한�
 - `planning_direction_*`: direction authority 문서와 방향별 JSON 원문이다.
 - `planning_tasks` / `planning_task_edges` / `planning_queue_projection`: task authority와 queue projection이다.
 - `runtime_*`: app-server/parallel runtime에서 쓰는 lease, session, queue, event projection이다.
+- `conversation_thread_turn_options`: app-server thread별 interactive model/effort 선택이다.
 
 schema가 한 함수에 모여 있는 이유는 projection 모듈들이 서로 다른 테이블을 만져도 migration 기준은
 하나여야 하기 때문이다. 분산된 `CREATE TABLE`은 버전 추적과 테스트 초기화를 어렵게 만든다.
@@ -418,6 +419,13 @@ pub(super) fn ensure_schema(
                 ON app_server_prompt_interactions(sequence DESC);
             CREATE INDEX IF NOT EXISTS idx_app_server_prompt_interactions_thread
                 ON app_server_prompt_interactions(thread_id, turn_id);
+
+            CREATE TABLE IF NOT EXISTS conversation_thread_turn_options (
+                thread_id TEXT PRIMARY KEY,
+                model TEXT,
+                reasoning_effort TEXT,
+                updated_at TEXT NOT NULL
+            );
             "#,
         )
         .context("failed to initialize authority-store schema")?;

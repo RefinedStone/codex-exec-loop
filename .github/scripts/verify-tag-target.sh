@@ -38,7 +38,7 @@ while (($# > 0)); do
       ;;
     --expected-commit)
       require_value "$1" "${2-}"
-      expected_commit="${2,,}"
+      expected_commit="$2"
       shift 2
       ;;
     -h|--help)
@@ -61,6 +61,11 @@ if [[ ! "${tag}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
   echo "verify-tag-target: --tag contains unsupported characters" >&2
   exit 1
 fi
+if ! command -v tr >/dev/null 2>&1; then
+  echo "verify-tag-target: tr is required" >&2
+  exit 1
+fi
+expected_commit="$(printf '%s' "${expected_commit}" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
 if [[ ! "${expected_commit}" =~ ^[0-9a-f]{40}$ ]]; then
   echo "verify-tag-target: --expected-commit must be a full 40-character commit SHA" >&2
   exit 1
@@ -110,7 +115,7 @@ resolve_api_object() {
 }
 
 object_identity="$(resolve_api_object "repos/${repo}/git/ref/tags/${tag}")"
-declare -A visited_tag_objects=()
+visited_tag_objects=$'\n'
 
 for _ in {1..8}; do
   read -r object_type object_sha <<<"${object_identity}"
@@ -122,11 +127,11 @@ for _ in {1..8}; do
     printf 'verified GitHub tag %s at commit %s\n' "${tag}" "${expected_commit}"
     exit 0
   fi
-  if [[ -n "${visited_tag_objects[${object_sha}]:-}" ]]; then
+  if [[ "${visited_tag_objects}" == *$'\n'"${object_sha}"$'\n'* ]]; then
     echo "verify-tag-target: annotated tag object cycle detected" >&2
     exit 1
   fi
-  visited_tag_objects["${object_sha}"]=1
+  visited_tag_objects+="${object_sha}"$'\n'
   object_identity="$(resolve_api_object "repos/${repo}/git/tags/${object_sha}")"
 done
 

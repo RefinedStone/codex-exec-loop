@@ -5,6 +5,7 @@
  */
 #![deny(dead_code)]
 
+use anyhow::Context;
 use std::io;
 
 /*
@@ -24,6 +25,10 @@ pub(crate) mod composition;
  * import하거나 domain/outbound adapter를 대체하지 않는다.
  */
 pub mod core;
+// configuration owns the small, explicitly allow-listed operator settings surface.  Keeping it
+// outside individual adapters prevents each entrypoint from inventing a different precedence
+// rule for the same setting.
+pub mod configuration;
 // diagnostics는 TUI/app-server stdout을 오염시키지 않는 선택적 tracing JSONL 관측 hook이다.
 pub mod diagnostics;
 // domain은 planning/parallel-mode의 상태 전이와 값 객체를 framework 없이 표현하는 가장 안쪽 계층이다.
@@ -52,6 +57,26 @@ pub(crate) mod trusted_executable;
  * app-server shell을 시작한다. 그래서 bin target들은 이름이 달라도 동일한 실행 정책을 공유한다.
  */
 pub fn run() -> anyhow::Result<i32> {
+    let invocation = configuration::ParsedInvocation::parse(std::env::args_os().skip(1))?;
+    /*
+     * Configuration inspection is explicitly non-mutating.  Dispatch it before
+     * startup resolution so `--help` and `akra config path/list/get/doctor`
+     * cannot create `${AKRA_HOME}/config.toml` as a side effect.
+     */
+    if invocation.is_help_only() || invocation.is_configuration_command() {
+        let mut stdout = io::stdout();
+        return Ok(adapter::inbound::cli::run_with_args_with_config_overrides(
+            invocation.command_args,
+            &invocation.overrides,
+            &mut stdout,
+        )?
+        .unwrap_or(0));
+    }
+
+    let cwd = std::env::current_dir().context("failed to resolve working directory")?;
+    let resolved_config =
+        configuration::ConfigurationService::resolve_for_startup(&cwd, &invocation.overrides)?;
+    configuration::install_process_config(resolved_config)?;
     let _diagnostics_guards = diagnostics::init_from_env();
     tracing::info!(
         cwd = ?std::env::current_dir().ok(),
@@ -77,7 +102,11 @@ pub fn run() -> anyhow::Result<i32> {
      * Some(exit_code)는 CLI adapter가 요청을 완전히 소비했다는 신호다. None은 오류가 아니라
      * "interactive shell로 계속 진행"하라는 fallthrough contract라서 TUI startup과 명확히 구분된다.
      */
-    if let Some(exit_code) = adapter::inbound::cli::run_with_env_args(&mut stdout)? {
+    if let Some(exit_code) = adapter::inbound::cli::run_with_args_with_config_overrides(
+        invocation.command_args,
+        &invocation.overrides,
+        &mut stdout,
+    )? {
         return Ok(exit_code);
     }
 

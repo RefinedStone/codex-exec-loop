@@ -18,6 +18,9 @@ use super::{
     ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation, SessionRenameAdmission,
     SessionRenameCorrelation, StartupCheckCorrelation,
 };
+use super::{
+    ConversationPreferencePersistenceCorrelation, ConversationPreferencePersistenceResult,
+};
 use super::{DirectionsMaintenanceLoadCorrelation, DirectionsMaintenanceSummarySnapshot};
 use super::{
     QueueAuthorityLoadCorrelation, QueueAuthorityLoadError, QueueAuthoritySnapshot,
@@ -152,6 +155,10 @@ pub enum CoreEffectCompletion {
         correlation: ApprovalReviewPersistenceCorrelation,
         result: Result<(), String>,
     },
+    ConversationPreferencesPersisted {
+        correlation: ConversationPreferencePersistenceCorrelation,
+        result: ConversationPreferencePersistenceResult,
+    },
     GithubReviewPollingSetupCompleted {
         correlation: GithubReviewPollingSetupCorrelation,
         result: Result<GithubReviewPollingSetupResult, String>,
@@ -273,6 +280,10 @@ pub enum AppEvent {
     ApprovalDecisionSubmissionCompleted {
         correlation: ApprovalDecisionCorrelation,
         result: Result<(), String>,
+    },
+    ConversationPreferencesPersisted {
+        correlation: ConversationPreferencePersistenceCorrelation,
+        result: ConversationPreferencePersistenceResult,
     },
     ConversationRuntimeAuthorityChanged(Box<ConversationRuntimeSnapshot>),
     GithubReviewPollingSetupStarted {

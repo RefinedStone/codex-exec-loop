@@ -84,6 +84,18 @@ The process-lifetime parallel control-plane handle and completion channel belong
 commands, while the application service owns enable/dispatch/refresh/disable policy and drains
 effect completions through the same handle.
 
+Configuration is a composition-time, secret-free snapshot rather than a second TUI or domain
+authority. `configuration::ConfigurationService` validates and merges built-ins, global TOML,
+legacy repository Git compatibility values, worktree TOML, environment variables, and process-only
+command overrides by leaf. Composition installs that resolved snapshot before constructing the
+runtime and injects it into TUI, GitHub, parallel, diagnostics, Admin, app-server, and subprocess
+adapters. File reads and mutations stay in the configuration boundary; adapters do not independently
+read an environment variable or repository config to redefine a resolved setting. Thread-specific
+conversation options are a durable outbound capability: the app-server adapter records submitted
+options and restores them without rewriting another thread's state. Interactive preference writes
+cross Core as a command/effect/completion and its single-writer coordinator preserves rapid
+model/effort selections in request order while reporting global and thread-store failures separately.
+
 ## Core Runtime
 
 `src/core` is the framework-free **Client Runtime** outside the business hexagon, at its inbound
@@ -133,8 +145,8 @@ Only `CoreRuntime` drives mutable client-runtime state. Adapters must not constr
 return a completion, but they do not own or mutate runtime state.
 
 `CoreController` is the exhaustive root router, not a bag of per-feature leases. Its private state
-is fixed to seven typed slices: `AppState`, startup, session, conversation/turn, read-model loads,
-planning, and GitHub review. Each feature reducer owns its generation counters, active
+is fixed to eight typed slices: `AppState`, startup, session, conversation/turn, read-model loads,
+planning, GitHub review, and ordered conversation-preference persistence. Each feature reducer owns its generation counters, active
 correlations, cancellation flags, and exact-completion checks behind methods; the root only
 coordinates cross-feature ordering and projects accepted results into `AppState`. Rust-aware
 architecture tests reject additional raw controller fields, visible reducer authority fields,

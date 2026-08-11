@@ -10,7 +10,9 @@ use super::*;
 use crate::adapter::inbound::tui::app::shell_runtime::ShellRuntime;
 use crate::adapter::inbound::tui::app::test_helpers::test_native_tui_app;
 use crate::core::app::CoreInput;
-use crate::domain::conversation::ConversationMessageKind;
+use crate::domain::conversation::{
+    ConversationMessageKind, ConversationReasoningEffort, ConversationTurnOptions,
+};
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterSnapshot, ParallelModeDistributorSnapshot,
     ParallelModePoolBoardSnapshot, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
@@ -319,6 +321,21 @@ fn model_selection_is_a_compact_staged_provider_flow() {
             "\n--- AKRA MODEL SELECTION 100x30 ---\n{model_screen}\n--- AKRA REASONING SELECTION 100x30 ---\n{reasoning_screen}\n--- END MODEL SELECTION FRAMES ---"
         );
     }
+}
+
+#[test]
+fn model_selection_renders_a_configured_custom_model_with_the_test_backend() {
+    let mut app = test_native_tui_app();
+    app.conversation.turn_options = ConversationTurnOptions {
+        model: Some("team-private-model".to_string()),
+        reasoning_effort: Some(ConversationReasoningEffort::Max),
+    };
+    app.show_model_selection_overlay();
+
+    let screen = render(&mut app, 100, 30);
+
+    assert!(screen.contains("Configured: team-private-model"));
+    assert!(screen.contains("custom"));
 }
 
 #[test]

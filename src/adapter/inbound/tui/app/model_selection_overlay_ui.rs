@@ -29,6 +29,9 @@ pub(super) struct ModelSelectionOverlayUiState {
     // This index is always relative to the staged model's supported effort list.
     selected_effort_index: usize,
     staged_model_index: usize,
+    // A custom ID is picker-local state: closing the overlay must not keep a
+    // stale model in the catalog after resolved defaults change.
+    configured_model: Option<String>,
 }
 
 const OPENAI_PROVIDER_LABEL: &str = "OpenAI";
@@ -59,6 +62,20 @@ const APP_SERVER_DEFAULT_REASONING_EFFORTS: &[Option<ConversationReasoningEffort
     Some(ConversationReasoningEffort::Medium),
     Some(ConversationReasoningEffort::High),
     Some(ConversationReasoningEffort::XHigh),
+    Some(ConversationReasoningEffort::Minimal),
+    Some(ConversationReasoningEffort::None),
+    None,
+];
+
+// A custom model can use either the legacy `minimal` capability or the newer
+// `max` capability. Until app-server publishes a model catalog, preserve a
+// caller's selected effort and allow every v1 effort value.
+const CONFIGURED_MODEL_REASONING_EFFORTS: &[Option<ConversationReasoningEffort>] = &[
+    Some(ConversationReasoningEffort::Low),
+    Some(ConversationReasoningEffort::Medium),
+    Some(ConversationReasoningEffort::High),
+    Some(ConversationReasoningEffort::XHigh),
+    Some(ConversationReasoningEffort::Max),
     Some(ConversationReasoningEffort::Minimal),
     Some(ConversationReasoningEffort::None),
     None,
@@ -147,6 +164,16 @@ pub(super) const MODEL_SELECTION_MODEL_OPTIONS: &[ModelSelectionModelOption] = &
     },
 ];
 
+const CONFIGURED_MODEL_SENTINEL: &str = "__akra_configured_model__";
+const CONFIGURED_MODEL_OPTION: ModelSelectionModelOption = ModelSelectionModelOption {
+    label: "Configured",
+    model: Some(CONFIGURED_MODEL_SENTINEL),
+    provider_label: OPENAI_PROVIDER_LABEL,
+    detail: "custom",
+    supported_efforts: CONFIGURED_MODEL_REASONING_EFFORTS,
+    recommended_effort: Some(ConversationReasoningEffort::Medium),
+};
+
 pub(super) fn model_selection_effort_option(
     effort: Option<ConversationReasoningEffort>,
 ) -> ModelSelectionEffortOption {
@@ -175,6 +202,7 @@ impl Default for ModelSelectionOverlayUiState {
             )
             .unwrap_or_else(|| recommended_effort_index(staged_model)),
             staged_model_index,
+            configured_model: None,
         }
     }
 }
@@ -182,10 +210,15 @@ impl Default for ModelSelectionOverlayUiState {
 impl ModelSelectionOverlayUiState {
     pub(super) fn reset_from_turn_options(&mut self, turn_options: &ConversationTurnOptions) {
         self.step = ModelSelectionStep::Model;
-        self.selected_model_index = turn_options
+        self.configured_model = turn_options
             .model
             .as_deref()
-            .and_then(model_option_index)
+            .and_then(|model| (model_option_index(model).is_none()).then(|| model.to_string()));
+        self.selected_model_index = self
+            .configured_model
+            .as_ref()
+            .map(|_| configured_model_index())
+            .or_else(|| turn_options.model.as_deref().and_then(model_option_index))
             .unwrap_or_else(default_model_index);
         self.staged_model_index = self.selected_model_index;
         let staged_model = self.staged_model();
@@ -211,7 +244,23 @@ impl ModelSelectionOverlayUiState {
     }
 
     pub(super) fn staged_model(&self) -> ModelSelectionModelOption {
-        MODEL_SELECTION_MODEL_OPTIONS[self.staged_model_index]
+        self.model_option_at(self.staged_model_index)
+    }
+
+    pub(super) fn staged_model_id(&self) -> Option<&str> {
+        if self.staged_model_index == configured_model_index() {
+            self.configured_model.as_deref()
+        } else {
+            self.staged_model().model
+        }
+    }
+
+    pub(super) fn staged_model_label(&self) -> String {
+        self.model_label_at(self.staged_model_index)
+    }
+
+    pub(super) fn configured_model(&self) -> Option<&str> {
+        self.configured_model.as_deref()
     }
 
     pub(super) fn selected_effort(&self) -> ModelSelectionEffortOption {
@@ -259,7 +308,9 @@ impl ModelSelectionOverlayUiState {
 
     fn active_option_len(&self) -> usize {
         match self.step {
-            ModelSelectionStep::Model => MODEL_SELECTION_MODEL_OPTIONS.len(),
+            ModelSelectionStep::Model => {
+                MODEL_SELECTION_MODEL_OPTIONS.len() + usize::from(self.configured_model.is_some())
+            }
             ModelSelectionStep::Effort => self.staged_model().supported_efforts.len(),
         }
     }
@@ -276,6 +327,21 @@ impl ModelSelectionOverlayUiState {
             ModelSelectionStep::Model => self.selected_model_index = index,
             ModelSelectionStep::Effort => self.selected_effort_index = index,
         }
+    }
+
+    fn model_option_at(&self, index: usize) -> ModelSelectionModelOption {
+        model_selection_option_at(index)
+    }
+
+    fn model_label_at(&self, index: usize) -> String {
+        if index == configured_model_index() {
+            return self
+                .configured_model
+                .as_deref()
+                .map(|model| format!("Configured: {model}"))
+                .unwrap_or_else(|| CONFIGURED_MODEL_OPTION.label.to_string());
+        }
+        self.model_option_at(index).label.to_string()
     }
 }
 
@@ -304,6 +370,26 @@ fn default_model_index() -> usize {
 
 fn project_default_model_index() -> usize {
     model_option_index(ConversationTurnOptions::DEFAULT_MODEL).unwrap_or(0)
+}
+
+pub(super) fn configured_model_index() -> usize {
+    MODEL_SELECTION_MODEL_OPTIONS.len()
+}
+
+pub(super) fn model_selection_option_at(index: usize) -> ModelSelectionModelOption {
+    MODEL_SELECTION_MODEL_OPTIONS
+        .get(index)
+        .copied()
+        .unwrap_or(CONFIGURED_MODEL_OPTION)
+}
+
+pub(super) fn model_selection_label_at(index: usize, configured_model: Option<&str>) -> String {
+    if index == configured_model_index() {
+        return configured_model
+            .map(|model| format!("Configured: {model}"))
+            .unwrap_or_else(|| CONFIGURED_MODEL_OPTION.label.to_string());
+    }
+    model_selection_option_at(index).label.to_string()
 }
 
 fn recommended_effort_index(model: ModelSelectionModelOption) -> usize {
@@ -434,5 +520,23 @@ mod tests {
             state.selected_model_index(),
             MODEL_SELECTION_MODEL_OPTIONS.len() - 1
         );
+    }
+
+    #[test]
+    fn reset_preserves_an_unknown_configured_model_as_a_picker_item() {
+        let mut state = ModelSelectionOverlayUiState::default();
+        state.reset_from_turn_options(&ConversationTurnOptions {
+            model: Some("my-private-model".to_string()),
+            reasoning_effort: Some(ConversationReasoningEffort::Max),
+        });
+
+        assert_eq!(state.selected_model_index(), configured_model_index());
+        assert_eq!(state.staged_model_id(), Some("my-private-model"));
+        assert_eq!(state.staged_model_label(), "Configured: my-private-model");
+        assert_eq!(
+            state.selected_effort().effort,
+            Some(ConversationReasoningEffort::Max)
+        );
+        assert!(state.select_active_index(configured_model_index()));
     }
 }
