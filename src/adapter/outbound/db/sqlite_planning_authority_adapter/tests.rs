@@ -84,7 +84,7 @@ use super::{
 use super::{
     WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT, WINDOWS_FILE_SHARE_ALL, WINDOWS_GENERIC_READ,
     WINDOWS_GENERIC_WRITE, WINDOWS_READ_CONTROL, WINDOWS_WRITE_DAC,
-    windows_sidecar_io_error_is_transient,
+    windows_authority_store_io_error_is_transient,
 };
 #[cfg(any(unix, windows))]
 use super::{
@@ -3264,7 +3264,7 @@ fn authority_store_open_survives_concurrent_delete_journal_churn() {
 fn authority_store_sidecar_retry_handles_delete_pending_and_rejects_hardlink_replacement() {
     use std::os::windows::fs::OpenOptionsExt;
 
-    assert!(windows_sidecar_io_error_is_transient(
+    assert!(windows_authority_store_io_error_is_transient(
         &std::io::Error::from_raw_os_error(
             windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED as i32,
         ),
