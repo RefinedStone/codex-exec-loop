@@ -1668,7 +1668,7 @@ fn validate_config_metadata(
 
 fn validate_open_config_identity(
     path: &Path,
-    expected: &fs::Metadata,
+    _expected: &fs::Metadata,
     file: &File,
     scope: ConfigScope,
 ) -> Result<()> {
@@ -1679,7 +1679,7 @@ fn validate_open_config_identity(
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        if expected.dev() != opened.dev() || expected.ino() != opened.ino() {
+        if _expected.dev() != opened.dev() || _expected.ino() != opened.ino() {
             bail!(
                 "configuration changed while being opened: {}",
                 path.display()
