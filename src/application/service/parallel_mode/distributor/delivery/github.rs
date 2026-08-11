@@ -757,7 +757,14 @@ fn resolve_pull_request_delivery_mode(
     runtime: &dyn ParallelModeRuntimePort,
     repo_root: &str,
 ) -> Result<PullRequestDeliveryMode, String> {
-    if let Some(config) = crate::configuration::current_process_config() {
+    if let Some(config) =
+        crate::configuration::current_process_config_for_workspace(std::path::Path::new(repo_root))
+            .map_err(|error| {
+                format!(
+                    "failed to resolve configuration for target workspace `{repo_root}`: {error:#}"
+                )
+            })?
+    {
         return parse_pull_request_delivery_mode(&config.config.github.pull_request_mode)
             .ok_or_else(|| "resolved github.pull_request_mode is invalid".to_string());
     }

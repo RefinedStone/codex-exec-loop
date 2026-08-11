@@ -13,6 +13,8 @@ Akra의 설정 표면은 의도적으로 작고 secret-free입니다. 운영자�
 
 Linked Git worktree마다 각자의 project 파일을 사용합니다. Git이 아닌 디렉터리에는 project 범위가 없고 전역 설정만 적용됩니다. --help, akra config path, list, get, doctor는 전역 파일을 만들지 않습니다.
 
+명령이 다른 workspace를 명시하면 Akra는 그 대상의 project TOML과 호환 Git 계층을 다시 해석합니다. 전역·환경변수·`-c/--config` 입력은 프로세스 시작 시점의 snapshot을 그대로 유지합니다.
+
 유효 leaf의 우선순위는 높은 쪽부터 아래처럼 고정됩니다.
 
     -c/--config > 환경변수 > 프로젝트 TOML > 호환 repository Git config > 전역 TOML > 내장값
@@ -72,7 +74,7 @@ CODEX_EXEC_LOOP_GITHUB_PR, RUST_LOG, AKRA_TRACE_FILE은 기존의 특수 계약�
 
 ## 영속성, 대화, 보안
 
-전역 파일은 owner-only이고 전역 디렉터리는 current user 소유이며 group/world writable이면 안 됩니다. project 파일은 review 가능한 일반 worktree 파일입니다. 두 범위 모두 symlink, hardlink/reparse point, regular file이 아닌 객체, 안전하지 않은 전역 소유권/권한, 크기 초과, open 중 객체 교체를 거부합니다. 쓰기는 AKRA_HOME 아래 path-hash interprocess lock에서 다시 읽고 toml_edit로 comment를 보존하며 atomic replace합니다.
+전역 파일은 owner-only이고 전역 디렉터리는 current user 소유이며 group/world writable이면 안 됩니다. project 파일은 review 가능한 일반 worktree 파일입니다. 두 범위 모두 symlink, hardlink/reparse point, regular file이 아닌 객체, 안전하지 않은 전역 소유권/권한, 크기 초과, open 중 객체 교체를 거부합니다. 쓰기는 AKRA_HOME 아래 path-hash OS-backed interprocess 파일 잠금에서 다시 읽고 toml_edit로 comment를 보존하며 atomic replace합니다. 잠금 파일은 남아도 writer가 비정상 종료하면 운영체제가 배타 잠금을 해제합니다.
 
 :model, :model default, :think는 현재 메모리 선택을 즉시 바꾸고 다음 새 thread의 전역 기본값과 활성 thread의 model/reasoning 행을 저장 큐에 넣습니다. Core는 빠른 연속 선택도 요청 순서대로 직렬 저장합니다. 전역 또는 thread 저장이 실패해도 live 선택은 되돌리지 않고 각각의 실패를 표시합니다. 새 thread는 실제 제출 options를 저장하고 저장된 Akra thread는 열 때 복원합니다. 저장 행이 없는 기존/외부 thread는 app-server에 None/None을 보내 app-server 기본값을 유지하므로 나중의 전역 변경이 소급 적용되지 않습니다.
 

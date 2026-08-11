@@ -315,7 +315,10 @@ pub struct ConfigPaths {
 
 impl ConfigPaths {
     pub fn discover(cwd: &Path) -> Result<Self> {
-        let global = global_config_path()?;
+        Self::discover_with_global(cwd, global_config_path()?)
+    }
+
+    fn discover_with_global(cwd: &Path, global: PathBuf) -> Result<Self> {
         let workspace_root = find_git_worktree_root(cwd)?;
         let project = workspace_root
             .as_ref()
@@ -467,6 +470,7 @@ pub struct ResolvedAkraConfig {
     pub config: AkraConfig,
     pub paths: ConfigPaths,
     origins: BTreeMap<SettingKey, SettingOrigin>,
+    source_snapshot: ConfigurationSourceSnapshot,
 }
 
 impl ResolvedAkraConfig {
@@ -490,6 +494,18 @@ impl ResolvedAkraConfig {
     fn value_for(&self, key: SettingKey) -> SettingValue {
         value_from_config(&self.config, key)
     }
+
+    /// Resolve this immutable process snapshot for an explicitly selected
+    /// workspace. Global, environment, and command-line layers stay pinned to
+    /// process startup; only the workspace-specific Git and project-TOML
+    /// layers are rebound.
+    pub(crate) fn resolve_for_workspace(&self, cwd: &Path) -> Result<Self> {
+        let paths = ConfigPaths::discover_with_global(cwd, self.paths.global.clone())?;
+        if paths.workspace_root == self.paths.workspace_root {
+            return Ok(self.clone());
+        }
+        ConfigurationService::resolve_with_source_snapshot(paths, self.source_snapshot.clone())
+    }
 }
 
 /// Install the one immutable process snapshot used by production adapters.
@@ -503,6 +519,16 @@ pub fn install_process_config(config: ResolvedAkraConfig) -> Result<()> {
 
 pub fn current_process_config() -> Option<&'static ResolvedAkraConfig> {
     INSTALLED_CONFIG.get()
+}
+
+/// Return the installed snapshot rebound to an explicitly selected workspace.
+/// A missing process snapshot keeps test and standalone fallback paths intact.
+pub(crate) fn current_process_config_for_workspace(
+    cwd: &Path,
+) -> Result<Option<ResolvedAkraConfig>> {
+    current_process_config()
+        .map(|config| config.resolve_for_workspace(cwd))
+        .transpose()
 }
 
 /// `-c key=value` command-line override.  Parsing keeps this separate from
@@ -522,6 +548,26 @@ impl ConfigOverride {
         Ok(Self {
             key,
             value: parse_cli_value(key, raw_value)?,
+        })
+    }
+}
+
+/// Inputs captured once at process startup. Rebinding a target workspace must
+/// never make a later file or environment mutation silently redefine the
+/// process-level configuration contract.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConfigurationSourceSnapshot {
+    global_layer: Option<AkraConfigLayer>,
+    environment_values: BTreeMap<SettingKey, (SettingValue, String)>,
+    overrides: Vec<ConfigOverride>,
+}
+
+impl ConfigurationSourceSnapshot {
+    fn capture(global_path: &Path, overrides: &[ConfigOverride]) -> Result<Self> {
+        Ok(Self {
+            global_layer: read_layer_if_present(global_path, ConfigScope::Global)?,
+            environment_values: EnvironmentConfigAdapter::from_process()?.values,
+            overrides: overrides.to_vec(),
         })
     }
 }
@@ -611,7 +657,14 @@ impl ConfigurationService {
         paths: ConfigPaths,
         overrides: &[ConfigOverride],
     ) -> Result<ResolvedAkraConfig> {
-        let global_layer = read_layer_if_present(&paths.global, ConfigScope::Global)?;
+        let source_snapshot = ConfigurationSourceSnapshot::capture(&paths.global, overrides)?;
+        Self::resolve_with_source_snapshot(paths, source_snapshot)
+    }
+
+    fn resolve_with_source_snapshot(
+        paths: ConfigPaths,
+        source_snapshot: ConfigurationSourceSnapshot,
+    ) -> Result<ResolvedAkraConfig> {
         let project_layer = match &paths.project {
             Some(path) => read_layer_if_present(path, ConfigScope::Project)?,
             None => None,
@@ -622,7 +675,6 @@ impl ConfigurationService {
             .map(read_legacy_git_values)
             .transpose()?
             .unwrap_or_default();
-        let environment_values = EnvironmentConfigAdapter::from_process()?;
 
         let mut config = AkraConfig::builtin();
         let mut origins = SettingKey::ALL
@@ -630,7 +682,7 @@ impl ConfigurationService {
             .map(|key| (key, SettingOrigin::Builtin))
             .collect::<BTreeMap<_, _>>();
 
-        if let Some(layer) = global_layer.as_ref() {
+        if let Some(layer) = source_snapshot.global_layer.as_ref() {
             apply_layer(&mut config, &mut origins, layer, SettingOrigin::GlobalToml);
         }
         for (key, value) in legacy_values {
@@ -647,16 +699,18 @@ impl ConfigurationService {
         if let Some(layer) = project_layer.as_ref() {
             apply_layer(&mut config, &mut origins, layer, SettingOrigin::ProjectToml);
         }
-        for (key, (value, variable)) in environment_values.values {
+        for (key, (value, variable)) in &source_snapshot.environment_values {
             apply_value(
                 &mut config,
                 &mut origins,
-                key,
-                value,
-                SettingOrigin::Environment { variable },
+                *key,
+                value.clone(),
+                SettingOrigin::Environment {
+                    variable: variable.clone(),
+                },
             );
         }
-        for override_value in overrides {
+        for override_value in &source_snapshot.overrides {
             apply_value(
                 &mut config,
                 &mut origins,
@@ -670,6 +724,7 @@ impl ConfigurationService {
             config,
             paths,
             origins,
+            source_snapshot,
         })
     }
 
@@ -2071,119 +2126,276 @@ fn create_private_temporary_file(path: &Path, _scope: ConfigScope) -> std::io::R
 }
 
 struct ConfigWriteLock {
-    path: PathBuf,
+    // Keeping the descriptor alive owns the OS-level exclusion. The lock file
+    // intentionally remains after release, so an abnormal process exit cannot
+    // leave a directory-shaped stale lock behind.
+    _file: File,
 }
 
 impl ConfigWriteLock {
     fn acquire(config_path: &Path) -> Result<Self> {
         // Global config and project config mutations use the same lock root.
         // For a project config this path is still deterministic under AKRA_HOME.
-        let global_config = global_config_path()?;
-        ensure_config_parent(&global_config, ConfigScope::Global)?;
-        let lock_root = global_config
-            .parent()
-            .ok_or_else(|| anyhow!("global configuration path has no parent"))?
-            .join("config-locks");
-        if !lock_root.exists() {
-            match fs::create_dir(&lock_root) {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-                Err(error) => {
-                    return Err(error).with_context(|| {
-                        format!(
-                            "failed to create configuration lock directory {}",
-                            lock_root.display()
-                        )
-                    });
-                }
-            }
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                if let Ok(metadata) = fs::symlink_metadata(&lock_root)
-                    && metadata.is_dir()
-                    && !metadata.file_type().is_symlink()
-                {
-                    fs::set_permissions(&lock_root, fs::Permissions::from_mode(0o700))?;
-                }
-            }
-        }
-        let lock_root_metadata = fs::symlink_metadata(&lock_root).with_context(|| {
-            format!(
-                "failed to inspect configuration lock directory {}",
-                lock_root.display()
-            )
-        })?;
-        if lock_root_metadata.file_type().is_symlink() || !lock_root_metadata.is_dir() {
-            bail!(
-                "configuration lock directory must be a real directory: {}",
-                lock_root.display()
-            )
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::{MetadataExt, PermissionsExt};
-            if lock_root_metadata.uid() != unsafe { libc::geteuid() }
-                || lock_root_metadata.mode() & 0o077 != 0
-            {
-                if lock_root_metadata.uid() != unsafe { libc::geteuid() } {
-                    bail!(
-                        "configuration lock directory must be owned by the current user: {}",
-                        lock_root.display()
-                    )
-                }
-                fs::set_permissions(&lock_root, fs::Permissions::from_mode(0o700)).with_context(
-                    || {
-                        format!(
-                            "failed to restrict configuration lock directory {}",
-                            lock_root.display()
-                        )
-                    },
-                )?;
-            }
-        }
-        let mut digest = Sha256::new();
-        digest.update(config_path.as_os_str().to_string_lossy().as_bytes());
-        let name = format!("{:x}.lock", digest.finalize());
-        let path = lock_root.join(name);
+        let path = config_write_lock_path(config_path)?;
         let deadline = Instant::now() + CONFIG_LOCK_WAIT;
         loop {
-            match fs::create_dir(&path) {
-                Ok(()) => return Ok(Self { path }),
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    let metadata = fs::symlink_metadata(&path).with_context(|| {
-                        format!("failed to inspect configuration lock {}", path.display())
-                    })?;
-                    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-                        bail!(
-                            "configuration lock path is not a directory: {}",
-                            path.display()
-                        )
-                    }
-                    if Instant::now() >= deadline {
-                        bail!(
-                            "timed out waiting for configuration writer lock: {}",
-                            path.display()
-                        )
-                    }
-                    thread::sleep(CONFIG_LOCK_RETRY);
+            match try_acquire_config_write_lock(&path)? {
+                Some(file) => return Ok(Self { _file: file }),
+                None if Instant::now() >= deadline => {
+                    bail!(
+                        "timed out waiting for configuration writer lock: {}",
+                        path.display()
+                    )
                 }
-                Err(error) => {
-                    return Err(error).with_context(|| {
-                        format!(
-                            "failed to acquire configuration writer lock {}",
-                            path.display()
-                        )
-                    });
-                }
+                None => thread::sleep(CONFIG_LOCK_RETRY),
             }
         }
     }
 }
 
+fn config_write_lock_path(config_path: &Path) -> Result<PathBuf> {
+    let global_config = global_config_path()?;
+    ensure_config_parent(&global_config, ConfigScope::Global)?;
+    let lock_root = global_config
+        .parent()
+        .ok_or_else(|| anyhow!("global configuration path has no parent"))?
+        .join("config-locks");
+    // Reuse the global-directory validation for creation and ACL handling; the
+    // lock root additionally remains owner-only because it names every active
+    // configuration mutation. The probe is never created.
+    ensure_config_parent(
+        &lock_root.join(".config-write-lock-root-probe"),
+        ConfigScope::Global,
+    )?;
+    #[cfg(unix)]
+    restrict_config_lock_root_permissions(&lock_root)?;
+    let mut digest = Sha256::new();
+    digest.update(config_path.as_os_str().to_string_lossy().as_bytes());
+    Ok(lock_root.join(format!("{:x}.lock", digest.finalize())))
+}
+
+#[cfg(unix)]
+fn restrict_config_lock_root_permissions(lock_root: &Path) -> Result<()> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let metadata = fs::symlink_metadata(lock_root).with_context(|| {
+        format!(
+            "failed to inspect configuration lock directory {}",
+            lock_root.display()
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        bail!(
+            "configuration lock directory must be a real directory: {}",
+            lock_root.display()
+        )
+    }
+    if metadata.uid() != unsafe { libc::geteuid() } {
+        bail!(
+            "configuration lock directory must be owned by the current user: {}",
+            lock_root.display()
+        )
+    }
+    if metadata.mode() & 0o077 != 0 {
+        fs::set_permissions(lock_root, fs::Permissions::from_mode(0o700)).with_context(|| {
+            format!(
+                "failed to restrict configuration lock directory {}",
+                lock_root.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn reject_legacy_config_lock_directory(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_dir() => bail!(
+            "legacy configuration lock directory found at {}; confirm no older Akra process is running, remove that directory, and retry",
+            path.display()
+        ),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| {
+            format!(
+                "failed to inspect configuration writer lock {}",
+                path.display()
+            )
+        }),
+    }
+}
+
+#[cfg(unix)]
+fn try_acquire_config_write_lock(path: &Path) -> Result<Option<File>> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    reject_legacy_config_lock_directory(path)?;
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .mode(0o600)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+        .open(path)
+        .with_context(|| {
+            format!(
+                "failed to open configuration writer lock {}",
+                path.display()
+            )
+        })?;
+    validate_config_write_lock_file(path, &file)?;
+    // SAFETY: flock observes only the owned descriptor and does not retain a
+    // Rust pointer. The OS releases this lock if the process exits abruptly.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        let error = std::io::Error::last_os_error();
+        let error_code = error.raw_os_error();
+        if error_code == Some(libc::EWOULDBLOCK) || error_code == Some(libc::EAGAIN) {
+            return Ok(None);
+        }
+        return Err(error).with_context(|| {
+            format!(
+                "failed to acquire configuration writer lock {}",
+                path.display()
+            )
+        });
+    }
+    validate_config_write_lock_file(path, &file)?;
+    Ok(Some(file))
+}
+
+#[cfg(unix)]
+fn validate_config_write_lock_file(path: &Path, file: &File) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    let opened = file.metadata().with_context(|| {
+        format!(
+            "failed to inspect configuration writer lock {}",
+            path.display()
+        )
+    })?;
+    let visible = fs::symlink_metadata(path).with_context(|| {
+        format!(
+            "failed to inspect configuration writer lock {}",
+            path.display()
+        )
+    })?;
+    if !opened.is_file()
+        || opened.uid() != unsafe { libc::geteuid() }
+        || opened.nlink() != 1
+        || opened.mode() & 0o077 != 0
+    {
+        bail!(
+            "configuration writer lock must be an owner-private single-link regular file: {}",
+            path.display()
+        )
+    }
+    if visible.file_type().is_symlink()
+        || !visible.is_file()
+        || visible.dev() != opened.dev()
+        || visible.ino() != opened.ino()
+    {
+        bail!(
+            "configuration writer lock changed while being opened: {}",
+            path.display()
+        )
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn try_acquire_config_write_lock(path: &Path) -> Result<Option<File>> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::{ERROR_LOCK_VIOLATION, HANDLE};
+    use windows_sys::Win32::Storage::FileSystem::LockFile;
+
+    reject_legacy_config_lock_directory(path)?;
+    let mut create_options = OpenOptions::new();
+    create_options
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .access_mode(
+            crate::private_fs::WINDOWS_GENERIC_READ
+                | crate::private_fs::WINDOWS_GENERIC_WRITE
+                | crate::private_fs::WINDOWS_READ_CONTROL
+                | crate::private_fs::WINDOWS_WRITE_DAC,
+        )
+        .share_mode(crate::private_fs::WINDOWS_FILE_SHARE_ALL)
+        .custom_flags(crate::private_fs::WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT);
+    let (file, created) = match create_options.open(path) {
+        Ok(file) => (file, true),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .access_mode(
+                    crate::private_fs::WINDOWS_GENERIC_READ
+                        | crate::private_fs::WINDOWS_GENERIC_WRITE
+                        | crate::private_fs::WINDOWS_READ_CONTROL,
+                )
+                .share_mode(crate::private_fs::WINDOWS_FILE_SHARE_ALL)
+                .custom_flags(crate::private_fs::WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT)
+                .open(path)
+                .with_context(|| {
+                    format!(
+                        "failed to open configuration writer lock {}",
+                        path.display()
+                    )
+                })?,
+            false,
+        ),
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "failed to create configuration writer lock {}",
+                    path.display()
+                )
+            });
+        }
+    };
+    crate::private_fs::validate_windows_path_identity_only(path, &file, false)?;
+    if created {
+        crate::private_fs::set_windows_private_acl(&file, false)?;
+    }
+    crate::private_fs::validate_windows_private_owner_and_acl(path, &file)?;
+    crate::private_fs::validate_windows_path_identity_only(path, &file, false)?;
+    // SAFETY: LockFile receives the valid owned handle and locks one byte at
+    // offset zero. Windows releases the byte-range lock on process exit.
+    if unsafe { LockFile(file.as_raw_handle() as HANDLE, 0, 0, 1, 0) } == 0 {
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(ERROR_LOCK_VIOLATION as i32) {
+            return Ok(None);
+        }
+        return Err(error).with_context(|| {
+            format!(
+                "failed to acquire configuration writer lock {}",
+                path.display()
+            )
+        });
+    }
+    crate::private_fs::validate_windows_path_identity_only(path, &file, false)?;
+    crate::private_fs::validate_windows_private_owner_and_acl(path, &file)?;
+    Ok(Some(file))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn try_acquire_config_write_lock(_path: &Path) -> Result<Option<File>> {
+    bail!("configuration writer locking is unsupported on this platform")
+}
+
+#[cfg(windows)]
 impl Drop for ConfigWriteLock {
     fn drop(&mut self) {
-        let _ = fs::remove_dir(&self.path);
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Foundation::HANDLE;
+        use windows_sys::Win32::Storage::FileSystem::UnlockFile;
+
+        // SAFETY: the file handle remains owned by this guard and exactly the
+        // byte range acquired above is released.
+        unsafe {
+            UnlockFile(self._file.as_raw_handle() as HANDLE, 0, 0, 1, 0);
+        }
     }
 }
 
@@ -2832,6 +3044,77 @@ mod tests {
     }
 
     #[test]
+    fn explicit_workspace_rebinds_project_layers_without_reloading_process_sources() {
+        let _lock = crate::test_utils::process_environment_mutex()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let root = temporary_directory("workspace-rebind");
+        let home = root.join("home");
+        let workspace_a = root.join("workspace-a");
+        let workspace_b = root.join("workspace-b");
+        fake_git_worktree(&workspace_a);
+        fake_git_worktree(&workspace_b);
+        let home_text = home.to_string_lossy().into_owned();
+        let _environment = EnvGuard::set(&[
+            ("AKRA_HOME", Some(&home_text)),
+            ("AKRA_GITHUB_PUSH_REMOTE", None),
+            ("AKRA_GITHUB_PR_MODE", None),
+            ("AKRA_PARALLEL_INTEGRATION_BRANCH", None),
+        ]);
+        write_global_fixture(
+            &home,
+            "schema_version = 1\n[github]\nreview_poll_interval_secs = 13\n",
+        );
+        for (workspace, remote, mode, branch) in [
+            (&workspace_a, "remote-a", "required", "integration-a"),
+            (&workspace_b, "remote-b", "disabled", "integration-b"),
+        ] {
+            let project = workspace
+                .join(PROJECT_CONFIG_DIRECTORY)
+                .join(CONFIG_FILE_NAME);
+            fs::create_dir_all(project.parent().expect("project config has parent"))
+                .expect("project config parent should create");
+            fs::write(
+                project,
+                format!(
+                    "schema_version = 1\n[github]\npush_remote = \"{remote}\"\npull_request_mode = \"{mode}\"\n[parallel]\nintegration_branch = \"{branch}\"\n"
+                ),
+            )
+            .expect("project config should write");
+        }
+        let overrides = [ConfigOverride::parse("github.pull_request_mode=auto")
+            .expect("command override should parse")];
+        let source = ConfigurationService::resolve_read_only(&workspace_a, &overrides)
+            .expect("source workspace should resolve");
+        write_global_fixture(
+            &home,
+            "schema_version = 1\n[github]\nreview_poll_interval_secs = 99\n",
+        );
+
+        let target = source
+            .resolve_for_workspace(&workspace_b)
+            .expect("target workspace should resolve from the process snapshot");
+
+        assert_eq!(target.config.github.push_remote, "remote-b");
+        assert_eq!(target.config.github.pull_request_mode, "auto");
+        assert_eq!(target.config.parallel.integration_branch, "integration-b");
+        assert_eq!(target.config.github.review_poll_interval_secs, 13);
+        assert!(matches!(
+            target.origin_for(SettingKey::GithubPushRemote),
+            SettingOrigin::ProjectToml
+        ));
+        assert!(matches!(
+            target.origin_for(SettingKey::GithubPullRequestMode),
+            SettingOrigin::CommandLine
+        ));
+        assert!(matches!(
+            target.origin_for(SettingKey::ParallelIntegrationBranch),
+            SettingOrigin::ProjectToml
+        ));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn mutation_preserves_comments_and_unset_restores_the_higher_leaf() {
         let _lock = crate::test_utils::process_environment_mutex()
             .lock()
@@ -3103,6 +3386,55 @@ mod tests {
                 .as_deref(),
             Some("120")
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn persistent_config_lock_file_is_reacquired_after_the_holder_exits() {
+        let _lock = crate::test_utils::process_environment_mutex()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let root = temporary_directory("persistent-lock-file");
+        let home = root.join("home");
+        let home_text = home.to_string_lossy().into_owned();
+        let _environment = EnvGuard::set(&[("AKRA_HOME", Some(&home_text))]);
+        let config_path = home.join(CONFIG_FILE_NAME);
+
+        let first = ConfigWriteLock::acquire(&config_path).expect("first lock should acquire");
+        let lock_path = config_write_lock_path(&config_path).expect("lock path should resolve");
+        assert!(
+            lock_path.is_file(),
+            "the durable lock file should remain visible"
+        );
+        drop(first);
+
+        let second = ConfigWriteLock::acquire(&config_path)
+            .expect("an unlocked persistent lock file should be reacquired");
+        drop(second);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn legacy_config_lock_directory_fails_closed_during_migration() {
+        let _lock = crate::test_utils::process_environment_mutex()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let root = temporary_directory("legacy-lock-directory");
+        let home = root.join("home");
+        let home_text = home.to_string_lossy().into_owned();
+        let _environment = EnvGuard::set(&[("AKRA_HOME", Some(&home_text))]);
+        let config_path = home.join(CONFIG_FILE_NAME);
+        let lock_path = config_write_lock_path(&config_path).expect("lock path should resolve");
+        fs::create_dir(&lock_path).expect("legacy directory lock should create");
+
+        let error = match ConfigWriteLock::acquire(&config_path) {
+            Ok(_) => panic!("a legacy directory lock must not be reclaimed blindly"),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.contains("legacy configuration lock directory found"));
+        assert!(error.contains("confirm no older Akra process is running"));
         let _ = fs::remove_dir_all(root);
     }
 

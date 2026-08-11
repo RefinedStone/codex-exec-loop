@@ -1081,7 +1081,9 @@ fn test_github_log_directory() -> PathBuf {
 }
 
 fn configured_push_remote_name(repo_root: &str) -> Result<String> {
-    if let Some(config) = crate::configuration::current_process_config() {
+    if let Some(config) =
+        crate::configuration::current_process_config_for_workspace(Path::new(repo_root))?
+    {
         return Ok(config.config.github.push_remote.clone());
     }
     let env_value = std::env::var(AKRA_GITHUB_PUSH_REMOTE_ENV_VAR).ok();

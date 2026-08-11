@@ -90,7 +90,9 @@ legacy repository Git compatibility values, worktree TOML, environment variables
 command overrides by leaf. Composition installs that resolved snapshot before constructing the
 runtime and injects it into TUI, GitHub, parallel, diagnostics, Admin, app-server, and subprocess
 adapters. File reads and mutations stay in the configuration boundary; adapters do not independently
-read an environment variable or repository config to redefine a resolved setting. Thread-specific
+read an environment variable or repository config to redefine a resolved setting. An explicitly
+targeted workspace rebinds only its project-TOML and legacy-Git layers while preserving the original
+global, environment, and command-line snapshot. Thread-specific
 conversation options are a durable outbound capability: the app-server adapter records submitted
 options and restores them without rewriting another thread's state. Interactive preference writes
 cross Core as a command/effect/completion and its single-writer coordinator preserves rapid
