@@ -29,10 +29,13 @@ use super::SqlitePlanningAuthorityAdapter;
 /*
 경로 정책을 나타내는 작은 상수들이다.
 
-`AKRA_HOME`이 있으면 모든 authority store는 그 아래에 모인다. 없으면 일반 실행에서는 사용자 홈의
-`.akra`를 쓰고, 테스트에서는 임시 디렉터리를 쓴다. `projects/<repo>-<hash>/runtime` 형태를 택하는
-이유는 같은 이름의 repository가 다른 절대 경로에 여러 개 있어도 충돌하지 않게 하기 위해서다.
+일반 실행에서 `AKRA_HOME`이 있으면 모든 authority store는 그 아래에 모이고, 없으면 사용자 홈의
+`.akra`를 쓴다. unit test는 병렬 테스트가 process-global 환경변수를 바꾸더라도 다른 fixture의
+저장소를 채택하지 않도록 항상 임시 디렉터리의 고정 test root를 쓴다.
+`projects/<repo>-<hash>/runtime` 형태를 택하는 이유는 같은 이름의 repository가 다른 절대 경로에
+여러 개 있어도 충돌하지 않게 하기 위해서다.
 */
+#[cfg(not(test))]
 const AKRA_HOME_ENV: &str = "AKRA_HOME";
 const AKRA_HOME_DIRECTORY: &str = ".akra";
 const AKRA_PROJECTS_DIRECTORY: &str = "projects";
@@ -291,22 +294,23 @@ fn select_repository_project_namespace(
 /*
 authority store 관리 데이터의 최상위 root를 결정한다.
 
-우선순위는 명시적 환경변수 `AKRA_HOME`이 가장 높다. 이 값은 테스트나 사용자가 별도 데이터
-디렉터리를 지정하고 싶을 때 전체 저장 위치를 제어하는 스위치다. 테스트 빌드에서는 사용자 홈을
-오염시키지 않도록 temp dir 아래를 사용하고, 일반 빌드에서는 HOME/USERPROFILE을 찾아 `.akra`를
-붙인다.
+일반 빌드에서는 명시적 환경변수 `AKRA_HOME`의 우선순위가 가장 높고, 없으면
+HOME/USERPROFILE을 찾아 `.akra`를 붙인다. unit-test 빌드는 사용자 홈을 오염시키지 않고 병렬
+configuration fixture의 process-global `AKRA_HOME` 변경에도 휘말리지 않도록 그 환경변수를 읽기
+전에 temp dir 아래의 고정 test root를 반환한다.
 */
+#[cfg(test)]
+pub(super) fn akra_home_root() -> Result<PathBuf> {
+    Ok(env::temp_dir().join(AKRA_HOME_DIRECTORY).join("tests"))
+}
+
+#[cfg(not(test))]
 pub(super) fn akra_home_root() -> Result<PathBuf> {
     if let Some(path) = env::var_os(AKRA_HOME_ENV) {
         return validate_absolute_akra_home(PathBuf::from(path));
     }
 
-    #[cfg(test)]
-    {
-        Ok(env::temp_dir().join(AKRA_HOME_DIRECTORY).join("tests"))
-    }
-
-    #[cfg(all(not(test), unix))]
+    #[cfg(unix)]
     {
         let home = env::var_os("HOME")
             .map(PathBuf::from)
@@ -314,7 +318,7 @@ pub(super) fn akra_home_root() -> Result<PathBuf> {
         Ok(validate_absolute_profile_home(home)?.join(AKRA_HOME_DIRECTORY))
     }
 
-    #[cfg(all(not(test), windows))]
+    #[cfg(windows)]
     {
         if let Some(home) = env::var_os("USERPROFILE").map(PathBuf::from) {
             return Ok(validate_absolute_profile_home(home)?.join(AKRA_HOME_DIRECTORY));
@@ -322,10 +326,19 @@ pub(super) fn akra_home_root() -> Result<PathBuf> {
         Ok(crate::private_fs::windows_local_app_data_path()?.join("Akra"))
     }
 
-    #[cfg(all(not(test), not(any(unix, windows))))]
+    #[cfg(not(any(unix, windows)))]
     {
         bail!("AKRA_HOME is required on this platform")
     }
+}
+
+#[cfg(test)]
+#[test]
+fn unit_test_authority_home_is_process_isolated() {
+    assert_eq!(
+        akra_home_root().expect("unit-test authority home should resolve"),
+        env::temp_dir().join(AKRA_HOME_DIRECTORY).join("tests")
+    );
 }
 
 fn validate_absolute_akra_home(path: PathBuf) -> Result<PathBuf> {
