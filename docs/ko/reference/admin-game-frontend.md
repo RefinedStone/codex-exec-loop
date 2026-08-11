@@ -52,6 +52,14 @@ authority, parallel policy, application control plane은 변경하지 않습니�
   닫고 fallback polling을 건너뛰며, 다시 보이면 dashboard/event를 한 번 reconcile한 뒤 reconnect합니다.
 - Passive validation은 QA/CI station과 signal packet으로 표시합니다. Correlated ordinary Queue task가
   실제 worker lease를 소유할 때만 worker character가 생깁니다.
+- 별도의 PR 승인관은 항상 존재하는 environment NPC이며 worker가 아닙니다. 서버는 durable
+  `github_rebase_merge` evidence가 있을 때만 `idle`, `reviewing`, `failure`, `success` 상태를 결정합니다.
+  성공의 유일한 근거는 `Verified`이고 check 개수만으로 승인을 추론하지 않습니다. Retryable provider
+  대기, stale, pause, remediation은 애니메이션 추측이 아니라 명시적인 qualifier로 전달됩니다.
+- 승인관 카드에는 정확한 PR, evidence SHA, required-check 진행도, 미해결 finding 수가 표시됩니다.
+  카드나 캐릭터를 선택하면 DOM의 첫 검증 항목이 아니라 현재 연출 중인 `recordKey`의 상세를 엽니다.
+  스테이션, signal packet, 캐릭터, 상세 drawer는 같은 record를 유지하고, 캐릭터 hit target은 넓은
+  DELIVERY room POI보다 위에서 입력을 받습니다.
 - Application-owned Debug Harness가 결정론적 validation scenario 열 개를 제공합니다. API, DOM, Pixi
   inspection은 같은 phase, severity, record identity, lease fact를 보고해야 합니다.
 
@@ -95,15 +103,17 @@ authority, parallel policy, application control plane은 변경하지 않습니�
 - Renderer는 보통 Pixi `60 fps` requestAnimationFrame ticker를 따릅니다. Host가 rAF를 throttle할 때만
   visible-tab `60 fps` timer가 대신하며 hidden tab에서는 둘 다 갱신하지 않습니다. Scene inspection은
   browser-harness 검증을 위해 active frame driver를 표시합니다.
-- `AgentWorld`는 map, actor, signal packet, point of interest, label, depth ordering을 소유합니다.
+- `AgentWorld`는 map, actor, 고정 PR 승인관, signal packet, point of interest, label, depth ordering을
+  소유합니다.
 - `SceneCameraController`는 fit, pan, wheel/pinch zoom, zoom control, bounds,
   `overview -> operations -> detail` semantic zoom projection을 소유합니다.
 - Actor state가 바뀌면 retained unit을 새 semantic destination으로 이동합니다. Front/rear/strict-side atlas
   row만 사용하며 diagonal character direction을 만들지 않습니다.
 - Normal travel은 exponential tail 대신 `168` world-pixels/s 상수로 `30%` presentation-speed 목표를
-  유지합니다. 네 방향 walk frame은 archetype/facing별 center와 foot alignment를 사용하고 step 경계에서
-  짧게 crossfade합니다. 동기화된 `760 ms` procedural gait가 `60 fps` driver에서 subpixel sway, lift,
-  shadow compression을 더합니다. Reduced motion은 walk cycle 없이 semantic destination으로 snap합니다.
+  유지합니다. 네 방향 walk frame은 archetype/facing별 center와 foot alignment를 사용하며 전신 pose를
+  crossfade하지 않습니다. 동기화된 `760 ms` procedural gait는 발자국과 shadow 크기를 고정한 채 `60 fps`
+  driver에서 subpixel sway와 lift만 더합니다. Reduced motion은 walk cycle 없이 semantic destination으로
+  snap합니다.
 - 변경 없는 idle/configured-standby unit은 roam하거나 packet을 만들지 않습니다. Atlas pose가 있으면
   laptop/seated를 선택하고, 아니면 coordinate를 바꾸지 않는 `960 ms` four-frame in-place gait를 `65%`
   amplitude로 사용할 수 있습니다.
@@ -123,6 +133,10 @@ authority, parallel policy, application control plane은 변경하지 않습니�
   standby destination은 분리된 빈 room block을 사용합니다.
 - Worker sprite는 `0.72` world scale을 사용합니다. Working actor는 duplicate furniture가 들어간 legacy
   laptop emote 대신 map desk 뒤의 rear-facing row를 사용합니다.
+- `pr-approver-atlas-128x192.png`는 별도의 `6 x 4` atlas입니다. 네 행은 intake, page review, failure,
+  success이고 발 anchor와 scale은 모든 frame에서 고정됩니다. 종이, 팔, 표정, 제한된 status accent만
+  움직입니다. Failure와 success는 한 번 재생한 뒤 마지막 pose에서 멈추고 reduced-motion 및
+  paused/waiting qualifier는 대표 정지 pose를 사용합니다.
 
 ## Image generation provenance
 
@@ -134,15 +148,26 @@ Production prompt는 낮은 20–25도 orthographic dollhouse camera, 빈 front/
 technical light, crisp character-scale pixel art를 요구했습니다. 사람, text, logo, floating UI, steep
 isometric perspective, diagonal chair, painterly blur, baked status icon은 금지했습니다.
 
+PR 승인관 atlas는 2026-08-11 내장 ImageGen으로 생성했고 worker atlas와 앞선 승인관 concept을 reference로
+사용했습니다. Prompt는 한 명의 성인 승인관 identity, camera, head size, body height, foot baseline, scale을
+24개 cell에 고정하고 intake, page review, failure, success를 각각 여섯 frame으로 구성했습니다. Magenta
+chroma background, 흰 종이와 안경의 어두운 outline, shadow/text/white halo 금지를 명시했습니다. 공식
+ImageGen chroma-removal helper가 alpha source를 만들고 repository preparation script가 각 cell을 공통
+baseline으로 정규화한 뒤 half atlas를 nearest-neighbor로만 파생합니다. 전체 prompt와 generation
+metadata는 `templates/admin/resources/pr_approver_sprite_pack/`에 있습니다.
+
 ## 검증
 
 다음을 실행합니다.
 
 ```text
 node --check scripts/capture_admin_validation_evidence.mjs
+node --check scripts/capture_admin_pr_approver.mjs
 node --check assets/admin/scripts/akra-dashboard.js
 npm --prefix assets/admin/game run check
+npm --prefix assets/admin/game run sprites:approver:check
 npm --prefix assets/admin/game run build
+cargo test game_approver --lib
 cargo test akra_graphic_dashboard --lib
 bash scripts/check_admin_graphic_visual.sh
 ```

@@ -205,6 +205,51 @@ try {
         );
       }
     }
+    if (!debugHarness) {
+      const fallbackApprover = await page.evaluate(() => {
+        const fallback = document.querySelector("[data-pr-approver]");
+        return {
+          state: fallback?.dataset.prApproverState ?? null,
+          recordKey: fallback?.dataset.validationRecordKey ?? null,
+          disabled: fallback instanceof HTMLButtonElement ? fallback.disabled : null,
+        };
+      });
+      for (const scene of [firstScene, secondScene]) {
+        const approver = scene?.validation?.approver;
+        if (
+          approver?.state !== "idle" ||
+          approver.qualifier !== "none" ||
+          approver.clip !== "idle" ||
+          approver.frameIndex !== 0 ||
+          approver.sourceFrameIndex !== 0 ||
+          approver.settled !== true ||
+          approver.recordKey !== null ||
+          approver.transitionKey !== "idle" ||
+          approver.visible !== true ||
+          approver.displayWidth <= 24 ||
+          approver.displayHeight <= 48 ||
+          scene.validation.recordKey !== null ||
+          scene.characterCount !== scene.actorCount + scene.standbyCount
+        ) {
+          throw new Error(
+            `${label} default PR approver inspection is not a stable, legible idle projection: ${JSON.stringify(scene)}`,
+          );
+        }
+      }
+      if (
+        firstScene.validation.approver.sourceFrameIndex !==
+          secondScene.validation.approver.sourceFrameIndex ||
+        firstScene.validation.approver.transitionKey !==
+          secondScene.validation.approver.transitionKey ||
+        fallbackApprover.state !== "idle" ||
+        fallbackApprover.recordKey !== "" ||
+        fallbackApprover.disabled !== true
+      ) {
+        throw new Error(
+          `${label} default PR approver idle frame or identity drifted: ${JSON.stringify({ firstScene, secondScene, fallbackApprover })}`,
+        );
+      }
+    }
     const semanticMotion = Math.max(
       firstScene.semanticMotionCount,
       secondScene.semanticMotionCount,

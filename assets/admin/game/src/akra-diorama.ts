@@ -13,6 +13,7 @@ import { DashboardSceneStore } from "./scene-store";
 
 const MAP_ASSET_URL = "/admin/assets/graphics/akra-operations-studio-v3.png";
 const AGENT_ATLAS_URL = "/admin/assets/graphics/gamebaljeonguk_atlas_128x192.png";
+const PR_APPROVER_ATLAS_URL = "/admin/assets/graphics/pr-approver-atlas-128x192.png";
 
 export const ACTIVE_FRAME_INTERVAL_MS = 1000 / 60;
 export const RAF_HEALTHY_GAP_MS = 80;
@@ -45,6 +46,23 @@ const emptyInspection = (): SceneInspection => ({
     packetKind: null,
     packetVisible: false,
     workerLeaseActive: false,
+    approver: {
+      state: "idle",
+      qualifier: "none",
+      clip: "idle",
+      frameIndex: 0,
+      sourceFrameIndex: 0,
+      settled: true,
+      recordKey: null,
+      pullRequestNumber: null,
+      transitionKey: "idle",
+      visible: false,
+      reducedMotion: false,
+      displayWidth: 0,
+      displayHeight: 0,
+      boardX: 0,
+      boardY: 0,
+    },
   },
   actors: [],
   standbyCharacters: [],
@@ -104,6 +122,34 @@ const emptyInspection = (): SceneInspection => ({
       container.dataset.sceneValidationPacketVisible = String(inspection.validation.packetVisible);
       container.dataset.sceneValidationWorkerLeaseActive = String(
         inspection.validation.workerLeaseActive
+      );
+      container.dataset.sceneApproverState = inspection.validation.approver.state;
+      container.dataset.sceneApproverQualifier = inspection.validation.approver.qualifier;
+      container.dataset.sceneApproverClip = inspection.validation.approver.clip;
+      container.dataset.sceneApproverFrameIndex = String(
+        inspection.validation.approver.frameIndex
+      );
+      container.dataset.sceneApproverSourceFrameIndex = String(
+        inspection.validation.approver.sourceFrameIndex
+      );
+      container.dataset.sceneApproverSettled = String(
+        inspection.validation.approver.settled
+      );
+      container.dataset.sceneApproverRecordKey =
+        inspection.validation.approver.recordKey ?? "";
+      container.dataset.sceneApproverTransitionKey =
+        inspection.validation.approver.transitionKey;
+      container.dataset.sceneApproverVisible = String(
+        inspection.validation.approver.visible
+      );
+      container.dataset.sceneApproverReducedMotion = String(
+        inspection.validation.approver.reducedMotion
+      );
+      container.dataset.sceneApproverBoardX = String(
+        inspection.validation.approver.boardX
+      );
+      container.dataset.sceneApproverBoardY = String(
+        inspection.validation.approver.boardY
       );
       container.dataset.sceneActorSignature = JSON.stringify(
         inspection.actors.map((actor) => ({
@@ -280,12 +326,18 @@ const emptyInspection = (): SceneInspection => ({
       const textureResults = await Promise.allSettled([
         Assets.load<Texture>(MAP_ASSET_URL),
         Assets.load<Texture>(AGENT_ATLAS_URL),
+        Assets.load<Texture>(PR_APPROVER_ATLAS_URL),
         document.fonts?.load("14px Galmuri11") ?? Promise.resolve([]),
       ]);
       if (destroyed) return;
       const mapResult = textureResults[0];
       const atlasResult = textureResults[1];
-      if (mapResult.status !== "fulfilled" || atlasResult.status !== "fulfilled") {
+      const approverAtlasResult = textureResults[2];
+      if (
+        mapResult.status !== "fulfilled"
+        || atlasResult.status !== "fulfilled"
+        || approverAtlasResult.status !== "fulfilled"
+      ) {
         const reasons = textureResults
           .filter((result) => result.status === "rejected")
           .map((result) => String(result.reason))
@@ -294,7 +346,12 @@ const emptyInspection = (): SceneInspection => ({
       }
 
       atlasResult.value.source.scaleMode = "nearest";
-      world = new AgentWorld(mapResult.value, atlasResult.value);
+      approverAtlasResult.value.source.scaleMode = "nearest";
+      world = new AgentWorld(
+        mapResult.value,
+        atlasResult.value,
+        approverAtlasResult.value
+      );
       app.stage.addChild(world.root);
       camera = new SceneCameraController({
         canvas: app.canvas,

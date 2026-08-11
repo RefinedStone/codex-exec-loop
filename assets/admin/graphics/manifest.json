@@ -5,6 +5,8 @@
   "runtime_assets": [
     "akra-operations-studio-v3.png",
     "gamebaljeonguk_atlas_128x192.png",
-    "gamebaljeonguk_atlas_64x96.png"
+    "gamebaljeonguk_atlas_64x96.png",
+    "pr-approver-atlas-128x192.png",
+    "pr-approver-atlas-64x96.png"
   ]
 }

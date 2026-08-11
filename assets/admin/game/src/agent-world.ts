@@ -22,6 +22,7 @@ import type {
   DashboardSceneSnapshot,
   Facing,
   GameActorProjection,
+  GamePrApproverProjection,
   GameStandbyProjection,
   GameValidationProjection,
   Point,
@@ -33,6 +34,11 @@ import type {
   VisualState,
 } from "./game-types";
 import {
+  PrApproverAnimator,
+  buildPrApproverFrames,
+  type PrApproverAnimationSnapshot,
+} from "./pr-approver-atlas";
+import {
   AGENT_SPRITE_SCALE,
   CLEANUP_STATION_POINTS,
   DELIVERY_STATION_POINTS,
@@ -40,6 +46,8 @@ import {
   MAP_WIDTH,
   OCCLUSION_POLYGONS,
   POINTS_OF_INTEREST,
+  PR_APPROVER_POINT,
+  PR_APPROVER_SPRITE_SCALE,
   QA_CI_SIGNAL_POINTS,
   QA_CI_STATION_POINT,
   REVIEW_STATION_POINTS,
@@ -112,9 +120,36 @@ interface ValidationStationVisual {
   group: Container;
   panel: Graphics;
   beacon: Graphics;
+  caption: Text;
   label: Text;
   modeLabel: Text;
+  progressTrack: Graphics;
+  progressFill: Graphics;
 }
+
+interface PrApproverVisual {
+  group: Container;
+  sprite: Sprite;
+  shadow: Graphics;
+  stateMarker: Graphics;
+  animator: PrApproverAnimator;
+  snapshot: PrApproverAnimationSnapshot;
+}
+
+const emptyApproverProjection = (): GamePrApproverProjection => ({
+  state: "idle",
+  qualifier: "none",
+  recordKey: null,
+  pullRequestNumber: null,
+  evidenceShortSha: null,
+  integrationMethod: null,
+  requiredChecksSucceeded: 0,
+  requiredChecksTotal: 0,
+  findingCount: 0,
+  remediationCount: 0,
+  statusLabel: "통합 PR 대기",
+  transitionKey: "idle",
+});
 
 const emptyValidationProjection = (): GameValidationProjection => ({
   stationState: "idle",
@@ -124,6 +159,7 @@ const emptyValidationProjection = (): GameValidationProjection => ({
   phase: null,
   packetKind: null,
   workerLeaseActive: false,
+  approver: emptyApproverProjection(),
 });
 
 const distance = (from: Point, to: Point): number =>
@@ -133,6 +169,37 @@ const stableNumber = (value: string): number =>
   [...value].reduce((sum, character) => sum + character.charCodeAt(0), 0);
 
 const copyPoint = (point: Point): Point => ({ x: point.x, y: point.y });
+
+const approverColor = (projection: GamePrApproverProjection): number => {
+  switch (projection.state) {
+    case "success":
+      return STATUS_PALETTE.success;
+    case "failure":
+      return STATUS_PALETTE.danger;
+    case "reviewing":
+      return projection.qualifier === "waiting" || projection.qualifier === "stale"
+        ? STATUS_PALETTE.warning
+        : STATUS_PALETTE.info;
+    default:
+      return STATUS_PALETTE.muted;
+  }
+};
+
+const approverStateLabel = (projection: GamePrApproverProjection): string => {
+  switch (projection.state) {
+    case "success":
+      return "승인 완료";
+    case "failure":
+      return projection.qualifier === "recovering" ? "재작업 확인" : "반려 확인";
+    case "reviewing":
+      if (projection.qualifier === "paused") return "검토 일시정지";
+      if (projection.qualifier === "stale") return "새 증거 대기";
+      if (projection.qualifier === "waiting") return "공급자 응답 대기";
+      return "문서 검토 중";
+    default:
+      return "통합 PR 대기";
+  }
+};
 
 export const AGENT_MOVEMENT_SPEED_RATIO = 0.3;
 export const AGENT_TRAVEL_SPEED_WORLD_PX_PER_SECOND = 168;
@@ -206,7 +273,7 @@ const relevantPacketTarget = (unit: AgentUnit): Point | null => {
 const dispatchSceneSelection = (
   detail:
     | { kind: "actor"; actorId: string }
-    | { kind: "poi"; detailTarget: string }
+    | { kind: "poi"; detailTarget: string; recordKey?: string | null }
 ): void => {
   window.dispatchEvent(new CustomEvent("akra:scene-selection-requested", { detail }));
 };
@@ -313,6 +380,7 @@ export class AgentWorld {
   private readonly mapTexture: Texture;
   private readonly atlasTexture: Texture;
   private readonly frameSets: Record<ArchetypeKey, AgentFrameSet>;
+  private readonly approverFrames: Texture[];
   private readonly agentLayer = new Container({ sortableChildren: true });
   private readonly packetLayer = new Container({ sortableChildren: true });
   private readonly labelLayer = new Container({ sortableChildren: true });
@@ -322,23 +390,38 @@ export class AgentWorld {
   private readonly poiLabels: Text[] = [];
   private validation = emptyValidationProjection();
   private validationStation: ValidationStationVisual | null = null;
+  private approverVisual: PrApproverVisual | null = null;
   private planningRevision: number | null = null;
   private zoomLevel: SemanticZoomLevel = "overview";
   private cameraZoom = 1;
   private renderCount = 0;
-  private reducedMotion =
-    window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+  private readonly reducedMotionQuery =
+    window.matchMedia?.("(prefers-reduced-motion: reduce)") ?? null;
+  private reducedMotion = this.reducedMotionQuery?.matches ?? false;
+  private readonly onReducedMotionChange = (event: MediaQueryListEvent): void => {
+    this.reducedMotion = event.matches;
+    for (const unit of this.units.values()) {
+      if (unit.presenceKind !== "configured_standby") continue;
+      unit.ambientActivity =
+        !this.reducedMotion && unit.standbyPatrolRoute.length > 1;
+      if (!unit.ambientActivity) unit.targetPoint = copyPoint(unit.homePoint);
+    }
+    this.syncApproverPresentation();
+  };
 
-  constructor(mapTexture: Texture, atlasTexture: Texture) {
+  constructor(mapTexture: Texture, atlasTexture: Texture, approverTexture: Texture) {
     this.mapTexture = mapTexture;
     this.atlasTexture = atlasTexture;
     this.frameSets = buildAgentFrameSets(atlasTexture);
+    this.approverFrames = buildPrApproverFrames(approverTexture);
+    this.reducedMotionQuery?.addEventListener("change", this.onReducedMotionChange);
     this.buildScene();
   }
 
   reconcile(snapshot: DashboardSceneSnapshot): void {
     this.planningRevision = snapshot.planningRevision;
     this.validation = snapshot.scene.validation;
+    this.approverVisual?.animator.reconcile(this.validation.approver);
     const projections: CharacterProjection[] = [
       ...snapshot.scene.actors,
       ...snapshot.scene.standbyCharacters,
@@ -401,6 +484,7 @@ export class AgentWorld {
       this.units.delete(key);
     }
     this.syncValidationStation();
+    this.syncApproverPresentation();
     this.rebuildSignalPackets();
     this.syncZoomPresentation();
   }
@@ -553,9 +637,10 @@ export class AgentWorld {
       packet.graphic.rotation = Math.atan2(packet.to.y - packet.from.y, packet.to.x - packet.from.x);
       packet.graphic.alpha = 0.28 + Math.sin(travel * Math.PI) * 0.72;
     }
+    this.updateApprover(deltaMilliseconds);
     if (this.validationStation && !this.reducedMotion) {
       const pulse = 0.82 + Math.sin(elapsedMilliseconds * 0.004) * 0.18;
-      this.validationStation.beacon.alpha = this.validation.stationState === "idle"
+      this.validationStation.beacon.alpha = this.validation.approver.state === "idle"
         ? 0.42
         : pulse;
     }
@@ -607,6 +692,30 @@ export class AgentWorld {
         packetKind: this.validation.packetKind,
         packetVisible: [...this.packets.keys()].some((key) => key.startsWith("validation:")),
         workerLeaseActive: this.validation.workerLeaseActive,
+        approver: (() => {
+          const visual = this.approverVisual;
+          const snapshot = visual?.snapshot
+            ?? new PrApproverAnimator(this.validation.approver).snapshot(this.reducedMotion);
+          const spriteBounds = visual?.sprite.getBounds();
+          const boardPoint = visual?.group.getGlobalPosition();
+          return {
+            state: snapshot.state,
+            qualifier: snapshot.qualifier,
+            clip: snapshot.clip,
+            frameIndex: snapshot.frameIndex,
+            sourceFrameIndex: snapshot.sourceFrameIndex,
+            settled: snapshot.settled,
+            recordKey: this.validation.approver.recordKey,
+            pullRequestNumber: this.validation.approver.pullRequestNumber,
+            transitionKey: snapshot.transitionKey,
+            visible: visual?.group.visible ?? false,
+            reducedMotion: this.reducedMotion,
+            displayWidth: Math.round(spriteBounds?.width ?? 0),
+            displayHeight: Math.round(spriteBounds?.height ?? 0),
+            boardX: Math.round(boardPoint?.x ?? 0),
+            boardY: Math.round(boardPoint?.y ?? 0),
+          };
+        })(),
       },
       actors: activeUnits.map((unit) => {
         const boardPoint = unit.group.getGlobalPosition();
@@ -668,6 +777,7 @@ export class AgentWorld {
   }
 
   destroy(): void {
+    this.reducedMotionQuery?.removeEventListener("change", this.onReducedMotionChange);
     this.units.clear();
     this.packets.clear();
     this.root.destroy({ children: true });
@@ -686,6 +796,7 @@ export class AgentWorld {
     this.poiLayer.zIndex = 12_000;
     this.labelLayer.zIndex = 20_000;
     this.root.addChild(this.packetLayer, this.agentLayer);
+    this.buildApprover();
 
     const foreground = new Sprite(this.mapTexture);
     foreground.position.set(0, 0);
@@ -700,17 +811,132 @@ export class AgentWorld {
     this.buildPointsOfInterest();
   }
 
+  private buildApprover(): void {
+    const animator = new PrApproverAnimator(this.validation.approver);
+    const snapshot = animator.snapshot(this.reducedMotion);
+    const sprite = new Sprite(
+      this.approverFrames[snapshot.sourceFrameIndex] ?? this.approverFrames[0]
+    );
+    sprite.anchor.set(0.5, 1);
+    sprite.scale.set(PR_APPROVER_SPRITE_SCALE);
+    sprite.roundPixels = true;
+
+    const stateMarker = new Graphics();
+    const shadow = new Graphics()
+      .ellipse(0, -2, 27, 7.5)
+      .fill({ color: 0x000000, alpha: 0.34 });
+    const group = new Container();
+    group.position.set(PR_APPROVER_POINT.x, PR_APPROVER_POINT.y);
+    group.zIndex = PR_APPROVER_POINT.y;
+    group.eventMode = "static";
+    group.cursor = "pointer";
+    group.hitArea = new Rectangle(-50, -152, 100, 158);
+    group.addChild(stateMarker, shadow, sprite);
+    group.on("pointertap", () => {
+      dispatchSceneSelection({
+        kind: "poi",
+        detailTarget: "validation",
+        recordKey: this.validation.approver.recordKey,
+      });
+    });
+    group.on("pointerover", () => { stateMarker.alpha = 1; });
+    group.on("pointerout", () => { stateMarker.alpha = 0.7; });
+    this.agentLayer.addChild(group);
+
+    // The approval desk sits inside DELIVERY's broad point-of-interest hit
+    // region. Keep an invisible, higher-priority interaction target in the POI
+    // layer so selecting the officer always opens this exact validation record
+    // instead of the distributor drawer underneath.
+    const interactionTarget = new Container();
+    interactionTarget.position.set(PR_APPROVER_POINT.x, PR_APPROVER_POINT.y);
+    interactionTarget.zIndex = 2_100;
+    interactionTarget.eventMode = "static";
+    interactionTarget.cursor = "pointer";
+    interactionTarget.hitArea = new Rectangle(-50, -152, 100, 158);
+    interactionTarget.on("pointertap", () => {
+      dispatchSceneSelection({
+        kind: "poi",
+        detailTarget: "validation",
+        recordKey: this.validation.approver.recordKey,
+      });
+    });
+    interactionTarget.on("pointerover", () => { stateMarker.alpha = 1; });
+    interactionTarget.on("pointerout", () => { stateMarker.alpha = 0.7; });
+    this.poiLayer.addChild(interactionTarget);
+    this.approverVisual = {
+      group,
+      sprite,
+      shadow,
+      stateMarker,
+      animator,
+      snapshot,
+    };
+    this.syncApproverPresentation();
+  }
+
+  private updateApprover(deltaMilliseconds: number): void {
+    const visual = this.approverVisual;
+    if (!visual) return;
+    const next = visual.animator.update(deltaMilliseconds, this.reducedMotion);
+    if (next.sourceFrameIndex !== visual.snapshot.sourceFrameIndex) {
+      visual.sprite.texture = this.approverFrames[next.sourceFrameIndex]
+        ?? this.approverFrames[0]
+        ?? Texture.EMPTY;
+    }
+    visual.snapshot = next;
+  }
+
+  private syncApproverPresentation(): void {
+    const visual = this.approverVisual;
+    if (!visual) return;
+    const projection = this.validation.approver;
+    const snapshot = visual.animator.snapshot(this.reducedMotion);
+    const color = approverColor(projection);
+    visual.snapshot = snapshot;
+    visual.sprite.texture = this.approverFrames[snapshot.sourceFrameIndex]
+      ?? this.approverFrames[0]
+      ?? Texture.EMPTY;
+    visual.group.visible = true;
+    visual.group.alpha = projection.state === "idle" ? 0.84 : 1;
+    visual.group.position.set(PR_APPROVER_POINT.x, PR_APPROVER_POINT.y);
+    visual.sprite.position.set(0, 0);
+    visual.sprite.scale.set(PR_APPROVER_SPRITE_SCALE);
+    visual.shadow.alpha = projection.state === "idle" ? 0.24 : 0.34;
+    visual.shadow.scale.set(1);
+    visual.stateMarker
+      .clear()
+      .ellipse(0, -2, 33, 10)
+      .stroke({ width: 2, color, alpha: projection.state === "idle" ? 0.42 : 0.82 })
+      .ellipse(0, -2, 27, 7.5)
+      .stroke({ width: 1, color, alpha: 0.36 });
+    visual.stateMarker.alpha = 0.7;
+  }
+
   private buildValidationStation(): void {
     const group = new Container();
     group.position.set(QA_CI_STATION_POINT.x, QA_CI_STATION_POINT.y);
+    group.zIndex = 2_000;
     group.eventMode = "static";
     group.cursor = "pointer";
-    group.hitArea = new Rectangle(-82, -49, 164, 98);
+    group.hitArea = new Rectangle(-102, -58, 204, 116);
 
     const panel = new Graphics();
     const beacon = new Graphics();
+    const caption = new Text({
+      text: "PR APPROVER",
+      style: {
+        fontFamily: "Galmuri11, monospace",
+        fontSize: 9,
+        fontWeight: "bold",
+        fill: 0x98abc4,
+        letterSpacing: 1.5,
+        stroke: { color: 0x03101d, width: 2 },
+      },
+    });
+    caption.anchor.set(0, 0.5);
+    caption.position.set(-84, -39);
     const label = new Text({
-      text: "QA / CI",
+      text: "통합 PR 대기",
       style: {
         fontFamily: "Galmuri11, monospace",
         fontSize: 13,
@@ -720,10 +946,10 @@ export class AgentWorld {
         stroke: { color: 0x03101d, width: 3 },
       },
     });
-    label.anchor.set(0.5);
-    label.position.set(0, -18);
+    label.anchor.set(0, 0.5);
+    label.position.set(-84, -13);
     const modeLabel = new Text({
-      text: "PASSIVE CHECK",
+      text: "CHECKS 0/0 · FINDINGS 0",
       style: {
         fontFamily: "Galmuri11, monospace",
         fontSize: 9,
@@ -733,55 +959,82 @@ export class AgentWorld {
         stroke: { color: 0x03101d, width: 2 },
       },
     });
-    modeLabel.anchor.set(0.5);
-    modeLabel.position.set(0, 16);
-    group.addChild(panel, beacon, label, modeLabel);
+    modeLabel.anchor.set(0, 0.5);
+    modeLabel.position.set(-84, 13);
+    const progressTrack = new Graphics();
+    const progressFill = new Graphics();
+    group.addChild(panel, beacon, caption, label, modeLabel, progressTrack, progressFill);
     group.on("pointertap", () => {
-      dispatchSceneSelection({ kind: "poi", detailTarget: "validation" });
+      dispatchSceneSelection({
+        kind: "poi",
+        detailTarget: "validation",
+        recordKey: this.validation.approver.recordKey,
+      });
     });
-    group.on("pointerover", () => group.scale.set(1.025));
-    group.on("pointerout", () => group.scale.set(1));
+    group.on("pointerover", () => { panel.alpha = 1; });
+    group.on("pointerout", () => { panel.alpha = 0.92; });
     this.poiLayer.addChild(group);
-    this.validationStation = { group, panel, beacon, label, modeLabel };
+    this.validationStation = {
+      group,
+      panel,
+      beacon,
+      caption,
+      label,
+      modeLabel,
+      progressTrack,
+      progressFill,
+    };
     this.syncValidationStation();
   }
 
   private syncValidationStation(): void {
     const station = this.validationStation;
     if (!station) return;
-    const color = STATUS_PALETTE[this.validation.severity];
+    const approver = this.validation.approver;
+    const color = approverColor(approver);
     station.panel
       .clear()
-      .roundRect(-78, -43, 156, 86, 7)
+      .roundRect(-96, -52, 192, 104, 8)
       .fill({ color: 0x04131f, alpha: 0.86 })
       .stroke({ width: 2.5, color, alpha: 0.86 })
-      .roundRect(-66, -33, 18, 54, 3)
-      .fill({ color: 0x081e31, alpha: 0.95 })
-      .stroke({ width: 1, color: 0x5da9ff, alpha: 0.45 })
-      .moveTo(-62, -20)
-      .lineTo(-52, -20)
-      .moveTo(-62, -8)
-      .lineTo(-52, -8)
-      .moveTo(-62, 4)
-      .lineTo(-52, 4)
-      .stroke({ width: 2, color, alpha: 0.72 });
+      .roundRect(-92, -48, 4, 96, 2)
+      .fill({ color, alpha: 0.78 });
+    station.panel.alpha = 0.92;
     station.beacon
       .clear()
-      .circle(61, -27, 7)
-      .fill({ color, alpha: this.validation.stationState === "idle" ? 0.32 : 0.9 })
-      .circle(61, -27, 12)
+      .circle(77, -38, 6)
+      .fill({ color, alpha: approver.state === "idle" ? 0.32 : 0.9 })
+      .circle(77, -38, 10)
       .stroke({ width: 1.5, color, alpha: 0.42 });
-    station.label.text = this.validation.label || "QA / CI";
+    station.caption.text = approver.evidenceShortSha
+      ? `PR APPROVER · ${approver.evidenceShortSha}`
+      : "PR APPROVER";
+    station.label.text = approver.pullRequestNumber
+      ? `PR #${approver.pullRequestNumber} · ${approverStateLabel(approver)}`
+      : approverStateLabel(approver);
     station.label.style.fill = color;
-    station.modeLabel.text = this.validation.workerLeaseActive
-      ? "LEASED WORKER"
-      : this.validation.phase
-        ? "PASSIVE CHECK"
-        : "NO RECORD";
-    station.modeLabel.style.fill = this.validation.workerLeaseActive
-      ? STATUS_PALETTE.success
+    const unresolvedFindings = Math.max(
+      0,
+      approver.findingCount - approver.remediationCount
+    );
+    station.modeLabel.text = `${approver.requiredChecksSucceeded}/${approver.requiredChecksTotal} CHECKS · ${unresolvedFindings} FINDING${unresolvedFindings === 1 ? "" : "S"}`;
+    station.modeLabel.style.fill = approver.state === "failure"
+      ? STATUS_PALETTE.danger
       : STATUS_PALETTE.muted;
-    station.group.alpha = this.validation.stationState === "idle" ? 0.68 : 1;
+    const progress = approver.requiredChecksTotal > 0
+      ? Math.min(1, approver.requiredChecksSucceeded / approver.requiredChecksTotal)
+      : approver.state === "success" ? 1 : 0;
+    station.progressTrack
+      .clear()
+      .roundRect(-84, 34, 168, 5, 2.5)
+      .fill({ color: 0x17304a, alpha: 0.9 });
+    station.progressFill.clear();
+    if (progress > 0) {
+      station.progressFill
+        .roundRect(-84, 34, Math.max(5, 168 * progress), 5, 2.5)
+        .fill({ color, alpha: 0.96 });
+    }
+    station.group.alpha = approver.state === "idle" ? 0.78 : 1;
   }
 
   private buildPointsOfInterest(): void {
@@ -1079,6 +1332,12 @@ export class AgentWorld {
     for (const unit of this.units.values()) this.syncUnitLabel(unit);
     const showPoiLabels = this.zoomLevel !== "overview";
     for (const label of this.poiLabels) label.visible = showPoiLabels;
+    if (this.validationStation) {
+      this.validationStation.caption.visible = showPoiLabels;
+      this.validationStation.modeLabel.visible = showPoiLabels;
+      this.validationStation.progressTrack.visible = showPoiLabels;
+      this.validationStation.progressFill.visible = showPoiLabels;
+    }
   }
 }
 

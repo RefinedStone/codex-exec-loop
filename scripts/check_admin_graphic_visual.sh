@@ -31,6 +31,9 @@ font_bold="${output_dir}/Galmuri11-Bold.woff2"
 operations_studio_asset="${output_dir}/akra-operations-studio-v3.png"
 agent_atlas_asset="${output_dir}/gamebaljeonguk_atlas_64x96.png"
 agent_atlas_large_asset="${output_dir}/gamebaljeonguk_atlas_128x192.png"
+pr_approver_atlas_asset="${output_dir}/pr-approver-atlas-64x96.png"
+pr_approver_atlas_large_asset="${output_dir}/pr-approver-atlas-128x192.png"
+pr_approver_output_dir="${output_dir}/pr-approver"
 screenshot_path="${output_dir}/admin-graphic.png"
 mobile_screenshot_path="${output_dir}/admin-graphic-mobile.png"
 compact_screenshot_path="${output_dir}/admin-graphic-compact.png"
@@ -190,14 +193,26 @@ capture_with_browser() {
   if ! node -e "require.resolve('@playwright/test')" >/dev/null 2>&1; then
     npm ci --ignore-scripts
   fi
-  AKRA_ADMIN_VISUAL_TOKEN="${admin_token}" node scripts/capture_admin_graphic.mjs \
-    --browser="${browser}" \
-    --url="${url}" \
-    --screenshot="${screenshot_path}" \
-    --mobile-screenshot="${mobile_screenshot_path}" \
-    --compact-screenshot="${compact_screenshot_path}" \
-    --full-hd-screenshot="${full_hd_screenshot_path}" \
-    --qhd-screenshot="${qhd_screenshot_path}"
+  if ! ADMIN_GRAPHIC_DEBUG_HARNESS="${debug_harness}" \
+    AKRA_ADMIN_VISUAL_TOKEN="${admin_token}" node scripts/capture_admin_graphic.mjs \
+      --browser="${browser}" \
+      --url="${url}" \
+      --screenshot="${screenshot_path}" \
+      --mobile-screenshot="${mobile_screenshot_path}" \
+      --compact-screenshot="${compact_screenshot_path}" \
+      --full-hd-screenshot="${full_hd_screenshot_path}" \
+      --qhd-screenshot="${qhd_screenshot_path}"; then
+    return 1
+  fi
+
+  if [[ "${debug_harness}" == "1" ]]; then
+    if ! AKRA_ADMIN_VISUAL_TOKEN="${admin_token}" node scripts/capture_admin_pr_approver.mjs \
+        --browser="${browser}" \
+        --url="${url}" \
+        --output-dir="${pr_approver_output_dir}"; then
+      return 1
+    fi
+  fi
 }
 
 cleanup() {
@@ -210,6 +225,13 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "node is required to validate the Admin browser capture scripts" >&2
+  exit 1
+fi
+node --check scripts/capture_admin_graphic.mjs
+node --check scripts/capture_admin_pr_approver.mjs
 
 if [[ "${ADMIN_GAME_BUILD:-1}" != "0" ]]; then
   if [[ ! -d assets/admin/game/node_modules ]]; then
@@ -303,6 +325,8 @@ authenticated_curl -fsS "${base_url}/admin/assets/fonts/Galmuri11-Bold.woff2" >"
 authenticated_curl -fsS "${base_url}/admin/assets/graphics/akra-operations-studio-v3.png" >"${operations_studio_asset}"
 authenticated_curl -fsS "${base_url}/admin/assets/graphics/gamebaljeonguk_atlas_64x96.png" >"${agent_atlas_asset}"
 authenticated_curl -fsS "${base_url}/admin/assets/graphics/gamebaljeonguk_atlas_128x192.png" >"${agent_atlas_large_asset}"
+authenticated_curl -fsS "${base_url}/admin/assets/graphics/pr-approver-atlas-64x96.png" >"${pr_approver_atlas_asset}"
+authenticated_curl -fsS "${base_url}/admin/assets/graphics/pr-approver-atlas-128x192.png" >"${pr_approver_atlas_large_asset}"
 events_error_status="$(authenticated_curl -sS -o "${events_error_json}" -w "%{http_code}" "${base_url}/api/admin/akra/events?limit=201")"
 if [[ "${events_error_status}" != "400" ]]; then
   echo "expected event limit validation to return 400, got ${events_error_status}" >&2
@@ -359,6 +383,8 @@ for token in \
   'id="validation-rail"' \
   'data-validation-list' \
   'gamebaljeonguk_atlas_64x96.png' \
+  'pr-approver-atlas-64x96.png' \
+  'data-pr-approver="true"' \
   'background-image: var(--agent-sprite-sheet)' \
   'background: var(--office-bg-image) 0 0 / 100% 100% no-repeat' \
   'akra-operations-studio-v3.png' \
@@ -381,6 +407,7 @@ for token in \
 done
 
 if [[ "${debug_harness}" == "0" ]]; then
+  require_contains "${admin_html}" 'data-pr-approver-state="idle"'
   for token in \
     'data-standby-character="true"' \
     'data-presence-kind="configured_standby"' \
@@ -424,6 +451,7 @@ for token in \
   'AkraAdminGame' \
   'pixi-diorama' \
   'gamebaljeonguk_atlas_128x192.png' \
+  'pr-approver-atlas-128x192.png' \
   'inspectScene' \
   'configured_standby' \
   'sceneStandbyCount' \
@@ -557,6 +585,7 @@ for token in \
   '"stations"' \
   '"actors"' \
   '"diagnostics"' \
+  '"approver"' \
   '"distributor"' \
   '"campaign"' \
   '"laneCards"' \
@@ -596,6 +625,14 @@ cmp -s assets/admin/graphics/gamebaljeonguk_atlas_128x192.png "${agent_atlas_lar
   echo "served large gamebaljeonguk agent atlas does not match workspace asset" >&2
   exit 1
 }
+cmp -s assets/admin/graphics/pr-approver-atlas-64x96.png "${pr_approver_atlas_asset}" || {
+  echo "served PR approver atlas does not match workspace asset" >&2
+  exit 1
+}
+cmp -s assets/admin/graphics/pr-approver-atlas-128x192.png "${pr_approver_atlas_large_asset}" || {
+  echo "served large PR approver atlas does not match workspace asset" >&2
+  exit 1
+}
 cmp -s assets/admin/game/akra-diorama.js "${game_js}" || {
   echo "served admin game diorama asset does not match workspace asset" >&2
   exit 1
@@ -629,6 +666,12 @@ if browser_path="$(find_browser)"; then
     sha256sum "${compact_screenshot_path}" >"${output_dir}/admin-graphic-compact.sha256"
     sha256sum "${full_hd_screenshot_path}" >"${output_dir}/admin-graphic-full-hd.sha256"
     sha256sum "${qhd_screenshot_path}" >"${output_dir}/admin-graphic-qhd.sha256"
+    if [[ "${debug_harness}" == "1" ]]; then
+      sha256sum "${pr_approver_output_dir}/reviewing.png" >"${pr_approver_output_dir}/reviewing.sha256"
+      sha256sum "${pr_approver_output_dir}/failure.png" >"${pr_approver_output_dir}/failure.sha256"
+      sha256sum "${pr_approver_output_dir}/success.png" >"${pr_approver_output_dir}/success.sha256"
+      echo "PR approver animation evidence captured: ${pr_approver_output_dir}"
+    fi
     echo "admin graphic screenshots captured: ${mobile_screenshot_path}, ${compact_screenshot_path}, ${screenshot_path}, ${full_hd_screenshot_path}, ${qhd_screenshot_path}"
   else
     exit 1

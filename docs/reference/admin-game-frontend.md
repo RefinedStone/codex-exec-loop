@@ -55,6 +55,15 @@ native TUI, planning authority, parallel policy, or application control plane.
   before reconnecting.
 - Passive validation appears as a QA/CI station and signal packet. A worker character exists only
   when a correlated ordinary Queue task owns an actual worker lease.
+- A separate, always-present PR Approver is an environment NPC rather than a worker. The server
+  projects its `idle`, `reviewing`, `failure`, or `success` state only for durable
+  `github_rebase_merge` evidence. `Verified` is the only success source; check counts never imply
+  approval. Retryable provider waits, stale observations, pauses, and remediation are explicit
+  qualifiers instead of animation guesses.
+- The approver card exposes the exact PR, evidence SHA, required-check progress, and unresolved
+  finding count. Selecting either the card or character opens the matching `recordKey`, not the
+  first validation row in DOM order. The station, signal packet, character, and detail drawer stay
+  on that same record, and the character hit target is layered above the broad DELIVERY room POI.
 - The application-owned debug harness supplies ten deterministic validation scenarios. API, DOM,
   and Pixi inspection must report the same phase, severity, record identity, and lease fact.
 
@@ -101,15 +110,16 @@ native TUI, planning authority, parallel policy, or application control plane.
 - The renderer normally follows Pixi's `60 fps` requestAnimationFrame ticker. A visible-tab
   `60 fps` timer takes over only when the host throttles requestAnimationFrame; hidden tabs update
   neither path. Scene inspection exposes the active frame driver for browser-harness verification.
-- `AgentWorld` owns the map, actors, signal packets, points of interest, labels, and depth ordering.
+- `AgentWorld` owns the map, actors, the fixed PR Approver, signal packets, points of interest,
+  labels, and depth ordering.
 - `SceneCameraController` owns fit, pan, wheel zoom, pinch zoom, zoom controls, bounds, and the
   `overview -> operations -> detail` semantic zoom projection.
 - Actor state changes move the retained unit toward its new semantic destination. Movement uses
   front, rear, or strict side atlas rows; diagonal character directions are not fabricated.
 - Normal-motion travel keeps the `30%` presentation-speed target as a constant `168` world-pixels
   per second instead of an exponential interpolation tail. The four directional walk frames use
-  archetype/facing-specific center and foot alignment, then briefly crossfade at each step boundary.
-  A synchronized `760 ms` procedural gait adds subpixel sway, lift, and matching shadow compression
+  archetype/facing-specific center and foot alignment without full-pose crossfades. A synchronized
+  `760 ms` procedural gait adds subpixel sway and lift while the footprint and shadow remain stable
   on the `60 fps` frame driver. Reduced-motion mode still snaps to the semantic destination without
   a walk cycle.
 - An unchanged idle or configured-standby unit never roams and never emits a packet. It may use a
@@ -132,6 +142,10 @@ native TUI, planning authority, parallel policy, or application control plane.
   standby destinations use separate uncluttered room blocks.
 - Worker sprites use a `0.72` world scale. Working actors use their rear-facing row behind the map's
   desks instead of legacy laptop emotes that contain duplicate furniture.
+- `pr-approver-atlas-128x192.png` is a separate `6 x 4` atlas. Its rows are intake, page-review,
+  failure, and success. The reviewer uses a fixed foot anchor and constant scale; only paper, arms,
+  expression, and bounded status accents change. Failure and success play once and hold their final
+  pose. Reduced-motion and paused/waiting qualifiers use a static representative pose.
 
 ## Image generation provenance
 
@@ -145,15 +159,27 @@ warm walnut and amber task lighting, cool cyan technical lighting, and crisp cha
 art. It explicitly prohibited people, text, logos, floating UI, steep isometric perspective,
 diagonal chairs, painterly blur, and baked status icons.
 
+The PR Approver atlas was generated with the built-in ImageGen tool on 2026-08-11 using the worker
+atlas and an earlier approval-officer concept as references. The prompt fixed one adult officer's
+identity, camera, head size, body height, foot baseline, and scale across 24 cells, with six frames
+each for intake, page review, failure, and success. It required a magenta chroma background, dark
+outlines around white paper and glasses, no shadow, no text, and no white halo. The official ImageGen
+chroma-removal helper produced the alpha source; the repository preparation script then normalizes
+every cell to the shared baseline and derives the half atlas with nearest-neighbor only. The full
+prompt and generation metadata live in `templates/admin/resources/pr_approver_sprite_pack/`.
+
 ## Verification
 
 Run:
 
 ```text
 node --check scripts/capture_admin_validation_evidence.mjs
+node --check scripts/capture_admin_pr_approver.mjs
 node --check assets/admin/scripts/akra-dashboard.js
 npm --prefix assets/admin/game run check
+npm --prefix assets/admin/game run sprites:approver:check
 npm --prefix assets/admin/game run build
+cargo test game_approver --lib
 cargo test akra_graphic_dashboard --lib
 bash scripts/check_admin_graphic_visual.sh
 ```

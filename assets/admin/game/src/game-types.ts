@@ -23,6 +23,14 @@ export type Facing = "down" | "side" | "up";
 export type AgentAnimationKind = "rest" | "idle" | "walk" | "working" | "blocked";
 export type ArchetypeKey = "planner" | "coffee_addict" | "ai_researcher" | "designer";
 export type SemanticZoomLevel = "overview" | "operations" | "detail";
+export type PrApproverState = "idle" | "reviewing" | "failure" | "success";
+export type PrApproverQualifier =
+  | "none"
+  | "waiting"
+  | "paused"
+  | "stale"
+  | "recovering";
+export type PrApproverClip = "idle" | "intake" | "review" | "failure" | "success";
 
 export interface Point {
   x: number;
@@ -69,6 +77,22 @@ export interface GameValidationProjection {
   phase: string | null;
   packetKind: string | null;
   workerLeaseActive: boolean;
+  approver: GamePrApproverProjection;
+}
+
+export interface GamePrApproverProjection {
+  state: PrApproverState;
+  qualifier: PrApproverQualifier;
+  recordKey: string | null;
+  pullRequestNumber: number | null;
+  evidenceShortSha: string | null;
+  integrationMethod: string | null;
+  requiredChecksSucceeded: number;
+  requiredChecksTotal: number;
+  findingCount: number;
+  remediationCount: number;
+  statusLabel: string;
+  transitionKey: string;
 }
 
 export interface GameSceneProjection {
@@ -154,6 +178,23 @@ export interface SceneInspection {
     packetKind: string | null;
     packetVisible: boolean;
     workerLeaseActive: boolean;
+    approver: {
+      state: PrApproverState;
+      qualifier: PrApproverQualifier;
+      clip: PrApproverClip;
+      frameIndex: number;
+      sourceFrameIndex: number;
+      settled: boolean;
+      recordKey: string | null;
+      pullRequestNumber: number | null;
+      transitionKey: string;
+      visible: boolean;
+      reducedMotion: boolean;
+      displayWidth: number;
+      displayHeight: number;
+      boardX: number;
+      boardY: number;
+    };
   };
   actors: SceneInspectionActor[];
   standbyCharacters: SceneInspectionStandby[];

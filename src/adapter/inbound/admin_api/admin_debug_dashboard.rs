@@ -505,6 +505,7 @@ pub(super) fn build_scene(
             phase: None,
             packet_kind: None,
             worker_lease_active: false,
+            approver: super::akra_dashboard::idle_game_approver_scene(),
         },
     }
 }

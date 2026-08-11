@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "status": "passed",
+  "capturedAt": "2026-08-11T08:28:00Z",
+  "browser": "Codex in-app browser",
+  "viewport": "embedded compact viewport",
+  "manualAssertions": {
+    "reviewing": {
+      "state": "reviewing",
+      "clip": "review",
+      "recordKey": "debug-validation-post_merge_success",
+      "visible": true
+    },
+    "failure": {
+      "state": "failure",
+      "clip": "failure",
+      "sourceFrameIndex": 17,
+      "settled": true,
+      "recordKey": "debug-validation-check_failure_recovery"
+    },
+    "recovering": {
+      "state": "failure",
+      "qualifier": "recovering",
+      "clip": "failure"
+    },
+    "success": {
+      "state": "success",
+      "clip": "success",
+      "sourceFrameIndex": 23,
+      "settled": true
+    },
+    "exactRecordInteraction": {
+      "clicked": "approver character",
+      "openedDialog": "PR #2101 · akra-debug-01",
+      "integrationMethod": "github_rebase_merge",
+      "recordKey": "debug-validation-post_merge_success",
+      "underlyingDeliveryPoiIntercepted": false
+    }
+  },
+  "automatedGate": {
+    "debugHarness": "passed",
+    "browserErrors": 0,
+    "normalMotion": ["idle", "reviewing", "failure", "recovering", "success"],
+    "reducedMotionRepresentativeFrames": {
+      "idle": 0,
+      "reviewing": 6,
+      "failure": 17,
+      "success": 23
+    },
+    "workerInvariant": "approver is independent from runtime worker/actor counts",
+    "servedAssetParity": "both approver atlases byte-match workspace assets"
+  },
+  "screenshots": [
+    {
+      "file": "reviewing-iab.png",
+      "bytes": 51712,
+      "sha256": "050e6ba06eec03a5b94e8cc5298687d6c578d2e0215ead5b4c12f293ca1697d8"
+    },
+    {
+      "file": "failure-iab.png",
+      "bytes": 58669,
+      "sha256": "84fc24d14b46d15816b62345b5341822e0a0c3daa63da57e14cc03ad26d224ec"
+    },
+    {
+      "file": "success-iab.png",
+      "bytes": 51396,
+      "sha256": "91aa82291ece454cb2214b973c36024ac67b8abd3cb8716ca9aceb87ba8bdd79"
+    }
+  ]
+}
