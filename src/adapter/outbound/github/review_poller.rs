@@ -1744,7 +1744,9 @@ printf '{{"ok":true}}'
             api_base_url: "https://api.test".to_string(),
             user_agent: "akra-test".to_string(),
             token: "bearer-token-must-not-leak".to_string(),
-            subprocess_timeout: std::time::Duration::from_secs(1),
+            // This fixture verifies curl config isolation, not timeout policy.
+            // Leave enough headroom for process startup during the full parallel suite.
+            subprocess_timeout: std::time::Duration::from_secs(10),
         };
         let previous_home = std::env::var_os("HOME");
         unsafe { std::env::set_var("HOME", &home) };
