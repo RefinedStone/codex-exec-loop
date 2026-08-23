@@ -5261,6 +5261,74 @@ mod tests {
     }
 
     #[test]
+    fn steer_confirmation_modal_owns_keys_and_esc_preserves_draft() {
+        let mut app = test_native_tui_app();
+        {
+            let conversation = ready_conversation_mut(&mut app);
+            conversation.thread_id = "thread-steer".to_string();
+            set_running_turn(conversation, "turn-steer");
+            conversation.composer.input_buffer = "steer draft".to_string();
+        }
+
+        assert!(app.show_turn_steer_confirmation());
+
+        // Printable input must not leak into the composer while the
+        // confirmation modal is resolving the Tab gesture.
+        assert!(app.handle_turn_steer_confirmation_key(key(KeyCode::Char('x'))));
+        assert!(app.is_turn_steer_confirmation_visible());
+        assert_eq!(
+            ready_conversation(&app).composer.input_buffer,
+            "steer draft"
+        );
+
+        // Ctrl-C remains the terminal-native escape hatch and declines the key
+        // so the outer router can run stop/interrupt handling instead.
+        assert!(!app.handle_turn_steer_confirmation_key(modified_key(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL
+        )));
+        assert!(app.conversation.turn_steer_confirmation.is_none());
+
+        // A fresh confirmation resolved with Esc keeps the exact draft.
+        assert!(app.show_turn_steer_confirmation());
+        assert!(app.handle_turn_steer_confirmation_key(key(KeyCode::Esc)));
+        assert!(!app.is_turn_steer_confirmation_visible());
+        assert_eq!(
+            ready_conversation(&app).composer.input_buffer,
+            "steer draft"
+        );
+    }
+
+    #[test]
+    fn stale_steering_confirmation_enter_keeps_draft_without_dispatching() {
+        let mut app = test_native_tui_app();
+        {
+            let conversation = ready_conversation_mut(&mut app);
+            conversation.thread_id = "thread-steer".to_string();
+            set_running_turn(conversation, "turn-steer");
+            conversation.composer.input_buffer = "steer draft".to_string();
+        }
+
+        assert!(app.show_turn_steer_confirmation());
+
+        // The active turn settles in the background between arming the
+        // confirmation and pressing Enter. The exactness guard must drop the
+        // intent instead of steering a different turn generation.
+        clear_active_turn(ready_conversation_mut(&mut app));
+
+        assert!(app.handle_turn_steer_confirmation_key(key(KeyCode::Enter)));
+
+        assert!(app.conversation.turn_steer_confirmation.is_none());
+        assert!(app.conversation.pending_turn_steer.is_none());
+        assert_eq!(
+            ready_conversation(&app).composer.input_buffer,
+            "steer draft",
+            "a stale steering confirmation must keep the operator draft"
+        );
+        assert!(ready_conversation(&app).status_text.contains("draft kept"));
+    }
+
+    #[test]
     fn work_command_opens_navigates_and_drills_into_terminal_activity() {
         let mut app = test_native_tui_app();
         let command =
