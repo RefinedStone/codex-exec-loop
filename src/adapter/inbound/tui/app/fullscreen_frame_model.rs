@@ -1272,4 +1272,38 @@ mod tests {
             usize::from(model.scroll_offset)
         );
     }
+
+    #[test]
+    fn startup_end_scroll_clamps_to_frame_and_survives_stale_receipt() {
+        /*
+        End stores usize::MAX as a jump-to-bottom sentinel. The next frame
+        must clamp it to the rendered content height for painting while the
+        receipt writes back the clamped value; a stale frame must reject the
+        whole transaction so the sentinel cannot leak into key handling.
+        */
+        let mut app = test_native_tui_app();
+        app.shell.chrome.shell_overlay = ShellOverlay::Startup;
+        app.shell.startup_diagnostics_scroll_offset = usize::MAX;
+        let area = Rect::new(0, 0, 80, 24);
+        let projection = FullscreenConversationFrameProjection::from_app(&app, area.width);
+        let model = capture_fullscreen_shell_frame_model(
+            &app,
+            ShellFrontendMode::Fullscreen,
+            area,
+            projection,
+        );
+        let (_, inspection, receipt) = model.into_parts();
+
+        let FullscreenInspectionFrameModel::Startup {
+            view: _,
+            warning_scroll_offset: scroll_offset,
+        } = inspection
+        else {
+            panic!("startup overlay must capture a startup frame");
+        };
+        assert_eq!(scroll_offset, 0);
+
+        assert!(apply_fullscreen_frame_render_receipt(&mut app, receipt));
+        assert_eq!(app.shell.startup_diagnostics_scroll_offset, 0);
+    }
 }
