@@ -95,7 +95,13 @@ use super::{
 // 테스트마다 SQLite namespace를 분리하는 workspace directory를 만든다. adapter가 workspace path를
 // DB 파일/row scope의 기준으로 쓰므로, 프로세스 id와 nanos를 섞어 병렬 테스트 충돌을 피한다.
 fn temp_workspace(prefix: &str) -> String {
-    let path = std::env::temp_dir().join(format!(
+    /*
+     * macOS temp_dir는 물리 경로의 symlink다. SQLITE_OPEN_NOFOLLOW 연결을 위해
+     * fixture 루트도 물리 경로로 정규화한다.
+     */
+    let physical_temp = std::fs::canonicalize(std::env::temp_dir())
+        .unwrap_or_else(|_| std::env::temp_dir());
+    let path = physical_temp.join(format!(
         "codex-exec-loop-db-{prefix}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()

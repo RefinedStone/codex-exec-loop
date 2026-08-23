@@ -105,7 +105,13 @@ impl TempGitRepo {
             .duration_since(UNIX_EPOCH)
             .expect("clock should be monotonic")
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("parallel-mode-{prefix}-{unique}"));
+        /*
+         * macOS temp_dir는 /private/var 물리 경로의 symlink다. authority store가
+         * SQLITE_OPEN_NOFOLLOW로 열기 때문에 테스트 루트도 물리 경로로 정규화한다.
+         */
+        let physical_temp = fs::canonicalize(std::env::temp_dir())
+            .unwrap_or_else(|_| std::env::temp_dir());
+        let root = physical_temp.join(format!("parallel-mode-{prefix}-{unique}"));
         let repo_root = root.join("repo");
         fs::create_dir_all(&repo_root).expect("temp repo root should be created");
         #[cfg(windows)]
