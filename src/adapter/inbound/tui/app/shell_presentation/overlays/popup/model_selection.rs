@@ -61,7 +61,7 @@ fn build_model_selection_lines(
         .enumerate()
         .map(|(index, option)| {
             overlay_option_line(
-                &(index + 1).to_string(),
+                model_selection_shortcut(index),
                 option.label,
                 option.detail,
                 selected_model_index == index,
@@ -71,7 +71,7 @@ fn build_model_selection_lines(
         .collect();
     if let Some(model) = configured_model {
         lines.push(overlay_option_line(
-            &(configured_model_index() + 1).to_string(),
+            "↑↓",
             &format!("Configured: {model}"),
             "custom",
             selected_model_index == configured_model_index(),
@@ -79,6 +79,11 @@ fn build_model_selection_lines(
         ));
     }
     lines
+}
+
+fn model_selection_shortcut(index: usize) -> &'static str {
+    const SHORTCUTS: [&str; 10] = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
+    SHORTCUTS.get(index).copied().unwrap_or("↑↓")
 }
 
 fn build_effort_selection_lines(
@@ -282,6 +287,41 @@ mod tests {
             view.summary_lines
                 .iter()
                 .any(|line| line.to_string().contains("Configured: my-private-model"))
+        );
+        assert!(view.selection_lines.iter().any(|line| {
+            line.to_string()
+                .contains("↑↓. Configured: my-private-model")
+        }));
+        assert!(
+            !view
+                .selection_lines
+                .iter()
+                .any(|line| line.to_string().contains("11. Configured"))
+        );
+    }
+
+    #[test]
+    fn tenth_model_uses_the_zero_shortcut_instead_of_an_unreachable_two_digit_label() {
+        let view = build_model_selection_overlay_view(ModelSelectionFrameInput {
+            step: ModelSelectionStep::Model,
+            selected_model_index: 9,
+            selected_effort_index: 0,
+            staged_model_index: 9,
+            configured_model: None,
+            current_model_label: "gpt-5.5",
+            current_effort_label: "high",
+        });
+
+        assert!(
+            view.selection_lines
+                .iter()
+                .any(|line| line.to_string().contains("0. App-server default"))
+        );
+        assert!(
+            !view
+                .selection_lines
+                .iter()
+                .any(|line| line.to_string().contains("10. App-server default"))
         );
     }
 }
