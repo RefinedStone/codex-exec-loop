@@ -1660,6 +1660,16 @@ mod tests {
             inline_preview_scroll_offset(Rect::new(0, 0, 80, 4), 12, 2),
             7
         );
+        // Home maps to scroll_from_bottom = usize::MAX and short/empty previews
+        // must clamp to offset 0 instead of wrapping the u16 conversion.
+        assert_eq!(
+            inline_preview_scroll_offset(Rect::new(0, 0, 80, 4), 12, usize::MAX),
+            0
+        );
+        assert_eq!(
+            inline_preview_scroll_offset(Rect::new(0, 0, 80, 4), 0, usize::MAX),
+            0
+        );
         assert_eq!(
             wrapped_approval_panel_height(&lines("wrapped", 2), 80, 6),
             6
