@@ -535,6 +535,41 @@ mod tests {
     }
 
     #[test]
+    fn backspace_and_cursor_moves_never_split_multibyte_graphemes() {
+        // 한글 + 결합 이모지 프롬프트에서 커서와 삭제는 항상 그래핌 경계에
+        // 머물러야 한다. 그렇지 않으면 패닉 또는 문자열 깨짐으로 이어져
+        // 프롬프트 전송 플로우가 망가진다.
+        let mut state = ConversationComposerState::default();
+        let inserted = reduce_conversation_input(
+            state,
+            ConversationComposerEvent::TextInserted {
+                text: "한글\u{1F44D}".to_string(),
+            },
+        );
+        state = inserted.state;
+        assert_eq!(state.input_buffer, "한글\u{1F44D}");
+
+        // Backspace removes the whole emoji grapheme in one step.
+        let reduced = reduce_conversation_input(state, ConversationComposerEvent::BackspacePressed);
+        assert_eq!(reduced.state.input_buffer, "한글");
+
+        // Cursor-left lands on the boundary before 글 (byte index 3); backspace
+        // then removes 글 and leaves only 한.
+        let mut state = reduced.state;
+        let moved = reduce_conversation_input(
+            state,
+            ConversationComposerEvent::CursorMoved {
+                movement: InputCursorMovement::PreviousCharacter,
+            },
+        );
+        state = moved.state;
+        assert_eq!(state.input_cursor_byte_index(), "한".len());
+
+        let reduced = reduce_conversation_input(state, ConversationComposerEvent::BackspacePressed);
+        assert_eq!(reduced.state.input_buffer, "글");
+    }
+
+    #[test]
     fn cursor_movement_controls_backspace_target() {
         let mut state = ConversationComposerState::default();
         state.input_buffer = "hello".to_string();
