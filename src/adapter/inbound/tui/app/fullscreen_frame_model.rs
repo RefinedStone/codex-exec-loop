@@ -1191,6 +1191,36 @@ mod tests {
     }
 
     #[test]
+    fn help_end_scroll_clamps_to_content_and_normalizes_via_receipt() {
+        let mut app = test_native_tui_app();
+        app.shell.chrome.shell_overlay = ShellOverlay::Help;
+        app.shell.help_scroll_offset = usize::MAX;
+        let area = Rect::new(0, 0, 80, 24);
+        let projection = FullscreenConversationFrameProjection::from_app(&app, area.width);
+        let model = capture_fullscreen_shell_frame_model(
+            &app,
+            ShellFrontendMode::Fullscreen,
+            area,
+            projection,
+        );
+        let (_, _, receipt) = model.into_parts();
+
+        /*
+         * End jumps past the end of the help content on purpose; the captured
+         * frame must already show a clamped u16 offset instead of wrapping.
+         */
+        let clamped_next = receipt
+            .help_scroll_offset
+            .as_ref()
+            .expect("help receipt captures scroll change")
+            .next;
+        assert_ne!(clamped_next, usize::MAX);
+
+        assert!(apply_fullscreen_frame_render_receipt(&mut app, receipt));
+        assert_eq!(app.shell.help_scroll_offset, clamped_next);
+    }
+
+    #[test]
     fn non_queryable_session_message_preserves_existing_list_state() {
         let mut app = test_native_tui_app();
         app.shell.chrome.shell_overlay = ShellOverlay::Sessions;
