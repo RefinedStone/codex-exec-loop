@@ -301,6 +301,37 @@ fn palette_state_keeps_selected_command_when_input_refines() {
 }
 
 #[test]
+fn palette_state_survives_unknown_prefix_without_selection() {
+    /*
+    Typing an unknown token such as :xyz keeps the palette open with zero
+    suggestions so the composer tail can explain the miss. Navigation,
+    selection reads, and repeated dismissal must stay inert instead of
+    panicking on the empty filtered list.
+    */
+    let mut state = InlineShellCommandPaletteState::default();
+    state.sync_to_input(":", None);
+    let turns_index = state
+        .suggestions()
+        .iter()
+        .position(|command| *command == InlineShellCommand::Turns)
+        .expect("turns command should be present");
+    assert!(state.move_selection(turns_index as isize));
+
+    state.sync_to_input(":xyz", state.selected_command());
+
+    assert!(state.is_active());
+    assert!(state.suggestions().is_empty());
+    assert_eq!(state.selected_command(), None);
+    assert_eq!(state.selected_index(), None);
+    assert!(!state.move_selection(1));
+    assert!(!state.move_selection(-1));
+
+    assert!(state.dismiss());
+    assert!(!state.is_active());
+    assert!(!state.dismiss());
+}
+
+#[test]
 fn completion_text_uses_canonical_argument_ready_command_forms() {
     /*
     Completion text is what gets inserted into the prompt, so commands that need
