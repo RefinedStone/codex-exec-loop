@@ -2826,6 +2826,32 @@ mod tests {
     }
 
     #[test]
+    fn exit_confirmation_owns_keys_before_overlay_navigation_and_prompt() {
+        let mut app = test_native_tui_app();
+        app.shell.chrome.shell_overlay = ShellOverlay::Help;
+        app.shell.help_scroll_offset = 2;
+        app.dispatch_shell_chrome(ShellChromeEvent::ExitConfirmationShown);
+
+        // While the exit confirmation is visible, overlay navigation keys must be
+        // consumed by the confirmation pass instead of scrolling the help list.
+        assert!(app.is_exit_confirmation_visible());
+        assert_eq!(
+            app.handle_exit_confirmation_key(key(KeyCode::Char('j'))),
+            Some(false)
+        );
+        assert_eq!(app.shell.help_scroll_offset, 2);
+        assert!(app.is_exit_confirmation_visible());
+
+        // Declining keeps both the overlay and the prompt untouched.
+        assert_eq!(
+            app.handle_exit_confirmation_key(key(KeyCode::Char('n'))),
+            Some(false)
+        );
+        assert!(!app.is_exit_confirmation_visible());
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Help);
+    }
+
+    #[test]
     fn inline_commands_cover_argument_status_and_stop_paths() {
         let mut app = test_native_tui_app();
 
