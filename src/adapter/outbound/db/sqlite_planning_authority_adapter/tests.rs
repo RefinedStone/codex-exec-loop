@@ -115,6 +115,14 @@ fn temp_workspace(prefix: &str) -> String {
     path.display().to_string()
 }
 
+// Barrier는 상대 스레드가 도달 전에 패닉하면 메인 스레드가 영원히 기다린다.
+// CI 부하에서 테스트 교착을 피하려고 준비 신호를 제한 시간이 있는 채널로 받는다.
+fn wait_worker_ready(ready: &std::sync::mpsc::Receiver<()>) {
+    ready
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("worker should signal readiness before the assertion phase");
+}
+
 #[test]
 fn conversation_thread_turn_options_round_trip_and_keep_missing_rows_distinct() {
     let workspace = temp_workspace("conversation-thread-options");
@@ -4546,9 +4554,10 @@ fn admin_file_sync_guard_and_nonterminal_dispatch_commands_are_mutually_exclusiv
 #[test]
 fn runtime_lease_first_blocks_authority_mutation_guard_after_barrier() {
     let workspace_dir = temp_workspace("authority-guard-runtime-first");
-    let lease_persisted = Arc::new(Barrier::new(2));
+    // Barrier 대신 채널로 준비 신호를 받는다. 워커가 실패하면 recv_timeout이
+    // 즉시 어설션으로 이어져 메인 스레드가 무한 대기에 빠지지 않는다.
+    let (lease_persisted, lease_persisted_rx) = std::sync::mpsc::channel();
     let worker_workspace = workspace_dir.clone();
-    let worker_barrier = lease_persisted.clone();
     let worker = std::thread::spawn(move || {
         SqlitePlanningAuthorityAdapter::new()
             .upsert_runtime_slot_lease(
@@ -4560,10 +4569,12 @@ fn runtime_lease_first_blocks_authority_mutation_guard_after_barrier() {
                 ),
             )
             .expect("runtime-first lease should persist");
-        worker_barrier.wait();
+        lease_persisted
+            .send(())
+            .expect("readiness receiver should stay alive");
     });
 
-    lease_persisted.wait();
+    wait_worker_ready(&lease_persisted_rx);
     let error = SqlitePlanningAuthorityAdapter::new()
         .acquire_admin_authority_mutation_guard(
             &workspace_dir,
@@ -4583,9 +4594,8 @@ fn runtime_lease_first_blocks_authority_mutation_guard_after_barrier() {
 #[test]
 fn runtime_claim_first_blocks_authority_mutation_guard_after_barrier() {
     let workspace_dir = temp_workspace("authority-guard-claim-first");
-    let claim_persisted = Arc::new(Barrier::new(2));
+    let (claim_persisted, claim_persisted_rx) = std::sync::mpsc::channel();
     let worker_workspace = workspace_dir.clone();
-    let worker_barrier = claim_persisted.clone();
     let worker = std::thread::spawn(move || {
         let adapter = SqlitePlanningAuthorityAdapter::new();
         let refresh_order = adapter
@@ -4597,11 +4607,13 @@ fn runtime_claim_first_blocks_authority_mutation_guard_after_barrier() {
                 .expect("claim-first refresh claim should acquire"),
             PlanningAuthorityOfficialRefreshClaimStatus::Acquired
         );
-        worker_barrier.wait();
+        claim_persisted
+            .send(())
+            .expect("readiness receiver should stay alive");
         refresh_order
     });
 
-    claim_persisted.wait();
+    wait_worker_ready(&claim_persisted_rx);
     let error = SqlitePlanningAuthorityAdapter::new()
         .acquire_admin_authority_mutation_guard(
             &workspace_dir,
