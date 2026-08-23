@@ -99,8 +99,8 @@ fn temp_workspace(prefix: &str) -> String {
      * macOS temp_dir는 물리 경로의 symlink다. SQLITE_OPEN_NOFOLLOW 연결을 위해
      * fixture 루트도 물리 경로로 정규화한다.
      */
-    let physical_temp = std::fs::canonicalize(std::env::temp_dir())
-        .unwrap_or_else(|_| std::env::temp_dir());
+    let physical_temp =
+        std::fs::canonicalize(std::env::temp_dir()).unwrap_or_else(|_| std::env::temp_dir());
     let path = physical_temp.join(format!(
         "codex-exec-loop-db-{prefix}-{}-{}",
         std::process::id(),
