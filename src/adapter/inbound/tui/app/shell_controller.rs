@@ -2440,12 +2440,13 @@ mod tests {
     }
 
     #[test]
-    fn turn_budget_editor_invalid_commit_keeps_policy_and_closes_draft_via_shell_command() {
+    fn turn_budget_editor_shell_commit_keeps_policy_and_preserves_open_draft_on_invalid() {
         /*
         :turns routes through the same control reducer as the inline editor.
         An invalid budget must leave the enabled policy untouched (still the
-        previous canonical value) while a valid commit replaces it and closes
-        any open editor draft, keeping overlay state and policy in sync.
+        previous canonical value) and keep an open editor draft so the
+        operator can correct the value instead of retyping it from scratch;
+        a valid commit replaces it, applies the policy, and closes the draft.
         */
         let mut app = test_native_tui_app();
         open_simple_review(&mut app);
@@ -2455,9 +2456,9 @@ mod tests {
 
         app.handle_turns_shell_command(Some("not-a-number"));
         assert_eq!(app.current_max_auto_turns_label(), "off");
-        // The shell-command path never opens an editor draft; invalid input only
-        // surfaces as status copy and leaves the overlay buffer untouched.
-        assert_eq!(app.max_auto_turns_edit_buffer(), None);
+        // The invalid commit keeps the draft open with its pre-command buffer
+        // so the operator can fix the value without starting over.
+        assert_eq!(app.max_auto_turns_edit_buffer(), Some("off"));
         assert_eq!(
             ready_conversation(&app).status_text,
             "auto-follow unchanged / use a positive whole number, infinite, off, or 0"
