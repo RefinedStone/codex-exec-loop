@@ -737,6 +737,37 @@ mod tests {
     }
 
     #[test]
+    fn search_change_drops_stale_selection_instead_of_attaching_wrong_session() {
+        let mut app = test_native_tui_app();
+        seed_sessions(
+            &mut app,
+            vec![
+                session("thread-alpha", "Alpha draft", "/tmp/root"),
+                session("thread-beta", "Beta bugfix", "/tmp/root"),
+            ],
+        );
+        app.apply_session_browser_selection(SessionBrowserSelection {
+            index: 1,
+            session_id: Some("thread-beta".to_string()),
+        });
+        assert_eq!(selected_session_id(&app), Some("thread-beta"));
+
+        // Committing a search that hides the selected session must clear the
+        // selection; otherwise Enter would attach the stale row from before the
+        // visible list changed.
+        app.shell.session_overlay_ui_state.start_search_query_edit();
+        for character in "alpha".chars() {
+            app.push_session_search_query_character(character);
+        }
+        app.save_session_search_query_edit();
+
+        assert_eq!(
+            app.current_session().map(|session| session.id.as_str()),
+            Some("thread-alpha")
+        );
+    }
+
+    #[test]
     fn search_editor_owns_text_keys_only_in_sessions_overlay() {
         let mut app = test_native_tui_app();
         seed_sessions(
