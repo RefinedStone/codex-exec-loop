@@ -5101,6 +5101,46 @@ mod tests {
     }
 
     #[test]
+    fn model_selection_escape_discards_staged_choice_and_preserves_custom_model() {
+        let mut app = test_native_tui_app();
+        let original = ConversationTurnOptions {
+            model: Some("team-private-model".to_string()),
+            reasoning_effort: Some(ConversationReasoningEffort::Max),
+        };
+        app.conversation.turn_options = original.clone();
+        app.conversation.next_new_thread_turn_options = original.clone();
+        app.show_model_selection_overlay();
+
+        // Selecting a catalog model only stages it until the effort step is confirmed.
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Char('1'))));
+        assert_eq!(
+            app.shell.model_selection_overlay_ui_state.step(),
+            ModelSelectionStep::Effort
+        );
+        assert_eq!(app.conversation.turn_options, original);
+        assert_eq!(app.conversation.next_new_thread_turn_options, original);
+
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Esc)));
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Hidden);
+        assert_eq!(app.conversation.turn_options, original);
+        assert_eq!(app.conversation.next_new_thread_turn_options, original);
+
+        // Reopening must project the still-current custom model, not the abandoned stage.
+        app.show_model_selection_overlay();
+        assert_eq!(
+            app.shell.model_selection_overlay_ui_state.staged_model_id(),
+            Some("team-private-model")
+        );
+        assert_eq!(
+            app.shell
+                .model_selection_overlay_ui_state
+                .selected_effort()
+                .effort,
+            Some(ConversationReasoningEffort::Max)
+        );
+    }
+
+    #[test]
     fn steer_completion_clears_only_the_exact_confirmed_draft() {
         let mut app = test_native_tui_app();
         let request = ConversationTurnSteerRequest {
