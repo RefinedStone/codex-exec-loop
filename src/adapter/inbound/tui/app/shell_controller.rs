@@ -2440,6 +2440,35 @@ mod tests {
     }
 
     #[test]
+    fn turn_budget_editor_invalid_commit_keeps_policy_and_closes_draft_via_shell_command() {
+        /*
+        :turns routes through the same control reducer as the inline editor.
+        An invalid budget must leave the enabled policy untouched (still the
+        previous canonical value) while a valid commit replaces it and closes
+        any open editor draft, keeping overlay state and policy in sync.
+        */
+        let mut app = test_native_tui_app();
+        open_simple_review(&mut app);
+        assert!(
+            app.handle_shell_overlay_key(modified_key(KeyCode::Char('l'), KeyModifiers::CONTROL))
+        );
+
+        app.handle_turns_shell_command(Some("not-a-number"));
+        assert_eq!(app.current_max_auto_turns_label(), "off");
+        // The shell-command path never opens an editor draft; invalid input only
+        // surfaces as status copy and leaves the overlay buffer untouched.
+        assert_eq!(app.max_auto_turns_edit_buffer(), None);
+        assert_eq!(
+            ready_conversation(&app).status_text,
+            "auto-follow unchanged / use a positive whole number, infinite, off, or 0"
+        );
+        
+        app.handle_turns_shell_command(Some("7"));
+        assert_eq!(app.current_max_auto_turns_label(), "7");
+        assert_eq!(app.max_auto_turns_edit_buffer(), None);
+    }
+
+    #[test]
     fn close_shell_overlay_resets_overlay_local_buffers() {
         let mut app = test_native_tui_app();
 

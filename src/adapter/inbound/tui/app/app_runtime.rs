@@ -2747,6 +2747,7 @@ impl NativeTuiApp {
             }
             AutoFollowControlEvent::MaxAutoTurnsUpdated { value } => {
                 let Some(command) = max_auto_turns_command(&value) else {
+                    self.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::EditFinished);
                     if let ConversationState::Ready(conversation) =
                         &mut self.conversation.lifecycle.conversation_state
                     {
