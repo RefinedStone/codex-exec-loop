@@ -1522,10 +1522,15 @@ impl NativeTuiApp {
                     .model_selection_overlay_ui_state
                     .move_selection(1);
             }
-            KeyCode::Char(number)
-                if key.modifiers.is_empty() && number.is_ascii_digit() && number != '0' =>
-            {
-                let index = number.to_digit(10).unwrap_or(0).saturating_sub(1) as usize;
+            KeyCode::Char(number) if key.modifiers.is_empty() && number.is_ascii_digit() => {
+                // The model catalog has ten built-in entries. Use 1-9 and 0
+                // as single-key shortcuts; multi-digit labels would apply the
+                // first digit immediately and select the wrong model.
+                let index = if number == '0' {
+                    9
+                } else {
+                    number.to_digit(10).unwrap_or(1).saturating_sub(1) as usize
+                };
                 if self
                     .shell
                     .model_selection_overlay_ui_state
@@ -5098,6 +5103,36 @@ mod tests {
             app.conversation.turn_options.reasoning_effort,
             Some(ConversationReasoningEffort::Max)
         );
+    }
+
+    #[test]
+    fn model_selection_zero_shortcut_selects_app_server_defaults() {
+        let mut app = test_native_tui_app();
+        app.show_model_selection_overlay();
+
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Char('0'))));
+        assert_eq!(
+            app.shell.model_selection_overlay_ui_state.step(),
+            ModelSelectionStep::Effort
+        );
+        assert_eq!(
+            app.shell
+                .model_selection_overlay_ui_state
+                .staged_model()
+                .model,
+            None
+        );
+        assert_eq!(
+            app.shell
+                .model_selection_overlay_ui_state
+                .selected_effort()
+                .effort,
+            None
+        );
+
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Enter)));
+        assert_eq!(app.conversation.turn_options.model, None);
+        assert_eq!(app.conversation.turn_options.reasoning_effort, None);
     }
 
     #[test]
