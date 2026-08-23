@@ -701,17 +701,38 @@ mod tests {
                 review: review.clone(),
             },
         );
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let first_write_deadline = Instant::now() + Duration::from_secs(2);
         while review_repository
-            .history
-            .lock()
-            .expect("history mutex poisoned")
-            .is_empty()
-            && Instant::now() < deadline
+            .pending_inbox_replace_count
+            .load(Ordering::SeqCst)
+            < 1
+            && Instant::now() < first_write_deadline
         {
             app.poll_client_runtime_events(16);
             std::thread::yield_now();
         }
+        assert_eq!(
+            review_repository
+                .pending_inbox_replace_count
+                .load(Ordering::SeqCst),
+            1,
+            "the first serialized write should finish before dispatching one duplicate"
+        );
+        let completion_deadline = Instant::now() + Duration::from_secs(2);
+        let mut completion_observed = false;
+        while !completion_observed && Instant::now() < completion_deadline {
+            completion_observed = app.poll_client_runtime_events(16);
+            std::thread::yield_now();
+        }
+        assert!(
+            completion_observed,
+            "the first write completion should clear coordinator admission before the duplicate"
+        );
+        dispatch_review_persistence_stream_event(
+            &mut app,
+            correlation,
+            TurnStreamEvent::ApprovalReviewUpdated { review },
+        );
         let duplicate_deadline = Instant::now() + Duration::from_secs(2);
         while review_repository
             .pending_inbox_replace_count
@@ -720,13 +741,6 @@ mod tests {
             && Instant::now() < duplicate_deadline
         {
             app.poll_client_runtime_events(16);
-            dispatch_review_persistence_stream_event(
-                &mut app,
-                correlation,
-                TurnStreamEvent::ApprovalReviewUpdated {
-                    review: review.clone(),
-                },
-            );
             std::thread::yield_now();
         }
         assert_eq!(
