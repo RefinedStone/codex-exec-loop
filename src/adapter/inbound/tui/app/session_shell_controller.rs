@@ -976,6 +976,40 @@ mod tests {
     }
 
     #[test]
+    fn rename_commit_with_blank_name_stays_in_editor_without_dispatch() {
+        let mut app = test_native_tui_app();
+        seed_sessions(
+            &mut app,
+            vec![session("thread-alpha", "Alpha draft", "/tmp/root")],
+        );
+
+        assert!(app.handle_session_overlay_key(key(KeyCode::Char('e'))));
+        for _ in 0.."Alpha draft".chars().count() {
+            assert!(app.handle_session_rename_editor_key(key(KeyCode::Backspace)));
+        }
+        // Whitespace-only input must not bypass the trim guard either.
+        for character in "   ".chars() {
+            assert!(app.handle_session_rename_editor_key(key(KeyCode::Char(character))));
+        }
+
+        assert!(app.handle_session_rename_editor_key(key(KeyCode::Enter)));
+
+        assert!(
+            app.is_session_rename_editing(),
+            "an empty rename commit keeps the editor open with its feedback"
+        );
+        assert_eq!(
+            app.shell.session_overlay_ui_state.rename_editor_feedback(),
+            Some("Name cannot be empty. Enter a title or press Esc to cancel.")
+        );
+        // The rename editor stays open with feedback and no admission is recorded.
+        assert!(!app
+            .shell
+            .session_overlay_ui_state
+            .is_rename_pending());
+    }
+
+    #[test]
     fn rename_completion_projects_success_but_only_exact_receipt_settles_editor() {
         let mut app = test_native_tui_app();
         seed_sessions(
