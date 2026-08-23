@@ -4883,6 +4883,15 @@ mod tests {
             ready_conversation(&app).composer.input_buffer,
             "draft prompt"
         );
+
+        // Scrolling stays available after the decision is locked, so the operator
+        // can still read long approval details while waiting for the runtime.
+        let before = ready_conversation(&app).approval_detail_scroll_offset;
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Down)));
+        assert_eq!(
+            ready_conversation(&app).approval_detail_scroll_offset,
+            before + 1
+        );
     }
 
     #[test]
