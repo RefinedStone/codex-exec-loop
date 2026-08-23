@@ -11,6 +11,7 @@ repo-scoped planning authority의 핵심은 "현재 process가 어느 worktree�
 모듈이 모두 공유하는 기준 좌표다.
 */
 use std::collections::BTreeMap;
+#[cfg(not(test))]
 use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
@@ -306,7 +307,7 @@ pub(super) fn akra_home_root() -> Result<PathBuf> {
      * authority store는 SQLITE_OPEN_NOFOLLOW로 경로 전체의 symlink 구성요소를
      * 거부하므로, 테스트 루트도 물리 경로로 정규화해야 연결이 가능하다.
      */
-    Ok(canonicalize_best_effort(&env::temp_dir())
+    Ok(crate::test_utils::platform_safe_temp_dir()
         .join(AKRA_HOME_DIRECTORY)
         .join("tests"))
 }
@@ -344,7 +345,7 @@ pub(super) fn akra_home_root() -> Result<PathBuf> {
 fn unit_test_authority_home_is_process_isolated() {
     assert_eq!(
         akra_home_root().expect("unit-test authority home should resolve"),
-        canonicalize_best_effort(&env::temp_dir())
+        crate::test_utils::platform_safe_temp_dir()
             .join(AKRA_HOME_DIRECTORY)
             .join("tests")
     );
