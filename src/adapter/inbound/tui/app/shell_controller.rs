@@ -3148,6 +3148,28 @@ mod tests {
     }
 
     #[test]
+    fn palette_acceptance_without_selection_keeps_prompt_and_overlay_untouched() {
+        /*
+        An unknown token such as :xyz leaves the palette open with zero
+        suggestions. Enter has no selected command to run, so it must be a
+        no-op that preserves both the typed draft and the hidden overlay;
+        otherwise a typo could silently submit or dismiss the composer.
+        */
+        let mut app = test_native_tui_app();
+        app.push_input_character(':');
+        app.push_input_character('x');
+        app.push_input_character('y');
+        app.push_input_character('z');
+
+        assert!(app.is_inline_command_palette_active());
+        assert!(!app.accept_inline_command_palette_selection());
+        assert_eq!(app.shell.chrome.shell_overlay, ShellOverlay::Hidden);
+        assert_eq!(ready_conversation(&app).composer.input_buffer, ":xyz");
+        // No status replacement means the composer keeps its baseline draft copy.
+        assert_eq!(ready_conversation(&app).status_text, "new thread draft");
+    }
+
+    #[test]
     fn queue_overlay_consumes_direct_manipulation_keys_without_editing_prompt() {
         let mut app = test_native_tui_app();
         ready_conversation_mut(&mut app).composer.input_buffer = "keep draft".to_string();
