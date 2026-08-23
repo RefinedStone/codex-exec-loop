@@ -1003,10 +1003,7 @@ mod tests {
             Some("Name cannot be empty. Enter a title or press Esc to cancel.")
         );
         // The rename editor stays open with feedback and no admission is recorded.
-        assert!(!app
-            .shell
-            .session_overlay_ui_state
-            .is_rename_pending());
+        assert!(!app.shell.session_overlay_ui_state.is_rename_pending());
     }
 
     #[test]

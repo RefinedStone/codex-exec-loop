@@ -2462,7 +2462,7 @@ mod tests {
             ready_conversation(&app).status_text,
             "auto-follow unchanged / use a positive whole number, infinite, off, or 0"
         );
-        
+
         app.handle_turns_shell_command(Some("7"));
         assert_eq!(app.current_max_auto_turns_label(), "7");
         assert_eq!(app.max_auto_turns_edit_buffer(), None);
