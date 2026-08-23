@@ -408,6 +408,7 @@ fn install_fake_codex(fake_bin: &Path, pid_log: &Path, request_log: &Path) {
     // A hosted tool-cache ancestor may be world-writable even when Node itself is safe. Copy the
     // executable into the private fixture instead of symlinking across that untrusted boundary.
     fs::copy(&node, &installed_node).expect("trusted Node fixture should copy");
+    copy_adjacent_node_runtime_libraries(&node, fake_bin);
 
     let launcher = fake_bin.join("codex");
     fs::write(&launcher, fake_codex_script(pid_log, request_log))
@@ -417,6 +418,58 @@ fn install_fake_codex(fake_bin: &Path, pid_log: &Path, request_log: &Path) {
         .expect("trusted Node fixture should become private and executable");
     fs::set_permissions(&launcher, fs::Permissions::from_mode(0o700))
         .expect("fake Codex launcher should become executable");
+    assert!(
+        Command::new(&installed_node)
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success()),
+        "private Node fixture and its adjacent runtime libraries should be executable"
+    );
+}
+
+fn copy_adjacent_node_runtime_libraries(node: &Path, fake_bin: &Path) {
+    // Homebrew Node 26 links libnode through @rpath/../lib. Copying only the executable
+    // therefore aborts in dyld after relocation. Standalone Node builds have no adjacent
+    // libnode file and need no extra fixture setup.
+    let Some(source_lib) = node
+        .parent()
+        .and_then(Path::parent)
+        .map(|root| root.join("lib"))
+        .filter(|path| path.is_dir())
+    else {
+        return;
+    };
+    let runtime_libraries = fs::read_dir(&source_lib)
+        .expect("adjacent Node runtime library directory should be readable")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("libnode."))
+        })
+        .collect::<Vec<_>>();
+    if runtime_libraries.is_empty() {
+        return;
+    }
+
+    let private_lib = fake_bin
+        .parent()
+        .expect("fake bin should have a trusted launcher root")
+        .join("lib");
+    create_private_directory(&private_lib);
+    for library in runtime_libraries {
+        let destination = private_lib.join(
+            library
+                .file_name()
+                .expect("Node runtime library should have a file name"),
+        );
+        fs::copy(&library, &destination).expect("Node runtime library fixture should copy");
+    }
 }
 
 fn find_host_node() -> PathBuf {
