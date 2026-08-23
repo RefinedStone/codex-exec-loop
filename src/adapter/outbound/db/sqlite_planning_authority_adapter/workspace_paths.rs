@@ -344,7 +344,9 @@ pub(super) fn akra_home_root() -> Result<PathBuf> {
 fn unit_test_authority_home_is_process_isolated() {
     assert_eq!(
         akra_home_root().expect("unit-test authority home should resolve"),
-        env::temp_dir().join(AKRA_HOME_DIRECTORY).join("tests")
+        canonicalize_best_effort(&env::temp_dir())
+            .join(AKRA_HOME_DIRECTORY)
+            .join("tests")
     );
 }
 
