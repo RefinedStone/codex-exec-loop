@@ -2931,8 +2931,7 @@ mod tests {
          * macOS temp_dir는 물리 경로의 symlink다. trace 디렉터리 검증은 symlink
          * 구성요소를 거부하므로 fixture 루트도 물리 경로로 정규화한다.
          */
-        let physical_temp =
-            std::fs::canonicalize(std::env::temp_dir()).unwrap_or_else(|_| std::env::temp_dir());
+        let physical_temp = crate::test_utils::platform_safe_temp_dir();
         let path = physical_temp.join(format!(
             "codex-exec-loop-{label}-{}-{now}",
             std::process::id()

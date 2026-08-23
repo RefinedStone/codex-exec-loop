@@ -1545,8 +1545,7 @@ mod tests {
              * macOS temp_dir는 물리 경로의 symlink다. NOFOLLOW 연결 정책을
              * 유지한 채 테스트하려면 fixture 루트도 물리 경로여야 한다.
              */
-            let physical_temp = std::fs::canonicalize(std::env::temp_dir())
-                .unwrap_or_else(|_| std::env::temp_dir());
+            let physical_temp = crate::test_utils::platform_safe_temp_dir();
             let root = physical_temp.join(format!(
                 "akra-telegram-global-{label}-{}-{nonce}",
                 std::process::id()
