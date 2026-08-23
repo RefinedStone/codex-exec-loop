@@ -301,7 +301,14 @@ configuration fixture의 process-global `AKRA_HOME` 변경에도 휘말리지 �
 */
 #[cfg(test)]
 pub(super) fn akra_home_root() -> Result<PathBuf> {
-    Ok(env::temp_dir().join(AKRA_HOME_DIRECTORY).join("tests"))
+    /*
+     * macOS는 temp_dir를 /private/var 같은 물리 경로의 symlink로 제공한다.
+     * authority store는 SQLITE_OPEN_NOFOLLOW로 경로 전체의 symlink 구성요소를
+     * 거부하므로, 테스트 루트도 물리 경로로 정규화해야 연결이 가능하다.
+     */
+    Ok(canonicalize_best_effort(&env::temp_dir())
+        .join(AKRA_HOME_DIRECTORY)
+        .join("tests"))
 }
 
 #[cfg(not(test))]
