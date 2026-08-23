@@ -179,4 +179,33 @@ mod tests {
             )]
         );
     }
+
+    #[test]
+    fn implicit_copy_falls_back_to_last_answer_but_explicit_selection_does_not() {
+        let mut app = test_native_tui_app();
+        let ConversationState::Ready(conversation) =
+            &mut app.conversation.lifecycle.conversation_state
+        else {
+            panic!("test conversation should be ready");
+        };
+        assert!(conversation.finalize_agent_message(
+            "agent-copy-fallback".to_string(),
+            Some("final".to_string()),
+            "fallback answer".to_string(),
+        ));
+
+        app.handle_copy_shell_command(Some("selection"));
+        assert!(
+            app.take_terminal_ui_effects().is_empty(),
+            "an explicit selection request must not silently copy a different source"
+        );
+
+        app.handle_copy_shell_command(None);
+        assert_eq!(
+            app.take_terminal_ui_effects(),
+            vec![TerminalUiEffect::CopyToClipboard(
+                "fallback answer".to_string()
+            )]
+        );
+    }
 }
