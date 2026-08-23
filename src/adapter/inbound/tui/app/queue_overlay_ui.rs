@@ -1035,6 +1035,26 @@ mod tests {
     }
 
     #[test]
+    fn move_selection_never_panics_on_empty_or_unknown_task_lists() {
+        // The queue overlay can be keyed while a catalog refresh empties the task
+        // list or replaces it with different ids. Selection movement must stay a
+        // safe no-op instead of panicking on the empty-slice subtraction.
+        let mut state = QueueOverlayUiState::default();
+        state.move_selection(&[], 1);
+        assert_eq!(state.selected_task_id(), None);
+
+        let tasks = vec!["task-a".to_string()];
+        state.sync(&tasks);
+        state.arm_remove_task(remove_intent("task-a", "2026-07-15T00:00:00Z"));
+
+        // Unknown selected id falls back to row 0 and clamps at the last row.
+        state.move_selection(&tasks, 5);
+        assert_eq!(state.selected_task_id(), Some("task-a"));
+        state.move_selection(&tasks, -5);
+        assert_eq!(state.selected_task_id(), Some("task-a"));
+    }
+
+    #[test]
     fn reset_drops_displayed_authority_tokens() {
         let mut state = QueueOverlayUiState::default();
         let request = begin_load(&mut state, 1, context("/tmp/workspace", Some("thread-a")));
