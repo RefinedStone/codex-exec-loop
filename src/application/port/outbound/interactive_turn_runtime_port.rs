@@ -56,6 +56,8 @@ pub trait InteractiveTurnRuntimePort: Send + Sync {
         cwd: &str,
         // 사용자 prompt 또는 조립된 main-session prompt이다. adapter가 Codex protocol request로 매핑한다.
         prompt: &str,
+        // prompt와 함께 `localImage` 입력으로 전송할 스테이징된 이미지 파일 경로이다.
+        image_paths: &[String],
         // model/think 같은 operator-selected turn overrides이다.
         options: ConversationTurnOptions,
         // outbound runtime이 `ThreadPrepared`, `TurnStarted`, delta, tool activity, completion/failure를 보낼 채널이다.
@@ -71,6 +73,8 @@ pub trait InteractiveTurnRuntimePort: Send + Sync {
         thread_id: &str,
         // 기존 thread에 이어 붙일 prompt이다.
         prompt: &str,
+        // 후속 turn에 `localImage` 입력으로 첨부할 스테이징된 이미지 파일 경로이다.
+        image_paths: &[String],
         // model/think 같은 operator-selected turn overrides이다.
         options: ConversationTurnOptions,
         // 후속 turn의 stream event를 전달할 채널이다. 실패도 panic이 아니라 `Failed` 이벤트나 `Result` 오류로 표현된다.

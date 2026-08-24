@@ -796,7 +796,102 @@ impl NativeTuiApp {
         self.dispatch_conversation_input(ConversationComposerEvent::NewlineInserted);
     }
     pub(super) fn pop_input_character(&mut self) {
+        /*
+         * Backspace mirrors competitor TUIs on an empty composer: when image
+         * chips are attached, backspace removes the newest chip before any
+         * text deletion can happen.
+         */
+        if self.composer_input_buffer_is_empty() && self.has_image_attachments() {
+            self.dispatch_conversation_input(ConversationComposerEvent::LastImageAttachmentRemoved);
+            return;
+        }
         self.dispatch_conversation_input(ConversationComposerEvent::BackspacePressed);
+    }
+    pub(super) fn attach_pasted_image_paths(&mut self, pasted_text: &str) -> bool {
+        // Attachments are composer state; without prompt focus (overlays,
+        // rename mode) a paste must never mutate them.
+        if !self.can_edit_prompt_input() {
+            return false;
+        }
+        let image_paths = clipboard_image::extract_existing_image_paths(pasted_text);
+        let mut attached_any = false;
+        for path in image_paths {
+            self.dispatch_conversation_input(ConversationComposerEvent::ImageAttachmentAdded {
+                path,
+            });
+            attached_any = true;
+        }
+        attached_any
+    }
+    pub(super) fn request_clipboard_image_probe(&mut self) -> bool {
+        /*
+         * The probe runs off the UI thread because osascript/PowerShell can
+         * block for hundreds of milliseconds. One in-flight probe at a time
+         * keeps duplicate Ctrl+V presses from stacking worker threads.
+         */
+        if !self.can_edit_prompt_input() || self.shell.clipboard_image_probe_in_flight {
+            return false;
+        }
+        self.shell.clipboard_image_probe_in_flight = true;
+        let sender = self.runtime.tx.clone();
+        std::thread::spawn(move || {
+            let result = clipboard_image::read_clipboard_image_from_staging_directory(
+                &clipboard_image::image_attachment_staging_directory(),
+            );
+            let _ = sender.try_send(BackgroundMessage::ClipboardImageProbed(result));
+        });
+        true
+    }
+    pub(super) fn apply_clipboard_image_probe(
+        &mut self,
+        result: clipboard_image::ClipboardImageProbeResult,
+    ) {
+        self.shell.clipboard_image_probe_in_flight = false;
+        match result {
+            Ok(Some(staged)) => {
+                self.dispatch_conversation_input(ConversationComposerEvent::ImageAttachmentAdded {
+                    path: staged.path.display().to_string(),
+                });
+                let status_text = self
+                    .shell
+                    .tui_language
+                    .clipboard_image_attached(&staged.display_name);
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text,
+                });
+            }
+            Ok(None) => {}
+            Err(reason) => {
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: reason,
+                });
+            }
+        }
+    }
+    pub(super) fn has_image_attachments(&self) -> bool {
+        match &self.conversation.lifecycle.conversation_state {
+            ConversationState::Ready(conversation) => {
+                !conversation.composer.image_attachments.is_empty()
+            }
+            ConversationState::Loading | ConversationState::Failed(_) => false,
+        }
+    }
+    pub(super) fn composer_image_attachment_paths(&self) -> Vec<String> {
+        match &self.conversation.lifecycle.conversation_state {
+            ConversationState::Ready(conversation) => conversation
+                .composer
+                .image_attachments
+                .iter()
+                .map(|path| path.to_string())
+                .collect(),
+            ConversationState::Loading | ConversationState::Failed(_) => Vec::new(),
+        }
+    }
+    fn composer_input_buffer_is_empty(&self) -> bool {
+        match &self.conversation.lifecycle.conversation_state {
+            ConversationState::Ready(conversation) => conversation.composer.input_buffer.is_empty(),
+            ConversationState::Loading | ConversationState::Failed(_) => true,
+        }
     }
     pub(super) fn delete_next_input_character(&mut self) {
         self.dispatch_conversation_input(ConversationComposerEvent::DeletePressed);

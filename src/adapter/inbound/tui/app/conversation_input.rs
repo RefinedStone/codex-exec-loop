@@ -23,6 +23,11 @@ pub(super) enum ConversationComposerEvent {
     PreviousWordDeleted,
     InputCleared,
     CursorMoved { movement: InputCursorMovement },
+    // Image attachments ride beside the text buffer. Adding one changes what
+    // the next submission sends, so it cancels a queued startup submit like a
+    // text edit would; removal mirrors Backspace on an empty buffer.
+    ImageAttachmentAdded { path: String },
+    LastImageAttachmentRemoved,
     // Palette events are navigation/completion state changes layered on top of
     // the same input buffer; they do not represent prompt submission.
     InlineCommandPaletteSelectionMoved { delta: isize },
@@ -141,6 +146,9 @@ pub(super) fn reduce_conversation_input(
                 },
                 &mut effects,
             );
+            // Clearing is a full composer reset: staged image chips must not
+            // outlive the prompt they were attached to.
+            state.image_attachments.clear();
             state.move_input_cursor_to_end();
         }
         ConversationComposerEvent::CursorMoved { movement } => {
@@ -150,6 +158,30 @@ pub(super) fn reduce_conversation_input(
                 movement,
             );
             state.set_input_cursor_byte_index(cursor_byte_index);
+        }
+        ConversationComposerEvent::ImageAttachmentAdded { path } => {
+            // Attachment changes what Enter will send, so a queued startup
+            // submit cannot survive it.
+            clear_startup_submit_after_input_change(&mut state, &mut effects);
+            let already_attached = state
+                .image_attachments
+                .iter()
+                .any(|existing| existing == &path);
+            if !already_attached {
+                if state.image_attachments.len() >= super::clipboard_image::MAX_IMAGE_ATTACHMENTS {
+                    effects.push(ConversationComposerEffect::ReplaceStatus {
+                        status_text: format!(
+                            "image attachment limit reached ({} images); remove one before adding another",
+                            super::clipboard_image::MAX_IMAGE_ATTACHMENTS
+                        ),
+                    });
+                } else {
+                    state.image_attachments.push(path);
+                }
+            }
+        }
+        ConversationComposerEvent::LastImageAttachmentRemoved => {
+            state.image_attachments.pop();
         }
         ConversationComposerEvent::InlineCommandPaletteSelectionMoved { delta } => {
             state.move_inline_shell_command_palette_selection(delta);
@@ -840,5 +872,98 @@ mod tests {
         let reduced = reduce_conversation_input(state, ConversationComposerEvent::InputCleared);
 
         assert!(reduced.state.input_buffer.is_empty());
+    }
+
+    #[test]
+    fn image_attachment_added_appends_path_and_cancels_startup_submit() {
+        let mut state = ConversationComposerState::default();
+        state.input_buffer = "look at this".to_string();
+        state.arm_startup_submit();
+
+        let reduced = reduce_conversation_input(
+            state,
+            ConversationComposerEvent::ImageAttachmentAdded {
+                path: "/tmp/shot.png".to_string(),
+            },
+        );
+
+        assert_eq!(reduced.state.image_attachments, vec!["/tmp/shot.png"]);
+        assert!(!reduced.state.startup_submit_armed);
+    }
+
+    #[test]
+    fn image_attachment_added_rejects_duplicate_paths() {
+        let event = ConversationComposerEvent::ImageAttachmentAdded {
+            path: "/tmp/shot.png".to_string(),
+        };
+        let reduced =
+            reduce_conversation_input(ConversationComposerState::default(), event.clone());
+        let reduced = reduce_conversation_input(reduced.state, event);
+
+        assert_eq!(reduced.state.image_attachments.len(), 1);
+        assert!(reduced.effects.is_empty());
+    }
+
+    #[test]
+    fn image_attachment_added_enforces_the_attachment_cap() {
+        let mut state = ConversationComposerState::default();
+        for index in 0..super::super::clipboard_image::MAX_IMAGE_ATTACHMENTS {
+            let reduced = reduce_conversation_input(
+                state,
+                ConversationComposerEvent::ImageAttachmentAdded {
+                    path: format!("/tmp/shot-{index}.png"),
+                },
+            );
+            state = reduced.state;
+        }
+
+        let reduced = reduce_conversation_input(
+            state,
+            ConversationComposerEvent::ImageAttachmentAdded {
+                path: "/tmp/overflow.png".to_string(),
+            },
+        );
+
+        assert_eq!(
+            reduced.state.image_attachments.len(),
+            super::super::clipboard_image::MAX_IMAGE_ATTACHMENTS
+        );
+        assert!(matches!(
+            reduced.effects.as_slice(),
+            [ConversationComposerEffect::ReplaceStatus { .. }]
+        ));
+    }
+
+    #[test]
+    fn last_image_attachment_removed_pops_in_order() {
+        let mut state = ConversationComposerState::default();
+        for path in ["/tmp/first.png", "/tmp/second.png"] {
+            let reduced = reduce_conversation_input(
+                state,
+                ConversationComposerEvent::ImageAttachmentAdded {
+                    path: path.to_string(),
+                },
+            );
+            state = reduced.state;
+        }
+        let reduced =
+            reduce_conversation_input(state, ConversationComposerEvent::LastImageAttachmentRemoved);
+
+        assert_eq!(reduced.state.image_attachments, vec!["/tmp/first.png"]);
+    }
+
+    #[test]
+    fn clearing_input_also_clears_image_attachments() {
+        let mut state = ConversationComposerState::default();
+        let attached = reduce_conversation_input(
+            state,
+            ConversationComposerEvent::ImageAttachmentAdded {
+                path: "/tmp/shot.png".to_string(),
+            },
+        );
+        state = attached.state;
+
+        let cleared = reduce_conversation_input(state, ConversationComposerEvent::InputCleared);
+        assert!(cleared.state.image_attachments.is_empty());
     }
 }

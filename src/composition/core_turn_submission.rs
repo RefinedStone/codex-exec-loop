@@ -348,6 +348,9 @@ fn resolve_stream_launch_request(
         workspace_directory,
         thread_id,
         prompt,
+        // Parallel launches never forward operator attachments; submission
+        // gating already rejects that combination upstream.
+        image_paths: _,
         prompt_origin,
         auto_follow_source,
         planning_handoff,
@@ -366,6 +369,11 @@ fn resolve_stream_launch_request(
             workspace_directory: outcome.request.workspace_directory,
             thread_id: outcome.request.thread_id,
             prompt: outcome.request.prompt,
+            /*
+             * Parallel stream launches never carry operator image attachments;
+             * submission gating already blocks that combination upstream.
+             */
+            image_paths: Vec::new(),
             prompt_origin,
             auto_follow_source,
             planning_handoff,
@@ -494,6 +502,7 @@ fn run_stream_request(
             .run_turn_stream(
                 thread_id,
                 &request.prompt,
+                &request.image_paths,
                 request.turn_options.clone(),
                 event_sender,
             )
@@ -502,6 +511,7 @@ fn run_stream_request(
             .run_new_thread_stream(
                 &request.workspace_directory,
                 &request.prompt,
+                &request.image_paths,
                 request.turn_options.clone(),
                 event_sender,
             )
@@ -644,6 +654,7 @@ mod tests {
         TurnSubmissionRequest {
             workspace_directory: "/tmp/workspace".to_string(),
             thread_id: Some("thread-1".to_string()),
+            image_paths: Vec::new(),
             prompt: "ship it".to_string(),
             prompt_origin: CorePromptOrigin::Manual,
             auto_follow_source: None,

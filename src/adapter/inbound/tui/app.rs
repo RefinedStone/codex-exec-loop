@@ -55,6 +55,8 @@ mod auto_follow;
 mod auto_follow_controls;
 #[path = "app/auto_follow_overlay_ui.rs"]
 mod auto_follow_overlay_ui;
+#[path = "app/clipboard_image.rs"]
+mod clipboard_image;
 #[path = "app/conversation/mod.rs"]
 mod conversation;
 #[path = "app/conversation_input.rs"]
@@ -351,6 +353,9 @@ struct NativeTuiShellState {
     model_selection_overlay_ui_state: ModelSelectionOverlayUiState,
     view_selection_overlay_ui_state: ViewSelectionOverlayUiState,
     show_startup_visual: bool,
+    // Guards duplicate clipboard image probes while a worker thread is still
+    // reading osascript/PowerShell output.
+    clipboard_image_probe_in_flight: bool,
 }
 
 struct NativeTuiConversationState {

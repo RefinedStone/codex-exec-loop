@@ -2171,6 +2171,7 @@ mod tests {
             &self,
             _cwd: &str,
             _prompt: &str,
+            _image_paths: &[String],
             _options: crate::domain::conversation::ConversationTurnOptions,
             _event_sender: crate::application::port::conversation_stream::ConversationStreamSender,
         ) -> Result<crate::domain::turn_terminal::ConversationTurnTerminalReceipt> {
@@ -2181,6 +2182,7 @@ mod tests {
             &self,
             _thread_id: &str,
             _prompt: &str,
+            _image_paths: &[String],
             _options: crate::domain::conversation::ConversationTurnOptions,
             _event_sender: crate::application::port::conversation_stream::ConversationStreamSender,
         ) -> Result<crate::domain::turn_terminal::ConversationTurnTerminalReceipt> {
@@ -4032,6 +4034,7 @@ mod tests {
         let turn_request = TurnSubmissionRequest {
             workspace_directory: "/tmp/new-workspace".to_string(),
             thread_id: Some("thread-new".to_string()),
+            image_paths: Vec::new(),
             prompt: "new work".to_string(),
             prompt_origin: CorePromptOrigin::Manual,
             auto_follow_source: None,

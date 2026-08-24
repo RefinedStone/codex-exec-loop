@@ -196,7 +196,17 @@ pub(super) fn build_prompt_cursor_offset(
     if content_width == 0 {
         return None;
     }
+    /*
+     * Chip rows sit above the prompt text, so the cursor must shift down by
+     * however many terminal rows the attachment chips occupy after wrapping.
+     */
+    let chip_lines = build_image_attachment_chip_lines(composer);
+    let chip_row_offset = chip_lines
+        .iter()
+        .map(|line| wrapped_row_count(line.width(), content_width))
+        .sum::<usize>() as u16;
     locate_prompt_cursor_with_word_wrap(composer, content_width)
+        .map(|(x, y)| (x, y.saturating_add(chip_row_offset)))
 }
 
 fn locate_prompt_cursor_with_word_wrap(
@@ -279,6 +289,32 @@ pub(super) fn build_prompt_buffer_view(
     build_prompt_buffer_view_with_optional_placeholder(composer, None)
 }
 
+/*
+ * Attached images render as one chip row above the prompt text (the same
+ * affordance Claude Code uses for pasted screenshots). An empty list renders
+ * nothing so the composer keeps its exact previous shape.
+ */
+pub(super) fn build_image_attachment_chip_lines(
+    composer: &ConversationComposerScreenModel<'_>,
+) -> Vec<Line<'static>> {
+    if composer.state.image_attachments.is_empty() {
+        return Vec::new();
+    }
+    let mut spans = Vec::new();
+    for (index, path) in composer.state.image_attachments.iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::raw("  "));
+        }
+        spans.push(Span::styled("[img]", AkraTheme::brand()));
+        let file_name = std::path::Path::new(path)
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.clone());
+        spans.push(Span::styled(format!(" {file_name}"), AkraTheme::subtle()));
+    }
+    vec![Line::from(spans)]
+}
+
 fn build_prompt_buffer_view_with_optional_placeholder(
     composer: &ConversationComposerScreenModel<'_>,
     placeholder: Option<&str>,
@@ -345,6 +381,35 @@ mod tests {
             build_prompt_cursor_offset(&composer_screen_model(&conversation), 80),
             Some((5, 0))
         );
+    }
+
+    #[test]
+    fn image_attachment_chips_render_above_the_prompt_and_shift_the_cursor() {
+        let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
+        conversation.composer.input_buffer = "hi".to_string();
+        conversation
+            .composer
+            .image_attachments
+            .push("/tmp/shot.png".to_string());
+
+        let composer = composer_screen_model(&conversation);
+        let chips = build_image_attachment_chip_lines(&composer);
+        assert_eq!(chips.len(), 1);
+        let chip_text = chips[0].to_string();
+        assert!(chip_text.contains("[img]"));
+        assert!(chip_text.contains("shot.png"));
+
+        // The text cursor keeps its prompt-local column but shifts down one
+        // chip row.
+        assert_eq!(build_prompt_cursor_offset(&composer, 80), Some((5, 1)));
+    }
+
+    #[test]
+    fn empty_attachments_render_no_chip_rows() {
+        let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
+        conversation.composer.input_buffer = "hi".to_string();
+        let chips = build_image_attachment_chip_lines(&composer_screen_model(&conversation));
+        assert!(chips.is_empty());
     }
 
     #[test]

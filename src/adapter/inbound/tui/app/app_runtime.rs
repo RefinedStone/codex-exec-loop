@@ -88,6 +88,10 @@ pub(super) enum BackgroundMessage {
     #[cfg(test)]
     ConversationRuntimeNotice(String),
     OperatorAlert(OperatorAlert),
+    // Clipboard image probes run on a worker thread because osascript and
+    // PowerShell can take hundreds of milliseconds; the result re-enters the
+    // UI loop through this channel instead of blocking key handling.
+    ClipboardImageProbed(super::clipboard_image::ClipboardImageProbeResult),
 }
 
 pub(super) struct NativeTuiAppRuntimeChannels {
@@ -583,6 +587,7 @@ mod tests {
             &self,
             cwd: &str,
             _prompt: &str,
+            _image_paths: &[String],
             _options: crate::domain::conversation::ConversationTurnOptions,
             event_sender: crate::application::port::conversation_stream::ConversationStreamSender,
         ) -> Result<crate::domain::turn_terminal::ConversationTurnTerminalReceipt> {
@@ -597,6 +602,7 @@ mod tests {
             &self,
             thread_id: &str,
             _prompt: &str,
+            _image_paths: &[String],
             _options: crate::domain::conversation::ConversationTurnOptions,
             event_sender: crate::application::port::conversation_stream::ConversationStreamSender,
         ) -> Result<crate::domain::turn_terminal::ConversationTurnTerminalReceipt> {
@@ -1694,6 +1700,7 @@ impl NativeTuiApp {
                 model_selection_overlay_ui_state: super::ModelSelectionOverlayUiState::default(),
                 view_selection_overlay_ui_state: super::ViewSelectionOverlayUiState::default(),
                 show_startup_visual: startup_visual_enabled_from_environment(),
+                clipboard_image_probe_in_flight: false,
             },
             conversation: super::NativeTuiConversationState {
                 lifecycle: ConversationLifecycleState {

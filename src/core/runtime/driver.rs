@@ -523,6 +523,7 @@ mod tests {
         let request = TurnSubmissionRequest {
             workspace_directory: "/tmp/workspace".to_string(),
             thread_id: Some("thread-1".to_string()),
+            image_paths: Vec::new(),
             prompt: "ship it".to_string(),
             prompt_origin: CorePromptOrigin::Manual,
             auto_follow_source: None,
@@ -619,6 +620,7 @@ mod tests {
         let submission_request = TurnSubmissionRequest {
             workspace_directory: "/tmp/workspace".to_string(),
             thread_id: Some("thread-1".to_string()),
+            image_paths: Vec::new(),
             prompt: "ship it".to_string(),
             prompt_origin: CorePromptOrigin::Manual,
             auto_follow_source: None,
@@ -1274,6 +1276,7 @@ mod tests {
         runtime.dispatch_command(AppCommand::SubmitTurn(Box::new(TurnSubmissionRequest {
             workspace_directory: "/tmp/workspace".to_string(),
             thread_id: Some("thread-1".to_string()),
+            image_paths: Vec::new(),
             prompt: "ship it".to_string(),
             prompt_origin: CorePromptOrigin::Manual,
             auto_follow_source: None,

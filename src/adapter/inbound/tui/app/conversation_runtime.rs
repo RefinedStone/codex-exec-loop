@@ -48,6 +48,9 @@ pub(super) enum ConversationRuntimeEvent {
         prompt: String,
         transcript_text: String,
         origin: PromptOrigin,
+        // Staged image paths captured at submission time; auto-follow and
+        // internal prompts always carry an empty list.
+        image_paths: Vec<String>,
     },
     PromptSubmissionAdmitted {
         transcript_text: String,
@@ -102,6 +105,7 @@ pub(super) enum ConversationRuntimeEffect {
         prompt: String,
         transcript_text: String,
         prompt_origin: PromptOrigin,
+        image_paths: Vec<String>,
     },
     EvaluatePostTurn {
         workspace_directory: String,
@@ -235,6 +239,7 @@ pub(super) fn reduce_conversation_runtime_with_transition(
             prompt,
             transcript_text,
             origin,
+            image_paths,
         } => {
             /*
              * Manual and auto-follow prompts share stream startup, but their
@@ -243,7 +248,7 @@ pub(super) fn reduce_conversation_runtime_with_transition(
              * stream starts so the next post-turn policy can detect repetition.
              */
             let prompt = prompt.trim().to_string();
-            if prompt.is_empty() {
+            if prompt.is_empty() && image_paths.is_empty() {
                 // Empty input is a presentation-level no-op. Every non-empty
                 // manual or automatic intent must reach Core admission so this
                 // reducer cannot become a second runtime policy gate.
@@ -274,6 +279,7 @@ pub(super) fn reduce_conversation_runtime_with_transition(
                 prompt,
                 transcript_text,
                 prompt_origin: origin,
+                image_paths,
             });
         }
         ConversationRuntimeEvent::PromptSubmissionAdmitted {
@@ -1405,6 +1411,7 @@ mod tests {
                 prompt: prompt.to_string(),
                 transcript_text: transcript_text.to_string(),
                 origin,
+                image_paths: Vec::new(),
             },
         );
         let [
@@ -1442,6 +1449,7 @@ mod tests {
                     prompt: "   ".to_string(),
                     transcript_text: "ignored".to_string(),
                     origin: PromptOrigin::Manual,
+                    image_paths: Vec::new(),
                 },
             )
         });
@@ -1462,6 +1470,7 @@ mod tests {
                     prompt: "continue".to_string(),
                     transcript_text: "continue".to_string(),
                     origin: auto_follow_origin(),
+                    image_paths: Vec::new(),
                 },
             )
         });
@@ -1492,6 +1501,7 @@ mod tests {
                     prompt: "manual".to_string(),
                     transcript_text: "manual".to_string(),
                     origin: PromptOrigin::Manual,
+                    image_paths: Vec::new(),
                 },
             )
         });
@@ -2700,6 +2710,7 @@ mod tests {
                 prompt: "continue queue".to_string(),
                 transcript_text: "continue queue".to_string(),
                 origin: auto_follow_origin(),
+                image_paths: Vec::new(),
             },
         );
 
