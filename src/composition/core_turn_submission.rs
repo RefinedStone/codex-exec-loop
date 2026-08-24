@@ -348,15 +348,14 @@ fn resolve_stream_launch_request(
         workspace_directory,
         thread_id,
         prompt,
-        // Parallel launches never forward operator attachments; submission
-        // gating already rejects that combination upstream.
-        image_paths: _,
+        image_paths,
         prompt_origin,
         auto_follow_source,
         planning_handoff,
         turn_options,
         slot_lease_handoff,
     } = request;
+    let requested_slot_lease = slot_lease_handoff.is_some();
     let outcome =
         parallel_mode_turn_service.prepare_stream_launch(ParallelTurnStreamLaunchRequest {
             workspace_directory,
@@ -364,16 +363,24 @@ fn resolve_stream_launch_request(
             prompt,
             slot_lease_handoff,
         })?;
+    /*
+     * Plain conversation turns pass through `prepare_stream_launch` unchanged
+     * and must keep their operator image attachments; only a real parallel
+     * slot launch (which converts the prompt into worker task turns) drops
+     * them. Upstream submission gating already blocks attaching images while
+     * parallel task intake is active, so this strip is defense in depth.
+     */
+    let image_paths = if requested_slot_lease || outcome.request.slot_lease_handoff.is_some() {
+        Vec::new()
+    } else {
+        image_paths
+    };
     Ok((
         TurnSubmissionRequest {
             workspace_directory: outcome.request.workspace_directory,
             thread_id: outcome.request.thread_id,
             prompt: outcome.request.prompt,
-            /*
-             * Parallel stream launches never carry operator image attachments;
-             * submission gating already blocks that combination upstream.
-             */
-            image_paths: Vec::new(),
+            image_paths,
             prompt_origin,
             auto_follow_source,
             planning_handoff,
@@ -666,6 +673,39 @@ mod tests {
 
     fn test_turn_correlation() -> TurnSubmissionCorrelation {
         TurnSubmissionCorrelation::new(7)
+    }
+
+    /*
+     * Regression for PR #2126 review (P1): plain conversation turns pass
+     * through prepare_stream_launch unchanged, so their operator image
+     * attachments must survive into run_stream_request.
+     */
+    #[test]
+    fn plain_stream_launch_preserves_operator_image_attachments() {
+        let parallel_mode_turn_service = ParallelModeTurnService::new(
+            crate::application::service::parallel_mode::ParallelModeService::new(
+                std::sync::Arc::new(
+                    crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter::new(),
+                ),
+                std::sync::Arc::new(
+                    crate::adapter::outbound::github::GithubAutomationAdapter::new(),
+                ),
+                std::sync::Arc::new(
+                    crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter::new(),
+                ),
+            ),
+        );
+        let mut request = sample_request();
+        request.image_paths = vec!["/tmp/shot.png".to_string()];
+
+        let (resolved_request, expected_lease, launch_notice, invalidate_snapshot) =
+            resolve_stream_launch_request(&parallel_mode_turn_service, request)
+                .expect("plain conversation launch should pass through");
+
+        assert_eq!(resolved_request.image_paths, vec!["/tmp/shot.png"]);
+        assert!(expected_lease.is_none());
+        assert!(launch_notice.is_none());
+        assert!(!invalidate_snapshot);
     }
 
     fn completed_receipt() -> ConversationTurnTerminalReceipt {
