@@ -206,6 +206,9 @@ impl ShellRuntime {
                 BackgroundMessage::OperatorAlert(alert) => {
                     self.emit_operator_alert(&alert);
                 }
+                BackgroundMessage::ClipboardImageProbed(result) => {
+                    self.app.apply_clipboard_image_probe(result);
+                }
             }
         }
         self.background_drain_limited =
@@ -308,7 +311,22 @@ impl ShellRuntime {
             self.request_redraw_at(now);
             return;
         }
-        if self.app.insert_input_text(text) {
+        /*
+         * Terminals cannot transport image bytes through bracketed paste. An
+         * exactly-empty paste therefore means "the clipboard holds an image"
+         * (iTerm2, Ghostty, and Windows Terminal all behave this way), so it
+         * becomes a clipboard probe. A non-empty paste is scanned for image
+         * file paths (drag-and-drop) before the text lands in the composer.
+         */
+        if text.is_empty() {
+            if self.app.request_clipboard_image_probe() {
+                self.request_redraw_at(now);
+            }
+            return;
+        }
+        let attached_image_paths = self.app.attach_pasted_image_paths(&text);
+        let text_inserted = self.app.insert_input_text(text);
+        if attached_image_paths || text_inserted {
             self.request_redraw_at(now);
         }
     }
@@ -423,6 +441,18 @@ impl ShellRuntime {
             }
             KeyCode::Char('w') if key.modifiers == KeyModifiers::CONTROL => {
                 self.app.delete_previous_input_word()
+            }
+            /*
+             * Ctrl+V (and Alt+V for terminals that swallow Ctrl+V) probes the OS
+             * clipboard for image data. Terminals that intercept the chord send
+             * an empty bracketed paste instead, which routes to the same probe.
+             */
+            KeyCode::Char('v')
+                if key.modifiers == KeyModifiers::CONTROL || key.modifiers == KeyModifiers::ALT =>
+            {
+                if !self.app.request_clipboard_image_probe() {
+                    return;
+                }
             }
             KeyCode::Char('e') if key.modifiers == KeyModifiers::CONTROL => {
                 if !self.app.toggle_latest_transcript_tool_card() {

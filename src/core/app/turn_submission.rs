@@ -40,6 +40,11 @@ pub struct TurnSubmissionRequest {
     pub workspace_directory: String,
     pub thread_id: Option<String>,
     pub prompt: String,
+    /*
+     * Staged image file paths submitted beside the prompt text. Composition maps
+     * them to `localImage` turn input items; empty for internal prompts.
+     */
+    pub image_paths: Vec<String>,
     pub prompt_origin: CorePromptOrigin,
     pub auto_follow_source: Option<PostTurnEvaluationCorrelation>,
     /*

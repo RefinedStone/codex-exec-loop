@@ -569,6 +569,13 @@ pub(super) enum TurnInputItem {
     // Text carries the user prompt or worker prompt body.
     #[serde(rename = "text")]
     Text { text: String },
+    /*
+     * LocalImage points app-server at an on-disk image (clipboard paste staging
+     * or a referenced file). app-server reads and uploads the bytes, so this
+     * client never embeds base64 payloads in the request line.
+     */
+    #[serde(rename = "localImage")]
+    LocalImage { path: String },
     // Skill points app-server at a local SKILL.md asset before the text prompt is interpreted.
     #[serde(rename = "skill")]
     Skill { name: String, path: String },
@@ -582,6 +589,10 @@ impl TurnInputItem {
          * field spelling remains centralized in this module.
          */
         Self::Text { text: text.into() }
+    }
+
+    pub(super) fn local_image(path: impl Into<String>) -> Self {
+        Self::LocalImage { path: path.into() }
     }
 
     pub(super) fn skill(name: impl Into<String>, path: impl Into<String>) -> Self {
@@ -898,6 +909,24 @@ mod tests {
         }))
         .expect("turn/steer response should deserialize");
         assert_eq!(response.turn_id, "turn-7");
+    }
+
+    #[test]
+    fn local_image_items_serialize_with_the_app_server_local_image_tag() {
+        // The wire tag must match the app-server LocalImageUserInput contract
+        // exactly; a renamed field would silently drop attachments server-side.
+        let items = vec![
+            TurnInputItem::local_image("/tmp/akra-paste-1.png"),
+            TurnInputItem::text("review this screenshot"),
+        ];
+
+        assert_eq!(
+            serde_json::to_value(items).expect("turn input should serialize"),
+            json!([
+                { "type": "localImage", "path": "/tmp/akra-paste-1.png" },
+                { "type": "text", "text": "review this screenshot" }
+            ])
+        );
     }
 
     #[test]

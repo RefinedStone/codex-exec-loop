@@ -688,6 +688,7 @@ mod tests {
         TurnSubmissionRequest {
             workspace_directory: "/workspace".to_string(),
             thread_id: Some("thread-1".to_string()),
+            image_paths: Vec::new(),
             prompt: "continue".to_string(),
             prompt_origin: origin,
             auto_follow_source: None,

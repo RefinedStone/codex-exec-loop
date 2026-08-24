@@ -135,6 +135,13 @@ impl TuiLanguage {
         }
     }
 
+    pub(super) fn clipboard_image_attached(self, display_name: &str) -> String {
+        match self {
+            Self::English => format!("attached clipboard image ({display_name})"),
+            Self::Korean => format!("클립보드 이미지를 첨부했습니다 ({display_name})"),
+        }
+    }
+
     pub(super) fn terminal_copy_unavailable(self, selection: bool) -> String {
         match (self, selection) {
             (Self::English, true) => {

@@ -62,7 +62,9 @@ impl NativeTuiApp {
             ConversationState::Ready(conversation) => conversation.composer.input_buffer.clone(),
             _ => return,
         };
-        if operator_prompt.trim().is_empty() {
+        // Image-only submissions are valid: chips carry the turn payload even
+        // when the operator typed no text.
+        if operator_prompt.trim().is_empty() && !self.has_image_attachments() {
             return;
         }
 
@@ -84,6 +86,7 @@ impl NativeTuiApp {
                 prompt,
                 transcript_text,
                 prompt_origin,
+                image_paths,
             } => {
                 let outcome = self.reduce_core_client_event(CoreInput::Command(
                     AppCommand::SubmitTurn(Box::new(self.build_turn_submission_request(
@@ -91,6 +94,7 @@ impl NativeTuiApp {
                         thread_id,
                         prompt,
                         &prompt_origin,
+                        image_paths,
                     ))),
                 ));
                 turn_submission_admitted = outcome.events.iter().any(|event| {
@@ -181,11 +185,13 @@ impl NativeTuiApp {
         thread_id: Option<String>,
         prompt: String,
         prompt_origin: &PromptOrigin,
+        image_paths: Vec<String>,
     ) -> TurnSubmissionRequest {
         TurnSubmissionRequest {
             workspace_directory,
             thread_id,
             prompt,
+            image_paths,
             prompt_origin: core_prompt_origin(prompt_origin),
             auto_follow_source: match prompt_origin {
                 PromptOrigin::AutoFollow(context) => Some(context.source.clone()),
@@ -274,8 +280,24 @@ impl NativeTuiApp {
             });
             return;
         }
-        let transcript_text = operator_prompt.trim().to_string();
+        let image_attachment_paths = self.composer_image_attachment_paths();
+        let trimmed_prompt = operator_prompt.trim().to_string();
+        // Image-only submissions keep going with a synthetic transcript row so
+        // the transcript still shows what the operator attached.
+        let transcript_text = if trimmed_prompt.is_empty() {
+            build_image_only_transcript_text(&image_attachment_paths)
+        } else {
+            trimmed_prompt
+        };
         if transcript_text.is_empty() {
+            return;
+        }
+        if !image_attachment_paths.is_empty() && self.parallel_mode_enabled() {
+            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                status_text:
+                    "image attachments cannot be submitted while parallel task intake is active"
+                        .to_string(),
+            });
             return;
         }
         let (input_is_current, delivery, parent_thread_id, parent_turn_id) =
@@ -295,6 +317,14 @@ impl NativeTuiApp {
                 }
             };
         if !input_is_current {
+            return;
+        }
+        if delivery == ManualPromptDelivery::QueueOnly && !image_attachment_paths.is_empty() {
+            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                status_text:
+                    "image attachments cannot be queued as a planning task; resubmit when idle"
+                        .to_string(),
+            });
             return;
         }
         match self.shell_action_availability() {
@@ -795,10 +825,20 @@ impl NativeTuiApp {
             parallel_mode_enabled = self.parallel_mode_enabled(),
         );
 
+        // Composer image chips ride only operator-driven submissions. Automatic
+        // follow-ups must never inherit attachments the operator staged for
+        // their own next turn.
+        let image_paths = match &prompt_origin {
+            PromptOrigin::AutoFollow(_) => Vec::new(),
+            PromptOrigin::Manual | PromptOrigin::ManualIntake(_) => {
+                self.composer_image_attachment_paths()
+            }
+        };
         self.dispatch_conversation_runtime(ConversationRuntimeEvent::SubmitPrompt {
             prompt,
             transcript_text,
             origin: prompt_origin,
+            image_paths,
         })
     }
 
@@ -841,6 +881,23 @@ fn manual_prompt_delivery(conversation: &ConversationViewModel) -> Option<Manual
     } else {
         None
     }
+}
+
+fn build_image_only_transcript_text(image_paths: &[String]) -> String {
+    /*
+     * The transcript is text-only, so attached images render as labeled rows
+     * (the same affordance Claude Code uses) while the turn itself carries
+     * real `localImage` items.
+     */
+    let mut lines = Vec::new();
+    for (index, path) in image_paths.iter().enumerate() {
+        let file_name = std::path::Path::new(path)
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.clone());
+        lines.push(format!("[image #{}: {file_name}]", index + 1));
+    }
+    lines.join("\n")
 }
 
 fn task_status_from_label(label: &str) -> TaskStatus {
@@ -1045,6 +1102,7 @@ mod tests {
             &self,
             cwd: &str,
             _prompt: &str,
+            _image_paths: &[String],
             _options: crate::domain::conversation::ConversationTurnOptions,
             event_sender: crate::application::port::conversation_stream::ConversationStreamSender,
         ) -> Result<crate::domain::turn_terminal::ConversationTurnTerminalReceipt> {
@@ -1059,6 +1117,7 @@ mod tests {
             &self,
             thread_id: &str,
             _prompt: &str,
+            _image_paths: &[String],
             _options: crate::domain::conversation::ConversationTurnOptions,
             event_sender: crate::application::port::conversation_stream::ConversationStreamSender,
         ) -> Result<crate::domain::turn_terminal::ConversationTurnTerminalReceipt> {
@@ -1373,6 +1432,7 @@ mod tests {
             prompt: "ship it".to_string(),
             transcript_text: "ship it".to_string(),
             prompt_origin: PromptOrigin::Manual,
+            image_paths: Vec::new(),
         });
         app.execute_conversation_runtime_effect(ConversationRuntimeEffect::EvaluatePostTurn {
             workspace_directory: workspace.path_str().to_string(),
@@ -2106,7 +2166,7 @@ mod tests {
         let (tx, _rx) =
             crate::application::port::conversation_stream::conversation_stream_channel();
         assert!(
-            port.run_turn_stream("thread-1", "prompt", Default::default(), tx,)
+            port.run_turn_stream("thread-1", "prompt", &[], Default::default(), tx)
                 .is_ok()
         );
     }
@@ -2656,6 +2716,7 @@ mod tests {
             Some("thread-1".to_string()),
             "continue queued task".to_string(),
             &auto_origin,
+            Vec::new(),
         );
         assert_eq!(
             auto_request.slot_lease_handoff,
@@ -2673,6 +2734,7 @@ mod tests {
             None,
             "manual prompt".to_string(),
             &PromptOrigin::Manual,
+            Vec::new(),
         );
         assert_eq!(no_task_request.slot_lease_handoff, None);
 
@@ -2682,6 +2744,7 @@ mod tests {
             None,
             "manual prompt".to_string(),
             &PromptOrigin::Manual,
+            Vec::new(),
         );
         assert_eq!(loading_request.slot_lease_handoff, None);
 
@@ -2759,6 +2822,7 @@ mod tests {
                 handoff_task: Some(task.clone()),
                 parallel_mode_enabled_at_submission: true,
             })),
+            Vec::new(),
         );
 
         assert_eq!(request.workspace_directory, workspace.path_str());
@@ -2784,6 +2848,7 @@ mod tests {
                 handoff_task: Some(task.clone()),
                 parallel_mode_enabled_at_submission: false,
             })),
+            Vec::new(),
         );
 
         assert_eq!(normal_intake_request.slot_lease_handoff, None);
@@ -2795,11 +2860,63 @@ mod tests {
             None,
             "manual prompt".to_string(),
             &PromptOrigin::Manual,
+            Vec::new(),
         );
 
         assert_eq!(manual_request.prompt_origin, CorePromptOrigin::Manual);
         assert_eq!(manual_request.planning_handoff, None);
         assert_eq!(manual_request.slot_lease_handoff, None);
+    }
+
+    #[test]
+    fn build_turn_submission_request_carries_composer_image_attachments() {
+        let workspace = TempWorkspace::new("turn-submit-images");
+        let mut app = make_test_app(&workspace);
+        set_input(&mut app, "check this screenshot");
+        for path in ["/tmp/a.png", "/tmp/b.png"] {
+            app.dispatch_conversation_input(ConversationComposerEvent::ImageAttachmentAdded {
+                path: path.to_string(),
+            });
+        }
+
+        let request = app.build_turn_submission_request(
+            workspace.path_str().to_string(),
+            None,
+            "check this screenshot".to_string(),
+            &PromptOrigin::Manual,
+            app.composer_image_attachment_paths(),
+        );
+
+        assert_eq!(request.image_paths, vec!["/tmp/a.png", "/tmp/b.png"]);
+    }
+
+    #[test]
+    fn image_only_manual_submission_enters_preparation_with_synthetic_transcript() {
+        let workspace = TempWorkspace::new("turn-submit-image-only");
+        let mut app = make_test_app(&workspace);
+        app.dispatch_conversation_input(ConversationComposerEvent::ImageAttachmentAdded {
+            path: "/tmp/shot.png".to_string(),
+        });
+
+        // The composer buffer is empty; the attachment alone must drive submit.
+        app.submit_manual_prompt_from_text(String::new());
+        let pending = app
+            .conversation
+            .pending_manual_prompt_preparation
+            .expect("image-only submission should prepare a turn");
+        assert_eq!(pending.transcript_text, "[image #1: shot.png]");
+    }
+
+    #[test]
+    fn image_only_transcript_rows_label_each_attachment_in_order() {
+        assert_eq!(super::build_image_only_transcript_text(&[]), "");
+        assert_eq!(
+            super::build_image_only_transcript_text(&[
+                "/tmp/first shot.png".to_string(),
+                "/tmp/second.jpeg".to_string(),
+            ]),
+            "[image #1: first shot.png]\n[image #2: second.jpeg]"
+        );
     }
 
     #[test]

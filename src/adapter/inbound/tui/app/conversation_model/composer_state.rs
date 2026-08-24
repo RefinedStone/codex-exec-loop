@@ -12,6 +12,10 @@ use super::super::inline_shell_commands::{InlineShellCommand, InlineShellCommand
 pub(crate) struct ConversationComposerState {
     pub(crate) input_buffer: String,
     input_cursor_byte_index: Option<usize>,
+    // Staged image file paths that travel with the next submission as
+    // `localImage` turn items. Order is attachment order; the renderer shows
+    // one chip per entry.
+    pub(crate) image_attachments: Vec<String>,
     pub(crate) inline_shell_command_palette_state: InlineShellCommandPaletteState,
     pub(crate) startup_submit_armed: bool,
 }
@@ -55,6 +59,7 @@ impl ConversationComposerState {
     pub(crate) fn clear_input_buffer(&mut self) {
         self.input_buffer.clear();
         self.input_cursor_byte_index = None;
+        self.image_attachments.clear();
         self.inline_shell_command_palette_state = InlineShellCommandPaletteState::default();
     }
 

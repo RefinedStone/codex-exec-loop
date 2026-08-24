@@ -1549,6 +1549,7 @@ mod tests {
             &self,
             cwd: &str,
             _prompt: &str,
+            _image_paths: &[String],
             _options: crate::domain::conversation::ConversationTurnOptions,
             event_sender: crate::application::port::conversation_stream::ConversationStreamSender,
         ) -> anyhow::Result<crate::domain::turn_terminal::ConversationTurnTerminalReceipt> {
@@ -1563,6 +1564,7 @@ mod tests {
             &self,
             thread_id: &str,
             _prompt: &str,
+            _image_paths: &[String],
             _options: crate::domain::conversation::ConversationTurnOptions,
             event_sender: crate::application::port::conversation_stream::ConversationStreamSender,
         ) -> anyhow::Result<crate::domain::turn_terminal::ConversationTurnTerminalReceipt> {
@@ -2506,6 +2508,7 @@ mod tests {
             .run_new_thread_stream(
                 "/tmp/root",
                 "prompt",
+                &[],
                 ConversationTurnOptions::default(),
                 new_thread_sender,
             )
@@ -2516,6 +2519,7 @@ mod tests {
             .run_turn_stream(
                 "thread-fixture",
                 "prompt",
+                &[],
                 ConversationTurnOptions::default(),
                 turn_sender,
             )

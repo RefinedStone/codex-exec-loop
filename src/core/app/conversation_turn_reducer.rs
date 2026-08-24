@@ -912,6 +912,7 @@ impl ConversationTurnFeatureReducer {
         let request = TurnSubmissionRequest {
             workspace_directory: "/workspace".to_string(),
             thread_id: None,
+            image_paths: Vec::new(),
             prompt: "test prompt".to_string(),
             prompt_origin: super::CorePromptOrigin::Manual,
             auto_follow_source: None,
@@ -1033,6 +1034,7 @@ mod tests {
         TurnSubmissionRequest {
             workspace_directory: "/workspace".to_string(),
             thread_id: None,
+            image_paths: Vec::new(),
             prompt: "test prompt".to_string(),
             prompt_origin: super::super::CorePromptOrigin::Manual,
             auto_follow_source: None,

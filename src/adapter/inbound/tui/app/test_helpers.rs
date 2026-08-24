@@ -532,6 +532,7 @@ impl InteractiveTurnRuntimePort for TestAppServerPort {
         &self,
         cwd: &str,
         _prompt: &str,
+        _image_paths: &[String],
         _options: crate::domain::conversation::ConversationTurnOptions,
         event_sender: crate::application::port::conversation_stream::ConversationStreamSender,
     ) -> Result<crate::domain::turn_terminal::ConversationTurnTerminalReceipt> {
@@ -546,6 +547,7 @@ impl InteractiveTurnRuntimePort for TestAppServerPort {
         &self,
         thread_id: &str,
         _prompt: &str,
+        _image_paths: &[String],
         _options: crate::domain::conversation::ConversationTurnOptions,
         event_sender: crate::application::port::conversation_stream::ConversationStreamSender,
     ) -> Result<crate::domain::turn_terminal::ConversationTurnTerminalReceipt> {
@@ -729,6 +731,7 @@ mod tests {
             .run_new_thread_stream(
                 "/tmp/root",
                 "prompt",
+                &[],
                 crate::domain::conversation::ConversationTurnOptions::default(),
                 event_sender.clone(),
             )
@@ -737,6 +740,7 @@ mod tests {
             .run_turn_stream(
                 "thread-1",
                 "prompt",
+                &[],
                 crate::domain::conversation::ConversationTurnOptions::default(),
                 event_sender,
             )

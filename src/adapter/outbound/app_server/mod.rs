@@ -786,11 +786,12 @@ impl CodexAppServerAdapter {
         )
     }
 
-    #[tracing::instrument(level = "trace", skip(self, cwd, prompt, event_sender))]
+    #[tracing::instrument(level = "trace", skip(self, cwd, prompt, image_paths, event_sender))]
     fn run_new_thread_stream_request(
         &self,
         cwd: &str,
         prompt: &str,
+        image_paths: &[String],
         options: ConversationTurnOptions,
         event_sender: ConversationStreamSender,
     ) -> Result<ConversationTurnTerminalReceipt> {
@@ -865,7 +866,7 @@ impl CodexAppServerAdapter {
 
             self.start_turn_and_wait_for_stream(
                 connection,
-                vec![TurnInputItem::text(prompt)],
+                turn_input_items(prompt, image_paths),
                 model,
                 effort,
                 &event_sender,
@@ -1695,17 +1696,22 @@ impl InteractiveTurnRuntimePort for CodexAppServerAdapter {
         &self,
         cwd: &str,
         prompt: &str,
+        image_paths: &[String],
         options: ConversationTurnOptions,
         event_sender: ConversationStreamSender,
     ) -> Result<ConversationTurnTerminalReceipt> {
-        self.run_new_thread_stream_request(cwd, prompt, options, event_sender)
+        self.run_new_thread_stream_request(cwd, prompt, image_paths, options, event_sender)
     }
 
-    #[tracing::instrument(level = "trace", skip(self, thread_id, prompt, event_sender))]
+    #[tracing::instrument(
+        level = "trace",
+        skip(self, thread_id, prompt, image_paths, event_sender)
+    )]
     fn run_turn_stream(
         &self,
         thread_id: &str,
         prompt: &str,
+        image_paths: &[String],
         options: ConversationTurnOptions,
         event_sender: ConversationStreamSender,
     ) -> Result<ConversationTurnTerminalReceipt> {
@@ -1783,7 +1789,7 @@ impl InteractiveTurnRuntimePort for CodexAppServerAdapter {
             }
             self.start_turn_and_wait_for_stream(
                 connection,
-                vec![TurnInputItem::text(prompt)],
+                turn_input_items(prompt, image_paths),
                 model,
                 effort,
                 &event_sender,
@@ -2033,6 +2039,17 @@ fn prompt_log_input_records(input: &[TurnInputItem]) -> Vec<AppServerPromptInput
                 "turn input",
                 bounded_prompt_log_string(text, APP_SERVER_PROMPT_LOG_MAX_BODY_CHARS),
             ),
+            TurnInputItem::LocalImage { path } => {
+                let file_name = std::path::Path::new(path)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_else(|| path.clone());
+                AppServerPromptInputRecord::new(
+                    "local_image",
+                    bounded_prompt_log_string(&file_name, APP_SERVER_PROMPT_LOG_MAX_METADATA_CHARS),
+                    bounded_prompt_log_string(path, APP_SERVER_PROMPT_LOG_MAX_BODY_CHARS),
+                )
+            }
             TurnInputItem::Skill { name, path } => AppServerPromptInputRecord::new(
                 "skill",
                 bounded_prompt_log_string(name, APP_SERVER_PROMPT_LOG_MAX_METADATA_CHARS),
@@ -2040,6 +2057,23 @@ fn prompt_log_input_records(input: &[TurnInputItem]) -> Vec<AppServerPromptInput
             ),
         })
         .collect()
+}
+
+/*
+ * Operator turns carry image attachments as `localImage` items before the text
+ * body, mirroring the ordering upstream clients use for non-text input. An
+ * image-only submission omits the empty text item entirely.
+ */
+fn turn_input_items(prompt: &str, image_paths: &[String]) -> Vec<TurnInputItem> {
+    let mut items: Vec<TurnInputItem> = image_paths
+        .iter()
+        .map(|path| TurnInputItem::local_image(path.clone()))
+        .collect();
+    if !items.is_empty() && prompt.trim().is_empty() {
+        return items;
+    }
+    items.push(TurnInputItem::text(prompt));
+    items
 }
 
 fn reasoning_effort_label(effort: ReasoningEffortValue) -> &'static str {
@@ -2151,6 +2185,8 @@ mod tests {
         ApprovalPolicyValue, ApprovalsReviewerValue, ReasoningEffortValue, SandboxModeValue,
         ThreadStartParams, TurnInputItem,
     };
+    #[cfg(test)]
+    use super::turn_input_items;
     use super::{
         AppServerEventSender, AppServerPromptOutputCapture, CodexAppServerAdapter,
         ConversationTurnApplicationDelivery, ConversationTurnTerminalReceipt,
@@ -2473,6 +2509,7 @@ mod tests {
             .run_new_thread_stream(
                 "/repo",
                 "start a new session",
+                &[],
                 ConversationTurnOptions::default(),
                 new_tx,
             )
@@ -2531,6 +2568,7 @@ mod tests {
             .run_turn_stream(
                 "resume-thread",
                 "continue session",
+                &[],
                 ConversationTurnOptions::default(),
                 resume_tx,
             )
@@ -2584,6 +2622,24 @@ mod tests {
         assert_eq!(turn_starts[1]["params"]["effort"], "medium");
     }
 
+    #[test]
+    fn turn_input_items_place_images_before_text_and_skip_empty_prompts() {
+        let with_prompt = turn_input_items("review this", &["/tmp/a.png".to_string()]);
+        assert_eq!(
+            with_prompt,
+            vec![
+                TurnInputItem::local_image("/tmp/a.png"),
+                TurnInputItem::text("review this"),
+            ]
+        );
+
+        let image_only = turn_input_items("", &["/tmp/a.png".to_string()]);
+        assert_eq!(image_only, vec![TurnInputItem::local_image("/tmp/a.png")]);
+
+        let text_only = turn_input_items("plain prompt", &[]);
+        assert_eq!(text_only, vec![TurnInputItem::text("plain prompt")]);
+    }
+
     #[cfg(unix)]
     #[test]
     fn user_thread_streams_pass_turn_option_overrides_to_app_server() {
@@ -2596,7 +2652,13 @@ mod tests {
 
         let (new_tx, new_rx) = conversation_stream_channel();
         adapter
-            .run_new_thread_stream("/repo", "start with overrides", options.clone(), new_tx)
+            .run_new_thread_stream(
+                "/repo",
+                "start with overrides",
+                &[],
+                options.clone(),
+                new_tx,
+            )
             .expect("new thread stream should complete");
         assert!(has_turn_completed(&new_rx.try_iter().collect::<Vec<_>>()));
 
@@ -2605,6 +2667,7 @@ mod tests {
             .run_turn_stream(
                 "resume-thread",
                 "continue with overrides",
+                &[],
                 options,
                 resume_tx,
             )
@@ -2671,6 +2734,7 @@ mod tests {
             .run_new_thread_stream(
                 "/repo",
                 "observe runtime envelope",
+                &[],
                 ConversationTurnOptions::default(),
                 event_sender,
             )
@@ -2766,6 +2830,7 @@ mod tests {
             .run_new_thread_stream(
                 "/repo",
                 "start after stale settings",
+                &[],
                 ConversationTurnOptions::default(),
                 start_sender,
             )
@@ -2798,6 +2863,7 @@ mod tests {
             .run_turn_stream(
                 "resume-thread",
                 "resume after stale settings",
+                &[],
                 ConversationTurnOptions::default(),
                 resume_sender,
             )
@@ -3081,6 +3147,7 @@ mod tests {
             .run_new_thread_stream(
                 "/repo",
                 "start a logged session",
+                &[],
                 ConversationTurnOptions::default(),
                 main_tx,
             )
@@ -3145,6 +3212,7 @@ mod tests {
                 .run_new_thread_stream(
                     "/repo",
                     "record terminal status",
+                    &[],
                     ConversationTurnOptions::default(),
                     event_sender,
                 )
@@ -3178,6 +3246,7 @@ mod tests {
             .run_new_thread_stream(
                 "/repo",
                 "retry then finish",
+                &[],
                 ConversationTurnOptions::default(),
                 event_sender,
             )
@@ -3215,6 +3284,7 @@ mod tests {
             .run_new_thread_stream(
                 "/repo",
                 "do not retain this prompt",
+                &[],
                 ConversationTurnOptions::default(),
                 event_sender,
             )
@@ -3244,6 +3314,7 @@ mod tests {
             .run_new_thread_stream(
                 "/repo",
                 "start a failing stream",
+                &[],
                 ConversationTurnOptions::default(),
                 tx,
             )
@@ -3299,6 +3370,7 @@ mod tests {
             .run_new_thread_stream(
                 "/repo",
                 "prompt log write fails",
+                &[],
                 ConversationTurnOptions::default(),
                 tx,
             )

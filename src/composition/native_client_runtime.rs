@@ -1339,6 +1339,7 @@ mod tests {
             &self,
             _cwd: &str,
             _prompt: &str,
+            _image_paths: &[String],
             _options: ConversationTurnOptions,
             _event_sender: crate::application::port::conversation_stream::ConversationStreamSender,
         ) -> anyhow::Result<ConversationTurnTerminalReceipt> {
@@ -1349,6 +1350,7 @@ mod tests {
             &self,
             _thread_id: &str,
             _prompt: &str,
+            _image_paths: &[String],
             _options: ConversationTurnOptions,
             _event_sender: crate::application::port::conversation_stream::ConversationStreamSender,
         ) -> anyhow::Result<ConversationTurnTerminalReceipt> {

@@ -6,7 +6,9 @@ use super::super::capability_copy::{
 };
 use super::super::planning::build_planning_worker_panel_lines;
 use super::super::planning::status_projection::build_planning_status_surface_projection;
-use super::super::prompt_composer::{build_prompt_buffer_view, build_shell_command_palette_lines};
+use super::super::prompt_composer::{
+    build_image_attachment_chip_lines, build_prompt_buffer_view, build_shell_command_palette_lines,
+};
 use super::super::{
     AkraTheme, ConversationComposerScreenModel, ConversationInputState, ConversationScreenModel,
     ConversationViewModel, InlineShellCommand, InlineShellCommandAvailability,
@@ -585,7 +587,10 @@ fn build_ready_prompt_lines(
     content_width: u16,
 ) -> Vec<Line<'static>> {
     let prompt_buffer = build_prompt_buffer_view(composer);
-    let mut lines = prompt_buffer.lines;
+    // Attachment chips lead the composer so the operator sees exactly what the
+    // next Enter will send before the prompt text itself.
+    let mut lines = build_image_attachment_chip_lines(composer);
+    lines.extend(prompt_buffer.lines);
     if composer.state.input_buffer.is_empty() {
         lines[0].spans.push(Span::styled(
             language.composer_placeholder(),
