@@ -6,6 +6,7 @@ use crate::core::app::{
     ConversationPreferenceThreadTarget, CoreInput, StopRequestAdmission, StopRequestAttempt,
     StopRequestCorrelation, TurnSteerAdmission, TurnSteerCorrelation,
 };
+use crate::domain::clipboard_image::ClipboardImageProbeOutcome;
 // Startup diagnostics gate user actions differently from rendering. The
 // controller keeps the three user-facing states here so prompt submission,
 // auto-follow, and overlays report the same readiness reason.
@@ -813,7 +814,7 @@ impl NativeTuiApp {
         if !self.can_edit_prompt_input() {
             return false;
         }
-        let image_paths = clipboard_image::extract_existing_image_paths(pasted_text);
+        let image_paths = pasted_image_path::extract_existing_image_paths(pasted_text);
         let mut attached_any = false;
         for path in image_paths {
             self.dispatch_conversation_input(ConversationComposerEvent::ImageAttachmentAdded {
@@ -825,32 +826,27 @@ impl NativeTuiApp {
     }
     pub(super) fn request_clipboard_image_probe(&mut self) -> bool {
         /*
-         * The probe runs off the UI thread because osascript/PowerShell can
-         * block for hundreds of milliseconds. One in-flight probe at a time
-         * keeps duplicate Ctrl+V presses from stacking worker threads.
+         * The probe runs on a composition-owned worker thread because osascript
+         * and PowerShell can block for hundreds of milliseconds; this method
+         * only forwards the request to the opaque trigger and lets the result
+         * re-enter through the background message lane.
          */
-        if !self.can_edit_prompt_input() || self.shell.clipboard_image_probe_in_flight {
+        if !self.can_edit_prompt_input() {
             return false;
         }
-        self.shell.clipboard_image_probe_in_flight = true;
         let sender = self.runtime.tx.clone();
-        std::thread::spawn(move || {
-            let result = clipboard_image::read_clipboard_image_from_staging_directory(
-                &clipboard_image::image_attachment_staging_directory(),
-            );
-            let _ = sender.try_send(BackgroundMessage::ClipboardImageProbed(result));
-        });
-        true
+        self.runtime
+            .clipboard_image_probe_trigger
+            .request_probe(Box::new(move |outcome| {
+                let _ = sender.try_send(BackgroundMessage::ClipboardImageProbed(outcome));
+            }))
     }
-    pub(super) fn apply_clipboard_image_probe(
-        &mut self,
-        result: clipboard_image::ClipboardImageProbeResult,
-    ) {
-        self.shell.clipboard_image_probe_in_flight = false;
-        match result {
-            Ok(Some(staged)) => {
+    pub(super) fn apply_clipboard_image_probe(&mut self, outcome: ClipboardImageProbeOutcome) {
+        match outcome {
+            ClipboardImageProbeOutcome::Attached(staged) => {
+                let path = staged.path.display().to_string();
                 self.dispatch_conversation_input(ConversationComposerEvent::ImageAttachmentAdded {
-                    path: staged.path.display().to_string(),
+                    path,
                 });
                 let status_text = self
                     .shell
@@ -860,8 +856,8 @@ impl NativeTuiApp {
                     status_text,
                 });
             }
-            Ok(None) => {}
-            Err(reason) => {
+            ClipboardImageProbeOutcome::NoImage => {}
+            ClipboardImageProbeOutcome::Failed(reason) => {
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                     status_text: reason,
                 });

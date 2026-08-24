@@ -26,6 +26,7 @@ use crate::application::service::planning::PlanningServices;
 use crate::application::service::post_turn_evaluation::PostTurnEvaluationService;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
+use crate::composition::clipboard_image_probe::ClipboardImageProbeTrigger;
 use crate::composition::core_effect_runner::CoreEffectRunner;
 use crate::core::app::{
     AppCommand, AppEvent, AppSnapshot, CoreDispatchOutcome, CoreInput, ParallelModeProjection,
@@ -77,11 +78,13 @@ pub(crate) struct NativeTuiApplicationComposition {
     core_runtime: NativeCoreRuntime,
     parallel_control_plane: ParallelModeControlPlaneComposition,
     turn_control_truth: ConversationRuntimeControlTruth,
+    clipboard_image_probe_trigger: Arc<dyn ClipboardImageProbeTrigger>,
 }
 
 pub(crate) struct BoundNativeTuiApplication {
     client_runtime: NativeClientRuntime,
     turn_control_truth: ConversationRuntimeControlTruth,
+    clipboard_image_probe_trigger: Arc<dyn ClipboardImageProbeTrigger>,
 }
 
 #[derive(Clone)]
@@ -375,6 +378,7 @@ impl NativeTuiApplicationComposition {
         conversation_service: ConversationService,
         parallel_control_plane: ParallelModeControlPlaneComposition,
         thread_turn_options_port: Arc<dyn ConversationThreadTurnOptionsPort>,
+        clipboard_image_probe_trigger: Arc<dyn ClipboardImageProbeTrigger>,
     ) -> Self {
         let turn_control_truth = conversation_service.runtime_control_truth();
         let planning_feature = parallel_control_plane.planning().clone();
@@ -391,6 +395,7 @@ impl NativeTuiApplicationComposition {
             core_runtime,
             parallel_control_plane,
             turn_control_truth,
+            clipboard_image_probe_trigger,
         }
     }
 
@@ -401,13 +406,24 @@ impl NativeTuiApplicationComposition {
                 self.parallel_control_plane,
             ),
             turn_control_truth: self.turn_control_truth,
+            clipboard_image_probe_trigger: self.clipboard_image_probe_trigger,
         }
     }
 }
 
 impl BoundNativeTuiApplication {
-    pub(crate) fn into_parts(self) -> (Box<dyn NativeClientPort>, ConversationRuntimeControlTruth) {
-        (Box::new(self.client_runtime), self.turn_control_truth)
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        Box<dyn NativeClientPort>,
+        ConversationRuntimeControlTruth,
+        Arc<dyn ClipboardImageProbeTrigger>,
+    ) {
+        (
+            Box::new(self.client_runtime),
+            self.turn_control_truth,
+            self.clipboard_image_probe_trigger,
+        )
     }
 }
 

@@ -17,7 +17,10 @@ use crossterm::event::{self, KeyCode, KeyModifiers};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, SyncSender};
+
+use crate::composition::clipboard_image_probe::ClipboardImageProbeTrigger;
 
 type SharedTranscriptCardDigests = std::sync::Arc<[[u8; 32]]>;
 
@@ -55,8 +58,6 @@ mod auto_follow;
 mod auto_follow_controls;
 #[path = "app/auto_follow_overlay_ui.rs"]
 mod auto_follow_overlay_ui;
-#[path = "app/clipboard_image.rs"]
-mod clipboard_image;
 #[path = "app/conversation/mod.rs"]
 mod conversation;
 #[path = "app/conversation_input.rs"]
@@ -99,6 +100,8 @@ mod parallel_presentation_bridge;
 mod parallel_stream_view;
 #[path = "app/parallel_supervisor_events.rs"]
 mod parallel_supervisor_events;
+#[path = "app/pasted_image_path.rs"]
+mod pasted_image_path;
 #[path = "app/planning/mod.rs"]
 mod planning;
 #[path = "app/planning_draft_editor_ui.rs"]
@@ -353,9 +356,6 @@ struct NativeTuiShellState {
     model_selection_overlay_ui_state: ModelSelectionOverlayUiState,
     view_selection_overlay_ui_state: ViewSelectionOverlayUiState,
     show_startup_visual: bool,
-    // Guards duplicate clipboard image probes while a worker thread is still
-    // reading osascript/PowerShell output.
-    clipboard_image_probe_in_flight: bool,
 }
 
 struct NativeTuiConversationState {
@@ -397,6 +397,7 @@ struct NativeTuiPlanningState {
 struct NativeTuiRuntimeState {
     client_runtime: Box<dyn NativeClientPort>,
     github_review_polling_state: GithubReviewPollingState,
+    clipboard_image_probe_trigger: Arc<dyn ClipboardImageProbeTrigger>,
     tx: SyncSender<BackgroundMessage>,
     rx: Receiver<BackgroundMessage>,
 }

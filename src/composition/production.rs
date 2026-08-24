@@ -1,9 +1,12 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::composition::clipboard_image_probe::CompositionClipboardImageProbeTrigger;
+
 use anyhow::Result;
 
 use crate::adapter::outbound::app_server::{AppServerPlanningWorkerAdapter, CodexAppServerAdapter};
+use crate::adapter::outbound::clipboard::PlatformClipboardImageAdapter;
 use crate::adapter::outbound::db::{
     SqlitePlanningAuthorityAdapter, SqliteTelegramGlobalRunnerLeaseAdapter,
 };
@@ -377,12 +380,16 @@ pub(crate) fn build_native_tui_application() -> NativeTuiApplicationComposition 
             &workspace_dir,
         )),
     );
+    let clipboard_image_probe_trigger = CompositionClipboardImageProbeTrigger::new_shared(
+        Arc::new(PlatformClipboardImageAdapter::new()),
+    );
     NativeTuiApplicationComposition::from_services(
         startup_service,
         session_service,
         conversation_service,
         parallel_mode_control_plane,
         ports.conversation_thread_turn_options_port,
+        clipboard_image_probe_trigger,
     )
 }
 

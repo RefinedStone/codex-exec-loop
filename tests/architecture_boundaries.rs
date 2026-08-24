@@ -253,6 +253,7 @@ const TUI_COVERAGE_SURFACES: &[TuiCoverageSurface] = &[
             "src/adapter/inbound/tui/app/conversation",
             "src/adapter/inbound/tui/app/inline_shell_commands",
             "src/adapter/inbound/tui/app/parallel_mode_shell_command.rs",
+            "src/adapter/inbound/tui/app/pasted_image_path.rs",
             "src/adapter/inbound/tui/app/planning_overlay_shell_command.rs",
             "src/adapter/inbound/tui/app/planning_reset_shell_command.rs",
             "src/adapter/inbound/tui/app/planning_shell_command.rs",
@@ -264,6 +265,7 @@ const TUI_COVERAGE_SURFACES: &[TuiCoverageSurface] = &[
             "src/adapter/inbound/tui/app/conversation_intents.rs",
             "src/adapter/inbound/tui/app/fullscreen_rendering_tests.rs",
             "src/adapter/inbound/tui/app/inline_shell_commands/tests.rs",
+            "src/adapter/inbound/tui/app/pasted_image_path.rs",
             "src/adapter/inbound/tui/app/shell_controller.rs",
         ],
     },
@@ -1389,6 +1391,10 @@ fn native_tui_app_owns_exactly_four_typed_private_state_slices() {
             &[
                 ("client_runtime", "Box<dyn NativeClientPort>"),
                 ("github_review_polling_state", "GithubReviewPollingState"),
+                (
+                    "clipboard_image_probe_trigger",
+                    "Arc<dyn ClipboardImageProbeTrigger>",
+                ),
                 ("tx", "SyncSender<BackgroundMessage>"),
                 ("rx", "Receiver<BackgroundMessage>"),
             ],
@@ -10282,6 +10288,8 @@ fn conversation_input_reducer_is_isolated_to_composer_state() {
     let expected_composer_field_names = [
         "input_buffer",
         "input_cursor_byte_index",
+        // Staged image paths for the next submission (`localImage` items).
+        "image_attachments",
         "inline_shell_command_palette_state",
         "startup_submit_armed",
     ]
@@ -13887,14 +13895,37 @@ fn verify_native_client_event_contract(
         .iter()
         .filter(|variant| !attributes_are_test_only(&variant.attrs))
         .collect::<Vec<_>>();
-    let [operator_alert] = production_variants.as_slice() else {
+    /*
+     * The background lane stays presentation-only: OperatorAlert carries shell
+     * notifications and ClipboardImageProbed re-enters clipboard probe results
+     * into the composer view-model (no conversation/core semantics).
+     */
+    let [operator_alert, clipboard_image_probed] = production_variants.as_slice() else {
         return Err(format!(
-            "production BackgroundMessage must remain presentation-only with one OperatorAlert variant; found {:?}",
+            "production BackgroundMessage must remain presentation-only with OperatorAlert and ClipboardImageProbed variants; found {:?}",
             production_variants
                 .iter()
                 .map(|variant| variant.ident.to_string())
                 .collect::<Vec<_>>()
         ));
+    };
+    let syn::Fields::Unnamed(clipboard_fields) = &clipboard_image_probed.fields else {
+        return Err(
+            "production BackgroundMessage::ClipboardImageProbed must carry one typed payload"
+                .to_string(),
+        );
+    };
+    if clipboard_image_probed.ident != "ClipboardImageProbed"
+        || clipboard_fields.unnamed.len() != 1
+        || !is_named_path_type(
+            &clipboard_fields.unnamed[0].ty,
+            "ClipboardImageProbeOutcome",
+        )
+    {
+        return Err(
+            "production BackgroundMessage must remain presentation-only as ClipboardImageProbed(ClipboardImageProbeOutcome)"
+                .to_string(),
+        );
     };
     let syn::Fields::Unnamed(fields) = &operator_alert.fields else {
         return Err(

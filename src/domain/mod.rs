@@ -3,6 +3,7 @@
  * service는 이 모델들을 조합하고, adapter는 domain 타입을 화면이나 외부 API 형식으로 변환한다.
  */
 pub(crate) mod app_server_prompt_log;
+pub(crate) mod clipboard_image;
 pub(crate) mod conversation;
 // conversation_runtime_envelope preserves requested, applied, and later-observed app-server
 // execution state without exposing raw provider configuration or credentials.

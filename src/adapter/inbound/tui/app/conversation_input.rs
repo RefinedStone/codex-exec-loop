@@ -2,6 +2,8 @@ use super::{ConversationComposerState, InlineShellCommand};
 use unicode_segmentation::UnicodeSegmentation;
 
 pub(super) const MAX_PROMPT_INPUT_BYTES: usize = 1024 * 1024;
+// Composer-side attachment cap mirrors competitor TUIs (opencode allows 5).
+pub(super) const MAX_IMAGE_ATTACHMENTS: usize = 5;
 const PROMPT_INPUT_LIMIT_STATUS: &str =
     "prompt input limit reached (1048576 bytes); shorten the prompt before submitting";
 
@@ -168,11 +170,11 @@ pub(super) fn reduce_conversation_input(
                 .iter()
                 .any(|existing| existing == &path);
             if !already_attached {
-                if state.image_attachments.len() >= super::clipboard_image::MAX_IMAGE_ATTACHMENTS {
+                if state.image_attachments.len() >= MAX_IMAGE_ATTACHMENTS {
                     effects.push(ConversationComposerEffect::ReplaceStatus {
                         status_text: format!(
                             "image attachment limit reached ({} images); remove one before adding another",
-                            super::clipboard_image::MAX_IMAGE_ATTACHMENTS
+                            MAX_IMAGE_ATTACHMENTS
                         ),
                     });
                 } else {
@@ -907,7 +909,7 @@ mod tests {
     #[test]
     fn image_attachment_added_enforces_the_attachment_cap() {
         let mut state = ConversationComposerState::default();
-        for index in 0..super::super::clipboard_image::MAX_IMAGE_ATTACHMENTS {
+        for index in 0..super::MAX_IMAGE_ATTACHMENTS {
             let reduced = reduce_conversation_input(
                 state,
                 ConversationComposerEvent::ImageAttachmentAdded {
@@ -926,7 +928,7 @@ mod tests {
 
         assert_eq!(
             reduced.state.image_attachments.len(),
-            super::super::clipboard_image::MAX_IMAGE_ATTACHMENTS
+            super::MAX_IMAGE_ATTACHMENTS
         );
         assert!(matches!(
             reduced.effects.as_slice(),
