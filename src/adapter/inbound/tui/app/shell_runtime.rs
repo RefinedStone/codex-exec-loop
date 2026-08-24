@@ -315,8 +315,9 @@ impl ShellRuntime {
          * Terminals cannot transport image bytes through bracketed paste. An
          * exactly-empty paste therefore means "the clipboard holds an image"
          * (iTerm2, Ghostty, and Windows Terminal all behave this way), so it
-         * becomes a clipboard probe. A non-empty paste is scanned for image
-         * file paths (drag-and-drop) before the text lands in the composer.
+         * becomes a clipboard probe. A non-empty paste has image file paths
+         * consumed into attachment chips (drag-and-drop); only the remaining
+         * text lands in the composer so an attached path is never re-typed.
          */
         if text.is_empty() {
             if self.app.request_clipboard_image_probe() {
@@ -324,9 +325,13 @@ impl ShellRuntime {
             }
             return;
         }
-        let attached_image_paths = self.app.attach_pasted_image_paths(&text);
-        let text_inserted = self.app.insert_input_text(text);
-        if attached_image_paths || text_inserted {
+        let remaining_text = self.app.consume_pasted_image_paths(&text);
+        let text_inserted = if remaining_text.is_empty() {
+            false
+        } else {
+            self.app.insert_input_text(remaining_text)
+        };
+        if text_inserted || self.app.has_image_attachments() {
             self.request_redraw_at(now);
         }
     }

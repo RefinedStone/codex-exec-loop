@@ -808,21 +808,22 @@ impl NativeTuiApp {
         }
         self.dispatch_conversation_input(ConversationComposerEvent::BackspacePressed);
     }
-    pub(super) fn attach_pasted_image_paths(&mut self, pasted_text: &str) -> bool {
-        // Attachments are composer state; without prompt focus (overlays,
-        // rename mode) a paste must never mutate them.
+    pub(super) fn consume_pasted_image_paths(&mut self, pasted_text: &str) -> String {
+        /*
+         * Attachments are composer state; without prompt focus (overlays,
+         * rename mode) a paste must never mutate them, so the paste text is
+         * returned untouched for the normal insertion path.
+         */
         if !self.can_edit_prompt_input() {
-            return false;
+            return pasted_text.to_string();
         }
-        let image_paths = pasted_image_path::extract_existing_image_paths(pasted_text);
-        let mut attached_any = false;
-        for path in image_paths {
+        let scan = pasted_image_path::scan_pasted_text(pasted_text);
+        for path in &scan.attached_paths {
             self.dispatch_conversation_input(ConversationComposerEvent::ImageAttachmentAdded {
-                path,
+                path: path.clone(),
             });
-            attached_any = true;
         }
-        attached_any
+        scan.remaining_text
     }
     pub(super) fn request_clipboard_image_probe(&mut self) -> bool {
         /*

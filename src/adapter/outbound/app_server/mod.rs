@@ -2622,6 +2622,46 @@ mod tests {
         assert_eq!(turn_starts[1]["params"]["effort"], "medium");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn user_thread_stream_sends_image_attachments_as_local_image_items() {
+        /*
+         * End-to-end regression for PR #2126 review (P1): once image paths
+         * reach the port, the logged turn/start input must carry a real
+         * `localImage` item before the text body — not text only.
+         */
+        let fake_codex = FakeCodex::install("user-image-items");
+        let adapter = test_adapter_with_fake(&fake_codex);
+
+        let (tx, rx) = conversation_stream_channel();
+        adapter
+            .run_new_thread_stream(
+                "/repo",
+                "review this screenshot",
+                &["/tmp/akra-paste-1.png".to_string()],
+                ConversationTurnOptions::default(),
+                tx,
+            )
+            .expect("new thread stream should complete");
+        assert!(has_turn_completed(&rx.try_iter().collect::<Vec<_>>()));
+
+        let turn_start = fake_codex
+            .logged_requests()
+            .into_iter()
+            .find(|request| request["method"] == "turn/start")
+            .expect("turn/start should be logged");
+        assert_eq!(turn_start["params"]["input"][0]["type"], "localImage");
+        assert_eq!(
+            turn_start["params"]["input"][0]["path"],
+            "/tmp/akra-paste-1.png"
+        );
+        assert_eq!(turn_start["params"]["input"][1]["type"], "text");
+        assert_eq!(
+            turn_start["params"]["input"][1]["text"],
+            "review this screenshot"
+        );
+    }
+
     #[test]
     fn turn_input_items_place_images_before_text_and_skip_empty_prompts() {
         let with_prompt = turn_input_items("review this", &["/tmp/a.png".to_string()]);
