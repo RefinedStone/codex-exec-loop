@@ -14,6 +14,8 @@ pub mod github_pr_validation_port;
 pub mod github_review_poller_port;
 // review center repository port는 approval/review inbox와 history truth를 읽고 쓰는 저장소 경계다.
 pub mod review_center_repository_port;
+// clipboard image probe port는 OS 클립보드 이미지를 스테이징 파일로 읽는 경계다.
+pub mod clipboard_image_probe_port;
 // interactive turn runtime port는 app-server와 대화 turn을 실행하는 능력을 분리한다.
 pub mod interactive_turn_runtime_port;
 // parallel agent worker port는 병렬 lane에서 실제 agent 작업을 시작하는 경계다.

@@ -1,4 +1,8 @@
+use std::sync::Arc;
 use std::sync::mpsc;
+
+use crate::composition::clipboard_image_probe::ClipboardImageProbeTrigger;
+use crate::domain::clipboard_image::ClipboardImageProbeOutcome;
 
 #[cfg(test)]
 use crate::application::port::conversation_stream::ConversationStreamEvent;
@@ -88,10 +92,10 @@ pub(super) enum BackgroundMessage {
     #[cfg(test)]
     ConversationRuntimeNotice(String),
     OperatorAlert(OperatorAlert),
-    // Clipboard image probes run on a worker thread because osascript and
-    // PowerShell can take hundreds of milliseconds; the result re-enters the
-    // UI loop through this channel instead of blocking key handling.
-    ClipboardImageProbed(super::clipboard_image::ClipboardImageProbeResult),
+    // Clipboard image probes run on a composition-owned worker thread because
+    // osascript and PowerShell can take hundreds of milliseconds; the result
+    // re-enters the UI loop through this channel instead of blocking keys.
+    ClipboardImageProbed(ClipboardImageProbeOutcome),
 }
 
 pub(super) struct NativeTuiAppRuntimeChannels {
@@ -1613,6 +1617,24 @@ impl NativeTuiParallelModeBinding {
     }
 }
 
+/*
+ * Test-only trigger that refuses probes: clipboard behavior is covered by the
+ * outbound adapter and composition worker tests, so app fixtures stay inert.
+ */
+#[cfg(test)]
+#[derive(Debug, Clone)]
+pub(super) struct InertClipboardImageProbeTrigger;
+
+#[cfg(test)]
+impl ClipboardImageProbeTrigger for InertClipboardImageProbeTrigger {
+    fn request_probe(
+        &self,
+        _on_complete: Box<dyn FnOnce(ClipboardImageProbeOutcome) + Send>,
+    ) -> bool {
+        false
+    }
+}
+
 impl NativeTuiApp {
     #[cfg(test)]
     pub(super) fn new(
@@ -1641,6 +1663,7 @@ impl NativeTuiApp {
             runtime_channels,
             turn_control_truth,
             GithubReviewPollingBootstrap::disabled(),
+            Arc::new(InertClipboardImageProbeTrigger),
         )
     }
 
@@ -1650,12 +1673,14 @@ impl NativeTuiApp {
     ) -> Self {
         let runtime_channels = NativeTuiAppRuntimeChannels::new();
         let application = application.bind_client_runtime();
-        let (client_runtime, turn_control_truth) = application.into_parts();
+        let (client_runtime, turn_control_truth, clipboard_image_probe_trigger) =
+            application.into_parts();
         Self::new_with_bound_application(
             client_runtime,
             runtime_channels,
             turn_control_truth,
             github_review_polling,
+            clipboard_image_probe_trigger,
         )
     }
 
@@ -1664,6 +1689,7 @@ impl NativeTuiApp {
         runtime_channels: NativeTuiAppRuntimeChannels,
         turn_control_truth: crate::domain::conversation::ConversationRuntimeControlTruth,
         github_review_polling: GithubReviewPollingBootstrap,
+        clipboard_image_probe_trigger: Arc<dyn ClipboardImageProbeTrigger>,
     ) -> Self {
         let GithubReviewPollingBootstrap {
             state: github_review_polling_state,
@@ -1700,7 +1726,6 @@ impl NativeTuiApp {
                 model_selection_overlay_ui_state: super::ModelSelectionOverlayUiState::default(),
                 view_selection_overlay_ui_state: super::ViewSelectionOverlayUiState::default(),
                 show_startup_visual: startup_visual_enabled_from_environment(),
-                clipboard_image_probe_in_flight: false,
             },
             conversation: super::NativeTuiConversationState {
                 lifecycle: ConversationLifecycleState {
@@ -1736,6 +1761,7 @@ impl NativeTuiApp {
             runtime: super::NativeTuiRuntimeState {
                 client_runtime,
                 github_review_polling_state,
+                clipboard_image_probe_trigger,
                 tx: runtime_channels.tx,
                 rx: runtime_channels.rx,
             },

@@ -5,6 +5,7 @@
  * outbound graph를 직접 조립하지 않는다. 이 top-level 모듈만 실제 outbound adapter를
  * application port/service 계약에 연결한다.
  */
+pub(crate) mod clipboard_image_probe;
 pub(crate) mod core_effect_runner;
 pub(crate) mod core_effect_worker;
 pub(crate) mod core_turn_submission;

@@ -92,6 +92,7 @@ Manual terminal capture stays primitive-sensitive only.
 - `src/adapter/inbound/tui/app/parallel_peek_overlay_ui.rs`
 - `src/adapter/inbound/tui/app/parallel_stream_view.rs`
 - `src/adapter/inbound/tui/app/parallel_supervisor_events.rs`
+- `src/adapter/inbound/tui/app/pasted_image_path.rs`
 - `src/adapter/inbound/tui/app/planning/controller.rs`
 - `src/adapter/inbound/tui/app/planning/presentation.rs`
 - `src/adapter/inbound/tui/app/planning/status_projection.rs`
