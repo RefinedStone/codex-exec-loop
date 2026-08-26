@@ -805,19 +805,26 @@ impl CodexAppServerAdapter {
             let workspace = protected_thread_workspace(cwd)?;
             let requested_cwd = workspace.cwd.clone();
             let thread_request = runtime_configuration_request(
-                None,
+                model,
                 None,
                 Some(&requested_cwd),
                 Some(self.execution_policy.approval_policy),
                 self.execution_policy.approvals_reviewer,
                 Some(self.execution_policy.sandbox_mode),
             );
+            /*
+             * thread/start must carry the caller's model: omitted model makes
+             * app-server resolve the thread default from its global config,
+             * which another codex client can repoint at any time. The turn/start
+             * override below stays because effort has no thread-level param.
+             */
             let thread_response = connection.start_thread(ThreadStartParams {
                 cwd: Some(workspace.cwd),
                 approval_policy: Some(self.execution_policy.approval_policy),
                 approvals_reviewer: self.execution_policy.approvals_reviewer,
                 sandbox: Some(self.execution_policy.sandbox_mode),
                 config: Some(workspace.config),
+                model: model.map(str::to_string),
                 ..ThreadStartParams::default()
             })?;
             let thread_id = thread_response.thread.id.clone();
@@ -1738,7 +1745,7 @@ impl InteractiveTurnRuntimePort for CodexAppServerAdapter {
             let workspace = protected_thread_workspace(&thread.cwd)?;
             let requested_cwd = workspace.cwd.clone();
             let thread_request = runtime_configuration_request(
-                None,
+                model,
                 None,
                 Some(&requested_cwd),
                 Some(self.execution_policy.approval_policy),
@@ -1752,6 +1759,7 @@ impl InteractiveTurnRuntimePort for CodexAppServerAdapter {
                 approvals_reviewer: self.execution_policy.approvals_reviewer,
                 sandbox: Some(self.execution_policy.sandbox_mode),
                 config: Some(workspace.config),
+                model: model.map(str::to_string),
             })?;
             if resume_response.thread.id != thread_id {
                 anyhow::bail!("thread/resume response identity did not match requested thread");
@@ -2521,11 +2529,11 @@ mod tests {
         let new_envelope = prepared_runtime_envelope(&new_events, "started-thread");
         assert_eq!(
             new_envelope.thread_request.model,
-            ConversationRuntimeRequestedValue::Omitted
+            ConversationRuntimeRequestedValue::Value("gpt-5.6-sol".to_string())
         );
         assert_eq!(
             new_envelope.applied.model,
-            ConversationRuntimeObservedValue::Observed("gpt-applied".to_string())
+            ConversationRuntimeObservedValue::Observed("gpt-5.6-sol".to_string())
         );
         assert_eq!(
             new_envelope.applied.reasoning_effort,
@@ -2580,7 +2588,7 @@ mod tests {
         let resume_envelope = prepared_runtime_envelope(&resume_events, "resume-thread");
         assert_eq!(
             resume_envelope.applied.model,
-            ConversationRuntimeObservedValue::Observed("gpt-resumed".to_string())
+            ConversationRuntimeObservedValue::Observed("gpt-5.6-sol".to_string())
         );
         assert_eq!(
             resume_envelope
@@ -2730,7 +2738,7 @@ mod tests {
             .filter(|request| request["method"] == "turn/start")
             .collect::<Vec<_>>();
 
-        assert!(thread_starts[0]["params"]["model"].is_null());
+        assert_eq!(thread_starts[0]["params"]["model"], "gpt-5.4");
         assert_eq!(thread_starts[0]["params"]["approvalPolicy"], "never");
         assert!(thread_starts[0]["params"]["approvalsReviewer"].is_null());
         assert_eq!(thread_starts[0]["params"]["sandbox"], "danger-full-access");
@@ -2739,6 +2747,7 @@ mod tests {
             "untrusted"
         );
         assert_eq!(thread_resumes[0]["params"]["cwd"], "/repo");
+        assert_eq!(thread_resumes[0]["params"]["model"], "gpt-5.4");
         assert_eq!(thread_resumes[0]["params"]["approvalPolicy"], "never");
         assert!(thread_resumes[0]["params"]["approvalsReviewer"].is_null());
         assert_eq!(thread_resumes[0]["params"]["sandbox"], "danger-full-access");
@@ -2760,6 +2769,86 @@ mod tests {
             "dangerFullAccess"
         );
         assert_eq!(turn_starts[1]["params"]["approvalPolicy"], "never");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn thread_level_model_follows_restored_options_and_stays_omitted_for_external_threads() {
+        /*
+         * Regression: thread/start and thread/resume used to omit the model, so
+         * app-server resolved the thread default from its global config — which
+         * another codex client can repoint (e.g. `chatgpt-web`). Restored thread
+         * options must pin the thread-level model, while threads with no Akra
+         * owned row keep the app-server thread's own default.
+         */
+        let saved_fake = FakeCodex::install("thread-model-restored");
+        let saved_adapter =
+            CodexAppServerAdapter::with_configs_and_prompt_log_and_thread_turn_options(
+                "test-client",
+                "test-version",
+                saved_fake.connection_config(),
+                AppServerExecutionPolicy::default(),
+                Arc::new(NoopAppServerPromptLogPort),
+                Arc::new(StubThreadTurnOptionsPort {
+                    loaded: Ok(Some(ConversationTurnOptions {
+                        model: Some("gpt-5.6-luna".to_string()),
+                        reasoning_effort: Some(ConversationReasoningEffort::High),
+                    })),
+                }),
+            );
+        let (saved_tx, saved_rx) = conversation_stream_channel();
+        saved_adapter
+            .run_turn_stream(
+                "resume-thread",
+                "continue with restored model",
+                &[],
+                ConversationTurnOptions::default(),
+                saved_tx,
+            )
+            .expect("restored thread stream should complete");
+        assert!(has_turn_completed(&saved_rx.try_iter().collect::<Vec<_>>()));
+        let saved_resume = saved_fake
+            .logged_requests()
+            .into_iter()
+            .find(|request| request["method"] == "thread/resume")
+            .expect("thread/resume should be logged");
+        assert_eq!(saved_resume["params"]["model"], "gpt-5.6-luna");
+
+        let external_fake = FakeCodex::install("thread-model-external");
+        let external_adapter =
+            CodexAppServerAdapter::with_configs_and_prompt_log_and_thread_turn_options(
+                "test-client",
+                "test-version",
+                external_fake.connection_config(),
+                AppServerExecutionPolicy::default(),
+                Arc::new(NoopAppServerPromptLogPort),
+                Arc::new(StubThreadTurnOptionsPort { loaded: Ok(None) }),
+            );
+        let (external_tx, external_rx) = conversation_stream_channel();
+        external_adapter
+            .run_turn_stream(
+                "resume-thread",
+                "continue an external thread",
+                &[],
+                ConversationTurnOptions::default(),
+                external_tx,
+            )
+            .expect("external thread stream should complete");
+        assert!(has_turn_completed(
+            &external_rx.try_iter().collect::<Vec<_>>()
+        ));
+        let external_resume = external_fake
+            .logged_requests()
+            .into_iter()
+            .find(|request| request["method"] == "thread/resume")
+            .expect("thread/resume should be logged");
+        assert!(external_resume["params"]["model"].is_null());
+        let external_turn = external_fake
+            .logged_requests()
+            .into_iter()
+            .find(|request| request["method"] == "turn/start")
+            .expect("turn/start should be logged");
+        assert!(external_turn["params"]["model"].is_null());
     }
 
     #[cfg(unix)]
@@ -2880,7 +2969,7 @@ mod tests {
             prepared_runtime_envelope(&start_events, "started-thread")
                 .applied
                 .model,
-            ConversationRuntimeObservedValue::Observed("gpt-applied".to_string())
+            ConversationRuntimeObservedValue::Observed("gpt-5.6-sol".to_string())
         );
         assert!(!start_events.iter().any(|event| matches!(
             event,
@@ -2913,7 +3002,7 @@ mod tests {
             prepared_runtime_envelope(&resume_events, "resume-thread")
                 .applied
                 .model,
-            ConversationRuntimeObservedValue::Observed("gpt-resumed".to_string())
+            ConversationRuntimeObservedValue::Observed("gpt-5.6-sol".to_string())
         );
         assert!(!resume_events.iter().any(|event| matches!(
             event,

@@ -527,6 +527,14 @@ pub(super) struct ThreadResumeParams {
     pub(super) sandbox: Option<SandboxModeValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) config: Option<BTreeMap<String, Value>>,
+    /*
+     * Omitted model keeps the thread's own persisted default (external threads
+     * must not inherit the client's global choice); a present model pins the
+     * restored thread selection so app-server does not fall back to its global
+     * config default.
+     */
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) model: Option<String>,
 }
 
 // TurnStartParams starts a turn inside a prepared thread; input ordering matters for skill items before text prompts.

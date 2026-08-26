@@ -4638,6 +4638,7 @@ mod tests {
             approvals_reviewer: None,
             sandbox: None,
             config: None,
+            model: None,
         }));
         assert_not_initialized(harness.connection.archive_thread("thread-1"));
         assert_not_initialized(harness.connection.start_turn(TurnStartParams {
@@ -4771,6 +4772,7 @@ mod tests {
                 approvals_reviewer: None,
                 sandbox: None,
                 config: None,
+                model: None,
             })
             .expect("thread/resume should deserialize");
         harness
