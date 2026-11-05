@@ -241,6 +241,20 @@ fn parse_reset_arguments(arguments: &[&str]) -> TelegramParsedMessage {
     TelegramParsedMessage::Command(TelegramInboundCommand::Planning(command))
 }
 
+pub(super) fn command_targets_other_bot(text: Option<&str>, bot_username: Option<&String>) -> bool {
+    /*
+     * 단체방에서 `/reset_all@OtherBot`은 다른 봇에게 보낸 명령이다. 접미사가 있으면
+     * getMe username과 대소문자 무시 비교하고, username을 모르면 fail-closed로 무시한다.
+     */
+    let Some(raw_command) = text.and_then(|text| text.split_whitespace().next()) else {
+        return false;
+    };
+    let Some((_, suffix)) = raw_command.split_once('@') else {
+        return false;
+    };
+    !bot_username.is_some_and(|username| username.eq_ignore_ascii_case(suffix))
+}
+
 fn normalize_command(raw_command: &str) -> String {
     /*
      * Telegram 단체방에서는 `/status@BotName`처럼 봇 이름이 붙은 command가 들어온다.

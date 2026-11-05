@@ -647,6 +647,7 @@ impl TelegramBotPort for FakeTelegramBotPort {
                 .lock()
                 .expect("bot identity mutex should lock")
                 .unwrap_or(123_456),
+            username: Some("AkraBot".to_string()),
         })
     }
 
@@ -1051,6 +1052,48 @@ fn runner_executes_planning_command_for_allowed_chat() {
     let reply = reply.expect("reply should exist");
     assert!(reply.contains("상태 요약"));
     assert!(reply.contains("Ship Telegram control"));
+}
+
+#[test]
+fn runner_ignores_commands_addressed_to_another_bot() {
+    /*
+     * In a shared group `/reset_all@OtherBot` targets a different bot. Only the
+     * getMe username (case-insensitive) or no suffix may reach planning control.
+     */
+    let (_gateway, runner) = build_runner(&[42]);
+    let message = |text: &str| TelegramInboundMessage {
+        message_id: 1,
+        chat_id: 42,
+        sender_user_id: Some(42),
+        text: Some(text.to_string()),
+        sender_display_name: Some("operator".to_string()),
+    };
+
+    // Unknown own username fails closed for any suffixed command.
+    assert_eq!(
+        runner
+            .handle_message(&message("/status@AkraBot"))
+            .expect("handler should succeed"),
+        None
+    );
+
+    runner
+        .bot_username
+        .set("AkraBot".to_string())
+        .expect("username should be unset");
+    assert_eq!(
+        runner
+            .handle_message(&message("/reset_all@OtherBot"))
+            .expect("handler should succeed"),
+        None
+    );
+    for own in ["/status@akrabot", "/status@AkraBot", "/status"] {
+        let reply = runner
+            .handle_message(&message(own))
+            .expect("handler should succeed")
+            .expect("own command should reply");
+        assert!(reply.contains("상태 요약"), "{own}");
+    }
 }
 
 #[test]
@@ -2279,6 +2322,7 @@ fn get_me_identity_must_match_before_the_runner_can_bind() {
         .expect_err("mismatched getMe identity must fail closed");
     assert!(error.to_string().contains("did not match"));
     assert_eq!(runner.lease_generation.load(Ordering::Acquire), 0);
+    assert_eq!(runner.bot_username.get(), None);
 }
 
 #[test]

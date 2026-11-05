@@ -50,7 +50,9 @@ mod message;
 
 use self::config::parse_args;
 pub(crate) use self::copy::{TELEGRAM_BOT_ALIAS_USAGE, TELEGRAM_BOT_COMMAND_USAGE};
-use self::message::{TelegramInboundCommand, TelegramParsedMessage, parse_message};
+use self::message::{
+    TelegramInboundCommand, TelegramParsedMessage, command_targets_other_bot, parse_message,
+};
 
 pub fn run_from_env() -> Result<()> {
     run_with_args(std::env::args().skip(1))
@@ -198,6 +200,8 @@ struct TelegramBotRunner {
     lease_generation: AtomicU64,
     lease_ttl_seconds: u64,
     binding_policy: TelegramWorkspaceBindingPolicy,
+    // Set by getMe before polling; `/cmd@OtherBot` commands are ignored against this name.
+    bot_username: std::sync::OnceLock<String>,
 }
 
 struct TelegramBotRuntimeConfig {
@@ -238,6 +242,7 @@ impl TelegramBotRunner {
             lease_generation: AtomicU64::new(0),
             lease_ttl_seconds: telegram_runner_lease_ttl_seconds(config.poll_timeout_seconds),
             binding_policy: config.binding_policy,
+            bot_username: std::sync::OnceLock::new(),
         }
     }
 
@@ -318,6 +323,9 @@ impl TelegramBotRunner {
             anyhow::bail!(
                 "Telegram getMe bot id did not match the configured token prefix; refusing to mutate the workspace binding"
             );
+        }
+        if let Some(username) = actual.username {
+            let _ = self.bot_username.set(username);
         }
         Ok(())
     }
@@ -525,6 +533,9 @@ impl TelegramBotRunner {
         Parsing is pure and Telegram-specific. Authorization intentionally happens after parsing so
         `/help` and syntax errors remain reachable even before an operator has configured allowlist.
         */
+        if command_targets_other_bot(message.text.as_deref(), self.bot_username.get()) {
+            return Ok(None);
+        }
         let parsed = parse_message(message.text.as_deref());
         match parsed {
             TelegramParsedMessage::Ignore => Ok(None),
