@@ -32,6 +32,7 @@
 
 다음 문서는 현재 구현 계약이 아닙니다.
 
+- [Akra Desktop 계획: Electron 앱 + 항상 실행되는 얇은 app-server Gateway](../plan/17-akra-desktop/README.md)
 - [Codex for OSS 지원서 초안](../plan/14-codex-for-oss-application.md)
 - [경쟁 앱 최신 compact 원문](../competitive/README.md) · [한국어 요약](competitive/README.md)
 
