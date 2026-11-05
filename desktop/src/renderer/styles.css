@@ -193,6 +193,13 @@ body {
   padding: 40px 20px;
 }
 
+/* 스레드가 없거나 열지 못한 상태에서도 입력창과 터미널이 화면 아래에 붙게 한다. */
+.main > p.empty,
+.main > p.error {
+  flex: 1;
+  margin: 0;
+}
+
 .muted,
 .retry {
   color: var(--muted);
