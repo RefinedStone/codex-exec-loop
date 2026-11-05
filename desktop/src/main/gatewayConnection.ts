@@ -11,6 +11,8 @@ const RECONNECT_INITIAL_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
 /** 데몬 시작을 너무 자주 시도하지 않도록 한 번 시도한 뒤 이 시간 동안은 다시 시도하지 않는다. */
 const DAEMON_START_COOLDOWN_MS = 10_000;
+/** Gateway 의 한도와 같다. 긴 스레드의 `thread/resume` 응답은 ws 기본값(100 MiB)을 넘을 수 있다. */
+const MAX_MESSAGE_BYTES = 256 * 1024 * 1024;
 
 export interface GatewayConnectionOptions {
   endpoint: string;
@@ -68,6 +70,7 @@ export class GatewayConnection {
     const socket = new WebSocket("ws://localhost/", {
       createConnection: () => connect(endpoint),
       perMessageDeflate: false,
+      maxPayload: MAX_MESSAGE_BYTES,
     });
     this.socket = socket;
     let opened = false;
