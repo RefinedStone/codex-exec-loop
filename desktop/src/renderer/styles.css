@@ -237,6 +237,8 @@ body {
 .approvals {
   display: grid;
   gap: 8px;
+  max-height: 55vh;
+  overflow-y: auto;
   padding: 8px 20px;
   border-top: 1px solid var(--line);
 }
@@ -368,4 +370,107 @@ button {
   align-items: center;
   justify-content: center;
   margin-bottom: 12px;
+}
+
+.diff-file-list {
+  display: grid;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.diff-file {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  white-space: normal;
+}
+
+.diff-file > summary,
+.turn-changes > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.diff-kind {
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--muted);
+}
+
+.diff-kind-add {
+  color: var(--ok);
+}
+
+.diff-kind-delete {
+  color: var(--bad);
+}
+
+.diff-counts {
+  margin-left: auto;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+
+.diff-count-add {
+  color: var(--ok);
+}
+
+.diff-count-del {
+  color: var(--bad);
+}
+
+.diff-lines {
+  max-height: 480px;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.diff-line {
+  min-width: max-content;
+  padding: 0 8px;
+  white-space: pre;
+}
+
+.diff-marker {
+  display: inline-block;
+  width: 1.5ch;
+  color: var(--muted);
+  user-select: none;
+}
+
+.diff-add {
+  background: rgba(47, 158, 68, 0.15);
+}
+
+.diff-del {
+  background: rgba(224, 49, 49, 0.15);
+}
+
+.diff-hunk {
+  background: rgba(76, 110, 245, 0.12);
+  color: var(--muted);
+}
+
+.diff-meta {
+  color: var(--muted);
+}
+
+.diff-more {
+  margin: 4px 8px;
+}
+
+.turn-changes {
+  border-top: 1px dashed var(--line);
+  padding-top: 4px;
+}
+
+.approval-changes .diff-lines {
+  max-height: 320px;
 }

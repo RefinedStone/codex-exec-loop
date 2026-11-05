@@ -2,6 +2,8 @@
 import { memo } from "react";
 
 import type { ThreadItem } from "../../shared/protocol/generated/v2/ThreadItem";
+import { diffFileFromChange } from "./diff";
+import { DiffFileList } from "./DiffView";
 import { Markdown } from "./Markdown";
 
 function userText(item: Extract<ThreadItem, { type: "userMessage" }>): string {
@@ -61,13 +63,7 @@ export const ItemView = memo(function ItemView({ item }: { item: ThreadItem }) {
             <span className="tool-label">파일 변경</span>
             <span className={`tool-status status-${item.status}`}>{item.status}</span>
           </div>
-          <ul>
-            {item.changes.map((change) => (
-              <li key={change.path}>
-                <code>{change.path}</code> <span className="muted">{JSON.stringify(change.kind)}</span>
-              </li>
-            ))}
-          </ul>
+          <DiffFileList files={item.changes.map(diffFileFromChange)} />
         </div>
       );
     case "mcpToolCall":

@@ -78,7 +78,7 @@ const transcript = (status: "inProgress" | "completed"): Transcript => ({
   title: "t",
   cwd: "/work/example-app",
   status: null,
-  turns: [{ id: "turn-1", status, errorMessage: null, items: [] }],
+  turns: [{ id: "turn-1", status, errorMessage: null, items: [], diff: null }],
   olderTurnsCursor: null,
 });
 
