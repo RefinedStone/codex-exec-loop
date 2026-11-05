@@ -1,5 +1,7 @@
 // 열린 스레드의 승인 요청이다 (P3 §6.4). 다른 창에서 답하면 `serverRequest/resolved` 로 사라진다.
 // 파일 변경 승인은 요청에 변경 내용이 없으므로, 같은 itemId 의 `fileChange` 아이템에서 diff 를 찾아 보여 준다 (R1).
+// 진행 중인 `fileChange` 아이템은 실시간 `item/started` 로만 온다. `thread/turns/list`, `thread/read` 에는 없다
+// (codex 0.159, 2026-11-06 실측). 그래서 요청이 온 뒤에 스레드를 연 창은 변경 내용을 받을 수 없다.
 import { useMemo } from "react";
 
 import { useDesktopStore } from "../session/desktopStore";
@@ -29,7 +31,11 @@ function ApprovalChanges({ turnId, itemId }: { turnId: string; itemId: string })
   const item = useDesktopStore((state) => findFileChange(state.transcript, turnId, itemId));
   const files = useMemo(() => item?.changes.map(diffFileFromChange) ?? [], [item]);
   if (files.length === 0) {
-    return <div className="muted">변경 내용을 아직 받지 못했습니다.</div>;
+    return (
+      <div className="muted" data-testid="approval-changes-missing">
+        이 창은 요청이 온 뒤에 스레드를 열어서 변경 내용을 받지 못했습니다. 요청을 처음 받은 창에서 확인하세요.
+      </div>
+    );
   }
   return (
     <div className="approval-changes" data-testid="approval-changes">
