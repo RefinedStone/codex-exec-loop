@@ -172,7 +172,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: assets/admin/game/package-lock.json
+          cache-dependency-path: |
+            assets/admin/game/package-lock.json
+            desktop/package-lock.json
 
       - name: Run Node and admin checks
         run: bash scripts/check_node_surfaces.sh

@@ -55,6 +55,22 @@ if [[ "${bundle_hash_before}" != "${bundle_hash_after}" ]]; then
   exit 1
 fi
 
+printf '\n==> desktop dependencies\n'
+# Type checks, unit tests, and bundling do not need the Electron runtime binary.
+ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm --prefix desktop ci
+
+printf '\n==> desktop dependency audit\n'
+npm --prefix desktop audit --audit-level=high
+
+printf '\n==> desktop typecheck\n'
+npm --prefix desktop run check
+
+printf '\n==> desktop tests\n'
+npm --prefix desktop test
+
+printf '\n==> desktop build\n'
+npm --prefix desktop run build
+
 printf '\n==> admin offline asset policy\n'
 if rg -n 'https?://|//(cdnjs|unpkg|esm\.sh|fastly\.jsdelivr)' \
   templates/admin \
