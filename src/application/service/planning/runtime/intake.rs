@@ -34,9 +34,7 @@ use crate::domain::planning::{
 mod draft;
 
 use self::draft::normalize_prompt;
-pub use self::draft::{
-    LocalPromptTaskDraftGenerator, PlanningTaskDraftGenerator, PlanningTaskIntakeGenerationRequest,
-};
+pub use self::draft::{LocalPromptTaskDraftGenerator, PlanningTaskIntakeGenerationRequest};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 // runtime/admin intake surface에서 들어오는 inbound request다.
@@ -210,7 +208,7 @@ pub struct PlanningTaskIntakeService {
     planning_validation_service: PlanningValidationService,
     authority_seed_service: PlanningAuthoritySeedService,
     mutation_service: PlanningTaskMutationService,
-    draft_generator: Arc<dyn PlanningTaskDraftGenerator>,
+    draft_generator: LocalPromptTaskDraftGenerator,
 }
 impl PlanningTaskIntakeService {
     // production constructor는 local deterministic draft generator를 사용한다.
@@ -219,23 +217,6 @@ impl PlanningTaskIntakeService {
         planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
         planning_validation_service: PlanningValidationService,
         priority_queue_service: PriorityQueueService,
-    ) -> Self {
-        Self::with_generator(
-            planning_workspace_port,
-            planning_task_repository_port,
-            planning_validation_service,
-            priority_queue_service,
-            Arc::new(LocalPromptTaskDraftGenerator::new()),
-        )
-    }
-
-    // test는 generator만 주입하고 seeding/mutation collaborator는 같은 흐름으로 유지할 수 있다.
-    pub fn with_generator(
-        planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
-        planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
-        planning_validation_service: PlanningValidationService,
-        priority_queue_service: PriorityQueueService,
-        draft_generator: Arc<dyn PlanningTaskDraftGenerator>,
     ) -> Self {
         let mutation_service = PlanningTaskMutationService::new(
             planning_task_repository_port.clone(),
@@ -252,7 +233,7 @@ impl PlanningTaskIntakeService {
             planning_task_repository_port,
             planning_validation_service,
             mutation_service,
-            draft_generator,
+            draft_generator: LocalPromptTaskDraftGenerator::new(),
         }
     }
 
@@ -545,10 +526,9 @@ pub(super) mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        LocalPromptTaskDraftGenerator, PlanningTaskDraftGenerator,
-        PlanningTaskIntakeGenerationRequest, PlanningTaskIntakeRequest, PlanningTaskIntakeService,
-        PlanningTaskIntakeValidationError, PlanningTaskIntakeValidationService,
-        required_workspace_body, task_intake_repair_guidance,
+        LocalPromptTaskDraftGenerator, PlanningTaskIntakeGenerationRequest,
+        PlanningTaskIntakeRequest, PlanningTaskIntakeService, PlanningTaskIntakeValidationError,
+        PlanningTaskIntakeValidationService, required_workspace_body, task_intake_repair_guidance,
     };
     use crate::adapter::outbound::filesystem::planning_workspace::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort;

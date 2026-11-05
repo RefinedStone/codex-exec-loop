@@ -107,9 +107,9 @@ pub use self::runtime::facade::{
 };
 // intake 타입은 사용자 prompt를 task draft/proposal/commit 결과로 바꾸는 task intake 흐름의 공개 입력과 출력이다.
 pub use self::runtime::intake::{
-    LocalPromptTaskDraftGenerator, PlanningTaskDraftGenerator, PlanningTaskIntakeCommitResult,
-    PlanningTaskIntakeDraft, PlanningTaskIntakeProposal, PlanningTaskIntakeRequest,
-    PlanningTaskIntakeValidationError, PlanningTaskIntakeValidationService,
+    LocalPromptTaskDraftGenerator, PlanningTaskIntakeCommitResult, PlanningTaskIntakeDraft,
+    PlanningTaskIntakeProposal, PlanningTaskIntakeRequest, PlanningTaskIntakeValidationError,
+    PlanningTaskIntakeValidationService,
 };
 pub use self::runtime::manual_intake::{
     ManualPromptIntakeOutcome, ManualPromptIntakeRequest, ManualPromptMainSessionHandoff,

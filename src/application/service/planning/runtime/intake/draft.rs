@@ -11,18 +11,6 @@ use chrono::{DateTime, SecondsFormat, Utc};
 const DEFAULT_RUNTIME_TASK_PRIORITY: i32 = 80;
 const TASK_TITLE_LIMIT: usize = 72;
 
-// 초안 생성기는 런타임 intake가 mutation preview 계층에 들어가기 직전의 마지막
-// 결정적 변환 지점이다. 여기서는 사용자 프롬프트와 방향 카탈로그만 보고 태스크
-// 후보를 만들고, 카탈로그 revision 검증이나 ID 충돌 판정은 preview 경계에 남긴다.
-// 트레이트로 분리해 두면 서비스 테스트는 충돌/검증 시나리오에 맞춘 초안을 주입하고,
-// 운영 경로는 동일한 로컬 prompt-to-task 투영을 계속 사용할 수 있다.
-pub trait PlanningTaskDraftGenerator: Send + Sync {
-    fn generate(
-        &self,
-        generation: &PlanningTaskIntakeGenerationRequest<'_>,
-    ) -> Result<PlanningTaskIntakeDraft>;
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct PlanningTaskIntakeGenerationRequest<'a> {
     pub intake_request: &'a PlanningTaskIntakeRequest,
@@ -33,6 +21,9 @@ pub struct PlanningTaskIntakeGenerationRequest<'a> {
     pub collision_suffix: Option<u32>,
 }
 
+// 초안 생성기는 런타임 intake가 mutation preview 계층에 들어가기 직전의 마지막
+// 결정적 변환 지점이다. 여기서는 사용자 프롬프트와 방향 카탈로그만 보고 태스크
+// 후보를 만들고, 카탈로그 revision 검증이나 ID 충돌 판정은 preview 경계에 남긴다.
 #[derive(Debug, Clone, Default)]
 pub struct LocalPromptTaskDraftGenerator;
 
@@ -40,10 +31,8 @@ impl LocalPromptTaskDraftGenerator {
     pub fn new() -> Self {
         Self
     }
-}
 
-impl PlanningTaskDraftGenerator for LocalPromptTaskDraftGenerator {
-    fn generate(
+    pub fn generate(
         &self,
         generation: &PlanningTaskIntakeGenerationRequest<'_>,
     ) -> Result<PlanningTaskIntakeDraft> {
@@ -182,10 +171,7 @@ fn build_task_id(
 mod tests {
     use chrono::{TimeZone, Utc};
 
-    use super::{
-        LocalPromptTaskDraftGenerator, PlanningTaskDraftGenerator,
-        PlanningTaskIntakeGenerationRequest,
-    };
+    use super::{LocalPromptTaskDraftGenerator, PlanningTaskIntakeGenerationRequest};
     use crate::application::service::planning::runtime::intake::tests::{directions, request};
     use crate::domain::planning::{TaskActor, TaskStatus};
 
