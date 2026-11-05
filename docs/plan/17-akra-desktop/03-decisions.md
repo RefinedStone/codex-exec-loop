@@ -33,6 +33,7 @@
 | D-13 | Codex 사용량 최소화 | 승인 | 2026-11-05 |
 | D-14 | RefinedStone 신원, 회사 계정과 분리 | 승인 | 2026-11-05 |
 | D-15 | macOS 와 Windows 를 함께 지원 | 승인 | 2026-11-05 |
+| D-16 | 사이드바는 작업 폴더(스레드 cwd) 묶음 | 승인 | 2026-11-05 |
 | P-01 | Gateway 는 새 바이너리 `akra-gateway` | 승인 | 2026-11-05 |
 | P-02 | upstream 은 Gateway 전용 자식 프로세스 | 승인 | 2026-11-05 |
 | P-03 | 클라이언트 접속 1개 = upstream 접속 1개 | 승인 | 2026-11-05 |
@@ -197,6 +198,15 @@
     동시에 `initialize` 와 `thread/list` 에 성공했다.
 - 영향: P-04 를 OS 별로 나눈다. upstream 접속 방식은 P-09 이다. 권한, 종료 신호, 데몬 시작 방식은
   OS 별로 처리한다 ([P1](phases/P1-gateway-daemon.md), [R8](roadmap/R8-packaging-and-operations.md)).
+
+### D-16 사이드바는 작업 폴더(스레드 cwd) 묶음
+
+- 결정: P3 사이드바는 Codex Project 대신 `thread/list` 의 스레드를 cwd(작업 폴더)로 묶어 보여 준다.
+  P-07(안정 API)을 유지한다 (Q-12).
+- 이유: codex 0.159 에서 `project/*` 요청은 실험 API(`experimentalApi: true`)에만 있다. 실험 API 는 변경이
+  잦아 앱이 더 자주 깨진다.
+- 영향: D-10 의 "작업공간은 Codex Project" 는 `project/*` 가 안정 API 로 오면 적용한다. 그때까지 새 스레드는
+  작업 폴더(cwd)만 고른다. 스레드의 `projectId` 필드는 안정 API 에도 있으므로 나중에 묶음 기준만 바꾼다.
 
 ## 제안
 

@@ -80,8 +80,8 @@ Akra Desktop 의 규칙:
 
 - 승인 대화상자는 요청을 받은 모든 창에 표시한다.
 - `serverRequest/resolved` 를 받으면 그 대화상자를 닫는다.
-- 두 창이 거의 동시에 답할 때의 처리는 실측으로 확인한다 (Q-03). 확인 전에는 먼저 도착한 답이
-  쓰인다고 가정하고, 두 번째 답의 오류 응답은 무시한다.
+- 두 창이 거의 동시에 답하면 먼저 도착한 답이 쓰이고 두 번째 답은 오류 없이 무시된다 (Q-03 실측). 창은
+  `serverRequest/resolved` 만 보고 대화상자를 닫는다.
 
 ## 6. 주요 흐름
 
@@ -93,7 +93,7 @@ Akra Desktop 의 규칙:
 4. renderer 가 `initialize` 를 보내고 `initialized` 알림을 보낸다.
 5. renderer 가 `akra/gateway/info` 로 upstream codex 버전을 확인한다. 생성 타입의 버전과 다르면
    경고를 표시한다.
-6. renderer 가 `project/list` 와 `thread/list` 로 사이드바를 그린다.
+6. renderer 가 `thread/list` 의 스레드를 작업 폴더(cwd)로 묶어 사이드바를 그린다 (D-16).
 
 ### 6.2 대화
 
@@ -107,15 +107,15 @@ Akra Desktop 의 규칙:
 
 ### 6.3 새 스레드
 
-1. 사용자가 Project 를 고른다. Project 의 root 가 여러 개이면 cwd 로 쓸 root 를 고른다.
-2. renderer 가 `thread/start {projectId, cwd}` 를 보낸다. 이 접속은 새 스레드를 구독한다.
+1. 사용자가 작업 폴더(cwd)를 고른다 (D-16).
+2. renderer 가 `thread/start {cwd}` 를 보낸다. 이 접속은 새 스레드를 구독한다. 다른 창은 첫 턴이 시작된 뒤에만
+   `thread/resume` 으로 구독할 수 있다 (05 §3 관찰).
 
 ### 6.4 앱 종료와 재시작
 
 1. 앱을 닫으면 main 이 Gateway 접속을 닫는다. Gateway 는 그 Session 의 upstream 접속을 닫는다.
-2. 진행 중인 턴은 app-server 에서 계속되어야 한다. 구독자가 없는 스레드의 턴이 계속되는지는 아직
-   확인하지 않았다 (Q-09). 계속되지 않으면 Gateway 가 자체 접속으로 진행 중인 스레드를 구독해서
-   유지한다.
+2. 진행 중인 턴은 구독자가 없어도 app-server 에서 끝까지 진행된다 (Q-09 실측). Gateway 의 자체 구독은
+   필요 없다.
 3. 앱을 다시 열면 `thread/resume` 으로 기록과 현재 상태를 받는다. 대기 중인 승인 요청은 replay 로
    다시 온다.
 

@@ -1,6 +1,6 @@
 # P1. Gateway 데몬
 
-상태: **진행 중** (P-01~P-04, P-09 승인) · 기준일: 2026-11-05 · 규모: Rust 수백~1,000줄과 테스트, 약 1.5주 (Windows 포함)
+상태: **구현 완료** (macOS 실기 확인만 남음) · 기준일: 2026-11-05 · 규모: Rust 수백~1,000줄과 테스트, 약 1.5주 (Windows 포함)
 
 ## 1. 목표
 
@@ -220,4 +220,6 @@ Akra 의 아키텍처 테스트(`tests/architecture_boundaries.rs`)를 통과해
   upstream, `akra/*` 로컬 응답, close `1012`/`1013`), `tests/binary_entrypoints.rs` 의 도움말·오류 계약.
 - 녹화 옵션(§4.6): `AKRA_GATEWAY_RECORD=1` 이면 세션마다 `$AKRA_HOME/recordings/gateway-<시각>-<번호>.jsonl`
   에 텍스트 메시지를 `client`/`gateway` 방향과 함께 남긴다. Windows 실기에서 세션 2개가 파일 2개로 기록됐다.
-- 남은 일: macOS 실기 확인(완료 기준 9), Q-03·Q-09 실측(턴 필요, 사용자 허락 필요).
+- 실측(§6, 완료 기준 8): 2026-11-05 사용자 허락으로 턴 3회를 써서 Q-03, Q-09 를 확인했다. 결과는
+  [05](../05-risks-and-open-questions.md) §3 에 있다.
+- 남은 일: macOS 실기 확인(완료 기준 9).
