@@ -32,14 +32,16 @@
 | D-12 | MVP 는 대화 부분만 | 승인 | 2026-11-05 |
 | D-13 | Codex 사용량 최소화 | 승인 | 2026-11-05 |
 | D-14 | RefinedStone 신원, 회사 계정과 분리 | 승인 | 2026-11-05 |
+| D-15 | macOS 와 Windows 를 함께 지원 | 승인 | 2026-11-05 |
 | P-01 | Gateway 는 새 바이너리 `akra-gateway` | 제안 | 2026-11-05 |
 | P-02 | upstream 은 Gateway 전용 자식 프로세스 | 제안 | 2026-11-05 |
 | P-03 | 클라이언트 접속 1개 = upstream 접속 1개 | 제안 | 2026-11-05 |
-| P-04 | unix 소켓만 사용, TCP 미사용 | 제안 | 2026-11-05 |
+| P-04 | 로컬 IPC 만 사용 (macOS unix 소켓, Windows named pipe), TCP 미사용 | 제안 | 2026-11-05 |
 | P-05 | 데스크톱 기술 조합 | 제안 | 2026-11-05 |
 | P-06 | TS 타입은 generate-ts 산출물을 커밋 | 제안 | 2026-11-05 |
 | P-07 | initialize 는 `experimentalApi: false` | 제안 | 2026-11-05 |
 | P-08 | 기존 TUI·하네스는 자체 app-server 유지 | 제안 | 2026-11-05 |
+| P-09 | upstream 접속은 `codex app-server proxy` | 제안 | 2026-11-05 |
 
 ## 승인된 결정
 
@@ -180,6 +182,22 @@
 - 영향: 업무 패널([R4](roadmap/R4-work-panels.md))이 회사 계정을 쓸 때에도 자격 증명은 OS 키체인에만
   저장한다.
 
+### D-15 macOS 와 Windows 를 함께 지원
+
+- 결정: Gateway 와 Akra Desktop 은 macOS 와 Windows 를 함께 지원한다. Linux 는 미정이다 (Q-06).
+- 이유: 사용자가 Windows 에서도 작업한다. Akra 는 이미 Windows 검증 경로
+  (`scripts/check_native_pr.ps1`)와 Windows 전용 의존성(`windows-sys`)을 가진다.
+- 근거: 2026-11-05 Windows 11 실측 ([P0](phases/P0-preflight-verification.md) §6).
+  - `codex app-server --listen unix://` 는 Windows 에서도 동작한다. 소켓 디렉터리가 현재 사용자 전용이
+    아니면 `socket directory is not private to the current user` 오류로 시작하지 않는다.
+  - Electron main 의 기반인 Node 는 Windows 에서 unix 소켓에 접속하지 못한다 (`EACCES`). Node 의
+    `net.connect(path)` 는 Windows 에서 named pipe 만 다룬다.
+  - Windows 의 CPython 에는 `socket.AF_UNIX` 가 없다. P0 의 Python 스크립트는 Windows 에서 실행되지 않는다.
+  - `codex app-server proxy --sock <경로>` 는 stdio 와 소켓 사이에서 바이트를 그대로 전달한다. 접속 3개가
+    동시에 `initialize` 와 `thread/list` 에 성공했다.
+- 영향: P-04 를 OS 별로 나눈다. upstream 접속 방식은 P-09 이다. 권한, 종료 신호, 데몬 시작 방식은
+  OS 별로 처리한다 ([P1](phases/P1-gateway-daemon.md), [R8](roadmap/R8-packaging-and-operations.md)).
+
 ## 제안 (사용자 확인 전)
 
 ### P-01 Gateway 는 새 바이너리 `akra-gateway`
@@ -195,6 +213,7 @@
   데몬(`codex app-server daemon`)은 쓰지 않는다.
 - 이유: 수명, 버전, 보안 설정을 Akra 가 통제한다. Akra 의 기존 실행 코드(보안 `-c` 설정, 환경 변수
   허용 목록, 신뢰 실행 파일 확인)를 그대로 쓴다 ([akra-current.md](reference/akra-current.md) §4).
+- Windows: 소켓 디렉터리는 현재 사용자 전용 ACL 이어야 한다. 아니면 app-server 가 시작하지 않는다 (D-15).
 
 ### P-03 클라이언트 접속 1개 = upstream 접속 1개
 
@@ -205,12 +224,19 @@
   ([codex-app-server.md](reference/codex-app-server.md) §5).
 - 효과: Gateway 에 요청 ID 재매핑, 알림 분배, initialize 대행이 필요 없다.
 
-### P-04 unix 소켓만 사용
+### P-04 로컬 IPC 만 사용
 
-- 제안: Gateway 는 `$AKRA_HOME/run/gateway.sock` 에서만 접속을 받는다 (기본 `~/.akra/run/`).
-  디렉터리 권한은 0700, 소켓은 0600 이다. TCP 포트를 열지 않는다.
-- 이유: OS 파일 권한이 접근 통제를 한다. 별도 인증 토큰이 필요 없다.
-- 주의: macOS 의 unix 소켓 경로 한도는 104바이트이다. 시작할 때 길이를 검사한다.
+- 제안: Gateway 는 OS 의 로컬 IPC 로만 접속을 받는다. TCP 포트를 열지 않는다.
+  - macOS: unix 소켓 `$AKRA_HOME/run/gateway.sock` (기본 `~/.akra/run/`). 디렉터리 권한은 0700, 소켓은
+    0600 이다.
+  - Windows: named pipe `\\.\pipe\akra-gateway-<사용자 식별자>`. 현재 사용자에게만 접근을 허용하는 보안
+    설명자로 만든다. `first_pipe_instance` 로 이름 선점을 막고, 원격 클라이언트를 거부한다.
+- 이유: OS 접근 통제가 인증을 대신한다. 별도 인증 토큰이 필요 없다.
+- 주의:
+  - macOS 의 unix 소켓 경로 한도는 104바이트이다. 시작할 때 길이를 검사한다.
+  - Windows named pipe 의 기본 권한은 Everyone 읽기를 허용한다. 권한을 반드시 명시한다.
+  - Windows 에서 Node 는 unix 소켓에 접속하지 못한다 (D-15). 그래서 Windows 의 클라이언트 구간은 named
+    pipe 만 쓴다.
 
 ### P-05 데스크톱 기술 조합
 
@@ -240,3 +266,19 @@
 - 이유: MVP 범위를 줄인다. 기존 동작을 바꾸지 않는다.
 - 영향: app-server 프로세스가 두 개가 될 수 있다. 둘 다 같은 `~/.codex` 를 쓰므로 대화 목록은 양쪽에서
   보인다. 통합은 [R5](roadmap/R5-harness-integration.md) 에서 판단한다.
+
+### P-09 upstream 접속은 `codex app-server proxy`
+
+- 제안: Gateway 는 클라이언트 Session 마다 `codex app-server proxy --sock <upstream 소켓>` 을 자식
+  프로세스로 실행한다. 그 stdin/stdout 위에서 WebSocket 으로 upstream 과 통신한다. macOS 와 Windows 가 같은
+  경로를 쓴다.
+- 이유:
+  - tokio 는 Windows 에서 unix 소켓 클라이언트를 제공하지 않는다. proxy 를 쓰면 새 크레이트가 필요 없다.
+  - `--sock` 이 Gateway 가 실행한 app-server 를 가리키므로 P-02 와 맞는다. Codex 관리형 데몬은 필요 없다.
+  - 2026-11-05 Windows 실측에서 접속 3개가 동시에 성공했다 ([P0](phases/P0-preflight-verification.md) §6).
+- 비용: 접속마다 codex 프로세스가 1개 늘어난다 (대기 중 약 6MB, Windows 실측).
+- 주의: proxy 는 바이트만 전달한다. 클라이언트가 WebSocket 핸드셰이크부터 직접 해야 한다. 실측 중 Node 의
+  `kill` 뒤에도 proxy 가 남은 경우가 있었다. 자식 프로세스는 Akra 의 `ManagedChild`(Windows job object)로
+  묶는다.
+- 대안: Windows 전용 unix 소켓 크레이트(예: `uds_windows`, 동기 API)를 비동기로 감싼다. macOS 는 tokio
+  `UnixStream` 을 직접 쓸 수 있다.
