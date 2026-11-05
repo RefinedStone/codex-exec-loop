@@ -223,3 +223,15 @@ Akra 의 아키텍처 테스트(`tests/architecture_boundaries.rs`)를 통과해
 - 실측(§6, 완료 기준 8): 2026-11-05 사용자 허락으로 턴 3회를 써서 Q-03, Q-09 를 확인했다. 결과는
   [05](../05-risks-and-open-questions.md) §3 에 있다.
 - 남은 일: macOS 실기 확인(완료 기준 9).
+
+### 2026-11-06 Windows 콘솔 창
+
+- 증상: 데스크톱 앱이 Gateway 를 콘솔 없이 띄운다 (`detached`, `stdio: ignore`, `windowsHide`). 그 상태에서 Gateway 가
+  `codex` 의 npm 래퍼(`node.exe codex.js`)를 띄우면 Windows 가 그 자식마다 새 콘솔을 만든다. 기본 터미널이 Windows
+  Terminal 인 PC 에서는 접속(스레드 열기)마다 터미널 창이 떴다 (창 기록: `CASCADIA_HOSTING_WINDOW_CLASS`,
+  `PseudoConsoleWindow` 의 프로세스 `node`).
+- 수정: Gateway 가 시작할 때 콘솔 창이 없으면 `AllocConsoleWithOptions(NO_WINDOW)` 로 창 없는 콘솔을 붙인다. 자식과
+  손자가 이 콘솔을 물려받아 새 창이 생기지 않는다. 터미널에서 실행했으면 아무것도 하지 않는다.
+- 확인 (사용자 허락, Gateway 재시작): 앱과 같은 방식으로 새 Gateway 를 띄우고 창 숨김 앱으로 두 번 접속했다. 새 콘솔
+  창은 0개였다. Gateway 의 자식은 `conhost.exe`(창 없는 콘솔)와 `node.exe`(app-server) 이다.
+- 한계: 이 API 는 Windows 11 24H2(빌드 26100) 부터 있다. 더 오래된 Windows 에서는 그대로 두므로 창이 뜰 수 있다.
