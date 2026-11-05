@@ -12,10 +12,11 @@ import { pathToFileURL } from "node:url";
 const DROPPED_METHODS =
   /^(account\/|mcpServer\/|hook\/|remoteControl\/|configWarning$|warning$|deprecationNotice$|thread\/tokenUsage\/|thread\/goal\/)/;
 // 프로토콜 구조를 담는 키이다. 값이 짧은 토큰이면 원문을 남긴다.
+// model, modelProvider, serviceTier 는 사용자 정의 값(조직 내부 공급자 이름 등)이 올 수 있어 넣지 않는다.
 const STRUCTURAL_KEYS = new Set([
   "jsonrpc", "method", "type", "status", "kind", "decision", "role", "source", "phase", "historyMode",
   "approvalPolicy", "approvalsReviewer", "sandbox", "effort", "reasoningEffort", "reasoning_effort",
-  "model", "modelProvider", "serviceTier", "cliVersion", "platformFamily", "platformOs", "itemsView",
+  "cliVersion", "platformFamily", "platformOs", "itemsView",
   "mode", "multiAgentMode", "id", "threadId", "turnId", "itemId", "sessionId", "approvalId", "requestId",
   "environmentId", "at", "direction",
 ]);

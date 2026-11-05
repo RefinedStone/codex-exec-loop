@@ -267,3 +267,37 @@ describe("paged thread loading", () => {
     expect(state.transcriptError ?? null).toBeNull();
   });
 });
+
+describe("turn list errors on an existing thread", () => {
+  it("shows the error instead of an empty history", async () => {
+    const { session, state, receive, sent, replyTo, emitState } = harness();
+    emitState("connected");
+    const opened = session.openThread("old");
+    await flush();
+    replyTo("thread/resume", { thread: { id: "old", name: "old", preview: "", cwd: "/w", status: { type: "idle" }, turns: [] } });
+    await flush();
+    const list = [...sent].reverse().find((message) => message.method === "thread/turns/list");
+    receive({ jsonrpc: "2.0", id: list?.id, error: { code: -32603, message: "internal error" } });
+    await opened;
+    expect(state.transcript ?? null).toBeNull();
+  });
+});
+
+describe("status changes while listing threads", () => {
+  it("prefer the newer status notification over the listed status", async () => {
+    const { state, receive, replyTo, emitState } = harness();
+    emitState("connected");
+    await flush();
+    replyTo("initialize", {});
+    await flush();
+    replyTo("akra/gateway/info", { gatewayVersion: "1", codexVersion: null, startedAt: "", upstreamRestarts: 0 });
+    await flush();
+    // While the list request is pending, thread "a" finishes and thread "b" starts.
+    receive({ jsonrpc: "2.0", method: "thread/status/changed", params: { threadId: "a", status: { type: "idle" } } });
+    receive({ jsonrpc: "2.0", method: "thread/status/changed", params: { threadId: "b", status: { type: "active", activeFlags: [] } } });
+    const listed = (id: string, active: boolean) => ({ id, cwd: "/w", name: id, preview: "", updatedAt: 1, status: active ? { type: "active", activeFlags: [] } : { type: "idle" } });
+    replyTo("thread/list", { data: [listed("a", true), listed("b", false)], nextCursor: null, backwardsCursor: null });
+    await flush();
+    expect(state.activeThreadIds).toEqual(["b"]);
+  });
+});

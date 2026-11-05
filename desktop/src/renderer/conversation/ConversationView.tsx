@@ -53,6 +53,8 @@ export function ConversationView({ onLoadOlder }: { onLoadOlder(): Promise<void>
   // 스레드를 새로 열면 맨 아래(최근 턴)부터 보여 준다.
   useEffect(() => {
     followBottom.current = true;
+    // 이전 스레드에서 걸어 둔 "이전 턴" 앵커는 새 스레드에 없으므로 버린다.
+    anchorTurnId.current = null;
   }, [openThreadId]);
 
   // 내용이 바뀔 때마다, 맨 아래를 보고 있었으면 맨 아래로 간다. 이전 턴을 붙였으면 보던 턴으로 돌아간다.
