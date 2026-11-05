@@ -66,7 +66,8 @@ const THREADS_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
     pullRequest(number: $number) {
       url title
       reviewThreads(first: 100) {
-        nodes { isResolved path line comments(first: 20) { nodes { author { login } body } } }
+        totalCount
+        nodes { isResolved path line comments(first: 20) { totalCount nodes { author { login } body } } }
       }
     }
   }
@@ -130,19 +131,46 @@ function clip(text: string, max: number): string {
 /** 해결되지 않은 리뷰 코멘트로 새 스레드의 첫 메시지를 만든다. 보내기는 사용자가 한다. */
 export function reviewPrompt(json: string): string {
   const pull = (JSON.parse(json) as {
-    data?: { repository?: { pullRequest?: { url?: string; title?: string; reviewThreads?: { nodes?: Array<{ isResolved?: boolean; path?: string; line?: number | null; comments?: { nodes?: Array<{ author?: { login?: string } | null; body?: string }> } }> } } } };
+    data?: {
+      repository?: {
+        pullRequest?: {
+          url?: string;
+          title?: string;
+          reviewThreads?: {
+            totalCount?: number;
+            nodes?: Array<{
+              isResolved?: boolean;
+              path?: string;
+              line?: number | null;
+              comments?: { totalCount?: number; nodes?: Array<{ author?: { login?: string } | null; body?: string }> };
+            }>;
+          };
+        };
+      };
+    };
   }).data?.repository?.pullRequest;
   if (!pull?.url) throw new Error("PR 을 찾을 수 없습니다.");
-  const open = (pull.reviewThreads?.nodes ?? []).filter((thread) => thread.isResolved === false);
+  const threads = pull.reviewThreads?.nodes ?? [];
+  const open = threads.filter((thread) => thread.isResolved === false);
   const lines = [`다음 PR 의 해결되지 않은 리뷰 코멘트를 확인하고 반영해 주세요.`, `PR: ${pull.url} (${pull.title ?? ""})`, ""];
   if (open.length === 0) lines.push("(해결되지 않은 리뷰 코멘트가 없습니다.)");
   open.forEach((thread, index) => {
     lines.push(`${index + 1}. ${thread.path ?? "(파일 없음)"}${thread.line ? `:${thread.line}` : ""}`);
-    for (const comment of thread.comments?.nodes ?? []) {
+    const comments = thread.comments?.nodes ?? [];
+    for (const comment of comments) {
       lines.push(`${comment.author?.login ?? "?"}: ${clip((comment.body ?? "").trim(), MAX_COMMENT_CHARS)}`);
+    }
+    // 한 번에 읽는 개수보다 많으면 빠진 것이 있다고 적는다. 에이전트가 이것이 전부라고 여기지 않게 한다.
+    const total = thread.comments?.totalCount ?? comments.length;
+    if (total > comments.length) {
+      lines.push(`(이 스레드의 코멘트 ${total}개 중 앞의 ${comments.length}개만 넣었습니다. 나머지는 PR 에서 확인하세요.)`);
     }
     lines.push("");
   });
+  const totalThreads = pull.reviewThreads?.totalCount ?? threads.length;
+  if (totalThreads > threads.length) {
+    lines.push(`(리뷰 스레드 ${totalThreads}개 중 앞의 ${threads.length}개만 읽었습니다. 나머지는 PR 에서 확인하세요.)`);
+  }
   return clip(lines.join("\n").trim(), MAX_PROMPT_CHARS);
 }
 

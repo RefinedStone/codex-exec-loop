@@ -65,6 +65,27 @@ describe("hand-off prompt", () => {
     expect(prompt).not.toContain("resolved");
   });
 
+  it("says when a thread or the PR has more than one page", () => {
+    const json = JSON.stringify({
+      data: {
+        repository: {
+          pullRequest: {
+            url: "https://github.com/acme/app/pull/7",
+            title: "t",
+            reviewThreads: {
+              totalCount: 130,
+              nodes: [{ isResolved: false, path: "a.ts", line: 1, comments: { totalCount: 25, nodes: [{ author: { login: "k" }, body: "first" }] } }],
+            },
+          },
+        },
+      },
+    });
+    const prompt = reviewPrompt(json);
+    expect(prompt).toContain("코멘트 25개 중 앞의 1개만");
+    expect(prompt).toContain("리뷰 스레드 130개 중 앞의 1개만");
+    expect(reviewPrompt(json.replace('"totalCount":25', '"totalCount":1').replace('"totalCount":130', '"totalCount":1'))).not.toContain("만 넣었습니다");
+  });
+
   it("clips very long comments", () => {
     const prompt = reviewPrompt(threadsJson([{ isResolved: false, path: "a", line: 1, comments: { nodes: [{ author: { login: "k" }, body: "x".repeat(5000) }] } }]));
     expect(prompt.length).toBeLessThan(2_300);
