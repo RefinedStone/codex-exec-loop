@@ -8476,3 +8476,97 @@ fn read_then_write_transaction_waits_for_a_short_write_lock() {
         "enqueue returned before the fixture lock was released: {elapsed:?}"
     );
 }
+
+#[test]
+fn concurrent_review_updates_keep_every_inbox_item() {
+    let workspace_dir = temp_workspace("review-center-concurrent-inbox");
+    drop(authority_connection(&workspace_dir));
+    let writer_count = 6;
+    let barrier = Arc::new(Barrier::new(writer_count));
+    let writers = (0..writer_count)
+        .map(|index| {
+            let barrier = barrier.clone();
+            let workspace_dir = workspace_dir.clone();
+            std::thread::spawn(move || {
+                let thread_id = format!("thread-{index}");
+                let review_id = format!("review-{index}");
+                let review = ReviewCenterThreadProjection::new(
+                    &thread_id,
+                    &review_id,
+                    "approval",
+                    "pending",
+                    "needs review",
+                    "2026-07-06T00:30:00Z",
+                    "2026-07-06T00:30:00Z",
+                );
+                let item = ReviewCenterInboxItem::new(
+                    &review_id,
+                    &thread_id,
+                    "pending",
+                    "needs review",
+                    "2026-07-06T00:30:00Z",
+                    "2026-07-06T00:30:00Z",
+                );
+                barrier.wait();
+                SqlitePlanningAuthorityAdapter::new().record_review_update(
+                    &workspace_dir,
+                    &review,
+                    Some(&item),
+                    None,
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    for writer in writers {
+        writer
+            .join()
+            .expect("review writer should join")
+            .expect("review update should persist");
+    }
+
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let mut review_ids = adapter
+        .load_pending_inbox(&workspace_dir)
+        .expect("inbox should load")
+        .into_iter()
+        .map(|item| item.review_id)
+        .collect::<Vec<_>>();
+    review_ids.sort();
+    assert_eq!(
+        review_ids,
+        (0..writer_count)
+            .map(|index| format!("review-{index}"))
+            .collect::<Vec<_>>()
+    );
+
+    let resolved = ReviewCenterThreadProjection::new(
+        "thread-0",
+        "review-0",
+        "approval",
+        "approved",
+        "approved",
+        "2026-07-06T00:30:00Z",
+        "2026-07-06T00:31:00Z",
+    );
+    let history = ReviewCenterHistoryEntry::new(
+        "review-0",
+        "thread-0",
+        "review_approved",
+        "approved",
+        "2026-07-06T00:31:00Z",
+    );
+    adapter
+        .record_review_update(&workspace_dir, &resolved, None, Some(&history))
+        .expect("resolved review should persist");
+    let inbox = adapter
+        .load_pending_inbox(&workspace_dir)
+        .expect("inbox should reload");
+    assert_eq!(inbox.len(), writer_count - 1);
+    assert!(inbox.iter().all(|item| item.review_id != "review-0"));
+    assert_eq!(
+        adapter
+            .load_recent_history(&workspace_dir)
+            .expect("history should load"),
+        vec![history]
+    );
+}
