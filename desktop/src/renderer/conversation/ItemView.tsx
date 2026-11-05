@@ -1,5 +1,8 @@
 // 아이템 종류별 표시이다 (P3 §6.3). 모르는 종류도 오류 없이 종류와 상태만 보여 준다.
+import { memo } from "react";
+
 import type { ThreadItem } from "../../shared/protocol/generated/v2/ThreadItem";
+import { Markdown } from "./Markdown";
 
 function userText(item: Extract<ThreadItem, { type: "userMessage" }>): string {
   return item.content
@@ -12,7 +15,8 @@ function statusOf(item: ThreadItem): string | null {
   return typeof status === "string" ? status : null;
 }
 
-export function ItemView({ item }: { item: ThreadItem }) {
+/** 상태 모델은 바뀐 아이템만 새 객체로 만들므로, 같은 객체면 다시 그리지 않는다. */
+export const ItemView = memo(function ItemView({ item }: { item: ThreadItem }) {
   switch (item.type) {
     case "userMessage":
       return (
@@ -23,7 +27,7 @@ export function ItemView({ item }: { item: ThreadItem }) {
     case "agentMessage":
       return (
         <div className="item item-agent" data-testid="item-agent">
-          {item.text}
+          <Markdown text={item.text} />
         </div>
       );
     case "reasoning":
@@ -95,4 +99,4 @@ export function ItemView({ item }: { item: ThreadItem }) {
       );
     }
   }
-}
+});
