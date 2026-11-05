@@ -26,6 +26,8 @@ function harness() {
       readyCalls += 1;
     },
     chooseFolder: async () => null,
+    gitStatus: async () => ({ ok: false, message: "not used" }),
+    gitFileDiff: async () => ({ kind: "binary" }),
   };
   const state: Partial<DesktopState> = { pendingApprovals: [], openThreadId: null, transcript: null, folders: [] };
   const store: SessionStore = {

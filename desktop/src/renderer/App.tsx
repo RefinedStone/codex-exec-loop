@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import { ApprovalPrompt } from "./conversation/ApprovalPrompt";
 import { Composer, type ComposerActions } from "./conversation/Composer";
 import { ConversationView } from "./conversation/ConversationView";
+import { WorkingTreePanel } from "./conversation/WorkingTreePanel";
 import { DesktopSession } from "./session/desktopSession";
 import { desktopSessionStore, useDesktopStore } from "./session/desktopStore";
 import { Sidebar } from "./sidebar/Sidebar";
@@ -69,6 +70,7 @@ export function App() {
       />
       <main className="main">
         <GatewayBar />
+        <WorkingTreePanel git={window.akra} />
         <ConversationView onLoadOlder={async () => session.current?.loadOlderTurns()} />
         <ApprovalPrompt onAnswer={(requestId, decision) => session.current?.answerApproval(requestId, decision)} />
         <Composer actions={composerActions} />

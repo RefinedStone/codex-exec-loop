@@ -7,6 +7,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, shell, type WebContents } fr
 import { IPC_CHANNELS } from "../shared/bridge";
 import { GatewayConnection } from "./gatewayConnection";
 import { resolveGatewayEndpoint, resolveGatewayExecutable } from "./gatewayEndpoint";
+import { readGitFileDiff, readGitStatus } from "./gitStatus";
 
 const connections = new Map<number, GatewayConnection>();
 
@@ -124,6 +125,11 @@ ipcMain.on(IPC_CHANNELS.send, (event, text: unknown) => {
 
 // renderer 가 상태 수신 함수를 등록한 뒤 보낸다. 화면을 다시 불러오면 다시 오고, 그때 접속을 새로 연다.
 ipcMain.on(IPC_CHANNELS.ready, (event) => attachGatewayConnection(event.sender));
+
+ipcMain.handle(IPC_CHANNELS.gitStatus, (_event, cwd: unknown) => readGitStatus(cwd));
+ipcMain.handle(IPC_CHANNELS.gitFileDiff, (_event, cwd: unknown, path: unknown, untracked: unknown) =>
+  readGitFileDiff(cwd, path, untracked),
+);
 
 ipcMain.handle(IPC_CHANNELS.chooseFolder, async (event) => {
   const owner = BrowserWindow.fromWebContents(event.sender);

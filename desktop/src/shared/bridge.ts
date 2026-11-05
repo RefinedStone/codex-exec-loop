@@ -18,7 +18,33 @@ export const IPC_CHANNELS = {
   connectionState: "akra:connection-state",
   ready: "akra:ready",
   chooseFolder: "akra:choose-folder",
+  gitStatus: "akra:git-status",
+  gitFileDiff: "akra:git-file-diff",
 } as const;
+
+/** 작업 트리의 바뀐 파일 하나이다 (`git status --porcelain=v1`). */
+export interface GitChangedFile {
+  /** 작업 폴더 기준 경로이다. untracked 폴더는 `/` 로 끝난다. */
+  path: string;
+  /** 이름을 바꾼 파일의 이전 경로이다. */
+  originalPath: string | null;
+  /** porcelain 의 두 글자 상태 (예: ` M`, `A `, `??`) */
+  status: string;
+  untracked: boolean;
+  directory: boolean;
+  /** HEAD 대비 줄 수이다. 새 파일, 바이너리, 첫 커밋 전에는 null 이다. */
+  added: number | null;
+  removed: number | null;
+}
+
+export type GitStatusResult =
+  | { ok: true; branch: string | null; files: GitChangedFile[]; truncated: boolean }
+  | { ok: false; message: string };
+
+export type GitFileDiff =
+  | { kind: "gitDiff"; text: string; truncated: boolean }
+  | { kind: "content"; text: string; truncated: boolean }
+  | { kind: "binary" };
 
 /** preload 가 `window.akra` 로 노출하는 함수 전부이다. */
 export interface AkraBridge {
@@ -33,4 +59,8 @@ export interface AkraBridge {
   ready(): void;
   /** 시스템 폴더 선택 대화상자를 연다. 고르지 않으면 null 이다. */
   chooseFolder(): Promise<string | null>;
+  /** 작업 폴더의 바뀐 파일 목록을 읽는다 (R1). */
+  gitStatus(cwd: string): Promise<GitStatusResult>;
+  /** 바뀐 파일 하나의 diff 를 읽는다. 새 파일은 내용을 돌려준다. */
+  gitFileDiff(cwd: string, path: string, untracked: boolean): Promise<GitFileDiff>;
 }
