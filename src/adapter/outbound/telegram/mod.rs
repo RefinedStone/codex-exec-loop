@@ -167,6 +167,7 @@ impl TelegramBotPort for CurlTelegramBotAdapter {
         }
         Ok(TelegramBotIdentity {
             bot_id: response.id,
+            username: response.username,
         })
     }
 
@@ -282,6 +283,8 @@ struct TelegramSendMessageResponse {
 #[derive(Debug, Deserialize)]
 struct TelegramGetMeResponse {
     id: u64,
+    #[serde(default)]
+    username: Option<String>,
 }
 fn build_curl_config(url: &str, body: &str, max_time_seconds: u32) -> String {
     // curl config file format을 stdin으로 전달하면 JSON body와 token URL을 shell quoting 없이 안전하게 넘길 수 있다.
@@ -358,14 +361,13 @@ mod tests {
     #[test]
     fn get_me_response_requires_a_numeric_bot_identity() {
         let envelope = serde_json::from_str::<TelegramApiEnvelope<TelegramGetMeResponse>>(
-            r#"{"ok":true,"result":{"id":123456}}"#,
+            r#"{"ok":true,"result":{"id":123456,"username":"AkraBot"}}"#,
         )
         .expect("Telegram getMe response should parse");
 
-        assert_eq!(
-            envelope.result.expect("getMe result should exist").id,
-            123_456
-        );
+        let result = envelope.result.expect("getMe result should exist");
+        assert_eq!(result.id, 123_456);
+        assert_eq!(result.username.as_deref(), Some("AkraBot"));
     }
     #[test]
     fn build_curl_config_supports_stdin_delivery() {

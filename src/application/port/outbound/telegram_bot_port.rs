@@ -6,9 +6,11 @@ use anyhow::Result;
 /// Extra wall-clock allowance used by the curl adapter beyond Telegram's long-poll timeout.
 pub const TELEGRAM_LONG_POLL_TRANSPORT_MARGIN_SECONDS: u64 = 15;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TelegramBotIdentity {
     pub bot_id: u64,
+    // Group chats address commands as `/cmd@username`; the runner ignores other bots' commands.
+    pub username: Option<String>,
 }
 
 // Poll request는 adapter가 Telegram Bot API의 getUpdates 호출로 변환할 입력 DTO이다. derive된
