@@ -15,6 +15,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
+use super::recorder::{GatewayRecorder, RecordDirection, SessionRecording};
 use super::router::{ClientTextRoute, respond_to_akra_request, route_client_text};
 use crate::application::port::outbound::gateway_upstream_port::{
     GatewayUpstreamPort, GatewayUpstreamStream,
@@ -32,10 +33,20 @@ enum SessionEnd {
     UpstreamRestarted,
 }
 
-pub(super) async fn run_session<S>(client: S, upstream: Arc<dyn GatewayUpstreamPort>) -> Result<()>
+pub(super) async fn run_session<S>(
+    client: S,
+    upstream: Arc<dyn GatewayUpstreamPort>,
+    recorder: Option<Arc<GatewayRecorder>>,
+) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+    let recording = open_recording(recorder.as_deref());
+    let record = |direction: RecordDirection, text: &str| {
+        if let Some(recording) = &recording {
+            recording.record(direction, text);
+        }
+    };
     let client_websocket = tokio_tungstenite::accept_async(client)
         .await
         .context("client WebSocket handshake failed")?;
@@ -74,12 +85,15 @@ where
             match message {
                 Message::Text(text) => match route_client_text(text.as_str()) {
                     ClientTextRoute::Forward => {
+                        record(RecordDirection::Client, text.as_str());
                         if upstream_sink.send(Message::Text(text)).await.is_err() {
                             return SessionEnd::UpstreamClosed;
                         }
                     }
                     ClientTextRoute::AkraRequest { id, method } => {
+                        record(RecordDirection::Client, text.as_str());
                         let response = respond_to_akra_request(id, &method, &upstream.snapshot());
+                        record(RecordDirection::Gateway, &response);
                         if outbox.send(Message::text(response)).await.is_err() {
                             return SessionEnd::ClientClosed;
                         }
@@ -107,6 +121,9 @@ where
         while let Some(Ok(message)) = upstream_stream.next().await {
             match message {
                 Message::Text(_) | Message::Binary(_) => {
+                    if let Message::Text(text) = &message {
+                        record(RecordDirection::Gateway, text.as_str());
+                    }
                     if outbox.send(message).await.is_err() {
                         return SessionEnd::ClientClosed;
                     }
@@ -150,6 +167,16 @@ where
     let _ = tokio::time::timeout(CLIENT_CLOSE_FLUSH_TIMEOUT, writer).await;
     tracing::debug!(?end, "gateway session ended");
     Ok(())
+}
+
+fn open_recording(recorder: Option<&GatewayRecorder>) -> Option<SessionRecording> {
+    match recorder?.open_session() {
+        Ok(recording) => Some(recording),
+        Err(error) => {
+            tracing::warn!(error = %format!("{error:#}"), "gateway recording disabled for session");
+            None
+        }
+    }
 }
 
 async fn open_upstream(

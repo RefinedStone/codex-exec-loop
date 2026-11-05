@@ -88,7 +88,7 @@ impl GatewayUpstreamPort for EchoUpstream {
 async fn connect_client(upstream: Arc<EchoUpstream>) -> WebSocketStream<DuplexStream> {
     let (client_side, gateway_side) = tokio::io::duplex(DUPLEX_BUFFER_BYTES);
     tokio::spawn(async move {
-        let _ = run_session(gateway_side, upstream).await;
+        let _ = run_session(gateway_side, upstream, None).await;
     });
     let (websocket, _) = tokio_tungstenite::client_async("ws://localhost/", client_side)
         .await

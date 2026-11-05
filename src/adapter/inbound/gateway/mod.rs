@@ -6,6 +6,7 @@
 //! 쓴다. Telegram 입구가 `TelegramBotPort` 를 쓰는 것과 같은 구조이다.
 
 mod listener;
+mod recorder;
 mod router;
 mod session;
 #[cfg(test)]
@@ -20,6 +21,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 
 use self::listener::GatewayListener;
+use self::recorder::GatewayRecorder;
 use crate::application::port::outbound::gateway_upstream_port::GatewayUpstreamPort;
 use crate::composition::production;
 
@@ -57,16 +59,22 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
         print!("{USAGE}");
         return Ok(());
     }
-    let run_dir = crate::configuration::akra_home_dir()?.join(RUN_DIRECTORY_NAME);
+    let akra_home = crate::configuration::akra_home_dir()?;
+    let run_dir = akra_home.join(RUN_DIRECTORY_NAME);
     crate::private_directory::ensure_private_directory(&run_dir)?;
     let _instance_lock = acquire_instance_lock(&run_dir)?;
+    let recorder = GatewayRecorder::from_env(&akra_home)?.map(Arc::new);
     let listener = GatewayListener::bind(&run_dir)?;
     let upstream = production::build_gateway_upstream_port(&run_dir)?;
     println!("akra-gateway listening on {}", listener.endpoint());
     let _ = std::io::stdout().flush();
-    tracing::info!(endpoint = %listener.endpoint(), "akra_gateway_started");
+    tracing::info!(
+        endpoint = %listener.endpoint(),
+        recording = recorder.is_some(),
+        "akra_gateway_started"
+    );
 
-    serve(listener, upstream.clone()).await;
+    serve(listener, upstream.clone(), recorder).await;
     upstream.shutdown();
     tracing::info!("akra_gateway_stopped");
     Ok(())
@@ -103,7 +111,11 @@ fn acquire_instance_lock(run_dir: &Path) -> Result<File> {
     }
 }
 
-async fn serve(mut listener: GatewayListener, upstream: Arc<dyn GatewayUpstreamPort>) {
+async fn serve(
+    mut listener: GatewayListener,
+    upstream: Arc<dyn GatewayUpstreamPort>,
+    recorder: Option<Arc<GatewayRecorder>>,
+) {
     let shutdown = shutdown_signal();
     tokio::pin!(shutdown);
     loop {
@@ -112,8 +124,9 @@ async fn serve(mut listener: GatewayListener, upstream: Arc<dyn GatewayUpstreamP
             accepted = listener.accept() => match accepted {
                 Ok(connection) => {
                     let upstream = upstream.clone();
+                    let recorder = recorder.clone();
                     tokio::spawn(async move {
-                        if let Err(error) = session::run_session(connection, upstream).await {
+                        if let Err(error) = session::run_session(connection, upstream, recorder).await {
                             tracing::debug!(error = %format!("{error:#}"), "gateway session failed");
                         }
                     });
