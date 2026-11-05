@@ -22,7 +22,7 @@ const check = (name, ok) => {
   if (!ok) failures.push(name);
 };
 
-const app = await electron.launch({ executablePath: electronPath, args: [desktopDir], env });
+const app = await electron.launch({ executablePath: electronPath, args: [desktopDir, ...(process.env.CI ? ["--no-sandbox"] : [])], env });
 try {
   const page = await app.firstWindow();
   await page.getByTestId("connection-phase").filter({ hasText: "연결됨" }).waitFor({ timeout: 30_000 });
