@@ -2334,6 +2334,7 @@ fn parallel_entry_from_off_resets_stale_startup_leases_and_slot_worktrees() {
         .expect("slot lease should be acquired");
     let slot_path = PathBuf::from(lease.worktree_path.clone());
     lease.leased_at = "2020-01-01T00:00:00Z".to_string();
+    mark_lease_owner_exited(&mut lease);
     write_slot_lease(
         &SqlitePlanningAuthorityAdapter::new(),
         &test_parallel_runtime(),
@@ -2538,6 +2539,7 @@ fn reconcile_releases_stale_leased_startup_slot() {
         )
         .expect("slot lease should be acquired");
     lease.leased_at = "2020-01-01T00:00:00Z".to_string();
+    mark_lease_owner_exited(&mut lease);
     write_slot_lease(
         &SqlitePlanningAuthorityAdapter::new(),
         &test_parallel_runtime(),
@@ -2579,6 +2581,111 @@ fn reconcile_releases_stale_leased_startup_slot() {
     );
 }
 
+// The current pid paired with a foreign birth identity models an exited owner whose pid was reused.
+fn mark_lease_owner_exited(lease: &mut ParallelModeSlotLeaseSnapshot) {
+    lease.owner_process = Some(
+        crate::domain::parallel_mode::ParallelModeSlotLeaseOwnerProcess {
+            process_id: std::process::id(),
+            start_identity: "exited-owner-start-identity".to_string(),
+        },
+    );
+}
+
+// A clock jump or laptop sleep can age a lease while its worker is still starting app-server.
+// Only owner exit may release the slot; otherwise another task could take the worktree.
+#[test]
+fn reconcile_preserves_old_startup_slot_while_owner_process_is_alive() {
+    let repo = TempGitRepo::new("startup-owner-alive");
+    let service = test_parallel_mode_service();
+    let mut lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("slot lease should be acquired");
+    assert_eq!(
+        lease.owner_process.as_ref().map(|owner| owner.process_id),
+        Some(std::process::id())
+    );
+    lease.leased_at = "2020-01-01T00:00:00Z".to_string();
+    write_slot_lease(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+        &repo.pool_root(),
+        &lease,
+    )
+    .expect("old lease should be persisted");
+    record_assigned_session_detail(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+        &repo.pool_root(),
+        &lease,
+    )
+    .expect("assigned detail should be recorded");
+
+    let pool = reconcile_pool_board(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+    );
+
+    assert_eq!(pool.leased_slots, 1);
+    assert!(repo.branch_exists(&lease.branch_name));
+    let runtime_projection =
+        SqlitePlanningAuthorityAdapter::load_runtime_projections(&repo.workspace_dir())
+            .expect("runtime projection should retain the live owner's lease");
+    assert_eq!(runtime_projection.slot_leases.get("slot-1"), Some(&lease));
+}
+
+// A crash after ThreadPrepared leaves a thread id on the detail. The dead owner still releases
+// the slot, even before the legacy age threshold.
+#[test]
+fn reconcile_releases_thread_prepared_startup_slot_when_owner_exited() {
+    let repo = TempGitRepo::new("startup-owner-exited");
+    let service = test_parallel_mode_service();
+    let mut lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("slot lease should be acquired");
+    mark_lease_owner_exited(&mut lease);
+    write_slot_lease(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+        &repo.pool_root(),
+        &lease,
+    )
+    .expect("exited-owner lease should be persisted");
+    crate::application::service::parallel_mode::record_thread_prepared_session_detail(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+        &repo.pool_root(),
+        &lease,
+        "thread-crashed",
+    )
+    .expect("thread prepared detail should be recorded");
+
+    let pool = reconcile_pool_board(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+    );
+
+    assert_eq!(pool.leased_slots, 0);
+    assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE);
+    assert!(!repo.branch_exists(&lease.branch_name));
+    let runtime_projection =
+        SqlitePlanningAuthorityAdapter::load_runtime_projections(&repo.workspace_dir())
+            .expect("runtime projection should load after owner-exit recovery");
+    assert!(!runtime_projection.slot_leases.contains_key("slot-1"));
+    assert_eq!(runtime_projection.task_dispatch_blocks.len(), 1);
+}
+
 #[test]
 fn reconcile_preserves_stale_startup_slot_when_dispatch_block_write_fails() {
     let repo = TempGitRepo::new("stale-leased-startup-block-failure");
@@ -2590,6 +2697,7 @@ fn reconcile_preserves_stale_startup_slot_when_dispatch_block_write_fails() {
         )
         .expect("slot lease should be acquired");
     lease.leased_at = "2020-01-01T00:00:00Z".to_string();
+    mark_lease_owner_exited(&mut lease);
     write_slot_lease(
         &SqlitePlanningAuthorityAdapter::new(),
         &test_parallel_runtime(),

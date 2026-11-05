@@ -316,6 +316,16 @@ pub struct ParallelModeSlotLeaseSnapshot {
         deserialize_with = "deserialize_lease_generation"
     )]
     pub lease_generation: Option<String>,
+    // Startup recovery releases a Leased slot only after this owner exits. Legacy leases
+    // without an owner keep the age rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_process: Option<ParallelModeSlotLeaseOwnerProcess>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParallelModeSlotLeaseOwnerProcess {
+    pub process_id: u32,
+    pub start_identity: String,
 }
 
 impl ParallelModeSlotLeaseSnapshot {
@@ -343,7 +353,13 @@ impl ParallelModeSlotLeaseSnapshot {
             running_started_at,
             delivery_target: None,
             lease_generation: None,
+            owner_process: None,
         }
+    }
+
+    pub fn with_owner_process(mut self, owner: Option<ParallelModeSlotLeaseOwnerProcess>) -> Self {
+        self.owner_process = owner;
+        self
     }
 
     pub fn with_delivery_target(mut self, target: ParallelModeDeliveryTargetSnapshot) -> Self {

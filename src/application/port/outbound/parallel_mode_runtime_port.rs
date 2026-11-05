@@ -104,6 +104,11 @@ pub trait ParallelModeRuntimePort: Send + Sync {
         Err("process start identity is unavailable in this runtime".to_string())
     }
 
+    // Ambiguous probes must answer true so recovery never takes a slot from a live owner.
+    fn process_owner_is_alive(&self, _process_id: u32, _start_identity: &str) -> bool {
+        true
+    }
+
     fn ensure_git_execution_safe(&self, _path: &Path) -> Result<(), String> {
         Err("guarded Git execution is unavailable in this runtime".to_string())
     }
