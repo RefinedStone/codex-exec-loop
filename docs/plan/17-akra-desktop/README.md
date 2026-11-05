@@ -40,9 +40,9 @@ Akra Desktop (Electron)  --WebSocket-->  akra-gateway (데몬)  --WebSocket-->  
 | --- | --- |
 | [01-background-and-goals.md](01-background-and-goals.md) | 사용자 상황, 목표, 비목표, 제약, 성공 기준, 검토 경과 |
 | [02-glossary.md](02-glossary.md) | 계층(L0~L4), Codex 프로토콜, Gateway, Electron 용어 |
-| [03-decisions.md](03-decisions.md) | 결정 D-01~D-15, 제안 P-01~P-09 |
+| [03-decisions.md](03-decisions.md) | 결정 D-01~D-16, 제안 P-01~P-09 |
 | [04-target-architecture.md](04-target-architecture.md) | 목표 구조, 연결 규칙, 흐름, 장애 처리, 보안, 배치 |
-| [05-risks-and-open-questions.md](05-risks-and-open-questions.md) | 위험 K-01~K-10, 미결 질문 Q-01~Q-11 |
+| [05-risks-and-open-questions.md](05-risks-and-open-questions.md) | 위험 K-01~K-10, 미결 질문 Q-01~Q-12, 실측 결과 |
 | [06-handoff-guide.md](06-handoff-guide.md) | 작업 환경, 계정, 저장소 절차, 명령, 사용량 정책, 금지 사항 |
 | [reference/codex-app-server.md](reference/codex-app-server.md) | 공개 Codex app-server: 실행 형태, 프로토콜, 다중 접속 규칙 |
 | [reference/codex-desktop-app.md](reference/codex-desktop-app.md) | 공식 Codex(ChatGPT) 데스크톱 앱의 구조 관찰 |
@@ -83,6 +83,7 @@ Akra Desktop (Electron)  --WebSocket-->  akra-gateway (데몬)  --WebSocket-->  
 | D-13 | 개발과 검증에서 Codex 사용량을 최소화한다 | 승인 |
 | D-14 | Akra 저장소는 RefinedStone 신원으로만 작업한다. 회사 계정과 분리한다 | 승인 |
 | D-15 | macOS 와 Windows 를 함께 지원한다 | 승인 |
+| D-16 | 사이드바는 Project 대신 작업 폴더(스레드 cwd)로 묶는다. 안정 API 만 쓴다 | 승인 |
 
 ## 단계와 상태
 
@@ -91,7 +92,7 @@ Akra Desktop (Electron)  --WebSocket-->  akra-gateway (데몬)  --WebSocket-->  
 | 단계 | 내용 | 상태 | 선행 조건 | 규모 |
 | --- | --- | --- | --- | --- |
 | [P0](phases/P0-preflight-verification.md) | 사전 검증 (빌드, 호환성, 다중 접속) | 완료 (2026-11-05) | - | - |
-| [P1](phases/P1-gateway-daemon.md) | Gateway 데몬 | 구현 완료 (macOS 실기, Q-03·Q-09 실측 남음) | Q-10, P-01~P-04, P-09 승인 (2026-11-05) | 약 1.5주 (Windows 포함) |
+| [P1](phases/P1-gateway-daemon.md) | Gateway 데몬 | 구현 완료 (macOS 실기 확인만 남음, Q-03·Q-09 실측 완료) | Q-10, P-01~P-04, P-09 승인 (2026-11-05) | 약 1.5주 (Windows 포함) |
 | [P2](phases/P2-desktop-shell.md) | Electron 골격과 Gateway 연결 | 진행 중 (골격 완료, 피드백 대기) | P1 | 약 1주 |
 | [P3](phases/P3-mvp-conversation.md) | MVP 대화 화면 | 대기 | P2 | 2~3주 |
 | [R1](roadmap/R1-change-review.md) | 변경 검토 (diff) | 계획 | P3 | 1~2주 |
