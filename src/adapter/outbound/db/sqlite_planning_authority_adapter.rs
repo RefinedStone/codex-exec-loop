@@ -3275,8 +3275,18 @@ parse 실패를 error로 만들지 않고 `None`으로 접는 것은 이 metadat
 쓰이기 때문이다. 값이 없거나 숫자가 아니면 caller는 기본값을 선택한다.
 */
 fn read_metadata_i64_connection(connection: &Connection, key: &str) -> Result<Option<i64>> {
-    read_metadata_string_connection(connection, key)
-        .map(|value| value.and_then(|value| value.parse::<i64>().ok()))
+    parse_metadata_i64(key, read_metadata_string_connection(connection, key)?)
+}
+
+// A corrupt counter must fail loudly; treating it as missing would restart revisions at 1.
+fn parse_metadata_i64(key: &str, value: Option<String>) -> Result<Option<i64>> {
+    value
+        .map(|value| {
+            value
+                .parse::<i64>()
+                .with_context(|| format!("authority metadata `{key}` is not an integer: `{value}`"))
+        })
+        .transpose()
 }
 
 fn insert_task_authority_mutation_records(
@@ -3337,7 +3347,7 @@ fn read_metadata_i64(transaction: &rusqlite::Transaction<'_>, key: &str) -> Resu
         )
         .optional()
         .with_context(|| format!("failed to read authority metadata `{key}`"))
-        .map(|value| value.and_then(|value| value.parse::<i64>().ok()))
+        .and_then(|value| parse_metadata_i64(key, value))
 }
 
 /*
