@@ -61,25 +61,75 @@ export interface FakeGateway {
   close(): Promise<void>;
 }
 
+/**
+ * 녹화의 이어지는 gateway 메시지이다. 클라이언트가 요청(method)을 보내거나 서버 요청에 답(response id)하면,
+ * 녹화에서 그 다음에 왔던 알림과 서버 요청을 같은 순서로 보낸다.
+ */
+interface ReplaySegment {
+  trigger: string;
+  followUps: string[];
+  used: boolean;
+}
+
+function triggerKey(message: JsonRpcEnvelope): string | null {
+  if (message.method) {
+    return `request:${message.method}`;
+  }
+  return message.id === undefined || message.id === null ? null : `response:${String(message.id)}`;
+}
+
+export function loadReplaySegments(recordingPath: string): ReplaySegment[] {
+  const segments: ReplaySegment[] = [];
+  let current: ReplaySegment | null = null;
+  for (const line of readFileSync(recordingPath, "utf8").split(/\r?\n/).filter((text) => text.trim().length > 0)) {
+    const record = JSON.parse(line) as RecordedLine;
+    const message = JSON.parse(record.text) as JsonRpcEnvelope;
+    if (record.direction === "client") {
+      const key = triggerKey(message);
+      current = key ? { trigger: key, followUps: [], used: false } : null;
+      if (current) {
+        segments.push(current);
+      }
+    } else if (current && message.method) {
+      current.followUps.push(record.text);
+    }
+  }
+  return segments;
+}
+
 export async function startFakeGateway(endpoint: string, recordingPath: string): Promise<FakeGateway> {
   const table = loadReplayTable(recordingPath);
+  const segments = loadReplaySegments(recordingPath);
   const receivedMethods: string[] = [];
   const server: Server = createServer();
   const sockets = new WebSocketServer({ server });
   sockets.on("connection", (socket) => {
+    const replayFollowUps = (message: JsonRpcEnvelope) => {
+      const key = triggerKey(message);
+      const segment = segments.find((candidate) => !candidate.used && candidate.trigger === key);
+      if (!segment) {
+        return;
+      }
+      segment.used = true;
+      for (const text of segment.followUps) {
+        socket.send(text);
+      }
+    };
     socket.on("message", (data) => {
       const message = JSON.parse(data.toString()) as JsonRpcEnvelope;
       if (!message.method) {
+        // 서버 요청(승인 등)에 대한 클라이언트 답이다. 녹화에서 그 뒤에 온 알림을 이어서 보낸다.
+        replayFollowUps(message);
         return;
       }
       receivedMethods.push(message.method);
-      if (message.id === undefined || message.id === null) {
-        return;
+      if (message.id !== undefined && message.id !== null) {
+        const recorded = table.get(message.method) ?? {
+          error: { code: -32601, message: `fake gateway has no recording for ${message.method}` },
+        };
+        socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, ...recorded }));
       }
-      const recorded = table.get(message.method) ?? {
-        error: { code: -32601, message: `fake gateway has no recording for ${message.method}` },
-      };
-      socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, ...recorded }));
+      replayFollowUps(message);
     });
   });
   await new Promise<void>((resolve, reject) => {
@@ -100,3 +150,5 @@ export async function startFakeGateway(endpoint: string, recordingPath: string):
 }
 
 export const BASIC_RECORDING = fileURLToPath(new URL("./fixtures/basic.jsonl", import.meta.url));
+export const APPROVAL_TURN_RECORDING = fileURLToPath(new URL("./fixtures/approval-turn.jsonl", import.meta.url));
+export const INTERRUPTED_TURN_RECORDING = fileURLToPath(new URL("./fixtures/interrupted-turn.jsonl", import.meta.url));
