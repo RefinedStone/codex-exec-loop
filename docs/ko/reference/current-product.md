@@ -219,6 +219,8 @@ parallel, Git, GitHub 권위를 바꾸지 않고 재생하며 PR 검증 복구 �
   다시 시작되면 close `1012`, upstream 을 쓸 수 없으면 close `1013` 으로 클라이언트를 닫는다.
 - 사용자당 Gateway 는 하나이다. 두 번째 인스턴스는 `another akra-gateway is already running` 으로 끝난다.
   자식 프로세스는 Gateway 와 함께 끝난다 (Windows 는 job object).
+- `AKRA_GATEWAY_RECORD=1` 이면 세션마다 텍스트 프레임을 사용자 전용 `$AKRA_HOME/recordings/` 에 JSONL 로
+  남긴다. 녹화 파일은 실제 대화를 담으므로 커밋하지 않는다.
 - 기존 TUI, Admin, Telegram 경로는 자체 stdio app-server 를 그대로 쓴다 (계획 P-08).
 
 ## 복구와 제한

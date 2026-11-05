@@ -274,6 +274,8 @@ the desktop app itself is not shipped yet.
   an unavailable upstream closes them with `1013`.
 - One Gateway runs per user: a second instance exits with `another akra-gateway is already running`.
   Child processes are contained (Windows job objects) and end with the Gateway.
+- `AKRA_GATEWAY_RECORD=1` records each session's text frames as JSONL under the user-private
+  `$AKRA_HOME/recordings/`. Recordings contain real conversations and must not be committed.
 - The existing TUI, Admin, and Telegram paths keep their own stdio app-server (plan P-08).
 
 ## Recovery and Limits
