@@ -11,6 +11,8 @@ export interface TurnView {
   status: Turn["status"];
   errorMessage: string | null;
   items: ThreadItem[];
+  /** `turn/diff/updated` 로 받은 이 턴의 전체 변경 (git 형식). 기록에는 없으므로 이전 턴은 null 이다. */
+  diff: string | null;
 }
 
 export interface Transcript {
@@ -71,7 +73,7 @@ export function prependOlderTurns(transcript: Transcript, newestFirst: readonly 
 }
 
 function turnView(turn: Turn): TurnView {
-  return { id: turn.id, status: turn.status, errorMessage: turn.error?.message ?? null, items: [...turn.items] };
+  return { id: turn.id, status: turn.status, errorMessage: turn.error?.message ?? null, items: [...turn.items], diff: null };
 }
 
 export function isTurnInProgress(transcript: Transcript | null): boolean {
@@ -97,6 +99,12 @@ export function applyNotification(transcript: Transcript, notification: Notifica
     case "item/started":
     case "item/completed":
       return upsertItem(transcript, params.turnId as string, params.item as ThreadItem);
+    case "turn/diff/updated":
+      return updateTurn(transcript, params.turnId as string, (turn) => ({ ...turn, diff: String(params.diff ?? "") }));
+    case "item/fileChange/patchUpdated":
+      return updateItem(transcript, params.turnId as string, params.itemId as string, (item) =>
+        item.type === "fileChange" ? { ...item, changes: params.changes as typeof item.changes } : item,
+      );
     default:
       if (DELTA_METHODS.has(notification.method)) {
         return appendDelta(transcript, notification.method, params);
@@ -135,16 +143,24 @@ function upsertItem(transcript: Transcript, turnId: string, item: ThreadItem): T
 }
 
 function appendDelta(transcript: Transcript, method: string, params: Record<string, unknown>): Transcript {
-  const turnId = params.turnId as string;
-  const itemId = params.itemId as string;
   const delta = String(params.delta ?? "");
+  return updateItem(transcript, params.turnId as string, params.itemId as string, (item) =>
+    withDelta(item, method, delta, params),
+  );
+}
+
+function updateItem(
+  transcript: Transcript,
+  turnId: string,
+  itemId: string,
+  update: (item: ThreadItem) => ThreadItem,
+): Transcript {
   return updateTurn(transcript, turnId, (turn) => {
     const index = turn.items.findIndex((item) => item.id === itemId);
     if (index < 0) {
       return turn;
     }
-    const item = turn.items[index]!;
-    return { ...turn, items: replaceAt(turn.items, index, withDelta(item, method, delta, params)) };
+    return { ...turn, items: replaceAt(turn.items, index, update(turn.items[index]!)) };
   });
 }
 

@@ -95,7 +95,7 @@ Akra Desktop (Electron)  --WebSocket-->  akra-gateway (데몬)  --WebSocket-->  
 | [P1](phases/P1-gateway-daemon.md) | Gateway 데몬 | 구현 완료 (macOS 실기 확인만 남음, Q-03·Q-09 실측 완료) | Q-10, P-01~P-04, P-09 승인 (2026-11-05) | 약 1.5주 (Windows 포함) |
 | [P2](phases/P2-desktop-shell.md) | Electron 골격과 Gateway 연결 | 진행 중 (골격 완료, 피드백 대기) | P1 | 약 1주 |
 | [P3](phases/P3-mvp-conversation.md) | MVP 대화 화면 | 실사용 대기 (기준 3 = 사용자 실사용 남음) | P2 | 2~3주 |
-| [R1](roadmap/R1-change-review.md) | 변경 검토 (diff) | 계획 | P3 | 1~2주 |
+| [R1](roadmap/R1-change-review.md) | 변경 검토 (diff) | 진행 중 (diff 표시 완료) | P3 | 1~2주 |
 | [R2](roadmap/R2-terminal.md) | 터미널 | 계획 | P3 | 1주 |
 | [R3](roadmap/R3-browser-panel.md) | 브라우저 패널 | 계획 | P3 | 1~2주 |
 | [R4](roadmap/R4-work-panels.md) | 업무 패널 | 계획 | P3 | 패널당 약 1주 |

@@ -1,9 +1,11 @@
 // 열린 스레드의 대화 기록이다. 긴 대화는 보이는 턴만 그린다 (P3 §7, 가상 스크롤).
 // 사용자가 맨 아래를 보고 있으면 새 내용이 올 때 맨 아래를 따라간다. 위로 올려 읽는 중이면 따라가지 않는다.
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { useDesktopStore } from "../session/desktopStore";
+import { turnDiffFiles } from "./diff";
+import { TurnChanges } from "./DiffView";
 import { ItemView } from "./ItemView";
 import type { TurnView } from "./transcript";
 
@@ -17,6 +19,7 @@ const ESTIMATED_TURN_HEIGHT = 320;
 const BOTTOM_THRESHOLD_PX = 48;
 
 const Turn = memo(function Turn({ turn }: { turn: TurnView }) {
+  const changedFiles = useMemo(() => turnDiffFiles(turn.diff, turn.items), [turn.diff, turn.items]);
   return (
     <article className="turn" data-testid="turn" data-status={turn.status}>
       {turn.items.map((item) => (
@@ -25,6 +28,7 @@ const Turn = memo(function Turn({ turn }: { turn: TurnView }) {
       {turn.status !== "completed" && (
         <div className={`turn-status status-${turn.status}`}>{TURN_STATUS_LABEL[turn.status] ?? turn.status}</div>
       )}
+      {changedFiles.length > 0 && <TurnChanges files={changedFiles} />}
       {turn.errorMessage && <div className="error">{turn.errorMessage}</div>}
     </article>
   );
