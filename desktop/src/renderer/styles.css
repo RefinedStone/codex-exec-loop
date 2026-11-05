@@ -474,3 +474,38 @@ button {
 .approval-changes .diff-lines {
   max-height: 320px;
 }
+
+.working-tree {
+  padding: 6px 20px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+
+.working-tree-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.working-tree-bar button:first-child {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.working-tree-files {
+  max-height: 45vh;
+  overflow-y: auto;
+}
+
+.diff-note {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.git-status-new {
+  color: var(--ok);
+}

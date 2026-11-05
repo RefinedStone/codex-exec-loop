@@ -18,7 +18,7 @@ export function DiffCounts({ added, removed }: { added: number; removed: number 
   );
 }
 
-function DiffLines({ lines }: { lines: DiffLine[] }) {
+export function DiffLines({ lines }: { lines: DiffLine[] }) {
   const [showAll, setShowAll] = useState(false);
   const shown = showAll ? lines : lines.slice(0, INITIAL_LINE_LIMIT);
   return (

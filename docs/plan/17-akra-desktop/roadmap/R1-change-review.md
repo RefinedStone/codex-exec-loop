@@ -1,6 +1,6 @@
 # R1. 변경 검토 (diff)
 
-상태: 진행 중 (diff 표시 완료, 작업 트리 상태 남음) · 기준일: 2026-11-06 · 선행: P3 · 규모: 1~2주
+상태: 구현 완료 (파일 변경 승인 화면 실기 확인 남음) · 기준일: 2026-11-06 · 선행: P3 · 규모: 1~2주
 
 ## 목표
 
@@ -43,3 +43,20 @@
   준다.
 - 확인: vitest (diff 해석, 턴 diff, patchUpdated), 실제 스레드에서 펼치기 55ms. 파일 변경 승인 화면은 턴이
   필요해서 실기 확인을 하지 않았다 (D-13).
+
+### 2026-11-06: 작업 트리 상태 (PR 2/2)
+
+- 공식 `gitDiffToRemote` 를 먼저 시험했지만 쓰지 않는다. untracked 파일까지 한 번에 diff 로 만든다. 최근 스레드
+  폴더 5개 중 2개에 untracked 파일이 1.3 GB, 3.9 GB 있었고, 그 폴더에서는 응답이 접속 한도(256 MiB)를 넘어
+  Gateway 세션 전체가 끊겼다. 다른 열린 스레드의 구독도 함께 끊긴다.
+- 그래서 설계 메모대로 main 의 서비스로 둔다 (`desktop/src/main/gitStatus.ts`). renderer 는 IPC
+  (`gitStatus`, `gitFileDiff`) 로 요청한다. 모두 읽기 명령이고 셸 없이 실행한다 (Windows 에서 콘솔 창을 띄우지
+  않는다).
+- 목록: `git status --porcelain=v1 -z --branch --untracked-files=normal` 과 `git diff HEAD --numstat -z`.
+  untracked 폴더는 펼치지 않는다. 목록 출력은 4 MB, 명령은 15초까지이다.
+- 파일 diff: 펼칠 때 하나씩 읽는다. 추적 중인 파일은 `git diff HEAD -- <경로>`, 새 파일은 내용이다. 1 MB 까지만
+  읽고, NUL 바이트가 있으면 바이너리로 표시한다. 경로는 작업 폴더 안의 상대 경로만 받는다.
+- 패널은 펼쳤을 때만 읽고, 펼친 동안 턴이 끝나면 다시 읽는다.
+- Windows 에서 콘솔 없이 실행한 git 이 `git-lfs` 같은 콘솔 프로그램을 띄우면 그때마다 터미널 창이 뜬다. 그래서
+  읽기 명령에는 LFS 필터, fsmonitor, textconv 를 끈다. 대신 시각만 바뀐 LFS 파일은 "수정" 으로 보일 수 있다.
+- 경로는 저장소 루트 기준이다. 스레드 cwd 가 하위 폴더여도 루트에서 파일을 찾는다.
