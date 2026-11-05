@@ -179,6 +179,18 @@ jobs:
       - name: Run Node and admin checks
         run: bash scripts/check_node_surfaces.sh
 
+      # Akra Desktop screen tests drive the built Electron app against the fake gateway (no codex, no turns).
+      # The Node checks above install desktop dependencies without the Electron binary, so fetch it here.
+      - name: Install Electron runtime for desktop screen tests
+        run: |
+          node desktop/node_modules/electron/install.js
+          command -v xvfb-run >/dev/null 2>&1 || (sudo apt-get update && sudo apt-get install -y xvfb)
+
+      - name: Run desktop screen tests
+        env:
+          CI: "true"
+        run: xvfb-run --auto-servernum npm --prefix desktop run e2e
+
   portable_native:
     name: Portable Rust Check (${{ matrix.label }})
     needs: scope
