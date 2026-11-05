@@ -206,7 +206,7 @@ pub(super) fn ensure_schema(
                 requested_at TEXT NOT NULL,
                 last_activity_at TEXT NOT NULL,
                 handoff_target TEXT,
-                PRIMARY KEY (workspace_root, review_id)
+                PRIMARY KEY (workspace_root, thread_id, review_id)
             );
 
             CREATE TABLE IF NOT EXISTS review_center_history (
@@ -439,6 +439,7 @@ pub(super) fn ensure_schema(
     ensure_pr_validation_scheduler_columns(&transaction)?;
     ensure_pr_validation_admin_operation_schema(&transaction)?;
     ensure_dispatch_command_rerun_column(&transaction)?;
+    ensure_review_center_inbox_thread_key(&transaction)?;
     if previous_schema_version.is_some_and(|version| version < 12) {
         migrate_legacy_pr_validation_attestations(&transaction)?;
     }
@@ -529,6 +530,65 @@ fn ensure_runtime_event_projection_index(connection: &Connection) -> Result<()> 
         )
         .context("failed to initialize runtime event projection index")?;
     Ok(())
+}
+
+/// 승인 대기함의 키에 thread_id 를 넣는다. 예전 키 (workspace_root, review_id) 에서는 다른 스레드의 같은
+/// target item id 가 기존 행을 덮어써서 첫 스레드의 대기 승인이 사라졌다. SQLite 는 기본 키를 바꿀 수 없으므로
+/// 표를 새로 만들어 옮긴다. 이미 새 키이면 아무것도 하지 않는다.
+fn ensure_review_center_inbox_thread_key(connection: &Connection) -> Result<()> {
+    if table_primary_key_columns(connection, "review_center_inbox")?
+        == ["workspace_root", "thread_id", "review_id"]
+    {
+        return Ok(());
+    }
+    connection
+        .execute_batch(
+            "CREATE TABLE review_center_inbox_thread_keyed (
+                workspace_root TEXT NOT NULL,
+                review_id TEXT NOT NULL,
+                thread_id TEXT NOT NULL,
+                inbox_state TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                requested_at TEXT NOT NULL,
+                last_activity_at TEXT NOT NULL,
+                handoff_target TEXT,
+                PRIMARY KEY (workspace_root, thread_id, review_id)
+            );
+            INSERT INTO review_center_inbox_thread_keyed
+                SELECT workspace_root, review_id, thread_id, inbox_state, summary,
+                       requested_at, last_activity_at, handoff_target
+                FROM review_center_inbox;
+            DROP TABLE review_center_inbox;
+            ALTER TABLE review_center_inbox_thread_keyed RENAME TO review_center_inbox;
+            CREATE INDEX IF NOT EXISTS idx_review_center_inbox_workspace_requested
+                ON review_center_inbox(workspace_root, requested_at DESC, review_id ASC);",
+        )
+        .context("failed to migrate review center inbox to a thread-scoped key")?;
+    Ok(())
+}
+
+#[cfg(test)]
+pub(super) fn ensure_review_center_inbox_thread_key_for_tests(
+    connection: &Connection,
+) -> Result<()> {
+    ensure_review_center_inbox_thread_key(connection)
+}
+
+/// 기본 키 열 이름을 키 순서대로 돌려준다.
+fn table_primary_key_columns(connection: &Connection, table_name: &str) -> Result<Vec<String>> {
+    let mut statement = connection
+        .prepare(&format!("PRAGMA table_info({table_name})"))
+        .with_context(|| format!("failed to inspect {table_name} primary key"))?;
+    let mut columns = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, i64>(5)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .into_iter()
+        .filter(|(position, _)| *position > 0)
+        .collect::<Vec<_>>();
+    columns.sort_by_key(|(position, _)| *position);
+    Ok(columns.into_iter().map(|(_, name)| name).collect())
 }
 
 fn ensure_dispatch_command_rerun_column(connection: &Connection) -> Result<()> {
@@ -1734,8 +1794,7 @@ pub(super) fn upsert_review_center_inbox_row(
                 workspace_root, review_id, thread_id, inbox_state, summary,
                 requested_at, last_activity_at, handoff_target
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-            ON CONFLICT(workspace_root, review_id) DO UPDATE SET
-                thread_id = excluded.thread_id,
+            ON CONFLICT(workspace_root, thread_id, review_id) DO UPDATE SET
                 inbox_state = excluded.inbox_state,
                 summary = excluded.summary,
                 requested_at = excluded.requested_at,

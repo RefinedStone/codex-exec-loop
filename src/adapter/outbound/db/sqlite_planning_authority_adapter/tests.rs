@@ -724,7 +724,7 @@ fn rollout_evidence_store_deduplicates_conflicts_and_enforces_retention() {
 
 #[test]
 fn authority_schema_migrates_v7_through_v17_additively_and_rejects_unsupported_versions() {
-    for legacy_version in [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17] {
+    for legacy_version in [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18] {
         let workspace_dir = temp_workspace(&format!("schema-migrate-v{legacy_version}"));
         let location = SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
             &workspace_dir,
@@ -772,7 +772,7 @@ fn authority_schema_migrates_v7_through_v17_additively_and_rejects_unsupported_v
                 |row| row.get(0),
             )
             .expect("migrated version should load");
-        assert_eq!(version, "18");
+        assert_eq!(version, "19");
         assert_eq!(
             migrated
                 .query_row(
@@ -872,7 +872,7 @@ fn authority_schema_migrates_v7_through_v17_additively_and_rejects_unsupported_v
         );
     }
 
-    for unsupported_version in ["6", "19", "not-a-version"] {
+    for unsupported_version in ["6", "20", "not-a-version"] {
         let workspace_dir = temp_workspace("schema-reject-unsupported");
         let location = SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
             &workspace_dir,
@@ -994,7 +994,7 @@ fn authority_schema_migrates_v12_pr_validation_schedule_without_data_loss() {
                 |row| row.get::<_, String>(0),
             )
             .unwrap(),
-        "18"
+        "19"
     );
     drop(migrated);
 
@@ -1197,7 +1197,7 @@ fn authority_schema_migrates_v11_legacy_merge_evidence_without_data_loss() {
             |row| row.get(0),
         )
         .expect("migrated version should load");
-    assert_eq!(version, "18");
+    assert_eq!(version, "19");
     let (method, evidence_sha, content): (String, String, String) = migrated
         .query_row(
             "SELECT integration_method, integration_evidence_sha, content
@@ -8582,6 +8582,88 @@ fn concurrent_review_updates_keep_every_inbox_item() {
             .expect("history should load"),
         vec![history]
     );
+}
+
+#[test]
+fn same_review_id_in_two_threads_keeps_both_inbox_items() {
+    // Regression: the inbox key was (workspace_root, review_id), so a second thread whose approval had the
+    // same target item id overwrote the first thread's pending row.
+    let workspace_dir = temp_workspace("review-center-thread-scoped-inbox");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    for thread_id in ["thread-a", "thread-b"] {
+        let review = ReviewCenterThreadProjection::new(
+            thread_id,
+            "item-1",
+            "approval",
+            "pending",
+            "needs review",
+            "2026-07-06T00:30:00Z",
+            "2026-07-06T00:30:00Z",
+        );
+        let item = ReviewCenterInboxItem::new(
+            "item-1",
+            thread_id,
+            "pending",
+            "needs review",
+            "2026-07-06T00:30:00Z",
+            "2026-07-06T00:30:00Z",
+        );
+        adapter
+            .record_review_update(&workspace_dir, &review, Some(&item), None)
+            .expect("review update should persist");
+    }
+    let mut threads = adapter
+        .load_pending_inbox(&workspace_dir)
+        .expect("inbox should load")
+        .into_iter()
+        .map(|item| item.thread_id)
+        .collect::<Vec<_>>();
+    threads.sort();
+    assert_eq!(
+        threads,
+        vec!["thread-a".to_string(), "thread-b".to_string()]
+    );
+}
+
+#[test]
+fn legacy_inbox_table_migrates_to_the_thread_scoped_key() {
+    let connection = rusqlite::Connection::open_in_memory().expect("memory db should open");
+    connection
+        .execute_batch(
+            "CREATE TABLE review_center_inbox (
+                workspace_root TEXT NOT NULL,
+                review_id TEXT NOT NULL,
+                thread_id TEXT NOT NULL,
+                inbox_state TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                requested_at TEXT NOT NULL,
+                last_activity_at TEXT NOT NULL,
+                handoff_target TEXT,
+                PRIMARY KEY (workspace_root, review_id)
+            );
+            INSERT INTO review_center_inbox VALUES
+                ('/w', 'item-1', 'thread-a', 'pending', 's', 't', 't', NULL);",
+        )
+        .expect("legacy table should be created");
+
+    super::store::ensure_review_center_inbox_thread_key_for_tests(&connection)
+        .expect("migration should succeed");
+    // Running it again on the migrated table is a no-op.
+    super::store::ensure_review_center_inbox_thread_key_for_tests(&connection)
+        .expect("second migration should be a no-op");
+
+    connection
+        .execute(
+            "INSERT INTO review_center_inbox VALUES ('/w', 'item-1', 'thread-b', 'pending', 's', 't', 't', NULL)",
+            [],
+        )
+        .expect("the same review id in another thread should now be allowed");
+    let rows: i64 = connection
+        .query_row("SELECT COUNT(*) FROM review_center_inbox", [], |row| {
+            row.get(0)
+        })
+        .expect("rows should count");
+    assert_eq!(rows, 2);
 }
 
 #[test]

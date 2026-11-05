@@ -77,6 +77,56 @@ fn metadata_is_link_or_reparse(metadata: &std::fs::Metadata) -> bool {
     metadata.file_type().is_symlink()
 }
 
+/// lease 소유 프로세스가 아직 살아 있는지 판단한다. 확인하지 못하면 살아 있다고 본다 (fail-closed).
+/// 생성 시각(birth identity)이 기록과 다르다고 증명될 때만 죽은 것으로 본다. 그래야 살아 있는 작업자의
+/// slot 과 worktree 를 다른 작업이 가져가지 않는다.
+fn owner_is_alive(
+    alive: anyhow::Result<bool>,
+    current_identity: impl FnOnce() -> anyhow::Result<Option<String>>,
+    recorded_identity: &str,
+) -> bool {
+    if !alive.unwrap_or(true) {
+        return false;
+    }
+    match current_identity() {
+        Ok(Some(current)) => current == recorded_identity,
+        // 살아 있는 PID 의 생성 시각을 읽지 못했다. 같은 프로세스일 수 있으므로 회수하지 않는다.
+        Ok(None) | Err(_) => true,
+    }
+}
+
+#[cfg(test)]
+mod owner_liveness_tests {
+    use super::owner_is_alive;
+
+    #[test]
+    fn only_a_dead_pid_or_a_proven_different_identity_releases_the_owner() {
+        assert!(!owner_is_alive(Ok(false), || Ok(None), "start-1"));
+        assert!(!owner_is_alive(
+            Ok(true),
+            || Ok(Some("start-2".to_string())),
+            "start-1"
+        ));
+        assert!(owner_is_alive(
+            Ok(true),
+            || Ok(Some("start-1".to_string())),
+            "start-1"
+        ));
+        // Ambiguous answers keep the lease (fail-closed).
+        assert!(owner_is_alive(Ok(true), || Ok(None), "start-1"));
+        assert!(owner_is_alive(
+            Ok(true),
+            || Err(anyhow::anyhow!("probe failed")),
+            "start-1"
+        ));
+        assert!(owner_is_alive(
+            Err(anyhow::anyhow!("probe failed")),
+            || Ok(None),
+            "start-1"
+        ));
+    }
+}
+
 impl ParallelModeRuntimePort for GitParallelModeRuntimeAdapter {
     fn acquire_pool_mutation_permit(
         &self,
@@ -118,14 +168,11 @@ impl ParallelModeRuntimePort for GitParallelModeRuntimeAdapter {
     }
 
     fn process_owner_is_alive(&self, process_id: u32, start_identity: &str) -> bool {
-        if !crate::process_liveness::process_is_alive(process_id).unwrap_or(true) {
-            return false;
-        }
-        match crate::process_liveness::process_start_identity(process_id) {
-            Ok(Some(current_start_identity)) => current_start_identity == start_identity,
-            Ok(None) => false,
-            Err(_) => true,
-        }
+        owner_is_alive(
+            crate::process_liveness::process_is_alive(process_id),
+            || crate::process_liveness::process_start_identity(process_id),
+            start_identity,
+        )
     }
 
     fn ensure_git_execution_safe(&self, path: &Path) -> Result<(), String> {
