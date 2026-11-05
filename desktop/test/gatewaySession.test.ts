@@ -3,10 +3,16 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import type { AkraBridge, ConnectionState } from "../src/shared/bridge";
 import { GatewayConnection } from "../src/main/gatewayConnection";
-import { groupThreadsByCwd, startDesktopSession } from "../src/renderer/session/desktopSession";
-import type { DesktopState } from "../src/renderer/session/desktopStore";
+import { DesktopSession, groupThreadsByCwd, startDesktopSession } from "../src/renderer/session/desktopSession";
+import type { DesktopState, SessionStore } from "../src/renderer/session/desktopStore";
 import type { Thread } from "../src/shared/protocol/generated/v2/Thread";
-import { BASIC_RECORDING, type FakeGateway, startFakeGateway, uniqueTestEndpoint } from "./fake-gateway/fakeGateway";
+import {
+  APPROVAL_TURN_RECORDING,
+  BASIC_RECORDING,
+  type FakeGateway,
+  startFakeGateway,
+  uniqueTestEndpoint,
+} from "./fake-gateway/fakeGateway";
 
 const cleanups: Array<() => Promise<void> | void> = [];
 
@@ -63,14 +69,27 @@ function connectBridge(endpoint: string, startDaemon?: () => void) {
   return { connection, bridge, states };
 }
 
+/** 세션이 쓰는 저장소 인터페이스를 평범한 객체로 구현한다 (zustand 없이). */
 function sessionStore() {
-  const store: Pick<DesktopState, "setConnection" | "setSession" | "setSessionError"> & {
-    snapshot: Partial<DesktopState>;
-  } = {
-    snapshot: {},
-    setConnection: (connection) => Object.assign(store.snapshot, { connection }),
-    setSession: (session) => Object.assign(store.snapshot, session, { sessionError: null }),
-    setSessionError: (sessionError) => Object.assign(store.snapshot, { sessionError }),
+  const snapshot: Partial<DesktopState> = { activeThreadIds: [], openThreadId: null, transcript: null };
+  const store: SessionStore & { snapshot: Partial<DesktopState> } = {
+    snapshot,
+    setConnection: (connection) => Object.assign(snapshot, { connection }),
+    setSession: (session) => Object.assign(snapshot, session, { sessionError: null }),
+    setSessionError: (sessionError) => Object.assign(snapshot, { sessionError }),
+    setThreadActive: (threadId, active) => {
+      const others = (snapshot.activeThreadIds ?? []).filter((id) => id !== threadId);
+      snapshot.activeThreadIds = active ? [...others, threadId] : others;
+    },
+    setOpenThread: (openThreadId) => Object.assign(snapshot, { openThreadId, transcript: null, transcriptError: null }),
+    setTranscript: (transcript, transcriptError = null) => Object.assign(snapshot, { transcript, transcriptError }),
+    updateTranscript: (update) => {
+      if (snapshot.transcript) {
+        snapshot.transcript = update(snapshot.transcript);
+      }
+    },
+    getOpenThreadId: () => snapshot.openThreadId ?? null,
+    getTranscript: () => snapshot.transcript ?? null,
   };
   return store;
 }
@@ -116,6 +135,29 @@ describe("desktop session over the fake gateway", () => {
     connection.start();
     await waitFor(() => states.at(-1)?.phase === "connected");
     expect(daemonStarts).toBe(1);
+  });
+});
+
+describe("opening a thread over the fake gateway", () => {
+  it("resumes the thread and streams the recorded turn into the transcript", async () => {
+    const fake = await startFakeGateway(uniqueTestEndpoint(), APPROVAL_TURN_RECORDING);
+    cleanups.push(() => fake.close());
+    const { connection, bridge } = connectBridge(fake.endpoint);
+    const store = sessionStore();
+    const session = new DesktopSession(bridge, store, "test", (callback) => setTimeout(callback, 0));
+    session.start();
+    cleanups.push(() => session.stop());
+    connection.start();
+    await waitFor(() => store.snapshot.gateway !== undefined || store.snapshot.sessionError !== undefined);
+
+    // The recording has no thread/list, so the folder list stays empty; open the recorded thread directly.
+    await session.openThread("01a1abfb-8f0a-7581-a8e4-c2953347f470");
+    expect(fake.receivedMethods).toContain("thread/resume");
+    // The recorded approval request is answered "method not found" for now; the recording then continues.
+    await waitFor(() => store.snapshot.transcript?.turns.at(-1)?.status === "completed");
+    const items = store.snapshot.transcript?.turns.at(-1)?.items ?? [];
+    expect(items.some((item) => item.type === "commandExecution")).toBe(true);
+    expect(items.some((item) => item.type === "agentMessage" && item.text.length > 0)).toBe(true);
   });
 });
 

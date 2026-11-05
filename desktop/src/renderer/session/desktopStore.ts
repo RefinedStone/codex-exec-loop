@@ -2,6 +2,7 @@
 import { create } from "zustand";
 
 import type { ConnectionState } from "../../shared/bridge";
+import type { Transcript } from "../conversation/transcript";
 import type { CodexVersionCheck } from "./codexVersion";
 
 export interface GatewayInfo {
@@ -17,7 +18,7 @@ export interface WorkspaceThread {
   updatedAt: number;
 }
 
-/** 안정 API 에는 `project/list` 가 없어서 스레드의 cwd 로 작업 폴더를 묶는다. */
+/** 안정 API 에는 `project/list` 가 없어서 스레드의 cwd 로 작업 폴더를 묶는다 (D-16). */
 export interface WorkspaceFolder {
   cwd: string;
   threads: WorkspaceThread[];
@@ -29,9 +30,18 @@ export interface DesktopState {
   versionCheck: CodexVersionCheck | null;
   folders: WorkspaceFolder[];
   sessionError: string | null;
+  /** 진행 중인 턴이 있는 스레드 id (사이드바 표시용) */
+  activeThreadIds: string[];
+  openThreadId: string | null;
+  transcript: Transcript | null;
+  transcriptError: string | null;
   setConnection(connection: ConnectionState): void;
   setSession(session: Pick<DesktopState, "gateway" | "versionCheck" | "folders">): void;
   setSessionError(message: string | null): void;
+  setThreadActive(threadId: string, active: boolean): void;
+  setOpenThread(threadId: string | null): void;
+  setTranscript(transcript: Transcript | null, error?: string | null): void;
+  updateTranscript(update: (transcript: Transcript) => Transcript): void;
 }
 
 export const useDesktopStore = create<DesktopState>((set) => ({
@@ -40,7 +50,47 @@ export const useDesktopStore = create<DesktopState>((set) => ({
   versionCheck: null,
   folders: [],
   sessionError: null,
+  activeThreadIds: [],
+  openThreadId: null,
+  transcript: null,
+  transcriptError: null,
   setConnection: (connection) => set({ connection }),
   setSession: (session) => set({ ...session, sessionError: null }),
   setSessionError: (sessionError) => set({ sessionError }),
+  setThreadActive: (threadId, active) =>
+    set((state) => {
+      const others = state.activeThreadIds.filter((id) => id !== threadId);
+      return { activeThreadIds: active ? [...others, threadId] : others };
+    }),
+  setOpenThread: (openThreadId) => set({ openThreadId, transcript: null, transcriptError: null }),
+  setTranscript: (transcript, transcriptError = null) => set({ transcript, transcriptError }),
+  updateTranscript: (update) =>
+    set((state) => (state.transcript ? { transcript: update(state.transcript) } : {})),
 }));
+
+export type SessionStore = Pick<
+  DesktopState,
+  | "setConnection"
+  | "setSession"
+  | "setSessionError"
+  | "setThreadActive"
+  | "setOpenThread"
+  | "setTranscript"
+  | "updateTranscript"
+> & { getOpenThreadId(): string | null; getTranscript(): Transcript | null };
+
+/** zustand 저장소를 세션이 쓰는 좁은 인터페이스로 감싼다. */
+export function desktopSessionStore(): SessionStore {
+  const state = useDesktopStore.getState();
+  return {
+    setConnection: state.setConnection,
+    setSession: state.setSession,
+    setSessionError: state.setSessionError,
+    setThreadActive: state.setThreadActive,
+    setOpenThread: state.setOpenThread,
+    setTranscript: state.setTranscript,
+    updateTranscript: state.updateTranscript,
+    getOpenThreadId: () => useDesktopStore.getState().openThreadId,
+    getTranscript: () => useDesktopStore.getState().transcript,
+  };
+}

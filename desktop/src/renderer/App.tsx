@@ -1,71 +1,53 @@
-// P2 시험 화면: 연결 상태, Gateway·codex 버전, 작업 폴더 목록을 보여 준다. 대화 화면은 P3 에서 만든다.
-import { useEffect } from "react";
+// 화면 구성 (P3 §4): 왼쪽 사이드바(작업 폴더 → 스레드), 오른쪽 대화 기록. Gateway 정보는 상단에 작게 둔다.
+import { useEffect, useRef } from "react";
 
-import type { ConnectionState } from "../shared/bridge";
-import { useDesktopStore } from "./session/desktopStore";
-import { startDesktopSession } from "./session/desktopSession";
+import { ConversationView } from "./conversation/ConversationView";
+import { DesktopSession } from "./session/desktopSession";
+import { desktopSessionStore, useDesktopStore } from "./session/desktopStore";
+import { Sidebar } from "./sidebar/Sidebar";
 
 const CLIENT_VERSION = "0.0.0-development";
 
-const PHASE_LABEL: Record<ConnectionState["phase"], string> = {
-  connecting: "연결 중",
-  connected: "연결됨",
-  disconnected: "끊김",
-};
+function GatewayBar() {
+  const gateway = useDesktopStore((state) => state.gateway);
+  const versionCheck = useDesktopStore((state) => state.versionCheck);
+  const sessionError = useDesktopStore((state) => state.sessionError);
+  return (
+    <header className="gateway-bar" data-testid="gateway-info">
+      {gateway && (
+        <span className="muted">
+          codex <span data-testid="codex-version">{gateway.codexVersion ?? "알 수 없음"}</span> · gateway{" "}
+          {gateway.gatewayVersion} · upstream 재시작 {gateway.upstreamRestarts}
+        </span>
+      )}
+      {versionCheck && !versionCheck.matches && (
+        <span className="warning" data-testid="version-warning">
+          생성 타입은 codex {versionCheck.generated ?? "?"} 기준인데 Gateway 는 {versionCheck.gateway ?? "?"} 를 실행
+          중입니다. 타입을 다시 생성하세요.
+        </span>
+      )}
+      {sessionError && <span className="error">{sessionError}</span>}
+    </header>
+  );
+}
 
 export function App() {
-  const { connection, gateway, versionCheck, folders, sessionError } = useDesktopStore();
+  const session = useRef<DesktopSession | null>(null);
 
-  useEffect(() => startDesktopSession(window.akra, useDesktopStore.getState(), CLIENT_VERSION), []);
+  useEffect(() => {
+    const created = new DesktopSession(window.akra, desktopSessionStore(), CLIENT_VERSION);
+    created.start();
+    session.current = created;
+    return () => created.stop();
+  }, []);
 
   return (
-    <main className="shell">
-      <header className="status-bar">
-        <span className={`status status-${connection?.phase ?? "connecting"}`} data-testid="connection-phase">
-          {PHASE_LABEL[connection?.phase ?? "connecting"]}
-        </span>
-        <span className="endpoint">{connection?.endpoint ?? ""}</span>
-        {connection?.phase === "disconnected" && connection.retryInMs !== undefined && (
-          <span className="retry">
-            {Math.round(connection.retryInMs / 1000)}초 뒤 다시 연결 {connection.detail ? `(${connection.detail})` : ""}
-          </span>
-        )}
-      </header>
-
-      {sessionError && <p className="error">{sessionError}</p>}
-
-      {gateway && (
-        <section className="panel" data-testid="gateway-info">
-          <h2>Gateway</h2>
-          <dl>
-            <dt>codex</dt>
-            <dd data-testid="codex-version">{gateway.codexVersion ?? "알 수 없음"}</dd>
-            <dt>gateway</dt>
-            <dd>{gateway.gatewayVersion}</dd>
-            <dt>upstream 재시작</dt>
-            <dd>{gateway.upstreamRestarts}</dd>
-          </dl>
-          {versionCheck && !versionCheck.matches && (
-            <p className="warning" data-testid="version-warning">
-              생성 타입은 codex {versionCheck.generated ?? "?"} 기준인데 Gateway 는 {versionCheck.gateway ?? "?"} 를
-              실행 중입니다. 타입을 다시 생성하세요.
-            </p>
-          )}
-        </section>
-      )}
-
-      <section className="panel" data-testid="folders">
-        <h2>작업 폴더</h2>
-        {folders.length === 0 && <p className="muted">스레드가 없습니다.</p>}
-        <ul>
-          {folders.map((folder) => (
-            <li key={folder.cwd}>
-              <strong>{folder.cwd}</strong>
-              <span className="muted"> · 스레드 {folder.threads.length}개</span>
-            </li>
-          ))}
-        </ul>
-      </section>
-    </main>
+    <div className="layout">
+      <Sidebar onOpenThread={(threadId) => void session.current?.openThread(threadId)} />
+      <main className="main">
+        <GatewayBar />
+        <ConversationView />
+      </main>
+    </div>
   );
 }
