@@ -4,10 +4,11 @@ use rand::RngCore;
 
 use super::pool::reconcile_pool_board_and_context_with_target_locked;
 use crate::application::port::outbound::github_automation_port::GithubRepositoryVisibility;
+use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeDeliveryTargetSnapshot,
-    ParallelModePoolSlotState, ParallelModeRepositoryVisibility, ParallelModeSlotLeaseRequest,
-    ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
+    ParallelModePoolSlotState, ParallelModeRepositoryVisibility, ParallelModeSlotLeaseOwnerProcess,
+    ParallelModeSlotLeaseRequest, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
 };
 
 use super::pr_validation::transition_pr_validation_remediation_with_ports;
@@ -324,7 +325,8 @@ impl ParallelModeService {
             None,
         )
         .with_delivery_target(delivery_target)
-        .with_lease_generation(lease_generation);
+        .with_lease_generation(lease_generation)
+        .with_owner_process(current_lease_owner_process(self.parallel_runtime.as_ref()));
         if let Err(error) = write_slot_lease(
             self.planning_authority.as_ref(),
             self.parallel_runtime.as_ref(),
@@ -872,4 +874,19 @@ fn new_slot_lease_generation() -> Result<String, String> {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect())
+}
+
+// Without a birth identity the lease stays ownerless and startup recovery keeps the age rule.
+fn current_lease_owner_process(
+    runtime: &dyn ParallelModeRuntimePort,
+) -> Option<ParallelModeSlotLeaseOwnerProcess> {
+    let process_id = runtime.current_process_id();
+    if process_id == 0 {
+        return None;
+    }
+    let start_identity = runtime.required_process_start_identity(process_id).ok()?;
+    Some(ParallelModeSlotLeaseOwnerProcess {
+        process_id,
+        start_identity,
+    })
 }

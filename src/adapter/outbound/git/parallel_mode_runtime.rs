@@ -117,6 +117,17 @@ impl ParallelModeRuntimePort for GitParallelModeRuntimeAdapter {
             .map_err(|error| error.to_string())
     }
 
+    fn process_owner_is_alive(&self, process_id: u32, start_identity: &str) -> bool {
+        if !crate::process_liveness::process_is_alive(process_id).unwrap_or(true) {
+            return false;
+        }
+        match crate::process_liveness::process_start_identity(process_id) {
+            Ok(Some(current_start_identity)) => current_start_identity == start_identity,
+            Ok(None) => false,
+            Err(_) => true,
+        }
+    }
+
     fn ensure_git_execution_safe(&self, path: &Path) -> Result<(), String> {
         crate::git_execution_guard::ensure_host_git_execution_config_safe(path)
             .map_err(|error| error.to_string())

@@ -348,7 +348,7 @@ pub(super) fn cleanup_stale_leased_startup_slots(
     let mut cleaned_slots = 0;
 
     for lease in context.slot_leases.values() {
-        if !stale_leased_startup_slot_can_be_released(lease, session_details) {
+        if !stale_leased_startup_slot_can_be_released(runtime, lease, session_details) {
             continue;
         }
         let slot_path = context.pool_root.join(&lease.slot_id);
@@ -527,10 +527,19 @@ fn worktree_is_clean_reusable_baseline(
 }
 
 fn stale_leased_startup_slot_can_be_released(
+    runtime: &dyn ParallelModeRuntimePort,
     lease: &ParallelModeSlotLeaseSnapshot,
     session_details: &[ParallelModeAgentSessionDetailSnapshot],
 ) -> bool {
-    if lease.state != ParallelModeSlotLeaseState::Leased || !leased_at_is_stale(&lease.leased_at) {
+    if lease.state != ParallelModeSlotLeaseState::Leased {
+        return false;
+    }
+    // A recorded owner decides alone: wall-clock age cannot prove a starting worker is gone,
+    // and a crash after ThreadPrepared must not pin the slot forever.
+    if let Some(owner) = &lease.owner_process {
+        return !runtime.process_owner_is_alive(owner.process_id, &owner.start_identity);
+    }
+    if !leased_at_is_stale(&lease.leased_at) {
         return false;
     }
 
