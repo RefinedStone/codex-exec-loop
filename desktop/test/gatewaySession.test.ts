@@ -76,6 +76,18 @@ function connectBridge(endpoint: string, startDaemon?: () => void) {
       onData: () => () => undefined,
       onExit: () => () => undefined,
     },
+    browser: {
+      show: async () => {
+        throw new Error("not used");
+      },
+      setBounds: () => undefined,
+      hide: () => undefined,
+      navigate: async () => false,
+      command: () => undefined,
+      onState: () => () => undefined,
+      loadSettings: async () => ({ profiles: [], presets: [] }),
+      saveSettings: async (settings) => settings,
+    },
   };
   cleanups.push(() => connection.close());
   return { connection, bridge, states };

@@ -1,6 +1,7 @@
 // 화면 구성 (P3 §4): 왼쪽 사이드바(작업 폴더 → 스레드), 오른쪽 대화 기록. Gateway 정보는 상단에 작게 둔다.
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
+import { BrowserPanel } from "./browser/BrowserPanel";
 import { ApprovalPrompt } from "./conversation/ApprovalPrompt";
 import { Composer, type ComposerActions } from "./conversation/Composer";
 import { ConversationView } from "./conversation/ConversationView";
@@ -12,7 +13,7 @@ import { TerminalDock } from "./terminal/TerminalDock";
 
 const CLIENT_VERSION = "0.0.0-development";
 
-function GatewayBar() {
+function GatewayBar({ browserOpen, onToggleBrowser }: { browserOpen: boolean; onToggleBrowser(): void }) {
   const gateway = useDesktopStore((state) => state.gateway);
   const versionCheck = useDesktopStore((state) => state.versionCheck);
   const sessionError = useDesktopStore((state) => state.sessionError);
@@ -31,12 +32,16 @@ function GatewayBar() {
         </span>
       )}
       {sessionError && <span className="error">{sessionError}</span>}
+      <button type="button" className="browser-toggle" onClick={onToggleBrowser} aria-pressed={browserOpen} data-testid="browser-toggle">
+        {browserOpen ? "브라우저 닫기" : "브라우저"}
+      </button>
     </header>
   );
 }
 
 export function App() {
   const session = useRef<DesktopSession | null>(null);
+  const [browserOpen, setBrowserOpen] = useState(false);
 
   useEffect(() => {
     const created = new DesktopSession(window.akra, desktopSessionStore(), CLIENT_VERSION);
@@ -57,7 +62,7 @@ export function App() {
   };
 
   return (
-    <div className="layout">
+    <div className={browserOpen ? "layout with-browser" : "layout"}>
       <Sidebar
         onOpenThread={(threadId) => void session.current?.openThread(threadId)}
         onStartThread={startThread}
@@ -70,13 +75,14 @@ export function App() {
         }}
       />
       <main className="main">
-        <GatewayBar />
+        <GatewayBar browserOpen={browserOpen} onToggleBrowser={() => setBrowserOpen((open) => !open)} />
         <WorkingTreePanel git={window.akra} />
         <ConversationView onLoadOlder={async () => session.current?.loadOlderTurns()} />
         <ApprovalPrompt onAnswer={(requestId, decision) => session.current?.answerApproval(requestId, decision)} />
         <Composer actions={composerActions} />
         <TerminalDock bridge={window.akra.terminal} />
       </main>
+      {browserOpen && <BrowserPanel bridge={window.akra.browser} />}
     </div>
   );
 }

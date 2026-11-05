@@ -36,6 +36,18 @@ function harness() {
       onData: () => () => undefined,
       onExit: () => () => undefined,
     },
+    browser: {
+      show: async () => {
+        throw new Error("not used");
+      },
+      setBounds: () => undefined,
+      hide: () => undefined,
+      navigate: async () => false,
+      command: () => undefined,
+      onState: () => () => undefined,
+      loadSettings: async () => ({ profiles: [], presets: [] }),
+      saveSettings: async (settings) => settings,
+    },
   };
   const state: Partial<DesktopState> = { pendingApprovals: [], openThreadId: null, transcript: null, folders: [] };
   const store: SessionStore = {
