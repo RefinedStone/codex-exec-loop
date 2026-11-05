@@ -48,3 +48,7 @@
   도는 동안 새로 뜬 창을 기록했는데 콘솔 창(`ConsoleWindowClass`, Windows Terminal) 은 없었다. 창을 띄운 실행에서
   `Get-Location`, `git --version` 출력을 확인했다.
 - 미결 그대로: 세션 복원, 터미널 출력을 에이전트에게 보내기, 분할 화면.
+- macOS: node-pty 1.1.0 의 macOS prebuild 는 `spawn-helper` 에 실행 권한이 없다 (패키지 안 모드 0644,
+  microsoft/node-pty#919). 그대로 두면 `pty.spawn()` 이 `posix_spawnp failed` 로 실패한다. stable 은 아직 1.1.0 이
+  최신이므로, `desktop/scripts/fix-pty-permissions.mjs` 를 postinstall 로 돌려 실행 권한을 되살린다. macOS 실기
+  확인은 아직 하지 않았다 (리뷰 지적, 2026-11-06).
