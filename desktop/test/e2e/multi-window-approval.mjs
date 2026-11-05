@@ -13,7 +13,7 @@ const fake = await import(pathToFileURL(join(desktopDir, "test/fake-gateway/fake
 
 const endpoint = fake.uniqueTestEndpoint();
 const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST_RECORDING, fake.APPROVAL_TURN_RECORDING]);
-const env = { ...process.env, AKRA_GATEWAY_ENDPOINT: endpoint };
+const env = { ...process.env, AKRA_GATEWAY_ENDPOINT: endpoint, AKRA_DESKTOP_HIDDEN: "1" };
 delete env.ELECTRON_RUN_AS_NODE;
 
 const failures = [];

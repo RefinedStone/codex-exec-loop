@@ -27,3 +27,4 @@ npm run e2e            # build, then drive the app against the fake gateway (CI 
 ```
 
 `AKRA_GATEWAY_ENDPOINT` points the app at another gateway endpoint (the fake gateway in tests).
+`AKRA_DESKTOP_HIDDEN=1` keeps windows hidden so screen tests do not cover the user's other apps.
