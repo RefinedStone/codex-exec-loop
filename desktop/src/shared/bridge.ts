@@ -16,6 +16,8 @@ export const IPC_CHANNELS = {
   send: "akra:send",
   message: "akra:message",
   connectionState: "akra:connection-state",
+  ready: "akra:ready",
+  chooseFolder: "akra:choose-folder",
 } as const;
 
 /** preload 가 `window.akra` 로 노출하는 함수 전부이다. */
@@ -24,4 +26,11 @@ export interface AkraBridge {
   send(text: string): void;
   onMessage(listener: (text: string) => void): () => void;
   onConnectionState(listener: (state: ConnectionState) => void): () => void;
+  /**
+   * 수신 함수를 모두 등록했다고 main 에 알린다. main 은 이때 Gateway 접속을 (다시) 연다. 그래서 빠른 접속의
+   * `connected` 알림을 renderer 가 놓치지 않는다.
+   */
+  ready(): void;
+  /** 시스템 폴더 선택 대화상자를 연다. 고르지 않으면 null 이다. */
+  chooseFolder(): Promise<string | null>;
 }

@@ -42,6 +42,8 @@ export interface DesktopState {
   setSession(session: Pick<DesktopState, "gateway" | "versionCheck" | "folders">): void;
   setSessionError(message: string | null): void;
   setThreadActive(threadId: string, active: boolean): void;
+  /** thread/list 의 상태로 진행 중 표시를 한 번에 채운다. */
+  setActiveThreads(threadIds: string[]): void;
   setOpenThread(threadId: string | null): void;
   setTranscript(transcript: Transcript | null, error?: string | null): void;
   updateTranscript(update: (transcript: Transcript) => Transcript): void;
@@ -71,6 +73,7 @@ export const useDesktopStore = create<DesktopState>((set) => ({
       const others = state.activeThreadIds.filter((id) => id !== threadId);
       return { activeThreadIds: active ? [...others, threadId] : others };
     }),
+  setActiveThreads: (activeThreadIds) => set({ activeThreadIds }),
   setOpenThread: (openThreadId) => set({ openThreadId, transcript: null, transcriptError: null }),
   setTranscript: (transcript, transcriptError = null) => set({ transcript, transcriptError }),
   updateTranscript: (update) =>
@@ -102,6 +105,7 @@ export type SessionStore = Pick<
   | "setSession"
   | "setSessionError"
   | "setThreadActive"
+  | "setActiveThreads"
   | "setOpenThread"
   | "setTranscript"
   | "updateTranscript"
@@ -119,6 +123,7 @@ export function desktopSessionStore(): SessionStore {
     setSession: state.setSession,
     setSessionError: state.setSessionError,
     setThreadActive: state.setThreadActive,
+    setActiveThreads: state.setActiveThreads,
     setOpenThread: state.setOpenThread,
     setTranscript: state.setTranscript,
     updateTranscript: state.updateTranscript,

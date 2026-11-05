@@ -15,19 +15,25 @@ interface Sent {
 
 function harness() {
   const sent: Sent[] = [];
+  let readyCalls = 0;
   const messageListeners = new Set<(text: string) => void>();
   const stateListeners = new Set<(state: ConnectionState) => void>();
   const bridge: AkraBridge = {
     send: (text) => sent.push(JSON.parse(text) as Sent),
     onMessage: (listener) => (messageListeners.add(listener), () => messageListeners.delete(listener)),
     onConnectionState: (listener) => (stateListeners.add(listener), () => stateListeners.delete(listener)),
+    ready: () => {
+      readyCalls += 1;
+    },
+    chooseFolder: async () => null,
   };
   const state: Partial<DesktopState> = { pendingApprovals: [], openThreadId: null, transcript: null, folders: [] };
   const store: SessionStore = {
     setConnection: () => undefined,
-    setSession: () => undefined,
+    setSession: (session) => Object.assign(state, session),
     setSessionError: () => undefined,
     setThreadActive: () => undefined,
+    setActiveThreads: (threadIds) => Object.assign(state, { activeThreadIds: threadIds }),
     setOpenThread: (openThreadId) => Object.assign(state, { openThreadId, transcript: null }),
     setTranscript: (transcript) => Object.assign(state, { transcript }),
     updateTranscript: (update) => {
@@ -57,7 +63,14 @@ function harness() {
     state.openThreadId = transcript.threadId;
     state.transcript = transcript;
   };
-  return { session, sent, state, receive, reply, openWith };
+  const emitState = (phase: ConnectionState["phase"]) =>
+    stateListeners.forEach((listener) => listener({ phase, endpoint: "test" }));
+  /** 아직 답하지 않은 요청 중 method 가 맞는 마지막 요청에 답한다. */
+  const replyTo = (method: string, result: unknown) => {
+    const request = [...sent].reverse().find((message) => message.method === method && message.id !== undefined);
+    receive({ jsonrpc: "2.0", id: request?.id, result });
+  };
+  return { session, sent, state, receive, reply, replyTo, openWith, emitState, readyCalls: () => readyCalls };
 }
 
 const transcript = (status: "inProgress" | "completed"): Transcript => ({
@@ -146,5 +159,66 @@ describe("approvals", () => {
     receive({ jsonrpc: "2.0", id: 9, method: "item/tool/requestUserInput", params: { threadId: "t1" } });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(sent.at(-1)).toMatchObject({ id: 9, error: { code: -32601 } });
+  });
+});
+
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+describe("review follow-ups", () => {
+  it("asks main to connect only after its listeners are registered", () => {
+    const { readyCalls } = harness();
+    expect(readyCalls()).toBe(1);
+  });
+
+  it("reads every thread-list page and marks threads that are already active", async () => {
+    const { sent, state, replyTo, emitState } = harness();
+    emitState("connected");
+    await flush();
+    replyTo("initialize", {});
+    await flush();
+    replyTo("akra/gateway/info", { gatewayVersion: "1", codexVersion: "codex-cli 0.159.0", startedAt: "", upstreamRestarts: 0 });
+    await flush();
+    const thread = (id: string, cwd: string, active: boolean) => ({
+      id,
+      cwd,
+      name: id,
+      preview: "",
+      updatedAt: 1,
+      status: active ? { type: "active", activeFlags: [] } : { type: "idle" },
+    });
+    replyTo("thread/list", { data: [thread("a", "/one", false)], nextCursor: "page-2", backwardsCursor: null });
+    await flush();
+    const second = [...sent].reverse().find((message) => message.method === "thread/list");
+    expect(second?.params).toMatchObject({ cursor: "page-2" });
+    replyTo("thread/list", { data: [thread("b", "/two", true)], nextCursor: null, backwardsCursor: null });
+    await flush();
+    expect(state.folders?.map((folder) => folder.cwd).sort()).toEqual(["/one", "/two"]);
+    expect(state.activeThreadIds).toEqual(["b"]);
+  });
+
+  it("keeps notifications for the newly opened thread when an older resume finishes first", async () => {
+    const { session, sent, state, receive, emitState } = harness();
+    emitState("connected");
+    void session.openThread("A");
+    void session.openThread("B");
+    await flush();
+    const resumes = sent.filter((message) => message.method === "thread/resume");
+    const thread = (id: string) => ({ thread: { id, name: id, preview: "", cwd: "/w", status: { type: "idle" }, turns: [{ id: "t", status: "inProgress", error: null, items: [{ type: "agentMessage", id: "m", text: "", phase: null, memoryCitation: null, delivery: null, questions: null }] }] } });
+    // The stale resume for A completes first.
+    receive({ jsonrpc: "2.0", id: resumes[0]?.id, result: thread("A") });
+    await flush();
+    // A delta for B arrives before B's resume response; it must not be lost.
+    receive({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { threadId: "B", turnId: "t", itemId: "m", delta: "hi" } });
+    receive({ jsonrpc: "2.0", id: resumes[1]?.id, result: thread("B") });
+    await flush();
+    const item = state.transcript?.turns[0]?.items[0];
+    expect(state.transcript?.threadId).toBe("B");
+    expect(item?.type === "agentMessage" && item.text).toBe("hi");
+  });
+
+  it("labels write-to-stdin approvals separately from new commands", () => {
+    const { state, receive } = harness();
+    receive({ jsonrpc: "2.0", id: 3, method: "item/commandExecution/requestApproval", params: { threadId: "t1", turnId: "x", itemId: "i", kind: "writeStdin" } });
+    expect(state.pendingApprovals?.[0]?.kind).toBe("writeStdin");
   });
 });

@@ -44,9 +44,10 @@ function runClient(index) {
     let buf = Buffer.alloc(0), upgraded = false, stderr = "", notifications = 0;
     const t0 = Date.now();
     const timer = setTimeout(() => finish(`timeout; stderr: ${stderr.slice(-300)}`), 20000);
-    function finish(extra) {
+    // `ok` 는 initialize 와 thread/list 가 모두 성공했을 때만 true 이다. 실패는 종료 코드로 알린다.
+    function finish(extra, ok = false) {
       clearTimeout(timer); child.kill();
-      resolve(`client ${index} (proxy pid ${child.pid}):\n  ${[...lines, `notifications seen: ${notifications}`, extra].filter(Boolean).join("\n  ")}`);
+      resolve({ ok, text: `client ${index} (proxy pid ${child.pid}):\n  ${[...lines, `notifications seen: ${notifications}`, extra].filter(Boolean).join("\n  ")}` });
     }
     child.stderr.on("data", (d) => (stderr += d));
     child.on("error", (e) => finish(`spawn error ${e.message}`));
@@ -76,10 +77,13 @@ function runClient(index) {
       send({ jsonrpc: "2.0", method: "initialized", params: {} });
       const list = await request(2, "thread/list", { limit: 3 });
       lines.push(`thread/list: ${describe(list)} | count: ${((list.result || {}).data || []).length} | ${Date.now() - t0}ms`);
-      finish();
+      finish(undefined, !init.error && !list.error);
     }
     child.stdin.write(`GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${randomBytes(16).toString("base64")}\r\nSec-WebSocket-Version: 13\r\n\r\n`);
   });
 }
 
-console.log((await Promise.all(Array.from({ length: clients }, (_, i) => runClient(i + 1)))).join("\n"));
+const results = await Promise.all(Array.from({ length: clients }, (_, i) => runClient(i + 1)));
+console.log(results.map((result) => result.text).join("\n"));
+// spawn 실패, WebSocket·JSON-RPC 오류, timeout 이 하나라도 있으면 자동화에서 실패로 보이게 한다.
+process.exitCode = results.every((result) => result.ok) ? 0 : 1;

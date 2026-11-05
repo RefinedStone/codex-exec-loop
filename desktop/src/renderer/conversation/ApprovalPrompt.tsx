@@ -2,6 +2,12 @@
 import { useDesktopStore } from "../session/desktopStore";
 import { APPROVAL_DECISIONS, type ApprovalDecision, type PendingApproval } from "./approvals";
 
+const APPROVAL_TITLE: Record<PendingApproval["kind"], string> = {
+  command: "명령 실행 승인",
+  writeStdin: "실행 중인 프로세스에 입력 보내기 승인",
+  fileChange: "파일 변경 승인",
+};
+
 const DECISION_LABEL: Record<ApprovalDecision, string> = {
   accept: "허용",
   acceptForSession: "이 세션 동안 허용",
@@ -24,7 +30,7 @@ export function ApprovalPrompt({
       {approvals.map((approval) => (
         <div key={String(approval.requestId)} className="approval" data-testid="approval">
           <div className="approval-title">
-            {approval.kind === "command" ? "명령 실행 승인" : "파일 변경 승인"}
+            {APPROVAL_TITLE[approval.kind]}
             {approval.command && <code>{approval.command}</code>}
           </div>
           {approval.cwd && <div className="muted">{approval.cwd}</div>}

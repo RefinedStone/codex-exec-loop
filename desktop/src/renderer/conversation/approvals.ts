@@ -2,7 +2,8 @@
 // codex 0.159 의 안정 API 는 요청에 선택지 목록을 주지 않으므로, 응답 타입이 정한 값 중 세 가지만 보여 준다.
 import type { JsonRpcId } from "../rpc/jsonRpcClient";
 
-export type ApprovalKind = "command" | "fileChange";
+/** writeStdin 은 이미 실행 중인 프로세스(터미널)에 입력을 보내는 승인이다. 새 명령 실행과 구분해 보여 준다. */
+export type ApprovalKind = "command" | "writeStdin" | "fileChange";
 export type ApprovalDecision = "accept" | "acceptForSession" | "decline";
 
 export const APPROVAL_DECISIONS: readonly ApprovalDecision[] = ["accept", "acceptForSession", "decline"];
@@ -36,7 +37,7 @@ export function toPendingApproval(method: string, params: unknown, requestId: Js
   }
   return {
     requestId,
-    kind,
+    kind: kind === "command" && fields.kind === "writeStdin" ? "writeStdin" : kind,
     threadId: fields.threadId,
     turnId: String(fields.turnId ?? ""),
     itemId: String(fields.itemId ?? ""),
