@@ -374,7 +374,7 @@ impl AppServerConnectionConfig {
         self.api_key_auth
     }
 
-    fn ensure_executable_is_pinned(&self) -> Result<()> {
+    pub(super) fn ensure_executable_is_pinned(&self) -> Result<()> {
         if let Some(error) = &self.executable_resolution_error {
             bail!("Codex executable could not be pinned safely at startup: {error}")
         }
@@ -773,7 +773,7 @@ fn configured_shell_environment_inherit() -> ShellEnvironmentInherit {
     resolution.inherit
 }
 
-fn app_server_command(config: &AppServerConnectionConfig) -> Command {
+pub(super) fn app_server_command(config: &AppServerConnectionConfig) -> Command {
     app_server_command_with_environment(
         config,
         config.shell_environment_inherit,
@@ -796,6 +796,36 @@ fn app_server_command_with_environment(
      * into generated tools. Login shells stay disabled because profile scripts can reintroduce
      * variables after that policy has built the initial tool environment.
      */
+    let mut command =
+        codex_command_with_environment(config, process_environment_policy, process_environment);
+    command
+        .arg("app-server")
+        .arg("-c")
+        .arg(inherit.codex_override())
+        .arg("-c")
+        .arg(SHELL_ENVIRONMENT_SECRET_EXCLUDES_OVERRIDE)
+        .arg("-c")
+        .arg(DISABLE_LOGIN_SHELL_OVERRIDE)
+        .envs(config.command_environment.iter().cloned());
+    command
+}
+
+/// 고정된 codex 실행 파일과 정리된 환경만 담은 command 이다. 하위 명령과 인자는 호출자가 붙인다.
+pub(super) fn codex_command(config: &AppServerConnectionConfig) -> Command {
+    let mut command = codex_command_with_environment(
+        config,
+        config.process_environment_policy,
+        std::env::vars_os(),
+    );
+    command.envs(config.command_environment.iter().cloned());
+    command
+}
+
+fn codex_command_with_environment(
+    config: &AppServerConnectionConfig,
+    process_environment_policy: ProcessEnvironmentPolicy,
+    process_environment: impl IntoIterator<Item = (OsString, OsString)>,
+) -> Command {
     let mut command = Command::new(&config.executable);
     command.args(&config.executable_prefix_args);
     if process_environment_policy == ProcessEnvironmentPolicy::Scrubbed {
@@ -813,15 +843,6 @@ fn app_server_command_with_environment(
         }
         command.env_clear().envs(filtered.variables);
     }
-    command
-        .arg("app-server")
-        .arg("-c")
-        .arg(inherit.codex_override())
-        .arg("-c")
-        .arg(SHELL_ENVIRONMENT_SECRET_EXCLUDES_OVERRIDE)
-        .arg("-c")
-        .arg(DISABLE_LOGIN_SHELL_OVERRIDE)
-        .envs(config.command_environment.iter().cloned());
     command
 }
 
