@@ -200,7 +200,7 @@ impl SqlitePlanningAuthorityAdapter {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let mut connection = open_authority_connection(&location)?;
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("failed to open conversation thread turn-options transaction")?;
         transaction
             .execute(
@@ -250,7 +250,7 @@ impl SqlitePlanningAuthorityAdapter {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let mut connection = open_authority_connection(&location)?;
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("failed to open review center thread review transaction")?;
         upsert_authority_metadata(
             &transaction,
@@ -271,7 +271,7 @@ impl SqlitePlanningAuthorityAdapter {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let mut connection = open_authority_connection(&location)?;
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("failed to open review center inbox transaction")?;
         upsert_authority_metadata(
             &transaction,
@@ -292,7 +292,7 @@ impl SqlitePlanningAuthorityAdapter {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let mut connection = open_authority_connection(&location)?;
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("failed to open review center history transaction")?;
         upsert_authority_metadata(
             &transaction,
@@ -326,7 +326,7 @@ impl SqlitePlanningAuthorityAdapter {
         let mut connection = open_authority_connection(&location)?;
 
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("failed to open authority-store active commit transaction")?;
         runtime_projection::ensure_no_admin_authority_mutation_guard(
             &transaction,
@@ -668,7 +668,7 @@ impl SqlitePlanningAuthorityAdapter {
         let mut connection = open_authority_connection(&location)?;
 
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("failed to open planning authority combined commit transaction")?;
         runtime_projection::ensure_no_admin_authority_mutation_guard(
             &transaction,
@@ -758,7 +758,7 @@ impl SqlitePlanningAuthorityAdapter {
         let mut connection = open_authority_connection(&location)?;
 
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("failed to open direction authority commit transaction")?;
         runtime_projection::ensure_no_admin_authority_mutation_guard(
             &transaction,
@@ -834,7 +834,7 @@ impl SqlitePlanningAuthorityAdapter {
         let mut connection = open_authority_connection(&location)?;
 
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("failed to open direction authority clear transaction")?;
         runtime_projection::ensure_no_admin_authority_mutation_guard(
             &transaction,
@@ -908,7 +908,7 @@ impl SqlitePlanningAuthorityAdapter {
         let mut connection = open_authority_connection(&location)?;
 
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("failed to open task authority commit transaction")?;
         runtime_projection::ensure_no_admin_authority_mutation_guard(
             &transaction,
@@ -972,7 +972,7 @@ impl SqlitePlanningAuthorityAdapter {
         let mut connection = open_authority_connection(&location)?;
 
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("failed to open task authority clear transaction")?;
         runtime_projection::ensure_no_admin_authority_mutation_guard(
             &transaction,
@@ -1012,7 +1012,7 @@ impl SqlitePlanningAuthorityAdapter {
         let mut connection = open_authority_connection(&location)?;
 
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("failed to open authority-store active file transaction")?;
         runtime_projection::ensure_no_admin_authority_mutation_guard(
             &transaction,
@@ -1046,7 +1046,7 @@ impl SqlitePlanningAuthorityAdapter {
         let mut connection = open_authority_connection(&location)?;
 
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("failed to open authority-store active removal transaction")?;
         runtime_projection::ensure_no_admin_authority_mutation_guard(
             &transaction,

@@ -903,7 +903,7 @@ pub(super) fn store_shadow_documents(
     documents: &BTreeMap<String, String>,
 ) -> Result<()> {
     let transaction = connection
-        .transaction()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
         .context("failed to open shadow-store transaction")?;
     transaction
         .execute("DELETE FROM shadow_documents", [])

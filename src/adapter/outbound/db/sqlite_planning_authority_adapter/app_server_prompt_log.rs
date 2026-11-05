@@ -19,7 +19,7 @@ impl SqlitePlanningAuthorityAdapter {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let mut connection = open_authority_connection(&location)?;
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .context("failed to open app-server prompt log cleanup transaction")?;
         let deleted = transaction
             .execute("DELETE FROM app_server_prompt_interactions", [])
@@ -72,7 +72,7 @@ impl SqlitePlanningAuthorityAdapter {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let mut connection = open_authority_connection(&location)?;
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .context("failed to open app-server prompt log transaction")?;
         let record = record.into_bounded();
         let content_json = serde_json::to_string(&record)

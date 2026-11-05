@@ -67,7 +67,7 @@ impl SqlitePlanningAuthorityAdapter {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let mut connection = open_authority_connection(&location)?;
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .context("failed to open authority-store draft stage transaction")?;
         /*
         draft staging은 active authority를 바로 바꾸지 않지만, operator에게는 "최근 초안이 있다"는
@@ -223,7 +223,7 @@ impl SqlitePlanningAuthorityAdapter {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let mut connection = open_authority_connection(&location)?;
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .context("failed to open authority-store draft replace transaction")?;
         upsert_authority_metadata(&transaction, &location, "last_draft_updated_at")?;
         upsert_draft_entry(&transaction, draft_name)?;

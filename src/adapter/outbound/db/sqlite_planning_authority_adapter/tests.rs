@@ -8440,3 +8440,39 @@ fn authority_open_skips_the_write_lock_for_a_current_store() {
         "opening a current store waited for the write lock: {elapsed:?}"
     );
 }
+
+#[test]
+fn read_then_write_transaction_waits_for_a_short_write_lock() {
+    let workspace_dir = temp_workspace("immediate-read-then-write");
+    drop(authority_connection(&workspace_dir));
+    let lock_connection = authority_connection(&workspace_dir);
+    lock_connection
+        .execute_batch("BEGIN IMMEDIATE")
+        .expect("fixture write lock should acquire");
+    let (started_sender, started_receiver) = std::sync::mpsc::channel();
+    let worker_workspace = workspace_dir.clone();
+    let worker = std::thread::spawn(move || {
+        started_sender
+            .send(())
+            .expect("enqueue worker start should publish");
+        let started_at = std::time::Instant::now();
+        // Enqueue reads the admin mutation guard before it writes.
+        let result = SqlitePlanningAuthorityAdapter::new()
+            .enqueue_runtime_dispatch_command(&worker_workspace, &dispatch_command_snapshot(901));
+        (result, started_at.elapsed())
+    });
+    started_receiver
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("enqueue worker should start");
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    lock_connection
+        .execute_batch("COMMIT")
+        .expect("fixture write lock should release");
+
+    let (result, elapsed) = worker.join().expect("enqueue worker should join");
+    assert!(result.expect("enqueue should wait for the short lock instead of failing busy"));
+    assert!(
+        elapsed >= std::time::Duration::from_millis(150),
+        "enqueue returned before the fixture lock was released: {elapsed:?}"
+    );
+}
