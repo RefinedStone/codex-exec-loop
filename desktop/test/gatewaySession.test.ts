@@ -68,6 +68,14 @@ function connectBridge(endpoint: string, startDaemon?: () => void) {
     chooseFolder: async () => null,
     gitStatus: async () => ({ ok: false, message: "not used" }),
     gitFileDiff: async () => ({ kind: "binary" }),
+    terminal: {
+      open: async () => ({ ok: false, message: "not used" }),
+      write: () => undefined,
+      resize: () => undefined,
+      close: () => undefined,
+      onData: () => () => undefined,
+      onExit: () => () => undefined,
+    },
   };
   cleanups.push(() => connection.close());
   return { connection, bridge, states };

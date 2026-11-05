@@ -509,3 +509,51 @@ button {
 .git-status-new {
   color: var(--ok);
 }
+
+.terminal-dock {
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.terminal-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 20px;
+}
+
+.terminal-tabs button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.terminal-tab {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 4px;
+  color: var(--muted);
+}
+
+.terminal-tab.active {
+  background: var(--surface);
+  color: inherit;
+}
+
+.terminal-close,
+.terminal-add {
+  color: var(--muted);
+}
+
+.terminal-body {
+  height: 35vh;
+  padding: 0 0 4px 8px;
+  background: #1e1e1e;
+}
+
+.terminal-view {
+  height: 100%;
+}

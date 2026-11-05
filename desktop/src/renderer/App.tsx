@@ -8,6 +8,7 @@ import { WorkingTreePanel } from "./conversation/WorkingTreePanel";
 import { DesktopSession } from "./session/desktopSession";
 import { desktopSessionStore, useDesktopStore } from "./session/desktopStore";
 import { Sidebar } from "./sidebar/Sidebar";
+import { TerminalDock } from "./terminal/TerminalDock";
 
 const CLIENT_VERSION = "0.0.0-development";
 
@@ -74,6 +75,7 @@ export function App() {
         <ConversationView onLoadOlder={async () => session.current?.loadOlderTurns()} />
         <ApprovalPrompt onAnswer={(requestId, decision) => session.current?.answerApproval(requestId, decision)} />
         <Composer actions={composerActions} />
+        <TerminalDock bridge={window.akra.terminal} />
       </main>
     </div>
   );
