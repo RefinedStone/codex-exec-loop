@@ -13,6 +13,7 @@ use serde_json::json;
 
 pub(super) const RECORD_ENV_VAR: &str = "AKRA_GATEWAY_RECORD";
 const RECORDINGS_DIRECTORY_NAME: &str = "recordings";
+const MAX_NAME_ATTEMPTS: u32 = 100;
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum RecordDirection {
@@ -51,16 +52,18 @@ impl GatewayRecorder {
         crate::private_directory::ensure_private_directory(directory)?;
         Ok(Self {
             directory: directory.to_path_buf(),
-            run_label: chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string(),
+            // 같은 초 안에 다시 시작해도 이전 실행의 파일과 겹치지 않게 밀리초와 PID 를 붙인다.
+            run_label: format!(
+                "{}-{}",
+                chrono::Utc::now().format("%Y%m%dT%H%M%S%3fZ"),
+                std::process::id()
+            ),
             next_session: AtomicU64::new(1),
         })
     }
 
     pub(super) fn open_session(&self) -> Result<SessionRecording> {
         let session = self.next_session.fetch_add(1, Ordering::SeqCst);
-        let path = self
-            .directory
-            .join(format!("gateway-{}-{session:04}.jsonl", self.run_label));
         let mut options = OpenOptions::new();
         options.create_new(true).append(true);
         #[cfg(unix)]
@@ -68,12 +71,32 @@ impl GatewayRecorder {
             use std::os::unix::fs::OpenOptionsExt;
             options.mode(0o600);
         }
-        let file = options
-            .open(&path)
-            .with_context(|| format!("failed to create recording `{}`", path.display()))?;
-        Ok(SessionRecording {
-            file: Mutex::new(file),
-        })
+        // 이름이 겹치면(같은 밀리초에 다시 시작한 실행 등) 기존 녹화를 덮지 않고 접미사를 붙인다.
+        for attempt in 0..MAX_NAME_ATTEMPTS {
+            let suffix = if attempt == 0 {
+                String::new()
+            } else {
+                format!("-{attempt}")
+            };
+            let path = self.directory.join(format!(
+                "gateway-{}-{session:04}{suffix}.jsonl",
+                self.run_label
+            ));
+            match options.open(&path) {
+                Ok(file) => {
+                    return Ok(SessionRecording {
+                        file: Mutex::new(file),
+                    });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!("failed to create recording `{}`", path.display())
+                    });
+                }
+            }
+        }
+        anyhow::bail!("could not find a free recording file name for session {session}")
     }
 }
 
@@ -140,6 +163,40 @@ mod tests {
         assert_eq!(lines[0]["direction"], "client");
         assert_eq!(lines[0]["text"], r#"{"id":1,"method":"thread/list"}"#);
         assert_eq!(lines[1]["direction"], "gateway");
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_restart_with_the_same_run_label_never_overwrites_an_earlier_recording() {
+        let directory = crate::test_utils::platform_safe_temp_dir().join(format!(
+            "akra-gateway-recorder-restart-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let first = GatewayRecorder::create(&directory).unwrap();
+        let mut second = GatewayRecorder::create(&directory).unwrap();
+        // Simulate a restart inside the same millisecond by the same process.
+        second.run_label = first.run_label.clone();
+
+        first
+            .open_session()
+            .unwrap()
+            .record(RecordDirection::Client, "first");
+        second
+            .open_session()
+            .unwrap()
+            .record(RecordDirection::Client, "second");
+
+        let contents: Vec<String> = std::fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+            .collect();
+        assert_eq!(contents.len(), 2, "both sessions must have their own file");
+        assert!(contents.iter().any(|text| text.contains("\"first\"")));
+        assert!(contents.iter().any(|text| text.contains("\"second\"")));
         let _ = std::fs::remove_dir_all(&directory);
     }
 }
