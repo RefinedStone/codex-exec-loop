@@ -88,6 +88,11 @@ function connectBridge(endpoint: string, startDaemon?: () => void) {
       loadSettings: async () => ({ profiles: [], presets: [] }),
       saveSettings: async (settings) => settings,
     },
+    github: {
+      summary: async () => ({ login: "", myPullRequests: [], reviewRequests: [] }),
+      reviewPrompt: async () => "",
+      openExternal: () => undefined,
+    },
   };
   cleanups.push(() => connection.close());
   return { connection, bridge, states };
