@@ -25,6 +25,31 @@ export interface WorkspaceFolder {
   threads: WorkspaceThread[];
 }
 
+/** 폴더 안은 최근 스레드부터, 폴더는 가장 최근 스레드가 있는 폴더부터 놓는다. */
+export function sortFolders(folders: WorkspaceFolder[]): WorkspaceFolder[] {
+  for (const folder of folders) {
+    folder.threads.sort((left, right) => right.updatedAt - left.updatedAt);
+  }
+  const latest = (folder: WorkspaceFolder) => folder.threads[0]?.updatedAt ?? 0;
+  return folders.sort((left, right) => latest(right) - latest(left));
+}
+
+/** 이미 보이는 스레드는 그대로 두고, 처음 보는 스레드만 더한다. 이 창에서 만든 새 스레드도 지우지 않는다. */
+export function mergeWorkspaceFolders(current: readonly WorkspaceFolder[], incoming: readonly WorkspaceFolder[]): WorkspaceFolder[] {
+  const known = new Set(current.flatMap((folder) => folder.threads.map((thread) => thread.id)));
+  const byCwd = new Map(current.map((folder) => [folder.cwd, { cwd: folder.cwd, threads: [...folder.threads] }]));
+  for (const folder of incoming) {
+    for (const thread of folder.threads) {
+      if (known.has(thread.id)) continue;
+      known.add(thread.id);
+      const target = byCwd.get(folder.cwd) ?? { cwd: folder.cwd, threads: [] };
+      target.threads.push(thread);
+      byCwd.set(folder.cwd, target);
+    }
+  }
+  return sortFolders([...byCwd.values()]);
+}
+
 export interface DesktopState {
   connection: ConnectionState | null;
   gateway: GatewayInfo | null;
@@ -52,6 +77,8 @@ export interface DesktopState {
   clearApprovals(): void;
   /** 이 창에서 만든 새 스레드를 사이드바의 작업 폴더 맨 앞에 넣는다. */
   addThreadToFolder(cwd: string, thread: WorkspaceThread): void;
+  /** 늦게 끝난 전체 목록에서 처음 보는 스레드만 사이드바에 더한다. */
+  mergeFolders(folders: WorkspaceFolder[]): void;
 }
 
 export const useDesktopStore = create<DesktopState>((set) => ({
@@ -97,6 +124,7 @@ export const useDesktopStore = create<DesktopState>((set) => ({
       const threads = [thread, ...(existing?.threads.filter((item) => item.id !== thread.id) ?? [])];
       return { folders: [{ cwd, threads }, ...others] };
     }),
+  mergeFolders: (folders) => set((state) => ({ folders: mergeWorkspaceFolders(state.folders, folders) })),
 }));
 
 export type SessionStore = Pick<
@@ -113,6 +141,7 @@ export type SessionStore = Pick<
   | "removeApproval"
   | "clearApprovals"
   | "addThreadToFolder"
+  | "mergeFolders"
 > & { getOpenThreadId(): string | null; getTranscript(): Transcript | null };
 
 /** zustand 저장소를 세션이 쓰는 좁은 인터페이스로 감싼다. */
@@ -131,6 +160,7 @@ export function desktopSessionStore(): SessionStore {
     removeApproval: state.removeApproval,
     clearApprovals: state.clearApprovals,
     addThreadToFolder: state.addThreadToFolder,
+    mergeFolders: state.mergeFolders,
     getOpenThreadId: () => useDesktopStore.getState().openThreadId,
     getTranscript: () => useDesktopStore.getState().transcript,
   };

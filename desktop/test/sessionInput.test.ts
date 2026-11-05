@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import type { AkraBridge, ConnectionState } from "../src/shared/bridge";
 import { DesktopSession } from "../src/renderer/session/desktopSession";
-import type { DesktopState, SessionStore } from "../src/renderer/session/desktopStore";
+import { type DesktopState, mergeWorkspaceFolders, type SessionStore } from "../src/renderer/session/desktopStore";
 import type { Transcript } from "../src/renderer/conversation/transcript";
 
 interface Sent {
@@ -50,6 +50,9 @@ function harness() {
     },
     addThreadToFolder: (cwd, thread) => {
       state.folders = [{ cwd, threads: [thread] }];
+    },
+    mergeFolders: (folders) => {
+      state.folders = mergeWorkspaceFolders(state.folders ?? [], folders);
     },
     getOpenThreadId: () => state.openThreadId ?? null,
     getTranscript: () => state.transcript ?? null,
@@ -195,6 +198,40 @@ describe("review follow-ups", () => {
     await flush();
     expect(state.folders?.map((folder) => folder.cwd).sort()).toEqual(["/one", "/two"]);
     expect(state.activeThreadIds).toEqual(["b"]);
+  });
+
+  it("shows the state-DB list first, then adds threads only the rollout scan finds", async () => {
+    const { sent, state, replyTo, emitState } = harness();
+    emitState("connected");
+    await flush();
+    replyTo("initialize", {});
+    await flush();
+    replyTo("akra/gateway/info", { gatewayVersion: "1", codexVersion: "codex-cli 0.159.0", startedAt: "", upstreamRestarts: 0 });
+    await flush();
+    const thread = (id: string, cwd: string, updatedAt: number) => ({
+      id,
+      cwd,
+      name: id,
+      preview: "",
+      updatedAt,
+      status: { type: "idle" },
+    });
+    const lists = () => sent.filter((message) => message.method === "thread/list");
+    expect(lists()[0]?.params).toMatchObject({ useStateDbOnly: true });
+    replyTo("thread/list", { data: [thread("a", "/one", 2)], nextCursor: null, backwardsCursor: null });
+    await flush();
+    expect(state.folders?.flatMap((folder) => folder.threads.map((item) => item.id))).toEqual(["a"]);
+
+    // The scan repeats a thread across pages; it must appear once.
+    expect(lists()[1]?.params).toMatchObject({ useStateDbOnly: false });
+    replyTo("thread/list", { data: [thread("a", "/one", 2), thread("old", "/one", 1)], nextCursor: "p2", backwardsCursor: null });
+    await flush();
+    replyTo("thread/list", { data: [thread("old", "/one", 1), thread("c", "/three", 3)], nextCursor: null, backwardsCursor: null });
+    await flush();
+    expect(state.folders?.map((folder) => [folder.cwd, folder.threads.map((item) => item.id)])).toEqual([
+      ["/three", ["c"]],
+      ["/one", ["a", "old"]],
+    ]);
   });
 
   it("keeps notifications for the newly opened thread when an older resume finishes first", async () => {
