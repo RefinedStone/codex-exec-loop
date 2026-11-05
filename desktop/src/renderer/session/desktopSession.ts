@@ -30,6 +30,8 @@ import type { GatewayInfo, SessionStore, WorkspaceFolder } from "./desktopStore"
 const THREAD_LIST_LIMIT = 100;
 /** 스레드를 열 때와 "이전 턴 더 보기" 한 번에 읽는 턴 수이다. 가장 큰 실측 스레드에서 10턴은 약 11 MB, 270ms 였다. */
 const TURN_PAGE_SIZE = 10;
+/** 첫 턴 전의 새 스레드에 대한 app-server 오류이다 (2026-11-05 실측: `no rollout found for thread id …`). */
+const NO_ROLLOUT_ERROR = /no rollout found/i;
 /** shortcut: 최대 50 페이지(5,000 스레드)까지만 읽는다. 더 많으면 사이드바를 필요할 때 더 읽는 방식으로 바꾼다. */
 const THREAD_LIST_MAX_PAGES = 50;
 
@@ -70,6 +72,19 @@ export function groupThreadsByCwd(threads: readonly Thread[]): WorkspaceFolder[]
   return sorted.sort((left, right) => latest(right) - latest(left));
 }
 
+/** 목록의 진행 중 스레드에, 목록을 읽는 동안 받은 상태 변경을 덮어 최종 목록을 만든다. */
+export function activeThreadIds(threads: readonly Thread[], changes: ReadonlyMap<string, boolean>): string[] {
+  const active = new Set(threads.filter((thread) => thread.status.type === "active").map((thread) => thread.id));
+  for (const [threadId, isActive] of changes) {
+    if (isActive) {
+      active.add(threadId);
+    } else {
+      active.delete(threadId);
+    }
+  }
+  return [...active];
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -80,6 +95,8 @@ export class DesktopSession {
   private readonly unsubscribers: Array<() => void> = [];
   /** resume 응답을 기다리는 동안 그 스레드에 온 알림이다. 응답을 반영한 뒤 이어서 반영한다. */
   private loading: ResumeLoading | null = null;
+  /** initialize 가 thread/list 를 읽는 동안 받은 진행 상태 변경이다 (스레드 id → 진행 중). */
+  private statusChangesWhileListing: Map<string, boolean> | null = null;
   private connected = false;
   /** 사용자의 답을 기다리는 승인 요청의 응답 함수이다. 키는 요청 id 이다. */
   private readonly approvalAnswers = new Map<string, (answer: unknown) => void>();
@@ -218,14 +235,19 @@ export class DesktopSession {
       await this.client.request("initialize", initializeParams(this.clientVersion));
       this.client.notify("initialized");
       const gateway = await this.client.request<GatewayInfo>("akra/gateway/info");
-      const threads = await this.listAllThreads();
+      // 목록을 읽는 동안 온 상태 변경은 목록의 상태보다 새롭다. 따로 모았다가 목록 결과 위에 덮는다.
+      const statusChanges = new Map<string, boolean>();
+      this.statusChangesWhileListing = statusChanges;
+      const threads = await this.listAllThreads().finally(() => {
+        this.statusChangesWhileListing = null;
+      });
       this.store.setSession({
         gateway,
         versionCheck: checkCodexVersion(GENERATED_CODEX_VERSION, gateway.codexVersion),
         folders: groupThreadsByCwd(threads),
       });
       // 이 창이 아직 구독하지 않은 스레드도 목록의 상태로 진행 중 표시를 채운다.
-      this.store.setActiveThreads(threads.filter((thread) => thread.status.type === "active").map((thread) => thread.id));
+      this.store.setActiveThreads(activeThreadIds(threads, statusChanges));
       if (this.store.getOpenThreadId()) {
         await this.resumeOpenThread();
       }
@@ -311,7 +333,8 @@ export class DesktopSession {
         ...(cursor ? { cursor } : {}),
       });
     } catch (error) {
-      if (cursor === null && error instanceof JsonRpcError) {
+      // 첫 턴 전의 새 스레드에는 기록(rollout)이 없다. 이 오류만 빈 기록으로 보고, 나머지는 화면에 보여 준다.
+      if (cursor === null && error instanceof JsonRpcError && NO_ROLLOUT_ERROR.test(error.message)) {
         return { data: [], nextCursor: null, backwardsCursor: null };
       }
       throw error;
@@ -324,7 +347,9 @@ export class DesktopSession {
       return;
     }
     if (method === "thread/status/changed") {
-      this.store.setThreadActive(threadId, (params as { status: ThreadStatus }).status.type === "active");
+      const active = (params as { status: ThreadStatus }).status.type === "active";
+      this.statusChangesWhileListing?.set(threadId, active);
+      this.store.setThreadActive(threadId, active);
     }
     if (method === "serverRequest/resolved") {
       this.resolveApprovalElsewhere((params as { requestId: JsonRpcId }).requestId);

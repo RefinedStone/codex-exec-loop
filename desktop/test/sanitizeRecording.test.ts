@@ -17,6 +17,8 @@ describe("sanitize-recording", () => {
         cwd: "C:/Users/someone/work",
         delta: "hello there",
         status: "completed",
+        modelProvider: "acme-prod",
+        model: "acme-internal-model",
       },
     };
     const sanitized = sanitizeValue("", message) as { method: string; params: Record<string, string> };
@@ -24,7 +26,7 @@ describe("sanitize-recording", () => {
     expect(sanitized.params.threadId).toBe(message.params.threadId);
     expect(sanitized.params.status).toBe("completed");
     expect(sanitized.params.cwd).toBe("/work/example-app");
-    for (const key of ["token", "url", "repository", "delta"]) {
+    for (const key of ["token", "url", "repository", "delta", "modelProvider", "model"]) {
       expect(sanitized.params[key]).not.toBe(message.params[key as keyof typeof message.params]);
       expect(sanitized.params[key]).toMatch(/^word/);
     }
