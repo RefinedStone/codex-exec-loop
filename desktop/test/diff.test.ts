@@ -71,6 +71,32 @@ describe("turn diff (git format)", () => {
     expect(totalCounts(files)).toEqual({ added: 3, removed: 2 });
   });
 
+  it("decodes paths git quotes, including octal UTF-8 bytes and spaces", () => {
+    const quoted = [
+      'diff --git "a/\\355\\225\\234 \\352\\270\\200.txt" "b/\\355\\225\\234 \\352\\270\\200.txt"',
+      "new file mode 100644",
+      "--- /dev/null",
+      '+++ "b/\\355\\225\\234 \\352\\270\\200.txt"',
+      "@@ -0,0 +1 @@",
+      "+x",
+      "diff --git a/with space.txt b/with space.txt",
+      "--- a/with space.txt\t",
+      "+++ b/with space.txt\t",
+      "@@ -1 +1 @@",
+      "-a",
+      "+b",
+      'diff --git a/plain.txt "b/tab\\there.txt"',
+      "rename from plain.txt",
+      'rename to "tab\\there.txt"',
+      "",
+    ].join("\n");
+    expect(parseGitDiff(quoted).map((file) => [file.path, file.kind, file.movePath])).toEqual([
+      ["한 글.txt", "add", null],
+      ["with space.txt", "update", null],
+      ["plain.txt", "update", "tab\there.txt"],
+    ]);
+  });
+
   it("returns no files for an empty diff", () => {
     expect(parseGitDiff("")).toEqual([]);
   });
@@ -88,6 +114,8 @@ describe("turn changes", () => {
     const items = [fileChange("applied", "completed"), fileChange("declined", "declined")];
     expect(turnDiffFiles(null, items).map((file) => file.path)).toEqual(["applied.txt"]);
     expect(turnDiffFiles("", items)).toEqual([]);
+    // A diff in a shape the parser does not know falls back to the items instead of hiding the changes.
+    expect(turnDiffFiles("unknown format\n", items).map((file) => file.path)).toEqual(["applied.txt"]);
   });
 
   const transcript = (): Transcript => ({
