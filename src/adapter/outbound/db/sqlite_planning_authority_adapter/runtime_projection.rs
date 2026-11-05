@@ -542,7 +542,7 @@ impl SqlitePlanningAuthorityAdapter {
         // 트랜잭션은 두 metadata 행 갱신을 한 단위로 묶는다.
         // 중간에 실패하면 순번만 증가하거나 갱신 시각만 바뀌는 반쪽 상태가 남지 않는다.
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .context("failed to open official refresh order transaction")?;
         // `last_claim_updated_at`은 클레임/큐 계열 런타임 상태가 바뀌었다는 저렴한 변경 신호이다.
         upsert_authority_metadata(&transaction, &location, "last_claim_updated_at")?;
@@ -582,7 +582,7 @@ impl SqlitePlanningAuthorityAdapter {
         // 트랜잭션 경계가 이 함수의 분산 락 단위이다.
         // commit하기 전까지 다른 실행자는 이 함수의 삽입/삭제 결과를 관찰하지 못한다.
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .context("failed to open official refresh claim transaction")?;
         // 시도 자체도 런타임 클레임 영역의 활동이므로 heartbeat metadata를 갱신한다.
         upsert_authority_metadata(&transaction, &location, "last_claim_updated_at")?;
@@ -723,7 +723,7 @@ impl SqlitePlanningAuthorityAdapter {
         let mut connection = open_authority_connection(&location)?;
         // 이 트랜잭션이 성공해야 "클레임 해제"와 "다음 refresh 실행 허용"이 함께 보인다.
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .context("failed to open official refresh release transaction")?;
         // release는 대기 중인 worker에게 중요한 변화이므로 authority metadata를 갱신한다.
         upsert_authority_metadata(&transaction, &location, "last_claim_updated_at")?;
@@ -774,7 +774,7 @@ impl SqlitePlanningAuthorityAdapter {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let mut connection = open_authority_connection(&location)?;
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .context("failed to open official refresh cancellation transaction")?;
         let deleted_rows = transaction
             .execute(
@@ -805,7 +805,7 @@ impl SqlitePlanningAuthorityAdapter {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let mut connection = open_authority_connection(&location)?;
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .context("failed to open official refresh recovery transaction")?;
         upsert_authority_metadata(&transaction, &location, "last_claim_updated_at")?;
 
@@ -999,7 +999,7 @@ impl SqlitePlanningAuthorityAdapter {
         let mut connection = open_authority_connection(&location)?;
         // 트랜잭션이 성공해야 대기 worker가 "클레임이 풀렸다"는 상태를 일관되게 관찰한다.
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .context("failed to open distributor queue release transaction")?;
         // 삭제 결과가 0행이어도 release 시도 자체는 상태 확인자가 다시 볼 수 있는 시점이다.
         upsert_authority_metadata(&transaction, &location, "last_claim_updated_at")?;
@@ -1028,7 +1028,7 @@ impl SqlitePlanningAuthorityAdapter {
         let payload_json = serde_json::to_string(command)
             .context("failed to serialize runtime dispatch command")?;
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .context("failed to open runtime dispatch command enqueue transaction")?;
         if !command.is_terminal() {
             ensure_no_admin_authority_mutation_guard(
@@ -1189,7 +1189,7 @@ impl SqlitePlanningAuthorityAdapter {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let mut connection = open_authority_connection(&location)?;
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .context("failed to open runtime dispatch command claim transaction")?;
         ensure_no_admin_authority_mutation_guard(&transaction, "dispatch command claim", None)?;
         upsert_authority_metadata(&transaction, &location, "last_claim_updated_at")?;
@@ -2629,7 +2629,7 @@ impl SqlitePlanningAuthorityAdapter {
             .context("failed to serialize runtime slot lease projection")?;
         // 이 트랜잭션이 성공해야 current row, invalid marker 정리, event log가 같은 상태를 가리킨다.
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .context("failed to open runtime slot lease transaction")?;
         ensure_task_not_retired(&transaction, &lease.task_id, "slot lease")?;
         // projection 쪽 변경 신호는 claim heartbeat와 별도로 `last_runtime_projection_at`에 남긴다.
@@ -2691,7 +2691,7 @@ impl SqlitePlanningAuthorityAdapter {
 
         // 트랜잭션을 사용해 snapshot 조회자가 삭제 전/후 상태가 섞인 중간 결과를 보지 않게 한다.
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .context("failed to open runtime slot lease removal transaction")?;
         // projection 변경 시각을 갱신해 외부 관찰자가 snapshot을 다시 읽을 근거를 남긴다.
         upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
@@ -2920,7 +2920,7 @@ impl SqlitePlanningAuthorityAdapter {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let mut connection = open_authority_connection(&location)?;
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .context("failed to open parallel runtime reset transaction")?;
         upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
         let dispatch_block_rows = preserve_failed_start_dispatch_blocks(&transaction)
@@ -2981,7 +2981,7 @@ impl SqlitePlanningAuthorityAdapter {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let mut connection = open_authority_connection(&location)?;
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .context("failed to open parallel runtime task cleanup transaction")?;
         upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
 
@@ -3078,7 +3078,7 @@ impl SqlitePlanningAuthorityAdapter {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let mut connection = open_authority_connection(&location)?;
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .context("failed to open parallel pool reset report transaction")?;
         upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
         let dispatch_block_rows = preserve_failed_start_dispatch_blocks(&transaction)
@@ -3188,7 +3188,7 @@ impl SqlitePlanningAuthorityAdapter {
             .context("failed to serialize runtime session detail projection")?;
         // current row와 event log가 서로 다른 상태를 가리키지 않도록 같은 트랜잭션에 넣는다.
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .context("failed to open runtime session detail transaction")?;
         ensure_task_not_retired(&transaction, &detail.task_id, "session detail")?;
         // runtime projection 변경이므로 claim용 metadata가 아니라 projection용 metadata를 갱신한다.
@@ -3247,7 +3247,7 @@ impl SqlitePlanningAuthorityAdapter {
         let payload_json = serde_json::to_string(block)
             .context("failed to serialize runtime task dispatch block projection")?;
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .context("failed to open runtime task dispatch block transaction")?;
         ensure_task_not_retired(&transaction, &block.task_id, "task dispatch block")?;
         upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
@@ -3316,7 +3316,7 @@ impl SqlitePlanningAuthorityAdapter {
             .context("failed to serialize runtime distributor queue projection")?;
         // 이 트랜잭션 안에서 current queue row와 event log가 같은 record를 기준으로 갱신된다.
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .context("failed to open runtime distributor queue transaction")?;
         ensure_task_not_retired(&transaction, &record.task_id, "distributor queue record")?;
         // projection 변경 시각을 갱신해 외부 polling이 queue snapshot을 다시 읽을 수 있게 한다.
