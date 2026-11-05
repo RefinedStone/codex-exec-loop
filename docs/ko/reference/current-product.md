@@ -201,6 +201,26 @@ semantic camera zoom, worker 이동, 가구 occlusion, scene selection은 presen
 scenario clock을 시작합니다. Normal delivery, blocked recovery, queue pressure를 실제 planning,
 parallel, Git, GitHub 권위를 바꾸지 않고 재생하며 PR 검증 복구 시나리오 열 개도 제공합니다.
 
+## Gateway 데몬
+
+`akra-gateway` 는 로컬 클라이언트(계획 중인 Akra Desktop)를 Gateway 가 소유한 `codex app-server` 에
+중계하는 상주 데몬이다. [Akra Desktop 계획](../../plan/17-akra-desktop/README.md)의 P1 이다. 데스크톱 앱은
+아직 출시되지 않았다.
+
+- 접속 주소: unix 는 `$AKRA_HOME/run/gateway.sock` (디렉터리 `0700`, 소켓 `0600`). Windows 는 named pipe
+  `\\.\pipe\akra-gateway-<사용자 SID>` 이고, 사용자 전용 보안 설명자, 첫 인스턴스 생성, 원격 거부를 쓴다.
+  TCP 포트는 열지 않는다. 시작하면 `akra-gateway listening on <주소>` 를 출력한다.
+- upstream: `codex app-server --listen unix://$AKRA_HOME/run/codex-app-server.sock` 를 TUI 와 같은 고정
+  실행 파일, `-c` 보안 설정, 정리된 환경으로 실행한다. 종료되면 1초~30초 간격으로 다시 시작하고, 그 횟수를
+  `akra/gateway/info` 로 알린다.
+- 세션: 클라이언트 WebSocket 마다 `codex app-server proxy --sock …` 자식 프로세스를 하나씩 연다. 그래서
+  `initialize`, 요청 ID, 스레드 구독은 접속마다 따로이다. 프레임은 바꾸지 않고 전달하고 `akra/*` 요청만
+  Gateway 가 답한다 (`akra/gateway/info`: Gateway·codex 버전, 시작 시각, upstream 재시작 횟수). upstream 이
+  다시 시작되면 close `1012`, upstream 을 쓸 수 없으면 close `1013` 으로 클라이언트를 닫는다.
+- 사용자당 Gateway 는 하나이다. 두 번째 인스턴스는 `another akra-gateway is already running` 으로 끝난다.
+  자식 프로세스는 Gateway 와 함께 끝난다 (Windows 는 job object).
+- 기존 TUI, Admin, Telegram 경로는 자체 stdio app-server 를 그대로 쓴다 (계획 P-08).
+
 ## 복구와 제한
 
 - 잘못되거나 충돌한 planning update는 continuation을 멈추고 검토 근거를 보존합니다.
@@ -218,6 +238,7 @@ parallel, Git, GitHub 권위를 바꾸지 않고 재생하며 PR 검증 복구 �
 - CLI: `src/adapter/inbound/cli.rs`
 - Admin: `src/adapter/inbound/admin_api/`
 - Telegram: `src/adapter/inbound/telegram_bot/`
+- Gateway: `src/adapter/inbound/gateway/`, `src/adapter/outbound/app_server/gateway_upstream.rs`
 - Planning: `src/application/service/planning/`, `src/domain/planning/`
 - Parallel: `src/application/service/parallel_mode/`, `src/domain/parallel_mode/`
 - App-server adapter: `src/adapter/outbound/app_server/`

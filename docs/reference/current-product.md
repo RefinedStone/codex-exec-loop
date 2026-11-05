@@ -255,6 +255,27 @@ scenario clock behind the same dashboard contract. It supports normal delivery, 
 queue pressure, and the ten PR-validation recovery scenarios without mutating real planning,
 parallel, Git, or GitHub authority.
 
+## Gateway Daemon
+
+`akra-gateway` is a resident daemon that relays local clients (the planned Akra Desktop) to a
+Gateway-owned `codex app-server`. It is P1 of [the Akra Desktop plan](../plan/17-akra-desktop/README.md);
+the desktop app itself is not shipped yet.
+
+- Endpoint: unix `$AKRA_HOME/run/gateway.sock` (directory `0700`, socket `0600`); Windows named pipe
+  `\\.\pipe\akra-gateway-<user SID>` with an owner-only security descriptor, first-instance creation, and
+  remote clients rejected. No TCP port is opened. Startup prints `akra-gateway listening on <endpoint>`.
+- Upstream: the Gateway runs `codex app-server --listen unix://$AKRA_HOME/run/codex-app-server.sock`
+  with the same pinned executable, `-c` security overrides, and scrubbed environment as the TUI. It
+  restarts an exited upstream with 1 s to 30 s backoff and reports the count in `akra/gateway/info`.
+- Sessions: each client WebSocket gets its own `codex app-server proxy --sock …` child, so `initialize`,
+  request ids, and thread subscriptions stay per connection. Frames pass through unchanged; only
+  `akra/*` requests are answered by the Gateway (`akra/gateway/info` returns gateway and codex versions,
+  start time, and upstream restarts). An upstream restart closes clients with WebSocket close `1012`;
+  an unavailable upstream closes them with `1013`.
+- One Gateway runs per user: a second instance exits with `another akra-gateway is already running`.
+  Child processes are contained (Windows job objects) and end with the Gateway.
+- The existing TUI, Admin, and Telegram paths keep their own stdio app-server (plan P-08).
+
 ## Recovery and Limits
 
 - Invalid or conflicting planning updates pause continuation and preserve review evidence.
@@ -272,6 +293,7 @@ parallel, Git, or GitHub authority.
 - CLI: `src/adapter/inbound/cli.rs`
 - Admin: `src/adapter/inbound/admin_api/`
 - Telegram: `src/adapter/inbound/telegram_bot/`
+- Gateway: `src/adapter/inbound/gateway/`, `src/adapter/outbound/app_server/gateway_upstream.rs`
 - Planning: `src/application/service/planning/`, `src/domain/planning/`
 - Parallel: `src/application/service/parallel_mode/`, `src/domain/parallel_mode/`
 - App-server adapter: `src/adapter/outbound/app_server/`

@@ -193,3 +193,29 @@ Akra 의 아키텍처 테스트(`tests/architecture_boundaries.rs`)를 통과해
 | 0.149.1 의 다중 접속 동작이 main 브랜치와 다르다 | 실측(§6)으로 확인한다 |
 | 구독자가 없으면 턴이 멈춘다 (Q-09) | Gateway 가 자체 접속으로 진행 중인 스레드를 구독해서 유지한다 |
 | macOS 와 Windows 의 IPC 차이 (K-10) | 차이를 Listener 와 권한 처리에 가둔다. Session 코드는 같은 스트림 타입을 쓴다 |
+
+## 9. 진행 기록
+
+### 2026-11-05 첫 구현
+
+- 구조 (작업 1, 사용자 승인): `src/bin/akra-gateway.rs` → `src/adapter/inbound/gateway/`
+  (`listener`, `session`, `router`) → outbound port `GatewayUpstreamPort` →
+  `src/adapter/outbound/app_server/gateway_upstream.rs`. 조립은 `composition::production` 이 한다.
+  순수 중계라 application service 와 inbound port 는 두지 않았다 (Telegram 입구와 같은 구조).
+- 재사용: `connection.rs` 의 `app_server_command`(보안 `-c`, 환경 변수 정리, 고정 실행 파일)와 새
+  `codex_command`, `subprocess::spawn`(`ManagedChild`), `configuration::akra_home_dir`, Windows ACL 은
+  `private_fs` 를 쓴다. 사용자 전용 디렉터리는 `src/private_directory.rs` 가 만든다.
+- 완료 기준 확인 (Windows 11, codex-cli 0.159.0, 턴 없음):
+
+| 기준 | 결과 |
+| --- | --- |
+| 1. 사용자 전용 주소 | `\\.\pipe\akra-gateway-<SID>` 가 사용자 전용 보안 설명자로 생겼다 |
+| 2. 다중 접속 | Node 클라이언트 3개가 named pipe 로 동시에 `akra/gateway/info`, `initialize`, `thread/list` 에 성공 |
+| 3. `akra/gateway/info` | `codexVersion`, `gatewayVersion`, `startedAt`, `upstreamRestarts` 를 돌려준다 |
+| 4. upstream 재시작 | upstream 을 강제 종료하자 대기 중인 클라이언트가 close `1012` 를 받았다. 재접속 후 `upstreamRestarts: 1` |
+| 5. 단일 인스턴스 | 두 번째 실행은 `another akra-gateway is already running` 으로 끝났다 (exit 1) |
+| 자식 정리 | Gateway 를 강제 종료하자 upstream 과 proxy 자식이 모두 끝났다 (job object) |
+
+- 자동 시험: router 단위 시험, 재시작 간격·경로 길이 단위 시험, 가짜 upstream 통합 시험(순서 보장, 접속별
+  upstream, `akra/*` 로컬 응답, close `1012`/`1013`), `tests/binary_entrypoints.rs` 의 도움말·오류 계약.
+- 남은 일: 녹화 옵션(§4.6), macOS 실기 확인(완료 기준 9), Q-03·Q-09 실측(턴 필요, 사용자 허락 필요).
