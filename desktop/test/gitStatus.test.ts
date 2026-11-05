@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { afterAll, describe, expect, it } from "vitest";
 
-import { parseNumstat, parsePorcelainStatus, readGitFileDiff, readGitStatus, resolveInside } from "../src/main/gitStatus";
+import { NO_HELPER_PROGRAMS, parseNumstat, parsePorcelainStatus, readGitFileDiff, readGitStatus, resolveInside } from "../src/main/gitStatus";
 
 describe("git status parsing", () => {
   it("reads the branch, renames, untracked folders and plain changes", () => {
@@ -95,8 +95,9 @@ describe("git status in a real repository", () => {
     git("config", "filter.lfs.clean", `sh -c 'touch "${marker}"; cat'`);
     writeFileSync(join(root, ".gitattributes"), "*.lfs filter=lfs\n");
     writeFileSync(join(root, "model.lfs"), "v1\n");
-    git("-c", "filter.lfs.process=", "-c", "filter.lfs.clean=", "add", ".");
-    git("-c", "filter.lfs.process=", "-c", "filter.lfs.clean=", "commit", "-q", "-m", "lfs");
+    // 준비 단계도 같은 설정으로 필터를 끈다. CI 러너의 전역 `filter.lfs.required=true` 도 함께 끈다.
+    git(...NO_HELPER_PROGRAMS, "add", ".");
+    git(...NO_HELPER_PROGRAMS, "commit", "-q", "-m", "lfs");
     writeFileSync(join(root, "model.lfs"), "v2\n");
 
     expect((await readGitStatus(root)).ok).toBe(true);
