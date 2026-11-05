@@ -3643,6 +3643,43 @@ fn read_bounded_line<R: BufRead>(
     }
 }
 
+// Stderr is diagnostics-only: bytes decode lossily (e.g. CP949 output) and an overlong line is
+// truncated up to the next newline, so neither can poison a live turn's transport.
+fn read_lossy_stderr_line<R: BufRead>(
+    reader: &mut R,
+    maximum_bytes: usize,
+) -> io::Result<BoundedLineRead> {
+    let mut line = Vec::new();
+    let mut truncated = false;
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            if line.is_empty() && !truncated {
+                return Ok(BoundedLineRead::EndOfFile);
+            }
+            break;
+        }
+        let newline = available.iter().position(|byte| *byte == b'\n');
+        let payload = &available[..newline.unwrap_or(available.len())];
+        let room = maximum_bytes.saturating_sub(line.len());
+        truncated |= payload.len() > room;
+        line.extend_from_slice(&payload[..payload.len().min(room)]);
+        let consumed = newline.map_or(available.len(), |index| index + 1);
+        reader.consume(consumed);
+        if newline.is_some() {
+            break;
+        }
+    }
+    if line.last() == Some(&b'\r') {
+        line.pop();
+    }
+    let mut text = String::from_utf8_lossy(&line).into_owned();
+    if truncated {
+        text.push_str(" [truncated]");
+    }
+    Ok(BoundedLineRead::Line(text))
+}
+
 fn spawn_pipe_reader<T: std::io::Read + Send + 'static>(
     pipe: T,
     tx: mpsc::SyncSender<AppServerLine>,
@@ -3661,7 +3698,12 @@ fn spawn_pipe_reader<T: std::io::Read + Send + 'static>(
         };
         let mut reader = BufReader::new(pipe);
         loop {
-            let line = match read_bounded_line(&mut reader, maximum_bytes) {
+            let read = if is_stderr {
+                read_lossy_stderr_line(&mut reader, maximum_bytes)
+            } else {
+                read_bounded_line(&mut reader, maximum_bytes)
+            };
+            let line = match read {
                 Ok(BoundedLineRead::Line(line)) => line,
                 Ok(BoundedLineRead::EndOfFile) => {
                     let _ = tx.send(AppServerLine::ReaderFinished {
@@ -8533,6 +8575,47 @@ mod tests {
                 ),
             ]
         );
+        assert!(transport_failure.current().is_none());
+    }
+
+    #[test]
+    fn stderr_reader_survives_oversized_and_non_utf8_diagnostics() {
+        let (tx, rx) = mpsc::sync_channel(APP_SERVER_LINE_CHANNEL_CAPACITY);
+        let transport_failure = Arc::new(TransportFailure::default());
+        let mut stderr = vec![b'e'; 65 * 1024];
+        stderr.push(b'\n');
+        // "\xC7\xD1" is CP949 for a Korean syllable and is not valid UTF-8.
+        stderr.extend_from_slice(&[0xC7, 0xD1, b'\n']);
+        stderr.extend_from_slice(b"after\n");
+        spawn_pipe_reader(
+            Cursor::new(stderr),
+            tx,
+            true,
+            MAX_STDERR_LINE_BYTES,
+            transport_failure.clone(),
+        );
+
+        let mut lines = Vec::new();
+        loop {
+            match rx.recv_timeout(Duration::from_secs(1)) {
+                Ok(AppServerLine::Stderr(line)) => lines.push(line),
+                Ok(AppServerLine::ReaderFinished {
+                    source,
+                    termination,
+                }) => {
+                    assert_eq!(source, AppServerReaderSource::Stderr);
+                    assert_eq!(termination, AppServerReaderTermination::EndOfFile);
+                    break;
+                }
+                other => panic!("unexpected stderr reader event: {}", other.is_ok()),
+            }
+        }
+
+        assert_eq!(lines.len(), 3);
+        assert!(lines[0].ends_with(" [truncated]"));
+        assert_eq!(lines[0].len(), MAX_STDERR_LINE_BYTES + " [truncated]".len());
+        assert_eq!(lines[1], "\u{FFFD}\u{FFFD}");
+        assert_eq!(lines[2], "after");
         assert!(transport_failure.current().is_none());
     }
 
