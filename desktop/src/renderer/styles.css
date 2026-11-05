@@ -1,0 +1,75 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --muted: #8a8f98;
+  --ok: #2f9e44;
+  --warn: #e8590c;
+  --bad: #e03131;
+}
+
+body {
+  margin: 0;
+}
+
+.shell {
+  display: grid;
+  gap: 16px;
+  padding: 16px 20px;
+}
+
+.status-bar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  font-size: 13px;
+}
+
+.status {
+  font-weight: 600;
+}
+
+.status-connected {
+  color: var(--ok);
+}
+
+.status-connecting {
+  color: var(--warn);
+}
+
+.status-disconnected {
+  color: var(--bad);
+}
+
+.endpoint,
+.muted,
+.retry {
+  color: var(--muted);
+}
+
+.panel h2 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+.panel dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+  margin: 0;
+}
+
+.panel dt {
+  color: var(--muted);
+}
+
+.panel dd {
+  margin: 0;
+}
+
+.warning {
+  color: var(--warn);
+}
+
+.error {
+  color: var(--bad);
+}
