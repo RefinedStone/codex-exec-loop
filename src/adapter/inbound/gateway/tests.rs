@@ -15,7 +15,7 @@ use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
 use super::GatewayCommand;
 use super::parse_args;
-use super::session::run_session;
+use super::session::{run_session, websocket_config};
 use crate::application::port::outbound::gateway_upstream_port::{
     GatewayUpstreamPort, GatewayUpstreamSnapshot, GatewayUpstreamStream,
 };
@@ -51,7 +51,12 @@ impl GatewayUpstreamPort for EchoUpstream {
         *self.opened.lock().unwrap() += 1;
         let (gateway_side, upstream_side) = tokio::io::duplex(DUPLEX_BUFFER_BYTES);
         tokio::spawn(async move {
-            let Ok(mut websocket) = tokio_tungstenite::accept_async(upstream_side).await else {
+            let Ok(mut websocket) = tokio_tungstenite::accept_async_with_config(
+                upstream_side,
+                Some(websocket_config()),
+            )
+            .await
+            else {
                 return;
             };
             while let Some(Ok(message)) = websocket.next().await {
@@ -90,9 +95,13 @@ async fn connect_client(upstream: Arc<EchoUpstream>) -> WebSocketStream<DuplexSt
     tokio::spawn(async move {
         let _ = run_session(gateway_side, upstream, None).await;
     });
-    let (websocket, _) = tokio_tungstenite::client_async("ws://localhost/", client_side)
-        .await
-        .expect("client handshake through the gateway session should succeed");
+    let (websocket, _) = tokio_tungstenite::client_async_with_config(
+        "ws://localhost/",
+        client_side,
+        Some(websocket_config()),
+    )
+    .await
+    .expect("client handshake through the gateway session should succeed");
     websocket
 }
 
@@ -136,6 +145,18 @@ async fn app_server_messages_are_relayed_in_order() {
         let body: Value = serde_json::from_str(reply.strip_prefix("echo:").unwrap()).unwrap();
         assert_eq!(body["id"], json!(index), "replies must keep request order");
     }
+}
+
+#[tokio::test]
+async fn messages_larger_than_the_tungstenite_default_frame_are_relayed() {
+    // A long thread's thread/resume response exceeded tungstenite's 16 MiB frame / 64 MiB message defaults
+    // and silently closed the session (found by opening real threads in Akra Desktop).
+    let upstream = EchoUpstream::new(true);
+    let mut client = connect_client(upstream).await;
+    let large = "x".repeat(20 << 20);
+    client.send(Message::text(large.clone())).await.unwrap();
+    let reply = next_text(&mut client).await;
+    assert_eq!(reply.len(), "echo:".len() + large.len());
 }
 
 #[tokio::test]

@@ -12,8 +12,8 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
 
 use super::recorder::{GatewayRecorder, RecordDirection, SessionRecording};
 use super::router::{ClientTextRoute, respond_to_akra_request, route_client_text};
@@ -25,6 +25,16 @@ use crate::application::port::outbound::gateway_upstream_port::{
 const UPSTREAM_WEBSOCKET_URL: &str = "ws://localhost/rpc";
 const CLIENT_OUTBOX_CAPACITY: usize = 256;
 const CLIENT_CLOSE_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
+/// `thread/resume` 응답은 긴 스레드의 모든 아이템(명령 출력 포함)을 담아 tungstenite 기본 한도(메시지 64 MiB,
+/// 프레임 16 MiB)를 넘을 수 있다. 넘으면 읽기가 오류로 끝나 세션이 닫힌다.
+/// shortcut: 고정 상한 256 MiB, 이보다 큰 스레드가 나오면 페이지 단위 읽기(excludeTurns, thread/items/list)로 바꾼다.
+const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 256 << 20;
+
+pub(super) fn websocket_config() -> WebSocketConfig {
+    WebSocketConfig::default()
+        .max_message_size(Some(MAX_WEBSOCKET_MESSAGE_BYTES))
+        .max_frame_size(Some(MAX_WEBSOCKET_MESSAGE_BYTES))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SessionEnd {
@@ -47,9 +57,10 @@ where
             recording.record(direction, text);
         }
     };
-    let client_websocket = tokio_tungstenite::accept_async(client)
-        .await
-        .context("client WebSocket handshake failed")?;
+    let client_websocket =
+        tokio_tungstenite::accept_async_with_config(client, Some(websocket_config()))
+            .await
+            .context("client WebSocket handshake failed")?;
     let (mut client_sink, mut client_stream) = client_websocket.split();
     let mut generation = upstream.generation();
     generation.borrow_and_update();
@@ -81,7 +92,14 @@ where
     });
 
     let client_to_upstream = async {
-        while let Some(Ok(message)) = client_stream.next().await {
+        while let Some(result) = client_stream.next().await {
+            let message = match result {
+                Ok(message) => message,
+                Err(error) => {
+                    tracing::warn!(error = %error, "gateway client read failed");
+                    return SessionEnd::ClientClosed;
+                }
+            };
             match message {
                 Message::Text(text) => match route_client_text(text.as_str()) {
                     ClientTextRoute::Forward => {
@@ -118,7 +136,14 @@ where
     };
 
     let upstream_to_client = async {
-        while let Some(Ok(message)) = upstream_stream.next().await {
+        while let Some(result) = upstream_stream.next().await {
+            let message = match result {
+                Ok(message) => message,
+                Err(error) => {
+                    tracing::warn!(error = %error, "gateway upstream read failed");
+                    break;
+                }
+            };
             match message {
                 Message::Text(_) | Message::Binary(_) => {
                     if let Message::Text(text) = &message {
@@ -183,9 +208,13 @@ async fn open_upstream(
     upstream: &dyn GatewayUpstreamPort,
 ) -> Result<WebSocketStream<Box<dyn GatewayUpstreamStream>>> {
     let stream = upstream.open_session()?;
-    let (websocket, _response) = tokio_tungstenite::client_async(UPSTREAM_WEBSOCKET_URL, stream)
-        .await
-        .context("upstream WebSocket handshake failed")?;
+    let (websocket, _response) = tokio_tungstenite::client_async_with_config(
+        UPSTREAM_WEBSOCKET_URL,
+        stream,
+        Some(websocket_config()),
+    )
+    .await
+    .context("upstream WebSocket handshake failed")?;
     Ok(websocket)
 }
 
