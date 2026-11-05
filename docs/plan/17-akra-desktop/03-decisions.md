@@ -21,7 +21,7 @@
 | D-01 | 출발점은 Akra + Electron | 승인 | 2026-11-05 |
 | D-02 | 엔진은 Codex 먼저, Claude 는 나중 | 승인 | 2026-11-05 |
 | D-03 | 클라우드 에이전트(dots) 비공개 백엔드 연결 | 제외 | 2026-11-05 |
-| D-04 | 저장소는 Akra 저장소 안 `desktop/` | 권장 | 2026-11-05 |
+| D-04 | 저장소는 Akra 저장소 안 `desktop/` | 승인 | 2026-11-05 |
 | D-05 | 기준 데이터 A+ | 승인 | 2026-11-05 |
 | D-06 | Gateway 는 항상 실행되는 데몬 | 승인 | 2026-11-05 |
 | D-07 | free 플랜 대응 보류 | 승인 | 2026-11-05 |
@@ -33,15 +33,15 @@
 | D-13 | Codex 사용량 최소화 | 승인 | 2026-11-05 |
 | D-14 | RefinedStone 신원, 회사 계정과 분리 | 승인 | 2026-11-05 |
 | D-15 | macOS 와 Windows 를 함께 지원 | 승인 | 2026-11-05 |
-| P-01 | Gateway 는 새 바이너리 `akra-gateway` | 제안 | 2026-11-05 |
-| P-02 | upstream 은 Gateway 전용 자식 프로세스 | 제안 | 2026-11-05 |
-| P-03 | 클라이언트 접속 1개 = upstream 접속 1개 | 제안 | 2026-11-05 |
-| P-04 | 로컬 IPC 만 사용 (macOS unix 소켓, Windows named pipe), TCP 미사용 | 제안 | 2026-11-05 |
+| P-01 | Gateway 는 새 바이너리 `akra-gateway` | 승인 | 2026-11-05 |
+| P-02 | upstream 은 Gateway 전용 자식 프로세스 | 승인 | 2026-11-05 |
+| P-03 | 클라이언트 접속 1개 = upstream 접속 1개 | 승인 | 2026-11-05 |
+| P-04 | 로컬 IPC 만 사용 (macOS unix 소켓, Windows named pipe), TCP 미사용 | 승인 | 2026-11-05 |
 | P-05 | 데스크톱 기술 조합 | 제안 | 2026-11-05 |
 | P-06 | TS 타입은 generate-ts 산출물을 커밋 | 제안 | 2026-11-05 |
 | P-07 | initialize 는 `experimentalApi: false` | 제안 | 2026-11-05 |
 | P-08 | 기존 TUI·하네스는 자체 app-server 유지 | 제안 | 2026-11-05 |
-| P-09 | upstream 접속은 `codex app-server proxy` | 제안 | 2026-11-05 |
+| P-09 | upstream 접속은 `codex app-server proxy` | 승인 | 2026-11-05 |
 
 ## 승인된 결정
 
@@ -76,14 +76,14 @@
 - 영향: 이런 에이전트는 공식 앱에서 쓴다. 공식 API 가 공개되면 그때 다시 논의한다. 공식 앱의 해당
   내부 구조는 이 저장소에 기록하지 않는다.
 
-### D-04 저장소는 Akra 저장소 안 `desktop/` (권장)
+### D-04 저장소는 Akra 저장소 안 `desktop/`
 
 - 결정: 별도 저장소를 만들지 않는다. Akra 저장소 루트에 `desktop/` 을 추가한다.
 - 이유:
   - Gateway(Rust)와 데스크톱(TS)의 변경을 커밋 하나로 함께 낸다.
   - 데스크톱 빌드가 같은 저장소의 Gateway 바이너리를 함께 빌드한다.
   - Codex 저장소도 엔진과 프로토콜 타입 생성을 한 저장소에서 한다.
-- 상태 메모: 사용자가 반대하지 않았지만 명시적으로 승인하지 않았다. P1 시작 전에 확인한다 (Q-10).
+- 상태 메모: 2026-11-05 사용자가 승인했다 (Q-10 해결).
 - 영향: Akra 의 Rust 중심 규칙과 CI 가 `desktop/` 에도 적용된다. `desktop/` 전용 규칙과 검사 경로를
   따로 둔다 ([P2](phases/P2-desktop-shell.md)).
 
@@ -198,7 +198,9 @@
 - 영향: P-04 를 OS 별로 나눈다. upstream 접속 방식은 P-09 이다. 권한, 종료 신호, 데몬 시작 방식은
   OS 별로 처리한다 ([P1](phases/P1-gateway-daemon.md), [R8](roadmap/R8-packaging-and-operations.md)).
 
-## 제안 (사용자 확인 전)
+## 제안
+
+P-01~P-04 와 P-09 는 2026-11-05 사용자가 승인했다. 나머지는 해당 단계 전에 확인한다.
 
 ### P-01 Gateway 는 새 바이너리 `akra-gateway`
 
