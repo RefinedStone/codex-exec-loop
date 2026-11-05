@@ -71,7 +71,13 @@ function connectBridge(endpoint: string, startDaemon?: () => void) {
 
 /** 세션이 쓰는 저장소 인터페이스를 평범한 객체로 구현한다 (zustand 없이). */
 function sessionStore() {
-  const snapshot: Partial<DesktopState> = { activeThreadIds: [], openThreadId: null, transcript: null };
+  const snapshot: Partial<DesktopState> = {
+    activeThreadIds: [],
+    openThreadId: null,
+    transcript: null,
+    pendingApprovals: [],
+    folders: [],
+  };
   const store: SessionStore & { snapshot: Partial<DesktopState> } = {
     snapshot,
     setConnection: (connection) => Object.assign(snapshot, { connection }),
@@ -87,6 +93,20 @@ function sessionStore() {
       if (snapshot.transcript) {
         snapshot.transcript = update(snapshot.transcript);
       }
+    },
+    addApproval: (approval) => {
+      snapshot.pendingApprovals = [...(snapshot.pendingApprovals ?? []), approval];
+    },
+    removeApproval: (requestId) => {
+      snapshot.pendingApprovals = (snapshot.pendingApprovals ?? []).filter(
+        (approval) => String(approval.requestId) !== String(requestId),
+      );
+    },
+    clearApprovals: () => {
+      snapshot.pendingApprovals = [];
+    },
+    addThreadToFolder: (cwd, thread) => {
+      snapshot.folders = [{ cwd, threads: [thread] }, ...(snapshot.folders ?? []).filter((folder) => folder.cwd !== cwd)];
     },
     getOpenThreadId: () => snapshot.openThreadId ?? null,
     getTranscript: () => snapshot.transcript ?? null,
@@ -153,7 +173,12 @@ describe("opening a thread over the fake gateway", () => {
     // The recording has no thread/list, so the folder list stays empty; open the recorded thread directly.
     await session.openThread("01a1abfb-8f0a-7581-a8e4-c2953347f470");
     expect(fake.receivedMethods).toContain("thread/resume");
-    // The recorded approval request is answered "method not found" for now; the recording then continues.
+    // The replayed approval request waits for the user; answering it lets the recording continue.
+    await waitFor(() => (store.snapshot.pendingApprovals?.length ?? 0) === 1);
+    const approval = store.snapshot.pendingApprovals![0]!;
+    expect(approval).toMatchObject({ kind: "command", threadId: "01a1abfb-8f0a-7581-a8e4-c2953347f470" });
+    session.answerApproval(approval.requestId, "accept");
+    expect(store.snapshot.pendingApprovals).toHaveLength(0);
     await waitFor(() => store.snapshot.transcript?.turns.at(-1)?.status === "completed");
     const items = store.snapshot.transcript?.turns.at(-1)?.items ?? [];
     expect(items.some((item) => item.type === "commandExecution")).toBe(true);

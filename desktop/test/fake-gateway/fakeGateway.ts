@@ -97,9 +97,18 @@ export function loadReplaySegments(recordingPath: string): ReplaySegment[] {
   return segments;
 }
 
-export async function startFakeGateway(endpoint: string, recordingPath: string): Promise<FakeGateway> {
-  const table = loadReplayTable(recordingPath);
-  const segments = loadReplaySegments(recordingPath);
+/** 녹화를 여러 개 주면 응답 표는 앞의 녹화가 우선하고, 이어지는 메시지는 순서대로 이어 붙인다. */
+export async function startFakeGateway(endpoint: string, recordingPaths: string | string[]): Promise<FakeGateway> {
+  const paths = Array.isArray(recordingPaths) ? recordingPaths : [recordingPaths];
+  const table = new Map<string, Pick<JsonRpcEnvelope, "result" | "error">>();
+  for (const path of paths) {
+    for (const [method, recorded] of loadReplayTable(path)) {
+      if (!table.has(method)) {
+        table.set(method, recorded);
+      }
+    }
+  }
+  const segments = paths.flatMap((path) => loadReplaySegments(path));
   const receivedMethods: string[] = [];
   const server: Server = createServer();
   const sockets = new WebSocketServer({ server });
@@ -152,3 +161,7 @@ export async function startFakeGateway(endpoint: string, recordingPath: string):
 export const BASIC_RECORDING = fileURLToPath(new URL("./fixtures/basic.jsonl", import.meta.url));
 export const APPROVAL_TURN_RECORDING = fileURLToPath(new URL("./fixtures/approval-turn.jsonl", import.meta.url));
 export const INTERRUPTED_TURN_RECORDING = fileURLToPath(new URL("./fixtures/interrupted-turn.jsonl", import.meta.url));
+/** approval-turn 의 스레드를 사이드바에 보여 주는 thread/list 녹화이다 (화면 시험용). */
+export const APPROVAL_THREAD_LIST_RECORDING = fileURLToPath(
+  new URL("./fixtures/approval-thread-list.jsonl", import.meta.url),
+);

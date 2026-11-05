@@ -16,6 +16,12 @@ describe("gateway endpoint", () => {
     expect(resolveGatewayEndpoint("linux", { AKRA_HOME: "/srv/akra" })).toBe(join("/srv/akra", "run", "gateway.sock"));
   });
 
+  it("lets AKRA_GATEWAY_ENDPOINT point the app at another gateway", () => {
+    expect(resolveGatewayEndpoint("win32", { AKRA_GATEWAY_ENDPOINT: "\\\\.\\pipe\\fake" }, () => "unused")).toBe(
+      "\\\\.\\pipe\\fake",
+    );
+  });
+
   it("uses the per-user named pipe on Windows", () => {
     expect(resolveGatewayEndpoint("win32", {}, () => "S-1-5-21-1-2-3-1000")).toBe(
       "\\\\.\\pipe\\akra-gateway-S-1-5-21-1-2-3-1000",

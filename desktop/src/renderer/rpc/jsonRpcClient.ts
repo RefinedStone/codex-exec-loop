@@ -24,7 +24,15 @@ interface PendingRequest {
 }
 
 export type NotificationListener = (method: string, params: unknown) => void;
-export type ServerRequestHandler = (method: string, params: unknown) => Promise<unknown>;
+
+/** 처리기가 이 값을 돌려주면 응답을 보내지 않는다. 다른 창이 이미 답해서 요청이 닫혔을 때 쓴다 (Q-03). */
+export const NO_RESPONSE: unique symbol = Symbol("no-response");
+
+export type ServerRequestHandler = (
+  method: string,
+  params: unknown,
+  id: JsonRpcId,
+) => Promise<unknown | typeof NO_RESPONSE>;
 
 interface IncomingMessage {
   id?: JsonRpcId | null;
@@ -115,8 +123,10 @@ export class JsonRpcClient {
       return;
     }
     try {
-      const result = await this.serverRequestHandler(method, params);
-      this.sendText(JSON.stringify({ jsonrpc: "2.0", id, result }));
+      const result = await this.serverRequestHandler(method, params, id);
+      if (result !== NO_RESPONSE) {
+        this.sendText(JSON.stringify({ jsonrpc: "2.0", id, result }));
+      }
     } catch (error) {
       const code = error instanceof JsonRpcError ? error.code : JSON_RPC_INTERNAL_ERROR;
       this.sendError(id, code, error instanceof Error ? error.message : String(error));
