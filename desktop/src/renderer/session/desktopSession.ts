@@ -26,6 +26,13 @@ import { checkCodexVersion } from "./codexVersion";
 import type { GatewayInfo, SessionStore, WorkspaceFolder } from "./desktopStore";
 
 const THREAD_LIST_LIMIT = 100;
+/** shortcut: 최대 50 페이지(5,000 스레드)까지만 읽는다. 더 많으면 사이드바를 필요할 때 더 읽는 방식으로 바꾼다. */
+const THREAD_LIST_MAX_PAGES = 50;
+
+interface ResumeLoading {
+  threadId: string;
+  buffer: QueuedNotification[];
+}
 const UNTITLED_THREAD = "(제목 없음)";
 
 interface QueuedNotification {
@@ -68,7 +75,7 @@ export class DesktopSession {
   private readonly batcher: FrameBatcher<QueuedNotification>;
   private readonly unsubscribers: Array<() => void> = [];
   /** resume 응답을 기다리는 동안 그 스레드에 온 알림이다. 응답을 반영한 뒤 이어서 반영한다. */
-  private pendingWhileLoading: QueuedNotification[] | null = null;
+  private loading: ResumeLoading | null = null;
   private connected = false;
   /** 사용자의 답을 기다리는 승인 요청의 응답 함수이다. 키는 요청 id 이다. */
   private readonly approvalAnswers = new Map<string, (answer: unknown) => void>();
@@ -100,6 +107,8 @@ export class DesktopSession {
         }
       }),
     );
+    // 수신 함수를 모두 등록한 뒤에 접속을 시작하게 한다 (빠른 접속의 connected 알림을 놓치지 않는다).
+    this.bridge.ready();
   }
 
   stop(): void {
@@ -205,12 +214,14 @@ export class DesktopSession {
       await this.client.request("initialize", initializeParams(this.clientVersion));
       this.client.notify("initialized");
       const gateway = await this.client.request<GatewayInfo>("akra/gateway/info");
-      const threads = await this.client.request<ThreadListResponse>("thread/list", { limit: THREAD_LIST_LIMIT });
+      const threads = await this.listAllThreads();
       this.store.setSession({
         gateway,
         versionCheck: checkCodexVersion(GENERATED_CODEX_VERSION, gateway.codexVersion),
-        folders: groupThreadsByCwd(threads.data),
+        folders: groupThreadsByCwd(threads),
       });
+      // 이 창이 아직 구독하지 않은 스레드도 목록의 상태로 진행 중 표시를 채운다.
+      this.store.setActiveThreads(threads.filter((thread) => thread.status.type === "active").map((thread) => thread.id));
       if (this.store.getOpenThreadId()) {
         await this.resumeOpenThread();
       }
@@ -219,25 +230,47 @@ export class DesktopSession {
     }
   }
 
+  /** `nextCursor` 를 따라 모든 페이지를 읽는다. 첫 페이지만 쓰면 오래된 작업 폴더가 목록에서 빠진다. */
+  private async listAllThreads(): Promise<Thread[]> {
+    const threads: Thread[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < THREAD_LIST_MAX_PAGES; page += 1) {
+      const response: ThreadListResponse = await this.client.request<ThreadListResponse>("thread/list", {
+        limit: THREAD_LIST_LIMIT,
+        ...(cursor ? { cursor } : {}),
+      });
+      threads.push(...response.data);
+      cursor = response.nextCursor;
+      if (!cursor) {
+        break;
+      }
+    }
+    return threads;
+  }
+
   private async resumeOpenThread(): Promise<void> {
     const threadId = this.store.getOpenThreadId();
     if (!threadId || !this.connected) {
       return;
     }
-    this.pendingWhileLoading = [];
+    // 요청마다 버퍼를 따로 둔다. 빠르게 스레드를 바꿔 resume 이 겹쳐도 먼저 끝난 요청이 다음 요청의 버퍼를 지우지 않는다.
+    const loading: ResumeLoading = { threadId, buffer: [] };
+    this.loading = loading;
     try {
       const response = await this.client.request<ThreadResumeResponse>("thread/resume", { threadId });
       if (this.store.getOpenThreadId() !== threadId) {
         return;
       }
       const transcript = transcriptFromResume(response);
-      this.store.setTranscript(applyNotifications(transcript, this.pendingWhileLoading ?? []));
+      this.store.setTranscript(applyNotifications(transcript, loading.buffer));
     } catch (error) {
       if (this.store.getOpenThreadId() === threadId) {
         this.store.setTranscript(null, errorMessage(error));
       }
     } finally {
-      this.pendingWhileLoading = null;
+      if (this.loading === loading) {
+        this.loading = null;
+      }
     }
   }
 
@@ -255,8 +288,8 @@ export class DesktopSession {
     if (threadId !== this.store.getOpenThreadId()) {
       return;
     }
-    if (this.pendingWhileLoading) {
-      this.pendingWhileLoading.push({ method, params });
+    if (this.loading?.threadId === threadId) {
+      this.loading.buffer.push({ method, params });
     } else {
       this.batcher.push({ method, params });
     }

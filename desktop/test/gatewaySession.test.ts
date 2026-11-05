@@ -64,6 +64,8 @@ function connectBridge(endpoint: string, startDaemon?: () => void) {
       stateListeners.add(listener);
       return () => stateListeners.delete(listener);
     },
+    ready: () => undefined,
+    chooseFolder: async () => null,
   };
   cleanups.push(() => connection.close());
   return { connection, bridge, states };
@@ -83,6 +85,9 @@ function sessionStore() {
     setConnection: (connection) => Object.assign(snapshot, { connection }),
     setSession: (session) => Object.assign(snapshot, session, { sessionError: null }),
     setSessionError: (sessionError) => Object.assign(snapshot, { sessionError }),
+    setActiveThreads: (threadIds) => {
+      snapshot.activeThreadIds = threadIds;
+    },
     setThreadActive: (threadId, active) => {
       const others = (snapshot.activeThreadIds ?? []).filter((id) => id !== threadId);
       snapshot.activeThreadIds = active ? [...others, threadId] : others;

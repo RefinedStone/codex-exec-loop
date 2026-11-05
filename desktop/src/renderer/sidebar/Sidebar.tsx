@@ -16,9 +16,12 @@ function folderName(cwd: string): string {
 export function Sidebar({
   onOpenThread,
   onStartThread,
+  onStartThreadInNewFolder,
 }: {
   onOpenThread(threadId: string): void;
   onStartThread(cwd: string): void;
+  /** 폴더를 골라 새 스레드를 시작한다. 스레드가 하나도 없는 새 설치에서도 쓸 수 있는 진입점이다. */
+  onStartThreadInNewFolder(): void;
 }) {
   const folders = useDesktopStore((state) => state.folders);
   const openThreadId = useDesktopStore((state) => state.openThreadId);
@@ -31,7 +34,16 @@ export function Sidebar({
   return (
     <nav className="sidebar" data-testid="folders">
       <div className="sidebar-scroll">
-        {folders.length === 0 && <p className="muted">스레드가 없습니다.</p>}
+        <button
+          type="button"
+          className="new-folder-thread"
+          onClick={onStartThreadInNewFolder}
+          disabled={phase !== "connected"}
+          data-testid="new-folder-thread"
+        >
+          + 폴더를 골라 새 스레드
+        </button>
+        {folders.length === 0 && <p className="muted">아직 스레드가 없습니다. 위 버튼으로 작업 폴더를 고르세요.</p>}
         {folders.map((folder) => (
           <section key={folder.cwd} className="folder">
             <h3 title={folder.cwd}>

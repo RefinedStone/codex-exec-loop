@@ -2,7 +2,7 @@
 import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
 
-import { app, BrowserWindow, ipcMain, shell, type WebContents } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, shell, type WebContents } from "electron";
 
 import { IPC_CHANNELS } from "../shared/bridge";
 import { GatewayConnection } from "./gatewayConnection";
@@ -91,9 +91,8 @@ function createWindow(): void {
     }
     return { action: "deny" };
   });
-  // 접속 상태 알림을 놓치지 않도록 화면이 준비된 뒤 접속한다.
+  // 접속은 renderer 가 수신 함수를 등록하고 `ready` 를 보낸 뒤에 연다 (아래 ipcMain 처리).
   const contentsId = contents.id;
-  contents.on("did-finish-load", () => attachGatewayConnection(contents));
   contents.once("destroyed", () => {
     connections.get(contentsId)?.close();
     connections.delete(contentsId);
@@ -112,6 +111,16 @@ ipcMain.on(IPC_CHANNELS.send, (event, text: unknown) => {
   if (typeof text === "string") {
     connections.get(event.sender.id)?.send(text);
   }
+});
+
+// renderer 가 상태 수신 함수를 등록한 뒤 보낸다. 화면을 다시 불러오면 다시 오고, 그때 접속을 새로 연다.
+ipcMain.on(IPC_CHANNELS.ready, (event) => attachGatewayConnection(event.sender));
+
+ipcMain.handle(IPC_CHANNELS.chooseFolder, async (event) => {
+  const owner = BrowserWindow.fromWebContents(event.sender);
+  const options = { title: "작업 폴더 선택", properties: ["openDirectory" as const] };
+  const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options);
+  return result.canceled ? null : (result.filePaths[0] ?? null);
 });
 
 void app.whenReady().then(() => {

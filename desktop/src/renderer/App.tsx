@@ -43,6 +43,12 @@ export function App() {
     return () => created.stop();
   }, []);
 
+  const startThread = (cwd: string) => {
+    void session.current?.startThread(cwd).catch((error: unknown) =>
+      useDesktopStore.getState().setSessionError(error instanceof Error ? error.message : String(error)),
+    );
+  };
+
   const composerActions: ComposerActions = {
     sendMessage: async (text) => session.current?.sendMessage(text),
     interrupt: async () => session.current?.interrupt(),
@@ -52,11 +58,14 @@ export function App() {
     <div className="layout">
       <Sidebar
         onOpenThread={(threadId) => void session.current?.openThread(threadId)}
-        onStartThread={(cwd) =>
-          void session.current?.startThread(cwd).catch((error: unknown) =>
-            useDesktopStore.getState().setSessionError(error instanceof Error ? error.message : String(error)),
-          )
-        }
+        onStartThread={startThread}
+        onStartThreadInNewFolder={() => {
+          void window.akra.chooseFolder().then((cwd) => {
+            if (cwd) {
+              startThread(cwd);
+            }
+          });
+        }}
       />
       <main className="main">
         <GatewayBar />
