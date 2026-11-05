@@ -42,6 +42,14 @@ test("admin-only changes run Node surfaces without unrelated Rust jobs", () => {
   assert.equal(plan.portable, false);
 });
 
+test("desktop-only changes run the Node surfaces without Rust jobs", () => {
+  const plan = classifyChangedPaths(["desktop/src/main/index.ts", "desktop/package-lock.json"]);
+  assert.equal(plan.scope, "admin");
+  assert.equal(plan.node, true);
+  assert.equal(plan.rust, false);
+  assert.equal(plan.portable, false);
+});
+
 test("mixed Rust and admin changes select both validation families", () => {
   const plan = classifyChangedPaths(["src/adapter/inbound/admin_api/mod.rs", "assets/admin/game/src/main.ts"]);
   assert.equal(plan.scope, "mixed");

@@ -106,6 +106,20 @@ function Invoke-NodeAdminChecks {
         throw "admin game bundle was stale before the check"
     }
 
+    # Type checks, unit tests, and bundling do not need the Electron runtime binary.
+    $env:ELECTRON_SKIP_BINARY_DOWNLOAD = "1"
+    try {
+        Invoke-ExternalStep "desktop dependencies" "npm" @("--prefix", "desktop", "ci")
+    } finally {
+        Remove-Item Env:ELECTRON_SKIP_BINARY_DOWNLOAD -ErrorAction SilentlyContinue
+    }
+    Invoke-ExternalStep "desktop dependency audit" "npm" @(
+        "--prefix", "desktop", "audit", "--audit-level=high"
+    )
+    Invoke-ExternalStep "desktop typecheck" "npm" @("--prefix", "desktop", "run", "check")
+    Invoke-ExternalStep "desktop tests" "npm" @("--prefix", "desktop", "test")
+    Invoke-ExternalStep "desktop build" "npm" @("--prefix", "desktop", "run", "build")
+
     Write-Host "`n==> admin offline asset policy"
     $remoteAssets = @(& rg -n 'https?://|//(cdnjs|unpkg|esm\.sh|fastly\.jsdelivr)' `
         "templates/admin" "assets/admin/game/src" "assets/admin/scripts")

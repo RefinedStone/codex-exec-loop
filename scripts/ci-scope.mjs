@@ -35,9 +35,13 @@ const ADMIN_PATHS = [
   /^templates\/admin\//,
 ];
 
+// Akra Desktop (Electron + TypeScript) is validated by the Node surface job.
+const DESKTOP_PATHS = [/^desktop\//];
+
 const NODE_PATHS = [
   /^npm\//,
   ...ADMIN_PATHS,
+  ...DESKTOP_PATHS,
 ];
 
 const RUST_PATHS = [
