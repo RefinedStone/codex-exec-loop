@@ -10,6 +10,7 @@ import type { ThreadListResponse } from "../../shared/protocol/generated/v2/Thre
 import type { ThreadResumeResponse } from "../../shared/protocol/generated/v2/ThreadResumeResponse";
 import type { ThreadStartResponse } from "../../shared/protocol/generated/v2/ThreadStartResponse";
 import type { ThreadStatus } from "../../shared/protocol/generated/v2/ThreadStatus";
+import type { ThreadTurnsListResponse } from "../../shared/protocol/generated/v2/ThreadTurnsListResponse";
 import type { UserInput } from "../../shared/protocol/generated/v2/UserInput";
 import { GENERATED_CODEX_VERSION } from "../../shared/protocol/version";
 import { type ApprovalDecision, approvalKey, toPendingApproval } from "../conversation/approvals";
@@ -18,6 +19,7 @@ import {
   applyNotifications,
   isTurnInProgress,
   notificationThreadId,
+  prependOlderTurns,
   transcriptFromResume,
   transcriptFromThread,
 } from "../conversation/transcript";
@@ -26,6 +28,8 @@ import { checkCodexVersion } from "./codexVersion";
 import type { GatewayInfo, SessionStore, WorkspaceFolder } from "./desktopStore";
 
 const THREAD_LIST_LIMIT = 100;
+/** 스레드를 열 때와 "이전 턴 더 보기" 한 번에 읽는 턴 수이다. 가장 큰 실측 스레드에서 10턴은 약 11 MB, 270ms 였다. */
+const TURN_PAGE_SIZE = 10;
 /** shortcut: 최대 50 페이지(5,000 스레드)까지만 읽는다. 더 많으면 사이드바를 필요할 때 더 읽는 방식으로 바꾼다. */
 const THREAD_LIST_MAX_PAGES = 50;
 
@@ -257,11 +261,20 @@ export class DesktopSession {
     const loading: ResumeLoading = { threadId, buffer: [] };
     this.loading = loading;
     try {
-      const response = await this.client.request<ThreadResumeResponse>("thread/resume", { threadId });
+      // 긴 스레드의 전체 resume 은 수십 MB 가 된다. 턴 없이 구독만 하고 최근 턴부터 페이지로 읽는다.
+      const response = await this.client.request<ThreadResumeResponse>("thread/resume", { threadId, excludeTurns: true });
       if (this.store.getOpenThreadId() !== threadId) {
         return;
       }
-      const transcript = transcriptFromResume(response);
+      let transcript = transcriptFromResume(response);
+      // 서버가 턴을 함께 보냈으면(예: 녹화 재생) 그대로 쓴다.
+      if (transcript.turns.length === 0) {
+        const page = await this.readTurnPage(threadId, null);
+        if (this.store.getOpenThreadId() !== threadId) {
+          return;
+        }
+        transcript = prependOlderTurns(transcript, page.data, page.nextCursor);
+      }
       this.store.setTranscript(applyNotifications(transcript, loading.buffer));
     } catch (error) {
       if (this.store.getOpenThreadId() === threadId) {
@@ -271,6 +284,37 @@ export class DesktopSession {
       if (this.loading === loading) {
         this.loading = null;
       }
+    }
+  }
+
+  /** 열린 스레드의 이전 턴을 한 페이지 더 읽어 앞에 붙인다. */
+  async loadOlderTurns(): Promise<void> {
+    const transcript = this.store.getTranscript();
+    const cursor = transcript?.olderTurnsCursor;
+    if (!transcript || !cursor) {
+      return;
+    }
+    const page = await this.readTurnPage(transcript.threadId, cursor);
+    if (this.store.getOpenThreadId() === transcript.threadId) {
+      this.store.updateTranscript((current) => prependOlderTurns(current, page.data, page.nextCursor));
+    }
+  }
+
+  /** 최신순으로 턴 한 페이지를 읽는다. 아직 기록이 없는 새 스레드는 빈 페이지로 본다. */
+  private async readTurnPage(threadId: string, cursor: string | null): Promise<ThreadTurnsListResponse> {
+    try {
+      return await this.client.request<ThreadTurnsListResponse>("thread/turns/list", {
+        threadId,
+        limit: TURN_PAGE_SIZE,
+        sortDirection: "desc",
+        itemsView: "full",
+        ...(cursor ? { cursor } : {}),
+      });
+    } catch (error) {
+      if (cursor === null && error instanceof JsonRpcError) {
+        return { data: [], nextCursor: null, backwardsCursor: null };
+      }
+      throw error;
     }
   }
 

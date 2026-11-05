@@ -361,3 +361,11 @@ button {
 .new-folder-thread:hover:not(:disabled) {
   background: var(--surface);
 }
+
+.load-older {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 12px;
+}

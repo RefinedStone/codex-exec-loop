@@ -19,6 +19,8 @@ export interface Transcript {
   cwd: string;
   status: ThreadStatus | null;
   turns: TurnView[];
+  /** 아직 읽지 않은 이전 턴의 `thread/turns/list` 커서이다. 없으면 처음 턴까지 다 읽었다. */
+  olderTurnsCursor: string | null;
 }
 
 interface Notification {
@@ -51,7 +53,21 @@ export function transcriptFromThread(thread: Thread): Transcript {
     cwd: thread.cwd,
     status: thread.status,
     turns: thread.turns.map(turnView),
+    olderTurnsCursor: null,
   };
+}
+
+/**
+ * `thread/turns/list` 의 최신순 페이지를 앞쪽(이전 턴)에 붙인다. 이미 있는 턴은 건너뛴다.
+ * 첫 페이지도 이 함수로 붙인다 (턴 없이 resume 한 뒤).
+ */
+export function prependOlderTurns(transcript: Transcript, newestFirst: readonly Turn[], nextCursor: string | null): Transcript {
+  const known = new Set(transcript.turns.map((turn) => turn.id));
+  const older = [...newestFirst]
+    .reverse()
+    .filter((turn) => !known.has(turn.id))
+    .map(turnView);
+  return { ...transcript, turns: [...older, ...transcript.turns], olderTurnsCursor: nextCursor };
 }
 
 function turnView(turn: Turn): TurnView {
