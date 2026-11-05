@@ -232,7 +232,16 @@ pub(super) async fn akra_stream_api(
     let mut interval = tokio::time::interval(Duration::from_millis(1_500));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-    let stream = IntervalStream::new(interval).map(move |_| {
+    let stream_session = state.security.stream_session_token(&headers);
+    let security = state.security.clone();
+    // A browser-session stream ends after logout or absolute expiry; capability streams continue.
+    let ticks = IntervalStream::new(interval).take_while(move |_| {
+        stream_session
+            .as_deref()
+            .is_none_or(|token| security.session_is_active(token))
+    });
+
+    let stream = ticks.map(move |_| {
         let control = akra_control_view(&state, "realtime control projection");
         let debug_projection = state.admin_debug_port.projection();
         let debug_harness = map_harness_view(&debug_projection);

@@ -1930,6 +1930,76 @@ async fn admin_akra_realtime_stream_is_authenticated_sse_with_resume_cursor() {
 }
 
 #[tokio::test]
+async fn admin_akra_realtime_stream_ends_after_browser_session_logout() {
+    let workspace = TempAdminWorkspace::new("akra-realtime-logout");
+    let router = admin_test_router(&workspace);
+    let login = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/admin/login")
+                .header(header::HOST, TEST_ADMIN_HOST)
+                .header(header::ORIGIN, format!("http://{TEST_ADMIN_HOST}"))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!("token={TEST_ADMIN_TOKEN}")))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let session_cookie = login
+        .headers()
+        .get(header::SET_COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .expect("login should set a session cookie")
+        .to_string();
+
+    let stream = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/admin/akra/stream")
+                .header(header::HOST, TEST_ADMIN_HOST)
+                .header(header::COOKIE, session_cookie.as_str())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stream.status(), StatusCode::OK);
+    let mut chunks = stream.into_body().into_data_stream();
+    tokio::time::timeout(Duration::from_secs(3), chunks.next())
+        .await
+        .expect("first frame should arrive")
+        .expect("stream should be open before logout")
+        .expect("first chunk should be readable");
+
+    let logout = router
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/admin/logout")
+                .header(header::HOST, TEST_ADMIN_HOST)
+                .header(header::COOKIE, session_cookie.as_str())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(logout.status().is_redirection());
+
+    let ended = tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(chunk) = chunks.next().await {
+            chunk.expect("chunk should be readable");
+        }
+    })
+    .await;
+    assert!(ended.is_ok(), "logged-out SSE stream must end");
+}
+
+#[tokio::test]
 async fn admin_akra_realtime_stream_resumes_oldest_unseen_events_without_loss() {
     let workspace = TempAdminWorkspace::new("akra-realtime-lossless-resume");
     let adapter = SqlitePlanningAuthorityAdapter::new();
