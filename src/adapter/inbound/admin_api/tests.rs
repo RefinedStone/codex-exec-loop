@@ -2409,13 +2409,15 @@ async fn admin_pr_validation_board_pages_phases_evidence_correlations_and_redact
         .unwrap();
     let location = adapter.resolve_authority_location(&workspace.path).unwrap();
     let connection = Connection::open(&location.authority_store_path).unwrap();
+    let recent_verified_at = chrono::Utc::now().to_rfc3339();
     for (key, updated_at) in [
         ("validation-integrated", "2026-08-10T10:00:00+00:00"),
         ("validation-verifying", "2026-08-10T11:00:00+00:00"),
         ("validation-queued", "2026-08-10T12:00:00+00:00"),
         ("validation-running", "2026-08-10T13:00:00+00:00"),
         ("validation-provider-blocked", "2026-08-10T14:00:00+00:00"),
-        ("validation-verified", "2026-08-10T15:00:00+00:00"),
+        // Settled records count only inside the 30-day terminal window, so keep this one recent.
+        ("validation-verified", recent_verified_at.as_str()),
     ] {
         connection
             .execute(
