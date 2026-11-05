@@ -190,7 +190,7 @@ describe("review follow-ups", () => {
     replyTo("thread/list", { data: [thread("a", "/one", false)], nextCursor: "page-2", backwardsCursor: null });
     await flush();
     const second = [...sent].reverse().find((message) => message.method === "thread/list");
-    expect(second?.params).toMatchObject({ cursor: "page-2" });
+    expect(second?.params).toMatchObject({ cursor: "page-2", useStateDbOnly: true });
     replyTo("thread/list", { data: [thread("b", "/two", true)], nextCursor: null, backwardsCursor: null });
     await flush();
     expect(state.folders?.map((folder) => folder.cwd).sort()).toEqual(["/one", "/two"]);
