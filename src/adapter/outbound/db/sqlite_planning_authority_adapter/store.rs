@@ -63,6 +63,10 @@ pub(super) fn ensure_schema(
     connection: &mut Connection,
     location: &PlanningAuthorityLocation,
 ) -> Result<()> {
+    // Opening a current store must not take the write lock, or every read serializes behind writers.
+    if authority_schema_is_current(connection, location)? {
+        return Ok(());
+    }
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .context("failed to open authority-store schema migration transaction")?;
@@ -469,6 +473,42 @@ pub(super) fn ensure_schema(
         .commit()
         .context("failed to commit authority-store schema migration")?;
     Ok(())
+}
+
+/*
+현재 schema version과 repository binding marker가 이미 모두 기록된 store인지 한 번의 read로 확인한다.
+하나라도 다르면 기존 IMMEDIATE migration 경로가 그대로 실행된다.
+*/
+fn authority_schema_is_current(
+    connection: &Connection,
+    location: &PlanningAuthorityLocation,
+) -> Result<bool> {
+    if !table_exists(connection, "authority_metadata")? {
+        return Ok(false);
+    }
+    let expected = [
+        ("schema_version", AUTHORITY_STORE_SCHEMA_VERSION.to_string()),
+        ("mode", AUTHORITY_STORE_MODE.to_string()),
+        ("canonical_repo_root", location.canonical_repo_root.clone()),
+        ("repository_identity", location.repository_identity.clone()),
+        ("workspace_root", location.workspace_root.clone()),
+    ];
+    let mut statement = connection
+        .prepare(
+            "SELECT key, value FROM authority_metadata
+             WHERE key IN ('schema_version', 'mode', 'canonical_repo_root',
+                           'repository_identity', 'workspace_root')",
+        )
+        .context("failed to prepare authority-store schema marker read")?;
+    let stored = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<BTreeMap<_, _>>>()
+        .context("failed to read authority-store schema markers")?;
+    Ok(expected
+        .iter()
+        .all(|(key, value)| stored.get(*key) == Some(value)))
 }
 
 fn ensure_runtime_event_projection_index(connection: &Connection) -> Result<()> {
