@@ -218,4 +218,6 @@ Akra 의 아키텍처 테스트(`tests/architecture_boundaries.rs`)를 통과해
 
 - 자동 시험: router 단위 시험, 재시작 간격·경로 길이 단위 시험, 가짜 upstream 통합 시험(순서 보장, 접속별
   upstream, `akra/*` 로컬 응답, close `1012`/`1013`), `tests/binary_entrypoints.rs` 의 도움말·오류 계약.
-- 남은 일: 녹화 옵션(§4.6), macOS 실기 확인(완료 기준 9), Q-03·Q-09 실측(턴 필요, 사용자 허락 필요).
+- 녹화 옵션(§4.6): `AKRA_GATEWAY_RECORD=1` 이면 세션마다 `$AKRA_HOME/recordings/gateway-<시각>-<번호>.jsonl`
+  에 텍스트 메시지를 `client`/`gateway` 방향과 함께 남긴다. Windows 실기에서 세션 2개가 파일 2개로 기록됐다.
+- 남은 일: macOS 실기 확인(완료 기준 9), Q-03·Q-09 실측(턴 필요, 사용자 허락 필요).
