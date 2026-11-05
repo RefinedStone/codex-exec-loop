@@ -1559,7 +1559,7 @@ fn validate_owned_windows_directory(path: &Path) -> Result<()> {
     validate_windows_path_identity(path, &directory, true)
 }
 
-fn create_private_temp_directory(prefix: &str) -> Result<PathBuf> {
+pub(crate) fn create_private_temp_directory(prefix: &str) -> Result<PathBuf> {
     let base = trusted_temp_directory_base()?;
     for _ in 0..32_u32 {
         let mut random = [0_u8; 16];
@@ -1589,7 +1589,7 @@ fn create_private_temp_directory(prefix: &str) -> Result<PathBuf> {
 }
 
 #[cfg(unix)]
-fn trusted_temp_directory_base() -> Result<PathBuf> {
+pub(crate) fn trusted_temp_directory_base() -> Result<PathBuf> {
     use std::os::unix::fs::MetadataExt;
 
     let base =
@@ -1603,7 +1603,7 @@ fn trusted_temp_directory_base() -> Result<PathBuf> {
 }
 
 #[cfg(windows)]
-fn trusted_temp_directory_base() -> Result<PathBuf> {
+pub(crate) fn trusted_temp_directory_base() -> Result<PathBuf> {
     let local_app_data = crate::private_fs::windows_local_app_data_path()?;
     let akra = local_app_data.join("Akra");
     let base = akra.join("trusted-temp");
