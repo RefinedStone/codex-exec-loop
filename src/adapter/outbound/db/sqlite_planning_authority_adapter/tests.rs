@@ -8648,3 +8648,36 @@ fn stored_dispatch_command(
         .find(|command| command.command_id == command_id)
         .expect("dispatch command should be stored")
 }
+
+#[test]
+fn runtime_event_append_trims_old_events_but_keeps_each_kind_newest_row() {
+    let workspace_dir = temp_workspace("runtime-event-retention");
+    set_authority_metadata(&workspace_dir, "runtime_event_sequence", "20000");
+    authority_connection(&workspace_dir)
+        .execute_batch(
+            "INSERT INTO runtime_events
+             (sequence, event_kind, projection_kind, projection_key, observed_planning_revision,
+              summary, payload_json, recorded_at)
+             VALUES
+             (1, 'seed', 'pr_validation', 'pr-1', 0, 'old', '{}', '2026-05-08T00:00:00Z'),
+             (2, 'seed', 'slot_lease', 'slot-1', 0, 'old', '{}', '2026-05-08T00:00:00Z'),
+             (3, 'seed', 'slot_lease', 'slot-1', 0, 'old', '{}', '2026-05-08T00:00:00Z');",
+        )
+        .expect("runtime event fixture should install");
+
+    assert!(
+        SqlitePlanningAuthorityAdapter::new()
+            .enqueue_runtime_dispatch_command(&workspace_dir, &dispatch_command_snapshot(920))
+            .expect("dispatch command should enqueue")
+    );
+
+    let sequences = authority_connection(&workspace_dir)
+        .prepare("SELECT sequence FROM runtime_events ORDER BY sequence")
+        .and_then(|mut statement| {
+            statement
+                .query_map([], |row| row.get::<_, i64>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()
+        })
+        .expect("runtime events should load");
+    assert_eq!(sequences, vec![1, 3, 20_001]);
+}

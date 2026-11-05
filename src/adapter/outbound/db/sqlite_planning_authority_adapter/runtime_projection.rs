@@ -50,6 +50,8 @@ use super::{
 };
 
 const RUNTIME_EVENT_FEED_LIMIT: i64 = 8;
+// Readers page at most 200 events (feed: 8), so 10_000 keeps 50 full pages of history.
+const RETAINED_RUNTIME_EVENT_COUNT: i64 = 10_000;
 
 pub(super) fn retire_task_runtime_projections(
     transaction: &Transaction<'_>,
@@ -4080,6 +4082,17 @@ fn append_runtime_event(
                 "failed to append runtime event `{event_kind}` for `{projection_kind}:{projection_key}`"
             )
         })?;
+    // The newest row per projection kind survives so MAX(sequence) revisions never move backwards.
+    transaction
+        .execute(
+            "DELETE FROM runtime_events
+             WHERE sequence <= ?1
+               AND sequence NOT IN (
+                   SELECT MAX(sequence) FROM runtime_events GROUP BY projection_kind
+               )",
+            params![sequence - RETAINED_RUNTIME_EVENT_COUNT],
+        )
+        .context("failed to trim old runtime events")?;
     Ok(())
 }
 
