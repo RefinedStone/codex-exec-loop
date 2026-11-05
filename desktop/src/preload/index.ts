@@ -3,6 +3,10 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 
 import {
   type AkraBridge,
+  type BrowserBounds,
+  type BrowserCommand,
+  type BrowserSettings,
+  type BrowserState,
   type ConnectionState,
   type GitFileDiff,
   type GitStatusResult,
@@ -59,6 +63,30 @@ const bridge: AkraBridge = {
     },
     onData: (listener) => listen<[number, string]>(IPC_CHANNELS.terminalData, listener),
     onExit: (listener) => listen<[number, number]>(IPC_CHANNELS.terminalExit, listener),
+  },
+  browser: {
+    show(profileId: string, bounds: BrowserBounds, url: string | null): Promise<BrowserState> {
+      return ipcRenderer.invoke(IPC_CHANNELS.browserShow, profileId, bounds, url) as Promise<BrowserState>;
+    },
+    setBounds(bounds: BrowserBounds): void {
+      ipcRenderer.send(IPC_CHANNELS.browserBounds, bounds);
+    },
+    hide(): void {
+      ipcRenderer.send(IPC_CHANNELS.browserHide);
+    },
+    navigate(input: string): Promise<boolean> {
+      return ipcRenderer.invoke(IPC_CHANNELS.browserNavigate, input) as Promise<boolean>;
+    },
+    command(command: BrowserCommand): void {
+      ipcRenderer.send(IPC_CHANNELS.browserCommand, command);
+    },
+    onState: (listener) => listen<[BrowserState]>(IPC_CHANNELS.browserState, listener),
+    loadSettings(): Promise<BrowserSettings> {
+      return ipcRenderer.invoke(IPC_CHANNELS.browserLoadSettings) as Promise<BrowserSettings>;
+    },
+    saveSettings(settings: BrowserSettings): Promise<BrowserSettings> {
+      return ipcRenderer.invoke(IPC_CHANNELS.browserSaveSettings, settings) as Promise<BrowserSettings>;
+    },
   },
 };
 

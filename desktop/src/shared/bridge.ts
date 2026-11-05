@@ -26,7 +26,67 @@ export const IPC_CHANNELS = {
   terminalClose: "akra:terminal-close",
   terminalData: "akra:terminal-data",
   terminalExit: "akra:terminal-exit",
+  browserShow: "akra:browser-show",
+  browserBounds: "akra:browser-bounds",
+  browserHide: "akra:browser-hide",
+  browserNavigate: "akra:browser-navigate",
+  browserCommand: "akra:browser-command",
+  browserState: "akra:browser-state",
+  browserLoadSettings: "akra:browser-load-settings",
+  browserSaveSettings: "akra:browser-save-settings",
 } as const;
+
+/** 브라우저 보기를 놓을 자리이다. 창 안의 CSS 픽셀이다. */
+export interface BrowserBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface BrowserState {
+  profileId: string;
+  url: string;
+  title: string;
+  loading: boolean;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  /** 마지막 페이지 열기 실패이다. */
+  error: string | null;
+}
+
+/** 프로필마다 쿠키, localStorage, 캐시가 따로 있다. */
+export interface BrowserProfile {
+  id: string;
+  name: string;
+}
+
+/** 자주 여는 사이트와 프로필의 조합이다. */
+export interface BrowserPreset {
+  name: string;
+  url: string;
+  profileId: string;
+}
+
+export interface BrowserSettings {
+  profiles: BrowserProfile[];
+  presets: BrowserPreset[];
+}
+
+export type BrowserCommand = "back" | "forward" | "reload" | "stop";
+
+/** 앱 창 안의 브라우저 보기이다 (R3). */
+export interface BrowserBridge {
+  show(profileId: string, bounds: BrowserBounds, url: string | null): Promise<BrowserState>;
+  setBounds(bounds: BrowserBounds): void;
+  hide(): void;
+  /** 열 수 없는 주소이면 false 이다. */
+  navigate(input: string): Promise<boolean>;
+  command(command: BrowserCommand): void;
+  onState(listener: (state: BrowserState) => void): () => void;
+  loadSettings(): Promise<BrowserSettings>;
+  saveSettings(settings: BrowserSettings): Promise<BrowserSettings>;
+}
 
 export interface TerminalOpenRequest {
   /** 터미널의 작업 폴더이다. 없거나 지워졌으면 홈 폴더이다. */
@@ -89,4 +149,5 @@ export interface AkraBridge {
   /** 바뀐 파일 하나의 diff 를 읽는다. 새 파일은 내용을 돌려준다. */
   gitFileDiff(cwd: string, path: string, untracked: boolean): Promise<GitFileDiff>;
   terminal: TerminalBridge;
+  browser: BrowserBridge;
 }

@@ -4,16 +4,25 @@ import { join, resolve } from "node:path";
 
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell, type WebContents } from "electron";
 
-import { IPC_CHANNELS, type TerminalOpenRequest } from "../shared/bridge";
+import { type BrowserBounds, IPC_CHANNELS, type TerminalOpenRequest } from "../shared/bridge";
 import { GatewayConnection } from "./gatewayConnection";
 import { resolveGatewayEndpoint, resolveGatewayExecutable } from "./gatewayEndpoint";
 import { spawn as spawnPty } from "node-pty";
 
+import { BrowserPanelService } from "./browserPanel";
+import { loadSettings, saveSettings } from "./browserSettings";
 import { readGitFileDiff, readGitStatus } from "./gitStatus";
 import { TerminalService } from "./terminalService";
 
+// 시험용이다. 브라우저 프로필의 쿠키와 설정이 사용자의 실제 앱 데이터 폴더에 쓰이지 않게 한다. ready 전에 정해야 한다.
+if (process.env.AKRA_DESKTOP_USER_DATA) {
+  app.setPath("userData", process.env.AKRA_DESKTOP_USER_DATA);
+}
+
 const connections = new Map<number, GatewayConnection>();
 const terminals = new TerminalService(spawnPty);
+const browsers = new BrowserPanelService();
+const browserSettingsPath = () => join(app.getPath("userData"), "browser-settings.json");
 
 function repositoryRoot(): string {
   // 개발 중에는 desktop/ 의 부모가 Akra 저장소 루트이다. 패키징 경로는 R8 에서 정한다.
@@ -109,6 +118,7 @@ function createWindow(): void {
     connections.get(contentsId)?.close();
     connections.delete(contentsId);
     terminals.closeAllOf(contentsId);
+    browsers.close(contentsId);
   });
   if (!HIDDEN_WINDOWS) {
     window.once("ready-to-show", () => window.show());
@@ -142,6 +152,18 @@ ipcMain.on(IPC_CHANNELS.terminalResize, (event, id: unknown, cols: unknown, rows
   terminals.resize(event.sender.id, id, cols, rows),
 );
 ipcMain.on(IPC_CHANNELS.terminalClose, (event, id: unknown) => terminals.close(event.sender.id, id));
+
+ipcMain.handle(IPC_CHANNELS.browserShow, (event, profileId: unknown, bounds: unknown, url: unknown) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  if (!window || typeof profileId !== "string") throw new Error("브라우저를 열 수 없습니다.");
+  return browsers.show(event.sender.id, window, profileId, bounds as BrowserBounds, typeof url === "string" ? url : null);
+});
+ipcMain.on(IPC_CHANNELS.browserBounds, (event, bounds: unknown) => browsers.setBounds(event.sender.id, bounds as BrowserBounds));
+ipcMain.on(IPC_CHANNELS.browserHide, (event) => browsers.hide(event.sender.id));
+ipcMain.handle(IPC_CHANNELS.browserNavigate, (event, input: unknown) => browsers.navigate(event.sender.id, input));
+ipcMain.on(IPC_CHANNELS.browserCommand, (event, command: unknown) => browsers.command(event.sender.id, command));
+ipcMain.handle(IPC_CHANNELS.browserLoadSettings, () => loadSettings(browserSettingsPath()));
+ipcMain.handle(IPC_CHANNELS.browserSaveSettings, (_event, settings: unknown) => saveSettings(browserSettingsPath(), settings));
 
 ipcMain.handle(IPC_CHANNELS.chooseFolder, async (event) => {
   const owner = BrowserWindow.fromWebContents(event.sender);
