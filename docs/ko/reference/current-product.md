@@ -241,6 +241,7 @@ parallel, Git, GitHub 권위를 바꾸지 않고 재생하며 PR 검증 복구 �
 - Admin: `src/adapter/inbound/admin_api/`
 - Telegram: `src/adapter/inbound/telegram_bot/`
 - Gateway: `src/adapter/inbound/gateway/`, `src/adapter/outbound/app_server/gateway_upstream.rs`
+- Desktop (개발 중, 계획 P2): `desktop/` — 창마다 `akra-gateway` 에 접속하는 Electron 앱. `desktop/AGENTS.md` 참고
 - Planning: `src/application/service/planning/`, `src/domain/planning/`
 - Parallel: `src/application/service/parallel_mode/`, `src/domain/parallel_mode/`
 - App-server adapter: `src/adapter/outbound/app_server/`
