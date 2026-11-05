@@ -256,13 +256,19 @@ export class DesktopSession {
     }
   }
 
-  /** `nextCursor` 를 따라 모든 페이지를 읽는다. 첫 페이지만 쓰면 오래된 작업 폴더가 목록에서 빠진다. */
+  /**
+   * `nextCursor` 를 따라 모든 페이지를 읽는다. 첫 페이지만 쓰면 오래된 작업 폴더가 목록에서 빠진다.
+   * 상태 DB 만 읽는다. 2026-11-06 실측 (rollout 1,465개, 18 GB): 상태 DB 67ms, rollout 전체 검사 27s, 스레드 id 는
+   * 둘 다 같은 292개였다. shortcut: 상태 DB 에 없는 스레드는 보이지 않는다. 빠지는 스레드가 나오면 전체 검사를
+   * 뒤에서 한 번 더 돌려 보충한다.
+   */
   private async listAllThreads(): Promise<Thread[]> {
     const threads: Thread[] = [];
     let cursor: string | null = null;
     for (let page = 0; page < THREAD_LIST_MAX_PAGES; page += 1) {
       const response: ThreadListResponse = await this.client.request<ThreadListResponse>("thread/list", {
         limit: THREAD_LIST_LIMIT,
+        useStateDbOnly: true,
         ...(cursor ? { cursor } : {}),
       });
       threads.push(...response.data);
