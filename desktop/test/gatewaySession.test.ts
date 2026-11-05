@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { AkraBridge, ConnectionState } from "../src/shared/bridge";
 import { GatewayConnection } from "../src/main/gatewayConnection";
 import { DesktopSession, groupThreadsByCwd, startDesktopSession } from "../src/renderer/session/desktopSession";
-import type { DesktopState, SessionStore } from "../src/renderer/session/desktopStore";
+import { type DesktopState, mergeWorkspaceFolders, type SessionStore } from "../src/renderer/session/desktopStore";
 import type { Thread } from "../src/shared/protocol/generated/v2/Thread";
 import {
   APPROVAL_TURN_RECORDING,
@@ -112,6 +112,9 @@ function sessionStore() {
     },
     addThreadToFolder: (cwd, thread) => {
       snapshot.folders = [{ cwd, threads: [thread] }, ...(snapshot.folders ?? []).filter((folder) => folder.cwd !== cwd)];
+    },
+    mergeFolders: (folders) => {
+      snapshot.folders = mergeWorkspaceFolders(snapshot.folders ?? [], folders);
     },
     getOpenThreadId: () => snapshot.openThreadId ?? null,
     getTranscript: () => snapshot.transcript ?? null,

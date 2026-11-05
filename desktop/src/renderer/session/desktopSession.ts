@@ -25,7 +25,7 @@ import {
 } from "../conversation/transcript";
 import { JsonRpcClient, JsonRpcError, type JsonRpcId, NO_RESPONSE } from "../rpc/jsonRpcClient";
 import { checkCodexVersion } from "./codexVersion";
-import type { GatewayInfo, SessionStore, WorkspaceFolder } from "./desktopStore";
+import { type GatewayInfo, type SessionStore, sortFolders, type WorkspaceFolder } from "./desktopStore";
 
 const THREAD_LIST_LIMIT = 100;
 /** 스레드를 열 때와 "이전 턴 더 보기" 한 번에 읽는 턴 수이다. 가장 큰 실측 스레드에서 10턴은 약 11 MB, 270ms 였다. */
@@ -55,7 +55,11 @@ export function initializeParams(clientVersion: string): InitializeParams {
 
 export function groupThreadsByCwd(threads: readonly Thread[]): WorkspaceFolder[] {
   const folders = new Map<string, WorkspaceFolder>();
+  // rollout 전체 검사는 페이지 사이에 같은 스레드를 다시 줄 수 있다 (2026-11-06 실측: 306행 중 고유 292개).
+  const seen = new Set<string>();
   for (const thread of threads) {
+    if (seen.has(thread.id)) continue;
+    seen.add(thread.id);
     const folder = folders.get(thread.cwd) ?? { cwd: thread.cwd, threads: [] };
     folder.threads.push({
       id: thread.id,
@@ -64,12 +68,7 @@ export function groupThreadsByCwd(threads: readonly Thread[]): WorkspaceFolder[]
     });
     folders.set(thread.cwd, folder);
   }
-  const sorted = [...folders.values()];
-  for (const folder of sorted) {
-    folder.threads.sort((left, right) => right.updatedAt - left.updatedAt);
-  }
-  const latest = (folder: WorkspaceFolder) => folder.threads[0]?.updatedAt ?? 0;
-  return sorted.sort((left, right) => latest(right) - latest(left));
+  return sortFolders([...folders.values()]);
 }
 
 /** 목록의 진행 중 스레드에, 목록을 읽는 동안 받은 상태 변경을 덮어 최종 목록을 만든다. */
@@ -98,6 +97,8 @@ export class DesktopSession {
   /** initialize 가 thread/list 를 읽는 동안 받은 진행 상태 변경이다 (스레드 id → 진행 중). */
   private statusChangesWhileListing: Map<string, boolean> | null = null;
   private connected = false;
+  /** 접속마다 늘어난다. 이전 접속에서 늦게 끝난 전체 검사는 반영하지 않는다. */
+  private listGeneration = 0;
   /** 사용자의 답을 기다리는 승인 요청의 응답 함수이다. 키는 요청 id 이다. */
   private readonly approvalAnswers = new Map<string, (answer: unknown) => void>();
 
@@ -238,7 +239,8 @@ export class DesktopSession {
       // 목록을 읽는 동안 온 상태 변경은 목록의 상태보다 새롭다. 따로 모았다가 목록 결과 위에 덮는다.
       const statusChanges = new Map<string, boolean>();
       this.statusChangesWhileListing = statusChanges;
-      const threads = await this.listAllThreads().finally(() => {
+      const generation = ++this.listGeneration;
+      const threads = await this.listAllThreads(true).finally(() => {
         this.statusChangesWhileListing = null;
       });
       this.store.setSession({
@@ -248,6 +250,7 @@ export class DesktopSession {
       });
       // 이 창이 아직 구독하지 않은 스레드도 목록의 상태로 진행 중 표시를 채운다.
       this.store.setActiveThreads(activeThreadIds(threads, statusChanges));
+      void this.addThreadsFromRolloutScan(generation);
       if (this.store.getOpenThreadId()) {
         await this.resumeOpenThread();
       }
@@ -257,18 +260,32 @@ export class DesktopSession {
   }
 
   /**
-   * `nextCursor` 를 따라 모든 페이지를 읽는다. 첫 페이지만 쓰면 오래된 작업 폴더가 목록에서 빠진다.
-   * 상태 DB 만 읽는다. 2026-11-06 실측 (rollout 1,465개, 18 GB): 상태 DB 67ms, rollout 전체 검사 27s, 스레드 id 는
-   * 둘 다 같은 292개였다. shortcut: 상태 DB 에 없는 스레드는 보이지 않는다. 빠지는 스레드가 나오면 전체 검사를
-   * 뒤에서 한 번 더 돌려 보충한다.
+   * 상태 DB 에 아직 반영되지 않은 스레드를 rollout 전체 검사로 찾아 사이드바에 더한다. 화면은 상태 DB 목록으로
+   * 먼저 보여 준다. 2026-11-06 실측 (rollout 1,465개, 18 GB): 상태 DB 67ms, 전체 검사 27s. 검사 중에는 스레드
+   * 열기가 0.8s 에서 3.4s 로 느려진다.
    */
-  private async listAllThreads(): Promise<Thread[]> {
+  private async addThreadsFromRolloutScan(generation: number): Promise<void> {
+    try {
+      const threads = await this.listAllThreads(false);
+      if (generation === this.listGeneration) {
+        this.store.mergeFolders(groupThreadsByCwd(threads));
+      }
+    } catch {
+      // 상태 DB 목록은 이미 보인다. 접속이 끊겨서 실패했으면 다시 연결할 때 다시 검사한다.
+    }
+  }
+
+  /**
+   * `nextCursor` 를 따라 모든 페이지를 읽는다. 첫 페이지만 쓰면 오래된 작업 폴더가 목록에서 빠진다.
+   * stateDbOnly 이면 rollout 파일을 검사하지 않고 상태 DB 만 읽는다.
+   */
+  private async listAllThreads(stateDbOnly: boolean): Promise<Thread[]> {
     const threads: Thread[] = [];
     let cursor: string | null = null;
     for (let page = 0; page < THREAD_LIST_MAX_PAGES; page += 1) {
       const response: ThreadListResponse = await this.client.request<ThreadListResponse>("thread/list", {
         limit: THREAD_LIST_LIMIT,
-        useStateDbOnly: true,
+        useStateDbOnly: stateDbOnly,
         ...(cursor ? { cursor } : {}),
       });
       threads.push(...response.data);
