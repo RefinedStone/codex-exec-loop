@@ -5,6 +5,7 @@ use crate::composition::clipboard_image_probe::CompositionClipboardImageProbeTri
 
 use anyhow::Result;
 
+use crate::adapter::outbound::app_server::gateway_upstream::AppServerGatewayUpstream;
 use crate::adapter::outbound::app_server::{AppServerPlanningWorkerAdapter, CodexAppServerAdapter};
 use crate::adapter::outbound::clipboard::PlatformClipboardImageAdapter;
 use crate::adapter::outbound::db::{
@@ -39,6 +40,7 @@ use crate::application::port::outbound::app_server_prompt_log_port::{
     NoopAppServerPromptLogPort,
 };
 use crate::application::port::outbound::conversation_thread_turn_options_port::ConversationThreadTurnOptionsPort;
+use crate::application::port::outbound::gateway_upstream_port::GatewayUpstreamPort;
 use crate::application::port::outbound::github_automation_port::GithubAutomationPort;
 use crate::application::port::outbound::github_pr_validation_port::GithubPrValidationPort;
 use crate::application::port::outbound::github_review_poller_port::GithubReviewPollerPort;
@@ -338,6 +340,11 @@ pub(crate) fn build_telegram_application(workspace_dir: String) -> ProductionTel
         telegram_global_runner_lease_port: ports.telegram_global_runner_lease_port,
         review_center_query_port: Arc::new(review_center_read_service),
     }
+}
+
+/// akra-gateway 의 upstream 을 시작한다. `run_dir` 는 현재 사용자 전용 디렉터리여야 한다.
+pub(crate) fn build_gateway_upstream_port(run_dir: &Path) -> Result<Arc<dyn GatewayUpstreamPort>> {
+    Ok(Arc::new(AppServerGatewayUpstream::start(run_dir)?))
 }
 
 pub(crate) fn build_telegram_bot_port(token: String) -> Arc<dyn TelegramBotPort> {

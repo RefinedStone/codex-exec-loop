@@ -15,6 +15,7 @@ const DEFAULT_BIN: &str = env!("CARGO_BIN_EXE_codex-exec-loop-native");
 const AKRA_BIN: &str = env!("CARGO_BIN_EXE_akra");
 const ADMIN_BIN: &str = env!("CARGO_BIN_EXE_akra-admin");
 const TELEGRAM_BIN: &str = env!("CARGO_BIN_EXE_akra-telegram");
+const GATEWAY_BIN: &str = env!("CARGO_BIN_EXE_akra-gateway");
 #[cfg(unix)]
 const TEST_ADMIN_TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 #[cfg(unix)]
@@ -33,6 +34,17 @@ fn default_binary_and_akra_wrapper_share_help_and_error_contracts() {
     let unsupported = run_command(AKRA_BIN, &["not-a-command"]);
     assert_failure(&unsupported);
     assert_contains(&unsupported.stderr, "unsupported command: not-a-command");
+}
+
+#[test]
+fn gateway_binary_shares_help_and_error_contracts() {
+    let help = run_command(GATEWAY_BIN, &["--help"]);
+    assert_success(&help);
+    assert_contains(&help.stdout, "Usage: akra-gateway");
+
+    let unsupported = run_command(GATEWAY_BIN, &["--port", "0"]);
+    assert_failure(&unsupported);
+    assert_contains(&unsupported.stderr, "unsupported argument: --port");
 }
 
 #[cfg(unix)]

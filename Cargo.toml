@@ -30,7 +30,10 @@ sha2 = "0.10"
 signal-hook = "0.3"
 rusqlite = { version = "0.37", features = ["bundled"] }
 time = { version = "0.3", default-features = false }
-tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "time"] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+# akra-gateway relays WebSocket frames between local IPC clients and `codex app-server proxy` children.
+tokio-tungstenite = { version = "0.28", default-features = false, features = ["handshake"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 tokio-stream = "0.1"
 toml = "0.8"
 toml_edit = "0.22"

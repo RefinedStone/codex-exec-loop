@@ -645,3 +645,64 @@ pub(crate) fn validate_windows_trusted_executable_acl(
 
     Ok(())
 }
+
+/// 현재 사용자 SID 의 문자열 형식(`S-1-5-21-...`)이다. named pipe 이름과 SDDL 에 쓴다.
+pub(crate) fn windows_current_user_sid_string() -> Result<String> {
+    use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
+
+    let current_user = windows_current_user_sid()?;
+    let mut raw: *mut u16 = std::ptr::null_mut();
+    // SAFETY: the SID stays alive in `current_user`; the output pointer is LocalAlloc'd by Windows.
+    if unsafe { ConvertSidToStringSidW(current_user.sid, &mut raw) } == 0 {
+        return Err(std::io::Error::last_os_error()).context("failed to format current-user SID");
+    }
+    let _allocation = WindowsLocalAllocation(raw.cast());
+    // SAFETY: a successful call returns a NUL-terminated wide string.
+    let length = unsafe { (0..).take_while(|&index| *raw.add(index) != 0).count() };
+    // SAFETY: `length` UTF-16 units were just verified as readable.
+    let units = unsafe { std::slice::from_raw_parts(raw, length) };
+    String::from_utf16(units).context("current-user SID was not valid UTF-16")
+}
+
+/// 현재 사용자에게만 모든 권한을 주고 상속을 막은 보안 설명자이다 (`D:P(A;;GA;;;<SID>)`).
+pub(crate) struct WindowsOwnerOnlySecurityDescriptor {
+    descriptor: WindowsLocalAllocation,
+}
+
+impl WindowsOwnerOnlySecurityDescriptor {
+    pub(crate) fn for_current_user() -> Result<Self> {
+        use windows_sys::Win32::Security::Authorization::{
+            ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+        };
+
+        let sddl = format!("D:P(A;;GA;;;{})", windows_current_user_sid_string()?);
+        let wide: Vec<u16> = sddl.encode_utf16().chain(std::iter::once(0)).collect();
+        let mut descriptor = std::ptr::null_mut();
+        // SAFETY: `wide` is NUL-terminated; the descriptor is LocalAlloc'd and freed on drop.
+        if unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                wide.as_ptr(),
+                SDDL_REVISION_1,
+                &mut descriptor,
+                std::ptr::null_mut(),
+            )
+        } == 0
+        {
+            return Err(std::io::Error::last_os_error())
+                .context("failed to build owner-only Windows security descriptor");
+        }
+        Ok(Self {
+            descriptor: WindowsLocalAllocation(descriptor.cast()),
+        })
+    }
+
+    /// `SECURITY_ATTRIBUTES` 를 만들 때 쓰는 원시 포인터이다. 이 값보다 오래 쓰면 안 된다.
+    pub(crate) fn as_raw(&self) -> *mut std::ffi::c_void {
+        self.descriptor.0.cast()
+    }
+}
+
+// SAFETY: the descriptor is immutable after creation and only read by Windows APIs.
+unsafe impl Send for WindowsOwnerOnlySecurityDescriptor {}
+// SAFETY: see `Send`; no interior mutation happens through `as_raw`.
+unsafe impl Sync for WindowsOwnerOnlySecurityDescriptor {}

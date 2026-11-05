@@ -1536,6 +1536,11 @@ fn parse_unsigned(value: &str, key: SettingKey) -> Result<u64> {
 }
 
 fn global_config_path() -> Result<PathBuf> {
+    Ok(akra_home_dir()?.join(CONFIG_FILE_NAME))
+}
+
+/// Akra 의 사용자별 홈 디렉터리이다. `AKRA_HOME` 이 있으면 그 절대 경로를, 없으면 `~/.akra` 를 쓴다.
+pub(crate) fn akra_home_dir() -> Result<PathBuf> {
     let home = match std::env::var_os("AKRA_HOME") {
         Some(path) if !path.is_empty() => PathBuf::from(path),
         _ => default_akra_home()?,
@@ -1543,7 +1548,7 @@ fn global_config_path() -> Result<PathBuf> {
     if !home.is_absolute() {
         bail!("AKRA_HOME must be an absolute path")
     }
-    Ok(home.join(CONFIG_FILE_NAME))
+    Ok(home)
 }
 
 fn default_akra_home() -> Result<PathBuf> {

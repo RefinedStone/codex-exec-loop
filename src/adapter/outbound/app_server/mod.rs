@@ -13,6 +13,8 @@
 mod approval;
 pub(crate) mod connection;
 mod execution_policy;
+// gateway_upstream.rs: akra-gateway 용 upstream app-server(--listen) 감시와 세션별 proxy 자식 프로세스.
+pub(crate) mod gateway_upstream;
 mod planning_worker;
 mod planning_worker_skill;
 pub(crate) mod protocol;

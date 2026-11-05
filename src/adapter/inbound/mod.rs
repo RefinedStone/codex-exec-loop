@@ -5,6 +5,8 @@
 pub mod admin_api;
 // CLI는 스크립트와 운영자가 직접 실행하는 명령줄 진입점이다.
 pub mod cli;
+// gateway는 데스크톱 앱 같은 로컬 클라이언트를 codex app-server 에 중계하는 akra-gateway 데몬이다.
+pub mod gateway;
 // Telegram bot은 채팅 업데이트를 planning control 명령과 응답 텍스트로 변환한다.
 pub mod telegram_bot;
 // TUI는 native-first 사용자 흐름의 주 표면이며 app-server 스트림과 planning 상태를 한 화면에 엮는다.

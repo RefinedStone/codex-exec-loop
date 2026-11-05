@@ -6,6 +6,8 @@
 pub mod app_server_prompt_log_port;
 // conversation thread turn options keep user-selected model/effort scoped to an app-server thread.
 pub mod conversation_thread_turn_options_port;
+// gateway upstream port는 akra-gateway 세션마다 codex app-server 와 이어진 바이트 스트림을 연다.
+pub mod gateway_upstream_port;
 // GitHub automation port는 PR 생성, merge, comment 같은 쓰기 작업을 추상화한다.
 pub mod github_automation_port;
 // GitHub PR validation port는 review/CI/merge 관찰 snapshot의 read-only 계약을 정의한다.
