@@ -66,7 +66,56 @@ function stripPrefix(path: string): string {
   return path.replace(/^[ab]\//, "");
 }
 
-/** git 형식 diff (`turn/diff/updated`) 를 파일별로 나눈다. */
+const C_ESCAPES: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, "\\": 92 };
+
+/**
+ * git 이 따옴표로 감싼 경로를 푼다 (공백 밖의 특수 문자, `core.quotePath` 의 비 ASCII 문자).
+ * 예: `"a/\355\225\234.txt"` 의 8진수는 UTF-8 바이트이다.
+ */
+function readQuoted(text: string, start: number): { value: string; end: number } {
+  const bytes: number[] = [];
+  const encoder = new TextEncoder();
+  let index = start + 1;
+  while (index < text.length && text[index] !== '"') {
+    if (text[index] === "\\" && index + 1 < text.length) {
+      const octal = /^[0-7]{3}/.exec(text.slice(index + 1, index + 4));
+      if (octal) {
+        bytes.push(parseInt(octal[0], 8));
+        index += 4;
+      } else {
+        const next = text[index + 1]!;
+        bytes.push(C_ESCAPES[next] ?? next.charCodeAt(0));
+        index += 2;
+      }
+      continue;
+    }
+    const character = String.fromCodePoint(text.codePointAt(index)!);
+    bytes.push(...encoder.encode(character));
+    index += character.length;
+  }
+  return { value: new TextDecoder().decode(new Uint8Array(bytes)), end: index + 1 };
+}
+
+/** `---`, `+++`, `rename to` 뒤의 경로 하나이다. 공백이 있는 경로 뒤에 git 이 붙이는 탭은 뗀다. */
+function pathField(text: string): string {
+  return text.startsWith('"') ? readQuoted(text, 0).value : text.replace(/\t$/, "");
+}
+
+/** `diff --git` 뒤의 두 경로이다. 어느 쪽이든 따옴표로 감싸질 수 있다. */
+function gitHeaderPaths(rest: string): [string, string] {
+  if (rest.startsWith('"')) {
+    const from = readQuoted(rest, 0);
+    return [from.value, pathField(rest.slice(from.end).trimStart())];
+  }
+  const quotedTo = rest.indexOf(' "b/');
+  if (quotedTo >= 0) {
+    return [rest.slice(0, quotedTo), readQuoted(rest, quotedTo + 1).value];
+  }
+  const split = rest.lastIndexOf(" b/");
+  return split >= 0 ? [rest.slice(0, split), rest.slice(split + 1)] : [rest, rest];
+}
+
+/** git 형식 diff (`turn/diff/updated`, `gitDiffToRemote`) 를 파일별로 나눈다. */
 export function parseGitDiff(diff: string): DiffFile[] {
   const files: DiffFile[] = [];
   let header: { from: string; to: string; kind: DiffFileKind; renameTo: string | null } | null = null;
@@ -81,10 +130,10 @@ export function parseGitDiff(diff: string): DiffFile[] {
   };
 
   for (const line of splitLines(diff)) {
-    const start = /^diff --git a\/(.+) b\/(.+)$/.exec(line);
-    if (start) {
+    if (line.startsWith("diff --git ")) {
       flush();
-      header = { from: start[1]!, to: start[2]!, kind: "update", renameTo: null };
+      const [from, to] = gitHeaderPaths(line.slice("diff --git ".length));
+      header = { from: stripPrefix(from), to: stripPrefix(to), kind: "update", renameTo: null };
       lines = [];
       inHunks = false;
       continue;
@@ -100,11 +149,11 @@ export function parseGitDiff(diff: string): DiffFile[] {
     } else if (line.startsWith("deleted file mode")) {
       header.kind = "delete";
     } else if (line.startsWith("rename to ")) {
-      header.renameTo = line.slice("rename to ".length);
+      header.renameTo = pathField(line.slice("rename to ".length));
     } else if (line.startsWith("--- ") && line !== "--- /dev/null") {
-      header.from = stripPrefix(line.slice(4));
+      header.from = stripPrefix(pathField(line.slice(4)));
     } else if (line.startsWith("+++ ") && line !== "+++ /dev/null") {
-      header.to = stripPrefix(line.slice(4));
+      header.to = stripPrefix(pathField(line.slice(4)));
     }
   }
   flush();
@@ -116,8 +165,10 @@ export function parseGitDiff(diff: string): DiffFile[] {
  * 기록에서 연 이전 턴에는 그 알림이 없으므로, 적용된 `fileChange` 아이템의 변경을 차례로 보여 준다.
  */
 export function turnDiffFiles(diff: string | null, items: readonly ThreadItem[]): DiffFile[] {
-  if (diff !== null) {
-    return parseGitDiff(diff);
+  const parsed = diff === null ? [] : parseGitDiff(diff);
+  // 비어 있는 diff 는 "변경 없음" 이다. 내용이 있는데 파일을 못 찾았으면 형식을 모르는 것이므로 아이템으로 대신한다.
+  if (diff !== null && (parsed.length > 0 || diff.trim() === "")) {
+    return parsed;
   }
   return items.flatMap((item) =>
     item.type === "fileChange" && item.status === "completed" ? item.changes.map(diffFileFromChange) : [],
