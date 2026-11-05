@@ -1,7 +1,21 @@
 // renderer 에 노출하는 것은 AkraBridge 의 함수뿐이다. Node API 와 ipcRenderer 자체는 노출하지 않는다.
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 
-import { type AkraBridge, type ConnectionState, type GitFileDiff, type GitStatusResult, IPC_CHANNELS } from "../shared/bridge";
+import {
+  type AkraBridge,
+  type ConnectionState,
+  type GitFileDiff,
+  type GitStatusResult,
+  IPC_CHANNELS,
+  type TerminalOpenRequest,
+  type TerminalOpenResult,
+} from "../shared/bridge";
+
+function listen<T extends unknown[]>(channel: string, listener: (...args: T) => void): () => void {
+  const handler = (_event: IpcRendererEvent, ...args: unknown[]) => listener(...(args as T));
+  ipcRenderer.on(channel, handler);
+  return () => ipcRenderer.removeListener(channel, handler);
+}
 
 const bridge: AkraBridge = {
   send(text: string): void {
@@ -29,6 +43,22 @@ const bridge: AkraBridge = {
   },
   gitFileDiff(cwd: string, path: string, untracked: boolean): Promise<GitFileDiff> {
     return ipcRenderer.invoke(IPC_CHANNELS.gitFileDiff, cwd, path, untracked) as Promise<GitFileDiff>;
+  },
+  terminal: {
+    open(request: TerminalOpenRequest): Promise<TerminalOpenResult> {
+      return ipcRenderer.invoke(IPC_CHANNELS.terminalOpen, request) as Promise<TerminalOpenResult>;
+    },
+    write(id: number, data: string): void {
+      ipcRenderer.send(IPC_CHANNELS.terminalWrite, id, data);
+    },
+    resize(id: number, cols: number, rows: number): void {
+      ipcRenderer.send(IPC_CHANNELS.terminalResize, id, cols, rows);
+    },
+    close(id: number): void {
+      ipcRenderer.send(IPC_CHANNELS.terminalClose, id);
+    },
+    onData: (listener) => listen<[number, string]>(IPC_CHANNELS.terminalData, listener),
+    onExit: (listener) => listen<[number, number]>(IPC_CHANNELS.terminalExit, listener),
   },
 };
 

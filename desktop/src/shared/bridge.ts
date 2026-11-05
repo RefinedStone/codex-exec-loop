@@ -20,7 +20,32 @@ export const IPC_CHANNELS = {
   chooseFolder: "akra:choose-folder",
   gitStatus: "akra:git-status",
   gitFileDiff: "akra:git-file-diff",
+  terminalOpen: "akra:terminal-open",
+  terminalWrite: "akra:terminal-write",
+  terminalResize: "akra:terminal-resize",
+  terminalClose: "akra:terminal-close",
+  terminalData: "akra:terminal-data",
+  terminalExit: "akra:terminal-exit",
 } as const;
+
+export interface TerminalOpenRequest {
+  /** 터미널의 작업 폴더이다. 없거나 지워졌으면 홈 폴더이다. */
+  cwd: string | null;
+  cols: number;
+  rows: number;
+}
+
+export type TerminalOpenResult = { ok: true; id: number; cwd: string; shell: string } | { ok: false; message: string };
+
+/** 앱 안 터미널이다 (R2). 대화 메시지 버스와 다른 IPC 통로를 쓴다. */
+export interface TerminalBridge {
+  open(request: TerminalOpenRequest): Promise<TerminalOpenResult>;
+  write(id: number, data: string): void;
+  resize(id: number, cols: number, rows: number): void;
+  close(id: number): void;
+  onData(listener: (id: number, data: string) => void): () => void;
+  onExit(listener: (id: number, exitCode: number) => void): () => void;
+}
 
 /** 작업 트리의 바뀐 파일 하나이다 (`git status --porcelain=v1`). */
 export interface GitChangedFile {
@@ -63,4 +88,5 @@ export interface AkraBridge {
   gitStatus(cwd: string): Promise<GitStatusResult>;
   /** 바뀐 파일 하나의 diff 를 읽는다. 새 파일은 내용을 돌려준다. */
   gitFileDiff(cwd: string, path: string, untracked: boolean): Promise<GitFileDiff>;
+  terminal: TerminalBridge;
 }

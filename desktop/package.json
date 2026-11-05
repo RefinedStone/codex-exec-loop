@@ -11,9 +11,10 @@
     "check": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
     "generate:protocol": "node scripts/generate-protocol.mjs",
-    "e2e": "electron-vite build && node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON test/e2e/approval-flow.mjs && node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON test/e2e/multi-window-approval.mjs"
+    "e2e": "electron-vite build && node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON test/e2e/approval-flow.mjs && node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON test/e2e/multi-window-approval.mjs && node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON test/e2e/terminal.mjs"
   },
   "dependencies": {
+    "node-pty": "1.1.0",
     "ws": "8.22.1"
   },
   "devDependencies": {
@@ -23,6 +24,9 @@
     "@types/react-dom": "19.3.0",
     "@types/ws": "8.18.2",
     "@vitejs/plugin-react": "6.2.1",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/addon-webgl": "0.19.0",
+    "@xterm/xterm": "6.0.0",
     "electron": "45.2.3",
     "electron-vite": "6.0.0",
     "playwright-core": "1.59.1",

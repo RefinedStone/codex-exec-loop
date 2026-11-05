@@ -4,12 +4,16 @@ import { join, resolve } from "node:path";
 
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell, type WebContents } from "electron";
 
-import { IPC_CHANNELS } from "../shared/bridge";
+import { IPC_CHANNELS, type TerminalOpenRequest } from "../shared/bridge";
 import { GatewayConnection } from "./gatewayConnection";
 import { resolveGatewayEndpoint, resolveGatewayExecutable } from "./gatewayEndpoint";
+import { spawn as spawnPty } from "node-pty";
+
 import { readGitFileDiff, readGitStatus } from "./gitStatus";
+import { TerminalService } from "./terminalService";
 
 const connections = new Map<number, GatewayConnection>();
+const terminals = new TerminalService(spawnPty);
 
 function repositoryRoot(): string {
   // 개발 중에는 desktop/ 의 부모가 Akra 저장소 루트이다. 패키징 경로는 R8 에서 정한다.
@@ -104,6 +108,7 @@ function createWindow(): void {
   contents.once("destroyed", () => {
     connections.get(contentsId)?.close();
     connections.delete(contentsId);
+    terminals.closeAllOf(contentsId);
   });
   if (!HIDDEN_WINDOWS) {
     window.once("ready-to-show", () => window.show());
@@ -130,6 +135,13 @@ ipcMain.handle(IPC_CHANNELS.gitStatus, (_event, cwd: unknown) => readGitStatus(c
 ipcMain.handle(IPC_CHANNELS.gitFileDiff, (_event, cwd: unknown, path: unknown, untracked: unknown) =>
   readGitFileDiff(cwd, path, untracked),
 );
+
+ipcMain.handle(IPC_CHANNELS.terminalOpen, (event, request: unknown) => terminals.open(event.sender, request as TerminalOpenRequest));
+ipcMain.on(IPC_CHANNELS.terminalWrite, (event, id: unknown, data: unknown) => terminals.write(event.sender.id, id, data));
+ipcMain.on(IPC_CHANNELS.terminalResize, (event, id: unknown, cols: unknown, rows: unknown) =>
+  terminals.resize(event.sender.id, id, cols, rows),
+);
+ipcMain.on(IPC_CHANNELS.terminalClose, (event, id: unknown) => terminals.close(event.sender.id, id));
 
 ipcMain.handle(IPC_CHANNELS.chooseFolder, async (event) => {
   const owner = BrowserWindow.fromWebContents(event.sender);
@@ -172,6 +184,9 @@ void app.whenReady().then(() => {
     }
   });
 });
+
+// 셸은 앱과 함께 끝난다. Gateway 데몬과 다르다.
+app.on("before-quit", () => terminals.closeAll());
 
 app.on("window-all-closed", () => {
   // Gateway 데몬은 앱과 별개로 계속 실행된다 (D-06).
