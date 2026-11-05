@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { WebSocketServer } from "ws";
+import { type WebSocket, WebSocketServer } from "ws";
 
 interface RecordedLine {
   direction: "client" | "gateway";
@@ -58,6 +58,8 @@ export function uniqueTestEndpoint(): string {
 export interface FakeGateway {
   readonly endpoint: string;
   readonly receivedMethods: string[];
+  /** 먼저 도착해서 쓰인 서버 요청 답이다. */
+  readonly answeredRequests: Array<{ requestId: string; result: unknown }>;
   close(): Promise<void>;
 }
 
@@ -68,7 +70,6 @@ export interface FakeGateway {
 interface ReplaySegment {
   trigger: string;
   followUps: string[];
-  used: boolean;
 }
 
 function triggerKey(message: JsonRpcEnvelope): string | null {
@@ -86,7 +87,7 @@ export function loadReplaySegments(recordingPath: string): ReplaySegment[] {
     const message = JSON.parse(record.text) as JsonRpcEnvelope;
     if (record.direction === "client") {
       const key = triggerKey(message);
-      current = key ? { trigger: key, followUps: [], used: false } : null;
+      current = key ? { trigger: key, followUps: [] } : null;
       if (current) {
         segments.push(current);
       }
@@ -110,24 +111,59 @@ export async function startFakeGateway(endpoint: string, recordingPaths: string 
   }
   const segments = paths.flatMap((path) => loadReplaySegments(path));
   const receivedMethods: string[] = [];
+  const answeredRequests: Array<{ requestId: string; result: unknown }> = [];
   const server: Server = createServer();
   const sockets = new WebSocketServer({ server });
+  // app-server 처럼 서버 요청은 접속마다 따로 받고, 먼저 온 답만 쓴다 (Q-03 실측).
+  const resolvedRequestIds = new Set<string>();
+  /** 서버 요청 id → 그 요청을 받은 접속들과 스레드 id */
+  const openServerRequests = new Map<string, { threadId: string; sockets: Set<WebSocket> }>();
   sockets.on("connection", (socket) => {
+    // 녹화 재생은 접속마다 따로 한다. 창 두 개가 같은 스레드를 열면 둘 다 같은 기록을 받는다.
+    const used = new Set<ReplaySegment>();
     const replayFollowUps = (message: JsonRpcEnvelope) => {
       const key = triggerKey(message);
-      const segment = segments.find((candidate) => !candidate.used && candidate.trigger === key);
+      const segment = segments.find((candidate) => !used.has(candidate) && candidate.trigger === key);
       if (!segment) {
         return;
       }
-      segment.used = true;
+      used.add(segment);
       for (const text of segment.followUps) {
+        const followUp = JSON.parse(text) as JsonRpcEnvelope & { params?: { threadId?: string } };
+        if (followUp.method && followUp.id !== undefined && followUp.id !== null) {
+          const requestId = String(followUp.id);
+          const open = openServerRequests.get(requestId) ?? { threadId: followUp.params?.threadId ?? "", sockets: new Set() };
+          open.sockets.add(socket);
+          openServerRequests.set(requestId, open);
+        }
         socket.send(text);
       }
     };
     socket.on("message", (data) => {
       const message = JSON.parse(data.toString()) as JsonRpcEnvelope;
       if (!message.method) {
-        // 서버 요청(승인 등)에 대한 클라이언트 답이다. 녹화에서 그 뒤에 온 알림을 이어서 보낸다.
+        // 서버 요청(승인 등)에 대한 클라이언트 답이다. 먼저 온 답이면 다른 접속에 resolved 를 알리고 녹화를 이어서
+        // 보낸다. 이미 닫힌 요청에 온 늦은 답은 무시한다.
+        const requestId = message.id === undefined || message.id === null ? null : String(message.id);
+        if (requestId && openServerRequests.has(requestId)) {
+          if (resolvedRequestIds.has(requestId)) {
+            return;
+          }
+          resolvedRequestIds.add(requestId);
+          const open = openServerRequests.get(requestId)!;
+          answeredRequests.push({ requestId, result: message.result });
+          for (const other of open.sockets) {
+            if (other !== socket) {
+              other.send(
+                JSON.stringify({
+                  jsonrpc: "2.0",
+                  method: "serverRequest/resolved",
+                  params: { threadId: open.threadId, requestId: message.id },
+                }),
+              );
+            }
+          }
+        }
         replayFollowUps(message);
         return;
       }
@@ -148,6 +184,7 @@ export async function startFakeGateway(endpoint: string, recordingPaths: string 
   return {
     endpoint,
     receivedMethods,
+    answeredRequests,
     close: async () => {
       for (const client of sockets.clients) {
         client.terminate();

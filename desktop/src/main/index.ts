@@ -2,7 +2,7 @@
 import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
 
-import { app, BrowserWindow, dialog, ipcMain, shell, type WebContents } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell, type WebContents } from "electron";
 
 import { IPC_CHANNELS } from "../shared/bridge";
 import { GatewayConnection } from "./gatewayConnection";
@@ -123,7 +123,33 @@ ipcMain.handle(IPC_CHANNELS.chooseFolder, async (event) => {
   return result.canceled ? null : (result.filePaths[0] ?? null);
 });
 
+/**
+ * 앱 메뉴이다. "새 창" 은 창을 하나 더 열고, 그 창은 자기 Gateway 접속을 가진다 (04 §4). 같은 스레드를 여러 창에서
+ * 열면 승인 요청은 모든 창에 오고, 한 창이 답하면 나머지 창에서는 `serverRequest/resolved` 로 사라진다.
+ */
+function installApplicationMenu(): void {
+  const menu = Menu.buildFromTemplate([
+    ...(process.platform === "darwin" ? [{ role: "appMenu" as const }] : []),
+    {
+      label: "파일",
+      submenu: [
+        { id: "new-window", label: "새 창", accelerator: "CmdOrCtrl+N", click: () => createWindow() },
+        { type: "separator" },
+        { role: "close", label: "창 닫기" },
+      ],
+    },
+    { role: "editMenu" },
+    {
+      label: "보기",
+      submenu: [{ role: "reload" }, { role: "toggleDevTools" }, { type: "separator" }, { role: "togglefullscreen" }],
+    },
+    { role: "windowMenu" },
+  ]);
+  Menu.setApplicationMenu(menu);
+}
+
 void app.whenReady().then(() => {
+  installApplicationMenu();
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
