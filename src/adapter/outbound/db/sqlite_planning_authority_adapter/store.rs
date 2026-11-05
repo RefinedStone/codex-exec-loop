@@ -1702,17 +1702,31 @@ pub(super) fn replace_review_center_pending_inbox_rows(
             params![workspace_root],
         )
         .context("failed to clear review center inbox rows")?;
-    let mut statement = transaction
-        .prepare(
+    for item in inbox {
+        upsert_review_center_inbox_row(transaction, workspace_root, item)?;
+    }
+    Ok(())
+}
+
+pub(super) fn upsert_review_center_inbox_row(
+    transaction: &rusqlite::Transaction<'_>,
+    workspace_root: &str,
+    item: &ReviewCenterInboxItem,
+) -> Result<()> {
+    transaction
+        .execute(
             "INSERT INTO review_center_inbox (
                 workspace_root, review_id, thread_id, inbox_state, summary,
                 requested_at, last_activity_at, handoff_target
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        )
-        .context("failed to prepare review center inbox insert")?;
-    for item in inbox {
-        statement
-            .execute(params![
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            ON CONFLICT(workspace_root, review_id) DO UPDATE SET
+                thread_id = excluded.thread_id,
+                inbox_state = excluded.inbox_state,
+                summary = excluded.summary,
+                requested_at = excluded.requested_at,
+                last_activity_at = excluded.last_activity_at,
+                handoff_target = excluded.handoff_target",
+            params![
                 workspace_root,
                 item.review_id,
                 item.thread_id,
@@ -1721,9 +1735,24 @@ pub(super) fn replace_review_center_pending_inbox_rows(
                 item.requested_at,
                 item.last_activity_at,
                 item.handoff_target,
-            ])
-            .context("failed to insert review center inbox row")?;
-    }
+            ],
+        )
+        .context("failed to upsert review center inbox row")?;
+    Ok(())
+}
+
+pub(super) fn delete_review_center_inbox_row(
+    transaction: &rusqlite::Transaction<'_>,
+    workspace_root: &str,
+    review: &ReviewCenterThreadProjection,
+) -> Result<()> {
+    transaction
+        .execute(
+            "DELETE FROM review_center_inbox
+             WHERE workspace_root = ?1 AND review_id = ?2 AND thread_id = ?3",
+            params![workspace_root, review.review_id, review.thread_id],
+        )
+        .context("failed to delete review center inbox row")?;
     Ok(())
 }
 

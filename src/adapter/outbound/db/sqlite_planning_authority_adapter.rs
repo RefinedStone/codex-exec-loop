@@ -285,6 +285,47 @@ impl SqlitePlanningAuthorityAdapter {
         Ok(())
     }
 
+    pub(crate) fn record_review_center_review_update(
+        workspace_dir: &str,
+        review: &ReviewCenterThreadProjection,
+        pending_item: Option<&ReviewCenterInboxItem>,
+        history_entry: Option<&ReviewCenterHistoryEntry>,
+    ) -> Result<()> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .context("failed to open review center review update transaction")?;
+        let workspace_root = location.workspace_root.as_str();
+        upsert_authority_metadata(
+            &transaction,
+            &location,
+            "last_review_center_thread_review_updated_at",
+        )?;
+        upsert_review_center_thread_review_row(&transaction, workspace_root, review)?;
+        upsert_authority_metadata(
+            &transaction,
+            &location,
+            "last_review_center_inbox_updated_at",
+        )?;
+        match pending_item {
+            Some(item) => upsert_review_center_inbox_row(&transaction, workspace_root, item)?,
+            None => delete_review_center_inbox_row(&transaction, workspace_root, review)?,
+        }
+        if let Some(entry) = history_entry {
+            upsert_authority_metadata(
+                &transaction,
+                &location,
+                "last_review_center_history_appended_at",
+            )?;
+            append_review_center_history_row(&transaction, workspace_root, entry)?;
+        }
+        transaction
+            .commit()
+            .context("failed to commit review center review update transaction")?;
+        Ok(())
+    }
+
     pub(crate) fn append_review_center_history_entry(
         workspace_dir: &str,
         entry: &ReviewCenterHistoryEntry,
@@ -1831,6 +1872,16 @@ impl ReviewCenterRepositoryPort for SqlitePlanningAuthorityAdapter {
         entry: &ReviewCenterHistoryEntry,
     ) -> Result<()> {
         Self::append_review_center_history_entry(workspace_dir, entry)
+    }
+
+    fn record_review_update(
+        &self,
+        workspace_dir: &str,
+        review: &ReviewCenterThreadProjection,
+        pending_item: Option<&ReviewCenterInboxItem>,
+        history_entry: Option<&ReviewCenterHistoryEntry>,
+    ) -> Result<()> {
+        Self::record_review_center_review_update(workspace_dir, review, pending_item, history_entry)
     }
 }
 /*

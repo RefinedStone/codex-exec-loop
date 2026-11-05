@@ -149,35 +149,22 @@ impl ReviewCenterWriteService {
             .map(|stored| !same_review_projection(stored, &projection))
             .unwrap_or(true);
 
-        self.review_center_repository
-            .upsert_thread_review(workspace_dir, &projection)?;
-
-        let mut inbox = self
-            .review_center_repository
-            .load_pending_inbox(workspace_dir)?
-            .into_iter()
-            .filter(|item| !(item.review_id == review_id && item.thread_id == thread_id))
-            .collect::<Vec<_>>();
-        if let Some(item) = build_pending_inbox_item(&projection) {
-            inbox.push(item);
-        }
-        self.review_center_repository
-            .replace_pending_inbox(workspace_dir, &inbox)?;
-
-        if history_changed {
-            self.review_center_repository.append_history_entry(
-                workspace_dir,
-                &build_history_entry(
-                    thread_id,
-                    &review_id,
-                    review,
-                    &projection.review_summary,
-                    &now,
-                ),
-            )?;
-        }
-
-        Ok(())
+        let pending_item = build_pending_inbox_item(&projection);
+        let history_entry = history_changed.then(|| {
+            build_history_entry(
+                thread_id,
+                &review_id,
+                review,
+                &projection.review_summary,
+                &now,
+            )
+        });
+        self.review_center_repository.record_review_update(
+            workspace_dir,
+            &projection,
+            pending_item.as_ref(),
+            history_entry.as_ref(),
+        )
     }
 }
 
