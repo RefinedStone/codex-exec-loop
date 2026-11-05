@@ -173,6 +173,34 @@ impl AdminSecurityConfig {
         self.authenticate_request(headers).is_some()
     }
 
+    // Capability-token streams return None and keep streaming; browser sessions are re-checked per frame.
+    pub(super) fn stream_session_token(&self, headers: &HeaderMap) -> Option<String> {
+        if header_capability_tokens(headers)
+            .into_iter()
+            .any(|candidate| self.matches_capability_token(candidate))
+        {
+            return None;
+        }
+        CookieJar::from_headers(headers)
+            .get(ADMIN_SESSION_COOKIE)
+            .map(|cookie| cookie.value().to_string())
+    }
+
+    pub(super) fn session_is_active(&self, candidate: &str) -> bool {
+        self.session_is_active_at(candidate, Instant::now())
+    }
+
+    // Read-only: an open stream is activity, so only logout, rotation, and absolute expiry end it.
+    fn session_is_active_at(&self, candidate: &str, now: Instant) -> bool {
+        let Ok(session) = self.session.lock() else {
+            return false;
+        };
+        session.as_ref().is_some_and(|active| {
+            now.saturating_duration_since(active.issued_at) < ADMIN_SESSION_ABSOLUTE_TIMEOUT
+                && constant_time_digest_eq(&active.digest, &token_digest(candidate))
+        })
+    }
+
     pub(super) fn matches_capability_token(&self, candidate: &str) -> bool {
         constant_time_digest_eq(&self.capability_digest, &token_digest(candidate))
     }
@@ -608,6 +636,48 @@ mod tests {
                 .authenticate_request_at(&headers, absolute_expired_at)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn stream_session_check_ends_on_logout_rotation_and_absolute_expiry() {
+        let security = AdminSecurityConfig::for_test(TEST_TOKEN, 18442);
+        let first = security
+            .issue_session_cookie()
+            .expect("test session should be issued");
+        assert!(security.session_is_active(first.value()));
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::COOKIE,
+            HeaderValue::from_str(&format!("{ADMIN_SESSION_COOKIE}={}", first.value()))
+                .expect("session header should be valid"),
+        );
+        assert_eq!(
+            security.stream_session_token(&headers).as_deref(),
+            Some(first.value())
+        );
+        headers.insert(ADMIN_TOKEN_HEADER, HeaderValue::from_static(TEST_TOKEN));
+        assert_eq!(security.stream_session_token(&headers), None);
+
+        let issued_at = security
+            .session
+            .lock()
+            .expect("test session lock should remain healthy")
+            .as_ref()
+            .expect("active session should exist")
+            .issued_at;
+        let expired_at = issued_at
+            .checked_add(ADMIN_SESSION_ABSOLUTE_TIMEOUT)
+            .expect("absolute timeout should fit the monotonic clock");
+        assert!(!security.session_is_active_at(first.value(), expired_at));
+
+        let second = security
+            .issue_session_cookie()
+            .expect("rotated session should be issued");
+        assert!(!security.session_is_active(first.value()));
+        assert!(security.session_is_active(second.value()));
+        security.clear_session();
+        assert!(!security.session_is_active(second.value()));
     }
 
     #[test]
