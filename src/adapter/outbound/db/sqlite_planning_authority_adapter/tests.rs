@@ -8681,3 +8681,22 @@ fn runtime_event_append_trims_old_events_but_keeps_each_kind_newest_row() {
         .expect("runtime events should load");
     assert_eq!(sequences, vec![1, 3, 20_001]);
 }
+
+#[test]
+fn unparsable_metadata_counter_fails_instead_of_restarting() {
+    let workspace_dir = temp_workspace("metadata-counter-corrupt");
+    set_authority_metadata(&workspace_dir, "planning_revision", "not-a-number");
+    let mut connection = authority_connection(&workspace_dir);
+
+    assert_error_contains(
+        super::read_metadata_i64_connection(&connection, "planning_revision"),
+        "authority metadata `planning_revision` is not an integer",
+    );
+    let transaction = connection
+        .transaction()
+        .expect("metadata transaction should open");
+    assert_error_contains(
+        super::bump_planning_revision(&transaction),
+        "authority metadata `planning_revision` is not an integer",
+    );
+}
