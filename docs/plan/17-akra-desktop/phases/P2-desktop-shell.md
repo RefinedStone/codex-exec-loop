@@ -65,7 +65,8 @@ new BrowserWindow({
 
 ### 4.3 main 의 Gateway 접속
 
-- 라이브러리: `ws`. unix 소켓 주소는 `ws+unix:///<절대경로>:/` 형식을 쓴다.
+- 라이브러리: `ws`. macOS 는 `ws+unix:///<절대경로>:/` 형식을 쓴다. Windows 는 `createConnection` 옵션으로
+  named pipe 접속(`net.connect("\\\\.\\pipe\\akra-gateway-<사용자 식별자>")`)을 넘긴다 (P-04).
 - 창 하나마다 접속 하나를 연다 (04 §4).
 - 접속이 끊기면 1초에서 시작해 최대 30초 간격으로 다시 접속한다. 상태(연결 중, 연결됨, 끊김)를
   renderer 에 알린다.

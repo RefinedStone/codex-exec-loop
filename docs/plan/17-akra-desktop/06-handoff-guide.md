@@ -17,10 +17,10 @@
 
 | 항목 | 값 |
 | --- | --- |
-| OS | macOS (Apple Silicon) |
+| OS | macOS (Apple Silicon), Windows 11 (D-15) |
 | Rust | 1.95.0 (`rust-toolchain.toml` 이 고정) |
 | Node, npm | Node 24.3.0, npm 11.4.2. pnpm 은 설치되어 있지 않다 |
-| codex CLI | 0.149.1, PATH 의 `/opt/homebrew/bin/codex`. Akra 와 Gateway 는 PATH 의 codex 를 쓴다 |
+| codex CLI | macOS: 0.149.1 (`/opt/homebrew/bin/codex`). Windows: 0.159.0 (npm 전역 설치). Akra 와 Gateway 는 PATH 의 codex 를 쓴다 |
 | Codex 로그인 | CLI 는 ChatGPT 계정으로 로그인되어 있다. 플랜은 free 이다 |
 | 공식 데스크톱 앱 | ChatGPT 앱 26.1029.61003 (번들 codex 0.166.0-alpha.6). 비교용으로만 쓴다 |
 | Akra 전역 설정 | `$AKRA_HOME` (기본 `~/.akra`) |
@@ -70,8 +70,9 @@ bash scripts/gh-akra.sh auth write-status   # RefinedStone 이어야 한다
 | 전체 테스트 | `cargo test --release` | 약 12분. 불안정 테스트 있음 |
 | 일부 테스트 | `cargo test --release --lib -- <경로 필터>` | - |
 | 전달 전 검사 목록 | `node scripts/agent-plan.mjs` | 즉시 |
-| app-server 핸드셰이크 | `python3 -I docs/plan/17-akra-desktop/scripts/appserver_handshake.py "$(command -v codex)"` | 수 초 |
-| 다중 접속 시험 | `python3 -I docs/plan/17-akra-desktop/scripts/multi_client_check.py --codex "$(command -v codex)"` | 수 초 |
+| app-server 핸드셰이크 (macOS·Linux) | `python3 -I docs/plan/17-akra-desktop/scripts/appserver_handshake.py "$(command -v codex)"` | 수 초 |
+| 다중 접속 시험 (macOS·Linux) | `python3 -I docs/plan/17-akra-desktop/scripts/multi_client_check.py --codex "$(command -v codex)"` | 수 초 |
+| 다중 접속 시험 (Windows 포함) | `node docs/plan/17-akra-desktop/scripts/proxy_ws_check.mjs <codex 실행 파일> 3 [소켓 경로]` | 수 초 |
 | 타입 생성 (P2 이후) | `codex app-server generate-ts --out <디렉터리>` | 수 초 |
 
 코딩 에이전트의 샌드박스 안에서 git 이나 소켓 명령이 실패하면, 먼저 샌드박스 제한인지 확인한다.

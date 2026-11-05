@@ -80,3 +80,31 @@ python3 -I docs/plan/17-akra-desktop/scripts/multi_client_check.py --socket ~/.a
 
 - Q-03: 두 접속이 같은 승인 요청에 답할 때의 처리
 - Q-09: 구독 접속이 모두 끊긴 스레드의 진행 중인 턴이 계속되는지
+
+## 6. Windows 검증 (2026-11-05)
+
+환경: Windows 11, codex-cli 0.159.0 (PATH, npm) 과 0.166.0 (Codex 관리형 데몬 패키지), Node v24.13.0.
+턴은 만들지 않았다 (D-13).
+
+| 항목 | 결과 |
+| --- | --- |
+| `codex app-server --listen unix://<경로>` | 동작한다. 소켓 디렉터리가 현재 사용자 전용 ACL 이 아니면 `Error: socket directory is not private to the current user` 로 시작하지 않는다 |
+| Node `net.connect(<unix 소켓 경로>)` | 실패 (`EACCES`). Node 는 Windows 에서 경로를 named pipe 로 다룬다 |
+| Python `socket.AF_UNIX` | 없다. §3 의 Python 스크립트는 Windows 에서 실행되지 않는다 |
+| `codex app-server proxy` 에 줄 단위 JSON 전송 | 응답 없음. proxy 는 바이트를 그대로 전달하고, 소켓은 WebSocket 을 기대한다 |
+| proxy 위 WebSocket 업그레이드 | `HTTP/1.1 101 Switching Protocols`. 최대 메시지 16 MiB (`x-codex-websocket-max-unfragmented-message-bytes`) |
+| 직접 실행한 app-server 에 `proxy --sock` 3개 동시 접속 | 3개 모두 `initialize` 와 `thread/list` 성공. 같은 요청 ID 를 각자 사용 |
+| proxy 프로세스 메모리 | 대기 중 약 6MB (private) |
+| proxy 종료 | Node `child.kill()` 뒤에도 proxy 가 남은 경우가 있었다 |
+
+재현:
+
+```bash
+node docs/plan/17-akra-desktop/scripts/proxy_ws_check.mjs <codex 실행 파일> 3 <소켓 경로>
+```
+
+- 소켓 경로를 생략하면 Codex 관리형 데몬의 control 소켓에 접속한다.
+- Windows 에서는 소켓 디렉터리를 먼저 현재 사용자 전용으로 만든다. 예:
+  `icacls <디렉터리> /inheritance:r /grant:r "%USERNAME%:(OI)(CI)F"`.
+- 해석: Windows 에서 앱 → Gateway 구간은 named pipe, Gateway → app-server 구간은 proxy 를 쓴다
+  (D-15, P-04, P-09). named pipe 위 WebSocket 구간은 아직 시험하지 않았다. P1 첫 작업에서 확인한다.

@@ -10,8 +10,8 @@
 
 | 항목 | 내용 |
 | --- | --- |
-| Gateway 상주 | macOS LaunchAgent 로 로그인 때 `akra-gateway` 를 시작한다. 비정상 종료 때 다시 시작한다 (Q-05) |
-| 앱 패키징 | electron-builder 로 `.app` 과 `.dmg` 를 만든다. `akra-gateway` 바이너리를 함께 넣는다 |
+| Gateway 상주 | 로그인 때 `akra-gateway` 를 시작한다. macOS 는 LaunchAgent, Windows 는 작업 스케줄러(로그온 트리거)를 쓴다. 비정상 종료 때 다시 시작한다 (Q-05) |
+| 앱 패키징 | electron-builder 로 macOS 는 `.app` 과 `.dmg`, Windows 는 설치 파일을 만든다. `akra-gateway` 바이너리를 함께 넣는다 |
 | 서명 | 개인 사용은 로컬 서명으로 시작한다. 배포가 필요하면 Developer ID 서명과 공증을 추가한다 |
 | 업데이트 | 처음에는 수동 설치로 한다. 자동 업데이트는 필요할 때 추가한다 |
 | 로그 | Gateway 와 앱의 로그 위치, 보존 기간, 크기 제한을 정한다 |
@@ -26,6 +26,6 @@
 
 ## 미결
 
-- Q-05: 데몬 시작 방식 (LaunchAgent, 앱이 시작)
-- Q-06: Windows, Linux 지원 여부
+- Q-05: 데몬 시작 방식 (LaunchAgent, 작업 스케줄러, 앱이 시작)
+- Q-06: Linux 지원 여부 (Windows 는 D-15 로 결정)
 - Q-08: 앱 이름과 아이콘

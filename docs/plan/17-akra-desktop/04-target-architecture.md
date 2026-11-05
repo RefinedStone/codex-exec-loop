@@ -17,7 +17,7 @@
 | main (Node)                                                              |
 |   창마다 Gateway 접속 1개, 데몬 확인과 시작, OS 기능                       |
 +--------+-----------------------------------------------------------------+
-         | WebSocket, unix 소켓 $AKRA_HOME/run/gateway.sock
+         | WebSocket, 로컬 IPC (macOS unix 소켓 / Windows named pipe, P-04)
 +--------v------------- akra-gateway (데몬, 컴퓨터당 1개) ------------------+
 | Listener -> Session(클라이언트마다) -> Router                             |
 |   akra/*       -> Gateway 가 직접 응답                                     |
@@ -25,8 +25,8 @@
 |   그 외        -> 이 Session 의 upstream 접속으로 그대로 전달               |
 | Upstream supervisor: app-server 실행, 감시, 재시작                         |
 +--------+-----------------------------------------------------------------+
-         | WebSocket, unix 소켓 $AKRA_HOME/run/codex-app-server.sock
-         | (클라이언트 Session 마다 upstream 접속 1개)
+         | WebSocket, proxy 자식 프로세스의 stdio -> unix 소켓 $AKRA_HOME/run/codex-app-server.sock
+         | (클라이언트 Session 마다 proxy 1개 = upstream 접속 1개, P-09)
 +--------v------------- codex app-server (Gateway 의 자식 프로세스) --------+
 | 공식 엔진. Project, Thread, Turn, Item 을 ~/.codex 에 저장한다             |
 +--------------------------------------------------------------------------+
@@ -87,7 +87,7 @@ Akra Desktop 의 규칙:
 
 ### 6.1 앱 시작
 
-1. main 이 `$AKRA_HOME/run/gateway.sock` 에 접속한다.
+1. main 이 Gateway 의 로컬 IPC 주소(P-04)에 접속한다.
 2. 접속에 실패하면 main 이 `akra-gateway` 를 시작하고 다시 접속한다. 나중에 OS 서비스로 바꾼다 (R8).
 3. main 이 창을 만들고, 그 창의 Gateway 접속을 연다.
 4. renderer 가 `initialize` 를 보내고 `initialized` 알림을 보낸다.
@@ -126,12 +126,13 @@ Akra Desktop 의 규칙:
 | upstream 종료 | 재시작한다 (대기 시간을 점점 늘린다). 기존 클라이언트 접속을 닫는다 | 다시 접속한다 | initialize 를 다시 하고, 보던 스레드를 resume 한다 |
 | Gateway 종료 | - | 다시 접속한다. 계속 실패하면 데몬을 시작한다 | "연결 끊김"을 표시한다 |
 | 클라이언트 비정상 종료 | 그 Session 의 upstream 접속을 닫는다 | - | - |
-| 소켓 경로가 104바이트 초과 | 시작하지 않고 오류를 출력한다 | 오류를 표시한다 | - |
+| 소켓 경로가 OS 한도 초과 (macOS 104바이트) | 시작하지 않고 오류를 출력한다 | 오류를 표시한다 | - |
 | Gateway 가 이미 실행 중 | 새 인스턴스는 시작하지 않는다 | 기존 데몬에 접속한다 | - |
 
 ## 8. 보안
 
-- Gateway 는 unix 소켓만 쓴다. `$AKRA_HOME/run` 권한은 0700, 소켓은 0600 이다. TCP 포트를 열지 않는다.
+- Gateway 는 로컬 IPC 만 쓴다. TCP 포트를 열지 않는다 (P-04). macOS 는 `$AKRA_HOME/run` 0700, 소켓
+  0600 이다. Windows 는 named pipe 와 `$AKRA_HOME\run` 모두 현재 사용자 전용 권한이다.
 - upstream 실행은 Akra 의 기존 보안 설정을 그대로 쓴다
   ([akra-current.md](reference/akra-current.md) §4):
   - `-c shell_environment_policy.inherit=...`
@@ -163,7 +164,7 @@ Akra Desktop 의 규칙:
 codex-exec-loop/
 +- src/bin/akra-gateway.rs                 Gateway 진입점 (P-01)
 +- src/adapter/inbound/gateway/            Listener, Session, akra/* 처리 (위치는 P1 에서 확정)
-+- src/adapter/outbound/app_server/        기존 app-server 실행 코드 재사용과 --listen 확장
++- src/adapter/outbound/app_server/        기존 app-server 실행 코드 재사용, --listen 확장, proxy 실행 (P-09)
 +- src/composition/                        Gateway 조립
 +- desktop/                                Akra Desktop (D-04)
 |  +- package.json, electron.vite.config.ts

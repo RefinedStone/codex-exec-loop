@@ -1,16 +1,16 @@
 # P1. Gateway 데몬
 
-상태: **다음 작업** (제안) · 기준일: 2026-11-05 · 규모: Rust 수백~1,000줄과 테스트, 약 1주
+상태: **다음 작업** (제안) · 기준일: 2026-11-05 · 규모: Rust 수백~1,000줄과 테스트, 약 1.5주 (Windows 포함)
 
 ## 1. 목표
 
-`akra-gateway` 데몬을 만든다. 데몬은 unix 소켓에서 클라이언트 접속을 받고, 접속마다 Codex
-app-server 접속을 하나씩 열어 메시지를 그대로 중계한다.
+`akra-gateway` 데몬을 만든다. 데몬은 로컬 IPC(P-04)에서 클라이언트 접속을 받고, 접속마다 Codex
+app-server 접속을 하나씩 열어 메시지를 그대로 중계한다. macOS 와 Windows 를 함께 지원한다 (D-15).
 
 ## 2. 선행 조건
 
 - Q-10: 모노레포(D-04)를 사용자에게 확인한다.
-- P-01~P-04 를 사용자에게 확인한다. 더 나은 안이 있으면 근거와 함께 제시한다.
+- P-01~P-04, P-09 를 사용자에게 확인한다. 더 나은 안이 있으면 근거와 함께 제시한다.
 - [06 인계 가이드](../06-handoff-guide.md) 의 저장소 절차대로 전용 worktree 를 만든다.
 
 ## 3. 범위
@@ -18,8 +18,8 @@ app-server 접속을 하나씩 열어 메시지를 그대로 중계한다.
 | 범위 안 | 범위 밖 |
 | --- | --- |
 | `akra-gateway` 바이너리 | interceptor 의 실제 동작 (자리만 만든다) |
-| unix 소켓 Listener (WebSocket) | `akra/gateway/info` 외의 `akra/*` 메서드 |
-| 클라이언트 접속마다 upstream 접속 1개 | OS 서비스 등록 (launchd 등, R8) |
+| 로컬 IPC Listener (WebSocket): macOS unix 소켓, Windows named pipe | `akra/gateway/info` 외의 `akra/*` 메서드 |
+| 클라이언트 접속마다 upstream 접속 1개 (proxy, P-09) | OS 서비스 등록 (launchd, 작업 스케줄러 등, R8) |
 | upstream app-server 실행, 감시, 재시작 | TUI·하네스의 app-server 통합 (P-08) |
 | `akra/gateway/info` | TCP 접속 |
 | 단일 인스턴스, 경로·권한, 종료 처리 | 데스크톱 앱 (P2) |
@@ -32,7 +32,8 @@ app-server 접속을 하나씩 열어 메시지를 그대로 중계한다.
 
 | 구성 요소 | 책임 |
 | --- | --- |
-| GatewayListener | `$AKRA_HOME/run/gateway.sock` 에서 접속을 받고 WebSocket 핸드셰이크를 한다 |
+| GatewayListener | P-04 의 주소(macOS unix 소켓, Windows named pipe)에서 접속을 받고 WebSocket 핸드셰이크를 한다 |
+| UpstreamConnector | Session 마다 `codex app-server proxy --sock` 을 실행하고, 그 stdio 위에서 WebSocket 핸드셰이크를 한다 (P-09) |
 | GatewaySession | 클라이언트 접속 하나를 맡는다. upstream 접속 하나를 연다. 양방향 전달 작업 두 개를 실행한다 |
 | MessageRouter | 클라이언트 메시지의 `method` 를 읽고 `akra/*` 처리, interceptor, 전달 중 하나를 고른다 |
 | AkraMethodHandler | `akra/*` 요청에 응답한다 |
@@ -69,31 +70,44 @@ enum UpstreamMessageAction { Forward, Replace(String), Drop }
 - 환경 변수: Akra 의 기존 허용 목록을 그대로 쓴다.
 - 기존 실행 코드(`src/adapter/outbound/app_server/connection.rs`)에서 실행 설정 부분을 함수로 분리해서
   재사용한다. 기존 stdio 경로의 동작은 바꾸지 않는다.
+- 소켓 디렉터리: macOS 는 0700 이다. Windows 는 상속을 끊은 현재 사용자 전용 ACL 이다. 아니면 app-server 가
+  시작하지 않는다 (D-15).
+- Session 접속: Session 마다 `codex app-server proxy --sock <upstream 소켓>` 을 실행한다 (P-09). proxy 는
+  `ManagedChild`(Windows job object)로 묶어서 Session 이나 Gateway 가 끝나면 함께 끝나게 한다.
 - 시작 확인: upstream 소켓에 접속할 수 있을 때까지 기다린다 (제한 시간 10초).
 - 버전: 시작할 때 `codex --version` 을 한 번 실행해서 기록한다.
 - 종료 감지: 자식 프로세스가 끝나면 모든 클라이언트 접속을 close 코드 1012 (service restart) 로 닫는다.
   1초에서 시작해 두 배씩 늘려 최대 30초 간격으로 재시작한다. 60초 동안 정상이면 간격을 초기화한다.
-- 정지: SIGINT, SIGTERM 을 받으면 클라이언트 접속을 닫고 자식 프로세스를 종료하고 소켓 파일을 지운다.
+- 정지: macOS 는 SIGINT·SIGTERM, Windows 는 Ctrl+C·콘솔 종료 이벤트를 받으면 클라이언트 접속을 닫고 자식
+  프로세스를 종료하고 소켓 파일을 지운다.
 
 ### 4.5 단일 인스턴스, 경로, 권한
 
-- `$AKRA_HOME/run` 을 권한 0700 으로 만든다. 소켓은 0600 이다.
-- 소켓 경로가 103바이트를 넘으면 시작하지 않는다 (macOS 한도 104바이트, 끝의 NUL 포함).
+- `$AKRA_HOME/run` 을 현재 사용자 전용으로 만든다. macOS 는 0700, 소켓은 0600 이다. Windows 는 상속을 끊은
+  사용자 전용 ACL 이다.
+- Windows named pipe 는 사용자 전용 보안 설명자, `first_pipe_instance(true)`, `reject_remote_clients(true)` 로
+  만든다 (P-04).
+- 소켓 경로가 103바이트를 넘으면 시작하지 않는다 (macOS 한도 104바이트, 끝의 NUL 포함). Windows 의 upstream
+  소켓에도 같은 검사를 한다.
 - `$AKRA_HOME/run/gateway.lock` 에 파일 잠금을 건다. 잠금을 얻지 못하면 다른 인스턴스가 실행 중이다.
   안내를 출력하고 종료한다.
-- 잠금을 얻었는데 소켓 파일이 남아 있으면 이전 실행의 흔적이다. 지우고 다시 만든다.
+- 잠금을 얻었는데 소켓 파일이 남아 있으면 이전 실행의 흔적이다. 지우고 다시 만든다. named pipe 는 프로세스가
+  끝나면 사라지므로 이 처리가 필요 없다.
 
 ### 4.6 로그와 녹화
 
 - 로그는 `$AKRA_HOME/log/` 에 쓴다. 메서드 이름, 크기, 접속 번호, 시각만 기록한다. 메시지 본문은 대화
   내용을 포함하므로 기록하지 않는다.
 - 녹화: 환경 변수(예: `AKRA_GATEWAY_RECORD=1`)가 켜져 있을 때만 접속 메시지를 JSONL 로 기록한다.
-  위치는 `$AKRA_HOME/recordings/`, 파일 권한은 0600 이다.
+  위치는 `$AKRA_HOME/recordings/`, 파일은 현재 사용자 전용 권한(macOS 0600)이다.
 - 녹화 파일은 실제 대화를 담는다. 저장소에 커밋하지 않는다. 시험용 픽스처는 내용을 바꾼 사본만 쓴다.
 
 ### 4.7 의존성 (제안)
 
-- `tokio-tungstenite`: unix 소켓 위의 WebSocket 서버(`accept_async`)와 클라이언트(`client_async`)
+- `tokio-tungstenite`: 로컬 IPC 위의 WebSocket 서버(`accept_async`)와 proxy stdio 위의 클라이언트
+  (`client_async`, 스트림은 `tokio::io::join(stdout, stdin)`)
+- Windows named pipe 는 `tokio::net::windows::named_pipe` 를 쓴다. 보안 설명자는 이미 의존성에 있는
+  `windows-sys`(`Win32_Security`, `Win32_System_Pipes`)로 만든다.
 - `futures-util`: 스트림 처리
 - 현재 Akra 에는 WebSocket 의존성이 없다. axum 에도 `ws` 기능이 켜져 있지 않다.
 - 의존성을 추가하면 `Cargo.lock` 을 함께 커밋한다. CI 는 `cargo test --locked` 와
@@ -135,7 +149,10 @@ Akra 의 아키텍처 테스트(`tests/architecture_boundaries.rs`)를 통과해
    - 통합 (가짜 upstream): 다중 클라이언트, 순서 보장, upstream 재시작 시 접속 종료, close 전파
    - 통합 (실제 codex, 턴 없음): 접속 2개의 initialize 와 `thread/list`. 로컬에서만 실행하도록 표시한다
    - `tests/binary_entrypoints.rs` 에 새 바이너리의 도움말과 오류 계약을 추가한다
-8. **수동 검증:** `scripts/multi_client_check.py --socket ~/.akra/run/gateway.sock` 을 실행한다.
+   - Windows: named pipe 권한, 사용자 전용 디렉터리 검사, proxy 자식 프로세스 정리
+8. **수동 검증:** macOS 는 `scripts/multi_client_check.py --socket ~/.akra/run/gateway.sock` 을 실행한다.
+   Windows 는 named pipe 에 접속하는 Node 시험 스크립트를 이 단계에서 만든다 (`scripts/proxy_ws_check.mjs` 의
+   WebSocket 코드를 재사용한다).
 9. **실측 (사용자 허락 후):** 아래 §6 절차로 Q-03 과 Q-09 를 확인하고 녹화 파일을 얻는다.
 
 ## 6. 실측 절차 (턴 사용, 허락 필요)
@@ -155,7 +172,8 @@ Akra 의 아키텍처 테스트(`tests/architecture_boundaries.rs`)를 통과해
 
 ## 7. 완료 기준
 
-1. `akra-gateway` 를 실행하면 `$AKRA_HOME/run/gateway.sock` 이 권한 0600 으로 생긴다.
+1. `akra-gateway` 를 실행하면 P-04 의 주소가 현재 사용자 전용 권한으로 생긴다 (macOS 소켓 0600, Windows
+   named pipe 사용자 전용).
 2. `multi_client_check.py --socket` 이 Gateway 소켓에서 성공한다.
 3. `akra/gateway/info` 가 codex 버전을 돌려준다.
 4. upstream 을 강제로 종료하면 Gateway 가 재시작하고 클라이언트 접속이 close 코드 1012 로 닫힌다.
@@ -164,6 +182,7 @@ Akra 의 아키텍처 테스트(`tests/architecture_boundaries.rs`)를 통과해
    기준선([akra-current.md](../reference/akra-current.md) §7)과 비교한다.
 7. `node scripts/agent-plan.mjs` 가 출력한 검사를 통과한다.
 8. (허락받은 경우) 실측 결과를 Q-03, Q-09 에 기록했다.
+9. 1~5 를 macOS 와 Windows 에서 모두 확인했다.
 
 ## 8. 위험
 
@@ -173,3 +192,4 @@ Akra 의 아키텍처 테스트(`tests/architecture_boundaries.rs`)를 통과해
 | 기존 실행 코드 분리 중 TUI 경로가 깨진다 | 분리 전후로 app-server 어댑터 테스트를 실행한다 |
 | 0.149.1 의 다중 접속 동작이 main 브랜치와 다르다 | 실측(§6)으로 확인한다 |
 | 구독자가 없으면 턴이 멈춘다 (Q-09) | Gateway 가 자체 접속으로 진행 중인 스레드를 구독해서 유지한다 |
+| macOS 와 Windows 의 IPC 차이 (K-10) | 차이를 Listener 와 권한 처리에 가둔다. Session 코드는 같은 스트림 타입을 쓴다 |

@@ -18,10 +18,10 @@
 | 명령 | 설명 |
 | --- | --- |
 | `codex app-server` | 기본 전송은 stdio 이다. 한 줄에 JSON-RPC 메시지 하나를 쓴다 (NDJSON). Akra 의 현재 방식이다 |
-| `codex app-server --listen unix://PATH` | unix 소켓에서 접속을 받는다. 메시지는 **WebSocket 프레임**이다 (P0 실측). 여러 접속을 받는다 |
+| `codex app-server --listen unix://PATH` | unix 소켓에서 접속을 받는다. 메시지는 **WebSocket 프레임**이다 (P0 실측). 여러 접속을 받는다. Windows 에서도 동작하며, 소켓 디렉터리가 현재 사용자 전용이어야 한다 (2026-11-05 실측) |
 | `codex app-server --listen ws://IP:PORT` | TCP WebSocket 으로 접속을 받는다 |
 | `codex app-server daemon start/stop/restart/version` | Codex 관리형 데몬. 제어 소켓은 `~/.codex/app-server-control/app-server-control.sock` 이다 |
-| `codex app-server proxy` | stdio 를 Codex 관리형 데몬의 제어 소켓에 중계한다 |
+| `codex app-server proxy [--sock PATH]` | stdio 와 unix 소켓 사이에서 바이트를 그대로 전달한다. 클라이언트는 stdio 위에서 WebSocket 핸드셰이크부터 해야 한다. `--sock` 을 생략하면 Codex 관리형 데몬의 제어 소켓에 접속한다 (2026-11-05 Windows 실측) |
 | `codex app-server generate-ts` | 프로토콜의 TypeScript 타입을 생성한다 (실험 기능) |
 | `codex app-server generate-json-schema` | 프로토콜의 JSON Schema 를 생성한다 (실험 기능) |
 | `-c key=value`, `--enable`, `--disable` | 설정을 덮어쓴다 |

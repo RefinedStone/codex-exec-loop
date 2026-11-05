@@ -18,6 +18,7 @@
 | 크기 | 앱 전체 약 1.8GB. UI 패키지(`app.asar`) 약 721MB, 그중 대부분이 웹 화면이다 |
 | 엔진 | 공개 Codex CLI 를 번들로 포함한다 (`codex-cli 0.166.0-alpha.6`) |
 | 엔진 실행 | 로컬: `codex -c features.code_mode_host=true app-server ...` (stdio). 원격: SSH 너머에서 `codex app-server --listen unix://` |
+| Windows 관찰 | `26.1029.7803.0` (2026-11-05). 로컬 엔진은 stdio 자식 프로세스로 실행한다. 관리형 데몬 소켓은 쓰지 않는다 |
 | 그 밖의 번들 | computer-use 런타임, macOS 네이티브 모듈, LaTeX 컴파일러, ripgrep |
 | 코드 상태 | 압축(minify)만 했다. 난독화는 없다. 소스맵은 포함하지 않았다 |
 | 규모 | 정확한 줄 수는 알 수 없다. 웹 화면에 ChatGPT 웹 기능 전체가 들어 있어서 Codex 부분만 분리할 수 없다 |
