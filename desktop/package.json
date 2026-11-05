@@ -10,7 +10,8 @@
     "start": "electron-vite preview",
     "check": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
-    "generate:protocol": "node scripts/generate-protocol.mjs"
+    "generate:protocol": "node scripts/generate-protocol.mjs",
+    "e2e": "electron-vite build && node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON test/e2e/approval-flow.mjs"
   },
   "dependencies": {
     "ws": "8.22.1"
@@ -23,6 +24,7 @@
     "@vitejs/plugin-react": "6.2.1",
     "electron": "45.2.3",
     "electron-vite": "6.0.0",
+    "playwright-core": "1.59.1",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "typescript": "7.0.2",

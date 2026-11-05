@@ -23,4 +23,7 @@ npm run check          # strict TypeScript for main/preload/tests and renderer
 npm test               # vitest, including the fake Gateway over a unix socket or named pipe
 npm run build          # electron-vite bundle into out/
 npm run dev            # open the app; starts akra-gateway from ../target if none is running
+npm run e2e            # local only: build, then drive the app against the fake gateway (needs Electron + display)
 ```
+
+`AKRA_GATEWAY_ENDPOINT` points the app at another gateway endpoint (the fake gateway in tests).

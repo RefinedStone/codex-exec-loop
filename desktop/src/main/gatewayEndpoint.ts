@@ -11,6 +11,10 @@ export function resolveGatewayEndpoint(
   env: NodeJS.ProcessEnv = process.env,
   readUserSid: () => string = readWindowsUserSid,
 ): string {
+  // 개발과 화면 시험에서 가짜 Gateway 에 붙일 때 쓴다.
+  if (env.AKRA_GATEWAY_ENDPOINT && env.AKRA_GATEWAY_ENDPOINT.length > 0) {
+    return env.AKRA_GATEWAY_ENDPOINT;
+  }
   if (platform === "win32") {
     return `\\\\.\\pipe\\akra-gateway-${readUserSid()}`;
   }

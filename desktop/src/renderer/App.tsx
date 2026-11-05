@@ -1,6 +1,8 @@
 // 화면 구성 (P3 §4): 왼쪽 사이드바(작업 폴더 → 스레드), 오른쪽 대화 기록. Gateway 정보는 상단에 작게 둔다.
 import { useEffect, useRef } from "react";
 
+import { ApprovalPrompt } from "./conversation/ApprovalPrompt";
+import { Composer, type ComposerActions } from "./conversation/Composer";
 import { ConversationView } from "./conversation/ConversationView";
 import { DesktopSession } from "./session/desktopSession";
 import { desktopSessionStore, useDesktopStore } from "./session/desktopStore";
@@ -41,12 +43,26 @@ export function App() {
     return () => created.stop();
   }, []);
 
+  const composerActions: ComposerActions = {
+    sendMessage: async (text) => session.current?.sendMessage(text),
+    interrupt: async () => session.current?.interrupt(),
+  };
+
   return (
     <div className="layout">
-      <Sidebar onOpenThread={(threadId) => void session.current?.openThread(threadId)} />
+      <Sidebar
+        onOpenThread={(threadId) => void session.current?.openThread(threadId)}
+        onStartThread={(cwd) =>
+          void session.current?.startThread(cwd).catch((error: unknown) =>
+            useDesktopStore.getState().setSessionError(error instanceof Error ? error.message : String(error)),
+          )
+        }
+      />
       <main className="main">
         <GatewayBar />
         <ConversationView />
+        <ApprovalPrompt onAnswer={(requestId, decision) => session.current?.answerApproval(requestId, decision)} />
+        <Composer actions={composerActions} />
       </main>
     </div>
   );

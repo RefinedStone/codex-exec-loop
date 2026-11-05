@@ -1,0 +1,4 @@
+{"at":"2026-11-05T13:54:58+00:00","direction":"client","text":"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"akra/gateway/info\",\"params\":{}}"}
+{"at":"2026-11-05T13:54:58+00:00","direction":"gateway","text":"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"codexVersion\":\"codex-cli 0.159.0\",\"gatewayVersion\":\"1.3.5\",\"startedAt\":\"2026-11-05T13:50:00+00:00\",\"upstreamRestarts\":0}}"}
+{"at":"2026-11-05T13:54:58+00:00","direction":"client","text":"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"thread/list\",\"params\":{\"limit\":100}}"}
+{"at":"2026-11-05T13:54:58+00:00","direction":"gateway","text":"{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"data\":[{\"id\":\"01a1abfb-8f0a-7581-a8e4-c2953347f470\",\"name\":\"Run node --version\",\"preview\":\"Run node --version\",\"cwd\":\"/work/example-app\",\"updatedAt\":1762350898}],\"nextCursor\":null,\"backwardsCursor\":null}}"}

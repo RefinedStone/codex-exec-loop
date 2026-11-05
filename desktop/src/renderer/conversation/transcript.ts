@@ -1,5 +1,6 @@
 // 열린 스레드의 화면용 사본이다. 원본은 app-server 에 있다 (D-05).
 // `thread/resume` 결과로 시작하고, 그 스레드의 `turn/*`, `item/*` 알림을 순서대로 반영한다. 모두 순수 함수이다.
+import type { Thread } from "../../shared/protocol/generated/v2/Thread";
 import type { ThreadItem } from "../../shared/protocol/generated/v2/ThreadItem";
 import type { ThreadResumeResponse } from "../../shared/protocol/generated/v2/ThreadResumeResponse";
 import type { ThreadStatus } from "../../shared/protocol/generated/v2/ThreadStatus";
@@ -39,7 +40,11 @@ export function notificationThreadId(params: unknown): string | null {
 }
 
 export function transcriptFromResume(response: ThreadResumeResponse): Transcript {
-  const { thread } = response;
+  return transcriptFromThread(response.thread);
+}
+
+/** `thread/start`, `thread/resume` 응답의 스레드로 화면 사본을 만든다. */
+export function transcriptFromThread(thread: Thread): Transcript {
   return {
     threadId: thread.id,
     title: thread.name ?? (thread.preview.trim() || "(제목 없음)"),

@@ -2,6 +2,7 @@
 import { create } from "zustand";
 
 import type { ConnectionState } from "../../shared/bridge";
+import type { PendingApproval } from "../conversation/approvals";
 import type { Transcript } from "../conversation/transcript";
 import type { CodexVersionCheck } from "./codexVersion";
 
@@ -35,6 +36,8 @@ export interface DesktopState {
   openThreadId: string | null;
   transcript: Transcript | null;
   transcriptError: string | null;
+  /** 답을 기다리는 승인 요청이다. 모든 스레드의 것을 모으고, 화면은 스레드별로 골라 보여 준다. */
+  pendingApprovals: PendingApproval[];
   setConnection(connection: ConnectionState): void;
   setSession(session: Pick<DesktopState, "gateway" | "versionCheck" | "folders">): void;
   setSessionError(message: string | null): void;
@@ -42,6 +45,11 @@ export interface DesktopState {
   setOpenThread(threadId: string | null): void;
   setTranscript(transcript: Transcript | null, error?: string | null): void;
   updateTranscript(update: (transcript: Transcript) => Transcript): void;
+  addApproval(approval: PendingApproval): void;
+  removeApproval(requestId: PendingApproval["requestId"]): void;
+  clearApprovals(): void;
+  /** 이 창에서 만든 새 스레드를 사이드바의 작업 폴더 맨 앞에 넣는다. */
+  addThreadToFolder(cwd: string, thread: WorkspaceThread): void;
 }
 
 export const useDesktopStore = create<DesktopState>((set) => ({
@@ -54,6 +62,7 @@ export const useDesktopStore = create<DesktopState>((set) => ({
   openThreadId: null,
   transcript: null,
   transcriptError: null,
+  pendingApprovals: [],
   setConnection: (connection) => set({ connection }),
   setSession: (session) => set({ ...session, sessionError: null }),
   setSessionError: (sessionError) => set({ sessionError }),
@@ -66,6 +75,25 @@ export const useDesktopStore = create<DesktopState>((set) => ({
   setTranscript: (transcript, transcriptError = null) => set({ transcript, transcriptError }),
   updateTranscript: (update) =>
     set((state) => (state.transcript ? { transcript: update(state.transcript) } : {})),
+  addApproval: (approval) =>
+    set((state) => ({
+      pendingApprovals: [
+        ...state.pendingApprovals.filter((pending) => String(pending.requestId) !== String(approval.requestId)),
+        approval,
+      ],
+    })),
+  removeApproval: (requestId) =>
+    set((state) => ({
+      pendingApprovals: state.pendingApprovals.filter((pending) => String(pending.requestId) !== String(requestId)),
+    })),
+  clearApprovals: () => set({ pendingApprovals: [] }),
+  addThreadToFolder: (cwd, thread) =>
+    set((state) => {
+      const existing = state.folders.find((folder) => folder.cwd === cwd);
+      const others = state.folders.filter((folder) => folder.cwd !== cwd);
+      const threads = [thread, ...(existing?.threads.filter((item) => item.id !== thread.id) ?? [])];
+      return { folders: [{ cwd, threads }, ...others] };
+    }),
 }));
 
 export type SessionStore = Pick<
@@ -77,6 +105,10 @@ export type SessionStore = Pick<
   | "setOpenThread"
   | "setTranscript"
   | "updateTranscript"
+  | "addApproval"
+  | "removeApproval"
+  | "clearApprovals"
+  | "addThreadToFolder"
 > & { getOpenThreadId(): string | null; getTranscript(): Transcript | null };
 
 /** zustand 저장소를 세션이 쓰는 좁은 인터페이스로 감싼다. */
@@ -90,6 +122,10 @@ export function desktopSessionStore(): SessionStore {
     setOpenThread: state.setOpenThread,
     setTranscript: state.setTranscript,
     updateTranscript: state.updateTranscript,
+    addApproval: state.addApproval,
+    removeApproval: state.removeApproval,
+    clearApprovals: state.clearApprovals,
+    addThreadToFolder: state.addThreadToFolder,
     getOpenThreadId: () => useDesktopStore.getState().openThreadId,
     getTranscript: () => useDesktopStore.getState().transcript,
   };
