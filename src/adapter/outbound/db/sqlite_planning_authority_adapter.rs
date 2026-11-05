@@ -87,7 +87,7 @@ use crate::domain::planning::{
 };
 
 // authority DB schema가 바뀔 때 올리는 adapter 내부 schema marker이다.
-const AUTHORITY_STORE_SCHEMA_VERSION: i64 = 17;
+const AUTHORITY_STORE_SCHEMA_VERSION: i64 = 18;
 const MINIMUM_MIGRATABLE_AUTHORITY_STORE_SCHEMA_VERSION: i64 = 7;
 // metadata에 저장되는 store mode 값으로, 다른 DB 파일과 planning authority store를 구분한다.
 const AUTHORITY_STORE_MODE: &str = "authority-store";
@@ -1512,6 +1512,15 @@ impl PlanningAuthorityPort for SqlitePlanningAuthorityAdapter {
         command: &ParallelModeDispatchCommandSnapshot,
     ) -> Result<()> {
         Self::update_runtime_dispatch_command(workspace_dir, command)
+    }
+
+    fn finish_runtime_dispatch_command(
+        &self,
+        workspace_dir: &str,
+        command: &ParallelModeDispatchCommandSnapshot,
+        expected_owner_token: &str,
+    ) -> Result<()> {
+        Self::finish_runtime_dispatch_command(workspace_dir, command, expected_owner_token)
     }
 
     fn cancel_runtime_dispatch_commands(&self, workspace_dir: &str, reason: &str) -> Result<usize> {

@@ -1401,6 +1401,17 @@ impl ParallelModeService {
             .map_err(|error| error.to_string())
     }
 
+    pub fn finish_dispatch_command(
+        &self,
+        workspace_dir: &str,
+        command: &ParallelModeDispatchCommandSnapshot,
+        expected_owner_token: &str,
+    ) -> Result<(), String> {
+        self.planning_authority
+            .finish_runtime_dispatch_command(workspace_dir, command, expected_owner_token)
+            .map_err(|error| error.to_string())
+    }
+
     pub fn recover_fresh_running_dispatch_command(
         &self,
         workspace_dir: &str,

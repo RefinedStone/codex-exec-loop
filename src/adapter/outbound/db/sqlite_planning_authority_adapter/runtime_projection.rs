@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 // 이 모듈의 public helper들은 모두 outbound adapter 경계에서 실패할 수 있으므로
 // `anyhow::Result`로 오류를 올리고, `Context`로 SQLite 단계 이름을 붙인다.
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 // 클레임 만료와 큐 처리 시각은 DB 행에 문자열로 남기기 때문에,
 // UTC 기준 RFC3339 타임스탬프를 만드는 `Utc`가 이 파일의 공통 시간 원천이다.
 use chrono::{DateTime, Utc};
@@ -1162,6 +1162,25 @@ impl SqlitePlanningAuthorityAdapter {
                     )
                 })?;
         }
+        if changed_rows == 0 && !command.is_terminal() {
+            // A wake that lands while the command runs must survive: its outcome write re-queues it.
+            transaction
+                .execute(
+                    "UPDATE runtime_dispatch_commands
+                     SET rerun_requested = 1
+                     WHERE command_id = ?1 AND command_state = ?2",
+                    params![
+                        &command.command_id,
+                        ParallelModeDispatchCommandState::Running.label()
+                    ],
+                )
+                .with_context(|| {
+                    format!(
+                        "failed to request rerun of running runtime dispatch command `{}`",
+                        command.command_id
+                    )
+                })?;
+        }
         if changed_rows > 0 {
             append_runtime_event(
                 &transaction,
@@ -1309,12 +1328,28 @@ impl SqlitePlanningAuthorityAdapter {
         workspace_dir: &str,
         command: &ParallelModeDispatchCommandSnapshot,
     ) -> Result<()> {
+        Self::store_runtime_dispatch_command(workspace_dir, command, None)
+    }
+
+    // Stores a dispatch outcome only while `expected_owner_token` still runs the command.
+    // A rerun requested during the run turns the outcome back into Pending.
+    pub(crate) fn finish_runtime_dispatch_command(
+        workspace_dir: &str,
+        command: &ParallelModeDispatchCommandSnapshot,
+        expected_owner_token: &str,
+    ) -> Result<()> {
+        Self::store_runtime_dispatch_command(workspace_dir, command, Some(expected_owner_token))
+    }
+
+    fn store_runtime_dispatch_command(
+        workspace_dir: &str,
+        command: &ParallelModeDispatchCommandSnapshot,
+        expected_owner_token: Option<&str>,
+    ) -> Result<()> {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let mut connection = open_authority_connection(&location)?;
-        let payload_json = serde_json::to_string(command)
-            .context("failed to serialize runtime dispatch command update")?;
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .context("failed to open runtime dispatch command update transaction")?;
         if !command.is_terminal() {
             ensure_no_admin_authority_mutation_guard(
@@ -1324,6 +1359,40 @@ impl SqlitePlanningAuthorityAdapter {
             )?;
         }
         upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
+        let mut command = command.clone();
+        if let Some(expected_owner_token) = expected_owner_token {
+            let rerun_requested = transaction
+                .query_row(
+                    "SELECT rerun_requested
+                     FROM runtime_dispatch_commands
+                     WHERE command_id = ?1 AND command_state = ?2 AND owner_token = ?3",
+                    params![
+                        &command.command_id,
+                        ParallelModeDispatchCommandState::Running.label(),
+                        expected_owner_token
+                    ],
+                    |row| row.get::<_, bool>(0),
+                )
+                .optional()
+                .with_context(|| {
+                    format!(
+                        "failed to read runtime dispatch command `{}` owner",
+                        command.command_id
+                    )
+                })?
+                .ok_or_else(|| {
+                    anyhow!(
+                        "runtime dispatch command `{}` is no longer running for owner `{expected_owner_token}`; outcome discarded",
+                        command.command_id
+                    )
+                })?;
+            if rerun_requested {
+                command.state = ParallelModeDispatchCommandState::Pending;
+                command.owner_token = None;
+            }
+        }
+        let payload_json = serde_json::to_string(&command)
+            .context("failed to serialize runtime dispatch command update")?;
         transaction
             .execute(
                 "UPDATE runtime_dispatch_commands
@@ -1334,8 +1403,10 @@ impl SqlitePlanningAuthorityAdapter {
                      epoch_id = ?5,
                      updated_at = ?6,
                      owner_token = ?7,
-                     content = ?8
-                 WHERE command_id = ?9",
+                     content = ?8,
+                     rerun_requested = 0
+                 WHERE command_id = ?9
+                   AND (?10 IS NULL OR owner_token = ?10)",
                 params![
                     command.kind.label(),
                     command.trigger.label(),
@@ -1345,7 +1416,8 @@ impl SqlitePlanningAuthorityAdapter {
                     &command.updated_at,
                     command.owner_token.as_deref(),
                     payload_json,
-                    &command.command_id
+                    &command.command_id,
+                    expected_owner_token
                 ],
             )
             .with_context(|| {
@@ -1363,7 +1435,7 @@ impl SqlitePlanningAuthorityAdapter {
                 "runtime dispatch command stored / state: {}",
                 command.state.label()
             ),
-            &serde_json::to_string(command)
+            &serde_json::to_string(&command)
                 .context("failed to serialize dispatch command update event payload")?,
         )?;
         transaction
