@@ -723,8 +723,8 @@ fn rollout_evidence_store_deduplicates_conflicts_and_enforces_retention() {
 }
 
 #[test]
-fn authority_schema_migrates_v7_through_v16_additively_and_rejects_unsupported_versions() {
-    for legacy_version in [7, 8, 9, 10, 11, 12, 13, 14, 15, 16] {
+fn authority_schema_migrates_v7_through_v17_additively_and_rejects_unsupported_versions() {
+    for legacy_version in [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17] {
         let workspace_dir = temp_workspace(&format!("schema-migrate-v{legacy_version}"));
         let location = SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
             &workspace_dir,
@@ -755,6 +755,7 @@ fn authority_schema_migrates_v7_through_v16_additively_and_rejects_unsupported_v
                  ALTER TABLE runtime_pr_validation_records DROP COLUMN operator_acknowledged_at;
                  ALTER TABLE runtime_pr_validation_records DROP COLUMN last_operator_command_id;
                  DROP TABLE conversation_thread_turn_options;
+                 ALTER TABLE runtime_dispatch_commands DROP COLUMN rerun_requested;
                  INSERT OR REPLACE INTO active_documents (relative_path, content)
                  VALUES ('legacy.md', 'legacy body');
                  UPDATE authority_metadata SET value = '{legacy_version}'
@@ -771,7 +772,7 @@ fn authority_schema_migrates_v7_through_v16_additively_and_rejects_unsupported_v
                 |row| row.get(0),
             )
             .expect("migrated version should load");
-        assert_eq!(version, "17");
+        assert_eq!(version, "18");
         assert_eq!(
             migrated
                 .query_row(
@@ -857,9 +858,21 @@ fn authority_schema_migrates_v7_through_v16_additively_and_rejects_unsupported_v
                 "Admin column `{column}` should migrate from v{legacy_version}"
             );
         }
+        let rerun_column_count: i64 = migrated
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('runtime_dispatch_commands')
+                 WHERE name = 'rerun_requested'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("dispatch command columns should inspect");
+        assert_eq!(
+            rerun_column_count, 1,
+            "dispatch command rerun column should migrate from v{legacy_version}"
+        );
     }
 
-    for unsupported_version in ["6", "18", "not-a-version"] {
+    for unsupported_version in ["6", "19", "not-a-version"] {
         let workspace_dir = temp_workspace("schema-reject-unsupported");
         let location = SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
             &workspace_dir,
@@ -981,7 +994,7 @@ fn authority_schema_migrates_v12_pr_validation_schedule_without_data_loss() {
                 |row| row.get::<_, String>(0),
             )
             .unwrap(),
-        "17"
+        "18"
     );
     drop(migrated);
 
@@ -1184,7 +1197,7 @@ fn authority_schema_migrates_v11_legacy_merge_evidence_without_data_loss() {
             |row| row.get(0),
         )
         .expect("migrated version should load");
-    assert_eq!(version, "17");
+    assert_eq!(version, "18");
     let (method, evidence_sha, content): (String, String, String) = migrated
         .query_row(
             "SELECT integration_method, integration_evidence_sha, content
@@ -8569,4 +8582,69 @@ fn concurrent_review_updates_keep_every_inbox_item() {
             .expect("history should load"),
         vec![history]
     );
+}
+
+#[test]
+fn dispatch_wake_during_running_command_requeues_it_after_the_outcome() {
+    let workspace_dir = temp_workspace("dispatch-rerun-during-running");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let command = dispatch_command_snapshot(910);
+    assert!(
+        adapter
+            .enqueue_runtime_dispatch_command(&workspace_dir, &command)
+            .expect("dispatch command should enqueue")
+    );
+    let mut running = adapter
+        .try_claim_next_runtime_dispatch_command(&workspace_dir, "owner-a")
+        .expect("dispatch command should claim")
+        .expect("dispatch command should exist");
+    assert!(
+        !adapter
+            .enqueue_runtime_dispatch_command(&workspace_dir, &command)
+            .expect("wake during running should be recorded"),
+        "a running command must not be inserted twice"
+    );
+
+    running.mark_blocked("no idle slot", "2026-05-08T00:01:00+00:00");
+    adapter
+        .finish_runtime_dispatch_command(&workspace_dir, &running, "owner-a")
+        .expect("blocked outcome should persist");
+    let stored = stored_dispatch_command(&adapter, &workspace_dir, &command.command_id);
+    assert_eq!(stored.state, ParallelModeDispatchCommandState::Pending);
+    assert_eq!(stored.owner_token, None);
+
+    let mut rerun = adapter
+        .try_claim_next_runtime_dispatch_command(&workspace_dir, "owner-b")
+        .expect("re-queued command should claim")
+        .expect("re-queued command should exist");
+    rerun.mark_completed("dispatched", "2026-05-08T00:02:00+00:00");
+    assert_error_contains(
+        adapter.finish_runtime_dispatch_command(&workspace_dir, &rerun, "owner-a"),
+        "is no longer running for owner `owner-a`",
+    );
+    assert_eq!(
+        stored_dispatch_command(&adapter, &workspace_dir, &command.command_id).state,
+        ParallelModeDispatchCommandState::Running
+    );
+    adapter
+        .finish_runtime_dispatch_command(&workspace_dir, &rerun, "owner-b")
+        .expect("owner outcome should persist");
+    assert_eq!(
+        stored_dispatch_command(&adapter, &workspace_dir, &command.command_id).state,
+        ParallelModeDispatchCommandState::Completed
+    );
+}
+
+fn stored_dispatch_command(
+    adapter: &SqlitePlanningAuthorityAdapter,
+    workspace_dir: &str,
+    command_id: &str,
+) -> ParallelModeDispatchCommandSnapshot {
+    adapter
+        .load_runtime_projections(workspace_dir)
+        .expect("runtime projections should load")
+        .dispatch_commands
+        .into_iter()
+        .find(|command| command.command_id == command_id)
+        .expect("dispatch command should be stored")
 }

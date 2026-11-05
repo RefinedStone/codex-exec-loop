@@ -624,12 +624,14 @@ fn persist_dispatch_command_outcome(
     outcome: &ParallelModeDispatchOutcome,
 ) {
     let timestamp = Utc::now().to_rfc3339();
+    let owner_token = command.owner_token.clone().unwrap_or_default();
     if outcome.blocked_reason.is_some() && outcome.launched_task_ids.is_empty() {
         command.mark_blocked(outcome.status_detail(), timestamp);
     } else {
         command.mark_completed(outcome.status_detail(), timestamp);
     }
-    if let Err(error) = service.update_dispatch_command(workspace_directory, command) {
+    if let Err(error) = service.finish_dispatch_command(workspace_directory, command, &owner_token)
+    {
         event_log::emit_lazy("parallel_dispatch_command_update_failed", || {
             serde_json::json!({
                 "workspace": workspace_directory,

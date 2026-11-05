@@ -438,6 +438,7 @@ pub(super) fn ensure_schema(
     ensure_pr_validation_attestation_columns(&transaction)?;
     ensure_pr_validation_scheduler_columns(&transaction)?;
     ensure_pr_validation_admin_operation_schema(&transaction)?;
+    ensure_dispatch_command_rerun_column(&transaction)?;
     if previous_schema_version.is_some_and(|version| version < 12) {
         migrate_legacy_pr_validation_attestations(&transaction)?;
     }
@@ -527,6 +528,20 @@ fn ensure_runtime_event_projection_index(connection: &Connection) -> Result<()> 
             [],
         )
         .context("failed to initialize runtime event projection index")?;
+    Ok(())
+}
+
+fn ensure_dispatch_command_rerun_column(connection: &Connection) -> Result<()> {
+    if table_column_exists(connection, "runtime_dispatch_commands", "rerun_requested")? {
+        return Ok(());
+    }
+    connection
+        .execute(
+            "ALTER TABLE runtime_dispatch_commands
+             ADD COLUMN rerun_requested INTEGER NOT NULL DEFAULT 0",
+            [],
+        )
+        .context("failed to add runtime dispatch command rerun column")?;
     Ok(())
 }
 

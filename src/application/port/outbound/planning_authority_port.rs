@@ -793,6 +793,17 @@ pub trait PlanningAuthorityPort: ParallelModeRuntimeEventLogPort + Send + Sync {
         command: &ParallelModeDispatchCommandSnapshot,
     ) -> Result<()>;
 
+    // Store a claimed command's outcome only while `expected_owner_token` still runs it.
+    // Durable adapters re-queue the command when a wake arrived during the run.
+    fn finish_runtime_dispatch_command(
+        &self,
+        workspace_dir: &str,
+        command: &ParallelModeDispatchCommandSnapshot,
+        _expected_owner_token: &str,
+    ) -> Result<()> {
+        self.update_runtime_dispatch_command(workspace_dir, command)
+    }
+
     // Cancel all non-terminal dispatch commands for mode-off or recovery boundaries.
     fn cancel_runtime_dispatch_commands(&self, workspace_dir: &str, reason: &str) -> Result<usize>;
 
