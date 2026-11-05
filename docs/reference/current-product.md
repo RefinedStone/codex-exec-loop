@@ -296,6 +296,8 @@ the desktop app itself is not shipped yet.
 - Admin: `src/adapter/inbound/admin_api/`
 - Telegram: `src/adapter/inbound/telegram_bot/`
 - Gateway: `src/adapter/inbound/gateway/`, `src/adapter/outbound/app_server/gateway_upstream.rs`
+- Desktop (in development, plan P2): `desktop/` — Electron shell that connects each window to `akra-gateway`;
+  see `desktop/AGENTS.md`
 - Planning: `src/application/service/planning/`, `src/domain/planning/`
 - Parallel: `src/application/service/parallel_mode/`, `src/domain/parallel_mode/`
 - App-server adapter: `src/adapter/outbound/app_server/`

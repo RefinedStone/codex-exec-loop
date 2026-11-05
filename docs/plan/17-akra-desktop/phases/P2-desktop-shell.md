@@ -1,6 +1,6 @@
 # P2. Electron 골격과 Gateway 연결
 
-상태: 대기 (P1 다음) · 기준일: 2026-11-05 · 규모: 약 1주
+상태: 진행 중 (골격 완료, 피드백 대기) · 기준일: 2026-11-05 · 규모: 약 1주
 
 ## 1. 목표
 
@@ -147,3 +147,37 @@ codex app-server generate-ts --out <임시 디렉터리>
 6. 생성 타입과 Gateway 의 codex 버전이 다르면 경고가 표시된다.
 7. 단위 시험과 가짜 Gateway 시험이 통과한다. 턴을 쓰지 않는다.
 8. `node scripts/agent-plan.mjs` 가 출력한 검사를 통과한다.
+
+## 7. 진행 기록
+
+### 2026-11-05 골격 구현
+
+- 진행 방식: 사용자 지시로 P-05, P-06, P-07 을 제안대로 적용하고 먼저 진행했다. 피드백은 후행으로 반영한다.
+- 버전 (2026-11-05 고정): electron 45.2.3, electron-vite 6.0.0, vite 8.3.6, react 19.3.1, typescript 7.0.2,
+  zustand 5.0.16, ws 8.22.1, vitest 5.1.0.
+- 설계와 다르게 구현한 부분:
+  - §4.3: macOS 와 Windows 모두 `ws` 의 `createConnection` 에 `net.connect(<주소>)` 를 넘긴다. Node 의
+    `net.connect` 가 unix 소켓과 named pipe 를 같은 방식으로 다루므로 `ws+unix:` 형식이 필요 없다.
+  - §4.3: Windows 사용자 SID 는 시스템 경로의 `whoami.exe /user` 로 읽는다. Git Bash 의 PATH 에서는 `whoami` 가
+    coreutils 로 잡혀 실패했다.
+  - §4.6: 생성 타입은 `src/shared/protocol/generated/`, 생성에 쓴 codex 버전은 `src/shared/protocol/version.ts` 에
+    둔다 (renderer 가 import 할 수 있게 TS 상수로 둔다).
+  - §4.7: 린트 도구는 아직 넣지 않았다. strict TypeScript 두 설정(main·preload·시험, renderer)으로 시작한다.
+    CI 는 `desktop/` 를 Node 범위로 분류하고 `check_node_surfaces.sh`, `check_native_pr.ps1` 이 의존성 설치,
+    audit, 타입 검사, 시험, 빌드를 실행한다.
+  - 시험 화면의 목록은 Project 대신 작업 폴더(스레드 cwd 묶음)이다. codex 0.159 의 안정 API 에는
+    `project/list` 가 없다 (Q-12).
+- 완료 기준 확인 (Windows 11, codex-cli 0.159.0, 턴 없음, Playwright 로 빌드한 앱 실행):
+
+| 기준 | 결과 |
+| --- | --- |
+| 1. 창 열림 | 제목 `Akra Desktop` 창이 열렸다 |
+| 2. 버전과 목록 | `codex-cli 0.159.0`, 작업 폴더 목록이 표시됐다 |
+| 3. Gateway 자동 시작 | Gateway 가 없는 상태에서 앱이 `target/debug/akra-gateway.exe` 를 시작하고 접속했다 |
+| 4. 재접속 | Gateway 를 강제 종료하자 `끊김` 이 표시되고, 앱이 데몬을 다시 시작해 접속과 initialize 를 다시 했다 |
+| 5. renderer 격리 | renderer 에서 `typeof require`, `typeof process` 가 `undefined`, `window.akra` 는 함수 3개뿐이다 |
+| 6. 버전 경고 | 버전이 같으면 경고가 없다. 다른 경우는 단위 시험으로 확인했다 |
+| 7. 시험 | vitest 17개 통과 (JSON-RPC 클라이언트, 주소, 재접속 간격, 가짜 Gateway 위 세션·재접속·데몬 시작) |
+| D-06 | 앱 창을 닫으면 앱은 끝나고 Gateway 는 계속 실행된다 |
+
+- 남은 일: macOS 실기 확인, Q-12 결정, 완료 기준 8 (`agent-plan` 검사는 PR 에서 실행).
