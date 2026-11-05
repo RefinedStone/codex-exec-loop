@@ -1,6 +1,6 @@
 # P3. MVP 대화 화면
 
-상태: 대기 (P2 다음) · 기준일: 2026-11-05 · 규모: 2~3주
+상태: 진행 중 (1단계: 대화 보기) · 기준일: 2026-11-05 · 규모: 2~3주
 
 ## 1. 목표
 
@@ -122,3 +122,24 @@
 2. 성공 기준 6 (앱을 닫은 뒤 턴 유지)은 Q-09 결과와 P1 의 대응으로 확인한다.
 3. 사용자가 실제 업무 하루를 Akra Desktop 으로 처리하고 불편 목록을 남긴다. 이 목록이 R 단계의 순서를
    정한다.
+
+## 10. 진행 기록
+
+### 2026-11-05 1단계: 대화 보기
+
+- 사이드바: `thread/list` 의 스레드를 작업 폴더(cwd)로 묶는다 (D-16). `thread/status/changed` 로 진행 중인
+  스레드에 표시를 붙인다.
+- 스레드 열기: `thread/resume` 응답으로 화면을 그리고, 그 스레드의 `turn/*`, `item/*` 알림을 반영한다. 다른
+  스레드로 옮기면 진행 중인 턴이 없는 이전 스레드는 `thread/unsubscribe` 한다. 다시 연결되면 열린 스레드를
+  다시 resume 한다. resume 응답을 기다리는 동안 온 알림은 응답을 반영한 뒤 이어서 반영한다.
+- 상태 모델: `src/renderer/conversation/transcript.ts` 의 순수 함수. delta 는 agentMessage, commandExecution
+  출력, plan, reasoning 요약에 이어 붙인다. 알림은 화면 프레임마다 한 번에 반영한다 (`FrameBatcher`).
+- 아이템 표시: userMessage, agentMessage(일반 텍스트), reasoning(요약 접기), commandExecution(명령·상태·exit·출력
+  접기), fileChange(파일 목록), mcpToolCall, plan, 그 밖의 종류(종류와 상태만).
+- 가짜 Gateway 는 녹화를 순서대로 재생한다. 요청에 답한 뒤 녹화에서 그 다음에 온 알림과 서버 요청을 보내고,
+  서버 요청에 대한 클라이언트 답을 받으면 그 뒤의 알림을 이어서 보낸다.
+- 실기에서 찾은 문제: 긴 스레드의 `thread/resume` 응답이 Gateway 의 WebSocket 기본 한도(tungstenite 메시지
+  64 MiB, 프레임 16 MiB)를 넘어 세션이 조용히 닫혔다. 한도를 256 MiB 로 올리고 읽기 오류를 로그에 남기게
+  고쳤다 (별도 PR). 이 스레드는 여는 데 약 5.7초가 걸렸다. 긴 스레드는 7장의 가상 스크롤과 함께
+  `excludeTurns`·페이지 읽기를 검토한다.
+- 남은 일: 마크다운, 입력(새 턴, steer, 중단, 새 스레드), 승인 대화상자, 가상 스크롤, Playwright 화면 시험.
