@@ -193,6 +193,8 @@ pub trait ParallelModeRuntimePort: Send + Sync {
 
     // stdin을 요구하는 command 실행 primitive이다. GitHub fallback script처럼 token/credentials를
     // stdin으로 넘겨야 하는 흐름이 command line argument에 민감 정보를 남기지 않도록 이 경로를 쓴다.
+    // 유일한 호출자가 test-only readiness probe이고 timeout이 없으므로 production build에서 제외한다.
+    #[cfg(test)]
     fn run_command_with_stdin(
         &self,
         // 실행할 binary 이름이다.

@@ -1542,6 +1542,7 @@ pub(crate) fn command_output_with_input_timeout_and_limits(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn wait_with_output(child: ManagedChild, command_label: &str) -> io::Result<Output> {
     wait_with_output_timeout(child, command_label, configured_subprocess_timeout())
 }

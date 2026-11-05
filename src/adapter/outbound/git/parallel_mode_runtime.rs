@@ -1,5 +1,4 @@
 use std::ffi::OsString;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -270,6 +269,7 @@ impl ParallelModeRuntimePort for GitParallelModeRuntimeAdapter {
         (!trimmed.is_empty()).then(|| trimmed.to_string())
     }
 
+    #[cfg(test)]
     fn run_command_with_stdin(
         &self,
         program: &str,
@@ -288,7 +288,7 @@ impl ParallelModeRuntimePort for GitParallelModeRuntimeAdapter {
         let mut child = subprocess::spawn(&mut command).ok()?;
 
         let mut stdin = child.take_stdin()?;
-        stdin.write_all(stdin_body.as_bytes()).ok()?;
+        std::io::Write::write_all(&mut stdin, stdin_body.as_bytes()).ok()?;
         drop(stdin);
 
         let output =
