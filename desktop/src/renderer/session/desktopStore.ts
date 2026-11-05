@@ -79,6 +79,9 @@ export interface DesktopState {
   addThreadToFolder(cwd: string, thread: WorkspaceThread): void;
   /** 늦게 끝난 전체 목록에서 처음 보는 스레드만 사이드바에 더한다. */
   mergeFolders(folders: WorkspaceFolder[]): void;
+  /** 그 스레드의 입력창에 미리 채울 글이다 (업무 패널에서 넘기기). 입력창이 가져가면 비운다. 보내기는 사용자가 한다. */
+  composerDraft: { threadId: string; text: string } | null;
+  setComposerDraft(draft: { threadId: string; text: string } | null): void;
 }
 
 export const useDesktopStore = create<DesktopState>((set) => ({
@@ -125,6 +128,8 @@ export const useDesktopStore = create<DesktopState>((set) => ({
       return { folders: [{ cwd, threads }, ...others] };
     }),
   mergeFolders: (folders) => set((state) => ({ folders: mergeWorkspaceFolders(state.folders, folders) })),
+  composerDraft: null,
+  setComposerDraft: (composerDraft) => set({ composerDraft }),
 }));
 
 export type SessionStore = Pick<

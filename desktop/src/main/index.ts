@@ -12,6 +12,7 @@ import { spawn as spawnPty } from "node-pty";
 import { BrowserPanelService } from "./browserPanel";
 import { loadSettings, saveSettings } from "./browserSettings";
 import { readGitFileDiff, readGitStatus } from "./gitStatus";
+import { readGitHubSummary, readReviewPrompt } from "./githubService";
 import { TerminalService } from "./terminalService";
 
 // 시험용이다. 브라우저 프로필의 쿠키와 설정이 사용자의 실제 앱 데이터 폴더에 쓰이지 않게 한다. ready 전에 정해야 한다.
@@ -164,6 +165,15 @@ ipcMain.handle(IPC_CHANNELS.browserNavigate, (event, input: unknown) => browsers
 ipcMain.on(IPC_CHANNELS.browserCommand, (event, command: unknown) => browsers.command(event.sender.id, command));
 ipcMain.handle(IPC_CHANNELS.browserLoadSettings, () => loadSettings(browserSettingsPath()));
 ipcMain.handle(IPC_CHANNELS.browserSaveSettings, (_event, settings: unknown) => saveSettings(browserSettingsPath(), settings));
+
+ipcMain.handle(IPC_CHANNELS.githubSummary, () => readGitHubSummary());
+ipcMain.handle(IPC_CHANNELS.githubReviewPrompt, (_event, url: unknown) => readReviewPrompt(url));
+// renderer 가 보낸 주소는 github.com 만 기본 브라우저로 연다.
+ipcMain.on(IPC_CHANNELS.openExternal, (_event, url: unknown) => {
+  if (typeof url === "string" && url.startsWith("https://github.com/")) {
+    void shell.openExternal(url);
+  }
+});
 
 ipcMain.handle(IPC_CHANNELS.chooseFolder, async (event) => {
   const owner = BrowserWindow.fromWebContents(event.sender);

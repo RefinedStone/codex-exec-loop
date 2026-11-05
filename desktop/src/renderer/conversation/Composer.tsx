@@ -1,6 +1,6 @@
 // 입력창 (P3 §6.2). Enter 는 보내기, Shift+Enter 는 줄바꿈이다. 턴이 진행 중이면 보내기는 steer 가 되고
 // 중단 버튼이 보인다. 연결이 끊기면 입력을 막는다 (§6.5).
-import { type KeyboardEvent, useState } from "react";
+import { type KeyboardEvent, useEffect, useState } from "react";
 
 import { useDesktopStore } from "../session/desktopStore";
 import { isTurnInProgress } from "./transcript";
@@ -17,6 +17,15 @@ export function Composer({ actions }: { actions: ComposerActions }) {
   const connected = useDesktopStore((state) => state.connection?.phase === "connected");
   const transcript = useDesktopStore((state) => state.transcript);
   const inProgress = isTurnInProgress(transcript);
+  const pendingDraft = useDesktopStore((state) => state.composerDraft);
+
+  // 업무 패널이 넘긴 글을 그 스레드가 열렸을 때 입력창에 채운다. 바로 보내지 않는다.
+  useEffect(() => {
+    if (pendingDraft && pendingDraft.threadId === transcript?.threadId) {
+      setDraft(pendingDraft.text);
+      useDesktopStore.getState().setComposerDraft(null);
+    }
+  }, [pendingDraft, transcript?.threadId]);
   const disabled = !connected || !transcript || sending;
 
   const run = async (action: () => Promise<void>) => {

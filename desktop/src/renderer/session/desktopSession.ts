@@ -171,7 +171,7 @@ export class DesktopSession {
   }
 
   /** 작업 폴더에서 새 스레드를 시작하고 연다. 첫 메시지는 열린 스레드에 보낸다 (P3 §6.2). */
-  async startThread(cwd: string): Promise<void> {
+  async startThread(cwd: string): Promise<string> {
     const response = await this.client.request<ThreadStartResponse>("thread/start", { cwd });
     const transcript = transcriptFromThread(response.thread);
     this.batcher.clear();
@@ -182,6 +182,7 @@ export class DesktopSession {
       title: transcript.title,
       updatedAt: response.thread.updatedAt,
     });
+    return response.thread.id;
   }
 
   /** 승인 요청에 답한다. 다른 창이 먼저 답했으면 이미 닫혀 있으므로 아무것도 하지 않는다. */

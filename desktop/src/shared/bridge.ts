@@ -34,7 +34,42 @@ export const IPC_CHANNELS = {
   browserState: "akra:browser-state",
   browserLoadSettings: "akra:browser-load-settings",
   browserSaveSettings: "akra:browser-save-settings",
+  githubSummary: "akra:github-summary",
+  githubReviewPrompt: "akra:github-review-prompt",
+  openExternal: "akra:open-external",
 } as const;
+
+export interface GitHubPullRequest {
+  number: number;
+  title: string;
+  url: string;
+  /** owner/name */
+  repository: string;
+  isDraft: boolean;
+  updatedAt: string;
+  /** 리뷰 요청 목록에서만 채운다. */
+  author: string | null;
+  /** 마지막 커밋의 CI 상태 (SUCCESS, FAILURE, PENDING 등). 없으면 null 이다. */
+  checks: string | null;
+  reviewDecision: string | null;
+  /** 해결되지 않은 리뷰 스레드 수이다. 내 PR 목록에서만 채운다. */
+  unresolvedThreads: number | null;
+}
+
+export interface GitHubSummary {
+  login: string;
+  myPullRequests: GitHubPullRequest[];
+  reviewRequests: GitHubPullRequest[];
+}
+
+/** GitHub 업무 패널이다 (R4). main 이 공식 CLI `gh` 로 읽는다. */
+export interface GitHubBridge {
+  summary(): Promise<GitHubSummary>;
+  /** PR 의 해결되지 않은 리뷰 코멘트로 만든 첫 메시지이다. */
+  reviewPrompt(url: string): Promise<string>;
+  /** github.com 주소를 기본 브라우저로 연다. */
+  openExternal(url: string): void;
+}
 
 /** 브라우저 보기를 놓을 자리이다. 창 안의 CSS 픽셀이다. */
 export interface BrowserBounds {
@@ -150,4 +185,5 @@ export interface AkraBridge {
   gitFileDiff(cwd: string, path: string, untracked: boolean): Promise<GitFileDiff>;
   terminal: TerminalBridge;
   browser: BrowserBridge;
+  github: GitHubBridge;
 }

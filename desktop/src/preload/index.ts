@@ -8,6 +8,7 @@ import {
   type BrowserSettings,
   type BrowserState,
   type ConnectionState,
+  type GitHubSummary,
   type GitFileDiff,
   type GitStatusResult,
   IPC_CHANNELS,
@@ -86,6 +87,17 @@ const bridge: AkraBridge = {
     },
     saveSettings(settings: BrowserSettings): Promise<BrowserSettings> {
       return ipcRenderer.invoke(IPC_CHANNELS.browserSaveSettings, settings) as Promise<BrowserSettings>;
+    },
+  },
+  github: {
+    summary(): Promise<GitHubSummary> {
+      return ipcRenderer.invoke(IPC_CHANNELS.githubSummary) as Promise<GitHubSummary>;
+    },
+    reviewPrompt(url: string): Promise<string> {
+      return ipcRenderer.invoke(IPC_CHANNELS.githubReviewPrompt, url) as Promise<string>;
+    },
+    openExternal(url: string): void {
+      ipcRenderer.send(IPC_CHANNELS.openExternal, url);
     },
   },
 };
