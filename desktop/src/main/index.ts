@@ -64,6 +64,12 @@ function isAppUrl(url: string, contents: WebContents): boolean {
   return url.startsWith("file://") && url.split("#")[0] === contents.getURL().split("#")[0];
 }
 
+/**
+ * 화면 시험용이다. 창을 보이지 않게 만들어 사용자가 쓰는 다른 앱 위로 올라오지 않게 한다.
+ * 보이지 않는 창에서도 requestAnimationFrame 과 타이머가 돌도록 background throttling 을 끈다.
+ */
+const HIDDEN_WINDOWS = process.env.AKRA_DESKTOP_HIDDEN === "1";
+
 function createWindow(): void {
   const window = new BrowserWindow({
     width: 1200,
@@ -75,6 +81,7 @@ function createWindow(): void {
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
+      backgroundThrottling: !HIDDEN_WINDOWS,
     },
   });
   const contents = window.webContents;
@@ -97,7 +104,9 @@ function createWindow(): void {
     connections.get(contentsId)?.close();
     connections.delete(contentsId);
   });
-  window.once("ready-to-show", () => window.show());
+  if (!HIDDEN_WINDOWS) {
+    window.once("ready-to-show", () => window.show());
+  }
 
   const devServer = process.env.ELECTRON_RENDERER_URL;
   if (devServer) {
