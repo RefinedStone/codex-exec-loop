@@ -69,7 +69,7 @@ export function App() {
       />
       <main className="main">
         <GatewayBar />
-        <ConversationView />
+        <ConversationView onLoadOlder={async () => session.current?.loadOlderTurns()} />
         <ApprovalPrompt onAnswer={(requestId, decision) => session.current?.answerApproval(requestId, decision)} />
         <Composer actions={composerActions} />
       </main>

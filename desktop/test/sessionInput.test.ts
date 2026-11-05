@@ -79,6 +79,7 @@ const transcript = (status: "inProgress" | "completed"): Transcript => ({
   cwd: "/work/example-app",
   status: null,
   turns: [{ id: "turn-1", status, errorMessage: null, items: [] }],
+  olderTurnsCursor: null,
 });
 
 describe("sending input", () => {
@@ -220,5 +221,49 @@ describe("review follow-ups", () => {
     const { state, receive } = harness();
     receive({ jsonrpc: "2.0", id: 3, method: "item/commandExecution/requestApproval", params: { threadId: "t1", turnId: "x", itemId: "i", kind: "writeStdin" } });
     expect(state.pendingApprovals?.[0]?.kind).toBe("writeStdin");
+  });
+});
+
+describe("paged thread loading", () => {
+  const turn = (id: string) => ({ id, items: [], itemsView: "full", status: "completed", error: null, startedAt: null, completedAt: null, durationMs: null });
+
+  it("resumes without turns, reads the newest page, then prepends older pages", async () => {
+    const { session, sent, state, replyTo, emitState } = harness();
+    emitState("connected");
+    const opened = session.openThread("big");
+    await flush();
+    const resume = sent.find((message) => message.method === "thread/resume");
+    expect(resume?.params).toMatchObject({ threadId: "big", excludeTurns: true });
+    replyTo("thread/resume", { thread: { id: "big", name: "big", preview: "", cwd: "/w", status: { type: "idle" }, turns: [] } });
+    await flush();
+    const first = [...sent].reverse().find((message) => message.method === "thread/turns/list");
+    expect(first?.params).toMatchObject({ threadId: "big", sortDirection: "desc", itemsView: "full" });
+    expect(first?.params).not.toHaveProperty("cursor");
+    replyTo("thread/turns/list", { data: [turn("t3"), turn("t2")], nextCursor: "older", backwardsCursor: null });
+    await opened;
+    expect(state.transcript?.turns.map((item) => item.id)).toEqual(["t2", "t3"]);
+    expect(state.transcript?.olderTurnsCursor).toBe("older");
+
+    const older = session.loadOlderTurns();
+    await flush();
+    expect([...sent].reverse().find((message) => message.method === "thread/turns/list")?.params).toMatchObject({ cursor: "older" });
+    replyTo("thread/turns/list", { data: [turn("t1")], nextCursor: null, backwardsCursor: null });
+    await older;
+    expect(state.transcript?.turns.map((item) => item.id)).toEqual(["t1", "t2", "t3"]);
+    expect(state.transcript?.olderTurnsCursor).toBeNull();
+  });
+
+  it("treats a turn-list error for a brand-new thread as an empty history", async () => {
+    const { session, state, receive, sent, replyTo, emitState } = harness();
+    emitState("connected");
+    const opened = session.openThread("fresh");
+    await flush();
+    replyTo("thread/resume", { thread: { id: "fresh", name: null, preview: "", cwd: "/w", status: { type: "idle" }, turns: [] } });
+    await flush();
+    const list = [...sent].reverse().find((message) => message.method === "thread/turns/list");
+    receive({ jsonrpc: "2.0", id: list?.id, error: { code: -32600, message: "no rollout found" } });
+    await opened;
+    expect(state.transcript?.turns).toEqual([]);
+    expect(state.transcriptError ?? null).toBeNull();
   });
 });
