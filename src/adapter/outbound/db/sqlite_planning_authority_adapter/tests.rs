@@ -8418,3 +8418,25 @@ fn authority_task(task_id: &str, direction_id: &str) -> TaskDefinition {
         updated_at: "2026-05-07T09:00:00Z".to_string(),
     }
 }
+
+#[test]
+fn authority_open_skips_the_write_lock_for_a_current_store() {
+    let workspace_dir = temp_workspace("schema-current-read-only-open");
+    let lock_connection = authority_connection(&workspace_dir);
+    lock_connection
+        .execute_batch("BEGIN IMMEDIATE")
+        .expect("fixture write lock should acquire");
+
+    let started_at = std::time::Instant::now();
+    let reader = authority_connection(&workspace_dir);
+    let elapsed = started_at.elapsed();
+    lock_connection
+        .execute_batch("ROLLBACK")
+        .expect("fixture write lock should release");
+
+    drop(reader);
+    assert!(
+        elapsed < std::time::Duration::from_secs(2),
+        "opening a current store waited for the write lock: {elapsed:?}"
+    );
+}
