@@ -60,6 +60,7 @@
 | OmO (oh-my-openagent) | 엔진 코드는 공개(SUL-1.0)이다. 데스크톱 앱은 소스가 없고, 로그인한 사용자에게 바이너리만 배포한다 |
 | Senpi | pi(badlogic/pi-mono)의 포크. OmO Native 의 엔진이다. 상세는 [docs/competitive/omo-native/](../../../competitive/omo-native/README.md) |
 | doriface | herdr-core 터미널을 웹, PWA, Electron 에서 원격으로 보는 클라이언트 (AGPL-3.0). 호스트 게이트웨이가 메시지를 해석하지 않고 바이트 그대로 전달한다. 이 계획의 Gateway 와 같은 발상이다 |
+| omowright | 에이전트용 브라우저 자동화 라이브러리 (MIT, 2026-08 시작). Playwright 모양 API, 접근성 스냅샷 + ref, 변경분 전달, 포트 없는 CDP(`--remote-debugging-pipe`). 실측 README 기준 스냅샷이 원본 HTML 의 약 5~36% 토큰이다. R9 에서 설계만 참고한다 (D-17) |
 | dori-superagent | herdr + omo 위의 외부 루프 하네스. TypeScript 약 1,600줄. 리드 세션 하나, 작업마다 별도 세션(lane), 조용한 lane 을 재촉하는 duty loop, 증거가 있어야 통과하는 머지 게이트. 라이선스는 확인하지 않았다. R5 설계 때 구조만 참고한다 |
 
 ## 5. Electron, Tauri, 순수 Rust GUI

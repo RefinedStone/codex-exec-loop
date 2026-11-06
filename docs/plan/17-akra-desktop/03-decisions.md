@@ -34,6 +34,7 @@
 | D-14 | RefinedStone 신원, 회사 계정과 분리 | 승인 | 2026-11-05 |
 | D-15 | macOS 와 Windows 를 함께 지원 | 승인 | 2026-11-05 |
 | D-16 | 사이드바는 작업 폴더(스레드 cwd) 묶음 | 승인 | 2026-11-05 |
+| D-17 | 에이전트 브라우저 조작과 스크린샷 처리는 Akra 자체 구현 | 승인 | 2026-11-06 |
 | P-01 | Gateway 는 새 바이너리 `akra-gateway` | 승인 | 2026-11-05 |
 | P-02 | upstream 은 Gateway 전용 자식 프로세스 | 승인 | 2026-11-05 |
 | P-03 | 클라이언트 접속 1개 = upstream 접속 1개 | 승인 | 2026-11-05 |
@@ -43,6 +44,7 @@
 | P-07 | initialize 는 `experimentalApi: false` | 제안 | 2026-11-05 |
 | P-08 | 기존 TUI·하네스는 자체 app-server 유지 | 제안 | 2026-11-05 |
 | P-09 | upstream 접속은 `codex app-server proxy` | 승인 | 2026-11-05 |
+| P-10 | 브라우저 도구는 MCP 서버로 엔진에 연결 | 제안 | 2026-11-06 |
 
 ## 승인된 결정
 
@@ -208,6 +210,18 @@
 - 영향: D-10 의 "작업공간은 Codex Project" 는 `project/*` 가 안정 API 로 오면 적용한다. 그때까지 새 스레드는
   작업 폴더(cwd)만 고른다. 스레드의 `projectId` 필드는 안정 API 에도 있으므로 나중에 묶음 기준만 바꾼다.
 
+### D-17 에이전트 브라우저 조작과 스크린샷 처리는 Akra 자체 구현
+
+- 결정: 에이전트가 앱 안 브라우저를 조작하는 기능과 스크린샷 처리를 Akra 가 직접 구현한다. omowright,
+  Playwright MCP, agent-browser, 공식 Codex 앱은 설계만 참고한다. 의존성으로 쓰지 않는다
+  ([R9](roadmap/R9-agent-browser-and-screenshots.md)).
+- 이유:
+  - 조작 대상은 R3 의 `WebContentsView` 이다. Electron `webContents.debugger` 가 포트 없이 CDP 를 준다.
+    omowright 는 직접 실행한 브라우저나 DevTools 주소에 붙는 구조라 이 보기에 바로 맞지 않는다.
+  - 의존성을 줄이고, 스냅샷 형식과 도구 출력을 Akra 가 통제한다.
+- 참고 범위: 아이디어와 구조만 참고한다. 코드는 직접 작성한다. CAPTCHA 풀기, 지문 위장, 사용자 Chrome
+  조작은 하지 않는다.
+
 ## 제안
 
 P-01~P-04 와 P-09 는 2026-11-05 사용자가 승인했다. 나머지는 해당 단계 전에 확인한다.
@@ -294,3 +308,12 @@ P-01~P-04 와 P-09 는 2026-11-05 사용자가 승인했다. 나머지는 해당
   묶는다.
 - 대안: Windows 전용 unix 소켓 크레이트(예: `uds_windows`, 동기 API)를 비동기로 감싼다. macOS 는 tokio
   `UnixStream` 을 직접 쓸 수 있다.
+
+### P-10 브라우저 도구는 MCP 서버로 엔진에 연결
+
+- 제안: 에이전트 브라우저 도구(R9)는 MCP 서버 `akra-browser-mcp` 로 엔진에 연결한다. MCP 서버는 얇은 중계이고,
+  실제 조작은 Electron main 이 한다.
+- 이유: MCP 는 안정된 공식 확장 경로이다. dynamic tools(`thread/start.dynamicTools`)는 2026-11-06 기준 실험
+  API 라서 P-07 과 충돌한다. 앱이 꺼져 있어도 MCP 서버는 명확한 오류를 돌려줄 수 있다.
+- 대안: dynamic tools. 안정 API 가 되면 다시 비교한다. 추가 프로세스가 없다는 장점이 있다.
+- 미결: 스레드별 등록(`thread/start` 의 `config`)과 전역 등록 중 무엇을 쓸지 R9 의 B1 에서 정한다.
