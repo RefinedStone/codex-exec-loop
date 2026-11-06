@@ -26,8 +26,8 @@
   - Orca(MIT)의 구현(`src/main/browser/cookies/`)을 참고한다. 원자성, 동시성, 롤백까지 처리한다.
     차용하면 고지를 유지한다.
 - 설치된 Chrome 자체를 앱 안에 넣을 수는 없다 ([alternatives.md](../reference/alternatives.md) §6).
-- 나중에 에이전트가 브라우저를 조작하게 하려면 `webContents.debugger` 로 CDP 를 쓴다. 이 기능은 별도로
-  논의한다.
+- 나중에 에이전트가 브라우저를 조작하게 하려면 `webContents.debugger` 로 CDP 를 쓴다. 이 기능은
+  [R9](R9-agent-browser-and-screenshots.md) 에서 다룬다.
 
 ## 미결
 
