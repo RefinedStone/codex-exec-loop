@@ -44,8 +44,13 @@ split mixed-responsibility files before they pass roughly 800 LOC.
 
 ## Commands and Tests
 
-Start with the deterministic change planner. It classifies the current diff using the same policy as
-GitHub Actions and prints the smallest safe local gate:
+Local checks are a quick pre-flight; `CI Gate` is the full gate. Before each commit, run
+`git diff --check`, and `cargo fmt --all` when Rust changed.
+
+When Rust or Node source changed, run the deterministic change planner. It classifies the current
+diff using the same policy as GitHub Actions and prints the smallest safe local gate. Skip it for
+docs, CI workflow, or config-only changes: the planner fails closed to the full gate for CI paths,
+and only `CI Gate` can prove a workflow change.
 
 ```text
 node scripts/agent-plan.mjs
@@ -74,6 +79,11 @@ WSL:
 ```powershell
 powershell -File scripts/check_native_pr.ps1 -Mode Full
 ```
+
+If `cargo` or `rg` is not on `PATH` (no `~/.cargo/bin` proxies), reinstall `rustup` to restore them.
+As a stopgap for one session, prepend
+`$env:USERPROFILE\.rustup\toolchains\<rust-toolchain channel>-x86_64-pc-windows-msvc\bin` and a
+folder that contains `rg.exe`.
 
 The Windows gate runs native TUI policy checks, Windows-safe Node/admin checks, rustfmt, clippy, and
 the code-deterministic Windows security/process/worktree contracts. `-Mode Rust` and `-Mode Admin`

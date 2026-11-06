@@ -8,7 +8,10 @@
   dedicated worktree from it.
 - One user-visible outcome uses one worktree, branch, and PR. Keep commits small inside that PR;
   do not create a PR for every commit.
-- Before delivery, run `node scripts/agent-plan.mjs` and the proportional checks it prints.
+- Local checks are a quick pre-flight; `CI Gate` is the full gate. Before each commit, run
+  `git diff --check`, and `cargo fmt --all` when Rust changed.
+- Run `node scripts/agent-plan.mjs` and the checks it prints only when Rust or Node source changed.
+  For docs, CI workflow, or config-only changes, skip it and let `CI Gate` decide.
 - Unless the user asks to hold locally, finish reviewable changes with
   `commit -> push -> PR(prerelease) -> CI Gate -> rebase merge -> worktree cleanup`.
 
