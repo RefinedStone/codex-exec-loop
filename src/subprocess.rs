@@ -231,7 +231,7 @@ impl ManagedChild {
 
         #[cfg(all(unix, not(target_os = "linux")))]
         if let Some(process_group_id) = self.process_group_id.take() {
-            return signal_unix_process_group(process_group_id, libc::SIGKILL);
+            return signal_unix_process_group(process_group_id, libc::SIGKILL, self.child_reaped);
         }
 
         #[cfg(windows)]
@@ -373,7 +373,11 @@ fn process_is_already_gone(error: &io::Error) -> bool {
 }
 
 #[cfg(all(unix, not(target_os = "linux")))]
-fn signal_unix_process_group(process_group_id: libc::pid_t, signal: libc::c_int) -> io::Result<()> {
+fn signal_unix_process_group(
+    process_group_id: libc::pid_t,
+    signal: libc::c_int,
+    leader_reaped: bool,
+) -> io::Result<()> {
     let result = unsafe {
         // A negative PID addresses the process group created in the child before exec.
         libc::kill(-process_group_id, signal)
@@ -382,10 +386,21 @@ fn signal_unix_process_group(process_group_id: libc::pid_t, signal: libc::c_int)
         return Ok(());
     }
     let error = io::Error::last_os_error();
-    if error.raw_os_error() == Some(libc::ESRCH) {
+    if group_signal_error_means_gone(error.raw_os_error(), leader_reaped) {
         Ok(())
     } else {
         Err(error)
+    }
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn group_signal_error_means_gone(raw_os_error: Option<i32>, leader_reaped: bool) -> bool {
+    match raw_os_error {
+        Some(libc::ESRCH) => true,
+        // macOS can return EPERM for a group whose reaped leader left only exiting members.
+        // Only the post-reap path accepts it; timeout and error cleanup stay strict.
+        Some(libc::EPERM) => leader_reaped && cfg!(target_os = "macos"),
+        _ => false,
     }
 }
 
@@ -1883,6 +1898,27 @@ mod tests {
                 .contains("subprocess containment cleanup also failed")
         );
         assert!(error.to_string().contains("did not converge"));
+    }
+
+    #[cfg(all(unix, not(target_os = "linux")))]
+    #[test]
+    fn group_signal_eperm_counts_as_gone_only_after_macos_reap() {
+        assert!(super::group_signal_error_means_gone(
+            Some(libc::ESRCH),
+            false
+        ));
+        assert!(!super::group_signal_error_means_gone(
+            Some(libc::EPERM),
+            false
+        ));
+        assert_eq!(
+            super::group_signal_error_means_gone(Some(libc::EPERM), true),
+            cfg!(target_os = "macos")
+        );
+        assert!(!super::group_signal_error_means_gone(
+            Some(libc::EINVAL),
+            true
+        ));
     }
 
     #[cfg(unix)]
