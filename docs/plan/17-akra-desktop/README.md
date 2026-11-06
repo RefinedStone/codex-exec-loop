@@ -40,7 +40,7 @@ Akra Desktop (Electron)  --WebSocket-->  akra-gateway (데몬)  --WebSocket-->  
 | --- | --- |
 | [01-background-and-goals.md](01-background-and-goals.md) | 사용자 상황, 목표, 비목표, 제약, 성공 기준, 검토 경과 |
 | [02-glossary.md](02-glossary.md) | 계층(L0~L4), Codex 프로토콜, Gateway, Electron 용어 |
-| [03-decisions.md](03-decisions.md) | 결정 D-01~D-17, 제안 P-01~P-10 |
+| [03-decisions.md](03-decisions.md) | 결정 D-01~D-17, 제안 P-01~P-11 |
 | [04-target-architecture.md](04-target-architecture.md) | 목표 구조, 연결 규칙, 흐름, 장애 처리, 보안, 배치 |
 | [05-risks-and-open-questions.md](05-risks-and-open-questions.md) | 위험 K-01~K-10, 미결 질문 Q-01~Q-12, 실측 결과 |
 | [06-handoff-guide.md](06-handoff-guide.md) | 작업 환경, 계정, 저장소 절차, 명령, 사용량 정책, 금지 사항 |
@@ -58,7 +58,7 @@ Akra Desktop (Electron)  --WebSocket-->  akra-gateway (데몬)  --WebSocket-->  
 | [roadmap/R4-work-panels.md](roadmap/R4-work-panels.md) | 업무 패널 (GitHub, Jira, Slack) |
 | [roadmap/R5-harness-integration.md](roadmap/R5-harness-integration.md) | Akra 하네스 연동 |
 | [roadmap/R6-context-compaction.md](roadmap/R6-context-compaction.md) | 자체 compact |
-| [roadmap/R7-claude-backend.md](roadmap/R7-claude-backend.md) | Claude 백엔드 |
+| [roadmap/R7-claude-backend.md](roadmap/R7-claude-backend.md) | Claude 백엔드 (대화 화면 + 하네스) |
 | [roadmap/R8-packaging-and-operations.md](roadmap/R8-packaging-and-operations.md) | 배포와 운영 |
 | [roadmap/R9-agent-browser-and-screenshots.md](roadmap/R9-agent-browser-and-screenshots.md) | 에이전트 브라우저 조작과 스크린샷 처리 |
 | [scripts/](scripts/) | P0 재현 스크립트 (Python: macOS·Linux, Node: Windows 포함) |
@@ -103,7 +103,7 @@ Akra Desktop (Electron)  --WebSocket-->  akra-gateway (데몬)  --WebSocket-->  
 | [R4](roadmap/R4-work-panels.md) | 업무 패널 | 진행 중 (GitHub 완료, Jira·Slack 남음) | P3 | 패널당 약 1주 |
 | [R5](roadmap/R5-harness-integration.md) | Akra 하네스 연동 | 계획 | P3, Q-01 | 2~4주 |
 | [R6](roadmap/R6-context-compaction.md) | 자체 compact | 계획 | P3, Q-02 | 미정 |
-| [R7](roadmap/R7-claude-backend.md) | Claude 백엔드 | 계획 | P3 | 3~5주 |
+| [R7](roadmap/R7-claude-backend.md) | Claude 백엔드 (대화 화면 + 하네스) | 계획 | P3 | 4~5주 |
 | [R8](roadmap/R8-packaging-and-operations.md) | 배포와 운영 | 계획 | P3 | 1~2주 |
 | [R9](roadmap/R9-agent-browser-and-screenshots.md) | 에이전트 브라우저 조작과 스크린샷 처리 | 계획 | R3 | 3~4주 |
 
