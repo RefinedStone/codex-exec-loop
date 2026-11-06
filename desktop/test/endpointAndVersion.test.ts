@@ -37,12 +37,16 @@ describe("gateway endpoint", () => {
     expect(() => parseWhoamiSid("garbage")).toThrow();
   });
 
-  it("prefers AKRA_GATEWAY_BIN, then release, then debug builds", () => {
+  it("prefers AKRA_GATEWAY_BIN, then the newer of the release and debug builds", () => {
     const root = resolve("/repo");
+    const release = resolve(root, "target", "release", "akra-gateway");
+    const debug = resolve(root, "target", "debug", "akra-gateway");
+    const builtAt = (times: Record<string, number>) => (path: string) => times[path] ?? null;
     expect(resolveGatewayExecutable(root, "linux", { AKRA_GATEWAY_BIN: "/opt/gw" })).toBe("/opt/gw");
-    const debugOnly = (path: string) => path.endsWith(join("debug", "akra-gateway"));
-    expect(resolveGatewayExecutable(root, "linux", {}, debugOnly)).toBe(resolve(root, "target", "debug", "akra-gateway"));
-    expect(resolveGatewayExecutable(root, "win32", {}, () => false)).toBe("akra-gateway.exe");
+    expect(resolveGatewayExecutable(root, "linux", {}, builtAt({ [debug]: 1 }))).toBe(debug);
+    expect(resolveGatewayExecutable(root, "linux", {}, builtAt({ [release]: 1, [debug]: 2 }))).toBe(debug);
+    expect(resolveGatewayExecutable(root, "linux", {}, builtAt({ [release]: 2, [debug]: 1 }))).toBe(release);
+    expect(resolveGatewayExecutable(root, "win32", {}, () => null)).toBe("akra-gateway.exe");
   });
 });
 

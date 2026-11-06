@@ -2,7 +2,7 @@
 // - unix: $AKRA_HOME/run/gateway.sock (기본 ~/.akra)
 // - Windows: \\.\pipe\akra-gateway-<현재 사용자 SID>
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -45,24 +45,30 @@ function readWindowsUserSid(): string {
 }
 
 /**
- * 데몬을 시작할 실행 파일이다. 순서: `AKRA_GATEWAY_BIN`, 저장소의 release 빌드, debug 빌드, PATH 의
- * `akra-gateway`.
+ * 데몬을 시작할 실행 파일이다. 순서: `AKRA_GATEWAY_BIN`, 저장소의 release·debug 빌드 중 더 최근 것, PATH 의
+ * `akra-gateway`. `npm run dev` 는 debug 를 빌드하므로, 오래된 release 빌드가 새 debug 빌드를 가리면 안 된다.
  */
 export function resolveGatewayExecutable(
   repositoryRoot: string,
   platform: NodeJS.Platform = process.platform,
   env: NodeJS.ProcessEnv = process.env,
-  exists: (path: string) => boolean = existsSync,
+  modifiedAt: (path: string) => number | null = readModifiedAt,
 ): string {
   if (env.AKRA_GATEWAY_BIN && env.AKRA_GATEWAY_BIN.length > 0) {
     return env.AKRA_GATEWAY_BIN;
   }
   const fileName = platform === "win32" ? "akra-gateway.exe" : "akra-gateway";
+  let newest: { path: string; modifiedAt: number } | null = null;
   for (const profile of ["release", "debug"]) {
     const candidate = resolve(repositoryRoot, "target", profile, fileName);
-    if (exists(candidate)) {
-      return candidate;
+    const time = modifiedAt(candidate);
+    if (time !== null && (newest === null || time > newest.modifiedAt)) {
+      newest = { path: candidate, modifiedAt: time };
     }
   }
-  return fileName;
+  return newest?.path ?? fileName;
+}
+
+function readModifiedAt(path: string): number | null {
+  return existsSync(path) ? statSync(path).mtimeMs : null;
 }
