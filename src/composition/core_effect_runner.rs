@@ -27,6 +27,7 @@ use crate::application::service::planning::{
     PlanningQueueAuthorityProjection, PlanningQueueAuthorityRefreshError,
     PlanningQueueCancellationRequest, PlanningQueueCancellationTarget,
     PlanningQueueCancellationTransactionResult, PlanningQueueUseCases,
+    PlanningResetRequest as ApplicationPlanningResetRequest,
     PlanningResetTarget as ApplicationPlanningResetTarget, PlanningRuntimeProjection,
     PlanningRuntimeUseCases, PlanningServices, PlanningTaskMutationCommitResult,
     PlanningWorkspaceUseCases,
@@ -595,9 +596,14 @@ impl CoreEffectRunner {
                 .ok_or_else(|| anyhow::anyhow!("planning workspace reset operation mismatch"))
                 .and_then(|requested_target| {
                     catch_redacted_worker_unwind(|| {
+                        // shortcut: the core intent has no confirmation flag; the TUI confirms before it
+                        // dispatches the intent. Carry confirmation in the command when K3 adds the protocol.
                         planning_workspace.reset_workspace(
                             &correlation.workspace_directory,
-                            application_planning_reset_target(requested_target),
+                            ApplicationPlanningResetRequest::new(
+                                application_planning_reset_target(requested_target),
+                                true,
+                            ),
                         )
                     })
                     .map_err(|_| anyhow::anyhow!("planning workspace reset worker panicked"))

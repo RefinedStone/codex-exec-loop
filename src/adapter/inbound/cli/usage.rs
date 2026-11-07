@@ -8,7 +8,8 @@ pub(super) const DOCTOR_USAGE: &str = "Usage: akra doctor [workspace_dir]";
 pub(super) const STATUS_USAGE: &str =
     "Usage: akra status [workspace_dir] | akra status --pr <number> [workspace_dir]";
 pub(super) const QUEUE_USAGE: &str = "Usage: akra queue [workspace_dir]";
-pub(super) const RESET_USAGE: &str = "Usage: akra reset <queue|directions|all> [workspace_dir]";
+pub(super) const RESET_USAGE: &str =
+    "Usage: akra reset <queue|directions|all> [workspace_dir] [--confirm]";
 pub(super) const PLANNING_TOOL_USAGE: &str =
     "Usage: akra planning-tool <contract|run> [workspace_dir]";
 pub(super) const PARALLEL_TICK_USAGE: &str = "Usage: akra parallel-tick [workspace_dir]";

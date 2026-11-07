@@ -976,7 +976,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_plain_workspace_production_flow_initializes_edits_and_resets_private_authority() {
-        use crate::application::service::planning::PlanningResetTarget;
+        use crate::application::service::planning::{PlanningResetRequest, PlanningResetTarget};
 
         let workspace = TempWorkspace::new("windows-plain-planning-flow");
         assert!(
@@ -1037,7 +1037,10 @@ mod tests {
 
         planning
             .workspace
-            .reset_workspace(&workspace_dir, PlanningResetTarget::All)
+            .reset_workspace(
+                &workspace_dir,
+                PlanningResetRequest::new(PlanningResetTarget::All, true),
+            )
             .expect("plain Windows full reset should commit through one authority transaction");
         let stale_draft_error = planning
             .workspace

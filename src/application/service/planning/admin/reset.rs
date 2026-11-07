@@ -4,7 +4,7 @@ use anyhow::Result;
 
 // PlanningResetTarget은 queue, directions, all 중 무엇을 초기화할지 나타내는 domain-facing 선택지다. admin
 // facade는 문자열 form parsing을 이미 끝낸 typed target만 받아 application service로 넘긴다.
-use crate::application::service::planning::PlanningResetTarget;
+use crate::application::service::planning::PlanningResetRequest;
 
 // reset 뒤에는 workspace 상태가 바뀌므로 doctor report를 admin 화면용 projection으로 다시 변환한다.
 use super::projection::map_doctor_report;
@@ -19,7 +19,7 @@ impl PlanningAdminFacadeService {
     pub fn reset_workspace(
         &self,
         // target은 이미 parse/validation을 통과한 typed reset 범위다. 여기서는 문자열을 다시 해석하지 않는다.
-        target: PlanningResetTarget,
+        request: PlanningResetRequest,
     ) -> Result<PlanningAdminResetOutcome> {
         // planning.workspace.reset_workspace가 실제 rewrite/remove를 수행하는 authoritative path다. facade는
         // self.workspace_dir을 넘겨 현재 admin instance가 관리하는 workspace만 대상으로 삼고, reset 정책 자체는
@@ -30,7 +30,7 @@ impl PlanningAdminFacadeService {
             // workspace service group은 reset/doctor/init처럼 workspace artifact를 다루는 작업을 담당한다.
             .workspace
             // 실패하면 `?`가 즉시 return해, reset 실패 후 잘못된 성공 outcome을 만들지 않는다.
-            .reset_workspace(self.workspace_dir.as_str(), target)?;
+            .reset_workspace(self.workspace_dir.as_str(), request)?;
         // reset 후 doctor를 다시 실행해 "무엇을 고쳤는지"뿐 아니라 "현재 workspace가 유효한지"도
         // 같은 응답에 담는다. admin 화면은 이 snapshot으로 validation panel을 갱신하고, 별도 inspect 호출 없이
         // reset 직후 상태를 표시할 수 있다.
@@ -79,7 +79,10 @@ mod tests {
 
         let outcome = fixture
             .facade
-            .reset_workspace(PlanningResetTarget::All)
+            .reset_workspace(PlanningResetRequest::new(
+                crate::domain::planning::PlanningResetTarget::All,
+                true,
+            ))
             .expect("full reset should succeed for seeded workspace");
 
         assert_eq!(outcome.target, "all");
@@ -112,7 +115,10 @@ mod tests {
 
         let error = fixture
             .facade
-            .reset_workspace(PlanningResetTarget::Queue)
+            .reset_workspace(PlanningResetRequest::new(
+                crate::domain::planning::PlanningResetTarget::Queue,
+                false,
+            ))
             .expect_err("reset should not bootstrap an empty workspace implicitly");
 
         assert_eq!(

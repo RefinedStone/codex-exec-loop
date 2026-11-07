@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::domain::planning::PlanningResetTarget;
+use crate::domain::planning::PlanningResetRequest;
 
 /*
  * PlanningAdminPort 계약은 의도적으로 data-heavy하다. inbound admin route/template과 planning application
@@ -478,7 +478,7 @@ pub trait PlanningAdminPort: Send + Sync {
 
     fn apply_exported_files(&self) -> Result<PlanningAdminFileSyncOutcome>;
 
-    fn reset_workspace(&self, target: PlanningResetTarget) -> Result<PlanningAdminResetOutcome>;
+    fn reset_workspace(&self, request: PlanningResetRequest) -> Result<PlanningAdminResetOutcome>;
 }
 
 impl<T> PlanningAdminPort for Arc<T>
@@ -566,8 +566,8 @@ where
         self.as_ref().apply_exported_files()
     }
 
-    fn reset_workspace(&self, target: PlanningResetTarget) -> Result<PlanningAdminResetOutcome> {
-        self.as_ref().reset_workspace(target)
+    fn reset_workspace(&self, request: PlanningResetRequest) -> Result<PlanningAdminResetOutcome> {
+        self.as_ref().reset_workspace(request)
     }
 }
 

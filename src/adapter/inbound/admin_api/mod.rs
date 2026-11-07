@@ -8,7 +8,7 @@ use crate::application::port::inbound::pr_validation_query_port::PrValidationQue
 use crate::application::port::inbound::pr_validation_rollout_evidence_query_port::PrValidationRolloutEvidenceQueryPort;
 use crate::application::port::inbound::review_center_query_port::ReviewCenterQueryPort;
 use crate::composition::production;
-use crate::domain::planning::PlanningResetTarget;
+use crate::domain::planning::{PlanningResetRequest, PlanningResetTarget};
 use anyhow::{Context, Result, anyhow, bail};
 use axum::Router;
 use axum::extract::{Request, State};
@@ -492,6 +492,22 @@ fn build_router(state: AdminAppState) -> Router {
             state,
             local_admin_request_guard,
         ))
+}
+
+/*
+ * reset 요청을 확인 여부와 함께 만든다. 확인되지 않은 directions/all 은 service 에 보내지 않고
+ * 428 Precondition Required 로 거절한다. service 도 같은 규칙으로 거절한다.
+ */
+fn reset_request(
+    target: &str,
+    confirm: bool,
+) -> std::result::Result<PlanningResetRequest, StatusCode> {
+    let request = PlanningResetRequest::new(parse_reset_target(target)?, confirm);
+    if request.is_allowed() {
+        Ok(request)
+    } else {
+        Err(StatusCode::PRECONDITION_REQUIRED)
+    }
 }
 
 fn parse_reset_target(target: &str) -> std::result::Result<PlanningResetTarget, StatusCode> {

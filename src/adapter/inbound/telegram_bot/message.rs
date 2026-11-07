@@ -1,7 +1,7 @@
 use crate::application::port::inbound::planning_control_port::{
     PLANNING_CONTROL_HELP_TEXT, PlanningControlCommand,
 };
-use crate::domain::planning::PlanningResetTarget;
+use crate::domain::planning::{PlanningResetRequest, PlanningResetTarget};
 
 /*
  * Telegram 메시지 파서는 inbound adapter의 가장 얇은 명령 해석 경계다.
@@ -128,30 +128,20 @@ pub(super) fn parse_message(text: Option<&str>) -> TelegramParsedMessage {
          */
         "/plan" => parse_plan_arguments(&arguments),
         /*
-         * reset alias들은 target이 명령어 이름에 이미 들어 있으므로 추가 인자를 금지한다.
+         * reset alias들은 target이 명령어 이름에 이미 들어 있으므로 `confirm` 외의 인자를 금지한다.
          * 이 제한 덕분에 `/reset_all now` 같은 애매한 입력이 조용히 실행되지 않는다.
          */
-        "/reset_queue" => parse_command_without_arguments(
+        "/reset_queue" => {
+            parse_reset_request(PlanningResetTarget::Queue, &arguments, "/reset_queue")
+        }
+        "/reset_directions" => parse_reset_request(
+            PlanningResetTarget::Directions,
             &arguments,
-            TelegramInboundCommand::Planning(PlanningControlCommand::Reset(
-                PlanningResetTarget::Queue,
-            )),
-            "/reset_queue",
+            "/reset_directions confirm",
         ),
-        "/reset_directions" => parse_command_without_arguments(
-            &arguments,
-            TelegramInboundCommand::Planning(PlanningControlCommand::Reset(
-                PlanningResetTarget::Directions,
-            )),
-            "/reset_directions",
-        ),
-        "/reset_all" => parse_command_without_arguments(
-            &arguments,
-            TelegramInboundCommand::Planning(PlanningControlCommand::Reset(
-                PlanningResetTarget::All,
-            )),
-            "/reset_all",
-        ),
+        "/reset_all" => {
+            parse_reset_request(PlanningResetTarget::All, &arguments, "/reset_all confirm")
+        }
         /*
          * `/reset`은 안전을 위해 target을 명시해야 한다. destructive command는 기본값을
          * 두지 않는 편이 낫기 때문에 빈 인자는 usage error로 돌린다.
@@ -218,7 +208,7 @@ fn parse_reset_arguments(arguments: &[&str]) -> TelegramParsedMessage {
      * reset은 workspace 상태를 지우는 명령이므로 반드시 하나의 target만 허용한다.
      * target 누락과 여분 인자를 같은 usage error로 처리해 애매한 입력을 남기지 않는다.
      */
-    let [target] = arguments else {
+    let [target, rest @ ..] = arguments else {
         return TelegramParsedMessage::Error(
             "사용법: /reset queue | /reset directions | /reset all".to_string(),
         );
@@ -228,17 +218,48 @@ fn parse_reset_arguments(arguments: &[&str]) -> TelegramParsedMessage {
      * Telegram의 짧은 단어 target을 application service의 reset enum으로 매핑한다.
      * 이 변환을 adapter 안에 두면 service는 Telegram 명령어 표기법을 알 필요가 없다.
      */
-    let command = match *target {
-        "queue" => PlanningControlCommand::Reset(PlanningResetTarget::Queue),
-        "directions" => PlanningControlCommand::Reset(PlanningResetTarget::Directions),
-        "all" => PlanningControlCommand::Reset(PlanningResetTarget::All),
+    let (target, usage) = match *target {
+        "queue" => (PlanningResetTarget::Queue, "/reset queue"),
+        "directions" => (PlanningResetTarget::Directions, "/reset directions confirm"),
+        "all" => (PlanningResetTarget::All, "/reset all confirm"),
         _ => {
             return TelegramParsedMessage::Error(
                 "사용법: /reset queue | /reset directions | /reset all".to_string(),
             );
         }
     };
-    TelegramParsedMessage::Command(TelegramInboundCommand::Planning(command))
+    if rest.len() > 1 || rest.first().is_some_and(|word| *word != "confirm") {
+        return TelegramParsedMessage::Error(
+            "사용법: /reset queue | /reset directions | /reset all".to_string(),
+        );
+    }
+    parse_reset_request(target, rest, usage)
+}
+
+/*
+ * directions/all 은 마지막 `confirm` 이 있어야 실행한다 (plan 18 K-D1). 확인이 없으면 아무것도 보내지 않고
+ * 다시 보낼 명령을 알려 준다. service 도 같은 규칙으로 거절한다.
+ */
+fn parse_reset_request(
+    target: PlanningResetTarget,
+    arguments: &[&str],
+    usage: &str,
+) -> TelegramParsedMessage {
+    let confirmed = match arguments {
+        [] => false,
+        ["confirm"] => true,
+        _ => return TelegramParsedMessage::Error(format!("사용법: {usage}")),
+    };
+    let request = PlanningResetRequest::new(target, confirmed);
+    if !request.is_allowed() {
+        return TelegramParsedMessage::Error(format!(
+            "reset {}은 확인이 필요합니다. 아무것도 바꾸지 않았습니다. `{usage}` 로 다시 보내세요.",
+            target.label()
+        ));
+    }
+    TelegramParsedMessage::Command(TelegramInboundCommand::Planning(
+        PlanningControlCommand::Reset(request),
+    ))
 }
 
 pub(super) fn command_targets_other_bot(text: Option<&str>, bot_username: Option<&String>) -> bool {

@@ -8,7 +8,7 @@ use crate::application::port::inbound::planning_admin_port::{
     PlanningAdminPort, PlanningAdminResetOutcome, PlanningAdminRuntimeSummary,
     PlanningAdminSessionView, PlanningAdminTaskDeleteRequest, PlanningAdminTaskMutationRequest,
 };
-use crate::domain::planning::PlanningResetTarget;
+use crate::domain::planning::PlanningResetRequest;
 
 use super::PlanningAdminFacadeService;
 
@@ -99,7 +99,7 @@ impl PlanningAdminPort for PlanningAdminFacadeService {
         PlanningAdminFacadeService::apply_exported_files(self)
     }
 
-    fn reset_workspace(&self, target: PlanningResetTarget) -> Result<PlanningAdminResetOutcome> {
-        PlanningAdminFacadeService::reset_workspace(self, target)
+    fn reset_workspace(&self, request: PlanningResetRequest) -> Result<PlanningAdminResetOutcome> {
+        PlanningAdminFacadeService::reset_workspace(self, request)
     }
 }

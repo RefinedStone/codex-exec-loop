@@ -1,4 +1,4 @@
-use crate::domain::planning::PlanningResetTarget;
+use crate::domain::planning::{PlanningResetRequest, PlanningResetTarget};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanningDoctorState {
@@ -116,9 +116,10 @@ pub struct PlanningWorkspaceResetResult {
 pub trait PlanningWorkspaceMaintenancePort: Send + Sync {
     fn inspect_workspace(&self, workspace_dir: &str) -> PlanningDoctorReport;
 
+    // 확인되지 않은 directions/all 요청은 아무것도 바꾸지 않고 오류를 돌려준다.
     fn reset_workspace(
         &self,
         workspace_dir: &str,
-        target: PlanningResetTarget,
+        request: PlanningResetRequest,
     ) -> anyhow::Result<PlanningWorkspaceResetResult>;
 }

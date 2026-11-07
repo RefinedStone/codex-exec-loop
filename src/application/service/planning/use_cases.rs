@@ -55,7 +55,7 @@ use crate::application::port::outbound::planning_authority_port::PlanningAuthori
 use crate::application::port::outbound::planning_task_repository_port::PlanningTaskAuthorityMutationRecord;
 use crate::domain::parallel_agent_profile::ParallelAgentProfile;
 use crate::domain::planning::{
-    OriginSessionKind, PlanningOfficialCompletionRefreshContract, PlanningResetTarget,
+    OriginSessionKind, PlanningOfficialCompletionRefreshContract, PlanningResetRequest,
     PostTurnContinuationPermit, PriorityQueueTask, QueueIdlePolicy, TaskMutationProvenance,
     TurnSnapshotCapture as DomainTurnSnapshotCapture,
     TurnSnapshotCaptureState as DomainTurnSnapshotCaptureState,
@@ -256,9 +256,9 @@ impl PlanningWorkspaceUseCases {
     pub fn reset_workspace(
         &self,
         workspace_dir: &str,
-        target: PlanningResetTarget,
+        request: PlanningResetRequest,
     ) -> anyhow::Result<PlanningWorkspaceResetResult> {
-        self.reset_service.reset_workspace(workspace_dir, target)
+        self.reset_service.reset_workspace(workspace_dir, request)
     }
     pub fn inspect_workspace(&self, workspace_dir: &str) -> PlanningDoctorReport {
         self.doctor_service.inspect_workspace(workspace_dir)
@@ -364,9 +364,9 @@ impl PlanningWorkspaceMaintenancePort for PlanningWorkspaceUseCases {
     fn reset_workspace(
         &self,
         workspace_dir: &str,
-        target: PlanningResetTarget,
+        request: PlanningResetRequest,
     ) -> anyhow::Result<PlanningWorkspaceResetResult> {
-        PlanningWorkspaceUseCases::reset_workspace(self, workspace_dir, target)
+        PlanningWorkspaceUseCases::reset_workspace(self, workspace_dir, request)
     }
 }
 #[derive(Clone)]
@@ -1656,6 +1656,7 @@ mod tests {
     use crate::application::service::planning::{
         PlanningQueueCancellationTarget, PlanningServices,
     };
+    use crate::domain::planning::PlanningResetTarget;
     use crate::domain::planning::RESULT_OUTPUT_FILE_PATH;
     use crate::domain::planning::{
         DirectionCatalogDocument, DirectionDefinition, DirectionState, OriginSessionKind,
@@ -2068,7 +2069,10 @@ mod tests {
 
         let reset = planning
             .workspace
-            .reset_workspace(workspace.path_str(), PlanningResetTarget::Queue)
+            .reset_workspace(
+                workspace.path_str(),
+                PlanningResetRequest::new(PlanningResetTarget::Queue, false),
+            )
             .expect("queue reset should delegate through workspace facade");
         assert_eq!(reset.target, PlanningResetTarget::Queue);
     }

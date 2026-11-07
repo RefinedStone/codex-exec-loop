@@ -15,7 +15,7 @@ use crate::configuration::{
     ConfigDoctorReport, ConfigOverride, ConfigPaths, ConfigScope, ConfigurationService,
     ParsedInvocation, SettingKey,
 };
-use crate::domain::planning::PlanningResetTarget;
+use crate::domain::planning::{PlanningResetRequest, PlanningResetTarget};
 use anyhow::{Context, Result, bail};
 use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
@@ -137,12 +137,27 @@ where
             )?))
         }
         // planning maintenance command는 optional workspace를 받고, 없으면 cwd를 사용한다.
+        // directions/all 은 마지막 `--confirm` 이 있어야 실행된다 (plan 18 K-D1).
+        [command, target, flag] if command == OsStr::new("reset") && is_confirm_flag(flag) => {
+            Ok(Some(run_reset(target.as_os_str(), None, true, stdout)?))
+        }
+        [command, target, workspace, flag]
+            if command == OsStr::new("reset") && is_confirm_flag(flag) =>
+        {
+            Ok(Some(run_reset(
+                target.as_os_str(),
+                Some(workspace.as_os_str()),
+                true,
+                stdout,
+            )?))
+        }
         [command, target] if command == OsStr::new("reset") => {
-            Ok(Some(run_reset(target.as_os_str(), None, stdout)?))
+            Ok(Some(run_reset(target.as_os_str(), None, false, stdout)?))
         }
         [command, target, workspace] if command == OsStr::new("reset") => Ok(Some(run_reset(
             target.as_os_str(),
             Some(workspace.as_os_str()),
+            false,
             stdout,
         )?)),
         [command, subcommand] if is_planning_tool_command(command) => Ok(Some(run_planning_tool(
@@ -405,14 +420,19 @@ fn run_doctor(workspace_arg: Option<&OsStr>, stdout: &mut impl Write) -> Result<
     Ok(report.exit_code())
 }
 
+fn is_confirm_flag(argument: &OsStr) -> bool {
+    argument == OsStr::new("--confirm")
+}
+
 fn run_reset(
     target_arg: &OsStr,
     workspace_arg: Option<&OsStr>,
+    confirmed: bool,
     stdout: &mut impl Write,
 ) -> Result<i32> {
-    let target = parse_reset_target(target_arg)?;
+    let request = PlanningResetRequest::new(parse_reset_target(target_arg)?, confirmed);
     let workspace_path = resolve_workspace_path(workspace_arg)?;
-    let report = reset_workspace(&workspace_path, target);
+    let report = reset_workspace(&workspace_path, request);
     render_reset_report(stdout, &report)?;
     Ok(report.exit_code())
 }
@@ -672,15 +692,22 @@ fn inspect_workspace(workspace_path: &Path) -> DoctorReport {
     DoctorReport::from_service_report(workspace_label, report)
 }
 
-fn reset_workspace(workspace_path: &Path, target: PlanningResetTarget) -> ResetReport {
+fn reset_workspace(workspace_path: &Path, request: PlanningResetRequest) -> ResetReport {
     let workspace_label = workspace_path.display().to_string();
     if let Err(issue) = validate_workspace_path(workspace_path) {
         return ResetReport::path_issue(workspace_label, issue);
     }
+    // service 도 같은 규칙으로 거절한다. 여기서는 CLI 확인 문법(`--confirm`)을 알려 준다.
+    if !request.is_allowed() {
+        let label = request.target.label();
+        let issue =
+            format!("reset {label} needs confirmation; nothing was changed. Rerun with --confirm");
+        return ResetReport::failure(workspace_label, request.target, issue);
+    }
     let workspace = production::build_planning_workspace_maintenance_port(&workspace_label);
-    match workspace.reset_workspace(workspace_path.to_string_lossy().as_ref(), target) {
+    match workspace.reset_workspace(workspace_path.to_string_lossy().as_ref(), request) {
         Ok(result) => ResetReport::success(workspace_label, &result),
-        Err(error) => ResetReport::failure(workspace_label, target, error.to_string()),
+        Err(error) => ResetReport::failure(workspace_label, request.target, error.to_string()),
     }
 }
 
@@ -938,8 +965,13 @@ mod tests {
         assert!(doctor_rendered.contains("workspace path does not exist"));
 
         let mut reset_output = Vec::new();
-        let reset_exit = run_reset(OsStr::new("queue"), Some(missing_arg), &mut reset_output)
-            .expect("reset should render issue");
+        let reset_exit = run_reset(
+            OsStr::new("queue"),
+            Some(missing_arg),
+            false,
+            &mut reset_output,
+        )
+        .expect("reset should render issue");
         let reset_rendered = String::from_utf8(reset_output).expect("reset output is utf8");
         assert_eq!(reset_exit, 1);
         assert!(reset_rendered.contains("command: reset"));
@@ -1025,13 +1057,47 @@ mod tests {
         assert!(doctor_rendered.contains("planning state: ready"));
 
         let mut reset_output = Vec::new();
-        let reset_exit = run_reset(OsStr::new("queue"), Some(workspace_arg), &mut reset_output)
-            .expect("reset should render");
+        let reset_exit = run_reset(
+            OsStr::new("queue"),
+            Some(workspace_arg),
+            false,
+            &mut reset_output,
+        )
+        .expect("reset should render");
         let reset_rendered = String::from_utf8(reset_output).expect("reset output is utf8");
 
         assert_eq!(reset_exit, 0);
         assert!(reset_rendered.contains("target: queue"));
         assert!(reset_rendered.contains("status: planning workspace reset"));
+
+        // directions/all 은 --confirm 없이 아무것도 바꾸지 않는다.
+        let mut refused_output = Vec::new();
+        let refused_exit = run_reset(
+            OsStr::new("all"),
+            Some(workspace_arg),
+            false,
+            &mut refused_output,
+        )
+        .expect("unconfirmed reset should render an issue");
+        let refused_rendered = String::from_utf8(refused_output).expect("reset output is utf8");
+        assert_eq!(refused_exit, 1);
+        assert!(refused_rendered.contains("Rerun with --confirm"));
+        assert!(!refused_rendered.contains("status: planning workspace reset"));
+
+        let mut confirmed_output = Vec::new();
+        let confirmed_exit = run_with_args(
+            [
+                OsStr::new("reset"),
+                OsStr::new("all"),
+                workspace_arg,
+                OsStr::new("--confirm"),
+            ]
+            .map(std::ffi::OsString::from)
+            .to_vec(),
+            &mut confirmed_output,
+        )
+        .expect("confirmed reset should run");
+        assert_eq!(confirmed_exit, Some(0));
 
         std::fs::remove_dir_all(workspace).expect("temp workspace should be removed");
     }

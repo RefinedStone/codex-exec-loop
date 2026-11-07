@@ -15,6 +15,32 @@ impl PlanningResetTarget {
             Self::All => "all",
         }
     }
+
+    // directions와 all은 authority 문서와 prompt 파일을 다시 쓴다. 모든 입구가 같은 확인을 거쳐야 한다.
+    pub fn requires_confirmation(self) -> bool {
+        matches!(self, Self::Directions | Self::All)
+    }
+}
+
+/*
+ * reset 범위와 operator 확인 여부를 함께 나른다. 확인 규칙을 입구(TUI, CLI, Telegram, admin)마다 두지 않고
+ * reset service 한 곳에서 검사하기 위한 값이다. 확인 문법(`confirm`, `--confirm`, JSON `confirm`)은 입구가 정한다.
+ */
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlanningResetRequest {
+    pub target: PlanningResetTarget,
+    pub confirmed: bool,
+}
+
+impl PlanningResetRequest {
+    pub fn new(target: PlanningResetTarget, confirmed: bool) -> Self {
+        Self { target, confirmed }
+    }
+
+    // queue는 파생 상태만 지우므로 확인 없이 허용한다.
+    pub fn is_allowed(self) -> bool {
+        self.confirmed || !self.target.requires_confirmation()
+    }
 }
 
 // result-output은 현재 accepted planning state를 대표하는 active planning artifact이다. admin draft,
@@ -100,8 +126,8 @@ pub fn default_direction_detail_doc_path(direction_id: &str) -> String {
 mod tests {
     // test는 canonical lookup 함수와 expected canonical constant만 사용해 public contract를 검증한다.
     use super::{
-        PLANNING_DRAFT_NAME_MAX_BYTES, PlanningDraftNameError, PlanningResetTarget,
-        validate_planning_draft_name,
+        PLANNING_DRAFT_NAME_MAX_BYTES, PlanningDraftNameError, PlanningResetRequest,
+        PlanningResetTarget, validate_planning_draft_name,
     };
     use crate::domain::planning::runtime_contracts::{
         RESULT_OUTPUT_FILE_PATH, canonical_active_planning_file_path,
@@ -184,5 +210,15 @@ mod tests {
         assert_eq!(PlanningResetTarget::Queue.label(), "queue");
         assert_eq!(PlanningResetTarget::Directions.label(), "directions");
         assert_eq!(PlanningResetTarget::All.label(), "all");
+    }
+
+    #[test]
+    fn only_queue_reset_is_allowed_without_confirmation() {
+        let request = PlanningResetRequest::new;
+        assert!(request(PlanningResetTarget::Queue, false).is_allowed());
+        assert!(!request(PlanningResetTarget::Directions, false).is_allowed());
+        assert!(!request(PlanningResetTarget::All, false).is_allowed());
+        assert!(request(PlanningResetTarget::Directions, true).is_allowed());
+        assert!(request(PlanningResetTarget::All, true).is_allowed());
     }
 }

@@ -7,7 +7,7 @@ use super::forms::{
 };
 use super::realtime::AkraCommandView;
 use super::{
-    AdminAppState, ensure_csrf_cookie, internal_server_error, parse_reset_target,
+    AdminAppState, ensure_csrf_cookie, internal_server_error, reset_request,
     verify_draft_name_path, verify_header_csrf,
 };
 use crate::adapter::inbound::admin_api::akra_dashboard::{EventFeedView, RuntimeEventView};
@@ -780,7 +780,7 @@ pub(super) async fn reset_api(
     verify_header_csrf(&jar, &headers)?;
     let outcome = state
         .facade
-        .reset_workspace(parse_reset_target(&request.target)?)
+        .reset_workspace(reset_request(&request.target, request.confirm)?)
         .map_err(internal_server_error)?;
     Ok(Json(outcome).into_response())
 }
