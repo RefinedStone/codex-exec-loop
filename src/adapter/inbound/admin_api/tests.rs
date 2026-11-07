@@ -3788,9 +3788,11 @@ fn admin_html_and_json_reset_routes_share_parser_and_facade() {
         );
     }
 
-    assert!(ADMIN_PAGES.contains("let target = parse_reset_target(&form.target)?;"));
-    assert!(ADMIN_PAGES.contains(".reset_workspace(target)"));
-    assert!(ADMIN_API.contains(".reset_workspace(parse_reset_target(&request.target)?)"));
+    assert!(ADMIN_PAGES.contains("let request = reset_request(&form.target, form.confirm)?;"));
+    assert!(ADMIN_PAGES.contains(".reset_workspace(request)"));
+    assert!(
+        ADMIN_API.contains(".reset_workspace(reset_request(&request.target, request.confirm)?)")
+    );
 }
 
 #[test]

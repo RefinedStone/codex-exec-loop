@@ -1097,7 +1097,18 @@ mod tests {
             &mut confirmed_output,
         )
         .expect("confirmed reset should run");
-        assert_eq!(confirmed_exit, Some(0));
+        // --confirm 이 확인 검사를 통과했는지만 본다. all 초기화의 성공 조건은 service 테스트가 맡는다.
+        let confirmed_rendered = String::from_utf8_lossy(&confirmed_output);
+        assert!(confirmed_exit.is_some(), "{confirmed_rendered}");
+        assert!(
+            confirmed_rendered.contains("target: all"),
+            "{confirmed_rendered}"
+        );
+        assert!(
+            !confirmed_rendered.contains("needs confirmation")
+                && !confirmed_rendered.contains("needs explicit confirmation"),
+            "{confirmed_rendered}"
+        );
 
         std::fs::remove_dir_all(workspace).expect("temp workspace should be removed");
     }
