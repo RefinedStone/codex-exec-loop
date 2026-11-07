@@ -11197,6 +11197,23 @@ fn tui_approval_decisions_enter_through_core_runtime() {
 }
 
 #[test]
+fn kernel_protocol_only_maps_wire_types_to_core() {
+    // plan 18 K3-1: the protocol adapter translates JSON-RPC types to core commands and events. It
+    // does not reach application services, composition, or outbound adapters; the kernel host does.
+    assert_no_forbidden_references_in_paths(
+        "kernel protocol must stay a pure wire/core mapping",
+        &["src/adapter/inbound/kernel_protocol"],
+        &[
+            "crate::application::service",
+            "crate::composition",
+            "crate::adapter::outbound",
+            "std::thread",
+            "tokio",
+        ],
+    );
+}
+
+#[test]
 fn inbound_adapters_do_not_block_switching_conversations_while_a_turn_runs() {
     // plan 18 K2-4: opening a conversation only changes the shown thread; Core finishes the left
     // one in the background, so no inbound adapter may refuse the switch.

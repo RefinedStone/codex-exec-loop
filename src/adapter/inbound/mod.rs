@@ -7,6 +7,8 @@ pub mod admin_api;
 pub mod cli;
 // gateway는 데스크톱 앱 같은 로컬 클라이언트를 codex app-server 에 중계하는 akra-gateway 데몬이다.
 pub mod gateway;
+// kernel_protocol은 akra/kernel/* 응용 프로토콜의 직렬화 타입과 core 변환이다 (plan 18 K3).
+pub mod kernel_protocol;
 // Telegram bot은 채팅 업데이트를 planning control 명령과 응답 텍스트로 변환한다.
 pub mod telegram_bot;
 // TUI는 native-first 사용자 흐름의 주 표면이며 app-server 스트림과 planning 상태를 한 화면에 엮는다.
