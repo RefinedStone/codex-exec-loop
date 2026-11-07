@@ -22,7 +22,20 @@ pub(crate) trait NativeClientPort: Send {
     #[must_use = "dispatch outcomes carry projection events that the inbound adapter must apply"]
     fn dispatch_client_event(&mut self, event: NativeClientEvent) -> NativeClientDispatchOutcome;
 
+    // 시험 전용이다. 화면은 `run_host_cycle` 을 쓴다 (plan 18 K1-6).
+    #[cfg(test)]
     fn poll_pending_client_event(&mut self) -> Option<NativeClientDispatchOutcome>;
+    /*
+     * 런타임 호스트의 한 주기이다 (plan 18 K1-6). 입력을 최대 `wait` 만큼 기다리고, 와 있는 입력을 최대
+     * `max_inputs` 개 처리한 뒤 core 와 병렬 제어부에 시계를 넣는다. 화면은 0 으로 부르고, 화면 없는
+     * 호스트는 기다린다.
+     */
+    fn run_host_cycle(
+        &mut self,
+        now: Instant,
+        wait: std::time::Duration,
+        max_inputs: usize,
+    ) -> Vec<NativeClientDispatchOutcome>;
     fn snapshot(&self) -> AppSnapshot;
     fn revisioned_planning_parallel_projection(&self) -> RevisionedPlanningParallelProjection;
     fn parallel_mode_projection(&self) -> ParallelModeProjection;

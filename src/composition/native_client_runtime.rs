@@ -1,9 +1,6 @@
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
-#[cfg(test)]
-use std::time::Duration;
-#[cfg(test)]
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::application::port::outbound::conversation_thread_turn_options_port::ConversationThreadTurnOptionsPort;
 #[cfg(test)]
@@ -812,6 +809,29 @@ impl NativeClientRuntime {
         self.core.runtime.snapshot()
     }
 
+    pub(crate) fn run_host_cycle(
+        &mut self,
+        now: Instant,
+        wait: Duration,
+        max_inputs: usize,
+    ) -> Vec<NativeClientDispatchOutcome> {
+        let mut outcomes = Vec::new();
+        if !wait.is_zero()
+            && let Some(outcome) = self.core.runtime.wait_pending_input(wait)
+        {
+            outcomes.push(self.resolve_internal_post_turn_routes(outcome));
+        }
+        while outcomes.len() < max_inputs {
+            let Some(outcome) = self.poll_pending_client_event() else {
+                break;
+            };
+            outcomes.push(outcome);
+        }
+        outcomes.push(self.dispatch_core_input(CoreInput::Tick { now }));
+        outcomes.push(self.dispatch_client_event(NativeClientEvent::ParallelTick { now }));
+        outcomes
+    }
+
     pub(crate) fn revisioned_planning_parallel_projection(
         &self,
     ) -> RevisionedPlanningParallelProjection {
@@ -957,10 +977,20 @@ impl NativeClientRuntime {
 }
 
 impl NativeClientPort for NativeClientRuntime {
+    fn run_host_cycle(
+        &mut self,
+        now: Instant,
+        wait: Duration,
+        max_inputs: usize,
+    ) -> Vec<NativeClientDispatchOutcome> {
+        NativeClientRuntime::run_host_cycle(self, now, wait, max_inputs)
+    }
+
     fn dispatch_client_event(&mut self, event: NativeClientEvent) -> NativeClientDispatchOutcome {
         NativeClientRuntime::dispatch_client_event(self, event)
     }
 
+    #[cfg(test)]
     fn poll_pending_client_event(&mut self) -> Option<NativeClientDispatchOutcome> {
         NativeClientRuntime::poll_pending_client_event(self)
     }
@@ -1435,6 +1465,161 @@ mod tests {
             unreachable!("routing test does not run turn effects")
         }
     }
+
+    /// 턴 실행 요청만 기록하는 포트이다. 실제 app-server 는 부르지 않는다.
+    #[derive(Clone, Default)]
+    struct RecordingTurnRuntimePort {
+        turns: Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    }
+
+    impl crate::application::port::outbound::startup_probe_port::StartupProbePort
+        for RecordingTurnRuntimePort
+    {
+        fn load_startup_context(
+            &self,
+        ) -> anyhow::Result<
+            crate::application::port::outbound::startup_probe_port::AppServerStartupContext,
+        > {
+            unreachable!("headless test does not run startup effects")
+        }
+    }
+
+    impl crate::application::port::outbound::session_catalog_port::SessionCatalogPort
+        for RecordingTurnRuntimePort
+    {
+        fn load_session_catalog(
+            &self,
+            _request: SessionCatalogRequest,
+        ) -> anyhow::Result<SessionCatalog> {
+            unreachable!("headless test does not run session effects")
+        }
+    }
+
+    impl crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort
+        for RecordingTurnRuntimePort
+    {
+        fn runtime_control_truth(&self) -> ConversationRuntimeControlTruth {
+            ConversationRuntimeControlTruth::codex_app_server()
+        }
+
+        fn load_conversation_snapshot(
+            &self,
+            _thread_id: &str,
+        ) -> anyhow::Result<ConversationSnapshot> {
+            unreachable!("headless test does not run conversation load effects")
+        }
+
+        fn request_stop_all_sessions(&self) -> anyhow::Result<()> {
+            unreachable!("headless test does not run stop effects")
+        }
+
+        fn run_new_thread_stream(
+            &self,
+            _cwd: &str,
+            _prompt: &str,
+            _image_paths: &[String],
+            _options: ConversationTurnOptions,
+            _event_sender: crate::application::port::conversation_stream::ConversationStreamSender,
+        ) -> anyhow::Result<ConversationTurnTerminalReceipt> {
+            unreachable!("headless test continues an existing thread")
+        }
+
+        fn run_turn_stream(
+            &self,
+            thread_id: &str,
+            prompt: &str,
+            _image_paths: &[String],
+            _options: ConversationTurnOptions,
+            _event_sender: crate::application::port::conversation_stream::ConversationStreamSender,
+        ) -> anyhow::Result<ConversationTurnTerminalReceipt> {
+            self.turns
+                .lock()
+                .expect("recorded turns should lock")
+                .push((thread_id.to_string(), prompt.to_string()));
+            Err(anyhow::anyhow!("headless test stops after the follow-up turn starts"))
+        }
+    }
+
+    /*
+     * 헤드리스 시험이다 (plan 18 K1-6). TUI 없이 런타임 호스트의 주기만으로
+     * 턴 종료 -> 평가 시작 -> AutoSubmit -> 다음 턴 제출이 이어지는지 본다.
+     */
+    #[test]
+    fn host_cycle_runs_turn_end_evaluation_and_auto_follow_without_a_client() {
+        let planning = test_planning_services(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
+        let parallel = test_parallel_mode_control_plane_composition(planning.clone());
+        let parallel_turns = parallel.parallel_mode_turn_service();
+        let port = Arc::new(RecordingTurnRuntimePort::default());
+        let turns = port.turns.clone();
+        let mut runtime = NativeClientRuntime::new_for_test(
+            StartupService::new(port.clone()),
+            SessionService::new(port.clone()),
+            ConversationService::new(port),
+            planning,
+            parallel_turns,
+            parallel,
+        );
+        let _ = runtime.dispatch_client_event(NativeClientEvent::core(CoreInput::Command(
+            AppCommand::SetAutoFollowMaxTurns { value: 2 },
+        )));
+        let turn_correlation = runtime.begin_test_turn_submission();
+        for event in [
+            TurnStreamEvent::ThreadPrepared {
+                thread_id: "thread-1".to_string(),
+                title: "Headless loop".to_string(),
+                cwd: "/workspace".to_string(),
+                runtime_envelope: Box::<ConversationRuntimeEnvelope>::default(),
+            },
+            TurnStreamEvent::TurnStarted {
+                turn_id: "turn-1".to_string(),
+                runtime_request: Box::<ConversationRuntimeConfigurationRequest>::default(),
+            },
+            TurnStreamEvent::TurnTerminal {
+                receipt: ConversationTurnTerminalReceipt::completed(
+                    "thread-1",
+                    "turn-1",
+                    Vec::new(),
+                )
+                .with_application_delivery(ConversationTurnApplicationDelivery::Confirmed),
+                execution_snapshot_capture: Some(TurnSnapshotCapture::capture_failed(
+                    "/workspace",
+                    "test capture skipped".to_string(),
+                )),
+            },
+        ] {
+            let _ = runtime.dispatch_client_event(NativeClientEvent::core(
+                CoreInput::ConversationStreamUpdated {
+                    correlation: turn_correlation,
+                    event,
+                },
+            ));
+        }
+        let correlation = match &runtime.snapshot().conversation_runtime.post_turn {
+            PostTurnAuthoritySnapshot::Evaluating { correlation, .. } => correlation.clone(),
+            other => panic!("the host should start the post-turn evaluation: {other:?}"),
+        };
+        let _ = runtime.dispatch_client_event(NativeClientEvent::core(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PostTurnEvaluationCompleted {
+                correlation: correlation.clone(),
+                execution: Box::new(post_turn_execution(&correlation)),
+            },
+        )));
+
+        let deadline = Instant::now() + WORKER_COMPLETION_TIMEOUT_FOR_HOST_TEST;
+        while turns.lock().expect("recorded turns should lock").is_empty() {
+            assert!(
+                Instant::now() < deadline,
+                "the host should submit the follow-up turn without a client"
+            );
+            let _ = runtime.run_host_cycle(Instant::now(), Duration::from_millis(50), 16);
+        }
+        assert_eq!(
+            turns.lock().expect("recorded turns should lock").as_slice(),
+            [("thread-1".to_string(), "continue".to_string())]
+        );
+    }
+
+    const WORKER_COMPLETION_TIMEOUT_FOR_HOST_TEST: Duration = Duration::from_secs(10);
 
     #[test]
     fn parallel_tick_waits_for_a_view_and_keeps_the_latest_one() {
