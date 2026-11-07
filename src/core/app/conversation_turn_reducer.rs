@@ -105,7 +105,7 @@ pub(super) struct ConversationLifecycleReduction {
 #[derive(Debug)]
 pub(super) struct TurnStreamReduction {
     // 이 스트림 이벤트로 턴이 끝나서 평가를 기다린다. 값은 그 턴의 planning 작업 공간이다.
-    pub(super) post_turn_evaluation_due: Option<String>,
+    pub(super) post_turn_evaluation_due_workspace: Option<String>,
     pub(super) snapshots: Vec<TurnStreamSnapshot>,
     pub(super) stop_effects: Vec<StopEffectIntent>,
     pub(super) approval_review_persistence: Option<ApprovalReviewPersistenceCorrelation>,
@@ -250,11 +250,7 @@ impl ConversationTurnFeatureReducer {
             return Some(reduce(self));
         }
         let index = self.background_sessions.iter().position(owns)?;
-        std::mem::swap(&mut self.session, &mut self.background_sessions[index]);
-        self.serving_background = true;
-        let result = reduce(self);
-        self.serving_background = false;
-        std::mem::swap(&mut self.session, &mut self.background_sessions[index]);
+        let result = self.reduce_background_session(index, reduce);
         if !self.background_sessions[index].is_busy() {
             self.background_sessions.remove(index);
         }
@@ -264,13 +260,47 @@ impl ConversationTurnFeatureReducer {
     fn for_each_session(&mut self, mut reduce: impl FnMut(&mut Self)) {
         reduce(self);
         for index in 0..self.background_sessions.len() {
-            std::mem::swap(&mut self.session, &mut self.background_sessions[index]);
-            self.serving_background = true;
-            reduce(self);
-            self.serving_background = false;
-            std::mem::swap(&mut self.session, &mut self.background_sessions[index]);
+            self.reduce_background_session(index, &mut reduce);
         }
         self.background_sessions.retain(ThreadSession::is_busy);
+    }
+
+    /// 뒤의 session 을 보는 자리와 잠시 바꿔서 `reduce` 를 실행하고 되돌린다.
+    fn reduce_background_session<R>(
+        &mut self,
+        index: usize,
+        reduce: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        std::mem::swap(&mut self.session, &mut self.background_sessions[index]);
+        self.serving_background = true;
+        let result = reduce(self);
+        self.serving_background = false;
+        std::mem::swap(&mut self.session, &mut self.background_sessions[index]);
+        result
+    }
+
+    /// 이 평가가 클라이언트가 보지 않는 thread 의 것이다. 그 결과는 클라이언트에 알리지 않는다.
+    pub(super) fn post_turn_evaluation_is_background(
+        &self,
+        correlation: &PostTurnEvaluationCorrelation,
+    ) -> bool {
+        let owns = |session: &ThreadSession| {
+            session
+                .in_flight_post_turn_evaluation
+                .as_ref()
+                .is_some_and(|active| &active.correlation == correlation)
+                || session.awaits_post_turn_route(correlation)
+        };
+        !owns(&self.session) && self.background_sessions.iter().any(owns)
+    }
+
+    /// 이 thread 는 클라이언트가 보지 않는 중이다.
+    pub(super) fn thread_is_background(&self, thread_id: &str) -> bool {
+        !self.session.streams_thread(thread_id)
+            && self
+                .background_sessions
+                .iter()
+                .any(|session| session.streams_thread(thread_id))
     }
 
     /// 보는 session 에 일이 남아 있으면 뒤로 보내고, 보는 자리에는 새 session 을 둔다.
@@ -392,8 +422,11 @@ impl ConversationTurnFeatureReducer {
         fallback_workspace_directory: String,
         blocked_by_session_rename: bool,
     ) -> ConversationLoadAdmission {
-        // 대화를 여는 일은 보는 thread 만 바꾼다 (plan 18 K2-3, KP-03). 일이 남은 session 은 뒤에서 계속 돈다.
-        if !self.stop_request_settlement_pending() && !blocked_by_session_rename {
+        /*
+         * 대화를 여는 일은 보는 thread 만 바꾼다 (plan 18 K2-3, KP-03). 일이 남은 session 은 뒤에서 계속 돈다.
+         * 이름 바꾸기 때문에 로드가 미뤄져도 같다. 정지가 끝나기를 기다리는 session 만 보는 자리에 남는다.
+         */
+        if !self.stop_request_settlement_pending() {
             self.send_busy_viewed_session_to_background();
         }
         self.invalidate_post_turn_continuation();
@@ -481,6 +514,11 @@ impl ConversationTurnFeatureReducer {
         if let Some(index) = resumed_index {
             // 뒤에서 돌던 thread 를 다시 열었다. 진행 상태를 그대로 보는 자리로 가져온다.
             self.session = self.background_sessions.remove(index);
+            if let Some(turn) = self.session.conversation_runtime.active_turn_correlation() {
+                // 승인 검토 저장 실패를 다시 이 대화에 알릴 수 있게 한다.
+                self.approval_review_persistence
+                    .begin_conversation_turn(turn);
+            }
         } else if let Some(identity) = loaded_identity {
             self.session
                 .turn_stream_state
@@ -526,16 +564,6 @@ impl ConversationTurnFeatureReducer {
             .conversation_runtime
             .active_turn_correlation()
             .or_else(|| self.other_session_active_turn())
-        {
-            if request.prompt_origin == super::CorePromptOrigin::AutoFollow {
-                self.session
-                    .conversation_runtime
-                    .cancel_queued_auto_follow_submission();
-            }
-            return TurnSubmissionAdmission::RejectedActive { active_correlation };
-        }
-        if let Some(active_correlation) =
-            self.session.conversation_runtime.active_turn_correlation()
         {
             if request.prompt_origin == super::CorePromptOrigin::AutoFollow {
                 self.session
@@ -670,7 +698,7 @@ impl ConversationTurnFeatureReducer {
             .map(|turn| turn.workspace_directory.clone())
             .filter(|workspace| !workspace.trim().is_empty());
         let stream_snapshot = self.session.turn_stream_state.apply_stream_event(event);
-        let post_turn_evaluation_due = match &stream_snapshot.update {
+        let post_turn_evaluation_due_workspace = match &stream_snapshot.update {
             TurnStreamUpdate::TurnCompleted {
                 turn_id,
                 changed_planning_file_paths,
@@ -835,7 +863,7 @@ impl ConversationTurnFeatureReducer {
             snapshots.clear();
         }
         TurnStreamReduction {
-            post_turn_evaluation_due,
+            post_turn_evaluation_due_workspace,
             snapshots,
             stop_effects,
             approval_review_persistence,

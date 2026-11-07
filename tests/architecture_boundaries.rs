@@ -11798,7 +11798,7 @@ fn post_turn_evaluation_uses_one_core_owned_exact_correlation() {
         // plan 18 K2-3: completions reach their own (possibly background) session.
         "fn post_turn_completions_reach_their_own_sessions_once_across_aba()",
         "fn left_conversation_keeps_its_post_turn_lease_across_aba()",
-        "fn deferred_conversation_load_cancels_active_post_turn_authority_immediately()",
+        "fn deferred_conversation_load_keeps_the_left_evaluation_in_the_background()",
         "fn forged_post_turn_payload_cannot_settle_the_exact_lease()",
         "fn post_turn_evaluation_generation_exhaustion_fails_before_admission()",
     ] {
