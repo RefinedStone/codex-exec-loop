@@ -102,7 +102,7 @@ Akra Desktop (Electron)  --WebSocket-->  akra-gateway (데몬)  --WebSocket-->  
 | [R1](roadmap/R1-change-review.md) | 변경 검토 (diff) | 완료 (2026-11-06) | P3 | 1~2주 |
 | [R2](roadmap/R2-terminal.md) | 터미널 | 완료 (2026-11-06) | P3 | 1주 |
 | [R3](roadmap/R3-browser-panel.md) | 브라우저 패널 | 완료 (2026-11-06, 쿠키 가져오기는 미룸) | P3 | 1~2주 |
-| [R4](roadmap/R4-work-panels.md) | 업무 패널 | 진행 중 (GitHub 완료, Jira·Slack 남음) | P3 | 패널당 약 1주 |
+| [R4](roadmap/R4-work-panels.md) | 업무 패널 | 진행 중 (GitHub·Jira 완료, Slack 남음) | P3 | 패널당 약 1주 |
 | [R5](roadmap/R5-harness-integration.md) | Akra 하네스 연동 | 계획 | P3, Q-01 | 2~4주 |
 | [R6](roadmap/R6-context-compaction.md) | 자체 compact | 계획 | P3, Q-02 | 미정 |
 | [R7](roadmap/R7-claude-backend.md) | Claude 백엔드 (대화 화면 + 하네스) | 계획 | P3 | 4~5주 |
