@@ -30,7 +30,7 @@ TUI intent
   -> core reducer/CoreEffect 또는 application parallel control-plane/effect
   -> application use case / outbound port
   -> private bounded completion mailbox
-  -> NativeClientPort::poll_pending_client_event
+  -> NativeClientPort::run_host_cycle (입력 처리 뒤 Core Tick, parallel tick)
   -> 해당 authority reducer
   -> snapshot/presentation event
   -> TUI projection
@@ -111,12 +111,33 @@ driver와 application 소유 parallel control-plane handle을 조립합니다. T
 `NativeClientPort::dispatch_client_event`로 `NativeClientEvent`만 전달하고
 owned snapshot/projection만 읽습니다. TUI는 parallel completion 진입점을 이름 붙이거나 raw
 runtime/handle/service를 직접 호출할 수 없습니다. Core와 parallel worker의
-success/failure/panic completion은 private mailbox를 거쳐 `poll_pending_client_event`로 해당
+success/failure/panic completion은 private mailbox를 거쳐 runtime host cycle로 해당
 authority reducer에 재진입합니다.
+
+`NativeClientRuntime::run_host_cycle(now, wait, max_inputs)`가 runtime host입니다. 한 cycle은
+blocking mailbox에서 Core input을 최대 `wait`만큼 기다리고, 대기 중인 input을 처리한 뒤
+`CoreInput::Tick`과 parallel tick을 넣습니다. TUI frame loop는 parallel 화면 상태
+(`ParallelViewChanged`)를 알린 뒤 `wait = 0`으로 부르고, headless host는 기다립니다. 시계, post-turn
+평가 시작(`EvaluateCompletedTurn`), route 결정, auto-follow 제출(`SubmitAutoFollowTurn`)은 inbound
+adapter가 아니라 host가 소유합니다. Architecture test가 이 host 전용 input을 `src/adapter/inbound`에서
+막고, headless test가 host cycle만으로 turn 종료, 평가, follow-up turn을 실행합니다.
+
+Core는 conversation turn 상태를 thread별로 둡니다. Conversation이나 새 draft를 열면 보는 thread만
+바뀝니다. 실행 중 turn, auto-follow, post-turn 평가, stop, steer가 남은 session은 background 목록으로
+가고, 보는 자리에는 auto-follow 설정과 turn option만 이어받은 새 session이 들어갑니다. Input은
+correlation으로 주인 session을 찾습니다. Background session은 turn, 평가, follow-up turn을 끝까지
+처리하고, 그 thread를 다시 열면 보는 자리로 돌아옵니다. Conversation turn은 모든 thread를 통틀어
+한 번에 하나만 실행합니다. Auto-follow 정책 변경은 모든 session에 적용되고, stop 요청은 모든
+provider session을 멈춥니다. 보지 않는 thread의 stream projection, 평가 시작·완료, auto-follow 결과,
+steer 결과, approval decision 결과, worker panel 기록은 client에 보내지 않습니다. 공유
+planning-runtime projection은 계속 갱신합니다. Approval review persistence는 하나의 공유 직렬 queue로
+남습니다. Session rename 때문에 미뤄진 load도 떠난 session을 유지하며, stop settlement를 기다리는
+session만 보는 자리에 남아 이전처럼 취소됩니다. TUI는 아직 turn 실행 중 session 전환을 막으므로
+제품 화면에서는 이 동작이 보이지 않습니다 (제안: plan 18 K2-4).
 
 `CoreRuntime`, effect executor, input mailbox는 library SDK가 아닌 crate-private 구현 세부사항입니다.
 Composition만 이들을 조립할 수 있습니다. Production `NativeClientRuntime` callable surface는 event
-dispatch, completion polling, owned read-only snapshot/projection으로 닫혀 있습니다. Raw runtime,
+dispatch, host cycle, owned read-only snapshot/projection으로 닫혀 있습니다. Raw runtime,
 runner, sender, service, mutable state reference, borrowed projection은 노출하지 않습니다. Rust-aware
 architecture test는 visibility와 정확한 facade method 목록을 함께 고정하며, raw type을 다시
 공개하거나 mutable facade capability를 추가한 mutation fixture가 `cargo test`에서 실패함을
@@ -174,8 +195,9 @@ Snapshot pointer identity와 `AppState` revision은 dispatch identity가 아닙�
 
 Post-turn 평가는 planning-worker panel을 바꾸기 전에 Core로 진입합니다. Command는 explicit
 완료·확정된 최신 terminal이고 active turn, 이미 적용된 평가, 같은 in-flight 평가가 없을 때만
-허용됩니다. 오래되거나 잘못되거나 중복된 start는 event/effect를 내지 않으며 completion은 정확한
-in-flight thread/turn lease와 일치해야 합니다. Core는 마지막 exact accepted
+허용됩니다. 오래되거나 잘못되거나 중복된 start는 event/effect를 내지 않으며 completion은 주인
+thread session의 정확한 in-flight thread/turn lease와 일치해야 합니다. Conversation을 떠나도 lease는
+background session에 남고, 같은 session의 새 turn만 이전 lease를 정리합니다. Core는 마지막 exact accepted
 `PlanningWorkerPanelState`를 history seed로 보관하고 conversation lifecycle이 무효화되거나
 교체되면 기본값으로 초기화합니다. Adapter request의 동명 field는 contract 호환을 위한 중립
 placeholder일 뿐 history authority가 아닙니다. Core는 admission 뒤 자체 seed를 복제해 settlement
@@ -259,8 +281,9 @@ workspace correlation, 동일 요청 coalescing, target 승인, 성공한 poll c
 completion 규칙을 소유합니다. 새 workspace setup은 A→B→A race를 포함해 이전 service, target,
 cursor, 진행 중 poll을 모두 무효화합니다. Composition은 TUI thread 밖에서 branch discovery와
 service 구성을 실행하고 정확히 승인된 setup correlation 하나의 service만 보관하므로 다른
-generation의 service로 poll할 수 없습니다. TUI에는 poll 간격과 `PendingFirstFrame` /
-`Discovering` / `Active` / `Disabled` / `SetupError` 표현만 남습니다.
+generation의 service로 poll할 수 없습니다. Poll 시각은 Core가 host `CoreInput::Tick`으로
+정합니다. TUI에는 `PendingFirstFrame` / `Discovering` / `Active` / `Disabled` / `SetupError` 표현만
+남습니다. Setup 시작은 아직 첫 frame 전달 뒤입니다 (제안: plan 18 K2-6에서 host로 옮김).
 
 Parallel peek load는 core-correlated read입니다. Core가 요청 thread에 단조 증가 generation을
 부여하고 최신 요청으로 이전 요청을 대체하며, 일치하지 않거나 중복된 completion은 TUI에 도달하기

@@ -30,7 +30,7 @@ TUI intent
   -> core reducer/CoreEffect or application parallel control plane/effect
   -> application use case / outbound port
   -> private bounded completion mailbox
-  -> NativeClientPort::poll_pending_client_event
+  -> NativeClientPort::run_host_cycle (drain inputs, then Core Tick and parallel tick)
   -> owning reducer
   -> snapshot/presentation event
   -> TUI projection
@@ -121,11 +121,34 @@ control-plane handle. The TUI dispatches only `NativeClientEvent` through the po
 and reads owned snapshots or projections; it cannot name the parallel completion ingress or call a
 raw driver/handle. UI-originated inputs remain synchronous so an adapter can bind an accepted
 admission before applying an immediate outcome. Core and parallel worker completions return through
-private mailboxes and re-enter their owning reducer through `poll_pending_client_event`.
+private mailboxes and re-enter their owning reducer through the runtime host cycle.
+
+`NativeClientRuntime::run_host_cycle(now, wait, max_inputs)` is the runtime host. One cycle waits up
+to `wait` for a Core input on the blocking mailbox, drains pending inputs, then feeds
+`CoreInput::Tick` and the parallel tick. The TUI frame loop runs it with zero wait after it reports
+its parallel view state (`ParallelViewChanged`); a headless host waits instead. The host, not an
+inbound adapter, owns the clock, the post-turn evaluation start (`EvaluateCompletedTurn`), route
+resolution, and the auto-follow submission (`SubmitAutoFollowTurn`). Architecture tests keep these
+host-only inputs out of `src/adapter/inbound`, and a headless test runs turn end, evaluation, and the
+follow-up turn with host cycles only.
+
+Core keeps conversation turn state per thread. Opening a conversation or a new draft changes only
+the shown thread: a session with a running turn, auto-follow, post-turn evaluation, stop, or steer
+moves to a background list, and the shown slot gets a fresh session that keeps the auto-follow
+settings and turn options. Inputs find their owning session by correlation. A background session
+finishes its turn, evaluation, and follow-up turn; reopening its thread brings it back. Only one
+conversation turn runs at a time across all threads. Auto-follow policy changes reach every session,
+and a stop request stops every provider session. The client receives no stream projection,
+evaluation start or settlement, auto-follow result, steer result, approval decision result, or
+worker-panel history from a thread it does not show; the shared planning-runtime projection still
+updates. Approval review persistence stays one shared serial queue. A load deferred by a session
+rename also keeps the left session; only a session waiting for stop settlement stays in the shown
+slot and is cancelled as before. The TUI still refuses to switch sessions while a turn runs, so this
+is not yet visible in the product (proposed: plan 18 K2-4).
 
 `CoreRuntime`, its effect executor, and its input mailbox are crate-private implementation details,
 not a library SDK. Only composition may assemble them. The production callable surface of
-`NativeClientRuntime` is closed to event dispatch, completion polling, and owned read-only
+`NativeClientRuntime` is closed to event dispatch, the host cycle, and owned read-only
 snapshots/projections. It exposes no raw runtime, runner, sender, service, mutable state reference,
 or borrowed projection. Rust-aware architecture tests pin both visibility boundaries and the exact
 facade method ledger, and mutation fixtures prove that reopening a raw type or adding a mutable
@@ -196,10 +219,10 @@ is admitted only for the latest confirmed completed terminal with no active turn
 applied evaluation, and no exact evaluation already in flight. Stale, wrong, and duplicate starts
 emit neither an event nor an effect. Core assigns a monotonic correlation over generation, thread,
 completed turn, turn workspace, and planning workspace; the effect and completion carry that same
-correlation. Only the active correlation may settle, so delayed or duplicate A→B→A completions
-cannot clear a newer lease; leaving the admitted conversation/turn lifecycle permanently prunes that
-lease even when no intermediate evaluation starts, and a conversation-switch intent cancels it
-immediately even if the load must be deferred. Core also checks the execution's outer identity,
+correlation. Only the active correlation of the owning thread session may settle, so delayed or
+duplicate A→B→A completions cannot clear a newer lease. Leaving the conversation keeps the lease in
+the background session instead of pruning it; a new turn in the same session still prunes the old
+lease. Core also checks the execution's outer identity,
 nested provenance, optional queue-mutation receipt, and output workspace. Composition converts
 malformed worker output into one correlated, redacted failure execution without mutating the shared
 continuation gate before Core admission. The continuation gate keeps shared lifecycle generation
@@ -303,9 +326,10 @@ setup generation, exact workspace correlation, identical-request coalescing, tar
 successful poll cursor, and stale/duplicate completion rules. A newer workspace setup invalidates
 the prior service, target, cursor, and in-flight poll, including A→B→A races. Composition performs
 branch discovery and service construction off the TUI thread and retains one service only for the
-exact accepted setup correlation; a poll cannot use another generation's service. The TUI owns the
-poll interval and `PendingFirstFrame` / `Discovering` / `Active` / `Disabled` / `SetupError`
-presentation only.
+exact accepted setup correlation; a poll cannot use another generation's service. Core schedules
+polls from the host `CoreInput::Tick`; the TUI owns `PendingFirstFrame` / `Discovering` / `Active` /
+`Disabled` / `SetupError` presentation only. The setup itself still starts after the first delivered
+frame (proposed: move it to the host in plan 18 K2-6).
 
 Parallel peek loads are core-correlated reads. Core assigns a monotonically increasing generation
 to the requested thread, lets the latest request supersede the previous one, and drops unmatched or
@@ -325,8 +349,12 @@ permit inputs from the current conversation authority rather than trusting a TUI
 route request is internal to `NativeClientRuntime`: composition checks the Core-owned stop/rearm
 gate, offers the exact prompt to the private parallel control-plane at most once, and re-enters Core
 with the same correlation and one typed `ParallelConsumed | AutoSubmit | NoContinuation`
-resolution. Only the final settled event reaches the TUI. A stale, duplicate, policy-superseded, or
-ABA route cannot submit an auto-follow prompt or revive parallel work. TUI conversation state does
+resolution. The host reads the auto-follow authority of the thread that awaits the route
+(`post_turn_route_runtime`), not the shown snapshot. For `AutoSubmit` the host submits the follow-up
+through `SubmitAutoFollowTurn`; Core builds the turn from the remembered turn options and planning
+handoff of that thread and reports `AutoFollowTurnSubmissionResolved`. Only the final settled event
+reaches the TUI, and only for the shown thread. A stale, duplicate, policy-superseded, or ABA route
+cannot submit an auto-follow prompt or revive parallel work. TUI conversation state does
 not retain a second planning-runtime copy or continuation gate. Disabling parallel routing settles
 a parallel-only evaluation, but preserves an exact in-flight evaluation when the independently
 configured single-session auto-follow budget can still consume its result.
