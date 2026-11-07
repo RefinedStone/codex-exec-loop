@@ -364,7 +364,7 @@ fn build_session_list_entry(
 
 // 보지 않는 thread 의 진행 표시이다 (plan 18 K2-4). 승인 대기가 가장 급하므로 먼저 보인다.
 fn thread_activity_label(activity: &crate::core::app::ThreadActivitySummary) -> &'static str {
-    if activity.approval_pending {
+    if activity.approval.is_some() {
         "approval needed"
     } else if activity.running {
         "running"
@@ -873,7 +873,8 @@ mod tests {
         let activity = crate::core::app::ThreadActivitySummary {
             thread_id: "thread-gamma".to_string(),
             running: true,
-            approval_pending: false,
+            active_turn_id: None,
+            approval: None,
             auto_follow_active: false,
         };
         let entry = build_session_list_entry(
@@ -882,7 +883,15 @@ mod tests {
         );
         assert_eq!(entry.lines[0].to_string(), "Gamma task  [running]");
         let waiting = crate::core::app::ThreadActivitySummary {
-            approval_pending: true,
+            approval: Some(crate::domain::conversation::ConversationApprovalRequest {
+                approval_id: "approval-1".to_string(),
+                server_request_id: "7".to_string(),
+                method: "item/commandExecution/requestApproval".to_string(),
+                kind:
+                    crate::domain::conversation::ConversationApprovalRequestKind::CommandExecution,
+                summary: "run tests".to_string(),
+                details: Vec::new(),
+            }),
             ..activity
         };
         assert_eq!(thread_activity_label(&waiting), "approval needed");

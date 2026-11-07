@@ -103,7 +103,10 @@ pub struct AutoFollowAuthoritySnapshot {
 pub struct ThreadActivitySummary {
     pub thread_id: String,
     pub running: bool,
-    pub approval_pending: bool,
+    // 진행 중 턴의 id 이다. 원격 클라이언트가 thread 를 지정해 steer 할 때 쓴다 (plan 18 K3-3a).
+    pub active_turn_id: Option<String>,
+    // 결정을 기다리는 승인 요청이다. 원격 클라이언트는 대화를 열지 않고 결정한다 (plan 18 K3-3a).
+    pub approval: Option<crate::domain::conversation::ConversationApprovalRequest>,
     pub auto_follow_active: bool,
 }
 

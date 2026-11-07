@@ -2,7 +2,8 @@
 
 ## 문서 상태
 
-- 상태: **Proposed execution plan**. 현재 제품 동작을 설명하지 않는다.
+- 상태: **Proposed execution plan**, K3-1·K3-2 완료. §3.2 는 2026-11-08 에 개정했다 (클라이언트별 보기 대신 thread 를
+  지정하는 명령). 현재 제품 동작을 설명하지 않는다.
 - 상위 계획: [18 Akra 커널 아키텍처](18-akra-kernel-architecture.md) §4.1, §4.4, §5.3~§5.6, §6 K3. 결정
   KP-03, KP-04, KP-06 (승인 2026-11-07). Q-K3, Q-K6 답 (2026-11-07).
 - 이전 단계: [K1](18-k1-headless-decision-loop.md), [K2](18-k2-thread-sessions.md) (완료 2026-11-08).
@@ -55,15 +56,25 @@
 - 클라이언트는 `KernelClientHandle` 로 붙는다: `send(command) -> Admission`, `query(query) -> Response`,
   이벤트 수신 채널. 비동기 Gateway 와는 채널로만 만난다. core 와 application 은 tokio 를 모른다.
 
-### 3.2 클라이언트 세션 (K2-5 를 여기서 한다)
+### 3.2 thread 를 지정하는 명령 (2026-11-08 개정)
 
-- 커널은 `ClientId` 마다 `ClientView` 를 둔다: 보는 thread, 대화 로드 절차, 조회 모델 슬롯(peek, review
-  center, queue, directions), 작업자 패널 기록, 수동 프롬프트 준비.
-- thread session 은 모두 같은 자격이다. "보는 자리"는 커널에서 없어지고, 클라이언트마다 보는 thread id 가
-  된다. K2-3 의 `background_sessions` 와 바꿔 넣기는 thread id 맵으로 바뀐다.
-- 이벤트는 대상이 붙어 나간다: `Thread(thread_id)`, `Client(client_id)`, `Kernel`. 호스트는 thread 이벤트를
-  그 thread 를 보는 클라이언트에게, 클라이언트 이벤트를 그 클라이언트에게, 커널 이벤트를 모두에게 보낸다.
-- 같은 프로세스의 TUI 는 `ClientId` 하나를 가진 클라이언트가 된다. 화면 동작은 지금과 같다.
+처음 설계는 클라이언트마다 보는 thread 와 조회 슬롯을 두는 것이었다 (K2-5 를 여기서). K3-2 뒤 조사에서 두 가지를
+확인해 바꿨다.
+
+- Desktop 은 대화 기록을 Gateway 를 거쳐 app-server 에서 직접 읽는다. 커널의 "보는 대화"(`ConversationSnapshot`,
+  스트림 투영)는 TUI 화면용이다. 원격 클라이언트에 필요한 것은 thread 요약, 자동 후속, 승인, planning 이다.
+- 그래서 원격 클라이언트는 보기를 바꾸지 않고 thread 나 승인 id 를 지정해서 명령한다.
+
+규칙:
+
+- 커널의 보는 자리는 같은 프로세스의 TUI 것으로 남는다. 원격 클라이언트는 이것을 바꾸는 명령(대화 열기, 새
+  초안)을 보내지 않는다. v0 프로토콜에서 이 두 명령을 뺀다.
+- 승인 결정은 승인 id 로, steer 는 thread id 로 그 thread 의 session 을 찾는다. 보지 않는 thread 의 결과도
+  처리한다. 결과는 thread 요약의 변화로 알린다.
+- thread 요약(`ThreadActivityChanged`)은 일이 남은 모든 thread(보는 thread 포함)를 담고, 진행 중 턴 id 와 기다리는
+  승인 요청을 함께 담는다.
+- 프롬프트 제출은 thread 를 지정한다. core 가 준비(planning 조각 붙이기)와 제출을 이어서 한다 (K3-3b).
+- 클라이언트별 보기(K2-5)는 TUI 가 원격 클라이언트가 되는 K6 으로 옮긴다.
 
 ### 3.3 응용 프로토콜 v0 (`akra/kernel/*`)
 
@@ -114,9 +125,10 @@ v0 명령은 화면 흐름 단계가 아니라 한 번에 끝나는 도메인 �
 | --- | --- | --- | --- |
 | K3-1 (완료 2026-11-08) | §3.3 프로토콜 v0 의 타입과 변환 (`src/adapter/inbound/kernel_protocol/`). 전송 없음. 명령 10개(세션 목록, 대화 열기, 새 초안, 이름 바꾸기, steer, 정지, 승인 결정, 자동 후속 최대 턴, 자동 후속 멈춤, planning 초기화), 조회 3개, 굵은 이벤트 4개(세션, 대화 실행 상태, thread 요약, 다시 맞추기). 설계와 다른 점: 프롬프트 제출은 core 가 준비 뒤 제출을 이어서 해야 하므로 K3-3 에서 더한다. 필드 없는 명령도 `{}` 로 둔다(serde 가 unit variant 의 모르는 필드를 거절하지 못한다) | 유지 | 직렬화 왕복 시험, 모든 v0 명령의 core 변환 시험, 확인 없는 초기화 거절, 모르는 명령·필드 거절, `describe` 내용 고정. 경계 테스트: 이 adapter 는 application·composition·outbound 를 모른다 |
 | K3-2 (완료 2026-11-08) | §3.1 `KernelHost`(`src/composition/kernel_host.rs`) 와 `KernelClientHandle`. 커널 스레드는 클라이언트 입력함을 비운 뒤 `run_host_cycle(now, 50ms, 64)` 을 돌리고 core 이벤트를 모든 클라이언트에 나눈다(대상별 분배는 K3-3). 클라이언트 채널은 1024 개 상한이고, 넘치면 `Resync` 를 보낸 뒤 이어서 보낸다. 조회는 스냅샷과 마지막 thread 요약을 준다. 알려진 한계: 클라이언트 명령은 커널 대기(최대 50ms)가 끝나야 처리된다. 운영 코드 연결은 K3-5 이다 | 유지 | 화면 없는 시험: 핸들로 명령을 보내고 조회하고, 턴 종료 → 평가 시작 → 자동 후속 제출 이벤트를 받고, 후속 턴이 실행된다. 느린 클라이언트는 커널을 막지 않고 `Resync` 를 받는다. 경계 테스트: 호스트는 tokio 와 inbound adapter 를 모른다 |
-| K3-3 | §3.2 클라이언트 세션과 대상이 붙은 이벤트. TUI 는 클라이언트 하나 | 유지 | 두 클라이언트가 다른 대화를 보고, 각자 자기 결과만 받는 core·호스트 시험 |
+| K3-3a (완료 2026-11-08) | §3.2 승인 결정은 승인 id 로, steer 는 thread id 로 주인 session 을 찾는다. thread 요약에 보는 thread, 진행 중 턴 id, 기다리는 승인을 넣는다. v0 에서 대화 열기·새 초안을 뺀다 | 유지 (TUI 의 세션 목록 표시는 보는 thread 에도 붙는다) | core 시험: 보지 않는 thread 의 승인을 결정하고 steer 한다 |
+| K3-3b | §3.2 thread 를 지정한 프롬프트 제출. core 가 준비 뒤 제출을 이어서 한다. 프로토콜 `submit_prompt` | 확장 | core·호스트 시험: 클라이언트가 보지 않는 thread 에 프롬프트를 보내고 턴이 실행된다 |
 | K3-4 | §3.4 작업 공간 잠금과 작업 공간당 커널 | 바뀜: 같은 작업 공간에 커널 둘이 안 돈다 | 잠금 경합 시험, TUI 시작 시 거절 메시지 |
-| K3-5 | Gateway 가 `akra/kernel/*` 를 커널 호스트에 연결 | 확장 | Gateway 시험: attach → command → event, 접속 끊김 → detach |
+| K3-5 | Gateway 가 `akra/kernel/*` 를 커널 호스트에 연결. 먼저 app-server 공유를 확인한다 (Q-K3-6) | 확장 | Gateway 시험: attach → command → event, 접속 끊김 → detach |
 | K3-6 | Desktop 이 `akra/kernel/*` 로 세션 활동과 자동 후속 상태를 보인다 | 확장 | Desktop 시험, 숨긴 창 텍스트 캡처 |
 
 규모: plan 18 추정 5~10일을 유지한다. K3-3 이 가장 크다 (K2-3 의 보는 자리 구조를 클라이언트별로 바꾼다).
@@ -140,3 +152,4 @@ v0 명령은 화면 흐름 단계가 아니라 한 번에 끝나는 도메인 �
 | Q-K3-3 | K3 동안 TUI 는 어떻게 하는가 | 자기 프로세스 커널을 유지하고 작업 공간 잠금을 함께 쓴다. 데몬 커널에 붙는 일은 K6 |
 | Q-K3-4 | 커널 단위 | 작업 공간당 하나 |
 | Q-K3-5 | 이벤트 전달 | K3 는 접속 중 실시간 알림만. 영구 기록과 커서는 K5 |
+| Q-K3-6 | 데몬 커널이 실행한 턴을 Desktop 이 실시간으로 보려면, 커널과 Desktop 이 같은 app-server 를 써야 한다. 지금 커널은 자기 stdio app-server 를, Desktop 은 Gateway upstream app-server 를 쓴다 | K3-5 전에 확인한다: 커널을 Gateway upstream 에 `app-server proxy` 연결로 붙였을 때 다른 연결이 그 thread 의 알림을 받는지. 받지 못하면 Desktop 은 커널 이벤트(thread 요약)로 상태만 보이고, 기록은 턴이 끝난 뒤 다시 읽는다 |

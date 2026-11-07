@@ -4,10 +4,6 @@ use serde_json::{Value, json};
 fn sample_commands() -> Vec<KernelCommand> {
     vec![
         KernelCommand::LoadSessions {},
-        KernelCommand::OpenConversation {
-            thread_id: "thread-1".to_string(),
-        },
-        KernelCommand::NewDraft {},
         KernelCommand::RenameSession {
             thread_id: "thread-1".to_string(),
             name: "Renamed".to_string(),
@@ -59,14 +55,17 @@ fn every_command_maps_to_one_core_command() {
         );
     }
     assert_eq!(
-        KernelCommand::OpenConversation {
-            thread_id: "thread-1".to_string()
+        KernelCommand::SteerTurn {
+            thread_id: "thread-1".to_string(),
+            expected_turn_id: "turn-1".to_string(),
+            prompt: "focus".to_string(),
         }
         .into_core("/workspace"),
-        Ok(AppCommand::LoadConversation {
+        Ok(AppCommand::SteerTurn(ConversationTurnSteerRequest {
             thread_id: "thread-1".to_string(),
-            fallback_workspace_directory: "/workspace".to_string(),
-        })
+            expected_turn_id: "turn-1".to_string(),
+            prompt: "focus".to_string(),
+        }))
     );
     assert_eq!(
         KernelCommand::PauseAutoFollow {}.into_core("/workspace"),
@@ -86,13 +85,21 @@ fn reset_requires_confirmation_and_blank_ids_are_rejected() {
         Err(ERROR_CONFIRMATION_REQUIRED)
     );
     assert_eq!(
-        KernelCommand::OpenConversation {
-            thread_id: "  ".to_string()
+        KernelCommand::RenameSession {
+            thread_id: "  ".to_string(),
+            name: "Renamed".to_string(),
         }
         .into_core("/workspace")
         .map_err(|error| error.code),
         Err(ERROR_INVALID_PARAMS)
     );
+    // plan 18 K3-3a: remote clients address threads; they cannot move the shown slot.
+    for shown_slot_command in ["open_conversation", "new_draft"] {
+        assert!(
+            serde_json::from_value::<KernelCommand>(json!({"type": shown_slot_command})).is_err(),
+            "{shown_slot_command} is not part of the remote protocol"
+        );
+    }
 }
 
 #[test]
@@ -120,7 +127,8 @@ fn only_coarse_core_events_are_exported() {
     let activity = ThreadActivitySummary {
         thread_id: "thread-1".to_string(),
         running: true,
-        approval_pending: false,
+        active_turn_id: None,
+        approval: None,
         auto_follow_active: false,
     };
     assert_eq!(
@@ -129,7 +137,8 @@ fn only_coarse_core_events_are_exported() {
             threads: vec![ThreadActivity {
                 thread_id: "thread-1".to_string(),
                 running: true,
-                approval_pending: false,
+                active_turn_id: None,
+                approval: None,
                 auto_follow_active: false,
             }],
         })

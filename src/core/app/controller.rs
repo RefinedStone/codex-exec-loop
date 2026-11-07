@@ -1778,6 +1778,16 @@ impl Default for CoreController {
 
 #[cfg(test)]
 mod tests {
+
+    /// plan 18 K3-3a: thread summaries now follow every busy thread, so exact event sequences
+    /// about one turn compare without them.
+    fn without_thread_activity(events: &[AppEvent]) -> Vec<AppEvent> {
+        events
+            .iter()
+            .filter(|event| !matches!(event, AppEvent::ThreadActivityChanged(_)))
+            .cloned()
+            .collect()
+    }
     use super::*;
     use crate::application::service::planning::PlanningRuntimeProjection;
     use crate::core::app::{
@@ -5175,7 +5185,7 @@ mod tests {
             Box::new(test_turn_submission_request(Some("thread-1"))),
         )));
         assert!(matches!(
-            next_submit.events.as_slice(),
+            without_thread_activity(&next_submit.events).as_slice(),
             [
                 AppEvent::ConversationRuntimeAuthorityChanged(_),
                 AppEvent::TurnSubmissionAdmissionResolved(TurnSubmissionAdmission::Accepted {
@@ -6397,7 +6407,7 @@ mod tests {
         ));
 
         assert!(matches!(
-            outcome.events.as_slice(),
+            without_thread_activity(&outcome.events).as_slice(),
             [
                 AppEvent::ConversationRuntimeAuthorityChanged(runtime),
                 AppEvent::TurnStreamSnapshotChanged(snapshot),
@@ -7462,13 +7472,14 @@ mod tests {
         assert!(outcome.snapshot.revision > 0);
         assert!(outcome.snapshot.conversation_runtime.active_turn.is_none());
         // 턴 종료 뒤 평가는 호스트가 시작한다 (plan 18 K1-4). core 는 기다리는 턴을 알린다.
+        let turn_events = without_thread_activity(&outcome.events);
         let [
             AppEvent::ConversationRuntimeAuthorityChanged(runtime),
             AppEvent::TurnStreamSnapshotChanged(snapshot),
             AppEvent::PostTurnEvaluationDue {
                 planning_workspace_directory,
             },
-        ] = outcome.events.as_slice()
+        ] = turn_events.as_slice()
         else {
             panic!(
                 "typed completion should publish authority, one stream snapshot, and the due evaluation"
@@ -9400,24 +9411,116 @@ mod tests {
     }
 
     #[test]
+    fn a_remote_client_decides_and_steers_a_thread_it_does_not_show() {
+        // plan 18 K3-3a: approval decisions find their thread by approval id, steering by thread id.
+        let mut controller = CoreController::new();
+        let turn = start_test_turn(&mut controller, "thread-1", "turn-1");
+        request_test_approval(&mut controller, turn, "approval-1");
+        let leave =
+            controller.handle_input(CoreInput::Command(AppCommand::InvalidateConversationLoad));
+        assert_eq!(controller.conversation_turn.background_session_count(), 1);
+        assert!(
+            !leave
+                .events
+                .iter()
+                .any(|event| matches!(event, AppEvent::ThreadActivityChanged(_))),
+            "the summary already named the thread, its turn, and its approval"
+        );
+
+        let decided =
+            controller.handle_input(CoreInput::Command(AppCommand::SubmitApprovalDecision {
+                request_identity: approval_identity("approval-1"),
+                decision: ConversationApprovalDecision::Accept,
+            }));
+        assert!(
+            matches!(
+                decided.effects.as_slice(),
+                [CoreEffect::SubmitApprovalDecision { .. }]
+            ),
+            "the background approval is decided without opening the thread: {:?}",
+            decided.events
+        );
+
+        let steered = controller.handle_input(CoreInput::Command(AppCommand::SteerTurn(
+            ConversationTurnSteerRequest {
+                thread_id: "thread-1".to_string(),
+                expected_turn_id: "turn-1".to_string(),
+                prompt: "focus on the failing test".to_string(),
+            },
+        )));
+        assert!(
+            matches!(steered.effects.as_slice(), [CoreEffect::SteerTurn { .. }]),
+            "the background turn is steered by thread id: {:?}",
+            steered.events
+        );
+        let unknown = controller.handle_input(CoreInput::Command(AppCommand::SteerTurn(
+            ConversationTurnSteerRequest {
+                thread_id: "thread-9".to_string(),
+                expected_turn_id: "turn-1".to_string(),
+                prompt: "focus".to_string(),
+            },
+        )));
+        assert!(unknown.effects.is_empty(), "an unknown thread is refused");
+    }
+
+    #[test]
+    fn thread_activity_names_the_running_turn_and_its_pending_approval() {
+        let mut controller = CoreController::new();
+        let turn = start_test_turn(&mut controller, "thread-1", "turn-1");
+        let requested = controller.handle_input(test_turn_stream_input(
+            turn,
+            TurnStreamEvent::ApprovalRequested {
+                request: ConversationApprovalRequest {
+                    approval_id: "approval-1".to_string(),
+                    server_request_id: "server-approval-1".to_string(),
+                    method: "item/commandExecution/requestApproval".to_string(),
+                    kind: ConversationApprovalRequestKind::CommandExecution,
+                    summary: "Command execution requested.".to_string(),
+                    details: Vec::new(),
+                },
+            },
+        ));
+        let activity = requested
+            .events
+            .iter()
+            .find_map(|event| match event {
+                AppEvent::ThreadActivityChanged(activity) => Some(activity.clone()),
+                _ => None,
+            })
+            .expect("the approval changes the summary");
+        assert!(matches!(
+            activity.as_slice(),
+            [super::super::ThreadActivitySummary {
+                thread_id,
+                running: true,
+                active_turn_id: Some(turn_id),
+                approval: Some(request),
+                ..
+            }] if thread_id == "thread-1" && turn_id == "turn-1" && request.approval_id == "approval-1"
+        ));
+    }
+
+    #[test]
     fn running_turn_survives_opening_another_conversation_and_resumes_on_return() {
         // plan 18 K2-3: opening a conversation changes only the shown thread.
         let mut controller = CoreController::new();
         let turn = start_test_turn(&mut controller, "thread-1", "turn-1");
+        // plan 18 K3-3a: the running thread was published while shown, so leaving it changes nothing
+        // in the thread summary.
+        assert_eq!(
+            controller.conversation_turn.take_thread_activity_change(),
+            None
+        );
         let leave = controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
             thread_id: "thread-2".to_string(),
             fallback_workspace_directory: "/tmp/workspace".to_string(),
         }));
         assert!(
-            leave.events.contains(&AppEvent::ThreadActivityChanged(vec![
-                super::super::ThreadActivitySummary {
-                    thread_id: "thread-1".to_string(),
-                    running: true,
-                    approval_pending: false,
-                    auto_follow_active: false,
-                }
-            ])),
-            "the session list learns that the left thread still runs"
+            !leave
+                .events
+                .iter()
+                .any(|event| matches!(event, AppEvent::ThreadActivityChanged(_))),
+            "leaving a running thread does not change its summary"
         );
         controller.handle_input(CoreInput::EffectCompleted(
             CoreEffectCompletion::ConversationLoaded {
