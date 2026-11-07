@@ -1421,22 +1421,39 @@ mod tests {
         let outcomes = runtime.drain_pending_inputs(8);
 
         assert_eq!(outcomes.len(), 1);
+        // 시작 점검 Ready 뒤에 core 가 세션 목록 첫 페이지 로드를 이어서 시작한다 (plan 18 K1-3).
         assert_eq!(
-            outcomes[0].events,
-            vec![AppEvent::StartupChanged {
+            outcomes[0].events.first(),
+            Some(&AppEvent::StartupChanged {
                 correlation: StartupCheckCorrelation::new(1, "/tmp/workspace"),
                 snapshot: StartupSnapshot::Ready(Box::new(ready.clone())),
-            }]
+            })
+        );
+        assert!(
+            outcomes[0]
+                .events
+                .iter()
+                .any(|event| matches!(event, AppEvent::SessionCatalogChanged(_))),
+            "{:?}",
+            outcomes[0].events
         );
         assert_eq!(
             runtime.snapshot().startup,
             StartupSnapshot::Ready(Box::new(ready))
         );
+        let recorded = effects.recorded_effects();
         assert_eq!(
-            effects.recorded_effects(),
-            vec![CoreEffect::RunStartupChecks {
+            recorded.first(),
+            Some(&CoreEffect::RunStartupChecks {
                 correlation: StartupCheckCorrelation::new(1, "/tmp/workspace"),
-            }]
+            })
+        );
+        assert!(
+            matches!(
+                recorded.as_slice(),
+                [_, CoreEffect::LoadSessionCatalog { .. }]
+            ),
+            "{recorded:?}"
         );
     }
 
