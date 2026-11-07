@@ -130,7 +130,9 @@ pub(super) fn build_session_overlay_content(
                         items: browser
                             .visible_sessions
                             .iter()
-                            .map(build_session_list_entry)
+                            .map(|session| {
+                                build_session_list_entry(session, model.activity_for(&session.id))
+                            })
                             .collect(),
                         selected_index: None,
                     },
@@ -154,6 +156,12 @@ pub(super) fn build_session_overlay_content(
                 )),
                 Line::from(format!("status: {}", selected_session.status_type)),
             ];
+            if let Some(activity) = model.activity_for(&selected_session.id) {
+                lines.push(Line::from(format!(
+                    "activity: {} (in the background)",
+                    thread_activity_label(activity)
+                )));
+            }
             if let Some(rename_editor) = model.rename_editor.as_ref()
                 && rename_editor.thread_id == selected_session.id
             {
@@ -189,7 +197,9 @@ pub(super) fn build_session_overlay_content(
                     items: browser
                         .visible_sessions
                         .iter()
-                        .map(build_session_list_entry)
+                        .map(|session| {
+                            build_session_list_entry(session, model.activity_for(&session.id))
+                        })
                         .collect(),
                     selected_index: browser.selected_index,
                 },
@@ -331,10 +341,17 @@ pub(super) fn build_session_warning_lines(model: &SessionOverlayScreenModel) -> 
     }
 }
 
-fn build_session_list_entry(session: &SessionSummary) -> OverlayListEntryView {
+fn build_session_list_entry(
+    session: &SessionSummary,
+    activity: Option<&crate::core::app::ThreadActivitySummary>,
+) -> OverlayListEntryView {
+    let title = match activity {
+        Some(activity) => format!("{}  [{}]", session.title(), thread_activity_label(activity)),
+        None => session.title().to_string(),
+    };
     OverlayListEntryView {
         lines: vec![
-            Line::from(session.title()),
+            Line::from(title),
             Line::from(format!(
                 "{}  {}  {}",
                 session.updated_at_label(),
@@ -342,6 +359,19 @@ fn build_session_list_entry(session: &SessionSummary) -> OverlayListEntryView {
                 session.short_id(),
             )),
         ],
+    }
+}
+
+// 보지 않는 thread 의 진행 표시이다 (plan 18 K2-4). 승인 대기가 가장 급하므로 먼저 보인다.
+fn thread_activity_label(activity: &crate::core::app::ThreadActivitySummary) -> &'static str {
+    if activity.approval_pending {
+        "approval needed"
+    } else if activity.running {
+        "running"
+    } else if activity.auto_follow_active {
+        "auto-follow"
+    } else {
+        "busy"
     }
 }
 
@@ -836,13 +866,32 @@ mod tests {
             "browser: no matches in /tmp/docs across 2 recent sessions"
         );
 
-        let entry = build_session_list_entry(&session("thread-gamma", "Gamma task", "/tmp/root"));
+        let entry =
+            build_session_list_entry(&session("thread-gamma", "Gamma task", "/tmp/root"), None);
         assert_eq!(entry.lines[0].to_string(), "Gamma task");
+        // plan 18 K2-4: a background thread shows its activity; approval comes first.
+        let activity = crate::core::app::ThreadActivitySummary {
+            thread_id: "thread-gamma".to_string(),
+            running: true,
+            approval_pending: false,
+            auto_follow_active: false,
+        };
+        let entry = build_session_list_entry(
+            &session("thread-gamma", "Gamma task", "/tmp/root"),
+            Some(&activity),
+        );
+        assert_eq!(entry.lines[0].to_string(), "Gamma task  [running]");
+        let waiting = crate::core::app::ThreadActivitySummary {
+            approval_pending: true,
+            ..activity
+        };
+        assert_eq!(thread_activity_label(&waiting), "approval needed");
         assert!(entry.lines[1].to_string().contains("thread-g"));
         assert!(!entry.lines[1].to_string().contains("native"));
 
         let long_title = "매우 긴 한국어 세션 제목 ".repeat(8);
-        let entry = build_session_list_entry(&session("thread-korean", &long_title, "/tmp/root"));
+        let entry =
+            build_session_list_entry(&session("thread-korean", &long_title, "/tmp/root"), None);
         assert_eq!(entry.lines[0].to_string(), long_title);
         assert_eq!(plural_suffix(1), "");
         assert_eq!(plural_suffix(2), "s");

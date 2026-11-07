@@ -132,8 +132,11 @@ provider session을 멈춥니다. 보지 않는 thread의 stream projection, 평
 steer 결과, approval decision 결과, worker panel 기록은 client에 보내지 않습니다. 공유
 planning-runtime projection은 계속 갱신합니다. Approval review persistence는 하나의 공유 직렬 queue로
 남습니다. Session rename 때문에 미뤄진 load도 떠난 session을 유지하며, stop settlement를 기다리는
-session만 보는 자리에 남아 이전처럼 취소됩니다. TUI는 아직 turn 실행 중 session 전환을 막으므로
-제품 화면에서는 이 동작이 보이지 않습니다 (제안: plan 18 K2-4).
+session만 보는 자리에 남아 이전처럼 취소됩니다. TUI는 turn 실행 중에도 다른 session이나 새 draft를
+열 수 있습니다. Core는 일이 남은 background thread의 요약(실행 중, approval 대기, auto-follow)을
+`ThreadActivityChanged`로 알리고, session 목록은 그 thread에 표시를 붙입니다. Approval 요청은 그
+thread를 다시 열어 결정하며, 결정하지 않으면 이전처럼 기한이 지나 거절됩니다. Thread를 다시 열면 live
+runtime 상태가 보이고 transcript는 provider에서 다시 읽습니다.
 
 `CoreRuntime`, effect executor, input mailbox는 library SDK가 아닌 crate-private 구현 세부사항입니다.
 Composition만 이들을 조립할 수 있습니다. Production `NativeClientRuntime` callable surface는 event

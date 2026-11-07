@@ -1742,6 +1742,7 @@ impl NativeTuiApp {
                 turn_options: initial_turn_options,
                 conversation_view_mode: super::ConversationViewMode::default(),
                 auto_follow_overlay_ui_state: AutoFollowOverlayUiState::default(),
+                thread_activity: Vec::new(),
             },
             planning: super::NativeTuiPlanningState {
                 planning_ui_intent_revision: 0,
@@ -2238,6 +2239,9 @@ impl NativeTuiApp {
             AppEvent::ManualPromptPrepared(result) => {
                 self.apply_manual_prompt_preparation(*result);
             }
+            AppEvent::ThreadActivityChanged(activity) => {
+                self.conversation.thread_activity = activity;
+            }
             AppEvent::PostTurnEvaluationStarted(state) => {
                 self.planning
                     .planning_worker_panel_state
@@ -2517,6 +2521,9 @@ impl NativeTuiApp {
                 | ConversationLifecycleEvent::SessionChosen { .. }
         );
         if changes_conversation_identity {
+            // 떠난 대화의 steer 결과는 Core 가 이 화면에 보내지 않는다 (plan 18 K2-3, K2-4).
+            self.conversation.turn_steer_confirmation = None;
+            self.conversation.pending_turn_steer = None;
             self.cancel_manual_prompt_preparation_for_identity_transition();
             self.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::EditFinished);
         }

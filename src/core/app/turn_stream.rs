@@ -115,6 +115,10 @@ impl TurnStreamState {
         self.last_applied_post_turn_evaluation_id = None;
     }
 
+    pub fn thread_id(&self) -> Option<&str> {
+        self.thread_id.as_deref()
+    }
+
     pub fn matches_thread(&self, thread_id: &str) -> bool {
         self.thread_id.as_deref() == Some(thread_id)
     }

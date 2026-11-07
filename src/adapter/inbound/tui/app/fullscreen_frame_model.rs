@@ -113,6 +113,7 @@ fn capture_session_overlay_screen_model(app: &NativeTuiApp) -> SessionOverlayScr
         &app.shell.chrome.session_state,
         &app.shell.session_overlay_ui_state,
         app.shell.chrome.selected_session_index,
+        &app.conversation.thread_activity,
     )
 }
 

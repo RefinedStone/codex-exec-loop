@@ -76,36 +76,13 @@ pub(super) fn reduce_conversation_intents(
     let mut effects = Vec::new();
 
     match event {
+        // 대화를 여는 일은 보는 thread 만 바꾼다 (plan 18 K2-4, KP-03). 실행 중인 turn, 자동 후속, 평가는
+        // Core 가 뒤에서 끝까지 처리하므로 막지 않는다.
         ConversationIntentEvent::NewDraftRequested => {
-            // 새 draft는 current turn의 stream과 post-turn action을 버릴 수 있어 running 중에는 막는다.
-            if state.has_running_turn {
-                effects.push(ConversationIntentEffect::ShowStatus {
-                    status_text:
-                        "turn still running; wait for completion before starting a new draft"
-                            .to_string(),
-                });
-            } else if state.blocks_navigation {
-                effects.push(ConversationIntentEffect::ShowStatus {
-                    status_text: "conversation is busy; wait before starting a new draft"
-                        .to_string(),
-                });
-            } else {
-                effects.push(ConversationIntentEffect::OpenNewDraft);
-            }
+            effects.push(ConversationIntentEffect::OpenNewDraft);
         }
         ConversationIntentEvent::SessionOpenRequested { session } => {
-            // Session switch도 current turn을 잃게 만드는 navigation이다. 선택 없음은 no-op다.
-            if state.has_running_turn {
-                effects.push(ConversationIntentEffect::ShowStatus {
-                    status_text:
-                        "turn still running; wait for completion before switching sessions"
-                            .to_string(),
-                });
-            } else if state.blocks_navigation {
-                effects.push(ConversationIntentEffect::ShowStatus {
-                    status_text: "conversation is busy; wait before switching sessions".to_string(),
-                });
-            } else if let Some(session) = session {
+            if let Some(session) = session {
                 effects.push(ConversationIntentEffect::OpenSession { session: *session });
             }
         }
@@ -144,8 +121,8 @@ mod tests {
     use crate::domain::conversation::ConversationControlSupport;
 
     #[test]
-    fn new_draft_requested_while_running_turn_only_shows_status() {
-        // Running turn guard는 새 draft navigation보다 우선해 shell controller가 draft effect를 받지 않는다.
+    fn new_draft_requested_while_running_turn_opens_the_draft() {
+        // plan 18 K2-4: the running turn continues in the background, so a new draft opens.
         let reduced = reduce_conversation_intents(
             ConversationIntentState {
                 has_running_turn: true,
@@ -156,12 +133,9 @@ mod tests {
             ConversationIntentEvent::NewDraftRequested,
         );
 
-        assert_eq!(reduced.effects.len(), 1);
         assert!(matches!(
-            reduced.effects.first(),
-            Some(ConversationIntentEffect::ShowStatus { status_text })
-                if status_text
-                    == "turn still running; wait for completion before starting a new draft"
+            reduced.effects.as_slice(),
+            [ConversationIntentEffect::OpenNewDraft]
         ));
     }
 
@@ -241,7 +215,8 @@ mod tests {
     }
 
     #[test]
-    fn finalizing_handoff_blocks_navigation_without_claiming_a_turn_is_running() {
+    fn busy_conversation_still_opens_another_session() {
+        // plan 18 K2-4: evaluation and auto-follow finish in the background.
         let reduced = reduce_conversation_intents(
             ConversationIntentState {
                 has_running_turn: false,
@@ -267,9 +242,7 @@ mod tests {
 
         assert!(matches!(
             reduced.effects.as_slice(),
-            [ConversationIntentEffect::ShowStatus { status_text }]
-                if status_text
-                    == "conversation is busy; wait before switching sessions"
+            [ConversationIntentEffect::OpenSession { session }] if session.id == "thread-2"
         ));
     }
 }

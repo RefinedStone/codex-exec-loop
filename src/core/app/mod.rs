@@ -52,7 +52,7 @@ pub use conversation_preferences::{
 pub use conversation_runtime::{
     ActiveTurnPhase, ActiveTurnSnapshot, ApprovalAuthorityPhase, ApprovalAuthoritySnapshot,
     AutoFollowAuthoritySnapshot, AutoFollowPhase, ConversationRuntimeSnapshot,
-    PostTurnAuthoritySnapshot, PostTurnRouteResolution,
+    PostTurnAuthoritySnapshot, PostTurnRouteResolution, ThreadActivitySummary,
 };
 pub use directions::{
     DirectionsMaintenanceDirectionSnapshot, DirectionsMaintenanceSummarySnapshot,

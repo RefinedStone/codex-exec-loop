@@ -143,8 +143,11 @@ evaluation start or settlement, auto-follow result, steer result, approval decis
 worker-panel history from a thread it does not show; the shared planning-runtime projection still
 updates. Approval review persistence stays one shared serial queue. A load deferred by a session
 rename also keeps the left session; only a session waiting for stop settlement stays in the shown
-slot and is cancelled as before. The TUI still refuses to switch sessions while a turn runs, so this
-is not yet visible in the product (proposed: plan 18 K2-4).
+slot and is cancelled as before. The TUI lets the user open another session or a new draft while a
+turn runs. Core publishes `ThreadActivityChanged` with a summary of busy background threads (running,
+approval pending, auto-follow), and the session list marks those threads. An approval request is
+decided after reopening its thread; an undecided one still expires as before. Reopening a thread
+shows its live runtime state; its transcript is reloaded from the provider.
 
 `CoreRuntime`, its effect executor, and its input mailbox are crate-private implementation details,
 not a library SDK. Only composition may assemble them. The production callable surface of

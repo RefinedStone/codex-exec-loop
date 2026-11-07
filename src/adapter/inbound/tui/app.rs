@@ -4,7 +4,9 @@ use crate::adapter::inbound::tui::shell_chrome::{
     ShellOverlayTransition, StartupState, reduce_shell_chrome,
 };
 use crate::adapter::inbound::tui::supersession_mud::SupersessionMudUiState;
-use crate::core::app::{PlanningRuntimeRefreshCorrelation, TurnSteerCorrelation};
+use crate::core::app::{
+    PlanningRuntimeRefreshCorrelation, ThreadActivitySummary, TurnSteerCorrelation,
+};
 use crate::core::native_client_port::NativeClientPort;
 use crate::domain::conversation::{
     ConversationMessage, ConversationMessageKind, ConversationReasoningEffort,
@@ -378,6 +380,8 @@ struct NativeTuiConversationState {
     turn_options: ConversationTurnOptions,
     conversation_view_mode: ConversationViewMode,
     auto_follow_overlay_ui_state: AutoFollowOverlayUiState,
+    // Core 가 알린, 보지 않는 thread 중 일이 남은 것의 요약이다 (plan 18 K2-4).
+    thread_activity: Vec<ThreadActivitySummary>,
 }
 
 struct NativeTuiPlanningState {
