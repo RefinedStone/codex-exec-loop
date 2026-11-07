@@ -4459,12 +4459,13 @@ mod tests {
             thread::sleep(Duration::from_millis(5));
         };
         match mode {
+            // Ready 뒤에는 core 가 세션 목록 로드를 이어서 시작한다 (plan 18 K1-3).
             "maintenance" => assert!(matches!(
                 completion.events.as_slice(),
                 [AppEvent::StartupChanged {
                     snapshot: StartupSnapshot::Ready(ready),
                     ..
-                }] if ready.warnings == [
+                }, ..] if ready.warnings == [
                     "app-server prompt-log privacy maintenance panicked; startup continued"
                 ]
             )),
@@ -4481,7 +4482,13 @@ mod tests {
         let quiet_deadline = Instant::now() + Duration::from_millis(100);
         let mut received_completion_inputs = 1;
         while Instant::now() < quiet_deadline {
-            if runtime.poll_pending_input().is_some() {
+            // 세션 목록 로드 완료는 세지 않는다. 시작 점검 완료만 정확히 한 번이어야 한다.
+            if runtime.poll_pending_input().is_some_and(|outcome| {
+                outcome
+                    .events
+                    .iter()
+                    .any(|event| matches!(event, AppEvent::StartupChanged { .. }))
+            }) {
                 received_completion_inputs += 1;
             }
             thread::sleep(Duration::from_millis(5));
