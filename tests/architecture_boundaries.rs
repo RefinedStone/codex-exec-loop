@@ -2897,15 +2897,17 @@ fn parallel_post_turn_continuation_reuses_the_accepted_runtime_projection() {
         .filter(|character| !character.is_whitespace())
         .collect::<String>();
     assert!(
-        compact_route.contains(
-            "exact_single_post_turn_routing_request(core_outcome.snapshot.as_ref(),&routing_requests"
-        ) && compact_route.contains(
-            "route_parallel_post_turn_for_exact_single(core_outcome.snapshot.as_ref(),&routing_requests"
-        ) && compact_route.contains(
-            "request.execution.evaluation.runtime_projection.has_actionable_queue_head()"
-        ) && compact_exact_route.contains("let[request]=routing_requestselse{returnNone;}")
+        compact_route
+            .contains("exact_single_post_turn_routing_request(&route_runtime,&routing_requests")
+            && compact_route.contains(
+                "route_parallel_post_turn_for_exact_single(&route_runtime,&routing_requests"
+            )
+            && compact_route.contains(
+                "request.execution.evaluation.runtime_projection.has_actionable_queue_head()"
+            )
+            && compact_exact_route.contains("let[request]=routing_requestselse{returnNone;}")
             && compact_exact_route.contains(
-                "pending_post_turn_route_correlation(snapshot)==Some(&request.correlation)"
+                "pending_post_turn_route_correlation(runtime)==Some(&request.correlation)"
             ),
         "NativeClientRuntime must route only the exact Core AwaitingRoute correlation and reuse its accepted queue-head projection"
     );
@@ -3523,6 +3525,10 @@ fn core_conversation_turn_feature_reducer_owns_one_correlated_lifecycle_slice() 
         "next_stop_request_generation",
         "next_turn_steer_generation",
         "next_approval_decision_generation",
+        // plan 18 K2-3: busy sessions the client left, and the one serial review persistence queue.
+        "background_sessions",
+        "serving_background",
+        "approval_review_persistence",
     ];
     let thread_session_fields = [
         "turn_stream_state",
@@ -3532,7 +3538,6 @@ fn core_conversation_turn_feature_reducer_owns_one_correlated_lifecycle_slice() 
         "in_flight_post_turn_evaluation",
         "active_stop_request",
         "active_turn_steer",
-        "approval_review_persistence",
         // plan 18 K1-4: evaluation inputs and the completed turn awaiting the host.
         "post_turn_messages",
         "pending_post_turn_evaluation",
@@ -11619,16 +11624,27 @@ fn tui_post_turn_execution_uses_planning_post_turn_facade() {
         "planning reducer start-state policy must derive history from its own seed, never the inbound request field"
     );
 
+    // plan 18 K2-3: both admission paths (host-started due evaluation and the explicit command)
+    // share one started-outcome builder.
     let handle_input_inner = top_level_impl_method_source(&core_controller, "handle_input_inner");
     let compact_handle_input = handle_input_inner
         .chars()
         .filter(|character| !character.is_whitespace())
         .collect::<String>();
+    let started_outcome =
+        top_level_impl_method_source(&core_controller, "post_turn_evaluation_started_outcome");
+    let compact_started_outcome = started_outcome
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
     assert!(
         compact_handle_input
-            .contains("self.planning.begin_post_turn_worker_panel(request.as_ref())")
-            && compact_handle_input.contains("request.as_ref()")
-            && compact_handle_input.contains(
+            .matches("self.post_turn_evaluation_started_outcome(correlation,")
+            .count()
+            == 2
+            && compact_started_outcome
+                .contains("self.planning.begin_post_turn_worker_panel(request.as_ref())")
+            && compact_started_outcome.contains(
                 "request.planning_worker_panel_state=planning_worker_panel_state.clone()"
             ),
         "Core admission must overwrite the effect request with the state derived from Core history"
@@ -11643,8 +11659,11 @@ fn tui_post_turn_execution_uses_planning_post_turn_facade() {
         accepted_reducer_settlement < history_seed_commit,
         "Core history may change only after the feature reducer accepts exact settlement"
     );
-    let post_turn_settlement =
-        top_level_impl_method_source(&conversation_turn_reducer, "complete_post_turn_evaluation");
+    // plan 18 K2-3: the public method finds the owning session; the in-session method gates.
+    let post_turn_settlement = top_level_impl_method_source(
+        &conversation_turn_reducer,
+        "complete_post_turn_evaluation_in_session",
+    );
     let compact_post_turn_settlement = post_turn_settlement
         .chars()
         .filter(|character| !character.is_whitespace())
@@ -11776,8 +11795,9 @@ fn post_turn_evaluation_uses_one_core_owned_exact_correlation() {
         "ConversationTurnFeatureReducer must bind exact post-turn correlation and worker authority in one lifecycle-pruned active lease"
     );
     for behavior_test in [
-        "fn post_turn_completion_requires_latest_exact_correlation_once_across_aba()",
-        "fn lifecycle_only_aba_prunes_the_old_post_turn_lease_before_completion()",
+        // plan 18 K2-3: completions reach their own (possibly background) session.
+        "fn post_turn_completions_reach_their_own_sessions_once_across_aba()",
+        "fn left_conversation_keeps_its_post_turn_lease_across_aba()",
         "fn deferred_conversation_load_cancels_active_post_turn_authority_immediately()",
         "fn forged_post_turn_payload_cannot_settle_the_exact_lease()",
         "fn post_turn_evaluation_generation_exhaustion_fails_before_admission()",
@@ -14086,6 +14106,8 @@ fn verify_client_runtime_api_boundary(
         "new",
         "parallel_mode_projection",
         "poll_pending_input",
+        // plan 18 K2-3: the host reads the runtime of the thread awaiting a route.
+        "post_turn_route_runtime",
         "revisioned_planning_parallel_projection",
         "snapshot",
         "wait_pending_input",
@@ -15976,14 +15998,16 @@ fn verify_turn_stream_authority_match_contract(
         .map(|variant| variant.ident.to_string())
         .collect::<HashSet<_>>();
 
+    // plan 18 K2-3: the public method finds the owning session; the in-session method holds the
+    // authority transition.
     let methods = inherent_impl_methods(
         &reducer_syntax,
         "ConversationTurnFeatureReducer",
-        "apply_correlated_turn_stream_event",
+        "apply_turn_stream_event_in_session",
     );
     let [method] = methods.as_slice() else {
         return Err(format!(
-            "expected one ConversationTurnFeatureReducer::apply_correlated_turn_stream_event, found {}",
+            "expected one ConversationTurnFeatureReducer::apply_turn_stream_event_in_session, found {}",
             methods.len()
         ));
     };
