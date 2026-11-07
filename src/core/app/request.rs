@@ -22,6 +22,9 @@ pub enum SessionCatalogLoadMode {
     Refresh,
 }
 
+// 세션 목록 한 페이지의 크기이다. 시작 점검 뒤 core 가 첫 페이지를 읽을 때와 화면의 새로 고침이 같은 값을 쓴다.
+pub const SESSION_CATALOG_PAGE_SIZE: usize = 10;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionCatalogLoadIntent {
     pub mode: SessionCatalogLoadMode,

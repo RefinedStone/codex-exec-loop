@@ -35,7 +35,7 @@ type SharedTranscriptCardDigests = std::sync::Arc<[[u8; 32]]>;
 // are paged, transcript history is capped, auto-follow is disabled until the
 // operator explicitly supplies a positive budget, and fullscreen panels stay short
 // enough to keep the prompt visible.
-const SESSION_PAGE_SIZE: usize = 10;
+const SESSION_PAGE_SIZE: usize = crate::core::app::SESSION_CATALOG_PAGE_SIZE;
 const DISABLED_AUTO_FOLLOW_MAX_TURNS_TOKEN: &str = "off";
 const INFINITE_AUTO_FOLLOW_MAX_TURNS: usize = usize::MAX;
 const INFINITE_AUTO_FOLLOW_MAX_TURNS_TOKEN: &str = "infinite";
