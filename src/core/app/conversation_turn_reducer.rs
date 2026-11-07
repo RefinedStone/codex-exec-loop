@@ -138,6 +138,8 @@ pub(super) struct ConversationTurnFeatureReducer {
     approval_review_persistence: ApprovalReviewPersistenceCoordinator,
     post_turn_messages: PostTurnMessages,
     pending_post_turn_evaluation: Option<PendingPostTurnEvaluation>,
+    // 자동 후속 턴에 쓸 턴 옵션이다 (plan 18 K1-5). 대화 로드, 제출, 클라이언트 변경으로 갱신한다.
+    turn_options: crate::domain::conversation::ConversationTurnOptions,
 }
 
 impl std::fmt::Debug for ConversationTurnFeatureReducer {
@@ -180,7 +182,19 @@ impl ConversationTurnFeatureReducer {
             approval_review_persistence: ApprovalReviewPersistenceCoordinator::new(),
             post_turn_messages: PostTurnMessages::default(),
             pending_post_turn_evaluation: None,
+            turn_options: Default::default(),
         }
+    }
+
+    pub(super) fn turn_options(&self) -> &crate::domain::conversation::ConversationTurnOptions {
+        &self.turn_options
+    }
+
+    pub(super) fn set_turn_options(
+        &mut self,
+        turn_options: crate::domain::conversation::ConversationTurnOptions,
+    ) {
+        self.turn_options = turn_options;
     }
 
     /// 호스트가 평가를 시작할 때 가져간다. 한 번만 가져갈 수 있다.
@@ -345,6 +359,7 @@ impl ConversationTurnFeatureReducer {
         if !request.transcript_text.trim().is_empty() {
             self.post_turn_messages.latest_user_message = Some(request.transcript_text.clone());
         }
+        self.turn_options = request.turn_options.clone();
         self.conversation_runtime.begin_turn(correlation, request);
         self.approval_review_persistence
             .begin_conversation_turn(correlation);

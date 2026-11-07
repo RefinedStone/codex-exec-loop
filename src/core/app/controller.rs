@@ -449,6 +449,13 @@ impl CoreController {
                     snapshot: self.shared_snapshot(),
                 }
             }
+            CoreInput::Command(AppCommand::SetConversationTurnOptions(turn_options)) => {
+                self.conversation_turn.set_turn_options(turn_options);
+                self.unchanged_outcome()
+            }
+            CoreInput::Command(AppCommand::SubmitAutoFollowTurn(submission)) => {
+                self.submit_auto_follow_turn(*submission)
+            }
             CoreInput::Command(AppCommand::EvaluateCompletedTurn {
                 parallel_mode_enabled,
                 parallel_automation_epoch_id,
@@ -594,6 +601,10 @@ impl CoreController {
                 else {
                     return self.unchanged_outcome();
                 };
+                if let Ok(ready) = &result {
+                    self.conversation_turn
+                        .set_turn_options(ready.turn_options.clone());
+                }
                 self.state.apply_conversation_result(result);
                 self.conversation_changed_outcome(
                     Some(correlation),
@@ -1475,6 +1486,65 @@ impl CoreController {
             effects,
             snapshot: self.shared_snapshot(),
         }
+    }
+
+    /*
+     * 자동 후속 턴을 제출한다 (plan 18 K1-5). 이전에는 TUI 가 자기 입력으로 다시 제출했다. 턴 옵션은 core 가
+     * 기억한 값을, 병렬 슬롯 lease 넘기기는 core 의 planning handoff 를 쓴다. 결과는 화면이 그릴 수 있게
+     * `AutoFollowTurnSubmissionResolved` 로 알린다.
+     */
+    fn submit_auto_follow_turn(
+        &mut self,
+        submission: super::AutoFollowTurnSubmission,
+    ) -> CoreDispatchOutcome {
+        let slot_lease_handoff = if submission.parallel_mode_enabled {
+            self.conversation_turn
+                .runtime_snapshot()
+                .planning_handoff
+                .map(|task| {
+                    crate::domain::planning::ParallelTurnHandoff::new(task.task_id, task.task_title)
+                })
+        } else {
+            None
+        };
+        let request = super::TurnSubmissionRequest {
+            workspace_directory: submission.source.turn_workspace_directory.clone(),
+            thread_id: Some(submission.source.thread_id.clone()),
+            prompt: submission.prompt,
+            transcript_text: submission.transcript_text.clone(),
+            image_paths: Vec::new(),
+            prompt_origin: super::CorePromptOrigin::AutoFollow,
+            auto_follow_source: Some(submission.source.clone()),
+            planning_handoff: None,
+            turn_options: self.conversation_turn.turn_options().clone(),
+            slot_lease_handoff,
+        };
+        let mut outcome = self.handle_input(CoreInput::Command(AppCommand::SubmitTurn(Box::new(
+            request,
+        ))));
+        let admitted = outcome.events.iter().any(|event| {
+            matches!(
+                event,
+                AppEvent::TurnSubmissionAdmissionResolved(TurnSubmissionAdmission::Accepted { .. })
+            )
+        });
+        // 화면은 제출 기록을 스트림 이벤트보다 먼저 받아야 한다. TUI 의 제출 경로와 같은 순서이다.
+        let resolved_index = outcome
+            .events
+            .iter()
+            .position(|event| matches!(event, AppEvent::TurnSubmissionAdmissionResolved(_)))
+            .map_or(outcome.events.len(), |index| index + 1);
+        outcome.events.insert(
+            resolved_index,
+            AppEvent::AutoFollowTurnSubmissionResolved {
+                source: submission.source,
+                completed_turn_id: submission.completed_turn_id,
+                transcript_text: submission.transcript_text,
+                mode_label: submission.mode_label,
+                admitted,
+            },
+        );
+        outcome
     }
 
     /*
@@ -8392,6 +8462,73 @@ mod tests {
         assert!(matches!(
             after_resolution.effects.as_slice(),
             [CoreEffect::SubmitTurn { .. }]
+        ));
+    }
+
+    #[test]
+    fn host_auto_follow_submission_uses_core_turn_options_and_reports_the_result() {
+        let mut controller = CoreController::new();
+        controller.handle_input(CoreInput::Command(AppCommand::SetAutoFollowMaxTurns {
+            value: 1,
+        }));
+        apply_completed_turn(&mut controller, "thread-1", "turn-1");
+        // 클라이언트가 바꾼 모델은 상태 값으로 core 에 들어온다 (plan 18 K1-5).
+        let turn_options = crate::domain::conversation::ConversationTurnOptions {
+            model: Some("model-chosen-in-the-client".to_string()),
+            ..Default::default()
+        };
+        controller.handle_input(CoreInput::Command(AppCommand::SetConversationTurnOptions(
+            turn_options.clone(),
+        )));
+        let started = start_post_turn_evaluation(&mut controller, "turn-1");
+        let source = post_turn_effect_correlation(&started);
+        controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PostTurnEvaluationCompleted {
+                correlation: source.clone(),
+                execution: Box::new(sample_post_turn_execution()),
+            },
+        ));
+        controller.handle_input(CoreInput::Command(
+            AppCommand::ResolvePostTurnContinuation {
+                correlation: source.clone(),
+                resolution: PostTurnRouteResolution::AutoSubmit,
+            },
+        ));
+
+        let submitted = controller.handle_input(CoreInput::Command(
+            AppCommand::SubmitAutoFollowTurn(Box::new(super::super::AutoFollowTurnSubmission {
+                source: source.clone(),
+                completed_turn_id: "turn-1".to_string(),
+                prompt: "continue the queue".to_string(),
+                transcript_text: "queued task".to_string(),
+                mode_label: "planning queue".to_string(),
+                parallel_mode_enabled: false,
+            })),
+        ));
+
+        let [CoreEffect::SubmitTurn { request, .. }] = submitted.effects.as_slice() else {
+            panic!(
+                "the follow-up turn should be submitted: {:?}",
+                submitted.effects
+            );
+        };
+        assert_eq!(request.prompt_origin, CorePromptOrigin::AutoFollow);
+        assert_eq!(request.auto_follow_source.as_ref(), Some(&source));
+        assert_eq!(request.turn_options, turn_options);
+        assert_eq!(request.transcript_text, "queued task");
+        assert!(request.slot_lease_handoff.is_none());
+        let resolved_position = submitted
+            .events
+            .iter()
+            .position(|event| matches!(event, AppEvent::TurnSubmissionAdmissionResolved(_)))
+            .expect("admission should resolve");
+        assert!(matches!(
+            submitted.events.get(resolved_position + 1),
+            Some(AppEvent::AutoFollowTurnSubmissionResolved {
+                admitted: true,
+                transcript_text,
+                ..
+            }) if transcript_text == "queued task"
         ));
     }
 

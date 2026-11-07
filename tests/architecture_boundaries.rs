@@ -3531,6 +3531,8 @@ fn core_conversation_turn_feature_reducer_owns_one_correlated_lifecycle_slice() 
         // plan 18 K1-4: evaluation inputs and the completed turn awaiting the host.
         "post_turn_messages",
         "pending_post_turn_evaluation",
+        // plan 18 K1-5: turn options for the follow-up turn the host submits.
+        "turn_options",
     ];
     let forbidden_root_fields = [
         "turn_stream_state",

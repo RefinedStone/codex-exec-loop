@@ -1742,6 +1742,12 @@ impl NativeTuiApp {
         self.conversation.turn_options.model = model;
         self.conversation.turn_options.reasoning_effort = effort_option.effort;
         self.conversation.next_new_thread_turn_options = self.conversation.turn_options.clone();
+        // core 가 자동 후속 턴에 쓸 턴 옵션이다 (plan 18 K1-5).
+        self.dispatch_client_event(crate::core::app::CoreInput::Command(
+            crate::core::app::AppCommand::SetConversationTurnOptions(
+                self.conversation.turn_options.clone(),
+            ),
+        ));
         self.close_shell_overlay();
         let mut status_text = format!(
             "model set to {}; reasoning set to {}",

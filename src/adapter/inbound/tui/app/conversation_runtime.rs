@@ -61,6 +61,9 @@ pub(super) enum ConversationRuntimeEvent {
         error: String,
     },
     PostTurnEvaluationCompleted {
+        // Production code no longer reads it since the host submits auto-follow (plan 18 K1-5).
+        // The test runtime transition helper still settles the exact correlation.
+        #[cfg_attr(not(test), allow(dead_code))]
         correlation: crate::core::app::PostTurnEvaluationCorrelation,
         evaluation: Box<PostTurnEvaluationOutcome>,
         route_resolution: crate::core::app::PostTurnRouteResolution,
@@ -103,13 +106,6 @@ pub(super) enum ConversationRuntimeEffect {
         transcript_text: String,
         prompt_origin: PromptOrigin,
         image_paths: Vec<String>,
-    },
-    QueueAutoPrompt {
-        source: crate::core::app::PostTurnEvaluationCorrelation,
-        prompt: String,
-        completed_turn_id: String,
-        mode_label: String,
-        transcript_text: String,
     },
     ShowApprovalOverlay,
     CloseApprovalOverlay,
@@ -189,14 +185,9 @@ impl PostTurnEvaluationProvenance {
 }
 #[derive(Debug, Clone)]
 pub(super) struct PostTurnQueuedPrompt {
-    // Prompt sent to app-server. It can include planning context not meant to be
-    // shown verbatim in transcript.
-    pub prompt: String,
-    // Human label for the auto-follow policy that produced this prompt.
+    // Human label for the auto-follow policy that produced this prompt. The host
+    // submits the prompt itself through Core (plan 18 K1-5).
     pub mode_label: String,
-    // Transcript marker shown to the operator; deliberately distinct from the
-    // executable prompt text above.
-    pub transcript_text: String,
 }
 #[derive(Debug, Clone)]
 pub(super) enum PostTurnContinuationAction {
@@ -671,7 +662,7 @@ pub(super) fn reduce_conversation_runtime_with_transition(
             }
         }
         ConversationRuntimeEvent::PostTurnEvaluationCompleted {
-            correlation,
+            correlation: _,
             evaluation,
             route_resolution,
         } => {
@@ -702,27 +693,16 @@ pub(super) fn reduce_conversation_runtime_with_transition(
                         }
                         return ConversationRuntimeReduction { state, effects };
                     }
-                    // Queueing records the pending loop in visible history before
-                    // emitting QueueAutoPrompt. The effect will re-enter this
-                    // reducer as SubmitPrompt with PromptOrigin::AutoFollow.
-                    let PostTurnQueuedPrompt {
-                        prompt,
-                        mode_label,
-                        transcript_text,
-                    } = *queued_prompt;
+                    // Queueing records the pending loop in visible history. The host
+                    // submits the follow-up through Core (plan 18 K1-5) and the view
+                    // records it from `AutoFollowTurnSubmissionResolved`.
+                    let PostTurnQueuedPrompt { mode_label, .. } = *queued_prompt;
                     let completed_turn_id = provenance.completed_turn_id;
                     state.clear_auto_follow_skip();
                     state.record_auto_follow_queue(&completed_turn_id);
                     state.status_text =
                         format!("turn completed / queued auto-follow with mode {mode_label}");
                     state.append_status_message(state.status_text.clone());
-                    effects.push(ConversationRuntimeEffect::QueueAutoPrompt {
-                        source: correlation,
-                        prompt,
-                        completed_turn_id,
-                        mode_label,
-                        transcript_text,
-                    });
                 }
                 PostTurnContinuationAction::SkipAutoFollow { mut reason } => {
                     // Skips are durable status messages because they explain why
@@ -2556,9 +2536,7 @@ mod tests {
                     runtime_notices: Vec::new(),
                     action: PostTurnContinuationAction::QueueAutoPrompt(Box::new(
                         PostTurnQueuedPrompt {
-                            prompt: "run task".to_string(),
                             mode_label: "planning queue".to_string(),
-                            transcript_text: "next-task".to_string(),
                         },
                     )),
                     operator_alerts: Vec::new(),
@@ -2573,18 +2551,6 @@ mod tests {
             "queued turn 1/3"
         );
         assert!(!reduction.state.can_accept_manual_prompt());
-
-        let queued_effect = reduction
-            .effects
-            .into_iter()
-            .find_map(|effect| match effect {
-                ConversationRuntimeEffect::QueueAutoPrompt {
-                    completed_turn_id, ..
-                } => Some(completed_turn_id),
-                _ => None,
-            })
-            .expect("post-turn queue action should emit an auto prompt effect");
-        assert_eq!(queued_effect, "turn-from-provenance");
     }
 
     #[test]
@@ -2661,9 +2627,7 @@ mod tests {
                         runtime_notices: Vec::new(),
                         action: PostTurnContinuationAction::QueueAutoPrompt(Box::new(
                             PostTurnQueuedPrompt {
-                                prompt: "must not run".to_string(),
                                 mode_label: "planning queue".to_string(),
-                                transcript_text: "must not run".to_string(),
                             },
                         )),
                         operator_alerts: Vec::new(),
@@ -2672,14 +2636,6 @@ mod tests {
                 },
             );
 
-            assert!(
-                !reduction.effects.iter().any(|effect| matches!(
-                    effect,
-                    ConversationRuntimeEffect::QueueAutoPrompt { .. }
-                )),
-                "stale result queued an automatic prompt for {}",
-                reduction.state.cwd
-            );
             assert!(reduction.state.can_accept_manual_prompt());
         }
     }
@@ -2730,9 +2686,7 @@ mod tests {
             planning_repair_state: None,
             runtime_notices: Vec::new(),
             action: PostTurnContinuationAction::QueueAutoPrompt(Box::new(PostTurnQueuedPrompt {
-                prompt: "dispatch ready task".to_string(),
                 mode_label: "planning queue".to_string(),
-                transcript_text: "dispatch ready task".to_string(),
             })),
             operator_alerts: Vec::new(),
         };
@@ -2745,12 +2699,8 @@ mod tests {
                 route_resolution: crate::core::app::PostTurnRouteResolution::ParallelConsumed,
             },
         );
-        assert!(
-            !default_off
-                .effects
-                .iter()
-                .any(|effect| matches!(effect, ConversationRuntimeEffect::QueueAutoPrompt { .. }))
-        );
+        // 자동 후속 제출은 호스트가 한다 (plan 18 K1-5). 화면은 자동 후속 활동을 남기지 않는다.
+        assert!(!default_off.state.auto_follow_state().has_live_activity());
 
         let mut stopped = ConversationViewModel::new_draft("/tmp/stopped".to_string());
         update_auto_follow(&mut stopped, |auto_follow| {
@@ -2772,12 +2722,8 @@ mod tests {
                 route_resolution: crate::core::app::PostTurnRouteResolution::NoContinuation,
             },
         );
-        assert!(
-            !stopped
-                .effects
-                .iter()
-                .any(|effect| matches!(effect, ConversationRuntimeEffect::QueueAutoPrompt { .. }))
-        );
+        // 자동 후속 제출은 호스트가 한다 (plan 18 K1-5). 화면은 자동 후속 활동을 남기지 않는다.
+        assert!(!stopped.state.auto_follow_state().has_live_activity());
         assert!(stopped.state.status_text.contains("stopped and disarmed"));
 
         let parallel_rearmed =
@@ -2790,12 +2736,12 @@ mod tests {
                 route_resolution: crate::core::app::PostTurnRouteResolution::ParallelConsumed,
             },
         );
+        // 자동 후속 제출은 호스트가 한다 (plan 18 K1-5). 화면은 자동 후속 활동을 남기지 않는다.
         assert!(
             !parallel_rearmed
-                .effects
-                .iter()
-                .any(|effect| matches!(effect, ConversationRuntimeEffect::QueueAutoPrompt { .. })),
-            "parallel-consumed work must never queue an in-session auto prompt"
+                .state
+                .auto_follow_state()
+                .has_live_activity()
         );
         assert!(
             !parallel_rearmed

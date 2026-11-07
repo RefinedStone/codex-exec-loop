@@ -23,9 +23,9 @@ use super::conversation_input::MAX_PROMPT_INPUT_BYTES;
 use super::planning::planning_worker_status_label;
 use super::planning_worker_debug_preview::build_debug_preview_lines;
 use super::{
-    AutoFollowSubmitContext, ConversationComposerEvent, ConversationInputEvent,
-    ConversationRuntimeEffect, ConversationRuntimeEvent, ConversationState, ConversationViewModel,
-    InlineShellCommandInput, ManualIntakeSubmitContext, ManualPromptDelivery, NativeTuiApp,
+    ConversationComposerEvent, ConversationInputEvent, ConversationRuntimeEffect,
+    ConversationRuntimeEvent, ConversationState, ConversationViewModel, InlineShellCommandInput,
+    ManualIntakeSubmitContext, ManualPromptDelivery, NativeTuiApp,
     PARALLEL_SUPERVISOR_OPERATOR_ACTOR, PendingManualPromptPreparation, PromptOrigin,
     ShellActionAvailability, ShellChromeEvent,
 };
@@ -126,25 +126,6 @@ impl NativeTuiApp {
                 {
                     conversation.record_stale_auto_follow_submission();
                 }
-            }
-            ConversationRuntimeEffect::QueueAutoPrompt {
-                source,
-                prompt,
-                completed_turn_id,
-                mode_label,
-                transcript_text,
-            } => {
-                let debug_detail = self.build_auto_follow_transcript_debug_detail(&transcript_text);
-                turn_submission_admitted = self.submit_prompt(
-                    prompt,
-                    PromptOrigin::AutoFollow(Box::new(AutoFollowSubmitContext {
-                        source,
-                        completed_turn_id,
-                        mode_label,
-                        transcript_text,
-                        debug_detail,
-                    })),
-                );
             }
             ConversationRuntimeEffect::ShowApprovalOverlay => {
                 self.dispatch_shell_chrome(ShellChromeEvent::ApprovalOverlayShown);
@@ -772,6 +753,7 @@ impl NativeTuiApp {
         );
     }
 
+    #[cfg(test)]
     pub(super) fn submit_prompt(&mut self, prompt: String, prompt_origin: PromptOrigin) -> bool {
         let transcript_text = match &prompt_origin {
             PromptOrigin::Manual => prompt.trim().to_string(),
@@ -833,7 +815,10 @@ impl NativeTuiApp {
         })
     }
 
-    fn build_auto_follow_transcript_debug_detail(&self, transcript_text: &str) -> Option<String> {
+    pub(super) fn build_auto_follow_transcript_debug_detail(
+        &self,
+        transcript_text: &str,
+    ) -> Option<String> {
         if !self.planning_worker_shows_debug_details()
             || transcript_text != QUEUED_TASK_TRANSCRIPT_TEXT
         {
@@ -2571,16 +2556,20 @@ mod tests {
     fn stale_queue_auto_prompt_is_rejected_without_leaving_manual_input_locked() {
         let workspace = TempWorkspace::new("turn-submit-auto-debug");
         let mut app = make_test_app(&workspace);
-        let admitted =
-            app.execute_conversation_runtime_effect(ConversationRuntimeEffect::QueueAutoPrompt {
-                source: post_turn_source("turn-completed", workspace.path_str()),
-                prompt: "continue task".to_string(),
-                completed_turn_id: "turn-completed".to_string(),
-                mode_label: "planning queue".to_string(),
-                transcript_text: QUEUED_TASK_TRANSCRIPT_TEXT.to_string(),
-            });
+        // 자동 후속 제출은 호스트가 core 로 한다 (plan 18 K1-5). 거절되면 화면이 취소를 표시한다.
+        app.dispatch_client_event(crate::core::app::CoreInput::Command(
+            crate::core::app::AppCommand::SubmitAutoFollowTurn(Box::new(
+                crate::core::app::AutoFollowTurnSubmission {
+                    source: post_turn_source("turn-completed", workspace.path_str()),
+                    completed_turn_id: "turn-completed".to_string(),
+                    prompt: "continue task".to_string(),
+                    transcript_text: QUEUED_TASK_TRANSCRIPT_TEXT.to_string(),
+                    mode_label: "planning queue".to_string(),
+                    parallel_mode_enabled: false,
+                },
+            )),
+        ));
 
-        assert!(!admitted);
         let conversation = ready_conversation(&app);
         assert_eq!(conversation.status_text, "auto-follow cancelled");
         assert!(conversation.can_accept_manual_prompt());
@@ -2659,16 +2648,20 @@ mod tests {
             }
             state => panic!("post-turn source should still be evaluating, got {state:?}"),
         };
-        let admitted =
-            app.execute_conversation_runtime_effect(ConversationRuntimeEffect::QueueAutoPrompt {
-                source,
-                prompt: "continue task".to_string(),
-                completed_turn_id: "turn-1".to_string(),
-                mode_label: "planning queue".to_string(),
-                transcript_text: QUEUED_TASK_TRANSCRIPT_TEXT.to_string(),
-            });
+        // 자동 후속 제출은 호스트가 core 로 한다 (plan 18 K1-5). 거절되면 화면이 취소를 표시한다.
+        app.dispatch_client_event(crate::core::app::CoreInput::Command(
+            crate::core::app::AppCommand::SubmitAutoFollowTurn(Box::new(
+                crate::core::app::AutoFollowTurnSubmission {
+                    source,
+                    completed_turn_id: "turn-1".to_string(),
+                    prompt: "continue task".to_string(),
+                    transcript_text: QUEUED_TASK_TRANSCRIPT_TEXT.to_string(),
+                    mode_label: "planning queue".to_string(),
+                    parallel_mode_enabled: false,
+                },
+            )),
+        ));
 
-        assert!(!admitted);
         assert!(app.conversation.pending_turn_steer.is_some());
         let conversation = ready_conversation(&app);
         assert_eq!(conversation.status_text, "auto-follow cancelled");

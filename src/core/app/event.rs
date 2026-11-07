@@ -312,6 +312,14 @@ pub enum AppEvent {
     PostTurnEvaluationDue {
         planning_workspace_directory: String,
     },
+    // 호스트가 제출한 자동 후속 턴의 결과이다 (plan 18 K1-5). 화면은 이 값으로 자동 후속 메시지를 그린다.
+    AutoFollowTurnSubmissionResolved {
+        source: PostTurnEvaluationCorrelation,
+        completed_turn_id: String,
+        transcript_text: String,
+        mode_label: String,
+        admitted: bool,
+    },
     PostTurnContinuationRoutingRequested {
         correlation: PostTurnEvaluationCorrelation,
         execution: Box<PostTurnExecution>,

@@ -71,9 +71,7 @@ fn tui_post_turn_action(
     match action {
         ApplicationPostTurnContinuationAction::QueueAutoPrompt(prompt) => {
             PostTurnContinuationAction::QueueAutoPrompt(Box::new(PostTurnQueuedPrompt {
-                prompt: prompt.prompt,
                 mode_label: prompt.mode_label,
-                transcript_text: prompt.transcript_text,
             }))
         }
         ApplicationPostTurnContinuationAction::SkipAutoFollow { reason } => {

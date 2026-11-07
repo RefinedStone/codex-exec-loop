@@ -38,6 +38,7 @@ pub use approval::{
     ApprovalDecisionAdmission, ApprovalDecisionCorrelation, ApprovalReviewPersistenceCorrelation,
 };
 pub use command::AppCommand;
+pub use command::AutoFollowTurnSubmission;
 pub(in crate::core) use controller::CoreController;
 pub use controller::CoreDispatchOutcome;
 pub use conversation::{
