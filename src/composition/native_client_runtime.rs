@@ -1121,7 +1121,7 @@ impl NativeClientPort for NativeClientRuntime {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::cell::Cell;
     use std::sync::Arc;
 
@@ -1627,6 +1627,26 @@ mod tests {
         run_auto_follow_loop_with_host_cycles(true);
     }
 
+    /// 턴 실행 요청을 기록하는 런타임이다. 커널 호스트 시험도 쓴다 (plan 18 K3-2).
+    pub(crate) type RecordedTurns = Arc<std::sync::Mutex<Vec<(String, String)>>>;
+
+    pub(crate) fn recording_runtime_for_test() -> (NativeClientRuntime, RecordedTurns) {
+        let planning = test_planning_services(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
+        let parallel = test_parallel_mode_control_plane_composition(planning.clone());
+        let parallel_turns = parallel.parallel_mode_turn_service();
+        let port = Arc::new(RecordingTurnRuntimePort::default());
+        let turns = port.turns.clone();
+        let runtime = NativeClientRuntime::new_for_test(
+            StartupService::new(port.clone()),
+            SessionService::new(port.clone()),
+            ConversationService::new(port),
+            planning,
+            parallel_turns,
+            parallel,
+        );
+        (runtime, turns)
+    }
+
     fn run_auto_follow_loop_with_host_cycles(leave_conversation_while_running: bool) {
         let planning = test_planning_services(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
         let parallel = test_parallel_mode_control_plane_composition(planning.clone());
@@ -1899,7 +1919,7 @@ mod tests {
         }
     }
 
-    fn post_turn_correlation(generation: u64) -> PostTurnEvaluationCorrelation {
+    pub(crate) fn post_turn_correlation(generation: u64) -> PostTurnEvaluationCorrelation {
         PostTurnEvaluationCorrelation::new(
             generation,
             "thread-1",
@@ -1909,7 +1929,9 @@ mod tests {
         )
     }
 
-    fn post_turn_execution(correlation: &PostTurnEvaluationCorrelation) -> PostTurnExecution {
+    pub(crate) fn post_turn_execution(
+        correlation: &PostTurnEvaluationCorrelation,
+    ) -> PostTurnExecution {
         PostTurnExecution {
             thread_id: correlation.thread_id.clone(),
             completed_turn_id: correlation.completed_turn_id.clone(),
