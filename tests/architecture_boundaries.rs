@@ -2345,6 +2345,9 @@ fn core_effect_workers_share_one_redacted_panic_totality_boundary() {
             raw_spawn_owners.push(format!("{}:{line}", path.display()).replace('\\', "/"));
         }
     }
+    // plan 18 K3-2: the long-lived kernel host thread is the one other spawn. It runs the kernel
+    // loop, not effect work, so it stays outside the effect worker boundary.
+    raw_spawn_owners.retain(|owner| !owner.contains("src/composition/kernel_host.rs:"));
     assert!(
         raw_spawn_owners.len() == 1
             && raw_spawn_owners[0].contains("src/composition/core_effect_worker.rs:"),
@@ -11210,6 +11213,17 @@ fn kernel_protocol_only_maps_wire_types_to_core() {
             "std::thread",
             "tokio",
         ],
+    );
+}
+
+#[test]
+fn kernel_host_owns_the_kernel_thread_without_transport_types() {
+    // plan 18 K3-2: the kernel host meets async transports only through channels, so core,
+    // application, and the host itself stay free of tokio and inbound adapter types.
+    assert_no_forbidden_references_in_paths(
+        "kernel host must not depend on transports or inbound adapters",
+        &["src/composition/kernel_host.rs"],
+        &["tokio", "crate::adapter::inbound", "async fn"],
     );
 }
 
