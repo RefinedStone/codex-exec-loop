@@ -93,7 +93,7 @@
 | 단계 | 내용 | 옮기는 것 | 검증 |
 | --- | --- | --- | --- |
 | K1-1 (완료 2026-11-07) | `Tick` 입력, GitHub 폴링 일정을 core 로. `AppCommand::PollGithubReview` 제거 | T4 (폴링 시각) | core 단위 테스트: tick 시각별 폴링 effect. TUI 는 tick 만 보냄 |
-| K1-2 | 병렬 tick 을 core 의 tick 처리로. pulse 는 화면 계산 | T5 | 기존 `parallel_mode` 테스트, pulse 화면 테스트 |
+| K1-2 (완료 2026-11-07) | 병렬 tick 은 시각만 담는다. 작업 공간과 supervisor 화면 상태는 `ParallelViewChanged` 상태 값으로 따로 알린다 | T5 | 기존 `parallel_mode` 테스트, pulse 화면 테스트 |
 | K1-3 | `Started` 입력과 시작 순서 | T6 | 부팅 시나리오 테스트. shell chrome 이 시작 명령을 내지 않음 |
 | K1-4 | thread 별 최근 사용자 메시지·응답, 턴 종료에서 core 가 평가 effect | T1, T2 | 녹화된 스트림으로 평가 입력 비교 (TUI 경로와 같은 값) |
 | K1-5 | `AutoSubmit` 을 core 가 제출. `TurnSubmissionPolicy` | T3 | 자동 후속 루프 2회 시나리오. 턴 옵션·lease 넘기기 비교 |

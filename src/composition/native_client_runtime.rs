@@ -41,6 +41,7 @@ use crate::core::native_client_port::{
     ParallelModeControlPlaneEpochSnapshot, ParallelModeControlPlaneLoadingStage,
     ParallelModeControlPlanePresentationEvent, ParallelModeControlPlanePresentationProjection,
     ParallelModeDispatchCleanupCorrelation, ParallelModeGlobalRuntimeNoticeProjection,
+    ParallelViewState,
 };
 use crate::core::runtime::{CoreRuntime, core_input_channel};
 use crate::domain::conversation::ConversationRuntimeControlTruth;
@@ -62,6 +63,8 @@ pub(crate) struct NativeClientRuntime {
     parallel_control_plane: ParallelModeControlPlaneHandle<NativeParallelModeControlPlaneEventSink>,
     parallel_completion_rx: Receiver<ParallelModeControlPlaneBackgroundEvent>,
     next_poll_lane: NativeClientPollLane,
+    // 병렬 tick 이 쓰는 작업 공간과 supervisor 화면 상태이다. 클라이언트가 바뀔 때 알린다 (plan 18 K1-2).
+    parallel_view: Option<ParallelViewState>,
 }
 
 struct NativeCoreRuntime {
@@ -496,6 +499,7 @@ impl NativeClientRuntime {
             parallel_control_plane,
             parallel_completion_rx,
             next_poll_lane: NativeClientPollLane::Core,
+            parallel_view: None,
         }
     }
 
@@ -565,17 +569,25 @@ impl NativeClientRuntime {
                         .handle_command(application_parallel_command(command)),
                 )),
             ),
-            NativeClientEvent::ParallelTick {
-                now,
-                workspace_directory,
-                activity_pulse_visible,
-            } => NativeClientDispatchOutcome::Parallel(NativeParallelDispatchOutcome::from_events(
-                client_presentation_events(self.parallel_control_plane.tick(
-                    now,
-                    workspace_directory,
-                    activity_pulse_visible,
-                )),
-            )),
+            NativeClientEvent::ParallelTick { now } => {
+                let events = match &self.parallel_view {
+                    Some(view) => self.parallel_control_plane.tick(
+                        now,
+                        view.workspace_directory.clone(),
+                        view.supervisor_view_active,
+                    ),
+                    None => Vec::new(),
+                };
+                NativeClientDispatchOutcome::Parallel(NativeParallelDispatchOutcome::from_events(
+                    client_presentation_events(events),
+                ))
+            }
+            NativeClientEvent::ParallelViewChanged(view) => {
+                self.parallel_view = Some(view);
+                NativeClientDispatchOutcome::Parallel(NativeParallelDispatchOutcome::from_events(
+                    Vec::new(),
+                ))
+            }
             NativeClientEvent::ClearParallelDispatchWithheldReason => {
                 self.parallel_control_plane.clear_dispatch_withheld_reason();
                 NativeClientDispatchOutcome::Parallel(NativeParallelDispatchOutcome::from_events(
@@ -1372,6 +1384,32 @@ mod tests {
         ) -> anyhow::Result<ConversationTurnTerminalReceipt> {
             unreachable!("routing test does not run turn effects")
         }
+    }
+
+    #[test]
+    fn parallel_tick_waits_for_a_view_and_keeps_the_latest_one() {
+        let mut runtime = native_client_runtime_for_routing_test();
+        let NativeClientDispatchOutcome::Parallel(before_view) =
+            runtime.dispatch_client_event(NativeClientEvent::ParallelTick {
+                now: Instant::now(),
+            })
+        else {
+            panic!("a parallel tick should route to the parallel lane");
+        };
+        assert!(
+            before_view.presentation_events.is_empty(),
+            "no workspace is known before the client reports its view"
+        );
+
+        let view = ParallelViewState {
+            workspace_directory: "/workspace".to_string(),
+            supervisor_view_active: false,
+        };
+        for _ in 0..2 {
+            let _ =
+                runtime.dispatch_client_event(NativeClientEvent::ParallelViewChanged(view.clone()));
+        }
+        assert_eq!(runtime.parallel_view.as_ref(), Some(&view));
     }
 
     fn native_client_runtime_for_routing_test() -> NativeClientRuntime {

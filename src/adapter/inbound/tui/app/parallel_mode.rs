@@ -9,6 +9,7 @@ use crate::application::service::parallel_mode::control_plane::parallel_mode_dis
 use crate::core::app::{AppCommand, CoreInput};
 use crate::core::native_client_port::{
     NativeClientEvent, ParallelModeControlPlaneCommand, ParallelModeControlPlanePresentationEvent,
+    ParallelViewState,
 };
 use crate::diagnostics::event_log;
 use crate::domain::parallel_mode::{
@@ -434,14 +435,15 @@ impl NativeTuiApp {
         now: Instant,
         sample: &ParallelPanelProjectionSample,
     ) -> bool {
-        let workspace_directory = self.planning_workspace_directory();
-        let activity_pulse_visible = self.parallel_mode_activity_pulse_visible_with_sample(sample);
-        self.dispatch_parallel_client_event(NativeClientEvent::ParallelTick {
-            now,
-            workspace_directory,
-            activity_pulse_visible,
-        })
-        .presentation_changed
+        // tick 에는 시각만 담는다 (plan 18 K1-2). 병렬 화면 상태는 상태 값으로 따로 알린다. 같은 값이 다시
+        // 와도 runtime 의 결과는 같다.
+        let view = ParallelViewState {
+            workspace_directory: self.planning_workspace_directory(),
+            supervisor_view_active: self.parallel_mode_activity_pulse_visible_with_sample(sample),
+        };
+        let _ = self.dispatch_parallel_client_event(NativeClientEvent::ParallelViewChanged(view));
+        self.dispatch_parallel_client_event(NativeClientEvent::ParallelTick { now })
+            .presentation_changed
     }
 
     fn sync_core_parallel_mode_readiness_projection(

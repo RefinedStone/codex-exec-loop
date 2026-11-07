@@ -60,14 +60,20 @@ pub(crate) trait NativeClientPort: Send {
     ) -> crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneBackgroundEvent;
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ParallelViewState {
+    pub(crate) workspace_directory: String,
+    pub(crate) supervisor_view_active: bool,
+}
+
 pub(crate) enum NativeClientEvent {
     Core(Box<CoreInput>),
     ParallelCommand(ParallelModeControlPlaneCommand),
-    ParallelTick {
-        now: Instant,
-        workspace_directory: String,
-        activity_pulse_visible: bool,
-    },
+    // 호스트 시계이다 (plan 18 K1-2). 깨우기 폴링과 정리 재시도는 병렬 제어부가 tick 마다 스스로 판단한다.
+    ParallelTick { now: Instant },
+    // 클라이언트가 보는 병렬 작업 공간과 supervisor 화면 상태이다. supervisor 새로 고침은 이 화면이 열려 있고
+    // 활동이 있을 때만 한다. 같은 값이 다시 와도 결과는 같다.
+    ParallelViewChanged(ParallelViewState),
     ClearParallelDispatchWithheldReason,
 }
 
