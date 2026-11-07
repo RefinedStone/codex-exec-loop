@@ -95,6 +95,18 @@ pub struct AutoFollowAuthoritySnapshot {
     pub stop_on_no_file_changes: bool,
 }
 
+/*
+ * 클라이언트가 보지 않는 thread 중 일이 남은 것의 요약이다 (plan 18 K2-4). 세션 목록에 실행 중, 승인 대기,
+ * 자동 후속 표시를 그릴 때 쓴다.
+ */
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadActivitySummary {
+    pub thread_id: String,
+    pub running: bool,
+    pub approval_pending: bool,
+    pub auto_follow_active: bool,
+}
+
 impl AutoFollowAuthoritySnapshot {
     pub const fn is_enabled(&self) -> bool {
         self.max_auto_turns > 0

@@ -1347,6 +1347,8 @@ fn native_tui_app_owns_exactly_four_typed_private_state_slices() {
                 ("turn_options", "ConversationTurnOptions"),
                 ("conversation_view_mode", "ConversationViewMode"),
                 ("auto_follow_overlay_ui_state", "AutoFollowOverlayUiState"),
+                // plan 18 K2-4: Core-published background thread activity for the session list.
+                ("thread_activity", "Vec<ThreadActivitySummary>"),
             ],
         ),
         (
@@ -3529,6 +3531,8 @@ fn core_conversation_turn_feature_reducer_owns_one_correlated_lifecycle_slice() 
         "background_sessions",
         "serving_background",
         "approval_review_persistence",
+        // plan 18 K2-4: the background thread activity last published to the client.
+        "published_thread_activity",
     ];
     let thread_session_fields = [
         "turn_stream_state",
@@ -11189,6 +11193,21 @@ fn tui_approval_decisions_enter_through_core_runtime() {
             ".reduce_core_client_event(CoreInput::Command(AppCommand::SubmitApprovalDecision"
         ),
         "TUI approval decisions must positively enter through AppCommand::SubmitApprovalDecision"
+    );
+}
+
+#[test]
+fn inbound_adapters_do_not_block_switching_conversations_while_a_turn_runs() {
+    // plan 18 K2-4: opening a conversation only changes the shown thread; Core finishes the left
+    // one in the background, so no inbound adapter may refuse the switch.
+    assert_no_forbidden_references_in_paths(
+        "inbound adapters must not refuse conversation switches while work runs",
+        &["src/adapter/inbound"],
+        &[
+            "wait for completion before switching sessions",
+            "wait for completion before starting a new draft",
+            "wait before switching sessions",
+        ],
     );
 }
 

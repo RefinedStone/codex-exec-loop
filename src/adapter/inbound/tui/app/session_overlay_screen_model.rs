@@ -19,6 +19,9 @@ pub(in crate::adapter::inbound::tui::app) struct SessionOverlayScreenModel {
     pub(in crate::adapter::inbound::tui::app) search_query_editor: Option<String>,
     pub(in crate::adapter::inbound::tui::app) rename_editor: Option<SessionRenameEditorScreenModel>,
     pub(in crate::adapter::inbound::tui::app) catalog: SessionOverlayCatalogScreenModel,
+    // 보지 않는 thread 중 일이 남은 것 (plan 18 K2-4).
+    pub(in crate::adapter::inbound::tui::app) thread_activity:
+        Vec<crate::core::app::ThreadActivitySummary>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,6 +64,7 @@ impl SessionOverlayScreenModel {
             &app.shell.chrome.session_state,
             &app.shell.session_overlay_ui_state,
             app.shell.chrome.selected_session_index,
+            &app.conversation.thread_activity,
         )
     }
 
@@ -71,6 +75,7 @@ impl SessionOverlayScreenModel {
         session_state: &SessionState,
         overlay_state: &SessionOverlayUiState,
         selected_session_index: usize,
+        thread_activity: &[crate::core::app::ThreadActivitySummary],
     ) -> Self {
         let browser_state = overlay_state.browser_state();
         let catalog = capture_catalog(
@@ -100,7 +105,17 @@ impl SessionOverlayScreenModel {
             search_query_editor,
             rename_editor,
             catalog,
+            thread_activity: thread_activity.to_vec(),
         }
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn activity_for(
+        &self,
+        thread_id: &str,
+    ) -> Option<&crate::core::app::ThreadActivitySummary> {
+        self.thread_activity
+            .iter()
+            .find(|activity| activity.thread_id == thread_id)
     }
 
     pub(in crate::adapter::inbound::tui::app) fn browser_available(&self) -> bool {
@@ -181,6 +196,31 @@ mod tests {
     use super::super::test_helpers::test_native_tui_app;
     use super::*;
     use crate::domain::recent_sessions::{RecentSessions, SessionCatalogStatus};
+
+    #[test]
+    fn core_thread_activity_reaches_the_session_list_model() {
+        // plan 18 K2-4: Core reports background threads; the session list shows them.
+        let mut app = test_native_tui_app();
+        let activity = crate::core::app::ThreadActivitySummary {
+            thread_id: "thread-1".to_string(),
+            running: true,
+            approval_pending: false,
+            auto_follow_active: false,
+        };
+        app.apply_core_event(crate::core::app::AppEvent::ThreadActivityChanged(vec![
+            activity.clone(),
+        ]));
+
+        let model = SessionOverlayScreenModel::capture(&app);
+        assert_eq!(model.activity_for("thread-1"), Some(&activity));
+        assert_eq!(model.activity_for("thread-2"), None);
+
+        app.apply_core_event(crate::core::app::AppEvent::ThreadActivityChanged(Vec::new()));
+        assert_eq!(
+            SessionOverlayScreenModel::capture(&app).activity_for("thread-1"),
+            None
+        );
+    }
 
     #[test]
     fn capture_owns_one_projected_page_and_editor_selection_facts() {

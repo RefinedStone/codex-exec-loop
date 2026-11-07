@@ -4,9 +4,9 @@ use super::{
     ApprovalDecisionAdmission, ApprovalDecisionCorrelation, ApprovalReviewPersistenceCorrelation,
     ConversationLoadCorrelation, ConversationRuntimeSnapshot, PostTurnEvaluationCorrelation,
     PostTurnRouteResolution, SessionRenameCorrelation, StopRequestAdmission, StopRequestAttempt,
-    StopRequestCorrelation, TurnSteerAdmission, TurnSteerCorrelation, TurnStreamEvent,
-    TurnStreamSnapshot, TurnStreamStartRejection, TurnStreamState, TurnStreamUpdate,
-    TurnSubmissionAdmission, TurnSubmissionCorrelation, TurnSubmissionRequest,
+    StopRequestCorrelation, ThreadActivitySummary, TurnSteerAdmission, TurnSteerCorrelation,
+    TurnStreamEvent, TurnStreamSnapshot, TurnStreamStartRejection, TurnStreamState,
+    TurnStreamUpdate, TurnSubmissionAdmission, TurnSubmissionCorrelation, TurnSubmissionRequest,
 };
 use crate::domain::conversation::{
     ConversationApprovalDecision, ConversationApprovalRequestIdentity,
@@ -187,6 +187,19 @@ impl ThreadSession {
         )
     }
 
+    fn activity_summary(&self) -> Option<ThreadActivitySummary> {
+        let thread_id = self.turn_stream_state.thread_id()?.to_string();
+        let runtime = self.conversation_runtime.snapshot();
+        Some(ThreadActivitySummary {
+            thread_id,
+            running: runtime.active_turn.is_some(),
+            approval_pending: runtime.approval.is_some(),
+            auto_follow_active: runtime.auto_follow.has_live_activity()
+                || runtime.post_turn.is_in_flight()
+                || self.pending_post_turn_evaluation.is_some(),
+        })
+    }
+
     fn streams_thread(&self, thread_id: &str) -> bool {
         self.turn_stream_state.matches_thread(thread_id)
     }
@@ -205,6 +218,8 @@ pub(super) struct ConversationTurnFeatureReducer {
     serving_background: bool,
     // 승인 검토 저장은 모든 thread 를 통틀어 한 줄로 차례대로 한다. 그래서 session 밖에 둔다.
     approval_review_persistence: ApprovalReviewPersistenceCoordinator,
+    // 클라이언트에 마지막으로 알린 뒤의 thread 요약이다 (plan 18 K2-4).
+    published_thread_activity: Vec<ThreadActivitySummary>,
     next_conversation_load_generation: u64,
     in_flight_conversation_load: Option<ConversationLoadCorrelation>,
     deferred_conversation_load: Option<DeferredConversationLoadIntent>,
@@ -294,6 +309,20 @@ impl ConversationTurnFeatureReducer {
         !owns(&self.session) && self.background_sessions.iter().any(owns)
     }
 
+    /// 마지막으로 알린 뒤 뒤의 thread 요약이 바뀌었으면 새 요약을 돌려준다 (plan 18 K2-4).
+    pub(super) fn take_thread_activity_change(&mut self) -> Option<Vec<ThreadActivitySummary>> {
+        let activity = self
+            .background_sessions
+            .iter()
+            .filter_map(ThreadSession::activity_summary)
+            .collect::<Vec<_>>();
+        if activity == self.published_thread_activity {
+            return None;
+        }
+        self.published_thread_activity = activity.clone();
+        Some(activity)
+    }
+
     /// 이 thread 는 클라이언트가 보지 않는 중이다.
     pub(super) fn thread_is_background(&self, thread_id: &str) -> bool {
         !self.session.streams_thread(thread_id)
@@ -363,6 +392,7 @@ impl ConversationTurnFeatureReducer {
             background_sessions: Vec::new(),
             serving_background: false,
             approval_review_persistence: ApprovalReviewPersistenceCoordinator::new(),
+            published_thread_activity: Vec::new(),
             next_conversation_load_generation: 1,
             in_flight_conversation_load: None,
             deferred_conversation_load: None,

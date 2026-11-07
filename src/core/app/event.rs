@@ -332,6 +332,8 @@ pub enum AppEvent {
     ConversationTurnWorkspaceChanged {
         workspace_directory: String,
     },
+    // 보지 않는 thread 중 일이 남은 것의 요약이 바뀌었다 (plan 18 K2-4).
+    ThreadActivityChanged(Vec<super::ThreadActivitySummary>),
     ParallelModeSupervisorSnapshotInvalidated,
 }
 

@@ -88,7 +88,13 @@ impl CoreController {
 
     pub(in crate::core) fn handle_input(&mut self, input: CoreInput) -> CoreDispatchOutcome {
         let outcome = self.handle_input_inner(input);
-        self.with_conversation_runtime_authority(outcome)
+        let mut outcome = self.with_conversation_runtime_authority(outcome);
+        if let Some(activity) = self.conversation_turn.take_thread_activity_change() {
+            outcome
+                .events
+                .push(AppEvent::ThreadActivityChanged(activity));
+        }
+        outcome
     }
 
     fn handle_input_inner(&mut self, input: CoreInput) -> CoreDispatchOutcome {
@@ -9388,10 +9394,21 @@ mod tests {
         // plan 18 K2-3: opening a conversation changes only the shown thread.
         let mut controller = CoreController::new();
         let turn = start_test_turn(&mut controller, "thread-1", "turn-1");
-        controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
+        let leave = controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
             thread_id: "thread-2".to_string(),
             fallback_workspace_directory: "/tmp/workspace".to_string(),
         }));
+        assert!(
+            leave.events.contains(&AppEvent::ThreadActivityChanged(vec![
+                super::super::ThreadActivitySummary {
+                    thread_id: "thread-1".to_string(),
+                    running: true,
+                    approval_pending: false,
+                    auto_follow_active: false,
+                }
+            ])),
+            "the session list learns that the left thread still runs"
+        );
         controller.handle_input(CoreInput::EffectCompleted(
             CoreEffectCompletion::ConversationLoaded {
                 correlation: conversation_load_correlation(1, "thread-2"),
@@ -9405,6 +9422,11 @@ mod tests {
                 .conversation_runtime
                 .active_turn
                 .is_none()
+        );
+        assert_eq!(
+            controller.conversation_turn.take_thread_activity_change(),
+            None,
+            "the running background thread was already published"
         );
 
         let reply = controller.handle_input(test_turn_stream_input(
@@ -9426,9 +9448,13 @@ mod tests {
                 execution_snapshot_capture: None,
             },
         ));
+        // plan 18 K2-4: the session list learns that the left thread now waits for evaluation.
         assert!(matches!(
             terminal.events.as_slice(),
-            [AppEvent::PostTurnEvaluationDue { .. }]
+            [
+                AppEvent::PostTurnEvaluationDue { .. },
+                AppEvent::ThreadActivityChanged(activity),
+            ] if activity.len() == 1 && !activity[0].running && activity[0].auto_follow_active
         ));
 
         controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
@@ -9560,9 +9586,10 @@ mod tests {
                 resolution: super::super::PostTurnRouteResolution::NoContinuation,
             },
         ));
-        assert!(
-            resolved.events.is_empty(),
-            "the client does not get the settled evaluation of a thread it does not show"
+        assert_eq!(
+            resolved.events,
+            vec![AppEvent::ThreadActivityChanged(Vec::new())],
+            "the client gets only the cleared background activity, not the settled evaluation"
         );
         assert!(controller.post_turn_route_runtime(&evaluation).is_none());
         assert_eq!(
