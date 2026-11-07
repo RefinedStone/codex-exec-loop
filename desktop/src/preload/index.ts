@@ -12,6 +12,9 @@ import {
   type GitFileDiff,
   type GitStatusResult,
   IPC_CHANNELS,
+  type JiraConnectRequest,
+  type JiraStatus,
+  type JiraSummary,
   type TerminalOpenRequest,
   type TerminalOpenResult,
 } from "../shared/bridge";
@@ -95,6 +98,26 @@ const bridge: AkraBridge = {
     },
     reviewPrompt(url: string): Promise<string> {
       return ipcRenderer.invoke(IPC_CHANNELS.githubReviewPrompt, url) as Promise<string>;
+    },
+    openExternal(url: string): void {
+      ipcRenderer.send(IPC_CHANNELS.openExternal, url);
+    },
+  },
+  jira: {
+    status(): Promise<JiraStatus> {
+      return ipcRenderer.invoke(IPC_CHANNELS.jiraStatus) as Promise<JiraStatus>;
+    },
+    connect(request: JiraConnectRequest): Promise<JiraStatus> {
+      return ipcRenderer.invoke(IPC_CHANNELS.jiraConnect, request) as Promise<JiraStatus>;
+    },
+    disconnect(): Promise<JiraStatus> {
+      return ipcRenderer.invoke(IPC_CHANNELS.jiraDisconnect) as Promise<JiraStatus>;
+    },
+    summary(): Promise<JiraSummary> {
+      return ipcRenderer.invoke(IPC_CHANNELS.jiraSummary) as Promise<JiraSummary>;
+    },
+    issuePrompt(key: string): Promise<string> {
+      return ipcRenderer.invoke(IPC_CHANNELS.jiraIssuePrompt, key) as Promise<string>;
     },
     openExternal(url: string): void {
       ipcRenderer.send(IPC_CHANNELS.openExternal, url);

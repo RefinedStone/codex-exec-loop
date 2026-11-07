@@ -2,7 +2,7 @@
 import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
 
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell, type WebContents } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell, type WebContents } from "electron";
 
 import { type BrowserBounds, IPC_CHANNELS, type TerminalOpenRequest } from "../shared/bridge";
 import { GatewayConnection } from "./gatewayConnection";
@@ -13,6 +13,7 @@ import { BrowserPanelService } from "./browserPanel";
 import { loadSettings, saveSettings } from "./browserSettings";
 import { readGitFileDiff, readGitStatus } from "./gitStatus";
 import { readGitHubSummary, readReviewPrompt } from "./githubService";
+import { JiraService } from "./jiraService";
 import { TerminalService } from "./terminalService";
 
 // 시험용이다. 브라우저 프로필의 쿠키와 설정이 사용자의 실제 앱 데이터 폴더에 쓰이지 않게 한다. ready 전에 정해야 한다.
@@ -24,6 +25,8 @@ const connections = new Map<number, GatewayConnection>();
 const terminals = new TerminalService(spawnPty);
 const browsers = new BrowserPanelService();
 const browserSettingsPath = () => join(app.getPath("userData"), "browser-settings.json");
+// userData 는 위에서 정한 뒤이다. 토큰은 safeStorage 로 암호화한다.
+const jira = new JiraService(app.getPath("userData"), safeStorage);
 
 function repositoryRoot(): string {
   // 개발 중에는 desktop/ 의 부모가 Akra 저장소 루트이다. 패키징 경로는 R8 에서 정한다.
@@ -168,11 +171,21 @@ ipcMain.handle(IPC_CHANNELS.browserSaveSettings, (_event, settings: unknown) => 
 
 ipcMain.handle(IPC_CHANNELS.githubSummary, () => readGitHubSummary());
 ipcMain.handle(IPC_CHANNELS.githubReviewPrompt, (_event, url: unknown) => readReviewPrompt(url));
-// renderer 가 보낸 주소는 github.com 만 기본 브라우저로 연다.
+ipcMain.handle(IPC_CHANNELS.jiraStatus, () => jira.status());
+ipcMain.handle(IPC_CHANNELS.jiraConnect, (_event, request: unknown) => jira.connect(request));
+ipcMain.handle(IPC_CHANNELS.jiraDisconnect, () => jira.disconnect());
+ipcMain.handle(IPC_CHANNELS.jiraSummary, () => jira.summary());
+ipcMain.handle(IPC_CHANNELS.jiraIssuePrompt, (_event, key: unknown) => jira.issuePrompt(key));
+// renderer 가 보낸 주소는 github.com 과 연결된 Jira 사이트의 티켓만 기본 브라우저로 연다.
 ipcMain.on(IPC_CHANNELS.openExternal, (_event, url: unknown) => {
-  if (typeof url === "string" && url.startsWith("https://github.com/")) {
+  if (typeof url !== "string") return;
+  if (url.startsWith("https://github.com/")) {
     void shell.openExternal(url);
+    return;
   }
+  void jira.isSiteUrl(url).then(async (allowed) => {
+    if (allowed) await shell.openExternal(url);
+  });
 });
 
 ipcMain.handle(IPC_CHANNELS.chooseFolder, async (event) => {

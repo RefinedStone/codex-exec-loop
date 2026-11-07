@@ -1,6 +1,6 @@
 # R4. 업무 패널 (GitHub, Jira, Slack)
 
-상태: 진행 중 (GitHub 완료, Jira·Slack 남음) · 기준일: 2026-11-06 · 선행: P3 · 규모: 패널당 약 1주
+상태: 진행 중 (GitHub·Jira 완료, Slack 남음) · 기준일: 2026-11-07 · 선행: P3 · 규모: 패널당 약 1주
 
 ## 목표
 
@@ -46,4 +46,23 @@
 - 확인 (실제 gh, 읽기만, 창 숨김): 내 PR 17개와 리뷰 요청을 3.4s 에 읽었다. 해결되지 않은 리뷰가 있는 PR 2개의
   메시지 항목 수가 리뷰 수와 같았다. 넘기기로 빈 새 스레드가 열리고 입력창이 채워졌다 (턴 없음, 보내지 않음).
   턴이 없는 새 스레드는 기록에 남지 않았다.
-- Jira, Slack: 회사 토큰 발급과 데이터 정책 확인(D-14)이 먼저 필요해서 아직 하지 않았다.
+- Slack: 회사 토큰 발급과 데이터 정책 확인(D-14)이 먼저 필요해서 아직 하지 않았다.
+
+### 2026-11-07: Jira 패널 (PR 2)
+
+- 방식 선택: Orca 방식(앱이 Jira REST 를 직접 부름)과 Codex 앱 방식(ChatGPT 의 Atlassian 커넥터를 app-server
+  `mcpServer/tool/call` 로 부름)을 비교했다. Codex 방식은 회사 데이터가 개인 ChatGPT 계정을 거치고(D-14), Cloud 만
+  되고, 커넥터 상태에 의존한다. 사용자가 Orca 방식을 골랐다. 에이전트는 필요하면 Codex 의 커넥터를 그대로 쓴다.
+- 데이터: main 이 Jira REST 를 Electron `net.fetch` 로 부른다 (`desktop/src/main/jiraService.ts`). 회사 프록시와
+  인증서 설정을 따른다. Cloud 는 이메일 + API 토큰(Basic, REST v3 `/search/jql`), Server/Data Center 는
+  PAT(Bearer, REST v2 `/search`)이다. 목록은 `assignee = currentUser() AND statusCategory != Done` 의 최근 30개이다.
+- 자격 증명: 연결할 때 `/myself` 로 토큰을 확인한 뒤에만 저장한다. 토큰은 `safeStorage` 로 암호화해서 userData 의
+  `jira-token.bin` 에만 둔다. 암호화를 쓸 수 없으면 저장하지 않는다. renderer 에는 토큰을 돌려주지 않는다.
+  주소는 https 만 받는다.
+- 화면: 상단 "Jira" 버튼으로 오른쪽 패널을 연다. 연결 전에는 연결 화면, 연결 후에는 티켓 목록과 "연결 해제"이다.
+  티켓 제목을 누르면 연결된 사이트의 `/browse/<키>` 주소만 기본 브라우저로 연다.
+- 에이전트로 넘기기: 티켓마다 "스레드로 넘기기" 버튼이 있다. 설명(Cloud 문서 형식은 글로 바꿈)과 최근 댓글 10개로
+  첫 메시지를 만들고, GitHub 패널과 같은 방법으로 새 스레드의 입력창만 채운다.
+- 확인 (창 숨김, 실제 Gateway, 자체 서명 인증서의 가짜 Jira HTTPS 서버, 임시 userData): 잘못된 토큰은 오류를
+  보이고 저장하지 않았다. 연결 후 티켓 2개가 보였다. 토큰 파일은 평문이 아니었고 연결 파일에는 토큰이 없었다.
+  넘기기로 새 스레드의 입력창에 설명과 댓글이 채워졌다 (보내지 않음). 실제 회사 Jira 로는 확인하지 않았다.

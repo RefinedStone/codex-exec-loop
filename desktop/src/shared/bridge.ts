@@ -37,6 +37,11 @@ export const IPC_CHANNELS = {
   githubSummary: "akra:github-summary",
   githubReviewPrompt: "akra:github-review-prompt",
   openExternal: "akra:open-external",
+  jiraStatus: "akra:jira-status",
+  jiraConnect: "akra:jira-connect",
+  jiraDisconnect: "akra:jira-disconnect",
+  jiraSummary: "akra:jira-summary",
+  jiraIssuePrompt: "akra:jira-issue-prompt",
 } as const;
 
 export interface GitHubPullRequest {
@@ -68,6 +73,50 @@ export interface GitHubBridge {
   /** PR 의 해결되지 않은 리뷰 코멘트로 만든 첫 메시지이다. */
   reviewPrompt(url: string): Promise<string>;
   /** github.com 주소를 기본 브라우저로 연다. */
+  openExternal(url: string): void;
+}
+
+/** cloud: Atlassian Cloud (이메일 + API 토큰). server: Server/Data Center (PAT). */
+export type JiraDeployment = "cloud" | "server";
+
+/** 연결 화면에서 main 으로 한 번만 보낸다. main 은 토큰을 renderer 로 돌려주지 않는다. */
+export interface JiraConnectRequest {
+  siteUrl: string;
+  deployment: JiraDeployment;
+  email: string;
+  token: string;
+}
+
+export type JiraStatus = { connected: false } | { connected: true; siteUrl: string; deployment: JiraDeployment; email: string | null };
+
+export interface JiraIssue {
+  key: string;
+  summary: string;
+  /** `<사이트>/browse/<키>` */
+  url: string;
+  status: string | null;
+  /** new, indeterminate, done */
+  statusCategory: string | null;
+  issueType: string | null;
+  priority: string | null;
+  updatedAt: string;
+}
+
+export interface JiraSummary {
+  siteUrl: string;
+  /** 나에게 배정된, 끝나지 않은 티켓이다. 최근 수정 순이다. */
+  issues: JiraIssue[];
+}
+
+/** Jira 업무 패널이다 (R4). main 이 Jira REST 를 직접 부른다. */
+export interface JiraBridge {
+  status(): Promise<JiraStatus>;
+  connect(request: JiraConnectRequest): Promise<JiraStatus>;
+  disconnect(): Promise<JiraStatus>;
+  summary(): Promise<JiraSummary>;
+  /** 티켓 내용(설명, 최근 댓글)으로 만든 첫 메시지이다. */
+  issuePrompt(key: string): Promise<string>;
+  /** 연결된 Jira 사이트의 티켓 주소를 기본 브라우저로 연다. */
   openExternal(url: string): void;
 }
 
@@ -186,4 +235,5 @@ export interface AkraBridge {
   terminal: TerminalBridge;
   browser: BrowserBridge;
   github: GitHubBridge;
+  jira: JiraBridge;
 }

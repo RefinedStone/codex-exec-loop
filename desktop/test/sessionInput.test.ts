@@ -53,6 +53,14 @@ function harness() {
       reviewPrompt: async () => "",
       openExternal: () => undefined,
     },
+    jira: {
+      status: async () => ({ connected: false }),
+      connect: async () => ({ connected: false }),
+      disconnect: async () => ({ connected: false }),
+      summary: async () => ({ siteUrl: "", issues: [] }),
+      issuePrompt: async () => "",
+      openExternal: () => undefined,
+    },
   };
   const state: Partial<DesktopState> = { pendingApprovals: [], openThreadId: null, transcript: null, folders: [] };
   const store: SessionStore = {

@@ -93,6 +93,14 @@ function connectBridge(endpoint: string, startDaemon?: () => void) {
       reviewPrompt: async () => "",
       openExternal: () => undefined,
     },
+    jira: {
+      status: async () => ({ connected: false }),
+      connect: async () => ({ connected: false }),
+      disconnect: async () => ({ connected: false }),
+      summary: async () => ({ siteUrl: "", issues: [] }),
+      issuePrompt: async () => "",
+      openExternal: () => undefined,
+    },
   };
   cleanups.push(() => connection.close());
   return { connection, bridge, states };

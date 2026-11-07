@@ -1,7 +1,6 @@
 // 화면 구성 (P3 §4): 왼쪽 사이드바(작업 폴더 → 스레드), 오른쪽 대화 기록. Gateway 정보는 상단에 작게 둔다.
 import { useEffect, useRef, useState } from "react";
 
-import type { GitHubPullRequest } from "../shared/bridge";
 import { BrowserPanel } from "./browser/BrowserPanel";
 import { ApprovalPrompt } from "./conversation/ApprovalPrompt";
 import { Composer, type ComposerActions } from "./conversation/Composer";
@@ -12,9 +11,10 @@ import { desktopSessionStore, useDesktopStore } from "./session/desktopStore";
 import { Sidebar } from "./sidebar/Sidebar";
 import { TerminalDock } from "./terminal/TerminalDock";
 import { GitHubPanel } from "./work/GitHubPanel";
+import { JiraPanel } from "./work/JiraPanel";
 
 /** 오른쪽 패널은 한 번에 하나만 연다. */
-type SidePanel = "browser" | "github" | null;
+type SidePanel = "browser" | "github" | "jira" | null;
 
 const CLIENT_VERSION = "0.0.0-development";
 
@@ -44,6 +44,9 @@ function GatewayBar({ sidePanel, onToggle }: { sidePanel: SidePanel; onToggle(pa
         <button type="button" onClick={() => onToggle("github")} aria-pressed={sidePanel === "github"} data-testid="github-toggle">
           {sidePanel === "github" ? "GitHub 닫기" : "GitHub"}
         </button>
+        <button type="button" onClick={() => onToggle("jira")} aria-pressed={sidePanel === "jira"} data-testid="jira-toggle">
+          {sidePanel === "jira" ? "Jira 닫기" : "Jira"}
+        </button>
       </span>
     </header>
   );
@@ -66,9 +69,8 @@ export function App() {
     );
   };
 
-  /** PR 의 해결되지 않은 리뷰 코멘트로 새 스레드를 만들고 입력창을 채운다. 폴더는 열린 스레드의 것, 없으면 고르게 한다. */
-  const handOffReview = async (pull: GitHubPullRequest) => {
-    const text = await window.akra.github.reviewPrompt(pull.url);
+  /** 업무 패널이 만든 글로 새 스레드를 만들고 입력창을 채운다. 폴더는 열린 스레드의 것, 없으면 고르게 한다. */
+  const handOff = async (text: string) => {
     const cwd = useDesktopStore.getState().transcript?.cwd ?? (await window.akra.chooseFolder());
     if (!cwd || !session.current) return;
     const threadId = await session.current.startThread(cwd);
@@ -102,7 +104,10 @@ export function App() {
         <TerminalDock bridge={window.akra.terminal} />
       </main>
       {sidePanel === "browser" && <BrowserPanel bridge={window.akra.browser} />}
-      {sidePanel === "github" && <GitHubPanel github={window.akra.github} onHandOff={handOffReview} />}
+      {sidePanel === "github" && (
+        <GitHubPanel github={window.akra.github} onHandOff={async (pull) => handOff(await window.akra.github.reviewPrompt(pull.url))} />
+      )}
+      {sidePanel === "jira" && <JiraPanel jira={window.akra.jira} onHandOff={async (issue) => handOff(await window.akra.jira.issuePrompt(issue.key))} />}
     </div>
   );
 }
