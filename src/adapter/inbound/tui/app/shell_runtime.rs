@@ -223,7 +223,7 @@ impl ShellRuntime {
                 .app
                 .maybe_start_github_review_polling_setup(&workspace_directory);
         }
-        redraw_requested |= self.app.maybe_start_github_review_poll(now);
+        redraw_requested |= self.app.tick_client_runtime(now);
         let parallel_presentation_sample = self.app.parallel_panel_projection_sample();
         let live_activity_pulse = self
             .app

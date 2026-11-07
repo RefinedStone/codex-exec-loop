@@ -1964,11 +1964,7 @@ impl NativeTuiApp {
                 correlation,
                 result,
             } => {
-                self.record_github_review_polling_setup_completion(
-                    std::time::Instant::now(),
-                    correlation,
-                    result,
-                );
+                self.record_github_review_polling_setup_completion(correlation, result);
             }
             AppEvent::GithubReviewPollStarted { correlation } => {
                 self.record_github_review_poll_started(correlation);
@@ -1977,11 +1973,7 @@ impl NativeTuiApp {
                 correlation,
                 result,
             } => {
-                self.record_github_review_poll_completion(
-                    std::time::Instant::now(),
-                    correlation,
-                    result.map(|result| *result),
-                );
+                self.record_github_review_poll_completion(correlation, result.map(|result| *result));
             }
             AppEvent::ReviewCenterLoadStarted { .. } => {}
             AppEvent::ReviewCenterLoaded {

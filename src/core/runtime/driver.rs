@@ -826,11 +826,13 @@ mod tests {
                 GithubReviewPollingSetupMode::Explicit {
                     target: target.clone(),
                 },
+                std::time::Duration::from_secs(60),
             ),
         ));
         let correlation = GithubReviewPollCorrelation::new(1, target.clone());
+        let t0 = std::time::Instant::now();
 
-        let outcome = runtime.dispatch_command(AppCommand::PollGithubReview);
+        let outcome = runtime.dispatch_input(CoreInput::Tick { now: t0 });
 
         assert_eq!(
             outcome.effects,
@@ -855,7 +857,16 @@ mod tests {
                 && result.snapshot.target == target
         ));
 
-        let next = runtime.dispatch_command(AppCommand::PollGithubReview);
+        let too_early = runtime.dispatch_input(CoreInput::Tick {
+            now: t0 + std::time::Duration::from_secs(59),
+        });
+        assert!(
+            too_early.effects.is_empty(),
+            "the next poll waits one interval"
+        );
+        let next = runtime.dispatch_input(CoreInput::Tick {
+            now: t0 + std::time::Duration::from_secs(61),
+        });
         assert!(matches!(
             next.effects.as_slice(),
             [CoreEffect::PollGithubReview {

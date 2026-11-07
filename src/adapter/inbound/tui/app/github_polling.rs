@@ -143,7 +143,6 @@ impl GithubReviewPollingState {
         environment_config: GithubReviewPollingEnvironmentConfig,
         setup_correlation: GithubReviewPollingSetupCorrelation,
         target: GithubPullRequestTarget,
-        now: Instant,
     ) -> Self {
         Self::Active(Box::new(GithubReviewPollingRuntimeState::new(
             GithubReviewPollingConfig {
@@ -152,12 +151,11 @@ impl GithubReviewPollingState {
             },
             environment_config,
             setup_correlation,
-            now,
         )))
     }
 
     #[cfg(test)]
-    pub(super) fn active(config: GithubReviewPollingConfig, now: Instant) -> Self {
+    pub(super) fn active(config: GithubReviewPollingConfig) -> Self {
         let target = config.target.clone();
         Self::active_with_setup(
             GithubReviewPollingEnvironmentConfig {
@@ -168,7 +166,6 @@ impl GithubReviewPollingState {
             },
             GithubReviewPollingSetupCorrelation::new(1, "/workspace"),
             target,
-            now,
         )
     }
     pub(super) fn status_label(&self) -> String {
@@ -231,6 +228,7 @@ impl GithubReviewPollingState {
         Some(GithubReviewPollingSetupRequest::new(
             workspace_directory,
             config.setup_mode.clone(),
+            config.interval,
         ))
     }
 
@@ -246,7 +244,6 @@ impl GithubReviewPollingState {
 
     fn record_setup_completion(
         &mut self,
-        now: Instant,
         correlation: GithubReviewPollingSetupCorrelation,
         result: Result<GithubReviewPollingSetupResult, String>,
     ) {
@@ -264,7 +261,7 @@ impl GithubReviewPollingState {
         let explicit_target = config.setup_mode.explicit_target().cloned();
         *self = match result {
             Ok(GithubReviewPollingSetupResult::Active { target }) => {
-                Self::active_with_setup(config, correlation, target, now)
+                Self::active_with_setup(config, correlation, target)
             }
             Ok(GithubReviewPollingSetupResult::Disabled) => Self::Disabled {
                 config: Some(config),
@@ -279,13 +276,6 @@ impl GithubReviewPollingState {
         };
     }
 
-    pub(super) fn poll_due(&self, now: Instant) -> bool {
-        let Self::Active(state) = self else {
-            return false;
-        };
-        state.poll_due(now)
-    }
-
     pub(super) fn record_poll_started(&mut self, correlation: GithubReviewPollCorrelation) {
         let Self::Active(state) = self else {
             return;
@@ -295,14 +285,13 @@ impl GithubReviewPollingState {
 
     pub(super) fn record_poll_completion(
         &mut self,
-        now: Instant,
         correlation: GithubReviewPollCorrelation,
         result: Result<GithubPullRequestPollResult, String>,
     ) {
         let Self::Active(state) = self else {
             return;
         };
-        state.record_poll_completion(now, correlation, result);
+        state.record_poll_completion(correlation, result);
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -313,7 +302,8 @@ pub(super) struct GithubReviewPollingConfig {
 
 // Runtime state separates the full snapshot, one-shot recent change notices,
 // and durable last_error so polling can retry without re-announcing old review
-// activity. Core owns the poll cursor and single-flight admission.
+// activity. Core owns the poll cursor, single-flight admission, and the poll
+// schedule (plan 18 K1-1); this state is presentation only.
 #[derive(Debug, Clone)]
 pub(super) struct GithubReviewPollingRuntimeState {
     pub(super) config: GithubReviewPollingConfig,
@@ -323,7 +313,6 @@ pub(super) struct GithubReviewPollingRuntimeState {
     pub(super) recent_changes: Vec<GithubPullRequestActivityEvent>,
     recent_change_notice: Option<String>,
     pub(super) last_error: Option<String>,
-    next_poll_at: Instant,
     pub(super) pending_correlation: Option<GithubReviewPollCorrelation>,
 }
 impl GithubReviewPollingRuntimeState {
@@ -331,7 +320,6 @@ impl GithubReviewPollingRuntimeState {
         config: GithubReviewPollingConfig,
         environment_config: GithubReviewPollingEnvironmentConfig,
         setup_correlation: GithubReviewPollingSetupCorrelation,
-        now: Instant,
     ) -> Self {
         Self {
             config,
@@ -341,9 +329,6 @@ impl GithubReviewPollingRuntimeState {
             recent_changes: Vec::new(),
             recent_change_notice: None,
             last_error: None,
-            // The first poll starts immediately after bootstrap; later polls
-            // are spaced from completion so slow requests do not overlap.
-            next_poll_at: now,
             pending_correlation: None,
         }
     }
@@ -393,10 +378,6 @@ impl GithubReviewPollingRuntimeState {
             ))
         }
     }
-    fn poll_due(&self, now: Instant) -> bool {
-        self.pending_correlation.is_none() && now >= self.next_poll_at
-    }
-
     fn record_poll_started(&mut self, correlation: GithubReviewPollCorrelation) {
         if correlation.target == self.config.target && self.pending_correlation.is_none() {
             self.pending_correlation = Some(correlation);
@@ -405,7 +386,6 @@ impl GithubReviewPollingRuntimeState {
 
     fn record_poll_completion(
         &mut self,
-        now: Instant,
         correlation: GithubReviewPollCorrelation,
         result: Result<GithubPullRequestPollResult, String>,
     ) {
@@ -413,7 +393,6 @@ impl GithubReviewPollingRuntimeState {
             return;
         }
         self.pending_correlation = None;
-        self.next_poll_at = now + self.config.interval;
         match result {
             Ok(result) => {
                 // Core supplies deltas relative to its cursor; the TUI keeps a
@@ -433,7 +412,7 @@ impl GithubReviewPollingRuntimeState {
     }
 }
 
-// NativeTuiApp owns the interval and presentation projection. Core owns poll
+// NativeTuiApp owns the presentation projection. Core owns the poll schedule,
 // admission, cursor continuity, and provider execution.
 impl NativeTuiApp {
     pub(super) fn github_review_polling_status_label(&self) -> String {
@@ -481,25 +460,18 @@ impl NativeTuiApp {
 
     pub(super) fn record_github_review_polling_setup_completion(
         &mut self,
-        now: Instant,
         correlation: GithubReviewPollingSetupCorrelation,
         result: Result<GithubReviewPollingSetupResult, String>,
     ) {
         self.runtime
             .github_review_polling_state
-            .record_setup_completion(now, correlation, result);
+            .record_setup_completion(correlation, result);
     }
 
-    pub(super) fn maybe_start_github_review_poll(&mut self, now: Instant) -> bool {
-        if !self.runtime.github_review_polling_state.poll_due(now) {
-            return false;
-        }
-        let outcome =
-            self.reduce_core_client_event(CoreInput::Command(AppCommand::PollGithubReview));
-        let started = outcome
-            .events
-            .iter()
-            .any(|event| matches!(event, AppEvent::GithubReviewPollStarted { .. }));
+    /// 호스트 시계를 core 에 넘긴다 (plan 18 K1-1). 무엇을 할지는 core 가 정한다. 무언가 시작되면 true 이다.
+    pub(super) fn tick_client_runtime(&mut self, now: Instant) -> bool {
+        let outcome = self.reduce_core_client_event(CoreInput::Tick { now });
+        let started = !outcome.events.is_empty();
         self.apply_core_dispatch_outcome(outcome);
         started
     }
@@ -515,13 +487,12 @@ impl NativeTuiApp {
 
     pub(super) fn record_github_review_poll_completion(
         &mut self,
-        now: Instant,
         correlation: GithubReviewPollCorrelation,
         result: Result<GithubPullRequestPollResult, String>,
     ) {
         self.runtime
             .github_review_polling_state
-            .record_poll_completion(now, correlation, result);
+            .record_poll_completion(correlation, result);
     }
 }
 

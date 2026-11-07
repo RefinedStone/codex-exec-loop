@@ -90,6 +90,5 @@ pub enum AppCommand {
         resolution: PostTurnRouteResolution,
     },
     SetupGithubReviewPolling(GithubReviewPollingSetupRequest),
-    PollGithubReview,
     EvaluatePostTurn(Box<PostTurnRequest>),
 }

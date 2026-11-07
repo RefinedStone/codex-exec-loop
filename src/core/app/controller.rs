@@ -433,8 +433,8 @@ impl CoreController {
                     snapshot: self.shared_snapshot(),
                 }
             }
-            CoreInput::Command(AppCommand::PollGithubReview) => {
-                let Some(admission) = self.github_review.begin_poll() else {
+            CoreInput::Tick { now } => {
+                let Some(admission) = self.github_review.tick(now) else {
                     return self.unchanged_outcome();
                 };
                 CoreDispatchOutcome {
@@ -5755,7 +5755,7 @@ mod tests {
         assert!(duplicate.events.is_empty());
         assert!(duplicate.effects.is_empty());
 
-        let early_poll = controller.handle_input(CoreInput::Command(AppCommand::PollGithubReview));
+        let early_poll = controller.handle_input(github_review_tick());
         assert!(early_poll.events.is_empty());
         assert!(early_poll.effects.is_empty());
 
@@ -5775,7 +5775,7 @@ mod tests {
             }] if completed == &correlation && completed_target == &target
         ));
 
-        let started = controller.handle_input(CoreInput::Command(AppCommand::PollGithubReview));
+        let started = controller.handle_input(github_review_tick());
         let poll_correlation = GithubReviewPollCorrelation::new(1, target);
         assert_eq!(
             started.events,
@@ -5792,7 +5792,7 @@ mod tests {
             }]
         );
 
-        let duplicate = controller.handle_input(CoreInput::Command(AppCommand::PollGithubReview));
+        let duplicate = controller.handle_input(github_review_tick());
         assert!(duplicate.events.is_empty());
         assert!(duplicate.effects.is_empty());
     }
@@ -5828,7 +5828,7 @@ mod tests {
         ));
         assert!(duplicate.events.is_empty());
 
-        let poll = controller.handle_input(CoreInput::Command(AppCommand::PollGithubReview));
+        let poll = controller.handle_input(github_review_tick());
         assert!(matches!(
             poll.effects.as_slice(),
             [CoreEffect::PollGithubReview {
@@ -5867,7 +5867,7 @@ mod tests {
                     ..
                 }] if message == expected_message
             ));
-            let poll = controller.handle_input(CoreInput::Command(AppCommand::PollGithubReview));
+            let poll = controller.handle_input(github_review_tick());
             assert!(poll.events.is_empty());
             assert!(poll.effects.is_empty());
         }
@@ -5879,7 +5879,7 @@ mod tests {
         let target = GithubPullRequestTarget::new("acme/widgets", 42);
         let setup_correlation =
             activate_github_review_setup(&mut controller, "/workspace", target.clone());
-        controller.handle_input(CoreInput::Command(AppCommand::PollGithubReview));
+        controller.handle_input(github_review_tick());
         let first_correlation = GithubReviewPollCorrelation::new(1, target.clone());
         let first_result = github_review_poll_result(&target, "2026-07-19T10:00:00Z");
 
@@ -5906,7 +5906,7 @@ mod tests {
         assert!(duplicate.effects.is_empty());
 
         let second_correlation = GithubReviewPollCorrelation::new(2, target.clone());
-        let second = controller.handle_input(CoreInput::Command(AppCommand::PollGithubReview));
+        let second = controller.handle_input(github_review_tick());
         assert_eq!(
             second.effects,
             vec![CoreEffect::PollGithubReview {
@@ -5929,7 +5929,7 @@ mod tests {
             }] if message == "GitHub unavailable"
         ));
 
-        let third = controller.handle_input(CoreInput::Command(AppCommand::PollGithubReview));
+        let third = controller.handle_input(github_review_tick());
         assert_eq!(
             third.effects,
             vec![CoreEffect::PollGithubReview {
@@ -5955,7 +5955,7 @@ mod tests {
         let target = GithubPullRequestTarget::new("acme/widgets", 42);
         let setup_correlation =
             activate_github_review_setup(&mut controller, "/workspace", target.clone());
-        controller.handle_input(CoreInput::Command(AppCommand::PollGithubReview));
+        controller.handle_input(github_review_tick());
         let previous = github_review_poll_result(&target, "2026-07-19T10:00:00Z");
         controller.handle_input(CoreInput::EffectCompleted(
             CoreEffectCompletion::GithubReviewPollCompleted {
@@ -5963,7 +5963,7 @@ mod tests {
                 result: Ok(previous.clone()),
             },
         ));
-        controller.handle_input(CoreInput::Command(AppCommand::PollGithubReview));
+        controller.handle_input(github_review_tick());
 
         let wrong_target = GithubPullRequestTarget::new("other/repository", 7);
         let rejected = controller.handle_input(CoreInput::EffectCompleted(
@@ -5983,7 +5983,7 @@ mod tests {
             }] if message == "GitHub review poll provider returned a different target"
         ));
 
-        let retried = controller.handle_input(CoreInput::Command(AppCommand::PollGithubReview));
+        let retried = controller.handle_input(github_review_tick());
         assert_eq!(
             retried.effects,
             vec![CoreEffect::PollGithubReview {
@@ -5999,7 +5999,7 @@ mod tests {
         let mut controller = CoreController::new();
         let target = GithubPullRequestTarget::new("acme/widgets", 42);
         activate_github_review_setup(&mut controller, "/workspace-a", target.clone());
-        controller.handle_input(CoreInput::Command(AppCommand::PollGithubReview));
+        controller.handle_input(github_review_tick());
         let first = GithubReviewPollCorrelation::new(1, target.clone());
         controller.handle_input(CoreInput::EffectCompleted(
             CoreEffectCompletion::GithubReviewPollCompleted {
@@ -6007,12 +6007,11 @@ mod tests {
                 result: Ok(github_review_poll_result(&target, "2026-07-19T10:00:00Z")),
             },
         ));
-        controller.handle_input(CoreInput::Command(AppCommand::PollGithubReview));
+        controller.handle_input(github_review_tick());
         let superseded_poll = GithubReviewPollCorrelation::new(2, target.clone());
 
         let setup_b = start_github_review_setup(&mut controller, "/workspace-b", target.clone());
-        let poll_before_setup =
-            controller.handle_input(CoreInput::Command(AppCommand::PollGithubReview));
+        let poll_before_setup = controller.handle_input(github_review_tick());
         assert!(poll_before_setup.effects.is_empty());
         let late_poll = controller.handle_input(CoreInput::EffectCompleted(
             CoreEffectCompletion::GithubReviewPollCompleted {
@@ -6023,7 +6022,7 @@ mod tests {
         assert!(late_poll.events.is_empty());
 
         complete_github_review_setup(&mut controller, setup_b.clone(), target.clone());
-        let restarted = controller.handle_input(CoreInput::Command(AppCommand::PollGithubReview));
+        let restarted = controller.handle_input(github_review_tick());
         let current_poll = GithubReviewPollCorrelation::new(3, target.clone());
         assert_eq!(
             restarted.effects,
@@ -6048,8 +6047,7 @@ mod tests {
             },
         ));
         assert!(late_current.events.is_empty());
-        let disabled_poll =
-            controller.handle_input(CoreInput::Command(AppCommand::PollGithubReview));
+        let disabled_poll = controller.handle_input(github_review_tick());
         assert!(disabled_poll.effects.is_empty());
     }
 
@@ -6078,7 +6076,7 @@ mod tests {
         );
         controller.github_review.exhaust_poll_generation();
 
-        controller.handle_input(CoreInput::Command(AppCommand::PollGithubReview));
+        controller.handle_input(github_review_tick());
     }
 
     #[test]
@@ -9372,7 +9370,26 @@ mod tests {
         GithubReviewPollingSetupRequest::new(
             workspace_directory,
             GithubReviewPollingSetupMode::Explicit { target },
+            std::time::Duration::from_secs(60),
         )
+    }
+
+    // 매번 한 시간씩 앞선 시각으로 tick 한다 (plan 18 K1-1). 폴링 간격(60초)보다 길어서, 폴링할 때가 되었으면
+    // 이 tick 에서 바로 폴링한다. 예전 `AppCommand::PollGithubReview` 를 부르던 테스트의 뜻을 그대로 둔다.
+    fn github_review_tick() -> CoreInput {
+        thread_local! {
+            static TICKS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+            static BASE: std::time::Instant = std::time::Instant::now();
+        }
+        let step = TICKS.with(|ticks| {
+            let step = ticks.get() + 1;
+            ticks.set(step);
+            step
+        });
+        let base = BASE.with(|base| *base);
+        CoreInput::Tick {
+            now: base + std::time::Duration::from_secs(3600) * step,
+        }
     }
 
     fn start_github_review_setup(
