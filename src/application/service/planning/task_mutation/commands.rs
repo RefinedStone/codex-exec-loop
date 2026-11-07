@@ -38,6 +38,10 @@ pub struct PlanningTaskUpdateInput {
     pub priority_reason: Option<String>,
     pub depends_on: Option<Vec<String>>,
     pub blocked_by: Option<Vec<String>>,
+    // 화면이 작업을 보여 줄 때의 planning revision 이다. 있으면 저장 시점의 revision 과 같아야 한다
+    // (plan 18 K-D2). 다르면 그 사이 다른 쓰기가 있었으므로 덮어쓰지 않고 거절한다. None 이면 검사하지 않는다.
+    // updated_at 은 초 단위라 같은 초의 쓰기를 구분하지 못해서 revision 을 쓴다.
+    pub expected_planning_revision: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -197,6 +201,7 @@ impl From<PlanningTaskCommandEnvelope> for PlanningTaskMutationCommand {
                     priority_reason: command.priority_reason,
                     depends_on: command.depends_on,
                     blocked_by: command.blocked_by,
+                    expected_planning_revision: None,
                 })
             }
         }

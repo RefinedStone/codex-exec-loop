@@ -141,6 +141,9 @@ pub(super) struct TaskMutationForm {
     pub(super) depends_on_text: String,
     #[serde(default)]
     pub(super) blocked_by_text: String,
+    // 편집 폼이 작업을 보여 줄 때의 planning revision 이다 (plan 18 K-D2).
+    #[serde(default)]
+    pub(super) expected_planning_revision: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

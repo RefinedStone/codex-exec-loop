@@ -26,6 +26,7 @@ pub(super) fn map_management_view(
     directions: &DirectionCatalogDocument,
     task_authority: &TaskAuthorityDocument,
     default_direction_id: &str,
+    planning_revision: i64,
 ) -> PlanningAdminManagementView {
     // task count는 direction id를 trim한 값으로 합산한다. queue resolution도 공백을 제거한 id로 연결을
     // 판단하므로, admin 화면의 "이 direction에 몇 개 task가 붙었는가"가 runtime 판단과 어긋나지 않는다.
@@ -44,6 +45,7 @@ pub(super) fn map_management_view(
         .collect::<Vec<_>>();
 
     PlanningAdminManagementView {
+        planning_revision,
         default_direction_id: default_direction_id.to_string(),
         // success criteria와 scope hints는 domain에서는 Vec<String>이지만 admin form에서는 textarea 하나로
         // 편집된다. newline join 정책을 projection에 고정해 두면 form submit parser와 round-trip 표현이 같은
@@ -373,7 +375,7 @@ mod tests {
             ],
         };
 
-        let view = map_management_view(&directions, &task_authority, "dir-active");
+        let view = map_management_view(&directions, &task_authority, "dir-active", 7);
 
         assert_eq!(view.default_direction_id, "dir-active");
         assert_eq!(

@@ -490,6 +490,7 @@ async fn upsert_task_for_surface(
             priority_reason: form.priority_reason,
             depends_on_text: form.depends_on_text,
             blocked_by_text: form.blocked_by_text,
+            expected_planning_revision: form.expected_planning_revision,
         })
         .map_err(internal_server_error)?;
     Ok(Redirect::to(&notice_location(surface.tasks_path(), &outcome.notice)).into_response())
