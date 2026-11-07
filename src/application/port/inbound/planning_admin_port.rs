@@ -298,6 +298,8 @@ pub struct PlanningAdminManagementView {
     pub default_direction_id: String,
     pub directions: Vec<PlanningAdminDirectionManagementView>,
     pub tasks: Vec<PlanningAdminTaskManagementView>,
+    // 이 화면을 읽은 시점의 planning revision 이다. 작업 수정 폼이 그대로 돌려보낸다 (plan 18 K-D2).
+    pub planning_revision: i64,
 }
 
 /*
@@ -348,6 +350,9 @@ pub struct PlanningAdminTaskMutationRequest {
     pub depends_on_text: String,
     #[serde(default)]
     pub blocked_by_text: String,
+    // 수정할 때 필수이다. 화면이 작업을 보여 줄 때의 planning revision 이다 (plan 18 K-D2).
+    #[serde(default)]
+    pub expected_planning_revision: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

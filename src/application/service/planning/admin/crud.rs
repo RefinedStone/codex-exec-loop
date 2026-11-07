@@ -32,10 +32,14 @@ impl PlanningAdminFacadeService {
         // management view는 매 mutation 후 accepted authority에서 다시 읽는다. 방금 처리한 in-memory command 결과를
         // 재사용하지 않는 이유는 commit boundary의 repair/default/validation이 실제 저장된 모양을 바꿀 수 있기 때문이다.
         let documents = self.load_operator_planning_documents()?;
+        let planning_revision = documents
+            .observed_planning_revision
+            .ok_or_else(|| anyhow!("planning revision is unavailable"))?;
         Ok(map_management_view(
             &documents.directions,
             &documents.task_authority,
             default_direction_id(&documents.directions)?,
+            planning_revision,
         ))
     }
     pub fn upsert_direction(
@@ -259,9 +263,22 @@ fn task_command_from_request(
 
     // update는 priority_reason에 Some(empty_string), reference에는 Some(empty_vec)를 허용한다. create에서는 blank가
     // default를 뜻하지만, update에서는 operator가 기존 값을 명시적으로 비우는 행위여야 하기 때문이다.
+    // id 를 먼저 검사한다. 그다음 폼이 열린 뒤 다른 쓰기가 있었는지 확인할 값이 없으면 수정하지 않는다
+    // (plan 18 K-D2).
+    let task_id = normalized_required_id(&task_id, "task id")?.to_string();
+    let expected_planning_revision = request
+        .expected_planning_revision
+        .trim()
+        .parse::<i64>()
+        .map_err(|_| {
+            anyhow!(
+                "expected_planning_revision is required to update a task; reload the task and retry"
+            )
+        })?;
     Ok(PlanningTaskMutationCommand::UpdateTask(
         PlanningTaskUpdateInput {
-            task_id: normalized_required_id(&task_id, "task id")?.to_string(),
+            expected_planning_revision: Some(expected_planning_revision),
+            task_id,
             direction_id: optional_id(request.direction_id, "direction id")?,
             direction_relation_note: None,
             title: Some(required_text(&request.title, "task title")?.to_string()),
@@ -468,17 +485,20 @@ mod tests {
             .clone();
         let updated = fixture
             .facade
-            .upsert_task(task_request(
-                &task_id,
-                "general-workstream",
-                "Updated admin task",
-                "Updated through admin",
-                "awaiting_user",
-                "65",
-                "-2",
-                "operator update",
-                "",
-                "",
+            .upsert_task(editing(
+                &fixture,
+                task_request(
+                    &task_id,
+                    "general-workstream",
+                    "Updated admin task",
+                    "Updated through admin",
+                    "awaiting_user",
+                    "65",
+                    "-2",
+                    "operator update",
+                    "",
+                    "",
+                ),
             ))
             .expect("task update should commit through shared mutation service");
         let reloaded_task = updated
@@ -496,6 +516,79 @@ mod tests {
         assert_eq!(reloaded_task.base_priority, 65);
         assert_eq!(reloaded_task.dynamic_priority_delta, -2);
         assert_eq!(reloaded_task.priority_reason, "operator update");
+    }
+
+    #[test]
+    fn admin_task_update_refuses_a_stale_form_and_keeps_the_newer_change() {
+        let fixture = TestAdminFixture::new("admin-crud-stale-form");
+        let added = fixture
+            .facade
+            .upsert_task(task_request(
+                "",
+                "",
+                "Stale form task",
+                "Original",
+                "ready",
+                "50",
+                "0",
+                "original",
+                "",
+                "",
+            ))
+            .expect("task create should commit");
+        let task_id = added
+            .management
+            .tasks
+            .iter()
+            .find(|task| task.title == "Stale form task")
+            .expect("created task should be visible")
+            .id
+            .clone();
+        let edit = |title: &str| {
+            task_request(
+                &task_id,
+                "general-workstream",
+                title,
+                title,
+                "ready",
+                "50",
+                "0",
+                "edit",
+                "",
+                "",
+            )
+        };
+
+        // 폼을 연 뒤, 저장하기 전에 다른 쓰기(작업자)가 같은 작업을 바꾼다.
+        let opened_form = editing(&fixture, edit("Edited from a stale form"));
+        fixture
+            .facade
+            .upsert_task(editing(&fixture, edit("Changed by the worker")))
+            .expect("the newer write should commit");
+
+        let stale = fixture
+            .facade
+            .upsert_task(opened_form)
+            .expect_err("a stale form must not overwrite the newer write");
+        assert!(stale.to_string().contains("reload it and retry"), "{stale}");
+        let missing = fixture
+            .facade
+            .upsert_task(edit("No revision"))
+            .expect_err("an update without the observed revision must be refused");
+        assert!(
+            missing.to_string().contains("expected_planning_revision"),
+            "{missing}"
+        );
+
+        let task = fixture
+            .facade
+            .load_management_view()
+            .expect("management view should load")
+            .tasks
+            .into_iter()
+            .find(|task| task.id == task_id)
+            .expect("task should remain visible");
+        assert_eq!(task.title, "Changed by the worker");
     }
 
     #[test]
@@ -554,17 +647,20 @@ mod tests {
             .expect("runtime-owned direction should be created before the lease");
         fixture
             .facade
-            .upsert_task(task_request(
-                &task_id,
-                "dir-runtime-owned",
-                "Guarded task",
-                "Original",
-                "ready",
-                "50",
-                "0",
-                "original",
-                "",
-                "",
+            .upsert_task(editing(
+                &fixture,
+                task_request(
+                    &task_id,
+                    "dir-runtime-owned",
+                    "Guarded task",
+                    "Original",
+                    "ready",
+                    "50",
+                    "0",
+                    "original",
+                    "",
+                    "",
+                ),
             ))
             .expect("task should move to the runtime-owned direction before the lease");
 
@@ -577,17 +673,20 @@ mod tests {
             .expect("runtime-first lease should persist");
         let task_error = fixture
             .facade
-            .upsert_task(task_request(
-                &task_id,
-                "dir-runtime-owned",
-                "Changed while running",
-                "Changed",
-                "cancelled",
-                "1",
-                "0",
-                "changed",
-                "",
-                "",
+            .upsert_task(editing(
+                &fixture,
+                task_request(
+                    &task_id,
+                    "dir-runtime-owned",
+                    "Changed while running",
+                    "Changed",
+                    "cancelled",
+                    "1",
+                    "0",
+                    "changed",
+                    "",
+                    "",
+                ),
             ))
             .expect_err("active task edit must fail closed");
         assert!(task_error.to_string().contains("slot `slot-1` is running"));
@@ -623,17 +722,20 @@ mod tests {
             .expect("runtime lease should clear");
         fixture
             .facade
-            .upsert_task(task_request(
-                &task_id,
-                "dir-runtime-owned",
-                "Changed after cleanup",
-                "Changed",
-                "awaiting_user",
-                "1",
-                "0",
-                "changed",
-                "",
-                "",
+            .upsert_task(editing(
+                &fixture,
+                task_request(
+                    &task_id,
+                    "dir-runtime-owned",
+                    "Changed after cleanup",
+                    "Changed",
+                    "awaiting_user",
+                    "1",
+                    "0",
+                    "changed",
+                    "",
+                    "",
+                ),
             ))
             .expect("inactive task edit should be allowed");
         fixture
@@ -691,17 +793,20 @@ mod tests {
 
         let update_error = fixture
             .facade
-            .upsert_task(task_request(
-                &task_id,
-                "general-workstream",
-                "Changed during refresh",
-                "Changed",
-                "ready",
-                "50",
-                "0",
-                "changed",
-                "",
-                "",
+            .upsert_task(editing(
+                &fixture,
+                task_request(
+                    &task_id,
+                    "general-workstream",
+                    "Changed during refresh",
+                    "Changed",
+                    "ready",
+                    "50",
+                    "0",
+                    "changed",
+                    "",
+                    "",
+                ),
             ))
             .expect_err("official refresh must block task updates");
         assert!(update_error.to_string().contains("official-refresh"));
@@ -956,6 +1061,7 @@ mod tests {
             priority_reason: String::new(),
             depends_on_text: "task-a, task-b\n task-c".to_string(),
             blocked_by_text: String::new(),
+            expected_planning_revision: String::new(),
         })
         .expect("admin request should map to common create command");
         let PlanningTaskMutationCommand::CreateTask(input) = command else {
@@ -984,6 +1090,7 @@ mod tests {
             priority_reason: "waiting for review".to_string(),
             depends_on_text: "task-a".to_string(),
             blocked_by_text: "task-b".to_string(),
+            expected_planning_revision: "7".to_string(),
         })
         .expect("admin request should map to common update command");
         let PlanningTaskMutationCommand::UpdateTask(input) = command else {
@@ -1110,7 +1217,22 @@ mod tests {
             priority_reason: priority_reason.to_string(),
             depends_on_text: depends_on_text.to_string(),
             blocked_by_text: blocked_by_text.to_string(),
+            expected_planning_revision: String::new(),
         }
+    }
+
+    // 수정 요청에 지금 보이는 planning revision 을 넣는다. admin 폼이 하는 일과 같다.
+    fn editing(
+        fixture: &TestAdminFixture,
+        mut request: PlanningAdminTaskMutationRequest,
+    ) -> PlanningAdminTaskMutationRequest {
+        request.expected_planning_revision = fixture
+            .facade
+            .load_management_view()
+            .expect("management view should load")
+            .planning_revision
+            .to_string();
+        request
     }
 
     fn direction_request(

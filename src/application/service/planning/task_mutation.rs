@@ -318,6 +318,8 @@ impl PlanningTaskMutationService {
         for _ in 0..=MAX_REVISION_CONFLICT_RETRIES {
             let context = self.load_context(&request.workspace_directory)?;
             observed_revision = Some(context.task_planning_revision);
+            // 재시도는 최신 상태에 명령을 다시 적용한다. 화면이 본 뒤 바뀌었으면 덮어쓰지 않고 멈춘다.
+            ensure_expected_planning_revision(&request, context.task_planning_revision)?;
             let mut candidate_task_authority = context.task_authority.clone();
             let application = self.apply_commands_to_authority(
                 &request,
@@ -891,5 +893,28 @@ struct TaskMutationAuditContext<'a> {
     legacy_source_turn_id: Option<&'a str>,
     provenance: &'a TaskMutationProvenance,
 }
+
+/*
+ * 화면(admin 폼 등)이 본 planning revision 이후 다른 쓰기가 있었는지 확인한다 (plan 18 K-D2).
+ * revision 을 가진 수정 명령만 검사한다. 에이전트 도구처럼 revision 이 없는 명령은 그대로 둔다.
+ */
+fn ensure_expected_planning_revision(
+    request: &PlanningTaskMutationRequest,
+    current_planning_revision: i64,
+) -> Result<()> {
+    for command in &request.commands {
+        if let PlanningTaskMutationCommand::UpdateTask(input) = command
+            && let Some(expected) = input.expected_planning_revision
+            && expected != current_planning_revision
+        {
+            bail!(
+                "planning changed after task `{}` was opened (revision {expected} -> {current_planning_revision}); reload it and retry",
+                input.task_id.trim()
+            );
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests;

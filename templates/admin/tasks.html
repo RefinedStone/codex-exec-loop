@@ -112,6 +112,7 @@
         <form method="post" action="{{ task_upsert_path }}" class="stack">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <input type="hidden" name="id" value="{{ task.id }}">
+          <input type="hidden" name="expected_planning_revision" value="{{ management.planning_revision }}">
           <div class="form-grid">
             <label class="field">
               <span>Title</span>

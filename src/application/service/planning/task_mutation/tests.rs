@@ -345,6 +345,7 @@ fn update_preserves_unspecified_fields() {
             provenance: provenance(),
             commands: vec![PlanningTaskMutationCommand::UpdateTask(
                 PlanningTaskUpdateInput {
+                    expected_planning_revision: None,
                     task_id: "task-1".to_string(),
                     direction_id: None,
                     direction_relation_note: None,
@@ -402,6 +403,7 @@ fn worker_update_preserves_existing_description_even_when_supplied() {
             provenance: provenance(),
             commands: vec![PlanningTaskMutationCommand::UpdateTask(
                 PlanningTaskUpdateInput {
+                    expected_planning_revision: None,
                     task_id: "task-1".to_string(),
                     direction_id: None,
                     direction_relation_note: None,
@@ -459,6 +461,7 @@ fn user_update_can_replace_existing_description() {
             provenance: provenance(),
             commands: vec![PlanningTaskMutationCommand::UpdateTask(
                 PlanningTaskUpdateInput {
+                    expected_planning_revision: None,
                     task_id: "task-1".to_string(),
                     direction_id: None,
                     direction_relation_note: None,
@@ -519,6 +522,7 @@ fn no_op_update_does_not_bump_revision_or_touch_audit_fields() {
             provenance: provenance(),
             commands: vec![PlanningTaskMutationCommand::UpdateTask(
                 PlanningTaskUpdateInput {
+                    expected_planning_revision: None,
                     task_id: "task-1".to_string(),
                     direction_id: None,
                     direction_relation_note: None,
@@ -798,6 +802,7 @@ fn terminal_status_change_is_rejected() {
             provenance: provenance(),
             commands: vec![PlanningTaskMutationCommand::UpdateTask(
                 PlanningTaskUpdateInput {
+                    expected_planning_revision: None,
                     task_id: "task-1".to_string(),
                     direction_id: None,
                     direction_relation_note: None,

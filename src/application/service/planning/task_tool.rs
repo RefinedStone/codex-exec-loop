@@ -204,6 +204,7 @@ impl From<PlanningTaskUpdatePayload> for PlanningTaskUpdateInput {
             priority_reason: input.priority_reason,
             depends_on: input.depends_on,
             blocked_by: input.blocked_by,
+            expected_planning_revision: None,
         }
     }
 }
