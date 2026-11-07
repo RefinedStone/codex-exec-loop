@@ -75,6 +75,13 @@ impl CoreController {
         self.state.revisioned_planning_parallel_projection()
     }
 
+    pub(in crate::core) fn post_turn_route_runtime(
+        &self,
+        correlation: &super::PostTurnEvaluationCorrelation,
+    ) -> Option<super::ConversationRuntimeSnapshot> {
+        self.conversation_turn.post_turn_route_runtime(correlation)
+    }
+
     pub(in crate::core) fn parallel_mode_projection(&self) -> ParallelModeProjection {
         self.state.parallel_mode_projection()
     }
@@ -460,18 +467,21 @@ impl CoreController {
                 parallel_mode_enabled,
                 parallel_automation_epoch_id,
             }) => {
-                let Some(pending) = self.conversation_turn.take_pending_post_turn_evaluation()
+                let snapshot = self.shared_snapshot();
+                let Some((correlation, request)) = self
+                    .conversation_turn
+                    .start_due_post_turn_evaluation(|pending| {
+                        Self::post_turn_request_from_pending(
+                            &snapshot,
+                            pending,
+                            parallel_mode_enabled,
+                            parallel_automation_epoch_id,
+                        )
+                    })
                 else {
                     return self.unchanged_outcome();
                 };
-                let request = self.post_turn_request_from_pending(
-                    pending,
-                    parallel_mode_enabled,
-                    parallel_automation_epoch_id,
-                );
-                self.handle_input(CoreInput::Command(AppCommand::EvaluatePostTurn(Box::new(
-                    request,
-                ))))
+                self.post_turn_evaluation_started_outcome(correlation, Box::new(request))
             }
             CoreInput::Command(AppCommand::EvaluatePostTurn(mut request)) => {
                 match self
@@ -479,19 +489,7 @@ impl CoreController {
                     .admit_post_turn_evaluation(request.as_mut())
                 {
                     Some(correlation) => {
-                        let planning_worker_panel_state =
-                            self.planning.begin_post_turn_worker_panel(request.as_ref());
-                        request.planning_worker_panel_state = planning_worker_panel_state.clone();
-                        CoreDispatchOutcome {
-                            events: vec![AppEvent::PostTurnEvaluationStarted(
-                                planning_worker_panel_state,
-                            )],
-                            effects: vec![CoreEffect::EvaluatePostTurn {
-                                correlation,
-                                request,
-                            }],
-                            snapshot: self.shared_snapshot(),
-                        }
+                        self.post_turn_evaluation_started_outcome(correlation, request)
                     }
                     None => self.unchanged_outcome(),
                 }
@@ -1497,13 +1495,14 @@ impl CoreController {
         &mut self,
         submission: super::AutoFollowTurnSubmission,
     ) -> CoreDispatchOutcome {
+        // 원래 thread 의 값을 쓴다. 그 thread 는 클라이언트가 보지 않는 중일 수 있다 (plan 18 K2-3).
+        let (source_runtime, source_turn_options) = self
+            .conversation_turn
+            .turn_context_for_thread(&submission.source.thread_id);
         let slot_lease_handoff = if submission.parallel_mode_enabled {
-            self.conversation_turn
-                .runtime_snapshot()
-                .planning_handoff
-                .map(|task| {
-                    crate::domain::planning::ParallelTurnHandoff::new(task.task_id, task.task_title)
-                })
+            source_runtime.planning_handoff.map(|task| {
+                crate::domain::planning::ParallelTurnHandoff::new(task.task_id, task.task_title)
+            })
         } else {
             None
         };
@@ -1516,7 +1515,7 @@ impl CoreController {
             prompt_origin: super::CorePromptOrigin::AutoFollow,
             auto_follow_source: Some(submission.source.clone()),
             planning_handoff: None,
-            turn_options: self.conversation_turn.turn_options().clone(),
+            turn_options: source_turn_options,
             slot_lease_handoff,
         };
         let mut outcome = self.handle_input(CoreInput::Command(AppCommand::SubmitTurn(Box::new(
@@ -1547,17 +1546,37 @@ impl CoreController {
         outcome
     }
 
+    fn post_turn_evaluation_started_outcome(
+        &mut self,
+        correlation: super::PostTurnEvaluationCorrelation,
+        mut request: Box<crate::domain::planning::PostTurnRequest>,
+    ) -> CoreDispatchOutcome {
+        let planning_worker_panel_state =
+            self.planning.begin_post_turn_worker_panel(request.as_ref());
+        request.planning_worker_panel_state = planning_worker_panel_state.clone();
+        CoreDispatchOutcome {
+            events: vec![AppEvent::PostTurnEvaluationStarted(
+                planning_worker_panel_state,
+            )],
+            effects: vec![CoreEffect::EvaluatePostTurn {
+                correlation,
+                request,
+            }],
+            snapshot: self.shared_snapshot(),
+        }
+    }
+
     /*
      * 평가 요청을 core 의 값으로 만든다 (plan 18 K1-4). 정책 값(자동 후속, 정지 키워드 등)은
      * `admit_post_turn_evaluation` 이 이어서 채운다. runtime 투영은 같은 planning 작업 공간의 것만 쓴다.
+     * self 를 빌리지 않는다: reducer 가 평가를 시작하는 중에 부른다 (plan 18 K2-3).
      */
     fn post_turn_request_from_pending(
-        &self,
+        snapshot: &AppSnapshot,
         pending: super::conversation_turn_reducer::PendingPostTurnEvaluation,
         parallel_mode_enabled: bool,
         parallel_automation_epoch_id: Option<u64>,
     ) -> crate::domain::planning::PostTurnRequest {
-        let snapshot = self.shared_snapshot();
         let current_runtime_projection = if snapshot
             .planning_parallel
             .planning_runtime_workspace_directory
@@ -5827,6 +5846,15 @@ mod tests {
                 ))),
             },
         ));
+        // plan 18 K2-3: the old turn keeps running in the background; one conversation turn runs
+        // at a time, so it ends before the new conversation starts a turn.
+        controller.handle_input(test_turn_stream_input(
+            turn_submission,
+            TurnStreamEvent::TurnTerminal {
+                receipt: confirmed_terminal_receipt("thread-old", "turn-1", Vec::new()),
+                execution_snapshot_capture: None,
+            },
+        ));
         let new_turn = start_test_turn(&mut controller, "thread-new", "turn-2");
         let queued_new_review = controller.handle_input(test_turn_stream_input(
             new_turn,
@@ -8639,7 +8667,7 @@ mod tests {
     }
 
     #[test]
-    fn post_turn_completion_requires_latest_exact_correlation_once_across_aba() {
+    fn post_turn_completions_reach_their_own_sessions_once_across_aba() {
         let mut controller = CoreController::new();
         let initial_history = PlanningWorkerPanelState {
             status: PlanningWorkerStatus::RefreshSucceeded,
@@ -8660,6 +8688,7 @@ mod tests {
         );
         let first_correlation = post_turn_effect_correlation(&first);
 
+        // plan 18 K2-3: each left conversation keeps its evaluation in the background.
         controller.handle_input(CoreInput::Command(AppCommand::InvalidateConversationLoad));
         apply_completed_turn(&mut controller, "thread-2", "turn-2");
         let second = start_post_turn_evaluation_for(
@@ -8707,28 +8736,27 @@ mod tests {
         ] {
             execution.planning_worker_panel_state = PlanningWorkerPanelState {
                 status: PlanningWorkerStatus::RepairFailed,
-                last_summary: Some(format!("forged stale {label} panel")),
+                last_summary: Some(format!("background {label} panel")),
                 ..PlanningWorkerPanelState::default()
             };
-            let stale = controller.handle_input(CoreInput::EffectCompleted(
+            let background = controller.handle_input(CoreInput::EffectCompleted(
                 CoreEffectCompletion::PostTurnEvaluationCompleted {
-                    correlation: stale_correlation,
+                    correlation: stale_correlation.clone(),
                     execution: Box::new(execution),
                 },
             ));
             assert!(
-                stale.events.is_empty() && stale.effects.is_empty(),
-                "{label} completion must be ignored"
+                background.events.iter().any(|event| matches!(
+                    event,
+                    AppEvent::PostTurnContinuationRoutingRequested { correlation, .. }
+                        if correlation == &stale_correlation
+                )),
+                "{label} completion must reach its own background session"
             );
             assert_eq!(
                 controller.active_post_turn_evaluation_correlation(),
                 Some(&current_correlation),
                 "{label} completion must not clear the current A lease"
-            );
-            assert_eq!(
-                controller.planning.worker_panel_history(),
-                &initial_history,
-                "{label} completion must not replace the current panel history seed"
             );
         }
 
@@ -8786,7 +8814,7 @@ mod tests {
     }
 
     #[test]
-    fn lifecycle_only_aba_prunes_the_old_post_turn_lease_before_completion() {
+    fn left_conversation_keeps_its_post_turn_lease_across_aba() {
         let mut controller = CoreController::new();
 
         apply_completed_turn(&mut controller, "thread-1", "turn-1");
@@ -8804,25 +8832,25 @@ mod tests {
         let first_correlation = post_turn_effect_correlation(&first);
         let first_permit = post_turn_effect_permit(&first);
 
+        // plan 18 K2-3: leaving the conversation keeps its evaluation running in the background.
         controller.handle_input(CoreInput::Command(AppCommand::InvalidateConversationLoad));
         apply_completed_turn(&mut controller, "thread-2", "turn-2");
         assert!(
             controller
                 .active_post_turn_evaluation_correlation()
                 .is_none(),
-            "leaving the admitted lifecycle must permanently prune its lease"
+            "the shown conversation does not inherit the lease of the left conversation"
         );
-        assert!(!first_permit.is_current());
         assert!(
-            first_permit.with_current(|| ()).is_none(),
-            "the pruned worker must lose authority to make later background commits"
+            first_permit.is_current(),
+            "the worker of the left conversation keeps its authority"
         );
         controller.handle_input(CoreInput::Command(AppCommand::InvalidateConversationLoad));
         apply_completed_turn(&mut controller, "thread-1", "turn-1");
 
-        let stale = controller.handle_input(CoreInput::EffectCompleted(
+        let background = controller.handle_input(CoreInput::EffectCompleted(
             CoreEffectCompletion::PostTurnEvaluationCompleted {
-                correlation: first_correlation,
+                correlation: first_correlation.clone(),
                 execution: Box::new(sample_post_turn_execution_for(
                     "thread-1",
                     "turn-1",
@@ -8830,12 +8858,16 @@ mod tests {
                 )),
             },
         ));
-        assert!(stale.events.is_empty());
-        assert!(stale.effects.is_empty());
+        assert!(background.events.iter().any(|event| matches!(
+            event,
+            AppEvent::PostTurnContinuationRoutingRequested { correlation, .. }
+                if correlation == &first_correlation
+        )));
         assert!(
             controller
                 .active_post_turn_evaluation_correlation()
-                .is_none()
+                .is_none(),
+            "the background completion does not touch the shown conversation"
         );
 
         let mut current_request = post_turn_request(
@@ -9005,15 +9037,20 @@ mod tests {
         settled.handle_input(CoreInput::Command(AppCommand::InvalidateConversationLoad));
         apply_completed_turn(&mut settled, "thread-1", "turn-2");
 
-        let stale_exact = settled.handle_input(CoreInput::EffectCompleted(post_turn_completion(
-            "/tmp/workspace",
-            Box::new(sample_post_turn_execution()),
-        )));
-        assert!(stale_exact.events.is_empty());
-        assert!(stale_exact.effects.is_empty());
+        // plan 18 K2-3: the left conversation finishes its evaluation in the background. The
+        // completion reaches that session, not the conversation the client now shows.
+        let background_exact = settled.handle_input(CoreInput::EffectCompleted(
+            post_turn_completion("/tmp/workspace", Box::new(sample_post_turn_execution())),
+        ));
+        assert!(
+            background_exact.events.iter().any(|event| matches!(
+                event,
+                AppEvent::PostTurnContinuationRoutingRequested { .. }
+            ))
+        );
         assert!(
             settled.active_post_turn_evaluation_correlation().is_none(),
-            "an exact but stale completion must settle its obsolete lease"
+            "the shown conversation has no evaluation of its own yet"
         );
         assert!(
             !start_post_turn_evaluation(&mut settled, "turn-2")
@@ -9304,51 +9341,136 @@ mod tests {
     }
 
     #[test]
-    fn post_turn_completion_is_dropped_during_conversation_load() {
+    fn running_turn_survives_opening_another_conversation_and_resumes_on_return() {
+        // plan 18 K2-3: opening a conversation changes only the shown thread.
         let mut controller = CoreController::new();
-        let current_projection = PlanningRuntimeProjection::ready(
-            "current prompt".to_string(),
-            "current summary".to_string(),
-            None,
-        );
-        controller.handle_input(runtime_projection_changed(
-            "/tmp/workspace",
-            current_projection.clone(),
-        ));
-        apply_completed_turn(&mut controller, "thread-1", "turn-1");
-        assert!(
-            !start_post_turn_evaluation(&mut controller, "turn-1")
-                .effects
-                .is_empty()
-        );
-        let load = controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
+        let turn = start_test_turn(&mut controller, "thread-1", "turn-1");
+        controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
             thread_id: "thread-2".to_string(),
             fallback_workspace_directory: "/tmp/workspace".to_string(),
         }));
-        let [CoreEffect::LoadConversation { correlation, .. }] = load.effects.as_slice() else {
-            panic!("conversation load should emit one correlated effect");
-        };
-        let correlation = correlation.clone();
-        let snapshot_before_completion = controller.snapshot();
-
-        let dropped = controller.handle_input(CoreInput::EffectCompleted(post_turn_completion(
-            "/tmp/workspace",
-            Box::new(sample_post_turn_execution()),
-        )));
-
-        assert_eq!(*dropped.snapshot, snapshot_before_completion);
-        assert!(dropped.events.is_empty());
-        assert!(dropped.effects.is_empty());
-
-        let failed_load = controller.handle_input(CoreInput::EffectCompleted(
+        controller.handle_input(CoreInput::EffectCompleted(
             CoreEffectCompletion::ConversationLoaded {
-                correlation,
-                result: Err("load failed".to_string()),
+                correlation: conversation_load_correlation(1, "thread-2"),
+                result: Ok(Box::new(sample_conversation_ready_snapshot_for("thread-2"))),
+            },
+        ));
+        assert_eq!(controller.conversation_turn.background_session_count(), 1);
+        assert!(
+            controller
+                .snapshot()
+                .conversation_runtime
+                .active_turn
+                .is_none()
+        );
+
+        let reply = controller.handle_input(test_turn_stream_input(
+            turn,
+            TurnStreamEvent::AgentMessageCompleted {
+                item_id: "item-1".to_string(),
+                phase: None,
+                text: "done in the background".to_string(),
+            },
+        ));
+        assert!(
+            reply.events.is_empty(),
+            "the client does not get stream projections of a thread it does not show"
+        );
+        let terminal = controller.handle_input(test_turn_stream_input(
+            turn,
+            TurnStreamEvent::TurnTerminal {
+                receipt: confirmed_terminal_receipt("thread-1", "turn-1", Vec::new()),
+                execution_snapshot_capture: None,
+            },
+        ));
+        assert!(matches!(
+            terminal.events.as_slice(),
+            [AppEvent::PostTurnEvaluationDue { .. }]
+        ));
+
+        controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
+            thread_id: "thread-1".to_string(),
+            fallback_workspace_directory: "/tmp/workspace".to_string(),
+        }));
+        controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ConversationLoaded {
+                correlation: conversation_load_correlation(2, "thread-1"),
+                result: Ok(Box::new(sample_conversation_ready_snapshot_for("thread-1"))),
             },
         ));
         assert_eq!(
-            *failed_load.snapshot.planning_parallel.planning_runtime,
-            current_projection
+            controller.conversation_turn.background_session_count(),
+            0,
+            "returning to the thread brings its session back"
+        );
+        let started =
+            controller.handle_input(CoreInput::Command(AppCommand::EvaluateCompletedTurn {
+                parallel_mode_enabled: false,
+                parallel_automation_epoch_id: None,
+            }));
+        let [CoreEffect::EvaluatePostTurn { request, .. }] = started.effects.as_slice() else {
+            panic!("the returned thread should evaluate its completed turn");
+        };
+        assert_eq!(request.context.thread_id, "thread-1");
+        assert_eq!(
+            request.context.latest_main_reply.as_deref(),
+            Some("done in the background")
+        );
+    }
+
+    #[test]
+    fn post_turn_completion_continues_in_background_during_conversation_load() {
+        // plan 18 K2-3: opening another conversation keeps the evaluation of the left one. Its
+        // completion routes in the background and leaves the shown conversation untouched.
+        let mut controller = CoreController::new();
+        apply_completed_turn(&mut controller, "thread-1", "turn-1");
+        // The host starts the due evaluation, as in production (plan 18 K1-4).
+        let started =
+            controller.handle_input(CoreInput::Command(AppCommand::EvaluateCompletedTurn {
+                parallel_mode_enabled: false,
+                parallel_automation_epoch_id: None,
+            }));
+        let evaluation = post_turn_effect_correlation(&started);
+        controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
+            thread_id: "thread-2".to_string(),
+            fallback_workspace_directory: "/tmp/workspace".to_string(),
+        }));
+        assert_eq!(controller.conversation_turn.background_session_count(), 1);
+
+        let completed = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PostTurnEvaluationCompleted {
+                correlation: evaluation.clone(),
+                execution: Box::new(sample_post_turn_execution_for(
+                    "thread-1",
+                    "turn-1",
+                    &evaluation.planning_workspace_directory,
+                )),
+            },
+        ));
+
+        assert!(completed.events.iter().any(|event| matches!(
+            event,
+            AppEvent::PostTurnContinuationRoutingRequested { correlation, .. }
+                if correlation == &evaluation
+        )));
+        assert_eq!(
+            completed.snapshot.conversation_runtime.post_turn,
+            super::super::PostTurnAuthoritySnapshot::Idle,
+            "the shown conversation does not await the background route"
+        );
+        assert!(controller.post_turn_route_runtime(&evaluation).is_some());
+
+        controller.handle_input(CoreInput::Command(
+            AppCommand::ResolvePostTurnContinuation {
+                correlation: evaluation.clone(),
+                resolution: super::super::PostTurnRouteResolution::NoContinuation,
+            },
+        ));
+        assert!(controller.post_turn_route_runtime(&evaluation).is_none());
+        assert_eq!(
+            controller.conversation_turn.background_session_count(),
+            0,
+            "a settled background session is dropped"
         );
     }
 

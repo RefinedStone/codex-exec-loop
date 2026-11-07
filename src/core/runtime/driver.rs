@@ -58,6 +58,14 @@ where
         self.controller.parallel_mode_projection()
     }
 
+    /// 경로 결정을 기다리는 thread 의 runtime 값이다 (plan 18 K2-3). 그 thread 는 화면이 보지 않을 수 있다.
+    pub(crate) fn post_turn_route_runtime(
+        &self,
+        correlation: &crate::core::app::PostTurnEvaluationCorrelation,
+    ) -> Option<crate::core::app::ConversationRuntimeSnapshot> {
+        self.controller.post_turn_route_runtime(correlation)
+    }
+
     pub(crate) fn dispatch_command(&mut self, command: AppCommand) -> CoreDispatchOutcome {
         self.dispatch_input(CoreInput::Command(command))
     }

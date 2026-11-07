@@ -26,9 +26,9 @@ use crate::application::service::startup_service::StartupService;
 use crate::composition::clipboard_image_probe::ClipboardImageProbeTrigger;
 use crate::composition::core_effect_runner::CoreEffectRunner;
 use crate::core::app::{
-    AppCommand, AppEvent, AppSnapshot, CoreDispatchOutcome, CoreInput, ParallelModeProjection,
-    PostTurnAuthoritySnapshot, PostTurnEvaluationCorrelation, PostTurnRouteResolution,
-    RevisionedPlanningParallelProjection,
+    AppCommand, AppEvent, AppSnapshot, ConversationRuntimeSnapshot, CoreDispatchOutcome, CoreInput,
+    ParallelModeProjection, PostTurnAuthoritySnapshot, PostTurnEvaluationCorrelation,
+    PostTurnRouteResolution, RevisionedPlanningParallelProjection,
 };
 #[cfg(test)]
 use crate::core::app::{GithubReviewPollingSetupRequest, TurnSubmissionCorrelation};
@@ -147,10 +147,11 @@ fn merge_core_dispatch_outcome_at(
     target.snapshot = resolved.snapshot;
 }
 
+// 경로를 기다리는 thread 의 runtime 값으로 판단한다 (plan 18 K2-3). 그 thread 는 화면이 보지 않을 수 있다.
 fn pending_post_turn_route_correlation(
-    snapshot: &AppSnapshot,
+    runtime: &ConversationRuntimeSnapshot,
 ) -> Option<&PostTurnEvaluationCorrelation> {
-    match &snapshot.conversation_runtime.post_turn {
+    match &runtime.post_turn {
         PostTurnAuthoritySnapshot::AwaitingRoute { correlation, .. } => Some(correlation),
         PostTurnAuthoritySnapshot::Idle
         | PostTurnAuthoritySnapshot::Evaluating { .. }
@@ -159,36 +160,35 @@ fn pending_post_turn_route_correlation(
 }
 
 fn exact_single_post_turn_routing_request<'a>(
-    snapshot: &AppSnapshot,
+    runtime: &ConversationRuntimeSnapshot,
     routing_requests: &'a [InternalPostTurnRoutingRequest],
 ) -> Option<&'a InternalPostTurnRoutingRequest> {
     let [request] = routing_requests else {
         return None;
     };
-    (pending_post_turn_route_correlation(snapshot) == Some(&request.correlation)).then_some(request)
+    (pending_post_turn_route_correlation(runtime) == Some(&request.correlation)).then_some(request)
 }
 
 fn route_parallel_post_turn_for_exact_single<T>(
-    snapshot: &AppSnapshot,
+    runtime: &ConversationRuntimeSnapshot,
     routing_requests: &[InternalPostTurnRoutingRequest],
     route: impl FnOnce(&InternalPostTurnRoutingRequest) -> T,
 ) -> Option<T> {
-    let request = exact_single_post_turn_routing_request(snapshot, routing_requests)?;
-    snapshot
-        .conversation_runtime
+    let request = exact_single_post_turn_routing_request(runtime, routing_requests)?;
+    runtime
         .auto_follow
         .parallel_post_turn_continuation_allowed()
         .then(|| route(request))
 }
 
 fn fail_closed_post_turn_settlement(
-    snapshot: &AppSnapshot,
+    runtime: &ConversationRuntimeSnapshot,
     routing_requests: &[InternalPostTurnRoutingRequest],
 ) -> Option<(usize, PostTurnEvaluationCorrelation)> {
     if routing_requests.len() <= 1 {
         return None;
     }
-    let current = pending_post_turn_route_correlation(snapshot)?;
+    let current = pending_post_turn_route_correlation(runtime)?;
     routing_requests
         .iter()
         .find(|request| &request.correlation == current)
@@ -670,9 +670,17 @@ impl NativeClientRuntime {
         if routing_requests.is_empty() {
             return NativeClientDispatchOutcome::Core(core_outcome);
         }
+        let route_runtime = routing_requests
+            .iter()
+            .find_map(|request| {
+                self.core
+                    .runtime
+                    .post_turn_route_runtime(&request.correlation)
+            })
+            .unwrap_or_else(|| core_outcome.snapshot.conversation_runtime.clone());
 
         if let Some((event_index, correlation)) =
-            fail_closed_post_turn_settlement(core_outcome.snapshot.as_ref(), &routing_requests)
+            fail_closed_post_turn_settlement(&route_runtime, &routing_requests)
         {
             let mut resolved =
                 self.core
@@ -686,10 +694,9 @@ impl NativeClientRuntime {
             return NativeClientDispatchOutcome::Core(core_outcome);
         }
 
-        let Some(request) = exact_single_post_turn_routing_request(
-            core_outcome.snapshot.as_ref(),
-            &routing_requests,
-        ) else {
+        let Some(request) =
+            exact_single_post_turn_routing_request(&route_runtime, &routing_requests)
+        else {
             return NativeClientDispatchOutcome::Core(core_outcome);
         };
         let auto_follow_prompt_queued = matches!(
@@ -697,7 +704,7 @@ impl NativeClientRuntime {
             PostTurnContinuationAction::QueueAutoPrompt(_)
         );
         let parallel_outcome = route_parallel_post_turn_for_exact_single(
-            core_outcome.snapshot.as_ref(),
+            &route_runtime,
             &routing_requests,
             |request| {
                 self.parallel_control_plane.continue_post_turn_queue(
@@ -730,11 +737,7 @@ impl NativeClientRuntime {
         let resolution = post_turn_route_resolution(
             auto_follow_prompt_queued,
             parallel_consumed_prompt,
-            core_outcome
-                .snapshot
-                .conversation_runtime
-                .auto_follow
-                .can_queue_next(),
+            route_runtime.auto_follow.can_queue_next(),
         );
         let event_index = request.event_index;
         let correlation = request.correlation.clone();
@@ -1129,9 +1132,13 @@ mod tests {
             .conversation_runtime
             .auto_follow
             .continuation_paused = true;
-        let blocked = route_parallel_post_turn_for_exact_single(&snapshot, &requests, |_| {
-            route_calls.set(route_calls.get() + 1);
-        });
+        let blocked = route_parallel_post_turn_for_exact_single(
+            &snapshot.conversation_runtime,
+            &requests,
+            |_| {
+                route_calls.set(route_calls.get() + 1);
+            },
+        );
         assert!(blocked.is_none());
         assert_eq!(route_calls.get(), 0);
 
@@ -1139,9 +1146,13 @@ mod tests {
             .conversation_runtime
             .auto_follow
             .parallel_rearmed_after_stop = true;
-        let allowed = route_parallel_post_turn_for_exact_single(&snapshot, &requests, |_| {
-            route_calls.set(route_calls.get() + 1);
-        });
+        let allowed = route_parallel_post_turn_for_exact_single(
+            &snapshot.conversation_runtime,
+            &requests,
+            |_| {
+                route_calls.set(route_calls.get() + 1);
+            },
+        );
         assert_eq!(allowed, Some(()));
         assert_eq!(route_calls.get(), 1);
     }
@@ -1154,14 +1165,18 @@ mod tests {
         let snapshot = awaiting_route_snapshot(&current);
         let route_calls = Cell::new(0);
 
-        let routed = route_parallel_post_turn_for_exact_single(&snapshot, &requests, |_| {
-            route_calls.set(route_calls.get() + 1);
-        });
+        let routed = route_parallel_post_turn_for_exact_single(
+            &snapshot.conversation_runtime,
+            &requests,
+            |_| {
+                route_calls.set(route_calls.get() + 1);
+            },
+        );
 
         assert!(routed.is_none());
         assert_eq!(route_calls.get(), 0);
         assert!(
-            fail_closed_post_turn_settlement(&snapshot, &requests).is_none(),
+            fail_closed_post_turn_settlement(&snapshot.conversation_runtime, &requests).is_none(),
             "a stale-only marker must not settle an unrelated current route"
         );
     }
@@ -1176,14 +1191,18 @@ mod tests {
         let snapshot = awaiting_route_snapshot(&correlation);
         let route_calls = Cell::new(0);
 
-        let routed = route_parallel_post_turn_for_exact_single(&snapshot, &requests, |_| {
-            route_calls.set(route_calls.get() + 1);
-        });
+        let routed = route_parallel_post_turn_for_exact_single(
+            &snapshot.conversation_runtime,
+            &requests,
+            |_| {
+                route_calls.set(route_calls.get() + 1);
+            },
+        );
 
         assert!(routed.is_none());
         assert_eq!(route_calls.get(), 0);
         assert_eq!(
-            fail_closed_post_turn_settlement(&snapshot, &requests),
+            fail_closed_post_turn_settlement(&snapshot.conversation_runtime, &requests),
             Some((0, correlation))
         );
     }
@@ -1199,14 +1218,18 @@ mod tests {
         let snapshot = awaiting_route_snapshot(&current);
         let route_calls = Cell::new(0);
 
-        let routed = route_parallel_post_turn_for_exact_single(&snapshot, &requests, |_| {
-            route_calls.set(route_calls.get() + 1);
-        });
+        let routed = route_parallel_post_turn_for_exact_single(
+            &snapshot.conversation_runtime,
+            &requests,
+            |_| {
+                route_calls.set(route_calls.get() + 1);
+            },
+        );
 
         assert!(routed.is_none());
         assert_eq!(route_calls.get(), 0);
         assert_eq!(
-            fail_closed_post_turn_settlement(&snapshot, &requests),
+            fail_closed_post_turn_settlement(&snapshot.conversation_runtime, &requests),
             Some((2, current))
         );
     }
@@ -1546,6 +1569,17 @@ mod tests {
      */
     #[test]
     fn host_cycle_runs_turn_end_evaluation_and_auto_follow_without_a_client() {
+        run_auto_follow_loop_with_host_cycles(false);
+    }
+
+    #[test]
+    fn host_cycle_finishes_the_auto_follow_loop_of_a_conversation_the_client_left() {
+        // plan 18 K2-3: the client opens a new draft while the turn runs. The left conversation
+        // still ends, gets evaluated, and submits its follow-up turn in the background.
+        run_auto_follow_loop_with_host_cycles(true);
+    }
+
+    fn run_auto_follow_loop_with_host_cycles(leave_conversation_while_running: bool) {
         let planning = test_planning_services(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
         let parallel = test_parallel_mode_control_plane_composition(planning.clone());
         let parallel_turns = parallel.parallel_mode_turn_service();
@@ -1574,18 +1608,6 @@ mod tests {
                 turn_id: "turn-1".to_string(),
                 runtime_request: Box::<ConversationRuntimeConfigurationRequest>::default(),
             },
-            TurnStreamEvent::TurnTerminal {
-                receipt: ConversationTurnTerminalReceipt::completed(
-                    "thread-1",
-                    "turn-1",
-                    Vec::new(),
-                )
-                .with_application_delivery(ConversationTurnApplicationDelivery::Confirmed),
-                execution_snapshot_capture: Some(TurnSnapshotCapture::capture_failed(
-                    "/workspace",
-                    "test capture skipped".to_string(),
-                )),
-            },
         ] {
             let _ = runtime.dispatch_client_event(NativeClientEvent::core(
                 CoreInput::ConversationStreamUpdated {
@@ -1594,8 +1616,41 @@ mod tests {
                 },
             ));
         }
+        if leave_conversation_while_running {
+            let _ = runtime.dispatch_client_event(NativeClientEvent::core(CoreInput::Command(
+                AppCommand::InvalidateConversationLoad,
+            )));
+            assert!(
+                runtime
+                    .snapshot()
+                    .conversation_runtime
+                    .active_turn
+                    .is_none()
+            );
+        }
+        let _ = runtime.dispatch_client_event(NativeClientEvent::core(
+            CoreInput::ConversationStreamUpdated {
+                correlation: turn_correlation,
+                event: TurnStreamEvent::TurnTerminal {
+                    receipt: ConversationTurnTerminalReceipt::completed(
+                        "thread-1",
+                        "turn-1",
+                        Vec::new(),
+                    )
+                    .with_application_delivery(ConversationTurnApplicationDelivery::Confirmed),
+                    execution_snapshot_capture: Some(TurnSnapshotCapture::capture_failed(
+                        "/workspace",
+                        "test capture skipped".to_string(),
+                    )),
+                },
+            },
+        ));
         let correlation = match &runtime.snapshot().conversation_runtime.post_turn {
             PostTurnAuthoritySnapshot::Evaluating { correlation, .. } => correlation.clone(),
+            // The shown draft has no evaluation; the left conversation evaluates its first one.
+            PostTurnAuthoritySnapshot::Idle if leave_conversation_while_running => {
+                post_turn_correlation(1)
+            }
             other => panic!("the host should start the post-turn evaluation: {other:?}"),
         };
         let _ = runtime.dispatch_client_event(NativeClientEvent::core(CoreInput::EffectCompleted(
