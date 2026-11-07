@@ -214,17 +214,19 @@ impl ShellRuntime {
         self.background_drain_limited =
             drained_background_messages == BACKGROUND_MESSAGE_DRAIN_BUDGET;
 
+        // 병렬 화면 상태를 알린 뒤 런타임 호스트의 한 주기(입력 처리, core·병렬 tick)를 돌린다 (plan 18 K1-6).
+        // 화면 상태와 pulse 는 같은 sample 하나를 쓴다.
+        let parallel_presentation_sample = self.app.parallel_panel_projection_sample();
+        self.app.sync_parallel_view(&parallel_presentation_sample);
         redraw_requested |= self
             .app
-            .poll_client_runtime_events(BACKGROUND_MESSAGE_DRAIN_BUDGET);
+            .run_client_runtime_host_cycle(now, BACKGROUND_MESSAGE_DRAIN_BUDGET);
         if self.first_frame_delivered {
             let workspace_directory = self.app.planning_workspace_directory();
             redraw_requested |= self
                 .app
                 .maybe_start_github_review_polling_setup(&workspace_directory);
         }
-        redraw_requested |= self.app.tick_client_runtime(now);
-        let parallel_presentation_sample = self.app.parallel_panel_projection_sample();
         let live_activity_pulse = self
             .app
             .live_activity_pulse_with_sample(now, &parallel_presentation_sample);
@@ -232,9 +234,6 @@ impl ShellRuntime {
             redraw_requested = true;
         }
         self.last_live_activity_pulse = live_activity_pulse;
-        redraw_requested |= self
-            .app
-            .tick_parallel_mode_control_plane(now, &parallel_presentation_sample);
         redraw_requested |= self.app.reconcile_directions_maintenance_context();
         redraw_requested |= self.app.reconcile_reviews_overlay_authority_context();
         redraw_requested |= self.app.reconcile_queue_overlay_authority_context();

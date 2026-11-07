@@ -1,4 +1,5 @@
 use crossterm::event::{self, KeyCode, KeyModifiers};
+#[cfg(test)]
 use std::time::Instant;
 
 use crate::adapter::inbound::tui::shell_chrome::{ShellChromeEvent, ShellOverlay};
@@ -430,6 +431,16 @@ impl NativeTuiApp {
         self.apply_parallel_mode_control_plane_command(command);
     }
 
+    /// 병렬 화면 상태를 알린다. tick 은 런타임 호스트의 주기가 넣는다 (plan 18 K1-6).
+    pub(super) fn sync_parallel_view(&mut self, sample: &ParallelPanelProjectionSample) {
+        let view = ParallelViewState {
+            workspace_directory: self.planning_workspace_directory(),
+            supervisor_view_active: self.parallel_mode_activity_pulse_visible_with_sample(sample),
+        };
+        let _ = self.dispatch_parallel_client_event(NativeClientEvent::ParallelViewChanged(view));
+    }
+
+    #[cfg(test)]
     pub(super) fn tick_parallel_mode_control_plane(
         &mut self,
         now: Instant,

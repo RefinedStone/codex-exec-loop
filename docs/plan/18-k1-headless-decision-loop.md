@@ -2,7 +2,7 @@
 
 ## 문서 상태
 
-- 상태: **Proposed execution plan**. 현재 제품 동작을 설명하지 않는다.
+- 상태: **완료 (2026-11-07)**. K1-1~K1-6 이 모두 머지되었다. 단계별 결과와 설계와 달라진 점은 §4 표에 적는다.
 - 상위 계획: [18 Akra 커널 아키텍처](18-akra-kernel-architecture.md) §5.1~§5.3, §6 K1. 결정 KP-01, KP-02 (승인 2026-11-07).
 - 기준일: 2026-11-07 (Asia/Seoul)
 - 기준 커밋: `6af4a09b` (`origin/prerelease`). K0 결함 수정이 모두 들어간 뒤이다.
@@ -97,7 +97,7 @@
 | K1-3 (완료 2026-11-07) | 시작 점검이 성공하면 core 가 세션 목록 첫 페이지를 이어서 읽는다. `Started` 입력은 만들지 않았다: 부팅과 재시도는 사용자 명령 `RunStartupChecks` 하나로 충분하다. GitHub 폴링 설정 시작(첫 화면 조건)은 설정 값이 TUI 에 있어서 K1-6 으로 옮긴다 | T6 | core 테스트: 점검 Ready 결과에 세션 목록 로드 effect 가 함께 나온다. shell chrome 은 세션 목록 명령을 내지 않는다 |
 | K1-4 (완료 2026-11-07) | core 가 최근 사용자 문장(제출 시 `transcript_text`)과 최근 응답을 기억한다. 턴 종료에서 core 가 평가 대기 턴과 `PostTurnEvaluationDue` 를 내고, 호스트(`NativeClientRuntime`)가 병렬 값(사용 여부, epoch)을 붙여 `EvaluateCompletedTurn` 으로 시작한다. TUI 의 평가 요청 경로는 지웠다. 차이: 기록을 연 뒤 응답 없이 끝난 턴은 TUI 가 기록의 예전 응답을 넘겼지만 core 는 이번 세션 값만 쓴다 | T1, T2 | core 테스트: 완료 턴의 평가 입력(응답, 변경 파일, 캡처, thread, planning 작업 공간, epoch)과 한 번만 평가. 호스트 테스트: 턴 종료 뒤 평가가 자동으로 시작된다 |
 | K1-5 (완료 2026-11-07) | 경로가 `AutoSubmit` 이면 호스트가 `SubmitAutoFollowTurn` 으로 core 에 제출한다. core 는 기억한 턴 옵션(제출, 대화 로드, 클라이언트의 `SetConversationTurnOptions` 로 갱신)과 planning handoff 로 만든 슬롯 lease 넘기기를 쓰고, `AutoFollowTurnSubmissionResolved` 로 결과를 알린다. 별도 `TurnSubmissionPolicy` 객체는 만들지 않았다: 규칙이 core 함수 하나로 충분하다. TUI 는 더 이상 다시 제출하지 않고 그 이벤트로 "Auto Follow-up" 메시지를 그린다. 차이: TUI 의 시작 상태 게이트를 거치지 않는다 | T3 | core 테스트: 턴 옵션, 원천 correlation, 결과 이벤트 순서. TUI 테스트: 거절된 제출은 "auto-follow cancelled" |
-| K1-6 | `CoreRuntimeHost`, 블로킹 입력함, 헤드리스 시험, 경계 테스트 | 구동 루프 | TUI 없이 가짜 app-server 로 턴 종료 → 평가 → 자동 후속 턴 |
+| K1-6 (완료 2026-11-07) | 런타임 호스트는 별도 타입 대신 `NativeClientRuntime::run_host_cycle` 이다: 입력을 최대 `wait` 만큼 블로킹으로 기다리고(`CoreInputReceiver::recv_timeout`), 와 있는 입력을 처리하고, core `Tick` 과 병렬 tick 을 넣는다. TUI 는 `wait = 0` 으로 부르고 병렬 화면 상태만 알린다. 경계 테스트가 inbound 의 호스트 전용 입력(`CoreInput::Tick`, 경로 결정, 평가 시작, 자동 후속 제출)을 막는다. GitHub 폴링 설정 시작(첫 화면 조건)은 작업 공간마다 다시 시작하는 규칙이 있어 K2(thread·작업 공간별 상태)로 옮긴다 | 구동 루프 | 헤드리스 시험: TUI 없이 `run_host_cycle` 만으로 턴 종료 → 평가 시작 → AutoSubmit → 다음 턴 실행 요청 |
 
 규모: plan 18 의 추정(4~7일, 옮길 로직과 테스트 800~1,500줄)을 유지한다. K1-4, K1-5 가 가장 크다.
 
@@ -114,5 +114,5 @@
 
 | ID | 질문 | 영향 |
 | --- | --- | --- |
-| Q-K1-1 | 헤드리스 시험의 진입점을 CLI 명령(`akra run --headless` 등)으로도 열 것인가, 시험 전용으로만 둘 것인가 | K1-6 범위 |
-| Q-K1-2 | tick 주기 (현재 화면 루프 최대 100ms) | 전력 사용, 폴링 지연 |
+| Q-K1-1 | 헤드리스 시험의 진입점을 CLI 명령(`akra run --headless` 등)으로도 열 것인가, 시험 전용으로만 둘 것인가 | **정함 (2026-11-07):** 시험 전용. CLI 진입점은 K3 데몬과 함께 정한다 |
+| Q-K1-2 | tick 주기 (현재 화면 루프 최대 100ms) | **정함 (2026-11-07):** 화면 루프 주기(최대 100ms)를 유지한다. 화면 없는 호스트는 `run_host_cycle` 의 `wait` 로 정한다 |

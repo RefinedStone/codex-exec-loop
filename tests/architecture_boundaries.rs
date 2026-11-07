@@ -2857,9 +2857,9 @@ fn parallel_dispatch_mutations_never_run_inline_under_the_control_plane_mutex() 
     let shell_runtime = fs::read_to_string("src/adapter/inbound/tui/app/shell_runtime.rs")
         .expect("TUI shell runtime source should load");
     assert!(
-        shell_runtime
-            .contains("tick_parallel_mode_control_plane(now, &parallel_presentation_sample)",),
-        "the production TUI shell pulse must drive the parallel control plane"
+        shell_runtime.contains("sync_parallel_view(&parallel_presentation_sample)")
+            && shell_runtime.contains("run_client_runtime_host_cycle(now"),
+        "the production TUI shell pulse must drive the parallel control plane through the runtime host cycle (plan 18 K1-6)"
     );
 }
 
@@ -8668,6 +8668,7 @@ fn tui_shell_renderer_consumes_one_owned_frame_without_app_or_effects() {
         "poll_pending_client_event",
         "presentation_projection",
         "revisioned_planning_parallel_projection",
+        "run_host_cycle",
         "snapshot",
     ] {
         assert!(
@@ -9965,7 +9966,7 @@ fn tui_parallel_frame_uses_one_control_plane_and_event_projection_sample() {
     for required in [
         "let parallel_presentation_sample = self.app.parallel_panel_projection_sample();",
         ".live_activity_pulse_with_sample(now, &parallel_presentation_sample)",
-        ".tick_parallel_mode_control_plane(now, &parallel_presentation_sample)",
+        ".sync_parallel_view(&parallel_presentation_sample)",
     ] {
         assert!(
             runtime_source.contains(required),
@@ -11166,6 +11167,49 @@ fn tui_approval_decisions_enter_through_core_runtime() {
 }
 
 #[test]
+fn inbound_adapters_do_not_drive_the_runtime_host_or_its_internal_decisions() {
+    // plan 18 K1-6: the runtime host owns the clock, the post-turn trigger, routing, and the
+    // auto-follow submission. Inbound adapters only send user commands and view state.
+    assert_no_forbidden_references_in_paths(
+        "inbound adapters must not construct host-only Core inputs",
+        &["src/adapter/inbound"],
+        &[
+            "CoreInput::Tick",
+            "ResolvePostTurnContinuation",
+            "EvaluateCompletedTurn",
+            "AppCommand::EvaluatePostTurn",
+        ],
+    );
+    assert_no_production_callable_reference_named_in_paths(
+        "inbound production code must not submit the auto-follow turn; the host does",
+        &["src/adapter/inbound"],
+        "SubmitAutoFollowTurn",
+    );
+    assert!(
+        !production_callable_reference_lines(
+            "fn sample() { send(AppCommand::SubmitAutoFollowTurn(Box::new(submission))); }",
+            "SubmitAutoFollowTurn",
+        )
+        .is_empty(),
+        "the guard must detect a tuple-variant command constructor"
+    );
+    let native_runtime = fs::read_to_string("src/composition/native_client_runtime.rs").unwrap();
+    for host_input in [
+        "CoreInput::Tick",
+        "NativeClientEvent::ParallelTick",
+        "AppCommand::EvaluateCompletedTurn",
+        "AppCommand::ResolvePostTurnContinuation",
+        "AppCommand::SubmitAutoFollowTurn",
+        "fn run_host_cycle",
+    ] {
+        assert!(
+            native_runtime.contains(host_input),
+            "the runtime host must own {host_input}"
+        );
+    }
+}
+
+#[test]
 fn tui_github_review_polling_enters_through_core_runtime() {
     assert_no_forbidden_references_in_paths(
         "TUI GitHub review polling must not own worker, cursor, or completion authority",
@@ -11204,8 +11248,8 @@ fn tui_github_review_polling_enters_through_core_runtime() {
             && polling_references
                 .paths
                 .iter()
-                .any(|path| path.ends_with("CoreInput::Tick")),
-        "TUI GitHub setup must enter through a typed Core command and polling through the host tick (plan 18 K1-1)"
+                .all(|path| !path.ends_with("CoreInput::Tick")),
+        "TUI GitHub setup must enter through a typed Core command; polling runs on the runtime host tick (plan 18 K1-1, K1-6)"
     );
 
     let forbidden_identifiers = [
@@ -14023,6 +14067,7 @@ fn verify_client_runtime_api_boundary(
         "poll_pending_input",
         "revisioned_planning_parallel_projection",
         "snapshot",
+        "wait_pending_input",
     ];
     let mut actual_runtime_api = Vec::new();
     for item in &driver_syntax.items {
@@ -14118,6 +14163,7 @@ fn verify_client_runtime_api_boundary(
         "parallel_mode_projection",
         "poll_pending_client_event",
         "revisioned_planning_parallel_projection",
+        "run_host_cycle",
         "snapshot",
     ];
     let read_only_facade_api = [

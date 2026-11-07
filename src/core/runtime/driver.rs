@@ -76,6 +76,15 @@ where
         outcomes
     }
 
+    /// 입력이 올 때까지 최대 `timeout` 만큼 기다린다 (plan 18 K1-6). 런타임 호스트가 polling 대신 쓴다.
+    pub(crate) fn wait_pending_input(
+        &mut self,
+        timeout: std::time::Duration,
+    ) -> Option<CoreDispatchOutcome> {
+        let input = self.input_receiver.recv_timeout(timeout).ok()?;
+        Some(self.dispatch_input(input))
+    }
+
     pub(crate) fn poll_pending_input(&mut self) -> Option<CoreDispatchOutcome> {
         let input = self.input_receiver.try_recv().ok()?;
         Some(self.dispatch_input(input))

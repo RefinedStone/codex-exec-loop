@@ -9,7 +9,7 @@ use crate::domain::github_review::{
     GithubPullRequestTarget, truncate_notice_text,
 };
 use anyhow::{Result, anyhow, bail};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 // GitHub review polling is an optional shell-side watcher for the active PR
 // lane. Explicit env configuration wins, otherwise the adapter may discover an
@@ -466,14 +466,6 @@ impl NativeTuiApp {
         self.runtime
             .github_review_polling_state
             .record_setup_completion(correlation, result);
-    }
-
-    /// 호스트 시계를 core 에 넘긴다 (plan 18 K1-1). 무엇을 할지는 core 가 정한다. 무언가 시작되면 true 이다.
-    pub(super) fn tick_client_runtime(&mut self, now: Instant) -> bool {
-        let outcome = self.reduce_core_client_event(CoreInput::Tick { now });
-        let started = !outcome.events.is_empty();
-        self.apply_core_dispatch_outcome(outcome);
-        started
     }
 
     pub(super) fn record_github_review_poll_started(

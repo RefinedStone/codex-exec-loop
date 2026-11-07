@@ -1860,6 +1860,34 @@ impl NativeTuiApp {
         }
     }
 
+    /// 런타임 호스트의 한 주기를 화면 루프에서 돌린다 (plan 18 K1-6). 화면은 기다리지 않는다.
+    pub(super) fn run_client_runtime_host_cycle(
+        &mut self,
+        now: std::time::Instant,
+        max_inputs: usize,
+    ) -> bool {
+        let outcomes =
+            self.runtime
+                .client_runtime
+                .run_host_cycle(now, std::time::Duration::ZERO, max_inputs);
+        let mut changed = false;
+        for outcome in outcomes {
+            changed |= match &outcome {
+                NativeClientDispatchOutcome::Core(core) => !core.events.is_empty(),
+                NativeClientDispatchOutcome::Parallel(parallel) => {
+                    !parallel.presentation_events.is_empty()
+                }
+                NativeClientDispatchOutcome::Combined { core, parallel } => {
+                    !core.events.is_empty() || !parallel.presentation_events.is_empty()
+                }
+            };
+            self.apply_native_client_dispatch_outcome(outcome);
+        }
+        changed
+    }
+
+    // 시험 전용이다. 화면 루프는 런타임 호스트의 주기를 쓴다 (plan 18 K1-6).
+    #[cfg(test)]
     pub(super) fn poll_client_runtime_events(&mut self, max_inputs: usize) -> bool {
         let mut changed = false;
         for _ in 0..max_inputs {

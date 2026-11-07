@@ -4,6 +4,7 @@ use std::fmt;
 use std::sync::mpsc::TrySendError;
 use std::sync::mpsc::{SendError, TryRecvError};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use crate::core::app::{CoreInput, TurnStreamEvent};
 use crate::domain::conversation_progressive_activity::MAX_RETAINED_PROGRESSIVE_ACTIVITY_DYNAMIC_BYTES;
@@ -241,6 +242,33 @@ impl fmt::Debug for CoreInputSender {
 }
 
 impl CoreInputReceiver {
+    /*
+     * 런타임 호스트가 polling 대신 쓴다 (plan 18 K1-6). 보내는 쪽의 notify_one 이 기다리는 다른 보내는 쪽을
+     * 깨울 수도 있으므로, 깨어나지 못해도 최대 timeout 만큼만 기다린다.
+     */
+    pub(super) fn recv_timeout(&self, timeout: Duration) -> Result<CoreInput, TryRecvError> {
+        let deadline = Instant::now() + timeout;
+        let mut state = self.shared.lock_state();
+        loop {
+            if let Some(input) = state.pop_next() {
+                drop(state);
+                self.shared.changed.notify_one();
+                return Ok(input);
+            }
+            if state.sender_count == 0 {
+                return Err(TryRecvError::Disconnected);
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return Err(TryRecvError::Empty);
+            }
+            state = match self.shared.changed.wait_timeout(state, deadline - now) {
+                Ok((state, _)) => state,
+                Err(poisoned) => poisoned.into_inner().0,
+            };
+        }
+    }
+
     pub(super) fn try_recv(&self) -> Result<CoreInput, TryRecvError> {
         let mut state = self.shared.lock_state();
         if let Some(input) = state.pop_next() {
