@@ -11199,8 +11199,8 @@ fn tui_github_review_polling_enters_through_core_runtime() {
             && polling_references
                 .paths
                 .iter()
-                .any(|path| path.ends_with("AppCommand::PollGithubReview")),
-        "TUI GitHub setup and polling must positively enter through typed Core commands"
+                .any(|path| path.ends_with("CoreInput::Tick")),
+        "TUI GitHub setup must enter through a typed Core command and polling through the host tick (plan 18 K1-1)"
     );
 
     let forbidden_identifiers = [
