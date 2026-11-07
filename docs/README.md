@@ -35,7 +35,8 @@ their exact headings, phrases, surface rows, or test-entrypoint inventory.
 
 The following content is not implementation truth:
 
-- [plan/18-akra-kernel-architecture.md](plan/18-akra-kernel-architecture.md): proposed kernel architecture where people and AI agents use one bidirectional command and event protocol (Korean)
+- [plan/18-akra-kernel-architecture.md](plan/18-akra-kernel-architecture.md): approved kernel architecture where people and AI agents use one bidirectional command and event protocol (Korean)
+- [plan/18-k1-headless-decision-loop.md](plan/18-k1-headless-decision-loop.md): proposed K1 steps that move decision rules and timers out of the TUI (Korean)
 - [plan/17-akra-desktop/README.md](plan/17-akra-desktop/README.md): proposed Electron desktop client over a thin, always-on Codex app-server gateway (Korean)
 - [plan/15-async-pr-ci-remediation-admin-rollout.md](plan/15-async-pr-ci-remediation-admin-rollout.md): proposed execution order for durable post-merge validation, remediation queueing, and the Akra Admin operations surface
 - [plan/14-codex-for-oss-application.md](plan/14-codex-for-oss-application.md): future program application draft with explicitly archival metrics
