@@ -1074,6 +1074,26 @@ async fn admin_json_mutations_require_header_csrf_and_share_reset_guard() {
         .expect("reset request should be served");
     assert_eq!(bad_target.status(), StatusCode::BAD_REQUEST);
 
+    // directions/all 은 confirm 없이 실행되지 않는다 (plan 18 K-D1).
+    for target in ["directions", "all"] {
+        let unconfirmed = router
+            .clone()
+            .oneshot(json_request(
+                Method::POST,
+                "/api/planning/reset",
+                json!({ "target": target }),
+                Some(&cookie),
+                Some(&csrf_token),
+            ))
+            .await
+            .expect("reset request should be served");
+        assert_eq!(
+            unconfirmed.status(),
+            StatusCode::PRECONDITION_REQUIRED,
+            "{target}"
+        );
+    }
+
     let accepted = router
         .clone()
         .oneshot(json_request(

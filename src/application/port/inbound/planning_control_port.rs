@@ -1,22 +1,22 @@
 use anyhow::Result;
 use std::sync::Arc;
 
-use crate::domain::planning::PlanningResetTarget;
+use crate::domain::planning::PlanningResetRequest;
 
 pub const PLANNING_CONTROL_HELP_TEXT: &str = "지원 명령어\n\
 /help\n\
 /status\n\
 /queue\n\
 /reset queue\n\
-/reset directions\n\
-/reset all";
+/reset directions confirm\n\
+/reset all confirm";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanningControlCommand {
     Help,
     Status,
     Queue,
-    Reset(PlanningResetTarget),
+    Reset(PlanningResetRequest),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -84,7 +84,7 @@ and parallel delivery invariants.
 akra doctor [workspace_dir]
 akra status [workspace_dir]
 akra queue [workspace_dir]
-akra reset <queue|directions|all> [workspace_dir]
+akra reset <queue|directions|all> [workspace_dir] [--confirm]
 akra planning-tool <contract|run> [workspace_dir]
 akra parallel-tick [workspace_dir]
 akra admin [--port <port>]

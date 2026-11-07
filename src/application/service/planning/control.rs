@@ -7,7 +7,7 @@ use crate::application::service::planning::{
     PlanningApplicationProjection, PlanningApplicationQueueTask, PlanningDoctorReport,
     PlanningServices, PlanningWorkspaceResetResult,
 };
-use crate::domain::planning::PlanningResetTarget;
+use crate::domain::planning::PlanningResetRequest;
 use anyhow::Result;
 use std::sync::Arc;
 
@@ -21,7 +21,8 @@ pub trait PlanningControlSurface: Send + Sync {
     // 좁은 trait은 command executor를 testable하게 만들고, text layer가 full planning facade API에 의존하지 않게 한다.
     fn workspace_dir(&self) -> &str;
     fn load_status_snapshot(&self) -> Result<PlanningControlStatusSnapshot>;
-    fn reset_workspace(&self, target: PlanningResetTarget) -> Result<PlanningControlResetOutcome>;
+    fn reset_workspace(&self, request: PlanningResetRequest)
+    -> Result<PlanningControlResetOutcome>;
 }
 
 #[derive(Clone)]
@@ -58,11 +59,14 @@ impl PlanningControlSurface for PlanningControlFacadeService {
         ))
     }
 
-    fn reset_workspace(&self, target: PlanningResetTarget) -> Result<PlanningControlResetOutcome> {
+    fn reset_workspace(
+        &self,
+        request: PlanningResetRequest,
+    ) -> Result<PlanningControlResetOutcome> {
         let result = self
             .planning
             .workspace
-            .reset_workspace(self.workspace_dir.as_str(), target)?;
+            .reset_workspace(self.workspace_dir.as_str(), request)?;
         Ok(map_workspace_reset_result(
             self.workspace_dir.as_str(),
             result,
@@ -120,8 +124,8 @@ impl PlanningControlService {
                 let snapshot = self.surface.load_status_snapshot()?;
                 Ok(PlanningControlReply::new(format_queue(&snapshot)))
             }
-            PlanningControlCommand::Reset(target) => {
-                let outcome = self.surface.reset_workspace(target)?;
+            PlanningControlCommand::Reset(request) => {
+                let outcome = self.surface.reset_workspace(request)?;
                 Ok(PlanningControlReply::new(format_reset(&outcome)))
             }
         }
@@ -318,7 +322,7 @@ mod tests {
         }
         fn reset_workspace(
             &self,
-            _target: PlanningResetTarget,
+            _request: crate::domain::planning::PlanningResetRequest,
         ) -> Result<PlanningControlResetOutcome> {
             Ok(self.reset_outcome.clone())
         }
@@ -399,7 +403,12 @@ mod tests {
         // reset 확인 문구는 rewrite된 authority file/store 이름을 포함해야 operator가 실제 효과를 확인할 수 있다.
         let service = build_service();
         let reply = service
-            .execute(PlanningControlCommand::Reset(PlanningResetTarget::Queue))
+            .execute(PlanningControlCommand::Reset(
+                crate::domain::planning::PlanningResetRequest::new(
+                    PlanningResetTarget::Queue,
+                    false,
+                ),
+            ))
             .expect("reset should execute");
 
         assert!(reply.text.contains("reset queue 완료"));

@@ -71,6 +71,9 @@ pub(super) struct ResetForm {
     pub(super) csrf_token: String,
     // page handler와 API handler가 parse_reset_target을 공유하도록 reset target은 transport text로 유지한다.
     pub(super) target: String,
+    // directions/all 폼은 브라우저 확인 대화 상자를 지난 뒤에만 `confirm=true` 를 보낸다.
+    #[serde(default)]
+    pub(super) confirm: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -173,6 +176,9 @@ pub(super) struct SaveDraftRequest {
 pub(super) struct ResetRequest {
     // API reset도 ResetForm과 같은 label vocabulary를 쓰며 최종 허용 목록은 parse_reset_target 하나가 결정한다.
     pub(super) target: String,
+    // directions/all 은 `"confirm": true` 가 있어야 실행한다 (plan 18 K-D1). 없으면 428 이다.
+    #[serde(default)]
+    pub(super) confirm: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

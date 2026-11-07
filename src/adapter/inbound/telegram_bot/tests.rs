@@ -30,11 +30,11 @@ use crate::application::port::outbound::telegram_global_runner_lease_port::{
 use crate::application::port::outbound::telegram_update_ledger_port::{
     TelegramRunnerLeaseClaimDecision, TelegramUpdateClaimDecision, TelegramUpdateLedgerPort,
 };
-use crate::application::service::planning::PlanningResetTarget;
 use crate::application::service::planning::control::{
     PlanningControlCommand, PlanningControlQueueEntry, PlanningControlResetOutcome,
     PlanningControlService, PlanningControlStatusSnapshot, PlanningControlSurface,
 };
+use crate::application::service::planning::{PlanningResetRequest, PlanningResetTarget};
 use crate::application::service::review_center::ReviewCenterReadService;
 use anyhow::{Context, Result, anyhow, bail};
 use std::collections::{BTreeMap, BTreeSet};
@@ -90,14 +90,17 @@ impl PlanningControlSurface for FakePlanningControlSurface {
         })
     }
 
-    fn reset_workspace(&self, target: PlanningResetTarget) -> Result<PlanningControlResetOutcome> {
+    fn reset_workspace(
+        &self,
+        request: PlanningResetRequest,
+    ) -> Result<PlanningControlResetOutcome> {
         /*
          * Reset tests do not need file IO; they need proof that Telegram target
          * words have already been mapped into the same PlanningResetTarget labels
          * used by admin and TUI control surfaces.
          */
         Ok(PlanningControlResetOutcome {
-            target: target.label().to_string(),
+            target: request.target.label().to_string(),
             rewritten_paths: vec!["DB task authority".to_string()],
             removed_paths: Vec::new(),
             planning_state: "ready".to_string(),
@@ -126,9 +129,12 @@ impl PlanningControlSurface for CountingPlanningControlSurface {
         FakePlanningControlSurface.load_status_snapshot()
     }
 
-    fn reset_workspace(&self, target: PlanningResetTarget) -> Result<PlanningControlResetOutcome> {
+    fn reset_workspace(
+        &self,
+        request: PlanningResetRequest,
+    ) -> Result<PlanningControlResetOutcome> {
         self.reset_calls.fetch_add(1, Ordering::SeqCst);
-        FakePlanningControlSurface.reset_workspace(target)
+        FakePlanningControlSurface.reset_workspace(request)
     }
 }
 
@@ -150,8 +156,11 @@ impl PlanningControlSurface for FlakyPlanningControlSurface {
         }
         FakePlanningControlSurface.load_status_snapshot()
     }
-    fn reset_workspace(&self, target: PlanningResetTarget) -> Result<PlanningControlResetOutcome> {
-        FakePlanningControlSurface.reset_workspace(target)
+    fn reset_workspace(
+        &self,
+        request: PlanningResetRequest,
+    ) -> Result<PlanningControlResetOutcome> {
+        FakePlanningControlSurface.reset_workspace(request)
     }
 }
 
@@ -838,15 +847,31 @@ fn parse_message_maps_supported_planning_commands_to_shared_control_enum() {
         ("/plan status", PlanningControlCommand::Status),
         (
             "/reset queue",
-            PlanningControlCommand::Reset(PlanningResetTarget::Queue),
+            PlanningControlCommand::Reset(PlanningResetRequest::new(
+                PlanningResetTarget::Queue,
+                false,
+            )),
         ),
         (
-            "/reset_directions",
-            PlanningControlCommand::Reset(PlanningResetTarget::Directions),
+            "/reset_directions confirm",
+            PlanningControlCommand::Reset(PlanningResetRequest::new(
+                PlanningResetTarget::Directions,
+                true,
+            )),
         ),
         (
-            "/reset_all",
-            PlanningControlCommand::Reset(PlanningResetTarget::All),
+            "/reset_all confirm",
+            PlanningControlCommand::Reset(PlanningResetRequest::new(
+                PlanningResetTarget::All,
+                true,
+            )),
+        ),
+        (
+            "/reset all confirm",
+            PlanningControlCommand::Reset(PlanningResetRequest::new(
+                PlanningResetTarget::All,
+                true,
+            )),
         ),
     ] {
         assert_eq!(
@@ -992,6 +1017,23 @@ fn parse_message_rejects_reset_with_extra_arguments() {
             "사용법: /reset queue | /reset directions | /reset all".to_string()
         )
     );
+}
+
+#[test]
+fn parse_message_refuses_unconfirmed_destructive_reset() {
+    for (raw, retry) in [
+        ("/reset_all", "/reset_all confirm"),
+        ("/reset_directions", "/reset_directions confirm"),
+        ("/reset all", "/reset all confirm"),
+    ] {
+        match parse_message(Some(raw)) {
+            TelegramParsedMessage::Error(text) => {
+                assert!(text.contains("확인이 필요합니다"), "{raw}: {text}");
+                assert!(text.contains(retry), "{raw}: {text}");
+            }
+            other => panic!("`{raw}` must not run without confirm: {other:?}"),
+        }
+    }
 }
 
 #[test]
@@ -1938,7 +1980,7 @@ fn post_poll_global_fence_discards_the_batch_before_workspace_side_effects() {
                 message_id: 730,
                 chat_id: 42,
                 sender_user_id: Some(42),
-                text: Some("/reset_all".to_string()),
+                text: Some("/reset_all confirm".to_string()),
                 sender_display_name: Some("operator".to_string()),
             }),
         }]);
@@ -2043,7 +2085,7 @@ fn keep_pending_restart_does_not_repeat_a_completed_reset_before_telegram_ack_po
             message_id: 700,
             chat_id: 42,
             sender_user_id: Some(42),
-            text: Some("/reset_all".to_string()),
+            text: Some("/reset_all confirm".to_string()),
             sender_display_name: Some("operator".to_string()),
         }),
     };
@@ -2226,7 +2268,7 @@ fn ledger_claim_failure_stops_before_command_or_reply_side_effects() {
                 message_id: 1,
                 chat_id: 42,
                 sender_user_id: Some(42),
-                text: Some("/reset_all".to_string()),
+                text: Some("/reset_all confirm".to_string()),
                 sender_display_name: None,
             }),
         }]);

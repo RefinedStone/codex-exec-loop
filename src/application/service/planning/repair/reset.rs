@@ -21,7 +21,6 @@ use crate::application::service::planning::authoring::bootstrap::{
 };
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
 use crate::application::service::planning::shared::authority_mutation_guard::with_authority_mutation_guard;
-use crate::domain::planning::PlanningResetTarget;
 use crate::domain::planning::PriorityQueueService;
 use crate::domain::planning::{
     DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, PLANNING_DIRECTION_DOCS_DIRECTORY,
@@ -29,6 +28,7 @@ use crate::domain::planning::{
     RESULT_OUTPUT_FILE_PATH,
 };
 use crate::domain::planning::{DirectionCatalogDocument, TaskAuthorityDocument, TaskStatus};
+use crate::domain::planning::{PlanningResetRequest, PlanningResetTarget};
 
 /*
  * Reset은 operator가 명시적으로 선택하는 planning authority의 파괴적 복구 경로다.
@@ -89,8 +89,16 @@ impl PlanningResetService {
     pub fn reset_workspace(
         &self,
         workspace_dir: &str,
-        target: PlanningResetTarget,
+        request: PlanningResetRequest,
     ) -> Result<PlanningWorkspaceResetResult> {
+        // 확인 규칙은 모든 입구가 공유한다 (plan 18 K-D1). 어느 입구가 확인을 빠뜨려도 아무것도 지우지 않는다.
+        if !request.is_allowed() {
+            return Err(anyhow!(
+                "reset {} needs explicit confirmation; nothing was changed",
+                request.target.label()
+            ));
+        }
+        let target = request.target;
         let bootstrap = self
             .planning_bootstrap_service
             .build_artifacts_for_mode(PlanningBootstrapMode::Simple);
@@ -657,12 +665,43 @@ mod tests {
 
         let error = fixture
             .service
-            .reset_workspace(fixture.workspace.path_str(), PlanningResetTarget::Queue)
+            .reset_workspace(
+                fixture.workspace.path_str(),
+                PlanningResetRequest::new(PlanningResetTarget::Queue, true),
+            )
             .expect_err("reset should not bootstrap a missing workspace");
 
         assert_eq!(
             error.to_string(),
             "planning workspace is unavailable; initialize planning first"
+        );
+    }
+
+    #[test]
+    fn unconfirmed_directions_and_all_resets_change_nothing() {
+        let fixture = ResetFixture::new("unconfirmed-reset");
+        fixture.write_result_output("# Result Output\n\n- Keep the operator contract.\n");
+
+        for target in [PlanningResetTarget::Directions, PlanningResetTarget::All] {
+            let error = fixture
+                .service
+                .reset_workspace(
+                    fixture.workspace.path_str(),
+                    PlanningResetRequest::new(target, false),
+                )
+                .expect_err("an unconfirmed destructive reset must be refused");
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "reset {} needs explicit confirmation; nothing was changed",
+                    target.label()
+                )
+            );
+        }
+        assert_eq!(
+            fs::read_to_string(fixture.workspace.path().join(RESULT_OUTPUT_FILE_PATH))
+                .expect("result output should stay readable"),
+            "# Result Output\n\n- Keep the operator contract.\n"
         );
     }
 
@@ -682,7 +721,10 @@ mod tests {
 
         let error = fixture
             .service
-            .reset_workspace(fixture.workspace.path_str(), PlanningResetTarget::Queue)
+            .reset_workspace(
+                fixture.workspace.path_str(),
+                PlanningResetRequest::new(PlanningResetTarget::Queue, true),
+            )
             .expect_err("queue reset must not clear authority without direction context");
 
         assert_eq!(
@@ -713,7 +755,10 @@ mod tests {
 
         fixture
             .service
-            .reset_workspace(fixture.workspace.path_str(), PlanningResetTarget::Queue)
+            .reset_workspace(
+                fixture.workspace.path_str(),
+                PlanningResetRequest::new(PlanningResetTarget::Queue, true),
+            )
             .expect("queue reset should commit the bootstrap empty task authority");
 
         let snapshot = fixture
@@ -749,7 +794,7 @@ mod tests {
             .service
             .reset_workspace(
                 fixture.workspace.path_str(),
-                PlanningResetTarget::Directions,
+                PlanningResetRequest::new(PlanningResetTarget::Directions, true),
             )
             .expect_err("directions reset should reject live task authority");
 
@@ -788,7 +833,7 @@ mod tests {
             .service
             .reset_workspace(
                 fixture.workspace.path_str(),
-                PlanningResetTarget::Directions,
+                PlanningResetRequest::new(PlanningResetTarget::Directions, true),
             )
             .expect("safe directions reset should succeed");
 
@@ -854,7 +899,10 @@ mod tests {
 
         let result = fixture
             .service
-            .reset_workspace(fixture.workspace.path_str(), PlanningResetTarget::All)
+            .reset_workspace(
+                fixture.workspace.path_str(),
+                PlanningResetRequest::new(PlanningResetTarget::All, true),
+            )
             .expect("all reset should replace the full planning scaffold");
 
         assert_eq!(result.target, PlanningResetTarget::All);
@@ -994,7 +1042,10 @@ mod tests {
             validation,
             priority_queue,
         )
-        .reset_workspace(workspace.path_str(), PlanningResetTarget::All)
+        .reset_workspace(
+            workspace.path_str(),
+            PlanningResetRequest::new(PlanningResetTarget::All, true),
+        )
         .expect("repo-scoped full reset should commit atomically");
         assert_eq!(result.target, PlanningResetTarget::All);
         for path in [
@@ -1127,7 +1178,10 @@ mod tests {
             validation,
             priority_queue,
         )
-        .reset_workspace(workspace.path_str(), PlanningResetTarget::All)
+        .reset_workspace(
+            workspace.path_str(),
+            PlanningResetRequest::new(PlanningResetTarget::All, true),
+        )
         .expect_err("active runtime claim must block reset admission");
         reset_attempted.wait();
         worker.join().expect("runtime-first worker should join");

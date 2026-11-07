@@ -51,11 +51,13 @@
       <form method="post" action="/admin/controls/reset" class="actions">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="target" value="directions">
+        <input type="hidden" name="confirm" value="true">
         <button type="submit" class="warn" data-confirm="Reset direction state from the workspace defaults?">Reset Directions</button>
       </form>
       <form method="post" action="/admin/controls/reset" class="actions">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="target" value="all">
+        <input type="hidden" name="confirm" value="true">
         <button type="submit" class="error" data-confirm="Reset all planning admin state for this workspace?">Reset All</button>
       </form>
     </div>

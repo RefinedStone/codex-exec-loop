@@ -11,7 +11,7 @@ use super::views::{
     ControlsTemplate, DashboardTemplate, DirectionsTemplate, DraftStatusTemplate,
     EditorActionPaths, EditorTemplate, ReviewsTemplate, TasksTemplate,
 };
-use super::{AdminAppState, parse_reset_target};
+use super::{AdminAppState, reset_request};
 use crate::adapter::inbound::admin_api::admin_debug_dashboard::build_admin_dashboard_view;
 use crate::application::port::inbound::parallel_agent_profile_port::parse_parallel_agent_profile_config_json;
 use crate::application::port::inbound::planning_admin_port::{
@@ -810,10 +810,10 @@ pub(super) async fn reset_page(
 ) -> std::result::Result<Response, StatusCode> {
     // reset은 api.rs와 같은 text-to-target parser를 써서 HTML control과 JSON control의 accepted label이 갈라지지 않게 한다.
     verify_form_csrf(&jar, &form.csrf_token)?;
-    let target = parse_reset_target(&form.target)?;
+    let request = reset_request(&form.target, form.confirm)?;
     state
         .facade
-        .reset_workspace(target)
+        .reset_workspace(request)
         .map_err(internal_server_error)?;
     Ok(Redirect::to("/admin/controls?notice=planning%20workspace%20reset").into_response())
 }

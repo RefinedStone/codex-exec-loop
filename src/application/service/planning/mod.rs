@@ -94,7 +94,7 @@ pub use self::repair::reconciliation::{
     PlanningReconciliationResult, PlanningRepairRequest, PlanningRepairRetryReason,
 };
 // reset 타입은 admin reset 요청이 어떤 범위를 되돌렸고 어떤 결과를 냈는지 표현한다.
-pub use crate::domain::planning::PlanningResetTarget;
+pub use crate::domain::planning::{PlanningResetRequest, PlanningResetTarget};
 // runtime facade 타입은 TUI 턴 제출 경로가 task handoff, auto-follow 판단, preview, status projection을 다룰 때 쓰는
 // 중심 계약이다.
 pub use self::runtime::facade::{
