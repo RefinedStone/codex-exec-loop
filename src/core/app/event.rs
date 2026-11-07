@@ -49,6 +49,10 @@ pub struct SessionRenameAcceptedSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoreInput {
     Command(super::AppCommand),
+    // 호스트의 시계이다 (plan 18 K1-1). 무엇을 할지는 core 가 정한다 (예: GitHub 리뷰 폴링).
+    Tick {
+        now: std::time::Instant,
+    },
     EffectCompleted(CoreEffectCompletion),
     ConversationStreamUpdated {
         correlation: TurnSubmissionCorrelation,

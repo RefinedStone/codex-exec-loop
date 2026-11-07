@@ -6,6 +6,18 @@ use super::{
 use crate::domain::github_review::{
     GithubPullRequestPollResult, GithubPullRequestPollState, GithubPullRequestTarget,
 };
+use std::time::Instant;
+
+/*
+ * 다음 폴링 시각이다 (plan 18 K1-1). core 에는 시계가 없으므로 호스트가 넣는 `CoreInput::Tick` 의 시각만 쓴다.
+ * 설정이 끝나면 다음 tick 에 바로 폴링하고, 폴링이 끝나면 마지막 tick 시각 + 간격에 다시 폴링한다.
+ */
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GithubReviewPollSchedule {
+    Off,
+    DueNow,
+    DueAt(Instant),
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum GithubReviewPollingSetupAdmission {
@@ -32,6 +44,8 @@ pub(super) struct GithubReviewFeatureReducer {
     cursor: Option<(GithubPullRequestTarget, GithubPullRequestPollState)>,
     next_poll_generation: u64,
     active_poll: Option<GithubReviewPollCorrelation>,
+    schedule: GithubReviewPollSchedule,
+    last_tick: Option<Instant>,
 }
 
 impl GithubReviewFeatureReducer {
@@ -45,6 +59,8 @@ impl GithubReviewFeatureReducer {
             cursor: None,
             next_poll_generation: 1,
             active_poll: None,
+            schedule: GithubReviewPollSchedule::Off,
+            last_tick: None,
         }
     }
 
@@ -68,6 +84,7 @@ impl GithubReviewFeatureReducer {
         self.target = None;
         self.cursor = None;
         self.active_poll = None;
+        self.schedule = GithubReviewPollSchedule::Off;
         GithubReviewPollingSetupAdmission::Started { correlation }
     }
 
@@ -109,16 +126,34 @@ impl GithubReviewFeatureReducer {
             Ok(GithubReviewPollingSetupResult::Active { target }) => {
                 self.accepted_setup_correlation = Some(correlation.clone());
                 self.target = Some(target.clone());
+                self.schedule = GithubReviewPollSchedule::DueNow;
             }
             Ok(GithubReviewPollingSetupResult::Disabled) | Err(_) => {
                 self.accepted_setup_correlation = None;
                 self.target = None;
+                self.schedule = GithubReviewPollSchedule::Off;
             }
         }
         Some(result)
     }
 
-    pub(super) fn begin_poll(&mut self) -> Option<GithubReviewPollAdmission> {
+    /// 호스트의 tick 이다. 폴링할 때가 되었으면 폴링을 시작한다.
+    pub(super) fn tick(&mut self, now: Instant) -> Option<GithubReviewPollAdmission> {
+        self.last_tick = Some(now);
+        let due = match self.schedule {
+            GithubReviewPollSchedule::Off => false,
+            GithubReviewPollSchedule::DueNow => true,
+            GithubReviewPollSchedule::DueAt(at) => now >= at,
+        };
+        if !due {
+            return None;
+        }
+        let admission = self.begin_poll()?;
+        self.schedule = GithubReviewPollSchedule::Off;
+        Some(admission)
+    }
+
+    fn begin_poll(&mut self) -> Option<GithubReviewPollAdmission> {
         let target = self.target.clone()?;
         let setup_correlation = self.accepted_setup_correlation.clone()?;
         if self.active_poll.is_some() {
@@ -159,6 +194,16 @@ impl GithubReviewFeatureReducer {
         if let Ok(poll) = &result {
             self.cursor = Some((correlation.target.clone(), poll.next_state.clone()));
         }
+        // 성공과 실패 모두 같은 간격 뒤에 다시 폴링한다. 느린 요청이 겹치지 않게 완료 시점부터 센다.
+        let interval = self
+            .setup_request
+            .as_ref()
+            .map(|request| request.poll_interval)
+            .unwrap_or_default();
+        self.schedule = match self.last_tick {
+            Some(last_tick) => GithubReviewPollSchedule::DueAt(last_tick + interval),
+            None => GithubReviewPollSchedule::DueNow,
+        };
         Some(result)
     }
 
@@ -205,7 +250,48 @@ mod tests {
         GithubReviewPollingSetupRequest::new(
             workspace_directory,
             GithubReviewPollingSetupMode::Explicit { target },
+            POLL_INTERVAL,
         )
+    }
+
+    const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
+    #[test]
+    fn tick_polls_after_setup_then_waits_one_interval_after_each_completion() {
+        let mut reducer = GithubReviewFeatureReducer::new();
+        let pr = target("acme/widgets", 42);
+        let t0 = Instant::now();
+        assert!(reducer.tick(t0).is_none(), "no setup means no poll");
+
+        let setup = started(reducer.begin_setup(setup_request("/workspace", pr.clone())));
+        assert!(reducer.tick(t0).is_none(), "setup still running");
+        reducer.complete_setup(
+            &setup,
+            Ok(GithubReviewPollingSetupResult::Active { target: pr.clone() }),
+        );
+
+        let first = reducer
+            .tick(t0)
+            .expect("first tick after setup should poll");
+        assert!(reducer.tick(t0).is_none(), "one poll at a time");
+        reducer.complete_poll(
+            &first.correlation,
+            Ok(poll_result(pr.clone(), "2026-07-19T10:00:00Z")),
+        );
+
+        let just_before = t0 + POLL_INTERVAL - std::time::Duration::from_millis(1);
+        assert!(reducer.tick(just_before).is_none(), "wait one interval");
+        // The schedule is anchored on the tick before completion, not on later ticks.
+        let second = reducer
+            .tick(t0 + POLL_INTERVAL + std::time::Duration::from_millis(1))
+            .expect("next interval should poll");
+        reducer.complete_poll(&second.correlation, Err("network".to_string()));
+        assert!(
+            reducer
+                .tick(t0 + POLL_INTERVAL + std::time::Duration::from_millis(2))
+                .is_none(),
+            "a failed poll also waits one interval"
+        );
     }
 
     fn started(

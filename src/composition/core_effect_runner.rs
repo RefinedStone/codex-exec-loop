@@ -2348,7 +2348,26 @@ mod tests {
         AppCommand::SetupGithubReviewPolling(GithubReviewPollingSetupRequest::new(
             workspace_directory,
             GithubReviewPollingSetupMode::Explicit { target },
+            Duration::from_secs(60),
         ))
+    }
+
+    // 매번 한 시간씩 앞선 시각으로 tick 한다 (plan 18 K1-1). 폴링 간격(60초)보다 길어서, 폴링할 때가 되었으면
+    // 이 tick 에서 바로 폴링한다. 예전 `AppCommand::PollGithubReview` 를 부르던 테스트의 뜻을 그대로 둔다.
+    fn github_review_tick() -> CoreInput {
+        thread_local! {
+            static TICKS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+            static BASE: std::time::Instant = std::time::Instant::now();
+        }
+        let step = TICKS.with(|ticks| {
+            let step = ticks.get() + 1;
+            ticks.set(step);
+            step
+        });
+        let base = BASE.with(|base| *base);
+        CoreInput::Tick {
+            now: base + std::time::Duration::from_secs(3600) * step,
+        }
     }
 
     fn dispatch_while_provider_is_gated(
@@ -4916,7 +4935,7 @@ mod tests {
             runtime.poll_pending_input().is_none(),
             "one setup worker must emit exactly one completion"
         );
-        let poll = runtime.dispatch_command(AppCommand::PollGithubReview);
+        let poll = runtime.dispatch_input(github_review_tick());
         assert!(
             poll.effects.is_empty(),
             "panic must leave setup fail-closed"
@@ -4961,7 +4980,7 @@ mod tests {
         });
         assert!(setup_a.effects.is_empty());
 
-        let first_a = runtime.dispatch_command(AppCommand::PollGithubReview);
+        let first_a = runtime.dispatch_input(github_review_tick());
         assert!(matches!(
             first_a.effects.as_slice(),
             [CoreEffect::PollGithubReview {
@@ -4993,7 +5012,7 @@ mod tests {
         });
         assert!(first_a_completed.effects.is_empty());
 
-        let second_a = runtime.dispatch_command(AppCommand::PollGithubReview);
+        let second_a = runtime.dispatch_input(github_review_tick());
         assert!(matches!(
             second_a.effects.as_slice(),
             [CoreEffect::PollGithubReview {
@@ -5042,7 +5061,7 @@ mod tests {
             "late poll completion from setup A must be ignored by Core"
         );
 
-        let started = runtime.dispatch_command(AppCommand::PollGithubReview);
+        let started = runtime.dispatch_input(github_review_tick());
         assert!(matches!(
             started.effects.as_slice(),
             [CoreEffect::PollGithubReview {

@@ -1,4 +1,5 @@
 use crate::domain::github_review::GithubPullRequestTarget;
+use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GithubReviewPollingSetupMode {
@@ -19,13 +20,20 @@ impl GithubReviewPollingSetupMode {
 pub struct GithubReviewPollingSetupRequest {
     pub workspace_directory: String,
     pub mode: GithubReviewPollingSetupMode,
+    // core 가 tick 에서 다음 폴링 시각을 정할 때 쓴다 (plan 18 K1-1).
+    pub poll_interval: Duration,
 }
 
 impl GithubReviewPollingSetupRequest {
-    pub fn new(workspace_directory: impl Into<String>, mode: GithubReviewPollingSetupMode) -> Self {
+    pub fn new(
+        workspace_directory: impl Into<String>,
+        mode: GithubReviewPollingSetupMode,
+        poll_interval: Duration,
+    ) -> Self {
         Self {
             workspace_directory: workspace_directory.into(),
             mode,
+            poll_interval,
         }
     }
 }
