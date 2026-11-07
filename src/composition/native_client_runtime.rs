@@ -1660,18 +1660,34 @@ mod tests {
             },
         )));
 
+        let mut client_saw_auto_follow = false;
         let deadline = Instant::now() + WORKER_COMPLETION_TIMEOUT_FOR_HOST_TEST;
         while turns.lock().expect("recorded turns should lock").is_empty() {
             assert!(
                 Instant::now() < deadline,
                 "the host should submit the follow-up turn without a client"
             );
-            let _ = runtime.run_host_cycle(Instant::now(), Duration::from_millis(50), 16);
+            for outcome in runtime.run_host_cycle(Instant::now(), Duration::from_millis(50), 16) {
+                let (NativeClientDispatchOutcome::Core(core)
+                | NativeClientDispatchOutcome::Combined { core, .. }) = outcome
+                else {
+                    continue;
+                };
+                client_saw_auto_follow |= core.events.iter().any(|event| {
+                    matches!(event, AppEvent::AutoFollowTurnSubmissionResolved { .. })
+                });
+            }
         }
         assert_eq!(
             turns.lock().expect("recorded turns should lock").as_slice(),
             [("thread-1".to_string(), "continue".to_string())]
         );
+        if leave_conversation_while_running {
+            assert!(
+                !client_saw_auto_follow,
+                "the follow-up turn of a left conversation must not reach the shown transcript"
+            );
+        }
     }
 
     const WORKER_COMPLETION_TIMEOUT_FOR_HOST_TEST: Duration = Duration::from_secs(10);

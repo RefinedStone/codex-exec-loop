@@ -578,6 +578,38 @@ mod tests {
     }
 
     #[test]
+    fn blocking_receive_returns_a_sent_input_and_times_out_when_empty() {
+        let (sender, receiver) = core_input_channel();
+        let started = std::time::Instant::now();
+        assert_eq!(
+            receiver.recv_timeout(Duration::from_millis(20)),
+            Err(TryRecvError::Empty),
+            "an empty mailbox waits until the deadline"
+        );
+        assert!(started.elapsed() >= Duration::from_millis(20));
+
+        let waiter = std::thread::spawn(move || receiver.recv_timeout(Duration::from_secs(10)));
+        sender
+            .try_send(status_input(1))
+            .expect("control input should be admitted");
+        assert_eq!(
+            waiter.join().expect("receiver thread should finish"),
+            Ok(status_input(1)),
+            "a waiting receiver wakes for a sent input"
+        );
+    }
+
+    #[test]
+    fn blocking_receive_reports_disconnect_after_the_last_sender_drops() {
+        let (sender, receiver) = core_input_channel();
+        drop(sender);
+        assert_eq!(
+            receiver.recv_timeout(Duration::from_secs(10)),
+            Err(TryRecvError::Disconnected)
+        );
+    }
+
+    #[test]
     fn progressive_pressure_preserves_control_admission_order_and_global_bytes() {
         let (sender, receiver) = core_input_channel();
         let detail = "x".repeat(MAX_PROGRESSIVE_AGENT_DRAFT_BYTES);

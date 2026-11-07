@@ -407,18 +407,25 @@ impl CoreController {
                 correlation,
                 resolution,
             }) => {
+                let background = self
+                    .conversation_turn
+                    .post_turn_evaluation_is_background(&correlation);
                 let Some((execution, route_resolution)) = self
                     .conversation_turn
                     .resolve_post_turn_route(&correlation, resolution)
                 else {
                     return self.unchanged_outcome();
                 };
+                // 보지 않는 thread 의 평가 결과는 클라이언트에 알리지 않는다 (plan 18 K2-3).
                 CoreDispatchOutcome {
-                    events: vec![AppEvent::PostTurnEvaluationCompleted {
-                        correlation,
-                        execution,
-                        route_resolution,
-                    }],
+                    events: (!background)
+                        .then_some(AppEvent::PostTurnEvaluationCompleted {
+                            correlation,
+                            execution,
+                            route_resolution,
+                        })
+                        .into_iter()
+                        .collect(),
                     effects: Vec::new(),
                     snapshot: self.shared_snapshot(),
                 }
@@ -1109,14 +1116,20 @@ impl CoreController {
                 correlation,
                 execution,
             }) => {
+                let background = self
+                    .conversation_turn
+                    .post_turn_evaluation_is_background(&correlation);
                 if !self
                     .conversation_turn
                     .complete_post_turn_evaluation(&correlation, execution.as_ref())
                 {
                     return self.unchanged_outcome();
                 }
-                self.planning
-                    .accept_post_turn_worker_panel(execution.as_ref());
+                // 작업자 패널 기록은 보는 대화의 것이다. planning 투영은 작업 공간의 것이라 함께 쓴다.
+                if !background {
+                    self.planning
+                        .accept_post_turn_worker_panel(execution.as_ref());
+                }
                 let workspace_directory = execution.runtime_projection_workspace_directory.clone();
                 let refresh_matches_workspace = self
                     .planning
@@ -1470,7 +1483,7 @@ impl CoreController {
             .map(AppEvent::turn_stream_snapshot_changed)
             .collect();
         let mut events: Vec<AppEvent> = events;
-        if let Some(planning_workspace_directory) = reduction.post_turn_evaluation_due {
+        if let Some(planning_workspace_directory) = reduction.post_turn_evaluation_due_workspace {
             events.push(AppEvent::PostTurnEvaluationDue {
                 planning_workspace_directory,
             });
@@ -1518,6 +1531,9 @@ impl CoreController {
             turn_options: source_turn_options,
             slot_lease_handoff,
         };
+        let background = self
+            .conversation_turn
+            .thread_is_background(&submission.source.thread_id);
         let mut outcome = self.handle_input(CoreInput::Command(AppCommand::SubmitTurn(Box::new(
             request,
         ))));
@@ -1527,6 +1543,13 @@ impl CoreController {
                 AppEvent::TurnSubmissionAdmissionResolved(TurnSubmissionAdmission::Accepted { .. })
             )
         });
+        if background {
+            // 보지 않는 thread 의 자동 후속 턴은 클라이언트의 대화 기록에 넣지 않는다 (plan 18 K2-3).
+            outcome
+                .events
+                .retain(|event| !matches!(event, AppEvent::TurnSubmissionAdmissionResolved(_)));
+            return outcome;
+        }
         // 화면은 제출 기록을 스트림 이벤트보다 먼저 받아야 한다. TUI 의 제출 경로와 같은 순서이다.
         let resolved_index = outcome
             .events
@@ -1554,10 +1577,16 @@ impl CoreController {
         let planning_worker_panel_state =
             self.planning.begin_post_turn_worker_panel(request.as_ref());
         request.planning_worker_panel_state = planning_worker_panel_state.clone();
+        let shown = !self
+            .conversation_turn
+            .post_turn_evaluation_is_background(&correlation);
         CoreDispatchOutcome {
-            events: vec![AppEvent::PostTurnEvaluationStarted(
-                planning_worker_panel_state,
-            )],
+            events: shown
+                .then_some(AppEvent::PostTurnEvaluationStarted(
+                    planning_worker_panel_state,
+                ))
+                .into_iter()
+                .collect(),
             effects: vec![CoreEffect::EvaluatePostTurn {
                 correlation,
                 request,
@@ -3910,7 +3939,8 @@ mod tests {
     }
 
     #[test]
-    fn deferred_conversation_load_cancels_active_post_turn_authority_immediately() {
+    fn deferred_conversation_load_keeps_the_left_evaluation_in_the_background() {
+        // plan 18 K2-3: a load deferred by a session rename still only changes the shown thread.
         let mut controller = CoreController::new();
         apply_completed_turn(&mut controller, "thread-1", "turn-1");
         let request = post_turn_request(
@@ -3937,21 +3967,29 @@ mod tests {
         assert!(
             controller
                 .active_post_turn_evaluation_correlation()
-                .is_none()
+                .is_none(),
+            "the shown slot does not hold the left evaluation"
         );
+        assert_eq!(controller.conversation_turn.background_session_count(), 1);
         assert!(
-            !stale_permit.is_current(),
-            "the conversation intent must revoke old worker authority before its load can start"
+            stale_permit.is_current(),
+            "the left evaluation keeps its worker authority"
         );
 
-        let stale = controller.handle_input(CoreInput::EffectCompleted(
+        let completed = controller.handle_input(CoreInput::EffectCompleted(
             CoreEffectCompletion::PostTurnEvaluationCompleted {
-                correlation: stale_correlation,
+                correlation: stale_correlation.clone(),
                 execution: Box::new(sample_post_turn_execution()),
             },
         ));
-        assert!(stale.events.is_empty());
-        assert!(stale.effects.is_empty());
+        assert!(
+            matches!(
+                completed.events.first(),
+                Some(AppEvent::PostTurnContinuationRoutingRequested { correlation, .. })
+                    if correlation == &stale_correlation
+            ),
+            "the background completion only requests its host route"
+        );
     }
 
     #[test]
@@ -8758,6 +8796,11 @@ mod tests {
                 Some(&current_correlation),
                 "{label} completion must not clear the current A lease"
             );
+            assert_eq!(
+                controller.planning.worker_panel_history(),
+                &initial_history,
+                "{label} completion must not replace the panel history of the shown conversation"
+            );
         }
 
         let accepted_history = PlanningWorkerPanelState {
@@ -9419,6 +9462,47 @@ mod tests {
     }
 
     #[test]
+    fn reopened_running_turn_reports_its_review_persistence_failure() {
+        // plan 18 K2-3: review persistence is one shared queue; reopening the thread binds it again.
+        let mut controller = CoreController::new();
+        let turn = start_test_turn(&mut controller, "thread-1", "turn-1");
+        for (generation, thread_id) in [(1, "thread-2"), (2, "thread-1")] {
+            controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
+                thread_id: thread_id.to_string(),
+                fallback_workspace_directory: "/tmp/workspace".to_string(),
+            }));
+            controller.handle_input(CoreInput::EffectCompleted(
+                CoreEffectCompletion::ConversationLoaded {
+                    correlation: conversation_load_correlation(generation, thread_id),
+                    result: Ok(Box::new(sample_conversation_ready_snapshot_for(thread_id))),
+                },
+            ));
+        }
+        assert_eq!(controller.conversation_turn.background_session_count(), 0);
+
+        let scheduled = controller.handle_input(test_turn_stream_input(
+            turn,
+            TurnStreamEvent::ApprovalReviewUpdated {
+                review: test_approval_review("tool-1"),
+            },
+        ));
+        let [CoreEffect::PersistApprovalReview { correlation }] = scheduled.effects.as_slice()
+        else {
+            panic!("the reopened turn should persist its review");
+        };
+        let failed = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ApprovalReviewPersisted {
+                correlation: correlation.clone(),
+                result: Err("review store unavailable".to_string()),
+            },
+        ));
+        assert!(
+            !failed.events.is_empty(),
+            "the shown conversation reports the persistence failure of its own turn"
+        );
+    }
+
+    #[test]
     fn post_turn_completion_continues_in_background_during_conversation_load() {
         // plan 18 K2-3: opening another conversation keeps the evaluation of the left one. Its
         // completion routes in the background and leaves the shown conversation untouched.
@@ -9460,12 +9544,26 @@ mod tests {
         );
         assert!(controller.post_turn_route_runtime(&evaluation).is_some());
 
-        controller.handle_input(CoreInput::Command(
+        assert!(
+            completed.events.iter().all(|event| matches!(
+                event,
+                AppEvent::PostTurnContinuationRoutingRequested { .. }
+                    | AppEvent::PlanningRuntimeRefreshStarted { .. }
+                    | AppEvent::PlanningRuntimeRefreshCancelled { .. }
+            )),
+            "only the host route request and workspace refresh follow a background completion: {:?}",
+            completed.events
+        );
+        let resolved = controller.handle_input(CoreInput::Command(
             AppCommand::ResolvePostTurnContinuation {
                 correlation: evaluation.clone(),
                 resolution: super::super::PostTurnRouteResolution::NoContinuation,
             },
         ));
+        assert!(
+            resolved.events.is_empty(),
+            "the client does not get the settled evaluation of a thread it does not show"
+        );
         assert!(controller.post_turn_route_runtime(&evaluation).is_none());
         assert_eq!(
             controller.conversation_turn.background_session_count(),
