@@ -89,9 +89,9 @@ pub use queue::{
 pub use request::{
     ConversationLoadCorrelation, DirectionsMaintenanceLoadCorrelation, ParallelPeekLoadCorrelation,
     PlanningRuntimeRefreshCorrelation, PostTurnEvaluationCorrelation,
-    QueueAuthorityLoadCorrelation, ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation,
-    SessionCatalogLoadIntent, SessionCatalogLoadMode, SessionRenameAdmission,
-    SessionRenameCorrelation, StartupCheckCorrelation,
+    QueueAuthorityLoadCorrelation, ReviewCenterLoadCorrelation, SESSION_CATALOG_PAGE_SIZE,
+    SessionCatalogLoadCorrelation, SessionCatalogLoadIntent, SessionCatalogLoadMode,
+    SessionRenameAdmission, SessionRenameCorrelation, StartupCheckCorrelation,
 };
 pub use review_center::{
     ReviewCenterHistoryEntrySnapshot, ReviewCenterInboxItemSnapshot, ReviewCenterSnapshot,

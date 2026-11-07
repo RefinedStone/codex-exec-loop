@@ -133,7 +133,6 @@ pub enum ShellChromeEvent {
     StartupCheckRequested,
     StartupProjected {
         snapshot: StartupSnapshot,
-        session_page_size: usize,
     },
     SessionsRequested {
         limit: usize,
@@ -239,10 +238,7 @@ pub fn reduce_shell_chrome(
             // Loading은 Core의 StartupChanged projection만 설치할 수 있다. 이 intent는 effect만 기술한다.
             effects.push(ShellChromeEffect::RunStartupChecks);
         }
-        ShellChromeEvent::StartupProjected {
-            snapshot,
-            session_page_size,
-        } => match snapshot {
+        ShellChromeEvent::StartupProjected { snapshot } => match snapshot {
             StartupSnapshot::Idle => {
                 state.startup_state = StartupState::Idle;
             }
@@ -250,19 +246,8 @@ pub fn reduce_shell_chrome(
                 state.startup_state = StartupState::Loading;
             }
             StartupSnapshot::Ready(ready) => {
-                // ready snapshot을 state 안으로 move하기 전에 session preload gate와 workspace scope에 필요한 값을 빼 둔다.
-                let can_continue = ready.can_continue;
-                let workspace_path = ready.workspace_path.clone();
+                // 세션 목록 첫 페이지는 core 가 시작 점검 완료와 함께 읽는다 (plan 18 K1-3).
                 state.startup_state = StartupState::Ready(ready);
-                // startup 성공은 ensure intent를 Core에 전달한다. 기존 catalog와 in-flight
-                // request를 보고 실제 load를 시작할지는 Core admission이 결정한다.
-                if can_continue {
-                    effects.push(ShellChromeEffect::LoadSessionCatalog {
-                        mode: SessionCatalogLoadMode::EnsureLoaded,
-                        limit: session_page_size,
-                        current_workspace_directory: Some(workspace_path),
-                    });
-                }
             }
             StartupSnapshot::Failed { message } => {
                 state.startup_state = StartupState::Failed(message);
@@ -491,14 +476,13 @@ mod tests {
     use crate::domain::startup_diagnostics::StartupDiagnostics;
     use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
     #[test]
-    fn startup_ready_projection_auto_requests_sessions() {
-        // startup 성공 직후에는 validated workspace로 recent session preload를 한 번 걸어 첫 화면 진입 비용을 줄인다.
+    fn startup_ready_projection_leaves_the_session_preload_to_core() {
+        // 세션 목록 첫 페이지는 core 가 시작 점검 완료와 함께 읽는다 (plan 18 K1-3).
         let state = ShellChromeState::new();
         let reduced = reduce_shell_chrome(
             state,
             ShellChromeEvent::StartupProjected {
                 snapshot: StartupSnapshot::Ready(sample_startup_diagnostics()),
-                session_page_size: 10,
             },
         );
 
@@ -507,14 +491,7 @@ mod tests {
             StartupState::Ready(_)
         ));
         assert!(matches!(reduced.state.session_state, SessionState::Idle));
-        assert_eq!(
-            reduced.effects,
-            vec![ShellChromeEffect::LoadSessionCatalog {
-                mode: SessionCatalogLoadMode::EnsureLoaded,
-                limit: 10,
-                current_workspace_directory: Some("/tmp/root".to_string()),
-            }]
-        );
+        assert!(reduced.effects.is_empty());
     }
 
     #[test]
@@ -531,7 +508,6 @@ mod tests {
             reduced.state,
             ShellChromeEvent::StartupProjected {
                 snapshot: StartupSnapshot::Loading,
-                session_page_size: 10,
             },
         );
         assert!(matches!(
@@ -549,7 +525,6 @@ mod tests {
             state,
             ShellChromeEvent::StartupProjected {
                 snapshot: StartupSnapshot::Idle,
-                session_page_size: 10,
             },
         );
         assert!(matches!(idle.state.startup_state, StartupState::Idle));
@@ -560,7 +535,6 @@ mod tests {
                 snapshot: StartupSnapshot::Failed {
                     message: "missing provider".to_string(),
                 },
-                session_page_size: 10,
             },
         );
         assert!(matches!(

@@ -479,8 +479,26 @@ impl CoreController {
                 if !self.startup.accept(&correlation) {
                     return self.unchanged_outcome();
                 }
+                // 시작 점검이 끝나면 core 가 세션 목록 첫 페이지를 이어서 읽는다 (plan 18 K1-3).
+                // 이전에는 TUI 가 Ready 투영을 보고 같은 명령을 다시 보냈다.
+                let session_catalog_intent = match &result {
+                    Ok(ready) if ready.can_continue => {
+                        Some(SessionCatalogLoadIntent::ensure_loaded(
+                            super::SESSION_CATALOG_PAGE_SIZE,
+                            ready.workspace_path.clone(),
+                        ))
+                    }
+                    Ok(_) | Err(_) => None,
+                };
                 self.state.apply_startup_result(result);
-                self.startup_changed_outcome(correlation, Vec::new())
+                let mut outcome = self.startup_changed_outcome(correlation, Vec::new());
+                if let Some(intent) = session_catalog_intent {
+                    let catalog = self.admit_session_catalog_load(intent);
+                    outcome.events.extend(catalog.events);
+                    outcome.effects.extend(catalog.effects);
+                    outcome.snapshot = catalog.snapshot;
+                }
+                outcome
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::SessionCatalogLoaded {
                 correlation,
@@ -2904,19 +2922,29 @@ mod tests {
             },
         ));
 
-        assert_eq!(outcome.snapshot.revision, 2);
+        // 시작 점검 Ready 와 세션 목록 로드 시작이 한 번에 반영된다 (plan 18 K1-3).
+        assert_eq!(outcome.snapshot.revision, 3);
         assert_eq!(
             outcome.snapshot.startup,
             StartupSnapshot::Ready(Box::new(ready_snapshot.clone()))
         );
         assert_eq!(
-            outcome.events,
-            vec![AppEvent::StartupChanged {
+            outcome.events.first(),
+            Some(&AppEvent::StartupChanged {
                 correlation: startup_check_correlation(1),
                 snapshot: StartupSnapshot::Ready(Box::new(ready_snapshot)),
-            }]
+            })
         );
-        assert!(outcome.effects.is_empty());
+        assert!(
+            matches!(
+                outcome.effects.as_slice(),
+                [CoreEffect::LoadSessionCatalog { correlation }]
+                    if correlation.workspace_directory == "/tmp/workspace"
+                        && correlation.limit == super::super::SESSION_CATALOG_PAGE_SIZE
+            ),
+            "core should load the first session page itself: {:?}",
+            outcome.effects
+        );
     }
 
     #[test]

@@ -2249,10 +2249,7 @@ impl NativeTuiApp {
             &snapshot,
             StartupSnapshot::Ready(_) | StartupSnapshot::Failed { .. }
         );
-        self.dispatch_shell_chrome(ShellChromeEvent::StartupProjected {
-            snapshot,
-            session_page_size: SESSION_PAGE_SIZE,
-        });
+        self.dispatch_shell_chrome(ShellChromeEvent::StartupProjected { snapshot });
         if let Some(workspace_directory) = workspace_directory {
             self.sync_draft_shell_workspace(&workspace_directory);
         }
