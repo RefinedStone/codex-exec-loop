@@ -449,6 +449,23 @@ impl CoreController {
                     snapshot: self.shared_snapshot(),
                 }
             }
+            CoreInput::Command(AppCommand::EvaluateCompletedTurn {
+                parallel_mode_enabled,
+                parallel_automation_epoch_id,
+            }) => {
+                let Some(pending) = self.conversation_turn.take_pending_post_turn_evaluation()
+                else {
+                    return self.unchanged_outcome();
+                };
+                let request = self.post_turn_request_from_pending(
+                    pending,
+                    parallel_mode_enabled,
+                    parallel_automation_epoch_id,
+                );
+                self.handle_input(CoreInput::Command(AppCommand::EvaluatePostTurn(Box::new(
+                    request,
+                ))))
+            }
             CoreInput::Command(AppCommand::EvaluatePostTurn(mut request)) => {
                 match self
                     .conversation_turn
@@ -1443,6 +1460,12 @@ impl CoreController {
             .into_iter()
             .map(AppEvent::turn_stream_snapshot_changed)
             .collect();
+        let mut events: Vec<AppEvent> = events;
+        if let Some(planning_workspace_directory) = reduction.post_turn_evaluation_due {
+            events.push(AppEvent::PostTurnEvaluationDue {
+                planning_workspace_directory,
+            });
+        }
         let mut effects = stop_effects_from_intents(reduction.stop_effects);
         if let Some(correlation) = reduction.approval_review_persistence {
             effects.push(CoreEffect::PersistApprovalReview { correlation });
@@ -1454,28 +1477,58 @@ impl CoreController {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn begin_test_turn_submission(&mut self) -> TurnSubmissionCorrelation {
-        let correlation = self.conversation_turn.begin_test_turn_submission();
-        self.state
-            .apply_conversation_runtime_snapshot(self.conversation_turn.runtime_snapshot());
-        correlation
+    /*
+     * 평가 요청을 core 의 값으로 만든다 (plan 18 K1-4). 정책 값(자동 후속, 정지 키워드 등)은
+     * `admit_post_turn_evaluation` 이 이어서 채운다. runtime 투영은 같은 planning 작업 공간의 것만 쓴다.
+     */
+    fn post_turn_request_from_pending(
+        &self,
+        pending: super::conversation_turn_reducer::PendingPostTurnEvaluation,
+        parallel_mode_enabled: bool,
+        parallel_automation_epoch_id: Option<u64>,
+    ) -> crate::domain::planning::PostTurnRequest {
+        let snapshot = self.shared_snapshot();
+        let current_runtime_projection = if snapshot
+            .planning_parallel
+            .planning_runtime_workspace_directory
+            .as_deref()
+            == Some(pending.planning_workspace_directory.as_str())
+        {
+            (*snapshot.planning_parallel.planning_runtime).clone()
+        } else {
+            crate::domain::planning::RuntimeProjection::uninitialized()
+        };
+        crate::domain::planning::PostTurnRequest {
+            context: crate::domain::planning::PostTurnContext {
+                thread_id: pending.thread_id,
+                planning_workspace_directory: pending.planning_workspace_directory,
+                latest_user_message: pending.latest_user_message,
+                latest_main_reply: pending.latest_agent_reply,
+                previous_handoff_task: None,
+                current_runtime_projection,
+                parallel_mode_enabled,
+                parallel_automation_epoch_id,
+                planning_settlement_paused: false,
+                continuation_paused: false,
+                can_queue_next: false,
+                stop_keyword: String::new(),
+                stop_keyword_matched: false,
+                no_file_changes_stop_matched: false,
+                mode_label: super::AUTO_FOLLOW_MODE_LABEL.to_string(),
+            },
+            workspace_directory: pending.workspace_directory,
+            completed_turn_id: pending.completed_turn_id,
+            changed_planning_file_paths: pending.changed_planning_file_paths,
+            execution_snapshot_capture: pending.execution_snapshot_capture,
+            planning_worker_panel_state: Default::default(),
+            continuation_permit: crate::domain::planning::PostTurnContinuationGate::default()
+                .capture(),
+        }
     }
 
     #[cfg(test)]
-    pub(crate) fn begin_test_post_turn_evaluation(
-        &mut self,
-        thread_id: &str,
-        completed_turn_id: &str,
-        turn_workspace_directory: &str,
-        planning_workspace_directory: &str,
-    ) -> PostTurnEvaluationCorrelation {
-        let correlation = self.conversation_turn.begin_test_post_turn_evaluation(
-            thread_id,
-            completed_turn_id,
-            turn_workspace_directory,
-            planning_workspace_directory,
-        );
+    pub(crate) fn begin_test_turn_submission(&mut self) -> TurnSubmissionCorrelation {
+        let correlation = self.conversation_turn.begin_test_turn_submission();
         self.state
             .apply_conversation_runtime_snapshot(self.conversation_turn.runtime_snapshot());
         correlation
@@ -4475,6 +4528,7 @@ mod tests {
     fn submit_turn_returns_core_effect_and_publishes_runtime_authority() {
         let mut controller = CoreController::new();
         let request = crate::core::app::TurnSubmissionRequest {
+            transcript_text: String::new(),
             workspace_directory: "/tmp/workspace".to_string(),
             thread_id: Some("thread-1".to_string()),
             image_paths: Vec::new(),
@@ -7230,6 +7284,14 @@ mod tests {
                 runtime_request: Box::default(),
             },
         ));
+        controller.handle_input(test_turn_stream_input(
+            turn_correlation,
+            TurnStreamEvent::AgentMessageCompleted {
+                item_id: "item-1".to_string(),
+                phase: None,
+                text: "done: plan updated".to_string(),
+            },
+        ));
         let execution_snapshot_capture = TurnSnapshotCapture::capture_failed(
             "/tmp/workspace",
             "planning capture failed".to_string(),
@@ -7247,15 +7309,22 @@ mod tests {
 
         assert!(outcome.snapshot.revision > 0);
         assert!(outcome.snapshot.conversation_runtime.active_turn.is_none());
+        // 턴 종료 뒤 평가는 호스트가 시작한다 (plan 18 K1-4). core 는 기다리는 턴을 알린다.
         let [
             AppEvent::ConversationRuntimeAuthorityChanged(runtime),
             AppEvent::TurnStreamSnapshotChanged(snapshot),
+            AppEvent::PostTurnEvaluationDue {
+                planning_workspace_directory,
+            },
         ] = outcome.events.as_slice()
         else {
-            panic!("typed completion should publish authority and one stream snapshot");
+            panic!(
+                "typed completion should publish authority, one stream snapshot, and the due evaluation"
+            );
         };
+        assert_eq!(planning_workspace_directory, "/tmp/workspace");
         assert!(runtime.active_turn.is_none());
-        assert_eq!(snapshot.revision, 3);
+        assert_eq!(snapshot.revision, 4);
         assert_eq!(
             snapshot.terminal,
             Some(TurnStreamTerminalSnapshot::Turn {
@@ -7270,6 +7339,51 @@ mod tests {
             } if capture == &execution_snapshot_capture
         ));
         assert!(outcome.effects.is_empty());
+
+        let started =
+            controller.handle_input(CoreInput::Command(AppCommand::EvaluateCompletedTurn {
+                parallel_mode_enabled: false,
+                parallel_automation_epoch_id: Some(7),
+            }));
+        let [CoreEffect::EvaluatePostTurn { request, .. }] = started.effects.as_slice() else {
+            panic!(
+                "the host command should start the evaluation: {:?}",
+                started.effects
+            );
+        };
+        assert_eq!(request.completed_turn_id, "turn-1");
+        assert_eq!(
+            request.changed_planning_file_paths,
+            vec!["new/docs/plan.md"]
+        );
+        assert_eq!(
+            request.execution_snapshot_capture.as_ref(),
+            Some(&execution_snapshot_capture)
+        );
+        assert_eq!(request.context.thread_id, "thread-1");
+        assert_eq!(
+            request.context.planning_workspace_directory,
+            "/tmp/workspace"
+        );
+        assert_eq!(
+            request.context.latest_main_reply.as_deref(),
+            Some("done: plan updated")
+        );
+        assert_eq!(request.context.parallel_automation_epoch_id, Some(7));
+        assert_eq!(
+            request.context.mode_label,
+            super::super::AUTO_FOLLOW_MODE_LABEL
+        );
+
+        let again =
+            controller.handle_input(CoreInput::Command(AppCommand::EvaluateCompletedTurn {
+                parallel_mode_enabled: false,
+                parallel_automation_epoch_id: None,
+            }));
+        assert!(
+            again.effects.is_empty(),
+            "a completed turn is evaluated once"
+        );
     }
 
     #[test]
@@ -9627,6 +9741,7 @@ mod tests {
 
     fn test_turn_submission_request(thread_id: Option<&str>) -> TurnSubmissionRequest {
         TurnSubmissionRequest {
+            transcript_text: String::new(),
             workspace_directory: "/tmp/workspace".to_string(),
             thread_id: thread_id.map(str::to_string),
             image_paths: Vec::new(),

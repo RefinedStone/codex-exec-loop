@@ -4057,6 +4057,7 @@ mod tests {
         let runner = test_effect_runner(planning_workspace, runtime_port.clone(), input_sender);
         let mut runtime = CoreRuntime::new(runner, input_receiver);
         let turn_request = TurnSubmissionRequest {
+            transcript_text: String::new(),
             workspace_directory: "/tmp/new-workspace".to_string(),
             thread_id: Some("thread-new".to_string()),
             image_paths: Vec::new(),

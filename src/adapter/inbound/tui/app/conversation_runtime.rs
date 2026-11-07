@@ -31,10 +31,7 @@ use crate::domain::conversation_runtime_envelope::{
 };
 use crate::domain::operator_alert::OperatorAlert;
 use crate::domain::parallel_mode::ParallelModePostTurnQueueSignal;
-use crate::domain::planning::{
-    PlanningQueueMutationReceipt, TaskHandoff as PlanningTaskHandoff,
-    TurnSnapshotCapture as PlanningTurnExecutionSnapshotCapture,
-};
+use crate::domain::planning::{PlanningQueueMutationReceipt, TaskHandoff as PlanningTaskHandoff};
 use serde_json::json;
 #[derive(Debug, Clone)]
 pub(super) enum ConversationRuntimeEvent {
@@ -106,12 +103,6 @@ pub(super) enum ConversationRuntimeEffect {
         transcript_text: String,
         prompt_origin: PromptOrigin,
         image_paths: Vec<String>,
-    },
-    EvaluatePostTurn {
-        workspace_directory: String,
-        completed_turn_id: String,
-        changed_planning_file_paths: Vec<String>,
-        execution_snapshot_capture: Option<PlanningTurnExecutionSnapshotCapture>,
     },
     QueueAutoPrompt {
         source: crate::core::app::PostTurnEvaluationCorrelation,
@@ -357,7 +348,6 @@ pub(super) fn reduce_conversation_runtime_with_transition(
             let applied = take_stream_snapshot_update(&mut state, snapshot);
             let progressive_activity = applied.progressive_activity;
             let item_lifecycle = applied.item_lifecycle;
-            let stream_workspace_directory = applied.workspace_directory;
             state
                 .progressive_activity_detail
                 .replace_snapshots(&progressive_activity, &item_lifecycle);
@@ -597,22 +587,16 @@ pub(super) fn reduce_conversation_runtime_with_transition(
                 TurnStreamUpdate::TurnCompleted {
                     turn_id,
                     changed_planning_file_paths,
-                    execution_snapshot_capture,
-                    status_text: _,
+                    ..
                 } => {
-                    // Turn completion closes the provider stream but does not decide
-                    // whether to auto-follow. That policy needs fresh planning state,
-                    // so it is emitted as an effect after the model enters evaluating
-                    // state.
+                    // Turn completion closes the provider stream. The host starts the
+                    // post-turn evaluation from Core-owned inputs (plan 18 K1-4); the
+                    // view only shows that settlement is in flight.
                     let approval_was_pending = previous_runtime.approval.is_some();
-                    queue_post_turn_evaluation(
+                    begin_post_turn_settlement_view(
                         &mut state,
-                        &mut effects,
-                        previous_runtime,
-                        stream_workspace_directory,
                         turn_id,
                         changed_planning_file_paths,
-                        execution_snapshot_capture,
                     );
                     if approval_was_pending {
                         effects.push(ConversationRuntimeEffect::CloseApprovalOverlay);
@@ -924,7 +908,6 @@ pub(super) fn reduce_conversation_runtime(
 
 struct AppliedStreamSnapshot {
     update: TurnStreamUpdate,
-    workspace_directory: Option<String>,
     item_lifecycle: std::sync::Arc<
         crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProjectionSnapshot,
     >,
@@ -941,7 +924,6 @@ fn take_stream_snapshot_update(
     state.runtime_envelope = snapshot.runtime_envelope.map(|envelope| *envelope);
     AppliedStreamSnapshot {
         update: snapshot.update,
-        workspace_directory: snapshot.cwd,
         item_lifecycle: snapshot.item_lifecycle,
         progressive_activity: snapshot.progressive_activity,
     }
@@ -1062,46 +1044,23 @@ fn prompt_origin_label(origin: &PromptOrigin) -> &'static str {
     }
 }
 
-fn queue_post_turn_evaluation(
+fn begin_post_turn_settlement_view(
     state: &mut ConversationViewModel,
-    effects: &mut Vec<ConversationRuntimeEffect>,
-    previous_runtime: &crate::core::app::ConversationRuntimeSnapshot,
-    stream_workspace_directory: Option<String>,
     turn_id: String,
     changed_planning_file_paths: Vec<String>,
-    execution_snapshot_capture: Option<PlanningTurnExecutionSnapshotCapture>,
 ) {
     let changed_planning_file_count = changed_planning_file_paths.len();
     state.finish_turn(&turn_id, &changed_planning_file_paths);
-    let workspace_directory = previous_runtime
-        .active_turn
-        .as_ref()
-        .map(|turn| turn.workspace_directory.clone())
-        .filter(|workspace| !workspace.trim().is_empty())
-        .or_else(|| stream_workspace_directory.filter(|workspace| !workspace.trim().is_empty()))
-        .or_else(|| {
-            execution_snapshot_capture
-                .as_ref()
-                .map(|capture| capture.workspace_directory.clone())
-        })
-        .unwrap_or_else(|| state.planning_workspace_directory().to_string());
     state.begin_post_turn_settlement(&turn_id);
     event_log::emit_lazy("post_turn_evaluation_queued", || {
         json!({
             "thread_id": state.thread_id.as_str(),
             "completed_turn_id": turn_id,
-            "workspace_directory": workspace_directory,
             "operation": "post_turn",
             "phase": "queued",
             "decision": "evaluate",
             "changed_planning_file_count": changed_planning_file_count,
         })
-    });
-    effects.push(ConversationRuntimeEffect::EvaluatePostTurn {
-        workspace_directory,
-        completed_turn_id: turn_id,
-        changed_planning_file_paths,
-        execution_snapshot_capture,
     });
 }
 
@@ -1116,9 +1075,6 @@ mod tests {
         AutoFollowSubmitContext, ManualIntakeSubmitContext, PromptOrigin,
     };
     use crate::application::port::conversation_stream::ConversationStreamEvent;
-    use crate::application::service::planning::{
-        PlanningExecutionSnapshot, PlanningTurnExecutionSnapshotCapture,
-    };
     use crate::core::app::TurnStreamTestHarness;
     use crate::diagnostics::trace_event_log::AKRA_EVENT_TARGET;
     use crate::domain::conversation::{
@@ -2395,10 +2351,6 @@ mod tests {
             state.thread_id = "thread-1".to_string();
             let reduction = reduce_conversation_runtime(state, stream_snapshot_event(event));
 
-            assert!(reduction.effects.iter().all(|effect| !matches!(
-                effect,
-                ConversationRuntimeEffect::EvaluatePostTurn { .. }
-            )));
             assert!(reduction.state.can_accept_manual_prompt());
             assert_eq!(
                 reduction.state.activity_rail_terminal_state,
@@ -2440,11 +2392,10 @@ mod tests {
             stream_snapshot_event(completed_stream_event("thread-1", "turn-1")),
         );
         assert_eq!(completed.state.activity_rail_terminal_state, None);
-        assert!(
-            completed
-                .effects
-                .iter()
-                .any(|effect| matches!(effect, ConversationRuntimeEffect::EvaluatePostTurn { .. }))
+        // 평가 시작은 호스트가 한다 (plan 18 K1-4). 화면은 평가 중이라고 표시한다.
+        assert_eq!(
+            completed.state.status_text,
+            "turn completed / evaluating post-turn continuation"
         );
     }
 
@@ -2472,13 +2423,6 @@ mod tests {
         );
         install_post_turn_evaluation(&mut reduction.state, "turn-1");
 
-        assert!(reduction.effects.iter().any(|effect| matches!(
-            effect,
-            ConversationRuntimeEffect::EvaluatePostTurn {
-                completed_turn_id,
-                ..
-            } if completed_turn_id == "turn-1"
-        )));
         assert!(!reduction.state.auto_follow_state().has_live_activity());
         assert!(reduction.state.has_post_turn_settlement_in_flight());
         assert!(!reduction.state.can_accept_manual_prompt());
@@ -2533,65 +2477,6 @@ mod tests {
         state.apply_runtime_snapshot(runtime);
         assert!(state.complete_post_turn_settlement("turn-a"));
         assert!(!state.has_post_turn_settlement_in_flight());
-    }
-
-    #[test]
-    fn stream_turn_completion_carries_execution_snapshot_to_post_turn_effect() {
-        let mut state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
-        state.thread_id = "thread-1".to_string();
-        install_active_turn(
-            &mut state,
-            crate::core::app::ActiveTurnPhase::Running,
-            Some("turn-1"),
-            "/tmp/workspace",
-        );
-        let expected_lease = crate::domain::parallel_mode::ParallelModeSlotLeaseSnapshot::new(
-            "slot-1",
-            "task-1",
-            "Task One",
-            "agent-1",
-            "akra-agent/slot-1/task-1",
-            "/tmp/workspace",
-            crate::domain::parallel_mode::ParallelModeSlotLeaseState::Running,
-            "2026-07-12T00:00:00Z",
-            Some("2026-07-12T00:00:01Z".to_string()),
-        )
-        .with_lease_generation("a".repeat(64));
-        let snapshot_capture = PlanningTurnExecutionSnapshotCapture::ready(
-            "/tmp/workspace",
-            PlanningExecutionSnapshot::default(),
-        )
-        .with_parallel_slot_lease(Some(expected_lease.clone()));
-
-        let reduction = with_akra_event_trace(|| {
-            reduce_conversation_runtime(
-                state,
-                ConversationRuntimeEvent::StreamSnapshotApplied(Box::new(
-                    TurnStreamTestHarness::new().apply_turn_completed(
-                        "turn-1".to_string(),
-                        vec!["new/docs/plan.md".to_string()],
-                        snapshot_capture.clone(),
-                    ),
-                )),
-            )
-        });
-
-        let post_turn_effect = reduction
-            .effects
-            .into_iter()
-            .find_map(|effect| match effect {
-                ConversationRuntimeEffect::EvaluatePostTurn {
-                    execution_snapshot_capture,
-                    ..
-                } => execution_snapshot_capture,
-                _ => None,
-            })
-            .expect("turn completion should queue post-turn evaluation with the snapshot capture");
-        assert_eq!(post_turn_effect, snapshot_capture);
-        assert_eq!(
-            post_turn_effect.parallel_slot_lease.as_deref(),
-            Some(&expected_lease)
-        );
     }
 
     #[test]

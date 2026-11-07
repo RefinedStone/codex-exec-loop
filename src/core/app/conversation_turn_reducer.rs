@@ -23,6 +23,29 @@ struct DeferredConversationLoadIntent {
     fallback_workspace_directory: String,
 }
 
+/*
+ * 턴 종료 뒤 평가에 넘길 값이다 (plan 18 K1-4). 이전에는 TUI 가 화면 기록에서 꺼냈다. core 는 이 대화에서
+ * 제출한 마지막 사용자 문장과 마지막 응답만 기억한다. 전체 기록은 갖지 않는다.
+ */
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct PostTurnMessages {
+    latest_user_message: Option<String>,
+    latest_agent_reply: Option<String>,
+}
+
+/// 턴이 끝났고 평가를 기다리는 턴이다. 호스트가 병렬 값을 붙여서 평가를 시작한다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PendingPostTurnEvaluation {
+    pub(super) thread_id: String,
+    pub(super) completed_turn_id: String,
+    pub(super) workspace_directory: String,
+    pub(super) planning_workspace_directory: String,
+    pub(super) changed_planning_file_paths: Vec<String>,
+    pub(super) execution_snapshot_capture: Option<crate::domain::planning::TurnSnapshotCapture>,
+    pub(super) latest_user_message: Option<String>,
+    pub(super) latest_agent_reply: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 struct ActiveTurnSteer {
     correlation: TurnSteerCorrelation,
@@ -81,6 +104,8 @@ pub(super) struct ConversationLifecycleReduction {
 
 #[derive(Debug)]
 pub(super) struct TurnStreamReduction {
+    // 이 스트림 이벤트로 턴이 끝나서 평가를 기다린다. 값은 그 턴의 planning 작업 공간이다.
+    pub(super) post_turn_evaluation_due: Option<String>,
     pub(super) snapshots: Vec<TurnStreamSnapshot>,
     pub(super) stop_effects: Vec<StopEffectIntent>,
     pub(super) approval_review_persistence: Option<ApprovalReviewPersistenceCorrelation>,
@@ -111,6 +136,8 @@ pub(super) struct ConversationTurnFeatureReducer {
     active_turn_steer: Option<ActiveTurnSteer>,
     next_approval_decision_generation: u64,
     approval_review_persistence: ApprovalReviewPersistenceCoordinator,
+    post_turn_messages: PostTurnMessages,
+    pending_post_turn_evaluation: Option<PendingPostTurnEvaluation>,
 }
 
 impl std::fmt::Debug for ConversationTurnFeatureReducer {
@@ -151,7 +178,16 @@ impl ConversationTurnFeatureReducer {
             active_turn_steer: None,
             next_approval_decision_generation: 1,
             approval_review_persistence: ApprovalReviewPersistenceCoordinator::new(),
+            post_turn_messages: PostTurnMessages::default(),
+            pending_post_turn_evaluation: None,
         }
+    }
+
+    /// 호스트가 평가를 시작할 때 가져간다. 한 번만 가져갈 수 있다.
+    pub(super) fn take_pending_post_turn_evaluation(
+        &mut self,
+    ) -> Option<PendingPostTurnEvaluation> {
+        self.pending_post_turn_evaluation.take()
     }
 
     pub(super) fn runtime_snapshot(&self) -> ConversationRuntimeSnapshot {
@@ -245,6 +281,9 @@ impl ConversationTurnFeatureReducer {
         self.approval_review_persistence.invalidate_conversation();
         self.guarded_session_rename_stream = None;
         self.turn_stream_state = TurnStreamState::new();
+        // 다른 대화를 열면 이전 대화의 메시지와 평가 대기 턴은 버린다.
+        self.post_turn_messages = PostTurnMessages::default();
+        self.pending_post_turn_evaluation = None;
         if let Some(identity) = loaded_identity {
             self.turn_stream_state.seed_loaded_thread_projection(
                 identity.thread_id,
@@ -303,6 +342,9 @@ impl ConversationTurnFeatureReducer {
             "turn submission",
         ));
         self.guarded_session_rename_stream = None;
+        if !request.transcript_text.trim().is_empty() {
+            self.post_turn_messages.latest_user_message = Some(request.transcript_text.clone());
+        }
         self.conversation_runtime.begin_turn(correlation, request);
         self.approval_review_persistence
             .begin_conversation_turn(correlation);
@@ -349,7 +391,55 @@ impl ConversationTurnFeatureReducer {
             }
             self.guarded_session_rename_stream = None;
         }
+        if let TurnStreamEvent::AgentMessageCompleted { text, .. } = &event
+            && !text.trim().is_empty()
+        {
+            // 비어 있지 않은 마지막 응답을 쓴다. 병렬 슬롯 루프와 TUI 의 규칙과 같다.
+            self.post_turn_messages.latest_agent_reply = Some(text.clone());
+        }
+        // 턴 종료 처리 전의 작업 공간이다. TUI 는 같은 순서로 골랐다 (활성 턴, 스트림, 실행 캡처).
+        let active_turn_workspace = self
+            .conversation_runtime
+            .snapshot()
+            .active_turn
+            .as_ref()
+            .map(|turn| turn.workspace_directory.clone())
+            .filter(|workspace| !workspace.trim().is_empty());
         let stream_snapshot = self.turn_stream_state.apply_stream_event(event);
+        let post_turn_evaluation_due = match &stream_snapshot.update {
+            TurnStreamUpdate::TurnCompleted {
+                turn_id,
+                changed_planning_file_paths,
+                execution_snapshot_capture,
+                ..
+            } => {
+                let stream_workspace = stream_snapshot
+                    .cwd
+                    .clone()
+                    .filter(|workspace| !workspace.trim().is_empty());
+                let planning_workspace_directory = stream_workspace.clone().unwrap_or_default();
+                let workspace_directory = active_turn_workspace
+                    .or(stream_workspace)
+                    .or_else(|| {
+                        execution_snapshot_capture
+                            .as_ref()
+                            .map(|capture| capture.workspace_directory.clone())
+                    })
+                    .unwrap_or_else(|| planning_workspace_directory.clone());
+                self.pending_post_turn_evaluation = Some(PendingPostTurnEvaluation {
+                    thread_id: stream_snapshot.thread_id.clone().unwrap_or_default(),
+                    completed_turn_id: turn_id.clone(),
+                    workspace_directory,
+                    planning_workspace_directory: planning_workspace_directory.clone(),
+                    changed_planning_file_paths: changed_planning_file_paths.clone(),
+                    execution_snapshot_capture: execution_snapshot_capture.clone(),
+                    latest_user_message: self.post_turn_messages.latest_user_message.clone(),
+                    latest_agent_reply: self.post_turn_messages.latest_agent_reply.clone(),
+                });
+                Some(planning_workspace_directory)
+            }
+            _ => None,
+        };
         match &stream_snapshot.update {
             TurnStreamUpdate::TurnStarted { turn_id, .. } => {
                 self.conversation_runtime
@@ -467,6 +557,7 @@ impl ConversationTurnFeatureReducer {
         }
         self.prune_post_turn_evaluation_for_lifecycle();
         Some(TurnStreamReduction {
+            post_turn_evaluation_due,
             snapshots,
             stop_effects,
             approval_review_persistence,
@@ -910,6 +1001,7 @@ impl ConversationTurnFeatureReducer {
             "test turn submission must not supersede an active generation"
         );
         let request = TurnSubmissionRequest {
+            transcript_text: String::new(),
             workspace_directory: "/workspace".to_string(),
             thread_id: None,
             image_paths: Vec::new(),
@@ -925,43 +1017,6 @@ impl ConversationTurnFeatureReducer {
         else {
             panic!("test turn submission should be admitted");
         };
-        correlation
-    }
-
-    #[cfg(test)]
-    pub(super) fn begin_test_post_turn_evaluation(
-        &mut self,
-        thread_id: &str,
-        completed_turn_id: &str,
-        turn_workspace_directory: &str,
-        planning_workspace_directory: &str,
-    ) -> PostTurnEvaluationCorrelation {
-        assert!(
-            self.in_flight_post_turn_evaluation.is_none(),
-            "test post-turn evaluation must not supersede an active lease"
-        );
-        assert!(
-            self.turn_stream_state
-                .can_start_post_turn_evaluation(thread_id, completed_turn_id),
-            "test post-turn evaluation must target the latest confirmed completed turn"
-        );
-        let correlation = PostTurnEvaluationCorrelation::new(
-            take_generation(
-                &mut self.next_post_turn_evaluation_generation,
-                "post-turn evaluation",
-            ),
-            thread_id,
-            completed_turn_id,
-            turn_workspace_directory,
-            planning_workspace_directory,
-        );
-        self.in_flight_post_turn_evaluation = Some(ActivePostTurnEvaluation {
-            correlation: correlation.clone(),
-            continuation_permit: crate::domain::planning::PostTurnContinuationGate::default()
-                .capture(),
-        });
-        self.conversation_runtime
-            .begin_post_turn_evaluation(correlation.clone());
         correlation
     }
 
@@ -1032,6 +1087,7 @@ mod tests {
 
     fn turn_request() -> TurnSubmissionRequest {
         TurnSubmissionRequest {
+            transcript_text: String::new(),
             workspace_directory: "/workspace".to_string(),
             thread_id: None,
             image_paths: Vec::new(),

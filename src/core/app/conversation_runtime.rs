@@ -686,6 +686,7 @@ mod tests {
 
     fn turn_request(origin: CorePromptOrigin) -> TurnSubmissionRequest {
         TurnSubmissionRequest {
+            transcript_text: String::new(),
             workspace_directory: "/workspace".to_string(),
             thread_id: Some("thread-1".to_string()),
             image_paths: Vec::new(),

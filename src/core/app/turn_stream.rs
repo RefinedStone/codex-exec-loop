@@ -565,16 +565,6 @@ impl TurnStreamTestHarness {
         self.0.apply_stream_event(event)
     }
 
-    pub(crate) fn apply_turn_completed(
-        &mut self,
-        turn_id: String,
-        changed_paths: Vec<String>,
-        execution_snapshot_capture: TurnSnapshotCapture,
-    ) -> TurnStreamSnapshot {
-        self.0
-            .apply_turn_completed(turn_id, changed_paths, execution_snapshot_capture)
-    }
-
     pub(crate) fn apply_runtime_notice(&mut self, notice: String) -> TurnStreamSnapshot {
         self.0.apply_runtime_notice(notice)
     }

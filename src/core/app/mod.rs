@@ -112,5 +112,6 @@ pub use turn_stream::{
     TurnStreamSnapshot, TurnStreamStartRejection, TurnStreamTerminalSnapshot, TurnStreamUpdate,
 };
 pub use turn_submission::{
-    CorePromptOrigin, TurnSubmissionAdmission, TurnSubmissionCorrelation, TurnSubmissionRequest,
+    AUTO_FOLLOW_MODE_LABEL, CorePromptOrigin, TurnSubmissionAdmission, TurnSubmissionCorrelation,
+    TurnSubmissionRequest,
 };

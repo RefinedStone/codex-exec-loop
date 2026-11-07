@@ -3528,6 +3528,9 @@ fn core_conversation_turn_feature_reducer_owns_one_correlated_lifecycle_slice() 
         "active_turn_steer",
         "next_approval_decision_generation",
         "approval_review_persistence",
+        // plan 18 K1-4: evaluation inputs and the completed turn awaiting the host.
+        "post_turn_messages",
+        "pending_post_turn_evaluation",
     ];
     let forbidden_root_fields = [
         "turn_stream_state",
@@ -11462,46 +11465,34 @@ fn tui_post_turn_execution_uses_planning_post_turn_facade() {
         "NativeTuiApp must not retain a raw application field"
     );
 
-    let tui_post_turn_source = fs::read_to_string(
-        "src/adapter/inbound/tui/app/turn_submission_runtime/post_turn_execution.rs",
-    )
-    .expect("TUI post-turn execution source should load");
-    let execute_post_turn_evaluation =
-        top_level_impl_method_source(&tui_post_turn_source, "execute_post_turn_evaluation");
-    let execute_syntax = syn::parse_file(&format!(
-        "impl NativeTuiApp {{\n{execute_post_turn_evaluation}\n}}"
-    ))
-    .expect("TUI post-turn request method should parse");
-    let mut panel_field_reads = NamedFieldAccessVisitor::new("planning_worker_panel_state");
-    panel_field_reads.visit_file(&execute_syntax);
-    assert!(
-        panel_field_reads.lines.is_empty()
-            && !execute_post_turn_evaluation.contains("planning_worker_panel_state"),
-        "TUI post-turn request admission must not seed Core from its projected panel state; field references: {:?}",
-        panel_field_reads.lines
+    // plan 18 K1-4: the TUI no longer builds or sends the post-turn evaluation request.
+    // The host starts it from Core-owned inputs with `AppCommand::EvaluateCompletedTurn`.
+    assert_no_forbidden_references_in_paths(
+        "TUI must not request post-turn evaluation; the host starts it from Core state",
+        &["src/adapter/inbound/tui"],
+        &[
+            "AppCommand::EvaluatePostTurn",
+            "AppCommand::EvaluateCompletedTurn",
+            "fn execute_post_turn_evaluation",
+            "fn application_post_turn_request",
+        ],
     );
-    let field_guard_sample = syn::parse_file(
-        "fn sample(app: &NativeTuiApp) { let _ = app.planning_worker_panel_state.clone(); }",
-    )
-    .expect("field guard sample should parse");
-    let mut sample_field_reads = NamedFieldAccessVisitor::new("planning_worker_panel_state");
-    sample_field_reads.visit_file(&field_guard_sample);
-    assert_eq!(
-        sample_field_reads.lines.len(),
-        1,
-        "planning-worker seed guard must detect a direct TUI field read"
-    );
-
-    let application_post_turn_request =
-        top_level_function_source(&tui_post_turn_source, "application_post_turn_request");
-    let compact_application_post_turn_request = application_post_turn_request
+    let core_controller_source = fs::read_to_string("src/core/app/controller.rs").unwrap();
+    let post_turn_request_from_pending =
+        top_level_impl_method_source(&core_controller_source, "post_turn_request_from_pending");
+    let compact_post_turn_request = post_turn_request_from_pending
         .chars()
         .filter(|character| !character.is_whitespace())
         .collect::<String>();
     assert!(
-        compact_application_post_turn_request
-            .contains("planning_worker_panel_state:Default::default()"),
-        "the adapter request DTO must carry only a neutral placeholder until Core binds its history seed"
+        compact_post_turn_request.contains("planning_worker_panel_state:Default::default()"),
+        "the Core-built request must carry only a neutral panel placeholder until admission binds its history seed"
+    );
+    let native_runtime_source =
+        fs::read_to_string("src/composition/native_client_runtime.rs").unwrap();
+    assert!(
+        native_runtime_source.contains("AppCommand::EvaluateCompletedTurn"),
+        "the host must start post-turn evaluation after Core reports a due completed turn"
     );
 
     assert_no_production_callable_reference_named_in_paths(

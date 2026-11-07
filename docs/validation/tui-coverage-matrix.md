@@ -148,7 +148,6 @@ Manual terminal capture stays primitive-sensitive only.
 - `src/adapter/inbound/tui/app/test_helpers.rs`
 - `src/adapter/inbound/tui/app/transcript_viewport_ui.rs`
 - `src/adapter/inbound/tui/app/turn_submission_runtime.rs`
-- `src/adapter/inbound/tui/app/turn_submission_runtime/post_turn_execution.rs`
 - `src/adapter/inbound/tui/app/view_selection_overlay_ui.rs`
 - `src/adapter/inbound/tui/app/work_center_overlay_ui.rs`
 - `src/adapter/inbound/tui/conversation_text.rs`

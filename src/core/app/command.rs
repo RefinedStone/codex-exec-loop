@@ -90,5 +90,11 @@ pub enum AppCommand {
         resolution: PostTurnRouteResolution,
     },
     SetupGithubReviewPolling(GithubReviewPollingSetupRequest),
+    // 호스트 전용이다 (plan 18 K1-4). core 가 기다리는 완료 턴의 평가를 시작한다. 병렬 값은 병렬 제어부를 가진
+    // 호스트만 안다.
+    EvaluateCompletedTurn {
+        parallel_mode_enabled: bool,
+        parallel_automation_epoch_id: Option<u64>,
+    },
     EvaluatePostTurn(Box<PostTurnRequest>),
 }

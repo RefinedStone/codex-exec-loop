@@ -95,7 +95,7 @@
 | K1-1 (완료 2026-11-07) | `Tick` 입력, GitHub 폴링 일정을 core 로. `AppCommand::PollGithubReview` 제거 | T4 (폴링 시각) | core 단위 테스트: tick 시각별 폴링 effect. TUI 는 tick 만 보냄 |
 | K1-2 (완료 2026-11-07) | 병렬 tick 은 시각만 담는다. 작업 공간과 supervisor 화면 상태는 `ParallelViewChanged` 상태 값으로 따로 알린다 | T5 | 기존 `parallel_mode` 테스트, pulse 화면 테스트 |
 | K1-3 (완료 2026-11-07) | 시작 점검이 성공하면 core 가 세션 목록 첫 페이지를 이어서 읽는다. `Started` 입력은 만들지 않았다: 부팅과 재시도는 사용자 명령 `RunStartupChecks` 하나로 충분하다. GitHub 폴링 설정 시작(첫 화면 조건)은 설정 값이 TUI 에 있어서 K1-6 으로 옮긴다 | T6 | core 테스트: 점검 Ready 결과에 세션 목록 로드 effect 가 함께 나온다. shell chrome 은 세션 목록 명령을 내지 않는다 |
-| K1-4 | thread 별 최근 사용자 메시지·응답, 턴 종료에서 core 가 평가 effect | T1, T2 | 녹화된 스트림으로 평가 입력 비교 (TUI 경로와 같은 값) |
+| K1-4 (완료 2026-11-07) | core 가 최근 사용자 문장(제출 시 `transcript_text`)과 최근 응답을 기억한다. 턴 종료에서 core 가 평가 대기 턴과 `PostTurnEvaluationDue` 를 내고, 호스트(`NativeClientRuntime`)가 병렬 값(사용 여부, epoch)을 붙여 `EvaluateCompletedTurn` 으로 시작한다. TUI 의 평가 요청 경로는 지웠다. 차이: 기록을 연 뒤 응답 없이 끝난 턴은 TUI 가 기록의 예전 응답을 넘겼지만 core 는 이번 세션 값만 쓴다 | T1, T2 | core 테스트: 완료 턴의 평가 입력(응답, 변경 파일, 캡처, thread, planning 작업 공간, epoch)과 한 번만 평가. 호스트 테스트: 턴 종료 뒤 평가가 자동으로 시작된다 |
 | K1-5 | `AutoSubmit` 을 core 가 제출. `TurnSubmissionPolicy` | T3 | 자동 후속 루프 2회 시나리오. 턴 옵션·lease 넘기기 비교 |
 | K1-6 | `CoreRuntimeHost`, 블로킹 입력함, 헤드리스 시험, 경계 테스트 | 구동 루프 | TUI 없이 가짜 app-server 로 턴 종료 → 평가 → 자동 후속 턴 |
 

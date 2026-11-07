@@ -2215,9 +2215,11 @@ impl NativeTuiApp {
                     .planning_worker_panel_state
                     .apply_started(state);
             }
-            AppEvent::PostTurnContinuationRoutingRequested { .. } => {
-                // NativeClientRuntime consumes this Core event and re-enters
-                // Core with the exact route resolution before TUI projection.
+            AppEvent::PostTurnContinuationRoutingRequested { .. }
+            | AppEvent::PostTurnEvaluationDue { .. } => {
+                // NativeClientRuntime consumes these Core events and re-enters
+                // Core (route resolution, post-turn evaluation start) before TUI
+                // projection.
             }
             AppEvent::PostTurnEvaluationCompleted {
                 correlation,

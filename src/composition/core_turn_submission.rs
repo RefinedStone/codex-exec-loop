@@ -348,6 +348,7 @@ fn resolve_stream_launch_request(
         workspace_directory,
         thread_id,
         prompt,
+        transcript_text,
         image_paths,
         prompt_origin,
         auto_follow_source,
@@ -377,6 +378,7 @@ fn resolve_stream_launch_request(
     };
     Ok((
         TurnSubmissionRequest {
+            transcript_text,
             workspace_directory: outcome.request.workspace_directory,
             thread_id: outcome.request.thread_id,
             prompt: outcome.request.prompt,
@@ -659,6 +661,7 @@ mod tests {
 
     fn sample_request() -> TurnSubmissionRequest {
         TurnSubmissionRequest {
+            transcript_text: String::new(),
             workspace_directory: "/tmp/workspace".to_string(),
             thread_id: Some("thread-1".to_string()),
             image_paths: Vec::new(),
