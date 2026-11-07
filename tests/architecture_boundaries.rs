@@ -3511,22 +3511,27 @@ fn core_conversation_turn_feature_reducer_owns_one_correlated_lifecycle_slice() 
         "conversation_turn must be the typed conversation/turn reducer"
     );
 
+    // plan 18 K2-2: generations and the conversation load procedure span all threads; the
+    // per-thread turn state lives in one ThreadSession.
     let reducer_authority_fields = [
-        "turn_stream_state",
-        "conversation_runtime",
-        "guarded_session_rename_stream",
+        "session",
         "next_conversation_load_generation",
         "in_flight_conversation_load",
         "deferred_conversation_load",
         "next_turn_submission_generation",
         "next_post_turn_evaluation_generation",
+        "next_stop_request_generation",
+        "next_turn_steer_generation",
+        "next_approval_decision_generation",
+    ];
+    let thread_session_fields = [
+        "turn_stream_state",
+        "conversation_runtime",
+        "guarded_session_rename_stream",
         "post_turn_continuation_gate",
         "in_flight_post_turn_evaluation",
-        "next_stop_request_generation",
         "active_stop_request",
-        "next_turn_steer_generation",
         "active_turn_steer",
-        "next_approval_decision_generation",
         "approval_review_persistence",
         // plan 18 K1-4: evaluation inputs and the completed turn awaiting the host.
         "post_turn_messages",
@@ -3610,8 +3615,24 @@ fn core_conversation_turn_feature_reducer_owns_one_correlated_lifecycle_slice() 
             .collect::<HashSet<_>>(),
         "ConversationTurnFeatureReducer must remain one cohesive correlated lifecycle slice"
     );
-    let reducer_struct_fields =
-        named_struct_fields(&reducer_syntax, "ConversationTurnFeatureReducer");
+    let reducer_struct_fields = named_struct_fields(&reducer_syntax, "ThreadSession");
+    assert_eq!(
+        reducer_struct_fields
+            .iter()
+            .map(|field| {
+                field
+                    .ident
+                    .as_ref()
+                    .expect("thread session field should be named")
+                    .to_string()
+            })
+            .collect::<HashSet<_>>(),
+        thread_session_fields
+            .into_iter()
+            .map(str::to_string)
+            .collect::<HashSet<_>>(),
+        "ThreadSession must hold exactly the per-thread turn state"
+    );
     let runtime_authority = reducer_struct_fields
         .iter()
         .find(|field| {
