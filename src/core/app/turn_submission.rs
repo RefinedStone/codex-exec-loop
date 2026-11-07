@@ -40,6 +40,9 @@ pub struct TurnSubmissionRequest {
     pub workspace_directory: String,
     pub thread_id: Option<String>,
     pub prompt: String,
+    // 대화 기록에 보이는 사용자 문장이다. 수동 intake 와 자동 후속은 실제 prompt 와 다르다. core 는 이 값을
+    // 턴 종료 뒤 평가의 "최근 사용자 메시지"로 쓴다 (plan 18 K1-4).
+    pub transcript_text: String,
     /*
      * Staged image file paths submitted beside the prompt text. Composition maps
      * them to `localImage` turn input items; empty for internal prompts.
@@ -56,6 +59,9 @@ pub struct TurnSubmissionRequest {
     pub turn_options: ConversationTurnOptions,
     pub slot_lease_handoff: Option<ParallelTurnHandoff>,
 }
+
+// 자동 후속 모드 이름이다. 평가 문맥과 화면이 같은 값을 쓴다.
+pub const AUTO_FOLLOW_MODE_LABEL: &str = "planning queue";
 
 impl TurnSubmissionRequest {
     pub(crate) fn request_label(&self) -> &'static str {

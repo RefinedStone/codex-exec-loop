@@ -18,7 +18,6 @@ use crate::domain::planning::{
     PlanningQueueMutationReceipt, PlanningQueueMutationReceiptEntry, QUEUED_TASK_TRANSCRIPT_TEXT,
     TaskStatus,
 };
-use post_turn_execution::PostTurnEvaluationRequest;
 
 use super::conversation_input::MAX_PROMPT_INPUT_BYTES;
 use super::planning::planning_worker_status_label;
@@ -88,14 +87,16 @@ impl NativeTuiApp {
                 prompt_origin,
                 image_paths,
             } => {
+                let mut request = self.build_turn_submission_request(
+                    workspace_directory,
+                    thread_id,
+                    prompt,
+                    &prompt_origin,
+                    image_paths,
+                );
+                request.transcript_text = transcript_text.clone();
                 let outcome = self.reduce_core_client_event(CoreInput::Command(
-                    AppCommand::SubmitTurn(Box::new(self.build_turn_submission_request(
-                        workspace_directory,
-                        thread_id,
-                        prompt,
-                        &prompt_origin,
-                        image_paths,
-                    ))),
+                    AppCommand::SubmitTurn(Box::new(request)),
                 ));
                 turn_submission_admitted = outcome.events.iter().any(|event| {
                     matches!(
@@ -126,17 +127,6 @@ impl NativeTuiApp {
                     conversation.record_stale_auto_follow_submission();
                 }
             }
-            ConversationRuntimeEffect::EvaluatePostTurn {
-                workspace_directory,
-                completed_turn_id,
-                changed_planning_file_paths,
-                execution_snapshot_capture,
-            } => self.execute_post_turn_evaluation(PostTurnEvaluationRequest {
-                workspace_directory,
-                completed_turn_id,
-                changed_planning_file_paths,
-                execution_snapshot_capture,
-            }),
             ConversationRuntimeEffect::QueueAutoPrompt {
                 source,
                 prompt,
@@ -191,6 +181,7 @@ impl NativeTuiApp {
             workspace_directory,
             thread_id,
             prompt,
+            transcript_text: String::new(),
             image_paths,
             prompt_origin: core_prompt_origin(prompt_origin),
             auto_follow_source: match prompt_origin {
@@ -1433,12 +1424,6 @@ mod tests {
             transcript_text: "ship it".to_string(),
             prompt_origin: PromptOrigin::Manual,
             image_paths: Vec::new(),
-        });
-        app.execute_conversation_runtime_effect(ConversationRuntimeEffect::EvaluatePostTurn {
-            workspace_directory: workspace.path_str().to_string(),
-            completed_turn_id: "turn-1".to_string(),
-            changed_planning_file_paths: Vec::new(),
-            execution_snapshot_capture: None,
         });
 
         assert!(matches!(

@@ -634,10 +634,41 @@ impl NativeClientRuntime {
         self.resolve_internal_post_turn_routes(outcome)
     }
 
+    /*
+     * 턴 종료 뒤 평가는 호스트가 시작한다 (plan 18 K1-4). core 는 기다리는 완료 턴을 알리고, 호스트는 병렬
+     * 제어부의 값(사용 여부, epoch)을 붙여서 다시 넣는다. 이전에는 TUI 가 화면 기록으로 요청을 만들었다.
+     */
+    fn start_due_post_turn_evaluations(&mut self, core_outcome: &mut CoreDispatchOutcome) {
+        let mut due = Vec::new();
+        let mut external_events = Vec::with_capacity(core_outcome.events.len());
+        for event in std::mem::take(&mut core_outcome.events) {
+            match event {
+                AppEvent::PostTurnEvaluationDue {
+                    planning_workspace_directory,
+                } => due.push((external_events.len(), planning_workspace_directory)),
+                external => external_events.push(external),
+            }
+        }
+        core_outcome.events = external_events;
+        // 뒤에서부터 끼워 넣어 앞쪽 위치가 바뀌지 않게 한다.
+        for (event_index, planning_workspace_directory) in due.into_iter().rev() {
+            let started = self
+                .core
+                .runtime
+                .dispatch_command(AppCommand::EvaluateCompletedTurn {
+                    parallel_mode_enabled: self.parallel_mode_enabled(),
+                    parallel_automation_epoch_id: self
+                        .current_parallel_epoch_id_for_workspace(&planning_workspace_directory),
+                });
+            merge_core_dispatch_outcome_at(core_outcome, started, event_index);
+        }
+    }
+
     fn resolve_internal_post_turn_routes(
         &mut self,
         mut core_outcome: CoreDispatchOutcome,
     ) -> NativeClientDispatchOutcome {
+        self.start_due_post_turn_evaluations(&mut core_outcome);
         let routing_requests = take_internal_post_turn_routing_requests(&mut core_outcome);
         if routing_requests.is_empty() {
             return NativeClientDispatchOutcome::Core(core_outcome);
@@ -796,22 +827,6 @@ impl NativeClientRuntime {
     }
 
     #[cfg(test)]
-    pub(crate) fn begin_test_post_turn_evaluation(
-        &mut self,
-        thread_id: &str,
-        completed_turn_id: &str,
-        turn_workspace_directory: &str,
-        planning_workspace_directory: &str,
-    ) -> PostTurnEvaluationCorrelation {
-        self.core.runtime.begin_test_post_turn_evaluation(
-            thread_id,
-            completed_turn_id,
-            turn_workspace_directory,
-            planning_workspace_directory,
-        )
-    }
-
-    #[cfg(test)]
     #[allow(dead_code)]
     pub(crate) fn test_post_turn_evaluation_is_in_flight(
         &self,
@@ -937,16 +952,17 @@ impl NativeClientPort for NativeClientRuntime {
         NativeClientRuntime::parallel_mode_enabled(self)
     }
 
+    #[cfg(test)]
+    fn current_parallel_epoch_id_for_workspace(&self, workspace_directory: &str) -> Option<u64> {
+        NativeClientRuntime::current_parallel_epoch_id_for_workspace(self, workspace_directory)
+    }
+
     fn parallel_control_plane_projection(&self) -> ParallelModeControlPlanePresentationProjection {
         NativeClientRuntime::parallel_control_plane_projection(self)
     }
 
     fn parallel_epoch_snapshot(&self) -> ParallelModeControlPlaneEpochSnapshot {
         NativeClientRuntime::parallel_epoch_snapshot(self)
-    }
-
-    fn current_parallel_epoch_id_for_workspace(&self, workspace_directory: &str) -> Option<u64> {
-        NativeClientRuntime::current_parallel_epoch_id_for_workspace(self, workspace_directory)
     }
 
     #[cfg(test)]
@@ -1264,12 +1280,17 @@ mod tests {
                 },
             ));
         }
-        let correlation = runtime.begin_test_post_turn_evaluation(
-            "thread-1",
-            "turn-1",
-            "/workspace",
-            "/workspace",
-        );
+        // 턴이 끝나면 호스트가 평가를 시작한다 (plan 18 K1-4).
+        let correlation = match &runtime
+            .core
+            .runtime
+            .snapshot()
+            .conversation_runtime
+            .post_turn
+        {
+            PostTurnAuthoritySnapshot::Evaluating { correlation, .. } => correlation.clone(),
+            other => panic!("the host should start the post-turn evaluation: {other:?}"),
+        };
         let completion =
             CoreInput::EffectCompleted(CoreEffectCompletion::PostTurnEvaluationCompleted {
                 correlation: correlation.clone(),

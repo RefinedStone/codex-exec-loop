@@ -29,6 +29,8 @@ pub(crate) trait NativeClientPort: Send {
     fn parallel_mode_enabled(&self) -> bool;
     fn parallel_control_plane_projection(&self) -> ParallelModeControlPlanePresentationProjection;
     fn parallel_epoch_snapshot(&self) -> ParallelModeControlPlaneEpochSnapshot;
+    // 시험 전용이다. 평가 요청의 epoch 는 호스트가 직접 붙인다 (plan 18 K1-4).
+    #[cfg(test)]
     fn current_parallel_epoch_id_for_workspace(&self, workspace_directory: &str) -> Option<u64>;
 
     #[cfg(test)]

@@ -18,7 +18,6 @@ pub(crate) use decision::AutoFollowSkipReason;
  * snapshot for terminal copy; it intentionally exposes no transition methods.
  */
 pub(crate) trait AutoFollowSnapshotPresentation {
-    fn mode_label(&self) -> &'static str;
     fn progress_label(&self) -> String;
     fn max_auto_turns_label(&self) -> String;
     fn next_auto_turn_index(&self) -> usize;
@@ -28,10 +27,6 @@ pub(crate) trait AutoFollowSnapshotPresentation {
 }
 
 impl AutoFollowSnapshotPresentation for AutoFollowAuthoritySnapshot {
-    fn mode_label(&self) -> &'static str {
-        AUTO_FOLLOW_MODE_LABEL
-    }
-
     fn progress_label(&self) -> String {
         if !self.is_enabled() {
             return DISABLED_AUTO_FOLLOW_MAX_TURNS_TOKEN.to_string();

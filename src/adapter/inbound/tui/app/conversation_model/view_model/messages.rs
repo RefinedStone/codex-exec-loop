@@ -348,36 +348,6 @@ impl ConversationViewModel {
     pub(crate) fn transcript_revision(&self) -> u64 {
         self.transcript_revision
     }
-
-    /*
-     * Auto-follow decision은 마지막 agent reply를 planning runtime request의 근거로
-     * 넘긴다. canonical transcript의 non-empty agent message만 읽으며,
-     * status/tool notice는 자동 후속 판단 입력에서 제외된다.
-     */
-    pub(crate) fn latest_agent_message_text(&self) -> Option<&str> {
-        self.messages
-            .iter()
-            .rev()
-            .find(|message| {
-                message.kind == ConversationMessageKind::Agent && !message.text.trim().is_empty()
-            })
-            .map(|message| message.text.as_str())
-    }
-
-    /*
-     * Latest user message는 prompt assembly와 UI status가 현재 conversation의
-     * operator intent를 다시 확인할 때 쓰는 query다. agent/status/tool message를
-     * 건너뛰어 사람이 입력한 마지막 지시만 반환한다.
-     */
-    pub(crate) fn latest_user_message_text(&self) -> Option<&str> {
-        self.messages
-            .iter()
-            .rev()
-            .find(|message| {
-                message.kind == ConversationMessageKind::User && !message.text.trim().is_empty()
-            })
-            .map(|message| message.text.as_str())
-    }
 }
 
 fn receipt_status_label(status: TaskStatus) -> &'static str {

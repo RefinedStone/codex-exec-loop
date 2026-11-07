@@ -104,22 +104,6 @@ where
     }
 
     #[cfg(test)]
-    pub(crate) fn begin_test_post_turn_evaluation(
-        &mut self,
-        thread_id: &str,
-        completed_turn_id: &str,
-        turn_workspace_directory: &str,
-        planning_workspace_directory: &str,
-    ) -> crate::core::app::PostTurnEvaluationCorrelation {
-        self.controller.begin_test_post_turn_evaluation(
-            thread_id,
-            completed_turn_id,
-            turn_workspace_directory,
-            planning_workspace_directory,
-        )
-    }
-
-    #[cfg(test)]
     #[allow(dead_code)]
     pub(crate) fn test_post_turn_evaluation_is_in_flight(
         &self,
@@ -521,6 +505,7 @@ mod tests {
         let effects = RecordingEffectExecutor::default();
         let mut runtime = CoreRuntime::new(effects.clone(), rx);
         let request = TurnSubmissionRequest {
+            transcript_text: String::new(),
             workspace_directory: "/tmp/workspace".to_string(),
             thread_id: Some("thread-1".to_string()),
             image_paths: Vec::new(),
@@ -618,6 +603,7 @@ mod tests {
         let effects = RecordingEffectExecutor::default();
         let mut runtime = CoreRuntime::new(effects.clone(), rx);
         let submission_request = TurnSubmissionRequest {
+            transcript_text: String::new(),
             workspace_directory: "/tmp/workspace".to_string(),
             thread_id: Some("thread-1".to_string()),
             image_paths: Vec::new(),
@@ -1285,6 +1271,7 @@ mod tests {
         let mut runtime = CoreRuntime::new(ImmediateStopRequestExecutor, rx);
         let turn_submission = TurnSubmissionCorrelation::new(1);
         runtime.dispatch_command(AppCommand::SubmitTurn(Box::new(TurnSubmissionRequest {
+            transcript_text: String::new(),
             workspace_directory: "/tmp/workspace".to_string(),
             thread_id: Some("thread-1".to_string()),
             image_paths: Vec::new(),

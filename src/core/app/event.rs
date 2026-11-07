@@ -307,6 +307,11 @@ pub enum AppEvent {
     TurnStreamSnapshotChanged(Box<TurnStreamSnapshot>),
     ManualPromptPrepared(Box<ManualPromptOutcome>),
     PostTurnEvaluationStarted(PlanningWorkerPanelState),
+    // 내부 이벤트이다 (plan 18 K1-4). 턴이 끝나서 평가를 기다린다. 호스트(NativeClientRuntime)가 병렬 값을
+    // 붙여 `AppCommand::EvaluateCompletedTurn` 으로 다시 넣고, 클라이언트에는 보내지 않는다.
+    PostTurnEvaluationDue {
+        planning_workspace_directory: String,
+    },
     PostTurnContinuationRoutingRequested {
         correlation: PostTurnEvaluationCorrelation,
         execution: Box<PostTurnExecution>,
