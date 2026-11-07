@@ -2215,6 +2215,36 @@ impl NativeTuiApp {
                     .planning_worker_panel_state
                     .apply_started(state);
             }
+            AppEvent::AutoFollowTurnSubmissionResolved {
+                source,
+                completed_turn_id,
+                transcript_text,
+                mode_label,
+                admitted,
+            } => {
+                // The host submitted the follow-up through Core (plan 18 K1-5).
+                // The view records it the same way as its own submissions.
+                if admitted {
+                    let debug_detail =
+                        self.build_auto_follow_transcript_debug_detail(&transcript_text);
+                    self.dispatch_conversation_runtime(
+                        ConversationRuntimeEvent::PromptSubmissionAdmitted {
+                            transcript_text: transcript_text.clone(),
+                            origin: super::PromptOrigin::AutoFollow(Box::new(super::AutoFollowSubmitContext {
+                                source,
+                                completed_turn_id,
+                                mode_label,
+                                transcript_text,
+                                debug_detail,
+                            })),
+                        },
+                    );
+                } else if let ConversationState::Ready(conversation) =
+                    &mut self.conversation.lifecycle.conversation_state
+                {
+                    conversation.record_stale_auto_follow_submission();
+                }
+            }
             AppEvent::PostTurnContinuationRoutingRequested { .. }
             | AppEvent::PostTurnEvaluationDue { .. } => {
                 // NativeClientRuntime consumes these Core events and re-enters
@@ -2470,6 +2500,10 @@ impl NativeTuiApp {
         self.apply_conversation_lifecycle_state(reduction.state);
         if opens_new_history {
             self.conversation.turn_options = self.conversation.next_new_thread_turn_options.clone();
+            // core 가 자동 후속 턴에 쓸 턴 옵션이다 (plan 18 K1-5).
+            self.dispatch_client_event(CoreInput::Command(AppCommand::SetConversationTurnOptions(
+                self.conversation.turn_options.clone(),
+            )));
             self.advance_transcript_document_revision();
             self.conversation.transcript_document_thread_id = None;
         } else if let Some(thread_id) = loaded_history_thread_id {

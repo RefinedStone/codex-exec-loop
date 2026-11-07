@@ -741,6 +741,26 @@ impl NativeClientRuntime {
         );
         let event_index = request.event_index;
         let correlation = request.correlation.clone();
+        // AutoSubmit 이면 호스트가 자동 후속 턴을 제출한다 (plan 18 K1-5). 이전에는 TUI 가 다시 제출했다.
+        let auto_follow_submission = match (&resolution, &request.execution.evaluation.action) {
+            (
+                PostTurnRouteResolution::AutoSubmit,
+                PostTurnContinuationAction::QueueAutoPrompt(queued),
+            ) => Some(crate::core::app::AutoFollowTurnSubmission {
+                source: correlation.clone(),
+                completed_turn_id: request
+                    .execution
+                    .evaluation
+                    .provenance
+                    .completed_turn_id
+                    .clone(),
+                prompt: queued.prompt.clone(),
+                transcript_text: queued.transcript_text.clone(),
+                mode_label: queued.mode_label.clone(),
+                parallel_mode_enabled: self.parallel_mode_enabled(),
+            }),
+            _ => None,
+        };
         let mut resolved =
             self.core
                 .runtime
@@ -750,6 +770,15 @@ impl NativeClientRuntime {
                 });
         let _ = take_internal_post_turn_routing_requests(&mut resolved);
         merge_core_dispatch_outcome_at(&mut core_outcome, resolved, event_index);
+        if let Some(submission) = auto_follow_submission {
+            let mut submitted = self
+                .core
+                .runtime
+                .dispatch_command(AppCommand::SubmitAutoFollowTurn(Box::new(submission)));
+            let _ = take_internal_post_turn_routing_requests(&mut submitted);
+            let end = core_outcome.events.len();
+            merge_core_dispatch_outcome_at(&mut core_outcome, submitted, end);
+        }
 
         NativeClientDispatchOutcome::Combined {
             core: core_outcome,

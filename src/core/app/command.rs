@@ -96,5 +96,20 @@ pub enum AppCommand {
         parallel_mode_enabled: bool,
         parallel_automation_epoch_id: Option<u64>,
     },
+    // 클라이언트가 고른 턴 옵션(모델, 추론 수준)이다. 상태 값이다. core 는 자동 후속 턴에 이 값을 쓴다.
+    SetConversationTurnOptions(crate::domain::conversation::ConversationTurnOptions),
+    // 호스트 전용이다 (plan 18 K1-5). 평가 경로가 AutoSubmit 이면 호스트가 자동 후속 턴을 core 로 제출한다.
+    SubmitAutoFollowTurn(Box<AutoFollowTurnSubmission>),
     EvaluatePostTurn(Box<PostTurnRequest>),
+}
+
+/// 자동 후속 턴 제출이다 (plan 18 K1-5). 평가가 만든 프롬프트와, 호스트가 아는 병렬 사용 여부를 담는다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutoFollowTurnSubmission {
+    pub source: super::PostTurnEvaluationCorrelation,
+    pub completed_turn_id: String,
+    pub prompt: String,
+    pub transcript_text: String,
+    pub mode_label: String,
+    pub parallel_mode_enabled: bool,
 }
