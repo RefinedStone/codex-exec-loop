@@ -1270,7 +1270,41 @@ fn windows_pipe_is_closed(error: &io::Error) -> bool {
     matches!(error.raw_os_error(), Some(109 | 232 | 233))
 }
 
+#[cfg(test)]
+thread_local! {
+    // 테스트 전용 제한 시간이다. 프로세스 환경 변수로 바꾸면 동시에 도는 다른 테스트의 하위 프로세스에도
+    // 짧은 제한이 걸린다 (plan 18 K-D7). 그래서 그 테스트의 스레드에만 둔다.
+    static TEST_SUBPROCESS_TIMEOUT: std::cell::Cell<Option<Duration>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// 이 스레드의 하위 프로세스 제한 시간을 guard 가 사는 동안만 바꾼다. 테스트 전용이다.
+#[cfg(test)]
+pub(crate) struct TestSubprocessTimeoutGuard {
+    previous: Option<Duration>,
+}
+
+#[cfg(test)]
+impl TestSubprocessTimeoutGuard {
+    pub(crate) fn set(timeout: Duration) -> Self {
+        Self {
+            previous: TEST_SUBPROCESS_TIMEOUT.replace(Some(timeout)),
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestSubprocessTimeoutGuard {
+    fn drop(&mut self) {
+        TEST_SUBPROCESS_TIMEOUT.set(self.previous);
+    }
+}
+
 pub(crate) fn configured_subprocess_timeout() -> Duration {
+    #[cfg(test)]
+    if let Some(timeout) = TEST_SUBPROCESS_TIMEOUT.get() {
+        return timeout;
+    }
     if let Some(config) = crate::configuration::current_process_config() {
         return Duration::from_secs(config.config.subprocess.timeout_secs);
     }
@@ -1742,6 +1776,20 @@ mod tests {
             DEFAULT_SUBPROCESS_TIMEOUT_SECS
         );
         assert_eq!(parse_subprocess_timeout_secs(Some("7")), 7);
+    }
+
+    #[test]
+    fn test_timeout_override_stays_on_its_own_thread() {
+        let short = Duration::from_millis(1234);
+        {
+            let _guard = super::TestSubprocessTimeoutGuard::set(short);
+            assert_eq!(super::configured_subprocess_timeout(), short);
+            let other_thread = std::thread::spawn(super::configured_subprocess_timeout)
+                .join()
+                .expect("other thread should read the timeout");
+            assert_ne!(other_thread, short);
+        }
+        assert_ne!(super::configured_subprocess_timeout(), short);
     }
 
     #[test]

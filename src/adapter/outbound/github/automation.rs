@@ -2349,7 +2349,6 @@ mod tests {
     #[cfg(unix)]
     use crate::domain::parallel_mode::ParallelModeCapabilitySnapshot;
     use crate::domain::parallel_mode::{ParallelModeCapabilityKey, ParallelModeCapabilityState};
-    use crate::subprocess::SUBPROCESS_TIMEOUT_ENV;
 
     #[test]
     fn frozen_remote_branch_listing_is_bounded_to_the_requested_prefix() {
@@ -3308,7 +3307,9 @@ exit 23
         let fixture = GitFixture::new("github-automation-pr-timeout");
         let repo = fixture.repo;
         let adapter = GithubAutomationAdapter::new();
-        let _timeout_guard = EnvVarGuard::set(SUBPROCESS_TIMEOUT_ENV, "1");
+        // 프로세스 환경 변수가 아니라 이 스레드에만 1초 제한을 건다 (plan 18 K-D7).
+        let _timeout_guard =
+            crate::subprocess::TestSubprocessTimeoutGuard::set(std::time::Duration::from_secs(1));
         let sensitive_title = "Create Timeout Private Title";
         let sensitive_body = "private timeout body must stay out of surfaced errors";
 
