@@ -94,18 +94,14 @@ pub struct CommandResponse {
 }
 
 /*
- * v0 명령이다. 화면 흐름 단계가 아니라 한 번에 끝나는 도메인 명령이다 (plan 18 §5.5). 프롬프트 제출(준비 +
- * 제출)은 core 가 준비 뒤 제출을 이어서 해야 하므로 K3-3 에서 더한다.
+ * v0 명령이다. 화면 흐름 단계가 아니라 한 번에 끝나는 도메인 명령이다 (plan 18 §5.5). 원격 클라이언트는 보는
+ * 자리를 바꾸지 않고 thread 나 승인 id 를 지정한다 (K3-3a). 프롬프트 제출은 K3-3b 에서 더한다.
  */
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 // 필드가 없는 명령도 `{}` 로 둔다. serde 는 unit variant 의 모르는 필드를 거절하지 못한다.
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum KernelCommand {
     LoadSessions {},
-    OpenConversation {
-        thread_id: String,
-    },
-    NewDraft {},
     RenameSession {
         thread_id: String,
         name: String,
@@ -133,10 +129,8 @@ pub enum KernelCommand {
     },
 }
 
-const COMMANDS: [&str; 10] = [
+const COMMANDS: [&str; 8] = [
     "load_sessions",
-    "open_conversation",
-    "new_draft",
     "rename_session",
     "steer_turn",
     "stop_all",
@@ -171,11 +165,6 @@ impl KernelCommand {
                     workspace_directory,
                 ))
             }
-            Self::OpenConversation { thread_id } => AppCommand::LoadConversation {
-                thread_id: non_blank("thread_id", thread_id)?,
-                fallback_workspace_directory: workspace_directory.to_string(),
-            },
-            Self::NewDraft {} => AppCommand::InvalidateConversationLoad,
             Self::RenameSession { thread_id, name } => {
                 AppCommand::RenameSession(SessionRenameRequest::new(
                     non_blank("thread_id", thread_id)?,
@@ -439,8 +428,20 @@ fn pending_approval(approval: &ApprovalAuthoritySnapshot) -> PendingApproval {
 pub struct ThreadActivity {
     pub thread_id: String,
     pub running: bool,
-    pub approval_pending: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_turn_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<ApprovalRequest>,
     pub auto_follow_active: bool,
+}
+
+/// 결정을 기다리는 승인 요청이다. `decide_approval` 에 두 id 를 그대로 보낸다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApprovalRequest {
+    pub approval_id: String,
+    pub server_request_id: String,
+    pub summary: String,
+    pub details: Vec<String>,
 }
 
 impl ThreadActivity {
@@ -448,7 +449,13 @@ impl ThreadActivity {
         Self {
             thread_id: activity.thread_id.clone(),
             running: activity.running,
-            approval_pending: activity.approval_pending,
+            active_turn_id: activity.active_turn_id.clone(),
+            approval: activity.approval.as_ref().map(|request| ApprovalRequest {
+                approval_id: request.approval_id.clone(),
+                server_request_id: request.server_request_id.clone(),
+                summary: request.summary.clone(),
+                details: request.details.clone(),
+            }),
             auto_follow_active: activity.auto_follow_active,
         }
     }

@@ -1802,6 +1802,16 @@ fn conversation_ready_snapshot(
 
 #[cfg(test)]
 mod tests {
+
+    /// plan 18 K3-3a: thread summaries now follow every busy thread, so exact event sequences
+    /// about one turn compare without them.
+    fn without_thread_activity(events: &[AppEvent]) -> Vec<AppEvent> {
+        events
+            .iter()
+            .filter(|event| !matches!(event, AppEvent::ThreadActivityChanged(_)))
+            .cloned()
+            .collect()
+    }
     use super::*;
     use std::process::Command;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -4142,7 +4152,7 @@ mod tests {
         let admitted_turn =
             runtime.dispatch_command(AppCommand::SubmitTurn(Box::new(turn_request)));
         assert!(matches!(
-            admitted_turn.events.as_slice(),
+            without_thread_activity(&admitted_turn.events).as_slice(),
             [
                 AppEvent::ConversationRuntimeAuthorityChanged(authority),
                 AppEvent::TurnSubmissionAdmissionResolved(

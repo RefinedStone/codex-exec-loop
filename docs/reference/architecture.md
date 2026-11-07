@@ -144,9 +144,10 @@ worker-panel history from a thread it does not show; the shared planning-runtime
 updates. Approval review persistence stays one shared serial queue. A load deferred by a session
 rename also keeps the left session; only a session waiting for stop settlement stays in the shown
 slot and is cancelled as before. The TUI lets the user open another session or a new draft while a
-turn runs. Core publishes `ThreadActivityChanged` with a summary of busy background threads (running,
-approval pending, auto-follow), and the session list marks those threads. An approval request is
-decided after reopening its thread; an undecided one still expires as before. Reopening a thread
+turn runs. Core publishes `ThreadActivityChanged` with a summary of every busy thread, the shown one
+included: running, the active turn id, the pending approval request, and auto-follow. The session list
+marks those threads. An approval decision finds its thread by approval id and a steer by thread id,
+so a client can act on a thread it does not show; an undecided approval still expires as before. Reopening a thread
 shows its live runtime state; its transcript is reloaded from the provider.
 
 `CoreRuntime`, its effect executor, and its input mailbox are crate-private implementation details,

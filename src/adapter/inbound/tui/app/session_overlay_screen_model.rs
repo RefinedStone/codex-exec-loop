@@ -204,7 +204,8 @@ mod tests {
         let activity = crate::core::app::ThreadActivitySummary {
             thread_id: "thread-1".to_string(),
             running: true,
-            approval_pending: false,
+            active_turn_id: None,
+            approval: None,
             auto_follow_active: false,
         };
         app.apply_core_event(crate::core::app::AppEvent::ThreadActivityChanged(vec![

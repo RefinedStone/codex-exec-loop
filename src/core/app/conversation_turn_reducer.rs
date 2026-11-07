@@ -193,7 +193,14 @@ impl ThreadSession {
         Some(ThreadActivitySummary {
             thread_id,
             running: runtime.active_turn.is_some(),
-            approval_pending: runtime.approval.is_some(),
+            active_turn_id: runtime
+                .active_turn
+                .as_ref()
+                .and_then(|turn| turn.turn_id.clone()),
+            approval: runtime
+                .approval
+                .as_ref()
+                .map(|approval| approval.request.clone()),
             auto_follow_active: runtime.auto_follow.has_live_activity()
                 || runtime.post_turn.is_in_flight()
                 || self.pending_post_turn_evaluation.is_some(),
@@ -309,11 +316,12 @@ impl ConversationTurnFeatureReducer {
         !owns(&self.session) && self.background_sessions.iter().any(owns)
     }
 
-    /// 마지막으로 알린 뒤 뒤의 thread 요약이 바뀌었으면 새 요약을 돌려준다 (plan 18 K2-4).
+    /// 마지막으로 알린 뒤 일이 남은 thread 요약이 바뀌었으면 새 요약을 돌려준다 (plan 18 K2-4, K3-3a).
+    /// 보는 thread 도 일이 남아 있으면 담는다. 원격 클라이언트는 보는 자리를 모르기 때문이다.
     pub(super) fn take_thread_activity_change(&mut self) -> Option<Vec<ThreadActivitySummary>> {
-        let activity = self
-            .background_sessions
-            .iter()
+        let activity = std::iter::once(&self.session)
+            .filter(|session| session.is_busy())
+            .chain(&self.background_sessions)
             .filter_map(ThreadSession::activity_summary)
             .collect::<Vec<_>>();
         if activity == self.published_thread_activity {
@@ -1027,7 +1035,20 @@ impl ConversationTurnFeatureReducer {
             .is_some_and(|active| active.pending_attempt.is_some())
     }
 
+    /// steer 는 thread id 로 그 thread 의 session 을 찾는다 (plan 18 K3-3a). 원격 클라이언트는 보지 않는 thread 도
+    /// steer 할 수 있다.
     pub(super) fn admit_turn_steer(
+        &mut self,
+        request: &ConversationTurnSteerRequest,
+    ) -> TurnSteerAdmission {
+        self.with_owning_session(
+            |session| session.streams_thread(&request.thread_id),
+            |reducer| reducer.admit_turn_steer_in_session(request),
+        )
+        .unwrap_or(TurnSteerAdmission::RejectedUnavailable)
+    }
+
+    fn admit_turn_steer_in_session(
         &mut self,
         request: &ConversationTurnSteerRequest,
     ) -> TurnSteerAdmission {
@@ -1087,7 +1108,25 @@ impl ConversationTurnFeatureReducer {
         }))
     }
 
+    /// 승인 결정은 승인 id 로 그 승인을 기다리는 session 을 찾는다 (plan 18 K3-3a).
     pub(super) fn admit_approval_decision(
+        &mut self,
+        request_identity: ConversationApprovalRequestIdentity,
+        decision: ConversationApprovalDecision,
+    ) -> ApprovalDecisionAdmission {
+        let owner_identity = request_identity.clone();
+        self.with_owning_session(
+            |session| {
+                session
+                    .turn_stream_state
+                    .matches_pending_approval(&owner_identity)
+            },
+            |reducer| reducer.admit_approval_decision_in_session(request_identity, decision),
+        )
+        .unwrap_or(ApprovalDecisionAdmission::RejectedUnavailable)
+    }
+
+    fn admit_approval_decision_in_session(
         &mut self,
         request_identity: ConversationApprovalRequestIdentity,
         decision: ConversationApprovalDecision,
