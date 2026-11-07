@@ -11289,12 +11289,24 @@ fn tui_github_review_polling_enters_through_core_runtime() {
         polling_references
             .paths
             .iter()
-            .any(|path| path.ends_with("AppCommand::SetupGithubReviewPolling"))
-            && polling_references
-                .paths
-                .iter()
-                .all(|path| !path.ends_with("CoreInput::Tick")),
-        "TUI GitHub setup must enter through a typed Core command; polling runs on the runtime host tick (plan 18 K1-1, K1-6)"
+            .all(|path| !path.ends_with("CoreInput::Tick")),
+        "TUI GitHub polling runs on the runtime host tick (plan 18 K1-1, K1-6)"
+    );
+    // plan 18 K2-6: the host starts the setup; the TUI only hands over the settings.
+    assert_no_forbidden_references_in_paths(
+        "inbound adapters must not start GitHub review polling setup",
+        &["src/adapter/inbound"],
+        &[
+            "SetupGithubReviewPolling",
+            "maybe_start_github_review_polling_setup",
+        ],
+    );
+    let native_runtime = fs::read_to_string("src/composition/native_client_runtime.rs")
+        .expect("native client runtime source should load");
+    assert!(
+        native_runtime.contains("fn start_github_review_polling_setup_when_due")
+            && native_runtime.contains("AppCommand::SetupGithubReviewPolling("),
+        "the runtime host must own the GitHub review setup start"
     );
 
     let forbidden_identifiers = [
@@ -14129,6 +14141,8 @@ fn verify_client_runtime_api_boundary(
         "post_turn_route_runtime",
         "revisioned_planning_parallel_projection",
         "snapshot",
+        // plan 18 K2-6: the host starts GitHub review setup after the startup checks succeed.
+        "startup_ready_workspace",
         "wait_pending_input",
     ];
     let mut actual_runtime_api = Vec::new();

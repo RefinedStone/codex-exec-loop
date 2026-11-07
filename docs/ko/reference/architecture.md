@@ -276,17 +276,19 @@ turn, workspace, thread, review와 correlation되며, composition이 기존 idem
 TUI thread 밖에서 실행합니다. 지연된 실패는 해당 conversation identity가 여전히 현재일 때만
 표시되므로 이전 write의 오류가 새 conversation에 추가되지 않습니다.
 
-GitHub review setup과 polling도 core-correlated 작업입니다. 첫 frame이 실제 전달되기 전 TUI는 환경
-값을 `PendingFirstFrame`으로 순수하게 파싱할 뿐 Git, credential, process, network discovery를
-실행하지 않습니다. Draw와 draw 이후 size 검증이 모두 성공한 뒤에만 해당 frame epoch의
-`SetupGithubReviewPolling`을 정확히 한 번 보냅니다. Core는 단조 증가 setup generation, 정확한
+GitHub review setup과 polling도 core-correlated 작업입니다. TUI bootstrap은 환경 값과 process
+설정을 `Pending`으로 파싱하고, 그 결과인 `GithubReviewPollingSettings`를 composition에 넘깁니다.
+TUI는 Git, credential, process, network discovery를 실행하지 않고 setup도 시작하지 않습니다.
+Runtime host(`NativeClientRuntime`)가 startup check 성공 뒤 workspace마다 한 번
+`SetupGithubReviewPolling`을 보냅니다. Workspace는 client가 마지막으로 알린 planning workspace이고,
+알린 값이 없으면 startup workspace입니다. Core는 단조 증가 setup generation, 정확한
 workspace correlation, 동일 요청 coalescing, target 승인, 성공한 poll cursor, stale/duplicate
 completion 규칙을 소유합니다. 새 workspace setup은 A→B→A race를 포함해 이전 service, target,
 cursor, 진행 중 poll을 모두 무효화합니다. Composition은 TUI thread 밖에서 branch discovery와
 service 구성을 실행하고 정확히 승인된 setup correlation 하나의 service만 보관하므로 다른
 generation의 service로 poll할 수 없습니다. Poll 시각은 Core가 host `CoreInput::Tick`으로
-정합니다. TUI에는 `PendingFirstFrame` / `Discovering` / `Active` / `Disabled` / `SetupError` 표현만
-남습니다. Setup 시작은 아직 첫 frame 전달 뒤입니다 (제안: plan 18 K2-6에서 host로 옮김).
+정합니다. TUI에는 `Pending` / `Discovering` / `Active` / `Disabled` / `SetupError` 표현만
+남습니다.
 
 Parallel peek load는 core-correlated read입니다. Core가 요청 thread에 단조 증가 generation을
 부여하고 최신 요청으로 이전 요청을 대체하며, 일치하지 않거나 중복된 completion은 TUI에 도달하기

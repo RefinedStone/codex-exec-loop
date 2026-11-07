@@ -321,18 +321,19 @@ is correlated to the exact turn, workspace, thread, and review; composition perf
 idempotent Review Center write off the TUI thread. Late failures are shown only while that
 conversation identity is still current, so an older write cannot add an error to a new conversation.
 
-GitHub review setup and polling are core-correlated. Before the first delivered frame, the TUI only
-parses environment values into `PendingFirstFrame`; it performs no Git, credential, process, or
-network discovery. After a draw succeeds and its post-draw size check remains stable, the TUI
-dispatches `SetupGithubReviewPolling` exactly once for that frame epoch. Core owns the monotonic
+GitHub review setup and polling are core-correlated. The TUI bootstrap parses the environment and
+process configuration into `Pending` and hands the resulting `GithubReviewPollingSettings` to
+composition; it performs no Git, credential, process, or network discovery and never starts the
+setup. The runtime host (`NativeClientRuntime`) dispatches `SetupGithubReviewPolling` after the
+startup checks succeed, once per workspace: the planning workspace the client last reported, or the
+startup workspace when no client reports one. Core owns the monotonic
 setup generation, exact workspace correlation, identical-request coalescing, target admission,
 successful poll cursor, and stale/duplicate completion rules. A newer workspace setup invalidates
 the prior service, target, cursor, and in-flight poll, including A→B→A races. Composition performs
 branch discovery and service construction off the TUI thread and retains one service only for the
 exact accepted setup correlation; a poll cannot use another generation's service. Core schedules
-polls from the host `CoreInput::Tick`; the TUI owns `PendingFirstFrame` / `Discovering` / `Active` /
-`Disabled` / `SetupError` presentation only. The setup itself still starts after the first delivered
-frame (proposed: move it to the host in plan 18 K2-6).
+polls from the host `CoreInput::Tick`; the TUI owns `Pending` / `Discovering` / `Active` /
+`Disabled` / `SetupError` presentation only.
 
 Parallel peek loads are core-correlated reads. Core assigns a monotonically increasing generation
 to the requested thread, lets the latest request supersede the previous one, and drops unmatched or

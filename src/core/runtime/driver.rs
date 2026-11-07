@@ -58,6 +58,11 @@ where
         self.controller.parallel_mode_projection()
     }
 
+    /// 시작 점검이 성공한 작업 공간이다 (plan 18 K2-6). 호스트가 GitHub 리뷰 폴링 설정 시작에 쓴다.
+    pub(crate) fn startup_ready_workspace(&self) -> Option<String> {
+        self.controller.startup_ready_workspace()
+    }
+
     /// 경로 결정을 기다리는 thread 의 runtime 값이다 (plan 18 K2-3). 그 thread 는 화면이 보지 않을 수 있다.
     pub(crate) fn post_turn_route_runtime(
         &self,

@@ -1672,7 +1672,10 @@ impl NativeTuiApp {
         github_review_polling: GithubReviewPollingBootstrap,
     ) -> Self {
         let runtime_channels = NativeTuiAppRuntimeChannels::new();
-        let application = application.bind_client_runtime();
+        // 설정 시작 시점은 호스트가 정한다 (plan 18 K2-6). 화면은 설정 값만 넘기고 상태를 그린다.
+        let application = application
+            .with_github_review_polling(github_review_polling.setup_settings())
+            .bind_client_runtime();
         let (client_runtime, turn_control_truth, clipboard_image_probe_trigger) =
             application.into_parts();
         Self::new_with_bound_application(
