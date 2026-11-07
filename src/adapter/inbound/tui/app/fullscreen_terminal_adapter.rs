@@ -66,7 +66,6 @@ impl<B: Backend> FullscreenTerminalAdapter<B> {
             return Ok(false);
         }
 
-        runtime.record_successful_frame_delivery();
         Ok(true)
     }
 

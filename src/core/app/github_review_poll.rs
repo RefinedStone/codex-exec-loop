@@ -38,6 +38,26 @@ impl GithubReviewPollingSetupRequest {
     }
 }
 
+/*
+ * GitHub 리뷰 폴링 설정 값이다 (plan 18 K2-6). 프로세스 설정에서 읽어 호스트에 넘긴다. 호스트는 작업 공간이
+ * 정해질 때마다 이 값으로 setup 요청을 만든다.
+ */
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GithubReviewPollingSettings {
+    pub mode: GithubReviewPollingSetupMode,
+    pub poll_interval: Duration,
+}
+
+impl GithubReviewPollingSettings {
+    pub fn request_for(&self, workspace_directory: &str) -> GithubReviewPollingSetupRequest {
+        GithubReviewPollingSetupRequest::new(
+            workspace_directory,
+            self.mode.clone(),
+            self.poll_interval,
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GithubReviewPollingSetupCorrelation {
     pub generation: u64,

@@ -1,8 +1,7 @@
 use super::NativeTuiApp;
 use crate::core::app::{
-    AppCommand, AppEvent, CoreInput, GithubReviewPollCorrelation,
-    GithubReviewPollingSetupCorrelation, GithubReviewPollingSetupMode,
-    GithubReviewPollingSetupRequest, GithubReviewPollingSetupResult,
+    GithubReviewPollCorrelation, GithubReviewPollingSettings, GithubReviewPollingSetupCorrelation,
+    GithubReviewPollingSetupMode, GithubReviewPollingSetupResult,
 };
 use crate::domain::github_review::{
     GithubPullRequestActivityEvent, GithubPullRequestActivitySnapshot, GithubPullRequestPollResult,
@@ -20,7 +19,7 @@ const DEFAULT_GITHUB_POLL_INTERVAL_SECONDS: u64 = 60;
 const MAX_STATUS_DETAIL_LENGTH: usize = 48;
 
 // Bootstrap parses process configuration only. Git, GitHub credential, and
-// network discovery are deferred to a Core effect after the first delivered frame.
+// network discovery are deferred to a Core effect the runtime host starts after startup (plan 18 K2-6).
 #[derive(Clone)]
 pub(super) struct GithubReviewPollingBootstrap {
     pub(super) state: GithubReviewPollingState,
@@ -65,7 +64,6 @@ impl GithubReviewPollingBootstrap {
                 return Self {
                     state: GithubReviewPollingState::SetupError {
                         config: None,
-                        workspace_directory: None,
                         target: None,
                         message: error.to_string(),
                     },
@@ -78,7 +76,6 @@ impl GithubReviewPollingBootstrap {
                 return Self {
                     state: GithubReviewPollingState::SetupError {
                         config: None,
-                        workspace_directory: None,
                         target: explicit_target,
                         message: error.to_string(),
                     },
@@ -90,7 +87,7 @@ impl GithubReviewPollingBootstrap {
             None => GithubReviewPollingSetupMode::Discover,
         };
         Self {
-            state: GithubReviewPollingState::PendingFirstFrame {
+            state: GithubReviewPollingState::Pending {
                 config: GithubReviewPollingEnvironmentConfig {
                     setup_mode,
                     interval,
@@ -99,12 +96,20 @@ impl GithubReviewPollingBootstrap {
         }
     }
 
+    /// 호스트가 설정을 시작할 때 쓸 값이다. 설정이 없거나 잘못되었으면 `None` 이다 (plan 18 K2-6).
+    pub(super) fn setup_settings(&self) -> Option<GithubReviewPollingSettings> {
+        match &self.state {
+            GithubReviewPollingState::Pending { config } => Some(GithubReviewPollingSettings {
+                mode: config.setup_mode.clone(),
+                poll_interval: config.interval,
+            }),
+            _ => None,
+        }
+    }
+
     pub(super) fn disabled() -> Self {
         Self {
-            state: GithubReviewPollingState::Disabled {
-                config: None,
-                workspace_directory: None,
-            },
+            state: GithubReviewPollingState::Disabled { config: None },
         }
     }
 }
@@ -119,7 +124,7 @@ pub(super) struct GithubReviewPollingEnvironmentConfig {
 // composition owns provider execution.
 #[derive(Debug, Clone)]
 pub(super) enum GithubReviewPollingState {
-    PendingFirstFrame {
+    Pending {
         config: GithubReviewPollingEnvironmentConfig,
     },
     Discovering {
@@ -128,11 +133,9 @@ pub(super) enum GithubReviewPollingState {
     },
     Disabled {
         config: Option<GithubReviewPollingEnvironmentConfig>,
-        workspace_directory: Option<String>,
     },
     SetupError {
         config: Option<GithubReviewPollingEnvironmentConfig>,
-        workspace_directory: Option<String>,
         target: Option<GithubPullRequestTarget>,
         message: String,
     },
@@ -141,7 +144,6 @@ pub(super) enum GithubReviewPollingState {
 impl GithubReviewPollingState {
     fn active_with_setup(
         environment_config: GithubReviewPollingEnvironmentConfig,
-        setup_correlation: GithubReviewPollingSetupCorrelation,
         target: GithubPullRequestTarget,
     ) -> Self {
         Self::Active(Box::new(GithubReviewPollingRuntimeState::new(
@@ -150,7 +152,6 @@ impl GithubReviewPollingState {
                 interval: environment_config.interval,
             },
             environment_config,
-            setup_correlation,
         )))
     }
 
@@ -164,13 +165,12 @@ impl GithubReviewPollingState {
                 },
                 interval: config.interval,
             },
-            GithubReviewPollingSetupCorrelation::new(1, "/workspace"),
             target,
         )
     }
     pub(super) fn status_label(&self) -> String {
         match self {
-            Self::PendingFirstFrame { .. } => "setup pending".to_string(),
+            Self::Pending { .. } => "setup pending".to_string(),
             Self::Discovering { .. } => "discovering".to_string(),
             Self::Disabled { .. } => "off".to_string(),
             Self::SetupError {
@@ -195,41 +195,10 @@ impl GithubReviewPollingState {
     }
     fn environment_config(&self) -> Option<&GithubReviewPollingEnvironmentConfig> {
         match self {
-            Self::PendingFirstFrame { config } | Self::Discovering { config, .. } => Some(config),
+            Self::Pending { config } | Self::Discovering { config, .. } => Some(config),
             Self::Disabled { config, .. } | Self::SetupError { config, .. } => config.as_ref(),
             Self::Active(state) => Some(&state.environment_config),
         }
-    }
-
-    fn configured_workspace_directory(&self) -> Option<&str> {
-        match self {
-            Self::PendingFirstFrame { .. } => None,
-            Self::Discovering { correlation, .. } => Some(correlation.workspace_directory.as_str()),
-            Self::Disabled {
-                workspace_directory,
-                ..
-            }
-            | Self::SetupError {
-                workspace_directory,
-                ..
-            } => workspace_directory.as_deref(),
-            Self::Active(state) => Some(state.setup_correlation.workspace_directory.as_str()),
-        }
-    }
-
-    fn setup_request_for_workspace(
-        &self,
-        workspace_directory: &str,
-    ) -> Option<GithubReviewPollingSetupRequest> {
-        let config = self.environment_config()?;
-        if self.configured_workspace_directory() == Some(workspace_directory) {
-            return None;
-        }
-        Some(GithubReviewPollingSetupRequest::new(
-            workspace_directory,
-            config.setup_mode.clone(),
-            config.interval,
-        ))
     }
 
     fn record_setup_started(&mut self, correlation: GithubReviewPollingSetupCorrelation) {
@@ -261,15 +230,13 @@ impl GithubReviewPollingState {
         let explicit_target = config.setup_mode.explicit_target().cloned();
         *self = match result {
             Ok(GithubReviewPollingSetupResult::Active { target }) => {
-                Self::active_with_setup(config, correlation, target)
+                Self::active_with_setup(config, target)
             }
             Ok(GithubReviewPollingSetupResult::Disabled) => Self::Disabled {
                 config: Some(config),
-                workspace_directory: Some(correlation.workspace_directory),
             },
             Err(message) => Self::SetupError {
                 config: Some(config),
-                workspace_directory: Some(correlation.workspace_directory),
                 target: explicit_target,
                 message,
             },
@@ -308,7 +275,6 @@ pub(super) struct GithubReviewPollingConfig {
 pub(super) struct GithubReviewPollingRuntimeState {
     pub(super) config: GithubReviewPollingConfig,
     pub(super) environment_config: GithubReviewPollingEnvironmentConfig,
-    pub(super) setup_correlation: GithubReviewPollingSetupCorrelation,
     pub(super) snapshot: Option<GithubPullRequestActivitySnapshot>,
     pub(super) recent_changes: Vec<GithubPullRequestActivityEvent>,
     recent_change_notice: Option<String>,
@@ -319,12 +285,10 @@ impl GithubReviewPollingRuntimeState {
     fn new(
         config: GithubReviewPollingConfig,
         environment_config: GithubReviewPollingEnvironmentConfig,
-        setup_correlation: GithubReviewPollingSetupCorrelation,
     ) -> Self {
         Self {
             config,
             environment_config,
-            setup_correlation,
             snapshot: None,
             recent_changes: Vec::new(),
             recent_change_notice: None,
@@ -425,28 +389,6 @@ impl NativeTuiApp {
         self.runtime
             .github_review_polling_state
             .recent_change_summary(max_total_len)
-    }
-
-    pub(super) fn maybe_start_github_review_polling_setup(
-        &mut self,
-        workspace_directory: &str,
-    ) -> bool {
-        let Some(request) = self
-            .runtime
-            .github_review_polling_state
-            .setup_request_for_workspace(workspace_directory)
-        else {
-            return false;
-        };
-        let outcome = self.reduce_core_client_event(CoreInput::Command(
-            AppCommand::SetupGithubReviewPolling(request),
-        ));
-        let started = outcome
-            .events
-            .iter()
-            .any(|event| matches!(event, AppEvent::GithubReviewPollingSetupStarted { .. }));
-        self.apply_core_dispatch_outcome(outcome);
-        started
     }
 
     pub(super) fn record_github_review_polling_setup_started(

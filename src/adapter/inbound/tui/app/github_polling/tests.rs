@@ -22,7 +22,7 @@ fn start_poll(
 fn bootstrap_without_pull_request_env_waits_for_first_frame_discovery() {
     let bootstrap = GithubReviewPollingBootstrap::from_env_values(None, None);
 
-    let GithubReviewPollingState::PendingFirstFrame { config } = bootstrap.state else {
+    let GithubReviewPollingState::Pending { config } = bootstrap.state else {
         panic!("expected pending first-frame state");
     };
     assert_eq!(config.setup_mode, GithubReviewPollingSetupMode::Discover);
@@ -38,7 +38,7 @@ fn bootstrap_explicit_target_waits_for_first_frame() {
         Some(" acme/widgets # 42 ".to_string()),
         Some("15".to_string()),
     );
-    let GithubReviewPollingState::PendingFirstFrame { config } = bootstrap.state else {
+    let GithubReviewPollingState::Pending { config } = bootstrap.state else {
         panic!("expected pending first-frame state");
     };
     assert_eq!(
@@ -108,17 +108,18 @@ fn bootstrap_surfaces_parse_errors_without_starting_setup() {
 
 #[test]
 fn state_transitions_pending_to_discovering_to_terminal_outcomes() {
-    let mut state =
-        GithubReviewPollingBootstrap::from_env_values(None, Some("15".to_string())).state;
-    let request = state
-        .setup_request_for_workspace("/workspace-a")
-        .expect("pending state should request setup");
-    assert_eq!(request.mode, GithubReviewPollingSetupMode::Discover);
+    let bootstrap = GithubReviewPollingBootstrap::from_env_values(None, Some("15".to_string()));
+    // plan 18 K2-6: the host builds the setup request from these settings.
+    let settings = bootstrap
+        .setup_settings()
+        .expect("pending state should hand setup settings to the host");
+    assert_eq!(settings.mode, GithubReviewPollingSetupMode::Discover);
+    assert_eq!(settings.poll_interval, std::time::Duration::from_secs(15));
+    let mut state = bootstrap.state;
 
     let correlation = GithubReviewPollingSetupCorrelation::new(1, "/workspace-a");
     state.record_setup_started(correlation.clone());
     assert_eq!(state.status_label(), "discovering");
-    assert!(state.setup_request_for_workspace("/workspace-a").is_none());
 
     state.record_setup_completion(
         GithubReviewPollingSetupCorrelation::new(2, "/workspace-a"),
@@ -132,8 +133,6 @@ fn state_transitions_pending_to_discovering_to_terminal_outcomes() {
 
     state.record_setup_completion(correlation, Ok(GithubReviewPollingSetupResult::Disabled));
     assert_eq!(state.status_label(), "off");
-    assert!(state.setup_request_for_workspace("/workspace-a").is_none());
-    assert!(state.setup_request_for_workspace("/workspace-b").is_some());
 }
 
 // The poll schedule lives in core (plan 18 K1-1). The presentation state only
@@ -197,10 +196,7 @@ fn active_state_keeps_last_error_visible() {
 
 #[test]
 fn state_copy_covers_disabled_setup_starting_polling_and_ignored_updates() {
-    let mut disabled = GithubReviewPollingState::Disabled {
-        config: None,
-        workspace_directory: None,
-    };
+    let mut disabled = GithubReviewPollingState::Disabled { config: None };
     assert_eq!(disabled.status_label(), "off");
     assert!(disabled.recent_change_summary(40).is_none());
     disabled.record_poll_completion(
@@ -211,7 +207,6 @@ fn state_copy_covers_disabled_setup_starting_polling_and_ignored_updates() {
 
     let setup_with_target = GithubReviewPollingState::SetupError {
         config: None,
-        workspace_directory: None,
         target: Some(GithubPullRequestTarget::new("acme/widgets", 42)),
         message: "   credentials are missing and the message should be trimmed   ".to_string(),
     };
@@ -222,7 +217,6 @@ fn state_copy_covers_disabled_setup_starting_polling_and_ignored_updates() {
 
     let setup_without_target = GithubReviewPollingState::SetupError {
         config: None,
-        workspace_directory: None,
         target: None,
         message: "bad env".to_string(),
     };

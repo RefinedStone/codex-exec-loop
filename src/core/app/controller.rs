@@ -82,6 +82,16 @@ impl CoreController {
         self.conversation_turn.post_turn_route_runtime(correlation)
     }
 
+    /// 시작 점검이 성공해 계속할 수 있으면 그 작업 공간이다 (plan 18 K2-6). 전체 스냅샷을 복사하지 않는다.
+    pub(in crate::core) fn startup_ready_workspace(&self) -> Option<String> {
+        match &self.state.shared_snapshot().startup {
+            super::StartupSnapshot::Ready(ready) if ready.can_continue => {
+                Some(ready.workspace_path.clone())
+            }
+            _ => None,
+        }
+    }
+
     pub(in crate::core) fn parallel_mode_projection(&self) -> ParallelModeProjection {
         self.state.parallel_mode_projection()
     }

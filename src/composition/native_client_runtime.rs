@@ -62,6 +62,9 @@ pub(crate) struct NativeClientRuntime {
     next_poll_lane: NativeClientPollLane,
     // 병렬 tick 이 쓰는 작업 공간과 supervisor 화면 상태이다. 클라이언트가 바뀔 때 알린다 (plan 18 K1-2).
     parallel_view: Option<ParallelViewState>,
+    // GitHub 리뷰 폴링 설정 값과 마지막으로 설정을 요청한 작업 공간이다 (plan 18 K2-6).
+    github_review_polling: Option<crate::core::app::GithubReviewPollingSettings>,
+    github_review_setup_workspace: Option<String>,
 }
 
 struct NativeCoreRuntime {
@@ -79,6 +82,7 @@ pub(crate) struct NativeTuiApplicationComposition {
     parallel_control_plane: ParallelModeControlPlaneComposition,
     turn_control_truth: ConversationRuntimeControlTruth,
     clipboard_image_probe_trigger: Arc<dyn ClipboardImageProbeTrigger>,
+    github_review_polling: Option<crate::core::app::GithubReviewPollingSettings>,
 }
 
 pub(crate) struct BoundNativeTuiApplication {
@@ -396,15 +400,25 @@ impl NativeTuiApplicationComposition {
             parallel_control_plane,
             turn_control_truth,
             clipboard_image_probe_trigger,
+            github_review_polling: None,
         }
     }
 
+    /// 프로세스 설정에서 읽은 GitHub 리뷰 폴링 값을 호스트에 넘긴다 (plan 18 K2-6).
+    pub(crate) fn with_github_review_polling(
+        mut self,
+        settings: Option<crate::core::app::GithubReviewPollingSettings>,
+    ) -> Self {
+        self.github_review_polling = settings;
+        self
+    }
+
     pub(crate) fn bind_client_runtime(self) -> BoundNativeTuiApplication {
+        let mut client_runtime =
+            NativeClientRuntime::from_parts(self.core_runtime, self.parallel_control_plane);
+        client_runtime.github_review_polling = self.github_review_polling;
         BoundNativeTuiApplication {
-            client_runtime: NativeClientRuntime::from_parts(
-                self.core_runtime,
-                self.parallel_control_plane,
-            ),
+            client_runtime,
             turn_control_truth: self.turn_control_truth,
             clipboard_image_probe_trigger: self.clipboard_image_probe_trigger,
         }
@@ -497,6 +511,8 @@ impl NativeClientRuntime {
             parallel_completion_rx,
             next_poll_lane: NativeClientPollLane::Core,
             parallel_view: None,
+            github_review_polling: None,
+            github_review_setup_workspace: None,
         }
     }
 
@@ -832,7 +848,39 @@ impl NativeClientRuntime {
         }
         outcomes.push(self.dispatch_core_input(CoreInput::Tick { now }));
         outcomes.push(self.dispatch_client_event(NativeClientEvent::ParallelTick { now }));
+        if let Some(outcome) = self.start_github_review_polling_setup_when_due() {
+            outcomes.push(outcome);
+        }
         outcomes
+    }
+
+    /*
+     * GitHub 리뷰 폴링 설정 시작을 호스트가 정한다 (plan 18 K2-6). 이전에는 TUI 가 첫 화면을 그린 뒤 보냈다.
+     * 시작 점검이 성공한 뒤, 작업 공간이 처음 정해지거나 바뀔 때 한 번 보낸다. 작업 공간은 화면이 알린
+     * planning 작업 공간이고, 화면이 없으면 시작 점검의 작업 공간이다. 탐색은 worker 에서 하므로 화면을
+     * 막지 않는다.
+     */
+    fn start_github_review_polling_setup_when_due(
+        &mut self,
+    ) -> Option<NativeClientDispatchOutcome> {
+        let settings = self.github_review_polling.as_ref()?;
+        let startup_workspace = self.core.runtime.startup_ready_workspace()?;
+        let workspace_directory = self
+            .parallel_view
+            .as_ref()
+            .map(|view| view.workspace_directory.clone())
+            .filter(|workspace| !workspace.trim().is_empty())
+            .unwrap_or(startup_workspace);
+        if self.github_review_setup_workspace.as_deref() == Some(workspace_directory.as_str()) {
+            return None;
+        }
+        let request = settings.request_for(&workspace_directory);
+        self.github_review_setup_workspace = Some(workspace_directory);
+        Some(
+            self.dispatch_core_input(CoreInput::Command(AppCommand::SetupGithubReviewPolling(
+                request,
+            ))),
+        )
     }
 
     pub(crate) fn revisioned_planning_parallel_projection(
@@ -1716,6 +1764,97 @@ mod tests {
                 runtime.dispatch_client_event(NativeClientEvent::ParallelViewChanged(view.clone()));
         }
         assert_eq!(runtime.parallel_view.as_ref(), Some(&view));
+    }
+
+    #[test]
+    fn host_cycle_starts_github_review_polling_setup_once_per_workspace_after_startup() {
+        // plan 18 K2-6: the host, not the TUI first frame, decides when GitHub review setup starts.
+        use crate::core::app::{
+            GithubReviewPollingSettings, GithubReviewPollingSetupMode, StartupAttachmentSnapshot,
+            StartupCheckCorrelation, StartupDiagnosticSnapshot, StartupReadySnapshot,
+        };
+        fn setup_count(outcomes: Vec<NativeClientDispatchOutcome>) -> usize {
+            outcomes
+                .into_iter()
+                .filter(|outcome| {
+                    let (NativeClientDispatchOutcome::Core(core)
+                    | NativeClientDispatchOutcome::Combined { core, .. }) = outcome
+                    else {
+                        return false;
+                    };
+                    core.events.iter().any(|event| {
+                        matches!(event, AppEvent::GithubReviewPollingSetupStarted { .. })
+                    })
+                })
+                .count()
+        }
+        let diagnostic = |detail: &str| StartupDiagnosticSnapshot {
+            ok: true,
+            detail: detail.to_string(),
+        };
+        let mut runtime = native_client_runtime_for_routing_test();
+        runtime.github_review_polling = Some(GithubReviewPollingSettings {
+            mode: GithubReviewPollingSetupMode::Explicit {
+                target: crate::domain::github_review::GithubPullRequestTarget::new(
+                    "acme/widgets",
+                    42,
+                ),
+            },
+            poll_interval: Duration::from_secs(60),
+        });
+
+        assert_eq!(
+            setup_count(runtime.run_host_cycle(Instant::now(), Duration::ZERO, 16)),
+            0,
+            "no setup before the startup checks succeed"
+        );
+        let _ = runtime.dispatch_client_event(NativeClientEvent::core(CoreInput::Command(
+            AppCommand::RunStartupChecks {
+                workspace_directory: "/tmp/workspace".to_string(),
+            },
+        )));
+        let _ = runtime.dispatch_client_event(NativeClientEvent::core(CoreInput::EffectCompleted(
+            CoreEffectCompletion::StartupChecksLoaded {
+                correlation: StartupCheckCorrelation::new(1, "/tmp/workspace"),
+                result: Ok(Box::new(StartupReadySnapshot {
+                    cwd: "/tmp/workspace".to_string(),
+                    workspace_path: "/tmp/workspace".to_string(),
+                    can_continue: true,
+                    codex_binary: diagnostic("/usr/bin/codex"),
+                    workspace: diagnostic("git repo: /tmp/workspace"),
+                    app_server_initialize: diagnostic("initialized"),
+                    account: diagnostic("authenticated"),
+                    attachment: StartupAttachmentSnapshot {
+                        mode_label: "provider-launched".to_string(),
+                        recovery_anchor_label: "provider-thread-id".to_string(),
+                    },
+                    warnings: Vec::new(),
+                    schema_snapshot: "embedded schema".to_string(),
+                })),
+            },
+        )));
+
+        assert_eq!(
+            setup_count(runtime.run_host_cycle(Instant::now(), Duration::ZERO, 16)),
+            1,
+            "the startup workspace starts the setup without a client"
+        );
+        assert_eq!(
+            setup_count(runtime.run_host_cycle(Instant::now(), Duration::ZERO, 16)),
+            0,
+            "the same workspace does not start the setup again"
+        );
+        let _ = runtime.dispatch_client_event(NativeClientEvent::ParallelViewChanged(
+            ParallelViewState {
+                workspace_directory: "/tmp/other".to_string(),
+                supervisor_view_active: false,
+            },
+        ));
+        assert_eq!(
+            setup_count(runtime.run_host_cycle(Instant::now(), Duration::ZERO, 16)),
+            1,
+            "a new shown workspace starts a new setup"
+        );
     }
 
     fn native_client_runtime_for_routing_test() -> NativeClientRuntime {

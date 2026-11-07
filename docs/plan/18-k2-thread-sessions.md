@@ -2,7 +2,7 @@
 
 ## 문서 상태
 
-- 상태: **진행 중**. K2-2, K2-3 완료 (2026-11-08). K2-4~K2-6 은 제안 상태이다. 완료된 동작은
+- 상태: **완료 (2026-11-08)**. K2-2, K2-3, K2-4, K2-6 완료. K2-5 는 K3 로 옮겼다 (§4 표). 완료된 동작은
   [architecture.md](../reference/architecture.md) Core Runtime 절에 적는다.
 - 상위 계획: [18 Akra 커널 아키텍처](18-akra-kernel-architecture.md) §3.2 제약 1·3, §5.4, §6 K2. 결정 KP-03
   (승인 2026-11-07).
@@ -178,8 +178,8 @@ TUI 는 이 값으로 세션 목록에 "실행 중", "승인 대기" 표시를 �
 | K2-2 (완료 2026-11-08) | §3.1 `ThreadSession` 으로 필드를 묶는다. 아직 session 은 하나이다. 필드 이름은 바꾸지 않았다 (`conversation_runtime`, `turn_stream_state` 등): 변경을 작게 두고 이름 정리는 맵이 생기는 K2-3 에서 함께 본다 | 유지 | 기존 core 테스트 전부. `ConversationTurnFeatureReducer` 와 `ThreadSession` 필드 목록 경계 테스트 |
 | K2-3 (완료 2026-11-08) | 대화를 열거나 새 초안을 열 때 일이 남은 session(턴, 자동 후속, 평가, 정지, steer)은 `background_sessions` 로 보내고, 보는 자리에는 자동 후속 설정과 턴 옵션만 이어받은 새 session 을 둔다. 다시 그 thread 를 열면 그 session 이 돌아온다. 설계와 다른 점: (1) 맵 대신 보는 session 하나와 목록을 쓴다. 주인은 thread 가 아니라 correlation 으로 찾고, 처리할 때만 보는 자리와 바꿔 넣는다. 그래서 기존 메서드 본문을 그대로 쓴다. (2) 승인 검토 저장은 한 줄로 차례대로 해야 해서 session 밖(공유)에 둔다. (3) K2-1 의 필요한 부분: 호스트가 경로를 기다리는 thread 의 runtime 값(`post_turn_route_runtime`)으로 경로를 고른다. (4) 평가 대기 턴 꺼내기와 평가 시작을 한 session 안에서 함께 한다(`start_due_post_turn_evaluation`). (5) 자동 후속 정책 변경(최대 턴, 일시 정지, 병렬 재개)은 모든 session 에 적용한다. (6) 보지 않는 thread 의 스트림 투영, steer 결과, 승인 결정 결과는 클라이언트에 보내지 않는다. 정지 요청은 지금처럼 app-server 의 모든 세션을 멈춘다 | core 는 전환을 허용. TUI 의 금지는 그대로라 화면 동작은 유지 | core 시험: 실행 중 다른 대화를 열고 돌아오면 같은 턴의 응답으로 평가한다. 다른 대화를 여는 중의 평가 완료는 뒤에서 경로까지 간다. 호스트 시험: 새 초안을 연 뒤에도 남겨 둔 대화의 자동 후속 턴이 제출된다. 기존 시험 7개는 "전환하면 버린다" 대신 "주인 session 에서 끝까지 처리한다"로 바꿨다 |
 | K2-4 (완료 2026-11-08) | 설계와 다른 점: 스냅샷 필드 대신 `AppEvent::ThreadActivityChanged` 로 요약이 바뀔 때만 알린다. 세션 목록은 제목 뒤에 `[approval needed]`, `[running]`, `[auto-follow]` 를 붙이고 상세 칸에 `activity:` 줄을 더한다. 대화를 떠나면 TUI 의 steer 대기 상태를 지운다. 경계 테스트가 inbound 의 전환 금지 문구를 막는다. 원래 계획: §3.4 `thread_activity`. TUI 의 전환 금지를 지우고 세션 목록에 실행·승인 표시를 그린다 | **바뀜**: 턴 실행 중 다른 대화를 볼 수 있다 | TUI 시험, 터미널 캡처. 다시 열면 진행 상태가 보인다 |
-| K2-5 | §3.6 `ClientView` 로 클라이언트 상태를 옮긴다 (대화 로드 절차, 조회 모델, 작업자 패널 기록) | 유지 | 필드 목록 경계 테스트 |
-| K2-6 | §3.7 GitHub 폴링 설정을 호스트로 | 첫 화면 조건 없어짐 | 헤드리스 시험: TUI 없이 폴링 설정과 폴링이 시작된다 |
+| K2-5 (K3 로 옮김 2026-11-08) | §3.6 `ClientView` 로 클라이언트 상태를 옮긴다 (대화 로드 절차, 조회 모델, 작업자 패널 기록). 옮긴 이유: 클라이언트가 하나인 지금은 타입만 나누는 일이라 동작과 시험이 바뀌지 않는다. 두 번째 클라이언트와 구독 계약이 없는 상태에서 정한 경계는 K3 프로토콜에서 다시 바뀔 가능성이 크다. K3 에서 클라이언트 세션, 결과를 요청자에게 전달, revision 분리와 함께 한다. 지금 클라이언트 쪽 값은 보는 thread 의 session 과 `ThreadActivityChanged` 로 이미 커널 상태와 구분된다 | 유지 | K3 에서 |
+| K2-6 (완료 2026-11-08) | §3.7 GitHub 폴링 설정 시작을 호스트(`start_github_review_polling_setup_when_due`)가 정한다: 시작 점검 성공 뒤, 작업 공간(화면이 알린 planning 작업 공간, 없으면 시작 점검 작업 공간)마다 한 번. 설계와 다른 점: 설정 값 파싱은 TUI bootstrap 에 남기고 결과(`GithubReviewPollingSettings`)만 composition 에 넘긴다. 화면 없는 호스트의 설정 읽기는 K3 데몬에서 composition 으로 옮긴다. TUI 의 `PendingFirstFrame` 은 `Pending` 으로 바꿨다 | 첫 화면 조건 없어짐 | 호스트 시험: 시작 점검 전에는 설정하지 않고, 성공 뒤 한 번, 같은 작업 공간에는 다시 하지 않고, 작업 공간이 바뀌면 다시 한다. 경계 테스트: inbound 는 `SetupGithubReviewPolling` 을 보내지 않는다 |
 
 규모: plan 18 추정 10~15일을 유지한다. K2-3 이 가장 크다 (reducer 1,504줄 중 대부분이 session 접근을 바꾼다).
 
