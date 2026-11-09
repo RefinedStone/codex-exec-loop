@@ -1684,64 +1684,6 @@ mod tests {
     }
 
     #[test]
-    fn an_epoch_closed_during_enqueue_keeps_the_result_commit_ready() {
-        // K3-5 review: the epoch check and the distributor enqueue commit must not race.
-        let workspace = TempGitWorkspace::new("parallel-epoch-closed-during-enqueue");
-        let parallel_service = test_parallel_mode_service();
-        parallel_service
-            .reset_pool_on_parallel_initial_setup_report(&workspace.root)
-            .expect("pool should initialize");
-        let lease = parallel_service
-            .acquire_slot_lease(
-                &workspace.root,
-                ParallelModeSlotLeaseRequest::from_task_identity(
-                    "task-enqueue-race",
-                    "Close epoch during enqueue",
-                ),
-            )
-            .expect("slot should lease");
-        parallel_service
-            .mark_workspace_slot_running(&lease.worktree_path)
-            .expect("slot should become running");
-        parallel_service
-            .mark_workspace_official_completion_refreshing(&lease.worktree_path)
-            .expect("official refresh state should persist");
-
-        let guard = ParallelModeAutomationGuard::default();
-        guard.activate(workspace.root.clone(), 9);
-        let turn_service = ParallelModeTurnService::new(parallel_service.clone())
-            .with_automation_guard(guard.clone());
-        let closing_guard = guard.clone();
-        let closing_workspace = workspace.root.clone();
-        super::super::distributor::install_after_distributor_enqueue_preflight_hook(move || {
-            closing_guard.cancel(&closing_workspace);
-        });
-
-        let outcome = turn_service.finalize_official_completion_success_for_epoch(
-            &lease.worktree_path,
-            &workspace.root,
-            9,
-            "official ledger refresh succeeded",
-        );
-
-        match outcome {
-            ParallelOfficialCompletionFinalizeOutcome::Durable { proof, .. } => assert_eq!(
-                proof,
-                ParallelOfficialCompletionDurableProof::CommitReadyAwaitingAutomation
-            ),
-            ParallelOfficialCompletionFinalizeOutcome::Failed { notices, stage } => {
-                panic!("closed epoch should keep commit-ready, not fail at {stage:?}: {notices:?}")
-            }
-        }
-        let snapshot = parallel_service.build_passive_supervisor_snapshot(&workspace.root, None);
-        assert_eq!(
-            snapshot.distributor.queue_depth(),
-            0,
-            "a closed epoch must not enqueue the result"
-        );
-    }
-
-    #[test]
     fn commit_ready_authority_proof_survives_runtime_mirror_failure() {
         let workspace = TempGitWorkspace::new("parallel-commit-ready-mirror-failure");
         let parallel_service = test_parallel_mode_service();

@@ -601,6 +601,81 @@ fn dirty_missing_commit_ready_candidate_does_not_starve_an_existing_queue_head()
     );
 }
 
+#[test]
+fn an_epoch_closed_during_enqueue_keeps_the_result_commit_ready() {
+    // K3-5 review: the epoch check and the distributor enqueue commit must not race.
+    use crate::application::service::parallel_mode::turn::{
+        ParallelModeTurnService, ParallelOfficialCompletionDurableProof,
+        ParallelOfficialCompletionFinalizeOutcome,
+    };
+
+    let repo = TempGitRepo::new("epoch-closed-during-enqueue");
+    let service =
+        test_parallel_mode_service_with_github(Arc::new(FakeGithubAutomationPort::ready()));
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-enqueue-race", "Enqueue race", "agent-race", "race"),
+        )
+        .expect("slot should lease");
+    service
+        .mark_workspace_slot_running(&lease.worktree_path)
+        .expect("slot should become running");
+    repo.commit_file_in_slot(
+        Path::new(&lease.worktree_path),
+        "race.txt",
+        "race result\n",
+        "record race result",
+    );
+    service
+        .begin_workspace_official_completion(
+            &lease.worktree_path,
+            "turn-task-enqueue-race",
+            None,
+            Some("Race result complete."),
+            Some("cargo test passed"),
+            None,
+        )
+        .expect("official completion should capture");
+    service
+        .mark_workspace_official_completion_refreshing(&lease.worktree_path)
+        .expect("official completion should enter refreshing");
+
+    let automation_guard = ParallelModeAutomationGuard::default();
+    automation_guard.activate(repo.workspace_dir(), 9);
+    let turn_service = ParallelModeTurnService::new(service.clone())
+        .with_automation_guard(automation_guard.clone());
+    let closing_workspace = repo.workspace_dir();
+    install_after_distributor_enqueue_preflight_hook(move || {
+        automation_guard.cancel(&closing_workspace);
+    });
+
+    let outcome = turn_service.finalize_official_completion_success_for_epoch(
+        &lease.worktree_path,
+        &repo.workspace_dir(),
+        9,
+        "official ledger refresh succeeded",
+    );
+
+    match outcome {
+        ParallelOfficialCompletionFinalizeOutcome::Durable { proof, .. } => assert_eq!(
+            proof,
+            ParallelOfficialCompletionDurableProof::CommitReadyAwaitingAutomation
+        ),
+        ParallelOfficialCompletionFinalizeOutcome::Failed { notices, stage } => {
+            panic!("closed epoch should keep commit-ready, not fail at {stage:?}: {notices:?}")
+        }
+    }
+    assert_eq!(
+        service
+            .build_passive_supervisor_snapshot(&repo.workspace_dir(), None)
+            .distributor
+            .queue_depth(),
+        0,
+        "a closed epoch must not enqueue the result"
+    );
+}
+
 fn prepare_missing_commit_ready_result(
     service: &ParallelModeService,
     repo: &TempGitRepo,
