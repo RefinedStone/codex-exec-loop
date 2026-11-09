@@ -46,7 +46,7 @@ enum KernelHostInput {
     },
     Command {
         command: AppCommand,
-        reply: Sender<()>,
+        reply: Sender<Vec<AppEvent>>,
     },
     #[cfg(test)]
     Inputs(Vec<CoreInput>),
@@ -110,17 +110,14 @@ impl KernelClientHandle {
         self.client_id
     }
 
-    /// 명령을 커널에 넣는다. 커널이 처리한 뒤 돌아온다. 결과는 이벤트로 온다. 커널이 끝났으면 `false` 이다.
-    pub(crate) fn send_command(&self, command: AppCommand) -> bool {
+    /// 명령을 커널에 넣는다. 커널이 처리한 뒤 그 처리에서 나온 core 이벤트를 돌려준다. 요청한 클라이언트는 이것으로
+    /// 거절 이유를 안다. 같은 이벤트는 모든 클라이언트에도 간다. 커널이 끝났으면 `None` 이다.
+    pub(crate) fn send_command(&self, command: AppCommand) -> Option<Vec<AppEvent>> {
         let (reply, answer) = mpsc::channel();
-        if self
-            .inbox
+        self.inbox
             .send(KernelHostInput::Command { command, reply })
-            .is_err()
-        {
-            return false;
-        }
-        answer.recv().is_ok()
+            .ok()?;
+        answer.recv().ok()
     }
 
     pub(crate) fn query(&self) -> Option<KernelHostView> {
@@ -212,8 +209,9 @@ impl KernelHostLoop {
                 let outcome = self
                     .runtime
                     .dispatch_client_event(NativeClientEvent::core(CoreInput::Command(command)));
+                let events = core_events(&outcome).to_vec();
                 self.publish(outcome);
-                let _ = reply.send(());
+                let _ = reply.send(events);
             }
             #[cfg(test)]
             KernelHostInput::Inputs(inputs) => {
@@ -272,6 +270,15 @@ impl KernelHostLoop {
 }
 
 /// 이벤트 하나를 보낸다. 받는 쪽이 사라졌으면 `false` 이다.
+/// dispatch 결과의 core 이벤트이다. 병렬 제어부 이벤트는 명령 응답에 넣지 않는다.
+fn core_events(outcome: &NativeClientDispatchOutcome) -> &[AppEvent] {
+    match outcome {
+        NativeClientDispatchOutcome::Core(core)
+        | NativeClientDispatchOutcome::Combined { core, .. } => &core.events,
+        NativeClientDispatchOutcome::Parallel(_) => &[],
+    }
+}
+
 fn deliver(client: &mut ClientSink, event: KernelHostEvent) -> bool {
     if !flush_resync(client) {
         return false;
@@ -346,7 +353,11 @@ mod tests {
         let client = host.attach().expect("a client should attach");
         assert_eq!(client.client_id(), 1);
 
-        assert!(client.send_command(AppCommand::SetAutoFollowMaxTurns { value: 2 }));
+        assert!(
+            client
+                .send_command(AppCommand::SetAutoFollowMaxTurns { value: 2 })
+                .is_some()
+        );
         assert_eq!(
             client
                 .query()
@@ -436,9 +447,13 @@ mod tests {
         // 넣는다.
         let workspace = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml/workspace");
 
-        assert!(client.send_command(AppCommand::LoadSessionCatalog(
-            crate::core::app::SessionCatalogLoadIntent::ensure_loaded(10, workspace),
-        )));
+        assert!(
+            client
+                .send_command(AppCommand::LoadSessionCatalog(
+                    crate::core::app::SessionCatalogLoadIntent::ensure_loaded(10, workspace),
+                ))
+                .is_some()
+        );
         assert!(
             wait_for(&client, |event| matches!(
                 event,
@@ -493,9 +508,10 @@ mod tests {
                     &**core,
                     AppEvent::ThreadPromptSubmitted {
                         thread_id,
-                        outcome: crate::core::app::ThreadPromptOutcome::Submitted(
-                            crate::core::app::TurnSubmissionAdmission::Accepted { .. }
-                        ),
+                        outcome: crate::core::app::ThreadPromptOutcome::Submitted {
+                            admission: crate::core::app::TurnSubmissionAdmission::Accepted { .. },
+                            ..
+                        },
                     } if thread_id == "thread-2"
                 )
             )),

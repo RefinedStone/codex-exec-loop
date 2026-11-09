@@ -332,7 +332,7 @@ pub enum AppEvent {
     ConversationTurnWorkspaceChanged {
         workspace_directory: String,
     },
-    // 보지 않는 thread 중 일이 남은 것의 요약이 바뀌었다 (plan 18 K2-4).
+    // 일이 남은 thread(보는 thread 포함)의 요약이 바뀌었다 (plan 18 K2-4, K3-3a).
     ThreadActivityChanged(Vec<super::ThreadActivitySummary>),
     // thread 를 지정한 프롬프트의 받아들임 결과이다 (plan 18 K3-3b).
     ThreadPromptAdmissionResolved {

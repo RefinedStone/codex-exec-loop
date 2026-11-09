@@ -67,7 +67,7 @@ pub use github_review_poll::{
 };
 pub use manual_prompt::{
     ManualPromptPreparationAdmission, ManualPromptPreparationIntent, ThreadPromptAdmission,
-    ThreadPromptOutcome, ThreadPromptSubmission,
+    ThreadPromptOutcome, ThreadPromptPreparationFailure, ThreadPromptSubmission,
 };
 pub use planning_runtime::{
     PlanningDoctorSnapshot, PlanningDoctorSnapshotState, PlanningRuntimeRefreshSnapshot,

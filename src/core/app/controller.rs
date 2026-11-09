@@ -307,14 +307,13 @@ impl CoreController {
                     snapshot: self.shared_snapshot(),
                 }
             }
-            // 호스트를 거치지 않은 제출은 병렬 모드를 모른다. 같은 작업이 병렬 slot 에도 나갈 수 있으므로 거절한다.
             CoreInput::Command(AppCommand::SubmitThreadPrompt(submission)) => {
-                self.begin_thread_prompt(*submission, true)
+                self.begin_thread_prompt(*submission)
             }
-            CoreInput::Command(AppCommand::AdmitThreadPrompt {
-                submission,
-                parallel_mode_enabled,
-            }) => self.begin_thread_prompt(*submission, parallel_mode_enabled),
+            CoreInput::Command(AppCommand::SetParallelModeEnabled(enabled)) => {
+                self.planning.set_host_parallel_mode(enabled);
+                self.unchanged_outcome()
+            }
             CoreInput::Command(AppCommand::CancelManualPromptPreparation) => {
                 let Some(correlation) = self.planning.cancel_manual_prompt_preparation() else {
                     return self.unchanged_outcome();
@@ -1536,19 +1535,21 @@ impl CoreController {
     fn begin_thread_prompt(
         &mut self,
         submission: super::ThreadPromptSubmission,
-        parallel_mode_enabled: bool,
     ) -> CoreDispatchOutcome {
-        let (admission, effects) = if parallel_mode_enabled {
-            (
-                super::ThreadPromptAdmission::RejectedParallelMode,
-                Vec::new(),
-            )
-        } else {
-            self.admit_thread_prompt(
+        let (admission, effects) = match self.planning.host_parallel_mode() {
+            Some(false) => self.admit_thread_prompt(
                 submission.workspace_directory,
                 &submission.thread_id,
                 submission.prompt,
-            )
+            ),
+            Some(true) => (
+                super::ThreadPromptAdmission::RejectedParallelMode,
+                Vec::new(),
+            ),
+            None => (
+                super::ThreadPromptAdmission::RejectedParallelModeUnknown,
+                Vec::new(),
+            ),
         };
         let thread_id = submission.thread_id;
         CoreDispatchOutcome {
@@ -1616,7 +1617,8 @@ impl CoreController {
 
     /*
      * 준비가 끝난 thread 지정 프롬프트를 그 thread 에 제출한다 (plan 18 K3-3b). 이 준비는 TUI 의 것이 아니므로
-     * `ManualPromptPrepared` 로 알리지 않는다.
+     * `ManualPromptPrepared` 로 알리지 않는다. 준비하는 사이에 병렬 모드가 켜졌으면 제출하지 않는다. 준비가 만든
+     * 작업은 큐에 있으므로 main session 턴으로 내면 병렬 slot 에도 나갈 수 있다.
      */
     fn submit_prepared_thread_prompt(
         &mut self,
@@ -1626,7 +1628,11 @@ impl CoreController {
     ) -> CoreDispatchOutcome {
         let workspace_directory = result.correlation().workspace_directory.clone();
         let (outcome, effects) = match prepared_thread_prompt_handoff(result, disposition) {
-            Ok(handoff) => {
+            Ok((_, task_id)) if self.planning.host_parallel_mode() != Some(false) => (
+                super::ThreadPromptOutcome::ParallelModeStarted { task_id },
+                Vec::new(),
+            ),
+            Ok((handoff, task_id)) => {
                 let request =
                     self.thread_prompt_turn_request(&thread_id, workspace_directory, handoff);
                 let admission = self
@@ -1643,10 +1649,13 @@ impl CoreController {
                     | TurnSubmissionAdmission::RejectedStopPending { .. }
                     | TurnSubmissionAdmission::RejectedUnavailable => Vec::new(),
                 };
-                (super::ThreadPromptOutcome::Submitted(admission), effects)
+                (
+                    super::ThreadPromptOutcome::Submitted { admission, task_id },
+                    effects,
+                )
             }
-            Err(reason) => (
-                super::ThreadPromptOutcome::PreparationFailed { reason },
+            Err(failure) => (
+                super::ThreadPromptOutcome::PreparationFailed(failure),
                 Vec::new(),
             ),
         };
@@ -1935,17 +1944,25 @@ fn stop_effects_from_intents(intents: Vec<StopEffectIntent>) -> Vec<CoreEffect> 
 }
 
 /*
- * 준비 결과에서 제출할 프롬프트를 꺼낸다 (plan 18 K3-3b). TUI 의 `apply_manual_prompt_intake_outcome` 과 같은
- * 규칙이다. planning 초안 검토가 필요하면 원격 클라이언트는 검토할 수 없으므로 실패로 알린다.
+ * 준비 결과에서 제출할 프롬프트와 준비가 큐에 둔 작업 id 를 꺼낸다 (plan 18 K3-3b). TUI 의
+ * `apply_manual_prompt_intake_outcome` 과 같은 규칙이다. planning 초안 검토가 필요하면 원격 클라이언트는 검토할 수
+ * 없으므로 실패로 알린다.
  */
 fn prepared_thread_prompt_handoff(
     result: crate::domain::planning::ManualPromptOutcome,
     disposition: ManualPromptCompletionDisposition,
-) -> Result<crate::domain::planning::ManualPromptMainSessionHandoff, String> {
+) -> Result<
+    (
+        crate::domain::planning::ManualPromptMainSessionHandoff,
+        String,
+    ),
+    super::ThreadPromptPreparationFailure,
+> {
+    use super::ThreadPromptPreparationFailure as Failure;
     use crate::domain::planning::{ManualPromptIntakeOutcome, ManualPromptOutcome};
 
     if disposition == ManualPromptCompletionDisposition::SuppressCancelled {
-        return Err("prompt preparation was cancelled".to_string());
+        return Err(Failure::Cancelled);
     }
     match result {
         ManualPromptOutcome::PromptReady {
@@ -1953,23 +1970,34 @@ fn prepared_thread_prompt_handoff(
             intake,
             ..
         } => match *intake {
-            ManualPromptIntakeOutcome::TaskCommitted { handoff, .. }
-            | ManualPromptIntakeOutcome::TaskUpdated { handoff, .. } => {
+            ManualPromptIntakeOutcome::TaskCommitted {
+                committed_task_id: task_id,
+                handoff,
+                ..
+            }
+            | ManualPromptIntakeOutcome::TaskUpdated {
+                updated_task_id: task_id,
+                handoff,
+                ..
+            } => {
                 if handoff.transcript_text == transcript_text {
-                    Ok(handoff)
+                    Ok((handoff, task_id))
                 } else {
-                    Err("prepared prompt does not match the submitted text".to_string())
+                    Err(Failure::TextMismatch)
                 }
             }
             ManualPromptIntakeOutcome::Rejected { reason }
-            | ManualPromptIntakeOutcome::Failed { reason } => Err(reason),
+            | ManualPromptIntakeOutcome::Failed { reason } => {
+                Err(Failure::PlanningRefused { reason })
+            }
         },
-        ManualPromptOutcome::BootstrapReviewRequired { review, .. } => Err(format!(
-            "planning bootstrap needs review / draft: {}",
-            review.draft_name
-        )),
+        ManualPromptOutcome::BootstrapReviewRequired { review, .. } => {
+            Err(Failure::BootstrapReviewRequired {
+                draft_name: review.draft_name,
+            })
+        }
         ManualPromptOutcome::BootstrapFailed { reason, .. }
-        | ManualPromptOutcome::Rejected { reason, .. } => Err(reason),
+        | ManualPromptOutcome::Rejected { reason, .. } => Err(Failure::PlanningRefused { reason }),
     }
 }
 
@@ -9667,14 +9695,23 @@ mod tests {
     }
 
     fn thread_prompt(thread_id: &str, prompt: &str) -> CoreInput {
-        CoreInput::Command(AppCommand::AdmitThreadPrompt {
-            submission: Box::new(super::super::ThreadPromptSubmission {
+        CoreInput::Command(AppCommand::SubmitThreadPrompt(Box::new(
+            super::super::ThreadPromptSubmission {
                 workspace_directory: "/tmp/workspace".to_string(),
                 thread_id: thread_id.to_string(),
                 prompt: prompt.to_string(),
-            }),
-            parallel_mode_enabled: false,
-        })
+            },
+        )))
+    }
+
+    /// 호스트가 병렬 모드 값을 알린 core 이다. thread 지정 프롬프트는 이 값을 알아야 받는다.
+    fn hosted_controller(parallel_mode_enabled: bool) -> CoreController {
+        let mut controller = CoreController::new();
+        let reported = controller.handle_input(CoreInput::Command(
+            AppCommand::SetParallelModeEnabled(parallel_mode_enabled),
+        ));
+        assert!(reported.events.is_empty() && reported.effects.is_empty());
+        controller
     }
 
     fn thread_prompt_admission(
@@ -9716,7 +9753,7 @@ mod tests {
     #[test]
     fn a_remote_client_submits_a_prompt_to_a_thread_it_does_not_show() {
         // plan 18 K3-3b: core prepares the prompt and then submits it to the addressed thread.
-        let mut controller = CoreController::new();
+        let mut controller = hosted_controller(false);
         load_test_session_catalog(&mut controller);
         load_test_conversation(&mut controller, "thread-alpha");
 
@@ -9739,11 +9776,12 @@ mod tests {
         assert!(
             submitted.events.contains(&AppEvent::ThreadPromptSubmitted {
                 thread_id: "thread-beta".to_string(),
-                outcome: super::super::ThreadPromptOutcome::Submitted(
-                    TurnSubmissionAdmission::Accepted {
+                outcome: super::super::ThreadPromptOutcome::Submitted {
+                    admission: TurnSubmissionAdmission::Accepted {
                         correlation: TurnSubmissionCorrelation::new(1),
-                    }
-                ),
+                    },
+                    task_id: "task-1".to_string(),
+                },
             }),
             "{:?}",
             submitted.events
@@ -9780,7 +9818,7 @@ mod tests {
 
     #[test]
     fn a_thread_prompt_is_refused_for_an_unknown_or_busy_thread() {
-        let mut controller = CoreController::new();
+        let mut controller = hosted_controller(false);
         let unknown = controller.handle_input(thread_prompt("thread-9", "hello"));
         assert_eq!(
             thread_prompt_admission(&unknown),
@@ -9804,7 +9842,7 @@ mod tests {
     #[test]
     fn a_tui_conversation_switch_does_not_cancel_a_remote_thread_prompt() {
         // plan 18 K3-3b: the TUI cancels on every conversation switch; only its own preparation stops.
-        let mut controller = CoreController::new();
+        let mut controller = hosted_controller(false);
         load_test_session_catalog(&mut controller);
         controller.handle_input(thread_prompt("thread-beta", "fix the test"));
 
@@ -9841,38 +9879,52 @@ mod tests {
     #[test]
     fn a_thread_prompt_is_refused_while_parallel_mode_is_on() {
         // plan 18 K3-3b: parallel intake lives in the TUI, so core does not start a main-session turn.
-        let mut controller = CoreController::new();
+        let mut controller = hosted_controller(true);
         load_test_session_catalog(&mut controller);
-        let refused = controller.handle_input(CoreInput::Command(AppCommand::AdmitThreadPrompt {
-            submission: Box::new(super::super::ThreadPromptSubmission {
-                workspace_directory: "/tmp/workspace".to_string(),
-                thread_id: "thread-beta".to_string(),
-                prompt: "fix the test".to_string(),
-            }),
-            parallel_mode_enabled: true,
-        }));
+        let refused = controller.handle_input(thread_prompt("thread-beta", "fix the test"));
         assert_eq!(
             thread_prompt_admission(&refused),
             super::super::ThreadPromptAdmission::RejectedParallelMode
         );
         assert!(refused.effects.is_empty(), "no planning task is made");
-        // 호스트를 거치지 않은 제출은 병렬 모드를 모르므로 같은 이유로 거절한다.
-        let unhosted = controller.handle_input(CoreInput::Command(AppCommand::SubmitThreadPrompt(
-            Box::new(super::super::ThreadPromptSubmission {
-                workspace_directory: "/tmp/workspace".to_string(),
-                thread_id: "thread-beta".to_string(),
-                prompt: "fix the test".to_string(),
-            }),
-        )));
+
+        // 호스트가 값을 알리기 전에는 병렬 모드를 모르므로 다른 이유로 거절한다.
+        let mut unhosted = CoreController::new();
+        load_test_session_catalog(&mut unhosted);
+        let refused = unhosted.handle_input(thread_prompt("thread-beta", "fix the test"));
         assert_eq!(
-            thread_prompt_admission(&unhosted),
-            super::super::ThreadPromptAdmission::RejectedParallelMode
+            thread_prompt_admission(&refused),
+            super::super::ThreadPromptAdmission::RejectedParallelModeUnknown
         );
+        assert!(refused.effects.is_empty(), "no planning task is made");
+    }
+
+    #[test]
+    fn a_thread_prompt_is_not_submitted_when_parallel_mode_starts_during_preparation() {
+        // plan 18 K3 review: the prepared task is already queued, so a main-session turn would run it twice.
+        let mut controller = hosted_controller(false);
+        load_test_session_catalog(&mut controller);
+        controller.handle_input(thread_prompt("thread-beta", "fix the test"));
+        controller.handle_input(CoreInput::Command(AppCommand::SetParallelModeEnabled(true)));
+
+        let prepared =
+            controller.handle_input(prepared_thread_prompt(1, "fix the test", "planned prompt"));
+
+        assert_eq!(
+            prepared.events,
+            vec![AppEvent::ThreadPromptSubmitted {
+                thread_id: "thread-beta".to_string(),
+                outcome: super::super::ThreadPromptOutcome::ParallelModeStarted {
+                    task_id: "task-1".to_string(),
+                },
+            }]
+        );
+        assert!(prepared.effects.is_empty(), "no main-session turn starts");
     }
 
     #[test]
     fn a_failed_thread_prompt_preparation_leaves_no_session_behind() {
-        let mut controller = CoreController::new();
+        let mut controller = hosted_controller(false);
         load_test_session_catalog(&mut controller);
         controller.handle_input(thread_prompt("thread-beta", "first"));
         let second = controller.handle_input(thread_prompt("thread-alpha", "second"));
@@ -9895,9 +9947,11 @@ mod tests {
             failed.events,
             vec![AppEvent::ThreadPromptSubmitted {
                 thread_id: "thread-beta".to_string(),
-                outcome: super::super::ThreadPromptOutcome::PreparationFailed {
-                    reason: "planning is invalid".to_string(),
-                },
+                outcome: super::super::ThreadPromptOutcome::PreparationFailed(
+                    super::super::ThreadPromptPreparationFailure::PlanningRefused {
+                        reason: "planning is invalid".to_string(),
+                    }
+                ),
             }]
         );
         assert!(failed.effects.is_empty());

@@ -41,6 +41,9 @@ pub(super) struct PlanningFeatureReducer {
     next_manual_prompt_preparation_generation: u64,
     in_flight_manual_prompt_preparation: Option<ActiveManualPromptPreparation>,
     worker_panel_history_seed: PlanningWorkerPanelState,
+    // 호스트가 알린 병렬 모드 값이다 (plan 18 K3-3b). 알리기 전에는 `None` 이다. thread 지정 프롬프트는 이 값으로
+    // 준비를 받을지, 준비가 끝난 뒤 제출할지 정한다.
+    host_parallel_mode: Option<bool>,
 }
 
 impl PlanningFeatureReducer {
@@ -53,7 +56,16 @@ impl PlanningFeatureReducer {
             next_manual_prompt_preparation_generation: 1,
             in_flight_manual_prompt_preparation: None,
             worker_panel_history_seed: PlanningWorkerPanelState::default(),
+            host_parallel_mode: None,
         }
+    }
+
+    pub(super) fn set_host_parallel_mode(&mut self, enabled: bool) {
+        self.host_parallel_mode = Some(enabled);
+    }
+
+    pub(super) fn host_parallel_mode(&self) -> Option<bool> {
+        self.host_parallel_mode
     }
 
     pub(super) fn begin_runtime_refresh(

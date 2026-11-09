@@ -65,6 +65,8 @@ pub(crate) struct NativeClientRuntime {
     // GitHub 리뷰 폴링 설정 값과 마지막으로 설정을 요청한 작업 공간이다 (plan 18 K2-6).
     github_review_polling: Option<crate::core::app::GithubReviewPollingSettings>,
     github_review_setup_workspace: Option<String>,
+    // core 에 마지막으로 알린 병렬 모드 값이다 (plan 18 K3-3b). 병렬 제어부 값과 다르면 다시 알린다.
+    core_parallel_mode: Option<bool>,
 }
 
 struct NativeCoreRuntime {
@@ -518,6 +520,7 @@ impl NativeClientRuntime {
             parallel_view: None,
             github_review_polling: None,
             github_review_setup_workspace: None,
+            core_parallel_mode: None,
         }
     }
 
@@ -616,6 +619,8 @@ impl NativeClientRuntime {
     }
 
     pub(crate) fn poll_pending_client_event(&mut self) -> Option<NativeClientDispatchOutcome> {
+        // 앞의 병렬 완료가 병렬 모드를 바꿨을 수 있다. core 입력을 꺼내기 전에 맞춘다.
+        self.report_parallel_mode_to_core();
         let lanes = match self.next_poll_lane {
             NativeClientPollLane::Core => {
                 [NativeClientPollLane::Core, NativeClientPollLane::Parallel]
@@ -648,22 +653,31 @@ impl NativeClientRuntime {
     }
 
     fn dispatch_core_input(&mut self, input: CoreInput) -> NativeClientDispatchOutcome {
-        let input = self.with_parallel_mode_for_thread_prompt(input);
+        self.report_parallel_mode_to_core();
         let outcome = self.core.runtime.dispatch_input(input);
         self.resolve_internal_post_turn_routes(outcome)
     }
 
-    /// thread 지정 프롬프트에 병렬 모드 사용 여부를 붙인다 (plan 18 K3-3b). 그 값은 병렬 제어부를 가진 호스트만 안다.
-    fn with_parallel_mode_for_thread_prompt(&self, input: CoreInput) -> CoreInput {
-        match input {
-            CoreInput::Command(AppCommand::SubmitThreadPrompt(submission)) => {
-                CoreInput::Command(AppCommand::AdmitThreadPrompt {
-                    submission,
-                    parallel_mode_enabled: self.parallel_mode_enabled(),
-                })
-            }
-            other => other,
+    /*
+     * core 가 아는 병렬 모드 값을 병렬 제어부 값에 맞춘다 (plan 18 K3-3b). core 는 thread 지정 프롬프트를 받을 때와
+     * 준비가 끝나 제출할 때 이 값을 본다. 호스트는 core 입력을 넣기 전마다 값을 다시 읽어 바뀌었을 때만 알린다.
+     * shortcut: 병렬 제어부는 공유 상태라 다른 스레드도 바꿀 수 있다. 커널 대기(`wait`) 중에 바뀌면 그 대기에서
+     * 깨어난 core 입력 하나는 이전 값을 본다. 병렬 제어부를 커널에 합칠 때(plan 19 Q5) 없앤다.
+     */
+    fn report_parallel_mode_to_core(&mut self) {
+        let enabled = self.parallel_mode_enabled();
+        if self.core_parallel_mode == Some(enabled) {
+            return;
         }
+        // 먼저 기록한다. 아래 dispatch 가 이 함수를 다시 불러도 바로 돌아온다.
+        self.core_parallel_mode = Some(enabled);
+        let outcome = self.dispatch_core_input(CoreInput::Command(
+            AppCommand::SetParallelModeEnabled(enabled),
+        ));
+        debug_assert!(
+            matches!(&outcome, NativeClientDispatchOutcome::Core(core) if core.events.is_empty()),
+            "reporting the parallel mode only updates core state"
+        );
     }
 
     /*
@@ -859,6 +873,7 @@ impl NativeClientRuntime {
         max_inputs: usize,
     ) -> Vec<NativeClientDispatchOutcome> {
         let mut outcomes = Vec::new();
+        self.report_parallel_mode_to_core();
         if !wait.is_zero()
             && let Some(outcome) = self.core.runtime.wait_pending_input(wait)
         {
@@ -1662,8 +1677,8 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn the_host_sets_parallel_mode_on_a_thread_prompt() {
-        // plan 18 K3-3b: a client cannot claim the parallel mode; the host uses its control plane.
+    fn the_host_reports_parallel_mode_before_a_thread_prompt() {
+        // plan 18 K3-3b: a client cannot claim the parallel mode; the host reports its control plane.
         let (mut runtime, _turns) = recording_runtime_for_test();
         let NativeClientDispatchOutcome::Core(outcome) = runtime.dispatch_client_event(
             NativeClientEvent::core(CoreInput::Command(AppCommand::SubmitThreadPrompt(

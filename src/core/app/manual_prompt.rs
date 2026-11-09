@@ -46,12 +46,34 @@ pub enum ThreadPromptAdmission {
     // 병렬 모드가 켜져 있다. 병렬 모드에서 수동 프롬프트는 병렬 작업 intake 로 가야 하는데, 그 경로는 아직 TUI
     // 에만 있다. main session 턴으로 내면 같은 작업이 병렬 slot 에도 나갈 수 있다.
     RejectedParallelMode,
+    // 호스트가 병렬 모드 값을 아직 알리지 않았다. 값을 모르면 병렬 모드일 수 있으므로 받지 않는다.
+    RejectedParallelModeUnknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ThreadPromptOutcome {
-    // 준비가 끝나고 턴을 제출했다. 값은 턴 제출 admission 이다.
-    Submitted(super::TurnSubmissionAdmission),
-    // 준비가 턴을 만들지 못했다.
-    PreparationFailed { reason: String },
+    // 준비가 끝나고 턴 제출을 시도했다. `task_id` 는 준비가 큐에 만들거나 고친 planning 작업이다. 제출이
+    // 거절되어도 그 작업은 큐에 남는다. 같은 프롬프트를 다시 보내면 작업이 하나 더 생긴다.
+    Submitted {
+        admission: super::TurnSubmissionAdmission,
+        task_id: String,
+    },
+    // 준비하는 사이에 병렬 모드가 켜졌다. main session 턴으로 내지 않는다. 작업은 큐에 남고 병렬 slot 이 맡는다.
+    ParallelModeStarted {
+        task_id: String,
+    },
+    // 준비가 턴을 만들지 못했다. planning 작업은 만들어지지 않았다.
+    PreparationFailed(ThreadPromptPreparationFailure),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ThreadPromptPreparationFailure {
+    // 준비가 취소되었다.
+    Cancelled,
+    // 준비 결과가 보낸 프롬프트와 맞지 않는다.
+    TextMismatch,
+    // planning 초안을 사람이 검토해야 한다. 원격 클라이언트는 검토할 수 없다.
+    BootstrapReviewRequired { draft_name: String },
+    // planning 이 프롬프트를 받지 않았거나 준비가 실패했다.
+    PlanningRefused { reason: String },
 }

@@ -362,7 +362,7 @@ fn build_session_list_entry(
     }
 }
 
-// 보지 않는 thread 의 진행 표시이다 (plan 18 K2-4). 승인 대기가 가장 급하므로 먼저 보인다.
+// 일이 남은 thread 의 진행 표시이다 (plan 18 K2-4). 보는 thread 에도 붙는다 (K3-3a). 승인 대기가 가장 급하므로 먼저 보인다.
 fn thread_activity_label(activity: &crate::core::app::ThreadActivitySummary) -> &'static str {
     if activity.approval.is_some() {
         "approval needed"
