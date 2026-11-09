@@ -35,6 +35,7 @@ their exact headings, phrases, surface rows, or test-entrypoint inventory.
 
 The following content is not implementation truth:
 
+- [plan/19-akra-kernel-quality-goals.md](plan/19-akra-kernel-quality-goals.md): proposed quality goals for the Akra kernel (restart safety, reproducible races, self-description, concurrency as policy, engine neutrality) and the order to reach them (Korean)
 - [plan/18-akra-kernel-architecture.md](plan/18-akra-kernel-architecture.md): approved kernel architecture where people and AI agents use one bidirectional command and event protocol (Korean)
 - [plan/18-k1-headless-decision-loop.md](plan/18-k1-headless-decision-loop.md): proposed K1 steps that move decision rules and timers out of the TUI (Korean)
 - [plan/17-akra-desktop/README.md](plan/17-akra-desktop/README.md): proposed Electron desktop client over a thin, always-on Codex app-server gateway (Korean)

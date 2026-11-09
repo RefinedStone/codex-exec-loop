@@ -8,7 +8,8 @@
 - 기준일: 진단(§3)은 2026-11-06, 진행 상태(§5.6, §6)는 2026-11-09 (Asia/Seoul)
 - 기준 커밋: 진단은 `8e64736cdb2050da2b2ffbce06b231da86186753`, 진행 상태는 `80c11441` (`origin/prerelease`)
 - 근거: 2026-11-06 코드 조사 4건 (§3). 불안정 테스트 조사 결과는 §3.5 에 있다.
-- 관련 계획: [17 Akra Desktop](17-akra-desktop/README.md)
+- 관련 계획: [17 Akra Desktop](17-akra-desktop/README.md), [19 Akra 커널 성질 목표](19-akra-kernel-quality-goals.md)
+  (K4~K6 의 완료 기준이 되는 성질 P1~P5 와 진행 순서, 2026-11-09 제안)
 - 목적: Akra 를 "사람이 TUI 로 조작하는 도구"에서 **사람과 AI 에이전트가 동등하게 쓰는 양방향 커널**로 바꾸는
   구조 수정안을 정한다.
 

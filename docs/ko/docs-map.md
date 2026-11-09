@@ -32,6 +32,7 @@
 
 다음 문서는 현재 구현 계약이 아닙니다.
 
+- [Akra 커널 성질 목표: 재시작 복구, 경합 재현, 자기 설명, 정책으로서의 동시성, 엔진 중립](../plan/19-akra-kernel-quality-goals.md)
 - [Akra 커널 아키텍처 수정안: 사람과 AI 에이전트가 같은 양방향 프로토콜을 쓰는 구조](../plan/18-akra-kernel-architecture.md)
 - [K1 상세 설계: 결정 규칙과 타이머를 TUI 밖으로](../plan/18-k1-headless-decision-loop.md)
 - [Akra Desktop 계획: Electron 앱 + 항상 실행되는 얇은 app-server Gateway](../plan/17-akra-desktop/README.md)
