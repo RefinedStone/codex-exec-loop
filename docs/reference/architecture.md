@@ -147,7 +147,11 @@ slot and is cancelled as before. The TUI lets the user open another session or a
 turn runs. Core publishes `ThreadActivityChanged` with a summary of every busy thread, the shown one
 included: running, the active turn id, the pending approval request, and auto-follow. The session list
 marks those threads. An approval decision finds its thread by approval id and a steer by thread id,
-so a client can act on a thread it does not show; an undecided approval still expires as before. Reopening a thread
+so a client can act on a thread it does not show; an undecided approval still expires as before.
+`SubmitThreadPrompt` sends a prompt to a thread by id: Core prepares it (as `PrepareManualPrompt`
+does) and then submits the turn into that thread's session, in the background when the thread is
+not shown. Core refuses an unknown thread and a busy one before the preparation, because the
+preparation writes a planning task. Reopening a thread
 shows its live runtime state; its transcript is reloaded from the provider.
 
 `CoreRuntime`, its effect executor, and its input mailbox are crate-private implementation details,

@@ -136,7 +136,10 @@ session만 보는 자리에 남아 이전처럼 취소됩니다. TUI는 turn 실
 열 수 있습니다. Core는 보는 thread를 포함해 일이 남은 모든 thread의 요약(실행 중, 진행 중 turn id,
 기다리는 approval 요청, auto-follow)을 `ThreadActivityChanged`로 알리고, session 목록은 그 thread에
 표시를 붙입니다. Approval 결정은 approval id로, steer는 thread id로 그 thread를 찾으므로 client는 보지
-않는 thread에도 명령할 수 있습니다. 결정하지 않은 approval은 이전처럼 기한이 지나 거절됩니다. Thread를 다시 열면 live
+않는 thread에도 명령할 수 있습니다. 결정하지 않은 approval은 이전처럼 기한이 지나 거절됩니다.
+`SubmitThreadPrompt`는 thread id로 prompt를 보냅니다. Core가 `PrepareManualPrompt`처럼 준비한 뒤 그
+thread의 session에 turn을 제출하며, 보지 않는 thread이면 background에서 실행합니다. 준비가 planning
+task를 쓰므로 Core는 모르는 thread와 일하는 중인 thread를 준비 전에 거절합니다. Thread를 다시 열면 live
 runtime 상태가 보이고 transcript는 provider에서 다시 읽습니다.
 
 `CoreRuntime`, effect executor, input mailbox는 library SDK가 아닌 crate-private 구현 세부사항입니다.
