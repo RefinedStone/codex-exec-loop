@@ -2,11 +2,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::composition::clipboard_image_probe::CompositionClipboardImageProbeTrigger;
+use crate::composition::repository_kernel::RepositoryKernelRegistry;
 
 use anyhow::Result;
 
 use crate::adapter::outbound::app_server::gateway_upstream::AppServerGatewayUpstream;
-use crate::adapter::outbound::app_server::{AppServerPlanningWorkerAdapter, CodexAppServerAdapter};
+use crate::adapter::outbound::app_server::{
+    AppServerPlanningWorkerAdapter, CodexAppServerAdapter, GatewayUpstreamSocket,
+};
 use crate::adapter::outbound::clipboard::PlatformClipboardImageAdapter;
 use crate::adapter::outbound::db::{
     SqlitePlanningAuthorityAdapter, SqliteTelegramGlobalRunnerLeaseAdapter,
@@ -346,8 +349,21 @@ pub(crate) fn build_telegram_application(workspace_dir: String) -> ProductionTel
 }
 
 /// akra-gateway 의 upstream 을 시작한다. `run_dir` 는 현재 사용자 전용 디렉터리여야 한다.
-pub(crate) fn build_gateway_upstream_port(run_dir: &Path) -> Result<Arc<dyn GatewayUpstreamPort>> {
-    Ok(Arc::new(AppServerGatewayUpstream::start(run_dir)?))
+/// Gateway 가 쓰는 upstream app-server 와 저장소 커널 목록이다. 커널은 같은 upstream 에 붙는다 (K3-5).
+pub(crate) struct GatewayBackend {
+    pub(crate) upstream: Arc<dyn GatewayUpstreamPort>,
+    pub(crate) kernels: Arc<RepositoryKernelRegistry>,
+}
+
+pub(crate) fn build_gateway_backend(run_dir: &Path) -> Result<GatewayBackend> {
+    let upstream = AppServerGatewayUpstream::start(run_dir)?;
+    let kernels = Arc::new(RepositoryKernelRegistry::sharing_app_server(
+        upstream.kernel_socket(),
+    ));
+    Ok(GatewayBackend {
+        upstream: Arc::new(upstream),
+        kernels,
+    })
 }
 
 pub(crate) fn build_telegram_bot_port(token: String) -> Arc<dyn TelegramBotPort> {
@@ -406,19 +422,26 @@ fn native_tui_workspace_dir() -> String {
 }
 
 pub(crate) fn build_native_tui_application() -> NativeTuiApplicationComposition {
-    build_native_application_for_workspace(&native_tui_workspace_dir())
+    build_native_application_for_workspace(&native_tui_workspace_dir(), None)
 }
 
 /// 화면 없는 커널의 런타임이다 (plan 18 K3-4). 호출자는 먼저 그 저장소의 커널 잠금을 잡는다. 조립이 PR 검증
-/// 스케줄러 스레드를 시작하기 때문이다.
-pub(crate) fn build_headless_kernel_runtime(workspace_dir: &str) -> NativeClientRuntime {
-    build_native_application_for_workspace(workspace_dir).into_headless_client_runtime()
+/// 스케줄러 스레드를 시작하기 때문이다. `app_server` 가 있으면 커널은 자기 app-server 대신 Gateway upstream 에
+/// 붙어 Desktop 과 같은 app-server 를 쓴다 (K3-5).
+pub(crate) fn build_headless_kernel_runtime(
+    workspace_dir: &str,
+    app_server: Option<GatewayUpstreamSocket>,
+) -> NativeClientRuntime {
+    build_native_application_for_workspace(workspace_dir, app_server).into_headless_client_runtime()
 }
 
-fn build_native_application_for_workspace(workspace_dir: &str) -> NativeTuiApplicationComposition {
+fn build_native_application_for_workspace(
+    workspace_dir: &str,
+    app_server: Option<GatewayUpstreamSocket>,
+) -> NativeTuiApplicationComposition {
     let workspace_dir = workspace_dir.to_string();
     let capture_enabled = app_server_prompt_logging_enabled();
-    let ports = build_shared_ports_for_prompt_logging(capture_enabled);
+    let ports = build_shared_ports_with_app_server(capture_enabled, app_server);
     let maintenance_mode = native_tui_prompt_log_maintenance_mode(capture_enabled);
     let startup_service = StartupService::new(ports.app_server_adapter.clone())
         .with_prompt_log_maintenance(
@@ -549,6 +572,13 @@ fn build_shared_ports() -> ProductionSharedPorts {
 }
 
 fn build_shared_ports_for_prompt_logging(prompt_logging_enabled: bool) -> ProductionSharedPorts {
+    build_shared_ports_with_app_server(prompt_logging_enabled, None)
+}
+
+fn build_shared_ports_with_app_server(
+    prompt_logging_enabled: bool,
+    app_server: Option<GatewayUpstreamSocket>,
+) -> ProductionSharedPorts {
     let planning_authority_adapter = Arc::new(SqlitePlanningAuthorityAdapter::new());
     let planning_authority_port: Arc<dyn PlanningAuthorityPort> =
         planning_authority_adapter.clone();
@@ -563,6 +593,7 @@ fn build_shared_ports_for_prompt_logging(prompt_logging_enabled: bool) -> Produc
     let app_server_adapter = app_server_adapter(
         app_server_prompt_log_port.clone(),
         conversation_thread_turn_options_port.clone(),
+        app_server,
     );
     let planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort> =
         planning_authority_adapter.clone();
@@ -704,15 +735,18 @@ fn build_pr_validation_scheduler_runtime(
 fn app_server_adapter(
     prompt_log_port: Arc<dyn AppServerPromptLogPort>,
     conversation_thread_turn_options_port: Arc<dyn ConversationThreadTurnOptionsPort>,
+    app_server: Option<GatewayUpstreamSocket>,
 ) -> Arc<CodexAppServerAdapter> {
-    Arc::new(
-        CodexAppServerAdapter::from_environment_with_prompt_log_and_thread_turn_options(
-            APP_SERVER_CLIENT_NAME,
-            env!("CARGO_PKG_VERSION"),
-            prompt_log_port,
-            conversation_thread_turn_options_port,
-        ),
-    )
+    let adapter = CodexAppServerAdapter::from_environment_with_prompt_log_and_thread_turn_options(
+        APP_SERVER_CLIENT_NAME,
+        env!("CARGO_PKG_VERSION"),
+        prompt_log_port,
+        conversation_thread_turn_options_port,
+    );
+    Arc::new(match app_server {
+        Some(socket) => adapter.through_gateway_upstream(socket),
+        None => adapter,
+    })
 }
 
 fn github_automation_port() -> Arc<dyn GithubAutomationPort> {

@@ -659,6 +659,14 @@ there; linked worktrees resolve to the same directory. The TUI and `build_kernel
 (`src/composition/repository_kernel.rs`) take it before they assemble the runtime, and dropping the
 kernel releases it after the host thread ends.
 
+`akra-gateway` holds a `RepositoryKernelRegistry` (one kernel per repository). The Gateway session
+routes `akra/kernel/*` to `src/adapter/inbound/gateway/kernel.rs`, which calls the blocking kernel
+handle through `spawn_blocking` and runs one event thread per attached connection. Kernels built by
+the Gateway connect their app-server adapter to the Gateway upstream: `AppServerTransport::GatewayProxy`
+spawns `codex app-server proxy --sock …` and `src/adapter/outbound/app_server/proxy_transport.rs`
+speaks WebSocket over its stdio, mapping one text message to one JSON line, so the line-based
+connection code stays the same.
+
 Dropping `NativeClientRuntime` closes every parallel automation epoch first. The kernel drops the
 runtime on its host thread, so the epochs close before the lock is released. Worker threads of the
 old runtime then stop at their next epoch check:

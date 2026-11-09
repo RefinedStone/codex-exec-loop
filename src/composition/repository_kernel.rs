@@ -13,6 +13,8 @@ use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 
+use crate::adapter::outbound::app_server::GatewayUpstreamSocket;
+
 use crate::adapter::outbound::filesystem::RepositoryKernelLock;
 use crate::composition::kernel_host::{KernelClientHandle, KernelHost};
 use crate::composition::native_client_runtime::NativeClientRuntime;
@@ -44,13 +46,23 @@ impl RepositoryKernel {
 #[derive(Default)]
 pub(crate) struct RepositoryKernelRegistry {
     kernels: Mutex<BTreeMap<String, RepositoryKernel>>,
+    /// 커널이 붙을 app-server 이다. 없으면 커널마다 자기 app-server 를 띄운다 (시험).
+    app_server: Option<GatewayUpstreamSocket>,
 }
 
 impl RepositoryKernelRegistry {
-    /// `workspace_dir` 가 속한 저장소의 커널에 클라이언트 하나를 붙인다. 그 저장소의 커널이 없으면 만든다. 같은
-    /// 저장소의 다른 worktree 는 같은 커널에 붙는다. 다른 프로세스가 그 저장소의 커널을 돌리면
-    /// `RepositoryKernelLockHeld` 오류이다.
-    pub(crate) fn attach(&self, workspace_dir: &str) -> Result<KernelClientHandle> {
+    /// 커널들이 Gateway upstream app-server 를 Desktop 과 함께 쓴다 (K3-5, Q-K3-6).
+    pub(crate) fn sharing_app_server(app_server: GatewayUpstreamSocket) -> Self {
+        Self {
+            kernels: Mutex::default(),
+            app_server: Some(app_server),
+        }
+    }
+
+    /// `workspace_dir` 가 속한 저장소의 커널에 클라이언트 하나를 붙이고, 커널의 저장소 신원과 함께 돌려준다. 그
+    /// 저장소의 커널이 없으면 만든다. 같은 저장소의 다른 worktree 는 같은 커널에 붙는다. 다른 프로세스가 그
+    /// 저장소의 커널을 돌리면 `RepositoryKernelLockHeld` 오류이다.
+    pub(crate) fn attach(&self, workspace_dir: &str) -> Result<(KernelClientHandle, String)> {
         let repository_key = production::repository_kernel_key(workspace_dir)?;
         // shortcut: 커널을 만드는 동안 목록을 잠가 다른 저장소의 접속도 기다린다. 접속이 잦아지면 저장소별로 잠근다.
         let mut kernels = self
@@ -61,25 +73,29 @@ impl RepositoryKernelRegistry {
             .get(&repository_key)
             .and_then(RepositoryKernel::attach)
         {
-            return Ok(client);
+            return Ok((client, repository_key));
         }
         // 호스트 스레드가 끝난 커널은 먼저 버려 잠금을 푼 뒤 다시 만든다.
         kernels.remove(&repository_key);
-        let kernel = build_kernel_for_workspace(workspace_dir)?;
+        let kernel = build_kernel_for_workspace(workspace_dir, self.app_server.clone())?;
         let client = kernel
             .attach()
             .context("the new kernel stopped before a client attached")?;
-        kernels.insert(repository_key, kernel);
-        Ok(client)
+        let repository_key = kernel.repository_key().to_string();
+        kernels.insert(repository_key.clone(), kernel);
+        Ok((client, repository_key))
     }
 }
 
 /// `workspace_dir` 가 속한 저장소의 커널을 조립하고 시작한다. 다른 프로세스가 그 저장소의 커널을 돌리면
 /// 아무것도 시작하지 않고 `RepositoryKernelLockHeld` 오류를 돌려준다.
-pub(crate) fn build_kernel_for_workspace(workspace_dir: &str) -> Result<RepositoryKernel> {
+pub(crate) fn build_kernel_for_workspace(
+    workspace_dir: &str,
+    app_server: Option<GatewayUpstreamSocket>,
+) -> Result<RepositoryKernel> {
     // 잠금을 먼저 잡는다. 런타임 조립이 PR 검증 스케줄러 스레드를 시작하기 때문이다.
     let lock = production::acquire_repository_kernel_lock(workspace_dir)?;
-    let runtime = production::build_headless_kernel_runtime(workspace_dir);
+    let runtime = production::build_headless_kernel_runtime(workspace_dir, app_server);
     start_repository_kernel(lock, runtime, workspace_dir)
 }
 
@@ -189,7 +205,7 @@ mod tests {
         let folder = temp_folder("refused");
         let _held = production::acquire_repository_kernel_lock(&folder.path).expect("first lock");
 
-        let Err(error) = build_kernel_for_workspace(&folder.path) else {
+        let Err(error) = build_kernel_for_workspace(&folder.path, None) else {
             panic!("a second kernel for the repository must not start");
         };
 
@@ -204,16 +220,21 @@ mod tests {
         let folder = temp_folder("registry");
         let registry = RepositoryKernelRegistry::default();
 
-        let first = registry
+        let (first, kernel) = registry
             .attach(&folder.path)
             .expect("first client attaches");
-        let second = registry
+        let (second, same_kernel) = registry
             .attach(&folder.path)
             .expect("a second client shares the kernel instead of taking the lock again");
         assert_ne!(first.client_id(), second.client_id());
+        assert_eq!(kernel, same_kernel);
+        assert_eq!(
+            kernel,
+            production::repository_kernel_key(&folder.path).expect("repository key")
+        );
         drop((first, second));
 
-        let again = registry
+        let (again, _) = registry
             .attach(&folder.path)
             .expect("the kernel outlives its clients");
         assert!(again.query().is_some());
@@ -234,7 +255,7 @@ mod tests {
     fn the_production_kernel_runs_without_a_screen() {
         // The host only ticks: no startup checks run, so no app-server starts.
         let folder = temp_folder("production");
-        let kernel = build_kernel_for_workspace(&folder.path).expect("kernel should start");
+        let kernel = build_kernel_for_workspace(&folder.path, None).expect("kernel should start");
         let client = kernel.attach().expect("a client attaches");
 
         assert!(

@@ -275,11 +275,22 @@ the desktop app itself is not shipped yet.
   `akra/*` requests are answered by the Gateway (`akra/gateway/info` returns gateway and codex versions,
   start time, and upstream restarts). An upstream restart closes clients with WebSocket close `1012`;
   an unavailable upstream closes them with `1013`.
+- Kernel protocol (`akra/kernel/*`, plan 18 K3 protocol v0): a client sends `akra/kernel/attach`
+  with a workspace and attaches to the kernel of the repository that holds it. The Gateway builds that
+  kernel on first attach and keeps it after clients leave, so auto-follow and parallel dispatch keep
+  running. Worktrees of one repository share one kernel. If another process (a TUI) runs the kernel
+  of that repository, attach fails with `-32012`. After attach the client sends
+  `akra/kernel/command` and `akra/kernel/query` and receives `akra/kernel/event` notifications;
+  requests before attach fail with `-32011`. `akra/kernel/describe` lists methods, commands, queries,
+  and events. Parallel control events and the planning query are not exported yet (K3-6).
+- The kernel uses the Gateway upstream app-server through its own `codex app-server proxy`
+  connection, so a client can `thread/resume` a thread that the kernel runs and receive its turn
+  notifications live.
 - One Gateway runs per user: a second instance exits with `another akra-gateway is already running`.
   Child processes are contained (Windows job objects) and end with the Gateway.
 - `AKRA_GATEWAY_RECORD=1` records each session's text frames as JSONL under the user-private
   `$AKRA_HOME/recordings/`. Recordings contain real conversations and must not be committed.
-- The existing TUI, Admin, and Telegram paths keep their own stdio app-server (plan P-08).
+- The TUI, Admin, and Telegram paths keep their own stdio app-server (plan P-08).
 
 ## Recovery and Limits
 

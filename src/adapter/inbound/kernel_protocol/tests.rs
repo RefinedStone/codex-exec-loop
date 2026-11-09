@@ -433,3 +433,36 @@ fn command_response_names_why_the_kernel_refused_a_command() {
         })
     );
 }
+
+#[test]
+fn a_query_answers_with_the_event_of_the_same_name() {
+    let snapshot = crate::core::app::AppSnapshot::initial();
+    let request: QueryRequest =
+        serde_json::from_value(json!({ "query": { "type": "auto_follow" } }))
+            .expect("query request should parse");
+    assert_eq!(
+        request.query.answer(&snapshot, &[]),
+        KernelEvent::AutoFollow(AutoFollowSettings::from_core(
+            &snapshot.conversation_runtime
+        ))
+    );
+    assert_eq!(
+        KernelQuery::ThreadActivity {}.answer(&snapshot, &[]),
+        KernelEvent::ThreadActivity {
+            threads: Vec::new()
+        }
+    );
+    assert!(
+        serde_json::from_value::<QueryRequest>(
+            json!({ "query": { "type": "sessions" }, "extra": 1 })
+        )
+        .is_err()
+    );
+    assert_eq!(
+        serde_json::to_value(EventNotification {
+            event: KernelEvent::Resync
+        })
+        .expect("notification should serialize"),
+        json!({ "event": { "type": "resync" } })
+    );
+}

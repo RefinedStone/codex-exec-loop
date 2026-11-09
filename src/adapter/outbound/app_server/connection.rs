@@ -218,8 +218,20 @@ impl AppServerTurnInterruptSignal {
     }
 }
 
+/// 연결이 app-server 에 닿는 길이다 (plan 18 K3-5).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) enum AppServerTransport {
+    /// 연결마다 자기 `codex app-server` 를 stdio JSON-RPC 로 띄운다 (TUI).
+    #[default]
+    OwnProcess,
+    /// Gateway upstream app-server 에 `codex app-server proxy --sock` 로 붙는다 (데몬 커널). 같은 app-server 를
+    /// Desktop 과 함께 써서, Desktop 이 커널이 돌리는 thread 를 resume 해 볼 수 있다 (Q-K3-6).
+    GatewayProxy { socket_argument: String },
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct AppServerConnectionConfig {
+    transport: AppServerTransport,
     executable: PathBuf,
     executable_prefix_args: Vec<OsString>,
     executable_resolution_error: Option<String>,
@@ -243,6 +255,7 @@ pub(super) struct AppServerConnectionConfig {
 impl Default for AppServerConnectionConfig {
     fn default() -> Self {
         Self {
+            transport: AppServerTransport::OwnProcess,
             executable: PathBuf::from("codex"),
             executable_prefix_args: Vec::new(),
             executable_resolution_error: None,
@@ -372,6 +385,10 @@ impl AppServerConnectionConfig {
 
     pub(super) fn uses_api_key_auth(&self) -> bool {
         self.api_key_auth
+    }
+
+    pub(super) fn set_transport(&mut self, transport: AppServerTransport) {
+        self.transport = transport;
     }
 
     pub(super) fn ensure_executable_is_pinned(&self) -> Result<()> {
@@ -951,25 +968,32 @@ struct AppServerWriteRequest {
     acknowledgement: SyncSender<std::result::Result<(), String>>,
 }
 
+/// JSON-RPC frame 하나(JSON 한 줄)를 app-server 로 보내는 곳이다. 자기 app-server 는 stdin 에 그대로 쓰고,
+/// Gateway proxy 는 WebSocket text 메시지 하나로 보낸다.
+pub(super) trait AppServerFrameSink: Send + 'static {
+    fn write_frame(&mut self, frame: &[u8]) -> io::Result<()>;
+}
+
+impl AppServerFrameSink for ChildStdin {
+    fn write_frame(&mut self, frame: &[u8]) -> io::Result<()> {
+        self.write_all(frame).and_then(|()| self.flush())
+    }
+}
+
 struct AppServerStdinWriter {
     sender: Option<SyncSender<AppServerWriteRequest>>,
     worker: Option<thread::JoinHandle<()>>,
 }
 
 impl AppServerStdinWriter {
-    fn spawn(mut stdin: ChildStdin, transport_failure: Arc<TransportFailure>) -> Self {
+    fn spawn(mut stdin: impl AppServerFrameSink, transport_failure: Arc<TransportFailure>) -> Self {
         let (sender, receiver) =
             mpsc::sync_channel::<AppServerWriteRequest>(APP_SERVER_WRITE_CHANNEL_CAPACITY);
         let worker = thread::spawn(move || {
             while let Ok(request) = receiver.recv() {
-                let result = stdin
-                    .write_all(&request.frame)
-                    .and_then(|()| stdin.flush())
-                    .map_err(|error| {
-                        format!(
-                            "failed to write a bounded JSON-RPC frame to app-server stdin: {error}"
-                        )
-                    });
+                let result = stdin.write_frame(&request.frame).map_err(|error| {
+                    format!("failed to write a bounded JSON-RPC frame to app-server stdin: {error}")
+                });
                 if let Err(message) = &result {
                     transport_failure.record(message.clone());
                 }
@@ -1138,7 +1162,18 @@ impl AppServerConnection {
          * 이 connection object는 request id matching과 stream notification reduction만 수행한다.
          */
         config.ensure_executable_is_pinned()?;
-        let mut command = app_server_command(&config);
+        let mut command = match &config.transport {
+            AppServerTransport::OwnProcess => app_server_command(&config),
+            AppServerTransport::GatewayProxy { socket_argument } => {
+                let mut command = codex_command(&config);
+                command
+                    .arg("app-server")
+                    .arg("proxy")
+                    .arg("--sock")
+                    .arg(socket_argument);
+                command
+            }
+        };
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -1161,7 +1196,20 @@ impl AppServerConnection {
             .context("failed to take app-server stderr")?;
 
         let transport_failure = Arc::new(TransportFailure::default());
-        let stdin_writer = AppServerStdinWriter::spawn(stdin, transport_failure.clone());
+        let (stdin_writer, stdout): (AppServerStdinWriter, Box<dyn std::io::Read + Send>) =
+            match &config.transport {
+                AppServerTransport::OwnProcess => (
+                    AppServerStdinWriter::spawn(stdin, transport_failure.clone()),
+                    Box::new(stdout),
+                ),
+                AppServerTransport::GatewayProxy { .. } => {
+                    let proxy = super::proxy_transport::open(stdin, stdout)?;
+                    (
+                        AppServerStdinWriter::spawn(proxy.frames, transport_failure.clone()),
+                        Box::new(proxy.lines),
+                    )
+                }
+            };
         let (tx, rx) = mpsc::sync_channel(APP_SERVER_LINE_CHANNEL_CAPACITY);
         spawn_pipe_reader(
             stdout,
@@ -8935,6 +8983,7 @@ mod tests {
 
     fn test_config() -> AppServerConnectionConfig {
         AppServerConnectionConfig {
+            transport: super::AppServerTransport::OwnProcess,
             executable: PathBuf::from("codex"),
             executable_prefix_args: Vec::new(),
             executable_resolution_error: None,

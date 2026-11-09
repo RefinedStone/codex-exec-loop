@@ -5,6 +5,7 @@
 //! 순수 중계는 application use case 가 아니므로 inbound port 없이 composition 이 조립한 outbound port 를
 //! 쓴다. Telegram 입구가 `TelegramBotPort` 를 쓰는 것과 같은 구조이다.
 
+mod kernel;
 mod listener;
 mod recorder;
 mod router;
@@ -24,6 +25,7 @@ use self::listener::GatewayListener;
 use self::recorder::GatewayRecorder;
 use crate::application::port::outbound::gateway_upstream_port::GatewayUpstreamPort;
 use crate::composition::production;
+use crate::composition::repository_kernel::RepositoryKernelRegistry;
 
 const USAGE: &str = "\
 Usage: akra-gateway
@@ -65,7 +67,8 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
     let _instance_lock = acquire_instance_lock(&run_dir)?;
     let recorder = GatewayRecorder::from_env(&akra_home)?.map(Arc::new);
     let listener = GatewayListener::bind(&run_dir)?;
-    let upstream = production::build_gateway_upstream_port(&run_dir)?;
+    let production::GatewayBackend { upstream, kernels } =
+        production::build_gateway_backend(&run_dir)?;
     println!("akra-gateway listening on {}", listener.endpoint());
     let _ = std::io::stdout().flush();
     tracing::info!(
@@ -74,7 +77,9 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
         "akra_gateway_started"
     );
 
-    serve(listener, upstream.clone(), recorder).await;
+    serve(listener, upstream.clone(), kernels.clone(), recorder).await;
+    // 커널을 먼저 멈춘다. 커널의 app-server 연결은 upstream 을 쓴다.
+    drop(kernels);
     upstream.shutdown();
     tracing::info!("akra_gateway_stopped");
     Ok(())
@@ -114,6 +119,7 @@ fn acquire_instance_lock(run_dir: &Path) -> Result<File> {
 async fn serve(
     mut listener: GatewayListener,
     upstream: Arc<dyn GatewayUpstreamPort>,
+    kernels: Arc<RepositoryKernelRegistry>,
     recorder: Option<Arc<GatewayRecorder>>,
 ) {
     let shutdown = shutdown_signal();
@@ -124,9 +130,12 @@ async fn serve(
             accepted = listener.accept() => match accepted {
                 Ok(connection) => {
                     let upstream = upstream.clone();
+                    let kernels = kernels.clone();
                     let recorder = recorder.clone();
                     tokio::spawn(async move {
-                        if let Err(error) = session::run_session(connection, upstream, recorder).await {
+                        if let Err(error) =
+                            session::run_session(connection, upstream, kernels, recorder).await
+                        {
                             tracing::debug!(error = %format!("{error:#}"), "gateway session failed");
                         }
                     });

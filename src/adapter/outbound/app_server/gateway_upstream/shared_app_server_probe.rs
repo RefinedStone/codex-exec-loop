@@ -220,3 +220,41 @@ async fn next_json(connection: &mut Connection, deadline: Instant) -> Option<Val
         }
     }
 }
+
+/// plan 18 K3-5: 커널의 app-server adapter 가 `app-server proxy` WebSocket 전송으로 Gateway upstream 에 붙는다.
+/// 모델 턴은 돌리지 않는다(사용량을 쓰지 않는다). 실제 codex 와 로그인이 필요하므로 기본으로는 돌지 않는다.
+#[test]
+#[ignore = "needs a real codex login (plan 18 K3-5)"]
+fn the_kernel_adapter_talks_to_the_upstream_through_the_proxy() {
+    use crate::application::port::outbound::session_catalog_port::SessionCatalogPort;
+    use crate::application::port::outbound::startup_probe_port::StartupProbePort;
+    use crate::domain::recent_sessions::SessionCatalogRequest;
+
+    let run_dir = std::env::temp_dir().join(format!("akq5-{}", std::process::id()));
+    crate::private_directory::ensure_private_directory(&run_dir).expect("private run dir");
+    let upstream = AppServerGatewayUpstream::start(&run_dir).expect("upstream should start");
+    let adapter = super::super::CodexAppServerAdapter::new("akra-k3-5-probe", "0")
+        .through_gateway_upstream(upstream.kernel_socket());
+
+    let startup = adapter.load_startup_context();
+    let catalog = adapter.load_session_catalog(SessionCatalogRequest {
+        limit: 5,
+        current_workspace_directory: None,
+    });
+    drop(adapter);
+    upstream.shutdown();
+    let _ = std::fs::remove_dir_all(&run_dir);
+
+    let startup = startup.expect("startup context should load through the proxy");
+    println!("initialize: {}", startup.initialize_detail);
+    println!("account ok: {}", startup.account_ok);
+    let catalog = catalog.expect("session catalog should load through the proxy");
+    assert!(
+        matches!(
+            catalog,
+            crate::domain::recent_sessions::SessionCatalog::Ready { .. }
+        ),
+        "session catalog should be ready: {catalog:?}"
+    );
+    println!("sessions: ready");
+}

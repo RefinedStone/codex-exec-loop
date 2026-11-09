@@ -15,11 +15,13 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
 
+use super::kernel::{KERNEL_METHOD_PREFIX, KernelSession};
 use super::recorder::{GatewayRecorder, RecordDirection, SessionRecording};
 use super::router::{ClientTextRoute, respond_to_akra_request, route_client_text};
 use crate::application::port::outbound::gateway_upstream_port::{
     GatewayUpstreamPort, GatewayUpstreamStream,
 };
+use crate::composition::repository_kernel::RepositoryKernelRegistry;
 
 /// proxy 는 바이트만 전달하므로 호스트 이름은 의미가 없다. app-server 의 WebSocket 경로이다.
 const UPSTREAM_WEBSOCKET_URL: &str = "ws://localhost/rpc";
@@ -46,6 +48,7 @@ enum SessionEnd {
 pub(super) async fn run_session<S>(
     client: S,
     upstream: Arc<dyn GatewayUpstreamPort>,
+    kernels: Arc<RepositoryKernelRegistry>,
     recorder: Option<Arc<GatewayRecorder>>,
 ) -> Result<()>
 where
@@ -90,6 +93,8 @@ where
         }
         let _ = client_sink.close().await;
     });
+    // 접속이 끝나면 함께 버려져 커널에서 떨어진다.
+    let mut kernel = KernelSession::new(kernels, outbox.clone());
 
     let client_to_upstream = async {
         while let Some(result) = client_stream.next().await {
@@ -110,7 +115,11 @@ where
                     }
                     ClientTextRoute::AkraRequest { id, method } => {
                         record(RecordDirection::Client, text.as_str());
-                        let response = respond_to_akra_request(id, &method, &upstream.snapshot());
+                        let response = if method.starts_with(KERNEL_METHOD_PREFIX) {
+                            kernel.respond(id, &method, text.as_str()).await
+                        } else {
+                            respond_to_akra_request(id, &method, &upstream.snapshot())
+                        };
                         record(RecordDirection::Gateway, &response);
                         if outbox.send(Message::text(response)).await.is_err() {
                             return SessionEnd::ClientClosed;

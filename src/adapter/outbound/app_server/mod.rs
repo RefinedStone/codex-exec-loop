@@ -18,6 +18,7 @@ pub(crate) mod gateway_upstream;
 mod planning_worker;
 mod planning_worker_skill;
 pub(crate) mod protocol;
+mod proxy_transport;
 pub(crate) mod runtime;
 mod startup_environment;
 mod steering;
@@ -622,7 +623,20 @@ pub struct CodexAppServerAdapter {
     thread_turn_options_port: Arc<dyn ConversationThreadTurnOptionsPort>,
 }
 
+/// Gateway upstream app-server 의 소켓이다. 데몬 커널은 이 소켓으로 Desktop 과 같은 app-server 를 쓴다 (K3-5).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct GatewayUpstreamSocket(pub(crate) String);
+
 impl CodexAppServerAdapter {
+    /// 이 adapter 의 연결이 자기 app-server 대신 Gateway upstream 에 붙는다.
+    pub(crate) fn through_gateway_upstream(mut self, socket: GatewayUpstreamSocket) -> Self {
+        self.connection_config
+            .set_transport(connection::AppServerTransport::GatewayProxy {
+                socket_argument: socket.0,
+            });
+        self
+    }
+
     pub fn new(client_name: impl Into<String>, client_version: impl Into<String>) -> Self {
         Self::from_environment(client_name, client_version)
     }

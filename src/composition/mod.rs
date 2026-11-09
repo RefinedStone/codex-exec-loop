@@ -9,12 +9,8 @@ pub(crate) mod clipboard_image_probe;
 pub(crate) mod core_effect_runner;
 pub(crate) mod core_effect_worker;
 pub(crate) mod core_turn_submission;
-// shortcut: K3-5 의 Gateway 연결 전까지 운영 코드에서 쓰지 않는다. 연결하면 이 allow 를 지운다.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod kernel_host;
 pub(crate) mod native_client_runtime;
 pub(crate) mod native_terminal_event_ingress;
 pub(crate) mod production;
-// shortcut: K3-5 의 Gateway 연결 전까지 운영 코드에서 쓰지 않는다. 연결하면 이 allow 를 지운다.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod repository_kernel;

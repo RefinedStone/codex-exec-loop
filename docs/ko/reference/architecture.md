@@ -558,6 +558,13 @@ Host 소유 Git 작업은 다음을 지킵니다.
 `build_kernel_for_workspace`(`src/composition/repository_kernel.rs`)는 런타임을 조립하기 전에 이 잠금을 잡고,
 커널을 버리면 호스트 스레드가 끝난 뒤 풀립니다.
 
+`akra-gateway` 는 `RepositoryKernelRegistry`(저장소당 커널 하나)를 가집니다. Gateway 세션은 `akra/kernel/*` 를
+`src/adapter/inbound/gateway/kernel.rs` 로 보내고, 이 모듈은 블로킹 커널 핸들을 `spawn_blocking` 으로 부르며
+붙은 접속마다 이벤트 스레드 하나를 둡니다. Gateway 가 만든 커널은 app-server adapter 를 Gateway upstream 에
+붙입니다. `AppServerTransport::GatewayProxy` 가 `codex app-server proxy --sock …` 을 띄우고,
+`src/adapter/outbound/app_server/proxy_transport.rs` 가 그 stdio 위에서 WebSocket 으로 말합니다. text 메시지
+하나를 JSON 한 줄로 바꾸므로 줄 단위 연결 코드는 그대로입니다.
+
 `NativeClientRuntime` 을 버리면 먼저 병렬 자동화 epoch 를 모두 닫습니다. 커널은 호스트 스레드에서 런타임을
 버리므로 epoch 가 잠금보다 먼저 닫힙니다. 이전 런타임의 작업 스레드는 다음 epoch 확인에서 멈춥니다.
 

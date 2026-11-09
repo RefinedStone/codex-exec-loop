@@ -93,7 +93,13 @@ impl GatewayUpstreamPort for EchoUpstream {
 async fn connect_client(upstream: Arc<EchoUpstream>) -> WebSocketStream<DuplexStream> {
     let (client_side, gateway_side) = tokio::io::duplex(DUPLEX_BUFFER_BYTES);
     tokio::spawn(async move {
-        let _ = run_session(gateway_side, upstream, None).await;
+        let _ = run_session(
+            gateway_side,
+            upstream,
+            Arc::new(crate::composition::repository_kernel::RepositoryKernelRegistry::default()),
+            None,
+        )
+        .await;
     });
     let (websocket, _) = tokio_tungstenite::client_async_with_config(
         "ws://localhost/",
@@ -225,4 +231,148 @@ fn arguments_accept_only_help() {
     );
     let error = parse_args(&["--port".to_string()]).unwrap_err().to_string();
     assert!(error.contains("unsupported argument: --port"), "{error}");
+}
+
+/// 실제 저장소 커널(자기 app-server, 시작 점검 없음)에 붙는 접속이다.
+async fn connect_kernel_client(
+    kernels: Arc<crate::composition::repository_kernel::RepositoryKernelRegistry>,
+) -> WebSocketStream<DuplexStream> {
+    let (client_side, gateway_side) = tokio::io::duplex(DUPLEX_BUFFER_BYTES);
+    let upstream = EchoUpstream::new(true);
+    tokio::spawn(async move {
+        let _ = run_session(gateway_side, upstream, kernels, None).await;
+    });
+    let (websocket, _) = tokio_tungstenite::client_async_with_config(
+        "ws://localhost/",
+        client_side,
+        Some(websocket_config()),
+    )
+    .await
+    .expect("client handshake through the gateway session should succeed");
+    websocket
+}
+
+async fn next_json_matching(
+    websocket: &mut WebSocketStream<DuplexStream>,
+    matches: impl Fn(&Value) -> bool,
+) -> Value {
+    loop {
+        let value: Value = serde_json::from_str(&next_text(websocket).await).unwrap();
+        if matches(&value) {
+            return value;
+        }
+    }
+}
+
+async fn kernel_request(
+    websocket: &mut WebSocketStream<DuplexStream>,
+    id: &str,
+    method: &str,
+    params: Value,
+) -> Value {
+    websocket
+        .send(Message::text(
+            json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}).to_string(),
+        ))
+        .await
+        .unwrap();
+    next_json_matching(websocket, |value| value["id"] == json!(id)).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_client_attaches_commands_and_receives_kernel_events() {
+    // plan 18 K3-5: akra/kernel/* reaches the repository kernel through the Gateway session.
+    let folder = crate::test_utils::platform_safe_temp_dir()
+        .join(format!("akra-gateway-kernel-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&folder);
+    std::fs::create_dir_all(&folder).unwrap();
+    let workspace = folder.display().to_string();
+    let kernels =
+        Arc::new(crate::composition::repository_kernel::RepositoryKernelRegistry::default());
+    let mut client = connect_kernel_client(kernels.clone()).await;
+
+    let refused = kernel_request(
+        &mut client,
+        "early",
+        "akra/kernel/query",
+        json!({"query": {"type": "auto_follow"}}),
+    )
+    .await;
+    assert_eq!(refused["error"]["code"], json!(-32011), "{refused}");
+
+    let attached = kernel_request(
+        &mut client,
+        "attach",
+        "akra/kernel/attach",
+        json!({"workspace": workspace, "client_name": "gateway-test"}),
+    )
+    .await;
+    assert_eq!(
+        attached["result"]["protocol_version"],
+        json!(0),
+        "{attached}"
+    );
+    assert!(
+        attached["result"]["kernel"]
+            .as_str()
+            .is_some_and(|kernel| !kernel.is_empty())
+    );
+
+    // The event and the command response travel on different paths, so either may come first.
+    client
+        .send(Message::text(
+            json!({
+                "jsonrpc": "2.0",
+                "id": "command",
+                "method": "akra/kernel/command",
+                "params": {"command": {"type": "set_auto_follow_max_turns", "value": 3}},
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+    let (mut commanded, mut event) = (None, None);
+    while commanded.is_none() || event.is_none() {
+        let value: Value = serde_json::from_str(&next_text(&mut client).await).unwrap();
+        if value["id"] == json!("command") {
+            commanded = Some(value);
+        } else if value["params"]["event"]["type"] == json!("auto_follow") {
+            event = Some(value);
+        }
+    }
+    assert_eq!(commanded.unwrap()["result"], json!({"processed": true}));
+    assert_eq!(event.unwrap()["params"]["event"]["max_turns"], json!(3));
+
+    let queried = kernel_request(
+        &mut client,
+        "query",
+        "akra/kernel/query",
+        json!({"query": {"type": "auto_follow"}}),
+    )
+    .await;
+    assert_eq!(queried["result"]["type"], json!("auto_follow"), "{queried}");
+    assert_eq!(queried["result"]["max_turns"], json!(3), "{queried}");
+
+    let described =
+        kernel_request(&mut client, "describe", "akra/kernel/describe", json!({})).await;
+    assert!(
+        described["result"]["methods"]
+            .as_array()
+            .is_some_and(|methods| !methods.is_empty())
+    );
+
+    let detached = kernel_request(&mut client, "detach", "akra/kernel/detach", json!({})).await;
+    assert_eq!(detached["result"], json!({}));
+    let refused = kernel_request(
+        &mut client,
+        "late",
+        "akra/kernel/command",
+        json!({"command": {"type": "pause_auto_follow"}}),
+    )
+    .await;
+    assert_eq!(refused["error"]["code"], json!(-32011), "{refused}");
+
+    drop(client);
+    drop(kernels);
+    let _ = std::fs::remove_dir_all(&folder);
 }
