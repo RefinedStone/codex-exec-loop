@@ -418,7 +418,8 @@ impl NativeTuiApp {
         let intent = PlanningWorkspaceResetIntent::new(
             self.planning_workspace_directory(),
             core_planning_reset_target(parsed.target),
-        );
+        )
+        .with_confirmation(parsed.confirmed);
         let outcome = self.reduce_core_client_event(CoreInput::Command(
             AppCommand::ResetPlanningWorkspace(intent),
         ));
@@ -432,7 +433,7 @@ impl NativeTuiApp {
         match admission {
             PlanningWorkspaceOperationAdmission::Started { correlation } => {
                 let status_text = match &correlation.operation {
-                    PlanningWorkspaceOperationKind::Reset { target } => {
+                    PlanningWorkspaceOperationKind::Reset { target, .. } => {
                         format!("planning reset in progress / target: {}", target.label())
                     }
                     PlanningWorkspaceOperationKind::StageSimpleDraft => {
@@ -493,6 +494,7 @@ impl NativeTuiApp {
                         Some(active_target),
                         PlanningWorkspaceOperationKind::Reset {
                             target: requested_target,
+                            ..
                         },
                     ) => format!(
                         "planning workspace busy / active reset: {} / requested reset: {} / wait for the active operation to finish",
