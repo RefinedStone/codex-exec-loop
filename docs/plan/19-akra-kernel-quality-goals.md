@@ -6,7 +6,8 @@
   기준은 [architecture.md](../reference/architecture.md) 이다.
 - 상위 계획: [18 Akra 커널 아키텍처](18-akra-kernel-architecture.md). 이 문서는 plan 18 의 K4~K6 에 **완료 기준이
   되는 성질**을 더한다. plan 18 의 결정(KP-01~07)은 바꾸지 않는다.
-- 관련 설계: [K2 thread 세션](18-k2-thread-sessions.md) (Q-K2-2, Q-K2-3), [K3 커널 데몬](18-k3-kernel-daemon-protocol.md).
+- 관련 설계: [K2 thread 세션](18-k2-thread-sessions.md) (Q-K2-2, Q-K2-3), [K3 커널 데몬](18-k3-kernel-daemon-protocol.md),
+  [20 관찰-제안 구조](20-akra-observe-and-offer.md) (이 성질들이 받쳐야 하는 사용자 기능).
 - 기준일: 2026-11-09 (Asia/Seoul)
 - 기준 커밋: `09e898dd` (`origin/prerelease`, K3-3b·K3-4 머지 뒤).
 

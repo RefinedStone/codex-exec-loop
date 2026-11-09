@@ -35,6 +35,7 @@ their exact headings, phrases, surface rows, or test-entrypoint inventory.
 
 The following content is not implementation truth:
 
+- [plan/20-akra-observe-and-offer.md](plan/20-akra-observe-and-offer.md): proposed overview: Akra observes plain Desktop conversations, recognizes events (for example a new PR), offers its features to the user, and acts on the answer; Codex keeps the transcript, Akra owns oversight and attention (Korean)
 - [plan/19-akra-kernel-quality-goals.md](plan/19-akra-kernel-quality-goals.md): proposed quality goals for the Akra kernel (restart safety, reproducible races, self-description, concurrency as policy, engine neutrality) and the order to reach them (Korean)
 - [plan/18-akra-kernel-architecture.md](plan/18-akra-kernel-architecture.md): approved kernel architecture where people and AI agents use one bidirectional command and event protocol (Korean)
 - [plan/18-k1-headless-decision-loop.md](plan/18-k1-headless-decision-loop.md): proposed K1 steps that move decision rules and timers out of the TUI (Korean)
