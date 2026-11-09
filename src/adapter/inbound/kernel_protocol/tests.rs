@@ -83,7 +83,6 @@ fn every_command_maps_to_one_core_command() {
                 workspace_directory: "/workspace".to_string(),
                 thread_id: "thread-2".to_string(),
                 prompt: "fix the failing test".to_string(),
-                parallel_mode_enabled: false,
             }
         )))
     );
@@ -161,9 +160,15 @@ fn unknown_commands_and_fields_are_refused() {
         )
         .is_err()
     );
-    let request: CommandRequest = serde_json::from_value(json!({"command": {"type": "stop_all"}}))
-        .expect("idempotency key is optional");
-    assert_eq!(request.idempotency_key, None);
+    serde_json::from_value::<CommandRequest>(json!({"command": {"type": "stop_all"}}))
+        .expect("a command request needs only the command");
+    assert!(
+        serde_json::from_value::<CommandRequest>(
+            json!({"command": {"type": "stop_all"}, "idempotency_key": "k-1"})
+        )
+        .is_err(),
+        "v0 has no idempotency key; a client must not think a retry is deduplicated"
+    );
 }
 
 #[test]
@@ -217,6 +222,7 @@ fn only_coarse_core_events_are_exported() {
         Some(KernelEvent::PromptSubmission(PromptSubmissionState {
             thread_id: "thread-2".to_string(),
             status: PromptSubmissionStatus::Rejected,
+            reason: Some(PromptSubmissionReason::UnknownThread),
             message: Some("unknown thread; load_sessions lists the known threads".to_string()),
         }))
     );
@@ -228,6 +234,7 @@ fn only_coarse_core_events_are_exported() {
         Some(KernelEvent::PromptSubmission(PromptSubmissionState {
             thread_id: "thread-2".to_string(),
             status: PromptSubmissionStatus::Rejected,
+            reason: Some(PromptSubmissionReason::ParallelMode),
             message: Some("parallel mode is on; submit the prompt in the TUI".to_string()),
         }))
     );
@@ -241,6 +248,7 @@ fn only_coarse_core_events_are_exported() {
         Some(KernelEvent::PromptSubmission(PromptSubmissionState {
             thread_id: "thread-2".to_string(),
             status: PromptSubmissionStatus::Failed,
+            reason: Some(PromptSubmissionReason::PreparationFailed),
             message: Some("planning is invalid".to_string()),
         }))
     );
@@ -261,10 +269,20 @@ fn events_and_description_have_stable_wire_shapes() {
         serde_json::to_value(KernelEvent::PromptSubmission(PromptSubmissionState {
             thread_id: "thread-1".to_string(),
             status: PromptSubmissionStatus::Preparing,
+            reason: None,
             message: None,
         }))
         .expect("event should serialize"),
         json!({"type": "prompt_submission", "thread_id": "thread-1", "status": "preparing"})
+    );
+    // plan 19 P3: a refusal carries a reason code that tells the client what to do next.
+    assert_eq!(
+        serde_json::to_value(KernelEvent::from_core(&AppEvent::ThreadPromptSubmitted {
+            thread_id: "thread-1".to_string(),
+            outcome: ThreadPromptOutcome::Submitted(TurnSubmissionAdmission::RejectedUnavailable),
+        }))
+        .expect("event should serialize")["reason"],
+        json!("unavailable")
     );
     let description = serde_json::to_value(describe()).expect("description should serialize");
     assert_eq!(description["protocol_version"], json!(PROTOCOL_VERSION));
@@ -304,6 +322,7 @@ fn events_and_description_have_stable_wire_shapes() {
         KernelEvent::PromptSubmission(PromptSubmissionState {
             thread_id: "thread-1".to_string(),
             status: PromptSubmissionStatus::Submitted,
+            reason: None,
             message: None,
         }),
         KernelEvent::Resync,

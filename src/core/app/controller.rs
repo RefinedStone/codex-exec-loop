@@ -307,9 +307,14 @@ impl CoreController {
                     snapshot: self.shared_snapshot(),
                 }
             }
+            // 호스트를 거치지 않은 제출은 병렬 모드를 모른다. 같은 작업이 병렬 slot 에도 나갈 수 있으므로 거절한다.
             CoreInput::Command(AppCommand::SubmitThreadPrompt(submission)) => {
-                self.begin_thread_prompt(*submission)
+                self.begin_thread_prompt(*submission, true)
             }
+            CoreInput::Command(AppCommand::AdmitThreadPrompt {
+                submission,
+                parallel_mode_enabled,
+            }) => self.begin_thread_prompt(*submission, parallel_mode_enabled),
             CoreInput::Command(AppCommand::CancelManualPromptPreparation) => {
                 let Some(correlation) = self.planning.cancel_manual_prompt_preparation() else {
                     return self.unchanged_outcome();
@@ -1531,8 +1536,9 @@ impl CoreController {
     fn begin_thread_prompt(
         &mut self,
         submission: super::ThreadPromptSubmission,
+        parallel_mode_enabled: bool,
     ) -> CoreDispatchOutcome {
-        let (admission, effects) = if submission.parallel_mode_enabled {
+        let (admission, effects) = if parallel_mode_enabled {
             (
                 super::ThreadPromptAdmission::RejectedParallelMode,
                 Vec::new(),
@@ -9661,14 +9667,14 @@ mod tests {
     }
 
     fn thread_prompt(thread_id: &str, prompt: &str) -> CoreInput {
-        CoreInput::Command(AppCommand::SubmitThreadPrompt(Box::new(
-            super::super::ThreadPromptSubmission {
+        CoreInput::Command(AppCommand::AdmitThreadPrompt {
+            submission: Box::new(super::super::ThreadPromptSubmission {
                 workspace_directory: "/tmp/workspace".to_string(),
                 thread_id: thread_id.to_string(),
                 prompt: prompt.to_string(),
-                parallel_mode_enabled: false,
-            },
-        )))
+            }),
+            parallel_mode_enabled: false,
+        })
     }
 
     fn thread_prompt_admission(
@@ -9837,19 +9843,31 @@ mod tests {
         // plan 18 K3-3b: parallel intake lives in the TUI, so core does not start a main-session turn.
         let mut controller = CoreController::new();
         load_test_session_catalog(&mut controller);
-        let refused = controller.handle_input(CoreInput::Command(AppCommand::SubmitThreadPrompt(
-            Box::new(super::super::ThreadPromptSubmission {
+        let refused = controller.handle_input(CoreInput::Command(AppCommand::AdmitThreadPrompt {
+            submission: Box::new(super::super::ThreadPromptSubmission {
                 workspace_directory: "/tmp/workspace".to_string(),
                 thread_id: "thread-beta".to_string(),
                 prompt: "fix the test".to_string(),
-                parallel_mode_enabled: true,
             }),
-        )));
+            parallel_mode_enabled: true,
+        }));
         assert_eq!(
             thread_prompt_admission(&refused),
             super::super::ThreadPromptAdmission::RejectedParallelMode
         );
         assert!(refused.effects.is_empty(), "no planning task is made");
+        // 호스트를 거치지 않은 제출은 병렬 모드를 모르므로 같은 이유로 거절한다.
+        let unhosted = controller.handle_input(CoreInput::Command(AppCommand::SubmitThreadPrompt(
+            Box::new(super::super::ThreadPromptSubmission {
+                workspace_directory: "/tmp/workspace".to_string(),
+                thread_id: "thread-beta".to_string(),
+                prompt: "fix the test".to_string(),
+            }),
+        )));
+        assert_eq!(
+            thread_prompt_admission(&unhosted),
+            super::super::ThreadPromptAdmission::RejectedParallelMode
+        );
     }
 
     #[test]
