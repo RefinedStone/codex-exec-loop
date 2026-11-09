@@ -287,6 +287,10 @@ the desktop app itself is not shipped yet.
 - Store-backed claims allow official refresh and distributor recovery after restart; recovery does
   not hard-reset operator-owned integration history.
 - Non-Git workspaces use planning authority but not the full Git worktree pool.
+- One Akra TUI runs per repository, including its linked worktrees. The TUI takes the repository
+  kernel lock `$AKRA_HOME/projects/<namespace>/runtime/kernel.lock` before it opens the screen; a
+  second TUI prints `another Akra kernel already runs for repository …` with the holder pid and exits.
+  If the lock file cannot be opened at all, the TUI warns and starts without the lock.
 - Planning detail authoring is manual; the `llm-assisted` editor path is disabled.
 - Real-terminal evidence is still required for primitive-sensitive fullscreen TUI changes and affected
   restart/distributor/multi-worktree flows.

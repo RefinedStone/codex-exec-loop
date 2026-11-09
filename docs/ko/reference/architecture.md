@@ -548,6 +548,12 @@ Host 소유 Git 작업은 다음을 지킵니다.
   과도한 변경, unmerged entry, 숨겨진 dirty submodule state를 거부합니다.
 - 격리된 credential-free network config와 별도로 검증한 API identity를 사용합니다.
 
+저장소 하나의 결정 고리는 프로세스 하나만 돌립니다. composition 이 사용자 전용 planning runtime 디렉터리를
+준비해서 `RepositoryKernelLockAdapter`(`src/adapter/outbound/filesystem/kernel_lock.rs`)에 넘기고, adapter 는 그
+안의 `kernel.lock` 에 OS 파일 잠금을 겁니다. linked worktree 도 같은 디렉터리로 갑니다. TUI 와
+`build_kernel_for_workspace`(`src/composition/repository_kernel.rs`)는 런타임을 조립하기 전에 이 잠금을 잡고,
+커널을 버리면 호스트 스레드가 끝난 뒤 풀립니다.
+
 Subprocess는 `src/subprocess.rs`를 사용합니다. Linux는 process-group과 제한된 `/proc` descendant
 containment, Windows는 kill-on-close Job, 그 밖의 Unix는 process-group containment를 보장합니다.
 같은 OS 사용자 프로세스의 악의적인 race는 filesystem-only threat boundary 밖입니다.

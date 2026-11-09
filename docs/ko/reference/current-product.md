@@ -231,6 +231,10 @@ parallel, Git, GitHub 권위를 바꾸지 않고 재생하며 PR 검증 복구 �
 - Store-backed claim으로 재시작 후 공식 refresh와 distributor 복구가 가능하지만 operator 소유
   integration history를 hard reset하지 않습니다.
 - Non-Git workspace는 planning authority를 사용하지만 Git worktree pool은 사용하지 않습니다.
+- Akra TUI 는 저장소(linked worktree 포함)마다 하나만 돕니다. TUI 는 화면을 열기 전에 저장소 커널 잠금
+  `$AKRA_HOME/projects/<namespace>/runtime/kernel.lock` 을 잡습니다. 두 번째 TUI 는 쥔 pid 와 함께
+  `another Akra kernel already runs for repository …` 를 보이고 끝납니다. 잠금 파일을 아예 열지 못하면 경고를 남기고
+  잠금 없이 시작합니다.
 - Planning 상세 작성은 수동이며 `llm-assisted` editor 경로는 비활성화되어 있습니다.
 - Primitive-sensitive TUI 변경과 관련 restart/distributor/multi-worktree 흐름은 실제 terminal
   evidence가 필요합니다.
