@@ -9,7 +9,9 @@ use std::time::{Duration, Instant};
 
 use crate::composition::native_client_runtime::NativeClientRuntime;
 use crate::core::app::{AppCommand, AppEvent, AppSnapshot, CoreInput, ThreadActivitySummary};
-use crate::core::native_client_port::{NativeClientDispatchOutcome, NativeClientEvent};
+use crate::core::native_client_port::{
+    NativeClientDispatchOutcome, NativeClientEvent, ParallelModeControlPlanePresentationEvent,
+};
 
 /// 커널 스레드가 커널 입력을 기다리는 최대 시간이다. 클라이언트 명령도 이 주기 안에 처리된다.
 /// shortcut: 클라이언트 명령은 이 대기가 끝나야 처리되어 최대 50ms 늦다. 지연이 문제가 되면 클라이언트 입력함과
@@ -22,9 +24,11 @@ const CLIENT_EVENT_CAPACITY: usize = 1024;
 pub(crate) type KernelClientId = u64;
 
 /// 클라이언트가 받는 이벤트이다. core 이벤트를 프로토콜 이벤트로 바꾸는 일은 inbound adapter 가 한다.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub(crate) enum KernelHostEvent {
     Core(Box<AppEvent>),
+    /// 병렬 제어부의 이벤트이다 (병렬 작업 진행, 감독 스냅샷). 프로토콜 이벤트로 바꾸는 일은 K3-6 에서 한다.
+    Parallel(Box<ParallelModeControlPlanePresentationEvent>),
     /// 이벤트가 넘쳐 일부를 버렸다. 클라이언트는 조회로 다시 맞춘다.
     Resync,
 }
@@ -183,6 +187,7 @@ impl KernelHostLoop {
             for outcome in outcomes {
                 self.publish(outcome);
             }
+            self.flush_pending_resyncs();
         }
     }
 
@@ -232,32 +237,46 @@ impl KernelHostLoop {
         }
     }
 
-    /// core 이벤트를 모든 클라이언트에 나눈다. K3-3 에서 대상(thread, 클라이언트)별로 나눈다.
+    /// core 이벤트와 병렬 제어부 이벤트를 모든 클라이언트에 나눈다. K3-3 에서 대상(thread, 클라이언트)별로 나눈다.
     fn publish(&mut self, outcome: NativeClientDispatchOutcome) {
-        let events = match outcome {
-            NativeClientDispatchOutcome::Core(core)
-            | NativeClientDispatchOutcome::Combined { core, .. } => core.events,
-            NativeClientDispatchOutcome::Parallel(_) => return,
+        let (core_events, parallel_events) = match outcome {
+            NativeClientDispatchOutcome::Core(core) => (core.events, Vec::new()),
+            NativeClientDispatchOutcome::Parallel(parallel) => {
+                (Vec::new(), parallel.presentation_events)
+            }
+            NativeClientDispatchOutcome::Combined { core, parallel } => {
+                (core.events, parallel.presentation_events)
+            }
         };
-        for event in events {
+        for event in core_events {
             if let AppEvent::ThreadActivityChanged(activity) = &event {
                 self.thread_activity = activity.clone();
             }
-            self.clients.retain(|_, client| {
-                deliver(client, KernelHostEvent::Core(Box::new(event.clone())))
-            });
+            self.broadcast(KernelHostEvent::Core(Box::new(event)));
         }
+        for event in parallel_events {
+            self.broadcast(KernelHostEvent::Parallel(Box::new(event)));
+        }
+    }
+
+    fn broadcast(&mut self, event: KernelHostEvent) {
+        self.clients
+            .retain(|_, client| deliver(client, event.clone()));
+    }
+
+    /// 이벤트를 버린 클라이언트에 `Resync` 를 보낸다. 새 이벤트가 없어도 다음 주기에 알린다.
+    fn flush_pending_resyncs(&mut self) {
+        self.clients.retain(|_, client| flush_resync(client));
     }
 }
 
 /// 이벤트 하나를 보낸다. 받는 쪽이 사라졌으면 `false` 이다.
 fn deliver(client: &mut ClientSink, event: KernelHostEvent) -> bool {
+    if !flush_resync(client) {
+        return false;
+    }
     if client.resync_pending {
-        match client.events.try_send(KernelHostEvent::Resync) {
-            Ok(()) => client.resync_pending = false,
-            Err(TrySendError::Full(_)) => return true,
-            Err(TrySendError::Disconnected(_)) => return false,
-        }
+        return true;
     }
     match client.events.try_send(event) {
         Ok(()) => true,
@@ -269,6 +288,21 @@ fn deliver(client: &mut ClientSink, event: KernelHostEvent) -> bool {
     }
 }
 
+/// 밀린 `Resync` 를 보낸다. 아직 자리가 없으면 다음에 다시 보낸다. 받는 쪽이 사라졌으면 `false` 이다.
+fn flush_resync(client: &mut ClientSink) -> bool {
+    if !client.resync_pending {
+        return true;
+    }
+    match client.events.try_send(KernelHostEvent::Resync) {
+        Ok(()) => {
+            client.resync_pending = false;
+            true
+        }
+        Err(TrySendError::Full(_)) => true,
+        Err(TrySendError::Disconnected(_)) => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -276,6 +310,7 @@ mod tests {
         post_turn_correlation, post_turn_execution, recording_runtime_for_test,
     };
     use crate::core::app::{CoreEffectCompletion, TurnStreamEvent};
+    use crate::core::native_client_port::NativeParallelDispatchOutcome;
     use crate::domain::conversation_runtime_envelope::{
         ConversationRuntimeConfigurationRequest, ConversationRuntimeEnvelope,
     };
@@ -404,14 +439,63 @@ mod tests {
             "a full queue drops, not blocks"
         );
         assert!(client.resync_pending);
-        assert_eq!(receiver.try_recv(), Ok(event.clone()));
+        assert!(matches!(receiver.try_recv(), Ok(KernelHostEvent::Core(_))));
         assert!(deliver(&mut client, event.clone()));
-        assert_eq!(
-            receiver.try_recv(),
-            Ok(KernelHostEvent::Resync),
+        assert!(
+            matches!(receiver.try_recv(), Ok(KernelHostEvent::Resync)),
             "the client learns it missed events before new ones"
         );
         drop(receiver);
         assert!(!deliver(&mut client, event), "a gone client is dropped");
+    }
+
+    #[test]
+    fn parallel_control_plane_events_reach_clients() {
+        let (runtime, _turns) = recording_runtime_for_test();
+        let (_inbox, inputs) = mpsc::channel();
+        let mut host = KernelHostLoop::new(runtime, inputs);
+        let (sender, receiver) = mpsc::sync_channel(4);
+        host.clients.insert(
+            1,
+            ClientSink {
+                events: sender,
+                resync_pending: false,
+            },
+        );
+
+        host.publish(NativeClientDispatchOutcome::Parallel(
+            NativeParallelDispatchOutcome::from_events(vec![
+                ParallelModeControlPlanePresentationEvent::ModeDisabled,
+            ]),
+        ));
+
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(KernelHostEvent::Parallel(event))
+                if matches!(*event, ParallelModeControlPlanePresentationEvent::ModeDisabled)
+        ));
+    }
+
+    #[test]
+    fn a_pending_resync_goes_out_without_a_new_event() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let mut client = ClientSink {
+            events: sender,
+            resync_pending: false,
+        };
+        let event = KernelHostEvent::Core(Box::new(AppEvent::ThreadActivityChanged(Vec::new())));
+        assert!(deliver(&mut client, event.clone()));
+        assert!(deliver(&mut client, event));
+        assert!(client.resync_pending);
+
+        assert!(flush_resync(&mut client), "a full queue keeps the resync");
+        assert!(client.resync_pending);
+        assert!(matches!(receiver.try_recv(), Ok(KernelHostEvent::Core(_))));
+        assert!(flush_resync(&mut client));
+        assert!(
+            matches!(receiver.try_recv(), Ok(KernelHostEvent::Resync)),
+            "the next host cycle tells the client even when no event follows"
+        );
+        assert!(!client.resync_pending);
     }
 }
