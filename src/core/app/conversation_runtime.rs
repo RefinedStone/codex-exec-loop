@@ -96,8 +96,8 @@ pub struct AutoFollowAuthoritySnapshot {
 }
 
 /*
- * 클라이언트가 보지 않는 thread 중 일이 남은 것의 요약이다 (plan 18 K2-4). 세션 목록에 실행 중, 승인 대기,
- * 자동 후속 표시를 그릴 때 쓴다.
+ * 일이 남은 thread(보는 thread 포함)의 요약이다 (plan 18 K2-4, K3-3a). 세션 목록에 실행 중, 승인 대기,
+ * 자동 후속 표시를 그릴 때 쓰고, 원격 클라이언트는 thread 를 지정한 명령에 쓴다.
  */
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThreadActivitySummary {

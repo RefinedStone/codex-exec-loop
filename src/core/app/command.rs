@@ -72,14 +72,11 @@ pub enum AppCommand {
     PrepareManualPrompt(Box<ManualPromptPreparationIntent>),
     CancelManualPromptPreparation,
     SubmitTurn(Box<TurnSubmissionRequest>),
-    // thread 를 지정한 프롬프트이다 (plan 18 K3-3b). 호스트가 병렬 모드 값을 붙여 `AdmitThreadPrompt` 로 바꾼다.
+    // thread 를 지정한 프롬프트이다 (plan 18 K3-3b). core 가 준비와 제출을 이어서 한다.
     SubmitThreadPrompt(Box<ThreadPromptSubmission>),
-    // 호스트 전용이다 (plan 18 K3-3b). core 가 준비와 제출을 이어서 한다. 병렬 모드 값은 병렬 제어부를 가진
-    // 호스트만 안다.
-    AdmitThreadPrompt {
-        submission: Box<ThreadPromptSubmission>,
-        parallel_mode_enabled: bool,
-    },
+    // 호스트 전용이다 (plan 18 K3-3b). 병렬 제어부의 병렬 모드 값이 바뀌면 호스트가 알린다. core 는 thread 지정
+    // 프롬프트를 받을 때와 준비가 끝나 제출할 때 이 값을 본다.
+    SetParallelModeEnabled(bool),
     RequestStopAllSessions,
     SteerTurn(ConversationTurnSteerRequest),
     SubmitApprovalDecision {

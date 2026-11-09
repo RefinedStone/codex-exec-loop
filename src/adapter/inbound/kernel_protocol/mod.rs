@@ -5,11 +5,11 @@
 use serde::{Deserialize, Serialize};
 
 use crate::core::app::{
-    ActiveTurnPhase, AppCommand, AppEvent, ApprovalAuthorityPhase, ApprovalAuthoritySnapshot,
-    ConversationRuntimeSnapshot, PlanningWorkspaceResetIntent, PlanningWorkspaceResetTarget,
-    PostTurnAuthoritySnapshot, SESSION_CATALOG_PAGE_SIZE, SessionCatalogLoadIntent,
-    SessionCatalogSnapshot, ThreadActivitySummary, ThreadPromptAdmission, ThreadPromptOutcome,
-    ThreadPromptSubmission, TurnSubmissionAdmission,
+    AppCommand, AppEvent, ApprovalDecisionAdmission, ConversationRuntimeSnapshot,
+    PlanningWorkspaceResetIntent, PlanningWorkspaceResetTarget, SESSION_CATALOG_PAGE_SIZE,
+    SessionCatalogLoadIntent, SessionCatalogSnapshot, ThreadActivitySummary, ThreadPromptAdmission,
+    ThreadPromptOutcome, ThreadPromptPreparationFailure, ThreadPromptSubmission,
+    TurnSteerAdmission, TurnSubmissionAdmission,
 };
 use crate::domain::conversation::{
     ConversationApprovalDecision, ConversationApprovalRequestIdentity, ConversationTurnSteerRequest,
@@ -88,11 +88,81 @@ pub struct CommandRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommandResponse {
-    /// 커널이 명령을 처리했다. 받아들였는지와 결과는 그 전에 `akra/kernel/event` 로 온다 (예:
-    /// `prompt_submission`, `thread_activity`). `false` 는 커널이 끝나서 명령을 넣지 못한 경우이다.
-    pub accepted: bool,
+    /// 커널이 명령을 처리했다. `false` 는 커널이 끝나서 명령을 넣지 못한 경우이다.
+    pub processed: bool,
+    /// 커널이 이 명령을 바로 거절한 이유이다 (`steer_turn`, `decide_approval`). `submit_prompt` 의 진행과 거절은
+    /// `prompt_submission` 이벤트로 온다. 받아들인 명령의 결과는 이벤트(`thread_activity` 등)로 온다.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
+    pub rejection: Option<CommandRejection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommandRejection {
+    pub reason: CommandRejectionReason,
+    /// 사람이 읽는 설명이다. 판단에는 `reason` 을 쓴다.
+    pub message: String,
+}
+
+/// 명령을 거절한 이유이다. 이름이 다음 행동을 알려 준다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandRejectionReason {
+    /// 같은 턴에 보낸 steer 가 아직 처리 중이다. 끝난 뒤 다시 보낸다.
+    SteerInFlight,
+    /// 그 thread 에 `expected_turn_id` 로 도는 턴이 없다. `thread_activity` 의 `active_turn_id` 를 쓴다.
+    NoMatchingTurn,
+    /// 같은 승인에 보낸 결정이 아직 처리 중이다.
+    DecisionInFlight,
+    /// 기다리는 승인 중에 그 id 가 없다. `thread_activity` 의 `approval` 을 쓴다.
+    NoMatchingApproval,
+}
+
+impl CommandResponse {
+    /// 커널이 명령을 처리하며 낸 core 이벤트로 응답을 만든다. `None` 은 커널이 끝난 경우이다.
+    pub fn from_core(events: Option<&[AppEvent]>) -> Self {
+        let Some(events) = events else {
+            return Self {
+                processed: false,
+                rejection: None,
+            };
+        };
+        Self {
+            processed: true,
+            rejection: events.iter().find_map(CommandRejection::from_core),
+        }
+    }
+}
+
+impl CommandRejection {
+    fn from_core(event: &AppEvent) -> Option<Self> {
+        let (reason, message) = match event {
+            AppEvent::TurnSteerAdmissionResolved(TurnSteerAdmission::RejectedActive { .. }) => (
+                CommandRejectionReason::SteerInFlight,
+                "another steer for this turn is still in flight",
+            ),
+            AppEvent::TurnSteerAdmissionResolved(TurnSteerAdmission::RejectedUnavailable) => (
+                CommandRejectionReason::NoMatchingTurn,
+                "the thread has no running turn with that id",
+            ),
+            AppEvent::ApprovalDecisionAdmissionResolved(
+                ApprovalDecisionAdmission::RejectedActive { .. },
+            ) => (
+                CommandRejectionReason::DecisionInFlight,
+                "a decision for this approval is still in flight",
+            ),
+            AppEvent::ApprovalDecisionAdmissionResolved(
+                ApprovalDecisionAdmission::RejectedUnavailable,
+            ) => (
+                CommandRejectionReason::NoMatchingApproval,
+                "no pending approval has that id",
+            ),
+            _ => return None,
+        };
+        Some(Self {
+            reason,
+            message: message.to_string(),
+        })
+    }
 }
 
 /*
@@ -252,11 +322,11 @@ fn non_blank(field: &str, value: String) -> Result<String, KernelProtocolError> 
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum KernelQuery {
     Sessions {},
-    ConversationRuntime {},
+    AutoFollow {},
     ThreadActivity {},
 }
 
-const QUERIES: [&str; 3] = ["sessions", "conversation_runtime", "thread_activity"];
+const QUERIES: [&str; 3] = ["sessions", "auto_follow", "thread_activity"];
 
 // event -------------------------------------------------------------------------------------------
 
@@ -268,7 +338,7 @@ const QUERIES: [&str; 3] = ["sessions", "conversation_runtime", "thread_activity
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum KernelEvent {
     Sessions(SessionsState),
-    ConversationRuntime(ConversationRuntimeSummary),
+    AutoFollow(AutoFollowSettings),
     ThreadActivity {
         threads: Vec<ThreadActivity>,
     },
@@ -280,7 +350,7 @@ pub enum KernelEvent {
 
 const EVENTS: [&str; 5] = [
     "sessions",
-    "conversation_runtime",
+    "auto_follow",
     "thread_activity",
     "prompt_submission",
     "resync",
@@ -293,9 +363,9 @@ impl KernelEvent {
             AppEvent::SessionCatalogChanged(snapshot) => {
                 Some(Self::Sessions(SessionsState::from_core(snapshot)))
             }
-            AppEvent::ConversationRuntimeAuthorityChanged(runtime) => Some(
-                Self::ConversationRuntime(ConversationRuntimeSummary::from_core(runtime)),
-            ),
+            AppEvent::ConversationRuntimeAuthorityChanged(runtime) => {
+                Some(Self::AutoFollow(AutoFollowSettings::from_core(runtime)))
+            }
             AppEvent::ThreadActivityChanged(threads) => Some(Self::ThreadActivity {
                 threads: threads.iter().map(ThreadActivity::from_core).collect(),
             }),
@@ -306,7 +376,7 @@ impl KernelEvent {
                 thread_id, admission,
             ))),
             AppEvent::ThreadPromptSubmitted { thread_id, outcome } => Some(Self::PromptSubmission(
-                PromptSubmissionState::submitted(thread_id, outcome),
+                PromptSubmissionState::from_outcome(thread_id, outcome),
             )),
             _ => None,
         }
@@ -377,80 +447,22 @@ impl SessionsState {
     }
 }
 
+/*
+ * 자동 후속 설정이다. 설정은 모든 thread 에 같이 걸린다. thread 별 진행(자동 후속이 도는지, 턴, 승인)은
+ * `thread_activity` 가 알린다. 보는 대화의 턴 상태는 TUI 화면용이라 v0 에서 보내지 않는다 (K3 §3.2).
+ */
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ConversationRuntimeSummary {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub active_turn: Option<ActiveTurn>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub approval: Option<PendingApproval>,
-    pub auto_follow: AutoFollow,
-    pub post_turn: PostTurnStatus,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ActiveTurn {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn_id: Option<String>,
-    pub running: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PendingApproval {
-    pub approval_id: String,
-    pub server_request_id: String,
-    pub summary: String,
-    pub details: Vec<String>,
-    pub decision_in_flight: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AutoFollow {
+pub struct AutoFollowSettings {
     pub max_turns: usize,
-    pub completed_turns: usize,
-    pub active: bool,
     pub paused: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PostTurnStatus {
-    Idle,
-    Evaluating,
-    AwaitingRoute,
-    Settled,
-}
-
-impl ConversationRuntimeSummary {
+impl AutoFollowSettings {
     pub fn from_core(runtime: &ConversationRuntimeSnapshot) -> Self {
         Self {
-            active_turn: runtime.active_turn.as_ref().map(|turn| ActiveTurn {
-                turn_id: turn.turn_id.clone(),
-                running: turn.phase == ActiveTurnPhase::Running,
-            }),
-            approval: runtime.approval.as_ref().map(pending_approval),
-            auto_follow: AutoFollow {
-                max_turns: runtime.auto_follow.max_auto_turns,
-                completed_turns: runtime.auto_follow.completed_auto_turns,
-                active: runtime.auto_follow.has_live_activity(),
-                paused: runtime.auto_follow.continuation_paused,
-            },
-            post_turn: match runtime.post_turn {
-                PostTurnAuthoritySnapshot::Idle => PostTurnStatus::Idle,
-                PostTurnAuthoritySnapshot::Evaluating { .. } => PostTurnStatus::Evaluating,
-                PostTurnAuthoritySnapshot::AwaitingRoute { .. } => PostTurnStatus::AwaitingRoute,
-                PostTurnAuthoritySnapshot::Settled { .. } => PostTurnStatus::Settled,
-            },
+            max_turns: runtime.auto_follow.max_auto_turns,
+            paused: runtime.auto_follow.continuation_paused,
         }
-    }
-}
-
-fn pending_approval(approval: &ApprovalAuthoritySnapshot) -> PendingApproval {
-    PendingApproval {
-        approval_id: approval.request.approval_id.clone(),
-        server_request_id: approval.request.server_request_id.clone(),
-        summary: approval.request.summary.clone(),
-        details: approval.request.details.clone(),
-        decision_in_flight: approval.phase != ApprovalAuthorityPhase::Pending,
     }
 }
 
@@ -495,9 +507,14 @@ impl ThreadActivity {
 pub struct PromptSubmissionState {
     pub thread_id: String,
     pub status: PromptSubmissionStatus,
-    /// `rejected`, `failed` 의 이유 코드이다. 클라이언트와 에이전트는 이 값으로 다음 행동을 고른다 (plan 19 P3).
+    /// `rejected`, `queued`, `failed` 의 이유 코드이다. 클라이언트와 에이전트는 이 값으로 다음 행동을 고른다
+    /// (plan 19 P3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<PromptSubmissionReason>,
+    /// 준비가 큐에 만들거나 고친 planning 작업이다. 이 값이 있으면 같은 프롬프트를 다시 보내지 않는다. 다시 보내면
+    /// 작업이 하나 더 생긴다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
     /// 사람이 읽는 설명이다. 판단에는 `reason` 을 쓴다.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
@@ -510,9 +527,11 @@ pub enum PromptSubmissionStatus {
     Preparing,
     /// 준비가 끝나고 턴을 제출했다.
     Submitted,
-    /// 받아들이지 않았다. 이유는 `reason` 이다.
+    /// 준비가 만든 작업이 큐에 남았고 턴은 시작하지 않았다. 이유는 `reason`, 작업은 `task_id` 이다.
+    Queued,
+    /// 받아들이지 않았다. 이유는 `reason` 이다. planning 작업은 만들어지지 않았다.
     Rejected,
-    /// 준비가 턴을 만들지 못했다.
+    /// 준비가 턴을 만들지 못했다. planning 작업은 만들어지지 않았다.
     Failed,
 }
 
@@ -526,80 +545,122 @@ pub enum PromptSubmissionReason {
     PreparationActive,
     /// 커널이 모르는 thread 이다. `load_sessions` 로 목록을 읽는다.
     UnknownThread,
-    /// 병렬 모드가 켜져 있다. TUI 에서 제출한다.
+    /// 병렬 모드가 켜져 있다. 병렬 모드가 꺼질 때까지 커널은 thread 에 프롬프트를 내지 않는다.
     ParallelMode,
-    /// 준비하는 사이에 다른 턴이 시작했다. 준비가 만든 planning 작업은 큐에 남는다.
+    /// 커널이 병렬 모드 값을 아직 모른다. 잠시 뒤 다시 보낸다.
+    ParallelModeUnknown,
+    /// 준비하는 사이에 병렬 모드가 켜졌다 (`queued`). 작업은 병렬 slot 이 맡는다.
+    ParallelModeStarted,
+    /// 준비하는 사이에 다른 턴이 시작했다 (`queued`). 작업은 큐에 남는다. 다시 보내지 않는다.
     TurnStartedDuringPreparation,
-    /// 정지 요청이 아직 끝나지 않았다.
+    /// 정지 요청이 아직 끝나지 않았다 (`queued`).
     StopPending,
-    /// 그 thread 가 지금 프롬프트를 받을 수 없다.
+    /// 그 thread 가 지금 프롬프트를 받을 수 없다 (`queued`).
     Unavailable,
-    /// 준비가 실패했다. `message` 가 원인이다.
-    PreparationFailed,
+    /// 준비가 취소되었다.
+    Cancelled,
+    /// 준비 결과가 보낸 프롬프트와 맞지 않는다.
+    TextMismatch,
+    /// planning 초안을 사람이 검토해야 한다. 원격 클라이언트는 검토할 수 없다. `message` 가 초안 이름이다.
+    BootstrapReviewRequired,
+    /// planning 이 프롬프트를 받지 않았다. `message` 가 원인이다.
+    PlanningRefused,
 }
 
 impl PromptSubmissionState {
     fn admitted(thread_id: &str, admission: &ThreadPromptAdmission) -> Self {
-        let rejected = match admission {
-            ThreadPromptAdmission::Accepted { .. } => None,
-            ThreadPromptAdmission::RejectedBusy => Some((
+        let (reason, message) = match admission {
+            ThreadPromptAdmission::Accepted { .. } => {
+                return Self::progress(thread_id, PromptSubmissionStatus::Preparing);
+            }
+            ThreadPromptAdmission::RejectedBusy => (
                 PromptSubmissionReason::Busy,
                 "a turn is running or the thread is still busy",
-            )),
-            ThreadPromptAdmission::RejectedPreparationActive { .. } => Some((
+            ),
+            ThreadPromptAdmission::RejectedPreparationActive { .. } => (
                 PromptSubmissionReason::PreparationActive,
                 "another prompt is being prepared",
-            )),
-            ThreadPromptAdmission::RejectedUnknownThread => Some((
+            ),
+            ThreadPromptAdmission::RejectedUnknownThread => (
                 PromptSubmissionReason::UnknownThread,
                 "unknown thread; load_sessions lists the known threads",
-            )),
-            ThreadPromptAdmission::RejectedParallelMode => Some((
-                PromptSubmissionReason::ParallelMode,
-                "parallel mode is on; submit the prompt in the TUI",
-            )),
-        };
-        match rejected {
-            None => Self::progress(thread_id, PromptSubmissionStatus::Preparing),
-            Some((reason, message)) => Self::stopped(
-                thread_id,
-                PromptSubmissionStatus::Rejected,
-                reason,
-                message.to_string(),
             ),
-        }
+            ThreadPromptAdmission::RejectedParallelMode => (
+                PromptSubmissionReason::ParallelMode,
+                "parallel mode is on; the kernel starts no thread prompt until it is off",
+            ),
+            ThreadPromptAdmission::RejectedParallelModeUnknown => (
+                PromptSubmissionReason::ParallelModeUnknown,
+                "the kernel does not know the parallel mode yet; try again",
+            ),
+        };
+        Self::stopped(
+            thread_id,
+            PromptSubmissionStatus::Rejected,
+            reason,
+            None,
+            message.to_string(),
+        )
     }
 
-    fn submitted(thread_id: &str, outcome: &ThreadPromptOutcome) -> Self {
-        let (reason, message) = match outcome {
-            ThreadPromptOutcome::Submitted(TurnSubmissionAdmission::Accepted { .. }) => {
-                return Self::progress(thread_id, PromptSubmissionStatus::Submitted);
+    fn from_outcome(thread_id: &str, outcome: &ThreadPromptOutcome) -> Self {
+        match outcome {
+            ThreadPromptOutcome::Submitted { admission, task_id } => {
+                let (reason, message) = match admission {
+                    TurnSubmissionAdmission::Accepted { .. } => {
+                        return Self {
+                            task_id: Some(task_id.clone()),
+                            ..Self::progress(thread_id, PromptSubmissionStatus::Submitted)
+                        };
+                    }
+                    TurnSubmissionAdmission::RejectedActive { .. } => (
+                        PromptSubmissionReason::TurnStartedDuringPreparation,
+                        "another turn started while the prompt was prepared",
+                    ),
+                    TurnSubmissionAdmission::RejectedStopPending { .. } => (
+                        PromptSubmissionReason::StopPending,
+                        "a stop request is still settling",
+                    ),
+                    TurnSubmissionAdmission::RejectedUnavailable => (
+                        PromptSubmissionReason::Unavailable,
+                        "the thread cannot take a prompt now",
+                    ),
+                };
+                Self::queued(thread_id, reason, task_id, message)
             }
-            ThreadPromptOutcome::Submitted(TurnSubmissionAdmission::RejectedActive { .. }) => (
-                PromptSubmissionReason::TurnStartedDuringPreparation,
-                "another turn started while the prompt was prepared; its planning task stays queued"
-                    .to_string(),
+            ThreadPromptOutcome::ParallelModeStarted { task_id } => Self::queued(
+                thread_id,
+                PromptSubmissionReason::ParallelModeStarted,
+                task_id,
+                "parallel mode started while the prompt was prepared",
             ),
-            ThreadPromptOutcome::Submitted(TurnSubmissionAdmission::RejectedStopPending {
-                ..
-            }) => (
-                PromptSubmissionReason::StopPending,
-                "a stop request is still settling".to_string(),
-            ),
-            ThreadPromptOutcome::Submitted(TurnSubmissionAdmission::RejectedUnavailable) => (
-                PromptSubmissionReason::Unavailable,
-                "the thread cannot take a prompt now".to_string(),
-            ),
-            ThreadPromptOutcome::PreparationFailed { reason } => {
-                return Self::stopped(
+            ThreadPromptOutcome::PreparationFailed(failure) => {
+                let (reason, message) = match failure {
+                    ThreadPromptPreparationFailure::Cancelled => (
+                        PromptSubmissionReason::Cancelled,
+                        "prompt preparation was cancelled".to_string(),
+                    ),
+                    ThreadPromptPreparationFailure::TextMismatch => (
+                        PromptSubmissionReason::TextMismatch,
+                        "prepared prompt does not match the submitted text".to_string(),
+                    ),
+                    ThreadPromptPreparationFailure::BootstrapReviewRequired { draft_name } => (
+                        PromptSubmissionReason::BootstrapReviewRequired,
+                        format!("planning bootstrap needs review / draft: {draft_name}"),
+                    ),
+                    ThreadPromptPreparationFailure::PlanningRefused { reason } => {
+                        (PromptSubmissionReason::PlanningRefused, reason.clone())
+                    }
+                };
+                Self::stopped(
                     thread_id,
                     PromptSubmissionStatus::Failed,
-                    PromptSubmissionReason::PreparationFailed,
-                    reason.clone(),
-                );
+                    reason,
+                    None,
+                    message,
+                )
             }
-        };
-        Self::stopped(thread_id, PromptSubmissionStatus::Rejected, reason, message)
+        }
     }
 
     fn progress(thread_id: &str, status: PromptSubmissionStatus) -> Self {
@@ -607,20 +668,38 @@ impl PromptSubmissionState {
             thread_id: thread_id.to_string(),
             status,
             reason: None,
+            task_id: None,
             message: None,
         }
+    }
+
+    fn queued(
+        thread_id: &str,
+        reason: PromptSubmissionReason,
+        task_id: &str,
+        situation: &str,
+    ) -> Self {
+        Self::stopped(
+            thread_id,
+            PromptSubmissionStatus::Queued,
+            reason,
+            Some(task_id.to_string()),
+            format!("{situation}; planning task {task_id} stays queued, do not resend the prompt"),
+        )
     }
 
     fn stopped(
         thread_id: &str,
         status: PromptSubmissionStatus,
         reason: PromptSubmissionReason,
+        task_id: Option<String>,
         message: String,
     ) -> Self {
         Self {
             thread_id: thread_id.to_string(),
             status,
             reason: Some(reason),
+            task_id,
             message: Some(message),
         }
     }
