@@ -106,7 +106,7 @@ compact)는 fork, `inject_items`, `developer_instructions` 로 하고, Codex 와
 | ID | 질문 | 기본값 (답이 없을 때) |
 | --- | --- | --- |
 | Q-O1 | "agent 튜닝 시스템"은 Akra 의 병렬 에이전트 프로필(`src/adapter/outbound/filesystem/parallel_agent_profile.rs`)인가, 별도 시스템인가 | 확인 전까지 정하지 않는다. Akra 프로필이면 카탈로그의 기반으로 확장한다. 별도 시스템이면 카탈로그 공급자(outbound port)로 연결한다 |
-| Q-O2 | 커널이 Gateway 의 app-server 를 함께 쓸 수 있는가, 커널 연결이 사용자 턴의 알림을 받는가 | K3 의 Q-K3-6 으로 확인한다 (턴 필요) |
+| Q-O2 | 커널이 Gateway 의 app-server 를 함께 쓸 수 있는가, 커널 연결이 사용자 턴의 알림을 받는가 | **일부 답함 (2026-11-10, Q-K3-6):** 함께 쓸 수 있다. 연결은 `thread/resume` 한 thread 의 턴 알림을 받는다. 그래서 커널이 사용자 턴을 보려면 그 thread 를 resume 해야 한다. 사용자가 다른 연결에서 시작한 thread 를 커널이 어떻게 알아내는지는 남았다(`thread/started` 전역 알림이 후보) |
 | Q-O3 | 모든 Desktop 대화를 기본으로 관찰하는가 | 예. 대화마다 끌 수 있다 |
 | Q-O4 | 자동으로 반응할 "문제"의 첫 목록 | PR 생성, CI 실패, 같은 오류 반복, 승인 방치. 사용자의 실사용 불편 목록(P3 기준 3)으로 다시 정한다 |
 | Q-O5 | 위임 thread 의 동시 실행 | 처음에는 병렬 모드 슬롯을 쓴다. plan 19 P4 가 되면 정책으로 바꾼다 |

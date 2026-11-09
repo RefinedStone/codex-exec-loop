@@ -445,6 +445,9 @@ fn log_child_stderr(label: &'static str, stderr: impl Read + Send + 'static) {
 }
 
 #[cfg(test)]
+mod shared_app_server_probe;
+
+#[cfg(test)]
 mod tests {
     use std::path::PathBuf;
     use std::time::Duration;
