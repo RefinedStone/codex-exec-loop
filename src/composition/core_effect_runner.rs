@@ -596,13 +596,11 @@ impl CoreEffectRunner {
                 .ok_or_else(|| anyhow::anyhow!("planning workspace reset operation mismatch"))
                 .and_then(|requested_target| {
                     catch_redacted_worker_unwind(|| {
-                        // shortcut: the core intent has no confirmation flag; the TUI confirms before it
-                        // dispatches the intent. Carry confirmation in the command when K3 adds the protocol.
                         planning_workspace.reset_workspace(
                             &correlation.workspace_directory,
                             ApplicationPlanningResetRequest::new(
                                 application_planning_reset_target(requested_target),
-                                true,
+                                correlation.reset_confirmed(),
                             ),
                         )
                     })
@@ -2585,6 +2583,7 @@ mod tests {
             workspace_directory: workspace_directory.to_string(),
             operation: PlanningWorkspaceOperationKind::Reset {
                 target: PlanningWorkspaceResetTarget::Queue,
+                confirmed: false,
             },
         }
     }
@@ -3670,6 +3669,46 @@ mod tests {
                 result: Err(_),
             }] if completed == &correlation
         ));
+    }
+
+    #[test]
+    fn unconfirmed_destructive_reset_through_core_changes_nothing() {
+        let workspace_directory = "/tmp/unconfirmed-planning-reset";
+        let (planning_gate, gate_entered, _gate_release) = one_shot_gate();
+        let planning_workspace = Arc::new(GatedPlanningWorkspacePort {
+            load_gate: planning_gate,
+            simple_authoring_gate: None,
+            stage_call_count: Arc::new(AtomicUsize::new(0)),
+            promote_call_count: Arc::new(AtomicUsize::new(0)),
+            panic_load_once: AtomicBool::new(false),
+            panic_draft_load_once: AtomicBool::new(false),
+        });
+        let runtime_port = Arc::new(GatedRuntimePort::default());
+        let (input_sender, input_receiver) = core_input_channel();
+        let runner = test_effect_runner(planning_workspace, runtime_port, input_sender);
+        let mut runtime = CoreRuntime::new(runner, input_receiver);
+
+        // plan 18 K-D1: the core command carries the caller's confirmation; it is not assumed.
+        runtime.dispatch_command(AppCommand::ResetPlanningWorkspace(
+            PlanningWorkspaceResetIntent::new(
+                workspace_directory,
+                PlanningWorkspaceResetTarget::Directions,
+            ),
+        ));
+        let refused = poll_until(&mut runtime, |outcome| {
+            matches!(
+                outcome.events.as_slice(),
+                [AppEvent::PlanningWorkspaceResetCompleted {
+                    result: Err(error),
+                    ..
+                }] if error.contains("needs explicit confirmation")
+            )
+        });
+        assert_eq!(refused.events.len(), 1);
+        assert!(
+            gate_entered.try_recv().is_err(),
+            "an unconfirmed reset must not reach the planning workspace"
+        );
     }
 
     #[test]

@@ -76,6 +76,7 @@ mod tests {
             workspace_directory: workspace_directory.to_string(),
             operation: PlanningWorkspaceOperationKind::Reset {
                 target: PlanningWorkspaceResetTarget::Queue,
+                confirmed: false,
             },
         }
     }

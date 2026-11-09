@@ -205,14 +205,17 @@ impl KernelCommand {
                             .to_string(),
                     });
                 }
-                AppCommand::ResetPlanningWorkspace(PlanningWorkspaceResetIntent::new(
-                    workspace_directory,
-                    match target {
-                        ResetTarget::Queue => PlanningWorkspaceResetTarget::Queue,
-                        ResetTarget::Directions => PlanningWorkspaceResetTarget::Directions,
-                        ResetTarget::All => PlanningWorkspaceResetTarget::All,
-                    },
-                ))
+                AppCommand::ResetPlanningWorkspace(
+                    PlanningWorkspaceResetIntent::new(
+                        workspace_directory,
+                        match target {
+                            ResetTarget::Queue => PlanningWorkspaceResetTarget::Queue,
+                            ResetTarget::Directions => PlanningWorkspaceResetTarget::Directions,
+                            ResetTarget::All => PlanningWorkspaceResetTarget::All,
+                        },
+                    )
+                    .with_confirmation(confirm),
+                )
             }
         };
         Ok(command)

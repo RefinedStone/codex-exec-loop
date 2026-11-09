@@ -22,6 +22,9 @@ impl PlanningWorkspaceResetTarget {
 pub struct PlanningWorkspaceResetIntent {
     pub workspace_directory: String,
     pub target: PlanningWorkspaceResetTarget,
+    /// 호출자가 파괴적 초기화를 확인했다. planning 서비스는 확인되지 않은 directions·all 초기화를 거절한다.
+    /// 그래서 모든 입구가 같은 검사를 거친다 (plan 18 K-D1).
+    pub confirmed: bool,
 }
 
 impl PlanningWorkspaceResetIntent {
@@ -32,7 +35,13 @@ impl PlanningWorkspaceResetIntent {
         Self {
             workspace_directory: workspace_directory.into(),
             target,
+            confirmed: false,
         }
+    }
+
+    pub fn with_confirmation(mut self, confirmed: bool) -> Self {
+        self.confirmed = confirmed;
+        self
     }
 }
 
@@ -124,6 +133,7 @@ impl PlanningEditorMutationIdentity {
 pub enum PlanningWorkspaceOperationKind {
     Reset {
         target: PlanningWorkspaceResetTarget,
+        confirmed: bool,
     },
     StageSimpleDraft,
     StageEditor {
@@ -185,6 +195,7 @@ impl PlanningWorkspaceOperationIntent {
             workspace_directory: intent.workspace_directory,
             operation: PlanningWorkspaceOperationKind::Reset {
                 target: intent.target,
+                confirmed: intent.confirmed,
             },
         }
     }
@@ -271,9 +282,19 @@ impl PlanningWorkspaceOperationCorrelation {
 
     pub fn reset_target(&self) -> Option<PlanningWorkspaceResetTarget> {
         match self.operation {
-            PlanningWorkspaceOperationKind::Reset { target } => Some(target),
+            PlanningWorkspaceOperationKind::Reset { target, .. } => Some(target),
             _ => None,
         }
+    }
+
+    pub fn reset_confirmed(&self) -> bool {
+        matches!(
+            self.operation,
+            PlanningWorkspaceOperationKind::Reset {
+                confirmed: true,
+                ..
+            }
+        )
     }
 
     pub fn draft_name(&self) -> Option<&str> {
@@ -832,6 +853,7 @@ mod tests {
         let mut stale_target = first.clone();
         stale_target.operation = PlanningWorkspaceOperationKind::Reset {
             target: PlanningWorkspaceResetTarget::All,
+            confirmed: false,
         };
 
         assert!(!coordinator.accept(&stale_generation));

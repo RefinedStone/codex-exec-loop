@@ -84,6 +84,21 @@ fn reset_requires_confirmation_and_blank_ids_are_rejected() {
             .map_err(|error| error.code),
         Err(ERROR_CONFIRMATION_REQUIRED)
     );
+    // The confirmation travels with the core command, so the planning service checks it too.
+    assert_eq!(
+        KernelCommand::ResetPlanning {
+            target: ResetTarget::Directions,
+            confirm: true,
+        }
+        .into_core("/workspace"),
+        Ok(AppCommand::ResetPlanningWorkspace(
+            PlanningWorkspaceResetIntent::new(
+                "/workspace",
+                PlanningWorkspaceResetTarget::Directions,
+            )
+            .with_confirmation(true)
+        ))
+    );
     assert_eq!(
         KernelCommand::RenameSession {
             thread_id: "  ".to_string(),

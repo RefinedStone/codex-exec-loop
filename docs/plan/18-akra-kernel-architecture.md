@@ -2,10 +2,11 @@
 
 ## 문서 상태
 
-- 상태: **Approved architecture change (구현 전)**. 결정 KP-01~07 을 2026-11-07 에 승인했다 (§7). 현재 제품
-  동작을 설명하지 않는다. 현재 구조의 기준은 [architecture.md](../reference/architecture.md) 이다.
-- 기준일: 2026-11-06 (Asia/Seoul)
-- 기준 커밋: `8e64736cdb2050da2b2ffbce06b231da86186753` (`origin/prerelease`)
+- 상태: **Approved architecture change, 구현 중**. 결정 KP-01~07 을 2026-11-07 에 승인했다 (§7). K0~K2 는
+  완료했고 K3 을 진행 중이다 (2026-11-09 기준 K3-1, K3-2, K3-3a 완료, §6). 이 문서는 목표 구조를 설명한다.
+  현재 구조의 기준은 [architecture.md](../reference/architecture.md) 이다.
+- 기준일: 진단(§3)은 2026-11-06, 진행 상태(§5.6, §6)는 2026-11-09 (Asia/Seoul)
+- 기준 커밋: 진단은 `8e64736cdb2050da2b2ffbce06b231da86186753`, 진행 상태는 `80c11441` (`origin/prerelease`)
 - 근거: 2026-11-06 코드 조사 4건 (§3). 불안정 테스트 조사 결과는 §3.5 에 있다.
 - 관련 계획: [17 Akra Desktop](17-akra-desktop/README.md)
 - 목적: Akra 를 "사람이 TUI 로 조작하는 도구"에서 **사람과 AI 에이전트가 동등하게 쓰는 양방향 커널**로 바꾸는
@@ -287,7 +288,7 @@ CLI, admin, Telegram 이 application 서비스를 직접 부르지 않고 응용
 
 | 결함 | 해결 |
 | --- | --- |
-| K-D1 초기화 확인 | **완료 (2026-11-07):** reset service 가 확인되지 않은 directions/all 을 거절한다. CLI `--confirm`, Telegram `confirm`, admin JSON `"confirm": true`(없으면 428). TUI 는 core intent 에 확인 플래그가 없어 K3 에서 옮긴다. 원래 계획: 확인 규칙을 공유 정책으로 옮긴다. 모든 입구가 같은 확인을 거친다 (예: 확인 토큰이나 `--confirm`) |
+| K-D1 초기화 확인 | **완료 (2026-11-07):** reset service 가 확인되지 않은 directions/all 을 거절한다. CLI `--confirm`, Telegram `confirm`, admin JSON `"confirm": true`(없으면 428). TUI·커널 프로토콜 경로도 완료 (2026-11-09): core 초기화 명령이 호출자의 확인 플래그를 싣고, effect runner 가 그 값을 서비스에 넘긴다. 확인을 가정하지 않는다. 원래 계획: 확인 규칙을 공유 정책으로 옮긴다. 모든 입구가 같은 확인을 거친다 (예: 확인 토큰이나 `--confirm`) |
 | K-D2 revision 검사 | **완료 (2026-11-07):** admin 작업 수정은 폼을 열 때의 planning revision 을 함께 보낸다. 저장 시점의 revision 과 다르면 덮어쓰지 않고 거절한다. 작업별 `updated_at` 은 초 단위라 쓰지 않았다. 원래 계획: 작업 수정 명령에 `expected_planning_revision` 을 필수로 넣는다 |
 | K-D3 병렬 정지 전달 | 병렬 실행 상태의 주인을 커널 하나로 둔다. 다른 프로세스 메모리에 두지 않는다 |
 | K-D4 감사 기록 | 모든 변경 명령이 커널의 감사 기록을 거친다 |
