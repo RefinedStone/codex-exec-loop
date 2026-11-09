@@ -611,4 +611,21 @@ mod tests {
         );
         assert!(!client.resync_pending);
     }
+
+    #[test]
+    fn stopping_the_host_closes_the_parallel_automation_epoch() {
+        // K3-5: worker threads of a dropped kernel must not dispatch next to a new kernel.
+        let (runtime, _turns) = recording_runtime_for_test();
+        runtime.force_parallel_epoch_for_test("/repo", 7);
+        let epoch_is_active = runtime.parallel_automation_probe_for_test();
+        assert!(epoch_is_active("/repo", 7));
+        let host = KernelHost::start(runtime).expect("kernel host thread should start");
+
+        drop(host);
+
+        assert!(
+            !epoch_is_active("/repo", 7),
+            "the host thread closes the epoch before the kernel releases its lock"
+        );
+    }
 }

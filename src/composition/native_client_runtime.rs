@@ -499,6 +499,14 @@ impl NativeCoreRuntime {
     }
 }
 
+/// 런타임을 버리면 병렬 제어부의 작업 스레드가 더는 배분하지 못한다. 커널은 호스트 스레드에서 런타임을 버린 뒤
+/// 저장소 잠금을 푼다. 그렇지 않으면 같은 저장소의 다음 커널과 이전 작업 스레드가 같은 큐를 배분할 수 있다 (K3-5).
+impl Drop for NativeClientRuntime {
+    fn drop(&mut self) {
+        self.parallel_control_plane.stop_automation();
+    }
+}
+
 impl NativeClientRuntime {
     const PARALLEL_COMPLETION_CAPACITY: usize = 256;
 
@@ -934,6 +942,17 @@ impl NativeClientRuntime {
 
     pub(crate) fn parallel_mode_enabled(&self) -> bool {
         self.parallel_control_plane.mode_enabled()
+    }
+
+    /// 런타임을 다른 스레드로 옮긴 뒤에도 병렬 epoch 를 확인한다.
+    #[cfg(test)]
+    pub(crate) fn parallel_automation_probe_for_test(
+        &self,
+    ) -> impl Fn(&str, u64) -> bool + Send + 'static {
+        let control_plane = self.parallel_control_plane.clone();
+        move |workspace_directory, epoch_id| {
+            control_plane.automation_epoch_is_active(workspace_directory, epoch_id)
+        }
     }
 
     pub(crate) fn parallel_control_plane_projection(

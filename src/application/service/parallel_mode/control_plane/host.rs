@@ -115,6 +115,12 @@ where
         self.service().mode_enabled()
     }
 
+    /// 작업 스레드(orchestrator tick, 배분, 작업 실행)의 epoch 를 모두 닫는다. 작업 스레드는 다음 확인에서 멈추고,
+    /// 진행 중인 큐 commit 은 이 호출이 기다린다. 저장한 병렬 모드 설정은 바꾸지 않는다.
+    pub fn stop_automation(&self) {
+        self.service().stop_automation();
+    }
+
     pub fn presentation_projection(&self) -> ParallelModeControlPlanePresentationProjection {
         let service = self.service();
         ParallelModeControlPlanePresentationProjection {

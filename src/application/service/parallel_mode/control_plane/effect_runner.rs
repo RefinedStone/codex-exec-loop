@@ -210,6 +210,10 @@ where
         self.automation_guard.cancel(workspace_directory);
     }
 
+    pub(crate) fn cancel_all_epochs(&self) {
+        self.automation_guard.cancel_all();
+    }
+
     #[cfg(test)]
     pub(crate) fn automation_epoch_is_active(
         &self,

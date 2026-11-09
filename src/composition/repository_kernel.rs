@@ -2,8 +2,14 @@
 //! worktree 들은 큐와 병렬 상태를 함께 쓰므로 한 커널을 쓴다. 병렬 슬롯 worktree(`akra-agent/slot-*`)는 이
 //! 커널이 관리하는 작업 공간이고, 커널을 만들지 않는다.
 //!
-//! 조립 순서: 저장소 잠금을 잡고, 런타임을 조립하고, 병렬 보기를 정하고, 커널 호스트를 시작한다. 저장소별
-//! 커널 목록과 커널의 수명(클라이언트가 모두 떠난 뒤)은 Gateway 연결(K3-5)에서 정한다.
+//! 조립 순서: 저장소 잠금을 잡고, 런타임을 조립하고, 병렬 보기를 정하고, 커널 호스트를 시작한다.
+//!
+//! 저장소별 커널 목록(`RepositoryKernelRegistry`, K3-5)은 저장소마다 커널 하나를 처음 붙을 때 만든다. 클라이언트가
+//! 모두 떠나도 커널은 남는다. 자동 후속과 병렬 배분은 클라이언트 없이도 돌아야 하기 때문이다. 목록을 버리면
+//! (Gateway 가 끝나면) 커널마다 병렬 작업 스레드를 멈추고, 호스트 스레드를 끝내고, 잠금을 푼다.
+
+use std::collections::BTreeMap;
+use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 
@@ -31,6 +37,40 @@ impl RepositoryKernel {
 
     pub(crate) fn attach(&self) -> Option<KernelClientHandle> {
         self.host.attach()
+    }
+}
+
+/// 저장소별 커널 목록이다. Gateway 가 비동기 접속 사이에서 함께 쓴다.
+#[derive(Default)]
+pub(crate) struct RepositoryKernelRegistry {
+    kernels: Mutex<BTreeMap<String, RepositoryKernel>>,
+}
+
+impl RepositoryKernelRegistry {
+    /// `workspace_dir` 가 속한 저장소의 커널에 클라이언트 하나를 붙인다. 그 저장소의 커널이 없으면 만든다. 같은
+    /// 저장소의 다른 worktree 는 같은 커널에 붙는다. 다른 프로세스가 그 저장소의 커널을 돌리면
+    /// `RepositoryKernelLockHeld` 오류이다.
+    pub(crate) fn attach(&self, workspace_dir: &str) -> Result<KernelClientHandle> {
+        let repository_key = production::repository_kernel_key(workspace_dir)?;
+        // shortcut: 커널을 만드는 동안 목록을 잠가 다른 저장소의 접속도 기다린다. 접속이 잦아지면 저장소별로 잠근다.
+        let mut kernels = self
+            .kernels
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(client) = kernels
+            .get(&repository_key)
+            .and_then(RepositoryKernel::attach)
+        {
+            return Ok(client);
+        }
+        // 호스트 스레드가 끝난 커널은 먼저 버려 잠금을 푼 뒤 다시 만든다.
+        kernels.remove(&repository_key);
+        let kernel = build_kernel_for_workspace(workspace_dir)?;
+        let client = kernel
+            .attach()
+            .context("the new kernel stopped before a client attached")?;
+        kernels.insert(repository_key, kernel);
+        Ok(client)
     }
 }
 
@@ -156,6 +196,37 @@ mod tests {
         assert!(
             error.downcast_ref::<RepositoryKernelLockHeld>().is_some(),
             "{error:#}"
+        );
+    }
+
+    #[test]
+    fn the_registry_keeps_one_kernel_per_repository_after_clients_leave() {
+        let folder = temp_folder("registry");
+        let registry = RepositoryKernelRegistry::default();
+
+        let first = registry
+            .attach(&folder.path)
+            .expect("first client attaches");
+        let second = registry
+            .attach(&folder.path)
+            .expect("a second client shares the kernel instead of taking the lock again");
+        assert_ne!(first.client_id(), second.client_id());
+        drop((first, second));
+
+        let again = registry
+            .attach(&folder.path)
+            .expect("the kernel outlives its clients");
+        assert!(again.query().is_some());
+        assert!(
+            production::acquire_repository_kernel_lock(&folder.path).is_err(),
+            "the kept kernel still holds the repository lock"
+        );
+
+        drop(again);
+        drop(registry);
+        assert!(
+            production::acquire_repository_kernel_lock(&folder.path).is_ok(),
+            "dropping the registry stops the kernel and releases the lock"
         );
     }
 

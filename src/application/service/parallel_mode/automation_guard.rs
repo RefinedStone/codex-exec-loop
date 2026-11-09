@@ -74,6 +74,14 @@ impl ParallelModeAutomationGuard {
             .remove(workspace_directory);
     }
 
+    /// 모든 작업 공간의 epoch 를 닫는다. 진행 중인 commit 이 있으면 그 commit 이 끝난 뒤 닫힌다.
+    pub(crate) fn cancel_all(&self) {
+        self.active_epochs
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+    }
+
     pub(crate) fn is_active(&self, workspace_directory: &str, epoch_id: u64) -> bool {
         self.active_epochs
             .lock()
@@ -141,6 +149,12 @@ mod tests {
 
         guard.cancel("/workspace");
         assert!(!guard.is_active("/workspace", 2));
+
+        guard.activate("/first", 3);
+        guard.activate("/second", 4);
+        guard.cancel_all();
+        assert!(!guard.is_active("/first", 3));
+        assert!(!guard.is_active("/second", 4));
     }
 
     #[test]
