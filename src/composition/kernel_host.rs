@@ -456,6 +456,7 @@ mod tests {
                     workspace_directory: workspace.to_string(),
                     thread_id: "thread-2".to_string(),
                     prompt: "fix the test".to_string(),
+                    parallel_mode_enabled: false,
                 },
             ))),
             CoreInput::EffectCompleted(CoreEffectCompletion::ManualPromptPrepared(Box::new(

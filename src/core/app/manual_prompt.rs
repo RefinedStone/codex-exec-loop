@@ -27,6 +27,8 @@ pub struct ThreadPromptSubmission {
     pub workspace_directory: String,
     pub thread_id: String,
     pub prompt: String,
+    // 병렬 모드 사용 여부이다. 병렬 제어부를 가진 호스트가 dispatch 때 채운다. 클라이언트가 보낸 값은 쓰지 않는다.
+    pub parallel_mode_enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,6 +45,9 @@ pub enum ThreadPromptAdmission {
     },
     // core 가 모르는 thread 이다. 보는 thread, 일이 남은 thread, 읽은 세션 목록 어디에도 없다.
     RejectedUnknownThread,
+    // 병렬 모드가 켜져 있다. 병렬 모드에서 수동 프롬프트는 병렬 작업 intake 로 가야 하는데, 그 경로는 아직 TUI
+    // 에만 있다. main session 턴으로 내면 같은 작업이 병렬 slot 에도 나갈 수 있다.
+    RejectedParallelMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
