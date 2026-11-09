@@ -367,6 +367,14 @@ pub(crate) fn acquire_repository_kernel_lock(workspace_dir: &str) -> Result<Repo
     RepositoryKernelLockAdapter::acquire(location, workspace_dir)
 }
 
+/// `workspace_dir` 가 속한 저장소의 신원이다. 잠금을 잡지 않는다. 커널 잠금의 `repository_key` 와 같은 값이다.
+pub(crate) fn repository_kernel_key(workspace_dir: &str) -> Result<String> {
+    Ok(
+        SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace_dir)?
+            .repository_identity,
+    )
+}
+
 /// TUI 가 시작 폴더의 저장소 잠금을 잡는다 (plan 18 K3-4). 다른 프로세스가 그 저장소의 커널을 돌리면 오류를
 /// 돌려주고, TUI 는 화면을 열기 전에 그 이유를 보이고 끝난다.
 pub(crate) fn acquire_native_tui_kernel_lock() -> Result<Option<RepositoryKernelLock>> {

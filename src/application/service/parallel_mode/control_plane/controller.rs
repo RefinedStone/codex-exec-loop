@@ -156,6 +156,12 @@ where
         self.runtime.store().current_epoch_id
     }
 
+    /// 이 제어부가 시작한 작업 스레드가 더는 큐를 배분하거나 작업을 시작하지 못하게 한다. 저장한 병렬 모드
+    /// 설정은 바꾸지 않는다. 커널을 버릴 때 쓴다.
+    pub fn stop_automation(&self) {
+        self.effect_runner.cancel_all_epochs();
+    }
+
     #[cfg(test)]
     pub fn automation_epoch_is_active(&self, workspace_directory: &str, epoch_id: u64) -> bool {
         self.effect_runner
