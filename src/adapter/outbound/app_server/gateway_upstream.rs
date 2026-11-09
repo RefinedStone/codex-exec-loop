@@ -25,6 +25,10 @@ use crate::application::port::outbound::gateway_upstream_port::{
 use crate::subprocess::{self, ManagedChild};
 
 const UPSTREAM_SOCKET_FILE_NAME: &str = "codex-app-server.sock";
+/// 지금 upstream 의 pid 를 적는 파일이다. Gateway 가 비정상 종료되면 다음 Gateway 가 남은 upstream 을 정리한다.
+const UPSTREAM_PID_FILE_NAME: &str = "gateway-upstream.pid";
+#[cfg(unix)]
+const STALE_UPSTREAM_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 const UPSTREAM_READY_TIMEOUT: Duration = Duration::from_secs(10);
 const UPSTREAM_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const CODEX_VERSION_TIMEOUT: Duration = Duration::from_secs(10);
@@ -59,6 +63,7 @@ impl AppServerGatewayUpstream {
         let socket_path = run_dir.join(UPSTREAM_SOCKET_FILE_NAME);
         ensure_socket_path_fits(&socket_path)?;
         let codex_version = read_codex_version(&config);
+        stop_stale_upstream(&socket_path);
         let child = spawn_upstream(&config, &socket_path)?;
         let (generation, _) = watch::channel(0);
         let shared = Arc::new(UpstreamShared {
@@ -123,6 +128,7 @@ impl GatewayUpstreamPort for AppServerGatewayUpstream {
         self.shared.ready.store(false, Ordering::SeqCst);
         stop_child(&self.shared);
         let _ = std::fs::remove_file(&self.shared.socket_path);
+        let _ = std::fs::remove_file(upstream_pid_path(&self.shared.socket_path));
     }
 }
 
@@ -268,8 +274,75 @@ fn spawn_upstream(config: &AppServerConnectionConfig, socket_path: &Path) -> Res
     if let Some(stderr) = child.take_stderr() {
         log_child_stderr("codex app-server upstream", stderr);
     }
+    if let Err(error) = std::fs::write(upstream_pid_path(socket_path), child.id().to_string()) {
+        tracing::warn!(error = %error, "failed to record the gateway upstream pid");
+    }
     wait_until_socket_ready(&mut child, socket_path)?;
     Ok(child)
+}
+
+fn upstream_pid_path(socket_path: &Path) -> PathBuf {
+    socket_path.with_file_name(UPSTREAM_PID_FILE_NAME)
+}
+
+/*
+ * 앞의 Gateway 가 비정상 종료되어 남은 upstream 을 끝낸다. Windows 는 job object 가 자식을 함께 끝내지만
+ * macOS 는 upstream 이 고아로 남아 codex 소켓 잠금을 쥔다. 그러면 새 upstream 이 시작하지 못하고 Gateway 가
+ * 바로 끝난다. 호출자는 단일 인스턴스 잠금을 이미 잡았으므로 기록된 upstream 은 살아 있는 Gateway 의 것이
+ * 아니다. pid 재사용에 대비해 명령줄이 이 소켓의 app-server 일 때만 끝낸다.
+ */
+#[cfg(unix)]
+fn stop_stale_upstream(socket_path: &Path) {
+    let pid_path = upstream_pid_path(socket_path);
+    let Ok(recorded) = std::fs::read_to_string(&pid_path) else {
+        return;
+    };
+    let _ = std::fs::remove_file(&pid_path);
+    let Ok(pid) = recorded.trim().parse::<libc::pid_t>() else {
+        return;
+    };
+    if pid <= 1 || !process_serves_socket(pid, &codex_socket_argument(socket_path)) {
+        return;
+    }
+    tracing::warn!(
+        pid,
+        "stopping a gateway upstream app-server left by a previous gateway"
+    );
+    // upstream 은 자기 프로세스 그룹의 리더이다 (`subprocess::spawn`). 그룹째 끝내서 손자도 정리한다.
+    let target = if unsafe { libc::getpgid(pid) } == pid {
+        -pid
+    } else {
+        pid
+    };
+    unsafe { libc::kill(target, libc::SIGTERM) };
+    let deadline = Instant::now() + STALE_UPSTREAM_STOP_TIMEOUT;
+    while Instant::now() < deadline {
+        if unsafe { libc::kill(pid, 0) } != 0 {
+            return;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    unsafe { libc::kill(target, libc::SIGKILL) };
+}
+
+#[cfg(not(unix))]
+fn stop_stale_upstream(socket_path: &Path) {
+    // Windows 의 job object 는 Gateway 가 끝날 때 upstream 도 끝낸다. 남은 기록만 지운다.
+    let _ = std::fs::remove_file(upstream_pid_path(socket_path));
+}
+
+#[cfg(unix)]
+fn process_serves_socket(pid: libc::pid_t, socket_argument: &str) -> bool {
+    let Ok(output) = std::process::Command::new("ps")
+        .args(["-ww", "-o", "command=", "-p", &pid.to_string()])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+    else {
+        return false;
+    };
+    let command_line = String::from_utf8_lossy(&output.stdout);
+    command_line.contains("app-server") && command_line.contains(socket_argument)
 }
 
 fn wait_until_socket_ready(child: &mut ManagedChild, socket_path: &Path) -> Result<()> {
@@ -362,6 +435,8 @@ mod tests {
         MAX_UNIX_SOCKET_PATH_BYTES, RESTART_BACKOFF_INITIAL, RESTART_BACKOFF_MAX,
         ensure_socket_path_fits, next_restart_backoff,
     };
+    #[cfg(unix)]
+    use super::{codex_socket_argument, stop_stale_upstream, upstream_pid_path};
 
     #[test]
     fn restart_backoff_doubles_until_the_cap_and_resets_after_a_healthy_run() {
@@ -386,5 +461,86 @@ mod tests {
         let too_long = PathBuf::from("/").join("a".repeat(MAX_UNIX_SOCKET_PATH_BYTES));
         let error = ensure_socket_path_fits(&too_long).unwrap_err().to_string();
         assert!(error.contains("Set AKRA_HOME to a shorter path"), "{error}");
+    }
+
+    /// 남은 upstream 대신 같은 명령줄 모양의 셸을 띄운다 (`exec` 하지 않아 명령줄이 남는다). 그룹 리더로 띄워 Gateway 와 같은 조건을 만든다.
+    #[cfg(unix)]
+    fn spawn_fake_upstream(command_line_tail: &str) -> std::process::Child {
+        use std::os::unix::process::CommandExt;
+        std::process::Command::new("/bin/sh")
+            .args([
+                "-c",
+                "sleep 30; :",
+                "sh",
+                "app-server",
+                "--listen",
+                command_line_tail,
+            ])
+            .process_group(0)
+            .spawn()
+            .expect("fake upstream should start")
+    }
+
+    #[cfg(unix)]
+    fn unique_run_dir() -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "akra-gateway-upstream-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock after epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&path).expect("run dir");
+        path
+    }
+
+    #[cfg(unix)]
+    fn wait_for_exit(child: &mut std::process::Child) -> bool {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while std::time::Instant::now() < deadline {
+            if child.try_wait().expect("try_wait should work").is_some() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        false
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_recorded_upstream_for_this_socket_is_stopped_and_forgotten() {
+        let run_dir = unique_run_dir();
+        let socket_path = run_dir.join("codex-app-server.sock");
+        let mut stale =
+            spawn_fake_upstream(&format!("unix://{}", codex_socket_argument(&socket_path)));
+        std::fs::write(upstream_pid_path(&socket_path), stale.id().to_string()).expect("pid file");
+        // 셸이 시작해 명령줄이 보일 때까지 기다린다.
+        std::thread::sleep(Duration::from_millis(200));
+
+        stop_stale_upstream(&socket_path);
+
+        assert!(wait_for_exit(&mut stale), "the stale upstream must stop");
+        assert!(!upstream_pid_path(&socket_path).exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_recorded_pid_of_another_program_is_left_alone() {
+        let run_dir = unique_run_dir();
+        let socket_path = run_dir.join("codex-app-server.sock");
+        let mut other = spawn_fake_upstream("unix:///somewhere/else.sock");
+        std::fs::write(upstream_pid_path(&socket_path), other.id().to_string()).expect("pid file");
+        std::thread::sleep(Duration::from_millis(200));
+
+        stop_stale_upstream(&socket_path);
+
+        assert!(
+            other.try_wait().expect("try_wait should work").is_none(),
+            "a reused pid must not be killed"
+        );
+        let _ = other.kill();
+        let _ = other.wait();
+        assert!(!upstream_pid_path(&socket_path).exists());
     }
 }

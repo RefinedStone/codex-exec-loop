@@ -198,6 +198,10 @@ impl ManagedChild {
         self.child.stderr.take()
     }
 
+    pub(crate) fn id(&self) -> u32 {
+        self.child.id()
+    }
+
     pub(crate) fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
         let status = self.child.try_wait()?;
         if status.is_some() {
