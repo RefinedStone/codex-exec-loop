@@ -219,11 +219,20 @@ parallel, Git, GitHub 권위를 바꾸지 않고 재생하며 PR 검증 복구 �
   `initialize`, 요청 ID, 스레드 구독은 접속마다 따로이다. 프레임은 바꾸지 않고 전달하고 `akra/*` 요청만
   Gateway 가 답한다 (`akra/gateway/info`: Gateway·codex 버전, 시작 시각, upstream 재시작 횟수). upstream 이
   다시 시작되면 close `1012`, upstream 을 쓸 수 없으면 close `1013` 으로 클라이언트를 닫는다.
+- 커널 프로토콜(`akra/kernel/*`, plan 18 K3 프로토콜 v0): 클라이언트가 작업 공간과 함께
+  `akra/kernel/attach` 를 보내면 그 공간이 속한 저장소의 커널에 붙는다. Gateway 는 처음 붙을 때 커널을 만들고,
+  클라이언트가 모두 떠나도 남겨 둔다. 그래서 자동 후속과 병렬 배분이 계속 돈다. 한 저장소의 worktree 들은 커널
+  하나를 함께 쓴다. 다른 프로세스(TUI)가 그 저장소의 커널을 돌리면 attach 는 `-32012` 로 실패한다. 붙은 뒤에는
+  `akra/kernel/command`, `akra/kernel/query` 를 보내고 `akra/kernel/event` 알림을 받는다. 붙기 전 요청은
+  `-32011` 로 실패한다. `akra/kernel/describe` 는 메서드, 명령, 조회, 이벤트 목록을 준다. 병렬 제어부 이벤트와
+  planning 조회는 아직 내보내지 않는다 (K3-6).
+- 커널은 자기 `codex app-server proxy` 연결로 Gateway upstream app-server 를 함께 쓴다. 그래서 클라이언트는
+  커널이 돌리는 thread 를 `thread/resume` 해서 그 턴 알림을 실시간으로 받는다.
 - 사용자당 Gateway 는 하나이다. 두 번째 인스턴스는 `another akra-gateway is already running` 으로 끝난다.
   자식 프로세스는 Gateway 와 함께 끝난다 (Windows 는 job object).
 - `AKRA_GATEWAY_RECORD=1` 이면 세션마다 텍스트 프레임을 사용자 전용 `$AKRA_HOME/recordings/` 에 JSONL 로
   남긴다. 녹화 파일은 실제 대화를 담으므로 커밋하지 않는다.
-- 기존 TUI, Admin, Telegram 경로는 자체 stdio app-server 를 그대로 쓴다 (계획 P-08).
+- TUI, Admin, Telegram 경로는 자체 stdio app-server 를 그대로 쓴다 (계획 P-08).
 
 ## 복구와 제한
 

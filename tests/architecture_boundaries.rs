@@ -2963,7 +2963,7 @@ fn native_tui_prompt_log_maintenance_runs_only_inside_the_startup_worker() {
     assert!(
         native_builder_calls
             .iter()
-            .any(|call| call == "build_shared_ports_for_prompt_logging")
+            .any(|call| call == "build_shared_ports_with_app_server")
             && native_builder_calls
                 .iter()
                 .any(|call| call == "with_prompt_log_maintenance"),
@@ -11266,7 +11266,7 @@ fn tui_startup_takes_the_repository_kernel_lock_before_it_builds_the_kernel() {
         .find("production::acquire_repository_kernel_lock(workspace_dir)?")
         .expect("the repository kernel must take the lock");
     let build = kernel
-        .find("production::build_headless_kernel_runtime(workspace_dir)")
+        .find("production::build_headless_kernel_runtime(workspace_dir, app_server)")
         .expect("the repository kernel must build its runtime");
     assert!(
         lock < build,

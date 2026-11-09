@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::core::app::{
-    AppCommand, AppEvent, ApprovalDecisionAdmission, ConversationRuntimeSnapshot,
+    AppCommand, AppEvent, AppSnapshot, ApprovalDecisionAdmission, ConversationRuntimeSnapshot,
     PlanningWorkspaceResetIntent, PlanningWorkspaceResetTarget, SESSION_CATALOG_PAGE_SIZE,
     SessionCatalogLoadIntent, SessionCatalogSnapshot, ThreadActivitySummary, ThreadPromptAdmission,
     ThreadPromptOutcome, ThreadPromptPreparationFailure, ThreadPromptSubmission,
@@ -42,6 +42,10 @@ const METHODS: [&str; 6] = [
 pub const ERROR_INVALID_PARAMS: i64 = -32602;
 /// 확인이 필요한 명령을 확인 없이 보냈다 (K-D1).
 pub const ERROR_CONFIRMATION_REQUIRED: i64 = -32010;
+/// 이 접속은 아직 커널에 붙지 않았다. `akra/kernel/attach` 를 먼저 보낸다.
+pub const ERROR_NOT_ATTACHED: i64 = -32011;
+/// 커널에 붙거나 닿지 못했다. 예: 다른 프로세스(TUI)가 그 저장소의 커널을 돌린다, 커널이 끝났다.
+pub const ERROR_KERNEL_UNAVAILABLE: i64 = -32012;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KernelProtocolError {
@@ -326,6 +330,29 @@ pub enum KernelQuery {
     ThreadActivity {},
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QueryRequest {
+    pub query: KernelQuery,
+}
+
+impl KernelQuery {
+    /// 조회 결과는 같은 이름의 이벤트와 같은 모양이다. 클라이언트는 둘을 같은 코드로 그린다.
+    pub fn answer(self, snapshot: &AppSnapshot, threads: &[ThreadActivitySummary]) -> KernelEvent {
+        match self {
+            Self::Sessions {} => {
+                KernelEvent::Sessions(SessionsState::from_core(&snapshot.session_catalog))
+            }
+            Self::AutoFollow {} => KernelEvent::AutoFollow(AutoFollowSettings::from_core(
+                &snapshot.conversation_runtime,
+            )),
+            Self::ThreadActivity {} => KernelEvent::ThreadActivity {
+                threads: threads.iter().map(ThreadActivity::from_core).collect(),
+            },
+        }
+    }
+}
+
 const QUERIES: [&str; 3] = ["sessions", "auto_follow", "thread_activity"];
 
 // event -------------------------------------------------------------------------------------------
@@ -346,6 +373,12 @@ pub enum KernelEvent {
     PromptSubmission(PromptSubmissionState),
     /// 이 클라이언트에게 보낼 이벤트가 넘쳐 버렸다. 클라이언트는 조회로 다시 맞춘다.
     Resync,
+}
+
+/// `akra/kernel/event` 알림의 params 이다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EventNotification {
+    pub event: KernelEvent,
 }
 
 const EVENTS: [&str; 5] = [

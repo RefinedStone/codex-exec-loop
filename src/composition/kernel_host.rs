@@ -28,7 +28,10 @@ pub(crate) type KernelClientId = u64;
 pub(crate) enum KernelHostEvent {
     Core(Box<AppEvent>),
     /// 병렬 제어부의 이벤트이다 (병렬 작업 진행, 감독 스냅샷). 프로토콜 이벤트로 바꾸는 일은 K3-6 에서 한다.
-    Parallel(Box<ParallelModeControlPlanePresentationEvent>),
+    // shortcut: Gateway 는 아직 이 이벤트를 보내지 않는다. K3-6 에서 프로토콜 이벤트로 바꾸면 이 allow 를 지운다.
+    Parallel(
+        #[cfg_attr(not(test), allow(dead_code))] Box<ParallelModeControlPlanePresentationEvent>,
+    ),
     /// 이벤트가 넘쳐 일부를 버렸다. 클라이언트는 조회로 다시 맞춘다.
     Resync,
 }
@@ -105,11 +108,14 @@ pub(crate) struct KernelClientHandle {
     events: Receiver<KernelHostEvent>,
 }
 
-impl KernelClientHandle {
-    pub(crate) fn client_id(&self) -> KernelClientId {
-        self.client_id
-    }
+/// 명령과 조회만 보내는 쪽이다. 이벤트를 받는 스레드가 핸들을 쥐는 동안 다른 작업이 명령을 보낼 때 쓴다.
+/// 핸들이 떨어진 뒤에도 보낼 수 있지만, 그 클라이언트는 이벤트를 받지 않는다.
+#[derive(Clone)]
+pub(crate) struct KernelCommandSender {
+    inbox: Sender<KernelHostInput>,
+}
 
+impl KernelCommandSender {
     /// 명령을 커널에 넣는다. 커널이 처리한 뒤 그 처리에서 나온 core 이벤트를 돌려준다. 요청한 클라이언트는 이것으로
     /// 거절 이유를 안다. 같은 이벤트는 모든 클라이언트에도 간다. 커널이 끝났으면 `None` 이다.
     pub(crate) fn send_command(&self, command: AppCommand) -> Option<Vec<AppEvent>> {
@@ -125,9 +131,40 @@ impl KernelClientHandle {
         self.inbox.send(KernelHostInput::Query { reply }).ok()?;
         answer.recv().ok()
     }
+}
 
+impl KernelClientHandle {
+    pub(crate) fn client_id(&self) -> KernelClientId {
+        self.client_id
+    }
+
+    pub(crate) fn commands(&self) -> KernelCommandSender {
+        KernelCommandSender {
+            inbox: self.inbox.clone(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn send_command(&self, command: AppCommand) -> Option<Vec<AppEvent>> {
+        self.commands().send_command(command)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn query(&self) -> Option<KernelHostView> {
+        self.commands().query()
+    }
+
+    #[cfg(test)]
     pub(crate) fn recv_event_timeout(&self, timeout: Duration) -> Option<KernelHostEvent> {
-        self.events.recv_timeout(timeout).ok()
+        self.recv_event(timeout).ok()
+    }
+
+    /// 이벤트를 기다린다. `Disconnected` 는 커널이 끝난 경우이다.
+    pub(crate) fn recv_event(
+        &self,
+        timeout: Duration,
+    ) -> Result<KernelHostEvent, mpsc::RecvTimeoutError> {
+        self.events.recv_timeout(timeout)
     }
 
     /// 시험이 커널 입력(스트림 이벤트, 효과 완료)을 직접 넣는다. 한 묶음은 호스트 주기 사이에 끊기지 않는다.
