@@ -8,7 +8,8 @@ use crate::core::app::{
     ActiveTurnPhase, AppCommand, AppEvent, ApprovalAuthorityPhase, ApprovalAuthoritySnapshot,
     ConversationRuntimeSnapshot, PlanningWorkspaceResetIntent, PlanningWorkspaceResetTarget,
     PostTurnAuthoritySnapshot, SESSION_CATALOG_PAGE_SIZE, SessionCatalogLoadIntent,
-    SessionCatalogSnapshot, ThreadActivitySummary,
+    SessionCatalogSnapshot, ThreadActivitySummary, ThreadPromptAdmission, ThreadPromptOutcome,
+    ThreadPromptSubmission, TurnSubmissionAdmission,
 };
 use crate::domain::conversation::{
     ConversationApprovalDecision, ConversationApprovalRequestIdentity, ConversationTurnSteerRequest,
@@ -95,7 +96,7 @@ pub struct CommandResponse {
 
 /*
  * v0 명령이다. 화면 흐름 단계가 아니라 한 번에 끝나는 도메인 명령이다 (plan 18 §5.5). 원격 클라이언트는 보는
- * 자리를 바꾸지 않고 thread 나 승인 id 를 지정한다 (K3-3a). 프롬프트 제출은 K3-3b 에서 더한다.
+ * 자리를 바꾸지 않고 thread 나 승인 id 를 지정한다 (K3-3a). 프롬프트 제출은 준비와 제출을 하나로 한다 (K3-3b).
  */
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 // 필드가 없는 명령도 `{}` 로 둔다. serde 는 unit variant 의 모르는 필드를 거절하지 못한다.
@@ -105,6 +106,11 @@ pub enum KernelCommand {
     RenameSession {
         thread_id: String,
         name: String,
+    },
+    /// thread 에 프롬프트를 보낸다. 커널이 planning 조각을 붙여 준비한 뒤 턴을 제출한다.
+    SubmitPrompt {
+        thread_id: String,
+        prompt: String,
     },
     SteerTurn {
         thread_id: String,
@@ -129,9 +135,10 @@ pub enum KernelCommand {
     },
 }
 
-const COMMANDS: [&str; 8] = [
+const COMMANDS: [&str; 9] = [
     "load_sessions",
     "rename_session",
+    "submit_prompt",
     "steer_turn",
     "stop_all",
     "decide_approval",
@@ -170,6 +177,13 @@ impl KernelCommand {
                     non_blank("thread_id", thread_id)?,
                     non_blank("name", name)?,
                 ))
+            }
+            Self::SubmitPrompt { thread_id, prompt } => {
+                AppCommand::SubmitThreadPrompt(Box::new(ThreadPromptSubmission {
+                    workspace_directory: workspace_directory.to_string(),
+                    thread_id: non_blank("thread_id", thread_id)?,
+                    prompt: non_blank("prompt", prompt)?,
+                }))
             }
             Self::SteerTurn {
                 thread_id,
@@ -257,14 +271,17 @@ pub enum KernelEvent {
     ThreadActivity {
         threads: Vec<ThreadActivity>,
     },
+    /// `submit_prompt` 의 진행이다. 턴이 시작되면 `thread_activity` 에도 나타난다.
+    PromptSubmission(PromptSubmissionState),
     /// 이 클라이언트에게 보낼 이벤트가 넘쳐 버렸다. 클라이언트는 조회로 다시 맞춘다.
     Resync,
 }
 
-const EVENTS: [&str; 4] = [
+const EVENTS: [&str; 5] = [
     "sessions",
     "conversation_runtime",
     "thread_activity",
+    "prompt_submission",
     "resync",
 ];
 
@@ -281,6 +298,15 @@ impl KernelEvent {
             AppEvent::ThreadActivityChanged(threads) => Some(Self::ThreadActivity {
                 threads: threads.iter().map(ThreadActivity::from_core).collect(),
             }),
+            AppEvent::ThreadPromptAdmissionResolved {
+                thread_id,
+                admission,
+            } => Some(Self::PromptSubmission(PromptSubmissionState::admitted(
+                thread_id, admission,
+            ))),
+            AppEvent::ThreadPromptSubmitted { thread_id, outcome } => Some(Self::PromptSubmission(
+                PromptSubmissionState::submitted(thread_id, outcome),
+            )),
             _ => None,
         }
     }
@@ -460,6 +486,82 @@ impl ThreadActivity {
                 details: request.details.clone(),
             }),
             auto_follow_active: activity.auto_follow_active,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromptSubmissionState {
+    pub thread_id: String,
+    pub status: PromptSubmissionStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PromptSubmissionStatus {
+    /// 받아들였고 준비 중이다.
+    Preparing,
+    /// 준비가 끝나고 턴을 제출했다.
+    Submitted,
+    /// 받아들이지 않았다 (모르는 thread, 일하는 중, 다른 준비 진행 중).
+    Rejected,
+    /// 준비가 턴을 만들지 못했다.
+    Failed,
+}
+
+impl PromptSubmissionState {
+    fn admitted(thread_id: &str, admission: &ThreadPromptAdmission) -> Self {
+        let (status, message) = match admission {
+            ThreadPromptAdmission::Accepted { .. } => (PromptSubmissionStatus::Preparing, None),
+            ThreadPromptAdmission::RejectedBusy => (
+                PromptSubmissionStatus::Rejected,
+                Some("a turn is running or the thread is still busy"),
+            ),
+            ThreadPromptAdmission::RejectedPreparationActive { .. } => (
+                PromptSubmissionStatus::Rejected,
+                Some("another prompt is being prepared"),
+            ),
+            ThreadPromptAdmission::RejectedUnknownThread => (
+                PromptSubmissionStatus::Rejected,
+                Some("unknown thread; load_sessions lists the known threads"),
+            ),
+        };
+        Self {
+            thread_id: thread_id.to_string(),
+            status,
+            message: message.map(str::to_string),
+        }
+    }
+
+    fn submitted(thread_id: &str, outcome: &ThreadPromptOutcome) -> Self {
+        let (status, message) = match outcome {
+            ThreadPromptOutcome::Submitted(TurnSubmissionAdmission::Accepted { .. }) => {
+                (PromptSubmissionStatus::Submitted, None)
+            }
+            ThreadPromptOutcome::Submitted(TurnSubmissionAdmission::RejectedActive { .. }) => (
+                PromptSubmissionStatus::Rejected,
+                Some("another turn started while the prompt was prepared".to_string()),
+            ),
+            ThreadPromptOutcome::Submitted(TurnSubmissionAdmission::RejectedStopPending {
+                ..
+            }) => (
+                PromptSubmissionStatus::Rejected,
+                Some("a stop request is still settling".to_string()),
+            ),
+            ThreadPromptOutcome::Submitted(TurnSubmissionAdmission::RejectedUnavailable) => (
+                PromptSubmissionStatus::Rejected,
+                Some("the thread cannot take a prompt now".to_string()),
+            ),
+            ThreadPromptOutcome::PreparationFailed { reason } => {
+                (PromptSubmissionStatus::Failed, Some(reason.clone()))
+            }
+        };
+        Self {
+            thread_id: thread_id.to_string(),
+            status,
+            message,
         }
     }
 }
