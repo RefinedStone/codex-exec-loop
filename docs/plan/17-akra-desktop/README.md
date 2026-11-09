@@ -10,7 +10,8 @@
 - 목적: Akra 에 항상 실행되는 Gateway 데몬과 Electron 데스크톱 앱(이하 **Akra Desktop**)을
   추가한다. 사용자는 Codex 대화와 업무 도구를 앱 하나에서 처리한다.
 - 관련 계획: [18 Akra 커널 아키텍처 수정안](../18-akra-kernel-architecture.md). R5 이후 단계는 이 수정안의
-  커널 구조를 전제로 다시 정리한다.
+  커널 구조를 전제로 다시 정리한다. [20 관찰-제안 구조](../20-akra-observe-and-offer.md)는 일반 대화에 Akra 기능을
+  연결하는 전체 그림이다 (D-18 제안).
 
 ## 요약
 
