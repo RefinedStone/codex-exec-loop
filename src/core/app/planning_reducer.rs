@@ -16,6 +16,8 @@ use crate::domain::planning::{
 struct ActiveManualPromptPreparation {
     correlation: ManualPromptCorrelation,
     cancelled: bool,
+    // thread 를 지정한 프롬프트이면 그 thread 이다 (plan 18 K3-3b). 준비가 끝나면 core 가 이 thread 에 제출한다.
+    addressed_thread_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -169,11 +171,39 @@ impl PlanningFeatureReducer {
         self.in_flight_manual_prompt_preparation = Some(ActiveManualPromptPreparation {
             correlation: correlation.clone(),
             cancelled: false,
+            addressed_thread_id: None,
         });
         ManualPromptPreparationReduction {
             admission: ManualPromptPreparationAdmission::Accepted { correlation },
             request: Some(Box::new(request)),
         }
+    }
+
+    /// thread 를 지정한 프롬프트의 준비를 시작한다 (plan 18 K3-3b). 준비 칸은 TUI 의 준비와 같이 쓴다.
+    pub(super) fn begin_thread_prompt_preparation(
+        &mut self,
+        intent: ManualPromptPreparationIntent,
+        thread_id: String,
+    ) -> ManualPromptPreparationReduction {
+        let reduction = self.begin_manual_prompt_preparation(intent);
+        if let (ManualPromptPreparationAdmission::Accepted { .. }, Some(active)) = (
+            &reduction.admission,
+            self.in_flight_manual_prompt_preparation.as_mut(),
+        ) {
+            active.addressed_thread_id = Some(thread_id);
+        }
+        reduction
+    }
+
+    /// 이 준비가 thread 를 지정한 프롬프트의 것이면 그 thread 이다 (plan 18 K3-3b).
+    pub(super) fn manual_prompt_preparation_thread(
+        &self,
+        correlation: &ManualPromptCorrelation,
+    ) -> Option<String> {
+        self.in_flight_manual_prompt_preparation
+            .as_ref()
+            .filter(|active| &active.correlation == correlation)
+            .and_then(|active| active.addressed_thread_id.clone())
     }
 
     pub(super) fn cancel_manual_prompt_preparation(&mut self) -> Option<ManualPromptCorrelation> {

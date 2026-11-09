@@ -307,6 +307,9 @@ impl CoreController {
                     snapshot: self.shared_snapshot(),
                 }
             }
+            CoreInput::Command(AppCommand::SubmitThreadPrompt(submission)) => {
+                self.begin_thread_prompt(*submission)
+            }
             CoreInput::Command(AppCommand::CancelManualPromptPreparation) => {
                 let Some(correlation) = self.planning.cancel_manual_prompt_preparation() else {
                     return self.unchanged_outcome();
@@ -1108,6 +1111,9 @@ impl CoreController {
                 }
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::ManualPromptPrepared(result)) => {
+                let addressed_thread_id = self
+                    .planning
+                    .manual_prompt_preparation_thread(result.correlation());
                 let Some(disposition) = self
                     .planning
                     .complete_manual_prompt_preparation(result.correlation())
@@ -1118,6 +1124,9 @@ impl CoreController {
                         snapshot: self.shared_snapshot(),
                     };
                 };
+                if let Some(thread_id) = addressed_thread_id {
+                    return self.submit_prepared_thread_prompt(thread_id, *result, disposition);
+                }
                 let snapshot = self.shared_snapshot();
                 CoreDispatchOutcome {
                     events: (disposition == ManualPromptCompletionDisposition::Publish)
@@ -1516,6 +1525,149 @@ impl CoreController {
     }
 
     /*
+     * thread 를 지정한 프롬프트를 받는다 (plan 18 K3-3b). 그 thread 를 알고 쉬고 있으면 준비를 시작한다. 준비가
+     * 끝나면 `submit_prepared_thread_prompt` 가 이어서 제출한다. TUI 가 하던 준비 -> 제출 두 단계를 core 가 잇는다.
+     */
+    fn begin_thread_prompt(
+        &mut self,
+        submission: super::ThreadPromptSubmission,
+    ) -> CoreDispatchOutcome {
+        let super::ThreadPromptSubmission {
+            workspace_directory,
+            thread_id,
+            prompt,
+        } = submission;
+        let (admission, effects) =
+            self.admit_thread_prompt(workspace_directory, &thread_id, prompt);
+        CoreDispatchOutcome {
+            events: vec![AppEvent::ThreadPromptAdmissionResolved {
+                thread_id,
+                admission,
+            }],
+            effects,
+            snapshot: self.shared_snapshot(),
+        }
+    }
+
+    fn admit_thread_prompt(
+        &mut self,
+        workspace_directory: String,
+        thread_id: &str,
+        prompt: String,
+    ) -> (super::ThreadPromptAdmission, Vec<CoreEffect>) {
+        if !self.thread_is_known(thread_id) {
+            return (
+                super::ThreadPromptAdmission::RejectedUnknownThread,
+                Vec::new(),
+            );
+        }
+        if self.conversation_turn.thread_rejects_new_prompt(thread_id) {
+            return (super::ThreadPromptAdmission::RejectedBusy, Vec::new());
+        }
+        let reduction = self.planning.begin_thread_prompt_preparation(
+            super::ManualPromptPreparationIntent {
+                workspace_directory,
+                raw_prompt: prompt,
+                parent_thread_id: Some(thread_id.to_string()),
+                parent_turn_id: None,
+            },
+            thread_id.to_string(),
+        );
+        match reduction.admission {
+            super::ManualPromptPreparationAdmission::Accepted { correlation } => {
+                let effects = reduction
+                    .request
+                    .into_iter()
+                    .map(CoreEffect::PrepareManualPrompt)
+                    .collect();
+                (
+                    super::ThreadPromptAdmission::Accepted { correlation },
+                    effects,
+                )
+            }
+            super::ManualPromptPreparationAdmission::RejectedActive { active_correlation } => (
+                super::ThreadPromptAdmission::RejectedPreparationActive { active_correlation },
+                Vec::new(),
+            ),
+        }
+    }
+
+    /// core 가 아는 thread 이다: 보는 thread, 일이 남은 thread, 읽은 세션 목록의 thread (plan 18 K3-3b).
+    fn thread_is_known(&self, thread_id: &str) -> bool {
+        self.conversation_turn.has_session_for_thread(thread_id)
+            || self
+                .state
+                .shared_snapshot()
+                .session_catalog
+                .lists_thread(thread_id)
+    }
+
+    /*
+     * 준비가 끝난 thread 지정 프롬프트를 그 thread 에 제출한다 (plan 18 K3-3b). 이 준비는 TUI 의 것이 아니므로
+     * `ManualPromptPrepared` 로 알리지 않는다.
+     */
+    fn submit_prepared_thread_prompt(
+        &mut self,
+        thread_id: String,
+        result: crate::domain::planning::ManualPromptOutcome,
+        disposition: ManualPromptCompletionDisposition,
+    ) -> CoreDispatchOutcome {
+        let workspace_directory = result.correlation().workspace_directory.clone();
+        let (outcome, effects) = match prepared_thread_prompt_handoff(result, disposition) {
+            Ok(handoff) => {
+                let request =
+                    self.thread_prompt_turn_request(&thread_id, workspace_directory, handoff);
+                let admission = self
+                    .conversation_turn
+                    .admit_thread_turn_submission(&thread_id, &request);
+                let effects = match admission {
+                    TurnSubmissionAdmission::Accepted { correlation } => {
+                        vec![CoreEffect::SubmitTurn {
+                            correlation,
+                            request: Box::new(request),
+                        }]
+                    }
+                    TurnSubmissionAdmission::RejectedActive { .. }
+                    | TurnSubmissionAdmission::RejectedStopPending { .. }
+                    | TurnSubmissionAdmission::RejectedUnavailable => Vec::new(),
+                };
+                (super::ThreadPromptOutcome::Submitted(admission), effects)
+            }
+            Err(reason) => (
+                super::ThreadPromptOutcome::PreparationFailed { reason },
+                Vec::new(),
+            ),
+        };
+        CoreDispatchOutcome {
+            events: vec![AppEvent::ThreadPromptSubmitted { thread_id, outcome }],
+            effects,
+            snapshot: self.shared_snapshot(),
+        }
+    }
+
+    fn thread_prompt_turn_request(
+        &self,
+        thread_id: &str,
+        workspace_directory: String,
+        handoff: crate::domain::planning::ManualPromptMainSessionHandoff,
+    ) -> super::TurnSubmissionRequest {
+        let (_, turn_options) = self.conversation_turn.turn_context_for_thread(thread_id);
+        super::TurnSubmissionRequest {
+            workspace_directory,
+            thread_id: Some(thread_id.to_string()),
+            prompt: handoff.prompt,
+            transcript_text: handoff.transcript_text,
+            image_paths: Vec::new(),
+            prompt_origin: super::CorePromptOrigin::ManualIntake,
+            auto_follow_source: None,
+            planning_handoff: handoff.task,
+            turn_options,
+            // 병렬 작업 슬롯은 병렬 제어부를 가진 호스트만 안다. 지금은 main session 턴으로 제출한다.
+            slot_lease_handoff: None,
+        }
+    }
+
+    /*
      * 자동 후속 턴을 제출한다 (plan 18 K1-5). 이전에는 TUI 가 자기 입력으로 다시 제출했다. 턴 옵션은 core 가
      * 기억한 값을, 병렬 슬롯 lease 넘기기는 core 의 planning handoff 를 쓴다. 결과는 화면이 그릴 수 있게
      * `AutoFollowTurnSubmissionResolved` 로 알린다.
@@ -1768,6 +1920,45 @@ fn stop_effects_from_intents(intents: Vec<StopEffectIntent>) -> Vec<CoreEffect> 
             }
         })
         .collect()
+}
+
+/*
+ * 준비 결과에서 제출할 프롬프트를 꺼낸다 (plan 18 K3-3b). TUI 의 `apply_manual_prompt_intake_outcome` 과 같은
+ * 규칙이다. planning 초안 검토가 필요하면 원격 클라이언트는 검토할 수 없으므로 실패로 알린다.
+ */
+fn prepared_thread_prompt_handoff(
+    result: crate::domain::planning::ManualPromptOutcome,
+    disposition: ManualPromptCompletionDisposition,
+) -> Result<crate::domain::planning::ManualPromptMainSessionHandoff, String> {
+    use crate::domain::planning::{ManualPromptIntakeOutcome, ManualPromptOutcome};
+
+    if disposition == ManualPromptCompletionDisposition::SuppressCancelled {
+        return Err("prompt preparation was cancelled".to_string());
+    }
+    match result {
+        ManualPromptOutcome::PromptReady {
+            transcript_text,
+            intake,
+            ..
+        } => match *intake {
+            ManualPromptIntakeOutcome::TaskCommitted { handoff, .. }
+            | ManualPromptIntakeOutcome::TaskUpdated { handoff, .. } => {
+                if handoff.transcript_text == transcript_text {
+                    Ok(handoff)
+                } else {
+                    Err("prepared prompt does not match the submitted text".to_string())
+                }
+            }
+            ManualPromptIntakeOutcome::Rejected { reason }
+            | ManualPromptIntakeOutcome::Failed { reason } => Err(reason),
+        },
+        ManualPromptOutcome::BootstrapReviewRequired { review, .. } => Err(format!(
+            "planning bootstrap needs review / draft: {}",
+            review.draft_name
+        )),
+        ManualPromptOutcome::BootstrapFailed { reason, .. }
+        | ManualPromptOutcome::Rejected { reason, .. } => Err(reason),
+    }
 }
 
 impl Default for CoreController {
@@ -9461,6 +9652,174 @@ mod tests {
             },
         )));
         assert!(unknown.effects.is_empty(), "an unknown thread is refused");
+    }
+
+    fn thread_prompt(thread_id: &str, prompt: &str) -> CoreInput {
+        CoreInput::Command(AppCommand::SubmitThreadPrompt(Box::new(
+            super::super::ThreadPromptSubmission {
+                workspace_directory: "/tmp/workspace".to_string(),
+                thread_id: thread_id.to_string(),
+                prompt: prompt.to_string(),
+            },
+        )))
+    }
+
+    fn thread_prompt_admission(
+        outcome: &CoreDispatchOutcome,
+    ) -> super::super::ThreadPromptAdmission {
+        outcome
+            .events
+            .iter()
+            .find_map(|event| match event {
+                AppEvent::ThreadPromptAdmissionResolved { admission, .. } => {
+                    Some(admission.clone())
+                }
+                _ => None,
+            })
+            .expect("a thread prompt always resolves its admission")
+    }
+
+    fn prepared_thread_prompt(generation: u64, transcript_text: &str, prompt: &str) -> CoreInput {
+        CoreInput::EffectCompleted(CoreEffectCompletion::ManualPromptPrepared(Box::new(
+            ManualPromptOutcome::PromptReady {
+                correlation: manual_prompt_correlation(generation, "/tmp/workspace"),
+                transcript_text: transcript_text.to_string(),
+                runtime_projection: Box::new(PlanningRuntimeProjection::invalid("test")),
+                intake: Box::new(
+                    crate::domain::planning::ManualPromptIntakeOutcome::TaskCommitted {
+                        committed_task_id: "task-1".to_string(),
+                        committed_planning_revision: 1,
+                        handoff: crate::domain::planning::ManualPromptMainSessionHandoff {
+                            prompt: prompt.to_string(),
+                            transcript_text: transcript_text.to_string(),
+                            task: None,
+                        },
+                    },
+                ),
+            },
+        )))
+    }
+
+    #[test]
+    fn a_remote_client_submits_a_prompt_to_a_thread_it_does_not_show() {
+        // plan 18 K3-3b: core prepares the prompt and then submits it to the addressed thread.
+        let mut controller = CoreController::new();
+        load_test_session_catalog(&mut controller);
+        load_test_conversation(&mut controller, "thread-alpha");
+
+        let accepted = controller.handle_input(thread_prompt("thread-beta", "fix the test"));
+        assert_eq!(
+            thread_prompt_admission(&accepted),
+            super::super::ThreadPromptAdmission::Accepted {
+                correlation: manual_prompt_correlation(1, "/tmp/workspace"),
+            }
+        );
+        assert!(matches!(
+            accepted.effects.as_slice(),
+            [CoreEffect::PrepareManualPrompt(request)]
+                if request.parent_thread_id.as_deref() == Some("thread-beta")
+                    && request.raw_prompt == "fix the test"
+        ));
+
+        let submitted =
+            controller.handle_input(prepared_thread_prompt(1, "fix the test", "planned prompt"));
+        assert!(
+            submitted.events.contains(&AppEvent::ThreadPromptSubmitted {
+                thread_id: "thread-beta".to_string(),
+                outcome: super::super::ThreadPromptOutcome::Submitted(
+                    TurnSubmissionAdmission::Accepted {
+                        correlation: TurnSubmissionCorrelation::new(1),
+                    }
+                ),
+            }),
+            "{:?}",
+            submitted.events
+        );
+        assert!(
+            !submitted
+                .events
+                .iter()
+                .any(|event| matches!(event, AppEvent::ManualPromptPrepared(_))),
+            "the TUI does not see another client's preparation"
+        );
+        assert!(matches!(
+            submitted.effects.as_slice(),
+            [CoreEffect::SubmitTurn { request, .. }]
+                if request.thread_id.as_deref() == Some("thread-beta")
+                    && request.prompt == "planned prompt"
+                    && request.prompt_origin == CorePromptOrigin::ManualIntake
+        ));
+        assert!(
+            submitted
+                .snapshot
+                .conversation_runtime
+                .active_turn
+                .is_none(),
+            "the shown thread stays idle"
+        );
+        assert_eq!(controller.conversation_turn.background_session_count(), 1);
+        assert!(submitted.events.iter().any(|event| matches!(
+            event,
+            AppEvent::ThreadActivityChanged(activity)
+                if activity.iter().any(|thread| thread.thread_id == "thread-beta" && thread.running)
+        )));
+    }
+
+    #[test]
+    fn a_thread_prompt_is_refused_for_an_unknown_or_busy_thread() {
+        let mut controller = CoreController::new();
+        let unknown = controller.handle_input(thread_prompt("thread-9", "hello"));
+        assert_eq!(
+            thread_prompt_admission(&unknown),
+            super::super::ThreadPromptAdmission::RejectedUnknownThread
+        );
+        assert!(unknown.effects.is_empty());
+
+        load_test_session_catalog(&mut controller);
+        start_test_turn(&mut controller, "thread-1", "turn-1");
+        for thread_id in ["thread-1", "thread-alpha"] {
+            let busy = controller.handle_input(thread_prompt(thread_id, "hello"));
+            assert_eq!(
+                thread_prompt_admission(&busy),
+                super::super::ThreadPromptAdmission::RejectedBusy,
+                "{thread_id}: one turn runs at a time"
+            );
+            assert!(busy.effects.is_empty(), "no planning task is made");
+        }
+    }
+
+    #[test]
+    fn a_failed_thread_prompt_preparation_leaves_no_session_behind() {
+        let mut controller = CoreController::new();
+        load_test_session_catalog(&mut controller);
+        controller.handle_input(thread_prompt("thread-beta", "first"));
+        let second = controller.handle_input(thread_prompt("thread-alpha", "second"));
+        assert_eq!(
+            thread_prompt_admission(&second),
+            super::super::ThreadPromptAdmission::RejectedPreparationActive {
+                active_correlation: manual_prompt_correlation(1, "/tmp/workspace"),
+            }
+        );
+
+        let failed = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ManualPromptPrepared(Box::new(ManualPromptOutcome::Rejected {
+                correlation: manual_prompt_correlation(1, "/tmp/workspace"),
+                transcript_text: "first".to_string(),
+                runtime_projection: Box::new(PlanningRuntimeProjection::invalid("test")),
+                reason: "planning is invalid".to_string(),
+            })),
+        ));
+        assert_eq!(
+            failed.events,
+            vec![AppEvent::ThreadPromptSubmitted {
+                thread_id: "thread-beta".to_string(),
+                outcome: super::super::ThreadPromptOutcome::PreparationFailed {
+                    reason: "planning is invalid".to_string(),
+                },
+            }]
+        );
+        assert!(failed.effects.is_empty());
+        assert_eq!(controller.conversation_turn.background_session_count(), 0);
     }
 
     #[test]

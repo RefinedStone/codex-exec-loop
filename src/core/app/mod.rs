@@ -65,7 +65,10 @@ pub use github_review_poll::{
     GithubReviewPollCorrelation, GithubReviewPollingSettings, GithubReviewPollingSetupCorrelation,
     GithubReviewPollingSetupMode, GithubReviewPollingSetupRequest, GithubReviewPollingSetupResult,
 };
-pub use manual_prompt::{ManualPromptPreparationAdmission, ManualPromptPreparationIntent};
+pub use manual_prompt::{
+    ManualPromptPreparationAdmission, ManualPromptPreparationIntent, ThreadPromptAdmission,
+    ThreadPromptOutcome, ThreadPromptSubmission,
+};
 pub use planning_runtime::{
     PlanningDoctorSnapshot, PlanningDoctorSnapshotState, PlanningRuntimeRefreshSnapshot,
 };

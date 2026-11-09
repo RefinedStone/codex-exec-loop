@@ -2303,6 +2303,9 @@ impl NativeTuiApp {
             AppEvent::ParallelModeSupervisorSnapshotInvalidated => {
                 self.invalidate_parallel_mode_supervisor_snapshot();
             }
+            // Remote clients submit prompts to threads by id (plan 18 K3-3b). The TUI
+            // sees those turns through the thread summary.
+            AppEvent::ThreadPromptAdmissionResolved { .. } | AppEvent::ThreadPromptSubmitted { .. } => {}
             AppEvent::SnapshotChanged(_) => {}
         }
     }

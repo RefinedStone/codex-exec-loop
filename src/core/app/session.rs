@@ -33,6 +33,19 @@ pub enum SessionCatalogSnapshot {
     Failed { message: String },
 }
 
+impl SessionCatalogSnapshot {
+    /// 읽은 세션 목록에 이 thread 가 있다 (plan 18 K3-3b).
+    pub(crate) fn lists_thread(&self, thread_id: &str) -> bool {
+        let Self::Ready(ready) = self else {
+            return false;
+        };
+        ready
+            .catalog
+            .recent_sessions()
+            .is_some_and(|sessions| sessions.items.iter().any(|item| item.id == thread_id))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum SessionCatalogState {
     #[default]
