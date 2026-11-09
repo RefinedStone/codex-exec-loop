@@ -4,8 +4,13 @@ pub mod parallel_agent_profile;
 pub mod planning_workspace;
 pub mod pr_validation_rollout_evidence;
 pub(crate) mod secure_fs;
+// kernel_lock 은 저장소당 커널 하나를 지키는 OS 파일 잠금이다 (plan 18 K3-4).
+pub(crate) mod kernel_lock;
 
 // re-export를 두면 composition/wiring code가 파일명 세부 구조를 몰라도 adapter를 직접 주입할 수 있다.
+pub(crate) use self::kernel_lock::{
+    RepositoryKernelLock, RepositoryKernelLockAdapter, RepositoryKernelLockHeld,
+};
 pub use self::parallel_agent_profile::FilesystemParallelAgentProfileRepositoryAdapter;
 pub use self::planning_workspace::FilesystemPlanningWorkspaceAdapter;
 pub use self::pr_validation_rollout_evidence::FilesystemPrValidationRolloutEvidenceAdapter;

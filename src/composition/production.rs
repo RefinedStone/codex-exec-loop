@@ -13,7 +13,8 @@ use crate::adapter::outbound::db::{
 };
 use crate::adapter::outbound::filesystem::{
     FilesystemParallelAgentProfileRepositoryAdapter, FilesystemPlanningWorkspaceAdapter,
-    FilesystemPrValidationRolloutEvidenceAdapter,
+    FilesystemPrValidationRolloutEvidenceAdapter, RepositoryKernelLock,
+    RepositoryKernelLockAdapter, RepositoryKernelLockHeld,
 };
 use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
 use crate::adapter::outbound::github::{
@@ -75,7 +76,9 @@ use crate::application::service::pr_validation_rollout_evidence_query::PrValidat
 use crate::application::service::review_center::ReviewCenterReadService;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
-use crate::composition::native_client_runtime::NativeTuiApplicationComposition;
+use crate::composition::native_client_runtime::{
+    NativeClientRuntime, NativeTuiApplicationComposition,
+};
 use crate::domain::github_review::GithubPullRequestTarget;
 
 const APP_SERVER_CLIENT_NAME: &str = "codex-exec-loop-native";
@@ -355,10 +358,54 @@ pub(crate) fn resolve_active_planning_workspace_root(workspace_dir: &str) -> Pat
     SqlitePlanningAuthorityAdapter::resolve_active_workspace_root(workspace_dir)
 }
 
-pub(crate) fn build_native_tui_application() -> NativeTuiApplicationComposition {
-    let workspace_dir = std::env::current_dir()
+/// `workspace_dir` 가 속한 저장소의 커널 잠금을 잡는다 (plan 18 K3-4). 결정 고리를 돌리는 프로세스는 런타임을
+/// 조립하기 전에 이것을 잡는다. 다른 프로세스가 쥐고 있으면 `RepositoryKernelLockHeld` 오류이다.
+pub(crate) fn acquire_repository_kernel_lock(workspace_dir: &str) -> Result<RepositoryKernelLock> {
+    RepositoryKernelLockAdapter::acquire(workspace_dir)
+}
+
+/// TUI 가 시작 폴더의 저장소 잠금을 잡는다 (plan 18 K3-4). 다른 프로세스가 그 저장소의 커널을 돌리면 오류를
+/// 돌려주고, TUI 는 화면을 열기 전에 그 이유를 보이고 끝난다.
+pub(crate) fn acquire_native_tui_kernel_lock() -> Result<Option<RepositoryKernelLock>> {
+    acquire_native_tui_kernel_lock_for_workspace(&native_tui_workspace_dir())
+}
+
+/// 잠금 파일을 만들지 못하는 오류(경합이 아닌 오류)는 TUI 를 막지 않는다. 경고를 남기고 잠금 없이 시작한다.
+/// 그 경우에도 planning 기준 데이터가 같은 디렉터리를 쓰므로 오류는 planning 화면에도 보인다.
+pub(crate) fn acquire_native_tui_kernel_lock_for_workspace(
+    workspace_dir: &str,
+) -> Result<Option<RepositoryKernelLock>> {
+    match RepositoryKernelLockAdapter::acquire(workspace_dir) {
+        Ok(lock) => Ok(Some(lock)),
+        Err(error) if error.downcast_ref::<RepositoryKernelLockHeld>().is_some() => Err(error),
+        Err(error) => {
+            tracing::warn!(
+                error = %format!("{error:#}"),
+                "kernel lock unavailable; the TUI starts without it"
+            );
+            Ok(None)
+        }
+    }
+}
+
+fn native_tui_workspace_dir() -> String {
+    std::env::current_dir()
         .map(|path| path.display().to_string())
-        .unwrap_or_else(|_| ".".to_string());
+        .unwrap_or_else(|_| ".".to_string())
+}
+
+pub(crate) fn build_native_tui_application() -> NativeTuiApplicationComposition {
+    build_native_application_for_workspace(&native_tui_workspace_dir())
+}
+
+/// 화면 없는 커널의 런타임이다 (plan 18 K3-4). 호출자는 먼저 그 저장소의 커널 잠금을 잡는다. 조립이 PR 검증
+/// 스케줄러 스레드를 시작하기 때문이다.
+pub(crate) fn build_headless_kernel_runtime(workspace_dir: &str) -> NativeClientRuntime {
+    build_native_application_for_workspace(workspace_dir).into_headless_client_runtime()
+}
+
+fn build_native_application_for_workspace(workspace_dir: &str) -> NativeTuiApplicationComposition {
+    let workspace_dir = workspace_dir.to_string();
     let capture_enabled = app_server_prompt_logging_enabled();
     let ports = build_shared_ports_for_prompt_logging(capture_enabled);
     let maintenance_mode = native_tui_prompt_log_maintenance_mode(capture_enabled);
@@ -1226,5 +1273,43 @@ mod tests {
             native_tui_prompt_log_maintenance_mode(false),
             AppServerPromptLogMaintenanceMode::ClearAll
         );
+    }
+
+    #[test]
+    fn tui_startup_refuses_a_repository_whose_kernel_runs_in_another_process() {
+        // plan 18 K3-4: the TUI shows the reason and exits before it opens the screen.
+        let workspace = TempWorkspace::new("tui-kernel-lock-held");
+        initialize_git_workspace(&workspace);
+        let workspace_dir = workspace.path().display().to_string();
+        let _kernel = acquire_repository_kernel_lock(&workspace_dir).expect("kernel lock");
+
+        let error = acquire_native_tui_kernel_lock_for_workspace(&workspace_dir)
+            .expect_err("the TUI must not start a second kernel for the repository");
+
+        let message = format!("{error:#}");
+        assert!(
+            message.starts_with("another Akra kernel already runs for repository")
+                && message.contains("kernel.lock")
+                && message.contains("Close that process and try again"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn tui_startup_keeps_running_without_the_lock_when_the_lock_file_cannot_open() {
+        let workspace = TempWorkspace::new("tui-kernel-lock-broken");
+        let workspace_dir = workspace.path().display().to_string();
+        let lock_path =
+            SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(&workspace_dir)
+                .map(|location| Path::new(&location.runtime_dir).join("kernel.lock"))
+                .expect("runtime directory should be prepared");
+        let _ = std::fs::remove_file(&lock_path);
+        std::fs::create_dir_all(&lock_path).expect("a directory blocks the lock file");
+
+        let lock = acquire_native_tui_kernel_lock_for_workspace(&workspace_dir)
+            .expect("a broken lock file does not stop the TUI");
+
+        assert!(lock.is_none());
+        let _ = std::fs::remove_dir(&lock_path);
     }
 }
