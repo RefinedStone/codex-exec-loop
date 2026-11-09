@@ -206,9 +206,13 @@ impl PlanningFeatureReducer {
             .and_then(|active| active.addressed_thread_id.clone())
     }
 
+    /*
+     * TUI 가 자기 준비를 취소한다. thread 를 지정한 준비는 원격 클라이언트의 것이라 취소하지 않는다 (plan 18 K3-3b).
+     * TUI 는 대화를 바꿀 때마다 이 명령을 보내므로, 취소하면 원격 제출이 실패하고 만든 planning 작업만 남는다.
+     */
     pub(super) fn cancel_manual_prompt_preparation(&mut self) -> Option<ManualPromptCorrelation> {
         let active = self.in_flight_manual_prompt_preparation.as_mut()?;
-        if active.cancelled {
+        if active.cancelled || active.addressed_thread_id.is_some() {
             return None;
         }
         active.cancelled = true;

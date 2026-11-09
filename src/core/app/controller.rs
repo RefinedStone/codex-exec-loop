@@ -1532,13 +1532,19 @@ impl CoreController {
         &mut self,
         submission: super::ThreadPromptSubmission,
     ) -> CoreDispatchOutcome {
-        let super::ThreadPromptSubmission {
-            workspace_directory,
-            thread_id,
-            prompt,
-        } = submission;
-        let (admission, effects) =
-            self.admit_thread_prompt(workspace_directory, &thread_id, prompt);
+        let (admission, effects) = if submission.parallel_mode_enabled {
+            (
+                super::ThreadPromptAdmission::RejectedParallelMode,
+                Vec::new(),
+            )
+        } else {
+            self.admit_thread_prompt(
+                submission.workspace_directory,
+                &submission.thread_id,
+                submission.prompt,
+            )
+        };
+        let thread_id = submission.thread_id;
         CoreDispatchOutcome {
             events: vec![AppEvent::ThreadPromptAdmissionResolved {
                 thread_id,
@@ -9660,6 +9666,7 @@ mod tests {
                 workspace_directory: "/tmp/workspace".to_string(),
                 thread_id: thread_id.to_string(),
                 prompt: prompt.to_string(),
+                parallel_mode_enabled: false,
             },
         )))
     }
@@ -9786,6 +9793,63 @@ mod tests {
             );
             assert!(busy.effects.is_empty(), "no planning task is made");
         }
+    }
+
+    #[test]
+    fn a_tui_conversation_switch_does_not_cancel_a_remote_thread_prompt() {
+        // plan 18 K3-3b: the TUI cancels on every conversation switch; only its own preparation stops.
+        let mut controller = CoreController::new();
+        load_test_session_catalog(&mut controller);
+        controller.handle_input(thread_prompt("thread-beta", "fix the test"));
+
+        let switched = controller.handle_input(CoreInput::Command(
+            AppCommand::CancelManualPromptPreparation,
+        ));
+        assert!(
+            switched.effects.is_empty(),
+            "the remote preparation keeps running"
+        );
+        let submitted =
+            controller.handle_input(prepared_thread_prompt(1, "fix the test", "planned prompt"));
+        assert!(matches!(
+            submitted.effects.as_slice(),
+            [CoreEffect::SubmitTurn { request, .. }]
+                if request.thread_id.as_deref() == Some("thread-beta")
+        ));
+
+        controller.handle_input(CoreInput::Command(AppCommand::PrepareManualPrompt(
+            Box::new(manual_prompt_intent("/tmp/workspace", "tui prompt")),
+        )));
+        let cancelled = controller.handle_input(CoreInput::Command(
+            AppCommand::CancelManualPromptPreparation,
+        ));
+        assert_eq!(
+            cancelled.effects,
+            vec![CoreEffect::CancelManualPromptPreparation {
+                correlation: manual_prompt_correlation(2, "/tmp/workspace"),
+            }],
+            "the TUI still cancels its own preparation"
+        );
+    }
+
+    #[test]
+    fn a_thread_prompt_is_refused_while_parallel_mode_is_on() {
+        // plan 18 K3-3b: parallel intake lives in the TUI, so core does not start a main-session turn.
+        let mut controller = CoreController::new();
+        load_test_session_catalog(&mut controller);
+        let refused = controller.handle_input(CoreInput::Command(AppCommand::SubmitThreadPrompt(
+            Box::new(super::super::ThreadPromptSubmission {
+                workspace_directory: "/tmp/workspace".to_string(),
+                thread_id: "thread-beta".to_string(),
+                prompt: "fix the test".to_string(),
+                parallel_mode_enabled: true,
+            }),
+        )));
+        assert_eq!(
+            thread_prompt_admission(&refused),
+            super::super::ThreadPromptAdmission::RejectedParallelMode
+        );
+        assert!(refused.effects.is_empty(), "no planning task is made");
     }
 
     #[test]

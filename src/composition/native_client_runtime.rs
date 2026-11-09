@@ -648,8 +648,20 @@ impl NativeClientRuntime {
     }
 
     fn dispatch_core_input(&mut self, input: CoreInput) -> NativeClientDispatchOutcome {
+        let input = self.with_parallel_mode_for_thread_prompt(input);
         let outcome = self.core.runtime.dispatch_input(input);
         self.resolve_internal_post_turn_routes(outcome)
+    }
+
+    /// thread 지정 프롬프트에 병렬 모드 사용 여부를 붙인다 (plan 18 K3-3b). 그 값은 병렬 제어부를 가진 호스트만 안다.
+    fn with_parallel_mode_for_thread_prompt(&self, input: CoreInput) -> CoreInput {
+        match input {
+            CoreInput::Command(AppCommand::SubmitThreadPrompt(mut submission)) => {
+                submission.parallel_mode_enabled = self.parallel_mode_enabled();
+                CoreInput::Command(AppCommand::SubmitThreadPrompt(submission))
+            }
+            other => other,
+        }
     }
 
     /*
@@ -1645,6 +1657,34 @@ pub(crate) mod tests {
     #[test]
     fn host_cycle_runs_turn_end_evaluation_and_auto_follow_without_a_client() {
         run_auto_follow_loop_with_host_cycles(false);
+    }
+
+    #[test]
+    fn the_host_sets_parallel_mode_on_a_thread_prompt() {
+        // plan 18 K3-3b: a client cannot claim the parallel mode; the host uses its control plane.
+        let (mut runtime, _turns) = recording_runtime_for_test();
+        let NativeClientDispatchOutcome::Core(outcome) = runtime.dispatch_client_event(
+            NativeClientEvent::core(CoreInput::Command(AppCommand::SubmitThreadPrompt(
+                Box::new(crate::core::app::ThreadPromptSubmission {
+                    workspace_directory: "/workspace".to_string(),
+                    thread_id: "thread-9".to_string(),
+                    prompt: "fix the test".to_string(),
+                    parallel_mode_enabled: true,
+                }),
+            ))),
+        ) else {
+            panic!("a thread prompt is a core command");
+        };
+        assert!(
+            outcome
+                .events
+                .contains(&AppEvent::ThreadPromptAdmissionResolved {
+                    thread_id: "thread-9".to_string(),
+                    admission: crate::core::app::ThreadPromptAdmission::RejectedUnknownThread,
+                }),
+            "parallel mode is off in the host, so core checks the thread: {:?}",
+            outcome.events
+        );
     }
 
     #[test]

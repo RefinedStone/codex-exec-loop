@@ -83,6 +83,7 @@ fn every_command_maps_to_one_core_command() {
                 workspace_directory: "/workspace".to_string(),
                 thread_id: "thread-2".to_string(),
                 prompt: "fix the failing test".to_string(),
+                parallel_mode_enabled: false,
             }
         )))
     );
@@ -217,6 +218,17 @@ fn only_coarse_core_events_are_exported() {
             thread_id: "thread-2".to_string(),
             status: PromptSubmissionStatus::Rejected,
             message: Some("unknown thread; load_sessions lists the known threads".to_string()),
+        }))
+    );
+    assert_eq!(
+        KernelEvent::from_core(&AppEvent::ThreadPromptAdmissionResolved {
+            thread_id: "thread-2".to_string(),
+            admission: ThreadPromptAdmission::RejectedParallelMode,
+        }),
+        Some(KernelEvent::PromptSubmission(PromptSubmissionState {
+            thread_id: "thread-2".to_string(),
+            status: PromptSubmissionStatus::Rejected,
+            message: Some("parallel mode is on; submit the prompt in the TUI".to_string()),
         }))
     );
     assert_eq!(

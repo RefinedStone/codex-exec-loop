@@ -183,6 +183,8 @@ impl KernelCommand {
                     workspace_directory: workspace_directory.to_string(),
                     thread_id: non_blank("thread_id", thread_id)?,
                     prompt: non_blank("prompt", prompt)?,
+                    // 커널 호스트가 병렬 제어부의 값으로 덮어쓴다.
+                    parallel_mode_enabled: false,
                 }))
             }
             Self::SteerTurn {
@@ -526,6 +528,10 @@ impl PromptSubmissionState {
             ThreadPromptAdmission::RejectedUnknownThread => (
                 PromptSubmissionStatus::Rejected,
                 Some("unknown thread; load_sessions lists the known threads"),
+            ),
+            ThreadPromptAdmission::RejectedParallelMode => (
+                PromptSubmissionStatus::Rejected,
+                Some("parallel mode is on; submit the prompt in the TUI"),
             ),
         };
         Self {
