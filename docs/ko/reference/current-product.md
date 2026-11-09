@@ -213,6 +213,8 @@ parallel, Git, GitHub 권위를 바꾸지 않고 재생하며 PR 검증 복구 �
 - upstream: `codex app-server --listen unix://$AKRA_HOME/run/codex-app-server.sock` 를 TUI 와 같은 고정
   실행 파일, `-c` 보안 설정, 정리된 환경으로 실행한다. 종료되면 1초~30초 간격으로 다시 시작하고, 그 횟수를
   `akra/gateway/info` 로 알린다.
+  upstream pid 는 `$AKRA_HOME/run/gateway-upstream.pid` 에 적는다. unix 에서 새 Gateway 는 비정상 종료한 Gateway
+  가 남긴 upstream 을 끝낸 뒤 자기 upstream 을 시작한다 (그 프로세스가 아직 같은 소켓의 `app-server` 일 때만).
 - 세션: 클라이언트 WebSocket 마다 `codex app-server proxy --sock …` 자식 프로세스를 하나씩 연다. 그래서
   `initialize`, 요청 ID, 스레드 구독은 접속마다 따로이다. 프레임은 바꾸지 않고 전달하고 `akra/*` 요청만
   Gateway 가 답한다 (`akra/gateway/info`: Gateway·codex 버전, 시작 시각, upstream 재시작 횟수). upstream 이

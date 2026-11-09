@@ -52,3 +52,6 @@
   microsoft/node-pty#919). 그대로 두면 `pty.spawn()` 이 `posix_spawnp failed` 로 실패한다. stable 은 아직 1.1.0 이
   최신이므로, `desktop/scripts/fix-pty-permissions.mjs` 를 postinstall 로 돌려 실행 권한을 되살린다. macOS 실기
   확인은 아직 하지 않았다 (리뷰 지적, 2026-11-06).
+- macOS 실기 (2026-11-09, Apple silicon): `spawn-helper` 를 패키지 상태(0644)로 되돌리면 `pty.spawn()` 이
+  `posix_spawnp failed` 로 실패했다. postinstall 스크립트가 두 prebuild(arm64, x64)의 실행 권한을 되살린 뒤에는 pty
+  출력과 종료 코드 0 을 받았다. `AKRA_E2E_TERMINAL=1 npm run e2e` 의 터미널 화면 시험 5개가 실제 zsh 에서 통과했다.
