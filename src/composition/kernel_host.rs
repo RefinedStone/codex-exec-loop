@@ -237,7 +237,8 @@ impl KernelHostLoop {
         }
     }
 
-    /// core 이벤트와 병렬 제어부 이벤트를 모든 클라이언트에 나눈다. K3-3 에서 대상(thread, 클라이언트)별로 나눈다.
+    /// core 이벤트와 병렬 제어부 이벤트를 모든 클라이언트에 나눈다. 원격 클라이언트는 보는 자리가 없고 thread 를
+    /// 지정하므로(§3.2) 이벤트는 thread id 를 담고 모두에게 간다. 클라이언트별 대상은 K6 의 클라이언트별 보기와 함께 정한다.
     fn publish(&mut self, outcome: NativeClientDispatchOutcome) {
         let (core_events, parallel_events) = match outcome {
             NativeClientDispatchOutcome::Core(core) => (core.events, Vec::new()),
@@ -456,7 +457,6 @@ mod tests {
                     workspace_directory: workspace.to_string(),
                     thread_id: "thread-2".to_string(),
                     prompt: "fix the test".to_string(),
-                    parallel_mode_enabled: false,
                 },
             ))),
             CoreInput::EffectCompleted(CoreEffectCompletion::ManualPromptPrepared(Box::new(

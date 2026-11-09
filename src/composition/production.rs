@@ -360,8 +360,11 @@ pub(crate) fn resolve_active_planning_workspace_root(workspace_dir: &str) -> Pat
 
 /// `workspace_dir` 가 속한 저장소의 커널 잠금을 잡는다 (plan 18 K3-4). 결정 고리를 돌리는 프로세스는 런타임을
 /// 조립하기 전에 이것을 잡는다. 다른 프로세스가 쥐고 있으면 `RepositoryKernelLockHeld` 오류이다.
+/// 잠금 파일은 planning 기준 데이터와 같은 사용자 전용 runtime 디렉터리에 둔다.
 pub(crate) fn acquire_repository_kernel_lock(workspace_dir: &str) -> Result<RepositoryKernelLock> {
-    RepositoryKernelLockAdapter::acquire(workspace_dir)
+    let location =
+        SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace_dir)?;
+    RepositoryKernelLockAdapter::acquire(location, workspace_dir)
 }
 
 /// TUI 가 시작 폴더의 저장소 잠금을 잡는다 (plan 18 K3-4). 다른 프로세스가 그 저장소의 커널을 돌리면 오류를
@@ -375,7 +378,7 @@ pub(crate) fn acquire_native_tui_kernel_lock() -> Result<Option<RepositoryKernel
 pub(crate) fn acquire_native_tui_kernel_lock_for_workspace(
     workspace_dir: &str,
 ) -> Result<Option<RepositoryKernelLock>> {
-    match RepositoryKernelLockAdapter::acquire(workspace_dir) {
+    match acquire_repository_kernel_lock(workspace_dir) {
         Ok(lock) => Ok(Some(lock)),
         Err(error) if error.downcast_ref::<RepositoryKernelLockHeld>().is_some() => Err(error),
         Err(error) => {

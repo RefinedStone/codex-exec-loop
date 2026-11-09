@@ -1,6 +1,6 @@
 //! Akra 커널 응용 프로토콜 v0 (plan 18 K3-1). JSON-RPC `akra/kernel/*` 메서드의 직렬화 타입과, 그 타입과
-//! core 타입 사이의 변환을 둔다. core 는 직렬화를 모르므로 변환은 이 inbound adapter 만 한다. 전송(Gateway)과
-//! 커널 호스트는 K3-2 이후 단계가 붙인다.
+//! core 타입 사이의 변환을 둔다. core 는 직렬화를 모르므로 변환은 이 inbound adapter 만 한다. 커널 호스트는
+//! `src/composition/kernel_host.rs` 이다. 전송(Gateway)은 K3-5 에서 붙인다.
 
 use serde::{Deserialize, Serialize};
 
@@ -73,6 +73,8 @@ pub struct AttachRequest {
 pub struct AttachResponse {
     pub client_id: String,
     pub protocol_version: u32,
+    /// 붙은 커널의 저장소 신원이다. 같은 저장소의 worktree 들은 같은 값을 받는다 (§3.4).
+    pub kernel: String,
 }
 
 // command -----------------------------------------------------------------------------------------
@@ -81,14 +83,13 @@ pub struct AttachResponse {
 #[serde(deny_unknown_fields)]
 pub struct CommandRequest {
     pub command: KernelCommand,
-    /// 같은 클라이언트가 같은 키로 다시 보내면 한 번만 처리한다.
-    #[serde(default)]
-    pub idempotency_key: Option<String>,
+    // 멱등 키는 v0 에 없다. 재전송을 가리려면 커널이 처리한 명령을 기억해야 하므로 사건 기록(K5)과 함께 더한다.
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommandResponse {
-    /// 커널이 명령을 받아들였다. 결과는 `akra/kernel/event` 로 온다.
+    /// 커널이 명령을 처리했다. 받아들였는지와 결과는 그 전에 `akra/kernel/event` 로 온다 (예:
+    /// `prompt_submission`, `thread_activity`). `false` 는 커널이 끝나서 명령을 넣지 못한 경우이다.
     pub accepted: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
@@ -183,8 +184,6 @@ impl KernelCommand {
                     workspace_directory: workspace_directory.to_string(),
                     thread_id: non_blank("thread_id", thread_id)?,
                     prompt: non_blank("prompt", prompt)?,
-                    // 커널 호스트가 병렬 제어부의 값으로 덮어쓴다.
-                    parallel_mode_enabled: false,
                 }))
             }
             Self::SteerTurn {
@@ -496,6 +495,10 @@ impl ThreadActivity {
 pub struct PromptSubmissionState {
     pub thread_id: String,
     pub status: PromptSubmissionStatus,
+    /// `rejected`, `failed` 의 이유 코드이다. 클라이언트와 에이전트는 이 값으로 다음 행동을 고른다 (plan 19 P3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<PromptSubmissionReason>,
+    /// 사람이 읽는 설명이다. 판단에는 `reason` 을 쓴다.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
 }
@@ -507,67 +510,118 @@ pub enum PromptSubmissionStatus {
     Preparing,
     /// 준비가 끝나고 턴을 제출했다.
     Submitted,
-    /// 받아들이지 않았다 (모르는 thread, 일하는 중, 다른 준비 진행 중).
+    /// 받아들이지 않았다. 이유는 `reason` 이다.
     Rejected,
     /// 준비가 턴을 만들지 못했다.
     Failed,
 }
 
+/// 제출하지 못한 이유이다. 이름이 다음 행동을 알려 준다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PromptSubmissionReason {
+    /// 턴이 돌거나 그 thread 에 일이 남아 있다. `thread_activity` 가 비면 다시 보낸다.
+    Busy,
+    /// 다른 프롬프트를 준비하고 있다. 그 준비가 끝나면 다시 보낸다.
+    PreparationActive,
+    /// 커널이 모르는 thread 이다. `load_sessions` 로 목록을 읽는다.
+    UnknownThread,
+    /// 병렬 모드가 켜져 있다. TUI 에서 제출한다.
+    ParallelMode,
+    /// 준비하는 사이에 다른 턴이 시작했다. 준비가 만든 planning 작업은 큐에 남는다.
+    TurnStartedDuringPreparation,
+    /// 정지 요청이 아직 끝나지 않았다.
+    StopPending,
+    /// 그 thread 가 지금 프롬프트를 받을 수 없다.
+    Unavailable,
+    /// 준비가 실패했다. `message` 가 원인이다.
+    PreparationFailed,
+}
+
 impl PromptSubmissionState {
     fn admitted(thread_id: &str, admission: &ThreadPromptAdmission) -> Self {
-        let (status, message) = match admission {
-            ThreadPromptAdmission::Accepted { .. } => (PromptSubmissionStatus::Preparing, None),
-            ThreadPromptAdmission::RejectedBusy => (
-                PromptSubmissionStatus::Rejected,
-                Some("a turn is running or the thread is still busy"),
-            ),
-            ThreadPromptAdmission::RejectedPreparationActive { .. } => (
-                PromptSubmissionStatus::Rejected,
-                Some("another prompt is being prepared"),
-            ),
-            ThreadPromptAdmission::RejectedUnknownThread => (
-                PromptSubmissionStatus::Rejected,
-                Some("unknown thread; load_sessions lists the known threads"),
-            ),
-            ThreadPromptAdmission::RejectedParallelMode => (
-                PromptSubmissionStatus::Rejected,
-                Some("parallel mode is on; submit the prompt in the TUI"),
-            ),
+        let rejected = match admission {
+            ThreadPromptAdmission::Accepted { .. } => None,
+            ThreadPromptAdmission::RejectedBusy => Some((
+                PromptSubmissionReason::Busy,
+                "a turn is running or the thread is still busy",
+            )),
+            ThreadPromptAdmission::RejectedPreparationActive { .. } => Some((
+                PromptSubmissionReason::PreparationActive,
+                "another prompt is being prepared",
+            )),
+            ThreadPromptAdmission::RejectedUnknownThread => Some((
+                PromptSubmissionReason::UnknownThread,
+                "unknown thread; load_sessions lists the known threads",
+            )),
+            ThreadPromptAdmission::RejectedParallelMode => Some((
+                PromptSubmissionReason::ParallelMode,
+                "parallel mode is on; submit the prompt in the TUI",
+            )),
         };
-        Self {
-            thread_id: thread_id.to_string(),
-            status,
-            message: message.map(str::to_string),
+        match rejected {
+            None => Self::progress(thread_id, PromptSubmissionStatus::Preparing),
+            Some((reason, message)) => Self::stopped(
+                thread_id,
+                PromptSubmissionStatus::Rejected,
+                reason,
+                message.to_string(),
+            ),
         }
     }
 
     fn submitted(thread_id: &str, outcome: &ThreadPromptOutcome) -> Self {
-        let (status, message) = match outcome {
+        let (reason, message) = match outcome {
             ThreadPromptOutcome::Submitted(TurnSubmissionAdmission::Accepted { .. }) => {
-                (PromptSubmissionStatus::Submitted, None)
+                return Self::progress(thread_id, PromptSubmissionStatus::Submitted);
             }
             ThreadPromptOutcome::Submitted(TurnSubmissionAdmission::RejectedActive { .. }) => (
-                PromptSubmissionStatus::Rejected,
-                Some("another turn started while the prompt was prepared".to_string()),
+                PromptSubmissionReason::TurnStartedDuringPreparation,
+                "another turn started while the prompt was prepared; its planning task stays queued"
+                    .to_string(),
             ),
             ThreadPromptOutcome::Submitted(TurnSubmissionAdmission::RejectedStopPending {
                 ..
             }) => (
-                PromptSubmissionStatus::Rejected,
-                Some("a stop request is still settling".to_string()),
+                PromptSubmissionReason::StopPending,
+                "a stop request is still settling".to_string(),
             ),
             ThreadPromptOutcome::Submitted(TurnSubmissionAdmission::RejectedUnavailable) => (
-                PromptSubmissionStatus::Rejected,
-                Some("the thread cannot take a prompt now".to_string()),
+                PromptSubmissionReason::Unavailable,
+                "the thread cannot take a prompt now".to_string(),
             ),
             ThreadPromptOutcome::PreparationFailed { reason } => {
-                (PromptSubmissionStatus::Failed, Some(reason.clone()))
+                return Self::stopped(
+                    thread_id,
+                    PromptSubmissionStatus::Failed,
+                    PromptSubmissionReason::PreparationFailed,
+                    reason.clone(),
+                );
             }
         };
+        Self::stopped(thread_id, PromptSubmissionStatus::Rejected, reason, message)
+    }
+
+    fn progress(thread_id: &str, status: PromptSubmissionStatus) -> Self {
         Self {
             thread_id: thread_id.to_string(),
             status,
-            message,
+            reason: None,
+            message: None,
+        }
+    }
+
+    fn stopped(
+        thread_id: &str,
+        status: PromptSubmissionStatus,
+        reason: PromptSubmissionReason,
+        message: String,
+    ) -> Self {
+        Self {
+            thread_id: thread_id.to_string(),
+            status,
+            reason: Some(reason),
+            message: Some(message),
         }
     }
 }

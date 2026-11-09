@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
+use crate::domain::planning::PlanningAuthorityLocation;
 
 const KERNEL_LOCK_FILE_NAME: &str = "kernel.lock";
 /// 진단 기록을 읽을 최대 크기이다. 기록은 세 줄이라 이것으로 충분하다.
@@ -66,11 +66,13 @@ impl std::error::Error for RepositoryKernelLockHeld {}
 pub(crate) struct RepositoryKernelLockAdapter;
 
 impl RepositoryKernelLockAdapter {
-    /// `workspace_dir` 가 속한 저장소의 커널 잠금을 잡는다. 다른 프로세스가 쥐고 있으면
+    /// `location` 저장소의 커널 잠금을 잡는다. `location.runtime_dir` 은 이미 준비된 사용자 전용 디렉터리여야
+    /// 한다. composition 이 planning 기준 데이터의 위치로 준비해서 넘긴다. 다른 프로세스가 쥐고 있으면
     /// `RepositoryKernelLockHeld` 오류를 돌려준다.
-    pub(crate) fn acquire(workspace_dir: &str) -> Result<RepositoryKernelLock> {
-        let location =
-            SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace_dir)?;
+    pub(crate) fn acquire(
+        location: PlanningAuthorityLocation,
+        workspace_dir: &str,
+    ) -> Result<RepositoryKernelLock> {
         let lock_path = Path::new(&location.runtime_dir).join(KERNEL_LOCK_FILE_NAME);
         let mut file = open_lock_file(&lock_path)?;
         match file.try_lock() {
@@ -233,6 +235,13 @@ mod tests {
         )
     }
 
+    fn acquire(workspace_dir: &str) -> Result<RepositoryKernelLock> {
+        let location = crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(
+            workspace_dir,
+        )?;
+        RepositoryKernelLockAdapter::acquire(location, workspace_dir)
+    }
+
     fn held_error(result: Result<RepositoryKernelLock>) -> RepositoryKernelLockHeld {
         let error = result.expect_err("the second acquire must be refused");
         error
@@ -244,9 +253,9 @@ mod tests {
     #[test]
     fn a_linked_worktree_cannot_take_the_lock_its_repository_holds() {
         let (_root, checkout, worktree) = repository_with_linked_worktree("worktree");
-        let _lock = RepositoryKernelLockAdapter::acquire(&checkout).expect("first lock");
+        let _lock = acquire(&checkout).expect("first lock");
 
-        let refused = held_error(RepositoryKernelLockAdapter::acquire(&worktree));
+        let refused = held_error(acquire(&worktree));
 
         assert!(refused.lock_path.ends_with("runtime/kernel.lock"));
         assert!(
@@ -274,7 +283,7 @@ mod tests {
             "{refused}"
         );
         // 같은 폴더의 두 번째 잠금도 거절된다.
-        held_error(RepositoryKernelLockAdapter::acquire(&checkout));
+        held_error(acquire(&checkout));
     }
 
     #[test]
@@ -282,8 +291,8 @@ mod tests {
         let (_first_root, first, _) = repository_with_linked_worktree("first");
         let (_second_root, second, _) = repository_with_linked_worktree("second");
 
-        let first_lock = RepositoryKernelLockAdapter::acquire(&first).expect("first repository");
-        let second_lock = RepositoryKernelLockAdapter::acquire(&second).expect("second repository");
+        let first_lock = acquire(&first).expect("first repository");
+        let second_lock = acquire(&second).expect("second repository");
 
         assert_ne!(first_lock.repository_key(), second_lock.repository_key());
     }
@@ -291,11 +300,11 @@ mod tests {
     #[test]
     fn dropping_the_lock_releases_it_for_the_next_process() {
         let (_root, checkout, worktree) = repository_with_linked_worktree("release");
-        let lock = RepositoryKernelLockAdapter::acquire(&worktree).expect("first lock");
+        let lock = acquire(&worktree).expect("first lock");
         let repository_key = lock.repository_key().to_string();
         drop(lock);
 
-        let next = RepositoryKernelLockAdapter::acquire(&checkout).expect("lock after release");
+        let next = acquire(&checkout).expect("lock after release");
 
         assert_eq!(next.repository_key(), repository_key);
     }
@@ -304,9 +313,9 @@ mod tests {
     fn a_plain_folder_locks_by_its_own_path_outside_the_folder() {
         let folder = temp_root("plain");
         let workspace = folder.0.display().to_string();
-        let _lock = RepositoryKernelLockAdapter::acquire(&workspace).expect("plain folder lock");
+        let _lock = acquire(&workspace).expect("plain folder lock");
 
-        let refused = held_error(RepositoryKernelLockAdapter::acquire(&workspace));
+        let refused = held_error(acquire(&workspace));
 
         assert!(
             !refused.lock_path.starts_with(&folder.0),

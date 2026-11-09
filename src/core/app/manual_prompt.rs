@@ -27,8 +27,6 @@ pub struct ThreadPromptSubmission {
     pub workspace_directory: String,
     pub thread_id: String,
     pub prompt: String,
-    // 병렬 모드 사용 여부이다. 병렬 제어부를 가진 호스트가 dispatch 때 채운다. 클라이언트가 보낸 값은 쓰지 않는다.
-    pub parallel_mode_enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
