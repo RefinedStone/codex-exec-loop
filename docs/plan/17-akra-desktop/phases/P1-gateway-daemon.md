@@ -1,6 +1,6 @@
 # P1. Gateway 데몬
 
-상태: **구현 완료** (macOS 실기 확인만 남음) · 기준일: 2026-11-05 · 규모: Rust 수백~1,000줄과 테스트, 약 1.5주 (Windows 포함)
+상태: **완료** (Windows 2026-11-05, macOS 2026-11-09 실기 확인) · 기준일: 2026-11-09 · 규모: Rust 수백~1,000줄과 테스트, 약 1.5주 (Windows 포함)
 
 ## 1. 목표
 
@@ -222,7 +222,7 @@ Akra 의 아키텍처 테스트(`tests/architecture_boundaries.rs`)를 통과해
   에 텍스트 메시지를 `client`/`gateway` 방향과 함께 남긴다. Windows 실기에서 세션 2개가 파일 2개로 기록됐다.
 - 실측(§6, 완료 기준 8): 2026-11-05 사용자 허락으로 턴 3회를 써서 Q-03, Q-09 를 확인했다. 결과는
   [05](../05-risks-and-open-questions.md) §3 에 있다.
-- 남은 일: macOS 실기 확인(완료 기준 9).
+- 남은 일: macOS 실기 확인(완료 기준 9). → 2026-11-09 완료 (아래 기록).
 
 ### 2026-11-06 Windows 콘솔 창
 
@@ -235,3 +235,24 @@ Akra 의 아키텍처 테스트(`tests/architecture_boundaries.rs`)를 통과해
 - 확인 (사용자 허락, Gateway 재시작): 앱과 같은 방식으로 새 Gateway 를 띄우고 창 숨김 앱으로 두 번 접속했다. 새 콘솔
   창은 0개였다. Gateway 의 자식은 `conhost.exe`(창 없는 콘솔)와 `node.exe`(app-server) 이다.
 - 한계: 이 API 는 Windows 11 24H2(빌드 26100) 부터 있다. 더 오래된 Windows 에서는 그대로 두므로 창이 뜰 수 있다.
+
+### 2026-11-09 macOS 실기 확인 (완료 기준 9)
+
+- 환경: macOS 26.5 (Apple silicon), codex-cli 0.167.0, `prerelease` `cd2d2550` 의 debug 빌드. 턴을 쓰지 않았다.
+
+| 기준 | 결과 |
+| --- | --- |
+| 1. 사용자 전용 주소 | `~/.akra/run/gateway.sock` 이 `srw-------`(0600), `~/.akra/run` 이 `drwx------`(0700) 로 생겼다 |
+| 2. 다중 접속 | `multi_client_check.py --socket ~/.akra/run/gateway.sock --clients 3`: 접속 3개가 각자 handshake, `akra/gateway/info`, `initialize`, 같은 요청 id 의 `thread/list` 에 성공 |
+| 3. `akra/gateway/info` | `codexVersion: codex-cli 0.167.0`, `gatewayVersion`, `startedAt`, `upstreamRestarts: 0` |
+| 4. upstream 재시작 | upstream 을 `SIGKILL` 로 끝내자 대기 중인 클라이언트가 0.04초 만에 close `1012` (`codex app-server upstream restarted`)를 받았다. 새 접속에서 `upstreamRestarts: 1`, `thread/list` 성공 |
+| 5. 단일 인스턴스 | 두 번째 실행은 `another akra-gateway is already running (lock …/gateway.lock)` 으로 끝났다 (exit 1) |
+
+- 결함 (P2 재접속 확인 중 발견, 같은 날 수정): Gateway 자체를 강제 종료하면 macOS 에서는 upstream
+  `codex app-server` 가 고아(ppid 1)로 남아 codex 소켓 잠금을 쥔다. 다음 Gateway 의 upstream 은
+  `exited before listening (exit status: 1)` 으로 바로 끝나고 Gateway 도 끝난다. Windows 는 job object 가 함께
+  끝내서 생기지 않았다.
+- 수정: Gateway 가 upstream pid 를 `$AKRA_HOME/run/gateway-upstream.pid` 에 적는다. 새 Gateway 는 단일 인스턴스
+  잠금을 잡은 뒤, 기록된 프로세스가 아직 자기 소켓의 `app-server` 이면 그 프로세스 그룹을 끝내고 새 upstream 을
+  시작한다. pid 가 다른 프로그램에 재사용되었으면 건드리지 않는다. 실기: 고아가 남은 상태에서 새 Gateway 가 고아를
+  끝내고 정상으로 시작했다.

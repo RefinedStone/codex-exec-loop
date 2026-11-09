@@ -267,6 +267,9 @@ the desktop app itself is not shipped yet.
 - Upstream: the Gateway runs `codex app-server --listen unix://$AKRA_HOME/run/codex-app-server.sock`
   with the same pinned executable, `-c` security overrides, and scrubbed environment as the TUI. It
   restarts an exited upstream with 1 s to 30 s backoff and reports the count in `akra/gateway/info`.
+  It records the upstream pid in `$AKRA_HOME/run/gateway-upstream.pid`; on unix a new Gateway stops an
+  upstream that a crashed Gateway left behind (only when that process is still an `app-server` for the
+  same socket) before it starts its own.
 - Sessions: each client WebSocket gets its own `codex app-server proxy --sock …` child, so `initialize`,
   request ids, and thread subscriptions stay per connection. Frames pass through unchanged; only
   `akra/*` requests are answered by the Gateway (`akra/gateway/info` returns gateway and codex versions,

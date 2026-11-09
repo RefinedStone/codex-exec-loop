@@ -1,6 +1,6 @@
 # P2. Electron 골격과 Gateway 연결
 
-상태: 진행 중 (골격 완료, 피드백 대기) · 기준일: 2026-11-05 · 규모: 약 1주
+상태: 완료 (Windows 2026-11-05, macOS 2026-11-09 실기 확인) · 기준일: 2026-11-09 · 규모: 약 1주
 
 ## 1. 목표
 
@@ -180,4 +180,24 @@ codex app-server generate-ts --out <임시 디렉터리>
 | 7. 시험 | vitest 17개 통과 (JSON-RPC 클라이언트, 주소, 재접속 간격, 가짜 Gateway 위 세션·재접속·데몬 시작) |
 | D-06 | 앱 창을 닫으면 앱은 끝나고 Gateway 는 계속 실행된다 |
 
-- 남은 일: macOS 실기 확인, Q-12 결정, 완료 기준 8 (`agent-plan` 검사는 PR 에서 실행).
+- 남은 일: macOS 실기 확인, Q-12 결정, 완료 기준 8 (`agent-plan` 검사는 PR 에서 실행). → 모두 끝남: Q-12 는
+  2026-11-05 에 cwd 묶음으로 결정, 완료 기준 8 은 머지된 PR 의 CI 로 확인, macOS 는 아래 기록.
+
+### 2026-11-09 macOS 실기 확인
+
+- 환경: macOS 26.5 (Apple silicon), codex-cli 0.167.0, Electron 45.2.3, Node 24.3.0. 빌드한 앱을 Playwright 로
+  숨긴 창(`AKRA_DESKTOP_HIDDEN=1`)으로 띄워 실제 Gateway 에 붙였다. 턴을 쓰지 않았다.
+
+| 기준 | 결과 |
+| --- | --- |
+| 1. 창 열림 | 제목 `Akra Desktop` 창이 열렸다 |
+| 2. 버전과 목록 | `codex-cli 0.167.0`, 작업 폴더별 스레드 498개가 표시됐다 |
+| 3. Gateway 자동 시작 | Gateway 가 없는 상태에서 앱이 `target/debug/akra-gateway` 를 시작하고 접속했다 |
+| 4. 재접속 | Gateway 를 `SIGKILL` 로 끝내자 `끊김` → `연결됨` 으로 돌아왔고 새 Gateway 가 떴다. 처음에는 실패했다: 고아 upstream 때문에 새 Gateway 가 시작하지 못했다 (P1 §9 2026-11-09 결함). 수정 뒤 통과 |
+| 5. renderer 격리 | `typeof require`, `typeof process` 가 `undefined`. `window.akra` 는 bridge 함수만 있다 |
+| 6. 버전 경고 | 생성 타입(0.159.0)과 Gateway(0.167.0)가 달라 경고가 표시됐다 |
+| 7. 시험 | `npm run check`, vitest 92개 통과. `npm run e2e` 화면 시험 23개 통과 (승인 흐름, 여러 창, 실제 셸 터미널, 브라우저) |
+| D-06 | 앱 창을 닫으면 앱은 끝나고 Gateway 는 계속 실행된다 |
+
+- 후속 (선택): codex 0.167.0 기준으로 `npm run generate:protocol` 을 다시 돌리면 경고가 없어진다. 타입 차이를
+  검토해야 하므로 이 확인에서는 하지 않았다.
