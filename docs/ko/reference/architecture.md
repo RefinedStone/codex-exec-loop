@@ -558,6 +558,16 @@ Host 소유 Git 작업은 다음을 지킵니다.
 `build_kernel_for_workspace`(`src/composition/repository_kernel.rs`)는 런타임을 조립하기 전에 이 잠금을 잡고,
 커널을 버리면 호스트 스레드가 끝난 뒤 풀립니다.
 
+`NativeClientRuntime` 을 버리면 먼저 병렬 자동화 epoch 를 모두 닫습니다. 커널은 호스트 스레드에서 런타임을
+버리므로 epoch 가 잠금보다 먼저 닫힙니다. 이전 런타임의 작업 스레드는 다음 epoch 확인에서 멈춥니다.
+
+- 배분된 작업 스레드는 slot 턴을 시작하지 않고 slot 을 돌려줍니다.
+- distributor 큐 넣기는 열린 epoch 안에서만 commit 합니다.
+- slot 턴 뒤의 planning 갱신은 epoch 에 묶인 continuation permit 으로, epoch 가 열려 있을 때만 결과를
+  적용합니다.
+
+이미 시작한 slot 턴은 끝까지 돌고, 그 뒤 큐를 바꾸지 않습니다. 저장한 병렬 모드 설정은 바뀌지 않습니다.
+
 Subprocess는 `src/subprocess.rs`를 사용합니다. Linux는 process-group과 제한된 `/proc` descendant
 containment, Windows는 kill-on-close Job, 그 밖의 Unix는 process-group containment를 보장합니다.
 같은 OS 사용자 프로세스의 악의적인 race는 filesystem-only threat boundary 밖입니다.

@@ -850,6 +850,25 @@ fn run_parallel_dispatch_worker(
     turn_service: ParallelModeTurnService,
     planning: PlanningServices,
 ) -> ParallelDispatchWorkerRunResult {
+    // 배분한 뒤 epoch 가 닫혔으면(병렬 모드 끔, 커널 종료) 턴을 시작하지 않고 slot 을 돌려준다.
+    // shortcut: 이 확인과 턴 시작 사이의 아주 짧은 틈은 남는다. 턴 시작을 epoch commit 안에 넣으려면 worker port 가
+    // 시작 확인 callback 을 받아야 한다. 그 틈에서 시작한 턴은 끝난 뒤 epoch 확인에서 큐를 바꾸지 않는다.
+    if !turn_service.automation_epoch_is_active(
+        &request.planning_workspace_directory,
+        request.automation_epoch_id,
+    ) {
+        let _ = turn_service.finalize_stream_completion(
+            &request.worktree_directory,
+            false,
+            true,
+            true,
+            true,
+        );
+        return ParallelDispatchWorkerRunResult::launch_failed(vec![format!(
+            "parallel automation epoch closed before worker launch / task: {}",
+            request.handoff_task.task_title
+        )]);
+    }
     let (event_tx, event_rx) = conversation_stream_channel();
     let service_request = request.clone();
     event_log::emit_lazy("parallel_worker_stream_starting", || {
@@ -1456,10 +1475,12 @@ fn run_parallel_dispatch_official_completion(
         notices.push(notice);
     }
 
-    if !turn_service.automation_epoch_is_active(
+    // 갱신은 오래 걸리므로 epoch 잠금을 쥐지 않는다. 대신 epoch 에 묶인 permit 으로 결과를 적용한다. 갱신 중에
+    // epoch 가 닫히면(병렬 모드 끔, 커널 종료) 결과를 planning 큐에 적용하지 않는다.
+    let Ok(refresh_permit) = turn_service.automation_epoch_continuation_permit(
         &request.planning_workspace_directory,
         request.automation_epoch_id,
-    ) {
+    ) else {
         turn_service.mark_official_completion_failed_for_lease(
             &request.expected_lease,
             "parallel automation epoch closed before planning authority refresh",
@@ -1469,7 +1490,7 @@ fn run_parallel_dispatch_official_completion(
             request.handoff_task.task_title
         ));
         return ParallelDispatchOfficialCompletionOutcome::failed(notices);
-    }
+    };
 
     let worker_request = PlanningOfficialCompletionRefreshRequest {
         /*
@@ -1485,9 +1506,14 @@ fn run_parallel_dispatch_official_completion(
         contract: &completion_report,
     };
 
-    let worker_outcome = planning
-        .worker
-        .refresh_queue_from_official_completion(worker_request);
+    let worker_outcome = match &refresh_permit {
+        Some(permit) => planning
+            .worker
+            .refresh_queue_from_official_completion_with_permit(worker_request, permit),
+        None => planning
+            .worker
+            .refresh_queue_from_official_completion(worker_request),
+    };
 
     if !turn_service.automation_epoch_is_active(
         &request.planning_workspace_directory,
@@ -2648,6 +2674,38 @@ mod tests {
                 .iter()
                 .all(|notice| !notice.contains("without a terminal receipt")),
             "notices: {:?}",
+            result.notices
+        );
+    }
+
+    #[test]
+    fn a_dispatched_worker_starts_no_turn_after_its_epoch_closed() {
+        // K3-5 review: a worker spawned before the kernel stopped must not start a slot turn.
+        let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let turn_service = ParallelModeTurnService::new(test_parallel_service(authority.clone()))
+            .with_automation_guard(
+                crate::application::service::parallel_mode::ParallelModeAutomationGuard::default(),
+            );
+        let result = run_parallel_dispatch_worker(
+            worker_request_with_secret_bodies(),
+            Arc::new(ScriptedParallelAgentWorkerPort::new(
+                vec![scripted_thread_prepared()],
+                WorkerExit::Panic,
+            )),
+            turn_service,
+            test_planning_services(authority),
+        );
+
+        assert_eq!(
+            result.worker_event_kind,
+            ParallelModeControlPlaneWorkerEventKind::LaunchFailed
+        );
+        assert!(
+            result
+                .notices
+                .iter()
+                .any(|notice| notice.contains("epoch closed before worker launch")),
+            "the worker port must not run: {:?}",
             result.notices
         );
     }

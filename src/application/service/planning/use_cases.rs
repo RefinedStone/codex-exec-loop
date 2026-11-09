@@ -1315,6 +1315,14 @@ impl PlanningWorkerUseCases {
         self.worker_orchestration
             .refresh_queue_from_official_completion(request)
     }
+    pub fn refresh_queue_from_official_completion_with_permit(
+        &self,
+        request: PlanningOfficialCompletionRefreshRequest<'_>,
+        continuation_permit: &PostTurnContinuationPermit,
+    ) -> anyhow::Result<PlanningWorkerRunOutcome> {
+        self.worker_orchestration
+            .refresh_queue_from_official_completion_with_permit(request, continuation_permit)
+    }
     pub fn prepare_post_turn_official_completion_refresh(
         &self,
         request: PlanningPostTurnOfficialCompletionPreparationRequest<'_>,

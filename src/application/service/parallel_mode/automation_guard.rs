@@ -4,7 +4,14 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone, Default)]
 pub(crate) struct ParallelModeAutomationGuard {
     active_epochs: Arc<Mutex<BTreeMap<String, u64>>>,
+    /// epoch 가 닫히거나 바뀔 때마다 한 칸 나아간다. 오래 걸리는 planning 갱신은 이 gate 의 permit 으로 결과를
+    /// 적용하므로, 갱신 중에 epoch 가 닫히면 결과를 적용하지 않는다.
+    epoch_gate: crate::domain::planning::PostTurnContinuationGate,
 }
+
+/// 확인한 automation epoch 가 이미 닫혔다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ParallelModeAutomationEpochClosed;
 
 #[derive(Clone, Debug)]
 pub(crate) struct ParallelModeAutomationPermit {
@@ -61,17 +68,25 @@ impl std::fmt::Debug for ParallelModeAutomationGuard {
 
 impl ParallelModeAutomationGuard {
     pub(crate) fn activate(&self, workspace_directory: impl Into<String>, epoch_id: u64) {
-        self.active_epochs
+        let previous = self
+            .active_epochs
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert(workspace_directory.into(), epoch_id);
+        if previous.is_some_and(|previous| previous != epoch_id) {
+            self.epoch_gate.advance();
+        }
     }
 
     pub(crate) fn cancel(&self, workspace_directory: &str) {
-        self.active_epochs
+        let removed = self
+            .active_epochs
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .remove(workspace_directory);
+        if removed.is_some() {
+            self.epoch_gate.advance();
+        }
     }
 
     /// 모든 작업 공간의 epoch 를 닫는다. 진행 중인 commit 이 있으면 그 commit 이 끝난 뒤 닫힌다.
@@ -80,6 +95,29 @@ impl ParallelModeAutomationGuard {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clear();
+        // epoch 잠금을 놓은 뒤 gate 를 나아가게 한다. gate 는 진행 중인 planning 결과 적용을 기다린다.
+        self.epoch_gate.advance();
+    }
+
+    /// 그 epoch 가 열려 있을 때 그 epoch 에 묶인 permit 을 준다. 오래 걸리는 planning 갱신이 결과를 적용할 때 쓴다.
+    /// epoch 가 닫히거나 바뀌면 permit 은 무효가 되고, 이미 시작한 적용은 닫는 쪽이 기다린다.
+    pub(crate) fn epoch_continuation_permit(
+        &self,
+        workspace_directory: &str,
+        epoch_id: u64,
+    ) -> Result<
+        crate::domain::planning::PostTurnContinuationPermit,
+        ParallelModeAutomationEpochClosed,
+    > {
+        let active_epochs = self
+            .active_epochs
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        active_epochs
+            .get(workspace_directory)
+            .is_some_and(|active_epoch_id| *active_epoch_id == epoch_id)
+            .then(|| self.epoch_gate.capture())
+            .ok_or(ParallelModeAutomationEpochClosed)
     }
 
     pub(crate) fn is_active(&self, workspace_directory: &str, epoch_id: u64) -> bool {
@@ -155,6 +193,30 @@ mod tests {
         guard.cancel_all();
         assert!(!guard.is_active("/first", 3));
         assert!(!guard.is_active("/second", 4));
+    }
+
+    #[test]
+    fn an_epoch_continuation_permit_dies_with_its_epoch() {
+        let guard = ParallelModeAutomationGuard::default();
+        assert!(guard.epoch_continuation_permit("/workspace", 7).is_err());
+
+        guard.activate("/workspace", 7);
+        let permit = guard
+            .epoch_continuation_permit("/workspace", 7)
+            .expect("an open epoch gives a permit");
+        guard.activate("/workspace", 7);
+        assert!(permit.is_current(), "re-activating the same epoch keeps it");
+
+        guard.cancel_all();
+        assert!(!permit.is_current());
+        assert_eq!(permit.with_current(|| "must not run"), None);
+
+        guard.activate("/workspace", 8);
+        let permit = guard
+            .epoch_continuation_permit("/workspace", 8)
+            .expect("the next epoch gives a permit");
+        guard.activate("/workspace", 9);
+        assert!(!permit.is_current(), "a replaced epoch loses its permit");
     }
 
     #[test]

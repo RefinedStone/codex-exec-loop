@@ -306,6 +306,19 @@ impl ParallelModeTurnService {
             .is_none_or(|guard| guard.is_active(workspace_directory, epoch_id))
     }
 
+    /// 오래 걸리는 planning 갱신이 결과를 적용할 때 쓰는 epoch permit 이다. guard 가 없으면 `Ok(None)` 이고
+    /// 막지 않는다. epoch 가 닫혔으면 `Err` 이다.
+    pub(crate) fn automation_epoch_continuation_permit(
+        &self,
+        workspace_directory: &str,
+        epoch_id: u64,
+    ) -> Result<Option<PostTurnContinuationPermit>, super::ParallelModeAutomationEpochClosed> {
+        self.automation_guard
+            .as_ref()
+            .map(|guard| guard.epoch_continuation_permit(workspace_directory, epoch_id))
+            .transpose()
+    }
+
     pub(crate) fn automation_permit(
         &self,
         workspace_directory: &str,
@@ -1156,9 +1169,17 @@ impl ParallelModeTurnService {
                 should_run_delivery_tick: false,
             };
         }
-        let enqueue = self
-            .parallel_mode_service
-            .enqueue_workspace_commit_ready_result_for_lease(&durable_lease);
+        // epoch 를 확인한 뒤 닫혀도 큐에 넣지 않도록, guard 가 있으면 epoch 안에서 commit 한다.
+        let enqueue = match automation_epoch.and_then(|(planning_workspace_directory, epoch_id)| {
+            self.automation_permit(planning_workspace_directory, epoch_id)
+        }) {
+            Some(permit) => self
+                .parallel_mode_service
+                .enqueue_workspace_commit_ready_result_for_lease_guarded(&durable_lease, &permit),
+            None => self
+                .parallel_mode_service
+                .enqueue_workspace_commit_ready_result_for_lease(&durable_lease),
+        };
         match enqueue {
             Ok(Some(item)) => notices.push(format!(
                 "commit-ready result entered the distributor queue / agent: {} / task: {} / state: {}",
@@ -1166,6 +1187,18 @@ impl ParallelModeTurnService {
                 item.task_title,
                 item.queue_state.label()
             )),
+            Ok(None) if !automation_is_active() => {
+                notices.push(
+                    "parallel result was durably marked commit-ready and awaits a new automation epoch"
+                        .to_string(),
+                );
+                return ParallelOfficialCompletionSuccessPreparation::Durable {
+                    notices,
+                    proof: ParallelOfficialCompletionDurableProof::CommitReadyAwaitingAutomation,
+                    expected_lease: durable_lease,
+                    should_run_delivery_tick: false,
+                };
+            }
             Ok(None) => {
                 notices.push(
                     "distributor enqueue did not persist a queue record after official refresh because the current running lease or commit-ready session no longer matched"
@@ -1648,6 +1681,64 @@ mod tests {
             .expect("commit-ready session detail should remain durable");
         assert_eq!(detail.state_label, "commit_ready");
         assert_eq!(snapshot.distributor.queue_depth(), 0);
+    }
+
+    #[test]
+    fn an_epoch_closed_during_enqueue_keeps_the_result_commit_ready() {
+        // K3-5 review: the epoch check and the distributor enqueue commit must not race.
+        let workspace = TempGitWorkspace::new("parallel-epoch-closed-during-enqueue");
+        let parallel_service = test_parallel_mode_service();
+        parallel_service
+            .reset_pool_on_parallel_initial_setup_report(&workspace.root)
+            .expect("pool should initialize");
+        let lease = parallel_service
+            .acquire_slot_lease(
+                &workspace.root,
+                ParallelModeSlotLeaseRequest::from_task_identity(
+                    "task-enqueue-race",
+                    "Close epoch during enqueue",
+                ),
+            )
+            .expect("slot should lease");
+        parallel_service
+            .mark_workspace_slot_running(&lease.worktree_path)
+            .expect("slot should become running");
+        parallel_service
+            .mark_workspace_official_completion_refreshing(&lease.worktree_path)
+            .expect("official refresh state should persist");
+
+        let guard = ParallelModeAutomationGuard::default();
+        guard.activate(workspace.root.clone(), 9);
+        let turn_service = ParallelModeTurnService::new(parallel_service.clone())
+            .with_automation_guard(guard.clone());
+        let closing_guard = guard.clone();
+        let closing_workspace = workspace.root.clone();
+        super::super::distributor::install_after_distributor_enqueue_preflight_hook(move || {
+            closing_guard.cancel(&closing_workspace);
+        });
+
+        let outcome = turn_service.finalize_official_completion_success_for_epoch(
+            &lease.worktree_path,
+            &workspace.root,
+            9,
+            "official ledger refresh succeeded",
+        );
+
+        match outcome {
+            ParallelOfficialCompletionFinalizeOutcome::Durable { proof, .. } => assert_eq!(
+                proof,
+                ParallelOfficialCompletionDurableProof::CommitReadyAwaitingAutomation
+            ),
+            ParallelOfficialCompletionFinalizeOutcome::Failed { notices, stage } => {
+                panic!("closed epoch should keep commit-ready, not fail at {stage:?}: {notices:?}")
+            }
+        }
+        let snapshot = parallel_service.build_passive_supervisor_snapshot(&workspace.root, None);
+        assert_eq!(
+            snapshot.distributor.queue_depth(),
+            0,
+            "a closed epoch must not enqueue the result"
+        );
     }
 
     #[test]

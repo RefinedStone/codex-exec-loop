@@ -659,6 +659,18 @@ there; linked worktrees resolve to the same directory. The TUI and `build_kernel
 (`src/composition/repository_kernel.rs`) take it before they assemble the runtime, and dropping the
 kernel releases it after the host thread ends.
 
+Dropping `NativeClientRuntime` closes every parallel automation epoch first. The kernel drops the
+runtime on its host thread, so the epochs close before the lock is released. Worker threads of the
+old runtime then stop at their next epoch check:
+
+- a dispatched worker does not start its slot turn and returns the slot;
+- a distributor enqueue commits only inside an open epoch;
+- the planning refresh after a slot turn applies its result only while its epoch is open, through a
+  continuation permit bound to the epoch.
+
+A slot turn that already started runs to its end and then changes no queue. The saved parallel mode
+setting does not change.
+
 Subprocesses use `src/subprocess.rs`. Linux uses process-group plus bounded `/proc` descendant
 containment, Windows uses a kill-on-close Job, and other Unix targets guarantee only process-group
 containment. Same-user hostile racing remains outside the filesystem-only threat boundary.
