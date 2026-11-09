@@ -8,6 +8,10 @@ fn sample_commands() -> Vec<KernelCommand> {
             thread_id: "thread-1".to_string(),
             name: "Renamed".to_string(),
         },
+        KernelCommand::SubmitPrompt {
+            thread_id: "thread-1".to_string(),
+            prompt: "fix the failing test".to_string(),
+        },
         KernelCommand::SteerTurn {
             thread_id: "thread-1".to_string(),
             expected_turn_id: "turn-1".to_string(),
@@ -66,6 +70,30 @@ fn every_command_maps_to_one_core_command() {
             expected_turn_id: "turn-1".to_string(),
             prompt: "focus".to_string(),
         }))
+    );
+    // plan 18 K3-3b: the prompt goes to the addressed thread; the kernel's workspace prepares it.
+    assert_eq!(
+        KernelCommand::SubmitPrompt {
+            thread_id: "thread-2".to_string(),
+            prompt: "fix the failing test".to_string(),
+        }
+        .into_core("/workspace"),
+        Ok(AppCommand::SubmitThreadPrompt(Box::new(
+            ThreadPromptSubmission {
+                workspace_directory: "/workspace".to_string(),
+                thread_id: "thread-2".to_string(),
+                prompt: "fix the failing test".to_string(),
+            }
+        )))
+    );
+    assert_eq!(
+        KernelCommand::SubmitPrompt {
+            thread_id: "thread-2".to_string(),
+            prompt: " ".to_string(),
+        }
+        .into_core("/workspace")
+        .map_err(|error| error.code),
+        Err(ERROR_INVALID_PARAMS)
     );
     assert_eq!(
         KernelCommand::PauseAutoFollow {}.into_core("/workspace"),
@@ -181,6 +209,30 @@ fn only_coarse_core_events_are_exported() {
         }))
     );
     assert_eq!(
+        KernelEvent::from_core(&AppEvent::ThreadPromptAdmissionResolved {
+            thread_id: "thread-2".to_string(),
+            admission: ThreadPromptAdmission::RejectedUnknownThread,
+        }),
+        Some(KernelEvent::PromptSubmission(PromptSubmissionState {
+            thread_id: "thread-2".to_string(),
+            status: PromptSubmissionStatus::Rejected,
+            message: Some("unknown thread; load_sessions lists the known threads".to_string()),
+        }))
+    );
+    assert_eq!(
+        KernelEvent::from_core(&AppEvent::ThreadPromptSubmitted {
+            thread_id: "thread-2".to_string(),
+            outcome: ThreadPromptOutcome::PreparationFailed {
+                reason: "planning is invalid".to_string(),
+            },
+        }),
+        Some(KernelEvent::PromptSubmission(PromptSubmissionState {
+            thread_id: "thread-2".to_string(),
+            status: PromptSubmissionStatus::Failed,
+            message: Some("planning is invalid".to_string()),
+        }))
+    );
+    assert_eq!(
         KernelEvent::from_core(&AppEvent::ParallelModeSupervisorSnapshotInvalidated),
         None,
         "fine-grained internal events stay inside the kernel"
@@ -192,6 +244,15 @@ fn events_and_description_have_stable_wire_shapes() {
     assert_eq!(
         serde_json::to_value(KernelEvent::Resync).expect("event should serialize"),
         json!({"type": "resync"})
+    );
+    assert_eq!(
+        serde_json::to_value(KernelEvent::PromptSubmission(PromptSubmissionState {
+            thread_id: "thread-1".to_string(),
+            status: PromptSubmissionStatus::Preparing,
+            message: None,
+        }))
+        .expect("event should serialize"),
+        json!({"type": "prompt_submission", "thread_id": "thread-1", "status": "preparing"})
     );
     let description = serde_json::to_value(describe()).expect("description should serialize");
     assert_eq!(description["protocol_version"], json!(PROTOCOL_VERSION));
@@ -228,6 +289,11 @@ fn events_and_description_have_stable_wire_shapes() {
         KernelEvent::ThreadActivity {
             threads: Vec::new(),
         },
+        KernelEvent::PromptSubmission(PromptSubmissionState {
+            thread_id: "thread-1".to_string(),
+            status: PromptSubmissionStatus::Submitted,
+            message: None,
+        }),
         KernelEvent::Resync,
     ]) {
         assert_eq!(

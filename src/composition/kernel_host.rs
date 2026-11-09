@@ -426,6 +426,102 @@ mod tests {
     }
 
     #[test]
+    fn a_client_submits_a_prompt_to_a_thread_the_tui_does_not_show() {
+        // plan 18 K3-3b: core prepares the prompt and submits the turn to the addressed thread.
+        let (runtime, turns) = recording_runtime_for_test();
+        let host = KernelHost::start(runtime).expect("kernel host thread should start");
+        let client = host.attach().expect("a client should attach");
+        // 파일 아래 경로라서 실제 worker(준비, 병렬 pool 잠금)는 아무것도 만들지 못한다. 시험은 준비 결과를 직접
+        // 넣는다.
+        let workspace = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml/workspace");
+
+        assert!(client.send_command(AppCommand::LoadSessionCatalog(
+            crate::core::app::SessionCatalogLoadIntent::ensure_loaded(10, workspace),
+        )));
+        assert!(
+            wait_for(&client, |event| matches!(
+                event,
+                KernelHostEvent::Core(core) if matches!(
+                    &**core,
+                    AppEvent::SessionCatalogChanged(crate::core::app::SessionCatalogSnapshot::Ready(_))
+                )
+            )),
+            "the kernel should list thread-2"
+        );
+
+        // 한 묶음이라 실제 준비 worker 의 결과보다 먼저 들어간다.
+        client.send_inputs_for_test(vec![
+            CoreInput::Command(AppCommand::SubmitThreadPrompt(Box::new(
+                crate::core::app::ThreadPromptSubmission {
+                    workspace_directory: workspace.to_string(),
+                    thread_id: "thread-2".to_string(),
+                    prompt: "fix the test".to_string(),
+                },
+            ))),
+            CoreInput::EffectCompleted(CoreEffectCompletion::ManualPromptPrepared(Box::new(
+                crate::domain::planning::ManualPromptOutcome::PromptReady {
+                    correlation: crate::domain::planning::ManualPromptCorrelation {
+                        request_id: 1,
+                        generation: 1,
+                        workspace_directory: workspace.to_string(),
+                    },
+                    transcript_text: "fix the test".to_string(),
+                    runtime_projection: Box::new(
+                        crate::application::service::planning::PlanningRuntimeProjection::invalid(
+                            "test",
+                        ),
+                    ),
+                    intake: Box::new(
+                        crate::domain::planning::ManualPromptIntakeOutcome::TaskCommitted {
+                            committed_task_id: "task-1".to_string(),
+                            committed_planning_revision: 1,
+                            handoff: crate::domain::planning::ManualPromptMainSessionHandoff {
+                                prompt: "planned prompt".to_string(),
+                                transcript_text: "fix the test".to_string(),
+                                task: None,
+                            },
+                        },
+                    ),
+                },
+            ))),
+        ]);
+        assert!(
+            wait_for(&client, |event| matches!(
+                event,
+                KernelHostEvent::Core(core) if matches!(
+                    &**core,
+                    AppEvent::ThreadPromptSubmitted {
+                        thread_id,
+                        outcome: crate::core::app::ThreadPromptOutcome::Submitted(
+                            crate::core::app::TurnSubmissionAdmission::Accepted { .. }
+                        ),
+                    } if thread_id == "thread-2"
+                )
+            )),
+            "the client should learn that the turn was submitted"
+        );
+        let deadline = Instant::now() + EVENT_TIMEOUT;
+        while turns.lock().expect("recorded turns should lock").is_empty() {
+            assert!(Instant::now() < deadline, "the turn should run");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(
+            turns.lock().expect("recorded turns should lock").as_slice(),
+            [("thread-2".to_string(), "planned prompt".to_string())]
+        );
+        assert!(
+            client
+                .query()
+                .expect("the host should answer queries")
+                .snapshot
+                .conversation_runtime
+                .active_turn
+                .is_none(),
+            "the shown slot did not move"
+        );
+    }
+
+    #[test]
     fn a_slow_client_gets_resync_instead_of_blocking_the_kernel() {
         let (sender, receiver) = mpsc::sync_channel(1);
         let mut client = ClientSink {
