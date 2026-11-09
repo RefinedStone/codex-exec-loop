@@ -14,6 +14,11 @@ use crate::composition::production;
 // shell_entrypoint owns terminal bootstrap only. Production service wiring lives
 // in crate::composition::production so TUI remains an inbound adapter.
 pub fn run() -> Result<()> {
+    /*
+     * 저장소당 커널 하나 (plan 18 K3-4). 커널을 조립하기 전에 시작 폴더의 저장소 잠금을 잡고, TUI 가 끝날 때까지
+     * 쥔다. 다른 TUI 나 커널 데몬이 이 저장소(다른 worktree 포함)를 돌리면 화면을 열기 전에 이유를 돌려준다.
+     */
+    let _kernel_lock = production::acquire_native_tui_kernel_lock()?;
     let shutdown = crate::shutdown::GracefulShutdown::install()?;
     let frontend = ShellFrontend::new();
     let runtime = prepare_runtime(build_default_app());

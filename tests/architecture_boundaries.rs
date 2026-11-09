@@ -11228,6 +11228,53 @@ fn kernel_host_owns_the_kernel_thread_without_transport_types() {
 }
 
 #[test]
+fn repository_kernel_assembly_stays_free_of_transports() {
+    // plan 18 K3-4: the repository kernel takes the lock and starts the host. The Gateway reaches it
+    // through channels only, so the assembly also stays free of tokio and inbound adapters.
+    assert_no_forbidden_references_in_paths(
+        "repository kernel assembly must not depend on transports or inbound adapters",
+        &["src/composition/repository_kernel.rs"],
+        &["tokio", "crate::adapter::inbound", "async fn"],
+    );
+}
+
+#[test]
+fn tui_startup_takes_the_repository_kernel_lock_before_it_builds_the_kernel() {
+    // plan 18 K3-4: the lock comes first. Building the kernel starts the PR validation scheduler,
+    // so a second TUI for the repository must stop before that.
+    let shell_entrypoint = fs::read_to_string("src/adapter/inbound/tui/app/shell_entrypoint.rs")
+        .expect("native shell entrypoint should load");
+    let production_source = production_lines(&shell_entrypoint)
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let lock = production_source
+        .find("production::acquire_native_tui_kernel_lock()?")
+        .expect("TUI startup must take the repository kernel lock and stop when it is held");
+    let build = production_source
+        .find("production::build_native_tui_application()")
+        .expect("TUI startup must build the native application");
+    assert!(
+        lock < build,
+        "TUI startup must take the kernel lock before it builds the kernel"
+    );
+
+    let kernel = fs::read_to_string("src/composition/repository_kernel.rs")
+        .expect("repository kernel source should load");
+    let lock = kernel
+        .find("production::acquire_repository_kernel_lock(workspace_dir)?")
+        .expect("the repository kernel must take the lock");
+    let build = kernel
+        .find("production::build_headless_kernel_runtime(workspace_dir)")
+        .expect("the repository kernel must build its runtime");
+    assert!(
+        lock < build,
+        "the repository kernel must take the lock before it builds the runtime"
+    );
+}
+
+#[test]
 fn inbound_adapters_do_not_block_switching_conversations_while_a_turn_runs() {
     // plan 18 K2-4: opening a conversation only changes the shown thread; Core finishes the left
     // one in the background, so no inbound adapter may refuse the switch.

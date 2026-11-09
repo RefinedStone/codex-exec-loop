@@ -423,6 +423,11 @@ impl NativeTuiApplicationComposition {
             clipboard_image_probe_trigger: self.clipboard_image_probe_trigger,
         }
     }
+
+    /// 화면 없는 커널이 쓰는 런타임이다 (plan 18 K3-4). 커널 호스트가 이것을 자기 스레드로 가져간다.
+    pub(crate) fn into_headless_client_runtime(self) -> NativeClientRuntime {
+        self.bind_client_runtime().client_runtime
+    }
 }
 
 impl BoundNativeTuiApplication {
@@ -826,6 +831,11 @@ impl NativeClientRuntime {
 
     pub(crate) fn snapshot(&self) -> AppSnapshot {
         self.core.runtime.snapshot()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn parallel_view_for_test(&self) -> Option<&ParallelViewState> {
+        self.parallel_view.as_ref()
     }
 
     pub(crate) fn run_host_cycle(

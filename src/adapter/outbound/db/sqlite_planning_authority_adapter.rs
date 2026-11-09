@@ -2299,6 +2299,19 @@ fn windows_authority_store_anyhow_error_is_transient(error: &anyhow::Error) -> b
         .any(windows_authority_store_io_error_is_transient)
 }
 
+impl SqlitePlanningAuthorityAdapter {
+    /// 저장소 runtime 디렉터리를 현재 사용자 전용으로 준비하고 그 위치를 돌려준다 (plan 18 K3-4). 커널 잠금처럼
+    /// DB 가 아닌 저장소 단위 파일도 authority store 와 같은 디렉터리와 같은 보안 규칙을 쓴다.
+    pub(crate) fn prepare_private_runtime_directory(
+        workspace_dir: &str,
+    ) -> Result<PlanningAuthorityLocation> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let _directory_anchors =
+            prepare_private_authority_directory_tree(Path::new(&location.runtime_dir))?;
+        Ok(location)
+    }
+}
+
 /*
 authority store가 속한 관리 디렉터리를 위에서 아래 순서로 준비한다.
 
