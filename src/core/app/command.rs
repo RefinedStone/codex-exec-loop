@@ -2,7 +2,8 @@ use super::{
     ConversationPreferencePersistenceRequest, GithubReviewPollingSetupRequest,
     ManualPromptPreparationIntent, PlanningEditorMutationRequest, PlanningEditorSessionIdentity,
     PlanningEditorStageTarget, PlanningWorkspaceResetIntent, PostTurnEvaluationCorrelation,
-    PostTurnRouteResolution, QueueMutationIntent, SessionCatalogLoadIntent, TurnSubmissionRequest,
+    PostTurnRouteResolution, QueueMutationIntent, SessionCatalogLoadIntent, ThreadPromptSubmission,
+    TurnSubmissionRequest,
 };
 use crate::domain::conversation::{
     ConversationApprovalDecision, ConversationApprovalRequestIdentity, ConversationTurnSteerRequest,
@@ -71,6 +72,8 @@ pub enum AppCommand {
     PrepareManualPrompt(Box<ManualPromptPreparationIntent>),
     CancelManualPromptPreparation,
     SubmitTurn(Box<TurnSubmissionRequest>),
+    // thread 를 지정한 프롬프트이다 (plan 18 K3-3b). core 가 준비와 제출을 이어서 한다.
+    SubmitThreadPrompt(Box<ThreadPromptSubmission>),
     RequestStopAllSessions,
     SteerTurn(ConversationTurnSteerRequest),
     SubmitApprovalDecision {

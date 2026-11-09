@@ -334,6 +334,16 @@ pub enum AppEvent {
     },
     // 보지 않는 thread 중 일이 남은 것의 요약이 바뀌었다 (plan 18 K2-4).
     ThreadActivityChanged(Vec<super::ThreadActivitySummary>),
+    // thread 를 지정한 프롬프트의 받아들임 결과이다 (plan 18 K3-3b).
+    ThreadPromptAdmissionResolved {
+        thread_id: String,
+        admission: super::ThreadPromptAdmission,
+    },
+    // thread 를 지정한 프롬프트의 준비가 끝나고 제출까지 한 결과이다 (plan 18 K3-3b).
+    ThreadPromptSubmitted {
+        thread_id: String,
+        outcome: super::ThreadPromptOutcome,
+    },
     ParallelModeSupervisorSnapshotInvalidated,
 }
 

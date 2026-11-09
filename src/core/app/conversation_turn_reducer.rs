@@ -592,6 +592,55 @@ impl ConversationTurnFeatureReducer {
         }
     }
 
+    /// 이 thread 의 session 이 있다. 보는 thread 이거나 일이 남은 thread 이다 (plan 18 K3-3b).
+    pub(super) fn has_session_for_thread(&self, thread_id: &str) -> bool {
+        std::iter::once(&self.session)
+            .chain(&self.background_sessions)
+            .any(|session| session.streams_thread(thread_id))
+    }
+
+    /*
+     * 이 thread 는 지금 새 프롬프트를 받을 수 없다 (plan 18 K3-3b). 그 thread 에 일이 남아 있거나, 다른 thread 에서
+     * 턴이 돈다. 턴은 모든 thread 를 통틀어 하나만 돌기 때문이다. 준비는 planning 작업을 만들므로 그 전에 거절한다.
+     */
+    pub(super) fn thread_rejects_new_prompt(&self, thread_id: &str) -> bool {
+        std::iter::once(&self.session)
+            .chain(&self.background_sessions)
+            .any(|session| {
+                session
+                    .conversation_runtime
+                    .active_turn_correlation()
+                    .is_some()
+                    || (session.streams_thread(thread_id) && session.is_busy())
+            })
+    }
+
+    /*
+     * thread 를 지정한 턴을 그 thread 의 session 에 넣는다 (plan 18 K3-3b). 그 thread 의 session 이 없으면 보는
+     * session 의 설정으로 뒤에 새로 만든다. 보는 자리는 바꾸지 않는다. 거절되면 새 session 은 일이 없어서 지워진다.
+     */
+    pub(super) fn admit_thread_turn_submission(
+        &mut self,
+        thread_id: &str,
+        request: &TurnSubmissionRequest,
+    ) -> TurnSubmissionAdmission {
+        if !self.has_session_for_thread(thread_id) {
+            let mut session = self.session.detached_view();
+            session.turn_stream_state.seed_loaded_thread_projection(
+                thread_id,
+                "",
+                request.workspace_directory.clone(),
+                ConversationItemLifecycleProjection::default(),
+            );
+            self.background_sessions.push(session);
+        }
+        self.with_owning_session(
+            |session| session.streams_thread(thread_id),
+            |reducer| reducer.admit_turn_submission_in_session(request),
+        )
+        .unwrap_or(TurnSubmissionAdmission::RejectedUnavailable)
+    }
+
     fn admit_turn_submission_in_session(
         &mut self,
         request: &TurnSubmissionRequest,
