@@ -29,6 +29,8 @@ const UPSTREAM_SOCKET_FILE_NAME: &str = "codex-app-server.sock";
 const UPSTREAM_PID_FILE_NAME: &str = "gateway-upstream.pid";
 #[cfg(unix)]
 const STALE_UPSTREAM_STOP_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(unix)]
+const STALE_UPSTREAM_KILL_WAIT: Duration = Duration::from_secs(2);
 const UPSTREAM_READY_TIMEOUT: Duration = Duration::from_secs(10);
 const UPSTREAM_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const CODEX_VERSION_TIMEOUT: Duration = Duration::from_secs(10);
@@ -128,7 +130,8 @@ impl GatewayUpstreamPort for AppServerGatewayUpstream {
         self.shared.ready.store(false, Ordering::SeqCst);
         stop_child(&self.shared);
         let _ = std::fs::remove_file(&self.shared.socket_path);
-        let _ = std::fs::remove_file(upstream_pid_path(&self.shared.socket_path));
+        // pid 기록은 지우지 않는다. supervisor 가 새 upstream 을 띄우는 중에 정지하면 그 upstream 이 남을 수 있고,
+        // 다음 Gateway 가 이 기록으로 정리한다. 이미 끝난 프로세스의 기록은 명령줄 검사에서 걸러진다.
     }
 }
 
@@ -193,7 +196,12 @@ fn supervise_upstream(shared: &UpstreamShared) {
                 return;
             }
             match spawn_upstream(&shared.config, &shared.socket_path) {
-                Ok(child) => {
+                Ok(mut child) => {
+                    // 띄우는 동안 정지 요청이 왔으면 `stop_child` 가 이 자식을 보지 못했다. 여기서 끝낸다.
+                    if shared.stopping.load(Ordering::SeqCst) {
+                        let _ = child.terminate_and_wait();
+                        return;
+                    }
                     *lock_child(shared) = Some(child);
                     shared.restarts.fetch_add(1, Ordering::SeqCst);
                     shared.ready.store(true, Ordering::SeqCst);
@@ -315,14 +323,24 @@ fn stop_stale_upstream(socket_path: &Path) {
         pid
     };
     unsafe { libc::kill(target, libc::SIGTERM) };
-    let deadline = Instant::now() + STALE_UPSTREAM_STOP_TIMEOUT;
+    if wait_until_gone(pid, STALE_UPSTREAM_STOP_TIMEOUT) {
+        return;
+    }
+    unsafe { libc::kill(target, libc::SIGKILL) };
+    // 프로세스가 사라져야 codex 소켓 잠금이 풀린다. 새 upstream 을 그 뒤에 띄운다.
+    let _ = wait_until_gone(pid, STALE_UPSTREAM_KILL_WAIT);
+}
+
+#[cfg(unix)]
+fn wait_until_gone(pid: libc::pid_t, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         if unsafe { libc::kill(pid, 0) } != 0 {
-            return;
+            return true;
         }
         thread::sleep(Duration::from_millis(50));
     }
-    unsafe { libc::kill(target, libc::SIGKILL) };
+    false
 }
 
 #[cfg(not(unix))]
@@ -463,22 +481,29 @@ mod tests {
         assert!(error.contains("Set AKRA_HOME to a shorter path"), "{error}");
     }
 
-    /// 남은 upstream 대신 같은 명령줄 모양의 셸을 띄운다 (`exec` 하지 않아 명령줄이 남는다). 그룹 리더로 띄워 Gateway 와 같은 조건을 만든다.
+    /// 남은 upstream 대신 같은 명령줄 모양의 셸을 띄우고 pid 를 돌려준다. 바깥 셸이 바로 끝나므로 이 셸은 운영의
+    /// 고아처럼 init(launchd) 이 거둔다. `set -m` 으로 자기 프로세스 그룹의 리더가 된다 (`subprocess::spawn` 과 같다).
+    /// `exec` 하지 않아 명령줄이 남는다.
     #[cfg(unix)]
-    fn spawn_fake_upstream(command_line_tail: &str) -> std::process::Child {
-        use std::os::unix::process::CommandExt;
-        std::process::Command::new("/bin/sh")
+    fn spawn_orphan_fake_upstream(command_line_tail: &str) -> libc::pid_t {
+        let output = std::process::Command::new("/bin/sh")
             .args([
                 "-c",
-                "sleep 30; :",
+                "set -m; /bin/sh -c 'sleep 30; :' sh app-server --listen \"$1\" >/dev/null 2>&1 & echo $!",
                 "sh",
-                "app-server",
-                "--listen",
                 command_line_tail,
             ])
-            .process_group(0)
-            .spawn()
-            .expect("fake upstream should start")
+            .output()
+            .expect("fake upstream should start");
+        String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse()
+            .expect("the outer shell prints the fake upstream pid")
+    }
+
+    #[cfg(unix)]
+    fn process_is_alive(pid: libc::pid_t) -> bool {
+        unsafe { libc::kill(pid, 0) == 0 }
     }
 
     #[cfg(unix)]
@@ -496,31 +521,24 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn wait_for_exit(child: &mut std::process::Child) -> bool {
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        while std::time::Instant::now() < deadline {
-            if child.try_wait().expect("try_wait should work").is_some() {
-                return true;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        false
-    }
-
-    #[cfg(unix)]
     #[test]
     fn a_recorded_upstream_for_this_socket_is_stopped_and_forgotten() {
         let run_dir = unique_run_dir();
         let socket_path = run_dir.join("codex-app-server.sock");
-        let mut stale =
-            spawn_fake_upstream(&format!("unix://{}", codex_socket_argument(&socket_path)));
-        std::fs::write(upstream_pid_path(&socket_path), stale.id().to_string()).expect("pid file");
+        let stale =
+            spawn_orphan_fake_upstream(&format!("unix://{}", codex_socket_argument(&socket_path)));
+        std::fs::write(upstream_pid_path(&socket_path), stale.to_string()).expect("pid file");
         // 셸이 시작해 명령줄이 보일 때까지 기다린다.
         std::thread::sleep(Duration::from_millis(200));
 
+        let started = std::time::Instant::now();
         stop_stale_upstream(&socket_path);
 
-        assert!(wait_for_exit(&mut stale), "the stale upstream must stop");
+        assert!(!process_is_alive(stale), "the stale upstream must stop");
+        assert!(
+            started.elapsed() < Duration::from_secs(4),
+            "SIGTERM alone should stop it, without the SIGKILL fallback"
+        );
         assert!(!upstream_pid_path(&socket_path).exists());
     }
 
@@ -529,18 +547,15 @@ mod tests {
     fn a_recorded_pid_of_another_program_is_left_alone() {
         let run_dir = unique_run_dir();
         let socket_path = run_dir.join("codex-app-server.sock");
-        let mut other = spawn_fake_upstream("unix:///somewhere/else.sock");
-        std::fs::write(upstream_pid_path(&socket_path), other.id().to_string()).expect("pid file");
+        let other = spawn_orphan_fake_upstream("unix:///somewhere/else.sock");
+        std::fs::write(upstream_pid_path(&socket_path), other.to_string()).expect("pid file");
         std::thread::sleep(Duration::from_millis(200));
 
         stop_stale_upstream(&socket_path);
 
-        assert!(
-            other.try_wait().expect("try_wait should work").is_none(),
-            "a reused pid must not be killed"
-        );
-        let _ = other.kill();
-        let _ = other.wait();
+        let survived = process_is_alive(other);
+        unsafe { libc::kill(-other, libc::SIGKILL) };
+        assert!(survived, "a reused pid must not be killed");
         assert!(!upstream_pid_path(&socket_path).exists());
     }
 }
