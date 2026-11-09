@@ -4,11 +4,11 @@
 
 - 상태: **Proposed execution plan**, K3-1·K3-2·K3-3a·K3-3b·K3-4 완료. §3.2 는 2026-11-08 에 개정했다 (클라이언트별 보기 대신
   thread 를 지정하는 명령). §3.4 는 2026-11-09 에 개정했다 (커널 단위를 폴더에서 저장소로). §1, §3.1, §3.3 은
-  2026-11-09 K3 리뷰 뒤 v0 코드에 맞췄다 (§3.7). 현재 제품 동작을 설명하지 않는다.
+  2026-11-09 K3 리뷰 두 번 뒤 v0 코드에 맞췄다 (§3.7). 현재 제품 동작을 설명하지 않는다.
 - 상위 계획: [18 Akra 커널 아키텍처](18-akra-kernel-architecture.md) §4.1, §4.4, §5.3~§5.6, §6 K3. 결정
   KP-03, KP-04, KP-06 (승인 2026-11-07). Q-K3, Q-K6 답 (2026-11-07).
 - 이전 단계: [K1](18-k1-headless-decision-loop.md), [K2](18-k2-thread-sessions.md) (완료 2026-11-08).
-  K2-5(클라이언트 상태 타입 분리)를 이 단계로 옮겼다.
+  K2-5(클라이언트 상태 타입 분리)를 이 단계로 옮겼다가, §3.2 개정 때 K6 으로 다시 옮겼다.
 - 관련 계획: [17 Akra Desktop](17-akra-desktop/README.md) D-11 (얇은 Gateway, `akra/*` 이름 공간).
 - 기준일: 2026-11-08 (Asia/Seoul)
 - 기준 커밋: `70c99aed` (`origin/prerelease`).
@@ -19,8 +19,9 @@
 ## 1. 목표
 
 1. 커널이 화면 없이 상주한다. 클라이언트가 없어도 턴, 평가, 자동 후속, 병렬 작업, PR 검증이 돈다.
-2. 클라이언트 여럿이 같은 커널에 붙는다. 각자 thread 를 지정해 명령한다 (§3.2). v0 의 결과 이벤트는 thread id 를
-   담고 모든 클라이언트에 간다. 요청한 클라이언트만 받는 대상 지정은 클라이언트별 보기와 함께 K6 에서 한다.
+2. 클라이언트 여럿이 같은 커널에 붙는다. 각자 thread 를 지정해 명령한다 (§3.2). 명령을 바로 거절하면 그 이유는
+   요청한 클라이언트의 명령 응답으로 간다. 그 밖의 결과 이벤트는 모든 클라이언트에 간다. thread 에 대한 이벤트는
+   thread id 를 담는다. 요청한 클라이언트만 받는 이벤트 대상 지정은 클라이언트별 보기와 함께 K6 에서 한다.
 3. 모든 원격 클라이언트는 하나의 응용 프로토콜(JSON-RPC)을 쓴다. 첫 원격 클라이언트는 Desktop 이다.
 4. 같은 저장소에서 커널이 둘 돌지 않는다 (K-D3, K-D5 해소). 저장소의 worktree 들은 한 커널을 쓴다 (§3.4).
 
@@ -34,7 +35,7 @@
 | 로컬 전용 endpoint: unix `$AKRA_HOME/run/gateway.sock`(0600), Windows named pipe(소유자 전용, 원격 거절) | `gateway/listener.rs` | 그대로 쓴다. TCP 는 열지 않는다 |
 | 접속마다 WebSocket JSON-RPC, `akra/*` 는 Gateway 가 직접 답한다 | `gateway/router.rs`, `session.rs` | `akra/kernel/*` 를 더한다 |
 | 화면 없이 도는 런타임 호스트 `run_host_cycle(now, wait, max_inputs)` | `composition/native_client_runtime.rs` (K1-6) | 데몬의 커널 스레드가 `wait > 0` 으로 돌린다 |
-| thread 별 session, 보지 않는 thread 의 결과 차단 | core `ConversationTurnFeatureReducer` (K2-3, K2-4) | 클라이언트별 보기로 일반화한다 |
+| thread 별 session, 보지 않는 thread 의 결과 차단 | core `ConversationTurnFeatureReducer` (K2-3, K2-4) | 원격 클라이언트는 보는 자리를 쓰지 않고 thread 를 지정한다 (§3.2) |
 | 일이 남은 thread 요약 `ThreadActivityChanged` | core (K2-4) | 그대로 프로토콜 이벤트가 된다 |
 
 ### 2.2 막는 것
@@ -56,9 +57,10 @@
 - composition 이 저장소 하나에 커널 하나를 조립한다 (`build_kernel_for_workspace(folder)`, §3.4).
 - 커널은 전용 OS 스레드에서 돈다. 반복: 클라이언트 입력함을 비우고, `run_host_cycle(now, 50ms, …)` 를 돌리고,
   결과를 구독자에게 나눈다. 커널 상태는 이 스레드만 바꾼다.
-- 클라이언트는 `KernelClientHandle` 로 붙는다: `send_command(command) -> bool`, `query(query) -> Response`,
-  이벤트 수신 채널. `send_command` 는 커널이 그 명령을 처리할 때까지 기다린다. 받아들임 여부와 결과는 그 처리에서
-  나온 이벤트(`prompt_submission`, `thread_activity` 등)로 먼저 온다. `false` 는 커널이 끝난 경우이다. 비동기 Gateway 와는 채널로만 만난다. core 와 application 은 tokio 를 모른다.
+- 클라이언트는 `KernelClientHandle` 로 붙는다: `send_command(command) -> Option<Vec<AppEvent>>`,
+  `query(query) -> Response`, 이벤트 수신 채널. `send_command` 는 커널이 그 명령을 처리할 때까지 기다리고, 그
+  처리에서 나온 core 이벤트를 돌려준다. 프로토콜은 이것으로 명령 응답의 거절 이유를 만든다. 같은 이벤트는 모든
+  클라이언트에도 간다. `None` 은 커널이 끝난 경우이다. 비동기 Gateway 와는 채널로만 만난다. core 와 application 은 tokio 를 모른다.
 
 ### 3.2 thread 를 지정하는 명령 (2026-11-08 개정)
 
@@ -74,17 +76,21 @@
 - 커널의 보는 자리는 같은 프로세스의 TUI 것으로 남는다. 원격 클라이언트는 이것을 바꾸는 명령(대화 열기, 새
   초안)을 보내지 않는다. v0 프로토콜에서 이 두 명령을 뺀다.
 - 승인 결정은 승인 id 로, steer 는 thread id 로 그 thread 의 session 을 찾는다. 보지 않는 thread 의 결과도
-  처리한다. 결과는 thread 요약의 변화로 알린다.
+  처리한다. 받아들인 결과는 thread 요약의 변화로 알리고, 거절은 명령 응답의 `rejection` 으로 알린다.
 - thread 요약(`ThreadActivityChanged`)은 일이 남은 모든 thread(보는 thread 포함)를 담고, 진행 중 턴 id 와 기다리는
   승인 요청을 함께 담는다.
 - 프롬프트 제출은 thread 를 지정한다. core 가 준비(planning 조각 붙이기)와 제출을 이어서 한다 (K3-3b). core 가
   모르는 thread(보는 thread, 일이 남은 thread, 읽은 세션 목록 어디에도 없다)와 일하는 중인 thread 는 준비 전에
   거절한다. 준비가 planning 작업을 만들기 때문이다. 턴은 모든 thread 를 통틀어 하나만 돌기 때문에 다른 thread 에서
-  턴이 돌아도 거절한다.
-- 준비하는 사이에 다른 턴(예: 자동 후속)이 시작하면 제출은 `turn_started_during_preparation` 으로 거절된다. 준비가
-  만든 planning 작업은 큐에 남는다. TUI 의 큐에만 넣기(QueueOnly)와 같은 상태이므로 잃는 작업은 없다. 그 사이에
-  준비 칸을 잡아 다른 턴을 막지 않는 이유는 자동 후속 턴을 잃지 않기 위해서이다. 준비가 끝난 뒤 쉴 때 다시 내는
-  일은 사건 연쇄가 아니라 맞추기(plan 19 §5.2)로 한다.
+  턴이 돌아도 거절한다. 병렬 모드가 켜져 있거나 호스트가 병렬 모드 값을 아직 알리지 않았어도 거절한다. 호스트는
+  core 입력을 넣기 전마다 병렬 제어부 값을 보고, 바뀌었으면 호스트 전용 `SetParallelModeEnabled` 로 알린다.
+- 준비가 끝나면 core 는 병렬 모드를 다시 본다. 그 사이에 병렬 모드가 켜졌으면 턴을 내지 않는다
+  (`queued`, `parallel_mode_started`). 작업은 큐에 있으므로 병렬 slot 이 맡는다.
+- 준비하는 사이에 다른 턴(예: 자동 후속)이 시작하면 제출은 거절된다 (`queued`, `turn_started_during_preparation`).
+  준비가 만든 planning 작업은 큐에 남는다. TUI 의 큐에만 넣기(QueueOnly)와 같은 상태이므로 잃는 작업은 없다. 이벤트는
+  그 작업 id(`task_id`)를 담고, 클라이언트는 같은 프롬프트를 다시 보내지 않는다. 다시 보내면 작업이 하나 더 생긴다.
+  그 사이에 준비 칸을 잡아 다른 턴을 막지 않는 이유는 자동 후속 턴을 잃지 않기 위해서이다. 큐에 남은 작업을 쉴 때
+  다시 내는 일은 사건 연쇄가 아니라 맞추기로 한다 (plan 19 Q2).
 - 클라이언트별 보기(K2-5)는 TUI 가 원격 클라이언트가 되는 K6 으로 옮긴다.
 
 ### 3.3 응용 프로토콜 v0 (`akra/kernel/*`)
@@ -96,13 +102,13 @@ adapter `src/adapter/inbound/kernel_protocol/` 에 둔다. core 는 직렬화를
 | --- | --- | --- |
 | `akra/kernel/attach` | 요청 | `{ workspace, client_name }` → `{ client_id, protocol_version, kernel }`. `kernel` 은 저장소 신원이다. 그 폴더가 속한 저장소의 커널에 붙는다 (없으면 만든다, §3.4) |
 | `akra/kernel/describe` | 요청 | 메서드, 명령, 이벤트 목록과 버전 (§4.3 자기 설명) |
-| `akra/kernel/command` | 요청 | `{ command }` → `{ accepted, message? }`. 커널이 처리한 뒤 답한다. 받아들임과 결과는 이벤트로 먼저 온다. 거절 이벤트는 이유 코드(`reason`)를 담는다 |
-| `akra/kernel/query` | 요청 | 세션 목록, 대화 실행 상태, thread 요약. planning 투영은 Desktop 이 보일 때(K3-6) 더한다 |
+| `akra/kernel/command` | 요청 | `{ command }` → `{ processed, rejection? }`. 커널이 처리한 뒤 답한다. 바로 거절한 명령(`steer_turn`, `decide_approval`)은 `rejection` 에 이유 코드를 담는다. `submit_prompt` 의 진행과 거절은 `prompt_submission` 이벤트가 이유 코드와 함께 알린다 |
+| `akra/kernel/query` | 요청 | 세션 목록, 자동 후속 설정, thread 요약. 보는 대화의 턴 상태는 TUI 화면용이라 보내지 않는다 (§3.2). planning 투영은 K3-6 에서 더한다 |
 | `akra/kernel/event` | 알림 (서버→클라이언트) | `{ event }`. attach 뒤 자동으로 받는다. 대상 지정은 K6 (§1) |
 | `akra/kernel/detach` | 요청 | 클라이언트 세션을 닫는다. 접속이 끊겨도 같다 |
 
-v0 명령은 화면 흐름 단계가 아니라 한 번에 끝나는 도메인 명령이다 (§5.5): 세션 목록 읽기, 대화 열기,
-새 초안, 프롬프트 제출(준비 + 제출을 하나로), steer, 정지, 승인 결정, 자동 후속 설정, 이름 바꾸기, planning
+v0 명령은 화면 흐름 단계가 아니라 한 번에 끝나는 도메인 명령이다 (§5.5): 세션 목록 읽기, 프롬프트 제출(준비 +
+제출을 하나로), steer, 정지, 승인 결정, 자동 후속 설정, 이름 바꾸기, planning
 초기화(확인 필수. 확인 값은 core 명령에 실려 planning 서비스까지 간다). 나머지 명령은 K4 에서 명령 스펙으로 옮길 때 더한다.
 
 호출자 신원은 접속이다 (로컬 소유자만 접속할 수 있다). 멱등 키는 v0 에 없다. 재전송을 가리려면 처리한 명령을
@@ -159,7 +165,7 @@ git worktree 에서 틀린다. planning 기준 데이터는 저장소 단위이�
 - `kernel_protocol` 만 직렬화 타입을 core 타입으로 바꾼다. Gateway 는 `kernel_protocol` 을 거쳐서만 커널에
   닿는다.
 - 커널 상태는 커널 스레드만 바꾼다 (`KernelHost` 밖에서 `NativeClientRuntime` 을 직접 부르지 않는다).
-- 병렬 모드 값처럼 호스트만 아는 값은 호스트 전용 명령(`AdmitThreadPrompt`, `EvaluateCompletedTurn`)에 싣는다.
+- 병렬 모드 값처럼 호스트만 아는 값은 호스트 전용 명령(`SetParallelModeEnabled`, `EvaluateCompletedTurn`)에 싣는다.
   inbound adapter 는 이 명령을 만들지 않는다.
 
 ### 3.7 K3 리뷰 반영 (2026-11-09)
@@ -168,11 +174,21 @@ K3-1~K3-4 를 plan 19·20 방향과 함께 리뷰했다. 고친 것:
 
 - 커널 잠금 adapter 가 SQLite planning adapter 를 직접 부르지 않는다. composition 이 runtime 디렉터리를 준비해서
   넘긴다.
-- 클라이언트 명령(`SubmitThreadPrompt`)에 병렬 모드 값이 없다. 호스트가 `AdmitThreadPrompt` 로 바꾸며 붙인다.
-  호스트를 거치지 않은 제출은 병렬 모드로 보고 거절한다.
-- `prompt_submission` 거절과 실패는 이유 코드를 담는다 (plan 19 P3 의 첫 조각).
+- 클라이언트 명령(`SubmitThreadPrompt`)에 병렬 모드 값이 없다. 호스트가 병렬 제어부 값을 호스트 전용
+  `SetParallelModeEnabled` 로 core 에 알린다. core 는 받을 때와 준비가 끝난 뒤 두 번 본다. 값을 모르면
+  `parallel_mode_unknown` 으로 거절한다.
+- `prompt_submission` 은 이유 코드를 담는다 (plan 19 P3 의 첫 조각). 준비 실패도 취소, 본문 불일치, 초안 검토
+  필요, planning 거절로 나눈다. 작업이 큐에 남으면 `queued` 와 `task_id` 를 알린다.
+- steer 와 승인 결정의 거절은 명령 응답의 `rejection` 으로 요청한 클라이언트에 간다. 명령 응답의 `accepted` 는
+  뜻대로 `processed` 로 바꿨다.
+- `conversation_runtime` 이벤트·조회를 `auto_follow`(모든 thread 에 같은 설정)로 줄였다. 보는 대화의 턴 상태는 TUI
+  화면용이므로 내보내지 않는다.
 - v0 에서 동작하지 않던 `idempotency_key` 를 뺐다. attach 응답에 `kernel` 을 더했다. §1, §3.1, §3.3 을 코드에 맞췄다.
-- TUI 저장소 잠금을 `docs/reference` 에 적었다.
+- TUI 저장소 잠금과 thread 지정 프롬프트의 병렬 모드 확인을 `docs/reference` 에 적었다.
+
+리뷰에서 반려한 것: 시험 코드가 SQLite adapter 로 runtime 위치를 만드는 것(경계 규칙은 운영 코드에만 걸린다),
+`kernel` 필드 이름(커널은 저장소당 하나라 뜻이 같다), 시험 helper 중복, 잠금 디렉터리 준비가 DB adapter 에 있는
+것(사용자 전용 디렉터리 보안 루틴을 그 파일과 함께 쓴다), 전송 타입 이름 규칙(K4 생성 때 정한다).
 
 남긴 것 (계획된 단계에서 한다):
 
@@ -193,9 +209,9 @@ K3-1~K3-4 를 plan 19·20 방향과 함께 리뷰했다. 고친 것:
 | K3-3b (완료 2026-11-09) | §3.2 thread 를 지정한 프롬프트 제출. core 명령 `SubmitThreadPrompt` 가 준비(`PrepareManualPrompt` 와 같은 효과) 뒤 제출(`SubmitTurn` 과 같은 admission)을 잇는다. 그 thread 의 session 이 없으면 보는 session 의 설정으로 뒤에 새로 만든다. 보는 자리는 바꾸지 않는다. 프로토콜 `submit_prompt` 와 진행 이벤트 `prompt_submission`(preparing, submitted, rejected, failed). 설계와 다른 점: (1) 모르는 thread 는 거절한다. 아는 thread 는 보는 thread, 일이 남은 thread, 읽은 세션 목록(첫 페이지)의 thread 이다. (2) planning 초안 검토가 필요한 준비 결과는 원격에서 검토할 수 없어 실패로 알린다. (3) 병렬 모드가 켜져 있으면 준비 전에 거절한다(`RejectedParallelMode`). 병렬 작업 intake 는 아직 TUI 에만 있고, main session 턴으로 내면 같은 작업이 병렬 slot 에도 나갈 수 있다. 사용 여부는 호스트가 병렬 제어부 값으로 채운다. 이미지 첨부는 없다. (4) TUI 는 지금처럼 자기 준비 → 제출 경로를 쓴다. (5) 준비 칸은 TUI 와 같이 쓴다. TUI 가 대화를 바꿀 때 보내는 준비 취소는 thread 를 지정한 준비를 취소하지 않는다 | 확장 | core 시험: 보지 않는 thread 에 제출하면 턴 효과가 나오고 보는 자리는 쉰다. 모르는 thread, 일하는 중, 병렬 모드, 다른 준비 진행 중, 준비 실패, TUI 의 대화 전환 뒤에도 원격 준비가 제출된다. 프로토콜 왕복·변환·이벤트·`describe`. 호스트 시험: 명령 → 턴 실행 |
 | K3-4 (완료 2026-11-09) | §3.4 저장소 잠금과 저장소당 커널. 설계와 다른 점: 커널 단위를 폴더에서 저장소로 고쳤다(§3.4 개정). 잠금은 `$AKRA_HOME/projects/<namespace>/runtime/kernel.lock` 이다. composition `build_kernel_for_workspace(folder)` 가 잠금을 먼저 잡고, 런타임을 조립하고, 병렬 보기(그 폴더, `supervisor_view_active = false`)를 정한 뒤 `KernelHost` 를 시작한다. 커널을 버리면 호스트 스레드가 끝난 뒤 잠금이 풀린다. TUI 도 시작할 때 같은 잠금을 잡는다. 저장소별 커널 목록(registry)은 Gateway 가 커널의 수명(클라이언트가 떠난 뒤)과 비동기 접속 사이의 공유를 정해야 하므로 K3-5 로 옮겼다. 데몬 커널의 GitHub 리뷰 폴링 설정도 K3-5 에서 넘긴다 | 바뀜: 같은 저장소에서 TUI 둘, 또는 TUI 와 데몬 커널이 함께 돌지 않는다. 두 번째 TUI 는 이유를 보이고 끝난다 | 잠금 경합 시험(다른 worktree 에서 두 번째 잠금 거절, 다른 저장소는 둘 다 성공, 쥔 쪽이 버리면 풀림), 조립 때 병렬 보기 설정, 커널 시작 뒤 잠금 유지, TUI 시작 거절 메시지 |
 | K3-5 | Gateway 가 `akra/kernel/*` 를 커널 호스트에 연결. 먼저 app-server 공유를 확인한다 (Q-K3-6). plan 20 의 Gateway 탭과 관찰자 모드는 여기에 넣지 않는다 (plan 20 §8). 커널을 버릴 때는 병렬 제어부의 작업 스레드(orchestrator tick, dispatch)를 멈춘 뒤 잠금을 푼다. 지금 `KernelHost` 는 호스트 스레드만 기다리므로, 같은 프로세스에서 커널을 다시 만들면 이전 작업 스레드가 새 커널과 같은 큐를 배분할 수 있다 (K3-4 리뷰) | 확장 | Gateway 시험: attach → command → event, 접속 끊김 → detach, 커널을 버리고 다시 만들어도 이전 작업 스레드가 배분하지 않음 |
-| K3-6 | Desktop 이 `akra/kernel/*` 로 세션 활동, 자동 후속, 병렬 작업 상태를 보인다. 병렬 제어부 이벤트의 프로토콜 변환을 여기서 더한다 | 확장 | Desktop 시험, 숨긴 창 텍스트 캡처 |
+| K3-6 | Desktop 이 `akra/kernel/*` 로 세션 활동, 자동 후속, 병렬 작업 상태, planning 큐를 보인다. 병렬 제어부 이벤트의 프로토콜 변환과 planning 투영 조회를 여기서 더한다 | 확장 | Desktop 시험, 숨긴 창 텍스트 캡처 |
 
-규모: plan 18 추정 5~10일을 유지한다. K3-3 이 가장 크다 (K2-3 의 보는 자리 구조를 클라이언트별로 바꾼다).
+규모: plan 18 추정 5~10일을 유지한다. K3-3 이 가장 컸다 (thread 를 지정한 명령과 원격 프롬프트 제출).
 
 ## 5. 위험
 

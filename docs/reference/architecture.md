@@ -151,7 +151,12 @@ so a client can act on a thread it does not show; an undecided approval still ex
 `SubmitThreadPrompt` sends a prompt to a thread by id: Core prepares it (as `PrepareManualPrompt`
 does) and then submits the turn into that thread's session, in the background when the thread is
 not shown. Core refuses an unknown thread and a busy one before the preparation, because the
-preparation writes a planning task. Reopening a thread
+preparation writes a planning task. It also refuses while parallel mode is on, or before the host
+has reported the parallel mode: the runtime host sends the host-only `SetParallelModeEnabled` to
+Core whenever the parallel control plane value changes, checked before each Core input. When the
+preparation ends, Core checks the mode again; if parallel mode started meanwhile, or another turn
+took the slot, Core starts no turn and reports the queued planning task id so a client does not
+resend the prompt. Reopening a thread
 shows its live runtime state; its transcript is reloaded from the provider.
 
 `CoreRuntime`, its effect executor, and its input mailbox are crate-private implementation details,

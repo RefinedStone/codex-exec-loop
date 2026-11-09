@@ -139,7 +139,11 @@ session만 보는 자리에 남아 이전처럼 취소됩니다. TUI는 turn 실
 않는 thread에도 명령할 수 있습니다. 결정하지 않은 approval은 이전처럼 기한이 지나 거절됩니다.
 `SubmitThreadPrompt`는 thread id로 prompt를 보냅니다. Core가 `PrepareManualPrompt`처럼 준비한 뒤 그
 thread의 session에 turn을 제출하며, 보지 않는 thread이면 background에서 실행합니다. 준비가 planning
-task를 쓰므로 Core는 모르는 thread와 일하는 중인 thread를 준비 전에 거절합니다. Thread를 다시 열면 live
+task를 쓰므로 Core는 모르는 thread와 일하는 중인 thread를 준비 전에 거절합니다. 병렬 모드가 켜져 있거나
+host가 병렬 모드 값을 아직 알리지 않았어도 거절합니다. Runtime host는 core 입력을 넣기 전마다 병렬
+제어부 값을 확인하고, 바뀌었으면 host 전용 `SetParallelModeEnabled`로 Core에 알립니다. 준비가 끝나면 Core는
+병렬 모드를 다시 봅니다. 그 사이 병렬 모드가 켜졌거나 다른 turn이 자리를 잡았으면 turn을 시작하지 않고,
+client가 prompt를 다시 보내지 않도록 큐에 남은 planning task id를 알립니다. Thread를 다시 열면 live
 runtime 상태가 보이고 transcript는 provider에서 다시 읽습니다.
 
 `CoreRuntime`, effect executor, input mailbox는 library SDK가 아닌 crate-private 구현 세부사항입니다.
