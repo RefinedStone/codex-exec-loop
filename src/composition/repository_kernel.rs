@@ -72,7 +72,18 @@ mod tests {
     use crate::adapter::outbound::filesystem::RepositoryKernelLockHeld;
     use crate::composition::native_client_runtime::tests::recording_runtime_for_test;
 
-    fn temp_folder(label: &str) -> String {
+    /// 시험이 끝나면 지우는 임시 폴더이다.
+    struct TempFolder {
+        path: String,
+    }
+
+    impl Drop for TempFolder {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn temp_folder(label: &str) -> TempFolder {
         static NEXT_FOLDER: AtomicU64 = AtomicU64::new(0);
         let folder: PathBuf = crate::test_utils::platform_safe_temp_dir().join(format!(
             "akra-repository-kernel-{label}-{}-{}",
@@ -81,7 +92,9 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&folder);
         std::fs::create_dir_all(&folder).expect("temp folder should be created");
-        folder.display().to_string()
+        TempFolder {
+            path: folder.display().to_string(),
+        }
     }
 
     #[test]
@@ -104,9 +117,10 @@ mod tests {
     #[test]
     fn the_kernel_keeps_its_repository_lock_until_it_stops() {
         let folder = temp_folder("lifetime");
-        let lock = production::acquire_repository_kernel_lock(&folder).expect("first lock");
+        let lock = production::acquire_repository_kernel_lock(&folder.path).expect("first lock");
         let (runtime, _turns) = recording_runtime_for_test();
-        let kernel = start_repository_kernel(lock, runtime, &folder).expect("kernel should start");
+        let kernel =
+            start_repository_kernel(lock, runtime, &folder.path).expect("kernel should start");
         let client = kernel
             .attach()
             .expect("a client attaches to the headless kernel");
@@ -115,7 +129,7 @@ mod tests {
             "the kernel thread answers queries"
         );
 
-        let refused = production::acquire_repository_kernel_lock(&folder)
+        let refused = production::acquire_repository_kernel_lock(&folder.path)
             .expect_err("a second kernel for the repository is refused");
         assert!(
             refused.downcast_ref::<RepositoryKernelLockHeld>().is_some(),
@@ -125,7 +139,7 @@ mod tests {
         let repository_key = kernel.repository_key().to_string();
         drop(client);
         drop(kernel);
-        let next = production::acquire_repository_kernel_lock(&folder)
+        let next = production::acquire_repository_kernel_lock(&folder.path)
             .expect("the lock is free after the kernel stops");
         assert_eq!(next.repository_key(), repository_key);
     }
@@ -133,9 +147,9 @@ mod tests {
     #[test]
     fn a_second_kernel_for_the_repository_is_refused_before_it_builds_anything() {
         let folder = temp_folder("refused");
-        let _held = production::acquire_repository_kernel_lock(&folder).expect("first lock");
+        let _held = production::acquire_repository_kernel_lock(&folder.path).expect("first lock");
 
-        let Err(error) = build_kernel_for_workspace(&folder) else {
+        let Err(error) = build_kernel_for_workspace(&folder.path) else {
             panic!("a second kernel for the repository must not start");
         };
 
@@ -149,7 +163,7 @@ mod tests {
     fn the_production_kernel_runs_without_a_screen() {
         // The host only ticks: no startup checks run, so no app-server starts.
         let folder = temp_folder("production");
-        let kernel = build_kernel_for_workspace(&folder).expect("kernel should start");
+        let kernel = build_kernel_for_workspace(&folder.path).expect("kernel should start");
         let client = kernel.attach().expect("a client attaches");
 
         assert!(
@@ -157,7 +171,7 @@ mod tests {
             "the kernel thread answers queries"
         );
         assert!(
-            production::acquire_repository_kernel_lock(&folder).is_err(),
+            production::acquire_repository_kernel_lock(&folder.path).is_err(),
             "the running kernel holds the repository lock"
         );
     }
