@@ -3,7 +3,8 @@
 ## 문서 상태
 
 - 상태: **Proposed execution plan**, K3-1·K3-2·K3-3a·K3-3b·K3-4 완료. §3.2 는 2026-11-08 에 개정했다 (클라이언트별 보기 대신
-  thread 를 지정하는 명령). §3.4 는 2026-11-09 에 개정했다 (커널 단위를 폴더에서 저장소로). 현재 제품 동작을 설명하지 않는다.
+  thread 를 지정하는 명령). §3.4 는 2026-11-09 에 개정했다 (커널 단위를 폴더에서 저장소로). §1, §3.1, §3.3 은
+  2026-11-09 K3 리뷰 뒤 v0 코드에 맞췄다 (§3.7). 현재 제품 동작을 설명하지 않는다.
 - 상위 계획: [18 Akra 커널 아키텍처](18-akra-kernel-architecture.md) §4.1, §4.4, §5.3~§5.6, §6 K3. 결정
   KP-03, KP-04, KP-06 (승인 2026-11-07). Q-K3, Q-K6 답 (2026-11-07).
 - 이전 단계: [K1](18-k1-headless-decision-loop.md), [K2](18-k2-thread-sessions.md) (완료 2026-11-08).
@@ -18,7 +19,8 @@
 ## 1. 목표
 
 1. 커널이 화면 없이 상주한다. 클라이언트가 없어도 턴, 평가, 자동 후속, 병렬 작업, PR 검증이 돈다.
-2. 클라이언트 여럿이 같은 커널에 붙는다. 각자 다른 대화를 볼 수 있다. 결과는 요청한 클라이언트에게 간다.
+2. 클라이언트 여럿이 같은 커널에 붙는다. 각자 thread 를 지정해 명령한다 (§3.2). v0 의 결과 이벤트는 thread id 를
+   담고 모든 클라이언트에 간다. 요청한 클라이언트만 받는 대상 지정은 클라이언트별 보기와 함께 K6 에서 한다.
 3. 모든 원격 클라이언트는 하나의 응용 프로토콜(JSON-RPC)을 쓴다. 첫 원격 클라이언트는 Desktop 이다.
 4. 같은 저장소에서 커널이 둘 돌지 않는다 (K-D3, K-D5 해소). 저장소의 worktree 들은 한 커널을 쓴다 (§3.4).
 
@@ -54,8 +56,9 @@
 - composition 이 저장소 하나에 커널 하나를 조립한다 (`build_kernel_for_workspace(folder)`, §3.4).
 - 커널은 전용 OS 스레드에서 돈다. 반복: 클라이언트 입력함을 비우고, `run_host_cycle(now, 50ms, …)` 를 돌리고,
   결과를 구독자에게 나눈다. 커널 상태는 이 스레드만 바꾼다.
-- 클라이언트는 `KernelClientHandle` 로 붙는다: `send(command) -> Admission`, `query(query) -> Response`,
-  이벤트 수신 채널. 비동기 Gateway 와는 채널로만 만난다. core 와 application 은 tokio 를 모른다.
+- 클라이언트는 `KernelClientHandle` 로 붙는다: `send_command(command) -> bool`, `query(query) -> Response`,
+  이벤트 수신 채널. `send_command` 는 커널이 그 명령을 처리할 때까지 기다린다. 받아들임 여부와 결과는 그 처리에서
+  나온 이벤트(`prompt_submission`, `thread_activity` 등)로 먼저 온다. `false` 는 커널이 끝난 경우이다. 비동기 Gateway 와는 채널로만 만난다. core 와 application 은 tokio 를 모른다.
 
 ### 3.2 thread 를 지정하는 명령 (2026-11-08 개정)
 
@@ -78,6 +81,10 @@
   모르는 thread(보는 thread, 일이 남은 thread, 읽은 세션 목록 어디에도 없다)와 일하는 중인 thread 는 준비 전에
   거절한다. 준비가 planning 작업을 만들기 때문이다. 턴은 모든 thread 를 통틀어 하나만 돌기 때문에 다른 thread 에서
   턴이 돌아도 거절한다.
+- 준비하는 사이에 다른 턴(예: 자동 후속)이 시작하면 제출은 `turn_started_during_preparation` 으로 거절된다. 준비가
+  만든 planning 작업은 큐에 남는다. TUI 의 큐에만 넣기(QueueOnly)와 같은 상태이므로 잃는 작업은 없다. 그 사이에
+  준비 칸을 잡아 다른 턴을 막지 않는 이유는 자동 후속 턴을 잃지 않기 위해서이다. 준비가 끝난 뒤 쉴 때 다시 내는
+  일은 사건 연쇄가 아니라 맞추기(plan 19 §5.2)로 한다.
 - 클라이언트별 보기(K2-5)는 TUI 가 원격 클라이언트가 되는 K6 으로 옮긴다.
 
 ### 3.3 응용 프로토콜 v0 (`akra/kernel/*`)
@@ -87,19 +94,20 @@ adapter `src/adapter/inbound/kernel_protocol/` 에 둔다. core 는 직렬화를
 
 | 메서드 | 종류 | 내용 |
 | --- | --- | --- |
-| `akra/kernel/attach` | 요청 | `{ workspace, client_name }` → `{ client_id, protocol_version, kernel }`. 그 폴더가 속한 저장소의 커널에 붙는다 (없으면 만든다, §3.4) |
+| `akra/kernel/attach` | 요청 | `{ workspace, client_name }` → `{ client_id, protocol_version, kernel }`. `kernel` 은 저장소 신원이다. 그 폴더가 속한 저장소의 커널에 붙는다 (없으면 만든다, §3.4) |
 | `akra/kernel/describe` | 요청 | 메서드, 명령, 이벤트 목록과 버전 (§4.3 자기 설명) |
-| `akra/kernel/command` | 요청 | `{ command, idempotency_key? }` → `{ admission }`. 오래 걸리는 명령은 받아들임만 답하고 결과는 이벤트로 온다 |
-| `akra/kernel/query` | 요청 | 세션 목록, 보는 대화, thread 요약, planning 투영 |
-| `akra/kernel/event` | 알림 (서버→클라이언트) | `{ target, event }`. attach 뒤 자동으로 받는다 |
+| `akra/kernel/command` | 요청 | `{ command }` → `{ accepted, message? }`. 커널이 처리한 뒤 답한다. 받아들임과 결과는 이벤트로 먼저 온다. 거절 이벤트는 이유 코드(`reason`)를 담는다 |
+| `akra/kernel/query` | 요청 | 세션 목록, 대화 실행 상태, thread 요약. planning 투영은 Desktop 이 보일 때(K3-6) 더한다 |
+| `akra/kernel/event` | 알림 (서버→클라이언트) | `{ event }`. attach 뒤 자동으로 받는다. 대상 지정은 K6 (§1) |
 | `akra/kernel/detach` | 요청 | 클라이언트 세션을 닫는다. 접속이 끊겨도 같다 |
 
 v0 명령은 화면 흐름 단계가 아니라 한 번에 끝나는 도메인 명령이다 (§5.5): 세션 목록 읽기, 대화 열기,
 새 초안, 프롬프트 제출(준비 + 제출을 하나로), steer, 정지, 승인 결정, 자동 후속 설정, 이름 바꾸기, planning
 초기화(확인 필수. 확인 값은 core 명령에 실려 planning 서비스까지 간다). 나머지 명령은 K4 에서 명령 스펙으로 옮길 때 더한다.
 
-호출자 신원은 접속이다 (로컬 소유자만 접속할 수 있다). 멱등 키는 같은 클라이언트의 같은 키 재전송을 한 번만
-처리한다. 원격 인증은 만들지 않는다 (Q-K6).
+호출자 신원은 접속이다 (로컬 소유자만 접속할 수 있다). 멱등 키는 v0 에 없다. 재전송을 가리려면 처리한 명령을
+기억해야 하므로 사건 기록과 함께 K5 에서 더한다. 그때까지 `idempotency_key` 를 보내면 모르는 필드로 거절한다.
+원격 인증은 만들지 않는다 (Q-K6).
 
 ### 3.4 저장소당 커널 하나 (2026-11-09 개정)
 
@@ -151,6 +159,29 @@ git worktree 에서 틀린다. planning 기준 데이터는 저장소 단위이�
 - `kernel_protocol` 만 직렬화 타입을 core 타입으로 바꾼다. Gateway 는 `kernel_protocol` 을 거쳐서만 커널에
   닿는다.
 - 커널 상태는 커널 스레드만 바꾼다 (`KernelHost` 밖에서 `NativeClientRuntime` 을 직접 부르지 않는다).
+- 병렬 모드 값처럼 호스트만 아는 값은 호스트 전용 명령(`AdmitThreadPrompt`, `EvaluateCompletedTurn`)에 싣는다.
+  inbound adapter 는 이 명령을 만들지 않는다.
+
+### 3.7 K3 리뷰 반영 (2026-11-09)
+
+K3-1~K3-4 를 plan 19·20 방향과 함께 리뷰했다. 고친 것:
+
+- 커널 잠금 adapter 가 SQLite planning adapter 를 직접 부르지 않는다. composition 이 runtime 디렉터리를 준비해서
+  넘긴다.
+- 클라이언트 명령(`SubmitThreadPrompt`)에 병렬 모드 값이 없다. 호스트가 `AdmitThreadPrompt` 로 바꾸며 붙인다.
+  호스트를 거치지 않은 제출은 병렬 모드로 보고 거절한다.
+- `prompt_submission` 거절과 실패는 이유 코드를 담는다 (plan 19 P3 의 첫 조각).
+- v0 에서 동작하지 않던 `idempotency_key` 를 뺐다. attach 응답에 `kernel` 을 더했다. §1, §3.1, §3.3 을 코드에 맞췄다.
+- TUI 저장소 잠금을 `docs/reference` 에 적었다.
+
+남긴 것 (계획된 단계에서 한다):
+
+- 준비 → 제출 규칙이 core(`submit_prepared_thread_prompt`)와 TUI(`apply_manual_prompt_intake_outcome`)에 둘 있다.
+  TUI 쪽은 K6 에서 지운다.
+- 원격 준비의 대상 thread(`addressed_thread_id`)는 메모리에만 있다. 재시작하면 잃는다 (plan 19 P1, Q3).
+- steer, 승인, 원격 제출이 모두 `with_owning_session`(`mem::swap`)을 거친다. thread 액터(plan 19 Q5)에서 바꾼다.
+- 명령 하나를 더할 때 enum, 이름 목록, 변환, 시험을 함께 고친다. 스펙 생성(K4, plan 19 Q4)이 대신한다.
+- `NativeClientRuntime`·`NativeTuiApplicationComposition` 이름은 plan 18 §5.9 대로 마지막에 바꾼다.
 
 ## 4. 단계 (PR 단위)
 
@@ -161,7 +192,7 @@ git worktree 에서 틀린다. planning 기준 데이터는 저장소 단위이�
 | K3-3a (완료 2026-11-08) | §3.2 승인 결정은 승인 id 로, steer 는 thread id 로 주인 session 을 찾는다. thread 요약에 보는 thread, 진행 중 턴 id, 기다리는 승인을 넣는다. v0 에서 대화 열기·새 초안을 뺀다 | 유지 (TUI 의 세션 목록 표시는 보는 thread 에도 붙는다) | core 시험: 보지 않는 thread 의 승인을 결정하고 steer 한다 |
 | K3-3b (완료 2026-11-09) | §3.2 thread 를 지정한 프롬프트 제출. core 명령 `SubmitThreadPrompt` 가 준비(`PrepareManualPrompt` 와 같은 효과) 뒤 제출(`SubmitTurn` 과 같은 admission)을 잇는다. 그 thread 의 session 이 없으면 보는 session 의 설정으로 뒤에 새로 만든다. 보는 자리는 바꾸지 않는다. 프로토콜 `submit_prompt` 와 진행 이벤트 `prompt_submission`(preparing, submitted, rejected, failed). 설계와 다른 점: (1) 모르는 thread 는 거절한다. 아는 thread 는 보는 thread, 일이 남은 thread, 읽은 세션 목록(첫 페이지)의 thread 이다. (2) planning 초안 검토가 필요한 준비 결과는 원격에서 검토할 수 없어 실패로 알린다. (3) 병렬 모드가 켜져 있으면 준비 전에 거절한다(`RejectedParallelMode`). 병렬 작업 intake 는 아직 TUI 에만 있고, main session 턴으로 내면 같은 작업이 병렬 slot 에도 나갈 수 있다. 사용 여부는 호스트가 병렬 제어부 값으로 채운다. 이미지 첨부는 없다. (4) TUI 는 지금처럼 자기 준비 → 제출 경로를 쓴다. (5) 준비 칸은 TUI 와 같이 쓴다. TUI 가 대화를 바꿀 때 보내는 준비 취소는 thread 를 지정한 준비를 취소하지 않는다 | 확장 | core 시험: 보지 않는 thread 에 제출하면 턴 효과가 나오고 보는 자리는 쉰다. 모르는 thread, 일하는 중, 병렬 모드, 다른 준비 진행 중, 준비 실패, TUI 의 대화 전환 뒤에도 원격 준비가 제출된다. 프로토콜 왕복·변환·이벤트·`describe`. 호스트 시험: 명령 → 턴 실행 |
 | K3-4 (완료 2026-11-09) | §3.4 저장소 잠금과 저장소당 커널. 설계와 다른 점: 커널 단위를 폴더에서 저장소로 고쳤다(§3.4 개정). 잠금은 `$AKRA_HOME/projects/<namespace>/runtime/kernel.lock` 이다. composition `build_kernel_for_workspace(folder)` 가 잠금을 먼저 잡고, 런타임을 조립하고, 병렬 보기(그 폴더, `supervisor_view_active = false`)를 정한 뒤 `KernelHost` 를 시작한다. 커널을 버리면 호스트 스레드가 끝난 뒤 잠금이 풀린다. TUI 도 시작할 때 같은 잠금을 잡는다. 저장소별 커널 목록(registry)은 Gateway 가 커널의 수명(클라이언트가 떠난 뒤)과 비동기 접속 사이의 공유를 정해야 하므로 K3-5 로 옮겼다. 데몬 커널의 GitHub 리뷰 폴링 설정도 K3-5 에서 넘긴다 | 바뀜: 같은 저장소에서 TUI 둘, 또는 TUI 와 데몬 커널이 함께 돌지 않는다. 두 번째 TUI 는 이유를 보이고 끝난다 | 잠금 경합 시험(다른 worktree 에서 두 번째 잠금 거절, 다른 저장소는 둘 다 성공, 쥔 쪽이 버리면 풀림), 조립 때 병렬 보기 설정, 커널 시작 뒤 잠금 유지, TUI 시작 거절 메시지 |
-| K3-5 | Gateway 가 `akra/kernel/*` 를 커널 호스트에 연결. 먼저 app-server 공유를 확인한다 (Q-K3-6). 커널을 버릴 때는 병렬 제어부의 작업 스레드(orchestrator tick, dispatch)를 멈춘 뒤 잠금을 푼다. 지금 `KernelHost` 는 호스트 스레드만 기다리므로, 같은 프로세스에서 커널을 다시 만들면 이전 작업 스레드가 새 커널과 같은 큐를 배분할 수 있다 (K3-4 리뷰) | 확장 | Gateway 시험: attach → command → event, 접속 끊김 → detach, 커널을 버리고 다시 만들어도 이전 작업 스레드가 배분하지 않음 |
+| K3-5 | Gateway 가 `akra/kernel/*` 를 커널 호스트에 연결. 먼저 app-server 공유를 확인한다 (Q-K3-6). plan 20 의 Gateway 탭과 관찰자 모드는 여기에 넣지 않는다 (plan 20 §8). 커널을 버릴 때는 병렬 제어부의 작업 스레드(orchestrator tick, dispatch)를 멈춘 뒤 잠금을 푼다. 지금 `KernelHost` 는 호스트 스레드만 기다리므로, 같은 프로세스에서 커널을 다시 만들면 이전 작업 스레드가 새 커널과 같은 큐를 배분할 수 있다 (K3-4 리뷰) | 확장 | Gateway 시험: attach → command → event, 접속 끊김 → detach, 커널을 버리고 다시 만들어도 이전 작업 스레드가 배분하지 않음 |
 | K3-6 | Desktop 이 `akra/kernel/*` 로 세션 활동, 자동 후속, 병렬 작업 상태를 보인다. 병렬 제어부 이벤트의 프로토콜 변환을 여기서 더한다 | 확장 | Desktop 시험, 숨긴 창 텍스트 캡처 |
 
 규모: plan 18 추정 5~10일을 유지한다. K3-3 이 가장 크다 (K2-3 의 보는 자리 구조를 클라이언트별로 바꾼다).

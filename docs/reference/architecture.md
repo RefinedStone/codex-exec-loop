@@ -647,6 +647,13 @@ Host-owned Git operations:
   special paths, oversized changes, unmerged entries, and hidden dirty submodule state
 - use isolated credential-free network configuration and a separately verified API identity
 
+One process runs the decision loop of a repository. Composition prepares the private planning
+runtime directory and passes it to `RepositoryKernelLockAdapter`
+(`src/adapter/outbound/filesystem/kernel_lock.rs`), which holds an OS file lock on `kernel.lock`
+there; linked worktrees resolve to the same directory. The TUI and `build_kernel_for_workspace`
+(`src/composition/repository_kernel.rs`) take it before they assemble the runtime, and dropping the
+kernel releases it after the host thread ends.
+
 Subprocesses use `src/subprocess.rs`. Linux uses process-group plus bounded `/proc` descendant
 containment, Windows uses a kill-on-close Job, and other Unix targets guarantee only process-group
 containment. Same-user hostile racing remains outside the filesystem-only threat boundary.
