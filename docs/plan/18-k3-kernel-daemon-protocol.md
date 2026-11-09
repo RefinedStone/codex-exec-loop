@@ -45,6 +45,7 @@
 | 커널 하나가 작업 공간 하나(`current_dir`)로 조립된다 | `production::build_native_tui_application` |
 | TUI 가 자기 프로세스 안에 커널을 갖는다. 데몬도 커널을 가지면 같은 작업 공간에 둘이 돈다 | K-D3, K-D5 |
 | app-server 연결은 커널마다 자기 stdio 자식을 쓴다 | `ports.app_server_adapter` |
+| 병렬 제어부 tick 은 화면이 알린 병렬 보기(`ParallelViewChanged`, 작업 공간)가 있어야 돈다. 데몬 커널에는 이것을 알릴 화면이 없다 | `native_client_runtime.rs` `NativeClientEvent::ParallelTick` |
 
 ## 3. 설계
 
@@ -124,12 +125,12 @@ v0 명령은 화면 흐름 단계가 아니라 한 번에 끝나는 도메인 �
 | 단계 | 내용 | 기존 동작 | 검증 |
 | --- | --- | --- | --- |
 | K3-1 (완료 2026-11-08) | §3.3 프로토콜 v0 의 타입과 변환 (`src/adapter/inbound/kernel_protocol/`). 전송 없음. 명령 10개(세션 목록, 대화 열기, 새 초안, 이름 바꾸기, steer, 정지, 승인 결정, 자동 후속 최대 턴, 자동 후속 멈춤, planning 초기화), 조회 3개, 굵은 이벤트 4개(세션, 대화 실행 상태, thread 요약, 다시 맞추기). 설계와 다른 점: 프롬프트 제출은 core 가 준비 뒤 제출을 이어서 해야 하므로 K3-3 에서 더한다. 필드 없는 명령도 `{}` 로 둔다(serde 가 unit variant 의 모르는 필드를 거절하지 못한다) | 유지 | 직렬화 왕복 시험, 모든 v0 명령의 core 변환 시험, 확인 없는 초기화 거절, 모르는 명령·필드 거절, `describe` 내용 고정. 경계 테스트: 이 adapter 는 application·composition·outbound 를 모른다 |
-| K3-2 (완료 2026-11-08) | §3.1 `KernelHost`(`src/composition/kernel_host.rs`) 와 `KernelClientHandle`. 커널 스레드는 클라이언트 입력함을 비운 뒤 `run_host_cycle(now, 50ms, 64)` 을 돌리고 core 이벤트를 모든 클라이언트에 나눈다(대상별 분배는 K3-3). 클라이언트 채널은 1024 개 상한이고, 넘치면 `Resync` 를 보낸 뒤 이어서 보낸다. 조회는 스냅샷과 마지막 thread 요약을 준다. 알려진 한계: 클라이언트 명령은 커널 대기(최대 50ms)가 끝나야 처리된다. 운영 코드 연결은 K3-5 이다 | 유지 | 화면 없는 시험: 핸들로 명령을 보내고 조회하고, 턴 종료 → 평가 시작 → 자동 후속 제출 이벤트를 받고, 후속 턴이 실행된다. 느린 클라이언트는 커널을 막지 않고 `Resync` 를 받는다. 경계 테스트: 호스트는 tokio 와 inbound adapter 를 모른다 |
+| K3-2 (완료 2026-11-08) | §3.1 `KernelHost`(`src/composition/kernel_host.rs`) 와 `KernelClientHandle`. 커널 스레드는 클라이언트 입력함을 비운 뒤 `run_host_cycle(now, 50ms, 64)` 을 돌리고 core 이벤트와 병렬 제어부 이벤트를 모든 클라이언트에 나눈다(대상별 분배는 K3-3. 병렬 이벤트는 2026-11-09 에 더했다). 클라이언트 채널은 1024 개 상한이고, 넘치면 `Resync` 를 보낸 뒤 이어서 보낸다. 밀린 `Resync` 는 새 이벤트가 없어도 다음 주기에 보낸다. 조회는 스냅샷과 마지막 thread 요약을 준다. 알려진 한계: 클라이언트 명령은 커널 대기(최대 50ms)가 끝나야 처리된다. 운영 코드 연결은 K3-5 이다 | 유지 | 화면 없는 시험: 핸들로 명령을 보내고 조회하고, 턴 종료 → 평가 시작 → 자동 후속 제출 이벤트를 받고, 후속 턴이 실행된다. 느린 클라이언트는 커널을 막지 않고 `Resync` 를 받는다. 경계 테스트: 호스트는 tokio 와 inbound adapter 를 모른다 |
 | K3-3a (완료 2026-11-08) | §3.2 승인 결정은 승인 id 로, steer 는 thread id 로 주인 session 을 찾는다. thread 요약에 보는 thread, 진행 중 턴 id, 기다리는 승인을 넣는다. v0 에서 대화 열기·새 초안을 뺀다 | 유지 (TUI 의 세션 목록 표시는 보는 thread 에도 붙는다) | core 시험: 보지 않는 thread 의 승인을 결정하고 steer 한다 |
 | K3-3b | §3.2 thread 를 지정한 프롬프트 제출. core 가 준비 뒤 제출을 이어서 한다. 프로토콜 `submit_prompt` | 확장 | core·호스트 시험: 클라이언트가 보지 않는 thread 에 프롬프트를 보내고 턴이 실행된다 |
-| K3-4 | §3.4 작업 공간 잠금과 작업 공간당 커널 | 바뀜: 같은 작업 공간에 커널 둘이 안 돈다 | 잠금 경합 시험, TUI 시작 시 거절 메시지 |
+| K3-4 | §3.4 작업 공간 잠금과 작업 공간당 커널. 커널을 조립할 때 그 작업 공간의 병렬 보기를 정해서 화면 없이도 병렬 tick 이 돈다 | 바뀜: 같은 작업 공간에 커널 둘이 안 돈다 | 잠금 경합 시험, TUI 시작 시 거절 메시지 |
 | K3-5 | Gateway 가 `akra/kernel/*` 를 커널 호스트에 연결. 먼저 app-server 공유를 확인한다 (Q-K3-6) | 확장 | Gateway 시험: attach → command → event, 접속 끊김 → detach |
-| K3-6 | Desktop 이 `akra/kernel/*` 로 세션 활동과 자동 후속 상태를 보인다 | 확장 | Desktop 시험, 숨긴 창 텍스트 캡처 |
+| K3-6 | Desktop 이 `akra/kernel/*` 로 세션 활동, 자동 후속, 병렬 작업 상태를 보인다. 병렬 제어부 이벤트의 프로토콜 변환을 여기서 더한다 | 확장 | Desktop 시험, 숨긴 창 텍스트 캡처 |
 
 규모: plan 18 추정 5~10일을 유지한다. K3-3 이 가장 크다 (K2-3 의 보는 자리 구조를 클라이언트별로 바꾼다).
 
