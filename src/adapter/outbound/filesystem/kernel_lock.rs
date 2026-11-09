@@ -18,6 +18,7 @@ use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 const KERNEL_LOCK_FILE_NAME: &str = "kernel.lock";
 /// 진단 기록을 읽을 최대 크기이다. 기록은 세 줄이라 이것으로 충분하다.
 const HOLDER_RECORD_MAX_BYTES: u64 = 4096;
+const HOLDER_RECORD_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
 
 /// 저장소 하나의 커널 잠금이다. 버리면 잠금이 풀린다.
 #[derive(Debug)]
@@ -124,6 +125,14 @@ fn write_holder_record(file: &mut File, workspace_dir: &str) -> std::io::Result<
 
 /// 쥔 프로세스의 기록을 읽어 한 줄로 만든다. Windows 는 잠긴 파일을 다른 핸들에서 읽지 못하므로 `None` 이다.
 fn read_holder_record(path: &Path) -> Option<String> {
+    // 쥔 쪽이 기록을 비우고 다시 쓰는 사이에 읽으면 비어 있다. 잠깐 뒤 한 번 더 읽는다.
+    read_holder_record_once(path).or_else(|| {
+        std::thread::sleep(HOLDER_RECORD_RETRY_DELAY);
+        read_holder_record_once(path)
+    })
+}
+
+fn read_holder_record_once(path: &Path) -> Option<String> {
     let mut body = String::new();
     File::open(path)
         .ok()?
@@ -158,7 +167,16 @@ mod tests {
     use std::process::Command;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    fn temp_root(label: &str) -> PathBuf {
+    /// 시험이 끝나면 지우는 임시 폴더이다.
+    struct TempRoot(PathBuf);
+
+    impl Drop for TempRoot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn temp_root(label: &str) -> TempRoot {
         static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
         let root = crate::test_utils::platform_safe_temp_dir().join(format!(
             "akra-kernel-lock-{label}-{}-{}",
@@ -167,7 +185,7 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("temp root should be created");
-        root
+        TempRoot(root)
     }
 
     fn git(directory: &Path, args: &[&str]) {
@@ -183,10 +201,10 @@ mod tests {
         );
     }
 
-    /// 커밋 하나와 linked worktree 하나를 가진 저장소이다. 돌려주는 값은 (본 checkout, worktree) 이다.
-    fn repository_with_linked_worktree(label: &str) -> (String, String) {
+    /// 커밋 하나와 linked worktree 하나를 가진 저장소이다. 돌려주는 값은 (임시 폴더, 본 checkout, worktree) 이다.
+    fn repository_with_linked_worktree(label: &str) -> (TempRoot, String, String) {
         let root = temp_root(label);
-        let checkout = root.join("repo");
+        let checkout = root.0.join("repo");
         std::fs::create_dir_all(&checkout).expect("checkout should be created");
         git(&checkout, &["init", "-b", "prerelease"]);
         git(&checkout, &["config", "user.name", "Akra Test"]);
@@ -197,7 +215,7 @@ mod tests {
         std::fs::write(checkout.join("README.md"), "seed\n").expect("seed should write");
         git(&checkout, &["add", "README.md"]);
         git(&checkout, &["commit", "-m", "seed"]);
-        let worktree = root.join("linked-worktree");
+        let worktree = root.0.join("linked-worktree");
         git(
             &checkout,
             &[
@@ -209,6 +227,7 @@ mod tests {
             ],
         );
         (
+            root,
             checkout.display().to_string(),
             worktree.display().to_string(),
         )
@@ -224,7 +243,7 @@ mod tests {
 
     #[test]
     fn a_linked_worktree_cannot_take_the_lock_its_repository_holds() {
-        let (checkout, worktree) = repository_with_linked_worktree("worktree");
+        let (_root, checkout, worktree) = repository_with_linked_worktree("worktree");
         let _lock = RepositoryKernelLockAdapter::acquire(&checkout).expect("first lock");
 
         let refused = held_error(RepositoryKernelLockAdapter::acquire(&worktree));
@@ -260,8 +279,8 @@ mod tests {
 
     #[test]
     fn different_repositories_hold_their_own_locks() {
-        let (first, _) = repository_with_linked_worktree("first");
-        let (second, _) = repository_with_linked_worktree("second");
+        let (_first_root, first, _) = repository_with_linked_worktree("first");
+        let (_second_root, second, _) = repository_with_linked_worktree("second");
 
         let first_lock = RepositoryKernelLockAdapter::acquire(&first).expect("first repository");
         let second_lock = RepositoryKernelLockAdapter::acquire(&second).expect("second repository");
@@ -271,7 +290,7 @@ mod tests {
 
     #[test]
     fn dropping_the_lock_releases_it_for_the_next_process() {
-        let (checkout, worktree) = repository_with_linked_worktree("release");
+        let (_root, checkout, worktree) = repository_with_linked_worktree("release");
         let lock = RepositoryKernelLockAdapter::acquire(&worktree).expect("first lock");
         let repository_key = lock.repository_key().to_string();
         drop(lock);
@@ -284,13 +303,13 @@ mod tests {
     #[test]
     fn a_plain_folder_locks_by_its_own_path_outside_the_folder() {
         let folder = temp_root("plain");
-        let workspace = folder.display().to_string();
+        let workspace = folder.0.display().to_string();
         let _lock = RepositoryKernelLockAdapter::acquire(&workspace).expect("plain folder lock");
 
         let refused = held_error(RepositoryKernelLockAdapter::acquire(&workspace));
 
         assert!(
-            !refused.lock_path.starts_with(&folder),
+            !refused.lock_path.starts_with(&folder.0),
             "the lock lives under AKRA_HOME, not inside the folder"
         );
     }
