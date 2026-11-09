@@ -2,8 +2,8 @@
 
 ## 문서 상태
 
-- 상태: **Proposed execution plan**, K3-1·K3-2 완료. §3.2 는 2026-11-08 에 개정했다 (클라이언트별 보기 대신 thread 를
-  지정하는 명령). §3.4 는 2026-11-09 에 개정했다 (커널 단위를 폴더에서 저장소로). 현재 제품 동작을 설명하지 않는다.
+- 상태: **Proposed execution plan**, K3-1·K3-2·K3-3a·K3-3b·K3-4 완료. §3.2 는 2026-11-08 에 개정했다 (클라이언트별 보기 대신
+  thread 를 지정하는 명령). §3.4 는 2026-11-09 에 개정했다 (커널 단위를 폴더에서 저장소로). 현재 제품 동작을 설명하지 않는다.
 - 상위 계획: [18 Akra 커널 아키텍처](18-akra-kernel-architecture.md) §4.1, §4.4, §5.3~§5.6, §6 K3. 결정
   KP-03, KP-04, KP-06 (승인 2026-11-07). Q-K3, Q-K6 답 (2026-11-07).
 - 이전 단계: [K1](18-k1-headless-decision-loop.md), [K2](18-k2-thread-sessions.md) (완료 2026-11-08).
@@ -74,7 +74,10 @@
   처리한다. 결과는 thread 요약의 변화로 알린다.
 - thread 요약(`ThreadActivityChanged`)은 일이 남은 모든 thread(보는 thread 포함)를 담고, 진행 중 턴 id 와 기다리는
   승인 요청을 함께 담는다.
-- 프롬프트 제출은 thread 를 지정한다. core 가 준비(planning 조각 붙이기)와 제출을 이어서 한다 (K3-3b).
+- 프롬프트 제출은 thread 를 지정한다. core 가 준비(planning 조각 붙이기)와 제출을 이어서 한다 (K3-3b). core 가
+  모르는 thread(보는 thread, 일이 남은 thread, 읽은 세션 목록 어디에도 없다)와 일하는 중인 thread 는 준비 전에
+  거절한다. 준비가 planning 작업을 만들기 때문이다. 턴은 모든 thread 를 통틀어 하나만 돌기 때문에 다른 thread 에서
+  턴이 돌아도 거절한다.
 - 클라이언트별 보기(K2-5)는 TUI 가 원격 클라이언트가 되는 K6 으로 옮긴다.
 
 ### 3.3 응용 프로토콜 v0 (`akra/kernel/*`)
@@ -156,7 +159,7 @@ git worktree 에서 틀린다. planning 기준 데이터는 저장소 단위이�
 | K3-1 (완료 2026-11-08) | §3.3 프로토콜 v0 의 타입과 변환 (`src/adapter/inbound/kernel_protocol/`). 전송 없음. 명령 10개(세션 목록, 대화 열기, 새 초안, 이름 바꾸기, steer, 정지, 승인 결정, 자동 후속 최대 턴, 자동 후속 멈춤, planning 초기화), 조회 3개, 굵은 이벤트 4개(세션, 대화 실행 상태, thread 요약, 다시 맞추기). 설계와 다른 점: 프롬프트 제출은 core 가 준비 뒤 제출을 이어서 해야 하므로 K3-3 에서 더한다. 필드 없는 명령도 `{}` 로 둔다(serde 가 unit variant 의 모르는 필드를 거절하지 못한다) | 유지 | 직렬화 왕복 시험, 모든 v0 명령의 core 변환 시험, 확인 없는 초기화 거절, 모르는 명령·필드 거절, `describe` 내용 고정. 경계 테스트: 이 adapter 는 application·composition·outbound 를 모른다 |
 | K3-2 (완료 2026-11-08) | §3.1 `KernelHost`(`src/composition/kernel_host.rs`) 와 `KernelClientHandle`. 커널 스레드는 클라이언트 입력함을 비운 뒤 `run_host_cycle(now, 50ms, 64)` 을 돌리고 core 이벤트와 병렬 제어부 이벤트를 모든 클라이언트에 나눈다(대상별 분배는 K3-3. 병렬 이벤트는 2026-11-09 에 더했다). 클라이언트 채널은 1024 개 상한이고, 넘치면 `Resync` 를 보낸 뒤 이어서 보낸다. 밀린 `Resync` 는 새 이벤트가 없어도 다음 주기에 보낸다. 조회는 스냅샷과 마지막 thread 요약을 준다. 알려진 한계: 클라이언트 명령은 커널 대기(최대 50ms)가 끝나야 처리된다. 운영 코드 연결은 K3-5 이다 | 유지 | 화면 없는 시험: 핸들로 명령을 보내고 조회하고, 턴 종료 → 평가 시작 → 자동 후속 제출 이벤트를 받고, 후속 턴이 실행된다. 느린 클라이언트는 커널을 막지 않고 `Resync` 를 받는다. 경계 테스트: 호스트는 tokio 와 inbound adapter 를 모른다 |
 | K3-3a (완료 2026-11-08) | §3.2 승인 결정은 승인 id 로, steer 는 thread id 로 주인 session 을 찾는다. thread 요약에 보는 thread, 진행 중 턴 id, 기다리는 승인을 넣는다. v0 에서 대화 열기·새 초안을 뺀다 | 유지 (TUI 의 세션 목록 표시는 보는 thread 에도 붙는다) | core 시험: 보지 않는 thread 의 승인을 결정하고 steer 한다 |
-| K3-3b | §3.2 thread 를 지정한 프롬프트 제출. core 가 준비 뒤 제출을 이어서 한다. 프로토콜 `submit_prompt` | 확장 | core·호스트 시험: 클라이언트가 보지 않는 thread 에 프롬프트를 보내고 턴이 실행된다 |
+| K3-3b (완료 2026-11-09) | §3.2 thread 를 지정한 프롬프트 제출. core 명령 `SubmitThreadPrompt` 가 준비(`PrepareManualPrompt` 와 같은 효과) 뒤 제출(`SubmitTurn` 과 같은 admission)을 잇는다. 그 thread 의 session 이 없으면 보는 session 의 설정으로 뒤에 새로 만든다. 보는 자리는 바꾸지 않는다. 프로토콜 `submit_prompt` 와 진행 이벤트 `prompt_submission`(preparing, submitted, rejected, failed). 설계와 다른 점: (1) 모르는 thread 는 거절한다. 아는 thread 는 보는 thread, 일이 남은 thread, 읽은 세션 목록(첫 페이지)의 thread 이다. (2) planning 초안 검토가 필요한 준비 결과는 원격에서 검토할 수 없어 실패로 알린다. (3) 병렬 모드의 작업 intake 와 slot lease 는 호스트만 알아서 v0 는 main session 턴으로 제출한다. 이미지 첨부도 없다. (4) TUI 는 지금처럼 자기 준비 → 제출 경로를 쓴다 | 확장 | core 시험: 보지 않는 thread 에 제출하면 턴 효과가 나오고 보는 자리는 쉰다. 모르는 thread, 일하는 중, 다른 준비 진행 중, 준비 실패. 프로토콜 왕복·변환·이벤트·`describe`. 호스트 시험: 명령 → 턴 실행 |
 | K3-4 (완료 2026-11-09) | §3.4 저장소 잠금과 저장소당 커널. 설계와 다른 점: 커널 단위를 폴더에서 저장소로 고쳤다(§3.4 개정). 잠금은 `$AKRA_HOME/projects/<namespace>/runtime/kernel.lock` 이다. composition `build_kernel_for_workspace(folder)` 가 잠금을 먼저 잡고, 런타임을 조립하고, 병렬 보기(그 폴더, `supervisor_view_active = false`)를 정한 뒤 `KernelHost` 를 시작한다. 커널을 버리면 호스트 스레드가 끝난 뒤 잠금이 풀린다. TUI 도 시작할 때 같은 잠금을 잡는다. 저장소별 커널 목록(registry)은 Gateway 가 커널의 수명(클라이언트가 떠난 뒤)과 비동기 접속 사이의 공유를 정해야 하므로 K3-5 로 옮겼다. 데몬 커널의 GitHub 리뷰 폴링 설정도 K3-5 에서 넘긴다 | 바뀜: 같은 저장소에서 TUI 둘, 또는 TUI 와 데몬 커널이 함께 돌지 않는다. 두 번째 TUI 는 이유를 보이고 끝난다 | 잠금 경합 시험(다른 worktree 에서 두 번째 잠금 거절, 다른 저장소는 둘 다 성공, 쥔 쪽이 버리면 풀림), 조립 때 병렬 보기 설정, 커널 시작 뒤 잠금 유지, TUI 시작 거절 메시지 |
 | K3-5 | Gateway 가 `akra/kernel/*` 를 커널 호스트에 연결. 먼저 app-server 공유를 확인한다 (Q-K3-6). 커널을 버릴 때는 병렬 제어부의 작업 스레드(orchestrator tick, dispatch)를 멈춘 뒤 잠금을 푼다. 지금 `KernelHost` 는 호스트 스레드만 기다리므로, 같은 프로세스에서 커널을 다시 만들면 이전 작업 스레드가 새 커널과 같은 큐를 배분할 수 있다 (K3-4 리뷰) | 확장 | Gateway 시험: attach → command → event, 접속 끊김 → detach, 커널을 버리고 다시 만들어도 이전 작업 스레드가 배분하지 않음 |
 | K3-6 | Desktop 이 `akra/kernel/*` 로 세션 활동, 자동 후속, 병렬 작업 상태를 보인다. 병렬 제어부 이벤트의 프로토콜 변환을 여기서 더한다 | 확장 | Desktop 시험, 숨긴 창 텍스트 캡처 |
