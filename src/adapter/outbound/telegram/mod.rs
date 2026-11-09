@@ -482,6 +482,10 @@ sleep 2
         let _ = fs::remove_dir_all(&root);
     }
 
+    /// 시간 초과를 보지 않는 시험의 대기 한도이다. 전체 시험을 병렬로 돌리면 가짜 curl 시작이 1초를 넘을 수 있다.
+    #[cfg(unix)]
+    const NON_TIMEOUT_TEST_WAIT: Duration = Duration::from_secs(10);
+
     #[cfg(unix)]
     #[test]
     fn execute_json_request_redacts_token_from_curl_and_api_failures() {
@@ -505,7 +509,7 @@ exit 22
             curl_resolution_error: None,
             api_base_url: "https://api.test".to_string(),
             token: secret.to_string(),
-            request_wait_timeout_override: Some(Duration::from_secs(1)),
+            request_wait_timeout_override: Some(NON_TIMEOUT_TEST_WAIT),
         };
 
         let curl_error = adapter
@@ -567,7 +571,7 @@ printf '{{"ok":true,"result":{{}}}}'
             curl_resolution_error: None,
             api_base_url: "https://api.test".to_string(),
             token: "secret-token".to_string(),
-            request_wait_timeout_override: Some(Duration::from_secs(1)),
+            request_wait_timeout_override: Some(NON_TIMEOUT_TEST_WAIT),
         };
 
         let _: serde_json::Value = adapter
