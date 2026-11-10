@@ -78,3 +78,12 @@
   - Slack Web API(사용자 토큰): 역시 사내 Slack 앱이 필요하다.
 - 모든 경로가 회사 워크스페이스의 사내 Slack 앱을 요구한다. 사용자가 이것을 어렵다고 판단해서 보류한다.
 - 에이전트가 Slack 을 읽는 일은 R7(Claude 백엔드)에서 claude.ai 의 Slack 커넥터로 할 수 있다 (Akra 가 만들 것 없음).
+
+### 2026-11-10: Notion 은 MCP hub 로 (plan 21)
+
+- 조사: Orca 와 OmO Desktop 에는 Notion 연동이 없다. Codex 앱은 ChatGPT 커넥터 경유 플러그인이고, 패널은
+  MCP Apps 위젯(`ui://notion/page`)이 `app.notion.com` 편집기를 iframe 으로 띄운 것이다. 변경 감지는 push 가
+  아니라 다음 턴에 도구로 다시 읽는 방식이다.
+- 결정: 에이전트용 Notion 은 패널이 아니라 Akra MCP hub(`akra mcp`, plan 21)로 연결한다. 공식
+  `https://mcp.notion.com/mcp` 를 쓰므로 ChatGPT 를 거치지 않는다(D-14).
+- Notion 목록 패널은 proposed 이다. 화면용 데이터는 MCP 결과보다 REST API 의 JSON 이 낫다는 점을 그때 다시 본다.

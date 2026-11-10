@@ -635,6 +635,11 @@ impl ParsedInvocation {
         self.command_args.first().is_some_and(|arg| arg == "config")
     }
 
+    /// `akra mcp` 는 저장소가 아니라 사용자 단위 hub 를 다룬다. 저장소 밖에서도 실행된다.
+    pub fn is_mcp_hub_command(&self) -> bool {
+        self.command_args.first().is_some_and(|arg| arg == "mcp")
+    }
+
     pub fn is_help_only(&self) -> bool {
         matches!(
             self.command_args.as_slice(),
@@ -3049,6 +3054,16 @@ mod tests {
 
         assert_eq!(invocation.command_args, vec![OsString::from("status")]);
         assert_eq!(invocation.overrides.len(), 2);
+    }
+
+    #[test]
+    fn mcp_hub_command_skips_repository_configuration() {
+        let hub = ParsedInvocation::parse(["mcp", "servers"]).expect("invocation should parse");
+        let status = ParsedInvocation::parse(["status"]).expect("invocation should parse");
+
+        assert!(hub.is_mcp_hub_command());
+        assert!(!hub.is_configuration_command());
+        assert!(!status.is_mcp_hub_command());
     }
 
     #[test]

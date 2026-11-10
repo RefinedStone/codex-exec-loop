@@ -250,6 +250,8 @@ pub(super) struct AppServerConnectionConfig {
     terminal_grace_timeout: Duration,
     terminal_delivery_timeout: Duration,
     terminal_delivery_retry_interval: Duration,
+    // initialize 직후 `skills/extraRoots/set` 으로 등록할 skill 폴더다. 비어 있으면 요청하지 않는다.
+    extra_skill_roots: Vec<PathBuf>,
 }
 
 impl Default for AppServerConnectionConfig {
@@ -274,6 +276,7 @@ impl Default for AppServerConnectionConfig {
             terminal_grace_timeout: DEFAULT_TERMINAL_GRACE_TIMEOUT,
             terminal_delivery_timeout: DEFAULT_TERMINAL_DELIVERY_TIMEOUT,
             terminal_delivery_retry_interval: DEFAULT_TERMINAL_DELIVERY_RETRY_INTERVAL,
+            extra_skill_roots: Vec::new(),
         }
     }
 }
@@ -309,6 +312,8 @@ impl AppServerConnectionConfig {
         config.shell_environment_inherit = configured_shell_environment_inherit();
         config.process_environment_policy = configured_process_environment_policy();
         config.api_key_auth = configured_api_key_auth();
+        // MCP hub 에 서버가 있을 때만 hub skill 이 생긴다. 없으면 세션 컨텍스트가 늘지 않는다.
+        config.extra_skill_roots = crate::adapter::outbound::mcp_hub::agent_skill_roots();
         match crate::trusted_executable::pinned_codex_command() {
             Ok(command) => {
                 config.executable = command.program;
@@ -1272,7 +1277,30 @@ impl AppServerConnection {
 
         self.send_notification("initialized", json!({}))?;
         self.initialized = true;
+        self.register_extra_skill_roots();
         Ok(response)
+    }
+
+    /*
+     * skill root 등록은 부가 기능이다. 이 요청을 모르는 codex 이거나 실패해도 대화는 계속하고,
+     * 운영자가 볼 수 있게 경고만 남긴다.
+     */
+    fn register_extra_skill_roots(&mut self) {
+        if self.config.extra_skill_roots.is_empty() {
+            return;
+        }
+        let roots = self
+            .config
+            .extra_skill_roots
+            .iter()
+            .map(|root| root.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        if let Err(error) =
+            self.send_request::<Value>("skills/extraRoots/set", json!({ "extraRoots": roots }))
+        {
+            self.diagnostics
+                .record_warning(format!("Akra MCP hub skill was not registered: {error:#}"));
+        }
     }
 
     pub(super) fn read_account(&mut self) -> Result<AccountReadResponse> {
@@ -4725,6 +4753,40 @@ mod tests {
             .expect_err("initialize must be exactly once per app-server child");
 
         assert!(error.to_string().contains("already called"));
+    }
+
+    #[test]
+    fn initialize_registers_extra_skill_roots_and_keeps_going_when_rejected() {
+        let mut harness = TestConnection::new(false);
+        harness.connection.config.extra_skill_roots = vec![PathBuf::from("/akra/mcp-hub/skills")];
+        harness.send_stdout(json!({
+            "id": 1,
+            "result": {
+                "userAgent": "codex-app-server/test",
+                "platformFamily": "unix",
+                "platformOs": "linux-x64"
+            }
+        }));
+        harness.send_stdout(json!({
+            "id": 2,
+            "error": { "code": -32601, "message": "unknown method" }
+        }));
+
+        harness
+            .connection
+            .initialize()
+            .expect("a rejected skill root must not fail initialize");
+
+        let logged = harness.logged_json_lines(3);
+        assert_eq!(logged[2]["method"], "skills/extraRoots/set");
+        assert_eq!(logged[2]["params"]["extraRoots"][0], "/akra/mcp-hub/skills");
+        let warnings = harness.connection.take_warnings();
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("MCP hub skill was not registered")),
+            "{warnings:?}"
+        );
     }
 
     #[test]
@@ -9003,6 +9065,7 @@ mod tests {
             terminal_grace_timeout: Duration::from_millis(20),
             terminal_delivery_timeout: Duration::from_millis(20),
             terminal_delivery_retry_interval: Duration::from_millis(1),
+            extra_skill_roots: Vec::new(),
         }
     }
 

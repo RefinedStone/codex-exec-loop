@@ -23,11 +23,13 @@ use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntime
 use crate::adapter::outbound::github::{
     GithubAutomationAdapter, GithubPrValidationAdapter, GithubReviewPollerAdapter,
 };
+use crate::adapter::outbound::mcp_hub::CodexMcpHubBackend;
 use crate::adapter::outbound::telegram::CurlTelegramBotAdapter;
 use crate::application::port::inbound::admin_debug_port::{
     AdminDebugHarnessConfig, AdminDebugPort,
 };
 use crate::application::port::inbound::app_server_prompt_log_query_port::AppServerPromptLogQueryPort;
+use crate::application::port::inbound::mcp_hub_port::McpHubPort;
 use crate::application::port::inbound::parallel_agent_profile_port::ParallelAgentProfilePort;
 use crate::application::port::inbound::parallel_mode_admin_port::ParallelModeAdminPort;
 use crate::application::port::inbound::parallel_mode_control_port::ParallelModeControlPort;
@@ -63,6 +65,7 @@ use crate::application::service::admin_debug_harness::AdminDebugHarnessService;
 use crate::application::service::app_server_prompt_log_query::AppServerPromptLogQueryService;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
+use crate::application::service::mcp_hub::McpHubService;
 use crate::application::service::parallel_agent_profile::ParallelAgentProfileService;
 use crate::application::service::parallel_mode::admin::ParallelModeAdminService;
 use crate::application::service::parallel_mode::{
@@ -159,6 +162,12 @@ pub(crate) fn build_pr_validation_query_port(
         workspace_dir,
         Arc::new(SqlitePlanningAuthorityAdapter::new()),
     ))
+}
+
+pub(crate) fn build_mcp_hub_port() -> Result<Arc<dyn McpHubPort>> {
+    Ok(Arc::new(McpHubService::new(Arc::new(
+        CodexMcpHubBackend::from_environment()?,
+    ))))
 }
 
 pub(crate) fn build_planning_task_tool_port(workspace_dir: &str) -> Arc<dyn PlanningTaskToolPort> {

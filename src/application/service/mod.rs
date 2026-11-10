@@ -12,6 +12,8 @@ pub mod github_review_poller_service;
 pub mod review_center;
 // manual_prompt_preparation은 TUI가 직접 bootstrap/intake를 조립하지 않게 하는 application preflight다.
 pub mod manual_prompt_preparation;
+// MCP hub service 는 등록부 확인, 도구 검색, 결과 축약을 맡는다.
+pub mod mcp_hub;
 // parallel_agent_profile은 병렬 agent의 이름, 역할, avatar, persona prompt 설정을 관리한다.
 pub mod parallel_agent_profile;
 // parallel_mode는 여러 worktree/agent lane을 만들고 배분하는 application 흐름이다.

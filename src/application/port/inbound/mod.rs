@@ -5,6 +5,7 @@
  */
 pub mod admin_debug_port;
 pub mod app_server_prompt_log_query_port;
+pub mod mcp_hub_port;
 pub mod parallel_agent_profile_port;
 pub mod parallel_mode_admin_port;
 pub mod parallel_mode_control_port;

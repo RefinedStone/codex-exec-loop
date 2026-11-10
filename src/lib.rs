@@ -63,9 +63,13 @@ pub fn run() -> anyhow::Result<i32> {
     /*
      * Configuration inspection is explicitly non-mutating.  Dispatch it before
      * startup resolution so `--help` and `akra config path/list/get/doctor`
-     * cannot create `${AKRA_HOME}/config.toml` as a side effect.
+     * cannot create `${AKRA_HOME}/config.toml` as a side effect. `akra mcp` uses only the
+     * user-level MCP hub, so an agent can run it outside any repository.
      */
-    if invocation.is_help_only() || invocation.is_configuration_command() {
+    if invocation.is_help_only()
+        || invocation.is_configuration_command()
+        || invocation.is_mcp_hub_command()
+    {
         let mut stdout = io::stdout();
         return Ok(adapter::inbound::cli::run_with_args_with_config_overrides(
             invocation.command_args,

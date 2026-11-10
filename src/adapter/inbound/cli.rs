@@ -26,6 +26,7 @@ use std::path::{Path, PathBuf};
  * argument parsing과 process exit code는 edge에 남기고, 실제 작업은 application service와 outbound adapter로 위임한다.
  * 그래서 TUI, admin API, automation tool이 같은 planning/parallel-mode 계약을 공유한다.
  */
+mod mcp;
 mod reports;
 mod usage;
 
@@ -34,9 +35,9 @@ use self::reports::{
     render_reset_report,
 };
 use self::usage::{
-    ADMIN_SERVER_ALIAS_USAGE, ADMIN_SERVER_USAGE, CONFIG_USAGE, DOCTOR_USAGE, PARALLEL_TICK_USAGE,
-    PLANNING_TOOL_USAGE, QUEUE_USAGE, RESET_USAGE, STATUS_USAGE, TELEGRAM_BOT_ALIAS_USAGE,
-    TELEGRAM_BOT_USAGE,
+    ADMIN_SERVER_ALIAS_USAGE, ADMIN_SERVER_USAGE, CONFIG_USAGE, DOCTOR_USAGE, MCP_USAGE,
+    PARALLEL_TICK_USAGE, PLANNING_TOOL_USAGE, QUEUE_USAGE, RESET_USAGE, STATUS_USAGE,
+    TELEGRAM_BOT_ALIAS_USAGE, TELEGRAM_BOT_USAGE,
 };
 
 pub fn run_with_env_args(stdout: &mut impl Write) -> Result<Option<i32>> {
@@ -80,11 +81,13 @@ where
             writeln!(stdout, "{PLANNING_TOOL_USAGE}")?;
             writeln!(stdout, "{PARALLEL_TICK_USAGE}")?;
             writeln!(stdout, "{CONFIG_USAGE}")?;
+            writeln!(stdout, "{MCP_USAGE}")?;
             Ok(Some(0))
         }
         [command, rest @ ..] if command == OsStr::new("config") => {
             Ok(Some(run_config(rest, overrides, stdout)?))
         }
+        [command, rest @ ..] if command == OsStr::new("mcp") => Ok(Some(run_mcp(rest, stdout)?)),
         // long-running async service는 첫 command token 뒤의 parsing을 각자 소유한다.
         [command] if is_admin_command(command) => Ok(Some(run_admin_server(&[])?)),
         [command, rest @ ..] if is_admin_command(command) => Ok(Some(run_admin_server(rest)?)),
@@ -391,6 +394,19 @@ fn is_planning_tool_command(command: &OsStr) -> bool {
     matches!(
         command.to_str(),
         Some("planning-tool" | "planning-task-tool")
+    )
+}
+
+fn run_mcp(args: &[OsString], stdout: &mut impl Write) -> Result<i32> {
+    // 사용법 오류는 hub 폴더나 codex 를 찾기 전에 알린다.
+    let command = mcp::parse(args)?;
+    let hub = production::build_mcp_hub_port()?;
+    mcp::run(
+        command,
+        hub.as_ref(),
+        &mut std::io::stdin().lock(),
+        stdout,
+        &mut std::io::stderr(),
     )
 }
 

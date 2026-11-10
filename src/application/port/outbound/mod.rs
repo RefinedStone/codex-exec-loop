@@ -20,6 +20,8 @@ pub mod review_center_repository_port;
 pub mod clipboard_image_probe_port;
 // interactive turn runtime port는 app-server와 대화 turn을 실행하는 능력을 분리한다.
 pub mod interactive_turn_runtime_port;
+// MCP hub backend port 는 MCP 서버 등록부와 필요할 때만 여는 연결을 추상화한다.
+pub mod mcp_hub_backend_port;
 // parallel agent worker port는 병렬 lane에서 실제 agent 작업을 시작하는 경계다.
 pub mod parallel_agent_worker_port;
 // parallel agent profile repository port는 workspace별 agent profile JSON 저장 경계를 분리한다.

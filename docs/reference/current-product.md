@@ -303,6 +303,30 @@ the desktop app itself is not shipped yet.
   `$AKRA_HOME/recordings/`. Recordings contain real conversations and must not be committed.
 - The TUI, Admin, and Telegram paths keep their own stdio app-server (plan P-08).
 
+## MCP Hub
+
+The MCP hub keeps one user-level set of MCP servers and their logins for every session and for Akra
+itself ([plan 21](../plan/21-akra-mcp-hub.md)). Sessions do not load the tool schemas; they find and
+call tools on demand.
+
+- `akra mcp servers|add|remove|login|search|describe|call` prints JSON. `add <name> --url <https-url>`
+  registers a streamable HTTP server (plain http only for localhost); `add <name> -- <command> [args...]`
+  registers a stdio server. `call <server> <tool> [<json-object>|-]` reads the arguments inline or from
+  stdin and exits with 1 when the tool result has `isError: true`.
+- The command does not resolve repository configuration, so it runs in any directory.
+- Engine: each command starts a hub-only `codex app-server` with `CODEX_HOME=$AKRA_HOME/mcp-hub` and
+  stops it when done. Codex owns the MCP transports, OAuth, and token storage and refresh. The
+  registry is `$AKRA_HOME/mcp-hub/config.toml` in Codex `[mcp_servers.<name>]` form; extra Codex keys
+  written by hand are kept.
+- `call` opens an ephemeral thread with only the target server enabled. `search` and `servers`
+  connect every enabled server. Requests that app-server sends to the hub (MCP elicitation and others)
+  are declined.
+- `login` prints the authorization URL on stderr and waits up to 10 minutes for the OAuth callback.
+- When the registry has at least one server, the hub writes
+  `$AKRA_HOME/mcp-hub/agent-skills/akra-mcp-hub/SKILL.md`, and every Akra app-server connection
+  registers that folder with `skills/extraRoots/set` right after `initialize`. A failure only leaves
+  a warning. Connections opened before the first server was added do not see the skill.
+
 ## Recovery and Limits
 
 - Invalid or conflicting planning updates pause continuation and preserve review evidence.
@@ -325,6 +349,8 @@ the desktop app itself is not shipped yet.
 - Admin: `src/adapter/inbound/admin_api/`
 - Telegram: `src/adapter/inbound/telegram_bot/`
 - Gateway: `src/adapter/inbound/gateway/`, `src/adapter/outbound/app_server/gateway_upstream.rs`
+- MCP hub: `src/adapter/inbound/cli/mcp.rs`, `src/application/service/mcp_hub.rs`,
+  `src/adapter/outbound/mcp_hub/`
 - Desktop (in development, plan P2): `desktop/` — Electron shell that connects each window to `akra-gateway`;
   see `desktop/AGENTS.md`. The "Akra" side panel attaches to the repository kernel of the open thread's
   folder only while it is open, and shows threads with remaining work, auto-follow, parallel work, and the
