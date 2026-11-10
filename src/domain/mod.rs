@@ -13,6 +13,8 @@ pub(crate) mod conversation_runtime_envelope;
 pub(crate) mod conversation_stream;
 // github_review는 review thread와 polling 결과를 서비스가 다루기 쉬운 값으로 표현한다.
 pub(crate) mod github_review;
+// MCP hub 는 사용자당 하나인 MCP 서버 등록부와 도구 검색 규칙을 가진다.
+pub(crate) mod mcp_hub;
 // operator_alert는 TUI/Telegram 같은 delivery adapter가 공유할 수 있는 사용자 알림 이벤트다.
 pub(crate) mod operator_alert;
 // parallel_mode는 lane, branch, worktree처럼 병렬 작업 자체의 의미를 담는다.
