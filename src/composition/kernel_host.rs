@@ -15,6 +15,7 @@ use crate::core::native_client_port::{
     ParallelModeControlPlanePresentationEvent, ParallelViewState,
 };
 use crate::core::runtime::CoreInputWaker;
+use crate::domain::kernel_event::KernelEventPage;
 use crate::domain::parallel_mode::ParallelModeSupervisorSnapshot;
 use crate::domain::planning::RuntimeProjection;
 
@@ -156,6 +157,12 @@ enum KernelHostInput {
     Query {
         reply: Sender<KernelHostView>,
     },
+    /// 판단 사건 기록을 cursor 로 읽는다 (plan 19 Q3-3).
+    History {
+        after: i64,
+        limit: usize,
+        reply: Sender<Result<KernelEventPage, String>>,
+    },
     Detach {
         client_id: KernelClientId,
     },
@@ -272,6 +279,22 @@ impl KernelCommandSender {
         self.inbox
             .send(KernelHostInput::Command { command, reply })
             .map_err(|_| KernelCallError::Stopped)?;
+        wait_reply(&answer, timeout)
+    }
+
+    /// `after` 뒤의 판단 사건을 읽는다 (plan 19 Q3-3). 기록을 읽지 못하면 안쪽 `Err` 에 이유를 담는다.
+    pub(crate) fn history(
+        &self,
+        after: i64,
+        limit: usize,
+        timeout: Duration,
+    ) -> Result<Result<KernelEventPage, String>, KernelCallError> {
+        let (reply, answer) = mpsc::channel();
+        self.inbox.send(KernelHostInput::History {
+            after,
+            limit,
+            reply,
+        })?;
         wait_reply(&answer, timeout)
     }
 
@@ -472,6 +495,18 @@ impl KernelHostLoop {
                         .dispatch_client_event(NativeClientEvent::core(input));
                     self.publish(outcome);
                 }
+            }
+            KernelHostInput::History {
+                after,
+                limit,
+                reply,
+            } => {
+                // shortcut: 기록을 커널 스레드에서 읽는다 (한 쪽은 최대 500개). 읽기가 느려지면 읽기 전용 연결로 옮긴다.
+                let page = self
+                    .runtime
+                    .kernel_event_history(after, limit)
+                    .map_err(|error| format!("{error:#}"));
+                let _ = reply.send(page);
             }
             KernelHostInput::Query { reply } => {
                 let _ = reply.send(KernelHostView {
@@ -942,6 +977,100 @@ mod tests {
             elapsed < HOST_WAIT * 4,
             "{COMMANDS} commands took {elapsed:?}; the host wait is {HOST_WAIT:?}"
         );
+    }
+
+    /// 기록 조회를 돌려주는 가짜 기록이다. 사건 `i` 의 sequence 는 `i + 1` 이다.
+    struct PagedLog(Vec<crate::domain::kernel_event::KernelEvent>);
+
+    impl crate::application::port::outbound::kernel_event_log_port::KernelEventLogPort for PagedLog {
+        fn append_kernel_events(
+            &self,
+            _workspace_dir: &str,
+            _events: &[crate::domain::kernel_event::KernelEvent],
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn load_kernel_events(
+            &self,
+            _workspace_dir: &str,
+            _kinds: &[&str],
+        ) -> anyhow::Result<Vec<crate::domain::kernel_event::KernelEvent>> {
+            Ok(Vec::new())
+        }
+
+        fn load_kernel_events_after(
+            &self,
+            _workspace_dir: &str,
+            after: i64,
+            limit: usize,
+        ) -> anyhow::Result<KernelEventPage> {
+            let records = self
+                .0
+                .iter()
+                .enumerate()
+                .map(
+                    |(index, event)| crate::domain::kernel_event::RecordedKernelEvent {
+                        sequence: index as i64 + 1,
+                        recorded_at: "now".to_string(),
+                        event: event.clone(),
+                    },
+                )
+                .filter(|record| record.sequence > after)
+                .take(limit)
+                .collect::<Vec<_>>();
+            let next_after = records.last().map_or(after, |record| record.sequence);
+            Ok(KernelEventPage {
+                records,
+                next_after,
+            })
+        }
+    }
+
+    #[test]
+    fn a_client_reads_the_kernel_history_page_by_page() {
+        // plan 19 Q3-3: the host thread reads the attached log for a client's history query.
+        let started = |turn_id: &str| crate::domain::kernel_event::KernelEvent::TurnStarted {
+            thread_id: "thread-1".to_string(),
+            turn_id: turn_id.to_string(),
+        };
+        let (mut runtime, _turns) = recording_runtime_for_test();
+        runtime.attach_kernel_event_log(
+            Arc::new(PagedLog(vec![
+                started("turn-1"),
+                started("turn-2"),
+                started("turn-3"),
+            ])),
+            "/workspace",
+        );
+        let host = KernelHost::start(runtime).expect("kernel host thread should start");
+        let client = host.attach().expect("a client should attach");
+        let commands = client.commands();
+
+        let first = commands
+            .history(0, 2, TEST_REPLY_TIMEOUT)
+            .expect("the host should answer")
+            .expect("the log should read");
+        assert_eq!(
+            first
+                .records
+                .iter()
+                .map(|record| record.event.clone())
+                .collect::<Vec<_>>(),
+            [started("turn-1"), started("turn-2")]
+        );
+        let rest = commands
+            .history(first.next_after, 2, TEST_REPLY_TIMEOUT)
+            .expect("the host should answer")
+            .expect("the log should read");
+        assert_eq!(
+            rest.records
+                .iter()
+                .map(|record| record.event.clone())
+                .collect::<Vec<_>>(),
+            [started("turn-3")]
+        );
+        assert_eq!(rest.next_after, 3);
     }
 
     #[test]

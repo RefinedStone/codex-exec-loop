@@ -101,6 +101,30 @@ pub enum KernelEvent {
     },
 }
 
+/// 기록에서 읽은 사건 하나이다 (plan 19 Q3-3). `sequence` 는 기록 순서이고 cursor 로 쓴다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecordedKernelEvent {
+    pub sequence: i64,
+    pub recorded_at: String,
+    pub event: KernelEvent,
+}
+
+/*
+ * cursor 로 읽은 기록 한 쪽이다 (plan 19 Q3-3). `next_after` 는 다음에 보낼 cursor 이다. 이 binary 가 모르는 사건을
+ * 건너뛰어도 cursor 는 그 뒤로 간다. 더 읽을 것이 없으면 받은 cursor 를 그대로 돌려준다.
+ */
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct KernelEventPage {
+    pub records: Vec<RecordedKernelEvent>,
+    pub next_after: i64,
+}
+
+/// 남김 종류가 아닌 사건을 최근 이만큼만 남긴다 (plan 19 Q3-3). 남김 종류는 복구에 필요해서 지우지 않는다.
+pub const RETAINED_KERNEL_EVENTS: i64 = 10_000;
+
+/// 한 번에 읽는 사건 수의 한도이다.
+pub const MAX_KERNEL_EVENT_PAGE: usize = 500;
+
 /// 남긴 프롬프트를 되돌릴 때 읽는 사건 종류이다. 다른 사건은 읽지 않는다.
 pub const THREAD_PROMPT_QUEUE_KINDS: [&str; 2] = ["thread_prompt_queued", "thread_prompt_settled"];
 

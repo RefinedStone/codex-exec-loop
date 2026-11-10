@@ -14330,6 +14330,8 @@ fn verify_client_runtime_api_boundary(
         "has_remaining_work",
         // plan 19 Q2-4: the kernel host wakes the host wait when a client input arrives.
         "host_waker",
+        // plan 19 Q3-3: the kernel host reads the event log for a client's history query.
+        "kernel_event_history",
         "parallel_control_plane_projection",
         "parallel_epoch_snapshot",
         "parallel_mode_enabled",
@@ -14345,6 +14347,7 @@ fn verify_client_runtime_api_boundary(
         "current_parallel_epoch_id_for_workspace",
         "has_remaining_work",
         "host_waker",
+        "kernel_event_history",
         "parallel_control_plane_projection",
         "parallel_epoch_snapshot",
         "parallel_mode_enabled",

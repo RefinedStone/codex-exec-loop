@@ -123,6 +123,112 @@ fn wait_worker_ready(ready: &std::sync::mpsc::Receiver<()>) {
 }
 
 #[test]
+fn kernel_event_pages_follow_the_cursor_and_old_events_are_trimmed() {
+    // plan 19 Q3-3: a page reads after a cursor; the queue kinds survive the trim.
+    use crate::application::port::outbound::kernel_event_log_port::KernelEventLogPort;
+    use crate::domain::kernel_event::{
+        KernelEvent, QueuedThreadPrompt, RETAINED_KERNEL_EVENTS, THREAD_PROMPT_QUEUE_KINDS,
+    };
+    let workspace = temp_workspace("kernel-event-pages");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let started = |turn_id: &str| KernelEvent::TurnStarted {
+        thread_id: "thread-1".to_string(),
+        turn_id: turn_id.to_string(),
+    };
+    let queued = KernelEvent::ThreadPromptQueued(QueuedThreadPrompt {
+        thread_id: "thread-1".to_string(),
+        workspace_directory: workspace.clone(),
+        handoff: crate::domain::planning::ManualPromptMainSessionHandoff {
+            prompt: "planned prompt".to_string(),
+            transcript_text: "fix the test".to_string(),
+            task: None,
+        },
+        task_id: "task-1".to_string(),
+    });
+    adapter
+        .append_kernel_events(&workspace, &[queued.clone(), started("turn-1")])
+        .expect("events should append");
+    let location =
+        SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(&workspace)
+            .expect("location should resolve");
+    open_authority_connection(&location)
+        .expect("store should open")
+        .execute(
+            "INSERT INTO kernel_events (kind, thread_id, payload_json, recorded_at)
+             VALUES ('future_kind', 'thread-1', '{\"kind\":\"future_kind\"}', 'now')",
+            [],
+        )
+        .expect("a future row should insert");
+    adapter
+        .append_kernel_events(&workspace, &[started("turn-2")])
+        .expect("events should append");
+
+    let first = adapter
+        .load_kernel_events_after(&workspace, 0, 2)
+        .expect("a page should load");
+    assert_eq!(
+        first
+            .records
+            .iter()
+            .map(|record| (record.sequence, record.event.clone()))
+            .collect::<Vec<_>>(),
+        vec![(1, queued.clone()), (2, started("turn-1"))]
+    );
+    assert_eq!(first.next_after, 2);
+    let second = adapter
+        .load_kernel_events_after(&workspace, first.next_after, 2)
+        .expect("a page should load");
+    assert_eq!(
+        second
+            .records
+            .iter()
+            .map(|record| record.event.clone())
+            .collect::<Vec<_>>(),
+        vec![started("turn-2")],
+        "the unknown row is skipped"
+    );
+    assert_eq!(second.next_after, 4, "the cursor passes the unknown row");
+    let empty = adapter
+        .load_kernel_events_after(&workspace, second.next_after, 2)
+        .expect("a page should load");
+    assert!(empty.records.is_empty());
+    assert_eq!(empty.next_after, 4);
+
+    // 보존 한도를 넘게 채운 뒤 하나를 더 쓰면 오래된 사건이 지워진다. 남김은 남는다.
+    open_authority_connection(&location)
+        .expect("store should open")
+        .execute(
+            "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+             INSERT INTO kernel_events (kind, thread_id, payload_json, recorded_at)
+             SELECT 'turn_started', 'thread-1',
+                    '{\"kind\":\"turn_started\",\"thread_id\":\"thread-1\",\"turn_id\":\"bulk\"}', 'now'
+             FROM n",
+            [RETAINED_KERNEL_EVENTS],
+        )
+        .expect("bulk rows should insert");
+    adapter
+        .append_kernel_events(&workspace, &[started("turn-last")])
+        .expect("events should append");
+    let connection = open_authority_connection(&location).expect("store should open");
+    let (oldest, count): (i64, i64) = connection
+        .query_row(
+            "SELECT MIN(sequence), COUNT(*) FROM kernel_events WHERE kind = 'turn_started'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("the trimmed log should count");
+    assert_eq!(count, RETAINED_KERNEL_EVENTS);
+    assert!(oldest > 4, "the oldest turn events are trimmed");
+    assert_eq!(
+        adapter
+            .load_kernel_events(&workspace, &THREAD_PROMPT_QUEUE_KINDS)
+            .expect("queue events should load"),
+        vec![queued],
+        "the queue kinds are never trimmed"
+    );
+}
+
+#[test]
 fn kernel_events_append_in_order_and_skip_unknown_kinds() {
     // plan 19 Q3-1: the log keeps order across appends; a row from a newer binary is skipped.
     // plan 19 Q3-2: a read returns only the asked kinds.

@@ -3,7 +3,10 @@ use chrono::Utc;
 use rusqlite::{Connection, TransactionBehavior, params};
 
 use crate::application::port::outbound::kernel_event_log_port::KernelEventLogPort;
-use crate::domain::kernel_event::KernelEvent;
+use crate::domain::kernel_event::{
+    KernelEvent, KernelEventPage, MAX_KERNEL_EVENT_PAGE, RETAINED_KERNEL_EVENTS,
+    RecordedKernelEvent, THREAD_PROMPT_QUEUE_KINDS,
+};
 
 use super::{SqlitePlanningAuthorityAdapter, open_authority_connection};
 
@@ -48,9 +51,68 @@ impl KernelEventLogPort for SqlitePlanningAuthorityAdapter {
                 )
                 .context("failed to append a kernel event")?;
         }
+        // 남김 종류는 복구에 필요하므로 지우지 않는다. 다른 사건은 최근 것만 남긴다 (plan 19 Q3-3).
+        transaction
+            .execute(
+                "DELETE FROM kernel_events
+                 WHERE kind NOT IN (?1, ?2)
+                   AND sequence <= (SELECT MAX(sequence) FROM kernel_events) - ?3",
+                params![
+                    THREAD_PROMPT_QUEUE_KINDS[0],
+                    THREAD_PROMPT_QUEUE_KINDS[1],
+                    RETAINED_KERNEL_EVENTS
+                ],
+            )
+            .context("failed to trim old kernel events")?;
         transaction
             .commit()
             .context("failed to commit kernel events")
+    }
+
+    fn load_kernel_events_after(
+        &self,
+        workspace_dir: &str,
+        after: i64,
+        limit: usize,
+    ) -> Result<KernelEventPage> {
+        let limit = limit.clamp(1, MAX_KERNEL_EVENT_PAGE);
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let connection = open_authority_connection(&location)?;
+        ensure_kernel_event_table(&connection)?;
+        let mut statement = connection
+            .prepare(
+                "SELECT sequence, recorded_at, payload_json FROM kernel_events
+                 WHERE sequence > ?1 ORDER BY sequence LIMIT ?2",
+            )
+            .context("failed to prepare the kernel event page read")?;
+        let rows = statement
+            .query_map(params![after, limit as i64], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .context("failed to read the kernel event page")?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("failed to read a kernel event row")?;
+        let next_after = rows.last().map_or(after, |(sequence, _, _)| *sequence);
+        // 이 binary 가 모르는 사건은 건너뛴다. cursor 는 그 사건 뒤로 간다.
+        let records = rows
+            .into_iter()
+            .filter_map(|(sequence, recorded_at, payload)| {
+                let event = serde_json::from_str(&payload).ok()?;
+                Some(RecordedKernelEvent {
+                    sequence,
+                    recorded_at,
+                    event,
+                })
+            })
+            .collect();
+        Ok(KernelEventPage {
+            records,
+            next_after,
+        })
     }
 
     fn load_kernel_events(&self, workspace_dir: &str, kinds: &[&str]) -> Result<Vec<KernelEvent>> {

@@ -383,6 +383,17 @@ async fn a_client_attaches_commands_and_receives_kernel_events() {
     )
     .await;
     assert_eq!(parallel["result"]["type"], json!("parallel"), "{parallel}");
+    // plan 19 Q3-3: the history query goes through the host thread; this kernel has no log.
+    let history = kernel_request(
+        &mut client,
+        "history",
+        "akra/kernel/query",
+        json!({"query": {"type": "history", "after": 7}}),
+    )
+    .await;
+    assert_eq!(history["result"]["type"], json!("history"), "{history}");
+    assert_eq!(history["result"]["records"], json!([]), "{history}");
+    assert_eq!(history["result"]["next_after"], json!(7), "{history}");
     assert_eq!(parallel["result"]["enabled"], json!(false), "{parallel}");
 
     let described =
