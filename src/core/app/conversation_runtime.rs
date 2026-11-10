@@ -248,7 +248,7 @@ pub(super) enum TurnAuthorityAdmission {
 #[derive(Debug, Clone)]
 pub(super) struct ConversationRuntimeAuthority {
     snapshot: ConversationRuntimeSnapshot,
-    // 턴 뒤 상태이다 (plan 19 Q2-1). `snapshot.post_turn` 은 이 값의 투영이고 `set_post_turn` 만 둘을 바꾼다.
+    // 턴 뒤 상태이다 (plan 19 Q2-1). `snapshot.post_turn` 은 이 값의 투영이고 `replace_post_turn` 만 둘을 바꾼다.
     post_turn: PostTurnState,
 }
 
@@ -261,8 +261,19 @@ impl ConversationRuntimeAuthority {
     }
 
     fn set_post_turn(&mut self, state: PostTurnState) {
-        self.snapshot.post_turn = state.projection();
-        self.post_turn = state;
+        let _ = self.replace_post_turn(state);
+    }
+
+    /// 턴 뒤 상태와 그 투영을 함께 바꾸고 이전 상태를 돌려준다. 허용된 전이인지 시험 빌드에서 확인한다.
+    fn replace_post_turn(&mut self, next: PostTurnState) -> PostTurnState {
+        debug_assert!(
+            next.may_follow(&self.post_turn),
+            "post-turn transition is not allowed: {:?} -> {:?}",
+            self.post_turn,
+            next
+        );
+        self.snapshot.post_turn = next.projection();
+        std::mem::replace(&mut self.post_turn, next)
     }
 
     pub(super) fn post_turn(&self) -> &PostTurnState {
@@ -587,11 +598,10 @@ impl ConversationRuntimeAuthority {
      * 대기를 바로 꺼내므로, 덮어쓰기는 호스트 없이 core 를 직접 돌릴 때만 생긴다.
      */
     pub(super) fn mark_post_turn_due(&mut self, pending: PendingPostTurnEvaluation) {
-        debug_assert!(
-            self.post_turn.in_flight_correlation().is_none(),
-            "a turn ends only while no post-turn evaluation is in flight: {:?}",
-            self.post_turn
-        );
+        // 도달하지 않는 경로이다. 도달하면 덮어쓰는 평가의 결과를 받지 않도록 permit 을 먼저 무효로 만든다.
+        if let Some(active) = self.post_turn.active_evaluation() {
+            active.continuation_permit.invalidate_if_current();
+        }
         self.set_post_turn(PostTurnState::Due(Box::new(pending)));
     }
 
@@ -600,12 +610,9 @@ impl ConversationRuntimeAuthority {
         if !self.post_turn.is_due() {
             return None;
         }
-        match std::mem::take(&mut self.post_turn) {
-            PostTurnState::Due(pending) => {
-                self.set_post_turn(PostTurnState::Idle);
-                Some(*pending)
-            }
-            _ => unreachable!("the post-turn state was checked as due"),
+        match self.replace_post_turn(PostTurnState::Idle) {
+            PostTurnState::Due(pending) => Some(*pending),
+            _ => None,
         }
     }
 
@@ -622,11 +629,7 @@ impl ConversationRuntimeAuthority {
         correlation: PostTurnEvaluationCorrelation,
         execution: Box<PostTurnExecution>,
     ) -> bool {
-        if self
-            .post_turn
-            .active_evaluation()
-            .is_none_or(|active| active.correlation != correlation)
-        {
+        if !self.post_turn.evaluates(&correlation) {
             return false;
         }
         self.set_post_turn(PostTurnState::AwaitingRoute {
@@ -645,16 +648,20 @@ impl ConversationRuntimeAuthority {
         if !self.post_turn.awaits_route(correlation) {
             return None;
         }
-        let PostTurnState::AwaitingRoute { execution, .. } = std::mem::take(&mut self.post_turn)
-        else {
-            unreachable!("the post-turn state was checked as awaiting this route");
-        };
         let accepted_resolution = if resolution == PostTurnRouteResolution::AutoSubmit
             && !self.snapshot.auto_follow.can_queue_next()
         {
             PostTurnRouteResolution::NoContinuation
         } else {
             resolution
+        };
+        let PostTurnState::AwaitingRoute { execution, .. } =
+            self.replace_post_turn(PostTurnState::Settled {
+                correlation: correlation.clone(),
+                resolution: accepted_resolution,
+            })
+        else {
+            return None;
         };
         match accepted_resolution {
             PostTurnRouteResolution::AutoSubmit => {
@@ -670,10 +677,6 @@ impl ConversationRuntimeAuthority {
                 self.snapshot.auto_follow.phase = AutoFollowPhase::Idle;
             }
         }
-        self.set_post_turn(PostTurnState::Settled {
-            correlation: correlation.clone(),
-            resolution: accepted_resolution,
-        });
         Some((execution, accepted_resolution))
     }
 

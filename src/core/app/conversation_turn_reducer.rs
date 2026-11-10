@@ -1,7 +1,6 @@
 use super::approval::{ApprovalReviewPersistenceCoordinator, ApprovalReviewPersistenceSettlement};
 use super::conversation_runtime::{ConversationRuntimeAuthority, TurnAuthorityAdmission};
-use super::post_turn_state::ActivePostTurnEvaluation;
-pub(super) use super::post_turn_state::PendingPostTurnEvaluation;
+use super::post_turn_state::{ActivePostTurnEvaluation, PendingPostTurnEvaluation};
 use super::{
     ApprovalDecisionAdmission, ApprovalDecisionCorrelation, ApprovalReviewPersistenceCorrelation,
     ConversationLoadCorrelation, ConversationRuntimeSnapshot, PostTurnEvaluationCorrelation,
@@ -136,7 +135,7 @@ impl ThreadSession {
             .conversation_runtime
             .snapshot()
             .can_accept_manual_prompt()
-            || self.conversation_runtime.post_turn().has_work()
+            || self.has_post_turn_work()
             || self.active_stop_request.is_some()
             || self.active_turn_steer.is_some()
     }
@@ -164,8 +163,15 @@ impl ThreadSession {
     }
 
     fn evaluates_post_turn(&self, correlation: &PostTurnEvaluationCorrelation) -> bool {
-        self.active_post_turn_evaluation()
-            .is_some_and(|active| &active.correlation == correlation)
+        self.conversation_runtime.post_turn().evaluates(correlation)
+    }
+
+    fn has_post_turn_work(&self) -> bool {
+        self.conversation_runtime.post_turn().has_unsettled_work()
+    }
+
+    fn has_due_post_turn(&self) -> bool {
+        self.conversation_runtime.post_turn().is_due()
     }
 
     fn active_post_turn_evaluation(&self) -> Option<&ActivePostTurnEvaluation> {
@@ -187,7 +193,7 @@ impl ThreadSession {
                 .as_ref()
                 .map(|approval| approval.request.clone()),
             auto_follow_active: runtime.auto_follow.has_live_activity()
-                || self.conversation_runtime.post_turn().has_work(),
+                || self.has_post_turn_work(),
         })
     }
 
@@ -411,7 +417,7 @@ impl ConversationTurnFeatureReducer {
         build_request: impl FnOnce(PendingPostTurnEvaluation) -> PostTurnRequest,
     ) -> Option<(PostTurnEvaluationCorrelation, PostTurnRequest)> {
         self.with_owning_session(
-            |session| session.conversation_runtime.post_turn().is_due(),
+            |session| session.has_due_post_turn(),
             |reducer| {
                 let pending = reducer.session.conversation_runtime.take_due_post_turn()?;
                 let mut request = build_request(pending);

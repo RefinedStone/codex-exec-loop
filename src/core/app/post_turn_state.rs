@@ -30,10 +30,13 @@ pub(super) struct ActivePostTurnEvaluation {
 }
 
 /*
- * 전이:
- *   Idle | Settled --턴 종료--> Due --평가 시작--> Evaluating --평가 완료--> AwaitingRoute --경로 결정--> Settled
+ * 전이 (`may_follow` 가 같은 규칙을 검사한다):
+ *   Idle | Due | Settled --턴 종료--> Due            (이전 Due 는 덮어쓴다)
+ *   Due --평가 시작 또는 버림--> Idle
+ *   Idle | Due | AwaitingRoute | Settled --평가 입장--> Evaluating
+ *   Evaluating --평가 완료--> AwaitingRoute --경로 결정--> Settled
  *   Evaluating | AwaitingRoute --정책 변경--> Settled (이어 가지 않음)
- *   Evaluating | AwaitingRoute | Settled --취소--> Idle (Due 는 남는다)
+ *   Evaluating | AwaitingRoute | Settled --새 턴, 대화 무효화, 평가 취소--> Idle (Due 는 남는다)
  */
 #[derive(Debug, Clone, Default)]
 pub(super) enum PostTurnState {
@@ -94,8 +97,8 @@ impl PostTurnState {
         }
     }
 
-    /// 대화를 바꿔도 이어서 처리해야 할 턴 뒤 일이 있다 (평가 대기, 평가 중, 경로 대기).
-    pub(super) fn has_work(&self) -> bool {
+    /// 아직 끝나지 않은 턴 뒤 일이 있다 (평가 대기, 평가 중, 경로 대기). 대화를 바꿔도 이어서 처리한다.
+    pub(super) fn has_unsettled_work(&self) -> bool {
         matches!(
             self,
             Self::Due(_) | Self::Evaluating { .. } | Self::AwaitingRoute { .. }
@@ -113,6 +116,11 @@ impl PostTurnState {
         }
     }
 
+    pub(super) fn evaluates(&self, correlation: &PostTurnEvaluationCorrelation) -> bool {
+        self.active_evaluation()
+            .is_some_and(|active| &active.correlation == correlation)
+    }
+
     pub(super) fn awaits_route(&self, correlation: &PostTurnEvaluationCorrelation) -> bool {
         matches!(self, Self::AwaitingRoute { correlation: awaiting, .. } if awaiting == correlation)
     }
@@ -125,14 +133,48 @@ impl PostTurnState {
             Self::Idle | Self::Due(_) | Self::Settled { .. } => None,
         }
     }
+
+    /// 이 상태가 `previous` 다음에 올 수 있다. 위 전이 규칙이다.
+    pub(super) fn may_follow(&self, previous: &Self) -> bool {
+        match self {
+            Self::Idle => true,
+            Self::Due(_) => previous.in_flight_correlation().is_none(),
+            Self::Evaluating { .. } => !matches!(previous, Self::Evaluating { .. }),
+            Self::AwaitingRoute { .. } => matches!(previous, Self::Evaluating { .. }),
+            Self::Settled { .. } => previous.in_flight_correlation().is_some(),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::planning::{
+        PlanningWorkerPanelState, PostTurnAutoFollowSkipReason, PostTurnContinuationAction,
+        PostTurnOutcome, PostTurnProvenance, RuntimeProjection,
+    };
 
     fn correlation() -> PostTurnEvaluationCorrelation {
         PostTurnEvaluationCorrelation::new(1, "thread-1", "turn-1", "/workspace", "/workspace")
+    }
+
+    fn execution() -> PostTurnExecution {
+        PostTurnExecution {
+            thread_id: "thread-1".to_string(),
+            completed_turn_id: "turn-1".to_string(),
+            runtime_projection_workspace_directory: "/workspace".to_string(),
+            evaluation: PostTurnOutcome {
+                provenance: PostTurnProvenance::new("turn-1".to_string()),
+                runtime_projection: RuntimeProjection::uninitialized(),
+                planning_repair_state: None,
+                runtime_notices: Vec::new(),
+                action: PostTurnContinuationAction::SkipAutoFollow {
+                    reason: PostTurnAutoFollowSkipReason::PlanningBlocked,
+                },
+                operator_alerts: Vec::new(),
+            },
+            planning_worker_panel_state: PlanningWorkerPanelState::default(),
+        }
     }
 
     fn pending() -> PendingPostTurnEvaluation {
@@ -151,7 +193,7 @@ mod tests {
     #[test]
     fn a_due_evaluation_is_work_but_projects_as_idle() {
         let state = PostTurnState::Due(Box::new(pending()));
-        assert!(state.has_work());
+        assert!(state.has_unsettled_work());
         assert!(state.is_due());
         assert_eq!(state.projection(), PostTurnAuthoritySnapshot::Idle);
         assert!(state.in_flight_correlation().is_none());
@@ -163,7 +205,7 @@ mod tests {
             correlation: correlation(),
             resolution: PostTurnRouteResolution::NoContinuation,
         };
-        assert!(!state.has_work());
+        assert!(!state.has_unsettled_work());
         assert!(!state.awaits_route(&correlation()));
         assert_eq!(
             state.projection(),
@@ -172,5 +214,29 @@ mod tests {
                 resolution: PostTurnRouteResolution::NoContinuation,
             }
         );
+    }
+
+    #[test]
+    fn only_an_in_flight_evaluation_can_settle_or_await_a_route() {
+        let evaluating = PostTurnState::Evaluating {
+            active: ActivePostTurnEvaluation::for_test(correlation()),
+            started_at: Instant::now(),
+        };
+        let settled = PostTurnState::Settled {
+            correlation: correlation(),
+            resolution: PostTurnRouteResolution::NoContinuation,
+        };
+        let awaiting = PostTurnState::AwaitingRoute {
+            correlation: correlation(),
+            execution: Box::new(execution()),
+            started_at: Instant::now(),
+        };
+        assert!(settled.may_follow(&evaluating));
+        assert!(awaiting.may_follow(&evaluating));
+        assert!(!settled.may_follow(&PostTurnState::Idle));
+        assert!(!awaiting.may_follow(&PostTurnState::Idle));
+        assert!(!PostTurnState::Due(Box::new(pending())).may_follow(&evaluating));
+        assert!(!evaluating.may_follow(&evaluating));
+        assert!(PostTurnState::Idle.may_follow(&awaiting));
     }
 }
