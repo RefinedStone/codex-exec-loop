@@ -11291,6 +11291,7 @@ fn inbound_adapters_do_not_drive_the_runtime_host_or_its_internal_decisions() {
             "EvaluateCompletedTurn",
             "AppCommand::EvaluatePostTurn",
             "SetParallelModeEnabled",
+            "ResubmitQueuedThreadPrompt",
         ],
     );
     assert_no_production_callable_reference_named_in_paths(
@@ -11314,6 +11315,7 @@ fn inbound_adapters_do_not_drive_the_runtime_host_or_its_internal_decisions() {
         "AppCommand::ResolvePostTurnContinuation",
         "AppCommand::SubmitAutoFollowTurn",
         "AppCommand::SetParallelModeEnabled",
+        "AppCommand::ResubmitQueuedThreadPrompt",
         "fn run_host_cycle",
     ] {
         assert!(

@@ -134,6 +134,8 @@ fn post_turn_anchor_index(events: &[AppEvent], step: &PostTurnHostStep) -> Optio
         PostTurnHostStep::RouteContinuation(work) => route_marker_index(events, &work.correlation),
         // 끝낼 평가가 여럿이라 자리도 여럿이다. 호스트가 평가마다 `route_marker_index` 로 찾는다.
         PostTurnHostStep::SettleWithoutContinuation { .. } => None,
+        // 다시 내는 프롬프트는 표시가 없다. 결과는 이 dispatch 의 다른 결과 뒤에 붙는다.
+        PostTurnHostStep::ResubmitQueuedThreadPrompt => None,
     }
 }
 
@@ -691,7 +693,8 @@ impl NativeClientRuntime {
     /*
      * 턴 뒤 단계를 상태에서 고른다 (plan 19 Q2-2). core 가 고른 단계를 하고 다시 묻는다. 평가 시작은 호스트가 병렬
      * 값(사용 여부, epoch)을 붙인다 (plan 18 K1-4). 경로 결정은 병렬 제어부에 묻고, AutoSubmit 이면 자동 후속 턴을
-     * 제출한다 (plan 18 K1-5). 이전에는 core 결과의 표시 이벤트를 따라 단계를 이어 붙였다.
+     * 제출한다 (plan 18 K1-5). 이전에는 core 결과의 표시 이벤트를 따라 단계를 이어 붙였다. 턴 뒤 일이 모두 끝나고
+     * 커널이 쉬면, 원격 준비가 큐에 남긴 프롬프트를 다시 낸다 (plan 19 Q2-3).
      */
     fn reconcile_post_turn(
         &mut self,
@@ -730,6 +733,13 @@ impl NativeClientRuntime {
                         splice_post_turn_step(&mut core_outcome, None, submitted);
                     }
                     parallel_events.extend(events);
+                }
+                PostTurnHostStep::ResubmitQueuedThreadPrompt => {
+                    let resubmitted = self
+                        .core
+                        .runtime
+                        .dispatch_command(AppCommand::ResubmitQueuedThreadPrompt);
+                    splice_post_turn_step(&mut core_outcome, anchor, resubmitted);
                 }
             }
         }
@@ -1881,6 +1891,106 @@ pub(crate) mod tests {
                 }),
             "parallel mode is off in the host, so core checks the thread: {:?}",
             outcome.events
+        );
+    }
+
+    #[test]
+    fn the_host_resubmits_a_queued_thread_prompt_when_the_blocking_turn_ends() {
+        // plan 19 Q2-3: the prompt was prepared while another turn ran. No client sends it again.
+        let (mut runtime, turns) = recording_runtime_for_test();
+        let stream = |runtime: &mut NativeClientRuntime, correlation, event| {
+            runtime.dispatch_client_event(NativeClientEvent::core(
+                CoreInput::ConversationStreamUpdated { correlation, event },
+            ))
+        };
+        let start_turn = |runtime: &mut NativeClientRuntime, turn_id: &str| {
+            let correlation = runtime.begin_test_turn_submission();
+            for event in [
+                TurnStreamEvent::ThreadPrepared {
+                    thread_id: "thread-1".to_string(),
+                    title: "Queued prompt".to_string(),
+                    cwd: "/workspace".to_string(),
+                    runtime_envelope: Box::<ConversationRuntimeEnvelope>::default(),
+                },
+                TurnStreamEvent::TurnStarted {
+                    turn_id: turn_id.to_string(),
+                    runtime_request: Box::<ConversationRuntimeConfigurationRequest>::default(),
+                },
+            ] {
+                let _ = stream(runtime, correlation, event);
+            }
+            correlation
+        };
+        let failed = || TurnStreamEvent::Failed {
+            message: "turn closed".to_string(),
+        };
+        // 첫 턴이 thread-1 을 core 가 아는 thread 로 만든다.
+        let first = start_turn(&mut runtime, "turn-1");
+        let _ = stream(&mut runtime, first, failed());
+        let _ = runtime.dispatch_client_event(NativeClientEvent::core(CoreInput::Command(
+            AppCommand::SubmitThreadPrompt(Box::new(crate::core::app::ThreadPromptSubmission {
+                workspace_directory: "/workspace".to_string(),
+                thread_id: "thread-1".to_string(),
+                prompt: "fix the test".to_string(),
+            })),
+        )));
+        let blocking = start_turn(&mut runtime, "turn-2");
+        let _ = runtime.dispatch_client_event(NativeClientEvent::core(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ManualPromptPrepared(Box::new(
+                crate::domain::planning::ManualPromptOutcome::PromptReady {
+                    correlation: crate::domain::planning::ManualPromptCorrelation {
+                        request_id: 1,
+                        generation: 1,
+                        workspace_directory: "/workspace".to_string(),
+                    },
+                    transcript_text: "fix the test".to_string(),
+                    runtime_projection: Box::new(
+                        crate::application::service::planning::PlanningRuntimeProjection::invalid(
+                            "test",
+                        ),
+                    ),
+                    intake: Box::new(
+                        crate::domain::planning::ManualPromptIntakeOutcome::TaskCommitted {
+                            committed_task_id: "task-1".to_string(),
+                            committed_planning_revision: 1,
+                            handoff: crate::domain::planning::ManualPromptMainSessionHandoff {
+                                prompt: "planned prompt".to_string(),
+                                transcript_text: "fix the test".to_string(),
+                                task: None,
+                            },
+                        },
+                    ),
+                },
+            )),
+        )));
+        assert!(runtime.has_remaining_work(), "the queued prompt is work");
+
+        let NativeClientDispatchOutcome::Core(ended) = stream(&mut runtime, blocking, failed())
+        else {
+            panic!("a stream update is a core input");
+        };
+        assert!(
+            ended.events.iter().any(|event| matches!(
+                event,
+                AppEvent::ThreadPromptSubmitted {
+                    outcome: crate::core::app::ThreadPromptOutcome::Submitted {
+                        admission: crate::core::app::TurnSubmissionAdmission::Accepted { .. },
+                        ..
+                    },
+                    ..
+                }
+            )),
+            "the same dispatch that ends the turn resubmits the prompt: {:?}",
+            ended.events
+        );
+        let deadline = Instant::now() + WORKER_COMPLETION_TIMEOUT_FOR_HOST_TEST;
+        while turns.lock().expect("recorded turns should lock").is_empty() {
+            assert!(Instant::now() < deadline, "the resubmitted turn should run");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(
+            turns.lock().expect("recorded turns should lock").as_slice(),
+            [("thread-1".to_string(), "planned prompt".to_string())]
         );
     }
 

@@ -52,6 +52,11 @@ pub enum PostTurnHostStep {
     SettleWithoutContinuation {
         correlations: Vec<PostTurnEvaluationCorrelation>,
     },
+    /*
+     * 원격 준비가 큐에 남긴 프롬프트가 있고 커널이 쉰다 (plan 19 Q2-3). 턴 뒤 일을 모두 끝낸 뒤에만 나온다. 그래서
+     * 자동 후속 턴이 먼저 이어 간다. 호스트가 `ResubmitQueuedThreadPrompt` 로 core 에 다시 내게 한다.
+     */
+    ResubmitQueuedThreadPrompt,
 }
 
 /// 경로를 고를 평가와, 그 평가를 가진 thread 의 runtime 값이다. 그 thread 는 화면이 보지 않을 수 있다.

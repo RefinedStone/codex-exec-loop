@@ -106,6 +106,8 @@ pub enum AppCommand {
     SetConversationTurnOptions(crate::domain::conversation::ConversationTurnOptions),
     // 호스트 전용이다 (plan 18 K1-5). 평가 경로가 AutoSubmit 이면 호스트가 자동 후속 턴을 core 로 제출한다.
     SubmitAutoFollowTurn(Box<AutoFollowTurnSubmission>),
+    // 호스트 전용이다 (plan 19 Q2-3). 원격 준비가 큐에 남긴 프롬프트 하나를 커널이 쉴 때 다시 낸다.
+    ResubmitQueuedThreadPrompt,
     EvaluatePostTurn(Box<PostTurnRequest>),
 }
 
