@@ -14342,6 +14342,8 @@ fn verify_client_runtime_api_boundary(
         "revisioned_planning_parallel_projection",
         "run_host_cycle",
         "snapshot",
+        // plan 19 Q3-3b: the kernel host sends the numbered records to its clients.
+        "take_published_kernel_records",
     ];
     let read_only_facade_api = [
         "current_parallel_epoch_id_for_workspace",

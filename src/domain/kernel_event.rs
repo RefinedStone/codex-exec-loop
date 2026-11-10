@@ -43,6 +43,17 @@ pub enum TurnOrigin {
     AutoFollow,
 }
 
+/// 턴이 어떻게 끝났는가이다 (plan 19 Q3-3b). app-server 의 terminal receipt 에서 온다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnEndOutcome {
+    Completed,
+    Interrupted,
+    Failed,
+    /// app-server 가 끝을 확정하지 못했다.
+    Unknown,
+}
+
 /// 턴 뒤 평가가 고른 다음 경로이다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -91,8 +102,14 @@ pub enum KernelEvent {
     },
     /// app-server 가 턴을 시작했다.
     TurnStarted { thread_id: String, turn_id: String },
-    /// 턴이 끝났다 (완료, 중단, 실패를 가르지 않는다).
-    TurnEnded { thread_id: String, turn_id: String },
+    /// 턴이 끝났다. `outcome` 은 그 dispatch 의 입력이 끝을 알렸을 때만 있다 (Q3-3b). 대화 무효화처럼 다른 일로
+    /// 요약에서 빠진 턴은 비어 있다. Q3-3b 이전의 기록에는 이 필드가 없다.
+    TurnEnded {
+        thread_id: String,
+        turn_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outcome: Option<TurnEndOutcome>,
+    },
     /// 턴 뒤 평가의 경로를 정했다.
     PostTurnRouted {
         thread_id: String,
@@ -189,6 +206,7 @@ pub fn turn_events_between(
         .map(|(thread_id, turn_id)| KernelEvent::TurnEnded {
             thread_id: thread_id.clone(),
             turn_id: turn_id.clone(),
+            outcome: None,
         });
     let started = after
         .iter()
@@ -280,6 +298,26 @@ mod tests {
     }
 
     #[test]
+    fn a_turn_end_recorded_before_the_outcome_field_still_reads() {
+        let old: KernelEvent = serde_json::from_value(serde_json::json!({
+            "kind": "turn_ended", "thread_id": "thread-1", "turn_id": "turn-1"
+        }))
+        .expect("a Q3-2 record should still decode");
+        assert_eq!(
+            old,
+            KernelEvent::TurnEnded {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                outcome: None,
+            }
+        );
+        assert!(
+            serde_json::to_value(&old).expect("event should serialize")["outcome"].is_null(),
+            "an unknown outcome is left out"
+        );
+    }
+
+    #[test]
     fn every_kind_matches_its_json_tag() {
         let events = [
             KernelEvent::ThreadPromptRejected {
@@ -298,6 +336,7 @@ mod tests {
             KernelEvent::TurnEnded {
                 thread_id: "thread-1".to_string(),
                 turn_id: "turn-1".to_string(),
+                outcome: Some(TurnEndOutcome::Interrupted),
             },
             KernelEvent::PostTurnRouted {
                 thread_id: "thread-1".to_string(),

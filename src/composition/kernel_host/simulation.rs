@@ -39,7 +39,7 @@ use crate::core::runtime::{CoreEffectExecutor, CoreInputSender};
 use crate::domain::conversation_runtime_envelope::{
     ConversationRuntimeConfigurationRequest, ConversationRuntimeEnvelope,
 };
-use crate::domain::kernel_event::KernelEvent;
+use crate::domain::kernel_event::{KernelEvent, RecordedKernelEvent};
 use crate::domain::planning::{
     PostTurnAutoFollowSkipReason, PostTurnContinuationAction, TurnSnapshotCapture,
 };
@@ -270,18 +270,18 @@ fn turn_key(thread_id: &str, turn_id: &str) -> (String, String) {
 
 /// 커널이 쓴 판단 사건이다 (plan 19 Q3-2). 기록기 스레드가 쓰고, 시뮬레이션은 커널을 버린 뒤에 읽는다.
 #[derive(Default)]
-struct SimKernelLog(Mutex<Vec<KernelEvent>>);
+struct SimKernelLog(Mutex<Vec<RecordedKernelEvent>>);
 
 impl KernelEventLogPort for SimKernelLog {
     fn append_kernel_events(
         &self,
         _workspace_dir: &str,
-        events: &[KernelEvent],
+        records: &[RecordedKernelEvent],
     ) -> anyhow::Result<()> {
         self.0
             .lock()
             .expect("kernel log should lock")
-            .extend_from_slice(events);
+            .extend_from_slice(records);
         Ok(())
     }
 
@@ -298,11 +298,25 @@ impl KernelEventLogPort for SimKernelLog {
  * I6: 판단 사건 기록이 맞다 (plan 19 Q3-2). 같은 턴 제출은 한 번만 기록된다 (자동 후속은 core 입력을 다시 넣는다).
  * 같은 턴은 한 번 시작하고 한 번 끝나며, 끝은 시작 뒤에 온다.
  */
-fn check_kernel_records(records: &[KernelEvent]) -> Result<(), String> {
+fn check_kernel_records(recorded: &[RecordedKernelEvent]) -> Result<(), String> {
+    // 커널이 정한 sequence 는 1 부터 빠짐없이 늘어난다 (plan 19 Q3-3b).
+    for (index, record) in recorded.iter().enumerate() {
+        if record.sequence != index as i64 + 1 {
+            return Err(format!(
+                "I6: record {index} has sequence {}, expected {}",
+                record.sequence,
+                index + 1
+            ));
+        }
+    }
+    let records = recorded
+        .iter()
+        .map(|record| record.event.clone())
+        .collect::<Vec<_>>();
     let mut submissions = BTreeSet::new();
     let mut started = BTreeSet::new();
     let mut ended = BTreeSet::new();
-    for record in records {
+    for record in &records {
         match record {
             KernelEvent::TurnSubmitted { submission, .. } if !submissions.insert(*submission) => {
                 return Err(format!(
@@ -314,7 +328,9 @@ fn check_kernel_records(records: &[KernelEvent]) -> Result<(), String> {
             {
                 return Err(format!("I6: {turn_id} on {thread_id} started twice"));
             }
-            KernelEvent::TurnEnded { thread_id, turn_id } => {
+            KernelEvent::TurnEnded {
+                thread_id, turn_id, ..
+            } => {
                 let key = turn_key(thread_id, turn_id);
                 if !started.contains(&key) || !ended.insert(key) {
                     return Err(format!(
@@ -918,6 +934,8 @@ fn client_event_name(event: KernelHostEvent) -> Option<String> {
         KernelHostEvent::Parallel(_) => Some("Parallel".to_string()),
         KernelHostEvent::Planning(_) => Some("Planning".to_string()),
         KernelHostEvent::Resync => Some("Resync".to_string()),
+        // 판단 기록은 I6 가 따로 본다. 기록에 넣으면 같은 seed 의 기록이 길어지기만 한다.
+        KernelHostEvent::Recorded(_) => None,
     }
 }
 

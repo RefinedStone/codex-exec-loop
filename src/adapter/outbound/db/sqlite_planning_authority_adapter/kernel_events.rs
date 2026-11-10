@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use chrono::Utc;
 use rusqlite::{Connection, TransactionBehavior, params};
 
 use crate::application::port::outbound::kernel_event_log_port::KernelEventLogPort;
@@ -29,8 +28,12 @@ fn ensure_kernel_event_table(connection: &Connection) -> Result<()> {
 }
 
 impl KernelEventLogPort for SqlitePlanningAuthorityAdapter {
-    fn append_kernel_events(&self, workspace_dir: &str, events: &[KernelEvent]) -> Result<()> {
-        if events.is_empty() {
+    fn append_kernel_events(
+        &self,
+        workspace_dir: &str,
+        records: &[RecordedKernelEvent],
+    ) -> Result<()> {
+        if records.is_empty() {
             return Ok(());
         }
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
@@ -39,15 +42,21 @@ impl KernelEventLogPort for SqlitePlanningAuthorityAdapter {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("failed to open the kernel event append transaction")?;
-        let recorded_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
-        for event in events {
+        for record in records {
+            let event = &record.event;
             let payload =
                 serde_json::to_string(event).context("failed to serialize a kernel event")?;
             transaction
                 .execute(
-                    "INSERT INTO kernel_events (kind, thread_id, payload_json, recorded_at)
-                     VALUES (?1, ?2, ?3, ?4)",
-                    params![event.kind(), event.thread_id(), payload, recorded_at],
+                    "INSERT INTO kernel_events (sequence, kind, thread_id, payload_json, recorded_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        record.sequence,
+                        event.kind(),
+                        event.thread_id(),
+                        payload,
+                        record.recorded_at
+                    ],
                 )
                 .context("failed to append a kernel event")?;
         }
@@ -67,6 +76,19 @@ impl KernelEventLogPort for SqlitePlanningAuthorityAdapter {
         transaction
             .commit()
             .context("failed to commit kernel events")
+    }
+
+    fn last_kernel_event_sequence(&self, workspace_dir: &str) -> Result<i64> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let connection = open_authority_connection(&location)?;
+        ensure_kernel_event_table(&connection)?;
+        connection
+            .query_row(
+                "SELECT COALESCE(MAX(sequence), 0) FROM kernel_events",
+                [],
+                |row| row.get(0),
+            )
+            .context("failed to read the last kernel event sequence")
     }
 
     fn load_kernel_events_after(

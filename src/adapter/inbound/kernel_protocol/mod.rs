@@ -2,7 +2,7 @@
 //! core 타입 사이의 변환을 둔다. core 는 직렬화를 모르므로 변환은 이 inbound adapter 만 한다. 커널 호스트는
 //! `src/composition/kernel_host.rs` 이다. 전송(Gateway)은 K3-5 에서 붙인다.
 
-use crate::domain::kernel_event::KernelEventPage;
+use crate::domain::kernel_event::{KernelEventPage, RecordedKernelEvent};
 use serde::{Deserialize, Serialize};
 
 use crate::core::app::{
@@ -445,6 +445,12 @@ pub enum KernelEvent {
      * `event` 이고 `event.kind` 가 종류이다 (`turn_started` 등).
      */
     History(KernelEventPage),
+    /*
+     * 커널이 판단 사건 하나를 기록했다 (plan 19 Q3-3b). `sequence` 는 기록과 같으므로 `history` 의 cursor 로 쓴다.
+     * `resync` 를 받으면 마지막으로 받은 `sequence` 를 `after` 로 `history` 를 읽어 빠진 사건을 채운다. 붙은 뒤
+     * `history` 와 겹칠 수 있으므로 클라이언트는 `sequence` 로 겹침을 지운다.
+     */
+    Recorded(RecordedKernelEvent),
 }
 
 /// `akra/kernel/event` 알림의 params 이다.
@@ -453,7 +459,7 @@ pub struct EventNotification {
     pub event: KernelEvent,
 }
 
-const EVENTS: [&str; 7] = [
+const EVENTS: [&str; 8] = [
     "sessions",
     "auto_follow",
     "thread_activity",
@@ -461,6 +467,7 @@ const EVENTS: [&str; 7] = [
     "planning",
     "parallel",
     "resync",
+    "recorded",
 ];
 
 impl KernelEvent {

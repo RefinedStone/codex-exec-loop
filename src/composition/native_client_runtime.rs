@@ -49,7 +49,8 @@ use crate::domain::conversation::ConversationRuntimeControlTruth;
 #[cfg(test)]
 use crate::domain::github_review::GithubPullRequestTarget;
 use crate::domain::kernel_event::{
-    KernelEventPage, THREAD_PROMPT_QUEUE_KINDS, open_queued_thread_prompts,
+    KernelEvent, KernelEventPage, RecordedKernelEvent, THREAD_PROMPT_QUEUE_KINDS,
+    open_queued_thread_prompts,
 };
 #[cfg(test)]
 use crate::domain::parallel_mode::ParallelModeAutomationTrigger;
@@ -78,6 +79,10 @@ pub(crate) struct NativeClientRuntime {
     kernel_events: Option<KernelEventRecorder>,
     // 판단 사건 기록과 그 작업 공간이다 (plan 19 Q3-3). 클라이언트의 기록 조회가 읽는다.
     kernel_event_log: Option<(Arc<dyn KernelEventLogPort>, String)>,
+    // 마지막으로 정한 기록 sequence 이다 (plan 19 Q3-3b). 저장소 커널은 잠금으로 하나뿐이라 커널이 정한다.
+    last_kernel_sequence: i64,
+    // 클라이언트에 아직 보내지 않은 기록이다 (plan 19 Q3-3b). 커널 호스트가 꺼내 `recorded` 이벤트로 보낸다.
+    published_kernel_records: Vec<RecordedKernelEvent>,
 }
 
 struct NativeCoreRuntime {
@@ -533,6 +538,8 @@ impl NativeClientRuntime {
             core_parallel_mode: None,
             kernel_events: None,
             kernel_event_log: None,
+            last_kernel_sequence: 0,
+            published_kernel_records: Vec::new(),
         }
     }
 
@@ -765,9 +772,13 @@ impl NativeClientRuntime {
         );
         strip_post_turn_markers(&mut core_outcome);
         // 판단 사건은 화면용 이벤트와 따로 꺼낸다. 기록기가 없으면(TUI) 버린다 (plan 19 Q3-2).
-        let records = self.core.runtime.take_kernel_records();
-        if let Some(recorder) = &self.kernel_events {
-            recorder.record(records);
+        let events = self.core.runtime.take_kernel_records();
+        if self.kernel_events.is_some() {
+            let records = self.number_kernel_records(events);
+            if let Some(recorder) = &self.kernel_events {
+                recorder.record(records.clone());
+            }
+            self.published_kernel_records.extend(records);
         }
         if !routed {
             return NativeClientDispatchOutcome::Core(core_outcome);
@@ -1001,25 +1012,51 @@ impl NativeClientRuntime {
         }
     }
 
+    /// 사건에 기록 sequence 와 시각을 붙인다 (plan 19 Q3-3b). 기록과 실시간 이벤트가 같은 sequence 를 쓴다.
+    fn number_kernel_records(&mut self, events: Vec<KernelEvent>) -> Vec<RecordedKernelEvent> {
+        let recorded_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+        events
+            .into_iter()
+            .map(|event| {
+                self.last_kernel_sequence += 1;
+                RecordedKernelEvent {
+                    sequence: self.last_kernel_sequence,
+                    recorded_at: recorded_at.clone(),
+                    event,
+                }
+            })
+            .collect()
+    }
+
+    /// 클라이언트에 보낼 새 기록을 꺼낸다 (plan 19 Q3-3b). 커널 호스트가 dispatch 결과를 나눈 뒤 부른다.
+    pub(crate) fn take_published_kernel_records(&mut self) -> Vec<RecordedKernelEvent> {
+        std::mem::take(&mut self.published_kernel_records)
+    }
+
     /*
      * 판단 사건 기록을 붙인다 (plan 19 Q3-1). 먼저 그 작업 공간의 기록에서 끝나지 않은 남긴 프롬프트를 읽어 core 에
-     * 되돌린다. core 는 쉴 때 그 프롬프트를 한 번 다시 낸다 (Q2-3). 기록을 읽지 못하면 되돌리지 않고 기록만 한다.
+     * 되돌린다. core 는 쉴 때 그 프롬프트를 한 번 다시 낸다 (Q2-3). 기록의 마지막 sequence 도 읽는다 (Q3-3b). 둘 중
+     * 하나라도 읽지 못하면 기록을 붙이지 않는다. sequence 를 모르면 쓸 때 이미 있는 sequence 와 부딪힌다.
      */
     pub(crate) fn attach_kernel_event_log(
         &mut self,
         log: Arc<dyn KernelEventLogPort>,
         workspace_dir: &str,
     ) {
-        let open = match log.load_kernel_events(workspace_dir, &THREAD_PROMPT_QUEUE_KINDS) {
-            Ok(events) => open_queued_thread_prompts(events),
+        let read = log
+            .load_kernel_events(workspace_dir, &THREAD_PROMPT_QUEUE_KINDS)
+            .and_then(|events| Ok((events, log.last_kernel_event_sequence(workspace_dir)?)));
+        let (open, last_sequence) = match read {
+            Ok((events, last_sequence)) => (open_queued_thread_prompts(events), last_sequence),
             Err(error) => {
                 tracing::warn!(
                     error_chars = error.to_string().chars().count(),
-                    "kernel event log read failed; queued thread prompts are not restored"
+                    "kernel event log read failed; the kernel records nothing and restores nothing"
                 );
-                Vec::new()
+                return;
             }
         };
+        self.last_kernel_sequence = last_sequence;
         self.kernel_events = Some(KernelEventRecorder::start(
             log.clone(),
             workspace_dir.to_string(),
@@ -2078,12 +2115,12 @@ pub(crate) mod tests {
         fn append_kernel_events(
             &self,
             _workspace_dir: &str,
-            events: &[crate::domain::kernel_event::KernelEvent],
+            records: &[RecordedKernelEvent],
         ) -> anyhow::Result<()> {
             self.0
                 .lock()
                 .expect("log should lock")
-                .extend_from_slice(events);
+                .extend(records.iter().map(|record| record.event.clone()));
             Ok(())
         }
 

@@ -122,6 +122,24 @@ fn wait_worker_ready(ready: &std::sync::mpsc::Receiver<()>) {
         .expect("worker should signal readiness before the assertion phase");
 }
 
+/// 사건에 `first` 부터 sequence 를 붙인다 (plan 19 Q3-3b). 커널이 정하는 sequence 를 흉내 낸다.
+fn numbered(
+    first: i64,
+    events: &[crate::domain::kernel_event::KernelEvent],
+) -> Vec<crate::domain::kernel_event::RecordedKernelEvent> {
+    events
+        .iter()
+        .enumerate()
+        .map(
+            |(index, event)| crate::domain::kernel_event::RecordedKernelEvent {
+                sequence: first + index as i64,
+                recorded_at: "2026-11-11T00:00:00Z".to_string(),
+                event: event.clone(),
+            },
+        )
+        .collect()
+}
+
 #[test]
 fn kernel_event_pages_follow_the_cursor_and_old_events_are_trimmed() {
     // plan 19 Q3-3: a page reads after a cursor; the queue kinds survive the trim.
@@ -146,7 +164,10 @@ fn kernel_event_pages_follow_the_cursor_and_old_events_are_trimmed() {
         task_id: "task-1".to_string(),
     });
     adapter
-        .append_kernel_events(&workspace, &[queued.clone(), started("turn-1")])
+        .append_kernel_events(
+            &workspace,
+            &numbered(1, &[queued.clone(), started("turn-1")]),
+        )
         .expect("events should append");
     let location =
         SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(&workspace)
@@ -160,7 +181,7 @@ fn kernel_event_pages_follow_the_cursor_and_old_events_are_trimmed() {
         )
         .expect("a future row should insert");
     adapter
-        .append_kernel_events(&workspace, &[started("turn-2")])
+        .append_kernel_events(&workspace, &numbered(4, &[started("turn-2")]))
         .expect("events should append");
 
     let first = adapter
@@ -207,7 +228,16 @@ fn kernel_event_pages_follow_the_cursor_and_old_events_are_trimmed() {
         )
         .expect("bulk rows should insert");
     adapter
-        .append_kernel_events(&workspace, &[started("turn-last")])
+        .append_kernel_events(
+            &workspace,
+            &numbered(
+                adapter
+                    .last_kernel_event_sequence(&workspace)
+                    .expect("the last sequence should read")
+                    + 1,
+                &[started("turn-last")],
+            ),
+        )
         .expect("events should append");
     let connection = open_authority_connection(&location).expect("store should open");
     let (oldest, count): (i64, i64) = connection
@@ -264,7 +294,7 @@ fn kernel_events_append_in_order_and_skip_unknown_kinds() {
     adapter
         .append_kernel_events(
             &workspace,
-            &[first.clone(), other_kind.clone(), second.clone()],
+            &numbered(1, &[first.clone(), other_kind.clone(), second.clone()]),
         )
         .expect("events should append");
     let location =
@@ -279,7 +309,7 @@ fn kernel_events_append_in_order_and_skip_unknown_kinds() {
         )
         .expect("a future row should insert");
     adapter
-        .append_kernel_events(&workspace, std::slice::from_ref(&third))
+        .append_kernel_events(&workspace, &numbered(5, std::slice::from_ref(&third)))
         .expect("events should append");
 
     assert_eq!(

@@ -338,6 +338,7 @@ fn protocol_event(event: KernelHostEvent) -> Option<KernelEvent> {
             Some(KernelEvent::Planning(PlanningState::from_core(&projection)))
         }
         KernelHostEvent::Resync => Some(KernelEvent::Resync),
+        KernelHostEvent::Recorded(record) => Some(KernelEvent::Recorded(*record)),
     }
 }
 

@@ -15,7 +15,7 @@ use crate::core::native_client_port::{
     ParallelModeControlPlanePresentationEvent, ParallelViewState,
 };
 use crate::core::runtime::CoreInputWaker;
-use crate::domain::kernel_event::KernelEventPage;
+use crate::domain::kernel_event::{KernelEventPage, RecordedKernelEvent};
 use crate::domain::parallel_mode::ParallelModeSupervisorSnapshot;
 use crate::domain::planning::RuntimeProjection;
 
@@ -72,8 +72,11 @@ pub(crate) enum KernelHostEvent {
     Parallel(Box<ParallelHostView>),
     /// planning 투영(큐)이 바뀌었다 (plan 18 K3-6). 바뀐 뒤의 투영 전체이다.
     Planning(Box<RuntimeProjection>),
-    /// 이벤트가 넘쳐 일부를 버렸다. 클라이언트는 조회로 다시 맞춘다.
+    /// 이벤트가 넘쳐 일부를 버렸다. 클라이언트는 조회로 다시 맞추고, 판단 기록은 마지막으로 받은 sequence 뒤를
+    /// `history` 로 읽는다 (plan 19 Q3-3b).
     Resync,
+    /// 판단 사건 하나를 기록했다 (plan 19 Q3-3b). sequence 는 기록과 같다.
+    Recorded(Box<RecordedKernelEvent>),
 }
 
 /// 조회 결과이다. 클라이언트가 지금 상태를 다시 그릴 때 쓴다.
@@ -542,6 +545,9 @@ impl KernelHostLoop {
                 self.broadcast(KernelHostEvent::Planning(self.planning.clone()));
             }
         }
+        for record in self.runtime.take_published_kernel_records() {
+            self.broadcast(KernelHostEvent::Recorded(Box::new(record)));
+        }
         if parallel_events.is_empty() {
             return;
         }
@@ -982,11 +988,76 @@ mod tests {
     /// 기록 조회를 돌려주는 가짜 기록이다. 사건 `i` 의 sequence 는 `i + 1` 이다.
     struct PagedLog(Vec<crate::domain::kernel_event::KernelEvent>);
 
+    /// 마지막 sequence 가 41 인 기록이다. 쓰기는 버린다.
+    struct ResumedLog;
+
+    impl crate::application::port::outbound::kernel_event_log_port::KernelEventLogPort for ResumedLog {
+        fn append_kernel_events(
+            &self,
+            _workspace_dir: &str,
+            _records: &[RecordedKernelEvent],
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn load_kernel_events(
+            &self,
+            _workspace_dir: &str,
+            _kinds: &[&str],
+        ) -> anyhow::Result<Vec<crate::domain::kernel_event::KernelEvent>> {
+            Ok(Vec::new())
+        }
+
+        fn last_kernel_event_sequence(&self, _workspace_dir: &str) -> anyhow::Result<i64> {
+            Ok(41)
+        }
+    }
+
+    #[test]
+    fn a_client_receives_each_record_with_the_sequence_after_the_log() {
+        // plan 19 Q3-3b: the kernel numbers records after the stored log and sends them live.
+        let (mut runtime, _turns) = recording_runtime_for_test();
+        runtime.attach_kernel_event_log(Arc::new(ResumedLog), "/workspace");
+        let host = KernelHost::start(runtime).expect("kernel host thread should start");
+        let client = host.attach().expect("a client should attach");
+        assert!(
+            client
+                .send_command(AppCommand::SubmitThreadPrompt(Box::new(
+                    crate::core::app::ThreadPromptSubmission {
+                        workspace_directory: "/workspace".to_string(),
+                        thread_id: "thread-9".to_string(),
+                        prompt: "hello".to_string(),
+                    },
+                )))
+                .is_some()
+        );
+        let mut recorded = None;
+        assert!(
+            wait_for(&client, |event| match event {
+                KernelHostEvent::Recorded(record) => {
+                    recorded = Some(record.as_ref().clone());
+                    true
+                }
+                _ => false,
+            }),
+            "the refusal should be sent as a record"
+        );
+        let record = recorded.expect("a record arrived");
+        assert_eq!(record.sequence, 42);
+        assert_eq!(
+            record.event,
+            crate::domain::kernel_event::KernelEvent::ThreadPromptRejected {
+                thread_id: "thread-9".to_string(),
+                reason: crate::domain::kernel_event::ThreadPromptRejection::UnknownThread,
+            }
+        );
+    }
+
     impl crate::application::port::outbound::kernel_event_log_port::KernelEventLogPort for PagedLog {
         fn append_kernel_events(
             &self,
             _workspace_dir: &str,
-            _events: &[crate::domain::kernel_event::KernelEvent],
+            _records: &[RecordedKernelEvent],
         ) -> anyhow::Result<()> {
             Ok(())
         }
