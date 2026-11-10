@@ -1196,6 +1196,15 @@ impl AppServerConnection {
             .context("failed to take app-server stderr")?;
 
         let transport_failure = Arc::new(TransportFailure::default());
+        let (tx, rx) = mpsc::sync_channel(APP_SERVER_LINE_CHANNEL_CAPACITY);
+        // stderr 는 핸드셰이크 전에 읽기 시작한다. proxy 가 핸드셰이크 중에 stderr 를 채워 멈추지 않게 한다.
+        spawn_pipe_reader(
+            stderr,
+            tx.clone(),
+            true,
+            MAX_STDERR_LINE_BYTES,
+            transport_failure.clone(),
+        );
         let (stdin_writer, stdout): (AppServerStdinWriter, Box<dyn std::io::Read + Send>) =
             match &config.transport {
                 AppServerTransport::OwnProcess => (
@@ -1210,19 +1219,11 @@ impl AppServerConnection {
                     )
                 }
             };
-        let (tx, rx) = mpsc::sync_channel(APP_SERVER_LINE_CHANNEL_CAPACITY);
         spawn_pipe_reader(
             stdout,
-            tx.clone(),
+            tx,
             false,
             MAX_STDOUT_LINE_BYTES,
-            transport_failure.clone(),
-        );
-        spawn_pipe_reader(
-            stderr,
-            tx,
-            true,
-            MAX_STDERR_LINE_BYTES,
             transport_failure.clone(),
         );
 
