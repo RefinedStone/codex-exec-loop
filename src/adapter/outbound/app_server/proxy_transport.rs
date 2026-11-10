@@ -9,8 +9,10 @@
 
 use std::io::{self, PipeReader, Read, Write};
 use std::process::{ChildStdin, ChildStdout};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use tokio_tungstenite::tungstenite::handshake::client::generate_key;
@@ -26,6 +28,9 @@ const HANDSHAKE_REQUEST_PATH: &str = "/rpc";
 const MAX_HANDSHAKE_RESPONSE_BYTES: usize = 16 * 1024;
 /// Gateway 세션과 같은 상한이다. 긴 thread 의 `thread/resume` 응답이 기본 한도를 넘을 수 있다.
 const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 256 << 20;
+/// proxy 가 핸드셰이크에 답할 때까지 기다리는 최대 시간이다. 정상 응답은 바로 온다. 넘으면 연결을 포기하고,
+/// 호출자가 proxy 프로세스를 끝낸다.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(super) struct ProxyStdio {
     pub(super) frames: ProxyFrameSink,
@@ -33,8 +38,8 @@ pub(super) struct ProxyStdio {
 }
 
 /// proxy stdio 위에서 WebSocket 핸드셰이크를 하고 두 방향을 연다.
-pub(super) fn open(mut stdin: ChildStdin, mut stdout: ChildStdout) -> Result<ProxyStdio> {
-    handshake(&mut stdin, &mut stdout)?;
+pub(super) fn open(mut stdin: ChildStdin, stdout: ChildStdout) -> Result<ProxyStdio> {
+    let stdout = handshake(&mut stdin, stdout, HANDSHAKE_TIMEOUT)?;
     let out = Arc::new(Mutex::new(stdin));
     let (lines, line_writer) = io::pipe().context("failed to open the proxy line pipe")?;
     let reader = WebSocket::from_raw_socket(
@@ -67,7 +72,13 @@ fn websocket_config() -> WebSocketConfig {
         .max_frame_size(Some(MAX_WEBSOCKET_MESSAGE_BYTES))
 }
 
-fn handshake(stdin: &mut impl Write, stdout: &mut impl Read) -> Result<()> {
+/// 핸드셰이크를 보내고 `timeout` 안에 답을 확인한다. 답을 읽은 stdout 을 돌려준다. 읽기는 블로킹이므로 전용
+/// 스레드에서 한다. 시간을 넘기면 그 스레드는 proxy 가 끝날 때(호출자가 끝낸다) 함께 끝난다.
+fn handshake<R: Read + Send + 'static>(
+    stdin: &mut impl Write,
+    stdout: R,
+    timeout: Duration,
+) -> Result<R> {
     let key = generate_key();
     let request = format!(
         "GET {HANDSHAKE_REQUEST_PATH} HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n\
@@ -77,7 +88,35 @@ fn handshake(stdin: &mut impl Write, stdout: &mut impl Read) -> Result<()> {
         .write_all(request.as_bytes())
         .and_then(|()| stdin.flush())
         .context("failed to send the proxy WebSocket handshake")?;
-    let response = read_response_head(stdout)?;
+    let (stdout, response) = read_response_head_within(stdout, timeout)?;
+    check_handshake_response(&response?, &key)?;
+    Ok(stdout)
+}
+
+fn read_response_head_within<R: Read + Send + 'static>(
+    mut stdout: R,
+    timeout: Duration,
+) -> Result<(R, Result<String>)> {
+    let (reply, answer) = mpsc::channel();
+    thread::Builder::new()
+        .name("akra-app-server-proxy-handshake".to_string())
+        .spawn(move || {
+            let response = read_response_head(&mut stdout);
+            let _ = reply.send((stdout, response));
+        })
+        .context("failed to start the proxy handshake reader")?;
+    match answer.recv_timeout(timeout) {
+        Ok(answered) => Ok(answered),
+        Err(RecvTimeoutError::Timeout) => {
+            bail!("app-server proxy did not answer the WebSocket handshake within {timeout:?}")
+        }
+        Err(RecvTimeoutError::Disconnected) => {
+            bail!("the proxy handshake reader stopped without an answer")
+        }
+    }
+}
+
+fn check_handshake_response(response: &str, key: &str) -> Result<()> {
     let status = response.lines().next().unwrap_or_default();
     if !status.starts_with("HTTP/1.1 101") {
         bail!("app-server proxy refused the WebSocket handshake: {status}")
@@ -240,12 +279,15 @@ mod tests {
 
     use super::*;
 
+    const TEST_HANDSHAKE_TIMEOUT: Duration = Duration::from_millis(300);
+
     #[test]
     fn the_handshake_checks_the_status_and_the_accept_key() {
         let mut sent = Vec::new();
         let Err(error) = handshake(
             &mut sent,
-            &mut Cursor::new(b"HTTP/1.1 400 Bad Request\r\n\r\n".to_vec()),
+            Cursor::new(b"HTTP/1.1 400 Bad Request\r\n\r\n".to_vec()),
+            TEST_HANDSHAKE_TIMEOUT,
         ) else {
             panic!("a refused upgrade must fail");
         };
@@ -255,13 +297,32 @@ mod tests {
 
         let Err(error) = handshake(
             &mut Vec::new(),
-            &mut Cursor::new(
+            Cursor::new(
                 b"HTTP/1.1 101 Switching Protocols\r\nSec-WebSocket-Accept: wrong\r\n\r\n".to_vec(),
             ),
+            TEST_HANDSHAKE_TIMEOUT,
         ) else {
             panic!("a wrong accept key must fail");
         };
         assert!(format!("{error:#}").contains("accept key"), "{error:#}");
+    }
+
+    #[test]
+    fn the_handshake_gives_up_when_the_proxy_never_answers() {
+        let (silent, _open_writer) = io::pipe().expect("pipe should open");
+        let (done, finished) = mpsc::channel();
+        thread::spawn(move || {
+            let result = handshake(&mut Vec::new(), silent, TEST_HANDSHAKE_TIMEOUT);
+            let _ = done.send(result.err().map(|error| format!("{error:#}")));
+        });
+
+        let error = finished
+            .recv_timeout(Duration::from_secs(3))
+            .expect("the handshake must end at its deadline");
+        assert!(
+            error.is_some_and(|error| error.contains("did not answer")),
+            "a silent proxy is an error"
+        );
     }
 
     #[test]
