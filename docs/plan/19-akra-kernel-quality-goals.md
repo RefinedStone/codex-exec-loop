@@ -105,7 +105,7 @@ TUI 에서 단계적으로 떼어내서(strangler) 기존 동작은 깨지 않�
 | 조각 | 내용 | 상태 |
 | --- | --- | --- |
 | Q2-1 | 턴 뒤 평가·경로 단계(평가 대기, 평가 중, 경로 대기, 끝남)를 enum `PostTurnState` 하나로 모은다 (FSM 1단계). 동작은 바꾸지 않는다 | 구현됨 |
-| Q2-2 | 호스트의 이벤트 사슬(`PostTurnEvaluationDue`, `PostTurnContinuationRoutingRequested` 를 꺼내 다음 단계를 부름)을 상태 비교로 바꾼다. 매 dispatch 뒤 `PostTurnState` 를 보고 다음 행동 0~1개를 고른다. 이벤트를 끼워 넣는 위치(`merge_core_dispatch_outcome_at`)를 어떻게 지킬지 함께 정한다 | 제안 |
+| Q2-2 | 호스트의 이벤트 사슬(`PostTurnEvaluationDue`, `PostTurnContinuationRoutingRequested` 를 꺼내 다음 단계를 부름)을 상태 비교로 바꾼다. 매 dispatch 뒤 `PostTurnState` 를 보고 다음 행동 0~1개를 고른다 | 구현됨 |
 | Q2-3 | 원격 준비가 큐에 남긴 작업을 쉴 때 다시 내는 일을 같은 규칙에 넣는다 (K3 §3.2) | 제안 |
 | Q2-4 | 입력함 셋(클라이언트, core, 병렬 완료)을 우편함 하나와 깨우기로 바꾼다 (50ms polling 제거) | 제안 |
 
@@ -139,6 +139,31 @@ Q2-1 결과 (`src/core/app/post_turn_state.rs`):
 - 머지 뒤 두 축 리뷰(표준, 명세)의 지적 10건 중 9건을 고쳤다: panic 없는 상태 꺼내기, 전이 검사, 비교 helper, 이름
   (`has_unsettled_work`), re-export 제거, 평가 중 덮어쓰기 때 permit 무효화, 이 문서의 남은 보유자 표. "wrapper 를
   모두 지우는" 대안은 받지 않았다 (기존 wrapper 와 맞추는 쪽이 변경이 작다).
+
+Q2-2 결과 (`PostTurnHostStep`, `NativeClientRuntime::reconcile_post_turn`):
+
+- 호스트는 core dispatch 마다 `next_post_turn_host_step()` 을 묻고, 고른 단계를 하고, 다시 묻는다. 단계는 모든
+  session 의 `PostTurnState` 에서 나온다.
+
+  | 상태 (모든 session) | 단계 |
+  | --- | --- |
+  | 평가 대기 (먼저 본다, 이전 호스트와 같은 차례) | `StartEvaluation`: 병렬 값(사용 여부, epoch)을 붙여 평가를 시작한다 |
+  | 경로 대기가 하나 | `RouteContinuation`: 병렬 제어부에 묻고, 경로를 정하고, AutoSubmit 이면 자동 후속 턴을 낸다 |
+  | 경로 대기가 둘 이상 | `SettleWithoutContinuation`: 모두 한 번에 이어 가지 않고 끝낸다 (병렬 제어부를 부르지 않는다) |
+
+- 표시 이벤트는 이제 결과를 넣을 자리일 뿐이다. 단계 결과는 그 표시 자리에 들어가므로 화면이 보는 이벤트 순서는
+  이전과 같다 (예: 경로 결정 결과가 planning 새로 고침 시작보다 앞). 표시가 없으면 끝에 붙인다. 표시는 클라이언트에
+  보내기 전에 지운다. 경로 표시의 `execution` 값은 이제 쓰지 않는다 (지우는 일은 이벤트 정리 때 한다, 제안).
+- 바뀐 동작 (의도함):
+  - 사건을 놓쳐도 이어진다. 호스트를 거치지 않은 core 입력의 표시를 잃어도, 다음 dispatch(호스트 주기의 `Tick`
+    포함)가 상태에서 같은 단계를 다시 본다 (`missed_post_turn_markers_are_picked_up_on_the_next_dispatch`).
+  - 오래된 표시나 중복 표시는 아무것도 하지 않는다 (상태가 단계를 정한다).
+  - 경로 대기가 둘 이상이면 모두 끝낸다. 이전에는 보는 thread 의 경로만 끝내고, 다른 경로는 표시를 잃어 경로 대기에
+    남을 수 있었다.
+- 병렬 모드 값을 core 에 알리는 중첩 dispatch(`report_parallel_mode_to_core`)는 상태 비교를 하지 않는다. 바깥 dispatch
+  가 한다. 그렇지 않으면 중첩 호출이 단계를 하고 그 결과 이벤트를 버릴 수 있다 (독립 리뷰 지적).
+- 확인: 모든 시험(`cargo test --locked`), 커널 시뮬레이션 seed 5000개, 결함 주입(호스트가 표시가 있을 때만 단계를
+  하게 바꾸면 회복 시험이 실패한다).
 
 ### 5.3 thread 를 독립 액터로 (동시성은 정책)
 
