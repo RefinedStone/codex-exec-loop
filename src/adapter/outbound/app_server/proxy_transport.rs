@@ -279,7 +279,12 @@ mod tests {
 
     use super::*;
 
-    const TEST_HANDSHAKE_TIMEOUT: Duration = Duration::from_millis(300);
+    /// 답이 이미 있는 시험의 상한이다. 답은 바로 읽히므로 시험을 늦추지 않는다. 부하가 커도 넘지 않게 넉넉히 둔다.
+    const ANSWERED_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+    /// 답하지 않는 proxy 시험의 상한이다. 시험은 이만큼 기다린다.
+    const SILENT_HANDSHAKE_TIMEOUT: Duration = Duration::from_millis(300);
+    /// 답하지 않는 proxy 시험이 끝나기를 기다리는 바깥 상한이다.
+    const SILENT_TEST_GUARD: Duration = Duration::from_secs(10);
 
     #[test]
     fn the_handshake_checks_the_status_and_the_accept_key() {
@@ -287,7 +292,7 @@ mod tests {
         let Err(error) = handshake(
             &mut sent,
             Cursor::new(b"HTTP/1.1 400 Bad Request\r\n\r\n".to_vec()),
-            TEST_HANDSHAKE_TIMEOUT,
+            ANSWERED_HANDSHAKE_TIMEOUT,
         ) else {
             panic!("a refused upgrade must fail");
         };
@@ -300,7 +305,7 @@ mod tests {
             Cursor::new(
                 b"HTTP/1.1 101 Switching Protocols\r\nSec-WebSocket-Accept: wrong\r\n\r\n".to_vec(),
             ),
-            TEST_HANDSHAKE_TIMEOUT,
+            ANSWERED_HANDSHAKE_TIMEOUT,
         ) else {
             panic!("a wrong accept key must fail");
         };
@@ -312,12 +317,12 @@ mod tests {
         let (silent, _open_writer) = io::pipe().expect("pipe should open");
         let (done, finished) = mpsc::channel();
         thread::spawn(move || {
-            let result = handshake(&mut Vec::new(), silent, TEST_HANDSHAKE_TIMEOUT);
+            let result = handshake(&mut Vec::new(), silent, SILENT_HANDSHAKE_TIMEOUT);
             let _ = done.send(result.err().map(|error| format!("{error:#}")));
         });
 
         let error = finished
-            .recv_timeout(Duration::from_secs(3))
+            .recv_timeout(SILENT_TEST_GUARD)
             .expect("the handshake must end at its deadline");
         assert!(
             error.is_some_and(|error| error.contains("did not answer")),
