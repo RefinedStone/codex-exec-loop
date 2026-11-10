@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TrySendError};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -91,21 +92,58 @@ enum KernelHostInput {
     Shutdown,
 }
 
+/// 커널이 한가해진 시각이다 (plan 18 K3-5). 클라이언트도 남은 일도 없으면 정해지고, 클라이언트가 붙거나 일이
+/// 생기면 지워진다. 커널 스레드가 쓰고, 커널 목록이 커널을 내릴지 정할 때 읽는다.
+#[derive(Clone, Default)]
+struct KernelIdleClock(Arc<Mutex<Option<Instant>>>);
+
+impl KernelIdleClock {
+    fn record(&self, busy: bool, now: Instant) {
+        let mut idle_since = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if busy {
+            *idle_since = None;
+        } else if idle_since.is_none() {
+            *idle_since = Some(now);
+        }
+    }
+
+    fn idle_since(&self) -> Option<Instant> {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
 pub(crate) struct KernelHost {
     inbox: Sender<KernelHostInput>,
     thread: Option<JoinHandle<()>>,
+    idle: KernelIdleClock,
 }
 
 impl KernelHost {
     pub(crate) fn start(runtime: NativeClientRuntime) -> std::io::Result<Self> {
         let (inbox, inputs) = mpsc::channel();
+        let idle = KernelIdleClock::default();
+        let host_idle = idle.clone();
         let thread = std::thread::Builder::new()
             .name("akra-kernel-host".to_string())
-            .spawn(move || KernelHostLoop::new(runtime, inputs).run())?;
+            .spawn(move || KernelHostLoop::new(runtime, inputs, host_idle).run())?;
         Ok(Self {
             inbox,
             thread: Some(thread),
+            idle,
         })
+    }
+
+    /// 클라이언트도 남은 일도 없이 지난 시간이다. 클라이언트가 있거나 일이 남았으면 `None` 이다.
+    pub(crate) fn idle_for(&self, now: Instant) -> Option<Duration> {
+        self.idle
+            .idle_since()
+            .map(|since| now.saturating_duration_since(since))
     }
 
     /// 클라이언트 하나를 붙인다. 커널 스레드가 끝났으면 `Stopped`, 답이 늦으면 `TimedOut` 이다. 늦은 붙기는 커널이
@@ -245,16 +283,22 @@ struct KernelHostLoop {
     clients: BTreeMap<KernelClientId, ClientSink>,
     next_client_id: KernelClientId,
     thread_activity: Vec<ThreadActivitySummary>,
+    idle: KernelIdleClock,
 }
 
 impl KernelHostLoop {
-    fn new(runtime: NativeClientRuntime, inputs: Receiver<KernelHostInput>) -> Self {
+    fn new(
+        runtime: NativeClientRuntime,
+        inputs: Receiver<KernelHostInput>,
+        idle: KernelIdleClock,
+    ) -> Self {
         Self {
             runtime,
             inputs,
             clients: BTreeMap::new(),
             next_client_id: 1,
             thread_activity: Vec::new(),
+            idle,
         }
     }
 
@@ -274,7 +318,14 @@ impl KernelHostLoop {
                 self.publish(outcome);
             }
             self.flush_pending_resyncs();
+            self.record_idle(Instant::now());
         }
+    }
+
+    /// 클라이언트도 남은 일도 없으면 한가한 시각을 정한다. 하나라도 있으면 지운다.
+    fn record_idle(&self, now: Instant) {
+        let busy = !self.clients.is_empty() || self.runtime.has_remaining_work();
+        self.idle.record(busy, now);
     }
 
     fn handle_input(&mut self, input: KernelHostInput) {
@@ -290,6 +341,8 @@ impl KernelHostLoop {
                         resync_pending: false,
                     },
                 );
+                // 답하기 전에 지운다. 붙기가 끝난 뒤 커널 목록이 이 커널을 한가하다고 보지 않는다.
+                self.idle.record(true, Instant::now());
                 if reply.send((client_id, receiver)).is_err() {
                     self.clients.remove(&client_id);
                 }
@@ -655,7 +708,7 @@ mod tests {
     fn parallel_control_plane_events_reach_clients() {
         let (runtime, _turns) = recording_runtime_for_test();
         let (_inbox, inputs) = mpsc::channel();
-        let mut host = KernelHostLoop::new(runtime, inputs);
+        let mut host = KernelHostLoop::new(runtime, inputs, KernelIdleClock::default());
         let (sender, receiver) = mpsc::sync_channel(4);
         host.clients.insert(
             1,
@@ -699,6 +752,58 @@ mod tests {
             "the next host cycle tells the client even when no event follows"
         );
         assert!(!client.resync_pending);
+    }
+
+    fn wait_until(mut condition: impl FnMut() -> bool) -> bool {
+        let deadline = Instant::now() + EVENT_TIMEOUT;
+        while Instant::now() < deadline {
+            if condition() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        false
+    }
+
+    #[test]
+    fn a_kernel_is_idle_only_without_clients_and_work() {
+        let (runtime, _turns) = recording_runtime_for_test();
+        let host = KernelHost::start(runtime).expect("kernel host thread should start");
+        assert!(
+            wait_until(|| host.idle_for(Instant::now()).is_some()),
+            "a kernel without clients and work becomes idle"
+        );
+
+        let client = host.attach().expect("a client should attach");
+        assert_eq!(
+            host.idle_for(Instant::now()),
+            None,
+            "an attached client clears the idle time before attach returns"
+        );
+
+        drop(client);
+        assert!(
+            wait_until(|| host.idle_for(Instant::now()).is_some()),
+            "the kernel is idle again after the client leaves"
+        );
+    }
+
+    #[test]
+    fn remaining_work_keeps_the_kernel_busy() {
+        let (mut runtime, _turns) = recording_runtime_for_test();
+        assert!(!runtime.has_remaining_work());
+        runtime.begin_test_turn_submission();
+        assert!(runtime.has_remaining_work(), "a turn is remaining work");
+
+        let (runtime, _turns) = recording_runtime_for_test();
+        runtime.force_parallel_epoch_for_test("/repo", 7);
+        assert!(
+            runtime.has_remaining_work(),
+            "an open parallel automation epoch is remaining work"
+        );
+        let host = KernelHost::start(runtime).expect("kernel host thread should start");
+        std::thread::sleep(HOST_WAIT * 4);
+        assert_eq!(host.idle_for(Instant::now()), None);
     }
 
     #[test]

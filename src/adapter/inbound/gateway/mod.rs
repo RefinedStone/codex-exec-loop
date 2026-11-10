@@ -17,7 +17,7 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
@@ -45,6 +45,8 @@ const INSTANCE_LOCK_FILE_NAME: &str = "gateway.lock";
 #[cfg(unix)]
 const MAX_UNIX_SOCKET_PATH_BYTES: usize = 103;
 const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(100);
+/// 한가한 커널을 찾는 간격이다. 커널은 한가한 시간(10분)이 지난 뒤 이 간격 안에 내려간다.
+const KERNEL_IDLE_SWEEP_INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Debug, PartialEq, Eq)]
 enum GatewayCommand {
@@ -134,9 +136,12 @@ async fn serve(
 ) {
     let shutdown = shutdown_signal();
     tokio::pin!(shutdown);
+    let mut idle_sweep = tokio::time::interval(KERNEL_IDLE_SWEEP_INTERVAL);
+    idle_sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
             () = &mut shutdown => return,
+            _ = idle_sweep.tick() => unload_idle_kernels(kernels.clone()),
             accepted = listener.accept() => match accepted {
                 Ok(connection) => {
                     let upstream = upstream.clone();
@@ -157,6 +162,15 @@ async fn serve(
             },
         }
     }
+}
+
+/// 오래 한가한 커널을 내린다. 내리기는 호스트 스레드를 기다리므로 블로킹 스레드에서 한다.
+fn unload_idle_kernels(kernels: Arc<RepositoryKernelRegistry>) {
+    tokio::task::spawn_blocking(move || {
+        for repository_key in kernels.unload_idle_kernels(Instant::now()) {
+            tracing::info!(repository = %repository_key, "idle repository kernel unloaded");
+        }
+    });
 }
 
 async fn shutdown_signal() {

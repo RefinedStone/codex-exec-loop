@@ -517,6 +517,10 @@ impl PlanningWorkspaceOperationCoordinator {
         PlanningWorkspaceOperationAdmission::Started { correlation }
     }
 
+    pub(super) fn is_active(&self) -> bool {
+        self.active.is_some()
+    }
+
     pub(super) fn accept(&mut self, correlation: &PlanningWorkspaceOperationCorrelation) -> bool {
         if self.active.as_ref() != Some(correlation) {
             return false;

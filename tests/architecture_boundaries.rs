@@ -14214,6 +14214,8 @@ fn verify_client_runtime_api_boundary(
     let expected_runtime_api = [
         "dispatch_command",
         "dispatch_input",
+        // plan 18 K3-5: the kernel host reads whether core work remains before it unloads an idle kernel.
+        "has_remaining_work",
         "new",
         "parallel_mode_projection",
         "poll_pending_input",
@@ -14313,6 +14315,8 @@ fn verify_client_runtime_api_boundary(
     let expected_facade_api = [
         "current_parallel_epoch_id_for_workspace",
         "dispatch_client_event",
+        // plan 18 K3-5: read-only check before the gateway unloads an idle kernel.
+        "has_remaining_work",
         "parallel_control_plane_projection",
         "parallel_epoch_snapshot",
         "parallel_mode_enabled",
@@ -14324,6 +14328,7 @@ fn verify_client_runtime_api_boundary(
     ];
     let read_only_facade_api = [
         "current_parallel_epoch_id_for_workspace",
+        "has_remaining_work",
         "parallel_control_plane_projection",
         "parallel_epoch_snapshot",
         "parallel_mode_enabled",

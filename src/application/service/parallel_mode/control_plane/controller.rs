@@ -162,6 +162,15 @@ where
         self.effect_runner.cancel_all_epochs();
     }
 
+    /// 병렬 제어부에 남은 일이 있다 (plan 18 K3-5 커널 내리기). 병렬 모드가 켜져 있거나, epoch 가 열려 있거나,
+    /// 제어 효과가 진행 중이거나, 배분된 작업 스레드가 돈다.
+    pub fn has_remaining_work(&self) -> bool {
+        self.mode_enabled()
+            || self.current_epoch_id().is_some()
+            || self.control_effect_in_flight()
+            || self.effect_runner.dispatch_workers_running()
+    }
+
     #[cfg(test)]
     pub fn automation_epoch_is_active(&self, workspace_directory: &str, epoch_id: u64) -> bool {
         self.effect_runner

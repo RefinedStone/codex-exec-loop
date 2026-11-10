@@ -96,6 +96,12 @@ impl CoreController {
         self.state.parallel_mode_projection()
     }
 
+    /// core 에 끝나지 않은 일이 있다 (plan 18 K3-5). 어느 thread 의 턴·승인·자동 후속·평가, 또는 planning 작업이다.
+    /// 커널을 내려도 되는지 볼 때 쓴다. 스냅샷을 복사하지 않는다.
+    pub(in crate::core) fn has_remaining_work(&self) -> bool {
+        self.conversation_turn.has_busy_session() || self.planning.has_work_in_flight()
+    }
+
     pub(in crate::core) fn handle_input(&mut self, input: CoreInput) -> CoreDispatchOutcome {
         let outcome = self.handle_input_inner(input);
         let mut outcome = self.with_conversation_runtime_authority(outcome);

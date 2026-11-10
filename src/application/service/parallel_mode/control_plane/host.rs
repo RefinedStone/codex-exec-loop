@@ -121,6 +121,11 @@ where
         self.service().stop_automation();
     }
 
+    /// 병렬 제어부에 남은 일이 있다. 커널을 내려도 되는지 볼 때 쓴다 (plan 18 K3-5).
+    pub fn has_remaining_work(&self) -> bool {
+        self.service().has_remaining_work()
+    }
+
     pub fn presentation_projection(&self) -> ParallelModeControlPlanePresentationProjection {
         let service = self.service();
         ParallelModeControlPlanePresentationProjection {

@@ -389,6 +389,11 @@ impl ConversationTurnFeatureReducer {
         )
     }
 
+    /// 일이 남은 session 이 있다 (턴, 승인, 자동 후속, 평가, 정지, steer). 보는 session 과 뒤로 보낸 session 을 함께 본다.
+    pub(super) fn has_busy_session(&self) -> bool {
+        self.session.is_busy() || self.background_sessions.iter().any(ThreadSession::is_busy)
+    }
+
     #[cfg(test)]
     pub(super) fn background_session_count(&self) -> usize {
         self.background_sessions.len()
