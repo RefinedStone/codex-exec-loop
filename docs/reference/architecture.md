@@ -669,7 +669,13 @@ per-connection task handles kernel requests in order and sends the answers throu
 outbox, so the read loop keeps relaying app-server messages while a kernel call waits. Kernel calls
 run through `spawn_blocking` with deadlines (attach 60 s, command and query 10 s; error `-32013`).
 One event thread per attached connection forwards events; detach and re-attach detach the client in
-the host and join that thread before they answer.
+the host and join that thread before they answer. The host thread keeps the parallel state
+(`ParallelHostView`: mode, last supervisor snapshot, status text) from parallel control events and sends
+it whole when it changes; it sends the planning projection when the core snapshot changes it. While a
+client is attached it sets `supervisor_view_active` (through `ParallelViewChanged`), and the first
+attach runs one `InspectSupervisor` that does not change the pool, unless one ran in the last 60 s.
+When parallel mode turns off it drops the last supervisor snapshot and, with a client attached,
+inspects again. Parallel events of another workspace are ignored.
 
 On shutdown the Gateway calls `RepositoryKernelRegistry::shutdown` before it stops the upstream
 app-server: each kernel closes its parallel automation epochs, joins its host thread, and releases

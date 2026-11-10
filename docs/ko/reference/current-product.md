@@ -226,8 +226,10 @@ parallel, Git, GitHub 권위를 바꾸지 않고 재생하며 PR 검증 복구 �
   프로세스(TUI)가 그 저장소의 커널을 돌리면 attach 는 `-32012` 로 실패한다. 붙은 뒤에는 `akra/kernel/command`,
   `akra/kernel/query` 를 보내고 `akra/kernel/event` 알림을 받는다. 붙기 전 요청은 `-32011` 로, 커널이 시간 안에
   답하지 않으면 `-32013` 으로 실패한다(명령은 그 뒤에 처리될 수 있다). `akra/kernel/detach` 답 뒤에는 이벤트가
-  오지 않는다. `akra/kernel/describe` 는 메서드, 명령, 조회, 이벤트 목록을 준다. 병렬 제어부 이벤트와 planning
-  조회는 아직 내보내지 않는다 (K3-6).
+  오지 않는다. `akra/kernel/describe` 는 메서드, 명령, 조회, 이벤트 목록을 준다. 조회와 이벤트 `planning`, `parallel` 은
+  planning 큐와 병렬 작업 상태(pool, 에이전트, 병합 큐, PR 검증)를 준다. `refresh_planning` 은 큐를 다시 읽는다.
+  클라이언트가 붙어 있는 동안 커널은 병렬 감독 스냅샷을 새로 고친다. 첫 붙기 때 pool 을 바꾸지 않는 감독 점검을
+  한 번 한다(TUI 병렬 화면처럼 push 준비 점검을 한다).
 - 붙은 클라이언트도 남은 일(턴, 승인, 자동 후속, 평가, planning 작업, 켜진 병렬 모드, 도는 병렬 작업)도 없이
   10분이 지난 커널은 내려간다. 그러면 TUI 가 그 저장소 잠금을 잡을 수 있다. 다음 붙기가 커널을 다시 시작한다.
   Gateway 가 끝날 때는 upstream app-server 보다 커널을 먼저 멈춘다.
@@ -261,7 +263,9 @@ parallel, Git, GitHub 권위를 바꾸지 않고 재생하며 PR 검증 복구 �
 - Admin: `src/adapter/inbound/admin_api/`
 - Telegram: `src/adapter/inbound/telegram_bot/`
 - Gateway: `src/adapter/inbound/gateway/`, `src/adapter/outbound/app_server/gateway_upstream.rs`
-- Desktop (개발 중, 계획 P2): `desktop/` — 창마다 `akra-gateway` 에 접속하는 Electron 앱. `desktop/AGENTS.md` 참고
+- Desktop (개발 중, 계획 P2): `desktop/` — 창마다 `akra-gateway` 에 접속하는 Electron 앱. `desktop/AGENTS.md` 참고.
+  "Akra" 옆 패널은 열려 있는 동안만 열린 스레드 폴더의 저장소 커널에 붙고, 일이 남은 대화, 자동 후속, 병렬 작업,
+  planning 큐를 보인다 (`desktop/src/renderer/kernel/`)
 - Planning: `src/application/service/planning/`, `src/domain/planning/`
 - Parallel: `src/application/service/parallel_mode/`, `src/domain/parallel_mode/`
 - App-server adapter: `src/adapter/outbound/app_server/`

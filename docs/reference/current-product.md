@@ -285,8 +285,11 @@ the desktop app itself is not shipped yet.
   `akra/kernel/query` and receives `akra/kernel/event` notifications; requests before attach fail
   with `-32011`, and a kernel that does not answer in time fails with `-32013` (a command may still
   run). No event arrives after the `akra/kernel/detach` answer. `akra/kernel/describe` lists methods,
-  commands, queries, and events. Parallel control events and the planning query are not exported yet
-  (K3-6).
+  commands, queries, and events. The `planning` and `parallel` queries and events carry the planning
+  queue and the parallel state (pool, agents, merge queue, PR validation); `refresh_planning` reads the
+  queue again. While a client is attached the kernel refreshes the parallel supervisor snapshot, and the
+  first attach runs one supervisor inspection that does not change the pool (it runs the push readiness
+  check, like the TUI parallel view).
 - A kernel with no attached client and no remaining work (turns, approvals, auto-follow, evaluation,
   planning work, parallel mode on, or running parallel work) for 10 minutes is unloaded, and its
   repository lock is free for a TUI. The next attach starts it again. Gateway shutdown stops the
@@ -323,7 +326,9 @@ the desktop app itself is not shipped yet.
 - Telegram: `src/adapter/inbound/telegram_bot/`
 - Gateway: `src/adapter/inbound/gateway/`, `src/adapter/outbound/app_server/gateway_upstream.rs`
 - Desktop (in development, plan P2): `desktop/` — Electron shell that connects each window to `akra-gateway`;
-  see `desktop/AGENTS.md`
+  see `desktop/AGENTS.md`. The "Akra" side panel attaches to the repository kernel of the open thread's
+  folder only while it is open, and shows threads with remaining work, auto-follow, parallel work, and the
+  planning queue (`desktop/src/renderer/kernel/`)
 - Planning: `src/application/service/planning/`, `src/domain/planning/`
 - Parallel: `src/application/service/parallel_mode/`, `src/domain/parallel_mode/`
 - App-server adapter: `src/adapter/outbound/app_server/`
