@@ -1138,9 +1138,9 @@ fn native_tui_uses_one_composition_owned_client_runtime_ingress() {
     );
     assert!(
         compact_dispatch_core_input.contains(
-            "letoutcome=self.core.runtime.dispatch_input(input);self.resolve_internal_post_turn_routes(outcome)"
+            "letoutcome=self.core.runtime.dispatch_input(input);self.reconcile_post_turn(outcome)"
         ),
-        "the one raw Core ingress must immediately consume internal post-turn routing before returning to the TUI"
+        "the one raw Core ingress must immediately reconcile post-turn steps before returning to the TUI (plan 19 Q2-2)"
     );
     assert!(
         !compact_facade.contains("NativeClientEvent::ParallelCompletion"),
@@ -2888,32 +2888,30 @@ fn parallel_post_turn_continuation_reuses_the_accepted_runtime_projection() {
         "the exact accepted post-turn runtime projection must carry workspace and queue-head authority into routing"
     );
 
+    // plan 19 Q2-2: core offers a route only when exactly one evaluation awaits it; the host routes that
+    // state-owned execution and reuses its accepted queue-head projection.
     let native_runtime = fs::read_to_string("src/composition/native_client_runtime.rs")
         .expect("native client runtime source should load");
-    let route = top_level_impl_method_source(&native_runtime, "resolve_internal_post_turn_routes");
+    let route = top_level_impl_method_source(&native_runtime, "route_post_turn_continuation");
     let compact_route = rust_code_without_comments_and_literals(&route)
         .chars()
         .filter(|character| !character.is_whitespace())
         .collect::<String>();
-    let exact_route =
-        top_level_function_source(&native_runtime, "exact_single_post_turn_routing_request");
-    let compact_exact_route = rust_code_without_comments_and_literals(&exact_route)
+    let reducer = fs::read_to_string("src/core/app/conversation_turn_reducer.rs")
+        .expect("conversation/turn reducer source should load");
+    let step = top_level_impl_method_source(&reducer, "next_post_turn_host_step");
+    let compact_step = rust_code_without_comments_and_literals(&step)
         .chars()
         .filter(|character| !character.is_whitespace())
         .collect::<String>();
     assert!(
-        compact_route
-            .contains("exact_single_post_turn_routing_request(&route_runtime,&routing_requests")
-            && compact_route.contains(
-                "route_parallel_post_turn_for_exact_single(&route_runtime,&routing_requests"
+        compact_route.contains("route_parallel_post_turn_when_allowed(&runtime,")
+            && compact_route
+                .contains("execution.evaluation.runtime_projection.has_actionable_queue_head()")
+            && compact_step.contains(
+                "[(session,correlation,execution)]=>Some(PostTurnHostStep::RouteContinuation("
             )
-            && compact_route.contains(
-                "request.execution.evaluation.runtime_projection.has_actionable_queue_head()"
-            )
-            && compact_exact_route.contains("let[request]=routing_requestselse{returnNone;}")
-            && compact_exact_route.contains(
-                "pending_post_turn_route_correlation(runtime)==Some(&request.correlation)"
-            ),
+            && compact_step.contains("several=>Some(PostTurnHostStep::SettleWithoutContinuation{"),
         "NativeClientRuntime must route only the exact Core AwaitingRoute correlation and reuse its accepted queue-head projection"
     );
     assert_eq!(
@@ -14218,10 +14216,10 @@ fn verify_client_runtime_api_boundary(
         // plan 18 K3-5: the kernel host reads whether core work remains before it unloads an idle kernel.
         "has_remaining_work",
         "new",
+        // plan 19 Q2-2: the host asks for the next post-turn step after every dispatch.
+        "next_post_turn_host_step",
         "parallel_mode_projection",
         "poll_pending_input",
-        // plan 18 K2-3: the host reads the runtime of the thread awaiting a route.
-        "post_turn_route_runtime",
         "revisioned_planning_parallel_projection",
         "snapshot",
         // plan 18 K2-6: the host starts GitHub review setup after the startup checks succeed.
