@@ -4,6 +4,7 @@ import { create } from "zustand";
 import type { ConnectionState } from "../../shared/bridge";
 import type { PendingApproval } from "../conversation/approvals";
 import type { Transcript } from "../conversation/transcript";
+import { EMPTY_KERNEL_VIEW, type KernelView } from "../kernel/kernelConnection";
 import type { CodexVersionCheck } from "./codexVersion";
 
 export interface GatewayInfo {
@@ -82,6 +83,16 @@ export interface DesktopState {
   /** 그 스레드의 입력창에 미리 채울 글이다 (업무 패널에서 넘기기). 입력창이 가져가면 비운다. 보내기는 사용자가 한다. */
   composerDraft: { threadId: string; text: string } | null;
   setComposerDraft(draft: { threadId: string; text: string } | null): void;
+  /** 커널 패널이 보는 저장소 커널의 상태이다 (plan 18 K3-6). */
+  kernel: KernelView;
+  setKernel(kernel: KernelView): void;
+}
+
+/** 열린 스레드의 작업 폴더이다. 사이드바 목록에서 찾으므로 기록을 다시 읽는 동안에도 바뀌지 않는다. */
+export function openThreadCwd(state: Pick<DesktopState, "folders" | "openThreadId" | "transcript">): string | null {
+  if (!state.openThreadId) return null;
+  const folder = state.folders.find((candidate) => candidate.threads.some((thread) => thread.id === state.openThreadId));
+  return folder?.cwd ?? (state.transcript?.threadId === state.openThreadId ? state.transcript.cwd : null);
 }
 
 export const useDesktopStore = create<DesktopState>((set) => ({
@@ -130,6 +141,8 @@ export const useDesktopStore = create<DesktopState>((set) => ({
   mergeFolders: (folders) => set((state) => ({ folders: mergeWorkspaceFolders(state.folders, folders) })),
   composerDraft: null,
   setComposerDraft: (composerDraft) => set({ composerDraft }),
+  kernel: EMPTY_KERNEL_VIEW,
+  setKernel: (kernel) => set({ kernel }),
 }));
 
 export type SessionStore = Pick<
@@ -147,7 +160,8 @@ export type SessionStore = Pick<
   | "clearApprovals"
   | "addThreadToFolder"
   | "mergeFolders"
-> & { getOpenThreadId(): string | null; getTranscript(): Transcript | null };
+  | "setKernel"
+> & { getOpenThreadId(): string | null; getTranscript(): Transcript | null; getKernel(): KernelView };
 
 /** zustand 저장소를 세션이 쓰는 좁은 인터페이스로 감싼다. */
 export function desktopSessionStore(): SessionStore {
@@ -166,6 +180,8 @@ export function desktopSessionStore(): SessionStore {
     clearApprovals: state.clearApprovals,
     addThreadToFolder: state.addThreadToFolder,
     mergeFolders: state.mergeFolders,
+    setKernel: state.setKernel,
+    getKernel: () => useDesktopStore.getState().kernel,
     getOpenThreadId: () => useDesktopStore.getState().openThreadId,
     getTranscript: () => useDesktopStore.getState().transcript,
   };

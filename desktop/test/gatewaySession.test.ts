@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import type { AkraBridge, ConnectionState } from "../src/shared/bridge";
 import { GatewayConnection } from "../src/main/gatewayConnection";
+import { EMPTY_KERNEL_VIEW } from "../src/renderer/kernel/kernelConnection";
 import { DesktopSession, groupThreadsByCwd, startDesktopSession } from "../src/renderer/session/desktopSession";
 import { type DesktopState, mergeWorkspaceFolders, type SessionStore } from "../src/renderer/session/desktopStore";
 import type { Thread } from "../src/shared/protocol/generated/v2/Thread";
@@ -153,6 +154,8 @@ function sessionStore() {
     },
     getOpenThreadId: () => snapshot.openThreadId ?? null,
     getTranscript: () => snapshot.transcript ?? null,
+    setKernel: (kernel) => Object.assign(snapshot, { kernel }),
+    getKernel: () => snapshot.kernel ?? EMPTY_KERNEL_VIEW,
   };
   return store;
 }

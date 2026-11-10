@@ -6,15 +6,16 @@ import { ApprovalPrompt } from "./conversation/ApprovalPrompt";
 import { Composer, type ComposerActions } from "./conversation/Composer";
 import { ConversationView } from "./conversation/ConversationView";
 import { WorkingTreePanel } from "./conversation/WorkingTreePanel";
+import { KernelPanel } from "./kernel/KernelPanel";
 import { DesktopSession } from "./session/desktopSession";
-import { desktopSessionStore, useDesktopStore } from "./session/desktopStore";
+import { desktopSessionStore, openThreadCwd, useDesktopStore } from "./session/desktopStore";
 import { Sidebar } from "./sidebar/Sidebar";
 import { TerminalDock } from "./terminal/TerminalDock";
 import { GitHubPanel } from "./work/GitHubPanel";
 import { JiraPanel } from "./work/JiraPanel";
 
 /** 오른쪽 패널은 한 번에 하나만 연다. */
-type SidePanel = "browser" | "github" | "jira" | null;
+type SidePanel = "browser" | "github" | "jira" | "kernel" | null;
 
 const CLIENT_VERSION = "0.0.0-development";
 
@@ -38,6 +39,9 @@ function GatewayBar({ sidePanel, onToggle }: { sidePanel: SidePanel; onToggle(pa
       )}
       {sessionError && <span className="error">{sessionError}</span>}
       <span className="side-toggles">
+        <button type="button" onClick={() => onToggle("kernel")} aria-pressed={sidePanel === "kernel"} data-testid="kernel-toggle">
+          {sidePanel === "kernel" ? "Akra 닫기" : "Akra"}
+        </button>
         <button type="button" onClick={() => onToggle("browser")} aria-pressed={sidePanel === "browser"} data-testid="browser-toggle">
           {sidePanel === "browser" ? "브라우저 닫기" : "브라우저"}
         </button>
@@ -55,6 +59,7 @@ function GatewayBar({ sidePanel, onToggle }: { sidePanel: SidePanel; onToggle(pa
 export function App() {
   const session = useRef<DesktopSession | null>(null);
   const [sidePanel, setSidePanel] = useState<SidePanel>(null);
+  const openCwd = useDesktopStore(openThreadCwd);
 
   useEffect(() => {
     const created = new DesktopSession(window.akra, desktopSessionStore(), CLIENT_VERSION);
@@ -62,6 +67,12 @@ export function App() {
     session.current = created;
     return () => created.stop();
   }, []);
+
+  // 커널 패널이 열려 있을 때만 열린 스레드의 저장소 커널에 붙는다. 붙어 있는 동안 그 저장소의 TUI 는 열리지 않는다.
+  const kernelWorkspace = sidePanel === "kernel" ? openCwd : null;
+  useEffect(() => {
+    void session.current?.showKernel(kernelWorkspace);
+  }, [kernelWorkspace]);
 
   const startThread = (cwd: string) => {
     void session.current?.startThread(cwd).catch((error: unknown) =>
@@ -107,6 +118,7 @@ export function App() {
       {sidePanel === "github" && (
         <GitHubPanel github={window.akra.github} onHandOff={async (pull) => handOff(await window.akra.github.reviewPrompt(pull.url))} />
       )}
+      {sidePanel === "kernel" && <KernelPanel onRefresh={async () => session.current?.refreshKernel()} />}
       {sidePanel === "jira" && <JiraPanel jira={window.akra.jira} onHandOff={async (issue) => handOff(await window.akra.jira.issuePrompt(issue.key))} />}
     </div>
   );
