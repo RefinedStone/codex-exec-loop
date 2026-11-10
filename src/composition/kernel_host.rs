@@ -14,13 +14,17 @@ use crate::core::native_client_port::{
     NativeClientDispatchOutcome, NativeClientEvent, ParallelModeControlPlaneCommand,
     ParallelModeControlPlanePresentationEvent, ParallelViewState,
 };
+use crate::core::runtime::CoreInputWaker;
 use crate::domain::parallel_mode::ParallelModeSupervisorSnapshot;
 use crate::domain::planning::RuntimeProjection;
 
-/// 커널 스레드가 커널 입력을 기다리는 최대 시간이다. 클라이언트 명령도 이 주기 안에 처리된다.
-/// shortcut: 클라이언트 명령은 이 대기가 끝나야 처리되어 최대 50ms 늦다. 지연이 문제가 되면 클라이언트 입력함과
-/// 커널 입력함을 하나의 깨우기로 합친다.
-const HOST_WAIT: Duration = Duration::from_millis(50);
+/*
+ * 커널 스레드가 입력 없이 기다리는 최대 시간이다. 입력함 셋(클라이언트, core, 병렬 완료)은 넣을 때 커널 스레드를
+ * 깨우므로 입력은 이 시간을 기다리지 않는다 (plan 19 Q2-4). 이 시간은 시계 일(`Tick`, 병렬 tick)의 주기이다. 그
+ * 일의 간격은 1초 이상이다.
+ * shortcut: 마감 시각이 없어 일이 없어도 이 주기로 깬다. 타이머를 마감 시각으로 바꿀 때(plan 19 Q3) 없앤다.
+ */
+const HOST_WAIT: Duration = Duration::from_millis(250);
 const HOST_MAX_INPUTS_PER_CYCLE: usize = 64;
 /// 클라이언트마다 쌓아 둘 이벤트 수이다. 넘치면 그 클라이언트에 `Resync` 를 보내고 증분은 버린다.
 const CLIENT_EVENT_CAPACITY: usize = 1024;
@@ -122,6 +126,23 @@ impl ParallelHostView {
     }
 }
 
+/// 클라이언트 입력함이다. 넣으면 커널 스레드를 깨운다 (plan 19 Q2-4). 커널 스레드는 core 입력함에서 기다린다.
+#[derive(Clone)]
+struct KernelInbox {
+    inputs: Sender<KernelHostInput>,
+    waker: CoreInputWaker,
+}
+
+impl KernelInbox {
+    fn send(&self, input: KernelHostInput) -> Result<(), KernelCallError> {
+        self.inputs
+            .send(input)
+            .map_err(|_| KernelCallError::Stopped)?;
+        self.waker.wake();
+        Ok(())
+    }
+}
+
 enum KernelHostInput {
     Attach {
         reply: Sender<(KernelClientId, Receiver<KernelHostEvent>)>,
@@ -168,14 +189,18 @@ impl KernelIdleClock {
 }
 
 pub(crate) struct KernelHost {
-    inbox: Sender<KernelHostInput>,
+    inbox: KernelInbox,
     thread: Option<JoinHandle<()>>,
     idle: KernelIdleClock,
 }
 
 impl KernelHost {
     pub(crate) fn start(runtime: NativeClientRuntime) -> std::io::Result<Self> {
-        let (inbox, inputs) = mpsc::channel();
+        let (sender, inputs) = mpsc::channel();
+        let inbox = KernelInbox {
+            inputs: sender,
+            waker: runtime.host_waker(),
+        };
         let idle = KernelIdleClock::default();
         let host_idle = idle.clone();
         let thread = std::thread::Builder::new()
@@ -223,7 +248,7 @@ impl Drop for KernelHost {
 /// 클라이언트 하나의 연결이다. 버리면 커널에서 떨어진다.
 pub(crate) struct KernelClientHandle {
     client_id: KernelClientId,
-    inbox: Sender<KernelHostInput>,
+    inbox: KernelInbox,
     events: Receiver<KernelHostEvent>,
 }
 
@@ -232,7 +257,7 @@ pub(crate) struct KernelClientHandle {
 #[derive(Clone)]
 pub(crate) struct KernelCommandSender {
     client_id: KernelClientId,
-    inbox: Sender<KernelHostInput>,
+    inbox: KernelInbox,
 }
 
 impl KernelCommandSender {
@@ -897,6 +922,25 @@ mod tests {
                 .active_turn
                 .is_none(),
             "the shown slot did not move"
+        );
+    }
+
+    #[test]
+    fn client_commands_wake_the_kernel_instead_of_waiting_for_the_cycle() {
+        // plan 19 Q2-4: before the wake, each command waited for the rest of the host wait.
+        let (runtime, _turns) = recording_runtime_for_test();
+        let host = KernelHost::start(runtime).expect("kernel host thread should start");
+        let client = host.attach().expect("a client should attach");
+        const COMMANDS: u32 = 10;
+        let started = Instant::now();
+        for _ in 0..COMMANDS {
+            assert!(client.send_command(AppCommand::Noop).is_some());
+        }
+        let elapsed = started.elapsed();
+        // 깨우지 않으면 명령마다 남은 대기(최대 HOST_WAIT)를 기다려 약 COMMANDS * HOST_WAIT 가 걸린다.
+        assert!(
+            elapsed < HOST_WAIT * 4,
+            "{COMMANDS} commands took {elapsed:?}; the host wait is {HOST_WAIT:?}"
         );
     }
 

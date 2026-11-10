@@ -83,6 +83,11 @@ where
         self.controller.next_post_turn_host_step()
     }
 
+    /// 이 런타임의 입력 대기를 깨운다 (plan 19 Q2-4). 커널 호스트의 다른 입력함이 쓴다.
+    pub(crate) fn input_waker(&self) -> super::CoreInputWaker {
+        self.input_receiver.waker()
+    }
+
     pub(crate) fn dispatch_command(&mut self, command: AppCommand) -> CoreDispatchOutcome {
         self.dispatch_input(CoreInput::Command(command))
     }

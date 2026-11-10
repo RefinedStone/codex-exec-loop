@@ -7,4 +7,4 @@ mod driver;
 mod input_mailbox;
 
 pub(crate) use driver::{CoreEffectExecutor, CoreRuntime};
-pub(crate) use input_mailbox::{CoreInputSender, core_input_channel};
+pub(crate) use input_mailbox::{CoreInputSender, CoreInputWaker, core_input_channel};
