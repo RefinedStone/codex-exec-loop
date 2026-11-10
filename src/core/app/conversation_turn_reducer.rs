@@ -1,6 +1,8 @@
 use super::approval::{ApprovalReviewPersistenceCoordinator, ApprovalReviewPersistenceSettlement};
 use super::conversation_runtime::{ConversationRuntimeAuthority, TurnAuthorityAdmission};
-use super::post_turn_state::{ActivePostTurnEvaluation, PendingPostTurnEvaluation};
+use super::post_turn_state::{
+    ActivePostTurnEvaluation, PendingPostTurnEvaluation, PostTurnHostStep, PostTurnRouteWork,
+};
 use super::{
     ApprovalDecisionAdmission, ApprovalDecisionCorrelation, ApprovalReviewPersistenceCorrelation,
     ConversationLoadCorrelation, ConversationRuntimeSnapshot, PostTurnEvaluationCorrelation,
@@ -339,15 +341,42 @@ impl ConversationTurnFeatureReducer {
             .find_map(|session| session.conversation_runtime.active_turn_correlation())
     }
 
-    /// 경로 결정을 기다리는 session 의 runtime 값이다. 호스트가 그 thread 의 자동 후속 설정으로 경로를 고른다.
-    pub(super) fn post_turn_route_runtime(
-        &self,
-        correlation: &PostTurnEvaluationCorrelation,
-    ) -> Option<ConversationRuntimeSnapshot> {
-        std::iter::once(&self.session)
-            .chain(&self.background_sessions)
-            .find(|session| session.awaits_post_turn_route(correlation))
-            .map(|session| session.conversation_runtime.snapshot())
+    /*
+     * 호스트가 다음에 할 턴 뒤 일이다 (plan 19 Q2-2). Q2-2 이전의 호스트처럼 평가 시작을 경로 결정보다 먼저 한다. 보는
+     * session 을 먼저 보고 뒤의 session 을 본다. `with_owning_session` 이 같은 차례로 주인을 찾는다.
+     */
+    pub(super) fn next_post_turn_host_step(&self) -> Option<PostTurnHostStep> {
+        let sessions = || std::iter::once(&self.session).chain(&self.background_sessions);
+        if let Some(pending) =
+            sessions().find_map(|session| session.conversation_runtime.post_turn().due_evaluation())
+        {
+            return Some(PostTurnHostStep::StartEvaluation {
+                planning_workspace_directory: pending.planning_workspace_directory.clone(),
+            });
+        }
+        let awaiting = sessions()
+            .filter_map(|session| {
+                let (correlation, execution) =
+                    session.conversation_runtime.post_turn().awaiting_route()?;
+                Some((session, correlation, execution))
+            })
+            .collect::<Vec<_>>();
+        match awaiting.as_slice() {
+            [] => None,
+            [(session, correlation, execution)] => Some(PostTurnHostStep::RouteContinuation(
+                Box::new(PostTurnRouteWork {
+                    correlation: (*correlation).clone(),
+                    execution: Box::new((*execution).clone()),
+                    runtime: session.conversation_runtime.snapshot(),
+                }),
+            )),
+            several => Some(PostTurnHostStep::SettleWithoutContinuation {
+                correlations: several
+                    .iter()
+                    .map(|(_, correlation, _)| (*correlation).clone())
+                    .collect(),
+            }),
+        }
     }
 
     /// 자동 후속 턴을 만들 때 쓰는 그 thread 의 runtime 값과 턴 옵션이다.

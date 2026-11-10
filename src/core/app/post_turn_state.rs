@@ -6,7 +6,10 @@
 
 use std::time::Instant;
 
-use super::{PostTurnAuthoritySnapshot, PostTurnEvaluationCorrelation, PostTurnRouteResolution};
+use super::{
+    ConversationRuntimeSnapshot, PostTurnAuthoritySnapshot, PostTurnEvaluationCorrelation,
+    PostTurnRouteResolution,
+};
 use crate::domain::planning::{PostTurnContinuationPermit, PostTurnExecution, TurnSnapshotCapture};
 
 /// 턴이 끝났고 평가를 기다리는 턴이다. 호스트가 병렬 값을 붙여서 평가를 시작한다.
@@ -27,6 +30,36 @@ pub(super) struct PendingPostTurnEvaluation {
 pub(super) struct ActivePostTurnEvaluation {
     pub(super) correlation: PostTurnEvaluationCorrelation,
     pub(super) continuation_permit: PostTurnContinuationPermit,
+}
+
+/*
+ * 호스트가 다음에 할 턴 뒤 일이다 (plan 19 Q2-2). core 는 모든 session 의 `PostTurnState` 를 보고 0~1개를 고른다.
+ * 호스트는 이벤트를 따라가지 않고 매 dispatch 뒤에 이 값을 묻는다. 그래서 사건 하나를 놓쳐도 다음에 물을 때 같은
+ * 일이 다시 보인다. 단계를 하면 상태가 바뀌므로 같은 단계가 두 번 나오지 않는다.
+ */
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PostTurnHostStep {
+    /// 평가 대기 턴이 있다. 호스트가 병렬 값을 붙여 평가를 시작한다.
+    StartEvaluation {
+        planning_workspace_directory: String,
+    },
+    /// 경로를 기다리는 평가가 하나 있다. 호스트가 병렬 제어부와 그 thread 의 자동 후속 설정으로 경로를 고른다.
+    RouteContinuation(Box<PostTurnRouteWork>),
+    /*
+     * 경로를 기다리는 평가가 둘 이상이다. 어느 것이 이어 갈 차례인지 정할 수 없으므로 모두 한 번에 이어 가지 않고
+     * 끝낸다 (실패하면 닫는다). 하나씩 끝내면 남은 하나가 다음 비교에서 정상 경로로 가 버린다.
+     */
+    SettleWithoutContinuation {
+        correlations: Vec<PostTurnEvaluationCorrelation>,
+    },
+}
+
+/// 경로를 고를 평가와, 그 평가를 가진 thread 의 runtime 값이다. 그 thread 는 화면이 보지 않을 수 있다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PostTurnRouteWork {
+    pub correlation: PostTurnEvaluationCorrelation,
+    pub execution: Box<PostTurnExecution>,
+    pub runtime: ConversationRuntimeSnapshot,
 }
 
 /*
@@ -119,6 +152,27 @@ impl PostTurnState {
     pub(super) fn evaluates(&self, correlation: &PostTurnEvaluationCorrelation) -> bool {
         self.active_evaluation()
             .is_some_and(|active| &active.correlation == correlation)
+    }
+
+    pub(super) fn due_evaluation(&self) -> Option<&PendingPostTurnEvaluation> {
+        match self {
+            Self::Due(pending) => Some(pending),
+            _ => None,
+        }
+    }
+
+    /// 경로를 기다리는 평가와 그 결과이다.
+    pub(super) fn awaiting_route(
+        &self,
+    ) -> Option<(&PostTurnEvaluationCorrelation, &PostTurnExecution)> {
+        match self {
+            Self::AwaitingRoute {
+                correlation,
+                execution,
+                ..
+            } => Some((correlation, execution)),
+            _ => None,
+        }
     }
 
     pub(super) fn awaits_route(&self, correlation: &PostTurnEvaluationCorrelation) -> bool {

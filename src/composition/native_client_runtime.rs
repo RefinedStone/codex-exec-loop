@@ -27,8 +27,8 @@ use crate::composition::clipboard_image_probe::ClipboardImageProbeTrigger;
 use crate::composition::core_effect_runner::CoreEffectRunner;
 use crate::core::app::{
     AppCommand, AppEvent, AppSnapshot, ConversationRuntimeSnapshot, CoreDispatchOutcome, CoreInput,
-    ParallelModeProjection, PostTurnAuthoritySnapshot, PostTurnEvaluationCorrelation,
-    PostTurnRouteResolution, RevisionedPlanningParallelProjection,
+    ParallelModeProjection, PostTurnEvaluationCorrelation, PostTurnHostStep,
+    PostTurnRouteResolution, PostTurnRouteWork, RevisionedPlanningParallelProjection,
 };
 #[cfg(test)]
 use crate::core::app::{GithubReviewPollingSetupRequest, TurnSubmissionCorrelation};
@@ -48,7 +48,7 @@ use crate::domain::conversation::ConversationRuntimeControlTruth;
 use crate::domain::github_review::GithubPullRequestTarget;
 #[cfg(test)]
 use crate::domain::parallel_mode::ParallelModeAutomationTrigger;
-use crate::domain::planning::{PostTurnContinuationAction, PostTurnExecution};
+use crate::domain::planning::PostTurnContinuationAction;
 
 /*
  * NativeClientRuntime is the composition-owned client runtime boundary used by
@@ -112,95 +112,79 @@ enum NativeClientPollLane {
     Parallel,
 }
 
-struct InternalPostTurnRoutingRequest {
-    event_index: usize,
-    correlation: PostTurnEvaluationCorrelation,
-    execution: Box<PostTurnExecution>,
-}
+/// 한 dispatch 에서 호스트가 하는 턴 뒤 단계의 최대 수이다. 단계마다 상태가 바뀌므로 보통 1~3 개로 끝난다.
+const MAX_POST_TURN_HOST_STEPS: usize = 8;
 
-fn take_internal_post_turn_routing_requests(
-    outcome: &mut CoreDispatchOutcome,
-) -> Vec<InternalPostTurnRoutingRequest> {
-    let mut routing_requests = Vec::<InternalPostTurnRoutingRequest>::new();
-    let mut external_events = Vec::with_capacity(outcome.events.len());
-    for event in std::mem::take(&mut outcome.events) {
-        match event {
-            AppEvent::PostTurnContinuationRoutingRequested {
-                correlation,
-                execution,
-            } => {
-                routing_requests.push(InternalPostTurnRoutingRequest {
-                    event_index: external_events.len(),
-                    correlation,
-                    execution,
-                });
-            }
-            external => external_events.push(external),
-        }
+/*
+ * 턴 뒤 단계의 결과를 넣을 자리이다 (plan 19 Q2-2). core 는 그 단계가 생긴 사건의 결과 안에 표시 이벤트를 둔다.
+ * 화면은 이벤트를 차례로 적용하므로, 결과를 그 자리에 넣어 뒤의 이벤트(예: planning 새로 고침 시작)보다 앞에 둔다.
+ * 단계는 표시가 아니라 상태에서 정한다. 표시가 없으면(놓친 사건을 다음 비교가 이어 갈 때) 끝에 붙인다.
+ */
+fn post_turn_anchor_index(events: &[AppEvent], step: &PostTurnHostStep) -> Option<usize> {
+    match step {
+        PostTurnHostStep::StartEvaluation {
+            planning_workspace_directory: wanted,
+        } => events.iter().position(|event| {
+            matches!(
+                event,
+                AppEvent::PostTurnEvaluationDue { planning_workspace_directory }
+                    if planning_workspace_directory == wanted
+            )
+        }),
+        PostTurnHostStep::RouteContinuation(work) => route_marker_index(events, &work.correlation),
+        // 끝낼 평가가 여럿이라 자리도 여럿이다. 호스트가 평가마다 `route_marker_index` 로 찾는다.
+        PostTurnHostStep::SettleWithoutContinuation { .. } => None,
     }
-    outcome.events = external_events;
-    routing_requests
 }
 
-fn merge_core_dispatch_outcome_at(
+fn route_marker_index(
+    events: &[AppEvent],
+    correlation: &PostTurnEvaluationCorrelation,
+) -> Option<usize> {
+    events.iter().position(|event| {
+        matches!(
+            event,
+            AppEvent::PostTurnContinuationRoutingRequested { correlation: marked, .. }
+                if marked == correlation
+        )
+    })
+}
+
+/// 단계 결과를 자리의 표시 이벤트 대신 넣는다. 자리가 없으면 끝에 붙인다.
+fn splice_post_turn_step(
     target: &mut CoreDispatchOutcome,
-    resolved: CoreDispatchOutcome,
-    event_index: usize,
+    anchor: Option<usize>,
+    step_outcome: CoreDispatchOutcome,
 ) {
-    let event_index = event_index.min(target.events.len());
-    target
-        .events
-        .splice(event_index..event_index, resolved.events);
-    target.effects.extend(resolved.effects);
-    target.snapshot = resolved.snapshot;
-}
-
-// 경로를 기다리는 thread 의 runtime 값으로 판단한다 (plan 18 K2-3). 그 thread 는 화면이 보지 않을 수 있다.
-fn pending_post_turn_route_correlation(
-    runtime: &ConversationRuntimeSnapshot,
-) -> Option<&PostTurnEvaluationCorrelation> {
-    match &runtime.post_turn {
-        PostTurnAuthoritySnapshot::AwaitingRoute { correlation, .. } => Some(correlation),
-        PostTurnAuthoritySnapshot::Idle
-        | PostTurnAuthoritySnapshot::Evaluating { .. }
-        | PostTurnAuthoritySnapshot::Settled { .. } => None,
-    }
-}
-
-fn exact_single_post_turn_routing_request<'a>(
-    runtime: &ConversationRuntimeSnapshot,
-    routing_requests: &'a [InternalPostTurnRoutingRequest],
-) -> Option<&'a InternalPostTurnRoutingRequest> {
-    let [request] = routing_requests else {
-        return None;
+    let range = match anchor {
+        Some(index) => index..index + 1,
+        None => target.events.len()..target.events.len(),
     };
-    (pending_post_turn_route_correlation(runtime) == Some(&request.correlation)).then_some(request)
+    target.events.splice(range, step_outcome.events);
+    target.effects.extend(step_outcome.effects);
+    target.snapshot = step_outcome.snapshot;
 }
 
-fn route_parallel_post_turn_for_exact_single<T>(
+/// 표시 이벤트는 호스트 안에서만 쓴다. 클라이언트에 보내기 전에 남은 것을 지운다.
+fn strip_post_turn_markers(outcome: &mut CoreDispatchOutcome) {
+    outcome.events.retain(|event| {
+        !matches!(
+            event,
+            AppEvent::PostTurnEvaluationDue { .. }
+                | AppEvent::PostTurnContinuationRoutingRequested { .. }
+        )
+    });
+}
+
+/// 그 thread 의 자동 후속 설정이 병렬 경로를 허락하면 병렬 제어부에 묻는다.
+fn route_parallel_post_turn_when_allowed<T>(
     runtime: &ConversationRuntimeSnapshot,
-    routing_requests: &[InternalPostTurnRoutingRequest],
-    route: impl FnOnce(&InternalPostTurnRoutingRequest) -> T,
+    route: impl FnOnce() -> T,
 ) -> Option<T> {
-    let request = exact_single_post_turn_routing_request(runtime, routing_requests)?;
     runtime
         .auto_follow
         .parallel_post_turn_continuation_allowed()
-        .then(|| route(request))
-}
-
-fn fail_closed_post_turn_settlement(
-    runtime: &ConversationRuntimeSnapshot,
-    routing_requests: &[InternalPostTurnRoutingRequest],
-) -> Option<(usize, PostTurnEvaluationCorrelation)> {
-    if routing_requests.len() <= 1 {
-        return None;
-    }
-    let current = pending_post_turn_route_correlation(runtime)?;
-    routing_requests
-        .iter()
-        .find(|request| &request.correlation == current)
-        .map(|request| (request.event_index, current.clone()))
+        .then(route)
 }
 
 const fn post_turn_route_resolution(
@@ -658,7 +642,7 @@ impl NativeClientRuntime {
                     .core
                     .runtime
                     .poll_pending_input()
-                    .map(|outcome| self.resolve_internal_post_turn_routes(outcome)),
+                    .map(|outcome| self.reconcile_post_turn(outcome)),
                 NativeClientPollLane::Parallel => match self.parallel_completion_rx.try_recv() {
                     Ok(completion) => Some(self.dispatch_parallel_completion(completion)),
                     Err(TryRecvError::Empty | TryRecvError::Disconnected) => None,
@@ -678,7 +662,7 @@ impl NativeClientRuntime {
     fn dispatch_core_input(&mut self, input: CoreInput) -> NativeClientDispatchOutcome {
         self.report_parallel_mode_to_core();
         let outcome = self.core.runtime.dispatch_input(input);
-        self.resolve_internal_post_turn_routes(outcome)
+        self.reconcile_post_turn(outcome)
     }
 
     /*
@@ -692,172 +676,167 @@ impl NativeClientRuntime {
         if self.core_parallel_mode == Some(enabled) {
             return;
         }
-        // 먼저 기록한다. 아래 dispatch 가 이 함수를 다시 불러도 바로 돌아온다.
         self.core_parallel_mode = Some(enabled);
-        let outcome = self.dispatch_core_input(CoreInput::Command(
+        // core 에 바로 넣는다. 턴 뒤 단계는 이 보고를 부른 바깥 dispatch 가 상태를 보고 한다 (plan 19 Q2-2).
+        let outcome = self.core.runtime.dispatch_input(CoreInput::Command(
             AppCommand::SetParallelModeEnabled(enabled),
         ));
         debug_assert!(
-            matches!(&outcome, NativeClientDispatchOutcome::Core(core) if core.events.is_empty()),
+            outcome.events.is_empty(),
             "reporting the parallel mode only updates core state"
         );
     }
 
     /*
-     * 턴 종료 뒤 평가는 호스트가 시작한다 (plan 18 K1-4). core 는 기다리는 완료 턴을 알리고, 호스트는 병렬
-     * 제어부의 값(사용 여부, epoch)을 붙여서 다시 넣는다. 이전에는 TUI 가 화면 기록으로 요청을 만들었다.
+     * 턴 뒤 단계를 상태에서 고른다 (plan 19 Q2-2). core 가 고른 단계를 하고 다시 묻는다. 평가 시작은 호스트가 병렬
+     * 값(사용 여부, epoch)을 붙인다 (plan 18 K1-4). 경로 결정은 병렬 제어부에 묻고, AutoSubmit 이면 자동 후속 턴을
+     * 제출한다 (plan 18 K1-5). 이전에는 core 결과의 표시 이벤트를 따라 단계를 이어 붙였다.
      */
-    fn start_due_post_turn_evaluations(&mut self, core_outcome: &mut CoreDispatchOutcome) {
-        let mut due = Vec::new();
-        let mut external_events = Vec::with_capacity(core_outcome.events.len());
-        for event in std::mem::take(&mut core_outcome.events) {
-            match event {
-                AppEvent::PostTurnEvaluationDue {
-                    planning_workspace_directory,
-                } => due.push((external_events.len(), planning_workspace_directory)),
-                external => external_events.push(external),
-            }
-        }
-        core_outcome.events = external_events;
-        // 뒤에서부터 끼워 넣어 앞쪽 위치가 바뀌지 않게 한다.
-        for (event_index, planning_workspace_directory) in due.into_iter().rev() {
-            let started = self
-                .core
-                .runtime
-                .dispatch_command(AppCommand::EvaluateCompletedTurn {
-                    parallel_mode_enabled: self.parallel_mode_enabled(),
-                    parallel_automation_epoch_id: self
-                        .current_parallel_epoch_id_for_workspace(&planning_workspace_directory),
-                });
-            merge_core_dispatch_outcome_at(core_outcome, started, event_index);
-        }
-    }
-
-    fn resolve_internal_post_turn_routes(
+    fn reconcile_post_turn(
         &mut self,
         mut core_outcome: CoreDispatchOutcome,
     ) -> NativeClientDispatchOutcome {
-        self.start_due_post_turn_evaluations(&mut core_outcome);
-        let routing_requests = take_internal_post_turn_routing_requests(&mut core_outcome);
-        if routing_requests.is_empty() {
+        let mut parallel_events = Vec::new();
+        let mut routed = false;
+        for _ in 0..MAX_POST_TURN_HOST_STEPS {
+            let Some(step) = self.core.runtime.next_post_turn_host_step() else {
+                break;
+            };
+            let anchor = post_turn_anchor_index(&core_outcome.events, &step);
+            match step {
+                PostTurnHostStep::StartEvaluation {
+                    planning_workspace_directory,
+                } => {
+                    let started = self.start_post_turn_evaluation(&planning_workspace_directory);
+                    splice_post_turn_step(&mut core_outcome, anchor, started);
+                }
+                PostTurnHostStep::SettleWithoutContinuation { correlations } => {
+                    // 끝낼 평가마다 그 평가의 표시 자리를 따로 찾는다.
+                    for correlation in correlations {
+                        let anchor = route_marker_index(&core_outcome.events, &correlation);
+                        let settled = self.resolve_post_turn_route(
+                            correlation,
+                            PostTurnRouteResolution::NoContinuation,
+                        );
+                        splice_post_turn_step(&mut core_outcome, anchor, settled);
+                    }
+                }
+                PostTurnHostStep::RouteContinuation(work) => {
+                    routed = true;
+                    let (resolved, submitted, events) = self.route_post_turn_continuation(*work);
+                    splice_post_turn_step(&mut core_outcome, anchor, resolved);
+                    if let Some(submitted) = submitted {
+                        splice_post_turn_step(&mut core_outcome, None, submitted);
+                    }
+                    parallel_events.extend(events);
+                }
+            }
+        }
+        debug_assert!(
+            self.core.runtime.next_post_turn_host_step().is_none(),
+            "post-turn host steps must settle within one dispatch"
+        );
+        strip_post_turn_markers(&mut core_outcome);
+        if !routed {
             return NativeClientDispatchOutcome::Core(core_outcome);
         }
-        let route_runtime = routing_requests
-            .iter()
-            .find_map(|request| {
-                self.core
-                    .runtime
-                    .post_turn_route_runtime(&request.correlation)
-            })
-            .unwrap_or_else(|| core_outcome.snapshot.conversation_runtime.clone());
-
-        if let Some((event_index, correlation)) =
-            fail_closed_post_turn_settlement(&route_runtime, &routing_requests)
-        {
-            let mut resolved =
-                self.core
-                    .runtime
-                    .dispatch_command(AppCommand::ResolvePostTurnContinuation {
-                        correlation,
-                        resolution: PostTurnRouteResolution::NoContinuation,
-                    });
-            let _ = take_internal_post_turn_routing_requests(&mut resolved);
-            merge_core_dispatch_outcome_at(&mut core_outcome, resolved, event_index);
-            return NativeClientDispatchOutcome::Core(core_outcome);
-        }
-
-        let Some(request) =
-            exact_single_post_turn_routing_request(&route_runtime, &routing_requests)
-        else {
-            return NativeClientDispatchOutcome::Core(core_outcome);
-        };
-        let auto_follow_prompt_queued = matches!(
-            &request.execution.evaluation.action,
-            PostTurnContinuationAction::QueueAutoPrompt(_)
-        );
-        let parallel_outcome = route_parallel_post_turn_for_exact_single(
-            &route_runtime,
-            &routing_requests,
-            |request| {
-                self.parallel_control_plane.continue_post_turn_queue(
-                    request
-                        .execution
-                        .runtime_projection_workspace_directory
-                        .clone(),
-                    request
-                        .execution
-                        .evaluation
-                        .provenance
-                        .parallel_queue_signal,
-                    auto_follow_prompt_queued,
-                    request
-                        .execution
-                        .evaluation
-                        .runtime_projection
-                        .has_actionable_queue_head(),
-                )
-            },
-        );
-        let parallel_consumed_prompt = parallel_outcome
-            .as_ref()
-            .is_some_and(|outcome| outcome.auto_follow_prompt_consumed);
-        let presentation_events = parallel_outcome
-            .map(|outcome| outcome.presentation_events)
-            .map(client_presentation_events)
-            .unwrap_or_default();
-
-        let resolution = post_turn_route_resolution(
-            auto_follow_prompt_queued,
-            parallel_consumed_prompt,
-            route_runtime.auto_follow.can_queue_next(),
-        );
-        let event_index = request.event_index;
-        let correlation = request.correlation.clone();
-        // AutoSubmit 이면 호스트가 자동 후속 턴을 제출한다 (plan 18 K1-5). 이전에는 TUI 가 다시 제출했다.
-        let auto_follow_submission = match (&resolution, &request.execution.evaluation.action) {
-            (
-                PostTurnRouteResolution::AutoSubmit,
-                PostTurnContinuationAction::QueueAutoPrompt(queued),
-            ) => Some(crate::core::app::AutoFollowTurnSubmission {
-                source: correlation.clone(),
-                completed_turn_id: request
-                    .execution
-                    .evaluation
-                    .provenance
-                    .completed_turn_id
-                    .clone(),
-                prompt: queued.prompt.clone(),
-                transcript_text: queued.transcript_text.clone(),
-                mode_label: queued.mode_label.clone(),
-                parallel_mode_enabled: self.parallel_mode_enabled(),
-            }),
-            _ => None,
-        };
-        let mut resolved =
-            self.core
-                .runtime
-                .dispatch_command(AppCommand::ResolvePostTurnContinuation {
-                    correlation,
-                    resolution,
-                });
-        let _ = take_internal_post_turn_routing_requests(&mut resolved);
-        merge_core_dispatch_outcome_at(&mut core_outcome, resolved, event_index);
-        if let Some(submission) = auto_follow_submission {
-            let mut submitted = self
-                .core
-                .runtime
-                .dispatch_command(AppCommand::SubmitAutoFollowTurn(Box::new(submission)));
-            let _ = take_internal_post_turn_routing_requests(&mut submitted);
-            let end = core_outcome.events.len();
-            merge_core_dispatch_outcome_at(&mut core_outcome, submitted, end);
-        }
-
         NativeClientDispatchOutcome::Combined {
             core: core_outcome,
             parallel: NativeParallelDispatchOutcome {
-                presentation_events,
+                presentation_events: parallel_events,
             },
         }
+    }
+
+    fn start_post_turn_evaluation(
+        &mut self,
+        planning_workspace_directory: &str,
+    ) -> CoreDispatchOutcome {
+        let command = AppCommand::EvaluateCompletedTurn {
+            parallel_mode_enabled: self.parallel_mode_enabled(),
+            parallel_automation_epoch_id: self
+                .current_parallel_epoch_id_for_workspace(planning_workspace_directory),
+        };
+        self.core.runtime.dispatch_command(command)
+    }
+
+    fn resolve_post_turn_route(
+        &mut self,
+        correlation: PostTurnEvaluationCorrelation,
+        resolution: PostTurnRouteResolution,
+    ) -> CoreDispatchOutcome {
+        self.core
+            .runtime
+            .dispatch_command(AppCommand::ResolvePostTurnContinuation {
+                correlation,
+                resolution,
+            })
+    }
+
+    /*
+     * 경로를 기다리는 평가 하나의 경로를 고른다. 병렬 제어부가 그 평가의 자동 후속 프롬프트를 쓰면 병렬 경로이다.
+     * 아니면 그 thread 가 자동 후속을 더 낼 수 있을 때 AutoSubmit 이다. 돌려주는 값은 경로 결정 결과, 자동 후속
+     * 제출 결과(AutoSubmit 일 때), 병렬 제어부의 화면 이벤트이다.
+     */
+    fn route_post_turn_continuation(
+        &mut self,
+        work: PostTurnRouteWork,
+    ) -> (
+        CoreDispatchOutcome,
+        Option<CoreDispatchOutcome>,
+        Vec<ParallelModeControlPlanePresentationEvent>,
+    ) {
+        let PostTurnRouteWork {
+            correlation,
+            execution,
+            runtime,
+        } = work;
+        let queued_prompt = match &execution.evaluation.action {
+            PostTurnContinuationAction::QueueAutoPrompt(queued) => Some(queued.as_ref().clone()),
+            PostTurnContinuationAction::SkipAutoFollow { .. } => None,
+        };
+        let parallel_outcome = route_parallel_post_turn_when_allowed(&runtime, || {
+            self.parallel_control_plane.continue_post_turn_queue(
+                execution.runtime_projection_workspace_directory.clone(),
+                execution.evaluation.provenance.parallel_queue_signal,
+                queued_prompt.is_some(),
+                execution
+                    .evaluation
+                    .runtime_projection
+                    .has_actionable_queue_head(),
+            )
+        });
+        let parallel_consumed_prompt = parallel_outcome
+            .as_ref()
+            .is_some_and(|outcome| outcome.auto_follow_prompt_consumed);
+        let parallel_events = parallel_outcome
+            .map(|outcome| client_presentation_events(outcome.presentation_events))
+            .unwrap_or_default();
+        let resolution = post_turn_route_resolution(
+            queued_prompt.is_some(),
+            parallel_consumed_prompt,
+            runtime.auto_follow.can_queue_next(),
+        );
+        let auto_follow_submission = match (&resolution, queued_prompt) {
+            (PostTurnRouteResolution::AutoSubmit, Some(queued)) => {
+                Some(crate::core::app::AutoFollowTurnSubmission {
+                    source: correlation.clone(),
+                    completed_turn_id: execution.evaluation.provenance.completed_turn_id.clone(),
+                    prompt: queued.prompt,
+                    transcript_text: queued.transcript_text,
+                    mode_label: queued.mode_label,
+                    parallel_mode_enabled: self.parallel_mode_enabled(),
+                })
+            }
+            _ => None,
+        };
+        let resolved = self.resolve_post_turn_route(correlation, resolution);
+        let submitted = auto_follow_submission.map(|submission| {
+            self.core
+                .runtime
+                .dispatch_command(AppCommand::SubmitAutoFollowTurn(Box::new(submission)))
+        });
+        (resolved, submitted, parallel_events)
     }
 
     fn dispatch_parallel_completion(
@@ -907,7 +886,7 @@ impl NativeClientRuntime {
         if !wait.is_zero()
             && let Some(outcome) = self.core.runtime.wait_pending_input(wait)
         {
-            outcomes.push(self.resolve_internal_post_turn_routes(outcome));
+            outcomes.push(self.reconcile_post_turn(outcome));
         }
         while outcomes.len() < max_inputs {
             let Some(outcome) = self.poll_pending_client_event() else {
@@ -1216,6 +1195,7 @@ pub(crate) mod tests {
         test_parallel_mode_control_plane_composition, test_planning_services,
     };
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+    use crate::core::app::PostTurnAuthoritySnapshot;
     use crate::core::app::{
         CoreEffect, CoreEffectCompletion, ParallelPeekLoadCorrelation,
         PlanningRuntimeRefreshCorrelation, TurnStreamEvent,
@@ -1227,8 +1207,8 @@ pub(crate) mod tests {
         ConversationRuntimeConfigurationRequest, ConversationRuntimeEnvelope,
     };
     use crate::domain::planning::{
-        PlanningWorkerPanelState, PostTurnOutcome, PostTurnProvenance, PostTurnQueuedPrompt,
-        RuntimeProjection, TurnSnapshotCapture,
+        PlanningWorkerPanelState, PostTurnExecution, PostTurnOutcome, PostTurnProvenance,
+        PostTurnQueuedPrompt, RuntimeProjection, TurnSnapshotCapture,
     };
     use crate::domain::recent_sessions::{SessionCatalog, SessionCatalogRequest};
     use crate::domain::turn_terminal::{
@@ -1256,23 +1236,17 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn parallel_post_turn_route_requires_exact_awaiting_authority_and_policy_gate() {
-        let correlation = post_turn_correlation(7);
-        let requests = vec![internal_routing_request(&correlation, 0)];
-        let mut snapshot = awaiting_route_snapshot(&correlation);
+    fn parallel_post_turn_route_requires_the_thread_policy_gate() {
+        let mut snapshot = AppSnapshot::initial();
         let route_calls = Cell::new(0);
 
         snapshot
             .conversation_runtime
             .auto_follow
             .continuation_paused = true;
-        let blocked = route_parallel_post_turn_for_exact_single(
-            &snapshot.conversation_runtime,
-            &requests,
-            |_| {
-                route_calls.set(route_calls.get() + 1);
-            },
-        );
+        let blocked = route_parallel_post_turn_when_allowed(&snapshot.conversation_runtime, || {
+            route_calls.set(route_calls.get() + 1);
+        });
         assert!(blocked.is_none());
         assert_eq!(route_calls.get(), 0);
 
@@ -1280,139 +1254,52 @@ pub(crate) mod tests {
             .conversation_runtime
             .auto_follow
             .parallel_rearmed_after_stop = true;
-        let allowed = route_parallel_post_turn_for_exact_single(
-            &snapshot.conversation_runtime,
-            &requests,
-            |_| {
-                route_calls.set(route_calls.get() + 1);
-            },
-        );
+        let allowed = route_parallel_post_turn_when_allowed(&snapshot.conversation_runtime, || {
+            route_calls.set(route_calls.get() + 1);
+        });
         assert_eq!(allowed, Some(()));
         assert_eq!(route_calls.get(), 1);
     }
 
     #[test]
-    fn stale_and_aba_route_markers_cannot_enter_the_parallel_side_effect() {
-        let correlation = post_turn_correlation(7);
-        let current = post_turn_correlation(8);
-        let requests = vec![internal_routing_request(&correlation, 0)];
-        let snapshot = awaiting_route_snapshot(&current);
-        let route_calls = Cell::new(0);
-
-        let routed = route_parallel_post_turn_for_exact_single(
-            &snapshot.conversation_runtime,
-            &requests,
-            |_| {
-                route_calls.set(route_calls.get() + 1);
-            },
-        );
-
-        assert!(routed.is_none());
-        assert_eq!(route_calls.get(), 0);
-        assert!(
-            fail_closed_post_turn_settlement(&snapshot.conversation_runtime, &requests).is_none(),
-            "a stale-only marker must not settle an unrelated current route"
-        );
-    }
-
-    #[test]
-    fn duplicate_route_markers_fail_closed_without_parallel_side_effect() {
-        let correlation = post_turn_correlation(7);
-        let requests = vec![
-            internal_routing_request(&correlation, 0),
-            internal_routing_request(&correlation, 1),
-        ];
-        let snapshot = awaiting_route_snapshot(&correlation);
-        let route_calls = Cell::new(0);
-
-        let routed = route_parallel_post_turn_for_exact_single(
-            &snapshot.conversation_runtime,
-            &requests,
-            |_| {
-                route_calls.set(route_calls.get() + 1);
-            },
-        );
-
-        assert!(routed.is_none());
-        assert_eq!(route_calls.get(), 0);
-        assert_eq!(
-            fail_closed_post_turn_settlement(&snapshot.conversation_runtime, &requests),
-            Some((0, correlation))
-        );
-    }
-
-    #[test]
-    fn multi_route_batch_settles_only_the_current_route_without_parallel_side_effect() {
+    fn a_stale_route_marker_does_nothing_without_an_awaiting_route() {
+        // plan 19 Q2-2: the host takes its steps from the post-turn state, not from markers. A marker whose
+        // evaluation no longer awaits a route cannot reach the parallel control plane, and it never reaches clients.
+        let mut runtime = native_client_runtime_for_routing_test();
         let stale = post_turn_correlation(7);
-        let current = post_turn_correlation(8);
-        let requests = vec![
-            internal_routing_request(&stale, 0),
-            internal_routing_request(&current, 2),
-        ];
-        let snapshot = awaiting_route_snapshot(&current);
-        let route_calls = Cell::new(0);
-
-        let routed = route_parallel_post_turn_for_exact_single(
-            &snapshot.conversation_runtime,
-            &requests,
-            |_| {
-                route_calls.set(route_calls.get() + 1);
-            },
-        );
-
-        assert!(routed.is_none());
-        assert_eq!(route_calls.get(), 0);
-        assert_eq!(
-            fail_closed_post_turn_settlement(&snapshot.conversation_runtime, &requests),
-            Some((2, current))
-        );
-    }
-
-    #[test]
-    fn routing_marker_extraction_preserves_fifo_positions_and_never_leaks_markers() {
-        let first_correlation = post_turn_correlation(7);
-        let second_correlation = post_turn_correlation(8);
-        let mut outcome = CoreDispatchOutcome {
+        let outcome = CoreDispatchOutcome {
             events: vec![
                 AppEvent::ParallelModeSupervisorSnapshotInvalidated,
-                routing_event(&first_correlation),
-                AppEvent::SnapshotChanged(Arc::new(AppSnapshot::initial())),
-                AppEvent::PostTurnContinuationRoutingRequested {
-                    correlation: second_correlation.clone(),
-                    execution: Box::new(post_turn_execution(&second_correlation)),
+                routing_event(&stale),
+                AppEvent::PostTurnEvaluationDue {
+                    planning_workspace_directory: "/workspace".to_string(),
                 },
             ],
             effects: Vec::new(),
             snapshot: Arc::new(AppSnapshot::initial()),
         };
 
-        let routing_requests = take_internal_post_turn_routing_requests(&mut outcome);
-
-        assert_eq!(routing_requests.len(), 2);
-        assert_eq!(routing_requests[0].correlation, first_correlation);
-        assert_eq!(routing_requests[0].event_index, 1);
-        assert_eq!(routing_requests[1].correlation, second_correlation);
-        assert_eq!(routing_requests[1].event_index, 2);
-        assert!(matches!(
-            outcome.events.as_slice(),
-            [
-                AppEvent::ParallelModeSupervisorSnapshotInvalidated,
-                AppEvent::SnapshotChanged(_)
-            ]
-        ));
+        let NativeClientDispatchOutcome::Core(reconciled) = runtime.reconcile_post_turn(outcome)
+        else {
+            panic!("no route was taken, so the outcome stays Core-only");
+        };
+        assert_eq!(
+            reconciled.events,
+            vec![AppEvent::ParallelModeSupervisorSnapshotInvalidated]
+        );
+        assert!(reconciled.effects.is_empty());
     }
 
     #[test]
-    fn resolved_completion_is_spliced_before_later_planning_refresh_events() {
+    fn a_step_result_replaces_its_marker_before_later_events() {
         let post_turn = post_turn_correlation(7);
         let refresh = PlanningRuntimeRefreshCorrelation::new(3, "/workspace");
-        let mut initial_snapshot = AppSnapshot::initial();
-        initial_snapshot.revision = 1;
         let mut resolved_snapshot = AppSnapshot::initial();
         resolved_snapshot.revision = 2;
-        let mut initial = CoreDispatchOutcome {
+        let mut outcome = CoreDispatchOutcome {
             events: vec![
                 AppEvent::ParallelModeSupervisorSnapshotInvalidated,
+                routing_event(&post_turn),
                 AppEvent::PlanningRuntimeRefreshStarted {
                     correlation: refresh.clone(),
                 },
@@ -1420,7 +1307,7 @@ pub(crate) mod tests {
             effects: vec![CoreEffect::LoadParallelPeekConversation {
                 correlation: ParallelPeekLoadCorrelation::new(1, "thread-initial"),
             }],
-            snapshot: Arc::new(initial_snapshot),
+            snapshot: Arc::new(AppSnapshot::initial()),
         };
         let resolved = CoreDispatchOutcome {
             events: vec![
@@ -1436,11 +1323,12 @@ pub(crate) mod tests {
             }],
             snapshot: Arc::new(resolved_snapshot),
         };
-
-        merge_core_dispatch_outcome_at(&mut initial, resolved, 1);
+        let anchor = route_marker_index(&outcome.events, &post_turn);
+        assert_eq!(anchor, Some(1));
+        splice_post_turn_step(&mut outcome, anchor, resolved);
 
         assert!(matches!(
-            initial.events.as_slice(),
+            outcome.events.as_slice(),
             [
                 AppEvent::ParallelModeSupervisorSnapshotInvalidated,
                 AppEvent::SnapshotChanged(_),
@@ -1454,8 +1342,253 @@ pub(crate) mod tests {
                 },
             ] if correlation == &post_turn && refresh_correlation == &refresh
         ));
-        assert_eq!(initial.effects.len(), 2);
-        assert_eq!(initial.snapshot.revision, 2);
+        assert_eq!(outcome.effects.len(), 2);
+        assert_eq!(outcome.snapshot.revision, 2);
+    }
+
+    #[test]
+    fn anchors_match_the_step_and_a_missing_anchor_appends() {
+        let current = post_turn_correlation(8);
+        let events = vec![
+            routing_event(&post_turn_correlation(7)),
+            AppEvent::PostTurnEvaluationDue {
+                planning_workspace_directory: "/other".to_string(),
+            },
+            AppEvent::PostTurnEvaluationDue {
+                planning_workspace_directory: "/workspace".to_string(),
+            },
+        ];
+        let route = PostTurnHostStep::RouteContinuation(Box::new(PostTurnRouteWork {
+            correlation: current.clone(),
+            execution: Box::new(post_turn_execution(&current)),
+            runtime: AppSnapshot::initial().conversation_runtime,
+        }));
+        let evaluation = PostTurnHostStep::StartEvaluation {
+            planning_workspace_directory: "/workspace".to_string(),
+        };
+
+        assert_eq!(post_turn_anchor_index(&events, &route), None);
+        assert_eq!(post_turn_anchor_index(&events, &evaluation), Some(2));
+
+        let mut outcome = CoreDispatchOutcome {
+            events: vec![AppEvent::ParallelModeSupervisorSnapshotInvalidated],
+            effects: Vec::new(),
+            snapshot: Arc::new(AppSnapshot::initial()),
+        };
+        let appended = CoreDispatchOutcome {
+            events: vec![AppEvent::ThreadActivityChanged(Vec::new())],
+            effects: Vec::new(),
+            snapshot: Arc::new(AppSnapshot::initial()),
+        };
+        splice_post_turn_step(&mut outcome, None, appended);
+        assert_eq!(
+            outcome.events,
+            vec![
+                AppEvent::ParallelModeSupervisorSnapshotInvalidated,
+                AppEvent::ThreadActivityChanged(Vec::new()),
+            ]
+        );
+    }
+
+    #[test]
+    fn missed_post_turn_markers_are_picked_up_on_the_next_dispatch() {
+        // plan 19 Q2-2: core inputs that bypass the host drop their markers. The next host dispatch (a Tick)
+        // still sees the due evaluation and then the awaiting route in the post-turn state and continues.
+        let mut runtime = native_client_runtime_for_routing_test();
+        let _ = runtime.dispatch_client_event(NativeClientEvent::core(CoreInput::Command(
+            AppCommand::PausePostTurnContinuation,
+        )));
+        let turn_correlation = runtime.begin_test_turn_submission();
+        for event in completed_turn_stream_events("thread-1", "turn-1") {
+            let _ = runtime
+                .core
+                .runtime
+                .dispatch_input(CoreInput::ConversationStreamUpdated {
+                    correlation: turn_correlation,
+                    event,
+                });
+        }
+        assert!(matches!(
+            runtime.core.runtime.next_post_turn_host_step(),
+            Some(PostTurnHostStep::StartEvaluation { .. })
+        ));
+
+        let NativeClientDispatchOutcome::Core(started) =
+            runtime.dispatch_client_event(NativeClientEvent::core(CoreInput::Tick {
+                now: Instant::now(),
+            }))
+        else {
+            panic!("starting an evaluation is a Core-only step");
+        };
+        assert!(
+            started
+                .events
+                .iter()
+                .any(|event| matches!(event, AppEvent::PostTurnEvaluationStarted(_))),
+            "the started evaluation reaches clients after the Tick events: {:?}",
+            started.events
+        );
+        let correlation = match &runtime.snapshot().conversation_runtime.post_turn {
+            PostTurnAuthoritySnapshot::Evaluating { correlation, .. } => correlation.clone(),
+            other => panic!("the next dispatch should start the evaluation: {other:?}"),
+        };
+
+        let _ = runtime
+            .core
+            .runtime
+            .dispatch_input(CoreInput::EffectCompleted(
+                CoreEffectCompletion::PostTurnEvaluationCompleted {
+                    correlation: correlation.clone(),
+                    execution: Box::new(post_turn_execution(&correlation)),
+                },
+            ));
+        let NativeClientDispatchOutcome::Combined { core, .. } =
+            runtime.dispatch_client_event(NativeClientEvent::core(CoreInput::Tick {
+                now: Instant::now(),
+            }))
+        else {
+            panic!("the next dispatch should route the awaiting evaluation");
+        };
+        assert!(core.events.iter().any(|event| matches!(
+            event,
+            AppEvent::PostTurnEvaluationCompleted { correlation: completed, .. }
+                if completed == &correlation
+        )));
+        assert!(runtime.core.runtime.next_post_turn_host_step().is_none());
+    }
+
+    /// 호스트를 거치지 않고 core 에 직접 넣어 경로 대기를 만든다. 표시 이벤트는 그대로 버려진다.
+    fn await_route_bypassing_host(
+        runtime: &mut NativeClientRuntime,
+        thread_id: &str,
+        turn_id: &str,
+    ) -> PostTurnEvaluationCorrelation {
+        let turn_correlation = runtime.begin_test_turn_submission();
+        for event in completed_turn_stream_events(thread_id, turn_id) {
+            let _ = runtime
+                .core
+                .runtime
+                .dispatch_input(CoreInput::ConversationStreamUpdated {
+                    correlation: turn_correlation,
+                    event,
+                });
+        }
+        let started = runtime
+            .core
+            .runtime
+            .dispatch_command(AppCommand::EvaluateCompletedTurn {
+                parallel_mode_enabled: false,
+                parallel_automation_epoch_id: None,
+            });
+        let [CoreEffect::EvaluatePostTurn { correlation, .. }] = started.effects.as_slice() else {
+            panic!("the due evaluation should start: {:?}", started.effects);
+        };
+        let correlation = correlation.clone();
+        let _ = runtime
+            .core
+            .runtime
+            .dispatch_input(CoreInput::EffectCompleted(
+                CoreEffectCompletion::PostTurnEvaluationCompleted {
+                    correlation: correlation.clone(),
+                    execution: Box::new(post_turn_execution(&correlation)),
+                },
+            ));
+        correlation
+    }
+
+    #[test]
+    fn the_host_settles_several_awaiting_routes_without_the_parallel_control_plane() {
+        let mut runtime = native_client_runtime_for_routing_test();
+        let background = await_route_bypassing_host(&mut runtime, "thread-1", "turn-1");
+        let _ = runtime
+            .core
+            .runtime
+            .dispatch_command(AppCommand::InvalidateConversationLoad);
+        let shown = await_route_bypassing_host(&mut runtime, "thread-2", "turn-2");
+        assert!(matches!(
+            runtime.core.runtime.next_post_turn_host_step(),
+            Some(PostTurnHostStep::SettleWithoutContinuation { correlations })
+                if correlations == vec![shown.clone(), background.clone()]
+        ));
+
+        let NativeClientDispatchOutcome::Core(settled) =
+            runtime.dispatch_client_event(NativeClientEvent::core(CoreInput::Tick {
+                now: Instant::now(),
+            }))
+        else {
+            panic!("settling without continuation never asks the parallel control plane");
+        };
+        assert!(settled.events.iter().any(|event| matches!(
+            event,
+            AppEvent::PostTurnEvaluationCompleted {
+                correlation,
+                route_resolution: PostTurnRouteResolution::NoContinuation,
+                ..
+            } if correlation == &shown
+        )));
+        assert!(runtime.core.runtime.next_post_turn_host_step().is_none());
+    }
+
+    #[test]
+    fn a_stale_marker_is_dropped_while_the_awaiting_route_is_routed_at_the_end() {
+        let mut runtime = native_client_runtime_for_routing_test();
+        let _ = runtime.dispatch_client_event(NativeClientEvent::core(CoreInput::Command(
+            AppCommand::PausePostTurnContinuation,
+        )));
+        let current = await_route_bypassing_host(&mut runtime, "thread-1", "turn-1");
+        let stale = post_turn_correlation(99);
+        let outcome = CoreDispatchOutcome {
+            events: vec![
+                routing_event(&stale),
+                AppEvent::ParallelModeSupervisorSnapshotInvalidated,
+            ],
+            effects: Vec::new(),
+            snapshot: Arc::new(AppSnapshot::initial()),
+        };
+
+        let NativeClientDispatchOutcome::Combined { core, .. } =
+            runtime.reconcile_post_turn(outcome)
+        else {
+            panic!("the awaiting route is routed");
+        };
+        // 오래된 표시는 지워지고, 경로 결정 결과는 표시가 없으므로 원래 이벤트 뒤에 붙는다.
+        assert!(matches!(
+            core.events.first(),
+            Some(AppEvent::ParallelModeSupervisorSnapshotInvalidated)
+        ));
+        assert!(core.events.iter().skip(1).any(|event| matches!(
+            event,
+            AppEvent::PostTurnEvaluationCompleted { correlation, .. } if correlation == &current
+        )));
+        assert!(
+            !core.events.iter().any(|event| matches!(
+                event,
+                AppEvent::PostTurnContinuationRoutingRequested { .. }
+            ))
+        );
+    }
+
+    fn completed_turn_stream_events(thread_id: &str, turn_id: &str) -> [TurnStreamEvent; 3] {
+        [
+            TurnStreamEvent::ThreadPrepared {
+                thread_id: thread_id.to_string(),
+                title: "Native routing".to_string(),
+                cwd: "/workspace".to_string(),
+                runtime_envelope: Box::<ConversationRuntimeEnvelope>::default(),
+            },
+            TurnStreamEvent::TurnStarted {
+                turn_id: turn_id.to_string(),
+                runtime_request: Box::<ConversationRuntimeConfigurationRequest>::default(),
+            },
+            TurnStreamEvent::TurnTerminal {
+                receipt: ConversationTurnTerminalReceipt::completed(thread_id, turn_id, Vec::new())
+                    .with_application_delivery(ConversationTurnApplicationDelivery::Confirmed),
+                execution_snapshot_capture: Some(TurnSnapshotCapture::capture_failed(
+                    "/workspace",
+                    "test capture skipped".to_string(),
+                )),
+            },
+        ]
     }
 
     #[test]
@@ -2020,26 +2153,6 @@ pub(crate) mod tests {
             parallel_turns,
             parallel,
         )
-    }
-
-    fn awaiting_route_snapshot(correlation: &PostTurnEvaluationCorrelation) -> AppSnapshot {
-        let mut snapshot = AppSnapshot::initial();
-        snapshot.conversation_runtime.post_turn = PostTurnAuthoritySnapshot::AwaitingRoute {
-            correlation: correlation.clone(),
-            started_at: Instant::now(),
-        };
-        snapshot
-    }
-
-    fn internal_routing_request(
-        correlation: &PostTurnEvaluationCorrelation,
-        event_index: usize,
-    ) -> InternalPostTurnRoutingRequest {
-        InternalPostTurnRoutingRequest {
-            event_index,
-            correlation: correlation.clone(),
-            execution: Box::new(post_turn_execution(correlation)),
-        }
     }
 
     fn routing_event(correlation: &PostTurnEvaluationCorrelation) -> AppEvent {
