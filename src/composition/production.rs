@@ -51,6 +51,7 @@ use crate::application::port::outbound::gateway_upstream_port::GatewayUpstreamPo
 use crate::application::port::outbound::github_automation_port::GithubAutomationPort;
 use crate::application::port::outbound::github_pr_validation_port::GithubPrValidationPort;
 use crate::application::port::outbound::github_review_poller_port::GithubReviewPollerPort;
+use crate::application::port::outbound::kernel_event_log_port::KernelEventLogPort;
 use crate::application::port::outbound::parallel_agent_profile_repository_port::ParallelAgentProfileRepositoryPort;
 use crate::application::port::outbound::parallel_agent_worker_port::ParallelAgentWorkerPort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
@@ -475,6 +476,11 @@ fn native_tui_workspace_dir() -> String {
 
 pub(crate) fn build_native_tui_application() -> NativeTuiApplicationComposition {
     build_native_application_for_workspace(&native_tui_workspace_dir(), None)
+}
+
+/// 커널의 판단 사건 기록이다 (plan 19 Q3-1). planning SQLite 의 `kernel_events` 표이다.
+pub(crate) fn kernel_event_log_port() -> Arc<dyn KernelEventLogPort> {
+    Arc::new(SqlitePlanningAuthorityAdapter::new())
 }
 
 /// 화면 없는 커널의 런타임이다 (plan 18 K3-4). 호출자는 먼저 그 저장소의 커널 잠금을 잡는다. 조립이 PR 검증

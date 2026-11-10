@@ -345,6 +345,9 @@ pub enum AppEvent {
         outcome: super::ThreadPromptOutcome,
     },
     ParallelModeSupervisorSnapshotInvalidated,
+    // 기록용 사건이다 (plan 19 Q3-1). 보지 않는 thread 의 판단도 낸다. 호스트가 꺼내 사건 기록에 쓰고, 클라이언트에는
+    // 보내지 않는다.
+    KernelRecorded(crate::domain::kernel_event::KernelEvent),
 }
 
 impl AppEvent {

@@ -11,6 +11,8 @@ pub(crate) mod conversation_item_lifecycle;
 pub(crate) mod conversation_progressive_activity;
 pub(crate) mod conversation_runtime_envelope;
 pub(crate) mod conversation_stream;
+// kernel_event 는 커널의 판단 사건이다. 추가 전용 기록에 쓰고 재시작할 때 판단 상태를 되돌린다 (plan 19 Q3).
+pub(crate) mod kernel_event;
 // github_review는 review thread와 polling 결과를 서비스가 다루기 쉬운 값으로 표현한다.
 pub(crate) mod github_review;
 // MCP hub 는 사용자당 하나인 MCP 서버 등록부와 도구 검색 규칙을 가진다.

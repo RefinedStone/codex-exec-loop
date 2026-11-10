@@ -6,6 +6,8 @@
 pub mod app_server_prompt_log_port;
 // conversation thread turn options keep user-selected model/effort scoped to an app-server thread.
 pub mod conversation_thread_turn_options_port;
+// kernel event log port 는 커널의 판단 사건을 저장소별 추가 전용 기록에 쓰고 읽는다 (plan 19 Q3).
+pub mod kernel_event_log_port;
 // gateway upstream port는 akra-gateway 세션마다 codex app-server 와 이어진 바이트 스트림을 연다.
 pub mod gateway_upstream_port;
 // GitHub automation port는 PR 생성, merge, comment 같은 쓰기 작업을 추상화한다.

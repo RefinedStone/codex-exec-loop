@@ -357,7 +357,7 @@ pub enum TurnSnapshotCaptureState {
     CaptureFailed(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TaskHandoff {
     pub task_id: String,
     pub task_title: String,
@@ -500,7 +500,7 @@ pub struct ManualPromptIntakeRequest {
     pub parent_turn_id: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ManualPromptMainSessionHandoff {
     pub prompt: String,
     pub transcript_text: String,

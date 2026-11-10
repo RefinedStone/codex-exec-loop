@@ -123,6 +123,58 @@ fn wait_worker_ready(ready: &std::sync::mpsc::Receiver<()>) {
 }
 
 #[test]
+fn kernel_events_append_in_order_and_skip_unknown_kinds() {
+    // plan 19 Q3-1: the log keeps order across appends; a row from a newer binary is skipped.
+    use crate::application::port::outbound::kernel_event_log_port::KernelEventLogPort;
+    use crate::domain::kernel_event::{KernelEvent, QueuedThreadPrompt, ThreadPromptSettlement};
+    let workspace = temp_workspace("kernel-events");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    assert!(
+        adapter
+            .load_kernel_events(&workspace)
+            .expect("an empty log should load")
+            .is_empty()
+    );
+    let queued = |task_id: &str| QueuedThreadPrompt {
+        thread_id: "thread-1".to_string(),
+        workspace_directory: workspace.clone(),
+        handoff: crate::domain::planning::ManualPromptMainSessionHandoff {
+            prompt: "planned prompt".to_string(),
+            transcript_text: "fix the test".to_string(),
+            task: None,
+        },
+        task_id: task_id.to_string(),
+    };
+    let first = KernelEvent::ThreadPromptQueued(queued("task-1"));
+    let second = queued("task-1").settled(ThreadPromptSettlement::Submitted);
+    let third = KernelEvent::ThreadPromptQueued(queued("task-2"));
+    adapter
+        .append_kernel_events(&workspace, &[first.clone(), second.clone()])
+        .expect("events should append");
+    let location =
+        SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(&workspace)
+            .expect("location should resolve");
+    open_authority_connection(&location)
+        .expect("store should open")
+        .execute(
+            "INSERT INTO kernel_events (kind, thread_id, payload_json, recorded_at)
+             VALUES ('future_kind', 'thread-1', '{\"kind\":\"future_kind\"}', 'now')",
+            [],
+        )
+        .expect("a future row should insert");
+    adapter
+        .append_kernel_events(&workspace, std::slice::from_ref(&third))
+        .expect("events should append");
+
+    assert_eq!(
+        adapter
+            .load_kernel_events(&workspace)
+            .expect("events should load"),
+        vec![first, second, third]
+    );
+}
+
+#[test]
 fn conversation_thread_turn_options_round_trip_and_keep_missing_rows_distinct() {
     let workspace = temp_workspace("conversation-thread-options");
     let adapter = SqlitePlanningAuthorityAdapter::new();

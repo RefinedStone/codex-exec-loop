@@ -2286,6 +2286,8 @@ impl NativeTuiApp {
                 // Core (route resolution, post-turn evaluation start) before TUI
                 // projection.
             }
+            // NativeClientRuntime takes kernel records out before any client sees them (plan 19 Q3-1).
+            AppEvent::KernelRecorded(_) => {}
             AppEvent::PostTurnEvaluationCompleted {
                 correlation,
                 execution,
