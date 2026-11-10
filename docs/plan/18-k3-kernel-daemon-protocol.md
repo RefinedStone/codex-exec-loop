@@ -4,7 +4,8 @@
 
 - 상태: **Proposed execution plan**, K3-1·K3-2·K3-3a·K3-3b·K3-4 완료. §3.2 는 2026-11-08 에 개정했다 (클라이언트별 보기 대신
   thread 를 지정하는 명령). §3.4 는 2026-11-09 에 개정했다 (커널 단위를 폴더에서 저장소로). §1, §3.1, §3.3 은
-  2026-11-09 K3 리뷰 두 번 뒤 v0 코드에 맞췄다 (§3.7). 현재 제품 동작을 설명하지 않는다.
+  2026-11-09 K3 리뷰 두 번 뒤 v0 코드에 맞췄다 (§3.7). K3-5 리뷰 반영(2026-11-10)과 커널 내리기 정책은 §3.7 에
+  적었다. 현재 제품 동작을 설명하지 않는다.
 - 상위 계획: [18 Akra 커널 아키텍처](18-akra-kernel-architecture.md) §4.1, §4.4, §5.3~§5.6, §6 K3. 결정
   KP-03, KP-04, KP-06 (승인 2026-11-07). Q-K3, Q-K6 답 (2026-11-07).
 - 이전 단계: [K1](18-k1-headless-decision-loop.md), [K2](18-k2-thread-sessions.md) (완료 2026-11-08).
@@ -105,7 +106,7 @@ adapter `src/adapter/inbound/kernel_protocol/` 에 둔다. core 는 직렬화를
 | `akra/kernel/command` | 요청 | `{ command }` → `{ processed, rejection? }`. 커널이 처리한 뒤 답한다. 바로 거절한 명령(`steer_turn`, `decide_approval`)은 `rejection` 에 이유 코드를 담는다. `submit_prompt` 의 진행과 거절은 `prompt_submission` 이벤트가 이유 코드와 함께 알린다 |
 | `akra/kernel/query` | 요청 | 세션 목록, 자동 후속 설정, thread 요약. 보는 대화의 턴 상태는 TUI 화면용이라 보내지 않는다 (§3.2). planning 투영은 K3-6 에서 더한다 |
 | `akra/kernel/event` | 알림 (서버→클라이언트) | `{ event }`. attach 뒤 자동으로 받는다. 대상 지정은 K6 (§1) |
-| `akra/kernel/detach` | 요청 | 클라이언트 세션을 닫는다. 접속이 끊겨도 같다 |
+| `akra/kernel/detach` | 요청 | 클라이언트 세션을 닫는다. 접속이 끊겨도 같다. 답 뒤에는 이벤트가 오지 않는다 |
 
 v0 명령은 화면 흐름 단계가 아니라 한 번에 끝나는 도메인 명령이다 (§5.5): 세션 목록 읽기, 프롬프트 제출(준비 +
 제출을 하나로), steer, 정지, 승인 결정, 자동 후속 설정, 이름 바꾸기, planning
@@ -140,7 +141,8 @@ git worktree 에서 틀린다. planning 기준 데이터는 저장소 단위이�
   돈다. 화면이 없으므로 `supervisor_view_active` 는 `false` 이다. supervisor 새로 고침은 화면에 보이기 위한
   주기적 점검이고, TUI 도 병렬 화면이 닫혀 있으면 `false` 를 보낸다. 배분과 정리는 이 값과 관계없이 돈다.
 - Gateway 는 저장소 신원마다 커널을 하나 둔다 (K3-5). 첫 attach 때 만들고, 클라이언트가 모두 떠나도 일이 남아
-  있으면(턴, 평가, 병렬, PR 검증) 계속 돈다.
+  있으면(턴, 평가, 병렬) 계속 돈다. 붙은 클라이언트도 남은 일도 없이 10분이 지나면 내린다 (§3.7 K3-5 리뷰).
+  커널의 작업 공간은 저장소의 대표 checkout 이다. 병렬 pool 안의 worktree 에서 붙으면 거절한다.
 - 병렬 정지가 다른 프로세스에 닿지 않는 문제(K-D3)는 모든 입구가 커널 하나를 거칠 때(K3-5, K4) 생기지 않는다.
 
 ### 3.5 TUI 와의 관계 (K6 전까지)
@@ -199,6 +201,55 @@ K3-1~K3-4 를 plan 19·20 방향과 함께 리뷰했다. 고친 것:
 - 명령 하나를 더할 때 enum, 이름 목록, 변환, 시험을 함께 고친다. 스펙 생성(K4, plan 19 Q4)이 대신한다.
 - `NativeClientRuntime`·`NativeTuiApplicationComposition` 이름은 plan 18 §5.9 대로 마지막에 바꾼다.
 
+#### K3-5 리뷰 반영 (2026-11-10)
+
+K3-5 병합 범위(`526f93a3..43e1d5c5`)를 리뷰했다. 지적 8개를 모두 코드와 실패하는 시험으로 확인했다(결함 아님으로
+본 것은 없다). 고친 것:
+
+1. Gateway 종료 순서. 접속 작업이 목록 `Arc` 를 쥐고, 바이너리는 `exit` 로 끝나 소멸자가 돌지 않았다. 그래서
+   `drop(kernels)` 는 커널을 멈추지 못했고 upstream app-server 가 먼저 멈췄다. 이제 `RepositoryKernelRegistry::shutdown`
+   이 커널마다 병렬 자동화를 멈추고, 호스트 스레드를 기다리고, 잠금을 푼 뒤 붙기를 거절한다. Gateway 는 이것을
+   upstream 보다 먼저 부른다. 시험: `shutdown_stops_kernels_that_sessions_still_share`,
+   `gateway_stop_stops_kernels_before_the_upstream_app_server`.
+2. 읽기 고리 막힘. 접속의 읽기 고리가 커널 호출을 기다려 승인 답과 중단 전달이 멈췄다. 이제 접속마다 작업 하나가 커널
+   요청을 차례대로 처리하고 답을 보내기 함으로 보낸다(같은 접속의 요청 순서와 id 는 그대로). 커널 호출은 시간 상한이
+   있다(붙기 60초, 명령·조회 10초, 넘으면 `-32013`). 목록 잠금은 자리를 찾을 때만 잡고, 저장소마다 자리 잠금을 둔다.
+   그래서 커널 만들기는 같은 저장소의 붙기만 기다리게 하고, 두 worktree 는 여전히 한 커널을 쓴다. 시험:
+   `a_waiting_kernel_attach_does_not_block_app_server_forwarding`, `a_slow_kernel_start_does_not_block_another_repository`.
+3. 늦은 작업 스레드의 slot 반환. epoch 가 닫힌 뒤 시작하지 않는 작업 스레드가 worktree 경로로 slot 을 돌려줬다.
+   이제 lease 세대(`finalize_stream_completion_for_lease`)로 막는다. 시험:
+   `a_late_worker_does_not_release_a_slot_that_a_new_epoch_leased_again`.
+4. 커널 작업 공간. 처음 붙은 경로가 커널의 병렬 작업 공간이 됐고, slot worktree 에서 붙어도 커널을 만들었다. 이제
+   작업 공간은 저장소의 대표 checkout(planning 기준 데이터의 `canonical_repo_root`)이고, 병렬 pool 안에서 붙으면
+   이유와 함께 거절한다. 시험: `a_kernel_attached_from_a_linked_worktree_works_in_the_primary_checkout`,
+   `a_parallel_slot_worktree_does_not_create_a_kernel`.
+5. 접속 정리 2초. 커널 세션이 보내기 함 송신자를 쥐어, 클라이언트가 닫을 때마다 쓰기 작업이 2초 상한까지 기다렸다.
+   이제 커널 요청 작업을 먼저 끝낸다. 시험: `a_client_close_ends_the_session_without_waiting_for_the_flush_timeout`.
+6. 떼어 낸 뒤 이벤트. 이전 이벤트 스레드가 최대 200ms 더 이벤트를 보냈고, 다시 붙으면 이벤트가 두 번 왔다. 이제
+   떼어 내기와 다시 붙기는 호스트에서 클라이언트를 떼고 이벤트 스레드가 끝난 뒤 답한다. 스레드는 멈춤 표시를 본 뒤
+   보내지 않고, 보내기 함이 차도 멈춤 표시를 본다. 다시 붙기는 이전 붙음을 먼저 떼므로, 새 붙기가 실패하면 그 접속은
+   붙지 않은 상태가 된다. 시험: `no_kernel_event_reaches_a_client_after_its_detach_response`,
+   `attaching_again_does_not_duplicate_kernel_events`.
+7. proxy 핸드셰이크 상한. 답하지 않는 proxy 가 커널의 app-server 호출을 모두 멈췄다. 이제 10초 상한이 있고, stderr
+   읽기는 핸드셰이크 전에 시작한다. 시험: `the_handshake_gives_up_when_the_proxy_never_answers`.
+8. 커널 내리기(승인한 정책). 붙은 클라이언트가 없고 남은 일이 없는 채로 10분(`KERNEL_IDLE_UNLOAD_AFTER`)이 지난
+   커널을 Gateway 가 30초마다 찾아 1번과 같은 순서로 내린다. 그러면 TUI 가 잠금을 잡을 수 있고, 다음 붙기가 커널을
+   다시 만든다. 남은 일은 지금 커널 상태로 정한다(`NativeClientRuntime::has_remaining_work`): core 의 바쁜 thread
+   session(턴, 대기 승인, 자동 후속, 평가, 정지, steer)과 진행 중인 planning 작업(프롬프트 준비, 큐 변경, 작업 공간
+   작업), 병렬 제어부의 켜진 병렬 모드, 열린 automation epoch, 진행 중인 제어 효과, 도는 배분 작업 스레드(automation
+   guard 의 새 수). 시험: `an_idle_kernel_unloads_and_the_next_attach_starts_it_again`,
+   `a_kernel_is_idle_only_without_clients_and_work`, `remaining_work_keeps_the_kernel_busy`.
+
+남긴 것:
+
+- PR 검증 스케줄러와 GitHub 리뷰 폴링은 남은 일로 보지 않는다(승인한 정책 목록 밖). 병렬 모드가 켜져 있으면 커널은
+  내려가지 않는다. 꺼진 저장소의 폴링은 커널과 함께 멈추고 다음 붙기에서 다시 시작한다.
+- 병렬 제어부의 정리 재시도 목록(`unsettled_dispatch_cleanups`)은 프로세스 메모리이고, 설계상 재시작 때 잃어도
+  기준 데이터에서 다시 찾는다. 그래서 남은 일로 보지 않는다.
+- 종료와 내리기는 이미 도는 배분 작업 스레드를 기다리지 않는다(epoch 를 닫을 뿐이다). Gateway 종료 때 그 slot 턴은
+  upstream 이 멈추면서 전송 오류로 끝나고 실패로 기록될 수 있다. 내리기는 작업 스레드가 없을 때만 한다.
+- 시간을 넘긴 명령은 커널이 나중에 처리할 수 있다. 클라이언트는 조회로 결과를 확인한다.
+
 ## 4. 단계 (PR 단위)
 
 | 단계 | 내용 | 기존 동작 | 검증 |
@@ -208,7 +259,7 @@ K3-1~K3-4 를 plan 19·20 방향과 함께 리뷰했다. 고친 것:
 | K3-3a (완료 2026-11-08) | §3.2 승인 결정은 승인 id 로, steer 는 thread id 로 주인 session 을 찾는다. thread 요약에 보는 thread, 진행 중 턴 id, 기다리는 승인을 넣는다. v0 에서 대화 열기·새 초안을 뺀다 | 유지 (TUI 의 세션 목록 표시는 보는 thread 에도 붙는다) | core 시험: 보지 않는 thread 의 승인을 결정하고 steer 한다 |
 | K3-3b (완료 2026-11-09) | §3.2 thread 를 지정한 프롬프트 제출. core 명령 `SubmitThreadPrompt` 가 준비(`PrepareManualPrompt` 와 같은 효과) 뒤 제출(`SubmitTurn` 과 같은 admission)을 잇는다. 그 thread 의 session 이 없으면 보는 session 의 설정으로 뒤에 새로 만든다. 보는 자리는 바꾸지 않는다. 프로토콜 `submit_prompt` 와 진행 이벤트 `prompt_submission`(preparing, submitted, rejected, failed). 설계와 다른 점: (1) 모르는 thread 는 거절한다. 아는 thread 는 보는 thread, 일이 남은 thread, 읽은 세션 목록(첫 페이지)의 thread 이다. (2) planning 초안 검토가 필요한 준비 결과는 원격에서 검토할 수 없어 실패로 알린다. (3) 병렬 모드가 켜져 있으면 준비 전에 거절한다(`RejectedParallelMode`). 병렬 작업 intake 는 아직 TUI 에만 있고, main session 턴으로 내면 같은 작업이 병렬 slot 에도 나갈 수 있다. 사용 여부는 호스트가 병렬 제어부 값으로 채운다. 이미지 첨부는 없다. (4) TUI 는 지금처럼 자기 준비 → 제출 경로를 쓴다. (5) 준비 칸은 TUI 와 같이 쓴다. TUI 가 대화를 바꿀 때 보내는 준비 취소는 thread 를 지정한 준비를 취소하지 않는다 | 확장 | core 시험: 보지 않는 thread 에 제출하면 턴 효과가 나오고 보는 자리는 쉰다. 모르는 thread, 일하는 중, 병렬 모드, 다른 준비 진행 중, 준비 실패, TUI 의 대화 전환 뒤에도 원격 준비가 제출된다. 프로토콜 왕복·변환·이벤트·`describe`. 호스트 시험: 명령 → 턴 실행 |
 | K3-4 (완료 2026-11-09) | §3.4 저장소 잠금과 저장소당 커널. 설계와 다른 점: 커널 단위를 폴더에서 저장소로 고쳤다(§3.4 개정). 잠금은 `$AKRA_HOME/projects/<namespace>/runtime/kernel.lock` 이다. composition `build_kernel_for_workspace(folder)` 가 잠금을 먼저 잡고, 런타임을 조립하고, 병렬 보기(그 폴더, `supervisor_view_active = false`)를 정한 뒤 `KernelHost` 를 시작한다. 커널을 버리면 호스트 스레드가 끝난 뒤 잠금이 풀린다. TUI 도 시작할 때 같은 잠금을 잡는다. 저장소별 커널 목록(registry)은 Gateway 가 커널의 수명(클라이언트가 떠난 뒤)과 비동기 접속 사이의 공유를 정해야 하므로 K3-5 로 옮겼다. 데몬 커널의 GitHub 리뷰 폴링 설정도 K3-5 에서 넘긴다 | 바뀜: 같은 저장소에서 TUI 둘, 또는 TUI 와 데몬 커널이 함께 돌지 않는다. 두 번째 TUI 는 이유를 보이고 끝난다 | 잠금 경합 시험(다른 worktree 에서 두 번째 잠금 거절, 다른 저장소는 둘 다 성공, 쥔 쪽이 버리면 풀림), 조립 때 병렬 보기 설정, 커널 시작 뒤 잠금 유지, TUI 시작 거절 메시지 |
-| K3-5 (완료 2026-11-10) | Gateway 가 `akra/kernel/*` 를 커널 호스트에 연결한다. Q-K3-6 을 확인했다(공유할 수 있다). Gateway 는 `RepositoryKernelRegistry` 를 가지고, 세션은 `akra/kernel/*` 를 `gateway/kernel.rs` 로 보낸다(attach, describe, command, query, detach, event 알림). 붙기 전 요청은 `-32011`, 커널에 닿지 못하면 `-32012`. 커널의 app-server adapter 는 `codex app-server proxy` 위 WebSocket (`proxy_transport.rs`)으로 Gateway upstream 을 쓴다. 조회 응답은 같은 이름의 이벤트와 같은 모양이다. 먼저 한 일: 커널 종료 순서와 저장소별 커널 목록(아래), 리뷰에서 막은 epoch 확인 틈. (1) 커널 종료 순서. `NativeClientRuntime` 을 버리면 병렬 제어부의 자동화 epoch 를 모두 닫는다(저장한 병렬 모드 설정은 그대로). 커널은 호스트 스레드에서 런타임을 버린 뒤 잠금을 푼다. 이전 작업 스레드(orchestrator tick, 배분, 작업 실행)는 다음 epoch 확인에서 멈춘다. 리뷰(2026-11-10)에서 확인 뒤 guard 없이 바꾸는 경로 세 개를 막았다: 배분된 작업 스레드는 턴 시작 전에 epoch 를 다시 보고 slot 을 돌려준다, distributor 큐 넣기는 epoch commit 안에서 한다, slot 턴 뒤 planning 갱신은 epoch 에 묶인 continuation permit 으로 결과를 적용한다(갱신 자체는 오래 걸리므로 잠금을 쥐지 않는다). 남은 틈: 배분 확인과 턴 시작 사이의 아주 짧은 틈(코드 `shortcut`), 그리고 slot lease 상태 기록. 이미 시작한 slot 작업 턴은 끝까지 돌지만 그 뒤 큐를 바꾸지 않는다. (2) 저장소별 커널 목록 `RepositoryKernelRegistry`. 처음 붙을 때 커널을 만들고, 같은 저장소의 다른 worktree 는 같은 커널에 붙는다. 클라이언트가 모두 떠나도 커널은 남는다(자동 후속과 병렬 배분은 클라이언트 없이 돈다). 목록을 버리면(Gateway 종료) 커널이 멈추고 잠금을 푼다. 설계와 다른 점: 병렬 제어부 이벤트는 아직 보내지 않는다(K3-6). 알려진 한계: 계정 사용량 한도로 실제 턴을 커널 경로로 돌려 보지 못했다. 공유 app-server 에서 승인 요청이 어느 연결로 가는지(커널, 또는 thread 를 resume 한 Desktop 도) 확인하지 못했다 | 확장 | Gateway 시험: attach → command → event, 붙기 전 거절, detach 뒤 거절, 조회 응답 모양. proxy 전송: 핸드셰이크 검사 단위 시험, 실제 codex 로 초기화·계정·세션 목록(`--ignored`). 호스트를 버리면 epoch 가 닫힌다, epoch 가 닫힌 뒤 배분된 작업 스레드는 턴을 시작하지 않는다, 큐 넣기 중에 epoch 가 닫히면 결과는 commit-ready 로 남는다, epoch permit 은 epoch 와 함께 무효가 된다, 목록은 저장소당 커널 하나를 두고 클라이언트가 떠나도 잠금을 쥐며 목록을 버리면 잠금을 푼다. 남은 시험: 커널을 실제로 다시 만들어 이전 작업 스레드가 배분하지 않음(Gateway 연결 때) |
+| K3-5 (완료 2026-11-10) | Gateway 가 `akra/kernel/*` 를 커널 호스트에 연결한다. Q-K3-6 을 확인했다(공유할 수 있다). Gateway 는 `RepositoryKernelRegistry` 를 가지고, 세션은 `akra/kernel/*` 를 `gateway/kernel.rs` 로 보낸다(attach, describe, command, query, detach, event 알림). 붙기 전 요청은 `-32011`, 커널에 닿지 못하면 `-32012`, 커널이 시간 안에 답하지 않으면 `-32013`(2026-11-10 리뷰 뒤). 커널의 app-server adapter 는 `codex app-server proxy` 위 WebSocket (`proxy_transport.rs`)으로 Gateway upstream 을 쓴다. 조회 응답은 같은 이름의 이벤트와 같은 모양이다. 먼저 한 일: 커널 종료 순서와 저장소별 커널 목록(아래), 리뷰에서 막은 epoch 확인 틈. (1) 커널 종료 순서. `NativeClientRuntime` 을 버리면 병렬 제어부의 자동화 epoch 를 모두 닫는다(저장한 병렬 모드 설정은 그대로). 커널은 호스트 스레드에서 런타임을 버린 뒤 잠금을 푼다. 이전 작업 스레드(orchestrator tick, 배분, 작업 실행)는 다음 epoch 확인에서 멈춘다. 리뷰(2026-11-10)에서 확인 뒤 guard 없이 바꾸는 경로 세 개를 막았다: 배분된 작업 스레드는 턴 시작 전에 epoch 를 다시 보고 slot 을 돌려준다, distributor 큐 넣기는 epoch commit 안에서 한다, slot 턴 뒤 planning 갱신은 epoch 에 묶인 continuation permit 으로 결과를 적용한다(갱신 자체는 오래 걸리므로 잠금을 쥐지 않는다). 남은 틈: 배분 확인과 턴 시작 사이의 아주 짧은 틈(코드 `shortcut`). 시작하지 않는 작업 스레드의 slot 반환은 K3-5 리뷰 뒤 lease 세대로 막았다(§3.7). 이미 시작한 slot 작업 턴은 끝까지 돌지만 그 뒤 큐를 바꾸지 않는다. (2) 저장소별 커널 목록 `RepositoryKernelRegistry`. 처음 붙을 때 커널을 만들고, 같은 저장소의 다른 worktree 는 같은 커널에 붙는다. 클라이언트가 모두 떠나도 커널은 남는다(자동 후속과 병렬 배분은 클라이언트 없이 돈다). Gateway 가 끝날 때 `shutdown` 이 upstream 보다 먼저 커널을 멈추고 잠금을 푼다. 붙은 클라이언트도 남은 일도 없이 10분이 지난 커널은 내린다(K3-5 리뷰, §3.7). 설계와 다른 점: 병렬 제어부 이벤트는 아직 보내지 않는다(K3-6). 알려진 한계: 계정 사용량 한도로 실제 턴을 커널 경로로 돌려 보지 못했다. 공유 app-server 에서 승인 요청이 어느 연결로 가는지(커널, 또는 thread 를 resume 한 Desktop 도) 확인하지 못했다 | 확장 | Gateway 시험: attach → command → event, 붙기 전 거절, detach 뒤 거절, 조회 응답 모양. proxy 전송: 핸드셰이크 검사 단위 시험, 실제 codex 로 초기화·계정·세션 목록(`--ignored`). 호스트를 버리면 epoch 가 닫힌다, epoch 가 닫힌 뒤 배분된 작업 스레드는 턴을 시작하지 않는다, 큐 넣기 중에 epoch 가 닫히면 결과는 commit-ready 로 남는다, epoch permit 은 epoch 와 함께 무효가 된다, 목록은 저장소당 커널 하나를 두고 클라이언트가 떠나도 잠금을 쥐며 목록을 버리면 잠금을 푼다. 남은 시험: 커널을 실제로 다시 만들어 이전 작업 스레드가 배분하지 않음(Gateway 연결 때). K3-5 리뷰 시험은 §3.7 |
 | K3-6 | Desktop 이 `akra/kernel/*` 로 세션 활동, 자동 후속, 병렬 작업 상태, planning 큐를 보인다. 병렬 제어부 이벤트의 프로토콜 변환과 planning 투영 조회를 여기서 더한다 | 확장 | Desktop 시험, 숨긴 창 텍스트 캡처 |
 
 규모: plan 18 추정 5~10일을 유지한다. K3-3 이 가장 컸다 (thread 를 지정한 명령과 원격 프롬프트 제출).

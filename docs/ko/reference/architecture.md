@@ -558,17 +558,31 @@ Host 소유 Git 작업은 다음을 지킵니다.
 `build_kernel_for_workspace`(`src/composition/repository_kernel.rs`)는 런타임을 조립하기 전에 이 잠금을 잡고,
 커널을 버리면 호스트 스레드가 끝난 뒤 풀립니다.
 
-`akra-gateway` 는 `RepositoryKernelRegistry`(저장소당 커널 하나)를 가집니다. Gateway 세션은 `akra/kernel/*` 를
-`src/adapter/inbound/gateway/kernel.rs` 로 보내고, 이 모듈은 블로킹 커널 핸들을 `spawn_blocking` 으로 부르며
-붙은 접속마다 이벤트 스레드 하나를 둡니다. Gateway 가 만든 커널은 app-server adapter 를 Gateway upstream 에
-붙입니다. `AppServerTransport::GatewayProxy` 가 `codex app-server proxy --sock …` 을 띄우고,
-`src/adapter/outbound/app_server/proxy_transport.rs` 가 그 stdio 위에서 WebSocket 으로 말합니다. text 메시지
-하나를 JSON 한 줄로 바꾸므로 줄 단위 연결 코드는 그대로입니다.
+`akra-gateway` 는 `RepositoryKernelRegistry`(저장소당 커널 하나)를 가집니다. 목록 잠금은 자리를 찾을 때만
+잡고, 저장소마다 자리 잠금이 따로 있습니다. 그래서 커널 만들기가 오래 걸려도 같은 저장소의 붙기만 기다립니다.
+커널의 작업 공간은 어느 worktree 에서 먼저 붙어도 저장소의 대표 checkout 입니다. 병렬 pool(slot worktree)
+안에서 붙으면 거절합니다. Gateway 세션은 `akra/kernel/*` 를 `src/adapter/inbound/gateway/kernel.rs` 로
+보냅니다. 접속마다 작업 하나가 커널 요청을 차례대로 처리하고 답을 접속의 보내기 함으로 보냅니다. 그래서 커널
+호출을 기다리는 동안에도 읽기 고리는 app-server 메시지를 계속 전달합니다. 커널 호출은 `spawn_blocking` 으로
+부르고 시간 상한이 있습니다(붙기 60초, 명령과 조회 10초, 오류 `-32013`). 붙은 접속마다 이벤트 스레드 하나를
+둡니다. 떼어 내기와 다시 붙기는 호스트에서 클라이언트를 떼고 그 스레드가 끝난 뒤 답합니다.
+
+Gateway 는 끝날 때 upstream app-server 를 멈추기 전에 `RepositoryKernelRegistry::shutdown` 을 부릅니다. 접속이
+목록을 아직 쥐고 있어도 커널마다 병렬 자동화 epoch 를 닫고, 호스트 스레드를 기다리고, 잠금을 풉니다. Gateway 는
+30초마다, 붙은 클라이언트도 남은 일도 없이 10분이 지난 커널을 같은 순서로 내립니다. 그러면 TUI 가 그 저장소
+잠금을 잡을 수 있고, 다음 붙기가 커널을 다시 만듭니다. 남은 일은 `NativeClientRuntime::has_remaining_work` 가
+정합니다. core 의 바쁜 thread session 이나 진행 중인 planning 작업, 또는 병렬 제어부의 켜진 병렬 모드, 열린
+epoch, 진행 중인 제어 효과, 도는 배분 작업 스레드입니다.
+
+Gateway 가 만든 커널은 app-server adapter 를 Gateway upstream 에 붙입니다. `AppServerTransport::GatewayProxy` 가
+`codex app-server proxy --sock …` 을 띄우고, `src/adapter/outbound/app_server/proxy_transport.rs` 가 그 stdio
+위에서 WebSocket 으로 말합니다. text 메시지 하나를 JSON 한 줄로 바꾸므로 줄 단위 연결 코드는 그대로입니다. proxy
+핸드셰이크는 10초 상한이 있고, stderr 읽기는 핸드셰이크 전에 시작합니다.
 
 `NativeClientRuntime` 을 버리면 먼저 병렬 자동화 epoch 를 모두 닫습니다. 커널은 호스트 스레드에서 런타임을
 버리므로 epoch 가 잠금보다 먼저 닫힙니다. 이전 런타임의 작업 스레드는 다음 epoch 확인에서 멈춥니다.
 
-- 배분된 작업 스레드는 slot 턴을 시작하지 않고 slot 을 돌려줍니다.
+- 배분된 작업 스레드는 slot 턴을 시작하지 않고 자기 lease 세대의 slot 만 돌려줍니다.
 - distributor 큐 넣기는 열린 epoch 안에서만 commit 합니다.
 - slot 턴 뒤의 planning 갱신은 epoch 에 묶인 continuation permit 으로, epoch 가 열려 있을 때만 결과를
   적용합니다.

@@ -278,11 +278,18 @@ the desktop app itself is not shipped yet.
 - Kernel protocol (`akra/kernel/*`, plan 18 K3 protocol v0): a client sends `akra/kernel/attach`
   with a workspace and attaches to the kernel of the repository that holds it. The Gateway builds that
   kernel on first attach and keeps it after clients leave, so auto-follow and parallel dispatch keep
-  running. Worktrees of one repository share one kernel. If another process (a TUI) runs the kernel
-  of that repository, attach fails with `-32012`. After attach the client sends
-  `akra/kernel/command` and `akra/kernel/query` and receives `akra/kernel/event` notifications;
-  requests before attach fail with `-32011`. `akra/kernel/describe` lists methods, commands, queries,
-  and events. Parallel control events and the planning query are not exported yet (K3-6).
+  running. Worktrees of one repository share one kernel, which works in the primary checkout. An
+  attach from an Akra parallel slot worktree fails. If another process (a TUI) runs the kernel of that
+  repository, attach fails with `-32012`. After attach the client sends `akra/kernel/command` and
+  `akra/kernel/query` and receives `akra/kernel/event` notifications; requests before attach fail
+  with `-32011`, and a kernel that does not answer in time fails with `-32013` (a command may still
+  run). No event arrives after the `akra/kernel/detach` answer. `akra/kernel/describe` lists methods,
+  commands, queries, and events. Parallel control events and the planning query are not exported yet
+  (K3-6).
+- A kernel with no attached client and no remaining work (turns, approvals, auto-follow, evaluation,
+  planning work, parallel mode on, or running parallel work) for 10 minutes is unloaded, and its
+  repository lock is free for a TUI. The next attach starts it again. Gateway shutdown stops the
+  kernels before the upstream app-server.
 - The kernel uses the Gateway upstream app-server through its own `codex app-server proxy`
   connection, so a client can `thread/resume` a thread that the kernel runs and receive its turn
   notifications live.
