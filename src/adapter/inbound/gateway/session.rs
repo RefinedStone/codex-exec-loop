@@ -15,7 +15,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
 
-use super::kernel::{KERNEL_METHOD_PREFIX, KernelSession};
+use super::kernel::{KERNEL_METHOD_PREFIX, KernelRequests};
 use super::recorder::{GatewayRecorder, RecordDirection, SessionRecording};
 use super::router::{ClientTextRoute, respond_to_akra_request, route_client_text};
 use crate::application::port::outbound::gateway_upstream_port::{
@@ -54,7 +54,7 @@ pub(super) async fn run_session<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    let recording = open_recording(recorder.as_deref());
+    let recording = open_recording(recorder.as_deref()).map(Arc::new);
     let record = |direction: RecordDirection, text: &str| {
         if let Some(recording) = &recording {
             recording.record(direction, text);
@@ -93,8 +93,8 @@ where
         }
         let _ = client_sink.close().await;
     });
-    // 접속이 끝나면 함께 버려져 커널에서 떨어진다.
-    let mut kernel = KernelSession::new(kernels, outbox.clone());
+    // 커널 요청은 따로 처리한다. 읽기 고리는 커널을 기다리지 않고 app-server 메시지를 계속 전달한다.
+    let kernel_requests = KernelRequests::start(kernels, outbox.clone(), recording.clone());
 
     let client_to_upstream = async {
         while let Some(result) = client_stream.next().await {
@@ -115,14 +115,18 @@ where
                     }
                     ClientTextRoute::AkraRequest { id, method } => {
                         record(RecordDirection::Client, text.as_str());
-                        let response = if method.starts_with(KERNEL_METHOD_PREFIX) {
-                            kernel.respond(id, &method, text.as_str()).await
+                        let immediate = if method.starts_with(KERNEL_METHOD_PREFIX) {
+                            kernel_requests
+                                .submit(id, method, text.as_str().to_string())
+                                .err()
                         } else {
-                            respond_to_akra_request(id, &method, &upstream.snapshot())
+                            Some(respond_to_akra_request(id, &method, &upstream.snapshot()))
                         };
-                        record(RecordDirection::Gateway, &response);
-                        if outbox.send(Message::text(response)).await.is_err() {
-                            return SessionEnd::ClientClosed;
+                        if let Some(response) = immediate {
+                            record(RecordDirection::Gateway, &response);
+                            if outbox.send(Message::text(response)).await.is_err() {
+                                return SessionEnd::ClientClosed;
+                            }
                         }
                     }
                     ClientTextRoute::AkraNotification { method } => {
@@ -197,6 +201,8 @@ where
             ))
             .await;
     }
+    // 커널 요청 작업과 이벤트 스레드도 보내기 함을 쥔다. 먼저 끝내야 쓰기 작업이 밀린 메시지를 보낸 뒤 바로 끝난다.
+    kernel_requests.stop().await;
     drop(outbox);
     let _ = tokio::time::timeout(CLIENT_CLOSE_FLUSH_TIMEOUT, writer).await;
     tracing::debug!(?end, "gateway session ended");

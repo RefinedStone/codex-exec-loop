@@ -46,6 +46,8 @@ pub const ERROR_CONFIRMATION_REQUIRED: i64 = -32010;
 pub const ERROR_NOT_ATTACHED: i64 = -32011;
 /// 커널에 붙거나 닿지 못했다. 예: 다른 프로세스(TUI)가 그 저장소의 커널을 돌린다, 커널이 끝났다.
 pub const ERROR_KERNEL_UNAVAILABLE: i64 = -32012;
+/// 커널이 정한 시간 안에 답하지 않았다. 명령은 그 뒤에 처리될 수 있으므로, 클라이언트는 조회로 결과를 확인한다.
+pub const ERROR_KERNEL_TIMEOUT: i64 = -32013;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KernelProtocolError {

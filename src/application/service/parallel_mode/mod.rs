@@ -154,6 +154,20 @@ const NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_DETAIL: &str =
 const NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_NEXT_ACTION: &str =
     "inspect the slot branch, merge or discard it manually, then rerun reconcile";
 
+/// 그 작업 공간이 저장소의 병렬 pool(slot worktree 와 통합 worktree) 안에 있다. 두 경로 모두 정규화한 값이어야
+/// 한다. pool 안의 worktree 는 커널이 관리하는 작업 공간이므로 커널을 만들지 않는다 (plan 18 §3.4).
+pub(crate) fn workspace_is_inside_parallel_pool(
+    canonical_repo_root: &std::path::Path,
+    workspace: &std::path::Path,
+) -> bool {
+    workspace.starts_with(parallel_pool_root(canonical_repo_root))
+}
+
+/// 저장소의 병렬 pool 위치이다. slot worktree 는 이 아래의 `slot-<n>` 이다.
+pub(crate) fn parallel_pool_root(canonical_repo_root: &std::path::Path) -> std::path::PathBuf {
+    derive_default_pool_root(canonical_repo_root)
+}
+
 fn unavailable_integration_branch_label(error: &str) -> String {
     format!("unavailable (invalid integration branch configuration: {error})")
 }

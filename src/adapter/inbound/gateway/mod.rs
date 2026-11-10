@@ -78,11 +78,21 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
     );
 
     serve(listener, upstream.clone(), kernels.clone(), recorder).await;
-    // 커널을 먼저 멈춘다. 커널의 app-server 연결은 upstream 을 쓴다.
-    drop(kernels);
-    upstream.shutdown();
+    stop_backend(upstream, kernels).await;
     tracing::info!("akra_gateway_stopped");
     Ok(())
+}
+
+/// 커널을 먼저 멈추고 그 뒤에 upstream app-server 를 멈춘다. 커널의 app-server 연결과 병렬 작업 턴은 upstream 을
+/// 쓴다. 접속 작업이 목록을 아직 쥐고 있어도 커널은 멈춘다. 프로세스는 이 뒤 `exit` 로 끝나 소멸자가 돌지 않는다.
+async fn stop_backend(
+    upstream: Arc<dyn GatewayUpstreamPort>,
+    kernels: Arc<RepositoryKernelRegistry>,
+) {
+    if let Err(error) = tokio::task::spawn_blocking(move || kernels.shutdown()).await {
+        tracing::warn!(error = %error, "repository kernel shutdown failed");
+    }
+    upstream.shutdown();
 }
 
 fn parse_args(args: &[String]) -> Result<GatewayCommand> {

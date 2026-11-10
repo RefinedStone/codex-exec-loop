@@ -376,3 +376,236 @@ async fn a_client_attaches_commands_and_receives_kernel_events() {
     drop(kernels);
     let _ = std::fs::remove_dir_all(&folder);
 }
+
+/// 커널 시험 폴더이다. 끝나면 지운다.
+struct KernelTestFolder {
+    path: std::path::PathBuf,
+}
+
+impl KernelTestFolder {
+    fn new(label: &str) -> Self {
+        let path = crate::test_utils::platform_safe_temp_dir().join(format!(
+            "akra-gateway-kernel-{label}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        Self { path }
+    }
+
+    fn workspace(&self) -> String {
+        self.path.display().to_string()
+    }
+}
+
+impl Drop for KernelTestFolder {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+async fn attach_kernel(
+    client: &mut WebSocketStream<DuplexStream>,
+    id: &str,
+    workspace: &str,
+) -> Value {
+    let attached = kernel_request(
+        client,
+        id,
+        "akra/kernel/attach",
+        json!({"workspace": workspace, "client_name": "gateway-test"}),
+    )
+    .await;
+    assert!(attached["result"]["kernel"].is_string(), "{attached}");
+    attached
+}
+
+fn set_max_turns_command(id: &str, value: u32) -> Message {
+    Message::text(
+        json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "akra/kernel/command",
+            "params": {"command": {"type": "set_auto_follow_max_turns", "value": value}},
+        })
+        .to_string(),
+    )
+}
+
+/// 조용한 시간이 올 때까지 받은 텍스트 메시지를 모은다.
+async fn texts_until_quiet(
+    websocket: &mut WebSocketStream<DuplexStream>,
+    quiet: Duration,
+) -> Vec<Value> {
+    let mut texts = Vec::new();
+    while let Ok(Some(Ok(message))) = tokio::time::timeout(quiet, websocket.next()).await {
+        if let Message::Text(text) = message {
+            texts.push(serde_json::from_str(text.as_str()).unwrap());
+        }
+    }
+    texts
+}
+
+const QUIET_WINDOW: Duration = Duration::from_millis(700);
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_client_close_ends_the_session_without_waiting_for_the_flush_timeout() {
+    // K3-5 review: the kernel session kept an outbox sender, so the writer waited 2 s on every close.
+    let (client_side, gateway_side) = tokio::io::duplex(DUPLEX_BUFFER_BYTES);
+    let session = tokio::spawn(run_session(
+        gateway_side,
+        EchoUpstream::new(true),
+        Arc::new(crate::composition::repository_kernel::RepositoryKernelRegistry::default()),
+        None,
+    ));
+    let (mut client, _) = tokio_tungstenite::client_async_with_config(
+        "ws://localhost/",
+        client_side,
+        Some(websocket_config()),
+    )
+    .await
+    .unwrap();
+
+    client.close(None).await.unwrap();
+
+    tokio::time::timeout(Duration::from_secs(1), session)
+        .await
+        .expect("the session should end before the flush timeout")
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_waiting_kernel_attach_does_not_block_app_server_forwarding() {
+    // K3-5 review: the read loop awaited the kernel call, so app-server messages stopped behind it.
+    let folder = KernelTestFolder::new("waiting-attach");
+    let kernels =
+        Arc::new(crate::composition::repository_kernel::RepositoryKernelRegistry::default());
+    let release = crate::composition::repository_kernel::tests::hold_repository_for_test(
+        &kernels,
+        &folder.workspace(),
+    );
+    let mut client = connect_kernel_client(kernels.clone()).await;
+
+    client
+        .send(Message::text(
+            json!({
+                "jsonrpc": "2.0",
+                "id": "attach",
+                "method": "akra/kernel/attach",
+                "params": {"workspace": folder.workspace(), "client_name": "gateway-test"},
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+    client
+        .send(Message::text(r#"{"id":1,"method":"thread/list"}"#))
+        .await
+        .unwrap();
+    let forwarded = tokio::time::timeout(Duration::from_secs(2), next_text(&mut client))
+        .await
+        .expect("app-server forwarding must not wait for the kernel attach");
+    assert_eq!(forwarded, r#"echo:{"id":1,"method":"thread/list"}"#);
+
+    drop(release);
+    let attached = next_json_matching(&mut client, |value| value["id"] == json!("attach")).await;
+    assert!(attached["result"]["kernel"].is_string(), "{attached}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn no_kernel_event_reaches_a_client_after_its_detach_response() {
+    let folder = KernelTestFolder::new("detach-events");
+    let kernels =
+        Arc::new(crate::composition::repository_kernel::RepositoryKernelRegistry::default());
+    let mut watcher = connect_kernel_client(kernels.clone()).await;
+    let mut driver = connect_kernel_client(kernels.clone()).await;
+    attach_kernel(&mut watcher, "attach", &folder.workspace()).await;
+    attach_kernel(&mut driver, "attach", &folder.workspace()).await;
+
+    let detached = kernel_request(&mut watcher, "detach", "akra/kernel/detach", json!({})).await;
+    assert_eq!(detached["result"], json!({}));
+    driver
+        .send(set_max_turns_command("command", 3))
+        .await
+        .unwrap();
+    next_json_matching(&mut driver, |value| value["id"] == json!("command")).await;
+
+    let late = texts_until_quiet(&mut watcher, QUIET_WINDOW).await;
+    assert!(
+        late.is_empty(),
+        "events after the detach response: {late:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn attaching_again_does_not_duplicate_kernel_events() {
+    let folder = KernelTestFolder::new("reattach-events");
+    let kernels =
+        Arc::new(crate::composition::repository_kernel::RepositoryKernelRegistry::default());
+    let mut client = connect_kernel_client(kernels.clone()).await;
+    attach_kernel(&mut client, "first", &folder.workspace()).await;
+    attach_kernel(&mut client, "second", &folder.workspace()).await;
+
+    client
+        .send(set_max_turns_command("command", 4))
+        .await
+        .unwrap();
+
+    let received = texts_until_quiet(&mut client, QUIET_WINDOW).await;
+    let events = received
+        .iter()
+        .filter(|value| value["params"]["event"]["type"] == json!("auto_follow"))
+        .count();
+    assert_eq!(events, 1, "{received:?}");
+}
+
+/// upstream 이 멈출 때 그 저장소의 커널 잠금이 풀려 있었는지 적는다.
+struct LockProbeUpstream {
+    inner: Arc<EchoUpstream>,
+    workspace: String,
+    kernel_lock_free_at_shutdown: Mutex<Option<bool>>,
+}
+
+impl GatewayUpstreamPort for LockProbeUpstream {
+    fn open_session(&self) -> Result<Box<dyn GatewayUpstreamStream>> {
+        self.inner.open_session()
+    }
+
+    fn snapshot(&self) -> GatewayUpstreamSnapshot {
+        self.inner.snapshot()
+    }
+
+    fn generation(&self) -> watch::Receiver<u64> {
+        self.inner.generation()
+    }
+
+    fn shutdown(&self) {
+        let free =
+            crate::composition::production::acquire_repository_kernel_lock(&self.workspace).is_ok();
+        *self.kernel_lock_free_at_shutdown.lock().unwrap() = Some(free);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn gateway_stop_stops_kernels_before_the_upstream_app_server() {
+    // K3-5 review: a connected session kept the registry alive, so the upstream stopped first.
+    let folder = KernelTestFolder::new("stop-order");
+    let kernels =
+        Arc::new(crate::composition::repository_kernel::RepositoryKernelRegistry::default());
+    let mut client = connect_kernel_client(kernels.clone()).await;
+    attach_kernel(&mut client, "attach", &folder.workspace()).await;
+    let upstream = Arc::new(LockProbeUpstream {
+        inner: EchoUpstream::new(true),
+        workspace: folder.workspace(),
+        kernel_lock_free_at_shutdown: Mutex::new(None),
+    });
+
+    super::stop_backend(upstream.clone(), kernels).await;
+
+    assert_eq!(
+        *upstream.kernel_lock_free_at_shutdown.lock().unwrap(),
+        Some(true),
+        "the kernel stops and releases its lock before the upstream stops"
+    );
+}

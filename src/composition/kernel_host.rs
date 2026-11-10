@@ -20,8 +20,37 @@ const HOST_WAIT: Duration = Duration::from_millis(50);
 const HOST_MAX_INPUTS_PER_CYCLE: usize = 64;
 /// 클라이언트마다 쌓아 둘 이벤트 수이다. 넘치면 그 클라이언트에 `Resync` 를 보내고 증분은 버린다.
 const CLIENT_EVENT_CAPACITY: usize = 1024;
+/// 붙기 요청에 커널 스레드가 답할 때까지 기다리는 최대 시간이다. 보통 한 주기(`HOST_WAIT`) 안에 답한다.
+const ATTACH_REPLY_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(crate) type KernelClientId = u64;
+
+/// 커널 호출이 답을 받지 못한 이유이다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KernelCallError {
+    /// 커널 스레드가 끝났다.
+    Stopped,
+    /// 커널 스레드가 정한 시간 안에 답하지 않았다. 요청은 그 뒤에 처리될 수 있다.
+    TimedOut,
+}
+
+impl std::fmt::Display for KernelCallError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Stopped => formatter.write_str("the kernel stopped"),
+            Self::TimedOut => formatter.write_str("the kernel did not answer in time"),
+        }
+    }
+}
+
+impl std::error::Error for KernelCallError {}
+
+fn wait_reply<T>(answer: &Receiver<T>, timeout: Duration) -> Result<T, KernelCallError> {
+    answer.recv_timeout(timeout).map_err(|error| match error {
+        mpsc::RecvTimeoutError::Timeout => KernelCallError::TimedOut,
+        mpsc::RecvTimeoutError::Disconnected => KernelCallError::Stopped,
+    })
+}
 
 /// 클라이언트가 받는 이벤트이다. core 이벤트를 프로토콜 이벤트로 바꾸는 일은 inbound adapter 가 한다.
 #[derive(Debug, Clone)]
@@ -79,12 +108,15 @@ impl KernelHost {
         })
     }
 
-    /// 클라이언트 하나를 붙인다. 커널 스레드가 끝났으면 `None` 이다.
-    pub(crate) fn attach(&self) -> Option<KernelClientHandle> {
+    /// 클라이언트 하나를 붙인다. 커널 스레드가 끝났으면 `Stopped`, 답이 늦으면 `TimedOut` 이다. 늦은 붙기는 커널이
+    /// 답을 보내지 못하므로 스스로 지운다.
+    pub(crate) fn attach(&self) -> Result<KernelClientHandle, KernelCallError> {
         let (reply, answer) = mpsc::channel();
-        self.inbox.send(KernelHostInput::Attach { reply }).ok()?;
-        let (client_id, events) = answer.recv().ok()?;
-        Some(KernelClientHandle {
+        self.inbox
+            .send(KernelHostInput::Attach { reply })
+            .map_err(|_| KernelCallError::Stopped)?;
+        let (client_id, events) = wait_reply(&answer, ATTACH_REPLY_TIMEOUT)?;
+        Ok(KernelClientHandle {
             client_id,
             inbox: self.inbox.clone(),
             events,
@@ -112,24 +144,38 @@ pub(crate) struct KernelClientHandle {
 /// 핸들이 떨어진 뒤에도 보낼 수 있지만, 그 클라이언트는 이벤트를 받지 않는다.
 #[derive(Clone)]
 pub(crate) struct KernelCommandSender {
+    client_id: KernelClientId,
     inbox: Sender<KernelHostInput>,
 }
 
 impl KernelCommandSender {
     /// 명령을 커널에 넣는다. 커널이 처리한 뒤 그 처리에서 나온 core 이벤트를 돌려준다. 요청한 클라이언트는 이것으로
-    /// 거절 이유를 안다. 같은 이벤트는 모든 클라이언트에도 간다. 커널이 끝났으면 `None` 이다.
-    pub(crate) fn send_command(&self, command: AppCommand) -> Option<Vec<AppEvent>> {
+    /// 거절 이유를 안다. 같은 이벤트는 모든 클라이언트에도 간다. `TimedOut` 이어도 커널은 명령을 나중에 처리할 수 있다.
+    pub(crate) fn send_command(
+        &self,
+        command: AppCommand,
+        timeout: Duration,
+    ) -> Result<Vec<AppEvent>, KernelCallError> {
         let (reply, answer) = mpsc::channel();
         self.inbox
             .send(KernelHostInput::Command { command, reply })
-            .ok()?;
-        answer.recv().ok()
+            .map_err(|_| KernelCallError::Stopped)?;
+        wait_reply(&answer, timeout)
     }
 
-    pub(crate) fn query(&self) -> Option<KernelHostView> {
+    pub(crate) fn query(&self, timeout: Duration) -> Result<KernelHostView, KernelCallError> {
         let (reply, answer) = mpsc::channel();
-        self.inbox.send(KernelHostInput::Query { reply }).ok()?;
-        answer.recv().ok()
+        self.inbox
+            .send(KernelHostInput::Query { reply })
+            .map_err(|_| KernelCallError::Stopped)?;
+        wait_reply(&answer, timeout)
+    }
+
+    /// 이 클라이언트를 커널에서 뗀다. 커널은 이벤트 채널을 닫고, 이벤트를 기다리던 쪽은 바로 끝을 본다.
+    pub(crate) fn detach(&self) {
+        let _ = self.inbox.send(KernelHostInput::Detach {
+            client_id: self.client_id,
+        });
     }
 }
 
@@ -140,18 +186,21 @@ impl KernelClientHandle {
 
     pub(crate) fn commands(&self) -> KernelCommandSender {
         KernelCommandSender {
+            client_id: self.client_id,
             inbox: self.inbox.clone(),
         }
     }
 
     #[cfg(test)]
     pub(crate) fn send_command(&self, command: AppCommand) -> Option<Vec<AppEvent>> {
-        self.commands().send_command(command)
+        self.commands()
+            .send_command(command, TEST_REPLY_TIMEOUT)
+            .ok()
     }
 
     #[cfg(test)]
     pub(crate) fn query(&self) -> Option<KernelHostView> {
-        self.commands().query()
+        self.commands().query(TEST_REPLY_TIMEOUT).ok()
     }
 
     #[cfg(test)]
@@ -173,6 +222,9 @@ impl KernelClientHandle {
         let _ = self.inbox.send(KernelHostInput::Inputs(inputs));
     }
 }
+
+#[cfg(test)]
+const TEST_REPLY_TIMEOUT: Duration = Duration::from_secs(10);
 
 impl Drop for KernelClientHandle {
     fn drop(&mut self) {
