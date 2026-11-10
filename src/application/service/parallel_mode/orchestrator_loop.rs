@@ -857,8 +857,9 @@ fn run_parallel_dispatch_worker(
         &request.planning_workspace_directory,
         request.automation_epoch_id,
     ) {
-        let _ = turn_service.finalize_stream_completion(
-            &request.worktree_directory,
+        // lease 세대로 막는다. 늦은 작업 스레드가 새 epoch 가 다시 빌린 slot 을 돌려주면 안 된다.
+        let _ = turn_service.finalize_stream_completion_for_lease(
+            &request.expected_lease,
             false,
             true,
             true,
@@ -2707,6 +2708,76 @@ mod tests {
                 .any(|notice| notice.contains("epoch closed before worker launch")),
             "the worker port must not run: {:?}",
             result.notices
+        );
+    }
+
+    #[test]
+    fn a_late_worker_does_not_release_a_slot_that_a_new_epoch_leased_again() {
+        // K3-5 review: the worker's lease is gone and a new generation leased the same slot.
+        let workspace = TempGitWorkspace::new("parallel-late-worker-lease-fence");
+        let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        test_planning_services(authority.clone())
+            .workspace
+            .initialize_simple_workspace(workspace.path())
+            .expect("planning authority should initialize");
+        run_git(Path::new(workspace.path()), &["add", "."]);
+        run_git(
+            Path::new(workspace.path()),
+            &["commit", "-qm", "initialize planning authority"],
+        );
+        run_git(
+            Path::new(workspace.path()),
+            &["push", "-q", "origin", "prerelease"],
+        );
+        let parallel_service = test_parallel_service(authority.clone());
+        parallel_service
+            .reset_pool_on_parallel_initial_setup_report(workspace.path())
+            .expect("parallel pool should initialize");
+        let late_lease = parallel_service
+            .acquire_slot_lease(
+                workspace.path(),
+                ParallelModeSlotLeaseRequest::from_task_identity("task-a", "Task A"),
+            )
+            .expect("the late worker's slot should lease");
+        parallel_service
+            .release_workspace_slot_lease_after_failed_start_for_lease(&late_lease)
+            .expect("the first generation should release")
+            .expect("the first generation should exist");
+        let current_lease = parallel_service
+            .acquire_slot_lease(
+                workspace.path(),
+                ParallelModeSlotLeaseRequest::from_task_identity("task-b", "Task B"),
+            )
+            .expect("a new epoch leases the same slot again");
+        assert_eq!(late_lease.slot_id, current_lease.slot_id);
+        let mut request = worker_request_with_secret_bodies();
+        request.planning_workspace_directory = workspace.path().to_string();
+        request.worktree_directory = late_lease.worktree_path.clone();
+        request.expected_lease = late_lease;
+        let turn_service = ParallelModeTurnService::new(parallel_service).with_automation_guard(
+            crate::application::service::parallel_mode::ParallelModeAutomationGuard::default(),
+        );
+
+        let result = run_parallel_dispatch_worker(
+            request,
+            Arc::new(ScriptedParallelAgentWorkerPort::new(
+                vec![scripted_thread_prepared()],
+                WorkerExit::Panic,
+            )),
+            turn_service,
+            test_planning_services(authority),
+        );
+
+        assert_eq!(
+            result.worker_event_kind,
+            ParallelModeControlPlaneWorkerEventKind::LaunchFailed
+        );
+        let projection = SqlitePlanningAuthorityAdapter::load_runtime_projections(workspace.path())
+            .expect("the runtime projection should load");
+        assert_eq!(
+            projection.slot_leases.get(&current_lease.slot_id),
+            Some(&current_lease),
+            "the late worker must not release the new generation"
         );
     }
 
