@@ -98,8 +98,54 @@ export function loadReplaySegments(recordingPath: string): ReplaySegment[] {
   return segments;
 }
 
+/**
+ * 가짜 저장소 커널이다 (plan 18 K3-6). `akra/kernel/*` 는 Gateway 가 직접 답하므로 녹화가 아니라 이 값으로 답한다.
+ */
+export interface FakeKernel {
+  /** 붙기 결과의 저장소 신원이다. null 이면 다른 프로세스가 잠금을 쥔 것처럼 -32012 로 거절한다. */
+  kernel: string | null;
+  /** 조회 종류 → 결과 이벤트 */
+  queries: Record<string, unknown>;
+  /** 붙은 뒤 조금 지나서 보낼 이벤트이다. */
+  eventsAfterAttach?: unknown[];
+}
+
+const FAKE_KERNEL_EVENT_DELAY_MS = 300;
+
+function answerKernel(kernel: FakeKernel, socket: WebSocket, message: JsonRpcEnvelope & { params?: Record<string, unknown> }): void {
+  const respond = (body: object) => socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, ...body }));
+  switch (message.method) {
+    case "akra/kernel/attach":
+      if (kernel.kernel === null) {
+        respond({ error: { code: -32012, message: "the repository kernel runs in another process (pid 4242)" } });
+        return;
+      }
+      respond({ result: { client_id: "1", protocol_version: 0, kernel: kernel.kernel } });
+      setTimeout(() => {
+        for (const event of kernel.eventsAfterAttach ?? []) {
+          socket.send(JSON.stringify({ jsonrpc: "2.0", method: "akra/kernel/event", params: { event } }));
+        }
+      }, FAKE_KERNEL_EVENT_DELAY_MS);
+      return;
+    case "akra/kernel/query": {
+      const type = (message.params?.query as { type?: string } | undefined)?.type ?? "";
+      respond(type in kernel.queries ? { result: kernel.queries[type] } : { error: { code: -32602, message: `unknown query ${type}` } });
+      return;
+    }
+    case "akra/kernel/command":
+      respond({ result: { processed: true } });
+      return;
+    default:
+      respond({ result: {} });
+  }
+}
+
 /** 녹화를 여러 개 주면 응답 표는 앞의 녹화가 우선하고, 이어지는 메시지는 순서대로 이어 붙인다. */
-export async function startFakeGateway(endpoint: string, recordingPaths: string | string[]): Promise<FakeGateway> {
+export async function startFakeGateway(
+  endpoint: string,
+  recordingPaths: string | string[],
+  options: { kernel?: FakeKernel } = {},
+): Promise<FakeGateway> {
   const paths = Array.isArray(recordingPaths) ? recordingPaths : [recordingPaths];
   const table = new Map<string, Pick<JsonRpcEnvelope, "result" | "error">>();
   for (const path of paths) {
@@ -168,6 +214,10 @@ export async function startFakeGateway(endpoint: string, recordingPaths: string 
         return;
       }
       receivedMethods.push(message.method);
+      if (options.kernel && message.method.startsWith("akra/kernel/")) {
+        answerKernel(options.kernel, socket, message);
+        return;
+      }
       if (message.id !== undefined && message.id !== null) {
         const recorded = table.get(message.method) ?? {
           error: { code: -32601, message: `fake gateway has no recording for ${message.method}` },

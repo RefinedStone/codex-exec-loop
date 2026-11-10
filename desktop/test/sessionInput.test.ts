@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { AkraBridge, ConnectionState } from "../src/shared/bridge";
+import { EMPTY_KERNEL_VIEW } from "../src/renderer/kernel/kernelConnection";
 import { DesktopSession } from "../src/renderer/session/desktopSession";
 import { type DesktopState, mergeWorkspaceFolders, type SessionStore } from "../src/renderer/session/desktopStore";
 import type { Transcript } from "../src/renderer/conversation/transcript";
@@ -91,6 +92,8 @@ function harness() {
     },
     getOpenThreadId: () => state.openThreadId ?? null,
     getTranscript: () => state.transcript ?? null,
+    setKernel: (kernel) => Object.assign(state, { kernel }),
+    getKernel: () => state.kernel ?? EMPTY_KERNEL_VIEW,
   };
   const session = new DesktopSession(bridge, store, "test", (callback) => callback());
   session.start();

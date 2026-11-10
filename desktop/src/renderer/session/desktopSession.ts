@@ -23,6 +23,8 @@ import {
   transcriptFromResume,
   transcriptFromThread,
 } from "../conversation/transcript";
+import { KernelConnection } from "../kernel/kernelConnection";
+import { KERNEL_METHOD } from "../kernel/protocol";
 import { JsonRpcClient, JsonRpcError, type JsonRpcId, NO_RESPONSE } from "../rpc/jsonRpcClient";
 import { checkCodexVersion } from "./codexVersion";
 import { type GatewayInfo, type SessionStore, sortFolders, type WorkspaceFolder } from "./desktopStore";
@@ -101,6 +103,8 @@ export class DesktopSession {
   private listGeneration = 0;
   /** 사용자의 답을 기다리는 승인 요청의 응답 함수이다. 키는 요청 id 이다. */
   private readonly approvalAnswers = new Map<string, (answer: unknown) => void>();
+  /** 커널 패널의 연결이다 (plan 18 K3-6). 같은 Gateway 접속을 쓴다. */
+  private readonly kernel: KernelConnection;
 
   constructor(
     private readonly bridge: AkraBridge,
@@ -111,6 +115,7 @@ export class DesktopSession {
     this.client = new JsonRpcClient((text) => bridge.send(text));
     this.batcher = new FrameBatcher((batch) => this.store.updateTranscript((transcript) => applyNotifications(transcript, batch)), scheduler);
     this.client.setServerRequestHandler((method, params, id) => this.handleServerRequest(method, params, id));
+    this.kernel = new KernelConnection(this.client, store);
   }
 
   start(): void {
@@ -124,6 +129,7 @@ export class DesktopSession {
           void this.initialize();
         } else {
           this.client.reset(state.phase);
+          this.kernel.connectionChanged(false);
           // 끊긴 접속의 승인 요청에는 답할 수 없다. 다시 구독하면 app-server 가 다시 보낸다 (replay).
           this.dropPendingApprovals();
         }
@@ -140,6 +146,16 @@ export class DesktopSession {
     this.batcher.clear();
     this.client.reset("closed");
     this.dropPendingApprovals();
+  }
+
+  /** 커널 패널이 보여 줄 폴더를 정한다. 그 폴더의 저장소 커널에 붙고, null 이면 뗀다. */
+  showKernel(workspace: string | null): Promise<void> {
+    return this.kernel.show(workspace);
+  }
+
+  /** 커널 패널의 상태를 다시 읽는다. */
+  refreshKernel(): Promise<void> {
+    return this.kernel.refresh();
   }
 
   /** 메시지를 보낸다. 진행 중인 턴이 있으면 steer, 없으면 새 턴이다 (P3 §6.2). */
@@ -233,6 +249,8 @@ export class DesktopSession {
 
   private async initialize(): Promise<void> {
     this.client.reset("reconnected");
+    // 커널 붙음은 접속마다 따로이다. 대기 중 요청을 정리한 뒤 다시 붙는다.
+    this.kernel.connectionChanged(true);
     try {
       await this.client.request("initialize", initializeParams(this.clientVersion));
       this.client.notify("initialized");
@@ -366,6 +384,10 @@ export class DesktopSession {
   }
 
   private handleNotification(method: string, params: unknown): void {
+    if (method === KERNEL_METHOD.event) {
+      this.kernel.handleEvent(params);
+      return;
+    }
     const threadId = notificationThreadId(params);
     if (!threadId) {
       return;
