@@ -120,6 +120,12 @@ export interface JiraBridge {
   openExternal(url: string): void;
 }
 
+/** Notion 업무 패널이다 (plan 21). 데이터는 renderer 가 Gateway 의 MCP hub 로 읽는다. */
+export interface NotionBridge {
+  /** Notion 페이지 주소를 기본 브라우저로 연다. */
+  openExternal(url: string): void;
+}
+
 /** 브라우저 보기를 놓을 자리이다. 창 안의 CSS 픽셀이다. */
 export interface BrowserBounds {
   x: number;
@@ -236,4 +242,5 @@ export interface AkraBridge {
   browser: BrowserBridge;
   github: GitHubBridge;
   jira: JiraBridge;
+  notion: NotionBridge;
 }

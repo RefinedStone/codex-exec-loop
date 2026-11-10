@@ -1,6 +1,6 @@
 # 21. Akra MCP hub
 
-상태: 2단계 완료 (CLI + skill, Gateway 상주 엔진) · 기준일: 2026-11-11 · 관련: plan 17 R4(업무 패널), plan 20(observe-and-offer)
+상태: 3단계 완료 (CLI + skill, Gateway 상주 엔진, Desktop Notion 패널) · 기준일: 2026-11-11 · 관련: plan 17 R4(업무 패널), plan 20(observe-and-offer)
 
 ## 목표
 
@@ -61,10 +61,24 @@
   였다 (직접 실행은 약 400ms). 서버 추가 뒤 상주 엔진이 내려갔다. 다른 `AKRA_HOME` 은 직접 실행했다. Gateway 를
   끈 뒤에도 직접 실행했고, 남은 app-server 는 없었다.
 
+## 3단계 (완료, 2026-11-11): Desktop Notion 패널
+
+- 결정: 패널도 MCP hub 를 쓴다 (사용자 선택). 로그인은 hub 의 OAuth 하나이고, 페이지마다 integration 을 연결하는
+  일이 없다. REST API 의 정해진 JSON 대신 MCP 결과를 방어적으로 읽는다.
+- renderer 가 창의 Gateway 접속으로 `akra/mcp/statuses` 와 `akra/mcp/call` 을 부른다. main 은 Notion 주소만
+  기본 브라우저로 연다(`https` 의 `notion.so`, `notion.com`, `*.notion.site`). Desktop 은 `hubHome` 을 싣지 않고,
+  Gateway 는 이런 요청을 자기 hub 로 처리한다.
+- 도구 이름은 서버의 도구 목록에서 고른다. 공식 Notion MCP 는 `notion-search`/`notion-fetch`, ChatGPT 커넥터는
+  `search`/`fetch` 이다. `notion-list-recent-pages` 가 있으면 열 때 최근 본 페이지를 보여 준다.
+- 결과 형식(커넥터로 값 없이 구조만 확인): 최근 목록은 글 JSON `{results:[{type,url,title}], nextCursor}`, 검색은
+  `{results:[{id,title,url}]}`(구조화 결과도 있음), fetch 는 `{title,url,text,path,page_last_edited_at,...}` 이다.
+- 화면: 서버가 없으면 `akra mcp add`/`login` 명령을, 로그인이 필요하면 `login` 명령을 보여 준다. 준비되면 최근
+  페이지, 검색, 제목 클릭(브라우저), "스레드로 넘기기"(페이지 내용으로 새 스레드의 입력창만 채움)이다.
+- 확인: 가짜 Gateway 와 가짜 MCP hub 로 화면 시험(`test/e2e/notion-panel.mjs`)을 숨긴 창에서 돌렸다. 실제
+  Notion 로그인과 호출은 하지 않았다.
+
 ## 남은 단계 (proposed)
 
-- **3단계: Desktop 패널.** Notion 같은 서비스의 목록 화면은 MCP 결과(모델용 글)보다 각 서비스 REST API 의
-  구조화된 JSON 이 낫다. 패널은 REST, 에이전트는 hub 로 나누는 안을 R4 에서 다시 정한다.
 - **도구 목록 캐시.** `search` 가 모든 서버에 연결하지 않도록 서버별 도구 목록을 저장한다.
 - **쓰기 정책.** 서버별, 도구별로 읽기 허용과 쓰기 승인을 정한다. 지금은 명령 승인 정책과 skill 규칙에 맡긴다.
 

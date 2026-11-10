@@ -326,7 +326,8 @@ call tools on demand.
 - `login` prints the authorization URL on stderr and waits up to 10 minutes for the OAuth callback.
 - The Gateway starts the resident engine on the first request, reuses one ephemeral thread per server,
   handles one request at a time, drops the engine after an error, and stops it after 10 idle minutes.
-  Every request carries `hubHome`; a Gateway that serves a different hub answers `-32040`. The CLI
+  `akra mcp` sends `hubHome` with every request; a Gateway that serves a different hub answers `-32040`.
+  Requests without `hubHome` (Desktop) use the Gateway's own hub. The CLI
   falls back to its own engine only when it cannot connect, gets method-not-found or `-32040`, or the
   Gateway closes with 1013 before reading; any other failure after sending is an error, so a tool call
   never runs twice. `add`, `remove`, and `login` run in the CLI and then send `akra/mcp/reload`.
@@ -362,7 +363,9 @@ call tools on demand.
 - Desktop (in development, plan P2): `desktop/` — Electron shell that connects each window to `akra-gateway`;
   see `desktop/AGENTS.md`. The "Akra" side panel attaches to the repository kernel of the open thread's
   folder only while it is open, and shows threads with remaining work, auto-follow, parallel work, and the
-  planning queue (`desktop/src/renderer/kernel/`)
+  planning queue (`desktop/src/renderer/kernel/`). The "Notion" side panel reads the `notion` server of the
+  MCP hub through `akra/mcp/*`: recently viewed pages, search, open in the browser (https Notion hosts
+  only), and hand-off that fills a new thread's composer with the page (`desktop/src/renderer/work/`)
 - Planning: `src/application/service/planning/`, `src/domain/planning/`
 - Parallel: `src/application/service/parallel_mode/`, `src/domain/parallel_mode/`
 - App-server adapter: `src/adapter/outbound/app_server/`

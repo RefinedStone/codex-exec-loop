@@ -86,4 +86,5 @@
   아니라 다음 턴에 도구로 다시 읽는 방식이다.
 - 결정: 에이전트용 Notion 은 패널이 아니라 Akra MCP hub(`akra mcp`, plan 21)로 연결한다. 공식
   `https://mcp.notion.com/mcp` 를 쓰므로 ChatGPT 를 거치지 않는다(D-14).
-- Notion 목록 패널은 proposed 이다. 화면용 데이터는 MCP 결과보다 REST API 의 JSON 이 낫다는 점을 그때 다시 본다.
+- 2026-11-11: Notion 패널을 만들었다 (plan 21 3단계). 사용자가 REST 대신 MCP hub 재사용을 골랐다. 로그인은 hub
+  의 OAuth 하나이고, 패널은 Gateway 의 `akra/mcp/*` 로 최근 페이지, 검색, 넘기기를 한다.

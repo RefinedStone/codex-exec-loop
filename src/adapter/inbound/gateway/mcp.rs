@@ -55,7 +55,9 @@ struct RequestEnvelope {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct HubParams {
-    hub_home: String,
+    // `akra mcp` 는 자기 hub 폴더를 싣는다. Desktop 은 싣지 않고 자기 Gateway 의 hub 를 쓴다.
+    #[serde(default)]
+    hub_home: Option<String>,
     #[serde(default)]
     server: Option<String>,
     #[serde(default)]
@@ -93,9 +95,13 @@ fn respond(hub: &GatewayMcpHub, id: Value, method: &str, text: &str) -> String {
         .and_then(|envelope| serde_json::from_value::<HubParams>(envelope.params).ok())
     {
         Some(params) => params,
-        None => return error_response(id, JSON_RPC_INVALID_PARAMS, "`hubHome` is required"),
+        None => return error_response(id, JSON_RPC_INVALID_PARAMS, "`params` must be an object"),
     };
-    if params.hub_home != hub.home {
+    if params
+        .hub_home
+        .as_ref()
+        .is_some_and(|hub_home| *hub_home != hub.home)
+    {
         return error_response(
             id,
             MCP_HUB_GATEWAY_OTHER_HUB,
@@ -233,6 +239,18 @@ mod tests {
     }
 
     #[test]
+    fn requests_without_a_hub_home_use_this_gateway_hub() {
+        let (hub, backend) = hub();
+        let call = answer(
+            &hub,
+            MCP_HUB_GATEWAY_CALL,
+            json!({ "server": "notion", "tool": "search", "arguments": {} }),
+        );
+        assert_eq!(call["result"], json!({ "content": [] }));
+        assert_eq!(backend.calls.lock().unwrap().len(), 1);
+    }
+
+    #[test]
     fn other_hubs_missing_params_and_unknown_methods_are_rejected() {
         let (hub, backend) = hub();
         let other = answer(
@@ -241,8 +259,8 @@ mod tests {
             json!({ "hubHome": "/other", "server": "a", "tool": "b" }),
         );
         assert_eq!(other["error"]["code"], MCP_HUB_GATEWAY_OTHER_HUB);
-        let missing = answer(&hub, MCP_HUB_GATEWAY_CALL, json!({ "server": "a" }));
-        assert_eq!(missing["error"]["code"], JSON_RPC_INVALID_PARAMS);
+        let not_object = answer(&hub, MCP_HUB_GATEWAY_CALL, json!("not an object"));
+        assert_eq!(not_object["error"]["code"], JSON_RPC_INVALID_PARAMS);
         let no_tool = answer(
             &hub,
             MCP_HUB_GATEWAY_CALL,

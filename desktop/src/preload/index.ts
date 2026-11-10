@@ -123,6 +123,11 @@ const bridge: AkraBridge = {
       ipcRenderer.send(IPC_CHANNELS.openExternal, url);
     },
   },
+  notion: {
+    openExternal(url: string): void {
+      ipcRenderer.send(IPC_CHANNELS.openExternal, url);
+    },
+  },
 };
 
 contextBridge.exposeInMainWorld("akra", bridge);
