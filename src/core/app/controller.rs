@@ -75,9 +75,28 @@ impl CoreController {
         self.state.revisioned_planning_parallel_projection()
     }
 
-    /// 호스트가 다음에 할 턴 뒤 일이다 (plan 19 Q2-2). 스냅샷을 복사하지 않는다.
+    /// 호스트가 다음에 할 턴 뒤 일이다 (plan 19 Q2-2, Q2-3). 스냅샷을 복사하지 않는다.
     pub(in crate::core) fn next_post_turn_host_step(&self) -> Option<super::PostTurnHostStep> {
-        self.conversation_turn.next_post_turn_host_step()
+        self.conversation_turn
+            .next_post_turn_host_step()
+            .or_else(|| {
+                self.queued_thread_prompt_is_due()
+                    .then_some(super::PostTurnHostStep::ResubmitQueuedThreadPrompt)
+            })
+    }
+
+    /*
+     * 큐에 남긴 thread 지정 프롬프트를 낼 차례이다 (plan 19 Q2-3). 모든 session 이 쉬어야 한다 (턴, 승인, 평가,
+     * 자동 후속, 정지, steer 없음). 병렬 모드가 켜졌으면 바로 차례이다. 그때는 내지 않고 병렬 slot 에 맡긴다.
+     * 값을 모르면 기다린다.
+     */
+    fn queued_thread_prompt_is_due(&self) -> bool {
+        self.planning.has_resubmittable_thread_prompt()
+            && match self.planning.host_parallel_mode() {
+                Some(true) => true,
+                Some(false) => !self.conversation_turn.has_busy_session(),
+                None => false,
+            }
     }
 
     /// 시작 점검이 성공해 계속할 수 있으면 그 작업 공간이다 (plan 18 K2-6). 전체 스냅샷을 복사하지 않는다.
@@ -456,6 +475,9 @@ impl CoreController {
                     effects: Vec::new(),
                     snapshot: self.shared_snapshot(),
                 }
+            }
+            CoreInput::Command(AppCommand::ResubmitQueuedThreadPrompt) => {
+                self.resubmit_queued_thread_prompt()
             }
             CoreInput::Command(AppCommand::SetupGithubReviewPolling(request)) => {
                 let GithubReviewPollingSetupAdmission::Started { correlation } =
@@ -1632,32 +1654,15 @@ impl CoreController {
     ) -> CoreDispatchOutcome {
         let workspace_directory = result.correlation().workspace_directory.clone();
         let (outcome, effects) = match prepared_thread_prompt_handoff(result, disposition) {
-            Ok((_, task_id)) if self.planning.host_parallel_mode() != Some(false) => (
-                super::ThreadPromptOutcome::ParallelModeStarted { task_id },
-                Vec::new(),
+            Ok((handoff, task_id)) => self.submit_thread_prompt_handoff(
+                super::planning_reducer::QueuedThreadPrompt {
+                    thread_id: thread_id.clone(),
+                    workspace_directory,
+                    handoff,
+                    task_id,
+                },
+                true,
             ),
-            Ok((handoff, task_id)) => {
-                let request =
-                    self.thread_prompt_turn_request(&thread_id, workspace_directory, handoff);
-                let admission = self
-                    .conversation_turn
-                    .admit_thread_turn_submission(&thread_id, &request);
-                let effects = match admission {
-                    TurnSubmissionAdmission::Accepted { correlation } => {
-                        vec![CoreEffect::SubmitTurn {
-                            correlation,
-                            request: Box::new(request),
-                        }]
-                    }
-                    TurnSubmissionAdmission::RejectedActive { .. }
-                    | TurnSubmissionAdmission::RejectedStopPending { .. }
-                    | TurnSubmissionAdmission::RejectedUnavailable => Vec::new(),
-                };
-                (
-                    super::ThreadPromptOutcome::Submitted { admission, task_id },
-                    effects,
-                )
-            }
             Err(failure) => (
                 super::ThreadPromptOutcome::PreparationFailed(failure),
                 Vec::new(),
@@ -1668,6 +1673,91 @@ impl CoreController {
             effects,
             snapshot: self.shared_snapshot(),
         }
+    }
+
+    /*
+     * 준비가 끝난 프롬프트를 그 thread 에 낸다. 병렬 모드이면 내지 않는다. 처음 낼 때 거절되면 큐에 남기고 커널이
+     * 쉴 때 한 번 다시 낸다 (plan 19 Q2-3). 다시 낼 때도 거절되면 남기지 않는다. 작업은 큐에 있고 반복은 막는다.
+     */
+    fn submit_thread_prompt_handoff(
+        &mut self,
+        prompt: super::planning_reducer::QueuedThreadPrompt,
+        queue_on_rejection: bool,
+    ) -> (super::ThreadPromptOutcome, Vec<CoreEffect>) {
+        let task_id = prompt.task_id.clone();
+        if self.planning.host_parallel_mode() != Some(false) {
+            return (
+                super::ThreadPromptOutcome::ParallelModeStarted { task_id },
+                Vec::new(),
+            );
+        }
+        let request = self.thread_prompt_turn_request(
+            &prompt.thread_id,
+            prompt.workspace_directory.clone(),
+            prompt.handoff.clone(),
+        );
+        let admission = self
+            .conversation_turn
+            .admit_thread_turn_submission(&prompt.thread_id, &request);
+        let effects = match admission {
+            TurnSubmissionAdmission::Accepted { correlation } => {
+                vec![CoreEffect::SubmitTurn {
+                    correlation,
+                    request: Box::new(request),
+                }]
+            }
+            TurnSubmissionAdmission::RejectedActive { .. }
+            | TurnSubmissionAdmission::RejectedStopPending { .. }
+            | TurnSubmissionAdmission::RejectedUnavailable => {
+                if queue_on_rejection {
+                    self.planning.queue_thread_prompt(prompt);
+                }
+                Vec::new()
+            }
+        };
+        (
+            super::ThreadPromptOutcome::Submitted { admission, task_id },
+            effects,
+        )
+    }
+
+    /*
+     * 큐에 남긴 프롬프트 하나를 다시 낸다 (plan 19 Q2-3). 호스트가 `ResubmitQueuedThreadPrompt` 단계에서 부른다.
+     * planning 투영이 그 작업을 끝났다고(완료, 취소) 보이면 내지 않는다. 자동 후속 턴이 그 사이에 큐 머리로 같은
+     * 작업을 했을 수 있다.
+     */
+    fn resubmit_queued_thread_prompt(&mut self) -> CoreDispatchOutcome {
+        if !self.queued_thread_prompt_is_due() {
+            return self.unchanged_outcome();
+        }
+        let Some(prompt) = self.planning.take_queued_thread_prompt() else {
+            return self.unchanged_outcome();
+        };
+        if self.planning_task_is_finished(&prompt.task_id) {
+            return self.unchanged_outcome();
+        }
+        let thread_id = prompt.thread_id.clone();
+        let (outcome, effects) = self.submit_thread_prompt_handoff(prompt, false);
+        CoreDispatchOutcome {
+            events: vec![AppEvent::ThreadPromptSubmitted { thread_id, outcome }],
+            effects,
+            snapshot: self.shared_snapshot(),
+        }
+    }
+
+    fn planning_task_is_finished(&self, task_id: &str) -> bool {
+        use crate::domain::planning::TaskStatus;
+        self.state
+            .shared_snapshot()
+            .planning_parallel
+            .planning_runtime
+            .queue_projection()
+            .is_some_and(|queue| {
+                queue.skipped_tasks.iter().any(|task| {
+                    task.task_id == task_id
+                        && matches!(task.status, TaskStatus::Done | TaskStatus::Cancelled)
+                })
+            })
     }
 
     fn thread_prompt_turn_request(
@@ -9995,6 +10085,150 @@ mod tests {
             }]
         );
         assert!(prepared.effects.is_empty(), "no main-session turn starts");
+    }
+
+    /// 다른 턴이 도는 동안 준비가 끝난 원격 프롬프트이다. 제출은 거절되고 프롬프트는 큐에 남는다 (plan 19 Q2-3).
+    fn queue_thread_prompt_behind_a_running_turn(
+        controller: &mut CoreController,
+    ) -> TurnSubmissionCorrelation {
+        load_test_session_catalog(controller);
+        controller.handle_input(thread_prompt("thread-beta", "fix the test"));
+        let running = start_test_turn(controller, "thread-1", "turn-1");
+        let prepared =
+            controller.handle_input(prepared_thread_prompt(1, "fix the test", "planned prompt"));
+        assert!(prepared.events.iter().any(|event| matches!(
+            event,
+            AppEvent::ThreadPromptSubmitted {
+                outcome: super::super::ThreadPromptOutcome::Submitted {
+                    admission: TurnSubmissionAdmission::RejectedActive { .. },
+                    task_id,
+                },
+                ..
+            } if task_id == "task-1"
+        )));
+        assert!(prepared.effects.is_empty(), "the other turn still runs");
+        assert_eq!(
+            controller.next_post_turn_host_step(),
+            None,
+            "the queued prompt waits while a turn runs"
+        );
+        running
+    }
+
+    fn end_test_turn(controller: &mut CoreController, turn: TurnSubmissionCorrelation) {
+        controller.handle_input(test_turn_stream_input(
+            turn,
+            TurnStreamEvent::Failed {
+                message: "turn closed".to_string(),
+            },
+        ));
+    }
+
+    #[test]
+    fn a_queued_thread_prompt_is_resubmitted_once_when_the_kernel_is_idle() {
+        let mut controller = hosted_controller(false);
+        let running = queue_thread_prompt_behind_a_running_turn(&mut controller);
+        end_test_turn(&mut controller, running);
+        assert!(
+            controller.has_remaining_work(),
+            "a queued prompt keeps the kernel loaded"
+        );
+        assert_eq!(
+            controller.next_post_turn_host_step(),
+            Some(super::super::PostTurnHostStep::ResubmitQueuedThreadPrompt)
+        );
+
+        let resubmitted =
+            controller.handle_input(CoreInput::Command(AppCommand::ResubmitQueuedThreadPrompt));
+        assert!(
+            resubmitted.events.iter().any(|event| matches!(
+                event,
+                AppEvent::ThreadPromptSubmitted {
+                    thread_id,
+                    outcome: super::super::ThreadPromptOutcome::Submitted {
+                        admission: TurnSubmissionAdmission::Accepted { .. },
+                        task_id,
+                    },
+                } if thread_id == "thread-beta" && task_id == "task-1"
+            )),
+            "{:?}",
+            resubmitted.events
+        );
+        assert!(matches!(
+            resubmitted.effects.as_slice(),
+            [CoreEffect::SubmitTurn { request, .. }]
+                if request.thread_id.as_deref() == Some("thread-beta")
+                    && request.prompt == "planned prompt"
+                    && request.prompt_origin == CorePromptOrigin::ManualIntake
+        ));
+        assert_eq!(controller.next_post_turn_host_step(), None);
+        let again =
+            controller.handle_input(CoreInput::Command(AppCommand::ResubmitQueuedThreadPrompt));
+        assert!(
+            again.events.is_empty() && again.effects.is_empty(),
+            "a stale step does nothing"
+        );
+    }
+
+    #[test]
+    fn a_queued_thread_prompt_goes_to_the_parallel_slots_when_parallel_mode_starts() {
+        let mut controller = hosted_controller(false);
+        queue_thread_prompt_behind_a_running_turn(&mut controller);
+        controller.handle_input(CoreInput::Command(AppCommand::SetParallelModeEnabled(true)));
+        assert_eq!(
+            controller.next_post_turn_host_step(),
+            Some(super::super::PostTurnHostStep::ResubmitQueuedThreadPrompt),
+            "parallel mode settles the queued prompt without waiting for the turn"
+        );
+
+        let settled =
+            controller.handle_input(CoreInput::Command(AppCommand::ResubmitQueuedThreadPrompt));
+        assert!(settled.events.contains(&AppEvent::ThreadPromptSubmitted {
+            thread_id: "thread-beta".to_string(),
+            outcome: super::super::ThreadPromptOutcome::ParallelModeStarted {
+                task_id: "task-1".to_string(),
+            },
+        }));
+        assert!(settled.effects.is_empty(), "no main-session turn starts");
+        assert_eq!(controller.next_post_turn_host_step(), None);
+    }
+
+    #[test]
+    fn a_queued_thread_prompt_is_dropped_when_planning_shows_its_task_finished() {
+        // 자동 후속 턴이 큐 머리로 같은 작업을 끝냈을 수 있다. 다시 내면 같은 작업이 두 번 돈다.
+        let mut controller = hosted_controller(false);
+        let running = queue_thread_prompt_behind_a_running_turn(&mut controller);
+        controller.state.apply_planning_runtime_projection(
+            "/tmp/workspace".to_string(),
+            Box::new(PlanningRuntimeProjection::ready_with_queue_projection(
+                "fragment".to_string(),
+                "queue".to_string(),
+                None,
+                None,
+                crate::domain::planning::PriorityQueueProjection {
+                    next_task: None,
+                    active_tasks: Vec::new(),
+                    proposed_tasks: Vec::new(),
+                    skipped_tasks: vec![crate::domain::planning::PriorityQueueSkippedTask {
+                        task_id: "task-1".to_string(),
+                        task_title: "Fix the test".to_string(),
+                        direction_id: "direction-1".to_string(),
+                        status: crate::domain::planning::TaskStatus::Done,
+                        reason: "done".to_string(),
+                    }],
+                },
+            )),
+        );
+        end_test_turn(&mut controller, running);
+
+        let dropped =
+            controller.handle_input(CoreInput::Command(AppCommand::ResubmitQueuedThreadPrompt));
+        assert!(
+            dropped.effects.is_empty(),
+            "the finished task does not run again"
+        );
+        assert!(!controller.has_remaining_work());
+        assert_eq!(controller.next_post_turn_host_step(), None);
     }
 
     #[test]

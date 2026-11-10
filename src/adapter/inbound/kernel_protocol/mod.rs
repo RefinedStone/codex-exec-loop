@@ -619,11 +619,12 @@ pub enum PromptSubmissionReason {
     ParallelModeUnknown,
     /// 준비하는 사이에 병렬 모드가 켜졌다 (`queued`). 작업은 병렬 slot 이 맡는다.
     ParallelModeStarted,
-    /// 준비하는 사이에 다른 턴이 시작했다 (`queued`). 작업은 큐에 남는다. 다시 보내지 않는다.
+    /// 준비하는 사이에 다른 턴이 시작했다 (`queued`). 작업은 큐에 남는다. 다시 보내지 않는다. 커널이 쉬면 한 번
+    /// 다시 내고 `submitted` 를 알린다 (plan 19 Q2-3).
     TurnStartedDuringPreparation,
-    /// 정지 요청이 아직 끝나지 않았다 (`queued`).
+    /// 정지 요청이 아직 끝나지 않았다 (`queued`). 커널이 쉬면 한 번 다시 낸다.
     StopPending,
-    /// 그 thread 가 지금 프롬프트를 받을 수 없다 (`queued`).
+    /// 그 thread 가 지금 프롬프트를 받을 수 없다 (`queued`). 커널이 쉬면 한 번 다시 낸다.
     Unavailable,
     /// 준비가 취소되었다.
     Cancelled,

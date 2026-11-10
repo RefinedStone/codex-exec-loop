@@ -20,6 +20,18 @@ struct ActiveManualPromptPreparation {
     addressed_thread_id: Option<String>,
 }
 
+/*
+ * 준비가 끝났지만 제출이 거절된 thread 지정 프롬프트이다 (plan 19 Q2-3). 준비가 만든 작업은 이미 큐에 있다. 커널이
+ * 쉬면 같은 handoff 로 한 번 다시 낸다. 메모리에만 있으므로 재시작하면 잃는다 (작업은 큐에 남는다, plan 19 Q3).
+ */
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct QueuedThreadPrompt {
+    pub(super) thread_id: String,
+    pub(super) workspace_directory: String,
+    pub(super) handoff: crate::domain::planning::ManualPromptMainSessionHandoff,
+    pub(super) task_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ManualPromptPreparationReduction {
     pub(super) admission: ManualPromptPreparationAdmission,
@@ -44,6 +56,8 @@ pub(super) struct PlanningFeatureReducer {
     // 호스트가 알린 병렬 모드 값이다 (plan 18 K3-3b). 알리기 전에는 `None` 이다. thread 지정 프롬프트는 이 값으로
     // 준비를 받을지, 준비가 끝난 뒤 제출할지 정한다.
     host_parallel_mode: Option<bool>,
+    // 다시 낼 thread 지정 프롬프트이다 (plan 19 Q2-3). 먼저 거절된 것부터 낸다.
+    queued_thread_prompts: std::collections::VecDeque<QueuedThreadPrompt>,
 }
 
 impl PlanningFeatureReducer {
@@ -57,6 +71,7 @@ impl PlanningFeatureReducer {
             in_flight_manual_prompt_preparation: None,
             worker_panel_history_seed: PlanningWorkerPanelState::default(),
             host_parallel_mode: None,
+            queued_thread_prompts: std::collections::VecDeque::new(),
         }
     }
 
@@ -66,6 +81,19 @@ impl PlanningFeatureReducer {
 
     pub(super) fn host_parallel_mode(&self) -> Option<bool> {
         self.host_parallel_mode
+    }
+
+    pub(super) fn queue_thread_prompt(&mut self, prompt: QueuedThreadPrompt) {
+        self.queued_thread_prompts.push_back(prompt);
+    }
+
+    pub(super) fn take_queued_thread_prompt(&mut self) -> Option<QueuedThreadPrompt> {
+        self.queued_thread_prompts.pop_front()
+    }
+
+    /// 다시 낼 프롬프트가 있고, 준비 칸이 비었다. 준비 중인 프롬프트가 먼저 제출되게 기다린다.
+    pub(super) fn has_resubmittable_thread_prompt(&self) -> bool {
+        !self.queued_thread_prompts.is_empty() && self.in_flight_manual_prompt_preparation.is_none()
     }
 
     pub(super) fn begin_runtime_refresh(
@@ -317,6 +345,7 @@ impl PlanningFeatureReducer {
     /// 끝나지 않은 planning 작업(프롬프트 준비, 큐 변경, 작업 공간 작업)이 있다 (plan 18 K3-5 커널 내리기).
     pub(super) fn has_work_in_flight(&self) -> bool {
         self.in_flight_manual_prompt_preparation.is_some()
+            || !self.queued_thread_prompts.is_empty()
             || self.active_queue_mutation.is_some()
             || self.workspace_operations.is_active()
     }
