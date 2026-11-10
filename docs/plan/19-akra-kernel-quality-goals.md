@@ -104,7 +104,7 @@ Q-Q1, Q-Q2 는 기본값으로 정했다 (§8): 사건 기록(K5)을 스펙(K4)�
 | Q3-1 | 기록 저장소(`KernelEventLogPort`, SQLite adapter, 기록기)와 첫 사건: 남긴 thread 지정 프롬프트의 남김과 끝남(`ThreadPromptQueued`, `ThreadPromptSettled`). 커널을 조립할 때 끝나지 않은 남김을 기록에서 읽어 core 에 되돌린다 | P1 첫 조각 | 구현됨 |
 | Q3-2 | 판단 사건을 더한다: 턴 제출(자동 후속 포함)·시작·끝, 턴 뒤 경로 결정, thread 지정 프롬프트 거절(이유 코드). 승인 사건은 Q3-5 로 옮겼다 | P3 | 구현됨 |
 | Q3-3 | 기록 조회와 보존: `akra/kernel/query` 의 `history { after, limit }`, 남김 종류가 아닌 사건은 최근 10,000개만 남긴다 | P3 | 구현됨 |
-| Q3-3b | 커서 구독: attach 의 cursor, 실시간 이벤트에 기록 sequence 를 붙인다. 넘친 클라이언트는 `Resync` 대신 커서로 따라잡는다. 턴 끝의 종류(완료, 중단, 실패)를 terminal receipt 에서 더한다 | P3 | 제안 |
+| Q3-3b | 커서 구독: 커널이 기록 sequence 를 정하고 `recorded` 이벤트로 실시간으로 보낸다. 넘친 클라이언트는 마지막 sequence 뒤를 `history` 로 따라잡는다. 턴 끝의 종류(완료, 중단, 실패, 모름)를 terminal receipt 에서 더한다 | P3 | 구현됨 |
 | Q3-4 | 타이머를 마감 시각으로 바꾼다. core 와 병렬 제어부가 다음 마감을 알리고, 호스트는 그때까지 잔다. Q2-4 의 250ms 주기 깨우기를 없앤다 | P2 | 제안 |
 | Q3-5 | 승인 객체: 승인 요청과 결정을 사건으로 기록하고(Q3-2 에서 옮김), 재시작 뒤 기다리는 승인을 보인다 | P1, P3 | 제안 |
 | Q3-6 | 연산 영수증(`op_id`, 상태, `next`)과 멱등 키 | P3 | 제안 |
@@ -119,7 +119,8 @@ Q3-1 결과 (`KernelEvent`, `KernelEventLogPort`, `KernelEventRecorder`, `AppCom
 - 기록기와 복구는 화면 없는 커널(`build_kernel_for_workspace`)에만 붙인다. thread 지정 프롬프트는 커널 프로토콜
   클라이언트만 보내므로 남김은 그 커널에서만 생긴다. TUI 런타임은 판단 사건을 버린다.
 - 커널을 조립할 때 저장소 잠금을 잡은 뒤 그 작업 공간의 기록을 읽는다. 끝나지 않은 남김을 `RestoreQueuedThreadPrompts`
-  로 core 에 넣고, core 는 Q2-3 과 같은 규칙으로 쉴 때 한 번 다시 낸다. 기록을 읽지 못하면 되돌리지 않고 기록만 한다.
+  로 core 에 넣고, core 는 Q2-3 과 같은 규칙으로 쉴 때 한 번 다시 낸다. 기록을 읽지 못하면 되돌리지 않고 기록만 했다.
+  Q3-3b 부터는 기록을 붙이지 않는다 (sequence 를 모르면 쓸 때 부딪힌다).
 - 기록기는 공유 worker 경계(`spawn_worker_with_panic_fallback`)의 스레드에서 쓴다. 런타임을 버리면 남은 사건을 다 쓰고
   끝난다. 커널은 그 뒤에 저장소 잠금을 풀므로 다음 커널은 모든 사건을 읽는다.
 - 남김과 끝남 사이에 프로세스가 죽으면, 다시 조립할 때 그 프롬프트를 한 번 더 낸다. 그 사이에 작업이 끝났으면 planning
@@ -143,7 +144,7 @@ Q3-2 결과 (`TurnSubmitted`, `TurnStarted`, `TurnEnded`, `PostTurnRouted`, `Thr
   `handle_input` 은 자기를 다시 부르고(자동 후속 제출) 바깥 결과가 안쪽 효과를 담는다. 그래서 이미 쌓은 제출은 다시
   쌓지 않는다.
 - 턴의 시작과 끝은 thread 요약에서 얻는다. 요약은 보지 않는 thread 를 담으므로 모든 thread 의 턴을 본다. 끝의 종류(완료,
-  중단, 실패)는 아직 가르지 않는다 (제안: Q3-3 과 함께 terminal receipt 에서 더한다).
+  중단, 실패)는 아직 가르지 않았다. Q3-3b 에서 더했다.
 - buffer 는 `ConversationTurnFeatureReducer` 에 둔다. `CoreController` 는 typed slice 8개만, `AppState` 는 스냅샷 필드
   하나만 가지도록 구조 시험이 막기 때문이다. 이 reducer 는 클라이언트에 알릴 thread 요약도 가진다.
 - 기록기는 커널의 작업 공간 하나에 쓴다. 복구도 그 작업 공간에서 읽는다. Q3-1 은 사건마다 그 사건의 작업 공간에 썼다.
@@ -170,6 +171,25 @@ Q3-3 결과 (`KernelQuery::History`, `KernelEventLogPort::load_kernel_events_aft
 - 확인: adapter 시험(cursor 와 쪽 크기, 모르는 사건을 건너뛴 cursor, 보존 한도와 남김 보존), 프로토콜 시험(조회 해석,
   답의 JSON 모양, 기록 없는 커널의 빈 쪽, `describe` 의 `history`), 커널 호스트 시험(쪽마다 읽기), Gateway 시험(접속을
   거친 조회), 구조 시험(facade 의 읽기 전용 `kernel_event_history`), Windows Rust gate.
+
+Q3-3b 결과 (`KernelEvent::Recorded`, `KernelHostEvent::Recorded`, `TurnEndOutcome`):
+
+- 저장소 커널은 저장소 잠금으로 하나뿐이고, 그 저장소의 `kernel_events` 를 쓰는 것도 그 커널뿐이다. 그래서 커널이
+  sequence 를 정한다. 기록을 붙일 때 마지막 sequence(`last_kernel_event_sequence`)를 읽고, dispatch 마다 꺼낸 사건에
+  다음 수와 시각을 붙인다. 기록기는 그 값 그대로 쓴다. 실시간 이벤트와 기록이 같은 sequence 를 가진다.
+- 커널 호스트는 dispatch 결과를 나눈 뒤 번호를 붙인 기록을 꺼내(`take_published_kernel_records`) 모든 클라이언트에
+  보낸다. 프로토콜 이벤트는 `{ "type": "recorded", "sequence", "recorded_at", "event": { "kind", ... } }` 이다.
+- 따라잡기: 클라이언트는 받은 `sequence` 를 기억한다. `resync` 를 받거나 다시 붙으면 그 값을 `after` 로 `history` 를
+  읽는다. 붙은 뒤의 실시간 이벤트와 `history` 가 겹칠 수 있으므로 `sequence` 로 겹침을 지운다. attach 에 cursor 를
+  넣는 방식은 쓰지 않았다. 붙은 뒤 한 번 읽는 것으로 같다.
+- 쓰기가 실패하면 클라이언트가 이미 받은 sequence 가 기록에 없을 수 있다 (경고 로그). 다음 사건은 다음 수를 쓴다.
+- 턴 끝: 그 dispatch 의 입력이 terminal receipt(완료, 중단, 실패, 모름)나 스트림 실패(실패)이면 `turn_ended` 에
+  `outcome` 을 붙인다. 대화 무효화처럼 다른 일로 요약에서 빠진 턴은 비운다. 턴은 한 번에 하나만 돌므로 한 입력이 끝낼
+  수 있는 턴은 하나이다. 이전 기록(`outcome` 없음)도 그대로 읽힌다.
+- Desktop 은 모르는 이벤트 종류를 넘긴다 (`kernelConnection.ts` 의 `default`). 이 이벤트를 그리는 일은 아직 없다.
+- 확인: domain 시험(이전 기록 읽기, `outcome` JSON), adapter 시험(명시한 sequence, 마지막 sequence 읽기), 프로토콜
+  시험(`recorded` JSON 모양, `describe`), 커널 호스트 시험(기록의 마지막 41 뒤로 42 를 실시간으로 받음), core 시험(완료한
+  턴의 `outcome`), 시뮬레이션 I6 에 sequence 검사(1 부터 빠짐없이 늘어남), seed 2000개, Windows Rust gate.
 
 ### 5.2 이어 붙이지 말고 맞춘다 (FSM + reconcile)
 
@@ -346,7 +366,7 @@ Q2-4 결과 (`CoreInputWaker`, `KernelInbox`):
 | I3 | 자동 후속은 평가가 프롬프트를 답한 완료 턴마다 한 번이고, 수동 턴 뒤 최대 턴 수를 넘지 않는다 |
 | I4 | 행동을 멈추고 바깥 세계가 남은 일을 모두 돌려주면 커널에 남은 일이 없다 (`has_remaining_work == false`) |
 | I5 | 바깥 세계에서 턴이 돌거나 평가가 진행 중이면 커널은 남은 일이 있다고 답한다 (커널을 내릴지 정하는 값, K3-5) |
-| I6 | 판단 사건 기록이 맞다: 같은 턴 제출은 한 번만 기록되고, 같은 턴은 한 번 시작하고 한 번 끝나며 끝은 시작 뒤에 온다 (Q3-2). 시뮬레이션은 커널에 메모리 기록을 붙이고, 커널을 버린 뒤 읽는다 |
+| I6 | 판단 사건 기록이 맞다: 같은 턴 제출은 한 번만 기록되고, 같은 턴은 한 번 시작하고 한 번 끝나며 끝은 시작 뒤에 온다 (Q3-2). sequence 는 1 부터 빠짐없이 늘어난다 (Q3-3b). 시뮬레이션은 커널에 메모리 기록을 붙이고, 커널을 버린 뒤 읽는다 |
 | 재현 | 같은 seed 는 같은 기록을 만든다 (seed 8개) |
 
 - 실행: PR 마다 seed 24개(약 0.05초). `AKRA_SIM_SEEDS=<개수>` 로 더 돌리고, 실패 보고의 `AKRA_SIM_SEED=<seed>` 로
