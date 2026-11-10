@@ -42,7 +42,7 @@ use crate::core::native_client_port::{
 };
 #[cfg(test)]
 use crate::core::runtime::CoreInputSender;
-use crate::core::runtime::{CoreEffectExecutor, CoreRuntime, core_input_channel};
+use crate::core::runtime::{CoreEffectExecutor, CoreInputWaker, CoreRuntime, core_input_channel};
 use crate::domain::conversation::ConversationRuntimeControlTruth;
 #[cfg(test)]
 use crate::domain::github_review::GithubPullRequestTarget;
@@ -98,11 +98,15 @@ pub(crate) struct BoundNativeTuiApplication {
 #[derive(Clone)]
 struct NativeParallelModeControlPlaneEventSink {
     tx: SyncSender<ParallelModeControlPlaneBackgroundEvent>,
+    // 커널 스레드는 core 입력함에서 기다린다. 병렬 완료를 넣으면 깨운다 (plan 19 Q2-4).
+    waker: CoreInputWaker,
 }
 
 impl ParallelModeControlPlaneEventSink for NativeParallelModeControlPlaneEventSink {
     fn send_control_plane_event(&self, event: ParallelModeControlPlaneBackgroundEvent) {
-        let _ = self.tx.send(event);
+        if self.tx.send(event).is_ok() {
+            self.waker.wake();
+        }
     }
 }
 
@@ -507,6 +511,7 @@ impl NativeClientRuntime {
         let parallel_control_plane =
             parallel_control_plane.bind_event_sink(NativeParallelModeControlPlaneEventSink {
                 tx: parallel_completion_tx,
+                waker: core.runtime.input_waker(),
             });
         Self {
             core,
@@ -954,6 +959,12 @@ impl NativeClientRuntime {
 
     pub(crate) fn parallel_mode_enabled(&self) -> bool {
         self.parallel_control_plane.mode_enabled()
+    }
+
+    /// `run_host_cycle` 의 기다림을 깨우는 손잡이이다 (plan 19 Q2-4). 커널 호스트가 클라이언트 입력을 넣을 때 쓴다.
+    /// 입력을 넣지 못하고 깨우기만 한다.
+    pub(crate) fn host_waker(&self) -> CoreInputWaker {
+        self.core.runtime.input_waker()
     }
 
     /// 커널에 남은 일이 있다 (plan 18 K3-5). core 의 턴·승인·자동 후속·평가·planning 작업, 또는 병렬 제어부의

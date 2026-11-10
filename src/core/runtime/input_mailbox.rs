@@ -20,6 +20,16 @@ pub(crate) struct CoreInputReceiver {
     shared: Arc<CoreInputMailbox>,
 }
 
+/*
+ * 커널 스레드를 깨운다 (plan 19 Q2-4). 커널의 다른 입력함(클라이언트, 병렬 완료)에 넣은 쪽이 부른다. 커널 스레드는
+ * 이 입력함에서만 기다리므로, 깨우면 기다림을 끝내고 모든 입력함을 본다. 입력을 넣지 않고 보내는 쪽 수에도 들지
+ * 않는다. 기다리기 전에 깨워도 잃지 않는다.
+ */
+#[derive(Clone)]
+pub(crate) struct CoreInputWaker {
+    shared: Arc<CoreInputMailbox>,
+}
+
 struct CoreInputMailbox {
     state: Mutex<CoreInputMailboxState>,
     changed: Condvar,
@@ -33,6 +43,7 @@ struct CoreInputMailboxState {
     latest_progressive_generation: Option<u64>,
     sender_count: usize,
     receiver_alive: bool,
+    wake_requested: bool,
 }
 
 impl CoreInputMailboxState {
@@ -47,6 +58,7 @@ impl CoreInputMailboxState {
             latest_progressive_generation: None,
             sender_count: 1,
             receiver_alive: true,
+            wake_requested: false,
         }
     }
 
@@ -241,10 +253,35 @@ impl fmt::Debug for CoreInputSender {
     }
 }
 
+impl CoreInputWaker {
+    pub(crate) fn wake(&self) {
+        let mut state = self.shared.lock_state();
+        state.wake_requested = true;
+        drop(state);
+        // 자리를 기다리는 보내는 쪽도 같은 condvar 를 기다리므로 모두 깨워 받는 쪽이 꼭 깨게 한다.
+        self.shared.changed.notify_all();
+    }
+}
+
+impl fmt::Debug for CoreInputWaker {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CoreInputWaker")
+            .finish_non_exhaustive()
+    }
+}
+
 impl CoreInputReceiver {
+    pub(super) fn waker(&self) -> CoreInputWaker {
+        CoreInputWaker {
+            shared: Arc::clone(&self.shared),
+        }
+    }
+
     /*
      * 런타임 호스트가 polling 대신 쓴다 (plan 18 K1-6). 보내는 쪽의 notify_one 이 기다리는 다른 보내는 쪽을
-     * 깨울 수도 있으므로, 깨어나지 못해도 최대 timeout 만큼만 기다린다.
+     * 깨울 수도 있으므로, 깨어나지 못해도 최대 timeout 만큼만 기다린다. 입력이 없어도 `CoreInputWaker` 가 깨우면
+     * `Empty` 로 바로 돌아온다 (plan 19 Q2-4).
      */
     pub(super) fn recv_timeout(&self, timeout: Duration) -> Result<CoreInput, TryRecvError> {
         let deadline = Instant::now() + timeout;
@@ -254,6 +291,10 @@ impl CoreInputReceiver {
                 drop(state);
                 self.shared.changed.notify_one();
                 return Ok(input);
+            }
+            if state.wake_requested {
+                state.wake_requested = false;
+                return Err(TryRecvError::Empty);
             }
             if state.sender_count == 0 {
                 return Err(TryRecvError::Disconnected);
@@ -597,6 +638,40 @@ mod tests {
             Ok(status_input(1)),
             "a waiting receiver wakes for a sent input"
         );
+    }
+
+    #[test]
+    fn a_waker_ends_a_blocking_receive_without_an_input_and_is_not_lost() {
+        // plan 19 Q2-4: another kernel inbox rings the same mailbox instead of waiting for the deadline.
+        let (_sender, receiver) = core_input_channel();
+        let waker = receiver.waker();
+        waker.wake();
+        let started = std::time::Instant::now();
+        assert_eq!(
+            receiver.recv_timeout(Duration::from_secs(10)),
+            Err(TryRecvError::Empty),
+            "a wake before the wait is kept"
+        );
+        assert!(started.elapsed() < Duration::from_secs(5));
+
+        let waiter = std::thread::spawn(move || {
+            let started = std::time::Instant::now();
+            let result = receiver.recv_timeout(Duration::from_secs(10));
+            (result, started.elapsed())
+        });
+        std::thread::sleep(Duration::from_millis(20));
+        waker.wake();
+        let (result, waited) = waiter.join().expect("receiver thread should finish");
+        assert_eq!(result, Err(TryRecvError::Empty));
+        assert!(waited < Duration::from_secs(5), "the wake ends the wait");
+    }
+
+    #[test]
+    fn a_waker_does_not_keep_the_mailbox_connected() {
+        let (sender, receiver) = core_input_channel();
+        let _waker = receiver.waker();
+        drop(sender);
+        assert_eq!(receiver.try_recv(), Err(TryRecvError::Disconnected));
     }
 
     #[test]

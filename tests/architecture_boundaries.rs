@@ -14217,6 +14217,8 @@ fn verify_client_runtime_api_boundary(
         "dispatch_input",
         // plan 18 K3-5: the kernel host reads whether core work remains before it unloads an idle kernel.
         "has_remaining_work",
+        // plan 19 Q2-4: the other kernel inboxes wake the host wait on the core mailbox.
+        "input_waker",
         "new",
         // plan 19 Q2-2: the host asks for the next post-turn step after every dispatch.
         "next_post_turn_host_step",
@@ -14318,6 +14320,8 @@ fn verify_client_runtime_api_boundary(
         "dispatch_client_event",
         // plan 18 K3-5: read-only check before the gateway unloads an idle kernel.
         "has_remaining_work",
+        // plan 19 Q2-4: the kernel host wakes the host wait when a client input arrives.
+        "host_waker",
         "parallel_control_plane_projection",
         "parallel_epoch_snapshot",
         "parallel_mode_enabled",
@@ -14332,6 +14336,7 @@ fn verify_client_runtime_api_boundary(
     let read_only_facade_api = [
         "current_parallel_epoch_id_for_workspace",
         "has_remaining_work",
+        "host_waker",
         "parallel_control_plane_projection",
         "parallel_epoch_snapshot",
         "parallel_mode_enabled",
