@@ -148,7 +148,12 @@ client가 prompt를 다시 보내지 않도록 큐에 남은 planning task id를
 턴 뒤 reconcile이 `ResubmitQueuedThreadPrompt`를 고릅니다. 그래서 자동 후속이 먼저 이어 갑니다. Core는
 prompt를 한 번 다시 내고 `submitted`를 알립니다 (다시 거절되면 `queued`). 병렬 모드가 켜졌으면 slot이
 작업을 맡으므로 내지 않습니다. planning 투영이 작업을 완료나 취소로 보여도 내지 않습니다. 남긴 prompt는
-남은 일로 세고, 재시작하면 잃습니다 (작업은 큐에 남습니다). Thread를 다시 열면 live
+남은 일로 셉니다. Core는 남김과 그 끝남을 기록용 사건(`AppEvent::KernelRecorded`)으로도 내고,
+`NativeClientRuntime`이 client에 보내기 전에 꺼냅니다. `build_kernel_for_workspace`가 만든 저장소 커널은 그
+사건을 기록 thread로 planning SQLite의 `kernel_events` 표에 씁니다. 저장소 잠금을 잡은 뒤 그 기록을 읽고, 끝나지
+않은 남김을 host 전용 `RestoreQueuedThreadPrompts`로 되돌립니다. 그래서 다시 시작한 커널도 쉴 때 한 번 다시
+냅니다. 표는 처음 쓸 때 만들고 schema version은 바꾸지 않으므로 이전 binary도 저장소를 엽니다. TUI 런타임은
+기록용 사건을 버립니다. Thread를 다시 열면 live
 runtime 상태가 보이고 transcript는 provider에서 다시 읽습니다.
 
 `CoreRuntime`, effect executor, input mailbox는 library SDK가 아닌 crate-private 구현 세부사항입니다.

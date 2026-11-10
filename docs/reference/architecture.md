@@ -161,8 +161,14 @@ prepared prompt in memory. The host's post-turn reconcile offers `ResubmitQueued
 every session is idle and no preparation runs, so auto-follow continues first. Core then submits the
 prompt once and reports `submitted` (or `queued` again if that also fails). It submits nothing when
 parallel mode started (the slots take the task) or when the planning projection shows the task done
-or cancelled. The queued prompt counts as remaining work and is lost on restart; the task stays
-queued. Reopening a thread
+or cancelled. The queued prompt counts as remaining work. Core also emits kernel records
+(`AppEvent::KernelRecorded`) for the queue and its settlement; `NativeClientRuntime` takes them out
+before any client sees them. A repository kernel built by `build_kernel_for_workspace` writes those
+records to the `kernel_events` table of the planning SQLite store through a recorder thread. After
+it takes the repository lock, it reads that log and restores the open queued prompts with the
+host-only `RestoreQueuedThreadPrompts`, so a restarted kernel submits them once when idle. The table
+is created on first use, without a schema version change, so older binaries still open the store.
+The TUI runtime drops kernel records. Reopening a thread
 shows its live runtime state; its transcript is reloaded from the provider.
 
 `CoreRuntime`, its effect executor, and its input mailbox are crate-private implementation details,
