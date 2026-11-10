@@ -272,7 +272,8 @@ the desktop app itself is not shipped yet.
   same socket) before it starts its own.
 - Sessions: each client WebSocket gets its own `codex app-server proxy --sock …` child, so `initialize`,
   request ids, and thread subscriptions stay per connection. Frames pass through unchanged; only
-  `akra/*` requests are answered by the Gateway (`akra/mcp/*` is the MCP hub, see below;
+  `akra/*` requests are answered by the Gateway (`akra/mcp/*` is the MCP hub and `akra/context/*` is the
+  work context, see below;
   `akra/gateway/info` returns gateway and codex versions,
   start time, and upstream restarts). An upstream restart closes clients with WebSocket close `1012`;
   an unavailable upstream closes them with `1013`.
@@ -339,6 +340,26 @@ call tools on demand.
   registers that folder with `skills/extraRoots/set` right after `initialize`. A failure only leaves
   a warning. Connections opened before the first server was added do not see the skill.
 
+## Work Context
+
+The Gateway records the external documents that a thread mentions, without a model call
+([plan 22](../plan/22-akra-work-context.md)).
+
+- `akra/context/thread { threadId }` reads the thread items that are new since the last call
+  (`thread/items/list`, newest first, stops at the last read item), finds documents in user and agent
+  messages, commands, and MCP tool arguments, stores them, and returns
+  `{ resources: [{ kind, key, url, title, source, firstSeenAt }] }`. Command output and tool results are
+  not read.
+- Recognizers (`src/domain/work_context.rs`): Notion pages, Jira issues (`<site>/browse/KEY-123`), and
+  GitHub pull requests and issues. A new service is one `ExternalResourceRecognizer`; the ledger, the
+  Gateway, and Desktop handle only the kind name.
+- Ledger: `$AKRA_HOME/work-context/ledger.sqlite` with documents, document-to-scope links (only the
+  `thread` scope today), and scan markers.
+- Desktop reads the open thread's documents when a thread opens and when a turn ends, shows the count
+  on the "문서" button, and lists them by kind in the "관련 문서" side panel.
+- Limits: ephemeral threads and threads without turns have no items to read; the first read of a very
+  long thread covers the newest 5,000 items.
+
 ## Recovery and Limits
 
 - Invalid or conflicting planning updates pause continuation and preserve review evidence.
@@ -361,6 +382,8 @@ call tools on demand.
 - Admin: `src/adapter/inbound/admin_api/`
 - Telegram: `src/adapter/inbound/telegram_bot/`
 - Gateway: `src/adapter/inbound/gateway/`, `src/adapter/outbound/app_server/gateway_upstream.rs`
+- Work context: `src/domain/work_context.rs`, `src/application/service/work_context.rs`,
+  `src/adapter/inbound/gateway/context.rs`, `desktop/src/renderer/work/threadDocuments.ts`
 - MCP hub: `src/adapter/inbound/cli/mcp.rs`, `src/application/service/mcp_hub.rs`,
   `src/adapter/outbound/mcp_hub/`
 - Desktop (in development, plan P2): `desktop/` — Electron shell that connects each window to `akra-gateway`;

@@ -22,6 +22,7 @@ mod proxy_transport;
 pub(crate) mod runtime;
 mod startup_environment;
 mod steering;
+pub(crate) mod thread_transcript;
 
 use std::collections::BTreeMap;
 use std::fs;

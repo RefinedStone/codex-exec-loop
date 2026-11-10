@@ -97,7 +97,7 @@ async fn connect_client(upstream: Arc<EchoUpstream>) -> WebSocketStream<DuplexSt
             gateway_side,
             upstream,
             Arc::new(crate::composition::repository_kernel::RepositoryKernelRegistry::default()),
-            None,
+            super::session::GatewayServices::default(),
             None,
         )
         .await;
@@ -241,7 +241,14 @@ async fn connect_kernel_client(
     let (client_side, gateway_side) = tokio::io::duplex(DUPLEX_BUFFER_BYTES);
     let upstream = EchoUpstream::new(true);
     tokio::spawn(async move {
-        let _ = run_session(gateway_side, upstream, kernels, None, None).await;
+        let _ = run_session(
+            gateway_side,
+            upstream,
+            kernels,
+            super::session::GatewayServices::default(),
+            None,
+        )
+        .await;
     });
     let (websocket, _) = tokio_tungstenite::client_async_with_config(
         "ws://localhost/",
@@ -499,7 +506,7 @@ async fn a_client_close_ends_the_session_without_waiting_for_the_flush_timeout()
         gateway_side,
         EchoUpstream::new(true),
         Arc::new(crate::composition::repository_kernel::RepositoryKernelRegistry::default()),
-        None,
+        super::session::GatewayServices::default(),
         None,
     ));
     let (mut client, _) = tokio_tungstenite::client_async_with_config(

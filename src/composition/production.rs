@@ -8,10 +8,12 @@ use anyhow::Result;
 
 use crate::adapter::inbound::gateway::GatewayMcpHub;
 use crate::adapter::outbound::app_server::gateway_upstream::AppServerGatewayUpstream;
+use crate::adapter::outbound::app_server::thread_transcript::AppServerThreadTranscript;
 use crate::adapter::outbound::app_server::{
     AppServerPlanningWorkerAdapter, CodexAppServerAdapter, GatewayUpstreamSocket,
 };
 use crate::adapter::outbound::clipboard::PlatformClipboardImageAdapter;
+use crate::adapter::outbound::db::sqlite_work_context_store::SqliteWorkContextStore;
 use crate::adapter::outbound::db::{
     SqlitePlanningAuthorityAdapter, SqliteTelegramGlobalRunnerLeaseAdapter,
 };
@@ -42,6 +44,7 @@ use crate::application::port::inbound::pr_validation_command_port::PrValidationC
 use crate::application::port::inbound::pr_validation_query_port::PrValidationQueryPort;
 use crate::application::port::inbound::pr_validation_rollout_evidence_query_port::PrValidationRolloutEvidenceQueryPort;
 use crate::application::port::inbound::review_center_query_port::ReviewCenterQueryPort;
+use crate::application::port::inbound::work_context_port::WorkContextPort;
 use crate::application::port::outbound::app_server_prompt_log_port::{
     AppServerPromptLogMaintenanceMode, AppServerPromptLogMaintenancePort, AppServerPromptLogPort,
     NoopAppServerPromptLogPort,
@@ -84,6 +87,7 @@ use crate::application::service::pr_validation_rollout_evidence_query::PrValidat
 use crate::application::service::review_center::ReviewCenterReadService;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
+use crate::application::service::work_context::WorkContextService;
 use crate::composition::native_client_runtime::{
     NativeClientRuntime, NativeTuiApplicationComposition,
 };
@@ -367,6 +371,7 @@ pub(crate) struct GatewayBackend {
     pub(crate) upstream: Arc<dyn GatewayUpstreamPort>,
     pub(crate) kernels: Arc<RepositoryKernelRegistry>,
     pub(crate) mcp_hub: Arc<GatewayMcpHub>,
+    pub(crate) work_context: Arc<dyn WorkContextPort>,
 }
 
 pub(crate) fn build_gateway_backend(run_dir: &Path) -> Result<GatewayBackend> {
@@ -379,10 +384,16 @@ pub(crate) fn build_gateway_backend(run_dir: &Path) -> Result<GatewayBackend> {
         hub.home().display().to_string(),
         Arc::new(hub),
     ));
+    let upstream: Arc<dyn GatewayUpstreamPort> = Arc::new(upstream);
+    let work_context: Arc<dyn WorkContextPort> = Arc::new(WorkContextService::new(
+        Arc::new(AppServerThreadTranscript::new(upstream.clone())),
+        Arc::new(SqliteWorkContextStore::from_environment()?),
+    ));
     Ok(GatewayBackend {
-        upstream: Arc::new(upstream),
+        upstream,
         kernels,
         mcp_hub,
+        work_context,
     })
 }
 

@@ -166,7 +166,7 @@ function answerMcpHub(hub: FakeMcpHub, socket: WebSocket, message: JsonRpcEnvelo
 export async function startFakeGateway(
   endpoint: string,
   recordingPaths: string | string[],
-  options: { kernel?: FakeKernel; mcpHub?: FakeMcpHub } = {},
+  options: { kernel?: FakeKernel; mcpHub?: FakeMcpHub; threadDocuments?: Record<string, unknown[]> } = {},
 ): Promise<FakeGateway> {
   const paths = Array.isArray(recordingPaths) ? recordingPaths : [recordingPaths];
   const table = new Map<string, Pick<JsonRpcEnvelope, "result" | "error">>();
@@ -238,6 +238,12 @@ export async function startFakeGateway(
       receivedMethods.push(message.method);
       if (options.kernel && message.method.startsWith("akra/kernel/")) {
         answerKernel(options.kernel, socket, message);
+        return;
+      }
+      // 작업 컨텍스트 (plan 22): 스레드 id → `akra/context/thread` 의 resources 이다.
+      if (options.threadDocuments && message.method === "akra/context/thread") {
+        const threadId = String((message as { params?: { threadId?: unknown } }).params?.threadId ?? "");
+        socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { resources: options.threadDocuments[threadId] ?? [] } }));
         return;
       }
       if (options.mcpHub && message.method.startsWith("akra/mcp/")) {
