@@ -678,9 +678,10 @@ impl NativeClientRuntime {
         }
         self.core_parallel_mode = Some(enabled);
         // core 에 바로 넣는다. 턴 뒤 단계는 이 보고를 부른 바깥 dispatch 가 상태를 보고 한다 (plan 19 Q2-2).
-        let outcome = self.core.runtime.dispatch_input(CoreInput::Command(
-            AppCommand::SetParallelModeEnabled(enabled),
-        ));
+        let outcome = self
+            .core
+            .runtime
+            .dispatch_command(AppCommand::SetParallelModeEnabled(enabled));
         debug_assert!(
             outcome.events.is_empty(),
             "reporting the parallel mode only updates core state"
