@@ -272,7 +272,8 @@ the desktop app itself is not shipped yet.
   same socket) before it starts its own.
 - Sessions: each client WebSocket gets its own `codex app-server proxy --sock …` child, so `initialize`,
   request ids, and thread subscriptions stay per connection. Frames pass through unchanged; only
-  `akra/*` requests are answered by the Gateway (`akra/gateway/info` returns gateway and codex versions,
+  `akra/*` requests are answered by the Gateway (`akra/mcp/*` is the MCP hub, see below;
+  `akra/gateway/info` returns gateway and codex versions,
   start time, and upstream restarts). An upstream restart closes clients with WebSocket close `1012`;
   an unavailable upstream closes them with `1013`.
 - Kernel protocol (`akra/kernel/*`, plan 18 K3 protocol v0): a client sends `akra/kernel/attach`
@@ -314,14 +315,21 @@ call tools on demand.
   registers a stdio server. `call <server> <tool> [<json-object>|-]` reads the arguments inline or from
   stdin and exits with 1 when the tool result has `isError: true`.
 - The command does not resolve repository configuration, so it runs in any directory.
-- Engine: each command starts a hub-only `codex app-server` with `CODEX_HOME=$AKRA_HOME/mcp-hub` and
-  stops it when done. Codex owns the MCP transports, OAuth, and token storage and refresh. The
+- Engine: a hub-only `codex app-server` with `CODEX_HOME=$AKRA_HOME/mcp-hub`. When `akra-gateway` runs,
+  `servers`, `search`, `describe`, and `call` go to its resident engine (`akra/mcp/statuses`,
+  `akra/mcp/call`); otherwise each command starts its own engine and stops it when done. Codex owns the MCP transports, OAuth, and token storage and refresh. The
   registry is `$AKRA_HOME/mcp-hub/config.toml` in Codex `[mcp_servers.<name>]` form; extra Codex keys
   written by hand are kept.
 - `call` opens an ephemeral thread with only the target server enabled. `search` and `servers`
   connect every enabled server. Requests that app-server sends to the hub (MCP elicitation and others)
   are declined.
 - `login` prints the authorization URL on stderr and waits up to 10 minutes for the OAuth callback.
+- The Gateway starts the resident engine on the first request, reuses one ephemeral thread per server,
+  handles one request at a time, drops the engine after an error, and stops it after 10 idle minutes.
+  Every request carries `hubHome`; a Gateway that serves a different hub answers `-32040`. The CLI
+  falls back to its own engine only when it cannot connect, gets method-not-found or `-32040`, or the
+  Gateway closes with 1013 before reading; any other failure after sending is an error, so a tool call
+  never runs twice. `add`, `remove`, and `login` run in the CLI and then send `akra/mcp/reload`.
 - When the registry has at least one server, the hub writes
   `$AKRA_HOME/mcp-hub/agent-skills/akra-mcp-hub/SKILL.md`, and every Akra app-server connection
   registers that folder with `skills/extraRoots/set` right after `initialize`. A failure only leaves

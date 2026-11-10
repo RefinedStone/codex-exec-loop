@@ -1,6 +1,6 @@
 # 21. Akra MCP hub
 
-상태: 1단계 완료 (CLI + skill) · 기준일: 2026-11-10 · 관련: plan 17 R4(업무 패널), plan 20(observe-and-offer)
+상태: 2단계 완료 (CLI + skill, Gateway 상주 엔진) · 기준일: 2026-11-11 · 관련: plan 17 R4(업무 패널), plan 20(observe-and-offer)
 
 ## 목표
 
@@ -43,11 +43,26 @@
 - 확인: 격리된 `AKRA_HOME` 에서 가짜 stdio 서버의 add, servers, search, describe, call(인라인, stdin) 과 Notion
   등록 후 `notLoggedIn` 표시를 실제 app-server 로 확인했다. 실제 Notion 로그인과 호출은 하지 않았다.
 
+## 2단계 (완료, 2026-11-11): Gateway 상주 엔진
+
+- Gateway 가 hub 엔진(hub 전용 app-server)을 첫 요청에 띄우고 유지한다. 서버별 ephemeral 스레드를 다시 쓰므로
+  MCP 연결과 원격 handshake 를 매번 하지 않는다. 10분 동안 쓰지 않으면 커널 정리 주기(30초)에 내린다. 오류가
+  나면 엔진을 버리고 다음 요청이 새로 띄운다. 요청은 하나씩 처리한다.
+- Gateway 메서드: `akra/mcp/statuses`, `akra/mcp/call`, `akra/mcp/reload`. 모든 요청에 `hubHome` 을 싣는다.
+  Windows 의 Gateway pipe 이름은 `AKRA_HOME` 이 아니라 사용자에 묶이므로, hub 폴더가 다르면 Gateway 는
+  `-32040` 으로 거절한다.
+- CLI 는 `servers`, `search`, `describe`, `call` 을 Gateway 로 먼저 보낸다. 직접 실행으로 돌아가는 경우는 셋뿐이다:
+  접속하지 못했을 때, 모르는 메서드(오래된 Gateway)나 다른 hub 폴더라는 답을 받았을 때, Gateway 가 upstream 을
+  열지 못해 1013 으로 닫았을 때. 요청을 보낸 뒤의 다른 실패는 오류로 끝낸다. 그래서 쓰기 도구가 두 번 실행되지
+  않는다.
+- `add`, `remove`, `login` 은 CLI 가 직접 하고, 끝나면 `akra/mcp/reload` 로 상주 엔진을 내린다.
+- Gateway 와 클라이언트의 endpoint 이름은 `src/gateway_endpoint.rs` 하나에서 정한다.
+- 확인: 격리된 `AKRA_HOME` 의 실제 `akra-gateway` 에서 가짜 stdio 서버 호출이 첫 번째 293ms, 그 뒤 약 55ms
+  였다 (직접 실행은 약 400ms). 서버 추가 뒤 상주 엔진이 내려갔다. 다른 `AKRA_HOME` 은 직접 실행했다. Gateway 를
+  끈 뒤에도 직접 실행했고, 남은 app-server 는 없었다.
+
 ## 남은 단계 (proposed)
 
-- **2단계: Gateway 상주 엔진.** Gateway 가 hub app-server 를 계속 띄워 두고 `akra/mcp/*` 요청을 받는다.
-  CLI 는 Gateway 가 있으면 그쪽을 쓴다. 효과: 원격 서버 handshake 를 매번 하지 않는다. 샌드박스 정책이
-  `workspace-write` 일 때도 CLI 는 로컬 IPC 만 하므로 네트워크 권한이 필요 없다.
 - **3단계: Desktop 패널.** Notion 같은 서비스의 목록 화면은 MCP 결과(모델용 글)보다 각 서비스 REST API 의
   구조화된 JSON 이 낫다. 패널은 REST, 에이전트는 hub 로 나누는 안을 R4 에서 다시 정한다.
 - **도구 목록 캐시.** `search` 가 모든 서버에 연결하지 않도록 서버별 도구 목록을 저장한다.
@@ -55,7 +70,8 @@
 
 ## 알려진 한계
 
-- 기본 정책(`danger-full-access`)이 아니면 에이전트의 `akra mcp` 실행이 네트워크와 hub 폴더 쓰기 승인을 요구할
-  수 있다.
+- Gateway 가 없고 기본 정책(`danger-full-access`)도 아니면, 에이전트의 `akra mcp` 직접 실행이 네트워크와 hub
+  폴더 쓰기 승인을 요구할 수 있다. Gateway 가 있으면 조회와 호출은 로컬 IPC 만 쓴다.
+- 상주 엔진은 요청을 하나씩 처리한다. 긴 도구 호출 하나가 다른 세션의 호출을 기다리게 한다.
 - skill root 는 app-server 연결을 열 때 정해진다. 서버를 처음 추가한 뒤에는 새 연결부터 skill 이 보인다.
 - `search` 는 켜진 모든 서버에 연결한다. 로그인하지 않은 서버는 오류로 표시되고 도구가 0개이다.

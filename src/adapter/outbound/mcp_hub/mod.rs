@@ -8,15 +8,19 @@
 //! - skill: 서버가 하나라도 있으면 `agent-skills/akra-mcp-hub/SKILL.md` 를 쓰고, app-server 연결이 그 폴더를
 //!   skill root 로 등록한다. 세션은 skill 설명 한 줄만 싣고, 필요할 때 `akra mcp` 를 쓴다.
 
+mod gateway_client;
 mod session;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value, json};
 use toml_edit::{Array, DocumentMut, Item, Table, value};
 
+pub(crate) use self::gateway_client::GatewayRoutedMcpHubBackend;
 use self::session::HubAppServerSession;
 use crate::application::port::outbound::mcp_hub_backend_port::McpHubBackendPort;
 use crate::domain::mcp_hub::{
@@ -35,17 +39,44 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(600);
 const STATUS_PAGE_LIMIT: u64 = 100;
 
+/// 상주 엔진이 이 시간 동안 쓰이지 않으면 Gateway 가 내린다. 커널의 한가한 시간과 같다.
+const RESIDENT_IDLE_LIMIT: Duration = Duration::from_secs(600);
+
 pub(crate) struct CodexMcpHubBackend {
     home: PathBuf,
+    // None 이면 명령마다 app-server 를 띄우고 끝낸다. Some 이면 Gateway 처럼 app-server 를 유지한다.
+    resident: Option<Mutex<Option<ResidentEngine>>>,
+}
+
+/// Gateway 가 유지하는 app-server 와 서버별 ephemeral 스레드이다. 스레드를 다시 쓰면 MCP 연결도 유지된다.
+struct ResidentEngine {
+    session: HubAppServerSession,
+    threads: HashMap<String, String>,
+    last_used: Instant,
 }
 
 impl CodexMcpHubBackend {
     pub(crate) fn from_environment() -> Result<Self> {
-        Ok(Self { home: hub_home()? })
+        Ok(Self::with_home(hub_home()?))
+    }
+
+    /// Gateway 용이다. 첫 요청에 app-server 를 띄우고, reload 나 한가한 시간이 지날 때까지 유지한다.
+    pub(crate) fn resident_from_environment() -> Result<Self> {
+        Ok(Self {
+            home: hub_home()?,
+            resident: Some(Mutex::new(None)),
+        })
     }
 
     fn with_home(home: PathBuf) -> Self {
-        Self { home }
+        Self {
+            home,
+            resident: None,
+        }
+    }
+
+    pub(crate) fn home(&self) -> &Path {
+        &self.home
     }
 
     fn config_path(&self) -> PathBuf {
@@ -77,6 +108,39 @@ impl CodexMcpHubBackend {
         let codex = crate::trusted_executable::pinned_codex_command()
             .context("the MCP hub needs the `codex` CLI")?;
         HubAppServerSession::open(&codex, &self.home)
+    }
+
+    /*
+     * app-server 세션 하나로 작업한다. 상주 모드는 세션과 스레드를 다시 쓰고, 오류가 나면 세션을 버려서 다음 요청이
+     * 새로 시작하게 한다. 일회 모드는 매번 새 세션을 열고 끝나면 닫는다.
+     */
+    fn with_engine<T>(
+        &self,
+        work: impl FnOnce(&mut HubAppServerSession, &mut HashMap<String, String>) -> Result<T>,
+    ) -> Result<T> {
+        let Some(resident) = &self.resident else {
+            let mut session = self.open_session()?;
+            return work(&mut session, &mut HashMap::new());
+        };
+        let mut guard = resident
+            .lock()
+            .map_err(|_| anyhow::anyhow!("the MCP hub engine lock is poisoned"))?;
+        if guard.is_none() {
+            *guard = Some(ResidentEngine {
+                session: self.open_session()?,
+                threads: HashMap::new(),
+                last_used: Instant::now(),
+            });
+        }
+        let Some(engine) = guard.as_mut() else {
+            bail!("the MCP hub engine did not start")
+        };
+        let result = work(&mut engine.session, &mut engine.threads);
+        match result {
+            Ok(_) => engine.last_used = Instant::now(),
+            Err(_) => *guard = None,
+        }
+        result
     }
 
     /// 대상 서버만 켠 ephemeral 스레드를 연다. 다른 서버는 접속하지 않는다.
@@ -122,7 +186,8 @@ impl McpHubBackendPort for CodexMcpHubBackend {
             .context("`mcp_servers` in the MCP hub config is not a table")?;
         servers.insert(&spec.name, Item::Table(server_table(spec)));
         self.write_document(&document)?;
-        write_agent_skill(&self.home)
+        write_agent_skill(&self.home)?;
+        self.reload()
     }
 
     fn unregister_server(&self, name: &str) -> Result<bool> {
@@ -134,47 +199,34 @@ impl McpHubBackendPort for CodexMcpHubBackend {
             .is_some();
         if removed {
             self.write_document(&document)?;
+            self.reload()?;
         }
         Ok(removed)
     }
 
     fn server_statuses(&self, only: Option<&str>) -> Result<Vec<McpHubServerStatus>> {
-        let mut session = self.open_session()?;
-        let mut statuses = Vec::new();
-        let mut cursor: Option<String> = None;
-        loop {
-            let mut params = json!({ "detail": "full", "limit": STATUS_PAGE_LIMIT });
-            if let Some(name) = only {
-                params["serverName"] = json!(name);
-            }
-            if let Some(cursor) = &cursor {
-                params["cursor"] = json!(cursor);
-            }
-            let page = session.request("mcpServerStatus/list", params, REQUEST_TIMEOUT)?;
-            if let Some(entries) = page.get("data").and_then(Value::as_array) {
-                statuses.extend(entries.iter().map(server_status_from_wire));
-            }
-            cursor = page
-                .get("nextCursor")
-                .and_then(Value::as_str)
-                .map(str::to_string);
-            if cursor.is_none() {
-                break;
-            }
-        }
-        Ok(statuses)
+        self.with_engine(|session, _threads| statuses_from(session, only))
     }
 
     fn call_tool(&self, server: &str, tool: &str, arguments: Value) -> Result<Value> {
-        let mut session = self.open_session()?;
-        let thread_id = self.start_thread_for(&mut session, server)?;
-        session.request(
-            "mcpServer/tool/call",
-            json!({ "threadId": thread_id, "server": server, "tool": tool, "arguments": arguments }),
-            REQUEST_TIMEOUT,
-        )
+        self.with_engine(|session, threads| {
+            let thread_id = match threads.get(server) {
+                Some(thread_id) => thread_id.clone(),
+                None => {
+                    let thread_id = self.start_thread_for(session, server)?;
+                    threads.insert(server.to_string(), thread_id.clone());
+                    thread_id
+                }
+            };
+            session.request(
+                "mcpServer/tool/call",
+                json!({ "threadId": thread_id, "server": server, "tool": tool, "arguments": arguments }),
+                REQUEST_TIMEOUT,
+            )
+        })
     }
 
+    /// 로그인은 사용자를 오래 기다리므로 상주 엔진을 쓰지 않고 따로 연다. 끝나면 상주 엔진을 내린다.
     fn login(&self, server: &str, on_authorization_url: &mut dyn FnMut(&str)) -> Result<()> {
         let mut session = self.open_session()?;
         let response = session.request(
@@ -192,6 +244,8 @@ impl McpHubBackendPort for CodexMcpHubBackend {
             LOGIN_TIMEOUT,
             |params| params.get("name").and_then(Value::as_str) == Some(server),
         )?;
+        drop(session);
+        self.reload()?;
         if completed.get("success").and_then(Value::as_bool) == Some(true) {
             return Ok(());
         }
@@ -200,6 +254,65 @@ impl McpHubBackendPort for CodexMcpHubBackend {
             .and_then(Value::as_str)
             .unwrap_or("the login did not finish");
         bail!("MCP server `{server}` login failed: {detail}")
+    }
+
+    fn reload(&self) -> Result<()> {
+        if let Some(resident) = &self.resident {
+            let engine = resident
+                .lock()
+                .map_err(|_| anyhow::anyhow!("the MCP hub engine lock is poisoned"))?
+                .take();
+            // app-server 정리는 잠금 밖에서 한다.
+            drop(engine);
+        }
+        Ok(())
+    }
+
+    fn release_if_idle(&self) {
+        let Some(resident) = &self.resident else {
+            return;
+        };
+        let Ok(mut guard) = resident.try_lock() else {
+            return;
+        };
+        let idle = guard
+            .as_ref()
+            .is_some_and(|engine| is_idle(engine.last_used, Instant::now()));
+        let engine = if idle { guard.take() } else { None };
+        drop(guard);
+        drop(engine);
+    }
+}
+
+fn is_idle(last_used: Instant, now: Instant) -> bool {
+    now.saturating_duration_since(last_used) >= RESIDENT_IDLE_LIMIT
+}
+
+fn statuses_from(
+    session: &mut HubAppServerSession,
+    only: Option<&str>,
+) -> Result<Vec<McpHubServerStatus>> {
+    let mut statuses = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let mut params = json!({ "detail": "full", "limit": STATUS_PAGE_LIMIT });
+        if let Some(name) = only {
+            params["serverName"] = json!(name);
+        }
+        if let Some(cursor) = &cursor {
+            params["cursor"] = json!(cursor);
+        }
+        let page = session.request("mcpServerStatus/list", params, REQUEST_TIMEOUT)?;
+        if let Some(entries) = page.get("data").and_then(Value::as_array) {
+            statuses.extend(entries.iter().map(server_status_from_wire));
+        }
+        cursor = page
+            .get("nextCursor")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        if cursor.is_none() {
+            return Ok(statuses);
+        }
     }
 }
 
@@ -407,6 +520,24 @@ mod tests {
         assert_eq!(failed.connection, "failed");
         assert_eq!(failed.auth, "unknown");
         assert_eq!(failed.error.as_deref(), Some("auth required"));
+    }
+
+    #[test]
+    fn resident_engine_becomes_idle_at_the_limit() {
+        let start = Instant::now();
+        assert!(!is_idle(start, start));
+        assert!(!is_idle(
+            start,
+            start + RESIDENT_IDLE_LIMIT - Duration::from_secs(1)
+        ));
+        assert!(is_idle(start, start + RESIDENT_IDLE_LIMIT));
+    }
+
+    #[test]
+    fn one_shot_backend_has_no_engine_to_reload() {
+        let backend = CodexMcpHubBackend::with_home(temp_home("reload"));
+        backend.reload().unwrap();
+        backend.release_if_idle();
     }
 
     #[test]

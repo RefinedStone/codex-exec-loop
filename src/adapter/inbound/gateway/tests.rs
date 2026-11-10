@@ -98,6 +98,7 @@ async fn connect_client(upstream: Arc<EchoUpstream>) -> WebSocketStream<DuplexSt
             upstream,
             Arc::new(crate::composition::repository_kernel::RepositoryKernelRegistry::default()),
             None,
+            None,
         )
         .await;
     });
@@ -240,7 +241,7 @@ async fn connect_kernel_client(
     let (client_side, gateway_side) = tokio::io::duplex(DUPLEX_BUFFER_BYTES);
     let upstream = EchoUpstream::new(true);
     tokio::spawn(async move {
-        let _ = run_session(gateway_side, upstream, kernels, None).await;
+        let _ = run_session(gateway_side, upstream, kernels, None, None).await;
     });
     let (websocket, _) = tokio_tungstenite::client_async_with_config(
         "ws://localhost/",
@@ -488,6 +489,7 @@ async fn a_client_close_ends_the_session_without_waiting_for_the_flush_timeout()
         EchoUpstream::new(true),
         Arc::new(crate::composition::repository_kernel::RepositoryKernelRegistry::default()),
         None,
+        None,
     ));
     let (mut client, _) = tokio_tungstenite::client_async_with_config(
         "ws://localhost/",
@@ -632,11 +634,50 @@ async fn gateway_stop_stops_kernels_before_the_upstream_app_server() {
         kernel_lock_free_at_shutdown: Mutex::new(None),
     });
 
-    super::stop_backend(upstream.clone(), kernels).await;
+    super::stop_backend(upstream.clone(), kernels, empty_mcp_hub()).await;
 
     assert_eq!(
         *upstream.kernel_lock_free_at_shutdown.lock().unwrap(),
         Some(true),
         "the kernel stops and releases its lock before the upstream stops"
     );
+}
+
+/// MCP hub 가 필요 없는 테스트용이다. 등록된 서버가 없고 엔진도 없다.
+fn empty_mcp_hub() -> Arc<super::GatewayMcpHub> {
+    struct EmptyHub;
+    impl crate::application::port::outbound::mcp_hub_backend_port::McpHubBackendPort for EmptyHub {
+        fn registered_servers(
+            &self,
+        ) -> anyhow::Result<Vec<crate::domain::mcp_hub::McpHubServerSpec>> {
+            Ok(Vec::new())
+        }
+        fn register_server(
+            &self,
+            _spec: &crate::domain::mcp_hub::McpHubServerSpec,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn unregister_server(&self, _name: &str) -> anyhow::Result<bool> {
+            Ok(false)
+        }
+        fn server_statuses(
+            &self,
+            _only: Option<&str>,
+        ) -> anyhow::Result<Vec<crate::domain::mcp_hub::McpHubServerStatus>> {
+            Ok(Vec::new())
+        }
+        fn call_tool(
+            &self,
+            _server: &str,
+            _tool: &str,
+            _arguments: serde_json::Value,
+        ) -> anyhow::Result<serde_json::Value> {
+            anyhow::bail!("no MCP hub in this test")
+        }
+        fn login(&self, _server: &str, _on_url: &mut dyn FnMut(&str)) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+    Arc::new(super::GatewayMcpHub::new(String::new(), Arc::new(EmptyHub)))
 }

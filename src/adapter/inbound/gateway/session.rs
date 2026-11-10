@@ -16,6 +16,7 @@ use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
 
 use super::kernel::{KERNEL_METHOD_PREFIX, KernelRequests};
+use super::mcp::{GatewayMcpHub, MCP_METHOD_PREFIX, spawn_request as spawn_mcp_request};
 use super::recorder::{GatewayRecorder, RecordDirection, SessionRecording};
 use super::router::{ClientTextRoute, respond_to_akra_request, route_client_text};
 use crate::application::port::outbound::gateway_upstream_port::{
@@ -49,6 +50,8 @@ pub(super) async fn run_session<S>(
     client: S,
     upstream: Arc<dyn GatewayUpstreamPort>,
     kernels: Arc<RepositoryKernelRegistry>,
+    // 없으면 `akra/mcp/*` 를 모르는 메서드로 답한다. 테스트가 hub 없이 세션을 돌릴 때 쓴다.
+    mcp_hub: Option<Arc<GatewayMcpHub>>,
     recorder: Option<Arc<GatewayRecorder>>,
 ) -> Result<()>
 where
@@ -115,10 +118,23 @@ where
                     }
                     ClientTextRoute::AkraRequest { id, method } => {
                         record(RecordDirection::Client, text.as_str());
+                        let mcp_hub_for_method = mcp_hub
+                            .as_ref()
+                            .filter(|_| method.starts_with(MCP_METHOD_PREFIX));
                         let immediate = if method.starts_with(KERNEL_METHOD_PREFIX) {
                             kernel_requests
                                 .submit(id, method, text.as_str().to_string())
                                 .err()
+                        } else if let Some(hub) = mcp_hub_for_method {
+                            spawn_mcp_request(
+                                hub.clone(),
+                                id,
+                                method,
+                                text.as_str().to_string(),
+                                outbox.clone(),
+                                recording.clone(),
+                            );
+                            None
                         } else {
                             Some(respond_to_akra_request(id, &method, &upstream.snapshot()))
                         };

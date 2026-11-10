@@ -3,13 +3,27 @@
  * 세션은 서버 도구 스키마를 미리 싣지 않고, 필요할 때 `akra mcp` 로 검색하고 호출한다.
  * 이 모듈은 I/O 없이 이름 규칙과 결과 축약만 정한다.
  */
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// 서버 이름은 Codex `config.toml` 의 `mcp_servers.<name>` 키와 CLI 인자로 그대로 쓰인다.
 pub const MCP_HUB_SERVER_NAME_MAX_CHARS: usize = 64;
 /// 검색 결과의 설명은 첫 줄만, 이 길이까지만 보여 준다. 전체 설명은 describe 가 준다.
 pub const MCP_HUB_TOOL_SUMMARY_MAX_CHARS: usize = 160;
+
+/*
+ * Gateway 상주 엔진과 `akra mcp` 클라이언트 사이의 JSON-RPC 계약이다. 모든 요청 params 에 `hubHome` 을 싣는다.
+ * Windows 의 Gateway pipe 이름은 사용자에 묶이므로 다른 `AKRA_HOME` 의 Gateway 가 받을 수 있다. 경로가 다르면
+ * Gateway 는 `MCP_HUB_GATEWAY_OTHER_HUB` 로 답하고, 클라이언트는 직접 실행한다.
+ */
+pub const MCP_HUB_GATEWAY_METHOD_PREFIX: &str = "akra/mcp/";
+/// params `{ hubHome, server? }` -> result `{ statuses: [McpHubServerStatus] }`
+pub const MCP_HUB_GATEWAY_STATUSES: &str = "akra/mcp/statuses";
+/// params `{ hubHome, server, tool, arguments }` -> result 는 MCP `tools/call` 결과이다.
+pub const MCP_HUB_GATEWAY_CALL: &str = "akra/mcp/call";
+/// params `{ hubHome }` -> result `{}`. 등록부나 로그인이 바뀐 뒤 상주 엔진을 내린다.
+pub const MCP_HUB_GATEWAY_RELOAD: &str = "akra/mcp/reload";
+pub const MCP_HUB_GATEWAY_OTHER_HUB: i64 = -32040;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum McpHubTransport {
@@ -89,7 +103,7 @@ fn is_loopback_http_url(url: &str) -> bool {
 }
 
 /// backend 가 알려 준 서버 하나의 상태와 도구 목록이다.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct McpHubServerStatus {
     pub name: String,
     pub auth: String,
@@ -98,7 +112,7 @@ pub struct McpHubServerStatus {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct McpHubToolInfo {
     pub name: String,
     pub description: String,

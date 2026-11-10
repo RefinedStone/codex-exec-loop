@@ -33,6 +33,8 @@ pub mod configuration;
 pub mod diagnostics;
 // domain은 planning/parallel-mode의 상태 전이와 값 객체를 framework 없이 표현하는 가장 안쪽 계층이다.
 pub(crate) mod domain;
+// Gateway 의 로컬 IPC 이름은 listener 와 Rust 클라이언트가 같이 쓴다.
+pub(crate) mod gateway_endpoint;
 // Windows file identity와 owner-only DACL 처리는 trace/planning 같은 private stores가 공유한다.
 #[cfg(windows)]
 pub(crate) mod private_fs;
