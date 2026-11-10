@@ -171,7 +171,9 @@ writes those records to the `kernel_events` table of the planning SQLite store o
 through a recorder thread. After
 it takes the repository lock, it reads that log and restores the open queued prompts with the
 host-only `RestoreQueuedThreadPrompts`, so a restarted kernel submits them once when idle. The
-restore reads only the queue kinds. The table
+restore reads only the queue kinds. Each append keeps only the latest 10,000 records of the other
+kinds; the queue kinds stay for the restore. The `history` kernel query pages through the log by
+cursor on the kernel host thread. The table
 is created on first use, without a schema version change, so older binaries still open the store.
 The TUI runtime drops kernel records. Reopening a thread
 shows its live runtime state; its transcript is reloaded from the provider.

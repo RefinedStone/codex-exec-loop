@@ -103,7 +103,8 @@ Q-Q1, Q-Q2 는 기본값으로 정했다 (§8): 사건 기록(K5)을 스펙(K4)�
 | --- | --- | --- | --- |
 | Q3-1 | 기록 저장소(`KernelEventLogPort`, SQLite adapter, 기록기)와 첫 사건: 남긴 thread 지정 프롬프트의 남김과 끝남(`ThreadPromptQueued`, `ThreadPromptSettled`). 커널을 조립할 때 끝나지 않은 남김을 기록에서 읽어 core 에 되돌린다 | P1 첫 조각 | 구현됨 |
 | Q3-2 | 판단 사건을 더한다: 턴 제출(자동 후속 포함)·시작·끝, 턴 뒤 경로 결정, thread 지정 프롬프트 거절(이유 코드). 승인 사건은 Q3-5 로 옮겼다 | P3 | 구현됨 |
-| Q3-3 | 기록 조회와 커서 구독: `akra/kernel/query` 의 `events_after { cursor, limit }`, attach 의 cursor. 넘친 클라이언트는 `Resync` 대신 커서로 따라잡는다 | P3 | 제안 |
+| Q3-3 | 기록 조회와 보존: `akra/kernel/query` 의 `history { after, limit }`, 남김 종류가 아닌 사건은 최근 10,000개만 남긴다 | P3 | 구현됨 |
+| Q3-3b | 커서 구독: attach 의 cursor, 실시간 이벤트에 기록 sequence 를 붙인다. 넘친 클라이언트는 `Resync` 대신 커서로 따라잡는다. 턴 끝의 종류(완료, 중단, 실패)를 terminal receipt 에서 더한다 | P3 | 제안 |
 | Q3-4 | 타이머를 마감 시각으로 바꾼다. core 와 병렬 제어부가 다음 마감을 알리고, 호스트는 그때까지 잔다. Q2-4 의 250ms 주기 깨우기를 없앤다 | P2 | 제안 |
 | Q3-5 | 승인 객체: 승인 요청과 결정을 사건으로 기록하고(Q3-2 에서 옮김), 재시작 뒤 기다리는 승인을 보인다 | P1, P3 | 제안 |
 | Q3-6 | 연산 영수증(`op_id`, 상태, `next`)과 멱등 키 | P3 | 제안 |
@@ -146,11 +147,29 @@ Q3-2 결과 (`TurnSubmitted`, `TurnStarted`, `TurnEnded`, `PostTurnRouted`, `Thr
 - buffer 는 `ConversationTurnFeatureReducer` 에 둔다. `CoreController` 는 typed slice 8개만, `AppState` 는 스냅샷 필드
   하나만 가지도록 구조 시험이 막기 때문이다. 이 reducer 는 클라이언트에 알릴 thread 요약도 가진다.
 - 기록기는 커널의 작업 공간 하나에 쓴다. 복구도 그 작업 공간에서 읽는다. Q3-1 은 사건마다 그 사건의 작업 공간에 썼다.
-- shortcut: 기록은 지우지 않고 늘어난다. 보존 기간이나 개수 제한은 기록 조회(Q3-3)와 함께 정한다.
+- 기록은 지우지 않고 늘어났다. Q3-3 에서 보존 한도를 정했다.
 - 확인: domain 시험(턴 차이, 모든 종류의 JSON 왕복), adapter 시험(종류 거르기), 기록기 시험(실패한 묶음 다음 묶음을
   씀), core 시험 1개(제출·시작·끝·경로·거절이 buffer 에만 쌓임), 호스트 시험(복구 뒤 다시 낸 제출과 끝남을 기록),
   시뮬레이션 불변식 I6(아래), 커널 시뮬레이션 seed 2000개, Windows Rust gate. 결함 주입: 제출 중복 거르기를 빼면 I6 가
   seed 24개 모두에서 잡는다.
+
+Q3-3 결과 (`KernelQuery::History`, `KernelEventLogPort::load_kernel_events_after`):
+
+- 클라이언트는 `akra/kernel/query` 에 `{ "type": "history", "after": <cursor>, "limit": <n> }` 를 보낸다. 처음에는
+  `after` 를 비운다 (0). 답은 `{ "type": "history", "records": [...], "next_after": <cursor> }` 이다. 사건 하나는
+  `sequence`, `recorded_at`, `event` 이고, `event.kind` 가 종류이다. `limit` 의 기본값은 100, 한도는 500 이다.
+- 다음 조회는 답의 `next_after` 를 `after` 로 보낸다. 이 binary 가 모르는 사건은 건너뛰지만 cursor 는 그 뒤로 간다. 더
+  읽을 것이 없으면 받은 cursor 를 그대로 돌려준다. 기록이 없는 커널(TUI, 시험)은 빈 쪽을 돌려준다.
+- 조회는 Gateway 접속에서 커널 스레드로 가고, 커널 스레드가 기록을 읽는다 (`KernelHostInput::History`). 기록기는 따로
+  쓰므로 방금 낸 사건은 아직 없을 수 있다.
+- 보존: 사건을 쓸 때 남김 종류(`thread_prompt_queued`, `thread_prompt_settled`)가 아닌 사건은 최근 10,000개만 남긴다
+  (`RETAINED_KERNEL_EVENTS`). 남김 종류는 재시작 복구에 필요해서 지우지 않는다. 지워진 범위보다 오래된 cursor 는 남은 가장
+  오래된 사건부터 받는다.
+- shortcut: 기록을 커널 스레드에서 읽는다 (한 쪽은 최대 500개). 읽기가 느려지면 읽기 전용 연결로 옮긴다.
+- Desktop 은 아직 이 조회를 쓰지 않는다 (`desktop/src/renderer/kernel/protocol.ts` 에 타입이 없다).
+- 확인: adapter 시험(cursor 와 쪽 크기, 모르는 사건을 건너뛴 cursor, 보존 한도와 남김 보존), 프로토콜 시험(조회 해석,
+  답의 JSON 모양, 기록 없는 커널의 빈 쪽, `describe` 의 `history`), 커널 호스트 시험(쪽마다 읽기), Gateway 시험(접속을
+  거친 조회), 구조 시험(facade 의 읽기 전용 `kernel_event_history`), Windows Rust gate.
 
 ### 5.2 이어 붙이지 말고 맞춘다 (FSM + reconcile)
 

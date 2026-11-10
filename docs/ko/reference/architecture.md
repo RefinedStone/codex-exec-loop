@@ -154,7 +154,8 @@ prompt를 한 번 다시 내고 `submitted`를 알립니다 (다시 거절되면
 dispatch마다 buffer를 비웁니다. `build_kernel_for_workspace`가 만든 저장소 커널은 그 사건을 기록 thread로 자기
 작업 공간의 planning SQLite `kernel_events` 표에 씁니다. 저장소 잠금을 잡은 뒤 그 기록을 읽고, 끝나지
 않은 남김을 host 전용 `RestoreQueuedThreadPrompts`로 되돌립니다. 그래서 다시 시작한 커널도 쉴 때 한 번 다시
-냅니다. 복구는 남김 종류만 읽습니다. 표는 처음 쓸 때 만들고 schema version은 바꾸지 않으므로 이전 binary도 저장소를 엽니다. TUI 런타임은
+냅니다. 복구는 남김 종류만 읽습니다. 쓸 때마다 남김 종류가 아닌 사건은 최근 10,000개만 남기고, 남김 종류는
+복구를 위해 남깁니다. 커널 조회 `history`는 커널 host thread에서 cursor로 기록을 나누어 읽습니다. 표는 처음 쓸 때 만들고 schema version은 바꾸지 않으므로 이전 binary도 저장소를 엽니다. TUI 런타임은
 판단 사건을 버립니다. Thread를 다시 열면 live
 runtime 상태가 보이고 transcript는 provider에서 다시 읽습니다.
 
