@@ -104,7 +104,7 @@ TUI 에서 단계적으로 떼어내서(strangler) 기존 동작은 깨지 않�
 
 | 조각 | 내용 | 상태 |
 | --- | --- | --- |
-| Q2-1 | 턴 뒤 상태를 enum `PostTurnState` 하나로 모은다 (FSM 1단계). 동작은 바꾸지 않는다 | 구현됨 |
+| Q2-1 | 턴 뒤 평가·경로 단계(평가 대기, 평가 중, 경로 대기, 끝남)를 enum `PostTurnState` 하나로 모은다 (FSM 1단계). 동작은 바꾸지 않는다 | 구현됨 |
 | Q2-2 | 호스트의 이벤트 사슬(`PostTurnEvaluationDue`, `PostTurnContinuationRoutingRequested` 를 꺼내 다음 단계를 부름)을 상태 비교로 바꾼다. 매 dispatch 뒤 `PostTurnState` 를 보고 다음 행동 0~1개를 고른다. 이벤트를 끼워 넣는 위치(`merge_core_dispatch_outcome_at`)를 어떻게 지킬지 함께 정한다 | 제안 |
 | Q2-3 | 원격 준비가 큐에 남긴 작업을 쉴 때 다시 내는 일을 같은 규칙에 넣는다 (K3 §3.2) | 제안 |
 | Q2-4 | 입력함 셋(클라이언트, core, 병렬 완료)을 우편함 하나와 깨우기로 바꾼다 (50ms polling 제거) | 제안 |
@@ -117,6 +117,16 @@ Q2-1 결과 (`src/core/app/post_turn_state.rs`):
 - 이제 runtime 권한이 `PostTurnState` (`Idle`, `Due`, `Evaluating`, `AwaitingRoute`, `Settled`) 하나를 갖는다.
   `snapshot.post_turn` 은 그 투영이고 `set_post_turn` 만 둘을 바꾼다. 경로 대기는 경로 데이터를 담으므로 "경로 대기인데
   데이터가 없다"는 조합이 사라졌다.
+- 허용된 전이는 `PostTurnState::may_follow` 가 정한다. 상태를 바꾸는 곳은 `replace_post_turn` 하나이고, 시험 빌드에서
+  허용되지 않은 전이를 `debug_assert` 로 막는다. production 경로에는 `unreachable!` 이 없다.
+- 남은 턴 뒤 상태 보유자 (아직 `PostTurnState` 밖에 있다):
+
+  | 보유자 | 위치 | 옮길 조각 (제안) |
+  | --- | --- | --- |
+  | 자동 후속 단계 `AutoFollowPhase` 와 `completed_auto_turns` | `conversation_runtime.rs` | Q2-2. 경로 결정(`Settled { AutoSubmit }`)과 `AutoFollowPhase::Queued` 는 같은 사실이라 함께 바뀐다. 지금은 `classify_turn_admission` 이 실행 중에 둘을 같이 확인한다 |
+  | 평가 결과 무효화 gate `post_turn_continuation_gate` | `ThreadSession` | 옮기지 않는다. 상태가 아니라 worker 와 공유하는 세대 번호이다 |
+  | 스트림 쪽 종료·평가 표시 (`terminal`, `last_applied_post_turn_evaluation_id`) | `TurnStreamState` (`turn_stream.rs`) | Q2-2 에서 판단한다. 평가 입장(`can_start_post_turn_evaluation`)과 완료 수락이 이 값을 본다 |
+
 - 이전 동작을 그대로 둔 어색한 점 (Q2-2 에서 다시 본다):
   - 새 턴 시작(`begin_turn`), 대화 무효화, 평가 취소는 평가 대기를 지우지 않는다.
   - 턴 종료는 이전 평가 대기를 덮어쓴다. 호스트가 평가 대기를 바로 꺼내므로 실행 중인 커널에서는 생기지 않는다.
@@ -126,6 +136,9 @@ Q2-1 결과 (`src/core/app/post_turn_state.rs`):
   `a_due_evaluation_follows_its_session_when_the_client_leaves_the_conversation`). 구조 시험은 새 소유 관계(runtime
   권한의 `post_turn: PostTurnState`, reducer 에 평가 상태 필드 없음)를 확인한다.
 - 확인: `check_native_pr.sh`, 커널 시뮬레이션 seed 5000개가 통과했다.
+- 머지 뒤 두 축 리뷰(표준, 명세)의 지적 10건 중 9건을 고쳤다: panic 없는 상태 꺼내기, 전이 검사, 비교 helper, 이름
+  (`has_unsettled_work`), re-export 제거, 평가 중 덮어쓰기 때 permit 무효화, 이 문서의 남은 보유자 표. "wrapper 를
+  모두 지우는" 대안은 받지 않았다 (기존 wrapper 와 맞추는 쪽이 변경이 작다).
 
 ### 5.3 thread 를 독립 액터로 (동시성은 정책)
 
