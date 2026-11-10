@@ -26,4 +26,12 @@ pub trait McpHubBackendPort: Send + Sync {
 
     /// OAuth 로그인을 시작한다. 인증 주소를 알려 준 뒤 사용자가 끝낼 때까지 기다린다.
     fn login(&self, server: &str, on_authorization_url: &mut dyn FnMut(&str)) -> Result<()>;
+
+    /// 유지 중인 연결을 내린다. 다음 요청이 등록부와 로그인을 다시 읽는다. 연결을 유지하지 않으면 할 일이 없다.
+    fn reload(&self) -> Result<()> {
+        Ok(())
+    }
+
+    /// 오래 쓰지 않은 연결을 내린다. 요청을 처리하는 중이면 기다리지 않고 그냥 돌아온다.
+    fn release_if_idle(&self) {}
 }

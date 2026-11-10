@@ -6,6 +6,7 @@ use crate::composition::repository_kernel::RepositoryKernelRegistry;
 
 use anyhow::Result;
 
+use crate::adapter::inbound::gateway::GatewayMcpHub;
 use crate::adapter::outbound::app_server::gateway_upstream::AppServerGatewayUpstream;
 use crate::adapter::outbound::app_server::{
     AppServerPlanningWorkerAdapter, CodexAppServerAdapter, GatewayUpstreamSocket,
@@ -23,7 +24,7 @@ use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntime
 use crate::adapter::outbound::github::{
     GithubAutomationAdapter, GithubPrValidationAdapter, GithubReviewPollerAdapter,
 };
-use crate::adapter::outbound::mcp_hub::CodexMcpHubBackend;
+use crate::adapter::outbound::mcp_hub::{CodexMcpHubBackend, GatewayRoutedMcpHubBackend};
 use crate::adapter::outbound::telegram::CurlTelegramBotAdapter;
 use crate::application::port::inbound::admin_debug_port::{
     AdminDebugHarnessConfig, AdminDebugPort,
@@ -164,10 +165,12 @@ pub(crate) fn build_pr_validation_query_port(
     ))
 }
 
+/// CLI 용 hub 이다. 조회와 호출은 Gateway 의 상주 엔진을 먼저 쓰고, Gateway 가 없으면 직접 실행한다.
 pub(crate) fn build_mcp_hub_port() -> Result<Arc<dyn McpHubPort>> {
-    Ok(Arc::new(McpHubService::new(Arc::new(
-        CodexMcpHubBackend::from_environment()?,
-    ))))
+    let local = CodexMcpHubBackend::from_environment()?;
+    let hub_home = local.home().display().to_string();
+    let routed = GatewayRoutedMcpHubBackend::new(Arc::new(local), hub_home);
+    Ok(Arc::new(McpHubService::new(Arc::new(routed))))
 }
 
 pub(crate) fn build_planning_task_tool_port(workspace_dir: &str) -> Arc<dyn PlanningTaskToolPort> {
@@ -362,6 +365,7 @@ pub(crate) fn build_telegram_application(workspace_dir: String) -> ProductionTel
 pub(crate) struct GatewayBackend {
     pub(crate) upstream: Arc<dyn GatewayUpstreamPort>,
     pub(crate) kernels: Arc<RepositoryKernelRegistry>,
+    pub(crate) mcp_hub: Arc<GatewayMcpHub>,
 }
 
 pub(crate) fn build_gateway_backend(run_dir: &Path) -> Result<GatewayBackend> {
@@ -369,9 +373,15 @@ pub(crate) fn build_gateway_backend(run_dir: &Path) -> Result<GatewayBackend> {
     let kernels = Arc::new(RepositoryKernelRegistry::sharing_app_server(
         upstream.kernel_socket(),
     ));
+    let hub = CodexMcpHubBackend::resident_from_environment()?;
+    let mcp_hub = Arc::new(GatewayMcpHub::new(
+        hub.home().display().to_string(),
+        Arc::new(hub),
+    ));
     Ok(GatewayBackend {
         upstream: Arc::new(upstream),
         kernels,
+        mcp_hub,
     })
 }
 

@@ -20,15 +20,13 @@ pub(super) struct GatewayListener {
 
 #[cfg(unix)]
 impl GatewayListener {
-    const SOCKET_FILE_NAME: &'static str = "gateway.sock";
-
     /// `run_dir` 는 현재 사용자 전용 디렉터리이고, 호출자는 단일 인스턴스 잠금을 이미 얻었다.
     pub(super) fn bind(run_dir: &Path) -> Result<Self> {
         use std::os::unix::fs::PermissionsExt;
 
         use anyhow::Context;
 
-        let path = run_dir.join(Self::SOCKET_FILE_NAME);
+        let path = crate::gateway_endpoint::unix_socket_path(run_dir);
         super::ensure_endpoint_path_fits(&path)?;
         // 잠금을 얻었으므로 남은 소켓 파일은 이전 실행의 흔적이다.
         match std::fs::remove_file(&path) {
@@ -73,10 +71,7 @@ pub(super) struct GatewayListener {
 #[cfg(windows)]
 impl GatewayListener {
     pub(super) fn bind(_run_dir: &Path) -> Result<Self> {
-        let name = format!(
-            r"\\.\pipe\akra-gateway-{}",
-            crate::private_fs::windows_current_user_sid_string()?
-        );
+        let name = crate::gateway_endpoint::windows_pipe_name()?;
         let security = crate::private_fs::WindowsOwnerOnlySecurityDescriptor::for_current_user()?;
         let next = create_pipe_instance(&name, &security, true)?;
         Ok(Self {

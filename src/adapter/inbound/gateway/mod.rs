@@ -7,6 +7,7 @@
 
 mod kernel;
 mod listener;
+mod mcp;
 mod recorder;
 mod router;
 mod session;
@@ -22,6 +23,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 
 use self::listener::GatewayListener;
+pub(crate) use self::mcp::GatewayMcpHub;
 use self::recorder::GatewayRecorder;
 use crate::application::port::outbound::gateway_upstream_port::GatewayUpstreamPort;
 use crate::composition::production;
@@ -39,7 +41,6 @@ user-private endpoint and are relayed to a Gateway-owned codex app-server.
 Options:
   -h, --help    Show this help
 ";
-const RUN_DIRECTORY_NAME: &str = "run";
 const INSTANCE_LOCK_FILE_NAME: &str = "gateway.lock";
 /// macOS 의 `sun_path` 는 NUL 을 포함해 104 바이트이다.
 #[cfg(unix)]
@@ -64,13 +65,16 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
         return Ok(());
     }
     let akra_home = crate::configuration::akra_home_dir()?;
-    let run_dir = akra_home.join(RUN_DIRECTORY_NAME);
+    let run_dir = akra_home.join(crate::gateway_endpoint::RUN_DIRECTORY_NAME);
     crate::private_directory::ensure_private_directory(&run_dir)?;
     let _instance_lock = acquire_instance_lock(&run_dir)?;
     let recorder = GatewayRecorder::from_env(&akra_home)?.map(Arc::new);
     let listener = GatewayListener::bind(&run_dir)?;
-    let production::GatewayBackend { upstream, kernels } =
-        production::build_gateway_backend(&run_dir)?;
+    let production::GatewayBackend {
+        upstream,
+        kernels,
+        mcp_hub,
+    } = production::build_gateway_backend(&run_dir)?;
     println!("akra-gateway listening on {}", listener.endpoint());
     let _ = std::io::stdout().flush();
     tracing::info!(
@@ -79,8 +83,15 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
         "akra_gateway_started"
     );
 
-    serve(listener, upstream.clone(), kernels.clone(), recorder).await;
-    stop_backend(upstream, kernels).await;
+    serve(
+        listener,
+        upstream.clone(),
+        kernels.clone(),
+        mcp_hub.clone(),
+        recorder,
+    )
+    .await;
+    stop_backend(upstream, kernels, mcp_hub).await;
     tracing::info!("akra_gateway_stopped");
     Ok(())
 }
@@ -90,10 +101,13 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
 async fn stop_backend(
     upstream: Arc<dyn GatewayUpstreamPort>,
     kernels: Arc<RepositoryKernelRegistry>,
+    mcp_hub: Arc<GatewayMcpHub>,
 ) {
     if let Err(error) = tokio::task::spawn_blocking(move || kernels.shutdown()).await {
         tracing::warn!(error = %error, "repository kernel shutdown failed");
     }
+    // MCP hub 엔진은 Gateway upstream 과 별개인 app-server 이다.
+    let _ = tokio::task::spawn_blocking(move || mcp_hub.shutdown()).await;
     upstream.shutdown();
 }
 
@@ -132,6 +146,7 @@ async fn serve(
     mut listener: GatewayListener,
     upstream: Arc<dyn GatewayUpstreamPort>,
     kernels: Arc<RepositoryKernelRegistry>,
+    mcp_hub: Arc<GatewayMcpHub>,
     recorder: Option<Arc<GatewayRecorder>>,
 ) {
     let shutdown = shutdown_signal();
@@ -141,15 +156,21 @@ async fn serve(
     loop {
         tokio::select! {
             () = &mut shutdown => return,
-            _ = idle_sweep.tick() => unload_idle_kernels(kernels.clone()),
+            _ = idle_sweep.tick() => {
+                unload_idle_kernels(kernels.clone());
+                let mcp_hub = mcp_hub.clone();
+                tokio::task::spawn_blocking(move || mcp_hub.release_if_idle());
+            }
             accepted = listener.accept() => match accepted {
                 Ok(connection) => {
                     let upstream = upstream.clone();
                     let kernels = kernels.clone();
+                    let mcp_hub = Some(mcp_hub.clone());
                     let recorder = recorder.clone();
                     tokio::spawn(async move {
                         if let Err(error) =
-                            session::run_session(connection, upstream, kernels, recorder).await
+                            session::run_session(connection, upstream, kernels, mcp_hub, recorder)
+                                .await
                         {
                             tracing::debug!(error = %format!("{error:#}"), "gateway session failed");
                         }
