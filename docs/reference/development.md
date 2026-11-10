@@ -92,6 +92,11 @@ checks host executable trust/ACL behavior, which can legitimately reject a devel
 mutable Node or package-manager install. The full `cargo test --locked` suite remains Ubuntu/CI-owned
 because many subprocess and filesystem tests intentionally assume a POSIX host.
 
+The kernel simulation test (`src/composition/kernel_host/simulation.rs`) runs the real kernel host
+with a fake clock, fake effect executor, and fake app-server, and checks kernel invariants for 24
+seeds on every `cargo test`. Run more seeds with `AKRA_SIM_SEEDS=<count>`, and reproduce a reported
+failure with `AKRA_SIM_SEED=<seed> cargo test --locked kernel_simulation`.
+
 Use unit tests beside modules and integration tests under `tests/`. Prioritize startup checks,
 app-server parsing, stream reduction, session mapping, planning authority mutations, and parallel
 recovery boundaries. Primitive-sensitive terminal changes also follow
