@@ -561,7 +561,8 @@ Host 소유 Git 작업은 다음을 지킵니다.
 `akra-gateway` 는 `RepositoryKernelRegistry`(저장소당 커널 하나)를 가집니다. 목록 잠금은 자리를 찾을 때만
 잡고, 저장소마다 자리 잠금이 따로 있습니다. 그래서 커널 만들기가 오래 걸려도 같은 저장소의 붙기만 기다립니다.
 커널의 작업 공간은 어느 worktree 에서 먼저 붙어도 저장소의 대표 checkout 입니다. 병렬 pool(slot worktree)
-안에서 붙으면 거절합니다. Gateway 세션은 `akra/kernel/*` 를 `src/adapter/inbound/gateway/kernel.rs` 로
+안에서 붙거나, 대표 checkout 이 없는 저장소(bare 저장소, `.git` 이 없는 대표 checkout)에 붙으면 거절합니다.
+그런 저장소는 붙는 worktree 에 따라 병렬 pool 위치가 바뀌기 때문입니다. Gateway 세션은 `akra/kernel/*` 를 `src/adapter/inbound/gateway/kernel.rs` 로
 보냅니다. 접속마다 작업 하나가 커널 요청을 차례대로 처리하고 답을 접속의 보내기 함으로 보냅니다. 그래서 커널
 호출을 기다리는 동안에도 읽기 고리는 app-server 메시지를 계속 전달합니다. 커널 호출은 `spawn_blocking` 으로
 부르고 시간 상한이 있습니다(붙기 60초, 명령과 조회 10초, 오류 `-32013`). 붙은 접속마다 이벤트 스레드 하나를
