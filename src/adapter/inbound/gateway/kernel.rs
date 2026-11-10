@@ -78,15 +78,17 @@ impl KernelRequests {
     pub(super) fn submit(&self, id: Value, method: String, text: String) -> Result<(), String> {
         let request = KernelRequest { id, method, text };
         self.sender.try_send(request).map_err(|error| {
-            let request = match error {
-                TrySendError::Full(request) | TrySendError::Closed(request) => request,
+            let (request, reason) = match error {
+                TrySendError::Full(request) => (
+                    request,
+                    "too many kernel requests are waiting on this connection",
+                ),
+                TrySendError::Closed(request) => (
+                    request,
+                    "the kernel request handler of this connection stopped",
+                ),
             };
-            response_text(
-                request.id,
-                Err(unavailable(
-                    "too many kernel requests are waiting on this connection".to_string(),
-                )),
-            )
+            response_text(request.id, Err(unavailable(reason.to_string())))
         })
     }
 

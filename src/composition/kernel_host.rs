@@ -788,22 +788,36 @@ mod tests {
         );
     }
 
+    /// 이미 한가한 시각이 정해진 호스트 고리에서 `record_idle` 을 한 번 부르고 한가한지 돌려준다.
+    fn idle_after_record(runtime: NativeClientRuntime) -> bool {
+        let (_inbox, inputs) = mpsc::channel();
+        let idle = KernelIdleClock::default();
+        idle.record(false, Instant::now());
+        let host = KernelHostLoop::new(runtime, inputs, idle.clone());
+
+        host.record_idle(Instant::now());
+
+        idle.idle_since().is_some()
+    }
+
     #[test]
     fn remaining_work_keeps_the_kernel_busy() {
+        let (runtime, _turns) = recording_runtime_for_test();
+        assert!(
+            idle_after_record(runtime),
+            "without clients and work the idle mark stays"
+        );
+
         let (mut runtime, _turns) = recording_runtime_for_test();
-        assert!(!runtime.has_remaining_work());
         runtime.begin_test_turn_submission();
-        assert!(runtime.has_remaining_work(), "a turn is remaining work");
+        assert!(!idle_after_record(runtime), "a turn is remaining work");
 
         let (runtime, _turns) = recording_runtime_for_test();
         runtime.force_parallel_epoch_for_test("/repo", 7);
         assert!(
-            runtime.has_remaining_work(),
+            !idle_after_record(runtime),
             "an open parallel automation epoch is remaining work"
         );
-        let host = KernelHost::start(runtime).expect("kernel host thread should start");
-        std::thread::sleep(HOST_WAIT * 4);
-        assert_eq!(host.idle_for(Instant::now()), None);
     }
 
     #[test]
