@@ -100,6 +100,33 @@ TUI 에서 단계적으로 떼어내서(strangler) 기존 동작은 깨지 않�
 - 타이머는 "마감 시각"이라는 상태가 된다. 호스트는 가장 가까운 마감까지만 잠든다. 매 주기 Tick 이 필요 없다.
 - 첫 적용 대상: 턴 뒤 처리(평가 → 경로 결정 → 자동 후속). 결함이 가장 많았던 곳이다.
 
+#### 5.2.1 Q2 조각 (2026-11-10)
+
+| 조각 | 내용 | 상태 |
+| --- | --- | --- |
+| Q2-1 | 턴 뒤 상태를 enum `PostTurnState` 하나로 모은다 (FSM 1단계). 동작은 바꾸지 않는다 | 구현됨 |
+| Q2-2 | 호스트의 이벤트 사슬(`PostTurnEvaluationDue`, `PostTurnContinuationRoutingRequested` 를 꺼내 다음 단계를 부름)을 상태 비교로 바꾼다. 매 dispatch 뒤 `PostTurnState` 를 보고 다음 행동 0~1개를 고른다. 이벤트를 끼워 넣는 위치(`merge_core_dispatch_outcome_at`)를 어떻게 지킬지 함께 정한다 | 제안 |
+| Q2-3 | 원격 준비가 큐에 남긴 작업을 쉴 때 다시 내는 일을 같은 규칙에 넣는다 (K3 §3.2) | 제안 |
+| Q2-4 | 입력함 셋(클라이언트, core, 병렬 완료)을 우편함 하나와 깨우기로 바꾼다 (50ms polling 제거) | 제안 |
+
+Q2-1 결과 (`src/core/app/post_turn_state.rs`):
+
+- 이전에는 같은 단계를 두 곳이 따로 가졌다. thread session 의 `pending_post_turn_evaluation`(평가 대기)과
+  `in_flight_post_turn_evaluation`(평가 중), runtime 권한의 `snapshot.post_turn`(평가 중, 경로 대기, 끝남)과
+  `pending_post_turn_route`(경로 데이터)이다. "평가 중"은 두 곳에 있었고 함께 바꿨다.
+- 이제 runtime 권한이 `PostTurnState` (`Idle`, `Due`, `Evaluating`, `AwaitingRoute`, `Settled`) 하나를 갖는다.
+  `snapshot.post_turn` 은 그 투영이고 `set_post_turn` 만 둘을 바꾼다. 경로 대기는 경로 데이터를 담으므로 "경로 대기인데
+  데이터가 없다"는 조합이 사라졌다.
+- 이전 동작을 그대로 둔 어색한 점 (Q2-2 에서 다시 본다):
+  - 새 턴 시작(`begin_turn`), 대화 무효화, 평가 취소는 평가 대기를 지우지 않는다.
+  - 턴 종료는 이전 평가 대기를 덮어쓴다. 호스트가 평가 대기를 바로 꺼내므로 실행 중인 커널에서는 생기지 않는다.
+    호스트 없이 core 를 직접 돌리는 시험(`left_conversation_keeps_its_post_turn_lease_across_aba`)에서는 생긴다.
+- 독립 리뷰 반영: 대화를 떠날 때 만드는 새 보는 자리(`detached_view`)가 runtime 권한을 복사하면서 평가 대기도
+  복사했다. 이전처럼 빈 상태에서 시작하게 고쳤다 (회귀 시험
+  `a_due_evaluation_follows_its_session_when_the_client_leaves_the_conversation`). 구조 시험은 새 소유 관계(runtime
+  권한의 `post_turn: PostTurnState`, reducer 에 평가 상태 필드 없음)를 확인한다.
+- 확인: `check_native_pr.sh`, 커널 시뮬레이션 seed 5000개가 통과했다.
+
 ### 5.3 thread 를 독립 액터로 (동시성은 정책)
 
 ```text
@@ -176,7 +203,7 @@ TUI 에서 단계적으로 떼어내서(strangler) 기존 동작은 깨지 않�
 | --- | --- | --- | --- | --- |
 | 1 | Q0 | K3-5·K3-6 을 먼저 끝낸다(완료 2026-11-10). 실사용 불편 목록이 이 문서의 설계를 검증한다 | K3 | - |
 | 2 | Q1 | 시뮬레이션 하네스를 작게 시작한다: 가짜 시계와 가짜 app-server 로 커널 호스트를 돌리고, 입력 순서를 seed 로 섞는다. 불변식 2~3개부터. 첫 조각 완료(2026-11-10, §5.5.1) | K3 와 병행 | P2 |
-| 3 | Q2 | 턴 뒤 처리를 FSM + reconcile 로 바꾼다. 원격 준비가 큐에 남긴 작업을 쉴 때 다시 내는 일도 같은 reconcile 규칙에 넣는다 (K3 §3.2). 입력함을 우편함 하나로 합치고 깨우기 방식으로 바꾼다 (50ms polling 제거) | K5 전 | P1 일부, P2 |
+| 3 | Q2 | 턴 뒤 처리를 FSM + reconcile 로 바꾼다. 원격 준비가 큐에 남긴 작업을 쉴 때 다시 내는 일도 같은 reconcile 규칙에 넣는다 (K3 §3.2). 입력함을 우편함 하나로 합치고 깨우기 방식으로 바꾼다 (50ms polling 제거). 조각은 §5.2.1, Q2-1 완료(2026-11-10) | K5 전 | P1 일부, P2 |
 | 4 | Q3 | 사건 기록을 K5 의 기반으로 정한다. 커서 구독, 승인 객체, 우편함·깨우기, 연산 영수증을 그 위에 세운다. 타이머를 마감 시각으로 바꾼다 | K5 | P1, P3 |
 | 5 | Q4 | 명령·사건·거절 이유 스펙과 생성기 | K4 | P3 |
 | 6 | Q5 | thread 액터, 자원 정책(동시 턴 N), 병렬 제어부 합치기, 루프 한 겹으로 접기, 이름 정리 (`NativeClientRuntime` → `Kernel`, core 해체) | K6, plan 18 §5.9 | P4 |
