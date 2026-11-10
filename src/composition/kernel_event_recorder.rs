@@ -15,12 +15,14 @@ pub(crate) struct KernelEventRecorder {
 }
 
 impl KernelEventRecorder {
-    pub(crate) fn start(log: Arc<dyn KernelEventLogPort>) -> Self {
+    /// 그 커널의 작업 공간에 쓴다 (plan 19 Q3-2). 커널은 저장소 하나의 것이므로 모든 사건이 같은 기록에 간다. 복구도
+    /// 같은 작업 공간에서 읽는다.
+    pub(crate) fn start(log: Arc<dyn KernelEventLogPort>, workspace_dir: String) -> Self {
         let (batches, received) = mpsc::channel::<Vec<KernelEvent>>();
         let writer = spawn_worker_with_panic_fallback(
             move || {
                 for batch in received {
-                    write_batch(log.as_ref(), &batch);
+                    write_batch(log.as_ref(), &workspace_dir, &batch);
                 }
             },
             || tracing::warn!("kernel event recorder stopped after a panic"),
@@ -41,18 +43,14 @@ impl KernelEventRecorder {
     }
 }
 
-/// 사건마다 그 작업 공간의 저장소에 쓴다. v0 의 사건은 한 묶음에 하나뿐이라 사건 단위로 쓴다.
-fn write_batch(log: &dyn KernelEventLogPort, batch: &[KernelEvent]) {
-    for event in batch {
-        if let Err(error) =
-            log.append_kernel_events(event.workspace_directory(), std::slice::from_ref(event))
-        {
-            tracing::warn!(
-                kind = event.kind(),
-                error_chars = error.to_string().chars().count(),
-                "kernel event append failed"
-            );
-        }
+/// 한 dispatch 의 사건을 한 transaction 으로 쓴다. 실패하면 그 묶음을 버리고 다음 묶음을 쓴다.
+fn write_batch(log: &dyn KernelEventLogPort, workspace_dir: &str, batch: &[KernelEvent]) {
+    if let Err(error) = log.append_kernel_events(workspace_dir, batch) {
+        tracing::warn!(
+            events = batch.len(),
+            error_chars = error.to_string().chars().count(),
+            "kernel event append failed"
+        );
     }
 }
 
@@ -71,21 +69,26 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
-    use crate::domain::kernel_event::{QueuedThreadPrompt, ThreadPromptSettlement};
 
+    /// 처음 쓰기 한 번은 실패한다.
     #[derive(Default)]
-    struct MemoryLog(Mutex<Vec<(String, KernelEvent)>>);
+    struct FlakyLog {
+        stored: Mutex<Vec<(String, KernelEvent)>>,
+        failed_once: Mutex<bool>,
+    }
 
-    impl KernelEventLogPort for MemoryLog {
+    impl KernelEventLogPort for FlakyLog {
         fn append_kernel_events(
             &self,
             workspace_dir: &str,
             events: &[KernelEvent],
         ) -> anyhow::Result<()> {
-            if workspace_dir == "/broken" {
-                anyhow::bail!("the store is unavailable");
+            let mut failed_once = self.failed_once.lock().expect("flag should lock");
+            if !*failed_once {
+                *failed_once = true;
+                anyhow::bail!("the store is busy");
             }
-            let mut stored = self.0.lock().expect("log should lock");
+            let mut stored = self.stored.lock().expect("log should lock");
             stored.extend(
                 events
                     .iter()
@@ -94,38 +97,35 @@ mod tests {
             Ok(())
         }
 
-        fn load_kernel_events(&self, _workspace_dir: &str) -> anyhow::Result<Vec<KernelEvent>> {
+        fn load_kernel_events(
+            &self,
+            _workspace_dir: &str,
+            _kinds: &[&str],
+        ) -> anyhow::Result<Vec<KernelEvent>> {
             Ok(Vec::new())
         }
     }
 
-    fn event(workspace: &str, task_id: &str) -> KernelEvent {
-        QueuedThreadPrompt {
+    fn started(turn_id: &str) -> KernelEvent {
+        KernelEvent::TurnStarted {
             thread_id: "thread-1".to_string(),
-            workspace_directory: workspace.to_string(),
-            handoff: crate::domain::planning::ManualPromptMainSessionHandoff {
-                prompt: "planned prompt".to_string(),
-                transcript_text: "fix the test".to_string(),
-                task: None,
-            },
-            task_id: task_id.to_string(),
+            turn_id: turn_id.to_string(),
         }
-        .settled(ThreadPromptSettlement::Submitted)
     }
 
     #[test]
-    fn dropping_the_recorder_writes_every_event_in_order_past_a_failure() {
-        let log = Arc::new(MemoryLog::default());
-        let recorder = KernelEventRecorder::start(log.clone());
-        recorder.record(vec![event("/a", "task-1"), event("/broken", "task-2")]);
-        recorder.record(vec![event("/b", "task-3")]);
+    fn dropping_the_recorder_writes_every_later_batch_in_order_past_a_failure() {
+        let log = Arc::new(FlakyLog::default());
+        let recorder = KernelEventRecorder::start(log.clone(), "/repo".to_string());
+        recorder.record(vec![started("turn-1")]);
+        recorder.record(vec![started("turn-2"), started("turn-3")]);
         drop(recorder);
-        let stored = log.0.lock().expect("log should lock");
+        let stored = log.stored.lock().expect("log should lock");
         assert_eq!(
             stored.as_slice(),
             [
-                ("/a".to_string(), event("/a", "task-1")),
-                ("/b".to_string(), event("/b", "task-3")),
+                ("/repo".to_string(), started("turn-2")),
+                ("/repo".to_string(), started("turn-3")),
             ]
         );
     }

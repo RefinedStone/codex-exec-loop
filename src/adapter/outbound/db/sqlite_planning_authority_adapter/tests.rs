@@ -125,13 +125,16 @@ fn wait_worker_ready(ready: &std::sync::mpsc::Receiver<()>) {
 #[test]
 fn kernel_events_append_in_order_and_skip_unknown_kinds() {
     // plan 19 Q3-1: the log keeps order across appends; a row from a newer binary is skipped.
+    // plan 19 Q3-2: a read returns only the asked kinds.
     use crate::application::port::outbound::kernel_event_log_port::KernelEventLogPort;
-    use crate::domain::kernel_event::{KernelEvent, QueuedThreadPrompt, ThreadPromptSettlement};
+    use crate::domain::kernel_event::{
+        KernelEvent, QueuedThreadPrompt, THREAD_PROMPT_QUEUE_KINDS, ThreadPromptSettlement,
+    };
     let workspace = temp_workspace("kernel-events");
     let adapter = SqlitePlanningAuthorityAdapter::new();
     assert!(
         adapter
-            .load_kernel_events(&workspace)
+            .load_kernel_events(&workspace, &THREAD_PROMPT_QUEUE_KINDS)
             .expect("an empty log should load")
             .is_empty()
     );
@@ -148,8 +151,15 @@ fn kernel_events_append_in_order_and_skip_unknown_kinds() {
     let first = KernelEvent::ThreadPromptQueued(queued("task-1"));
     let second = queued("task-1").settled(ThreadPromptSettlement::Submitted);
     let third = KernelEvent::ThreadPromptQueued(queued("task-2"));
+    let other_kind = KernelEvent::TurnStarted {
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+    };
     adapter
-        .append_kernel_events(&workspace, &[first.clone(), second.clone()])
+        .append_kernel_events(
+            &workspace,
+            &[first.clone(), other_kind.clone(), second.clone()],
+        )
         .expect("events should append");
     let location =
         SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(&workspace)
@@ -158,7 +168,7 @@ fn kernel_events_append_in_order_and_skip_unknown_kinds() {
         .expect("store should open")
         .execute(
             "INSERT INTO kernel_events (kind, thread_id, payload_json, recorded_at)
-             VALUES ('future_kind', 'thread-1', '{\"kind\":\"future_kind\"}', 'now')",
+             VALUES ('thread_prompt_queued', 'thread-1', '{\"kind\":\"future_shape\"}', 'now')",
             [],
         )
         .expect("a future row should insert");
@@ -168,9 +178,15 @@ fn kernel_events_append_in_order_and_skip_unknown_kinds() {
 
     assert_eq!(
         adapter
-            .load_kernel_events(&workspace)
+            .load_kernel_events(&workspace, &THREAD_PROMPT_QUEUE_KINDS)
             .expect("events should load"),
         vec![first, second, third]
+    );
+    assert_eq!(
+        adapter
+            .load_kernel_events(&workspace, &["turn_started"])
+            .expect("events should load"),
+        vec![other_kind]
     );
 }
 

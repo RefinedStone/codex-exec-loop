@@ -88,6 +88,11 @@ where
         self.input_receiver.waker()
     }
 
+    /// core 가 쌓은 판단 사건을 꺼낸다 (plan 19 Q3-2). 호스트가 dispatch 뒤에 꺼내 사건 기록에 쓴다.
+    pub(crate) fn take_kernel_records(&mut self) -> Vec<crate::core::app::KernelEvent> {
+        self.controller.take_kernel_records()
+    }
+
     pub(crate) fn dispatch_command(&mut self, command: AppCommand) -> CoreDispatchOutcome {
         self.dispatch_input(CoreInput::Command(command))
     }

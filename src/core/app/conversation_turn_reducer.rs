@@ -219,6 +219,8 @@ pub(super) struct ConversationTurnFeatureReducer {
     approval_review_persistence: ApprovalReviewPersistenceCoordinator,
     // 클라이언트에 마지막으로 알린 뒤의 thread 요약이다 (plan 18 K2-4).
     published_thread_activity: Vec<ThreadActivitySummary>,
+    // 호스트가 꺼내 가기 전의 판단 사건이다 (plan 19 Q3-1, Q3-2). 클라이언트에 알릴 thread 요약처럼 내보낼 값이다.
+    kernel_records: Vec<crate::domain::kernel_event::KernelEvent>,
     next_conversation_load_generation: u64,
     in_flight_conversation_load: Option<ConversationLoadCorrelation>,
     deferred_conversation_load: Option<DeferredConversationLoadIntent>,
@@ -314,6 +316,29 @@ impl ConversationTurnFeatureReducer {
         }
         self.published_thread_activity = activity.clone();
         Some(activity)
+    }
+
+    pub(super) fn record_kernel_event(&mut self, event: crate::domain::kernel_event::KernelEvent) {
+        self.kernel_records.push(event);
+    }
+
+    pub(super) fn has_kernel_record(
+        &self,
+        event: &crate::domain::kernel_event::KernelEvent,
+    ) -> bool {
+        self.kernel_records.contains(event)
+    }
+
+    pub(super) fn take_kernel_records(&mut self) -> Vec<crate::domain::kernel_event::KernelEvent> {
+        std::mem::take(&mut self.kernel_records)
+    }
+
+    /// 마지막으로 알린 thread 요약의 `(thread id, 진행 중 턴 id)` 이다 (plan 19 Q3-2). 턴 기록의 이전 값이다.
+    pub(super) fn published_thread_turns(&self) -> Vec<(String, Option<String>)> {
+        self.published_thread_activity
+            .iter()
+            .map(|thread| (thread.thread_id.clone(), thread.active_turn_id.clone()))
+            .collect()
     }
 
     /// 이 thread 는 클라이언트가 보지 않는 중이다.
@@ -418,6 +443,7 @@ impl ConversationTurnFeatureReducer {
             serving_background: false,
             approval_review_persistence: ApprovalReviewPersistenceCoordinator::new(),
             published_thread_activity: Vec::new(),
+            kernel_records: Vec::new(),
             next_conversation_load_generation: 1,
             in_flight_conversation_load: None,
             deferred_conversation_load: None,
