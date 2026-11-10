@@ -46,8 +46,10 @@ ResourceProviderPort
   title(resource) -> string       // 알림에 쓸 이름이다
 ```
 
-- Notion: MCP hub(plan 21)로 읽는다. 처음에는 `notion-fetch` 결과의 `page_last_edited_at` 을 쓴다. 공식 MCP 에
-  더 가벼운 도구가 있으면 그것으로 바꾼다. 필요하면 같은 포트 뒤에 REST API(`GET /v1/pages/{id}`)를 넣는다.
+- Notion: MCP hub(plan 21)로 읽는다. 버전 확인은 `notion-get-version-changes` 에 `start_time` = 마지막 확인
+  시각을 주어 그 뒤의 변경만 받는다 (B0 결과). 변경이 없으면 결과가 작다. 편집 권한이 없는 페이지는 이 도구를
+  쓸 수 없으므로 `notion-fetch` 의 `page_last_edited_at` 으로 대신한다. 필요하면 같은 포트 뒤에 REST
+  API(`GET /v1/pages/{id}`)를 넣는다.
 - Jira, GitHub: 기존 Desktop 서비스(`jiraService.ts`, `githubService.ts`)가 읽는 값을 쓴다 (나중 단계).
 
 ## 행동 규약
@@ -64,6 +66,8 @@ ResourceProviderPort
 - R1 은 턴 시작을 가로채지 않는다. Desktop 의 턴은 kernel 을 거치지 않고 app-server 로 바로 가기 때문이다.
   대신 변경을 알면 쉬는 스레드의 기록에 미리 넣어 두고, 다음 턴이 그것을 읽는다. 턴이 도는 중이면 끝난 뒤에 넣는다.
 - R4 는 hub 가 AI 의 모든 Notion 호출을 중계하므로 가능하다. AI 가 hub 를 거치지 않고 읽으면 기록되지 않는다.
+- AI 자신의 변경은 R1 로 알리지 않는다. `notion-get-version-changes` 는 변경마다 출처(`notion_ai`, `custom_agent`,
+  `mcp`)를 알려 준다. `mcp` 출처만 있는 변경은 알림에서 뺀다. 다른 MCP 클라이언트의 변경도 함께 빠지는 한계가 있다.
 
 ## 소유자와 저장
 
@@ -76,11 +80,17 @@ ResourceProviderPort
 
 - 감시, 비교, 알림, 승인은 코드이다. MCP 호출은 Notion 서버로 가고 모델로 가지 않는다.
 - 모델 토큰은 다음 턴의 알림 한 줄(수십 토큰)과, AI 가 다시 읽기로 정했을 때 문서 내용만큼 든다.
-- Notion 호출량: 묶인 자원 수 × 확인 횟수이다. `notion-fetch` 는 본문 전체를 받으므로 가벼운 버전 조회가 중요하다.
+- Notion 호출량: 묶인 자원 수 × 확인 횟수이다. 변경이 없을 때 `notion-get-version-changes` 결과는 작다.
+  `notion-fetch` 대체 경로는 본문 전체를 받으므로 편집 권한이 없는 페이지에만 쓴다.
 
 ## 단계
 
-1. **B0 확인 (사용자 필요)**: 실제 Notion 로그인 후 공식 MCP 의 도구 목록에서 가벼운 버전 조회 도구를 찾는다.
+1. **B0 확인 (완료, 2026-11-11)**: 사용자가 hub 로 공식 Notion MCP 에 로그인했다. 도구 79개 중
+   `notion-get-version-changes`(입력 `page`, `start_time`, `end_time`, `sources`, `authors`)를 버전 확인에 쓴다.
+   패널이 쓰는 `notion-search`, `notion-fetch`, `notion-list-recent-pages` 도 이 이름으로 있다. 도구 목록과
+   스키마만 읽었고 페이지 내용은 읽지 않았다.
+   - 함께 찾은 문제: `akra mcp login` 이 app-server 에 `timeoutSecs` 를 넘기지 않아 app-server 의 기본 제한
+     시간에 먼저 끝난다 (CLI 는 10분을 기다린다). B1 에서 고친다.
 2. **B1 연결과 R1**: Gateway 의 연결 저장소, `akra/binding/bind|unbind|list`, Notion 제공자, 감시자, R1 알림.
    Desktop 의 "스레드로 넘기기"가 `bind` 도 보낸다.
 3. **B2 R3, R4**: `resource_changed` 이벤트와 Desktop 제안, hub 의 읽기와 쓰기 기록.
@@ -89,7 +99,6 @@ ResourceProviderPort
 
 ## 열린 질문
 
-- 공식 Notion MCP 에 수정 시각만 읽는 도구가 있는가 (B0).
 - `thread/inject_items` 로 넣은 메시지의 역할(`developer` 또는 `user`)과, 쉬는 스레드에 넣을 때 기록과 화면에
   어떻게 보이는가. 실제 app-server 로 확인해야 한다.
 - `akra` 가 PATH 에 없는 환경이 있다. 이때 skill 의 `akra mcp` 와 `akra bind` 를 에이전트가 실행하지 못한다.
