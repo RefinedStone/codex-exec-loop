@@ -1,3 +1,4 @@
+use super::post_turn_state::{ActivePostTurnEvaluation, PendingPostTurnEvaluation, PostTurnState};
 use super::{
     ApprovalDecisionCorrelation, CorePromptOrigin, PostTurnEvaluationCorrelation,
     TurnSubmissionCorrelation, TurnSubmissionRequest,
@@ -237,12 +238,6 @@ impl Default for ConversationRuntimeSnapshot {
     }
 }
 
-#[derive(Debug, Clone)]
-struct PendingPostTurnRoute {
-    correlation: PostTurnEvaluationCorrelation,
-    execution: Box<PostTurnExecution>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum TurnAuthorityAdmission {
     Accepted,
@@ -253,15 +248,25 @@ pub(super) enum TurnAuthorityAdmission {
 #[derive(Debug, Clone)]
 pub(super) struct ConversationRuntimeAuthority {
     snapshot: ConversationRuntimeSnapshot,
-    pending_post_turn_route: Option<PendingPostTurnRoute>,
+    // 턴 뒤 상태이다 (plan 19 Q2-1). `snapshot.post_turn` 은 이 값의 투영이고 `set_post_turn` 만 둘을 바꾼다.
+    post_turn: PostTurnState,
 }
 
 impl ConversationRuntimeAuthority {
     pub(super) fn new() -> Self {
         Self {
             snapshot: ConversationRuntimeSnapshot::initial(),
-            pending_post_turn_route: None,
+            post_turn: PostTurnState::Idle,
         }
+    }
+
+    fn set_post_turn(&mut self, state: PostTurnState) {
+        self.snapshot.post_turn = state.projection();
+        self.post_turn = state;
+    }
+
+    pub(super) fn post_turn(&self) -> &PostTurnState {
+        &self.post_turn
     }
 
     pub(super) fn snapshot(&self) -> ConversationRuntimeSnapshot {
@@ -343,8 +348,8 @@ impl ConversationRuntimeAuthority {
     ) {
         self.snapshot.approval = None;
         self.snapshot.approval_review = None;
-        self.snapshot.post_turn = PostTurnAuthoritySnapshot::Idle;
-        self.pending_post_turn_route = None;
+        // shortcut: 평가 대기는 지우지 않는다 (Q2-1 이전 동작). 평가 대기 중에는 새 턴이 들어오지 않는다.
+        self.reset_post_turn_keeping_due();
         match request.prompt_origin {
             CorePromptOrigin::Manual => {
                 self.snapshot.planning_handoff = None;
@@ -462,9 +467,8 @@ impl ConversationRuntimeAuthority {
         self.snapshot.approval = None;
         self.snapshot.approval_review = None;
         self.snapshot.auto_follow.phase = AutoFollowPhase::Idle;
-        self.snapshot.post_turn = PostTurnAuthoritySnapshot::Idle;
+        self.reset_post_turn_keeping_due();
         self.snapshot.planning_handoff = None;
-        self.pending_post_turn_route = None;
     }
 
     pub(super) fn set_pending_approval(&mut self, request: ConversationApprovalRequest) {
@@ -577,39 +581,59 @@ impl ConversationRuntimeAuthority {
         }
     }
 
-    pub(super) fn begin_post_turn_evaluation(
-        &mut self,
-        correlation: PostTurnEvaluationCorrelation,
-    ) {
-        self.pending_post_turn_route = None;
-        self.snapshot.post_turn = PostTurnAuthoritySnapshot::Evaluating {
-            correlation,
-            started_at: Instant::now(),
-        };
+    /*
+     * 턴이 끝났다. 호스트가 평가를 시작할 때까지 평가 대기로 둔다. 평가 중이거나 경로를 기다리는 동안에는 새 턴이
+     * 들어오지 않으므로 그 상태를 덮어쓰는 일은 없다. 이전 평가 대기는 덮어쓴다 (Q2-1 이전 동작). 호스트는 평가
+     * 대기를 바로 꺼내므로, 덮어쓰기는 호스트 없이 core 를 직접 돌릴 때만 생긴다.
+     */
+    pub(super) fn mark_post_turn_due(&mut self, pending: PendingPostTurnEvaluation) {
+        debug_assert!(
+            self.post_turn.in_flight_correlation().is_none(),
+            "a turn ends only while no post-turn evaluation is in flight: {:?}",
+            self.post_turn
+        );
+        self.set_post_turn(PostTurnState::Due(Box::new(pending)));
     }
 
+    /// 평가 대기를 꺼낸다. 평가를 시작하거나 버릴 때 쓴다.
+    pub(super) fn take_due_post_turn(&mut self) -> Option<PendingPostTurnEvaluation> {
+        if !self.post_turn.is_due() {
+            return None;
+        }
+        match std::mem::take(&mut self.post_turn) {
+            PostTurnState::Due(pending) => {
+                self.set_post_turn(PostTurnState::Idle);
+                Some(*pending)
+            }
+            _ => unreachable!("the post-turn state was checked as due"),
+        }
+    }
+
+    pub(super) fn begin_post_turn_evaluation(&mut self, active: ActivePostTurnEvaluation) {
+        self.set_post_turn(PostTurnState::Evaluating {
+            active,
+            started_at: Instant::now(),
+        });
+    }
+
+    /// 평가가 끝났다. 그 평가가 지금 평가 중이면 경로 대기로 바꾼다.
     pub(super) fn await_post_turn_route(
         &mut self,
         correlation: PostTurnEvaluationCorrelation,
         execution: Box<PostTurnExecution>,
     ) -> bool {
-        if !matches!(
-            &self.snapshot.post_turn,
-            PostTurnAuthoritySnapshot::Evaluating {
-                correlation: active,
-                ..
-            } if active == &correlation
-        ) {
+        if self
+            .post_turn
+            .active_evaluation()
+            .is_none_or(|active| active.correlation != correlation)
+        {
             return false;
         }
-        self.pending_post_turn_route = Some(PendingPostTurnRoute {
-            correlation: correlation.clone(),
-            execution,
-        });
-        self.snapshot.post_turn = PostTurnAuthoritySnapshot::AwaitingRoute {
+        self.set_post_turn(PostTurnState::AwaitingRoute {
             correlation,
+            execution,
             started_at: Instant::now(),
-        };
+        });
         true
     }
 
@@ -618,17 +642,13 @@ impl ConversationRuntimeAuthority {
         correlation: &PostTurnEvaluationCorrelation,
         resolution: PostTurnRouteResolution,
     ) -> Option<(Box<PostTurnExecution>, PostTurnRouteResolution)> {
-        if self
-            .pending_post_turn_route
-            .as_ref()
-            .is_none_or(|pending| &pending.correlation != correlation)
-        {
+        if !self.post_turn.awaits_route(correlation) {
             return None;
         }
-        let pending = self
-            .pending_post_turn_route
-            .take()
-            .expect("exact pending post-turn route must remain present");
+        let PostTurnState::AwaitingRoute { execution, .. } = std::mem::take(&mut self.post_turn)
+        else {
+            unreachable!("the post-turn state was checked as awaiting this route");
+        };
         let accepted_resolution = if resolution == PostTurnRouteResolution::AutoSubmit
             && !self.snapshot.auto_follow.can_queue_next()
         {
@@ -639,7 +659,7 @@ impl ConversationRuntimeAuthority {
         match accepted_resolution {
             PostTurnRouteResolution::AutoSubmit => {
                 self.snapshot.planning_handoff =
-                    pending.execution.evaluation.provenance.handoff_task.clone();
+                    execution.evaluation.provenance.handoff_task.clone();
                 let turn_index = self.snapshot.auto_follow.completed_auto_turns + 1;
                 self.snapshot.auto_follow.phase = AutoFollowPhase::Queued {
                     turn_index,
@@ -650,34 +670,40 @@ impl ConversationRuntimeAuthority {
                 self.snapshot.auto_follow.phase = AutoFollowPhase::Idle;
             }
         }
-        self.snapshot.post_turn = PostTurnAuthoritySnapshot::Settled {
+        self.set_post_turn(PostTurnState::Settled {
             correlation: correlation.clone(),
             resolution: accepted_resolution,
-        };
-        Some((pending.execution, accepted_resolution))
+        });
+        Some((execution, accepted_resolution))
     }
 
-    pub(super) fn cancel_post_turn_evaluation(&mut self) {
-        self.pending_post_turn_route = None;
-        self.snapshot.post_turn = PostTurnAuthoritySnapshot::Idle;
+    /// 평가를 버린다. 평가 중이었으면 그 평가를 돌려주어 permit 을 무효로 만들게 한다. 평가 대기는 남긴다.
+    pub(super) fn cancel_post_turn_evaluation(&mut self) -> Option<ActivePostTurnEvaluation> {
+        let cancelled = self.post_turn.active_evaluation().cloned();
+        self.reset_post_turn_keeping_due();
+        cancelled
+    }
+
+    /// 평가 대기를 버린다. 다른 대화를 열어 이전 대화의 턴을 평가하지 않을 때 쓴다.
+    pub(super) fn discard_due_post_turn(&mut self) {
+        let _ = self.take_due_post_turn();
+    }
+
+    fn reset_post_turn_keeping_due(&mut self) {
+        if !self.post_turn.is_due() {
+            self.set_post_turn(PostTurnState::Idle);
+        }
     }
 
     pub(super) fn settle_in_flight_post_turn_without_continuation(
         &mut self,
     ) -> Option<PostTurnEvaluationCorrelation> {
-        let correlation = match &self.snapshot.post_turn {
-            PostTurnAuthoritySnapshot::Evaluating { correlation, .. }
-            | PostTurnAuthoritySnapshot::AwaitingRoute { correlation, .. } => correlation.clone(),
-            PostTurnAuthoritySnapshot::Idle | PostTurnAuthoritySnapshot::Settled { .. } => {
-                return None;
-            }
-        };
-        self.pending_post_turn_route = None;
+        let correlation = self.post_turn.in_flight_correlation()?.clone();
         self.snapshot.auto_follow.phase = AutoFollowPhase::Idle;
-        self.snapshot.post_turn = PostTurnAuthoritySnapshot::Settled {
+        self.set_post_turn(PostTurnState::Settled {
             correlation: correlation.clone(),
             resolution: PostTurnRouteResolution::NoContinuation,
-        };
+        });
         Some(correlation)
     }
 }
@@ -793,9 +819,9 @@ mod tests {
         let first = post_turn_correlation(1, "turn-a");
         let current = post_turn_correlation(2, "turn-a");
 
-        authority.begin_post_turn_evaluation(first.clone());
+        authority.begin_post_turn_evaluation(ActivePostTurnEvaluation::for_test(first.clone()));
         assert!(authority.await_post_turn_route(first.clone(), post_turn_execution("turn-a"),));
-        authority.begin_post_turn_evaluation(current.clone());
+        authority.begin_post_turn_evaluation(ActivePostTurnEvaluation::for_test(current.clone()));
         assert!(
             authority
                 .resolve_post_turn_route(&first, PostTurnRouteResolution::AutoSubmit)
@@ -841,7 +867,8 @@ mod tests {
     fn policy_settlement_cancels_an_exact_evaluation_or_pending_route_once() {
         let mut authority = ConversationRuntimeAuthority::new();
         let evaluating = post_turn_correlation(1, "turn-evaluating");
-        authority.begin_post_turn_evaluation(evaluating.clone());
+        authority
+            .begin_post_turn_evaluation(ActivePostTurnEvaluation::for_test(evaluating.clone()));
 
         assert_eq!(
             authority.settle_in_flight_post_turn_without_continuation(),
@@ -862,7 +889,8 @@ mod tests {
         );
 
         let awaiting_route = post_turn_correlation(2, "turn-awaiting-route");
-        authority.begin_post_turn_evaluation(awaiting_route.clone());
+        authority
+            .begin_post_turn_evaluation(ActivePostTurnEvaluation::for_test(awaiting_route.clone()));
         assert!(authority.await_post_turn_route(
             awaiting_route.clone(),
             post_turn_execution("turn-awaiting-route"),
@@ -884,7 +912,8 @@ mod tests {
         let mut authority = ConversationRuntimeAuthority::new();
         authority.set_auto_follow_max_turns(1);
         let first_route = post_turn_correlation(1, "turn-manual");
-        authority.begin_post_turn_evaluation(first_route.clone());
+        authority
+            .begin_post_turn_evaluation(ActivePostTurnEvaluation::for_test(first_route.clone()));
         assert!(
             authority
                 .await_post_turn_route(first_route.clone(), post_turn_execution("turn-manual"),)
@@ -928,7 +957,9 @@ mod tests {
         assert_eq!(authority.snapshot().auto_follow.completed_auto_turns, 1);
 
         let exhausted_route = post_turn_correlation(2, "turn-auto");
-        authority.begin_post_turn_evaluation(exhausted_route.clone());
+        authority.begin_post_turn_evaluation(ActivePostTurnEvaluation::for_test(
+            exhausted_route.clone(),
+        ));
         assert!(
             authority
                 .await_post_turn_route(exhausted_route.clone(), post_turn_execution("turn-auto"),)
@@ -971,7 +1002,7 @@ mod tests {
         let mut authority = ConversationRuntimeAuthority::new();
         authority.set_auto_follow_max_turns(2);
         let source = post_turn_correlation(1, "turn-1");
-        authority.begin_post_turn_evaluation(source.clone());
+        authority.begin_post_turn_evaluation(ActivePostTurnEvaluation::for_test(source.clone()));
         assert!(authority.await_post_turn_route(source.clone(), post_turn_execution("turn-1")));
         assert!(
             authority
@@ -995,7 +1026,8 @@ mod tests {
 
         authority.set_auto_follow_max_turns(2);
         let revised_source = post_turn_correlation(2, "turn-2");
-        authority.begin_post_turn_evaluation(revised_source.clone());
+        authority
+            .begin_post_turn_evaluation(ActivePostTurnEvaluation::for_test(revised_source.clone()));
         assert!(
             authority.await_post_turn_route(revised_source.clone(), post_turn_execution("turn-2"),)
         );

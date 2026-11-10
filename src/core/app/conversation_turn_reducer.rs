@@ -1,5 +1,7 @@
 use super::approval::{ApprovalReviewPersistenceCoordinator, ApprovalReviewPersistenceSettlement};
 use super::conversation_runtime::{ConversationRuntimeAuthority, TurnAuthorityAdmission};
+use super::post_turn_state::ActivePostTurnEvaluation;
+pub(super) use super::post_turn_state::PendingPostTurnEvaluation;
 use super::{
     ApprovalDecisionAdmission, ApprovalDecisionCorrelation, ApprovalReviewPersistenceCorrelation,
     ConversationLoadCorrelation, ConversationRuntimeSnapshot, PostTurnEvaluationCorrelation,
@@ -13,9 +15,7 @@ use crate::domain::conversation::{
     ConversationTurnSteerReceipt, ConversationTurnSteerRequest,
 };
 use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProjection;
-use crate::domain::planning::{
-    PostTurnContinuationGate, PostTurnContinuationPermit, PostTurnExecution, PostTurnRequest,
-};
+use crate::domain::planning::{PostTurnContinuationGate, PostTurnExecution, PostTurnRequest};
 
 #[derive(Debug, Clone)]
 struct DeferredConversationLoadIntent {
@@ -33,19 +33,6 @@ struct PostTurnMessages {
     latest_agent_reply: Option<String>,
 }
 
-/// 턴이 끝났고 평가를 기다리는 턴이다. 호스트가 병렬 값을 붙여서 평가를 시작한다.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct PendingPostTurnEvaluation {
-    pub(super) thread_id: String,
-    pub(super) completed_turn_id: String,
-    pub(super) workspace_directory: String,
-    pub(super) planning_workspace_directory: String,
-    pub(super) changed_planning_file_paths: Vec<String>,
-    pub(super) execution_snapshot_capture: Option<crate::domain::planning::TurnSnapshotCapture>,
-    pub(super) latest_user_message: Option<String>,
-    pub(super) latest_agent_reply: Option<String>,
-}
-
 #[derive(Debug, Clone)]
 struct ActiveTurnSteer {
     correlation: TurnSteerCorrelation,
@@ -58,12 +45,6 @@ struct ActiveStopRequest {
     pending_attempt: Option<StopRequestAttempt>,
     synchronize_after_turn_started: bool,
     invalidated: bool,
-}
-
-#[derive(Debug, Clone)]
-struct ActivePostTurnEvaluation {
-    correlation: PostTurnEvaluationCorrelation,
-    continuation_permit: PostTurnContinuationPermit,
 }
 
 #[derive(Debug)]
@@ -128,11 +109,9 @@ struct ThreadSession {
     conversation_runtime: ConversationRuntimeAuthority,
     guarded_session_rename_stream: Option<(TurnSubmissionCorrelation, SessionRenameCorrelation)>,
     post_turn_continuation_gate: PostTurnContinuationGate,
-    in_flight_post_turn_evaluation: Option<ActivePostTurnEvaluation>,
     active_stop_request: Option<ActiveStopRequest>,
     active_turn_steer: Option<ActiveTurnSteer>,
     post_turn_messages: PostTurnMessages,
-    pending_post_turn_evaluation: Option<PendingPostTurnEvaluation>,
     // 자동 후속 턴에 쓸 턴 옵션이다 (plan 18 K1-5). 대화 로드, 제출, 클라이언트 변경으로 갱신한다.
     turn_options: crate::domain::conversation::ConversationTurnOptions,
 }
@@ -144,11 +123,9 @@ impl ThreadSession {
             conversation_runtime: ConversationRuntimeAuthority::new(),
             guarded_session_rename_stream: None,
             post_turn_continuation_gate: PostTurnContinuationGate::default(),
-            in_flight_post_turn_evaluation: None,
             active_stop_request: None,
             active_turn_steer: None,
             post_turn_messages: PostTurnMessages::default(),
-            pending_post_turn_evaluation: None,
             turn_options: Default::default(),
         }
     }
@@ -159,8 +136,7 @@ impl ThreadSession {
             .conversation_runtime
             .snapshot()
             .can_accept_manual_prompt()
-            || self.pending_post_turn_evaluation.is_some()
-            || self.in_flight_post_turn_evaluation.is_some()
+            || self.conversation_runtime.post_turn().has_work()
             || self.active_stop_request.is_some()
             || self.active_turn_steer.is_some()
     }
@@ -171,6 +147,8 @@ impl ThreadSession {
         let mut view = Self::new();
         view.conversation_runtime = self.conversation_runtime.clone();
         view.conversation_runtime.invalidate_conversation();
+        // 평가 대기는 뒤로 보낸 session 에 남는다. 보는 자리는 이전처럼 빈 상태에서 시작한다.
+        view.conversation_runtime.discard_due_post_turn();
         view.turn_options = self.turn_options.clone();
         view
     }
@@ -180,11 +158,18 @@ impl ThreadSession {
     }
 
     fn awaits_post_turn_route(&self, correlation: &PostTurnEvaluationCorrelation) -> bool {
-        matches!(
-            &self.conversation_runtime.snapshot().post_turn,
-            super::PostTurnAuthoritySnapshot::AwaitingRoute { correlation: awaiting, .. }
-                if awaiting == correlation
-        )
+        self.conversation_runtime
+            .post_turn()
+            .awaits_route(correlation)
+    }
+
+    fn evaluates_post_turn(&self, correlation: &PostTurnEvaluationCorrelation) -> bool {
+        self.active_post_turn_evaluation()
+            .is_some_and(|active| &active.correlation == correlation)
+    }
+
+    fn active_post_turn_evaluation(&self) -> Option<&ActivePostTurnEvaluation> {
+        self.conversation_runtime.post_turn().active_evaluation()
     }
 
     fn activity_summary(&self) -> Option<ThreadActivitySummary> {
@@ -202,8 +187,7 @@ impl ThreadSession {
                 .as_ref()
                 .map(|approval| approval.request.clone()),
             auto_follow_active: runtime.auto_follow.has_live_activity()
-                || runtime.post_turn.is_in_flight()
-                || self.pending_post_turn_evaluation.is_some(),
+                || self.conversation_runtime.post_turn().has_work(),
         })
     }
 
@@ -246,10 +230,7 @@ impl std::fmt::Debug for ConversationTurnFeatureReducer {
                 "in_flight_conversation_load",
                 &self.in_flight_conversation_load,
             )
-            .field(
-                "in_flight_post_turn_evaluation",
-                &self.session.in_flight_post_turn_evaluation,
-            )
+            .field("post_turn", self.session.conversation_runtime.post_turn())
             .field("active_stop_request", &self.session.active_stop_request)
             .field("active_turn_steer", &self.session.active_turn_steer)
             .field("background_sessions", &self.background_sessions.len())
@@ -307,11 +288,7 @@ impl ConversationTurnFeatureReducer {
         correlation: &PostTurnEvaluationCorrelation,
     ) -> bool {
         let owns = |session: &ThreadSession| {
-            session
-                .in_flight_post_turn_evaluation
-                .as_ref()
-                .is_some_and(|active| &active.correlation == correlation)
-                || session.awaits_post_turn_route(correlation)
+            session.evaluates_post_turn(correlation) || session.awaits_post_turn_route(correlation)
         };
         !owns(&self.session) && self.background_sessions.iter().any(owns)
     }
@@ -434,9 +411,9 @@ impl ConversationTurnFeatureReducer {
         build_request: impl FnOnce(PendingPostTurnEvaluation) -> PostTurnRequest,
     ) -> Option<(PostTurnEvaluationCorrelation, PostTurnRequest)> {
         self.with_owning_session(
-            |session| session.pending_post_turn_evaluation.is_some(),
+            |session| session.conversation_runtime.post_turn().is_due(),
             |reducer| {
-                let pending = reducer.session.pending_post_turn_evaluation.take()?;
+                let pending = reducer.session.conversation_runtime.take_due_post_turn()?;
                 let mut request = build_request(pending);
                 let correlation = reducer.admit_post_turn_evaluation_in_session(&mut request)?;
                 Some((correlation, request))
@@ -548,7 +525,7 @@ impl ConversationTurnFeatureReducer {
         self.session.turn_stream_state = TurnStreamState::new();
         // 다른 대화를 열면 이전 대화의 메시지와 평가 대기 턴은 버린다.
         self.session.post_turn_messages = PostTurnMessages::default();
-        self.session.pending_post_turn_evaluation = None;
+        self.session.conversation_runtime.discard_due_post_turn();
         let resumed_index = loaded_identity.as_ref().and_then(|identity| {
             self.background_sessions
                 .iter()
@@ -810,20 +787,26 @@ impl ConversationTurnFeatureReducer {
                             .map(|capture| capture.workspace_directory.clone())
                     })
                     .unwrap_or_else(|| planning_workspace_directory.clone());
-                self.session.pending_post_turn_evaluation = Some(PendingPostTurnEvaluation {
-                    thread_id: stream_snapshot.thread_id.clone().unwrap_or_default(),
-                    completed_turn_id: turn_id.clone(),
-                    workspace_directory,
-                    planning_workspace_directory: planning_workspace_directory.clone(),
-                    changed_planning_file_paths: changed_planning_file_paths.clone(),
-                    execution_snapshot_capture: execution_snapshot_capture.clone(),
-                    latest_user_message: self
-                        .session
-                        .post_turn_messages
-                        .latest_user_message
-                        .clone(),
-                    latest_agent_reply: self.session.post_turn_messages.latest_agent_reply.clone(),
-                });
+                self.session
+                    .conversation_runtime
+                    .mark_post_turn_due(PendingPostTurnEvaluation {
+                        thread_id: stream_snapshot.thread_id.clone().unwrap_or_default(),
+                        completed_turn_id: turn_id.clone(),
+                        workspace_directory,
+                        planning_workspace_directory: planning_workspace_directory.clone(),
+                        changed_planning_file_paths: changed_planning_file_paths.clone(),
+                        execution_snapshot_capture: execution_snapshot_capture.clone(),
+                        latest_user_message: self
+                            .session
+                            .post_turn_messages
+                            .latest_user_message
+                            .clone(),
+                        latest_agent_reply: self
+                            .session
+                            .post_turn_messages
+                            .latest_agent_reply
+                            .clone(),
+                    });
                 Some(planning_workspace_directory)
             }
             _ => None,
@@ -1261,7 +1244,7 @@ impl ConversationTurnFeatureReducer {
         request: &mut PostTurnRequest,
     ) -> Option<PostTurnEvaluationCorrelation> {
         self.prune_post_turn_evaluation_for_lifecycle();
-        if self.session.in_flight_post_turn_evaluation.is_some()
+        if self.session.active_post_turn_evaluation().is_some()
             || !self
                 .session
                 .turn_stream_state
@@ -1308,13 +1291,12 @@ impl ConversationTurnFeatureReducer {
             request.context.planning_workspace_directory.clone(),
         );
         request.continuation_permit = self.session.post_turn_continuation_gate.capture();
-        self.session.in_flight_post_turn_evaluation = Some(ActivePostTurnEvaluation {
-            correlation: correlation.clone(),
-            continuation_permit: request.continuation_permit.clone(),
-        });
         self.session
             .conversation_runtime
-            .begin_post_turn_evaluation(correlation.clone());
+            .begin_post_turn_evaluation(ActivePostTurnEvaluation {
+                correlation: correlation.clone(),
+                continuation_permit: request.continuation_permit.clone(),
+            });
         Some(correlation)
     }
 
@@ -1324,12 +1306,7 @@ impl ConversationTurnFeatureReducer {
         execution: &PostTurnExecution,
     ) -> bool {
         self.with_owning_session(
-            |session| {
-                session
-                    .in_flight_post_turn_evaluation
-                    .as_ref()
-                    .is_some_and(|active| &active.correlation == correlation)
-            },
+            |session| session.evaluates_post_turn(correlation),
             |reducer| reducer.complete_post_turn_evaluation_in_session(correlation, execution),
         )
         .unwrap_or(false)
@@ -1356,7 +1333,6 @@ impl ConversationTurnFeatureReducer {
         {
             return false;
         }
-        self.session.in_flight_post_turn_evaluation = None;
         self.session
             .conversation_runtime
             .await_post_turn_route(correlation.clone(), Box::new(execution.clone()))
@@ -1427,8 +1403,7 @@ impl ConversationTurnFeatureReducer {
         &self,
     ) -> Option<&PostTurnEvaluationCorrelation> {
         self.session
-            .in_flight_post_turn_evaluation
-            .as_ref()
+            .active_post_turn_evaluation()
             .map(|active| &active.correlation)
     }
 
@@ -1441,8 +1416,7 @@ impl ConversationTurnFeatureReducer {
     fn prune_post_turn_evaluation_for_lifecycle(&mut self) {
         let should_prune = self
             .session
-            .in_flight_post_turn_evaluation
-            .as_ref()
+            .active_post_turn_evaluation()
             .is_some_and(|active| {
                 !self
                     .session
@@ -1458,12 +1432,13 @@ impl ConversationTurnFeatureReducer {
     }
 
     fn cancel_active_post_turn_evaluation(&mut self) {
-        if let Some(active) = self.session.in_flight_post_turn_evaluation.take() {
+        if let Some(active) = self
+            .session
+            .conversation_runtime
+            .cancel_post_turn_evaluation()
+        {
             active.continuation_permit.invalidate_if_current();
         }
-        self.session
-            .conversation_runtime
-            .cancel_post_turn_evaluation();
     }
 
     fn invalidate_post_turn_continuation(&mut self) {
@@ -1473,14 +1448,16 @@ impl ConversationTurnFeatureReducer {
 
     fn settle_post_turn_continuation_for_policy_change(&mut self) {
         self.session.post_turn_continuation_gate.advance();
-        let active = self.session.in_flight_post_turn_evaluation.take();
+        let active = self.session.active_post_turn_evaluation().cloned();
         if let Some(active) = active.as_ref()
             && !self.session.turn_stream_state.settle_post_turn_terminal(
                 &active.correlation.thread_id,
                 &active.correlation.completed_turn_id,
             )
         {
-            self.session
+            // gate 를 이미 넘겼으므로 permit 은 따로 무효로 만들지 않는다 (Q2-1 이전 동작).
+            let _ = self
+                .session
                 .conversation_runtime
                 .cancel_post_turn_evaluation();
             return;
@@ -1692,7 +1669,7 @@ mod tests {
         reducer
             .session
             .conversation_runtime
-            .begin_post_turn_evaluation(correlation.clone());
+            .begin_post_turn_evaluation(ActivePostTurnEvaluation::for_test(correlation.clone()));
         assert!(
             reducer
                 .session

@@ -3542,12 +3542,10 @@ fn core_conversation_turn_feature_reducer_owns_one_correlated_lifecycle_slice() 
         "conversation_runtime",
         "guarded_session_rename_stream",
         "post_turn_continuation_gate",
-        "in_flight_post_turn_evaluation",
         "active_stop_request",
         "active_turn_steer",
-        // plan 18 K1-4: evaluation inputs and the completed turn awaiting the host.
+        // plan 18 K1-4: evaluation inputs. plan 19 Q2-1: the post-turn phase lives in the runtime authority.
         "post_turn_messages",
-        "pending_post_turn_evaluation",
         // plan 18 K1-5: turn options for the follow-up turn the host submits.
         "turn_options",
     ];
@@ -3680,20 +3678,13 @@ fn core_conversation_turn_feature_reducer_owns_one_correlated_lifecycle_slice() 
     assert!(
         matches!(
             runtime_fields.as_slice(),
-            [snapshot, pending_route]
+            [snapshot, post_turn]
                 if snapshot.ident.as_ref().is_some_and(|ident| ident == "snapshot")
                     && is_named_path_type(&snapshot.ty, "ConversationRuntimeSnapshot")
-                    && pending_route
-                        .ident
-                        .as_ref()
-                        .is_some_and(|ident| ident == "pending_post_turn_route")
-                    && is_single_generic_named_type(
-                        &pending_route.ty,
-                        "Option",
-                        "PendingPostTurnRoute",
-                    )
+                    && post_turn.ident.as_ref().is_some_and(|ident| ident == "post_turn")
+                    && is_named_path_type(&post_turn.ty, "PostTurnState")
         ),
-        "ConversationRuntimeAuthority must retain one semantic snapshot plus one private exact route payload"
+        "ConversationRuntimeAuthority must retain one semantic snapshot plus one post-turn state (plan 19 Q2-1)"
     );
     let production_reducer = production_source_before_inline_tests(&reducer_source);
     for forbidden_dependency in [
@@ -11884,14 +11875,24 @@ fn post_turn_evaluation_uses_one_core_owned_exact_correlation() {
         .expect("Core controller source should load");
     let reducer = fs::read_to_string("src/core/app/conversation_turn_reducer.rs")
         .expect("conversation/turn reducer source should load");
+    let post_turn_state = fs::read_to_string("src/core/app/post_turn_state.rs")
+        .expect("post-turn state source should load");
+    let runtime_authority = fs::read_to_string("src/core/app/conversation_runtime.rs")
+        .expect("conversation runtime authority source should load");
     let production_controller = production_source_before_inline_tests(&controller);
     let production_reducer = production_source_before_inline_tests(&reducer);
+    let production_post_turn_state = production_source_before_inline_tests(&post_turn_state);
+    // plan 19 Q2-1: the active lease is one state of the single post-turn state owned by the runtime authority.
     assert!(
-        production_reducer.contains("struct ActivePostTurnEvaluation")
-            && production_reducer.contains("correlation: PostTurnEvaluationCorrelation")
-            && production_reducer.contains("continuation_permit: PostTurnContinuationPermit")
-            && production_reducer
-                .contains("in_flight_post_turn_evaluation: Option<ActivePostTurnEvaluation>")
+        production_post_turn_state.contains("struct ActivePostTurnEvaluation")
+            && production_post_turn_state.contains("correlation: PostTurnEvaluationCorrelation")
+            && production_post_turn_state
+                .contains("continuation_permit: PostTurnContinuationPermit")
+            && production_post_turn_state.contains("active: ActivePostTurnEvaluation")
+            && production_source_before_inline_tests(&runtime_authority)
+                .contains("post_turn: PostTurnState")
+            && !production_reducer.contains("in_flight_post_turn_evaluation")
+            && !production_reducer.contains("pending_post_turn_evaluation:")
             && production_reducer.contains("next_post_turn_evaluation_generation: u64")
             && production_reducer
                 .contains("if self.active_post_turn_evaluation_correlation() != Some(correlation)")

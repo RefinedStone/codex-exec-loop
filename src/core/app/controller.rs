@@ -7787,6 +7787,29 @@ mod tests {
     }
 
     #[test]
+    fn a_due_evaluation_follows_its_session_when_the_client_leaves_the_conversation() {
+        // plan 19 Q2-1: leaving the conversation sends the completed turn's session to the background.
+        // The new view starts empty, so the host's evaluation command reaches the background session.
+        let mut controller = CoreController::new();
+        apply_completed_turn(&mut controller, "thread-1", "turn-1");
+        controller.handle_input(CoreInput::Command(AppCommand::InvalidateConversationLoad));
+
+        let started =
+            controller.handle_input(CoreInput::Command(AppCommand::EvaluateCompletedTurn {
+                parallel_mode_enabled: false,
+                parallel_automation_epoch_id: None,
+            }));
+        let [CoreEffect::EvaluatePostTurn { request, .. }] = started.effects.as_slice() else {
+            panic!(
+                "the background session should start its evaluation: {:?}",
+                started.effects
+            );
+        };
+        assert_eq!(request.context.thread_id, "thread-1");
+        assert_eq!(request.completed_turn_id, "turn-1");
+    }
+
+    #[test]
     fn conversation_runtime_notice_reduces_to_core_snapshot_without_state_revision() {
         let mut controller = CoreController::new();
         let before = controller
