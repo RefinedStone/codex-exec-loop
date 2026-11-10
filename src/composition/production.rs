@@ -383,12 +383,35 @@ pub(crate) fn acquire_repository_kernel_lock(workspace_dir: &str) -> Result<Repo
     RepositoryKernelLockAdapter::acquire(location, workspace_dir)
 }
 
-/// `workspace_dir` 가 속한 저장소의 신원이다. 잠금을 잡지 않는다. 커널 잠금의 `repository_key` 와 같은 값이다.
-pub(crate) fn repository_kernel_key(workspace_dir: &str) -> Result<String> {
-    Ok(
-        SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace_dir)?
-            .repository_identity,
-    )
+/// 클라이언트가 붙으려는 폴더가 속한 저장소의 커널 자리이다 (plan 18 K3-5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RepositoryKernelTarget {
+    /// 저장소 신원이다. 커널 잠금의 `repository_key` 와 같은 값이다.
+    pub(crate) repository_key: String,
+    /// 커널의 작업 공간이다. 저장소의 대표 checkout 이고, git 이 아닌 폴더는 정규화한 그 폴더이다. 어느 worktree
+    /// 에서 처음 붙어도 같은 값이다.
+    pub(crate) workspace_root: String,
+}
+
+/// `workspace_dir` 가 속한 저장소의 커널 자리를 찾는다. 잠금을 잡지 않는다. 병렬 pool 안의 worktree(slot,
+/// 통합)는 커널이 관리하는 작업 공간이므로 거절한다.
+pub(crate) fn repository_kernel_target(workspace_dir: &str) -> Result<RepositoryKernelTarget> {
+    let location =
+        SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace_dir)?;
+    if crate::application::service::parallel_mode::workspace_is_inside_parallel_pool(
+        Path::new(&location.canonical_repo_root),
+        Path::new(&location.workspace_root),
+    ) {
+        anyhow::bail!(
+            "`{workspace_dir}` is an Akra parallel slot worktree. Attach from the repository checkout \
+             `{}` instead; the repository kernel manages its slot worktrees",
+            location.canonical_repo_root
+        )
+    }
+    Ok(RepositoryKernelTarget {
+        repository_key: location.repository_identity,
+        workspace_root: location.canonical_repo_root,
+    })
 }
 
 /// TUI 가 시작 폴더의 저장소 잠금을 잡는다 (plan 18 K3-4). 다른 프로세스가 그 저장소의 커널을 돌리면 오류를
