@@ -229,7 +229,8 @@ parallel, Git, GitHub 권위를 바꾸지 않고 재생하며 PR 검증 복구 �
   오지 않는다. `akra/kernel/describe` 는 메서드, 명령, 조회, 이벤트 목록을 준다. 조회와 이벤트 `planning`, `parallel` 은
   planning 큐와 병렬 작업 상태(pool, 에이전트, 병합 큐, PR 검증)를 준다. `refresh_planning` 은 큐를 다시 읽는다.
   조회 `history`(`{"type": "history", "after": <cursor>, "limit": <n>}`)는 커널의 판단 사건 기록을 기록 순서대로
-  나누어 읽고 `records` 와 `next_after` 로 답한다. 다음 조회에는 `next_after` 를 `after` 로 보낸다.
+  나누어 읽고 `records` 와 `next_after` 로 답한다. 다음 조회에는 `next_after` 를 `after` 로 보낸다. 새 기록은 같은
+  `sequence` 로 `recorded` 이벤트로도 바로 온다. `resync` 뒤에는 마지막으로 본 sequence 뒤를 `history` 로 읽는다.
   클라이언트가 붙어 있는 동안 커널은 병렬 감독 스냅샷을 새로 고친다. 첫 붙기 때 pool 을 바꾸지 않는 감독 점검을
   한 번 한다(TUI 병렬 화면처럼 push 준비 점검을 한다).
 - 붙은 클라이언트도 남은 일(턴, 승인, 자동 후속, 평가, planning 작업, 켜진 병렬 모드, 도는 병렬 작업)도 없이

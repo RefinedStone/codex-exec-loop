@@ -155,7 +155,10 @@ dispatch마다 buffer를 비웁니다. `build_kernel_for_workspace`가 만든 �
 작업 공간의 planning SQLite `kernel_events` 표에 씁니다. 저장소 잠금을 잡은 뒤 그 기록을 읽고, 끝나지
 않은 남김을 host 전용 `RestoreQueuedThreadPrompts`로 되돌립니다. 그래서 다시 시작한 커널도 쉴 때 한 번 다시
 냅니다. 복구는 남김 종류만 읽습니다. 쓸 때마다 남김 종류가 아닌 사건은 최근 10,000개만 남기고, 남김 종류는
-복구를 위해 남깁니다. 커널 조회 `history`는 커널 host thread에서 cursor로 기록을 나누어 읽습니다. 표는 처음 쓸 때 만들고 schema version은 바꾸지 않으므로 이전 binary도 저장소를 엽니다. TUI 런타임은
+복구를 위해 남깁니다. 커널 조회 `history`는 커널 host thread에서 cursor로 기록을 나누어 읽습니다. 저장소 커널은
+자기 기록을 쓰는 유일한 쪽이므로 저장된 최대값 다음부터 sequence를 직접 정하고, 같은 sequence로 각 기록을 커널
+이벤트 `recorded`로 바로 보냅니다. `resync`를 받은 client는 마지막으로 본 sequence 뒤를 `history`로 읽습니다.
+`turn_ended` 기록은 그 dispatch 입력이 알린 끝 결과를 담습니다. 표는 처음 쓸 때 만들고 schema version은 바꾸지 않으므로 이전 binary도 저장소를 엽니다. TUI 런타임은
 판단 사건을 버립니다. Thread를 다시 열면 live
 runtime 상태가 보이고 transcript는 provider에서 다시 읽습니다.
 

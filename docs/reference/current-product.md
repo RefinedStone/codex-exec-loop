@@ -290,7 +290,8 @@ the desktop app itself is not shipped yet.
   queue and the parallel state (pool, agents, merge queue, PR validation); `refresh_planning` reads the
   queue again. The `history` query (`{"type": "history", "after": <cursor>, "limit": <n>}`) pages
   through the kernel decision log in record order and answers with `records` and `next_after`; send
-  `next_after` as the next `after`. While a client is attached the kernel refreshes the parallel supervisor snapshot, and the
+  `next_after` as the next `after`. Each new record also arrives live as a `recorded` event with the
+  same `sequence`; after `resync`, read `history` after the last sequence seen. While a client is attached the kernel refreshes the parallel supervisor snapshot, and the
   first attach runs one supervisor inspection that does not change the pool (it runs the push readiness
   check, like the TUI parallel view).
 - A kernel with no attached client and no remaining work (turns, approvals, auto-follow, evaluation,
