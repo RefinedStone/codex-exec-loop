@@ -25,10 +25,11 @@ use crate::adapter::inbound::kernel_protocol::{
     AttachRequest, AttachResponse, CommandRequest, CommandResponse, ERROR_INVALID_PARAMS,
     ERROR_KERNEL_TIMEOUT, ERROR_KERNEL_UNAVAILABLE, ERROR_NOT_ATTACHED, EventNotification,
     KernelEvent, KernelProtocolError, METHOD_ATTACH, METHOD_COMMAND, METHOD_DESCRIBE,
-    METHOD_DETACH, METHOD_EVENT, METHOD_QUERY, PROTOCOL_VERSION, QueryRequest, describe,
+    METHOD_DETACH, METHOD_EVENT, METHOD_QUERY, PROTOCOL_VERSION, ParallelSource, ParallelState,
+    PlanningState, QueryRequest, describe,
 };
 use crate::composition::kernel_host::{
-    KernelCallError, KernelClientHandle, KernelCommandSender, KernelHostEvent,
+    KernelCallError, KernelClientHandle, KernelCommandSender, KernelHostEvent, ParallelHostView,
 };
 use crate::composition::repository_kernel::RepositoryKernelRegistry;
 
@@ -237,7 +238,11 @@ impl KernelSession {
                 KernelCallError::Stopped => unavailable(error.to_string()),
                 KernelCallError::TimedOut => timed_out("query", KERNEL_CALL_TIMEOUT),
             })?;
-        to_result(request.query.answer(&view.snapshot, &view.thread_activity))
+        to_result(request.query.answer(
+            &view.snapshot,
+            &view.thread_activity,
+            parallel_source(&view.parallel),
+        ))
     }
 
     /// 커널에서 떨어지고, 이벤트 스레드가 끝날 때까지 기다린다. 그 뒤에는 이 접속에 커널 이벤트가 가지 않는다.
@@ -311,8 +316,21 @@ fn send_unless_stopped(
 fn protocol_event(event: KernelHostEvent) -> Option<KernelEvent> {
     match event {
         KernelHostEvent::Core(event) => KernelEvent::from_core(&event),
-        KernelHostEvent::Parallel(_) => None,
+        KernelHostEvent::Parallel(parallel) => Some(KernelEvent::Parallel(
+            ParallelState::from_core(parallel_source(&parallel)),
+        )),
+        KernelHostEvent::Planning(projection) => {
+            Some(KernelEvent::Planning(PlanningState::from_core(&projection)))
+        }
         KernelHostEvent::Resync => Some(KernelEvent::Resync),
+    }
+}
+
+fn parallel_source(view: &ParallelHostView) -> ParallelSource<'_> {
+    ParallelSource {
+        enabled: view.enabled,
+        supervisor: view.supervisor.as_deref(),
+        status: view.status.as_deref(),
     }
 }
 

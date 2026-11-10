@@ -14,6 +14,10 @@ use crate::core::app::{
 use crate::domain::conversation::{
     ConversationApprovalDecision, ConversationApprovalRequestIdentity, ConversationTurnSteerRequest,
 };
+use crate::domain::parallel_mode::{ParallelModeSupervisorSnapshot, ParallelModeSupervisorState};
+use crate::domain::planning::{
+    PriorityQueueTask, RuntimeProjection, RuntimeWorkspaceStatus, TaskStatus,
+};
 use crate::domain::recent_sessions::{SessionCatalog, SessionRenameRequest};
 
 #[cfg(test)]
@@ -210,9 +214,11 @@ pub enum KernelCommand {
         #[serde(default)]
         confirm: bool,
     },
+    /// planning 큐를 다시 읽는다. 결과는 `planning` 이벤트로 온다.
+    RefreshPlanning {},
 }
 
-const COMMANDS: [&str; 9] = [
+const COMMANDS: [&str; 10] = [
     "load_sessions",
     "rename_session",
     "submit_prompt",
@@ -222,6 +228,7 @@ const COMMANDS: [&str; 9] = [
     "set_auto_follow_max_turns",
     "pause_auto_follow",
     "reset_planning",
+    "refresh_planning",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -308,6 +315,9 @@ impl KernelCommand {
                     .with_confirmation(confirm),
                 )
             }
+            Self::RefreshPlanning {} => AppCommand::RefreshPlanningRuntime {
+                workspace_directory: workspace_directory.to_string(),
+            },
         };
         Ok(command)
     }
@@ -330,6 +340,8 @@ pub enum KernelQuery {
     Sessions {},
     AutoFollow {},
     ThreadActivity {},
+    Planning {},
+    Parallel {},
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -340,7 +352,12 @@ pub struct QueryRequest {
 
 impl KernelQuery {
     /// 조회 결과는 같은 이름의 이벤트와 같은 모양이다. 클라이언트는 둘을 같은 코드로 그린다.
-    pub fn answer(self, snapshot: &AppSnapshot, threads: &[ThreadActivitySummary]) -> KernelEvent {
+    pub fn answer(
+        self,
+        snapshot: &AppSnapshot,
+        threads: &[ThreadActivitySummary],
+        parallel: ParallelSource<'_>,
+    ) -> KernelEvent {
         match self {
             Self::Sessions {} => {
                 KernelEvent::Sessions(SessionsState::from_core(&snapshot.session_catalog))
@@ -351,11 +368,21 @@ impl KernelQuery {
             Self::ThreadActivity {} => KernelEvent::ThreadActivity {
                 threads: threads.iter().map(ThreadActivity::from_core).collect(),
             },
+            Self::Planning {} => KernelEvent::Planning(PlanningState::from_core(
+                &snapshot.planning_parallel.planning_runtime,
+            )),
+            Self::Parallel {} => KernelEvent::Parallel(ParallelState::from_core(parallel)),
         }
     }
 }
 
-const QUERIES: [&str; 3] = ["sessions", "auto_follow", "thread_activity"];
+const QUERIES: [&str; 5] = [
+    "sessions",
+    "auto_follow",
+    "thread_activity",
+    "planning",
+    "parallel",
+];
 
 // event -------------------------------------------------------------------------------------------
 
@@ -373,6 +400,10 @@ pub enum KernelEvent {
     },
     /// `submit_prompt` 의 진행이다. 턴이 시작되면 `thread_activity` 에도 나타난다.
     PromptSubmission(PromptSubmissionState),
+    /// planning 큐가 바뀌었다 (K3-6).
+    Planning(PlanningState),
+    /// 병렬 작업 상태가 바뀌었다 (K3-6). 클라이언트가 붙어 있는 동안 커널이 감독 스냅샷을 주기적으로 새로 고친다.
+    Parallel(ParallelState),
     /// 이 클라이언트에게 보낼 이벤트가 넘쳐 버렸다. 클라이언트는 조회로 다시 맞춘다.
     Resync,
 }
@@ -383,11 +414,13 @@ pub struct EventNotification {
     pub event: KernelEvent,
 }
 
-const EVENTS: [&str; 5] = [
+const EVENTS: [&str; 7] = [
     "sessions",
     "auto_follow",
     "thread_activity",
     "prompt_submission",
+    "planning",
+    "parallel",
     "resync",
 ];
 
@@ -736,6 +769,315 @@ impl PromptSubmissionState {
             reason: Some(reason),
             task_id,
             message: Some(message),
+        }
+    }
+}
+
+// planning ----------------------------------------------------------------------------------------
+
+/*
+ * planning 큐이다 (K3-6). 커널 작업 공간(저장소의 대표 checkout)의 planning 투영을 보낸다. 커널이 아직 읽지 않았으면
+ * `uninitialized` 이다. 클라이언트는 붙은 뒤 `refresh_planning` 을 보낸다.
+ */
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanningState {
+    pub status: PlanningStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue_summary: Option<String>,
+    /// `invalid` 의 원인이다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<String>,
+    /// planning 이 자동 후속을 멈춘 이유이다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_follow_pause_reason: Option<String>,
+    /// 다음에 실행할 작업이다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_task: Option<PlanningTask>,
+    pub active_tasks: Vec<PlanningTask>,
+    /// 아직 받아들이지 않은 후속 제안이다.
+    pub proposed_tasks: Vec<PlanningTask>,
+    pub skipped_tasks: Vec<SkippedPlanningTask>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanningStatus {
+    /// planning 이 없거나 커널이 아직 읽지 않았다.
+    Uninitialized,
+    Invalid,
+    ReadyWithoutTask,
+    ReadyWithTask,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanningTask {
+    pub rank: usize,
+    pub task_id: String,
+    pub direction_title: String,
+    pub title: String,
+    pub status: PlanningTaskStatus,
+    pub priority: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkippedPlanningTask {
+    pub task_id: String,
+    pub title: String,
+    pub status: PlanningTaskStatus,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanningTaskStatus {
+    Ready,
+    Blocked,
+    InProgress,
+    Done,
+    Cancelled,
+    AwaitingUser,
+    Proposed,
+}
+
+impl PlanningTaskStatus {
+    fn from_core(status: TaskStatus) -> Self {
+        match status {
+            TaskStatus::Ready => Self::Ready,
+            TaskStatus::Blocked => Self::Blocked,
+            TaskStatus::InProgress => Self::InProgress,
+            TaskStatus::Done => Self::Done,
+            TaskStatus::Cancelled => Self::Cancelled,
+            TaskStatus::AwaitingUser => Self::AwaitingUser,
+            TaskStatus::Proposed => Self::Proposed,
+        }
+    }
+}
+
+impl PlanningTask {
+    fn from_core(task: &PriorityQueueTask) -> Self {
+        Self {
+            rank: task.rank,
+            task_id: task.task_id.clone(),
+            direction_title: task.direction_title.clone(),
+            title: task.task_title.clone(),
+            status: PlanningTaskStatus::from_core(task.status),
+            priority: task.combined_priority,
+        }
+    }
+}
+
+impl PlanningState {
+    pub fn from_core(projection: &RuntimeProjection) -> Self {
+        let queue = projection.queue_projection();
+        let tasks = |pick: fn(
+            &crate::domain::planning::PriorityQueueProjection,
+        ) -> &Vec<PriorityQueueTask>| {
+            queue
+                .map(|queue| pick(queue).iter().map(PlanningTask::from_core).collect())
+                .unwrap_or_default()
+        };
+        Self {
+            status: match projection.workspace_status() {
+                RuntimeWorkspaceStatus::Uninitialized => PlanningStatus::Uninitialized,
+                RuntimeWorkspaceStatus::Invalid => PlanningStatus::Invalid,
+                RuntimeWorkspaceStatus::ReadyNoTask => PlanningStatus::ReadyWithoutTask,
+                RuntimeWorkspaceStatus::ReadyWithTask => PlanningStatus::ReadyWithTask,
+            },
+            revision: projection.planning_revision(),
+            queue_summary: projection.queue_summary().map(str::to_string),
+            failure_reason: projection.failure_reason().map(str::to_string),
+            auto_follow_pause_reason: projection.auto_follow_pause_reason().map(str::to_string),
+            next_task: queue
+                .and_then(|queue| queue.next_task.as_ref())
+                .or(projection.queue_head())
+                .map(PlanningTask::from_core),
+            active_tasks: tasks(|queue| &queue.active_tasks),
+            proposed_tasks: tasks(|queue| &queue.proposed_tasks),
+            skipped_tasks: queue
+                .map(|queue| {
+                    queue
+                        .skipped_tasks
+                        .iter()
+                        .map(|task| SkippedPlanningTask {
+                            task_id: task.task_id.clone(),
+                            title: task.task_title.clone(),
+                            status: PlanningTaskStatus::from_core(task.status),
+                            reason: task.reason.clone(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }
+    }
+}
+
+// parallel ----------------------------------------------------------------------------------------
+
+/// 커널 호스트가 모은 병렬 작업 상태이다. 호스트 타입을 모르게 하려고 값만 빌린다.
+#[derive(Debug, Clone, Copy)]
+pub struct ParallelSource<'a> {
+    pub enabled: bool,
+    pub supervisor: Option<&'a ParallelModeSupervisorSnapshot>,
+    pub status: Option<&'a str>,
+}
+
+/*
+ * 병렬 작업 상태이다 (K3-6). 감독 스냅샷은 TUI 의 병렬 화면과 같은 값이다. 상태 이름(`state`)은 TUI 와 같은 표시
+ * 이름을 snake_case 로 바꾼 것이다. 명령 스펙(K4)에서 열거형으로 고정한다.
+ */
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParallelState {
+    pub enabled: bool,
+    /// 병렬 제어부가 마지막으로 알린 상태 문구이다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// 커널이 아직 감독 스냅샷을 읽지 않았으면 없다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supervisor: Option<ParallelSupervisor>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParallelSupervisor {
+    pub state: ParallelSupervisorState,
+    pub pool: ParallelPool,
+    pub agents: Vec<ParallelAgent>,
+    /// 병합 큐의 머리 요약이다.
+    pub merge_head: String,
+    pub merge_queue: Vec<ParallelMergeItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_validation: Option<ParallelPrValidation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notice: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParallelSupervisorState {
+    Prepare,
+    Supervise,
+    Recover,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParallelPool {
+    pub configured: usize,
+    pub idle: usize,
+    pub leased: usize,
+    pub running: usize,
+    pub awaiting_cleanup: usize,
+    pub blocked: usize,
+    pub missing: usize,
+    pub unavailable: usize,
+    pub exhausted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParallelAgent {
+    pub agent_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    pub task_title: String,
+    pub slot_id: String,
+    pub branch: String,
+    pub state: String,
+    pub duration: String,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParallelMergeItem {
+    pub task_title: String,
+    pub state: String,
+    pub branch: String,
+    pub commit: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParallelPrValidation {
+    pub pull_request_number: u64,
+    pub url: String,
+    pub state: String,
+    pub phase: String,
+    pub reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocker: Option<String>,
+}
+
+fn state_name(label: &str) -> String {
+    label.replace(' ', "_")
+}
+
+impl ParallelState {
+    pub fn from_core(source: ParallelSource<'_>) -> Self {
+        Self {
+            enabled: source.enabled,
+            status: source.status.map(str::to_string),
+            supervisor: source.supervisor.map(ParallelSupervisor::from_core),
+        }
+    }
+}
+
+impl ParallelSupervisor {
+    fn from_core(snapshot: &ParallelModeSupervisorSnapshot) -> Self {
+        let pool = &snapshot.pool;
+        Self {
+            state: match snapshot.state {
+                ParallelModeSupervisorState::Prepare => ParallelSupervisorState::Prepare,
+                ParallelModeSupervisorState::Supervise => ParallelSupervisorState::Supervise,
+                ParallelModeSupervisorState::Recover => ParallelSupervisorState::Recover,
+            },
+            pool: ParallelPool {
+                configured: pool.configured_size,
+                idle: pool.idle_slots,
+                leased: pool.leased_slots,
+                running: pool.running_slots,
+                awaiting_cleanup: pool.awaiting_cleanup_slots,
+                blocked: pool.blocked_slots,
+                missing: pool.missing_slots,
+                unavailable: pool.unavailable_slots,
+                exhausted: pool.exhausted,
+            },
+            agents: snapshot
+                .roster
+                .entries
+                .iter()
+                .map(|entry| ParallelAgent {
+                    agent_id: entry.agent_id.clone(),
+                    thread_id: entry.thread_id.clone(),
+                    task_title: entry.task_title.clone(),
+                    slot_id: entry.slot_id.clone(),
+                    branch: entry.branch_name.clone(),
+                    state: entry.state_label.clone(),
+                    duration: entry.duration_label.clone(),
+                    summary: entry.latest_summary.clone(),
+                })
+                .collect(),
+            merge_head: snapshot.distributor.head_summary.clone(),
+            merge_queue: snapshot
+                .distributor
+                .queue_items
+                .iter()
+                .map(|item| ParallelMergeItem {
+                    task_title: item.task_title.clone(),
+                    state: state_name(item.queue_state.label()),
+                    branch: item.branch_name.clone(),
+                    commit: item.commit_short_sha.clone(),
+                })
+                .collect(),
+            pr_validation: snapshot
+                .pr_validation
+                .as_ref()
+                .map(|summary| ParallelPrValidation {
+                    pull_request_number: summary.pull_request_number,
+                    url: summary.canonical_pr_url.clone(),
+                    state: state_name(summary.state.label()),
+                    phase: summary.phase_label().to_string(),
+                    reason: summary.reason.clone(),
+                    blocker: summary.blocker.clone(),
+                }),
+            notice: snapshot.top_notice.clone(),
         }
     }
 }
