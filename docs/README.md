@@ -35,6 +35,7 @@ their exact headings, phrases, surface rows, or test-entrypoint inventory.
 
 The following content is not implementation truth:
 
+- [plan/22-akra-thread-binding.md](plan/22-akra-thread-binding.md): proposed contract that binds a thread to an external document (Notion page, Jira issue, PR) so Akra, not the model, checks changes, notifies, and gates writes without model tokens (Korean)
 - [plan/21-akra-mcp-hub.md](plan/21-akra-mcp-hub.md): user-level MCP hub; the `akra mcp` CLI, the on-demand skill, the Gateway-resident engine, and the Desktop Notion panel shipped (Korean)
 - [plan/20-akra-observe-and-offer.md](plan/20-akra-observe-and-offer.md): proposed overview: Akra observes plain Desktop conversations, recognizes events (for example a new PR), offers its features to the user, and acts on the answer; Codex keeps the transcript, Akra owns oversight and attention (Korean)
 - [plan/19-akra-kernel-quality-goals.md](plan/19-akra-kernel-quality-goals.md): proposed quality goals for the Akra kernel (restart safety, reproducible races, self-description, concurrency as policy, engine neutrality) and the order to reach them (Korean)
