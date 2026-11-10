@@ -6,6 +6,9 @@ use std::process::Command;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// 시간 초과를 보지 않는 시험의 대기 한도이다. 전체 시험을 병렬로 돌리면 가짜 gh·curl 시작이 1초를 넘을 수 있다.
+const NON_TIMEOUT_TEST_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
 use super::{
     GithubReviewPollerAdapter, IssueCommentResponse, PullRequestLocatorResponse,
     PullRequestResponse, PullRequestReviewCommentResponse, PullRequestReviewResponse,
@@ -872,7 +875,7 @@ printf '  gh-token-123  \n'
     let token = GithubReviewPollerAdapter::read_gh_auth_token_with_program(
         &root,
         &gh_program,
-        std::time::Duration::from_secs(1),
+        NON_TIMEOUT_TEST_WAIT,
     )
     .expect("gh auth token command should be handled");
     assert_eq!(token.as_deref(), Some("gh-token-123"));
@@ -888,7 +891,7 @@ printf '\n'
     let empty = GithubReviewPollerAdapter::read_gh_auth_token_with_program(
         &root,
         &gh_program,
-        std::time::Duration::from_secs(1),
+        NON_TIMEOUT_TEST_WAIT,
     )
     .expect("empty gh token should not fail");
     assert_eq!(empty, None);
@@ -904,7 +907,7 @@ exit 2
     let failed = GithubReviewPollerAdapter::read_gh_auth_token_with_program(
         &root,
         &gh_program,
-        std::time::Duration::from_secs(1),
+        NON_TIMEOUT_TEST_WAIT,
     )
     .expect("failed gh token command should be ignored");
     assert_eq!(failed, None);
@@ -1629,7 +1632,7 @@ fn fake_adapter(curl_path: &Path) -> GithubReviewPollerAdapter {
         api_base_url: "https://api.test".to_string(),
         user_agent: "akra-test".to_string(),
         token: "secret-token".to_string(),
-        subprocess_timeout: std::time::Duration::from_secs(1),
+        subprocess_timeout: NON_TIMEOUT_TEST_WAIT,
     }
 }
 
