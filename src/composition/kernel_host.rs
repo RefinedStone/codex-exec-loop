@@ -366,24 +366,39 @@ impl KernelHostLoop {
     }
 
     fn run(mut self) {
-        loop {
-            loop {
-                match self.inputs.try_recv() {
-                    Ok(KernelHostInput::Shutdown) | Err(mpsc::TryRecvError::Disconnected) => return,
-                    Ok(input) => self.handle_input(input),
-                    Err(mpsc::TryRecvError::Empty) => break,
-                }
-            }
-            let outcomes =
-                self.runtime
-                    .run_host_cycle(Instant::now(), HOST_WAIT, HOST_MAX_INPUTS_PER_CYCLE);
-            for outcome in outcomes {
-                self.publish(outcome);
-            }
-            self.sync_parallel_mode();
-            self.flush_pending_resyncs();
+        while self.handle_pending_inputs() {
+            self.run_cycle(Instant::now(), HOST_WAIT);
             self.record_idle(Instant::now());
         }
+    }
+
+    /// 클라이언트 입력을 모두 처리한다. 끝내라는 입력이 왔거나 보내는 쪽이 모두 사라졌으면 `false` 이다.
+    fn handle_pending_inputs(&mut self) -> bool {
+        loop {
+            match self.inputs.try_recv() {
+                Ok(KernelHostInput::Shutdown) | Err(mpsc::TryRecvError::Disconnected) => {
+                    return false;
+                }
+                Ok(input) => self.handle_input(input),
+                Err(mpsc::TryRecvError::Empty) => return true,
+            }
+        }
+    }
+
+    /*
+     * 커널 한 주기이다. `now` 는 core 와 병렬 제어부의 시계이고, `wait` 는 core 입력을 기다리는 최대 시간이다.
+     * 실행 중인 커널은 실제 시각과 `HOST_WAIT` 를 준다. 시뮬레이션 시험은 가짜 시각과 0 을 준다 (plan 19 Q1).
+     * shortcut: 호스트 자신의 시계(붙기 때 한가한 시각 기록, 감독 점검 재사용)는 아직 실제 시각을 읽는다.
+     */
+    fn run_cycle(&mut self, now: Instant, wait: Duration) {
+        let outcomes = self
+            .runtime
+            .run_host_cycle(now, wait, HOST_MAX_INPUTS_PER_CYCLE);
+        for outcome in outcomes {
+            self.publish(outcome);
+        }
+        self.sync_parallel_mode();
+        self.flush_pending_resyncs();
     }
 
     /// 클라이언트도 남은 일도 없으면 한가한 시각을 정한다. 하나라도 있으면 지운다.
@@ -653,6 +668,9 @@ fn flush_resync(client: &mut ClientSink) -> bool {
         Err(TrySendError::Disconnected(_)) => false,
     }
 }
+
+#[cfg(test)]
+mod simulation;
 
 #[cfg(test)]
 mod tests {

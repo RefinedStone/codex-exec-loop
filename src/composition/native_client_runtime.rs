@@ -40,7 +40,9 @@ use crate::core::native_client_port::{
     ParallelModeDispatchCleanupCorrelation, ParallelModeGlobalRuntimeNoticeProjection,
     ParallelViewState,
 };
-use crate::core::runtime::{CoreRuntime, core_input_channel};
+#[cfg(test)]
+use crate::core::runtime::CoreInputSender;
+use crate::core::runtime::{CoreEffectExecutor, CoreRuntime, core_input_channel};
 use crate::domain::conversation::ConversationRuntimeControlTruth;
 #[cfg(test)]
 use crate::domain::github_review::GithubPullRequestTarget;
@@ -70,7 +72,7 @@ pub(crate) struct NativeClientRuntime {
 }
 
 struct NativeCoreRuntime {
-    runtime: CoreRuntime<CoreEffectRunner>,
+    runtime: CoreRuntime<Box<dyn CoreEffectExecutor + Send>>,
 }
 
 /*
@@ -494,7 +496,7 @@ impl NativeCoreRuntime {
         ));
 
         Self {
-            runtime: CoreRuntime::new(effect_runner, input_receiver),
+            runtime: CoreRuntime::new(Box::new(effect_runner), input_receiver),
         }
     }
 }
@@ -552,6 +554,19 @@ impl NativeClientRuntime {
             ),
             parallel_control_plane,
         )
+    }
+
+    /// 효과 실행기를 시험이 정한다 (plan 19 Q1). 시험은 돌려받은 core 입력함의 보내는 쪽으로 효과의 완료를 넣는다.
+    #[cfg(test)]
+    pub(crate) fn new_with_effect_executor_for_test(
+        parallel_control_plane: ParallelModeControlPlaneComposition,
+        effect_executor: Box<dyn CoreEffectExecutor + Send>,
+    ) -> (Self, CoreInputSender) {
+        let (input_sender, input_receiver) = core_input_channel();
+        let core = NativeCoreRuntime {
+            runtime: CoreRuntime::new(effect_executor, input_receiver),
+        };
+        (Self::from_parts(core, parallel_control_plane), input_sender)
     }
 
     #[cfg(test)]
