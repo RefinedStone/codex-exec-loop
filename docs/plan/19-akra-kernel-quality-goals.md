@@ -80,6 +80,54 @@ TUI 에서 단계적으로 떼어내서(strangler) 기존 동작은 깨지 않�
   결정 A+). 이 기록은 Akra 의 판단 기록이지 대화 사본이 아니다.
 - 얻는 것: 재시작 복구(P1), 감사(K-D4), 커서 구독으로 `Resync` 제거, "무슨 일이 있었나" 조회(P3).
 
+#### 5.1.1 Q3 조각 (2026-11-11)
+
+Q-Q1, Q-Q2 는 기본값으로 정했다 (§8): 사건 기록(K5)을 스펙(K4)보다 먼저 하고, 기록은 planning SQLite 의 다른 표에
+둔다.
+
+기록 방식:
+
+- core 가 판단하는 자리에서 기록용 사건 `AppEvent::KernelRecorded(KernelEvent)` 를 낸다. 보지 않는 thread 의 판단도
+  낸다. 화면용 이벤트는 보지 않는 thread 의 결과를 감추므로, 화면용 이벤트에서 사건을 거꾸로 만들지 않는다.
+- 호스트(`NativeClientRuntime`)가 dispatch 결과에서 기록용 사건을 꺼내 기록기에 넘긴다. 기록용 사건은 클라이언트에
+  보내지 않는다 (턴 뒤 표시 이벤트와 같다).
+- 기록기는 전용 스레드에서 차례로 쓴다. 쓰기가 실패해도 커널은 멈추지 않는다 (경고 로그). 커널 스레드는 SQLite 잠금을
+  기다리지 않는다.
+- 표: `kernel_events(sequence, kind, thread_id, payload_json, recorded_at)`. `payload_json` 은 `KernelEvent` 의 JSON
+  이다. schema version 은 올리지 않는다. 올리면 이전 binary(병렬 slot 의 akra 등)가 이 DB 를 열지 못한다. 표는 기록
+  adapter 가 처음 쓰거나 읽을 때 `CREATE TABLE IF NOT EXISTS` 로 만든다.
+
+| 조각 | 내용 | 성질 | 상태 |
+| --- | --- | --- | --- |
+| Q3-1 | 기록 저장소(`KernelEventLogPort`, SQLite adapter, 기록기)와 첫 사건: 남긴 thread 지정 프롬프트의 남김과 끝남(`ThreadPromptQueued`, `ThreadPromptSettled`). 커널을 조립할 때 끝나지 않은 남김을 기록에서 읽어 core 에 되돌린다 | P1 첫 조각 | 구현됨 |
+| Q3-2 | 판단 사건을 더한다: 턴 제출·시작·끝, 턴 뒤 경로 결정, 자동 후속 제출, 승인 요청·결정, 프롬프트 거절(이유 코드) | P3 | 제안 |
+| Q3-3 | 기록 조회와 커서 구독: `akra/kernel/query` 의 `events_after { cursor, limit }`, attach 의 cursor. 넘친 클라이언트는 `Resync` 대신 커서로 따라잡는다 | P3 | 제안 |
+| Q3-4 | 타이머를 마감 시각으로 바꾼다. core 와 병렬 제어부가 다음 마감을 알리고, 호스트는 그때까지 잔다. Q2-4 의 250ms 주기 깨우기를 없앤다 | P2 | 제안 |
+| Q3-5 | 승인 객체: 승인 요청과 결정을 기록하고, 재시작 뒤 기다리는 승인을 보인다 | P1, P3 | 제안 |
+| Q3-6 | 연산 영수증(`op_id`, 상태, `next`)과 멱등 키 | P3 | 제안 |
+| Q3-7 | 시뮬레이션에 재시작을 모델한다: 무작위 시점에 커널을 버리고 기록으로 다시 조립한다 | P1, P2 | 제안 |
+
+Q3-1 결과 (`KernelEvent`, `KernelEventLogPort`, `KernelEventRecorder`, `AppCommand::RestoreQueuedThreadPrompts`):
+
+- core 는 남긴 프롬프트(Q2-3)를 큐에 넣을 때 `ThreadPromptQueued` 를 낸다. 다시 내거나(`submitted`), 병렬 slot 에
+  맡기거나(`parallel_slots`), 완료 작업이라 버리거나(`task_finished`), 다시 거절될 때(`rejected_again`)
+  `ThreadPromptSettled` 를 낸다. 둘은 작업 id 로 짝을 맞춘다. 남긴 프롬프트 타입은 domain 으로 옮겼다
+  (`domain::kernel_event::QueuedThreadPrompt`). core 의 큐와 기록이 같은 값을 쓴다.
+- 기록기와 복구는 화면 없는 커널(`build_kernel_for_workspace`)에만 붙인다. thread 지정 프롬프트는 커널 프로토콜
+  클라이언트만 보내므로 남김은 그 커널에서만 생긴다. TUI 런타임은 기록용 사건을 버린다.
+- 커널을 조립할 때 저장소 잠금을 잡은 뒤 그 작업 공간의 기록을 읽는다. 끝나지 않은 남김을 `RestoreQueuedThreadPrompts`
+  로 core 에 넣고, core 는 Q2-3 과 같은 규칙으로 쉴 때 한 번 다시 낸다. 기록을 읽지 못하면 되돌리지 않고 기록만 한다.
+- 기록기는 공유 worker 경계(`spawn_worker_with_panic_fallback`)의 스레드에서 쓴다. 런타임을 버리면 남은 사건을 다 쓰고
+  끝난다. 커널은 그 뒤에 저장소 잠금을 풀므로 다음 커널은 모든 사건을 읽는다.
+- 남김과 끝남 사이에 프로세스가 죽으면, 다시 조립할 때 그 프롬프트를 한 번 더 낸다. 그 사이에 작업이 끝났으면 planning
+  투영이 완료를 보일 때만 막는다 (Q2-3 의 확실한 신호 규칙). 드문 중복 실행 위험이다.
+- shortcut: 복구는 그 작업 공간의 사건을 모두 읽는다. v0 의 사건은 남긴 프롬프트뿐이라 작다. Q3-2 에서 사건이 늘면
+  투영 스냅샷이나 범위 읽기를 더한다.
+- 확인: domain 시험 2개(끝나지 않은 남김, JSON 왕복), adapter 시험 1개(순서 유지, 모르는 사건 건너뜀), 기록기 시험
+  1개(버릴 때 다 씀, 실패한 쓰기를 넘김), core 시험(복구 뒤 다시 냄, Q2-3 시험 3개에 기록 확인), 호스트 시험 1개(새 커널이
+  기록에서 끝나지 않은 남김만 다시 내고 그 끝남을 기록), 구조 시험(입력 adapter 는 복구 명령을 만들지 않는다), 커널
+  시뮬레이션 seed 2000개, Windows Rust gate.
+
 ### 5.2 이어 붙이지 말고 맞춘다 (FSM + reconcile)
 
 두 단계로 나눈다.
@@ -300,8 +348,8 @@ K4 와 K5 의 순서는 plan 18 표와 반대이다. 사건 목록(K5)이 정해
 
 | ID | 질문 | 기본값 (답이 없을 때) |
 | --- | --- | --- |
-| Q-Q1 | K4(스펙)와 K5(사건 기록)의 순서를 바꿀 것인가 | 바꾼다. 사건 목록을 먼저 정한다 |
-| Q-Q2 | 사건 기록을 planning SQLite 와 같은 DB 에 둘 것인가 | 같은 DB 의 다른 표. 저장소 단위가 같기 때문이다 |
+| Q-Q1 | K4(스펙)와 K5(사건 기록)의 순서를 바꿀 것인가 | 바꾼다. 사건 목록을 먼저 정한다. **기본값 적용 (2026-11-11, Q3)** |
+| Q-Q2 | 사건 기록을 planning SQLite 와 같은 DB 에 둘 것인가 | 같은 DB 의 다른 표. 저장소 단위가 같기 때문이다. **기본값 적용 (2026-11-11, `kernel_events`)** |
 | Q-Q3 | 동시 턴 N 의 기본값 | 1 을 유지한다. 실사용에서 필요해지면 올린다 (Q-K2-2) |
 | Q-Q4 | 시뮬레이션을 CI 에서 몇 번 돌릴 것인가 | PR 마다 짧게(고정 seed 몇 개), 야간에 길게 |
 
