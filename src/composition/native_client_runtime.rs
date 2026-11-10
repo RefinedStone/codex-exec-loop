@@ -48,7 +48,9 @@ use crate::core::runtime::{CoreEffectExecutor, CoreInputWaker, CoreRuntime, core
 use crate::domain::conversation::ConversationRuntimeControlTruth;
 #[cfg(test)]
 use crate::domain::github_review::GithubPullRequestTarget;
-use crate::domain::kernel_event::{THREAD_PROMPT_QUEUE_KINDS, open_queued_thread_prompts};
+use crate::domain::kernel_event::{
+    KernelEventPage, THREAD_PROMPT_QUEUE_KINDS, open_queued_thread_prompts,
+};
 #[cfg(test)]
 use crate::domain::parallel_mode::ParallelModeAutomationTrigger;
 use crate::domain::planning::PostTurnContinuationAction;
@@ -74,6 +76,8 @@ pub(crate) struct NativeClientRuntime {
     core_parallel_mode: Option<bool>,
     // 판단 사건 기록기이다 (plan 19 Q3-1). 화면 없는 커널만 붙인다. 없으면 기록용 사건은 버린다.
     kernel_events: Option<KernelEventRecorder>,
+    // 판단 사건 기록과 그 작업 공간이다 (plan 19 Q3-3). 클라이언트의 기록 조회가 읽는다.
+    kernel_event_log: Option<(Arc<dyn KernelEventLogPort>, String)>,
 }
 
 struct NativeCoreRuntime {
@@ -528,6 +532,7 @@ impl NativeClientRuntime {
             github_review_setup_workspace: None,
             core_parallel_mode: None,
             kernel_events: None,
+            kernel_event_log: None,
         }
     }
 
@@ -979,6 +984,24 @@ impl NativeClientRuntime {
     }
 
     /*
+     * `after` 뒤의 판단 사건을 읽는다 (plan 19 Q3-3). 기록이 없는 커널은 빈 쪽을 돌려준다. 기록기는 따로 쓰므로 방금 낸
+     * 사건은 아직 없을 수 있다.
+     */
+    pub(crate) fn kernel_event_history(
+        &self,
+        after: i64,
+        limit: usize,
+    ) -> anyhow::Result<KernelEventPage> {
+        match &self.kernel_event_log {
+            Some((log, workspace_dir)) => log.load_kernel_events_after(workspace_dir, after, limit),
+            None => Ok(KernelEventPage {
+                records: Vec::new(),
+                next_after: after,
+            }),
+        }
+    }
+
+    /*
      * 판단 사건 기록을 붙인다 (plan 19 Q3-1). 먼저 그 작업 공간의 기록에서 끝나지 않은 남긴 프롬프트를 읽어 core 에
      * 되돌린다. core 는 쉴 때 그 프롬프트를 한 번 다시 낸다 (Q2-3). 기록을 읽지 못하면 되돌리지 않고 기록만 한다.
      */
@@ -997,7 +1020,11 @@ impl NativeClientRuntime {
                 Vec::new()
             }
         };
-        self.kernel_events = Some(KernelEventRecorder::start(log, workspace_dir.to_string()));
+        self.kernel_events = Some(KernelEventRecorder::start(
+            log.clone(),
+            workspace_dir.to_string(),
+        ));
+        self.kernel_event_log = Some((log, workspace_dir.to_string()));
         if !open.is_empty() {
             // 아직 클라이언트가 없다. 결과는 조회로 보인다. 기록용 사건은 이 dispatch 안에서 기록된다.
             let _ = self.dispatch_core_input(CoreInput::Command(

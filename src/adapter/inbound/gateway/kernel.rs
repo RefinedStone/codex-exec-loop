@@ -231,6 +231,20 @@ impl KernelSession {
     async fn query(&mut self, params: Value) -> Result<Value, KernelProtocolError> {
         let attached = self.attached()?;
         let request: QueryRequest = parse_params(params)?;
+        let history = match request.query.history_range() {
+            Some((after, limit)) => {
+                let commands = attached.commands.clone();
+                let page = blocking(move || commands.history(after, limit, KERNEL_CALL_TIMEOUT))
+                    .await?
+                    .map_err(|error| match error {
+                        KernelCallError::Stopped => unavailable(error.to_string()),
+                        KernelCallError::TimedOut => timed_out("query", KERNEL_CALL_TIMEOUT),
+                    })?
+                    .map_err(unavailable)?;
+                Some(page)
+            }
+            None => None,
+        };
         let commands = attached.commands.clone();
         let view = blocking(move || commands.query(KERNEL_CALL_TIMEOUT))
             .await?
@@ -242,6 +256,7 @@ impl KernelSession {
             &view.snapshot,
             &view.thread_activity,
             parallel_source(&view.parallel),
+            history,
         ))
     }
 

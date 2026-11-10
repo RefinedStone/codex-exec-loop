@@ -2,6 +2,7 @@
 //! core 타입 사이의 변환을 둔다. core 는 직렬화를 모르므로 변환은 이 inbound adapter 만 한다. 커널 호스트는
 //! `src/composition/kernel_host.rs` 이다. 전송(Gateway)은 K3-5 에서 붙인다.
 
+use crate::domain::kernel_event::KernelEventPage;
 use serde::{Deserialize, Serialize};
 
 use crate::core::app::{
@@ -342,7 +343,20 @@ pub enum KernelQuery {
     ThreadActivity {},
     Planning {},
     Parallel {},
+    /*
+     * 판단 사건 기록이다 (plan 19 Q3-3). `after` 보다 뒤의 사건을 기록 순서대로 최대 `limit` 개 준다. 처음에는
+     * `after` 를 비운다. 답의 `next_after` 를 다음 조회의 `after` 로 보낸다.
+     */
+    History {
+        #[serde(default)]
+        after: Option<i64>,
+        #[serde(default)]
+        limit: Option<u32>,
+    },
 }
+
+/// 기록 조회의 한 쪽 기본 크기이다.
+const DEFAULT_HISTORY_LIMIT: usize = 100;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -351,12 +365,25 @@ pub struct QueryRequest {
 }
 
 impl KernelQuery {
-    /// 조회 결과는 같은 이름의 이벤트와 같은 모양이다. 클라이언트는 둘을 같은 코드로 그린다.
+    /// 기록 조회이면 읽을 cursor 와 개수이다. 기록은 스냅샷이 아니라 커널의 사건 기록에서 읽는다.
+    pub fn history_range(&self) -> Option<(i64, usize)> {
+        match self {
+            Self::History { after, limit } => Some((
+                after.unwrap_or(0),
+                limit.map_or(DEFAULT_HISTORY_LIMIT, |limit| limit as usize),
+            )),
+            _ => None,
+        }
+    }
+
+    /// 조회 결과는 같은 이름의 이벤트와 같은 모양이다. 클라이언트는 둘을 같은 코드로 그린다. 기록 조회는 호출자가
+    /// 읽은 `history` 쪽을 그대로 담는다.
     pub fn answer(
         self,
         snapshot: &AppSnapshot,
         threads: &[ThreadActivitySummary],
         parallel: ParallelSource<'_>,
+        history: Option<KernelEventPage>,
     ) -> KernelEvent {
         match self {
             Self::Sessions {} => {
@@ -372,16 +399,23 @@ impl KernelQuery {
                 &snapshot.planning_parallel.planning_runtime,
             )),
             Self::Parallel {} => KernelEvent::Parallel(ParallelState::from_core(parallel)),
+            Self::History { after, .. } => {
+                KernelEvent::History(history.unwrap_or_else(|| KernelEventPage {
+                    records: Vec::new(),
+                    next_after: after.unwrap_or(0),
+                }))
+            }
         }
     }
 }
 
-const QUERIES: [&str; 5] = [
+const QUERIES: [&str; 6] = [
     "sessions",
     "auto_follow",
     "thread_activity",
     "planning",
     "parallel",
+    "history",
 ];
 
 // event -------------------------------------------------------------------------------------------
@@ -406,6 +440,11 @@ pub enum KernelEvent {
     Parallel(ParallelState),
     /// 이 클라이언트에게 보낼 이벤트가 넘쳐 버렸다. 클라이언트는 조회로 다시 맞춘다.
     Resync,
+    /*
+     * 기록 조회(`history`)의 답이다 (plan 19 Q3-3). 이벤트로는 보내지 않는다. 사건 하나는 `sequence`, `recorded_at`,
+     * `event` 이고 `event.kind` 가 종류이다 (`turn_started` 등).
+     */
+    History(KernelEventPage),
 }
 
 /// `akra/kernel/event` 알림의 params 이다.

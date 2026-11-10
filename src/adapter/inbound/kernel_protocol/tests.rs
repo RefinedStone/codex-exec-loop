@@ -379,6 +379,10 @@ fn events_and_description_have_stable_wire_shapes() {
         KernelQuery::ThreadActivity {},
         KernelQuery::Planning {},
         KernelQuery::Parallel {},
+        KernelQuery::History {
+            after: None,
+            limit: None,
+        },
     ]) {
         assert_eq!(
             serde_json::to_value(query).expect("query should serialize")["type"],
@@ -455,19 +459,69 @@ fn command_response_names_why_the_kernel_refused_a_command() {
 }
 
 #[test]
+fn a_history_query_reads_after_its_cursor_and_answers_with_the_page() {
+    // plan 19 Q3-3: the gateway reads the page from the kernel log and the answer carries it.
+    let first: QueryRequest = serde_json::from_value(json!({ "query": { "type": "history" } }))
+        .expect("a bare history query should parse");
+    assert_eq!(first.query.history_range(), Some((0, 100)));
+    let next: QueryRequest =
+        serde_json::from_value(json!({ "query": { "type": "history", "after": 41, "limit": 5 } }))
+            .expect("a history query with a cursor should parse");
+    assert_eq!(next.query.history_range(), Some((41, 5)));
+    assert_eq!(KernelQuery::Planning {}.history_range(), None);
+
+    let page = crate::domain::kernel_event::KernelEventPage {
+        records: vec![crate::domain::kernel_event::RecordedKernelEvent {
+            sequence: 42,
+            recorded_at: "2026-11-11T00:00:00Z".to_string(),
+            event: crate::domain::kernel_event::KernelEvent::TurnStarted {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+            },
+        }],
+        next_after: 42,
+    };
+    let snapshot = crate::core::app::AppSnapshot::initial();
+    let answer = next
+        .query
+        .answer(&snapshot, &[], no_parallel(), Some(page.clone()));
+    assert_eq!(answer, KernelEvent::History(page));
+    assert_eq!(
+        serde_json::to_value(&answer).expect("the answer should serialize"),
+        json!({
+            "type": "history",
+            "records": [{
+                "sequence": 42,
+                "recorded_at": "2026-11-11T00:00:00Z",
+                "event": { "kind": "turn_started", "thread_id": "thread-1", "turn_id": "turn-1" },
+            }],
+            "next_after": 42,
+        })
+    );
+    assert_eq!(
+        first.query.answer(&snapshot, &[], no_parallel(), None),
+        KernelEvent::History(crate::domain::kernel_event::KernelEventPage {
+            records: Vec::new(),
+            next_after: 0,
+        }),
+        "a kernel without a log answers with an empty page"
+    );
+}
+
+#[test]
 fn a_query_answers_with_the_event_of_the_same_name() {
     let snapshot = crate::core::app::AppSnapshot::initial();
     let request: QueryRequest =
         serde_json::from_value(json!({ "query": { "type": "auto_follow" } }))
             .expect("query request should parse");
     assert_eq!(
-        request.query.answer(&snapshot, &[], no_parallel()),
+        request.query.answer(&snapshot, &[], no_parallel(), None),
         KernelEvent::AutoFollow(AutoFollowSettings::from_core(
             &snapshot.conversation_runtime
         ))
     );
     assert_eq!(
-        KernelQuery::ThreadActivity {}.answer(&snapshot, &[], no_parallel()),
+        KernelQuery::ThreadActivity {}.answer(&snapshot, &[], no_parallel(), None),
         KernelEvent::ThreadActivity {
             threads: Vec::new()
         }
