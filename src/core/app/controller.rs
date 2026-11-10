@@ -75,11 +75,9 @@ impl CoreController {
         self.state.revisioned_planning_parallel_projection()
     }
 
-    pub(in crate::core) fn post_turn_route_runtime(
-        &self,
-        correlation: &super::PostTurnEvaluationCorrelation,
-    ) -> Option<super::ConversationRuntimeSnapshot> {
-        self.conversation_turn.post_turn_route_runtime(correlation)
+    /// 호스트가 다음에 할 턴 뒤 일이다 (plan 19 Q2-2). 스냅샷을 복사하지 않는다.
+    pub(in crate::core) fn next_post_turn_host_step(&self) -> Option<super::PostTurnHostStep> {
+        self.conversation_turn.next_post_turn_host_step()
     }
 
     /// 시작 점검이 성공해 계속할 수 있으면 그 작업 공간이다 (plan 18 K2-6). 전체 스냅샷을 복사하지 않는다.
@@ -7787,6 +7785,54 @@ mod tests {
     }
 
     #[test]
+    fn several_awaiting_routes_settle_together_without_continuation() {
+        // plan 19 Q2-2: when two evaluations await a route, none of them is the obvious one to continue.
+        // The host settles all of them in one step, so the last one does not slip into a normal route.
+        let mut controller = CoreController::new();
+        let evaluate = |controller: &mut CoreController| {
+            post_turn_effect_correlation(&controller.handle_input(CoreInput::Command(
+                AppCommand::EvaluateCompletedTurn {
+                    parallel_mode_enabled: false,
+                    parallel_automation_epoch_id: None,
+                },
+            )))
+        };
+        apply_completed_turn(&mut controller, "thread-1", "turn-1");
+        let background = evaluate(&mut controller);
+        controller.handle_input(CoreInput::Command(AppCommand::InvalidateConversationLoad));
+        apply_completed_turn(&mut controller, "thread-2", "turn-2");
+        let shown = evaluate(&mut controller);
+        for correlation in [&background, &shown] {
+            controller.handle_input(CoreInput::EffectCompleted(
+                CoreEffectCompletion::PostTurnEvaluationCompleted {
+                    correlation: correlation.clone(),
+                    execution: Box::new(sample_post_turn_execution_for(
+                        &correlation.thread_id,
+                        &correlation.completed_turn_id,
+                        &correlation.planning_workspace_directory,
+                    )),
+                },
+            ));
+        }
+
+        assert_eq!(
+            controller.next_post_turn_host_step(),
+            Some(super::super::PostTurnHostStep::SettleWithoutContinuation {
+                correlations: vec![shown.clone(), background.clone()],
+            })
+        );
+        for correlation in [shown, background] {
+            controller.handle_input(CoreInput::Command(
+                AppCommand::ResolvePostTurnContinuation {
+                    correlation,
+                    resolution: super::super::PostTurnRouteResolution::NoContinuation,
+                },
+            ));
+        }
+        assert!(controller.next_post_turn_host_step().is_none());
+    }
+
+    #[test]
     fn a_due_evaluation_follows_its_session_when_the_client_leaves_the_conversation() {
         // plan 19 Q2-1: leaving the conversation sends the completed turn's session to the background.
         // The new view starts empty, so the host's evaluation command reaches the background session.
@@ -10205,7 +10251,14 @@ mod tests {
             super::super::PostTurnAuthoritySnapshot::Idle,
             "the shown conversation does not await the background route"
         );
-        assert!(controller.post_turn_route_runtime(&evaluation).is_some());
+        assert!(
+            matches!(
+                controller.next_post_turn_host_step(),
+                Some(super::super::PostTurnHostStep::RouteContinuation(work))
+                    if work.correlation == evaluation
+            ),
+            "the host routes the background evaluation from the post-turn state (plan 19 Q2-2)"
+        );
 
         assert!(
             completed.events.iter().all(|event| matches!(
@@ -10228,7 +10281,7 @@ mod tests {
             vec![AppEvent::ThreadActivityChanged(Vec::new())],
             "the client gets only the cleared background activity, not the settled evaluation"
         );
-        assert!(controller.post_turn_route_runtime(&evaluation).is_none());
+        assert!(controller.next_post_turn_host_step().is_none());
         assert_eq!(
             controller.conversation_turn.background_session_count(),
             0,

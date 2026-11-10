@@ -78,12 +78,9 @@ where
         self.controller.startup_ready_workspace()
     }
 
-    /// 경로 결정을 기다리는 thread 의 runtime 값이다 (plan 18 K2-3). 그 thread 는 화면이 보지 않을 수 있다.
-    pub(crate) fn post_turn_route_runtime(
-        &self,
-        correlation: &crate::core::app::PostTurnEvaluationCorrelation,
-    ) -> Option<crate::core::app::ConversationRuntimeSnapshot> {
-        self.controller.post_turn_route_runtime(correlation)
+    /// 호스트가 다음에 할 턴 뒤 일이다 (plan 19 Q2-2). 호스트는 매 dispatch 뒤에 이것을 묻는다.
+    pub(crate) fn next_post_turn_host_step(&self) -> Option<crate::core::app::PostTurnHostStep> {
+        self.controller.next_post_turn_host_step()
     }
 
     pub(crate) fn dispatch_command(&mut self, command: AppCommand) -> CoreDispatchOutcome {
