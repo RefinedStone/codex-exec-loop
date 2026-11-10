@@ -222,10 +222,15 @@ parallel, Git, GitHub 권위를 바꾸지 않고 재생하며 PR 검증 복구 �
 - 커널 프로토콜(`akra/kernel/*`, plan 18 K3 프로토콜 v0): 클라이언트가 작업 공간과 함께
   `akra/kernel/attach` 를 보내면 그 공간이 속한 저장소의 커널에 붙는다. Gateway 는 처음 붙을 때 커널을 만들고,
   클라이언트가 모두 떠나도 남겨 둔다. 그래서 자동 후속과 병렬 배분이 계속 돈다. 한 저장소의 worktree 들은 커널
-  하나를 함께 쓴다. 다른 프로세스(TUI)가 그 저장소의 커널을 돌리면 attach 는 `-32012` 로 실패한다. 붙은 뒤에는
-  `akra/kernel/command`, `akra/kernel/query` 를 보내고 `akra/kernel/event` 알림을 받는다. 붙기 전 요청은
-  `-32011` 로 실패한다. `akra/kernel/describe` 는 메서드, 명령, 조회, 이벤트 목록을 준다. 병렬 제어부 이벤트와
-  planning 조회는 아직 내보내지 않는다 (K3-6).
+  하나를 함께 쓰고, 커널은 대표 checkout 에서 일한다. Akra 병렬 slot worktree 에서 붙으면 실패한다. 다른
+  프로세스(TUI)가 그 저장소의 커널을 돌리면 attach 는 `-32012` 로 실패한다. 붙은 뒤에는 `akra/kernel/command`,
+  `akra/kernel/query` 를 보내고 `akra/kernel/event` 알림을 받는다. 붙기 전 요청은 `-32011` 로, 커널이 시간 안에
+  답하지 않으면 `-32013` 으로 실패한다(명령은 그 뒤에 처리될 수 있다). `akra/kernel/detach` 답 뒤에는 이벤트가
+  오지 않는다. `akra/kernel/describe` 는 메서드, 명령, 조회, 이벤트 목록을 준다. 병렬 제어부 이벤트와 planning
+  조회는 아직 내보내지 않는다 (K3-6).
+- 붙은 클라이언트도 남은 일(턴, 승인, 자동 후속, 평가, planning 작업, 켜진 병렬 모드, 도는 병렬 작업)도 없이
+  10분이 지난 커널은 내려간다. 그러면 TUI 가 그 저장소 잠금을 잡을 수 있다. 다음 붙기가 커널을 다시 시작한다.
+  Gateway 가 끝날 때는 upstream app-server 보다 커널을 먼저 멈춘다.
 - 커널은 자기 `codex app-server proxy` 연결로 Gateway upstream app-server 를 함께 쓴다. 그래서 클라이언트는
   커널이 돌리는 thread 를 `thread/resume` 해서 그 턴 알림을 실시간으로 받는다.
 - 사용자당 Gateway 는 하나이다. 두 번째 인스턴스는 `another akra-gateway is already running` 으로 끝난다.

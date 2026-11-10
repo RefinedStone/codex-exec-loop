@@ -659,19 +659,37 @@ there; linked worktrees resolve to the same directory. The TUI and `build_kernel
 (`src/composition/repository_kernel.rs`) take it before they assemble the runtime, and dropping the
 kernel releases it after the host thread ends.
 
-`akra-gateway` holds a `RepositoryKernelRegistry` (one kernel per repository). The Gateway session
-routes `akra/kernel/*` to `src/adapter/inbound/gateway/kernel.rs`, which calls the blocking kernel
-handle through `spawn_blocking` and runs one event thread per attached connection. Kernels built by
+`akra-gateway` holds a `RepositoryKernelRegistry` (one kernel per repository). The registry lock
+covers only the map lookup; each repository entry has its own lock, so a slow kernel start blocks
+only attaches to the same repository. The kernel workspace is the primary checkout of the repository,
+whatever worktree attached first; an attach from inside the parallel pool (slot worktrees) is
+refused. The Gateway session routes `akra/kernel/*` to `src/adapter/inbound/gateway/kernel.rs`. A
+per-connection task handles kernel requests in order and sends the answers through the connection
+outbox, so the read loop keeps relaying app-server messages while a kernel call waits. Kernel calls
+run through `spawn_blocking` with deadlines (attach 60 s, command and query 10 s; error `-32013`).
+One event thread per attached connection forwards events; detach and re-attach detach the client in
+the host and join that thread before they answer.
+
+On shutdown the Gateway calls `RepositoryKernelRegistry::shutdown` before it stops the upstream
+app-server: each kernel closes its parallel automation epochs, joins its host thread, and releases
+its lock, even while sessions still hold the registry. Every 30 s the Gateway also unloads kernels
+that had no attached client and no remaining work for 10 minutes, in the same order, so the
+repository lock is free for a TUI; the next attach builds the kernel again.
+`NativeClientRuntime::has_remaining_work` defines remaining work: a busy thread session or planning
+work in flight in core, or parallel mode on, an open epoch, a control effect in flight, or a running
+dispatch worker thread in the parallel control plane. Kernels built by
 the Gateway connect their app-server adapter to the Gateway upstream: `AppServerTransport::GatewayProxy`
 spawns `codex app-server proxy --sock …` and `src/adapter/outbound/app_server/proxy_transport.rs`
 speaks WebSocket over its stdio, mapping one text message to one JSON line, so the line-based
-connection code stays the same.
+connection code stays the same. The proxy handshake has a 10 s deadline, and the stderr reader starts
+before it.
 
 Dropping `NativeClientRuntime` closes every parallel automation epoch first. The kernel drops the
 runtime on its host thread, so the epochs close before the lock is released. Worker threads of the
 old runtime then stop at their next epoch check:
 
-- a dispatched worker does not start its slot turn and returns the slot;
+- a dispatched worker does not start its slot turn and returns the slot, fenced by its lease
+  generation;
 - a distributor enqueue commits only inside an open epoch;
 - the planning refresh after a slot turn applies its result only while its epoch is open, through a
   continuation permit bound to the epoch.
