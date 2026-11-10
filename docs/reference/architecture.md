@@ -161,12 +161,17 @@ prepared prompt in memory. The host's post-turn reconcile offers `ResubmitQueued
 every session is idle and no preparation runs, so auto-follow continues first. Core then submits the
 prompt once and reports `submitted` (or `queued` again if that also fails). It submits nothing when
 parallel mode started (the slots take the task) or when the planning projection shows the task done
-or cancelled. The queued prompt counts as remaining work. Core also emits kernel records
-(`AppEvent::KernelRecorded`) for the queue and its settlement; `NativeClientRuntime` takes them out
-before any client sees them. A repository kernel built by `build_kernel_for_workspace` writes those
-records to the `kernel_events` table of the planning SQLite store through a recorder thread. After
+or cancelled. The queued prompt counts as remaining work. Core also keeps kernel records
+(`KernelEvent`) in a buffer apart from the client events: the queue and its settlement, every
+accepted turn submission (taken from the `SubmitTurn` effect, auto-follow included), turn start and
+end (the difference between two thread activity summaries, so background threads count), the
+post-turn route, and the reason a thread prompt was refused before preparation. `NativeClientRuntime`
+drains the buffer after every dispatch. A repository kernel built by `build_kernel_for_workspace`
+writes those records to the `kernel_events` table of the planning SQLite store of its workspace
+through a recorder thread. After
 it takes the repository lock, it reads that log and restores the open queued prompts with the
-host-only `RestoreQueuedThreadPrompts`, so a restarted kernel submits them once when idle. The table
+host-only `RestoreQueuedThreadPrompts`, so a restarted kernel submits them once when idle. The
+restore reads only the queue kinds. The table
 is created on first use, without a schema version change, so older binaries still open the store.
 The TUI runtime drops kernel records. Reopening a thread
 shows its live runtime state; its transcript is reloaded from the provider.
