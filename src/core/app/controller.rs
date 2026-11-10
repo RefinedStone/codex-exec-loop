@@ -1797,7 +1797,7 @@ impl CoreController {
      */
     fn post_turn_request_from_pending(
         snapshot: &AppSnapshot,
-        pending: super::conversation_turn_reducer::PendingPostTurnEvaluation,
+        pending: super::post_turn_state::PendingPostTurnEvaluation,
         parallel_mode_enabled: bool,
         parallel_automation_epoch_id: Option<u64>,
     ) -> crate::domain::planning::PostTurnRequest {
