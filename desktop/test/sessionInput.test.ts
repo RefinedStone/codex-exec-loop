@@ -62,6 +62,7 @@ function harness() {
       issuePrompt: async () => "",
       openExternal: () => undefined,
     },
+    notion: { openExternal: () => undefined },
   };
   const state: Partial<DesktopState> = { pendingApprovals: [], openThreadId: null, transcript: null, folders: [] };
   const store: SessionStore = {

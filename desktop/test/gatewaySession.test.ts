@@ -102,6 +102,7 @@ function connectBridge(endpoint: string, startDaemon?: () => void) {
       issuePrompt: async () => "",
       openExternal: () => undefined,
     },
+    notion: { openExternal: () => undefined },
   };
   cleanups.push(() => connection.close());
   return { connection, bridge, states };

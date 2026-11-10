@@ -141,10 +141,32 @@ function answerKernel(kernel: FakeKernel, socket: WebSocket, message: JsonRpcEnv
 }
 
 /** 녹화를 여러 개 주면 응답 표는 앞의 녹화가 우선하고, 이어지는 메시지는 순서대로 이어 붙인다. */
+/** 가짜 MCP hub 이다 (plan 21). `akra/mcp/*` 는 Gateway 가 직접 답하므로 녹화가 아니라 이 값으로 답한다. */
+export interface FakeMcpHub {
+  /** `akra/mcp/statuses` 결과의 statuses 이다. */
+  statuses: unknown[];
+  /** 도구 이름 → `akra/mcp/call` 결과 */
+  tools: Record<string, unknown>;
+}
+
+function answerMcpHub(hub: FakeMcpHub, socket: WebSocket, message: JsonRpcEnvelope & { params?: Record<string, unknown> }): void {
+  const respond = (body: object) => socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, ...body }));
+  if (message.method === "akra/mcp/statuses") {
+    respond({ result: { statuses: hub.statuses } });
+    return;
+  }
+  const tool = String(message.params?.tool ?? "");
+  if (message.method === "akra/mcp/call" && tool in hub.tools) {
+    respond({ result: hub.tools[tool] });
+    return;
+  }
+  respond({ error: { code: -32000, message: `fake MCP hub has no answer for ${message.method} ${tool}` } });
+}
+
 export async function startFakeGateway(
   endpoint: string,
   recordingPaths: string | string[],
-  options: { kernel?: FakeKernel } = {},
+  options: { kernel?: FakeKernel; mcpHub?: FakeMcpHub } = {},
 ): Promise<FakeGateway> {
   const paths = Array.isArray(recordingPaths) ? recordingPaths : [recordingPaths];
   const table = new Map<string, Pick<JsonRpcEnvelope, "result" | "error">>();
@@ -218,6 +240,10 @@ export async function startFakeGateway(
         answerKernel(options.kernel, socket, message);
         return;
       }
+      if (options.mcpHub && message.method.startsWith("akra/mcp/")) {
+        answerMcpHub(options.mcpHub, socket, message);
+        return;
+      }
       if (message.id !== undefined && message.id !== null) {
         const recorded = table.get(message.method) ?? {
           error: { code: -32601, message: `fake gateway has no recording for ${message.method}` },
@@ -252,3 +278,5 @@ export const INTERRUPTED_TURN_RECORDING = fileURLToPath(new URL("./fixtures/inte
 export const APPROVAL_THREAD_LIST_RECORDING = fileURLToPath(
   new URL("./fixtures/approval-thread-list.jsonl", import.meta.url),
 );
+/** 업무 패널의 "스레드로 넘기기" 가 만드는 새 스레드이다. interrupted-turn 의 스레드에서 turns 를 비웠다. */
+export const THREAD_START_RECORDING = fileURLToPath(new URL("./fixtures/thread-start.jsonl", import.meta.url));

@@ -43,8 +43,13 @@ describe("recorded fixtures", () => {
     }
   });
 
+  it("thread-start answers a new thread without turns", () => {
+    expect(methods("thread-start.jsonl")).toEqual(["thread/start"]);
+    expect(loadReplayTable(fixture("thread-start.jsonl")).has("thread/start")).toBe(true);
+  });
+
   it("contains no local paths or account data", () => {
-    for (const name of ["approval-turn.jsonl", "interrupted-turn.jsonl"]) {
+    for (const name of ["approval-turn.jsonl", "interrupted-turn.jsonl", "thread-start.jsonl"]) {
       const text = readFileSync(fixture(name), "utf8");
       expect(text).not.toMatch(/[A-Za-z]:\\\\|\/Users\/|\/home\/[a-z]|@[a-z0-9-]+\.[a-z]/i);
       expect(text).not.toMatch(/"account\/|rateLimits/);

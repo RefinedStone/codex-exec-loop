@@ -1,5 +1,5 @@
 // 화면 구성 (P3 §4): 왼쪽 사이드바(작업 폴더 → 스레드), 오른쪽 대화 기록. Gateway 정보는 상단에 작게 둔다.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { BrowserPanel } from "./browser/BrowserPanel";
 import { ApprovalPrompt } from "./conversation/ApprovalPrompt";
@@ -13,9 +13,11 @@ import { Sidebar } from "./sidebar/Sidebar";
 import { TerminalDock } from "./terminal/TerminalDock";
 import { GitHubPanel } from "./work/GitHubPanel";
 import { JiraPanel } from "./work/JiraPanel";
+import type { GatewayRequest } from "./work/notionHub";
+import { NotionPanel } from "./work/NotionPanel";
 
 /** 오른쪽 패널은 한 번에 하나만 연다. */
-type SidePanel = "browser" | "github" | "jira" | "kernel" | null;
+type SidePanel = "browser" | "github" | "jira" | "notion" | "kernel" | null;
 
 const CLIENT_VERSION = "0.0.0-development";
 
@@ -50,6 +52,9 @@ function GatewayBar({ sidePanel, onToggle }: { sidePanel: SidePanel; onToggle(pa
         </button>
         <button type="button" onClick={() => onToggle("jira")} aria-pressed={sidePanel === "jira"} data-testid="jira-toggle">
           {sidePanel === "jira" ? "Jira 닫기" : "Jira"}
+        </button>
+        <button type="button" onClick={() => onToggle("notion")} aria-pressed={sidePanel === "notion"} data-testid="notion-toggle">
+          {sidePanel === "notion" ? "Notion 닫기" : "Notion"}
         </button>
       </span>
     </header>
@@ -88,6 +93,16 @@ export function App() {
     useDesktopStore.getState().setComposerDraft({ threadId, text });
   };
 
+  // 패널이 접속마다 새 객체를 받지 않도록 한 번만 만든다. 요청은 그때의 세션으로 보낸다.
+  const mcpRequest = useMemo<GatewayRequest>(
+    () =>
+      function request<T>(method: string, params: unknown): Promise<T> {
+        const current = session.current;
+        return current ? current.requestMcpHub<T>(method, params) : Promise.reject(new Error("세션이 아직 시작되지 않았습니다."));
+      },
+    [],
+  );
+
   const composerActions: ComposerActions = {
     sendMessage: async (text) => session.current?.sendMessage(text),
     interrupt: async () => session.current?.interrupt(),
@@ -120,6 +135,7 @@ export function App() {
       )}
       {sidePanel === "kernel" && <KernelPanel onRefresh={async () => session.current?.refreshKernel()} />}
       {sidePanel === "jira" && <JiraPanel jira={window.akra.jira} onHandOff={async (issue) => handOff(await window.akra.jira.issuePrompt(issue.key))} />}
+      {sidePanel === "notion" && <NotionPanel request={mcpRequest} notion={window.akra.notion} onHandOff={handOff} />}
     </div>
   );
 }

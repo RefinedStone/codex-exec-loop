@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell, type WebContents } from "electron";
 
 import { type BrowserBounds, IPC_CHANNELS, type TerminalOpenRequest } from "../shared/bridge";
+import { isNotionPageUrl } from "../shared/notionLinks";
 import { GatewayConnection } from "./gatewayConnection";
 import { resolveGatewayEndpoint, resolveGatewayExecutable } from "./gatewayEndpoint";
 import { spawn as spawnPty } from "node-pty";
@@ -176,10 +177,10 @@ ipcMain.handle(IPC_CHANNELS.jiraConnect, (_event, request: unknown) => jira.conn
 ipcMain.handle(IPC_CHANNELS.jiraDisconnect, () => jira.disconnect());
 ipcMain.handle(IPC_CHANNELS.jiraSummary, () => jira.summary());
 ipcMain.handle(IPC_CHANNELS.jiraIssuePrompt, (_event, key: unknown) => jira.issuePrompt(key));
-// renderer 가 보낸 주소는 github.com 과 연결된 Jira 사이트의 티켓만 기본 브라우저로 연다.
+// renderer 가 보낸 주소는 github.com, Notion, 연결된 Jira 사이트의 티켓만 기본 브라우저로 연다.
 ipcMain.on(IPC_CHANNELS.openExternal, (_event, url: unknown) => {
   if (typeof url !== "string") return;
-  if (url.startsWith("https://github.com/")) {
+  if (url.startsWith("https://github.com/") || isNotionPageUrl(url)) {
     void shell.openExternal(url);
     return;
   }
