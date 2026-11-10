@@ -15,10 +15,12 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
 
+use super::context::{CONTEXT_METHOD_PREFIX, spawn_request as spawn_context_request};
 use super::kernel::{KERNEL_METHOD_PREFIX, KernelRequests};
 use super::mcp::{GatewayMcpHub, MCP_METHOD_PREFIX, spawn_request as spawn_mcp_request};
 use super::recorder::{GatewayRecorder, RecordDirection, SessionRecording};
 use super::router::{ClientTextRoute, respond_to_akra_request, route_client_text};
+use crate::application::port::inbound::work_context_port::WorkContextPort;
 use crate::application::port::outbound::gateway_upstream_port::{
     GatewayUpstreamPort, GatewayUpstreamStream,
 };
@@ -39,6 +41,14 @@ pub(super) fn websocket_config() -> WebSocketConfig {
         .max_frame_size(Some(MAX_WEBSOCKET_MESSAGE_BYTES))
 }
 
+/// Gateway 가 직접 답하는 `akra/*` 서비스들이다. 없는 서비스의 메서드는 모르는 메서드로 답한다. 테스트는 필요한
+/// 것만 채운다.
+#[derive(Clone, Default)]
+pub(super) struct GatewayServices {
+    pub(super) mcp_hub: Option<Arc<GatewayMcpHub>>,
+    pub(super) work_context: Option<Arc<dyn WorkContextPort>>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SessionEnd {
     ClientClosed,
@@ -50,8 +60,7 @@ pub(super) async fn run_session<S>(
     client: S,
     upstream: Arc<dyn GatewayUpstreamPort>,
     kernels: Arc<RepositoryKernelRegistry>,
-    // 없으면 `akra/mcp/*` 를 모르는 메서드로 답한다. 테스트가 hub 없이 세션을 돌릴 때 쓴다.
-    mcp_hub: Option<Arc<GatewayMcpHub>>,
+    services: GatewayServices,
     recorder: Option<Arc<GatewayRecorder>>,
 ) -> Result<()>
 where
@@ -118,9 +127,14 @@ where
                     }
                     ClientTextRoute::AkraRequest { id, method } => {
                         record(RecordDirection::Client, text.as_str());
-                        let mcp_hub_for_method = mcp_hub
+                        let mcp_hub_for_method = services
+                            .mcp_hub
                             .as_ref()
                             .filter(|_| method.starts_with(MCP_METHOD_PREFIX));
+                        let context_for_method = services
+                            .work_context
+                            .as_ref()
+                            .filter(|_| method.starts_with(CONTEXT_METHOD_PREFIX));
                         let immediate = if method.starts_with(KERNEL_METHOD_PREFIX) {
                             kernel_requests
                                 .submit(id, method, text.as_str().to_string())
@@ -128,6 +142,16 @@ where
                         } else if let Some(hub) = mcp_hub_for_method {
                             spawn_mcp_request(
                                 hub.clone(),
+                                id,
+                                method,
+                                text.as_str().to_string(),
+                                outbox.clone(),
+                                recording.clone(),
+                            );
+                            None
+                        } else if let Some(context) = context_for_method {
+                            spawn_context_request(
+                                context.clone(),
                                 id,
                                 method,
                                 text.as_str().to_string(),

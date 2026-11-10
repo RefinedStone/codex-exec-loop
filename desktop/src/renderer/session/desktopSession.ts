@@ -90,6 +90,9 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** 패널이 직접 부를 수 있는 Gateway 메서드이다. app-server 메서드와 커널 명령은 이 길로 보내지 않는다. */
+const GATEWAY_SERVICE_PREFIXES = ["akra/mcp/", "akra/context/"];
+
 export class DesktopSession {
   private readonly client: JsonRpcClient;
   private readonly batcher: FrameBatcher<QueuedNotification>;
@@ -158,10 +161,10 @@ export class DesktopSession {
     return this.kernel.refresh();
   }
 
-  /** MCP hub 요청이다 (plan 21). 업무 패널이 같은 Gateway 접속으로 hub 의 상주 엔진을 쓴다. */
-  requestMcpHub<T>(method: string, params: unknown): Promise<T> {
-    if (!method.startsWith("akra/mcp/")) {
-      return Promise.reject(new Error(`${method} 는 MCP hub 요청이 아닙니다.`));
+  /** 업무 패널이 같은 Gateway 접속으로 보내는 요청이다: MCP hub(plan 21)와 작업 컨텍스트(plan 22). */
+  requestGatewayService<T>(method: string, params: unknown): Promise<T> {
+    if (!GATEWAY_SERVICE_PREFIXES.some((prefix) => method.startsWith(prefix))) {
+      return Promise.reject(new Error(`${method} 는 패널이 쓸 수 있는 Gateway 요청이 아닙니다.`));
     }
     if (!this.connected) {
       return Promise.reject(new Error("Gateway 에 연결되어 있지 않습니다."));

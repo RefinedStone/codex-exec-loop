@@ -18,3 +18,4 @@ pub mod pr_validation_command_port;
 pub mod pr_validation_query_port;
 pub mod pr_validation_rollout_evidence_query_port;
 pub mod review_center_query_port;
+pub mod work_context_port;
