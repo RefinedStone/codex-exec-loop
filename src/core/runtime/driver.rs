@@ -24,6 +24,16 @@ pub(crate) trait CoreEffectExecutor {
     fn run_effect(&self, effect: CoreEffect) -> Option<CoreInput>;
 }
 
+/// 조립은 실행기를 상자에 담아 바꿀 수 있다. 시뮬레이션 시험은 효과를 기록만 하는 실행기를 넣는다 (plan 19 Q1).
+impl<E> CoreEffectExecutor for Box<E>
+where
+    E: CoreEffectExecutor + ?Sized,
+{
+    fn run_effect(&self, effect: CoreEffect) -> Option<CoreInput> {
+        (**self).run_effect(effect)
+    }
+}
+
 impl<E> CoreRuntime<E>
 where
     E: CoreEffectExecutor,
