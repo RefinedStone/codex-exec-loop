@@ -55,7 +55,8 @@ mod support;
 pub(crate) mod turn;
 mod worker_commit;
 pub(crate) use self::automation_guard::{
-    ParallelModeAutomationEpochClosed, ParallelModeAutomationGuard, ParallelModeAutomationPermit,
+    ParallelDispatchWorkerActivity, ParallelModeAutomationEpochClosed, ParallelModeAutomationGuard,
+    ParallelModeAutomationPermit,
 };
 use self::branch_names::{allocate_agent_branch_name, branch_exists};
 #[cfg(test)]

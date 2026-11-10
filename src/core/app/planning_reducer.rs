@@ -314,6 +314,13 @@ impl PlanningFeatureReducer {
         self.in_flight_manual_prompt_preparation.is_some()
     }
 
+    /// 끝나지 않은 planning 작업(프롬프트 준비, 큐 변경, 작업 공간 작업)이 있다 (plan 18 K3-5 커널 내리기).
+    pub(super) fn has_work_in_flight(&self) -> bool {
+        self.in_flight_manual_prompt_preparation.is_some()
+            || self.active_queue_mutation.is_some()
+            || self.workspace_operations.is_active()
+    }
+
     #[cfg(test)]
     pub(super) fn manual_prompt_preparation_is_cancelled(&self) -> bool {
         self.in_flight_manual_prompt_preparation

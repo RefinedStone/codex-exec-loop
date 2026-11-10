@@ -777,7 +777,10 @@ fn spawn_parallel_dispatch_worker(
     let task_title = request.handoff_task.task_title.clone();
     let expected_lease = request.expected_lease.clone();
     let panic_settlement_service = turn_service.clone();
+    // 스레드를 만들기 전에 센다. 커널을 내려도 되는지 볼 때 작업 스레드가 빠지지 않는다.
+    let activity = turn_service.enter_dispatch_worker();
     thread::spawn(move || {
+        let _activity = activity;
         /*
          * Background worker는 TUI event loop를 직접 만지지 않는다. 모든 결과는 notice message와
          * supervisor snapshot invalidation으로 되돌아가며, sender 실패는 이미 UI가 내려가는 중이라는

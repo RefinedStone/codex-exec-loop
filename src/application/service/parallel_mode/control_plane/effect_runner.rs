@@ -214,6 +214,10 @@ where
         self.automation_guard.cancel_all();
     }
 
+    pub(crate) fn dispatch_workers_running(&self) -> bool {
+        self.automation_guard.dispatch_workers_running()
+    }
+
     #[cfg(test)]
     pub(crate) fn automation_epoch_is_active(
         &self,

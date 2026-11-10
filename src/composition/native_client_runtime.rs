@@ -944,6 +944,12 @@ impl NativeClientRuntime {
         self.parallel_control_plane.mode_enabled()
     }
 
+    /// 커널에 남은 일이 있다 (plan 18 K3-5). core 의 턴·승인·자동 후속·평가·planning 작업, 또는 병렬 제어부의
+    /// 일(켜진 병렬 모드, 열린 epoch, 진행 중인 제어 효과, 배분된 작업 스레드)이다. 커널을 내려도 되는지 볼 때 쓴다.
+    pub(crate) fn has_remaining_work(&self) -> bool {
+        self.core.runtime.has_remaining_work() || self.parallel_control_plane.has_remaining_work()
+    }
+
     /// 런타임을 다른 스레드로 옮긴 뒤에도 병렬 epoch 를 확인한다.
     #[cfg(test)]
     pub(crate) fn parallel_automation_probe_for_test(

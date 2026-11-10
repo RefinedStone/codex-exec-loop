@@ -306,6 +306,13 @@ impl ParallelModeTurnService {
             .is_none_or(|guard| guard.is_active(workspace_directory, epoch_id))
     }
 
+    /// 배분된 작업 스레드가 도는 동안 쥔다. guard 가 없으면 세지 않는다.
+    pub(crate) fn enter_dispatch_worker(&self) -> Option<super::ParallelDispatchWorkerActivity> {
+        self.automation_guard
+            .as_ref()
+            .map(super::ParallelModeAutomationGuard::enter_dispatch_worker)
+    }
+
     /// 오래 걸리는 planning 갱신이 결과를 적용할 때 쓰는 epoch permit 이다. guard 가 없으면 `Ok(None)` 이고
     /// 막지 않는다. epoch 가 닫혔으면 `Err` 이다.
     pub(crate) fn automation_epoch_continuation_permit(

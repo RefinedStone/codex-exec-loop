@@ -58,6 +58,11 @@ where
         self.controller.parallel_mode_projection()
     }
 
+    /// core 에 끝나지 않은 일이 있다 (plan 18 K3-5).
+    pub(crate) fn has_remaining_work(&self) -> bool {
+        self.controller.has_remaining_work()
+    }
+
     /// 시작 점검이 성공한 작업 공간이다 (plan 18 K2-6). 호스트가 GitHub 리뷰 폴링 설정 시작에 쓴다.
     pub(crate) fn startup_ready_workspace(&self) -> Option<String> {
         self.controller.startup_ready_workspace()

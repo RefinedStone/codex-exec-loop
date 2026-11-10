@@ -8,10 +8,15 @@
 //! 공간은 어느 worktree 에서 붙어도 저장소의 대표 checkout 이다. 클라이언트가 모두 떠나도 커널은 남는다. 자동
 //! 후속과 병렬 배분은 클라이언트 없이도 돌아야 하기 때문이다. Gateway 가 끝날 때 `shutdown` 이 커널마다 병렬
 //! 작업 스레드를 멈추고, 호스트 스레드를 끝내고, 잠금을 푼다. 접속이 목록을 아직 쥐고 있어도 같다.
+//!
+//! 커널 내리기: 붙은 클라이언트가 없고 남은 일이 없는 채로 `KERNEL_IDLE_UNLOAD_AFTER` 가 지난 커널은
+//! `unload_idle_kernels` 가 같은 순서로 멈추고 잠금을 푼다. 그래야 같은 저장소의 TUI 가 시작할 수 있다. 다음 붙기가
+//! 커널을 다시 만든다. 남은 일은 `NativeClientRuntime::has_remaining_work` 가 정한다.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
@@ -26,6 +31,9 @@ use crate::core::native_client_port::{NativeClientEvent, ParallelViewState};
 /// 화면 없는 커널의 supervisor 화면 상태이다. supervisor 새로 고침은 화면에 보이기 위한 주기적 점검이고,
 /// TUI 도 병렬 화면이 닫혀 있으면 `false` 를 보낸다. 배분 깨우기와 정리 재시도는 이 값과 관계없이 돈다.
 const HEADLESS_SUPERVISOR_VIEW_ACTIVE: bool = false;
+/// 클라이언트도 남은 일도 없는 커널을 내리기까지 기다리는 시간이다 (10분). 잠깐 떠났다 돌아오는 클라이언트가
+/// 커널을 다시 만들지 않게 한다.
+pub(crate) const KERNEL_IDLE_UNLOAD_AFTER: Duration = Duration::from_secs(10 * 60);
 
 pub(crate) struct RepositoryKernel {
     // 필드는 선언 순서대로 버려진다. 호스트 스레드가 먼저 끝나고, 그 뒤에 잠금이 풀린다.
@@ -48,6 +56,12 @@ impl RepositoryKernel {
     pub(crate) fn attach(&self) -> Result<KernelClientHandle, KernelCallError> {
         self.host.attach()
     }
+
+    fn idle_long_enough(&self, now: Instant) -> bool {
+        self.host
+            .idle_for(now)
+            .is_some_and(|idle| idle >= KERNEL_IDLE_UNLOAD_AFTER)
+    }
 }
 
 /// 저장소 하나의 커널 자리이다. 커널을 만들거나 멈추는 동안 이 자리만 잠근다. 다른 저장소의 붙기는 기다리지 않는다.
@@ -63,10 +77,27 @@ impl RepositoryKernelEntry {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// 커널이 있으면 멈추고 잠금을 푼다. 버리는 쪽이 호스트 스레드가 끝날 때까지 기다린다.
+    /// 커널이 있으면 멈추고 잠금을 푼다. 버리는 쪽이 호스트 스레드가 끝날 때까지 기다린다. 자리 잠금을 쥔 채
+    /// 버리므로, 같은 저장소의 다음 붙기는 이전 커널이 잠금을 푼 뒤에 커널을 만든다.
     fn stop_kernel(&self) {
-        let stopped = self.lock().take();
-        drop(stopped);
+        *self.lock() = None;
+    }
+
+    /// 오래 한가한 커널을 내린다. 커널을 만들거나 붙는 중인 자리는 건너뛴다.
+    fn unload_if_idle(&self, now: Instant) -> bool {
+        let mut kernel = match self.kernel.try_lock() {
+            Ok(kernel) => kernel,
+            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(TryLockError::WouldBlock) => return false,
+        };
+        if !kernel
+            .as_ref()
+            .is_some_and(|kernel| kernel.idle_long_enough(now))
+        {
+            return false;
+        }
+        *kernel = None;
+        true
     }
 }
 
@@ -131,6 +162,16 @@ impl RepositoryKernelRegistry {
         }
     }
 
+    /// 클라이언트도 남은 일도 없이 `KERNEL_IDLE_UNLOAD_AFTER` 가 지난 커널을 내린다. 순서는 `shutdown` 과 같다.
+    /// 내린 커널의 저장소 신원을 돌려준다.
+    pub(crate) fn unload_idle_kernels(&self, now: Instant) -> Vec<String> {
+        self.keyed_entries()
+            .into_iter()
+            .filter(|(_, entry)| entry.unload_if_idle(now))
+            .map(|(repository_key, _)| repository_key)
+            .collect()
+    }
+
     fn entry(&self, repository_key: &str) -> Result<Arc<RepositoryKernelEntry>> {
         self.ensure_running()?;
         let mut repositories = self
@@ -144,11 +185,18 @@ impl RepositoryKernelRegistry {
     }
 
     fn entries(&self) -> Vec<Arc<RepositoryKernelEntry>> {
+        self.keyed_entries()
+            .into_iter()
+            .map(|(_, entry)| entry)
+            .collect()
+    }
+
+    fn keyed_entries(&self) -> Vec<(String, Arc<RepositoryKernelEntry>)> {
         self.repositories
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .values()
-            .cloned()
+            .iter()
+            .map(|(repository_key, entry)| (repository_key.clone(), entry.clone()))
             .collect()
     }
 
@@ -487,6 +535,54 @@ pub(crate) mod tests {
             .expect("another repository attaches while the first one is still starting");
         assert!(result.is_ok(), "{result:?}");
         drop(release);
+    }
+
+    #[test]
+    fn an_idle_kernel_unloads_and_the_next_attach_starts_it_again() {
+        let folder = temp_folder("idle-unload");
+        let registry = RepositoryKernelRegistry::default();
+        let (client, repository_key) = registry.attach(&folder.path).expect("a client attaches");
+        let later = || std::time::Instant::now() + KERNEL_IDLE_UNLOAD_AFTER;
+        assert!(
+            registry.unload_idle_kernels(later()).is_empty(),
+            "a kernel with a client stays"
+        );
+
+        drop(client);
+        let entry = registry
+            .entry(&repository_key)
+            .expect("registry is running");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let is_idle = || {
+            entry
+                .lock()
+                .as_ref()
+                .and_then(|kernel| kernel.host.idle_for(std::time::Instant::now()))
+                .is_some()
+        };
+        while !is_idle() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the kernel becomes idle"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(
+            registry
+                .unload_idle_kernels(std::time::Instant::now())
+                .is_empty(),
+            "a kernel stays until the idle time passes"
+        );
+
+        assert_eq!(registry.unload_idle_kernels(later()), vec![repository_key]);
+        assert!(
+            production::acquire_repository_kernel_lock(&folder.path).is_ok(),
+            "unloading releases the lock, so a TUI can start"
+        );
+        let (again, _) = registry
+            .attach(&folder.path)
+            .expect("the next attach starts the kernel again");
+        assert!(again.query().is_some());
     }
 
     #[test]

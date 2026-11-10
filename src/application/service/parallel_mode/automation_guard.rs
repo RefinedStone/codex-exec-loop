@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Default)]
@@ -7,6 +8,20 @@ pub(crate) struct ParallelModeAutomationGuard {
     /// epoch 가 닫히거나 바뀔 때마다 한 칸 나아간다. 오래 걸리는 planning 갱신은 이 gate 의 permit 으로 결과를
     /// 적용하므로, 갱신 중에 epoch 가 닫히면 결과를 적용하지 않는다.
     epoch_gate: crate::domain::planning::PostTurnContinuationGate,
+    /// 배분된 작업 스레드(slot 턴과 그 뒤 처리) 수이다. 커널을 내려도 되는지 볼 때 쓴다 (plan 18 K3-5).
+    running_dispatch_workers: Arc<AtomicUsize>,
+}
+
+/// 배분된 작업 스레드 하나가 도는 동안 쥔다. 버리면 수가 줄어든다.
+#[derive(Debug)]
+pub(crate) struct ParallelDispatchWorkerActivity {
+    running_dispatch_workers: Arc<AtomicUsize>,
+}
+
+impl Drop for ParallelDispatchWorkerActivity {
+    fn drop(&mut self) {
+        self.running_dispatch_workers.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 /// 확인한 automation epoch 가 이미 닫혔다.
@@ -67,6 +82,17 @@ impl std::fmt::Debug for ParallelModeAutomationGuard {
 }
 
 impl ParallelModeAutomationGuard {
+    pub(crate) fn enter_dispatch_worker(&self) -> ParallelDispatchWorkerActivity {
+        self.running_dispatch_workers.fetch_add(1, Ordering::SeqCst);
+        ParallelDispatchWorkerActivity {
+            running_dispatch_workers: self.running_dispatch_workers.clone(),
+        }
+    }
+
+    pub(crate) fn dispatch_workers_running(&self) -> bool {
+        self.running_dispatch_workers.load(Ordering::SeqCst) > 0
+    }
+
     pub(crate) fn activate(&self, workspace_directory: impl Into<String>, epoch_id: u64) {
         let previous = self
             .active_epochs
@@ -193,6 +219,20 @@ mod tests {
         guard.cancel_all();
         assert!(!guard.is_active("/first", 3));
         assert!(!guard.is_active("/second", 4));
+    }
+
+    #[test]
+    fn dispatch_worker_activity_counts_running_workers() {
+        let guard = ParallelModeAutomationGuard::default();
+        assert!(!guard.dispatch_workers_running());
+
+        let first = guard.enter_dispatch_worker();
+        let second = guard.clone().enter_dispatch_worker();
+        drop(first);
+        assert!(guard.dispatch_workers_running(), "one worker still runs");
+
+        drop(second);
+        assert!(!guard.dispatch_workers_running());
     }
 
     #[test]
