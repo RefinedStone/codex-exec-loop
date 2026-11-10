@@ -14321,6 +14321,8 @@ fn verify_client_runtime_api_boundary(
         "parallel_epoch_snapshot",
         "parallel_mode_enabled",
         "parallel_mode_projection",
+        // plan 18 K3-6: the kernel host reads the parallel view workspace for supervisor inspection.
+        "parallel_view_workspace",
         "poll_pending_client_event",
         "revisioned_planning_parallel_projection",
         "run_host_cycle",
@@ -14333,6 +14335,7 @@ fn verify_client_runtime_api_boundary(
         "parallel_epoch_snapshot",
         "parallel_mode_enabled",
         "parallel_mode_projection",
+        "parallel_view_workspace",
         "revisioned_planning_parallel_projection",
         "snapshot",
     ];

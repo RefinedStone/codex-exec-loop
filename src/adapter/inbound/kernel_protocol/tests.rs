@@ -29,7 +29,16 @@ fn sample_commands() -> Vec<KernelCommand> {
             target: ResetTarget::All,
             confirm: true,
         },
+        KernelCommand::RefreshPlanning {},
     ]
+}
+
+fn no_parallel() -> ParallelSource<'static> {
+    ParallelSource {
+        enabled: false,
+        supervisor: None,
+        status: None,
+    }
 }
 
 #[test]
@@ -98,6 +107,13 @@ fn every_command_maps_to_one_core_command() {
     assert_eq!(
         KernelCommand::PauseAutoFollow {}.into_core("/workspace"),
         Ok(AppCommand::PausePostTurnContinuation)
+    );
+    // plan 18 K3-6: the kernel reads the planning queue of its own workspace.
+    assert_eq!(
+        KernelCommand::RefreshPlanning {}.into_core("/workspace"),
+        Ok(AppCommand::RefreshPlanningRuntime {
+            workspace_directory: "/workspace".to_string(),
+        })
     );
 }
 
@@ -361,6 +377,8 @@ fn events_and_description_have_stable_wire_shapes() {
         KernelQuery::Sessions {},
         KernelQuery::AutoFollow {},
         KernelQuery::ThreadActivity {},
+        KernelQuery::Planning {},
+        KernelQuery::Parallel {},
     ]) {
         assert_eq!(
             serde_json::to_value(query).expect("query should serialize")["type"],
@@ -386,6 +404,8 @@ fn events_and_description_have_stable_wire_shapes() {
             task_id: None,
             message: None,
         }),
+        KernelEvent::Planning(PlanningState::from_core(&RuntimeProjection::uninitialized())),
+        KernelEvent::Parallel(ParallelState::from_core(no_parallel())),
         KernelEvent::Resync,
     ]) {
         assert_eq!(
@@ -441,13 +461,13 @@ fn a_query_answers_with_the_event_of_the_same_name() {
         serde_json::from_value(json!({ "query": { "type": "auto_follow" } }))
             .expect("query request should parse");
     assert_eq!(
-        request.query.answer(&snapshot, &[]),
+        request.query.answer(&snapshot, &[], no_parallel()),
         KernelEvent::AutoFollow(AutoFollowSettings::from_core(
             &snapshot.conversation_runtime
         ))
     );
     assert_eq!(
-        KernelQuery::ThreadActivity {}.answer(&snapshot, &[]),
+        KernelQuery::ThreadActivity {}.answer(&snapshot, &[], no_parallel()),
         KernelEvent::ThreadActivity {
             threads: Vec::new()
         }
@@ -464,5 +484,172 @@ fn a_query_answers_with_the_event_of_the_same_name() {
         })
         .expect("notification should serialize"),
         json!({ "event": { "type": "resync" } })
+    );
+}
+
+fn queue_task(rank: usize, task_id: &str, status: TaskStatus) -> PriorityQueueTask {
+    PriorityQueueTask {
+        rank,
+        task_id: task_id.to_string(),
+        direction_id: "direction-1".to_string(),
+        direction_title: "Ship K3".to_string(),
+        task_title: format!("task {task_id}"),
+        status,
+        combined_priority: 10,
+        updated_at: "2026-11-10T00:00:00Z".to_string(),
+        rank_reasons: vec!["priority".to_string()],
+    }
+}
+
+#[test]
+fn planning_state_carries_the_queue_of_the_kernel_workspace() {
+    // plan 18 K3-6: a remote client sees the same queue as the TUI planning panel.
+    let head = queue_task(1, "task-1", TaskStatus::InProgress);
+    let projection = RuntimeProjection::ready_with_queue_projection(
+        "fragment".to_string(),
+        "2 tasks".to_string(),
+        None,
+        Some(head.clone()),
+        crate::domain::planning::PriorityQueueProjection {
+            next_task: Some(head.clone()),
+            active_tasks: vec![head, queue_task(2, "task-2", TaskStatus::Ready)],
+            proposed_tasks: vec![queue_task(3, "task-3", TaskStatus::Proposed)],
+            skipped_tasks: vec![crate::domain::planning::PriorityQueueSkippedTask {
+                task_id: "task-4".to_string(),
+                task_title: "task task-4".to_string(),
+                direction_id: "direction-1".to_string(),
+                status: TaskStatus::Blocked,
+                reason: "blocked by task-1".to_string(),
+            }],
+        },
+    )
+    .with_planning_revision(Some(4));
+
+    let state = serde_json::to_value(KernelEvent::Planning(PlanningState::from_core(&projection)))
+        .expect("planning should serialize");
+
+    assert_eq!(state["type"], json!("planning"));
+    assert_eq!(state["status"], json!("ready_with_task"));
+    assert_eq!(state["revision"], json!(4));
+    assert_eq!(
+        state["next_task"],
+        json!({
+            "rank": 1,
+            "task_id": "task-1",
+            "direction_title": "Ship K3",
+            "title": "task task-1",
+            "status": "in_progress",
+            "priority": 10
+        })
+    );
+    assert_eq!(state["active_tasks"].as_array().map(Vec::len), Some(2));
+    assert_eq!(state["proposed_tasks"][0]["status"], json!("proposed"));
+    assert_eq!(
+        state["skipped_tasks"],
+        json!([{
+            "task_id": "task-4",
+            "title": "task task-4",
+            "status": "blocked",
+            "reason": "blocked by task-1"
+        }])
+    );
+    assert_eq!(
+        serde_json::to_value(PlanningState::from_core(&RuntimeProjection::uninitialized()))
+            .expect("planning should serialize"),
+        json!({
+            "status": "uninitialized",
+            "active_tasks": [],
+            "proposed_tasks": [],
+            "skipped_tasks": []
+        })
+    );
+}
+
+#[test]
+fn parallel_state_carries_the_supervisor_board() {
+    // plan 18 K3-6: pool, agents and merge queue come from the same supervisor snapshot as the TUI.
+    use crate::domain::parallel_mode::{
+        ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot,
+        ParallelModeDistributorQueueItem, ParallelModeDistributorSnapshot,
+        ParallelModePoolBoardSnapshot, ParallelModeQueueItemState,
+        ParallelModeSupervisorDetailSnapshot,
+    };
+    let mut agent = ParallelModeAgentRosterEntry::new(
+        "agent-1",
+        "task task-2",
+        "slot-1",
+        "akra/task-2",
+        "running",
+        "3m",
+        "editing tests",
+    );
+    agent.thread_id = Some("thread-9".to_string());
+    let snapshot = ParallelModeSupervisorSnapshot::new(
+        ParallelModeSupervisorState::Supervise,
+        "/repo",
+        ParallelModePoolBoardSnapshot::new(2, "pool", "reconciled", Vec::new()),
+        ParallelModeAgentRosterSnapshot::new(vec![agent], "no agents"),
+        ParallelModeSupervisorDetailSnapshot::new(None, "no session"),
+        ParallelModeDistributorSnapshot::new(
+            vec![ParallelModeDistributorQueueItem::new(
+                "agent-1",
+                "task task-2",
+                ParallelModeQueueItemState::PrPending,
+                "akra/task-2",
+                "abc1234",
+                "waiting for CI",
+            )],
+            Vec::new(),
+            "head: task-2",
+            "",
+        ),
+        Some("pool is full".to_string()),
+    );
+
+    let state = serde_json::to_value(KernelEvent::Parallel(ParallelState::from_core(
+        ParallelSource {
+            enabled: true,
+            supervisor: Some(&snapshot),
+            status: Some("parallel mode on"),
+        },
+    )))
+    .expect("parallel should serialize");
+
+    assert_eq!(state["type"], json!("parallel"));
+    assert_eq!(state["enabled"], json!(true));
+    assert_eq!(state["status"], json!("parallel mode on"));
+    let supervisor = &state["supervisor"];
+    assert_eq!(supervisor["state"], json!("supervise"));
+    assert_eq!(supervisor["pool"]["configured"], json!(2));
+    assert_eq!(
+        supervisor["agents"],
+        json!([{
+            "agent_id": "agent-1",
+            "thread_id": "thread-9",
+            "task_title": "task task-2",
+            "slot_id": "slot-1",
+            "branch": "akra/task-2",
+            "state": "running",
+            "duration": "3m",
+            "summary": "editing tests"
+        }])
+    );
+    assert_eq!(supervisor["merge_head"], json!("head: task-2"));
+    assert_eq!(
+        supervisor["merge_queue"],
+        json!([{
+            "task_title": "task task-2",
+            "state": "pr_pending",
+            "branch": "akra/task-2",
+            "commit": "abc1234"
+        }])
+    );
+    assert_eq!(supervisor["notice"], json!("pool is full"));
+    assert!(supervisor.get("pr_validation").is_none());
+    assert_eq!(
+        serde_json::to_value(ParallelState::from_core(no_parallel()))
+            .expect("parallel should serialize"),
+        json!({ "enabled": false }),
+        "before the first supervisor refresh the kernel only knows the mode"
     );
 }

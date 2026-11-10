@@ -869,6 +869,13 @@ impl NativeClientRuntime {
         self.core.runtime.snapshot()
     }
 
+    /// 병렬 보기의 작업 공간이다 (plan 18 K3-6). 커널은 조립할 때 저장소의 대표 checkout 으로 정한다.
+    pub(crate) fn parallel_view_workspace(&self) -> Option<String> {
+        self.parallel_view
+            .as_ref()
+            .map(|view| view.workspace_directory.clone())
+    }
+
     #[cfg(test)]
     pub(crate) fn parallel_view_for_test(&self) -> Option<&ParallelViewState> {
         self.parallel_view.as_ref()

@@ -353,6 +353,37 @@ async fn a_client_attaches_commands_and_receives_kernel_events() {
     assert_eq!(queried["result"]["type"], json!("auto_follow"), "{queried}");
     assert_eq!(queried["result"]["max_turns"], json!(3), "{queried}");
 
+    // plan 18 K3-6: the planning queue and the parallel state travel through the same session.
+    let refreshed = kernel_request(
+        &mut client,
+        "refresh",
+        "akra/kernel/command",
+        json!({"command": {"type": "refresh_planning"}}),
+    )
+    .await;
+    assert_eq!(
+        refreshed["result"],
+        json!({"processed": true}),
+        "{refreshed}"
+    );
+    let planning = kernel_request(
+        &mut client,
+        "planning",
+        "akra/kernel/query",
+        json!({"query": {"type": "planning"}}),
+    )
+    .await;
+    assert_eq!(planning["result"]["type"], json!("planning"), "{planning}");
+    let parallel = kernel_request(
+        &mut client,
+        "parallel",
+        "akra/kernel/query",
+        json!({"query": {"type": "parallel"}}),
+    )
+    .await;
+    assert_eq!(parallel["result"]["type"], json!("parallel"), "{parallel}");
+    assert_eq!(parallel["result"]["enabled"], json!(false), "{parallel}");
+
     let described =
         kernel_request(&mut client, "describe", "akra/kernel/describe", json!({})).await;
     assert!(
