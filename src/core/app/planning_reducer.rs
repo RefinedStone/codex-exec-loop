@@ -20,17 +20,8 @@ struct ActiveManualPromptPreparation {
     addressed_thread_id: Option<String>,
 }
 
-/*
- * 준비가 끝났지만 제출이 거절된 thread 지정 프롬프트이다 (plan 19 Q2-3). 준비가 만든 작업은 이미 큐에 있다. 커널이
- * 쉬면 같은 handoff 로 한 번 다시 낸다. 메모리에만 있으므로 재시작하면 잃는다 (작업은 큐에 남는다, plan 19 Q3).
- */
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct QueuedThreadPrompt {
-    pub(super) thread_id: String,
-    pub(super) workspace_directory: String,
-    pub(super) handoff: crate::domain::planning::ManualPromptMainSessionHandoff,
-    pub(super) task_id: String,
-}
+// 남긴 프롬프트는 사건 기록에도 쓰므로 domain 타입이다 (plan 19 Q3-1).
+pub(super) use crate::domain::kernel_event::QueuedThreadPrompt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ManualPromptPreparationReduction {

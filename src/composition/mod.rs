@@ -9,6 +9,7 @@ pub(crate) mod clipboard_image_probe;
 pub(crate) mod core_effect_runner;
 pub(crate) mod core_effect_worker;
 pub(crate) mod core_turn_submission;
+pub(crate) mod kernel_event_recorder;
 pub(crate) mod kernel_host;
 pub(crate) mod native_client_runtime;
 pub(crate) mod native_terminal_event_ingress;

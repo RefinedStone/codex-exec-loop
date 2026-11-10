@@ -26,6 +26,7 @@ use super::{
     StopRequestCorrelation, TurnSteerCorrelation,
 };
 use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProjection;
+use crate::domain::kernel_event::{KernelEvent, ThreadPromptSettlement};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -478,6 +479,9 @@ impl CoreController {
             }
             CoreInput::Command(AppCommand::ResubmitQueuedThreadPrompt) => {
                 self.resubmit_queued_thread_prompt()
+            }
+            CoreInput::Command(AppCommand::RestoreQueuedThreadPrompts(prompts)) => {
+                self.restore_queued_thread_prompts(prompts)
             }
             CoreInput::Command(AppCommand::SetupGithubReviewPolling(request)) => {
                 let GithubReviewPollingSetupAdmission::Started { correlation } =
@@ -1653,7 +1657,7 @@ impl CoreController {
         disposition: ManualPromptCompletionDisposition,
     ) -> CoreDispatchOutcome {
         let workspace_directory = result.correlation().workspace_directory.clone();
-        let (outcome, effects) = match prepared_thread_prompt_handoff(result, disposition) {
+        let (outcome, effects, record) = match prepared_thread_prompt_handoff(result, disposition) {
             Ok((handoff, task_id)) => self.submit_thread_prompt_handoff(
                 super::planning_reducer::QueuedThreadPrompt {
                     thread_id: thread_id.clone(),
@@ -1666,10 +1670,23 @@ impl CoreController {
             Err(failure) => (
                 super::ThreadPromptOutcome::PreparationFailed(failure),
                 Vec::new(),
+                None,
             ),
         };
+        self.thread_prompt_submitted_outcome(thread_id, outcome, effects, record)
+    }
+
+    fn thread_prompt_submitted_outcome(
+        &self,
+        thread_id: String,
+        outcome: super::ThreadPromptOutcome,
+        effects: Vec<CoreEffect>,
+        record: Option<KernelEvent>,
+    ) -> CoreDispatchOutcome {
+        let mut events = vec![AppEvent::ThreadPromptSubmitted { thread_id, outcome }];
+        events.extend(record.map(AppEvent::KernelRecorded));
         CoreDispatchOutcome {
-            events: vec![AppEvent::ThreadPromptSubmitted { thread_id, outcome }],
+            events,
             effects,
             snapshot: self.shared_snapshot(),
         }
@@ -1678,17 +1695,25 @@ impl CoreController {
     /*
      * 준비가 끝난 프롬프트를 그 thread 에 낸다. 병렬 모드이면 내지 않는다. 처음 낼 때 거절되면 큐에 남기고 커널이
      * 쉴 때 한 번 다시 낸다 (plan 19 Q2-3). 다시 낼 때도 거절되면 남기지 않는다. 작업은 큐에 있고 반복은 막는다.
+     * 남김과 그 끝남은 사건으로 기록한다 (plan 19 Q3-1). 처음 낼 때의 제출이나 병렬 넘김은 남김이 아니라 기록하지 않는다.
      */
     fn submit_thread_prompt_handoff(
         &mut self,
         prompt: super::planning_reducer::QueuedThreadPrompt,
         queue_on_rejection: bool,
-    ) -> (super::ThreadPromptOutcome, Vec<CoreEffect>) {
+    ) -> (
+        super::ThreadPromptOutcome,
+        Vec<CoreEffect>,
+        Option<KernelEvent>,
+    ) {
         let task_id = prompt.task_id.clone();
         if self.planning.host_parallel_mode() != Some(false) {
+            let record = (!queue_on_rejection)
+                .then(|| prompt.settled(ThreadPromptSettlement::ParallelSlots));
             return (
                 super::ThreadPromptOutcome::ParallelModeStarted { task_id },
                 Vec::new(),
+                record,
             );
         }
         let request = self.thread_prompt_turn_request(
@@ -1699,25 +1724,33 @@ impl CoreController {
         let admission = self
             .conversation_turn
             .admit_thread_turn_submission(&prompt.thread_id, &request);
-        let effects = match admission {
-            TurnSubmissionAdmission::Accepted { correlation } => {
+        let (effects, record) = match admission {
+            TurnSubmissionAdmission::Accepted { correlation } => (
                 vec![CoreEffect::SubmitTurn {
                     correlation,
                     request: Box::new(request),
-                }]
-            }
+                }],
+                (!queue_on_rejection).then(|| prompt.settled(ThreadPromptSettlement::Submitted)),
+            ),
             TurnSubmissionAdmission::RejectedActive { .. }
             | TurnSubmissionAdmission::RejectedStopPending { .. }
             | TurnSubmissionAdmission::RejectedUnavailable => {
                 if queue_on_rejection {
+                    let record = KernelEvent::ThreadPromptQueued(prompt.clone());
                     self.planning.queue_thread_prompt(prompt);
+                    (Vec::new(), Some(record))
+                } else {
+                    (
+                        Vec::new(),
+                        Some(prompt.settled(ThreadPromptSettlement::RejectedAgain)),
+                    )
                 }
-                Vec::new()
             }
         };
         (
             super::ThreadPromptOutcome::Submitted { admission, task_id },
             effects,
+            record,
         )
     }
 
@@ -1734,15 +1767,28 @@ impl CoreController {
             return self.unchanged_outcome();
         };
         if self.planning_task_is_finished(&prompt.task_id) {
-            return self.unchanged_outcome();
+            return CoreDispatchOutcome {
+                events: vec![AppEvent::KernelRecorded(
+                    prompt.settled(ThreadPromptSettlement::TaskFinished),
+                )],
+                effects: Vec::new(),
+                snapshot: self.shared_snapshot(),
+            };
         }
         let thread_id = prompt.thread_id.clone();
-        let (outcome, effects) = self.submit_thread_prompt_handoff(prompt, false);
-        CoreDispatchOutcome {
-            events: vec![AppEvent::ThreadPromptSubmitted { thread_id, outcome }],
-            effects,
-            snapshot: self.shared_snapshot(),
+        let (outcome, effects, record) = self.submit_thread_prompt_handoff(prompt, false);
+        self.thread_prompt_submitted_outcome(thread_id, outcome, effects, record)
+    }
+
+    /// 기록에서 읽은 끝나지 않은 남김을 큐에 되돌린다 (plan 19 Q3-1). 이미 기록된 남김이라 다시 기록하지 않는다.
+    fn restore_queued_thread_prompts(
+        &mut self,
+        prompts: Vec<super::planning_reducer::QueuedThreadPrompt>,
+    ) -> CoreDispatchOutcome {
+        for prompt in prompts {
+            self.planning.queue_thread_prompt(prompt);
         }
+        self.unchanged_outcome()
     }
 
     fn planning_task_is_finished(&self, task_id: &str) -> bool {
@@ -10107,12 +10153,77 @@ mod tests {
             } if task_id == "task-1"
         )));
         assert!(prepared.effects.is_empty(), "the other turn still runs");
+        assert!(
+            matches!(
+                kernel_records(&prepared).as_slice(),
+                [KernelEvent::ThreadPromptQueued(queued)]
+                    if queued.thread_id == "thread-beta" && queued.task_id == "task-1"
+            ),
+            "plan 19 Q3-1: the queued prompt is recorded"
+        );
         assert_eq!(
             controller.next_post_turn_host_step(),
             None,
             "the queued prompt waits while a turn runs"
         );
         running
+    }
+
+    fn kernel_records(outcome: &CoreDispatchOutcome) -> Vec<KernelEvent> {
+        outcome
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                AppEvent::KernelRecorded(record) => Some(record.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn settlement_of(outcome: &CoreDispatchOutcome) -> Option<ThreadPromptSettlement> {
+        match kernel_records(outcome).as_slice() {
+            [KernelEvent::ThreadPromptSettled { settlement, .. }] => Some(*settlement),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_restored_queued_thread_prompt_is_resubmitted_when_the_kernel_is_idle() {
+        // plan 19 Q3-1: a new kernel restores the open queued prompts from the event log.
+        let mut controller = hosted_controller(false);
+        let restored =
+            controller.handle_input(CoreInput::Command(AppCommand::RestoreQueuedThreadPrompts(
+                vec![crate::domain::kernel_event::QueuedThreadPrompt {
+                    thread_id: "thread-beta".to_string(),
+                    workspace_directory: "/tmp/workspace".to_string(),
+                    handoff: crate::domain::planning::ManualPromptMainSessionHandoff {
+                        prompt: "planned prompt".to_string(),
+                        transcript_text: "fix the test".to_string(),
+                        task: None,
+                    },
+                    task_id: "task-1".to_string(),
+                }],
+            )));
+        assert!(
+            kernel_records(&restored).is_empty(),
+            "a restored prompt is already recorded"
+        );
+        assert_eq!(
+            controller.next_post_turn_host_step(),
+            Some(super::super::PostTurnHostStep::ResubmitQueuedThreadPrompt)
+        );
+        let resubmitted =
+            controller.handle_input(CoreInput::Command(AppCommand::ResubmitQueuedThreadPrompt));
+        assert!(matches!(
+            resubmitted.effects.as_slice(),
+            [CoreEffect::SubmitTurn { request, .. }]
+                if request.thread_id.as_deref() == Some("thread-beta")
+                    && request.prompt == "planned prompt"
+        ));
+        assert_eq!(
+            settlement_of(&resubmitted),
+            Some(ThreadPromptSettlement::Submitted)
+        );
     }
 
     fn end_test_turn(controller: &mut CoreController, turn: TurnSubmissionCorrelation) {
@@ -10161,6 +10272,10 @@ mod tests {
                     && request.prompt == "planned prompt"
                     && request.prompt_origin == CorePromptOrigin::ManualIntake
         ));
+        assert_eq!(
+            settlement_of(&resubmitted),
+            Some(ThreadPromptSettlement::Submitted)
+        );
         assert_eq!(controller.next_post_turn_host_step(), None);
         let again =
             controller.handle_input(CoreInput::Command(AppCommand::ResubmitQueuedThreadPrompt));
@@ -10190,6 +10305,10 @@ mod tests {
             },
         }));
         assert!(settled.effects.is_empty(), "no main-session turn starts");
+        assert_eq!(
+            settlement_of(&settled),
+            Some(ThreadPromptSettlement::ParallelSlots)
+        );
         assert_eq!(controller.next_post_turn_host_step(), None);
     }
 
@@ -10226,6 +10345,10 @@ mod tests {
         assert!(
             dropped.effects.is_empty(),
             "the finished task does not run again"
+        );
+        assert_eq!(
+            settlement_of(&dropped),
+            Some(ThreadPromptSettlement::TaskFinished)
         );
         assert!(!controller.has_remaining_work());
         assert_eq!(controller.next_post_turn_host_step(), None);

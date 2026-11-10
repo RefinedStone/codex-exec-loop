@@ -108,6 +108,8 @@ pub enum AppCommand {
     SubmitAutoFollowTurn(Box<AutoFollowTurnSubmission>),
     // 호스트 전용이다 (plan 19 Q2-3). 원격 준비가 큐에 남긴 프롬프트 하나를 커널이 쉴 때 다시 낸다.
     ResubmitQueuedThreadPrompt,
+    // 호스트 전용이다 (plan 19 Q3-1). 커널을 조립할 때 사건 기록에서 읽은 끝나지 않은 남김을 되돌린다.
+    RestoreQueuedThreadPrompts(Vec<crate::domain::kernel_event::QueuedThreadPrompt>),
     EvaluatePostTurn(Box<PostTurnRequest>),
 }
 

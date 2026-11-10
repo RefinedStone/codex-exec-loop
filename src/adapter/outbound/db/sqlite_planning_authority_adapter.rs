@@ -53,6 +53,8 @@ use crate::domain::parallel_mode::{
 };
 // app-server prompt 입출력 trace를 authority DB runtime 영역에 저장하는 모듈이다.
 mod app_server_prompt_log;
+// 커널의 판단 사건 기록(`kernel_events`)을 다루는 하위 모듈이다 (plan 19 Q3-1).
+mod kernel_events;
 // active snapshot 테이블을 다루는 하위 모듈이다.
 mod active_documents;
 // repo-scoped draft staging을 SQLite 행으로 저장하는 하위 모듈이다.

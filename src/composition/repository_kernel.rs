@@ -216,7 +216,9 @@ pub(crate) fn build_kernel_for_workspace(
 ) -> Result<RepositoryKernel> {
     // 잠금을 먼저 잡는다. 런타임 조립이 PR 검증 스케줄러 스레드를 시작하기 때문이다.
     let lock = production::acquire_repository_kernel_lock(workspace_dir)?;
-    let runtime = production::build_headless_kernel_runtime(workspace_dir, app_server);
+    let mut runtime = production::build_headless_kernel_runtime(workspace_dir, app_server);
+    // 잠금을 잡은 뒤에 기록을 읽는다. 이전 커널은 기록을 다 쓴 뒤 잠금을 풀었다 (plan 19 Q3-1).
+    runtime.attach_kernel_event_log(production::kernel_event_log_port(), workspace_dir);
     start_repository_kernel(lock, runtime, workspace_dir)
 }
 

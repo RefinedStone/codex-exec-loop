@@ -11292,6 +11292,7 @@ fn inbound_adapters_do_not_drive_the_runtime_host_or_its_internal_decisions() {
             "AppCommand::EvaluatePostTurn",
             "SetParallelModeEnabled",
             "ResubmitQueuedThreadPrompt",
+            "RestoreQueuedThreadPrompts",
         ],
     );
     assert_no_production_callable_reference_named_in_paths(
@@ -11316,6 +11317,7 @@ fn inbound_adapters_do_not_drive_the_runtime_host_or_its_internal_decisions() {
         "AppCommand::SubmitAutoFollowTurn",
         "AppCommand::SetParallelModeEnabled",
         "AppCommand::ResubmitQueuedThreadPrompt",
+        "AppCommand::RestoreQueuedThreadPrompts",
         "fn run_host_cycle",
     ] {
         assert!(
@@ -14316,6 +14318,8 @@ fn verify_client_runtime_api_boundary(
     let facade_syntax = syn::parse_file(native_facade)
         .map_err(|error| format!("native client facade must parse: {error}"))?;
     let expected_facade_api = [
+        // plan 19 Q3-1: the repository kernel attaches its event log and restores queued prompts.
+        "attach_kernel_event_log",
         "current_parallel_epoch_id_for_workspace",
         "dispatch_client_event",
         // plan 18 K3-5: read-only check before the gateway unloads an idle kernel.
