@@ -143,7 +143,12 @@ task를 쓰므로 Core는 모르는 thread와 일하는 중인 thread를 준비 
 host가 병렬 모드 값을 아직 알리지 않았어도 거절합니다. Runtime host는 core 입력을 넣기 전마다 병렬
 제어부 값을 확인하고, 바뀌었으면 host 전용 `SetParallelModeEnabled`로 Core에 알립니다. 준비가 끝나면 Core는
 병렬 모드를 다시 봅니다. 그 사이 병렬 모드가 켜졌거나 다른 turn이 자리를 잡았으면 turn을 시작하지 않고,
-client가 prompt를 다시 보내지 않도록 큐에 남은 planning task id를 알립니다. Thread를 다시 열면 live
+client가 prompt를 다시 보내지 않도록 큐에 남은 planning task id를 알립니다. 다른 turn이나 끝나지 않은 정지
+때문에 제출이 거절되면 Core는 준비된 prompt를 메모리에 둡니다. 모든 session이 쉬고 준비가 없으면 host의
+턴 뒤 reconcile이 `ResubmitQueuedThreadPrompt`를 고릅니다. 그래서 자동 후속이 먼저 이어 갑니다. Core는
+prompt를 한 번 다시 내고 `submitted`를 알립니다 (다시 거절되면 `queued`). 병렬 모드가 켜졌으면 slot이
+작업을 맡으므로 내지 않습니다. planning 투영이 작업을 완료나 취소로 보여도 내지 않습니다. 남긴 prompt는
+남은 일로 세고, 재시작하면 잃습니다 (작업은 큐에 남습니다). Thread를 다시 열면 live
 runtime 상태가 보이고 transcript는 provider에서 다시 읽습니다.
 
 `CoreRuntime`, effect executor, input mailbox는 library SDK가 아닌 crate-private 구현 세부사항입니다.
