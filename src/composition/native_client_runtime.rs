@@ -48,7 +48,7 @@ use crate::core::runtime::{CoreEffectExecutor, CoreInputWaker, CoreRuntime, core
 use crate::domain::conversation::ConversationRuntimeControlTruth;
 #[cfg(test)]
 use crate::domain::github_review::GithubPullRequestTarget;
-use crate::domain::kernel_event::{KernelEvent, open_queued_thread_prompts};
+use crate::domain::kernel_event::{THREAD_PROMPT_QUEUE_KINDS, open_queued_thread_prompts};
 #[cfg(test)]
 use crate::domain::parallel_mode::ParallelModeAutomationTrigger;
 use crate::domain::planning::PostTurnContinuationAction;
@@ -185,19 +185,6 @@ fn strip_post_turn_markers(outcome: &mut CoreDispatchOutcome) {
                 | AppEvent::PostTurnContinuationRoutingRequested { .. }
         )
     });
-}
-
-/// 기록용 사건을 꺼낸다 (plan 19 Q3-1). 클라이언트에는 보내지 않는다.
-fn take_kernel_records(outcome: &mut CoreDispatchOutcome) -> Vec<KernelEvent> {
-    let mut records = Vec::new();
-    outcome.events.retain(|event| match event {
-        AppEvent::KernelRecorded(record) => {
-            records.push(record.clone());
-            false
-        }
-        _ => true,
-    });
-    records
 }
 
 /// 그 thread 의 자동 후속 설정이 병렬 경로를 허락하면 병렬 제어부에 묻는다.
@@ -772,7 +759,8 @@ impl NativeClientRuntime {
             "post-turn host steps must settle within one dispatch"
         );
         strip_post_turn_markers(&mut core_outcome);
-        let records = take_kernel_records(&mut core_outcome);
+        // 판단 사건은 화면용 이벤트와 따로 꺼낸다. 기록기가 없으면(TUI) 버린다 (plan 19 Q3-2).
+        let records = self.core.runtime.take_kernel_records();
         if let Some(recorder) = &self.kernel_events {
             recorder.record(records);
         }
@@ -999,7 +987,7 @@ impl NativeClientRuntime {
         log: Arc<dyn KernelEventLogPort>,
         workspace_dir: &str,
     ) {
-        let open = match log.load_kernel_events(workspace_dir) {
+        let open = match log.load_kernel_events(workspace_dir, &THREAD_PROMPT_QUEUE_KINDS) {
             Ok(events) => open_queued_thread_prompts(events),
             Err(error) => {
                 tracing::warn!(
@@ -1009,7 +997,7 @@ impl NativeClientRuntime {
                 Vec::new()
             }
         };
-        self.kernel_events = Some(KernelEventRecorder::start(log));
+        self.kernel_events = Some(KernelEventRecorder::start(log, workspace_dir.to_string()));
         if !open.is_empty() {
             // 아직 클라이언트가 없다. 결과는 조회로 보인다. 기록용 사건은 이 dispatch 안에서 기록된다.
             let _ = self.dispatch_core_input(CoreInput::Command(
@@ -2045,13 +2033,6 @@ pub(crate) mod tests {
             "the same dispatch that ends the turn resubmits the prompt: {:?}",
             ended.events
         );
-        assert!(
-            !ended
-                .events
-                .iter()
-                .any(|event| matches!(event, AppEvent::KernelRecorded(_))),
-            "plan 19 Q3-1: kernel records never reach clients"
-        );
         let deadline = Instant::now() + WORKER_COMPLETION_TIMEOUT_FOR_HOST_TEST;
         while turns.lock().expect("recorded turns should lock").is_empty() {
             assert!(Instant::now() < deadline, "the resubmitted turn should run");
@@ -2082,8 +2063,14 @@ pub(crate) mod tests {
         fn load_kernel_events(
             &self,
             _workspace_dir: &str,
+            kinds: &[&str],
         ) -> anyhow::Result<Vec<crate::domain::kernel_event::KernelEvent>> {
-            Ok(self.0.lock().expect("log should lock").clone())
+            let stored = self.0.lock().expect("log should lock");
+            Ok(stored
+                .iter()
+                .filter(|event| kinds.contains(&event.kind()))
+                .cloned()
+                .collect())
         }
     }
 
@@ -2123,9 +2110,18 @@ pub(crate) mod tests {
             "only the open queued prompt runs"
         );
         drop(runtime);
+        let recorded = log.0.lock().expect("log should lock");
+        // plan 19 Q3-2: the turn submission is recorded with the settlement, in the same dispatch.
         assert_eq!(
-            log.0.lock().expect("log should lock").last(),
-            Some(&queued("task-1", "planned prompt").settled(ThreadPromptSettlement::Submitted)),
+            recorded[3..],
+            [
+                queued("task-1", "planned prompt").settled(ThreadPromptSettlement::Submitted),
+                KernelEvent::TurnSubmitted {
+                    thread_id: "thread-1".to_string(),
+                    submission: 1,
+                    origin: crate::domain::kernel_event::TurnOrigin::ManualIntake,
+                },
+            ],
             "the resubmission is recorded before the runtime is gone"
         );
     }

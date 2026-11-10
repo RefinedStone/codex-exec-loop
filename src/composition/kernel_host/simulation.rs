@@ -27,6 +27,7 @@ use crate::adapter::inbound::tui::app::test_helpers::{
     test_parallel_mode_control_plane_composition, test_planning_services,
 };
 use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+use crate::application::port::outbound::kernel_event_log_port::KernelEventLogPort;
 use crate::composition::native_client_runtime::NativeClientRuntime;
 use crate::composition::native_client_runtime::tests::post_turn_execution;
 use crate::core::app::{
@@ -38,6 +39,7 @@ use crate::core::runtime::{CoreEffectExecutor, CoreInputSender};
 use crate::domain::conversation_runtime_envelope::{
     ConversationRuntimeConfigurationRequest, ConversationRuntimeEnvelope,
 };
+use crate::domain::kernel_event::KernelEvent;
 use crate::domain::planning::{
     PostTurnAutoFollowSkipReason, PostTurnContinuationAction, TurnSnapshotCapture,
 };
@@ -266,6 +268,66 @@ fn turn_key(thread_id: &str, turn_id: &str) -> (String, String) {
     (thread_id.to_string(), turn_id.to_string())
 }
 
+/// 커널이 쓴 판단 사건이다 (plan 19 Q3-2). 기록기 스레드가 쓰고, 시뮬레이션은 커널을 버린 뒤에 읽는다.
+#[derive(Default)]
+struct SimKernelLog(Mutex<Vec<KernelEvent>>);
+
+impl KernelEventLogPort for SimKernelLog {
+    fn append_kernel_events(
+        &self,
+        _workspace_dir: &str,
+        events: &[KernelEvent],
+    ) -> anyhow::Result<()> {
+        self.0
+            .lock()
+            .expect("kernel log should lock")
+            .extend_from_slice(events);
+        Ok(())
+    }
+
+    fn load_kernel_events(
+        &self,
+        _workspace_dir: &str,
+        _kinds: &[&str],
+    ) -> anyhow::Result<Vec<KernelEvent>> {
+        Ok(Vec::new())
+    }
+}
+
+/*
+ * I6: 판단 사건 기록이 맞다 (plan 19 Q3-2). 같은 턴 제출은 한 번만 기록된다 (자동 후속은 core 입력을 다시 넣는다).
+ * 같은 턴은 한 번 시작하고 한 번 끝나며, 끝은 시작 뒤에 온다.
+ */
+fn check_kernel_records(records: &[KernelEvent]) -> Result<(), String> {
+    let mut submissions = BTreeSet::new();
+    let mut started = BTreeSet::new();
+    let mut ended = BTreeSet::new();
+    for record in records {
+        match record {
+            KernelEvent::TurnSubmitted { submission, .. } if !submissions.insert(*submission) => {
+                return Err(format!(
+                    "I6: turn submission {submission} was recorded twice"
+                ));
+            }
+            KernelEvent::TurnStarted { thread_id, turn_id }
+                if !started.insert(turn_key(thread_id, turn_id)) =>
+            {
+                return Err(format!("I6: {turn_id} on {thread_id} started twice"));
+            }
+            KernelEvent::TurnEnded { thread_id, turn_id } => {
+                let key = turn_key(thread_id, turn_id);
+                if !started.contains(&key) || !ended.insert(key) {
+                    return Err(format!(
+                        "I6: {turn_id} on {thread_id} ended without one matching start"
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 struct Simulation {
     rng: SimRng,
     settings: ScenarioSettings,
@@ -290,6 +352,7 @@ struct Simulation {
     next_turn: u64,
     manual_turns_sent: usize,
     ledger: InvariantLedger,
+    kernel_log: Arc<SimKernelLog>,
 }
 
 impl Simulation {
@@ -304,10 +367,12 @@ impl Simulation {
          * 클라이언트가 붙을 때마다 병렬 제어부가 감독 점검을 실제 작업 스레드에서 돌리고, 그 완료 시점이 seed 를
          * 따르지 않는다. 병렬 제어부의 효과를 가짜로 바꾸는 일은 병렬 모드를 모델할 때 한다.
          */
-        let (runtime, core_inputs) = NativeClientRuntime::new_with_effect_executor_for_test(
+        let (mut runtime, core_inputs) = NativeClientRuntime::new_with_effect_executor_for_test(
             parallel,
             Box::new(effects.clone()),
         );
+        let kernel_log = Arc::new(SimKernelLog::default());
+        runtime.attach_kernel_event_log(kernel_log.clone(), "/sim");
         let (inbox, inputs) = mpsc::channel();
         let host = KernelHostLoop::new(runtime, inputs, KernelIdleClock::default());
         let mut simulation = Self {
@@ -328,6 +393,7 @@ impl Simulation {
             invalidated_stop_requests: BTreeSet::new(),
             known_threads: Vec::new(),
             next_thread: 1,
+            kernel_log,
             next_turn: 1,
             manual_turns_sent: 0,
             ledger: InvariantLedger::default(),
@@ -346,6 +412,13 @@ impl Simulation {
             Ok(result) => result,
             Err(panic) => Err(self.violation(panic_message(panic.as_ref()))),
         };
+        let result = result.and_then(|()| {
+            let step = self.step;
+            // 커널을 버려야 기록기가 남은 사건을 다 쓴다.
+            drop(self.host);
+            let records = self.kernel_log.0.lock().expect("kernel log should lock");
+            check_kernel_records(&records).map_err(|message| Violation { step, message })
+        });
         match result {
             Ok(()) => Ok(self.trace),
             Err(violation) => Err((violation, self.trace)),

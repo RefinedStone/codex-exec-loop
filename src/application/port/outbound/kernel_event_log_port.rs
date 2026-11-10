@@ -9,5 +9,6 @@ use crate::domain::kernel_event::KernelEvent;
 pub trait KernelEventLogPort: Send + Sync {
     fn append_kernel_events(&self, workspace_dir: &str, events: &[KernelEvent]) -> Result<()>;
 
-    fn load_kernel_events(&self, workspace_dir: &str) -> Result<Vec<KernelEvent>>;
+    /// 이 종류(`KernelEvent::kind`)의 사건만 기록 순서대로 읽는다.
+    fn load_kernel_events(&self, workspace_dir: &str, kinds: &[&str]) -> Result<Vec<KernelEvent>>;
 }

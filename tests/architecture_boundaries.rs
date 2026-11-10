@@ -3534,6 +3534,8 @@ fn core_conversation_turn_feature_reducer_owns_one_correlated_lifecycle_slice() 
         "approval_review_persistence",
         // plan 18 K2-4: the background thread activity last published to the client.
         "published_thread_activity",
+        // plan 19 Q3-2: the kernel records the host drains after every dispatch.
+        "kernel_records",
     ];
     let thread_session_fields = [
         "turn_stream_state",
@@ -14230,6 +14232,8 @@ fn verify_client_runtime_api_boundary(
         "snapshot",
         // plan 18 K2-6: the host starts GitHub review setup after the startup checks succeed.
         "startup_ready_workspace",
+        // plan 19 Q3-2: the host drains the kernel records after every dispatch.
+        "take_kernel_records",
         "wait_pending_input",
     ];
     let mut actual_runtime_api = Vec::new();

@@ -26,7 +26,7 @@ use super::{
     StopRequestCorrelation, TurnSteerCorrelation,
 };
 use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProjection;
-use crate::domain::kernel_event::{KernelEvent, ThreadPromptSettlement};
+use crate::domain::kernel_event::{self, KernelEvent, ThreadPromptSettlement};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -121,14 +121,51 @@ impl CoreController {
     }
 
     pub(in crate::core) fn handle_input(&mut self, input: CoreInput) -> CoreDispatchOutcome {
+        let turns_before = self.conversation_turn.published_thread_turns();
         let outcome = self.handle_input_inner(input);
         let mut outcome = self.with_conversation_runtime_authority(outcome);
+        self.record_turn_submissions(&outcome.effects);
         if let Some(activity) = self.conversation_turn.take_thread_activity_change() {
+            // 턴의 시작과 끝은 thread 요약의 변화로 기록한다 (plan 19 Q3-2). 요약은 보지 않는 thread 도 담는다.
+            for event in kernel_event::turn_events_between(&turns_before, &thread_turns(&activity))
+            {
+                self.conversation_turn.record_kernel_event(event);
+            }
             outcome
                 .events
                 .push(AppEvent::ThreadActivityChanged(activity));
         }
         outcome
+    }
+
+    /// 호스트가 dispatch 뒤에 꺼내 가는 판단 사건이다 (plan 19 Q3-2). 화면용 이벤트에 섞지 않는다.
+    pub(in crate::core) fn take_kernel_records(&mut self) -> Vec<KernelEvent> {
+        self.conversation_turn.take_kernel_records()
+    }
+
+    /*
+     * 받아들인 턴 제출을 기록한다 (plan 19 Q3-2). 모든 제출 경로(사람, intake, thread 지정, 자동 후속)가 `SubmitTurn`
+     * 효과를 낸다. `handle_input` 은 자기를 다시 부르고(자동 후속 제출) 바깥 결과가 안쪽 효과를 담으므로, 이미 기록한
+     * 제출은 다시 기록하지 않는다.
+     */
+    fn record_turn_submissions(&mut self, effects: &[CoreEffect]) {
+        for effect in effects {
+            let CoreEffect::SubmitTurn {
+                correlation,
+                request,
+            } = effect
+            else {
+                continue;
+            };
+            let submitted = KernelEvent::TurnSubmitted {
+                thread_id: request.thread_id.clone().unwrap_or_default(),
+                submission: correlation.generation,
+                origin: turn_origin(request.prompt_origin),
+            };
+            if !self.conversation_turn.has_kernel_record(&submitted) {
+                self.conversation_turn.record_kernel_event(submitted);
+            }
+        }
     }
 
     fn handle_input_inner(&mut self, input: CoreInput) -> CoreDispatchOutcome {
@@ -463,6 +500,13 @@ impl CoreController {
                 else {
                     return self.unchanged_outcome();
                 };
+                // 경로는 보지 않는 thread 의 것도 기록한다 (plan 19 Q3-2).
+                self.conversation_turn
+                    .record_kernel_event(KernelEvent::PostTurnRouted {
+                        thread_id: correlation.thread_id.clone(),
+                        completed_turn_id: correlation.completed_turn_id.clone(),
+                        route: post_turn_route(route_resolution),
+                    });
                 // 보지 않는 thread 의 평가 결과는 클라이언트에 알리지 않는다 (plan 18 K2-3).
                 CoreDispatchOutcome {
                     events: (!background)
@@ -1582,6 +1626,13 @@ impl CoreController {
             ),
         };
         let thread_id = submission.thread_id;
+        if let Some(reason) = thread_prompt_rejection(&admission) {
+            self.conversation_turn
+                .record_kernel_event(KernelEvent::ThreadPromptRejected {
+                    thread_id: thread_id.clone(),
+                    reason,
+                });
+        }
         CoreDispatchOutcome {
             events: vec![AppEvent::ThreadPromptAdmissionResolved {
                 thread_id,
@@ -1677,16 +1728,17 @@ impl CoreController {
     }
 
     fn thread_prompt_submitted_outcome(
-        &self,
+        &mut self,
         thread_id: String,
         outcome: super::ThreadPromptOutcome,
         effects: Vec<CoreEffect>,
         record: Option<KernelEvent>,
     ) -> CoreDispatchOutcome {
-        let mut events = vec![AppEvent::ThreadPromptSubmitted { thread_id, outcome }];
-        events.extend(record.map(AppEvent::KernelRecorded));
+        if let Some(record) = record {
+            self.conversation_turn.record_kernel_event(record);
+        }
         CoreDispatchOutcome {
-            events,
+            events: vec![AppEvent::ThreadPromptSubmitted { thread_id, outcome }],
             effects,
             snapshot: self.shared_snapshot(),
         }
@@ -1767,13 +1819,9 @@ impl CoreController {
             return self.unchanged_outcome();
         };
         if self.planning_task_is_finished(&prompt.task_id) {
-            return CoreDispatchOutcome {
-                events: vec![AppEvent::KernelRecorded(
-                    prompt.settled(ThreadPromptSettlement::TaskFinished),
-                )],
-                effects: Vec::new(),
-                snapshot: self.shared_snapshot(),
-            };
+            self.conversation_turn
+                .record_kernel_event(prompt.settled(ThreadPromptSettlement::TaskFinished));
+            return self.unchanged_outcome();
         }
         let thread_id = prompt.thread_id.clone();
         let (outcome, effects, record) = self.submit_thread_prompt_handoff(prompt, false);
@@ -2088,6 +2136,51 @@ fn stop_effects_from_intents(intents: Vec<StopEffectIntent>) -> Vec<CoreEffect> 
  * `apply_manual_prompt_intake_outcome` 과 같은 규칙이다. planning 초안 검토가 필요하면 원격 클라이언트는 검토할 수
  * 없으므로 실패로 알린다.
  */
+fn thread_turns(activity: &[super::ThreadActivitySummary]) -> Vec<(String, Option<String>)> {
+    activity
+        .iter()
+        .map(|thread| (thread.thread_id.clone(), thread.active_turn_id.clone()))
+        .collect()
+}
+
+fn turn_origin(origin: super::CorePromptOrigin) -> kernel_event::TurnOrigin {
+    match origin {
+        super::CorePromptOrigin::Manual => kernel_event::TurnOrigin::Manual,
+        super::CorePromptOrigin::ManualIntake => kernel_event::TurnOrigin::ManualIntake,
+        super::CorePromptOrigin::AutoFollow => kernel_event::TurnOrigin::AutoFollow,
+    }
+}
+
+fn post_turn_route(resolution: super::PostTurnRouteResolution) -> kernel_event::PostTurnRoute {
+    match resolution {
+        super::PostTurnRouteResolution::AutoSubmit => kernel_event::PostTurnRoute::AutoSubmit,
+        super::PostTurnRouteResolution::ParallelConsumed => {
+            kernel_event::PostTurnRoute::ParallelConsumed
+        }
+        super::PostTurnRouteResolution::NoContinuation => {
+            kernel_event::PostTurnRoute::NoContinuation
+        }
+    }
+}
+
+fn thread_prompt_rejection(
+    admission: &super::ThreadPromptAdmission,
+) -> Option<kernel_event::ThreadPromptRejection> {
+    use kernel_event::ThreadPromptRejection as Rejection;
+    match admission {
+        super::ThreadPromptAdmission::Accepted { .. } => None,
+        super::ThreadPromptAdmission::RejectedBusy => Some(Rejection::Busy),
+        super::ThreadPromptAdmission::RejectedPreparationActive { .. } => {
+            Some(Rejection::PreparationActive)
+        }
+        super::ThreadPromptAdmission::RejectedUnknownThread => Some(Rejection::UnknownThread),
+        super::ThreadPromptAdmission::RejectedParallelMode => Some(Rejection::ParallelMode),
+        super::ThreadPromptAdmission::RejectedParallelModeUnknown => {
+            Some(Rejection::ParallelModeUnknown)
+        }
+    }
+}
+
 fn prepared_thread_prompt_handoff(
     result: crate::domain::planning::ManualPromptOutcome,
     disposition: ManualPromptCompletionDisposition,
@@ -10155,7 +10248,7 @@ mod tests {
         assert!(prepared.effects.is_empty(), "the other turn still runs");
         assert!(
             matches!(
-                kernel_records(&prepared).as_slice(),
+                queue_records(controller).as_slice(),
                 [KernelEvent::ThreadPromptQueued(queued)]
                     if queued.thread_id == "thread-beta" && queued.task_id == "task-1"
             ),
@@ -10169,29 +10262,104 @@ mod tests {
         running
     }
 
-    fn kernel_records(outcome: &CoreDispatchOutcome) -> Vec<KernelEvent> {
-        outcome
-            .events
-            .iter()
-            .filter_map(|event| match event {
-                AppEvent::KernelRecorded(record) => Some(record.clone()),
-                _ => None,
-            })
+    /// 남긴 프롬프트의 사건만 꺼낸다. 다른 사건(턴 제출 등)은 버린다.
+    fn queue_records(controller: &mut CoreController) -> Vec<KernelEvent> {
+        controller
+            .take_kernel_records()
+            .into_iter()
+            .filter(|record| kernel_event::THREAD_PROMPT_QUEUE_KINDS.contains(&record.kind()))
             .collect()
     }
 
-    fn settlement_of(outcome: &CoreDispatchOutcome) -> Option<ThreadPromptSettlement> {
-        match kernel_records(outcome).as_slice() {
+    fn settlement_of(controller: &mut CoreController) -> Option<ThreadPromptSettlement> {
+        match queue_records(controller).as_slice() {
             [KernelEvent::ThreadPromptSettled { settlement, .. }] => Some(*settlement),
             _ => None,
         }
     }
 
     #[test]
+    fn the_core_records_turn_lifecycle_route_and_prompt_rejection_decisions() {
+        // plan 19 Q3-2: decisions go to the record buffer, not to the client events.
+        use kernel_event::{PostTurnRoute, ThreadPromptRejection, TurnOrigin};
+        let mut controller = hosted_controller(false);
+        let turn = start_test_turn(&mut controller, "thread-1", "turn-1");
+        assert_eq!(
+            controller.take_kernel_records(),
+            vec![
+                KernelEvent::TurnSubmitted {
+                    thread_id: "thread-1".to_string(),
+                    submission: turn.generation,
+                    origin: TurnOrigin::Manual,
+                },
+                KernelEvent::TurnStarted {
+                    thread_id: "thread-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                },
+            ]
+        );
+
+        let ended = controller.handle_input(test_turn_stream_input(
+            turn,
+            TurnStreamEvent::TurnTerminal {
+                receipt: confirmed_terminal_receipt("thread-1", "turn-1", Vec::new()),
+                execution_snapshot_capture: None,
+            },
+        ));
+        assert_eq!(
+            controller.take_kernel_records(),
+            vec![KernelEvent::TurnEnded {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+            }]
+        );
+        assert!(
+            ended
+                .events
+                .iter()
+                .all(|event| !format!("{event:?}").contains("TurnEnded")),
+            "records never ride on the client events"
+        );
+
+        let post_turn = start_post_turn_evaluation(&mut controller, "turn-1");
+        let correlation = post_turn_effect_correlation(&post_turn);
+        controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PostTurnEvaluationCompleted {
+                correlation: correlation.clone(),
+                execution: Box::new(sample_post_turn_execution()),
+            },
+        ));
+        controller.take_kernel_records();
+        controller.handle_input(CoreInput::Command(
+            AppCommand::ResolvePostTurnContinuation {
+                correlation,
+                resolution: PostTurnRouteResolution::NoContinuation,
+            },
+        ));
+        assert_eq!(
+            controller.take_kernel_records(),
+            vec![KernelEvent::PostTurnRouted {
+                thread_id: "thread-1".to_string(),
+                completed_turn_id: "turn-1".to_string(),
+                route: PostTurnRoute::NoContinuation,
+            }]
+        );
+
+        controller.handle_input(thread_prompt("thread-9", "hello"));
+        assert_eq!(
+            controller.take_kernel_records(),
+            vec![KernelEvent::ThreadPromptRejected {
+                thread_id: "thread-9".to_string(),
+                reason: ThreadPromptRejection::UnknownThread,
+            }]
+        );
+    }
+
+    #[test]
     fn a_restored_queued_thread_prompt_is_resubmitted_when_the_kernel_is_idle() {
         // plan 19 Q3-1: a new kernel restores the open queued prompts from the event log.
         let mut controller = hosted_controller(false);
-        let restored =
+        let _ =
             controller.handle_input(CoreInput::Command(AppCommand::RestoreQueuedThreadPrompts(
                 vec![crate::domain::kernel_event::QueuedThreadPrompt {
                     thread_id: "thread-beta".to_string(),
@@ -10205,7 +10373,7 @@ mod tests {
                 }],
             )));
         assert!(
-            kernel_records(&restored).is_empty(),
+            queue_records(&mut controller).is_empty(),
             "a restored prompt is already recorded"
         );
         assert_eq!(
@@ -10221,7 +10389,7 @@ mod tests {
                     && request.prompt == "planned prompt"
         ));
         assert_eq!(
-            settlement_of(&resubmitted),
+            settlement_of(&mut controller),
             Some(ThreadPromptSettlement::Submitted)
         );
     }
@@ -10273,7 +10441,7 @@ mod tests {
                     && request.prompt_origin == CorePromptOrigin::ManualIntake
         ));
         assert_eq!(
-            settlement_of(&resubmitted),
+            settlement_of(&mut controller),
             Some(ThreadPromptSettlement::Submitted)
         );
         assert_eq!(controller.next_post_turn_host_step(), None);
@@ -10306,7 +10474,7 @@ mod tests {
         }));
         assert!(settled.effects.is_empty(), "no main-session turn starts");
         assert_eq!(
-            settlement_of(&settled),
+            settlement_of(&mut controller),
             Some(ThreadPromptSettlement::ParallelSlots)
         );
         assert_eq!(controller.next_post_turn_host_step(), None);
@@ -10347,7 +10515,7 @@ mod tests {
             "the finished task does not run again"
         );
         assert_eq!(
-            settlement_of(&dropped),
+            settlement_of(&mut controller),
             Some(ThreadPromptSettlement::TaskFinished)
         );
         assert!(!controller.has_remaining_work());
