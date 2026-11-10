@@ -156,7 +156,13 @@ has reported the parallel mode: the runtime host sends the host-only `SetParalle
 Core whenever the parallel control plane value changes, checked before each Core input. When the
 preparation ends, Core checks the mode again; if parallel mode started meanwhile, or another turn
 took the slot, Core starts no turn and reports the queued planning task id so a client does not
-resend the prompt. Reopening a thread
+resend the prompt. When another turn (or a pending stop) refused the submission, Core keeps the
+prepared prompt in memory. The host's post-turn reconcile offers `ResubmitQueuedThreadPrompt` once
+every session is idle and no preparation runs, so auto-follow continues first. Core then submits the
+prompt once and reports `submitted` (or `queued` again if that also fails). It submits nothing when
+parallel mode started (the slots take the task) or when the planning projection shows the task done
+or cancelled. The queued prompt counts as remaining work and is lost on restart; the task stays
+queued. Reopening a thread
 shows its live runtime state; its transcript is reloaded from the provider.
 
 `CoreRuntime`, its effect executor, and its input mailbox are crate-private implementation details,
