@@ -122,13 +122,19 @@ impl CoreController {
 
     pub(in crate::core) fn handle_input(&mut self, input: CoreInput) -> CoreDispatchOutcome {
         let turns_before = self.conversation_turn.published_thread_turns();
+        let ending = turn_end_outcome(&input);
         let outcome = self.handle_input_inner(input);
         let mut outcome = self.with_conversation_runtime_authority(outcome);
         self.record_turn_submissions(&outcome.effects);
         if let Some(activity) = self.conversation_turn.take_thread_activity_change() {
             // 턴의 시작과 끝은 thread 요약의 변화로 기록한다 (plan 19 Q3-2). 요약은 보지 않는 thread 도 담는다.
-            for event in kernel_event::turn_events_between(&turns_before, &thread_turns(&activity))
+            for mut event in
+                kernel_event::turn_events_between(&turns_before, &thread_turns(&activity))
             {
+                // 이 입력이 턴의 끝을 알렸으면 그 결과를 붙인다 (plan 19 Q3-3b). 턴은 한 번에 하나만 돈다.
+                if let KernelEvent::TurnEnded { outcome, .. } = &mut event {
+                    *outcome = ending;
+                }
                 self.conversation_turn.record_kernel_event(event);
             }
             outcome
@@ -2136,6 +2142,25 @@ fn stop_effects_from_intents(intents: Vec<StopEffectIntent>) -> Vec<CoreEffect> 
  * `apply_manual_prompt_intake_outcome` 과 같은 규칙이다. planning 초안 검토가 필요하면 원격 클라이언트는 검토할 수
  * 없으므로 실패로 알린다.
  */
+/// 이 입력이 턴의 끝을 알리면 그 결과이다 (plan 19 Q3-3b).
+fn turn_end_outcome(input: &CoreInput) -> Option<kernel_event::TurnEndOutcome> {
+    use crate::domain::turn_terminal::ConversationTurnTerminalOutcome as Terminal;
+    use kernel_event::TurnEndOutcome;
+    let CoreInput::ConversationStreamUpdated { event, .. } = input else {
+        return None;
+    };
+    match event {
+        TurnStreamEvent::TurnTerminal { receipt, .. } => Some(match receipt.outcome {
+            Terminal::Completed => TurnEndOutcome::Completed,
+            Terminal::Interrupted => TurnEndOutcome::Interrupted,
+            Terminal::Failed { .. } => TurnEndOutcome::Failed,
+            Terminal::Unknown { .. } => TurnEndOutcome::Unknown,
+        }),
+        TurnStreamEvent::Failed { .. } => Some(TurnEndOutcome::Failed),
+        _ => None,
+    }
+}
+
 fn thread_turns(activity: &[super::ThreadActivitySummary]) -> Vec<(String, Option<String>)> {
     activity
         .iter()
@@ -10311,6 +10336,7 @@ mod tests {
             vec![KernelEvent::TurnEnded {
                 thread_id: "thread-1".to_string(),
                 turn_id: "turn-1".to_string(),
+                outcome: Some(kernel_event::TurnEndOutcome::Completed),
             }]
         );
         assert!(

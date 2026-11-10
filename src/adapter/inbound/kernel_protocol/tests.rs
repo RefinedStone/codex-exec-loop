@@ -459,6 +459,35 @@ fn command_response_names_why_the_kernel_refused_a_command() {
 }
 
 #[test]
+fn a_recorded_event_carries_the_log_sequence_for_the_history_cursor() {
+    // plan 19 Q3-3b: the live event and the history page share one record shape.
+    let event = KernelEvent::Recorded(crate::domain::kernel_event::RecordedKernelEvent {
+        sequence: 42,
+        recorded_at: "2026-11-11T00:00:00Z".to_string(),
+        event: crate::domain::kernel_event::KernelEvent::TurnEnded {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            outcome: Some(crate::domain::kernel_event::TurnEndOutcome::Interrupted),
+        },
+    });
+    assert_eq!(
+        serde_json::to_value(&event).expect("the event should serialize"),
+        json!({
+            "type": "recorded",
+            "sequence": 42,
+            "recorded_at": "2026-11-11T00:00:00Z",
+            "event": {
+                "kind": "turn_ended",
+                "thread_id": "thread-1",
+                "turn_id": "turn-1",
+                "outcome": "interrupted",
+            },
+        })
+    );
+    assert!(describe().events.contains(&"recorded".to_string()));
+}
+
+#[test]
 fn a_history_query_reads_after_its_cursor_and_answers_with_the_page() {
     // plan 19 Q3-3: the gateway reads the page from the kernel log and the answer carries it.
     let first: QueryRequest = serde_json::from_value(json!({ "query": { "type": "history" } }))

@@ -1,14 +1,24 @@
 use anyhow::Result;
 
-use crate::domain::kernel_event::{KernelEvent, KernelEventPage};
+use crate::domain::kernel_event::{KernelEvent, KernelEventPage, RecordedKernelEvent};
 
 /*
  * 커널의 판단 사건을 저장소별 추가 전용 기록에 쓰고 읽는다 (plan 19 Q3-1). 작업 공간으로 그 저장소의 기록을 찾는다.
  * 읽을 때는 기록 순서를 지킨다. 이 binary 가 모르는 사건(더 새 binary 가 쓴 것)은 건너뛴다.
  */
 pub trait KernelEventLogPort: Send + Sync {
-    /// 사건을 쓴다. 남김 종류가 아닌 오래된 사건은 최근 `RETAINED_KERNEL_EVENTS` 개만 남긴다 (Q3-3).
-    fn append_kernel_events(&self, workspace_dir: &str, events: &[KernelEvent]) -> Result<()>;
+    /// 사건을 커널이 정한 sequence 와 시각 그대로 쓴다 (Q3-3b). 남김 종류가 아닌 오래된 사건은 최근
+    /// `RETAINED_KERNEL_EVENTS` 개만 남긴다 (Q3-3).
+    fn append_kernel_events(
+        &self,
+        workspace_dir: &str,
+        records: &[RecordedKernelEvent],
+    ) -> Result<()>;
+
+    /// 기록의 가장 큰 sequence 이다. 비었으면 0 이다 (Q3-3b). 커널은 그 다음 수부터 정한다. 기본값은 0 이다 (시험용 기록).
+    fn last_kernel_event_sequence(&self, _workspace_dir: &str) -> Result<i64> {
+        Ok(0)
+    }
 
     /// 이 종류(`KernelEvent::kind`)의 사건만 기록 순서대로 읽는다.
     fn load_kernel_events(&self, workspace_dir: &str, kinds: &[&str]) -> Result<Vec<KernelEvent>>;

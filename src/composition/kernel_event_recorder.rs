@@ -7,10 +7,10 @@ use std::thread::JoinHandle;
 
 use crate::application::port::outbound::kernel_event_log_port::KernelEventLogPort;
 use crate::composition::core_effect_worker::spawn_worker_with_panic_fallback;
-use crate::domain::kernel_event::KernelEvent;
+use crate::domain::kernel_event::RecordedKernelEvent;
 
 pub(crate) struct KernelEventRecorder {
-    batches: Option<Sender<Vec<KernelEvent>>>,
+    batches: Option<Sender<Vec<RecordedKernelEvent>>>,
     writer: Option<JoinHandle<()>>,
 }
 
@@ -18,7 +18,7 @@ impl KernelEventRecorder {
     /// 그 커널의 작업 공간에 쓴다 (plan 19 Q3-2). 커널은 저장소 하나의 것이므로 모든 사건이 같은 기록에 간다. 복구도
     /// 같은 작업 공간에서 읽는다.
     pub(crate) fn start(log: Arc<dyn KernelEventLogPort>, workspace_dir: String) -> Self {
-        let (batches, received) = mpsc::channel::<Vec<KernelEvent>>();
+        let (batches, received) = mpsc::channel::<Vec<RecordedKernelEvent>>();
         let writer = spawn_worker_with_panic_fallback(
             move || {
                 for batch in received {
@@ -33,18 +33,18 @@ impl KernelEventRecorder {
         }
     }
 
-    pub(crate) fn record(&self, events: Vec<KernelEvent>) {
-        if events.is_empty() {
+    pub(crate) fn record(&self, records: Vec<RecordedKernelEvent>) {
+        if records.is_empty() {
             return;
         }
         if let Some(batches) = &self.batches {
-            let _ = batches.send(events);
+            let _ = batches.send(records);
         }
     }
 }
 
 /// 한 dispatch 의 사건을 한 transaction 으로 쓴다. 실패하면 그 묶음을 버리고 다음 묶음을 쓴다.
-fn write_batch(log: &dyn KernelEventLogPort, workspace_dir: &str, batch: &[KernelEvent]) {
+fn write_batch(log: &dyn KernelEventLogPort, workspace_dir: &str, batch: &[RecordedKernelEvent]) {
     if let Err(error) = log.append_kernel_events(workspace_dir, batch) {
         tracing::warn!(
             events = batch.len(),
@@ -69,11 +69,12 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
+    use crate::domain::kernel_event::KernelEvent;
 
     /// 처음 쓰기 한 번은 실패한다.
     #[derive(Default)]
     struct FlakyLog {
-        stored: Mutex<Vec<(String, KernelEvent)>>,
+        stored: Mutex<Vec<(String, RecordedKernelEvent)>>,
         failed_once: Mutex<bool>,
     }
 
@@ -81,7 +82,7 @@ mod tests {
         fn append_kernel_events(
             &self,
             workspace_dir: &str,
-            events: &[KernelEvent],
+            events: &[RecordedKernelEvent],
         ) -> anyhow::Result<()> {
             let mut failed_once = self.failed_once.lock().expect("flag should lock");
             if !*failed_once {
@@ -106,10 +107,14 @@ mod tests {
         }
     }
 
-    fn started(turn_id: &str) -> KernelEvent {
-        KernelEvent::TurnStarted {
-            thread_id: "thread-1".to_string(),
-            turn_id: turn_id.to_string(),
+    fn started(turn_id: &str) -> RecordedKernelEvent {
+        RecordedKernelEvent {
+            sequence: turn_id.len() as i64,
+            recorded_at: "now".to_string(),
+            event: KernelEvent::TurnStarted {
+                thread_id: "thread-1".to_string(),
+                turn_id: turn_id.to_string(),
+            },
         }
     }
 
