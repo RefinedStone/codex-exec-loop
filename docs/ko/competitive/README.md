@@ -24,7 +24,7 @@ Akra 기준: `0c94f7e8b4549c2358f8b6d4b0c1ebc7e206dd48` (`prerelease`)
 | 제품 | 현재 기준 | 핵심 위협 |
 | --- | --- | --- |
 | [OpenAI Codex](../../competitive/upstream-codex/README.md) | v0.147.0 | upstream runtime·protocol의 빠른 변화 |
-| [Senpi + OmO Native](../../competitive/omo-native/README.md) | Senpi v2026.8.7, 설치된 OmO dev adapter | 캐시 친화성, 토큰 관측, 장기 child session |
+| [OmO](../../competitive/omo-native/README.md) | harness `04ba4a70` (2026-11-10), Desktop 2026.1025.3 beta | 재시작 뒤 이어지는 goal·child 상태, Codex 플러그인 판, 데스크톱 기능 폭 |
 | [jcode](../../competitive/jcode/README.md) | v0.68.0 | native multi-session harness, desktop, 성능 계측 |
 | [OpenCode](../../competitive/opencode/README.md) | v1.18.15 | TUI/server/desktop 연속성과 넓은 생태계 |
 | [Orca](../../competitive/orca/README.md) | v1.4.176 | worktree 중심 desktop fleet와 복구 UX |

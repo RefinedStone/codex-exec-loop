@@ -32,7 +32,7 @@ Provider count, tool count, and agent count are not product goals by themselves.
 | Product | Current pin | Previous audited pin | Why it matters to Akra |
 | --- | --- | --- | --- |
 | [OpenAI Codex](upstream-codex/README.md) | [v0.147.0](https://github.com/openai/codex/releases/tag/rust-v0.147.0), `be6e8eac029b183056b7e4402879f15d2c85f61b` | v0.144.1 | upstream runtime and protocol authority |
-| [Senpi + OmO Native](omo-native/README.md) | Senpi [v2026.8.7](https://github.com/code-yeongyu/senpi/releases/tag/v2026.8.7); OmO public v4.19.4 plus installed public-source dev adapter | new | cache affinity, context accounting, durable child sessions, token observability |
+| [OmO](omo-native/README.md) | harness `04ba4a7081e2877057b6ba67e0ce933beb06930e` (2026-11-10); Desktop 2026.1025.3 beta with OmO v5.1.46 | Senpi v2026.8.7, OmO v4.19.4 | durable goal/child state, Codex plugin edition, desktop breadth, cache observability |
 | [jcode](jcode/README.md) | [v0.68.0](https://github.com/1jehuang/jcode/releases/tag/v0.68.0), `fcf53909f8fe3b8cb1167dc3a03b178b0a635f39` | v0.43.0 | native multi-session harness, desktop, performance instrumentation |
 | [OpenCode](opencode/README.md) | [v1.18.15](https://github.com/anomalyco/opencode/releases/tag/v1.18.15), `d7b115f623760e68a4749d16508a9eca350f246f` | v1.17.18 | broad TUI/server/desktop harness and session continuity |
 | [Orca](orca/README.md) | [v1.4.176](https://github.com/stablyai/orca/releases/tag/v1.4.176), `02cea8a51ac3b69fcda7fe8ccc4f3ed0f68c445b` | v1.4.137 | worktree-first desktop fleet, terminal recovery, remote/mobile reach |
