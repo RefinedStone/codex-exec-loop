@@ -1506,6 +1506,9 @@ mod timeout_policy_tests {
     use std::path::{Path, PathBuf};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+    /// 시간 초과를 보지 않는 시험의 대기 한도이다. 전체 시험을 병렬로 돌리면 가짜 curl 시작이 1초를 넘을 수 있다.
+    const NON_TIMEOUT_TEST_WAIT: Duration = Duration::from_secs(10);
+
     #[test]
     fn gh_auth_token_timeout_degrades_to_none() {
         let root = unique_temp_dir("review-poller-gh-auth-timeout");
@@ -1618,7 +1621,7 @@ printf '{{"ok":true}}'
             api_base_url: "https://api.test".to_string(),
             user_agent: "akra-test".to_string(),
             token: "secret-token".to_string(),
-            subprocess_timeout: std::time::Duration::from_secs(1),
+            subprocess_timeout: NON_TIMEOUT_TEST_WAIT,
         };
 
         let body = adapter
@@ -1668,7 +1671,7 @@ printf 'HTTP/2 200\r\nX-RateLimit-Remaining: 4999\r\n\r\n{{"data":{{}}}}{}200'
             api_base_url: "https://api.test".to_string(),
             user_agent: "akra-test".to_string(),
             token: "secret-token".to_string(),
-            subprocess_timeout: std::time::Duration::from_secs(1),
+            subprocess_timeout: NON_TIMEOUT_TEST_WAIT,
         };
         let request =
             r#"{"operationName":"AkraPullRequestReviewThreads","variables":{"owner":"acme"}}"#;
