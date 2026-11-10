@@ -663,7 +663,8 @@ kernel releases it after the host thread ends.
 covers only the map lookup; each repository entry has its own lock, so a slow kernel start blocks
 only attaches to the same repository. The kernel workspace is the primary checkout of the repository,
 whatever worktree attached first; an attach from inside the parallel pool (slot worktrees) is
-refused. The Gateway session routes `akra/kernel/*` to `src/adapter/inbound/gateway/kernel.rs`. A
+refused, and so is an attach to a repository without a primary checkout (a bare repository, or a
+primary checkout without `.git`), because its pool location would follow the attaching worktree. The Gateway session routes `akra/kernel/*` to `src/adapter/inbound/gateway/kernel.rs`. A
 per-connection task handles kernel requests in order and sends the answers through the connection
 outbox, so the read loop keeps relaying app-server messages while a kernel call waits. Kernel calls
 run through `spawn_blocking` with deadlines (attach 60 s, command and query 10 s; error `-32013`).

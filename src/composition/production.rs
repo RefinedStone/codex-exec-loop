@@ -394,23 +394,33 @@ pub(crate) struct RepositoryKernelTarget {
 }
 
 /// `workspace_dir` 가 속한 저장소의 커널 자리를 찾는다. 잠금을 잡지 않는다. 병렬 pool 안의 worktree(slot,
-/// 통합)는 커널이 관리하는 작업 공간이므로 거절한다.
+/// 통합)는 커널이 관리하는 작업 공간이므로 거절한다. 대표 checkout 이 없는 저장소(bare 저장소, 대표 checkout 의
+/// `.git` 이 없음)도 거절한다. 그 저장소는 처음 붙은 worktree 에 따라 병렬 pool 위치가 바뀌기 때문이다.
 pub(crate) fn repository_kernel_target(workspace_dir: &str) -> Result<RepositoryKernelTarget> {
+    let Some(primary_checkout) =
+        SqlitePlanningAuthorityAdapter::resolve_primary_checkout_root(workspace_dir)?
+    else {
+        anyhow::bail!(
+            "`{workspace_dir}` belongs to a repository without a primary checkout (a bare \
+             repository, or the primary checkout lost its `.git`). The Akra kernel needs a stable \
+             primary checkout for its parallel pool; attach from a regular clone instead"
+        )
+    };
     let location =
         SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace_dir)?;
     if crate::application::service::parallel_mode::workspace_is_inside_parallel_pool(
-        Path::new(&location.canonical_repo_root),
+        &primary_checkout,
         Path::new(&location.workspace_root),
     ) {
         anyhow::bail!(
             "`{workspace_dir}` is an Akra parallel slot worktree. Attach from the repository checkout \
              `{}` instead; the repository kernel manages its slot worktrees",
-            location.canonical_repo_root
+            primary_checkout.display()
         )
     }
     Ok(RepositoryKernelTarget {
         repository_key: location.repository_identity,
-        workspace_root: location.canonical_repo_root,
+        workspace_root: primary_checkout.display().to_string(),
     })
 }
 

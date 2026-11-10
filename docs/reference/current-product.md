@@ -279,7 +279,8 @@ the desktop app itself is not shipped yet.
   with a workspace and attaches to the kernel of the repository that holds it. The Gateway builds that
   kernel on first attach and keeps it after clients leave, so auto-follow and parallel dispatch keep
   running. Worktrees of one repository share one kernel, which works in the primary checkout. An
-  attach from an Akra parallel slot worktree fails. If another process (a TUI) runs the kernel of that
+  attach from an Akra parallel slot worktree, or to a repository without a primary checkout (a bare
+  repository), fails. If another process (a TUI) runs the kernel of that
   repository, attach fails with `-32012`. After attach the client sends `akra/kernel/command` and
   `akra/kernel/query` and receives `akra/kernel/event` notifications; requests before attach fail
   with `-32011`, and a kernel that does not answer in time fails with `-32013` (a command may still

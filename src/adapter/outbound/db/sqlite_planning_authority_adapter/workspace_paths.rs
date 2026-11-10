@@ -58,6 +58,9 @@ struct RepositoryIncarnation {
 #[derive(Debug, Clone)]
 struct RepositoryPathResolution {
     canonical_repo_root: PathBuf,
+    // 대표 checkout 이다. linked worktree 만 있고 대표 checkout 이 없으면(bare 저장소, 대표 checkout 의 `.git` 이
+    // 없음) `None` 이다. 그때 `canonical_repo_root` 는 worktree 마다 다르다.
+    primary_checkout_root: Option<PathBuf>,
     canonical_common_dir: PathBuf,
     repository_incarnation: RepositoryIncarnation,
     repository_identity: String,
@@ -92,6 +95,16 @@ impl SqlitePlanningAuthorityAdapter {
     호출자가 Git repository 밖에서도 같은 API를 호출할 수 있기 때문이다. 즉 이 함수는
     "repo-aware이면 repo root, 아니면 workspace root"라는 adapter 경계의 기준점을 제공한다.
     */
+    /// 커널 작업 공간의 기준 checkout 이다 (plan 18 K3-5). git 이 아닌 폴더는 정규화한 그 폴더이고, git 저장소는
+    /// 대표 checkout 이다. 대표 checkout 이 없으면 `None` 이다. 그 저장소는 어느 worktree 에서 붙느냐에 따라 병렬
+    /// pool 위치가 바뀌므로 커널의 기준으로 쓰지 않는다.
+    pub(crate) fn resolve_primary_checkout_root(workspace_dir: &str) -> Result<Option<PathBuf>> {
+        Ok(match resolve_repository_paths(workspace_dir)? {
+            Some(paths) => paths.primary_checkout_root,
+            None => Some(canonicalize_best_effort(Path::new(workspace_dir))),
+        })
+    }
+
     pub(crate) fn resolve_active_workspace_root(workspace_dir: &str) -> PathBuf {
         Self::resolve_authority_location_from_workspace(workspace_dir)
             .map(|location| PathBuf::from(location.canonical_repo_root))
@@ -531,13 +544,15 @@ fn resolve_repository_paths_uncached(
         canonicalize_best_effort(&absolutize_path(workspace_path, Path::new(&git_dir)));
     let primary_checkout_root = resolve_primary_checkout_root(workspace_dir, &canonical_common_dir);
     let worktrees_root = canonical_common_dir.join("worktrees");
-    let canonical_repo_root = if canonical_git_dir.starts_with(&worktrees_root) {
-        primary_checkout_root
-            .clone()
-            .unwrap_or_else(|| canonical_toplevel.clone())
+    let is_linked_worktree = canonical_git_dir.starts_with(&worktrees_root);
+    let primary_checkout = if is_linked_worktree {
+        primary_checkout_root.clone()
     } else {
-        canonical_toplevel
+        Some(canonical_toplevel.clone())
     };
+    let canonical_repo_root = primary_checkout
+        .clone()
+        .unwrap_or_else(|| canonical_toplevel.clone());
     let (storage_namespace_key, uses_legacy_namespace_hash) = primary_checkout_root
         .map(|root| (root, true))
         .unwrap_or_else(|| (canonical_common_dir.clone(), false));
@@ -553,6 +568,7 @@ fn resolve_repository_paths_uncached(
 
     Ok(Some(RepositoryPathResolution {
         canonical_repo_root,
+        primary_checkout_root: primary_checkout,
         canonical_common_dir,
         repository_incarnation,
         repository_identity,

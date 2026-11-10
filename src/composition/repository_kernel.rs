@@ -513,6 +513,41 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_repository_without_a_primary_checkout_does_not_create_a_kernel() {
+        // K3-5 second review: without a primary checkout each worktree is its own root, so the parallel
+        // pool would move with the worktree that attached first.
+        let folder = temp_folder("bare-repository");
+        let source = git_repository(&folder);
+        let bare = PathBuf::from(&folder.path).join("bare.git");
+        let bare_text = bare.display().to_string();
+        run_git(
+            &source,
+            &[
+                "clone",
+                "-q",
+                "--bare",
+                &source.display().to_string(),
+                &bare_text,
+            ],
+        );
+        let worktree = add_worktree(&bare, &PathBuf::from(&folder.path).join("work"), "work");
+        let registry = RepositoryKernelRegistry::default();
+
+        let Err(error) = registry.attach(&worktree) else {
+            panic!("a repository without a primary checkout must not create a kernel");
+        };
+
+        assert!(
+            format!("{error:#}").contains("without a primary checkout"),
+            "{error:#}"
+        );
+        assert!(
+            production::acquire_repository_kernel_lock(&worktree).is_ok(),
+            "the refused attach took no lock"
+        );
+    }
+
+    #[test]
     fn a_slow_kernel_start_does_not_block_another_repository() {
         let slow = temp_folder("slow-repository");
         let other = temp_folder("other-repository");

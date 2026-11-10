@@ -221,8 +221,10 @@ K3-5 병합 범위(`526f93a3..43e1d5c5`)를 리뷰했다. 지적 8개를 모두 
    `a_late_worker_does_not_release_a_slot_that_a_new_epoch_leased_again`.
 4. 커널 작업 공간. 처음 붙은 경로가 커널의 병렬 작업 공간이 됐고, slot worktree 에서 붙어도 커널을 만들었다. 이제
    작업 공간은 저장소의 대표 checkout(planning 기준 데이터의 `canonical_repo_root`)이고, 병렬 pool 안에서 붙으면
-   이유와 함께 거절한다. 시험: `a_kernel_attached_from_a_linked_worktree_works_in_the_primary_checkout`,
-   `a_parallel_slot_worktree_does_not_create_a_kernel`.
+   이유와 함께 거절한다. 대표 checkout 이 없는 저장소(bare 저장소, 대표 checkout 의 `.git` 이 없음)는 worktree 마다
+   기준이 달라 처음 붙은 worktree 에 따라 병렬 pool 위치가 바뀐다. 그래서 그런 저장소의 붙기는 이유와 함께 거절한다
+   (두 번째 리뷰). 시험: `a_kernel_attached_from_a_linked_worktree_works_in_the_primary_checkout`,
+   `a_parallel_slot_worktree_does_not_create_a_kernel`, `a_repository_without_a_primary_checkout_does_not_create_a_kernel`.
 5. 접속 정리 2초. 커널 세션이 보내기 함 송신자를 쥐어, 클라이언트가 닫을 때마다 쓰기 작업이 2초 상한까지 기다렸다.
    이제 커널 요청 작업을 먼저 끝낸다. 시험: `a_client_close_ends_the_session_without_waiting_for_the_flush_timeout`.
 6. 떼어 낸 뒤 이벤트. 이전 이벤트 스레드가 최대 200ms 더 이벤트를 보냈고, 다시 붙으면 이벤트가 두 번 왔다. 이제

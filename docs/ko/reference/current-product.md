@@ -222,7 +222,7 @@ parallel, Git, GitHub 권위를 바꾸지 않고 재생하며 PR 검증 복구 �
 - 커널 프로토콜(`akra/kernel/*`, plan 18 K3 프로토콜 v0): 클라이언트가 작업 공간과 함께
   `akra/kernel/attach` 를 보내면 그 공간이 속한 저장소의 커널에 붙는다. Gateway 는 처음 붙을 때 커널을 만들고,
   클라이언트가 모두 떠나도 남겨 둔다. 그래서 자동 후속과 병렬 배분이 계속 돈다. 한 저장소의 worktree 들은 커널
-  하나를 함께 쓰고, 커널은 대표 checkout 에서 일한다. Akra 병렬 slot worktree 에서 붙으면 실패한다. 다른
+  하나를 함께 쓰고, 커널은 대표 checkout 에서 일한다. Akra 병렬 slot worktree 에서 붙거나 대표 checkout 이 없는 저장소(bare 저장소)에 붙으면 실패한다. 다른
   프로세스(TUI)가 그 저장소의 커널을 돌리면 attach 는 `-32012` 로 실패한다. 붙은 뒤에는 `akra/kernel/command`,
   `akra/kernel/query` 를 보내고 `akra/kernel/event` 알림을 받는다. 붙기 전 요청은 `-32011` 로, 커널이 시간 안에
   답하지 않으면 `-32013` 으로 실패한다(명령은 그 뒤에 처리될 수 있다). `akra/kernel/detach` 답 뒤에는 이벤트가
