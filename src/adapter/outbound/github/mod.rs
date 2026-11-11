@@ -6,9 +6,12 @@ pub mod pr_validation;
 // review_poller adapter는 PR review/comment activity를 읽는 outbound boundary다.
 // automation과 읽기 전용 polling을 별도 module로 나누어 GitHub 작업의 책임을 분리한다.
 pub mod review_poller;
+// resource_version adapter는 작업 컨텍스트 장부의 GitHub 문서가 바뀌었는지 `gh` 로 확인한다 (plan 22).
+pub mod resource_version;
 
 // automation re-export는 wiring code가 하위 파일명을 직접 의존하지 않고 adapter 이름만 import하게 한다.
 pub use self::automation::GithubAutomationAdapter;
 pub use self::pr_validation::GithubPrValidationAdapter;
 // review poller re-export도 같은 public surface를 제공해 composition이 port 구현체를 직접 주입하게 한다.
+pub use self::resource_version::GithubResourceVersionAdapter;
 pub use self::review_poller::GithubReviewPollerAdapter;
