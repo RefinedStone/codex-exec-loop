@@ -32,7 +32,16 @@ export function DocumentsPanel({ state, onRefresh, onOpenChanged }: { state: Thr
               <ul>
                 {group.documents.map((document) => (
                   <li key={`${document.kind}:${document.key}`} className="work-item" data-testid="documents-item">
-                    <a className="work-link" href={document.url} target="_blank" rel="noreferrer" title={document.url} onClick={() => document.changed && onOpenChanged(document)}>
+                    <a
+                      className="work-link"
+                      href={document.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      title={document.url}
+                      onClick={() => document.changed && onOpenChanged(document)}
+                      // 가운데 버튼도 문서를 연다. click 사건이 아니다.
+                      onAuxClick={(event) => event.button === 1 && document.changed && onOpenChanged(document)}
+                    >
                       {document.title}
                     </a>
                     <div className="work-meta">
