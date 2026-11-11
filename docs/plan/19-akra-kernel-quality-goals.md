@@ -262,20 +262,29 @@ Q3-7 결과 (`src/composition/kernel_host/simulation.rs`, 시험만 바꿨다):
   프롬프트가 큐에 남았을 때 재시작을 더 자주 고른다.
 - 확인: seed 5000개 통과.
 
-시뮬레이션이 찾은 커널 결함 (고치지 않았다, 제안):
+시뮬레이션이 찾은 커널 결함:
 
-- **중지가 끝나기 전에 새 대화를 열면 커널이 돌고 있는 턴을 잊는다.** 순서: 턴이 도는 중에 `RequestStopAllSessions`,
-  그 중지가 끝나기 전에 `InvalidateConversationLoad`. `reduce_conversation_invalidation` 은 중지가 진행 중인
-  session 을 뒤로 보내지 않고 그 자리에서 지운다 (`active_turn` 을 비우고 중지 요청을 무효로 만든다). 그 턴은
-  app-server 에서 끝까지 돌고, 커널은 남은 일이 없다고 답하며, 다른 턴을 함께 시작할 수 있다. 다른 대화를 여는
-  `LoadConversation` 은 같은 경우에 중지가 끝날 때까지 미룬다 (`Deferred`).
-- 재현: `submit_manual_turn` 의 `may_leave` 조건을 빼면 seed 1000개 중 26개가 I5(일이 있는데 없다고 답함) 또는
-  I1(두 번째 턴)로 실패한다. 예: seed 15 (I5), seed 496 (I1).
-- 이 순서는 TUI 에서만 가능하다 (커널 프로토콜에는 `InvalidateConversationLoad` 가 없다). 실제 가능성은 낮다. 중지
-  worker 는 곧 끝나므로 그 사이에 새 대화를 열어야 한다. 실제로는 중지가 이미 나갔으면 턴은 중단되고, 커널만 그 턴을
-  잊는다. 시뮬레이션은 이 순서를 피한다 (끝나지 않은 중지 시도가 있을 수 있으면 새 대화를 열지 않는다).
-  고치면 그 조건을 지운다. 고치는 방향: 새 대화도 `LoadConversation` 처럼 중지가 끝날 때까지 미루거나, 중지가 진행
-  중인 session 도 뒤로 보낸다.
+- **중지가 끝나기 전에 새 대화를 열면 커널이 돌고 있는 턴을 잊었다 (고쳤다, 2026-11-11).** 순서: 턴이 도는 중에
+  `RequestStopAllSessions`, 그 중지가 끝나기 전에 `InvalidateConversationLoad`. `reduce_conversation_invalidation`
+  은 중지가 진행 중인 session 을 뒤로 보내지 않고 그 자리에서 지웠다 (`active_turn` 을 비웠다). 커널은 남은 일이
+  없다고 답했고, 다른 턴을 함께 받았다. TUI 에서만 가능한 순서이다 (커널 프로토콜에는 이 명령이 없다).
+- 수정: 그 session 도 뒤로 보낸다. 중지 요청은 대화를 떠나므로 먼저 무효로 만든다 (다른 대화를 여는
+  `LoadConversation` 과 같은 규칙). 중지 완료는 뒤의 session 을 찾아가고 클라이언트에 알리지 않는다. 턴이 끝나면 그
+  session 은 사라진다. 회귀 시험: `a_new_conversation_during_a_pending_stop_keeps_the_running_turn` (중지 완료 뒤에도
+  남은 일이 있고 두 번째 턴을 거절한다. 수정 전에는 실패한다).
+- 끝나지 않은 중지 시도는 뒤의 session 에 있어도 새 턴을 막는다 (`RejectedStopPending`). 정지는 app-server 의 모든
+  턴에 닿는 신호라서, 무효가 되기 전에 worker 를 떠난 정지가 새 턴을 멈출 수 있기 때문이다. 이전에는 그 정지 요청이
+  보는 자리에 남아 같은 거절을 냈다. 회귀 시험: `a_pending_stop_of_a_left_conversation_still_blocks_new_turns`.
+- 시뮬레이션의 가짜 app-server 는 무효가 된 정지도 가끔 실행한 것으로 답한다 (worker 가 이미 보낸 경우).
+- 시뮬레이션의 회피 조건을 지웠다. 이제 이 순서를 직접 돈다. 수정을 빼면 seed 1000개 중 28개가 I5(일이 있는데
+  없다고 답함, 24개) 또는 I1(두 번째 턴, 4개)로 실패한다. 수정이 있으면 seed 5000개가 통과한다.
+- 남긴 것 (제안): 대화를 떠나면 진행 중인 중지 요청이 무효가 된다. 중지 worker 가 아직 요청을 보내지 않았으면 그
+  턴은 뒤에서 끝까지 돈다. 떠난 뒤에도 중지를 이어 가려면 중지 완료를 뒤의 session 에서 받는 규칙(클라이언트에
+  알리지 않음, 턴 시작 뒤의 재시도)을 정해야 한다. 지금은 중지의 첫 시도가 끝난 뒤에 떠나면 요청이 무효가 되지
+  않고, 턴 시작 뒤의 재시도 완료가 새 화면에 보인다 (이 변경 전부터 그랬다).
+- 인접한 가능성 (확인하지 않음, 제안): `complete_conversation_load` 도 보는 session 을 그 자리에서 바꾼다. 로드가
+  진행 중일 때 턴 제출이 들어오면 core 는 막지 않고, 완료 때 그 턴을 잊을 수 있다. 시뮬레이션은 아직
+  `LoadConversation` 을 모델하지 않는다.
 - 커널은 보지 않는 thread 에 낸 `SubmitTurn` 을 막지 않는다. 같은 thread 에 session 이 둘이 되면 뒤의 session 의 자동
   후속 취소가 보는 session 에 가서, 뒤의 session 이 `Queued` 로 남고 커널이 한가해지지 않는다. 지금 클라이언트는
   이 입력을 보내지 않는다. 막는 일은 명령 스펙(Q4)에서 정한다.
