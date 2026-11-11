@@ -201,7 +201,7 @@ impl TempAdminWorkspace {
 
     fn new_git(prefix: &str) -> Self {
         let workspace = Self::new(prefix);
-        let output = std::process::Command::new("git")
+        let output = crate::test_utils::git_command()
             .args(["init", "-q", workspace.path.as_str()])
             .output()
             .expect("git fixture initialization should run");
@@ -224,7 +224,7 @@ fn admin_test_router(workspace: &TempAdminWorkspace) -> Router {
 }
 
 fn write_rollout_evidence_fixture(workspace: &TempAdminWorkspace) {
-    let remote = std::process::Command::new("git")
+    let remote = crate::test_utils::git_command()
         .args([
             "-C",
             workspace.path.as_str(),

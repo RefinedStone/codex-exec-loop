@@ -165,7 +165,6 @@ mod tests {
     use std::fs;
     use std::path::Path;
     #[cfg(not(windows))]
-    use std::process::Command;
     use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -238,7 +237,7 @@ mod tests {
     #[test]
     fn git_backed_file_sync_uses_candidate_file_without_mutating_active_db_on_export() {
         let workspace = TempPlanningWorkspace::new("admin-file-sync-git-backed");
-        let output = Command::new("git")
+        let output = crate::test_utils::git_command()
             .args(["init", "-q", &workspace.path])
             .output()
             .expect("git init should run");
@@ -277,7 +276,7 @@ mod tests {
             !manifest.exists(),
             "git-backed export baseline must stay in the repo-scoped DB"
         );
-        let status = Command::new("git")
+        let status = crate::test_utils::git_command()
             .args([
                 "-C",
                 &workspace.path,

@@ -166,7 +166,6 @@ fn describe_holder_record(body: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    use std::process::Command;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     /// 시험이 끝나면 지우는 임시 폴더이다.
@@ -191,7 +190,7 @@ mod tests {
     }
 
     fn git(directory: &Path, args: &[&str]) {
-        let output = Command::new("git")
+        let output = crate::test_utils::git_command()
             .args(args)
             .current_dir(directory)
             .output()

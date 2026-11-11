@@ -8,6 +8,22 @@ use std::process::Command;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+/// 시험의 git 명령이다. 시험을 돌린 셸의 `GIT_*`(예: git hook 의 `GIT_DIR`)를 물려받지 않는다. 물려받으면 시험
+/// 폴더가 아니라 실제 작업 저장소에 `init`, `config`, `commit` 이 실행된다 (`src/test_utils.rs::git_command`).
+fn git_command() -> Command {
+    let mut command = Command::new("git");
+    for (name, _) in std::env::vars_os() {
+        if name
+            .to_string_lossy()
+            .to_ascii_uppercase()
+            .starts_with("GIT_")
+        {
+            command.env_remove(name);
+        }
+    }
+    command
+}
+
 fn make_records_dir() -> PathBuf {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -224,7 +240,7 @@ fn release_version_check_reports_missing_tomllib_as_a_prerequisite() {
 }
 
 fn run_git(repo: &Path, args: &[&str]) -> std::process::Output {
-    Command::new("git")
+    git_command()
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -329,7 +345,7 @@ fn make_cleanup_worktree_fixture() -> (PathBuf, PathBuf, PathBuf) {
     fs::create_dir(&repo).expect("repo fixture dir should be created");
 
     assert_success(
-        &Command::new("git")
+        &git_command()
             .arg("init")
             .arg(&repo)
             .output()
@@ -359,7 +375,7 @@ fn make_cleanup_worktree_fixture() -> (PathBuf, PathBuf, PathBuf) {
         "rename base branch",
     );
     assert_success(
-        &Command::new("git")
+        &git_command()
             .arg("-C")
             .arg(&repo)
             .arg("worktree")
@@ -1263,7 +1279,7 @@ fn native_release_archives_are_reproducible_for_unix_and_windows_targets() {
     .expect("fixture followup should be written");
 
     assert_success(
-        &Command::new("git")
+        &git_command()
             .arg("init")
             .arg(&repo)
             .output()
@@ -1747,7 +1763,7 @@ fn gh_akra_auth_status_uses_explicit_token_without_scanning_username_profiles() 
     fs::create_dir(&userprofile_root).expect("userprofile fixture dir should be created");
 
     assert_success(
-        &Command::new("git")
+        &git_command()
             .arg("init")
             .arg(&repo)
             .output()
@@ -2007,7 +2023,7 @@ fn gh_akra_rejects_unsupported_remote_without_echoing_its_url() {
     let repo = root.join("repo");
     fs::create_dir(&repo).expect("repo fixture dir should be created");
     assert_success(
-        &Command::new("git")
+        &git_command()
             .arg("init")
             .arg(&repo)
             .output()
@@ -2040,12 +2056,84 @@ fn gh_akra_rejects_unsupported_remote_without_echoing_its_url() {
 }
 
 #[test]
+fn gh_akra_pr_create_refuses_commits_with_a_test_identity() {
+    // A test run that inherited GIT_DIR writes `Akra Test <akra@example.invalid>` into the work repository's
+    // config. PR creation refuses such commits, and a repository identity on a reserved domain, before any
+    // token or network step.
+    let root = make_records_dir();
+    let repo = root.join("repo");
+    fs::create_dir(&repo).expect("repo fixture dir should be created");
+    for args in [
+        vec!["init", "-q", "-b", "prerelease"],
+        vec!["config", "user.name", "RefinedStone"],
+        vec!["config", "user.email", "owner@users.noreply.github.com"],
+        vec![
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/widgets.git",
+        ],
+        vec!["commit", "-q", "--allow-empty", "-m", "base"],
+        vec!["switch", "-q", "-c", "feature"],
+        vec![
+            "-c",
+            "user.name=Akra Test",
+            "-c",
+            "user.email=akra@example.invalid",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "leaked identity",
+        ],
+    ] {
+        assert_success(&run_git(&repo, &args), "prepare the PR fixture");
+    }
+    let create_pr = || {
+        Command::new("bash")
+            .arg(repo_root().join("scripts/gh-akra.sh"))
+            .args(["pr", "create", "--base", "prerelease", "--head", "feature"])
+            .args(["--title", "t", "--body", "b"])
+            .current_dir(&repo)
+            .env_remove("AKRA_GITHUB_TOKEN")
+            .env_remove("GITHUB_TOKEN")
+            .output()
+            .expect("gh-akra should run")
+    };
+
+    let leaked_commit = create_pr();
+    assert!(!leaked_commit.status.success());
+    let stderr = String::from_utf8_lossy(&leaked_commit.stderr);
+    assert!(
+        stderr.contains("these commits use a test identity"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("akra@example.invalid leaked identity"),
+        "{stderr}"
+    );
+
+    assert_success(
+        &run_git(&repo, &["config", "user.email", "akra@example.invalid"]),
+        "leak the test identity into the repository config",
+    );
+    let leaked_identity = create_pr();
+    assert!(!leaked_identity.status.success());
+    let stderr = String::from_utf8_lossy(&leaked_identity.stderr);
+    assert!(
+        stderr.contains("the repository git identity uses the test address"),
+        "{stderr}"
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn gh_akra_rejects_https_remote_with_embedded_identity_without_echoing_it() {
     let root = make_records_dir();
     let repo = root.join("repo");
     fs::create_dir(&repo).expect("repo fixture dir should be created");
     assert_success(
-        &Command::new("git")
+        &git_command()
             .arg("init")
             .arg(&repo)
             .output()
@@ -2090,7 +2178,7 @@ fn gh_akra_auth_status_never_executes_repo_scoped_git_credential_helper() {
     let helper_marker = root.join("repo-credential-helper-ran");
 
     assert_success(
-        &Command::new("git")
+        &git_command()
             .arg("init")
             .arg(&repo)
             .output()
@@ -2184,7 +2272,7 @@ fn gh_akra_git_boundary_ignores_routing_config_helper_and_trace_injection() {
     }
     for repository in [&repo, &poison] {
         assert_success(
-            &Command::new("git")
+            &git_command()
                 .arg("init")
                 .arg(repository)
                 .output()
@@ -2363,7 +2451,7 @@ fn gh_akra_write_status_supports_system_bash_and_requires_pinned_api_identity() 
     fs::create_dir(&bin_dir).expect("write identity bin should be created");
     let helper_marker = root.join("write-credential-helper-ran");
     assert_success(
-        &Command::new("git")
+        &git_command()
             .arg("init")
             .arg(&repo)
             .output()
@@ -2487,7 +2575,7 @@ fn gh_akra_does_not_fall_back_to_any_source_git_credential_helper() {
     fs::create_dir(&bin_dir).expect("bin fixture dir should be created");
     let helper_marker = root.join("host-wide-helper-ran");
     assert_success(
-        &Command::new("git")
+        &git_command()
             .arg("init")
             .arg(&repo)
             .output()
@@ -2581,7 +2669,7 @@ fn gh_akra_review_reply_uses_scoped_endpoint_and_rejects_invalid_ids() {
         .expect("review reply body should be written");
 
     assert_success(
-        &Command::new("git")
+        &git_command()
             .arg("init")
             .arg(&repo)
             .output()
@@ -2807,7 +2895,7 @@ fn gh_akra_api_fallback_enriches_required_pull_request_gate_fields_without_gh() 
     fs::create_dir(&bin_dir).expect("bin fixture dir should be created");
 
     assert_success(
-        &Command::new("git")
+        &git_command()
             .arg("init")
             .arg(&repo)
             .output()
@@ -2991,7 +3079,7 @@ fn gh_akra_api_fallback_ignores_poisoned_home_curl_config() {
     .expect("poisoned curlrc should be written");
 
     assert_success(
-        &Command::new("git")
+        &git_command()
             .arg("init")
             .arg(&repo)
             .output()

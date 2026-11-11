@@ -2,7 +2,6 @@ use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1580,7 +1579,7 @@ fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
 fn init_git_repo(prefix: &str) -> PathBuf {
     let repo_root = unique_temp_dir(prefix);
     fs::create_dir_all(&repo_root).expect("git fixture root should be created");
-    let output = Command::new("git")
+    let output = crate::test_utils::git_command()
         .arg("init")
         .arg(&repo_root)
         .output()
@@ -1600,7 +1599,7 @@ fn init_git_repo(prefix: &str) -> PathBuf {
 }
 
 fn run_git(repo_root: &Path, args: &[&str]) {
-    let output = Command::new("git")
+    let output = crate::test_utils::git_command()
         .arg("-C")
         .arg(repo_root)
         .args(args)

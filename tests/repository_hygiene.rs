@@ -6,6 +6,22 @@ use std::process::Command;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
+/// 시험의 git 명령이다. 시험을 돌린 셸의 `GIT_*`(예: git hook 의 `GIT_DIR`)를 물려받지 않는다. 물려받으면 시험
+/// 폴더가 아니라 실제 작업 저장소에 `init`, `config`, `commit` 이 실행된다 (`src/test_utils.rs::git_command`).
+fn git_command() -> Command {
+    let mut command = Command::new("git");
+    for (name, _) in std::env::vars_os() {
+        if name
+            .to_string_lossy()
+            .to_ascii_uppercase()
+            .starts_with("GIT_")
+        {
+            command.env_remove(name);
+        }
+    }
+    command
+}
+
 #[derive(Deserialize)]
 struct AdminGraphicsManifest {
     schema_version: u32,
@@ -461,7 +477,7 @@ fn temporary_output_directory_is_ignored_and_has_no_tracked_files() {
     );
 
     if repo.join(".git").exists() {
-        let output = Command::new("git")
+        let output = git_command()
             .args(["-C", repo.to_str().expect("repository path must be UTF-8")])
             .args(["ls-files", "--", "tmp"])
             .output()
@@ -482,7 +498,7 @@ fn tracked_lf_files_are_normalized_in_the_git_index() {
         return;
     }
 
-    let output = Command::new("git")
+    let output = git_command()
         .arg("-C")
         .arg(&repo)
         .args(["ls-files", "--eol", "-z"])

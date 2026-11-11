@@ -491,6 +491,78 @@ github_command_is_read_only() {
   esac
 }
 
+# Test fixtures write git identities on reserved domains (RFC 2606, RFC 6761). When a test run inherits
+# GIT_DIR (for example from a git hook), those identities land in the work repository's config, and every
+# later commit carries them. A real author never uses these domains, so PR creation refuses them.
+is_reserved_test_email() {
+  local domain
+  domain="$(printf '%s' "${1##*@}" | tr '[:upper:]' '[:lower:]')"
+  case "${domain}" in
+    example.com | example.net | example.org | *.example.com | *.example.net | *.example.org | \
+      example | *.example | invalid | *.invalid | test | *.test | localhost | *.localhost)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+verify_pr_commit_authors() {
+  local base_branch=""
+  local head_branch="HEAD"
+  local base_ref
+  local identity_email
+  local hash author_email committer_email subject
+  local rejected=""
+
+  while (($# > 0)); do
+    case "$1" in
+      --base | --head)
+        if (($# < 2)); then
+          return 0
+        fi
+        if [[ "$1" == "--base" ]]; then
+          base_branch="$2"
+        else
+          head_branch="$2"
+        fi
+        shift 2
+        ;;
+      *)
+        shift
+        ;;
+    esac
+  done
+
+  identity_email="$(safe_git -C "${repo_root}" config --get user.email 2>/dev/null || true)"
+  if [[ -n "${identity_email}" ]] && is_reserved_test_email "${identity_email}"; then
+    printf '%s: the repository git identity uses the test address %s; a test probably ran with an inherited GIT_DIR. Restore user.name and user.email before creating a PR.\n' \
+      "${script_name}" "${identity_email}" >&2
+    exit 1
+  fi
+  if [[ -z "${base_branch}" ]]; then
+    return 0
+  fi
+  base_ref="origin/${base_branch}"
+  if ! safe_git -C "${repo_root}" rev-parse --verify --quiet "${base_ref}^{commit}" >/dev/null; then
+    base_ref="${base_branch}"
+  fi
+  if ! safe_git -C "${repo_root}" rev-parse --verify --quiet "${base_ref}^{commit}" >/dev/null \
+    || ! safe_git -C "${repo_root}" rev-parse --verify --quiet "${head_branch}^{commit}" >/dev/null; then
+    return 0
+  fi
+  while IFS=$'\t' read -r hash author_email committer_email subject; do
+    if is_reserved_test_email "${author_email}" || is_reserved_test_email "${committer_email}"; then
+      rejected+="  ${hash} ${author_email} ${subject}"$'\n'
+    fi
+  done < <(safe_git -C "${repo_root}" log --format='%h%x09%ae%x09%ce%x09%s' "${base_ref}..${head_branch}")
+  if [[ -n "${rejected}" ]]; then
+    printf '%s: these commits use a test identity:\n%s' "${script_name}" "${rejected}" >&2
+    printf 'Restore user.name and user.email, then run: git rebase %s --exec "git commit --amend --no-edit --reset-author"\n' \
+      "${base_ref}" >&2
+    exit 1
+  fi
+}
+
 verify_write_identity() {
   local actual_login
   local remote_url
@@ -1201,6 +1273,10 @@ fi
 
 if [[ "${1-}" == "review-reply" ]]; then
   parse_review_reply_args "${@:2}"
+fi
+
+if [[ "${1-}:${2-}" == "pr:create" ]]; then
+  verify_pr_commit_authors "${@:3}"
 fi
 
 if ! github_command_is_read_only "$@"; then

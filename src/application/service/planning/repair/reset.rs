@@ -1358,7 +1358,7 @@ mod tests {
         }
 
         fn initialize_git(&self) {
-            let output = std::process::Command::new("git")
+            let output = crate::test_utils::git_command()
                 .arg("init")
                 .arg("--quiet")
                 .current_dir(&self.path)

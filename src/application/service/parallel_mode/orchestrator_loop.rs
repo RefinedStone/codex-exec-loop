@@ -1797,7 +1797,6 @@ mod tests {
     use anyhow::{Result, anyhow};
     use std::fs;
     use std::path::{Path, PathBuf};
-    use std::process::Command;
     use std::sync::{Arc, Mutex, mpsc};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -1868,13 +1867,13 @@ mod tests {
             _branch_name: &str,
             tracking_ref: &str,
         ) -> Result<String> {
-            let head = Command::new("git")
+            let head = crate::test_utils::git_command()
                 .current_dir(repo_root)
                 .args(["rev-parse", "HEAD"])
                 .output()?;
             anyhow::ensure!(head.status.success(), "test repository HEAD is unavailable");
             let commit_sha = String::from_utf8(head.stdout)?.trim().to_string();
-            let update = Command::new("git")
+            let update = crate::test_utils::git_command()
                 .current_dir(repo_root)
                 .args(["update-ref", tracking_ref, commit_sha.as_str()])
                 .output()?;
@@ -2029,7 +2028,7 @@ mod tests {
     }
 
     fn run_git(repo_root: &Path, args: &[&str]) {
-        let output = Command::new("git")
+        let output = crate::test_utils::git_command()
             .current_dir(repo_root)
             .args(args)
             .env("GIT_TERMINAL_PROMPT", "0")

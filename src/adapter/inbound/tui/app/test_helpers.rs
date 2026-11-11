@@ -1,4 +1,3 @@
-use std::process::Command;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -139,7 +138,7 @@ pub(crate) fn test_planning_services_with_task_repository(
 struct TestGithubAutomationPort;
 
 fn run_test_git(repo_root: &str, args: &[&str]) -> Result<String> {
-    let output = Command::new("git")
+    let output = crate::test_utils::git_command()
         .args(["-C", repo_root])
         .args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -259,7 +258,7 @@ impl GithubAutomationPort for TestGithubAutomationPort {
     ) -> Result<Option<String>> {
         require_test_delivery_target(repo_root, push_remote, credential_redacted_push_url)?;
         let branch_ref = format!("refs/heads/{branch_name}");
-        let output = Command::new("git")
+        let output = crate::test_utils::git_command()
             .args(["-C", repo_root, "ls-remote", "--heads"])
             .arg(credential_redacted_push_url)
             .arg(&branch_ref)
@@ -293,7 +292,7 @@ impl GithubAutomationPort for TestGithubAutomationPort {
     ) -> Result<Vec<String>> {
         require_test_delivery_target(repo_root, push_remote, credential_redacted_push_url)?;
         let remote_pattern = format!("refs/heads/{branch_prefix}*");
-        let output = Command::new("git")
+        let output = crate::test_utils::git_command()
             .args(["-C", repo_root, "ls-remote", "--heads"])
             .arg(credential_redacted_push_url)
             .arg(&remote_pattern)

@@ -2083,7 +2083,6 @@ mod tests {
         ParallelModeRuntimeEventsSnapshot, ParallelModeSupervisorState, PrValidationSchedulerMode,
     };
     use std::path::PathBuf;
-    use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -3176,7 +3175,7 @@ mod tests {
 
         let repo = temp_path("repo");
         std::fs::create_dir_all(&repo).expect("repo temp dir should be created");
-        let status = Command::new("git")
+        let status = crate::test_utils::git_command()
             .args(["init", "-b", "dashboard-test"])
             .arg(&repo)
             .env("GIT_TERMINAL_PROMPT", "0")

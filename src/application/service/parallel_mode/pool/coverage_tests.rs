@@ -8,7 +8,6 @@ use crate::domain::parallel_mode::{
     ParallelModeAutomationTrigger, ParallelModeDispatchCommandSnapshot,
     ParallelModeDispatchCommandState,
 };
-use std::process::Command;
 use std::sync::Mutex;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
@@ -302,7 +301,7 @@ fn path_string(path: &Path) -> String {
 }
 
 fn run_git(repo: &Path, args: &[&str]) {
-    let output = Command::new("git")
+    let output = crate::test_utils::git_command()
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -319,7 +318,7 @@ fn run_git(repo: &Path, args: &[&str]) {
 fn init_temp_git_repo(prefix: &str) -> PathBuf {
     let repo = temp_repo_path(prefix);
     fs::create_dir_all(&repo).expect("repo directory should be created");
-    let output = Command::new("git")
+    let output = crate::test_utils::git_command()
         .arg("init")
         .arg(&repo)
         .output()

@@ -227,7 +227,7 @@ fn distributor_rearms_epoch_closed_integrated_worktree_and_resumes_exact_push() 
         None,
     )
     .expect("source committer date should resolve");
-    let cherry_pick = Command::new("git")
+    let cherry_pick = crate::test_utils::git_command()
         .current_dir(&integration_path)
         .args(["cherry-pick", record.source_commit_sha.as_str()])
         .env("GIT_COMMITTER_DATE", source_committer_date)

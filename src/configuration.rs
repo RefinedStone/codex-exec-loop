@@ -3166,14 +3166,14 @@ mod tests {
     fn resolver_applies_legacy_project_environment_and_command_precedence_in_order() {
         let root = temporary_directory("full-precedence");
         let workspace = root.join("workspace");
-        let initialized = std::process::Command::new("git")
+        let initialized = crate::test_utils::git_command()
             .arg("init")
             .arg("--quiet")
             .arg(&workspace)
             .status()
             .expect("Git should initialize a precedence fixture");
         assert!(initialized.success());
-        let configured = std::process::Command::new("git")
+        let configured = crate::test_utils::git_command()
             .arg("-C")
             .arg(&workspace)
             .arg("config")

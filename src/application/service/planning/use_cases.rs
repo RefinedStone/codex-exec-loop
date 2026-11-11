@@ -2088,7 +2088,7 @@ mod tests {
     #[test]
     fn git_workspace_use_cases_delegate_revision_bound_maintenance_editors() {
         let workspace = TempPlanningWorkspace::new("planning-use-cases-git-maintenance");
-        let output = std::process::Command::new("git")
+        let output = crate::test_utils::git_command()
             .args(["init", "-q", workspace.path_str()])
             .output()
             .expect("git fixture initialization should run");

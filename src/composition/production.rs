@@ -840,7 +840,6 @@ mod tests {
         PrValidationTargetShaSnapshot,
     };
     use std::path::{Path, PathBuf};
-    use std::process::Command;
     use std::sync::Mutex;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -946,7 +945,7 @@ mod tests {
             vec!["config", "user.email", "akra@example.invalid"],
             vec!["commit", "--allow-empty", "-m", "initial"],
         ] {
-            let output = Command::new("git")
+            let output = crate::test_utils::git_command()
                 .args(args)
                 .current_dir(workspace.path())
                 .output()

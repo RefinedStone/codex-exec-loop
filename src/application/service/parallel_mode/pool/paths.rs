@@ -389,7 +389,6 @@ mod tests {
     use super::{resolve_git_dir, worktree_paths_match};
     use std::fs;
     use std::path::{Path, PathBuf};
-    use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn unique_repo(label: &str) -> PathBuf {
@@ -405,7 +404,7 @@ mod tests {
     }
 
     fn run_git(repo: &Path, args: &[&str]) {
-        let status = Command::new("git")
+        let status = crate::test_utils::git_command()
             .arg("-C")
             .arg(repo)
             .args(args)

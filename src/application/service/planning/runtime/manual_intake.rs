@@ -216,7 +216,6 @@ pub(super) fn manual_intake_task_prompt(
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-    use std::process::Command;
     use std::sync::Arc;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -757,7 +756,7 @@ mod tests {
     }
 
     fn run_git(repo_root: &std::path::Path, args: &[&str]) {
-        let output = Command::new("git")
+        let output = crate::test_utils::git_command()
             .current_dir(repo_root)
             .args(args)
             .env("GIT_TERMINAL_PROMPT", "0")
