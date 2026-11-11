@@ -491,15 +491,16 @@ github_command_is_read_only() {
   esac
 }
 
-# Test fixtures write git identities on reserved domains (RFC 2606, RFC 6761). When a test run inherits
-# GIT_DIR (for example from a git hook), those identities land in the work repository's config, and every
-# later commit carries them. A real author never uses these domains, so PR creation refuses them.
+# Test fixtures write git identities on documentation domains (RFC 2606: example.*, .example, .test).
+# When a test run inherits GIT_DIR (for example from a git hook), those identities land in the work
+# repository's config, and every later commit carries them. A real author never uses these domains, so
+# PR creation refuses them. The host-owned parallel worker identity (akra@localhost.invalid) is not a
+# fixture and stays allowed.
 is_reserved_test_email() {
   local domain
   domain="$(printf '%s' "${1##*@}" | tr '[:upper:]' '[:lower:]')"
   case "${domain}" in
-    example.com | example.net | example.org | *.example.com | *.example.net | *.example.org | \
-      example | *.example | invalid | *.invalid | test | *.test | localhost | *.localhost)
+    example.* | *.example.* | example | *.example | test | *.test)
       return 0
       ;;
   esac

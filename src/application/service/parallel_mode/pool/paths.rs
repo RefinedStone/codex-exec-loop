@@ -389,6 +389,8 @@ mod tests {
     use super::{resolve_git_dir, worktree_paths_match};
     use std::fs;
     use std::path::{Path, PathBuf};
+    #[cfg(windows)]
+    use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn unique_repo(label: &str) -> PathBuf {
