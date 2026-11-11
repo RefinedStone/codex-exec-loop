@@ -16,8 +16,9 @@ const GITHUB_KIND: &str = "github";
 const VERSION_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// `updated_at` 은 `2026-11-11T00:00:00Z` 모양이다. 이보다 긴 답은 버전이 아니다.
 const MAX_VERSION_CHARS: usize = 40;
-/// 사용자의 GitHub 신원이다. 환경을 비운 뒤 이 값만 `gh` 에 넘긴다. 없으면 `gh` 가 저장한 로그인을 쓴다.
-const GITHUB_TOKEN_ENVIRONMENT: [&str; 2] = ["GH_TOKEN", "GITHUB_TOKEN"];
+/// 사용자의 GitHub 토큰을 찾는 순서이다. 리뷰 확인(`review_poller`)과 같다. 환경을 비운 뒤 처음 찾은 값만
+/// `GH_TOKEN` 으로 `gh` 에 넘긴다. 없으면 `gh` 가 저장한 로그인을 쓴다.
+const GITHUB_TOKEN_ENVIRONMENT: [&str; 3] = ["AKRA_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];
 
 pub struct GithubResourceVersionAdapter {
     /// `gh` 를 찾고 실행할 때 기준이 되는 폴더이다. 저장소가 아닌 Akra 의 폴더를 준다.
@@ -41,10 +42,11 @@ impl GithubResourceVersionAdapter {
             &self.working_directory,
             true,
         )?;
-        for name in GITHUB_TOKEN_ENVIRONMENT {
-            if let Some(token) = std::env::var_os(name).filter(|token| !token.is_empty()) {
-                command.env(name, token);
-            }
+        let token = GITHUB_TOKEN_ENVIRONMENT
+            .into_iter()
+            .find_map(|name| std::env::var_os(name).filter(|token| !token.is_empty()));
+        if let Some(token) = token {
+            command.env("GH_TOKEN", token);
         }
         command
             .args(["api", &target.api_path(), "--jq", ".updated_at"])

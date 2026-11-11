@@ -1,4 +1,5 @@
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Result, bail};
@@ -20,6 +21,8 @@ const MAX_THREAD_ID_CHARS: usize = 256;
 const VERSION_CHECK_INTERVAL: Duration = Duration::from_secs(5 * 60);
 /// 한 번에 외부 서비스에 묻는 문서 수의 상한이다. 문서가 많은 스레드도 정해진 시간 안에 답한다.
 const MAX_VERSION_CHECKS_PER_REFRESH: usize = 20;
+/// 한 번에 이만큼 실패하면 그 확인을 멈춘다. 서비스에 닿지 않을 때 문서마다 시간 제한을 기다리지 않는다.
+const MAX_VERSION_FAILURES_PER_REFRESH: usize = 3;
 
 type Clock = Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>;
 
@@ -35,7 +38,16 @@ pub struct WorkContextService {
     store: Arc<dyn WorkContextStorePort>,
     recognizers: Vec<Box<dyn ExternalResourceRecognizer>>,
     version_providers: Vec<Arc<dyn ExternalResourceVersionPort>>,
+    /// 버전 확인은 한 번에 하나만 한다. 같은 문서를 두 요청이 함께 묻지 않는다.
+    version_check: Mutex<VersionCheckState>,
     clock: Clock,
+}
+
+#[derive(Default)]
+struct VersionCheckState {
+    /// 닿지 않은 문서 (종류, 키)와 그 시각이다. 이 문서도 `VERSION_CHECK_INTERVAL` 뒤에 다시 묻는다.
+    /// 장부에 적지 않는다. Gateway 를 다시 시작하면 한 번 더 묻는다.
+    unreachable_since: HashMap<(String, String), DateTime<Utc>>,
 }
 
 impl WorkContextService {
@@ -48,6 +60,7 @@ impl WorkContextService {
             store,
             recognizers: external_resource_recognizers(),
             version_providers: Vec::new(),
+            version_check: Mutex::new(VersionCheckState::default()),
             clock: Arc::new(Utc::now),
         }
     }
@@ -112,23 +125,38 @@ impl WorkContextService {
 
     /// 확인한 지 오래된 문서의 지금 버전을 제공자에게 묻고 장부에 적는다. 처음 확인한 버전은 읽은 버전이 된다.
     fn check_versions(&self, thread_id: &str) -> Result<()> {
+        let mut state = self
+            .version_check
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let now = (self.clock)();
         let mut checks = 0;
+        let mut failures = 0;
         for link in self.links(thread_id)? {
             let Some(provider) = self.version_provider(&link.resource.kind) else {
                 continue;
             };
-            if !check_is_due(link.checked_version.as_ref(), now) {
+            let document = (link.resource.kind.clone(), link.resource.key.clone());
+            let waits_after_failure = state
+                .unreachable_since
+                .get(&document)
+                .is_some_and(|failed_at| !interval_has_passed(*failed_at, now));
+            if waits_after_failure || !check_is_due(link.checked_version.as_ref(), now) {
                 continue;
             }
-            if checks == MAX_VERSION_CHECKS_PER_REFRESH {
+            if checks == MAX_VERSION_CHECKS_PER_REFRESH
+                || failures == MAX_VERSION_FAILURES_PER_REFRESH
+            {
                 break;
             }
             checks += 1;
-            // 닿지 않는 문서는 건너뛴다. 이전 값이 남고, 다음 확인에서 다시 묻는다.
+            // 닿지 않는 문서는 건너뛴다. 장부의 이전 값이 남는다.
             let Ok(version) = provider.current_version(&link.resource) else {
+                state.unreachable_since.insert(document, now);
+                failures += 1;
                 continue;
             };
+            state.unreachable_since.remove(&document);
             self.store.record_resource_version(
                 &link.resource,
                 &ResourceVersionCheck {
@@ -148,6 +176,12 @@ impl WorkContextService {
     }
 }
 
+fn interval_has_passed(since: DateTime<Utc>, now: DateTime<Utc>) -> bool {
+    now.signed_duration_since(since)
+        .to_std()
+        .is_ok_and(|elapsed| elapsed >= VERSION_CHECK_INTERVAL)
+}
+
 /// 확인한 적이 없거나, 확인한 지 `VERSION_CHECK_INTERVAL` 이 지났다. 읽지 못하는 시각은 지난 것으로 본다.
 fn check_is_due(check: Option<&ResourceVersionCheck>, now: DateTime<Utc>) -> bool {
     let Some(checked_at) = check
@@ -156,9 +190,7 @@ fn check_is_due(check: Option<&ResourceVersionCheck>, now: DateTime<Utc>) -> boo
     else {
         return true;
     };
-    now.signed_duration_since(checked_at)
-        .to_std()
-        .is_ok_and(|elapsed| elapsed >= VERSION_CHECK_INTERVAL)
+    interval_has_passed(checked_at, now)
 }
 
 fn thread_resource(link: WorkContextLink) -> ThreadResource {
@@ -239,8 +271,6 @@ mod tests {
     };
     use crate::application::port::outbound::work_context_store_port::WorkContextLink;
     use crate::domain::work_context::ExternalResourceRef;
-    use std::collections::HashMap;
-    use std::sync::Mutex;
 
     #[derive(Default)]
     struct FakeTranscript {
@@ -501,16 +531,45 @@ mod tests {
         );
         assert_eq!(*versions.asked.lock().unwrap(), ["a/b#2", "a/b#3"]);
 
-        // 닿지 않던 문서는 다음에 바로 다시 묻는다. 처음 닿은 버전이 기준이 된다.
+        // 닿지 않던 문서도 간격을 기다린다. 처음 닿은 버전이 기준이 된다.
         versions.set("a/b#3", "v7");
         *now.lock().unwrap() += chrono::Duration::seconds(10);
-        let second = service.refresh_thread_resources("thread-1").unwrap();
-        assert_eq!(changed_flags(&second)[1], ("a/b#3", false));
+        service.refresh_thread_resources("thread-1").unwrap();
+        assert_eq!(*versions.asked.lock().unwrap(), ["a/b#2", "a/b#3"]);
+
+        *now.lock().unwrap() += chrono::Duration::seconds(5 * 60);
+        let later = service.refresh_thread_resources("thread-1").unwrap();
+        assert_eq!(changed_flags(&later)[1], ("a/b#3", false));
+        assert_eq!(
+            later[1].version_checked_at.as_deref(),
+            Some("2026-11-11T00:05:10Z")
+        );
         assert_eq!(
             *versions.asked.lock().unwrap(),
-            ["a/b#2", "a/b#3", "a/b#3"],
-            "the checked document waits for its interval"
+            ["a/b#2", "a/b#3", "a/b#2", "a/b#3"]
         );
+    }
+
+    #[test]
+    fn a_refresh_stops_after_a_few_failures_and_later_documents_get_their_turn() {
+        // When the service is down, every document would wait for its timeout. Stop early.
+        let (service, versions, _now) = versioned_service(
+            "https://github.com/a/b/issues/1 https://github.com/a/b/issues/2 \
+             https://github.com/a/b/issues/3 https://github.com/a/b/issues/4 \
+             https://github.com/a/b/issues/5",
+        );
+        versions.set("a/b#5", "v1");
+
+        service.refresh_thread_resources("thread-1").unwrap();
+        assert_eq!(*versions.asked.lock().unwrap(), ["a/b#1", "a/b#2", "a/b#3"]);
+
+        // 실패한 문서는 기다린다. 뒤의 문서가 막히지 않는다.
+        let second = service.refresh_thread_resources("thread-1").unwrap();
+        assert_eq!(
+            *versions.asked.lock().unwrap(),
+            ["a/b#1", "a/b#2", "a/b#3", "a/b#4", "a/b#5"]
+        );
+        assert!(second[4].version_checked_at.is_some());
     }
 
     #[test]
@@ -520,17 +579,20 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
         let (service, versions, _now) = versioned_service(&text);
+        for number in 1..=MAX_VERSION_CHECKS_PER_REFRESH + 5 {
+            versions.set(&format!("a/b#{number}"), "v1");
+        }
 
         service.refresh_thread_resources("thread-1").unwrap();
         assert_eq!(
             versions.asked.lock().unwrap().len(),
             MAX_VERSION_CHECKS_PER_REFRESH
         );
-        // 남은 문서는 다음 확인에서 묻는다. 닿지 않은 문서는 기다리지 않기 때문이다.
+        // 남은 문서는 다음 확인에서 묻는다. 확인한 문서는 간격을 기다린다.
         service.refresh_thread_resources("thread-1").unwrap();
         assert_eq!(
             versions.asked.lock().unwrap().len(),
-            2 * MAX_VERSION_CHECKS_PER_REFRESH
+            MAX_VERSION_CHECKS_PER_REFRESH + 5
         );
     }
 
