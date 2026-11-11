@@ -1706,6 +1706,31 @@ fn take_generation(next_generation: &mut u64, operation: &str) -> u64 {
     generation
 }
 
+/// thread 요약에서 기다리는 승인을 꺼낸다 (plan 19 Q3-5). 요청의 내용은 담지 않는다.
+pub(super) fn pending_approvals(
+    activity: &[ThreadActivitySummary],
+) -> Vec<crate::domain::kernel_event::PendingApproval> {
+    use crate::domain::conversation::ConversationApprovalRequestKind as Kind;
+    use crate::domain::kernel_event::{ApprovalRequestKind, PendingApproval};
+    activity
+        .iter()
+        .filter_map(|thread| {
+            let request = thread.approval.as_ref()?;
+            Some(PendingApproval::new(
+                &thread.thread_id,
+                thread.active_turn_id.as_deref(),
+                &request.approval_id,
+                match request.kind {
+                    Kind::CommandExecution => ApprovalRequestKind::CommandExecution,
+                    Kind::FileChange => ApprovalRequestKind::FileChange,
+                    Kind::Permissions => ApprovalRequestKind::Permissions,
+                },
+                &request.summary,
+            ))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2125,29 +2150,4 @@ mod tests {
         assert!(reducer.admit_post_turn_evaluation(&mut post_turn).is_some());
         assert_eq!(post_turn.context.previous_handoff_task, Some(task_a));
     }
-}
-
-/// thread 요약에서 기다리는 승인을 꺼낸다 (plan 19 Q3-5). 요청의 내용은 담지 않는다.
-pub(super) fn pending_approvals(
-    activity: &[ThreadActivitySummary],
-) -> Vec<crate::domain::kernel_event::PendingApproval> {
-    use crate::domain::conversation::ConversationApprovalRequestKind as Kind;
-    use crate::domain::kernel_event::{ApprovalRequestKind, PendingApproval};
-    activity
-        .iter()
-        .filter_map(|thread| {
-            let request = thread.approval.as_ref()?;
-            Some(PendingApproval::new(
-                &thread.thread_id,
-                thread.active_turn_id.as_deref(),
-                &request.approval_id,
-                match request.kind {
-                    Kind::CommandExecution => ApprovalRequestKind::CommandExecution,
-                    Kind::FileChange => ApprovalRequestKind::FileChange,
-                    Kind::Permissions => ApprovalRequestKind::Permissions,
-                },
-                &request.summary,
-            ))
-        })
-        .collect()
 }
