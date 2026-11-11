@@ -139,7 +139,9 @@ kbd {
 }
 
 .ghost {
+  flex: none;
   padding: 2px 6px;
+  white-space: nowrap;
   border-radius: var(--radius-s);
   color: var(--text-2);
   font-size: var(--text-s);
@@ -461,22 +463,33 @@ kbd {
   line-height: 18px;
 }
 
-.row-action {
+.row-actions {
   position: absolute;
   top: 5px;
   right: 6px;
   display: none;
+  padding: 1px;
+  border-radius: var(--radius-s);
+  background: var(--bg-elevated);
+  box-shadow: 0 0 0 1px var(--line);
+}
+
+.row-actions button {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 22px;
   height: 22px;
-  border-radius: var(--radius-s);
-  background: var(--bg-elevated);
+  border-radius: 4px;
   color: var(--text-3);
-  box-shadow: 0 0 0 1px var(--line);
 }
 
-.thread-row:hover .row-action {
+.row-actions button:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.thread-row:hover .row-actions {
   display: inline-flex;
 }
 
@@ -484,8 +497,18 @@ kbd {
   visibility: hidden;
 }
 
-.row-action.pinned {
+.row-actions button.pinned {
   color: var(--accent);
+}
+
+.aside-row {
+  display: flex;
+  align-items: center;
+  color: var(--text-3);
+}
+
+.aside-row .thread {
+  align-items: center;
 }
 
 .empty-row {
@@ -1202,8 +1225,18 @@ kbd {
   color: var(--text-2);
 }
 
+.queued-edit {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+}
+
 .queued-text {
   flex: 1;
+  min-width: 0;
+  text-align: left;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

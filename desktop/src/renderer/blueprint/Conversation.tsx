@@ -203,6 +203,7 @@ function Turn({ turn, threadId }: { turn: MockTurn; threadId: string }) {
 }
 
 const BOTTOM_THRESHOLD_PX = 64;
+const USER_SCROLL_WINDOW_MS = 600;
 
 export function Conversation({ threadId }: { threadId: string }) {
   const turns = useBlueprint((state) => state.turns[threadId]) ?? [];
@@ -236,16 +237,26 @@ export function Conversation({ threadId }: { threadId: string }) {
     return () => observer.disconnect();
   }, []);
 
+  /** 사용자가 직접 스크롤한 때이다. 영역 크기가 바뀌어 생긴 스크롤 이벤트는 따라가기를 끄지 않는다. */
+  const userScrollAt = useRef(0);
+  const markUserScroll = () => {
+    userScrollAt.current = Date.now();
+  };
+
   const onScroll = () => {
     const element = scrollRef.current;
     if (!element) return;
-    follow.current = element.scrollHeight - element.scrollTop - element.clientHeight < BOTTOM_THRESHOLD_PX;
-    setAtBottom(follow.current);
+    const nearBottom = element.scrollHeight - element.scrollTop - element.clientHeight < BOTTOM_THRESHOLD_PX;
+    const byUser = Date.now() - userScrollAt.current < USER_SCROLL_WINDOW_MS;
+    if (nearBottom || byUser) {
+      follow.current = nearBottom;
+      setAtBottom(nearBottom);
+    }
   };
 
   return (
     <div className="conversation-wrap">
-      <div className="conversation" ref={scrollRef} onScroll={onScroll}>
+      <div className="conversation" ref={scrollRef} onScroll={onScroll} onWheel={markUserScroll} onPointerDown={markUserScroll} onKeyDown={markUserScroll} onTouchMove={markUserScroll}>
         <div className="column">
           {turns.map((turn) => (
             <Turn key={turn.id} turn={turn} threadId={threadId} />
