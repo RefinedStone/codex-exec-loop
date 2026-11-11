@@ -107,7 +107,7 @@ Q-Q1, Q-Q2 는 기본값으로 정했다 (§8): 사건 기록(K5)을 스펙(K4)�
 | Q3-3b | 커서 구독: 커널이 기록 sequence 를 정하고 `recorded` 이벤트로 실시간으로 보낸다. 넘친 클라이언트는 마지막 sequence 뒤를 `history` 로 따라잡는다. 턴 끝의 종류(완료, 중단, 실패, 모름)를 terminal receipt 에서 더한다 | P3 | 구현됨 |
 | Q3-4 | 타이머를 마감 시각으로 바꾼다. core 와 병렬 제어부가 다음 마감을 알리고, 호스트는 그때까지 잔다. Q2-4 의 250ms 주기 깨우기를 없앤다 | P2 | 구현됨 |
 | Q3-5 | 승인 객체: 승인 요청과 그 끝을 사건으로 기록하고(Q3-2 에서 옮김), 재시작 뒤 이전 커널이 남긴 승인을 `lost` 로 닫아 보인다. 설계는 §5.1.2 (승인, 연산 영수증, 멱등 키를 하나의 사건 기록 위에 둔다) | P1, P3 | 구현됨 (턴은 되살리지 않는다) |
-| Q3-6 | 연산 영수증(`op_id`, 상태, `next`)과 멱등 키. 설계는 §5.1.2 | P3 | 제안 |
+| Q3-6 | 연산 영수증(`op_id`, 상태, `next`)과 멱등 키. 커널이 받은 명령과 바로 거절한 명령을 기록하고, 같은 키의 재전송은 다시 실행하지 않는다. 설계는 §5.1.2 | P3 | 구현됨 (상태는 받아들임과 바로 거절까지) |
 | Q3-7 | 시뮬레이션에 재시작을 모델한다: 무작위 시점에 커널을 버리고 기록으로 다시 조립한다 | P1, P2 | 구현됨 (기록을 다 쓴 뒤의 재시작) |
 
 Q3-1 결과 (`KernelEvent`, `KernelEventLogPort`, `KernelEventRecorder`, `AppCommand::RestoreQueuedThreadPrompts`):
@@ -299,7 +299,7 @@ Q3-7 결과 (`src/composition/kernel_host/simulation.rs`, 시험만 바꿨다):
 
 #### 5.1.2 K5 설계: 기록 한 곳 위의 승인, 연산, 멱등 (2026-11-11)
 
-Q3-5 와 Q3-6 을 한 설계로 정한다. 승인 객체, 연산 영수증, 멱등 키를 따로 만들면 저장소가 셋이 된다. 그래서 셋 모두
+Q3-5 와 Q3-6 을 한 설계로 정했고, 둘 다 구현했다. 승인 객체, 연산 영수증, 멱등 키를 따로 만들면 저장소가 셋이 된다. 그래서 셋 모두
 이미 있는 판단 사건 기록(`kernel_events`)의 사건 종류로 둔다.
 
 원칙:
@@ -321,7 +321,7 @@ Q3-5 와 Q3-6 을 한 설계로 정한다. 승인 객체, 연산 영수증, 멱�
 | 종류 | `kind`. snake_case, 일어난 일의 과거형이다. `describe` 의 `records` 가 모든 종류를 알린다 | 구현됨 (Q3-5) |
 | 대상 | `thread_id` 열. thread 에 속하지 않는 사건은 빈 값이고, 대상(저장소 경로, 커밋, PR)은 payload 에 둔다 | 구현됨 / 관찰 사건은 제안 |
 | 출처 | 지금 모든 사건은 커널의 판단이다. 관찰 사건은 `kind` 를 `<출처>_<일>` 로 짓는다 (예: `git_commit_observed`) | 제안 |
-| 멱등 | 명령은 클라이언트의 `idempotency_key` 로 가른다. 관찰 사건은 payload 의 자연 키(커밋 sha 등)로 가른다 | 제안 (Q3-6) |
+| 멱등 | 명령은 클라이언트의 `idempotency_key` 로 가른다. 관찰 사건은 payload 의 자연 키(커밋 sha 등)로 가른다 | 명령은 구현됨 (Q3-6) / 관찰 사건은 제안 |
 | 보존 | 다시 낼 일이 담긴 종류(남김)는 지우지 않는다. 나머지는 최근 10,000개이다. 승인도 나머지에 든다. 요청이 지워질 만큼 오래 열린 승인은 재시작 때 `lost` 를 쓰지 않는다 | 구현됨 (Q3-3) |
 
 승인 (Q3-5, 구현됨):
@@ -336,16 +336,18 @@ Q3-5 와 Q3-6 을 한 설계로 정한다. 승인 객체, 연산 영수증, 멱�
   새 커널은 답할 수 없다. 클라이언트는 기록에서 "요청, 잃음"을 보고 그 일을 다시 낼지 정한다.
 - 열린 승인의 지금 값은 계속 thread 요약(`thread_activity.approval`)이 알린다. 기록은 그 변화의 이력이다.
 
-연산과 멱등 (Q3-6, 제안):
+연산과 멱등 (Q3-6, 구현됨):
 
-- 커널은 명령을 처리하기 전에 `command_received { command, thread_id, idempotency_key?, fingerprint }` 를 기록한다.
-  `command` 는 명령 종류의 이름이고, `fingerprint` 는 명령 내용의 지문이다. 그 sequence 가 `op_id` 이다.
-- 커널이 명령을 바로 거절하면 `command_rejected { op_id, reason }` 를 기록한다.
-- 명령의 답에 영수증을 더한다: `operation { op_id, state, next { after }, replayed }`. `state` 는 `accepted` 또는
-  `rejected` 이다. `next.after` 는 `op_id` 이고, 그 뒤의 `history` 와 `recorded` 가 이 명령의 진행이다.
+- 커널은 명령을 처리하기 전에 `command_received { op_id, command, thread_id, fingerprint, idempotency_key? }` 를
+  기록한다. `command` 는 명령 종류의 이름이고, `fingerprint` 는 명령 내용의 지문이다. `op_id` 는 그 기록의 sequence
+  이다.
+- 커널이 명령을 바로 거절하면 `command_rejected { op_id, thread_id, reason }` 를 기록한다.
+- 명령의 답에 영수증이 있다: `operation { op_id, state, next { query, after }, replayed }`. `state` 는 `accepted` 또는
+  `rejected` 이다. `next` 는 `history` 를 `op_id` 뒤부터 읽으라는 뜻이다. 그 뒤의 `history` 와 `recorded` 가 이 명령의
+  진행이다.
 - 멱등 키: 같은 키와 같은 지문의 명령은 다시 실행하지 않고 처음의 영수증을 돌려준다 (`replayed`). 같은 키에 다른
-  지문이면 오류이다. 키는 그 사건이 기록에 남아 있는 동안 기억한다. 커널을 다시 조립하면 기록에서 되돌린다.
-- 읽기 명령(`load_sessions`, `refresh_planning`)은 기록하지 않고 영수증도 없다.
+  지문이면 오류(`-32014`)이다. 키는 그 사건이 기록에 남아 있는 동안 기억한다. 커널을 다시 조립하면 기록에서 되돌린다.
+- 읽기 명령(`load_sessions`, `refresh_planning`)은 기록하지 않고 영수증도 없다. 키가 있어도 그냥 실행한다.
 - 얻는 것: 감사 기록(K-D4)의 프로토콜 부분, 재전송 구분(K3 §3.3 의 남은 일), "이 명령 뒤에 무슨 일이 있었나" 조회.
 
 하지 않는 것:
@@ -378,7 +380,7 @@ Q3-5 결과 (`ApprovalRequested`, `ApprovalResolved`, `PendingApproval`, `open_a
   `describe.records`), 시뮬레이션 정해진 순서 1개(결정 없이 중단, 재시작)와 seed 5000개. 결함 주입: `lost` 를
   기록하지 않음 → I8 (seed 200개 중 5개와 정해진 순서), 결정을 붙이지 않음 → I8 (200개 중 103개), 끝을 기록하지
   않음 → I8 (300개 중 166개).
-- 한계:
+- 한계 (Q3-5):
   - 쓰기가 실패한 `approval_resolved` 는 다음 조립에서 `lost` 로 적힌다 (실제로는 결정된 승인). 기록을 다 쓰지 못한
     강제 종료와 같은 종류의 위험이다.
   - app-server adapter 는 결정 알림을 제어 큐가 가득 차면 버린다 (`try_send`). 그러면 core 는 턴이 끝날 때까지 승인을
@@ -387,6 +389,35 @@ Q3-5 결과 (`ApprovalRequested`, `ApprovalResolved`, `PendingApproval`, `open_a
     더 닫는다.
   - `summary` 가 요청의 내용을 담지 않는 것은 app-server adapter 의 규칙이다 (고정 문장과 개수만 만든다). 기록은 그
     값을 200자로 자를 뿐이다.
+
+Q3-6 결과 (`CommandReceived`, `CommandRejected`, `CommandMemory`, `OperationReceipt`, `KernelCommandDescriptor`):
+
+- 프로토콜 adapter 가 명령의 설명(`KernelCommandDescriptor`: 종류 이름, thread, 지문, 키)을 만든다. 지문은 명령 JSON 의
+  SHA-256 앞 16바이트이다. 프롬프트 글은 지문으로만 남는다. Gateway 는 명령과 설명을 함께 커널에 넣는다
+  (`send_described_command`).
+- 커널 호스트는 명령을 런타임의 `dispatch_client_command` 하나로 넘긴다. 런타임은 먼저 키를 본다. 처음이면
+  `command_received` 를 기록하고 명령을 실행한다. 재전송이면 실행하지 않고 처음의 영수증을 준다. 실행한 명령을 core 가
+  바로 거절하면 `command_rejected` 를 기록한다. 런타임의 공개 API 는 이 메서드 하나만 늘었다 (구조 시험의 목록).
+- 처리한 명령의 기억(`CommandMemory`)은 기록의 투영이다. `attach_kernel_event_log` 가 명령 종류(`COMMAND_KINDS`)를 읽어
+  다시 만든다. 실행 중에는 기록의 보존 한도(10,000개)보다 오래된 키를 잊는다. 따로 저장하지 않는다.
+- 거절 이유(`CommandRejectionReason`)를 프로토콜 adapter 에서 domain 으로 옮겼다. core 이벤트가 그 이유를 알려 준다
+  (`AppEvent::command_rejection`). 기록과 영수증과 프로토콜 답이 같은 값을 쓴다.
+- 프로토콜: `akra/kernel/command` 의 요청에 `idempotency_key`(1~128자, 제어 문자 없음), 답에 `operation`. 키를 다른 명령에
+  다시 쓰면 `-32014`. 영수증이 없는 답은 이전과 같은 모양이다. Desktop 은 아직 키를 보내지 않는다.
+- 기록이 없는 커널(TUI, 기록을 읽지 못한 커널)은 명령을 가리지 않고 영수증도 없다.
+- 시뮬레이션: thread 지정 프롬프트를 멱등 키와 함께 보내고, 같은 키로 다시 보낸다 (재시작 뒤에도). 불변식 I9 를
+  더했다 (§5.5.1). I6 은 `command_received.op_id` 가 그 기록의 sequence 인지도 본다.
+- 확인: domain 시험(기억을 기록에서 다시 만듦, 같은 거절, 잊기, 기록에 내용이 없음), 프로토콜 시험(설명과 지문, 읽기
+  명령, 키 검사, 답의 JSON 모양), 런타임 시험(재전송은 한 번만 받음, 재시작 뒤에도 같음), 커널 호스트 시험(재전송은
+  실행하지 않음, 기록은 처음 것만), Gateway 시험(실제 커널: 영수증, 재전송, 키 충돌 `-32014`), 시뮬레이션 seed 3000개.
+  결함 주입 (seed 500개): 재시작한 커널이 키를 잊음 → I9 (97개), 키를 기억하지 않음 → I9 (382개).
+- 한계 (Q3-6):
+  - 영수증의 `state` 는 받아들임과 바로 거절까지이다. `submit_prompt` 의 늦은 거절(`thread_prompt_rejected`)과 턴의
+    끝은 그 뒤의 기록에 있다. 연산이 끝났는지를 한 값으로 주지 않는다 (명령 스펙 Q4 의 일).
+  - 기록을 쓰는 것과 명령을 실행하는 것 사이에 프로세스가 죽으면, 재전송은 실행되지 않은 명령의 영수증을 받는다
+    ("많아야 한 번"). 클라이언트는 `next` 대로 기록을 읽어 진행이 없으면 새 키로 다시 보낸다.
+  - 쓰기가 실패한 `command_received` 의 키는 재시작 뒤에 잊힌다. 그 재전송은 다시 실행된다.
+  - CLI, admin, Telegram 의 명령은 아직 커널을 거치지 않으므로 기록되지 않는다 (K4).
 
 ### 5.2 이어 붙이지 말고 맞춘다 (FSM + reconcile)
 
@@ -565,6 +596,7 @@ Q2-4 결과 (`CoreInputWaker`, `KernelInbox`):
 | I5 | 바깥 세계에서 턴이 돌거나 평가가 진행 중이면 커널은 남은 일이 있다고 답한다 (커널을 내릴지 정하는 값, K3-5) |
 | I6 | 판단 사건 기록이 맞다: 같은 턴 제출은 한 번만 기록되고, 같은 턴은 한 번 시작하고 한 번 끝나며 끝은 시작 뒤에 온다 (Q3-2). sequence 는 1 부터 빠짐없이 늘어난다 (Q3-3b). 시뮬레이션은 커널에 메모리 기록을 붙이고, 커널을 버린 뒤 읽는다 |
 | I7 | thread 지정 프롬프트는 커널을 다시 켜도 app-server 에 많아야 한 번, 자기 thread 에만 닿는다. 끝에 기록에 열린 남김이 없고, "다시 내서 끝남"으로 기록한 남김은 app-server 가 정확히 한 번 받았다 (Q3-7) |
+| I9 | 같은 멱등 키로 다시 보낸 명령은 다시 실행되지 않고 처음의 영수증을 받는다. 커널을 다시 켠 뒤에도 같다. planner 는 프롬프트 하나를 한 번만 준비한다 (Q3-6) |
 | I8 | 승인 기록이 맞다. 커널이 받은 승인은 요청한 차례대로 한 번씩 기록되고 thread 와 턴이 맞다. 끝은 그 id 의 가장 가까운 앞 요청에 한 번 붙고, 종류는 가짜 app-server 가 한 일과 같다(수락, 거절, 시간 초과, 결정 없이 끝남, 재시작으로 잃음). 커널이 받지 못한 요청은 기록에 없다. 끝에 열린 승인이 없다 (Q3-5) |
 | 재현 | 같은 seed 는 같은 기록을 만든다 (seed 8개) |
 
