@@ -424,7 +424,7 @@ pub(crate) mod tests {
     }
 
     fn run_git(directory: &std::path::Path, args: &[&str]) {
-        let output = std::process::Command::new("git")
+        let output = crate::test_utils::git_command()
             .current_dir(directory)
             .args(args)
             .output()

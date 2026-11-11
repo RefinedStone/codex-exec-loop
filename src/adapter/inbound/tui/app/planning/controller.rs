@@ -1621,7 +1621,7 @@ mod tests {
         planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
         sqlite: Arc<SqlitePlanningAuthorityAdapter>,
     ) -> NativeTuiApp {
-        let output = std::process::Command::new("git")
+        let output = crate::test_utils::git_command()
             .args(["init", "-q", workspace.path_str()])
             .output()
             .expect("git fixture initialization should run");

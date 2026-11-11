@@ -97,6 +97,14 @@ with a fake clock, fake effect executor, and fake app-server, and checks kernel 
 seeds on every `cargo test`. Run more seeds with `AKRA_SIM_SEEDS=<count>`, and reproduce a reported
 failure with `AKRA_SIM_SEED=<seed> cargo test --locked kernel_simulation`.
 
+Tests run git through `crate::test_utils::git_command()` (or the one `git_command` helper of an
+integration test file), never through a raw `Command::new("git")`. The helper drops every inherited
+`GIT_*` variable. A test run started from a git hook or an agent shell can inherit `GIT_DIR`, and then
+fixture `init`, `config user.*`, `commit`, and `reset` run in the real work repository; 123 commits
+reached this repository with the fixture identity that way. An architecture test enforces the helper,
+and `scripts/gh-akra.sh pr create` refuses commits, or a repository identity, on reserved test
+domains (`example.*`, `.invalid`, `.test`, `.localhost`).
+
 Use unit tests beside modules and integration tests under `tests/`. Prioritize startup checks,
 app-server parsing, stream reduction, session mapping, planning authority mutations, and parallel
 recovery boundaries. Primitive-sensitive terminal changes also follow

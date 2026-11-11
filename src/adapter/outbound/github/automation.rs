@@ -2789,7 +2789,7 @@ printf '%s\n' 'trusted-helper-executed'
         git(&publisher, &["push", "origin", "main"]);
         let remote_only_sha = git_stdout(&publisher, &["rev-parse", "HEAD"]);
         assert!(
-            !Command::new("git")
+            !crate::test_utils::git_command()
                 .current_dir(&fixture.repo)
                 .args(["cat-file", "-e", &format!("{remote_only_sha}^{{commit}}")])
                 .status()
@@ -3808,7 +3808,7 @@ esac
     }
 
     fn git_stdout(repo: &Path, args: &[&str]) -> String {
-        let output = Command::new("git")
+        let output = crate::test_utils::git_command()
             .current_dir(repo)
             .args(args)
             .output()
@@ -3823,7 +3823,7 @@ esac
     }
 
     fn git_in(repo: &Path, args: &[&str]) {
-        let output = Command::new("git")
+        let output = crate::test_utils::git_command()
             .current_dir(repo)
             .args(args)
             .output()

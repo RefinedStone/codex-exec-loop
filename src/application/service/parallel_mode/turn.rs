@@ -1370,7 +1370,6 @@ mod tests {
         ConversationTurnTerminalUncertainty,
     };
     use std::fs;
-    use std::process::Command;
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
     struct TempGitWorkspace {
@@ -1424,7 +1423,7 @@ mod tests {
         root.display().to_string()
     }
     fn run_git(repo_root: &std::path::Path, args: &[&str]) {
-        let status = Command::new("git")
+        let status = crate::test_utils::git_command()
             .current_dir(repo_root)
             .args(args)
             .status()
@@ -1483,7 +1482,7 @@ mod tests {
             repo_root: &str,
             push_remote: &str,
         ) -> anyhow::Result<String> {
-            let output = Command::new("git")
+            let output = crate::test_utils::git_command()
                 .current_dir(repo_root)
                 .args(["remote", "get-url", "--push", push_remote])
                 .output()?;
@@ -1501,7 +1500,7 @@ mod tests {
             branch_prefix: &str,
         ) -> anyhow::Result<Vec<String>> {
             let remote_pattern = format!("refs/heads/{branch_prefix}*");
-            let output = Command::new("git")
+            let output = crate::test_utils::git_command()
                 .current_dir(repo_root)
                 .args([
                     "ls-remote",
@@ -1540,12 +1539,12 @@ mod tests {
             tracking_ref: &str,
         ) -> anyhow::Result<String> {
             let refspec = format!("+refs/heads/{branch_name}:{tracking_ref}");
-            let status = Command::new("git")
+            let status = crate::test_utils::git_command()
                 .current_dir(repo_root)
                 .args(["fetch", "--quiet", credential_redacted_push_url, &refspec])
                 .status()?;
             anyhow::ensure!(status.success(), "test frozen-target fetch failed");
-            let output = Command::new("git")
+            let output = crate::test_utils::git_command()
                 .current_dir(repo_root)
                 .args(["rev-parse", tracking_ref])
                 .output()?;

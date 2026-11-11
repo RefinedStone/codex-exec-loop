@@ -756,7 +756,6 @@ mod tests {
         PlanningDraftFileRecord, PlanningWorkspacePort, RepoScopedPlanningWorkspacePort,
     };
     use crate::application::service::planning::RESULT_OUTPUT_FILE_PATH;
-    use std::process::Command;
     use std::sync::{Arc, Barrier};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1142,7 +1141,7 @@ mod tests {
             std::process::id()
         ));
         std::fs::create_dir_all(&workspace).expect("workspace fixture should be created");
-        let output = Command::new("git")
+        let output = crate::test_utils::git_command()
             .args(["init", "-q", workspace.to_str().unwrap()])
             .output()
             .expect("git init should run");
@@ -1215,7 +1214,7 @@ mod tests {
             std::process::id()
         ));
         std::fs::create_dir_all(&workspace).expect("workspace fixture should be created");
-        let output = Command::new("git")
+        let output = crate::test_utils::git_command()
             .args(["init", "-q", workspace.to_str().unwrap()])
             .output()
             .expect("git init should run");
@@ -1272,7 +1271,7 @@ mod tests {
             std::process::id()
         ));
         std::fs::create_dir_all(&workspace).expect("workspace fixture should be created");
-        let output = Command::new("git")
+        let output = crate::test_utils::git_command()
             .args(["init", "-q", workspace.to_str().unwrap()])
             .output()
             .expect("git init should run");

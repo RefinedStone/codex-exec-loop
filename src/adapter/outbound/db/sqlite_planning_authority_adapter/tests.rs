@@ -379,7 +379,7 @@ fn authority_location_for_store(store_path: &std::path::Path) -> PlanningAuthori
     }
 }
 fn run_git_command(repo_root: &std::path::Path, args: &[&str]) {
-    let output = std::process::Command::new("git")
+    let output = crate::test_utils::git_command()
         .current_dir(repo_root)
         .args(args)
         .env("GIT_TERMINAL_PROMPT", "0")

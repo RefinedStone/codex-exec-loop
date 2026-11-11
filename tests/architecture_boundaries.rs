@@ -25554,6 +25554,46 @@ fn is_comment_only_line(line: &str) -> bool {
     trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*')
 }
 
+#[test]
+fn git_commands_go_through_one_environment_isolating_builder() {
+    // A test run started from a git hook or an agent shell can inherit GIT_DIR. Then `git -C <fixture>` runs
+    // `init`, `config user.*`, `commit`, and `reset` in the real work repository. 123 commits left this
+    // repository with the test identity `Akra Test <akra@example.invalid>` that way. Production git goes
+    // through `git_subprocess`; test git goes through `test_utils::git_command` (or the same helper in an
+    // integration test file), and both drop every inherited GIT_* variable.
+    const RAW_GIT: &str = "Command::new(\"git\")";
+    let allowed_raw_git = [
+        // the production hardening boundary and its own poisoned-environment tests
+        ("src/git_subprocess.rs", None),
+        // the one test builder per crate
+        ("src/test_utils.rs", Some(1)),
+        ("tests/native_validation_scripts.rs", Some(1)),
+        ("tests/repository_hygiene.rs", Some(1)),
+        // string fixtures for the semantic reference scanner
+        ("tests/architecture_boundaries.rs", None),
+    ];
+    let mut violations = Vec::new();
+    for root in ["src", "tests"] {
+        for file in rust_files_under(Path::new(root)) {
+            let path = file.to_string_lossy().replace('\\', "/");
+            let source = fs::read_to_string(&file).expect("rust source should load");
+            let count = source.matches(RAW_GIT).count();
+            if count == 0 {
+                continue;
+            }
+            match allowed_raw_git.iter().find(|(allowed, _)| *allowed == path) {
+                Some((_, None)) => {}
+                Some((_, Some(expected))) if *expected == count => {}
+                _ => violations.push(format!("{path}: {count}")),
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "raw git commands inherit the caller's GIT_DIR; use test_utils::git_command or git_subprocess: {violations:?}"
+    );
+}
+
 fn rust_files_under(root: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
     collect_rust_files(root, &mut files);

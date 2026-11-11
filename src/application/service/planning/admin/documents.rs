@@ -514,7 +514,6 @@ mod tests {
     };
     use std::fs;
     use std::path::PathBuf;
-    use std::process::Command;
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1059,7 +1058,7 @@ mod tests {
 
         fn new_git(prefix: &str) -> Self {
             let workspace = Self::new(prefix);
-            let status = Command::new("git")
+            let status = crate::test_utils::git_command()
                 .args(["init", workspace.path.as_str()])
                 .status()
                 .expect("git init should run");

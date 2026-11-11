@@ -81,7 +81,6 @@ use std::fs::OpenOptions;
 #[cfg(windows)]
 use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -285,7 +284,7 @@ impl TempGitRepo {
     fn create_bare_origin_remote(&self) -> PathBuf {
         let remote_path = self.root.join("origin.git");
         if !remote_path.exists() {
-            let output = Command::new("git")
+            let output = crate::test_utils::git_command()
                 .args(["init", "--bare", "-q"])
                 .arg(&remote_path)
                 .env("GIT_TERMINAL_PROMPT", "0")
@@ -364,7 +363,7 @@ impl TempGitRepo {
     // branch 존재 여부는 cleanup과 lease allocator의 핵심 관찰값이다. 파일 상태가
     // 아니라 git ref database를 직접 조회해 실제 runtime adapter와 같은 기준을 쓴다.
     fn branch_exists(&self, branch_name: &str) -> bool {
-        let output = Command::new("git")
+        let output = crate::test_utils::git_command()
             .current_dir(&self.repo_root)
             .args([
                 "show-ref",
@@ -446,7 +445,7 @@ impl Drop for EnvVarGuard {
 // git helper는 실패한 명령의 stdout/stderr를 assert 메시지에 싣는다. worktree
 // 관련 테스트는 실패 원인이 repo state에 묻히기 쉬워서 command line도 함께 고정한다.
 fn run_git(repo_root: &Path, args: &[&str]) {
-    let output = Command::new("git")
+    let output = crate::test_utils::git_command()
         .current_dir(repo_root)
         .args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -461,7 +460,7 @@ fn run_git(repo_root: &Path, args: &[&str]) {
     );
 }
 fn run_git_result(repo_root: &Path, args: &[&str]) -> anyhow::Result<()> {
-    let output = Command::new("git")
+    let output = crate::test_utils::git_command()
         .current_dir(repo_root)
         .args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -478,7 +477,7 @@ fn run_git_result(repo_root: &Path, args: &[&str]) -> anyhow::Result<()> {
     );
 }
 fn current_branch(repo_root: &Path) -> String {
-    let output = Command::new("git")
+    let output = crate::test_utils::git_command()
         .current_dir(repo_root)
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -1281,7 +1280,7 @@ impl GithubAutomationPort for FakeGithubAutomationPort {
             anyhow::bail!(error);
         }
         let remote_pattern = format!("refs/heads/{branch_prefix}*");
-        let output = Command::new("git")
+        let output = crate::test_utils::git_command()
             .args([
                 "-C",
                 repo_root,
@@ -1900,7 +1899,7 @@ impl GithubAutomationPort for GitBackedGithubAutomationPort {
         branch_prefix: &str,
     ) -> anyhow::Result<Vec<String>> {
         let remote_pattern = format!("refs/heads/{branch_prefix}*");
-        let output = Command::new("git")
+        let output = crate::test_utils::git_command()
             .args([
                 "-C",
                 repo_root,

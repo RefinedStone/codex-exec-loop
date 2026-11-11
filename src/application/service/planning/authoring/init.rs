@@ -1623,7 +1623,7 @@ mod tests {
 
         fn new_sqlite(prefix: &str) -> Self {
             let workspace = TempPlanningWorkspace::new(prefix);
-            let output = std::process::Command::new("git")
+            let output = crate::test_utils::git_command()
                 .args(["init", "-q", workspace.path_str()])
                 .output()
                 .expect("git fixture initialization should run");
