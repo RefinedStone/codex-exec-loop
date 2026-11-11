@@ -46,7 +46,8 @@ recognize(주소의 호스트와 경로) -> 문서(kind, key, url, title_hint) �
 - 새 서비스는 구현 하나를 `external_resource_recognizers()` 에 더한다. 장부, 수집기, Gateway, Desktop 은 종류
   이름만 다루므로 바꾸지 않는다. Desktop 은 모르는 종류를 종류 이름 그대로 보인다.
 - `(kind, key)` 가 같으면 같은 문서이다. Notion 은 페이지 id, Jira 는 `사이트/키`, GitHub 는 `owner/repo#번호` 이다.
-- 변경 확인(2단계)은 종류마다 제공자 포트(`version`, `changes`)를 따로 둔다. 인식과 조회는 다른 경계이다.
+- 변경 확인(2단계)은 종류마다 제공자(`ExternalResourceVersionPort`: `kind`, `current_version`)를 따로 둔다. 인식과
+  조회는 다른 경계이다. 제공자가 없는 종류의 문서는 바뀜을 확인하지 않는다. 변경 내용(`changes`)은 제안이다.
 
 ### 장부
 
@@ -57,6 +58,8 @@ recognize(주소의 호스트와 경로) -> 문서(kind, key, url, title_hint) �
 | `resources` | 문서: `kind`, `key`, 주소, 제목 힌트 |
 | `links` | 문서 ↔ 범위(`scope_kind`, `scope_id`), 처음 본 곳(`user`, `agent`, `tool`), 처음 본 시각 |
 | `scan_markers` | 범위마다 마지막으로 읽은 위치 |
+| `resource_versions` | 문서마다 마지막으로 확인한 버전과 그 시각. 문서의 값이므로 모든 범위가 함께 쓴다 |
+| `read_versions` | 범위가 그 문서에서 읽은 버전. 확인한 버전과 다르면 "바뀜"이다 |
 
 범위 종류는 글자이다. 지금은 `thread` 만 쓴다. `path`(파일 폴더)와 `task`(planning 작업, 브랜치)는 같은 표에 더한다.
 
@@ -85,12 +88,35 @@ recognize(주소의 호스트와 경로) -> 문서(kind, key, url, title_hint) �
   - `thread/inject_items` 로 넣은 글은 모델 기록에만 들어가고 스레드 아이템 목록과 화면에는 나오지 않는다. 그래서
     4단계의 자동 한 줄은 사람에게 따로 보여야 한다.
 
+## 2단계 첫 조각: GitHub 문서의 바뀜 (완료, 2026-11-11)
+
+- 버전: GitHub PR 과 issue 의 `updated_at` 이다. 댓글, 라벨, 상태, PR 의 새 commit 이 이 값을 바꾼다. `gh api` 로
+  읽는다 (`GithubResourceVersionAdapter`). 문서의 내용은 읽지 않고, 모델을 부르지 않는다.
+- Gateway 메서드:
+  - `akra/context/refresh { threadId }`: 수집한 뒤, 확인한 지 5분이 지난 문서의 지금 버전을 묻는다. 한 번에 문서
+    20개까지 묻고, 3번 실패하면 멈춘다. 닿지 않은 문서도 5분 뒤에 다시 묻는다.
+  - `akra/context/markRead { threadId, kind, key }`: 지금 확인한 버전을 그 스레드의 읽은 버전으로 한다.
+  - 세 메서드의 `resources` 항목에 `changed`, `versionCheckedAt` 이 있다. `akra/context/thread` 는 장부의 값만
+    쓰고 외부 서비스에 묻지 않는다.
+- 읽은 버전: 스레드가 문서를 처음 확인한 버전이다. 그 뒤에 확인한 버전이 다르면 "바뀜"이다.
+- Desktop: 목록을 먼저 보이고 그 뒤에 `refresh` 를 부른다 (스레드를 열 때, 턴이 끝날 때, "새로 고침"). 열린
+  스레드만 확인한다. 바뀐 문서에 "바뀜"을 보이고, 버튼은 `문서 N · 바뀜 M` 이다. 사용자가 바뀐 문서를 열면
+  `markRead` 를 부른다. `refresh` 가 실패하면 목록을 그대로 둔다.
+- 신원: `AKRA_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN` 순서로 찾고, 없으면 `gh` 에 저장된 로그인을 쓴다. 그
+  계정이 볼 수 없는 문서는 닿지 않는 문서이다. 바뀜을 보이지 않는다.
+- 확인: 단위 시험(서비스, 장부, Gateway, 키와 답의 검사), 실제 `gh` 로 공개 PR 하나의 `updated_at` 을 읽음,
+  Desktop 화면 시험(가짜 Gateway, 숨긴 창).
+- 한계:
+  - 처음 확인하기 전에 바뀐 것은 모른다. AI 가 문서를 읽은 시각과 처음 확인한 시각 사이의 변경이다.
+  - "읽음"은 사용자가 Desktop 에서 문서를 연 것이다. AI 가 문서를 다시 읽은 것은 아직 읽음으로 치지 않는다.
+  - 무엇이 바뀌었는지는 보이지 않는다.
+
 ## 남은 단계 (proposed)
 
-2. **변경 확인**: 종류별 제공자 포트. Notion 은 MCP hub 의 `notion-get-version-changes`(`start_time` = 마지막 확인
-   시각, B0 에서 확인)를 쓰고, 편집 권한이 없는 페이지는 `notion-fetch` 의 `page_last_edited_at` 을 쓴다. Jira 는
-   이슈의 `updated`, GitHub 는 `gh` 이다. 스레드가 활성일 때만, 유효 시간이 지난 문서만 확인한다. 장부에
-   `읽은 버전`을 더하고 Desktop 목록에 "바뀜"을 보인다.
+2. **변경 확인의 남은 종류**: GitHub 는 끝났다 (위 "2단계 첫 조각"). Notion 제공자는 MCP hub 의
+   `notion-get-version-changes`(`start_time` = 마지막 확인 시각, B0 에서 확인)를 쓰고, 편집 권한이 없는 페이지는
+   `notion-fetch` 의 `page_last_edited_at` 을 쓴다. Jira 제공자는 이슈의 `updated` 를 쓴다. 둘 다 제공자 하나를
+   더하는 일이다. 장부, 서비스, Gateway, Desktop 은 바꾸지 않는다.
 3. **경로 범위와 `akra context`**: 스레드가 고친 파일의 폴더, 문서가 연결된 커밋과 PR 의 경로를 `path` 범위로 잇는다.
    AI 용 `akra context list|show|changes` 와 skill 을 더한다. 새 스레드가 같은 경로를 만지면 관련 문서를 찾는다.
    키워드 검색은 SQLite FTS5 로 한다. 벡터 검색은 놓친 사례를 측정한 뒤에 검색 포트 뒤에 더한다.
