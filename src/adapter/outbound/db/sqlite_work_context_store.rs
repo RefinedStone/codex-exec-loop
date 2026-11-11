@@ -11,7 +11,7 @@ use anyhow::{Context, Result, anyhow};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::application::port::outbound::work_context_store_port::{
-    WorkContextLink, WorkContextStorePort,
+    ResourceVersionCheck, WorkContextLink, WorkContextStorePort,
 };
 use crate::domain::work_context::ExternalResourceRef;
 
@@ -40,6 +40,18 @@ CREATE TABLE IF NOT EXISTS scan_markers (
     scope_id TEXT NOT NULL,
     marker TEXT NOT NULL,
     PRIMARY KEY (scope_kind, scope_id)
+);
+CREATE TABLE IF NOT EXISTS resource_versions (
+    resource_id INTEGER PRIMARY KEY REFERENCES resources (id),
+    version TEXT NOT NULL,
+    checked_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS read_versions (
+    scope_kind TEXT NOT NULL,
+    scope_id TEXT NOT NULL,
+    resource_id INTEGER NOT NULL REFERENCES resources (id),
+    version TEXT NOT NULL,
+    PRIMARY KEY (scope_kind, scope_id, resource_id)
 );
 ";
 
@@ -130,8 +142,12 @@ impl WorkContextStorePort for SqliteWorkContextStore {
     fn links(&self, scope_kind: &str, scope_id: &str) -> Result<Vec<WorkContextLink>> {
         self.with_connection(|connection| {
             let mut statement = connection.prepare(
-                "SELECT r.kind, r.key, r.url, r.title_hint, l.source, l.first_seen_at
+                "SELECT r.kind, r.key, r.url, r.title_hint, l.source, l.first_seen_at,
+                        v.version, v.checked_at, rv.version
                  FROM links l JOIN resources r ON r.id = l.resource_id
+                 LEFT JOIN resource_versions v ON v.resource_id = l.resource_id
+                 LEFT JOIN read_versions rv ON rv.resource_id = l.resource_id
+                      AND rv.scope_kind = l.scope_kind AND rv.scope_id = l.scope_id
                  WHERE l.scope_kind = ?1 AND l.scope_id = ?2
                  ORDER BY l.rowid",
             )?;
@@ -145,6 +161,8 @@ impl WorkContextStorePort for SqliteWorkContextStore {
                     },
                     source: row.get(4)?,
                     first_seen_at: row.get(5)?,
+                    checked_version: version_check(row.get(6)?, row.get(7)?),
+                    read_version: row.get(8)?,
                 })
             })?;
             rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -175,6 +193,61 @@ impl WorkContextStorePort for SqliteWorkContextStore {
             Ok(())
         })
     }
+
+    fn record_resource_version(
+        &self,
+        resource: &ExternalResourceRef,
+        check: &ResourceVersionCheck,
+    ) -> Result<()> {
+        self.with_connection(|connection| {
+            connection.execute(
+                "INSERT INTO resource_versions (resource_id, version, checked_at)
+                 SELECT id, ?3, ?4 FROM resources WHERE kind = ?1 AND key = ?2
+                 ON CONFLICT (resource_id) DO UPDATE SET
+                     version = excluded.version, checked_at = excluded.checked_at",
+                params![resource.kind, resource.key, check.version, check.checked_at],
+            )?;
+            Ok(())
+        })
+    }
+
+    fn set_read_version(
+        &self,
+        scope_kind: &str,
+        scope_id: &str,
+        resource: &ExternalResourceRef,
+        version: &str,
+        replace: bool,
+    ) -> Result<()> {
+        // 처음 확인은 기준만 정한다. 이미 읽은 버전이 있으면 그대로 둔다.
+        let on_conflict = if replace {
+            "DO UPDATE SET version = excluded.version"
+        } else {
+            "DO NOTHING"
+        };
+        self.with_connection(|connection| {
+            connection.execute(
+                &format!(
+                    "INSERT INTO read_versions (scope_kind, scope_id, resource_id, version)
+                     SELECT ?1, ?2, id, ?5 FROM resources WHERE kind = ?3 AND key = ?4
+                     ON CONFLICT (scope_kind, scope_id, resource_id) {on_conflict}"
+                ),
+                params![scope_kind, scope_id, resource.kind, resource.key, version],
+            )?;
+            Ok(())
+        })
+    }
+}
+
+/// 버전과 확인 시각은 같은 줄에 함께 있다. 줄이 없으면 둘 다 없다.
+fn version_check(
+    version: Option<String>,
+    checked_at: Option<String>,
+) -> Option<ResourceVersionCheck> {
+    Some(ResourceVersionCheck {
+        version: version?,
+        checked_at: checked_at?,
+    })
 }
 
 #[cfg(test)]
@@ -239,6 +312,65 @@ mod tests {
         assert_eq!(second.len(), 1);
         assert_eq!(second[0].resource.title_hint.as_deref(), Some("Spec"));
         assert!(store.links("path", "t1").unwrap().is_empty());
+        drop(store);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn versions_are_per_document_and_read_versions_are_per_scope() {
+        // plan 22 stage 2: the checked version belongs to the document; each scope keeps what it has read.
+        let (store, directory) = store("versions");
+        let document = resource("github", "a/b#2", None);
+        for scope in ["t1", "t2"] {
+            store
+                .link_resources("thread", scope, "user", std::slice::from_ref(&document))
+                .unwrap();
+        }
+        let untouched = store.links("thread", "t1").unwrap();
+        assert_eq!(untouched[0].checked_version, None);
+        assert_eq!(untouched[0].read_version, None);
+
+        let check = |version: &str, checked_at: &str| ResourceVersionCheck {
+            version: version.to_string(),
+            checked_at: checked_at.to_string(),
+        };
+        store
+            .record_resource_version(&document, &check("v1", "2026-11-11T00:00:00Z"))
+            .unwrap();
+        store
+            .set_read_version("thread", "t1", &document, "v1", false)
+            .unwrap();
+        store
+            .record_resource_version(&document, &check("v2", "2026-11-11T00:10:00Z"))
+            .unwrap();
+        // 기준은 처음 값이다. 덮어쓰지 않는 쓰기는 그대로 둔다.
+        store
+            .set_read_version("thread", "t1", &document, "v2", false)
+            .unwrap();
+
+        let first = store.links("thread", "t1").unwrap();
+        assert_eq!(
+            first[0].checked_version,
+            Some(check("v2", "2026-11-11T00:10:00Z"))
+        );
+        assert_eq!(first[0].read_version.as_deref(), Some("v1"));
+        let second = store.links("thread", "t2").unwrap();
+        assert_eq!(second[0].checked_version, first[0].checked_version);
+        assert_eq!(second[0].read_version, None, "t2 has not read the document");
+
+        store
+            .set_read_version("thread", "t1", &document, "v2", true)
+            .unwrap();
+        assert_eq!(
+            store.links("thread", "t1").unwrap()[0]
+                .read_version
+                .as_deref(),
+            Some("v2")
+        );
+        // 장부에 없는 문서의 버전은 적지 않는다.
+        store
+            .record_resource_version(&resource("github", "x/y#1", None), &check("v", "t"))
+            .unwrap();
         drop(store);
         let _ = std::fs::remove_dir_all(directory);
     }

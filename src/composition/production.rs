@@ -24,7 +24,8 @@ use crate::adapter::outbound::filesystem::{
 };
 use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
 use crate::adapter::outbound::github::{
-    GithubAutomationAdapter, GithubPrValidationAdapter, GithubReviewPollerAdapter,
+    GithubAutomationAdapter, GithubPrValidationAdapter, GithubResourceVersionAdapter,
+    GithubReviewPollerAdapter,
 };
 use crate::adapter::outbound::mcp_hub::{CodexMcpHubBackend, GatewayRoutedMcpHubBackend};
 use crate::adapter::outbound::telegram::CurlTelegramBotAdapter;
@@ -385,10 +386,15 @@ pub(crate) fn build_gateway_backend(run_dir: &Path) -> Result<GatewayBackend> {
         Arc::new(hub),
     ));
     let upstream: Arc<dyn GatewayUpstreamPort> = Arc::new(upstream);
-    let work_context: Arc<dyn WorkContextPort> = Arc::new(WorkContextService::new(
-        Arc::new(AppServerThreadTranscript::new(upstream.clone())),
-        Arc::new(SqliteWorkContextStore::from_environment()?),
-    ));
+    let work_context: Arc<dyn WorkContextPort> = Arc::new(
+        WorkContextService::new(
+            Arc::new(AppServerThreadTranscript::new(upstream.clone())),
+            Arc::new(SqliteWorkContextStore::from_environment()?),
+        )
+        .with_version_providers(vec![Arc::new(GithubResourceVersionAdapter::new(
+            crate::configuration::akra_home_dir()?,
+        ))]),
+    );
     Ok(GatewayBackend {
         upstream,
         kernels,

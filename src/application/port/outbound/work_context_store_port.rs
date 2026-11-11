@@ -16,6 +16,18 @@ pub struct WorkContextLink {
     pub source: String,
     /// 처음 본 시각 (RFC 3339) 이다.
     pub first_seen_at: String,
+    /// 마지막으로 확인한 문서의 버전과 그 시각이다 (plan 22 2단계). 확인한 적이 없으면 없다.
+    pub checked_version: Option<ResourceVersionCheck>,
+    /// 이 범위가 읽은 버전이다. 확인한 버전과 다르면 문서가 바뀐 것이다.
+    pub read_version: Option<String>,
+}
+
+/// 문서의 버전을 확인한 결과이다. 문서마다 하나이고 모든 범위가 같이 쓴다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourceVersionCheck {
+    pub version: String,
+    /// 확인한 시각 (RFC 3339) 이다.
+    pub checked_at: String,
 }
 
 pub trait WorkContextStorePort: Send + Sync {
@@ -35,4 +47,21 @@ pub trait WorkContextStorePort: Send + Sync {
     fn scan_marker(&self, scope_kind: &str, scope_id: &str) -> Result<Option<String>>;
 
     fn set_scan_marker(&self, scope_kind: &str, scope_id: &str, marker: &str) -> Result<()>;
+
+    /// 문서의 지금 버전과 확인한 시각을 적는다. 이전 확인을 덮어쓴다.
+    fn record_resource_version(
+        &self,
+        resource: &ExternalResourceRef,
+        check: &ResourceVersionCheck,
+    ) -> Result<()>;
+
+    /// 범위가 읽은 버전을 적는다. `replace` 가 아니면 이미 적힌 값을 그대로 둔다 (처음 확인이 기준이 된다).
+    fn set_read_version(
+        &self,
+        scope_kind: &str,
+        scope_id: &str,
+        resource: &ExternalResourceRef,
+        version: &str,
+        replace: bool,
+    ) -> Result<()>;
 }

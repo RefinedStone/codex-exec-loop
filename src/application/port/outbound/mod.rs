@@ -23,6 +23,7 @@ pub mod clipboard_image_probe_port;
 // interactive turn runtime port는 app-server와 대화 turn을 실행하는 능력을 분리한다.
 pub mod interactive_turn_runtime_port;
 // thread transcript port 는 스레드 기록에서 글만 읽는 조회 경계다.
+pub mod external_resource_version_port;
 pub mod thread_transcript_port;
 // work context store port 는 외부 문서와 범위의 관계를 저장하는 장부 경계다.
 pub mod work_context_store_port;
