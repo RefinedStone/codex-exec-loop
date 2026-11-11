@@ -48,7 +48,7 @@ use crate::domain::conversation_runtime_envelope::{
     ConversationRuntimeConfigurationRequest, ConversationRuntimeEnvelope,
 };
 use crate::domain::kernel_event::{
-    ApprovalResolution, KernelEvent, RecordedKernelEvent, ThreadPromptSettlement, open_approvals,
+    ApprovalResolution, KernelEvent, RecordedKernelEvent, ThreadPromptSettlement,
     open_queued_thread_prompts,
 };
 use crate::domain::planning::{
@@ -194,14 +194,25 @@ struct FakeTurn {
     approval: Option<String>,
 }
 
-/// 가짜 app-server 가 요청한 승인이 기록에서 어떻게 끝나야 하는가이다 (I8).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ExpectedApproval {
-    /// 아직 결정을 기다린다. 시나리오가 끝날 때 남아 있으면 안 된다.
-    Open,
-    Resolved(ApprovalResolution),
+/*
+ * 가짜 app-server 가 요청한 승인 하나이다 (I8). 기대값은 시뮬레이션이 한 일에서만 만든다. 커널의 기록을 보고 만들지
+ * 않는다. 승인 id 는 실제 app-server adapter 처럼 커널을 다시 켤 때마다 1 부터 다시 센다.
+ */
+#[derive(Debug, Clone)]
+struct SimApproval {
+    approval_id: String,
+    thread_id: String,
+    turn_id: String,
+    /// 이 승인을 요청한 커널 실행이다. 재시작 수와 같다.
+    lifetime: usize,
+    /// 커널이 요청 입력을 처리했다. 입력을 넣은 뒤에 커널 주기가 돌았다.
+    request_delivered: bool,
+    /// app-server 가 한 일로 정해진 끝이다. 없으면 아직 결정을 기다린다.
+    end: Option<ApprovalResolution>,
+    /// 커널이 그 끝을 알리는 입력을 처리했다.
+    end_delivered: bool,
     /// 커널이 요청을 받기 전에 다시 켜졌다. 기록에 없어야 한다.
-    NeverRecorded,
+    never_recorded: bool,
 }
 
 /// 바깥 세계가 나중에 돌려줄 완료이다. 어떤 순서로 돌려줄지는 난수가 고른다.
@@ -264,8 +275,8 @@ struct InvariantLedger {
     auto_turns_since_manual: BTreeMap<String, usize>,
     /// 가짜 planner 가 답한 프롬프트마다 그 작업, 받을 thread, app-server 가 받은 횟수이다 (I7).
     planned_prompts: BTreeMap<String, PlannedPrompt>,
-    /// 가짜 app-server 가 요청한 승인과 그 끝이다 (I8). 키는 승인 id 이다.
-    approvals: BTreeMap<String, ExpectedApproval>,
+    /// 가짜 app-server 가 요청한 승인이다 (I8). 요청한 차례대로이다.
+    approvals: Vec<SimApproval>,
 }
 
 impl InvariantLedger {
@@ -347,82 +358,130 @@ impl InvariantLedger {
         Ok(())
     }
 
-    /// 결정 없이 턴이 끝났다. 이미 결정된 승인은 그대로 둔다.
-    fn withdraw_approval(&mut self, approval_id: &str) {
-        if let Some(expected @ ExpectedApproval::Open) = self.approvals.get_mut(approval_id) {
-            *expected = ExpectedApproval::Resolved(ApprovalResolution::Withdrawn);
+    /// 이 커널 실행에서 아직 끝이 정해지지 않은 그 id 의 승인에 끝을 정한다. 이미 끝난 승인은 그대로 둔다.
+    fn end_approval(&mut self, approval_id: &str, lifetime: usize, end: ApprovalResolution) {
+        let open = self.approvals.iter_mut().rev().find(|approval| {
+            approval.approval_id == approval_id
+                && approval.lifetime == lifetime
+                && approval.end.is_none()
+        });
+        if let Some(approval) = open {
+            approval.end = Some(end);
         }
     }
 
-    /*
-     * 커널을 다시 켤 때 부른다. 기록에 열린 채 남은 승인은 새 커널이 잃은 것으로 닫아야 한다. 가짜 app-server 가
-     * 결정을 보냈어도 이전 커널이 그 입력을 처리하지 못했으면 같다. 기록에 요청이 없는 승인은 커널이 받지 못한 것이다.
-     */
-    fn expect_approvals_after_restart(&mut self, recorded: &[RecordedKernelEvent]) {
-        let events = || recorded.iter().map(|record| record.event.clone());
-        let requested = events()
-            .filter_map(|event| match event {
-                KernelEvent::ApprovalRequested(approval) => Some(approval.approval_id),
-                _ => None,
-            })
-            .collect::<BTreeSet<_>>();
-        let open = open_approvals(events())
-            .into_iter()
-            .map(|approval| approval.approval_id)
-            .collect::<BTreeSet<_>>();
-        for (approval_id, expected) in &mut self.approvals {
-            if open.contains(approval_id) {
-                *expected = ExpectedApproval::Resolved(ApprovalResolution::Lost);
-            } else if !requested.contains(approval_id) {
-                *expected = ExpectedApproval::NeverRecorded;
+    /// 커널 주기가 돌았다. 그 전에 넣은 입력은 커널이 모두 처리했다.
+    fn mark_approval_inputs_delivered(&mut self, lifetime: usize) {
+        for approval in &mut self.approvals {
+            if approval.lifetime == lifetime {
+                approval.request_delivered = true;
+                approval.end_delivered = approval.end.is_some();
             }
         }
     }
 
     /*
-     * I8: 승인 기록이 맞다 (plan 19 Q3-5). 승인 하나는 한 번 요청되고 한 번 끝나며, 끝은 요청 뒤에 온다. 끝의 종류는
-     * 가짜 app-server 가 한 일과 같다. 시나리오가 끝나면 열린 승인이 없다. 기록은 커널을 버린 뒤에 읽는다.
+     * 커널을 다시 켤 때 부른다. 커널이 요청을 처리하지 못했으면 그 승인은 기록에 없어야 한다. 요청은 처리했지만 끝을
+     * 처리하지 못했으면(끝이 없거나, 끝을 알리는 입력이 아직 큐에 있었다) 새 커널이 잃은 것으로 닫아야 한다.
+     */
+    fn expect_approvals_after_restart(&mut self, ended_lifetime: usize) {
+        for approval in &mut self.approvals {
+            if approval.lifetime != ended_lifetime {
+                continue;
+            }
+            if !approval.request_delivered {
+                approval.never_recorded = true;
+            } else if !approval.end_delivered {
+                approval.end = Some(ApprovalResolution::Lost);
+                approval.end_delivered = true;
+            }
+        }
+    }
+
+    /*
+     * I8: 승인 기록이 맞다 (plan 19 Q3-5). 커널이 받은 승인은 요청한 차례대로 한 번씩 기록되고, thread 와 턴이 맞다.
+     * 끝은 그 id 의 가장 가까운 앞 요청에 붙고, 한 번이며, 종류는 가짜 app-server 가 한 일과 같다. 커널이 받지 못한
+     * 요청은 기록에 없다. 시나리오가 끝나면 열린 승인이 없다. 기록은 커널을 버린 뒤에 읽는다.
      */
     fn check_approval_records(&self, recorded: &[RecordedKernelEvent]) -> Result<(), String> {
-        let mut requests: BTreeMap<String, usize> = BTreeMap::new();
-        let mut ends: BTreeMap<String, Vec<ApprovalResolution>> = BTreeMap::new();
+        struct Seen {
+            thread_id: String,
+            turn_id: Option<String>,
+            ends: Vec<ApprovalResolution>,
+        }
+        let mut seen: BTreeMap<String, Vec<Seen>> = BTreeMap::new();
         for record in recorded {
             match &record.event {
                 KernelEvent::ApprovalRequested(approval) => {
-                    *requests.entry(approval.approval_id.clone()).or_default() += 1;
+                    seen.entry(approval.approval_id.clone())
+                        .or_default()
+                        .push(Seen {
+                            thread_id: approval.thread_id.clone(),
+                            turn_id: approval.turn_id.clone(),
+                            ends: Vec::new(),
+                        });
                 }
                 KernelEvent::ApprovalResolved {
+                    thread_id,
                     approval_id,
                     resolution,
-                    ..
                 } => {
-                    if !requests.contains_key(approval_id) {
+                    let Some(request) = seen.get_mut(approval_id).and_then(|all| all.last_mut())
+                    else {
                         return Err(format!("I8: {approval_id} ended before it was requested"));
+                    };
+                    if &request.thread_id != thread_id {
+                        return Err(format!(
+                            "I8: {approval_id} was requested on {} but ended on {thread_id}",
+                            request.thread_id
+                        ));
                     }
-                    ends.entry(approval_id.clone())
-                        .or_default()
-                        .push(*resolution);
+                    request.ends.push(*resolution);
                 }
                 _ => {}
             }
         }
-        if let Some(unknown) = requests.keys().find(|id| !self.approvals.contains_key(*id)) {
+        let mut expected: BTreeMap<&str, Vec<&SimApproval>> = BTreeMap::new();
+        for approval in self.approvals.iter().filter(|a| !a.never_recorded) {
+            expected
+                .entry(approval.approval_id.as_str())
+                .or_default()
+                .push(approval);
+        }
+        if let Some((approval_id, requests)) = seen
+            .iter()
+            .find(|(id, requests)| expected.get(id.as_str()).map_or(0, Vec::len) != requests.len())
+        {
             return Err(format!(
-                "I8: the record has {unknown}, which no turn requested"
+                "I8: the record has {} request(s) of {approval_id}, but the kernel received {}",
+                requests.len(),
+                expected.get(approval_id.as_str()).map_or(0, Vec::len)
             ));
         }
-        for (approval_id, expected) in &self.approvals {
-            let requested = requests.get(approval_id).copied().unwrap_or(0);
-            let ended = ends.get(approval_id).map_or(&[][..], Vec::as_slice);
-            let matches = match expected {
-                ExpectedApproval::Open => false,
-                ExpectedApproval::NeverRecorded => requested == 0 && ended.is_empty(),
-                ExpectedApproval::Resolved(resolution) => requested == 1 && ended == [*resolution],
-            };
-            if !matches {
+        for (approval_id, approvals) in expected {
+            let requests = seen.get(approval_id).map_or(&[][..], Vec::as_slice);
+            if requests.len() != approvals.len() {
                 return Err(format!(
-                    "I8: {approval_id} should be {expected:?}, but the record has {requested} request(s) and ends {ended:?}"
+                    "I8: the kernel received {} request(s) of {approval_id}, but the record has {}",
+                    approvals.len(),
+                    requests.len()
                 ));
+            }
+            for (approval, request) in approvals.iter().zip(requests) {
+                let place_matches = request.thread_id == approval.thread_id
+                    && request.turn_id.as_deref() == Some(approval.turn_id.as_str());
+                if !place_matches {
+                    return Err(format!(
+                        "I8: {approval_id} belongs to {} on {}, but the record has {:?} on {}",
+                        approval.turn_id, approval.thread_id, request.turn_id, request.thread_id
+                    ));
+                }
+                if approval.end.is_none() || request.ends != approval.end.as_slice() {
+                    return Err(format!(
+                        "I8: {approval_id} of {} should end {:?}, but the record has ends {:?}",
+                        approval.turn_id, approval.end, request.ends
+                    ));
+                }
             }
         }
         Ok(())
@@ -875,9 +934,11 @@ impl Simulation {
         self.prompt_probably_queued = false;
         self.prompt_prepared_behind_turn = false;
         self.ledger.auto_turns_since_manual.clear();
+        self.ledger
+            .expect_approvals_after_restart(self.restarts - 1);
+        self.next_approval = 1;
         let (lifetime_start, carried) = {
             let records = self.kernel_log.0.lock().expect("kernel log should lock");
-            self.ledger.expect_approvals_after_restart(&records);
             let events = records.iter().map(|record| record.event.clone());
             (records.len(), open_queued_thread_prompts(events))
         };
@@ -1014,6 +1075,7 @@ impl Simulation {
         );
         self.host.run_cycle(now, Duration::ZERO);
         self.queued_core_inputs = 0;
+        self.ledger.mark_approval_inputs_delivered(self.restarts);
         // 커널이 준비 완료를 처리한 뒤에야 프롬프트가 큐에 있다. 턴이 없으면 커널은 큐를 바로 비운다.
         self.prompt_probably_queued = self.turn.is_some()
             && (self.prompt_probably_queued || self.prompt_prepared_behind_turn);
@@ -1215,9 +1277,16 @@ impl Simulation {
             "app-server: {} requests {approval_id}",
             turn.turn_id
         ));
-        self.ledger
-            .approvals
-            .insert(approval_id.clone(), ExpectedApproval::Open);
+        self.ledger.approvals.push(SimApproval {
+            approval_id: approval_id.clone(),
+            thread_id: turn.thread_id.clone(),
+            turn_id: turn.turn_id.clone(),
+            lifetime: self.restarts,
+            request_delivered: false,
+            end: None,
+            end_delivered: false,
+            never_recorded: false,
+        });
         self.send_core_input(CoreInput::ConversationStreamUpdated {
             correlation: turn.correlation,
             event: TurnStreamEvent::ApprovalRequested {
@@ -1256,8 +1325,7 @@ impl Simulation {
         };
         self.record(format!("app-server: {approval_id} ended {sent:?}"));
         self.ledger
-            .approvals
-            .insert(approval_id.clone(), ExpectedApproval::Resolved(expected));
+            .end_approval(&approval_id, self.restarts, expected);
         self.send_core_input(CoreInput::ConversationStreamUpdated {
             correlation: turn.correlation,
             event: TurnStreamEvent::ApprovalResolved {
@@ -1278,7 +1346,8 @@ impl Simulation {
             turn.turn_id, turn.stage
         ));
         if let Some(approval_id) = &turn.approval {
-            self.ledger.withdraw_approval(approval_id);
+            self.ledger
+                .end_approval(approval_id, self.restarts, ApprovalResolution::Withdrawn);
         }
         self.turn = None;
         self.send_core_input(CoreInput::ConversationStreamUpdated {
@@ -1323,7 +1392,8 @@ impl Simulation {
         };
         self.record(format!("app-server: {} ended {outcome:?}", turn.turn_id));
         if let Some(approval_id) = &turn.approval {
-            self.ledger.withdraw_approval(approval_id);
+            self.ledger
+                .end_approval(approval_id, self.restarts, ApprovalResolution::Withdrawn);
         }
         self.turn = None;
         let receipt = ConversationTurnTerminalReceipt::new(
