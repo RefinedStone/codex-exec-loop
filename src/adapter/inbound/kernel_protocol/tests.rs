@@ -217,6 +217,9 @@ fn a_command_is_described_for_the_record_without_its_content() {
     // `printf '%s' '{"type":"stop_all"}' | shasum -a 256` 의 앞 32글자이다.
     assert_eq!(stop.fingerprint, "3d50b0f9d9db44466ce2c5fcde73eb7f");
     assert_eq!(stop.thread_id, "");
+    // 필드가 여럿인 명령은 키를 정렬한 JSON 의 지문이다:
+    // `{"expected_turn_id":"turn-1","prompt":"secret words","thread_id":"thread-1","type":"steer_turn"}`.
+    assert_eq!(described.fingerprint, "7a79475eb8e56bb1a8b1318dd9076ca9");
 }
 
 #[test]
@@ -284,6 +287,27 @@ fn a_command_response_carries_the_operation_receipt() {
         KernelProtocolError::idempotency_key_reused().code,
         ERROR_IDEMPOTENCY_KEY_REUSED
     );
+    assert_eq!(
+        KernelProtocolError::idempotency_unavailable().code,
+        ERROR_IDEMPOTENCY_UNAVAILABLE
+    );
+}
+
+#[test]
+fn a_prompt_refused_before_preparation_is_a_rejected_command() {
+    // plan 19 Q3-6 review: the receipt of `submit_prompt` must not say accepted when core refused it at once.
+    let refused = CommandResponse::from_core(Some(&[AppEvent::ThreadPromptAdmissionResolved {
+        thread_id: "thread-1".to_string(),
+        admission: crate::core::app::ThreadPromptAdmission::RejectedBusy,
+    }]))
+    .with_operation(Some(crate::domain::kernel_event::OperationReceipt {
+        op_id: 5,
+        rejection: Some(CommandRejectionReason::Busy),
+        replayed: false,
+    }));
+    let json = serde_json::to_value(refused).expect("response should serialize");
+    assert_eq!(json["rejection"]["reason"], json!("busy"));
+    assert_eq!(json["operation"]["state"], json!("rejected"));
 }
 
 #[test]

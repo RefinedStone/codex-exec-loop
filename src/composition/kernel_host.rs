@@ -53,6 +53,8 @@ pub(crate) enum KernelCommandOutcome {
     Replayed(OperationReceipt),
     /// 그 멱등 키는 다른 명령에 썼다. 실행하지 않았다.
     KeyReused,
+    /// 이 커널은 기록이 없어서 재전송을 가릴 수 없다. 키가 있는 명령을 실행하지 않았다.
+    KeyUnavailable,
 }
 
 /// 커널 호출이 답을 받지 못한 이유이다.
@@ -302,7 +304,9 @@ impl KernelCommandSender {
         self.send_described_command(command, None, timeout)
             .map(|outcome| match outcome {
                 KernelCommandOutcome::Handled { events, .. } => events,
-                KernelCommandOutcome::Replayed(_) | KernelCommandOutcome::KeyReused => Vec::new(),
+                KernelCommandOutcome::Replayed(_)
+                | KernelCommandOutcome::KeyReused
+                | KernelCommandOutcome::KeyUnavailable => Vec::new(),
             })
     }
 
@@ -601,6 +605,7 @@ impl KernelHostLoop {
         match self.runtime.dispatch_client_command(command, descriptor) {
             ClientCommandDispatch::Replayed(receipt) => KernelCommandOutcome::Replayed(receipt),
             ClientCommandDispatch::KeyReused => KernelCommandOutcome::KeyReused,
+            ClientCommandDispatch::KeyUnavailable => KernelCommandOutcome::KeyUnavailable,
             ClientCommandDispatch::Ran { outcome, operation } => {
                 let events = core_events(&outcome).to_vec();
                 self.publish(outcome);
