@@ -185,7 +185,13 @@ a summary of at most 200 characters; never the command, patch, or paths) and `ap
 `accepted`, `declined`, `timed_out`, `withdrawn` (gone without a decision), or `lost`. When a kernel
 attaches its log, it closes every approval the previous kernel left open as `lost`, because that
 request belonged to the previous kernel's app-server connection. `akra/kernel/describe` lists all
-record kinds in `records`. The table
+record kinds in `records`. Client commands are records as well: before the kernel host runs a
+command that came with a descriptor, the runtime records `command_received` (command name, thread,
+a fingerprint of the content, the optional idempotency key); the sequence of that record is the
+operation id. A command that core refuses at once adds `command_rejected`. The set of handled
+idempotency keys is a projection of the log: it is rebuilt from the command kinds when the log is
+attached, so a resend with the same key and fingerprint does not run again, also after a restart.
+The table
 is created on first use, without a schema version change, so older binaries still open the store.
 The TUI runtime drops kernel records. Reopening a thread
 shows its live runtime state; its transcript is reloaded from the provider.

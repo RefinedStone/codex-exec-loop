@@ -105,7 +105,7 @@ adapter `src/adapter/inbound/kernel_protocol/` 에 둔다. core 는 직렬화를
 | --- | --- | --- |
 | `akra/kernel/attach` | 요청 | `{ workspace, client_name }` → `{ client_id, protocol_version, kernel }`. `kernel` 은 저장소 신원이다. 그 폴더가 속한 저장소의 커널에 붙는다 (없으면 만든다, §3.4) |
 | `akra/kernel/describe` | 요청 | 메서드, 명령, 이벤트 목록, 판단 사건 기록의 종류(`records`, plan 19 Q3-5)와 버전 (§4.3 자기 설명) |
-| `akra/kernel/command` | 요청 | `{ command }` → `{ processed, rejection? }`. 커널이 처리한 뒤 답한다. 바로 거절한 명령(`steer_turn`, `decide_approval`)은 `rejection` 에 이유 코드를 담는다. `submit_prompt` 의 진행과 거절은 `prompt_submission` 이벤트가 이유 코드와 함께 알린다 |
+| `akra/kernel/command` | 요청 | `{ command, idempotency_key? }` → `{ processed, rejection?, operation? }` (`operation` 과 키는 plan 19 Q3-6). 커널이 처리한 뒤 답한다. 바로 거절한 명령(`steer_turn`, `decide_approval`)은 `rejection` 에 이유 코드를 담는다. `submit_prompt` 의 진행과 거절은 `prompt_submission` 이벤트가 이유 코드와 함께 알린다 |
 | `akra/kernel/query` | 요청 | 세션 목록, 자동 후속 설정, thread 요약, planning 큐, 병렬 작업 상태(K3-6), 판단 사건 기록(`history`, plan 19 Q3-3). 보는 대화의 턴 상태는 TUI 화면용이라 보내지 않는다 (§3.2) |
 | `akra/kernel/event` | 알림 (서버→클라이언트) | `{ event }`. attach 뒤 자동으로 받는다. 대상 지정은 K6 (§1) |
 | `akra/kernel/detach` | 요청 | 클라이언트 세션을 닫는다. 접속이 끊겨도 같다. 답 뒤에는 이벤트가 오지 않는다 |
@@ -114,8 +114,9 @@ v0 명령은 화면 흐름 단계가 아니라 한 번에 끝나는 도메인 �
 제출을 하나로), steer, 정지, 승인 결정, 자동 후속 설정, 이름 바꾸기, planning
 초기화(확인 필수. 확인 값은 core 명령에 실려 planning 서비스까지 간다), planning 다시 읽기(K3-6). 나머지 명령은 K4 에서 명령 스펙으로 옮길 때 더한다.
 
-호출자 신원은 접속이다 (로컬 소유자만 접속할 수 있다). 멱등 키는 v0 에 없다. 재전송을 가리려면 처리한 명령을
-기억해야 하므로 사건 기록과 함께 K5 에서 더한다. 그때까지 `idempotency_key` 를 보내면 모르는 필드로 거절한다.
+호출자 신원은 접속이다 (로컬 소유자만 접속할 수 있다). 멱등 키는 처음의 v0 에 없었고, 사건 기록과 함께 더했다
+(2026-11-11, plan 19 Q3-6): 요청의 `idempotency_key` 와 답의 `operation { op_id, state, next, replayed }` 이다. 커널은
+받은 명령을 기록하고, 같은 키의 같은 명령은 다시 실행하지 않는다. 같은 키의 다른 명령은 `-32014` 이다.
 원격 인증은 만들지 않는다 (Q-K6).
 
 ### 3.4 저장소당 커널 하나 (2026-11-09 개정)

@@ -295,7 +295,14 @@ the desktop app itself is not shipped yet.
   same `sequence`; after `resync`, read `history` after the last sequence seen. Approval requests and
   their ends are records (`approval_requested`, `approval_resolved` with `accepted`, `declined`,
   `timed_out`, `withdrawn`, or `lost`); a restarted kernel records the approvals of the previous kernel
-  as `lost` and cannot answer them. While a client is attached the kernel refreshes the parallel supervisor snapshot, and the
+  as `lost` and cannot answer them. `akra/kernel/command` accepts an optional `idempotency_key`
+  (1 to 128 characters) and answers a recorded command with
+  `operation { op_id, state, next { query, after }, replayed }`: `op_id` is the sequence of the
+  `command_received` record, `state` is `accepted` or `rejected`, and the progress of the command is
+  the log after `op_id`. A resend with the same key and the same command does not run again and gets
+  the first receipt with `replayed`; the same key with another command fails with `-32014`. Keys are
+  remembered while their record is in the log, also across a kernel restart. `load_sessions` and
+  `refresh_planning` are not recorded and have no receipt. While a client is attached the kernel refreshes the parallel supervisor snapshot, and the
   first attach runs one supervisor inspection that does not change the pool (it runs the push readiness
   check, like the TUI parallel view).
 - A kernel with no attached client and no remaining work (turns, approvals, auto-follow, evaluation,
