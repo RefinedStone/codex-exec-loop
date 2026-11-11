@@ -7,6 +7,7 @@
   "scripts": {
     "predev": "node scripts/prepare-dev.mjs",
     "dev": "electron-vite dev",
+    "blueprint": "node scripts/blueprint.mjs",
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "check": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",

@@ -25,5 +25,6 @@ describe("npm run dev preparation", () => {
     expect(gatewayBuildSkipReason({})).toBeNull();
     expect(gatewayBuildSkipReason({ AKRA_GATEWAY_ENDPOINT: "/tmp/fake.sock" })).toMatch(/AKRA_GATEWAY_ENDPOINT/);
     expect(gatewayBuildSkipReason({ AKRA_GATEWAY_BIN: "/opt/gw" })).toMatch(/AKRA_GATEWAY_BIN/);
+    expect(gatewayBuildSkipReason({ AKRA_DESKTOP_BLUEPRINT: "1" })).toMatch(/AKRA_DESKTOP_BLUEPRINT/);
   });
 });

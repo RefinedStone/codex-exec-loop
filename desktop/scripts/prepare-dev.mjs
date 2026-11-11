@@ -18,6 +18,9 @@ export function electronBinaryReady(electronRoot, exists = existsSync, readText 
 
 /** Gateway 를 빌드하지 않아도 되는 이유를 돌려준다. 빌드해야 하면 null 이다. */
 export function gatewayBuildSkipReason(env) {
+  if (env.AKRA_DESKTOP_BLUEPRINT === "1") {
+    return "AKRA_DESKTOP_BLUEPRINT is set; the blueprint screen uses no gateway";
+  }
   if (env.AKRA_GATEWAY_ENDPOINT) {
     return "AKRA_GATEWAY_ENDPOINT is set; the app uses that gateway";
   }
