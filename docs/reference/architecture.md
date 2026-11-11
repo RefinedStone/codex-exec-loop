@@ -180,7 +180,12 @@ cursor on the kernel host thread. The repository kernel is the only writer of it
 numbers the records itself, starting after the stored maximum, and sends each one live as a
 `recorded` kernel event with the same sequence; a client that gets `resync` reads `history` after
 the last sequence it saw. A `turn_ended` record carries the terminal outcome when the dispatch input
-reported it. The table
+reported it. Approvals are records too: `approval_requested` (thread, turn, approval id, request kind,
+a summary of at most 200 characters; never the command, patch, or paths) and `approval_resolved` with
+`accepted`, `declined`, `timed_out`, `withdrawn` (gone without a decision), or `lost`. When a kernel
+attaches its log, it closes every approval the previous kernel left open as `lost`, because that
+request belonged to the previous kernel's app-server connection. `akra/kernel/describe` lists all
+record kinds in `records`. The table
 is created on first use, without a schema version change, so older binaries still open the store.
 The TUI runtime drops kernel records. Reopening a thread
 shows its live runtime state; its transcript is reloaded from the provider.
