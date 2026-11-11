@@ -178,12 +178,111 @@ fn unknown_commands_and_fields_are_refused() {
     );
     serde_json::from_value::<CommandRequest>(json!({"command": {"type": "stop_all"}}))
         .expect("a command request needs only the command");
-    assert!(
-        serde_json::from_value::<CommandRequest>(
-            json!({"command": {"type": "stop_all"}, "idempotency_key": "k-1"})
-        )
-        .is_err(),
-        "v0 has no idempotency key; a client must not think a retry is deduplicated"
+}
+
+fn command_request(command: serde_json::Value, key: Option<&str>) -> CommandRequest {
+    let mut request = json!({ "command": command });
+    if let Some(key) = key {
+        request["idempotency_key"] = json!(key);
+    }
+    serde_json::from_value(request).expect("the request should parse")
+}
+
+#[test]
+fn a_command_is_described_for_the_record_without_its_content() {
+    // plan 19 Q3-6: the kernel records the command name, its thread, and a fingerprint of the content.
+    let steer = json!({"type": "steer_turn", "thread_id": "thread-1", "expected_turn_id": "turn-1", "prompt": "secret words"});
+    let described = command_request(steer.clone(), Some("key-1"))
+        .descriptor()
+        .expect("the key is valid")
+        .expect("steer is recorded");
+    assert_eq!(described.command, "steer_turn");
+    assert_eq!(described.thread_id, "thread-1");
+    assert_eq!(described.idempotency_key.as_deref(), Some("key-1"));
+    assert_eq!(described.fingerprint.len(), 32);
+    assert!(!format!("{described:?}").contains("secret"));
+
+    // 같은 명령은 같은 지문이고, 내용이 다르면 지문이 다르다. 키는 지문에 들지 않는다.
+    let same = command_request(steer, None).descriptor().unwrap().unwrap();
+    assert_eq!(same.fingerprint, described.fingerprint);
+    assert_eq!(same.idempotency_key, None);
+    let other = json!({"type": "steer_turn", "thread_id": "thread-1", "expected_turn_id": "turn-1", "prompt": "other words"});
+    let other = command_request(other, None).descriptor().unwrap().unwrap();
+    assert_ne!(other.fingerprint, described.fingerprint);
+    // 지문은 binary 가 바뀌어도 같아야 한다. 다시 조립한 커널이 기록의 지문과 견준다.
+    let stop = command_request(json!({"type": "stop_all"}), None)
+        .descriptor()
+        .unwrap()
+        .unwrap();
+    // `printf '%s' '{"type":"stop_all"}' | shasum -a 256` 의 앞 32글자이다.
+    assert_eq!(stop.fingerprint, "3d50b0f9d9db44466ce2c5fcde73eb7f");
+    assert_eq!(stop.thread_id, "");
+}
+
+#[test]
+fn read_commands_are_not_recorded_and_bad_keys_are_refused() {
+    for read in ["load_sessions", "refresh_planning"] {
+        let request = command_request(json!({ "type": read }), Some("key-1"));
+        assert_eq!(request.descriptor().expect("the key is valid"), None);
+    }
+    for key in ["", "   ", "line\nbreak", &"k".repeat(129)] {
+        let request = command_request(json!({"type": "stop_all"}), Some(key));
+        assert_eq!(
+            request
+                .descriptor()
+                .expect_err("the key should be refused")
+                .code,
+            ERROR_INVALID_PARAMS,
+            "{key:?}"
+        );
+    }
+    command_request(json!({"type": "stop_all"}), Some(&"k".repeat(128)))
+        .descriptor()
+        .expect("128 characters are allowed");
+}
+
+#[test]
+fn a_command_response_carries_the_operation_receipt() {
+    use crate::domain::kernel_event::OperationReceipt;
+    let accepted = CommandResponse::from_core(Some(&[])).with_operation(Some(OperationReceipt {
+        op_id: 41,
+        rejection: None,
+        replayed: false,
+    }));
+    assert_eq!(
+        serde_json::to_value(accepted).expect("response should serialize"),
+        json!({
+            "processed": true,
+            "operation": { "op_id": 41, "state": "accepted", "next": { "query": "history", "after": 41 } },
+        })
+    );
+    let replayed = CommandResponse::replayed(OperationReceipt {
+        op_id: 41,
+        rejection: Some(CommandRejectionReason::NoMatchingTurn),
+        replayed: true,
+    });
+    assert_eq!(
+        serde_json::to_value(replayed).expect("response should serialize"),
+        json!({
+            "processed": true,
+            "rejection": { "reason": "no_matching_turn", "message": "the thread has no running turn with that id" },
+            "operation": {
+                "op_id": 41,
+                "state": "rejected",
+                "next": { "query": "history", "after": 41 },
+                "replayed": true,
+            },
+        })
+    );
+    // 영수증이 없는 답은 이전과 같은 모양이다.
+    assert_eq!(
+        serde_json::to_value(CommandResponse::from_core(Some(&[])).with_operation(None))
+            .expect("response should serialize"),
+        json!({ "processed": true })
+    );
+    assert_eq!(
+        KernelProtocolError::idempotency_key_reused().code,
+        ERROR_IDEMPOTENCY_KEY_REUSED
     );
 }
 
@@ -427,6 +526,7 @@ fn command_response_names_why_the_kernel_refused_a_command() {
         CommandResponse {
             processed: false,
             rejection: None,
+            operation: None,
         }
     );
     assert_eq!(
@@ -434,6 +534,7 @@ fn command_response_names_why_the_kernel_refused_a_command() {
         CommandResponse {
             processed: true,
             rejection: None,
+            operation: None,
         }
     );
     let refused = CommandResponse::from_core(Some(&[AppEvent::TurnSteerAdmissionResolved(

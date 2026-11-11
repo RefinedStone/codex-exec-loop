@@ -115,6 +115,44 @@ pub struct PendingApproval {
     pub summary: String,
 }
 
+/// 커널이 명령을 바로 거절한 이유이다 (plan 18 K3, plan 19 Q3-6). 이름이 다음 행동을 알려 준다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandRejectionReason {
+    /// 같은 턴에 보낸 steer 가 아직 처리 중이다. 끝난 뒤 다시 보낸다.
+    SteerInFlight,
+    /// 그 thread 에 `expected_turn_id` 로 도는 턴이 없다. `thread_activity` 의 `active_turn_id` 를 쓴다.
+    NoMatchingTurn,
+    /// 같은 승인에 보낸 결정이 아직 처리 중이다.
+    DecisionInFlight,
+    /// 기다리는 승인 중에 그 id 가 없다. `thread_activity` 의 `approval` 을 쓴다.
+    NoMatchingApproval,
+}
+
+/*
+ * 클라이언트가 보낸 명령을 기록하기 위한 설명이다 (plan 19 Q3-6). 명령의 내용(프롬프트 글 등)은 담지 않는다.
+ * `fingerprint` 는 내용의 지문이다. 같은 멱등 키로 온 명령이 같은 명령인지 볼 때만 쓴다.
+ */
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KernelCommandDescriptor {
+    /// 명령 종류의 이름이다 (예: `submit_prompt`).
+    pub command: String,
+    /// 명령이 가리키는 thread 이다. thread 를 가리키지 않는 명령은 비어 있다.
+    pub thread_id: String,
+    pub fingerprint: String,
+    pub idempotency_key: Option<String>,
+}
+
+/// 명령의 영수증이다 (plan 19 Q3-6). `op_id` 는 그 명령을 받은 기록의 sequence 이다. 진행은 그 뒤의 기록이다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OperationReceipt {
+    pub op_id: i64,
+    /// 커널이 명령을 바로 거절했으면 그 이유이다.
+    pub rejection: Option<CommandRejectionReason>,
+    /// 같은 멱등 키의 명령을 전에 받았다. 다시 실행하지 않았고, 처음의 결과이다.
+    pub replayed: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum KernelEvent {
@@ -162,6 +200,21 @@ pub enum KernelEvent {
         approval_id: String,
         resolution: ApprovalResolution,
     },
+    /// 클라이언트의 명령을 받았다 (plan 19 Q3-6). 처리하기 전에 기록한다. `op_id` 는 이 기록의 sequence 이다.
+    CommandReceived {
+        op_id: i64,
+        command: String,
+        thread_id: String,
+        fingerprint: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        idempotency_key: Option<String>,
+    },
+    /// 커널이 그 명령을 바로 거절했다.
+    CommandRejected {
+        op_id: i64,
+        thread_id: String,
+        reason: CommandRejectionReason,
+    },
 }
 
 /// 기록에서 읽은 사건 하나이다 (plan 19 Q3-3). `sequence` 는 기록 순서이고 cursor 로 쓴다.
@@ -192,7 +245,7 @@ pub const MAX_KERNEL_EVENT_PAGE: usize = 500;
 pub const THREAD_PROMPT_QUEUE_KINDS: [&str; 2] = ["thread_prompt_queued", "thread_prompt_settled"];
 
 /// 기록에 쓰는 모든 사건 종류이다. 자기 설명(`describe`)이 이 목록을 알린다.
-pub const KERNEL_EVENT_KINDS: [&str; 9] = [
+pub const KERNEL_EVENT_KINDS: [&str; 11] = [
     "thread_prompt_queued",
     "thread_prompt_settled",
     "thread_prompt_rejected",
@@ -202,7 +255,12 @@ pub const KERNEL_EVENT_KINDS: [&str; 9] = [
     "post_turn_routed",
     "approval_requested",
     "approval_resolved",
+    "command_received",
+    "command_rejected",
 ];
+
+/// 처리한 명령을 되돌릴 때 읽는 사건 종류이다 (plan 19 Q3-6).
+pub const COMMAND_KINDS: [&str; 2] = ["command_received", "command_rejected"];
 
 /// 열린 승인을 찾을 때 읽는 사건 종류이다 (plan 19 Q3-5).
 pub const APPROVAL_KINDS: [&str; 2] = ["approval_requested", "approval_resolved"];
@@ -266,6 +324,8 @@ impl KernelEvent {
             Self::PostTurnRouted { .. } => "post_turn_routed",
             Self::ApprovalRequested(_) => "approval_requested",
             Self::ApprovalResolved { .. } => "approval_resolved",
+            Self::CommandReceived { .. } => "command_received",
+            Self::CommandRejected { .. } => "command_rejected",
         }
     }
 
@@ -274,6 +334,8 @@ impl KernelEvent {
             Self::ThreadPromptQueued(prompt) => &prompt.thread_id,
             Self::ApprovalRequested(approval) => &approval.thread_id,
             Self::ApprovalResolved { thread_id, .. }
+            | Self::CommandReceived { thread_id, .. }
+            | Self::CommandRejected { thread_id, .. }
             | Self::ThreadPromptSettled { thread_id, .. }
             | Self::ThreadPromptRejected { thread_id, .. }
             | Self::TurnSubmitted { thread_id, .. }
@@ -364,6 +426,96 @@ pub fn open_approvals(events: impl IntoIterator<Item = KernelEvent>) -> Vec<Pend
         }
     }
     open
+}
+
+/// 멱등 키로 기억한 명령 하나이다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RememberedCommand {
+    op_id: i64,
+    fingerprint: String,
+    rejection: Option<CommandRejectionReason>,
+}
+
+/// 멱등 키로 명령을 찾은 결과이다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandRecall {
+    /// 이 키는 처음이다.
+    Unknown,
+    /// 같은 명령을 전에 받았다. 다시 실행하지 않는다.
+    Same(OperationReceipt),
+    /// 이 키는 다른 명령에 썼다.
+    Different,
+}
+
+/*
+ * 멱등 키로 기억하는 처리한 명령이다 (plan 19 Q3-6). 기록의 투영이다. 따로 저장하지 않고, 커널을 조립할 때 기록의
+ * 명령 종류(`COMMAND_KINDS`)에서 다시 만든다. 그래서 기록에 남아 있는 동안만 기억한다.
+ */
+#[derive(Debug, Default)]
+pub struct CommandMemory {
+    by_key: std::collections::BTreeMap<String, RememberedCommand>,
+}
+
+impl CommandMemory {
+    /// 기록 순서대로 읽은 사건에서 다시 만든다. 키가 없는 명령은 기억하지 않는다.
+    pub fn from_events(events: impl IntoIterator<Item = KernelEvent>) -> Self {
+        let mut memory = Self::default();
+        for event in events {
+            match event {
+                KernelEvent::CommandReceived {
+                    op_id,
+                    fingerprint,
+                    idempotency_key: Some(key),
+                    ..
+                } => memory.remember(&key, op_id, &fingerprint),
+                KernelEvent::CommandRejected { op_id, reason, .. } => memory.reject(op_id, reason),
+                _ => {}
+            }
+        }
+        memory
+    }
+
+    pub fn recall(&self, key: &str, fingerprint: &str) -> CommandRecall {
+        match self.by_key.get(key) {
+            None => CommandRecall::Unknown,
+            Some(remembered) if remembered.fingerprint == fingerprint => {
+                CommandRecall::Same(OperationReceipt {
+                    op_id: remembered.op_id,
+                    rejection: remembered.rejection,
+                    replayed: true,
+                })
+            }
+            Some(_) => CommandRecall::Different,
+        }
+    }
+
+    pub fn remember(&mut self, key: &str, op_id: i64, fingerprint: &str) {
+        self.by_key.insert(
+            key.to_string(),
+            RememberedCommand {
+                op_id,
+                fingerprint: fingerprint.to_string(),
+                rejection: None,
+            },
+        );
+    }
+
+    /// 그 연산이 바로 거절되었다. 같은 키로 다시 오면 같은 거절을 답한다.
+    pub fn reject(&mut self, op_id: i64, reason: CommandRejectionReason) {
+        if let Some(remembered) = self
+            .by_key
+            .values_mut()
+            .find(|remembered| remembered.op_id == op_id)
+        {
+            remembered.rejection = Some(reason);
+        }
+    }
+
+    /// 기록에서 지워진 범위의 명령은 잊는다. 기록의 보존 한도와 같은 범위만 기억한다.
+    pub fn forget_before(&mut self, oldest_op_id: i64) {
+        self.by_key
+            .retain(|_, remembered| remembered.op_id >= oldest_op_id);
+    }
 }
 
 /// 기록 순서대로 읽은 사건에서 아직 끝나지 않은 남김을 남긴 차례대로 돌려준다.
@@ -495,6 +647,12 @@ mod tests {
             },
             KernelEvent::ApprovalRequested(approval("thread-1", "a")),
             approval("thread-1", "a").resolved(ApprovalResolution::TimedOut),
+            received(7, Some("key-1"), "fp-1"),
+            KernelEvent::CommandRejected {
+                op_id: 7,
+                thread_id: "thread-1".to_string(),
+                reason: CommandRejectionReason::NoMatchingTurn,
+            },
         ];
         // 종류 하나에 사건 하나이다. 새 사건은 이 목록과 `KERNEL_EVENT_KINDS` 에 함께 더한다.
         assert_eq!(
@@ -588,6 +746,75 @@ mod tests {
                 "summary",
                 "thread_id"
             ]
+        );
+    }
+
+    fn received(op_id: i64, key: Option<&str>, fingerprint: &str) -> KernelEvent {
+        KernelEvent::CommandReceived {
+            op_id,
+            command: "steer_turn".to_string(),
+            thread_id: "thread-1".to_string(),
+            fingerprint: fingerprint.to_string(),
+            idempotency_key: key.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn the_command_memory_is_rebuilt_from_the_record() {
+        // plan 19 Q3-6: the memory is a projection of the log. Only commands with a key are remembered.
+        let mut memory = CommandMemory::from_events([
+            received(3, Some("key-a"), "fp-a"),
+            received(4, None, "fp-b"),
+            received(9, Some("key-c"), "fp-c"),
+            KernelEvent::CommandRejected {
+                op_id: 9,
+                thread_id: "thread-1".to_string(),
+                reason: CommandRejectionReason::SteerInFlight,
+            },
+            settled("task-1"),
+        ]);
+        assert_eq!(
+            memory.recall("key-a", "fp-a"),
+            CommandRecall::Same(OperationReceipt {
+                op_id: 3,
+                rejection: None,
+                replayed: true,
+            })
+        );
+        assert_eq!(
+            memory.recall("key-c", "fp-c"),
+            CommandRecall::Same(OperationReceipt {
+                op_id: 9,
+                rejection: Some(CommandRejectionReason::SteerInFlight),
+                replayed: true,
+            }),
+            "a resend gets the same rejection"
+        );
+        assert_eq!(memory.recall("key-a", "fp-other"), CommandRecall::Different);
+        assert_eq!(memory.recall("key-z", "fp-a"), CommandRecall::Unknown);
+
+        // 기록에서 지워진 범위는 잊는다.
+        memory.forget_before(9);
+        assert_eq!(memory.recall("key-a", "fp-a"), CommandRecall::Unknown);
+        assert!(matches!(
+            memory.recall("key-c", "fp-c"),
+            CommandRecall::Same(_)
+        ));
+    }
+
+    #[test]
+    fn a_command_record_has_no_content_and_leaves_out_a_missing_key() {
+        let json = serde_json::to_value(received(4, None, "fp-b")).expect("event should serialize");
+        let mut fields = json
+            .as_object()
+            .expect("an event is an object")
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        fields.sort_unstable();
+        assert_eq!(
+            fields,
+            ["command", "fingerprint", "kind", "op_id", "thread_id"]
         );
     }
 

@@ -8,14 +8,16 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use crate::composition::native_client_runtime::NativeClientRuntime;
+use crate::composition::native_client_runtime::{ClientCommandDispatch, NativeClientRuntime};
 use crate::core::app::{AppCommand, AppEvent, AppSnapshot, CoreInput, ThreadActivitySummary};
 use crate::core::native_client_port::{
     NativeClientDispatchOutcome, NativeClientEvent, ParallelModeControlPlaneCommand,
     ParallelModeControlPlanePresentationEvent, ParallelViewState,
 };
 use crate::core::runtime::CoreInputWaker;
-use crate::domain::kernel_event::{KernelEventPage, RecordedKernelEvent};
+use crate::domain::kernel_event::{
+    KernelCommandDescriptor, KernelEventPage, OperationReceipt, RecordedKernelEvent,
+};
 use crate::domain::parallel_mode::ParallelModeSupervisorSnapshot;
 use crate::domain::planning::RuntimeProjection;
 
@@ -37,6 +39,21 @@ const SUPERVISOR_INSPECTION_REUSE: Duration = Duration::from_secs(60);
 const ATTACH_REPLY_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(crate) type KernelClientId = u64;
+
+/// 커널이 명령 하나를 처리한 결과이다 (plan 19 Q3-6).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum KernelCommandOutcome {
+    /// 커널이 명령을 실행했다. `events` 는 그 처리에서 나온 core 이벤트이고, 요청한 클라이언트는 이것으로 거절
+    /// 이유를 안다. 같은 이벤트는 모든 클라이언트에도 간다. `operation` 은 기록한 명령의 영수증이다.
+    Handled {
+        events: Vec<AppEvent>,
+        operation: Option<OperationReceipt>,
+    },
+    /// 같은 멱등 키의 같은 명령을 전에 받았다. 실행하지 않았다.
+    Replayed(OperationReceipt),
+    /// 그 멱등 키는 다른 명령에 썼다. 실행하지 않았다.
+    KeyReused,
+}
 
 /// 커널 호출이 답을 받지 못한 이유이다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,7 +171,9 @@ enum KernelHostInput {
     },
     Command {
         command: AppCommand,
-        reply: Sender<Vec<AppEvent>>,
+        /// 기록과 멱등에 쓰는 설명이다 (plan 19 Q3-6). 없으면 기록하지 않고 영수증도 없다.
+        descriptor: Option<KernelCommandDescriptor>,
+        reply: Sender<KernelCommandOutcome>,
     },
     #[cfg(test)]
     Inputs(Vec<CoreInput>),
@@ -274,14 +293,36 @@ pub(crate) struct KernelCommandSender {
 impl KernelCommandSender {
     /// 명령을 커널에 넣는다. 커널이 처리한 뒤 그 처리에서 나온 core 이벤트를 돌려준다. 요청한 클라이언트는 이것으로
     /// 거절 이유를 안다. 같은 이벤트는 모든 클라이언트에도 간다. `TimedOut` 이어도 커널은 명령을 나중에 처리할 수 있다.
+    #[cfg(test)]
     pub(crate) fn send_command(
         &self,
         command: AppCommand,
         timeout: Duration,
     ) -> Result<Vec<AppEvent>, KernelCallError> {
+        self.send_described_command(command, None, timeout)
+            .map(|outcome| match outcome {
+                KernelCommandOutcome::Handled { events, .. } => events,
+                KernelCommandOutcome::Replayed(_) | KernelCommandOutcome::KeyReused => Vec::new(),
+            })
+    }
+
+    /*
+     * 명령을 그 설명과 함께 커널에 넣는다 (plan 19 Q3-6). 커널은 설명으로 명령을 기록하고, 멱등 키로 재전송을 가린다.
+     * 재전송이면 커널은 명령을 실행하지 않고 처음의 영수증을 돌려준다. 설명이 없는 명령(읽기 명령)은 기록하지 않는다.
+     */
+    pub(crate) fn send_described_command(
+        &self,
+        command: AppCommand,
+        descriptor: Option<KernelCommandDescriptor>,
+        timeout: Duration,
+    ) -> Result<KernelCommandOutcome, KernelCallError> {
         let (reply, answer) = mpsc::channel();
         self.inbox
-            .send(KernelHostInput::Command { command, reply })
+            .send(KernelHostInput::Command {
+                command,
+                descriptor,
+                reply,
+            })
             .map_err(|_| KernelCallError::Stopped)?;
         wait_reply(&answer, timeout)
     }
@@ -511,14 +552,12 @@ impl KernelHostLoop {
                     self.remove_client(client_id);
                 }
             }
-            KernelHostInput::Command { command, reply } => {
-                let outcome = self
-                    .runtime
-                    .dispatch_client_event(NativeClientEvent::core(CoreInput::Command(command)));
-                let events = core_events(&outcome).to_vec();
-                self.publish(outcome);
-                self.sync_parallel_mode();
-                let _ = reply.send(events);
+            KernelHostInput::Command {
+                command,
+                descriptor,
+                reply,
+            } => {
+                let _ = reply.send(self.handle_command(command, descriptor.as_ref()));
             }
             #[cfg(test)]
             KernelHostInput::Inputs(inputs) => {
@@ -550,6 +589,24 @@ impl KernelHostLoop {
             }
             KernelHostInput::Detach { client_id } => self.remove_client(client_id),
             KernelHostInput::Shutdown => {}
+        }
+    }
+
+    /// 클라이언트의 명령을 처리한다. 런타임이 명령을 기록하고 멱등 키로 재전송을 가린다 (plan 19 Q3-6).
+    fn handle_command(
+        &mut self,
+        command: AppCommand,
+        descriptor: Option<&KernelCommandDescriptor>,
+    ) -> KernelCommandOutcome {
+        match self.runtime.dispatch_client_command(command, descriptor) {
+            ClientCommandDispatch::Replayed(receipt) => KernelCommandOutcome::Replayed(receipt),
+            ClientCommandDispatch::KeyReused => KernelCommandOutcome::KeyReused,
+            ClientCommandDispatch::Ran { outcome, operation } => {
+                let events = core_events(&outcome).to_vec();
+                self.publish(outcome);
+                self.sync_parallel_mode();
+                KernelCommandOutcome::Handled { events, operation }
+            }
         }
     }
 
@@ -1171,6 +1228,79 @@ mod tests {
                 next_after,
             })
         }
+    }
+
+    #[test]
+    fn a_resent_command_runs_once_and_gets_the_first_receipt() {
+        // plan 19 Q3-6: the host records the command before it runs it and tells resends apart by the key.
+        use crate::domain::conversation::ConversationTurnSteerRequest;
+        use crate::domain::kernel_event::{
+            CommandRejectionReason, KernelCommandDescriptor, KernelEvent, OperationReceipt,
+        };
+        let (mut runtime, _turns) = recording_runtime_for_test();
+        runtime.attach_kernel_event_log(Arc::new(PagedLog(Vec::new())), "/workspace");
+        let host = KernelHost::start(runtime).expect("kernel host thread should start");
+        let client = host.attach().expect("a client should attach");
+        let commands = client.commands();
+        let steer = || {
+            AppCommand::SteerTurn(ConversationTurnSteerRequest {
+                thread_id: "thread-9".to_string(),
+                expected_turn_id: "turn-1".to_string(),
+                prompt: "go on".to_string(),
+            })
+        };
+        let described = |fingerprint: &str| {
+            Some(KernelCommandDescriptor {
+                command: "steer_turn".to_string(),
+                thread_id: "thread-9".to_string(),
+                fingerprint: fingerprint.to_string(),
+                idempotency_key: Some("key-1".to_string()),
+            })
+        };
+        let send = |fingerprint: &str| {
+            commands
+                .send_described_command(steer(), described(fingerprint), TEST_REPLY_TIMEOUT)
+                .expect("the host should answer")
+        };
+        let rejected = Some(CommandRejectionReason::NoMatchingTurn);
+
+        let KernelCommandOutcome::Handled { events, operation } = send("fp-1") else {
+            panic!("the first command should run");
+        };
+        assert_eq!(
+            operation,
+            Some(OperationReceipt {
+                op_id: 1,
+                rejection: rejected,
+                replayed: false,
+            })
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| event.command_rejection().is_some())
+        );
+        assert_eq!(
+            send("fp-1"),
+            KernelCommandOutcome::Replayed(OperationReceipt {
+                op_id: 1,
+                rejection: rejected,
+                replayed: true,
+            })
+        );
+        assert_eq!(send("fp-2"), KernelCommandOutcome::KeyReused);
+
+        // 처음 명령만 기록에 남는다: 받음, 거절. 재전송과 키 충돌은 기록하지 않는다.
+        let mut kinds = Vec::new();
+        while let Some(event) = client.recv_event_timeout(Duration::from_millis(200)) {
+            if let KernelHostEvent::Recorded(record) = event {
+                kinds.push((record.sequence, record.event.kind()));
+                if let KernelEvent::CommandReceived { op_id, .. } = &record.event {
+                    assert_eq!(*op_id, record.sequence);
+                }
+            }
+        }
+        assert_eq!(kinds, [(1, "command_received"), (2, "command_rejected")]);
     }
 
     #[test]

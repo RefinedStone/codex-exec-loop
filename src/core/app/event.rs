@@ -351,4 +351,25 @@ impl AppEvent {
     pub fn turn_stream_snapshot_changed(snapshot: TurnStreamSnapshot) -> Self {
         Self::TurnStreamSnapshotChanged(Box::new(snapshot))
     }
+
+    /// 이 이벤트가 명령을 바로 거절한 것이면 그 이유이다 (plan 18 K3, plan 19 Q3-6). 커널이 영수증과 기록에 쓴다.
+    pub fn command_rejection(&self) -> Option<crate::domain::kernel_event::CommandRejectionReason> {
+        use super::ApprovalDecisionAdmission;
+        use crate::domain::kernel_event::CommandRejectionReason as Reason;
+        match self {
+            Self::TurnSteerAdmissionResolved(TurnSteerAdmission::RejectedActive { .. }) => {
+                Some(Reason::SteerInFlight)
+            }
+            Self::TurnSteerAdmissionResolved(TurnSteerAdmission::RejectedUnavailable) => {
+                Some(Reason::NoMatchingTurn)
+            }
+            Self::ApprovalDecisionAdmissionResolved(
+                ApprovalDecisionAdmission::RejectedActive { .. },
+            ) => Some(Reason::DecisionInFlight),
+            Self::ApprovalDecisionAdmissionResolved(
+                ApprovalDecisionAdmission::RejectedUnavailable,
+            ) => Some(Reason::NoMatchingApproval),
+            _ => None,
+        }
+    }
 }
