@@ -2,15 +2,17 @@
 //! core 타입 사이의 변환을 둔다. core 는 직렬화를 모르므로 변환은 이 inbound adapter 만 한다. 커널 호스트는
 //! `src/composition/kernel_host.rs` 이다. 전송(Gateway)은 K3-5 에서 붙인다.
 
-use crate::domain::kernel_event::{KernelEventPage, RecordedKernelEvent};
+pub use crate::domain::kernel_event::CommandRejectionReason;
+use crate::domain::kernel_event::{
+    KernelCommandDescriptor, KernelEventPage, OperationReceipt, RecordedKernelEvent,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::core::app::{
-    AppCommand, AppEvent, AppSnapshot, ApprovalDecisionAdmission, ConversationRuntimeSnapshot,
-    PlanningWorkspaceResetIntent, PlanningWorkspaceResetTarget, SESSION_CATALOG_PAGE_SIZE,
-    SessionCatalogLoadIntent, SessionCatalogSnapshot, ThreadActivitySummary, ThreadPromptAdmission,
-    ThreadPromptOutcome, ThreadPromptPreparationFailure, ThreadPromptSubmission,
-    TurnSteerAdmission, TurnSubmissionAdmission,
+    AppCommand, AppEvent, AppSnapshot, ConversationRuntimeSnapshot, PlanningWorkspaceResetIntent,
+    PlanningWorkspaceResetTarget, SESSION_CATALOG_PAGE_SIZE, SessionCatalogLoadIntent,
+    SessionCatalogSnapshot, ThreadActivitySummary, ThreadPromptAdmission, ThreadPromptOutcome,
+    ThreadPromptPreparationFailure, ThreadPromptSubmission, TurnSubmissionAdmission,
 };
 use crate::domain::conversation::{
     ConversationApprovalDecision, ConversationApprovalRequestIdentity, ConversationTurnSteerRequest,
@@ -53,6 +55,8 @@ pub const ERROR_NOT_ATTACHED: i64 = -32011;
 pub const ERROR_KERNEL_UNAVAILABLE: i64 = -32012;
 /// 커널이 정한 시간 안에 답하지 않았다. 명령은 그 뒤에 처리될 수 있으므로, 클라이언트는 조회로 결과를 확인한다.
 pub const ERROR_KERNEL_TIMEOUT: i64 = -32013;
+/// 이 `idempotency_key` 는 다른 명령에 이미 썼다 (plan 19 Q3-6). 명령마다 새 키를 만든다.
+pub const ERROR_IDEMPOTENCY_KEY_REUSED: i64 = -32014;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KernelProtocolError {
@@ -65,6 +69,13 @@ impl KernelProtocolError {
         Self {
             code: ERROR_INVALID_PARAMS,
             message: message.into(),
+        }
+    }
+
+    pub fn idempotency_key_reused() -> Self {
+        Self {
+            code: ERROR_IDEMPOTENCY_KEY_REUSED,
+            message: "idempotency_key was already used for a different command".to_string(),
         }
     }
 }
@@ -90,11 +101,80 @@ pub struct AttachResponse {
 
 // command -----------------------------------------------------------------------------------------
 
+/// 멱등 키의 최대 길이이다.
+const MAX_IDEMPOTENCY_KEY_CHARS: usize = 128;
+/// 명령 지문의 길이이다 (SHA-256 의 앞 16바이트를 16진수로 쓴다).
+const FINGERPRINT_HEX_CHARS: usize = 32;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CommandRequest {
     pub command: KernelCommand,
-    // 멱등 키는 v0 에 없다. 재전송을 가리려면 커널이 처리한 명령을 기억해야 하므로 사건 기록(K5)과 함께 더한다.
+    /*
+     * 재전송을 가리는 키이다 (plan 19 Q3-6). 클라이언트가 명령마다 새로 만든다. 같은 키와 같은 명령을 다시 보내면
+     * 커널은 다시 실행하지 않고 처음의 영수증을 답한다 (`operation.replayed`). 같은 키로 다른 명령을 보내면
+     * `ERROR_IDEMPOTENCY_KEY_REUSED` 이다. 커널은 그 명령의 기록이 남아 있는 동안 키를 기억한다.
+     */
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
+}
+
+impl CommandRequest {
+    /*
+     * 커널이 이 명령을 기록할 때 쓰는 설명이다 (plan 19 Q3-6). 명령의 내용은 지문으로만 남는다. 읽기 명령
+     * (`load_sessions`, `refresh_planning`)은 기록하지 않으므로 `None` 이다. 그 명령은 키가 있어도 그냥 실행한다.
+     */
+    pub fn descriptor(&self) -> Result<Option<KernelCommandDescriptor>, KernelProtocolError> {
+        let idempotency_key = self
+            .idempotency_key
+            .as_deref()
+            .map(valid_idempotency_key)
+            .transpose()?;
+        let thread_id = match &self.command {
+            KernelCommand::LoadSessions {} | KernelCommand::RefreshPlanning {} => return Ok(None),
+            KernelCommand::RenameSession { thread_id, .. }
+            | KernelCommand::SubmitPrompt { thread_id, .. }
+            | KernelCommand::SteerTurn { thread_id, .. } => thread_id.clone(),
+            KernelCommand::StopAll {}
+            | KernelCommand::DecideApproval { .. }
+            | KernelCommand::SetAutoFollowMaxTurns { .. }
+            | KernelCommand::PauseAutoFollow {}
+            | KernelCommand::ResetPlanning { .. } => String::new(),
+        };
+        let json = serde_json::to_value(&self.command).map_err(|error| {
+            KernelProtocolError::invalid_params(format!("command cannot be described: {error}"))
+        })?;
+        Ok(Some(KernelCommandDescriptor {
+            command: json["type"].as_str().unwrap_or_default().to_string(),
+            thread_id,
+            fingerprint: fingerprint(&json.to_string()),
+            idempotency_key,
+        }))
+    }
+}
+
+fn valid_idempotency_key(key: &str) -> Result<String, KernelProtocolError> {
+    let valid = !key.trim().is_empty()
+        && key.chars().count() <= MAX_IDEMPOTENCY_KEY_CHARS
+        && !key.chars().any(char::is_control);
+    if !valid {
+        return Err(KernelProtocolError::invalid_params(format!(
+            "idempotency_key must be 1 to {MAX_IDEMPOTENCY_KEY_CHARS} characters without control characters"
+        )));
+    }
+    Ok(key.to_string())
+}
+
+/// 명령 내용의 지문이다. 기록에 내용 대신 남는다. 같은 명령은 binary 가 바뀌어도 같은 지문이다.
+fn fingerprint(command_json: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(command_json.as_bytes());
+    let mut hex = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    hex.truncate(FINGERPRINT_HEX_CHARS);
+    hex
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -105,6 +185,57 @@ pub struct CommandResponse {
     /// `prompt_submission` 이벤트로 온다. 받아들인 명령의 결과는 이벤트(`thread_activity` 등)로 온다.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rejection: Option<CommandRejection>,
+    /// 명령의 영수증이다 (plan 19 Q3-6). 읽기 명령과 기록이 없는 커널은 영수증이 없다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation: Option<Operation>,
+}
+
+/*
+ * 명령의 영수증이다 (plan 19 Q3-6). `op_id` 는 커널이 그 명령을 받은 기록의 sequence 이다. 명령의 진행은 그 뒤의
+ * 기록이다: `next` 대로 `history` 를 `after` 부터 읽거나, `sequence` 가 `op_id` 보다 큰 `recorded` 이벤트를 본다.
+ */
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Operation {
+    pub op_id: i64,
+    pub state: OperationState,
+    pub next: OperationNext,
+    /// 같은 멱등 키의 명령을 전에 받았다. 다시 실행하지 않았고, 처음의 결과를 답한다.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub replayed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OperationState {
+    /// 커널이 명령을 받아들였다. 결과는 이벤트와 기록으로 온다.
+    Accepted,
+    /// 커널이 명령을 바로 거절했다. 이유는 `rejection` 에 있다.
+    Rejected,
+}
+
+/// 영수증 뒤에 할 조회이다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperationNext {
+    pub query: String,
+    pub after: i64,
+}
+
+impl Operation {
+    fn from_receipt(receipt: OperationReceipt) -> Self {
+        Self {
+            op_id: receipt.op_id,
+            state: if receipt.rejection.is_some() {
+                OperationState::Rejected
+            } else {
+                OperationState::Accepted
+            },
+            next: OperationNext {
+                query: "history".to_string(),
+                after: receipt.op_id,
+            },
+            replayed: receipt.replayed,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,20 +245,6 @@ pub struct CommandRejection {
     pub message: String,
 }
 
-/// 명령을 거절한 이유이다. 이름이 다음 행동을 알려 준다.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CommandRejectionReason {
-    /// 같은 턴에 보낸 steer 가 아직 처리 중이다. 끝난 뒤 다시 보낸다.
-    SteerInFlight,
-    /// 그 thread 에 `expected_turn_id` 로 도는 턴이 없다. `thread_activity` 의 `active_turn_id` 를 쓴다.
-    NoMatchingTurn,
-    /// 같은 승인에 보낸 결정이 아직 처리 중이다.
-    DecisionInFlight,
-    /// 기다리는 승인 중에 그 id 가 없다. `thread_activity` 의 `approval` 을 쓴다.
-    NoMatchingApproval,
-}
-
 impl CommandResponse {
     /// 커널이 명령을 처리하며 낸 core 이벤트로 응답을 만든다. `None` 은 커널이 끝난 경우이다.
     pub fn from_core(events: Option<&[AppEvent]>) -> Self {
@@ -135,44 +252,51 @@ impl CommandResponse {
             return Self {
                 processed: false,
                 rejection: None,
+                operation: None,
             };
         };
         Self {
             processed: true,
-            rejection: events.iter().find_map(CommandRejection::from_core),
+            rejection: events
+                .iter()
+                .find_map(AppEvent::command_rejection)
+                .map(CommandRejection::new),
+            operation: None,
+        }
+    }
+
+    /// 커널이 준 영수증을 붙인다. 영수증이 없으면(읽기 명령, 기록이 없는 커널) 그대로이다.
+    pub fn with_operation(mut self, receipt: Option<OperationReceipt>) -> Self {
+        self.operation = receipt.map(Operation::from_receipt);
+        self
+    }
+
+    /// 같은 멱등 키의 명령을 다시 받았다. 실행하지 않고 처음의 결과로 답한다.
+    pub fn replayed(receipt: OperationReceipt) -> Self {
+        Self {
+            processed: true,
+            rejection: receipt.rejection.map(CommandRejection::new),
+            operation: Some(Operation::from_receipt(receipt)),
         }
     }
 }
 
 impl CommandRejection {
-    fn from_core(event: &AppEvent) -> Option<Self> {
-        let (reason, message) = match event {
-            AppEvent::TurnSteerAdmissionResolved(TurnSteerAdmission::RejectedActive { .. }) => (
-                CommandRejectionReason::SteerInFlight,
-                "another steer for this turn is still in flight",
-            ),
-            AppEvent::TurnSteerAdmissionResolved(TurnSteerAdmission::RejectedUnavailable) => (
-                CommandRejectionReason::NoMatchingTurn,
-                "the thread has no running turn with that id",
-            ),
-            AppEvent::ApprovalDecisionAdmissionResolved(
-                ApprovalDecisionAdmission::RejectedActive { .. },
-            ) => (
-                CommandRejectionReason::DecisionInFlight,
-                "a decision for this approval is still in flight",
-            ),
-            AppEvent::ApprovalDecisionAdmissionResolved(
-                ApprovalDecisionAdmission::RejectedUnavailable,
-            ) => (
-                CommandRejectionReason::NoMatchingApproval,
-                "no pending approval has that id",
-            ),
-            _ => return None,
+    fn new(reason: CommandRejectionReason) -> Self {
+        let message = match reason {
+            CommandRejectionReason::SteerInFlight => {
+                "another steer for this turn is still in flight"
+            }
+            CommandRejectionReason::NoMatchingTurn => "the thread has no running turn with that id",
+            CommandRejectionReason::DecisionInFlight => {
+                "a decision for this approval is still in flight"
+            }
+            CommandRejectionReason::NoMatchingApproval => "no pending approval has that id",
         };
-        Some(Self {
+        Self {
             reason,
             message: message.to_string(),
-        })
+        }
     }
 }
 

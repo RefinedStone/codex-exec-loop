@@ -49,12 +49,40 @@ use crate::domain::conversation::ConversationRuntimeControlTruth;
 #[cfg(test)]
 use crate::domain::github_review::GithubPullRequestTarget;
 use crate::domain::kernel_event::{
-    APPROVAL_KINDS, ApprovalResolution, KernelEvent, KernelEventPage, RecordedKernelEvent,
-    THREAD_PROMPT_QUEUE_KINDS, open_approvals, open_queued_thread_prompts,
+    APPROVAL_KINDS, ApprovalResolution, COMMAND_KINDS, CommandMemory, CommandRecall,
+    CommandRejectionReason, KernelCommandDescriptor, KernelEvent, KernelEventPage,
+    OperationReceipt, RETAINED_KERNEL_EVENTS, RecordedKernelEvent, THREAD_PROMPT_QUEUE_KINDS,
+    open_approvals, open_queued_thread_prompts,
 };
 #[cfg(test)]
 use crate::domain::parallel_mode::ParallelModeAutomationTrigger;
 use crate::domain::planning::PostTurnContinuationAction;
+
+/// 클라이언트의 명령 하나를 처리한 결과이다 (plan 19 Q3-6).
+pub(crate) enum ClientCommandDispatch {
+    /// 명령을 실행했다. `operation` 은 기록한 명령의 영수증이다. 기록이 없는 커널과 설명이 없는 명령은 없다.
+    Ran {
+        outcome: NativeClientDispatchOutcome,
+        operation: Option<OperationReceipt>,
+    },
+    /// 같은 멱등 키의 같은 명령을 전에 받았다. 실행하지 않았다.
+    Replayed(OperationReceipt),
+    /// 이 멱등 키는 다른 명령에 썼다. 실행하지 않았다.
+    KeyReused,
+}
+
+/// 클라이언트의 명령을 받은 결과이다 (plan 19 Q3-6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CommandAdmission {
+    /// 처음 받은 명령이다. 기록했다. 값은 연산 id 이다. 부르는 쪽이 명령을 실행한다.
+    Recorded(i64),
+    /// 기록이 없는 커널이다. 명령을 가리지 않는다. 부르는 쪽이 명령을 실행한다.
+    Unrecorded,
+    /// 같은 멱등 키의 같은 명령을 전에 받았다. 실행하지 않는다.
+    Replayed(OperationReceipt),
+    /// 이 멱등 키는 다른 명령에 썼다. 실행하지 않는다.
+    KeyReused,
+}
 
 /*
  * NativeClientRuntime is the composition-owned client runtime boundary used by
@@ -83,6 +111,8 @@ pub(crate) struct NativeClientRuntime {
     last_kernel_sequence: i64,
     // 클라이언트에 아직 보내지 않은 기록이다 (plan 19 Q3-3b). 커널 호스트가 꺼내 `recorded` 이벤트로 보낸다.
     published_kernel_records: Vec<RecordedKernelEvent>,
+    /// 멱등 키로 기억하는 처리한 명령이다 (plan 19 Q3-6). 기록의 투영이고, 기록을 붙일 때 다시 만든다.
+    command_memory: CommandMemory,
     // 마지막 주기가 입력 상한에서 멈췄다 (plan 19 Q3-4). 입력함에 남은 입력은 호스트를 다시 깨우지 않으므로, 다음
     // 주기는 기다리지 않는다.
     inputs_left_after_cycle: bool,
@@ -543,6 +573,7 @@ impl NativeClientRuntime {
             kernel_event_log: None,
             last_kernel_sequence: 0,
             published_kernel_records: Vec::new(),
+            command_memory: CommandMemory::default(),
             inputs_left_after_cycle: false,
         }
     }
@@ -1043,6 +1074,93 @@ impl NativeClientRuntime {
         }
     }
 
+    /*
+     * 클라이언트의 명령 하나를 처리한다 (plan 19 Q3-6). 설명이 있으면 먼저 받은 것을 기록하고 멱등 키를 본다.
+     * 재전송은 실행하지 않고 처음의 영수증을 돌려준다. 실행한 명령을 core 가 바로 거절했으면 그 거절도 기록한다.
+     * 설명이 없는 명령(읽기 명령)은 기록하지 않고 그냥 실행한다.
+     */
+    pub(crate) fn dispatch_client_command(
+        &mut self,
+        command: AppCommand,
+        descriptor: Option<&KernelCommandDescriptor>,
+    ) -> ClientCommandDispatch {
+        let admission = descriptor.map(|descriptor| self.admit_command(descriptor));
+        match admission {
+            Some(CommandAdmission::Replayed(receipt)) => {
+                return ClientCommandDispatch::Replayed(receipt);
+            }
+            Some(CommandAdmission::KeyReused) => return ClientCommandDispatch::KeyReused,
+            Some(CommandAdmission::Recorded(_) | CommandAdmission::Unrecorded) | None => {}
+        }
+        let outcome =
+            self.dispatch_client_event(NativeClientEvent::core(CoreInput::Command(command)));
+        let operation = match (descriptor, admission) {
+            (Some(descriptor), Some(CommandAdmission::Recorded(op_id))) => {
+                let rejection = match &outcome {
+                    NativeClientDispatchOutcome::Core(core)
+                    | NativeClientDispatchOutcome::Combined { core, .. } => {
+                        core.events.iter().find_map(AppEvent::command_rejection)
+                    }
+                    NativeClientDispatchOutcome::Parallel(_) => None,
+                };
+                if let Some(reason) = rejection {
+                    self.reject_command(op_id, &descriptor.thread_id, reason);
+                }
+                Some(OperationReceipt {
+                    op_id,
+                    rejection,
+                    replayed: false,
+                })
+            }
+            _ => None,
+        };
+        ClientCommandDispatch::Ran { outcome, operation }
+    }
+
+    /*
+     * 클라이언트의 명령을 처리하기 전에 받는다 (plan 19 Q3-6). 같은 멱등 키의 같은 명령을 전에 받았으면 처음의
+     * 영수증을 돌려주고, 부르는 쪽은 명령을 실행하지 않는다. 처음이면 `command_received` 를 기록한다. 그 기록의
+     * sequence 가 연산 id 이다. 기록이 없는 커널(TUI, 기록을 읽지 못한 커널)은 명령을 가리지 않고 영수증도 없다.
+     */
+    fn admit_command(&mut self, descriptor: &KernelCommandDescriptor) -> CommandAdmission {
+        if self.kernel_events.is_none() {
+            return CommandAdmission::Unrecorded;
+        }
+        if let Some(key) = &descriptor.idempotency_key {
+            match self.command_memory.recall(key, &descriptor.fingerprint) {
+                CommandRecall::Same(receipt) => return CommandAdmission::Replayed(receipt),
+                CommandRecall::Different => return CommandAdmission::KeyReused,
+                CommandRecall::Unknown => {}
+            }
+        }
+        let op_id = self.last_kernel_sequence + 1;
+        self.record_kernel_events(vec![KernelEvent::CommandReceived {
+            op_id,
+            command: descriptor.command.clone(),
+            thread_id: descriptor.thread_id.clone(),
+            fingerprint: descriptor.fingerprint.clone(),
+            idempotency_key: descriptor.idempotency_key.clone(),
+        }]);
+        if let Some(key) = &descriptor.idempotency_key {
+            self.command_memory
+                .remember(key, op_id, &descriptor.fingerprint);
+            // 기록이 지우는 범위의 명령은 잊는다. 다시 조립한 커널이 기억하는 범위와 같다.
+            self.command_memory
+                .forget_before(op_id - RETAINED_KERNEL_EVENTS);
+        }
+        CommandAdmission::Recorded(op_id)
+    }
+
+    /// 받은 명령을 커널이 바로 거절했다 (plan 19 Q3-6). 기록하고, 같은 키의 재전송에 같은 거절을 답하게 기억한다.
+    fn reject_command(&mut self, op_id: i64, thread_id: &str, reason: CommandRejectionReason) {
+        self.command_memory.reject(op_id, reason);
+        self.record_kernel_events(vec![KernelEvent::CommandRejected {
+            op_id,
+            thread_id: thread_id.to_string(),
+            reason,
+        }]);
+    }
+
     /// 사건에 번호를 붙여 기록기에 넘기고, 클라이언트에 보낼 자리에 둔다. 기록기가 없으면(TUI) 버린다.
     fn record_kernel_events(&mut self, events: Vec<KernelEvent>) {
         if self.kernel_events.is_none() {
@@ -1093,18 +1211,24 @@ impl NativeClientRuntime {
             .load_kernel_events(workspace_dir, &THREAD_PROMPT_QUEUE_KINDS)
             .and_then(|prompts| {
                 let approvals = log.load_kernel_events(workspace_dir, &APPROVAL_KINDS)?;
+                let commands = log.load_kernel_events(workspace_dir, &COMMAND_KINDS)?;
                 Ok((
                     prompts,
                     approvals,
+                    commands,
                     log.last_kernel_event_sequence(workspace_dir)?,
                 ))
             });
         let (open, lost_approvals, last_sequence) = match read {
-            Ok((prompts, approvals, last_sequence)) => (
-                open_queued_thread_prompts(prompts),
-                open_approvals(approvals),
-                last_sequence,
-            ),
+            Ok((prompts, approvals, commands, last_sequence)) => {
+                // 이전 커널이 받은 명령의 멱등 키를 되돌린다 (Q3-6). 재전송은 커널을 다시 켜도 한 번만 실행된다.
+                self.command_memory = CommandMemory::from_events(commands);
+                (
+                    open_queued_thread_prompts(prompts),
+                    open_approvals(approvals),
+                    last_sequence,
+                )
+            }
             Err(error) => {
                 tracing::warn!(
                     error_chars = error.to_string().chars().count(),
@@ -2341,6 +2465,86 @@ pub(crate) mod tests {
         assert!(second.take_published_kernel_records().is_empty());
         drop(second);
         assert_eq!(log.0.lock().expect("log should lock").len(), 4);
+    }
+
+    #[test]
+    fn a_resent_command_is_admitted_once_even_after_a_restart() {
+        // plan 19 Q3-6: the kernel remembers the key in its log. A resend gets the first receipt.
+        use crate::domain::kernel_event::{
+            CommandRejectionReason, KernelCommandDescriptor, KernelEvent, OperationReceipt,
+        };
+        let described = |key: Option<&str>, fingerprint: &str| KernelCommandDescriptor {
+            command: "steer_turn".to_string(),
+            thread_id: "thread-1".to_string(),
+            fingerprint: fingerprint.to_string(),
+            idempotency_key: key.map(str::to_string),
+        };
+        let first_receipt = OperationReceipt {
+            op_id: 1,
+            rejection: Some(CommandRejectionReason::NoMatchingTurn),
+            replayed: true,
+        };
+        let log = Arc::new(MemoryKernelEventLog::default());
+        let (mut runtime, _turns) = recording_runtime_for_test();
+        assert_eq!(
+            runtime.admit_command(&described(Some("key-1"), "fp-1")),
+            CommandAdmission::Unrecorded,
+            "a kernel without a log does not tell resends apart"
+        );
+        runtime.attach_kernel_event_log(log.clone(), "/workspace");
+
+        assert_eq!(
+            runtime.admit_command(&described(Some("key-1"), "fp-1")),
+            CommandAdmission::Recorded(1)
+        );
+        runtime.reject_command(1, "thread-1", CommandRejectionReason::NoMatchingTurn);
+        assert_eq!(
+            runtime.admit_command(&described(Some("key-1"), "fp-1")),
+            CommandAdmission::Replayed(first_receipt)
+        );
+        assert_eq!(
+            runtime.admit_command(&described(Some("key-1"), "fp-2")),
+            CommandAdmission::KeyReused
+        );
+        // 키가 없는 명령은 매번 새 연산이다.
+        assert_eq!(
+            runtime.admit_command(&described(None, "fp-1")),
+            CommandAdmission::Recorded(3)
+        );
+        let published = runtime.take_published_kernel_records();
+        assert_eq!(
+            published
+                .iter()
+                .map(|record| (record.sequence, record.event.kind()))
+                .collect::<Vec<_>>(),
+            [
+                (1, "command_received"),
+                (2, "command_rejected"),
+                (3, "command_received")
+            ]
+        );
+        assert!(
+            matches!(
+                &published[0].event,
+                KernelEvent::CommandReceived { op_id: 1, .. }
+            ),
+            "the operation id is the sequence of the record"
+        );
+        drop(runtime);
+
+        let (mut restarted, _turns) = recording_runtime_for_test();
+        restarted.attach_kernel_event_log(log.clone(), "/workspace");
+        assert_eq!(
+            restarted.admit_command(&described(Some("key-1"), "fp-1")),
+            CommandAdmission::Replayed(first_receipt),
+            "the new kernel answers the resend with the first receipt"
+        );
+        assert_eq!(
+            restarted.admit_command(&described(Some("key-1"), "fp-2")),
+            CommandAdmission::KeyReused
+        );
+        drop(restarted);
+        assert_eq!(log.0.lock().expect("log should lock").len(), 3);
     }
 
     #[test]

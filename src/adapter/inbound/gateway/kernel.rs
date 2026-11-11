@@ -29,7 +29,8 @@ use crate::adapter::inbound::kernel_protocol::{
     PlanningState, QueryRequest, describe,
 };
 use crate::composition::kernel_host::{
-    KernelCallError, KernelClientHandle, KernelCommandSender, KernelHostEvent, ParallelHostView,
+    KernelCallError, KernelClientHandle, KernelCommandOutcome, KernelCommandSender,
+    KernelHostEvent, ParallelHostView,
 };
 use crate::composition::repository_kernel::RepositoryKernelRegistry;
 
@@ -215,17 +216,28 @@ impl KernelSession {
     async fn command(&mut self, params: Value) -> Result<Value, KernelProtocolError> {
         let attached = self.attached()?;
         let request: CommandRequest = parse_params(params)?;
+        // 커널은 이 설명으로 명령을 기록하고 멱등 키로 재전송을 가린다 (plan 19 Q3-6).
+        let descriptor = request.descriptor()?;
         let command = request.command.into_core(&attached.workspace)?;
         let commands = attached.commands.clone();
-        let events =
-            match blocking(move || commands.send_command(command, KERNEL_CALL_TIMEOUT)).await? {
-                Ok(events) => Some(events),
-                Err(KernelCallError::Stopped) => None,
-                Err(KernelCallError::TimedOut) => {
-                    return Err(timed_out("command", KERNEL_CALL_TIMEOUT));
-                }
-            };
-        to_result(CommandResponse::from_core(events.as_deref()))
+        let sent = blocking(move || {
+            commands.send_described_command(command, descriptor, KERNEL_CALL_TIMEOUT)
+        })
+        .await?;
+        let response = match sent {
+            Ok(KernelCommandOutcome::Handled { events, operation }) => {
+                CommandResponse::from_core(Some(&events)).with_operation(operation)
+            }
+            Ok(KernelCommandOutcome::Replayed(receipt)) => CommandResponse::replayed(receipt),
+            Ok(KernelCommandOutcome::KeyReused) => {
+                return Err(KernelProtocolError::idempotency_key_reused());
+            }
+            Err(KernelCallError::Stopped) => CommandResponse::from_core(None),
+            Err(KernelCallError::TimedOut) => {
+                return Err(timed_out("command", KERNEL_CALL_TIMEOUT));
+            }
+        };
+        to_result(response)
     }
 
     async fn query(&mut self, params: Value) -> Result<Value, KernelProtocolError> {

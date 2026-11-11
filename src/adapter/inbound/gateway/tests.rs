@@ -348,8 +348,56 @@ async fn a_client_attaches_commands_and_receives_kernel_events() {
             event = Some(value);
         }
     }
-    assert_eq!(commanded.unwrap()["result"], json!({"processed": true}));
+    // plan 19 Q3-6: a recorded command answers with its receipt. The operation id is a log position.
+    let commanded = commanded.unwrap()["result"].clone();
+    assert_eq!(commanded["processed"], json!(true), "{commanded}");
+    assert_eq!(
+        commanded["operation"]["state"],
+        json!("accepted"),
+        "{commanded}"
+    );
+    assert!(
+        commanded["operation"]["op_id"]
+            .as_i64()
+            .is_some_and(|op_id| op_id > 0)
+    );
+    assert_eq!(
+        commanded["operation"]["next"],
+        json!({"query": "history", "after": commanded["operation"]["op_id"]})
+    );
     assert_eq!(event.unwrap()["params"]["event"]["max_turns"], json!(3));
+
+    // A resend with the same key does not run again and gets the first receipt.
+    let keyed = |id: &'static str, value: u64| {
+        (
+            id,
+            json!({
+                "command": {"type": "set_auto_follow_max_turns", "value": value},
+                "idempotency_key": "key-1",
+            }),
+        )
+    };
+    let (id, params) = keyed("keyed", 4);
+    let first = kernel_request(&mut client, id, "akra/kernel/command", params).await;
+    let (id, params) = keyed("resent", 4);
+    let resent = kernel_request(&mut client, id, "akra/kernel/command", params).await;
+    assert_eq!(
+        first["result"]["operation"]["replayed"],
+        Value::Null,
+        "{first}"
+    );
+    assert_eq!(
+        resent["result"]["operation"]["replayed"],
+        json!(true),
+        "{resent}"
+    );
+    assert_eq!(
+        resent["result"]["operation"]["op_id"], first["result"]["operation"]["op_id"],
+        "{resent}"
+    );
+    let (id, params) = keyed("reused", 5);
+    let reused = kernel_request(&mut client, id, "akra/kernel/command", params).await;
+    assert_eq!(reused["error"]["code"], json!(-32014), "{reused}");
 
     let queried = kernel_request(
         &mut client,
@@ -359,7 +407,8 @@ async fn a_client_attaches_commands_and_receives_kernel_events() {
     )
     .await;
     assert_eq!(queried["result"]["type"], json!("auto_follow"), "{queried}");
-    assert_eq!(queried["result"]["max_turns"], json!(3), "{queried}");
+    // The keyed command (4) ran once. The command that reused its key (5) did not run.
+    assert_eq!(queried["result"]["max_turns"], json!(4), "{queried}");
 
     // plan 18 K3-6: the planning queue and the parallel state travel through the same session.
     let refreshed = kernel_request(

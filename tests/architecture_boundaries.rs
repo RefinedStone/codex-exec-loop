@@ -14327,6 +14327,8 @@ fn verify_client_runtime_api_boundary(
         // plan 19 Q3-1: the repository kernel attaches its event log and restores queued prompts.
         "attach_kernel_event_log",
         "current_parallel_epoch_id_for_workspace",
+        // plan 19 Q3-6: the kernel host dispatches a client command with its record and idempotency key.
+        "dispatch_client_command",
         "dispatch_client_event",
         // plan 18 K3-5: read-only check before the gateway unloads an idle kernel.
         "has_remaining_work",
