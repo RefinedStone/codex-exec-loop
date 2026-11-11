@@ -16,7 +16,8 @@
 //!
 //! 지금 모델하는 범위: 수동 턴 제출(새 thread, 기존 thread), thread 지정 프롬프트(준비, 큐에 남김, 다시 냄), 중지
 //! 요청(성공, 실패, 무효), 턴 시작·종료·실패, 턴 뒤 평가, 자동 후속, 클라이언트 떼기와 다시 붙기, 커널 재시작(기록을
-//! 다 쓴 뒤), 시계. 병렬 모드, 승인, steer, 기록을 다 쓰지 못한 강제 종료는 아직 모델하지 않는다.
+//! 다 쓴 뒤), 승인 요청과 그 끝(app-server 가 알린 결정, 결정 없이 끝난 턴, 재시작), 시계. 병렬 모드, 클라이언트의 승인
+//! 결정 명령, steer, 기록을 다 쓰지 못한 강제 종료는 아직 모델하지 않는다.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -39,11 +40,16 @@ use crate::core::app::{
     ThreadPromptSubmission, TurnStreamEvent, TurnSubmissionCorrelation, TurnSubmissionRequest,
 };
 use crate::core::runtime::{CoreEffectExecutor, CoreInputSender};
+use crate::domain::conversation::{
+    ConversationApprovalRequest, ConversationApprovalRequestIdentity,
+    ConversationApprovalRequestKind, ConversationApprovalResolution,
+};
 use crate::domain::conversation_runtime_envelope::{
     ConversationRuntimeConfigurationRequest, ConversationRuntimeEnvelope,
 };
 use crate::domain::kernel_event::{
-    KernelEvent, RecordedKernelEvent, ThreadPromptSettlement, open_queued_thread_prompts,
+    ApprovalResolution, KernelEvent, RecordedKernelEvent, ThreadPromptSettlement, open_approvals,
+    open_queued_thread_prompts,
 };
 use crate::domain::planning::{
     ManualPromptCorrelation, ManualPromptIntakeOutcome, ManualPromptMainSessionHandoff,
@@ -151,6 +157,8 @@ struct ScenarioSettings {
     thread_prompt_budget: usize,
     /// 커널을 무작위 시점에 버리고 기록으로 다시 조립한다 (plan 19 Q3-7).
     restarts: bool,
+    /// 가짜 app-server 가 도는 턴에서 요청하는 승인 수이다 (plan 19 Q3-5).
+    approval_budget: usize,
 }
 
 impl ScenarioSettings {
@@ -161,6 +169,7 @@ impl ScenarioSettings {
             stop_requests: rng.percent(50),
             thread_prompt_budget: rng.index(5),
             restarts: rng.percent(50),
+            approval_budget: rng.index(4),
         }
     }
 }
@@ -181,6 +190,18 @@ struct FakeTurn {
     turn_id: String,
     stage: TurnStage,
     interrupt_requested: bool,
+    /// 이 턴이 결정을 기다리는 승인의 id 이다.
+    approval: Option<String>,
+}
+
+/// 가짜 app-server 가 요청한 승인이 기록에서 어떻게 끝나야 하는가이다 (I8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExpectedApproval {
+    /// 아직 결정을 기다린다. 시나리오가 끝날 때 남아 있으면 안 된다.
+    Open,
+    Resolved(ApprovalResolution),
+    /// 커널이 요청을 받기 전에 다시 켜졌다. 기록에 없어야 한다.
+    NeverRecorded,
 }
 
 /// 바깥 세계가 나중에 돌려줄 완료이다. 어떤 순서로 돌려줄지는 난수가 고른다.
@@ -243,6 +264,8 @@ struct InvariantLedger {
     auto_turns_since_manual: BTreeMap<String, usize>,
     /// 가짜 planner 가 답한 프롬프트마다 그 작업, 받을 thread, app-server 가 받은 횟수이다 (I7).
     planned_prompts: BTreeMap<String, PlannedPrompt>,
+    /// 가짜 app-server 가 요청한 승인과 그 끝이다 (I8). 키는 승인 id 이다.
+    approvals: BTreeMap<String, ExpectedApproval>,
 }
 
 impl InvariantLedger {
@@ -318,6 +341,87 @@ impl InvariantLedger {
             if submissions != 1 {
                 return Err(format!(
                     "I7: the record says the queued prompt of {task_id} was submitted, but the app-server got it {submissions} times"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// 결정 없이 턴이 끝났다. 이미 결정된 승인은 그대로 둔다.
+    fn withdraw_approval(&mut self, approval_id: &str) {
+        if let Some(expected @ ExpectedApproval::Open) = self.approvals.get_mut(approval_id) {
+            *expected = ExpectedApproval::Resolved(ApprovalResolution::Withdrawn);
+        }
+    }
+
+    /*
+     * 커널을 다시 켤 때 부른다. 기록에 열린 채 남은 승인은 새 커널이 잃은 것으로 닫아야 한다. 가짜 app-server 가
+     * 결정을 보냈어도 이전 커널이 그 입력을 처리하지 못했으면 같다. 기록에 요청이 없는 승인은 커널이 받지 못한 것이다.
+     */
+    fn expect_approvals_after_restart(&mut self, recorded: &[RecordedKernelEvent]) {
+        let events = || recorded.iter().map(|record| record.event.clone());
+        let requested = events()
+            .filter_map(|event| match event {
+                KernelEvent::ApprovalRequested(approval) => Some(approval.approval_id),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        let open = open_approvals(events())
+            .into_iter()
+            .map(|approval| approval.approval_id)
+            .collect::<BTreeSet<_>>();
+        for (approval_id, expected) in &mut self.approvals {
+            if open.contains(approval_id) {
+                *expected = ExpectedApproval::Resolved(ApprovalResolution::Lost);
+            } else if !requested.contains(approval_id) {
+                *expected = ExpectedApproval::NeverRecorded;
+            }
+        }
+    }
+
+    /*
+     * I8: 승인 기록이 맞다 (plan 19 Q3-5). 승인 하나는 한 번 요청되고 한 번 끝나며, 끝은 요청 뒤에 온다. 끝의 종류는
+     * 가짜 app-server 가 한 일과 같다. 시나리오가 끝나면 열린 승인이 없다. 기록은 커널을 버린 뒤에 읽는다.
+     */
+    fn check_approval_records(&self, recorded: &[RecordedKernelEvent]) -> Result<(), String> {
+        let mut requests: BTreeMap<String, usize> = BTreeMap::new();
+        let mut ends: BTreeMap<String, Vec<ApprovalResolution>> = BTreeMap::new();
+        for record in recorded {
+            match &record.event {
+                KernelEvent::ApprovalRequested(approval) => {
+                    *requests.entry(approval.approval_id.clone()).or_default() += 1;
+                }
+                KernelEvent::ApprovalResolved {
+                    approval_id,
+                    resolution,
+                    ..
+                } => {
+                    if !requests.contains_key(approval_id) {
+                        return Err(format!("I8: {approval_id} ended before it was requested"));
+                    }
+                    ends.entry(approval_id.clone())
+                        .or_default()
+                        .push(*resolution);
+                }
+                _ => {}
+            }
+        }
+        if let Some(unknown) = requests.keys().find(|id| !self.approvals.contains_key(*id)) {
+            return Err(format!(
+                "I8: the record has {unknown}, which no turn requested"
+            ));
+        }
+        for (approval_id, expected) in &self.approvals {
+            let requested = requests.get(approval_id).copied().unwrap_or(0);
+            let ended = ends.get(approval_id).map_or(&[][..], Vec::as_slice);
+            let matches = match expected {
+                ExpectedApproval::Open => false,
+                ExpectedApproval::NeverRecorded => requested == 0 && ended.is_empty(),
+                ExpectedApproval::Resolved(resolution) => requested == 1 && ended == [*resolution],
+            };
+            if !matches {
+                return Err(format!(
+                    "I8: {approval_id} should be {expected:?}, but the record has {requested} request(s) and ends {ended:?}"
                 ));
             }
         }
@@ -521,6 +625,7 @@ struct Simulation {
     manual_turns_sent: usize,
     thread_prompts_sent: usize,
     next_task: u64,
+    next_approval: u64,
     restarts: usize,
     /// 다시 켠 커널이 쓰기 시작한 기록 위치이다. I6 이 커널마다 다시 세는 값을 여기서 끊는다.
     lifetime_starts: Vec<usize>,
@@ -573,6 +678,7 @@ impl Simulation {
             manual_turns_sent: 0,
             thread_prompts_sent: 0,
             next_task: 1,
+            next_approval: 1,
             restarts: 0,
             lifetime_starts: Vec::new(),
             carried_prompts: BTreeSet::new(),
@@ -598,7 +704,7 @@ impl Simulation {
         self.finish(result)
     }
 
-    /// 커널을 버리고 기록을 확인한다 (I6, I7). 성공하면 기록 전체를 돌려준다.
+    /// 커널을 버리고 기록을 확인한다 (I6, I7, I8). 성공하면 기록 전체를 돌려준다.
     fn finish(
         self,
         result: Result<(), Violation>,
@@ -610,6 +716,7 @@ impl Simulation {
             let records = self.kernel_log.0.lock().expect("kernel log should lock");
             check_kernel_records(&records, &self.lifetime_starts)
                 .and_then(|()| self.ledger.check_queued_prompt_records(&records))
+                .and_then(|()| self.ledger.check_approval_records(&records))
                 .map_err(|message| Violation { step, message })
         });
         match result {
@@ -770,6 +877,7 @@ impl Simulation {
         self.ledger.auto_turns_since_manual.clear();
         let (lifetime_start, carried) = {
             let records = self.kernel_log.0.lock().expect("kernel log should lock");
+            self.ledger.expect_approvals_after_restart(&records);
             let events = records.iter().map(|record| record.event.clone());
             (records.len(), open_queued_thread_prompts(events))
         };
@@ -1051,6 +1159,7 @@ impl Simulation {
             turn_id,
             stage: TurnStage::Submitted,
             interrupt_requested: false,
+            approval: None,
         });
         Ok(())
     }
@@ -1083,8 +1192,83 @@ impl Simulation {
         match turn.stage {
             _ if stream_fails => self.fail_turn(&turn),
             TurnStage::Submitted => self.start_turn(turn),
+            // app-server 는 승인을 기다리는 턴을 끝내지 않는다. 중단 요청이 닿은 턴만 끝낸다.
+            TurnStage::Started if turn.approval.is_some() && !turn.interrupt_requested => {
+                self.resolve_approval(turn);
+            }
+            TurnStage::Started if self.turn_requests_approval(&turn) => self.request_approval(turn),
             TurnStage::Started => self.finish_turn(&turn),
         }
+    }
+
+    fn turn_requests_approval(&mut self, turn: &FakeTurn) -> bool {
+        !turn.interrupt_requested
+            && self.ledger.approvals.len() < self.settings.approval_budget
+            && self.rng.percent(50)
+    }
+
+    /// 도는 턴이 승인을 요청한다 (plan 19 Q3-5). 그 턴은 보지 않는 thread 의 것일 수 있다.
+    fn request_approval(&mut self, mut turn: FakeTurn) {
+        let approval_id = format!("approval-{}", self.next_approval);
+        self.next_approval += 1;
+        self.record(format!(
+            "app-server: {} requests {approval_id}",
+            turn.turn_id
+        ));
+        self.ledger
+            .approvals
+            .insert(approval_id.clone(), ExpectedApproval::Open);
+        self.send_core_input(CoreInput::ConversationStreamUpdated {
+            correlation: turn.correlation,
+            event: TurnStreamEvent::ApprovalRequested {
+                request: ConversationApprovalRequest {
+                    server_request_id: format!("server-{approval_id}"),
+                    approval_id: approval_id.clone(),
+                    method: "item/commandExecution/requestApproval".to_string(),
+                    kind: ConversationApprovalRequestKind::CommandExecution,
+                    summary: "Command execution requested.".to_string(),
+                    details: Vec::new(),
+                },
+            },
+        });
+        turn.approval = Some(approval_id);
+        self.turn = Some(turn);
+    }
+
+    /// app-server 가 승인의 끝을 알린다. 다른 클라이언트의 결정이거나 시간 초과이다.
+    fn resolve_approval(&mut self, mut turn: FakeTurn) {
+        let Some(approval_id) = turn.approval.take() else {
+            return;
+        };
+        let (sent, expected) = match self.rng.below(3) {
+            0 => (
+                ConversationApprovalResolution::Accepted,
+                ApprovalResolution::Accepted,
+            ),
+            1 => (
+                ConversationApprovalResolution::Declined,
+                ApprovalResolution::Declined,
+            ),
+            _ => (
+                ConversationApprovalResolution::TimedOut,
+                ApprovalResolution::TimedOut,
+            ),
+        };
+        self.record(format!("app-server: {approval_id} ended {sent:?}"));
+        self.ledger
+            .approvals
+            .insert(approval_id.clone(), ExpectedApproval::Resolved(expected));
+        self.send_core_input(CoreInput::ConversationStreamUpdated {
+            correlation: turn.correlation,
+            event: TurnStreamEvent::ApprovalResolved {
+                request_identity: ConversationApprovalRequestIdentity {
+                    server_request_id: format!("server-{approval_id}"),
+                    approval_id,
+                },
+                resolution: sent,
+            },
+        });
+        self.turn = Some(turn);
     }
 
     /// 실제 worker 는 시작 전이든 뒤든 스트림 오류를 `Failed` 하나로 알린다 (`publish_turn_submission_failure`).
@@ -1093,6 +1277,9 @@ impl Simulation {
             "app-server: {} failed while {:?}",
             turn.turn_id, turn.stage
         ));
+        if let Some(approval_id) = &turn.approval {
+            self.ledger.withdraw_approval(approval_id);
+        }
         self.turn = None;
         self.send_core_input(CoreInput::ConversationStreamUpdated {
             correlation: turn.correlation,
@@ -1135,6 +1322,9 @@ impl Simulation {
             ConversationTurnTerminalOutcome::Completed
         };
         self.record(format!("app-server: {} ended {outcome:?}", turn.turn_id));
+        if let Some(approval_id) = &turn.approval {
+            self.ledger.withdraw_approval(approval_id);
+        }
         self.turn = None;
         let receipt = ConversationTurnTerminalReceipt::new(
             turn.thread_id.clone(),
@@ -1488,6 +1678,77 @@ fn kernel_simulation_restores_a_queued_prompt_after_a_restart() {
 }
 
 #[test]
+fn kernel_simulation_closes_an_open_approval_as_lost_after_a_restart() {
+    /*
+     * plan 19 Q3-5 의 중심 경로를 정해진 순서로 지난다. 순서: 턴이 돈다 → 승인을 요청한다 → 커널을 다시 켠다 → 새
+     * 커널이 그 승인을 잃은 것으로 닫는다. 결정 없이 턴이 끝난 승인은 결정 없이 사라진 것으로 남는다.
+     */
+    let mut simulation = Simulation::new(0);
+    let script = |simulation: &mut Simulation| -> Result<(), Violation> {
+        let cycle = Duration::from_millis(10);
+        let run_turn_to_approval = |simulation: &mut Simulation| -> Result<FakeTurn, Violation> {
+            simulation.submit_manual_turn();
+            simulation.run_host_cycle(cycle)?;
+            let turn = simulation
+                .turn
+                .clone()
+                .expect("the manual turn should reach the app-server");
+            simulation.start_turn(turn);
+            simulation.run_host_cycle(cycle)?;
+            let turn = simulation.turn.clone().expect("the turn should run");
+            simulation.request_approval(turn);
+            simulation.run_host_cycle(cycle)?;
+            Ok(simulation.turn.clone().expect("the turn should wait"))
+        };
+        simulation.open_client_session();
+        simulation.run_host_cycle(cycle)?;
+        simulation.deliver_completion();
+        simulation.run_host_cycle(cycle)?;
+
+        let mut waiting = run_turn_to_approval(simulation)?;
+        waiting.interrupt_requested = true;
+        simulation.finish_turn(&waiting);
+        simulation.run_host_cycle(cycle)?;
+        simulation.settle()?;
+
+        run_turn_to_approval(simulation)?;
+        simulation.restart_kernel()?;
+        simulation.settle()
+    };
+    let result = script(&mut simulation);
+    let log = simulation.kernel_log.clone();
+    if let Err((violation, trace)) = simulation.finish(result) {
+        panic!(
+            "step {}: {}\n{}",
+            violation.step,
+            violation.message,
+            trace.join("\n")
+        );
+    }
+    let ends = log
+        .0
+        .lock()
+        .expect("kernel log should lock")
+        .iter()
+        .filter_map(|record| match &record.event {
+            KernelEvent::ApprovalResolved {
+                approval_id,
+                resolution,
+                ..
+            } => Some((approval_id.clone(), *resolution)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ends,
+        [
+            ("approval-1".to_string(), ApprovalResolution::Withdrawn),
+            ("approval-2".to_string(), ApprovalResolution::Lost),
+        ]
+    );
+}
+
+#[test]
 fn kernel_simulation_replays_the_same_trace_for_the_same_seed() {
     // P2 의 바탕이다: 같은 seed 가 다른 순서를 만들면 실패를 seed 로 다시 만들 수 없다.
     for seed in 0..8 {
@@ -1518,6 +1779,11 @@ fn kernel_simulation_reaches_follow_up_turns_and_stops() {
         // plan 19 Q3-7: thread prompts and a restart. The restart with a queued prompt has its own scripted test.
         "(ManualIntake",
         "kernel restarted with 0",
+        // plan 19 Q3-5: approvals. The restart with an open approval has its own scripted test.
+        "requests approval-",
+        "ended Accepted",
+        "ended Declined",
+        "ended TimedOut",
     ] {
         assert!(
             traces.iter().any(|line| line.contains(expected)),
