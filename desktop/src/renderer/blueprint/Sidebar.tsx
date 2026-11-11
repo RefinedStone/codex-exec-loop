@@ -3,7 +3,7 @@ import { useState } from "react";
 
 import { Icon } from "./icons";
 import { PROJECTS, type MockThread, type ThreadStatus } from "./mockData";
-import { notConnected, openThread, showView, togglePinned, toggleTheme, useBlueprint } from "./store";
+import { markDone, notConnected, openThread, restoreThread, showView, snooze, togglePinned, toggleTheme, useBlueprint } from "./store";
 
 const STATUS_LABEL: Record<ThreadStatus, string> = {
   running: "진행 중",
@@ -19,6 +19,50 @@ export function StatusMark({ status }: { status: ThreadStatus }) {
 
 export function needsAttention(status: ThreadStatus): boolean {
   return status === "approval" || status === "failed";
+}
+
+/** 완료로 정리했거나 미룬 스레드는 목록에서 뺀다. */
+function isListed(thread: MockThread): boolean {
+  return !thread.done && thread.snoozedUntil === null;
+}
+
+/** 목록에서 뺀 스레드이다. 펼치면 되돌릴 수 있다. */
+function SetAside() {
+  const [open, setOpen] = useState(false);
+  const threads = useBlueprint((state) => state.threads);
+  const aside = threads.filter((thread) => !isListed(thread));
+  if (aside.length === 0) return null;
+  const done = aside.filter((thread) => thread.done).length;
+  return (
+    <section className="project">
+      <header className="project-header">
+        <button type="button" className="project-name" onClick={() => setOpen(!open)} aria-expanded={open}>
+          <Icon name={open ? "chevronDown" : "chevronRight"} size={12} />
+          <span className="section-label">
+            완료 {done} · 미룸 {aside.length - done}
+          </span>
+        </button>
+      </header>
+      {open && (
+        <ul>
+          {aside.map((thread) => (
+            <li key={thread.id} className="aside-row">
+              <button type="button" className="thread" onClick={() => openThread(thread.id)}>
+                <Icon name={thread.done ? "check" : "clock"} size={12} />
+                <span className="thread-text">
+                  <span className="thread-title">{thread.title}</span>
+                  <span className="thread-sub">{thread.done ? "완료" : `${thread.snoozedUntil ?? ""}에 돌아옴`}</span>
+                </span>
+              </button>
+              <button type="button" className="ghost" onClick={() => restoreThread(thread.id)}>
+                되돌리기
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
 }
 
 function ThreadRow({ thread }: { thread: MockThread }) {
@@ -41,9 +85,17 @@ function ThreadRow({ thread }: { thread: MockThread }) {
         </span>
         <span className="thread-age">{thread.status === "approval" ? <span className="badge badge-warn">승인</span> : thread.updated}</span>
       </button>
-      <button type="button" className={thread.pinned ? "row-action pinned" : "row-action"} title={thread.pinned ? "고정 해제" : "고정"} onClick={() => togglePinned(thread.id)}>
-        <Icon name="stack" size={13} />
-      </button>
+      <span className="row-actions">
+        <button type="button" className={thread.pinned ? "pinned" : undefined} title={thread.pinned ? "고정 해제" : "고정"} onClick={() => togglePinned(thread.id)}>
+          <Icon name="stack" size={13} />
+        </button>
+        <button type="button" title="내일까지 미루기" onClick={() => snooze(thread.id)}>
+          <Icon name="clock" size={13} />
+        </button>
+        <button type="button" title="완료로 정리" onClick={() => markDone(thread.id)}>
+          <Icon name="check" size={13} />
+        </button>
+      </span>
     </li>
   );
 }
@@ -51,7 +103,7 @@ function ThreadRow({ thread }: { thread: MockThread }) {
 function ProjectSection({ projectId, name, path }: { projectId: string; name: string; path: string }) {
   const [open, setOpen] = useState(true);
   const threads = useBlueprint((state) => state.threads);
-  const mine = threads.filter((thread) => thread.projectId === projectId && !thread.pinned);
+  const mine = threads.filter((thread) => thread.projectId === projectId && !thread.pinned && isListed(thread));
   return (
     <section className="project">
       <header className="project-header" title={path}>
@@ -88,7 +140,7 @@ export function Sidebar() {
   const view = useBlueprint((state) => state.view);
   const theme = useBlueprint((state) => state.theme);
   const threads = useBlueprint((state) => state.threads);
-  const pinned = threads.filter((thread) => thread.pinned);
+  const pinned = threads.filter((thread) => thread.pinned && isListed(thread));
   const attention = threads.filter((thread) => needsAttention(thread.status)).length;
   return (
     <nav className="sidebar">
@@ -126,6 +178,7 @@ export function Sidebar() {
         {PROJECTS.map((project) => (
           <ProjectSection key={project.id} projectId={project.id} name={project.name} path={project.path} />
         ))}
+        <SetAside />
         <button type="button" className="nav-item add-project" onClick={() => notConnected("프로젝트 추가")}>
           <Icon name="plus" />
           <span>프로젝트 추가</span>

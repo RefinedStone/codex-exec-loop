@@ -4,7 +4,7 @@ import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { PlanList } from "./Conversation";
 import { Icon } from "./icons";
 import { EFFORTS, MENTION_FILES, MODELS, PERMISSIONS, SLASH_COMMANDS, type PlanStep } from "./mockData";
-import { answerApproval, interrupt, notConnected, removeQueued, sendMessage, startThread, toast, useBlueprint } from "./store";
+import { answerApproval, editQueued, interrupt, notConnected, removeQueued, sendMessage, startThread, toast, useBlueprint } from "./store";
 
 export function Picker({ icon, value, options, onChange }: { icon?: React.ReactNode; value: string; options: readonly string[]; onChange(value: string): void }) {
   const [open, setOpen] = useState(false);
@@ -116,13 +116,33 @@ function PlanStrip({ steps }: { steps: readonly PlanStep[] }) {
 
 function QueuedCards({ threadId }: { threadId: string }) {
   const queued = useBlueprint((state) => state.queued[threadId]) ?? [];
+  const [editing, setEditing] = useState<number | null>(null);
   if (queued.length === 0) return null;
   return (
     <ul className="queued">
       {queued.map((text, index) => (
         <li key={`${index}:${text}`}>
           <Icon name="clock" size={13} />
-          <span className="queued-text">{text}</span>
+          {editing === index ? (
+            <input
+              className="queued-edit"
+              autoFocus
+              defaultValue={text}
+              aria-label="대기 메시지 편집"
+              onBlur={(event) => {
+                editQueued(threadId, index, event.currentTarget.value.trim() || text);
+                setEditing(null);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.nativeEvent.isComposing) event.currentTarget.blur();
+                if (event.key === "Escape") setEditing(null);
+              }}
+            />
+          ) : (
+            <button type="button" className="queued-text" title="눌러서 편집" onClick={() => setEditing(index)}>
+              {text}
+            </button>
+          )}
           <button
             type="button"
             className="ghost"

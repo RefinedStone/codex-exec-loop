@@ -112,7 +112,7 @@ export function Fleet() {
       </header>
       <div className="fleet-columns">
         {FLEET_COLUMNS.map((column) => {
-          const items = threads.filter((thread) => column.statuses.includes(thread.status));
+          const items = threads.filter((thread) => column.statuses.includes(thread.status) && !thread.done && thread.snoozedUntil === null);
           return (
             <section key={column.title} className="fleet-column">
               <h3 title={column.hint}>

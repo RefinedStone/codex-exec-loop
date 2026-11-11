@@ -21,6 +21,10 @@ export interface MockThread {
   removed: number;
   pullRequest: { number: number; checks: "pass" | "fail" | "pending" } | null;
   pinned: boolean;
+  /** 끝난 일로 정리한 스레드이다. 사이드바 목록에서 빠진다. */
+  done: boolean;
+  /** 미룬 스레드가 목록에 돌아오는 때이다. null 이면 미루지 않았다. */
+  snoozedUntil: string | null;
 }
 
 export type StepKind = "read" | "search" | "edit" | "command" | "tool";
@@ -75,13 +79,13 @@ export const PROJECTS: MockProject[] = [
 ];
 
 export const THREADS: MockThread[] = [
-  { id: "t1", projectId: "akra", title: "사이드바에 스레드 상태 표시", status: "idle", updated: "방금", branch: "feat/sidebar-status", worktree: true, added: 182, removed: 41, pullRequest: null, pinned: true },
-  { id: "t2", projectId: "akra", title: "Gateway 재접속 간격 수정", status: "approval", updated: "3분", branch: "fix/reconnect-backoff", worktree: true, added: 24, removed: 9, pullRequest: null, pinned: false },
-  { id: "t3", projectId: "akra", title: "kernel simulation 시험 실패 조사", status: "running", updated: "12분", branch: "fix/kernel-simulation", worktree: true, added: 6, removed: 2, pullRequest: null, pinned: false },
-  { id: "t4", projectId: "akra", title: "plan 19 문서 정리", status: "unread", updated: "1시간", branch: "docs/plan-19", worktree: true, added: 96, removed: 120, pullRequest: { number: 2231, checks: "pass" }, pinned: false },
-  { id: "t5", projectId: "example-app", title: "로그인 폼 검증 추가", status: "failed", updated: "2시간", branch: "feat/login-validation", worktree: true, added: 58, removed: 4, pullRequest: { number: 412, checks: "fail" }, pinned: false },
-  { id: "t6", projectId: "example-app", title: "의존성 업데이트", status: "idle", updated: "3일", branch: "main", worktree: false, added: 0, removed: 0, pullRequest: null, pinned: false },
-  { id: "t7", projectId: "docs-site", title: "검색 색인 빌드 스크립트", status: "idle", updated: "5일", branch: "main", worktree: false, added: 0, removed: 0, pullRequest: null, pinned: false },
+  { id: "t1", projectId: "akra", title: "사이드바에 스레드 상태 표시", status: "idle", updated: "방금", branch: "feat/sidebar-status", worktree: true, added: 182, removed: 41, pullRequest: null, pinned: true, done: false, snoozedUntil: null },
+  { id: "t2", projectId: "akra", title: "Gateway 재접속 간격 수정", status: "approval", updated: "3분", branch: "fix/reconnect-backoff", worktree: true, added: 24, removed: 9, pullRequest: null, pinned: false, done: false, snoozedUntil: null },
+  { id: "t3", projectId: "akra", title: "kernel simulation 시험 실패 조사", status: "running", updated: "12분", branch: "fix/kernel-simulation", worktree: true, added: 6, removed: 2, pullRequest: null, pinned: false, done: false, snoozedUntil: null },
+  { id: "t4", projectId: "akra", title: "plan 19 문서 정리", status: "unread", updated: "1시간", branch: "docs/plan-19", worktree: true, added: 96, removed: 120, pullRequest: { number: 2231, checks: "pass" }, pinned: false, done: false, snoozedUntil: null },
+  { id: "t5", projectId: "example-app", title: "로그인 폼 검증 추가", status: "failed", updated: "2시간", branch: "feat/login-validation", worktree: true, added: 58, removed: 4, pullRequest: { number: 412, checks: "fail" }, pinned: false, done: false, snoozedUntil: null },
+  { id: "t6", projectId: "example-app", title: "의존성 업데이트", status: "idle", updated: "3일", branch: "main", worktree: false, added: 0, removed: 0, pullRequest: null, pinned: false, done: false, snoozedUntil: "월요일 오전 9시" },
+  { id: "t7", projectId: "docs-site", title: "검색 색인 빌드 스크립트", status: "idle", updated: "5일", branch: "main", worktree: false, added: 0, removed: 0, pullRequest: null, pinned: false, done: true, snoozedUntil: null },
 ];
 
 const T1_TURNS: MockTurn[] = [

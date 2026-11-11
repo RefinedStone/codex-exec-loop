@@ -143,6 +143,37 @@ export function handOffToNewThread(text: string): void {
   set({ view: "home", handOff: text, paletteOpen: false });
 }
 
+function updateThread(threadId: string, update: Partial<MockThread>): void {
+  set((state) => ({ threads: state.threads.map((thread) => (thread.id === threadId ? { ...thread, ...update } : thread)) }));
+}
+
+/** 끝난 스레드를 목록에서 뺀다. 진행 중인 스레드는 정리하지 않는다. */
+export function markDone(threadId: string): void {
+  if (isRunning(threadId)) {
+    toast("진행 중인 스레드는 완료로 정리할 수 없습니다");
+    return;
+  }
+  updateThread(threadId, { done: true, snoozedUntil: null, pinned: false });
+  toast("완료로 정리했습니다");
+}
+
+/** 스레드를 정해진 때까지 목록에서 뺀다 (mock: 때는 고정 값이다). */
+export function snooze(threadId: string): void {
+  updateThread(threadId, { snoozedUntil: "내일 오전 9시", pinned: false });
+  toast("내일 오전 9시까지 미뤘습니다");
+}
+
+/** 완료나 미루기를 취소하고 목록에 되돌린다. */
+export function restoreThread(threadId: string): void {
+  updateThread(threadId, { done: false, snoozedUntil: null });
+}
+
+export function editQueued(threadId: string, index: number, text: string): void {
+  set((state) => ({
+    queued: { ...state.queued, [threadId]: (state.queued[threadId] ?? []).map((current, position) => (position === index ? text : current)) },
+  }));
+}
+
 export function addReviewNote(note: ReviewNote): void {
   set((state) => ({ reviewNotes: [...state.reviewNotes, note] }));
 }
@@ -343,6 +374,7 @@ export function isRunning(threadId: string): boolean {
 
 /** 턴이 진행 중이면 대기 목록에 넣고, 아니면 새 턴을 시작한다. */
 export function sendMessage(threadId: string, text: string): void {
+  restoreThread(threadId);
   if (isRunning(threadId)) {
     set((state) => ({ queued: { ...state.queued, [threadId]: [...(state.queued[threadId] ?? []), text] } }));
   } else {
@@ -366,6 +398,8 @@ export function startThread(text: string): void {
     removed: 0,
     pullRequest: null,
     pinned: false,
+    done: false,
+    snoozedUntil: null,
   };
   set((state) => ({ threads: [thread, ...state.threads], turns: { ...state.turns, [id]: [] } }));
   openThread(id);
