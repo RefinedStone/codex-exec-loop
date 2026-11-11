@@ -180,12 +180,13 @@ export async function startFakeGateway(
     kernel?: FakeKernel;
     mcpHub?: FakeMcpHub;
     threadDocuments?: Record<string, FakeThreadDocument[]>;
-    /** 스레드 id → `akra/context/refresh` 가 바뀐 것으로 찾는 문서의 키이다. `akra/context/markRead` 가 지운다. */
+    /** 스레드 id → `akra/context/refresh` 가 바뀐 것으로 찾는 문서의 키이다. `akra/context/markRead` 뒤에는 다시 찾지 않는다. */
     changedThreadDocuments?: Record<string, string[]>;
   } = {},
 ): Promise<FakeGateway> {
-  // 작업 컨텍스트의 바뀜 상태이다: `스레드 id\n문서 키`.
+  // 작업 컨텍스트의 바뀜 상태이다: `스레드 id\n문서 키`. 읽은 문서는 같은 버전으로 다시 바뀜이 되지 않는다.
   const changedDocuments = new Set<string>();
+  const readDocuments = new Set<string>();
   const paths = Array.isArray(recordingPaths) ? recordingPaths : [recordingPaths];
   const table = new Map<string, Pick<JsonRpcEnvelope, "result" | "error">>();
   for (const path of paths) {
@@ -263,9 +264,15 @@ export async function startFakeGateway(
         const params = (message as { params?: { threadId?: unknown; key?: unknown } }).params;
         const threadId = String(params?.threadId ?? "");
         if (message.method === "akra/context/refresh") {
-          for (const key of options.changedThreadDocuments?.[threadId] ?? []) changedDocuments.add(`${threadId}\n${key}`);
+          for (const key of options.changedThreadDocuments?.[threadId] ?? []) {
+            if (!readDocuments.has(`${threadId}\n${key}`)) changedDocuments.add(`${threadId}\n${key}`);
+          }
         }
-        if (message.method === "akra/context/markRead") changedDocuments.delete(`${threadId}\n${String(params?.key ?? "")}`);
+        if (message.method === "akra/context/markRead") {
+          const document = `${threadId}\n${String(params?.key ?? "")}`;
+          changedDocuments.delete(document);
+          readDocuments.add(document);
+        }
         const resources = (options.threadDocuments[threadId] ?? []).map((document) => ({ ...document, changed: changedDocuments.has(`${threadId}\n${document.key}`) }));
         socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { resources } }));
         return;
