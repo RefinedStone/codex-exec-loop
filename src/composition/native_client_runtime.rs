@@ -51,8 +51,8 @@ use crate::domain::github_review::GithubPullRequestTarget;
 use crate::domain::kernel_event::{
     APPROVAL_KINDS, ApprovalResolution, COMMAND_KINDS, CommandMemory, CommandRecall,
     CommandRejectionReason, KernelCommandDescriptor, KernelEvent, KernelEventPage,
-    OperationReceipt, RETAINED_KERNEL_EVENTS, RecordedKernelEvent, THREAD_PROMPT_QUEUE_KINDS,
-    open_approvals, open_queued_thread_prompts,
+    OperationReceipt, RecordedKernelEvent, THREAD_PROMPT_QUEUE_KINDS, open_approvals,
+    open_queued_thread_prompts,
 };
 #[cfg(test)]
 use crate::domain::parallel_mode::ParallelModeAutomationTrigger;
@@ -69,6 +69,8 @@ pub(crate) enum ClientCommandDispatch {
     Replayed(OperationReceipt),
     /// 이 멱등 키는 다른 명령에 썼다. 실행하지 않았다.
     KeyReused,
+    /// 기록이 없는 커널이 멱등 키가 있는 명령을 받았다. 재전송을 가릴 수 없으므로 실행하지 않았다.
+    KeyUnavailable,
 }
 
 /// 클라이언트의 명령을 받은 결과이다 (plan 19 Q3-6).
@@ -76,8 +78,10 @@ pub(crate) enum ClientCommandDispatch {
 enum CommandAdmission {
     /// 처음 받은 명령이다. 기록했다. 값은 연산 id 이다. 부르는 쪽이 명령을 실행한다.
     Recorded(i64),
-    /// 기록이 없는 커널이다. 명령을 가리지 않는다. 부르는 쪽이 명령을 실행한다.
+    /// 기록이 없는 커널이 키가 없는 명령을 받았다. 부르는 쪽이 명령을 실행한다.
     Unrecorded,
+    /// 기록이 없는 커널이 키가 있는 명령을 받았다. 실행하지 않는다.
+    KeyUnavailable,
     /// 같은 멱등 키의 같은 명령을 전에 받았다. 실행하지 않는다.
     Replayed(OperationReceipt),
     /// 이 멱등 키는 다른 명령에 썼다. 실행하지 않는다.
@@ -1090,6 +1094,7 @@ impl NativeClientRuntime {
                 return ClientCommandDispatch::Replayed(receipt);
             }
             Some(CommandAdmission::KeyReused) => return ClientCommandDispatch::KeyReused,
+            Some(CommandAdmission::KeyUnavailable) => return ClientCommandDispatch::KeyUnavailable,
             Some(CommandAdmission::Recorded(_) | CommandAdmission::Unrecorded) | None => {}
         }
         let outcome =
@@ -1120,12 +1125,19 @@ impl NativeClientRuntime {
     /*
      * 클라이언트의 명령을 처리하기 전에 받는다 (plan 19 Q3-6). 같은 멱등 키의 같은 명령을 전에 받았으면 처음의
      * 영수증을 돌려주고, 부르는 쪽은 명령을 실행하지 않는다. 처음이면 `command_received` 를 기록한다. 그 기록의
-     * sequence 가 연산 id 이다. 기록이 없는 커널(TUI, 기록을 읽지 못한 커널)은 명령을 가리지 않고 영수증도 없다.
+     * sequence 가 연산 id 이다. 기록이 없는 커널(TUI, 기록을 읽지 못한 커널)은 영수증이 없고, 키가 있는 명령을
+     * 실행하지 않는다. 가릴 수 없는 재전송을 조용히 두 번 실행하지 않기 위해서이다.
      */
     fn admit_command(&mut self, descriptor: &KernelCommandDescriptor) -> CommandAdmission {
         if self.kernel_events.is_none() {
-            return CommandAdmission::Unrecorded;
+            return match descriptor.idempotency_key {
+                Some(_) => CommandAdmission::KeyUnavailable,
+                None => CommandAdmission::Unrecorded,
+            };
         }
+        // 기록이 지운 범위의 명령은 잊는다. 다시 조립한 커널이 기억하는 범위와 같다.
+        self.command_memory
+            .forget_trimmed(self.last_kernel_sequence);
         if let Some(key) = &descriptor.idempotency_key {
             match self.command_memory.recall(key, &descriptor.fingerprint) {
                 CommandRecall::Same(receipt) => return CommandAdmission::Replayed(receipt),
@@ -1144,9 +1156,6 @@ impl NativeClientRuntime {
         if let Some(key) = &descriptor.idempotency_key {
             self.command_memory
                 .remember(key, op_id, &descriptor.fingerprint);
-            // 기록이 지우는 범위의 명령은 잊는다. 다시 조립한 커널이 기억하는 범위와 같다.
-            self.command_memory
-                .forget_before(op_id - RETAINED_KERNEL_EVENTS);
         }
         CommandAdmission::Recorded(op_id)
     }
@@ -2354,6 +2363,11 @@ pub(crate) mod tests {
             Ok(())
         }
 
+        /// 실제 기록처럼 다음 커널이 이전 기록 뒤로 번호를 이어 가게 한다.
+        fn last_kernel_event_sequence(&self, _workspace_dir: &str) -> anyhow::Result<i64> {
+            Ok(self.0.lock().expect("log should lock").len() as i64)
+        }
+
         fn load_kernel_events(
             &self,
             _workspace_dir: &str,
@@ -2486,11 +2500,24 @@ pub(crate) mod tests {
         };
         let log = Arc::new(MemoryKernelEventLog::default());
         let (mut runtime, _turns) = recording_runtime_for_test();
+        // 기록이 없는 커널은 재전송을 가릴 수 없다. 키가 있는 명령을 실행하지 않고, 키가 없는 명령은 그냥 실행한다.
         assert_eq!(
             runtime.admit_command(&described(Some("key-1"), "fp-1")),
-            CommandAdmission::Unrecorded,
-            "a kernel without a log does not tell resends apart"
+            CommandAdmission::KeyUnavailable
         );
+        assert!(matches!(
+            runtime
+                .dispatch_client_command(AppCommand::Noop, Some(&described(Some("key-1"), "fp-1"))),
+            ClientCommandDispatch::KeyUnavailable
+        ));
+        assert!(matches!(
+            runtime.dispatch_client_command(AppCommand::Noop, Some(&described(None, "fp-1"))),
+            ClientCommandDispatch::Ran {
+                operation: None,
+                ..
+            }
+        ));
+        assert!(runtime.take_published_kernel_records().is_empty());
         runtime.attach_kernel_event_log(log.clone(), "/workspace");
 
         assert_eq!(
@@ -2543,8 +2570,13 @@ pub(crate) mod tests {
             restarted.admit_command(&described(Some("key-1"), "fp-2")),
             CommandAdmission::KeyReused
         );
+        // 새 명령의 연산 id 는 이전 커널의 기록 뒤로 이어진다. 이전 연산과 겹치지 않는다.
+        assert_eq!(
+            restarted.admit_command(&described(Some("key-2"), "fp-1")),
+            CommandAdmission::Recorded(4)
+        );
         drop(restarted);
-        assert_eq!(log.0.lock().expect("log should lock").len(), 3);
+        assert_eq!(log.0.lock().expect("log should lock").len(), 4);
     }
 
     #[test]

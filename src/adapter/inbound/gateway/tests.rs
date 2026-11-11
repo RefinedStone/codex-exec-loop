@@ -399,6 +399,29 @@ async fn a_client_attaches_commands_and_receives_kernel_events() {
     let reused = kernel_request(&mut client, id, "akra/kernel/command", params).await;
     assert_eq!(reused["error"]["code"], json!(-32014), "{reused}");
 
+    // A command that the kernel refuses at once answers `rejected`, and a resend gets the same refusal.
+    let unknown_thread = |id: &'static str| {
+        (
+            id,
+            json!({
+                "command": {"type": "submit_prompt", "thread_id": "no-such-thread", "prompt": "hello"},
+                "idempotency_key": "key-2",
+            }),
+        )
+    };
+    for (id, replayed) in [("refused", Value::Null), ("refused-again", json!(true))] {
+        let (id, params) = unknown_thread(id);
+        let refused = kernel_request(&mut client, id, "akra/kernel/command", params).await;
+        let result = &refused["result"];
+        assert_eq!(
+            result["rejection"]["reason"],
+            json!("unknown_thread"),
+            "{refused}"
+        );
+        assert_eq!(result["operation"]["state"], json!("rejected"), "{refused}");
+        assert_eq!(result["operation"]["replayed"], replayed, "{refused}");
+    }
+
     let queried = kernel_request(
         &mut client,
         "query",

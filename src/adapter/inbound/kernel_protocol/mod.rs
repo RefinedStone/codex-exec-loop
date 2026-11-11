@@ -57,6 +57,9 @@ pub const ERROR_KERNEL_UNAVAILABLE: i64 = -32012;
 pub const ERROR_KERNEL_TIMEOUT: i64 = -32013;
 /// 이 `idempotency_key` 는 다른 명령에 이미 썼다 (plan 19 Q3-6). 명령마다 새 키를 만든다.
 pub const ERROR_IDEMPOTENCY_KEY_REUSED: i64 = -32014;
+/// 이 커널은 기록이 없어서 재전송을 가릴 수 없다 (plan 19 Q3-6). 키가 있는 명령을 실행하지 않았다. 키 없이 보내면
+/// 실행하지만 재전송은 다시 실행된다.
+pub const ERROR_IDEMPOTENCY_UNAVAILABLE: i64 = -32015;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KernelProtocolError {
@@ -76,6 +79,15 @@ impl KernelProtocolError {
         Self {
             code: ERROR_IDEMPOTENCY_KEY_REUSED,
             message: "idempotency_key was already used for a different command".to_string(),
+        }
+    }
+
+    pub fn idempotency_unavailable() -> Self {
+        Self {
+            code: ERROR_IDEMPOTENCY_UNAVAILABLE,
+            message:
+                "this kernel has no decision log and cannot tell resends apart; the command did not run"
+                    .to_string(),
         }
     }
 }
@@ -111,9 +123,11 @@ const FINGERPRINT_HEX_CHARS: usize = 32;
 pub struct CommandRequest {
     pub command: KernelCommand,
     /*
-     * 재전송을 가리는 키이다 (plan 19 Q3-6). 클라이언트가 명령마다 새로 만든다. 같은 키와 같은 명령을 다시 보내면
-     * 커널은 다시 실행하지 않고 처음의 영수증을 답한다 (`operation.replayed`). 같은 키로 다른 명령을 보내면
-     * `ERROR_IDEMPOTENCY_KEY_REUSED` 이다. 커널은 그 명령의 기록이 남아 있는 동안 키를 기억한다.
+     * 재전송을 가리는 키이다 (plan 19 Q3-6). 클라이언트가 명령마다 새로 만든다. 키의 범위는 저장소의 커널
+     * 전체이므로(모든 클라이언트) 무작위 값(UUID 등)을 쓴다. 같은 키와 같은 명령을 다시 보내면 커널은 다시 실행하지
+     * 않고 처음의 영수증을 답한다 (`operation.replayed`). 거절된 명령도 같다: 다시 하려면 새 키로 보낸다. 같은 키로
+     * 다른 명령을 보내면 `ERROR_IDEMPOTENCY_KEY_REUSED` 이다. 커널은 그 명령의 기록이 남아 있는 동안 키를 기억한다.
+     * 기록이 없는 커널은 키가 있는 명령을 실행하지 않고 `ERROR_IDEMPOTENCY_UNAVAILABLE` 로 답한다.
      */
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
@@ -122,7 +136,8 @@ pub struct CommandRequest {
 impl CommandRequest {
     /*
      * 커널이 이 명령을 기록할 때 쓰는 설명이다 (plan 19 Q3-6). 명령의 내용은 지문으로만 남는다. 읽기 명령
-     * (`load_sessions`, `refresh_planning`)은 기록하지 않으므로 `None` 이다. 그 명령은 키가 있어도 그냥 실행한다.
+     * (`load_sessions`, `refresh_planning`)은 기록하지 않으므로 `None` 이다. 그 명령은 바른 키가 있어도 그냥
+     * 실행한다. 잘못된 키는 어느 명령이든 거절한다.
      */
     pub fn descriptor(&self) -> Result<Option<KernelCommandDescriptor>, KernelProtocolError> {
         let idempotency_key = self
@@ -147,7 +162,7 @@ impl CommandRequest {
         Ok(Some(KernelCommandDescriptor {
             command: json["type"].as_str().unwrap_or_default().to_string(),
             thread_id,
-            fingerprint: fingerprint(&json.to_string()),
+            fingerprint: fingerprint(&json),
             idempotency_key,
         }))
     }
@@ -165,10 +180,16 @@ fn valid_idempotency_key(key: &str) -> Result<String, KernelProtocolError> {
     Ok(key.to_string())
 }
 
-/// 명령 내용의 지문이다. 기록에 내용 대신 남는다. 같은 명령은 binary 가 바뀌어도 같은 지문이다.
-fn fingerprint(command_json: &str) -> String {
+/*
+ * 명령 내용의 지문이다. 기록에 내용 대신 남는다. 같은 명령은 binary 가 바뀌어도 같은 지문이어야 하므로, 키를 정렬한
+ * JSON 글자로 만든다 (`serde_json` 의 맵 순서 설정에 기대지 않는다). 명령에 필드를 더하면 그 명령의 지문이 바뀐다.
+ * 지문은 비밀이 아니다: 짧은 프롬프트는 추측해서 같은 지문인지 확인할 수 있다.
+ */
+fn fingerprint(command: &serde_json::Value) -> String {
     use sha2::{Digest, Sha256};
-    let digest = Sha256::digest(command_json.as_bytes());
+    let mut canonical = String::new();
+    write_canonical_json(command, &mut canonical);
+    let digest = Sha256::digest(canonical.as_bytes());
     let mut hex = digest
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -177,12 +198,44 @@ fn fingerprint(command_json: &str) -> String {
     hex
 }
 
+/// 객체의 키를 정렬하고 공백 없이 쓴다.
+fn write_canonical_json(value: &serde_json::Value, out: &mut String) {
+    match value {
+        serde_json::Value::Object(fields) => {
+            let mut names = fields.keys().collect::<Vec<_>>();
+            names.sort_unstable();
+            out.push('{');
+            for (index, name) in names.into_iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                out.push_str(&serde_json::Value::String(name.clone()).to_string());
+                out.push(':');
+                write_canonical_json(&fields[name], out);
+            }
+            out.push('}');
+        }
+        serde_json::Value::Array(items) => {
+            out.push('[');
+            for (index, item) in items.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                write_canonical_json(item, out);
+            }
+            out.push(']');
+        }
+        scalar => out.push_str(&scalar.to_string()),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommandResponse {
     /// 커널이 명령을 처리했다. `false` 는 커널이 끝나서 명령을 넣지 못한 경우이다.
     pub processed: bool,
-    /// 커널이 이 명령을 바로 거절한 이유이다 (`steer_turn`, `decide_approval`). `submit_prompt` 의 진행과 거절은
-    /// `prompt_submission` 이벤트로 온다. 받아들인 명령의 결과는 이벤트(`thread_activity` 등)로 온다.
+    /// 커널이 이 명령을 바로 거절한 이유이다 (`steer_turn`, `decide_approval`, 준비 전에 거절한 `submit_prompt`).
+    /// `submit_prompt` 의 준비 뒤 진행과 거절은 `prompt_submission` 이벤트로 온다. 받아들인 명령의 결과는
+    /// 이벤트(`thread_activity` 등)로 온다.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rejection: Option<CommandRejection>,
     /// 명령의 영수증이다 (plan 19 Q3-6). 읽기 명령과 기록이 없는 커널은 영수증이 없다.
@@ -292,6 +345,17 @@ impl CommandRejection {
                 "a decision for this approval is still in flight"
             }
             CommandRejectionReason::NoMatchingApproval => "no pending approval has that id",
+            CommandRejectionReason::Busy => "a turn is running or the thread is still busy",
+            CommandRejectionReason::PreparationActive => "another prompt is being prepared",
+            CommandRejectionReason::UnknownThread => {
+                "unknown thread; load_sessions lists the known threads"
+            }
+            CommandRejectionReason::ParallelMode => {
+                "parallel mode is on; the kernel starts no thread prompt until it is off"
+            }
+            CommandRejectionReason::ParallelModeUnknown => {
+                "the kernel does not know the parallel mode yet; try again"
+            }
         };
         Self {
             reason,

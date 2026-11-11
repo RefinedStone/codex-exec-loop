@@ -232,6 +232,9 @@ impl KernelSession {
             Ok(KernelCommandOutcome::KeyReused) => {
                 return Err(KernelProtocolError::idempotency_key_reused());
             }
+            Ok(KernelCommandOutcome::KeyUnavailable) => {
+                return Err(KernelProtocolError::idempotency_unavailable());
+            }
             Err(KernelCallError::Stopped) => CommandResponse::from_core(None),
             Err(KernelCallError::TimedOut) => {
                 return Err(timed_out("command", KERNEL_CALL_TIMEOUT));

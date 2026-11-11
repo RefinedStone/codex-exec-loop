@@ -702,8 +702,8 @@ struct Simulation {
     next_turn: u64,
     manual_turns_sent: usize,
     thread_prompts_sent: usize,
-    /// 보낸 thread 지정 프롬프트의 `(thread, 프롬프트)` 이다. 재전송은 여기서 고른다.
-    sent_thread_prompts: Vec<(String, String)>,
+    /// 보낸 thread 지정 프롬프트의 `(thread, 프롬프트, 처음 받은 연산 id)` 이다. 재전송은 여기서 고른다.
+    sent_thread_prompts: Vec<(String, String, i64)>,
     prompt_resends: usize,
     next_task: u64,
     next_approval: u64,
@@ -995,13 +995,16 @@ impl Simulation {
         self.record(format!("client: thread prompt '{prompt}' to {thread_id}"));
         self.thread_prompt_targets
             .insert(prompt.clone(), thread_id.clone());
+        // 처음 보낸 명령은 실행되고 영수증을 받는다. 그 연산 id 를 재전송의 답과 견준다 (I9).
+        let KernelCommandOutcome::Handled {
+            operation: Some(receipt),
+            ..
+        } = self.send_thread_prompt(&thread_id, &prompt)
+        else {
+            panic!("I9: the first send of '{prompt}' did not run with a receipt");
+        };
         self.sent_thread_prompts
-            .push((thread_id.clone(), prompt.clone()));
-        let outcome = self.send_thread_prompt(&thread_id, &prompt);
-        debug_assert!(
-            matches!(outcome, KernelCommandOutcome::Handled { .. }),
-            "a first command runs"
-        );
+            .push((thread_id, prompt, receipt.op_id));
     }
 
     /// thread 지정 프롬프트를 멱등 키와 함께 보낸다 (plan 19 Q3-6). 키는 프롬프트마다 하나이다.
@@ -1033,10 +1036,10 @@ impl Simulation {
     fn resend_thread_prompt(&mut self) -> Result<(), Violation> {
         self.prompt_resends += 1;
         let index = self.rng.index(self.sent_thread_prompts.len());
-        let (thread_id, prompt) = self.sent_thread_prompts[index].clone();
+        let (thread_id, prompt, first_op_id) = self.sent_thread_prompts[index].clone();
         let outcome = self.send_thread_prompt(&thread_id, &prompt);
         match outcome {
-            KernelCommandOutcome::Replayed(receipt) => {
+            KernelCommandOutcome::Replayed(receipt) if receipt.op_id == first_op_id => {
                 self.record(format!(
                     "client: resend of '{prompt}' answered with the receipt of operation {}",
                     receipt.op_id
@@ -1905,6 +1908,47 @@ fn kernel_simulation_closes_an_open_approval_as_lost_after_a_restart() {
             ("approval-2".to_string(), ApprovalResolution::Lost),
         ]
     );
+}
+
+#[test]
+fn kernel_simulation_answers_a_resend_with_the_first_receipt_after_a_restart() {
+    // plan 19 Q3-6 의 중심 경로를 정해진 순서로 지난다: 키가 있는 프롬프트를 보낸다 → 커널을 다시 켠다 → 같은 키로 다시
+    // 보낸다. 새 커널은 기록에서 키를 되돌렸으므로 실행하지 않고 처음의 영수증을 답한다.
+    let mut simulation = Simulation::new(0);
+    let script = |simulation: &mut Simulation| -> Result<(), Violation> {
+        let cycle = Duration::from_millis(10);
+        simulation.open_client_session();
+        simulation.run_host_cycle(cycle)?;
+        simulation.deliver_completion();
+        simulation.run_host_cycle(cycle)?;
+
+        simulation.submit_thread_prompt();
+        simulation.run_host_cycle(cycle)?;
+        simulation.resend_thread_prompt()?;
+        simulation.restart_kernel()?;
+        simulation.run_host_cycle(cycle)?;
+        simulation.resend_thread_prompt()?;
+        simulation.settle()
+    };
+    let result = script(&mut simulation);
+    let trace = match simulation.finish(result) {
+        Ok(trace) => trace,
+        Err((violation, trace)) => panic!(
+            "step {}: {}\n{}",
+            violation.step,
+            violation.message,
+            trace.join("\n")
+        ),
+    };
+    let resends = trace
+        .iter()
+        .filter(|line| line.contains("answered with the receipt of operation"))
+        .count();
+    let prepared = trace
+        .iter()
+        .filter(|line| line.contains("planner: prepare 'request 1'"))
+        .count();
+    assert_eq!((resends, prepared), (2, 1), "{}", trace.join("\n"));
 }
 
 #[test]

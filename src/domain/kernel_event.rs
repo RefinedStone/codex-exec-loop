@@ -119,7 +119,7 @@ pub struct PendingApproval {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandRejectionReason {
-    /// 같은 턴에 보낸 steer 가 아직 처리 중이다. 끝난 뒤 다시 보낸다.
+    /// 같은 턴에 보낸 steer 가 아직 처리 중이다. 끝난 뒤 새 멱등 키로 다시 보낸다.
     SteerInFlight,
     /// 그 thread 에 `expected_turn_id` 로 도는 턴이 없다. `thread_activity` 의 `active_turn_id` 를 쓴다.
     NoMatchingTurn,
@@ -127,6 +127,17 @@ pub enum CommandRejectionReason {
     DecisionInFlight,
     /// 기다리는 승인 중에 그 id 가 없다. `thread_activity` 의 `approval` 을 쓴다.
     NoMatchingApproval,
+    // 아래는 thread 지정 프롬프트(`submit_prompt`)를 준비 전에 거절한 이유이다. `ThreadPromptRejection` 과 같은 값이다.
+    /// 턴이 돌거나 그 thread 에 일이 남아 있다. `thread_activity` 가 비면 새 멱등 키로 다시 보낸다.
+    Busy,
+    /// 다른 프롬프트를 준비하고 있다. 그 준비가 끝나면 새 멱등 키로 다시 보낸다.
+    PreparationActive,
+    /// 커널이 모르는 thread 이다. `load_sessions` 로 목록을 읽는다.
+    UnknownThread,
+    /// 병렬 모드가 켜져 있다. 병렬 모드가 꺼질 때까지 커널은 thread 에 프롬프트를 내지 않는다.
+    ParallelMode,
+    /// 커널이 병렬 모드 값을 아직 모른다. 잠시 뒤 새 멱등 키로 다시 보낸다.
+    ParallelModeUnknown,
 }
 
 /*
@@ -511,10 +522,13 @@ impl CommandMemory {
         }
     }
 
-    /// 기록에서 지워진 범위의 명령은 잊는다. 기록의 보존 한도와 같은 범위만 기억한다.
-    pub fn forget_before(&mut self, oldest_op_id: i64) {
+    /*
+     * 기록에서 지워진 범위의 명령은 잊는다. 기록은 쓸 때마다 가장 새 sequence 에서 `RETAINED_KERNEL_EVENTS` 보다
+     * 오래된 사건을 지운다. 같은 규칙으로 잊어야 실행 중인 커널과 다시 조립한 커널이 같은 키를 기억한다.
+     */
+    pub fn forget_trimmed(&mut self, newest_sequence: i64) {
         self.by_key
-            .retain(|_, remembered| remembered.op_id >= oldest_op_id);
+            .retain(|_, remembered| remembered.op_id > newest_sequence - RETAINED_KERNEL_EVENTS);
     }
 }
 
@@ -793,8 +807,13 @@ mod tests {
         assert_eq!(memory.recall("key-a", "fp-other"), CommandRecall::Different);
         assert_eq!(memory.recall("key-z", "fp-a"), CommandRecall::Unknown);
 
-        // 기록에서 지워진 범위는 잊는다.
-        memory.forget_before(9);
+        // 기록에서 지워진 범위는 잊는다. 기록은 `sequence <= 가장 새 sequence - 보존 한도` 를 지운다.
+        memory.forget_trimmed(RETAINED_KERNEL_EVENTS + 2);
+        assert!(matches!(
+            memory.recall("key-a", "fp-a"),
+            CommandRecall::Same(_)
+        ));
+        memory.forget_trimmed(RETAINED_KERNEL_EVENTS + 3);
         assert_eq!(memory.recall("key-a", "fp-a"), CommandRecall::Unknown);
         assert!(matches!(
             memory.recall("key-c", "fp-c"),
