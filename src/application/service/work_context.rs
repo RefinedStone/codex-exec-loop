@@ -153,25 +153,29 @@ impl WorkContextService {
         // 전에 닿지 않은 문서는 뒤에 묻는다. 계속 실패하는 문서가 다른 문서의 차례를 막지 않는다.
         due.sort_by_key(|(failed_before, ..)| *failed_before);
         let mut failures = 0;
-        for (_, provider, link, document) in due.into_iter().take(MAX_VERSION_CHECKS_PER_REFRESH) {
-            if failures == MAX_VERSION_FAILURES_PER_REFRESH {
-                break;
+        let candidates = due.into_iter().take(MAX_VERSION_CHECKS_PER_REFRESH);
+        for (_, provider, link, document) in candidates {
+            match provider.current_version(&link.resource.key) {
+                Ok(version) => {
+                    state.unreachable_since.remove(&document);
+                    self.store.record_resource_version(
+                        &link.resource,
+                        &ResourceVersionCheck {
+                            version: version.clone(),
+                            checked_at: now.to_rfc3339_opts(SecondsFormat::Secs, true),
+                        },
+                    )?;
+                    self.set_first_read_version(thread_id, &link.resource, &version)?;
+                }
+                // 닿지 않는 문서는 건너뛴다. 장부의 이전 값이 남는다.
+                Err(_) => {
+                    state.unreachable_since.insert(document, now);
+                    failures += 1;
+                    if failures == MAX_VERSION_FAILURES_PER_REFRESH {
+                        break;
+                    }
+                }
             }
-            // 닿지 않는 문서는 건너뛴다. 장부의 이전 값이 남는다.
-            let Ok(version) = provider.current_version(&link.resource.key) else {
-                state.unreachable_since.insert(document, now);
-                failures += 1;
-                continue;
-            };
-            state.unreachable_since.remove(&document);
-            self.store.record_resource_version(
-                &link.resource,
-                &ResourceVersionCheck {
-                    version: version.clone(),
-                    checked_at: now.to_rfc3339_opts(SecondsFormat::Secs, true),
-                },
-            )?;
-            self.set_first_read_version(thread_id, &link.resource, &version)?;
         }
         Ok(())
     }
