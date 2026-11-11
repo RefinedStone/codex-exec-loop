@@ -1,6 +1,18 @@
 import { describe, expect, it } from "vitest";
 
-import { CONTEXT_THREAD_METHOD, documentsFrom, fetchThreadDocuments, groupByKind, kindLabel, sourceLabel } from "../src/renderer/work/threadDocuments";
+import {
+  changedCount,
+  CONTEXT_MARK_READ_METHOD,
+  CONTEXT_REFRESH_METHOD,
+  CONTEXT_THREAD_METHOD,
+  documentsFrom,
+  fetchThreadDocuments,
+  groupByKind,
+  kindLabel,
+  markThreadDocumentRead,
+  refreshThreadDocuments,
+  sourceLabel,
+} from "../src/renderer/work/threadDocuments";
 
 const resource = (overrides: Record<string, unknown>) => ({
   kind: "jira",
@@ -19,6 +31,13 @@ describe("documentsFrom", () => {
     });
     expect(documents.map((document) => document.key)).toEqual(["acme.atlassian.net/ABC-1", "L-1"]);
     expect(documents[1]?.title).toBe("https://acme.atlassian.net/browse/ABC-1");
+  });
+
+  it("reads the changed mark and treats a missing mark as not changed", () => {
+    // A Gateway from before plan 22 stage 2 sends no `changed` field.
+    const documents = documentsFrom({ resources: [resource({ changed: true }), resource({ key: "b" }), resource({ key: "c", changed: "yes" })] });
+    expect(documents.map((document) => document.changed)).toEqual([true, false, false]);
+    expect(changedCount(documents)).toBe(1);
   });
 
   it("rejects an unknown response shape", () => {
@@ -53,5 +72,21 @@ describe("fetchThreadDocuments", () => {
     }, "thread-1");
     expect(sent).toEqual([[CONTEXT_THREAD_METHOD, { threadId: "thread-1" }]]);
     expect(documents).toHaveLength(1);
+  });
+
+  it("asks for a version check and marks one document as read", async () => {
+    const sent: unknown[] = [];
+    const request = <T,>(method: string, params: unknown): Promise<T> => {
+      sent.push([method, params]);
+      return Promise.resolve({ resources: [resource({ changed: method === CONTEXT_REFRESH_METHOD })] } as T);
+    };
+    const refreshed = await refreshThreadDocuments(request, "thread-1");
+    expect(refreshed[0]?.changed).toBe(true);
+    const read = await markThreadDocumentRead(request, "thread-1", refreshed[0]!);
+    expect(read[0]?.changed).toBe(false);
+    expect(sent).toEqual([
+      [CONTEXT_REFRESH_METHOD, { threadId: "thread-1" }],
+      [CONTEXT_MARK_READ_METHOD, { threadId: "thread-1", kind: "jira", key: "acme.atlassian.net/ABC-1" }],
+    ]);
   });
 });

@@ -163,11 +163,29 @@ function answerMcpHub(hub: FakeMcpHub, socket: WebSocket, message: JsonRpcEnvelo
   respond({ error: { code: -32000, message: `fake MCP hub has no answer for ${message.method} ${tool}` } });
 }
 
+/** `akra/context/*` 가 돌려주는 문서이다. `changed` 는 가짜 Gateway 가 붙인다. */
+export interface FakeThreadDocument {
+  kind: string;
+  key: string;
+  url: string;
+  title: string;
+  source: string;
+  firstSeenAt: string;
+}
+
 export async function startFakeGateway(
   endpoint: string,
   recordingPaths: string | string[],
-  options: { kernel?: FakeKernel; mcpHub?: FakeMcpHub; threadDocuments?: Record<string, unknown[]> } = {},
+  options: {
+    kernel?: FakeKernel;
+    mcpHub?: FakeMcpHub;
+    threadDocuments?: Record<string, FakeThreadDocument[]>;
+    /** 스레드 id → `akra/context/refresh` 가 바뀐 것으로 찾는 문서의 키이다. `akra/context/markRead` 가 지운다. */
+    changedThreadDocuments?: Record<string, string[]>;
+  } = {},
 ): Promise<FakeGateway> {
+  // 작업 컨텍스트의 바뀜 상태이다: `스레드 id\n문서 키`.
+  const changedDocuments = new Set<string>();
   const paths = Array.isArray(recordingPaths) ? recordingPaths : [recordingPaths];
   const table = new Map<string, Pick<JsonRpcEnvelope, "result" | "error">>();
   for (const path of paths) {
@@ -240,10 +258,16 @@ export async function startFakeGateway(
         answerKernel(options.kernel, socket, message);
         return;
       }
-      // 작업 컨텍스트 (plan 22): 스레드 id → `akra/context/thread` 의 resources 이다.
-      if (options.threadDocuments && message.method === "akra/context/thread") {
-        const threadId = String((message as { params?: { threadId?: unknown } }).params?.threadId ?? "");
-        socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { resources: options.threadDocuments[threadId] ?? [] } }));
+      // 작업 컨텍스트 (plan 22): 스레드 id → `akra/context/*` 의 resources 이다. 목록 조회는 바뀜을 찾지 않는다.
+      if (options.threadDocuments && message.method.startsWith("akra/context/")) {
+        const params = (message as { params?: { threadId?: unknown; key?: unknown } }).params;
+        const threadId = String(params?.threadId ?? "");
+        if (message.method === "akra/context/refresh") {
+          for (const key of options.changedThreadDocuments?.[threadId] ?? []) changedDocuments.add(`${threadId}\n${key}`);
+        }
+        if (message.method === "akra/context/markRead") changedDocuments.delete(`${threadId}\n${String(params?.key ?? "")}`);
+        const resources = (options.threadDocuments[threadId] ?? []).map((document) => ({ ...document, changed: changedDocuments.has(`${threadId}\n${document.key}`) }));
+        socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { resources } }));
         return;
       }
       if (options.mcpHub && message.method.startsWith("akra/mcp/")) {

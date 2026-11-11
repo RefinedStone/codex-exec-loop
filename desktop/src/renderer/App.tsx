@@ -17,7 +17,7 @@ import { DocumentsPanel } from "./work/DocumentsPanel";
 import { JiraPanel } from "./work/JiraPanel";
 import type { GatewayRequest } from "./work/notionHub";
 import { NotionPanel } from "./work/NotionPanel";
-import { fetchThreadDocuments, type ThreadDocumentsState } from "./work/threadDocuments";
+import { changedCount, fetchThreadDocuments, markThreadDocumentRead, refreshThreadDocuments, type ThreadDocument, type ThreadDocumentsState } from "./work/threadDocuments";
 
 /** 오른쪽 패널은 한 번에 하나만 연다. */
 type SidePanel = "browser" | "documents" | "github" | "jira" | "notion" | "kernel" | null;
@@ -27,10 +27,12 @@ const CLIENT_VERSION = "0.0.0-development";
 function GatewayBar({
   sidePanel,
   documentCount,
+  changedDocumentCount,
   onToggle,
 }: {
   sidePanel: SidePanel;
   documentCount: number | null;
+  changedDocumentCount: number;
   onToggle(panel: Exclude<SidePanel, null>): void;
 }) {
   const gateway = useDesktopStore((state) => state.gateway);
@@ -56,7 +58,7 @@ function GatewayBar({
           {sidePanel === "kernel" ? "Akra 닫기" : "Akra"}
         </button>
         <button type="button" onClick={() => onToggle("documents")} aria-pressed={sidePanel === "documents"} data-testid="documents-toggle">
-          {sidePanel === "documents" ? "문서 닫기" : documentCount ? `문서 ${documentCount}` : "문서"}
+          {sidePanel === "documents" ? "문서 닫기" : documentCount ? `문서 ${documentCount}${changedDocumentCount ? ` · 바뀜 ${changedDocumentCount}` : ""}` : "문서"}
         </button>
         <button type="button" onClick={() => onToggle("browser")} aria-pressed={sidePanel === "browser"} data-testid="browser-toggle">
           {sidePanel === "browser" ? "브라우저 닫기" : "브라우저"}
@@ -119,6 +121,8 @@ export function App() {
 
   // 스레드를 열 때와 턴이 끝날 때 그 스레드의 관련 문서를 읽는다 (plan 22). Gateway 가 이때 새 기록에서 문서를 찾아
   // 장부에 적는다. 패널이 닫혀 있어도 한다. 모델을 부르지 않는 조회이다.
+  // 목록을 먼저 보이고, 그 뒤에 문서가 바뀌었는지 확인한다. 확인은 외부 서비스에 물어서 느릴 수 있다.
+  // 확인이 실패하면 (이전 Gateway, 서비스에 닿지 않음) 목록을 그대로 둔다.
   const connected = useDesktopStore((state) => state.connection?.phase === "connected");
   const openThreadId = useDesktopStore((state) => state.openThreadId);
   const turnInProgress = useDesktopStore((state) => isTurnInProgress(state.transcript));
@@ -132,14 +136,27 @@ export function App() {
     if (turnInProgress) return;
     let current = true;
     setDocuments((previous) => (previous.phase === "loaded" && previous.threadId === openThreadId ? previous : { phase: "loading", threadId: openThreadId }));
+    const show = (found: ThreadDocument[]) => current && setDocuments({ phase: "loaded", threadId: openThreadId, documents: found });
     fetchThreadDocuments(gatewayRequest, openThreadId).then(
-      (found) => current && setDocuments({ phase: "loaded", threadId: openThreadId, documents: found }),
+      (found) => {
+        show(found);
+        if (current && found.length > 0) refreshThreadDocuments(gatewayRequest, openThreadId).then(show, () => undefined);
+      },
       (error: unknown) => current && setDocuments({ phase: "failed", threadId: openThreadId, message: error instanceof Error ? error.message : String(error) }),
     );
     return () => {
       current = false;
     };
   }, [openThreadId, connected, turnInProgress, documentsRefresh, gatewayRequest]);
+  // 사용자가 바뀐 문서를 열었다. 실패하면 표시가 남고, 다음에 열 때 다시 한다.
+  const markDocumentRead = (document: ThreadDocument) => {
+    if (!openThreadId) return;
+    const threadId = openThreadId;
+    markThreadDocumentRead(gatewayRequest, threadId, document).then(
+      (found) => setDocuments((previous) => (previous.phase === "loaded" && previous.threadId === threadId ? { ...previous, documents: found } : previous)),
+      () => undefined,
+    );
+  };
 
   const composerActions: ComposerActions = {
     sendMessage: async (text) => session.current?.sendMessage(text),
@@ -163,6 +180,7 @@ export function App() {
         <GatewayBar
           sidePanel={sidePanel}
           documentCount={documents.phase === "loaded" ? documents.documents.length : null}
+          changedDocumentCount={documents.phase === "loaded" ? changedCount(documents.documents) : 0}
           onToggle={(panel) => setSidePanel((open) => (open === panel ? null : panel))} />
         <WorkingTreePanel git={window.akra} />
         <ConversationView onLoadOlder={async () => session.current?.loadOlderTurns()} />
@@ -171,7 +189,7 @@ export function App() {
         <TerminalDock bridge={window.akra.terminal} />
       </main>
       {sidePanel === "browser" && <BrowserPanel bridge={window.akra.browser} />}
-      {sidePanel === "documents" && <DocumentsPanel state={documents} onRefresh={() => setDocumentsRefresh((count) => count + 1)} />}
+      {sidePanel === "documents" && <DocumentsPanel state={documents} onRefresh={() => setDocumentsRefresh((count) => count + 1)} onOpenChanged={markDocumentRead} />}
       {sidePanel === "github" && (
         <GitHubPanel github={window.akra.github} onHandOff={async (pull) => handOff(await window.akra.github.reviewPrompt(pull.url))} />
       )}
