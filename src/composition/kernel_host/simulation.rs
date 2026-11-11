@@ -16,7 +16,8 @@
 //!
 //! 지금 모델하는 범위: 수동 턴 제출(새 thread, 기존 thread), thread 지정 프롬프트(준비, 큐에 남김, 다시 냄), 중지
 //! 요청(성공, 실패, 무효), 턴 시작·종료·실패, 턴 뒤 평가, 자동 후속, 클라이언트 떼기와 다시 붙기, 커널 재시작(기록을
-//! 다 쓴 뒤), 승인 요청과 그 끝(app-server 가 알린 결정, 결정 없이 끝난 턴, 재시작), 시계. 병렬 모드, 클라이언트의 승인
+//! 다 쓴 뒤), 승인 요청과 그 끝(app-server 가 알린 결정, 결정 없이 끝난 턴, 재시작), 멱등 키가 있는 thread 지정
+//! 프롬프트의 재전송, 시계. 병렬 모드, 클라이언트의 승인
 //! 결정 명령, steer, 기록을 다 쓰지 못한 강제 종료는 아직 모델하지 않는다.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -25,7 +26,10 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use super::{KernelClientId, KernelHostEvent, KernelHostInput, KernelHostLoop, KernelIdleClock};
+use super::{
+    KernelClientId, KernelCommandOutcome, KernelHostEvent, KernelHostInput, KernelHostLoop,
+    KernelIdleClock,
+};
 use crate::adapter::inbound::tui::app::test_helpers::{
     test_parallel_mode_control_plane_composition, test_planning_services,
 };
@@ -48,8 +52,8 @@ use crate::domain::conversation_runtime_envelope::{
     ConversationRuntimeConfigurationRequest, ConversationRuntimeEnvelope,
 };
 use crate::domain::kernel_event::{
-    ApprovalResolution, KernelEvent, RecordedKernelEvent, ThreadPromptSettlement,
-    open_queued_thread_prompts,
+    ApprovalResolution, KernelCommandDescriptor, KernelEvent, RecordedKernelEvent,
+    ThreadPromptSettlement, open_queued_thread_prompts,
 };
 use crate::domain::planning::{
     ManualPromptCorrelation, ManualPromptIntakeOutcome, ManualPromptMainSessionHandoff,
@@ -68,6 +72,8 @@ const WORKSPACE: &str = "/akra-simulation/workspace";
 const CATALOG_THREADS: [&str; 2] = ["thread-a", "thread-b"];
 /// 한 seed 에서 커널을 다시 켜는 최대 횟수이다.
 const MAX_RESTARTS: usize = 2;
+/// 한 seed 에서 thread 지정 프롬프트를 같은 멱등 키로 다시 보내는 최대 횟수이다 (plan 19 Q3-6).
+const MAX_PROMPT_RESENDS: usize = 2;
 /// 한 seed 에서 시뮬레이션이 고르는 행동 수이다.
 const SCENARIO_STEPS: usize = 240;
 /// 행동을 멈춘 뒤 커널이 일을 끝낼 때까지 허용하는 주기 수이다. 자동 후속 사슬이 끝날 만큼 넉넉하다.
@@ -242,6 +248,8 @@ enum PendingCompletion {
 enum SimAction {
     SubmitManualTurn,
     SubmitThreadPrompt,
+    /// 보낸 thread 지정 프롬프트를 같은 멱등 키로 다시 보낸다 (응답을 받지 못한 클라이언트).
+    ResendThreadPrompt,
     RestartKernel,
     RequestStop,
     ToggleClient,
@@ -277,6 +285,8 @@ struct InvariantLedger {
     planned_prompts: BTreeMap<String, PlannedPrompt>,
     /// 가짜 app-server 가 요청한 승인이다 (I8). 요청한 차례대로이다.
     approvals: Vec<SimApproval>,
+    /// 가짜 planner 가 준비한 프롬프트이다 (I9). 프롬프트 하나는 한 번만 준비된다.
+    prepared_prompts: BTreeSet<String>,
 }
 
 impl InvariantLedger {
@@ -624,6 +634,15 @@ fn check_kernel_records(
     let mut submissions = BTreeSet::new();
     let mut started = BTreeSet::new();
     let mut ended = BTreeSet::new();
+    // 연산 id 는 그 명령을 받은 기록의 sequence 이다 (plan 19 Q3-6).
+    if let Some(record) = recorded.iter().find(|record| {
+        matches!(&record.event, KernelEvent::CommandReceived { op_id, .. } if *op_id != record.sequence)
+    }) {
+        return Err(format!(
+            "I6: the command record at sequence {} names another operation id",
+            record.sequence
+        ));
+    }
     for (index, record) in records.iter().enumerate() {
         // 제출 번호는 커널마다 1 부터 다시 센다. 다시 켠 커널의 번호는 이전 커널의 번호와 겹칠 수 있다 (Q3-7).
         if lifetime_starts.contains(&index) {
@@ -683,6 +702,9 @@ struct Simulation {
     next_turn: u64,
     manual_turns_sent: usize,
     thread_prompts_sent: usize,
+    /// 보낸 thread 지정 프롬프트의 `(thread, 프롬프트)` 이다. 재전송은 여기서 고른다.
+    sent_thread_prompts: Vec<(String, String)>,
+    prompt_resends: usize,
     next_task: u64,
     next_approval: u64,
     restarts: usize,
@@ -736,6 +758,8 @@ impl Simulation {
             next_turn: 1,
             manual_turns_sent: 0,
             thread_prompts_sent: 0,
+            sent_thread_prompts: Vec::new(),
+            prompt_resends: 0,
             next_task: 1,
             next_approval: 1,
             restarts: 0,
@@ -816,6 +840,9 @@ impl Simulation {
         if self.thread_prompts_sent < self.settings.thread_prompt_budget {
             choices.push((SimAction::SubmitThreadPrompt, 4));
         }
+        if !self.sent_thread_prompts.is_empty() && self.prompt_resends < MAX_PROMPT_RESENDS {
+            choices.push((SimAction::ResendThreadPrompt, 3));
+        }
         if self.settings.restarts && self.restarts < MAX_RESTARTS {
             // 큐에 프롬프트가 남았을 때 다시 켜는 경우가 이 시험의 목적이다. 그때 더 자주 고른다.
             let queued = self.prompt_probably_queued && self.turn.is_some();
@@ -851,6 +878,7 @@ impl Simulation {
             SimAction::RestartKernel => return self.restart_kernel(),
             SimAction::SubmitManualTurn => self.submit_manual_turn(),
             SimAction::SubmitThreadPrompt => self.submit_thread_prompt(),
+            SimAction::ResendThreadPrompt => return self.resend_thread_prompt(),
             SimAction::RequestStop => {
                 self.record("client: stop all sessions".to_string());
                 self.send_command(AppCommand::RequestStopAllSessions);
@@ -967,13 +995,59 @@ impl Simulation {
         self.record(format!("client: thread prompt '{prompt}' to {thread_id}"));
         self.thread_prompt_targets
             .insert(prompt.clone(), thread_id.clone());
-        self.send_command(AppCommand::SubmitThreadPrompt(Box::new(
-            ThreadPromptSubmission {
+        self.sent_thread_prompts
+            .push((thread_id.clone(), prompt.clone()));
+        let outcome = self.send_thread_prompt(&thread_id, &prompt);
+        debug_assert!(
+            matches!(outcome, KernelCommandOutcome::Handled { .. }),
+            "a first command runs"
+        );
+    }
+
+    /// thread 지정 프롬프트를 멱등 키와 함께 보낸다 (plan 19 Q3-6). 키는 프롬프트마다 하나이다.
+    fn send_thread_prompt(&mut self, thread_id: &str, prompt: &str) -> KernelCommandOutcome {
+        let (reply, answer) = mpsc::channel();
+        self.send_host_input(KernelHostInput::Command {
+            command: AppCommand::SubmitThreadPrompt(Box::new(ThreadPromptSubmission {
                 workspace_directory: WORKSPACE.to_string(),
-                thread_id,
-                prompt,
-            },
-        )));
+                thread_id: thread_id.to_string(),
+                prompt: prompt.to_string(),
+            })),
+            descriptor: Some(KernelCommandDescriptor {
+                command: "submit_prompt".to_string(),
+                thread_id: thread_id.to_string(),
+                fingerprint: format!("{thread_id}:{prompt}"),
+                idempotency_key: Some(format!("key of {prompt}")),
+            }),
+            reply,
+        });
+        answer
+            .try_recv()
+            .expect("the host answers a command when it handles its inputs")
+    }
+
+    /*
+     * I9: 같은 멱등 키로 다시 보낸 명령은 다시 실행되지 않는다 (plan 19 Q3-6). 커널을 다시 켠 뒤에도 같다. 커널은
+     * 처음의 영수증을 답한다. 다시 실행하면 planner 가 같은 프롬프트를 두 번 준비하고 작업이 둘이 된다.
+     */
+    fn resend_thread_prompt(&mut self) -> Result<(), Violation> {
+        self.prompt_resends += 1;
+        let index = self.rng.index(self.sent_thread_prompts.len());
+        let (thread_id, prompt) = self.sent_thread_prompts[index].clone();
+        let outcome = self.send_thread_prompt(&thread_id, &prompt);
+        match outcome {
+            KernelCommandOutcome::Replayed(receipt) => {
+                self.record(format!(
+                    "client: resend of '{prompt}' answered with the receipt of operation {}",
+                    receipt.op_id
+                ));
+                Ok(())
+            }
+            other => Err(self.violation(format!(
+                "I9: the resend of '{prompt}' was not answered with the first receipt: {}",
+                variant_name(&format!("{other:?}"))
+            ))),
+        }
     }
 
     fn accept_effects(&mut self) -> Result<(), Violation> {
@@ -1006,7 +1080,11 @@ impl Simulation {
     /// 클라이언트 명령은 실제 클라이언트처럼 호스트 입력함으로 보낸다. 응답은 이벤트로도 오므로 버린다.
     fn send_command(&mut self, command: AppCommand) {
         let (reply, _answer) = mpsc::channel();
-        self.send_host_input(KernelHostInput::Command { command, reply });
+        self.send_host_input(KernelHostInput::Command {
+            command,
+            descriptor: None,
+            reply,
+        });
     }
 
     fn send_host_input(&mut self, input: KernelHostInput) {
@@ -1161,6 +1239,17 @@ impl Simulation {
             }
             CoreEffect::PrepareManualPrompt(request) => {
                 self.record(format!("planner: prepare '{}'", request.raw_prompt));
+                // I9 의 바깥쪽 확인이다: 프롬프트 하나는 한 번만 준비된다. 재전송이 다시 실행되면 여기서 걸린다.
+                if !self
+                    .ledger
+                    .prepared_prompts
+                    .insert(request.raw_prompt.clone())
+                {
+                    return Err(self.violation(format!(
+                        "I9: the planner prepared '{}' twice",
+                        request.raw_prompt
+                    )));
+                }
                 self.pending.push(PendingCompletion::PromptPreparation {
                     correlation: request.correlation,
                     raw_prompt: request.raw_prompt,
@@ -1854,6 +1943,8 @@ fn kernel_simulation_reaches_follow_up_turns_and_stops() {
         "ended Accepted",
         "ended Declined",
         "ended TimedOut",
+        // plan 19 Q3-6: a resend with the same idempotency key.
+        "answered with the receipt of operation",
     ] {
         assert!(
             traces.iter().any(|line| line.contains(expected)),
