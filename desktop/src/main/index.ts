@@ -89,12 +89,21 @@ function isAppUrl(url: string, contents: WebContents): boolean {
  */
 const HIDDEN_WINDOWS = process.env.AKRA_DESKTOP_HIDDEN === "1";
 
+/**
+ * UX 블루프린트 화면을 연다 (`npm run blueprint`). mock 데이터만 쓰는 화면이고 Gateway 에 접속하지 않는다.
+ * 블루프린트는 `ready` 를 보내지 않으므로 Gateway 접속과 데몬 시작이 일어나지 않는다.
+ */
+const BLUEPRINT = process.env.AKRA_DESKTOP_BLUEPRINT === "1";
+const RENDERER_PAGE = BLUEPRINT ? "blueprint.html" : "index.html";
+
 function createWindow(): void {
   const window = new BrowserWindow({
-    width: 1200,
-    height: 800,
-    title: "Akra Desktop",
+    width: BLUEPRINT ? 1440 : 1200,
+    height: BLUEPRINT ? 900 : 800,
+    title: BLUEPRINT ? "Akra Desktop Blueprint" : "Akra Desktop",
     show: false,
+    // 블루프린트는 창 제목 막대를 화면 위 막대와 합친다 (macOS).
+    ...(BLUEPRINT && process.platform === "darwin" ? { titleBarStyle: "hiddenInset" as const, trafficLightPosition: { x: 14, y: 14 } } : {}),
     webPreferences: {
       preload: join(__dirname, "../preload/index.js"),
       sandbox: true,
@@ -131,9 +140,9 @@ function createWindow(): void {
 
   const devServer = process.env.ELECTRON_RENDERER_URL;
   if (devServer) {
-    void window.loadURL(devServer);
+    void window.loadURL(`${devServer}/${RENDERER_PAGE}`);
   } else {
-    void window.loadFile(join(__dirname, "../renderer/index.html"));
+    void window.loadFile(join(__dirname, "../renderer", RENDERER_PAGE));
   }
 }
 

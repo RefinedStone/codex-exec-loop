@@ -15,6 +15,10 @@ The repository-wide rules in [`../AGENTS.md`](../AGENTS.md) still apply.
   (`turn/start`, `turn/steer`, …). Use the fake Gateway in `test/fake-gateway/` with recordings.
   Committed fixtures contain only altered content; never commit real recordings.
 
+- `src/renderer/blueprint/` is the target UX with mock data. It imports nothing from `session/`, `rpc/`, or
+  `window.akra`. Move a real component to the blueprint look one at a time; colors and sizes come from
+  `src/renderer/design/tokens.css`.
+
 ## Commands
 
 ```bash
@@ -24,6 +28,7 @@ npm test               # vitest, including the fake Gateway over a unix socket o
 npm run build          # electron-vite bundle into out/
 npm run dev            # fetch a missing Electron binary, cargo build akra-gateway, then open the app
                        # (starts the newer of ../target/{release,debug}/akra-gateway if none is running)
+npm run blueprint      # open the UX blueprint screen (src/renderer/blueprint): mock data only, no gateway, no codex
 npm run e2e            # build, then drive the app against the fake gateway (CI runs it under xvfb-run)
 ```
 

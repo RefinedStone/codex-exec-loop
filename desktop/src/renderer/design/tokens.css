@@ -1,0 +1,75 @@
+/* Akra Desktop 디자인 토큰이다. 색, 글꼴, 간격, 모서리 값은 여기에서만 정한다.
+   `data-theme` 이 없으면 밝은 값이다. 화면이 시작할 때 OS 설정에 맞춰 `data-theme` 을 붙인다. */
+:root {
+  --font-sans: system-ui, -apple-system, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --text-xs: 11px;
+  --text-s: 12px;
+  --text-m: 13px;
+  --text-l: 14px;
+  --text-xl: 20px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+
+  --radius-s: 6px;
+  --radius-m: 10px;
+  --radius-l: 16px;
+
+  --motion-fast: 120ms;
+  --motion: 200ms;
+
+  color-scheme: light;
+  --bg: #ffffff;
+  --bg-sidebar: #f5f5f6;
+  --bg-elevated: #ffffff;
+  --bg-sunken: #f3f3f5;
+  --bg-hover: rgba(0, 0, 0, 0.045);
+  --bg-active: rgba(0, 0, 0, 0.075);
+  --line: rgba(0, 0, 0, 0.09);
+  --line-strong: rgba(0, 0, 0, 0.17);
+  --text: #1b1c1f;
+  --text-2: #5b5f68;
+  --text-3: #8c9099;
+  --accent: #4457e6;
+  --accent-text: #ffffff;
+  --accent-bg: rgba(68, 87, 230, 0.1);
+  --ok: #1f9d61;
+  --warn: #c2760f;
+  --warn-bg: rgba(194, 118, 15, 0.1);
+  --bad: #d6453f;
+  --bad-bg: rgba(214, 69, 63, 0.09);
+  --add-bg: rgba(31, 157, 97, 0.12);
+  --del-bg: rgba(214, 69, 63, 0.1);
+  --shadow: 0 8px 28px rgba(0, 0, 0, 0.12), 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #111214;
+  --bg-sidebar: #17181b;
+  --bg-elevated: #1d1f23;
+  --bg-sunken: #0c0d0f;
+  --bg-hover: rgba(255, 255, 255, 0.055);
+  --bg-active: rgba(255, 255, 255, 0.09);
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.16);
+  --text: #e9eaed;
+  --text-2: #a5a9b2;
+  --text-3: #6f747e;
+  --accent: #8794ff;
+  --accent-text: #0e0f12;
+  --accent-bg: rgba(135, 148, 255, 0.15);
+  --ok: #4cc38a;
+  --warn: #f0a84b;
+  --warn-bg: rgba(240, 168, 75, 0.12);
+  --bad: #f2706b;
+  --bad-bg: rgba(242, 112, 107, 0.12);
+  --add-bg: rgba(76, 195, 138, 0.14);
+  --del-bg: rgba(242, 112, 107, 0.14);
+  --shadow: 0 12px 36px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.4);
+}

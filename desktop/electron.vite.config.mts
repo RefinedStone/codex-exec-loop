@@ -23,7 +23,11 @@ export default defineConfig({
     root: resolve(import.meta.dirname, "src/renderer"),
     build: {
       rollupOptions: {
-        input: { index: resolve(import.meta.dirname, "src/renderer/index.html") },
+        input: {
+          index: resolve(import.meta.dirname, "src/renderer/index.html"),
+          // UX 블루프린트 화면이다 (`npm run blueprint`). mock 데이터만 쓴다.
+          blueprint: resolve(import.meta.dirname, "src/renderer/blueprint.html"),
+        },
       },
     },
     plugins: [react()],
