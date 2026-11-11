@@ -8,15 +8,17 @@
 //! - 가짜 app-server: 턴을 시작하고, 시작 알림과 종료 알림을 따로 보낸다. 시작 전후에 스트림이 실패할 수 있다.
 //!   중지 요청이 닿으면 그 요청이 가리키는 턴을 중단으로 끝낸다.
 //! - 가짜 평가기: 턴 뒤 평가에 자동 후속 프롬프트 또는 멈춤을 답한다.
+//! - 가짜 planner: thread 지정 프롬프트의 준비에 작업 하나와 실행할 프롬프트를 답한다.
+//! - 재시작: 커널을 버리고 같은 기록으로 다시 조립한다. 이전 커널의 진행 중 일은 바깥 세계에서도 버린다.
 //!
 //! 무엇을 언제 할지는 seed 하나로 만든 난수가 고른다. 같은 seed 는 같은 순서를 만든다. 실패하면 seed 를 알리므로
 //! `AKRA_SIM_SEED=<seed>` 로 같은 실패를 다시 만든다.
 //!
-//! 지금 모델하는 범위: 수동 턴 제출(새 thread, 기존 thread), 중지 요청(성공, 실패, 무효), 턴 시작·종료·실패, 턴 뒤
-//! 평가, 자동 후속, 클라이언트 떼기와 다시 붙기, 시계. 병렬 모드, 승인, steer, 원격 준비(thread 지정 프롬프트),
-//! 커널 재시작은 아직 모델하지 않는다.
+//! 지금 모델하는 범위: 수동 턴 제출(새 thread, 기존 thread), thread 지정 프롬프트(준비, 큐에 남김, 다시 냄), 중지
+//! 요청(성공, 실패, 무효), 턴 시작·종료·실패, 턴 뒤 평가, 자동 후속, 클라이언트 떼기와 다시 붙기, 커널 재시작(기록을
+//! 다 쓴 뒤), 시계. 병렬 모드, 승인, steer, 기록을 다 쓰지 못한 강제 종료는 아직 모델하지 않는다.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -32,23 +34,34 @@ use crate::composition::native_client_runtime::NativeClientRuntime;
 use crate::composition::native_client_runtime::tests::post_turn_execution;
 use crate::core::app::{
     AppCommand, AppEvent, CoreEffect, CoreEffectCompletion, CoreInput, CorePromptOrigin,
-    PostTurnEvaluationCorrelation, StopRequestAttempt, StopRequestCorrelation, TurnStreamEvent,
-    TurnSubmissionCorrelation, TurnSubmissionRequest,
+    PostTurnEvaluationCorrelation, SessionCatalogLoadCorrelation, SessionCatalogLoadIntent,
+    SessionCatalogReadySnapshot, StopRequestAttempt, StopRequestCorrelation,
+    ThreadPromptSubmission, TurnStreamEvent, TurnSubmissionCorrelation, TurnSubmissionRequest,
 };
 use crate::core::runtime::{CoreEffectExecutor, CoreInputSender};
 use crate::domain::conversation_runtime_envelope::{
     ConversationRuntimeConfigurationRequest, ConversationRuntimeEnvelope,
 };
-use crate::domain::kernel_event::{KernelEvent, RecordedKernelEvent};
-use crate::domain::planning::{
-    PostTurnAutoFollowSkipReason, PostTurnContinuationAction, TurnSnapshotCapture,
+use crate::domain::kernel_event::{
+    KernelEvent, RecordedKernelEvent, ThreadPromptSettlement, open_queued_thread_prompts,
 };
+use crate::domain::planning::{
+    ManualPromptCorrelation, ManualPromptIntakeOutcome, ManualPromptMainSessionHandoff,
+    ManualPromptOutcome, PostTurnAutoFollowSkipReason, PostTurnContinuationAction,
+    PostTurnContinuationPermit, RuntimeProjection, TurnSnapshotCapture,
+};
+use crate::domain::recent_sessions::RecentSessions;
+use crate::domain::session_summary::SessionSummary;
 use crate::domain::turn_terminal::{
     ConversationTurnApplicationDelivery, ConversationTurnTerminalOutcome,
     ConversationTurnTerminalReceipt,
 };
 
 const WORKSPACE: &str = "/akra-simulation/workspace";
+/// 커널을 켜기 전부터 app-server 에 있는 thread 이다. 세션 목록에 있어야 thread 지정 프롬프트를 받는다.
+const CATALOG_THREADS: [&str; 2] = ["thread-a", "thread-b"];
+/// 한 seed 에서 커널을 다시 켜는 최대 횟수이다.
+const MAX_RESTARTS: usize = 2;
 /// 한 seed 에서 시뮬레이션이 고르는 행동 수이다.
 const SCENARIO_STEPS: usize = 240;
 /// 행동을 멈춘 뒤 커널이 일을 끝낼 때까지 허용하는 주기 수이다. 자동 후속 사슬이 끝날 만큼 넉넉하다.
@@ -134,14 +147,20 @@ struct ScenarioSettings {
     manual_turn_budget: usize,
     /// 중지 요청은 자동 후속을 멈춘다. 모든 seed 가 중지하면 자동 후속 사슬이 드물어지므로 seed 의 반만 중지한다.
     stop_requests: bool,
+    /// 클라이언트가 thread 를 지정해 보내는 프롬프트 수이다 (plan 18 K3-3b). 커널이 바쁘면 큐에 남는다 (Q2-3).
+    thread_prompt_budget: usize,
+    /// 커널을 무작위 시점에 버리고 기록으로 다시 조립한다 (plan 19 Q3-7).
+    restarts: bool,
 }
 
 impl ScenarioSettings {
     fn from_rng(rng: &mut SimRng) -> Self {
         Self {
             max_auto_turns: rng.index(4),
-            manual_turn_budget: 2 + rng.index(5),
+            manual_turn_budget: 3 + rng.index(6),
             stop_requests: rng.percent(50),
+            thread_prompt_budget: rng.index(5),
+            restarts: rng.percent(50),
         }
     }
 }
@@ -169,10 +188,20 @@ struct FakeTurn {
 enum PendingCompletion {
     PostTurnEvaluation {
         correlation: PostTurnEvaluationCorrelation,
+        /// 커널이 이 평가의 결과를 아직 받는지 알려 준다. 정책이 바뀌면(중지 등) 커널이 무효로 만든다.
+        permit: PostTurnContinuationPermit,
     },
     StopAttempt {
         correlation: StopRequestCorrelation,
         attempt: StopRequestAttempt,
+    },
+    SessionCatalog {
+        correlation: SessionCatalogLoadCorrelation,
+    },
+    /// thread 지정 프롬프트의 준비이다. 가짜 planner 가 작업 하나와 실행할 프롬프트를 답한다.
+    PromptPreparation {
+        correlation: ManualPromptCorrelation,
+        raw_prompt: String,
     },
 }
 
@@ -180,6 +209,8 @@ enum PendingCompletion {
 #[derive(Debug, Clone, Copy)]
 enum SimAction {
     SubmitManualTurn,
+    SubmitThreadPrompt,
+    RestartKernel,
     RequestStop,
     ToggleClient,
     AdvanceTurn,
@@ -194,6 +225,13 @@ struct Violation {
     message: String,
 }
 
+#[derive(Debug, Clone)]
+struct PlannedPrompt {
+    task_id: String,
+    thread_id: String,
+    submissions: usize,
+}
+
 /// 불변식 I2, I3 을 보려고 모으는 기록이다. 어긋나면 위반 문장을 돌려준다.
 #[derive(Default)]
 struct InvariantLedger {
@@ -201,7 +239,10 @@ struct InvariantLedger {
     /// 평가가 자동 후속 프롬프트를 답한 완료 턴이다. 자동 후속은 이 턴에서만 나올 수 있다.
     auto_prompted_turns: BTreeSet<(String, String)>,
     followed_turns: BTreeSet<(String, String)>,
-    auto_turns_since_manual: usize,
+    /// thread 마다 사람이 낸 턴 뒤의 자동 후속 수이다. 한도는 thread(session)마다 따로 센다.
+    auto_turns_since_manual: BTreeMap<String, usize>,
+    /// 가짜 planner 가 답한 프롬프트마다 그 작업, 받을 thread, app-server 가 받은 횟수이다 (I7).
+    planned_prompts: BTreeMap<String, PlannedPrompt>,
 }
 
 impl InvariantLedger {
@@ -227,6 +268,62 @@ impl InvariantLedger {
         ));
     }
 
+    /// I7: thread 지정 프롬프트는 커널을 다시 켜도 많아야 한 번, 자기 thread 에만 닿는다.
+    fn record_planned_prompt_submission(
+        &mut self,
+        request: &TurnSubmissionRequest,
+    ) -> Result<(), String> {
+        let Some(planned) = self.planned_prompts.get_mut(&request.prompt) else {
+            return Ok(());
+        };
+        planned.submissions += 1;
+        if planned.submissions > 1 {
+            return Err(format!(
+                "I7: the prompt of {} reached the app-server {} times",
+                planned.task_id, planned.submissions
+            ));
+        }
+        if request.thread_id.as_deref() != Some(planned.thread_id.as_str()) {
+            return Err(format!(
+                "I7: the prompt of {} for {} reached {:?}",
+                planned.task_id, planned.thread_id, request.thread_id
+            ));
+        }
+        Ok(())
+    }
+
+    /*
+     * I7 의 끝 확인이다. 기록에 남김이 열린 채 남으면 안 된다. 다시 내서 끝났다고 기록한 남김은 app-server 가 그
+     * 프롬프트를 정확히 한 번 받았어야 한다. 기록은 커널을 버린 뒤에 읽는다.
+     */
+    fn check_queued_prompt_records(&self, recorded: &[RecordedKernelEvent]) -> Result<(), String> {
+        let events = || recorded.iter().map(|record| record.event.clone());
+        if let Some(open) = open_queued_thread_prompts(events()).first() {
+            return Err(format!("I7: the prompt of {} stayed queued", open.task_id));
+        }
+        for event in events() {
+            let KernelEvent::ThreadPromptSettled {
+                task_id,
+                settlement: ThreadPromptSettlement::Submitted,
+                ..
+            } = event
+            else {
+                continue;
+            };
+            let submissions = self
+                .planned_prompts
+                .values()
+                .find(|planned| planned.task_id == task_id)
+                .map_or(0, |planned| planned.submissions);
+            if submissions != 1 {
+                return Err(format!(
+                    "I7: the record says the queued prompt of {task_id} was submitted, but the app-server got it {submissions} times"
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// I3: 자동 후속은 평가가 프롬프트를 답한 완료 턴마다 한 번이고, 수동 턴 뒤 최대 턴 수를 넘지 않는다.
     fn record_turn_submission(
         &mut self,
@@ -234,19 +331,25 @@ impl InvariantLedger {
         max_auto_turns: usize,
     ) -> Result<(), String> {
         if request.prompt_origin != CorePromptOrigin::AutoFollow {
-            self.auto_turns_since_manual = 0;
+            if let Some(thread_id) = &request.thread_id {
+                self.auto_turns_since_manual.remove(thread_id);
+            }
             return Ok(());
-        }
-        self.auto_turns_since_manual += 1;
-        if self.auto_turns_since_manual > max_auto_turns {
-            return Err(format!(
-                "I3: follow-up turn {} exceeds the limit {max_auto_turns}",
-                self.auto_turns_since_manual
-            ));
         }
         let Some(source) = &request.auto_follow_source else {
             return Err("I3: a follow-up turn has no source turn".to_string());
         };
+        let follow_ups = self
+            .auto_turns_since_manual
+            .entry(source.thread_id.clone())
+            .or_default();
+        *follow_ups += 1;
+        if *follow_ups > max_auto_turns {
+            return Err(format!(
+                "I3: follow-up turn {follow_ups} on {} exceeds the limit {max_auto_turns}",
+                source.thread_id
+            ));
+        }
         let key = turn_key(&source.thread_id, &source.completed_turn_id);
         if !self.auto_prompted_turns.contains(&key) {
             return Err(format!(
@@ -285,12 +388,51 @@ impl KernelEventLogPort for SimKernelLog {
         Ok(())
     }
 
+    fn last_kernel_event_sequence(&self, _workspace_dir: &str) -> anyhow::Result<i64> {
+        let records = self.0.lock().expect("kernel log should lock");
+        Ok(records.last().map_or(0, |record| record.sequence))
+    }
+
+    /// 다시 켠 커널이 남김 종류의 사건을 읽는다 (plan 19 Q3-1).
     fn load_kernel_events(
         &self,
         _workspace_dir: &str,
-        _kinds: &[&str],
+        kinds: &[&str],
     ) -> anyhow::Result<Vec<KernelEvent>> {
-        Ok(Vec::new())
+        let records = self.0.lock().expect("kernel log should lock");
+        Ok(records
+            .iter()
+            .filter(|record| kinds.contains(&record.event.kind()))
+            .map(|record| record.event.clone())
+            .collect())
+    }
+}
+
+/// 가짜 바깥 세계에 연결한 커널 하나이다. 기록은 아직 붙이지 않았다.
+struct SimKernel {
+    host: KernelHostLoop,
+    inbox: Sender<KernelHostInput>,
+    effects: RecordedEffects,
+    core_inputs: CoreInputSender,
+}
+
+fn build_sim_kernel() -> SimKernel {
+    let effects = RecordedEffects::default();
+    let planning = test_planning_services(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
+    let parallel = test_parallel_mode_control_plane_composition(planning);
+    /*
+     * 실행 중인 커널과 달리 병렬 보기의 작업 공간을 정하지 않는다 (`show_workspace_to_parallel_control`). 정하면
+     * 클라이언트가 붙을 때마다 병렬 제어부가 감독 점검을 실제 작업 스레드에서 돌리고, 그 완료 시점이 seed 를
+     * 따르지 않는다. 병렬 제어부의 효과를 가짜로 바꾸는 일은 병렬 모드를 모델할 때 한다.
+     */
+    let (runtime, core_inputs) =
+        NativeClientRuntime::new_with_effect_executor_for_test(parallel, Box::new(effects.clone()));
+    let (inbox, inputs) = mpsc::channel();
+    SimKernel {
+        host: KernelHostLoop::new(runtime, inputs, KernelIdleClock::default()),
+        inbox,
+        effects,
+        core_inputs,
     }
 }
 
@@ -298,7 +440,10 @@ impl KernelEventLogPort for SimKernelLog {
  * I6: 판단 사건 기록이 맞다 (plan 19 Q3-2). 같은 턴 제출은 한 번만 기록된다 (자동 후속은 core 입력을 다시 넣는다).
  * 같은 턴은 한 번 시작하고 한 번 끝나며, 끝은 시작 뒤에 온다.
  */
-fn check_kernel_records(recorded: &[RecordedKernelEvent]) -> Result<(), String> {
+fn check_kernel_records(
+    recorded: &[RecordedKernelEvent],
+    lifetime_starts: &[usize],
+) -> Result<(), String> {
     // 커널이 정한 sequence 는 1 부터 빠짐없이 늘어난다 (plan 19 Q3-3b).
     for (index, record) in recorded.iter().enumerate() {
         if record.sequence != index as i64 + 1 {
@@ -316,7 +461,11 @@ fn check_kernel_records(recorded: &[RecordedKernelEvent]) -> Result<(), String> 
     let mut submissions = BTreeSet::new();
     let mut started = BTreeSet::new();
     let mut ended = BTreeSet::new();
-    for record in &records {
+    for (index, record) in records.iter().enumerate() {
+        // 제출 번호는 커널마다 1 부터 다시 센다. 다시 켠 커널의 번호는 이전 커널의 번호와 겹칠 수 있다 (Q3-7).
+        if lifetime_starts.contains(&index) {
+            submissions.clear();
+        }
         match record {
             KernelEvent::TurnSubmitted { submission, .. } if !submissions.insert(*submission) => {
                 return Err(format!(
@@ -365,10 +514,24 @@ struct Simulation {
     turn: Option<FakeTurn>,
     pending: Vec<PendingCompletion>,
     invalidated_stop_requests: BTreeSet<u64>,
-    known_threads: Vec<String>,
+    /// 가짜 클라이언트(화면)가 보는 대화이다. 수동 턴은 TUI 처럼 이 대화에만 낸다. 새 대화를 열면 `None` 이다.
+    viewed_thread: Option<String>,
     next_thread: u64,
     next_turn: u64,
     manual_turns_sent: usize,
+    thread_prompts_sent: usize,
+    next_task: u64,
+    restarts: usize,
+    /// 다시 켠 커널이 쓰기 시작한 기록 위치이다. I6 이 커널마다 다시 세는 값을 여기서 끊는다.
+    lifetime_starts: Vec<usize>,
+    /// 마지막으로 커널을 다시 켤 때 큐에 남아 있던 프롬프트이다. 다시 나가면 기록에 적는다.
+    carried_prompts: BTreeSet<String>,
+    /// 클라이언트가 보낸 thread 지정 프롬프트와 그 thread 이다. 준비가 끝난 프롬프트가 닿을 곳이다.
+    thread_prompt_targets: BTreeMap<String, String>,
+    /// 턴이 도는 동안 준비 완료를 넣었다. 다음 주기에서 커널이 그 프롬프트를 큐에 남긴다.
+    prompt_prepared_behind_turn: bool,
+    /// 턴이 도는 동안 준비가 끝난 프롬프트가 있다. 그 프롬프트는 큐에 남았을 가능성이 크다.
+    prompt_probably_queued: bool,
     ledger: InvariantLedger,
     kernel_log: Arc<SimKernelLog>,
 }
@@ -377,22 +540,15 @@ impl Simulation {
     fn new(seed: u64) -> Self {
         let mut rng = SimRng::new(seed);
         let settings = ScenarioSettings::from_rng(&mut rng);
-        let effects = RecordedEffects::default();
-        let planning = test_planning_services(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
-        let parallel = test_parallel_mode_control_plane_composition(planning);
-        /*
-         * 실행 중인 커널과 달리 병렬 보기의 작업 공간을 정하지 않는다 (`show_workspace_to_parallel_control`). 정하면
-         * 클라이언트가 붙을 때마다 병렬 제어부가 감독 점검을 실제 작업 스레드에서 돌리고, 그 완료 시점이 seed 를
-         * 따르지 않는다. 병렬 제어부의 효과를 가짜로 바꾸는 일은 병렬 모드를 모델할 때 한다.
-         */
-        let (mut runtime, core_inputs) = NativeClientRuntime::new_with_effect_executor_for_test(
-            parallel,
-            Box::new(effects.clone()),
-        );
+        let SimKernel {
+            mut host,
+            inbox,
+            effects,
+            core_inputs,
+        } = build_sim_kernel();
         let kernel_log = Arc::new(SimKernelLog::default());
-        runtime.attach_kernel_event_log(kernel_log.clone(), "/sim");
-        let (inbox, inputs) = mpsc::channel();
-        let host = KernelHostLoop::new(runtime, inputs, KernelIdleClock::default());
+        host.runtime
+            .attach_kernel_event_log(kernel_log.clone(), "/sim");
         let mut simulation = Self {
             rng,
             settings,
@@ -410,11 +566,19 @@ impl Simulation {
             turn: None,
             pending: Vec::new(),
             invalidated_stop_requests: BTreeSet::new(),
-            known_threads: Vec::new(),
+            viewed_thread: None,
             next_thread: 1,
             kernel_log,
             next_turn: 1,
             manual_turns_sent: 0,
+            thread_prompts_sent: 0,
+            next_task: 1,
+            restarts: 0,
+            lifetime_starts: Vec::new(),
+            carried_prompts: BTreeSet::new(),
+            thread_prompt_targets: BTreeMap::new(),
+            prompt_prepared_behind_turn: false,
+            prompt_probably_queued: false,
             ledger: InvariantLedger::default(),
         };
         simulation.record(format!("seed {seed}, {settings:?}"));
@@ -431,12 +595,22 @@ impl Simulation {
             Ok(result) => result,
             Err(panic) => Err(self.violation(panic_message(panic.as_ref()))),
         };
+        self.finish(result)
+    }
+
+    /// 커널을 버리고 기록을 확인한다 (I6, I7). 성공하면 기록 전체를 돌려준다.
+    fn finish(
+        self,
+        result: Result<(), Violation>,
+    ) -> Result<Vec<String>, (Violation, Vec<String>)> {
         let result = result.and_then(|()| {
             let step = self.step;
             // 커널을 버려야 기록기가 남은 사건을 다 쓴다.
             drop(self.host);
             let records = self.kernel_log.0.lock().expect("kernel log should lock");
-            check_kernel_records(&records).map_err(|message| Violation { step, message })
+            check_kernel_records(&records, &self.lifetime_starts)
+                .and_then(|()| self.ledger.check_queued_prompt_records(&records))
+                .map_err(|message| Violation { step, message })
         });
         match result {
             Ok(()) => Ok(self.trace),
@@ -445,10 +619,7 @@ impl Simulation {
     }
 
     fn run_scenario(&mut self) -> Result<(), Violation> {
-        self.attach_client();
-        self.send_command(AppCommand::SetAutoFollowMaxTurns {
-            value: self.settings.max_auto_turns,
-        });
+        self.open_client_session();
         self.run_host_cycle(Duration::ZERO)?;
         for _ in 0..SCENARIO_STEPS {
             self.step += 1;
@@ -462,18 +633,37 @@ impl Simulation {
         if self.queued_core_inputs >= CORE_INPUT_FLUSH_THRESHOLD {
             return SimAction::RunHostCycle;
         }
-        let mut choices = vec![(SimAction::RunHostCycle, 6), (SimAction::ToggleClient, 1)];
+        let mut choices = vec![(SimAction::RunHostCycle, 24), (SimAction::ToggleClient, 4)];
         if self.manual_turns_sent < self.settings.manual_turn_budget {
-            choices.push((SimAction::SubmitManualTurn, 1));
+            // 준비 중인 thread 지정 프롬프트가 있으면 턴을 먼저 시작해 그 프롬프트가 큐에 남는 경우를 자주 만든다.
+            let preparing = self
+                .pending
+                .iter()
+                .any(|pending| matches!(pending, PendingCompletion::PromptPreparation { .. }));
+            let weight = if preparing && self.turn.is_none() {
+                24
+            } else {
+                4
+            };
+            choices.push((SimAction::SubmitManualTurn, weight));
+        }
+        if self.thread_prompts_sent < self.settings.thread_prompt_budget {
+            choices.push((SimAction::SubmitThreadPrompt, 4));
+        }
+        if self.settings.restarts && self.restarts < MAX_RESTARTS {
+            // 큐에 프롬프트가 남았을 때 다시 켜는 경우가 이 시험의 목적이다. 그때 더 자주 고른다.
+            let queued = self.prompt_probably_queued && self.turn.is_some();
+            let weight = if queued { 48 } else { 1 };
+            choices.push((SimAction::RestartKernel, weight));
         }
         if self.turn.is_some() {
-            choices.push((SimAction::AdvanceTurn, 3));
+            choices.push((SimAction::AdvanceTurn, 12));
         }
         if self.turn.is_some() && self.settings.stop_requests {
-            choices.push((SimAction::RequestStop, 1));
+            choices.push((SimAction::RequestStop, 4));
         }
         if !self.pending.is_empty() {
-            choices.push((SimAction::DeliverCompletion, 3));
+            choices.push((SimAction::DeliverCompletion, 12));
         }
         let total: u64 = choices.iter().map(|(_, weight)| weight).sum();
         let mut pick = self.rng.below(total);
@@ -492,7 +682,9 @@ impl Simulation {
                 let advance = Duration::from_millis(self.rng.below(1501));
                 return self.run_host_cycle(advance);
             }
+            SimAction::RestartKernel => return self.restart_kernel(),
             SimAction::SubmitManualTurn => self.submit_manual_turn(),
+            SimAction::SubmitThreadPrompt => self.submit_thread_prompt(),
             SimAction::RequestStop => {
                 self.record("client: stop all sessions".to_string());
                 self.send_command(AppCommand::RequestStopAllSessions);
@@ -523,15 +715,115 @@ impl Simulation {
             }
         }
         Err(self.violation(format!(
-            "I4: the kernel did not settle: remaining work {}, fake turn {:?}, pending completions {}",
+            "I4: the kernel did not settle: remaining work {}, fake turn {:?}, pending completions {}, busy threads {:?}, viewed runtime {:?}",
             self.host.runtime.has_remaining_work(),
             self.turn,
-            self.pending.len()
+            self.pending.len(),
+            self.host.thread_activity,
+            self.host.runtime.snapshot().conversation_runtime
         )))
     }
 
     fn is_quiet(&self) -> bool {
         self.turn.is_none() && self.pending.is_empty() && !self.host.runtime.has_remaining_work()
+    }
+
+    /// 클라이언트가 커널에 붙어 하는 처음 일이다: 자동 후속 한도를 정하고 세션 목록을 읽는다.
+    fn open_client_session(&mut self) {
+        self.attach_client();
+        self.send_command(AppCommand::SetAutoFollowMaxTurns {
+            value: self.settings.max_auto_turns,
+        });
+        self.send_command(AppCommand::LoadSessionCatalog(
+            SessionCatalogLoadIntent::ensure_loaded(10, WORKSPACE),
+        ));
+    }
+
+    /*
+     * 커널을 버리고 같은 기록으로 다시 조립한다 (plan 19 Q3-7). 이전 커널의 worker 는 커널과 함께 사라지므로,
+     * 진행 중이던 턴과 완료는 바깥 세계에서도 버린다. 지금 커널은 그 일들을 기록에 남기지 않는다 (P1 의 남은 부분).
+     * 큐에 남긴 thread 지정 프롬프트는 기록에 있으므로 새 커널이 되돌린다 (Q3-1).
+     */
+    fn restart_kernel(&mut self) -> Result<(), Violation> {
+        // 이전 커널이 마지막으로 낸 효과를 먼저 받는다. 그 효과는 app-server 에 닿은 것으로 센다.
+        self.accept_effects()?;
+        self.restarts += 1;
+        let SimKernel {
+            host,
+            inbox,
+            effects,
+            core_inputs,
+        } = build_sim_kernel();
+        // 이전 커널을 버려야 기록기가 남은 사건을 다 쓴다. 새 커널은 그 뒤에 기록을 읽는다.
+        drop(std::mem::replace(&mut self.host, host));
+        self.inbox = inbox;
+        self.effects = effects;
+        self.core_inputs = core_inputs;
+        self.client = None;
+        self.viewed_thread = None;
+        self.turn = None;
+        self.pending.clear();
+        self.invalidated_stop_requests.clear();
+        self.queued_core_inputs = 0;
+        self.prompt_probably_queued = false;
+        self.prompt_prepared_behind_turn = false;
+        self.ledger.auto_turns_since_manual.clear();
+        let (lifetime_start, carried) = {
+            let records = self.kernel_log.0.lock().expect("kernel log should lock");
+            let events = records.iter().map(|record| record.event.clone());
+            (records.len(), open_queued_thread_prompts(events))
+        };
+        self.lifetime_starts.push(lifetime_start);
+        self.record(format!(
+            "kernel restarted with {} queued thread prompt(s)",
+            carried.len()
+        ));
+        self.carried_prompts = carried
+            .into_iter()
+            .map(|prompt| prompt.handoff.prompt)
+            .collect();
+        self.host
+            .runtime
+            .attach_kernel_event_log(self.kernel_log.clone(), "/sim");
+        // 되돌린 프롬프트는 기록을 붙이는 dispatch 안에서 바로 다시 나갈 수 있다.
+        self.accept_effects()?;
+        self.open_client_session();
+        Ok(())
+    }
+
+    fn submit_thread_prompt(&mut self) {
+        self.thread_prompts_sent += 1;
+        let thread_id = CATALOG_THREADS[self.rng.index(CATALOG_THREADS.len())].to_string();
+        let prompt = format!("request {}", self.thread_prompts_sent);
+        self.record(format!("client: thread prompt '{prompt}' to {thread_id}"));
+        self.thread_prompt_targets
+            .insert(prompt.clone(), thread_id.clone());
+        self.send_command(AppCommand::SubmitThreadPrompt(Box::new(
+            ThreadPromptSubmission {
+                workspace_directory: WORKSPACE.to_string(),
+                thread_id,
+                prompt,
+            },
+        )));
+    }
+
+    /*
+     * 커널에 끝나지 않은 중지 시도가 있을 수 있다. 중지 완료가 바깥 세계에 남아 있거나, 커널이 아직 처리하지 않은
+     * 입력이 있다 (중지 명령의 효과나 중지 완료일 수 있다).
+     */
+    fn stop_attempt_may_be_open(&self) -> bool {
+        self.host_woken
+            || self
+                .pending
+                .iter()
+                .any(|pending| matches!(pending, PendingCompletion::StopAttempt { .. }))
+    }
+
+    fn accept_effects(&mut self) -> Result<(), Violation> {
+        for effect in self.effects.take() {
+            self.accept_effect(effect)?;
+        }
+        Ok(())
     }
 
     fn attach_client(&mut self) {
@@ -571,9 +863,27 @@ impl Simulation {
         );
     }
 
+    /*
+     * 화면(TUI)이 내는 턴이다. 보는 대화를 이어 가거나, 새 대화를 열고 낸다. 보지 않는 thread 에는 내지 않는다.
+     * 실제 클라이언트도 그렇다: TUI 는 대화를 먼저 열고, 원격 클라이언트는 이 명령 대신 thread 지정 프롬프트를 쓴다.
+     * 보지 않는 thread 에 내면 그 thread 의 session 이 둘이 될 수 있고, 커널은 그 입력을 막지 않는다 (plan 19 Q3-7).
+     */
     fn submit_manual_turn(&mut self) {
         self.manual_turns_sent += 1;
-        let thread_id = self.choose_thread_for_manual_turn();
+        /*
+         * 중지가 끝나기 전에는 새 대화를 열지 않는다. 그 순서에서 커널은 돌고 있는 턴을 잊고 중지 요청도 무효로 만든다.
+         * 그 턴은 app-server 에서 끝까지 돌고, 커널은 다른 턴을 함께 시작할 수 있다 (I1, I5 가 깨진다). 커널의 알려진
+         * 결함이고 plan 19 Q3-7 에 적었다. 고치면 이 조건을 지운다.
+         */
+        let may_leave = !self.stop_attempt_may_be_open();
+        let continues_viewed = self.viewed_thread.is_some() && (!may_leave || self.rng.percent(50));
+        if !continues_viewed && self.viewed_thread.take().is_some() {
+            self.record("client: open a new conversation".to_string());
+            // TUI 는 새 대화를 열 때 자기 프롬프트 준비를 먼저 취소한다. thread 지정 준비는 취소되면 안 된다.
+            self.send_command(AppCommand::CancelManualPromptPreparation);
+            self.send_command(AppCommand::InvalidateConversationLoad);
+        }
+        let thread_id = self.viewed_thread.clone();
         let prompt = format!("task {}", self.manual_turns_sent);
         self.record(format!("client: submit '{prompt}' to {thread_id:?}"));
         self.send_command(AppCommand::SubmitTurn(Box::new(TurnSubmissionRequest {
@@ -588,14 +898,6 @@ impl Simulation {
             turn_options: Default::default(),
             slot_lease_handoff: None,
         })));
-    }
-
-    fn choose_thread_for_manual_turn(&mut self) -> Option<String> {
-        if self.known_threads.is_empty() || self.rng.percent(50) {
-            return None;
-        }
-        let index = self.rng.index(self.known_threads.len());
-        Some(self.known_threads[index].clone())
     }
 
     /// 커널 한 주기를 돌리고, 그 주기에 나온 효과를 바깥 세계에 넘긴다. 가짜 시계는 `advance` 만큼 간다.
@@ -621,25 +923,34 @@ impl Simulation {
         );
         self.host.run_cycle(now, Duration::ZERO);
         self.queued_core_inputs = 0;
+        // 커널이 준비 완료를 처리한 뒤에야 프롬프트가 큐에 있다. 턴이 없으면 커널은 큐를 바로 비운다.
+        self.prompt_probably_queued = self.turn.is_some()
+            && (self.prompt_probably_queued || self.prompt_prepared_behind_turn);
+        self.prompt_prepared_behind_turn = false;
         self.drain_client_events();
-        for effect in self.effects.take() {
-            self.accept_effect(effect)?;
-        }
+        self.accept_effects()?;
         self.check_remaining_work_while_busy()
     }
 
     /*
      * I5: 바깥 세계에서 턴이 돌거나 평가가 진행 중이면 커널은 남은 일이 있다고 답해야 한다. 이 답으로 커널을 내릴지
-     * 정하므로(plan 18 K3-5), 일이 있는데 없다고 하면 진행 중인 일을 잃는다.
+     * 정하므로(plan 18 K3-5), 일이 있는데 없다고 하면 진행 중인 일을 잃는다. 커널이 무효로 만든 평가는 세지 않는다.
+     * 중지처럼 정책이 바뀌면 커널은 평가를 버리고, 그 worker 의 결과는 받지 않는다.
      */
     fn check_remaining_work_while_busy(&self) -> Result<(), Violation> {
-        let evaluating = self
+        let evaluating = self.pending.iter().any(|pending| {
+            matches!(pending, PendingCompletion::PostTurnEvaluation { permit, .. } if permit.is_current())
+        });
+        // 받아들인 thread 지정 프롬프트의 준비도 남은 일이다. 커널을 내리면 그 프롬프트를 잃는다.
+        let preparing = self
             .pending
             .iter()
-            .any(|pending| matches!(pending, PendingCompletion::PostTurnEvaluation { .. }));
-        if (self.turn.is_some() || evaluating) && !self.host.runtime.has_remaining_work() {
+            .any(|pending| matches!(pending, PendingCompletion::PromptPreparation { .. }));
+        if (self.turn.is_some() || evaluating || preparing)
+            && !self.host.runtime.has_remaining_work()
+        {
             return Err(self.violation(format!(
-                "I5: the kernel reports no remaining work while turn {:?} runs or an evaluation is pending ({evaluating})",
+                "I5: the kernel reports no remaining work while turn {:?} runs, an evaluation is pending ({evaluating}), or a prompt is being prepared ({preparing})",
                 self.turn.as_ref().map(|turn| &turn.turn_id)
             )));
         }
@@ -662,9 +973,10 @@ impl Simulation {
                 correlation,
                 request,
             } => self.start_fake_turn(correlation, *request),
-            CoreEffect::EvaluatePostTurn { correlation, .. } => {
-                self.start_fake_evaluation(correlation)
-            }
+            CoreEffect::EvaluatePostTurn {
+                correlation,
+                request,
+            } => self.start_fake_evaluation(correlation, request.continuation_permit),
             CoreEffect::RequestStopAllSessions {
                 correlation,
                 attempt,
@@ -689,7 +1001,24 @@ impl Simulation {
                     .insert(correlation.generation);
                 Ok(())
             }
-            CoreEffect::CancelManualPromptPreparation { .. } => Ok(()),
+            CoreEffect::LoadSessionCatalog { correlation } => {
+                self.pending
+                    .push(PendingCompletion::SessionCatalog { correlation });
+                Ok(())
+            }
+            CoreEffect::PrepareManualPrompt(request) => {
+                self.record(format!("planner: prepare '{}'", request.raw_prompt));
+                self.pending.push(PendingCompletion::PromptPreparation {
+                    correlation: request.correlation,
+                    raw_prompt: request.raw_prompt,
+                });
+                Ok(())
+            }
+            // 시뮬레이션의 준비는 모두 thread 지정 프롬프트의 것이다. 화면의 취소가 그 준비를 끊으면 안 된다
+            // (plan 18 K3-3b 의 회귀).
+            CoreEffect::CancelManualPromptPreparation { .. } => Err(self.violation(
+                "a client cancel reached the preparation of a thread prompt".to_string(),
+            )),
             other => Err(self.violation(format!(
                 "the simulation does not model this effect yet: {}",
                 variant_name(&format!("{other:?}"))
@@ -711,12 +1040,22 @@ impl Simulation {
         }
         self.ledger
             .record_turn_submission(&request, self.settings.max_auto_turns)
+            .and_then(|()| self.ledger.record_planned_prompt_submission(&request))
             .map_err(|message| self.violation(message))?;
+        if self.carried_prompts.remove(&request.prompt) {
+            self.record(format!(
+                "restored prompt '{}' submitted after the restart",
+                request.prompt
+            ));
+        }
         let thread_id = request.thread_id.clone().unwrap_or_else(|| {
             let thread_id = format!("thread-{}", self.next_thread);
             self.next_thread += 1;
             thread_id
         });
+        if request.prompt_origin == CorePromptOrigin::Manual {
+            self.viewed_thread = Some(thread_id.clone());
+        }
         let turn_id = format!("turn-{}", self.next_turn);
         self.next_turn += 1;
         self.record(format!(
@@ -736,6 +1075,7 @@ impl Simulation {
     fn start_fake_evaluation(
         &mut self,
         correlation: PostTurnEvaluationCorrelation,
+        permit: PostTurnContinuationPermit,
     ) -> Result<(), Violation> {
         self.ledger
             .record_evaluation_start(&correlation)
@@ -744,8 +1084,10 @@ impl Simulation {
             "evaluator: start {} on {} (generation {})",
             correlation.completed_turn_id, correlation.thread_id, correlation.generation
         ));
-        self.pending
-            .push(PendingCompletion::PostTurnEvaluation { correlation });
+        self.pending.push(PendingCompletion::PostTurnEvaluation {
+            correlation,
+            permit,
+        });
         Ok(())
     }
 
@@ -779,9 +1121,6 @@ impl Simulation {
 
     fn start_turn(&mut self, mut turn: FakeTurn) {
         self.record(format!("app-server: {} started", turn.turn_id));
-        if !self.known_threads.contains(&turn.thread_id) {
-            self.known_threads.push(turn.thread_id.clone());
-        }
         self.send_core_input(CoreInput::ConversationTurnWorkspaceChanged {
             correlation: turn.correlation,
             workspace_directory: WORKSPACE.to_string(),
@@ -839,14 +1178,81 @@ impl Simulation {
         }
         let index = self.rng.index(self.pending.len());
         match self.pending.remove(index) {
-            PendingCompletion::PostTurnEvaluation { correlation } => {
+            PendingCompletion::PostTurnEvaluation { correlation, .. } => {
                 self.complete_evaluation(correlation);
             }
             PendingCompletion::StopAttempt {
                 correlation,
                 attempt,
             } => self.complete_stop_attempt(correlation, attempt),
+            PendingCompletion::SessionCatalog { correlation } => {
+                self.complete_session_catalog(correlation);
+            }
+            PendingCompletion::PromptPreparation {
+                correlation,
+                raw_prompt,
+            } => self.complete_prompt_preparation(correlation, raw_prompt),
         }
+    }
+
+    fn complete_session_catalog(&mut self, correlation: SessionCatalogLoadCorrelation) {
+        let items = CATALOG_THREADS.map(catalog_session).to_vec();
+        self.send_core_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::SessionCatalogLoaded {
+                correlation,
+                result: Ok(SessionCatalogReadySnapshot::from_catalog(
+                    RecentSessions {
+                        items,
+                        warnings: Vec::new(),
+                        next_cursor: None,
+                    }
+                    .into(),
+                )),
+            },
+        ));
+    }
+
+    /// 가짜 planner 가 작업 하나를 만들고 실행할 프롬프트를 답한다. 프롬프트 글은 작업마다 다르다 (I7 이 센다).
+    fn complete_prompt_preparation(
+        &mut self,
+        correlation: ManualPromptCorrelation,
+        raw_prompt: String,
+    ) {
+        let task_id = format!("task-{}", self.next_task);
+        let planned_prompt = format!("planned {raw_prompt} for {task_id}");
+        self.prompt_prepared_behind_turn |= self.turn.is_some();
+        let thread_id = self
+            .thread_prompt_targets
+            .get(&raw_prompt)
+            .cloned()
+            .unwrap_or_default();
+        self.ledger.planned_prompts.insert(
+            planned_prompt.clone(),
+            PlannedPrompt {
+                task_id: task_id.clone(),
+                thread_id,
+                submissions: 0,
+            },
+        );
+        self.record(format!("planner: '{raw_prompt}' -> {task_id}"));
+        let outcome = ManualPromptOutcome::PromptReady {
+            correlation,
+            transcript_text: raw_prompt.clone(),
+            runtime_projection: Box::new(RuntimeProjection::invalid("simulation")),
+            intake: Box::new(ManualPromptIntakeOutcome::TaskCommitted {
+                committed_task_id: task_id,
+                committed_planning_revision: self.next_task as i64,
+                handoff: ManualPromptMainSessionHandoff {
+                    prompt: planned_prompt,
+                    transcript_text: raw_prompt,
+                    task: None,
+                },
+            }),
+        };
+        self.next_task += 1;
+        self.send_core_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ManualPromptPrepared(Box::new(outcome)),
+        ));
     }
 
     /*
@@ -893,7 +1299,7 @@ impl Simulation {
         } else if self.rng.percent(10) {
             Err("simulated stop failure".to_string())
         } else {
-            self.interrupt_target_turn(correlation);
+            self.interrupt_running_turn();
             Ok(())
         };
         self.record(format!(
@@ -909,14 +1315,12 @@ impl Simulation {
         ));
     }
 
-    fn interrupt_target_turn(&mut self, correlation: StopRequestCorrelation) {
-        let Some(target) = correlation.turn_submission else {
-            return;
-        };
+    /// 실제 app-server adapter 처럼 지금 도는 턴을 중단한다 (모든 스트림). 그 턴은 보지 않는 thread 의 것일 수 있다.
+    fn interrupt_running_turn(&mut self) {
         if let Some(turn) = self
             .turn
             .as_mut()
-            .filter(|turn| turn.correlation == target && turn.stage == TurnStage::Started)
+            .filter(|turn| turn.stage == TurnStage::Started)
         {
             turn.interrupt_requested = true;
         }
@@ -939,6 +1343,21 @@ impl Simulation {
             step: self.step,
             message,
         }
+    }
+}
+
+fn catalog_session(thread_id: &str) -> SessionSummary {
+    SessionSummary {
+        id: thread_id.to_string(),
+        name: Some(format!("Simulated {thread_id}")),
+        preview: String::new(),
+        cwd: WORKSPACE.to_string(),
+        source: "simulation".to_string(),
+        model_provider: "simulation".to_string(),
+        updated_at_epoch: 1,
+        status_type: "ready".to_string(),
+        path: format!("{WORKSPACE}/{thread_id}"),
+        git_branch: None,
     }
 }
 
@@ -977,7 +1396,9 @@ fn run_seed(seed: u64) -> Result<Vec<String>, String> {
 }
 
 fn failure_report(seed: u64, message: &str, trace: &[String]) -> String {
-    let tail_start = trace.len().saturating_sub(TRACE_TAIL);
+    // `AKRA_SIM_TRACE_TAIL` 로 보고에 넣는 기록 줄 수를 늘린다 (실패를 조사할 때).
+    let tail = env_number("AKRA_SIM_TRACE_TAIL").map_or(TRACE_TAIL, |lines| lines as usize);
+    let tail_start = trace.len().saturating_sub(tail);
     format!(
         "kernel simulation failed: {message}\nreproduce: AKRA_SIM_SEED={seed} cargo test --locked kernel_simulation\nlast trace lines:\n{}",
         trace[tail_start..].join("\n")
@@ -1027,6 +1448,59 @@ fn kernel_simulation_keeps_the_invariants_for_every_seed() {
 }
 
 #[test]
+fn kernel_simulation_restores_a_queued_prompt_after_a_restart() {
+    /*
+     * plan 19 Q3-7 의 중심 경로를 정해진 순서로 지난다. 무작위 시나리오에서는 이 경로가 seed 의 일부에서만 나온다.
+     * 순서: 세션 목록을 읽는다 → thread 지정 프롬프트를 보낸다 → 다른 대화에서 턴이 돈다 → 준비가 끝나 프롬프트가
+     * 큐에 남는다 → 커널을 다시 켠다 → 새 커널이 그 프롬프트를 한 번 낸다.
+     */
+    let mut simulation = Simulation::new(0);
+    let script = |simulation: &mut Simulation| -> Result<(), Violation> {
+        let cycle = Duration::from_millis(10);
+        simulation.open_client_session();
+        simulation.run_host_cycle(cycle)?;
+        simulation.deliver_completion();
+        simulation.run_host_cycle(cycle)?;
+
+        simulation.submit_thread_prompt();
+        simulation.run_host_cycle(cycle)?;
+        simulation.submit_manual_turn();
+        simulation.run_host_cycle(cycle)?;
+        let turn = simulation
+            .turn
+            .clone()
+            .expect("the manual turn should reach the app-server");
+        simulation.start_turn(turn);
+        simulation.run_host_cycle(cycle)?;
+        simulation.deliver_completion();
+        simulation.run_host_cycle(cycle)?;
+
+        simulation.restart_kernel()?;
+        simulation.settle()
+    };
+    let result = script(&mut simulation);
+    let trace = match simulation.finish(result) {
+        Ok(trace) => trace,
+        Err((violation, trace)) => panic!(
+            "step {}: {}\n{}",
+            violation.step,
+            violation.message,
+            trace.join("\n")
+        ),
+    };
+    for expected in [
+        "kernel restarted with 1 queued thread prompt(s)",
+        "submitted after the restart",
+    ] {
+        assert!(
+            trace.iter().any(|line| line.contains(expected)),
+            "the scripted run did not reach '{expected}':\n{}",
+            trace.join("\n")
+        );
+    }
+}
+
+#[test]
 fn kernel_simulation_replays_the_same_trace_for_the_same_seed() {
     // P2 의 바탕이다: 같은 seed 가 다른 순서를 만들면 실패를 seed 로 다시 만들 수 없다.
     for seed in 0..8 {
@@ -1054,6 +1528,9 @@ fn kernel_simulation_reaches_follow_up_turns_and_stops() {
         "-> Err(\"stop request was superseded",
         "-> Err(\"simulated stop failure",
         "detached",
+        // plan 19 Q3-7: thread prompts and a restart. The restart with a queued prompt has its own scripted test.
+        "(ManualIntake",
+        "kernel restarted with 0",
     ] {
         assert!(
             traces.iter().any(|line| line.contains(expected)),
