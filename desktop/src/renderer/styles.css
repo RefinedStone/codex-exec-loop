@@ -720,6 +720,10 @@ button {
   background: var(--surface);
 }
 
+.work-changed {
+  color: var(--warn);
+}
+
 .checks-success {
   color: var(--ok);
 }
