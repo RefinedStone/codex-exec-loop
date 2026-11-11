@@ -488,6 +488,53 @@ fn a_recorded_event_carries_the_log_sequence_for_the_history_cursor() {
 }
 
 #[test]
+fn approval_records_reach_the_client_without_the_request_content() {
+    // plan 19 Q3-5: the request and its end are records. `describe` lists every record kind.
+    use crate::domain::kernel_event::{
+        ApprovalRequestKind, ApprovalResolution, KernelEvent as Record, PendingApproval,
+    };
+    let approval = PendingApproval::new(
+        "thread-1",
+        Some("turn-1"),
+        "approval-1",
+        ApprovalRequestKind::CommandExecution,
+        "Command execution requested.",
+    );
+    let recorded = |sequence, event| {
+        let event = KernelEvent::Recorded(RecordedKernelEvent {
+            sequence,
+            recorded_at: "2026-11-11T00:00:00Z".to_string(),
+            event,
+        });
+        serde_json::to_value(&event).expect("the event should serialize")["event"].clone()
+    };
+    assert_eq!(
+        recorded(7, Record::ApprovalRequested(approval.clone())),
+        json!({
+            "kind": "approval_requested",
+            "thread_id": "thread-1",
+            "turn_id": "turn-1",
+            "approval_id": "approval-1",
+            "request_kind": "command_execution",
+            "summary": "Command execution requested.",
+        })
+    );
+    assert_eq!(
+        recorded(8, approval.resolved(ApprovalResolution::Lost)),
+        json!({
+            "kind": "approval_resolved",
+            "thread_id": "thread-1",
+            "approval_id": "approval-1",
+            "resolution": "lost",
+        })
+    );
+    let records = describe().records;
+    for kind in ["approval_requested", "approval_resolved", "turn_ended"] {
+        assert!(records.contains(&kind.to_string()), "{kind}");
+    }
+}
+
+#[test]
 fn a_history_query_reads_after_its_cursor_and_answers_with_the_page() {
     // plan 19 Q3-3: the gateway reads the page from the kernel log and the answer carries it.
     let first: QueryRequest = serde_json::from_value(json!({ "query": { "type": "history" } }))

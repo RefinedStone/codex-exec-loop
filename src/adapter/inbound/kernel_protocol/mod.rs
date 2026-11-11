@@ -1139,6 +1139,9 @@ pub struct KernelDescription {
     pub commands: Vec<String>,
     pub queries: Vec<String>,
     pub events: Vec<String>,
+    /// 판단 사건 기록의 종류이다 (`recorded` 이벤트와 `history` 조회의 `event.kind`). plan 19 Q3-5 에서 더했다.
+    #[serde(default)]
+    pub records: Vec<String>,
 }
 
 pub fn describe() -> KernelDescription {
@@ -1149,5 +1152,6 @@ pub fn describe() -> KernelDescription {
         commands: owned(&COMMANDS),
         queries: owned(&QUERIES),
         events: owned(&EVENTS),
+        records: owned(&crate::domain::kernel_event::KERNEL_EVENT_KINDS),
     }
 }

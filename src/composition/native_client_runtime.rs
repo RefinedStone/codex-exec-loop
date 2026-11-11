@@ -49,8 +49,8 @@ use crate::domain::conversation::ConversationRuntimeControlTruth;
 #[cfg(test)]
 use crate::domain::github_review::GithubPullRequestTarget;
 use crate::domain::kernel_event::{
-    KernelEvent, KernelEventPage, RecordedKernelEvent, THREAD_PROMPT_QUEUE_KINDS,
-    open_queued_thread_prompts,
+    APPROVAL_KINDS, ApprovalResolution, KernelEvent, KernelEventPage, RecordedKernelEvent,
+    THREAD_PROMPT_QUEUE_KINDS, open_approvals, open_queued_thread_prompts,
 };
 #[cfg(test)]
 use crate::domain::parallel_mode::ParallelModeAutomationTrigger;
@@ -777,13 +777,7 @@ impl NativeClientRuntime {
         strip_post_turn_markers(&mut core_outcome);
         // 판단 사건은 화면용 이벤트와 따로 꺼낸다. 기록기가 없으면(TUI) 버린다 (plan 19 Q3-2).
         let events = self.core.runtime.take_kernel_records();
-        if self.kernel_events.is_some() {
-            let records = self.number_kernel_records(events);
-            if let Some(recorder) = &self.kernel_events {
-                recorder.record(records.clone());
-            }
-            self.published_kernel_records.extend(records);
-        }
+        self.record_kernel_events(events);
         if !routed {
             return NativeClientDispatchOutcome::Core(core_outcome);
         }
@@ -1049,6 +1043,18 @@ impl NativeClientRuntime {
         }
     }
 
+    /// 사건에 번호를 붙여 기록기에 넘기고, 클라이언트에 보낼 자리에 둔다. 기록기가 없으면(TUI) 버린다.
+    fn record_kernel_events(&mut self, events: Vec<KernelEvent>) {
+        if self.kernel_events.is_none() {
+            return;
+        }
+        let records = self.number_kernel_records(events);
+        if let Some(recorder) = &self.kernel_events {
+            recorder.record(records.clone());
+        }
+        self.published_kernel_records.extend(records);
+    }
+
     /// 사건에 기록 sequence 와 시각을 붙인다 (plan 19 Q3-3b). 기록과 실시간 이벤트가 같은 sequence 를 쓴다.
     fn number_kernel_records(&mut self, events: Vec<KernelEvent>) -> Vec<RecordedKernelEvent> {
         let recorded_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
@@ -1072,8 +1078,11 @@ impl NativeClientRuntime {
 
     /*
      * 판단 사건 기록을 붙인다 (plan 19 Q3-1). 먼저 그 작업 공간의 기록에서 끝나지 않은 남긴 프롬프트를 읽어 core 에
-     * 되돌린다. core 는 쉴 때 그 프롬프트를 한 번 다시 낸다 (Q2-3). 기록의 마지막 sequence 도 읽는다 (Q3-3b). 둘 중
-     * 하나라도 읽지 못하면 기록을 붙이지 않는다. sequence 를 모르면 쓸 때 이미 있는 sequence 와 부딪힌다.
+     * 되돌린다. core 는 쉴 때 그 프롬프트를 한 번 다시 낸다 (Q2-3). 기록의 마지막 sequence 도 읽는다 (Q3-3b). 하나라도
+     * 읽지 못하면 기록을 붙이지 않는다. sequence 를 모르면 쓸 때 이미 있는 sequence 와 부딪힌다.
+     *
+     * 이전 커널이 열어 둔 승인은 잃은 것으로 닫는다 (Q3-5). 그 요청은 이전 커널의 app-server 접속에 온 것이라서 이
+     * 커널은 답할 수 없다. 클라이언트는 기록에서 "요청, 잃음"을 보고 그 일을 다시 낼지 정한다.
      */
     pub(crate) fn attach_kernel_event_log(
         &mut self,
@@ -1082,9 +1091,20 @@ impl NativeClientRuntime {
     ) {
         let read = log
             .load_kernel_events(workspace_dir, &THREAD_PROMPT_QUEUE_KINDS)
-            .and_then(|events| Ok((events, log.last_kernel_event_sequence(workspace_dir)?)));
-        let (open, last_sequence) = match read {
-            Ok((events, last_sequence)) => (open_queued_thread_prompts(events), last_sequence),
+            .and_then(|prompts| {
+                let approvals = log.load_kernel_events(workspace_dir, &APPROVAL_KINDS)?;
+                Ok((
+                    prompts,
+                    approvals,
+                    log.last_kernel_event_sequence(workspace_dir)?,
+                ))
+            });
+        let (open, lost_approvals, last_sequence) = match read {
+            Ok((prompts, approvals, last_sequence)) => (
+                open_queued_thread_prompts(prompts),
+                open_approvals(approvals),
+                last_sequence,
+            ),
             Err(error) => {
                 tracing::warn!(
                     error_chars = error.to_string().chars().count(),
@@ -1099,6 +1119,12 @@ impl NativeClientRuntime {
             workspace_dir.to_string(),
         ));
         self.kernel_event_log = Some((log, workspace_dir.to_string()));
+        self.record_kernel_events(
+            lost_approvals
+                .iter()
+                .map(|approval| approval.resolved(ApprovalResolution::Lost))
+                .collect(),
+        );
         if !open.is_empty() {
             // 아직 클라이언트가 없다. 결과는 조회로 보인다. 기록용 사건은 이 dispatch 안에서 기록된다.
             let _ = self.dispatch_core_input(CoreInput::Command(
@@ -2268,6 +2294,53 @@ pub(crate) mod tests {
             ],
             "the resubmission is recorded before the runtime is gone"
         );
+    }
+
+    #[test]
+    fn a_new_kernel_closes_the_approvals_the_previous_kernel_left_open() {
+        // plan 19 Q3-5: the request came to the previous kernel's connection. The new kernel cannot
+        // answer it, so it records the approval as lost. It does so once.
+        use crate::domain::kernel_event::{
+            ApprovalRequestKind, ApprovalResolution, KernelEvent, PendingApproval,
+        };
+        let approval = |approval_id: &str| {
+            PendingApproval::new(
+                "thread-1",
+                Some("turn-1"),
+                approval_id,
+                ApprovalRequestKind::CommandExecution,
+                "Command execution requested.",
+            )
+        };
+        let log = Arc::new(MemoryKernelEventLog::default());
+        log.0.lock().expect("log should lock").extend([
+            KernelEvent::ApprovalRequested(approval("decided")),
+            approval("decided").resolved(ApprovalResolution::Accepted),
+            KernelEvent::ApprovalRequested(approval("open")),
+        ]);
+
+        let (mut runtime, _turns) = recording_runtime_for_test();
+        runtime.attach_kernel_event_log(log.clone(), "/workspace");
+        let published = runtime.take_published_kernel_records();
+        assert_eq!(
+            published
+                .iter()
+                .map(|record| &record.event)
+                .collect::<Vec<_>>(),
+            [&approval("open").resolved(ApprovalResolution::Lost)],
+            "clients that attach later receive the record"
+        );
+        drop(runtime);
+        assert_eq!(
+            log.0.lock().expect("log should lock")[3..],
+            [approval("open").resolved(ApprovalResolution::Lost)]
+        );
+
+        let (mut second, _turns) = recording_runtime_for_test();
+        second.attach_kernel_event_log(log.clone(), "/workspace");
+        assert!(second.take_published_kernel_records().is_empty());
+        drop(second);
+        assert_eq!(log.0.lock().expect("log should lock").len(), 4);
     }
 
     #[test]

@@ -130,7 +130,9 @@ impl CoreController {
 
     pub(in crate::core) fn handle_input(&mut self, input: CoreInput) -> CoreDispatchOutcome {
         let turns_before = self.conversation_turn.published_thread_turns();
+        let approvals_before = self.conversation_turn.published_thread_approvals();
         let ending = turn_end_outcome(&input);
+        let decided = approval_resolution(&input);
         let outcome = self.handle_input_inner(input);
         let mut outcome = self.with_conversation_runtime_authority(outcome);
         self.record_turn_submissions(&outcome.effects);
@@ -142,6 +144,24 @@ impl CoreController {
                 // 이 입력이 턴의 끝을 알렸으면 그 결과를 붙인다 (plan 19 Q3-3b). 턴은 한 번에 하나만 돈다.
                 if let KernelEvent::TurnEnded { outcome, .. } = &mut event {
                     *outcome = ending;
+                }
+                self.conversation_turn.record_kernel_event(event);
+            }
+            // 승인의 요청과 끝도 같은 요약의 변화로 기록한다 (plan 19 Q3-5).
+            for mut event in kernel_event::approval_events_between(
+                &approvals_before,
+                &super::conversation_turn_reducer::pending_approvals(&activity),
+            ) {
+                // 이 입력이 그 승인의 결정을 알렸으면 그 결과를 붙인다. 아니면 결정 없이 사라진 것이다.
+                if let KernelEvent::ApprovalResolved {
+                    approval_id,
+                    resolution,
+                    ..
+                } = &mut event
+                    && let Some((decided_id, decided)) = &decided
+                    && decided_id == approval_id
+                {
+                    *resolution = *decided;
                 }
                 self.conversation_turn.record_kernel_event(event);
             }
@@ -2167,6 +2187,32 @@ fn turn_end_outcome(input: &CoreInput) -> Option<kernel_event::TurnEndOutcome> {
         TurnStreamEvent::Failed { .. } => Some(TurnEndOutcome::Failed),
         _ => None,
     }
+}
+
+/// 이 입력이 알린 승인의 끝이다 (plan 19 Q3-5). `(승인 id, 끝의 종류)` 이다.
+fn approval_resolution(input: &CoreInput) -> Option<(String, kernel_event::ApprovalResolution)> {
+    use crate::domain::conversation::ConversationApprovalResolution as Resolution;
+    use kernel_event::ApprovalResolution;
+    let CoreInput::ConversationStreamUpdated {
+        event:
+            TurnStreamEvent::ApprovalResolved {
+                request_identity,
+                resolution,
+            },
+        ..
+    } = input
+    else {
+        return None;
+    };
+    let resolution = match resolution {
+        Resolution::Accepted => ApprovalResolution::Accepted,
+        Resolution::Declined => ApprovalResolution::Declined,
+        Resolution::TimedOut => ApprovalResolution::TimedOut,
+        Resolution::Interrupted | Resolution::Disconnected | Resolution::InvalidRequest => {
+            ApprovalResolution::Withdrawn
+        }
+    };
+    Some((request_identity.approval_id.clone(), resolution))
 }
 
 fn thread_turns(activity: &[super::ThreadActivitySummary]) -> Vec<(String, Option<String>)> {
@@ -10386,6 +10432,66 @@ mod tests {
                 thread_id: "thread-9".to_string(),
                 reason: ThreadPromptRejection::UnknownThread,
             }]
+        );
+    }
+
+    #[test]
+    fn the_core_records_approval_requests_and_how_they_end() {
+        // plan 19 Q3-5: the request and its end are records. The request content is not.
+        use kernel_event::{ApprovalRequestKind, ApprovalResolution, PendingApproval};
+        let mut controller = hosted_controller(false);
+        let turn = start_test_turn(&mut controller, "thread-1", "turn-1");
+        controller.take_kernel_records();
+        let resolved = |approval_id: &str, resolution| KernelEvent::ApprovalResolved {
+            thread_id: "thread-1".to_string(),
+            approval_id: approval_id.to_string(),
+            resolution,
+        };
+
+        request_test_approval(&mut controller, turn, "approval-1");
+        assert_eq!(
+            controller.take_kernel_records(),
+            vec![KernelEvent::ApprovalRequested(PendingApproval::new(
+                "thread-1",
+                Some("turn-1"),
+                "approval-1",
+                ApprovalRequestKind::CommandExecution,
+                "Command execution requested.",
+            ))]
+        );
+
+        controller.handle_input(test_turn_stream_input(
+            turn,
+            TurnStreamEvent::ApprovalResolved {
+                request_identity: approval_identity("approval-1"),
+                resolution: ConversationApprovalResolution::Declined,
+            },
+        ));
+        assert_eq!(
+            controller.take_kernel_records(),
+            vec![resolved("approval-1", ApprovalResolution::Declined)]
+        );
+
+        // 결정 없이 턴이 끝난 승인은 결정 없이 사라진 것으로 남는다.
+        request_test_approval(&mut controller, turn, "approval-2");
+        controller.take_kernel_records();
+        controller.handle_input(test_turn_stream_input(
+            turn,
+            TurnStreamEvent::TurnTerminal {
+                receipt: confirmed_terminal_receipt("thread-1", "turn-1", Vec::new()),
+                execution_snapshot_capture: None,
+            },
+        ));
+        assert_eq!(
+            controller.take_kernel_records(),
+            vec![
+                KernelEvent::TurnEnded {
+                    thread_id: "thread-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    outcome: Some(kernel_event::TurnEndOutcome::Completed),
+                },
+                resolved("approval-2", ApprovalResolution::Withdrawn),
+            ]
         );
     }
 
