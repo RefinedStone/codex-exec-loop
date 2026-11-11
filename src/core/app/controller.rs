@@ -10428,6 +10428,146 @@ mod tests {
         );
     }
 
+    /// 정지를 요청하고 그 시도의 correlation 과 종류를 돌려준다.
+    fn request_test_stop(
+        controller: &mut CoreController,
+    ) -> (StopRequestCorrelation, StopRequestAttempt) {
+        let stop = controller.handle_input(CoreInput::Command(AppCommand::RequestStopAllSessions));
+        let [
+            CoreEffect::RequestStopAllSessions {
+                correlation,
+                attempt,
+            },
+        ] = stop.effects.as_slice()
+        else {
+            panic!(
+                "the stop request should start one attempt: {:?}",
+                stop.effects
+            );
+        };
+        (*correlation, *attempt)
+    }
+
+    fn turn_admission_of(outcome: &CoreDispatchOutcome) -> TurnSubmissionAdmission {
+        outcome
+            .events
+            .iter()
+            .find_map(|event| match event {
+                AppEvent::TurnSubmissionAdmissionResolved(admission) => Some(*admission),
+                _ => None,
+            })
+            .expect("a turn submission always resolves its admission")
+    }
+
+    fn submit_new_conversation_turn(controller: &mut CoreController) -> TurnSubmissionAdmission {
+        let outcome = controller.handle_input(CoreInput::Command(AppCommand::SubmitTurn(
+            Box::new(test_turn_submission_request(None)),
+        )));
+        turn_admission_of(&outcome)
+    }
+
+    #[test]
+    fn a_new_conversation_during_a_pending_stop_keeps_the_running_turn() {
+        // plan 19 Q3-7 found this with the kernel simulation: the client asks to stop, and opens a new
+        // conversation before the stop settles. Core forgot the running turn: after the stop attempt came
+        // back it reported no remaining work and admitted a second turn while the first one still ran.
+        let mut controller = hosted_controller(false);
+        let running = start_test_turn(&mut controller, "thread-1", "turn-1");
+        let (stop_correlation, attempt) = request_test_stop(&mut controller);
+
+        let left =
+            controller.handle_input(CoreInput::Command(AppCommand::InvalidateConversationLoad));
+        assert!(
+            left.effects.contains(&CoreEffect::InvalidateStopRequest {
+                correlation: stop_correlation,
+            }),
+            "leaving the conversation invalidates its stop request, as opening another conversation does"
+        );
+        assert_eq!(
+            controller.conversation_turn.background_session_count(),
+            1,
+            "the left conversation keeps its turn in the background"
+        );
+
+        // The invalidated stop attempt comes back without a client event.
+        let settled = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::StopRequestAttemptCompleted {
+                correlation: stop_correlation,
+                attempt,
+                result: Err("stop request was superseded before provider execution".to_string()),
+            },
+        ));
+        assert!(
+            !settled
+                .events
+                .iter()
+                .any(|event| matches!(event, AppEvent::StopRequestAttemptCompleted { .. })),
+            "the new conversation does not see the pending stop of the conversation it left"
+        );
+        // This is where the defect showed: the stop is settled, and the turn still runs in the app-server.
+        assert!(
+            controller.has_remaining_work(),
+            "the kernel must not unload while the turn runs"
+        );
+        assert_eq!(
+            submit_new_conversation_turn(&mut controller),
+            TurnSubmissionAdmission::RejectedActive {
+                active_correlation: running,
+            },
+            "one turn runs at a time across all threads"
+        );
+
+        end_test_turn(&mut controller, running);
+        assert!(!controller.has_remaining_work());
+        assert_eq!(controller.conversation_turn.background_session_count(), 0);
+        assert!(matches!(
+            submit_new_conversation_turn(&mut controller),
+            TurnSubmissionAdmission::Accepted { .. }
+        ));
+    }
+
+    #[test]
+    fn a_pending_stop_of_a_left_conversation_still_blocks_new_turns() {
+        // A stop reaches every turn in the app-server. An attempt that already left its worker can still
+        // interrupt a turn that starts now, so a new turn waits for the attempt, also after the client left
+        // the conversation that asked for the stop.
+        let mut controller = hosted_controller(false);
+        let running = start_test_turn(&mut controller, "thread-1", "turn-1");
+        let (stop_correlation, attempt) = request_test_stop(&mut controller);
+        controller.handle_input(CoreInput::Command(AppCommand::InvalidateConversationLoad));
+        // The turn ends before the stop attempt comes back.
+        end_test_turn(&mut controller, running);
+
+        assert_eq!(
+            submit_new_conversation_turn(&mut controller),
+            TurnSubmissionAdmission::RejectedStopPending { stop_correlation },
+        );
+        assert!(
+            controller.has_remaining_work(),
+            "the open stop attempt keeps the left conversation"
+        );
+
+        // The worker had already sent the stop: it comes back as done, still without a client event.
+        let settled = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::StopRequestAttemptCompleted {
+                correlation: stop_correlation,
+                attempt,
+                result: Ok(()),
+            },
+        ));
+        assert!(
+            !settled
+                .events
+                .iter()
+                .any(|event| matches!(event, AppEvent::StopRequestAttemptCompleted { .. }))
+        );
+        assert!(!controller.has_remaining_work());
+        assert!(matches!(
+            submit_new_conversation_turn(&mut controller),
+            TurnSubmissionAdmission::Accepted { .. }
+        ));
+    }
+
     fn end_test_turn(controller: &mut CoreController, turn: TurnSubmissionCorrelation) {
         controller.handle_input(test_turn_stream_input(
             turn,

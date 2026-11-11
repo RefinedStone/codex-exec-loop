@@ -807,18 +807,6 @@ impl Simulation {
         )));
     }
 
-    /*
-     * 커널에 끝나지 않은 중지 시도가 있을 수 있다. 중지 완료가 바깥 세계에 남아 있거나, 커널이 아직 처리하지 않은
-     * 입력이 있다 (중지 명령의 효과나 중지 완료일 수 있다).
-     */
-    fn stop_attempt_may_be_open(&self) -> bool {
-        self.host_woken
-            || self
-                .pending
-                .iter()
-                .any(|pending| matches!(pending, PendingCompletion::StopAttempt { .. }))
-    }
-
     fn accept_effects(&mut self) -> Result<(), Violation> {
         for effect in self.effects.take() {
             self.accept_effect(effect)?;
@@ -867,16 +855,11 @@ impl Simulation {
      * 화면(TUI)이 내는 턴이다. 보는 대화를 이어 가거나, 새 대화를 열고 낸다. 보지 않는 thread 에는 내지 않는다.
      * 실제 클라이언트도 그렇다: TUI 는 대화를 먼저 열고, 원격 클라이언트는 이 명령 대신 thread 지정 프롬프트를 쓴다.
      * 보지 않는 thread 에 내면 그 thread 의 session 이 둘이 될 수 있고, 커널은 그 입력을 막지 않는다 (plan 19 Q3-7).
+     * 새 대화는 중지가 끝나기 전에도 연다. 그 session 은 뒤에서 턴을 이어 간다.
      */
     fn submit_manual_turn(&mut self) {
         self.manual_turns_sent += 1;
-        /*
-         * 중지가 끝나기 전에는 새 대화를 열지 않는다. 그 순서에서 커널은 돌고 있는 턴을 잊고 중지 요청도 무효로 만든다.
-         * 그 턴은 app-server 에서 끝까지 돌고, 커널은 다른 턴을 함께 시작할 수 있다 (I1, I5 가 깨진다). 커널의 알려진
-         * 결함이고 plan 19 Q3-7 에 적었다. 고치면 이 조건을 지운다.
-         */
-        let may_leave = !self.stop_attempt_may_be_open();
-        let continues_viewed = self.viewed_thread.is_some() && (!may_leave || self.rng.percent(50));
+        let continues_viewed = self.viewed_thread.is_some() && self.rng.percent(50);
         if !continues_viewed && self.viewed_thread.take().is_some() {
             self.record("client: open a new conversation".to_string());
             // TUI 는 새 대화를 열 때 자기 프롬프트 준비를 먼저 취소한다. thread 지정 준비는 취소되면 안 된다.
@@ -1291,11 +1274,15 @@ impl Simulation {
         correlation: StopRequestCorrelation,
         attempt: StopRequestAttempt,
     ) {
-        let result = if self
+        let invalidated = self
             .invalidated_stop_requests
-            .contains(&correlation.generation)
-        {
+            .contains(&correlation.generation);
+        let result = if invalidated && self.rng.percent(70) {
             Err("stop request was superseded before provider execution".to_string())
+        } else if invalidated {
+            // 무효가 되기 전에 worker 가 이미 요청을 보냈다. 정지는 그대로 app-server 에 닿는다.
+            self.interrupt_running_turn();
+            Ok(())
         } else if self.rng.percent(10) {
             Err("simulated stop failure".to_string())
         } else {
