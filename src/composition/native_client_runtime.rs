@@ -83,6 +83,9 @@ pub(crate) struct NativeClientRuntime {
     last_kernel_sequence: i64,
     // 클라이언트에 아직 보내지 않은 기록이다 (plan 19 Q3-3b). 커널 호스트가 꺼내 `recorded` 이벤트로 보낸다.
     published_kernel_records: Vec<RecordedKernelEvent>,
+    // 마지막 주기가 입력 상한에서 멈췄다 (plan 19 Q3-4). 입력함에 남은 입력은 호스트를 다시 깨우지 않으므로, 다음
+    // 주기는 기다리지 않는다.
+    inputs_left_after_cycle: bool,
 }
 
 struct NativeCoreRuntime {
@@ -540,6 +543,7 @@ impl NativeClientRuntime {
             kernel_event_log: None,
             last_kernel_sequence: 0,
             published_kernel_records: Vec::new(),
+            inputs_left_after_cycle: false,
         }
     }
 
@@ -918,9 +922,38 @@ impl NativeClientRuntime {
         self.parallel_view.as_ref()
     }
 
+    /*
+     * 다음 시계 일의 마감 시각이다 (plan 19 Q3-4). core 의 `Tick` 과 병렬 tick 이 다음에 할 일 중 가장 가까운 것이다.
+     * 커널 호스트는 이 시각까지만 자고, 마감이 없으면 입력이 올 때까지 잔다. 병렬 tick 은 병렬 보기가 있을 때만 돈다.
+     */
+    pub(crate) fn next_deadline(&self, now: Instant) -> Option<Instant> {
+        if self.inputs_left_after_cycle {
+            return Some(now);
+        }
+        let core = self.core.runtime.next_deadline(now);
+        let parallel = self.parallel_view.as_ref().and_then(|view| {
+            self.parallel_control_plane
+                .next_deadline(now, view.supervisor_view_active)
+        });
+        [core, parallel].into_iter().flatten().min()
+    }
+
     pub(crate) fn run_host_cycle(
         &mut self,
         now: Instant,
+        wait: Duration,
+        max_inputs: usize,
+    ) -> Vec<NativeClientDispatchOutcome> {
+        self.run_host_cycle_with_clock(&|| now, wait, max_inputs)
+    }
+
+    /*
+     * 한 주기이다. 입력을 최대 `wait` 만큼 기다린 뒤에 시계를 읽는다 (plan 19 Q3-4). 기다림이 길 수 있으므로, 기다리기
+     * 전의 시각을 `Tick` 에 주면 마감이 지났는데도 일을 시작하지 않는다.
+     */
+    pub(crate) fn run_host_cycle_with_clock(
+        &mut self,
+        clock: &dyn Fn() -> Instant,
         wait: Duration,
         max_inputs: usize,
     ) -> Vec<NativeClientDispatchOutcome> {
@@ -931,12 +964,16 @@ impl NativeClientRuntime {
         {
             outcomes.push(self.reconcile_post_turn(outcome));
         }
+        let now = clock();
         while outcomes.len() < max_inputs {
             let Some(outcome) = self.poll_pending_client_event() else {
                 break;
             };
             outcomes.push(outcome);
         }
+        self.inputs_left_after_cycle = outcomes.len() >= max_inputs;
+        // `Tick` 은 마감이 없어도 넣는다. 이 dispatch 가 앞의 병렬 완료가 바꾼 병렬 모드를 core 에 알리고 턴 뒤
+        // 단계를 다시 본다.
         outcomes.push(self.dispatch_core_input(CoreInput::Tick { now }));
         outcomes.push(self.dispatch_client_event(NativeClientEvent::ParallelTick { now }));
         if let Some(outcome) = self.start_github_review_polling_setup_when_due() {
@@ -1714,6 +1751,49 @@ pub(crate) mod tests {
                 )),
             },
         ]
+    }
+
+    #[test]
+    fn a_cycle_that_stops_at_the_input_limit_does_not_wait_before_the_next_one() {
+        // plan 19 Q3-4: inputs left in a mailbox do not wake the host again. The deadline is "now" until a
+        // cycle drains them, so they do not wait for the next clock deadline (or the 30 s safety net).
+        struct IgnoredEffects;
+        impl CoreEffectExecutor for IgnoredEffects {
+            fn run_effect(&self, _effect: CoreEffect) -> Option<CoreInput> {
+                None
+            }
+        }
+        let planning = test_planning_services(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
+        let parallel = test_parallel_mode_control_plane_composition(planning);
+        let (mut runtime, core_inputs) = NativeClientRuntime::new_with_effect_executor_for_test(
+            parallel,
+            Box::new(IgnoredEffects),
+        );
+        let now = Instant::now();
+        assert_eq!(
+            runtime.next_deadline(now),
+            None,
+            "an idle runtime has no deadline"
+        );
+
+        for _ in 0..3 {
+            core_inputs
+                .send(CoreInput::Command(AppCommand::Noop))
+                .expect("the runtime keeps the receiver");
+        }
+        let _ = runtime.run_host_cycle(now, Duration::ZERO, 2);
+        assert_eq!(
+            runtime.next_deadline(now),
+            Some(now),
+            "one input is still in the mailbox"
+        );
+
+        let _ = runtime.run_host_cycle(now, Duration::ZERO, 2);
+        assert_eq!(
+            runtime.next_deadline(now),
+            None,
+            "the mailbox is empty again"
+        );
     }
 
     #[test]

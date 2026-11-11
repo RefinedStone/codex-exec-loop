@@ -76,6 +76,14 @@ impl CoreController {
         self.state.revisioned_planning_parallel_projection()
     }
 
+    /// core 의 다음 시계 일(`Tick` 이 할 일)의 마감 시각이다 (plan 19 Q3-4). 지금은 GitHub 리뷰 폴링뿐이다.
+    pub(in crate::core) fn next_deadline(
+        &self,
+        now: std::time::Instant,
+    ) -> Option<std::time::Instant> {
+        self.github_review.next_deadline(now)
+    }
+
     /// 호스트가 다음에 할 턴 뒤 일이다 (plan 19 Q2-2, Q2-3). 스냅샷을 복사하지 않는다.
     pub(in crate::core) fn next_post_turn_host_step(&self) -> Option<super::PostTurnHostStep> {
         self.conversation_turn

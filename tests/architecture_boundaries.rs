@@ -14224,6 +14224,8 @@ fn verify_client_runtime_api_boundary(
         // plan 19 Q2-4: the other kernel inboxes wake the host wait on the core mailbox.
         "input_waker",
         "new",
+        // plan 19 Q3-4: the host sleeps until the next clock deadline of core.
+        "next_deadline",
         // plan 19 Q2-2: the host asks for the next post-turn step after every dispatch.
         "next_post_turn_host_step",
         "parallel_mode_projection",
@@ -14332,6 +14334,8 @@ fn verify_client_runtime_api_boundary(
         "host_waker",
         // plan 19 Q3-3: the kernel host reads the event log for a client's history query.
         "kernel_event_history",
+        // plan 19 Q3-4: the kernel host sleeps until the next clock deadline.
+        "next_deadline",
         "parallel_control_plane_projection",
         "parallel_epoch_snapshot",
         "parallel_mode_enabled",
@@ -14341,6 +14345,8 @@ fn verify_client_runtime_api_boundary(
         "poll_pending_client_event",
         "revisioned_planning_parallel_projection",
         "run_host_cycle",
+        // plan 19 Q3-4: the kernel host reads the clock after the wait.
+        "run_host_cycle_with_clock",
         "snapshot",
         // plan 19 Q3-3b: the kernel host sends the numbered records to its clients.
         "take_published_kernel_records",
@@ -14350,6 +14356,7 @@ fn verify_client_runtime_api_boundary(
         "has_remaining_work",
         "host_waker",
         "kernel_event_history",
+        "next_deadline",
         "parallel_control_plane_projection",
         "parallel_epoch_snapshot",
         "parallel_mode_enabled",
