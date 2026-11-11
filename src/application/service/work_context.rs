@@ -12,7 +12,8 @@ use crate::application::port::outbound::work_context_store_port::{
     ResourceVersionCheck, WORK_CONTEXT_SCOPE_THREAD, WorkContextLink, WorkContextStorePort,
 };
 use crate::domain::work_context::{
-    ExternalResourceRecognizer, external_resource_recognizers, extract_external_resources,
+    ExternalResourceRecognizer, ExternalResourceRef, external_resource_recognizers,
+    extract_external_resources,
 };
 
 /// 스레드 id 는 장부의 키이다. app-server 의 id 는 짧은 UUID 이다.
@@ -130,28 +131,34 @@ impl WorkContextService {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let now = (self.clock)();
-        let mut checks = 0;
-        let mut failures = 0;
+        let mut due = Vec::new();
         for link in self.links(thread_id)? {
             let Some(provider) = self.version_provider(&link.resource.kind) else {
                 continue;
             };
-            let document = (link.resource.kind.clone(), link.resource.key.clone());
-            let waits_after_failure = state
-                .unreachable_since
-                .get(&document)
-                .is_some_and(|failed_at| !interval_has_passed(*failed_at, now));
-            if waits_after_failure || !check_is_due(link.checked_version.as_ref(), now) {
+            if let Some(check) = fresh_check(link.checked_version.as_ref(), now) {
+                // 다른 스레드가 조금 전에 확인한 문서이다. 그 버전이 이 스레드가 처음 확인한 버전이다.
+                if link.read_version.is_none() {
+                    self.set_first_read_version(thread_id, &link.resource, &check.version)?;
+                }
                 continue;
             }
-            if checks == MAX_VERSION_CHECKS_PER_REFRESH
-                || failures == MAX_VERSION_FAILURES_PER_REFRESH
-            {
+            let document = (link.resource.kind.clone(), link.resource.key.clone());
+            let failed_at = state.unreachable_since.get(&document).copied();
+            if failed_at.is_some_and(|failed_at| !interval_has_passed(failed_at, now)) {
+                continue;
+            }
+            due.push((failed_at.is_some(), provider, link, document));
+        }
+        // 전에 닿지 않은 문서는 뒤에 묻는다. 계속 실패하는 문서가 다른 문서의 차례를 막지 않는다.
+        due.sort_by_key(|(failed_before, ..)| *failed_before);
+        let mut failures = 0;
+        for (_, provider, link, document) in due.into_iter().take(MAX_VERSION_CHECKS_PER_REFRESH) {
+            if failures == MAX_VERSION_FAILURES_PER_REFRESH {
                 break;
             }
-            checks += 1;
             // 닿지 않는 문서는 건너뛴다. 장부의 이전 값이 남는다.
-            let Ok(version) = provider.current_version(&link.resource) else {
+            let Ok(version) = provider.current_version(&link.resource.key) else {
                 state.unreachable_since.insert(document, now);
                 failures += 1;
                 continue;
@@ -164,15 +171,25 @@ impl WorkContextService {
                     checked_at: now.to_rfc3339_opts(SecondsFormat::Secs, true),
                 },
             )?;
-            self.store.set_read_version(
-                WORK_CONTEXT_SCOPE_THREAD,
-                thread_id,
-                &link.resource,
-                &version,
-                false,
-            )?;
+            self.set_first_read_version(thread_id, &link.resource, &version)?;
         }
         Ok(())
+    }
+
+    /// 스레드에 읽은 버전이 없을 때만 적는다. 있는 값은 사용자가 문서를 열 때만 바뀐다.
+    fn set_first_read_version(
+        &self,
+        thread_id: &str,
+        resource: &ExternalResourceRef,
+        version: &str,
+    ) -> Result<()> {
+        self.store.set_read_version(
+            WORK_CONTEXT_SCOPE_THREAD,
+            thread_id,
+            resource,
+            version,
+            false,
+        )
     }
 }
 
@@ -182,15 +199,15 @@ fn interval_has_passed(since: DateTime<Utc>, now: DateTime<Utc>) -> bool {
         .is_ok_and(|elapsed| elapsed >= VERSION_CHECK_INTERVAL)
 }
 
-/// 확인한 적이 없거나, 확인한 지 `VERSION_CHECK_INTERVAL` 이 지났다. 읽지 못하는 시각은 지난 것으로 본다.
-fn check_is_due(check: Option<&ResourceVersionCheck>, now: DateTime<Utc>) -> bool {
-    let Some(checked_at) = check
-        .and_then(|check| DateTime::parse_from_rfc3339(&check.checked_at).ok())
-        .map(|checked_at| checked_at.with_timezone(&Utc))
-    else {
-        return true;
-    };
-    interval_has_passed(checked_at, now)
+/// 확인한 지 `VERSION_CHECK_INTERVAL` 이 지나지 않은 확인이다. 읽지 못하는 시각은 지난 것으로 본다.
+fn fresh_check(
+    check: Option<&ResourceVersionCheck>,
+    now: DateTime<Utc>,
+) -> Option<&ResourceVersionCheck> {
+    check.filter(|check| {
+        DateTime::parse_from_rfc3339(&check.checked_at)
+            .is_ok_and(|checked_at| !interval_has_passed(checked_at.with_timezone(&Utc), now))
+    })
 }
 
 fn thread_resource(link: WorkContextLink) -> ThreadResource {
@@ -270,7 +287,6 @@ mod tests {
         ThreadTextFragment, ThreadTextPage,
     };
     use crate::application::port::outbound::work_context_store_port::WorkContextLink;
-    use crate::domain::work_context::ExternalResourceRef;
 
     #[derive(Default)]
     struct FakeTranscript {
@@ -319,13 +335,18 @@ mod tests {
                         && link.resource.key == resource.key
                 });
                 if !known {
+                    // 확인한 버전은 문서의 값이다. 다른 범위가 적은 값이 새 연결에도 보인다.
+                    let checked_version = links
+                        .iter()
+                        .find(|(_, link)| same_document(link, resource))
+                        .and_then(|(_, link)| link.checked_version.clone());
                     links.push((
                         scope_id.to_string(),
                         WorkContextLink {
                             resource: resource.clone(),
                             source: source.to_string(),
                             first_seen_at: "2026-11-11T00:00:00Z".to_string(),
-                            checked_version: None,
+                            checked_version,
                             read_version: None,
                         },
                     ));
@@ -405,12 +426,12 @@ mod tests {
         fn kind(&self) -> &'static str {
             "github"
         }
-        fn current_version(&self, resource: &ExternalResourceRef) -> Result<String> {
-            self.asked.lock().unwrap().push(resource.key.clone());
+        fn current_version(&self, key: &str) -> Result<String> {
+            self.asked.lock().unwrap().push(key.to_string());
             self.versions
                 .lock()
                 .unwrap()
-                .get(&resource.key)
+                .get(key)
                 .cloned()
                 .ok_or_else(|| anyhow::anyhow!("the document cannot be read"))
         }
@@ -570,6 +591,76 @@ mod tests {
             ["a/b#1", "a/b#2", "a/b#3", "a/b#4", "a/b#5"]
         );
         assert!(second[4].version_checked_at.is_some());
+    }
+
+    #[test]
+    fn documents_that_always_fail_do_not_take_the_turn_of_the_others() {
+        // Three documents always fail (no access). The fourth must still get its checks.
+        let (service, versions, now) = versioned_service(
+            "https://github.com/a/b/issues/1 https://github.com/a/b/issues/2 \
+             https://github.com/a/b/issues/3 https://github.com/a/b/issues/4",
+        );
+        versions.set("a/b#4", "v1");
+        service.refresh_thread_resources("thread-1").unwrap();
+        service.refresh_thread_resources("thread-1").unwrap();
+        versions.asked.lock().unwrap().clear();
+
+        versions.set("a/b#4", "v2");
+        *now.lock().unwrap() += chrono::Duration::seconds(6 * 60);
+        let later = service.refresh_thread_resources("thread-1").unwrap();
+        assert_eq!(
+            *versions.asked.lock().unwrap(),
+            ["a/b#4", "a/b#1", "a/b#2", "a/b#3"]
+        );
+        assert_eq!(changed_flags(&later)[3], ("a/b#4", true));
+    }
+
+    #[test]
+    fn a_second_thread_takes_a_recent_check_as_its_read_version() {
+        // The check time belongs to the document. Thread 2 must not lose its baseline because thread 1 asked first.
+        let transcript = Arc::new(FakeTranscript::default());
+        for _ in 0..2 {
+            transcript.pages.lock().unwrap().push(ThreadTextPage {
+                fragments: vec![fragment("user", "https://github.com/a/b/pull/2")],
+                newest_item_id: Some("item-1".into()),
+            });
+        }
+        let versions = Arc::new(FakeVersions::default());
+        versions.set("a/b#2", "v1");
+        let (clock, now) = test_clock("2026-11-11T00:00:00Z");
+        let service = WorkContextService::new(transcript, Arc::new(FakeStore::default()))
+            .with_version_providers(vec![versions.clone()])
+            .with_clock(clock);
+
+        service.refresh_thread_resources("thread-1").unwrap();
+        *now.lock().unwrap() += chrono::Duration::seconds(60);
+        service.refresh_thread_resources("thread-2").unwrap();
+        assert_eq!(
+            versions.asked.lock().unwrap().len(),
+            1,
+            "the check is recent"
+        );
+
+        versions.set("a/b#2", "v2");
+        *now.lock().unwrap() += chrono::Duration::seconds(10 * 60);
+        service.refresh_thread_resources("thread-1").unwrap();
+        assert_eq!(
+            changed_flags(&service.thread_resources("thread-2").unwrap()),
+            [("a/b#2", true)]
+        );
+
+        // 한 스레드가 읽어도 다른 스레드의 표시는 남는다.
+        service
+            .mark_thread_resource_read("thread-1", "github", "a/b#2")
+            .unwrap();
+        assert_eq!(
+            changed_flags(&service.thread_resources("thread-1").unwrap()),
+            [("a/b#2", false)]
+        );
+        assert_eq!(
+            changed_flags(&service.thread_resources("thread-2").unwrap()),
+            [("a/b#2", true)]
+        );
     }
 
     #[test]

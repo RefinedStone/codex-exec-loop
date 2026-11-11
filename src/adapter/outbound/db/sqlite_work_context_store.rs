@@ -367,10 +367,18 @@ mod tests {
                 .as_deref(),
             Some("v2")
         );
-        // 장부에 없는 문서의 버전은 적지 않는다.
+        // 장부에 없는 문서의 버전은 적지 않는다. 그 문서가 나중에 장부에 들어와도 확인한 버전이 없다.
+        let unknown = resource("github", "x/y#1", None);
         store
-            .record_resource_version(&resource("github", "x/y#1", None), &check("v", "t"))
+            .record_resource_version(&unknown, &check("v", "t"))
             .unwrap();
+        store
+            .link_resources("thread", "t3", "user", std::slice::from_ref(&unknown))
+            .unwrap();
+        assert_eq!(
+            store.links("thread", "t3").unwrap()[0].checked_version,
+            None
+        );
         drop(store);
         let _ = std::fs::remove_dir_all(directory);
     }
