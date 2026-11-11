@@ -287,12 +287,15 @@ the desktop app itself is not shipped yet.
   `akra/kernel/query` and receives `akra/kernel/event` notifications; requests before attach fail
   with `-32011`, and a kernel that does not answer in time fails with `-32013` (a command may still
   run). No event arrives after the `akra/kernel/detach` answer. `akra/kernel/describe` lists methods,
-  commands, queries, and events. The `planning` and `parallel` queries and events carry the planning
+  commands, queries, events, and the kinds of decision records (`records`). The `planning` and `parallel` queries and events carry the planning
   queue and the parallel state (pool, agents, merge queue, PR validation); `refresh_planning` reads the
   queue again. The `history` query (`{"type": "history", "after": <cursor>, "limit": <n>}`) pages
   through the kernel decision log in record order and answers with `records` and `next_after`; send
   `next_after` as the next `after`. Each new record also arrives live as a `recorded` event with the
-  same `sequence`; after `resync`, read `history` after the last sequence seen. While a client is attached the kernel refreshes the parallel supervisor snapshot, and the
+  same `sequence`; after `resync`, read `history` after the last sequence seen. Approval requests and
+  their ends are records (`approval_requested`, `approval_resolved` with `accepted`, `declined`,
+  `timed_out`, `withdrawn`, or `lost`); a restarted kernel records the approvals of the previous kernel
+  as `lost` and cannot answer them. While a client is attached the kernel refreshes the parallel supervisor snapshot, and the
   first attach runs one supervisor inspection that does not change the pool (it runs the push readiness
   check, like the TUI parallel view).
 - A kernel with no attached client and no remaining work (turns, approvals, auto-follow, evaluation,
