@@ -102,8 +102,9 @@ integration test file), never through a raw `Command::new("git")`. The helper dr
 `GIT_*` variable. A test run started from a git hook or an agent shell can inherit `GIT_DIR`, and then
 fixture `init`, `config user.*`, `commit`, and `reset` run in the real work repository; 123 commits
 reached this repository with the fixture identity that way. An architecture test enforces the helper,
-and `scripts/gh-akra.sh pr create` refuses commits, or a repository identity, on reserved test
-domains (`example.*`, `.invalid`, `.test`, `.localhost`).
+and `scripts/gh-akra.sh pr create` refuses commits, or a repository identity, on documentation
+domains (`example.*`, `.example`, `.test`). The host-owned parallel worker identity
+(`akra@localhost.invalid`) stays allowed.
 
 Use unit tests beside modules and integration tests under `tests/`. Prioritize startup checks,
 app-server parsing, stream reduction, session mapping, planning authority mutations, and parallel

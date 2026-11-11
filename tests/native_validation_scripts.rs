@@ -2113,6 +2113,37 @@ fn gh_akra_pr_create_refuses_commits_with_a_test_identity() {
         "{stderr}"
     );
 
+    // The host-owned parallel worker identity is not a fixture: the check lets it pass to the next step.
+    for args in [
+        vec!["switch", "-q", "prerelease"],
+        vec!["switch", "-q", "-c", "worker"],
+        vec![
+            "-c",
+            "user.name=Akra Parallel Worker",
+            "-c",
+            "user.email=akra@localhost.invalid",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "host-owned worker commit",
+        ],
+        vec!["switch", "-q", "feature"],
+    ] {
+        assert_success(&run_git(&repo, &args), "prepare the worker branch");
+    }
+    let worker = Command::new("bash")
+        .arg(repo_root().join("scripts/gh-akra.sh"))
+        .args(["pr", "create", "--base", "prerelease", "--head", "worker"])
+        .args(["--title", "t", "--body", "b"])
+        .current_dir(&repo)
+        .env_remove("AKRA_GITHUB_TOKEN")
+        .env_remove("GITHUB_TOKEN")
+        .output()
+        .expect("gh-akra should run");
+    let stderr = String::from_utf8_lossy(&worker.stderr);
+    assert!(!stderr.contains("test identity"), "{stderr}");
+
     assert_success(
         &run_git(&repo, &["config", "user.email", "akra@example.invalid"]),
         "leak the test identity into the repository config",
