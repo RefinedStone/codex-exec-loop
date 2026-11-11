@@ -360,6 +360,14 @@ impl ConversationTurnFeatureReducer {
         self.background_sessions.push(busy);
     }
 
+    fn other_session_pending_stop(&self) -> Option<ActiveStopRequest> {
+        self.background_sessions.iter().find_map(|session| {
+            session
+                .active_stop_request
+                .filter(|active| active.pending_attempt.is_some())
+        })
+    }
+
     fn other_session_active_turn(&self) -> Option<TurnSubmissionCorrelation> {
         self.background_sessions
             .iter()
@@ -551,15 +559,21 @@ impl ConversationTurnFeatureReducer {
     }
 
     pub(super) fn reduce_conversation_invalidation(&mut self) -> ConversationLifecycleReduction {
-        if !self.stop_request_settlement_pending() {
-            self.send_busy_viewed_session_to_background();
+        /*
+         * 새 대화를 열면 일이 남은 session 은 뒤에서 계속 돈다 (plan 18 K2-3). 정지가 끝나기를 기다리는 session 도
+         * 뒤로 보낸다. 그 정지 요청은 대화를 떠나므로 먼저 무효로 만든다 (다른 대화를 열 때와 같다). 정지 완료는
+         * 뒤의 session 을 찾아간다. 이전에는 그 session 을 보는 자리에서 지워서, 돌고 있는 턴을 커널이 잊었다:
+         * 남은 일이 없다고 답했고 두 번째 턴을 받았다 (plan 19 Q3-7 의 시뮬레이션이 찾았다).
+         */
+        let mut stop_effects = Vec::new();
+        if self.stop_request_settlement_pending() {
+            self.invalidate_stop_request_for_lifecycle(&mut stop_effects);
         }
+        self.send_busy_viewed_session_to_background();
         self.invalidate_post_turn_continuation();
         self.deferred_conversation_load = None;
         self.in_flight_conversation_load = None;
-        let mut stop_effects = Vec::new();
-        self.invalidate_stop_request_for_lifecycle(&mut stop_effects);
-        self.session.active_turn_steer = None;
+        // 정지 요청이나 steer 가 있던 session 은 일이 남은 session 이라 위에서 뒤로 갔다. 보는 자리에는 둘 다 없다.
         self.session.conversation_runtime.invalidate_conversation();
         self.approval_review_persistence.invalidate_conversation();
         self.session.guarded_session_rename_stream = None;
@@ -702,10 +716,15 @@ impl ConversationTurnFeatureReducer {
             }
             return TurnSubmissionAdmission::RejectedActive { active_correlation };
         }
+        /*
+         * 끝나지 않은 정지 시도가 있으면 턴을 받지 않는다. 정지는 app-server 의 모든 턴에 닿는 신호라서, 늦게 나간
+         * 정지가 새 턴을 멈출 수 있다. 뒤의 session 의 정지도 본다. 정지 중에 새 대화를 열면 그 요청은 뒤로 간다.
+         */
         if let Some(active_stop) = self
             .session
             .active_stop_request
             .filter(|active| active.pending_attempt.is_some())
+            .or_else(|| self.other_session_pending_stop())
         {
             if request.prompt_origin == super::CorePromptOrigin::AutoFollow {
                 self.session
