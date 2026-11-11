@@ -1,5 +1,5 @@
 //! GitHub 문서(PR, issue)의 지금 버전을 `gh` 로 읽는다 (plan 22 2단계). 버전은 그 문서의 `updated_at` 이다.
-//! 댓글, 라벨, 상태, PR 의 새 commit 이 이 값을 바꾼다. 모델을 부르지 않고, 문서의 내용은 읽지 않는다.
+//! 댓글, 라벨, 상태 변경이 이 값을 바꾼다. 모델을 부르지 않고, 문서의 내용은 읽지 않는다.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -8,10 +8,11 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 
 use crate::application::port::outbound::external_resource_version_port::ExternalResourceVersionPort;
-use crate::domain::work_context::ExternalResourceRef;
 use crate::subprocess;
 
 const GITHUB_KIND: &str = "github";
+/// 인식기는 `github.com` 의 문서만 장부에 적는다. `gh` 의 기본 호스트가 다른 서버여도 여기에만 묻는다.
+const GITHUB_HOSTNAME: &str = "github.com";
 /// 문서 하나를 묻는 최대 시간이다. 넘으면 그 문서는 닿지 않은 것으로 둔다.
 const VERSION_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// `updated_at` 은 `2026-11-11T00:00:00Z` 모양이다. 이보다 긴 답은 버전이 아니다.
@@ -30,12 +31,7 @@ impl GithubResourceVersionAdapter {
         Self { working_directory }
     }
 
-    fn gh_command(&self, target: &GithubIssueTarget) -> Result<Command> {
-        let gh = crate::trusted_executable::resolve_native_from_current_path(
-            "gh",
-            &self.working_directory,
-        )
-        .context("gh is not available")?;
+    fn gh_command(&self, gh: &Path, api_path: &str) -> Result<Command> {
         let mut command = Command::new(gh);
         crate::trusted_executable::configure_credential_command_environment(
             &mut command,
@@ -49,7 +45,8 @@ impl GithubResourceVersionAdapter {
             command.env("GH_TOKEN", token);
         }
         command
-            .args(["api", &target.api_path(), "--jq", ".updated_at"])
+            .args(["api", "--hostname", GITHUB_HOSTNAME, api_path])
+            .args(["--jq", ".updated_at"])
             .current_dir(crate::trusted_executable::neutral_user_config_directory(
                 &self.working_directory,
             ))
@@ -64,9 +61,14 @@ impl ExternalResourceVersionPort for GithubResourceVersionAdapter {
         GITHUB_KIND
     }
 
-    fn current_version(&self, resource: &ExternalResourceRef) -> Result<String> {
-        let target = GithubIssueTarget::parse(&resource.key)?;
-        let mut command = self.gh_command(&target)?;
+    fn current_version(&self, key: &str) -> Result<String> {
+        let target = GithubIssueTarget::parse(key)?;
+        let gh = crate::trusted_executable::resolve_native_from_current_path(
+            "gh",
+            &self.working_directory,
+        )
+        .context("gh is not available")?;
+        let mut command = self.gh_command(&gh, &target.api_path())?;
         let output = subprocess::command_output_with_timeout(
             &mut command,
             "gh api issue",
@@ -90,7 +92,8 @@ struct GithubIssueTarget<'a> {
 }
 
 impl<'a> GithubIssueTarget<'a> {
-    /// 키의 각 부분은 `gh` 인자가 된다. GitHub 이름에 쓸 수 있는 글자만 받는다.
+    /// 키의 각 부분은 API 경로가 된다. GitHub 이름에 쓸 수 있는 글자만 받는다. `.github` 같은 저장소 이름과
+    /// 밑줄이 있는 계정 이름도 있다.
     fn parse(key: &'a str) -> Result<Self> {
         let parts = key
             .split_once('#')
@@ -101,14 +104,15 @@ impl<'a> GithubIssueTarget<'a> {
         let name_is_valid = |name: &str, extra: &[char]| {
             !name.is_empty()
                 && name.len() <= 100
-                && !name.starts_with(['.', '-'])
+                && name != "."
+                && name != ".."
                 && name.chars().all(|character| {
                     character.is_ascii_alphanumeric() || extra.contains(&character)
                 })
         };
         let number_is_valid =
             !number.is_empty() && number.len() <= 10 && number.bytes().all(|b| b.is_ascii_digit());
-        if !name_is_valid(owner, &['-'])
+        if !name_is_valid(owner, &['-', '_'])
             || !name_is_valid(repository, &['-', '_', '.'])
             || !number_is_valid
         {
@@ -143,12 +147,6 @@ fn version_from_output(stdout: &[u8]) -> Result<String> {
     Ok(version)
 }
 
-/// 이 제공자가 쓰는 폴더가 저장소 안이 아닌지는 조립이 정한다. 시험은 경로만 본다.
-#[cfg(test)]
-fn working_directory(adapter: &GithubResourceVersionAdapter) -> &Path {
-    &adapter.working_directory
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,11 +162,18 @@ mod tests {
             GithubIssueTarget::parse("a/b.c_d#1").unwrap().api_path(),
             "repos/a/b.c_d/issues/1"
         );
+        // 인식기가 받는 이름이다: 조직의 `.github` 저장소, 밑줄이 있는 계정.
+        assert_eq!(
+            GithubIssueTarget::parse("octo_acme/.github#5")
+                .unwrap()
+                .api_path(),
+            "repos/octo_acme/.github/issues/5"
+        );
     }
 
     #[test]
     fn keys_that_are_not_a_repository_and_a_number_are_rejected() {
-        // The parts become `gh` arguments and a URL path. Nothing else may pass.
+        // The parts become one API path argument. Nothing else may pass.
         for key in [
             "a/b",
             "a#1",
@@ -179,8 +184,10 @@ mod tests {
             "a/b#12345678901",
             "a/b/c#1",
             "a/../b#1",
-            "a/.b#1",
-            "-a/b#1",
+            "a/..#1",
+            "a/.#1",
+            "../b#1",
+            "a b/c#1",
             "a/b?x=1#1",
             "a/b --hostname evil.example#1",
             "a/b#1 --jq .",
@@ -210,9 +217,36 @@ mod tests {
     }
 
     #[test]
-    fn the_adapter_reports_the_github_kind_and_keeps_its_folder() {
-        let adapter = GithubResourceVersionAdapter::new(PathBuf::from("/akra-home"));
+    fn the_command_asks_github_com_for_one_field_with_a_cleared_environment() {
+        let adapter = GithubResourceVersionAdapter::new(std::env::temp_dir());
         assert_eq!(adapter.kind(), "github");
-        assert_eq!(working_directory(&adapter), Path::new("/akra-home"));
+        let command = adapter
+            .gh_command(Path::new("gh"), "repos/a/b/issues/1")
+            .unwrap();
+        let arguments: Vec<_> = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            arguments,
+            [
+                "api",
+                "--hostname",
+                "github.com",
+                "repos/a/b/issues/1",
+                "--jq",
+                ".updated_at"
+            ]
+        );
+        // The child sees only what the adapter sets. A host or repository override never passes.
+        let passed: Vec<_> = command
+            .get_envs()
+            .filter(|(_, value)| value.is_some())
+            .map(|(name, _)| name.to_string_lossy().into_owned())
+            .collect();
+        assert!(passed.iter().any(|name| name == "GH_PROMPT_DISABLED"));
+        for name in ["GH_HOST", "GH_REPO", "GH_ENTERPRISE_TOKEN", "GITHUB_TOKEN"] {
+            assert!(!passed.iter().any(|passed| passed == name), "{name}");
+        }
     }
 }
