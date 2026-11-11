@@ -126,7 +126,10 @@ private mailboxes and re-enter their owning reducer through the runtime host cyc
 `NativeClientRuntime::run_host_cycle(now, wait, max_inputs)` is the runtime host. One cycle waits up
 to `wait` for a Core input on the blocking mailbox, drains pending inputs, then feeds
 `CoreInput::Tick` and the parallel tick. The TUI frame loop runs it with zero wait after it reports
-its parallel view state (`ParallelViewChanged`); a headless host waits instead. The host, not an
+its parallel view state (`ParallelViewChanged`). The kernel host waits until the next clock deadline
+(`NativeClientRuntime::next_deadline`: the GitHub review poll and the parallel control-plane tick
+work), reads the clock after the wait, and sleeps until an input when no deadline exists (a 30 s
+safety net bounds that sleep). The host, not an
 inbound adapter, owns the clock, the post-turn evaluation start (`EvaluateCompletedTurn`), route
 resolution, and the auto-follow submission (`SubmitAutoFollowTurn`). Architecture tests keep these
 host-only inputs out of `src/adapter/inbound`, and a headless test runs turn end, evaluation, and the

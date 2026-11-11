@@ -117,7 +117,9 @@ authority reducer에 재진입합니다.
 `NativeClientRuntime::run_host_cycle(now, wait, max_inputs)`가 runtime host입니다. 한 cycle은
 blocking mailbox에서 Core input을 최대 `wait`만큼 기다리고, 대기 중인 input을 처리한 뒤
 `CoreInput::Tick`과 parallel tick을 넣습니다. TUI frame loop는 parallel 화면 상태
-(`ParallelViewChanged`)를 알린 뒤 `wait = 0`으로 부르고, headless host는 기다립니다. 시계, post-turn
+(`ParallelViewChanged`)를 알린 뒤 `wait = 0`으로 부릅니다. Kernel host는 다음 시계 마감
+(`NativeClientRuntime::next_deadline`: GitHub review poll과 parallel control-plane tick 일)까지 기다리고,
+기다린 뒤에 시계를 읽습니다. 마감이 없으면 input이 올 때까지 잡니다 (30초 안전망이 그 잠의 상한입니다). 시계, post-turn
 평가 시작(`EvaluateCompletedTurn`), route 결정, auto-follow 제출(`SubmitAutoFollowTurn`)은 inbound
 adapter가 아니라 host가 소유합니다. Architecture test가 이 host 전용 input을 `src/adapter/inbound`에서
 막고, headless test가 host cycle만으로 turn 종료, 평가, follow-up turn을 실행합니다.

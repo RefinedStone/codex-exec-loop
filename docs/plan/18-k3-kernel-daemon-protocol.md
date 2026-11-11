@@ -56,9 +56,9 @@
 ### 3.1 커널 호스트 (`KernelHost`)
 
 - composition 이 저장소 하나에 커널 하나를 조립한다 (`build_kernel_for_workspace(folder)`, §3.4).
-- 커널은 전용 OS 스레드에서 돈다. 반복: 클라이언트 입력함을 비우고, `run_host_cycle(now, 250ms, …)` 를 돌리고,
+- 커널은 전용 OS 스레드에서 돈다. 반복: 클라이언트 입력함을 비우고, 다음 마감 시각까지 기다리는 주기를 돌리고,
   결과를 구독자에게 나눈다. 커널 상태는 이 스레드만 바꾼다. 입력함 셋은 넣을 때 커널 스레드를 깨우므로 입력은 이
-  대기를 기다리지 않는다 (plan 19 Q2-4, 이전에는 50ms).
+  대기를 기다리지 않는다 (plan 19 Q2-4). 마감이 없으면 입력이 올 때까지 잔다 (plan 19 Q3-4, 이전에는 250ms 주기).
 - 클라이언트는 `KernelClientHandle` 로 붙는다: `send_command(command) -> Option<Vec<AppEvent>>`,
   `query(query) -> Response`, 이벤트 수신 채널. `send_command` 는 커널이 그 명령을 처리할 때까지 기다리고, 그
   처리에서 나온 core 이벤트를 돌려준다. 프로토콜은 이것으로 명령 응답의 거절 이유를 만든다. 같은 이벤트는 모든
