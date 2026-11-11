@@ -300,9 +300,15 @@ the desktop app itself is not shipped yet.
   `operation { op_id, state, next { query, after }, replayed }`: `op_id` is the sequence of the
   `command_received` record, `state` is `accepted` or `rejected`, and the progress of the command is
   the log after `op_id`. A resend with the same key and the same command does not run again and gets
-  the first receipt with `replayed`; the same key with another command fails with `-32014`. Keys are
-  remembered while their record is in the log, also across a kernel restart. `load_sessions` and
-  `refresh_planning` are not recorded and have no receipt. While a client is attached the kernel refreshes the parallel supervisor snapshot, and the
+  the first receipt with `replayed`; the same key with another command fails with `-32014`. A refused
+  command keeps its refusal for its key; send a new key to try again. Keys are shared by all clients
+  of the repository kernel, so a client uses a random key for each command. Keys are remembered while
+  their record is in the log (the latest 10,000 records), also across a kernel restart that wrote its
+  records; a crash can lose the latest keys. A kernel without a log refuses a command with a key
+  (`-32015`). A `submit_prompt` that the kernel refuses before preparation (`busy`,
+  `preparation_active`, `unknown_thread`, `parallel_mode`, `parallel_mode_unknown`) now also answers
+  with `rejection` and `state: rejected`. `load_sessions` and `refresh_planning` are not recorded and
+  have no receipt. While a client is attached the kernel refreshes the parallel supervisor snapshot, and the
   first attach runs one supervisor inspection that does not change the pool (it runs the push readiness
   check, like the TUI parallel view).
 - A kernel with no attached client and no remaining work (turns, approvals, auto-follow, evaluation,
