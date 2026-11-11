@@ -355,6 +355,8 @@ struct Simulation {
     core_inputs: CoreInputSender,
     /// 마지막 커널 주기 뒤 core 입력함에 넣은 입력 수이다.
     queued_core_inputs: usize,
+    /// 마지막 주기 뒤에 입력이 커널을 깨웠다 (클라이언트 입력함 또는 core 입력함). 실제 호스트의 깨우기와 같다.
+    host_woken: bool,
     started_at: Instant,
     elapsed: Duration,
     step: usize,
@@ -400,6 +402,7 @@ impl Simulation {
             effects,
             core_inputs,
             queued_core_inputs: 0,
+            host_woken: false,
             started_at: Instant::now() + FAKE_CLOCK_OFFSET,
             elapsed: Duration::ZERO,
             step: 0,
@@ -558,6 +561,7 @@ impl Simulation {
     }
 
     fn send_host_input(&mut self, input: KernelHostInput) {
+        self.host_woken = true;
         self.inbox
             .send(input)
             .expect("the simulation owns the host loop");
@@ -598,6 +602,19 @@ impl Simulation {
     fn run_host_cycle(&mut self, advance: Duration) -> Result<(), Violation> {
         self.elapsed += advance;
         let now = self.started_at + self.elapsed;
+        /*
+         * 실제 커널 호스트처럼 돈다 (plan 19 Q3-4): 입력이 깨웠거나 마감 시각이 되었을 때만 주기를 돈다. 30초 안전망은
+         * 흉내 내지 않는다. 그래서 깨우지도 않고 마감도 내지 않는 일이 커널에 있으면, 그 일은 끝나지 않고 I4 가 잡는다.
+         */
+        let deadline_reached = self
+            .host
+            .runtime
+            .next_deadline(now)
+            .is_some_and(|deadline| deadline <= now);
+        if !self.host_woken && !deadline_reached {
+            return Ok(());
+        }
+        self.host_woken = false;
         assert!(
             self.host.handle_pending_inputs(),
             "the simulation never shuts the host down"
@@ -906,6 +923,7 @@ impl Simulation {
     }
 
     fn send_core_input(&mut self, input: CoreInput) {
+        self.host_woken = true;
         self.queued_core_inputs += 1;
         self.core_inputs
             .send(input)

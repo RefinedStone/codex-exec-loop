@@ -439,6 +439,41 @@ where
         events
     }
 
+    /*
+     * `tick` 이 다음에 할 일의 마감 시각이다 (plan 19 Q3-4). 호스트는 이 시각까지만 잔다. 조건은 `tick` 과 같다:
+     * 끝나지 않은 배분 정리의 재시도, 감독 화면을 볼 때의 새로 고침, 배분할 수 있을 때의 깨움 확인이다. 제어 효과가
+     * 진행 중이라 `tick` 이 아무것도 못 하는 일은 마감에서 뺀다. 그 효과의 완료 이벤트가 호스트를 깨운다. epoch 가
+     * 없으면 새로 고침 명령은 버려지므로 그때도 마감이 없다. 마감이 있는데 `tick` 이 시각을 넘기지 않으면 호스트가
+     * 쉬지 않고 돈다.
+     */
+    pub fn next_deadline(&self, now: Instant, activity_pulse_visible: bool) -> Option<Instant> {
+        let after_interval =
+            |last: Option<Instant>| last.map_or(now, |last| last + CONTROL_PLANE_TICK_INTERVAL);
+        let cleanup_retry = (self.runtime.oldest_unsettled_dispatch_cleanup().is_some()
+            && !self.control_effect_in_flight())
+        .then(|| after_interval(self.last_cleanup_retry_at));
+        let supervisor_refresh = (activity_pulse_visible
+            && self.current_epoch_id().is_some()
+            && !self.non_poll_control_effect_in_flight())
+        .then(|| after_interval(self.last_supervisor_refresh_at));
+        let wake_poll = self
+            .pending_dispatch_poll_ready()
+            .then(|| after_interval(self.last_orchestrator_wake_poll_at));
+        [cleanup_retry, supervisor_refresh, wake_poll]
+            .into_iter()
+            .flatten()
+            .min()
+    }
+
+    fn pending_dispatch_poll_ready(&self) -> bool {
+        ParallelModeControlPlaneAggregate::pending_dispatch_poll_readiness(
+            self.mode_enabled(),
+            self.current_epoch_id().is_some(),
+            self.runtime.store().projection_ready,
+            self.control_effect_in_flight(),
+        ) == ParallelModePendingDispatchPollDecision::Ready
+    }
+
     fn cleanup_retry_interval_due(&self, now: Instant) -> bool {
         self.last_cleanup_retry_at
             .is_none_or(|last_retry| now.duration_since(last_retry) >= CONTROL_PLANE_TICK_INTERVAL)
@@ -483,13 +518,7 @@ where
         workspace_directory: String,
         follow_up_tick_signature: Option<String>,
     ) -> Vec<ParallelModeControlPlanePresentationEvent> {
-        if ParallelModeControlPlaneAggregate::pending_dispatch_poll_readiness(
-            self.mode_enabled(),
-            self.current_epoch_id().is_some(),
-            self.runtime.store().projection_ready,
-            self.control_effect_in_flight(),
-        ) == ParallelModePendingDispatchPollDecision::Skip
-        {
+        if !self.pending_dispatch_poll_ready() {
             return Vec::new();
         }
         self.handle_command(ParallelModeControlPlaneCommand::PollPendingDispatchWake {

@@ -2876,6 +2876,52 @@ fn stale_enqueue_cleanup_failure_enters_global_notice_without_replacing_workspac
 }
 
 #[test]
+fn the_tick_deadline_exists_only_for_work_a_tick_can_do_and_moves_after_the_tick() {
+    // plan 19 Q3-4: the kernel host sleeps until this deadline. Without work there is none, so an idle kernel
+    // sleeps until an input. A tick at the deadline must move it forward, or the host would spin.
+    let workspace = unique_workspace("tick-deadline");
+    let (handle, rx) = test_control_plane_handle_with_noop_authority(Arc::new(
+        NoopPlanningAuthorityPort::default(),
+    ));
+    let now = Instant::now();
+
+    assert_eq!(
+        handle.next_deadline(now, false),
+        None,
+        "parallel mode is off and nobody watches the supervisor"
+    );
+    assert_eq!(
+        handle.next_deadline(now, true),
+        None,
+        "without an epoch a supervisor refresh command is dropped, so a watching client sets no deadline"
+    );
+
+    handle.force_mode_for_test(&workspace, true);
+    handle.force_readiness_snapshot_for_test(ready_readiness(&workspace));
+    assert_eq!(
+        handle.next_deadline(now, true),
+        Some(now),
+        "an open epoch refreshes the supervisor and polls for pending dispatch wakes"
+    );
+
+    let _ = handle.tick(now, workspace.clone(), true);
+    assert_eq!(
+        handle.next_deadline(now, true),
+        None,
+        "the refresh is in flight; its completion wakes the host"
+    );
+    // Each completion wakes the host. After the last one the next deadline is one interval after the tick.
+    while handle.next_deadline(now, true).is_none() {
+        let _ = handle.handle_background_event(recv_background_event(&rx));
+    }
+    assert_eq!(
+        handle.next_deadline(now, true),
+        Some(now + Duration::from_secs(1)),
+        "the tick moved both clocks, so the host sleeps one interval"
+    );
+}
+
+#[test]
 fn persistent_cleanup_retry_yields_to_replacement_refresh_and_pending_poll_without_starving() {
     let mutation_count = Arc::new(AtomicUsize::new(0));
     let authority = Arc::new(

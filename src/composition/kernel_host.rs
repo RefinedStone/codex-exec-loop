@@ -20,19 +20,20 @@ use crate::domain::parallel_mode::ParallelModeSupervisorSnapshot;
 use crate::domain::planning::RuntimeProjection;
 
 /*
- * 커널 스레드가 입력 없이 기다리는 최대 시간이다. 입력함 셋(클라이언트, core, 병렬 완료)은 넣을 때 커널 스레드를
- * 깨우므로 입력은 이 시간을 기다리지 않는다 (plan 19 Q2-4). 이 시간은 시계 일(`Tick`, 병렬 tick)의 주기이다. 그
- * 일의 간격은 1초 이상이다.
- * shortcut: 마감 시각이 없어 일이 없어도 이 주기로 깬다. 타이머를 마감 시각으로 바꿀 때(plan 19 Q3) 없앤다.
+ * 커널 스레드는 다음 마감 시각까지만 잔다 (plan 19 Q3-4). 입력함 셋(클라이언트, core, 병렬 완료)은 넣을 때 커널
+ * 스레드를 깨우므로 입력은 기다리지 않는다 (Q2-4). 마감이 없으면 이 시간까지 잔다. 이 값은 시계 일의 주기가 아니라
+ * 안전망이다: 마감을 알리지 않는 시계 일이 생겨도 그 일이 멈추지 않고 이 시간 안에 한 번은 돈다.
  */
-const HOST_WAIT: Duration = Duration::from_millis(250);
+const HOST_IDLE_WAIT: Duration = Duration::from_secs(30);
+/// 넘친 클라이언트에 `Resync` 를 다시 보내는 간격이다. 그 클라이언트가 비우는 일은 커널을 깨우지 않는다.
+const HOST_RESYNC_RETRY_WAIT: Duration = Duration::from_millis(250);
 const HOST_MAX_INPUTS_PER_CYCLE: usize = 64;
 /// 클라이언트마다 쌓아 둘 이벤트 수이다. 넘치면 그 클라이언트에 `Resync` 를 보내고 증분은 버린다.
 const CLIENT_EVENT_CAPACITY: usize = 1024;
 /// 첫 클라이언트가 붙을 때, 이 시간 안에 감독 점검을 했으면 다시 하지 않는다. Gateway 는 같은 저장소의 다른 폴더로
 /// 다시 붙을 때도 이전 붙음을 먼저 떼므로, 점검(push 준비 점검 포함)이 되풀이되지 않게 한다.
 const SUPERVISOR_INSPECTION_REUSE: Duration = Duration::from_secs(60);
-/// 붙기 요청에 커널 스레드가 답할 때까지 기다리는 최대 시간이다. 보통 한 주기(`HOST_WAIT`) 안에 답한다.
+/// 붙기 요청에 커널 스레드가 답할 때까지 기다리는 최대 시간이다. 붙기 요청은 커널 스레드를 깨우므로 보통 바로 답한다.
 const ATTACH_REPLY_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(crate) type KernelClientId = u64;
@@ -418,9 +419,32 @@ impl KernelHostLoop {
 
     fn run(mut self) {
         while self.handle_pending_inputs() {
-            self.run_cycle(Instant::now(), HOST_WAIT);
-            self.record_idle(Instant::now());
+            // 자기 전에 기록한다. 주기 끝에 기록하면 오래 자는 동안 한가해진 시각이 정해지지 않는다 (Q3-4).
+            let now = Instant::now();
+            self.record_idle(now);
+            let wait = self.next_wait(now);
+            self.run_cycle_with_clock(&Instant::now, wait);
         }
+    }
+
+    /*
+     * 입력 없이 잘 수 있는 시간이다 (plan 19 Q3-4). 가장 가까운 마감까지이고, 마감이 지났으면 0 이다. `Resync` 를
+     * 못 받은 클라이언트가 있으면 짧게만 잔다. 마감이 없으면 안전망 시간까지 잔다.
+     */
+    fn next_wait(&self, now: Instant) -> Duration {
+        let until_deadline = self
+            .runtime
+            .next_deadline(now)
+            .map_or(HOST_IDLE_WAIT, |deadline| {
+                deadline.saturating_duration_since(now)
+            });
+        let resync_pending = self.clients.values().any(|client| client.resync_pending);
+        let limit = if resync_pending {
+            HOST_RESYNC_RETRY_WAIT
+        } else {
+            HOST_IDLE_WAIT
+        };
+        until_deadline.min(limit)
     }
 
     /// 클라이언트 입력을 모두 처리한다. 끝내라는 입력이 왔거나 보내는 쪽이 모두 사라졌으면 `false` 이다.
@@ -438,13 +462,19 @@ impl KernelHostLoop {
 
     /*
      * 커널 한 주기이다. `now` 는 core 와 병렬 제어부의 시계이고, `wait` 는 core 입력을 기다리는 최대 시간이다.
-     * 실행 중인 커널은 실제 시각과 `HOST_WAIT` 를 준다. 시뮬레이션 시험은 가짜 시각과 0 을 준다 (plan 19 Q1).
+     * 시뮬레이션 시험이 가짜 시각과 0 을 준다 (plan 19 Q1). 실행 중인 커널은 `run_cycle_with_clock` 을 쓴다.
      * shortcut: 호스트 자신의 시계(붙기 때 한가한 시각 기록, 감독 점검 재사용)는 아직 실제 시각을 읽는다.
      */
+    #[cfg(test)]
     fn run_cycle(&mut self, now: Instant, wait: Duration) {
-        let outcomes = self
-            .runtime
-            .run_host_cycle(now, wait, HOST_MAX_INPUTS_PER_CYCLE);
+        self.run_cycle_with_clock(&|| now, wait);
+    }
+
+    /// 커널 한 주기이다. 입력을 최대 `wait` 만큼 기다린 뒤에 `clock` 을 읽는다. 오래 잔 뒤에도 시각이 맞다.
+    fn run_cycle_with_clock(&mut self, clock: &dyn Fn() -> Instant, wait: Duration) {
+        let outcomes =
+            self.runtime
+                .run_host_cycle_with_clock(clock, wait, HOST_MAX_INPUTS_PER_CYCLE);
         for outcome in outcomes {
             self.publish(outcome);
         }
@@ -967,6 +997,51 @@ mod tests {
     }
 
     #[test]
+    fn an_idle_kernel_sleeps_until_an_input_even_with_a_watching_client() {
+        // plan 19 Q3-4: without a deadline the host waits the idle (safety) time, not a 250 ms period.
+        let (mut host, _events) = host_loop_with_client();
+        let now = Instant::now();
+        assert_eq!(host.next_wait(now), HOST_IDLE_WAIT);
+
+        // A watching client alone sets no deadline: without an open epoch a refresh would be dropped.
+        host.set_supervisor_view(true);
+        assert_eq!(host.next_wait(now), HOST_IDLE_WAIT);
+
+        host.clients
+            .get_mut(&1)
+            .expect("the test client is attached")
+            .resync_pending = true;
+        assert_eq!(
+            host.next_wait(now),
+            HOST_RESYNC_RETRY_WAIT,
+            "a client that missed events gets its Resync soon"
+        );
+    }
+
+    #[test]
+    fn the_cycle_reads_the_clock_after_the_wait() {
+        // plan 19 Q3-4: the wait can be long. A clock read before the wait would give core a stale time.
+        let (mut host, _events) = host_loop_with_client();
+        let wait = Duration::from_millis(40);
+        let started = Instant::now();
+        let read_at = std::cell::Cell::new(None);
+        host.run_cycle_with_clock(
+            &|| {
+                let now = Instant::now();
+                read_at.set(Some(now));
+                now
+            },
+            wait,
+        );
+        let read_at = read_at.get().expect("the cycle reads the clock once");
+        assert!(
+            read_at.duration_since(started) >= wait,
+            "the clock was read {:?} after the cycle started; the wait is {wait:?}",
+            read_at.duration_since(started)
+        );
+    }
+
+    #[test]
     fn client_commands_wake_the_kernel_instead_of_waiting_for_the_cycle() {
         // plan 19 Q2-4: before the wake, each command waited for the rest of the host wait.
         let (runtime, _turns) = recording_runtime_for_test();
@@ -978,10 +1053,10 @@ mod tests {
             assert!(client.send_command(AppCommand::Noop).is_some());
         }
         let elapsed = started.elapsed();
-        // 깨우지 않으면 명령마다 남은 대기(최대 HOST_WAIT)를 기다려 약 COMMANDS * HOST_WAIT 가 걸린다.
+        // 깨우지 않으면 명령마다 남은 대기(마감이 없으면 HOST_IDLE_WAIT)를 기다린다.
         assert!(
-            elapsed < HOST_WAIT * 4,
-            "{COMMANDS} commands took {elapsed:?}; the host wait is {HOST_WAIT:?}"
+            elapsed < Duration::from_secs(1),
+            "{COMMANDS} commands took {elapsed:?}; the idle wait is {HOST_IDLE_WAIT:?}"
         );
     }
 

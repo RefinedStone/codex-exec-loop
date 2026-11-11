@@ -111,6 +111,11 @@ where
             .tick(now, workspace_directory, activity_pulse_visible)
     }
 
+    /// `tick` 이 다음에 할 일의 마감 시각이다 (plan 19 Q3-4).
+    pub fn next_deadline(&self, now: Instant, activity_pulse_visible: bool) -> Option<Instant> {
+        self.service().next_deadline(now, activity_pulse_visible)
+    }
+
     pub fn mode_enabled(&self) -> bool {
         self.service().mode_enabled()
     }

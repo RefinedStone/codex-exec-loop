@@ -78,6 +78,11 @@ where
         self.controller.startup_ready_workspace()
     }
 
+    /// core 의 다음 시계 일의 마감 시각이다 (plan 19 Q3-4). 호스트는 이 시각까지만 잔다.
+    pub(crate) fn next_deadline(&self, now: std::time::Instant) -> Option<std::time::Instant> {
+        self.controller.next_deadline(now)
+    }
+
     /// 호스트가 다음에 할 턴 뒤 일이다 (plan 19 Q2-2). 호스트는 매 dispatch 뒤에 이것을 묻는다.
     pub(crate) fn next_post_turn_host_step(&self) -> Option<crate::core::app::PostTurnHostStep> {
         self.controller.next_post_turn_host_step()

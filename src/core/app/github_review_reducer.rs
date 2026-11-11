@@ -137,6 +137,25 @@ impl GithubReviewFeatureReducer {
         Some(result)
     }
 
+    /*
+     * 다음 폴링의 마감 시각이다 (plan 19 Q3-4). 호스트는 이 시각까지만 잔다. `tick` 이 폴링을 시작할 수 있을 때만
+     * 마감이 있다. 대상이나 설정이 없거나 폴링이 진행 중이면 마감이 없다. 그 상태는 입력(설정 완료, 폴링 완료)이
+     * 바꾸고, 입력은 호스트를 깨운다. 마감이 있는데 `tick` 이 아무것도 하지 않으면 호스트가 쉬지 않고 돈다.
+     */
+    pub(super) fn next_deadline(&self, now: Instant) -> Option<Instant> {
+        if self.target.is_none()
+            || self.accepted_setup_correlation.is_none()
+            || self.active_poll.is_some()
+        {
+            return None;
+        }
+        match self.schedule {
+            GithubReviewPollSchedule::Off => None,
+            GithubReviewPollSchedule::DueNow => Some(now),
+            GithubReviewPollSchedule::DueAt(at) => Some(at),
+        }
+    }
+
     /// 호스트의 tick 이다. 폴링할 때가 되었으면 폴링을 시작한다.
     pub(super) fn tick(&mut self, now: Instant) -> Option<GithubReviewPollAdmission> {
         self.last_tick = Some(now);
@@ -194,7 +213,11 @@ impl GithubReviewFeatureReducer {
         if let Ok(poll) = &result {
             self.cursor = Some((correlation.target.clone(), poll.next_state.clone()));
         }
-        // 성공과 실패 모두 같은 간격 뒤에 다시 폴링한다. 느린 요청이 겹치지 않게 완료 시점부터 센다.
+        /*
+         * 성공과 실패 모두 같은 간격 뒤에 다시 폴링한다. 간격은 완료 직전의 tick 에서 잰다. 화면 루프는 매 프레임
+         * tick 을 넣으므로 그 시각이 거의 완료 시각이다. 마감까지 자는 커널 호스트(plan 19 Q3-4)는 폴링 중에 tick 을
+         * 넣지 않으므로 폴링을 시작한 시각에서 잰다. 폴링이 간격보다 오래 걸리면 끝나자마자 다시 폴링한다.
+         */
         let interval = self
             .setup_request
             .as_ref()
@@ -292,6 +315,44 @@ mod tests {
                 .is_none(),
             "a failed poll also waits one interval"
         );
+    }
+
+    #[test]
+    fn the_deadline_exists_only_when_a_tick_can_start_a_poll_and_moves_after_it() {
+        // plan 19 Q3-4: the host sleeps until this deadline. A deadline that a tick cannot act on would spin the host.
+        let mut reducer = GithubReviewFeatureReducer::new();
+        let pr = target("acme/widgets", 42);
+        let t0 = Instant::now();
+        assert_eq!(reducer.next_deadline(t0), None, "no setup, nothing to do");
+
+        let setup = started(reducer.begin_setup(setup_request("/workspace", pr.clone())));
+        assert_eq!(
+            reducer.next_deadline(t0),
+            None,
+            "the setup completion wakes the host"
+        );
+        reducer.complete_setup(
+            &setup,
+            Ok(GithubReviewPollingSetupResult::Active { target: pr.clone() }),
+        );
+        assert_eq!(
+            reducer.next_deadline(t0),
+            Some(t0),
+            "poll at once after setup"
+        );
+
+        let poll = reducer.tick(t0).expect("the tick at the deadline polls");
+        assert_eq!(
+            reducer.next_deadline(t0),
+            None,
+            "while the poll runs, its completion wakes the host"
+        );
+        reducer.complete_poll(
+            &poll.correlation,
+            Ok(poll_result(pr, "2026-07-19T10:00:00Z")),
+        );
+        assert_eq!(reducer.next_deadline(t0), Some(t0 + POLL_INTERVAL));
+        assert!(reducer.tick(t0 + POLL_INTERVAL).is_some());
     }
 
     fn started(
