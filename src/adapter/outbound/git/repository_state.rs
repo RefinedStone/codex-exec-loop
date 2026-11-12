@@ -68,6 +68,12 @@ mod tests {
         git(&directory, &["init", "--quiet", "--initial-branch", "main"]);
         assert_eq!(adapter.repository_state(&workspace).unwrap(), None);
 
+        // 시험의 git 은 물려받은 설정을 버린다. 커밋에는 저장소의 신원이 필요하다.
+        git(&directory, &["config", "user.name", "Akra Test"]);
+        git(
+            &directory,
+            &["config", "user.email", "akra-test@example.com"],
+        );
         git(
             &directory,
             &["commit", "--quiet", "--allow-empty", "-m", "first"],
