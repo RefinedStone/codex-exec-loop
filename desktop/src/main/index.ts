@@ -12,7 +12,7 @@ import { spawn as spawnPty } from "node-pty";
 
 import { BrowserPanelService } from "./browserPanel";
 import { loadSettings, saveSettings } from "./browserSettings";
-import { readGitFileDiff, readGitStatus, resolveGitFile, runGitFileAction } from "./gitStatus";
+import { editorUrl, executeGitFilePlan, planGitFileAction, readGitFileDiff, readGitStatus, resolveGitFile } from "./gitStatus";
 import { readGitHubSummary, readReviewPrompt } from "./githubService";
 import { JiraService } from "./jiraService";
 import { TerminalService } from "./terminalService";
@@ -160,14 +160,17 @@ ipcMain.handle(IPC_CHANNELS.gitFileDiff, (_event, cwd: unknown, path: unknown, u
   readGitFileDiff(cwd, path, untracked),
 );
 // 변경 버리기는 되돌릴 수 없다. 확인은 main 이 한다. renderer 가 확인을 건너뛸 수 없다.
-ipcMain.handle(IPC_CHANNELS.gitFileAction, async (event, cwd: unknown, action: unknown, file: unknown) => {
+// main 이 git 에서 읽은 상태로 먼저 확인한다. 거절할 요청에는 확인 창을 띄우지 않고, 창에는 실제로 바뀌는 경로를 보여 준다.
+ipcMain.handle(IPC_CHANNELS.gitFileAction, async (event, cwd: unknown, action: unknown, path: unknown) => {
+  const planned = await planGitFileAction(cwd, action, path);
+  if (!planned.ok) return planned;
   if (action === "discard") {
-    const path = String((file as { path?: unknown } | null)?.path ?? "");
     const window = BrowserWindow.fromWebContents(event.sender);
+    const restored = planned.plan.originalPath ? `\n이전 경로를 되살립니다: ${planned.plan.originalPath}` : "";
     const options = {
       type: "warning" as const,
       message: "이 파일의 변경을 버립니까?",
-      detail: `${path}\n\n버린 변경은 되돌릴 수 없습니다. 새 파일은 지워집니다.`,
+      detail: `${planned.plan.path}${restored}\n\n버린 변경은 되돌릴 수 없습니다. 새 파일은 지워집니다.`,
       buttons: ["변경 버리기", "취소"],
       defaultId: 1,
       cancelId: 1,
@@ -175,14 +178,18 @@ ipcMain.handle(IPC_CHANNELS.gitFileAction, async (event, cwd: unknown, action: u
     const answer = window ? await dialog.showMessageBox(window, options) : await dialog.showMessageBox(options);
     if (answer.response !== 0) return { ok: false, message: "취소했습니다.", cancelled: true };
   }
-  return runGitFileAction(cwd, action, file);
+  return executeGitFilePlan(planned.plan);
 });
 // `shell.openPath` 는 쓰지 않는다. Windows 에서 `.js`, `.bat` 같은 파일을 실행한다. 에이전트가 만든 파일일 수 있다.
 // shortcut: 편집기는 VS Code 주소(`vscode://file/…`)로만 연다. 다른 편집기는 앱 안 편집(P-12)이나 설정이 생기면 더한다.
 ipcMain.handle(IPC_CHANNELS.gitOpenFile, async (_event, cwd: unknown, path: unknown) => {
   const target = await resolveGitFile(cwd, path);
-  const url = `vscode://file/${target.split(/[\\/]/).map(encodeURIComponent).join("/")}`;
-  await shell.openExternal(url).catch(() => shell.showItemInFolder(target));
+  // 처리기가 없으면 OS 가 앱 선택 창을 띄우고 `openExternal` 은 성공으로 끝난다. 그래서 먼저 등록 여부를 본다.
+  if (!app.getApplicationNameForProtocol("vscode://")) {
+    shell.showItemInFolder(target);
+    return;
+  }
+  await shell.openExternal(editorUrl(target)).catch(() => shell.showItemInFolder(target));
 });
 
 ipcMain.handle(IPC_CHANNELS.terminalOpen, (event, request: unknown) => terminals.open(event.sender, request as TerminalOpenRequest));

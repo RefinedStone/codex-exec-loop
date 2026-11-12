@@ -10,7 +10,6 @@ import {
   type ConnectionState,
   type GitHubSummary,
   type GitActionResult,
-  type GitChangedFile,
   type GitFileAction,
   type GitFileDiff,
   type GitStatusResult,
@@ -55,8 +54,8 @@ const bridge: AkraBridge = {
   gitFileDiff(cwd: string, path: string, untracked: boolean): Promise<GitFileDiff> {
     return ipcRenderer.invoke(IPC_CHANNELS.gitFileDiff, cwd, path, untracked) as Promise<GitFileDiff>;
   },
-  gitFileAction(cwd: string, action: GitFileAction, file: GitChangedFile): Promise<GitActionResult> {
-    return ipcRenderer.invoke(IPC_CHANNELS.gitFileAction, cwd, action, file) as Promise<GitActionResult>;
+  gitFileAction(cwd: string, action: GitFileAction, path: string): Promise<GitActionResult> {
+    return ipcRenderer.invoke(IPC_CHANNELS.gitFileAction, cwd, action, path) as Promise<GitActionResult>;
   },
   gitOpenFile(cwd: string, path: string): Promise<void> {
     return ipcRenderer.invoke(IPC_CHANNELS.gitOpenFile, cwd, path) as Promise<void>;

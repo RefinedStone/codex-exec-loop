@@ -3,13 +3,21 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { AkraBridge, GitChangedFile, GitFileAction, GitFileDiff, GitStatusResult } from "../../shared/bridge";
+import { isConflictStatus, stageState } from "../../shared/gitChange";
 import { Icon, type IconName } from "../design/icons";
 import { useDesktopStore } from "../session/desktopStore";
 import { toast } from "../session/uiStore";
 import { type DiffLine, diffFileFromChange, parseGitDiff } from "./diff";
 import { DiffCounts, DiffLines } from "./DiffView";
 
-type GitReader = Pick<AkraBridge, "gitStatus" | "gitFileDiff" | "gitFileAction" | "gitOpenFile">;
+/** 변경 패널이 쓰는 브리지 함수이다. 읽기와 파일별 동작이다. */
+type GitAccess = Pick<AkraBridge, "gitStatus" | "gitFileDiff" | "gitFileAction" | "gitOpenFile">;
+
+/** 동작 하나가 끝날 때까지 패널의 모든 동작 버튼을 막는다. git 은 저장소마다 한 번에 하나만 쓸 수 있다 (`index.lock`). */
+interface ActionLock {
+  busy: boolean;
+  setBusy(busy: boolean): void;
+}
 
 type PanelState = { phase: "idle" } | { phase: "loading" } | { phase: "loaded"; result: GitStatusResult } | { phase: "failed"; message: string };
 
@@ -34,22 +42,19 @@ function linesFromDiff(diff: GitFileDiff, path: string): { lines: DiffLine[]; no
   return { lines: file?.lines ?? [], note: file && file.lines.length > 0 ? note : (note ?? "줄 단위 변경이 없습니다 (모드나 바이너리 변경).") };
 }
 
-/** porcelain 상태의 첫 글자는 스테이지한 변경, 둘째 글자는 아직 스테이지하지 않은 변경이다. */
-export function stageState(file: Pick<GitChangedFile, "status" | "untracked">): { staged: boolean; unstaged: boolean } {
-  return { staged: !file.untracked && file.status[0] !== " ", unstaged: file.untracked || file.status[1] !== " " };
-}
-
 const ACTION_LABEL: Record<GitFileAction, string> = { stage: "스테이지", unstage: "스테이지 취소", discard: "변경 버리기" };
 const ACTION_ICON: Record<GitFileAction, IconName> = { stage: "plus", unstage: "minus", discard: "undo" };
 
 /** 파일 줄의 동작 버튼이다. 줄(`summary`) 안에 있으므로 누를 때 줄이 펼쳐지지 않게 한다. */
-function FileActions({ cwd, file, git, onChanged }: { cwd: string; file: GitChangedFile; git: GitReader; onChanged(): void }) {
-  const [busy, setBusy] = useState(false);
+function FileActions({ cwd, file, git, lock, onChanged }: { cwd: string; file: GitChangedFile; git: GitAccess; lock: ActionLock; onChanged(): void }) {
+  const { busy, setBusy } = lock;
   const { staged, unstaged } = stageState(file);
+  // 충돌 상태의 파일은 여기서 스테이지하거나 버리지 않는다. main 도 거절한다.
+  const conflict = isConflictStatus(file.status);
   const run = (action: GitFileAction) => {
     setBusy(true);
     git
-      .gitFileAction(cwd, action, file)
+      .gitFileAction(cwd, action, file.path)
       .then(
         (result) => {
           if (result.ok) onChanged();
@@ -92,14 +97,14 @@ function FileActions({ cwd, file, git, onChanged }: { cwd: string; file: GitChan
           <Icon name="pencil" size={13} />
         </button>
       )}
-      {button("discard")}
-      {staged && button("unstage")}
-      {unstaged && button("stage")}
+      {!conflict && !file.directory && button("discard")}
+      {!conflict && staged && button("unstage")}
+      {!conflict && unstaged && button("stage")}
     </span>
   );
 }
 
-function ChangedFile({ cwd, file, git, onChanged }: { cwd: string; file: GitChangedFile; git: GitReader; onChanged(): void }) {
+function ChangedFile({ cwd, file, git, lock, onChanged }: { cwd: string; file: GitChangedFile; git: GitAccess; lock: ActionLock; onChanged(): void }) {
   const [open, setOpen] = useState(false);
   const [state, setState] = useState<FileState>({ phase: "loading" });
 
@@ -124,9 +129,9 @@ function ChangedFile({ cwd, file, git, onChanged }: { cwd: string; file: GitChan
         </>
       )}
       <code>{file.path}</code>
-      {stageState(file).staged && <span className="badge badge-ok">스테이지</span>}
+      {isConflictStatus(file.status) ? <span className="badge badge-bad">충돌</span> : stageState(file).staged && <span className="badge badge-ok">스테이지</span>}
       {file.added !== null && file.removed !== null && <DiffCounts added={file.added} removed={file.removed} />}
-      <FileActions cwd={cwd} file={file} git={git} onChanged={onChanged} />
+      <FileActions cwd={cwd} file={file} git={git} lock={lock} onChanged={onChanged} />
     </summary>
   );
   if (file.directory) {
@@ -161,7 +166,7 @@ export interface WorkingTree {
 }
 
 /** 열린 스레드 폴더의 작업 트리를 읽는다. 폴더가 바뀔 때와 턴이 끝날 때 다시 읽는다. */
-export function useWorkingTree(git: GitReader): WorkingTree {
+export function useWorkingTree(git: GitAccess): WorkingTree {
   const cwd = useDesktopStore((state) => state.transcript?.cwd ?? null);
   const lastTurnStatus = useDesktopStore((state) => state.transcript?.turns.at(-1)?.status ?? null);
   const [panel, setPanel] = useState<PanelState>({ phase: "idle" });
@@ -212,8 +217,9 @@ export function workingTreeCounts(tree: WorkingTree): { branch: string | null; a
   return { branch, added: files.reduce((sum, file) => sum + (file.added ?? 0), 0), removed: files.reduce((sum, file) => sum + (file.removed ?? 0), 0) };
 }
 
-export function WorkingTreePanel({ tree, git }: { tree: WorkingTree; git: GitReader }) {
+export function WorkingTreePanel({ tree, git }: { tree: WorkingTree; git: GitAccess }) {
   const { cwd, panel } = tree;
+  const [busy, setBusy] = useState(false);
   if (!cwd) {
     return <p className="muted empty">스레드를 열면 그 폴더의 변경을 보여 줍니다.</p>;
   }
@@ -242,7 +248,7 @@ export function WorkingTreePanel({ tree, git }: { tree: WorkingTree; git: GitRea
       {files && files.length > 0 && (
         <div className="working-tree-files diff-file-list" key={tree.generation}>
           {files.map((file) => (
-            <ChangedFile key={`${file.status}:${file.path}`} cwd={cwd} file={file} git={git} onChanged={tree.refresh} />
+            <ChangedFile key={`${file.status}:${file.path}`} cwd={cwd} file={file} git={git} lock={{ busy, setBusy }} onChanged={tree.refresh} />
           ))}
         </div>
       )}
