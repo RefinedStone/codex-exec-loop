@@ -36,6 +36,7 @@ Provider count, tool count, and agent count are not product goals by themselves.
 | [jcode](jcode/README.md) | [v0.68.0](https://github.com/1jehuang/jcode/releases/tag/v0.68.0), `fcf53909f8fe3b8cb1167dc3a03b178b0a635f39` | v0.43.0 | native multi-session harness, desktop, performance instrumentation |
 | [OpenCode](opencode/README.md) | [v1.18.15](https://github.com/anomalyco/opencode/releases/tag/v1.18.15), `d7b115f623760e68a4749d16508a9eca350f246f` | v1.17.18 | broad TUI/server/desktop harness and session continuity |
 | [Orca](orca/README.md) | [v1.4.176](https://github.com/stablyai/orca/releases/tag/v1.4.176), `02cea8a51ac3b69fcda7fe8ccc4f3ed0f68c445b` | v1.4.137 | worktree-first desktop fleet, terminal recovery, remote/mobile reach |
+| [Hide](hide/README.md) | [v1.2.7](https://github.com/with-hide/hide/releases/tag/v1.2.7), `171719601dd6874f0113751335a9362d62405e3f` (2026-11-12) | none | attention model over a multi-vendor terminal fleet: whose move is next, why it stopped, per-node finish lines |
 | [Agent Canvas](agent-canvas/README.md) | [v1.6.1](https://github.com/OpenHands/agent-canvas/releases/tag/v1.6.1), `43f091baf135142ed6c146f888f44a957141193f` | v1.2.1 | browser/desktop inspector, remote backends, durable automations |
 | [Grok Build](grok-build/README.md) | public HEAD `afbc0fb710320c7add294c2106d447ecc3e3af2e` | `b189869b...` | full-stack Rust harness, TUI breadth, fast worktrees |
 
