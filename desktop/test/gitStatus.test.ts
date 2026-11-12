@@ -1,11 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterAll, describe, expect, it } from "vitest";
 
-import { NO_HELPER_PROGRAMS, parseNumstat, parsePorcelainStatus, readGitFileDiff, readGitStatus, resolveInside } from "../src/main/gitStatus";
+import { discardCommands, NO_HELPER_PROGRAMS, parseNumstat, parsePorcelainStatus, readGitFileDiff, readGitStatus, resolveGitFile, resolveInside, runGitFileAction } from "../src/main/gitStatus";
 
 describe("git status parsing", () => {
   it("reads the branch, renames, untracked folders and plain changes", () => {
@@ -34,6 +34,83 @@ describe("git status parsing", () => {
     for (const bad of ["../outside.txt", "src/../../outside.txt", join(root, "a.ts"), "", ".", 42]) {
       expect(() => resolveInside(root, bad)).toThrow();
     }
+  });
+});
+
+describe("git file actions", () => {
+  const root = mkdtempSync(join(tmpdir(), "akra-git-actions-"));
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd: root, encoding: "utf8" });
+  const statusOf = async () => {
+    const status = await readGitStatus(root);
+    return new Map(status.ok ? status.files.map((file) => [file.path, file]) : []);
+  };
+  const fileOf = async (path: string) => {
+    const file = (await statusOf()).get(path);
+    if (!file) throw new Error(`${path} is not in git status`);
+    return file;
+  };
+
+  it("picks the discard commands from the status", () => {
+    expect(discardCommands("??", "new", null)).toEqual([["clean", "-fd", "--", "new"]]);
+    expect(discardCommands("A ", "added", null)).toEqual([["rm", "-f", "-q", "--", "added"]]);
+    expect(discardCommands("R ", "new", "old").map((command) => command[0])).toEqual(["rm", "restore"]);
+    expect(discardCommands(" M", "changed", null)).toEqual([["restore", "--staged", "--worktree", "--source=HEAD", "--", "changed"]]);
+  });
+
+  it("stages, unstages and discards one file and leaves the other files alone", async () => {
+    git("init", "-q", "-b", "main");
+    writeFileSync(join(root, "a.txt"), "a\n");
+    writeFileSync(join(root, "b.txt"), "b\n");
+    writeFileSync(join(root, "old.txt"), "rename me\n");
+    git("add", ".");
+    git("commit", "-q", "-m", "init");
+    writeFileSync(join(root, "a.txt"), "A\n");
+    writeFileSync(join(root, "b.txt"), "B\n");
+    writeFileSync(join(root, "new file.txt"), "new\n");
+
+    expect(await runGitFileAction(root, "stage", await fileOf("a.txt"))).toEqual({ ok: true });
+    expect((await fileOf("a.txt")).status).toBe("M ");
+    expect((await fileOf("b.txt")).status).toBe(" M");
+
+    expect(await runGitFileAction(root, "unstage", await fileOf("a.txt"))).toEqual({ ok: true });
+    expect((await fileOf("a.txt")).status).toBe(" M");
+
+    expect(await runGitFileAction(root, "discard", await fileOf("a.txt"))).toEqual({ ok: true });
+    expect(await runGitFileAction(root, "discard", await fileOf("new file.txt"))).toEqual({ ok: true });
+    const after = await statusOf();
+    expect([...after.keys()]).toEqual(["b.txt"]);
+    expect(existsSync(join(root, "new file.txt"))).toBe(false);
+    expect(readFileSync(join(root, "a.txt"), "utf8").replace(/\r/g, "")).toBe("a\n");
+    expect(readFileSync(join(root, "b.txt"), "utf8").replace(/\r/g, "")).toBe("B\n");
+  });
+
+  it("discards a staged new file and a staged rename", async () => {
+    writeFileSync(join(root, "added.txt"), "x\n");
+    git("add", "added.txt");
+    git("mv", "old.txt", "renamed.txt");
+    expect((await fileOf("renamed.txt")).status).toBe("R ");
+
+    expect(await runGitFileAction(root, "discard", await fileOf("added.txt"))).toEqual({ ok: true });
+    expect(await runGitFileAction(root, "discard", await fileOf("renamed.txt"))).toEqual({ ok: true });
+    expect([...(await statusOf()).keys()]).toEqual(["b.txt"]);
+    expect(existsSync(join(root, "old.txt"))).toBe(true);
+    expect(existsSync(join(root, "renamed.txt"))).toBe(false);
+  });
+
+  it("refuses a file with a content filter, a path outside the repository and an unknown action", async () => {
+    writeFileSync(join(root, ".gitattributes"), "*.bin filter=lfs\n");
+    writeFileSync(join(root, "big.bin"), "data\n");
+    const filtered = await runGitFileAction(root, "stage", await fileOf("big.bin"));
+    expect(filtered.ok).toBe(false);
+    expect((await fileOf("big.bin")).status).toBe("??");
+
+    const outside = { path: "../escape.txt", originalPath: null, status: " M", untracked: false, directory: false, added: null, removed: null };
+    await expect(runGitFileAction(root, "discard", outside)).rejects.toThrow();
+    await expect(runGitFileAction(root, "push", await fileOf("b.txt"))).rejects.toThrow();
+    await expect(resolveGitFile(root, "../escape.txt")).rejects.toThrow();
+    expect(await resolveGitFile(root, "b.txt")).toBe(join(root, "b.txt"));
   });
 });
 

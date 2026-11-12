@@ -1,4 +1,4 @@
-// 스레드 cwd 의 작업 트리 상태를 main 에서 git 으로 읽는다 (R1). 모두 읽기 명령이다.
+// 스레드 cwd 의 작업 트리 상태를 main 에서 git 으로 읽는다 (R1). 파일 하나의 스테이지, 스테이지 취소, 되돌리기도 한다 (R10).
 // 공식 `gitDiffToRemote` 는 쓰지 않는다. untracked 파일까지 한 번에 diff 로 만들어서, 큰 파일(실측 1.3~3.9 GB)이
 // 있는 폴더에서는 응답이 접속 한도를 넘고 Gateway 세션 전체가 끊겼다 (2026-11-06). 여기서는 목록만 먼저 읽고,
 // 파일 diff 는 펼칠 때 하나씩, 크기 한도 안에서 읽는다.
@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 import { open, stat } from "node:fs/promises";
 import { isAbsolute, normalize, relative, resolve, sep } from "node:path";
 
-import type { GitChangedFile, GitFileDiff, GitStatusResult } from "../shared/bridge";
+import type { GitActionResult, GitChangedFile, GitFileAction, GitFileDiff, GitStatusResult } from "../shared/bridge";
 
 const GIT_TIMEOUT_MS = 15_000;
 /** 목록 출력의 한도이다. 이보다 크면 잘린 목록을 보여 준다. */
@@ -184,11 +184,23 @@ async function readUntrackedFile(path: string): Promise<GitFileDiff> {
   }
 }
 
+interface RepositoryFile {
+  cwd: string;
+  /** 저장소 루트의 절대 경로이다. */
+  root: string;
+  /** 루트 기준의 경로이다 (`/` 구분). */
+  relativePath: string;
+  /** 파일의 절대 경로이다. */
+  target: string;
+  /** 저장소 루트 기준의 git 경로 지정이다. */
+  pathspec: string;
+}
+
 /**
- * 파일 하나의 변경이다. 추적 중인 파일은 HEAD 대비 git diff, 새 파일은 내용이다.
+ * renderer 가 보낸 경로를 저장소 안의 파일로 확인한다.
  * status 의 경로는 cwd 가 아니라 저장소 루트 기준이다. cwd 가 하위 폴더여도 루트에서 찾는다.
  */
-export async function readGitFileDiff(cwdInput: unknown, path: unknown, untracked: unknown): Promise<GitFileDiff> {
+async function repositoryFile(cwdInput: unknown, path: unknown): Promise<RepositoryFile> {
   const cwd = await requireDirectory(cwdInput);
   const top = await runGit(cwd, ["rev-parse", "--show-toplevel"], 4096);
   if (top.code !== 0) {
@@ -196,11 +208,76 @@ export async function readGitFileDiff(cwdInput: unknown, path: unknown, untracke
   }
   const root = resolve(top.stdout.trim());
   const target = resolveInside(root, path);
+  const relativePath = relative(root, target).split(sep).join("/");
+  // literal: 경로의 `*` 같은 문자를 패턴으로 읽지 않는다.
+  return { cwd, root, relativePath, target, pathspec: `:(top,literal)${relativePath}` };
+}
+
+/** 편집기로 열 파일의 절대 경로이다. 저장소 밖의 경로는 거절한다. */
+export async function resolveGitFile(cwdInput: unknown, path: unknown): Promise<string> {
+  return (await repositoryFile(cwdInput, path)).target;
+}
+
+const GIT_FILE_ACTIONS: readonly GitFileAction[] = ["stage", "unstage", "discard"];
+
+/** `discard` 가 실행할 git 명령이다. 상태(porcelain 두 글자)에 따라 다르다. */
+export function discardCommands(status: string, pathspec: string, originalPathspec: string | null): string[][] {
+  const restore = (spec: string) => ["restore", "--staged", "--worktree", "--source=HEAD", "--", spec];
+  if (status === "??") return [["clean", "-fd", "--", pathspec]];
+  // 새로 더한 파일과 복사한 파일은 HEAD 에 없다. 지우면 된다.
+  if (status.startsWith("A") || status.startsWith("C")) return [["rm", "-f", "-q", "--", pathspec]];
+  // 이름을 바꾼 파일은 새 경로를 지우고 이전 경로를 되살린다.
+  if (status.startsWith("R") && originalPathspec) return [["rm", "-f", "-q", "--", pathspec], restore(originalPathspec)];
+  return [restore(pathspec)];
+}
+
+/**
+ * 파일에 `filter` 속성(LFS 등)이 있는지 본다. 이 모듈은 git 이 필터 프로그램을 띄우지 않게 한다 (`NO_HELPER_PROGRAMS`).
+ * 그 상태로 스테이지하면 포인터가 아니라 원본이 들어가고, 되돌리면 포인터 파일이 작업 폴더에 써진다.
+ */
+async function hasContentFilter(file: RepositoryFile): Promise<boolean> {
+  // check-attr 는 경로 지정이 아니라 경로를 받는다. 그래서 루트에서 루트 기준 경로로 묻는다. 출력은 `경로 NUL 속성 NUL 값 NUL` 이다.
+  const output = await runGit(file.root, ["check-attr", "-z", "filter", "--", file.relativePath], 4096);
+  const value = output.stdout.split("\0")[2] ?? "";
+  return output.code === 0 && value !== "" && value !== "unspecified" && value !== "unset";
+}
+
+/**
+ * 파일 하나를 스테이지하거나, 스테이지를 취소하거나, 변경을 버린다. `discard` 는 되돌릴 수 없다. 부르는 쪽이
+ * 사용자에게 먼저 확인한다.
+ * shortcut: `filter` 속성이 있는 파일(LFS)의 스테이지와 되돌리기는 거절한다. 필요하면 필터를 켠 git 실행을 따로 만든다.
+ */
+export async function runGitFileAction(cwdInput: unknown, action: unknown, fileInput: unknown): Promise<GitActionResult> {
+  const fields = (fileInput ?? {}) as Partial<GitChangedFile>;
+  if (!GIT_FILE_ACTIONS.includes(action as GitFileAction) || typeof fields.status !== "string") {
+    throw new Error("git 동작 요청이 올바르지 않습니다.");
+  }
+  const file = await repositoryFile(cwdInput, fields.path);
+  if (action !== "unstage" && (await hasContentFilter(file))) {
+    return { ok: false, message: "필터(LFS 등)가 있는 파일입니다. 터미널에서 git 으로 처리하십시오." };
+  }
+  const original = fields.originalPath ? (await repositoryFile(cwdInput, fields.originalPath)).pathspec : null;
+  const commands =
+    action === "stage"
+      ? [["add", "-A", "--", file.pathspec]]
+      : action === "unstage"
+        ? [["restore", "--staged", "--", ...(original ? [original] : []), file.pathspec]]
+        : discardCommands(fields.status, file.pathspec, original);
+  for (const args of commands) {
+    const output = await runGit(file.cwd, args, 4096);
+    if (output.code !== 0) {
+      return { ok: false, message: failureMessage(output, `git ${args[0]} 가 실패했습니다.`) };
+    }
+  }
+  return { ok: true };
+}
+
+/** 파일 하나의 변경이다. 추적 중인 파일은 HEAD 대비 git diff, 새 파일은 내용이다. */
+export async function readGitFileDiff(cwdInput: unknown, path: unknown, untracked: unknown): Promise<GitFileDiff> {
+  const { cwd, target, pathspec } = await repositoryFile(cwdInput, path);
   if (untracked === true) {
     return readUntrackedFile(target);
   }
-  // literal: 경로의 `*` 같은 문자를 패턴으로 읽지 않는다.
-  const pathspec = `:(top,literal)${relative(root, target).split(sep).join("/")}`;
   const output = await runGit(cwd, ["diff", "HEAD", "--no-color", "--no-ext-diff", "--no-textconv", "--", pathspec], FILE_DIFF_LIMIT);
   if (output.code !== 0) {
     throw new Error(failureMessage(output, "git diff 가 실패했습니다."));

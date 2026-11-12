@@ -12,7 +12,7 @@ import { spawn as spawnPty } from "node-pty";
 
 import { BrowserPanelService } from "./browserPanel";
 import { loadSettings, saveSettings } from "./browserSettings";
-import { readGitFileDiff, readGitStatus } from "./gitStatus";
+import { readGitFileDiff, readGitStatus, resolveGitFile, runGitFileAction } from "./gitStatus";
 import { readGitHubSummary, readReviewPrompt } from "./githubService";
 import { JiraService } from "./jiraService";
 import { TerminalService } from "./terminalService";
@@ -159,6 +159,31 @@ ipcMain.handle(IPC_CHANNELS.gitStatus, (_event, cwd: unknown) => readGitStatus(c
 ipcMain.handle(IPC_CHANNELS.gitFileDiff, (_event, cwd: unknown, path: unknown, untracked: unknown) =>
   readGitFileDiff(cwd, path, untracked),
 );
+// 변경 버리기는 되돌릴 수 없다. 확인은 main 이 한다. renderer 가 확인을 건너뛸 수 없다.
+ipcMain.handle(IPC_CHANNELS.gitFileAction, async (event, cwd: unknown, action: unknown, file: unknown) => {
+  if (action === "discard") {
+    const path = String((file as { path?: unknown } | null)?.path ?? "");
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const options = {
+      type: "warning" as const,
+      message: "이 파일의 변경을 버립니까?",
+      detail: `${path}\n\n버린 변경은 되돌릴 수 없습니다. 새 파일은 지워집니다.`,
+      buttons: ["변경 버리기", "취소"],
+      defaultId: 1,
+      cancelId: 1,
+    };
+    const answer = window ? await dialog.showMessageBox(window, options) : await dialog.showMessageBox(options);
+    if (answer.response !== 0) return { ok: false, message: "취소했습니다.", cancelled: true };
+  }
+  return runGitFileAction(cwd, action, file);
+});
+// `shell.openPath` 는 쓰지 않는다. Windows 에서 `.js`, `.bat` 같은 파일을 실행한다. 에이전트가 만든 파일일 수 있다.
+// shortcut: 편집기는 VS Code 주소(`vscode://file/…`)로만 연다. 다른 편집기는 앱 안 편집(P-12)이나 설정이 생기면 더한다.
+ipcMain.handle(IPC_CHANNELS.gitOpenFile, async (_event, cwd: unknown, path: unknown) => {
+  const target = await resolveGitFile(cwd, path);
+  const url = `vscode://file/${target.split(/[\\/]/).map(encodeURIComponent).join("/")}`;
+  await shell.openExternal(url).catch(() => shell.showItemInFolder(target));
+});
 
 ipcMain.handle(IPC_CHANNELS.terminalOpen, (event, request: unknown) => terminals.open(event.sender, request as TerminalOpenRequest));
 ipcMain.on(IPC_CHANNELS.terminalWrite, (event, id: unknown, data: unknown) => terminals.write(event.sender.id, id, data));

@@ -29,6 +29,8 @@ function harness() {
     chooseFolder: async () => null,
     gitStatus: async () => ({ ok: false, message: "not used" }),
     gitFileDiff: async () => ({ kind: "binary" }),
+    gitFileAction: async () => ({ ok: true as const }),
+    gitOpenFile: async () => undefined,
     terminal: {
       open: async () => ({ ok: false, message: "not used" }),
       write: () => undefined,

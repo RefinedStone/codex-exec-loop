@@ -2,13 +2,14 @@
 // 읽는다. 목록은 스레드를 열 때와 턴이 끝날 때 읽는다. 위 막대의 변경 줄 수와 오른쪽 `변경` 패널이 함께 쓴다 (R10).
 import { useEffect, useRef, useState } from "react";
 
-import type { AkraBridge, GitChangedFile, GitFileDiff, GitStatusResult } from "../../shared/bridge";
-import { Icon } from "../design/icons";
+import type { AkraBridge, GitChangedFile, GitFileAction, GitFileDiff, GitStatusResult } from "../../shared/bridge";
+import { Icon, type IconName } from "../design/icons";
 import { useDesktopStore } from "../session/desktopStore";
+import { toast } from "../session/uiStore";
 import { type DiffLine, diffFileFromChange, parseGitDiff } from "./diff";
 import { DiffCounts, DiffLines } from "./DiffView";
 
-type GitReader = Pick<AkraBridge, "gitStatus" | "gitFileDiff">;
+type GitReader = Pick<AkraBridge, "gitStatus" | "gitFileDiff" | "gitFileAction" | "gitOpenFile">;
 
 type PanelState = { phase: "idle" } | { phase: "loading" } | { phase: "loaded"; result: GitStatusResult } | { phase: "failed"; message: string };
 
@@ -33,7 +34,72 @@ function linesFromDiff(diff: GitFileDiff, path: string): { lines: DiffLine[]; no
   return { lines: file?.lines ?? [], note: file && file.lines.length > 0 ? note : (note ?? "줄 단위 변경이 없습니다 (모드나 바이너리 변경).") };
 }
 
-function ChangedFile({ cwd, file, git }: { cwd: string; file: GitChangedFile; git: GitReader }) {
+/** porcelain 상태의 첫 글자는 스테이지한 변경, 둘째 글자는 아직 스테이지하지 않은 변경이다. */
+export function stageState(file: Pick<GitChangedFile, "status" | "untracked">): { staged: boolean; unstaged: boolean } {
+  return { staged: !file.untracked && file.status[0] !== " ", unstaged: file.untracked || file.status[1] !== " " };
+}
+
+const ACTION_LABEL: Record<GitFileAction, string> = { stage: "스테이지", unstage: "스테이지 취소", discard: "변경 버리기" };
+const ACTION_ICON: Record<GitFileAction, IconName> = { stage: "plus", unstage: "minus", discard: "undo" };
+
+/** 파일 줄의 동작 버튼이다. 줄(`summary`) 안에 있으므로 누를 때 줄이 펼쳐지지 않게 한다. */
+function FileActions({ cwd, file, git, onChanged }: { cwd: string; file: GitChangedFile; git: GitReader; onChanged(): void }) {
+  const [busy, setBusy] = useState(false);
+  const { staged, unstaged } = stageState(file);
+  const run = (action: GitFileAction) => {
+    setBusy(true);
+    git
+      .gitFileAction(cwd, action, file)
+      .then(
+        (result) => {
+          if (result.ok) onChanged();
+          else if (!result.cancelled) toast(`${ACTION_LABEL[action]} 실패: ${result.message}`);
+        },
+        (error: unknown) => toast(`${ACTION_LABEL[action]} 실패: ${error instanceof Error ? error.message : String(error)}`),
+      )
+      .finally(() => setBusy(false));
+  };
+  const button = (action: GitFileAction) => (
+    <button
+      type="button"
+      className="icon-button"
+      title={ACTION_LABEL[action]}
+      aria-label={ACTION_LABEL[action]}
+      disabled={busy}
+      onClick={(event) => {
+        event.preventDefault();
+        run(action);
+      }}
+      data-testid={`git-${action}`}
+    >
+      <Icon name={ACTION_ICON[action]} size={13} />
+    </button>
+  );
+  return (
+    <span className="file-actions">
+      {!file.directory && (
+        <button
+          type="button"
+          className="icon-button"
+          title="편집기로 열기"
+          aria-label="편집기로 열기"
+          onClick={(event) => {
+            event.preventDefault();
+            git.gitOpenFile(cwd, file.path).catch((error: unknown) => toast(`열지 못했습니다: ${error instanceof Error ? error.message : String(error)}`));
+          }}
+          data-testid="git-open"
+        >
+          <Icon name="pencil" size={13} />
+        </button>
+      )}
+      {button("discard")}
+      {staged && button("unstage")}
+      {unstaged && button("stage")}
+    </span>
+  );
+}
+
+function ChangedFile({ cwd, file, git, onChanged }: { cwd: string; file: GitChangedFile; git: GitReader; onChanged(): void }) {
   const [open, setOpen] = useState(false);
   const [state, setState] = useState<FileState>({ phase: "loading" });
 
@@ -58,7 +124,9 @@ function ChangedFile({ cwd, file, git }: { cwd: string; file: GitChangedFile; gi
         </>
       )}
       <code>{file.path}</code>
+      {stageState(file).staged && <span className="badge badge-ok">스테이지</span>}
       {file.added !== null && file.removed !== null && <DiffCounts added={file.added} removed={file.removed} />}
+      <FileActions cwd={cwd} file={file} git={git} onChanged={onChanged} />
     </summary>
   );
   if (file.directory) {
@@ -174,7 +242,7 @@ export function WorkingTreePanel({ tree, git }: { tree: WorkingTree; git: GitRea
       {files && files.length > 0 && (
         <div className="working-tree-files diff-file-list" key={tree.generation}>
           {files.map((file) => (
-            <ChangedFile key={`${file.status}:${file.path}`} cwd={cwd} file={file} git={git} />
+            <ChangedFile key={`${file.status}:${file.path}`} cwd={cwd} file={file} git={git} onChanged={tree.refresh} />
           ))}
         </div>
       )}
