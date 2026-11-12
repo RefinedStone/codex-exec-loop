@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstat, realpath } from "node:fs/promises";
+import { lstat, readFile, realpath } from "node:fs/promises";
 import { isAbsolute, relative } from "node:path";
 
 import type { GitActionResult } from "../shared/bridge";
@@ -22,6 +22,8 @@ interface HunkSnapshot {
   fingerprint: string;
   header: string;
   hunks: GitHunkDiff["hunks"];
+  worktreeEol: "lf" | "crlf" | "mixed" | null;
+  attributeEol: string;
 }
 
 const plans = new WeakMap<GitHunkPlan, { snapshot: HunkSnapshot; hunkId: string }>();
@@ -53,6 +55,7 @@ async function snapshot(cwdInput: unknown, pathInput: unknown): Promise<HunkSnap
     throw error;
   });
   if (info && !info.isFile()) throw new Error("심볼릭 링크와 일반 파일이 아닌 경로는 부분 변경을 처리할 수 없습니다.");
+  if (info && info.size > DIFF_LIMIT) throw new Error("파일이 1 MB보다 큽니다. 파일 전체 동작을 사용하십시오.");
   // A regular file may still be reached through a symlinked parent directory.
   if (info) {
     const canonicalRoot = await realpath(file.root);
@@ -70,11 +73,21 @@ async function snapshot(cwdInput: unknown, pathInput: unknown): Promise<HunkSnap
   }
   const starts = [...diff.stdout.matchAll(/^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@.*\n/gm)].map((match) => match.index);
   if (starts.length === 0) throw new Error("스테이지하지 않은 텍스트 변경이 없습니다.");
-  const fingerprint = digest(JSON.stringify([file.relativePath, index.stdout, diff.stdout]));
+  const content = info ? await readFile(file.target) : null;
+  const text = content?.toString("utf8") ?? "";
+  const crlf = text.includes("\r\n");
+  const lf = /(?<!\r)\n/.test(text);
+  const worktreeEol = crlf ? (lf ? "mixed" : "crlf") : (lf ? "lf" : null);
+  const attribute = await runGit(file.root, ["check-attr", "-z", "eol", "--", file.relativePath], 4096);
+  if (attribute.code !== 0 || attribute.truncated) throw new Error("줄바꿈 속성을 읽을 수 없습니다.");
+  const attributeEol = attribute.stdout.split("\0")[2] ?? "unspecified";
+  const fingerprint = digest(JSON.stringify([file.relativePath, index.stdout, diff.stdout, content?.toString("base64"), attributeEol]));
   return {
     root: file.root,
     path: file.relativePath,
     fingerprint,
+    worktreeEol,
+    attributeEol,
     header: diff.stdout.slice(0, starts[0]),
     hunks: starts.map((start, position) => ({
       id: digest(`${fingerprint}:${position}`),
@@ -103,6 +116,10 @@ export async function planGitHunkAction(
     if (typeof hunkId !== "string" || !/^[a-f0-9]{64}$/.test(hunkId)) throw new Error("부분 변경 ID가 올바르지 않습니다.");
     const current = await snapshot(cwdInput, pathInput);
     if (!current.hunks.some((hunk) => hunk.id === hunkId)) throw new Error(STALE_MESSAGE);
+    if (action === "discard" && (current.worktreeEol === "mixed" ||
+      (current.worktreeEol && ["lf", "crlf"].includes(current.attributeEol) && current.attributeEol !== current.worktreeEol))) {
+      throw new Error("줄바꿈이 섞여 있거나 저장소 속성과 다릅니다. 파일 전체 동작을 사용하십시오.");
+    }
     const plan: GitHunkPlan = Object.freeze({ path: current.path, action });
     plans.set(plan, { snapshot: current, hunkId });
     return { ok: true, plan };
@@ -121,6 +138,7 @@ export async function executeGitHunkPlan(plan: GitHunkPlan): Promise<GitActionRe
     const hunk = current.hunks.find((entry) => entry.id === saved.hunkId);
     if (!hunk) return { ok: false, message: STALE_MESSAGE };
     const result = await runGit(current.root, [
+      ...(plan.action === "discard" && current.worktreeEol ? ["-c", `core.autocrlf=${current.worktreeEol === "crlf"}`, "-c", `core.eol=${current.worktreeEol}`] : []),
       "apply", "--whitespace=nowarn", ...(plan.action === "stage" ? ["--cached"] : ["--reverse"]), "-",
     ], 4096, { stdin: current.header + hunk.text });
     return result.code === 0 && !result.timedOut && !result.truncated
