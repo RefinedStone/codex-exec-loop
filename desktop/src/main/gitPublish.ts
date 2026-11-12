@@ -105,9 +105,10 @@ export async function planPullRequest(cwdInput: unknown, input: unknown, run: Gh
 
 /** gh 로 PR 을 만든다. gh 는 저장소 밖에서 실행한다. 그래서 저장소와 브랜치를 인자로 준다. */
 export async function executePullRequest(plan: PullRequestPlan, run: GhRunner = runGh): Promise<GitPublishResult> {
-  const args = ["pr", "create", "--repo", plan.repository, `--head=${plan.branch}`, `--base=${plan.base}`, `--title=${plan.title}`, `--body=${plan.body}`];
+  // 본문은 표준 입력으로 준다. Windows 는 명령행 전체가 32,767자를 넘으면 프로세스를 만들지 못한다. 본문은 60,000자까지 받는다.
+  const args = ["pr", "create", "--repo", plan.repository, `--head=${plan.branch}`, `--base=${plan.base}`, `--title=${plan.title}`, "--body-file", "-"];
   try {
-    const output = await run(plan.draft ? [...args, "--draft"] : args);
+    const output = await run(plan.draft ? [...args, "--draft"] : args, plan.body);
     // 방금 만든 PR 이 바로 보이게 한다.
     clearPullRequestCache();
     const url = output.split(/\s+/).find((word) => word.startsWith("https://github.com/")) ?? null;

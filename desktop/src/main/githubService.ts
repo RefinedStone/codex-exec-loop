@@ -10,10 +10,11 @@ const OUTPUT_LIMIT = 8 << 20;
 const MAX_COMMENT_CHARS = 2_000;
 const MAX_PROMPT_CHARS = 20_000;
 
-export type GhRunner = (args: string[]) => Promise<string>;
+/** `stdin` 을 주면 gh 의 표준 입력에 쓴다 (`--body-file -` 처럼 긴 값을 인자 대신 넘길 때). */
+export type GhRunner = (args: string[], stdin?: string) => Promise<string>;
 
 /** gh 를 셸 없이 실행한다. 저장소 폴더 밖(홈)에서 실행해서 git 을 부르지 않게 하고, 대화형 질문을 끈다. */
-export const runGh: GhRunner = (args) =>
+export const runGh: GhRunner = (args, stdin) =>
   new Promise((resolve, reject) => {
     const child = spawn("gh", args, {
       cwd: homedir(),
@@ -40,6 +41,9 @@ export const runGh: GhRunner = (args) =>
       if (code === 0) resolve(Buffer.concat(chunks).toString("utf8"));
       else reject(new Error(stderr.trim() || `gh 가 실패했습니다 (종료 코드 ${code}). \`gh auth login\` 을 확인하세요.`));
     });
+    // gh 가 입력을 다 읽기 전에 끝날 수 있다. 실패는 종료 코드가 알린다.
+    child.stdin.on("error", () => undefined);
+    child.stdin.end(stdin);
   });
 
 const SUMMARY_QUERY = `query {

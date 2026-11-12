@@ -71,6 +71,12 @@ async function snapshot(cwdInput: unknown, pathInput: unknown): Promise<HunkSnap
   if (/^(Binary files |GIT binary patch|old mode |new mode )/m.test(diff.stdout)) {
     throw new Error("바이너리 또는 파일 모드 변경은 파일 전체 동작을 사용하십시오.");
   }
+  // `runGit` 은 출력을 UTF-8 문자열로 바꾼다. UTF-8 이 아닌 바이트는 U+FFFD 가 되고, 그 문자열로 만든 패치를 적용하면
+  // 파일 내용이 깨진다. shortcut: U+FFFD 가 보이면 거절한다. 그 글자를 실제로 쓰는 UTF-8 파일도 거절된다. 필요하면 패치를
+  // 바이트로 보관한다.
+  if (diff.stdout.includes("\uFFFD")) {
+    throw new Error("UTF-8 이 아닌 내용이 있습니다. 파일 전체 동작을 사용하십시오.");
+  }
   const starts = [...diff.stdout.matchAll(/^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@.*\n/gm)].map((match) => match.index);
   if (starts.length === 0) throw new Error("스테이지하지 않은 텍스트 변경이 없습니다.");
   const content = info ? await readFile(file.target) : null;
