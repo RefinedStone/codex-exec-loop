@@ -1,24 +1,28 @@
 //! 커널의 판단 사건이다 (plan 19 Q3-1). 추가 전용 기록에 쓰고, 커널을 다시 조립할 때 판단 상태를 되돌린다.
 //! 대화 원본, 화면 상태, 스트림 delta 는 담지 않는다 (plan 19 §5.1).
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::domain::kernel_spec::{KernelCommandKind, KernelRecordKind, spec_names};
 use crate::domain::planning::ManualPromptMainSessionHandoff;
 
 /*
  * 준비가 끝났지만 제출이 거절된 thread 지정 프롬프트이다 (plan 19 Q2-3). 준비가 만든 작업은 이미 큐에 있다. 커널이
  * 쉬면 같은 handoff 로 한 번 다시 낸다. 기록에서 되돌릴 수 있게 직렬화한다 (Q3-1).
  */
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct QueuedThreadPrompt {
     pub thread_id: String,
     pub workspace_directory: String,
+    /// 커널이 되돌릴 때만 쓰는 값이다. 스펙에는 싣지 않는다.
+    #[schemars(skip)]
     pub handoff: ManualPromptMainSessionHandoff,
     pub task_id: String,
 }
 
 /// 남긴 프롬프트가 어떻게 끝났는가이다.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ThreadPromptSettlement {
     /// 다시 내서 턴을 제출했다.
@@ -32,7 +36,7 @@ pub enum ThreadPromptSettlement {
 }
 
 /// 턴을 낸 쪽이다.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TurnOrigin {
     /// 사람이 낸 프롬프트이다.
@@ -44,7 +48,7 @@ pub enum TurnOrigin {
 }
 
 /// 턴이 어떻게 끝났는가이다 (plan 19 Q3-3b). app-server 의 terminal receipt 에서 온다.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TurnEndOutcome {
     Completed,
@@ -55,7 +59,7 @@ pub enum TurnEndOutcome {
 }
 
 /// 턴 뒤 평가가 고른 다음 경로이다.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PostTurnRoute {
     /// 자동 후속 턴을 낸다.
@@ -67,7 +71,7 @@ pub enum PostTurnRoute {
 }
 
 /// thread 지정 프롬프트를 준비 전에 거절한 이유이다. planning 작업은 만들어지지 않았다.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ThreadPromptRejection {
     Busy,
@@ -78,7 +82,7 @@ pub enum ThreadPromptRejection {
 }
 
 /// 승인을 요청한 일의 종류이다 (plan 19 Q3-5).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalRequestKind {
     CommandExecution,
@@ -87,7 +91,7 @@ pub enum ApprovalRequestKind {
 }
 
 /// 승인이 어떻게 끝났는가이다 (plan 19 Q3-5).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalResolution {
     Accepted,
@@ -104,7 +108,7 @@ pub enum ApprovalResolution {
  * 결정을 기다리는 승인이다 (plan 19 Q3-5). 요청의 내용(명령 원문, patch, 경로)은 담지 않는다. `summary` 는 클라이언트에
  * 보이는 짧은 설명과 같은 값이다. 요청과 끝은 `(thread id, 승인 id)` 로 짝을 맞춘다.
  */
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct PendingApproval {
     pub thread_id: String,
     /// 승인을 요청한 턴이다. 턴 id 를 아직 모르면 비어 있다.
@@ -115,29 +119,31 @@ pub struct PendingApproval {
     pub summary: String,
 }
 
-/// 커널이 명령을 바로 거절한 이유이다 (plan 18 K3, plan 19 Q3-6). 이름이 다음 행동을 알려 준다.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CommandRejectionReason {
-    /// 같은 턴에 보낸 steer 가 아직 처리 중이다. 끝난 뒤 새 멱등 키로 다시 보낸다.
-    SteerInFlight,
-    /// 그 thread 에 `expected_turn_id` 로 도는 턴이 없다. `thread_activity` 의 `active_turn_id` 를 쓴다.
-    NoMatchingTurn,
-    /// 같은 승인에 보낸 결정이 아직 처리 중이다.
-    DecisionInFlight,
-    /// 기다리는 승인 중에 그 id 가 없다. `thread_activity` 의 `approval` 을 쓴다.
-    NoMatchingApproval,
-    // 아래는 thread 지정 프롬프트(`submit_prompt`)를 준비 전에 거절한 이유이다. `ThreadPromptRejection` 과 같은 값이다.
-    /// 턴이 돌거나 그 thread 에 일이 남아 있다. `thread_activity` 가 비면 새 멱등 키로 다시 보낸다.
-    Busy,
-    /// 다른 프롬프트를 준비하고 있다. 그 준비가 끝나면 새 멱등 키로 다시 보낸다.
-    PreparationActive,
-    /// 커널이 모르는 thread 이다. `load_sessions` 로 목록을 읽는다.
-    UnknownThread,
-    /// 병렬 모드가 켜져 있다. 병렬 모드가 꺼질 때까지 커널은 thread 에 프롬프트를 내지 않는다.
-    ParallelMode,
-    /// 커널이 병렬 모드 값을 아직 모른다. 잠시 뒤 새 멱등 키로 다시 보낸다.
-    ParallelModeUnknown,
+spec_names! {
+    /// 커널이 명령을 바로 거절한 이유이다 (plan 18 K3, plan 19 Q3-6). 설명이 다음 행동을 알려 준다. 뒤의 다섯은 thread
+    /// 지정 프롬프트(`submit_prompt`)를 준비 전에 거절한 이유이고 `ThreadPromptRejection` 과 같은 값이다.
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[serde(rename_all = "snake_case")]
+    pub enum CommandRejectionReason {
+        SteerInFlight => "steer_in_flight",
+            "Another steer for the same turn is still in flight. Send again with a new idempotency key after it ends.";
+        NoMatchingTurn => "no_matching_turn",
+            "The thread has no running turn with `expected_turn_id`. Read `active_turn_id` from `thread_activity`.";
+        DecisionInFlight => "decision_in_flight",
+            "A decision for the same approval is still in flight.";
+        NoMatchingApproval => "no_matching_approval",
+            "No pending approval has that id. Read `approval` from `thread_activity`.";
+        Busy => "busy",
+            "A turn is running or the thread still has work. Send again with a new idempotency key when `thread_activity` is empty.";
+        PreparationActive => "preparation_active",
+            "Another prompt is being prepared. Send again with a new idempotency key after that preparation ends.";
+        UnknownThread => "unknown_thread",
+            "The kernel does not know the thread. Send `load_sessions` first.";
+        ParallelMode => "parallel_mode",
+            "Parallel mode is on. The kernel starts no thread prompt until it is off.";
+        ParallelModeUnknown => "parallel_mode_unknown",
+            "The kernel does not know the parallel mode yet. Send again with a new idempotency key shortly.";
+    }
 }
 
 /*
@@ -146,8 +152,7 @@ pub enum CommandRejectionReason {
  */
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KernelCommandDescriptor {
-    /// 명령 종류의 이름이다 (예: `submit_prompt`).
-    pub command: String,
+    pub command: KernelCommandKind,
     /// 명령이 가리키는 thread 이다. thread 를 가리키지 않는 명령은 비어 있다.
     pub thread_id: String,
     pub fingerprint: String,
@@ -164,8 +169,9 @@ pub struct OperationReceipt {
     pub replayed: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[schemars(rename = "KernelRecord")]
 pub enum KernelEvent {
     /// 커널이 프롬프트를 남겼다. 쉴 때 한 번 다시 낸다.
     ThreadPromptQueued(QueuedThreadPrompt),
@@ -229,7 +235,7 @@ pub enum KernelEvent {
 }
 
 /// 기록에서 읽은 사건 하나이다 (plan 19 Q3-3). `sequence` 는 기록 순서이고 cursor 로 쓴다.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RecordedKernelEvent {
     pub sequence: i64,
     pub recorded_at: String,
@@ -240,7 +246,7 @@ pub struct RecordedKernelEvent {
  * cursor 로 읽은 기록 한 쪽이다 (plan 19 Q3-3). `next_after` 는 다음에 보낼 cursor 이다. 이 binary 가 모르는 사건을
  * 건너뛰어도 cursor 는 그 뒤로 간다. 더 읽을 것이 없으면 받은 cursor 를 그대로 돌려준다.
  */
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 pub struct KernelEventPage {
     pub records: Vec<RecordedKernelEvent>,
     pub next_after: i64,
@@ -253,28 +259,22 @@ pub const RETAINED_KERNEL_EVENTS: i64 = 10_000;
 pub const MAX_KERNEL_EVENT_PAGE: usize = 500;
 
 /// 남긴 프롬프트를 되돌릴 때 읽는 사건 종류이다. 다른 사건은 읽지 않는다.
-pub const THREAD_PROMPT_QUEUE_KINDS: [&str; 2] = ["thread_prompt_queued", "thread_prompt_settled"];
-
-/// 기록에 쓰는 모든 사건 종류이다. 자기 설명(`describe`)이 이 목록을 알린다.
-pub const KERNEL_EVENT_KINDS: [&str; 11] = [
-    "thread_prompt_queued",
-    "thread_prompt_settled",
-    "thread_prompt_rejected",
-    "turn_submitted",
-    "turn_started",
-    "turn_ended",
-    "post_turn_routed",
-    "approval_requested",
-    "approval_resolved",
-    "command_received",
-    "command_rejected",
+pub const THREAD_PROMPT_QUEUE_KINDS: [&str; 2] = [
+    KernelRecordKind::ThreadPromptQueued.name(),
+    KernelRecordKind::ThreadPromptSettled.name(),
 ];
 
 /// 처리한 명령을 되돌릴 때 읽는 사건 종류이다 (plan 19 Q3-6).
-pub const COMMAND_KINDS: [&str; 2] = ["command_received", "command_rejected"];
+pub const COMMAND_KINDS: [&str; 2] = [
+    KernelRecordKind::CommandReceived.name(),
+    KernelRecordKind::CommandRejected.name(),
+];
 
 /// 열린 승인을 찾을 때 읽는 사건 종류이다 (plan 19 Q3-5).
-pub const APPROVAL_KINDS: [&str; 2] = ["approval_requested", "approval_resolved"];
+pub const APPROVAL_KINDS: [&str; 2] = [
+    KernelRecordKind::ApprovalRequested.name(),
+    KernelRecordKind::ApprovalResolved.name(),
+];
 
 /// 기록에 남기는 승인 설명의 최대 길이이다. 기록은 대화의 사본이 아니다.
 const APPROVAL_SUMMARY_MAX_CHARS: usize = 200;
@@ -325,18 +325,23 @@ impl PendingApproval {
 impl KernelEvent {
     /// 기록 표의 `kind` 열 값이다. 직렬화의 `kind` 와 같다.
     pub fn kind(&self) -> &'static str {
+        self.record_kind().name()
+    }
+
+    /// 이 사건의 종류이다. 종류의 이름과 설명은 `KernelRecordKind` 가 가진다 (plan 18 K4-1).
+    pub fn record_kind(&self) -> KernelRecordKind {
         match self {
-            Self::ThreadPromptQueued(_) => "thread_prompt_queued",
-            Self::ThreadPromptSettled { .. } => "thread_prompt_settled",
-            Self::ThreadPromptRejected { .. } => "thread_prompt_rejected",
-            Self::TurnSubmitted { .. } => "turn_submitted",
-            Self::TurnStarted { .. } => "turn_started",
-            Self::TurnEnded { .. } => "turn_ended",
-            Self::PostTurnRouted { .. } => "post_turn_routed",
-            Self::ApprovalRequested(_) => "approval_requested",
-            Self::ApprovalResolved { .. } => "approval_resolved",
-            Self::CommandReceived { .. } => "command_received",
-            Self::CommandRejected { .. } => "command_rejected",
+            Self::ThreadPromptQueued(_) => KernelRecordKind::ThreadPromptQueued,
+            Self::ThreadPromptSettled { .. } => KernelRecordKind::ThreadPromptSettled,
+            Self::ThreadPromptRejected { .. } => KernelRecordKind::ThreadPromptRejected,
+            Self::TurnSubmitted { .. } => KernelRecordKind::TurnSubmitted,
+            Self::TurnStarted { .. } => KernelRecordKind::TurnStarted,
+            Self::TurnEnded { .. } => KernelRecordKind::TurnEnded,
+            Self::PostTurnRouted { .. } => KernelRecordKind::PostTurnRouted,
+            Self::ApprovalRequested(_) => KernelRecordKind::ApprovalRequested,
+            Self::ApprovalResolved { .. } => KernelRecordKind::ApprovalResolved,
+            Self::CommandReceived { .. } => KernelRecordKind::CommandReceived,
+            Self::CommandRejected { .. } => KernelRecordKind::CommandRejected,
         }
     }
 
@@ -668,10 +673,13 @@ mod tests {
                 reason: CommandRejectionReason::NoMatchingTurn,
             },
         ];
-        // 종류 하나에 사건 하나이다. 새 사건은 이 목록과 `KERNEL_EVENT_KINDS` 에 함께 더한다.
+        // 종류 하나에 사건 하나이다. 새 사건을 더하면 `record_kind` 가 컴파일되지 않고, 이 표본이 빠지면 여기서 걸린다.
         assert_eq!(
             events.iter().map(KernelEvent::kind).collect::<Vec<_>>(),
-            KERNEL_EVENT_KINDS
+            KernelRecordKind::ALL
+                .iter()
+                .map(|kind| kind.name())
+                .collect::<Vec<_>>()
         );
         for event in events {
             let json = serde_json::to_value(&event).expect("event should serialize");

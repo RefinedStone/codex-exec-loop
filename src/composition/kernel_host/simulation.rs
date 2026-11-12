@@ -1017,7 +1017,7 @@ impl Simulation {
                 prompt: prompt.to_string(),
             })),
             descriptor: Some(KernelCommandDescriptor {
-                command: "submit_prompt".to_string(),
+                command: crate::domain::kernel_spec::KernelCommandKind::SubmitPrompt,
                 thread_id: thread_id.to_string(),
                 fingerprint: format!("{thread_id}:{prompt}"),
                 idempotency_key: Some(format!("key of {prompt}")),

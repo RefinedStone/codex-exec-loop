@@ -317,7 +317,7 @@ async fn a_client_attaches_commands_and_receives_kernel_events() {
     .await;
     assert_eq!(
         attached["result"]["protocol_version"],
-        json!(0),
+        json!(crate::adapter::inbound::kernel_protocol::PROTOCOL_VERSION),
         "{attached}"
     );
     assert!(
@@ -477,11 +477,22 @@ async fn a_client_attaches_commands_and_receives_kernel_events() {
 
     let described =
         kernel_request(&mut client, "describe", "akra/kernel/describe", json!({})).await;
-    assert!(
-        described["result"]["methods"]
+    // plan 18 K4-1: `describe` answers with the whole spec. A client needs no other document.
+    let spec = &described["result"];
+    assert_eq!(spec["protocol_version"], json!(1), "{described}");
+    let named = |list: &str, name: &str| {
+        spec[list]
             .as_array()
-            .is_some_and(|methods| !methods.is_empty())
-    );
+            .is_some_and(|entries| entries.iter().any(|entry| entry["name"] == name))
+    };
+    assert!(named("methods", "akra/kernel/describe"));
+    assert!(named("commands", "submit_prompt"));
+    assert!(named("queries", "history"));
+    assert!(named("events", "recorded"));
+    assert!(named("records", "command_received"));
+    assert!(named("reasons", "busy"));
+    assert!(named("errors", "idempotency_key_reused"));
+    assert!(spec["$defs"]["CommandResponse"].is_object());
 
     let detached = kernel_request(&mut client, "detach", "akra/kernel/detach", json!({})).await;
     assert_eq!(detached["result"], json!({}));

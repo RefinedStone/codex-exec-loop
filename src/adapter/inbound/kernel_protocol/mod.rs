@@ -6,6 +6,8 @@ pub use crate::domain::kernel_event::CommandRejectionReason;
 use crate::domain::kernel_event::{
     KernelCommandDescriptor, KernelEventPage, OperationReceipt, RecordedKernelEvent,
 };
+use crate::domain::kernel_spec::{KernelCommandKind, spec_names};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::core::app::{
@@ -26,8 +28,12 @@ use crate::domain::recent_sessions::{SessionCatalog, SessionRenameRequest};
 #[cfg(test)]
 mod tests;
 
-/// 프로토콜 판이다. 호환되지 않게 바꾸면 올린다. K4 에서 명령 스펙으로 생성하면서 1 이 된다.
-pub const PROTOCOL_VERSION: u32 = 0;
+mod spec;
+pub use spec::{KernelSpec, describe};
+
+/// 프로토콜 판이다. 전송 모양을 호환되지 않게 바꿀 때만 올린다. 필드를 더하는 것은 올리지 않는다. K4-1 에서
+/// `describe` 의 답이 스펙 전체로 바뀌어 1 이 되었다.
+pub const PROTOCOL_VERSION: u32 = 1;
 
 pub const METHOD_ATTACH: &str = "akra/kernel/attach";
 pub const METHOD_DESCRIBE: &str = "akra/kernel/describe";
@@ -36,30 +42,76 @@ pub const METHOD_QUERY: &str = "akra/kernel/query";
 pub const METHOD_EVENT: &str = "akra/kernel/event";
 pub const METHOD_DETACH: &str = "akra/kernel/detach";
 
-const METHODS: [&str; 6] = [
-    METHOD_ATTACH,
-    METHOD_DESCRIBE,
-    METHOD_COMMAND,
-    METHOD_QUERY,
-    METHOD_EVENT,
-    METHOD_DETACH,
-];
+spec_names! {
+    /// 프로토콜의 메서드이다.
+    pub(crate) enum KernelMethodKind {
+        Attach => "akra/kernel/attach",
+            "Attach this connection to the kernel of the repository that owns the workspace folder.";
+        Describe => "akra/kernel/describe",
+            "Return this specification.";
+        Command => "akra/kernel/command",
+            "Send one command. The answer carries the rejection, if any, and the operation receipt.";
+        Query => "akra/kernel/query",
+            "Read one current value or a page of the decision log.";
+        Event => "akra/kernel/event",
+            "Notification from the kernel to an attached client.";
+        Detach => "akra/kernel/detach",
+            "Detach this connection. No event arrives after the answer.";
+    }
+}
 
 /// JSON-RPC 의 잘못된 인자 오류 코드이다.
-pub const ERROR_INVALID_PARAMS: i64 = -32602;
+pub const ERROR_INVALID_PARAMS: i64 = KernelErrorKind::InvalidParams.code();
 /// 확인이 필요한 명령을 확인 없이 보냈다 (K-D1).
-pub const ERROR_CONFIRMATION_REQUIRED: i64 = -32010;
+pub const ERROR_CONFIRMATION_REQUIRED: i64 = KernelErrorKind::ConfirmationRequired.code();
 /// 이 접속은 아직 커널에 붙지 않았다. `akra/kernel/attach` 를 먼저 보낸다.
-pub const ERROR_NOT_ATTACHED: i64 = -32011;
+pub const ERROR_NOT_ATTACHED: i64 = KernelErrorKind::NotAttached.code();
 /// 커널에 붙거나 닿지 못했다. 예: 다른 프로세스(TUI)가 그 저장소의 커널을 돌린다, 커널이 끝났다.
-pub const ERROR_KERNEL_UNAVAILABLE: i64 = -32012;
+pub const ERROR_KERNEL_UNAVAILABLE: i64 = KernelErrorKind::KernelUnavailable.code();
 /// 커널이 정한 시간 안에 답하지 않았다. 명령은 그 뒤에 처리될 수 있으므로, 클라이언트는 조회로 결과를 확인한다.
-pub const ERROR_KERNEL_TIMEOUT: i64 = -32013;
+pub const ERROR_KERNEL_TIMEOUT: i64 = KernelErrorKind::KernelTimeout.code();
 /// 이 `idempotency_key` 는 다른 명령에 이미 썼다 (plan 19 Q3-6). 명령마다 새 키를 만든다.
-pub const ERROR_IDEMPOTENCY_KEY_REUSED: i64 = -32014;
+pub const ERROR_IDEMPOTENCY_KEY_REUSED: i64 = KernelErrorKind::IdempotencyKeyReused.code();
 /// 이 커널은 기록이 없어서 재전송을 가릴 수 없다 (plan 19 Q3-6). 키가 있는 명령을 실행하지 않았다. 키 없이 보내면
 /// 실행하지만 재전송은 다시 실행된다.
-pub const ERROR_IDEMPOTENCY_UNAVAILABLE: i64 = -32015;
+pub const ERROR_IDEMPOTENCY_UNAVAILABLE: i64 = KernelErrorKind::IdempotencyUnavailable.code();
+
+spec_names! {
+    /// 프로토콜이 내는 JSON-RPC 오류이다. 코드는 `code` 가 정한다.
+    pub(crate) enum KernelErrorKind {
+        InvalidParams => "invalid_params",
+            "The request does not match the input schema.";
+        MethodNotFound => "method_not_found",
+            "The method is not an `akra/kernel/*` method of this protocol version.";
+        ConfirmationRequired => "confirmation_required",
+            "A destructive command came without `confirm: true`.";
+        NotAttached => "not_attached",
+            "This connection is not attached. Send `akra/kernel/attach` first.";
+        KernelUnavailable => "kernel_unavailable",
+            "The kernel cannot be reached. Another process (a TUI) may run the kernel of that repository, or the kernel stopped.";
+        KernelTimeout => "kernel_timeout",
+            "The kernel did not answer in time. The command may still run; read the result with a query.";
+        IdempotencyKeyReused => "idempotency_key_reused",
+            "The `idempotency_key` was already used for a different command. Use a new key for each command.";
+        IdempotencyUnavailable => "idempotency_unavailable",
+            "This kernel has no decision log and cannot tell resends apart. The command did not run.";
+    }
+}
+
+impl KernelErrorKind {
+    pub(crate) const fn code(self) -> i64 {
+        match self {
+            Self::InvalidParams => -32602,
+            Self::MethodNotFound => -32601,
+            Self::ConfirmationRequired => -32010,
+            Self::NotAttached => -32011,
+            Self::KernelUnavailable => -32012,
+            Self::KernelTimeout => -32013,
+            Self::IdempotencyKeyReused => -32014,
+            Self::IdempotencyUnavailable => -32015,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KernelProtocolError {
@@ -94,7 +146,7 @@ impl KernelProtocolError {
 
 // attach -------------------------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AttachRequest {
     /// 커널을 고르는 작업 공간 루트이다.
@@ -103,7 +155,7 @@ pub struct AttachRequest {
     pub client_name: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct AttachResponse {
     pub client_id: String,
     pub protocol_version: u32,
@@ -118,7 +170,7 @@ const MAX_IDEMPOTENCY_KEY_CHARS: usize = 128;
 /// 명령 지문의 길이이다 (SHA-256 의 앞 16바이트를 16진수로 쓴다).
 const FINGERPRINT_HEX_CHARS: usize = 32;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CommandRequest {
     pub command: KernelCommand,
@@ -136,8 +188,8 @@ pub struct CommandRequest {
 impl CommandRequest {
     /*
      * 커널이 이 명령을 기록할 때 쓰는 설명이다 (plan 19 Q3-6). 명령의 내용은 지문으로만 남는다. 읽기 명령
-     * (`load_sessions`, `refresh_planning`)은 기록하지 않으므로 `None` 이다. 그 명령은 바른 키가 있어도 그냥
-     * 실행한다. 잘못된 키는 어느 명령이든 거절한다.
+     * (스펙의 `effect: read`)은 기록하지 않으므로 `None` 이다. 그 명령은 바른 키가 있어도 그냥 실행한다. 잘못된
+     * 키는 어느 명령이든 거절한다.
      */
     pub fn descriptor(&self) -> Result<Option<KernelCommandDescriptor>, KernelProtocolError> {
         let idempotency_key = self
@@ -145,22 +197,27 @@ impl CommandRequest {
             .as_deref()
             .map(valid_idempotency_key)
             .transpose()?;
+        let kind = self.command.kind();
+        if !kind.is_recorded() {
+            return Ok(None);
+        }
         let thread_id = match &self.command {
-            KernelCommand::LoadSessions {} | KernelCommand::RefreshPlanning {} => return Ok(None),
             KernelCommand::RenameSession { thread_id, .. }
             | KernelCommand::SubmitPrompt { thread_id, .. }
             | KernelCommand::SteerTurn { thread_id, .. } => thread_id.clone(),
-            KernelCommand::StopAll {}
+            KernelCommand::LoadSessions {}
+            | KernelCommand::StopAll {}
             | KernelCommand::DecideApproval { .. }
             | KernelCommand::SetAutoFollowMaxTurns { .. }
             | KernelCommand::PauseAutoFollow {}
-            | KernelCommand::ResetPlanning { .. } => String::new(),
+            | KernelCommand::ResetPlanning { .. }
+            | KernelCommand::RefreshPlanning {} => String::new(),
         };
         let json = serde_json::to_value(&self.command).map_err(|error| {
             KernelProtocolError::invalid_params(format!("command cannot be described: {error}"))
         })?;
         Ok(Some(KernelCommandDescriptor {
-            command: json["type"].as_str().unwrap_or_default().to_string(),
+            command: kind,
             thread_id,
             fingerprint: fingerprint(&json),
             idempotency_key,
@@ -229,7 +286,7 @@ fn write_canonical_json(value: &serde_json::Value, out: &mut String) {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct CommandResponse {
     /// 커널이 명령을 처리했다. `false` 는 커널이 끝나서 명령을 넣지 못한 경우이다.
     pub processed: bool,
@@ -247,7 +304,7 @@ pub struct CommandResponse {
  * 명령의 영수증이다 (plan 19 Q3-6). `op_id` 는 커널이 그 명령을 받은 기록의 sequence 이다. 명령의 진행은 그 뒤의
  * 기록이다: `next` 대로 `history` 를 `after` 부터 읽거나, `sequence` 가 `op_id` 보다 큰 `recorded` 이벤트를 본다.
  */
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Operation {
     pub op_id: i64,
     pub state: OperationState,
@@ -257,7 +314,7 @@ pub struct Operation {
     pub replayed: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum OperationState {
     /// 커널이 명령을 받아들였다. 결과는 이벤트와 기록으로 온다.
@@ -267,7 +324,7 @@ pub enum OperationState {
 }
 
 /// 영수증 뒤에 할 조회이다.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct OperationNext {
     pub query: String,
     pub after: i64,
@@ -291,7 +348,7 @@ impl Operation {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct CommandRejection {
     pub reason: CommandRejectionReason,
     /// 사람이 읽는 설명이다. 판단에는 `reason` 을 쓴다.
@@ -368,7 +425,7 @@ impl CommandRejection {
  * v0 명령이다. 화면 흐름 단계가 아니라 한 번에 끝나는 도메인 명령이다 (plan 18 §5.5). 원격 클라이언트는 보는
  * 자리를 바꾸지 않고 thread 나 승인 id 를 지정한다 (K3-3a). 프롬프트 제출은 준비와 제출을 하나로 한다 (K3-3b).
  */
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 // 필드가 없는 명령도 `{}` 로 둔다. serde 는 unit variant 의 모르는 필드를 거절하지 못한다.
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum KernelCommand {
@@ -407,27 +464,14 @@ pub enum KernelCommand {
     RefreshPlanning {},
 }
 
-const COMMANDS: [&str; 10] = [
-    "load_sessions",
-    "rename_session",
-    "submit_prompt",
-    "steer_turn",
-    "stop_all",
-    "decide_approval",
-    "set_auto_follow_max_turns",
-    "pause_auto_follow",
-    "reset_planning",
-    "refresh_planning",
-];
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalDecision {
     Accept,
     Decline,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ResetTarget {
     Queue,
@@ -436,6 +480,22 @@ pub enum ResetTarget {
 }
 
 impl KernelCommand {
+    /// 이 명령의 종류이다. 이름과 성질은 domain 의 표가 가진다 (plan 18 K4-1).
+    pub fn kind(&self) -> KernelCommandKind {
+        match self {
+            Self::LoadSessions {} => KernelCommandKind::LoadSessions,
+            Self::RenameSession { .. } => KernelCommandKind::RenameSession,
+            Self::SubmitPrompt { .. } => KernelCommandKind::SubmitPrompt,
+            Self::SteerTurn { .. } => KernelCommandKind::SteerTurn,
+            Self::StopAll {} => KernelCommandKind::StopAll,
+            Self::DecideApproval { .. } => KernelCommandKind::DecideApproval,
+            Self::SetAutoFollowMaxTurns { .. } => KernelCommandKind::SetAutoFollowMaxTurns,
+            Self::PauseAutoFollow {} => KernelCommandKind::PauseAutoFollow,
+            Self::ResetPlanning { .. } => KernelCommandKind::ResetPlanning,
+            Self::RefreshPlanning {} => KernelCommandKind::RefreshPlanning,
+        }
+    }
+
     /// 커널이 처리할 core 명령으로 바꾼다. 작업 공간은 attach 때 고른 커널의 것이다.
     pub fn into_core(self, workspace_directory: &str) -> Result<AppCommand, KernelProtocolError> {
         let command = match self {
@@ -523,7 +583,7 @@ fn non_blank(field: &str, value: String) -> Result<String, KernelProtocolError> 
 
 // query -------------------------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum KernelQuery {
     Sessions {},
@@ -546,7 +606,7 @@ pub enum KernelQuery {
 /// 기록 조회의 한 쪽 기본 크기이다.
 const DEFAULT_HISTORY_LIMIT: usize = 100;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct QueryRequest {
     pub query: KernelQuery,
@@ -564,7 +624,7 @@ impl KernelQuery {
         }
     }
 
-    /// 조회 결과는 같은 이름의 이벤트와 같은 모양이다. 클라이언트는 둘을 같은 코드로 그린다. 기록 조회는 호출자가
+    /// 조회의 답은 같은 이름의 이벤트와 같은 모양이다. 클라이언트는 둘을 같은 코드로 그린다. 기록 조회는 호출자가
     /// 읽은 `history` 쪽을 그대로 담는다.
     pub fn answer(
         self,
@@ -572,23 +632,23 @@ impl KernelQuery {
         threads: &[ThreadActivitySummary],
         parallel: ParallelSource<'_>,
         history: Option<KernelEventPage>,
-    ) -> KernelEvent {
+    ) -> KernelQueryAnswer {
         match self {
             Self::Sessions {} => {
-                KernelEvent::Sessions(SessionsState::from_core(&snapshot.session_catalog))
+                KernelQueryAnswer::Sessions(SessionsState::from_core(&snapshot.session_catalog))
             }
-            Self::AutoFollow {} => KernelEvent::AutoFollow(AutoFollowSettings::from_core(
+            Self::AutoFollow {} => KernelQueryAnswer::AutoFollow(AutoFollowSettings::from_core(
                 &snapshot.conversation_runtime,
             )),
-            Self::ThreadActivity {} => KernelEvent::ThreadActivity {
+            Self::ThreadActivity {} => KernelQueryAnswer::ThreadActivity {
                 threads: threads.iter().map(ThreadActivity::from_core).collect(),
             },
-            Self::Planning {} => KernelEvent::Planning(PlanningState::from_core(
+            Self::Planning {} => KernelQueryAnswer::Planning(PlanningState::from_core(
                 &snapshot.planning_parallel.planning_runtime,
             )),
-            Self::Parallel {} => KernelEvent::Parallel(ParallelState::from_core(parallel)),
+            Self::Parallel {} => KernelQueryAnswer::Parallel(ParallelState::from_core(parallel)),
             Self::History { after, .. } => {
-                KernelEvent::History(history.unwrap_or_else(|| KernelEventPage {
+                KernelQueryAnswer::History(history.unwrap_or_else(|| KernelEventPage {
                     records: Vec::new(),
                     next_after: after.unwrap_or(0),
                 }))
@@ -597,14 +657,41 @@ impl KernelQuery {
     }
 }
 
-const QUERIES: [&str; 6] = [
-    "sessions",
-    "auto_follow",
-    "thread_activity",
-    "planning",
-    "parallel",
-    "history",
-];
+spec_names! {
+    /// 조회의 종류이다.
+    pub(crate) enum KernelQueryKind {
+        Sessions => "sessions",
+            "The session list of the workspace and its load state.";
+        AutoFollow => "auto_follow",
+            "The automatic follow-up settings. They are the same for every thread.";
+        ThreadActivity => "thread_activity",
+            "The threads that still have work: a running turn, a pending approval, or automatic follow-up.";
+        Planning => "planning",
+            "The planning queue.";
+        Parallel => "parallel",
+            "The parallel mode state: pool, agents, merge queue, and pull request validation.";
+        History => "history",
+            "A page of the decision log after a cursor. Send the answer's `next_after` as the next `after`.";
+    }
+}
+
+/*
+ * 조회의 답이다 (plan 18 K4-1). 이벤트 enum 에서 나눴다. 조회마다 답의 모양이 하나라서 스펙이 조회의 출력 스키마를
+ * 이 타입에서 얻는다. 전송 모양은 이전과 같다: 같은 이름의 이벤트와 같고, `history` 는 조회에만 있다.
+ */
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum KernelQueryAnswer {
+    Sessions(SessionsState),
+    AutoFollow(AutoFollowSettings),
+    ThreadActivity {
+        threads: Vec<ThreadActivity>,
+    },
+    Planning(PlanningState),
+    Parallel(ParallelState),
+    /// 사건 하나는 `sequence`, `recorded_at`, `event` 이고 `event.kind` 가 종류이다 (`turn_started` 등).
+    History(KernelEventPage),
+}
 
 // event -------------------------------------------------------------------------------------------
 
@@ -612,7 +699,7 @@ const QUERIES: [&str; 6] = [
  * v0 이벤트는 굵은 단위이다 (plan 18 §5.5). 클라이언트가 지금 상태를 다시 그릴 수 있는 값을 통째로 보낸다.
  * 증분 스트림은 보내지 않는다. 같은 모양을 조회 결과로도 쓴다.
  */
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum KernelEvent {
     Sessions(SessionsState),
@@ -629,11 +716,6 @@ pub enum KernelEvent {
     /// 이 클라이언트에게 보낼 이벤트가 넘쳐 버렸다. 클라이언트는 조회로 다시 맞춘다.
     Resync,
     /*
-     * 기록 조회(`history`)의 답이다 (plan 19 Q3-3). 이벤트로는 보내지 않는다. 사건 하나는 `sequence`, `recorded_at`,
-     * `event` 이고 `event.kind` 가 종류이다 (`turn_started` 등).
-     */
-    History(KernelEventPage),
-    /*
      * 커널이 판단 사건 하나를 기록했다 (plan 19 Q3-3b). `sequence` 는 기록과 같으므로 `history` 의 cursor 로 쓴다.
      * `resync` 를 받으면 마지막으로 받은 `sequence` 를 `after` 로 `history` 를 읽어 빠진 사건을 채운다. 붙은 뒤
      * `history` 와 겹칠 수 있으므로 클라이언트는 `sequence` 로 겹침을 지운다.
@@ -642,21 +724,32 @@ pub enum KernelEvent {
 }
 
 /// `akra/kernel/event` 알림의 params 이다.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct EventNotification {
     pub event: KernelEvent,
 }
 
-const EVENTS: [&str; 8] = [
-    "sessions",
-    "auto_follow",
-    "thread_activity",
-    "prompt_submission",
-    "planning",
-    "parallel",
-    "resync",
-    "recorded",
-];
+spec_names! {
+    /// 이벤트의 종류이다.
+    pub(crate) enum KernelEventKind {
+        Sessions => "sessions",
+            "The session list or its load state changed.";
+        AutoFollow => "auto_follow",
+            "The automatic follow-up settings changed.";
+        ThreadActivity => "thread_activity",
+            "The set of threads with work changed. The event carries every such thread.";
+        PromptSubmission => "prompt_submission",
+            "Progress of a `submit_prompt` command: preparing, submitted, queued, rejected, or failed.";
+        Planning => "planning",
+            "The planning queue changed.";
+        Parallel => "parallel",
+            "The parallel mode state changed.";
+        Resync => "resync",
+            "Events for this client were dropped. Read the current values with queries and `history` after the last sequence seen.";
+        Recorded => "recorded",
+            "The kernel wrote one decision record. `sequence` is the cursor for `history`.";
+    }
+}
 
 impl KernelEvent {
     /// 프로토콜로 내보낼 core 이벤트만 바꾼다. 나머지는 v0 에서 보내지 않는다.
@@ -685,7 +778,7 @@ impl KernelEvent {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SessionsState {
     pub status: SessionsStatus,
     pub sessions: Vec<SessionEntry>,
@@ -693,7 +786,7 @@ pub struct SessionsState {
     pub message: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionsStatus {
     Idle,
@@ -703,7 +796,7 @@ pub enum SessionsStatus {
     Failed,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SessionEntry {
     pub thread_id: String,
     pub title: String,
@@ -753,7 +846,7 @@ impl SessionsState {
  * 자동 후속 설정이다. 설정은 모든 thread 에 같이 걸린다. thread 별 진행(자동 후속이 도는지, 턴, 승인)은
  * `thread_activity` 가 알린다. 보는 대화의 턴 상태는 TUI 화면용이라 v0 에서 보내지 않는다 (K3 §3.2).
  */
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct AutoFollowSettings {
     pub max_turns: usize,
     pub paused: bool,
@@ -768,7 +861,7 @@ impl AutoFollowSettings {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadActivity {
     pub thread_id: String,
     pub running: bool,
@@ -780,7 +873,7 @@ pub struct ThreadActivity {
 }
 
 /// 결정을 기다리는 승인 요청이다. `decide_approval` 에 두 id 를 그대로 보낸다.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ApprovalRequest {
     pub approval_id: String,
     pub server_request_id: String,
@@ -805,7 +898,7 @@ impl ThreadActivity {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct PromptSubmissionState {
     pub thread_id: String,
     pub status: PromptSubmissionStatus,
@@ -822,7 +915,7 @@ pub struct PromptSubmissionState {
     pub message: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PromptSubmissionStatus {
     /// 받아들였고 준비 중이다.
@@ -838,7 +931,7 @@ pub enum PromptSubmissionStatus {
 }
 
 /// 제출하지 못한 이유이다. 이름이 다음 행동을 알려 준다.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PromptSubmissionReason {
     /// 턴이 돌거나 그 thread 에 일이 남아 있다. `thread_activity` 가 비면 다시 보낸다.
@@ -1014,7 +1107,7 @@ impl PromptSubmissionState {
  * planning 큐이다 (K3-6). 커널 작업 공간(저장소의 대표 checkout)의 planning 투영을 보낸다. 커널이 아직 읽지 않았으면
  * `uninitialized` 이다. 클라이언트는 붙은 뒤 `refresh_planning` 을 보낸다.
  */
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct PlanningState {
     pub status: PlanningStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1036,7 +1129,7 @@ pub struct PlanningState {
     pub skipped_tasks: Vec<SkippedPlanningTask>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PlanningStatus {
     /// planning 이 없거나 커널이 아직 읽지 않았다.
@@ -1046,7 +1139,7 @@ pub enum PlanningStatus {
     ReadyWithTask,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct PlanningTask {
     pub rank: usize,
     pub task_id: String,
@@ -1056,7 +1149,7 @@ pub struct PlanningTask {
     pub priority: i32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SkippedPlanningTask {
     pub task_id: String,
     pub title: String,
@@ -1064,7 +1157,7 @@ pub struct SkippedPlanningTask {
     pub reason: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PlanningTaskStatus {
     Ready,
@@ -1162,7 +1255,7 @@ pub struct ParallelSource<'a> {
  * 병렬 작업 상태이다 (K3-6). 감독 스냅샷은 TUI 의 병렬 화면과 같은 값이다. 상태 이름(`state`)은 TUI 와 같은 표시
  * 이름을 snake_case 로 바꾼 것이다. 명령 스펙(K4)에서 열거형으로 고정한다.
  */
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ParallelState {
     pub enabled: bool,
     /// 병렬 제어부가 마지막으로 알린 상태 문구이다.
@@ -1173,7 +1266,7 @@ pub struct ParallelState {
     pub supervisor: Option<ParallelSupervisor>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ParallelSupervisor {
     pub state: ParallelSupervisorState,
     pub pool: ParallelPool,
@@ -1187,7 +1280,7 @@ pub struct ParallelSupervisor {
     pub notice: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ParallelSupervisorState {
     Prepare,
@@ -1195,7 +1288,7 @@ pub enum ParallelSupervisorState {
     Recover,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ParallelPool {
     pub configured: usize,
     pub idle: usize,
@@ -1208,7 +1301,7 @@ pub struct ParallelPool {
     pub exhausted: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ParallelAgent {
     pub agent_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1221,7 +1314,7 @@ pub struct ParallelAgent {
     pub summary: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ParallelMergeItem {
     pub task_title: String,
     pub state: String,
@@ -1229,7 +1322,7 @@ pub struct ParallelMergeItem {
     pub commit: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ParallelPrValidation {
     pub pull_request_number: u64,
     pub url: String,
@@ -1314,32 +1407,5 @@ impl ParallelSupervisor {
                 }),
             notice: snapshot.top_notice.clone(),
         }
-    }
-}
-
-// describe ----------------------------------------------------------------------------------------
-
-/// 자기 설명이다 (plan 18 §4.3). 클라이언트와 에이전트가 쓸 수 있는 메서드, 명령, 조회, 이벤트를 알린다.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct KernelDescription {
-    pub protocol_version: u32,
-    pub methods: Vec<String>,
-    pub commands: Vec<String>,
-    pub queries: Vec<String>,
-    pub events: Vec<String>,
-    /// 판단 사건 기록의 종류이다 (`recorded` 이벤트와 `history` 조회의 `event.kind`). plan 19 Q3-5 에서 더했다.
-    #[serde(default)]
-    pub records: Vec<String>,
-}
-
-pub fn describe() -> KernelDescription {
-    let owned = |names: &[&str]| names.iter().map(|name| (*name).to_string()).collect();
-    KernelDescription {
-        protocol_version: PROTOCOL_VERSION,
-        methods: owned(&METHODS),
-        commands: owned(&COMMANDS),
-        queries: owned(&QUERIES),
-        events: owned(&EVENTS),
-        records: owned(&crate::domain::kernel_event::KERNEL_EVENT_KINDS),
     }
 }
