@@ -319,11 +319,25 @@ pub struct CommandResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Operation {
     pub op_id: i64,
-    pub state: OperationState,
+    /// 받아들임의 결과이다. 지금 상태는 `operation` 조회가 알린다 (plan 18 K4-4).
+    pub state: OperationAdmission,
     pub next: OperationNext,
     /// 같은 멱등 키의 명령을 전에 받았다. 다시 실행하지 않았고, 처음의 결과를 답한다.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub replayed: bool,
+}
+
+/*
+ * 영수증의 `state` 이다. 커널이 명령을 받을 때의 결과만 알린다. 연산의 지금 상태(`OperationState`)와 타입을 나눈다.
+ * 그래서 스펙만 읽는 클라이언트가 영수증에는 이 두 값만 온다는 것을 안다.
+ */
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OperationAdmission {
+    /// 커널이 명령을 받아들였다. 결과는 이벤트와 기록으로 온다.
+    Accepted,
+    /// 커널이 명령을 바로 거절했다. 이유는 `rejection` 에 있다.
+    Rejected,
 }
 
 /// 영수증 뒤에 할 조회이다.
@@ -338,9 +352,9 @@ impl Operation {
         Self {
             op_id: receipt.op_id,
             state: if receipt.rejection.is_some() {
-                OperationState::Rejected
+                OperationAdmission::Rejected
             } else {
-                OperationState::Accepted
+                OperationAdmission::Accepted
             },
             next: OperationNext {
                 query: "history".to_string(),

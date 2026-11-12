@@ -319,7 +319,10 @@ the desktop app itself is not shipped yet.
   (`{"type": "operation", "op_id": <id>}`) answers with the current `state` of that operation and its
   `records`: `accepted`, `running`, `done`, `rejected`, `failed`, `lost` (the kernel was built again
   while the operation was open), or `unknown` (no command record has that id, or it is older than the
-  retention limit). The kernel computes the state from the records. Each command in the spec has
+  retention limit). The kernel computes the state from the records. The `command_received` record
+  carries the `completion` rule that applied when the kernel received the command; a command received
+  by an older kernel has none and stays `accepted`. A `submit_prompt` that the kernel still prepares
+  is `accepted`; it becomes `running` with its first later record. Each command in the spec has
   `completion`: `accepted` (it ends when the kernel accepts it), `records` (it ends with a later
   record; only `submit_prompt` now), or `unreported` (`rename_session`, `steer_turn`, `stop_all`,
   `decide_approval`, and `reset_planning`: the kernel does not report their end yet and their state

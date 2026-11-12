@@ -239,7 +239,7 @@ impl PlanningFeatureReducer {
     }
 
     /// 이 준비가 thread 를 지정한 프롬프트의 것이면 그 thread 이다 (plan 18 K3-3b).
-    pub(super) fn manual_prompt_preparation_thread(
+    pub(super) fn addressed_thread_prompt(
         &self,
         correlation: &ManualPromptCorrelation,
     ) -> Option<AddressedThreadPrompt> {

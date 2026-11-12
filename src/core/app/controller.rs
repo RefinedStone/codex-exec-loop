@@ -1225,9 +1225,7 @@ impl CoreController {
                 }
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::ManualPromptPrepared(result)) => {
-                let addressed = self
-                    .planning
-                    .manual_prompt_preparation_thread(result.correlation());
+                let addressed = self.planning.addressed_thread_prompt(result.correlation());
                 let Some(disposition) = self
                     .planning
                     .complete_manual_prompt_preparation(result.correlation())
@@ -1761,7 +1759,7 @@ impl CoreController {
             ),
             Err(failure) => {
                 // 준비가 실패한 명령은 턴 기록이 없다. 그 연산의 끝을 따로 적는다 (plan 18 K4-4).
-                let record = operation_ended(
+                let record = command_completed(
                     op_id,
                     &thread_id,
                     kernel_event::OperationEnd::Failed,
@@ -1812,7 +1810,7 @@ impl CoreController {
         if self.planning.host_parallel_mode() != Some(false) {
             // 처음 낼 때의 병렬 넘김은 남김이 아니다. 턴도 없으므로 그 연산의 끝을 따로 적는다 (plan 18 K4-4).
             let record = if queue_on_rejection {
-                operation_ended(
+                command_completed(
                     prompt.op_id,
                     &prompt.thread_id,
                     kernel_event::OperationEnd::Done,
@@ -2253,7 +2251,7 @@ fn approval_resolution(input: &CoreInput) -> Option<(String, kernel_event::Appro
 }
 
 /// 명령이 턴 기록 없이 끝났다는 사건이다 (plan 18 K4-4). 명령에서 오지 않은 일(연산 id 가 없다)은 적지 않는다.
-fn operation_ended(
+fn command_completed(
     op_id: Option<i64>,
     thread_id: &str,
     result: kernel_event::OperationEnd,
@@ -10409,6 +10407,7 @@ mod tests {
             thread_id: "thread-beta".to_string(),
             fingerprint: "fp".to_string(),
             idempotency_key: None,
+            completion: Some(crate::domain::kernel_spec::CommandCompletion::Records),
         };
         let state =
             kernel_event::operation_state(op_id, std::iter::once(&received).chain(own.iter()));

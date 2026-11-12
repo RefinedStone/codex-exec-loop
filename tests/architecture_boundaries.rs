@@ -3551,7 +3551,7 @@ fn core_conversation_turn_feature_reducer_owns_one_correlated_lifecycle_slice() 
         // plan 18 K1-5: turn options for the follow-up turn the host submits.
         "turn_options",
         // plan 18 K4-4: the operation of the command that submitted the current turn.
-        "operation",
+        "op_id",
     ];
     let forbidden_root_fields = [
         "turn_stream_state",

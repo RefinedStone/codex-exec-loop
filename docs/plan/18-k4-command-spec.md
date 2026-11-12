@@ -590,3 +590,23 @@ K4-4 를 둘로 나눴다 (§5 의 대응: 기록 종류마다 나눈다). K4-4a
   K4-4b 에서 정한다.
 - 기록을 다 쓰지 못한 강제 종료 뒤에는 열린 연산을 닫는 기록이 맞지 않을 수 있다 (Q3-6 의 한계와 같다).
 - Desktop 은 `operation` 조회를 쓰지 않는다. 타입은 K4-6 의 생성 타입에서 온다.
+
+리뷰 반영 (2026-11-12, 표준 축과 스펙 축):
+
+- 결함: 재시작이 K4-4 이전의 커널이 받은 `submit_prompt` 를 모두 `lost` 로 닫았다. 그 커널은 턴 기록에 연산 id 를 싣지
+  않아서, 끝난 명령도 열린 것으로 보였다. 고침: `command_received` 가 받을 때의 끝 규칙(`completion`)을 적는다.
+  상태 계산과 재시작 닫기는 그 값을 쓴다. 값이 없는 기록(이전 커널)은 끝을 알리지 않는 명령으로 다루고 닫지
+  않는다. 명령 이름으로 지금 binary 의 규칙을 찾던 코드를 지웠다. 그래서 K4-4b 가 규칙을 바꿔도 이미 받은 연산의
+  상태는 바뀌지 않는다.
+- 결함: `operation` 조회에 `op_id` 로 정수의 최솟값을 보내면 debug 빌드에서 커널 스레드가 overflow 로 멈췄다. 고침:
+  1 보다 작은 연산 id 는 기록을 읽지 않고 `unknown` 으로 답한다.
+- 영수증의 `state` 를 두 값의 타입(`OperationAdmission`)으로 나눴다. 스펙만 읽는 클라이언트가 영수증에는
+  `accepted` 와 `rejected` 만 온다는 것을 안다. 전송되는 글자는 같다.
+- 설계와 다른 점으로 적는다: 준비 중인 `submit_prompt` 의 상태는 `running` 이 아니라 `accepted` 이다 (§3.4 의 표는
+  준비 중을 `running` 에 넣었다). 준비를 시작할 때 연산 id 를 실은 기록이 없다. 그 기록을 더하지 않았다. `accepted`
+  의 뜻("받아들였고 아직 기록이 없다")과는 맞다.
+- 정리: Gateway 의 기록 읽기 두 곳을 `read_kernel_log` 하나로 합쳤다. `restart_closures` 에서 열린 턴 찾기를
+  `lost_turns` 로 나눴다. 이름을 맞췄다 (`ThreadSession.op_id`, `command_completed`, `addressed_thread_prompt`).
+- 고치지 않은 것: 턴 id 를 받기 전에 멈춘 프롬프트는 `failed` 이고 받은 뒤에 멈춘 것은 `done` 이다 (그 경로가 실제로
+  있는지 확인하지 못했다). `decide_approval` 은 `approval_resolved` 기록이 이미 있지만 `unreported` 이다 (K4-4b).
+  연산 조회는 여전히 연산 id 뒤의 기록을 모두 읽는다. 연산 id 의 타입(`OperationId`)은 만들지 않았다.

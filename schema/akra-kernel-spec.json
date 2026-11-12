@@ -1190,6 +1190,16 @@
           "command": {
             "type": "string"
           },
+          "completion": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CommandCompletion"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "fingerprint": {
             "type": "string"
           },
@@ -1698,6 +1708,14 @@
         "paused"
       ],
       "type": "object"
+    },
+    "CommandCompletion": {
+      "enum": [
+        "accepted",
+        "records",
+        "unreported"
+      ],
+      "type": "string"
     },
     "CommandRejection": {
       "properties": {
@@ -2572,6 +2590,16 @@
             "command": {
               "type": "string"
             },
+            "completion": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CommandCompletion"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "fingerprint": {
               "type": "string"
             },
@@ -2799,7 +2827,7 @@
           "type": "boolean"
         },
         "state": {
-          "$ref": "#/$defs/OperationState"
+          "$ref": "#/$defs/OperationAdmission"
         }
       },
       "required": [
@@ -2808,6 +2836,18 @@
         "next"
       ],
       "type": "object"
+    },
+    "OperationAdmission": {
+      "oneOf": [
+        {
+          "const": "accepted",
+          "type": "string"
+        },
+        {
+          "const": "rejected",
+          "type": "string"
+        }
+      ]
     },
     "OperationEnd": {
       "oneOf": [

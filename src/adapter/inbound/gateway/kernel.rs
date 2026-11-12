@@ -248,28 +248,16 @@ impl KernelSession {
         let history = match request.query.history_range() {
             Some((after, limit)) => {
                 let commands = attached.commands.clone();
-                let page = blocking(move || commands.history(after, limit, KERNEL_CALL_TIMEOUT))
-                    .await?
-                    .map_err(|error| match error {
-                        KernelCallError::Stopped => unavailable(error.to_string()),
-                        KernelCallError::TimedOut => timed_out("query", KERNEL_CALL_TIMEOUT),
-                    })?
-                    .map_err(unavailable)?;
-                Some(page)
+                let read = move || commands.history(after, limit, KERNEL_CALL_TIMEOUT);
+                Some(read_kernel_log(read).await?)
             }
             None => None,
         };
         let operation = match request.query.operation_id() {
             Some(op_id) => {
                 let commands = attached.commands.clone();
-                let status = blocking(move || commands.operation(op_id, KERNEL_CALL_TIMEOUT))
-                    .await?
-                    .map_err(|error| match error {
-                        KernelCallError::Stopped => unavailable(error.to_string()),
-                        KernelCallError::TimedOut => timed_out("query", KERNEL_CALL_TIMEOUT),
-                    })?
-                    .map_err(unavailable)?;
-                Some(status)
+                let read = move || commands.operation(op_id, KERNEL_CALL_TIMEOUT);
+                Some(read_kernel_log(read).await?)
             }
             None => None,
         };
@@ -397,6 +385,20 @@ async fn blocking<T: Send + 'static>(
     tokio::task::spawn_blocking(work)
         .await
         .map_err(|error| unavailable(format!("kernel call failed: {error}")))
+}
+
+/// 커널의 사건 기록에서 값을 읽는다 (`history`, `operation`). 커널이 끝났거나, 답이 늦거나, 기록을 읽지 못하면
+/// 프로토콜 오류이다.
+async fn read_kernel_log<T: Send + 'static>(
+    read: impl FnOnce() -> Result<Result<T, String>, KernelCallError> + Send + 'static,
+) -> Result<T, KernelProtocolError> {
+    blocking(read)
+        .await?
+        .map_err(|error| match error {
+            KernelCallError::Stopped => unavailable(error.to_string()),
+            KernelCallError::TimedOut => timed_out("query", KERNEL_CALL_TIMEOUT),
+        })?
+        .map_err(unavailable)
 }
 
 fn parse_params<T: DeserializeOwned>(params: Value) -> Result<T, KernelProtocolError> {
