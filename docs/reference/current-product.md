@@ -291,7 +291,8 @@ the desktop app itself is not shipped yet.
   rejections, input and output JSON Schema), `queries`, `events`, `records`, `reasons`, `errors`, the meaning
   of the scope, effect, and idempotency values (`terms`), and the shared type definitions in `$defs`
   (JSON Schema 2020-12). The input schemas carry the rules the kernel checks (non-blank text, the
-  length of `idempotency_key`). Fields have no description in the spec yet. The same value is checked
+  length of `idempotency_key`). The state values of the parallel board (agent state, merge queue
+  state, pull request validation state and phase) are closed lists in the spec. Fields have no description in the spec yet. The same value is checked
   in as `schema/akra-kernel-spec.json`. The `message` of a command rejection is the summary of its
   reason in the spec. The `planning` and `parallel` queries and events carry the planning
   queue and the parallel state (pool, agents, merge queue, PR validation); `refresh_planning` reads the

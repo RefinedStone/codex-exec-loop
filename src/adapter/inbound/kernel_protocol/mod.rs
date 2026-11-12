@@ -19,7 +19,10 @@ use crate::core::app::{
 use crate::domain::conversation::{
     ConversationApprovalDecision, ConversationApprovalRequestIdentity, ConversationTurnSteerRequest,
 };
-use crate::domain::parallel_mode::{ParallelModeSupervisorSnapshot, ParallelModeSupervisorState};
+use crate::domain::parallel_mode::{
+    ParallelModeAgentRosterState, ParallelModeQueueItemState, ParallelModeSupervisorSnapshot,
+    ParallelModeSupervisorState, PrValidationOperatorState, PrValidationPhase,
+};
 use crate::domain::planning::{
     PriorityQueueTask, RuntimeProjection, RuntimeWorkspaceStatus, TaskStatus,
 };
@@ -1247,8 +1250,8 @@ pub struct ParallelSource<'a> {
 }
 
 /*
- * 병렬 작업 상태이다 (K3-6). 감독 스냅샷은 TUI 의 병렬 화면과 같은 값이다. 상태 이름(`state`)은 TUI 와 같은 표시
- * 이름을 snake_case 로 바꾼 것이다. 명령 스펙(K4)에서 열거형으로 고정한다.
+ * 병렬 작업 상태이다 (K3-6). 감독 스냅샷은 TUI 의 병렬 화면과 같은 값이다. 상태 값(`state`, `phase`)은 정해진
+ * 값이다 (K4-2). 전송되는 글자는 이전과 같다: TUI 의 표시 이름을 snake_case 로 쓴 것이다.
  */
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ParallelState {
@@ -1304,32 +1307,159 @@ pub struct ParallelAgent {
     pub task_title: String,
     pub slot_id: String,
     pub branch: String,
-    pub state: String,
+    pub state: ParallelAgentState,
     pub duration: String,
     pub summary: String,
+}
+
+/// 에이전트의 상태이다 (plan 18 K4-2). domain 의 roster 상태와 같은 이름이다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ParallelAgentState {
+    Starting,
+    Running,
+    CleanupPending,
+    ReportedComplete,
+    LedgerRefreshing,
+    CommitReady,
+    MergeQueued,
+    Pushing,
+    PrPending,
+    MergePending,
+    Integrating,
+    OfficialRefreshRecoveryNeeded,
+    Failed,
+    // roster 가 만든 상태가 아니다. 커널이 만든 행에는 나오지 않는다. 문서 주석으로 쓰지 않는다: 문서 주석이 있는
+    // variant 는 스키마에서 따로 나뉘어, 값의 목록이 하나의 `enum` 으로 나오지 않는다.
+    Unknown,
+}
+
+impl ParallelAgentState {
+    fn from_core(state: Option<ParallelModeAgentRosterState>) -> Self {
+        use ParallelModeAgentRosterState as Roster;
+        match state {
+            None => Self::Unknown,
+            Some(Roster::Starting) => Self::Starting,
+            Some(Roster::Running) => Self::Running,
+            Some(Roster::CleanupPending) => Self::CleanupPending,
+            Some(Roster::ReportedComplete) => Self::ReportedComplete,
+            Some(Roster::LedgerRefreshing) => Self::LedgerRefreshing,
+            Some(Roster::CommitReady) => Self::CommitReady,
+            Some(Roster::MergeQueued) => Self::MergeQueued,
+            Some(Roster::Pushing) => Self::Pushing,
+            Some(Roster::PrPending) => Self::PrPending,
+            Some(Roster::MergePending) => Self::MergePending,
+            Some(Roster::Integrating) => Self::Integrating,
+            Some(Roster::OfficialRefreshRecoveryNeeded) => Self::OfficialRefreshRecoveryNeeded,
+            Some(Roster::Failed) => Self::Failed,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ParallelMergeItem {
     pub task_title: String,
-    pub state: String,
+    pub state: ParallelMergeState,
     pub branch: String,
     pub commit: String,
+}
+
+/// 병합 큐 항목의 상태이다 (plan 18 K4-2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ParallelMergeState {
+    Idle,
+    Queued,
+    Pushing,
+    PrPending,
+    MergePending,
+    Integrating,
+    Cleaning,
+    Done,
+    Blocked,
+    Failed,
+}
+
+impl ParallelMergeState {
+    fn from_core(state: ParallelModeQueueItemState) -> Self {
+        match state {
+            ParallelModeQueueItemState::Idle => Self::Idle,
+            ParallelModeQueueItemState::Queued => Self::Queued,
+            ParallelModeQueueItemState::Pushing => Self::Pushing,
+            ParallelModeQueueItemState::PrPending => Self::PrPending,
+            ParallelModeQueueItemState::MergePending => Self::MergePending,
+            ParallelModeQueueItemState::Integrating => Self::Integrating,
+            ParallelModeQueueItemState::Cleaning => Self::Cleaning,
+            ParallelModeQueueItemState::Done => Self::Done,
+            ParallelModeQueueItemState::Blocked => Self::Blocked,
+            ParallelModeQueueItemState::Failed => Self::Failed,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ParallelPrValidation {
     pub pull_request_number: u64,
     pub url: String,
-    pub state: String,
-    pub phase: String,
+    pub state: ParallelPrValidationState,
+    pub phase: ParallelPrValidationPhase,
     pub reason: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocker: Option<String>,
 }
 
-fn state_name(label: &str) -> String {
-    label.replace(' ', "_")
+/// PR 검증이 사람에게 요구하는 것으로 본 상태이다 (plan 18 K4-2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ParallelPrValidationState {
+    Pending,
+    Blocking,
+    Remediation,
+    Terminal,
+    Blocked,
+    Failed,
+}
+
+impl ParallelPrValidationState {
+    fn from_core(state: PrValidationOperatorState) -> Self {
+        match state {
+            PrValidationOperatorState::Pending => Self::Pending,
+            PrValidationOperatorState::Blocking => Self::Blocking,
+            PrValidationOperatorState::Remediation => Self::Remediation,
+            PrValidationOperatorState::Terminal => Self::Terminal,
+            PrValidationOperatorState::Blocked => Self::Blocked,
+            PrValidationOperatorState::Failed => Self::Failed,
+        }
+    }
+}
+
+/// PR 검증의 단계이다 (plan 18 K4-2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ParallelPrValidationPhase {
+    Registered,
+    PreMergeObservation,
+    RemediationQueued,
+    RemediationRunning,
+    PostMergeObservation,
+    Settled,
+    Blocked,
+    Failed,
+}
+
+impl ParallelPrValidationPhase {
+    fn from_core(phase: PrValidationPhase) -> Self {
+        match phase {
+            PrValidationPhase::Registered => Self::Registered,
+            PrValidationPhase::PreMergeObservation => Self::PreMergeObservation,
+            PrValidationPhase::RemediationQueued => Self::RemediationQueued,
+            PrValidationPhase::RemediationRunning => Self::RemediationRunning,
+            PrValidationPhase::PostMergeObservation => Self::PostMergeObservation,
+            PrValidationPhase::Settled => Self::Settled,
+            PrValidationPhase::Blocked => Self::Blocked,
+            PrValidationPhase::Failed => Self::Failed,
+        }
+    }
 }
 
 impl ParallelState {
@@ -1372,7 +1502,7 @@ impl ParallelSupervisor {
                     task_title: entry.task_title.clone(),
                     slot_id: entry.slot_id.clone(),
                     branch: entry.branch_name.clone(),
-                    state: entry.state_label.clone(),
+                    state: ParallelAgentState::from_core(entry.state()),
                     duration: entry.duration_label.clone(),
                     summary: entry.latest_summary.clone(),
                 })
@@ -1384,7 +1514,7 @@ impl ParallelSupervisor {
                 .iter()
                 .map(|item| ParallelMergeItem {
                     task_title: item.task_title.clone(),
-                    state: state_name(item.queue_state.label()),
+                    state: ParallelMergeState::from_core(item.queue_state),
                     branch: item.branch_name.clone(),
                     commit: item.commit_short_sha.clone(),
                 })
@@ -1395,8 +1525,8 @@ impl ParallelSupervisor {
                 .map(|summary| ParallelPrValidation {
                     pull_request_number: summary.pull_request_number,
                     url: summary.canonical_pr_url.clone(),
-                    state: state_name(summary.state.label()),
-                    phase: summary.phase_label().to_string(),
+                    state: ParallelPrValidationState::from_core(summary.state),
+                    phase: ParallelPrValidationPhase::from_core(summary.phase),
                     reason: summary.reason.clone(),
                     blocker: summary.blocker.clone(),
                 }),

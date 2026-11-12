@@ -18,8 +18,9 @@ mod runtime_events;
 // 흡수해 병렬 모드 화면과 서비스가 같은 도메인 언어를 쓰게 둔다.
 pub use self::agent_session::{
     ParallelModeAgentLeaseIdentity, ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot,
-    ParallelModeAgentSessionDetailSnapshot, ParallelModeAgentSessionHistoryEntry,
-    ParallelModeLiveSessionDetailDefaults, ParallelModeSupervisorDetailSnapshot,
+    ParallelModeAgentRosterState, ParallelModeAgentSessionDetailSnapshot,
+    ParallelModeAgentSessionHistoryEntry, ParallelModeLiveSessionDetailDefaults,
+    ParallelModeSupervisorDetailSnapshot,
 };
 use self::agent_session::{roster_recency_key, roster_state_priority};
 #[allow(unused_imports)]
