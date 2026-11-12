@@ -219,6 +219,7 @@ pub(crate) fn build_kernel_for_workspace(
     let mut runtime = production::build_headless_kernel_runtime(workspace_dir, app_server);
     // 잠금을 잡은 뒤에 기록을 읽는다. 이전 커널은 기록을 다 쓴 뒤 잠금을 풀었다 (plan 19 Q3-1).
     runtime.attach_kernel_event_log(production::kernel_event_log_port(), workspace_dir);
+    runtime.attach_repository_observer(production::repository_state_port());
     start_repository_kernel(lock, runtime, workspace_dir)
 }
 

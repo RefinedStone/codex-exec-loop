@@ -356,6 +356,15 @@ the desktop app itself is not shipped yet.
   have no receipt. While a client is attached the kernel refreshes the parallel supervisor snapshot, and the
   first attach runs one supervisor inspection that does not change the pool (it runs the push readiness
   check, like the TUI parallel view).
+- A repository kernel with a log observes the git state of its workspace: the checked-out commit and
+  branch. A separate thread reads it about every 30 seconds; when it differs from the last record, the
+  kernel writes a `repository_changed` record (`head`, `branch`, `previous_head`, `previous_branch`).
+  One record can cover several changes. The record does not say who made the change, so commits by an
+  Akra turn, by the user, and by an agent that Akra did not open look the same. The record has no thread
+  (`thread_id` is empty in `history`). A new kernel starts from the last recorded state, so a change made
+  while no kernel ran is one record; the first observation in a log has no `previous_head`. Other
+  worktrees of the repository, other branches, and uncommitted file changes are not observed. The TUI
+  runtime does not observe.
 - A kernel with no attached client and no remaining work (turns, approvals, auto-follow, evaluation,
   planning work, parallel mode on, or running parallel work) for 10 minutes is unloaded, and its
   repository lock is free for a TUI. The next attach starts it again. Gateway shutdown stops the

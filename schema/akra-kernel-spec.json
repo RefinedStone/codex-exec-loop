@@ -1304,6 +1304,44 @@
         ],
         "type": "object"
       }
+    },
+    {
+      "name": "repository_changed",
+      "summary": "The checked-out commit or branch of the workspace differs from the last observation. The kernel looks periodically, so one record can cover several changes. It does not say who made the change. Without `previous_head`, this is the first observation in this log. This record has no thread: `thread_id` is empty in history.",
+      "payload": {
+        "properties": {
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "head": {
+            "type": "string"
+          },
+          "kind": {
+            "const": "repository_changed",
+            "type": "string"
+          },
+          "previous_branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "previous_head": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "head"
+        ],
+        "type": "object"
+      }
     }
   ],
   "reasons": [
@@ -2699,6 +2737,40 @@
             "op_id",
             "thread_id",
             "result"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "branch": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "head": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "repository_changed",
+              "type": "string"
+            },
+            "previous_branch": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "previous_head": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "head"
           ],
           "type": "object"
         }

@@ -262,6 +262,58 @@ pub enum KernelEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<ReasonCode>,
     },
+    /*
+     * 저장소의 git 상태가 지난 관찰과 다르다 (plan 20 §4.1). 커널은 주기적으로 본다. 그래서 관찰 사이의 변화
+     * 여러 개가 사건 하나가 된다. 누가 바꿨는지는 모른다. Akra 의 턴일 수도 있고, Akra 가 열지 않은 에이전트나
+     * 사용자일 수도 있다. 이전 값이 없으면 이 기록의 첫 관찰이다. 대화가 아니므로 thread id 가 없다.
+     */
+    RepositoryChanged {
+        head: String,
+        /// 체크아웃한 브랜치이다. 브랜치가 아닌 커밋을 체크아웃했으면 없다.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        branch: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        previous_head: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        previous_branch: Option<String>,
+    },
+}
+
+/// 작업 공간의 git 상태이다. 커밋이 하나도 없는 저장소와 저장소가 아닌 폴더는 상태가 없다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepositoryState {
+    pub head: String,
+    pub branch: Option<String>,
+}
+
+impl RepositoryState {
+    /// 지난 관찰과 다르면 그 사건이다. 지난 관찰이 없으면 첫 관찰로 기록한다.
+    pub fn change_from(&self, previous: Option<&Self>) -> Option<KernelEvent> {
+        if previous == Some(self) {
+            return None;
+        }
+        Some(KernelEvent::RepositoryChanged {
+            head: self.head.clone(),
+            branch: self.branch.clone(),
+            previous_head: previous.map(|state| state.head.clone()),
+            previous_branch: previous.and_then(|state| state.branch.clone()),
+        })
+    }
+}
+
+/// 기록의 마지막 git 상태이다. 커널을 다시 조립할 때 읽는다. 그래야 커널이 꺼진 동안의 변화도 사건이 된다.
+pub fn last_repository_state(
+    events: impl IntoIterator<Item = KernelEvent>,
+) -> Option<RepositoryState> {
+    events
+        .into_iter()
+        .filter_map(|event| match event {
+            KernelEvent::RepositoryChanged { head, branch, .. } => {
+                Some(RepositoryState { head, branch })
+            }
+            _ => None,
+        })
+        .last()
 }
 
 /// 기록에서 읽은 사건 하나이다 (plan 19 Q3-3). `sequence` 는 기록 순서이고 cursor 로 쓴다.
@@ -346,6 +398,9 @@ pub const APPROVAL_KINDS: [&str; 2] = [
     KernelRecordKind::ApprovalResolved.name(),
 ];
 
+/// 마지막 git 상태를 찾을 때 읽는 사건 종류이다 (plan 20 §4.1).
+pub const REPOSITORY_KINDS: [&str; 1] = [KernelRecordKind::RepositoryChanged.name()];
+
 /// 기록에 남기는 승인 설명의 최대 길이이다. 기록은 대화의 사본이 아니다.
 const APPROVAL_SUMMARY_MAX_CHARS: usize = 200;
 
@@ -414,11 +469,14 @@ impl KernelEvent {
             Self::CommandReceived { .. } => KernelRecordKind::CommandReceived,
             Self::CommandRejected { .. } => KernelRecordKind::CommandRejected,
             Self::CommandCompleted { .. } => KernelRecordKind::CommandCompleted,
+            Self::RepositoryChanged { .. } => KernelRecordKind::RepositoryChanged,
         }
     }
 
+    /// 이 사건의 대화이다. 대화가 없는 사건은 비어 있다.
     pub fn thread_id(&self) -> &str {
         match self {
+            Self::RepositoryChanged { .. } => "",
             Self::ThreadPromptQueued(prompt) => &prompt.thread_id,
             Self::ApprovalRequested(approval) => &approval.thread_id,
             Self::ApprovalResolved { thread_id, .. }
@@ -450,7 +508,8 @@ impl KernelEvent {
             Self::ThreadPromptRejected { .. }
             | Self::PostTurnRouted { .. }
             | Self::ApprovalRequested(_)
-            | Self::ApprovalResolved { .. } => None,
+            | Self::ApprovalResolved { .. }
+            | Self::RepositoryChanged { .. } => None,
         }
     }
 
@@ -492,7 +551,8 @@ impl KernelEvent {
             Self::ThreadPromptRejected { .. }
             | Self::PostTurnRouted { .. }
             | Self::ApprovalRequested(_)
-            | Self::ApprovalResolved { .. } => return None,
+            | Self::ApprovalResolved { .. }
+            | Self::RepositoryChanged { .. } => return None,
         };
         Some(state)
     }
@@ -1258,6 +1318,9 @@ mod tests {
                 result: OperationEnd::Failed,
                 reason: Some(ReasonCode::PlanningRefused),
             },
+            repository("b", Some("main"))
+                .change_from(Some(&repository("a", None)))
+                .expect("a different state is a change"),
         ];
         // 종류 하나에 사건 하나이다. 새 사건을 더하면 `record_kind` 가 컴파일되지 않고, 이 표본이 빠지면 여기서 걸린다.
         assert_eq!(
@@ -1431,6 +1494,45 @@ mod tests {
             fields,
             ["command", "fingerprint", "kind", "op_id", "thread_id"]
         );
+    }
+
+    fn repository(head: &str, branch: Option<&str>) -> RepositoryState {
+        RepositoryState {
+            head: head.to_string(),
+            branch: branch.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn a_repository_change_carries_the_previous_state_and_the_log_restores_the_last_one() {
+        let first = repository("a", Some("main"));
+        let baseline = first.change_from(None).expect("the first observation");
+        assert_eq!(
+            serde_json::to_value(&baseline).expect("event should serialize"),
+            serde_json::json!({ "kind": "repository_changed", "head": "a", "branch": "main" })
+        );
+        assert_eq!(first.change_from(Some(&first)), None);
+
+        // 같은 커밋에서 브랜치만 바뀌어도 변화이다. 브랜치가 없는 체크아웃은 `branch` 가 없다.
+        let detached = repository("a", None);
+        let moved = detached.change_from(Some(&first)).expect("a branch change");
+        assert_eq!(
+            moved,
+            KernelEvent::RepositoryChanged {
+                head: "a".to_string(),
+                branch: None,
+                previous_head: Some("a".to_string()),
+                previous_branch: Some("main".to_string()),
+            }
+        );
+        assert_eq!(moved.thread_id(), "");
+        assert_eq!(moved.op_id(), None);
+
+        assert_eq!(
+            last_repository_state([baseline, settled("task-1"), moved]),
+            Some(detached)
+        );
+        assert_eq!(last_repository_state([settled("task-1")]), None);
     }
 
     #[test]
