@@ -17,9 +17,10 @@ use super::{
     KernelQueryAnswer, KernelQueryKind, NextStep, PROTOCOL_VERSION, QueryRequest, error_next,
     reason_next,
 };
-use crate::domain::kernel_event::{KernelEvent as KernelRecord, ReasonCode};
+use crate::domain::kernel_event::KernelEvent as KernelRecord;
 use crate::domain::kernel_spec::{
     CommandEffect, CommandIdempotency, CommandScope, KernelCommandKind, KernelRecordKind,
+    ReasonCode,
 };
 use crate::domain::parallel_mode::ParallelModeAgentRosterState;
 
@@ -51,11 +52,11 @@ pub struct KernelSpec {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Terms {
-    pub scope: Vec<ReasonEntry>,
-    pub effect: Vec<ReasonEntry>,
-    pub idempotency: Vec<ReasonEntry>,
+    pub scope: Vec<TermEntry>,
+    pub effect: Vec<TermEntry>,
+    pub idempotency: Vec<TermEntry>,
     /// 병렬 에이전트의 `state` 값이다 (plan 18 K4-2). 이름만으로 뜻을 알기 어려운 값이라서 설명을 싣는다.
-    pub agent_state: Vec<ReasonEntry>,
+    pub agent_state: Vec<TermEntry>,
 }
 
 /// 메서드가 답을 받는 요청인가, 커널이 보내는 알림인가이다.
@@ -120,7 +121,7 @@ pub struct RecordEntry {
 
 /// 이름과 뜻이다. `terms` 의 값이 이 모양이다.
 #[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct ReasonEntry {
+pub struct TermEntry {
     pub name: &'static str,
     pub summary: &'static str,
 }
@@ -182,7 +183,7 @@ pub fn describe() -> KernelSpec {
             }
         })
         .collect();
-    let term = |name, summary| ReasonEntry { name, summary };
+    let term = |name, summary| TermEntry { name, summary };
     KernelSpec {
         schema_dialect: SCHEMA_DIALECT,
         protocol_version: PROTOCOL_VERSION,

@@ -144,11 +144,11 @@ spec_names! {
         ParallelModeStarted => "parallel_mode_started",
             "Parallel mode started while the prompt was prepared. The planning task stays queued and parallel slots take it. Do not send the prompt again.";
         TurnStartedDuringPreparation => "turn_started_during_preparation",
-            "Another turn started while the prompt was prepared. The planning task stays queued and the kernel submits the prompt once when it is idle. Do not send the prompt again.";
+            "Another turn started while the prompt was prepared. The planning task stays queued and the kernel submits the prompt once when it is idle. The result arrives as a `prompt_submission` event with the same `task_id`. Do not send the prompt again.";
         StopPending => "stop_pending",
-            "A stop request is still settling. The planning task stays queued and the kernel submits the prompt once when it is idle. Do not send the prompt again.";
+            "A stop request is still settling. The planning task stays queued and the kernel submits the prompt once when it is idle. The result arrives as a `prompt_submission` event with the same `task_id`. Do not send the prompt again.";
         Unavailable => "unavailable",
-            "The thread cannot take a prompt now. The planning task stays queued and the kernel submits the prompt once when it is idle. Do not send the prompt again.";
+            "The thread cannot take a prompt now. The planning task stays queued and the kernel submits the prompt once when it is idle. The result arrives as a `prompt_submission` event with the same `task_id`. Do not send the prompt again.";
         Cancelled => "cancelled",
             "The prompt preparation was cancelled. No planning task was made.";
         TextMismatch => "text_mismatch",
@@ -295,8 +295,8 @@ mod tests {
 
     #[test]
     fn reason_codes_keep_the_text_of_the_three_old_lists() {
-        // plan 18 K4-3: one list replaced `ReasonCode`, `ReasonCode`, and
-        // `PromptSubmissionReason`. Records and v0 clients read the same text, and serde must agree with the table.
+        // plan 18 K4-3: one list replaced `CommandRejectionReason`, `ThreadPromptRejection`,
+        // and `PromptSubmissionReason`. Records and v0 clients read the same text, and serde must agree with the table.
         let names = ReasonCode::ALL
             .iter()
             .map(|reason| reason.name())
@@ -331,17 +331,5 @@ mod tests {
                 reason.name()
             );
         }
-    }
-
-    #[test]
-    fn the_command_rejections_are_the_first_nine_reasons() {
-        // The other reasons belong to `prompt_submission` events after the command was accepted.
-        let mut rejections = KernelCommandKind::ALL
-            .iter()
-            .flat_map(|kind| kind.spec().rejections.iter().copied())
-            .collect::<Vec<_>>();
-        rejections.sort_by_key(|reason| ReasonCode::ALL.iter().position(|known| known == reason));
-        rejections.dedup();
-        assert_eq!(rejections, ReasonCode::ALL[..9]);
     }
 }

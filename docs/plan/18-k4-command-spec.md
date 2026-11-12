@@ -176,7 +176,8 @@ Error  { name, code, summary, next[] }
 | `wait { milliseconds }` | 그만큼 기다린다. 그 일의 끝을 알리는 이벤트가 없을 때만 쓴다 (K4-3 에서 더했다, §8) |
 | `query { name }` | 그 조회로 지금 값을 읽는다 |
 | `command { name }` | 그 명령을 보낸다 |
-| `resend` | 같은 명령을 새 멱등 키로 다시 보낸다 |
+| `method { name }` | 그 메서드를 보낸다 (`not_attached` 뒤의 `akra/kernel/attach`. K4-3 에서 더했다, §8) |
+| `resend` | 같은 요청을 다시 보낸다. 명령이면 새 멱등 키로 보낸다 |
 | `ask_user` | 사람이 정해야 한다 |
 | `stop` | 다시 하지 않는다 |
 
@@ -505,21 +506,30 @@ Q3-6 의 영수증은 받아들임과 바로 거절까지만 알린다. 끝은 �
   이유의 `summary` 이다. `bootstrap_review_required` 와 `planning_refused` 만 초안 이름과 원인을 싣는다.
 - 큐에 남긴 프롬프트를 내지 않고 끝낼 때 클라이언트에 알린다. 상태 `dropped` 를 더했고, 이유는 기록의 값을 그대로
   쓴다: `task_finished` (작업이 이미 끝났다), `rejected_again` (한 번 더 낸 것이 또 거절되었다).
-- 시뮬레이션의 I6 에 거절의 완전성을 더했다: `command_rejected` 의 이유는 같은 연산의 명령 스펙 `rejections` 에 있다.
+- 시뮬레이션에 불변식 I10 (거절의 완전성)을 더했다: `command_rejected` 의 이유는 같은 연산의 명령 스펙 `rejections` 에
+  있다. 기본 seed 들에서 거절이 한 번도 나지 않으면 시험이 실패한다. 시뮬레이션이 기록하는 명령은 `submit_prompt`
+  뿐이므로 다른 명령의 거절(steer, 승인 결정)은 이 불변식이 보지 않는다.
 
 설계와 다른 점:
 
 - `next` 의 표는 domain 이 아니라 adapter 에 있다. 단계가 가리키는 조회와 이벤트의 이름은 adapter 의 표이고,
   domain 은 adapter 를 쓰지 못한다. 커널은 `next` 를 읽지 않는다.
 - 단계 `wait { milliseconds }` 를 더했다. `steer_in_flight`, `decision_in_flight`, `parallel_mode_unknown` 은 그 일의
-  끝을 알리는 이벤트가 없다. 없는 이벤트를 기다리라고 할 수 없어서 1초를 기다리게 했다.
+  끝을 알리는 이벤트가 없다. 없는 이벤트를 기다리라고 할 수 없어서 1초를 기다리게 했다. `preparation_active` 도 같다:
+  거절 자체가 `prompt_submission` 을 내므로 그 이벤트를 기다리면 자기 거절에서 바로 풀린다 (리뷰에서 고쳤다).
+- 단계 `method { name }` 를 더했다. `not_attached` 의 다음 행동은 `akra/kernel/attach` 를 보내고 다시 보내는 것이다.
+- `wait_for` 에는 조건이 없다 (§3.2). 큐에 남은 프롬프트의 `wait_for prompt_submission` 은 다른 thread 의 이벤트에도
+  풀린다. 클라이언트가 이벤트의 `task_id` 로 가린다. 이유의 설명이 그것을 적는다. 연산의 끝은 K4-4 의 `operation`
+  조회가 정확히 알린다.
+- `errors[].next` 는 스펙에만 있다. JSON-RPC 오류 응답은 `code` 와 `message` 이고, 클라이언트는 `code` 로 스펙의
+  항목을 찾는다.
 - 상태 `dropped` 와 이유 `rejected_again` 은 설계에 없었다. 한 번 더 낸 프롬프트가 또 거절되면 이전에는 `queued` 로
   알렸다. 커널은 그것을 다시 내지 않으므로 `queued` 의 `next` (`wait_for prompt_submission`)가 끝나지 않는다.
 - `ThreadPromptRejected` 기록의 `reason` 스키마가 5개에서 19개의 목록으로 넓어졌다. 이전 기록은 그대로 읽힌다.
 - 명령의 답과 `prompt_submission` 의 `message` 글이 바뀌었다 (판단에는 `reason` 을 쓴다). 프로토콜 판은 그대로 1 이다.
   필드(`next`)와 값(`dropped`, 이유 10개)을 더한 것이다.
 
-확인: domain 시험(이유의 글자, 명령 거절의 범위), 프로토콜 시험(모든 이유와 오류의 `next` 가 스펙의 이름을 가리킨다,
+확인: domain 시험(이유의 글자, 이전 기록의 거절 이유를 읽는다), 프로토콜 시험(모든 이유와 오류의 `next` 가 스펙의 이름을 가리킨다,
 모든 이유가 클라이언트에 닿는다, 단계의 전송 모양, 이벤트와 답의 모양), core 시험(버린 프롬프트의 이벤트), 커널
 시뮬레이션 (300 seed), 스펙 파일 시험.
 

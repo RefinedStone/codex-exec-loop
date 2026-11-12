@@ -296,8 +296,9 @@ the desktop app itself is not shipped yet.
   in as `schema/akra-kernel-spec.json`. All reason codes are one list (`reasons`): command
   rejections and the reasons of `prompt_submission` events use the same names. Each reason and each
   error has `next`, an ordered list of steps a client can run as given: `wait_for { event }`,
-  `wait { milliseconds }`, `query { name }`, `command { name }`, `resend` (the same command with a new
-  key), `ask_user`, and `stop`. A command rejection carries `reason`, `message` (the summary of the
+  `wait { milliseconds }`, `query { name }`, `command { name }`, `method { name }`, `resend` (the same
+  request; a command gets a new key), `ask_user`, and `stop`. A `wait_for` step has no condition, so
+  the client matches the event to its prompt by `task_id`. A command rejection carries `reason`, `message` (the summary of the
   reason), and the `next` of that reason. A `prompt_submission` event with a reason carries the same
   `next`. When the kernel drops a queued prompt without a turn, the client gets `prompt_submission`
   with status `dropped` and reason `task_finished` (its task is already done or cancelled) or

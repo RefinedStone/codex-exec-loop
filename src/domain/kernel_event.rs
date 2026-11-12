@@ -600,6 +600,34 @@ mod tests {
     }
 
     #[test]
+    fn rejection_records_written_before_the_one_reason_list_still_read() {
+        // plan 18 K4-3: the stored text of the two old reason enums is the text of `ReasonCode`.
+        let prompt: KernelEvent = serde_json::from_value(serde_json::json!({
+            "kind": "thread_prompt_rejected", "thread_id": "thread-1", "reason": "preparation_active"
+        }))
+        .expect("an old thread prompt rejection should still decode");
+        assert_eq!(
+            prompt,
+            KernelEvent::ThreadPromptRejected {
+                thread_id: "thread-1".to_string(),
+                reason: ReasonCode::PreparationActive,
+            }
+        );
+        let command: KernelEvent = serde_json::from_value(serde_json::json!({
+            "kind": "command_rejected", "op_id": 7, "thread_id": "thread-1", "reason": "steer_in_flight"
+        }))
+        .expect("an old command rejection should still decode");
+        assert_eq!(
+            command,
+            KernelEvent::CommandRejected {
+                op_id: 7,
+                thread_id: "thread-1".to_string(),
+                reason: ReasonCode::SteerInFlight,
+            }
+        );
+    }
+
+    #[test]
     fn every_kind_matches_its_json_tag() {
         let events = [
             KernelEvent::ThreadPromptQueued(queued("task-1")),

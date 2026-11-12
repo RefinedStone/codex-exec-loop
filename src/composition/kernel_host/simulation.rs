@@ -80,6 +80,8 @@ const SCENARIO_STEPS: usize = 240;
 const SETTLE_STEPS: usize = 400;
 /// PR 마다 도는 seed 수이다 (plan 19 Q-Q4). 더 돌리려면 `AKRA_SIM_SEEDS` 를 준다.
 const DEFAULT_SEED_COUNT: u64 = 24;
+/// 커널이 thread 지정 프롬프트를 바로 거절했을 때의 기록 줄 머리이다. I10 이 거절을 실제로 보았는지 세는 데 쓴다.
+const REJECTED_AT_ONCE: &str = "kernel: rejected at once";
 /// 실패 보고에 넣는 마지막 기록 줄 수이다.
 const TRACE_TAIL: usize = 40;
 /*
@@ -677,7 +679,7 @@ fn check_kernel_records(
 }
 
 /*
- * I6: 거절의 완전성 (plan 18 K4-3, 설계 §3.9). 커널이 명령에 낸 모든 이유 코드는 그 명령의 스펙 `rejections` 에 있다.
+ * I10: 거절의 완전성 (plan 18 K4-3, 설계 §3.9). 커널이 명령에 낸 모든 이유 코드는 그 명령의 스펙 `rejections` 에 있다.
  * 클라이언트는 스펙에 없는 이유를 받지 않는다. 명령의 이름은 같은 연산 id 의 받은 기록에서 읽는다.
  */
 fn check_rejections_are_in_the_spec(records: &[KernelEvent]) -> Result<(), String> {
@@ -689,14 +691,18 @@ fn check_rejections_are_in_the_spec(records: &[KernelEvent]) -> Result<(), Strin
                 commands.insert(*op_id, command.as_str());
             }
             KernelEvent::CommandRejected { op_id, reason, .. } => {
-                let name = commands.get(op_id).copied().unwrap_or_default();
+                let Some(name) = commands.get(op_id).copied() else {
+                    return Err(format!(
+                        "I10: operation {op_id} was rejected without a received record"
+                    ));
+                };
                 let listed = KernelCommandKind::ALL
                     .iter()
                     .find(|kind| kind.name() == name)
                     .is_some_and(|kind| kind.spec().rejections.contains(reason));
                 if !listed {
                     return Err(format!(
-                        "I6: operation {op_id} (`{name}`) was rejected with `{}`, which its spec does not list",
+                        "I10: operation {op_id} (`{name}`) was rejected with `{}`, which its spec does not list",
                         reason.name()
                     ));
                 }
@@ -819,7 +825,7 @@ impl Simulation {
         self.finish(result)
     }
 
-    /// 커널을 버리고 기록을 확인한다 (I6, I7, I8). 성공하면 기록 전체를 돌려준다.
+    /// 커널을 버리고 기록을 확인한다 (I6, I7, I8, I10). 성공하면 기록 전체를 돌려준다.
     fn finish(
         self,
         result: Result<(), Violation>,
@@ -1035,6 +1041,12 @@ impl Simulation {
         else {
             panic!("I9: the first send of '{prompt}' did not run with a receipt");
         };
+        if let Some(reason) = receipt.rejection {
+            self.record(format!(
+                "{REJECTED_AT_ONCE} '{prompt}' with {}",
+                reason.name()
+            ));
+        }
         self.sent_thread_prompts
             .push((thread_id, prompt, receipt.op_id));
     }
@@ -1806,16 +1818,30 @@ fn env_number(name: &str) -> Option<u64> {
 
 #[test]
 fn kernel_simulation_keeps_the_invariants_for_every_seed() {
-    let failures: Vec<String> = seeds_to_run()
+    let seeds = seeds_to_run();
+    let seed_count = seeds.len() as u64;
+    let (traces, failures): (Vec<_>, Vec<_>) =
+        seeds.into_iter().map(run_seed).partition(Result::is_ok);
+    let failures = failures
         .into_iter()
-        .filter_map(|seed| run_seed(seed).err())
-        .collect();
+        .filter_map(Result::err)
+        .collect::<Vec<_>>();
     assert!(
         failures.is_empty(),
         "{} seed(s) failed\n\n{}",
         failures.len(),
         failures.join("\n\n")
     );
+    // I10 checks nothing when no command is rejected. The default seeds must reject at least one prompt.
+    if seed_count >= DEFAULT_SEED_COUNT {
+        let rejected = traces
+            .iter()
+            .flatten()
+            .flatten()
+            .filter(|line| line.contains(REJECTED_AT_ONCE))
+            .count();
+        assert!(rejected > 0, "no seed rejected a thread prompt at once");
+    }
 }
 
 #[test]

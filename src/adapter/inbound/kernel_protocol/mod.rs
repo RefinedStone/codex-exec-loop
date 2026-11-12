@@ -948,13 +948,12 @@ impl PromptSubmissionState {
     }
 
     fn from_outcome(thread_id: &str, outcome: &ThreadPromptOutcome) -> Self {
-        let task = |task_id: &String| Some(task_id.clone());
         match outcome {
             ThreadPromptOutcome::Submitted { admission, task_id } => {
                 let reason = match admission {
                     TurnSubmissionAdmission::Accepted { .. } => {
                         return Self {
-                            task_id: task(task_id),
+                            task_id: Some(task_id.clone()),
                             ..Self::progress(thread_id, PromptSubmissionStatus::Submitted)
                         };
                     }
@@ -968,14 +967,14 @@ impl PromptSubmissionState {
                     thread_id,
                     PromptSubmissionStatus::Queued,
                     reason,
-                    task(task_id),
+                    Some(task_id.clone()),
                 )
             }
             ThreadPromptOutcome::ParallelModeStarted { task_id } => Self::stopped(
                 thread_id,
                 PromptSubmissionStatus::Queued,
                 ReasonCode::ParallelModeStarted,
-                task(task_id),
+                Some(task_id.clone()),
             ),
             ThreadPromptOutcome::PreparationFailed(failure) => {
                 let (reason, detail) = match failure {
@@ -993,25 +992,21 @@ impl PromptSubmissionState {
                         (ReasonCode::PlanningRefused, Some(reason.clone()))
                     }
                 };
-                let mut state =
-                    Self::stopped(thread_id, PromptSubmissionStatus::Failed, reason, None);
                 // 이 두 이유는 설명 대신 초안 이름이나 원인을 싣는다. 사람이 그것을 보고 정한다.
-                if detail.is_some() {
-                    state.message = detail;
-                }
-                state
+                Self::stopped(thread_id, PromptSubmissionStatus::Failed, reason, None)
+                    .with_detail(detail)
             }
             ThreadPromptOutcome::QueuedTaskFinished { task_id } => Self::stopped(
                 thread_id,
                 PromptSubmissionStatus::Dropped,
                 ReasonCode::TaskFinished,
-                task(task_id),
+                Some(task_id.clone()),
             ),
             ThreadPromptOutcome::QueuedRejectedAgain { task_id } => Self::stopped(
                 thread_id,
                 PromptSubmissionStatus::Dropped,
                 ReasonCode::RejectedAgain,
-                task(task_id),
+                Some(task_id.clone()),
             ),
         }
     }
@@ -1024,6 +1019,14 @@ impl PromptSubmissionState {
             next: Vec::new(),
             task_id: None,
             message: None,
+        }
+    }
+
+    /// 이유의 설명 대신 그 일의 내용(초안 이름, 원인)을 싣는다. 내용이 없으면 그대로이다.
+    fn with_detail(self, detail: Option<String>) -> Self {
+        Self {
+            message: detail.or(self.message),
+            ..self
         }
     }
 
