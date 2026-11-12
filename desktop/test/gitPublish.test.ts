@@ -51,6 +51,19 @@ describe("push and create a PR", () => {
     if (summary.ok) expect(summary.commits.map((item) => item.pushed)).toEqual([true]);
   });
 
+  it("does not publish annotated tags when push.followTags is enabled", async () => {
+    git("tag", "-a", "local-only", "-m", "Local tag");
+    git("config", "push.followTags", "true");
+    try {
+      const planned = await planPush(root);
+      if (!planned.ok) throw new Error(planned.message);
+      expect((await executePush(planned.plan)).ok).toBe(true);
+      expect(gitIn(remote, "for-each-ref", "--format=%(refname)", "refs/tags")).toBe("");
+    } finally {
+      git("config", "--unset", "push.followTags");
+    }
+  });
+
   it("does not overwrite a remote branch that is ahead", async () => {
     const other = join(base, "other");
     gitIn(base, "clone", "-q", "-b", "feat/x", remote, "other");
@@ -66,6 +79,32 @@ describe("push and create a PR", () => {
     const result = await executePush(planned.plan);
     expect(result.ok).toBe(false);
     expect(gitIn(remote, "rev-parse", "refs/heads/feat/x").trim()).toBe(theirs);
+  });
+
+  it("shows the push URL rather than the fetch URL", async () => {
+    git("config", "remote.origin.pushurl", "https://github.com/sample/publish.git");
+    try {
+      const planned = await planPush(root);
+      expect(planned).toMatchObject({ ok: true, plan: { remoteUrl: "https://github.com/sample/publish.git" } });
+      git("config", "--add", "remote.origin.pushurl", "https://github.com/sample/second.git");
+      expect((await planPush(root)).ok).toBe(false);
+    } finally {
+      git("config", "--unset-all", "remote.origin.pushurl");
+    }
+  });
+
+  it("refuses a push when its destination changes during confirmation", async () => {
+    const unexpected = join(base, "unexpected.git");
+    gitIn(base, "init", "-q", "--bare", unexpected);
+    const planned = await planPush(root);
+    if (!planned.ok) throw new Error(planned.message);
+    git("config", "remote.origin.pushurl", unexpected);
+    try {
+      expect((await executePush(planned.plan)).ok).toBe(false);
+      expect(gitIn(unexpected, "for-each-ref", "--format=%(refname)", "refs/heads")).toBe("");
+    } finally {
+      git("config", "--unset-all", "remote.origin.pushurl");
+    }
   });
 
   it("refuses to push without a branch or without origin", async () => {
