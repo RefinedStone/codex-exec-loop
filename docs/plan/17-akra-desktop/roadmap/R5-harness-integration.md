@@ -24,6 +24,7 @@ Akra 의 외부 루프 기능(계획 큐, worktree 슬롯, 검증, PR 전달)을
 - 하네스가 쓰는 app-server(P-08)를 Gateway 의 upstream 으로 합칠지 정한다. 합치면 Akra 내부 코드를
   Gateway 의 클라이언트로 바꾼다.
 - 시작 전에 불안정 테스트(K-02)를 정리한다. 하네스 영역의 테스트가 기준선 역할을 해야 한다.
+- 완료 기준과 증거는 [plan 24](../../24-akra-evidence-harness.md) 가 맡는다 (제안). 범위 2~4 는 그 계획의 E4 와 겹친다.
 - 참고: dori-superagent 의 구조 (리드 세션, 작업별 lane, duty loop, 증거 기반 머지 게이트)
   ([alternatives.md](../reference/alternatives.md) §4).
 
