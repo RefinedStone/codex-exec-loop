@@ -2,7 +2,6 @@
 import { useState } from "react";
 
 import type { DiffFile, DiffLine } from "./diff";
-import { totalCounts } from "./diff";
 
 /** 처음에 그리는 줄 수이다. 더 긴 파일은 버튼을 눌러 나머지를 그린다. */
 const INITIAL_LINE_LIMIT = 1000;
@@ -65,18 +64,5 @@ export function DiffFileList({ files, defaultOpen = false }: { files: readonly D
         <DiffFileView key={`${index}:${file.path}`} file={file} defaultOpen={defaultOpen} />
       ))}
     </div>
-  );
-}
-
-/** 턴 끝의 "이 턴의 변경" 요약이다. 펼치면 파일 목록이 나온다. */
-export function TurnChanges({ files }: { files: readonly DiffFile[] }) {
-  const counts = totalCounts(files);
-  return (
-    <details className="turn-changes" data-testid="turn-changes">
-      <summary>
-        이 턴의 변경 · 파일 {files.length}개 <DiffCounts added={counts.added} removed={counts.removed} />
-      </summary>
-      <DiffFileList files={files} />
-    </details>
   );
 }

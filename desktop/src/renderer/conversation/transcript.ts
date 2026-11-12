@@ -4,7 +4,9 @@ import type { Thread } from "../../shared/protocol/generated/v2/Thread";
 import type { ThreadItem } from "../../shared/protocol/generated/v2/ThreadItem";
 import type { ThreadResumeResponse } from "../../shared/protocol/generated/v2/ThreadResumeResponse";
 import type { ThreadStatus } from "../../shared/protocol/generated/v2/ThreadStatus";
+import type { ThreadTokenUsage } from "../../shared/protocol/generated/v2/ThreadTokenUsage";
 import type { Turn } from "../../shared/protocol/generated/v2/Turn";
+import type { TurnPlanStep } from "../../shared/protocol/generated/v2/TurnPlanStep";
 
 export interface TurnView {
   id: string;
@@ -13,6 +15,11 @@ export interface TurnView {
   items: ThreadItem[];
   /** `turn/diff/updated` 로 받은 이 턴의 전체 변경 (git 형식). 기록에는 없으므로 이전 턴은 null 이다. */
   diff: string | null;
+  /** `turn/plan/updated` 로 받은 이 턴의 계획이다. 기록에는 없으므로 이전 턴은 null 이다. */
+  plan: TurnPlanStep[] | null;
+  /** 턴이 시작한 때이다 (Unix 초). */
+  startedAt: number | null;
+  durationMs: number | null;
 }
 
 export interface Transcript {
@@ -23,6 +30,8 @@ export interface Transcript {
   turns: TurnView[];
   /** 아직 읽지 않은 이전 턴의 `thread/turns/list` 커서이다. 없으면 처음 턴까지 다 읽었다. */
   olderTurnsCursor: string | null;
+  /** `thread/tokenUsage/updated` 로 받은 마지막 사용량이다. 스레드를 연 뒤 턴이 없었으면 null 이다. */
+  tokenUsage: ThreadTokenUsage | null;
 }
 
 interface Notification {
@@ -56,6 +65,7 @@ export function transcriptFromThread(thread: Thread): Transcript {
     status: thread.status,
     turns: thread.turns.map(turnView),
     olderTurnsCursor: null,
+    tokenUsage: null,
   };
 }
 
@@ -73,11 +83,27 @@ export function prependOlderTurns(transcript: Transcript, newestFirst: readonly 
 }
 
 function turnView(turn: Turn): TurnView {
-  return { id: turn.id, status: turn.status, errorMessage: turn.error?.message ?? null, items: [...turn.items], diff: null };
+  return {
+    id: turn.id,
+    status: turn.status,
+    errorMessage: turn.error?.message ?? null,
+    items: [...turn.items],
+    diff: null,
+    plan: null,
+    startedAt: turn.startedAt ?? null,
+    durationMs: turn.durationMs ?? null,
+  };
 }
 
 export function isTurnInProgress(transcript: Transcript | null): boolean {
   return transcript?.turns.at(-1)?.status === "inProgress";
+}
+
+/** 마지막 요청이 쓴 토큰을 모델의 컨텍스트 크기로 나눈 값(%)이다. 크기를 모르면 null 이다. */
+export function contextPercent(transcript: Transcript | null): number | null {
+  const usage = transcript?.tokenUsage;
+  if (!usage?.modelContextWindow) return null;
+  return Math.min(100, Math.round((usage.last.totalTokens / usage.modelContextWindow) * 100));
 }
 
 /** 알림 여러 개를 순서대로 반영한다. 화면 프레임마다 한 번 부른다. */
@@ -99,6 +125,10 @@ export function applyNotification(transcript: Transcript, notification: Notifica
     case "item/started":
     case "item/completed":
       return upsertItem(transcript, params.turnId as string, params.item as ThreadItem);
+    case "turn/plan/updated":
+      return updateTurn(transcript, params.turnId as string, (turn) => ({ ...turn, plan: params.plan as TurnPlanStep[] }));
+    case "thread/tokenUsage/updated":
+      return { ...transcript, tokenUsage: params.tokenUsage as ThreadTokenUsage };
     case "turn/diff/updated":
       return updateTurn(transcript, params.turnId as string, (turn) => ({ ...turn, diff: String(params.diff ?? "") }));
     case "item/fileChange/patchUpdated":
@@ -121,7 +151,14 @@ function upsertTurn(transcript: Transcript, turn: Turn): Transcript {
   const existing = transcript.turns[index]!;
   // turn/completed 의 items 는 비어 있을 수 있다. 그때는 알림으로 모은 아이템을 유지한다.
   const items = turn.items.length > 0 ? mergeItems(existing.items, turn.items) : existing.items;
-  const updated: TurnView = { ...existing, status: turn.status, errorMessage: turn.error?.message ?? null, items };
+  const updated: TurnView = {
+    ...existing,
+    status: turn.status,
+    errorMessage: turn.error?.message ?? null,
+    items,
+    startedAt: turn.startedAt ?? existing.startedAt,
+    durationMs: turn.durationMs ?? existing.durationMs,
+  };
   return { ...transcript, turns: replaceAt(transcript.turns, index, updated) };
 }
 

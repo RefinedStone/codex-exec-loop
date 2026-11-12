@@ -1,8 +1,9 @@
 // 열린 스레드 cwd 의 작업 트리 변경이다 (R1). main 이 git 으로 바뀐 파일 목록을 읽고, 파일 diff 는 펼칠 때 하나씩
-// 읽는다. 패널을 펼쳤을 때만 읽고, 펼친 동안 턴이 끝나면 다시 읽는다.
+// 읽는다. 목록은 스레드를 열 때와 턴이 끝날 때 읽는다. 위 막대의 변경 줄 수와 오른쪽 `변경` 패널이 함께 쓴다 (R10).
 import { useEffect, useRef, useState } from "react";
 
 import type { AkraBridge, GitChangedFile, GitFileDiff, GitStatusResult } from "../../shared/bridge";
+import { Icon } from "../design/icons";
 import { useDesktopStore } from "../session/desktopStore";
 import { type DiffLine, diffFileFromChange, parseGitDiff } from "./diff";
 import { DiffCounts, DiffLines } from "./DiffView";
@@ -64,31 +65,39 @@ function ChangedFile({ cwd, file, git }: { cwd: string; file: GitChangedFile; gi
     return (
       <details className="diff-file" data-testid="git-file">
         {summary}
-        <div className="muted diff-note">새 폴더입니다. 안의 파일은 펼치지 않습니다.</div>
+        <div className="muted diff-hint">새 폴더입니다. 안의 파일은 펼치지 않습니다.</div>
       </details>
     );
   }
   return (
     <details className="diff-file" data-testid="git-file" open={open} onToggle={(event) => toggle(event.currentTarget.open)}>
       {summary}
-      {open && state.phase === "loading" && <div className="muted diff-note">읽는 중…</div>}
-      {open && state.phase === "failed" && <div className="error diff-note">{state.message}</div>}
+      {open && state.phase === "loading" && <div className="muted diff-hint">읽는 중…</div>}
+      {open && state.phase === "failed" && <div className="error diff-hint">{state.message}</div>}
       {open && state.phase === "loaded" && (
         <>
           {state.lines.length > 0 && <DiffLines lines={state.lines} />}
-          {state.note && <div className="muted diff-note">{state.note}</div>}
+          {state.note && <div className="muted diff-hint">{state.note}</div>}
         </>
       )}
     </details>
   );
 }
 
-export function WorkingTreePanel({ git }: { git: GitReader }) {
+export interface WorkingTree {
+  cwd: string | null;
+  panel: PanelState;
+  /** 다시 읽을 때마다 늘어난다. 파일 diff 도 새로 읽도록 목록 key 로 쓴다. */
+  generation: number;
+  refresh(): void;
+}
+
+/** 열린 스레드 폴더의 작업 트리를 읽는다. 폴더가 바뀔 때와 턴이 끝날 때 다시 읽는다. */
+export function useWorkingTree(git: GitReader): WorkingTree {
   const cwd = useDesktopStore((state) => state.transcript?.cwd ?? null);
   const lastTurnStatus = useDesktopStore((state) => state.transcript?.turns.at(-1)?.status ?? null);
-  const [open, setOpen] = useState(false);
   const [panel, setPanel] = useState<PanelState>({ phase: "idle" });
-  /** 늦게 끝난 이전 요청이 새 결과를 덮지 않게 한다. 다시 읽을 때마다 파일 diff 도 새로 읽도록 목록 key 로 쓴다. */
+  /** 늦게 끝난 이전 요청이 새 결과를 덮지 않게 한다. */
   const requestCounter = useRef(0);
 
   const refresh = (target: string) => {
@@ -106,65 +115,64 @@ export function WorkingTreePanel({ git }: { git: GitReader }) {
     );
   };
 
-  // 다른 폴더의 스레드로 바뀌면 이전 결과를 버린다. 펼쳐 둔 상태이면 새 폴더를 읽는다.
+  // 다른 폴더의 스레드로 바뀌면 이전 결과를 버리고 새 폴더를 읽는다.
   useEffect(() => {
     requestCounter.current += 1;
     setPanel({ phase: "idle" });
-    if (open && cwd) {
+    if (cwd) {
       refresh(cwd);
     }
   }, [cwd]); // 폴더가 바뀔 때만 다시 읽는다.
 
-  // 펼친 동안 턴이 끝나면 에이전트가 바꾼 파일을 반영해 다시 읽는다.
+  // 턴이 끝나면 에이전트가 바꾼 파일을 반영해 다시 읽는다.
   const previousStatus = useRef(lastTurnStatus);
   useEffect(() => {
     const finished = previousStatus.current === "inProgress" && lastTurnStatus !== "inProgress";
     previousStatus.current = lastTurnStatus;
-    if (finished && open && cwd) {
+    if (finished && cwd) {
       refresh(cwd);
     }
   }, [lastTurnStatus]); // 턴 상태가 바뀔 때만 본다.
 
+  return { cwd, panel, generation: requestCounter.current, refresh: () => cwd && refresh(cwd) };
+}
+
+/** 줄 수를 아는 파일의 더한 줄과 지운 줄의 합이다. 아직 읽지 못했으면 null 이다. */
+export function workingTreeCounts(tree: WorkingTree): { branch: string | null; added: number; removed: number } | null {
+  if (tree.panel.phase !== "loaded" || !tree.panel.result.ok) return null;
+  const { branch, files } = tree.panel.result;
+  return { branch, added: files.reduce((sum, file) => sum + (file.added ?? 0), 0), removed: files.reduce((sum, file) => sum + (file.removed ?? 0), 0) };
+}
+
+export function WorkingTreePanel({ tree, git }: { tree: WorkingTree; git: GitReader }) {
+  const { cwd, panel } = tree;
   if (!cwd) {
-    return null;
+    return <p className="muted empty">스레드를 열면 그 폴더의 변경을 보여 줍니다.</p>;
   }
-
-  const toggle = () => {
-    const next = !open;
-    setOpen(next);
-    if (next && panel.phase === "idle") {
-      refresh(cwd);
-    }
-  };
-
   const result = panel.phase === "loaded" ? panel.result : null;
   const failure = panel.phase === "failed" ? panel.message : result && !result.ok ? result.message : null;
   const files = result?.ok ? result.files : null;
   return (
-    <section className="working-tree" data-testid="working-tree">
-      <div className="working-tree-bar">
-        <button type="button" onClick={toggle} data-testid="working-tree-toggle" aria-expanded={open}>
-          {open ? "▾" : "▸"} 작업 트리 변경
-        </button>
+    <section className="review working-tree" data-testid="working-tree">
+      <div className="review-toolbar">
         {result?.ok && (
           <span className="muted" data-testid="working-tree-summary">
-            {result.branch ?? "브랜치 없음"} · 파일 {result.files.length}개{result.truncated ? " (목록이 길어 일부만)" : ""}
+            <Icon name="branch" size={12} /> {result.branch ?? "브랜치 없음"} · 파일 {result.files.length}개{result.truncated ? " (목록이 길어 일부만)" : ""}
           </span>
         )}
-        {open && (
-          <button type="button" onClick={() => refresh(cwd)} disabled={panel.phase === "loading"}>
-            {panel.phase === "loading" ? "읽는 중…" : "새로 고침"}
-          </button>
-        )}
+        <span className="bar-spacer" />
+        <button type="button" className="button" onClick={tree.refresh} disabled={panel.phase === "loading"}>
+          {panel.phase === "loading" ? "읽는 중…" : "새로 고침"}
+        </button>
       </div>
-      {open && failure && (
-        <div className="error" data-testid="working-tree-error">
+      {failure && (
+        <div className="error diff-hint" data-testid="working-tree-error">
           작업 트리를 읽을 수 없습니다. {failure}
         </div>
       )}
-      {open && files && files.length === 0 && <div className="muted">바뀐 파일이 없습니다.</div>}
-      {open && files && files.length > 0 && (
-        <div className="working-tree-files diff-file-list" key={requestCounter.current}>
+      {files && files.length === 0 && <div className="muted diff-hint">바뀐 파일이 없습니다.</div>}
+      {files && files.length > 0 && (
+        <div className="working-tree-files diff-file-list" key={tree.generation}>
           {files.map((file) => (
             <ChangedFile key={`${file.status}:${file.path}`} cwd={cwd} file={file} git={git} />
           ))}

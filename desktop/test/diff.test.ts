@@ -124,7 +124,8 @@ describe("turn changes", () => {
     cwd: "/w",
     status: null,
     olderTurnsCursor: null,
-    turns: [{ id: "tu", status: "inProgress", errorMessage: null, items: [fileChange("fc", "completed")], diff: null }],
+    tokenUsage: null,
+    turns: [{ id: "tu", status: "inProgress", errorMessage: null, items: [fileChange("fc", "completed")], diff: null, plan: null, startedAt: null, durationMs: null }],
   });
 
   it("keeps the latest turn/diff/updated on the turn", () => {

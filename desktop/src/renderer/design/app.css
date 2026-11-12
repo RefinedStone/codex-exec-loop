@@ -1,4 +1,4 @@
-/* Akra Desktop UX 블루프린트의 모양이다. 값은 ../design/tokens.css 의 토큰만 쓴다. */
+/* Akra Desktop 화면의 모양이다. 실제 앱과 UX 블루프린트가 함께 쓴다. 값은 tokens.css 의 토큰만 쓴다. */
 * {
   box-sizing: border-box;
 }

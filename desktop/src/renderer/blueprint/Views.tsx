@@ -1,8 +1,9 @@
 // 대화 밖의 화면이다: 새 스레드(홈), 현황판, 명령 팔레트, 단축키 목록, 터미널, 알림.
 import { useEffect, useMemo, useState } from "react";
 
-import { Composer, Picker } from "./Composer";
-import { Icon, type IconName } from "./icons";
+import { Picker } from "../design/Picker";
+import { Composer } from "./Composer";
+import { Icon, type IconName } from "../design/icons";
 import { PROJECTS, SUGGESTIONS, TERMINAL_LINES, type MockThread, type ThreadStatus } from "./mockData";
 import { StatusMark } from "./Sidebar";
 import { handOffToNewThread, notConnected, openThread, showView, togglePanel, toggleTheme, useBlueprint } from "./store";

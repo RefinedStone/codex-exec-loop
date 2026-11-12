@@ -35,10 +35,10 @@ try {
   await page.locator('[data-testid="turn"][data-status="completed"]').last().waitFor({ timeout: 15_000 });
   check("allowing removes the prompt and the recorded turn completes", (await page.getByTestId("approval").count()) === 0);
   check(
-    "agent text and the command card render",
-    (await page.getByTestId("item-agent").count()) > 0 && (await page.getByTestId("item-command").count()) > 0,
+    "agent text and the folded activity line render",
+    (await page.getByTestId("item-agent").count()) > 0 && (await page.getByTestId("item-activity").count()) > 0,
   );
-  check("composer is ready for a new turn", (await page.getByTestId("composer-send").textContent()) === "보내기");
+  check("composer is ready for a new turn", (await page.getByTestId("composer-send").getAttribute("title")) === "보내기");
 } catch (error) {
   check(`flow finished without error (${String(error).split("\n")[0]})`, false);
 } finally {

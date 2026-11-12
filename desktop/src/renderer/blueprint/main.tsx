@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 
 import { BlueprintApp } from "./BlueprintApp";
 import "../design/tokens.css";
-import "./blueprint.css";
+import "../design/app.css";
 
 const container = document.getElementById("root");
 if (!container) {

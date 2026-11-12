@@ -2,45 +2,10 @@
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 
 import { PlanList } from "./Conversation";
-import { Icon } from "./icons";
+import { Icon } from "../design/icons";
+import { Picker } from "../design/Picker";
 import { EFFORTS, MENTION_FILES, MODELS, PERMISSIONS, SLASH_COMMANDS, type PlanStep } from "./mockData";
 import { answerApproval, editQueued, interrupt, notConnected, removeQueued, sendMessage, startThread, toast, useBlueprint } from "./store";
-
-export function Picker({ icon, value, options, onChange }: { icon?: React.ReactNode; value: string; options: readonly string[]; onChange(value: string): void }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <span className="picker">
-      <button type="button" className="chip-button" onClick={() => setOpen(!open)} aria-expanded={open}>
-        {icon}
-        {value}
-        <Icon name="chevronDown" size={11} />
-      </button>
-      {open && (
-        <>
-          <div className="backdrop" onClick={() => setOpen(false)} />
-          <ul className="menu" role="listbox">
-            {options.map((option) => (
-              <li key={option}>
-                <button
-                  type="button"
-                  role="option"
-                  aria-selected={option === value}
-                  onClick={() => {
-                    onChange(option);
-                    setOpen(false);
-                  }}
-                >
-                  <span className="menu-check">{option === value && <Icon name="check" size={12} />}</span>
-                  {option}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
-    </span>
-  );
-}
 
 function ApprovalCard({ threadId }: { threadId: string }) {
   const approval = useBlueprint((state) => state.approvals[threadId]);

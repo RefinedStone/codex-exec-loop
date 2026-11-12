@@ -2,7 +2,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { Markdown } from "../conversation/Markdown";
-import { Icon, type IconName } from "./icons";
+import { Icon, type IconName } from "../design/icons";
 import type { ChangedFile, MockItem, MockStep, MockTurn, PlanStep, StepKind } from "./mockData";
 import { notConnected, useBlueprint } from "./store";
 

@@ -215,7 +215,7 @@ function installApplicationMenu(): void {
     {
       label: "파일",
       submenu: [
-        { id: "new-window", label: "새 창", accelerator: "CmdOrCtrl+N", click: () => createWindow() },
+        { id: "new-window", label: "새 창", accelerator: "CmdOrCtrl+Shift+N", click: () => createWindow() },
         { type: "separator" },
         { role: "close", label: "창 닫기" },
       ],

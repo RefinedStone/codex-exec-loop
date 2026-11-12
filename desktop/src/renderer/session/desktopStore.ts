@@ -17,7 +17,12 @@ export interface GatewayInfo {
 export interface WorkspaceThread {
   id: string;
   title: string;
+  /** Unix 초이다. */
   updatedAt: number;
+  /** 스레드를 만들 때의 git 브랜치이다. 없으면 null 이다. */
+  branch: string | null;
+  /** app-server 가 이 스레드를 `systemError` 상태로 알렸다. */
+  failed: boolean;
 }
 
 /** 안정 API 에는 `project/list` 가 없어서 스레드의 cwd 로 작업 폴더를 묶는다 (D-16). */
@@ -59,6 +64,8 @@ export interface DesktopState {
   sessionError: string | null;
   /** 진행 중인 턴이 있는 스레드 id (사이드바 표시용) */
   activeThreadIds: string[];
+  /** 열려 있지 않은 동안 턴이 끝난 스레드 id 이다. 이 창의 메모리에만 있다. 스레드를 열면 빠진다. */
+  unreadThreadIds: string[];
   openThreadId: string | null;
   transcript: Transcript | null;
   transcriptError: string | null;
@@ -80,9 +87,6 @@ export interface DesktopState {
   addThreadToFolder(cwd: string, thread: WorkspaceThread): void;
   /** 늦게 끝난 전체 목록에서 처음 보는 스레드만 사이드바에 더한다. */
   mergeFolders(folders: WorkspaceFolder[]): void;
-  /** 그 스레드의 입력창에 미리 채울 글이다 (업무 패널에서 넘기기). 입력창이 가져가면 비운다. 보내기는 사용자가 한다. */
-  composerDraft: { threadId: string; text: string } | null;
-  setComposerDraft(draft: { threadId: string; text: string } | null): void;
   /** 커널 패널이 보는 저장소 커널의 상태이다 (plan 18 K3-6). */
   kernel: KernelView;
   setKernel(kernel: KernelView): void;
@@ -102,6 +106,7 @@ export const useDesktopStore = create<DesktopState>((set) => ({
   folders: [],
   sessionError: null,
   activeThreadIds: [],
+  unreadThreadIds: [],
   openThreadId: null,
   transcript: null,
   transcriptError: null,
@@ -112,10 +117,13 @@ export const useDesktopStore = create<DesktopState>((set) => ({
   setThreadActive: (threadId, active) =>
     set((state) => {
       const others = state.activeThreadIds.filter((id) => id !== threadId);
-      return { activeThreadIds: active ? [...others, threadId] : others };
+      const finishedUnseen = !active && others.length < state.activeThreadIds.length && state.openThreadId !== threadId;
+      const unread = state.unreadThreadIds.filter((id) => id !== threadId);
+      return { activeThreadIds: active ? [...others, threadId] : others, unreadThreadIds: finishedUnseen ? [...unread, threadId] : unread };
     }),
   setActiveThreads: (activeThreadIds) => set({ activeThreadIds }),
-  setOpenThread: (openThreadId) => set({ openThreadId, transcript: null, transcriptError: null }),
+  setOpenThread: (openThreadId) =>
+    set((state) => ({ openThreadId, transcript: null, transcriptError: null, unreadThreadIds: state.unreadThreadIds.filter((id) => id !== openThreadId) })),
   setTranscript: (transcript, transcriptError = null) => set({ transcript, transcriptError }),
   updateTranscript: (update) =>
     set((state) => (state.transcript ? { transcript: update(state.transcript) } : {})),
@@ -139,8 +147,6 @@ export const useDesktopStore = create<DesktopState>((set) => ({
       return { folders: [{ cwd, threads }, ...others] };
     }),
   mergeFolders: (folders) => set((state) => ({ folders: mergeWorkspaceFolders(state.folders, folders) })),
-  composerDraft: null,
-  setComposerDraft: (composerDraft) => set({ composerDraft }),
   kernel: EMPTY_KERNEL_VIEW,
   setKernel: (kernel) => set({ kernel }),
 }));
