@@ -229,6 +229,13 @@ pub enum KernelEvent {
         fingerprint: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         idempotency_key: Option<String>,
+        /*
+         * 이 명령을 받은 커널이 그 끝을 어떻게 알리는가이다 (plan 18 K4-4). 받을 때의 규칙을 기록에 적는다. 그래야 뒤의
+         * binary 가 규칙을 바꿔도 이 연산의 상태가 바뀌지 않는다. K4-4 이전의 기록에는 없다. 그 커널은 턴 기록에
+         * 연산 id 를 싣지 않았으므로 그 연산의 끝은 알 수 없다. 끝을 알리지 않는 명령과 같이 다룬다.
+         */
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        completion: Option<CommandCompletion>,
     },
     /// 커널이 그 명령을 바로 거절했다.
     CommandRejected {
@@ -439,15 +446,12 @@ impl KernelEvent {
     /// 이 사건 뒤의 그 연산의 상태이다. 상태를 바꾸지 않는 사건은 `None` 이다.
     fn operation_step(&self) -> Option<OperationState> {
         let state = match self {
-            Self::CommandReceived { command, .. } => {
-                let ends_at_once = KernelCommandKind::from_name(command)
-                    .is_some_and(|kind| kind.spec().completion == CommandCompletion::Accepted);
-                if ends_at_once {
-                    OperationState::Done
-                } else {
+            Self::CommandReceived { completion, .. } => match completion {
+                Some(CommandCompletion::Accepted) => OperationState::Done,
+                Some(CommandCompletion::Records | CommandCompletion::Unreported) | None => {
                     OperationState::Accepted
                 }
-            }
+            },
             Self::CommandRejected { .. } => OperationState::Rejected,
             Self::ThreadPromptQueued(_) | Self::TurnSubmitted { .. } | Self::TurnStarted { .. } => {
                 OperationState::Running
@@ -521,9 +525,42 @@ pub fn operation_state<'a>(
  * - 시작했지만 끝나지 않은 턴은 `turn_ended` 의 `lost` 로 닫는다.
  * - 그 뒤에도 열려 있는 연산은 `command_completed` 의 `lost` 로 닫는다. 큐에 남은 프롬프트의 연산은 닫지 않는다.
  *   새 커널이 그 프롬프트를 다시 내고, 그 턴도 같은 연산이다.
- * - 끝을 알리지 않는 명령(`CommandCompletion::Unreported`)의 연산은 닫지 않는다. 그 상태는 원래 `accepted` 로 남는다.
+ * - 끝을 기록으로 알리는 명령(`CommandCompletion::Records`)의 연산만 닫는다. 끝을 알리지 않는 명령과 K4-4 이전의
+ *   커널이 받은 명령은 닫지 않는다. 그 상태는 원래 `accepted` 로 남는다. 이전 커널의 명령은 턴 기록에 연산 id 가
+ *   없어서, 끝난 명령도 열린 것처럼 보인다. 닫으면 끝난 명령을 `lost` 로 적게 된다.
  */
 pub fn restart_closures(events: &[KernelEvent]) -> Vec<KernelEvent> {
+    let mut closures = lost_turns(events);
+    let queued = open_queued_thread_prompts(events.iter().cloned())
+        .into_iter()
+        .filter_map(|prompt| prompt.op_id)
+        .collect::<Vec<_>>();
+    let states = operation_states(events.iter().chain(&closures));
+    for event in events {
+        let KernelEvent::CommandReceived {
+            op_id,
+            thread_id,
+            completion: Some(CommandCompletion::Records),
+            ..
+        } = event
+        else {
+            continue;
+        };
+        let open = states.get(op_id).is_some_and(|state| !state.is_end());
+        if open && !queued.contains(op_id) {
+            closures.push(KernelEvent::CommandCompleted {
+                op_id: *op_id,
+                thread_id: thread_id.clone(),
+                result: OperationEnd::Lost,
+                reason: None,
+            });
+        }
+    }
+    closures
+}
+
+/// 시작했지만 끝나지 않은 턴을 `lost` 로 닫는 사건이다. 시작한 차례대로이다.
+fn lost_turns(events: &[KernelEvent]) -> Vec<KernelEvent> {
     let mut open_turns: Vec<(&str, &str, Option<i64>)> = Vec::new();
     for event in events {
         match event {
@@ -538,7 +575,7 @@ pub fn restart_closures(events: &[KernelEvent]) -> Vec<KernelEvent> {
             _ => {}
         }
     }
-    let mut closures = open_turns
+    open_turns
         .into_iter()
         .map(|(thread_id, turn_id, op_id)| KernelEvent::TurnEnded {
             thread_id: thread_id.to_string(),
@@ -546,35 +583,7 @@ pub fn restart_closures(events: &[KernelEvent]) -> Vec<KernelEvent> {
             outcome: Some(TurnEndOutcome::Lost),
             op_id,
         })
-        .collect::<Vec<_>>();
-    let queued = open_queued_thread_prompts(events.iter().cloned())
-        .into_iter()
-        .filter_map(|prompt| prompt.op_id)
-        .collect::<Vec<_>>();
-    let states = operation_states(events.iter().chain(&closures));
-    for event in events {
-        let KernelEvent::CommandReceived {
-            op_id,
-            command,
-            thread_id,
-            ..
-        } = event
-        else {
-            continue;
-        };
-        let reports_its_end = KernelCommandKind::from_name(command)
-            .is_some_and(|kind| kind.spec().completion == CommandCompletion::Records);
-        let open = states.get(op_id).is_some_and(|state| !state.is_end());
-        if reports_its_end && open && !queued.contains(op_id) {
-            closures.push(KernelEvent::CommandCompleted {
-                op_id: *op_id,
-                thread_id: thread_id.clone(),
-                result: OperationEnd::Lost,
-                reason: None,
-            });
-        }
-    }
-    closures
+        .collect()
 }
 
 /*
@@ -585,34 +594,37 @@ pub fn restart_closures(events: &[KernelEvent]) -> Vec<KernelEvent> {
  * `command_completed` 의 `failed` 를 낸다 (plan 18 K4-4).
  */
 pub fn turn_events_between(before: &[ThreadTurn], after: &[ThreadTurn]) -> Vec<KernelEvent> {
-    let same_turn = |left: &ThreadTurn, right: &ThreadTurn| {
-        left.thread_id == right.thread_id && left.turn_id == right.turn_id
-    };
+    // 시작한 턴이다: `(thread id, 턴 id, 연산 id)`.
     let started_turns = |turns: &[ThreadTurn]| {
         turns
             .iter()
-            .filter(|turn| turn.turn_id.is_some())
-            .cloned()
+            .filter_map(|turn| Some((turn.thread_id.clone(), turn.turn_id.clone()?, turn.op_id)))
             .collect::<Vec<_>>()
+    };
+    let same_turn = |left: &(String, String, Option<i64>),
+                     right: &(String, String, Option<i64>)| {
+        left.0 == right.0 && left.1 == right.1
     };
     let (running_before, running_after) = (started_turns(before), started_turns(after));
     let ended = running_before
         .iter()
         .filter(|turn| !running_after.iter().any(|other| same_turn(turn, other)))
-        .map(|turn| KernelEvent::TurnEnded {
-            thread_id: turn.thread_id.clone(),
-            turn_id: turn.turn_id.clone().unwrap_or_default(),
+        .map(|(thread_id, turn_id, op_id)| KernelEvent::TurnEnded {
+            thread_id: thread_id.clone(),
+            turn_id: turn_id.clone(),
             outcome: None,
-            op_id: turn.op_id,
-        });
+            op_id: *op_id,
+        })
+        .collect::<Vec<_>>();
     let started = running_after
         .iter()
         .filter(|turn| !running_before.iter().any(|other| same_turn(turn, other)))
-        .map(|turn| KernelEvent::TurnStarted {
-            thread_id: turn.thread_id.clone(),
-            turn_id: turn.turn_id.clone().unwrap_or_default(),
-            op_id: turn.op_id,
-        });
+        .map(|(thread_id, turn_id, op_id)| KernelEvent::TurnStarted {
+            thread_id: thread_id.clone(),
+            turn_id: turn_id.clone(),
+            op_id: *op_id,
+        })
+        .collect::<Vec<_>>();
     let closed_without_a_turn = before
         .iter()
         .filter(|turn| turn.turn_id.is_none())
@@ -624,7 +636,11 @@ pub fn turn_events_between(before: &[ThreadTurn], after: &[ThreadTurn]) -> Vec<K
             result: OperationEnd::Failed,
             reason: None,
         });
-    ended.chain(started).chain(closed_without_a_turn).collect()
+    ended
+        .into_iter()
+        .chain(started)
+        .chain(closed_without_a_turn)
+        .collect()
 }
 
 /*
@@ -834,14 +850,67 @@ mod tests {
         }
     }
 
+    /// 지금의 커널이 받은 명령이다. 그 명령의 끝 규칙을 함께 적는다.
     fn received_command(op_id: i64, command: &str) -> KernelEvent {
+        let completion = KernelCommandKind::ALL
+            .iter()
+            .find(|kind| kind.name() == command)
+            .map(|kind| kind.spec().completion);
+        assert!(completion.is_some(), "unknown command {command}");
+        received_with(op_id, command, completion)
+    }
+
+    /// K4-4 이전의 커널이 받은 명령이다. 끝 규칙이 없다.
+    fn received_before_completion(op_id: i64, command: &str) -> KernelEvent {
+        received_with(op_id, command, None)
+    }
+
+    fn received_with(
+        op_id: i64,
+        command: &str,
+        completion: Option<CommandCompletion>,
+    ) -> KernelEvent {
         KernelEvent::CommandReceived {
             op_id,
             command: command.to_string(),
             thread_id: "thread-1".to_string(),
             fingerprint: "fp".to_string(),
             idempotency_key: None,
+            completion,
         }
+    }
+
+    #[test]
+    fn a_command_of_an_older_kernel_is_not_closed_as_lost() {
+        // The older kernel put no operation id on its turn records. Its finished prompts look open.
+        // Closing them at a restart would record finished commands as lost.
+        let old: KernelEvent = serde_json::from_value(serde_json::json!({
+            "kind": "command_received", "op_id": 1, "command": "submit_prompt",
+            "thread_id": "thread-1", "fingerprint": "fp"
+        }))
+        .expect("a command record without `completion` should still decode");
+        assert_eq!(old, received_before_completion(1, "submit_prompt"));
+        let records = [
+            old,
+            turn_started("turn-1", None),
+            turn_ended("turn-1", TurnEndOutcome::Completed, None),
+            received_command(4, "submit_prompt"),
+        ];
+        assert_eq!(
+            restart_closures(&records),
+            vec![KernelEvent::CommandCompleted {
+                op_id: 4,
+                thread_id: "thread-1".to_string(),
+                result: OperationEnd::Lost,
+                reason: None,
+            }],
+            "only the command of this kernel generation is closed"
+        );
+        assert_eq!(operation_state(1, &records), OperationState::Accepted);
+        // The rule of a command is the rule the receiving kernel recorded, not the rule of this binary.
+        let unreported_then =
+            received_with(5, "submit_prompt", Some(CommandCompletion::Unreported));
+        assert!(restart_closures(std::slice::from_ref(&unreported_then)).is_empty());
     }
 
     fn turn_started(turn: &str, op_id: Option<i64>) -> KernelEvent {
@@ -1268,6 +1337,7 @@ mod tests {
             thread_id: "thread-1".to_string(),
             fingerprint: fingerprint.to_string(),
             idempotency_key: key.map(str::to_string),
+            completion: None,
         }
     }
 

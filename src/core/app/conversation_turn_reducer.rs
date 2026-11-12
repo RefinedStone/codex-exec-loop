@@ -116,7 +116,7 @@ struct ThreadSession {
     // 자동 후속 턴에 쓸 턴 옵션이다 (plan 18 K1-5). 대화 로드, 제출, 클라이언트 변경으로 갱신한다.
     turn_options: crate::domain::conversation::ConversationTurnOptions,
     // 지금 턴을 낸 명령의 연산 id 이다 (plan 18 K4-4). 턴을 받을 때마다 다시 정한다. 명령이 낸 턴이 아니면 비어 있다.
-    operation: Option<i64>,
+    op_id: Option<i64>,
 }
 
 impl ThreadSession {
@@ -130,7 +130,7 @@ impl ThreadSession {
             active_turn_steer: None,
             post_turn_messages: PostTurnMessages::default(),
             turn_options: Default::default(),
-            operation: None,
+            op_id: None,
         }
     }
 
@@ -214,7 +214,7 @@ impl ThreadSession {
         Some(crate::domain::kernel_event::ThreadTurn {
             thread_id,
             turn_id: active_turn.turn_id.clone(),
-            op_id: self.operation,
+            op_id: self.op_id,
         })
     }
 }
@@ -368,7 +368,7 @@ impl ConversationTurnFeatureReducer {
         std::iter::once(&self.session)
             .chain(&self.background_sessions)
             .find(|session| session.owns_turn(correlation))
-            .and_then(|session| session.operation)
+            .and_then(|session| session.op_id)
     }
 
     /// 마지막으로 알린 thread 요약의 기다리는 승인이다 (plan 19 Q3-5). 승인 기록의 이전 값이다.
@@ -735,7 +735,7 @@ impl ConversationTurnFeatureReducer {
             |reducer| {
                 let admission = reducer.admit_turn_submission_in_session(request);
                 if matches!(admission, TurnSubmissionAdmission::Accepted { .. }) {
-                    reducer.session.operation = op_id;
+                    reducer.session.op_id = op_id;
                 }
                 admission
             },
@@ -812,7 +812,7 @@ impl ConversationTurnFeatureReducer {
         ));
         self.session.guarded_session_rename_stream = None;
         // 새 턴은 이전 턴의 연산에 속하지 않는다. 명령이 낸 턴이면 부르는 쪽이 뒤에 넣는다.
-        self.session.operation = None;
+        self.session.op_id = None;
         if !request.transcript_text.trim().is_empty() {
             self.session.post_turn_messages.latest_user_message =
                 Some(request.transcript_text.clone());

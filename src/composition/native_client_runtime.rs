@@ -1173,6 +1173,8 @@ impl NativeClientRuntime {
             thread_id: descriptor.thread_id.clone(),
             fingerprint: descriptor.fingerprint.clone(),
             idempotency_key: descriptor.idempotency_key.clone(),
+            // 받을 때의 규칙을 적는다. 연산의 상태는 이 값으로 계산한다 (plan 18 K4-4).
+            completion: Some(descriptor.command.spec().completion),
         }]);
         if let Some(key) = &descriptor.idempotency_key {
             self.command_memory
@@ -1215,9 +1217,13 @@ impl NativeClientRuntime {
      * 저장소에 연산 id 로 읽는 조회를 더한다.
      */
     pub(crate) fn kernel_operation(&self, op_id: i64) -> anyhow::Result<OperationStatus> {
+        // 연산 id 는 기록의 sequence 이고 1 부터이다. 그보다 작은 값은 기록을 읽지 않고 답한다.
+        if op_id < 1 {
+            return Ok(OperationStatus::from_records(op_id, Vec::new()));
+        }
         let mut records = Vec::new();
         if let Some((log, workspace_dir)) = &self.kernel_event_log {
-            let mut after = op_id.saturating_sub(1);
+            let mut after = op_id - 1;
             loop {
                 let page =
                     log.load_kernel_events_after(workspace_dir, after, MAX_KERNEL_EVENT_PAGE)?;
@@ -2525,6 +2531,13 @@ pub(crate) mod tests {
             state_and_kinds(&runtime, 3),
             (OperationState::Unknown, Vec::new())
         );
+        // An id below the first sequence is unknown. The smallest integer once overflowed here.
+        for no_operation in [0, -1, i64::MIN] {
+            assert_eq!(
+                state_and_kinds(&runtime, no_operation),
+                (OperationState::Unknown, Vec::new())
+            );
+        }
         drop(runtime);
 
         // The previous kernel stopped while operation 1 was open. The new kernel closes it once.

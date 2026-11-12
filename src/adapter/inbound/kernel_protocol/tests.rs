@@ -782,6 +782,7 @@ fn an_operation_query_answers_with_the_state_and_the_records_of_one_command() {
                     thread_id: "thread-1".to_string(),
                     fingerprint: "0123".to_string(),
                     idempotency_key: None,
+                    completion: Some(crate::domain::kernel_spec::CommandCompletion::Records),
                 },
             ),
             // A record of another turn is not part of this operation.
@@ -1859,6 +1860,7 @@ fn sample_records() -> Vec<crate::domain::kernel_event::KernelEvent> {
             thread_id: "thread-1".to_string(),
             fingerprint: "0123".to_string(),
             idempotency_key: Some("key-1".to_string()),
+            completion: Some(crate::domain::kernel_spec::CommandCompletion::Unreported),
         },
         Record::CommandRejected {
             op_id: 7,

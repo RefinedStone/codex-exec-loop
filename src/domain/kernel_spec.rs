@@ -166,7 +166,7 @@ spec_names! {
 
 spec_names! {
     /// 명령이 언제 끝나는가이다 (plan 18 K4-4, 설계 §3.4). `operation` 조회의 `state` 가 이 규칙으로 끝을 안다.
-    #[derive(Serialize, JsonSchema)]
+    #[derive(Serialize, Deserialize, JsonSchema)]
     #[serde(rename_all = "snake_case")]
     pub enum CommandCompletion {
         Accepted => "accepted",
@@ -276,11 +276,6 @@ impl KernelCommandKind {
             rejections,
             completion,
         }
-    }
-
-    /// 기록에 적힌 이름의 명령 종류이다. 이 binary 가 모르는 이름은 `None` 이다.
-    pub fn from_name(name: &str) -> Option<Self> {
-        Self::ALL.iter().copied().find(|kind| kind.name() == name)
     }
 
     /// 판단 사건 기록에 남는 명령인가이다. 읽기 명령은 남지 않는다.

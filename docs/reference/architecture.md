@@ -208,7 +208,10 @@ after a restart that wrote its records; after a crash that lost the record it ru
 without a log refuses a command that carries a key.
 The state of an operation is not stored. `operation_states` folds the records that carry an `op_id`
 (`command_received`, `command_rejected`, `command_completed`, the queue kinds, and the turn kinds);
-the last record of an operation gives its state. The runtime puts the operation id into
+the last record of an operation gives its state. `command_received` records the completion rule the
+receiving kernel used (`completion`), and the state uses that recorded rule, not the rule of the
+running binary. A command record without it (written before K4-4) is treated as a command that
+reports no end, and a restart does not close it. The runtime puts the operation id into
 `SubmitThreadPrompt` after it records the command (`AppCommand::with_operation`). Core carries it
 through the prompt preparation, the queued prompt, and the thread session of the turn
 (`ThreadSession.operation`), so `turn_submitted`, `turn_started`, and `turn_ended` name the
