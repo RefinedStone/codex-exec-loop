@@ -1,7 +1,7 @@
 // 사이드바: 고정한 스레드, 프로젝트별 스레드, 상태 표시이다. 상태는 진행 중, 승인 대기, 읽지 않음, 실패이다.
 import { useState } from "react";
 
-import { Icon } from "./icons";
+import { Icon } from "../design/icons";
 import { PROJECTS, type MockThread, type ThreadStatus } from "./mockData";
 import { markDone, notConnected, openThread, restoreThread, showView, snooze, togglePinned, toggleTheme, useBlueprint } from "./store";
 

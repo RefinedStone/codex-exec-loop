@@ -16,7 +16,8 @@
 - 동작하지 않는 버튼은 넣지 않는다. 블루프린트의 `notConnected` 버튼은 실제 앱에 옮기지 않는다.
 - `data-testid` 는 유지한다. 자리가 바뀐 것만 e2e 를 고친다.
 - 턴을 만드는 요청은 사용자가 보낸 메시지에서만 나간다 (D-13). 시험은 가짜 Gateway 를 쓴다.
-- 조각 하나가 PR 하나이다. 조각마다 `npm run check`, `npx vitest run`, `npm run e2e` 를 통과한다.
+- S1~S5 는 PR 하나이다. 조각을 따로 넣으면 옛 모양과 새 모양의 CSS 가 섞인 화면이 중간에 생긴다. S6 의 항목은
+  각각 PR 하나이다. PR 마다 `npm run check`, `npx vitest run`, `npm run e2e` 를 통과한다.
 
 ## 기능 대응표
 
@@ -126,3 +127,29 @@
 ### 2026-11-12: 계획
 
 - 블루프린트 화면과 실제 앱을 비교해서 위 대응표를 만들었다.
+
+### 2026-11-12: S1~S5
+
+- 공용 파일: `design/app.css`(이전 `blueprint/blueprint.css`), `design/icons.tsx`, `design/Picker.tsx`. `styles.css` 에는
+  블루프린트에 없는 부분(파일 변경 목록, 터미널, 패널 내용)만 남겼다.
+- 화면 상태는 `session/uiStore.ts` 에 있다. 처음 화면은 새 스레드 화면이다.
+- 사이드바: 상태 계산은 `sidebar/threadStatus.ts` 이다. `desktopStore` 에 `unreadThreadIds` 와 스레드의 `branch`, `failed` 를 더했다.
+- 대화: 묶기는 `conversation/turnBlocks.ts` 이다. 명령의 `commandActions` 가 읽기나 검색 하나이면 그 종류로 보여 준다.
+  `transcript` 는 `turn/plan/updated`, `thread/tokenUsage/updated`, 턴의 `startedAt`·`durationMs` 를 받는다.
+- 입력창: 승인 카드와 계획 진행 줄이 입력창 위에 붙는다. `Ctrl/⌘+Backspace` 거부는 입력창에 글이 있으면 동작하지 않는다
+  (낱말 지우기와 겹친다).
+- 새 스레드: 보낼 때 `thread/start` 다음 `turn/start` 를 보낸다. 업무 패널의 넘기기는 새 스레드 화면의 입력창을 채운다.
+  스레드별 초안 값(`composerDraft`)은 지웠다.
+- 변경 패널: 작업 트리 목록을 스레드를 열 때와 턴이 끝날 때 읽는다 (이전: 영역을 펼쳤을 때만). 위 막대의 줄 수에 쓴다.
+- 단축키: `Ctrl/⌘+N` 은 새 스레드이다. 새 창은 `Ctrl/⌘+Shift+N` 으로 옮겼다. 터미널 안의 `Ctrl` 조합은 셸에 준다 (`Ctrl+\`` 제외).
+- 목록 응답에 `status` 가 없는 스레드도 읽는다 (시험 녹화가 그렇다. 이전에는 세션 오류가 보였다).
+- e2e 변경: Notion 은 `work-toggle` 다음 `notion-toggle`, 보내기 버튼은 `title`, 명령 카드는 접힌 작업 묶음(`item-activity`)으로 확인한다.
+- 검증 (Windows): `npm run check`, `npx vitest run` (134 중 3 건너뜀), `npm run e2e` (PASS 40, 터미널 시험은 Windows 에서 건너뜀).
+  숨김 창 스크린샷으로 새 스레드 화면, 승인 카드, 업무 패널, 검색과 명령, 어두운 화면을 확인했다.
+
+남은 것과 알려진 한계:
+
+- macOS 실기 확인, 터미널 e2e (`AKRA_E2E_TERMINAL=1`), 실제 턴에서의 계획 카드와 컨텍스트 표시 확인.
+- 브라우저 패널이 열려 있으면 검색과 명령, 단축키 목록이 페이지 뒤에 가려진다 (페이지는 main 의 WebContentsView 이다).
+- 현황판은 열마다 최근 30개까지, 검색과 명령은 50개까지 그린다.
+- S6 은 시작하지 않았다.

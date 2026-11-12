@@ -59,9 +59,10 @@ const app = await electron.launch({ executablePath: electronPath, args: [desktop
 try {
   const page = await app.firstWindow();
   await page.getByTestId("connection-phase").filter({ hasText: "연결됨" }).waitFor({ timeout: 30_000 });
-  // 넘기기는 열린 스레드의 폴더에 새 스레드를 만든다. 폴더 선택 대화상자를 피하려고 스레드를 먼저 연다.
+  // 넘기기는 새 스레드 화면의 입력창을 채운다. 열린 스레드의 폴더를 고른 상태가 되도록 스레드를 먼저 연다.
   await page.getByTestId("thread-entry").first().click();
 
+  await page.getByTestId("work-toggle").click();
   await page.getByTestId("notion-toggle").click();
   await page.getByTestId("notion-panel").waitFor({ timeout: 10_000 });
   await page.getByTestId("notion-page").first().waitFor({ timeout: 10_000 });

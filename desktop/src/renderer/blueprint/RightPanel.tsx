@@ -2,7 +2,7 @@
 import { useMemo, useState } from "react";
 
 import { parseGitDiff, type DiffFile } from "../conversation/diff";
-import { Icon, type IconName } from "./icons";
+import { Icon, type IconName } from "../design/icons";
 import { DOCUMENTS, KERNEL, MOCK_DIFF, WORK_ITEMS } from "./mockData";
 import { addReviewNote, handOffToNewThread, notConnected, openThread, toast, useBlueprint, type PanelId } from "./store";
 

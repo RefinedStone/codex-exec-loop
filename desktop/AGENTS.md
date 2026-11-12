@@ -16,8 +16,10 @@ The repository-wide rules in [`../AGENTS.md`](../AGENTS.md) still apply.
   Committed fixtures contain only altered content; never commit real recordings.
 
 - `src/renderer/blueprint/` is the target UX with mock data. It imports nothing from `session/`, `rpc/`, or
-  `window.akra`. Move a real component to the blueprint look one at a time; colors and sizes come from
-  `src/renderer/design/tokens.css`.
+  `window.akra`. The real app follows its look (plan R10). Both read `src/renderer/design/`: `tokens.css` holds
+  colors and sizes, `app.css` the shell and shared parts, `icons.tsx` and `Picker.tsx` the shared components.
+  `src/renderer/styles.css` holds only the parts that the blueprint does not have. Do not add a button that
+  does nothing to the real app.
 
 ## Commands
 

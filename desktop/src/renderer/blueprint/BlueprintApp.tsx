@@ -4,7 +4,7 @@ import { useEffect } from "react";
 
 import { Composer } from "./Composer";
 import { Conversation } from "./Conversation";
-import { Icon } from "./icons";
+import { Icon } from "../design/icons";
 import { PROJECTS } from "./mockData";
 import { PANELS, RightPanel } from "./RightPanel";
 import { Sidebar } from "./Sidebar";

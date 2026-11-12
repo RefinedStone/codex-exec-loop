@@ -27,7 +27,7 @@ import { KernelConnection } from "../kernel/kernelConnection";
 import { KERNEL_METHOD } from "../kernel/protocol";
 import { JsonRpcClient, JsonRpcError, type JsonRpcId, NO_RESPONSE } from "../rpc/jsonRpcClient";
 import { checkCodexVersion } from "./codexVersion";
-import { type GatewayInfo, type SessionStore, sortFolders, type WorkspaceFolder } from "./desktopStore";
+import { type GatewayInfo, type SessionStore, sortFolders, type WorkspaceFolder, type WorkspaceThread } from "./desktopStore";
 
 const THREAD_LIST_LIMIT = 100;
 /** 스레드를 열 때와 "이전 턴 더 보기" 한 번에 읽는 턴 수이다. 가장 큰 실측 스레드에서 10턴은 약 11 MB, 270ms 였다. */
@@ -55,6 +55,11 @@ export function initializeParams(clientVersion: string): InitializeParams {
   };
 }
 
+/** 사이드바에 필요한 값만 고른다. */
+function workspaceThread(thread: Thread, title: string): WorkspaceThread {
+  return { id: thread.id, title, updatedAt: thread.updatedAt, branch: thread.gitInfo?.branch ?? null, failed: thread.status?.type === "systemError" };
+}
+
 export function groupThreadsByCwd(threads: readonly Thread[]): WorkspaceFolder[] {
   const folders = new Map<string, WorkspaceFolder>();
   // rollout 전체 검사는 페이지 사이에 같은 스레드를 다시 줄 수 있다 (2026-11-06 실측: 306행 중 고유 292개).
@@ -63,11 +68,7 @@ export function groupThreadsByCwd(threads: readonly Thread[]): WorkspaceFolder[]
     if (seen.has(thread.id)) continue;
     seen.add(thread.id);
     const folder = folders.get(thread.cwd) ?? { cwd: thread.cwd, threads: [] };
-    folder.threads.push({
-      id: thread.id,
-      title: thread.name ?? (thread.preview.trim() || UNTITLED_THREAD),
-      updatedAt: thread.updatedAt,
-    });
+    folder.threads.push(workspaceThread(thread, thread.name ?? (thread.preview.trim() || UNTITLED_THREAD)));
     folders.set(thread.cwd, folder);
   }
   return sortFolders([...folders.values()]);
@@ -75,7 +76,7 @@ export function groupThreadsByCwd(threads: readonly Thread[]): WorkspaceFolder[]
 
 /** 목록의 진행 중 스레드에, 목록을 읽는 동안 받은 상태 변경을 덮어 최종 목록을 만든다. */
 export function activeThreadIds(threads: readonly Thread[], changes: ReadonlyMap<string, boolean>): string[] {
-  const active = new Set(threads.filter((thread) => thread.status.type === "active").map((thread) => thread.id));
+  const active = new Set(threads.filter((thread) => thread.status?.type === "active").map((thread) => thread.id));
   for (const [threadId, isActive] of changes) {
     if (isActive) {
       active.add(threadId);
@@ -207,11 +208,7 @@ export class DesktopSession {
     this.batcher.clear();
     this.store.setOpenThread(response.thread.id);
     this.store.setTranscript(transcript);
-    this.store.addThreadToFolder(response.thread.cwd, {
-      id: response.thread.id,
-      title: transcript.title,
-      updatedAt: response.thread.updatedAt,
-    });
+    this.store.addThreadToFolder(response.thread.cwd, workspaceThread(response.thread, transcript.title));
     return response.thread.id;
   }
 
