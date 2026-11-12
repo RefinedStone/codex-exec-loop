@@ -7,6 +7,7 @@ import { open, stat } from "node:fs/promises";
 import { isAbsolute, normalize, relative, resolve, sep } from "node:path";
 
 import type { GitActionResult, GitChangedFile, GitFileAction, GitFileDiff, GitStatusResult } from "../shared/bridge";
+import { isConflictStatus, stageState } from "../shared/gitChange";
 
 const GIT_TIMEOUT_MS = 15_000;
 /** 목록 출력의 한도이다. 이보다 크면 잘린 목록을 보여 준다. */
@@ -219,11 +220,31 @@ export async function resolveGitFile(cwdInput: unknown, path: unknown): Promise<
 }
 
 const GIT_FILE_ACTIONS: readonly GitFileAction[] = ["stage", "unstage", "discard"];
+const FILTER_MESSAGE = "필터(LFS 등)가 있는 파일입니다. 터미널에서 git 으로 처리하십시오.";
+/** 폴더를 스테이지할 때 필터를 확인하는 파일 수의 한도이다. */
+const FOLDER_FILE_LIMIT = 200;
+const ATTRIBUTE_BATCH = 50;
 
-/** `discard` 가 실행할 git 명령이다. 상태(porcelain 두 글자)에 따라 다르다. */
+/** 확인을 마친 git 동작이다. `planGitFileAction` 만 만든다. */
+export interface GitFilePlan {
+  cwd: string;
+  commands: string[][];
+  /** 확인 창에 보여 줄 경로이다 (저장소 루트 기준). */
+  path: string;
+  /** 이름을 바꾼 파일을 버릴 때 되살리는 이전 경로이다. */
+  originalPath: string | null;
+}
+
+export type GitFilePlanResult = { ok: true; plan: GitFilePlan } | { ok: false; message: string };
+
+function refuse(message: string): GitFilePlanResult {
+  return { ok: false, message };
+}
+
+/** `discard` 가 실행할 git 명령이다. 상태(porcelain 두 글자)에 따라 다르다. 충돌 상태와 폴더는 받지 않는다. */
 export function discardCommands(status: string, pathspec: string, originalPathspec: string | null): string[][] {
   const restore = (spec: string) => ["restore", "--staged", "--worktree", "--source=HEAD", "--", spec];
-  if (status === "??") return [["clean", "-fd", "--", pathspec]];
+  if (status === "??") return [["clean", "-f", "--", pathspec]];
   // 새로 더한 파일과 복사한 파일은 HEAD 에 없다. 지우면 된다.
   if (status.startsWith("A") || status.startsWith("C")) return [["rm", "-f", "-q", "--", pathspec]];
   // 이름을 바꾼 파일은 새 경로를 지우고 이전 경로를 되살린다.
@@ -232,44 +253,109 @@ export function discardCommands(status: string, pathspec: string, originalPathsp
 }
 
 /**
- * 파일에 `filter` 속성(LFS 등)이 있는지 본다. 이 모듈은 git 이 필터 프로그램을 띄우지 않게 한다 (`NO_HELPER_PROGRAMS`).
- * 그 상태로 스테이지하면 포인터가 아니라 원본이 들어가고, 되돌리면 포인터 파일이 작업 폴더에 써진다.
+ * 이 파일의 지금 상태를 git 에서 읽는다. renderer 가 보낸 상태는 쓰지 않는다. 오래된 목록이나 꾸민 값으로 다른
+ * 명령을 고르지 못하게 한다. 이름 바꾸기는 경로를 좁혀 읽으면 보이지 않으므로 전체 목록에서 찾는다.
  */
-async function hasContentFilter(file: RepositoryFile): Promise<boolean> {
-  // check-attr 는 경로 지정이 아니라 경로를 받는다. 그래서 루트에서 루트 기준 경로로 묻는다. 출력은 `경로 NUL 속성 NUL 값 NUL` 이다.
-  const output = await runGit(file.root, ["check-attr", "-z", "filter", "--", file.relativePath], 4096);
-  const value = output.stdout.split("\0")[2] ?? "";
-  return output.code === 0 && value !== "" && value !== "unspecified" && value !== "unset";
+async function currentChange(file: RepositoryFile): Promise<GitChangedFile | null> {
+  const status = await runGit(file.root, ["status", "--porcelain=v1", "-z", "--untracked-files=normal"], STATUS_OUTPUT_LIMIT);
+  if (status.code !== 0) {
+    throw new Error(failureMessage(status, "git status 가 실패했습니다."));
+  }
+  return parsePorcelainStatus(status.stdout).files.find((change) => change.path.replace(/\/$/, "") === file.relativePath) ?? null;
 }
 
 /**
- * 파일 하나를 스테이지하거나, 스테이지를 취소하거나, 변경을 버린다. `discard` 는 되돌릴 수 없다. 부르는 쪽이
- * 사용자에게 먼저 확인한다.
- * shortcut: `filter` 속성이 있는 파일(LFS)의 스테이지와 되돌리기는 거절한다. 필요하면 필터를 켠 git 실행을 따로 만든다.
+ * 경로 중 하나라도 `filter` 속성(LFS 등)이 있는지 본다. 이 모듈은 git 이 필터 프로그램을 띄우지 않게 한다
+ * (`NO_HELPER_PROGRAMS`). 그 상태로 스테이지하면 포인터가 아니라 원본이 들어가고, 되돌리면 포인터 파일이 작업 폴더에 써진다.
  */
-export async function runGitFileAction(cwdInput: unknown, action: unknown, fileInput: unknown): Promise<GitActionResult> {
-  const fields = (fileInput ?? {}) as Partial<GitChangedFile>;
-  if (!GIT_FILE_ACTIONS.includes(action as GitFileAction) || typeof fields.status !== "string") {
+async function anyContentFilter(root: string, relativePaths: readonly string[]): Promise<boolean> {
+  for (let start = 0; start < relativePaths.length; start += ATTRIBUTE_BATCH) {
+    // check-attr 는 경로 지정이 아니라 경로를 받는다. 그래서 루트에서 루트 기준 경로로 묻는다. 출력은 `경로 NUL 속성 NUL 값 NUL` 이다.
+    const output = await runGit(root, ["check-attr", "-z", "filter", "--", ...relativePaths.slice(start, start + ATTRIBUTE_BATCH)], STATUS_OUTPUT_LIMIT);
+    if (output.code !== 0 || output.truncated) {
+      throw new Error(failureMessage(output, "git check-attr 가 실패했습니다."));
+    }
+    const fields = output.stdout.split("\0");
+    for (let index = 2; index < fields.length; index += 3) {
+      if (fields[index] !== "unspecified" && fields[index] !== "unset") return true;
+    }
+  }
+  return false;
+}
+
+/** 새 폴더 안의 추적하지 않는 파일이다. 한도보다 많으면 null 이다. */
+async function untrackedFilesIn(file: RepositoryFile): Promise<string[] | null> {
+  const output = await runGit(file.root, ["ls-files", "-o", "--exclude-standard", "-z", "--", file.pathspec], STATUS_OUTPUT_LIMIT);
+  if (output.code !== 0) {
+    throw new Error(failureMessage(output, "git ls-files 가 실패했습니다."));
+  }
+  const paths = output.stdout.split("\0").filter((path) => path.length > 0);
+  return output.truncated || paths.length > FOLDER_FILE_LIMIT ? null : paths;
+}
+
+/**
+ * 파일 하나의 스테이지, 스테이지 취소, 변경 버리기를 확인하고 실행할 명령을 정한다. 아무것도 바꾸지 않는다.
+ * shortcut: `filter` 속성이 있는 파일(LFS), 충돌 상태의 파일, 폴더 버리기는 거절한다. 필요하면 필터를 켠 git 실행과
+ * 충돌 해결 화면을 따로 만든다.
+ */
+export async function planGitFileAction(cwdInput: unknown, action: unknown, path: unknown): Promise<GitFilePlanResult> {
+  if (!GIT_FILE_ACTIONS.includes(action as GitFileAction)) {
     throw new Error("git 동작 요청이 올바르지 않습니다.");
   }
-  const file = await repositoryFile(cwdInput, fields.path);
-  if (action !== "unstage" && (await hasContentFilter(file))) {
-    return { ok: false, message: "필터(LFS 등)가 있는 파일입니다. 터미널에서 git 으로 처리하십시오." };
+  const file = await repositoryFile(cwdInput, path);
+  const change = await currentChange(file);
+  if (!change) return refuse("바뀐 파일 목록에 없습니다. 목록을 새로 고치십시오.");
+  if (isConflictStatus(change.status)) return refuse("충돌 상태의 파일입니다. 터미널에서 해결하십시오.");
+  const original = change.originalPath ? await repositoryFile(file.root, change.originalPath) : null;
+  const plan = (commands: string[][]): GitFilePlanResult => ({
+    ok: true,
+    plan: { cwd: file.cwd, commands, path: change.path, originalPath: change.originalPath },
+  });
+
+  if (action === "unstage") {
+    if (!stageState(change).staged) return refuse("스테이지한 변경이 없습니다.");
+    const specs = [...(original ? [original.pathspec] : []), file.pathspec];
+    // 첫 커밋 전에는 HEAD 가 없어서 `restore --staged` 가 실패한다.
+    const head = await runGit(file.root, ["rev-parse", "--verify", "-q", "HEAD"], 4096);
+    return plan([head.code === 0 ? ["restore", "--staged", "--", ...specs] : ["rm", "--cached", "-q", "--", ...specs]]);
   }
-  const original = fields.originalPath ? (await repositoryFile(cwdInput, fields.originalPath)).pathspec : null;
-  const commands =
-    action === "stage"
-      ? [["add", "-A", "--", file.pathspec]]
-      : action === "unstage"
-        ? [["restore", "--staged", "--", ...(original ? [original] : []), file.pathspec]]
-        : discardCommands(fields.status, file.pathspec, original);
-  for (const args of commands) {
-    const output = await runGit(file.cwd, args, 4096);
+  if (change.directory) {
+    if (action === "discard") return refuse("폴더는 한 번에 버리지 않습니다. 안의 파일을 터미널에서 지우십시오.");
+    const inside = await untrackedFilesIn(file);
+    if (!inside) return refuse(`폴더 안의 파일이 ${FOLDER_FILE_LIMIT}개보다 많습니다. 터미널에서 스테이지하십시오.`);
+    if (await anyContentFilter(file.root, inside)) return refuse(FILTER_MESSAGE);
+    return plan([["add", "-A", "--", file.pathspec]]);
+  }
+  if (await anyContentFilter(file.root, [file.relativePath, ...(original ? [original.relativePath] : [])])) return refuse(FILTER_MESSAGE);
+  if (action === "stage") return plan([["add", "-A", "--", file.pathspec]]);
+  // 이전 경로에 새 파일이 생겼으면 되살릴 때 그 파일을 덮어쓴다.
+  if (change.status.startsWith("R") && original && (await stat(original.target).catch(() => null))) {
+    return refuse(`이전 경로(${change.originalPath})에 다른 파일이 있습니다. 그 파일을 옮긴 뒤에 다시 하십시오.`);
+  }
+  return plan(discardCommands(change.status, file.pathspec, original?.pathspec ?? null));
+}
+
+/** 확인을 마친 동작을 실행한다. `discard` 는 되돌릴 수 없다. 부르는 쪽이 사용자에게 먼저 확인한다. */
+export async function executeGitFilePlan(plan: GitFilePlan): Promise<GitActionResult> {
+  for (const args of plan.commands) {
+    const output = await runGit(plan.cwd, args, 4096);
     if (output.code !== 0) {
       return { ok: false, message: failureMessage(output, `git ${args[0]} 가 실패했습니다.`) };
     }
   }
   return { ok: true };
+}
+
+/** 확인하고 바로 실행한다. 사용자 확인이 필요 없는 동작과 시험이 쓴다. */
+export async function runGitFileAction(cwdInput: unknown, action: unknown, path: unknown): Promise<GitActionResult> {
+  const planned = await planGitFileAction(cwdInput, action, path);
+  return planned.ok ? executeGitFilePlan(planned.plan) : planned;
+}
+
+/** 파일을 VS Code 로 여는 주소이다. 드라이브 문자(`C:`)는 그대로 두고 나머지 구간만 인코딩한다. */
+export function editorUrl(target: string): string {
+  const parts = target.split(/[\\/]/);
+  return `vscode://file/${parts.map((part, index) => (index === 0 && /^[A-Za-z]:$/.test(part) ? part : encodeURIComponent(part))).join("/")}`;
 }
 
 /** 파일 하나의 변경이다. 추적 중인 파일은 HEAD 대비 git diff, 새 파일은 내용이다. */

@@ -453,7 +453,11 @@ The Gateway records the external documents that a thread mentions, without a mod
   folder only while it is open, and shows threads with remaining work, auto-follow, parallel work, and the
   planning queue (`desktop/src/renderer/kernel/`). The "Notion" view of the "업무" side panel reads the `notion` server of the
   MCP hub through `akra/mcp/*`: recently viewed pages, search, open in the browser (https Notion hosts
-  only), and hand-off that fills the new-thread screen's composer with the page (`desktop/src/renderer/work/`)
+  only), and hand-off that fills the new-thread screen's composer with the page (`desktop/src/renderer/work/`).
+  The "변경" side panel lists the working-tree changes of the open thread's folder and can stage, unstage, discard,
+  or open one file; the main process reads the file's state from git again before it acts, asks before a discard,
+  and refuses conflicted files, files with a content filter (LFS), and discarding a folder
+  (`desktop/src/main/gitStatus.ts`)
 - Planning: `src/application/service/planning/`, `src/domain/planning/`
 - Parallel: `src/application/service/parallel_mode/`, `src/domain/parallel_mode/`
 - App-server adapter: `src/adapter/outbound/app_server/`

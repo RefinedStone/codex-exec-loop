@@ -68,24 +68,14 @@ function ReviewDiff({ file }: { file: DiffFile }) {
   );
 }
 
-const SCOPES = ["마지막 턴", "스테이지 전", "브랜치 전체"] as const;
-
 function ReviewPanel() {
   const files = useMemo(() => parseGitDiff(MOCK_DIFF), []);
   const [selected, setSelected] = useState(0);
-  const [scope, setScope] = useState<string>(SCOPES[0]);
   const noteCount = useBlueprint((state) => state.reviewNotes.length);
   const file = files[selected];
   return (
     <div className="review">
       <div className="review-toolbar">
-        <div className="segmented">
-          {SCOPES.map((name) => (
-            <button key={name} type="button" className={scope === name ? "selected" : undefined} onClick={() => setScope(name)}>
-              {name}
-            </button>
-          ))}
-        </div>
         <span className="bar-spacer" />
         <button type="button" className="button" onClick={() => notConnected("스테이지")}>
           모두 스테이지

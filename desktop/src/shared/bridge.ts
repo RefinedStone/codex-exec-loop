@@ -246,8 +246,11 @@ export interface AkraBridge {
   gitStatus(cwd: string): Promise<GitStatusResult>;
   /** 바뀐 파일 하나의 diff 를 읽는다. 새 파일은 내용을 돌려준다. */
   gitFileDiff(cwd: string, path: string, untracked: boolean): Promise<GitFileDiff>;
-  /** 바뀐 파일 하나를 스테이지하거나, 스테이지를 취소하거나, 변경을 버린다. 버리기 전에 main 이 사용자에게 확인한다. */
-  gitFileAction(cwd: string, action: GitFileAction, file: GitChangedFile): Promise<GitActionResult>;
+  /**
+   * 바뀐 파일 하나를 스테이지하거나, 스테이지를 취소하거나, 변경을 버린다. 경로만 보낸다. main 이 그 파일의 상태를
+   * git 에서 다시 읽고, 버리기 전에 사용자에게 확인한다.
+   */
+  gitFileAction(cwd: string, action: GitFileAction, path: string): Promise<GitActionResult>;
   /** 파일을 편집기(VS Code)로 연다. 편집기가 없으면 파일이 있는 폴더를 연다. */
   gitOpenFile(cwd: string, path: string): Promise<void>;
   terminal: TerminalBridge;
