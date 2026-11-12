@@ -277,6 +277,13 @@ the desktop app itself is not shipped yet.
   `akra/gateway/info` returns gateway and codex versions,
   start time, and upstream restarts). An upstream restart closes clients with WebSocket close `1012`;
   an unavailable upstream closes them with `1013`.
+- Hosts (plan 25 S1a): a connection selects its upstream host with the WebSocket request path
+  `/host/<id>`; any other path means `local`. Production registers only `local`, the app-server above.
+  An unknown id is closed with `1008`. `akra/gateway/info` also returns `host` (the host of this
+  connection) and `hosts` (id, codex version, start time, and restarts of each host). On a connection
+  to a host other than `local`, `akra/kernel/*` is refused with `-32601`, `akra/context/*` answers
+  with empty `resources` and does not read or write the ledger, `akra/mcp/*` is unchanged, and
+  `AKRA_GATEWAY_RECORD` records nothing.
 - Kernel protocol (`akra/kernel/*`, plan 18 K3, protocol version 1 since the kernel spec of K4-1): a client sends `akra/kernel/attach`
   with a workspace and attaches to the kernel of the repository that holds it. The Gateway builds that
   kernel on first attach and keeps it after clients leave, so auto-follow and parallel dispatch keep

@@ -6,6 +6,7 @@
 //! 쓴다. Telegram 입구가 `TelegramBotPort` 를 쓰는 것과 같은 구조이다.
 
 mod context;
+mod hosts;
 mod kernel;
 mod listener;
 mod mcp;
@@ -23,11 +24,11 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
+use self::hosts::GatewayHosts;
 use self::listener::GatewayListener;
 pub(crate) use self::mcp::GatewayMcpHub;
 use self::recorder::GatewayRecorder;
 use crate::application::port::inbound::work_context_port::WorkContextPort;
-use crate::application::port::outbound::gateway_upstream_port::GatewayUpstreamPort;
 use crate::composition::production;
 use crate::composition::repository_kernel::RepositoryKernelRegistry;
 
@@ -86,16 +87,18 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
         "akra_gateway_started"
     );
 
+    // 지금은 `local` 하나이다. 원격 호스트는 공식 접속 경로가 생긴 뒤에 더한다 (plan 25 G0).
+    let hosts = GatewayHosts::new(upstream, Vec::new());
     serve(
         listener,
-        upstream.clone(),
+        hosts.clone(),
         kernels.clone(),
         mcp_hub.clone(),
         work_context,
         recorder,
     )
     .await;
-    stop_backend(upstream, kernels, mcp_hub).await;
+    stop_backend(hosts, kernels, mcp_hub).await;
     tracing::info!("akra_gateway_stopped");
     Ok(())
 }
@@ -103,7 +106,7 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
 /// 커널을 먼저 멈추고 그 뒤에 upstream app-server 를 멈춘다. 커널의 app-server 연결과 병렬 작업 턴은 upstream 을
 /// 쓴다. 접속 작업이 목록을 아직 쥐고 있어도 커널은 멈춘다. 프로세스는 이 뒤 `exit` 로 끝나 소멸자가 돌지 않는다.
 async fn stop_backend(
-    upstream: Arc<dyn GatewayUpstreamPort>,
+    hosts: GatewayHosts,
     kernels: Arc<RepositoryKernelRegistry>,
     mcp_hub: Arc<GatewayMcpHub>,
 ) {
@@ -112,7 +115,7 @@ async fn stop_backend(
     }
     // MCP hub 엔진은 Gateway upstream 과 별개인 app-server 이다.
     let _ = tokio::task::spawn_blocking(move || mcp_hub.shutdown()).await;
-    upstream.shutdown();
+    hosts.shutdown();
 }
 
 fn parse_args(args: &[String]) -> Result<GatewayCommand> {
@@ -148,7 +151,7 @@ fn acquire_instance_lock(run_dir: &Path) -> Result<File> {
 
 async fn serve(
     mut listener: GatewayListener,
-    upstream: Arc<dyn GatewayUpstreamPort>,
+    hosts: GatewayHosts,
     kernels: Arc<RepositoryKernelRegistry>,
     mcp_hub: Arc<GatewayMcpHub>,
     work_context: Arc<dyn WorkContextPort>,
@@ -168,7 +171,7 @@ async fn serve(
             }
             accepted = listener.accept() => match accepted {
                 Ok(connection) => {
-                    let upstream = upstream.clone();
+                    let hosts = hosts.clone();
                     let kernels = kernels.clone();
                     let services = session::GatewayServices {
                         mcp_hub: Some(mcp_hub.clone()),
@@ -177,7 +180,7 @@ async fn serve(
                     let recorder = recorder.clone();
                     tokio::spawn(async move {
                         if let Err(error) =
-                            session::run_session(connection, upstream, kernels, services, recorder)
+                            session::run_session(connection, hosts, kernels, services, recorder)
                                 .await
                         {
                             tracing::debug!(error = %format!("{error:#}"), "gateway session failed");

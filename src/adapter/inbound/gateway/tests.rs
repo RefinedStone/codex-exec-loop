@@ -14,6 +14,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
 use super::GatewayCommand;
+use super::hosts::GatewayHosts;
 use super::parse_args;
 use super::session::{run_session, websocket_config};
 use crate::application::port::outbound::gateway_upstream_port::{
@@ -95,7 +96,7 @@ async fn connect_client(upstream: Arc<EchoUpstream>) -> WebSocketStream<DuplexSt
     tokio::spawn(async move {
         let _ = run_session(
             gateway_side,
-            upstream,
+            GatewayHosts::new(upstream, Vec::new()),
             Arc::new(crate::composition::repository_kernel::RepositoryKernelRegistry::default()),
             super::session::GatewayServices::default(),
             None,
@@ -243,7 +244,7 @@ async fn connect_kernel_client(
     tokio::spawn(async move {
         let _ = run_session(
             gateway_side,
-            upstream,
+            GatewayHosts::new(upstream, Vec::new()),
             kernels,
             super::session::GatewayServices::default(),
             None,
@@ -623,7 +624,7 @@ async fn a_client_close_ends_the_session_without_waiting_for_the_flush_timeout()
     let (client_side, gateway_side) = tokio::io::duplex(DUPLEX_BUFFER_BYTES);
     let session = tokio::spawn(run_session(
         gateway_side,
-        EchoUpstream::new(true),
+        GatewayHosts::new(EchoUpstream::new(true), Vec::new()),
         Arc::new(crate::composition::repository_kernel::RepositoryKernelRegistry::default()),
         super::session::GatewayServices::default(),
         None,
@@ -771,7 +772,12 @@ async fn gateway_stop_stops_kernels_before_the_upstream_app_server() {
         kernel_lock_free_at_shutdown: Mutex::new(None),
     });
 
-    super::stop_backend(upstream.clone(), kernels, empty_mcp_hub()).await;
+    super::stop_backend(
+        GatewayHosts::new(upstream.clone(), Vec::new()),
+        kernels,
+        empty_mcp_hub(),
+    )
+    .await;
 
     assert_eq!(
         *upstream.kernel_lock_free_at_shutdown.lock().unwrap(),
@@ -817,4 +823,122 @@ fn empty_mcp_hub() -> Arc<super::GatewayMcpHub> {
         }
     }
     Arc::new(super::GatewayMcpHub::new(String::new(), Arc::new(EmptyHub)))
+}
+
+/// plan 25 S1a: `local` 과 가짜 두 번째 호스트 `cloud` 가 있는 Gateway 에 `path` 로 붙는다.
+async fn connect_to_host(
+    path: &str,
+    local: Arc<EchoUpstream>,
+    cloud: Arc<EchoUpstream>,
+    recorder: Option<Arc<super::recorder::GatewayRecorder>>,
+) -> WebSocketStream<DuplexStream> {
+    let (client_side, gateway_side) = tokio::io::duplex(DUPLEX_BUFFER_BYTES);
+    let hosts = GatewayHosts::new(local, vec![("cloud".to_string(), cloud as _)]);
+    tokio::spawn(async move {
+        let _ = run_session(
+            gateway_side,
+            hosts,
+            Arc::new(crate::composition::repository_kernel::RepositoryKernelRegistry::default()),
+            super::session::GatewayServices::default(),
+            recorder,
+        )
+        .await;
+    });
+    let (websocket, _) = tokio_tungstenite::client_async_with_config(
+        format!("ws://localhost{path}"),
+        client_side,
+        Some(websocket_config()),
+    )
+    .await
+    .expect("client handshake through the gateway session should succeed");
+    websocket
+}
+
+#[tokio::test]
+async fn the_request_path_selects_the_host_and_an_unknown_host_is_closed() {
+    let local = EchoUpstream::new(true);
+    let cloud = EchoUpstream::new(true);
+
+    let mut remote = connect_to_host("/host/cloud", local.clone(), cloud.clone(), None).await;
+    remote.send(Message::text(r#"{"id":1}"#)).await.unwrap();
+    assert_eq!(next_text(&mut remote).await, r#"echo:{"id":1}"#);
+    assert_eq!(*cloud.opened.lock().unwrap(), 1);
+    assert_eq!(*local.opened.lock().unwrap(), 0);
+
+    let info = kernel_request(&mut remote, "info", "akra/gateway/info", json!({})).await;
+    assert_eq!(info["result"]["host"], json!("cloud"));
+    let ids: Vec<&Value> = info["result"]["hosts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|host| &host["id"])
+        .collect();
+    assert_eq!(ids, [&json!("local"), &json!("cloud")]);
+
+    let mut unknown = connect_to_host("/host/nope", local.clone(), cloud.clone(), None).await;
+    assert_eq!(next_close_code(&mut unknown).await, Some(CloseCode::Policy));
+    assert_eq!(*local.opened.lock().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn a_remote_host_refuses_kernel_methods_and_answers_context_without_the_ledger() {
+    // plan 25 §3.1 and Q-C3. No work context service is set, so an answer proves the ledger was not used.
+    let mut remote = connect_to_host(
+        "/host/cloud",
+        EchoUpstream::new(true),
+        EchoUpstream::new(true),
+        None,
+    )
+    .await;
+
+    let refused = kernel_request(&mut remote, "k", "akra/kernel/describe", json!({})).await;
+    assert_eq!(refused["error"]["code"], json!(-32601));
+
+    let context = kernel_request(
+        &mut remote,
+        "c",
+        "akra/context/thread",
+        json!({ "threadId": "remote-thread" }),
+    )
+    .await;
+    assert_eq!(context["result"]["resources"], json!([]));
+}
+
+#[tokio::test]
+async fn a_remote_host_session_is_not_recorded() {
+    let directory = crate::test_utils::platform_safe_temp_dir().join(format!(
+        "akra-gateway-host-recording-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&directory);
+    let recorder = Arc::new(super::recorder::GatewayRecorder::create(&directory).unwrap());
+    let sessions = || std::fs::read_dir(&directory).unwrap().count();
+    let before = sessions();
+
+    let mut remote = connect_to_host(
+        "/host/cloud",
+        EchoUpstream::new(true),
+        EchoUpstream::new(true),
+        Some(recorder.clone()),
+    )
+    .await;
+    remote.send(Message::text(r#"{"id":1}"#)).await.unwrap();
+    next_text(&mut remote).await;
+    assert_eq!(
+        sessions(),
+        before,
+        "a remote session must not open a recording"
+    );
+
+    let mut local = connect_to_host(
+        "/",
+        EchoUpstream::new(true),
+        EchoUpstream::new(true),
+        Some(recorder),
+    )
+    .await;
+    local.send(Message::text(r#"{"id":1}"#)).await.unwrap();
+    next_text(&mut local).await;
+    assert!(sessions() > before, "the local session is still recorded");
+    let _ = std::fs::remove_dir_all(&directory);
 }

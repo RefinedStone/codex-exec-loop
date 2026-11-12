@@ -114,6 +114,12 @@ fn respond(context: &dyn WorkContextPort, id: Value, method: &str, text: &str) -
     }
 }
 
+/// `local` 이 아닌 접속의 `akra/context/*` 답이다 (plan 25 Q-C3). 답은 하지만 장부를 읽지도 쓰지도 않는다. 장부의
+/// 키는 thread id 뿐이라서 원격 thread 가 들어가면 같은 id 의 로컬 thread 와 섞인다.
+pub(super) fn remote_host_response(id: Value) -> String {
+    json!({ "jsonrpc": "2.0", "id": id, "result": { "resources": [] } }).to_string()
+}
+
 fn error_response(id: Value, code: i64, message: &str) -> String {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } }).to_string()
 }

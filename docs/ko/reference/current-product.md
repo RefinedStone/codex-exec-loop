@@ -219,6 +219,12 @@ parallel, Git, GitHub 권위를 바꾸지 않고 재생하며 PR 검증 복구 �
   `initialize`, 요청 ID, 스레드 구독은 접속마다 따로이다. 프레임은 바꾸지 않고 전달하고 `akra/*` 요청만
   Gateway 가 답한다 (`akra/gateway/info`: Gateway·codex 버전, 시작 시각, upstream 재시작 횟수). upstream 이
   다시 시작되면 close `1012`, upstream 을 쓸 수 없으면 close `1013` 으로 클라이언트를 닫는다.
+- 호스트 (plan 25 S1a): 접속은 WebSocket 요청 경로 `/host/<id>` 로 upstream 호스트를 고른다. 다른 경로는
+  `local` 이다. 운영 구성은 `local`(위의 app-server) 하나만 등록한다. 모르는 id 는 close `1008` 로 닫는다.
+  `akra/gateway/info` 는 `host`(이 접속의 호스트)와 `hosts`(호스트마다 id, codex 버전, 시작 시각, 재시작
+  횟수)도 돌려준다. `local` 이 아닌 접속에서 `akra/kernel/*` 는 `-32601` 로 거절하고, `akra/context/*` 는 빈
+  `resources` 로 답하며 장부를 읽거나 쓰지 않는다. `akra/mcp/*` 는 그대로이고 `AKRA_GATEWAY_RECORD` 는
+  기록하지 않는다.
 - 커널 프로토콜(`akra/kernel/*`, plan 18 K3 프로토콜 v0): 클라이언트가 작업 공간과 함께
   `akra/kernel/attach` 를 보내면 그 공간이 속한 저장소의 커널에 붙는다. Gateway 는 처음 붙을 때 커널을 만들고,
   클라이언트가 모두 떠나도 남겨 둔다. 그래서 자동 후속과 병렬 배분이 계속 돈다. 한 저장소의 worktree 들은 커널

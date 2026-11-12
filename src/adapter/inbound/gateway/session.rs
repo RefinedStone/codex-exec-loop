@@ -12,14 +12,21 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
 
-use super::context::{CONTEXT_METHOD_PREFIX, spawn_request as spawn_context_request};
+use super::context::{
+    CONTEXT_METHOD_PREFIX, remote_host_response as remote_context_response,
+    spawn_request as spawn_context_request,
+};
+use super::hosts::{GatewayHosts, LOCAL_HOST_ID, host_id_from_path};
 use super::kernel::{KERNEL_METHOD_PREFIX, KernelRequests};
 use super::mcp::{GatewayMcpHub, MCP_METHOD_PREFIX, spawn_request as spawn_mcp_request};
 use super::recorder::{GatewayRecorder, RecordDirection, SessionRecording};
-use super::router::{ClientTextRoute, respond_to_akra_request, route_client_text};
+use super::router::{
+    ClientTextRoute, refuse_kernel_on_remote_host, respond_to_akra_request, route_client_text,
+};
 use crate::application::port::inbound::work_context_port::WorkContextPort;
 use crate::application::port::outbound::gateway_upstream_port::{
     GatewayUpstreamPort, GatewayUpstreamStream,
@@ -58,7 +65,7 @@ enum SessionEnd {
 
 pub(super) async fn run_session<S>(
     client: S,
-    upstream: Arc<dyn GatewayUpstreamPort>,
+    hosts: GatewayHosts,
     kernels: Arc<RepositoryKernelRegistry>,
     services: GatewayServices,
     recorder: Option<Arc<GatewayRecorder>>,
@@ -66,17 +73,39 @@ pub(super) async fn run_session<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    let recording = open_recording(recorder.as_deref()).map(Arc::new);
+    let mut request_path = String::new();
+    // 오류 타입은 tungstenite 의 `Callback` 이 정한다. 이 콜백은 오류를 만들지 않는다.
+    #[allow(clippy::result_large_err)]
+    let read_path = |request: &Request, response: Response| {
+        request_path = request.uri().path().to_string();
+        Ok(response)
+    };
+    let client_websocket = tokio_tungstenite::accept_hdr_async_with_config(
+        client,
+        read_path,
+        Some(websocket_config()),
+    )
+    .await
+    .context("client WebSocket handshake failed")?;
+    let (mut client_sink, mut client_stream) = client_websocket.split();
+    let host_id = host_id_from_path(&request_path);
+    let Some(upstream) = hosts.find(host_id) else {
+        let _ = client_sink
+            .send(close_message(CloseCode::Policy, "unknown gateway host"))
+            .await;
+        return Ok(());
+    };
+    let is_local = host_id == LOCAL_HOST_ID;
+    // 원격 대화는 디스크에 남기지 않는다 (plan 25 §3.1).
+    let recording = is_local
+        .then(|| open_recording(recorder.as_deref()))
+        .flatten()
+        .map(Arc::new);
     let record = |direction: RecordDirection, text: &str| {
         if let Some(recording) = &recording {
             recording.record(direction, text);
         }
     };
-    let client_websocket =
-        tokio_tungstenite::accept_async_with_config(client, Some(websocket_config()))
-            .await
-            .context("client WebSocket handshake failed")?;
-    let (mut client_sink, mut client_stream) = client_websocket.split();
     let mut generation = upstream.generation();
     generation.borrow_and_update();
 
@@ -106,7 +135,8 @@ where
         let _ = client_sink.close().await;
     });
     // 커널 요청은 따로 처리한다. 읽기 고리는 커널을 기다리지 않고 app-server 메시지를 계속 전달한다.
-    let kernel_requests = KernelRequests::start(kernels, outbox.clone(), recording.clone());
+    let kernel_requests =
+        is_local.then(|| KernelRequests::start(kernels, outbox.clone(), recording.clone()));
 
     let client_to_upstream = async {
         while let Some(result) = client_stream.next().await {
@@ -136,9 +166,14 @@ where
                             .as_ref()
                             .filter(|_| method.starts_with(CONTEXT_METHOD_PREFIX));
                         let immediate = if method.starts_with(KERNEL_METHOD_PREFIX) {
-                            kernel_requests
-                                .submit(id, method, text.as_str().to_string())
-                                .err()
+                            match &kernel_requests {
+                                Some(kernel_requests) => kernel_requests
+                                    .submit(id, method, text.as_str().to_string())
+                                    .err(),
+                                None => Some(refuse_kernel_on_remote_host(id, &method)),
+                            }
+                        } else if !is_local && method.starts_with(CONTEXT_METHOD_PREFIX) {
+                            Some(remote_context_response(id))
                         } else if let Some(hub) = mcp_hub_for_method {
                             spawn_mcp_request(
                                 hub.clone(),
@@ -160,7 +195,12 @@ where
                             );
                             None
                         } else {
-                            Some(respond_to_akra_request(id, &method, &upstream.snapshot()))
+                            Some(respond_to_akra_request(
+                                id,
+                                &method,
+                                host_id,
+                                &hosts.snapshots(),
+                            ))
                         };
                         if let Some(response) = immediate {
                             record(RecordDirection::Gateway, &response);
@@ -242,7 +282,9 @@ where
             .await;
     }
     // 커널 요청 작업과 이벤트 스레드도 보내기 함을 쥔다. 먼저 끝내야 쓰기 작업이 밀린 메시지를 보낸 뒤 바로 끝난다.
-    kernel_requests.stop().await;
+    if let Some(kernel_requests) = kernel_requests {
+        kernel_requests.stop().await;
+    }
     drop(outbox);
     let _ = tokio::time::timeout(CLIENT_CLOSE_FLUSH_TIMEOUT, writer).await;
     tracing::debug!(?end, "gateway session ended");
