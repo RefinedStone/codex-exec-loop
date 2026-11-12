@@ -13,19 +13,48 @@ use crate::domain::recent_sessions::SessionRenameRequest;
 
 impl AppCommand {
     /*
-     * 이 명령의 연산 id 를 넣는다 (plan 18 K4-4). 런타임이 명령을 기록한 뒤 부른다. 지금은 thread 지정 프롬프트만 연산
-     * id 를 가진다. 다른 명령의 끝은 아직 기록하지 않는다 (K4-4b).
+     * 이 명령의 연산 id 를 넣는다 (plan 18 K4-4). 런타임이 명령을 기록한 뒤 부른다. core 는 그 명령의 끝을 기록할 때
+     * 이 id 를 쓴다. thread 지정 프롬프트는 준비와 턴을 거치므로 id 를 제출 값에 싣는다. 효과 하나로 끝나는 명령
+     * 다섯은 `OfOperation` 으로 감싼다. 받아들이면 끝나는 명령과 읽기 명령은 그대로 둔다.
      */
-    pub fn with_operation(mut self, op_id: i64) -> Self {
-        if let Self::SubmitThreadPrompt(submission) = &mut self {
-            submission.op_id = Some(op_id);
+    pub fn with_operation(self, op_id: i64) -> Self {
+        match self {
+            Self::SubmitThreadPrompt(mut submission) => {
+                submission.op_id = Some(op_id);
+                Self::SubmitThreadPrompt(submission)
+            }
+            Self::RenameSession(_)
+            | Self::ResetPlanningWorkspace(_)
+            | Self::RequestStopAllSessions
+            | Self::SteerTurn(_)
+            | Self::SubmitApprovalDecision { .. } => Self::OfOperation {
+                op_id,
+                command: Box::new(self),
+            },
+            other => other,
         }
-        self
+    }
+
+    /// 이 명령이 가리키는 thread 이다. 끝 기록의 `thread_id` 이다. thread 를 가리키지 않는 명령은 비어 있다.
+    pub fn operation_thread_id(&self) -> &str {
+        match self {
+            Self::RenameSession(request) => &request.thread_id,
+            Self::SteerTurn(request) => &request.thread_id,
+            _ => "",
+        }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppCommand {
+    /*
+     * 연산 id 를 가진 명령이다 (plan 18 K4-4b). 커널이 기록한 클라이언트 명령만 이 모양이다. core 는 안의 명령을
+     * 그대로 처리하고, 그 명령이 낸 효과의 완료를 그 연산의 끝으로 적는다. `with_operation` 이 만든다.
+     */
+    OfOperation {
+        op_id: i64,
+        command: Box<AppCommand>,
+    },
     /*
      * Noop gives the skeleton a real command path without changing product
      * behavior. Feature slices replace this with domain-specific commands such

@@ -324,9 +324,15 @@ the desktop app itself is not shipped yet.
   by an older kernel has none and stays `accepted`. A `submit_prompt` that the kernel still prepares
   is `accepted`; it becomes `running` with its first later record. Each command in the spec has
   `completion`: `accepted` (it ends when the kernel accepts it), `records` (it ends with a later
-  record; only `submit_prompt` now), or `unreported` (`rename_session`, `steer_turn`, `stop_all`,
-  `decide_approval`, and `reset_planning`: the kernel does not report their end yet and their state
-  stays `accepted`). A `submit_prompt` ends with the `turn_ended` record of its turn, or with
+  record: `submit_prompt`, `rename_session`, `steer_turn`, `stop_all`, `decide_approval`, and
+  `reset_planning`), or `unreported` (no command of this version; it is the rule of commands that an
+  older kernel received, and their state stays `accepted`). `rename_session`, `steer_turn`,
+  `stop_all`, `decide_approval`, and `reset_planning` end with `command_completed` when the request
+  of the command returns: `done` if it succeeded and `failed` if it did not. `stop_all` ends with its
+  first stop request; the kernel may send the stop again after a turn starts. A command that the
+  kernel accepts but that does nothing (a rename while the session list loads, a stop while another
+  stop is in flight, a reset while a planning operation runs) ends as `failed` at once. A
+  `submit_prompt` ends with the `turn_ended` record of its turn, or with
   `command_completed` when no turn ran (failed preparation, hand-over to parallel slots, a turn
   submission that closed before a turn started), or with the settlement of its queued prompt. A
   queued prompt is `running`, not an end. The records of a `submit_prompt` carry its `op_id`

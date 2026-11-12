@@ -2762,13 +2762,27 @@ pub(crate) mod tests {
             restarted.admit_command(&described(Some("key-1"), "fp-2")),
             CommandAdmission::KeyReused
         );
-        // 새 명령의 연산 id 는 이전 커널의 기록 뒤로 이어진다. 이전 연산과 겹치지 않는다.
+        // 이전 커널이 열어 둔 steer(연산 3)는 새 커널이 `lost` 로 닫는다 (plan 18 K4-4b). 그 기록이 4 이다.
+        // 새 명령의 연산 id 는 그 뒤로 이어진다. 이전 연산과 겹치지 않는다.
         assert_eq!(
             restarted.admit_command(&described(Some("key-2"), "fp-1")),
-            CommandAdmission::Recorded(4)
+            CommandAdmission::Recorded(5)
         );
         drop(restarted);
-        assert_eq!(log.0.lock().expect("log should lock").len(), 4);
+        let recorded = log.0.lock().expect("log should lock");
+        assert_eq!(recorded.len(), 5);
+        assert!(
+            matches!(
+                &recorded[3],
+                KernelEvent::CommandCompleted {
+                    op_id: 3,
+                    result: crate::domain::kernel_event::OperationEnd::Lost,
+                    ..
+                }
+            ),
+            "{:?}",
+            recorded[3]
+        );
     }
 
     #[test]
