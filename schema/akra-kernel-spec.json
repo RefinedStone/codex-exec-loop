@@ -1,0 +1,2889 @@
+{
+  "protocol_version": 1,
+  "methods": [
+    {
+      "name": "akra/kernel/attach",
+      "summary": "Attach this connection to the kernel of the repository that owns the workspace folder.",
+      "params": {
+        "$ref": "#/$defs/AttachRequest"
+      },
+      "result": {
+        "$ref": "#/$defs/AttachResponse"
+      }
+    },
+    {
+      "name": "akra/kernel/describe",
+      "summary": "Return this specification."
+    },
+    {
+      "name": "akra/kernel/command",
+      "summary": "Send one command. The answer carries the rejection, if any, and the operation receipt.",
+      "params": {
+        "$ref": "#/$defs/CommandRequest"
+      },
+      "result": {
+        "$ref": "#/$defs/CommandResponse"
+      }
+    },
+    {
+      "name": "akra/kernel/query",
+      "summary": "Read one current value or a page of the decision log.",
+      "params": {
+        "$ref": "#/$defs/QueryRequest"
+      },
+      "result": {
+        "$ref": "#/$defs/KernelQueryAnswer"
+      }
+    },
+    {
+      "name": "akra/kernel/event",
+      "summary": "Notification from the kernel to an attached client.",
+      "params": {
+        "$ref": "#/$defs/EventNotification"
+      }
+    },
+    {
+      "name": "akra/kernel/detach",
+      "summary": "Detach this connection. No event arrives after the answer."
+    }
+  ],
+  "commands": [
+    {
+      "name": "load_sessions",
+      "scope": "session",
+      "summary": "Load the session list of the workspace. The result arrives as the `sessions` event.",
+      "effect": "read",
+      "idempotency": "natural",
+      "rejections": [],
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "load_sessions",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      }
+    },
+    {
+      "name": "rename_session",
+      "scope": "session",
+      "summary": "Rename a session (thread).",
+      "effect": "write",
+      "idempotency": "natural",
+      "rejections": [],
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "thread_id": {
+            "type": "string"
+          },
+          "type": {
+            "const": "rename_session",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "thread_id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      }
+    },
+    {
+      "name": "submit_prompt",
+      "scope": "thread",
+      "summary": "Send a prompt to a thread. The kernel prepares it with planning context and submits a turn. Progress arrives as `prompt_submission` events.",
+      "effect": "write",
+      "idempotency": "keyed",
+      "rejections": [
+        "busy",
+        "preparation_active",
+        "unknown_thread",
+        "parallel_mode",
+        "parallel_mode_unknown"
+      ],
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "prompt": {
+            "type": "string"
+          },
+          "thread_id": {
+            "type": "string"
+          },
+          "type": {
+            "const": "submit_prompt",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "thread_id",
+          "prompt"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      }
+    },
+    {
+      "name": "steer_turn",
+      "scope": "thread",
+      "summary": "Add a prompt to the turn that is running on a thread.",
+      "effect": "write",
+      "idempotency": "keyed",
+      "rejections": [
+        "steer_in_flight",
+        "no_matching_turn"
+      ],
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_turn_id": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "thread_id": {
+            "type": "string"
+          },
+          "type": {
+            "const": "steer_turn",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "thread_id",
+          "expected_turn_id",
+          "prompt"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      }
+    },
+    {
+      "name": "stop_all",
+      "scope": "thread",
+      "summary": "Request a stop of every running turn.",
+      "effect": "write",
+      "idempotency": "natural",
+      "rejections": [],
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "stop_all",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      }
+    },
+    {
+      "name": "decide_approval",
+      "scope": "approval",
+      "summary": "Accept or decline a pending approval request.",
+      "effect": "write",
+      "idempotency": "keyed",
+      "rejections": [
+        "decision_in_flight",
+        "no_matching_approval"
+      ],
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "approval_id": {
+            "type": "string"
+          },
+          "decision": {
+            "$ref": "#/$defs/ApprovalDecision"
+          },
+          "server_request_id": {
+            "type": "string"
+          },
+          "type": {
+            "const": "decide_approval",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "approval_id",
+          "server_request_id",
+          "decision"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      }
+    },
+    {
+      "name": "set_auto_follow_max_turns",
+      "scope": "auto_follow",
+      "summary": "Set how many automatic follow-up turns may run after a manual turn.",
+      "effect": "write",
+      "idempotency": "natural",
+      "rejections": [],
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "set_auto_follow_max_turns",
+            "type": "string"
+          },
+          "value": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "type",
+          "value"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      }
+    },
+    {
+      "name": "pause_auto_follow",
+      "scope": "auto_follow",
+      "summary": "Pause automatic follow-up turns.",
+      "effect": "write",
+      "idempotency": "natural",
+      "rejections": [],
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "pause_auto_follow",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      }
+    },
+    {
+      "name": "reset_planning",
+      "scope": "planning",
+      "summary": "Delete planning data (the queue, the directions, or all of it).",
+      "effect": "destructive",
+      "idempotency": "natural",
+      "rejections": [],
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "default": false,
+            "type": "boolean"
+          },
+          "target": {
+            "$ref": "#/$defs/ResetTarget"
+          },
+          "type": {
+            "const": "reset_planning",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "target"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      }
+    },
+    {
+      "name": "refresh_planning",
+      "scope": "planning",
+      "summary": "Read the planning queue again. The result arrives as the `planning` event.",
+      "effect": "read",
+      "idempotency": "natural",
+      "rejections": [],
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "refresh_planning",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      }
+    }
+  ],
+  "queries": [
+    {
+      "name": "sessions",
+      "summary": "The session list of the workspace and its load state.",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "sessions",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/SessionsState",
+        "properties": {
+          "type": {
+            "const": "sessions",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "auto_follow",
+      "summary": "The automatic follow-up settings. They are the same for every thread.",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "auto_follow",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/AutoFollowSettings",
+        "properties": {
+          "type": {
+            "const": "auto_follow",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "thread_activity",
+      "summary": "The threads that still have work: a running turn, a pending approval, or automatic follow-up.",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "thread_activity",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "properties": {
+          "threads": {
+            "items": {
+              "$ref": "#/$defs/ThreadActivity"
+            },
+            "type": "array"
+          },
+          "type": {
+            "const": "thread_activity",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "threads"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "planning",
+      "summary": "The planning queue.",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "planning",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/PlanningState",
+        "properties": {
+          "type": {
+            "const": "planning",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "parallel",
+      "summary": "The parallel mode state: pool, agents, merge queue, and pull request validation.",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "parallel",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/ParallelState",
+        "properties": {
+          "type": {
+            "const": "parallel",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "history",
+      "summary": "A page of the decision log after a cursor. Send the answer's `next_after` as the next `after`.",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "default": null,
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "limit": {
+            "default": null,
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "type": {
+            "const": "history",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/KernelEventPage",
+        "properties": {
+          "type": {
+            "const": "history",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      }
+    }
+  ],
+  "events": [
+    {
+      "name": "sessions",
+      "summary": "The session list or its load state changed.",
+      "payload": {
+        "$ref": "#/$defs/SessionsState",
+        "properties": {
+          "type": {
+            "const": "sessions",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "auto_follow",
+      "summary": "The automatic follow-up settings changed.",
+      "payload": {
+        "$ref": "#/$defs/AutoFollowSettings",
+        "properties": {
+          "type": {
+            "const": "auto_follow",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "thread_activity",
+      "summary": "The set of threads with work changed. The event carries every such thread.",
+      "payload": {
+        "properties": {
+          "threads": {
+            "items": {
+              "$ref": "#/$defs/ThreadActivity"
+            },
+            "type": "array"
+          },
+          "type": {
+            "const": "thread_activity",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "threads"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "prompt_submission",
+      "summary": "Progress of a `submit_prompt` command: preparing, submitted, queued, rejected, or failed.",
+      "payload": {
+        "$ref": "#/$defs/PromptSubmissionState",
+        "properties": {
+          "type": {
+            "const": "prompt_submission",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "planning",
+      "summary": "The planning queue changed.",
+      "payload": {
+        "$ref": "#/$defs/PlanningState",
+        "properties": {
+          "type": {
+            "const": "planning",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "parallel",
+      "summary": "The parallel mode state changed.",
+      "payload": {
+        "$ref": "#/$defs/ParallelState",
+        "properties": {
+          "type": {
+            "const": "parallel",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "resync",
+      "summary": "Events for this client were dropped. Read the current values with queries and `history` after the last sequence seen.",
+      "payload": {
+        "properties": {
+          "type": {
+            "const": "resync",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "recorded",
+      "summary": "The kernel wrote one decision record. `sequence` is the cursor for `history`.",
+      "payload": {
+        "$ref": "#/$defs/RecordedKernelEvent",
+        "properties": {
+          "type": {
+            "const": "recorded",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      }
+    }
+  ],
+  "records": [
+    {
+      "name": "thread_prompt_queued",
+      "summary": "The kernel kept a prepared prompt in its queue. It submits the prompt once when it is idle.",
+      "payload": {
+        "$ref": "#/$defs/QueuedThreadPrompt",
+        "properties": {
+          "kind": {
+            "const": "thread_prompt_queued",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "thread_prompt_settled",
+      "summary": "A queued prompt ended: submitted, handed to parallel slots, dropped because its task finished, or rejected again.",
+      "payload": {
+        "properties": {
+          "kind": {
+            "const": "thread_prompt_settled",
+            "type": "string"
+          },
+          "settlement": {
+            "$ref": "#/$defs/ThreadPromptSettlement"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "thread_id": {
+            "type": "string"
+          },
+          "workspace_directory": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "thread_id",
+          "workspace_directory",
+          "task_id",
+          "settlement"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "thread_prompt_rejected",
+      "summary": "The kernel rejected a thread prompt before preparation. No planning task was made.",
+      "payload": {
+        "properties": {
+          "kind": {
+            "const": "thread_prompt_rejected",
+            "type": "string"
+          },
+          "reason": {
+            "$ref": "#/$defs/ThreadPromptRejection"
+          },
+          "thread_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "thread_id",
+          "reason"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "turn_submitted",
+      "summary": "The kernel accepted a turn submission (manual, prepared, or automatic follow-up).",
+      "payload": {
+        "properties": {
+          "kind": {
+            "const": "turn_submitted",
+            "type": "string"
+          },
+          "origin": {
+            "$ref": "#/$defs/TurnOrigin"
+          },
+          "submission": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "thread_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "thread_id",
+          "submission",
+          "origin"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "turn_started",
+      "summary": "The app-server started a turn.",
+      "payload": {
+        "properties": {
+          "kind": {
+            "const": "turn_started",
+            "type": "string"
+          },
+          "thread_id": {
+            "type": "string"
+          },
+          "turn_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "thread_id",
+          "turn_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "turn_ended",
+      "summary": "A turn ended. `outcome` is present when the kernel saw how it ended.",
+      "payload": {
+        "properties": {
+          "kind": {
+            "const": "turn_ended",
+            "type": "string"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TurnEndOutcome"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "thread_id": {
+            "type": "string"
+          },
+          "turn_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "thread_id",
+          "turn_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "post_turn_routed",
+      "summary": "The kernel chose what follows a completed turn.",
+      "payload": {
+        "properties": {
+          "completed_turn_id": {
+            "type": "string"
+          },
+          "kind": {
+            "const": "post_turn_routed",
+            "type": "string"
+          },
+          "route": {
+            "$ref": "#/$defs/PostTurnRoute"
+          },
+          "thread_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "thread_id",
+          "completed_turn_id",
+          "route"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "approval_requested",
+      "summary": "A turn asked for an approval. The request content is not recorded.",
+      "payload": {
+        "$ref": "#/$defs/PendingApproval",
+        "properties": {
+          "kind": {
+            "const": "approval_requested",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "approval_resolved",
+      "summary": "An approval ended: accepted, declined, timed out, withdrawn, or lost at a kernel restart.",
+      "payload": {
+        "properties": {
+          "approval_id": {
+            "type": "string"
+          },
+          "kind": {
+            "const": "approval_resolved",
+            "type": "string"
+          },
+          "resolution": {
+            "$ref": "#/$defs/ApprovalResolution"
+          },
+          "thread_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "thread_id",
+          "approval_id",
+          "resolution"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "command_received",
+      "summary": "The kernel received a client command. `op_id` is the sequence of this record.",
+      "payload": {
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "fingerprint": {
+            "type": "string"
+          },
+          "idempotency_key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "const": "command_received",
+            "type": "string"
+          },
+          "op_id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "thread_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "op_id",
+          "command",
+          "thread_id",
+          "fingerprint"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "command_rejected",
+      "summary": "The kernel rejected a received command at once.",
+      "payload": {
+        "properties": {
+          "kind": {
+            "const": "command_rejected",
+            "type": "string"
+          },
+          "op_id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "reason": {
+            "$ref": "#/$defs/CommandRejectionReason"
+          },
+          "thread_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "op_id",
+          "thread_id",
+          "reason"
+        ],
+        "type": "object"
+      }
+    }
+  ],
+  "reasons": [
+    {
+      "name": "steer_in_flight",
+      "summary": "Another steer for the same turn is still in flight. Send again with a new idempotency key after it ends."
+    },
+    {
+      "name": "no_matching_turn",
+      "summary": "The thread has no running turn with `expected_turn_id`. Read `active_turn_id` from `thread_activity`."
+    },
+    {
+      "name": "decision_in_flight",
+      "summary": "A decision for the same approval is still in flight."
+    },
+    {
+      "name": "no_matching_approval",
+      "summary": "No pending approval has that id. Read `approval` from `thread_activity`."
+    },
+    {
+      "name": "busy",
+      "summary": "A turn is running or the thread still has work. Send again with a new idempotency key when `thread_activity` is empty."
+    },
+    {
+      "name": "preparation_active",
+      "summary": "Another prompt is being prepared. Send again with a new idempotency key after that preparation ends."
+    },
+    {
+      "name": "unknown_thread",
+      "summary": "The kernel does not know the thread. Send `load_sessions` first."
+    },
+    {
+      "name": "parallel_mode",
+      "summary": "Parallel mode is on. The kernel starts no thread prompt until it is off."
+    },
+    {
+      "name": "parallel_mode_unknown",
+      "summary": "The kernel does not know the parallel mode yet. Send again with a new idempotency key shortly."
+    }
+  ],
+  "errors": [
+    {
+      "name": "invalid_params",
+      "code": -32602,
+      "summary": "The request does not match the input schema."
+    },
+    {
+      "name": "method_not_found",
+      "code": -32601,
+      "summary": "The method is not an `akra/kernel/*` method of this protocol version."
+    },
+    {
+      "name": "confirmation_required",
+      "code": -32010,
+      "summary": "A destructive command came without `confirm: true`."
+    },
+    {
+      "name": "not_attached",
+      "code": -32011,
+      "summary": "This connection is not attached. Send `akra/kernel/attach` first."
+    },
+    {
+      "name": "kernel_unavailable",
+      "code": -32012,
+      "summary": "The kernel cannot be reached. Another process (a TUI) may run the kernel of that repository, or the kernel stopped."
+    },
+    {
+      "name": "kernel_timeout",
+      "code": -32013,
+      "summary": "The kernel did not answer in time. The command may still run; read the result with a query."
+    },
+    {
+      "name": "idempotency_key_reused",
+      "code": -32014,
+      "summary": "The `idempotency_key` was already used for a different command. Use a new key for each command."
+    },
+    {
+      "name": "idempotency_unavailable",
+      "code": -32015,
+      "summary": "This kernel has no decision log and cannot tell resends apart. The command did not run."
+    }
+  ],
+  "$defs": {
+    "ApprovalDecision": {
+      "enum": [
+        "accept",
+        "decline"
+      ],
+      "type": "string"
+    },
+    "ApprovalRequest": {
+      "properties": {
+        "approval_id": {
+          "type": "string"
+        },
+        "details": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "server_request_id": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "approval_id",
+        "server_request_id",
+        "summary",
+        "details"
+      ],
+      "type": "object"
+    },
+    "ApprovalRequestKind": {
+      "enum": [
+        "command_execution",
+        "file_change",
+        "permissions"
+      ],
+      "type": "string"
+    },
+    "ApprovalResolution": {
+      "oneOf": [
+        {
+          "enum": [
+            "accepted",
+            "declined"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "timed_out",
+          "type": "string"
+        },
+        {
+          "const": "withdrawn",
+          "type": "string"
+        },
+        {
+          "const": "lost",
+          "type": "string"
+        }
+      ]
+    },
+    "AttachRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "client_name": {
+          "type": "string"
+        },
+        "workspace": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace",
+        "client_name"
+      ],
+      "type": "object"
+    },
+    "AttachResponse": {
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "kernel": {
+          "type": "string"
+        },
+        "protocol_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "client_id",
+        "protocol_version",
+        "kernel"
+      ],
+      "type": "object"
+    },
+    "AutoFollowSettings": {
+      "properties": {
+        "max_turns": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "paused": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "max_turns",
+        "paused"
+      ],
+      "type": "object"
+    },
+    "CommandRejection": {
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/CommandRejectionReason"
+        }
+      },
+      "required": [
+        "reason",
+        "message"
+      ],
+      "type": "object"
+    },
+    "CommandRejectionReason": {
+      "enum": [
+        "steer_in_flight",
+        "no_matching_turn",
+        "decision_in_flight",
+        "no_matching_approval",
+        "busy",
+        "preparation_active",
+        "unknown_thread",
+        "parallel_mode",
+        "parallel_mode_unknown"
+      ],
+      "type": "string"
+    },
+    "CommandRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "$ref": "#/$defs/KernelCommand"
+        },
+        "idempotency_key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    },
+    "CommandResponse": {
+      "properties": {
+        "operation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Operation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "processed": {
+          "type": "boolean"
+        },
+        "rejection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CommandRejection"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "processed"
+      ],
+      "type": "object"
+    },
+    "EventNotification": {
+      "properties": {
+        "event": {
+          "$ref": "#/$defs/KernelEvent"
+        }
+      },
+      "required": [
+        "event"
+      ],
+      "type": "object"
+    },
+    "KernelCommand": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "load_sessions",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "thread_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "rename_session",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "thread_id",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "prompt": {
+              "type": "string"
+            },
+            "thread_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "submit_prompt",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "thread_id",
+            "prompt"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expected_turn_id": {
+              "type": "string"
+            },
+            "prompt": {
+              "type": "string"
+            },
+            "thread_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "steer_turn",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "thread_id",
+            "expected_turn_id",
+            "prompt"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "stop_all",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "approval_id": {
+              "type": "string"
+            },
+            "decision": {
+              "$ref": "#/$defs/ApprovalDecision"
+            },
+            "server_request_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "decide_approval",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "approval_id",
+            "server_request_id",
+            "decision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "set_auto_follow_max_turns",
+              "type": "string"
+            },
+            "value": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "pause_auto_follow",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "confirm": {
+              "default": false,
+              "type": "boolean"
+            },
+            "target": {
+              "$ref": "#/$defs/ResetTarget"
+            },
+            "type": {
+              "const": "reset_planning",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "target"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "refresh_planning",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "KernelEvent": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/SessionsState",
+          "properties": {
+            "type": {
+              "const": "sessions",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/AutoFollowSettings",
+          "properties": {
+            "type": {
+              "const": "auto_follow",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "threads": {
+              "items": {
+                "$ref": "#/$defs/ThreadActivity"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "thread_activity",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "threads"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/PromptSubmissionState",
+          "properties": {
+            "type": {
+              "const": "prompt_submission",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/PlanningState",
+          "properties": {
+            "type": {
+              "const": "planning",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/ParallelState",
+          "properties": {
+            "type": {
+              "const": "parallel",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "resync",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/RecordedKernelEvent",
+          "properties": {
+            "type": {
+              "const": "recorded",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "KernelEventPage": {
+      "properties": {
+        "next_after": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "records": {
+          "items": {
+            "$ref": "#/$defs/RecordedKernelEvent"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "records",
+        "next_after"
+      ],
+      "type": "object"
+    },
+    "KernelQuery": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "sessions",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "auto_follow",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "thread_activity",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "planning",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "parallel",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "after": {
+              "default": null,
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "limit": {
+              "default": null,
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "history",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "KernelQueryAnswer": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/SessionsState",
+          "properties": {
+            "type": {
+              "const": "sessions",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/AutoFollowSettings",
+          "properties": {
+            "type": {
+              "const": "auto_follow",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "threads": {
+              "items": {
+                "$ref": "#/$defs/ThreadActivity"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "thread_activity",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "threads"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/PlanningState",
+          "properties": {
+            "type": {
+              "const": "planning",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/ParallelState",
+          "properties": {
+            "type": {
+              "const": "parallel",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/KernelEventPage",
+          "properties": {
+            "type": {
+              "const": "history",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "KernelRecord": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/QueuedThreadPrompt",
+          "properties": {
+            "kind": {
+              "const": "thread_prompt_queued",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "thread_prompt_settled",
+              "type": "string"
+            },
+            "settlement": {
+              "$ref": "#/$defs/ThreadPromptSettlement"
+            },
+            "task_id": {
+              "type": "string"
+            },
+            "thread_id": {
+              "type": "string"
+            },
+            "workspace_directory": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "thread_id",
+            "workspace_directory",
+            "task_id",
+            "settlement"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "thread_prompt_rejected",
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/$defs/ThreadPromptRejection"
+            },
+            "thread_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "thread_id",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "turn_submitted",
+              "type": "string"
+            },
+            "origin": {
+              "$ref": "#/$defs/TurnOrigin"
+            },
+            "submission": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "thread_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "thread_id",
+            "submission",
+            "origin"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "turn_started",
+              "type": "string"
+            },
+            "thread_id": {
+              "type": "string"
+            },
+            "turn_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "thread_id",
+            "turn_id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "turn_ended",
+              "type": "string"
+            },
+            "outcome": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TurnEndOutcome"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "thread_id": {
+              "type": "string"
+            },
+            "turn_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "thread_id",
+            "turn_id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "completed_turn_id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "post_turn_routed",
+              "type": "string"
+            },
+            "route": {
+              "$ref": "#/$defs/PostTurnRoute"
+            },
+            "thread_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "thread_id",
+            "completed_turn_id",
+            "route"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/PendingApproval",
+          "properties": {
+            "kind": {
+              "const": "approval_requested",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "approval_id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "approval_resolved",
+              "type": "string"
+            },
+            "resolution": {
+              "$ref": "#/$defs/ApprovalResolution"
+            },
+            "thread_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "thread_id",
+            "approval_id",
+            "resolution"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "command": {
+              "type": "string"
+            },
+            "fingerprint": {
+              "type": "string"
+            },
+            "idempotency_key": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "command_received",
+              "type": "string"
+            },
+            "op_id": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "thread_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "op_id",
+            "command",
+            "thread_id",
+            "fingerprint"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "command_rejected",
+              "type": "string"
+            },
+            "op_id": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "reason": {
+              "$ref": "#/$defs/CommandRejectionReason"
+            },
+            "thread_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "op_id",
+            "thread_id",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Operation": {
+      "properties": {
+        "next": {
+          "$ref": "#/$defs/OperationNext"
+        },
+        "op_id": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "replayed": {
+          "type": "boolean"
+        },
+        "state": {
+          "$ref": "#/$defs/OperationState"
+        }
+      },
+      "required": [
+        "op_id",
+        "state",
+        "next"
+      ],
+      "type": "object"
+    },
+    "OperationNext": {
+      "properties": {
+        "after": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "query": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "query",
+        "after"
+      ],
+      "type": "object"
+    },
+    "OperationState": {
+      "oneOf": [
+        {
+          "const": "accepted",
+          "type": "string"
+        },
+        {
+          "const": "rejected",
+          "type": "string"
+        }
+      ]
+    },
+    "ParallelAgent": {
+      "properties": {
+        "agent_id": {
+          "type": "string"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "duration": {
+          "type": "string"
+        },
+        "slot_id": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "task_title": {
+          "type": "string"
+        },
+        "thread_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "agent_id",
+        "task_title",
+        "slot_id",
+        "branch",
+        "state",
+        "duration",
+        "summary"
+      ],
+      "type": "object"
+    },
+    "ParallelMergeItem": {
+      "properties": {
+        "branch": {
+          "type": "string"
+        },
+        "commit": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "task_title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_title",
+        "state",
+        "branch",
+        "commit"
+      ],
+      "type": "object"
+    },
+    "ParallelPool": {
+      "properties": {
+        "awaiting_cleanup": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "blocked": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "configured": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "exhausted": {
+          "type": "boolean"
+        },
+        "idle": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "leased": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "missing": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "running": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unavailable": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "configured",
+        "idle",
+        "leased",
+        "running",
+        "awaiting_cleanup",
+        "blocked",
+        "missing",
+        "unavailable",
+        "exhausted"
+      ],
+      "type": "object"
+    },
+    "ParallelPrValidation": {
+      "properties": {
+        "blocker": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "phase": {
+          "type": "string"
+        },
+        "pull_request_number": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pull_request_number",
+        "url",
+        "state",
+        "phase",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "ParallelState": {
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "supervisor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ParallelSupervisor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "type": "object"
+    },
+    "ParallelSupervisor": {
+      "properties": {
+        "agents": {
+          "items": {
+            "$ref": "#/$defs/ParallelAgent"
+          },
+          "type": "array"
+        },
+        "merge_head": {
+          "type": "string"
+        },
+        "merge_queue": {
+          "items": {
+            "$ref": "#/$defs/ParallelMergeItem"
+          },
+          "type": "array"
+        },
+        "notice": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pool": {
+          "$ref": "#/$defs/ParallelPool"
+        },
+        "pr_validation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ParallelPrValidation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/ParallelSupervisorState"
+        }
+      },
+      "required": [
+        "state",
+        "pool",
+        "agents",
+        "merge_head",
+        "merge_queue"
+      ],
+      "type": "object"
+    },
+    "ParallelSupervisorState": {
+      "enum": [
+        "prepare",
+        "supervise",
+        "recover"
+      ],
+      "type": "string"
+    },
+    "PendingApproval": {
+      "properties": {
+        "approval_id": {
+          "type": "string"
+        },
+        "request_kind": {
+          "$ref": "#/$defs/ApprovalRequestKind"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "turn_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "thread_id",
+        "approval_id",
+        "request_kind",
+        "summary"
+      ],
+      "type": "object"
+    },
+    "PlanningState": {
+      "properties": {
+        "active_tasks": {
+          "items": {
+            "$ref": "#/$defs/PlanningTask"
+          },
+          "type": "array"
+        },
+        "auto_follow_pause_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "failure_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "next_task": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlanningTask"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "proposed_tasks": {
+          "items": {
+            "$ref": "#/$defs/PlanningTask"
+          },
+          "type": "array"
+        },
+        "queue_summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revision": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "skipped_tasks": {
+          "items": {
+            "$ref": "#/$defs/SkippedPlanningTask"
+          },
+          "type": "array"
+        },
+        "status": {
+          "$ref": "#/$defs/PlanningStatus"
+        }
+      },
+      "required": [
+        "status",
+        "active_tasks",
+        "proposed_tasks",
+        "skipped_tasks"
+      ],
+      "type": "object"
+    },
+    "PlanningStatus": {
+      "oneOf": [
+        {
+          "enum": [
+            "invalid",
+            "ready_without_task",
+            "ready_with_task"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "uninitialized",
+          "type": "string"
+        }
+      ]
+    },
+    "PlanningTask": {
+      "properties": {
+        "direction_title": {
+          "type": "string"
+        },
+        "priority": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "rank": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "status": {
+          "$ref": "#/$defs/PlanningTaskStatus"
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "rank",
+        "task_id",
+        "direction_title",
+        "title",
+        "status",
+        "priority"
+      ],
+      "type": "object"
+    },
+    "PlanningTaskStatus": {
+      "enum": [
+        "ready",
+        "blocked",
+        "in_progress",
+        "done",
+        "cancelled",
+        "awaiting_user",
+        "proposed"
+      ],
+      "type": "string"
+    },
+    "PostTurnRoute": {
+      "oneOf": [
+        {
+          "const": "auto_submit",
+          "type": "string"
+        },
+        {
+          "const": "parallel_consumed",
+          "type": "string"
+        },
+        {
+          "const": "no_continuation",
+          "type": "string"
+        }
+      ]
+    },
+    "PromptSubmissionReason": {
+      "oneOf": [
+        {
+          "const": "busy",
+          "type": "string"
+        },
+        {
+          "const": "preparation_active",
+          "type": "string"
+        },
+        {
+          "const": "unknown_thread",
+          "type": "string"
+        },
+        {
+          "const": "parallel_mode",
+          "type": "string"
+        },
+        {
+          "const": "parallel_mode_unknown",
+          "type": "string"
+        },
+        {
+          "const": "parallel_mode_started",
+          "type": "string"
+        },
+        {
+          "const": "turn_started_during_preparation",
+          "type": "string"
+        },
+        {
+          "const": "stop_pending",
+          "type": "string"
+        },
+        {
+          "const": "unavailable",
+          "type": "string"
+        },
+        {
+          "const": "cancelled",
+          "type": "string"
+        },
+        {
+          "const": "text_mismatch",
+          "type": "string"
+        },
+        {
+          "const": "bootstrap_review_required",
+          "type": "string"
+        },
+        {
+          "const": "planning_refused",
+          "type": "string"
+        }
+      ]
+    },
+    "PromptSubmissionState": {
+      "properties": {
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PromptSubmissionReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/PromptSubmissionStatus"
+        },
+        "task_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "thread_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id",
+        "status"
+      ],
+      "type": "object"
+    },
+    "PromptSubmissionStatus": {
+      "oneOf": [
+        {
+          "const": "preparing",
+          "type": "string"
+        },
+        {
+          "const": "submitted",
+          "type": "string"
+        },
+        {
+          "const": "queued",
+          "type": "string"
+        },
+        {
+          "const": "rejected",
+          "type": "string"
+        },
+        {
+          "const": "failed",
+          "type": "string"
+        }
+      ]
+    },
+    "QueryRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "query": {
+          "$ref": "#/$defs/KernelQuery"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    },
+    "QueuedThreadPrompt": {
+      "properties": {
+        "task_id": {
+          "type": "string"
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "workspace_directory": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id",
+        "workspace_directory",
+        "task_id"
+      ],
+      "type": "object"
+    },
+    "RecordedKernelEvent": {
+      "properties": {
+        "event": {
+          "$ref": "#/$defs/KernelRecord"
+        },
+        "recorded_at": {
+          "type": "string"
+        },
+        "sequence": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sequence",
+        "recorded_at",
+        "event"
+      ],
+      "type": "object"
+    },
+    "ResetTarget": {
+      "enum": [
+        "queue",
+        "directions",
+        "all"
+      ],
+      "type": "string"
+    },
+    "SessionEntry": {
+      "properties": {
+        "thread_id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at_epoch": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "workspace": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id",
+        "title",
+        "workspace",
+        "updated_at_epoch"
+      ],
+      "type": "object"
+    },
+    "SessionsState": {
+      "properties": {
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sessions": {
+          "items": {
+            "$ref": "#/$defs/SessionEntry"
+          },
+          "type": "array"
+        },
+        "status": {
+          "$ref": "#/$defs/SessionsStatus"
+        }
+      },
+      "required": [
+        "status",
+        "sessions"
+      ],
+      "type": "object"
+    },
+    "SessionsStatus": {
+      "enum": [
+        "idle",
+        "loading",
+        "ready",
+        "unavailable",
+        "failed"
+      ],
+      "type": "string"
+    },
+    "SkippedPlanningTask": {
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/PlanningTaskStatus"
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "title",
+        "status",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "ThreadActivity": {
+      "properties": {
+        "active_turn_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "approval": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApprovalRequest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "auto_follow_active": {
+          "type": "boolean"
+        },
+        "running": {
+          "type": "boolean"
+        },
+        "thread_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id",
+        "running",
+        "auto_follow_active"
+      ],
+      "type": "object"
+    },
+    "ThreadPromptRejection": {
+      "enum": [
+        "busy",
+        "preparation_active",
+        "unknown_thread",
+        "parallel_mode",
+        "parallel_mode_unknown"
+      ],
+      "type": "string"
+    },
+    "ThreadPromptSettlement": {
+      "oneOf": [
+        {
+          "const": "submitted",
+          "type": "string"
+        },
+        {
+          "const": "parallel_slots",
+          "type": "string"
+        },
+        {
+          "const": "task_finished",
+          "type": "string"
+        },
+        {
+          "const": "rejected_again",
+          "type": "string"
+        }
+      ]
+    },
+    "TurnEndOutcome": {
+      "oneOf": [
+        {
+          "enum": [
+            "completed",
+            "interrupted",
+            "failed"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "type": "string"
+        }
+      ]
+    },
+    "TurnOrigin": {
+      "oneOf": [
+        {
+          "const": "manual",
+          "type": "string"
+        },
+        {
+          "const": "manual_intake",
+          "type": "string"
+        },
+        {
+          "const": "auto_follow",
+          "type": "string"
+        }
+      ]
+    }
+  }
+}

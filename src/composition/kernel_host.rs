@@ -1256,7 +1256,7 @@ mod tests {
         };
         let described = |fingerprint: &str| {
             Some(KernelCommandDescriptor {
-                command: "steer_turn".to_string(),
+                command: crate::domain::kernel_spec::KernelCommandKind::SteerTurn,
                 thread_id: "thread-9".to_string(),
                 fingerprint: fingerprint.to_string(),
                 idempotency_key: Some("key-1".to_string()),

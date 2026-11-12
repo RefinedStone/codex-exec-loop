@@ -1148,7 +1148,7 @@ impl NativeClientRuntime {
         let op_id = self.last_kernel_sequence + 1;
         self.record_kernel_events(vec![KernelEvent::CommandReceived {
             op_id,
-            command: descriptor.command.clone(),
+            command: descriptor.command.name().to_string(),
             thread_id: descriptor.thread_id.clone(),
             fingerprint: descriptor.fingerprint.clone(),
             idempotency_key: descriptor.idempotency_key.clone(),
@@ -2488,7 +2488,7 @@ pub(crate) mod tests {
             CommandRejectionReason, KernelCommandDescriptor, KernelEvent, OperationReceipt,
         };
         let described = |key: Option<&str>, fingerprint: &str| KernelCommandDescriptor {
-            command: "steer_turn".to_string(),
+            command: crate::domain::kernel_spec::KernelCommandKind::SteerTurn,
             thread_id: "thread-1".to_string(),
             fingerprint: fingerprint.to_string(),
             idempotency_key: key.map(str::to_string),
