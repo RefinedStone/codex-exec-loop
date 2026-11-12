@@ -106,11 +106,9 @@ export interface FakeKernel {
   kernel: string | null;
   /** 조회 종류 → 결과 이벤트 */
   queries: Record<string, unknown>;
-  /** 붙은 뒤 조금 지나서 보낼 이벤트이다. */
+  /** 붙은 뒤 첫 명령에 응답한 다음 보낼 이벤트이다. 초기 조회가 끝났다는 신호로 쓴다. */
   eventsAfterAttach?: unknown[];
 }
-
-const FAKE_KERNEL_EVENT_DELAY_MS = 300;
 
 function answerKernel(kernel: FakeKernel, socket: WebSocket, message: JsonRpcEnvelope & { params?: Record<string, unknown> }): void {
   const respond = (body: object) => socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, ...body }));
@@ -120,12 +118,7 @@ function answerKernel(kernel: FakeKernel, socket: WebSocket, message: JsonRpcEnv
         respond({ error: { code: -32012, message: "the repository kernel runs in another process (pid 4242)" } });
         return;
       }
-      respond({ result: { client_id: "1", protocol_version: 0, kernel: kernel.kernel } });
-      setTimeout(() => {
-        for (const event of kernel.eventsAfterAttach ?? []) {
-          socket.send(JSON.stringify({ jsonrpc: "2.0", method: "akra/kernel/event", params: { event } }));
-        }
-      }, FAKE_KERNEL_EVENT_DELAY_MS);
+      respond({ result: { client_id: "1", protocol_version: 1, kernel: kernel.kernel } });
       return;
     case "akra/kernel/query": {
       const type = (message.params?.query as { type?: string } | undefined)?.type ?? "";
@@ -178,6 +171,7 @@ export async function startFakeGateway(
   recordingPaths: string | string[],
   options: {
     kernel?: FakeKernel;
+    onRequest?(method: string): void;
     mcpHub?: FakeMcpHub;
     threadDocuments?: Record<string, FakeThreadDocument[]>;
     /** 스레드 id → `akra/context/refresh` 가 바뀐 것으로 찾는 문서의 키이다. `akra/context/markRead` 뒤에는 다시 찾지 않는다. */
@@ -206,6 +200,7 @@ export async function startFakeGateway(
   /** 서버 요청 id → 그 요청을 받은 접속들과 스레드 id */
   const openServerRequests = new Map<string, { threadId: string; sockets: Set<WebSocket> }>();
   sockets.on("connection", (socket) => {
+    let kernelEventsSent = false;
     // 녹화 재생은 접속마다 따로 한다. 창 두 개가 같은 스레드를 열면 둘 다 같은 기록을 받는다.
     const used = new Set<ReplaySegment>();
     const replayFollowUps = (message: JsonRpcEnvelope) => {
@@ -255,8 +250,16 @@ export async function startFakeGateway(
         return;
       }
       receivedMethods.push(message.method);
+      options.onRequest?.(message.method);
       if (options.kernel && message.method.startsWith("akra/kernel/")) {
         answerKernel(options.kernel, socket, message);
+        if (message.method === "akra/kernel/attach") kernelEventsSent = false;
+        if (message.method === "akra/kernel/command" && !kernelEventsSent) {
+          kernelEventsSent = true;
+          for (const event of options.kernel.eventsAfterAttach ?? []) {
+            socket.send(JSON.stringify({ jsonrpc: "2.0", method: "akra/kernel/event", params: { event } }));
+          }
+        }
         return;
       }
       // 작업 컨텍스트 (plan 22): 스레드 id → `akra/context/*` 의 resources 이다. 목록 조회는 바뀜을 찾지 않는다.

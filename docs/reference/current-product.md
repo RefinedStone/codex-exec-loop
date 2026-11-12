@@ -462,7 +462,12 @@ The Gateway records the external documents that a thread mentions, without a mod
 - Desktop (in development, plan P2): `desktop/` — Electron shell that connects each window to `akra-gateway`;
   see `desktop/AGENTS.md`. The "Akra" side panel attaches to the repository kernel of the open thread's
   folder only while it is open, and shows threads with remaining work, auto-follow, parallel work, and the
-  planning queue (`desktop/src/renderer/kernel/`). The "Notion" view of the "업무" side panel reads the `notion` server of the
+  planning queue (`desktop/src/renderer/kernel/`). Kernel wire types and command effects are generated from
+  `schema/akra-kernel-spec.json` with `npm run generate:kernel-protocol`. The shared kernel command sender
+  adds a fresh UUID idempotency key to each mutation and leaves read commands keyless. It does not replay
+  requests after disconnect. The panel currently sends only the read command `refresh_planning`;
+  conversation and approval actions still use the app-server path.
+  The "Notion" view of the "업무" side panel reads the `notion` server of the
   MCP hub through `akra/mcp/*`: recently viewed pages, search, open in the browser (https Notion hosts
   only), and hand-off that fills the new-thread screen's composer with the page (`desktop/src/renderer/work/`).
   The "변경" side panel lists the working-tree changes of the open thread's folder and can stage, unstage, discard,
