@@ -20,6 +20,8 @@ export const IPC_CHANNELS = {
   chooseFolder: "akra:choose-folder",
   gitStatus: "akra:git-status",
   gitFileDiff: "akra:git-file-diff",
+  gitFileAction: "akra:git-file-action",
+  gitOpenFile: "akra:git-open-file",
   terminalOpen: "akra:terminal-open",
   terminalWrite: "akra:terminal-write",
   terminalResize: "akra:terminal-resize",
@@ -216,6 +218,12 @@ export type GitStatusResult =
   | { ok: true; branch: string | null; files: GitChangedFile[]; truncated: boolean }
   | { ok: false; message: string };
 
+/** 파일 하나에 하는 git 동작이다. `discard` 는 변경을 버린다 (되돌릴 수 없다). */
+export type GitFileAction = "stage" | "unstage" | "discard";
+
+/** `cancelled` 는 사용자가 확인 창에서 취소했다는 뜻이다. */
+export type GitActionResult = { ok: true } | { ok: false; message: string; cancelled?: boolean };
+
 export type GitFileDiff =
   | { kind: "gitDiff"; text: string; truncated: boolean }
   | { kind: "content"; text: string; truncated: boolean }
@@ -238,6 +246,10 @@ export interface AkraBridge {
   gitStatus(cwd: string): Promise<GitStatusResult>;
   /** 바뀐 파일 하나의 diff 를 읽는다. 새 파일은 내용을 돌려준다. */
   gitFileDiff(cwd: string, path: string, untracked: boolean): Promise<GitFileDiff>;
+  /** 바뀐 파일 하나를 스테이지하거나, 스테이지를 취소하거나, 변경을 버린다. 버리기 전에 main 이 사용자에게 확인한다. */
+  gitFileAction(cwd: string, action: GitFileAction, file: GitChangedFile): Promise<GitActionResult>;
+  /** 파일을 편집기(VS Code)로 연다. 편집기가 없으면 파일이 있는 폴더를 연다. */
+  gitOpenFile(cwd: string, path: string): Promise<void>;
   terminal: TerminalBridge;
   browser: BrowserBridge;
   github: GitHubBridge;

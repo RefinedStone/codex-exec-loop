@@ -170,6 +170,22 @@
   color: var(--bad);
 }
 
+.file-actions {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: auto;
+}
+
+/* 줄 수가 이미 오른쪽 끝으로 밀었으면 그 옆에 붙는다. */
+.diff-counts + .file-actions {
+  margin-left: 4px;
+}
+
+.file-actions .icon-button {
+  width: 22px;
+  height: 22px;
+}
+
 .diff-file .diff-lines {
   max-height: 480px;
   overflow: auto;
