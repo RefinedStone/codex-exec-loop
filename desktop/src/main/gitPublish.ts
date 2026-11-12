@@ -16,8 +16,9 @@ const BRANCH_NAME = /^(?!-)[\w./-]+$/;
 export interface PushPlan {
   cwd: string;
   branch: string;
-  /** `origin` 의 주소이다. 확인 창에 보여 준다. */
+  /** `origin` 의 push 주소이다. 확인 창에 보여 준다. */
   remoteUrl: string;
+  commit: string;
 }
 
 export interface PullRequestPlan {
@@ -46,15 +47,23 @@ export async function planPush(cwdInput: unknown): Promise<Planned<PushPlan>> {
   const cwd = await requireDirectory(cwdInput);
   const branch = await gitLine(cwd, "symbolic-ref", "-q", "--short", "HEAD");
   if (!branch) return refuse("브랜치가 없습니다. 브랜치를 만든 뒤에 push 하십시오.");
-  const remoteUrl = await gitLine(cwd, "remote", "get-url", "origin");
+  const remoteUrl = await gitLine(cwd, "remote", "get-url", "--push", "--all", "origin");
   if (!remoteUrl) return refuse("원격 저장소 origin 이 없습니다.");
-  return { ok: true, plan: { cwd, branch, remoteUrl } };
+  if (remoteUrl.includes("\n")) return refuse("push 주소가 여러 개입니다. 터미널에서 대상 주소를 확인하십시오.");
+  const commit = await gitLine(cwd, "rev-parse", "--verify", "HEAD");
+  if (!commit) return refuse("push 할 커밋이 없습니다.");
+  return { ok: true, plan: { cwd, branch, remoteUrl, commit } };
 }
 
 /** 현재 브랜치를 `origin` 의 같은 이름 브랜치로 push 한다. 원격이 앞서 있으면 git 이 거절한다. 강제로 덮어쓰지 않는다. */
 export async function executePush(plan: PushPlan): Promise<GitPublishResult> {
+  const current = await planPush(plan.cwd);
+  if (!current.ok) return current;
+  if (current.plan.branch !== plan.branch || current.plan.remoteUrl !== plan.remoteUrl || current.plan.commit !== plan.commit) {
+    return refuse("확인하는 동안 브랜치나 원격이 바뀌었습니다. 다시 확인하십시오.");
+  }
   const ref = `refs/heads/${plan.branch}`;
-  const output = await runGit(plan.cwd, ["push", "--set-upstream", "origin", `${ref}:${ref}`], 1 << 16, { timeoutMs: PUSH_TIMEOUT_MS, env: NO_PROMPT_ENV });
+  const output = await runGit(plan.cwd, ["push", "--no-follow-tags", "--set-upstream", "origin", `${ref}:${ref}`], 1 << 16, { timeoutMs: PUSH_TIMEOUT_MS, env: NO_PROMPT_ENV });
   if (output.code !== 0) {
     return refuse(failureMessage(output, "git push 가 실패했습니다."));
   }
