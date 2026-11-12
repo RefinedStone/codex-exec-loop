@@ -18,6 +18,7 @@ OmO now ships as three related surfaces. They must not be scored as one implemen
 | Desktop runtime | bundle reports `@code-yeongyu/senpi` 2026.10.23-1 and OmO [`v5.1.46`](https://github.com/code-yeongyu/oh-my-openagent/tree/638d30d68837e994ea2edb3a87cb94f40588d991) (`638d30d68837e994ea2edb3a87cb94f40588d991`) |
 | Desktop server origin | [T3 Code](https://github.com/pingdotgg/t3code) (MIT), checked at [`cec8d73a1f0fd3bd9a48df88640436e73a04afa3`](https://github.com/pingdotgg/t3code/tree/cec8d73a1f0fd3bd9a48df88640436e73a04afa3) |
 | Audit date | 2026-11-10 (Asia/Seoul) |
+| Runtime read | 2026-11-13: OmO `638d30d6` (v5.1.46) and Senpi [`2638d524`](https://github.com/code-yeongyu/senpi/tree/2638d524bab2bb87cff874ef1f7e11df16c77643), the commits in the bundle manifest of the Windows desktop build, plus the local records of one session. See [Runtime Behaviour at the Installed Pin](#runtime-behaviour-at-the-installed-pin-2026-11-13) |
 | Akra baseline | `6c58243763c2f7ca798a53de27cd427982996fa8` (`prerelease`) |
 | Previous Akra audit | 2026-08-08: installed Senpi v2026.7.26, OmO public v4.19.4 plus dev adapter `fd79bf49bd45e2053658c7d52c512d7330037e34`, Akra `0c94f7e8b4549c2358f8b6d4b0c1ebc7e206dd48` |
 
@@ -144,6 +145,107 @@ requests.
 - Engine recovery is best effort: a turn is resent or reported as lost after an engine restart.
 - Telemetry is on by default (PostHog, enumerated fields). It can be turned off with
   `DO_NOT_TRACK=1` or `OMO_DISABLE_TELEMETRY=1`.
+
+## Runtime Behaviour at the Installed Pin (2026-11-13)
+
+This section is a source read of the two repositories at the commits that the Windows desktop
+bundle reports, checked against the local records of one real session (about 52 minutes, two Akra
+Desktop pull requests and one review of two kernel commits). The installed runtime is bytecode;
+the read is of the public source at the same commits. Token figures are in
+[Cache and Token Efficiency](../cache-and-token-efficiency.md#second-snapshot-2026-11-13).
+
+### Which layer owns what
+
+| Layer | Repository | Owns |
+| --- | --- | --- |
+| Senpi host | `code-yeongyu/senpi` (`coding-agent` is about 346k lines) | provider transport and cache key, the default system prompt, compaction, the `eval` tool, goals, todo enforcement, stop hooks, rule injection |
+| OmO adapter | `packages/omo-senpi` (about 103k lines) | the `ultrawork` directive, the memory block, the continuation hooks, model profiles |
+| Task engine | `packages/senpi-task` (about 64k lines) | child tasks: categories, model resolution, spawn, result delivery |
+
+### Model orchestration
+
+- The orchestrating model chooses a `category` or a named agent as an argument of the `task`
+  tool. Code maps the category to a model. A category and an explicit `model` together are
+  refused, but a named agent can be given an explicit model.
+- Categories and their default models (`senpi-task/src/category/`): `quick` is
+  `gpt-6-luna-fast`, `deep-low` is `gpt-6.1-sol` with medium reasoning, `deep-high` and
+  `ultrabrain` are `gpt-6-astra`, `unspecified-*` and `architect` are Claude models, and
+  `visual-engineering` and `writing` are Gemini. `deep-low` is described as the default lane. A
+  child on the wrong lane is told to answer `ESCALATE: deep-high`.
+- Exploration agents default to cheap models. The reviewers take a category: the gate reviewer
+  defaults to `deep-high`.
+- The fallback list of a category task is the rest of the category chain plus the parent's model.
+  The local records matched this list exactly.
+- Limits: depth 1 by default, 5 concurrent tasks for each model lane, and a global limit. No token
+  or cost budget exists for an ordinary child. `max_turns` is parsed and not used.
+- Observed: the orchestrator ran on `gpt-6-astra` and all six children on `gpt-6.1-sol`. For the
+  gate reviews the orchestrator gave the cheaper model explicitly (`source: "explicit"` in the task
+  record) instead of the `deep-high` default.
+
+### Child handoff
+
+- A child is a new session. It gets a five-line identity, the role instructions, and the parent's
+  prompt. It does not get the parent transcript, extensions, skills, or context files.
+- A child uses the default Senpi system prompt and the parent's tools minus the workflow, team,
+  and ask-the-user tools. Its prefix is not the parent's prefix.
+- Only the final response returns to the parent, at most 32,000 characters; the rest goes to a
+  file. `task_output` returns the last 60 lines by default, at most 30,000 characters, with tool
+  names and without tool results.
+- The parent does not poll. It ends its turn, and a completion notice wakes it. Notices are
+  batched into one injection and deduplicated on `(task_id, run_epoch)`.
+- On Windows the mode is always in-process.
+
+### What the harness injects
+
+| Injection | Owner | Trigger | Position | Size |
+| --- | --- | --- | --- | --- |
+| `ultrawork` directive | OmO | the word `ulw` or `ultrawork` in the input | hidden message at the end | about 31k characters, once for each session and again after each compaction |
+| memory block | OmO | each turn | inside the system prompt, pinned to the revision of the first turn | up to 24,576 bytes |
+| continuation prompt (ulw-loop, plan) | OmO | the agent settles with open work | hidden follow-up that starts a turn | about 300 characters, at most 8 in a row |
+| goal continuation prompt | Senpi | an active goal at the end of a turn, or a 270-second timer | hidden follow-up | about 4.5 KB each time |
+| first-turn todo reminder | Senpi | the first request of a session | hidden reminder; the default also forces the `todo` tool | short, once |
+| todo-owed backstop | Senpi | a turn that ends with open todos and no tool call | one-sentence reminder that starts a turn | at most 2 in a chain |
+| project rules | Senpi | `AGENTS.md` of the working directory and its ancestors | system prompt, up front | up to 64 KiB for each file |
+| lazy rule activation | Senpi | a `read`, `edit`, or `write` on a path that a rule matches | suffix of that tool result, once for each session, again after compaction | up to 12,000 characters for each rule |
+| stream guard (`ttsr`) | Senpi | repeated output, leaked control tokens, fake tool-call text | aborts the stream and sends a hidden interrupt | short |
+
+- Almost every injection is appended at the end or attached to a tool result. The start of the
+  prompt stays stable. This is the same rule that gives the high cache-read fraction.
+- The backstop is quiet when it should be: in the observed session it was suppressed 36 times
+  (non-interactive child, waiting on a child or a monitor, no open todo) and each suppression
+  cost no tokens.
+- The OmO Senpi edition does not inject rules itself. Its own guide says that rules are
+  intentionally not a Senpi component; the host does it.
+- The quality of the delivered work came from the directive and the gate: a plan file, evidence
+  files under `.omo/evidence/`, and one independent gate reviewer that must reproduce the claims.
+  In the observed session each gate review found one real defect before merge (an unconfirmed tag
+  pushed with a branch, and line endings changed by a partial discard). The reviewer prompt asks
+  for inputs (a code-review report, a QA matrix) that did not exist, and the reports said so.
+
+### Context control
+
+- Compaction triggers at 70% of the context window (80% above 512k). The Senpi catalog gives
+  `gpt-6-astra` a 600,000-token window, so the observed 240k tokens for each response were under
+  every trigger.
+- The reduction of old tool results without a model call is off for models that use OpenAI remote
+  compaction.
+- The OmO OpenCode edition has a dynamic pruning option, off by default. The Senpi edition has no
+  conversation pruning of its own.
+
+### What this means for Akra
+
+- OmO's delegation is efficient where Akra's is already going: bounded results, no polling, and a
+  child that starts clean. The observed cost was in the orchestrator's unreduced history.
+- Akra owns none of the provider-side mechanisms and should not. The transferable rules are
+  placement (volatile text last) and bounding (what a child returns).
+- An independent review step that must reproduce claims found real defects in both products
+  during the same days. It is worth a fixed place in the Akra delivery flow.
+
+Evidence gaps for this section: the installed binary was not compared with the source; fallback
+during a run, the provider's use of the cache key, and the context window that the installed app
+used were not observed; `memory-core`, team mode, the DAG, and the workpool were not read. A dozen
+central claims were reopened in the source by the author; the other file references come from a
+delegated read and were not each reopened.
 
 ## Current Competitive Shape
 
