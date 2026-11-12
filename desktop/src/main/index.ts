@@ -160,9 +160,9 @@ ipcMain.handle(IPC_CHANNELS.gitStatus, (_event, cwd: unknown) => readGitStatus(c
 ipcMain.handle(IPC_CHANNELS.gitFileDiff, (_event, cwd: unknown, path: unknown, untracked: unknown) =>
   readGitFileDiff(cwd, path, untracked),
 );
-// 변경 버리기는 되돌릴 수 없다. 확인은 main 이 한다. renderer 가 확인을 건너뛸 수 없다.
-ipcMain.handle(IPC_CHANNELS.gitBranchSummary, (_event, cwd: unknown) => readBranchSummary(cwd));
+ipcMain.handle(IPC_CHANNELS.gitBranchSummary, (_event, cwd: unknown, fresh: unknown) => readBranchSummary(cwd, fresh));
 ipcMain.handle(IPC_CHANNELS.gitCommitDiff, (_event, cwd: unknown, sha: unknown) => readCommitDiff(cwd, sha));
+// 변경 버리기는 되돌릴 수 없다. 확인은 main 이 한다. renderer 가 확인을 건너뛸 수 없다.
 // main 이 git 에서 읽은 상태로 먼저 확인한다. 거절할 요청에는 확인 창을 띄우지 않고, 창에는 실제로 바뀌는 경로를 보여 준다.
 ipcMain.handle(IPC_CHANNELS.gitFileAction, async (event, cwd: unknown, action: unknown, path: unknown) => {
   const planned = await planGitFileAction(cwd, action, path);

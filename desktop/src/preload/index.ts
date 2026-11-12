@@ -62,8 +62,8 @@ const bridge: AkraBridge = {
   gitOpenFile(cwd: string, path: string): Promise<void> {
     return ipcRenderer.invoke(IPC_CHANNELS.gitOpenFile, cwd, path) as Promise<void>;
   },
-  gitBranchSummary(cwd: string): Promise<GitBranchSummary> {
-    return ipcRenderer.invoke(IPC_CHANNELS.gitBranchSummary, cwd) as Promise<GitBranchSummary>;
+  gitBranchSummary(cwd: string, fresh: boolean): Promise<GitBranchSummary> {
+    return ipcRenderer.invoke(IPC_CHANNELS.gitBranchSummary, cwd, fresh) as Promise<GitBranchSummary>;
   },
   gitCommitDiff(cwd: string, sha: string): Promise<GitCommitDiff> {
     return ipcRenderer.invoke(IPC_CHANNELS.gitCommitDiff, cwd, sha) as Promise<GitCommitDiff>;

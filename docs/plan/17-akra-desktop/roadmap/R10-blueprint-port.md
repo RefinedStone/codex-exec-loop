@@ -208,17 +208,26 @@
 이 단계는 읽기만 한다. push 와 PR 만들기 버튼은 다음 단계이다.
 
 - main: `gitBranch.ts` 의 `readBranchSummary`, `readCommitDiff`.
-  - 기준 브랜치: 현재 브랜치의 PR 이 있으면 그 대상 브랜치(`origin/<대상>`)이다. 없으면 `origin/HEAD` 가 가리키는 브랜치이다.
-    둘 다 없으면 커밋 목록을 비우고 "기준 브랜치를 찾지 못했습니다" 를 보여 준다.
-  - 커밋: `git log <기준>..HEAD`, 최근 100개까지. push 여부는 `git rev-list <upstream>..HEAD` 로 본다. 원격 브랜치가 없으면
-    모두 push 전이다.
-  - PR: `gh pr list --repo <owner/name> --head=<원격 브랜치> --state all --limit 1`. gh 는 저장소 밖에서 실행한다. 저장소는
-    `origin` 주소에서 읽는다. GitHub 가 아니면 PR 을 찾지 않는다. gh 가 실패하면 이유를 보여 주고 커밋 목록은 그대로 보여 준다.
+  - 기준 브랜치는 처음 찾은 것이다: PR 의 대상 브랜치(`origin/<대상>`), 이 브랜치를 만든 원격 브랜치(upstream 이 다른
+    브랜치일 때), `origin/HEAD`, `origin/main`, `origin/master`. 하나도 없으면 커밋 목록을 비우고 "기준 브랜치를 찾지
+    못했습니다" 를 보여 준다.
+  - 이 브랜치의 원격 브랜치는 `origin/<브랜치 이름>` 이다. upstream 은 쓰지 않는다. `git worktree add -b x <path> origin/main`
+    으로 만든 브랜치의 upstream 은 `origin/main` 이다.
+  - 커밋: `git log <기준>..HEAD`, 최근 100개까지. push 여부는 `git rev-list <원격 브랜치>..HEAD` 로 본다. 원격 브랜치가 없으면
+    모두 push 전이다. 머지한 뒤 지운 브랜치와 브랜치 없이 보는 커밋은 표시하지 않는다.
+  - PR: `gh pr list --repo <owner/name> --head=<브랜치> --state all`. gh 는 저장소 밖에서 실행한다. 저장소는 `origin` 주소에서
+    읽는다. GitHub 가 아니면 PR 을 찾지 않는다. fork 에서 같은 이름으로 올린 PR 은 뺀다. gh 가 실패하면 이유를 보여 주고
+    커밋 목록은 그대로 보여 준다. 성공한 결과는 60초 저장한다. 턴이 끝날 때와 새로 고침은 다시 묻는다.
   - CI 상태는 `statusCheckRollup` 을 통과, 실패, 진행 중 하나로 줄인다.
 - 화면: `conversation/BranchCommits.tsx`. 커밋을 펼치면 그 커밋의 변경을 읽는다. 위 막대에 `PR #번호` 를 보여 준다.
+  PR 줄의 "GitHub 에서 열기" 는 기본 브라우저로 연다.
 - 읽는 때: 작업 트리 목록과 같다 (스레드를 열 때, 턴이 끝날 때, 새로 고침, 파일 동작 뒤).
 - 시험: `test/gitBranch.test.ts` 가 실제 저장소와 가짜 gh 로 확인한다.
-- 확인하지 않은 것: 실제 gh 호출과 화면 모양. fork 에서 올린 PR 은 찾지 못한다 (`--head` 는 같은 저장소의 브랜치만 본다).
+- 리뷰 반영 (머지 전, 리뷰 3개): 위의 원격 브랜치와 기준 브랜치 규칙, PR 저장, fork PR 제외, `git log -z` 읽기 (제목의 제어
+    문자로 커밋이 빠지지 않게), ref 앞의 `--end-of-options`. 반려: PR 타입 두 개 합치기, 오류 문구 함수 모으기.
+- 알려진 한계: push 는 했고 PR 은 없는 브랜치는 `origin/HEAD` 와 비교한다. 이 저장소는 `origin/HEAD` 가 `main` 이고 작업은
+  `prerelease` 에서 갈라지므로, 그때는 커밋이 100개 넘게 나온다. PR 을 만들면 맞는 기준이 된다.
+- 확인하지 않은 것: 실제 gh 호출과 화면 모양. fork 에서 이 저장소로 올린 내 PR 은 찾지 못한다.
 
 다음 후보 (계획만, 2026-11-12):
 

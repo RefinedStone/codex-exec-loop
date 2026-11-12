@@ -60,7 +60,7 @@ function CommitRow({ cwd, commit, git }: { cwd: string; commit: GitCommit; git: 
       <summary>
         <code>{commit.shortSha}</code>
         <span className="commit-subject">{commit.subject}</span>
-        {!commit.pushed && <span className="badge badge-warn">push 전</span>}
+        {commit.pushed === false && <span className="badge badge-warn">push 전</span>}
         <span className="muted commit-meta">
           {commit.author} · {relativeAge(commit.committedAt, Date.now())}
         </span>
@@ -78,25 +78,29 @@ function CommitRow({ cwd, commit, git }: { cwd: string; commit: GitCommit; git: 
 }
 
 export function BranchCommits({ cwd, state, git, onOpenUrl }: { cwd: string; state: BranchState; git: CommitReader; onOpenUrl(url: string): void }) {
-  if (state.phase === "idle" || state.phase === "loading") {
+  if (state.phase === "idle") {
     return null;
   }
+  if (state.phase === "loading") {
+    return <div className="muted diff-hint branch-commits">커밋과 PR 을 읽는 중…</div>;
+  }
+  const failure = state.phase === "failed" ? state.message : state.summary.ok ? null : state.summary.message;
   if (state.phase === "failed" || !state.summary.ok) {
     return (
-      <div className="error diff-hint" data-testid="branch-error">
-        브랜치의 커밋을 읽을 수 없습니다. {state.phase === "failed" ? state.message : state.summary.ok ? "" : state.summary.message}
+      <div className="error diff-hint branch-commits" data-testid="branch-error">
+        브랜치의 커밋을 읽을 수 없습니다. {failure}
       </div>
     );
   }
   const { summary } = state;
-  const unpushed = summary.commits.filter((commit) => !commit.pushed).length;
+  const unpushed = summary.commits.filter((commit) => commit.pushed === false).length;
   return (
     <section className="branch-commits" data-testid="branch-commits">
       <header className="review-toolbar">
         <strong>커밋 {summary.commits.length}{summary.truncated ? "+" : ""}개</strong>
         {summary.base ? <span className="muted">기준 {summary.base}</span> : <span className="muted">기준 브랜치를 찾지 못했습니다.</span>}
         {summary.base && unpushed > 0 && <span className="badge badge-warn">push 전 {unpushed}</span>}
-        {summary.base && !summary.upstream && summary.branch && <span className="muted">원격 브랜치 없음</span>}
+        {summary.base && !summary.remoteBranch && summary.branch && summary.pullRequest?.state !== "MERGED" && <span className="muted">원격 브랜치 없음</span>}
       </header>
       {summary.pullRequest ? (
         <PullRequestLine pullRequest={summary.pullRequest} onOpenUrl={onOpenUrl} />

@@ -239,8 +239,8 @@ export interface GitCommit {
   author: string;
   /** Unix 초이다. */
   committedAt: number;
-  /** 원격 브랜치에 있다. 원격 브랜치가 없으면 false 이다. */
-  pushed: boolean;
+  /** 원격 브랜치에 있다. 원격 브랜치가 없으면 false 이다. 알 수 없으면 null 이다 (머지한 뒤 지운 브랜치, 브랜치 없이 보는 커밋). */
+  pushed: boolean | null;
 }
 
 export type GitChecksState = "SUCCESS" | "FAILURE" | "PENDING";
@@ -263,8 +263,8 @@ export type GitBranchSummary =
       ok: true;
       /** 현재 브랜치이다. 브랜치 없이 커밋을 보고 있으면 null 이다. */
       branch: string | null;
-      /** 원격 추적 브랜치이다 (예: `origin/feat/x`). 없으면 null 이다. */
-      upstream: string | null;
+      /** 이 브랜치를 push 한 원격 브랜치이다 (예: `origin/feat/x`). 없으면 null 이다. */
+      remoteBranch: string | null;
       /** `origin` 의 GitHub `owner/name` 이다. GitHub 가 아니면 null 이다. */
       repository: string | null;
       /** 커밋을 비교한 기준이다 (예: `origin/main`). 찾지 못했으면 null 이고 커밋 목록은 비어 있다. */
@@ -308,8 +308,8 @@ export interface AkraBridge {
   gitFileAction(cwd: string, action: GitFileAction, path: string): Promise<GitActionResult>;
   /** 파일을 편집기(VS Code)로 연다. 편집기가 없으면 파일이 있는 폴더를 연다. */
   gitOpenFile(cwd: string, path: string): Promise<void>;
-  /** 브랜치가 기준 브랜치 뒤에 더한 커밋과 그 브랜치의 PR 을 읽는다. */
-  gitBranchSummary(cwd: string): Promise<GitBranchSummary>;
+  /** 브랜치가 기준 브랜치 뒤에 더한 커밋과 그 브랜치의 PR 을 읽는다. `fresh` 이면 잠깐 저장해 둔 PR 을 쓰지 않고 다시 묻는다. */
+  gitBranchSummary(cwd: string, fresh: boolean): Promise<GitBranchSummary>;
   /** 커밋 하나의 변경을 읽는다. */
   gitCommitDiff(cwd: string, sha: string): Promise<GitCommitDiff>;
   terminal: TerminalBridge;
