@@ -14332,6 +14332,8 @@ fn verify_client_runtime_api_boundary(
     let expected_facade_api = [
         // plan 19 Q3-1: the repository kernel attaches its event log and restores queued prompts.
         "attach_kernel_event_log",
+        // plan 20 §4.1: the repository kernel attaches the git observer after its event log.
+        "attach_repository_observer",
         "current_parallel_epoch_id_for_workspace",
         // plan 19 Q3-6: the kernel host dispatches a client command with its record and idempotency key.
         "dispatch_client_command",
