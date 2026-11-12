@@ -10,6 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// 시험의 git 명령이다. 시험을 돌린 셸의 `GIT_*`(예: git hook 의 `GIT_DIR`)를 물려받지 않는다. 물려받으면 시험
 /// 폴더가 아니라 실제 작업 저장소에 `init`, `config`, `commit` 이 실행된다 (`src/test_utils.rs::git_command`).
+/// 파일 감시(`core.fsmonitor`)도 끈다. 켜져 있으면 임시 저장소마다 감시 데몬이 뜨고 남는다.
 fn git_command() -> Command {
     let mut command = Command::new("git");
     for (name, _) in std::env::vars_os() {
@@ -21,6 +22,10 @@ fn git_command() -> Command {
             command.env_remove(name);
         }
     }
+    command
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "core.fsmonitor")
+        .env("GIT_CONFIG_VALUE_0", "false");
     command
 }
 
