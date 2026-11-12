@@ -3534,6 +3534,8 @@ fn core_conversation_turn_feature_reducer_owns_one_correlated_lifecycle_slice() 
         "approval_review_persistence",
         // plan 18 K2-4: the background thread activity last published to the client.
         "published_thread_activity",
+        // plan 18 K4-4: the turns of those threads at the last publish, with the operation of each turn.
+        "published_thread_turns",
         // plan 19 Q3-2: the kernel records the host drains after every dispatch.
         "kernel_records",
     ];
@@ -3548,6 +3550,8 @@ fn core_conversation_turn_feature_reducer_owns_one_correlated_lifecycle_slice() 
         "post_turn_messages",
         // plan 18 K1-5: turn options for the follow-up turn the host submits.
         "turn_options",
+        // plan 18 K4-4: the operation of the command that submitted the current turn.
+        "operation",
     ];
     let forbidden_root_fields = [
         "turn_stream_state",
