@@ -10469,6 +10469,7 @@ mod tests {
             fingerprint: "fp".to_string(),
             idempotency_key: None,
             completion: Some(crate::domain::kernel_spec::CommandCompletion::Records),
+            caller: None,
         };
         let state =
             kernel_event::operation_state(op_id, std::iter::once(&received).chain(own.iter()));

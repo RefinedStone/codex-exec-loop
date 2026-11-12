@@ -320,6 +320,11 @@ the desktop app itself is not shipped yet.
   `records`: `accepted`, `running`, `done`, `rejected`, `failed`, `lost` (the kernel was built again
   while the operation was open), or `unknown` (no command record has that id, or it is older than the
   retention limit). The kernel computes the state from the records. The `command_received` record
+  carries `caller`, the name the connection gave in `akra/kernel/attach` (`client_name`, at most 64
+  characters; it is not authentication), so the log says which client sent a command and which
+  client decided an approval. The kernel, not the inbound adapter, checks the `effect` of the spec: a
+  `destructive` command without `confirm: true` fails with `-32010`, is not run, and is not recorded.
+  The `command_received` record also
   carries the `completion` rule that applied when the kernel received the command; a command received
   by an older kernel has none and stays `accepted`. A `submit_prompt` that the kernel still prepares
   is `accepted`; it becomes `running` with its first later record. Each command in the spec has

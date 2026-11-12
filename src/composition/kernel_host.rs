@@ -56,6 +56,8 @@ pub(crate) enum KernelCommandOutcome {
     KeyReused,
     /// 이 커널은 기록이 없어서 재전송을 가릴 수 없다. 키가 있는 명령을 실행하지 않았다.
     KeyUnavailable,
+    /// 지우는 명령이 확인 없이 왔다 (plan 18 K4-5). 실행하지 않았다.
+    ConfirmationRequired,
 }
 
 /// 커널 호출이 답을 받지 못한 이유이다.
@@ -312,7 +314,8 @@ impl KernelCommandSender {
                 KernelCommandOutcome::Handled { events, .. } => events,
                 KernelCommandOutcome::Replayed(_)
                 | KernelCommandOutcome::KeyReused
-                | KernelCommandOutcome::KeyUnavailable => Vec::new(),
+                | KernelCommandOutcome::KeyUnavailable
+                | KernelCommandOutcome::ConfirmationRequired => Vec::new(),
             })
     }
 
@@ -631,6 +634,9 @@ impl KernelHostLoop {
             ClientCommandDispatch::Replayed(receipt) => KernelCommandOutcome::Replayed(receipt),
             ClientCommandDispatch::KeyReused => KernelCommandOutcome::KeyReused,
             ClientCommandDispatch::KeyUnavailable => KernelCommandOutcome::KeyUnavailable,
+            ClientCommandDispatch::ConfirmationRequired => {
+                KernelCommandOutcome::ConfirmationRequired
+            }
             ClientCommandDispatch::Ran { outcome, operation } => {
                 let events = core_events(&outcome).to_vec();
                 self.publish(outcome);
@@ -1287,6 +1293,8 @@ mod tests {
                 thread_id: "thread-9".to_string(),
                 fingerprint: fingerprint.to_string(),
                 idempotency_key: Some("key-1".to_string()),
+                caller: None,
+                confirmed: false,
             })
         };
         let send = |fingerprint: &str| {

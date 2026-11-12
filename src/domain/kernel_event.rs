@@ -149,7 +149,14 @@ pub struct KernelCommandDescriptor {
     pub thread_id: String,
     pub fingerprint: String,
     pub idempotency_key: Option<String>,
+    /// 지우는 명령을 확인하고 보냈는가이다 (plan 18 K4-5). 커널은 확인이 없는 `destructive` 명령을 실행하지 않는다.
+    pub confirmed: bool,
+    /// 명령을 보낸 접속이 스스로 밝힌 이름이다 (plan 18 K4-5). 예: `akra-desktop`. 인증이 아니다. 이름이 없으면 비운다.
+    pub caller: Option<String>,
 }
+
+/// 기록에 남기는 호출자 이름의 최대 길이이다. 이름은 클라이언트가 정하므로 길이를 막는다.
+pub const CALLER_NAME_MAX_CHARS: usize = 64;
 
 /// 명령의 영수증이다 (plan 19 Q3-6). `op_id` 는 그 명령을 받은 기록의 sequence 이다. 진행은 그 뒤의 기록이다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -236,6 +243,10 @@ pub enum KernelEvent {
          */
         #[serde(default, skip_serializing_if = "Option::is_none")]
         completion: Option<CommandCompletion>,
+        /// 명령을 보낸 접속이 스스로 밝힌 이름이다 (plan 18 K4-5). 승인 결정도 명령이므로 누가 결정했는지 남는다.
+        /// 인증이 아니다. K4-5 이전의 기록과 이름을 밝히지 않은 접속의 기록에는 없다.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caller: Option<String>,
     },
     /// 커널이 그 명령을 바로 거절했다.
     CommandRejected {
@@ -877,6 +888,7 @@ mod tests {
             fingerprint: "fp".to_string(),
             idempotency_key: None,
             completion,
+            caller: None,
         }
     }
 
@@ -1353,6 +1365,7 @@ mod tests {
             fingerprint: fingerprint.to_string(),
             idempotency_key: key.map(str::to_string),
             completion: None,
+            caller: None,
         }
     }
 

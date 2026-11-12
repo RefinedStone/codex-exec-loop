@@ -33,6 +33,7 @@ use crate::composition::kernel_host::{
     KernelHostEvent, ParallelHostView,
 };
 use crate::composition::repository_kernel::RepositoryKernelRegistry;
+use crate::domain::kernel_event::KernelCommandDescriptor;
 
 pub(super) const KERNEL_METHOD_PREFIX: &str = "akra/kernel/";
 /// 이벤트 스레드가 멈춤 표시를 확인하는 간격이다. `detach` 는 커널이 이벤트 채널을 닫게 하므로 보통 더 빨리 끝난다.
@@ -128,6 +129,8 @@ struct KernelSession {
 
 struct AttachedKernel {
     workspace: String,
+    /// 이 접속이 attach 때 밝힌 이름이다. 커널이 명령의 기록에 호출자로 적는다 (plan 18 K4-5).
+    client_name: String,
     commands: KernelCommandSender,
     stop_events: Arc<AtomicBool>,
     events: Option<JoinHandle<()>>,
@@ -205,6 +208,7 @@ impl KernelSession {
             .map_err(|error| unavailable(format!("failed to start the event thread: {error}")))?;
         self.attached = Some(AttachedKernel {
             workspace: request.workspace,
+            client_name: request.client_name,
             commands,
             stop_events,
             events: Some(events),
@@ -216,7 +220,14 @@ impl KernelSession {
         let attached = self.attached()?;
         let request: CommandRequest = parse_params(params)?;
         // 커널은 이 설명으로 명령을 기록하고 멱등 키로 재전송을 가린다 (plan 19 Q3-6).
-        let descriptor = request.descriptor()?;
+        let command_name = request.command.kind().name();
+        let caller = Some(attached.client_name.clone()).filter(|name| !name.trim().is_empty());
+        let descriptor = request
+            .descriptor()?
+            .map(|descriptor| KernelCommandDescriptor {
+                caller,
+                ..descriptor
+            });
         let command = request.command.into_core(&attached.workspace)?;
         let commands = attached.commands.clone();
         let sent = blocking(move || {
@@ -233,6 +244,9 @@ impl KernelSession {
             }
             Ok(KernelCommandOutcome::KeyUnavailable) => {
                 return Err(KernelProtocolError::idempotency_unavailable());
+            }
+            Ok(KernelCommandOutcome::ConfirmationRequired) => {
+                return Err(KernelProtocolError::confirmation_required(command_name));
             }
             Err(KernelCallError::Stopped) => CommandResponse::from_core(None),
             Err(KernelCallError::TimedOut) => {

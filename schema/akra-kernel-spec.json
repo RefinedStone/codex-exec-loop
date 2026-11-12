@@ -1187,6 +1187,12 @@
       "summary": "The kernel received a client command. `op_id` is the sequence of this record.",
       "payload": {
         "properties": {
+          "caller": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "command": {
             "type": "string"
           },
@@ -2587,6 +2593,12 @@
         },
         {
           "properties": {
+            "caller": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "command": {
               "type": "string"
             },

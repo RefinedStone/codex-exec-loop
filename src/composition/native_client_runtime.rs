@@ -49,10 +49,10 @@ use crate::domain::conversation::ConversationRuntimeControlTruth;
 #[cfg(test)]
 use crate::domain::github_review::GithubPullRequestTarget;
 use crate::domain::kernel_event::{
-    APPROVAL_KINDS, ApprovalResolution, COMMAND_KINDS, CommandMemory, CommandRecall,
-    KernelCommandDescriptor, KernelEvent, KernelEventPage, MAX_KERNEL_EVENT_PAGE, OPERATION_KINDS,
-    OperationReceipt, OperationStatus, ReasonCode, RecordedKernelEvent, THREAD_PROMPT_QUEUE_KINDS,
-    open_approvals, open_queued_thread_prompts, restart_closures,
+    APPROVAL_KINDS, ApprovalResolution, CALLER_NAME_MAX_CHARS, COMMAND_KINDS, CommandMemory,
+    CommandRecall, KernelCommandDescriptor, KernelEvent, KernelEventPage, MAX_KERNEL_EVENT_PAGE,
+    OPERATION_KINDS, OperationReceipt, OperationStatus, ReasonCode, RecordedKernelEvent,
+    THREAD_PROMPT_QUEUE_KINDS, open_approvals, open_queued_thread_prompts, restart_closures,
 };
 #[cfg(test)]
 use crate::domain::parallel_mode::ParallelModeAutomationTrigger;
@@ -71,6 +71,8 @@ pub(crate) enum ClientCommandDispatch {
     KeyReused,
     /// 기록이 없는 커널이 멱등 키가 있는 명령을 받았다. 재전송을 가릴 수 없으므로 실행하지 않았다.
     KeyUnavailable,
+    /// 지우는 명령이 확인 없이 왔다 (plan 18 K4-5). 실행하지 않았고 기록하지도 않았다.
+    ConfirmationRequired,
 }
 
 /// 클라이언트의 명령을 받은 결과이다 (plan 19 Q3-6).
@@ -1097,6 +1099,17 @@ impl NativeClientRuntime {
         command: AppCommand,
         descriptor: Option<&KernelCommandDescriptor>,
     ) -> ClientCommandDispatch {
+        /*
+         * 스펙의 효과 등급을 커널이 검사한다 (plan 18 K4-5, K-D1). 지우는 명령은 확인이 있어야 한다. 입구는 검사하지
+         * 않는다. 그래서 모든 입구가 같은 규칙을 따른다. 받지 않은 명령은 연산이 아니므로 기록하지 않는다.
+         */
+        if descriptor.is_some_and(|descriptor| {
+            descriptor.command.spec().effect
+                == crate::domain::kernel_spec::CommandEffect::Destructive
+                && !descriptor.confirmed
+        }) {
+            return ClientCommandDispatch::ConfirmationRequired;
+        }
         let admission = descriptor.map(|descriptor| self.admit_command(descriptor));
         match admission {
             Some(CommandAdmission::Replayed(receipt)) => {
@@ -1175,6 +1188,10 @@ impl NativeClientRuntime {
             idempotency_key: descriptor.idempotency_key.clone(),
             // 받을 때의 규칙을 적는다. 연산의 상태는 이 값으로 계산한다 (plan 18 K4-4).
             completion: Some(descriptor.command.spec().completion),
+            caller: descriptor
+                .caller
+                .as_deref()
+                .map(|caller| caller.chars().take(CALLER_NAME_MAX_CHARS).collect()),
         }]);
         if let Some(key) = &descriptor.idempotency_key {
             self.command_memory
@@ -2489,6 +2506,8 @@ pub(crate) mod tests {
             thread_id: "thread-1".to_string(),
             fingerprint: "fp-1".to_string(),
             idempotency_key: None,
+            caller: None,
+            confirmed: false,
         };
         let state_and_kinds = |runtime: &NativeClientRuntime, op_id: i64| {
             let status = runtime
@@ -2684,6 +2703,8 @@ pub(crate) mod tests {
             thread_id: "thread-1".to_string(),
             fingerprint: fingerprint.to_string(),
             idempotency_key: key.map(str::to_string),
+            caller: None,
+            confirmed: false,
         };
         let first_receipt = OperationReceipt {
             op_id: 1,
@@ -2782,6 +2803,53 @@ pub(crate) mod tests {
             ),
             "{:?}",
             recorded[3]
+        );
+    }
+
+    #[test]
+    fn the_kernel_refuses_a_destructive_command_without_confirmation_and_records_the_caller() {
+        // plan 18 K4-5: the kernel checks the effect of the spec. The inbound adapters do not.
+        use crate::domain::kernel_event::{
+            CALLER_NAME_MAX_CHARS, KernelCommandDescriptor, KernelEvent,
+        };
+        use crate::domain::kernel_spec::KernelCommandKind;
+        let described = |confirmed, caller: Option<String>| KernelCommandDescriptor {
+            command: KernelCommandKind::ResetPlanning,
+            thread_id: String::new(),
+            fingerprint: "fp-1".to_string(),
+            idempotency_key: None,
+            confirmed,
+            caller,
+        };
+        let log = Arc::new(MemoryKernelEventLog::default());
+        let (mut runtime, _turns) = recording_runtime_for_test();
+        runtime.attach_kernel_event_log(log.clone(), "/workspace");
+        assert!(matches!(
+            runtime.dispatch_client_command(AppCommand::Noop, Some(&described(false, None))),
+            ClientCommandDispatch::ConfirmationRequired
+        ));
+        assert!(
+            runtime.take_published_kernel_records().is_empty(),
+            "a command that the kernel did not take is not an operation"
+        );
+
+        let long_name = "x".repeat(CALLER_NAME_MAX_CHARS + 20);
+        assert!(matches!(
+            runtime
+                .dispatch_client_command(AppCommand::Noop, Some(&described(true, Some(long_name)))),
+            ClientCommandDispatch::Ran {
+                operation: Some(_),
+                ..
+            }
+        ));
+        let published = runtime.take_published_kernel_records();
+        let KernelEvent::CommandReceived { caller, .. } = &published[0].event else {
+            panic!("the first record is the received command: {published:?}");
+        };
+        assert_eq!(
+            caller.as_deref().map(|caller| caller.chars().count()),
+            Some(CALLER_NAME_MAX_CHARS),
+            "the client chooses the name, so the record bounds it"
         );
     }
 

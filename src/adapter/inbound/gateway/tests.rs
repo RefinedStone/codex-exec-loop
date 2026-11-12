@@ -388,6 +388,12 @@ async fn a_client_attaches_commands_and_receives_kernel_events() {
         operation["records"][0]["sequence"], commanded["operation"]["op_id"],
         "{operation}"
     );
+    // plan 18 K4-5: the record names the connection that sent the command.
+    assert_eq!(
+        operation["records"][0]["event"]["caller"],
+        json!("gateway-test"),
+        "{operation}"
+    );
     let unknown = kernel_request(
         &mut client,
         "unknown-operation",

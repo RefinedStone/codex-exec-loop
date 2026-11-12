@@ -1113,6 +1113,8 @@ impl Simulation {
                 thread_id: thread_id.to_string(),
                 fingerprint: format!("{thread_id}:{prompt}"),
                 idempotency_key: Some(format!("key of {prompt}")),
+                caller: None,
+                confirmed: false,
             }),
             reply,
         });
@@ -1185,6 +1187,8 @@ impl Simulation {
                 thread_id: String::new(),
                 fingerprint: "stop".to_string(),
                 idempotency_key: None,
+                caller: None,
+                confirmed: false,
             }),
             reply,
         });
