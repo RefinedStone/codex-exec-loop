@@ -6,6 +6,7 @@ use crate::application::port::outbound::conversation_thread_turn_options_port::C
 #[cfg(test)]
 use crate::application::port::outbound::conversation_thread_turn_options_port::NoopConversationThreadTurnOptionsPort;
 use crate::application::port::outbound::kernel_event_log_port::KernelEventLogPort;
+use crate::application::port::outbound::repository_state_port::RepositoryStatePort;
 use crate::application::service::conversation_service::ConversationService;
 #[cfg(test)]
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
@@ -27,6 +28,7 @@ use crate::application::service::startup_service::StartupService;
 use crate::composition::clipboard_image_probe::ClipboardImageProbeTrigger;
 use crate::composition::core_effect_runner::CoreEffectRunner;
 use crate::composition::kernel_event_recorder::KernelEventRecorder;
+use crate::composition::repository_observer::RepositoryObserver;
 use crate::core::app::{
     AppCommand, AppEvent, AppSnapshot, ConversationRuntimeSnapshot, CoreDispatchOutcome, CoreInput,
     ParallelModeProjection, PostTurnEvaluationCorrelation, PostTurnHostStep,
@@ -51,8 +53,9 @@ use crate::domain::github_review::GithubPullRequestTarget;
 use crate::domain::kernel_event::{
     APPROVAL_KINDS, ApprovalResolution, CALLER_NAME_MAX_CHARS, COMMAND_KINDS, CommandMemory,
     CommandRecall, KernelCommandDescriptor, KernelEvent, KernelEventPage, MAX_KERNEL_EVENT_PAGE,
-    OPERATION_KINDS, OperationReceipt, OperationStatus, ReasonCode, RecordedKernelEvent,
-    THREAD_PROMPT_QUEUE_KINDS, open_approvals, open_queued_thread_prompts, restart_closures,
+    OPERATION_KINDS, OperationReceipt, OperationStatus, REPOSITORY_KINDS, ReasonCode,
+    RecordedKernelEvent, RepositoryState, THREAD_PROMPT_QUEUE_KINDS, last_repository_state,
+    open_approvals, open_queued_thread_prompts, restart_closures,
 };
 #[cfg(test)]
 use crate::domain::parallel_mode::ParallelModeAutomationTrigger;
@@ -115,6 +118,9 @@ pub(crate) struct NativeClientRuntime {
     kernel_event_log: Option<(Arc<dyn KernelEventLogPort>, String)>,
     // 마지막으로 정한 기록 sequence 이다 (plan 19 Q3-3b). 저장소 커널은 잠금으로 하나뿐이라 커널이 정한다.
     last_kernel_sequence: i64,
+    // 작업 공간의 git 관찰자와 마지막으로 기록한 상태이다 (plan 20 §4.1). 기록이 붙은 커널만 관찰한다.
+    repository_observer: Option<RepositoryObserver>,
+    repository_state: Option<RepositoryState>,
     // 클라이언트에 아직 보내지 않은 기록이다 (plan 19 Q3-3b). 커널 호스트가 꺼내 `recorded` 이벤트로 보낸다.
     published_kernel_records: Vec<RecordedKernelEvent>,
     /*
@@ -586,6 +592,8 @@ impl NativeClientRuntime {
             kernel_events: None,
             kernel_event_log: None,
             last_kernel_sequence: 0,
+            repository_observer: None,
+            repository_state: None,
             published_kernel_records: Vec::new(),
             recent_kernel_records: std::collections::VecDeque::new(),
             command_memory: CommandMemory::default(),
@@ -1019,6 +1027,13 @@ impl NativeClientRuntime {
         if let Some(outcome) = self.start_github_review_polling_setup_when_due() {
             outcomes.push(outcome);
         }
+        if let Some(current) = self
+            .repository_observer
+            .as_ref()
+            .and_then(RepositoryObserver::latest)
+        {
+            self.record_repository_state(current);
+        }
         outcomes
     }
 
@@ -1349,6 +1364,30 @@ impl NativeClientRuntime {
             let _ = self.dispatch_core_input(CoreInput::Command(
                 AppCommand::RestoreQueuedThreadPrompts(open),
             ));
+        }
+    }
+
+    /*
+     * 작업 공간의 git 상태를 관찰한다 (plan 20 §4.1). 기록이 붙은 뒤에 부른다. 기록이 없는 커널은 관찰하지 않는다.
+     * 기록의 마지막 상태에서 시작하므로 커널이 꺼진 동안의 변화도 사건 하나가 된다. 그 기록을 읽지 못하면 첫 관찰로
+     * 시작한다.
+     */
+    pub(crate) fn attach_repository_observer(&mut self, port: Arc<dyn RepositoryStatePort>) {
+        let Some((log, workspace_dir)) = &self.kernel_event_log else {
+            return;
+        };
+        self.repository_state = log
+            .load_kernel_events(workspace_dir, &REPOSITORY_KINDS)
+            .ok()
+            .and_then(last_repository_state);
+        self.repository_observer = Some(RepositoryObserver::start(port, workspace_dir.clone()));
+    }
+
+    /// 관찰한 상태가 지난 기록과 다르면 사건을 기록한다. 같은 상태는 기록하지 않는다.
+    fn record_repository_state(&mut self, current: RepositoryState) {
+        if let Some(event) = current.change_from(self.repository_state.as_ref()) {
+            self.repository_state = Some(current);
+            self.record_kernel_events(vec![event]);
         }
     }
 
@@ -2494,6 +2533,70 @@ pub(crate) mod tests {
                 next_after,
             })
         }
+    }
+
+    #[test]
+    fn a_repository_change_is_recorded_once_and_a_restart_continues_from_the_log() {
+        use crate::domain::kernel_event::KernelEvent;
+        // plan 20 §4.1: the observer thread only reads. This test gives the kernel the states directly.
+        struct NoRepository;
+        impl RepositoryStatePort for NoRepository {
+            fn repository_state(
+                &self,
+                _workspace: &str,
+            ) -> anyhow::Result<Option<RepositoryState>> {
+                Ok(None)
+            }
+        }
+        let state = |head: &str| RepositoryState {
+            head: head.to_string(),
+            branch: Some("main".to_string()),
+        };
+        let changes = |runtime: &mut NativeClientRuntime| {
+            runtime
+                .take_published_kernel_records()
+                .into_iter()
+                .map(|record| match record.event {
+                    KernelEvent::RepositoryChanged {
+                        head,
+                        previous_head,
+                        ..
+                    } => (record.sequence, head, previous_head),
+                    other => panic!("unexpected record {other:?}"),
+                })
+                .collect::<Vec<_>>()
+        };
+        let log = Arc::new(MemoryKernelEventLog::default());
+        let (mut runtime, _turns) = recording_runtime_for_test();
+        runtime.attach_repository_observer(Arc::new(NoRepository));
+        assert!(
+            runtime.repository_observer.is_none(),
+            "a kernel without a log does not observe"
+        );
+        runtime.attach_kernel_event_log(log.clone(), "/workspace");
+        runtime.attach_repository_observer(Arc::new(NoRepository));
+        runtime.record_repository_state(state("a"));
+        runtime.record_repository_state(state("a"));
+        runtime.record_repository_state(state("b"));
+        assert_eq!(
+            changes(&mut runtime),
+            [
+                (1, "a".to_string(), None),
+                (2, "b".to_string(), Some("a".to_string())),
+            ]
+        );
+        drop(runtime);
+
+        // The next kernel starts from the last recorded state. A change made while no kernel ran is one record.
+        let (mut restarted, _turns) = recording_runtime_for_test();
+        restarted.attach_kernel_event_log(log.clone(), "/workspace");
+        restarted.attach_repository_observer(Arc::new(NoRepository));
+        restarted.record_repository_state(state("b"));
+        restarted.record_repository_state(state("c"));
+        assert_eq!(
+            changes(&mut restarted),
+            [(3, "c".to_string(), Some("b".to_string()))]
+        );
     }
 
     #[test]

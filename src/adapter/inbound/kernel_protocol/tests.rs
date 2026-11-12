@@ -1890,6 +1890,12 @@ fn sample_records() -> Vec<crate::domain::kernel_event::KernelEvent> {
             result: crate::domain::kernel_event::OperationEnd::Failed,
             reason: Some(ReasonCode::PlanningRefused),
         },
+        Record::RepositoryChanged {
+            head: "b".repeat(40),
+            branch: Some("main".to_string()),
+            previous_head: Some("a".repeat(40)),
+            previous_branch: None,
+        },
     ]
 }
 

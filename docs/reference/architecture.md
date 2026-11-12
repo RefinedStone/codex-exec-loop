@@ -235,6 +235,11 @@ an end as `turn_ended` with `lost`, and every other open operation as `command_c
 the latest records the runtime keeps in memory, because the recorder may not have written them yet.
 The table
 is created on first use, without a schema version change, so older binaries still open the store.
+`RepositoryObserver` (`src/composition/repository_observer.rs`) reads the workspace git state through
+`RepositoryStatePort` on its own thread, so the kernel thread never waits for git. Each host cycle
+takes the latest state; `RepositoryState::change_from` in the domain decides whether it is a
+`repository_changed` record. The runtime restores the last state from the log when the observer
+attaches.
 The TUI runtime drops kernel records. Reopening a thread
 shows its live runtime state; its transcript is reloaded from the provider.
 

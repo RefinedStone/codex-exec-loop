@@ -23,6 +23,7 @@ use crate::adapter::outbound::filesystem::{
     RepositoryKernelLockAdapter, RepositoryKernelLockHeld,
 };
 use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
+use crate::adapter::outbound::git::repository_state::GitRepositoryStateAdapter;
 use crate::adapter::outbound::github::{
     GithubAutomationAdapter, GithubPrValidationAdapter, GithubResourceVersionAdapter,
     GithubReviewPollerAdapter,
@@ -63,6 +64,7 @@ use crate::application::port::outbound::planning_task_repository_port::PlanningT
 use crate::application::port::outbound::planning_worker_port::PlanningWorkerPort;
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
 use crate::application::port::outbound::pr_validation_rollout_evidence_store_port::PrValidationRolloutEvidenceStorePort;
+use crate::application::port::outbound::repository_state_port::RepositoryStatePort;
 use crate::application::port::outbound::review_center_repository_port::ReviewCenterRepositoryPort;
 use crate::application::port::outbound::telegram_bot_port::TelegramBotPort;
 use crate::application::port::outbound::telegram_global_runner_lease_port::TelegramGlobalRunnerLeasePort;
@@ -498,6 +500,11 @@ pub(crate) fn build_native_tui_application() -> NativeTuiApplicationComposition 
 /// 커널의 판단 사건 기록이다 (plan 19 Q3-1). planning SQLite 의 `kernel_events` 표이다.
 pub(crate) fn kernel_event_log_port() -> Arc<dyn KernelEventLogPort> {
     Arc::new(SqlitePlanningAuthorityAdapter::new())
+}
+
+/// 커널이 관찰하는 작업 공간의 git 상태이다 (plan 20 §4.1).
+pub(crate) fn repository_state_port() -> Arc<dyn RepositoryStatePort> {
+    Arc::new(GitRepositoryStateAdapter)
 }
 
 /// 화면 없는 커널의 런타임이다 (plan 18 K3-4). 호출자는 먼저 그 저장소의 커널 잠금을 잡는다. 조립이 PR 검증
