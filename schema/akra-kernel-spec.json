@@ -47,6 +47,60 @@
         "name": "keyed",
         "summary": "Sending it again runs it again. Send `idempotency_key` so that the kernel tells a resend apart."
       }
+    ],
+    "agent_state": [
+      {
+        "name": "starting",
+        "summary": "The slot is leased and the agent session is starting."
+      },
+      {
+        "name": "running",
+        "summary": "The agent works on its task."
+      },
+      {
+        "name": "cleanup_pending",
+        "summary": "The work is delivered and the slot waits for cleanup."
+      },
+      {
+        "name": "reported_complete",
+        "summary": "The agent reported completion. The kernel has not checked it yet."
+      },
+      {
+        "name": "ledger_refreshing",
+        "summary": "The kernel reads the planning data again after the report."
+      },
+      {
+        "name": "commit_ready",
+        "summary": "The completion is official and the commit waits for delivery."
+      },
+      {
+        "name": "merge_queued",
+        "summary": "The commit is in the merge queue."
+      },
+      {
+        "name": "pushing",
+        "summary": "The branch is being pushed."
+      },
+      {
+        "name": "pr_pending",
+        "summary": "The pull request is being created or waits for its checks."
+      },
+      {
+        "name": "merge_pending",
+        "summary": "The pull request waits for the merge."
+      },
+      {
+        "name": "integrating",
+        "summary": "The commit is being integrated into the base branch."
+      },
+      {
+        "name": "official_refresh_recovery_needed",
+        "summary": "The kernel could not confirm the completion and needs a recovery step."
+      },
+      {
+        "name": "failed",
+        "summary": "The delivery failed or is blocked."
+      }
     ]
   },
   "methods": [

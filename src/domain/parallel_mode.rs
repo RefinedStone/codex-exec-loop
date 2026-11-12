@@ -404,30 +404,22 @@ impl ParallelModeSlotLeaseSnapshot {
 
     // lease가 Running 이후라면 agent session의 더 세밀한 후속 파이프라인 상태를
     // 화면에 올릴 수 있다. Leased 단계는 아직 런타임 세션이 주인이 아니므로 덮지 않는다.
-    pub fn runtime_state_override<'a>(
+    pub fn runtime_state_override(
         &self,
-        detail: &'a ParallelModeAgentSessionDetailSnapshot,
-    ) -> Option<&'a str> {
-        match self.state {
-            ParallelModeSlotLeaseState::Running => match detail.state_label.as_str() {
-                "reported_complete"
-                | "ledger_refreshing"
-                | "commit_ready"
-                | "merge_queued"
-                | "pushing"
-                | "pr_pending"
-                | "merge_pending"
-                | "integrating"
-                | "official_refresh_recovery_needed"
-                | "failed" => Some(detail.state_label.as_str()),
-                _ => None,
-            },
-            ParallelModeSlotLeaseState::CleanupPending => match detail.state_label.as_str() {
-                "official_refresh_recovery_needed" | "failed" => Some(detail.state_label.as_str()),
-                _ => None,
-            },
-            ParallelModeSlotLeaseState::Leased => None,
-        }
+        detail: &ParallelModeAgentSessionDetailSnapshot,
+    ) -> Option<ParallelModeAgentRosterState> {
+        // detail 의 이름이 roster 의 상태가 아니면 덮지 않는다. 이름은 `ParallelModeAgentRosterState` 한 곳에 있다.
+        let state = ParallelModeAgentRosterState::from_label(&detail.state_label)?;
+        let shown = match self.state {
+            ParallelModeSlotLeaseState::Running => state.is_delivery_stage(),
+            ParallelModeSlotLeaseState::CleanupPending => matches!(
+                state,
+                ParallelModeAgentRosterState::OfficialRefreshRecoveryNeeded
+                    | ParallelModeAgentRosterState::Failed
+            ),
+            ParallelModeSlotLeaseState::Leased => false,
+        };
+        shown.then_some(state)
     }
 
     // roster 정렬과 slot 선택은 같은 우선순위 함수를 공유한다. 새 상태가 추가될 때

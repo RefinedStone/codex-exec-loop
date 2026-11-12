@@ -344,8 +344,8 @@ fn live_detail_state_label(
     detail: &ParallelModeAgentSessionDetailSnapshot,
 ) -> String {
     // completion/distributor pipeline이 더 구체적인 label을 가지고 있으면 lease state보다 우선한다.
-    if let Some(label) = lease.runtime_state_override(detail) {
-        return label.to_string();
+    if let Some(state) = lease.runtime_state_override(detail) {
+        return state.name().to_string();
     }
 
     match lease.state {
@@ -622,6 +622,11 @@ impl ParallelModeAgentRosterState {
             .copied()
             .find(|state| state.name() == label)
     }
+
+    /// 에이전트가 일을 마친 뒤의 전달 단계인가이다. lease 상태 셋은 아니다.
+    pub fn is_delivery_stage(self) -> bool {
+        !matches!(self, Self::Starting | Self::Running | Self::CleanupPending)
+    }
 }
 
 impl ParallelModeAgentRosterEntry {
@@ -636,10 +641,8 @@ pub fn roster_state(
     lease: &ParallelModeSlotLeaseSnapshot,
     detail: Option<&ParallelModeAgentSessionDetailSnapshot>,
 ) -> ParallelModeAgentRosterState {
-    let pipeline_state = detail
-        .and_then(|detail| lease.runtime_state_override(detail))
-        .and_then(ParallelModeAgentRosterState::from_label);
-    pipeline_state.unwrap_or(match lease.state {
+    let delivery_stage = detail.and_then(|detail| lease.runtime_state_override(detail));
+    delivery_stage.unwrap_or(match lease.state {
         ParallelModeSlotLeaseState::Leased => ParallelModeAgentRosterState::Starting,
         ParallelModeSlotLeaseState::Running => ParallelModeAgentRosterState::Running,
         ParallelModeSlotLeaseState::CleanupPending => ParallelModeAgentRosterState::CleanupPending,

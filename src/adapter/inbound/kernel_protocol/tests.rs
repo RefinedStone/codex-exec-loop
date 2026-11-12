@@ -1299,6 +1299,14 @@ fn parallel_state_values_are_typed_and_keep_their_wire_names() {
         );
     }
     assert_eq!(wire(&ParallelAgentState::from_core(None)), json!("unknown"));
+    // The spec explains each agent state. `unknown` is not a roster state and has no entry.
+    assert_eq!(
+        names_of(&spec_json()["terms"]["agent_state"]),
+        ParallelModeAgentRosterState::ALL
+            .iter()
+            .map(|state| state.name())
+            .collect::<Vec<_>>()
+    );
     let merge_states = [
         ParallelModeQueueItemState::Idle,
         ParallelModeQueueItemState::Queued,
