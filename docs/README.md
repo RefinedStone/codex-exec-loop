@@ -36,6 +36,7 @@ their exact headings, phrases, surface rows, or test-entrypoint inventory.
 The following content is not implementation truth:
 
 - [plan/24-akra-evidence-harness.md](plan/24-akra-evidence-harness.md): proposed: a task carries acceptance criteria, a criterion passes only with an evidence file that the kernel records against the code tree, unmet criteria block delivery, and Akra Desktop shows the criteria and the evidence (Korean)
+- [plan/25-akra-cloud-agent-host.md](plan/25-akra-cloud-agent-host.md): proposed: the Gateway relays more than one app-server host, so Akra Desktop can read and message a cloud agent; it starts only when an official connection path exists (Korean)
 - [plan/23-akra-attention-items.md](plan/23-akra-attention-items.md): proposed: the kernel decides one list of attention items (thread, task, pull request, repository) with a closed cause list; the sidebar groups, the reason line, and the completion card read it (Korean)
 - [plan/22-akra-work-context.md](plan/22-akra-work-context.md): work context; Akra collects the external documents (Notion, Jira, GitHub) of a thread without the model and lists them in Desktop (step 1 shipped); change checks, path scopes, and on-demand delivery to the agent are proposed (Korean)
 - [plan/21-akra-mcp-hub.md](plan/21-akra-mcp-hub.md): user-level MCP hub; the `akra mcp` CLI, the on-demand skill, the Gateway-resident engine, and the Desktop Notion panel shipped (Korean)
