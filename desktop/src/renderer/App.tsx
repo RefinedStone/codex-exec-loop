@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { BrowserPanel } from "./browser/BrowserPanel";
 import { ApprovalPrompt } from "./conversation/ApprovalPrompt";
+import { pullRequestBadgeClass } from "./conversation/BranchCommits";
 import { Composer, type ComposerActions } from "./conversation/Composer";
 import { ConversationView } from "./conversation/ConversationView";
 import { isTurnInProgress } from "./conversation/transcript";
@@ -46,6 +47,7 @@ function TopBar({ tree, documentCount, changedDocumentCount }: { tree: WorkingTr
   const title = useDesktopStore((state) => state.transcript?.title ?? null);
   const cwd = useDesktopStore(openThreadCwd);
   const counts = workingTreeCounts(tree);
+  const pullRequest = tree.branch.phase === "loaded" && tree.branch.summary.ok ? tree.branch.summary.pullRequest : null;
   return (
     <header className={sidebarOpen ? "top-bar" : "top-bar no-sidebar"} data-testid="gateway-info">
       <button type="button" className="icon-button" title={`사이드바 (${MOD_KEY}B)`} onClick={() => useUiStore.setState({ sidebarOpen: !sidebarOpen })}>
@@ -62,6 +64,11 @@ function TopBar({ tree, documentCount, changedDocumentCount }: { tree: WorkingTr
             <span className="chip" title="작업 폴더의 현재 브랜치">
               <Icon name="branch" size={12} />
               {counts.branch}
+            </span>
+          )}
+          {pullRequest && (
+            <span className={pullRequestBadgeClass(pullRequest)} title={pullRequest.title} data-testid="top-pr">
+              PR #{pullRequest.number}
             </span>
           )}
         </div>
@@ -320,7 +327,7 @@ export function App() {
           </main>
           {panel && (
             <RightPanel panel={panel}>
-              {panel === "review" && <WorkingTreePanel tree={tree} git={window.akra} />}
+              {panel === "review" && <WorkingTreePanel tree={tree} git={window.akra} onOpenUrl={(url) => window.akra.github.openExternal(url)} />}
               {panel === "kernel" && <KernelPanel onRefresh={async () => session.current?.refreshKernel()} />}
               {panel === "browser" && <BrowserPanel bridge={window.akra.browser} />}
               {panel === "work" && <WorkTab request={gatewayRequest} onHandOff={handOff} />}

@@ -22,6 +22,8 @@ export const IPC_CHANNELS = {
   gitFileDiff: "akra:git-file-diff",
   gitFileAction: "akra:git-file-action",
   gitOpenFile: "akra:git-open-file",
+  gitBranchSummary: "akra:git-branch-summary",
+  gitCommitDiff: "akra:git-commit-diff",
   terminalOpen: "akra:terminal-open",
   terminalWrite: "akra:terminal-write",
   terminalResize: "akra:terminal-resize",
@@ -229,6 +231,59 @@ export type GitFileDiff =
   | { kind: "content"; text: string; truncated: boolean }
   | { kind: "binary" };
 
+/** 브랜치가 기준 브랜치 뒤에 더한 커밋 하나이다. */
+export interface GitCommit {
+  sha: string;
+  shortSha: string;
+  subject: string;
+  author: string;
+  /** Unix 초이다. */
+  committedAt: number;
+  /** 원격 브랜치에 있다. 원격 브랜치가 없으면 false 이다. */
+  pushed: boolean;
+}
+
+export type GitChecksState = "SUCCESS" | "FAILURE" | "PENDING";
+
+/** 현재 브랜치의 GitHub PR 이다. 같은 브랜치의 PR 이 여럿이면 가장 최근 것이다. */
+export interface GitPullRequest {
+  number: number;
+  title: string;
+  url: string;
+  state: "OPEN" | "MERGED" | "CLOSED";
+  isDraft: boolean;
+  /** PR 의 대상 브랜치이다. */
+  baseBranch: string;
+  /** 검사가 없으면 null 이다. */
+  checks: GitChecksState | null;
+}
+
+export type GitBranchSummary =
+  | {
+      ok: true;
+      /** 현재 브랜치이다. 브랜치 없이 커밋을 보고 있으면 null 이다. */
+      branch: string | null;
+      /** 원격 추적 브랜치이다 (예: `origin/feat/x`). 없으면 null 이다. */
+      upstream: string | null;
+      /** `origin` 의 GitHub `owner/name` 이다. GitHub 가 아니면 null 이다. */
+      repository: string | null;
+      /** 커밋을 비교한 기준이다 (예: `origin/main`). 찾지 못했으면 null 이고 커밋 목록은 비어 있다. */
+      base: string | null;
+      /** 최근 것부터이다. */
+      commits: GitCommit[];
+      truncated: boolean;
+      pullRequest: GitPullRequest | null;
+      /** PR 을 읽지 못한 이유이다 (gh 없음, 로그인 안 함 등). */
+      pullRequestError: string | null;
+    }
+  | { ok: false; message: string };
+
+export interface GitCommitDiff {
+  /** git diff 형식이다. */
+  text: string;
+  truncated: boolean;
+}
+
 /** preload 가 `window.akra` 로 노출하는 함수 전부이다. */
 export interface AkraBridge {
   /** JSON-RPC 메시지 한 개를 Gateway 로 보낸다. */
@@ -253,6 +308,10 @@ export interface AkraBridge {
   gitFileAction(cwd: string, action: GitFileAction, path: string): Promise<GitActionResult>;
   /** 파일을 편집기(VS Code)로 연다. 편집기가 없으면 파일이 있는 폴더를 연다. */
   gitOpenFile(cwd: string, path: string): Promise<void>;
+  /** 브랜치가 기준 브랜치 뒤에 더한 커밋과 그 브랜치의 PR 을 읽는다. */
+  gitBranchSummary(cwd: string): Promise<GitBranchSummary>;
+  /** 커밋 하나의 변경을 읽는다. */
+  gitCommitDiff(cwd: string, sha: string): Promise<GitCommitDiff>;
   terminal: TerminalBridge;
   browser: BrowserBridge;
   github: GitHubBridge;
