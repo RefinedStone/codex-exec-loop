@@ -213,6 +213,43 @@
   padding: 8px 10px;
 }
 
+.branch-commits {
+  border-top: 1px solid var(--line);
+}
+
+.branch-commits .review-toolbar {
+  border-bottom: 0;
+}
+
+.branch-pr {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: var(--text-s);
+}
+
+.branch-pr-title,
+.commit-subject {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.commit-subject {
+  flex: 1;
+  min-width: 0;
+}
+
+.commit-meta {
+  flex: none;
+}
+
+.commit-files {
+  padding: 0 8px 8px;
+  border-top: 1px solid var(--line);
+}
+
 /* ---- 터미널 ---- */
 
 .terminal-dock {

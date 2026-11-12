@@ -31,6 +31,8 @@ function harness() {
     gitFileDiff: async () => ({ kind: "binary" }),
     gitFileAction: async () => ({ ok: true as const }),
     gitOpenFile: async () => undefined,
+    gitBranchSummary: async () => ({ ok: false as const, message: "" }),
+    gitCommitDiff: async () => ({ text: "", truncated: false }),
     terminal: {
       open: async () => ({ ok: false, message: "not used" }),
       write: () => undefined,

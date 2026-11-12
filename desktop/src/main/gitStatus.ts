@@ -15,7 +15,7 @@ const STATUS_OUTPUT_LIMIT = 4 << 20;
 /** 파일 하나의 diff 한도이다. 넘으면 앞부분만 보여 준다. */
 const FILE_DIFF_LIMIT = 1 << 20;
 
-interface GitOutput {
+export interface GitOutput {
   stdout: string;
   code: number | null;
   truncated: boolean;
@@ -23,7 +23,7 @@ interface GitOutput {
   stderr: string;
 }
 
-function failureMessage(output: GitOutput, fallback: string): string {
+export function failureMessage(output: GitOutput, fallback: string): string {
   if (output.timedOut) {
     return `git 이 ${GIT_TIMEOUT_MS / 1000}초 안에 끝나지 않았습니다.`;
   }
@@ -44,7 +44,7 @@ export const NO_HELPER_PROGRAMS = [
 ];
 
 /** git 을 셸 없이 실행하고 출력은 한도까지만 모은다. Windows 에서 콘솔 창을 띄우지 않는다. */
-function runGit(cwd: string, args: string[], limit: number): Promise<GitOutput> {
+export function runGit(cwd: string, args: string[], limit: number): Promise<GitOutput> {
   return new Promise((resolvePromise, reject) => {
     const child = spawn("git", ["-c", "core.quotePath=false", ...NO_HELPER_PROGRAMS, ...args], { cwd, windowsHide: true });
     const chunks: Buffer[] = [];
@@ -132,7 +132,7 @@ export function parseNumstat(output: string): Map<string, { added: number | null
   return counts;
 }
 
-async function requireDirectory(cwd: unknown): Promise<string> {
+export async function requireDirectory(cwd: unknown): Promise<string> {
   if (typeof cwd !== "string" || !isAbsolute(cwd)) {
     throw new Error("작업 폴더는 절대 경로여야 합니다.");
   }

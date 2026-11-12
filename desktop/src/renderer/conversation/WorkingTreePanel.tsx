@@ -7,11 +7,12 @@ import { isConflictStatus, stageState } from "../../shared/gitChange";
 import { Icon, type IconName } from "../design/icons";
 import { useDesktopStore } from "../session/desktopStore";
 import { toast } from "../session/uiStore";
+import { BranchCommits, type BranchState } from "./BranchCommits";
 import { type DiffLine, diffFileFromChange, parseGitDiff } from "./diff";
 import { DiffCounts, DiffLines } from "./DiffView";
 
 /** 변경 패널이 쓰는 브리지 함수이다. 읽기와 파일별 동작이다. */
-type GitAccess = Pick<AkraBridge, "gitStatus" | "gitFileDiff" | "gitFileAction" | "gitOpenFile">;
+type GitAccess = Pick<AkraBridge, "gitStatus" | "gitFileDiff" | "gitFileAction" | "gitOpenFile" | "gitBranchSummary" | "gitCommitDiff">;
 
 /** 동작 하나가 끝날 때까지 패널의 모든 동작 버튼을 막는다. git 은 저장소마다 한 번에 하나만 쓸 수 있다 (`index.lock`). */
 interface ActionLock {
@@ -160,6 +161,8 @@ function ChangedFile({ cwd, file, git, lock, onChanged }: { cwd: string; file: G
 export interface WorkingTree {
   cwd: string | null;
   panel: PanelState;
+  /** 브랜치의 커밋과 PR 이다. 작업 트리 목록과 같은 때에 읽는다. */
+  branch: BranchState;
   /** 다시 읽을 때마다 늘어난다. 파일 diff 도 새로 읽도록 목록 key 로 쓴다. */
   generation: number;
   refresh(): void;
@@ -170,6 +173,7 @@ export function useWorkingTree(git: GitAccess): WorkingTree {
   const cwd = useDesktopStore((state) => state.transcript?.cwd ?? null);
   const lastTurnStatus = useDesktopStore((state) => state.transcript?.turns.at(-1)?.status ?? null);
   const [panel, setPanel] = useState<PanelState>({ phase: "idle" });
+  const [branch, setBranch] = useState<BranchState>({ phase: "idle" });
   /** 늦게 끝난 이전 요청이 새 결과를 덮지 않게 한다. */
   const requestCounter = useRef(0);
 
@@ -186,12 +190,25 @@ export function useWorkingTree(git: GitAccess): WorkingTree {
         }
       },
     );
+    // PR 을 읽는 gh 는 느릴 수 있다. 그동안 이전 커밋 목록을 그대로 보여 준다.
+    setBranch((previous) => (previous.phase === "loaded" ? previous : { phase: "loading" }));
+    git.gitBranchSummary(target).then(
+      (summary) => {
+        if (request === requestCounter.current) setBranch({ phase: "loaded", summary });
+      },
+      (error: unknown) => {
+        if (request === requestCounter.current) {
+          setBranch({ phase: "failed", message: error instanceof Error ? error.message : String(error) });
+        }
+      },
+    );
   };
 
   // 다른 폴더의 스레드로 바뀌면 이전 결과를 버리고 새 폴더를 읽는다.
   useEffect(() => {
     requestCounter.current += 1;
     setPanel({ phase: "idle" });
+    setBranch({ phase: "idle" });
     if (cwd) {
       refresh(cwd);
     }
@@ -207,7 +224,7 @@ export function useWorkingTree(git: GitAccess): WorkingTree {
     }
   }, [lastTurnStatus]); // 턴 상태가 바뀔 때만 본다.
 
-  return { cwd, panel, generation: requestCounter.current, refresh: () => cwd && refresh(cwd) };
+  return { cwd, panel, branch, generation: requestCounter.current, refresh: () => cwd && refresh(cwd) };
 }
 
 /** 줄 수를 아는 파일의 더한 줄과 지운 줄의 합이다. 아직 읽지 못했으면 null 이다. */
@@ -217,7 +234,7 @@ export function workingTreeCounts(tree: WorkingTree): { branch: string | null; a
   return { branch, added: files.reduce((sum, file) => sum + (file.added ?? 0), 0), removed: files.reduce((sum, file) => sum + (file.removed ?? 0), 0) };
 }
 
-export function WorkingTreePanel({ tree, git }: { tree: WorkingTree; git: GitAccess }) {
+export function WorkingTreePanel({ tree, git, onOpenUrl }: { tree: WorkingTree; git: GitAccess; onOpenUrl(url: string): void }) {
   const { cwd, panel } = tree;
   const [busy, setBusy] = useState(false);
   if (!cwd) {
@@ -252,6 +269,7 @@ export function WorkingTreePanel({ tree, git }: { tree: WorkingTree; git: GitAcc
           ))}
         </div>
       )}
+      <BranchCommits cwd={cwd} state={tree.branch} git={git} onOpenUrl={onOpenUrl} />
     </section>
   );
 }
