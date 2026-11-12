@@ -2,6 +2,7 @@
 // 턴은 쓰지 않는다. 패널을 열면 열린 스레드의 저장소 커널에 붙고, 조회와 이벤트로 그린 뒤, 닫으면 뗀다.
 // 창은 숨긴 채로 돌리고 패널의 글을 출력한다 (숨긴 창 텍스트 캡처).
 import { createRequire } from "node:module";
+import { EventEmitter, once } from "node:events";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -66,7 +67,10 @@ const kernel = {
 };
 
 const endpoint = fake.uniqueTestEndpoint();
-const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST_RECORDING, fake.INTERRUPTED_TURN_RECORDING], { kernel });
+const requests = new EventEmitter();
+const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST_RECORDING, fake.INTERRUPTED_TURN_RECORDING], {
+  kernel, onRequest: (method) => requests.emit(method),
+});
 const env = { ...process.env, AKRA_GATEWAY_ENDPOINT: endpoint, AKRA_DESKTOP_HIDDEN: "1" };
 delete env.ELECTRON_RUN_AS_NODE;
 
@@ -102,20 +106,18 @@ try {
   console.log(await page.getByTestId("kernel-panel").innerText());
   console.log("-------------------------");
 
+  const detached = once(requests, "akra/kernel/detach", { signal: AbortSignal.timeout(5_000) });
   await page.getByTestId("kernel-toggle").click();
   await page.getByTestId("kernel-panel").waitFor({ state: "detached", timeout: 10_000 });
-  const deadline = Date.now() + 5_000;
-  while (!gateway.receivedMethods.includes("akra/kernel/detach") && Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
+  await detached;
   check("closing the panel detaches from the kernel", gateway.receivedMethods.includes("akra/kernel/detach"));
 } catch (error) {
   check(`flow finished without error (${String(error).split("\n")[0]})`, false);
 } finally {
   // 창을 닫으면 앱이 끝난다. app.close() 는 쓰지 않는다 (P2 기록 참고).
-  const exited = new Promise((resolve) => app.process().once("exit", resolve));
+  const exited = once(app.process(), "exit", { signal: AbortSignal.timeout(10_000) });
   for (const window of app.windows()) await window.close();
-  await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 10_000))]);
+  await exited;
   await gateway.close();
 }
 process.exit(failures.length === 0 ? 0 : 1);

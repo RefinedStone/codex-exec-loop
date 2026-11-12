@@ -334,8 +334,8 @@ Q3-6 의 영수증은 받아들임과 바로 거절까지만 알린다. 끝은 �
 | K4-3 (완료 2026-11-12, §8) | 이유 코드를 하나로 합치고 `next` 를 답에 싣는다. 버린 프롬프트를 `prompt_submission` 으로 알린다 | 유지 (글자는 같다. `next` 는 더한 필드이다) | domain 시험, 프로토콜 시험, 시뮬레이션의 거절 완전성 불변식 |
 | K4-4 (완료 2026-11-12, §8. K4-4a 와 K4-4b 로 나눠 했다) | 연산의 끝. 기록에 `op_id`, 완료 기록, 재시작 때 열린 턴의 `lost`, `operation` 조회 | 유지 (기록에 필드와 종류를 더한다) | core 시험, 시뮬레이션의 연산 끝 불변식 (재시작 seed 포함) |
 | K4-5 (완료 2026-11-12, §8. 전제 조건 검사는 넣지 않았다) | 호출자 기록. 효과 등급과 전제 조건을 커널이 검사한다 | 유지 (`destructive` 의 확인 규칙은 `reset_planning` 과 같다. 검사하는 곳만 커널로 옮겼다) | core 시험, 프로토콜 시험, 시뮬레이션 |
-| K4-6 | Desktop 타입을 스펙에서 만든다. `protocol.ts` 의 손 복사를 지운다 | 유지 | `npm run check`, vitest (생성 결과 시험), e2e |
-| K4-7 | Desktop 이 변경 명령에 멱등 키를 보낸다 | 유지 | vitest, e2e |
+| K4-6 (구현 2026-11-12, §8) | Desktop 타입을 스펙에서 만든다. `protocol.ts` 의 손 복사를 지운다 | 유지 | `npm run check`, vitest (생성 결과 시험), e2e |
+| K4-7 (구현 2026-11-12, §8) | Desktop 공통 명령 전송 함수가 변경 명령에 멱등 키를 붙인다. 현재 패널은 읽기 명령만 쓴다 | 유지 | vitest, e2e |
 | K4-8 | `akra kernel` CLI, `KernelCommandPort`, Gateway 클라이언트, 명령 전용 조립, 잠깐 붙는 접속, 잠금 파일의 쥔 쪽. skill 문서를 스펙에서 만들고 등록한다 | 확장 | CLI 시험, G2 시험, skill 파일 시험 |
 | K4-9a | 입구 이전: planning 초기화 | 유지 (같은 결과. 기록에 남는다) | 입구 경계 시험, CLI·Telegram·admin 시험 |
 | K4-9b | 입구 이전: 병렬 제어, 수동 배분, 프로필. admin, Telegram, `parallel-tick` 이 스케줄러를 시작하지 않는다 | 전환 (Gateway 의 커널이 병렬 상태의 주인이다) | K-D3 회귀 시험 (admin 의 정지가 커널에 닿는다), 시뮬레이션 |
@@ -689,3 +689,19 @@ K4-4 를 둘로 나눴다 (§5 의 대응: 기록 종류마다 나눈다). K4-4a
 
 - CLI, admin, Telegram 은 아직 커널 경로를 쓰지 않는다 (K4-8, K4-9). 그 입구의 호출자 이름(`akra-cli` 등)은 그때 생긴다.
 - Desktop 은 `client_name` 을 이미 보낸다. 기록의 호출자를 화면에 쓰지는 않는다.
+
+### K4-6 / K4-7 (2026-11-12)
+
+- `npm run generate:kernel-protocol` 이 `schema/akra-kernel-spec.json` 에서
+  `desktop/src/shared/kernel-protocol/generated/index.ts` 를 만든다. 메서드, 오류 코드, 명령 효과와
+  `$defs` 의 전송 타입을 생성한다. 생성기는 현재 스펙의 스키마 형식만 지원하고 모르는 형식은 거절한다.
+- `renderer/kernel/protocol.ts` 는 생성 타입을 내보내고 패널이 읽는 조회 목록만 정한다. 조회 응답은
+  `KernelQueryAnswer` 에서 고른다. 이벤트 타입을 조회 응답 타입으로 쓰지 않는다.
+- `sendKernelCommand` 는 생성한 효과 표를 보고 `write`, `destructive` 명령마다 Web Crypto UUID를 붙인다.
+  `load_sessions`, `refresh_planning` 은 키 없이 보낸다. 같은 내용이어도 새 호출은 새 키를 쓴다.
+- 연결이 끊기면 기존 RPC처럼 요청이 실패한다. 자동 재전송, 요청 저장, 새 변경 버튼은 넣지 않는다.
+  현재 커널 패널의 유일한 명령은 `refresh_planning` 이다. 대화 입력과 승인 답은 기존 app-server 경로를 쓴다.
+- 시험은 생성 파일 일치, 유효한 타입과 잘못된 타입의 컴파일 결과, 모든 명령의 키 유무, 독립 요청의 키 분리,
+  연결 종료 후 재전송하지 않음을 확인한다. 커널 패널 E2E는 읽기 경로의 회귀 검증이다.
+  변경 명령 버튼이 없으므로 화면을 통한 변경 명령 전송까지 검증했다고 보지 않는다.
+- 커널 연결 시험과 커널 패널 E2E는 고정 시간 대기 대신 요청과 상태 변화 신호를 사용한다.

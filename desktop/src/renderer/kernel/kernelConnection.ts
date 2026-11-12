@@ -5,15 +5,16 @@ import { JsonRpcError, type JsonRpcClient } from "../rpc/jsonRpcClient";
 import {
   type AttachResponse,
   type AutoFollowSettings,
-  type CommandResponse,
   KERNEL_METHOD,
   KERNEL_UNAVAILABLE,
   KERNEL_VIEW_QUERIES,
   type KernelEvent,
+  type KernelViewAnswer,
   type ParallelState,
   type PlanningState,
   type ThreadActivity,
 } from "./protocol";
+import { sendKernelCommand } from "./sendKernelCommand";
 
 export type KernelPhase = "idle" | "attaching" | "attached" | "failed";
 
@@ -103,7 +104,7 @@ export class KernelConnection {
     this.store.setKernel({ ...this.store.getKernel(), message: null });
     try {
       await this.readView(generation);
-      await this.command({ type: "refresh_planning" });
+      await sendKernelCommand(this.client, { type: "refresh_planning" });
     } catch (error) {
       if (generation === this.generation) {
         this.showReadFailure(error);
@@ -156,7 +157,7 @@ export class KernelConnection {
     // 붙은 뒤의 실패는 붙음을 바꾸지 않는다. 커널에는 계속 붙어 있으므로 "새로 고침"으로 다시 읽을 수 있어야 한다.
     try {
       await this.readView(generation);
-      await this.command({ type: "refresh_planning" });
+      await sendKernelCommand(this.client, { type: "refresh_planning" });
     } catch (error) {
       if (generation === this.generation) {
         this.showReadFailure(error);
@@ -171,16 +172,12 @@ export class KernelConnection {
     }
   }
 
-  private async command(command: { type: string } & Record<string, unknown>): Promise<CommandResponse> {
-    return this.client.request<CommandResponse>(KERNEL_METHOD.command, { command });
-  }
-
   /** 조회 결과는 같은 이름의 이벤트와 모양이 같다. 조회하는 동안 같은 종류의 이벤트가 왔으면 조회 결과를 버린다. */
   private async readView(generation: number): Promise<void> {
     await Promise.all(
       KERNEL_VIEW_QUERIES.map(async (type) => {
         const seen = this.eventCounts.get(type) ?? 0;
-        const event = await this.client.request<KernelEvent>(KERNEL_METHOD.query, { query: { type } });
+        const event = await this.client.request<KernelViewAnswer>(KERNEL_METHOD.query, { query: { type } });
         if (generation === this.generation && (this.eventCounts.get(type) ?? 0) === seen) {
           this.apply(event);
         }

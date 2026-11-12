@@ -11,6 +11,8 @@ The repository-wide rules in [`../AGENTS.md`](../AGENTS.md) still apply.
   Conversation logic lives in the renderer.
 - Do not edit `src/shared/protocol/generated/` or `src/shared/protocol/version.ts` by hand. Regenerate with
   `npm run generate:protocol` after a codex upgrade.
+- Kernel wire types in `src/shared/kernel-protocol/generated/` come from
+  `schema/akra-kernel-spec.json`. Regenerate with `npm run generate:kernel-protocol`; do not edit them by hand.
 - Follow the Codex usage policy (plan D-13): development and tests send no model-calling requests
   (`turn/start`, `turn/steer`, …). Use the fake Gateway in `test/fake-gateway/` with recordings.
   Committed fixtures contain only altered content; never commit real recordings.
