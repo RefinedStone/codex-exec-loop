@@ -3538,6 +3538,8 @@ fn core_conversation_turn_feature_reducer_owns_one_correlated_lifecycle_slice() 
         "published_thread_turns",
         // plan 19 Q3-2: the kernel records the host drains after every dispatch.
         "kernel_records",
+        // plan 18 K4-4b: the recorded commands that wait for the completion of their effect.
+        "command_operations",
     ];
     let thread_session_fields = [
         "turn_stream_state",

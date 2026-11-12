@@ -714,7 +714,7 @@ fn check_rejections_are_in_the_spec(records: &[KernelEvent]) -> Result<(), Strin
 }
 
 /*
- * I11: 연산의 끝 (plan 18 K4-4, 설계 §3.9). 시나리오가 끝나고 커널이 일을 마치면, 클라이언트가 보낸 모든 thread 지정
+ * I11: 연산의 끝 (plan 18 K4-4, 설계 §3.9). 기록된 중지 명령도 같다 (K4-4b). 시나리오가 끝나고 커널이 일을 마치면, 클라이언트가 보낸 모든 thread 지정
  * 프롬프트의 연산은 끝난 상태이다: `done`, `rejected`, `failed`, `lost` 중 하나이다. 상태는 기록에서만 계산한다.
  * 열린 채로 남은 연산이 있으면 클라이언트는 그 명령이 끝났는지 알 수 없다.
  */
@@ -723,8 +723,20 @@ fn check_operations_ended(
     operations: &[(i64, &str)],
 ) -> Result<(), String> {
     use crate::domain::kernel_event::operation_states;
+    use crate::domain::kernel_spec::CommandCompletion;
     let states = operation_states(recorded.iter().map(|record| &record.event));
-    for (op_id, prompt) in operations {
+    // 보낸 프롬프트와, 끝을 기록으로 알리는 다른 명령(중지)이다 (plan 18 K4-4b).
+    let other_commands = recorded.iter().filter_map(|record| match &record.event {
+        KernelEvent::CommandReceived {
+            op_id,
+            command,
+            completion: Some(CommandCompletion::Records),
+            ..
+        } => Some((*op_id, command.as_str())),
+        _ => None,
+    });
+    for (op_id, prompt) in operations.iter().copied().chain(other_commands) {
+        let op_id = &op_id;
         match states.get(op_id) {
             Some(state) if state.is_end() => {}
             other => {
@@ -954,7 +966,7 @@ impl Simulation {
             SimAction::ResendThreadPrompt => return self.resend_thread_prompt(),
             SimAction::RequestStop => {
                 self.record("client: stop all sessions".to_string());
-                self.send_command(AppCommand::RequestStopAllSessions);
+                self.send_recorded_stop();
             }
             SimAction::ToggleClient => self.toggle_client(),
             SimAction::AdvanceTurn => self.advance_turn(),
@@ -1158,6 +1170,24 @@ impl Simulation {
             }
             None => self.attach_client(),
         }
+    }
+
+    /*
+     * 중지 명령을 Gateway 처럼 설명과 함께 보낸다 (plan 18 K4-4b). 커널이 그 명령을 기록하고, I11 이 그 연산의 끝을
+     * 본다. 프롬프트가 아닌 명령의 끝(효과의 완료, 한 일이 없는 명령, 재시작)을 이 명령이 대표한다.
+     */
+    fn send_recorded_stop(&mut self) {
+        let (reply, _answer) = mpsc::channel();
+        self.send_host_input(KernelHostInput::Command {
+            command: AppCommand::RequestStopAllSessions,
+            descriptor: Some(KernelCommandDescriptor {
+                command: crate::domain::kernel_spec::KernelCommandKind::StopAll,
+                thread_id: String::new(),
+                fingerprint: "stop".to_string(),
+                idempotency_key: None,
+            }),
+            reply,
+        });
     }
 
     /// 클라이언트 명령은 실제 클라이언트처럼 호스트 입력함으로 보낸다. 응답은 이벤트로도 오므로 버린다.

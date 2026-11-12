@@ -238,6 +238,8 @@ pub(super) struct ConversationTurnFeatureReducer {
     published_thread_turns: Vec<crate::domain::kernel_event::ThreadTurn>,
     // 호스트가 꺼내 가기 전의 판단 사건이다 (plan 19 Q3-1, Q3-2). 클라이언트에 알릴 thread 요약처럼 내보낼 값이다.
     kernel_records: Vec<crate::domain::kernel_event::KernelEvent>,
+    // 효과의 완료를 기다리는 명령이다 (plan 18 K4-4b). 완료가 오면 그 연산의 끝을 기록한다. 기록과 같은 곳에 둔다.
+    command_operations: super::command_operation::CommandOperationTracker,
     next_conversation_load_generation: u64,
     in_flight_conversation_load: Option<ConversationLoadCorrelation>,
     deferred_conversation_load: Option<DeferredConversationLoadIntent>,
@@ -341,6 +343,23 @@ impl ConversationTurnFeatureReducer {
         self.published_thread_activity = activity.clone();
         self.published_thread_turns = turns;
         Some(activity)
+    }
+
+    /// 명령이 낸 효과에 그 연산을 묶는다 (plan 18 K4-4b). 효과의 완료가 그 명령의 끝이다.
+    pub(super) fn track_command_operation(
+        &mut self,
+        effect: super::command_operation::CommandEffectKey,
+        operation: super::command_operation::OpenCommandOperation,
+    ) {
+        self.command_operations.track(effect, operation);
+    }
+
+    /// 완료된 효과를 기다리던 명령을 꺼낸다. 기록된 명령이 낸 효과가 아니면 `None` 이다.
+    pub(super) fn complete_command_operation(
+        &mut self,
+        effect: &super::command_operation::CommandEffectKey,
+    ) -> Option<super::command_operation::OpenCommandOperation> {
+        self.command_operations.complete(effect)
     }
 
     pub(super) fn record_kernel_event(&mut self, event: crate::domain::kernel_event::KernelEvent) {
@@ -489,6 +508,7 @@ impl ConversationTurnFeatureReducer {
             approval_review_persistence: ApprovalReviewPersistenceCoordinator::new(),
             published_thread_activity: Vec::new(),
             published_thread_turns: Vec::new(),
+            command_operations: Default::default(),
             kernel_records: Vec::new(),
             next_conversation_load_generation: 1,
             in_flight_conversation_load: None,

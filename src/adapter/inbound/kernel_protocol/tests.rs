@@ -846,7 +846,16 @@ fn an_operation_query_answers_with_the_state_and_the_records_of_one_command() {
     };
     assert_eq!(completion("submit_prompt"), Some(json!("records")));
     assert_eq!(completion("pause_auto_follow"), Some(json!("accepted")));
-    assert_eq!(completion("steer_turn"), Some(json!("unreported")));
+    // plan 18 K4-4b: every recorded command that does not end at once ends with a record.
+    for command in [
+        "steer_turn",
+        "stop_all",
+        "rename_session",
+        "decide_approval",
+        "reset_planning",
+    ] {
+        assert_eq!(completion(command), Some(json!("records")), "{command}");
+    }
     assert_eq!(
         names_of(&spec["terms"]["operation_state"]),
         [

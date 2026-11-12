@@ -217,7 +217,14 @@ through the prompt preparation, the queued prompt, and the thread session of the
 (`ThreadSession.operation`), so `turn_submitted`, `turn_started`, and `turn_ended` name the
 operation. A command that ends without a turn gets `command_completed`: a failed preparation, a
 hand-over to parallel slots at the first attempt, or a turn submission that closes before a turn
-started. When a kernel attaches its log, `restart_closures` closes every turn that started without
+started. The five commands that run one effect (rename, planning reset, stop, steer, approval
+decision) reach Core as `AppCommand::OfOperation { op_id, command }`. Core handles the inner command
+as before, then binds the operation to the correlation of the effect that the command made
+(`CommandEffectKey`, kept in `ConversationTurnFeatureReducer` next to the kernel records). When the
+completion of that effect comes back, Core records `command_completed` with `done` or `failed`,
+also when the feature reducer ignores a stale completion. The correlation types do not carry the
+operation id, so the feature reducers did not change. A command that made no effect and was not
+rejected ends as `failed` in the same dispatch. When a kernel attaches its log, `restart_closures` closes every turn that started without
 an end as `turn_ended` with `lost`, and every other open operation as `command_completed` with
 `lost`, except the operation of a queued prompt, which the new kernel submits again. The
 `operation` kernel query reads the log after the operation id on the kernel host thread and adds

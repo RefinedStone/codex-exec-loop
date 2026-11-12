@@ -1051,10 +1051,25 @@ mod tests {
             operation_state(3, &[received_command(3, "pause_auto_follow")]),
             OperationState::Done
         );
-        // A command whose end the kernel does not report yet stays accepted.
+        // A command that ends with a later record is accepted until that record comes.
         assert_eq!(
             operation_state(4, &[received_command(4, "steer_turn")]),
             OperationState::Accepted
+        );
+        assert_eq!(
+            operation_state(
+                4,
+                &[
+                    received_command(4, "steer_turn"),
+                    KernelEvent::CommandCompleted {
+                        op_id: 4,
+                        thread_id: "thread-1".to_string(),
+                        result: OperationEnd::Done,
+                        reason: None,
+                    },
+                ]
+            ),
+            OperationState::Done
         );
     }
 
@@ -1065,7 +1080,7 @@ mod tests {
             ..queued("task-3")
         };
         let records = [
-            // 1: its turn runs. 2: still preparing. 3: queued. 4: ended. 5: a command without a reported end.
+            // 1: its turn runs. 2: still preparing. 3: queued. 4: ended. 5: received by a kernel that reported no end.
             received_command(1, "submit_prompt"),
             turn_started("turn-1", Some(1)),
             received_command(2, "submit_prompt"),
@@ -1074,7 +1089,7 @@ mod tests {
             received_command(4, "submit_prompt"),
             turn_started("turn-4", Some(4)),
             turn_ended("turn-4", TurnEndOutcome::Completed, Some(4)),
-            received_command(5, "steer_turn"),
+            received_with(5, "steer_turn", Some(CommandCompletion::Unreported)),
             // A turn that no command submitted.
             turn_started("turn-auto", None),
         ];

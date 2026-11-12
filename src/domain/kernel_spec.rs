@@ -174,7 +174,7 @@ spec_names! {
         Records => "records",
             "The command ends with a later record that carries its `op_id`. Read the `operation` query.";
         Unreported => "unreported",
-            "The kernel does not report the end of this command yet. Its operation state stays `accepted`. Watch the events instead.";
+            "The kernel that received the command did not report its end. Its operation state stays `accepted`. No command of this version has this rule; it is the rule of commands that an older kernel received.";
     }
 }
 
@@ -223,18 +223,17 @@ impl KernelCommandKind {
         use CommandEffect::{Destructive, Read, Write};
         use CommandIdempotency::{Keyed, Natural};
         use ReasonCode as Reason;
-        // shortcut: 끝을 아직 알리지 않는 명령 다섯은 `Unreported` 이다. 완료 기록을 더하는 조각(K4-4b)에서 `Records` 로 바꾼다.
         let completion = match self {
             Self::LoadSessions
             | Self::RefreshPlanning
             | Self::SetAutoFollowMaxTurns
             | Self::PauseAutoFollow => CommandCompletion::Accepted,
-            Self::SubmitPrompt => CommandCompletion::Records,
-            Self::RenameSession
+            Self::SubmitPrompt
+            | Self::RenameSession
             | Self::SteerTurn
             | Self::StopAll
             | Self::DecideApproval
-            | Self::ResetPlanning => CommandCompletion::Unreported,
+            | Self::ResetPlanning => CommandCompletion::Records,
         };
         let (scope, effect, idempotency, rejections): (_, _, _, &'static [Reason]) = match self {
             Self::LoadSessions => (CommandScope::Session, Read, Natural, &[]),
@@ -310,7 +309,7 @@ spec_names! {
         CommandRejected => "command_rejected",
             "The kernel rejected a received command at once.";
         CommandCompleted => "command_completed",
-            "A command ended without a turn record: its preparation failed, its work went to parallel slots, its turn submission closed before a turn started, or the kernel was built again.";
+            "A command ended without a turn record. For `submit_prompt`: its preparation failed, its work went to parallel slots, or its turn submission closed before a turn started. For the other commands: the request of the command returned (`done` or `failed`), or the command did nothing (`failed`). For every command: the kernel was built again (`lost`).";
     }
 }
 

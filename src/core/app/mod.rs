@@ -5,6 +5,7 @@
  */
 pub mod approval;
 pub mod command;
+mod command_operation;
 mod controller;
 pub mod conversation;
 mod conversation_preferences;

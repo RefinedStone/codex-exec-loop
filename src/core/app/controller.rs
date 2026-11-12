@@ -133,8 +133,12 @@ impl CoreController {
         let approvals_before = self.conversation_turn.published_thread_approvals();
         let ending = turn_end_outcome(&input);
         let decided = approval_resolution(&input);
+        let completed_effect = super::command_operation::CommandEffectKey::of_completion(&input);
         let outcome = self.handle_input_inner(input);
         let mut outcome = self.with_conversation_runtime_authority(outcome);
+        if let Some((effect, succeeded)) = completed_effect {
+            self.record_command_end(&effect, succeeded);
+        }
         self.record_turn_submissions(&outcome.effects);
         if let Some(activity) = self.conversation_turn.take_thread_activity_change() {
             // 턴의 시작과 끝은 thread 요약의 변화로 기록한다 (plan 19 Q3-2). 요약은 보지 않는 thread 도 담는다.
@@ -204,8 +208,65 @@ impl CoreController {
         }
     }
 
+    /*
+     * 연산 id 를 가진 명령을 처리한다 (plan 18 K4-4b). 안의 명령을 그대로 처리한 뒤, 그 명령이 낸 효과에 연산을
+     * 묶는다. 효과의 완료가 그 명령의 끝이다. 효과를 내지 않았고 거절도 아니면 그 명령은 한 일이 없다 (예: 세션
+     * 목록을 읽는 중의 이름 바꾸기, 이미 진행 중인 중지). 기다릴 완료가 없으므로 끝을 바로 적는다.
+     */
+    fn handle_operation_command(&mut self, op_id: i64, command: AppCommand) -> CoreDispatchOutcome {
+        use super::command_operation::{CommandEffectKey, OpenCommandOperation};
+        let thread_id = command.operation_thread_id().to_string();
+        let outcome = self.handle_input_inner(CoreInput::Command(command));
+        let rejected = outcome
+            .events
+            .iter()
+            .any(|event| event.command_rejection().is_some());
+        match CommandEffectKey::of_effects(&outcome.effects) {
+            Some(effect) => self
+                .conversation_turn
+                .track_command_operation(effect, OpenCommandOperation { op_id, thread_id }),
+            // 바로 거절한 명령은 런타임이 `command_rejected` 로 적는다.
+            None if rejected => {}
+            None => self
+                .conversation_turn
+                .record_kernel_event(KernelEvent::CommandCompleted {
+                    op_id,
+                    thread_id,
+                    result: kernel_event::OperationEnd::Failed,
+                    reason: None,
+                }),
+        }
+        outcome
+    }
+
+    /// 명령의 효과가 완료되었다. 그 효과를 기다리던 명령이 있으면 그 연산의 끝을 적는다 (plan 18 K4-4b).
+    fn record_command_end(
+        &mut self,
+        effect: &super::command_operation::CommandEffectKey,
+        succeeded: bool,
+    ) {
+        let Some(operation) = self.conversation_turn.complete_command_operation(effect) else {
+            return;
+        };
+        let result = if succeeded {
+            kernel_event::OperationEnd::Done
+        } else {
+            kernel_event::OperationEnd::Failed
+        };
+        self.conversation_turn
+            .record_kernel_event(KernelEvent::CommandCompleted {
+                op_id: operation.op_id,
+                thread_id: operation.thread_id,
+                result,
+                reason: None,
+            });
+    }
+
     fn handle_input_inner(&mut self, input: CoreInput) -> CoreDispatchOutcome {
         match input {
+            CoreInput::Command(AppCommand::OfOperation { op_id, command }) => {
+                self.handle_operation_command(op_id, *command)
+            }
             CoreInput::Command(AppCommand::Noop) => CoreDispatchOutcome {
                 events: Vec::new(),
                 effects: Vec::new(),
@@ -10553,6 +10614,161 @@ mod tests {
         let (records, state) = operation_records(&mut controller, 7);
         assert_eq!(kinds(&records), ["thread_prompt_settled", "turn_submitted"]);
         assert_eq!(state, OperationState::Running);
+    }
+
+    /// 그 연산의 끝 기록이다. 다른 기록은 버린다.
+    fn command_ends(controller: &mut CoreController) -> Vec<(i64, kernel_event::OperationEnd)> {
+        controller
+            .take_kernel_records()
+            .into_iter()
+            .filter_map(|record| match record {
+                KernelEvent::CommandCompleted { op_id, result, .. } => Some((op_id, result)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_completion_of_a_command_effect_ends_its_operation() {
+        // plan 18 K4-4b: stop, steer, and rename end when their request returns.
+        use kernel_event::OperationEnd;
+        let mut controller = hosted_controller(false);
+        let turn = start_test_turn(&mut controller, "thread-1", "turn-1");
+        controller.take_kernel_records();
+
+        // steer: the request fails.
+        let steered = controller.handle_input(CoreInput::Command(
+            AppCommand::SteerTurn(crate::domain::conversation::ConversationTurnSteerRequest {
+                thread_id: "thread-1".to_string(),
+                expected_turn_id: "turn-1".to_string(),
+                prompt: "also run the tests".to_string(),
+            })
+            .with_operation(7),
+        ));
+        let [CoreEffect::SteerTurn { correlation, .. }] = steered.effects.as_slice() else {
+            panic!("the steer should start one request: {:?}", steered.effects);
+        };
+        assert!(
+            command_ends(&mut controller).is_empty(),
+            "the command is open while its request runs"
+        );
+        controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::TurnSteered {
+                correlation: *correlation,
+                result: Err("the turn is gone".to_string()),
+            },
+        ));
+        assert_eq!(command_ends(&mut controller), [(7, OperationEnd::Failed)]);
+
+        // stop: the first stop request returns. A second stop while it runs does nothing.
+        let stopped = controller.handle_input(CoreInput::Command(
+            AppCommand::RequestStopAllSessions.with_operation(8),
+        ));
+        let [
+            CoreEffect::RequestStopAllSessions {
+                correlation: stop,
+                attempt: StopRequestAttempt::Initial,
+            },
+        ] = stopped.effects.as_slice()
+        else {
+            panic!("the stop should start one request: {:?}", stopped.effects);
+        };
+        let again = controller.handle_input(CoreInput::Command(
+            AppCommand::RequestStopAllSessions.with_operation(9),
+        ));
+        assert!(again.effects.is_empty(), "a stop is already in flight");
+        assert_eq!(
+            command_ends(&mut controller),
+            [(9, OperationEnd::Failed)],
+            "a command that did nothing ends at once"
+        );
+        controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::StopRequestAttemptCompleted {
+                correlation: *stop,
+                attempt: StopRequestAttempt::Initial,
+                result: Ok(()),
+            },
+        ));
+        assert_eq!(command_ends(&mut controller), [(8, OperationEnd::Done)]);
+        end_test_turn(&mut controller, turn);
+
+        // A command that no client recorded (a TUI command) ends no operation.
+        let unrecorded =
+            controller.handle_input(CoreInput::Command(AppCommand::RequestStopAllSessions));
+        if let [
+            CoreEffect::RequestStopAllSessions {
+                correlation,
+                attempt,
+            },
+        ] = unrecorded.effects.as_slice()
+        {
+            controller.handle_input(CoreInput::EffectCompleted(
+                CoreEffectCompletion::StopRequestAttemptCompleted {
+                    correlation: *correlation,
+                    attempt: *attempt,
+                    result: Ok(()),
+                },
+            ));
+        }
+        assert!(command_ends(&mut controller).is_empty());
+    }
+
+    #[test]
+    fn a_command_that_the_kernel_rejects_at_once_gets_no_completion_record() {
+        // The runtime records `command_rejected` for it. A second end record would be wrong.
+        let mut controller = hosted_controller(false);
+        let rejected = controller.handle_input(CoreInput::Command(
+            AppCommand::SteerTurn(crate::domain::conversation::ConversationTurnSteerRequest {
+                thread_id: "thread-1".to_string(),
+                expected_turn_id: "turn-1".to_string(),
+                prompt: "also run the tests".to_string(),
+            })
+            .with_operation(7),
+        ));
+        assert_eq!(
+            rejected.events.iter().find_map(AppEvent::command_rejection),
+            Some(kernel_event::ReasonCode::NoMatchingTurn)
+        );
+        assert!(command_ends(&mut controller).is_empty());
+    }
+
+    #[test]
+    fn a_rename_ends_with_the_result_of_its_request_and_names_its_thread() {
+        use kernel_event::OperationEnd;
+        let rename = |op_id| {
+            CoreInput::Command(
+                AppCommand::RenameSession(SessionRenameRequest::new("thread-1", "Renamed"))
+                    .with_operation(op_id),
+            )
+        };
+        let mut controller = CoreController::new();
+        controller.handle_input(rename(7));
+        // A second rename while the first runs is not started. It ends at once.
+        controller.handle_input(rename(8));
+        assert_eq!(
+            controller.take_kernel_records(),
+            vec![KernelEvent::CommandCompleted {
+                op_id: 8,
+                thread_id: "thread-1".to_string(),
+                result: OperationEnd::Failed,
+                reason: None,
+            }]
+        );
+        controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::SessionRenamed {
+                correlation: session_rename_correlation(1, "thread-1", "Renamed"),
+                result: Ok(()),
+            },
+        ));
+        assert_eq!(
+            controller.take_kernel_records(),
+            vec![KernelEvent::CommandCompleted {
+                op_id: 7,
+                thread_id: "thread-1".to_string(),
+                result: OperationEnd::Done,
+                reason: None,
+            }]
+        );
     }
 
     #[test]

@@ -113,7 +113,7 @@
       },
       {
         "name": "unreported",
-        "summary": "The kernel does not report the end of this command yet. Its operation state stays `accepted`. Watch the events instead."
+        "summary": "The kernel that received the command did not report its end. Its operation state stays `accepted`. No command of this version has this rule; it is the rule of commands that an older kernel received."
       }
     ],
     "operation_state": [
@@ -233,7 +233,7 @@
       "effect": "write",
       "idempotency": "natural",
       "rejections": [],
-      "completion": "unreported",
+      "completion": "records",
       "input": {
         "additionalProperties": false,
         "properties": {
@@ -316,7 +316,7 @@
         "steer_in_flight",
         "no_matching_turn"
       ],
-      "completion": "unreported",
+      "completion": "records",
       "input": {
         "additionalProperties": false,
         "properties": {
@@ -359,7 +359,7 @@
       "effect": "write",
       "idempotency": "natural",
       "rejections": [],
-      "completion": "unreported",
+      "completion": "records",
       "input": {
         "additionalProperties": false,
         "properties": {
@@ -387,7 +387,7 @@
         "decision_in_flight",
         "no_matching_approval"
       ],
-      "completion": "unreported",
+      "completion": "records",
       "input": {
         "additionalProperties": false,
         "properties": {
@@ -484,7 +484,7 @@
       "effect": "destructive",
       "idempotency": "natural",
       "rejections": [],
-      "completion": "unreported",
+      "completion": "records",
       "input": {
         "additionalProperties": false,
         "properties": {
@@ -1262,7 +1262,7 @@
     },
     {
       "name": "command_completed",
-      "summary": "A command ended without a turn record: its preparation failed, its work went to parallel slots, its turn submission closed before a turn started, or the kernel was built again.",
+      "summary": "A command ended without a turn record. For `submit_prompt`: its preparation failed, its work went to parallel slots, or its turn submission closed before a turn started. For the other commands: the request of the command returned (`done` or `failed`), or the command did nothing (`failed`). For every command: the kernel was built again (`lost`).",
       "payload": {
         "properties": {
           "kind": {

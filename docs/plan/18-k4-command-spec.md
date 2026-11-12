@@ -2,7 +2,7 @@
 
 ## 문서 상태
 
-- 상태: **구현 중**. K4-1, K4-2, K4-3, K4-4a 를 구현했다 (2026-11-12, §8). 나머지 조각은 제안이다. 현재 제품 동작의 기준은
+- 상태: **구현 중**. K4-1, K4-2, K4-3, K4-4 (K4-4a, K4-4b)를 구현했다 (2026-11-12, §8). 나머지 조각은 제안이다. 현재 제품 동작의 기준은
   `docs/reference/` 이다. 2026-11-12 에 리뷰 세 개(독립 리뷰, 표준
   축, 스펙 축)를 받아 고쳤다 (§7). 같은 날 사용자가 §6 의 질문을 작업자의 판단에 맡겼고, 기본값으로 정했다.
 - 상위 계획: [18 Akra 커널 아키텍처](18-akra-kernel-architecture.md) §4.3, §4.4, §5.5, §5.6, §6 K4. 결정 KP-04,
@@ -332,7 +332,7 @@ Q3-6 의 영수증은 받아들임과 바로 거절까지만 알린다. 끝은 �
 | K4-1 (완료 2026-11-12, §8) | 스펙 뼈대. `schemars` 확인, `KernelCommandKind` 와 domain 의 표, adapter 의 표와 스키마, 조회의 답 타입을 이벤트에서 나눈다, `describe` 가 `KernelSpec` 을 답한다, `schema/akra-kernel-spec.json`, 프로토콜 판 1, 이름 규칙. 손으로 적은 이름 목록을 지운다 | 유지 (명령·조회·이벤트의 전송 모양은 같다. `describe` 의 답만 바뀐다) | 스펙 파일 시험, 빠짐 없음 시험, 스키마와 전송 모양 시험 |
 | K4-2 (완료 2026-11-12, §8) | 병렬 상태 값을 타입으로 바꾼다 | 유지 (전송되는 글자는 같다. 스펙이 값의 목록을 알린다) | 프로토콜 시험, domain 시험 |
 | K4-3 (완료 2026-11-12, §8) | 이유 코드를 하나로 합치고 `next` 를 답에 싣는다. 버린 프롬프트를 `prompt_submission` 으로 알린다 | 유지 (글자는 같다. `next` 는 더한 필드이다) | domain 시험, 프로토콜 시험, 시뮬레이션의 거절 완전성 불변식 |
-| K4-4 (K4-4a 완료 2026-11-12, §8. K4-4b 는 제안: 나머지 명령 다섯의 완료 기록) | 연산의 끝. 기록에 `op_id`, 완료 기록, 재시작 때 열린 턴의 `lost`, `operation` 조회 | 유지 (기록에 필드와 종류를 더한다) | core 시험, 시뮬레이션의 연산 끝 불변식 (재시작 seed 포함) |
+| K4-4 (완료 2026-11-12, §8. K4-4a 와 K4-4b 로 나눠 했다) | 연산의 끝. 기록에 `op_id`, 완료 기록, 재시작 때 열린 턴의 `lost`, `operation` 조회 | 유지 (기록에 필드와 종류를 더한다) | core 시험, 시뮬레이션의 연산 끝 불변식 (재시작 seed 포함) |
 | K4-5 | 호출자 기록. 효과 등급과 전제 조건을 커널이 검사한다 | 바뀜 (보지 않는 thread 의 턴 제출을 거절한다. `destructive` 의 확인 규칙은 `reset_planning` 과 같다) | core 시험, 프로토콜 시험, 시뮬레이션 |
 | K4-6 | Desktop 타입을 스펙에서 만든다. `protocol.ts` 의 손 복사를 지운다 | 유지 | `npm run check`, vitest (생성 결과 시험), e2e |
 | K4-7 | Desktop 이 변경 명령에 멱등 키를 보낸다 | 유지 | vitest, e2e |
@@ -610,3 +610,47 @@ K4-4 를 둘로 나눴다 (§5 의 대응: 기록 종류마다 나눈다). K4-4a
 - 고치지 않은 것: 턴 id 를 받기 전에 멈춘 프롬프트는 `failed` 이고 받은 뒤에 멈춘 것은 `done` 이다 (그 경로가 실제로
   있는지 확인하지 못했다). `decide_approval` 은 `approval_resolved` 기록이 이미 있지만 `unreported` 이다 (K4-4b).
   연산 조회는 여전히 연산 id 뒤의 기록을 모두 읽는다. 연산 id 의 타입(`OperationId`)은 만들지 않았다.
+
+### K4-4b (2026-11-12)
+
+만든 것:
+
+- 명령 다섯(`rename_session`, `steer_turn`, `stop_all`, `decide_approval`, `reset_planning`)의 `completion` 이
+  `records` 이다. 그 명령의 요청이 돌아오면 `command_completed` 를 적는다: 성공이면 `done`, 실패이면 `failed`.
+- 런타임이 기록한 명령은 core 에 `AppCommand::OfOperation { op_id, command }` 로 온다. core 는 안의 명령을 이전과 같이
+  처리하고, 그 명령이 낸 효과의 correlation 에 연산을 묶는다 (`CommandEffectKey`). 그 효과의 완료가 core 입력으로
+  돌아오면 끝을 적는다.
+- 효과를 내지 않았고 거절도 아닌 명령은 한 일이 없다 (세션 목록을 읽는 중의 이름 바꾸기, 이미 진행 중인 중지, 다른
+  planning 작업 중의 초기화). 기다릴 완료가 없으므로 같은 dispatch 에서 `failed` 로 끝낸다.
+- 바로 거절한 명령(`steer_turn`, `decide_approval` 의 이유 코드)은 이전처럼 `command_rejected` 만 남는다.
+- 재시작: 이 명령들도 열려 있으면 `command_completed` 의 `lost` 로 닫힌다 (K4-4a 의 규칙).
+- 시뮬레이션이 중지 명령을 Gateway 처럼 설명과 함께 보낸다. I11 이 기록된 모든 `records` 명령의 끝을 본다.
+
+설계와 다른 점:
+
+- correlation 에 `op_id` 를 싣지 않았다 (§3.4 는 "core 의 correlation(… steer, 승인 결정, 중지)에 `op_id` 를 싣는다").
+  효과와 완료가 이미 같은 correlation 을 가지므로, 그 correlation 을 키로 연산을 찾는다. 다섯 기능의 reducer 와
+  correlation 타입은 바뀌지 않았다.
+- `decide_approval` 의 끝은 `approval_resolved` 가 아니라 `command_completed` 이다 (§3.4 는 `approval_resolved`). 결정을
+  보낸 요청이 돌아온 것이 그 명령의 끝이다. `approval_resolved` 는 app-server 가 알린 승인의 끝이고 명령 없이도
+  온다 (시간 초과, 턴의 끝). 그 기록에는 `op_id` 를 싣지 않았다.
+- `stop_all` 의 끝은 처음 보낸 중지 요청의 완료이다. 턴이 시작한 뒤의 다시 보내기는 커널 안의 일이다. 턴이 실제로
+  멈췄는지는 그 턴의 `turn_ended` 가 알린다.
+- 완료가 낡아서 reducer 가 그 결과를 쓰지 않는 경우에도 명령은 끝난다. 효과는 실행되었기 때문이다.
+- 추적 상태는 `ConversationTurnFeatureReducer` 에 둔다. controller 는 구조 시험이 정한 여덟 조각만 가진다.
+
+결정:
+
+- `thread_prompt_queued` 의 `handoff` (프롬프트 글)는 전송에서 빼지 않는다. 지금 접속하는 쪽은 로컬 소유자뿐이고,
+  Desktop 이 큐에 남은 프롬프트를 보여 줄 때 그 글이 필요하다. 호출자를 가리는 조각(K4-5)에서 다시 본다.
+
+확인: core 시험(효과의 완료가 끝을 적는다, 한 일이 없는 명령, 바로 거절한 명령, 기록되지 않은 명령), 추적 모듈의
+시험, domain 시험, 프로토콜 시험(다섯 명령의 `completion`), 런타임 시험(열린 steer 를 재시작이 `lost` 로 닫는다),
+구조 시험, 커널 시뮬레이션 (300 seed). 결함 주입 (300 seed): 한 일이 없는 명령의 끝을 적지 않음 → I11 (35개), 중지의
+다른 시도를 끝으로 봄 → I11 (75개).
+
+남긴 것:
+
+- 시뮬레이션은 다섯 명령 중 중지만 보낸다. steer, 중지, 이름 바꾸기의 끝은 core 시험이 직접 본다.
+- 승인 결정과 초기화는 효과의 완료를 직접 넣는 core 시험이 없다. 두 명령은 같은 추적 경로를 타고, 그 키는 추적
+  모듈의 `match` 에 있다.
