@@ -20,6 +20,7 @@ use crate::domain::kernel_event::{CommandRejectionReason, KernelEvent as KernelR
 use crate::domain::kernel_spec::{
     CommandEffect, CommandIdempotency, CommandScope, KernelCommandKind, KernelRecordKind,
 };
+use crate::domain::parallel_mode::ParallelModeAgentRosterState;
 
 /// 스키마의 방언이다. newtype variant 의 스키마는 `$ref` 옆에 `properties` 를 둔다. 그것은 이 방언에서만 맞다.
 const SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
@@ -52,6 +53,8 @@ pub struct Terms {
     pub scope: Vec<ReasonEntry>,
     pub effect: Vec<ReasonEntry>,
     pub idempotency: Vec<ReasonEntry>,
+    /// 병렬 에이전트의 `state` 값이다 (plan 18 K4-2). 이름만으로 뜻을 알기 어려운 값이라서 설명을 싣는다.
+    pub agent_state: Vec<ReasonEntry>,
 }
 
 /// 메서드가 답을 받는 요청인가, 커널이 보내는 알림인가이다.
@@ -185,6 +188,10 @@ pub fn describe() -> KernelSpec {
             idempotency: CommandIdempotency::ALL
                 .iter()
                 .map(|idempotency| term(idempotency.name(), idempotency.summary()))
+                .collect(),
+            agent_state: ParallelModeAgentRosterState::ALL
+                .iter()
+                .map(|state| term(state.name(), state.summary()))
                 .collect(),
         },
         methods,

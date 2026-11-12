@@ -778,7 +778,7 @@ fn live_detail_enrichment_fills_missing_runtime_fields_from_lease() {
     assert_eq!(enriched.updated_at, "2026-01-01T00:25:00Z");
     assert_eq!(
         cleanup.runtime_state_override(&session_detail(&cleanup, "failed", "cleanup failed")),
-        Some("failed")
+        Some(super::ParallelModeAgentRosterState::Failed)
     );
 }
 
@@ -827,13 +827,40 @@ fn the_roster_state_is_a_closed_set_with_the_names_the_roster_already_shows() {
     ] {
         let detail = session_detail(&running, label, "");
         assert_eq!(
-            running.runtime_state_override(&detail),
+            running.runtime_state_override(&detail).map(State::name),
             Some(label),
             "the lease should show the delivery stage"
         );
         assert_eq!(roster_state_label(&running, Some(&detail)), label);
-        assert_eq!(State::from_label(label).map(State::name), Some(label));
     }
+    // 전달 단계는 lease 상태 셋을 뺀 나머지이다. 위의 열 개가 그 전부이다.
+    assert_eq!(
+        State::ALL
+            .iter()
+            .filter(|state| state.is_delivery_stage())
+            .count(),
+        10
+    );
+    // cleanup 을 기다리는 lease 는 두 단계만 보인다. 임대만 된 lease 는 덮지 않는다.
+    let cleanup = lease_in(ParallelModeSlotLeaseState::CleanupPending);
+    let shown_in_cleanup = State::ALL
+        .iter()
+        .filter(|state| {
+            cleanup
+                .runtime_state_override(&session_detail(&cleanup, state.name(), ""))
+                .is_some()
+        })
+        .map(|state| state.name())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        shown_in_cleanup,
+        ["official_refresh_recovery_needed", "failed"]
+    );
+    let leased = lease_in(ParallelModeSlotLeaseState::Leased);
+    assert_eq!(
+        leased.runtime_state_override(&session_detail(&leased, "failed", "")),
+        None
+    );
     // detail 의 다른 이름은 roster 의 상태가 아니다. lease 상태를 보인다.
     let detail = session_detail(&running, "in_progress", "");
     assert_eq!(roster_state(&running, Some(&detail)), State::Running);

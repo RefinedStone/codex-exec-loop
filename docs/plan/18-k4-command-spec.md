@@ -472,15 +472,18 @@ Q3-6 의 영수증은 받아들임과 바로 거절까지만 알린다. 끝은 �
   표시 이름을 글자로 바꾸던 `state_name` 을 지웠다.
 - 에이전트의 상태는 domain 에서 글자였다. roster 가 보이는 상태를 enum 으로 정했다
   (`ParallelModeAgentRosterState`, 13개: lease 상태 셋과 전달 단계 열). roster 의 `state_label` 은 그 enum 의 이름에서
-  나온다 (`roster_state`). 그래서 값을 만드는 곳이 하나이다.
+  나온다 (`roster_state`). 전달 단계를 고르는 `runtime_state_override` 도 그 enum 을 돌려준다. 그래서 이름이 한 곳에
+  있다. 스펙의 `terms.agent_state` 가 13개 값의 뜻을 알린다.
 
 설계와 다른 점:
 
 - 전송되는 글자는 바뀌지 않았다. 설계는 "바뀜"으로 적었다. 이전 값이 이미 표시 이름을 snake_case 로 쓴 것이었고,
-  새 enum 의 이름이 그것과 같다. 시험이 domain 의 모든 값에서 이전 글자와 같은지 본다. 그래서 Desktop 은 고치지
-  않았다.
+  새 enum 의 이름이 그것과 같다. 병합 큐와 PR 검증은 프로토콜 시험이 domain 의 모든 값에서 이전 글자(표시 이름)와
+  같은지 본다. 에이전트는 domain 시험이 이전 글자 13개와 같은지 보고, 프로토콜 시험이 그 이름을 그대로 보내는지
+  본다. 그래서 Desktop 은 고치지 않았다.
 - 에이전트 상태에 `unknown` 이 있다. roster 가 만든 행에는 나오지 않는다. 손으로 만든 행(시험의 표본)의 이름이
-  roster 의 이름이 아닐 때 쓴다.
+  roster 의 이름이 아닐 때 쓴다. 이 값을 없애려면 roster 행이 글자 대신 enum 을 가져야 하고, TUI 와 admin 의 시험
+  표본 약 20곳을 고쳐야 한다. 병렬 모드의 정리(plan 19 Q5)에서 한다.
 - session detail 의 상태(`state_label`, 약 16개의 글자가 병렬 서비스와 TUI, admin, 저장된 투영에 걸쳐 있다)는 타입으로
   바꾸지 않았다. 커널 프로토콜은 그 값을 보내지 않는다. 병렬 모드의 정리(plan 19 Q5)에서 한다.
 
