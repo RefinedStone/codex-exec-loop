@@ -4,8 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Composer, type ComposerActions } from "../conversation/Composer";
 import { Icon, type IconName } from "../design/icons";
 import { Picker } from "../design/Picker";
-import { useDesktopStore } from "../session/desktopStore";
-import { MOD_KEY, showHome, showView, togglePanel, toggleTerminal, toggleTheme, useUiStore } from "../session/uiStore";
+import { remoteHostKey, useDesktopStore } from "../session/desktopStore";
+import { MOD_KEY, showHome, showView, togglePanel, toggleRemoteAgents, toggleTerminal, toggleTheme, useUiStore } from "../session/uiStore";
 import { StatusMark, useThreadMarks } from "../sidebar/Sidebar";
 import { allThreads, folderName, type ListedThread, relativeAge, threadMark, type ThreadMark } from "../sidebar/threadStatus";
 
@@ -140,13 +140,16 @@ function paletteCommands(): PaletteEntry[] {
 
 export function CommandPalette({ onOpenThread }: { onOpenThread(threadId: string): void }) {
   const folders = useDesktopStore((state) => state.folders);
+  // Gateway 에 원격 호스트가 있을 때만 켜고 끄는 명령을 보인다.
+  const remoteAvailable = useDesktopStore((state) => remoteHostKey(state) !== "");
   const [query, setQuery] = useState("");
   const [cursor, setCursor] = useState(0);
   const entries = useMemo(() => {
+    const remote: PaletteEntry[] = remoteAvailable ? [{ id: "remote-agents", icon: "globe", label: "클라우드 에이전트 켜기 / 끄기", hint: "", run: () => toggleRemoteAgents() }] : [];
     const threads = allThreads(folders).map<PaletteEntry>((thread) => ({ id: thread.id, icon: "message", label: thread.title, hint: folderName(thread.cwd), run: () => onOpenThread(thread.id) }));
     const needle = query.trim().toLowerCase();
-    return [...paletteCommands(), ...threads].filter((entry) => entry.label.toLowerCase().includes(needle)).slice(0, PALETTE_LIMIT);
-  }, [folders, query, onOpenThread]);
+    return [...paletteCommands(), ...remote, ...threads].filter((entry) => entry.label.toLowerCase().includes(needle)).slice(0, PALETTE_LIMIT);
+  }, [folders, query, onOpenThread, remoteAvailable]);
   const close = () => useUiStore.setState({ paletteOpen: false });
   const run = (entry: PaletteEntry | undefined) => {
     if (!entry) return;

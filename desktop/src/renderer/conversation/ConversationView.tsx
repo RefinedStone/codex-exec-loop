@@ -6,7 +6,7 @@ import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "rea
 
 import type { TurnPlanStep } from "../../shared/protocol/generated/v2/TurnPlanStep";
 import { Icon, type IconName } from "../design/icons";
-import { useDesktopStore } from "../session/desktopStore";
+import { useConversationStore } from "../session/desktopStore";
 import { toast, useUiStore } from "../session/uiStore";
 import { diffFileFromChange, totalCounts, turnDiffFiles, type DiffFile } from "./diff";
 import { DiffCounts, DiffFileList } from "./DiffView";
@@ -164,7 +164,7 @@ function workingLabel(turn: TurnView, waitingForApproval: boolean): string {
 }
 
 function Working({ turn }: { turn: TurnView }) {
-  const waiting = useDesktopStore((state) => state.pendingApprovals.some((approval) => approval.turnId === turn.id));
+  const waiting = useConversationStore((state) => state.pendingApprovals.some((approval) => approval.turnId === turn.id));
   const elapsed = useElapsed(turn.startedAt);
   return (
     <div className={waiting ? "working waiting" : "working"}>
@@ -218,9 +218,9 @@ const Turn = memo(function Turn({ turn }: { turn: TurnView }) {
 });
 
 export function ConversationView({ onLoadOlder }: { onLoadOlder(): Promise<void> }) {
-  const openThreadId = useDesktopStore((state) => state.openThreadId);
-  const transcript = useDesktopStore((state) => state.transcript);
-  const transcriptError = useDesktopStore((state) => state.transcriptError);
+  const openThreadId = useConversationStore((state) => state.openThreadId);
+  const transcript = useConversationStore((state) => state.transcript);
+  const transcriptError = useConversationStore((state) => state.transcriptError);
   const scrollRef = useRef<HTMLElement>(null);
   const followBottom = useRef(true);
   const [atBottom, setAtBottom] = useState(true);

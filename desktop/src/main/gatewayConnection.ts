@@ -13,9 +13,13 @@ const RECONNECT_MAX_MS = 30_000;
 const DAEMON_START_COOLDOWN_MS = 10_000;
 /** Gateway 의 한도와 같다. 긴 스레드의 `thread/resume` 응답은 ws 기본값(100 MiB)을 넘을 수 있다. */
 const MAX_MESSAGE_BYTES = 256 * 1024 * 1024;
+/** Gateway 는 모르는 호스트의 접속을 이 코드로 닫는다 (plan 25 §3.1). 다시 접속해도 같으므로 다시 접속하지 않는다. */
+const CLOSE_UNKNOWN_HOST = 1008;
 
 export interface GatewayConnectionOptions {
   endpoint: string;
+  /** Gateway 가 중계할 app-server 호스트이다 (plan 25). 없으면 `local` 이다. */
+  host?: string;
   onMessage(text: string): void;
   onState(state: ConnectionState): void;
   /** 접속이 실패했을 때 데몬을 시작한다. 없으면 시작하지 않는다. */
@@ -64,10 +68,10 @@ export class GatewayConnection {
     if (this.closed) {
       return;
     }
-    const { endpoint } = this.options;
+    const { endpoint, host } = this.options;
     this.options.onState({ phase: "connecting", endpoint });
     // 호스트 이름은 의미가 없다. 실제 통로는 unix 소켓이나 named pipe 이다.
-    const socket = new WebSocket("ws://localhost/", {
+    const socket = new WebSocket(host ? `ws://localhost/host/${encodeURIComponent(host)}` : "ws://localhost/", {
       createConnection: () => connect(endpoint),
       perMessageDeflate: false,
       maxPayload: MAX_MESSAGE_BYTES,
@@ -92,6 +96,10 @@ export class GatewayConnection {
     socket.on("close", (code) => {
       if (this.socket === socket) {
         this.socket = undefined;
+      }
+      if (code === CLOSE_UNKNOWN_HOST) {
+        this.options.onState({ phase: "disconnected", endpoint, detail: `Gateway 에 호스트 ${host ?? "local"} 가 없습니다.` });
+        return;
       }
       if (!opened) {
         this.maybeStartDaemon();

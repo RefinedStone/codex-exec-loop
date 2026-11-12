@@ -49,6 +49,13 @@ const bridge: AkraBridge = {
   ready(): void {
     ipcRenderer.send(IPC_CHANNELS.ready);
   },
+  remote: {
+    open: (host) => ipcRenderer.send(IPC_CHANNELS.remoteOpen, host),
+    close: (host) => ipcRenderer.send(IPC_CHANNELS.remoteClose, host),
+    send: (host, text) => ipcRenderer.send(IPC_CHANNELS.remoteSend, host, text),
+    onMessage: (listener) => listen<[string, string]>(IPC_CHANNELS.remoteMessage, listener),
+    onConnectionState: (listener) => listen<[string, ConnectionState]>(IPC_CHANNELS.remoteState, listener),
+  },
   async chooseFolder(): Promise<string | null> {
     const folder: unknown = await ipcRenderer.invoke(IPC_CHANNELS.chooseFolder);
     return typeof folder === "string" ? folder : null;

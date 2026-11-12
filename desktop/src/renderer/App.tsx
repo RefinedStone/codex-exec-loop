@@ -11,9 +11,9 @@ import { isTurnInProgress } from "./conversation/transcript";
 import { useWorkingTree, type WorkingTree, workingTreeCounts, WorkingTreePanel } from "./conversation/WorkingTreePanel";
 import { Icon, type IconName } from "./design/icons";
 import { KernelPanel } from "./kernel/KernelPanel";
-import { DesktopSession } from "./session/desktopSession";
-import { desktopSessionStore, openThreadCwd, useDesktopStore } from "./session/desktopStore";
-import { handOffToNewThread, MOD_KEY, type PanelId, setDraft, showView, toast, togglePanel, toggleTerminal, useUiStore } from "./session/uiStore";
+import { DesktopSession, remoteHostBridge } from "./session/desktopSession";
+import { ConversationStoreContext, desktopSessionStore, openThreadCwd, remoteHostKey, remoteHostStore, useDesktopStore } from "./session/desktopStore";
+import { handOffToNewThread, MOD_KEY, type PanelId, setDraft, showRemote, showView, toast, togglePanel, toggleTerminal, useUiStore } from "./session/uiStore";
 import { Sidebar } from "./sidebar/Sidebar";
 import { folderName } from "./sidebar/threadStatus";
 import { TerminalDock } from "./terminal/TerminalDock";
@@ -210,6 +210,41 @@ export function App() {
     return () => created.stop();
   }, []);
 
+  // 원격 호스트(plan 25)마다 읽기 전용 세션을 하나 둔다. 사용자가 켰고 Gateway 가 그 호스트를 알릴 때만 접속한다.
+  const remoteSessions = useRef(new Map<string, DesktopSession>());
+  const remoteAgents = useUiStore((state) => state.remoteAgents);
+  const remoteHost = useUiStore((state) => state.remoteHost);
+  const remoteHosts = useDesktopStore(remoteHostKey);
+  useEffect(() => {
+    if (!remoteAgents || !remoteHosts) return;
+    const sessions = remoteSessions.current;
+    const hosts = remoteHosts.split(",");
+    for (const host of hosts) {
+      const created = new DesktopSession(remoteHostBridge(window.akra.remote, host), desktopSessionStore(remoteHostStore(host)), CLIENT_VERSION, undefined, true);
+      created.start();
+      sessions.set(host, created);
+    }
+    return () => {
+      for (const host of hosts) {
+        sessions.get(host)?.stop();
+        sessions.delete(host);
+        window.akra.remote.close(host);
+      }
+    };
+  }, [remoteAgents, remoteHosts]);
+  // 원격 구역을 끄거나 그 호스트가 목록에서 빠지면 원격 대화 화면을 닫는다.
+  const remoteVisible = remoteAgents && remoteHost !== null && remoteHosts.split(",").includes(remoteHost);
+  useEffect(() => {
+    if (view === "remote" && !remoteVisible) showView("home");
+  }, [view, remoteVisible]);
+
+  const openRemoteThread = useCallback((host: string, threadId: string) => {
+    showRemote(host);
+    const state = remoteHostStore(host).getState();
+    if (state.openThreadId === threadId && state.transcript?.threadId === threadId) return;
+    void remoteSessions.current.get(host)?.openThread(threadId);
+  }, []);
+
   // 커널 패널이 열려 있을 때만 열린 스레드의 저장소 커널에 붙는다. 붙어 있는 동안 그 저장소의 TUI 는 열리지 않는다.
   const kernelWorkspace = panel === "kernel" ? openCwd : null;
   useEffect(() => {
@@ -309,7 +344,7 @@ export function App() {
 
   return (
     <div className="shell">
-      {sidebarOpen && <Sidebar onOpenThread={openThread} />}
+      {sidebarOpen && <Sidebar onOpenThread={openThread} onOpenRemoteThread={openRemoteThread} />}
       <div className="workspace">
         <TopBar tree={tree} documentCount={documents.phase === "loaded" ? documents.documents.length : null} changedDocumentCount={documents.phase === "loaded" ? changedCount(documents.documents) : 0} />
         <SessionBanner />
@@ -322,6 +357,14 @@ export function App() {
                 <ConversationView onLoadOlder={async () => session.current?.loadOlderTurns()} />
                 <Composer actions={composerActions} above={<ApprovalPrompt onAnswer={(requestId, decision) => session.current?.answerApproval(requestId, decision)} />} />
               </>
+            )}
+            {view === "remote" && remoteHost && remoteVisible && (
+              <ConversationStoreContext.Provider value={remoteHostStore(remoteHost)}>
+                <div className="banner" data-testid="remote-banner">
+                  <span>클라우드 에이전트 · {remoteHost} · 읽기 전용입니다. 메시지를 보내지 않습니다.</span>
+                </div>
+                <ConversationView onLoadOlder={async () => remoteSessions.current.get(remoteHost)?.loadOlderTurns()} />
+              </ConversationStoreContext.Provider>
             )}
             <TerminalDock bridge={window.akra.terminal} />
           </main>

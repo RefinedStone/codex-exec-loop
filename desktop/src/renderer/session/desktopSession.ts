@@ -3,7 +3,7 @@
 // 다시 연결되면 열려 있던 스레드를 다시 resume 한다 (P3 §6.5).
 // 입력(새 턴, steer, 중단, 새 스레드)과 승인 요청 응답도 여기서 보낸다 (P3 §6.2, §6.4). 턴을 만드는 요청은
 // 사용자가 보낸 메시지에서만 나간다.
-import type { AkraBridge } from "../../shared/bridge";
+import type { AkraBridge, RemoteHostBridge } from "../../shared/bridge";
 import type { InitializeParams } from "../../shared/protocol/generated/InitializeParams";
 import type { Thread } from "../../shared/protocol/generated/v2/Thread";
 import type { ThreadListResponse } from "../../shared/protocol/generated/v2/ThreadListResponse";
@@ -94,6 +94,21 @@ function errorMessage(error: unknown): string {
 /** 패널이 직접 부를 수 있는 Gateway 메서드이다. app-server 메서드와 커널 명령은 이 길로 보내지 않는다. */
 const GATEWAY_SERVICE_PREFIXES = ["akra/mcp/", "akra/context/"];
 
+/** 세션이 쓰는 메시지 버스이다. `local` 은 `window.akra` 이고, 원격 호스트는 `remoteHostBridge` 이다. */
+export type SessionBridge = Pick<AkraBridge, "send" | "onMessage" | "onConnectionState" | "ready">;
+
+/** 원격 호스트 하나의 메시지 버스이다 (plan 25). `ready` 가 그 호스트의 접속을 연다. */
+export function remoteHostBridge(remote: RemoteHostBridge, host: string): SessionBridge {
+  return {
+    send: (text) => remote.send(host, text),
+    onMessage: (listener) => remote.onMessage((from, text) => from === host && listener(text)),
+    onConnectionState: (listener) => remote.onConnectionState((from, state) => from === host && listener(state)),
+    ready: () => remote.open(host),
+  };
+}
+
+const READ_ONLY_ERROR = "원격 호스트의 대화는 읽기 전용입니다.";
+
 export class DesktopSession {
   private readonly client: JsonRpcClient;
   private readonly batcher: FrameBatcher<QueuedNotification>;
@@ -111,10 +126,12 @@ export class DesktopSession {
   private readonly kernel: KernelConnection;
 
   constructor(
-    private readonly bridge: AkraBridge,
+    private readonly bridge: SessionBridge,
     private readonly store: SessionStore,
     private readonly clientVersion: string,
     scheduler?: FrameScheduler,
+    /** 원격 호스트의 세션이다 (plan 25 G2 전). 읽기만 한다: 턴, 새 스레드, 승인 응답을 보내지 않는다. */
+    private readonly readOnly = false,
   ) {
     this.client = new JsonRpcClient((text) => bridge.send(text));
     this.batcher = new FrameBatcher((batch) => this.store.updateTranscript((transcript) => applyNotifications(transcript, batch)), scheduler);
@@ -175,6 +192,7 @@ export class DesktopSession {
 
   /** 메시지를 보낸다. 진행 중인 턴이 있으면 steer, 없으면 새 턴이다 (P3 §6.2). */
   async sendMessage(text: string): Promise<void> {
+    this.assertWritable();
     const threadId = this.store.getOpenThreadId();
     const trimmed = text.trim();
     if (!threadId || trimmed.length === 0) {
@@ -192,6 +210,7 @@ export class DesktopSession {
 
   /** 진행 중인 턴을 중단한다. */
   async interrupt(): Promise<void> {
+    this.assertWritable();
     const threadId = this.store.getOpenThreadId();
     const transcript = this.store.getTranscript();
     const turn = transcript?.turns.at(-1);
@@ -203,6 +222,7 @@ export class DesktopSession {
 
   /** 작업 폴더에서 새 스레드를 시작하고 연다. 첫 메시지는 열린 스레드에 보낸다 (P3 §6.2). */
   async startThread(cwd: string): Promise<string> {
+    this.assertWritable();
     const response = await this.client.request<ThreadStartResponse>("thread/start", { cwd });
     const transcript = transcriptFromThread(response.thread);
     this.batcher.clear();
@@ -221,8 +241,14 @@ export class DesktopSession {
     answer?.({ decision });
   }
 
+  private assertWritable(): void {
+    if (this.readOnly) {
+      throw new Error(READ_ONLY_ERROR);
+    }
+  }
+
   private handleServerRequest(method: string, params: unknown, id: JsonRpcId): Promise<unknown> {
-    const approval = toPendingApproval(method, params, id);
+    const approval = this.readOnly ? null : toPendingApproval(method, params, id);
     if (!approval) {
       return Promise.reject(new JsonRpcError(-32601, `Akra Desktop does not handle ${method} yet`));
     }
@@ -280,7 +306,10 @@ export class DesktopSession {
       });
       // 이 창이 아직 구독하지 않은 스레드도 목록의 상태로 진행 중 표시를 채운다.
       this.store.setActiveThreads(activeThreadIds(threads, statusChanges));
-      void this.addThreadsFromRolloutScan(generation);
+      // 원격 호스트는 목록을 한 번만 읽는다 (plan 25 §8).
+      if (!this.readOnly) {
+        void this.addThreadsFromRolloutScan(generation);
+      }
       if (this.store.getOpenThreadId()) {
         await this.resumeOpenThread();
       }

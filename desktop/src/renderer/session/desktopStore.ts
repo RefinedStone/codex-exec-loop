@@ -1,7 +1,8 @@
 // 화면 상태이다. 대화 원본은 app-server 가 가지므로 여기에는 화면에 필요한 값만 둔다 (D-05).
+import { createContext, useContext } from "react";
 import { create } from "zustand";
 
-import type { ConnectionState } from "../../shared/bridge";
+import { type ConnectionState, isRemoteHostId } from "../../shared/bridge";
 import type { PendingApproval } from "../conversation/approvals";
 import type { Transcript } from "../conversation/transcript";
 import { EMPTY_KERNEL_VIEW, type KernelView } from "../kernel/kernelConnection";
@@ -12,6 +13,16 @@ export interface GatewayInfo {
   codexVersion: string | null;
   startedAt: string;
   upstreamRestarts: number;
+  /** Gateway 가 중계하는 호스트 목록이다 (plan 25). 이전 Gateway 는 보내지 않는다. */
+  hosts?: { id: string }[];
+}
+
+/** `local` 이 아닌 호스트 id 를 쉼표로 이은 값이다. 문자열이므로 목록을 다시 읽어도 값이 같으면 화면이 다시 그리지 않는다. */
+export function remoteHostKey(state: Pick<DesktopState, "gateway">): string {
+  return (state.gateway?.hosts ?? [])
+    .map((host) => host.id)
+    .filter(isRemoteHostId)
+    .join(",");
 }
 
 export interface WorkspaceThread {
@@ -103,7 +114,7 @@ export function openThreadCwd(state: Pick<DesktopState, "folders" | "openThreadI
   return folder?.cwd ?? (state.transcript?.threadId === state.openThreadId ? state.transcript.cwd : null);
 }
 
-export const useDesktopStore = create<DesktopState>((set) => ({
+const createDesktopStore = () => create<DesktopState>((set) => ({
   connection: null,
   gateway: null,
   versionCheck: null,
@@ -163,6 +174,29 @@ export const useDesktopStore = create<DesktopState>((set) => ({
   setKernel: (kernel) => set({ kernel }),
 }));
 
+/** `local` 호스트의 상태이다. */
+export const useDesktopStore = createDesktopStore();
+export type DesktopStore = typeof useDesktopStore;
+
+const remoteHostStores = new Map<string, DesktopStore>();
+
+/**
+ * 원격 호스트(plan 25)의 상태이다. 호스트마다 저장소가 따로이다. 그래서 스레드는 `(호스트, 스레드 id)` 로 구분되고,
+ * 원격 대화는 `local` 의 패널(변경, 커널, 문서, 터미널)에 닿지 않는다. 메모리에만 있다 (D-05).
+ */
+export function remoteHostStore(host: string): DesktopStore {
+  const store = remoteHostStores.get(host) ?? createDesktopStore();
+  remoteHostStores.set(host, store);
+  return store;
+}
+
+/** 대화 화면이 읽는 저장소이다. 원격 대화를 그릴 때만 그 호스트의 저장소로 바꾼다. */
+export const ConversationStoreContext = createContext<DesktopStore>(useDesktopStore);
+
+export function useConversationStore<T>(selector: (state: DesktopState) => T): T {
+  return useContext(ConversationStoreContext)(selector);
+}
+
 export type SessionStore = Pick<
   DesktopState,
   | "setConnection"
@@ -183,8 +217,8 @@ export type SessionStore = Pick<
 > & { getOpenThreadId(): string | null; getTranscript(): Transcript | null; getKernel(): KernelView };
 
 /** zustand 저장소를 세션이 쓰는 좁은 인터페이스로 감싼다. */
-export function desktopSessionStore(): SessionStore {
-  const state = useDesktopStore.getState();
+export function desktopSessionStore(store: DesktopStore = useDesktopStore): SessionStore {
+  const state = store.getState();
   return {
     setConnection: state.setConnection,
     setSession: state.setSession,
@@ -201,8 +235,8 @@ export function desktopSessionStore(): SessionStore {
     addThreadToFolder: state.addThreadToFolder,
     mergeFolders: state.mergeFolders,
     setKernel: state.setKernel,
-    getKernel: () => useDesktopStore.getState().kernel,
-    getOpenThreadId: () => useDesktopStore.getState().openThreadId,
-    getTranscript: () => useDesktopStore.getState().transcript,
+    getKernel: () => store.getState().kernel,
+    getOpenThreadId: () => store.getState().openThreadId,
+    getTranscript: () => store.getState().transcript,
   };
 }

@@ -284,6 +284,16 @@ the desktop app itself is not shipped yet.
   to a host other than `local`, `akra/kernel/*` is refused with `-32601`, `akra/context/*` answers
   with empty `resources` and does not read or write the ledger, `akra/mcp/*` is unchanged, and
   `AKRA_GATEWAY_RECORD` records nothing.
+- Desktop remote hosts (plan 25, Desktop part of S2): Desktop reads `hosts` from `akra/gateway/info`. When
+  the list has a host other than `local`, the command palette shows "클라우드 에이전트 켜기 / 끄기". The
+  default is off, and turning it on shows a warning first. While it is on, each window opens one more
+  Gateway connection per remote host on `/host/<id>` and the sidebar shows a section for that host with
+  its threads. A remote thread opens read-only: Desktop sends no turn, no thread start, and no approval
+  answer to a remote host, and the remote conversation does not use the kernel, changes, documents, or
+  terminal panels. Remote state stays in memory. A connection that the Gateway closes with `1008` is not
+  retried. Production registers only `local`, so the command and the section do not appear there; no
+  remote upstream adapter exists yet (`desktop/src/main/gatewayConnection.ts`,
+  `desktop/src/renderer/session/`).
 - Kernel protocol (`akra/kernel/*`, plan 18 K3, protocol version 1 since the kernel spec of K4-1): a client sends `akra/kernel/attach`
   with a workspace and attaches to the kernel of the repository that holds it. The Gateway builds that
   kernel on first attach and keeps it after clients leave, so auto-follow and parallel dispatch keep
