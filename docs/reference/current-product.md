@@ -293,8 +293,16 @@ the desktop app itself is not shipped yet.
   (JSON Schema 2020-12). The input schemas carry the rules the kernel checks (non-blank text, the
   length of `idempotency_key`). The state values of the parallel board (agent state, merge queue
   state, pull request validation state and phase) are closed lists in the spec. Fields have no description in the spec yet. The same value is checked
-  in as `schema/akra-kernel-spec.json`. The `message` of a command rejection is the summary of its
-  reason in the spec. The `planning` and `parallel` queries and events carry the planning
+  in as `schema/akra-kernel-spec.json`. All reason codes are one list (`reasons`): command
+  rejections and the reasons of `prompt_submission` events use the same names. Each reason and each
+  error has `next`, an ordered list of steps a client can run as given: `wait_for { event }`,
+  `wait { milliseconds }`, `query { name }`, `command { name }`, `resend` (the same command with a new
+  key), `ask_user`, and `stop`. A command rejection carries `reason`, `message` (the summary of the
+  reason), and the `next` of that reason. A `prompt_submission` event with a reason carries the same
+  `next`. When the kernel drops a queued prompt without a turn, the client gets `prompt_submission`
+  with status `dropped` and reason `task_finished` (its task is already done or cancelled) or
+  `rejected_again` (the one resend was refused again; the task stays queued). The `planning` and
+  `parallel` queries and events carry the planning
   queue and the parallel state (pool, agents, merge queue, PR validation); `refresh_planning` reads the
   queue again. The `history` query (`{"type": "history", "after": <cursor>, "limit": <n>}`) pages
   through the kernel decision log in record order and answers with `records` and `next_after`; send

@@ -1185,7 +1185,7 @@ mod tests {
             record.event,
             crate::domain::kernel_event::KernelEvent::ThreadPromptRejected {
                 thread_id: "thread-9".to_string(),
-                reason: crate::domain::kernel_event::ThreadPromptRejection::UnknownThread,
+                reason: crate::domain::kernel_event::ReasonCode::UnknownThread,
             }
         );
     }
@@ -1240,7 +1240,7 @@ mod tests {
         // plan 19 Q3-6: the host records the command before it runs it and tells resends apart by the key.
         use crate::domain::conversation::ConversationTurnSteerRequest;
         use crate::domain::kernel_event::{
-            CommandRejectionReason, KernelCommandDescriptor, KernelEvent, OperationReceipt,
+            KernelCommandDescriptor, KernelEvent, OperationReceipt, ReasonCode,
         };
         let (mut runtime, _turns) = recording_runtime_for_test();
         runtime.attach_kernel_event_log(Arc::new(PagedLog(Vec::new())), "/workspace");
@@ -1267,7 +1267,7 @@ mod tests {
                 .send_described_command(steer(), described(fingerprint), TEST_REPLY_TIMEOUT)
                 .expect("the host should answer")
         };
-        let rejected = Some(CommandRejectionReason::NoMatchingTurn);
+        let rejected = Some(ReasonCode::NoMatchingTurn);
 
         let KernelCommandOutcome::Handled { events, operation } = send("fp-1") else {
             panic!("the first command should run");

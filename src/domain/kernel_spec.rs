@@ -1,6 +1,6 @@
 //! 커널 스펙의 domain 쪽 표이다 (plan 18 K4-1, 설계 `docs/plan/18-k4-command-spec.md` §3.1).
 //!
-//! 명령의 종류와 성질, 거절 이유, 기록의 종류를 여기서 한 번 정한다. 커널은 이 표로 명령을 기록할지 정한다
+//! 명령의 종류와 성질, 이유 코드, 기록의 종류를 여기서 한 번 정한다. 커널은 이 표로 명령을 기록할지 정한다
 //! (`is_recorded`). 효과와 전제 조건을 커널이 검사하는 일은 K4-5 이다. 전송 모양(serde 타입)과 조회·이벤트·오류의
 //! 표는 inbound adapter `kernel_protocol` 에 있고, 그 adapter 가 두 표와 스키마를 묶어 `describe` 의 답을 만든다.
 //! 설명(`summary`)은 클라이언트와 에이전트가 읽으므로 영어로 쓴다.
@@ -114,11 +114,15 @@ spec_names! {
 }
 
 spec_names! {
-    /// 커널이 명령을 바로 거절한 이유이다 (plan 18 K3, plan 19 Q3-6). 설명이 다음 행동을 알려 준다. 뒤의 다섯은 thread
-    /// 지정 프롬프트(`submit_prompt`)를 준비 전에 거절한 이유이고 `ThreadPromptRejection` 과 같은 값이다.
+    /*
+     * 이유 코드이다 (plan 18 K4-3, 설계 §3.3). 커널이 명령을 바로 거절한 이유(명령 답의 `rejection`, 기록
+     * `command_rejected`), thread 지정 프롬프트를 준비 전에 거절한 이유(기록 `thread_prompt_rejected`), 그 프롬프트가
+     * 턴 없이 멈춘 이유(`prompt_submission` 이벤트)가 모두 이 목록 하나에서 온다. 전송되는 글자는 이전의 세 enum 과
+     * 같다. 다음 행동(`next`)은 전송 표가 붙인다 (`kernel_protocol`).
+     */
     #[derive(Serialize, Deserialize, JsonSchema)]
     #[serde(rename_all = "snake_case")]
-    pub enum CommandRejectionReason {
+    pub enum ReasonCode {
         SteerInFlight => "steer_in_flight",
             "Another steer for the same turn is still in flight. Send again with a new idempotency key after it ends.";
         NoMatchingTurn => "no_matching_turn",
@@ -137,6 +141,26 @@ spec_names! {
             "Parallel mode is on. The kernel starts no thread prompt until it is off.";
         ParallelModeUnknown => "parallel_mode_unknown",
             "The kernel does not know the parallel mode yet. Send again with a new idempotency key shortly.";
+        ParallelModeStarted => "parallel_mode_started",
+            "Parallel mode started while the prompt was prepared. The planning task stays queued and parallel slots take it. Do not send the prompt again.";
+        TurnStartedDuringPreparation => "turn_started_during_preparation",
+            "Another turn started while the prompt was prepared. The planning task stays queued and the kernel submits the prompt once when it is idle. Do not send the prompt again.";
+        StopPending => "stop_pending",
+            "A stop request is still settling. The planning task stays queued and the kernel submits the prompt once when it is idle. Do not send the prompt again.";
+        Unavailable => "unavailable",
+            "The thread cannot take a prompt now. The planning task stays queued and the kernel submits the prompt once when it is idle. Do not send the prompt again.";
+        Cancelled => "cancelled",
+            "The prompt preparation was cancelled. No planning task was made.";
+        TextMismatch => "text_mismatch",
+            "The prepared prompt does not match the sent text. No planning task was made.";
+        BootstrapReviewRequired => "bootstrap_review_required",
+            "A person must review the planning draft first. `message` names the draft. No planning task was made.";
+        PlanningRefused => "planning_refused",
+            "Planning did not take the prompt. `message` gives the cause. No planning task was made.";
+        TaskFinished => "task_finished",
+            "The kernel dropped the queued prompt because its planning task is already done or cancelled.";
+        RejectedAgain => "rejected_again",
+            "The kernel sent the queued prompt once more and the thread rejected it again. The kernel does not send it again. The planning task stays queued.";
     }
 }
 
@@ -147,14 +171,14 @@ pub struct CommandSpec {
     pub effect: CommandEffect,
     pub idempotency: CommandIdempotency,
     /// 커널이 이 명령을 바로 거절할 때 낼 수 있는 이유이다.
-    pub rejections: &'static [CommandRejectionReason],
+    pub rejections: &'static [ReasonCode],
 }
 
 impl KernelCommandKind {
     pub const fn spec(self) -> CommandSpec {
         use CommandEffect::{Destructive, Read, Write};
         use CommandIdempotency::{Keyed, Natural};
-        use CommandRejectionReason as Reason;
+        use ReasonCode as Reason;
         let (scope, effect, idempotency, rejections): (_, _, _, &'static [Reason]) = match self {
             Self::LoadSessions => (CommandScope::Session, Read, Natural, &[]),
             Self::RenameSession => (CommandScope::Session, Write, Natural, &[]),
@@ -270,15 +294,54 @@ mod tests {
     }
 
     #[test]
-    fn every_reason_belongs_to_a_command() {
-        for reason in CommandRejectionReason::ALL {
-            assert!(
-                KernelCommandKind::ALL
-                    .iter()
-                    .any(|kind| kind.spec().rejections.contains(reason)),
-                "{} is not a rejection of any command",
+    fn reason_codes_keep_the_text_of_the_three_old_lists() {
+        // plan 18 K4-3: one list replaced `ReasonCode`, `ReasonCode`, and
+        // `PromptSubmissionReason`. Records and v0 clients read the same text, and serde must agree with the table.
+        let names = ReasonCode::ALL
+            .iter()
+            .map(|reason| reason.name())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            [
+                "steer_in_flight",
+                "no_matching_turn",
+                "decision_in_flight",
+                "no_matching_approval",
+                "busy",
+                "preparation_active",
+                "unknown_thread",
+                "parallel_mode",
+                "parallel_mode_unknown",
+                "parallel_mode_started",
+                "turn_started_during_preparation",
+                "stop_pending",
+                "unavailable",
+                "cancelled",
+                "text_mismatch",
+                "bootstrap_review_required",
+                "planning_refused",
+                "task_finished",
+                "rejected_again",
+            ]
+        );
+        for reason in ReasonCode::ALL {
+            assert_eq!(
+                serde_json::to_value(reason).expect("a reason should serialize"),
                 reason.name()
             );
         }
+    }
+
+    #[test]
+    fn the_command_rejections_are_the_first_nine_reasons() {
+        // The other reasons belong to `prompt_submission` events after the command was accepted.
+        let mut rejections = KernelCommandKind::ALL
+            .iter()
+            .flat_map(|kind| kind.spec().rejections.iter().copied())
+            .collect::<Vec<_>>();
+        rejections.sort_by_key(|reason| ReasonCode::ALL.iter().position(|known| known == reason));
+        rejections.dedup();
+        assert_eq!(rejections, ReasonCode::ALL[..9]);
     }
 }

@@ -353,9 +353,9 @@ impl AppEvent {
     }
 
     /// 이 이벤트가 명령을 바로 거절한 것이면 그 이유이다 (plan 18 K3, plan 19 Q3-6). 커널이 영수증과 기록에 쓴다.
-    pub fn command_rejection(&self) -> Option<crate::domain::kernel_event::CommandRejectionReason> {
-        use super::{ApprovalDecisionAdmission, ThreadPromptAdmission};
-        use crate::domain::kernel_event::CommandRejectionReason as Reason;
+    pub fn command_rejection(&self) -> Option<crate::domain::kernel_event::ReasonCode> {
+        use super::ApprovalDecisionAdmission;
+        use crate::domain::kernel_event::ReasonCode as Reason;
         match self {
             Self::TurnSteerAdmissionResolved(TurnSteerAdmission::RejectedActive { .. }) => {
                 Some(Reason::SteerInFlight)
@@ -370,18 +370,7 @@ impl AppEvent {
                 ApprovalDecisionAdmission::RejectedUnavailable,
             ) => Some(Reason::NoMatchingApproval),
             // thread 지정 프롬프트는 준비 전에 같은 dispatch 에서 거절될 수 있다. 준비 뒤의 결과는 나중에 온다.
-            Self::ThreadPromptAdmissionResolved { admission, .. } => match admission {
-                ThreadPromptAdmission::Accepted { .. } => None,
-                ThreadPromptAdmission::RejectedBusy => Some(Reason::Busy),
-                ThreadPromptAdmission::RejectedPreparationActive { .. } => {
-                    Some(Reason::PreparationActive)
-                }
-                ThreadPromptAdmission::RejectedUnknownThread => Some(Reason::UnknownThread),
-                ThreadPromptAdmission::RejectedParallelMode => Some(Reason::ParallelMode),
-                ThreadPromptAdmission::RejectedParallelModeUnknown => {
-                    Some(Reason::ParallelModeUnknown)
-                }
-            },
+            Self::ThreadPromptAdmissionResolved { admission, .. } => admission.rejection(),
             _ => None,
         }
     }

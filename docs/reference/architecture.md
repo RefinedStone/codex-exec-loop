@@ -162,9 +162,11 @@ took the slot, Core starts no turn and reports the queued planning task id so a 
 resend the prompt. When another turn (or a pending stop) refused the submission, Core keeps the
 prepared prompt in memory. The host's post-turn reconcile offers `ResubmitQueuedThreadPrompt` once
 every session is idle and no preparation runs, so auto-follow continues first. Core then submits the
-prompt once and reports `submitted` (or `queued` again if that also fails). It submits nothing when
-parallel mode started (the slots take the task) or when the planning projection shows the task done
-or cancelled. The queued prompt counts as remaining work. Core also keeps kernel records
+prompt once and reports `submitted`, or `dropped` with `rejected_again` if that also fails (it does
+not keep the prompt again). It submits nothing when parallel mode started (the slots take the task,
+reported as `queued` with `parallel_mode_started`) or when the planning projection shows the task
+done or cancelled (reported as `dropped` with `task_finished`). The queued prompt counts as remaining
+work. Core also keeps kernel records
 (`KernelEvent`) in a buffer apart from the client events: the queue and its settlement, every
 accepted turn submission (taken from the `SubmitTurn` effect, auto-follow included), turn start and
 end (the difference between two thread activity summaries, so background threads count), the
@@ -186,9 +188,12 @@ a summary of at most 200 characters; never the command, patch, or paths) and `ap
 attaches its log, it closes every approval the previous kernel left open as `lost`, because that
 request belonged to the previous kernel's app-server connection. `akra/kernel/describe` answers with the
 kernel spec. Names and meaning are written once in `spec_names!` tables: command kinds with their
-scope, effect, idempotency, and rejections, record kinds, and rejection reasons in
-`domain::kernel_spec` and `domain::kernel_event`; methods, queries, events, and error codes in the
-inbound adapter `kernel_protocol`. Shapes are JSON Schema derived from the serde wire types with
+scope, effect, idempotency, and rejections, record kinds, and the one reason list `ReasonCode` in
+`domain::kernel_spec`; methods, queries, events, and error codes in the inbound adapter
+`kernel_protocol`. Core turns a thread prompt admission into a reason once
+(`ThreadPromptAdmission::rejection`); the receipt, the record, and the event use that value. The
+next steps of each reason and error (`next`) are an exhaustive match in `kernel_protocol::next`,
+because the steps name queries and events of the adapter. Shapes are JSON Schema derived from the serde wire types with
 `schemars`; code comments are removed from the schemas. The exported value is
 `schema/akra-kernel-spec.json`, and a test fails when the file differs from the code
 (`scripts/refresh_akra_kernel_spec.sh` rewrites it). Client commands are records as well: before the runtime runs a command

@@ -14,9 +14,10 @@ use serde_json::{Map, Value};
 use super::{
     AttachRequest, AttachResponse, CommandRequest, CommandResponse, EventNotification,
     KernelCommand, KernelErrorKind, KernelEvent, KernelEventKind, KernelMethodKind, KernelQuery,
-    KernelQueryAnswer, KernelQueryKind, PROTOCOL_VERSION, QueryRequest,
+    KernelQueryAnswer, KernelQueryKind, NextStep, PROTOCOL_VERSION, QueryRequest, error_next,
+    reason_next,
 };
-use crate::domain::kernel_event::{CommandRejectionReason, KernelEvent as KernelRecord};
+use crate::domain::kernel_event::{KernelEvent as KernelRecord, ReasonCode};
 use crate::domain::kernel_spec::{
     CommandEffect, CommandIdempotency, CommandScope, KernelCommandKind, KernelRecordKind,
 };
@@ -41,7 +42,7 @@ pub struct KernelSpec {
     pub queries: Vec<QueryEntry>,
     pub events: Vec<EventEntry>,
     pub records: Vec<RecordEntry>,
-    pub reasons: Vec<ReasonEntry>,
+    pub reasons: Vec<ReasonCodeEntry>,
     pub errors: Vec<ErrorEntry>,
     /// 스키마가 `#/$defs/<이름>` 으로 가리키는 타입이다.
     #[serde(rename = "$defs")]
@@ -117,11 +118,19 @@ pub struct RecordEntry {
     pub payload: Value,
 }
 
-/// 이름과 뜻이다. 이유 코드와 `terms` 의 값이 이 모양이다.
+/// 이름과 뜻이다. `terms` 의 값이 이 모양이다.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ReasonEntry {
     pub name: &'static str,
     pub summary: &'static str,
+}
+
+/// 이유 코드 하나이다 (plan 18 K4-3). `next` 는 그 이유 뒤에 클라이언트가 차례대로 할 단계이다.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ReasonCodeEntry {
+    pub name: &'static str,
+    pub summary: &'static str,
+    pub next: Vec<NextStep>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -130,6 +139,7 @@ pub struct ErrorEntry {
     /// JSON-RPC 오류 코드이다.
     pub code: i64,
     pub summary: &'static str,
+    pub next: Vec<NextStep>,
 }
 
 /// `akra/kernel/describe` 의 답이다.
@@ -236,11 +246,12 @@ pub fn describe() -> KernelSpec {
                 payload: schema_named(&records, kind.name()),
             })
             .collect(),
-        reasons: CommandRejectionReason::ALL
+        reasons: ReasonCode::ALL
             .iter()
-            .map(|reason| ReasonEntry {
+            .map(|&reason| ReasonCodeEntry {
                 name: reason.name(),
                 summary: reason.summary(),
+                next: reason_next(reason),
             })
             .collect(),
         errors: KernelErrorKind::ALL
@@ -249,6 +260,7 @@ pub fn describe() -> KernelSpec {
                 name: error.name(),
                 code: error.code(),
                 summary: error.summary(),
+                next: error_next(*error),
             })
             .collect(),
         definitions: schemas.into_definitions(),

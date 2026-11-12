@@ -262,14 +262,18 @@ fn a_command_response_carries_the_operation_receipt() {
     );
     let replayed = CommandResponse::replayed(OperationReceipt {
         op_id: 41,
-        rejection: Some(CommandRejectionReason::NoMatchingTurn),
+        rejection: Some(ReasonCode::NoMatchingTurn),
         replayed: true,
     });
     assert_eq!(
         serde_json::to_value(replayed).expect("response should serialize"),
         json!({
             "processed": true,
-            "rejection": { "reason": "no_matching_turn", "message": CommandRejectionReason::NoMatchingTurn.summary() },
+            "rejection": {
+                "reason": "no_matching_turn",
+                "message": ReasonCode::NoMatchingTurn.summary(),
+                "next": [{ "step": "query", "name": "thread_activity" }],
+            },
             "operation": {
                 "op_id": 41,
                 "state": "rejected",
@@ -303,7 +307,7 @@ fn a_prompt_refused_before_preparation_is_a_rejected_command() {
     }]))
     .with_operation(Some(crate::domain::kernel_event::OperationReceipt {
         op_id: 5,
-        rejection: Some(CommandRejectionReason::Busy),
+        rejection: Some(ReasonCode::Busy),
         replayed: false,
     }));
     let json = serde_json::to_value(refused).expect("response should serialize");
@@ -353,6 +357,7 @@ fn only_coarse_core_events_are_exported() {
             message: None,
         }))
     );
+    // plan 18 K4-3: the reason, its sentence, and its next steps all come from the reason table.
     assert_eq!(
         KernelEvent::from_core(&AppEvent::ThreadPromptAdmissionResolved {
             thread_id: "thread-2".to_string(),
@@ -361,25 +366,15 @@ fn only_coarse_core_events_are_exported() {
         Some(KernelEvent::PromptSubmission(PromptSubmissionState {
             thread_id: "thread-2".to_string(),
             status: PromptSubmissionStatus::Rejected,
-            reason: Some(PromptSubmissionReason::UnknownThread),
+            reason: Some(ReasonCode::UnknownThread),
+            next: vec![
+                NextStep::Command {
+                    name: "load_sessions".to_string()
+                },
+                NextStep::Resend,
+            ],
             task_id: None,
-            message: Some("unknown thread; load_sessions lists the known threads".to_string()),
-        }))
-    );
-    assert_eq!(
-        KernelEvent::from_core(&AppEvent::ThreadPromptAdmissionResolved {
-            thread_id: "thread-2".to_string(),
-            admission: ThreadPromptAdmission::RejectedParallelMode,
-        }),
-        Some(KernelEvent::PromptSubmission(PromptSubmissionState {
-            thread_id: "thread-2".to_string(),
-            status: PromptSubmissionStatus::Rejected,
-            reason: Some(PromptSubmissionReason::ParallelMode),
-            task_id: None,
-            message: Some(
-                "parallel mode is on; the kernel starts no thread prompt until it is off"
-                    .to_string()
-            ),
+            message: Some(ReasonCode::UnknownThread.summary().to_string()),
         }))
     );
     assert_eq!(
@@ -394,7 +389,8 @@ fn only_coarse_core_events_are_exported() {
         Some(KernelEvent::PromptSubmission(PromptSubmissionState {
             thread_id: "thread-2".to_string(),
             status: PromptSubmissionStatus::Failed,
-            reason: Some(PromptSubmissionReason::PlanningRefused),
+            reason: Some(ReasonCode::PlanningRefused),
+            next: vec![NextStep::AskUser],
             task_id: None,
             message: Some("planning is invalid".to_string()),
         }))
@@ -411,41 +407,66 @@ fn only_coarse_core_events_are_exported() {
         Some(KernelEvent::PromptSubmission(PromptSubmissionState {
             thread_id: "thread-2".to_string(),
             status: PromptSubmissionStatus::Queued,
-            reason: Some(PromptSubmissionReason::Unavailable),
+            reason: Some(ReasonCode::Unavailable),
+            next: vec![NextStep::WaitFor {
+                event: "prompt_submission".to_string()
+            }],
             task_id: Some("task-7".to_string()),
-            message: Some(
-                "the thread cannot take a prompt now; planning task task-7 stays queued, \
-                 do not resend the prompt"
-                    .to_string()
-            ),
+            message: Some(ReasonCode::Unavailable.summary().to_string()),
         }))
     );
+    let status_and_reason = |event: &AppEvent| {
+        KernelEvent::from_core(event).and_then(|event| match event {
+            KernelEvent::PromptSubmission(state) => Some((state.status, state.reason)),
+            _ => None,
+        })
+    };
     assert_eq!(
-        KernelEvent::from_core(&AppEvent::ThreadPromptSubmitted {
+        status_and_reason(&AppEvent::ThreadPromptSubmitted {
             thread_id: "thread-2".to_string(),
             outcome: ThreadPromptOutcome::ParallelModeStarted {
                 task_id: "task-7".to_string(),
             },
-        })
-        .and_then(|event| match event {
-            KernelEvent::PromptSubmission(state) => Some((state.status, state.reason)),
-            _ => None,
         }),
         Some((
             PromptSubmissionStatus::Queued,
-            Some(PromptSubmissionReason::ParallelModeStarted)
+            Some(ReasonCode::ParallelModeStarted)
         ))
     );
     assert_eq!(
-        KernelEvent::from_core(&AppEvent::ThreadPromptAdmissionResolved {
+        status_and_reason(&AppEvent::ThreadPromptAdmissionResolved {
             thread_id: "thread-2".to_string(),
             admission: ThreadPromptAdmission::RejectedParallelModeUnknown,
-        })
-        .and_then(|event| match event {
-            KernelEvent::PromptSubmission(state) => state.reason,
-            _ => None,
         }),
-        Some(PromptSubmissionReason::ParallelModeUnknown)
+        Some((
+            PromptSubmissionStatus::Rejected,
+            Some(ReasonCode::ParallelModeUnknown)
+        ))
+    );
+    // plan 18 K4-3: a queued prompt that the kernel drops is no longer silent.
+    assert_eq!(
+        status_and_reason(&AppEvent::ThreadPromptSubmitted {
+            thread_id: "thread-2".to_string(),
+            outcome: ThreadPromptOutcome::QueuedTaskFinished {
+                task_id: "task-7".to_string(),
+            },
+        }),
+        Some((
+            PromptSubmissionStatus::Dropped,
+            Some(ReasonCode::TaskFinished)
+        ))
+    );
+    assert_eq!(
+        status_and_reason(&AppEvent::ThreadPromptSubmitted {
+            thread_id: "thread-2".to_string(),
+            outcome: ThreadPromptOutcome::QueuedRejectedAgain {
+                task_id: "task-7".to_string(),
+            },
+        }),
+        Some((
+            PromptSubmissionStatus::Dropped,
+            Some(ReasonCode::RejectedAgain)
+        ))
     );
     assert_eq!(
         KernelEvent::from_core(&AppEvent::ParallelModeSupervisorSnapshotInvalidated),
@@ -465,6 +486,7 @@ fn events_and_description_have_stable_wire_shapes() {
             thread_id: "thread-1".to_string(),
             status: PromptSubmissionStatus::Preparing,
             reason: None,
+            next: Vec::new(),
             task_id: None,
             message: None,
         }))
@@ -539,6 +561,7 @@ fn events_and_description_have_stable_wire_shapes() {
             thread_id: "thread-1".to_string(),
             status: PromptSubmissionStatus::Submitted,
             reason: None,
+            next: Vec::new(),
             task_id: None,
             message: None,
         }),
@@ -577,7 +600,7 @@ fn command_response_names_why_the_kernel_refused_a_command() {
     )]));
     assert_eq!(
         refused.rejection.map(|rejection| rejection.reason),
-        Some(CommandRejectionReason::NoMatchingTurn)
+        Some(ReasonCode::NoMatchingTurn)
     );
     let refused = CommandResponse::from_core(Some(&[AppEvent::ApprovalDecisionAdmissionResolved(
         crate::core::app::ApprovalDecisionAdmission::RejectedUnavailable,
@@ -588,7 +611,8 @@ fn command_response_names_why_the_kernel_refused_a_command() {
             "processed": true,
             "rejection": {
                 "reason": "no_matching_approval",
-                "message": CommandRejectionReason::NoMatchingApproval.summary()
+                "message": ReasonCode::NoMatchingApproval.summary(),
+                "next": [{ "step": "query", "name": "thread_activity" }],
             }
         })
     );
@@ -1004,7 +1028,7 @@ fn the_spec_tables_and_the_wire_types_name_the_same_things() {
 #[test]
 fn reason_and_error_names_are_the_wire_values() {
     let spec = spec_json();
-    for reason in CommandRejectionReason::ALL {
+    for reason in ReasonCode::ALL {
         assert_eq!(
             serde_json::to_value(reason).expect("a reason should serialize"),
             json!(reason.name()),
@@ -1013,7 +1037,7 @@ fn reason_and_error_names_are_the_wire_values() {
     }
     assert_eq!(
         names_of(&spec["reasons"]),
-        spec["$defs"]["CommandRejectionReason"]["enum"]
+        spec["$defs"]["ReasonCode"]["enum"]
             .as_array()
             .expect("the reason enum")
             .iter()
@@ -1039,6 +1063,111 @@ fn reason_and_error_names_are_the_wire_values() {
             -32602, -32601, -32010, -32011, -32012, -32013, -32014, -32015
         ]
     );
+}
+
+#[test]
+fn every_reason_and_error_tells_the_next_steps_by_name() {
+    // plan 18 K4-3: `next` is data. Each step names an event, query, or command of the spec.
+    let spec = spec_json();
+    let names = |section: &str| names_of(&spec[section]);
+    let (events, queries, commands) = (names("events"), names("queries"), names("commands"));
+    for entry in spec["reasons"]
+        .as_array()
+        .expect("reasons")
+        .iter()
+        .chain(spec["errors"].as_array().expect("errors"))
+    {
+        let steps = entry["next"].as_array().expect("every entry has `next`");
+        assert!(!steps.is_empty(), "{} has no next step", entry["name"]);
+        for step in steps {
+            let named = |field: &str| step[field].as_str().expect("a named step").to_string();
+            match step["step"].as_str().expect("a step kind") {
+                "wait_for" => assert!(events.contains(&named("event")), "{step}"),
+                "query" => assert!(queries.contains(&named("name")), "{step}"),
+                "command" => assert!(commands.contains(&named("name")), "{step}"),
+                "wait" => assert!(step["milliseconds"].as_u64().is_some(), "{step}"),
+                "resend" | "ask_user" | "stop" => {}
+                other => panic!("unknown step {other}"),
+            }
+        }
+    }
+    assert_eq!(
+        serde_json::to_value(reason_next(ReasonCode::Busy)).expect("steps should serialize"),
+        json!([{ "step": "wait_for", "event": "thread_activity" }, { "step": "resend" }])
+    );
+    assert_eq!(
+        serde_json::to_value(reason_next(ReasonCode::SteerInFlight))
+            .expect("steps should serialize"),
+        json!([{ "step": "wait", "milliseconds": 1000 }, { "step": "resend" }])
+    );
+}
+
+#[test]
+fn every_reason_reaches_a_client() {
+    // A reason is either an immediate command rejection or a `prompt_submission` reason. None is dead.
+    let mut reached = KernelCommandKind::ALL
+        .iter()
+        .flat_map(|kind| kind.spec().rejections.iter().copied())
+        .collect::<Vec<_>>();
+    let task_id = "task-1".to_string();
+    let outcomes = [
+        TurnSubmissionAdmission::RejectedActive {
+            active_correlation: crate::core::app::TurnSubmissionCorrelation::new(1),
+        },
+        TurnSubmissionAdmission::RejectedStopPending {
+            stop_correlation: crate::core::app::StopRequestCorrelation::new(1, None),
+        },
+        TurnSubmissionAdmission::RejectedUnavailable,
+    ]
+    .into_iter()
+    .map(|admission| ThreadPromptOutcome::Submitted {
+        admission,
+        task_id: task_id.clone(),
+    })
+    .chain([
+        ThreadPromptOutcome::ParallelModeStarted {
+            task_id: task_id.clone(),
+        },
+        ThreadPromptOutcome::QueuedTaskFinished {
+            task_id: task_id.clone(),
+        },
+        ThreadPromptOutcome::QueuedRejectedAgain {
+            task_id: task_id.clone(),
+        },
+    ])
+    .chain(
+        [
+            ThreadPromptPreparationFailure::Cancelled,
+            ThreadPromptPreparationFailure::TextMismatch,
+            ThreadPromptPreparationFailure::BootstrapReviewRequired {
+                draft_name: "draft".to_string(),
+            },
+            ThreadPromptPreparationFailure::PlanningRefused {
+                reason: "invalid".to_string(),
+            },
+        ]
+        .map(ThreadPromptOutcome::PreparationFailed),
+    );
+    for outcome in outcomes {
+        let event = KernelEvent::from_core(&AppEvent::ThreadPromptSubmitted {
+            thread_id: "thread-1".to_string(),
+            outcome,
+        });
+        if let Some(KernelEvent::PromptSubmission(state)) = event {
+            assert_eq!(
+                state.next,
+                state.reason.map(reason_next).unwrap_or_default()
+            );
+            reached.extend(state.reason);
+        }
+    }
+    for reason in ReasonCode::ALL {
+        assert!(
+            reached.contains(reason),
+            "{} reaches no client",
+            reason.name()
+        );
+    }
 }
 
 #[test]
@@ -1538,8 +1667,8 @@ fn a_destructive_command_needs_confirm_in_the_schema_and_in_the_code() {
 fn sample_records() -> Vec<crate::domain::kernel_event::KernelEvent> {
     use crate::domain::kernel_event::{
         ApprovalRequestKind, ApprovalResolution, KernelEvent as Record, PendingApproval,
-        PostTurnRoute, QueuedThreadPrompt, ThreadPromptRejection, ThreadPromptSettlement,
-        TurnEndOutcome, TurnOrigin,
+        PostTurnRoute, QueuedThreadPrompt, ReasonCode, ThreadPromptSettlement, TurnEndOutcome,
+        TurnOrigin,
     };
     let queued = QueuedThreadPrompt {
         thread_id: "thread-1".to_string(),
@@ -1563,7 +1692,7 @@ fn sample_records() -> Vec<crate::domain::kernel_event::KernelEvent> {
         Record::ThreadPromptQueued(queued),
         Record::ThreadPromptRejected {
             thread_id: "thread-1".to_string(),
-            reason: ThreadPromptRejection::ParallelMode,
+            reason: ReasonCode::ParallelMode,
         },
         Record::TurnSubmitted {
             thread_id: String::new(),
@@ -1601,7 +1730,7 @@ fn sample_records() -> Vec<crate::domain::kernel_event::KernelEvent> {
         Record::CommandRejected {
             op_id: 7,
             thread_id: "thread-1".to_string(),
-            reason: CommandRejectionReason::Busy,
+            reason: ReasonCode::Busy,
         },
     ]
 }
@@ -1685,7 +1814,8 @@ fn real_wire_values_match_the_schemas_of_the_spec() {
         KernelEvent::PromptSubmission(PromptSubmissionState {
             thread_id: "thread-1".to_string(),
             status: PromptSubmissionStatus::Queued,
-            reason: Some(PromptSubmissionReason::TurnStartedDuringPreparation),
+            reason: Some(ReasonCode::TurnStartedDuringPreparation),
+            next: reason_next(ReasonCode::TurnStartedDuringPreparation),
             task_id: Some("task-1".to_string()),
             message: Some("another turn started".to_string()),
         }),
@@ -1798,7 +1928,7 @@ fn real_wire_values_match_the_schemas_of_the_spec() {
         json!({ "client_id": "1", "protocol_version": 1, "kernel": "repository" }),
     );
     // 명령의 답: 받아들인 영수증과, 영수증이 있는 거절.
-    for rejection in [None, Some(CommandRejectionReason::Busy)] {
+    for rejection in [None, Some(ReasonCode::Busy)] {
         let answer = CommandResponse::from_core(Some(&[])).with_operation(Some(
             crate::domain::kernel_event::OperationReceipt {
                 op_id: 5,

@@ -2,7 +2,7 @@
 
 ## 문서 상태
 
-- 상태: **구현 중**. K4-1 과 K4-2 를 구현했다 (2026-11-12, §8). 나머지 조각은 제안이다. 현재 제품 동작의 기준은
+- 상태: **구현 중**. K4-1, K4-2, K4-3 을 구현했다 (2026-11-12, §8). 나머지 조각은 제안이다. 현재 제품 동작의 기준은
   `docs/reference/` 이다. 2026-11-12 에 리뷰 세 개(독립 리뷰, 표준
   축, 스펙 축)를 받아 고쳤다 (§7). 같은 날 사용자가 §6 의 질문을 작업자의 판단에 맡겼고, 기본값으로 정했다.
 - 상위 계획: [18 Akra 커널 아키텍처](18-akra-kernel-architecture.md) §4.3, §4.4, §5.5, §5.6, §6 K4. 결정 KP-04,
@@ -173,6 +173,7 @@ Error  { name, code, summary, next[] }
 | `next` 의 단계 | 뜻 |
 | --- | --- |
 | `wait_for { event }` | 그 이름의 이벤트가 다음에 올 때까지 기다린다. 조건은 없다. 온 뒤에 다음 단계를 한다 |
+| `wait { milliseconds }` | 그만큼 기다린다. 그 일의 끝을 알리는 이벤트가 없을 때만 쓴다 (K4-3 에서 더했다, §8) |
 | `query { name }` | 그 조회로 지금 값을 읽는다 |
 | `command { name }` | 그 명령을 보낸다 |
 | `resend` | 같은 명령을 새 멱등 키로 다시 보낸다 |
@@ -329,7 +330,7 @@ Q3-6 의 영수증은 받아들임과 바로 거절까지만 알린다. 끝은 �
 | --- | --- | --- | --- |
 | K4-1 (완료 2026-11-12, §8) | 스펙 뼈대. `schemars` 확인, `KernelCommandKind` 와 domain 의 표, adapter 의 표와 스키마, 조회의 답 타입을 이벤트에서 나눈다, `describe` 가 `KernelSpec` 을 답한다, `schema/akra-kernel-spec.json`, 프로토콜 판 1, 이름 규칙. 손으로 적은 이름 목록을 지운다 | 유지 (명령·조회·이벤트의 전송 모양은 같다. `describe` 의 답만 바뀐다) | 스펙 파일 시험, 빠짐 없음 시험, 스키마와 전송 모양 시험 |
 | K4-2 (완료 2026-11-12, §8) | 병렬 상태 값을 타입으로 바꾼다 | 유지 (전송되는 글자는 같다. 스펙이 값의 목록을 알린다) | 프로토콜 시험, domain 시험 |
-| K4-3 | 이유 코드를 하나로 합치고 `next` 를 답에 싣는다. 버린 프롬프트를 `prompt_submission` 으로 알린다 | 유지 (글자는 같다. `next` 는 더한 필드이다) | domain 시험, 프로토콜 시험, 시뮬레이션의 거절 완전성 불변식 |
+| K4-3 (완료 2026-11-12, §8) | 이유 코드를 하나로 합치고 `next` 를 답에 싣는다. 버린 프롬프트를 `prompt_submission` 으로 알린다 | 유지 (글자는 같다. `next` 는 더한 필드이다) | domain 시험, 프로토콜 시험, 시뮬레이션의 거절 완전성 불변식 |
 | K4-4 | 연산의 끝. 기록에 `op_id`, 완료 기록, 재시작 때 열린 턴의 `lost`, `operation` 조회 | 유지 (기록에 필드와 종류를 더한다) | core 시험, 시뮬레이션의 연산 끝 불변식 (재시작 seed 포함) |
 | K4-5 | 호출자 기록. 효과 등급과 전제 조건을 커널이 검사한다 | 바뀜 (보지 않는 thread 의 턴 제출을 거절한다. `destructive` 의 확인 규칙은 `reset_planning` 과 같다) | core 시험, 프로토콜 시험, 시뮬레이션 |
 | K4-6 | Desktop 타입을 스펙에서 만든다. `protocol.ts` 의 손 복사를 지운다 | 유지 | `npm run check`, vitest (생성 결과 시험), e2e |
@@ -489,3 +490,41 @@ Q3-6 의 영수증은 받아들임과 바로 거절까지만 알린다. 끝은 �
 
 확인: 프로토콜 시험(domain 의 모든 값에서 전송 글자가 이전과 같다, 스펙의 값 목록과 필드의 타입), domain 시험(lease
 상태와 전달 단계 열 개가 같은 이름의 상태가 된다), roster 를 읽는 화면의 시험(TUI, admin), 구조 시험, 스펙 파일 시험.
+
+### K4-3 (2026-11-12)
+
+만든 것:
+
+- 이유 코드가 domain 의 `ReasonCode` 하나이다 (19개). `CommandRejectionReason`, `ThreadPromptRejection`,
+  `PromptSubmissionReason` 을 지웠다. 전송되는 글자는 이전과 같다. domain 시험이 19개의 글자를 고정한다. 명령의
+  `rejections` 는 앞의 9개이고, 나머지는 `prompt_submission` 의 이유이다.
+- core 는 `ThreadPromptAdmission::rejection` 한 곳에서 이유 코드로 바꾼다. 영수증, 기록(`thread_prompt_rejected`),
+  `prompt_submission` 이벤트가 그 값을 쓴다.
+- `next` 가 데이터이다: 스펙의 `reasons[].next`, `errors[].next`, 명령 답의 `rejection.next`, `prompt_submission` 의
+  `next`. 값은 adapter `kernel_protocol::next` 의 빠짐없는 `match` 하나에서 온다. `prompt_submission` 의 `message` 도
+  이유의 `summary` 이다. `bootstrap_review_required` 와 `planning_refused` 만 초안 이름과 원인을 싣는다.
+- 큐에 남긴 프롬프트를 내지 않고 끝낼 때 클라이언트에 알린다. 상태 `dropped` 를 더했고, 이유는 기록의 값을 그대로
+  쓴다: `task_finished` (작업이 이미 끝났다), `rejected_again` (한 번 더 낸 것이 또 거절되었다).
+- 시뮬레이션의 I6 에 거절의 완전성을 더했다: `command_rejected` 의 이유는 같은 연산의 명령 스펙 `rejections` 에 있다.
+
+설계와 다른 점:
+
+- `next` 의 표는 domain 이 아니라 adapter 에 있다. 단계가 가리키는 조회와 이벤트의 이름은 adapter 의 표이고,
+  domain 은 adapter 를 쓰지 못한다. 커널은 `next` 를 읽지 않는다.
+- 단계 `wait { milliseconds }` 를 더했다. `steer_in_flight`, `decision_in_flight`, `parallel_mode_unknown` 은 그 일의
+  끝을 알리는 이벤트가 없다. 없는 이벤트를 기다리라고 할 수 없어서 1초를 기다리게 했다.
+- 상태 `dropped` 와 이유 `rejected_again` 은 설계에 없었다. 한 번 더 낸 프롬프트가 또 거절되면 이전에는 `queued` 로
+  알렸다. 커널은 그것을 다시 내지 않으므로 `queued` 의 `next` (`wait_for prompt_submission`)가 끝나지 않는다.
+- `ThreadPromptRejected` 기록의 `reason` 스키마가 5개에서 19개의 목록으로 넓어졌다. 이전 기록은 그대로 읽힌다.
+- 명령의 답과 `prompt_submission` 의 `message` 글이 바뀌었다 (판단에는 `reason` 을 쓴다). 프로토콜 판은 그대로 1 이다.
+  필드(`next`)와 값(`dropped`, 이유 10개)을 더한 것이다.
+
+확인: domain 시험(이유의 글자, 명령 거절의 범위), 프로토콜 시험(모든 이유와 오류의 `next` 가 스펙의 이름을 가리킨다,
+모든 이유가 클라이언트에 닿는다, 단계의 전송 모양, 이벤트와 답의 모양), core 시험(버린 프롬프트의 이벤트), 커널
+시뮬레이션 (300 seed), 스펙 파일 시험.
+
+남긴 것:
+
+- `rejected_again` 의 core 경로(다시 낸 프롬프트가 또 거절됨)는 core 시험이 없다. 프로토콜 시험이 이벤트 모양을 본다.
+- Desktop 은 `prompt_submission` 을 쓰지 않는다. `protocol.ts` 에 `dropped` 만 더했다. `next` 는 K4-6 의 생성 타입에서
+  온다.

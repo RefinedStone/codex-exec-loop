@@ -2,7 +2,7 @@
 //! core 타입 사이의 변환을 둔다. core 는 직렬화를 모르므로 변환은 이 inbound adapter 만 한다. 커널 호스트는
 //! `src/composition/kernel_host.rs` 이다. 전송(Gateway)은 K3-5 에서 붙인다.
 
-pub use crate::domain::kernel_event::CommandRejectionReason;
+pub use crate::domain::kernel_event::ReasonCode;
 use crate::domain::kernel_event::{
     KernelCommandDescriptor, KernelEventPage, OperationReceipt, RecordedKernelEvent,
 };
@@ -30,6 +30,10 @@ use crate::domain::recent_sessions::{SessionCatalog, SessionRenameRequest};
 
 #[cfg(test)]
 mod tests;
+
+mod next;
+use next::error_next;
+pub use next::{NextStep, reason_next};
 
 mod spec;
 pub use spec::{KernelSpec, describe};
@@ -356,9 +360,11 @@ impl Operation {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct CommandRejection {
-    pub reason: CommandRejectionReason,
+    pub reason: ReasonCode,
     /// 사람이 읽는 설명이다. 판단에는 `reason` 을 쓴다.
     pub message: String,
+    /// 다음 행동이다 (plan 18 K4-3). 스펙의 그 이유의 `next` 와 같다.
+    pub next: Vec<NextStep>,
 }
 
 impl CommandResponse {
@@ -398,11 +404,12 @@ impl CommandResponse {
 }
 
 impl CommandRejection {
-    fn new(reason: CommandRejectionReason) -> Self {
-        // 설명은 이유의 표에서 온다. 스펙의 `reasons` 와 같은 글이다.
+    fn new(reason: ReasonCode) -> Self {
+        // 설명과 다음 행동은 이유의 표에서 온다. 스펙의 `reasons` 와 같은 값이다.
         Self {
             reason,
             message: reason.summary().to_string(),
+            next: reason_next(reason),
         }
     }
 }
@@ -900,10 +907,12 @@ impl ThreadActivity {
 pub struct PromptSubmissionState {
     pub thread_id: String,
     pub status: PromptSubmissionStatus,
-    /// `rejected`, `queued`, `failed` 의 이유 코드이다. 클라이언트와 에이전트는 이 값으로 다음 행동을 고른다
-    /// (plan 19 P3).
+    /// `rejected`, `queued`, `failed`, `dropped` 의 이유 코드이다. 뜻은 스펙의 `reasons` 에 있다 (plan 18 K4-3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<PromptSubmissionReason>,
+    pub reason: Option<ReasonCode>,
+    /// 그 이유 뒤의 다음 행동이다. 스펙의 그 이유의 `next` 와 같다. 이유가 없으면 비어 있고 보내지 않는다.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub next: Vec<NextStep>,
     /// 준비가 큐에 만들거나 고친 planning 작업이다. 이 값이 있으면 같은 프롬프트를 다시 보내지 않는다. 다시 보내면
     /// 작업이 하나 더 생긴다.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -926,134 +935,84 @@ pub enum PromptSubmissionStatus {
     Rejected,
     /// 준비가 턴을 만들지 못했다. planning 작업은 만들어지지 않았다.
     Failed,
-}
-
-/// 제출하지 못한 이유이다. 이름이 다음 행동을 알려 준다.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum PromptSubmissionReason {
-    /// 턴이 돌거나 그 thread 에 일이 남아 있다. `thread_activity` 가 비면 다시 보낸다.
-    Busy,
-    /// 다른 프롬프트를 준비하고 있다. 그 준비가 끝나면 다시 보낸다.
-    PreparationActive,
-    /// 커널이 모르는 thread 이다. `load_sessions` 로 목록을 읽는다.
-    UnknownThread,
-    /// 병렬 모드가 켜져 있다. 병렬 모드가 꺼질 때까지 커널은 thread 에 프롬프트를 내지 않는다.
-    ParallelMode,
-    /// 커널이 병렬 모드 값을 아직 모른다. 잠시 뒤 다시 보낸다.
-    ParallelModeUnknown,
-    /// 준비하는 사이에 병렬 모드가 켜졌다 (`queued`). 작업은 병렬 slot 이 맡는다.
-    ParallelModeStarted,
-    /// 준비하는 사이에 다른 턴이 시작했다 (`queued`). 작업은 큐에 남는다. 다시 보내지 않는다. 커널이 쉬면 한 번
-    /// 다시 내고 `submitted` 를 알린다 (plan 19 Q2-3).
-    TurnStartedDuringPreparation,
-    /// 정지 요청이 아직 끝나지 않았다 (`queued`). 커널이 쉬면 한 번 다시 낸다.
-    StopPending,
-    /// 그 thread 가 지금 프롬프트를 받을 수 없다 (`queued`). 커널이 쉬면 한 번 다시 낸다.
-    Unavailable,
-    /// 준비가 취소되었다.
-    Cancelled,
-    /// 준비 결과가 보낸 프롬프트와 맞지 않는다.
-    TextMismatch,
-    /// planning 초안을 사람이 검토해야 한다. 원격 클라이언트는 검토할 수 없다. `message` 가 초안 이름이다.
-    BootstrapReviewRequired,
-    /// planning 이 프롬프트를 받지 않았다. `message` 가 원인이다.
-    PlanningRefused,
+    /// 커널이 큐에 남긴 프롬프트를 내지 않고 끝냈다 (plan 18 K4-3). 이유는 `reason`, 작업은 `task_id` 이다.
+    Dropped,
 }
 
 impl PromptSubmissionState {
     fn admitted(thread_id: &str, admission: &ThreadPromptAdmission) -> Self {
-        let (reason, message) = match admission {
-            ThreadPromptAdmission::Accepted { .. } => {
-                return Self::progress(thread_id, PromptSubmissionStatus::Preparing);
-            }
-            ThreadPromptAdmission::RejectedBusy => (
-                PromptSubmissionReason::Busy,
-                "a turn is running or the thread is still busy",
-            ),
-            ThreadPromptAdmission::RejectedPreparationActive { .. } => (
-                PromptSubmissionReason::PreparationActive,
-                "another prompt is being prepared",
-            ),
-            ThreadPromptAdmission::RejectedUnknownThread => (
-                PromptSubmissionReason::UnknownThread,
-                "unknown thread; load_sessions lists the known threads",
-            ),
-            ThreadPromptAdmission::RejectedParallelMode => (
-                PromptSubmissionReason::ParallelMode,
-                "parallel mode is on; the kernel starts no thread prompt until it is off",
-            ),
-            ThreadPromptAdmission::RejectedParallelModeUnknown => (
-                PromptSubmissionReason::ParallelModeUnknown,
-                "the kernel does not know the parallel mode yet; try again",
-            ),
+        let Some(reason) = admission.rejection() else {
+            return Self::progress(thread_id, PromptSubmissionStatus::Preparing);
         };
-        Self::stopped(
-            thread_id,
-            PromptSubmissionStatus::Rejected,
-            reason,
-            None,
-            message.to_string(),
-        )
+        Self::stopped(thread_id, PromptSubmissionStatus::Rejected, reason, None)
     }
 
     fn from_outcome(thread_id: &str, outcome: &ThreadPromptOutcome) -> Self {
+        let task = |task_id: &String| Some(task_id.clone());
         match outcome {
             ThreadPromptOutcome::Submitted { admission, task_id } => {
-                let (reason, message) = match admission {
+                let reason = match admission {
                     TurnSubmissionAdmission::Accepted { .. } => {
                         return Self {
-                            task_id: Some(task_id.clone()),
+                            task_id: task(task_id),
                             ..Self::progress(thread_id, PromptSubmissionStatus::Submitted)
                         };
                     }
-                    TurnSubmissionAdmission::RejectedActive { .. } => (
-                        PromptSubmissionReason::TurnStartedDuringPreparation,
-                        "another turn started while the prompt was prepared",
-                    ),
-                    TurnSubmissionAdmission::RejectedStopPending { .. } => (
-                        PromptSubmissionReason::StopPending,
-                        "a stop request is still settling",
-                    ),
-                    TurnSubmissionAdmission::RejectedUnavailable => (
-                        PromptSubmissionReason::Unavailable,
-                        "the thread cannot take a prompt now",
-                    ),
-                };
-                Self::queued(thread_id, reason, task_id, message)
-            }
-            ThreadPromptOutcome::ParallelModeStarted { task_id } => Self::queued(
-                thread_id,
-                PromptSubmissionReason::ParallelModeStarted,
-                task_id,
-                "parallel mode started while the prompt was prepared",
-            ),
-            ThreadPromptOutcome::PreparationFailed(failure) => {
-                let (reason, message) = match failure {
-                    ThreadPromptPreparationFailure::Cancelled => (
-                        PromptSubmissionReason::Cancelled,
-                        "prompt preparation was cancelled".to_string(),
-                    ),
-                    ThreadPromptPreparationFailure::TextMismatch => (
-                        PromptSubmissionReason::TextMismatch,
-                        "prepared prompt does not match the submitted text".to_string(),
-                    ),
-                    ThreadPromptPreparationFailure::BootstrapReviewRequired { draft_name } => (
-                        PromptSubmissionReason::BootstrapReviewRequired,
-                        format!("planning bootstrap needs review / draft: {draft_name}"),
-                    ),
-                    ThreadPromptPreparationFailure::PlanningRefused { reason } => {
-                        (PromptSubmissionReason::PlanningRefused, reason.clone())
+                    TurnSubmissionAdmission::RejectedActive { .. } => {
+                        ReasonCode::TurnStartedDuringPreparation
                     }
+                    TurnSubmissionAdmission::RejectedStopPending { .. } => ReasonCode::StopPending,
+                    TurnSubmissionAdmission::RejectedUnavailable => ReasonCode::Unavailable,
                 };
                 Self::stopped(
                     thread_id,
-                    PromptSubmissionStatus::Failed,
+                    PromptSubmissionStatus::Queued,
                     reason,
-                    None,
-                    message,
+                    task(task_id),
                 )
             }
+            ThreadPromptOutcome::ParallelModeStarted { task_id } => Self::stopped(
+                thread_id,
+                PromptSubmissionStatus::Queued,
+                ReasonCode::ParallelModeStarted,
+                task(task_id),
+            ),
+            ThreadPromptOutcome::PreparationFailed(failure) => {
+                let (reason, detail) = match failure {
+                    ThreadPromptPreparationFailure::Cancelled => (ReasonCode::Cancelled, None),
+                    ThreadPromptPreparationFailure::TextMismatch => {
+                        (ReasonCode::TextMismatch, None)
+                    }
+                    ThreadPromptPreparationFailure::BootstrapReviewRequired { draft_name } => (
+                        ReasonCode::BootstrapReviewRequired,
+                        Some(format!(
+                            "planning bootstrap needs review / draft: {draft_name}"
+                        )),
+                    ),
+                    ThreadPromptPreparationFailure::PlanningRefused { reason } => {
+                        (ReasonCode::PlanningRefused, Some(reason.clone()))
+                    }
+                };
+                let mut state =
+                    Self::stopped(thread_id, PromptSubmissionStatus::Failed, reason, None);
+                // 이 두 이유는 설명 대신 초안 이름이나 원인을 싣는다. 사람이 그것을 보고 정한다.
+                if detail.is_some() {
+                    state.message = detail;
+                }
+                state
+            }
+            ThreadPromptOutcome::QueuedTaskFinished { task_id } => Self::stopped(
+                thread_id,
+                PromptSubmissionStatus::Dropped,
+                ReasonCode::TaskFinished,
+                task(task_id),
+            ),
+            ThreadPromptOutcome::QueuedRejectedAgain { task_id } => Self::stopped(
+                thread_id,
+                PromptSubmissionStatus::Dropped,
+                ReasonCode::RejectedAgain,
+                task(task_id),
+            ),
         }
     }
 
@@ -1062,39 +1021,26 @@ impl PromptSubmissionState {
             thread_id: thread_id.to_string(),
             status,
             reason: None,
+            next: Vec::new(),
             task_id: None,
             message: None,
         }
     }
 
-    fn queued(
-        thread_id: &str,
-        reason: PromptSubmissionReason,
-        task_id: &str,
-        situation: &str,
-    ) -> Self {
-        Self::stopped(
-            thread_id,
-            PromptSubmissionStatus::Queued,
-            reason,
-            Some(task_id.to_string()),
-            format!("{situation}; planning task {task_id} stays queued, do not resend the prompt"),
-        )
-    }
-
+    /// 이유가 있는 상태이다. 설명과 다음 행동은 이유의 표에서 온다.
     fn stopped(
         thread_id: &str,
         status: PromptSubmissionStatus,
-        reason: PromptSubmissionReason,
+        reason: ReasonCode,
         task_id: Option<String>,
-        message: String,
     ) -> Self {
         Self {
             thread_id: thread_id.to_string(),
             status,
             reason: Some(reason),
+            next: reason_next(reason),
             task_id,
-            message: Some(message),
+            message: Some(reason.summary().to_string()),
         }
     }
 }

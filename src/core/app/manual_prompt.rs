@@ -1,3 +1,4 @@
+use crate::domain::kernel_spec::ReasonCode;
 use crate::domain::planning::ManualPromptCorrelation;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,6 +51,20 @@ pub enum ThreadPromptAdmission {
     RejectedParallelModeUnknown,
 }
 
+impl ThreadPromptAdmission {
+    /// 거절이면 그 이유 코드이다 (plan 18 K4-3). 영수증, 기록, `prompt_submission` 이벤트가 모두 이 값을 쓴다.
+    pub fn rejection(&self) -> Option<ReasonCode> {
+        match self {
+            Self::Accepted { .. } => None,
+            Self::RejectedBusy => Some(ReasonCode::Busy),
+            Self::RejectedPreparationActive { .. } => Some(ReasonCode::PreparationActive),
+            Self::RejectedUnknownThread => Some(ReasonCode::UnknownThread),
+            Self::RejectedParallelMode => Some(ReasonCode::ParallelMode),
+            Self::RejectedParallelModeUnknown => Some(ReasonCode::ParallelModeUnknown),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ThreadPromptOutcome {
     // 준비가 끝나고 턴 제출을 시도했다. `task_id` 는 준비가 큐에 만들거나 고친 planning 작업이다. 제출이
@@ -64,6 +79,14 @@ pub enum ThreadPromptOutcome {
     },
     // 준비가 턴을 만들지 못했다. planning 작업은 만들어지지 않았다.
     PreparationFailed(ThreadPromptPreparationFailure),
+    // 큐에 남긴 프롬프트를 내지 않고 버렸다 (plan 19 Q2-3, plan 18 K4-3). planning 투영이 작업을 완료나 취소로 보인다.
+    QueuedTaskFinished {
+        task_id: String,
+    },
+    // 큐에 남긴 프롬프트를 한 번 더 냈지만 또 거절되었다. 다시 내지 않는다. 작업은 큐에 남는다.
+    QueuedRejectedAgain {
+        task_id: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
