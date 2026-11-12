@@ -1660,7 +1660,7 @@ impl CoreController {
             ),
         };
         let thread_id = submission.thread_id;
-        if let Some(reason) = thread_prompt_rejection(&admission) {
+        if let Some(reason) = admission.rejection() {
             self.conversation_turn
                 .record_kernel_event(KernelEvent::ThreadPromptRejected {
                     thread_id: thread_id.clone(),
@@ -1810,8 +1810,9 @@ impl CoreController {
         let admission = self
             .conversation_turn
             .admit_thread_turn_submission(&prompt.thread_id, &request);
-        let (effects, record) = match admission {
+        match admission {
             TurnSubmissionAdmission::Accepted { correlation } => (
+                super::ThreadPromptOutcome::Submitted { admission, task_id },
                 vec![CoreEffect::SubmitTurn {
                     correlation,
                     request: Box::new(request),
@@ -1824,20 +1825,21 @@ impl CoreController {
                 if queue_on_rejection {
                     let record = KernelEvent::ThreadPromptQueued(prompt.clone());
                     self.planning.queue_thread_prompt(prompt);
-                    (Vec::new(), Some(record))
-                } else {
                     (
+                        super::ThreadPromptOutcome::Submitted { admission, task_id },
+                        Vec::new(),
+                        Some(record),
+                    )
+                } else {
+                    // 다시 낸 프롬프트는 다시 남기지 않는다. 클라이언트에 "큐에 남음"이 아니라 버림을 알린다 (K4-3).
+                    (
+                        super::ThreadPromptOutcome::QueuedRejectedAgain { task_id },
                         Vec::new(),
                         Some(prompt.settled(ThreadPromptSettlement::RejectedAgain)),
                     )
                 }
             }
-        };
-        (
-            super::ThreadPromptOutcome::Submitted { admission, task_id },
-            effects,
-            record,
-        )
+        }
     }
 
     /*
@@ -1853,9 +1855,17 @@ impl CoreController {
             return self.unchanged_outcome();
         };
         if self.planning_task_is_finished(&prompt.task_id) {
-            self.conversation_turn
-                .record_kernel_event(prompt.settled(ThreadPromptSettlement::TaskFinished));
-            return self.unchanged_outcome();
+            // 버린 프롬프트를 클라이언트에도 알린다. 이전에는 기록에만 남았다 (plan 18 K4-3).
+            let record = prompt.settled(ThreadPromptSettlement::TaskFinished);
+            let outcome = super::ThreadPromptOutcome::QueuedTaskFinished {
+                task_id: prompt.task_id,
+            };
+            return self.thread_prompt_submitted_outcome(
+                prompt.thread_id,
+                outcome,
+                Vec::new(),
+                Some(record),
+            );
         }
         let thread_id = prompt.thread_id.clone();
         let (outcome, effects, record) = self.submit_thread_prompt_handoff(prompt, false);
@@ -2238,24 +2248,6 @@ fn post_turn_route(resolution: super::PostTurnRouteResolution) -> kernel_event::
         }
         super::PostTurnRouteResolution::NoContinuation => {
             kernel_event::PostTurnRoute::NoContinuation
-        }
-    }
-}
-
-fn thread_prompt_rejection(
-    admission: &super::ThreadPromptAdmission,
-) -> Option<kernel_event::ThreadPromptRejection> {
-    use kernel_event::ThreadPromptRejection as Rejection;
-    match admission {
-        super::ThreadPromptAdmission::Accepted { .. } => None,
-        super::ThreadPromptAdmission::RejectedBusy => Some(Rejection::Busy),
-        super::ThreadPromptAdmission::RejectedPreparationActive { .. } => {
-            Some(Rejection::PreparationActive)
-        }
-        super::ThreadPromptAdmission::RejectedUnknownThread => Some(Rejection::UnknownThread),
-        super::ThreadPromptAdmission::RejectedParallelMode => Some(Rejection::ParallelMode),
-        super::ThreadPromptAdmission::RejectedParallelModeUnknown => {
-            Some(Rejection::ParallelModeUnknown)
         }
     }
 }
@@ -10360,7 +10352,7 @@ mod tests {
     #[test]
     fn the_core_records_turn_lifecycle_route_and_prompt_rejection_decisions() {
         // plan 19 Q3-2: decisions go to the record buffer, not to the client events.
-        use kernel_event::{PostTurnRoute, ThreadPromptRejection, TurnOrigin};
+        use kernel_event::{PostTurnRoute, ReasonCode, TurnOrigin};
         let mut controller = hosted_controller(false);
         let turn = start_test_turn(&mut controller, "thread-1", "turn-1");
         assert_eq!(
@@ -10430,7 +10422,7 @@ mod tests {
             controller.take_kernel_records(),
             vec![KernelEvent::ThreadPromptRejected {
                 thread_id: "thread-9".to_string(),
-                reason: ThreadPromptRejection::UnknownThread,
+                reason: ReasonCode::UnknownThread,
             }]
         );
     }
@@ -10793,6 +10785,16 @@ mod tests {
         assert!(
             dropped.effects.is_empty(),
             "the finished task does not run again"
+        );
+        // plan 18 K4-3: the client learns that the prompt was dropped. Before, only the record knew.
+        assert_eq!(
+            dropped.events,
+            vec![AppEvent::ThreadPromptSubmitted {
+                thread_id: "thread-beta".to_string(),
+                outcome: super::super::ThreadPromptOutcome::QueuedTaskFinished {
+                    task_id: "task-1".to_string(),
+                },
+            }]
         );
         assert_eq!(
             settlement_of(&mut controller),

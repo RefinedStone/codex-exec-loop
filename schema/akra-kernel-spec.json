@@ -890,7 +890,7 @@
             "type": "string"
           },
           "reason": {
-            "$ref": "#/$defs/ThreadPromptRejection"
+            "$ref": "#/$defs/ReasonCode"
           },
           "thread_id": {
             "type": "string"
@@ -1118,7 +1118,7 @@
             "type": "integer"
           },
           "reason": {
-            "$ref": "#/$defs/CommandRejectionReason"
+            "$ref": "#/$defs/ReasonCode"
           },
           "thread_id": {
             "type": "string"
@@ -1137,81 +1137,287 @@
   "reasons": [
     {
       "name": "steer_in_flight",
-      "summary": "Another steer for the same turn is still in flight. Send again with a new idempotency key after it ends."
+      "summary": "Another steer for the same turn is still in flight. Send again with a new idempotency key after it ends.",
+      "next": [
+        {
+          "step": "wait",
+          "milliseconds": 1000
+        },
+        {
+          "step": "resend"
+        }
+      ]
     },
     {
       "name": "no_matching_turn",
-      "summary": "The thread has no running turn with `expected_turn_id`. Read `active_turn_id` from `thread_activity`."
+      "summary": "The thread has no running turn with `expected_turn_id`. Read `active_turn_id` from `thread_activity`.",
+      "next": [
+        {
+          "step": "query",
+          "name": "thread_activity"
+        }
+      ]
     },
     {
       "name": "decision_in_flight",
-      "summary": "A decision for the same approval is still in flight."
+      "summary": "A decision for the same approval is still in flight.",
+      "next": [
+        {
+          "step": "wait",
+          "milliseconds": 1000
+        },
+        {
+          "step": "query",
+          "name": "thread_activity"
+        }
+      ]
     },
     {
       "name": "no_matching_approval",
-      "summary": "No pending approval has that id. Read `approval` from `thread_activity`."
+      "summary": "No pending approval has that id. Read `approval` from `thread_activity`.",
+      "next": [
+        {
+          "step": "query",
+          "name": "thread_activity"
+        }
+      ]
     },
     {
       "name": "busy",
-      "summary": "A turn is running or the thread still has work. Send again with a new idempotency key when `thread_activity` is empty."
+      "summary": "A turn is running or the thread still has work. Send again with a new idempotency key when `thread_activity` is empty.",
+      "next": [
+        {
+          "step": "wait_for",
+          "event": "thread_activity"
+        },
+        {
+          "step": "resend"
+        }
+      ]
     },
     {
       "name": "preparation_active",
-      "summary": "Another prompt is being prepared. Send again with a new idempotency key after that preparation ends."
+      "summary": "Another prompt is being prepared. Send again with a new idempotency key after that preparation ends.",
+      "next": [
+        {
+          "step": "wait_for",
+          "event": "prompt_submission"
+        },
+        {
+          "step": "resend"
+        }
+      ]
     },
     {
       "name": "unknown_thread",
-      "summary": "The kernel does not know the thread. Send `load_sessions` first."
+      "summary": "The kernel does not know the thread. Send `load_sessions` first.",
+      "next": [
+        {
+          "step": "command",
+          "name": "load_sessions"
+        },
+        {
+          "step": "resend"
+        }
+      ]
     },
     {
       "name": "parallel_mode",
-      "summary": "Parallel mode is on. The kernel starts no thread prompt until it is off."
+      "summary": "Parallel mode is on. The kernel starts no thread prompt until it is off.",
+      "next": [
+        {
+          "step": "ask_user"
+        }
+      ]
     },
     {
       "name": "parallel_mode_unknown",
-      "summary": "The kernel does not know the parallel mode yet. Send again with a new idempotency key shortly."
+      "summary": "The kernel does not know the parallel mode yet. Send again with a new idempotency key shortly.",
+      "next": [
+        {
+          "step": "wait",
+          "milliseconds": 1000
+        },
+        {
+          "step": "resend"
+        }
+      ]
+    },
+    {
+      "name": "parallel_mode_started",
+      "summary": "Parallel mode started while the prompt was prepared. The planning task stays queued and parallel slots take it. Do not send the prompt again.",
+      "next": [
+        {
+          "step": "stop"
+        }
+      ]
+    },
+    {
+      "name": "turn_started_during_preparation",
+      "summary": "Another turn started while the prompt was prepared. The planning task stays queued and the kernel submits the prompt once when it is idle. Do not send the prompt again.",
+      "next": [
+        {
+          "step": "wait_for",
+          "event": "prompt_submission"
+        }
+      ]
+    },
+    {
+      "name": "stop_pending",
+      "summary": "A stop request is still settling. The planning task stays queued and the kernel submits the prompt once when it is idle. Do not send the prompt again.",
+      "next": [
+        {
+          "step": "wait_for",
+          "event": "prompt_submission"
+        }
+      ]
+    },
+    {
+      "name": "unavailable",
+      "summary": "The thread cannot take a prompt now. The planning task stays queued and the kernel submits the prompt once when it is idle. Do not send the prompt again.",
+      "next": [
+        {
+          "step": "wait_for",
+          "event": "prompt_submission"
+        }
+      ]
+    },
+    {
+      "name": "cancelled",
+      "summary": "The prompt preparation was cancelled. No planning task was made.",
+      "next": [
+        {
+          "step": "stop"
+        }
+      ]
+    },
+    {
+      "name": "text_mismatch",
+      "summary": "The prepared prompt does not match the sent text. No planning task was made.",
+      "next": [
+        {
+          "step": "stop"
+        }
+      ]
+    },
+    {
+      "name": "bootstrap_review_required",
+      "summary": "A person must review the planning draft first. `message` names the draft. No planning task was made.",
+      "next": [
+        {
+          "step": "ask_user"
+        }
+      ]
+    },
+    {
+      "name": "planning_refused",
+      "summary": "Planning did not take the prompt. `message` gives the cause. No planning task was made.",
+      "next": [
+        {
+          "step": "ask_user"
+        }
+      ]
+    },
+    {
+      "name": "task_finished",
+      "summary": "The kernel dropped the queued prompt because its planning task is already done or cancelled.",
+      "next": [
+        {
+          "step": "stop"
+        }
+      ]
+    },
+    {
+      "name": "rejected_again",
+      "summary": "The kernel sent the queued prompt once more and the thread rejected it again. The kernel does not send it again. The planning task stays queued.",
+      "next": [
+        {
+          "step": "stop"
+        }
+      ]
     }
   ],
   "errors": [
     {
       "name": "invalid_params",
       "code": -32602,
-      "summary": "The request does not match the input schema."
+      "summary": "The request does not match the input schema.",
+      "next": [
+        {
+          "step": "stop"
+        }
+      ]
     },
     {
       "name": "method_not_found",
       "code": -32601,
-      "summary": "The method is not an `akra/kernel/*` method of this protocol version."
+      "summary": "The method is not an `akra/kernel/*` method of this protocol version.",
+      "next": [
+        {
+          "step": "stop"
+        }
+      ]
     },
     {
       "name": "confirmation_required",
       "code": -32010,
-      "summary": "A destructive command came without `confirm: true`."
+      "summary": "A destructive command came without `confirm: true`.",
+      "next": [
+        {
+          "step": "ask_user"
+        }
+      ]
     },
     {
       "name": "not_attached",
       "code": -32011,
-      "summary": "This connection is not attached. Send `akra/kernel/attach` first."
+      "summary": "This connection is not attached. Send `akra/kernel/attach` first.",
+      "next": [
+        {
+          "step": "stop"
+        }
+      ]
     },
     {
       "name": "kernel_unavailable",
       "code": -32012,
-      "summary": "The kernel cannot be reached. Another process (a TUI) may run the kernel of that repository, or the kernel stopped."
+      "summary": "The kernel cannot be reached. Another process (a TUI) may run the kernel of that repository, or the kernel stopped.",
+      "next": [
+        {
+          "step": "ask_user"
+        }
+      ]
     },
     {
       "name": "kernel_timeout",
       "code": -32013,
-      "summary": "The kernel did not answer in time. The command may still run; read the result with a query."
+      "summary": "The kernel did not answer in time. The command may still run; read the result with a query.",
+      "next": [
+        {
+          "step": "query",
+          "name": "history"
+        }
+      ]
     },
     {
       "name": "idempotency_key_reused",
       "code": -32014,
-      "summary": "The `idempotency_key` was already used for a different command. Use a new key for each command."
+      "summary": "The `idempotency_key` was already used for a different command. Use a new key for each command.",
+      "next": [
+        {
+          "step": "resend"
+        }
+      ]
     },
     {
       "name": "idempotency_unavailable",
       "code": -32015,
-      "summary": "This kernel has no decision log and cannot tell resends apart. The command did not run."
+      "summary": "This kernel has no decision log and cannot tell resends apart. The command did not run.",
+      "next": [
+        {
+          "step": "ask_user"
+        }
+      ]
     }
   ],
   "$defs": {
@@ -1338,29 +1544,22 @@
         "message": {
           "type": "string"
         },
+        "next": {
+          "items": {
+            "$ref": "#/$defs/NextStep"
+          },
+          "type": "array"
+        },
         "reason": {
-          "$ref": "#/$defs/CommandRejectionReason"
+          "$ref": "#/$defs/ReasonCode"
         }
       },
       "required": [
         "reason",
-        "message"
+        "message",
+        "next"
       ],
       "type": "object"
-    },
-    "CommandRejectionReason": {
-      "enum": [
-        "steer_in_flight",
-        "no_matching_turn",
-        "decision_in_flight",
-        "no_matching_approval",
-        "busy",
-        "preparation_active",
-        "unknown_thread",
-        "parallel_mode",
-        "parallel_mode_unknown"
-      ],
-      "type": "string"
     },
     "CommandRequest": {
       "additionalProperties": false,
@@ -1999,7 +2198,7 @@
               "type": "string"
             },
             "reason": {
-              "$ref": "#/$defs/ThreadPromptRejection"
+              "$ref": "#/$defs/ReasonCode"
             },
             "thread_id": {
               "type": "string"
@@ -2195,7 +2394,7 @@
               "type": "integer"
             },
             "reason": {
-              "$ref": "#/$defs/CommandRejectionReason"
+              "$ref": "#/$defs/ReasonCode"
             },
             "thread_id": {
               "type": "string"
@@ -2206,6 +2405,112 @@
             "op_id",
             "thread_id",
             "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "NextStep": {
+      "oneOf": [
+        {
+          "properties": {
+            "event": {
+              "type": "string"
+            },
+            "step": {
+              "const": "wait_for",
+              "type": "string"
+            }
+          },
+          "required": [
+            "step",
+            "event"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "milliseconds": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "step": {
+              "const": "wait",
+              "type": "string"
+            }
+          },
+          "required": [
+            "step",
+            "milliseconds"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "step": {
+              "const": "query",
+              "type": "string"
+            }
+          },
+          "required": [
+            "step",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "step": {
+              "const": "command",
+              "type": "string"
+            }
+          },
+          "required": [
+            "step",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "step": {
+              "const": "resend",
+              "type": "string"
+            }
+          },
+          "required": [
+            "step"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "step": {
+              "const": "ask_user",
+              "type": "string"
+            }
+          },
+          "required": [
+            "step"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "step": {
+              "const": "stop",
+              "type": "string"
+            }
+          },
+          "required": [
+            "step"
           ],
           "type": "object"
         }
@@ -2736,62 +3041,6 @@
         }
       ]
     },
-    "PromptSubmissionReason": {
-      "oneOf": [
-        {
-          "const": "busy",
-          "type": "string"
-        },
-        {
-          "const": "preparation_active",
-          "type": "string"
-        },
-        {
-          "const": "unknown_thread",
-          "type": "string"
-        },
-        {
-          "const": "parallel_mode",
-          "type": "string"
-        },
-        {
-          "const": "parallel_mode_unknown",
-          "type": "string"
-        },
-        {
-          "const": "parallel_mode_started",
-          "type": "string"
-        },
-        {
-          "const": "turn_started_during_preparation",
-          "type": "string"
-        },
-        {
-          "const": "stop_pending",
-          "type": "string"
-        },
-        {
-          "const": "unavailable",
-          "type": "string"
-        },
-        {
-          "const": "cancelled",
-          "type": "string"
-        },
-        {
-          "const": "text_mismatch",
-          "type": "string"
-        },
-        {
-          "const": "bootstrap_review_required",
-          "type": "string"
-        },
-        {
-          "const": "planning_refused",
-          "type": "string"
-        }
-      ]
-    },
     "PromptSubmissionState": {
       "properties": {
         "message": {
@@ -2800,10 +3049,16 @@
             "null"
           ]
         },
+        "next": {
+          "items": {
+            "$ref": "#/$defs/NextStep"
+          },
+          "type": "array"
+        },
         "reason": {
           "anyOf": [
             {
-              "$ref": "#/$defs/PromptSubmissionReason"
+              "$ref": "#/$defs/ReasonCode"
             },
             {
               "type": "null"
@@ -2850,6 +3105,10 @@
         {
           "const": "failed",
           "type": "string"
+        },
+        {
+          "const": "dropped",
+          "type": "string"
         }
       ]
     },
@@ -2883,6 +3142,30 @@
         "task_id"
       ],
       "type": "object"
+    },
+    "ReasonCode": {
+      "enum": [
+        "steer_in_flight",
+        "no_matching_turn",
+        "decision_in_flight",
+        "no_matching_approval",
+        "busy",
+        "preparation_active",
+        "unknown_thread",
+        "parallel_mode",
+        "parallel_mode_unknown",
+        "parallel_mode_started",
+        "turn_started_during_preparation",
+        "stop_pending",
+        "unavailable",
+        "cancelled",
+        "text_mismatch",
+        "bootstrap_review_required",
+        "planning_refused",
+        "task_finished",
+        "rejected_again"
+      ],
+      "type": "string"
     },
     "RecordedKernelEvent": {
       "properties": {
@@ -3027,16 +3310,6 @@
         "auto_follow_active"
       ],
       "type": "object"
-    },
-    "ThreadPromptRejection": {
-      "enum": [
-        "busy",
-        "preparation_active",
-        "unknown_thread",
-        "parallel_mode",
-        "parallel_mode_unknown"
-      ],
-      "type": "string"
     },
     "ThreadPromptSettlement": {
       "oneOf": [

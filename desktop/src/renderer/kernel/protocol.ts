@@ -113,7 +113,7 @@ export interface ParallelState {
 
 export interface PromptSubmissionState {
   thread_id: string;
-  status: "preparing" | "submitted" | "queued" | "rejected" | "failed";
+  status: "preparing" | "submitted" | "queued" | "rejected" | "failed" | "dropped";
   reason?: string;
   task_id?: string;
   message?: string;

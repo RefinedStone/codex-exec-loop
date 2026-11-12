@@ -643,6 +643,7 @@ fn check_kernel_records(
             record.sequence
         ));
     }
+    check_rejections_are_in_the_spec(&records)?;
     for (index, record) in records.iter().enumerate() {
         // 제출 번호는 커널마다 1 부터 다시 센다. 다시 켠 커널의 번호는 이전 커널의 번호와 겹칠 수 있다 (Q3-7).
         if lifetime_starts.contains(&index) {
@@ -666,6 +667,37 @@ fn check_kernel_records(
                 if !started.contains(&key) || !ended.insert(key) {
                     return Err(format!(
                         "I6: {turn_id} on {thread_id} ended without one matching start"
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/*
+ * I6: 거절의 완전성 (plan 18 K4-3, 설계 §3.9). 커널이 명령에 낸 모든 이유 코드는 그 명령의 스펙 `rejections` 에 있다.
+ * 클라이언트는 스펙에 없는 이유를 받지 않는다. 명령의 이름은 같은 연산 id 의 받은 기록에서 읽는다.
+ */
+fn check_rejections_are_in_the_spec(records: &[KernelEvent]) -> Result<(), String> {
+    use crate::domain::kernel_spec::KernelCommandKind;
+    let mut commands = BTreeMap::new();
+    for record in records {
+        match record {
+            KernelEvent::CommandReceived { op_id, command, .. } => {
+                commands.insert(*op_id, command.as_str());
+            }
+            KernelEvent::CommandRejected { op_id, reason, .. } => {
+                let name = commands.get(op_id).copied().unwrap_or_default();
+                let listed = KernelCommandKind::ALL
+                    .iter()
+                    .find(|kind| kind.name() == name)
+                    .is_some_and(|kind| kind.spec().rejections.contains(reason));
+                if !listed {
+                    return Err(format!(
+                        "I6: operation {op_id} (`{name}`) was rejected with `{}`, which its spec does not list",
+                        reason.name()
                     ));
                 }
             }

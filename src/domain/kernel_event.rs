@@ -4,7 +4,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub use crate::domain::kernel_spec::CommandRejectionReason;
+pub use crate::domain::kernel_spec::ReasonCode;
 use crate::domain::kernel_spec::{KernelCommandKind, KernelRecordKind};
 use crate::domain::planning::ManualPromptMainSessionHandoff;
 
@@ -71,17 +71,6 @@ pub enum PostTurnRoute {
     NoContinuation,
 }
 
-/// thread 지정 프롬프트를 준비 전에 거절한 이유이다. planning 작업은 만들어지지 않았다.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ThreadPromptRejection {
-    Busy,
-    PreparationActive,
-    UnknownThread,
-    ParallelMode,
-    ParallelModeUnknown,
-}
-
 /// 승인을 요청한 일의 종류이다 (plan 19 Q3-5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -138,7 +127,7 @@ pub struct KernelCommandDescriptor {
 pub struct OperationReceipt {
     pub op_id: i64,
     /// 커널이 명령을 바로 거절했으면 그 이유이다.
-    pub rejection: Option<CommandRejectionReason>,
+    pub rejection: Option<ReasonCode>,
     /// 같은 멱등 키의 명령을 전에 받았다. 다시 실행하지 않았고, 처음의 결과이다.
     pub replayed: bool,
 }
@@ -159,7 +148,7 @@ pub enum KernelEvent {
     /// thread 지정 프롬프트를 준비 전에 거절했다 (plan 19 Q3-2).
     ThreadPromptRejected {
         thread_id: String,
-        reason: ThreadPromptRejection,
+        reason: ReasonCode,
     },
     /// 턴 제출을 받아들였다. `submission` 은 그 제출의 세대 번호이다. 새 대화의 첫 턴은 thread id 가 비어 있다.
     TurnSubmitted {
@@ -204,7 +193,7 @@ pub enum KernelEvent {
     CommandRejected {
         op_id: i64,
         thread_id: String,
-        reason: CommandRejectionReason,
+        reason: ReasonCode,
     },
 }
 
@@ -423,7 +412,7 @@ pub fn open_approvals(events: impl IntoIterator<Item = KernelEvent>) -> Vec<Pend
 struct RememberedCommand {
     op_id: i64,
     fingerprint: String,
-    rejection: Option<CommandRejectionReason>,
+    rejection: Option<ReasonCode>,
 }
 
 /// 멱등 키로 명령을 찾은 결과이다.
@@ -491,7 +480,7 @@ impl CommandMemory {
     }
 
     /// 그 연산이 바로 거절되었다. 같은 키로 다시 오면 같은 거절을 답한다.
-    pub fn reject(&mut self, op_id: i64, reason: CommandRejectionReason) {
+    pub fn reject(&mut self, op_id: i64, reason: ReasonCode) {
         if let Some(remembered) = self
             .by_key
             .values_mut()
@@ -617,7 +606,7 @@ mod tests {
             settled("task-1"),
             KernelEvent::ThreadPromptRejected {
                 thread_id: "thread-1".to_string(),
-                reason: ThreadPromptRejection::Busy,
+                reason: ReasonCode::Busy,
             },
             KernelEvent::TurnSubmitted {
                 thread_id: String::new(),
@@ -644,7 +633,7 @@ mod tests {
             KernelEvent::CommandRejected {
                 op_id: 7,
                 thread_id: "thread-1".to_string(),
-                reason: CommandRejectionReason::NoMatchingTurn,
+                reason: ReasonCode::NoMatchingTurn,
             },
         ];
         // 종류 하나에 사건 하나이다. 새 사건을 더하면 `record_kind` 가 컴파일되지 않고, 이 표본이 빠지면 여기서 걸린다.
@@ -765,7 +754,7 @@ mod tests {
             KernelEvent::CommandRejected {
                 op_id: 9,
                 thread_id: "thread-1".to_string(),
-                reason: CommandRejectionReason::SteerInFlight,
+                reason: ReasonCode::SteerInFlight,
             },
             settled("task-1"),
         ]);
@@ -781,7 +770,7 @@ mod tests {
             memory.recall("key-c", "fp-c"),
             CommandRecall::Same(OperationReceipt {
                 op_id: 9,
-                rejection: Some(CommandRejectionReason::SteerInFlight),
+                rejection: Some(ReasonCode::SteerInFlight),
                 replayed: true,
             }),
             "a resend gets the same rejection"

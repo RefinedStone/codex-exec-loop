@@ -50,9 +50,8 @@ use crate::domain::conversation::ConversationRuntimeControlTruth;
 use crate::domain::github_review::GithubPullRequestTarget;
 use crate::domain::kernel_event::{
     APPROVAL_KINDS, ApprovalResolution, COMMAND_KINDS, CommandMemory, CommandRecall,
-    CommandRejectionReason, KernelCommandDescriptor, KernelEvent, KernelEventPage,
-    OperationReceipt, RecordedKernelEvent, THREAD_PROMPT_QUEUE_KINDS, open_approvals,
-    open_queued_thread_prompts,
+    KernelCommandDescriptor, KernelEvent, KernelEventPage, OperationReceipt, ReasonCode,
+    RecordedKernelEvent, THREAD_PROMPT_QUEUE_KINDS, open_approvals, open_queued_thread_prompts,
 };
 #[cfg(test)]
 use crate::domain::parallel_mode::ParallelModeAutomationTrigger;
@@ -1168,7 +1167,7 @@ impl NativeClientRuntime {
     }
 
     /// 받은 명령을 커널이 바로 거절했다 (plan 19 Q3-6). 기록하고, 같은 키의 재전송에 같은 거절을 답하게 기억한다.
-    fn reject_command(&mut self, op_id: i64, thread_id: &str, reason: CommandRejectionReason) {
+    fn reject_command(&mut self, op_id: i64, thread_id: &str, reason: ReasonCode) {
         self.command_memory.reject(op_id, reason);
         self.record_kernel_events(vec![KernelEvent::CommandRejected {
             op_id,
@@ -2492,7 +2491,7 @@ pub(crate) mod tests {
     fn a_resent_command_is_admitted_once_even_after_a_restart() {
         // plan 19 Q3-6: the kernel remembers the key in its log. A resend gets the first receipt.
         use crate::domain::kernel_event::{
-            CommandRejectionReason, KernelCommandDescriptor, KernelEvent, OperationReceipt,
+            KernelCommandDescriptor, KernelEvent, OperationReceipt, ReasonCode,
         };
         let described = |key: Option<&str>, fingerprint: &str| KernelCommandDescriptor {
             command: crate::domain::kernel_spec::KernelCommandKind::SteerTurn,
@@ -2502,7 +2501,7 @@ pub(crate) mod tests {
         };
         let first_receipt = OperationReceipt {
             op_id: 1,
-            rejection: Some(CommandRejectionReason::NoMatchingTurn),
+            rejection: Some(ReasonCode::NoMatchingTurn),
             replayed: true,
         };
         let log = Arc::new(MemoryKernelEventLog::default());
@@ -2531,7 +2530,7 @@ pub(crate) mod tests {
             runtime.admit_command(&described(Some("key-1"), "fp-1")),
             CommandAdmission::Recorded(1)
         );
-        runtime.reject_command(1, "thread-1", CommandRejectionReason::NoMatchingTurn);
+        runtime.reject_command(1, "thread-1", ReasonCode::NoMatchingTurn);
         assert_eq!(
             runtime.admit_command(&described(Some("key-1"), "fp-1")),
             CommandAdmission::Replayed(first_receipt)
