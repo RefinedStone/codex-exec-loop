@@ -23,8 +23,8 @@ export interface UiState {
   shortcutsOpen: boolean;
   /** 새 스레드 화면이 고른 작업 폴더이다. null 이면 보낼 때 폴더를 고르게 한다. */
   homeCwd: string | null;
-  /** 업무 패널이 넘긴 글이다. 새 스레드 화면의 입력창이 받아서 채운다. 바로 보내지 않는다. */
-  handOff: string | null;
+  /** 입력창에 쓰던 글이다. 키는 스레드 id 이고, 새 스레드 화면은 `HOME_DRAFT` 이다. 보기를 바꿔도 남는다. */
+  drafts: Record<string, string>;
   toasts: Toast[];
 }
 
@@ -41,7 +41,7 @@ export const useUiStore = create<UiState>(() => ({
   paletteOpen: false,
   shortcutsOpen: false,
   homeCwd: null,
-  handOff: null,
+  drafts: {},
   toasts: [],
 }));
 
@@ -66,9 +66,16 @@ export function showHome(cwd?: string): void {
   set((state) => ({ view: "home", paletteOpen: false, homeCwd: cwd ?? state.homeCwd }));
 }
 
-/** 글을 새 스레드 화면의 입력창에 채운다. */
+/** 새 스레드 화면 입력창의 초안 키이다. */
+export const HOME_DRAFT = "home";
+
+export function setDraft(key: string, text: string): void {
+  set((state) => ({ drafts: { ...state.drafts, [key]: text } }));
+}
+
+/** 글을 새 스레드 화면의 입력창에 채운다. 바로 보내지 않는다. */
 export function handOffToNewThread(text: string): void {
-  set({ view: "home", handOff: text, paletteOpen: false });
+  set((state) => ({ view: "home", paletteOpen: false, drafts: { ...state.drafts, [HOME_DRAFT]: text } }));
 }
 
 export function togglePanel(panel: PanelId): void {

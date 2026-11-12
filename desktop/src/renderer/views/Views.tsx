@@ -259,16 +259,17 @@ export function useShortcuts(): void {
       if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey) return;
       // 터미널 안의 Ctrl 조합은 셸의 것이다 (Ctrl+K, Ctrl+N 등). Ctrl+` 만 받는다.
       const inTerminal = event.target instanceof Element && event.target.closest(".terminal-body") !== null;
-      if (inTerminal && !event.metaKey && event.key !== "`") return;
+      if (inTerminal && !event.metaKey && event.code !== "Backquote") return;
+      // 글자가 아니라 글쇠 자리로 찾는다. 한글 입력 상태에서는 `event.key` 가 한글 자모이다.
       const actions: Record<string, () => void> = {
-        k: () => useUiStore.setState((state) => ({ paletteOpen: !state.paletteOpen })),
-        n: () => showHome(),
-        b: () => useUiStore.setState((state) => ({ sidebarOpen: !state.sidebarOpen })),
-        j: toggleTerminal,
-        "`": toggleTerminal,
-        "\\": () => useUiStore.setState((state) => ({ panel: state.panel ? null : "review" })),
+        KeyK: () => useUiStore.setState((state) => ({ paletteOpen: !state.paletteOpen })),
+        KeyN: () => showHome(),
+        KeyB: () => useUiStore.setState((state) => ({ sidebarOpen: !state.sidebarOpen })),
+        KeyJ: toggleTerminal,
+        Backquote: toggleTerminal,
+        Backslash: () => useUiStore.setState((state) => ({ panel: state.panel ? null : "review" })),
       };
-      const action = actions[event.key.toLowerCase()];
+      const action = actions[event.code];
       if (action) {
         event.preventDefault();
         action();

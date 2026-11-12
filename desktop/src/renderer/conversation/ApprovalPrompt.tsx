@@ -67,7 +67,10 @@ export function ApprovalPrompt({
   useEffect(() => {
     if (!first) return;
     const onKey = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey)) return;
+      // 누르고 있어서 생긴 반복은 받지 않는다. 다음 요청까지 연달아 답하지 않게 한다.
+      if (!(event.metaKey || event.ctrlKey) || event.repeat) return;
+      // 터미널, 오른쪽 패널, 검색과 명령에서 누른 키는 그 입력의 것이다.
+      if (event.target instanceof Element && event.target.closest(".terminal-body, .right-panel, .overlay")) return;
       if (event.key === "Enter") {
         event.preventDefault();
         onAnswer(first.requestId, "accept");

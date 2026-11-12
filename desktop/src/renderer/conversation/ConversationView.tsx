@@ -21,7 +21,8 @@ const BOTTOM_THRESHOLD_PX = 64;
 const STEP_ICON: Record<StepKind, IconName> = { read: "file", search: "search", edit: "pencil", command: "terminal", tool: "bolt" };
 const STEP_VERB: Record<StepKind, string> = { read: "읽음", search: "검색", edit: "수정", command: "실행", tool: "도구" };
 
-function StepRow({ step }: { step: StepItem }) {
+/** 아이템 객체가 같으면 다시 그리지 않는다. */
+const StepRow = memo(function StepRow({ step }: { step: StepItem }) {
   const status = stepStatus(step);
   const [open, setOpen] = useState(status === "failed");
   const kind = stepKind(step);
@@ -43,7 +44,7 @@ function StepRow({ step }: { step: StepItem }) {
       {open && step.type === "fileChange" && <DiffFileList files={step.changes.map(diffFileFromChange)} defaultOpen />}
     </li>
   );
-}
+});
 
 /** 진행 중이거나 실패가 있으면 펼친다. 끝난 작업 묶음은 한 줄로 접는다. */
 function Activity({ steps }: { steps: StepItem[] }) {
@@ -101,6 +102,19 @@ function Changes({ files }: { files: readonly DiffFile[] }) {
   );
 }
 
+/** `turnBlocks` 는 덩어리 객체를 매번 새로 만든다. 그래서 내용(원본 아이템과 글)으로 비교한다. */
+function sameBlock(previous: { block: TurnBlock }, next: { block: TurnBlock }): boolean {
+  const a = previous.block;
+  const b = next.block;
+  if (a.type === "activity") {
+    return b.type === "activity" && a.steps.length === b.steps.length && a.steps.every((step, index) => step === b.steps[index]);
+  }
+  if (a.type === "other") {
+    return b.type === "other" && a.item === b.item;
+  }
+  return a.type === b.type && a.id === b.id && a.text === b.text;
+}
+
 const Block = memo(function Block({ block }: { block: TurnBlock }) {
   switch (block.type) {
     case "user":
@@ -130,7 +144,7 @@ const Block = memo(function Block({ block }: { block: TurnBlock }) {
     case "other":
       return <ItemView item={block.item} />;
   }
-});
+}, sameBlock);
 
 function useElapsed(startedAtSeconds: number | null): string | null {
   const [now, setNow] = useState(Date.now());

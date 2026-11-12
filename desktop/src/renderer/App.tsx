@@ -12,7 +12,7 @@ import { Icon, type IconName } from "./design/icons";
 import { KernelPanel } from "./kernel/KernelPanel";
 import { DesktopSession } from "./session/desktopSession";
 import { desktopSessionStore, openThreadCwd, useDesktopStore } from "./session/desktopStore";
-import { handOffToNewThread, MOD_KEY, type PanelId, showView, toast, togglePanel, toggleTerminal, useUiStore } from "./session/uiStore";
+import { handOffToNewThread, MOD_KEY, type PanelId, setDraft, showView, toast, togglePanel, toggleTerminal, useUiStore } from "./session/uiStore";
 import { Sidebar } from "./sidebar/Sidebar";
 import { folderName } from "./sidebar/threadStatus";
 import { TerminalDock } from "./terminal/TerminalDock";
@@ -124,15 +124,20 @@ const MAX_PANEL_WIDTH = 900;
 function RightPanel({ panel, children }: { panel: PanelId; children: React.ReactNode }) {
   const [width, setWidth] = useState(520);
   const startResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    // 포인터를 손잡이에 잡아 둔다. 브라우저 페이지 위로 끌어도 이동과 놓기 이벤트를 여기서 받는다.
+    const handle = event.currentTarget;
+    handle.setPointerCapture(event.pointerId);
     const startX = event.clientX;
     const startWidth = width;
     const onMove = (move: PointerEvent) => setWidth(Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, startWidth + startX - move.clientX)));
     const onUp = () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
+      handle.removeEventListener("pointercancel", onUp);
     };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
+    handle.addEventListener("pointercancel", onUp);
   };
   return (
     <aside className="right-panel" style={{ width }}>
@@ -206,8 +211,20 @@ export function App() {
 
   const openThread = useCallback((threadId: string) => {
     showView("thread");
+    // 이미 열려서 기록이 있는 스레드는 다시 읽지 않는다. 다시 읽으면 실시간으로만 오는 값(턴 diff, 계획, 사용량)을 잃는다.
+    const state = useDesktopStore.getState();
+    if (state.openThreadId === threadId && state.transcript?.threadId === threadId) return;
     void session.current?.openThread(threadId);
   }, []);
+
+  // 대화가 화면에 있는지 저장소에 알린다. 다른 보기에 있는 동안 끝난 턴은 읽지 않음이 된다. 대화로 돌아오면 지운다.
+  useEffect(() => {
+    const threadVisible = view === "thread";
+    useDesktopStore.setState((state) => ({
+      threadVisible,
+      unreadThreadIds: threadVisible ? state.unreadThreadIds.filter((id) => id !== state.openThreadId) : state.unreadThreadIds,
+    }));
+  }, [view]);
 
   /** 업무 패널이 만든 글을 새 스레드 화면의 입력창에 채운다. 폴더는 열린 스레드의 것을 먼저 고른다. 보내기는 사용자가 한다. */
   const handOff = async (text: string) => {
@@ -272,10 +289,13 @@ export function App() {
       const current = session.current;
       const cwd = useUiStore.getState().homeCwd ?? (await window.akra.chooseFolder());
       if (!cwd || !current) return false;
-      await current.startThread(cwd);
+      const threadId = await current.startThread(cwd);
       showView("thread");
-      // 스레드는 이미 만들었다. 첫 메시지가 실패하면 그 스레드에서 다시 보낼 수 있게 알린다.
-      await current.sendMessage(text).catch((error: unknown) => toast(`첫 메시지를 보내지 못했습니다: ${errorText(error)}`));
+      // 스레드는 이미 만들었다. 첫 메시지가 실패하면 글을 그 스레드의 입력창에 되돌려서 다시 보낼 수 있게 한다.
+      await current.sendMessage(text).catch((error: unknown) => {
+        setDraft(threadId, text);
+        toast(`첫 메시지를 보내지 못했습니다: ${errorText(error)}`);
+      });
       return true;
     },
   };

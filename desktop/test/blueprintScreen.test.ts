@@ -79,7 +79,7 @@ describe("thread marks", () => {
 });
 
 describe("unread threads", () => {
-  beforeEach(() => useDesktopStore.setState({ activeThreadIds: [], unreadThreadIds: [], openThreadId: null }));
+  beforeEach(() => useDesktopStore.setState({ activeThreadIds: [], unreadThreadIds: [], openThreadId: null, threadVisible: true, folders: [] }));
 
   it("marks a thread unread when its turn ends while it is not open, and clears it on open", () => {
     const store = useDesktopStore.getState();
@@ -97,6 +97,32 @@ describe("unread threads", () => {
     store.setThreadActive("t1", false);
     store.setThreadActive("t2", false);
     expect(useDesktopStore.getState().unreadThreadIds).toEqual([]);
+  });
+});
+
+describe("store values the review fixes added", () => {
+  beforeEach(() => useDesktopStore.setState({ activeThreadIds: [], unreadThreadIds: [], openThreadId: null, threadVisible: true, folders: [] }));
+
+  it("marks the open thread unread when its turn ends while another view is on screen", () => {
+    const store = useDesktopStore.getState();
+    store.setOpenThread("t1");
+    useDesktopStore.setState({ threadVisible: false });
+    store.setThreadActive("t1", true);
+    store.setThreadActive("t1", false);
+    expect(useDesktopStore.getState().unreadThreadIds).toEqual(["t1"]);
+  });
+
+  it("follows the failed state of a thread from status changes", () => {
+    const thread = { id: "t1", title: "t", updatedAt: 0, branch: null, failed: false };
+    useDesktopStore.setState({ folders: [{ cwd: "/w", threads: [thread] }] });
+    const store = useDesktopStore.getState();
+    store.setThreadFailed("t1", true);
+    expect(useDesktopStore.getState().folders[0]?.threads[0]?.failed).toBe(true);
+    const failedFolders = useDesktopStore.getState().folders;
+    store.setThreadFailed("t1", true);
+    expect(useDesktopStore.getState().folders).toBe(failedFolders);
+    store.setThreadFailed("t1", false);
+    expect(useDesktopStore.getState().folders[0]?.threads[0]?.failed).toBe(false);
   });
 });
 
