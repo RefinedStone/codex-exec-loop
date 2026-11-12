@@ -1,4 +1,5 @@
 // main 과 renderer 가 공유하는 메시지 버스 계약이다. main 은 메시지를 해석하지 않고 문자열 그대로 전달한다.
+import type { GitHunkAction, GitHunkDiff } from "./gitHunks";
 
 export type ConnectionPhase = "connecting" | "connected" | "disconnected";
 
@@ -21,6 +22,8 @@ export const IPC_CHANNELS = {
   gitStatus: "akra:git-status",
   gitFileDiff: "akra:git-file-diff",
   gitFileAction: "akra:git-file-action",
+  gitHunks: "akra:git-hunks",
+  gitHunkAction: "akra:git-hunk-action",
   gitOpenFile: "akra:git-open-file",
   gitBranchSummary: "akra:git-branch-summary",
   gitCommitDiff: "akra:git-commit-diff",
@@ -321,6 +324,8 @@ export interface AkraBridge {
    * git 에서 다시 읽고, 버리기 전에 사용자에게 확인한다.
    */
   gitFileAction(cwd: string, action: GitFileAction, path: string): Promise<GitActionResult>;
+  gitHunks(cwd: string, path: string): Promise<GitHunkDiff>;
+  gitHunkAction(cwd: string, action: GitHunkAction, path: string, hunkId: string): Promise<GitActionResult>;
   /** 파일을 편집기(VS Code)로 연다. 편집기가 없으면 파일이 있는 폴더를 연다. */
   gitOpenFile(cwd: string, path: string): Promise<void>;
   /** 브랜치가 기준 브랜치 뒤에 더한 커밋과 그 브랜치의 PR 을 읽는다. `fresh` 이면 잠깐 저장해 둔 PR 을 쓰지 않고 다시 묻는다. */

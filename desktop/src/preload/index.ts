@@ -1,5 +1,6 @@
 // renderer 에 노출하는 것은 AkraBridge 의 함수뿐이다. Node API 와 ipcRenderer 자체는 노출하지 않는다.
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
+import type { GitHunkAction, GitHunkDiff } from "../shared/gitHunks";
 
 import {
   type AkraBridge,
@@ -60,6 +61,12 @@ const bridge: AkraBridge = {
   },
   gitFileAction(cwd: string, action: GitFileAction, path: string): Promise<GitActionResult> {
     return ipcRenderer.invoke(IPC_CHANNELS.gitFileAction, cwd, action, path) as Promise<GitActionResult>;
+  },
+  gitHunks(cwd: string, path: string): Promise<GitHunkDiff> {
+    return ipcRenderer.invoke(IPC_CHANNELS.gitHunks, cwd, path);
+  },
+  gitHunkAction(cwd: string, action: GitHunkAction, path: string, hunkId: string): Promise<GitActionResult> {
+    return ipcRenderer.invoke(IPC_CHANNELS.gitHunkAction, cwd, action, path, hunkId);
   },
   gitOpenFile(cwd: string, path: string): Promise<void> {
     return ipcRenderer.invoke(IPC_CHANNELS.gitOpenFile, cwd, path) as Promise<void>;

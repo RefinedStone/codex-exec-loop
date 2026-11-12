@@ -14,6 +14,7 @@ import { BrowserPanelService } from "./browserPanel";
 import { loadSettings, saveSettings } from "./browserSettings";
 import { readBranchSummary, readCommitDiff } from "./gitBranch";
 import { executePullRequest, executePush, planPullRequest, planPush } from "./gitPublish";
+import { executeGitHunkPlan, planGitHunkAction, readGitHunks } from "./gitHunks";
 import { editorUrl, executeGitFilePlan, planGitFileAction, readGitFileDiff, readGitStatus, resolveGitFile } from "./gitStatus";
 import { readGitHubSummary, readReviewPrompt } from "./githubService";
 import { JiraService } from "./jiraService";
@@ -185,6 +186,18 @@ ipcMain.handle(IPC_CHANNELS.gitFileAction, async (event, cwd: unknown, action: u
   }
   return executeGitFilePlan(planned.plan);
 });
+// 부분 버리기도 main 이 확인한다. renderer 는 patch 대신 읽을 때 받은 식별자만 보낸다.
+ipcMain.handle(IPC_CHANNELS.gitHunks, (_event, cwd: unknown, path: unknown) => readGitHunks(cwd, path));
+ipcMain.handle(IPC_CHANNELS.gitHunkAction, async (event, cwd: unknown, action: unknown, path: unknown, hunkId: unknown) => {
+  const planned = await planGitHunkAction(cwd, action, path, hunkId);
+  if (!planned.ok) return planned;
+  if (planned.plan.action === "discard") {
+    const detail = `${planned.plan.path}\n\n선택한 변경 덩어리만 버립니다. 스테이지한 변경은 유지됩니다. 버린 변경은 되돌릴 수 없습니다.`;
+    if (!(await confirmAction(event.sender, "warning", "이 부분의 변경을 버립니까?", detail, "변경 버리기"))) return CANCELLED;
+  }
+  return executeGitHunkPlan(planned.plan);
+});
+
 // push 와 PR 만들기는 저장소 밖에 쓴다. main 이 확인하고, 창에 어디에 무엇을 쓰는지 보여 준다.
 ipcMain.handle(IPC_CHANNELS.gitPush, async (event, cwd: unknown) => {
   const planned = await planPush(cwd);
