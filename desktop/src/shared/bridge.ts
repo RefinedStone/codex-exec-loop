@@ -24,6 +24,8 @@ export const IPC_CHANNELS = {
   gitOpenFile: "akra:git-open-file",
   gitBranchSummary: "akra:git-branch-summary",
   gitCommitDiff: "akra:git-commit-diff",
+  gitPush: "akra:git-push",
+  gitCreatePullRequest: "akra:git-create-pull-request",
   terminalOpen: "akra:terminal-open",
   terminalWrite: "akra:terminal-write",
   terminalResize: "akra:terminal-resize",
@@ -278,6 +280,19 @@ export type GitBranchSummary =
     }
   | { ok: false; message: string };
 
+/** 사용자가 쓴 새 PR 의 내용이다. */
+export interface PullRequestDraft {
+  /** 한 줄이다. */
+  title: string;
+  body: string;
+  /** 대상 브랜치의 이름이다 (`origin/` 없이). */
+  base: string;
+  draft: boolean;
+}
+
+/** push 와 PR 만들기의 결과이다. `url` 은 만든 PR 의 주소이다. `cancelled` 는 사용자가 확인 창에서 취소했다는 뜻이다. */
+export type GitPublishResult = { ok: true; url: string | null } | { ok: false; message: string; cancelled?: boolean };
+
 export interface GitCommitDiff {
   /** git diff 형식이다. */
   text: string;
@@ -312,6 +327,10 @@ export interface AkraBridge {
   gitBranchSummary(cwd: string, fresh: boolean): Promise<GitBranchSummary>;
   /** 커밋 하나의 변경을 읽는다. */
   gitCommitDiff(cwd: string, sha: string): Promise<GitCommitDiff>;
+  /** 현재 브랜치를 `origin` 의 같은 이름 브랜치로 push 한다. main 이 먼저 사용자에게 확인한다. 강제 push 는 하지 않는다. */
+  gitPush(cwd: string): Promise<GitPublishResult>;
+  /** 현재 브랜치의 PR 을 gh 로 만든다. main 이 저장소, 브랜치, gh 계정을 보여 주고 사용자에게 확인한다. */
+  gitCreatePullRequest(cwd: string, draft: PullRequestDraft): Promise<GitPublishResult>;
   terminal: TerminalBridge;
   browser: BrowserBridge;
   github: GitHubBridge;

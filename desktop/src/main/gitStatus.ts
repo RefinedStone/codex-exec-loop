@@ -25,7 +25,7 @@ export interface GitOutput {
 
 export function failureMessage(output: GitOutput, fallback: string): string {
   if (output.timedOut) {
-    return `git 이 ${GIT_TIMEOUT_MS / 1000}초 안에 끝나지 않았습니다.`;
+    return "git 이 제한 시간 안에 끝나지 않았습니다.";
   }
   return output.stderr.trim() || fallback;
 }
@@ -44,9 +44,13 @@ export const NO_HELPER_PROGRAMS = [
 ];
 
 /** git 을 셸 없이 실행하고 출력은 한도까지만 모은다. Windows 에서 콘솔 창을 띄우지 않는다. */
-export function runGit(cwd: string, args: string[], limit: number): Promise<GitOutput> {
+export function runGit(cwd: string, args: string[], limit: number, options: { timeoutMs?: number; env?: Record<string, string> } = {}): Promise<GitOutput> {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn("git", ["-c", "core.quotePath=false", ...NO_HELPER_PROGRAMS, ...args], { cwd, windowsHide: true });
+    const child = spawn("git", ["-c", "core.quotePath=false", ...NO_HELPER_PROGRAMS, ...args], {
+      cwd,
+      windowsHide: true,
+      ...(options.env ? { env: { ...process.env, ...options.env } } : {}),
+    });
     const chunks: Buffer[] = [];
     let size = 0;
     let truncated = false;
@@ -55,7 +59,7 @@ export function runGit(cwd: string, args: string[], limit: number): Promise<GitO
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill();
-    }, GIT_TIMEOUT_MS);
+    }, options.timeoutMs ?? GIT_TIMEOUT_MS);
     child.stdout.on("data", (chunk: Buffer) => {
       if (truncated) return;
       chunks.push(chunk);

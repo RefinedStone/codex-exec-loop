@@ -229,10 +229,29 @@
   `prerelease` 에서 갈라지므로, 그때는 커밋이 100개 넘게 나온다. PR 을 만들면 맞는 기준이 된다.
 - 확인하지 않은 것: 실제 gh 호출과 화면 모양. fork 에서 이 저장소로 올린 내 PR 은 찾지 못한다.
 
+### 2026-11-12: push 와 PR 만들기 버튼
+
+`변경` 패널의 커밋 목록 위에 push 버튼과 PR 만들기 양식을 둔다. 둘 다 저장소 밖에 쓰는 동작이다.
+
+- main: `gitPublish.ts`. 확인(`planPush`, `planPullRequest`)과 실행(`executePush`, `executePullRequest`)을 나눈다. IPC 처리기가
+  그 사이에 확인 창을 띄운다. renderer 는 확인을 건너뛸 수 없다.
+  - push: `git push --set-upstream origin refs/heads/<브랜치>:refs/heads/<브랜치>`. 같은 이름의 원격 브랜치로만 간다
+    (upstream 이 기준 브랜치여도 그렇다). 강제 push 는 하지 않는다. 원격이 앞서 있으면 git 이 거절한다. 제한 시간은 120초이다.
+    암호를 묻는 창을 띄우지 않는다 (`GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`). 확인 창에 브랜치와 원격 주소를 보여 준다.
+  - PR 만들기: `gh pr create --repo … --head=… --base=… --title=… --body=… [--draft]`. gh 는 저장소 밖에서 실행한다.
+    GitHub 저장소이고, 브랜치가 `origin` 에 있고, push 하지 않은 커밋이 없을 때만 한다. 확인 창에 저장소, 브랜치, 대상 브랜치,
+    제목, gh 계정(`gh api user`)을 보여 준다.
+- 화면: push 버튼은 push 전인 커밋이 있을 때 보인다. PR 만들기는 모두 push 했고 열린 PR 이 없을 때 보인다
+  (`conversation/branchPublish.ts`). 양식의 처음 값은 첫 커밋 제목, 커밋 제목 목록, 기준 브랜치이다. 사용자가 고친다.
+  제목과 본문을 에이전트가 쓰게 하지 않는다 (턴을 만드는 요청이다).
+- 주의: push 는 git 의 자격 증명을, PR 만들기는 gh 의 계정을 쓴다. 저장소별 계정 규칙이 있는 곳에서는 두 계정이 다를 수 있다.
+  확인 창이 gh 계정을 보여 준다. git 쪽 계정은 보여 주지 못한다.
+- 시험: `test/gitPublish.test.ts` 가 로컬 bare 원격과 가짜 gh 로 확인한다.
+- 확인하지 않은 것: 실제 원격으로의 push, 실제 `gh pr create`, 확인 창, 화면 모양.
+
 다음 후보 (계획만, 2026-11-12):
 
 - hunk 단위 스테이지와 버리기: `git apply --cached` 와 `git apply -R` 에 hunk 하나의 patch 를 준다.
-- push · PR 만들기 버튼: 외부에 쓰는 동작이다. 확인 창과 gh 계정 표시가 필요하다.
 
 남은 것과 알려진 한계:
 
