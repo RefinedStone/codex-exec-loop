@@ -72,6 +72,50 @@ describe("Git hunk actions", () => {
     expect(repo.text()).toBe(action === "stage" ? both : first);
   });
 
+  it.each(["lf", "crlf"] as const)("preserves %s working-tree endings when discard overrides autocrlf", async (eol) => {
+    const repo = repository();
+    repo.git("config", "core.autocrlf", "true");
+    const first = repo.content.replace("line 12\n", "first\n");
+    const both = first.replace("line 32\n", "second\n");
+    const format = (text: string) => eol === "crlf" ? text.replaceAll("\n", "\r\n") : text;
+    repo.write(format(both));
+
+    expect(await act(repo.root, "discard", 1)).toEqual({ ok: true });
+
+    expect(repo.text()).toBe(format(first));
+    expect(repo.git("show", ":a.txt")).toBe(repo.content);
+  });
+
+  it("rejects discard when explicit eol attributes would change unrelated lines", async () => {
+    const repo = repository();
+    writeFileSync(join(repo.root, ".gitattributes"), "a.txt text eol=crlf\n");
+    const content = repo.content.replace("line 12\n", "changed\n");
+    repo.write(content);
+    const diff = await readGitHunks(repo.root, "a.txt");
+
+    const planned = await planGitHunkAction(repo.root, "discard", "a.txt", diff.hunks[0]?.id);
+
+    expect(planned.ok).toBe(false);
+    expect(repo.text()).toBe(content);
+    expect(repo.git("show", ":a.txt")).toBe(repo.content);
+  });
+
+  it("rejects a plan after only working-tree line endings change", async () => {
+    const repo = repository();
+    repo.git("config", "core.autocrlf", "true");
+    const content = repo.content.replace("line 12\n", "changed\n");
+    repo.write(content);
+    const diff = await readGitHunks(repo.root, "a.txt");
+    const planned = await planGitHunkAction(repo.root, "discard", "a.txt", diff.hunks[0]?.id);
+    if (!planned.ok) throw new Error(planned.message);
+    const newer = content.replaceAll("\n", "\r\n");
+    repo.write(newer);
+
+    expect((await executeGitHunkPlan(planned.plan)).ok).toBe(false);
+
+    expect(repo.text()).toBe(newer);
+  });
+
   it.each(["stage", "discard"] as const)("rejects stale worktree plans without writes when %s runs", async (action) => {
     const repo = repository();
     repo.write("changed\n");
