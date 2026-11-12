@@ -1071,6 +1071,7 @@ fn every_reason_and_error_tells_the_next_steps_by_name() {
     let spec = spec_json();
     let names = |section: &str| names_of(&spec[section]);
     let (events, queries, commands) = (names("events"), names("queries"), names("commands"));
+    let methods = names("methods");
     for entry in spec["reasons"]
         .as_array()
         .expect("reasons")
@@ -1085,6 +1086,7 @@ fn every_reason_and_error_tells_the_next_steps_by_name() {
                 "wait_for" => assert!(events.contains(&named("event")), "{step}"),
                 "query" => assert!(queries.contains(&named("name")), "{step}"),
                 "command" => assert!(commands.contains(&named("name")), "{step}"),
+                "method" => assert!(methods.contains(&named("name")), "{step}"),
                 "wait" => assert!(step["milliseconds"].as_u64().is_some(), "{step}"),
                 "resend" | "ask_user" | "stop" => {}
                 other => panic!("unknown step {other}"),
@@ -1094,6 +1096,21 @@ fn every_reason_and_error_tells_the_next_steps_by_name() {
     assert_eq!(
         serde_json::to_value(reason_next(ReasonCode::Busy)).expect("steps should serialize"),
         json!([{ "step": "wait_for", "event": "thread_activity" }, { "step": "resend" }])
+    );
+    // A rejected prompt also sends `prompt_submission`. A step that waits for that event would end at once.
+    for reason in KernelCommandKind::SubmitPrompt.spec().rejections {
+        assert!(
+            !reason_next(*reason).contains(&NextStep::WaitFor {
+                event: "prompt_submission".to_string()
+            }),
+            "{}",
+            reason.name()
+        );
+    }
+    assert_eq!(
+        serde_json::to_value(error_next(KernelErrorKind::NotAttached))
+            .expect("steps should serialize"),
+        json!([{ "step": "method", "name": "akra/kernel/attach" }, { "step": "resend" }])
     );
     assert_eq!(
         serde_json::to_value(reason_next(ReasonCode::SteerInFlight))

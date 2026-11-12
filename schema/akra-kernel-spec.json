@@ -1200,8 +1200,8 @@
       "summary": "Another prompt is being prepared. Send again with a new idempotency key after that preparation ends.",
       "next": [
         {
-          "step": "wait_for",
-          "event": "prompt_submission"
+          "step": "wait",
+          "milliseconds": 1000
         },
         {
           "step": "resend"
@@ -1254,7 +1254,7 @@
     },
     {
       "name": "turn_started_during_preparation",
-      "summary": "Another turn started while the prompt was prepared. The planning task stays queued and the kernel submits the prompt once when it is idle. Do not send the prompt again.",
+      "summary": "Another turn started while the prompt was prepared. The planning task stays queued and the kernel submits the prompt once when it is idle. The result arrives as a `prompt_submission` event with the same `task_id`. Do not send the prompt again.",
       "next": [
         {
           "step": "wait_for",
@@ -1264,7 +1264,7 @@
     },
     {
       "name": "stop_pending",
-      "summary": "A stop request is still settling. The planning task stays queued and the kernel submits the prompt once when it is idle. Do not send the prompt again.",
+      "summary": "A stop request is still settling. The planning task stays queued and the kernel submits the prompt once when it is idle. The result arrives as a `prompt_submission` event with the same `task_id`. Do not send the prompt again.",
       "next": [
         {
           "step": "wait_for",
@@ -1274,7 +1274,7 @@
     },
     {
       "name": "unavailable",
-      "summary": "The thread cannot take a prompt now. The planning task stays queued and the kernel submits the prompt once when it is idle. Do not send the prompt again.",
+      "summary": "The thread cannot take a prompt now. The planning task stays queued and the kernel submits the prompt once when it is idle. The result arrives as a `prompt_submission` event with the same `task_id`. Do not send the prompt again.",
       "next": [
         {
           "step": "wait_for",
@@ -1374,7 +1374,11 @@
       "summary": "This connection is not attached. Send `akra/kernel/attach` first.",
       "next": [
         {
-          "step": "stop"
+          "step": "method",
+          "name": "akra/kernel/attach"
+        },
+        {
+          "step": "resend"
         }
       ]
     },
@@ -2469,6 +2473,22 @@
             },
             "step": {
               "const": "command",
+              "type": "string"
+            }
+          },
+          "required": [
+            "step",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "step": {
+              "const": "method",
               "type": "string"
             }
           },

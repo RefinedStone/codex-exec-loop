@@ -7,7 +7,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::{KernelErrorKind, KernelEventKind, KernelQueryKind};
+use super::{KernelErrorKind, KernelEventKind, KernelMethodKind, KernelQueryKind};
 use crate::domain::kernel_spec::{KernelCommandKind, ReasonCode};
 
 /// 이유가 `next` 로 기다리라고 할 때의 시간이다. 그 일의 끝을 알리는 이벤트가 없는 경우에만 쓴다.
@@ -25,7 +25,9 @@ pub enum NextStep {
     Query { name: String },
     /// 그 명령을 보낸다.
     Command { name: String },
-    /// 같은 명령을 새 멱등 키로 다시 보낸다.
+    /// 그 메서드를 보낸다 (예: `akra/kernel/attach`).
+    Method { name: String },
+    /// 같은 요청을 다시 보낸다. 명령이면 새 멱등 키로 보낸다.
     Resend,
     /// 사람이 정해야 한다.
     AskUser,
@@ -49,6 +51,12 @@ impl NextStep {
     fn command(command: KernelCommandKind) -> Self {
         Self::Command {
             name: command.name().to_string(),
+        }
+    }
+
+    fn method(method: KernelMethodKind) -> Self {
+        Self::Method {
+            name: method.name().to_string(),
         }
     }
 
@@ -77,11 +85,8 @@ pub fn reason_next(reason: ReasonCode) -> Vec<NextStep> {
             Step::wait_for(KernelEventKind::ThreadActivity),
             Step::Resend,
         ],
-        // 진행 중인 준비가 끝나면 그 프롬프트의 `prompt_submission` 이 온다.
-        ReasonCode::PreparationActive => vec![
-            Step::wait_for(KernelEventKind::PromptSubmission),
-            Step::Resend,
-        ],
+        // 이 거절도 `prompt_submission` 이벤트를 낸다. 그 이벤트를 기다리면 자기 거절에서 바로 풀린다.
+        ReasonCode::PreparationActive => vec![Step::short_wait(), Step::Resend],
         ReasonCode::UnknownThread => {
             vec![Step::command(KernelCommandKind::LoadSessions), Step::Resend]
         }
@@ -89,7 +94,8 @@ pub fn reason_next(reason: ReasonCode) -> Vec<NextStep> {
         ReasonCode::ParallelMode => vec![Step::AskUser],
         ReasonCode::ParallelModeUnknown => vec![Step::short_wait(), Step::Resend],
         ReasonCode::ParallelModeStarted => vec![Step::Stop],
-        // 커널이 쉴 때 한 번 다시 내고 그 결과를 `prompt_submission` 으로 알린다.
+        // 커널이 쉴 때 한 번 다시 내고 그 결과를 `prompt_submission` 으로 알린다. 단계에는 조건이 없으므로 클라이언트가
+        // 그 이벤트의 `task_id` 로 자기 프롬프트인지 가린다 (이유의 설명이 그것을 적는다).
         ReasonCode::TurnStartedDuringPreparation
         | ReasonCode::StopPending
         | ReasonCode::Unavailable => vec![Step::wait_for(KernelEventKind::PromptSubmission)],
@@ -104,9 +110,10 @@ pub(crate) fn error_next(error: KernelErrorKind) -> Vec<NextStep> {
     use NextStep as Step;
     match error {
         // 입력이나 메서드를 고쳐야 한다. 같은 요청을 다시 보내도 같은 오류이다.
-        KernelErrorKind::InvalidParams
-        | KernelErrorKind::MethodNotFound
-        | KernelErrorKind::NotAttached => vec![Step::Stop],
+        KernelErrorKind::InvalidParams | KernelErrorKind::MethodNotFound => vec![Step::Stop],
+        KernelErrorKind::NotAttached => {
+            vec![Step::method(KernelMethodKind::Attach), Step::Resend]
+        }
         KernelErrorKind::ConfirmationRequired => vec![Step::AskUser],
         KernelErrorKind::KernelUnavailable => vec![Step::AskUser],
         KernelErrorKind::KernelTimeout => vec![Step::query(KernelQueryKind::History)],
