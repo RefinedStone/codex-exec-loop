@@ -1281,6 +1281,109 @@ fn assert_matches_spec(spec: &Value, list: &str, field: &str, value: &Value) {
     );
 }
 
+#[test]
+fn parallel_state_values_are_typed_and_keep_their_wire_names() {
+    /*
+     * plan 18 K4-2: the state values of the parallel board are closed sets in the spec. The wire names are the
+     * ones clients already receive: the display label of the domain state with `_` for a space.
+     */
+    use crate::domain::parallel_mode::{
+        ParallelModeAgentRosterState, ParallelModeQueueItemState, PrValidationOperatorState,
+        PrValidationPhase,
+    };
+    let wire = |value: &dyn erased::Json| value.json();
+    for state in ParallelModeAgentRosterState::ALL {
+        assert_eq!(
+            wire(&ParallelAgentState::from_core(Some(*state))),
+            json!(state.name())
+        );
+    }
+    assert_eq!(wire(&ParallelAgentState::from_core(None)), json!("unknown"));
+    let merge_states = [
+        ParallelModeQueueItemState::Idle,
+        ParallelModeQueueItemState::Queued,
+        ParallelModeQueueItemState::Pushing,
+        ParallelModeQueueItemState::PrPending,
+        ParallelModeQueueItemState::MergePending,
+        ParallelModeQueueItemState::Integrating,
+        ParallelModeQueueItemState::Cleaning,
+        ParallelModeQueueItemState::Done,
+        ParallelModeQueueItemState::Blocked,
+        ParallelModeQueueItemState::Failed,
+    ];
+    for state in merge_states {
+        assert_eq!(
+            wire(&ParallelMergeState::from_core(state)),
+            json!(state.label().replace(' ', "_"))
+        );
+    }
+    let validation_states = [
+        PrValidationOperatorState::Pending,
+        PrValidationOperatorState::Blocking,
+        PrValidationOperatorState::Remediation,
+        PrValidationOperatorState::Terminal,
+        PrValidationOperatorState::Blocked,
+        PrValidationOperatorState::Failed,
+    ];
+    for state in validation_states {
+        assert_eq!(
+            wire(&ParallelPrValidationState::from_core(state)),
+            json!(state.label().replace(' ', "_"))
+        );
+    }
+    let phases = [
+        (PrValidationPhase::Registered, "registered"),
+        (
+            PrValidationPhase::PreMergeObservation,
+            "pre_merge_observation",
+        ),
+        (PrValidationPhase::RemediationQueued, "remediation_queued"),
+        (PrValidationPhase::RemediationRunning, "remediation_running"),
+        (
+            PrValidationPhase::PostMergeObservation,
+            "post_merge_observation",
+        ),
+        (PrValidationPhase::Settled, "settled"),
+        (PrValidationPhase::Blocked, "blocked"),
+        (PrValidationPhase::Failed, "failed"),
+    ];
+    for (phase, name) in phases {
+        assert_eq!(
+            wire(&ParallelPrValidationPhase::from_core(phase)),
+            json!(name)
+        );
+    }
+    // The spec lists the values. A client no longer reads them as free text.
+    let spec = spec_json();
+    for (type_name, count) in [
+        (
+            "ParallelAgentState",
+            ParallelModeAgentRosterState::ALL.len() + 1,
+        ),
+        ("ParallelMergeState", merge_states.len()),
+        ("ParallelPrValidationState", validation_states.len()),
+        ("ParallelPrValidationPhase", phases.len()),
+    ] {
+        assert_eq!(
+            spec["$defs"][type_name]["enum"].as_array().map(Vec::len),
+            Some(count),
+            "{type_name}"
+        );
+    }
+    for (owner, field, type_name) in [
+        ("ParallelAgent", "state", "ParallelAgentState"),
+        ("ParallelMergeItem", "state", "ParallelMergeState"),
+        ("ParallelPrValidation", "state", "ParallelPrValidationState"),
+        ("ParallelPrValidation", "phase", "ParallelPrValidationPhase"),
+    ] {
+        assert_eq!(
+            spec["$defs"][owner]["properties"][field]["$ref"],
+            json!(format!("#/$defs/{type_name}")),
+            "{owner}.{field}"
+        );
+    }
+}
+
 /// 스키마가 쓰는 키워드를 모은다. `properties` 바로 아래의 키는 필드 이름이라서 뺀다.
 fn schema_keywords(schema: &Value, keywords: &mut std::collections::BTreeSet<String>) {
     match schema {
@@ -1644,22 +1747,22 @@ fn real_wire_values_match_the_schemas_of_the_spec() {
                     task_title: "Task".to_string(),
                     slot_id: "slot-1".to_string(),
                     branch: "akra-agent/slot-1".to_string(),
-                    state: "running".to_string(),
+                    state: ParallelAgentState::ReportedComplete,
                     duration: "1m".to_string(),
                     summary: "working".to_string(),
                 }],
                 merge_head: "abc123".to_string(),
                 merge_queue: vec![ParallelMergeItem {
                     task_title: "Task".to_string(),
-                    state: "queued".to_string(),
+                    state: ParallelMergeState::MergePending,
                     branch: "akra-agent/slot-1".to_string(),
                     commit: "abc123".to_string(),
                 }],
                 pr_validation: Some(ParallelPrValidation {
                     pull_request_number: 12,
                     url: "https://example.invalid/pull/12".to_string(),
-                    state: "waiting".to_string(),
-                    phase: "checks".to_string(),
+                    state: ParallelPrValidationState::Remediation,
+                    phase: ParallelPrValidationPhase::PostMergeObservation,
                     reason: "checks pending".to_string(),
                     blocker: Some("ci".to_string()),
                 }),

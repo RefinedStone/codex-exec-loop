@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use super::{ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState};
+use crate::domain::kernel_spec::spec_names;
 
 /*
  * agent_session.rs는 parallel-mode runtime의 lease 중심 상태를 operator-facing session/roster snapshot으로
@@ -592,22 +593,65 @@ pub(super) fn roster_recency_key(lease: &ParallelModeSlotLeaseSnapshot) -> &str 
         .unwrap_or(lease.leased_at.as_str())
 }
 
-// roster state는 detail override가 있으면 pipeline label을 우선하고, 아니면 lease state를 보여 준다.
+spec_names! {
+    /// roster 가 보이는 에이전트의 상태이다 (plan 18 K4-2). lease 상태 셋과, 일을 마친 뒤 전달 단계의 상태이다.
+    /// roster 의 `state_label` 은 이 값의 이름이다. 커널 프로토콜은 이 값을 타입으로 보낸다.
+    pub enum ParallelModeAgentRosterState {
+        Starting => "starting", "The slot is leased and the agent session is starting.";
+        Running => "running", "The agent works on its task.";
+        CleanupPending => "cleanup_pending", "The work is delivered and the slot waits for cleanup.";
+        ReportedComplete => "reported_complete", "The agent reported completion. The kernel has not checked it yet.";
+        LedgerRefreshing => "ledger_refreshing", "The kernel reads the planning data again after the report.";
+        CommitReady => "commit_ready", "The completion is official and the commit waits for delivery.";
+        MergeQueued => "merge_queued", "The commit is in the merge queue.";
+        Pushing => "pushing", "The branch is being pushed.";
+        PrPending => "pr_pending", "The pull request is being created or waits for its checks.";
+        MergePending => "merge_pending", "The pull request waits for the merge.";
+        Integrating => "integrating", "The commit is being integrated into the base branch.";
+        OfficialRefreshRecoveryNeeded => "official_refresh_recovery_needed",
+            "The kernel could not confirm the completion and needs a recovery step.";
+        Failed => "failed", "The delivery failed or is blocked.";
+    }
+}
+
+impl ParallelModeAgentRosterState {
+    /// 이름으로 상태를 찾는다. roster 가 만든 이름은 항상 찾는다.
+    pub fn from_label(label: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|state| state.name() == label)
+    }
+}
+
+impl ParallelModeAgentRosterEntry {
+    /// 이 행의 상태이다. 손으로 만든 행(시험, 예전 표시)의 이름이 roster 의 이름이 아니면 `None` 이다.
+    pub fn state(&self) -> Option<ParallelModeAgentRosterState> {
+        ParallelModeAgentRosterState::from_label(&self.state_label)
+    }
+}
+
+// roster state는 detail override가 있으면 pipeline 상태를 우선하고, 아니면 lease state를 보여 준다.
+pub fn roster_state(
+    lease: &ParallelModeSlotLeaseSnapshot,
+    detail: Option<&ParallelModeAgentSessionDetailSnapshot>,
+) -> ParallelModeAgentRosterState {
+    let pipeline_state = detail
+        .and_then(|detail| lease.runtime_state_override(detail))
+        .and_then(ParallelModeAgentRosterState::from_label);
+    pipeline_state.unwrap_or(match lease.state {
+        ParallelModeSlotLeaseState::Leased => ParallelModeAgentRosterState::Starting,
+        ParallelModeSlotLeaseState::Running => ParallelModeAgentRosterState::Running,
+        ParallelModeSlotLeaseState::CleanupPending => ParallelModeAgentRosterState::CleanupPending,
+    })
+}
+
+/// roster 행에 적는 상태 이름이다. `roster_state` 의 이름과 같다.
 pub fn roster_state_label(
     lease: &ParallelModeSlotLeaseSnapshot,
     detail: Option<&ParallelModeAgentSessionDetailSnapshot>,
 ) -> String {
-    if let Some(detail) = detail
-        && let Some(label) = lease.runtime_state_override(detail)
-    {
-        return label.to_string();
-    }
-
-    match lease.state {
-        ParallelModeSlotLeaseState::Leased => "starting".to_string(),
-        ParallelModeSlotLeaseState::Running => "running".to_string(),
-        ParallelModeSlotLeaseState::CleanupPending => "cleanup_pending".to_string(),
-    }
+    roster_state(lease, detail).name().to_string()
 }
 
 // duration column은 단순 시간뿐 아니라 official completion/distributor phase를 압축해 보여 주는 자리다.

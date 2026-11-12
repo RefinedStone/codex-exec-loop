@@ -782,6 +782,68 @@ fn live_detail_enrichment_fills_missing_runtime_fields_from_lease() {
     );
 }
 
+// plan 18 K4-2: roster 의 상태는 정해진 값이다. lease 상태 셋과, 일을 마친 뒤의 전달 단계가 그 값이다. 전달 단계의
+// 이름은 session detail 의 이름과 같아야 한다. 이름이 어긋나면 그 단계가 조용히 lease 상태로 보인다.
+#[test]
+fn the_roster_state_is_a_closed_set_with_the_names_the_roster_already_shows() {
+    use super::agent_session::{roster_state, roster_state_label};
+    use super::{ParallelModeAgentRosterEntry, ParallelModeAgentRosterState as State};
+    let lease_in = |state| {
+        lease(
+            "slot-1",
+            "task-1",
+            "Task One",
+            "agent-1",
+            state,
+            "2026-01-01T00:00:00Z",
+            Some("2026-01-01T00:05:00Z"),
+        )
+    };
+    for (lease_state, expected) in [
+        (ParallelModeSlotLeaseState::Leased, State::Starting),
+        (ParallelModeSlotLeaseState::Running, State::Running),
+        (
+            ParallelModeSlotLeaseState::CleanupPending,
+            State::CleanupPending,
+        ),
+    ] {
+        let lease = lease_in(lease_state);
+        assert_eq!(roster_state(&lease, None), expected);
+        assert_eq!(roster_state_label(&lease, None), expected.name());
+    }
+    // 도는 lease 는 detail 이 알린 전달 단계를 보인다. 그 이름마다 같은 이름의 상태가 있다.
+    let running = lease_in(ParallelModeSlotLeaseState::Running);
+    for label in [
+        "reported_complete",
+        "ledger_refreshing",
+        "commit_ready",
+        "merge_queued",
+        "pushing",
+        "pr_pending",
+        "merge_pending",
+        "integrating",
+        "official_refresh_recovery_needed",
+        "failed",
+    ] {
+        let detail = session_detail(&running, label, "");
+        assert_eq!(
+            running.runtime_state_override(&detail),
+            Some(label),
+            "the lease should show the delivery stage"
+        );
+        assert_eq!(roster_state_label(&running, Some(&detail)), label);
+        assert_eq!(State::from_label(label).map(State::name), Some(label));
+    }
+    // detail 의 다른 이름은 roster 의 상태가 아니다. lease 상태를 보인다.
+    let detail = session_detail(&running, "in_progress", "");
+    assert_eq!(roster_state(&running, Some(&detail)), State::Running);
+    // 손으로 만든 행의 이름이 roster 의 이름이 아니면 상태가 없다.
+    let row = |label: &str| ParallelModeAgentRosterEntry::new("a", "t", "s", "b", label, "", "");
+    assert_eq!(row("pr_pending").state(), Some(State::PrPending));
+    assert_eq!(row("review").state(), None);
+    assert_eq!(State::ALL.len(), 13);
+}
+
 // runtime detail 선택은 현재 queue head가 가장 강한 신호다. queue head가 없으면
 // active lease, 둘 다 없으면 history로 내려가 supervisor detail panel이 비지 않게 한다.
 #[test]

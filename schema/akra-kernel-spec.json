@@ -2223,7 +2223,7 @@
           "type": "string"
         },
         "state": {
-          "type": "string"
+          "$ref": "#/$defs/ParallelAgentState"
         },
         "summary": {
           "type": "string"
@@ -2249,6 +2249,25 @@
       ],
       "type": "object"
     },
+    "ParallelAgentState": {
+      "enum": [
+        "starting",
+        "running",
+        "cleanup_pending",
+        "reported_complete",
+        "ledger_refreshing",
+        "commit_ready",
+        "merge_queued",
+        "pushing",
+        "pr_pending",
+        "merge_pending",
+        "integrating",
+        "official_refresh_recovery_needed",
+        "failed",
+        "unknown"
+      ],
+      "type": "string"
+    },
     "ParallelMergeItem": {
       "properties": {
         "branch": {
@@ -2258,7 +2277,7 @@
           "type": "string"
         },
         "state": {
-          "type": "string"
+          "$ref": "#/$defs/ParallelMergeState"
         },
         "task_title": {
           "type": "string"
@@ -2271,6 +2290,21 @@
         "commit"
       ],
       "type": "object"
+    },
+    "ParallelMergeState": {
+      "enum": [
+        "idle",
+        "queued",
+        "pushing",
+        "pr_pending",
+        "merge_pending",
+        "integrating",
+        "cleaning",
+        "done",
+        "blocked",
+        "failed"
+      ],
+      "type": "string"
     },
     "ParallelPool": {
       "properties": {
@@ -2340,7 +2374,7 @@
           ]
         },
         "phase": {
-          "type": "string"
+          "$ref": "#/$defs/ParallelPrValidationPhase"
         },
         "pull_request_number": {
           "format": "uint64",
@@ -2351,7 +2385,7 @@
           "type": "string"
         },
         "state": {
-          "type": "string"
+          "$ref": "#/$defs/ParallelPrValidationState"
         },
         "url": {
           "type": "string"
@@ -2365,6 +2399,30 @@
         "reason"
       ],
       "type": "object"
+    },
+    "ParallelPrValidationPhase": {
+      "enum": [
+        "registered",
+        "pre_merge_observation",
+        "remediation_queued",
+        "remediation_running",
+        "post_merge_observation",
+        "settled",
+        "blocked",
+        "failed"
+      ],
+      "type": "string"
+    },
+    "ParallelPrValidationState": {
+      "enum": [
+        "pending",
+        "blocking",
+        "remediation",
+        "terminal",
+        "blocked",
+        "failed"
+      ],
+      "type": "string"
     },
     "ParallelState": {
       "properties": {
