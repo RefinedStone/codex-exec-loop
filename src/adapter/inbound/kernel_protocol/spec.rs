@@ -21,10 +21,20 @@ use crate::domain::kernel_spec::{
     CommandEffect, CommandIdempotency, CommandScope, KernelCommandKind, KernelRecordKind,
 };
 
-/// 자기 설명이다 (plan 18 §4.3). 문서를 읽지 않은 클라이언트와 에이전트가 이 값만으로 프로토콜을 쓴다.
+/// 스키마의 방언이다. newtype variant 의 스키마는 `$ref` 옆에 `properties` 를 둔다. 그것은 이 방언에서만 맞다.
+const SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
+
+/*
+ * 자기 설명이다 (plan 18 §4.3). 프로토콜의 이름, 뜻, 모양을 담는다. 필드마다의 설명은 아직 없다 (K4 설계 §8).
+ */
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct KernelSpec {
+    /// 이 스펙 안의 모든 스키마가 따르는 JSON Schema 방언이다.
+    #[serde(rename = "$schema")]
+    pub schema_dialect: &'static str,
     pub protocol_version: u32,
+    /// 명령의 `scope`, `effect`, `idempotency` 가 쓰는 값과 그 뜻이다.
+    pub terms: Terms,
     pub methods: Vec<MethodEntry>,
     pub commands: Vec<CommandEntry>,
     pub queries: Vec<QueryEntry>,
@@ -38,8 +48,24 @@ pub struct KernelSpec {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Terms {
+    pub scope: Vec<ReasonEntry>,
+    pub effect: Vec<ReasonEntry>,
+    pub idempotency: Vec<ReasonEntry>,
+}
+
+/// 메서드가 답을 받는 요청인가, 커널이 보내는 알림인가이다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MethodDirection {
+    Request,
+    Notification,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct MethodEntry {
     pub name: &'static str,
+    pub kind: MethodDirection,
     pub summary: &'static str,
     /// 요청 또는 알림의 `params` 이다. 없는 메서드는 비어 있다.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -88,6 +114,7 @@ pub struct RecordEntry {
     pub payload: Value,
 }
 
+/// 이름과 뜻이다. 이유 코드와 `terms` 의 값이 이 모양이다.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ReasonEntry {
     pub name: &'static str,
@@ -132,14 +159,34 @@ pub fn describe() -> KernelSpec {
             };
             MethodEntry {
                 name: method.name(),
+                kind: match method {
+                    KernelMethodKind::Event => MethodDirection::Notification,
+                    _ => MethodDirection::Request,
+                },
                 summary: method.summary(),
                 params,
                 result,
             }
         })
         .collect();
+    let term = |name, summary| ReasonEntry { name, summary };
     KernelSpec {
+        schema_dialect: SCHEMA_DIALECT,
         protocol_version: PROTOCOL_VERSION,
+        terms: Terms {
+            scope: CommandScope::ALL
+                .iter()
+                .map(|scope| term(scope.name(), scope.summary()))
+                .collect(),
+            effect: CommandEffect::ALL
+                .iter()
+                .map(|effect| term(effect.name(), effect.summary()))
+                .collect(),
+            idempotency: CommandIdempotency::ALL
+                .iter()
+                .map(|idempotency| term(idempotency.name(), idempotency.summary()))
+                .collect(),
+        },
         methods,
         commands: KernelCommandKind::ALL
             .iter()
@@ -258,7 +305,8 @@ impl Schemas {
 /*
  * 스키마에서 `description` 과 `title` 을 뺀다. schemars 는 Rust 의 문서 주석을 그 자리에 넣는다. 이 저장소의 주석은
  * 개발자가 읽는 글이고 계획 번호를 담는다. 스펙의 뜻은 표의 `summary` 만 싣는다. `properties` 바로 아래의 키는
- * 필드 이름이므로 지우지 않는다 (`title` 이라는 필드가 있다).
+ * 필드 이름이므로 지우지 않는다 (`title` 이라는 필드가 있다). `default`, `const`, `enum`, `examples` 의 값은
+ * 스키마가 아니라 데이터이므로 건드리지 않는다.
  */
 fn without_code_comments(schema: Value) -> Value {
     match schema {
@@ -268,6 +316,13 @@ fn without_code_comments(schema: Value) -> Value {
                 .filter(|(keyword, _)| keyword != "description" && keyword != "title")
                 .map(|(keyword, value)| {
                     let value = match value {
+                        data if matches!(
+                            keyword.as_str(),
+                            "default" | "const" | "enum" | "examples"
+                        ) =>
+                        {
+                            data
+                        }
                         Value::Object(properties) if keyword == "properties" => Value::Object(
                             properties
                                 .into_iter()

@@ -269,7 +269,7 @@ fn a_command_response_carries_the_operation_receipt() {
         serde_json::to_value(replayed).expect("response should serialize"),
         json!({
             "processed": true,
-            "rejection": { "reason": "no_matching_turn", "message": "the thread has no running turn with that id" },
+            "rejection": { "reason": "no_matching_turn", "message": CommandRejectionReason::NoMatchingTurn.summary() },
             "operation": {
                 "op_id": 41,
                 "state": "rejected",
@@ -588,7 +588,7 @@ fn command_response_names_why_the_kernel_refused_a_command() {
             "processed": true,
             "rejection": {
                 "reason": "no_matching_approval",
-                "message": "no pending approval has that id"
+                "message": CommandRejectionReason::NoMatchingApproval.summary()
             }
         })
     );
@@ -934,8 +934,8 @@ fn spec_json() -> Value {
 }
 
 /// 스펙의 한 목록에서 `name` 들을 꺼낸다.
-fn spec_names_of(spec: &Value, list: &str) -> Vec<String> {
-    spec[list]
+fn names_of(entries: &Value) -> Vec<String> {
+    entries
         .as_array()
         .expect("a spec list")
         .iter()
@@ -944,15 +944,15 @@ fn spec_names_of(spec: &Value, list: &str) -> Vec<String> {
 }
 
 /// tag 가 있는 전송 enum 의 스키마에서 variant 의 이름들을 꺼낸다. 이름은 타입에서 나온 값이다.
-fn wire_variant_names(spec: &Value, type_name: &str, tag: &str) -> Vec<String> {
-    spec["$defs"][type_name]["oneOf"]
+fn wire_variant_names(tagged_enum: &Value, tag: &str) -> Vec<String> {
+    tagged_enum["oneOf"]
         .as_array()
-        .unwrap_or_else(|| panic!("{type_name} should be a tagged enum in $defs"))
+        .expect("a tagged enum in $defs")
         .iter()
         .map(|variant| {
             variant["properties"][tag]["const"]
                 .as_str()
-                .unwrap_or_else(|| panic!("a {type_name} variant without a `{tag}` constant"))
+                .unwrap_or_else(|| panic!("a variant without a `{tag}` constant"))
                 .to_string()
         })
         .collect()
@@ -971,8 +971,8 @@ fn the_spec_tables_and_the_wire_types_name_the_same_things() {
         ("records", "KernelRecord", "kind"),
     ] {
         assert_eq!(
-            spec_names_of(&spec, list),
-            wire_variant_names(&spec, type_name, tag),
+            names_of(&spec[list]),
+            wire_variant_names(&spec["$defs"][type_name], tag),
             "{list} and {type_name}"
         );
     }
@@ -1012,7 +1012,7 @@ fn reason_and_error_names_are_the_wire_values() {
         );
     }
     assert_eq!(
-        spec_names_of(&spec, "reasons"),
+        names_of(&spec["reasons"]),
         spec["$defs"]["CommandRejectionReason"]["enum"]
             .as_array()
             .expect("the reason enum")
@@ -1021,7 +1021,7 @@ fn reason_and_error_names_are_the_wire_values() {
             .collect::<Vec<_>>()
     );
     // Every rejection of a command is a reason of the spec.
-    let reasons = spec_names_of(&spec, "reasons");
+    let reasons = names_of(&spec["reasons"]);
     for command in spec["commands"].as_array().expect("commands") {
         for rejection in command["rejections"].as_array().expect("rejections") {
             assert!(reasons.contains(&rejection.as_str().expect("a reason").to_string()));
@@ -1096,6 +1096,31 @@ fn the_spec_entry_of_a_command_carries_its_meaning_and_its_input() {
     );
     assert!(spec["$defs"]["PlanningTask"]["properties"]["title"].is_object());
     assert_eq!(spec["protocol_version"], 1);
+    assert_eq!(
+        spec["$schema"],
+        "https://json-schema.org/draft/2020-12/schema"
+    );
+    // The spec explains its own words, and tells a request from a notification.
+    assert_eq!(
+        names_of(&spec["terms"]["effect"]),
+        ["read", "write", "destructive"]
+    );
+    assert_eq!(
+        names_of(&spec["terms"]["idempotency"]),
+        ["natural", "keyed"]
+    );
+    assert_eq!(
+        names_of(&spec["terms"]["scope"]),
+        ["session", "thread", "approval", "auto_follow", "planning"]
+    );
+    let notifications = spec["methods"]
+        .as_array()
+        .expect("methods")
+        .iter()
+        .filter(|method| method["kind"] == "notification")
+        .map(|method| method["name"].as_str().expect("a method name"))
+        .collect::<Vec<_>>();
+    assert_eq!(notifications, ["akra/kernel/event"]);
 }
 
 #[test]
@@ -1208,6 +1233,24 @@ fn schema_errors(schema: &Value, value: &Value, definitions: &Value, path: &str)
             }
         }
     }
+    if let Some(text) = value.as_str() {
+        let length = text.chars().count() as u64;
+        if schema
+            .get("minLength")
+            .and_then(Value::as_u64)
+            .is_some_and(|minimum| length < minimum)
+            || schema
+                .get("maxLength")
+                .and_then(Value::as_u64)
+                .is_some_and(|maximum| length > maximum)
+        {
+            errors.push(format!("{path}: the length {length} is out of range"));
+        }
+        // 이 프로토콜의 정규 규칙은 "공백이 아닌 글자가 있다" 하나이다. 다른 규칙이 생기면 아래 시험이 알린다.
+        if schema.get("pattern").is_some() && text.trim().is_empty() {
+            errors.push(format!("{path}: the text is blank"));
+        }
+    }
     if let (Some(items), Some(elements)) = (schema.get("items"), value.as_array()) {
         for (index, element) in elements.iter().enumerate() {
             errors.extend(schema_errors(
@@ -1238,12 +1281,242 @@ fn assert_matches_spec(spec: &Value, list: &str, field: &str, value: &Value) {
     );
 }
 
+/// 스키마가 쓰는 키워드를 모은다. `properties` 바로 아래의 키는 필드 이름이라서 뺀다.
+fn schema_keywords(schema: &Value, keywords: &mut std::collections::BTreeSet<String>) {
+    match schema {
+        Value::Object(fields) => {
+            for (keyword, value) in fields {
+                keywords.insert(keyword.clone());
+                match (keyword.as_str(), value) {
+                    ("properties" | "$defs", Value::Object(named)) => {
+                        named
+                            .values()
+                            .for_each(|schema| schema_keywords(schema, keywords));
+                    }
+                    ("default" | "const" | "enum", _) => {}
+                    _ => schema_keywords(value, keywords),
+                }
+            }
+        }
+        Value::Array(items) => items
+            .iter()
+            .for_each(|schema| schema_keywords(schema, keywords)),
+        _ => {}
+    }
+}
+
+#[test]
+fn the_test_checker_knows_every_schema_keyword_of_the_spec() {
+    // `schema_errors` passes over a keyword it does not know. So a new keyword in the spec must fail here first.
+    let spec = spec_json();
+    let mut keywords = std::collections::BTreeSet::new();
+    for list in ["methods", "commands", "queries", "events", "records"] {
+        for entry in spec[list].as_array().expect("a spec list") {
+            for field in ["params", "result", "input", "output", "payload"] {
+                schema_keywords(&entry[field], &mut keywords);
+            }
+        }
+    }
+    schema_keywords(&json!({ "$defs": spec["$defs"] }), &mut keywords);
+    let known = [
+        "$defs",
+        "$ref",
+        "additionalProperties",
+        "anyOf",
+        "const",
+        "default",
+        "enum",
+        "format",
+        "items",
+        "maxLength",
+        "minLength",
+        "minimum",
+        "oneOf",
+        "pattern",
+        "properties",
+        "required",
+        "type",
+    ];
+    let unknown = keywords
+        .iter()
+        .filter(|keyword| !known.contains(&keyword.as_str()))
+        .collect::<Vec<_>>();
+    assert!(unknown.is_empty(), "the checker does not know {unknown:?}");
+    // `format` and `minimum` say only "an unsigned or sized integer". `additionalProperties` is always `false`,
+    // and the only pattern is the non-blank rule.
+    let text = serde_json::to_string(&spec).expect("the spec should serialize");
+    assert!(!text.contains("\"additionalProperties\":{"));
+    assert_eq!(
+        text.matches("\"pattern\":").count(),
+        text.matches("\"pattern\":\"\\\\S\"").count()
+    );
+}
+
+#[test]
+fn the_input_schema_carries_the_rules_the_code_checks() {
+    // A value the schema accepts must not fail with "does not match the input schema".
+    let spec = spec_json();
+    let steer = spec["commands"]
+        .as_array()
+        .expect("commands")
+        .iter()
+        .find(|entry| entry["name"] == "steer_turn")
+        .expect("steer_turn");
+    let blank = json!({ "type": "steer_turn", "thread_id": "thread-1", "expected_turn_id": "turn-1", "prompt": "  " });
+    assert_eq!(
+        schema_errors(&steer["input"], &blank, &spec["$defs"], "steer_turn"),
+        ["steer_turn.prompt: the text is blank"]
+    );
+    let command: KernelCommand = serde_json::from_value(blank).expect("serde accepts the shape");
+    assert_eq!(
+        command
+            .into_core("/workspace")
+            .expect_err("the code refuses a blank prompt")
+            .code,
+        ERROR_INVALID_PARAMS
+    );
+    let key = &spec["$defs"]["CommandRequest"]["properties"]["idempotency_key"];
+    assert_eq!(
+        (key["minLength"].as_u64(), key["maxLength"].as_u64()),
+        (Some(1), Some(128))
+    );
+}
+
+#[test]
+fn a_destructive_command_needs_confirm_in_the_schema_and_in_the_code() {
+    // The spec says `destructive` commands need `confirm: true`. Each such command must have the field and
+    // must be refused without it. A new destructive command that forgets the check fails here.
+    let spec = spec_json();
+    let mut destructive = 0;
+    for command in sample_commands() {
+        if command.kind().spec().effect != crate::domain::kernel_spec::CommandEffect::Destructive {
+            continue;
+        }
+        destructive += 1;
+        let name = command.kind().name();
+        let entry = spec["commands"]
+            .as_array()
+            .expect("commands")
+            .iter()
+            .find(|entry| entry["name"] == name)
+            .expect("a command entry");
+        assert_eq!(
+            entry["input"]["properties"]["confirm"]["type"], "boolean",
+            "{name}"
+        );
+        let mut unconfirmed = serde_json::to_value(&command).expect("command should serialize");
+        unconfirmed["confirm"] = json!(false);
+        let unconfirmed: KernelCommand =
+            serde_json::from_value(unconfirmed).expect("the unconfirmed command should parse");
+        assert_eq!(
+            unconfirmed
+                .into_core("/workspace")
+                .expect_err("{name} must need confirm")
+                .code,
+            ERROR_CONFIRMATION_REQUIRED,
+            "{name}"
+        );
+    }
+    assert_eq!(
+        destructive, 1,
+        "reset_planning is the destructive command today"
+    );
+}
+
+/// 값이 채워진 기록 표본이다. 종류마다 하나이다.
+fn sample_records() -> Vec<crate::domain::kernel_event::KernelEvent> {
+    use crate::domain::kernel_event::{
+        ApprovalRequestKind, ApprovalResolution, KernelEvent as Record, PendingApproval,
+        PostTurnRoute, QueuedThreadPrompt, ThreadPromptRejection, ThreadPromptSettlement,
+        TurnEndOutcome, TurnOrigin,
+    };
+    let queued = QueuedThreadPrompt {
+        thread_id: "thread-1".to_string(),
+        workspace_directory: "/workspace".to_string(),
+        handoff: crate::domain::planning::ManualPromptMainSessionHandoff {
+            prompt: "planned prompt".to_string(),
+            transcript_text: "fix the test".to_string(),
+            task: None,
+        },
+        task_id: "task-1".to_string(),
+    };
+    let approval = PendingApproval::new(
+        "thread-1",
+        Some("turn-1"),
+        "approval-1",
+        ApprovalRequestKind::FileChange,
+        "File change requested.",
+    );
+    vec![
+        queued.settled(ThreadPromptSettlement::TaskFinished),
+        Record::ThreadPromptQueued(queued),
+        Record::ThreadPromptRejected {
+            thread_id: "thread-1".to_string(),
+            reason: ThreadPromptRejection::ParallelMode,
+        },
+        Record::TurnSubmitted {
+            thread_id: String::new(),
+            submission: 3,
+            origin: TurnOrigin::AutoFollow,
+        },
+        Record::TurnStarted {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+        },
+        Record::TurnEnded {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            outcome: Some(TurnEndOutcome::Interrupted),
+        },
+        Record::TurnEnded {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-2".to_string(),
+            outcome: None,
+        },
+        Record::PostTurnRouted {
+            thread_id: "thread-1".to_string(),
+            completed_turn_id: "turn-1".to_string(),
+            route: PostTurnRoute::ParallelConsumed,
+        },
+        approval.resolved(ApprovalResolution::TimedOut),
+        Record::ApprovalRequested(approval),
+        Record::CommandReceived {
+            op_id: 7,
+            command: "steer_turn".to_string(),
+            thread_id: "thread-1".to_string(),
+            fingerprint: "0123".to_string(),
+            idempotency_key: Some("key-1".to_string()),
+        },
+        Record::CommandRejected {
+            op_id: 7,
+            thread_id: "thread-1".to_string(),
+            reason: CommandRejectionReason::Busy,
+        },
+    ]
+}
+
 #[test]
 fn real_wire_values_match_the_schemas_of_the_spec() {
     let spec = spec_json();
     let to_json = |value: &dyn erased::Json| value.json();
+    let matches_type = |type_name: &str, value: Value| {
+        let errors = schema_errors(
+            &json!({ "$ref": format!("#/$defs/{type_name}") }),
+            &value,
+            &spec["$defs"],
+            type_name,
+        );
+        assert!(errors.is_empty(), "{type_name}: {errors:?}\n{value}");
+    };
     for command in sample_commands() {
         assert_matches_spec(&spec, "commands", "input", &to_json(&command));
+        matches_type(
+            "CommandRequest",
+            to_json(&CommandRequest {
+                command,
+                idempotency_key: Some("key-1".to_string()),
+            }),
+        );
     }
     let snapshot = crate::core::app::AppSnapshot::initial();
     let record = |sequence, event| crate::domain::kernel_event::RecordedKernelEvent {
@@ -1251,37 +1524,16 @@ fn real_wire_values_match_the_schemas_of_the_spec() {
         recorded_at: "2026-11-11T00:00:00Z".to_string(),
         event,
     };
-    let records = [
-        crate::domain::kernel_event::KernelEvent::TurnEnded {
-            thread_id: "thread-1".to_string(),
-            turn_id: "turn-1".to_string(),
-            outcome: None,
-        },
-        crate::domain::kernel_event::KernelEvent::ApprovalRequested(
-            crate::domain::kernel_event::PendingApproval::new(
-                "thread-1",
-                None,
-                "approval-1",
-                crate::domain::kernel_event::ApprovalRequestKind::FileChange,
-                "File change requested.",
-            ),
-        ),
-        crate::domain::kernel_event::KernelEvent::CommandReceived {
-            op_id: 7,
-            command: "steer_turn".to_string(),
-            thread_id: "thread-1".to_string(),
-            fingerprint: "0123".to_string(),
-            idempotency_key: None,
-        },
-        crate::domain::kernel_event::KernelEvent::CommandRejected {
-            op_id: 7,
-            thread_id: "thread-1".to_string(),
-            reason: CommandRejectionReason::Busy,
-        },
-    ];
+    let records = sample_records();
+    let mut kinds = std::collections::BTreeSet::new();
     for event in &records {
+        kinds.insert(event.kind());
         assert_matches_spec(&spec, "records", "payload", &to_json(event));
     }
+    assert_eq!(
+        kinds.len(),
+        spec["records"].as_array().expect("records").len()
+    );
     for query in [
         KernelQuery::Sessions {},
         KernelQuery::AutoFollow {},
@@ -1294,6 +1546,7 @@ fn real_wire_values_match_the_schemas_of_the_spec() {
         },
     ] {
         assert_matches_spec(&spec, "queries", "input", &to_json(&query));
+        matches_type("QueryRequest", to_json(&QueryRequest { query }));
         let page = crate::domain::kernel_event::KernelEventPage {
             records: records
                 .iter()
@@ -1301,42 +1554,149 @@ fn real_wire_values_match_the_schemas_of_the_spec() {
                 .enumerate()
                 .map(|(index, event)| record(index as i64 + 1, event))
                 .collect(),
-            next_after: 4,
+            next_after: 12,
         };
         let answer = query.answer(&snapshot, &[], no_parallel(), Some(page));
         assert_matches_spec(&spec, "queries", "output", &to_json(&answer));
     }
-    for event in [
+    // 값이 채워진 상태이다. 빈 목록만 보내면 중첩된 타입의 스키마를 검사하지 못한다.
+    let task = PlanningTask {
+        rank: 1,
+        task_id: "task-1".to_string(),
+        direction_title: "Direction".to_string(),
+        title: "Task".to_string(),
+        status: PlanningTaskStatus::Ready,
+        priority: 3,
+    };
+    let populated = [
         KernelEvent::Resync,
         KernelEvent::Recorded(record(9, records[0].clone())),
         KernelEvent::PromptSubmission(PromptSubmissionState {
             thread_id: "thread-1".to_string(),
-            status: PromptSubmissionStatus::Rejected,
-            reason: Some(PromptSubmissionReason::Busy),
-            task_id: None,
-            message: Some("a turn is running".to_string()),
+            status: PromptSubmissionStatus::Queued,
+            reason: Some(PromptSubmissionReason::TurnStartedDuringPreparation),
+            task_id: Some("task-1".to_string()),
+            message: Some("another turn started".to_string()),
         }),
-        KernelEvent::Sessions(SessionsState::from_core(&snapshot.session_catalog)),
-        KernelEvent::Planning(PlanningState::from_core(&RuntimeProjection::uninitialized())),
-        KernelEvent::Parallel(ParallelState::from_core(no_parallel())),
-    ] {
-        assert_matches_spec(&spec, "events", "payload", &to_json(&event));
-    }
-    // 답도 스키마에 맞는다: 영수증이 있는 거절.
-    let refused = CommandResponse::from_core(Some(&[])).with_operation(Some(
-        crate::domain::kernel_event::OperationReceipt {
-            op_id: 5,
-            rejection: Some(CommandRejectionReason::Busy),
-            replayed: true,
+        KernelEvent::Sessions(SessionsState {
+            status: SessionsStatus::Ready,
+            sessions: vec![SessionEntry {
+                thread_id: "thread-1".to_string(),
+                title: "Session".to_string(),
+                workspace: "/workspace".to_string(),
+                updated_at_epoch: 1_700_000_000,
+            }],
+            message: Some("loaded".to_string()),
+        }),
+        KernelEvent::AutoFollow(AutoFollowSettings {
+            max_turns: 3,
+            paused: true,
+        }),
+        KernelEvent::ThreadActivity {
+            threads: vec![ThreadActivity {
+                thread_id: "thread-1".to_string(),
+                running: true,
+                active_turn_id: Some("turn-1".to_string()),
+                approval: Some(ApprovalRequest {
+                    approval_id: "approval-1".to_string(),
+                    server_request_id: "7".to_string(),
+                    summary: "Command execution requested.".to_string(),
+                    details: vec!["cargo test".to_string()],
+                }),
+                auto_follow_active: false,
+            }],
         },
-    ));
-    let errors = schema_errors(
-        &json!({ "$ref": "#/$defs/CommandResponse" }),
-        &to_json(&refused),
-        &spec["$defs"],
-        "CommandResponse",
+        KernelEvent::Planning(PlanningState {
+            status: PlanningStatus::ReadyWithTask,
+            revision: Some(4),
+            queue_summary: Some("1 ready".to_string()),
+            failure_reason: None,
+            auto_follow_pause_reason: Some("paused".to_string()),
+            next_task: Some(task.clone()),
+            active_tasks: vec![task.clone()],
+            proposed_tasks: vec![task],
+            skipped_tasks: vec![SkippedPlanningTask {
+                task_id: "task-2".to_string(),
+                title: "Skipped".to_string(),
+                status: PlanningTaskStatus::Blocked,
+                reason: "blocked".to_string(),
+            }],
+        }),
+        KernelEvent::Parallel(ParallelState {
+            enabled: true,
+            status: Some("running".to_string()),
+            supervisor: Some(ParallelSupervisor {
+                state: ParallelSupervisorState::Supervise,
+                pool: ParallelPool {
+                    configured: 2,
+                    idle: 1,
+                    leased: 0,
+                    running: 1,
+                    awaiting_cleanup: 0,
+                    blocked: 0,
+                    missing: 0,
+                    unavailable: 0,
+                    exhausted: false,
+                },
+                agents: vec![ParallelAgent {
+                    agent_id: "agent-1".to_string(),
+                    thread_id: Some("thread-2".to_string()),
+                    task_title: "Task".to_string(),
+                    slot_id: "slot-1".to_string(),
+                    branch: "akra-agent/slot-1".to_string(),
+                    state: "running".to_string(),
+                    duration: "1m".to_string(),
+                    summary: "working".to_string(),
+                }],
+                merge_head: "abc123".to_string(),
+                merge_queue: vec![ParallelMergeItem {
+                    task_title: "Task".to_string(),
+                    state: "queued".to_string(),
+                    branch: "akra-agent/slot-1".to_string(),
+                    commit: "abc123".to_string(),
+                }],
+                pr_validation: Some(ParallelPrValidation {
+                    pull_request_number: 12,
+                    url: "https://example.invalid/pull/12".to_string(),
+                    state: "waiting".to_string(),
+                    phase: "checks".to_string(),
+                    reason: "checks pending".to_string(),
+                    blocker: Some("ci".to_string()),
+                }),
+                notice: Some("notice".to_string()),
+            }),
+        }),
+    ];
+    let mut event_names = std::collections::BTreeSet::new();
+    for event in populated {
+        let value = to_json(&event);
+        event_names.insert(value["type"].as_str().expect("an event type").to_string());
+        assert_matches_spec(&spec, "events", "payload", &value);
+        matches_type("EventNotification", to_json(&EventNotification { event }));
+    }
+    assert_eq!(
+        event_names.len(),
+        spec["events"].as_array().expect("events").len()
     );
-    assert!(errors.is_empty(), "{errors:?}");
+    matches_type(
+        "AttachRequest",
+        json!({ "workspace": "/workspace", "client_name": "akra-desktop" }),
+    );
+    matches_type(
+        "AttachResponse",
+        json!({ "client_id": "1", "protocol_version": 1, "kernel": "repository" }),
+    );
+    // 명령의 답: 받아들인 영수증과, 영수증이 있는 거절.
+    for rejection in [None, Some(CommandRejectionReason::Busy)] {
+        let answer = CommandResponse::from_core(Some(&[])).with_operation(Some(
+            crate::domain::kernel_event::OperationReceipt {
+                op_id: 5,
+                rejection,
+                replayed: rejection.is_some(),
+            },
+        ));
+        matches_type("CommandResponse", to_json(&answer));
+    }
     // 검사기가 틀린 값을 잡는지 본다. 잡지 못하면 위의 확인은 뜻이 없다.
     let wrong =
         json!({ "type": "steer_turn", "thread_id": "thread-1", "prompt": 3, "extra": true });

@@ -1,13 +1,12 @@
 //! 커널 스펙의 domain 쪽 표이다 (plan 18 K4-1, 설계 `docs/plan/18-k4-command-spec.md` §3.1).
 //!
-//! 명령의 종류와 성질, 기록의 종류를 여기서 한 번 정한다. 커널은 이 표로 명령을 기록하고 검사한다. 전송 모양(serde
-//! 타입)과 조회·이벤트·오류의 표는 inbound adapter `kernel_protocol` 에 있고, 그 adapter 가 두 표와 스키마를 묶어
-//! `describe` 의 답을 만든다. 설명(`summary`)은 클라이언트와 에이전트가 읽으므로 영어로 쓴다.
+//! 명령의 종류와 성질, 거절 이유, 기록의 종류를 여기서 한 번 정한다. 커널은 이 표로 명령을 기록할지 정한다
+//! (`is_recorded`). 효과와 전제 조건을 커널이 검사하는 일은 K4-5 이다. 전송 모양(serde 타입)과 조회·이벤트·오류의
+//! 표는 inbound adapter `kernel_protocol` 에 있고, 그 adapter 가 두 표와 스키마를 묶어 `describe` 의 답을 만든다.
+//! 설명(`summary`)은 클라이언트와 에이전트가 읽으므로 영어로 쓴다.
 
 use schemars::JsonSchema;
-use serde::Serialize;
-
-use crate::domain::kernel_event::CommandRejectionReason;
+use serde::{Deserialize, Serialize};
 
 /*
  * 이름 목록 하나를 한 번만 적는다. 줄 하나가 값, 전송되는 이름, 한 문장 설명이다. enum 과 `ALL`, `name`, `summary` 를
@@ -75,37 +74,70 @@ spec_names! {
     }
 }
 
-/// 명령이 바꾸는 상태의 구역이다. 권한 범위이다 (plan 18 §4.4).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum CommandScope {
-    Session,
-    Thread,
-    Approval,
-    AutoFollow,
-    Planning,
+spec_names! {
+    /// 명령이 바꾸는 상태의 구역이다. 권한 범위이다 (plan 18 §4.4).
+    #[derive(Serialize, JsonSchema)]
+    #[serde(rename_all = "snake_case")]
+    pub enum CommandScope {
+        Session => "session", "The session list and session names.";
+        Thread => "thread", "The turns of a thread.";
+        Approval => "approval", "Pending approval requests.";
+        AutoFollow => "auto_follow", "The automatic follow-up settings.";
+        Planning => "planning", "The planning queue and directions.";
+    }
 }
 
-/// 명령의 부작용이다.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum CommandEffect {
-    /// 상태를 바꾸지 않는다. 판단 사건 기록에 남지 않고 영수증도 없다.
-    Read,
-    /// 상태를 바꾼다. 기록에 남는다.
-    Write,
-    /// 지운다. 기록에 남고, 입력에 `confirm: true` 가 있어야 한다.
-    Destructive,
+spec_names! {
+    /// 명령의 부작용이다.
+    #[derive(Serialize, JsonSchema)]
+    #[serde(rename_all = "snake_case")]
+    pub enum CommandEffect {
+        Read => "read",
+            "Changes no state. The command is not written to the decision log and has no operation receipt.";
+        Write => "write",
+            "Changes state. The command is written to the decision log.";
+        Destructive => "destructive",
+            "Deletes data. The command is written to the decision log and its input needs `confirm: true`.";
+    }
 }
 
-/// 같은 명령을 두 번 보내면 어떻게 되는가이다.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum CommandIdempotency {
-    /// 같은 입력은 같은 상태가 된다. 다시 보내도 된다.
-    Natural,
-    /// 다시 보내면 한 번 더 실행된다. `idempotency_key` 로 재전송을 가린다.
-    Keyed,
+spec_names! {
+    /// 같은 명령을 두 번 보내면 어떻게 되는가이다.
+    #[derive(Serialize, JsonSchema)]
+    #[serde(rename_all = "snake_case")]
+    pub enum CommandIdempotency {
+        Natural => "natural",
+            "The same input gives the same state. Sending it again is safe.";
+        Keyed => "keyed",
+            "Sending it again runs it again. Send `idempotency_key` so that the kernel tells a resend apart.";
+    }
+}
+
+spec_names! {
+    /// 커널이 명령을 바로 거절한 이유이다 (plan 18 K3, plan 19 Q3-6). 설명이 다음 행동을 알려 준다. 뒤의 다섯은 thread
+    /// 지정 프롬프트(`submit_prompt`)를 준비 전에 거절한 이유이고 `ThreadPromptRejection` 과 같은 값이다.
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[serde(rename_all = "snake_case")]
+    pub enum CommandRejectionReason {
+        SteerInFlight => "steer_in_flight",
+            "Another steer for the same turn is still in flight. Send again with a new idempotency key after it ends.";
+        NoMatchingTurn => "no_matching_turn",
+            "The thread has no running turn with `expected_turn_id`. Read `active_turn_id` from `thread_activity`.";
+        DecisionInFlight => "decision_in_flight",
+            "A decision for the same approval is still in flight.";
+        NoMatchingApproval => "no_matching_approval",
+            "No pending approval has that id. Read `approval` from `thread_activity`.";
+        Busy => "busy",
+            "A turn is running or the thread still has work. Send again with a new idempotency key when `thread_activity` is empty.";
+        PreparationActive => "preparation_active",
+            "Another prompt is being prepared. Send again with a new idempotency key after that preparation ends.";
+        UnknownThread => "unknown_thread",
+            "The kernel does not know the thread. Send `load_sessions` first.";
+        ParallelMode => "parallel_mode",
+            "Parallel mode is on. The kernel starts no thread prompt until it is off.";
+        ParallelModeUnknown => "parallel_mode_unknown",
+            "The kernel does not know the parallel mode yet. Send again with a new idempotency key shortly.";
+    }
 }
 
 /// 명령 하나의 성질이다. 종류마다 하나이다.
