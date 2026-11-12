@@ -199,8 +199,12 @@ because the steps name queries and events of the adapter. Shapes are JSON Schema
 (`scripts/refresh_akra_kernel_spec.sh` rewrites it). Client commands are records as well: before the runtime runs a command
 that came with a descriptor, it numbers a `command_received` record (command name, thread, a
 fingerprint of the content, the optional idempotency key) and hands it to the recorder; the
-sequence of that record is the operation id. The recorder writes on its own thread, so the command
-runs before the record is on disk. A command that core refuses at once adds `command_rejected`.
+sequence of that record is the operation id. The descriptor also carries `confirmed` and `caller`.
+The runtime refuses a command whose spec effect is `destructive` when `confirmed` is false, before
+it records anything; the protocol adapter only reports the `confirm` field
+(`KernelCommand::confirmed`). The gateway puts the `client_name` of the attach into `caller`, and
+the runtime writes it to `command_received` (at most 64 characters). The recorder writes on its own
+thread, so the command runs before the record is on disk. A command that core refuses at once adds `command_rejected`.
 The set of handled idempotency keys is a projection of the log: it lives in memory while the kernel
 runs, forgets what the log has trimmed, and is rebuilt from the command kinds when the log is
 attached. A resend with the same key and fingerprint does not run again while the kernel runs and

@@ -124,12 +124,18 @@ fn reset_requires_confirmation_and_blank_ids_are_rejected() {
     let unconfirmed: KernelCommand =
         serde_json::from_value(json!({"type": "reset_planning", "target": "queue"}))
             .expect("confirm defaults to false");
-    assert_eq!(
-        unconfirmed
-            .into_core("/workspace")
-            .map_err(|error| error.code),
-        Err(ERROR_CONFIRMATION_REQUIRED)
-    );
+    // plan 18 K4-5: the adapter does not refuse the command. It tells the kernel whether the client
+    // confirmed, and the kernel refuses a destructive command without it.
+    assert!(!unconfirmed.confirmed());
+    let described = CommandRequest {
+        command: unconfirmed,
+        idempotency_key: None,
+    }
+    .descriptor()
+    .expect("the command is valid")
+    .expect("a destructive command is recorded");
+    assert!(!described.confirmed);
+    assert_eq!(described.caller, None, "the transport adds the caller");
     // The confirmation travels with the core command, so the planning service checks it too.
     assert_eq!(
         KernelCommand::ResetPlanning {
@@ -783,6 +789,7 @@ fn an_operation_query_answers_with_the_state_and_the_records_of_one_command() {
                     fingerprint: "0123".to_string(),
                     idempotency_key: None,
                     completion: Some(crate::domain::kernel_spec::CommandCompletion::Records),
+                    caller: None,
                 },
             ),
             // A record of another turn is not part of this operation.
@@ -1786,14 +1793,14 @@ fn a_destructive_command_needs_confirm_in_the_schema_and_in_the_code() {
         unconfirmed["confirm"] = json!(false);
         let unconfirmed: KernelCommand =
             serde_json::from_value(unconfirmed).expect("the unconfirmed command should parse");
-        assert_eq!(
-            unconfirmed
-                .into_core("/workspace")
-                .expect_err("{name} must need confirm")
-                .code,
-            ERROR_CONFIRMATION_REQUIRED,
-            "{name}"
-        );
+        // The kernel reads this value and refuses the command (plan 18 K4-5). A destructive command whose
+        // `confirm` field does not reach `confirmed()` fails here.
+        assert!(!unconfirmed.confirmed(), "{name}");
+        let mut confirmed = serde_json::to_value(&command).expect("command should serialize");
+        confirmed["confirm"] = json!(true);
+        let confirmed: KernelCommand =
+            serde_json::from_value(confirmed).expect("the confirmed command should parse");
+        assert!(confirmed.confirmed(), "{name}");
     }
     assert_eq!(
         destructive, 1,
@@ -1870,6 +1877,7 @@ fn sample_records() -> Vec<crate::domain::kernel_event::KernelEvent> {
             fingerprint: "0123".to_string(),
             idempotency_key: Some("key-1".to_string()),
             completion: Some(crate::domain::kernel_spec::CommandCompletion::Unreported),
+            caller: None,
         },
         Record::CommandRejected {
             op_id: 7,

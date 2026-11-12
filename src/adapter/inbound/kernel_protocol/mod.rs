@@ -138,6 +138,14 @@ impl KernelProtocolError {
         }
     }
 
+    /// 확인이 필요한 명령을 확인 없이 보냈다 (K-D1, plan 18 K4-5). 커널이 실행하지 않았다.
+    pub fn confirmation_required(command: &str) -> Self {
+        Self {
+            code: ERROR_CONFIRMATION_REQUIRED,
+            message: format!("{command} deletes data; send \"confirm\": true"),
+        }
+    }
+
     pub fn idempotency_key_reused() -> Self {
         Self {
             code: ERROR_IDEMPOTENCY_KEY_REUSED,
@@ -233,6 +241,9 @@ impl CommandRequest {
             thread_id,
             fingerprint: fingerprint(&json),
             idempotency_key,
+            confirmed: self.command.confirmed(),
+            // 접속의 이름은 전송 계층(Gateway)이 안다. 거기서 넣는다.
+            caller: None,
         }))
     }
 }
@@ -508,6 +519,23 @@ impl KernelCommand {
         }
     }
 
+    /// 클라이언트가 지우는 명령을 확인하고 보냈는가이다. 확인 필드가 없는 명령은 `false` 이다. 커널이 이 값과
+    /// 스펙의 `effect` 로 명령을 받을지 정한다 (plan 18 K4-5). 이 adapter 는 검사하지 않는다.
+    pub fn confirmed(&self) -> bool {
+        match self {
+            Self::ResetPlanning { confirm, .. } => *confirm,
+            Self::LoadSessions {}
+            | Self::RenameSession { .. }
+            | Self::SubmitPrompt { .. }
+            | Self::SteerTurn { .. }
+            | Self::StopAll {}
+            | Self::DecideApproval { .. }
+            | Self::SetAutoFollowMaxTurns { .. }
+            | Self::PauseAutoFollow {}
+            | Self::RefreshPlanning {} => false,
+        }
+    }
+
     /// 커널이 처리할 core 명령으로 바꾼다. 작업 공간은 attach 때 고른 커널의 것이다.
     pub fn into_core(self, workspace_directory: &str) -> Result<AppCommand, KernelProtocolError> {
         let command = match self {
@@ -558,26 +586,17 @@ impl KernelCommand {
             },
             Self::SetAutoFollowMaxTurns { value } => AppCommand::SetAutoFollowMaxTurns { value },
             Self::PauseAutoFollow {} => AppCommand::PausePostTurnContinuation,
-            Self::ResetPlanning { target, confirm } => {
-                if !confirm {
-                    return Err(KernelProtocolError {
-                        code: ERROR_CONFIRMATION_REQUIRED,
-                        message: "reset_planning deletes planning data; send \"confirm\": true"
-                            .to_string(),
-                    });
-                }
-                AppCommand::ResetPlanningWorkspace(
-                    PlanningWorkspaceResetIntent::new(
-                        workspace_directory,
-                        match target {
-                            ResetTarget::Queue => PlanningWorkspaceResetTarget::Queue,
-                            ResetTarget::Directions => PlanningWorkspaceResetTarget::Directions,
-                            ResetTarget::All => PlanningWorkspaceResetTarget::All,
-                        },
-                    )
-                    .with_confirmation(confirm),
+            Self::ResetPlanning { target, confirm } => AppCommand::ResetPlanningWorkspace(
+                PlanningWorkspaceResetIntent::new(
+                    workspace_directory,
+                    match target {
+                        ResetTarget::Queue => PlanningWorkspaceResetTarget::Queue,
+                        ResetTarget::Directions => PlanningWorkspaceResetTarget::Directions,
+                        ResetTarget::All => PlanningWorkspaceResetTarget::All,
+                    },
                 )
-            }
+                .with_confirmation(confirm),
+            ),
             Self::RefreshPlanning {} => AppCommand::RefreshPlanningRuntime {
                 workspace_directory: workspace_directory.to_string(),
             },
