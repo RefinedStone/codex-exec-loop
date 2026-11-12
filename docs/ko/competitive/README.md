@@ -28,6 +28,7 @@ Akra 기준: `0c94f7e8b4549c2358f8b6d4b0c1ebc7e206dd48` (`prerelease`)
 | [jcode](../../competitive/jcode/README.md) | v0.68.0 | native multi-session harness, desktop, 성능 계측 |
 | [OpenCode](../../competitive/opencode/README.md) | v1.18.15 | TUI/server/desktop 연속성과 넓은 생태계 |
 | [Orca](../../competitive/orca/README.md) | v1.4.176 | worktree 중심 desktop fleet와 복구 UX |
+| [Hide](../../competitive/hide/README.md) | v1.2.7, `17171960` (2026-11-12) | 누구 차례인지와 멈춘 이유를 core 가 판정하는 주의 모델, 노드별 완료 기준 |
 | [Agent Canvas](../../competitive/agent-canvas/README.md) | v1.6.1 | browser/desktop inspector와 automation |
 | [Grok Build](../../competitive/grok-build/README.md) | public HEAD `afbc0fb7...` | Rust full-stack harness, TUI, fast worktree |
 
