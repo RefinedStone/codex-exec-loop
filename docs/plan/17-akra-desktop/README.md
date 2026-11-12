@@ -43,7 +43,7 @@ Akra Desktop (Electron)  --WebSocket-->  akra-gateway (데몬)  --WebSocket-->  
 | --- | --- |
 | [01-background-and-goals.md](01-background-and-goals.md) | 사용자 상황, 목표, 비목표, 제약, 성공 기준, 검토 경과 |
 | [02-glossary.md](02-glossary.md) | 계층(L0~L4), Codex 프로토콜, Gateway, Electron 용어 |
-| [03-decisions.md](03-decisions.md) | 결정 D-01~D-17, 제안 P-01~P-11 |
+| [03-decisions.md](03-decisions.md) | 결정 D-01~D-17, 제안 P-01~P-12 |
 | [04-target-architecture.md](04-target-architecture.md) | 목표 구조, 연결 규칙, 흐름, 장애 처리, 보안, 배치 |
 | [05-risks-and-open-questions.md](05-risks-and-open-questions.md) | 위험 K-01~K-10, 미결 질문 Q-01~Q-12, 실측 결과 |
 | [06-handoff-guide.md](06-handoff-guide.md) | 작업 환경, 계정, 저장소 절차, 명령, 사용량 정책, 금지 사항 |
@@ -51,6 +51,7 @@ Akra Desktop (Electron)  --WebSocket-->  akra-gateway (데몬)  --WebSocket-->  
 | [reference/codex-desktop-app.md](reference/codex-desktop-app.md) | 공식 Codex(ChatGPT) 데스크톱 앱의 구조 관찰 |
 | [reference/akra-current.md](reference/akra-current.md) | 현재 Akra 구조, 대화 경로, 테스트 기준선 |
 | [reference/alternatives.md](reference/alternatives.md) | 검토한 대안과 라이선스 (Orca, Claude, Tauri 등) |
+| [reference/pierre-diffs.md](reference/pierre-diffs.md) | diff 표시·편집 엔진 `@pierre/diffs` 조사 (P-12) |
 | [phases/P0-preflight-verification.md](phases/P0-preflight-verification.md) | 사전 검증 기록 |
 | [phases/P1-gateway-daemon.md](phases/P1-gateway-daemon.md) | Gateway 데몬 |
 | [phases/P2-desktop-shell.md](phases/P2-desktop-shell.md) | Electron 골격과 Gateway 연결 |
